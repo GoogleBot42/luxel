@@ -1,0 +1,2926 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Luxel web UI v2 — mockups</title>
+<style>
+:root{
+  --bg:#14161a; --bg-panel:#1c1f26; --bg-inset:#101216; --border:#2b303a;
+  --text:#d7dae0; --text-dim:#8a90a0; --accent:#e8a33d; --error:#e05555; --warn:#d9a343;
+  --ok:#5fbf7a; --accent-soft:rgba(232,163,61,.15);
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"DejaVu Sans Mono",monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,"DejaVu Sans",sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:#0e1013;color:var(--text);font:14px/1.45 var(--sans);-webkit-font-smoothing:antialiased}
+
+/* ---------- page furniture ---------- */
+.page{display:grid;grid-template-columns:184px minmax(0,1fr);gap:40px;padding:32px 32px 96px;max-width:1500px}
+.idx{position:sticky;top:32px;align-self:start}
+.idx h3{font:11px/1 var(--sans);text-transform:uppercase;letter-spacing:.08em;color:var(--text-dim);margin:0 0 12px}
+.idx a{display:block;padding:5px 8px;border-radius:5px;color:var(--text-dim);text-decoration:none;font-size:12.5px}
+.idx a:hover{background:rgba(255,255,255,.04);color:var(--text)}
+.idx a b{color:var(--accent);font-weight:600;font-family:var(--mono);font-size:11.5px;margin-right:6px}
+.masthead h1{font-size:22px;font-weight:600;margin:0 0 6px;letter-spacing:-.01em}
+.masthead p{margin:0 0 36px;color:var(--text-dim);font-size:13px;max-width:760px}
+.cap{font:12px/1 var(--mono);color:var(--text-dim);margin:0 0 10px;letter-spacing:.01em}
+.cap b{color:var(--accent);font-weight:600}
+.note{max-width:760px;color:var(--text-dim);font-size:13px;margin:14px 0 44px;border-left:2px solid var(--border);padding-left:14px}
+.note b{color:var(--text);font-weight:600}
+.frame{border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--bg);box-shadow:0 10px 30px rgba(0,0,0,.45)}
+.w1200{width:1200px}
+.w390{width:390px}
+.w760{width:760px}
+.pair{display:flex;gap:28px;align-items:flex-start;flex-wrap:wrap}
+
+/* ---------- app shell ---------- */
+.hdr{height:44px;display:flex;align-items:center;gap:16px;padding:0 16px;background:var(--bg-panel);border-bottom:1px solid var(--border)}
+.wordmark{font-size:14px;font-weight:600;color:var(--accent);letter-spacing:-.01em;white-space:nowrap}
+.wordmark span{color:var(--text)}
+.devchip{display:inline-flex;align-items:center;gap:6px;font:11.5px/1 var(--mono);color:var(--text-dim);white-space:nowrap}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--ok);flex:none}
+.tabs{display:flex;align-self:stretch;margin-left:8px}
+.tabs a{display:flex;align-items:center;padding:0 12px;font-size:13px;color:var(--text-dim);text-decoration:none;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tabs a.on{color:var(--text);border-bottom-color:var(--accent)}
+.spacer{flex:1}
+.fps{font:11.5px/1 var(--mono);color:var(--text-dim);white-space:nowrap}
+
+/* ---------- primitives ---------- */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-inset);color:var(--text);font:13px/1 var(--sans);white-space:nowrap;cursor:default}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#16110a;font-weight:600}
+.btn.quiet{background:transparent;color:var(--text-dim)}
+.btn.icon{width:32px;padding:0}
+.btn.sm{height:26px;padding:0 8px;font-size:12px}
+.btn.sm.icon{width:26px;padding:0}
+.btn svg{display:block}
+.group{display:inline-flex;align-items:center;gap:4px}
+.inp{height:32px;padding:0 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-inset);color:var(--text);font:13px/1 var(--sans)}
+.inp.mono{font-family:var(--mono);font-size:12.5px}
+.inp.ph{color:var(--text-dim)}
+.inp.num{width:72px;text-align:left;font-family:var(--mono);font-size:12.5px}
+.inp.xs{height:26px;font-size:12px;padding:0 7px}
+.sel{display:inline-flex;align-items:center;justify-content:space-between;gap:10px;height:32px;padding:0 9px 0 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-inset);color:var(--text);font:13px/1 var(--sans);white-space:nowrap}
+.sel i{color:var(--text-dim);font-style:normal;font-size:10px}
+.sel.dis{color:#5b6070;background:#15171c;border-color:#23272f}
+.slabel{font:11px/1 var(--sans);text-transform:uppercase;letter-spacing:.08em;color:var(--text-dim)}
+.dim{color:var(--text-dim)}
+.mono{font-family:var(--mono)}
+.tiny{font-size:12px}
+.hint{font-size:12px;color:var(--text-dim);line-height:1.4}
+
+.seg{display:inline-flex;border:1px solid var(--border);border-radius:6px;overflow:hidden;background:var(--bg-inset)}
+.seg>div{display:flex;align-items:center;gap:7px;height:32px;padding:0 14px;font-size:13px;color:var(--text-dim);border-right:1px solid var(--border)}
+.seg>div:last-child{border-right:0}
+.seg>div.on{background:var(--accent-soft);color:var(--text);box-shadow:inset 0 -2px 0 var(--accent)}
+.seg .ct{font:11px/1 var(--mono);color:var(--text-dim)}
+.seg>div.on .ct{color:var(--accent)}
+
+.slider{position:relative;flex:1;height:16px;display:flex;align-items:center;min-width:80px}
+.slider .trk{width:100%;height:4px;border-radius:2px;background:#2b303a}
+.slider .fil{position:absolute;left:0;height:4px;border-radius:2px;background:var(--accent)}
+.slider .thb{position:absolute;width:14px;height:14px;border-radius:50%;background:var(--accent);margin-left:-7px;box-shadow:0 0 0 3px rgba(232,163,61,.16)}
+.sw{position:relative;width:36px;height:20px;border-radius:10px;background:#272c35;flex:none}
+.sw i{position:absolute;top:3px;left:3px;width:14px;height:14px;border-radius:50%;background:#636a79;transition:.1s}
+.sw.on{background:var(--accent-soft);box-shadow:inset 0 0 0 1px rgba(232,163,61,.55)}
+.sw.on i{left:19px;background:var(--accent)}
+.sw-cyc{}
+
+.pagebar{display:flex;align-items:center;gap:12px;padding:12px 20px;border-bottom:1px solid var(--border);background:var(--bg)}
+.body{padding:20px}
+
+/* ---------- tiles ---------- */
+.tiles{display:grid;gap:16px;padding:20px}
+.c6{grid-template-columns:repeat(6,1fr)}
+.c3{grid-template-columns:repeat(3,1fr)}
+.c2{grid-template-columns:repeat(2,1fr)}
+.tile{border:1px solid var(--border);border-radius:8px;background:var(--bg-panel);overflow:hidden}
+.tile .thumb{position:relative;background:#000;line-height:0}
+.tile canvas{display:block;width:100%;aspect-ratio:1/1;image-rendering:pixelated}
+.tile.bar canvas{aspect-ratio:6/1}
+.tile .meta{padding:8px 10px 10px}
+.tile .nm{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile .sub{margin-top:4px;font:11px/1.2 var(--mono);color:var(--text-dim)}
+.tile .elink{margin-top:5px;font-size:12px;color:var(--accent)}
+.tile.playing{box-shadow:0 0 0 2px var(--ok);border-color:transparent}
+.pill{position:absolute;top:8px;left:8px;display:inline-flex;align-items:center;gap:5px;height:20px;padding:0 8px;border-radius:999px;background:rgba(8,14,10,.82);border:1px solid rgba(95,191,122,.55);color:var(--ok);font:11px/1 var(--sans)}
+.actions{position:absolute;left:0;right:0;bottom:0;display:flex;align-items:center;gap:6px;padding:8px;background:linear-gradient(to top,rgba(10,12,15,.94),rgba(10,12,15,.72) 60%,transparent);opacity:0;transition:opacity .12s}
+.tile:hover .actions,.tile.hov .actions{opacity:1}
+.actions .btn{background:rgba(28,31,38,.95)}
+</style>
+<style>
+/* ---------- editor ---------- */
+.edhdr{height:48px;display:flex;align-items:center;gap:12px;padding:0 16px;background:var(--bg-panel);border-bottom:1px solid var(--border);position:relative}
+.nameedit{display:inline-flex;align-items:center;height:30px;padding:0 9px;border:1px solid var(--border);border-radius:6px;background:rgba(255,255,255,.02);font-size:14px;font-weight:600;color:var(--text)}
+.savestate{font:11.5px/1 var(--mono);color:var(--text-dim)}
+.menuwrap{position:relative}
+.edhdr-rail{flex:none;width:344px;height:100%;display:flex;align-items:center;justify-content:flex-end;padding-left:16px;margin-left:16px;border-left:1px solid var(--border)}
+.menu{position:absolute;right:0;top:calc(100% + 7px);width:214px;padding:4px;background:var(--bg-panel);border:1px solid var(--border);border-radius:8px;box-shadow:0 14px 34px rgba(0,0,0,.65);z-index:20}
+.menu .mi{padding:7px 10px;border-radius:5px;font-size:13px;color:var(--text)}
+.menu .mi.hi{background:rgba(255,255,255,.05)}
+.menu .mi.del{color:var(--error)}
+.menu .sepr{height:1px;margin:4px 6px;background:var(--border)}
+.edbody{display:flex;align-items:stretch}
+.code{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--bg-inset);border-right:1px solid var(--border)}
+.codebody{flex:1;padding:10px 0;font:12.5px/20px var(--mono);overflow:hidden}
+.ln{display:flex}
+.ln .gut{flex:none;width:52px;padding-right:12px;text-align:right;color:#4b5261;user-select:none;position:relative}
+.ln.cur{background:rgba(255,255,255,.025)}
+.ln.err .gut{color:var(--error)}
+.ln .gut .rd{position:absolute;left:10px;top:7px;width:6px;height:6px;border-radius:50%;background:var(--error)}
+.ln .src{white-space:pre;padding-right:20px;color:#b9bfcc}
+.sq{text-decoration:underline wavy var(--error);text-decoration-skip-ink:none;text-underline-offset:3px}
+.kw{color:#c792ea}.fn{color:#82aaff}.nu{color:#e3b26a}.co{color:#5f6672}.st{color:#8fc98f}.bi{color:#89ddd0}
+.codestatus{display:flex;align-items:center;gap:8px;padding:9px 14px;border-top:1px solid var(--border);background:rgba(224,85,85,.09);color:#eda0a0;font:12px/1 var(--mono)}
+.codestatus .jump{margin-left:auto;color:var(--text-dim);text-decoration:underline}
+.rail{flex:none;width:360px;background:var(--bg);display:flex;flex-direction:column}
+.rsec{padding:14px 16px;border-bottom:1px solid var(--border)}
+.rhead{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.rhead .rdim{font:11px/1 var(--mono);color:var(--text-dim);white-space:nowrap}
+.rhead .grp{margin-left:auto;display:inline-flex;align-items:center;gap:4px}
+.prev{width:100%;aspect-ratio:1/1;display:block;background:#000;border:1px solid var(--border);border-radius:6px;image-rendering:pixelated}
+.prev.strip{aspect-ratio:8/1}
+.capstrip{display:flex;align-items:center;gap:8px;margin-top:10px;padding:7px 10px;border-radius:6px;background:rgba(217,163,67,.12);border:1px solid rgba(217,163,67,.32);color:#e5bd74;font-size:11.5px;white-space:nowrap}
+.capstrip a{margin-left:auto;color:var(--text-dim);text-decoration:underline}
+.ctlrow{display:grid;grid-template-columns:82px 1fr auto;gap:12px;align-items:center;margin-top:12px}
+.swatches{display:flex;gap:6px}
+.swatches i{width:26px;height:22px;border-radius:4px;border:1px solid rgba(255,255,255,.14);display:block}
+.disclose{display:flex;align-items:center;gap:8px;cursor:default}
+.chev{color:var(--text-dim);font-size:10px;font-style:normal}
+
+/* ---------- settings ---------- */
+.setwrap{max-width:760px;margin:0 auto;padding:28px 20px 40px}
+.titlerow{display:flex;align-items:baseline;gap:12px;margin-bottom:28px}
+.titlerow h1{margin:0;font-size:22px;font-weight:600;letter-spacing:-.01em}
+.sect{margin-bottom:32px}
+.secthead{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+.secthead .rule{flex:1;height:1px;background:var(--border)}
+.form{padding:16px;border:1px solid var(--border);border-radius:8px;background:var(--bg-panel)}
+.srow{display:grid;grid-template-columns:132px 1fr;gap:14px;align-items:center;margin-bottom:12px}
+.srow:last-child{margin-bottom:0}
+.srow>.lab{font-size:13px;color:var(--text-dim)}
+.bigslider{display:flex;align-items:center;gap:14px}
+.bigslider .slider{height:20px}
+.bigslider .trk{height:6px;border-radius:3px}
+.bigslider .fil{height:6px;border-radius:3px}
+.bigslider .thb{width:18px;height:18px;margin-left:-9px}
+.bigslider .val{font:13px/1 var(--mono);color:var(--text);min-width:52px;text-align:right}
+.summary{display:flex;align-items:center;gap:14px;margin-bottom:12px}
+.summary .big{font-size:17px;font-weight:600}
+.summary canvas{width:56px;height:56px;border:1px solid var(--border);border-radius:6px;background:#000;image-rendering:pixelated;margin-left:auto;display:block}
+.summary canvas.strip{width:120px;height:20px}
+.advdiv{display:flex;align-items:center;gap:12px;margin:40px 0 6px}
+.advdiv .rule{flex:1;height:1px;background:var(--border)}
+.disclist{border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--bg-panel)}
+.drow{display:flex;align-items:center;gap:10px;padding:11px 14px;border-bottom:1px solid var(--border);font-size:13px}
+.drow:last-child{border-bottom:0}
+.drow .st2{margin-left:auto;font:11.5px/1 var(--mono);color:var(--text-dim)}
+.drow.open{background:rgba(255,255,255,.02)}
+.dbody{padding:4px 14px 16px;border-bottom:1px solid var(--border);background:rgba(0,0,0,.18)}
+.gradbar{height:22px;border-radius:4px;border:1px solid var(--border);background:linear-gradient(90deg,#120a1e,#3b1d6b,#a8307c,#e8843d,#f7e08a)}
+.linkrow{display:flex;align-items:center;gap:10px;margin-top:12px}
+.linkrow a{margin-left:auto;color:var(--text-dim);font-size:12.5px;text-decoration:none;border-bottom:1px dotted var(--border)}
+
+/* ---------- playlist ---------- */
+.transport{display:flex;align-items:center;gap:12px;padding:12px 20px;border-bottom:1px solid var(--border);flex-wrap:wrap}
+.nowplaying{min-width:230px}
+.nowplaying .np1{font-size:13px}
+.nowplaying .np1 b{font-weight:600}
+.nowplaying .np1 .t{font-family:var(--mono);font-size:11.5px;color:var(--text-dim);margin-left:8px}
+.prog{margin-top:5px;height:3px;border-radius:2px;background:#272c35;overflow:hidden}
+.prog i{display:block;height:100%;background:var(--ok)}
+.pllist{max-width:820px;padding:20px}
+.plrow{display:flex;align-items:center;gap:12px;padding:10px 12px;margin-bottom:8px;border:1px solid var(--border);border-radius:8px;background:var(--bg-panel)}
+.plrow.playing{border-left:3px solid var(--ok);padding-left:10px}
+.plrow .hnd{color:#555c6b;font-size:14px;width:14px;text-align:center;flex:none}
+.plrow .hnd.ok{color:var(--ok);font-size:11px}
+.plrow canvas{width:44px;height:44px;flex:none;border-radius:4px;background:#000;image-rendering:pixelated;display:block}
+.plrow .who{flex:1;min-width:0}
+.plrow .who .n{font-size:13px}
+.plrow .who .t{margin-top:3px;font:11px/1 var(--mono);color:var(--text-dim);display:flex;align-items:center;gap:5px}
+.chip{display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 9px;border:1px solid var(--border);border-radius:6px;background:var(--bg-inset);font:12px/1 var(--mono);color:var(--text-dim);white-space:nowrap}
+.chip.ovr{color:var(--accent);border-color:rgba(232,163,61,.45)}
+.chip.open{color:var(--text);background:#1c2029;border-color:#3a4150}
+.plvals{padding:2px 12px 12px 12px;margin:-4px 0 8px;border:1px solid var(--border);border-top:0;border-radius:0 0 8px 8px;background:rgba(0,0,0,.2)}
+.plvals .ctlrow{grid-template-columns:70px 1fr 74px;margin-top:10px}
+.plfoot{padding:0 20px 22px;font:12px/1 var(--mono);color:var(--text-dim)}
+
+/* ---------- popover (S5) ---------- */
+.pop{position:absolute;width:296px;top:calc(100% + 8px);right:0;padding:6px;background:var(--bg-panel);border:1px solid var(--border);border-radius:8px;box-shadow:0 16px 40px rgba(0,0,0,.7);z-index:20}
+.pop .pr{display:flex;align-items:center;gap:9px;padding:8px 9px;border-radius:6px;font-size:13px}
+.pop .pr.on{background:var(--accent-soft)}
+.radio{width:13px;height:13px;border-radius:50%;border:1px solid #4d545f;flex:none;position:relative}
+.pop .pr.on .radio{border-color:var(--accent)}
+.pop .pr.on .radio::after{content:"";position:absolute;inset:3px;border-radius:50%;background:var(--accent)}
+.cbx{width:12px;height:12px;border-radius:3px;border:1px solid #4d545f;flex:none}
+.popfoot{padding:9px 10px 6px;border-top:1px solid var(--border);margin-top:4px;font-size:11.5px;color:var(--text-dim);line-height:1.4}
+.pop .inp.xs{width:52px}
+.dimmed{opacity:.45}
+</style>
+</head>
+<body>
+<div class="page">
+<nav class="idx">
+  <h3>Batch 1 · Console</h3>
+  <a href="#S1"><b>S1</b>Patterns · matrix</a>
+  <a href="#S1b"><b>S1b</b>Patterns · strip</a>
+  <a href="#S1c"><b>S1c</b>Patterns · mobile</a>
+  <a href="#S2"><b>S2</b>Editor</a>
+  <a href="#S2b"><b>S2b</b>Editor · mobile</a>
+  <a href="#S3"><b>S3</b>Settings</a>
+  <a href="#S3b"><b>S3b</b>LED layout · strip</a>
+  <a href="#S4"><b>S4</b>Playlist</a>
+  <a href="#S4b"><b>S4b</b>Playlist · mobile</a>
+  <a href="#S5"><b>S5</b>Preview as…</a>
+  <h3 style="margin-top:20px">Batch 2 · Scenes</h3>
+  <a href="#S6"><b>S6</b>Scenes list</a>
+  <a href="#S7"><b>S7</b>Scene editor</a>
+  <a href="#S7b"><b>S7b</b>Pattern layer</a>
+  <a href="#S7c"><b>S7c</b>Scene editor · sprite</a>
+  <a href="#S9"><b>S9</b>Playground scenes</a>
+  <h3 style="margin-top:20px">Batch 3 · Wiring &amp; capabilities</h3>
+  <a href="#S3c"><b>S3c</b>HUB75 chain</a>
+  <a href="#S3d"><b>S3d</b>Pixel wiring</a>
+  <a href="#S3i"><b>S3i</b>Output · device caps</a>
+  <a href="#S6b"><b>S6b</b>Scenes empty state</a>
+  <h3 style="margin-top:20px">Batch 4 · Projection</h3>
+  <a href="#S3e"><b>S3e</b>Matrix</a>
+  <a href="#S3f"><b>S3f</b>Strip</a>
+  <a href="#S3g"><b>S3g</b>3D lattice</a>
+  <a href="#S3h"><b>S3h</b>Ring map</a>
+  <a href="#S2c"><b>S2c</b>Controls · projection</a>
+  <a href="#S2d"><b>S2d</b>Controls · 2D pattern</a>
+  <h3 style="margin-top:20px">Batch 5 · Outputs</h3>
+  <a href="#S3j"><b>S3j</b>Strip · 2 outputs</a>
+  <a href="#S3k"><b>S3k</b>Panels · 2 outputs</a>
+</nav>
+<main>
+<div class="masthead">
+  <h1>Luxel web UI v2 — mockups</h1>
+  <p>Static wireframes. Amber is the existing app accent; layout and hierarchy are what changed.</p>
+</div>
+<!-- ===================== S1 ===================== -->
+<p class="cap"><b>S1</b> · Patterns — console, 64×64 matrix</p>
+<div class="frame w1200" id="S1">
+  <header class="hdr">
+    <div class="wordmark">luxel</div>
+    <div class="devchip"><i class="dot"></i>luxel-f6b0a8 · 64×64 matrix</div>
+    <nav class="tabs"><a class="on">Patterns</a><a>Scenes</a><a>Playlist</a><a>Settings</a></nav>
+    <div class="spacer"></div>
+    <div class="fps">27 fps</div>
+  </header>
+  <div class="pagebar">
+    <div class="seg">
+      <div class="on">On device <span class="ct">5</span></div>
+      <div>Library <span class="ct">307</span></div>
+    </div>
+    <input class="inp ph" style="width:240px" value="search patterns…">
+    <div class="spacer"></div>
+    <div class="btn primary">+ New pattern</div>
+  </div>
+  <div class="tiles c6">
+    <div class="tile playing">
+      <div class="thumb">
+        <canvas data-viz="aurora" data-w="64" data-h="64"></canvas>
+        <div class="pill">▶ playing</div>
+      </div>
+      <div class="meta"><div class="nm">Aurora 2D</div></div>
+    </div>
+    <div class="tile hov">
+      <div class="thumb">
+        <canvas data-viz="rain" data-w="64" data-h="64"></canvas>
+        <div class="actions">
+          <div class="btn sm">▶ Play</div>
+          <div class="btn sm">Edit</div>
+          <div class="btn sm icon">⋯</div>
+        </div>
+      </div>
+      <div class="meta"><div class="nm">Raindrops 2D</div></div>
+    </div>
+    <div class="tile">
+      <div class="thumb"><canvas data-viz="sunsetacross" data-w="64" data-h="64"></canvas></div>
+      <div class="meta"><div class="nm">Sunset Fade</div><div class="sub">1D · along x</div></div>
+    </div>
+    <div class="tile">
+      <div class="thumb"><canvas data-viz="eyes" data-w="64" data-h="64"></canvas></div>
+      <div class="meta"><div class="nm">Blinky Eyes 2D</div></div>
+    </div>
+    <div class="tile">
+      <div class="thumb"><canvas data-viz="sparkleacross" data-w="64" data-h="64"></canvas></div>
+      <div class="meta"><div class="nm">Warm Sparkle</div><div class="sub">1D · along x</div></div>
+    </div>
+  </div>
+</div>
+<p class="note"><b>What changed.</b> One primary action on the page (<i>+ New pattern</i>); everything else is quiet. The
+on-device / library split is a segmented control instead of two tabs that looked like two apps. Tiles are square because
+the device is square — the thumbnail is a preview of the actual panel, so a 1D pattern shows the projection it will
+actually get (here along x, the device default) and says so, instead of pretending to be a strip. Per-tile verbs (Play / Edit / ⋯) live on the tile they act on and only appear on
+hover; nothing that writes the device sits loose in the page bar.</p>
+
+<!-- ===================== S1b ===================== -->
+<p class="cap"><b>S1b</b> · Patterns — console, 300 px strip</p>
+<div class="frame w1200" id="S1b">
+  <header class="hdr">
+    <div class="wordmark">luxel</div>
+    <div class="devchip"><i class="dot"></i>luxel-4ae0d4 · 300 px strip</div>
+    <nav class="tabs"><a class="on">Patterns</a><a>Playlist</a><a>Settings</a></nav>
+    <div class="spacer"></div>
+    <div class="fps">31 fps</div>
+  </header>
+  <div class="pagebar">
+    <div class="seg">
+      <div class="on">On device <span class="ct">6</span></div>
+      <div>Library <span class="ct">307</span></div>
+    </div>
+    <input class="inp ph" style="width:240px" value="search patterns…">
+    <div class="spacer"></div>
+    <div class="btn primary">+ New pattern</div>
+  </div>
+  <div class="tiles c3">
+    <div class="tile bar playing">
+      <div class="thumb">
+        <canvas data-viz="sunsetbar" data-w="150" data-h="1"></canvas>
+        <div class="pill">▶ playing</div>
+      </div>
+      <div class="meta"><div class="nm">Sunset Fade</div></div>
+    </div>
+    <div class="tile bar">
+      <div class="thumb"><canvas data-viz="cometbar" data-w="150" data-h="1"></canvas></div>
+      <div class="meta"><div class="nm">Blue Comet</div></div>
+    </div>
+    <div class="tile bar">
+      <div class="thumb"><canvas data-viz="aurorabar" data-w="150" data-h="1"></canvas></div>
+      <div class="meta"><div class="nm">Aurora 2D</div><div class="sub">2D · shown as a strip</div></div>
+    </div>
+    <div class="tile bar">
+      <div class="thumb"><canvas data-viz="sparklebar" data-w="150" data-h="1"></canvas></div>
+      <div class="meta"><div class="nm">Warm Sparkle</div></div>
+    </div>
+    <div class="tile bar">
+      <div class="thumb"><canvas data-viz="rainbowbar" data-w="150" data-h="1"></canvas></div>
+      <div class="meta"><div class="nm">Rainbow Sweep</div></div>
+    </div>
+    <div class="tile bar">
+      <div class="thumb"><canvas data-viz="firebar" data-w="150" data-h="1"></canvas></div>
+      <div class="meta"><div class="nm">Ember Fire</div></div>
+    </div>
+  </div>
+</div>
+<p class="note"><b>What changed.</b> Same page, different device: tile shape follows the fixture, always — 6:1 bars for a
+300 px strip. A 2D pattern gets the caption here (<i>2D · shown as a strip</i>) because on this device it is the odd one
+out. The Scenes tab is absent: the feature is meaningless on a strip, so it is hidden rather than shown-and-broken.</p>
+
+<!-- ===================== S1c ===================== -->
+<p class="cap"><b>S1c</b> · Patterns — mobile 390 px</p>
+<div class="frame w390" id="S1c">
+  <header class="hdr" style="height:auto;flex-direction:column;align-items:stretch;gap:0;padding:0">
+    <div style="display:flex;align-items:center;gap:10px;padding:0 12px;height:40px">
+      <div class="wordmark">luxel</div>
+      <div class="devchip"><i class="dot"></i>luxel-f6b0a8 · 64×64</div>
+      <div class="spacer"></div>
+      <div class="fps">27 fps</div>
+    </div>
+    <nav class="tabs" style="height:38px;overflow-x:auto;margin-left:0;padding:0 8px">
+      <a class="on">Patterns</a><a>Scenes</a><a>Playlist</a><a>Settings</a>
+    </nav>
+  </header>
+  <div style="padding:12px 12px 0">
+    <div class="seg" style="display:flex;width:100%">
+      <div class="on" style="flex:1;justify-content:center">On device <span class="ct">5</span></div>
+      <div style="flex:1;justify-content:center">Library <span class="ct">307</span></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <input class="inp ph" style="flex:1" value="search patterns…">
+      <div class="btn primary icon">+</div>
+    </div>
+  </div>
+  <div class="tiles c2" style="padding:12px">
+    <div class="tile playing">
+      <div class="thumb">
+        <canvas data-viz="aurora" data-w="64" data-h="64"></canvas>
+        <div class="pill">▶ playing</div>
+      </div>
+      <div class="meta"><div class="nm">Aurora 2D</div><div class="elink">Edit</div></div>
+    </div>
+    <div class="tile">
+      <div class="thumb"><canvas data-viz="rain" data-w="64" data-h="64"></canvas></div>
+      <div class="meta"><div class="nm">Raindrops 2D</div><div class="elink">Edit</div></div>
+    </div>
+    <div class="tile">
+      <div class="thumb"><canvas data-viz="sunsetrow" data-w="64" data-h="64"></canvas></div>
+      <div class="meta"><div class="nm">Sunset Fade</div><div class="sub">1D · by index</div><div class="elink">Edit</div></div>
+    </div>
+    <div class="tile">
+      <div class="thumb"><canvas data-viz="eyes" data-w="64" data-h="64"></canvas></div>
+      <div class="meta"><div class="nm">Blinky Eyes 2D</div><div class="elink">Edit</div></div>
+    </div>
+  </div>
+</div>
+<p class="note"><b>What changed.</b> The phone case is "pick a pattern from the couch": tapping the tile plays it, and
+<i>Edit</i> is a small link under the name rather than a button competing for the tap. Header splits into identity on
+line 1 and a horizontally scrolling tab row on line 2; the page bar keeps its order (scope → search → new) with the
+primary action shrunk to an icon.</p>
+<!-- ===================== S2 ===================== -->
+<p class="cap"><b>S2</b> · Editor — console, 64×64 matrix</p>
+<div class="frame w1200" id="S2">
+  <header class="edhdr">
+    <div class="btn quiet">← Patterns</div>
+    <div class="nameedit">Aurora 2D</div>
+    <div class="savestate">saved · on device</div>
+    <div class="spacer"></div>
+    <div class="btn primary">Save</div>
+    <div class="menuwrap">
+      <div class="btn icon">⋯</div>
+      <div class="menu">
+        <div class="mi">Add to playlist</div>
+        <div class="mi parent hi">Add to scene<span class="caret">▸</span>
+          <div class="sub">
+            <div class="mi">Clock overlay</div>
+            <div class="mi">Aurora + ticker</div>
+            <div class="sepr"></div>
+            <div class="mi">New scene…</div>
+          </div>
+        </div>
+        <div class="sepr"></div>
+        <div class="mi">Duplicate</div>
+        <div class="mi">Export .epe</div>
+        <div class="mi">Import .epe…</div>
+        <div class="sepr"></div>
+        <div class="mi del">Delete</div>
+      </div>
+    </div>
+    <div class="edhdr-rail"><div class="devchip"><i class="dot"></i>luxel-f6b0a8 · 64×64 matrix</div></div>
+  </header>
+  <div class="edbody" style="height:772px">
+    <div class="code">
+      <div class="codebody">
+<div class="ln"><span class="gut">1</span><span class="src"><span class="co">// Aurora 2D — slow green curtains with a violet shimmer</span></span></div>
+<div class="ln"><span class="gut">2</span><span class="src"> </span></div>
+<div class="ln"><span class="gut">3</span><span class="src"><span class="kw">export var</span> band = <span class="nu">0</span></span></div>
+<div class="ln"><span class="gut">4</span><span class="src"><span class="kw">export var</span> shimmerAmp = <span class="nu">0</span></span></div>
+<div class="ln"><span class="gut">5</span><span class="src"> </span></div>
+<div class="ln"><span class="gut">6</span><span class="src"><span class="kw">var</span> t1, t2, nsx, nsy</span></div>
+<div class="ln"><span class="gut">7</span><span class="src"> </span></div>
+<div class="ln"><span class="gut">8</span><span class="src"><span class="kw">export function</span> <span class="fn">beforeRender</span>(delta) {</span></div>
+<div class="ln"><span class="gut">9</span><span class="src">  t1 = <span class="bi">time</span>(<span class="nu">.10</span> * speed)</span></div>
+<div class="ln"><span class="gut">10</span><span class="src">  t2 = <span class="bi">time</span>(<span class="nu">.037</span> * speed)</span></div>
+<div class="ln"><span class="gut">11</span><span class="src">  nsx = <span class="nu">2.1</span> / cellSize</span></div>
+<div class="ln"><span class="gut">12</span><span class="src">  nsy = <span class="nu">1.3</span> / cellSize</span></div>
+<div class="ln"><span class="gut">13</span><span class="src">  band = <span class="bi">wave</span>(t2) * <span class="nu">.35</span> + <span class="nu">.5</span></span></div>
+<div class="ln err cur"><span class="gut"><span class="rd"></span>14</span><span class="src">  shimmerAmp = <span class="nu">.12</span> + <span class="sq">nosie</span>(t1 * <span class="nu">3</span>, <span class="nu">0</span>) * <span class="nu">.08</span></span></div>
+<div class="ln"><span class="gut">15</span><span class="src">}</span></div>
+<div class="ln"><span class="gut">16</span><span class="src"> </span></div>
+<div class="ln"><span class="gut">17</span><span class="src"><span class="kw">export function</span> <span class="fn">render2D</span>(index, x, y) {</span></div>
+<div class="ln"><span class="gut">18</span><span class="src">  <span class="kw">var</span> n = <span class="bi">simplex2</span>(x * nsx, y * nsy + t1 * <span class="nu">6</span>)</span></div>
+<div class="ln"><span class="gut">19</span><span class="src">  <span class="kw">var</span> curtain = <span class="bi">clamp</span>(<span class="nu">1</span> - <span class="bi">abs</span>(y - band) * <span class="nu">3.2</span>, <span class="nu">0</span>, <span class="nu">1</span>)</span></div>
+<div class="ln"><span class="gut">20</span><span class="src"> </span></div>
+<div class="ln"><span class="gut">21</span><span class="src">  <span class="kw">var</span> sh = <span class="bi">simplex3</span>(x * <span class="nu">4</span>, y * <span class="nu">4</span>, t2 * <span class="nu">9</span>)</span></div>
+<div class="ln"><span class="gut">22</span><span class="src">  <span class="kw">var</span> v = <span class="bi">clamp</span>(curtain * (<span class="nu">.55</span> + <span class="nu">.45</span> * n) + sh * shimmerAmp, <span class="nu">0</span>, <span class="nu">1</span>)</span></div>
+<div class="ln"><span class="gut">23</span><span class="src">  <span class="kw">var</span> h = <span class="nu">.33</span> - n * <span class="nu">.06</span> + sh * <span class="nu">.04</span></span></div>
+<div class="ln"><span class="gut">24</span><span class="src"> </span></div>
+<div class="ln"><span class="gut">25</span><span class="src">  <span class="kw">if</span> (sparkle && <span class="bi">random</span>(<span class="nu">1</span>) &lt; v * <span class="nu">.012</span>) {</span></div>
+<div class="ln"><span class="gut">26</span><span class="src">    <span class="bi">hsv</span>(h + <span class="nu">.55</span>, <span class="nu">.35</span>, <span class="nu">1</span>)</span></div>
+<div class="ln"><span class="gut">27</span><span class="src">  } <span class="kw">else</span> <span class="bi">hsv</span>(h, <span class="nu">1</span> - v * <span class="nu">.35</span>, v * v)</span></div>
+<div class="ln"><span class="gut">28</span><span class="src">}</span></div>
+      </div>
+      <div class="codestatus">✗ line 14 · unknown identifier "nosie" — did you mean simplex2?<span class="jump">jump to line</span></div>
+    </div>
+    <div class="rail">
+      <div class="rsec">
+        <div class="rhead">
+          <div class="slabel">Preview</div>
+          <div class="rdim">64×64 · 27 fps</div>
+          <div class="grp">
+            <div class="btn sm icon" title="pause">‖</div>
+            <div class="sel" style="height:26px;font-size:12px;padding:0 7px 0 8px">60 fps <i>▾</i></div>
+            <div class="btn sm icon" title="debug"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="8" y="7" width="8" height="12" rx="4"/><path d="M4 10h4M16 10h4M4 16h4M16 16h4M9.5 5l1 2M14.5 5l-1 2"/></svg></div>
+          </div>
+        </div>
+        <canvas class="prev" data-viz="aurora" data-w="64" data-h="64"></canvas>
+        <div class="capstrip">⚠ tight fit — 3.1 KB headroom on this device <a>details</a></div>
+      </div>
+      <div class="rsec">
+        <div class="rhead"><div class="slabel">Controls</div></div>
+        <div class="ctlrow">
+          <div class="tiny dim">Cell size</div>
+          <div class="slider"><div class="trk"></div><div class="fil" style="width:8%"></div><div class="thb" style="left:8%"></div></div>
+          <input class="inp num xs" value="1">
+        </div>
+        <div class="ctlrow">
+          <div class="tiny dim">Speed</div>
+          <div class="slider"><div class="trk"></div><div class="fil" style="width:40%"></div><div class="thb" style="left:40%"></div></div>
+          <input class="inp num xs" value="0.4">
+        </div>
+        <div class="ctlrow">
+          <div class="tiny dim">Palette</div>
+          <div class="swatches"><i style="background:#14361f"></i><i style="background:#3ec66f"></i><i style="background:#9a5cd6"></i></div>
+          <div></div>
+        </div>
+        <div class="ctlrow">
+          <div class="tiny dim">Sparkle</div>
+          <div><div class="sw on"><i></i></div></div>
+          <div></div>
+        </div>
+      </div>
+      <div class="rsec">
+        <div class="disclose"><i class="chev">▸</i><div class="slabel">Vars (2)</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="note"><b>What changed.</b> The editor has exactly one primary action (<i>Save</i>), and the document verbs that
+used to sit beside it — export, import, duplicate, delete — moved into the ⋯ menu with delete last and error-tinted.
+The old bottom bar (layout select, pixel count, fps, pause, sound, debug) is gone: geometry belongs to the device and
+lives in Settings, and playback/debug is the preview panel's own header, next to the thing it controls. The code column
+holds only code; compile errors report in a status strip pinned to it — gutter dot, squiggle, one plain sentence —
+instead of a toast somewhere else on the page. The preview header carries only what this pattern can use: Aurora 2D
+reads no audio, so there is no mic button — it appears when a pattern binds a sensor — and <i>VARS</i> is absent
+entirely for a pattern that exports none.</p>
+
+<!-- ===================== S2b ===================== -->
+<p class="cap"><b>S2b</b> · Editor — mobile 390 px</p>
+<div class="frame w390" id="S2b">
+  <header class="edhdr" style="height:44px;padding:0 10px;gap:8px">
+    <div class="btn quiet icon">←</div>
+    <div class="nameedit" style="font-size:13px;flex:1;min-width:0">Aurora 2D</div>
+    <div class="btn primary">Save</div>
+    <div class="btn icon">⋯</div>
+  </header>
+  <div style="height:872px;overflow:hidden">
+    <div class="rsec">
+      <div class="rhead">
+        <div class="slabel">Preview</div>
+        <div class="rdim">64×64</div>
+        <div class="grp">
+          <div class="btn sm icon">‖</div>
+          <div class="btn sm icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="8" y="7" width="8" height="12" rx="4"/><path d="M4 10h4M16 10h4M4 16h4M16 16h4M9.5 5l1 2M14.5 5l-1 2"/></svg></div>
+        </div>
+      </div>
+      <canvas class="prev" data-viz="aurora" data-w="64" data-h="64" style="max-width:280px;margin:0 auto"></canvas>
+      <div class="capstrip">⚠ tight fit — 3.1 KB headroom <a>details</a></div>
+    </div>
+    <div class="rsec">
+      <div class="rhead"><div class="slabel">Controls</div></div>
+      <div class="ctlrow">
+        <div class="tiny dim">Cell size</div>
+        <div class="slider"><div class="trk"></div><div class="fil" style="width:8%"></div><div class="thb" style="left:8%"></div></div>
+        <input class="inp num xs" value="1">
+      </div>
+      <div class="ctlrow">
+        <div class="tiny dim">Speed</div>
+        <div class="slider"><div class="trk"></div><div class="fil" style="width:40%"></div><div class="thb" style="left:40%"></div></div>
+        <input class="inp num xs" value="0.4">
+      </div>
+      <div class="ctlrow">
+        <div class="tiny dim">Sparkle</div>
+        <div><div class="sw on"><i></i></div></div>
+        <div></div>
+      </div>
+    </div>
+    <div class="rsec" style="border-bottom:0">
+      <div class="rhead"><div class="slabel">Code</div><div class="rdim">edit on a larger screen to change code</div></div>
+      <div class="code" style="border:1px solid var(--border);border-radius:6px;background:var(--bg-inset)">
+        <div class="codebody" style="font-size:11.5px;line-height:17px;padding:8px 0;height:214px">
+<div class="ln"><span class="gut" style="width:34px;padding-right:8px">1</span><span class="src"><span class="co">// Aurora 2D — slow green curtains</span></span></div>
+<div class="ln"><span class="gut" style="width:34px;padding-right:8px">2</span><span class="src"> </span></div>
+<div class="ln"><span class="gut" style="width:34px;padding-right:8px">3</span><span class="src"><span class="kw">export var</span> band = <span class="nu">0</span></span></div>
+<div class="ln"><span class="gut" style="width:34px;padding-right:8px">4</span><span class="src"><span class="kw">export var</span> shimmerAmp = <span class="nu">0</span></span></div>
+<div class="ln"><span class="gut" style="width:34px;padding-right:8px">5</span><span class="src"> </span></div>
+<div class="ln"><span class="gut" style="width:34px;padding-right:8px">6</span><span class="src"><span class="kw">var</span> t1, t2, nsx, nsy</span></div>
+<div class="ln"><span class="gut" style="width:34px;padding-right:8px">7</span><span class="src"> </span></div>
+<div class="ln"><span class="gut" style="width:34px;padding-right:8px">8</span><span class="src"><span class="kw">export function</span> <span class="fn">beforeRender</span>(delta) {</span></div>
+<div class="ln"><span class="gut" style="width:34px;padding-right:8px">9</span><span class="src">  t1 = <span class="bi">time</span>(<span class="nu">.10</span> * speed)</span></div>
+<div class="ln"><span class="gut" style="width:34px;padding-right:8px">10</span><span class="src">  t2 = <span class="bi">time</span>(<span class="nu">.037</span> * speed)</span></div>
+<div class="ln"><span class="gut" style="width:34px;padding-right:8px">11</span><span class="src">  nsx = <span class="nu">2.1</span> / cellSize</span></div>
+<div class="ln"><span class="gut" style="width:34px;padding-right:8px">12</span><span class="src">  nsy = <span class="nu">1.3</span> / cellSize</span></div>
+<div class="ln"><span class="gut" style="width:34px;padding-right:8px">13</span><span class="src">  band = <span class="bi">wave</span>(t2) * <span class="nu">.35</span> + <span class="nu">.5</span></span></div>
+<div class="ln err"><span class="gut" style="width:34px;padding-right:8px"><span class="rd" style="left:4px;top:6px"></span>14</span><span class="src">  shimmerAmp = <span class="nu">.12</span> + <span class="sq">nosie</span>(t1 * <span class="nu">3</span>, <span class="nu">0</span>)</span></div>
+        </div>
+        <div class="codestatus" style="font-size:11px;padding:8px 10px">✗ line 14 · unknown identifier "nosie"</div>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="note"><b>What changed.</b> Same screen, stacked: on a phone the useful half is the preview and its controls, so
+they come first and the code drops below, read-only with a one-line explanation rather than a text area nobody can
+usefully type into. Header keeps one primary (<i>Save</i>) plus ⋯; the error strip stays attached to the code.</p>
+<!-- ===================== S3 ===================== -->
+<p class="cap"><b>S3</b> · Settings — console, 64×64 matrix on a HUB75 S3 board</p>
+<div class="frame w1200" id="S3">
+  <header class="hdr">
+    <div class="wordmark">luxel</div>
+    <div class="devchip"><i class="dot"></i>luxel-f6b0a8 · 64×64 matrix</div>
+    <nav class="tabs"><a>Patterns</a><a>Scenes</a><a>Playlist</a><a class="on">Settings</a></nav>
+    <div class="spacer"></div>
+    <div class="fps">27 fps</div>
+  </header>
+  <div class="setwrap">
+    <div class="titlerow">
+      <h1>Settings</h1>
+      <div class="mono tiny dim">luxel-f6b0a8 · v0.1.44</div>
+    </div>
+
+    <section class="sect">
+      <div class="secthead"><div class="slabel">Device</div><div class="rule"></div></div>
+      <div class="form">
+        <div class="srow">
+          <div class="lab">Name</div>
+          <div><input class="inp mono" style="width:260px" value="luxel-f6b0a8"></div>
+        </div>
+        <div class="srow" style="align-items:start">
+          <div class="lab" style="padding-top:7px">Brightness</div>
+          <div>
+            <div class="bigslider">
+              <div class="slider"><div class="trk"></div><div class="fil" style="width:10%"></div><div class="thb" style="left:10%"></div></div>
+              <div class="val">3 / 31</div>
+            </div>
+            <div class="hint" style="margin-top:8px">The LED driver's current limit. Applied live and saved on the device — it dims the panel, not the previews on this page.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="sect">
+      <div class="secthead"><div class="slabel">LED layout</div><div class="rule"></div></div>
+      <div class="form">
+        <div class="summary">
+          <div class="big">64 × 64 matrix</div>
+          <div class="hint">4096 pixels · HUB75</div>
+          <canvas data-viz="grid64" data-w="64" data-h="64"></canvas>
+        </div>
+        <div class="srow">
+          <div class="lab">Size</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <input class="inp num" value="64"><span class="dim tiny">×</span><input class="inp num" value="64">
+            <span class="hint">px</span>
+          </div>
+        </div>
+        <div class="srow">
+          <div class="lab">Wiring</div>
+          <div><div class="sel" style="width:170px">HUB75 panel <i>▾</i></div></div>
+        </div>
+        <div class="srow">
+          <div class="lab">Panel scan</div>
+          <div><div class="sel" style="width:170px">1/32 <i>▾</i></div></div>
+        </div>
+        <div class="srow">
+          <div class="lab">Chained panels</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <input class="inp num" value="1">
+            <div class="sel" style="width:150px">serpentine <i>▾</i></div>
+          </div>
+        </div>
+        <div class="hint" style="margin-top:14px">Changes to panel geometry apply after a reboot.</div>
+        <div class="linkrow">
+          <div class="hint">For rings, sculptures, irregular layouts</div>
+          <a>Custom map program →</a>
+        </div>
+      </div>
+    </section>
+
+    <section class="sect">
+      <div class="secthead"><div class="slabel">WiFi</div><div class="rule"></div></div>
+      <div class="form" style="display:flex;align-items:center;gap:14px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <i class="dot"></i><span class="tiny dim">Connected to</span>
+          <span class="mono tiny">home-iot</span><span class="dim">·</span><span class="mono tiny">192.168.0.238</span>
+        </div>
+        <div class="spacer"></div>
+        <div class="btn">Change network…</div>
+      </div>
+    </section>
+
+    <div class="advdiv"><div class="slabel">Advanced</div><div class="rule"></div></div>
+    <div class="hint" style="margin-bottom:14px">Settings most installs never touch.</div>
+
+    <div class="disclist">
+      <div class="drow open"><i class="chev">▾</i>Output processing<span class="st2">gamma 2.2 · blur 0 · glow 0</span></div>
+      <div class="dbody">
+        <div class="srow" style="margin-top:12px">
+          <div class="lab">Gamma</div>
+          <div style="display:flex;align-items:center;gap:10px"><input class="inp num" value="2.2"><span class="hint">0 = off; 2.2 gives smoother dark fades</span></div>
+        </div>
+        <div class="srow">
+          <div class="lab">Brightness curve</div>
+          <div style="display:flex;align-items:center;gap:10px"><input class="inp num" value="2.2"><span class="hint">makes the dimmer end feel linear</span></div>
+        </div>
+        <div class="srow">
+          <div class="lab">Blur</div>
+          <div style="display:flex;align-items:center;gap:10px"><input class="inp num" value="0"><span class="hint">% — softens across the panel</span></div>
+        </div>
+        <div class="srow">
+          <div class="lab">Glow</div>
+          <div style="display:flex;align-items:center;gap:10px"><input class="inp num" value="0"><span class="hint">% — bright pixels bleed into their neighbours</span></div>
+        </div>
+        <div class="srow" style="align-items:start">
+          <div class="lab" style="padding-top:2px">Palette</div>
+          <div>
+            <div class="gradbar"></div>
+            <div style="display:flex;align-items:center;gap:10px;margin-top:8px">
+              <div class="btn sm">Edit stops…</div>
+              <span class="hint">5 stops · applied on top of the pattern's own palette</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="drow"><i class="chev">▸</i>Panel driver<span class="st2">30 MHz · 7 planes · 240 Hz</span></div>
+      <div class="drow"><i class="chev">▸</i>Clock &amp; time zone<span class="st2">UTC-6 · synced</span></div>
+      <div class="drow"><i class="chev">▸</i>Multi-device sync<span class="st2">off</span></div>
+      <div class="drow"><i class="chev">▸</i>MQTT · Home Assistant<span class="st2">disabled</span></div>
+      <div class="drow"><i class="chev">▸</i>Network input (DDP / E1.31)<span class="st2">idle</span></div>
+      <div class="drow"><i class="chev">▸</i>Storage<span class="st2">5 patterns · 112 KB free</span></div>
+      <div class="drow"><i class="chev">▸</i>Firmware &amp; recovery<span class="st2">v0.1.44 · Update… · Reboot into setup AP</span></div>
+    </div>
+  </div>
+</div>
+<p class="note"><b>What changed.</b> Nine equal-weight cards became a ranked page: the three things people actually open
+Settings for — name, brightness, what the fixture is — are full sections at the top, and everything else collapses into
+one <i>Advanced</i> list where each row states its current value so you can scan without opening anything. Only forms get
+a panel background; section headers plus a rule carry the rest, which kills the card-in-card look. Geometry has exactly
+one home here (LED layout), with the reboot caveat stated where the field is, and the custom map is a link out rather
+than a fourth place to set pixel counts. There is no Layout picker on this board: a HUB75 driver has no other option,
+and the summary line above already says what the fixture is.</p>
+
+<!-- ===================== S3b ===================== -->
+<p class="cap"><b>S3b</b> · Settings — LED layout section only, SK9822 strip board</p>
+<div class="frame w760" id="S3b">
+  <div style="padding:20px">
+    <div class="sect" style="margin-bottom:22px">
+      <div class="secthead"><div class="slabel">LED layout</div><div class="rule"></div><div class="mono tiny dim">state 1 · layout = strip</div></div>
+      <div class="form">
+        <div class="summary">
+          <div class="big">300 px strip</div>
+          <div class="hint">SK9822 · GPIO 18</div>
+          <canvas class="strip" data-viz="sunsetbar" data-w="150" data-h="1"></canvas>
+        </div>
+        <div class="srow">
+          <div class="lab">Layout</div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <div class="sel" style="width:190px">Strip <i>▾</i></div>
+            <span class="hint">Strip · Matrix · 3D · custom map</span>
+          </div>
+        </div>
+        <div class="srow">
+          <div class="lab">Pixels</div>
+          <div><input class="inp num" value="300"></div>
+        </div>
+        <div class="srow">
+          <div class="lab">LED type</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <div class="sel" style="width:150px">SK9822 <i>▾</i></div>
+            <span class="tiny dim" style="margin-left:6px">Color order</span>
+            <div class="sel" style="width:96px">BGR <i>▾</i></div>
+          </div>
+        </div>
+        <div class="srow">
+          <div class="lab">Data pin</div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <div class="sel" style="width:150px">GPIO 18 <i>▾</i></div>
+            <span class="hint">applies after a reboot</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="sect" style="margin-bottom:6px">
+      <div class="secthead"><div class="slabel">LED layout</div><div class="rule"></div><div class="mono tiny dim">state 2 · layout = matrix</div></div>
+      <div class="form">
+        <div class="summary">
+          <div class="big">16 × 16 matrix</div>
+          <div class="hint">256 of 300 px · SK9822</div>
+          <canvas data-viz="grid16" data-w="16" data-h="16"></canvas>
+        </div>
+        <div class="srow">
+          <div class="lab">Layout</div>
+          <div><div class="sel" style="width:190px">Matrix <i>▾</i></div></div>
+        </div>
+        <div class="srow">
+          <div class="lab">Size</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <input class="inp num" value="16"><span class="dim tiny">×</span><input class="inp num" value="16">
+            <div class="sel" style="width:150px;margin-left:6px">serpentine <i>▾</i></div>
+          </div>
+        </div>
+        <div class="srow">
+          <div class="lab">LED type</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <div class="sel" style="width:150px">SK9822 <i>▾</i></div>
+            <span class="tiny dim" style="margin-left:6px">Color order</span>
+            <div class="sel" style="width:96px">BGR <i>▾</i></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="note"><b>What changed.</b> One section, two boards, same shape: the Layout picker is the only place geometry
+lives, and choosing Matrix on a strip board swaps the fields under it (pixels → width × height + wiring) and the
+thumbnail with it, so the page always shows what the device thinks it is. Color order appears next to LED type here
+because it is a strip concern; the HUB75 board in S3 never shows it — and neither board shows a control whose only
+value is the one it already has.</p>
+<!-- ===================== S4 ===================== -->
+<p class="cap"><b>S4</b> · Playlist — console, 64×64 matrix</p>
+<div class="frame w1200" id="S4">
+  <header class="hdr">
+    <div class="wordmark">luxel</div>
+    <div class="devchip"><i class="dot"></i>luxel-f6b0a8 · 64×64 matrix</div>
+    <nav class="tabs"><a>Patterns</a><a>Scenes</a><a class="on">Playlist</a><a>Settings</a></nav>
+    <div class="spacer"></div>
+    <div class="fps">27 fps</div>
+  </header>
+  <div class="transport">
+    <div class="group">
+      <div class="btn primary">‖ Pause</div>
+      <div class="btn icon" title="stop"><svg width="10" height="10" viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8" rx="1" fill="currentColor"/></svg></div>
+      <div class="btn icon" title="previous"><svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><rect x="2" y="2" width="1.6" height="8"/><path d="M10 2v8L4.6 6z"/></svg></div>
+      <div class="btn icon" title="next"><svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><rect x="8.4" y="2" width="1.6" height="8"/><path d="M2 2v8l5.4-4z"/></svg></div>
+    </div>
+    <div class="nowplaying" style="margin-left:8px">
+      <div class="np1"><b>Sunset Fade</b><span class="t">0:05 / 0:08</span></div>
+      <div class="prog"><i style="width:62%"></i></div>
+    </div>
+    <div class="spacer"></div>
+    <div class="group" style="gap:8px">
+      <span class="tiny dim">Default duration</span><input class="inp num xs" value="8"><span class="tiny dim">s</span>
+    </div>
+    <div class="group" style="gap:8px;margin-left:8px">
+      <span class="tiny dim">Crossfade</span><input class="inp num xs" value="0.5"><span class="tiny dim">s</span>
+    </div>
+    <div class="btn icon" style="margin-left:4px">⋯</div>
+  </div>
+  <div class="pllist">
+    <div class="plrow playing">
+      <div class="hnd ok">▶</div>
+      <canvas data-viz="sunsetrow" data-w="64" data-h="64"></canvas>
+      <div class="who">
+        <div class="n">Sunset Fade</div>
+        <div class="t">Pattern</div>
+      </div>
+      <div class="chip">8 s</div>
+      <div class="chip open">3 values ▴</div>
+      <div class="btn icon quiet">✕</div>
+    </div>
+    <div class="plvals">
+      <div class="ctlrow">
+        <div class="tiny dim">Hue</div>
+        <div class="slider"><div class="trk"></div><div class="fil" style="width:10%"></div><div class="thb" style="left:10%"></div></div>
+        <input class="inp num xs" value="0.10">
+      </div>
+      <div class="ctlrow">
+        <div class="tiny dim">Speed</div>
+        <div class="slider"><div class="trk"></div><div class="fil" style="width:8%"></div><div class="thb" style="left:8%"></div></div>
+        <input class="inp num xs" value="0.08">
+      </div>
+      <div class="ctlrow">
+        <div class="tiny dim">Sparkle</div>
+        <div><div class="sw"><i></i></div></div>
+        <div></div>
+      </div>
+    </div>
+    <div class="plrow">
+      <div class="hnd">⠿</div>
+      <canvas data-viz="cometsq" data-w="64" data-h="64"></canvas>
+      <div class="who">
+        <div class="n">Blue Comet</div>
+        <div class="t">Pattern</div>
+      </div>
+      <div class="chip ovr">15 s</div>
+      <div class="chip">1 value ▾</div>
+      <div class="btn icon quiet">✕</div>
+    </div>
+    <div class="plrow">
+      <div class="hnd">⠿</div>
+      <canvas data-viz="clock" data-w="64" data-h="64"></canvas>
+      <div class="who">
+        <div class="n">Clock overlay</div>
+        <div class="t">Scene ▤ · 2 layers</div>
+      </div>
+      <div class="chip">8 s</div>
+      <div class="lnk">Edit scene ›</div>
+      <div class="btn icon quiet">✕</div>
+    </div>
+    <div class="plrow">
+      <div class="hnd">⠿</div>
+      <canvas data-viz="sparklerow" data-w="64" data-h="64"></canvas>
+      <div class="who">
+        <div class="n">Warm Sparkle</div>
+        <div class="t">Pattern</div>
+      </div>
+      <div class="chip">8 s</div>
+      <div class="chip">1 value ▾</div>
+      <div class="btn icon quiet">✕</div>
+    </div>
+    <div class="btn quiet" style="margin-top:4px">+ Add</div>
+  </div>
+  <div class="plfoot">4 items · loop ≈ 39 s</div>
+</div>
+<p class="note"><b>What changed.</b> Transport is one group at the left with a single primary (<i>Pause</i> while playing)
+and the now-playing readout right beside it, so the controls sit next to the thing they control; the two settings that
+are not transport (default duration, crossfade) moved to the far right, and <i>Clear playlist</i> went into ⋯ where a
+destructive action belongs. Rows are quiet until you need them: duration and values are chips that open in place,
+overridden values show in accent, and the playing row is marked with a green edge instead of a full-row highlight.
+Thumbnails are the device shape, and a scene says it is a scene. There are no named presets to manage: a playlist item
+owns its values inline and you edit them in place in the row, and a scene layer owns its own in the layer inspector.</p>
+
+<!-- ===================== S4b ===================== -->
+<p class="cap"><b>S4b</b> · Playlist — mobile 390 px</p>
+<div class="frame w390" id="S4b">
+  <header class="hdr" style="height:auto;flex-direction:column;align-items:stretch;gap:0;padding:0">
+    <div style="display:flex;align-items:center;gap:10px;padding:0 12px;height:40px">
+      <div class="wordmark">luxel</div>
+      <div class="devchip"><i class="dot"></i>luxel-f6b0a8 · 64×64</div>
+      <div class="spacer"></div>
+      <div class="fps">27 fps</div>
+    </div>
+    <nav class="tabs" style="height:38px;overflow-x:auto;margin-left:0;padding:0 8px">
+      <a>Patterns</a><a>Scenes</a><a class="on">Playlist</a><a>Settings</a>
+    </nav>
+  </header>
+  <div class="transport" style="padding:12px;gap:10px">
+    <div class="group">
+      <div class="btn primary">‖ Pause</div>
+      <div class="btn icon"><svg width="10" height="10" viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8" rx="1" fill="currentColor"/></svg></div>
+      <div class="btn icon"><svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><rect x="2" y="2" width="1.6" height="8"/><path d="M10 2v8L4.6 6z"/></svg></div>
+      <div class="btn icon"><svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><rect x="8.4" y="2" width="1.6" height="8"/><path d="M2 2v8l5.4-4z"/></svg></div>
+      <div class="spacer"></div>
+      <div class="btn icon">⋯</div>
+    </div>
+    <div class="nowplaying" style="width:100%;min-width:0">
+      <div class="np1"><b>Sunset Fade</b><span class="t">0:05 / 0:08</span></div>
+      <div class="prog"><i style="width:62%"></i></div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;width:100%">
+      <span class="tiny dim">Default</span><input class="inp num xs" value="8"><span class="tiny dim">s</span>
+      <span class="tiny dim" style="margin-left:8px">Crossfade</span><input class="inp num xs" value="0.5"><span class="tiny dim">s</span>
+    </div>
+  </div>
+  <div class="pllist" style="padding:12px">
+    <div class="plrow playing" style="gap:10px">
+      <div class="hnd ok">▶</div>
+      <canvas data-viz="sunsetrow" data-w="64" data-h="64" style="width:40px;height:40px"></canvas>
+      <div class="who">
+        <div class="n">Sunset Fade</div>
+        <div class="t">Pattern · 8 s</div>
+      </div>
+      <div class="chip open">3 ▴</div>
+      <div class="btn icon quiet">✕</div>
+    </div>
+    <div class="plvals">
+      <div class="ctlrow" style="grid-template-columns:56px 1fr 66px">
+        <div class="tiny dim">Hue</div>
+        <div class="slider"><div class="trk"></div><div class="fil" style="width:10%"></div><div class="thb" style="left:10%"></div></div>
+        <input class="inp num xs" style="width:100%" value="0.10">
+      </div>
+      <div class="ctlrow" style="grid-template-columns:56px 1fr 66px">
+        <div class="tiny dim">Speed</div>
+        <div class="slider"><div class="trk"></div><div class="fil" style="width:8%"></div><div class="thb" style="left:8%"></div></div>
+        <input class="inp num xs" style="width:100%" value="0.08">
+      </div>
+    </div>
+    <div class="plrow" style="gap:10px">
+      <div class="hnd">⠿</div>
+      <canvas data-viz="cometsq" data-w="64" data-h="64" style="width:40px;height:40px"></canvas>
+      <div class="who">
+        <div class="n">Blue Comet</div>
+        <div class="t">Pattern · <span style="color:var(--accent)">15 s</span></div>
+      </div>
+      <div class="chip">1 ▾</div>
+      <div class="btn icon quiet">✕</div>
+    </div>
+    <div class="plrow" style="gap:10px">
+      <div class="hnd">⠿</div>
+      <canvas data-viz="clock" data-w="64" data-h="64" style="width:40px;height:40px"></canvas>
+      <div class="who">
+        <div class="n">Clock overlay</div>
+        <div class="t">Scene ▤ · 2 layers · 8 s</div>
+      </div>
+      <div class="lnk">Edit ›</div>
+      <div class="btn icon quiet">✕</div>
+    </div>
+    <div class="plrow" style="gap:10px">
+      <div class="hnd">⠿</div>
+      <canvas data-viz="sparklerow" data-w="64" data-h="64" style="width:40px;height:40px"></canvas>
+      <div class="who">
+        <div class="n">Warm Sparkle</div>
+        <div class="t">Pattern · 8 s</div>
+      </div>
+      <div class="chip">1 ▾</div>
+      <div class="btn icon quiet">✕</div>
+    </div>
+  </div>
+  <div class="plfoot" style="padding:0 12px 16px">4 items · loop ≈ 39 s</div>
+</div>
+<p class="note"><b>What changed.</b> The transport wraps to its own lines — buttons, then now-playing, then the two
+numeric settings — instead of squeezing nine controls into one row. Thumbnails shrink to 40 px, duration folds into the
+type line (overrides still in accent) and the values chip keeps working as a tap-to-open row.</p>
+
+<!-- ===================== S5 ===================== -->
+<p class="cap"><b>S5</b> · Playground — "Preview as" popover open</p>
+<div class="frame w1200" id="S5" style="height:520px">
+  <header class="hdr">
+    <div class="wordmark">luxel <span>playground</span></div>
+    <nav class="tabs"><a class="on">Patterns</a><a>Scenes</a></nav>
+    <div class="spacer"></div>
+    <div class="menuwrap">
+      <div class="btn" style="border-color:var(--accent);color:var(--text);background:var(--accent-soft)">Preview as &nbsp;<span class="mono tiny">64×64 matrix</span> <i style="font-style:normal;font-size:10px;color:var(--text-dim)">▾</i></div>
+      <div class="pop">
+        <div class="pr"><span class="radio"></span><div style="white-space:nowrap">Auto — follow the pattern <span class="dim mono" style="font-size:10.5px">3D›2D›1D</span></div></div>
+        <div class="pr"><span class="radio"></span><div style="display:flex;align-items:center;gap:8px">Strip <input class="inp xs num" value="60"><span class="dim tiny">px</span></div></div>
+        <div class="pr on"><span class="radio"></span><div style="display:flex;align-items:center;gap:6px">Matrix <input class="inp xs num" value="64"><span class="dim tiny">×</span><input class="inp xs num" value="64"></div></div>
+        <div class="pr"><span class="radio"></span><div style="display:flex;align-items:center;gap:8px">3D lattice <input class="inp xs num" value="5"><span class="dim tiny">³</span></div></div>
+        <div class="pr"><span class="radio"></span><div>Custom map program →</div></div>
+        <div class="popfoot">Every preview and tile on this page uses this layout. On a device it is the device's own.</div>
+      </div>
+    </div>
+    <div class="fps" style="margin-left:14px">60 fps</div>
+  </header>
+  <div class="pagebar">
+    <div class="seg"><div class="on">Library <span class="ct">307</span></div><div>Mine <span class="ct">12</span></div></div>
+    <input class="inp ph" style="width:240px" value="search patterns…">
+    <div class="spacer"></div>
+    <div class="btn primary">+ New pattern</div>
+  </div>
+  <div class="tiles c6">
+    <div class="tile"><div class="thumb"><canvas data-viz="aurora" data-w="64" data-h="64"></canvas></div><div class="meta"><div class="nm">Aurora 2D</div></div></div>
+    <div class="tile"><div class="thumb"><canvas data-viz="rain" data-w="64" data-h="64"></canvas></div><div class="meta"><div class="nm">Raindrops 2D</div></div></div>
+    <div class="tile"><div class="thumb"><canvas data-viz="spiral" data-w="64" data-h="64"></canvas></div><div class="meta"><div class="nm">2D Spiral Twirls</div></div></div>
+    <div class="tile"><div class="thumb"><canvas data-viz="fireball" data-w="64" data-h="64"></canvas></div><div class="meta"><div class="nm">Wandering Fireball</div></div></div>
+    <div class="tile"><div class="thumb"><canvas data-viz="sunsetrow" data-w="64" data-h="64"></canvas></div><div class="meta"><div class="nm">Sunset Fade</div><div class="sub">1D · by index</div></div></div>
+    <div class="tile"><div class="thumb"><canvas data-viz="eyes" data-w="64" data-h="64"></canvas></div><div class="meta"><div class="nm">Blinky Eyes 2D</div></div></div>
+    <div class="tile"><div class="thumb"><canvas data-viz="cometsq" data-w="64" data-h="64"></canvas></div><div class="meta"><div class="nm">Blue Comet</div></div></div>
+    <div class="tile"><div class="thumb"><canvas data-viz="clock" data-w="64" data-h="64"></canvas></div><div class="meta"><div class="nm">Clock overlay</div></div></div>
+    <div class="tile"><div class="thumb"><canvas data-viz="firerow" data-w="64" data-h="64"></canvas></div><div class="meta"><div class="nm">Ember Fire</div><div class="sub">1D · by index</div></div></div>
+    <div class="tile"><div class="thumb"><canvas data-viz="grid64" data-w="64" data-h="64"></canvas></div><div class="meta"><div class="nm">Grid Check</div></div></div>
+    <div class="tile"><div class="thumb"><canvas data-viz="sparklerow" data-w="64" data-h="64"></canvas></div><div class="meta"><div class="nm">Warm Sparkle</div><div class="sub">1D · by index</div></div></div>
+    <div class="tile"><div class="thumb"><canvas data-viz="rain" data-w="64" data-h="64"></canvas></div><div class="meta"><div class="nm">Blue Rain 2D</div></div></div>
+  </div>
+</div>
+<p class="note"><b>What changed.</b> The playground has no device, so the thing every preview silently depended on — the
+fake fixture — becomes explicit and lives in exactly one control in the header. Picking it here re-shapes every tile and
+every preview on the page at once, which is why the tiles behind are square; the footer says so in one line. This is the
+playground twin of S3's LED layout, and the only place a "pixel count" field survives. The chip sets shape only.
+Wiring (serpentine, start corner, outputs) is a console setting in LED layout; the console preview runs the local
+engine with the device's real wiring so a 1D pattern under "By index" looks like the panel.</p>
+<style>
+/* ---------- batch 2 · scenes ---------- */
+.c4{grid-template-columns:repeat(4,1fr)}
+.c5{grid-template-columns:repeat(5,1fr)}
+.w320{width:320px}
+.scene3{display:flex;align-items:stretch}
+.lcol{flex:none;width:260px;padding:14px 12px;border-right:1px solid var(--border)}
+.ccol{flex:1;min-width:0;padding:14px 16px}
+.rcol{flex:none;width:320px;padding:14px 16px;border-left:1px solid var(--border)}
+.lrow{display:flex;align-items:center;gap:8px;padding:7px 8px;margin-bottom:2px;border-radius:6px;border-left:2px solid transparent;font-size:13px}
+.lrow.sel{background:var(--accent-soft);border-left-color:var(--accent)}
+.lrow.off{opacity:.45}
+.lrow .hnd{color:#555c6b;font-size:13px;width:12px;text-align:center;flex:none}
+.lrow .eye{color:var(--text-dim);flex:none;display:block}
+.lrow .ty{flex:none;width:14px;text-align:center;font:11px/1 var(--mono);color:var(--text-dim)}
+.lrow .nm2{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lrow .meta2{font:11px/1 var(--mono);color:var(--text-dim);white-space:nowrap}
+.addwrap{position:relative;margin-top:14px}
+.menu.full{left:0;right:0;width:auto}
+.mi.dis{color:#5b6070;white-space:nowrap}
+.mdim{margin-left:auto;font:10px/1 var(--mono);color:var(--text-dim);white-space:nowrap}
+.stage{position:relative;width:460px;line-height:0}
+.stage canvas{display:block;width:460px;height:460px;image-rendering:pixelated;border:1px solid var(--border);border-radius:6px;background:#000}
+.marq{position:absolute;border:1px dashed var(--accent);box-shadow:0 0 0 1px rgba(0,0,0,.45)}
+.hdl{position:absolute;width:7px;height:7px;background:var(--accent);border-radius:1px}
+.budget{max-width:460px;height:4px;margin-top:7px;border-radius:2px;background:#272c35;overflow:hidden}
+.budget i{display:block;height:100%;background:var(--warn)}
+.irow{display:grid;grid-template-columns:86px 1fr;gap:10px;align-items:center;margin-bottom:11px}
+.irow>*{min-width:0}
+.irow.wide{grid-template-columns:1fr;gap:6px}
+.irow.start{align-items:start}
+.irow.start .ilab{padding-top:7px}
+.ilab{font-size:12.5px;color:var(--text-dim)}
+.rrow{display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px}
+.rrow .radio{position:relative}
+.rrow.on .radio{border-color:var(--accent)}
+.rrow.on .radio::after{content:"";position:absolute;inset:3px;border-radius:50%;background:var(--accent)}
+.sel.xs{height:26px;font-size:12px;padding:0 7px 0 8px}
+.seg.sm>div{height:26px;padding:0 11px;font-size:12px}
+.slider.dis .fil{background:#3a4150}
+.slider.dis .thb{background:#4b5260;box-shadow:none}
+.boxrow{display:flex;gap:6px;align-items:center}
+.boxrow label{display:flex;align-items:center;gap:4px;font:11px/1 var(--mono);color:var(--text-dim)}
+.boxrow .inp{width:46px;height:26px;font-size:12px;padding:0 6px;font-family:var(--mono)}
+.irule{height:1px;background:var(--border);margin:16px 0}
+.swatchbtn{display:inline-flex;align-items:center;gap:8px;height:26px;padding:0 9px 0 6px;border:1px solid var(--border);border-radius:6px;background:var(--bg-inset);font-size:12px}
+.swatchbtn i{width:14px;height:14px;border-radius:3px;border:1px solid rgba(255,255,255,.2);display:block}
+.btn.del{color:var(--error);border-color:transparent;background:transparent;padding:0}
+.frow{display:grid;grid-template-columns:88px 46px 64px 1fr 104px 22px;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);font-size:13px}
+.frow:last-child{border-bottom:0}
+.frow .fm{font:11.5px/1 var(--mono);color:var(--text-dim)}
+.frow canvas{image-rendering:pixelated;display:block;background:#0a0c0f;border:1px solid var(--border);border-radius:3px}
+.frow .x{color:var(--text-dim);text-align:center;font-size:13px}
+</style>
+
+<div class="masthead" style="margin:56px 0 0">
+  <h1 style="font-size:18px">Batch 2 · Scenes</h1>
+  <p style="margin-bottom:28px">Layering: one device, several sources stacked. Same shell, same accent.</p>
+</div>
+
+<!-- ===================== S6 ===================== -->
+<p class="cap"><b>S6</b> · Scenes — console, 64×64 matrix</p>
+<div class="frame w1200" id="S6" style="height:520px">
+  <header class="hdr">
+    <div class="wordmark">luxel</div>
+    <div class="devchip"><i class="dot"></i>luxel-f6b0a8 · 64×64 matrix</div>
+    <nav class="tabs"><a>Patterns</a><a class="on">Scenes</a><a>Playlist</a><a>Settings</a></nav>
+    <div class="spacer"></div>
+    <div class="fps">24 fps</div>
+  </header>
+  <div class="pagebar">
+    <div class="hint">Layer patterns, text and images on top of each other. Scenes play like patterns.</div>
+    <div class="spacer"></div>
+    <div class="btn primary">+ New scene</div>
+  </div>
+  <div class="tiles c4">
+    <div class="tile playing">
+      <div class="thumb">
+        <canvas data-viz="clock" data-w="64" data-h="64"></canvas>
+        <div class="pill">▶ playing</div>
+      </div>
+      <div class="meta"><div class="nm">Clock overlay</div><div class="sub">3 layers</div></div>
+    </div>
+    <div class="tile">
+      <div class="thumb"><canvas data-viz="ticker" data-w="64" data-h="64"></canvas></div>
+      <div class="meta"><div class="nm">Aurora + ticker</div><div class="sub">3 layers</div></div>
+    </div>
+    <div class="tile">
+      <div class="thumb"><canvas data-viz="party" data-w="64" data-h="64"></canvas></div>
+      <div class="meta"><div class="nm">Party wall</div><div class="sub">4 layers</div></div>
+    </div>
+  </div>
+</div>
+<p class="note"><b>What changed.</b> Scenes are new, so the job here is making them feel like patterns, not like a
+second app: same tab bar, same tile grid, same square device-shaped thumbnail, same <i>playing</i> ring — a scene plays
+exactly where a pattern plays. One quiet sentence explains what a scene is; the only loud thing on the page is
+<i>+ New scene</i>. The dim <i>3 layers</i> line is the one piece of scene-specific metadata worth showing at this size.</p>
+
+<!-- ===================== S7 ===================== -->
+<p class="cap"><b>S7</b> · Scene editor — text layer selected, 64×64 matrix</p>
+<div class="frame w1200" id="S7">
+  <header class="edhdr">
+    <div class="btn quiet">← Scenes</div>
+    <div class="nameedit">Clock overlay</div>
+    <div class="savestate">saved · on device</div>
+    <div class="spacer"></div>
+    <div class="btn primary">Save</div>
+    <div class="menuwrap"><div class="btn icon">⋯</div></div>
+  </header>
+  <div class="scene3" style="height:712px">
+    <div class="lcol">
+      <div class="rhead" style="margin-bottom:8px">
+        <div class="slabel">Layers</div>
+        <div class="rdim" style="margin-left:auto">top = front</div>
+      </div>
+      <div class="lrow sel">
+        <span class="hnd">⠿</span>
+        <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+        <span class="ty">T</span>
+        <span class="nm2">Time</span>
+        <span class="meta2">12:48</span>
+      </div>
+      <div class="lrow">
+        <span class="hnd">⠿</span>
+        <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+        <span class="ty">▦</span>
+        <span class="nm2">Heart</span>
+        <span class="meta2">sprite · 9×8</span>
+      </div>
+      <div class="lrow">
+        <span class="hnd">⠿</span>
+        <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+        <span class="ty">▤</span>
+        <span class="nm2">Aurora 2D</span>
+        <span class="meta2">60 % · lighten</span>
+      </div>
+      <div class="lrow off">
+        <span class="hnd">⠿</span>
+        <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4l16 16"/><path d="M6.7 6.9C4 8.6 2 12 2 12s3.8 6 10 6c1.9 0 3.5-.5 4.9-1.3"/><path d="M9.9 5.2A9.6 9.6 0 0 1 12 6c6.2 0 10 6 10 6a18 18 0 0 1-2.4 3"/></svg>
+        <span class="ty">▭</span>
+        <span class="nm2">Bottom bar</span>
+        <span class="meta2">color</span>
+      </div>
+      <div class="lrow">
+        <span class="hnd">⠿</span>
+        <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+        <span class="ty">▤</span>
+        <span class="nm2">Rainbow</span>
+        <span class="meta2">base</span>
+      </div>
+      <div class="addwrap">
+        <div class="btn primary" style="width:100%;justify-content:center">+ Add layer ▾</div>
+        <div class="menu full">
+          <div class="mi dis" style="display:flex;align-items:center;gap:8px">▤ Pattern <span class="mdim">2 of 2 used on this device</span></div>
+          <div class="mi hi">T Text</div>
+          <div class="mi">▦ Sprite</div>
+          <div class="mi">▭ Color</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="ccol">
+      <div class="rhead">
+        <div class="slabel">Preview</div>
+        <div class="rdim">64×64 · 24 fps on device</div>
+        <div class="grp">
+          <div class="btn sm icon">‖</div>
+        </div>
+      </div>
+      <div class="stage">
+        <canvas data-viz="stagecomp" data-w="64" data-h="64"></canvas>
+        <div class="marq" style="left:0;top:202px;width:460px;height:58px"></div>
+        <div class="hdl" style="left:-3px;top:199px"></div>
+        <div class="hdl" style="left:456px;top:199px"></div>
+        <div class="hdl" style="left:-3px;top:257px"></div>
+        <div class="hdl" style="left:456px;top:257px"></div>
+      </div>
+      <div class="hint" style="margin-top:12px">Frame cost: 2 pattern layers · text, sprite and color layers are free</div>
+      <div class="budget"><i style="width:70%"></i></div>
+    </div>
+
+    <div class="rcol">
+      <div class="rhead" style="margin-bottom:12px"><div class="slabel">Text layer</div></div>
+      <div class="irow"><div class="ilab">Name</div><input class="inp" style="width:100%" value="Time"></div>
+      <div class="irow start">
+        <div class="ilab">Text</div>
+        <div>
+          <div class="rrow"><span class="radio"></span>Fixed <input class="inp xs" style="flex:1;min-width:0" value="Hello"></div>
+          <div class="rrow on"><span class="radio"></span>Clock <div class="sel xs" style="flex:1">HH:MM <i>▾</i></div></div>
+          <div class="rrow"><span class="radio"></span>Text slot 1</div>
+          <div class="hint" style="padding-left:21px">set from the API or Home Assistant</div>
+        </div>
+      </div>
+      <div class="irow"><div class="ilab">Font</div><div class="sel" style="width:100%">5×7 regular <i>▾</i></div></div>
+      <div class="irow"><div class="ilab">Color</div><div><div class="swatchbtn"><i style="background:#ffffff"></i>white</div></div></div>
+      <div class="irow"><div class="ilab">Align</div>
+        <div class="seg sm"><div>left</div><div class="on">center</div><div>right</div></div>
+      </div>
+      <div class="irow"><div class="ilab">Scroll</div><div class="sel" style="width:100%">none <i>▾</i></div></div>
+      <div class="irow wide"><div class="ilab">Box</div>
+        <div class="boxrow">
+          <label>x <input class="inp" value="0"></label>
+          <label>y <input class="inp" value="28"></label>
+          <label>w <input class="inp" value="64"></label>
+          <label>h <input class="inp" value="8"></label>
+        </div>
+      </div>
+      <div class="irule"></div>
+      <div class="irow"><div class="ilab">Blend</div><div class="sel" style="width:100%">normal <i>▾</i></div></div>
+      <div class="irow"><div class="ilab">Opacity</div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <div class="slider"><div class="trk"></div><div class="fil" style="width:100%"></div><div class="thb" style="left:100%"></div></div>
+          <span class="mono tiny dim">100 %</span>
+        </div>
+      </div>
+      <div style="margin-top:26px"><div class="btn del">Delete layer</div></div>
+    </div>
+  </div>
+</div>
+<p class="note"><b>What changed.</b> Three columns, one job each: what is stacked (left), what it looks like (centre),
+what the selected layer does (right) — so nothing about a layer is edited in two places. Selection is the only link
+between them: the text layer is highlighted in the list and its box is the dashed marquee on the preview, which is how
+you set geometry — by dragging, with the four numbers as the exact fallback. Visibility lives on the eye in the list,
+never as a checkbox in the inspector; <i>Delete layer</i> sits alone at the bottom, error-tinted and quiet, far from
+Save. The cost line states the real constraint (pattern layers cost frame time, text and color do not). Controls that
+cannot do anything are not drawn: <i>Speed</i> appears only once Scroll is something other than none, and <i>Image</i>
+is absent from Add layer until the device advertises per-file uploads (Phase D). The greyed <i>Pattern · 2 of 2 used on
+this device</i> row is the deliberate exception — disabled <i>with</i> its reason, because the layer budget is
+something the user has to learn.</p>
+
+<style>
+.ramp{flex:1;height:22px;border-radius:4px;border:1px solid var(--border);background:linear-gradient(90deg,#000 0%,#0f6f6a 52%,#ffffff 100%)}
+</style>
+
+<!-- ===================== S7b ===================== -->
+<p class="cap"><b>S7b</b> · Scene editor — inspector with a PATTERN layer selected</p>
+<div class="frame w320" id="S7b">
+  <div class="rcol" style="border-left:0;width:100%">
+    <div class="rhead" style="margin-bottom:12px"><div class="slabel">Pattern layer</div></div>
+
+    <div class="irow wide">
+      <div class="ilab">Pattern</div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <canvas data-viz="aurora" data-w="64" data-h="64" style="width:44px;height:44px;border-radius:4px;image-rendering:pixelated;background:#000;display:block"></canvas>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;white-space:nowrap">Aurora 2D</div>
+          <div class="hint" style="white-space:nowrap">2D · 4096 px</div>
+        </div>
+        <div class="btn sm">Change…</div>
+      </div>
+    </div>
+
+    <div class="rhead" style="margin:16px 0 6px"><div class="slabel">Controls</div></div>
+    <div class="irow"><div class="ilab">Cell size</div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <div class="slider"><div class="trk"></div><div class="fil" style="width:8%"></div><div class="thb" style="left:8%"></div></div>
+        <input class="inp num xs" style="width:58px" value="1">
+      </div>
+    </div>
+    <div class="irow"><div class="ilab">Speed</div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <div class="slider"><div class="trk"></div><div class="fil" style="width:40%"></div><div class="thb" style="left:40%"></div></div>
+        <input class="inp num xs" style="width:58px" value="0.4">
+      </div>
+    </div>
+
+    <div class="irule"></div>
+
+    <div class="irow start">
+      <div class="ilab" style="padding-top:4px">Color ramp</div>
+      <div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <div class="ramp"></div>
+          <a class="lnk">Edit…</a>
+        </div>
+        <div class="hint" style="margin-top:7px">recolors this layer by brightness — a white-on-black pattern becomes any gradient</div>
+      </div>
+    </div>
+
+    <div class="irule"></div>
+
+    <div class="irow wide"><div class="ilab">Box</div>
+      <div class="boxrow">
+        <label>x <input class="inp" value="0"></label>
+        <label>y <input class="inp" value="0"></label>
+        <label>w <input class="inp" value="64"></label>
+        <label>h <input class="inp" value="64"></label>
+      </div>
+    </div>
+    <div class="irow"><div class="ilab">Fit</div><div class="sel" style="width:100%">fill <i>▾</i></div></div>
+
+    <div class="irule"></div>
+
+    <div class="irow"><div class="ilab">Blend</div><div class="sel" style="width:100%">Normal <i>▾</i></div></div>
+    <div class="irow start"><div class="ilab" style="padding-top:7px">Transparent</div>
+      <div>
+        <div class="sel" style="width:100%">black pixels <i>▾</i></div>
+        <div class="hint" style="margin-top:6px">nothing · black pixels · by brightness</div>
+      </div>
+    </div>
+    <div class="irow"><div class="ilab">Opacity</div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <div class="slider"><div class="trk"></div><div class="fil" style="width:60%"></div><div class="thb" style="left:60%"></div></div>
+        <span class="mono tiny dim">60 %</span>
+      </div>
+    </div>
+
+    <div class="statecap">with Blend = Lighten:<span class="rule"></span></div>
+
+    <div class="irow"><div class="ilab">Blend</div><div class="sel" style="width:100%">Lighten <i>▾</i></div></div>
+    <div class="irow" style="margin-bottom:0"><div class="ilab">Opacity</div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <div class="slider"><div class="trk"></div><div class="fil" style="width:60%"></div><div class="thb" style="left:60%"></div></div>
+        <span class="mono tiny dim">60 %</span>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="note"><b>What changed.</b> Transparency is a key on which pixels count and only applies to Normal blending;
+Add, Lighten and Multiply carry their own (adding black or multiplying by white changes nothing) and Mask uses the
+layer's brightness as a stencil. The color ramp is the engine's existing output-palette stage applied per layer.</p>
+
+<style>
+/* ---------- sprite layer ---------- */
+.toolrow{display:flex;align-items:center;gap:8px;margin:10px 0 10px}
+.btn.sm.icon.on{background:var(--accent);border-color:var(--accent);color:#16110a}
+.recents{display:flex;gap:4px;flex:none}
+.recents i{display:block;width:16px;height:16px;border-radius:3px;border:1px solid rgba(255,255,255,.14)}
+.toolrow .hint{flex:1;min-width:0;font-size:11.5px}
+.cellmark{position:absolute;width:7px;height:7px;border:1px solid rgba(255,255,255,.9);box-shadow:0 0 0 1px rgba(0,0,0,.65)}
+.cursor{position:absolute;pointer-events:none}
+.pal{display:grid;grid-template-columns:repeat(8,14px);gap:4px}
+.pal i{display:block;width:14px;height:14px;border-radius:3px;border:1px solid rgba(255,255,255,.14)}
+.pal i.empty{background:transparent;border:1px dashed #3d4450}
+</style>
+
+<!-- ===================== S7c ===================== -->
+<p class="cap"><b>S7c</b> · Scene editor — sprite layer selected, drawing on the preview</p>
+<div class="frame w1200" id="S7c">
+  <header class="edhdr">
+    <div class="btn quiet">← Scenes</div>
+    <div class="nameedit">Clock overlay</div>
+    <div class="savestate">unsaved changes</div>
+    <div class="spacer"></div>
+    <div class="btn primary">Save</div>
+    <div class="menuwrap"><div class="btn icon">⋯</div></div>
+  </header>
+  <div class="scene3" style="height:712px">
+    <div class="lcol">
+      <div class="rhead" style="margin-bottom:8px">
+        <div class="slabel">Layers</div>
+        <div class="rdim" style="margin-left:auto">top = front</div>
+      </div>
+      <div class="lrow">
+        <span class="hnd">⠿</span>
+        <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+        <span class="ty">T</span>
+        <span class="nm2">Time</span>
+        <span class="meta2">12:48</span>
+      </div>
+      <div class="lrow sel">
+        <span class="hnd">⠿</span>
+        <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+        <span class="ty">▦</span>
+        <span class="nm2">Heart</span>
+        <span class="meta2">sprite · 9×8</span>
+      </div>
+      <div class="lrow">
+        <span class="hnd">⠿</span>
+        <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+        <span class="ty">▤</span>
+        <span class="nm2">Aurora 2D</span>
+        <span class="meta2">60 % · lighten</span>
+      </div>
+      <div class="lrow off">
+        <span class="hnd">⠿</span>
+        <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4l16 16"/><path d="M6.7 6.9C4 8.6 2 12 2 12s3.8 6 10 6c1.9 0 3.5-.5 4.9-1.3"/><path d="M9.9 5.2A9.6 9.6 0 0 1 12 6c6.2 0 10 6 10 6a18 18 0 0 1-2.4 3"/></svg>
+        <span class="ty">▭</span>
+        <span class="nm2">Bottom bar</span>
+        <span class="meta2">color</span>
+      </div>
+      <div class="lrow">
+        <span class="hnd">⠿</span>
+        <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+        <span class="ty">▤</span>
+        <span class="nm2">Rainbow</span>
+        <span class="meta2">base</span>
+      </div>
+      <div class="addwrap">
+        <div class="btn primary" style="width:100%;justify-content:center">+ Add layer ▾</div>
+      </div>
+    </div>
+
+    <div class="ccol">
+      <div class="rhead">
+        <div class="slabel">Preview</div>
+        <div class="rdim">64×64 · 24 fps on device</div>
+        <div class="grp">
+          <div class="btn sm icon">‖</div>
+        </div>
+      </div>
+      <div class="toolrow">
+        <div class="btn sm icon on" title="pencil"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20l4-1L20 7a2 2 0 0 0-3-3L5 16z"/><path d="M15 6l3 3"/></svg></div>
+        <div class="btn sm icon" title="eraser"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 20h13"/><path d="M5 16l7-7 6 6-5 5H7z"/></svg></div>
+        <div class="btn sm icon" title="fill"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 11l7-7 7 7-7 7z"/><path d="M19 15c1.4 1.9 2 2.9 2 3.8a2 2 0 1 1-4 0c0-.9.6-1.9 2-3.8z"/></svg></div>
+        <div class="swatchbtn"><i style="background:#e0463c"></i>red</div>
+        <div class="recents">
+          <i style="background:#ff8b80"></i><i style="background:#e8a33d"></i><i style="background:#f2e6cd"></i>
+          <i style="background:#3ec66f"></i><i style="background:#4aa3e0"></i><i style="background:#9a5cd6"></i>
+        </div>
+        <div class="hint">click or drag on the preview to paint · erased pixels are transparent</div>
+      </div>
+      <div class="stage">
+        <canvas data-viz="stageheart" data-w="64" data-h="64"></canvas>
+        <div class="marq" style="left:30px;top:30px;width:65px;height:58px"></div>
+        <div class="hdl" style="left:27px;top:27px"></div>
+        <div class="hdl" style="left:91px;top:27px"></div>
+        <div class="hdl" style="left:27px;top:84px"></div>
+        <div class="hdl" style="left:91px;top:84px"></div>
+        <div class="cellmark" style="left:87px;top:51px"></div>
+        <svg class="cursor" style="left:81px;top:45px" width="20" height="20" viewBox="0 0 20 20">
+          <path d="M10 1 V7 M10 13 V19 M1 10 H7 M13 10 H19" stroke="#0b0d11" stroke-width="3.6" stroke-linecap="round"/>
+          <path d="M10 1 V7 M10 13 V19 M1 10 H7 M13 10 H19" stroke="#ffffff" stroke-width="1.6" stroke-linecap="round"/>
+          <circle cx="10" cy="10" r="1.3" fill="#ffffff"/>
+        </svg>
+      </div>
+      <div class="hint" style="margin-top:12px">Frame cost: 2 pattern layers · text, sprite and color layers are free</div>
+      <div class="budget"><i style="width:70%"></i></div>
+    </div>
+
+    <div class="rcol">
+      <div class="rhead" style="margin-bottom:12px"><div class="slabel">Sprite layer</div></div>
+      <div class="irow"><div class="ilab">Name</div><input class="inp" style="width:100%" value="Heart"></div>
+      <div class="irow"><div class="ilab">Size</div>
+        <div class="boxrow">
+          <label>w <input class="inp" value="9"></label>
+          <label>h <input class="inp" value="8"></label>
+          <span class="un" style="font:11px/1 var(--mono);color:var(--text-dim)">px</span>
+        </div>
+      </div>
+      <div class="irow start"><div class="ilab" style="padding-top:5px">Frames</div>
+        <div>
+          <input class="inp num xs" style="width:58px" value="1">
+          <div class="hint" style="margin-top:6px">animation frames — a frame strip appears at 2+</div>
+        </div>
+      </div>
+      <div class="irow start"><div class="ilab" style="padding-top:2px">Palette</div>
+        <div>
+          <div class="pal">
+            <i style="background:#e0463c"></i><i style="background:#ff8b80"></i><i style="background:#8f2018"></i><i style="background:#f2e6cd"></i>
+            <i style="background:#e8a33d"></i><i style="background:#3ec66f"></i><i style="background:#4aa3e0"></i><i style="background:#9a5cd6"></i>
+            <i class="empty"></i><i class="empty"></i><i class="empty"></i><i class="empty"></i>
+            <i class="empty"></i><i class="empty"></i><i class="empty"></i><i class="empty"></i>
+          </div>
+          <div class="hint" style="margin-top:6px">16 colours</div>
+        </div>
+      </div>
+      <div class="irow"><div class="ilab">Transparent</div><div class="hint">black pixels · sprites are always keyed</div></div>
+
+      <div class="irule"></div>
+
+      <div class="irow wide"><div class="ilab">Box</div>
+        <div class="boxrow">
+          <label>x <input class="inp" value="4"></label>
+          <label>y <input class="inp" value="4"></label>
+          <label style="color:#5f6675">w <input class="inp" style="color:#7b8292" value="9"></label>
+          <label style="color:#5f6675">h <input class="inp" style="color:#7b8292" value="8"></label>
+        </div>
+      </div>
+      <div class="irow"><div class="ilab">Fit</div><div class="hint">1:1 · sprites are never scaled</div></div>
+
+      <div class="irule"></div>
+
+      <div class="irow"><div class="ilab">Blend</div><div class="sel" style="width:100%">Normal <i>▾</i></div></div>
+      <div class="irow"><div class="ilab">Opacity</div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <div class="slider"><div class="trk"></div><div class="fil" style="width:100%"></div><div class="thb" style="left:100%"></div></div>
+          <span class="mono tiny dim">100 %</span>
+        </div>
+      </div>
+      <div style="margin-top:22px"><div class="btn del">Delete layer</div></div>
+    </div>
+  </div>
+</div>
+<p class="note"><b>What changed.</b> A sprite is stored as a sprite-tagged pattern in the existing pattern store
+(palette-indexed pixels + blit), so it needs no new storage, works in the playground, and the compositor blits it
+natively — it does not use one of the two pattern-layer slots. Drawing happens on the preview at the layer's box: the
+tool row sits directly above the canvas it acts on, the selection marquee is the sprite's bounds, and the cursor paints
+one pixel cell at a time.</p>
+
+
+<!-- ===================== S9 ===================== -->
+<p class="cap"><b>S9</b> · Playground — Scenes tab</p>
+<div class="frame w1200" id="S9" style="height:420px">
+  <header class="hdr">
+    <div class="wordmark">luxel <span>playground</span></div>
+    <nav class="tabs"><a>Patterns</a><a class="on">Scenes</a></nav>
+    <div class="spacer"></div>
+    <div class="btn" style="border-color:var(--accent);color:var(--text);background:var(--accent-soft)">Preview as &nbsp;<span class="mono tiny">64×64 matrix</span> <i style="font-style:normal;font-size:10px;color:var(--text-dim)">▾</i></div>
+    <div class="fps" style="margin-left:14px">60 fps</div>
+  </header>
+  <div class="pagebar">
+    <div class="hint">Scenes need a 2D fixture. This page is previewing a 64×64 matrix.</div>
+    <div class="spacer"></div>
+    <div class="btn primary">+ New scene</div>
+  </div>
+  <div class="tiles c5">
+    <div class="tile">
+      <div class="thumb"><canvas data-viz="clock" data-w="64" data-h="64"></canvas></div>
+      <div class="meta"><div class="nm">Clock overlay</div><div class="sub">3 layers</div></div>
+    </div>
+    <div class="tile">
+      <div class="thumb"><canvas data-viz="party" data-w="64" data-h="64"></canvas></div>
+      <div class="meta"><div class="nm">Party wall</div><div class="sub">4 layers</div></div>
+    </div>
+  </div>
+</div>
+<p class="note"><b>What changed.</b> The playground has no device, so the Scenes tab follows the <i>Preview as</i> chip:
+it is here because the chip says matrix. Set the chip to Strip and the tab disappears exactly as it does on a strip
+device (S1b) — one rule, two places, no separate explanation for why a feature is missing.</p>
+
+<style>
+/* ---------- batch 3 · wiring & capabilities ---------- */
+.s3c .srow{grid-template-columns:120px 1fr}
+.arrbox{margin-top:16px;padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--bg-inset)}
+.arrsvg{display:block;margin:0 auto}
+.ckrow{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;white-space:nowrap}
+.cbx.on{background:var(--accent);border-color:var(--accent);color:#16110a;display:inline-flex;align-items:center;justify-content:center;font-size:9px;line-height:1}
+.dot.amber{background:var(--accent)}
+.refresh{display:flex;align-items:center;gap:8px;margin-top:16px;font-size:13px}
+.refresh .hz{color:var(--accent);font-family:var(--mono);font-size:13px}
+.notes{margin-top:14px}
+.notes div{font-size:12px;color:var(--text-dim);line-height:1.6}
+.menu .mi.parent{display:flex;align-items:center;position:relative}
+.menu .mi .caret{margin-left:auto;color:var(--text-dim);font-size:10px}
+.menu .sub{position:absolute;left:calc(100% + 6px);top:-5px;width:184px;padding:4px;background:var(--bg-panel);border:1px solid var(--border);border-radius:8px;box-shadow:0 14px 34px rgba(0,0,0,.65)}
+.lnk{font-size:12.5px;color:var(--text-dim);white-space:nowrap}
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;height:212px;text-align:center}
+</style>
+
+<div class="masthead" style="margin:56px 0 0">
+  <h1 style="font-size:18px">Batch 3 · Wiring &amp; capabilities</h1>
+  <p style="margin-bottom:28px">Panel arrangement as a picture, and the "add this somewhere" paths.</p>
+</div>
+
+<!-- ===================== S3c ===================== -->
+<p class="cap"><b>S3c</b> · LED layout — HUB75, 2×2 panel chain</p>
+<div class="frame w760 s3c" id="S3c">
+  <div style="padding:20px">
+    <div class="sect" style="margin-bottom:0">
+      <div class="secthead"><div class="slabel">LED layout</div><div class="rule"></div><div class="mono tiny dim">luxel-f6b0a8 · HUB75 S3</div></div>
+      <div class="form">
+        <div class="summary">
+          <div class="big">128 × 128 matrix</div>
+          <div class="hint">4 panels · 16384 pixels · HUB75</div>
+          <canvas data-viz="grid64" data-w="64" data-h="64"></canvas>
+        </div>
+
+        <div class="srow">
+          <div class="lab">Panel</div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <div class="sel" style="width:150px">64 × 64 <i>▾</i></div>
+            <span class="tiny dim">scan</span>
+            <div class="sel" style="width:96px">1/32 <i>▾</i></div>
+          </div>
+        </div>
+        <div class="srow">
+          <div class="lab">Panels</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <input class="inp num" style="width:60px" value="2"><span class="tiny dim">across ×</span>
+            <input class="inp num" style="width:60px" value="2"><span class="tiny dim">down</span>
+          </div>
+        </div>
+        <div class="srow">
+          <div class="lab">Chain</div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <span class="tiny dim">starts</span>
+            <div class="sel" style="width:120px">top-left <i>▾</i></div>
+            <span class="tiny dim">runs</span>
+            <div class="sel" style="width:126px">horizontal <i>▾</i></div>
+          </div>
+        </div>
+        <div class="srow">
+          <div class="lab"></div>
+          <div>
+            <div style="display:flex;align-items:center;gap:18px">
+              <span class="ckrow"><span class="cbx on">✓</span>serpentine (snake)</span>
+              <span class="ckrow"><span class="cbx on">✓</span>rotate alternate rows 180°</span>
+            </div>
+            <div class="hint" style="margin-top:8px">Follow the ribbon cable from the driver: 1 is the panel it plugs into.</div>
+          </div>
+        </div>
+
+        <div class="arrbox">
+          <svg class="arrsvg" width="420" height="300" viewBox="0 0 420 300">
+            <defs>
+              <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#e8a33d"/></marker>
+              <marker id="ahd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="4.5" markerHeight="4.5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#5f6775"/></marker>
+            </defs>
+            <!-- overall size, top -->
+            <text x="230" y="13" fill="#8a90a0" font-family="ui-monospace,monospace" font-size="11" text-anchor="middle">128 px</text>
+            <line x1="110" y1="21" x2="350" y2="21" stroke="#3a4150" stroke-width="1"/>
+            <line x1="110" y1="17" x2="110" y2="25" stroke="#3a4150" stroke-width="1"/>
+            <line x1="350" y1="17" x2="350" y2="25" stroke="#3a4150" stroke-width="1"/>
+            <!-- overall size, left -->
+            <text transform="translate(44,150) rotate(-90)" fill="#8a90a0" font-family="ui-monospace,monospace" font-size="11" text-anchor="middle">128 px</text>
+            <line x1="52" y1="30" x2="52" y2="270" stroke="#3a4150" stroke-width="1"/>
+            <line x1="48" y1="30" x2="56" y2="30" stroke="#3a4150" stroke-width="1"/>
+            <line x1="48" y1="270" x2="56" y2="270" stroke="#3a4150" stroke-width="1"/>
+            <!-- panels -->
+            <rect x="110" y="30" width="116" height="116" rx="4" fill="#171a20" stroke="#2b303a"/>
+            <rect x="234" y="30" width="116" height="116" rx="4" fill="#171a20" stroke="#2b303a"/>
+            <rect x="234" y="154" width="116" height="116" rx="4" fill="#171a20" stroke="#2b303a"/>
+            <rect x="110" y="154" width="116" height="116" rx="4" fill="#171a20" stroke="#2b303a"/>
+            <!-- chain path -->
+            <path d="M168,88 L292,88 L292,212 L168,212" fill="none" stroke="#e8a33d" stroke-width="3.5" stroke-linejoin="round" stroke-linecap="round"/>
+            <!-- chain index knockouts -->
+            <circle cx="168" cy="88" r="21" fill="#171a20"/>
+            <circle cx="292" cy="88" r="21" fill="#171a20"/>
+            <circle cx="292" cy="212" r="21" fill="#171a20"/>
+            <circle cx="168" cy="212" r="21" fill="#171a20"/>
+            <text x="168" y="99" fill="#7c8496" font-family="ui-monospace,monospace" font-size="30" text-anchor="middle">1</text>
+            <text x="292" y="99" fill="#7c8496" font-family="ui-monospace,monospace" font-size="30" text-anchor="middle">2</text>
+            <text x="292" y="223" fill="#7c8496" font-family="ui-monospace,monospace" font-size="30" text-anchor="middle">3</text>
+            <text x="168" y="223" fill="#7c8496" font-family="ui-monospace,monospace" font-size="30" text-anchor="middle">4</text>
+            <path d="M238,88 L225,80.5 L225,95.5 z" fill="#e8a33d"/>
+            <path d="M292,158 L284.5,145 L299.5,145 z" fill="#e8a33d"/>
+            <path d="M222,212 L235,204.5 L235,219.5 z" fill="#e8a33d"/>
+            <!-- scan direction -->
+            <line x1="142" y1="126" x2="190" y2="126" stroke="#5f6775" stroke-width="1.2" marker-end="url(#ahd)"/>
+            <line x1="266" y1="126" x2="314" y2="126" stroke="#5f6775" stroke-width="1.2" marker-end="url(#ahd)"/>
+            <line x1="314" y1="250" x2="266" y2="250" stroke="#5f6775" stroke-width="1.2" marker-end="url(#ahd)"/>
+            <line x1="190" y1="250" x2="142" y2="250" stroke="#5f6775" stroke-width="1.2" marker-end="url(#ahd)"/>
+            <!-- rotated markers on row 2 -->
+            <text x="246" y="176" fill="#8a90a0" font-family="ui-monospace,monospace" font-size="15">↻</text>
+            <text x="122" y="176" fill="#8a90a0" font-family="ui-monospace,monospace" font-size="15">↻</text>
+            <!-- input -->
+            <rect x="78" y="81" width="14" height="14" rx="2" fill="#e8a33d"/>
+            <line x1="92" y1="88" x2="101" y2="88" stroke="#e8a33d" stroke-width="3"/>
+            <path d="M110,88 L99,81.5 L99,94.5 z" fill="#e8a33d"/>
+            <text x="72" y="92" fill="#e8a33d" font-family="ui-monospace,monospace" font-size="12" text-anchor="end">IN</text>
+          </svg>
+        </div>
+
+        <div class="refresh">
+          <i class="dot amber"></i><span>Estimated refresh</span><span class="hz">57 Hz</span>
+        </div>
+        <div class="hint" style="margin-top:6px">4 panels × 7 planes at 30 MHz. Below 100 Hz cameras and fast motion show flicker — lower the plane count in Advanced › Panel driver, or use fewer panels per chain.</div>
+
+        <div class="notes">
+          <div>One chain per output on this board.</div>
+          <div>Every panel in a chain must have the same size and scan.</div>
+          <div>Changes apply after a reboot.</div>
+        </div>
+
+        <div class="linkrow">
+          <div class="hint">For rings, sculptures, irregular layouts</div>
+          <a>Custom map program →</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="note"><b>What changed.</b> Panel chains are the one setting people get wrong, and six dropdowns cannot say
+which panel is which — the picture can. The arrangement is drawn from the fields above it: chain order, the snake, the
+180° flip on row 2, and the scan direction each panel ends up with, with <b>IN</b> on the panel the ribbon plugs into so
+there is a physical thing to match. The refresh estimate sits under it because panel count is what spends it, and it
+names the fix (plane count, in Advanced) rather than just going amber.</p>
+
+<!-- ===================== S3d ===================== -->
+<p class="cap"><b>S3d</b> · LED layout — WS2812 matrix built from strip</p>
+<div class="frame w760 s3c" id="S3d">
+  <div style="padding:20px">
+    <div class="sect" style="margin-bottom:0">
+      <div class="secthead"><div class="slabel">LED layout</div><div class="rule"></div><div class="mono tiny dim">luxel-4ae0d4 · WS2812</div></div>
+      <div class="form">
+        <div class="summary">
+          <div class="big">16 × 16 matrix</div>
+          <div class="hint">256 of 300 px · WS2812 · GPIO 18</div>
+          <canvas data-viz="grid16" data-w="16" data-h="16"></canvas>
+        </div>
+
+        <div class="srow">
+          <div class="lab">Layout</div>
+          <div><div class="sel" style="width:150px">Matrix <i>▾</i></div></div>
+        </div>
+        <div class="srow">
+          <div class="lab">Size</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <input class="inp num" style="width:60px" value="16"><span class="tiny dim">×</span>
+            <input class="inp num" style="width:60px" value="16"><span class="tiny dim">px</span>
+          </div>
+        </div>
+        <div class="srow">
+          <div class="lab">Pixel wiring</div>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span class="tiny dim">starts</span>
+            <div class="sel" style="width:126px">bottom-left <i>▾</i></div>
+            <span class="tiny dim">runs</span>
+            <div class="sel" style="width:110px">vertical <i>▾</i></div>
+            <span class="ckrow"><span class="cbx on">✓</span>serpentine</span>
+          </div>
+        </div>
+
+        <div class="arrbox">
+          <svg class="arrsvg" width="420" height="300" viewBox="0 0 420 300">
+            <defs>
+              <pattern id="pxdots" width="15" height="15" patternUnits="userSpaceOnUse">
+                <circle cx="7.5" cy="7.5" r="1.7" fill="#3a4150"/>
+              </pattern>
+              <linearGradient id="fade" gradientUnits="userSpaceOnUse" x1="105" y1="0" x2="238" y2="0">
+                <stop offset="0" stop-color="#e8a33d" stop-opacity="1"/>
+                <stop offset="0.38" stop-color="#e8a33d" stop-opacity="1"/>
+                <stop offset="0.66" stop-color="#e8a33d" stop-opacity="0.45"/>
+                <stop offset="0.86" stop-color="#e8a33d" stop-opacity="0.14"/>
+                <stop offset="1" stop-color="#e8a33d" stop-opacity="0"/>
+              </linearGradient>
+              <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#e8a33d"/></marker>
+            </defs>
+            <!-- size labels -->
+            <text x="217" y="13" fill="#8a90a0" font-family="ui-monospace,monospace" font-size="11" text-anchor="middle">16 px</text>
+            <line x1="105" y1="21" x2="330" y2="21" stroke="#3a4150"/>
+            <line x1="105" y1="17" x2="105" y2="25" stroke="#3a4150"/>
+            <line x1="330" y1="17" x2="330" y2="25" stroke="#3a4150"/>
+            <text transform="translate(44,142) rotate(-90)" fill="#8a90a0" font-family="ui-monospace,monospace" font-size="11" text-anchor="middle">16 px</text>
+            <line x1="52" y1="30" x2="52" y2="255" stroke="#3a4150"/>
+            <line x1="48" y1="30" x2="56" y2="30" stroke="#3a4150"/>
+            <line x1="48" y1="255" x2="56" y2="255" stroke="#3a4150"/>
+            <!-- pixel grid -->
+            <rect x="97.5" y="22.5" width="240" height="240" fill="url(#pxdots)"/>
+            <!-- wiring path, fading out to the right -->
+            <path d="M105,255 L105,30 L120,30 L120,255 L135,255 L135,30 L150,30 L150,255 L165,255 L165,30 L180,30 L180,255 L195,255 L195,30 L210,30 L210,255 L225,255 L225,110"
+                  fill="none" stroke="url(#fade)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+            <!-- direction cues on the first two columns -->
+            <line x1="105" y1="70" x2="105" y2="48" stroke="#e8a33d" stroke-width="3" stroke-linecap="round" marker-end="url(#ah2)"/>
+            <line x1="120" y1="215" x2="120" y2="237" stroke="#e8a33d" stroke-width="3" stroke-linecap="round" marker-end="url(#ah2)"/>
+            <!-- input -->
+            <rect x="84" y="249" width="12" height="12" rx="2" fill="#e8a33d"/>
+            <line x1="96" y1="255" x2="105" y2="255" stroke="#e8a33d" stroke-width="2.5"/>
+            <text x="90" y="241" fill="#e8a33d" font-family="ui-monospace,monospace" font-size="11" text-anchor="middle">IN</text>
+            <!-- first pixel emphasis -->
+            <circle cx="105" cy="255" r="3.4" fill="#e8a33d"/>
+            <text x="252" y="285" fill="#8a90a0" font-family="ui-monospace,monospace" font-size="11" text-anchor="middle">…256 px, column by column</text>
+          </svg>
+        </div>
+
+        <div class="srow" style="margin-top:16px">
+          <div class="lab">Panels</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <input class="inp num" style="width:60px" value="1"><span class="tiny dim">across ×</span>
+            <input class="inp num" style="width:60px" value="1"><span class="tiny dim">down</span>
+          </div>
+        </div>
+        <div class="hint">Tile several matrices — each one wired as above.</div>
+
+        <div class="notes"><div>Changes apply after a reboot.</div></div>
+        <div class="linkrow">
+          <div class="hint">For rings, sculptures, irregular layouts</div>
+          <a>Custom map program →</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="note"><b>What changed.</b> The same widget, one level down: on a strip-built matrix the thing you have to
+describe is how the strip snakes through the pixels, and it is the identical question — where does it start, which way
+does it run, does it snake. Same picture, same <b>IN</b> marker, same reboot note; only the unit changed from panel to
+pixel. <i>Panels across × down</i> stays underneath so tiling several of these is the next step out, not a different
+screen.</p>
+
+<!-- ===================== S3i ===================== -->
+<p class="cap"><b>S3i</b> · Settings — Output processing, two devices</p>
+<div class="frame w760" id="S3i">
+  <div style="padding:20px">
+    <div class="disclist">
+      <div class="drow open"><i class="chev">▾</i>Output processing<span class="st2">300 px SK9822 strip</span></div>
+      <div class="dbody" style="border-bottom:0">
+        <div class="srow">
+          <div class="lab">Gamma</div>
+          <div style="display:flex;align-items:center;gap:10px"><input class="inp num" value="2.2"><span class="hint">0 = off; 2.2 gives smoother dark fades</span></div>
+        </div>
+        <div class="srow">
+          <div class="lab">Brightness curve</div>
+          <div style="display:flex;align-items:center;gap:10px"><input class="inp num" value="2.2"><span class="hint">makes the dimmer end feel linear</span></div>
+        </div>
+        <div class="srow">
+          <div class="lab">Power cap</div>
+          <div style="display:flex;align-items:center;gap:10px"><input class="inp num" value="0"><span class="hint">mA — frames estimated above this get scaled down; 0 = off</span></div>
+        </div>
+        <div class="srow">
+          <div class="lab">Blur</div>
+          <div style="display:flex;align-items:center;gap:10px"><input class="inp num" value="0"><span class="hint">% — softens along the strip</span></div>
+        </div>
+        <div class="srow">
+          <div class="lab">Glow</div>
+          <div style="display:flex;align-items:center;gap:10px"><input class="inp num" value="0"><span class="hint">% — bright pixels bleed into their neighbours</span></div>
+        </div>
+        <div class="srow" style="align-items:start">
+          <div class="lab" style="padding-top:2px">Palette</div>
+          <div>
+            <div class="gradbar"></div>
+            <div style="display:flex;align-items:center;gap:10px;margin-top:8px">
+              <div class="btn sm">Edit stops…</div>
+              <span class="hint">5 stops · applied on top of the pattern's own palette</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="statecap">same group, a device with fewer capabilities:<span class="rule"></span></div>
+
+    <div class="disclist">
+      <div class="drow open"><i class="chev">▾</i>Output processing<span class="st2">custom map · 3D · 400 px</span></div>
+      <div class="dbody" style="border-bottom:0">
+        <div class="srow">
+          <div class="lab">Gamma</div>
+          <div style="display:flex;align-items:center;gap:10px"><input class="inp num" value="2.2"><span class="hint">0 = off; 2.2 gives smoother dark fades</span></div>
+        </div>
+        <div class="srow">
+          <div class="lab">Brightness curve</div>
+          <div style="display:flex;align-items:center;gap:10px"><input class="inp num" value="2.2"><span class="hint">makes the dimmer end feel linear</span></div>
+        </div>
+        <div class="srow" style="align-items:start">
+          <div class="lab" style="padding-top:2px">Palette</div>
+          <div>
+            <div class="gradbar"></div>
+            <div style="display:flex;align-items:center;gap:10px;margin-top:8px">
+              <div class="btn sm">Edit stops…</div>
+              <span class="hint">5 stops · applied on top of the pattern's own palette</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="note"><b>What changed.</b> The device advertises what it can do (caps in <span class="mono tiny">/api/status</span>);
+a setting the device doesn't advertise is absent, never disabled. Blur and glow need neighbours — a strip or a regular
+grid — so on a 3D custom map the group is simply shorter, with no greyed rows and no "not available" copy to read past.
+The same rule removes Power cap from the HUB75 board in S3, which cannot estimate its own current.</p>
+
+<!-- ===================== S6b ===================== -->
+<p class="cap"><b>S6b</b> · Scenes — playground, no 2D fixture selected</p>
+<div class="frame w1200" id="S6b" style="height:260px">
+  <header class="hdr">
+    <div class="wordmark">luxel <span>playground</span></div>
+    <nav class="tabs"><a>Patterns</a><a class="on">Scenes</a></nav>
+    <div class="spacer"></div>
+    <div class="btn" style="border-color:var(--accent);color:var(--text);background:var(--accent-soft)">Preview as &nbsp;<span class="mono tiny">Auto</span> <i style="font-style:normal;font-size:10px;color:var(--text-dim)">▾</i></div>
+    <div class="fps" style="margin-left:14px">60 fps</div>
+  </header>
+  <div class="empty">
+    <div class="dim" style="font-size:13px">Scenes layer patterns, text and images on a matrix.</div>
+    <div class="btn primary">Preview as a 64×64 matrix</div>
+    <div class="hint">Then + New scene.</div>
+  </div>
+</div>
+<p class="note"><b>What changed.</b> The empty state is the fix for the tab that would otherwise be a dead end: it says
+what scenes are in one sentence and hands over the single action that unblocks the page — set the preview fixture —
+rather than showing an empty grid with a <i>+ New scene</i> button that cannot work yet. No card, no illustration, and
+the follow-up step is dim text, not a second button.</p>
+
+<style>
+/* ---------- batch 4 · projection ---------- */
+.w360{width:360px}
+.cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:10px}
+.pcard{padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--bg-inset)}
+.pcard.on{border-color:var(--accent);background:var(--accent-soft);box-shadow:0 0 0 1px rgba(232,163,61,.3)}
+.pcard canvas{display:block;width:120px;height:120px;margin:0 auto;border-radius:4px;background:#000;image-rendering:pixelated}
+.pnm{margin-top:10px;font-size:13px;text-align:center}
+.pcard.on .pnm{font-weight:600}
+.phint{margin-top:5px;font-size:11px;line-height:1.45;color:var(--text-dim);text-align:center;white-space:normal}
+.prowlab{font-size:13px}
+#S3e .srow{grid-template-columns:168px 1fr}
+.disrow{display:flex;align-items:center;gap:10px;opacity:.5;font-size:13px}
+</style>
+
+<div class="masthead" style="margin:56px 0 0">
+  <h1 style="font-size:18px">Batch 4 · Projection</h1>
+  <p style="margin-bottom:28px">What happens when a pattern's layout is not the fixture's layout.</p>
+</div>
+
+<style>
+/* ---------- batch 5 · projection follows the layout ---------- */
+.prow{display:grid;grid-template-columns:168px minmax(0,1fr);gap:14px;align-items:start;margin-bottom:20px}
+.prow:last-child{margin-bottom:0}
+.prlab{font-size:13px;padding-top:12px}
+.prow .cards{margin-top:0}
+.cards.c2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.cards.c3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.cards.c4{grid-template-columns:repeat(4,minmax(0,1fr))}
+.pcanv{position:relative;line-height:0}
+.pcard canvas.smooth{image-rendering:auto}
+.gl{position:absolute;right:8px;bottom:6px;background:rgba(8,10,14,.74);border-radius:5px}
+.barcard{display:flex;align-items:center;gap:12px;padding:10px 12px;margin-bottom:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-inset)}
+.barcard:last-child{margin-bottom:0}
+.barcard.on{border-color:var(--accent);background:var(--accent-soft);box-shadow:0 0 0 1px rgba(232,163,61,.3)}
+.barcard canvas{display:block;width:200px;height:24px;border-radius:3px;background:#000;image-rendering:pixelated;flex:none}
+.barcard svg{flex:none;display:block}
+.bnm{font-size:13px}
+.barcard.on .bnm{font-weight:600}
+.bhint{margin-top:3px;font-size:11px;color:var(--text-dim)}
+.pnote{font-size:12.5px;color:var(--text-dim);padding-top:12px}
+#S3g .pcard{padding:8px}
+#S3i .srow{margin-bottom:9px}
+#S3i .dbody{padding:6px 14px 13px}
+#S3g .pcard canvas{width:100px;height:100px}
+</style>
+
+<!-- ===================== S3e ===================== -->
+<p class="cap"><b>S3e</b> · Projection — 64×64 matrix</p>
+<div class="frame w760" id="S3e">
+  <div style="padding:20px">
+    <div class="sect" style="margin-bottom:0">
+      <div class="secthead"><div class="slabel">Projection</div><div class="rule"></div><div class="mono tiny dim">64×64 matrix</div></div>
+      <div class="form">
+        <div class="hint" style="margin-bottom:18px">How patterns made for another layout are shown on this one. A playlist item or scene layer can override it.</div>
+
+        <div class="prow">
+          <div class="prlab">1D patterns</div>
+          <div class="cards c3">
+            <div class="pcard">
+              <div class="pcanv"><canvas data-viz="projrows" data-w="64" data-h="64"></canvas></div>
+              <div class="pnm">By index</div>
+              <div class="phint">rows · 4096 unique pixels</div>
+            </div>
+            <div class="pcard on">
+              <div class="pcanv"><canvas data-viz="projacross" data-w="64" data-h="64"></canvas></div>
+              <div class="pnm">Along x</div>
+              <div class="phint">stretched across · 64 unique pixels · 64× cheaper</div>
+            </div>
+            <div class="pcard">
+              <div class="pcanv"><canvas data-viz="projdown" data-w="64" data-h="64"></canvas></div>
+              <div class="pnm">Along y</div>
+              <div class="phint">stretched down · 64 unique pixels</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="prow">
+          <div class="prlab">3D patterns</div>
+          <div class="cards c3">
+            <div class="pcard on">
+              <div class="pcanv">
+                <canvas data-viz="slicexy" data-w="64" data-h="64"></canvas>
+                <svg class="gl" width="40" height="40" viewBox="0 0 40 40">
+                  <polygon points="20,7 33,14.5 20,22 7,14.5" fill="rgba(232,163,61,.42)" stroke="#e8a33d" stroke-width="1.3"/>
+                  <polygon points="7,14.5 20,22 20,35 7,27.5" fill="none" stroke="#7e8798" stroke-width="1"/>
+                  <polygon points="33,14.5 20,22 20,35 33,27.5" fill="none" stroke="#7e8798" stroke-width="1"/>
+                </svg>
+              </div>
+              <div class="pnm">Slice xy</div>
+              <div class="phint">z = 0.5</div>
+            </div>
+            <div class="pcard">
+              <div class="pcanv">
+                <canvas data-viz="slicexz" data-w="64" data-h="64"></canvas>
+                <svg class="gl" width="40" height="40" viewBox="0 0 40 40">
+                  <polygon points="20,7 33,14.5 20,22 7,14.5" fill="none" stroke="#7e8798" stroke-width="1"/>
+                  <polygon points="7,14.5 20,22 20,35 7,27.5" fill="rgba(232,163,61,.42)" stroke="#e8a33d" stroke-width="1.3"/>
+                  <polygon points="33,14.5 20,22 20,35 33,27.5" fill="none" stroke="#7e8798" stroke-width="1"/>
+                </svg>
+              </div>
+              <div class="pnm">Slice xz</div>
+              <div class="phint">y = 0.5</div>
+            </div>
+            <div class="pcard">
+              <div class="pcanv">
+                <canvas data-viz="sliceyz" data-w="64" data-h="64"></canvas>
+                <svg class="gl" width="40" height="40" viewBox="0 0 40 40">
+                  <polygon points="20,7 33,14.5 20,22 7,14.5" fill="none" stroke="#7e8798" stroke-width="1"/>
+                  <polygon points="7,14.5 20,22 20,35 7,27.5" fill="none" stroke="#7e8798" stroke-width="1"/>
+                  <polygon points="33,14.5 20,22 20,35 33,27.5" fill="rgba(232,163,61,.42)" stroke="#e8a33d" stroke-width="1.3"/>
+                </svg>
+              </div>
+              <div class="pnm">Slice yz</div>
+              <div class="phint">x = 0.5</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="note"><b>What changed.</b> The block now lists only the kinds of pattern that are <i>not</i> native here — a
+2D pattern on a matrix needs no projection, so that row does not exist, rather than appearing greyed out. Each picker
+offers the axes this fixture actually has, and the cards show the result on this fixture, with the cost stated where it
+differs: stretching computes 64 pixels instead of 4096. The cube glyph says which cut a slice is without a sentence.</p>
+
+<!-- ===================== S3f ===================== -->
+<p class="cap"><b>S3f</b> · Projection — 300 px strip</p>
+<div class="frame w760" id="S3f">
+  <div style="padding:20px">
+    <div class="sect" style="margin-bottom:0">
+      <div class="secthead"><div class="slabel">Projection</div><div class="rule"></div><div class="mono tiny dim">300 px strip</div></div>
+      <div class="form">
+        <div class="hint" style="margin-bottom:18px">How patterns made for another layout are shown on this one. A playlist item or scene layer can override it.</div>
+
+        <div class="prow">
+          <div class="prlab">2D patterns</div>
+          <div>
+            <div class="barcard on">
+              <svg width="40" height="40" viewBox="0 0 40 40">
+                <rect x="7" y="7" width="26" height="26" fill="none" stroke="#5c6472"/>
+                <line x1="13.5" y1="7" x2="13.5" y2="33" stroke="#4a5160"/><line x1="20" y1="7" x2="20" y2="33" stroke="#4a5160"/><line x1="26.5" y1="7" x2="26.5" y2="33" stroke="#4a5160"/>
+                <line x1="7" y1="13.5" x2="33" y2="13.5" stroke="#4a5160"/><line x1="7" y1="26.5" x2="33" y2="26.5" stroke="#4a5160"/>
+                <line x1="7" y1="20" x2="33" y2="20" stroke="#e8a33d" stroke-width="2.4"/>
+              </svg>
+              <canvas data-viz="barmidrow" data-w="200" data-h="1"></canvas>
+              <div><div class="bnm">Middle row</div><div class="bhint">the strip shows y = 0.5</div></div>
+            </div>
+            <div class="barcard">
+              <svg width="40" height="40" viewBox="0 0 40 40">
+                <rect x="7" y="7" width="26" height="26" fill="none" stroke="#5c6472"/>
+                <line x1="13.5" y1="7" x2="13.5" y2="33" stroke="#4a5160"/><line x1="26.5" y1="7" x2="26.5" y2="33" stroke="#4a5160"/>
+                <line x1="7" y1="13.5" x2="33" y2="13.5" stroke="#4a5160"/><line x1="7" y1="20" x2="33" y2="20" stroke="#4a5160"/><line x1="7" y1="26.5" x2="33" y2="26.5" stroke="#4a5160"/>
+                <line x1="20" y1="7" x2="20" y2="33" stroke="#e8a33d" stroke-width="2.4"/>
+              </svg>
+              <canvas data-viz="barmidcol" data-w="200" data-h="1"></canvas>
+              <div><div class="bnm">Middle column</div><div class="bhint">the strip shows x = 0.5</div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="prow">
+          <div class="prlab">3D patterns</div>
+          <div>
+            <div class="barcard on">
+              <svg width="40" height="40" viewBox="0 0 40 40">
+                <polygon points="20,7 33,14.5 20,22 7,14.5" fill="none" stroke="#4b5260"/>
+                <polygon points="7,14.5 20,22 20,35 7,27.5" fill="none" stroke="#4b5260"/>
+                <polygon points="33,14.5 20,22 20,35 33,27.5" fill="none" stroke="#4b5260"/>
+                <line x1="7" y1="13.5" x2="33" y2="28.5" stroke="#e8a33d" stroke-width="2.2" stroke-linecap="round"/>
+              </svg>
+              <canvas data-viz="bar3dx" data-w="200" data-h="1"></canvas>
+              <div><div class="bnm">Along x</div><div class="bhint">line through the centre, y = z = 0.5</div></div>
+            </div>
+            <div class="barcard">
+              <svg width="40" height="40" viewBox="0 0 40 40">
+                <polygon points="20,7 33,14.5 20,22 7,14.5" fill="none" stroke="#4b5260"/>
+                <polygon points="7,14.5 20,22 20,35 7,27.5" fill="none" stroke="#4b5260"/>
+                <polygon points="33,14.5 20,22 20,35 33,27.5" fill="none" stroke="#4b5260"/>
+                <line x1="33" y1="13.5" x2="7" y2="28.5" stroke="#e8a33d" stroke-width="2.2" stroke-linecap="round"/>
+              </svg>
+              <canvas data-viz="bar3dy" data-w="200" data-h="1"></canvas>
+              <div><div class="bnm">Along y</div><div class="bhint">line through the centre, x = z = 0.5</div></div>
+            </div>
+            <div class="barcard">
+              <svg width="40" height="40" viewBox="0 0 40 40">
+                <polygon points="20,7 33,14.5 20,22 7,14.5" fill="none" stroke="#4b5260"/>
+                <polygon points="7,14.5 20,22 20,35 7,27.5" fill="none" stroke="#4b5260"/>
+                <polygon points="33,14.5 20,22 20,35 33,27.5" fill="none" stroke="#4b5260"/>
+                <line x1="20" y1="6" x2="20" y2="36" stroke="#e8a33d" stroke-width="2.2" stroke-linecap="round"/>
+              </svg>
+              <canvas data-viz="bar3dz" data-w="200" data-h="1"></canvas>
+              <div><div class="bnm">Along z</div><div class="bhint">line through the centre, x = y = 0.5</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="note"><b>What changed.</b> On a strip the native kind is 1D, so there is no 1D row at all — the block starts
+with 2D. Cards are bars because that is the fixture's shape, and the tiny glyph beside each one shows where the bar came
+from: a line through a grid, or a line through a cube. Same two questions as the matrix frame, asked with the only axes
+a strip can be given.</p>
+
+<!-- ===================== S3g ===================== -->
+<p class="cap"><b>S3g</b> · Projection — 8×8×8 lattice</p>
+<div class="frame w760" id="S3g">
+  <div style="padding:20px">
+    <div class="sect" style="margin-bottom:0">
+      <div class="secthead"><div class="slabel">Projection</div><div class="rule"></div><div class="mono tiny dim">8×8×8 lattice · 512 px</div></div>
+      <div class="form">
+        <div class="hint" style="margin-bottom:18px">How patterns made for another layout are shown on this one. A playlist item or scene layer can override it.</div>
+
+        <div class="prow">
+          <div class="prlab">1D patterns</div>
+          <div class="cards c4">
+            <div class="pcard">
+              <div class="pcanv"><canvas class="smooth" data-viz="lattice3" data-rule="index" data-w="100" data-h="100"></canvas></div>
+              <div class="pnm">By index</div>
+              <div class="phint">layer by layer, row by row · 512 unique pixels</div>
+            </div>
+            <div class="pcard on">
+              <div class="pcanv"><canvas class="smooth" data-viz="lattice3" data-rule="x" data-w="100" data-h="100"></canvas></div>
+              <div class="pnm">Along x</div>
+              <div class="phint">one strip along x, repeated over y and z · 8 unique pixels</div>
+            </div>
+            <div class="pcard">
+              <div class="pcanv"><canvas class="smooth" data-viz="lattice3" data-rule="y" data-w="100" data-h="100"></canvas></div>
+              <div class="pnm">Along y</div>
+              <div class="phint">repeated over x and z · 8 unique pixels</div>
+            </div>
+            <div class="pcard">
+              <div class="pcanv"><canvas class="smooth" data-viz="lattice3" data-rule="z" data-w="100" data-h="100"></canvas></div>
+              <div class="pnm">Along z</div>
+              <div class="phint">repeated over x and y · 8 unique pixels</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="prow">
+          <div class="prlab">2D patterns</div>
+          <div class="cards c3">
+            <div class="pcard on">
+              <div class="pcanv"><canvas class="smooth" data-viz="lattice3" data-rule="extz" data-w="100" data-h="100"></canvas></div>
+              <div class="pnm">Repeat along z</div>
+              <div class="phint">the xy image on every layer</div>
+            </div>
+            <div class="pcard">
+              <div class="pcanv"><canvas class="smooth" data-viz="lattice3" data-rule="exty" data-w="100" data-h="100"></canvas></div>
+              <div class="pnm">Repeat along y</div>
+              <div class="phint">the xz image at every y</div>
+            </div>
+            <div class="pcard">
+              <div class="pcanv"><canvas class="smooth" data-viz="lattice3" data-rule="extx" data-w="100" data-h="100"></canvas></div>
+              <div class="pnm">Repeat along x</div>
+              <div class="phint">the yz image at every x</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="note"><b>What changed.</b> A lattice is native for 3D patterns, so the 3D row is gone and the two rows that
+remain are the ones a cube has to answer: where a strip goes, and which way a flat image is extruded. The card art is
+the lattice itself, so "repeated over y and z" is something you see rather than parse.</p>
+
+<!-- ===================== S3h ===================== -->
+<p class="cap"><b>S3h</b> · Projection — custom map, 256 px ring</p>
+<div class="frame w760" id="S3h">
+  <div style="padding:20px">
+    <div class="sect" style="margin-bottom:0">
+      <div class="secthead"><div class="slabel">Projection</div><div class="rule"></div><div class="mono tiny dim">custom map · 2D · 256 px</div></div>
+      <div class="form">
+        <div class="hint" style="margin-bottom:18px">How patterns made for another layout are shown on this one. A playlist item or scene layer can override it.</div>
+
+        <div class="prow">
+          <div class="prlab">1D patterns</div>
+          <div class="cards c3">
+            <div class="pcard on">
+              <div class="pcanv"><canvas class="smooth" data-viz="ringmap" data-rule="index" data-w="120" data-h="120"></canvas></div>
+              <div class="pnm">By index</div>
+              <div class="phint">wiring order</div>
+            </div>
+            <div class="pcard">
+              <div class="pcanv"><canvas class="smooth" data-viz="ringmap" data-rule="x" data-w="120" data-h="120"></canvas></div>
+              <div class="pnm">Along x</div>
+              <div class="phint">hue follows the map's x only</div>
+            </div>
+            <div class="pcard">
+              <div class="pcanv"><canvas class="smooth" data-viz="ringmap" data-rule="y" data-w="120" data-h="120"></canvas></div>
+              <div class="pnm">Along y</div>
+              <div class="phint">hue follows the map's y only</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="prow">
+          <div class="prlab">3D patterns</div>
+          <div class="cards c3">
+            <div class="pcard on">
+              <div class="pcanv">
+                <canvas class="smooth" data-viz="ringmap" data-rule="sxy" data-w="120" data-h="120"></canvas>
+                <svg class="gl" width="40" height="40" viewBox="0 0 40 40">
+                  <polygon points="20,7 33,14.5 20,22 7,14.5" fill="rgba(232,163,61,.42)" stroke="#e8a33d" stroke-width="1.3"/>
+                  <polygon points="7,14.5 20,22 20,35 7,27.5" fill="none" stroke="#7e8798" stroke-width="1"/>
+                  <polygon points="33,14.5 20,22 20,35 33,27.5" fill="none" stroke="#7e8798" stroke-width="1"/>
+                </svg>
+              </div>
+              <div class="pnm">Slice xy</div>
+              <div class="phint">z = 0.5</div>
+            </div>
+            <div class="pcard">
+              <div class="pcanv">
+                <canvas class="smooth" data-viz="ringmap" data-rule="sxz" data-w="120" data-h="120"></canvas>
+                <svg class="gl" width="40" height="40" viewBox="0 0 40 40">
+                  <polygon points="20,7 33,14.5 20,22 7,14.5" fill="none" stroke="#7e8798" stroke-width="1"/>
+                  <polygon points="7,14.5 20,22 20,35 7,27.5" fill="rgba(232,163,61,.42)" stroke="#e8a33d" stroke-width="1.3"/>
+                  <polygon points="33,14.5 20,22 20,35 33,27.5" fill="none" stroke="#7e8798" stroke-width="1"/>
+                </svg>
+              </div>
+              <div class="pnm">Slice xz</div>
+              <div class="phint">y = 0.5</div>
+            </div>
+            <div class="pcard">
+              <div class="pcanv">
+                <canvas class="smooth" data-viz="ringmap" data-rule="syz" data-w="120" data-h="120"></canvas>
+                <svg class="gl" width="40" height="40" viewBox="0 0 40 40">
+                  <polygon points="20,7 33,14.5 20,22 7,14.5" fill="none" stroke="#7e8798" stroke-width="1"/>
+                  <polygon points="7,14.5 20,22 20,35 7,27.5" fill="none" stroke="#7e8798" stroke-width="1"/>
+                  <polygon points="33,14.5 20,22 20,35 33,27.5" fill="rgba(232,163,61,.42)" stroke="#e8a33d" stroke-width="1.3"/>
+                </svg>
+              </div>
+              <div class="pnm">Slice yz</div>
+              <div class="phint">x = 0.5</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="note"><b>What changed.</b> "Custom" is not a dimensionality — this map is 2D because that is what its program
+plots — so the block asks exactly the same two questions as the matrix frame, and only the card shape differs. <i>By
+index</i> is the default because wiring order is the one ordering a sculpture always has, and the art shows the seam
+where the wiring starts. The 3D row is a real picker: which cut of the cube lands on the ring, with the cube glyph
+saying which plane that is.</p>
+
+
+<style>
+/* ---------- batch 6 · projection as an advanced row ---------- */
+.hairline{height:1px;background:var(--border);margin:16px 0 12px}
+.projrow{display:flex;align-items:center;gap:10px;font-size:12.5px;padding:3px 0}
+.projrow .pl{color:var(--text-dim)}
+.projrow .pv{color:var(--text)}
+.projrow .pv.ovr{color:var(--accent)}
+.projrow .pa{margin-left:auto;color:var(--accent);font-size:12.5px}
+.statecap{display:flex;align-items:center;gap:10px;margin:18px 0 8px;font:11px/1 var(--mono);color:#6a7182}
+.statecap .rule{flex:1;height:1px;background:#242832}
+</style>
+
+<!-- ===================== S2c ===================== -->
+<p class="cap"><b>S2c</b> · Editor — Controls for a 1D pattern on a matrix</p>
+<div class="frame w360" id="S2c">
+  <div class="rsec" style="border-bottom:0;padding:16px 16px 20px">
+    <div class="rhead"><div class="slabel">Controls</div><div class="rdim">Sunset Fade · 1D</div></div>
+    <div class="ctlrow">
+      <div class="tiny dim">Hue</div>
+      <div class="slider"><div class="trk"></div><div class="fil" style="width:10%"></div><div class="thb" style="left:10%"></div></div>
+      <input class="inp num xs" value="0.10">
+    </div>
+    <div class="ctlrow">
+      <div class="tiny dim">Speed</div>
+      <div class="slider"><div class="trk"></div><div class="fil" style="width:8%"></div><div class="thb" style="left:8%"></div></div>
+      <input class="inp num xs" value="0.08">
+    </div>
+    <div class="ctlrow">
+      <div class="tiny dim">Sparkle</div>
+      <div><div class="sw on"><i></i></div></div>
+      <div></div>
+    </div>
+    <div class="hairline"></div>
+    <div class="projrow">
+      <span class="pl">Projection</span>
+      <span class="pv">device default · along x</span>
+      <a class="pa">change</a>
+    </div>
+    <div class="statecap">override state:<span class="rule"></span></div>
+    <div class="projrow">
+      <span class="pl">Projection</span>
+      <span class="pv ovr">along y · override</span>
+      <a class="pa">reset</a>
+    </div>
+    <div class="hint" style="margin-top:12px">Saved with the playlist item or scene layer, like the sliders.</div>
+  </div>
+</div>
+<p class="note"><b>What changed.</b> Projection stopped being a control and became a status line: one dim row under a
+hairline, after the pattern's own values, saying what is in force and offering one word to change it. The row appears
+only when the pattern's dimensionality differs from the layout's native one <i>and</i> that layout offers more than one
+option — a 2D pattern on a matrix shows no row at all (S2d). Inherited reads as plain text; an override reads in accent
+with <i>reset</i> in place of <i>change</i>, so the two states are distinguishable at a glance without opening anything.
+Like every other value here it is not a named preset: it is stored on the playlist item or the scene layer that used
+this pattern, and edited in place there — in the playlist row (S4) or the layer inspector (S7b).</p>
+
+<!-- ===================== S2d ===================== -->
+<p class="cap"><b>S2d</b> · Editor — Controls for a 2D pattern on a matrix</p>
+<div class="frame w360" id="S2d">
+  <div class="rsec" style="border-bottom:0;padding:16px 16px 20px">
+    <div class="rhead"><div class="slabel">Controls</div><div class="rdim">Aurora 2D · 2D</div></div>
+    <div class="ctlrow">
+      <div class="tiny dim">Cell size</div>
+      <div class="slider"><div class="trk"></div><div class="fil" style="width:8%"></div><div class="thb" style="left:8%"></div></div>
+      <input class="inp num xs" value="1">
+    </div>
+    <div class="ctlrow">
+      <div class="tiny dim">Speed</div>
+      <div class="slider"><div class="trk"></div><div class="fil" style="width:40%"></div><div class="thb" style="left:40%"></div></div>
+      <input class="inp num xs" value="0.4">
+    </div>
+  </div>
+</div>
+<p class="note"><b>2D pattern on a matrix: nothing to project, so nothing shown.</b> No hairline, no dim row, no
+"— not applicable". The block ends after the pattern's own values, which is also why the projection row is worth
+noticing when it does appear.</p>
+
+<style>
+/* ---------- batch 5 · outputs ---------- */
+.outtable{margin-top:8px;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--bg-inset)}
+.orow{display:flex;align-items:center;gap:8px;padding:9px 10px;border-bottom:1px solid var(--border)}
+.orow:last-child{border-bottom:0}
+.ochip{flex:none;width:22px;height:22px;border-radius:5px;display:flex;align-items:center;justify-content:center;font:11px/1 var(--mono)}
+.ochip.o1{background:rgba(232,163,61,.16);color:var(--accent);box-shadow:inset 0 0 0 1px rgba(232,163,61,.55)}
+.ochip.o2{background:rgba(91,155,213,.16);color:#7db4e6;box-shadow:inset 0 0 0 1px rgba(91,155,213,.55)}
+.orow .sel{height:28px;font-size:12px;padding:0 7px 0 8px;flex:none}
+.orow .inp{height:28px;font-size:12px;padding:0 7px;flex:none}
+.orow .un{font:11px/1 var(--mono);color:var(--text-dim);flex:none}
+.orange{margin-left:auto;font:11px/1 var(--mono);color:var(--text-dim);white-space:nowrap;flex:none}
+.orow .btn.icon{width:24px;height:24px;flex:none}
+.ospacer{width:24px;flex:none}
+.ckrow.sm{font-size:11.5px}
+</style>
+
+<div class="masthead" style="margin:56px 0 0">
+  <h1 style="font-size:18px">Batch 5 · Outputs</h1>
+  <p style="margin-bottom:28px">One layout, several wires. An output drives a consecutive run of the layout's index space.</p>
+</div>
+
+<!-- ===================== S3j ===================== -->
+<p class="cap"><b>S3j</b> · LED layout — 600 px strip across two outputs</p>
+<div class="frame w760 s3c" id="S3j">
+  <div style="padding:20px">
+    <div class="sect" style="margin-bottom:0">
+      <div class="secthead"><div class="slabel">LED layout</div><div class="rule"></div><div class="mono tiny dim">luxel-4ae0d4 · Athom · 2 outputs</div></div>
+      <div class="form">
+        <div class="summary">
+          <div class="big">600 px strip</div>
+          <div class="hint">2 outputs · WS2812</div>
+        </div>
+
+        <div class="srow">
+          <div class="lab">Layout</div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <div class="sel" style="width:150px">Strip <i>▾</i></div>
+            <span class="hint">Strip · Matrix · 3D · custom map</span>
+          </div>
+        </div>
+
+        <div style="margin-top:18px">
+          <div class="slabel">Outputs</div>
+          <div class="outtable">
+            <div class="orow">
+              <div class="ochip o1">1</div>
+              <span class="un">GPIO</span><div class="sel" style="width:64px">18 <i>▾</i></div>
+              <div class="sel" style="width:96px">WS2812 <i>▾</i></div>
+              <div class="sel" style="width:68px">BGR <i>▾</i></div>
+              <input class="inp mono" style="width:56px" value="300"><span class="un">px</span>
+              <span class="ckrow sm"><span class="cbx"></span>reverse</span>
+              <span class="orange">pixels 0–299</span>
+              <div class="ospacer"></div>
+            </div>
+            <div class="orow">
+              <div class="ochip o2">2</div>
+              <span class="un">GPIO</span><div class="sel" style="width:64px">19 <i>▾</i></div>
+              <div class="sel" style="width:96px">WS2812 <i>▾</i></div>
+              <div class="sel" style="width:68px">BGR <i>▾</i></div>
+              <input class="inp mono" style="width:56px" value="300"><span class="un">px</span>
+              <span class="ckrow sm"><span class="cbx on">✓</span>reverse</span>
+              <span class="orange">pixels 300–599</span>
+              <div class="btn icon quiet">✕</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="arrbox">
+          <svg class="arrsvg" width="640" height="76" viewBox="0 0 640 76">
+            <defs>
+              <pattern id="ticks" width="3" height="16" patternUnits="userSpaceOnUse">
+                <rect x="0" y="0" width="1" height="16" fill="rgba(0,0,0,.55)"/>
+              </pattern>
+            </defs>
+            <text x="176" y="22" fill="#e8a33d" font-family="ui-monospace,monospace" font-size="11" text-anchor="middle">output 1</text>
+            <text x="461" y="22" fill="#5b9bd5" font-family="ui-monospace,monospace" font-size="11" text-anchor="middle">output 2</text>
+            <rect x="34" y="30" width="285" height="16" rx="2" fill="rgba(232,163,61,.6)"/>
+            <rect x="319" y="30" width="285" height="16" rx="2" fill="rgba(91,155,213,.6)"/>
+            <rect x="34" y="30" width="570" height="16" rx="2" fill="url(#ticks)"/>
+            <line x1="319" y1="26" x2="319" y2="50" stroke="#0e1013" stroke-width="2"/>
+            <!-- output 1 input, at the low end, running right -->
+            <text x="13" y="27" fill="#e8a33d" font-family="ui-monospace,monospace" font-size="10" text-anchor="middle">IN</text>
+            <rect x="6" y="33" width="10" height="10" rx="2" fill="#e8a33d"/>
+            <line x1="16" y1="38" x2="26" y2="38" stroke="#e8a33d" stroke-width="2.4"/>
+            <path d="M34,38 L25,33 L25,43 z" fill="#e8a33d"/>
+            <!-- output 2 input, at the high end, running left (reversed) -->
+            <text x="629" y="27" fill="#5b9bd5" font-family="ui-monospace,monospace" font-size="10" text-anchor="middle">IN</text>
+            <rect x="624" y="33" width="10" height="10" rx="2" fill="#5b9bd5"/>
+            <line x1="614" y1="38" x2="624" y2="38" stroke="#5b9bd5" stroke-width="2.4"/>
+            <path d="M604,38 L613,33 L613,43 z" fill="#5b9bd5"/>
+            <text x="34" y="62" fill="#8a90a0" font-family="ui-monospace,monospace" font-size="10" text-anchor="start">0</text>
+            <text x="313" y="62" fill="#8a90a0" font-family="ui-monospace,monospace" font-size="10" text-anchor="end">299</text>
+            <text x="325" y="62" fill="#8a90a0" font-family="ui-monospace,monospace" font-size="10" text-anchor="start">300</text>
+            <text x="604" y="62" fill="#8a90a0" font-family="ui-monospace,monospace" font-size="10" text-anchor="end">599</text>
+          </svg>
+        </div>
+
+        <div class="notes">
+          <div>Total 600 pixels · one strip to every pattern, playlist and Home Assistant.</div>
+          <div>Data pin changes apply after a reboot.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="note"><b>What changed.</b> Two wires, one fixture: the layout is still a single 600-pixel strip, and an output
+is just a consecutive run of it — so patterns, the playlist and Home Assistant never learn that there are two. Each row
+computes the range it owns rather than asking you to add up offsets, and <i>reverse</i> is shown where it is true: the
+second run's IN marker sits at the far end with its arrow pointing back. Output 2's blue is an identity colour, not a
+second accent — it means "this wire", and appears nowhere else in the UI.</p>
+
+<!-- ===================== S3k ===================== -->
+<p class="cap"><b>S3k</b> · LED layout — 32×32 matrix from four panels, two outputs</p>
+<div class="frame w760 s3c" id="S3k">
+  <div style="padding:20px">
+    <div class="sect" style="margin-bottom:0">
+      <div class="secthead"><div class="slabel">LED layout</div><div class="rule"></div><div class="mono tiny dim">WS2812 · 2 outputs</div></div>
+      <div class="form">
+        <div class="summary">
+          <div class="big">32 × 32 matrix</div>
+          <div class="hint">4 panels · 2 outputs</div>
+        </div>
+
+        <div class="srow">
+          <div class="lab">Layout</div>
+          <div><div class="sel" style="width:150px">Matrix <i>▾</i></div></div>
+        </div>
+        <div class="srow">
+          <div class="lab">Panel</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <input class="inp num" style="width:56px" value="16"><span class="tiny dim">×</span>
+            <input class="inp num" style="width:56px" value="16"><span class="tiny dim">px</span>
+          </div>
+        </div>
+        <div class="srow">
+          <div class="lab">Pixel wiring</div>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span class="tiny dim">starts</span><div class="sel" style="width:126px">bottom-left <i>▾</i></div>
+            <span class="tiny dim">runs</span><div class="sel" style="width:104px">vertical <i>▾</i></div>
+            <span class="ckrow"><span class="cbx on">✓</span>serpentine</span>
+          </div>
+        </div>
+        <div class="srow">
+          <div class="lab">Panels</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <input class="inp num" style="width:56px" value="2"><span class="tiny dim">across ×</span>
+            <input class="inp num" style="width:56px" value="2"><span class="tiny dim">down</span>
+          </div>
+        </div>
+        <div class="srow">
+          <div class="lab">Chain</div>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span class="tiny dim">starts</span><div class="sel" style="width:110px">top-left <i>▾</i></div>
+            <span class="tiny dim">runs</span><div class="sel" style="width:114px">horizontal <i>▾</i></div>
+            <span class="ckrow"><span class="cbx on">✓</span>serpentine</span>
+          </div>
+        </div>
+
+        <div style="margin-top:18px">
+          <div class="slabel">Outputs</div>
+          <div class="outtable">
+            <div class="orow">
+              <div class="ochip o1">1</div>
+              <span class="un">GPIO</span><div class="sel" style="width:64px">18 <i>▾</i></div>
+              <div class="sel" style="width:96px">WS2812 <i>▾</i></div>
+              <div class="sel" style="width:68px">BGR <i>▾</i></div>
+              <input class="inp mono" style="width:48px" value="2"><span class="un">panels</span>
+              <span class="orange">panels 1–2</span>
+              <div class="ospacer"></div>
+            </div>
+            <div class="orow">
+              <div class="ochip o2">2</div>
+              <span class="un">GPIO</span><div class="sel" style="width:64px">19 <i>▾</i></div>
+              <div class="sel" style="width:96px">WS2812 <i>▾</i></div>
+              <div class="sel" style="width:68px">BGR <i>▾</i></div>
+              <input class="inp mono" style="width:48px" value="2"><span class="un">panels</span>
+              <span class="orange">panels 3–4</span>
+              <div class="btn icon quiet">✕</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="arrbox">
+          <svg class="arrsvg" width="420" height="300" viewBox="0 0 420 300">
+            <text x="230" y="13" fill="#8a90a0" font-family="ui-monospace,monospace" font-size="11" text-anchor="middle">32 px</text>
+            <line x1="110" y1="21" x2="350" y2="21" stroke="#3a4150"/>
+            <line x1="110" y1="17" x2="110" y2="25" stroke="#3a4150"/>
+            <line x1="350" y1="17" x2="350" y2="25" stroke="#3a4150"/>
+            <text transform="translate(44,150) rotate(-90)" fill="#8a90a0" font-family="ui-monospace,monospace" font-size="11" text-anchor="middle">32 px</text>
+            <line x1="52" y1="30" x2="52" y2="270" stroke="#3a4150"/>
+            <line x1="48" y1="30" x2="56" y2="30" stroke="#3a4150"/>
+            <line x1="48" y1="270" x2="56" y2="270" stroke="#3a4150"/>
+            <!-- panels, tinted by the output that drives them -->
+            <rect x="110" y="30" width="116" height="116" rx="4" fill="#241f18" stroke="rgba(232,163,61,.4)"/>
+            <rect x="234" y="30" width="116" height="116" rx="4" fill="#241f18" stroke="rgba(232,163,61,.4)"/>
+            <rect x="234" y="154" width="116" height="116" rx="4" fill="#191d24" stroke="rgba(91,155,213,.4)"/>
+            <rect x="110" y="154" width="116" height="116" rx="4" fill="#191d24" stroke="rgba(91,155,213,.4)"/>
+            <!-- output 1: panels 1 → 2 -->
+            <path d="M168,88 L292,88" fill="none" stroke="#e8a33d" stroke-width="3.5" stroke-linecap="round"/>
+            <!-- output 2: panels 3 → 4 -->
+            <path d="M292,212 L168,212" fill="none" stroke="#5b9bd5" stroke-width="3.5" stroke-linecap="round"/>
+            <circle cx="168" cy="88" r="21" fill="#241f18"/>
+            <circle cx="292" cy="88" r="21" fill="#241f18"/>
+            <circle cx="292" cy="212" r="21" fill="#191d24"/>
+            <circle cx="168" cy="212" r="21" fill="#191d24"/>
+            <text x="168" y="99" fill="#7c8496" font-family="ui-monospace,monospace" font-size="30" text-anchor="middle">1</text>
+            <text x="292" y="99" fill="#7c8496" font-family="ui-monospace,monospace" font-size="30" text-anchor="middle">2</text>
+            <text x="292" y="223" fill="#7c8496" font-family="ui-monospace,monospace" font-size="30" text-anchor="middle">3</text>
+            <text x="168" y="223" fill="#7c8496" font-family="ui-monospace,monospace" font-size="30" text-anchor="middle">4</text>
+            <path d="M238,88 L225,80.5 L225,95.5 z" fill="#e8a33d"/>
+            <path d="M222,212 L235,204.5 L235,219.5 z" fill="#5b9bd5"/>
+            <!-- one input per output, at its first panel -->
+            <rect x="78" y="81" width="14" height="14" rx="2" fill="#e8a33d"/>
+            <line x1="92" y1="88" x2="101" y2="88" stroke="#e8a33d" stroke-width="3"/>
+            <path d="M110,88 L99,81.5 L99,94.5 z" fill="#e8a33d"/>
+            <text x="72" y="92" fill="#e8a33d" font-family="ui-monospace,monospace" font-size="12" text-anchor="end">IN 1</text>
+            <rect x="368" y="205" width="14" height="14" rx="2" fill="#5b9bd5"/>
+            <line x1="359" y1="212" x2="368" y2="212" stroke="#5b9bd5" stroke-width="3"/>
+            <path d="M350,212 L361,205.5 L361,218.5 z" fill="#5b9bd5"/>
+            <text x="388" y="216" fill="#5b9bd5" font-family="ui-monospace,monospace" font-size="12" text-anchor="start">IN 2</text>
+          </svg>
+        </div>
+
+        <div class="notes">
+          <div>Total 1024 pixels.</div>
+          <div>Each output drives a consecutive run of the chain.</div>
+          <div>Changes apply after a reboot.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="note"><b>What changed.</b> The panel grid, the chain order and the wiring inside a panel are still described
+once, above; outputs only say where the one chain is cut. The picture carries that: panels are tinted by the output
+that drives them, each run is its own polyline with its own <b>IN</b> marker at the panel its wire plugs into, and the
+numbers stay the chain order so the table's <i>panels 1–2</i> / <i>panels 3–4</i> is something you can point at. Cutting
+anywhere but along the chain is not offered, which is why there is no per-panel output picker.</p>
+
+</main>
+</div>
+<script>
+(function(){
+var TAU=Math.PI*2, RGB=[0,0,0];
+function cl(v,a,b){return v<a?a:(v>b?b:v)}
+function hash(x,y){var s=Math.sin(x*127.1+y*311.7)*43758.5453;return s-Math.floor(s)}
+function vn(x,y){
+  var xi=Math.floor(x),yi=Math.floor(y),xf=x-xi,yf=y-yi;
+  var u=xf*xf*(3-2*xf),v=yf*yf*(3-2*yf);
+  var a=hash(xi,yi),b=hash(xi+1,yi),c=hash(xi,yi+1),d=hash(xi+1,yi+1);
+  return a+(b-a)*u+(c-a)*v+(a-b-c+d)*u*v;
+}
+function hsv(h,s,v){
+  h=h-Math.floor(h); var i=Math.floor(h*6),f=h*6-i,p=v*(1-s),q=v*(1-f*s),t=v*(1-(1-f)*s);
+  switch(i%6){
+    case 0:RGB[0]=v;RGB[1]=t;RGB[2]=p;break;
+    case 1:RGB[0]=q;RGB[1]=v;RGB[2]=p;break;
+    case 2:RGB[0]=p;RGB[1]=v;RGB[2]=t;break;
+    case 3:RGB[0]=p;RGB[1]=q;RGB[2]=v;break;
+    case 4:RGB[0]=t;RGB[1]=p;RGB[2]=v;break;
+    default:RGB[0]=v;RGB[1]=p;RGB[2]=q;
+  }
+  RGB[0]*=255;RGB[1]*=255;RGB[2]*=255;return RGB;
+}
+function rgb(r,g,b){RGB[0]=r*255;RGB[1]=g*255;RGB[2]=b*255;return RGB}
+
+function aurora(x,y,w,h,t){
+  var nx=x/w, ny=y/h;
+  var band=.5+.28*Math.sin(t*.55)+.08*Math.sin(t*.21);
+  var n=vn(nx*3.2, ny*2.1+t*.55);
+  var curtain=cl(1-Math.abs(ny-band)*3.1,0,1);
+  var sh=vn(nx*7+11, ny*7-t*.9);
+  var v=cl(curtain*(.5+.5*n)+(sh-.5)*.34,0,1);
+  if(hash(x*7+Math.floor(t*9),y*3)<v*.02) return hsv(.76,.42,1);
+  return hsv(.34-n*.07+(sh-.5)*.09, 1-v*.35, v*v);
+}
+function rain(x,y,w,h,t){
+  var ph=hash(x,7), sp=.35+ph*.5;
+  var yp=((t*sp+ph)%1)*(h+10)-5, d=yp-y;
+  var v=0;
+  if(d>=0&&d<9) v=1-d/9;
+  v=v*v;
+  var bg=.04+.03*vn(x/w*4,y/h*4+t*.2);
+  if(v<.05) return hsv(.58,.9,bg);
+  return hsv(.53+ph*.07, .85-v*.5, cl(bg+v,0,1));
+}
+function eyes(x,y,w,h,t){
+  var closed=(Math.sin(t*1.1)>.93)||(Math.sin(t*.37+1.3)>.965);
+  var blink=closed?.10:1;
+  var look=Math.sin(t*.45)*4;
+  var bg=.02+.025*vn(x/w*3,y/h*3+t*.1);
+  var r=0;
+  for(var e=0;e<2;e++){
+    var cx=e?43:21, cy=31, hw=11, hh=11*blink;
+    var dx=(x-cx)/hw, dy=(y-cy)/Math.max(hh,1.2);
+    if(dx*dx+dy*dy<=1){
+      var px=(x-(cx+look))/4.5, py=(y-cy)/4.5;
+      r=(!closed&&px*px+py*py<=1)?2:1;
+    }
+  }
+  if(r===2) return hsv(.62,.75,.10);
+  if(r===1) return hsv(.11,.30,1);
+  return hsv(.6,.8,bg);
+}
+function sunset1d(u,t){
+  var q=u*1.6-t*.28;
+  var w1=.5+.5*Math.sin(q*TAU);
+  var w2=.5+.5*Math.sin(q*TAU*2+1.1);
+  var hu=.005+.115*w1+.02*w2;
+  return hsv(hu, 1-.28*w1, .18+.82*(w1*.75+w2*.25));
+}
+function sparkle1d(u,t,i){
+  var base=.11+.08*(.5+.5*Math.sin(u*9-t*.8));
+  var s=hash(i, Math.floor(t*12));
+  if(s>.986){var k=(s-.986)/.014; return hsv(.1,.25+.3*(1-k),1)}
+  return hsv(.075,.92,base);
+}
+function comet1d(u,t){
+  var p=(t*.32)%1, d=(u-p+1)%1, v=Math.exp(-d*13);
+  return hsv(.58-v*.05, 1-v*.55, cl(v,.015,1));
+}
+function rainbow1d(u,t){return hsv(u*1.2+t*.12,1,.95)}
+var F={
+ '0':['01110','10001','10011','10101','11001','10001','01110'],
+ '1':['00100','01100','00100','00100','00100','00100','01110'],
+ '2':['01110','10001','00001','00010','00100','01000','11111'],
+ '3':['11111','00010','00100','00010','00001','10001','01110'],
+ '4':['00010','00110','01010','10010','11111','00010','00010'],
+ '5':['11111','10000','11110','00001','00001','10001','01110'],
+ '6':['00110','01000','10000','11110','10001','10001','01110'],
+ '7':['11111','00001','00010','00100','01000','01000','01000'],
+ '8':['01110','10001','10001','01110','10001','10001','01110'],
+ '9':['01110','10001','10001','01111','00001','00010','01100'],
+ ':':['00000','00100','00100','00000','00100','00100','00000'],
+ 'A':['01110','10001','10001','11111','10001','10001','10001'],
+ 'a':['00000','00000','01110','00001','01111','10001','01111'],
+ 'P':['11110','10001','10001','11110','10000','10000','10000'],
+ 'R':['11110','10001','10001','11110','10100','10010','10001'],
+ 'T':['11111','00100','00100','00100','00100','00100','00100'],
+ 'Y':['10001','01010','00100','00100','00100','00100','00100'],
+ ' ':['00000','00000','00000','00000','00000','00000','00000']
+};
+var F35={
+ '0':['111','101','101','101','111'],
+ '1':['010','110','010','010','111'],
+ '2':['111','001','111','100','111'],
+ '3':['111','001','111','001','111'],
+ '4':['101','101','111','001','001'],
+ '5':['111','100','111','001','111'],
+ '6':['111','100','111','101','111'],
+ '7':['111','001','001','001','001'],
+ '8':['111','101','111','101','111'],
+ '9':['111','101','111','001','111'],
+ ':':['000','010','000','010','000'],
+ 'A':['111','101','111','101','101'],
+ 'a':['000','110','101','101','111'],
+ ' ':['000','000','000','000','000']
+};
+function textW(str,cw,px){return str.length*(cw+1)*px-px}
+function drawTextCell(ctx,str,x,y,cw,ch,px,color){
+  ctx.fillStyle=color||'#fff';
+  for(var i=0;i<str.length;i++){
+    var tiny=(cw<=3&&ch<=5), src=tiny?F35:F, sw=tiny?3:5, sh=tiny?5:7;
+    var g=src[str.charAt(i)]; var gx=x+i*(cw+1)*px;
+    if(!g) continue;
+    for(var r=0;r<ch;r++){
+      var sr=Math.min(sh-1,Math.floor(r*sh/ch));
+      for(var c=0;c<cw;c++){
+        var sc=Math.min(sw-1,Math.floor(c*sw/cw));
+        if(g[sr].charAt(sc)==='1') ctx.fillRect(gx+c*px,y+r*px,px,px);
+      }
+    }
+  }
+}
+function clockBg(x,y,w,h,t){var c=aurora(x,y,w,h,t*.6);RGB[0]=c[0]*.32;RGB[1]=c[1]*.32;RGB[2]=c[2]*.32;return RGB}
+function partyBg(x,y,w,h,t){var c=spiral(x,y,w,h,t*1.3);RGB[0]=c[0]*.55;RGB[1]=c[1]*.55;RGB[2]=c[2]*.55;return RGB}
+function flatBg(){RGB[0]=10;RGB[1]=12;RGB[2]=16;return RGB}
+function stagecomp(x,y,w,h,t){
+  var b=rainbow1d(y/h*.55+.02,t*.35), br=b[0],bg=b[1],bb=b[2];
+  var a=aurora(x,y,w,h,t), ar=a[0]*.6,ag=a[1]*.6,ab=a[2]*.6;
+  RGB[0]=255-(255-br*.55)*(255-ar)/255;
+  RGB[1]=255-(255-bg*.55)*(255-ag)/255;
+  RGB[2]=255-(255-bb*.55)*(255-ab)/255;
+  return RGB;
+}
+function latticeColor(rule,i,j,k,t){
+  if(rule==='index') return hsv(((k*64+j*8+i)/512)*5+t*.03,1,1);
+  if(rule==='x') return hsv(i/8+t*.03,1,1);
+  if(rule==='y') return hsv(j/8+t*.03,1,1);
+  if(rule==='z') return hsv(k/8+t*.03,1,1);
+  var a,b;
+  if(rule==='extz'){a=i;b=j} else if(rule==='exty'){a=i;b=k} else {a=j;b=k}
+  var dx=(a-3.5)/3.5, dy=(b-3.5)/3.5;
+  return hsv(Math.sqrt(dx*dx+dy*dy)/1.414*1.15+.05+t*.03,1,1);
+}
+var LATT=null;
+function lattOrder(){
+  if(LATT) return LATT;
+  LATT=[];
+  for(var k=0;k<8;k++)for(var j=0;j<8;j++)for(var i=0;i<8;i++) LATT.push([i,j,k]);
+  LATT.sort(function(p,q){return (p[0]+p[1])-(q[0]+q[1]) || p[2]-q[2];});
+  return LATT;
+}
+var HEART=['.##...##.','#########','#########','#########','.#######.','..#####..','...###...','....#....'];
+var POST={
+  stageheart:function(ctx,w,h,t){
+    for(var r=0;r<8;r++){
+      for(var c=0;c<9;c++){
+        if(HEART[r].charAt(c)!=='#') continue;
+        ctx.fillStyle=(r<2&&(c===1||c===7))?'#ff8b80':(r>4?'#c33a31':'#e0463c');
+        ctx.fillRect(4+c,4+r,1,1);
+      }
+    }
+    drawTextCell(ctx,'12:48',17,28,5,7,1,'#ffffff');
+  },
+  lattice3:function(ctx,w,h,t,el){
+    var rule=el.dataset.rule||'x', pts=lattOrder();
+    var cx=w/2, cy=h/2+2, ax=w*.055, ay=w*.031, az=w*.064, R=w*.027;
+    for(var n=0;n<pts.length;n++){
+      var i=pts[n][0], j=pts[n][1], k=pts[n][2];
+      var u=cx+(i-j)*ax, v=cy+(i+j-7)*ay-(k-3.5)*az;
+      var c=latticeColor(rule,i,j,k,t), f=.42+.58*((i+j)/14);
+      ctx.fillStyle='rgb('+(c[0]*f|0)+','+(c[1]*f|0)+','+(c[2]*f|0)+')';
+      ctx.beginPath(); ctx.arc(u,v,R,0,TAU); ctx.fill();
+    }
+  },
+  ringmap:function(ctx,w,h,t,el){
+    var rule=el.dataset.rule||'index', cx=w/2, cy=h/2+1, R=w*.37;
+    ctx.strokeStyle='#3a4150'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(cx,cy-R-9); ctx.lineTo(cx,cy-R-3); ctx.stroke();
+    for(var n=0;n<256;n++){
+      var a=n/256*TAU-Math.PI/2, x=cx+Math.cos(a)*R, y=cy+Math.sin(a)*R, c;
+      var mx=(Math.cos(a)+1)/2, my=(Math.sin(a)+1)/2;
+      if(rule==='index') c=hsv(n/256+t*.03,1,1);
+      else if(rule==='x') c=hsv(mx+t*.03,1,1);
+      else if(rule==='y') c=hsv(my+t*.03,1,1);
+      else if(rule==='sxy') c=hsv(mx+.35*my+.8+t*.03,1,1);
+      else if(rule==='sxz') c=hsv(mx+1.6*my+.175+t*.03,1,1);
+      else c=hsv(.5+.35*mx+1.6*my+t*.03,1,1);
+      ctx.fillStyle='rgb('+(c[0]|0)+','+(c[1]|0)+','+(c[2]|0)+')';
+      ctx.beginPath(); ctx.arc(x,y,2.0,0,TAU); ctx.fill();
+    }
+  },
+  clock:function(ctx,w,h,t){ drawTextCell(ctx,'12:48',17,28,5,7,1,'#f2e6cd'); },
+  stagecomp:function(ctx,w,h,t){ drawTextCell(ctx,'12:48',17,28,5,7,1,'#ffffff'); },
+  ticker:function(ctx,w,h,t){
+    ctx.fillStyle='rgba(0,0,0,.72)'; ctx.fillRect(0,49,w,15);
+    var str='PARTY 21:00  ', tw=textW(str,5,1)+1, off=(t*9)%tw;
+    drawTextCell(ctx,str,Math.floor(-off),53,5,7,1,'#e8a33d');
+    drawTextCell(ctx,str,Math.floor(-off+tw),53,5,7,1,'#e8a33d');
+  },
+  party:function(ctx,w,h,t){
+    ctx.fillStyle='rgba(6,8,12,.8)'; ctx.fillRect(7,20,50,16);
+    drawTextCell(ctx,'PARTY',10,22,8,12,1,'#ffffff');
+    ctx.fillStyle='#e8a33d'; ctx.fillRect(0,58,w,6);
+  },
+};
+function comet2d(x,y,w,h,t){
+  var v=0;
+  for(var k=0;k<8;k++){
+    var tt=t-k*.085;
+    var cx=.5+.33*Math.sin(tt*.95), cy=.5+.33*Math.cos(tt*.64);
+    var dx=x/w-cx, dy=y/h-cy, d=Math.sqrt(dx*dx+dy*dy);
+    v+=Math.exp(-d*13)*(1-k/9);
+  }
+  v=cl(v,0,1);
+  return hsv(.58-v*.07,1-v*.55,cl(v,.015,1));
+}
+function fire1d(u,t,i){
+  var n=vn(u*7, t*1.6)*.7+vn(u*17+3, t*3.2)*.3;
+  var v=cl(n*1.35,0,1);
+  return hsv(.02+.09*v, 1-.25*v, v*v*.95+.03);
+}
+function auroraStrip(u,t,i){
+  var g=13, ix=(i%g)/g, iy=Math.floor(i/g)/g;
+  return aurora(ix*64,iy*64,64,64,t);
+}
+function grid(x,y,w,h,t,step){
+  var c=aurora(x,y,w,h,t);
+  var r=c[0]*.42,g=c[1]*.42,b=c[2]*.42;
+  if(x%step===0||y%step===0||x===w-1||y===h-1){r+=26;g+=30;b+=38}
+  RGB[0]=cl(r,0,255);RGB[1]=cl(g,0,255);RGB[2]=cl(b,0,255);return RGB;
+}
+function spiral(x,y,w,h,t){
+  var nx=(x/w-.5)*2, ny=(y/h-.5)*2;
+  var a=Math.atan2(ny,nx)/TAU, r=Math.sqrt(nx*nx+ny*ny);
+  var f=.5+.5*Math.sin((a*3+r*6-t*.9)*TAU);
+  return hsv(a+r*.4+t*.06, .85, cl(f*f*(1.15-r*.65),0,1));
+}
+function fireball(x,y,w,h,t){
+  var cx=.5+.3*Math.sin(t*.43), cy=.5+.28*Math.cos(t*.31);
+  var dx=x/w-cx, dy=y/h-cy, d=Math.sqrt(dx*dx+dy*dy);
+  var v=Math.exp(-d*7.5)*(.85+.15*Math.sin(t*4));
+  return hsv(.13-v*.05, 1-v*.55, cl(v,.01,1));
+}
+
+var VIZ={
+  aurora:aurora, rain:rain, eyes:eyes, spiral:spiral, fireball:fireball,
+  grid64:function(x,y,w,h,t){return grid(x,y,w,h,t,8)},
+  grid16:function(x,y,w,h,t){return grid(x,y,w,h,t,4)},
+  sunsetrow:function(x,y,w,h,t){return sunset1d((y*w+x)/(w*h),t)},
+  sparklerow:function(x,y,w,h,t){var i=y*w+x;return sparkle1d(i/(w*h),t,i)},
+  cometsq:comet2d,
+  firerow:function(x,y,w,h,t){var i=y*w+x;return fire1d(i/(w*h),t,i)},
+  clock:clockBg,
+  ticker:aurora,
+  party:partyBg,
+  stagecomp:stagecomp,
+  stageheart:stagecomp,
+  slicexy:function(x,y,w,h,t){var dx=x/w-.5,dy=y/h-.5;var r=Math.sqrt(dx*dx+dy*dy)*2.4;return hsv(r+t*.05,1,1)},
+  slicexz:function(x,y,w,h,t){return hsv(y/h+.35+t*.05,1,1)},
+  sliceyz:function(x,y,w,h,t){return hsv(x/w+.7+t*.05,1,1)},
+  barmidrow:function(x,y,w,h,t){return hsv(x/w+t*.05,1,1)},
+  barmidcol:function(x,y,w,h,t){return hsv(.62-Math.abs(x/w-.5)*1.2+t*.05,1,1)},
+  bar3dx:function(x,y,w,h,t){return hsv(x/w*.9+.05+t*.05,1,1)},
+  bar3dy:function(x,y,w,h,t){return hsv(.15+(1-x/w)*.8+t*.05,1,1)},
+  bar3dz:function(x,y,w,h,t){return hsv(.55+Math.abs(x/w-.5)*1.6+t*.05,1,1)},
+  lattice3:flatBg,
+  ringmap:flatBg,
+  projrows:function(x,y,w,h,t){return hsv((y*w+x)/(w*h)*8+t*.05,1,1)},
+  projacross:function(x,y,w,h,t){return hsv(x/w+t*.05,1,1)},
+  projdown:function(x,y,w,h,t){return hsv(y/h+t*.05,1,1)},
+  sunsetacross:function(x,y,w,h,t){return sunset1d(x/w,t)},
+  sparkleacross:function(x,y,w,h,t){
+    var sp=hash(x*3+1,Math.floor(t*10));
+    var base=.10+.07*(.5+.5*Math.sin(x/w*9-t*.8));
+    if(sp>.93){var k=(sp-.93)/.07;return hsv(.1,.22+.4*(1-k),1)}
+    return hsv(.075,.92,base);
+  },
+  sunsetbar:function(x,y,w,h,t){return sunset1d(x/w,t)},
+  cometbar:function(x,y,w,h,t){return comet1d(x/w,t)},
+  rainbowbar:function(x,y,w,h,t){return rainbow1d(x/w,t)},
+  firebar:function(x,y,w,h,t){return fire1d(x/w,t,x)},
+  sparklebar:function(x,y,w,h,t){return sparkle1d(x/w,t,x)},
+  aurorabar:function(x,y,w,h,t){return auroraStrip(x/w,t,x)}
+};
+
+var items=[].slice.call(document.querySelectorAll('canvas[data-viz]')).map(function(c){
+  var w=+c.dataset.w||64, h=+c.dataset.h||64;
+  c.width=w; c.height=h;
+  var ctx=c.getContext('2d');
+  return {c:c,w:w,h:h,ctx:ctx,img:ctx.createImageData(w,h),fn:VIZ[c.dataset.viz]||aurora,post:POST[c.dataset.viz]};
+});
+
+function draw(t){
+  for(var k=0;k<items.length;k++){
+    var it=items[k], d=it.img.data, p=0;
+    for(var y=0;y<it.h;y++){
+      for(var x=0;x<it.w;x++){
+        var c=it.fn(x,y,it.w,it.h,t);
+        d[p++]=c[0]|0; d[p++]=c[1]|0; d[p++]=c[2]|0; d[p++]=255;
+      }
+    }
+    it.ctx.putImageData(it.img,0,0);
+    if(it.post) it.post(it.ctx,it.w,it.h,t,it.c);
+  }
+}
+
+var reduce=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+if(reduce){ draw(2.4); }
+else{
+  var last=0;
+  (function loop(ts){
+    if(ts-last>42){ last=ts; draw(ts/1000+2.4); }
+    requestAnimationFrame(loop);
+  })(0);
+}
+window.__mockupsReady=true;
+})();
+</script>
+</body>
+</html>

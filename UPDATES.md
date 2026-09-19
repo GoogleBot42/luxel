@@ -1,5 +1,24 @@
 # Update log
 
+## 2026-09-18 — Web UI v2 design approved; proposal + research + mockups committed (#461)
+
+A design-only session with Jeremy. `docs/design/webui-v2/proposal.md` is the
+approved spec for the console/playground rewrite: one `Layout` object (dims
+1/2/3 + source regular|map + outputs[]) owns geometry; every setting and
+feature is gated by the device's advertised `caps` and the Layout, never by
+board-name inference; a Scene is an ordered stack of Layers (pattern | text |
+sprite | color) with blend modes normal/add/lighten/multiply/mask and a
+black-pixel / brightness key instead of an alpha channel; a playlist plays
+patterns or scenes; values are inline per item (no named presets); projection
+(how a pattern of one dimensionality shows on a Layout of another) is a device
+default plus a per-item override, keyed off dims only; multiple outputs are
+consecutive runs of the one pixel space. Twelve decisions (D1–D12) recorded in
+§9. `research/` holds the code audit, engine/firmware constraints survey and
+the comparative/font study the design rests on; `mockups.html` is the 27-frame
+wireframe deck (also published at https://claude-luxel-webui-v2.sites.neet.dev/).
+Tickets: milestone "Web UI v2", epic #461, Phase A #462–#476, B #477–#482,
+C #483–#486, future #487/#488. `docs/webui.md` is now the historical backlog.
+
 ## 2026-09-08 (later) — the firmware stops shipping the directory it was built in (#441)
 
 `--remap-path-prefix` on every firmware build entry point. **−7.7 to −9.2 KB
