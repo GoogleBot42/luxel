@@ -1,5 +1,81 @@
 # Update log
 
+## 2026-09-19 — `/api/layout`: one endpoint for the one geometry concept (#465, #495)
+
+Before this, "what shape is this installation" was spread over four endpoints
+with nothing naming the shape itself: `/api/config` held the pixel count,
+`/api/map grid` the grid, `/api/datapin` and `/api/protocol` the wiring, and
+nobody held the panel arrangement, the outputs or the projection defaults at
+all. `GET/POST /api/layout` is now the source of truth for all of it, on the
+firmware AND the `luxel serve` mirror.
+
+`GET` returns the whole object — `kind` (`strip|matrix|map`), `source`
+(`regular|map`), the Layout's own `dims`/`regular`/`w`/`h`, `pixels`/`max`, the
+`matrix` arrangement block (`pw ph cols rows start dir snake rot180 scan`),
+`outputs[]` (`n pin proto order count rev`), the `proj` triple, and the old
+`/api/map` payload embedded so a client needs one fetch. `POST` takes
+playlist-style lines — `strip N` | `matrix PW PH COLS ROWS START DIR SNAKE
+ROT180 [SCAN]` | `map …` (the `/api/map` wire verbatim, so a 64×64 is still
+`map grid 64 64`) plus `out …` and `proj1d/2d/3d` lines — and answers with the
+GET body prefixed by `"ok"` and `"reboot_required"`, so the UI never re-GETs. A
+bad line answers `{"ok":false,"error":…,"line":N}` and changes nothing.
+
+Everything that decides the shape lives in a new `luxel_core::layout` — the
+grammar, the validation, the JSON writer and the flash record — so the two
+hosts can differ only in the facts they feed it (`Limits`: board pixel cap,
+`caps.outputs`, panel-ness, the pin and protocol tables). 16 host unit tests.
+
+**Live vs reboot, stated rather than guessed.** Pixel count, engine grid, map
+and the `proj*` defaults apply on the next frame and `/api/status.geom` follows
+without a reboot; the chain wiring and the output table are built once at boot
+(#475 and #474 consume them), so a POST that changes one answers
+`reboot_required:true`. The Layout persists as a ~20-byte `LXLO` record under a
+new reserved `LAYOUT_KEY`; it deliberately does NOT carry the pixel count or
+the map payload, which keep their existing homes — that is what keeps
+`/api/config`, `/api/map`, `/api/datapin` and `/api/protocol` working as
+honest aliases (deprecated for one release, documented in docs/api.md) instead
+of a second copy that drifts. A device with no record boots its board default,
+reading `kind` off whatever map is installed, so an upgraded device is right on
+first contact.
+
+The firmware now installs the projection defaults on every engine it builds and
+on a POST; the mirror's `POST /api/map proj*=` stopgap from #473 is gone.
+
+Also **#495**: `luxel serve --pixels N` above the board cap was silently
+clamped since #464, which quietly disarmed device-e2e's #420 element-ledger
+check. It is a hard error naming the ceiling now, `--max-pixels N` raises it
+explicitly, and `--board panel` comes up at the panel's own 4096 px instead of
+a 300 px strip wearing a panel's map.
+
+Verified: `cargo test --workspace` (18 new host units for the grammar, the
+persisted wire, the JSON shapes and every rejection), `tools/serve-e2e.mjs`
+(Layout round-trips over strip / matrix-with-arrangement / map-grid / two
+outputs / projection, the error cases with their line numbers, alias
+agreement, and the #495 exit), `tools/stack-check.sh` clean (+
+`EXTRA_FEATURES=small-chip`) — which is how `sort_by_key`'s 4,144 B driftsort
+stack frame got caught and removed.
+
+**On hardware.** Athom rig 192.168.0.183: the whole exercise — `strip 60` →
+`strip 120` → an `out` line per output → projection defaults — with
+`/api/status.geom` following each POST without a reboot, and the Layout
+surviving a real reboot; restored to found state exactly. Seengreat panel
+192.168.0.238: `GET /api/layout` reports its 64×64 matrix
+(`kind:"matrix"`, `matrix{pw:64,ph:64,cols:1,rows:1,…}`, one panel-shaped
+output) and correctly refuses both `strip` and `out`; `heap_free` unmoved at
+41,612 B.
+
+**Size.** +14,944 B on the tightest gated image, landing it at **3.28 %** of
+the OTA slot free — it fits because #501's diet ran first; on the pre-diet
+tree the same feature read 2.07 % and could not merge. A size pass inside
+this change recovered ~3.2 KB of that: persisting the Layout as its own POST
+wire re-parsed at boot rather than a binary record (−1.9 KB), and a
+hand-rolled decimal parser in place of `str::parse` (−1.3 KB, since
+`from_str_radix` instantiates per integer width). Per-variant table and the
+symbol-level breakdown in docs/boards.md — including that **`athom-music`,
+published but not one of the three CI-gated variants, lands at 2.44 %**:
+`pixelblaze-v3` stopped being a valid Xtensa stand-in for it when #501
+dropped `wled-takeover` on one and not the other. Filed separately.
+
 ## 2026-09-19 — web v2 A7: the editor gets three owners (#468)
 
 `pages/Editor.svelte` mixed four concerns across three bars (a toolbar, the

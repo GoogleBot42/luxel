@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use luxel_core::engine::Engine;
 use luxel_core::fixed::Fx;
 use luxel_core::jsonview::{self, json_escape};
-use luxel_core::projection::{Projection, ProjectionMode};
+use luxel_core::projection::Projection;
 
 /// The firmware's embedded fallback page, raw. It carries build-mode blocks
 /// that firmware/build.rs resolves at compile time (see the comment at the
@@ -233,11 +233,13 @@ struct State {
     /// impersonated panel's own grid from a map a client installed, exactly
     /// as `devicemap::SOURCE` does on the firmware.
     map_source: AtomicU8,
-    /// Projection defaults (Gitea #473): how a pattern whose dimensionality
-    /// differs from the Layout's is shown on it. Carried on `/api/map` for
-    /// now so the console and the e2e harnesses can drive the engine
-    /// mechanism; ticket A4 (#465) moves them to `/api/layout`.
-    projection: Mutex<Projection>,
+    /// The Layout (`/api/layout`, Gitea #465): kind, matrix arrangement,
+    /// output table and the projection defaults (#473). The pixel count and
+    /// the pixel map are NOT in here — they stay in `pixel_count` and
+    /// `device_map` so `/api/config` and `/api/map` remain aliases of the
+    /// same state rather than a second copy, exactly as on the firmware.
+    /// A mirror has no flash, so nothing here survives the process.
+    layout: Mutex<luxel_core::layout::Layout>,
     map_dirty: AtomicBool,
     /// Network input (DDP/E1.31): assembled RGB frame + when it last moved.
     /// While packets flow the render loop shows this instead of the engine;
@@ -922,6 +924,47 @@ fn install_board_map(state: &State) -> (bool, usize) {
     }
 }
 
+/// `GET /api/map`. Same shape as firmware `devicemap::to_json`: a procedural
+/// grid also reports its `kind`/`w`/`h`, which is how a client learns the
+/// device's installed geometry (Gitea #372).
+fn map_json(state: &State) -> String {
+    match &*state.device_map.lock().unwrap() {
+        Some((dims, coords)) => {
+            let shape = match *state.device_grid.lock().unwrap() {
+                Some((w, h)) => format!(",\"kind\":\"grid\",\"w\":{w},\"h\":{h}"),
+                None => String::from(",\"kind\":\"coords\""),
+            };
+            format!(
+                "{{\"installed\":true,\"dims\":{},\"count\":{}{}}}",
+                dims,
+                coords.len(),
+                shape
+            )
+        }
+        None => String::from("{\"installed\":false,\"dims\":0,\"count\":0}"),
+    }
+}
+
+/// Install (or clear) the map from a `POST /api/map`-shaped wire body — the
+/// one path both that route and `/api/layout` go through, so the two can
+/// only agree. Returns `(installed, count)`.
+fn apply_map_wire(state: &State, body: &str) -> (bool, usize) {
+    let out = match parse_map(body) {
+        Some((dims, coords, grid)) => {
+            let n = coords.len();
+            *state.device_map.lock().unwrap() = Some((dims, coords));
+            *state.device_grid.lock().unwrap() = grid;
+            state.map_source.store(2, Ordering::Relaxed);
+            (true, n)
+        }
+        // empty/invalid clears — and a panel mirror falls back to its own
+        // geometry, exactly as devicemap::board_default does on a HUB75 board
+        None => install_board_map(state),
+    };
+    state.map_dirty.store(true, Ordering::Relaxed);
+    out
+}
+
 /// Apply the installed map to an engine (no-op if none), then the projection
 /// defaults — a map install re-derives the engine's projection plan, so the
 /// order matters.
@@ -929,42 +972,128 @@ fn apply_map(state: &State, engine: &mut Engine) {
     if let Some((dims, coords)) = state.device_map.lock().unwrap().as_ref() {
         engine.set_map(*dims, coords);
     }
-    engine.set_projection(*state.projection.lock().unwrap());
+    engine.set_projection(cur_projection(state));
 }
 
-/// Pull `proj1d=`/`proj2d=`/`proj3d=` tokens out of a `POST /api/map` body,
-/// returning the updated triple and the body with them removed. Unknown
-/// tokens and unparseable modes are ignored, so an old client's body still
-/// means exactly what it always did.
-fn take_projection(body: &str, mut proj: Projection) -> (Projection, String) {
-    let mut rest = String::with_capacity(body.len());
-    for tok in body.split_whitespace() {
-        let field = match tok.split_once('=') {
-            Some((k @ ("proj1d" | "proj2d" | "proj3d"), v)) => (k, v),
-            _ => {
-                rest.push_str(tok);
-                rest.push(' ');
-                continue;
-            }
-        };
-        if let Ok(mode) = field.1.parse::<ProjectionMode>() {
-            let dims = match field.0 {
-                "proj3d" => 3,
-                "proj2d" => 2,
-                _ => 1,
-            };
-            proj.set(dims, mode);
+// --- the Layout (`/api/layout`, Gitea #465) ---------------------------------
+//
+// The grammar, the validation, the JSON and the shape all live in
+// `luxel_core::layout`, shared with the firmware; what follows is this
+// host's facts and the wiring into the state it already keeps.
+
+/// The projection defaults the Layout currently holds.
+fn cur_projection(state: &State) -> Projection {
+    state.layout.lock().unwrap().proj
+}
+
+/// The Layout a mirror with nothing configured comes up in — `--board panel`
+/// IS its 64x64 panel, a strip mirror is its strip.
+fn board_default_layout(panel: bool) -> luxel_core::layout::Layout {
+    if panel {
+        luxel_core::layout::Layout::board_default(
+            luxel_core::layout::LayoutKind::Matrix,
+            luxel_core::layout::Matrix::single(PANEL_W, PANEL_H),
+        )
+    } else {
+        luxel_core::layout::Layout::board_default(
+            luxel_core::layout::LayoutKind::Strip,
+            luxel_core::layout::Matrix::single(1, 1),
+        )
+    }
+}
+
+/// Board facts the core parser validates a `POST /api/layout` body against.
+/// The mirror drives no strip, so every GPIO that could plausibly exist is
+/// accepted — a test impersonating a board picks its own pin numbers.
+///
+/// `strict` is always true here: the firmware relaxes it when re-reading its
+/// own persisted Layout, and the mirror has no flash to re-read.
+fn layout_limits(state: &State, strict: bool) -> luxel_core::layout::Limits<'static> {
+    luxel_core::layout::Limits {
+        max_pixels: state.max_pixels,
+        outputs: state.hw.outputs,
+        panel: state.hw.panel,
+        pin_ok: &|p| p < 64,
+        proto_code: &protocol_code,
+        strict,
+    }
+}
+
+/// Build the `View` the core JSON writer needs and run `f` with it.
+fn with_layout_view<R>(
+    state: &State,
+    pixels: Option<u32>,
+    f: impl FnOnce(&luxel_core::layout::View) -> R,
+) -> R {
+    let map_json = map_json(state);
+    let (map_dims, map_grid) = match &*state.device_map.lock().unwrap() {
+        Some((dims, coords)) => (*dims, luxel_core::outpipe::detect_grid(*dims, coords)),
+        None => (0, None),
+    };
+    f(&luxel_core::layout::View {
+        pixels: pixels.unwrap_or_else(|| state.pixel_count.load(Ordering::Relaxed)),
+        max_pixels: state.max_pixels,
+        map_dims,
+        map_grid,
+        map_json: &map_json,
+        proto_name: &protocol_name,
+        // the mirror has no data pin (`POST /api/datapin` 404s), so the
+        // implicit output reports 0 — the same "absent" signal `/api/config`
+        // already gives by omitting `data_pins`
+        default_pin: 0,
+        default_proto: state.protocol.load(Ordering::Relaxed),
+        default_order: state.color_order.load(Ordering::Relaxed),
+    })
+}
+
+/// `GET /api/layout` (`pixels` = `None` reports the applied count; a POST
+/// answer passes the requested one — see `layout::View::pixels`).
+fn layout_json(state: &State, pixels: Option<u32>) -> String {
+    let mut out = String::new();
+    with_layout_view(state, pixels, |v| {
+        state.layout.lock().unwrap().push_json(&mut out, v)
+    });
+    out
+}
+
+/// `{"ok":true,"reboot_required":B,…}` — the GET body with two fields in
+/// front, so a client never has to re-fetch after a POST.
+fn layout_ok_json(state: &State, reboot_required: bool, pixels: Option<u32>) -> String {
+    let body = layout_json(state, pixels);
+    format!("{{\"ok\":true,\"reboot_required\":{reboot_required},{}", &body[1..])
+}
+
+/// Note that the map changed through the `POST /api/map` ALIAS: a user map
+/// makes the Layout a `map`, clearing it goes back to the board's own kind.
+fn note_map_changed(state: &State, user_installed: bool) {
+    let want = if user_installed {
+        luxel_core::layout::LayoutKind::Map
+    } else {
+        board_default_layout(state.hw.panel).kind
+    };
+    state.layout.lock().unwrap().kind = want;
+}
+
+/// Note that a strip setting changed through one of the aliases
+/// (`/api/config`, `/api/protocol`, `/api/output`): output 0 IS the strip,
+/// so a stored table follows it. No-op while nothing is stored — the
+/// implicit single output is rendered from live state. Mirrors
+/// `firmware/src/layout.rs::note_alias_change`.
+fn note_layout_alias_change(state: &State, pixels: u32) {
+    let proto = state.protocol.load(Ordering::Relaxed);
+    let order = state.color_order.load(Ordering::Relaxed);
+    // `pixels` is the REQUESTED count: `/api/config` persists before the
+    // render loop drains its message, the same applied-lags-requested split
+    // the firmware has.
+    let mut l = state.layout.lock().unwrap();
+    let single = l.outputs.len() == 1 && l.kind != luxel_core::layout::LayoutKind::Matrix;
+    if let Some(o) = l.outputs.iter_mut().find(|o| o.n == 0) {
+        o.proto = proto;
+        o.order = order;
+        if single {
+            o.count = pixels;
         }
     }
-    (proj, rest)
-}
-
-/// The projection triple as JSON fields (no braces).
-fn projection_json(p: &Projection) -> String {
-    format!(
-        "\"proj1d\":\"{}\",\"proj2d\":\"{}\",\"proj3d\":\"{}\"",
-        p.proj1d, p.proj2d, p.proj3d
-    )
 }
 
 /// Engine construction with the host wall clock (+ configured tz) already
@@ -980,7 +1109,7 @@ fn engine_now(state: &State, prog: luxel_core::vm::Program, pixel_count: u32) ->
     // Install the projection before the first frame: `pixelCount` under an
     // along-axis projection is the strip's length, and top-level init has
     // already run by the time anything else could set it (Gitea #473).
-    e.set_projection(*state.projection.lock().unwrap());
+    e.set_projection(cur_projection(state));
     e
 }
 
@@ -1695,6 +1824,7 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
             let r = match body.trim().parse::<u32>() {
                 Ok(n) if n >= 1 && n <= state.max_pixels => {
                     push(&state, Msg::Config(n));
+                    note_layout_alias_change(&state, n);
                     format!("{{\"ok\":true,\"pixels\":{}}}", n)
                 }
                 _ => format!("{{\"ok\":false,\"error\":\"pixels must be 1..={}\"}}", state.max_pixels),
@@ -1714,6 +1844,7 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
                 Some(code) => {
                     // the mirror drives no real LEDs — just round-trip the setting
                     state.protocol.store(code, Ordering::Relaxed);
+                    note_layout_alias_change(&state, state.pixel_count.load(Ordering::Relaxed));
                     format!("{{\"ok\":true,\"protocol\":\"{}\"}}", protocol_name(code))
                 }
                 None => String::from("{\"ok\":false,\"error\":\"protocol must be sk9822 or ws2812\"}"),
@@ -1769,6 +1900,7 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
                     state.bright_curve.store(bc, Ordering::Relaxed);
                     state.post_blur.store(bl, Ordering::Relaxed);
                     state.post_glow.store(gl, Ordering::Relaxed);
+                    note_layout_alias_change(&state, state.pixel_count.load(Ordering::Relaxed));
                     format!(
                         "{{\"ok\":true,\"order\":\"{}\",\"gamma\":{},\"capMa\":{},\"brightCurve\":{},\"blur\":{},\"glow\":{}}}",
                         o.name(),
@@ -1973,60 +2105,61 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
             };
             respond(&mut stream, 200, "application/json", r.as_bytes());
         }
-        ("GET", "/api/map") => {
-            // Same shape as firmware devicemap::to_json: a procedural grid
-            // also reports its `kind`/`w`/`h`, which is how a client learns
-            // the device's installed geometry (Gitea #372).
-            let proj = projection_json(&state.projection.lock().unwrap());
-            let body = match &*state.device_map.lock().unwrap() {
-                Some((dims, coords)) => {
-                    let shape = match *state.device_grid.lock().unwrap() {
-                        Some((w, h)) => format!(",\"kind\":\"grid\",\"w\":{w},\"h\":{h}"),
-                        None => String::from(",\"kind\":\"coords\""),
-                    };
-                    format!(
-                        "{{\"installed\":true,\"dims\":{},\"count\":{}{},{proj}}}",
-                        dims,
-                        coords.len(),
-                        shape
-                    )
+        ("GET", "/api/layout") => {
+            respond(&mut stream, 200, "application/json", layout_json(&state, None).as_bytes());
+        }
+        ("POST", "/api/layout") => {
+            let body = String::from_utf8_lossy(&req.body);
+            let cur = state.layout.lock().unwrap().clone();
+            let pixels_now = state.pixel_count.load(Ordering::Relaxed);
+            let r = match luxel_core::layout::parse(
+                &body,
+                &cur,
+                pixels_now,
+                &layout_limits(&state, true),
+            ) {
+                Err(e) => {
+                    let mut out = String::new();
+                    luxel_core::layout::push_error_json(&mut out, &e);
+                    out
                 }
-                None => format!("{{\"installed\":false,\"dims\":0,\"count\":0,{proj}}}"),
+                Ok(edit) => {
+                    // The Layout's own edits go through the paths that
+                    // already own that state, so `/api/config` and
+                    // `/api/map` stay aliases rather than a second copy.
+                    if let Some(m) = edit.map.as_deref() {
+                        apply_map_wire(&state, m);
+                    }
+                    if let Some(n) = edit.pixels {
+                        push(&state, Msg::Config(n));
+                    }
+                    // Output 0 IS the strip this host drives (#474 makes the
+                    // rest real), so its protocol and colour order write
+                    // through to the live settings the aliases expose.
+                    if let Some(o) = edit.layout.outputs.iter().find(|o| o.n == 0) {
+                        state.protocol.store(o.proto, Ordering::Relaxed);
+                        state.color_order.store(o.order, Ordering::Relaxed);
+                    }
+                    let reboot = edit.reboot_required;
+                    let pixels_requested = edit.pixels;
+                    *state.layout.lock().unwrap() = edit.layout;
+                    state.map_dirty.store(true, Ordering::Relaxed); // reinstall the projection
+                    layout_ok_json(&state, reboot, pixels_requested)
+                }
             };
-            respond(&mut stream, 200, "application/json", body.as_bytes());
+            respond(&mut stream, 200, "application/json", r.as_bytes());
+        }
+        ("GET", "/api/map") => {
+            respond(&mut stream, 200, "application/json", map_json(&state).as_bytes());
         }
         ("POST", "/api/map") => {
-            let raw = String::from_utf8_lossy(&req.body);
-            // `proj1d=`/`proj2d=`/`proj3d=` ride along for now (A4 #465 moves
-            // them to /api/layout); a body carrying ONLY those keeps the map.
-            let (proj, body) = take_projection(&raw, *state.projection.lock().unwrap());
-            *state.projection.lock().unwrap() = proj;
-            let proj_only = body.trim().is_empty() && !raw.trim().is_empty();
-            let (installed, count) = if proj_only {
-                let m = state.device_map.lock().unwrap();
-                (m.is_some(), m.as_ref().map_or(0, |(_, c)| c.len()))
-            } else {
-                match parse_map(&body) {
-                    Some((dims, coords, grid)) => {
-                        let n = coords.len();
-                        *state.device_map.lock().unwrap() = Some((dims, coords));
-                        *state.device_grid.lock().unwrap() = grid;
-                        state.map_source.store(2, Ordering::Relaxed);
-                        (true, n)
-                    }
-                    // empty/invalid clears — and a panel mirror falls back to
-                    // its own geometry, exactly as devicemap::board_default
-                    // does on a HUB75 board.
-                    None => install_board_map(&state),
-                }
-            };
-            state.map_dirty.store(true, Ordering::Relaxed);
-            let r = format!(
-                "{{\"ok\":true,\"installed\":{},\"count\":{},{}}}",
-                installed,
-                count,
-                projection_json(&proj)
-            );
+            // ALIAS of `/api/layout map …` (Gitea #465): same state, and the
+            // Layout's `kind` follows. (The `proj*` tokens this route carried
+            // as a #473 stopgap are gone — `/api/layout` owns them now.)
+            let body = String::from_utf8_lossy(&req.body).into_owned();
+            let (installed, count) = apply_map_wire(&state, &body);
+            note_map_changed(&state, installed && !body.trim().is_empty());
+            let r = format!("{{\"ok\":true,\"installed\":{installed},\"count\":{count}}}");
             respond(&mut stream, 200, "application/json", r.as_bytes());
         }
         ("GET", "/api/playlist") => {
@@ -2128,7 +2261,16 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
 }
 
 pub fn serve_cmd(rest: &[String]) -> ExitCode {
-    let mut pixels: u32 = 300;
+    // None until `--pixels` is given: `--board panel` then defaults it to the
+    // panel's own 4096, so a panel mirror comes up as a coherent 64x64
+    // Layout instead of a 300 px strip wearing a 4096-pixel map (Gitea #495).
+    let mut pixels: Option<u32> = None;
+    // `--max-pixels`: raise (or lower) this run's ceiling explicitly. The
+    // default is the impersonated board's — 2048 strip, 4096 panel — and a
+    // `--pixels` above it is now a hard error rather than a silent clamp,
+    // which is what quietly disarmed the #420 element-ledger check in
+    // device-e2e.mjs (Gitea #495).
+    let mut max_pixels_arg: Option<u32> = None;
     let mut port: u16 = 8720;
     // 0 = "this host has no meaningful free-heap number"; see State::heap_free
     let mut heap_free: u32 = 0;
@@ -2159,8 +2301,12 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         match (flag.as_str(), it.next()) {
             ("--web-dir", Some(v)) => web_dir_arg = Some(v.clone()),
             ("--pixels", Some(v)) => match v.parse() {
-                Ok(n) => pixels = n,
+                Ok(n) => pixels = Some(n),
                 Err(_) => return super::usage(),
+            },
+            ("--max-pixels", Some(v)) => match v.parse::<u32>() {
+                Ok(n) if n >= 1 => max_pixels_arg = Some(n),
+                _ => return super::usage(),
             },
             ("--port", Some(v)) => match v.parse() {
                 Ok(n) => port = n,
@@ -2221,9 +2367,22 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         }
     }
 
-    let max_pixels = if panel { PANEL_MAX_PIXELS } else { MAX_PIXELS };
+    let max_pixels =
+        max_pixels_arg.unwrap_or(if panel { PANEL_MAX_PIXELS } else { MAX_PIXELS });
+    // A panel mirror IS its panel, so its pixel count defaults to the panel's
+    // area rather than a strip's 300 (Gitea #495).
+    let pixels = pixels.unwrap_or(if panel { PANEL_MAX_PIXELS } else { 300 });
+    if pixels < 1 || pixels > max_pixels {
+        eprintln!(
+            "luxel serve: --pixels {pixels} is outside this run's Layout ceiling of \
+             {max_pixels} px.\n  The ceiling is the impersonated board's cap \
+             ({MAX_PIXELS} strip, {PANEL_MAX_PIXELS} with --board panel); raise it \
+             explicitly with --max-pixels N."
+        );
+        return ExitCode::FAILURE;
+    }
     let state = Arc::new(State {
-        pixel_count: AtomicU32::new(pixels.clamp(1, max_pixels)),
+        pixel_count: AtomicU32::new(pixels),
         max_pixels,
         hw: luxel_core::caps::Hw {
             // The mirror drives a virtual strip: pixel count, protocol and
@@ -2242,7 +2401,7 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
             // the two spatial stages (#476), a strip's can.
             blur_glow: !panel,
         },
-        geom: Mutex::new(luxel_core::caps::Geom::strip(pixels.clamp(1, max_pixels))),
+        geom: Mutex::new(luxel_core::caps::Geom::strip(pixels)),
         heap_free: AtomicU32::new(heap_free),
         engine_heap: AtomicU32::new(engine_heap),
         inbox: Mutex::new(Vec::new()),
@@ -2268,7 +2427,7 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         device_map: Mutex::new(None),
         device_grid: Mutex::new(None),
         map_source: AtomicU8::new(0),
-        projection: Mutex::new(Projection::DEFAULT),
+        layout: Mutex::new(board_default_layout(panel)),
         map_dirty: AtomicBool::new(false),
         live_pixels: Mutex::new(Vec::new()),
         live_mark: Mutex::new(None),

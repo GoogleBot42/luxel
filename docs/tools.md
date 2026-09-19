@@ -93,7 +93,7 @@ are documented once in [docs/api.md](api.md), not here.
 | `web/tools/lna-e2e.mjs` | The browser-blocked device state (#162) in real chromium, from a REAL https origin: serves `web/dist` twice — over TLS with a throwaway self-signed cert (openssl, dev shell) and over plain http — and points both at a dead private-space address. Asserts the https copy shows the Local-Network-Access explanation with its manual routes while the http copy shows the ordinary "cannot reach device", then A/Bs `targetAddressSpace` none/local/public from the page and prints Chromium's own errorText for each. ~40 s, no hardware. What it CANNOT do is the granted path: headless chromium doesn't run the policy (identical verdicts — see the header comment for the flags that don't help), so the https→device success flow still needs a headful browser. |
 | `web/tools/fake-wled.mjs` | A fake WLED device over HTTP that "reboots into Luxel" after an `/update` upload — the fixture flash-e2e drives. Arch/CORS/reboot-time via env. |
 | `web/tools/gen-flash-manifest.mjs` | Writes `firmware/manifest.json` for the installer page from a directory of release artifacts (release workflow + flash-e2e fixture both use it). |
-| `tools/serve-e2e.mjs` | Fast fetch-only smoke test of the mirror: HTTP API (including `POST /api/events` event injection and `POST /api/pins` digital-pin AND analog-pin injection, each driven end-to-end into a live pattern's pixels; and `/api/status`'s `geom`/`caps` across strip / fabricated-√n-grid / user-grid / irregular-3D layouts plus a second `--board panel` mirror) + page routing (`/` serves the built playground or the minimal fallback; `/min` the minimal page, with its build-mode blocks resolved). Full-UI browser coverage is `web/tools/device-e2e.mjs`. |
+| `tools/serve-e2e.mjs` | Fast fetch-only smoke test of the mirror: HTTP API (including `POST /api/events` event injection and `POST /api/pins` digital-pin AND analog-pin injection, each driven end-to-end into a live pattern's pixels; and `/api/status`'s `geom`/`caps` across strip / fabricated-√n-grid / user-grid / irregular-3D layouts plus a second `--board panel` mirror; `GET`/`POST /api/layout` round-trips over strip, matrix-with-arrangement, map-grid, two outputs and projection defaults, its error cases with line numbers, and the `/api/config`//`api/map` alias agreement) + page routing (`/` serves the built playground or the minimal fallback; `/min` the minimal page, with its build-mode blocks resolved). Full-UI browser coverage is `web/tools/device-e2e.mjs`. |
 | `tools/mqtt-e2e.mjs` | MQTT bridge against a REAL local mosquitto (dev-shell dep): mirror connects, retained availability, and the `luxel/<id>/event` topic driving a `readEvent()` pattern (text lines → pixels). Needs `web/public/luxel.wasm` (`npm run wasm`). |
 
 ## CLI (`cargo run -p luxel-cli --` or `target/release/luxel`)
@@ -111,13 +111,19 @@ panel's frame rates), and **`--board strip|panel` / `--outputs N`** (Gitea
 #464) — `--board panel` reports `max_pixels` 4096, comes up on its own 64×64
 grid and advertises panel `caps` (`panel:true`, `strip_driver:false`,
 `power_cap:false`, `layers:2`), which is what the v2 Settings page's
-capability gating reads. It is the flag form of what
-`web/tools/maxpixels-e2e.mjs` does by intercepting `/api/status` in the page.
-**`--pixels` is clamped to the board's cap, silently**: `serve --pixels 4096`
-without `--board panel` comes up at 2048, and a `grid 64 64` posted to it is
-truncated to 2048 coordinates — which `detect_grid` then reports as a 64×32
-grid, not the 64×64 you asked for (2026-09-19, #463). Pass `--board panel`
-whenever you want a 4096 px layout.
+capability gating reads — and it now comes up with the matching Layout
+(`kind:"matrix"`, 64×64, 4096 px) rather than a 300 px strip wearing a panel's
+map. It is the flag form of what `web/tools/maxpixels-e2e.mjs` does by
+intercepting `/api/status` in the page.
+
+`--pixels N` past the run's ceiling is a **hard error** naming the ceiling, not
+a silent clamp (Gitea #495 — the clamp is what quietly disarmed device-e2e's
+#420 element-ledger check, and a `grid 64 64` posted to a clamped 2048 px
+mirror was truncated to 2048 coordinates, which `detect_grid` then reported as
+a 64×32 grid rather than the 64×64 asked for). `--max-pixels N` raises or
+lowers that ceiling explicitly, which is how a strip mirror is driven at a
+panel's pixel count without impersonating a panel; `--board panel` is the other
+route when you want the panel's capabilities too.
 
 `--ddp-port` / `--e131-port` move the network-input listeners off the standard
 DDP 4048 / sACN 5568 (Gitea #496). Those ports are global, so a mirror left

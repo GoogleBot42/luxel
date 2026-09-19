@@ -427,6 +427,38 @@ in it at all any more, not even their directory:**
 | `MAP_KEY` | ≤ 3,840 | per pixel-map upload |
 | `RESUME_KEY` | ~16 | per swap (skipped when unchanged) |
 | `PALETTE_KEY` | ≤ 64 | per palette edit |
+| `LAYOUT_KEY` | ~40–110 | per Layout edit |
+
+`LAYOUT_KEY` is the **Layout** (`/api/layout`, Gitea #465) — the kind
+(`strip`/`matrix`/`map`), the matrix arrangement
+(`pw ph cols rows start dir snake rot180 scan`), the output table and the
+projection triple — stored as **its own `POST /api/layout` wire**, the way
+`PLAYLIST_KEY` stores the playlist body verbatim, and re-parsed at boot.
+That is one codec instead of a serializer plus a deserializer plus a version
+byte: an unreadable record just leaves the board default standing (the
+store's no-migration rule), and a record is legible with `curl`. It costs
+image, too — the binary form this replaced was 2.2 KB of `.text` on the C6
+(docs/boards.md).
+
+Two consequences of re-parsing worth knowing:
+
+- The stored body's `strip <n>` count and its `map` line are **dropped** on
+  load, because the pixel count and the pixel map already came from their own
+  records (the `LXDV` nvs record and `MAP_KEY`). Not carrying them here is the
+  whole point — it is what keeps `/api/config` and `/api/map` honest aliases
+  of the same state rather than a second copy that can drift. It is also why
+  `strip` takes its count optionally and a `map` Layout abbreviates to the
+  bare word `map`.
+- The boot re-parse runs with `Limits::strict` **off**, so the cross-line
+  invariant that the outputs partition the pixel space exactly is not
+  enforced there. An alias that moved the pixel count can leave a stored
+  table that no longer adds up, and losing the whole Layout over that would
+  be worse than reporting a table the next POST has to restate anyway.
+
+A device upgraded from an image that predates the endpoint has no record at
+all and comes up exactly as it did before: `kind` is read off whatever map is
+installed. `luxel_core::layout` owns the grammar, shared with the
+`luxel serve` mirror.
 
 Caps: `MAX_SOURCE` 32 KiB and `MAX_BC` 40 KiB are sanity limits now that a
 file is exact-sized (the 16 KiB HTTP request buffer bounds a POST well below

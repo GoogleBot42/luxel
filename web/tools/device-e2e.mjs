@@ -226,7 +226,7 @@ try {
     const MAPPED = `http://127.0.0.1:${MAP_PORT}`;
     const mappedDev = spawn(
       "../target/debug/luxel",
-      ["serve", ...NO_NETIN, "--port", String(MAP_PORT), "--pixels", "4096", "--board", "panel"],
+      ["serve", ...NO_NETIN, "--port", String(MAP_PORT), "--pixels", "4096", "--max-pixels", "4096"],
       { stdio: ["ignore", "pipe", "inherit"] },
     );
     await new Promise((resolve, reject) => {
@@ -1802,22 +1802,24 @@ try {
     // black with the editor saying nothing, because the capacity model
     // discarded the element-ledger vmerr and the device's own vmerr was
     // overwritten by the "indexing a non-array value" cascade one frame later.
+    // `--max-pixels` is load-bearing: a strip mirror's ceiling is 2048, and
+    // `--pixels 4096` used to be clamped to it in silence, which disarmed
+    // this whole check (Gitea #495 — it is a hard error now).
     const PANEL_PORT = E2E.mirror.loadedPanel; // E2E_PORT + 23
     const PANEL = `http://127.0.0.1:${PANEL_PORT}`;
     const panelDev = spawn(
       "../target/debug/luxel",
-      // `--board panel` is load-bearing since #464: a strip-board mirror caps
-      // at 2048 px and SILENTLY clamps `--pixels 4096` down to it, which puts
-      // 3×2048 array elements inside the 10236-element budget and makes this
-      // check unfalsifiable (Gitea #495).
+      // `--max-pixels` is the #495 route: it raises this run's ceiling
+      // without impersonating a panel, so the rig stays the honest one — a
+      // STRIP bigger than the editor's preview.
       [
         "serve",
         ...NO_NETIN,
         "--port",
         String(PANEL_PORT),
-        "--board",
-        "panel",
         "--pixels",
+        "4096",
+        "--max-pixels",
         "4096",
         "--heap-free",
         "200000",

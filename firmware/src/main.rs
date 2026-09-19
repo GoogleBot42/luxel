@@ -62,6 +62,7 @@ mod flashmap;
 mod gpio;
 #[cfg(feature = "hub75")]
 mod hub75;
+mod layout;
 mod leds;
 mod mqtt;
 mod netin;
@@ -351,6 +352,7 @@ async fn main(spawner: Spawner) -> ! {
     patterns::init();
     playlist::init(); // after patterns::init (shares the storage partition)
     devicemap::init();
+    layout::init();
     outpal::init(); // device output palette (also a reserved-key blob)
     } else {
         println!("LUXEL_NO_OTA: ota disabled");
@@ -867,14 +869,20 @@ fn budgeted_engine(prog: luxel_core::vm::Program, count: u32) -> Engine {
     // real time (SNTP may not have synced yet on early boot -> None -> 0,
     // same as a PB with no time source). The render loop keeps it fresh
     // per frame afterwards.
-    Engine::from_program_budgeted_at_ext(
+    let mut e = Engine::from_program_budgeted_at_ext(
         prog,
         count,
         1,
         budget,
         element_budget(budget),
         shared::wall_now_local(),
-    )
+    );
+    // Install the Layout's projection defaults BEFORE the first frame
+    // (Gitea #465/#473): `pixelCount` under an along-axis projection is the
+    // strip's length, and the pattern's top-level init has already run by
+    // the time anything else could set it.
+    e.set_projection(layout::projection());
+    e
 }
 
 /// [`budgeted_engine`] + post-build floor check: a pattern that fits its
@@ -1458,6 +1466,15 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                 // cleared → rebuild without a map (do not re-mark dirty)
                 drop(engine.take()); // free before re-decoding (peak heap)
                 engine = rebuild();
+            }
+        }
+
+        // projection defaults changed (POST /api/layout) — they apply live,
+        // and they change the effective geometry (Gitea #465)
+        if layout::take_proj_dirty() {
+            geom_dirty = true;
+            if let Some(eng) = engine.as_mut() {
+                eng.set_projection(layout::projection());
             }
         }
 

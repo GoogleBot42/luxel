@@ -288,7 +288,200 @@ check(
     pst.caps.outputs === 2,
   JSON.stringify(pst.caps),
 );
+// A panel mirror's Layout IS the panel: kind matrix, 64x64, one panel-shaped
+// output, and `strip`/`out` refused on it (Gitea #465).
+const panelBase = `http://127.0.0.1:${PORT + 1}`;
+const pLayout = await (await fetch(`${panelBase}/api/layout`)).json();
+check(
+  "--board panel: Layout is the 64x64 matrix",
+  pLayout.kind === "matrix" &&
+    pLayout.dims === 2 &&
+    pLayout.w === 64 &&
+    pLayout.h === 64 &&
+    pLayout.pixels === 4096 &&
+    pLayout.matrix.pw === 64 &&
+    pLayout.matrix.cols === 1 &&
+    pLayout.outputs.length === 1 &&
+    pLayout.outputs[0].count === 1,
+  JSON.stringify(pLayout),
+);
+check(
+  "layout: a panel board refuses `strip`",
+  (await postLayout(panelBase, "strip 60")).line === 1,
+);
 panel.kill();
+
+// ---- GET/POST /api/layout (Gitea #465) ----
+// The one geometry object: kind, arrangement, outputs, projection defaults.
+// Everything below runs against the 120 px strip mirror started at the top.
+async function postLayout(b, body) {
+  return await (await fetch(`${b}/api/layout`, { method: "POST", body })).json();
+}
+
+const l0 = await (await fetch(`${base}/api/layout`)).json();
+check(
+  "layout: a bare strip mirror reports kind strip, one implicit output",
+  l0.kind === "strip" &&
+    l0.source === "regular" &&
+    l0.dims === 1 &&
+    l0.regular === true &&
+    l0.w === 120 &&
+    l0.h === 1 &&
+    l0.pixels === 120 &&
+    l0.max === 2048 &&
+    l0.matrix === undefined &&
+    l0.outputs.length === 1 &&
+    l0.outputs[0].n === 0 &&
+    l0.outputs[0].count === 120 &&
+    l0.proj.proj1d === "index" &&
+    l0.map.installed === false,
+  JSON.stringify(l0),
+);
+
+const lStrip = await postLayout(base, "strip 240\nproj1d x\nproj3d yz");
+check(
+  "layout: `strip N` resizes live and echoes the whole object",
+  lStrip.ok === true &&
+    lStrip.reboot_required === false &&
+    lStrip.pixels === 240 &&
+    lStrip.w === 240 &&
+    lStrip.proj.proj1d === "x" &&
+    lStrip.proj.proj3d === "yz",
+  JSON.stringify(lStrip),
+);
+await sleep(400);
+check(
+  "layout: /api/status geom follows a POST without a reboot",
+  (await (await fetch(`${base}/api/status`)).json()).geom.w === 240,
+);
+check(
+  "layout: /api/config is an alias of the same pixel count",
+  (await (await fetch(`${base}/api/config`)).json()).pixels === 240,
+);
+
+const lMatrix = await postLayout(base, "matrix 32 16 2 1 tl row 1 0 16");
+check(
+  "layout: `matrix` derives the grid, keeps the arrangement, needs a reboot",
+  lMatrix.ok === true &&
+    lMatrix.reboot_required === true &&
+    lMatrix.kind === "matrix" &&
+    lMatrix.dims === 2 &&
+    lMatrix.w === 64 &&
+    lMatrix.h === 16 &&
+    lMatrix.pixels === 1024 &&
+    lMatrix.matrix.cols === 2 &&
+    lMatrix.matrix.snake === 1 &&
+    lMatrix.matrix.scan === 16 &&
+    lMatrix.outputs[0].count === 2 && // panels, not pixels
+    lMatrix.map.kind === "grid" &&
+    lMatrix.map.w === 64,
+  JSON.stringify(lMatrix),
+);
+await sleep(400);
+check(
+  "layout: the matrix grid reached /api/map too",
+  (await (await fetch(`${base}/api/map`)).json()).w === 64,
+);
+
+const lMap = await postLayout(base, "map grid 8 8");
+check(
+  "layout: `map grid W H` is the /api/map wire, source flips to map, pixels follow",
+  lMap.kind === "map" && lMap.source === "map" && lMap.w === 8 && lMap.h === 8 && lMap.pixels === 64,
+  JSON.stringify(lMap),
+);
+await sleep(400);
+check(
+  "layout: the map grid resized the pixel space through /api/config too",
+  (await (await fetch(`${base}/api/config`)).json()).pixels === 64,
+);
+// the alias keeps its own contract: `POST /api/map` never resized a strip
+await fetch(`${base}/api/map`, { method: "POST", body: "grid 16 4" });
+const lAfterMapAlias = await (await fetch(`${base}/api/layout`)).json();
+check(
+  "layout: a POST /api/map alias keeps kind map and reports the new shape",
+  lAfterMapAlias.kind === "map" &&
+    lAfterMapAlias.w === 16 &&
+    lAfterMapAlias.h === 4 &&
+    lAfterMapAlias.pixels === 64,
+  JSON.stringify(lAfterMapAlias),
+);
+
+// outputs: stored, validated, reported — driving the second one is #474
+await postLayout(base, "strip 120");
+const outs2 = spawn(
+  "target/debug/luxel",
+  ["serve", "--port", String(PORT + 2), "--pixels", "120", "--outputs", "2"],
+  { stdio: ["ignore", "pipe", "inherit"] },
+);
+process.on("exit", () => outs2.kill());
+await new Promise((resolve, reject) => {
+  outs2.stdout.on("data", (d) => { if (String(d).includes("luxel serve:")) resolve(); });
+  outs2.on("exit", () => reject(new Error("2-output mirror died")));
+  setTimeout(() => reject(new Error("2-output mirror start timeout")), 30000);
+});
+const outsBase = `http://127.0.0.1:${PORT + 2}`;
+await sleep(500);
+const lOuts = await postLayout(
+  outsBase,
+  "strip 120\nout 0 18 ws2812 grb 60\nout 1 19 sk9822 rgb 60 rev",
+);
+check(
+  "layout: two outputs partition the pixel space and need a reboot",
+  lOuts.ok === true &&
+    lOuts.reboot_required === true &&
+    lOuts.outputs.length === 2 &&
+    lOuts.outputs[0].pin === 18 &&
+    lOuts.outputs[0].proto === "ws2812" &&
+    lOuts.outputs[1].order === "rgb" &&
+    lOuts.outputs[1].rev === true,
+  JSON.stringify(lOuts.outputs),
+);
+check(
+  "layout: output 0 writes through to /api/protocol",
+  (await (await fetch(`${outsBase}/api/protocol`)).json()).protocol === "ws2812",
+);
+const badCases = [
+  ["strip 0", 1, "pixel count out of range"],
+  ["strip 99999", 1, "past the board ceiling"],
+  ["strip 60\nwibble 1", 2, "unknown line"],
+  ["strip 60\nout 0 18 apa106 grb 60", 2, "unknown protocol"],
+  ["strip 60\nout 5 18 ws2812 grb 60", 2, "output index past caps.outputs"],
+  ["strip 60\nproj1d sideways", 2, "unknown projection token"],
+  ["strip 120\nout 0 18 ws2812 grb 60", 0, "counts must add up"],
+  ["strip 60\nmatrix 8 8 1 1 tl row 0 0", 2, "one kind line per body"],
+];
+for (const [body, line, why] of badCases) {
+  const r = await postLayout(outsBase, body);
+  check(`layout: rejects ${why} at line ${line}`, r.ok === false && r.line === line, JSON.stringify(r));
+}
+const lUnchanged = await (await fetch(`${outsBase}/api/layout`)).json();
+check(
+  "layout: a rejected body changes nothing",
+  lUnchanged.pixels === 120 && lUnchanged.outputs.length === 2,
+  JSON.stringify(lUnchanged),
+);
+const lCleared = await postLayout(outsBase, "out none");
+check(
+  "layout: `out none` goes back to the one implicit output",
+  lCleared.ok === true && lCleared.outputs.length === 1 && lCleared.outputs[0].count === 120,
+  JSON.stringify(lCleared.outputs),
+);
+outs2.kill();
+
+// ---- --pixels past the ceiling is an error, not a silent clamp (#495) ----
+const over = spawn(
+  "target/debug/luxel",
+  ["serve", "--port", String(PORT + 3), "--pixels", "4096"],
+  { stdio: ["ignore", "pipe", "pipe"] },
+);
+let overErr = "";
+over.stderr.on("data", (d) => (overErr += String(d)));
+const overCode = await new Promise((r) => over.on("exit", r));
+check(
+  "--pixels past the board ceiling exits with the reason named",
+  overCode !== 0 && /--max-pixels/.test(overErr),
+  `code=${overCode} ${overErr.trim()}`,
+);
 
 server.kill();
 console.log(failures === 0 ? "\nall checks passed" : `\n${failures} FAILURES`);
