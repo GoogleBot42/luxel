@@ -50,3 +50,10 @@ paths:
   socket. The connect handshake on page load stays, though: the device
   reports its running pattern/status before the editor opens.
 - Strict TypeScript only.
+- **The web UI v2 spec is `docs/design/webui-v2/proposal.md`** (approved
+  2026-09-18, epic #461). Any v2 work follows it: geometry comes from the one
+  `Layout` store, and a control is *absent* unless the device's advertised
+  `caps` / the Layout / the pattern's exports say the thing it acts on exists —
+  never disabled, never inferred from a board name (the one exception is a
+  budget the user must learn, e.g. Add layer → Pattern at the layer cap; see
+  proposal §5.7 for the full visibility audit). `docs/webui.md` is historical.
