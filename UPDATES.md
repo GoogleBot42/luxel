@@ -1,5 +1,27 @@
 # Update log
 
+## 2026-09-19 — Web UI v2 Phase A complete (#461: #462–#476)
+
+All fifteen Phase A tickets merged in one day, one PR each, run as waves of
+subagents (procedure: `.claude/skills/phase-orchestration`). What a user now
+has: one `Layout` on `/api/layout` (strip / matrix with panel arrangement /
+custom map, outputs, projection defaults) reported alongside `geom` and
+`caps` on `/api/status`; a console whose every control is gated by those
+caps (absent, never disabled); one Patterns page with device-shaped tiles
+and a running marker; an editor whose header owns the document, code pane
+owns its errors and preview runs the device output chain; a ranked Settings
+page with the panel-arrangement graphic, an Outputs table and projection
+cards; a playlist whose items carry their own values and projection; in-app
+dialogs; the map program as its own screen; projection modes in the engine
+(a 1D pattern on the 64×64 panel now costs 64 render calls, not 4096); the
+Athom's second output driven; HUB75 chains remapped at boot; #446 fixed.
+The firmware diet (#501: build-std `optimize_for_size`, `wled-takeover` per
+board) paid for it — margins after the phase: C6 hosted 3.27 %, pb-v3
+4.47 %, athom-music 2.41 % (not CI-gated, #513). Verified on the merged tree:
+`tools/ci.sh` + all five chromium harnesses; Athom and Seengreat deployed and
+driven in a real browser. Open for Jeremy: #501 (repartition for Phase C),
+#513, #518/#521/#526 (needs eyes / a second panel / a real OTA upload).
+Per-ticket entries follow.
 ## 2026-09-19 — Phase A end-of-phase hardware check (#461); coldload's boot signal
 
 Master (`0705b40`) deployed to both bench boards and the v2 console driven

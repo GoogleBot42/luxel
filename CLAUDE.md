@@ -56,6 +56,8 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
   saves Fable token usage, which is the scarce resource. Sonnet is fine for the
   simplest lookups. Reserve Fable for the main loop and subagent tasks that
   genuinely need top-tier reasoning (Jeremy's standing instruction, 2026-08-16).
+- A milestone of many tickets (web UI v2 Phase B/C, or any comparable epic) runs as
+  waves of one-PR-per-ticket subagents — .claude/skills/phase-orchestration.
 - A device brief states the TASK, never the device's numbers: found state
   (brightness, pattern, pixel count) is read from the device and restored,
   never carried as a target — a brief's "brightness 31" got "restored" over

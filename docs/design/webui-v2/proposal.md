@@ -1,7 +1,9 @@
 # Luxel web UI v2 — design proposal
 
-Status: APPROVED 2026-09-18 — all decisions D1–D12 made (see §9). Nothing built yet. Decision points are
-numbered **D1…D12** and collected at the end.
+Status: APPROVED 2026-09-18 — all decisions D1–D12 made (see §9). **Phase A (#462–#476)
+shipped 2026-09-19**; Phases B and C are not started. Decision points are
+numbered **D1…D12** and collected at the end. The shipped web structure is documented in
+`docs/web-architecture.md`, the wire in `docs/api.md`.
 
 Inputs: 42 screenshots of the current UI, a code audit of `web/src` (4052-line App.svelte),
 a survey of the engine/firmware constraints, and a comparative study of PatternFlow, OBS,
