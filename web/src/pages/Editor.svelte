@@ -1484,7 +1484,7 @@
           run map
         </button>
         <button
-          class="debug-toggle"
+          class="mapdbg"
           class:active={mapDebugMode}
           data-role="map-debug"
           title="toggle the map debugger"
@@ -1741,7 +1741,7 @@
          their data-roles intact. #469 moves them into Settings → LED layout
          and DELETES this block. -->
     {#if $device}
-      <div class="rsec ledlayout" data-role="led-layout">
+      <div class="rsec" data-role="led-layout">
         <div class="rhead">
           <span class="slabel">LED layout</span>
           <span class="rdim">moves to Settings (#469)</span>
@@ -1997,6 +1997,13 @@
     border-bottom: 1px solid var(--border);
     background: var(--bg-panel);
     font-size: 12px;
+  }
+
+  /* the map bar's debug toggle reads "armed" the same way the preview
+     header's does */
+  .mapdbg.active {
+    border-color: var(--accent);
+    color: var(--accent);
   }
 
   .editor-host {
