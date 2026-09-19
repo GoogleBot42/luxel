@@ -94,12 +94,15 @@ list and `CI_BOARD` builds just one variant):
 What it is **not**: no device, no browser e2e, no soak. The hardware gates in
 docs/tools.md still have to be run by hand.
 
-**One build at a time.** The workflow takes a `concurrency` group named
-`luxel-ci` — deliberately global, not per-ref — with `cancel-in-progress:
-true`. A new build therefore cancels whatever is in flight rather than
-queueing behind it. That matters twice over: sessions merge PRs
-continuously, and the runner is shared with every other repo on the server,
-so a superseded build is somebody else's queue time.
+**One build per ref.** The workflow takes a `concurrency` group named
+`luxel-ci-<ref>` with `cancel-in-progress: true`: a new push to a branch
+cancels that branch's own stale build, and runs for different refs queue
+behind each other. The group used to be global (one build repo-wide, so a
+superseded build never cost the shared runner time), but once several agent
+sessions were opening PRs in parallel every push on any branch killed every
+other branch's run — the cancelled run reports as commit-status `failure`,
+and each PR needed two or three manual re-queues before it could merge
+(2026-09-19). Queue time is the price; wasted reruns were dearer.
 
 **Runner.** `runs-on: nixos` — the host-mode runner (label `nixos:host`): a
 NixOS container that shares the host nix-daemon and `/nix/store` and keeps a
