@@ -1,6 +1,13 @@
 //! LED strip drivers. Both speak SPI so one peripheral covers both chip
 //! families; the C3's GPIO matrix routes MOSI to any pin (e.g. the Athom
 //! LS4P's GPIO21).
+//!
+//! A board with more than one output (Gitea #474) runs one driver instance
+//! per output over the SAME frame — [`Protocol::encode_run`] takes the
+//! consecutive run that output carries rather than the whole frame.
+
+#[cfg(not(feature = "hub75"))]
+use luxel_core::layout::Run;
 
 /// Which strip protocol to drive. Selected by `PROTOCOL` in main.rs; the
 /// unselected variant is intentionally uninstantiated.
@@ -66,12 +73,40 @@ impl Protocol {
         }
     }
 
+    /// Encode ONE output's run of `rgb` into `out` (sized by
+    /// [`buf_len`](Self::buf_len) for `run.len`).
+    ///
+    /// The run is a consecutive slice of the one pixel space, walked
+    /// backwards when it is wired backwards (Gitea #474, D11); `perm` is the
+    /// colour-order fix-up an output with its own order applies on top of
+    /// the frame the shared output chain already permuted
+    /// (`ColorOrder::relative`), `None` when it agrees with the chain.
+    /// A single-output board passes the whole frame, no reverse and no
+    /// permutation, which is the pre-#474 path exactly.
     #[cfg(not(feature = "hub75"))]
-    pub fn encode(self, rgb: &[[u8; 3]], brightness5: u8, out: &mut [u8]) {
+    pub fn encode_run(
+        self,
+        rgb: &[[u8; 3]],
+        run: Run,
+        perm: Option<[u8; 3]>,
+        brightness5: u8,
+        out: &mut [u8],
+    ) {
         match self {
-            Protocol::Sk9822 => encode_sk9822(rgb, brightness5, out),
-            Protocol::Ws2812 => encode_ws2812(rgb, brightness5, out),
+            Protocol::Sk9822 => encode_sk9822(rgb, run, perm, brightness5, out),
+            Protocol::Ws2812 => encode_ws2812(rgb, run, perm, brightness5, out),
         }
+    }
+}
+
+/// The run's `i`-th wire pixel, colour-order fix-up applied.
+#[cfg(not(feature = "hub75"))]
+#[inline]
+fn wire_px(rgb: &[[u8; 3]], run: &Run, perm: Option<[u8; 3]>, i: u32) -> [u8; 3] {
+    let px = rgb[run.index(i) as usize];
+    match perm {
+        None => px,
+        Some(q) => [px[q[0] as usize], px[q[1] as usize], px[q[2] as usize]],
     }
 }
 
@@ -83,9 +118,16 @@ pub(crate) fn scale5(channel: u8, brightness5: u8) -> u8 {
 }
 
 #[cfg(not(feature = "hub75"))]
-fn encode_sk9822(rgb: &[[u8; 3]], brightness5: u8, out: &mut [u8]) {
+fn encode_sk9822(
+    rgb: &[[u8; 3]],
+    run: Run,
+    perm: Option<[u8; 3]>,
+    brightness5: u8,
+    out: &mut [u8],
+) {
     let mut i = 4; // leading zeros already in place
-    for px in rgb {
+    for k in 0..run.len {
+        let px = wire_px(rgb, &run, perm, k);
         out[i] = 0xE0 | (brightness5 & 0x1F);
         out[i + 1] = px[2]; // B
         out[i + 2] = px[1]; // G
@@ -99,9 +141,16 @@ fn encode_sk9822(rgb: &[[u8; 3]], brightness5: u8, out: &mut [u8]) {
 /// `brightness5` (0–31) scales each channel in software — WS2812 has no
 /// hardware brightness field.
 #[cfg(not(feature = "hub75"))]
-fn encode_ws2812(rgb: &[[u8; 3]], brightness5: u8, out: &mut [u8]) {
+fn encode_ws2812(
+    rgb: &[[u8; 3]],
+    run: Run,
+    perm: Option<[u8; 3]>,
+    brightness5: u8,
+    out: &mut [u8],
+) {
     let mut o = 0;
-    for px in rgb {
+    for k in 0..run.len {
+        let px = wire_px(rgb, &run, perm, k);
         // WS2812 wants GRB
         for byte in [
             scale5(px[1], brightness5),

@@ -42,7 +42,7 @@ is on only where that install path exists.
 |---|---|---|---|---|---|---|---|
 | `board-c3-devkit` (default) | ESP32-C3 | CLK GPIO6, DATA GPIO7 | SK9822, 60 px | 2048 | yes | supported (hardware-verified) | bare devkit |
 | `board-pixelblaze-v3` | ESP32 | CLK GPIO18, DATA GPIO23 | SK9822, 300 px | 2048 | no | supported (the dev unit) | official PB v3 Standard schematic; onboard 5 V level shifter; status LED GPIO12 (lit at boot = Luxel alive); button GPIO32 (unused) |
-| `board-athom-music` | ESP32 | CLK1 GPIO5, DATA1 GPIO18 | WS2812, 60 px | 2048 | yes | builds, untested on hardware | Athom music-reactive WLED controller — demoted from bench hardware, config stays maintained; strip-VCC relay on GPIO2 must be driven high or the strip stays dark; channel 2 + mic + IR unused for now |
+| `board-athom-music` | ESP32 | CLK1 GPIO5, DATA1 GPIO18; **CLK2 GPIO16, DATA2 GPIO17** | WS2812, 60 px | 2048 | yes | on the bench (the rig) | Athom music-reactive WLED controller; strip-VCC relay on GPIO2 must be driven high or the strip stays dark. **The only two-output board** (`board::OUTPUTS` = 2, Gitea #474): `POST /api/layout` `out 0`/`out 1` lines split the one pixel space across both channels — see "Two outputs on the Athom" below. Mic + IR unused |
 | `board-esp32-generic` | ESP32 | CLK GPIO18, DATA GPIO23 | WS2812, 60 px | 2048 | yes | builds, untested on hardware | VSPI defaults — most WROOM/DevKitC boards break these out |
 | `board-s3-devkit` | ESP32-S3 | CLK GPIO12, DATA GPIO11 | WS2812, 60 px | 2048 | yes | **builds, UNTESTED ON METAL** | ESP32-S3-DevKitC-1; SPI2/FSPI IO_MUX pins (direct DMA route), clear of the octal-PSRAM pins GPIO33–37 |
 | `board-c6-devkit` | ESP32-C6 | CLK GPIO6, DATA GPIO7 | WS2812, 60 px | 2048 | yes | **builds, UNTESTED ON METAL** | ESP32-C6-DevKitC-1; SPI2/FSPI IO_MUX pins (same numbers as the C3 by coincidence of the IO_MUX tables), clear of the onboard RGB LED on GPIO8 |
@@ -1094,6 +1094,107 @@ hand-rolled decimal `num()` in place of `str::parse` (**−1.3 KB** —
 driftsort is a **4,144 B stack frame** in the web task, which
 `tools/stack-check.sh` surfaced — the same family #501 removed from
 takeover.rs, found independently on the stack side rather than the image side.
+
+2026-09-19 (A13), **multiple outputs** (Gitea #474 — each output drives a
+consecutive run of the one Layout), credless flake builds against
+`origin/master` `9ea68f9`:
+
+| variant | before | after | Δ | slot margin |
+|---|---:|---:|---:|---:|
+| `athom-music` *(the only 2-output board)* | 1,022,912 | 1,027,232 | **+4,320** | **21,344 B (2.03 %)** |
+| `pixelblaze-v3` | 1,001,296 | 1,002,064 | +768 | 46,512 B (4.43 %) |
+| `c6-devkit` + `hosted-ui` *(tightest gated image)* | 1,014,144 | 1,014,944 | +800 | 33,632 B (3.20 %) |
+
+The second driver instance itself is behind a `multi_output` cfg (build.rs,
+set from the board feature and asserted against `board::OUTPUTS`), so it is
+**+3.5 KB on the Athom and nothing anywhere else**: a second `SpiDma` +
+`EncodeBuf`, the boot wiring for SPI3/DMA_SPI3, and the per-frame second
+`write_run` + colour-order fix-up. The +576/+272 every strip board does pay is
+the split ARITHMETIC, which is unconditional on purpose — `Layout::run_of` and
+`Run::clamped`/`index` in `Protocol::encode_run`, plus the parser's
+duplicate-pad check — and it buys **`rev` on a single output** (a strip wired
+from the far end) and a driver that clamps instead of indexing past a stale
+table on every board, not just the Athom. (+768 vs +800 on two different
+arches for the same code is the ±0.7 KB repacking noise this section warns
+about further down; the honest reading is "under a kilobyte".)
+Reusing the SAME backend (SPI, already linked) rather than adding RMT beside
+it is what keeps this at 4 KB: the #474 survey priced a second protocol
+backend at 8–12 KB.
+
+`athom-music` is back under image-check's 3 % floor at 2.03 %, which it was
+already under before this change (2.44 %, Gitea #513 — it is published but not
+CI-gated, so nothing runs image-check on it). The two gated images stay over
+the floor.
+
+**`.stack` needed a kilobyte of heap to stay legal, and master was already
+under.** The second driver's task statics cost 120 B of the classic ESP32's
+leftover stack, and `board-athom-music` was **already 68 B below**
+`tools/stack-check.sh`'s 24,576 B floor on `origin/master` `9ea68f9`
+(24,508 B) — nothing catches it because CI stack-checks `pixelblaze-v3`,
+which sits at 24,580 B, four bytes over. So this change takes 1 KB out of the
+classic-ESP32 heap **on the two-output board only**
+(`80 * 1024 - SECOND_OUTPUT_RAM` in main.rs), which puts `board-athom-music`
+at **25,412 B** (27,004 B with `small-chip`), both clean. Measured, all
+`tools/stack-check.sh`:
+
+| build | master | this change |
+|---|---:|---:|
+| `board-athom-music` | 24,508 **FAIL** | **25,412 ok** |
+| `board-athom-music` + `small-chip` | — | 27,004 ok |
+| `board-pixelblaze-v3` | 24,580 ok | 24,580 ok (unchanged) |
+| `board-c6-devkit` + `hosted-ui` | ok | ok |
+
+The four-byte margin on `pixelblaze-v3` is the real finding here and is NOT
+fixed by this change — Gitea #515.
+
+### Two outputs on the Athom
+
+The board breaks out two clocked LED channels — DATA1/CLK1 on GPIO18/5 and
+DATA2/CLK2 on GPIO17/16 — and since #474 the firmware drives both. Channel 1
+is SPI2 (HSPI) as always; channel 2 is SPI3 (VSPI) with `DMA_SPI3`, built at
+boot only when the stored Layout has an `out 1` line, so a board with one
+strip touches neither the peripheral nor the pad. GPIO16 is in the board's
+`RESERVED_PINS` (that SPI's clock), which is why it is no longer offered by
+`/api/config`'s `data_pins` list; GPIO17 is not reserved — the DATA pad is
+whatever `out 1` names, exactly like output 0's.
+
+```text
+strip 120
+out 0 18 ws2812 rgb 60
+out 1 17 ws2812 rgb 60 rev
+```
+
+One pixel space, one pattern, one brightness: output 0 lights pixels 0–59 and
+output 1 pixels 60–119, the second run wired backwards. Reboot to apply (the
+table is built once, at boot); `out none` goes back to the single implicit
+output. Full semantics in docs/api.md, the driver in docs/firmware.md.
+
+**Measured on the rig** (192.168.0.183, v0.1.40, slot ota_0, 60 px WS2812 on
+DATA1, 2026-09-19), `/api/status` `out_us`:
+
+| configuration | `out_us` | `heap_free` |
+|---|---:|---:|
+| 1 output, 60 px (as found) | 2,519–2,531 | 83,972 |
+| `out 0 … 30` posted, BEFORE the reboot | 1,495–1,507 | — |
+| `out 0 … 30` + `out 1 17 … 30 rev`, after the reboot | **2,825–2,830** | 83,836 |
+| `out 0 18 ws2812 rgb 60 rev` (one reversed output) | 2,540–2,547 | 83,832 |
+
+Three things fall out of that. The split is **live** — posting the table
+halved output 0's wire time immediately, before any reboot, because the runs
+are re-read from the Layout per frame; only the second DRIVER waits for the
+reboot. The outputs are **sequential**: two 30 px runs cost 2,827 us against
+one 60 px run's 2,524 us, and the +302 us is exactly the second WS2812 latch
+tail (90 B at 2.4 MHz = 300 us) — splitting a fixed pixel count does not halve
+wire time. And a **reversed** run costs ~20 us at 60 px, i.e. nothing.
+
+The second encode buffer costs 136 B of heap at 30 px; the 1 KB step between
+this board's heap before and after #474 is `SECOND_OUTPUT_RAM` (above), not
+the buffers.
+
+**Not verified: what the LEDs actually do.** Nothing is wired to DATA2 on the
+bench and the agent has no eyes on the strip, so "the first 30 LEDs show the
+first half of Rainbow" is inferred from `out_us` and the readback, never seen.
+Gitea #518 has the 10-minute bench procedure.
 
 Since Gitea #328 the hot half of the interpreter can execute from internal
 SRAM (`.rwtext`) instead of through the flash instruction cache. What each

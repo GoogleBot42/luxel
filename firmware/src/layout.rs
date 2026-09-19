@@ -31,7 +31,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use esp_println::println;
-use luxel_core::layout::{Layout, LayoutKind, Limits, Matrix, View};
+use luxel_core::layout::{Layout, LayoutKind, Limits, Matrix, Output, Run, View};
 use luxel_core::projection::Projection;
 
 use crate::leds::Protocol;
@@ -65,6 +65,28 @@ fn current() -> Layout {
         Some(l) => l.clone(),
         None => board_default(),
     })
+}
+
+/// The consecutive run of the ONE pixel space that output `n` drives
+/// (Gitea #474, D11) — what the strip driver splits the frame by. `None` =
+/// this output drives nothing. Read under the lock rather than through
+/// `current()`: a clone would allocate, and this runs on every resize.
+///
+/// Before `init` (a `LUXEL_NO_OTA` build has no store to read) the answer is
+/// the board default's: output 0 carries the whole frame.
+pub fn run_of(n: u8, pixels: u32) -> Option<Run> {
+    LAYOUT.lock(|c| match c.borrow().as_ref() {
+        Some(l) => l.run_of(n, pixels),
+        None => (n == 0).then_some(Run { start: 0, len: pixels, rev: false }),
+    })
+}
+
+/// The stored `out <n> …` line, when the Layout configures one — the pin,
+/// protocol and colour order the boot wiring needs to build that output's
+/// driver instance. `None` for output 0 means "no table": the implicit
+/// single output built from the live strip settings.
+pub fn configured_output(n: u8) -> Option<Output> {
+    LAYOUT.lock(|c| c.borrow().as_ref().and_then(|l| l.outputs.iter().find(|o| o.n == n).copied()))
 }
 
 /// The projection defaults to install on every engine (boot and rebuild).

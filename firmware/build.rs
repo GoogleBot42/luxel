@@ -52,6 +52,16 @@ fn main() {
     if multi_core && std::env::var_os("CARGO_FEATURE_HUB75").is_some() {
         println!("cargo:rustc-cfg=pipelined");
     }
+
+    // Boards with a SECOND physical strip output get a second driver
+    // instance (src/output.rs, Gitea #474): another SPI peripheral, another
+    // encode buffer, another run of the one pixel space. Only the Athom has
+    // one today. Gated so every other board's image is byte-identical —
+    // board::OUTPUTS is the same fact and board.rs asserts the two agree.
+    println!("cargo::rustc-check-cfg=cfg(multi_output)");
+    if std::env::var_os("CARGO_FEATURE_BOARD_ATHOM_MUSIC").is_some() {
+        println!("cargo:rustc-cfg=multi_output");
+    }
 }
 
 /// Resolve the embedded fallback page's build-mode blocks (src/index.html,

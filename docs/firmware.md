@@ -138,7 +138,11 @@ overflow symptoms can look like blob corruption rather than a stack bug.
 `#[esp_hal::ram(reclaimed)]` region (96 KB on esp32 / 64 KB on the C3 —
 DRAM the WiFi blob would otherwise reserve before init reclaims it) and the
 main heap region (80 KB on esp32 / 160 KB on the C3). Whatever DRAM is left
-after both becomes `.stack`.
+after both becomes `.stack`. A board that links extra task statics pays for
+them out of the heap rather than out of that leftover: the classic-ESP32
+main region is `80 * 1024 - SECOND_OUTPUT_RAM`, where the 1 KB is taken only
+on a board with a second output driver (Gitea #474). The same idiom is why
+`psram-arena` boards drop 160 KB to 154 KB.
 
 **Task futures are statics.** `#[embassy_executor::task]` functions compile
 to statics, so a large buffer held across an `.await` inside one lives in
@@ -665,6 +669,57 @@ through a `#[repr(C)]` wrapper with a zero-sized `[u32; 0]` field:
 `include_bytes!` has alignment 1 and `deserialize_lean_static` silently
 copies a blob whose word region is not 4-aligned in memory.
 
+## Output drivers: one instance per configured output
+
+Everything past the VM goes through `firmware/src/output.rs`'s
+`OutputDriver` trait — the render task never touches a peripheral (see
+`pipeline.rs`). `BoardOutput` is a compile-time alias, not a `dyn`: embassy
+tasks cannot be generic, so the render task takes one concrete type
+(`SpiStripOutput` for strips, `Hub75Output` for panels).
+
+Since Gitea #474 that one driver can carry **more than one physical
+output**. `caps.outputs` (`board::OUTPUTS`) says how many the board breaks
+out; `POST /api/layout`'s `out` lines say which run of the one pixel space
+each carries (docs/api.md). Only `board-athom-music` has two today.
+
+- **Instances, not a loop over pins.** `SpiStripOutput` owns output 0's SPI
+  peripheral and encode buffer; a board with a second output owns a `Chan`
+  with its OWN SPI peripheral (SPI3/`DMA_SPI3` on the classic ESP32 —
+  output 0 is SPI2), its own encode buffer, its own protocol and colour
+  order. The second one is built at boot in main.rs's board-wiring section,
+  and ONLY when the stored Layout has an `out 1` line: with none, neither
+  the peripheral nor the CLK2 pad is touched.
+- **Behind a cfg.** `multi_output` (firmware/build.rs, from the board
+  feature) gates the whole second channel, so a one-output board's image is
+  what it was before #474. `board.rs` asserts `multi_output == (OUTPUTS > 1)`
+  so the advertised capability and the driver cannot drift apart — a board
+  advertising two outputs with no second driver would accept an `out 1` line
+  and silently drive nothing.
+- **Buffers are per run, not per frame.** `resize` sizes each output's
+  buffer to ITS run (`Layout::run_of`), so splitting 60 px into 30 + 30 costs
+  the same encode bytes as one 60 px run plus one extra protocol latch tail
+  — not two full-frame buffers. The run itself is NOT cached in the driver:
+  it is re-read from the Layout per frame, because 12 bytes of task statics
+  is real money against the `.stack` floor above.
+- **Sequential on the wire.** `spi.write` blocks until the DMA transfer
+  completes, so the outputs are written one after another on the render
+  task and `out_us` covers all of them. Two outputs buy pixel count, not
+  wire time.
+- **One frame, one chain.** The device output chain (palette, gamma, colour
+  order, power cap) runs ONCE over the whole frame, so the power estimate is
+  summed across every run by construction, and an output whose `order`
+  differs from output 0's applies a 3-element fix-up over its own run
+  (`ColorOrder::relative`) rather than a second full pass.
+- **The flash fence sees both.** `output::transfer_busy()` (core1.rs reads it
+  before a flash op, because on the classic ESP32 an SPI1 flash op during an
+  in-flight SPI2 DMA transfer hangs the CPU) now checks SPI3's `CMD.usr` too
+  — but only once that peripheral has actually been constructed
+  (`shared::DATA_PIN2 != NO_PIN`).
+- **Pads.** The second SPI's clock is a board constant in
+  `board::SECOND_CLK_PIN` and is in that board's `RESERVED_PINS`; its DATA
+  pad is whatever `out 1` names and is excluded from pattern GPIO at runtime
+  by `gpio::pin_is_free`, exactly as output 0's is.
+
 ## Render-loop timing counters
 
 `render_task` publishes `FPS` — frames rendered in the last full second —
@@ -1163,8 +1218,8 @@ ESP32-WROOM-32E, 4 MB flash on the older revision (ships with WLED-SR
 
 | function | GPIO |
 |---|---|
-| DATA1 / CLK1 | 18 / 5 |
-| DATA2 / CLK2 | 17 / 16 (not driven yet) |
+| DATA1 / CLK1 | 18 / 5 (SPI2/HSPI) |
+| DATA2 / CLK2 | 17 / 16 — **driven since Gitea #474** (SPI3/VSPI; CLK2 is reserved, DATA2 is whatever `out 1` names) |
 | strip VCC relay | 2 — **must be high or the strips stay dark** |
 | button | 0 |
 | IR receiver | 25 |

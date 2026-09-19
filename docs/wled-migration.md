@@ -60,7 +60,11 @@ carrying 25 KB of OTA slot it can never use.
      and a pin that already equals the board default stores no override
      (a stored pin would follow the config onto a board with a different
      default) — so the common case narrates nothing and boot 2 reports
-     "board default", which is the correct end state, not a missed import;
+     "board default", which is the correct end state, not a missed import.
+     **Only the FIRST bus (`ins[0]`) is imported**, so a two-channel WLED
+     install (the Athom has two — docs/boards.md) comes up driving one
+     output and the second has to be re-stated with `POST /api/layout`
+     `out 1 …` (Gitea #516; multi-output driving itself is #474);
    - locate self by comparing its own `esp_app_desc` (image offset 0x20)
      against each app slot; copy itself to ota_0 @0x10000 if not already
      there (sector-wise erase+write+verify);

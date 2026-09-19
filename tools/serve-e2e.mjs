@@ -406,7 +406,19 @@ check(
   JSON.stringify(lAfterMapAlias),
 );
 
-// outputs: stored, validated, reported — driving the second one is #474
+// a one-output mirror must refuse a second output outright (#474): caps is
+// what makes the Settings Outputs table appear, so the two have to agree
+const caps1 = (await (await fetch(`${base}/api/status`)).json()).caps;
+check("caps.outputs is 1 on a default mirror", caps1.outputs === 1, JSON.stringify(caps1));
+const refused = await postLayout(base, "strip 120\nout 1 18 ws2812 grb 120");
+check(
+  "layout: a board with one output refuses `out 1`",
+  refused.ok === false && refused.line === 2,
+  JSON.stringify(refused),
+);
+
+// outputs: stored, validated, reported; the firmware drives one run per
+// output (#474) — the mirror models the table they are driven from
 await postLayout(base, "strip 120");
 const outs2 = spawn(
   "target/debug/luxel",
@@ -440,6 +452,25 @@ check(
   "layout: output 0 writes through to /api/protocol",
   (await (await fetch(`${outsBase}/api/protocol`)).json()).protocol === "ws2812",
 );
+const sOuts = await (await fetch(`${outsBase}/api/status`)).json();
+check(
+  "caps.outputs follows --outputs, so the Outputs table is offered",
+  sOuts.caps.outputs === 2,
+  JSON.stringify(sOuts.caps),
+);
+const lOutsGet = await (await fetch(`${outsBase}/api/layout`)).json();
+check(
+  "layout: GET reports the same table the POST echoed, field for field",
+  JSON.stringify(lOutsGet.outputs) === JSON.stringify(lOuts.outputs),
+  JSON.stringify(lOutsGet.outputs),
+);
+const lRev = await postLayout(outsBase, "strip 120\nout 0 18 ws2812 grb 120 rev");
+check(
+  "layout: one output can be the whole space, wired backwards",
+  lRev.ok === true && lRev.outputs.length === 1 && lRev.outputs[0].rev === true,
+  JSON.stringify(lRev.outputs),
+);
+await postLayout(outsBase, "strip 120\nout 0 18 ws2812 grb 60\nout 1 19 sk9822 rgb 60 rev");
 const badCases = [
   ["strip 0", 1, "pixel count out of range"],
   ["strip 99999", 1, "past the board ceiling"],
@@ -449,6 +480,7 @@ const badCases = [
   ["strip 60\nproj1d sideways", 2, "unknown projection token"],
   ["strip 120\nout 0 18 ws2812 grb 60", 0, "counts must add up"],
   ["strip 60\nmatrix 8 8 1 1 tl row 0 0", 2, "one kind line per body"],
+  ["strip 120\nout 0 18 ws2812 grb 60\nout 1 18 ws2812 grb 60", 3, "two outputs on one pad"],
 ];
 for (const [body, line, why] of badCases) {
   const r = await postLayout(outsBase, body);

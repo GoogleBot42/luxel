@@ -246,10 +246,20 @@ async fn main(spawner: Spawner) -> ! {
     // 88 KB with the 3-slot pool — that lands ~22 KB of stack, under the
     // 24 KB floor. The esp-rtos stack guard + boot-loop guard catch it
     // non-destructively if this ever proves too tight.
+    // A second output driver (Gitea #474) is task statics — another SpiDma
+    // and another encode-buffer Vec inside the render task's future — and on
+    // the classic ESP32 `.stack` is what is LEFT after them. The board that
+    // has one gives the kilobyte back from the heap rather than from the
+    // stack floor, so `tools/stack-check.sh` stays green on it; every other
+    // board's RAM layout is untouched (docs/boards.md "Two outputs").
+    #[cfg(multi_output)]
+    const SECOND_OUTPUT_RAM: usize = 1024;
+    #[cfg(not(multi_output))]
+    const SECOND_OUTPUT_RAM: usize = 0;
     #[cfg(all(feature = "esp32", feature = "small-chip"))]
-    esp_alloc::heap_allocator!(size: 88 * 1024);
+    esp_alloc::heap_allocator!(size: 88 * 1024 - SECOND_OUTPUT_RAM);
     #[cfg(all(feature = "esp32", not(feature = "small-chip")))]
-    esp_alloc::heap_allocator!(size: 80 * 1024);
+    esp_alloc::heap_allocator!(size: 80 * 1024 - SECOND_OUTPUT_RAM);
     // Non-esp32 (C3/S3/C6): tuned on the C3's 313 KB DRAM, which is the
     // tightest of the three — the S3 (dram_seg ~334 KB) and C6 (~441 KB)
     // inherit it and simply keep a larger leftover .stack. UNTESTED ON
@@ -431,6 +441,54 @@ async fn main(spawner: Spawner) -> ! {
         #[cfg(feature = "esp32")]
         let spi = spi.with_dma(p.DMA_SPI2);
         output::SpiStripOutput::new(spi)
+    };
+    // The board's SECOND strip output (Gitea #474): one driver instance per
+    // configured output, each carrying a consecutive run of the ONE pixel
+    // space. Built only when the stored Layout has an `out 1` line — with
+    // none, SPI3/DMA_SPI3 and the CLK2 pad are never touched and the board
+    // behaves exactly as it did before. The Layout is already loaded here
+    // (`layout::init()` above, with the rest of the store).
+    #[cfg(multi_output)]
+    let out = {
+        let mut out = out;
+        match layout::configured_output(1) {
+            Some(o) if board::data_pin_ok(o.pin) => {
+                let proto = Protocol::from_u8(o.proto);
+                match Spi::new(
+                    p.SPI3,
+                    SpiConfig::default()
+                        .with_frequency(Rate::from_hz(proto.spi_hz()))
+                        .with_mode(Mode::_0),
+                ) {
+                    Ok(spi) => {
+                        // CLK2 — the typed half of board::SECOND_CLK_PIN,
+                        // which board.rs asserts is a reserved pad.
+                        #[cfg(feature = "board-athom-music")]
+                        let spi = spi.with_sck(p.GPIO16);
+                        // SAFETY: as output 0's MOSI above — `data_pin_ok`
+                        // excludes every pad the firmware names by type, and
+                        // `gpio::pin_is_free` excludes DATA_PIN2 in turn, so
+                        // this is the pad's only owner.
+                        let spi = spi
+                            .with_mosi(unsafe { esp_hal::gpio::AnyPin::steal(o.pin) })
+                            .with_dma(p.DMA_SPI3);
+                        shared::DATA_PIN2.store(o.pin, Ordering::Relaxed);
+                        println!(
+                            "output 1: GPIO{} {} {} px{}",
+                            o.pin,
+                            proto.name(),
+                            o.count,
+                            if o.rev { " reversed" } else { "" }
+                        );
+                        out.attach_second(spi, proto, o.order);
+                    }
+                    Err(_) => println!("output 1: spi init failed — not driven"),
+                }
+            }
+            Some(o) => println!("output 1: GPIO{} is not usable on this board — not driven", o.pin),
+            None => {}
+        }
+        out
     };
     // HUB75 panel over LCD_CAM (S3 only): the strip SPI is not wired at
     // all — DMA_CH0 feeds the panel's circular rescan instead. The pin map
