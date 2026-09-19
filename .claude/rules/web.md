@@ -16,6 +16,14 @@ paths:
   cycle behind — the markup showed `bar` while the component held a grid rig,
   in e2e only (it reproduced under a second page in the same browser, never in
   isolation). Assign the derived values in that same function.
+  It is NOT only a cycle and NOT only flaky: when the assigning function is
+  called *from* a reactive block, the derived `$:` never re-runs at all —
+  Svelte resets `$$.dirty` only after `$$.update()` has finished, so an
+  invalidation raised during it is folded into the fragment patch and
+  schedules no second flush. #471 hit this deterministically (a map screen
+  that ran its program on open showed "not run yet" every single time, while
+  clicking Run — an event handler, i.e. its own flush — worked). Applies to a
+  plain `let`, not just to stores (next bullet).
 - The device serves the UI from a tiny connection pool (3 sockets default,
   2 small-chip) and browser-NATIVE requests (script/stylesheet/preload
   tags) can't go through fetchgate — vite is deliberately configured with
@@ -50,6 +58,15 @@ paths:
 - In e2e scripts, write injected pattern bodies on one line — CodeMirror
   auto-closes `{`, so a trailing `}` on its own line doubles up and the
   compile silently breaks.
+- Since #471 **two full-screen editors are mounted at once** — the pattern
+  editor (`[data-role="editor-view"]`) and the map program's screen
+  (`map-editor-view`) — each with its own CodeMirror pane and its own
+  `[data-role="preview"]`. An unscoped `.cm-content` / `.editor-slot` /
+  `[data-role="preview"]` selector silently resolves to the pattern editor's,
+  whichever screen is on top. Scope to the visible one
+  (`main.editor-frame:not([hidden]) …`, the `VISIBLE_CODE` constant in
+  `web/tools/e2e.mjs`) or to the screen you mean by its `data-role`. Same rule
+  when adding a third screen: give its `<main>` a `data-role` and scope.
 - The playground previews a `render2D` pattern on a **16x16 grid at targetFps
   60** by default (`stores/geometry.ts`, "Preview as" = Auto), while the bench
   panel is 64x64 at 100+ fps. So "wrong in the browser, fine on device" for a
