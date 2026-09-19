@@ -1,5 +1,87 @@
 # Update log
 
+## 2026-09-19 — web v2 A7: the editor gets three owners (#468)
+
+`pages/Editor.svelte` mixed four concerns across three bars (a toolbar, the
+sub-tabs, a playback bar that was half rig-config and half transport —
+research/ui-audit.md §4). It now has three owners and nothing crosses between
+them (proposal §5.2, mockups S2/S2b/S2c/S2d):
+
+- **The header owns the document.** `← Patterns Library` · the name, edited
+  **in place** (click, Enter/blur commits, Escape cancels, an empty name is
+  refused inline — nothing disabled) · the save state
+  (`saved · on device` / `unsaved` / `saved · in browser`) · **Save**, the one
+  primary action · a ⋯ menu of document verbs: Add to playlist (console,
+  captures the current slider values), Duplicate, Export .epe, Import .epe…,
+  Share (playground), Delete last and error-tinted. The last
+  `window.prompt`-descended naming dialog in the app is gone with it; every
+  confirmation still goes through `stores/dialog.ts`.
+- **The code pane owns its errors.** A dot in the gutter, a wavy underline on
+  the span, and one status strip pinned to the bottom of the pane
+  (`✗ line 14 · unknown identifier "nosie"`, click to jump). Runtime errors use
+  the same strip. No compile-error banner in the rail: the banner list is for
+  *conditions* (device unreachable, wasm failed to load), and an error about
+  line 14 belongs next to line 14 — it used to be ~1000 px away (audit §5).
+- **The preview header owns the transport.** `Preview · 64×64 matrix ·
+  27 fps on device` then play/pause · fps ▾ · mic · debug. The mic appears
+  **only** when the compiled pattern binds sensor variables
+  (`Engine.wantsSensors()`), and VARS is absent entirely for a pattern that
+  exports none — read off the engine, never the source text (§5.7).
+
+The console preview now runs the **device output chain** (#466): `setOutpipe`
+is fed from `/api/output` + `/api/brightness` + `caps.panel` (which per-pixel
+current model the power cap uses), and the loop draws `engine.outpipe()` while
+a device is connected. Set the device's colour order to `bgr` and a red
+pattern previews blue, as the wire would carry it. `/api/status`'s `caps` (#464)
+is now read into a `deviceCaps` store — A8 (#469) gates the whole Settings page
+on it.
+
+The quiet **Projection row** (§5.4d, S2c/S2d) sits under a hairline after the
+pattern's own controls, visible only when the pattern's dimensionality differs
+from the Layout's *and* that Layout offers more than one option — a 2D pattern
+on a matrix shows nothing at all. Labels come from the engine
+(`Luxel.projectionOptions`). The choice lives in `projectionOverride`, a value
+of the working copy cleared by every pattern load; per-item storage is A9/#470's
+and Phase B's.
+
+Mobile (≤600 px, D9 responsive-only): the rail stacks **above** the code, the
+header drops its secondary text, and the code pane is read-mostly with a line
+saying so.
+
+Two things live in the editor only until their ticket lands, each behind a
+comment naming it: the console's **"LED layout"** block at the foot of the rail
+(the old playback bar's shape select / pixel fields / install-grid /
+install-map / clear-map, `data-role`s intact — **#469 deletes it**), and the
+**map program**, now opened from the rail over the code pane with its own bar
+instead of a sub-tab (**#471** gives it a screen). `Add to scene ▸` is not
+rendered at all until scenes exist (#480).
+
+Renamed/new `data-role`s (harnesses updated in the same commit):
+`editor-toolbar` → `editor-header`; `subtab-pattern`/`subtab-map` kept but
+relocated (rail entry point + map bar); new `name-input`, `name-error`,
+`save-state`, `duplicate`, `epe-import`, `compile-error`, `runtime-error`,
+`preview-dims`, `target-fps`, `vars-section`, `led-layout`, `map-bar`,
+`projection-row`, `projection-value`, `projection-change`, `projection-reset`,
+`projection-options`, `projection-opt-<mode>`. Compile errors no longer render
+as `.banner.error`.
+
+One Svelte trap cost real time and is now documented in
+docs/web-architecture.md: a `$:` must not derive from a store that another
+reactive statement *writes*. `matchRunningToLibrary()` sets `patternName` from
+inside a reactive block, and `$: displayName = $patternName || …` earlier in
+the file rendered stale **and never caught up** — Svelte folds the store's
+dirty bit into the fragment patch but does not re-run reactive statements that
+already ran. The header's name, save state and delete visibility are functions
+called from the markup with every dependency passed in.
+
+Verified against the native mirror (no hardware): `npm test` (52),
+`npm run build` + bundle-shape check, `e2e.mjs`, `device-e2e.mjs` (its
+`--board panel` mirror covers the projection row on a 64×64 console),
+`maxpixels-e2e.mjs`, `sync-e2e.mjs`, `flash-e2e.mjs`, `tools/ci.sh`.
+Screenshots: the panel console with a 1D pattern projected along x, the
+playground editor, the compile-error state, 390 px mobile, and the outpipe
+colour-order swap.
+
 ## 2026-09-19 — OTA-slot diet: build-std `optimize_for_size` fleet-wide, `wled-takeover` per board (#501)
 
 The 1 MiB app slot had run out of policy margin: the tightest shipped images

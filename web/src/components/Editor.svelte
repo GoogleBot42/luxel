@@ -100,6 +100,43 @@
     return lines;
   }
 
+  // ---- compile-error gutter dot ----
+  // The code pane owns its errors (proposal §5.2): a dot in the gutter, a
+  // wavy underline on the span (the `.cm-lintRange-error` theme below) and
+  // one status strip pinned under the pane — the editor page renders that
+  // last part. The dot is what makes an error findable after scrolling away.
+
+  const setErrLine = StateEffect.define<number | null>(); // line-start pos
+  class ErrMarker extends GutterMarker {
+    override toDOM(): Node {
+      const el = document.createElement("span");
+      el.className = "cm-err-dot";
+      el.textContent = "●";
+      return el;
+    }
+  }
+  const errMarker = new ErrMarker();
+  const errField = StateField.define<RangeSet<GutterMarker>>({
+    create: () => RangeSet.empty,
+    update(set, tr) {
+      set = set.map(tr.changes);
+      for (const e of tr.effects) {
+        if (e.is(setErrLine)) {
+          set = e.value === null ? RangeSet.empty : RangeSet.of([errMarker.range(e.value)]);
+        }
+      }
+      return set;
+    },
+  });
+  // No `initialSpacer`: CodeMirror renders the spacer marker's own DOM, so a
+  // spacer here would leave a permanent `.cm-err-dot` in the gutter and the
+  // dot would never read as "there is an error". The theme fixes the width
+  // instead, so the column does not jump when one appears.
+  const errGutter = gutter({
+    class: "cm-err-gutter",
+    markers: (v) => v.state.field(errField),
+  });
+
   // ---- hover value inspection ----
 
   const hoverExt = hoverTooltip(
@@ -206,6 +243,8 @@
       extensions: [
         bpGutter,
         bpField,
+        errGutter,
+        errField,
         debugLineField,
         hoverExt,
         basicSetup,
@@ -219,6 +258,8 @@
           ".cm-scroller": { fontFamily: "ui-monospace, Menlo, Consolas, monospace" },
           ".cm-bp-gutter": { width: "14px", cursor: "pointer" },
           ".cm-bp-dot": { color: "#e05555" },
+          ".cm-err-gutter": { width: "10px" },
+          ".cm-err-dot": { color: "#e05555", fontSize: "9px" },
           ".cm-debug-line": { backgroundColor: "rgba(232, 163, 61, 0.18)" },
           ".cm-hover-value": {
             padding: "3px 8px",
@@ -276,7 +317,8 @@
     view.focus();
   }
 
-  /** Show a compile-error squiggle over [from, to) (char offsets); null clears. */
+  /** Show a compile-error squiggle over [from, to) (char offsets) and a dot in
+   *  the gutter on that line; null clears both. */
   export function setErrorRange(range: { from: number; to: number; message: string } | null): void {
     if (!view) return;
     const len = view.state.doc.length;
@@ -292,6 +334,8 @@
             },
           ];
     view.dispatch(setDiagnostics(view.state, diags));
+    const line = range === null ? null : view.state.doc.lineAt(Math.min(range.from, len)).from;
+    view.dispatch({ effects: setErrLine.of(line) });
   }
 
   /** Highlight (and reveal) the paused line; null clears. */

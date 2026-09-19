@@ -10,7 +10,7 @@
 import { derived, get, writable, type Readable, type Writable } from "svelte/store";
 import { DEFAULT_PATTERN } from "../lib/examples";
 import { parseControlHints, type ControlHint } from "../lib/hints";
-import { Engine, Luxel, type RuntimeError } from "../lib/luxel";
+import { Engine, Luxel, type ProjectionMode, type RuntimeError } from "../lib/luxel";
 import {
   deletePattern,
   listPatterns,
@@ -50,6 +50,19 @@ export const exampleName = writable(DEFAULT_PATTERN.name);
 export const devicePatternId = writable("");
 /** Slider positions, keyed by control name. */
 export const controlValues = writable<Record<string, number[]>>({});
+/**
+ * The working copy's projection override (proposal §5.4d, Gitea #468): how
+ * THIS pattern is shown on a Layout whose dimensionality differs from its
+ * own, when the user has overridden the device's default. `null` = inherit.
+ *
+ * It is a VALUE, not source: a projection never touches the pattern text (the
+ * map's mistake — §5.4d), and it is keyed off the pattern's dims, so one mode
+ * is all it needs to carry. Durable storage belongs to whatever *used* the
+ * pattern — a playlist item's values (A9, #470) or a scene layer's (Phase B);
+ * until those exist it lives here, beside the slider values, and every
+ * pattern load clears it exactly as `controlValues` is cleared.
+ */
+export const projectionOverride: Writable<ProjectionMode | null> = writable(null);
 /** `//# min=…` annotations parsed out of the source. */
 export const hints: Readable<Map<string, ControlHint>> = derived(source, parseControlHints);
 

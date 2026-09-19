@@ -7,7 +7,17 @@
 import { execSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import puppeteer from "puppeteer-core";
-import { acceptDialog, cancelDialog, dialogTitle, PORT as E2E, waitDialog } from "./e2e-common.mjs";
+import {
+  acceptDialog,
+  cancelDialog,
+  dialogTitle,
+  menuClick,
+  menuHas,
+  PORT as E2E,
+  renameTo,
+  saveState,
+  waitDialog,
+} from "./e2e-common.mjs";
 
 const CHROMIUM =
   process.env.CHROMIUM ?? execSync("command -v chromium", { encoding: "utf8" }).trim();
@@ -222,32 +232,63 @@ try {
   const fpsText = await page.$eval('[data-role="fps"]', (el) => el.textContent ?? "");
   check("engine renders (fps > 0)", parseInt(fpsText) > 10, fpsText.trim());
 
-  // keyboard shortcut: Cmd/Ctrl+S opens the in-app naming dialog (#472)
+  // The header owns the document (A7, #468): the name edits INLINE — there is
+  // no naming dialog any more, and an unnamed pattern is refused in place.
   await page.keyboard.down("Control");
   await page.keyboard.press("s");
   await page.keyboard.up("Control");
-  await waitDialog(page);
-  check("Ctrl+S opens the naming dialog", (await dialogTitle(page)) === "Save pattern");
-  await acceptDialog(page, "e2e saved");
-  await sleep(400);
+  await sleep(300);
   check(
-    "Ctrl+S saves the pattern",
-    (await page.$eval('[data-role="pattern-name"]', (el) => el.textContent ?? "")).includes("e2e saved"),
+    "Ctrl+S on an unnamed pattern opens the inline name editor",
+    (await page.$('[data-role="name-input"]')) !== null,
   );
+  check("Ctrl+S opens no naming dialog", (await page.$('[data-role="dialog"]')) === null);
+  check(
+    "the inline editor says why, in place",
+    (await page.$eval('[data-role="name-error"]', (el) => el.textContent.trim())) !== "",
+  );
+  await page.keyboard.press("Enter"); // still empty
+  await sleep(200);
+  check(
+    "an empty name is rejected inline (field stays open)",
+    (await page.$('[data-role="name-input"]')) !== null &&
+      (await page.$eval('[data-role="name-error"]', (el) => el.textContent.trim())) ===
+        "a name is required",
+  );
+  await page.type('[data-role="name-input"]', "e2e saved");
+  await page.keyboard.press("Enter");
+  await sleep(300);
+  check(
+    "Enter commits the inline rename",
+    (await page.$eval('[data-role="pattern-name"]', (el) => el.textContent.trim())) === "e2e saved",
+  );
+  check("a renamed document reads unsaved", (await saveState(page)) === "unsaved");
+  await page.click('[data-role="save"]');
+  await sleep(400);
+  check("Save stores it under the header's name", (await saveState(page)) === "saved · in browser");
   const lit = await page.$eval(".waterfall", (c) => {
     const d = c.getContext("2d").getImageData(0, 0, c.width, 3).data;
     return d.some((v, i) => i % 4 !== 3 && v > 0);
   });
   check("waterfall shows pixels", lit);
 
-  // file actions live in a toolbar ABOVE the editor (inside the editor's left
-  // column), not in the header next to the connection controls
-  const saveInToolbar = await page.$(
-    'main.editor-view .left [data-role="editor-toolbar"] [data-role="save"]',
+  // The document verbs live in the EDITOR's own header (A7, #468), not in the
+  // shell header next to the device chip, and not in a bar under the code.
+  const saveInEditorHeader = await page.$(
+    'main.editor-view [data-role="editor-header"] [data-role="save"]',
   );
-  check("file actions are in the editor toolbar (above the editor)", saveInToolbar !== null);
-  const saveInHeader = await page.$('header [data-role="save"]');
-  check("no file actions in the header", saveInHeader === null);
+  check("Save is the editor header's primary action", saveInEditorHeader !== null);
+  check("no file actions in the shell header", (await page.$('.shell > header [data-role="save"]')) === null);
+  check("the editor header states the save state", (await page.$('[data-role="save-state"]')) !== null);
+  check("Duplicate is in the ⋯ menu", await menuHas(page, "duplicate"));
+  check("Import .epe… is in the ⋯ menu", await menuHas(page, "epe-import"));
+  // the old playback bar is gone: geometry and transport left the code column
+  check("no layout select in the playground editor", (await page.$('[data-role="layout-kind"]')) === null);
+  check("no sub-tabs above the code", (await page.$('[data-role="editor-subtabs"]')) === null);
+  check(
+    "the transport is the preview panel's own header",
+    (await page.$('.rsec .rhead [data-role="pause"]')) !== null,
+  );
 
   // ── 3. a clean rainbow, then typing + compile error. Single-line bodies
   //      throughout: CodeMirror auto-closes `{`, so a trailing `}` on its own
@@ -257,10 +298,19 @@ try {
   await page.keyboard.type(" @@@");
   await sleep(300);
   check("editor accepts typing", (await page.$eval(".cm-content", (el) => el.textContent ?? "")).includes("@@@"));
-  await page.waitForSelector(".banner.error", { timeout: 3000 }).catch(() => null);
-  check("compile error banner appears", (await page.$(".banner.error")) !== null);
+  // The code pane owns its errors (A7, #468): a strip pinned to its bottom,
+  // a squiggle on the span and a dot in the gutter — no banner in the rail.
+  await page.waitForSelector('[data-role="compile-error"]', { timeout: 3000 }).catch(() => null);
+  const errStrip = await page
+    .$eval('[data-role="compile-error"]', (el) => (el.textContent ?? "").trim())
+    .catch(() => "");
+  check("compile error strip appears under the code", errStrip !== "");
+  check("compile error strip names the line", /^✗ line \d+ · /.test(errStrip), errStrip.slice(0, 48));
+  check("no compile-error banner in the rail", (await page.$(".right .banner.error")) === null);
   await page.waitForSelector(".cm-lintRange-error", { timeout: 2000 }).catch(() => null);
   check("error squiggle rendered", (await page.$(".cm-lintRange-error")) !== null);
+  check("error gutter dot rendered", (await page.$(".cm-err-dot")) !== null);
+  await page.screenshot({ path: `${shotDir}/e2e-compile-error.png` });
   await page.keyboard.press("Escape");
   await page.keyboard.down("Control");
   await page.keyboard.press("z");
@@ -268,7 +318,12 @@ try {
   await page.keyboard.up("Control");
   await sleep(500);
   const fixedDoc = await page.$eval(".cm-content", (el) => el.textContent ?? "");
-  check("banner clears after fix", (await page.$(".banner.error")) === null && !fixedDoc.includes("@@@"));
+  check(
+    "error strip and gutter dot clear after a fix",
+    (await page.$('[data-role="compile-error"]')) === null &&
+      (await page.$(".cm-err-dot")) === null &&
+      !fixedDoc.includes("@@@"),
+  );
   await page.screenshot({ path: `${shotDir}/e2e-2-typing.png` });
 
   // ── 3b. event injection: a preview click feeds readEvent() ──
@@ -539,6 +594,14 @@ try {
   await page.click('[data-role="pause"]');
   const varText = await page.$eval("table", (el) => el.textContent ?? "").catch(() => "");
   check("var watcher lists zoom", varText.includes("zoom"));
+  check("VARS is present for a pattern that exports one", (await page.$('[data-role="vars-section"]')) !== null);
+
+  // ── 7a2. absent, not disabled (proposal §5.7): a pattern that exports no
+  //        vars has no VARS section, and one that reads no sensors has no mic ──
+  await setEditor(page, "export function render(index) { hsv(index / pixelCount, 1, 1) }");
+  await sleep(400);
+  check("VARS is absent for a pattern that exports none", (await page.$('[data-role="vars-section"]')) === null);
+  check("mic is absent for a pattern that reads no sensors", (await page.$('[data-role="mic-toggle"]')) === null);
 
   // ── 7b. sound: mic toggle feeds sensor vars (fake chromium mic tone) ──
   await setEditor(
@@ -546,7 +609,11 @@ try {
     "export var energyAverage\nexport var frequencyData\n" +
       "export function render(index) { hsv(0, 1, energyAverage) }",
   );
-  await sleep(300);
+  await sleep(400);
+  check(
+    "mic appears for a pattern that reads frequencyData",
+    (await page.$('[data-role="mic-toggle"]')) !== null,
+  );
   await page.click('[data-role="mic-toggle"]');
   let heard = false;
   for (let i = 0; i < 12 && !heard; i++) {
@@ -573,7 +640,7 @@ try {
   await fileInput.uploadFile(epePath);
   await sleep(700);
   check("epe import replaces the source", (await page.$eval(".cm-content", (el) => el.textContent ?? "")).includes("beforeRender"));
-  check("epe import compiles (no banners)", (await page.$(".banner.error")) === null);
+  check("epe import compiles (no error strip)", (await page.$('[data-role="compile-error"]')) === null);
   check("editor shows the imported name", (await page.$eval('[data-role="pattern-name"]', (el) => el.textContent ?? "")).includes("KITT e2e"));
   const badPath = join(epeDir, "broken.epe");
   writeFileSync(badPath, "{ not json");
@@ -585,9 +652,7 @@ try {
   const dlDir = mkdtempSync(join(tmpdir(), "luxel-dl-"));
   const cdp = await page.createCDPSession();
   await cdp.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: dlDir, eventsEnabled: true });
-  await page.click('[data-role="overflow"]');
-  await sleep(150);
-  await page.click('[data-role="epe-export"]');
+  await menuClick(page, "epe-export");
   await sleep(800);
   const dl = readdirSync(dlDir).find((f) => f.endsWith(".epe"));
   check("export downloads an .epe", dl !== undefined, dl ?? "no file");
@@ -600,9 +665,9 @@ try {
     );
   }
 
-  // ── 9. shareable URL (playground only) ──
+  // ── 9. shareable URL (playground only, in the ⋯ menu) ──
   await setEditor(page, "export function render(index) { hsv(time(.1) + index / pixelCount, 1, 1) }");
-  await page.click('[data-role="share"]');
+  await menuClick(page, "share");
   await sleep(400);
   const shareUrl = await page.url();
   check("share writes a #p= fragment", /#p(s)?=/.test(shareUrl), shareUrl.slice(-24));
@@ -612,14 +677,19 @@ try {
   await sleep(800);
   check("share link opens the editor on the pattern", (await page2.$('[data-role="editor-back"]')) !== null);
   check("share link restores the pattern", (await page2.$eval(".cm-content", (el) => el.textContent ?? "")).includes("hsv(time(.1)"));
-  check("shared pattern compiles", (await page2.$(".banner.error")) === null);
+  check("shared pattern compiles", (await page2.$('[data-role="compile-error"]')) === null);
   await page2.close();
 
   // ── 10. map: the "Custom map program" Layout choice; a debuggable program ──
+  // Since A7 (#468) the map program is not a sub-tab of the pattern editor: it
+  // is reached from the rail's "Map program" section (`subtab-map`) and opens
+  // over the code pane with its own bar (`subtab-pattern` closes it). A10
+  // (#471) turns that into a screen of its own.
   await previewAs(page, "map");
   await page.waitForSelector('[data-role="subtab-map"]', { timeout: 3000 });
   await sleep(700);
-  check("2D map reveals the map sub-tab", (await page.$('[data-role="subtab-map"]')) !== null);
+  check("2D map reveals the map program entry point", (await page.$('[data-role="subtab-map"]')) !== null);
+  check("the map editor is not open until asked", (await page.$('[data-role="map-editor"]')) === null);
   const mapErr = (await page.$('[data-role="map-error"]')) || (await page.$('[data-role="map-compile-error"]'));
   check("map runs without error", mapErr === null);
   check(
@@ -637,12 +707,17 @@ try {
   check("map scatter renders lit dots", mapLit > 200, `${mapLit} lit`);
   await page.screenshot({ path: `${shotDir}/e2e-4-map.png` });
   // debuggable: breakpoint on plot() pauses the per-pixel map run
+  await page.click('[data-role="subtab-map"]'); // open it over the code pane
+  await page.waitForSelector('[data-role="map-editor"] .cm-line', { timeout: 3000 });
+  await sleep(400);
+  check("the map program opens over the code pane", (await page.$('[data-role="map-bar"]')) !== null);
   const mapPlot = await page.$$eval('[data-role="map-editor"] .cm-line', (els) => {
     const i = els.findIndex((el) => el.textContent?.includes("plot("));
     if (i < 0) return null;
     const r = els[i].getBoundingClientRect();
     return { y: r.y, h: r.height };
   });
+  check("the map pane shows the map program's source", mapPlot !== null);
   if (mapPlot) {
     const mg = await page.$eval('[data-role="map-editor"] .cm-bp-gutter', (el) => {
       const r = el.getBoundingClientRect();
@@ -684,7 +759,7 @@ try {
   // `#p=` even with a custom map installed. Links already out there carry one
   // (`#pj=`) and must keep working — built by hand here, uncompressed, since
   // nothing writes that form any more.
-  await page.click('[data-role="share"]');
+  await menuClick(page, "share");
   await sleep(400);
   const shareMapUrl = await page.url();
   check("share with a map still writes #p= (no map inside)", /#p(s)?=/.test(shareMapUrl), shareMapUrl.slice(-24));
@@ -710,60 +785,68 @@ try {
   check("its 3D map is 3D again (badge)", (await page3.$('[data-role="map-3d"]')) !== null);
   await page3.close();
 
-  // turning mapping off hides the map sub-tab
+  // turning mapping off hides the map program's entry point
   await previewAs(page, "auto");
   check("leaving the map layout turns mapping off", (await page.$('[data-role="subtab-map"]')) === null);
 
-  // ── 11. library: save (in-app naming dialog), back, reload resumes the copy ──
+  // ── 11. library: the inline name IS the saved name; back; reload resumes ──
   await setEditor(page, "export function render(index) { hsv(index / pixelCount, 1, 0.5) }");
 
-  // 11a. the cancel path: the dialog opens, Escape dismisses it, nothing saved
-  // (this browser's saved patterns are the `Mine` source of the Patterns page
-  // since #467 — they used to be a row of chips above the library grid)
+  // 11a. the cancel path: emptying the name is refused in place, and cancelling
+  //      the rename saves nothing (there is no naming dialog since #468).
+  //      This browser's saved patterns are the `Mine` source of the Patterns
+  //      page since #467 — they used to be a row of chips above the grid.
   const savedCount = () => page.$$eval(`${MINE} .tile`, (els) => els.length);
   const mineNames = () =>
     page.$$eval(`${MINE} .tile .tname`, (els) => els.map((e) => (e.textContent ?? "").trim()));
   const savedBefore = await savedCount();
-  await page.click('[data-role="save"]');
-  await waitDialog(page);
-  check("save opens the in-app naming dialog", (await dialogTitle(page)) === "Save pattern");
-  check("naming dialog has a text field", (await page.$('[data-role="dialog-input"]')) !== null);
-  check("naming dialog is not a reboot dialog", (await page.$('[data-role="dialog-reboot"]')) === null);
-  await page.screenshot({ path: `${shotDir}/e2e-dialog-naming.png` });
-  await page.setViewport({ width: 390, height: 780 });
-  await sleep(200);
-  await page.screenshot({ path: `${shotDir}/e2e-dialog-naming-390.png` });
-  check(
-    "dialog fits a 390 px viewport (no horizontal overflow)",
-    await page.$eval('[data-role="dialog"]', (el) => el.getBoundingClientRect().right <= 390),
-  );
-  await page.setViewport({ width: 1400, height: 900 });
-  await sleep(200);
-  // an empty name is refused in place — nothing is disabled, the reason shows
-  await page.$eval('[data-role="dialog-input"]', (el) => {
+  await page.click('[data-role="pattern-name"]');
+  await page.waitForSelector('[data-role="name-input"]', { timeout: 2000 });
+  await page.$eval('[data-role="name-input"]', (el) => {
     el.value = "";
     el.dispatchEvent(new Event("input", { bubbles: true }));
   });
-  await page.click('[data-role="dialog-confirm"]');
+  await page.focus('[data-role="name-input"]');
+  await page.keyboard.press("Enter");
   await sleep(200);
   check(
-    "an empty name keeps the dialog open with a reason",
-    (await page.$('[data-role="dialog"]')) !== null &&
-      (await page.$eval('[data-role="dialog-error"]', (el) => el.textContent.trim())) !== "",
+    "an emptied name keeps the inline editor open with a reason",
+    (await page.$('[data-role="name-input"]')) !== null &&
+      (await page.$eval('[data-role="name-error"]', (el) => el.textContent.trim())) !== "",
   );
   await page.keyboard.press("Escape");
   await sleep(250);
-  check("Escape closes the naming dialog", (await page.$('[data-role="dialog"]')) === null);
-  check("a cancelled save adds nothing to the library", (await savedCount()) === savedBefore);
+  check("Escape cancels the rename", (await page.$('[data-role="name-input"]')) === null);
+  check("a cancelled rename adds nothing to the library", (await savedCount()) === savedBefore);
+  check("no native or in-app dialog for naming", (await page.$('[data-role="dialog"]')) === null);
 
-  // 11b. the accept path: the typed name is the saved name
+  // 11b. the accept path: the header's name is the saved name
+  await renameTo(page, "e2e saved");
   await page.click('[data-role="save"]');
-  await acceptDialog(page, "e2e saved");
   await sleep(400);
   check(
-    "the typed name becomes the pattern name",
+    "the inline name becomes the pattern name",
     (await page.$eval('[data-role="pattern-name"]', (el) => el.textContent.trim())) === "e2e saved",
   );
+  check("saving clears the unsaved state", (await saveState(page)) === "saved · in browser");
+  await page.screenshot({ path: `${shotDir}/e2e-editor-playground.png` });
+  await page.setViewport({ width: 390, height: 780 });
+  await sleep(400);
+  check(
+    "mobile: the rail stacks above the code",
+    await page.evaluate(() => {
+      const rail = document.querySelector("main.editor-view .right");
+      const code = document.querySelector("main.editor-view .left");
+      return rail !== null && code !== null && rail.getBoundingClientRect().top < code.getBoundingClientRect().top;
+    }),
+  );
+  check(
+    "mobile: the editor does not scroll sideways",
+    await page.evaluate(() => document.documentElement.scrollWidth <= 390),
+  );
+  await page.screenshot({ path: `${shotDir}/e2e-editor-390.png` });
+  await page.setViewport({ width: 1400, height: 900 });
+  await sleep(300);
   await page.click('[data-role="editor-back"]');
   await sleep(300);
   check("back returns to the Patterns page", (await page.$('[data-role="patterns-panel"]:not([hidden])')) !== null);
@@ -791,8 +874,9 @@ try {
   await page.click(`${MINE} .tile [data-role="tile-face"]`);
   await sleep(400);
   check("a Mine tile opens the editor", (await page.$('[data-role="editor-back"]')) !== null);
-  // delete: a danger confirmation, cancel first (the entry survives)
-  await page.click('[data-role="delete"]');
+  check("a stored pattern reads as saved", (await saveState(page)) === "saved · in browser");
+  // delete: in the ⋯ menu, a danger confirmation, cancel first (entry survives)
+  await menuClick(page, "delete");
   await waitDialog(page);
   check(
     "delete opens a danger confirmation",
@@ -812,7 +896,7 @@ try {
   await pickSource(page, "mine");
   await page.click(`${MINE} .tile [data-role="tile-face"]`);
   await sleep(400);
-  await page.click('[data-role="delete"]');
+  await menuClick(page, "delete");
   await acceptDialog(page);
   await sleep(300);
   await page.click('[data-role="editor-back"]');

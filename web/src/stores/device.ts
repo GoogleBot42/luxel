@@ -9,6 +9,7 @@
 import { derived, get, writable, type Readable, type Writable } from "svelte/store";
 import {
   DeviceSession,
+  type DeviceCaps,
   type DeviceStatus,
   type MqttStatus,
   type Playlist,
@@ -95,6 +96,14 @@ export const deviceMap = writable<DeviceMap>({ installed: false, dims: 0, count:
 /** `/api/status`'s `geom` (Gitea #464): the engine's EFFECTIVE geometry, as
  *  reported. Raw wire state — read it through `deviceLayout`, never directly. */
 export const deviceGeomStatus = writable<DeviceStatus["geom"] | null>(null);
+
+/** `/api/status`'s `caps` (Gitea #464): what this device can do. Null until a
+ *  device answers, and on firmware older than the field — a consumer that
+ *  can't tell falls back to the conservative reading, never to a board name
+ *  (proposal §5.3). A8 (#469) gates the whole Settings page on it; the editor
+ *  reads only `panel`, to know which per-pixel current model the console
+ *  preview's output chain should use. */
+export const deviceCaps = writable<DeviceCaps | null>(null);
 
 /** The coordinates of an irregular device map, when they are known: a map
  *  THIS session installed. `GET /api/map` reports only a count, so a map
@@ -316,6 +325,7 @@ export async function refreshStatus(): Promise<void> {
     deviceHeapFree.set(st.heap_free ?? 0);
     deviceEngineHeap.set(st.engine_heap ?? 0);
     deviceGeomStatus.set(st.geom ?? null); // the device's Layout (#464)
+    deviceCaps.set(st.caps ?? null); // what it can do (#464)
     if (st.pixels) devicePixels.set(st.pixels);
     deviceFps.set(st.fps);
     deviceOutFps.set(st.out_fps ?? 0);
@@ -539,6 +549,7 @@ export async function connectDevice(base: string, pullPattern = true): Promise<C
     deviceBase.set(base);
     devicePixels.set(st.pixels); // hardware pixel count (fixed; layout only rearranges)
     deviceGeomStatus.set(st.geom ?? null); // the device's Layout (#464)
+    deviceCaps.set(st.caps ?? null); // what it can do (#464)
     // Per-board cap (#74). Status is authoritative and keeps being refreshed
     // by every later poll; /api/config's `max` is only the fallback for
     // firmware that predates the field — so remember which one we got and

@@ -207,19 +207,7 @@
     </div>
   {/if}
   <header>
-    {#if editing}
-      <button
-        data-role="editor-back"
-        class="back"
-        on:click={() => (editing = false)}
-        title={`back to ${backLabel}`}
-      >
-        ← {backLabel}
-      </button>
-      <span class="pattern-name" data-role="pattern-name">
-        {$patternName || $exampleName || "untitled pattern"}
-      </span>
-    {:else}
+    {#if !editing}
       <span class="wordmark">
         luxel <span class="dim">{$isPlayground ? "playground" : ($device?.base ?? $deviceBase) || "device"}</span>
       </span>
@@ -285,10 +273,20 @@
     </div>
   {/if}
 
-  <!-- the one modal host: naming and confirmations (stores/dialog.ts) -->
+  <!-- the one modal host: confirmations and the share-link fallback
+       (stores/dialog.ts; naming is inline in the editor header since #468) -->
   <Dialog />
 
-  <Editor bind:this={editor} active={editing} on:open={() => (editing = true)} />
+  <!-- The editor owns its own header (A7, #468): back, the inline-editable
+       name, the save state, Save and the ⋯ menu are the DOCUMENT's, and the
+       document is the editor's. The shell only tells it where back goes. -->
+  <Editor
+    bind:this={editor}
+    active={editing}
+    {backLabel}
+    on:open={() => (editing = true)}
+    on:back={() => (editing = false)}
+  />
 
   <Patterns
     active={!editing && tab === "patterns"}
@@ -408,15 +406,6 @@
 
   .layout-chip .dot.live {
     background: #4caf50;
-  }
-
-  .back {
-    font-weight: 600;
-  }
-
-  .pattern-name {
-    color: var(--text);
-    font-weight: 600;
   }
 
   /* first-load cover over the whole app (header included) */

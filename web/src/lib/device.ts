@@ -78,6 +78,28 @@ export interface DeviceStatus {
   vm_us?: number;
   pipe_us?: number;
   out_us?: number;
+  /** What this device can do (Gitea #464), derived by the firmware from board
+   *  features × the current Layout. The UI shows a setting only when its
+   *  capability is advertised — absent, never disabled (proposal §5.3/§5.7).
+   *  Absent on firmware older than the field; see docs/api.md "caps". */
+  caps?: DeviceCaps;
+}
+
+/** `/api/status`'s `caps` block (docs/api.md). Every field is advertised by
+ *  both the firmware and the mirror, so they are not optional here — the
+ *  whole block is, for firmware that predates it. */
+export interface DeviceCaps {
+  strip_driver: boolean;
+  panel: boolean;
+  outputs: number;
+  power_cap: boolean;
+  blur_glow: boolean;
+  layers: number;
+  text_slots: number;
+  reboot: boolean;
+  ota: boolean;
+  psram: boolean;
+  assets: boolean;
 }
 
 /** GET /api/map. */

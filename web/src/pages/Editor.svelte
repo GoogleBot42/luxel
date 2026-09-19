@@ -1,40 +1,67 @@
 <script lang="ts">
-  // The pattern editor: toolbar (file actions), the code pane, the playback
-  // bar, and the right-rail inspector (banners, debugger, preview, controls,
-  // pins, vars). It owns the local WASM engine, the render loop and the
-  // device push — the local-preview-plus-push model: the preview always runs
-  // on the local engine, and the device is a sink we send code + controls to.
+  // The pattern editor (proposal §5.2, mockups S2/S2b/S2c/S2d).
+  //
+  // Three owners, and nothing crosses between them:
+  //   · the HEADER owns the document — back, the inline-editable name, the
+  //     save state, the one primary action (Save) and the ⋯ menu of document
+  //     verbs (add to playlist, duplicate, export/import, delete, share).
+  //   · the CODE PANE owns its errors — a gutter dot and a wavy underline on
+  //     the line, and one status strip pinned to the bottom of the pane. No
+  //     compile-error banner in the rail: the cause and the report used to be
+  //     ~1000 px apart (research/ui-audit.md §5).
+  //   · the PREVIEW HEADER owns the transport — play/pause, target fps, the
+  //     mic (only when the pattern binds sensors) and the debugger, next to
+  //     the thing they control.
+  //
+  // It owns the local WASM engine, the render loop and the device push — the
+  // local-preview-plus-push model: the preview always runs on the local
+  // engine, and the device is a sink we send code + controls to. On a console
+  // the preview additionally runs the DEVICE OUTPUT CHAIN over each frame
+  // (#466), so what is drawn here is what the wire would carry.
   import { createEventDispatcher, onDestroy, tick } from "svelte";
   import Controls from "../components/Controls.svelte";
   import Debugger from "../components/Debugger.svelte";
   import CodeEditor from "../components/Editor.svelte";
   import PinPanel from "../components/PinPanel.svelte";
   import Preview from "../components/Preview.svelte";
+  import ProjectionRow from "../components/ProjectionRow.svelte";
   import VarWatcher from "../components/VarWatcher.svelte";
   import MapEditor from "./MapEditor.svelte";
   import { MicSource, toSensorBoardFrame } from "../lib/audio";
   import { lxpEnvelope } from "../lib/device";
+  import type { ProjectionMode } from "../lib/geometry";
   import {
     Engine,
+    type ColorOrder,
     type Control,
     type DebugSnapshot,
     type DeviceModel,
     type Diagnostic,
+    type OutpipeSettings,
     type StepKind,
   } from "../lib/luxel";
   import {
+    brightness,
     clearDeviceMap,
     device,
+    deviceCaps,
     deviceEngineHeap,
     deviceError,
+    deviceFps,
     deviceHeapFree,
     deviceMap,
+    deviceOutFps,
     devicePatterns,
     devicePixels,
+    deviceRescanHz,
     deviceVmerr,
     installDeviceGridMap,
     installDeviceMapCoords,
     isPlayground,
+    outputStatus,
+    paletteAmount,
+    paletteFlat,
+    paletteSupported,
     playlist,
     queuePlaylistSave,
     refreshDevicePatterns,
@@ -66,11 +93,11 @@
     findSaved,
     hints,
     luxel,
-    mapSrc,
     newPatternSource,
     parseEpe,
     patternName,
     previewFps,
+    projectionOverride,
     runtimeError,
     saved,
     saveToLocalLibrary,
@@ -79,19 +106,26 @@
 
   /** The editor is the visible surface (drives keyboard shortcuts). */
   export let active = false;
+  /** What the back button returns to — the shell knows, the editor doesn't. */
+  export let backLabel = "Patterns";
 
-  const dispatch = createEventDispatcher<{ open: void }>();
+  const dispatch = createEventDispatcher<{ open: void; back: void }>();
 
   let editor: CodeEditor;
   let preview: Preview;
   let mapRef: MapEditor;
   let fileInput: HTMLInputElement;
+  let nameInput: HTMLInputElement;
 
   let engine: Engine | undefined;
   let compileError: Diagnostic | null = null;
   let controls: Control[] = [];
   let readouts = new Map<string, number>();
   let vars: Record<string, number | number[]> = {};
+  /** The compiled pattern binds sensor-board variables (`frequencyData`, …),
+   *  which is the ONLY reason the mic button exists (proposal §5.7 — S2 used
+   *  to show it always). Read off the engine, never the source text. */
+  let wantsSensors = false;
   /** Digital pins the running pattern touches — the engine can't be asked
    *  statically (pin numbers are runtime values), so this is polled off
    *  `lx_pins_used` and the pin panel is shown only when it's non-empty
@@ -114,11 +148,13 @@
   /** Fetching/activating a pattern for the editor — cover the editor with a
    *  loading screen so a stale last-opened script never flashes first. */
   let patternLoading = false;
-  /** File-actions overflow menu (import/export). */
+  /** The header's ⋯ menu (the document verbs). */
   let menuOpen = false;
   let importError = "";
-  /** Which document the left editor shows: the pattern or the map program. */
-  let subTab: "pattern" | "map" = "pattern";
+  /** The map program is open over the code pane. It is GEOMETRY, not part of
+   *  the pattern: A10 (#471) promotes it to a screen of its own, and this
+   *  boolean plus the entry point in the rail is all that then moves. */
+  let mapOpen = false;
   let mapCompileError: Diagnostic | null = null;
   let mapDebugMode = false;
   let mapDbg: DebugSnapshot = { paused: false };
@@ -129,9 +165,9 @@
   let lastT = 0;
   let lastPoll = 0;
 
-  // the map sub-tab exists only while the custom map program IS the Layout
+  // the map program exists only while it IS the Layout
   $: mapIsLayout = $previewAs.mode === "map";
-  $: if (!mapIsLayout && subTab === "map") subTab = "pattern";
+  $: if (!mapIsLayout && mapOpen) mapOpen = false;
 
   /** Choosing "Custom map program" — from the playground's chip or the
    *  console's shape select — is what enables mapping, so the program runs and
@@ -158,8 +194,8 @@
   $: if ($layoutSignature !== builtRig && $luxel) recompile();
 
   /** The device's vmerr, but only when it is a capacity rejection — other
-   *  runtime errors are the local engine's business and already have a banner.
-   *  Matches the firmware's wording (`firmware/src/main.rs`) and the mirror's.
+   *  runtime errors are the local engine's business and are reported by the
+   *  code pane's own status strip.
    *
    *  Two shapes reach here. The load-time refusal ("pattern too large for this
    *  device") comes from the floor check, and so does the array-arena BYTE
@@ -172,6 +208,102 @@
     $deviceVmerr && /too large for this device|array element budget exceeded/.test($deviceVmerr)
       ? $deviceVmerr
       : "";
+
+  // ---- the document: name, save state (proposal §5.2) ----
+  //
+  // These are FUNCTIONS called from the markup with every dependency passed in,
+  // not `$:` derivations. `matchRunningToLibrary()` below writes `patternName`
+  // and `devicePatternId` from inside a reactive statement, and a `$:` whose
+  // input is assigned that way renders one cycle stale — Svelte captures the
+  // dirty bits for the fragment patch, but does not re-run earlier reactive
+  // statements (.claude/rules/web.md; it cost this ticket an afternoon when
+  // the header read "untitled pattern" for a pattern it had just adopted a
+  // name for). A markup expression, given the same dependencies, is patched
+  // with those bits and is always current.
+
+  /** What the header shows when the name is not being edited. */
+  function nameOf(name: string, example: string): string {
+    return name || example || "untitled pattern";
+  }
+
+  /** `saved · on device` / `unsaved` / `saved · in browser` — the one line
+   *  that answers "is what I am looking at stored anywhere?". */
+  function saveStateOf(
+    drt: boolean,
+    dev: unknown,
+    dpid: string,
+    name: string,
+    lib: { name: string }[],
+  ): string {
+    if (drt) return "unsaved";
+    if (dev && dpid) return "saved · on device";
+    if (!dev && name !== "" && lib.some((s) => s.name === name)) return "saved · in browser";
+    return "not saved yet";
+  }
+
+  /** Delete targets a stored pattern: the device's copy on a console, this
+   *  browser's library entry in the playground. Absent when there is neither. */
+  function canDeleteNow(
+    dev: unknown,
+    dpid: string,
+    example: string,
+    name: string,
+    lib: { name: string }[],
+  ): boolean {
+    if (dev) return dpid !== "";
+    return example === "" && lib.some((s) => s.name === name);
+  }
+
+  let editingName = false;
+  let nameDraft = "";
+  let nameError = "";
+
+  /** Click-to-edit. `reason` seeds the inline rejection when the rename is
+   *  forced by something else (Save on an unnamed pattern). */
+  function startRename(reason = ""): void {
+    nameDraft = $patternName || $exampleName;
+    nameError = reason;
+    editingName = true;
+    void tick().then(() => {
+      nameInput?.focus();
+      nameInput?.select();
+    });
+  }
+
+  /** Enter or blur commits; an empty name is refused IN PLACE (nothing is
+   *  disabled — proposal §5.7), so the field stays open with the reason. */
+  function commitName(): void {
+    if (!editingName) return;
+    const next = nameDraft.trim();
+    if (next === "") {
+      nameError = "a name is required";
+      void tick().then(() => nameInput?.focus());
+      return;
+    }
+    editingName = false;
+    nameError = "";
+    if (next === ($patternName || $exampleName)) return;
+    patternName.set(next);
+    exampleName.set("");
+    // The stored copy still carries the old name, so the document no longer
+    // matches it: Save (re-)stores it under the new one.
+    dirty.set(true);
+  }
+
+  function cancelRename(): void {
+    editingName = false;
+    nameError = "";
+  }
+
+  function onNameKey(e: KeyboardEvent): void {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      commitName();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      cancelRename();
+    }
+  }
 
   // ---- capacity warning (Gitea #15) ----
   // Different ESP32s have different heap. A pattern that runs happily in the
@@ -324,9 +456,14 @@
       compileError = null;
       runtimeError.set(null);
       configureEngine(engine); // map + projection, from the ONE Layout
+      applyProjection(); // …then this pattern's own override, if any (§5.4d)
+      applyOutpipe(); // the device output chain the console previews through
       builtRig = $layoutSignature; // this engine matches the current Layout
       engine.setWallClock(Date.now() / 1000);
       controls = engine.controls();
+      vars = engine.vars(); // VARS is absent for a pattern that exports none
+      wantsSensors = engine.wantsSensors();
+      if (!wantsSensors && micOn) toggleMic(); // nothing consumes the audio
       if (debugMode) {
         engine.debugEnable(true);
         applyBreakpoints();
@@ -406,6 +543,86 @@
   // so it goes in the banner list and clears itself when it clears.
   $: setBanner("device-error", $deviceError ? { level: "error", text: $deviceError } : null);
 
+  // ---- projection (proposal §5.4d) ----
+
+  /** Point the preview engine at the projection actually in force: the
+   *  Layout's default, with this pattern's override substituted for its own
+   *  dimensionality. Called right after `configureEngine`, which installs the
+   *  defaults — and before the first frame, because `pixelCount` under an
+   *  along-axis projection becomes the strip length. */
+  function applyProjection(): void {
+    if (!engine) return;
+    const mode = $projectionOverride;
+    if (mode === null) return; // configureEngine already installed the default
+    const key = $patternDims === 3 ? "proj3d" : $patternDims === 2 ? "proj2d" : "proj1d";
+    engine.setProjection({ ...$layout.projection, [key]: mode });
+  }
+
+  /** A pick from the quiet Projection row. The engine reads `pixelCount` at
+   *  init time under an along-axis projection, so this rebuilds rather than
+   *  patching a running VM. */
+  function onProjectionSet(e: CustomEvent<ProjectionMode | null>): void {
+    projectionOverride.set(e.detail);
+    recompile();
+  }
+
+  // ---- the device output chain (Gitea #466) ----
+
+  const COLOR_ORDERS: readonly string[] = ["rgb", "rbg", "grb", "gbr", "brg", "bgr"];
+
+  /**
+   * Configure the engine's copy of the DEVICE output chain — palette remap,
+   * blur, glow, colour order, gamma, power cap — from what this device
+   * reports. Without it the console preview differs from the strip by the
+   * whole Settings page (research/engine-constraints.md §8v). In the
+   * playground there is no device, so the chain is off and `outpipe()` would
+   * equal `frame()`; we draw the raw frame there instead of paying for it.
+   *
+   * Cheap and idempotent: called on compile and whenever the device's output
+   * settings change, never per frame.
+   */
+  function applyOutpipe(): void {
+    if (!engine) return;
+    if (!$device) {
+      engine.setOutpipe({});
+      return;
+    }
+    const o = $outputStatus;
+    const order = o && COLOR_ORDERS.includes(o.order) ? (o.order as ColorOrder) : "rgb";
+    const s: OutpipeSettings = {
+      order,
+      gamma: o?.gamma ?? 0,
+      capMa: o?.capMa ?? 0,
+      brightCurve: o?.brightCurve ?? 0,
+      blur: o?.blur ?? 0,
+      glow: o?.glow ?? 0,
+      palette: $paletteSupported ? [...$paletteFlat] : [],
+      paletteAmount: $paletteSupported ? $paletteAmount : 0,
+      brightness: $brightness,
+      // Which per-pixel current model the power cap uses is a capability, not
+      // a board name (#464): a panel time-multiplexes its rows, a strip
+      // conducts every pixel at once. Unknown caps ⇒ the conservative strip
+      // model, which is also what every non-panel board wants.
+      powerModel: $deviceCaps?.panel ? "hub75" : "strip",
+      panelScan: Math.max(1, Math.round(($layout.h || 64) / 2)),
+    };
+    engine.setOutpipe(s);
+  }
+
+  // Every input of the chain, named in the block itself so Svelte tracks them.
+  $: {
+    engine;
+    $device;
+    $outputStatus;
+    $paletteSupported;
+    $paletteFlat;
+    $paletteAmount;
+    $brightness;
+    $deviceCaps;
+    $layout;
+    applyOutpipe();
+  }
+
   // ---- boot ----
 
   /** Device mode: a local engine first so the boot cover lifts onto a live
@@ -430,6 +647,7 @@
         patternName.set("");
         exampleName.set("");
         devicePatternId.set("");
+        projectionOverride.set(null);
       }
       compileError = null;
     }
@@ -454,6 +672,16 @@
 
   // ---- opening patterns ----
 
+  /** Everything a fresh document resets. A projection override is a VALUE of
+   *  the working copy, so it is dropped exactly where the slider values are. */
+  function resetDocumentState(): void {
+    importError = "";
+    controlValues.set({});
+    projectionOverride.set(null);
+    editingName = false;
+    nameError = "";
+  }
+
   export function newPattern(): void {
     // The template follows the Layout: a matrix console starts you in
     // `render2D`, not on a 1D ramp it will show row-major (#463).
@@ -461,10 +689,9 @@
     patternName.set("");
     exampleName.set("");
     devicePatternId.set("");
-    importError = "";
-    controlValues.set({});
+    resetDocumentState();
     dirty.set(false); // a fresh template — not yet edited
-    subTab = "pattern";
+    mapOpen = false;
     preview?.clear();
     void tick().then(applyEdit);
   }
@@ -475,9 +702,8 @@
     preview?.clear();
     patternName.set(p.name);
     exampleName.set("");
-    importError = "";
     source.set(p.source);
-    controlValues.set({});
+    resetDocumentState();
     dirty.set(false); // freshly loaded from the library
     void tick().then(applyEdit);
   }
@@ -489,10 +715,9 @@
     preview?.clear(); // picking a pattern opens it in the editor
     patternName.set(p.name);
     exampleName.set("");
-    importError = "";
     devicePatternId.set("");
     source.set(p.source);
-    controlValues.set({});
+    resetDocumentState();
     dirty.set(false); // freshly picked from the gallery
     void tick().then(applyEdit);
   }
@@ -532,6 +757,7 @@
       patternName.set(p.name);
       exampleName.set("");
       source.set(p.source);
+      resetDocumentState();
       dirty.set(false); // freshly loaded from the device — matches what's running
       compileError = null;
       // controls come from the local recompile the caller runs next
@@ -572,7 +798,7 @@
       exampleName.set("");
       devicePatternId.set("");
       source.set(epe.source);
-      controlValues.set({});
+      resetDocumentState();
       dirty.set(true); // an imported .epe isn't in the library/device until saved
       dispatch("open"); // a dropped/imported .epe opens straight in the editor
       preview?.clear(); // fresh waterfall for the imported pattern
@@ -594,21 +820,30 @@
     exportEpe($patternName || $exampleName || "luxel pattern", $source);
   }
 
-  // ---- library ----
+  // ---- the ⋯ menu's document verbs ----
 
-  /** Name-then-save. A7 (#468) moves the naming to an inline-editable header;
-   *  when it does, only this `promptText` call goes away — the save itself is
-   *  already independent of where the name came from. */
-  async function saveToLibrary(): Promise<void> {
-    const name = await promptText({
-      title: $device ? "Save pattern on the device" : "Save pattern",
-      label: "Name",
-      initial: $patternName || $exampleName || "my pattern",
-      placeholder: "my pattern",
-      confirmLabel: "Save",
-      validate: (v) => (v.trim() === "" ? "a name is required" : null),
-    });
-    if (name === null) return;
+  /** Detach the working copy from whatever it was stored as, under a new
+   *  name — the shortcut for "start from this one". Nothing is written until
+   *  Save, so a duplicate that is abandoned leaves no trace. */
+  function duplicate(): void {
+    const base = nameOf($patternName, $exampleName);
+    patternName.set(`${base} copy`);
+    exampleName.set("");
+    devicePatternId.set("");
+    dirty.set(true);
+    note("save", "duplicated — Save to store it", 2500);
+  }
+
+  /** Save the working copy under the name in the header. The name is the
+   *  header's (A7, #468) — there is no naming prompt any more; an unnamed
+   *  pattern opens the inline editor with the reason, which is the same
+   *  "refuse in place, disable nothing" rule the dialog used. */
+  async function saveCurrent(): Promise<void> {
+    const name = ($patternName || $exampleName).trim();
+    if (name === "") {
+      startRename("name this pattern before saving");
+      return;
+    }
     if ($device) {
       const bc = compileToBytecode($source);
       if (!bc) {
@@ -706,14 +941,14 @@
     }
   }
 
-  // ---- the console's interim shape override ----
+  // ---- the console's interim "LED layout" block ----
   //
-  // On a device the Layout is the DEVICE's (#463). These two controls are
-  // what is left of the old rig config: they re-shape the console's preview
-  // and say what "install grid / install map on device" will install. A8
-  // (#469) moves them into Settings → LED layout and A10 (#471) gives the map
-  // program its own screen; the playground drives the same store through the
-  // header's "Preview as" chip instead.
+  // On a device the Layout is the DEVICE's (#463). These controls are what is
+  // left of the old rig config: they re-shape the console's preview and say
+  // what "install … on device" will install. They sit at the FOOT of the rail,
+  // out of the editor's chrome, and A8 (#469) moves them into
+  // Settings → LED layout — at which point this whole block is deleted, not
+  // rewritten. A10 (#471) gives the map program its own screen.
 
   /** What the legacy select shows for the reconciled Layout. */
   $: layoutKind = $previewAs.mode === "map" ? "map" : $layout.dims === 2 ? "grid" : "strip";
@@ -724,10 +959,9 @@
       // "2D map" is how mapping is enabled; the watcher above runs the program
       // and its coordinates become the Layout. Switching back turns it off.
       setPreviewAs({ mode: "map", pixels: pixelCount() });
-      subTab = "map";
       return;
     }
-    subTab = "pattern";
+    mapOpen = false;
     // on a device the pixel count is fixed by hardware; layout only rearranges
     const total = $device ? $devicePixels : pixelCount();
     if (kind === "strip") {
@@ -785,7 +1019,25 @@
     })();
   }
 
-  // ---- transport ----
+  // ---- transport (the preview panel's own header) ----
+
+  /** The rate the preview header states: the DEVICE's own on a console
+   *  (`out_fps` on a pipelined HUB75 board — frames the panel displayed —
+   *  else `fps`), the browser loop's in the playground. */
+  $: previewRate = !$device
+    ? { text: `${$previewFps.toFixed(0)} fps`, title: "local preview loop in this browser tab" }
+    : $deviceOutFps > 0
+      ? {
+          text: `${$deviceOutFps} fps on device`,
+          title:
+            `${$deviceOutFps} fps displayed by the panel (out_fps)` +
+            ($deviceRescanHz ? `, panel rescan ${$deviceRescanHz} Hz` : "") +
+            ` — device render loop ${$deviceFps} fps, local preview ${$previewFps.toFixed(0)} fps`,
+        }
+      : {
+          text: `${$deviceFps} fps on device`,
+          title: `${$deviceFps} fps rendered by the device — local preview ${$previewFps.toFixed(0)} fps`,
+        };
 
   function onFpsChange(e: Event): void {
     targetFps = Number((e.target as HTMLSelectElement).value);
@@ -897,7 +1149,7 @@
     return new TextDecoder().decode(bytes.subarray(0, Math.min(byte, bytes.length))).length;
   }
 
-  // keep the squiggle in sync with the compile status
+  // keep the squiggle + gutter dot in sync with the compile status
   $: if (editor) {
     if (compileError && compileError.start !== undefined && compileError.end !== undefined) {
       editor.setErrorRange({
@@ -1040,7 +1292,12 @@
       onPausedRefresh();
       return;
     }
-    preview?.draw(px);
+    // The console draws what the WIRE would carry: the device output chain
+    // (palette, blur, glow, colour order, gamma, power cap) over the engine's
+    // frame — the same `luxel_core::outpipe::DeviceChain` the firmware runs
+    // (#466). The playground has no device chain, so its raw frame IS the
+    // finished frame.
+    preview?.draw($device ? engine.outpipe() : px);
     previewFps.update((f) => f * 0.9 + (1000 / Math.max(dt, 1)) * 0.1);
     const err = engine.takeError();
     if (err) runtimeError.set(err);
@@ -1065,7 +1322,7 @@
     const mod = e.metaKey || e.ctrlKey;
     if (mod && e.key.toLowerCase() === "s") {
       e.preventDefault();
-      void saveToLibrary();
+      void saveCurrent();
     } else if (mod && e.key === "Enter") {
       e.preventDefault();
       applyEdit(); // recompile the preview + push to the device
@@ -1097,104 +1354,149 @@
       {$device ? "loading the pattern from the device…" : "loading pattern…"}
     </div>
   {/if}
-  <section class="left">
-    <!-- File actions live in a toolbar fixed above the editor (not in the
-         header next to the device connection) — they act on the pattern
-         being edited. -->
-    <div class="editor-toolbar" data-role="editor-toolbar">
-      <button
-        data-role="save"
-        title={$device ? "save the current pattern on the device" : "save to this browser's library"}
-        on:click={() => void saveToLibrary()}
-      >
-        save
-      </button>
-      {#if $devicePatternId !== "" || $saved.some((s) => s.name === $patternName && $exampleName === "")}
-        <button
-          data-role="delete"
-          title={$devicePatternId ? "remove from the device" : "remove from the library"}
-          on:click={() => void deleteSaved()}
-        >
-          delete
-        </button>
-      {/if}
-      {#if $isPlayground}
-        <button
-          data-role="share"
-          class="primary"
-          title="copy a link that carries this pattern in the URL"
-          on:click={() => void sharePattern()}
-        >
-          share
-        </button>
-      {/if}
-      {#if $device && $devicePatternId}
-        <button
-          data-role="add-to-playlist"
-          title="add this pattern (with its current parameters) to the playlist"
-          on:click={addToPlaylist}
-        >
-          + playlist
-        </button>
-      {/if}
-      <span class="overflow">
-        <button
-          class="more"
-          data-role="overflow"
-          title="more actions"
-          aria-label="more actions"
-          on:click|stopPropagation={() => (menuOpen = !menuOpen)}
-        >
-          ⋯
-        </button>
-        {#if menuOpen}
-          <div class="menu" role="menu">
-            <button data-role="epe-import" role="menuitem" on:click={() => fileInput.click()}>
-              import .epe…
-            </button>
-            <button data-role="epe-export" role="menuitem" on:click={doExportEpe}>
-              export .epe
-            </button>
-          </div>
-        {/if}
-      </span>
-      {#if $notes.save}<span class="dim note" data-role="save-note">{$notes.save}</span>{/if}
-      {#if $notes.share}<span class="dim note" data-role="share-note">{$notes.share}</span>{/if}
-      <input
-        class="file-input"
-        type="file"
-        accept=".epe,.json,application/json"
-        bind:this={fileInput}
-        on:change={onImportPick}
-      />
-    </div>
 
-    {#if mapIsLayout}
-      <div class="subtabs" data-role="editor-subtabs">
-        <button
-          data-role="subtab-pattern"
-          class="subtab"
-          class:active={subTab === "pattern"}
-          on:click={() => (subTab = "pattern")}
-        >
-          pattern
+  <!-- ── the header owns the DOCUMENT (proposal §5.2, mockup S2) ──
+       back · inline-editable name · save state · one primary action · the ⋯
+       menu of document verbs. No geometry, no transport, no sub-tabs. -->
+  <header class="editor-header" data-role="editor-header">
+    <button
+      data-role="editor-back"
+      class="back"
+      title={`back to ${backLabel}`}
+      on:click={() => dispatch("back")}
+    >
+      ← {backLabel}
+    </button>
+
+    {#if editingName}
+      <input
+        class="name-input"
+        data-role="name-input"
+        bind:this={nameInput}
+        bind:value={nameDraft}
+        aria-label="pattern name"
+        on:keydown={onNameKey}
+        on:blur={commitName}
+        on:click|stopPropagation
+      />
+    {:else}
+      <button
+        class="name"
+        data-role="pattern-name"
+        title="click to rename"
+        on:click|stopPropagation={() => startRename()}
+      >
+        {nameOf($patternName, $exampleName)}
+      </button>
+    {/if}
+    {#if nameError}<span class="name-error" data-role="name-error">{nameError}</span>{/if}
+
+    <span class="savestate" data-role="save-state">
+      {saveStateOf($dirty, $device, $devicePatternId, $patternName, $saved)}
+    </span>
+
+    <span class="spacer"></span>
+
+    {#if $notes.save}<span class="dim note" data-role="save-note">{$notes.save}</span>{/if}
+    {#if $notes.share}<span class="dim note" data-role="share-note">{$notes.share}</span>{/if}
+
+    <button
+      class="primary"
+      data-role="save"
+      title={$device ? "store this pattern on the device" : "store this pattern in this browser"}
+      on:click={() => void saveCurrent()}
+    >
+      {$device ? "Save to device" : "Save"}
+    </button>
+
+    <span class="overflow">
+      <button
+        class="more"
+        data-role="overflow"
+        title="more actions"
+        aria-label="more actions"
+        on:click|stopPropagation={() => (menuOpen = !menuOpen)}
+      >
+        ⋯
+      </button>
+      {#if menuOpen}
+        <div class="menu" role="menu">
+          <!-- "Add to scene ▸" belongs here (proposal §5.4b) and is absent
+               until scenes exist — Phase B, Gitea #480. Not rendered rather
+               than rendered-disabled: a control is absent unless the thing it
+               acts on exists (§5.7). -->
+          {#if $device && $devicePatternId}
+            <button
+              data-role="add-to-playlist"
+              role="menuitem"
+              title="add this pattern, with its current values, to the playlist"
+              on:click={addToPlaylist}
+            >
+              Add to playlist
+            </button>
+          {/if}
+          <button data-role="duplicate" role="menuitem" on:click={duplicate}>Duplicate</button>
+          <div class="sepr"></div>
+          <button data-role="epe-export" role="menuitem" on:click={doExportEpe}>Export .epe</button>
+          <button data-role="epe-import" role="menuitem" on:click={() => fileInput.click()}>
+            Import .epe…
+          </button>
+          {#if $isPlayground}
+            <button
+              data-role="share"
+              role="menuitem"
+              title="copy a link that carries this pattern in the URL"
+              on:click={() => void sharePattern()}
+            >
+              Share…
+            </button>
+          {/if}
+          {#if canDeleteNow($device, $devicePatternId, $exampleName, $patternName, $saved)}
+            <div class="sepr"></div>
+            <button class="del" data-role="delete" role="menuitem" on:click={() => void deleteSaved()}>
+              Delete
+            </button>
+          {/if}
+        </div>
+      {/if}
+    </span>
+
+    <input
+      class="file-input"
+      type="file"
+      accept=".epe,.json,application/json"
+      bind:this={fileInput}
+      on:change={onImportPick}
+    />
+  </header>
+
+  <!-- ── the code column holds only code, and owns its own errors ── -->
+  <section class="left">
+    {#if mapOpen}
+      <!-- The map program is GEOMETRY. Until A10 (#471) gives it a screen it
+           opens over the code pane with its own bar; nothing about it is in
+           the pattern editor's chrome any more. -->
+      <div class="mapbar" data-role="map-bar">
+        <button data-role="subtab-pattern" on:click={() => (mapOpen = false)}>← pattern</button>
+        <span class="dim">map program — the Layout's, not the pattern's</span>
+        <span class="spacer"></span>
+        <button data-role="map-run" title="run the map program and install it" on:click={() => mapRef.run()}>
+          run map
         </button>
         <button
-          data-role="subtab-map"
-          class="subtab"
-          class:active={subTab === "map"}
-          on:click={() => {
-            subTab = "map";
-            if (!mapRef.hasEngine()) mapRef.recompile(!mapDebugMode);
-          }}
+          class="debug-toggle"
+          class:active={mapDebugMode}
+          data-role="map-debug"
+          title="toggle the map debugger"
+          on:click={() => mapRef.toggleDebug()}
         >
-          map
+          debug
         </button>
       </div>
     {/if}
 
     <div class="editor-host">
-      <div class="editor-slot" hidden={subTab !== "pattern"}>
+      <div class="editor-slot" hidden={mapOpen}>
         <CodeEditor
           bind:this={editor}
           value={$source}
@@ -1209,267 +1511,308 @@
         bind:debugMode={mapDebugMode}
         bind:dbg={mapDbg}
         showPane={mapIsLayout}
-        visible={subTab === "map"}
+        visible={mapOpen}
         liveApply={mapIsLayout}
         on:install={onMapInstall}
       />
     </div>
 
-    <div class="playback">
-      <!-- CONSOLE ONLY (#463). The Layout is the device's; what is left here
-           is the shape the console previews in and what "install … on device"
-           will install. The playground's Layout is the header's "Preview as"
-           chip — these fields were its rig config and are gone. A8 (#469)
-           moves these into Settings → LED layout, A10 (#471) gives the map
-           program its own screen. -->
-      {#if $device}
-        <select value={layoutKind} data-role="layout-kind" on:change={setLayoutKind}>
-          <option value="strip">strip</option>
-          <option value="grid">grid</option>
-          <option value="map">2D map</option>
-        </select>
-        {#if layoutKind === "strip"}
-          <input
-            class="num"
-            data-role="layout-px"
-            type="number"
-            min="1"
-            max="4096"
-            value={$layout.pixels}
-            disabled
-            title="fixed by the device's hardware"
-          />
-          <span class="dim">px</span>
-        {:else if layoutKind === "grid"}
-          <input
-            class="num"
-            data-role="layout-w"
-            type="number"
-            min="1"
-            max="256"
-            value={$layout.w}
-            on:change={(e) => setLayoutNum("w", e)}
-          />
-          <span class="dim">×</span>
-          <input
-            class="num"
-            data-role="layout-h"
-            type="number"
-            min="1"
-            max="256"
-            value={$layout.h}
-            on:change={(e) => setLayoutNum("h", e)}
-          />
-          <button
-            data-role="grid-install"
-            title="tell the device it is a {$layout.w}×{$layout.h} grid so its patterns render in 2D (no coordinates uploaded, nothing allocated on the device)"
-            on:click={installDeviceGrid}
-          >
-            install grid on device
-          </button>
-          {#if $deviceMap.installed}
-            <span class="dim mono" data-role="map-installed">{$deviceMap.count}px {$deviceMap.dims}D on device</span>
-          {/if}
-        {:else}
-          <span class="dim mono" data-role="map-badge">{$layout.coords?.length ?? 0} px mapped</span>
-        {/if}
-      {:else}
-        <!-- the playground's Layout lives in the header chip; this is a readout -->
-        <span class="dim mono" data-role="layout-summary" title="change it with “Preview as” in the header">
-          {$layoutName}
-        </span>
-      {/if}
-      {#if subTab === "map"}
-        <button data-role="map-run" title="run the map program and install it" on:click={() => mapRef.run()}>
-          run map
+    <!-- The status strip pinned to the bottom of the pane: one plain sentence
+         about the line the gutter dot and the squiggle already point at
+         (proposal §5.2). Compile first, then the runtime error — never both,
+         and never a banner across the page from the cause. -->
+    {#if mapOpen}
+      {#if mapCompileError}
+        <button class="codestatus err" data-role="map-compile-error" on:click={() => mapRef.jumpToError()}>
+          ✗ line {mapCompileError.line} · {mapCompileError.message}
+          <span class="jump">jump to line</span>
         </button>
-        {#if $device && mapIsLayout}
-          <button
-            data-role="map-install"
-            title="upload this map to the device so its patterns render in 2D/3D"
-            on:click={installDeviceMap}
-          >
-            install on device
-          </button>
-          {#if $deviceMap.installed}
-            <button
-              data-role="map-clear"
-              title="remove the map from the device"
-              on:click={onClearDeviceMap}
-            >
-              clear device map
-            </button>
-            <span class="dim mono" data-role="map-installed">
-              {$deviceMap.count}px {$deviceMap.dims}D on device
-            </span>
-          {/if}
-        {/if}
-        {#if $notes.map}<span class="mapper-error" data-role="map-error">{$notes.map}</span>{/if}
       {/if}
-      <span class="sep"></span>
-      <select value={targetFps} on:change={onFpsChange}>
-        <option value={0}>max fps</option>
-        <option value={60}>60 fps</option>
-        <option value={30}>30 fps</option>
-        <option value={15}>15 fps</option>
-        <option value={5}>5 fps</option>
-      </select>
-      <button data-role="pause" on:click={togglePause} title={running ? "pause" : "resume"}>
-        {running ? "pause" : "play"}
+    {:else if compileError}
+      <button class="codestatus err" data-role="compile-error" on:click={jumpToError}>
+        ✗ line {compileError.line} · {compileError.message}
+        <span class="jump">jump to line</span>
       </button>
-      {#if subTab === "map"}
-        <button
-          class="debug-toggle"
-          class:active={mapDebugMode}
-          data-role="map-debug"
-          title="toggle the map debugger"
-          on:click={() => mapRef.toggleDebug()}
-        >
-          debug
-        </button>
-      {:else}
-        <!-- the preview runs on the local engine (even on a device), so the
-             step-debugger works everywhere -->
-        <button
-          class="debug-toggle"
-          class:active={micOn}
-          data-role="mic-toggle"
-          title="feed microphone audio to sensor patterns (frequencyData, energyAverage, maxFrequency)"
-          on:click={toggleMic}
-        >
-          sound
-        </button>
-        {#if $notes.mic}<span class="mapper-error" data-role="mic-error">{$notes.mic}</span>{/if}
-        <button
-          class="debug-toggle"
-          class:active={debugMode}
-          data-role="debug"
-          title="toggle debugger"
-          on:click={toggleDebug}
-        >
-          debug
-        </button>
-      {/if}
-    </div>
+    {:else if $runtimeError}
+      <div class="codestatus warn" data-role="runtime-error">
+        ⚠ runtime · {$runtimeError.message}
+        <button class="dismiss" title="dismiss" on:click={() => runtimeError.set(null)}>×</button>
+      </div>
+    {/if}
+    <p class="code-hint">Editing code needs a wider screen — the preview and its values are above.</p>
   </section>
+
   <section class="right">
     <!-- Conditions that persist until whatever caused them goes away: the
          wasm failed to load, the device is unreachable. Pushed by whoever
-         knows (the shell, the push path) rather than derived here. -->
+         knows (the shell, the push path) rather than derived here. Compile and
+         runtime errors are NOT here any more — they belong to the code pane. -->
     {#each $banners as b (b.id)}
       <div class="banner" class:error={b.level === "error"} class:warn={b.level === "warn"} data-role={b.role}>
         {b.text}
       </div>
     {/each}
-    <!-- Capacity (Gitea #15). Severity follows CERTAINTY, not size: the
-         device's own rejection is a fact and reads as an error; our local
-         model is advice and reads as a warning. Both are non-blocking —
-         the pattern keeps previewing locally either way. -->
-    {#if deviceRejectedForSize}
-      <div class="banner error" data-role="capacity-rejected">
-        the device rejected this pattern: {deviceRejectedForSize}
-      </div>
-    {:else if capacity}
-      <div
-        class="banner warn"
-        class:capacity-over={capacity.level === "over"}
-        data-role="capacity-warning"
-        data-level={capacity.level}
-        title={capacity.detail}
-      >
-        {capacity.level === "over" ? "⚠" : "△"}
-        {capacity.text}
-      </div>
-    {/if}
     {#if importError}
       <div class="banner error" data-role="import-error">
         {importError}
         <button class="dismiss" on:click={() => (importError = "")}>×</button>
       </div>
     {/if}
-    {#if compileError && subTab === "pattern"}
-      <button class="banner error as-button" on:click={jumpToError}>
-        line {compileError.line}:{compileError.col} — {compileError.message}
-      </button>
-    {/if}
-    {#if mapCompileError && subTab === "map"}
-      <button
-        class="banner error as-button"
-        data-role="map-compile-error"
-        on:click={() => mapRef.jumpToError()}
-      >
-        map line {mapCompileError.line}:{mapCompileError.col} — {mapCompileError.message}
-      </button>
-    {/if}
-    {#if $runtimeError && !compileError && subTab === "pattern"}
-      <div class="banner warn">
-        runtime: {$runtimeError.message}
-        <button class="dismiss" on:click={() => runtimeError.set(null)}>×</button>
+
+    {#if mapOpen && mapDebugMode}
+      <div class="rsec">
+        <Debugger
+          snapshot={mapDbg}
+          runningHint="set a gutter breakpoint, then Run map to step through it"
+          on:step={(e) => mapRef.step(e.detail)}
+          on:break={() => mapRef.requestBreak()}
+        />
+      </div>
+    {:else if debugMode && !mapOpen}
+      <div class="rsec">
+        <Debugger snapshot={dbg} on:step={(e) => step(e.detail)} on:break={requestBreak} />
       </div>
     {/if}
 
-    {#if subTab === "map" && mapDebugMode}
-      <Debugger
-        snapshot={mapDbg}
-        runningHint="set a gutter breakpoint, then Run map to step through it"
-        on:step={(e) => mapRef.step(e.detail)}
-        on:break={() => mapRef.requestBreak()}
-      />
-    {:else if debugMode && subTab === "pattern"}
-      <Debugger snapshot={dbg} on:step={(e) => step(e.detail)} on:break={requestBreak} />
-    {/if}
+    <!-- ── Preview: its header owns the transport (mockup S2) ── -->
+    <div class="rsec">
+      <div class="rhead">
+        <span class="slabel">Preview</span>
+        <span class="rdim" data-role="preview-dims" title={previewRate.title}>
+          {$layoutName} · {previewRate.text}
+        </span>
+        <span class="grp">
+          <button
+            class="icon"
+            data-role="pause"
+            title={running ? "pause the preview" : "resume the preview"}
+            aria-label={running ? "pause" : "play"}
+            on:click={togglePause}
+          >
+            {running ? "❚❚" : "▶"}
+          </button>
+          <select
+            class="fpssel"
+            data-role="target-fps"
+            value={targetFps}
+            title="preview frame rate"
+            on:change={onFpsChange}
+          >
+            <option value={0}>max fps</option>
+            <option value={60}>60 fps</option>
+            <option value={30}>30 fps</option>
+            <option value={15}>15 fps</option>
+            <option value={5}>5 fps</option>
+          </select>
+          {#if wantsSensors}
+            <!-- ONLY when the pattern binds sensor variables (§5.7) — a
+                 pattern that reads no audio has no use for a microphone.
+                 Inline SVG rather than a glyph: a headless chromium without
+                 a symbol font draws ♪ and ⏿ as tofu (seen in the e2e shots). -->
+            <button
+              class="icon"
+              class:active={micOn}
+              data-role="mic-toggle"
+              title="feed microphone audio to sensor patterns (frequencyData, energyAverage, maxFrequency)"
+              aria-label="microphone"
+              on:click={toggleMic}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                <rect x="9" y="3" width="6" height="11" rx="3" />
+                <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
+              </svg>
+            </button>
+          {/if}
+          <!-- the preview runs on the local engine (even on a device), so the
+               step-debugger works everywhere -->
+          <button
+            class="icon"
+            class:active={debugMode}
+            data-role="debug"
+            title="toggle the step debugger"
+            aria-label="debug"
+            on:click={toggleDebug}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <rect x="8" y="7" width="8" height="12" rx="4" />
+              <path d="M4 10h4M16 10h4M4 16h4M16 16h4M9.5 5l1 2M14.5 5l-1 2" />
+            </svg>
+          </button>
+        </span>
+      </div>
+      <div class="preview-wrap">
+        <Preview bind:this={preview} layout={$layout} on:inject={onInject} />
+      </div>
+      {#if $notes.mic}<p class="mapper-error" data-role="mic-error">{$notes.mic}</p>{/if}
 
-    <div class="preview-wrap">
-      <Preview bind:this={preview} layout={$layout} on:inject={onInject} />
+      <!-- Capacity (Gitea #15), the existing idiom in its new place: a strip
+           under the preview it is about. Severity follows CERTAINTY, not size:
+           the device's own rejection is a fact and reads as an error; our local
+           model is advice and reads as a warning. Both are non-blocking — the
+           pattern keeps previewing locally either way. -->
+      {#if deviceRejectedForSize}
+        <div class="capstrip err" data-role="capacity-rejected">
+          the device rejected this pattern: {deviceRejectedForSize}
+        </div>
+      {:else if capacity}
+        <div
+          class="capstrip"
+          class:capacity-over={capacity.level === "over"}
+          data-role="capacity-warning"
+          data-level={capacity.level}
+          title={capacity.detail}
+        >
+          {capacity.level === "over" ? "⚠" : "△"}
+          {capacity.text}
+        </div>
+      {/if}
     </div>
 
-    <h2>Controls</h2>
-    <Controls {controls} bind:values={$controlValues} {readouts} hints={$hints} on:set={onControlSet} />
-    {#if controls.length === 0}
-      <p class="dim hint">
-        export <code>function sliderName(v)</code> to add controls — bound them with
-        <code>//# min=0 max=5 step=0.5 default=2</code>
-      </p>
+    <!-- ── Controls, then the quiet Projection row (S2c/S2d) ── -->
+    <div class="rsec">
+      <div class="rhead"><span class="slabel">Controls</span></div>
+      <Controls {controls} bind:values={$controlValues} {readouts} hints={$hints} on:set={onControlSet} />
+      {#if controls.length === 0}
+        <p class="dim hint">
+          export <code>function sliderName(v)</code> to add controls — bound them with
+          <code>//# min=0 max=5 step=0.5 default=2</code>
+        </p>
+      {/if}
+      <ProjectionRow
+        patternDims={$patternDims}
+        layout={$layout}
+        override={$projectionOverride}
+        on:set={onProjectionSet}
+      />
+    </div>
+
+    <!-- VARS is absent entirely for a pattern that exports none (§5.7). -->
+    {#if Object.keys(vars).length > 0}
+      <div class="rsec" data-role="vars-section">
+        <div class="rhead"><span class="slabel">Vars</span></div>
+        <VarWatcher {vars} />
+      </div>
     {/if}
 
     {#if pins.length > 0 || analogPins.length > 0}
-      <h2>Pins</h2>
-      <PinPanel
-        {pins}
-        {analogPins}
-        levels={pinLevels}
-        idleHigh={pinIdleHigh}
-        bind:latched={pinLatched}
-        bind:analogValues
-        on:drive={onPinDrive}
-        on:analog={onAnalogDrive}
-      />
-      <p class="dim hint">
-        {#if pins.length > 0}<code>press</code> drives the pin while held; <code>hold</code> keeps
-          it driven after you let go. Releasing both returns the pin to its
-          <code>pinMode</code> idle level.{/if}{#if analogPins.length > 0}{" "}
-          An analog slider is what <code>analogRead</code>/<code>touchRead</code> read on that pin,
-          0..1 — it stays where you leave it.{/if}{#if $device}{" "}
-          Drives the local preview only: on the device these pins are real GPIO, read from and
-          written to the pads every frame.{/if}
-      </p>
+      <div class="rsec">
+        <div class="rhead"><span class="slabel">Pins</span></div>
+        <PinPanel
+          {pins}
+          {analogPins}
+          levels={pinLevels}
+          idleHigh={pinIdleHigh}
+          bind:latched={pinLatched}
+          bind:analogValues
+          on:drive={onPinDrive}
+          on:analog={onAnalogDrive}
+        />
+        <p class="dim hint">
+          {#if pins.length > 0}<code>press</code> drives the pin while held; <code>hold</code> keeps
+            it driven after you let go. Releasing both returns the pin to its
+            <code>pinMode</code> idle level.{/if}{#if analogPins.length > 0}{" "}
+            An analog slider is what <code>analogRead</code>/<code>touchRead</code> read on that pin,
+            0..1 — it stays where you leave it.{/if}{#if $device}{" "}
+            Drives the local preview only: on the device these pins are real GPIO, read from and
+            written to the pads every frame.{/if}
+        </p>
+      </div>
     {/if}
 
     {#if mapIsLayout}
-      <h2>Map</h2>
-      <p class="dim hint">
-        A {$pixelTotal}-point map is installed. Edit it in the
-        <button class="link" data-role="goto-map" on:click={() => (subTab = "map")}>map</button>
-        sub-tab — it's a debuggable Luxel program (<code>plot(x, y)</code> per pixel).{" "}
-        {#if $device}It only arranges this preview — it isn't uploaded to the device.{/if} Choose
-        a different layout to turn mapping off.
-      </p>
+      <div class="rsec">
+        <div class="rhead"><span class="slabel">Map program</span></div>
+        <p class="dim hint">
+          A {$pixelTotal}-point map is the Layout.
+          <button class="link" data-role="subtab-map" on:click={() => (mapOpen = true)}>
+            Edit the map program
+          </button>
+          — a debuggable Luxel program (<code>plot(x, y)</code> per pixel).{" "}
+          {#if $device}It only arranges this preview until you install it below.{/if} Choose a
+          different layout to turn mapping off.
+        </p>
+        {#if $notes.map}<p class="mapper-error" data-role="map-error">{$notes.map}</p>{/if}
+      </div>
     {/if}
 
-    <h2>Vars</h2>
-    <VarWatcher {vars} />
-    {#if Object.keys(vars).length === 0}
-      <p class="dim hint">export <code>var name</code> to watch values here</p>
+    <!-- ── TEMPORARY: the console's LED layout (A8, Gitea #469) ──
+         The editor must not configure geometry — but nothing else can yet, so
+         the old playback-bar controls live on at the foot of the rail with
+         their data-roles intact. #469 moves them into Settings → LED layout
+         and DELETES this block. -->
+    {#if $device}
+      <div class="rsec ledlayout" data-role="led-layout">
+        <div class="rhead">
+          <span class="slabel">LED layout</span>
+          <span class="rdim">moves to Settings (#469)</span>
+        </div>
+        <div class="ledrow">
+          <select value={layoutKind} data-role="layout-kind" on:change={setLayoutKind}>
+            <option value="strip">strip</option>
+            <option value="grid">grid</option>
+            <option value="map">2D map</option>
+          </select>
+          {#if layoutKind === "strip"}
+            <input
+              class="num"
+              data-role="layout-px"
+              type="number"
+              min="1"
+              max="4096"
+              value={$layout.pixels}
+              disabled
+              title="fixed by the device's hardware"
+            />
+            <span class="dim">px</span>
+          {:else if layoutKind === "grid"}
+            <input
+              class="num"
+              data-role="layout-w"
+              type="number"
+              min="1"
+              max="256"
+              value={$layout.w}
+              on:change={(e) => setLayoutNum("w", e)}
+            />
+            <span class="dim">×</span>
+            <input
+              class="num"
+              data-role="layout-h"
+              type="number"
+              min="1"
+              max="256"
+              value={$layout.h}
+              on:change={(e) => setLayoutNum("h", e)}
+            />
+            <button
+              data-role="grid-install"
+              title="tell the device it is a {$layout.w}×{$layout.h} grid so its patterns render in 2D (no coordinates uploaded, nothing allocated on the device)"
+              on:click={installDeviceGrid}
+            >
+              install grid on device
+            </button>
+          {:else}
+            <span class="dim mono" data-role="map-badge">{$layout.coords?.length ?? 0} px mapped</span>
+            <button
+              data-role="map-install"
+              title="upload this map to the device so its patterns render in 2D/3D"
+              on:click={installDeviceMap}
+            >
+              install on device
+            </button>
+            {#if $deviceMap.installed}
+              <button data-role="map-clear" title="remove the map from the device" on:click={onClearDeviceMap}>
+                clear device map
+              </button>
+            {/if}
+          {/if}
+          {#if $deviceMap.installed && layoutKind !== "strip"}
+            <span class="dim mono" data-role="map-installed">
+              {$deviceMap.count}px {$deviceMap.dims}D on device
+            </span>
+          {/if}
+        </div>
+      </div>
     {/if}
   </section>
 </main>
@@ -1480,10 +1823,15 @@
     display: none;
   }
 
+  /* header spans both columns; code left, rail right (S2) */
   .editor-view {
     position: relative;
     display: grid;
     grid-template-columns: minmax(360px, 1fr) minmax(320px, 420px);
+    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-areas:
+      "hdr hdr"
+      "code rail";
     flex: 1;
     min-height: 0;
   }
@@ -1510,33 +1858,73 @@
     font-size: 12px;
   }
 
-  .left {
+  /* ---- the document header ---- */
+
+  .editor-header {
+    grid-area: hdr;
     display: flex;
-    flex-direction: column;
-    min-width: 0;
-    min-height: 0;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-panel);
+    flex-wrap: wrap;
+  }
+
+  .back {
+    font-weight: 600;
+  }
+
+  /* the name reads as text and edits in place — not a form field with a
+     button beside it (proposal §5.2) */
+  .name {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    padding: 3px 6px;
+    font: inherit;
+    font-weight: 600;
+    color: var(--text);
+    cursor: text;
+    max-width: 340px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .name:hover {
+    border-color: var(--border);
+  }
+
+  .name-input {
+    font: inherit;
+    font-weight: 600;
+    padding: 3px 6px;
+    width: 220px;
+  }
+
+  .name-error {
+    color: var(--error);
+    font-size: 12px;
+  }
+
+  .savestate {
+    color: var(--text-dim);
+    font-size: 12px;
+  }
+
+  .spacer {
+    flex: 1;
   }
 
   .note {
     font-size: 12px;
   }
 
-  .editor-toolbar {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 10px;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-panel);
-  }
-
-  .editor-toolbar .primary {
+  .primary {
     border-color: var(--accent);
     color: var(--accent);
-  }
-
-  .editor-toolbar .note {
-    margin-left: auto;
+    font-weight: 600;
   }
 
   .overflow {
@@ -1552,11 +1940,11 @@
   .menu {
     position: absolute;
     top: calc(100% + 4px);
-    left: 0;
+    right: 0;
     z-index: 20;
     display: flex;
     flex-direction: column;
-    min-width: 140px;
+    min-width: 160px;
     padding: 4px;
     gap: 2px;
     border: 1px solid var(--border);
@@ -1580,32 +1968,35 @@
     background: var(--bg-inset);
   }
 
-  .subtabs {
+  /* delete is last and error-tinted (S2) */
+  .menu button.del {
+    color: var(--error);
+  }
+
+  .sepr {
+    height: 1px;
+    margin: 3px 2px;
+    background: var(--border);
+  }
+
+  /* ---- the code column ---- */
+
+  .left {
+    grid-area: code;
     display: flex;
-    gap: 2px;
-    padding: 0 10px;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .mapbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 10px;
     border-bottom: 1px solid var(--border);
     background: var(--bg-panel);
-  }
-
-  .subtab {
-    background: transparent;
-    border: none;
-    border-bottom: 2px solid transparent;
-    border-radius: 0;
-    padding: 5px 10px;
-    color: var(--text-dim);
     font-size: 12px;
-    cursor: pointer;
-  }
-
-  .subtab:hover {
-    color: var(--text);
-  }
-
-  .subtab.active {
-    color: var(--accent);
-    border-bottom-color: var(--accent);
   }
 
   .editor-host {
@@ -1622,21 +2013,49 @@
     display: none;
   }
 
-  .playback {
+  /* the code pane's own error report: one line, pinned to its bottom edge */
+  .codestatus {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 6px 10px;
+    gap: 8px;
+    width: 100%;
+    padding: 7px 10px;
+    border: none;
     border-top: 1px solid var(--border);
+    border-radius: 0;
     background: var(--bg-panel);
-    flex-wrap: wrap;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 12px;
+    text-align: left;
   }
 
-  .playback .sep {
-    width: 1px;
-    align-self: stretch;
-    margin: 2px 4px;
-    background: var(--border);
+  .codestatus.err {
+    border-top-color: var(--error);
+    background: color-mix(in srgb, var(--error) 16%, transparent);
+    color: #f2b8b8;
+    cursor: pointer;
+  }
+
+  .codestatus.warn {
+    border-top-color: var(--warn);
+    background: color-mix(in srgb, var(--warn) 12%, transparent);
+    color: #ecd9a8;
+  }
+
+  .codestatus .jump {
+    margin-left: auto;
+    color: var(--text-dim);
+    text-decoration: underline;
+  }
+
+  /* only ever shown on a phone, where the code is read-mostly (D9) */
+  .code-hint {
+    display: none;
+    margin: 0;
+    padding: 6px 10px;
+    border-top: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: 11px;
   }
 
   .link {
@@ -1649,24 +2068,81 @@
     font: inherit;
   }
 
+  /* ---- the rail ---- */
+
   .right {
-    padding: 12px;
+    grid-area: rail;
+    padding: 0;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    gap: 8px;
     background: var(--bg-panel);
   }
 
-  h2 {
+  /* one section per concern, separated by a hairline (S2) */
+  .rsec {
+    padding: 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .rhead {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .slabel {
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.1em;
     color: var(--text-dim);
-    margin: 10px 0 2px;
+  }
+
+  .rdim {
+    color: var(--text-dim);
+    font-size: 12px;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* the transport group rides at the right of the preview header */
+  .grp {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .grp .icon {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 7px;
+    line-height: 1;
+  }
+
+  .grp .icon svg {
+    width: 13px;
+    height: 13px;
+  }
+
+  .grp .icon.active {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .fpssel {
+    font-size: 12px;
+    padding: 1px 4px;
   }
 
   .banner {
+    margin: 8px 12px 0;
     padding: 8px 10px;
     border-radius: 6px;
     font-family: ui-monospace, Menlo, Consolas, monospace;
@@ -1689,17 +2165,31 @@
     gap: 8px;
   }
 
+  /* the capacity idiom, kept: certainty-graded and never blocking */
+  .capstrip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 9px;
+    border: 1px solid var(--warn);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--warn) 14%, transparent);
+    color: #ecd9a8;
+    font-size: 12px;
+  }
+
   /* "will not fit" vs "getting close" — same amber family (both are
      predictions, not facts; the device's own rejection is the red one),
      separated by weight rather than hue. */
-  .banner.warn.capacity-over {
+  .capstrip.capacity-over {
     background: color-mix(in srgb, var(--warn) 24%, transparent);
     font-weight: 600;
   }
 
-  .as-button {
-    cursor: pointer;
-    width: 100%;
+  .capstrip.err {
+    border-color: var(--error);
+    background: color-mix(in srgb, var(--error) 18%, transparent);
+    color: #f2b8b8;
   }
 
   .dismiss {
@@ -1714,16 +2204,12 @@
     margin: 2px 0;
   }
 
-  .debug-toggle.active {
-    border-color: var(--accent);
-    color: var(--accent);
-  }
-
   .file-input {
     display: none;
   }
 
   .mapper-error {
+    margin: 0;
     color: var(--error);
     font-family: ui-monospace, Menlo, Consolas, monospace;
     font-size: 12px;
@@ -1731,6 +2217,13 @@
 
   .preview-wrap {
     position: relative;
+  }
+
+  .ledrow {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
   }
 
   .spinner {
@@ -1746,6 +2239,52 @@
   @keyframes conn-spin {
     to {
       transform: rotate(1turn);
+    }
+  }
+
+  /* ---- phone (D9: responsive only) ----
+     The rail stacks ABOVE the code: the preview and its values are what a
+     phone is for, and the code is read-mostly (mockup S2b). */
+  @media (max-width: 600px) {
+    .editor-view {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: auto auto auto;
+      grid-template-areas:
+        "hdr"
+        "rail"
+        "code";
+      overflow-y: auto;
+    }
+
+    .editor-header {
+      gap: 8px;
+      padding: 6px 10px;
+    }
+
+    .editor-header .savestate,
+    .editor-header .note {
+      display: none;
+    }
+
+    .name {
+      max-width: 40vw;
+    }
+
+    .right {
+      overflow-y: visible;
+    }
+
+    .left {
+      border-top: 1px solid var(--border);
+    }
+
+    .editor-host {
+      flex: none;
+      height: 260px;
+    }
+
+    .code-hint {
+      display: block;
     }
   }
 </style>
