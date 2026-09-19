@@ -240,10 +240,12 @@ Three files and one rule: **an item owns its values.**
 | `components/ProjectionRow.svelte` | the quiet Projection line, shared with the editor's Controls rail (#468) |
 
 `addToPlaylist(patternId, values?, proj?)` is the ONE path every "Add to
-playlist" affordance takes (the editor's button today; the Patterns tile ⋯
-menu at A6). It resolves the name from `devicePatterns`, appends
-optimistically and debounces the write — callers pass the values they have
-tuned and nothing else. There are no named presets (D6): the same pattern can
+playlist" affordance takes (the editor's ⋯ entry and the Patterns tile ⋯
+menu). It resolves the name from `devicePatterns`, appends optimistically and
+debounces the write — callers pass the values they have tuned and nothing
+else. From the editor that includes `stores/pattern.ts`'s
+`projectionOverride`: the editor holds a projection choice only until
+something durable takes it, and a playlist item is that something. There are no named presets (D6): the same pattern can
 sit in the playlist twice with two different looks, and each row edits its own.
 
 A value moved on the row that is CURRENTLY PLAYING is also pushed live with

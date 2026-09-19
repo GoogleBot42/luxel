@@ -1831,6 +1831,36 @@ try {
     (await (await fetch(`${DEV}/api/playlist`)).json()).items.length === 0,
   );
 
+  // ---- "Add to playlist" captures the PROJECTION too (#470 + #468) ----
+  // This console fabricates an 11×11 grid for a non-1D pattern, so a 3D one
+  // is not native to it and the editor's quiet Projection row is live. The
+  // choice made there is a VALUE, and the playlist item it is added to is
+  // where that value gets its durable home (stores/pattern.ts).
+  await page.click('[data-role="tab-patterns"]');
+  await sleep(400);
+  await tileAction(page, DTILE, "tile-edit");
+  await sleep(1200);
+  await setEditor(page, "export function render3D(index, x, y, z) { hsv(x, 1, z) }");
+  await sleep(1200);
+  await renameTo(page, "proj rider");
+  await page.click('[data-role="save"]');
+  await sleep(900);
+  await page.click('[data-role="projection-change"]');
+  await page.waitForSelector('[data-role="projection-options"]', { timeout: 2000 });
+  await page.click('[data-role="projection-opt-yz"]');
+  await sleep(400);
+  await menuClick(page, "add-to-playlist");
+  await sleep(700);
+  const plWithProj = await (await fetch(`${DEV}/api/playlist`)).json();
+  check(
+    "playlist: Add to playlist carries the editor's projection onto the item",
+    plWithProj.items.length === 1 && plWithProj.items[0].proj === "yz",
+    JSON.stringify(plWithProj.items),
+  );
+  await fetch(`${DEV}/api/playlist`, { method: "POST", body: "D 5" }); // clean up
+  await page.click('[data-role="editor-back"]'); // back to the tabs
+  await sleep(400);
+
   // ---- playlist pre-flight: an item whose assert() fails at the current
   // pixel count is reported per-item ("invalid") and badged in the UI ----
   const picky =

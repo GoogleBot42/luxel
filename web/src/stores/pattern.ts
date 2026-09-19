@@ -60,9 +60,11 @@ export const controlValues = writable<Record<string, number[]>>({});
  * It is a VALUE, not source: a projection never touches the pattern text (the
  * map's mistake — §5.4d), and it is keyed off the pattern's dims, so one mode
  * is all it needs to carry. Durable storage belongs to whatever *used* the
- * pattern — a playlist item's values (A9, #470) or a scene layer's (Phase B);
- * until those exist it lives here, beside the slider values, and every
- * pattern load clears it exactly as `controlValues` is cleared.
+ * pattern — a playlist item's values (its `P` line, #470) or a scene layer's
+ * (Phase B). Here it is the EDITOR's working copy: it lives beside the slider
+ * values, every pattern load clears it exactly as `controlValues` is cleared,
+ * and "Add to playlist" hands it to `addToPlaylist`'s `proj` argument along
+ * with them.
  */
 export const projectionOverride: Writable<ProjectionMode | null> = writable(null);
 /** `//# min=…` annotations parsed out of the source. */

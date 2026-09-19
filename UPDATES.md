@@ -45,9 +45,11 @@ thumbnails, built so Phase B adds a Scenes *section* rather than a second
 component (`pick` already carries a `kind`, and `PlaylistItem.kind` is the row
 side of the same seam). Exported for the editor's and the Patterns tile's ⋯
 menus. `stores/device.ts` gained `addToPlaylist(patternId, values?, proj?)` —
-the ONE path every "Add to playlist" affordance takes; the editor's button and
-the Patterns tile ⋯ menu (#467, merged while this was in flight) both call it
-instead of building an item literal of their own.
+the ONE path every "Add to playlist" affordance takes; the editor's ⋯ entry and
+the Patterns tile ⋯ menu (#467/#468, merged while this was in flight) both call
+it instead of building an item literal of their own. From the editor it carries
+the projection too: `stores/pattern.ts` `projectionOverride` is the editor's
+working copy of a choice whose durable home is exactly this item's `P` line.
 
 **Mobile (≤ 600 px, D9).** Chips drop to their own line instead of squeezing
 the name, thumbnails shrink to 40 px, chips and ✕ become 32 px targets, the

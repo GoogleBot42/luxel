@@ -869,9 +869,11 @@
    *  different params. */
   function addToPlaylist(): void {
     if (!$device || !$devicePatternId) return;
-    // one path for every "Add to playlist" affordance (#470) — the item
-    // carries the values you tuned here, and nothing else does
-    addPatternToPlaylist($devicePatternId, { ...$controlValues });
+    // One path for every "Add to playlist" affordance (#470). The item takes
+    // a snapshot of everything that is a VALUE here — the sliders AND the
+    // projection you chose for this pattern — because the playlist item is
+    // where those get their durable home (stores/pattern.ts).
+    addPatternToPlaylist($devicePatternId, { ...$controlValues }, $projectionOverride ?? undefined);
     note("save", "added to playlist", 2000);
   }
 
