@@ -1062,12 +1062,16 @@ the scheduler applies it when the item activates):
 
 | variant | before | after | Δ | slot margin |
 |---|---:|---:|---:|---:|
-| `c6-devkit` + `hosted-ui` *(the tightest shipped image)* | 1,012,384 | 1,012,928 | **+544** | 35,648 B (3.39 %) |
-| `athom-music` | 1,011,680 | 1,012,512 | +832 | 36,064 B (3.44 %) |
+| `c6-devkit` + `hosted-ui` *(the tightest shipped image)* | 999,200 | 1,000,128 | **+928** | 48,448 B (4.62 %) |
+| `athom-music` | 1,007,248 | 1,008,032 | +784 | 40,544 B (3.86 %) |
 
-Credless flake builds against `origin/master` `eeb6e03`. `.stack` on
-`board-pixelblaze-v3` 26,876 → **26,812 B** (−64; `small-chip` profile),
-`tools/stack-check.sh` clean at both profiles.
+Credless flake builds against `origin/master` `184fedc` — i.e. on top of the
+#501 diet above, which is why the absolute numbers are ~12 KB below the #466
+row. `.stack` on `board-pixelblaze-v3` 26,956 → **26,892 B** (−64;
+`small-chip` profile), `tools/stack-check.sh` clean at both profiles. The same
+branch measured against pre-#501 master read +544 B on the C6 rather than
++928; both are inside the sub-kilobyte noise band the #466 entry describes, so
+read this as "well under a kilobyte", not as a figure to three digits.
 
 Under a kilobyte because the expensive half was already linked: #473 put the
 whole projection plan machinery in `Engine::frame` unconditionally, so the

@@ -238,7 +238,7 @@
   {/if}
 
   {#if valuesOpen}
-    <div class="expand" data-role="pl-values">
+    <div class="expand" class:bare={params.length === 0} data-role="pl-values">
       {#if params.length > 0}
         <Controls controls={params} values={item.controls} {readouts} {hints} on:set={onSet} />
       {/if}
@@ -416,6 +416,14 @@
     margin-top: 8px;
     padding-top: 8px;
     border-top: 1px solid var(--border);
+  }
+
+  /* a pattern with no controls opens straight onto ProjectionRow, which
+     draws its own hairline — two of them 10 px apart is the tell */
+  .expand.bare {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: none;
   }
 
   .dur-edit {

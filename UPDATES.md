@@ -19,10 +19,10 @@ echoes `"proj":"x"` only when an item overrides. docs/api.md carries the
 grammar and the practical item budget (~270 values-free items in the 4 KiB
 body, ~60 with values, ~45 with three sliders and a projection each).
 
-Firmware cost: **+544 B** on `c6-devkit` + `hosted-ui` (the tightest shipped
-image, 3.39 % of the OTA slot free), +832 B on `athom-music`; `.stack` on
-pixelblaze-v3 26,876 → 26,812 B, `tools/stack-check.sh` clean at both
-profiles. It is sub-kilobyte because #473 already linked the projection plan
+Firmware cost: **+928 B** on `c6-devkit` + `hosted-ui` (the tightest shipped
+image, 4.62 % of the OTA slot free after #501's diet), +784 B on
+`athom-music`; `.stack` on pixelblaze-v3 26,956 → 26,892 B,
+`tools/stack-check.sh` clean at both profiles. It is sub-kilobyte because #473 already linked the projection plan
 machinery unconditionally — no `format!`, no new monomorphizations, the `P`
 line parsed by the same `split_whitespace` walk `C` uses (docs/boards.md).
 
