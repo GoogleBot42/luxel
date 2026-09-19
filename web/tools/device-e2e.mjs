@@ -2081,7 +2081,9 @@ try {
         status: e.querySelector(".st2")?.textContent?.trim() ?? "",
       })),
     );
-    check("settings: the Advanced list has all eight rows", rows.length >= 7, `${rows.length} rows`);
+    // seven unconditional rows here; Panel driver is the caps-gated eighth
+    // and belongs to the HUB75 fixture below
+    check("settings: the Advanced list carries every unconditional row", rows.length === 7, `${rows.length} rows`);
     check(
       "settings: every Advanced row starts collapsed",
       rows.every((r) => !r.open),
