@@ -2,36 +2,45 @@
   // WiFi provisioning + the one-boot setup access point. Both reboot the
   // device, so both confirm first.
   import { device, wifiForm, wifiSource, wifiSsid } from "../stores/device";
+  import { confirm } from "../stores/dialog";
   import { note, notes } from "../stores/notify";
 
   /** Save WiFi creds — the device stores them and reboots to apply. */
-  function saveWifi(): void {
+  async function saveWifi(): Promise<void> {
     const ssid = $wifiForm.ssid.trim();
     if (!ssid) return;
-    if (!window.confirm(`Save WiFi and reboot the device to join "${ssid}"?`)) return;
-    void (async () => {
-      note("wifi", "saving…");
-      const r = await $device?.setWifi(ssid, $wifiForm.password);
-      if (r?.ok) {
-        note("wifi", "saved — the device is rebooting to join the new network");
-        wifiSsid.set(ssid);
-        wifiSource.set("flash");
-      } else {
-        note("wifi", r?.error ? `failed: ${r.error}` : "save failed");
-      }
-    })();
+    const ok = await confirm({
+      title: "Save WiFi and reboot?",
+      body: `The credentials are stored in flash and the device joins "${ssid}" on the next boot. If they are wrong it comes back as an open setup access point.`,
+      confirmLabel: "Save & reboot",
+      reboot: true,
+    });
+    if (!ok) return;
+    note("wifi", "saving…");
+    const r = await $device?.setWifi(ssid, $wifiForm.password);
+    if (r?.ok) {
+      note("wifi", "saved — the device is rebooting to join the new network");
+      wifiSsid.set(ssid);
+      wifiSource.set("flash");
+    } else {
+      note("wifi", r?.error ? `failed: ${r.error}` : "save failed");
+    }
   }
 
-  function startApMode(): void {
-    if (!window.confirm("Reboot the device into its setup access point? It leaves this network for one boot (rejoin it by saving WiFi from the AP, or just reboot it again).")) return;
-    void (async () => {
-      const r = await $device?.startApMode();
-      note(
-        "ap",
-        r?.ok ? 'rebooting into AP "luxel-…" — connect to it at 192.168.4.1' : "failed",
-        8000,
-      );
-    })();
+  async function startApMode(): Promise<void> {
+    const ok = await confirm({
+      title: "Reboot into the setup access point?",
+      body: "The device leaves this network for one boot and comes back as an open AP (luxel-…, http://192.168.4.1/). Rejoin this network by saving WiFi from the AP, or just reboot it again.",
+      confirmLabel: "Reboot into AP",
+      reboot: true,
+    });
+    if (!ok) return;
+    const r = await $device?.startApMode();
+    note(
+      "ap",
+      r?.ok ? 'rebooting into AP "luxel-…" — connect to it at 192.168.4.1' : "failed",
+      8000,
+    );
   }
 </script>
 
@@ -65,7 +74,7 @@
       class="primary"
       data-role="wifi-save"
       disabled={!$device || !$wifiForm.ssid.trim()}
-      on:click={saveWifi}
+      on:click={() => void saveWifi()}
     >
       save &amp; reboot
     </button>
@@ -78,7 +87,7 @@
     where this same page provisions it.
   </p>
   <div class="field">
-    <button data-role="apmode" on:click={startApMode}>reboot into setup AP</button>
+    <button data-role="apmode" on:click={() => void startApMode()}>reboot into setup AP</button>
     <span class="dim">
       one boot only — good for re-provisioning; it comes back as a station afterwards
     </span>

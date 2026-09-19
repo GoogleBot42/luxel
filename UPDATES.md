@@ -1,5 +1,62 @@
 # Update log
 
+## 2026-09-19 (later still²) — web v2 A11: in-app dialogs (#472) + one E2E_PORT block (#496)
+
+**#472.** The eight `window.prompt`/`window.confirm` call sites are gone; there
+are no native dialogs left anywhere under `web/src`. One primitive replaces
+them: `stores/dialog.ts` with promise-returning `confirm({title, body,
+confirmLabel, danger, reboot})` and `promptText({title, label, initial,
+validate})`, rendered by a single `components/Dialog.svelte` mounted once per
+app entry (the shell, and `flash/Flash.svelte` for the installer). A call site
+reads `if (!(await confirm(…))) return;`, which is what makes it testable.
+
+Converted: save-pattern naming (playground + device), the two delete
+confirmations, playlist clear, WiFi save, setup-AP, the strip data pin, the
+share-link clipboard fallback, and the installer's wrong-image guard. The
+three reboot-requiring actions now carry the standing "the device reboots to
+apply this" line (proposal §5.3) instead of burying it in prose, and the two
+deletes plus playlist-clear read as destructive. Nothing is disabled: an empty
+name keeps the dialog open with the reason shown (§5.7). Escape cancels, Enter
+confirms, Tab is trapped in the panel, focus returns where it was, and under
+420 px the buttons stack full-width with the primary on top (D9). Naming stays
+a one-line `promptText` call so A7 (#468) can lift it into the inline-editable
+header without touching the save path.
+
+**#496.** Every port any e2e harness binds now derives from one knob. `E2E_PORT`
+is the base of a 100-port block owned by a single run, and `web/tools/e2e-common.mjs`
+holds the whole offset table (web previews +0/+2/+4/+6/+8, mirrors +20…+26,
++30, +40/+41, sync beacon +42, DDP/sACN +43/+44, fake-wled +50, lna +60/+61).
+Before this, `E2E_PORT` moved only the `vite preview` server while every mirror
+port was a literal (`const DEV_PORT = 8723`), so a second session either died
+on `Address already in use` or — the bad case — pointed its browser at the
+other session's mirror and passed. The default base 4179 keeps the old
+defaults of e2e/device-e2e/flash-e2e. Two sessions now only need `E2E_PORT`
+values 100 apart.
+
+The last global ports were the network-input listeners, fixed by their
+protocols (DDP 4048, sACN 5568) and therefore stealable across sessions —
+verified by watching an orphan mirror from another worktree break this run's
+netin checks. `luxel serve` gained `--ddp-port` / `--e131-port`
+(`netin_listener` now takes the protocol rather than inferring it from the
+port); the harness gives the mirror under test this run's own pair and starts
+every other mirror with `NO_NETIN` (`--ddp-port 0 --e131-port 0`, an ephemeral
+bind), which also removes the "bind failed; network input off" noise.
+
+Harnesses: both `page.on("dialog")` handlers deleted — their absence is now the
+guard, since a native dialog would hang the run. `e2e-common.mjs` exports the
+driver (`waitDialog`/`acceptDialog`/`cancelDialog`/`dialogTitle`) and the
+harnesses cover naming (Ctrl+S and the toolbar), the cancel path (Escape,
+nothing saved), empty-name validation, 390-px layout, both delete
+confirmations cancelled-then-accepted, the WiFi reboot confirm cancelled (the
+device is not reconfigured) then accepted, and the installer's mismatch guard.
+
+Verified: `e2e.mjs`, `device-e2e.mjs`, `maxpixels-e2e.mjs`, `sync-e2e.mjs`,
+`flash-e2e.mjs` all green in real chromium, `npm test` (36), `npm run build`
+(`dist/index.html` and `dist/flash.html` still one script + one stylesheet, no
+modulepreload), `tools/ci.sh` with `CI_SKIP=firmware`. Isolation was checked by
+running two `device-e2e.mjs` instances concurrently at `E2E_PORT` 4600 and
+4700 — both passed. Screenshots of each dialog kind at 1400 px and 390 px.
+
 ## 2026-09-19 (later still) — the playground runs the device output chain (#466)
 
 `apply_outpipe` — ~90 lines in `firmware/src/main.rs` over functions that

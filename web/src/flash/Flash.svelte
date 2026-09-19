@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import Dialog from "../components/Dialog.svelte";
   import {
     FLASHABLE_CHIP_NAMES,
     isFlashableChip,
@@ -17,6 +18,7 @@
     type Probe,
     type WaitProgress,
   } from "./lib/device";
+  import { confirm } from "../stores/dialog";
 
   // ── step 1: firmware source ──
   let source: FirmwareSource | null = null;
@@ -99,11 +101,15 @@
     }
     // wrong-board images brick nothing (the boot guard rolls back), but
     // catch the obvious slip before it costs a recovery cycle
-    if (
-      f.name !== b.file &&
-      !confirm(`selected "${f.name}" but the ${b.name} image is "${b.file}" — flash anyway?`)
-    )
-      return null;
+    if (f.name !== b.file) {
+      const ok = await confirm({
+        title: "That file name doesn't match the board",
+        body: `You picked "${f.name}", but the ${b.name} image is "${b.file}". A wrong image doesn't brick the board — the boot guard rolls back — but it costs a recovery cycle.`,
+        confirmLabel: "Flash anyway",
+        danger: true,
+      });
+      if (!ok) return null;
+    }
     return f;
   }
 
@@ -432,6 +438,9 @@
     ESP32 chips have release images, but no one-click path yet.
   </footer>
 </main>
+
+<!-- the one modal host for this entry (stores/dialog.ts) -->
+<Dialog />
 
 <style>
   main {

@@ -1,9 +1,10 @@
 // One-off diagnostics for the typing + controls bugs.
 import { execSync, spawn } from "node:child_process";
 import puppeteer from "puppeteer-core";
+import { PORT as E2E } from "./e2e-common.mjs";
 
 const CHROMIUM = execSync("command -v chromium", { encoding: "utf8" }).trim();
-const server = spawn("npx", ["vite", "preview", "--port", "4181", "--strictPort"], {
+const server = spawn("npx", ["vite", "preview", "--port", String(E2E.web.debug), "--strictPort"], {
   stdio: "ignore",
 });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -17,7 +18,7 @@ const browser = await puppeteer.launch({
 const page = await browser.newPage();
 page.on("console", (m) => console.log("console:", m.type(), m.text()));
 page.on("pageerror", (e) => console.log("PAGEERROR:", String(e)));
-await page.goto("http://localhost:4181/", { waitUntil: "networkidle0" });
+await page.goto(`http://localhost:${E2E.web.debug}/`, { waitUntil: "networkidle0" });
 await page.waitForSelector(".cm-content");
 await sleep(800);
 

@@ -86,6 +86,7 @@ are documented once in [docs/api.md](api.md), not here.
 | `web/tools/sync-e2e.mjs` | Two mirrors over loopback UDP: leader/follower clock convergence, sensor relay, pattern adoption via `/api/pattern.lxp`. |
 | `web/tools/coldload.mjs` | Cold-load soak against a REAL device: `node tools/coldload.mjs <url> [N]` launches N fresh-profile chromiums (cache off) and requires full device-mode boot with zero failed requests — the acceptance check for the device web pool (3 sockets default, 2 small-chip). `TRACE=1` prints per-request timelines on clean loads too. |
 | `web/tools/lxp.mjs` | Node-side pattern compiler for scripts: loads the built `luxel.wasm`, exports `compile()` / `envelope()` / `lxpBody()` — how anything outside a browser produces the LXP1 envelopes the device API takes. |
+| `web/tools/e2e-common.mjs` | Shared harness module, imported by every e2e script. **The port plan (Gitea #496):** `E2E_PORT` is the base of a **100-port block owned by one run**, and every port any harness binds is `E2E_PORT + <fixed offset>` — nothing is a literal any more. Offsets: web previews `+0` e2e, `+2` device-e2e, `+4` flash-e2e, `+6` maxpixels-e2e, `+8` debug.mjs; mirrors `+20` device-e2e main, `+21` tight, `+22` loaded, `+23` loaded-panel, `+24` panel, `+25` map, `+26` slow, `+30` maxpixels, `+40`/`+41` sync A/B; `+42` sync beacon, `+43`/`+44` DDP/sACN, `+50` fake-wled, `+60`/`+61` lna-e2e https/http. Default base 4179 (block 4179–4279), which keeps the old defaults of e2e (4179), device-e2e (4181) and flash-e2e (4183). **Two concurrent sessions just need `E2E_PORT` values 100 apart — use a multiple of 100 (4200, 4300, …).** Also exports `NO_NETIN` (`--ddp-port 0 --e131-port 0`, for every mirror that is not the one under network-input test) and the **in-app dialog driver** (`waitDialog` / `acceptDialog(page, text?)` / `cancelDialog` / `dialogTitle`) — since Gitea #472 naming and confirmations are `components/Dialog.svelte`, so a harness must never install a `page.on("dialog")` handler. |
 | `web/tools/gen-gallery.mjs` | Builds `public/gallery.json` from the corpus, filtered to patterns that compile clean per the last corpus report. Runs as part of `npm run build`. |
 | `web/tools/pack-assets.mjs` | Packs `dist/` into the LUXA flash archive `deploy.sh` uploads. |
 | `web/tools/flash-e2e.mjs` | Installer-page (flash.html) e2e in real chromium against `fake-wled.mjs`: bundled + github firmware-source modes, CORS-less and CORS-full WLED, esp8266 stop, full flash→reboot→assets flow. No hardware. |
@@ -112,6 +113,12 @@ grid and advertises panel `caps` (`panel:true`, `strip_driver:false`,
 `power_cap:false`, `layers:2`), which is what the v2 Settings page's
 capability gating reads. It is the flag form of what
 `web/tools/maxpixels-e2e.mjs` does by intercepting `/api/status` in the page.
+
+`--ddp-port` / `--e131-port` move the network-input listeners off the standard
+DDP 4048 / sACN 5568 (Gitea #496). Those ports are global, so a mirror left
+running by another session owns them for everyone; the e2e harnesses give the
+mirror under test this run's own pair and pass `0` (an ephemeral port) to every
+other mirror they start.
 
 `run`/`bench` also take `--proj MODE` (`index|x|y|z|xy|xz|yz`, Gitea #473) —
 the projection for a pattern whose dimensionality differs from the rig's. It

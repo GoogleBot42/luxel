@@ -28,17 +28,19 @@ and `node_modules`, and the harnesses below assume a real `npm run build` succee
    like a real regression (cost three runs and a stash-and-rebuild on 2026-09-08 before
    the cwd was the answer). Run `cd web && node tools/e2e.mjs [screenshot-dir]`:
    - `node tools/e2e.mjs [screenshot-dir]` — playground-only, no device. Starts its own
-     `vite preview` on `E2E_PORT` (default 4179). Covers the pattern library, editor,
+     `vite preview` on `E2E_PORT + 0` (default 4179). Covers the pattern library, editor,
      compile-error surfacing, tile spinners. Screenshots land in `screenshot-dir`
      (default `/tmp`) as `e2e-N-*.png`.
    - `node tools/device-e2e.mjs` — device-mode. Builds `luxel-cli`, starts `luxel serve`
-     (the native mirror of the firmware API, fixed port 8723) as a stand-in device, then
-     drives the playground on `E2E_PORT` (default 4181) pointed at it via `?device=`.
+     (the native mirror of the firmware API, on `E2E_PORT + 20`) as a stand-in device,
+     then drives the playground on `E2E_PORT + 2` pointed at it via `?device=`.
      Covers connect, editor sync from device, live-code push, preview streaming,
      controls/vars, compile errors, disconnect.
-   - `node tools/sync-e2e.mjs` — two native mirrors over loopback UDP (fixed ports
-     8731/8732), no browser: leader/follower clock convergence and sensor relay. Use
-     this only when the change touches multi-device sync, not general UI work.
+   - `node tools/sync-e2e.mjs` — two native mirrors over loopback UDP
+     (`E2E_PORT + 40/41`), no browser: leader/follower clock convergence and sensor
+     relay. Use this only when the change touches multi-device sync, not general UI work.
+   Since #496 every port any harness binds is `E2E_PORT + <fixed offset>` from the table
+   in `web/tools/e2e-common.mjs` (also in docs/tools.md) — one 100-port block per run.
    All three build `luxel-cli` (`cargo build -q -p luxel-cli`) and/or the wasm engine
    themselves — no separate build step needed beyond `npm run build` for the wasm/gallery
    assets `e2e.mjs`/`device-e2e.mjs` serve.
@@ -161,11 +163,16 @@ nothing in this container is public.
 - `e2e.mjs`/`device-e2e.mjs` do NOT rebuild the app — a check failing after an
   `App.svelte` edit without `npm run build` reads exactly like a real bug (two false
   failures on 2026-09-07). Build first, every time.
-- `device-e2e.mjs` dying mid-suite with `ECONNREFUSED 127.0.0.1:8723` — its mirror port
-  is hardcoded (no `E2E_PORT` for it), so a concurrent session's `luxel serve`, or your
-  own orphan from a previous aborted run, takes it. `ss -tlnp | grep 8723` then
-  `ls -l /proc/<pid>/cwd` tells you whose it is; kill your own and re-run before
+- `device-e2e.mjs` dying mid-suite with `ECONNREFUSED` on its mirror — since #496 the
+  mirror is `E2E_PORT + 20`, so this now means your OWN orphan from an aborted run (two
+  sessions with different `E2E_PORT` can no longer collide). `ss -tlnp | grep <port>`
+  then `ls -l /proc/<pid>/cwd` tells you whose it is; kill your own and re-run before
   suspecting the change.
+- A `page.click` that hangs forever, or checks failing right after a save/delete/WiFi
+  action — naming and confirmations are in-app dialogs (#472). Drive them with
+  `acceptDialog`/`cancelDialog` from `web/tools/e2e-common.mjs`; never install a
+  `page.on("dialog")` handler (a native prompt/confirm reaching the browser is itself
+  the regression).
 - A `page.click` on a Settings-tab field throwing "Node is either not clickable or not
   an Element" — the settings panel is rendered into the DOM even while the editor is
   open (`hidden={editing || tab !== "settings"}`), so the element *exists* and

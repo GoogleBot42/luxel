@@ -8,15 +8,23 @@
 import { execSync, spawn } from "node:child_process";
 import dgram from "node:dgram";
 import puppeteer from "puppeteer-core";
+import {
+  acceptDialog,
+  cancelDialog,
+  dialogTitle,
+  NO_NETIN,
+  PORT as E2E,
+  waitDialog,
+} from "./e2e-common.mjs";
 import { lxpBody } from "./lxp.mjs";
 
 const CHROMIUM =
   process.env.CHROMIUM ?? execSync("command -v chromium", { encoding: "utf8" }).trim();
 
-const PORT = Number(process.env.E2E_PORT ?? 4181);
+const PORT = E2E.web.device; // E2E_PORT + 2 (see tools/e2e-common.mjs)
 /** Where screenshots land (matching e2e.mjs's convention). */
 const shotDir = process.argv[2] ?? "/tmp";
-const DEV_PORT = 8723;
+const DEV_PORT = E2E.mirror.device; // E2E_PORT + 20
 const DEV = `http://127.0.0.1:${DEV_PORT}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -30,7 +38,21 @@ execSync("cargo build -q -p luxel-cli", { stdio: "inherit", cwd: ".." });
 // covers the fix; a fast mirror hides the race entirely.
 const device = spawn(
   "../target/debug/luxel",
-  ["serve", "--port", String(DEV_PORT), "--pixels", "120", "--fps", "24"],
+  [
+    "serve",
+    "--port",
+    String(DEV_PORT),
+    "--pixels",
+    "120",
+    "--fps",
+    "24",
+    // network-input ports are global (DDP 4048 / sACN 5568) — take this run's
+    // own pair so a concurrent session's mirror does not own them (#496)
+    "--ddp-port",
+    String(E2E.netin.ddp),
+    "--e131-port",
+    String(E2E.netin.e131),
+  ],
   { stdio: ["ignore", "pipe", "inherit"] },
 );
 await new Promise((resolve, reject) => {
@@ -177,11 +199,11 @@ try {
   // on a 64x64 grid preview — the rig is derived from the compiled pattern,
   // and its geometry from the hardware, not from a 16x16 default.
   {
-    const MAP_PORT = DEV_PORT + 11;
+    const MAP_PORT = E2E.mirror.map; // E2E_PORT + 25
     const MAPPED = `http://127.0.0.1:${MAP_PORT}`;
     const mappedDev = spawn(
       "../target/debug/luxel",
-      ["serve", "--port", String(MAP_PORT), "--pixels", "4096"],
+      ["serve", ...NO_NETIN, "--port", String(MAP_PORT), "--pixels", "4096"],
       { stdio: ["ignore", "pipe", "inherit"] },
     );
     await new Promise((resolve, reject) => {
@@ -236,11 +258,11 @@ try {
   // readout that tracks requestAnimationFrame cannot pass this. Its own
   // mirror and page, so the main suite's device keeps its default pace.
   {
-    const SLOW_PORT = DEV_PORT + 12;
+    const SLOW_PORT = E2E.mirror.slow; // E2E_PORT + 26
     const SLOW = `http://127.0.0.1:${SLOW_PORT}`;
     const slowDev = spawn(
       "../target/debug/luxel",
-      ["serve", "--port", String(SLOW_PORT), "--pixels", "120", "--fps", "24"],
+      ["serve", ...NO_NETIN, "--port", String(SLOW_PORT), "--pixels", "120", "--fps", "24"],
       { stdio: ["ignore", "pipe", "inherit"] },
     );
     await new Promise((resolve, reject) => {
@@ -289,12 +311,13 @@ try {
   // with `rescan_hz` as its ceiling — the readout must prefer it over `fps`
   // and say so. The mirror impersonates one (it drives no panel).
   {
-    const PANEL_PORT = DEV_PORT + 10;
+    const PANEL_PORT = E2E.mirror.panel; // E2E_PORT + 24
     const PANEL = `http://127.0.0.1:${PANEL_PORT}`;
     const panelDev = spawn(
       "../target/debug/luxel",
       [
         "serve",
+        ...NO_NETIN,
         "--port",
         String(PANEL_PORT),
         "--pixels",
@@ -530,13 +553,10 @@ try {
   // restore a valid pattern in the editor first (the error test left junk)
   await setEditor(page, "export function render(index) { hsv(index / pixelCount, 1, 0.4) }");
   await sleep(900);
-  page.on("dialog", (d) => {
-    if (d.message().includes("save pattern")) return void d.accept("device kept");
-    if (d.message().includes("delete")) return void d.accept();
-    if (d.message().includes("clear")) return void d.accept();
-    if (d.message().includes("WiFi")) return void d.accept();
-    void d.dismiss();
-  });
+  // No `page.on("dialog")` handler: naming and confirmations are in-app
+  // dialogs since Gitea #472, driven through their data-roles below. A native
+  // prompt/confirm reaching the browser would hang the run — which is the
+  // regression this absence guards.
 
   // WiFi settings form (the panel is in the DOM even while the editor is open)
   const w0 = await (await fetch(`${DEV}/api/wifi`)).json();
@@ -551,6 +571,28 @@ try {
   });
   await sleep(100);
   await page.$eval('[data-role="wifi-save"]', (el) => el.click()); // panel is hidden; click directly
+  // reboot-requiring action → an in-app confirmation that says so (#472)
+  await waitDialog(page);
+  check("wifi: save opens a reboot confirmation", (await dialogTitle(page)) === "Save WiFi and reboot?");
+  check(
+    "wifi: the reboot dialog is labelled as rebooting",
+    (await page.$('[data-role="dialog-reboot"]')) !== null,
+  );
+  await page.screenshot({ path: `${shotDir}/device-e2e-dialog-reboot.png` });
+  await page.setViewport({ width: 390, height: 780 });
+  await sleep(200);
+  await page.screenshot({ path: `${shotDir}/device-e2e-dialog-reboot-390.png` });
+  await page.setViewport({ width: 1400, height: 900 });
+  await sleep(200);
+  // cancel first: the device must NOT be reconfigured
+  await cancelDialog(page);
+  await sleep(300);
+  check(
+    "wifi: a cancelled confirmation writes nothing",
+    (await (await fetch(`${DEV}/api/wifi`)).json()).ssid !== "TestNet",
+  );
+  await page.$eval('[data-role="wifi-save"]', (el) => el.click());
+  await acceptDialog(page);
   await sleep(500);
   check(
     "wifi: save stores the SSID on the device",
@@ -774,7 +816,7 @@ try {
     ddp.writeUInt16BE(3, 8); // length
     ddp.set([1, 2, 3], 10); // first pixel = rgb(1,2,3)
     for (let i = 0; i < 4; i++) {
-      await new Promise((r) => udp.send(ddp, 4048, "127.0.0.1", r));
+      await new Promise((r) => udp.send(ddp, E2E.netin.ddp, "127.0.0.1", r));
       await sleep(80);
     }
     udp.close();
@@ -793,7 +835,14 @@ try {
     check("netin: pattern resumes after timeout", stIdle.live === null, JSON.stringify(stIdle));
   }
 
-  await page.click('[data-role="save"]'); // save (editor header) → stores on the device
+  // save (editor toolbar) → in-app naming dialog → stores on the device
+  await page.click('[data-role="save"]');
+  await waitDialog(page);
+  check(
+    "library: save names it in an in-app dialog",
+    (await dialogTitle(page)) === "Save pattern on the device",
+  );
+  await acceptDialog(page, "device kept");
   await sleep(900);
   const apiList = await (await fetch(`${DEV}/api/patterns`)).json();
   check(
@@ -909,10 +958,27 @@ try {
   const activated = await (await fetch(`${DEV}/api/pattern`)).text();
   check("library: selecting a device pattern activates it", activated.includes("0.4"));
   check("library: editor shows the stored source", (await page.$eval(".cm-content", (el) => el.textContent ?? "")).includes("0.4"));
-  // delete it from the editor
+  // delete it from the editor — an in-app danger confirmation (Gitea #472),
+  // cancelled once (nothing happens) before it is accepted
   const delBtn = await page.$('[data-role="delete"]');
   check("library: delete button present", delBtn !== null);
   await delBtn?.click();
+  await waitDialog(page);
+  check(
+    "library: delete asks with a danger dialog",
+    (await dialogTitle(page)) === "Delete pattern from the device?" &&
+      (await page.$eval('[data-role="dialog-confirm"]', (el) => el.className)).includes("danger"),
+  );
+  await page.screenshot({ path: `${shotDir}/device-e2e-dialog-delete.png` });
+  await cancelDialog(page);
+  await sleep(600);
+  check("library: a cancelled delete sends no request", seenReqs.length === 0, seenReqs.join(","));
+  check(
+    "library: a cancelled delete keeps the pattern",
+    ((await (await fetch(`${DEV}/api/patterns`)).json()).patterns ?? []).length === 1,
+  );
+  await page.click('[data-role="delete"]');
+  await acceptDialog(page);
   await sleep(900);
   check("library: DELETE request was sent", seenReqs.length > 0, seenReqs.join(","));
   const apiAfter = await (await fetch(`${DEV}/api/patterns`)).json();
@@ -959,7 +1025,8 @@ try {
 
   // clean copy → defer to the device. Save (clean), change the device
   // out-of-band, reload: the editor must open the RUNNING pattern, not resume.
-  await page.click('[data-role="save"]'); // dialog handler accepts as "device kept"
+  await page.click('[data-role="save"]');
+  await acceptDialog(page, "device kept");
   await sleep(1000);
   await fetch(`${DEV}/api/code`, {
     method: "POST",
@@ -981,7 +1048,8 @@ try {
   // params, set durations, play, advance
   await setEditor(page, "export function sliderHue(h) { g = h } export function render(index) { hsv(g + index / pixelCount, 1, 1) }");
   await sleep(900);
-  await page.click('[data-role="save"]'); // dialog handler saves as "device kept"
+  await page.click('[data-role="save"]');
+  await acceptDialog(page, "device kept");
   await sleep(900);
   const addBtn = await page.$('[data-role="add-to-playlist"]');
   check("playlist: add-to-playlist appears for a saved pattern", addBtn !== null);
@@ -1100,7 +1168,8 @@ try {
   const total = await page.$eval('[data-role="pl-total"]', (el) => el.textContent ?? "");
   check("playlist: total run-time shown", /2 items/.test(total) && /7s/.test(total), total.trim());
   // clear empties the playlist
-  await page.click('[data-role="pl-clear"]'); // dialog handler accepts
+  await page.click('[data-role="pl-clear"]');
+  await acceptDialog(page);
   await sleep(500);
   check(
     "playlist: clear empties it",
@@ -1189,11 +1258,11 @@ try {
   // 10 KB load headroom (20 KB runtime floor) with the array arena clamped at
   // its 16 KB minimum — which puts all four verdicts within reach of a
   // one-line pattern. See crates/luxel-core/src/budget.rs.
-  const TIGHT_PORT = DEV_PORT + 1;
+  const TIGHT_PORT = E2E.mirror.tight; // E2E_PORT + 21
   const TIGHT = `http://127.0.0.1:${TIGHT_PORT}`;
   const tightDev = spawn(
     "../target/debug/luxel",
-    ["serve", "--port", String(TIGHT_PORT), "--pixels", "120", "--heap-free", "30720"],
+    ["serve", ...NO_NETIN, "--port", String(TIGHT_PORT), "--pixels", "120", "--heap-free", "30720"],
     { stdio: ["ignore", "pipe", "inherit"] },
   );
   await new Promise((resolve, reject) => {
@@ -1276,12 +1345,13 @@ try {
     // the starved mirror above correctly calls "too large", fits here. This
     // is the regression Jeremy reported: with a fat pattern loaded, heap_free
     // reads low and the editor warned about patterns that load fine.
-    const LOADED_PORT = TIGHT_PORT + 1;
+    const LOADED_PORT = E2E.mirror.loaded; // E2E_PORT + 22
     const LOADED = `http://127.0.0.1:${LOADED_PORT}`;
     const loadedDev = spawn(
       "../target/debug/luxel",
       [
         "serve",
+        ...NO_NETIN,
         "--port",
         String(LOADED_PORT),
         "--pixels",
@@ -1331,7 +1401,7 @@ try {
     // black with the editor saying nothing, because the capacity model
     // discarded the element-ledger vmerr and the device's own vmerr was
     // overwritten by the "indexing a non-array value" cascade one frame later.
-    const PANEL_PORT = LOADED_PORT + 1;
+    const PANEL_PORT = E2E.mirror.loadedPanel; // E2E_PORT + 23
     const PANEL = `http://127.0.0.1:${PANEL_PORT}`;
     const panelDev = spawn(
       "../target/debug/luxel",
@@ -1341,6 +1411,7 @@ try {
       // check unfalsifiable (Gitea #495).
       [
         "serve",
+        ...NO_NETIN,
         "--port",
         String(PANEL_PORT),
         "--board",

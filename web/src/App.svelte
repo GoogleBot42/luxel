@@ -4,6 +4,7 @@
   // the browser-blocked banner. Everything else lives in ./stores (state) and
   // ./pages (surfaces) — see docs/web-architecture.md.
   import { onDestroy, onMount } from "svelte";
+  import Dialog from "./components/Dialog.svelte";
   import { gatedFetch } from "./lib/fetchgate";
   import DevicePatterns from "./pages/DevicePatterns.svelte";
   import Editor from "./pages/Editor.svelte";
@@ -300,6 +301,9 @@
       </ul>
     </div>
   {/if}
+
+  <!-- the one modal host: naming and confirmations (stores/dialog.ts) -->
+  <Dialog />
 
   <Editor bind:this={editor} active={editing} on:open={() => (editing = true)} />
 

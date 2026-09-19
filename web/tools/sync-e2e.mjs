@@ -5,11 +5,12 @@
 // Usage (from web/): node tools/sync-e2e.mjs
 
 import { execSync, spawn } from "node:child_process";
+import { NO_NETIN, PORT as E2E } from "./e2e-common.mjs";
 import { lxpBody } from "./lxp.mjs";
 
-const A_PORT = 8731;
-const B_PORT = 8732;
-const SYNC_PORT = 14049;
+const A_PORT = E2E.mirror.syncA; // E2E_PORT + 40 (see tools/e2e-common.mjs)
+const B_PORT = E2E.mirror.syncB; // E2E_PORT + 41
+const SYNC_PORT = E2E.sync; // E2E_PORT + 42
 const A = `http://127.0.0.1:${A_PORT}`;
 const B = `http://127.0.0.1:${B_PORT}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -18,7 +19,7 @@ execSync("cargo build -q -p luxel-cli", { stdio: "inherit", cwd: ".." });
 const mirror = (port, extra) =>
   spawn(
     "../target/debug/luxel",
-    ["serve", "--port", String(port), "--pixels", "60", ...extra],
+    ["serve", ...NO_NETIN, "--port", String(port), "--pixels", "60", ...extra],
     { stdio: ["ignore", "pipe", "inherit"] },
   );
 const started = (p) =>
