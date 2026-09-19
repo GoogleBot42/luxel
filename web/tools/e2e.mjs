@@ -81,11 +81,37 @@ async function pasteEditor(page, text) {
   await sleep(500);
 }
 
+// The playground's Layout (Gitea #463): the header chip chooses it, the
+// preview's `data-shape` and the chip's label report it. The old rig
+// dropdown / px / W×H fields in the playback bar are gone — they were the
+// rig config, and geometry is not per-pattern any more.
 const rig = async (page) => ({
-  kind: await page.$eval('[data-role="layout-kind"]', (el) => el.value),
-  w: await page.$eval('[data-role="layout-w"]', (el) => el.value).catch(() => ""),
-  h: await page.$eval('[data-role="layout-h"]', (el) => el.value).catch(() => ""),
+  shape: await page.$eval('[data-role="preview"]', (el) => el.dataset.shape ?? ""),
+  label: await page
+    .$eval('[data-role="preview-as-label"]', (el) => (el.textContent ?? "").trim())
+    .catch(() => ""),
 });
+
+/** Pick a "Preview as" option, optionally typing its numbers first. */
+async function previewAs(page, choice, nums = {}) {
+  await page.click('[data-role="preview-as"]');
+  await page.waitForSelector('[data-role="preview-as-menu"]', { timeout: 3000 });
+  for (const [role, value] of Object.entries(nums)) {
+    await page.$eval(
+      `[data-role="preview-as-${role}"]`,
+      (el, v) => {
+        el.value = String(v);
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      },
+      value,
+    );
+    await sleep(150);
+  }
+  await page.click(`[data-role="preview-as-${choice}"]`);
+  await sleep(150);
+  await page.click('[data-role="fps"]'); // click away to close the popover
+  await sleep(400);
+}
 
 try {
   const page = await browser.newPage();
@@ -457,8 +483,7 @@ try {
     page,
     "export var zoom = 0.45\nexport function sliderZoom(v) { zoom = v }  //# min=0.1 max=1.5 default=0.45\nexport function render2D(index, x, y) { hsv(x * zoom, 1, 1) }",
   );
-  await page.select('[data-role="layout-kind"]', "grid");
-  await sleep(500);
+  await previewAs(page, "matrix", { w: 16, h: 16 });
   const [mn, mx, val] = await page.$eval('input[type="range"]', (el) => [el.min, el.max, el.value]);
   check("//# hint bounds the slider", mn === "0.1" && mx === "1.5", `min=${mn} max=${mx}`);
   check("//# default applied", Number(val) === 0.45, val);
@@ -467,15 +492,19 @@ try {
     return d.some((v, i) => i % 4 !== 3 && v > 0);
   });
   check("2D grid preview renders", gridLit);
-  // bump grid width via the layout input
-  await page.$eval('[data-role="layout-w"]', (el) => {
-    el.value = "24";
-    el.dispatchEvent(new Event("change", { bubbles: true }));
-  });
-  await sleep(400);
+  check(
+    "the Preview-as chip states the layout",
+    (await rig(page)).label === "16×16 matrix",
+    (await rig(page)).label,
+  );
+  // bump the matrix width from the chip
+  await previewAs(page, "matrix", { w: 24 });
   check("layout edit resizes the render", (await page.$eval(".grid", (c) => c.width)) === 24);
-  await page.select('[data-role="layout-kind"]', "strip");
-  await sleep(300);
+  await previewAs(page, "auto");
+  check("back to Auto follows the pattern again", (await rig(page)).label === "16×16 matrix");
+  await setEditor(page, "export function render(index) { hsv(index / pixelCount, 1, 1) }");
+  await sleep(400);
+  check("Auto: a 1D pattern is a bar again", (await rig(page)).shape === "bar");
   await page.screenshot({ path: `${shotDir}/e2e-3-controls.png` });
 
   // ── 7. pause freezes the preview; vars watcher lists exports ──
@@ -565,14 +594,19 @@ try {
   check("shared pattern compiles", (await page2.$(".banner.error")) === null);
   await page2.close();
 
-  // ── 10. map: enable via the "2D map" layout option; it's a debuggable Luxel program ──
-  await page.select('[data-role="layout-kind"]', "map");
+  // ── 10. map: the "Custom map program" Layout choice; a debuggable program ──
+  await previewAs(page, "map");
   await page.waitForSelector('[data-role="subtab-map"]', { timeout: 3000 });
   await sleep(700);
   check("2D map reveals the map sub-tab", (await page.$('[data-role="subtab-map"]')) !== null);
   const mapErr = (await page.$('[data-role="map-error"]')) || (await page.$('[data-role="map-compile-error"]'));
   check("map runs without error", mapErr === null);
-  check("map installs (px mapped)", (await page.$eval('[data-role="map-badge"]', (el) => el.textContent ?? "")).includes("px mapped"));
+  check(
+    "map installs (the Layout is the map's points)",
+    (await rig(page)).label.includes("custom map"),
+    (await rig(page)).label,
+  );
+  check("map layout is a scatter", (await rig(page)).shape === "scatter");
   const mapLit = await page.$eval(".map", (c) => {
     const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
     let n = 0;
@@ -624,26 +658,40 @@ try {
   check("3D map auto-rotates", m3a !== m3b);
   await page.screenshot({ path: `${shotDir}/e2e-4b-map3d.png` });
 
-  // ── 10c. share links carry the map program (#pj=) ──
+  // ── 10c. share links carry the PATTERN only; old map links still open ──
+  // A map is the Layout's, not the pattern's (#463), so a link made today is
+  // `#p=` even with a custom map installed. Links already out there carry one
+  // (`#pj=`) and must keep working — built by hand here, uncompressed, since
+  // nothing writes that form any more.
   await page.click('[data-role="share"]');
   await sleep(400);
   const shareMapUrl = await page.url();
-  check("share with a map writes #pj=", /#pj(s)?=/.test(shareMapUrl), shareMapUrl.slice(-24));
+  check("share with a map still writes #p= (no map inside)", /#p(s)?=/.test(shareMapUrl), shareMapUrl.slice(-24));
+  check("share no longer writes #pj=", !/#pj/.test(shareMapUrl));
+  const legacy = await page.evaluate(() => {
+    const payload = JSON.stringify({
+      s: "export function render(index) { hsv(index / pixelCount, 1, 1) }",
+      m: "export function render(index) { plot(cos(index/pixelCount*PI2), sin(index/pixelCount*PI2), index/pixelCount - 0.5) }",
+    });
+    const bytes = new TextEncoder().encode(payload);
+    let s = "";
+    for (const v of bytes) s += String.fromCharCode(v);
+    return `#pjs=${btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}`;
+  });
   const page3 = await browser.newPage();
-  await page3.goto(shareMapUrl, { waitUntil: "networkidle0" });
+  await page3.goto(`http://localhost:${PORT}/${legacy}`, { waitUntil: "networkidle0" });
   await page3.waitForSelector(".cm-content");
-  await sleep(1200);
-  const sharedBadge = await page3
-    .$eval('[data-role="map-badge"]', (el) => el.textContent ?? "")
+  await sleep(1500);
+  const sharedLabel = await page3
+    .$eval('[data-role="preview-as-label"]', (el) => (el.textContent ?? "").trim())
     .catch(() => "");
-  check("shared map link restores the mapped layout", sharedBadge.includes("px mapped"), sharedBadge);
-  check("shared map is 3D again (badge)", (await page3.$('[data-role="map-3d"]')) !== null);
+  check("a pre-#463 share link still restores its map", sharedLabel.includes("custom map"), sharedLabel);
+  check("its 3D map is 3D again (badge)", (await page3.$('[data-role="map-3d"]')) !== null);
   await page3.close();
 
   // turning mapping off hides the map sub-tab
-  await page.select('[data-role="layout-kind"]', "strip");
-  await sleep(400);
-  check("choosing strip turns mapping off", (await page.$('[data-role="subtab-map"]')) === null);
+  await previewAs(page, "auto");
+  check("leaving the map layout turns mapping off", (await page.$('[data-role="subtab-map"]')) === null);
 
   // ── 11. library: save (in-app naming dialog), back, reload resumes the copy ──
   await setEditor(page, "export function render(index) { hsv(index / pixelCount, 1, 0.5) }");
@@ -797,21 +845,18 @@ try {
     (await page.$('[data-role="capacity-warning"]')) === null,
   );
 
-  // ---- the rig follows the source, not just the gallery manifest (#372) ----
-  // A render2D pattern reaching the editor by any route gets the grid rig a
-  // gallery pick has always given it; a 1D pattern is left alone; an explicit
-  // pick outranks both.
+  // ---- the Layout: Auto follows the COMPILED pattern, a choice outranks it ----
+  // (Gitea #463, D7. The rig used to be derived once per pattern load and
+  // latched (#372); now Auto tracks the compiled pattern continuously and an
+  // explicit "Preview as" choice is the user's until they change it.)
   await page.click('[data-role="editor-back"]');
   await page.click('[data-role="new-pattern"]');
   await page.waitForSelector('[data-role="editor-back"]');
   await sleep(400);
-  check("rig: a new (render) pattern starts on a strip", (await rig(page)).kind === "strip");
+  check("layout: a new (render) pattern starts on a strip", (await rig(page)).shape === "bar");
 
   await pasteEditor(page, "export function render(index) { hsv(index / pixelCount, 1, 1) }");
-  check(
-    "rig: pasting a render() pattern leaves the strip alone",
-    (await rig(page)).kind === "strip",
-  );
+  check("layout: a render() pattern stays a bar", (await rig(page)).shape === "bar");
 
   // A renderFrame pattern that draws in coordinate space is 2D too, even
   // though it never mentions render2D (the engine's own uses_coordinate_bulk_op).
@@ -820,36 +865,102 @@ try {
     "export function renderFrame() {\n  clear()\n  hsv(0.3, 1, 1)\n  fillCircle(0.5, 0.5, 0.3)\n}",
   );
   check(
-    "rig: a renderFrame pattern drawing in coordinate space gets the grid",
-    (await rig(page)).kind === "grid",
+    "layout: a renderFrame pattern drawing in coordinate space gets the grid",
+    (await rig(page)).shape === "grid",
   );
 
-  // An explicit rig choice for the pattern in the editor outranks the source.
-  await page.select('[data-role="layout-kind"]', "strip");
-  await sleep(400);
+  // An explicit choice outranks the pattern — and now also survives opening
+  // another pattern, because it is the PAGE's layout, not the pattern's.
+  await previewAs(page, "strip", { px: 120 });
   await pasteEditor(page, "export function render2D(index, x, y) { hsv(y, 1, x) }");
-  check(
-    "rig: a hand-picked rig is not overridden by a later paste",
-    (await rig(page)).kind === "strip",
-  );
+  {
+    const r = await rig(page);
+    check(
+      "layout: an explicit Strip choice is not overridden by a 2D pattern",
+      r.shape === "bar" && r.label === "120 px strip",
+      JSON.stringify(r),
+    );
+  }
   await page.screenshot({ path: `${shotDir}/e2e-rig-manual-strip.png` });
 
-  // ...but opening a different pattern is a fresh choice, so the derivation
-  // is back in charge.
   await page.click('[data-role="editor-back"]');
   await page.click('[data-role="new-pattern"]');
   await page.waitForSelector('[data-role="editor-back"]');
   await sleep(400);
   await pasteEditor(page, "export function render2D(index, x, y) { hsv(x, 1, y) }");
+  check(
+    "layout: an explicit choice survives opening another pattern",
+    (await rig(page)).label === "120 px strip",
+    (await rig(page)).label,
+  );
+
+  await previewAs(page, "auto");
   {
     const r = await rig(page);
     check(
-      "rig: pasting a render2D pattern selects the 16x16 grid",
-      r.kind === "grid" && r.w === "16" && r.h === "16",
+      "layout: back on Auto, a render2D pattern gets the 16×16 grid",
+      r.shape === "grid" && r.label === "16×16 matrix",
       JSON.stringify(r),
     );
     await page.screenshot({ path: `${shotDir}/e2e-rig-render2d-grid.png` });
   }
+
+  // ---- device-shaped tiles + captions (the #463 payoff) ----
+  // Under Auto the Library is a mix of bars and squares; under an explicit
+  // Matrix every tile is square and the 1D ones say how they are projected.
+  await page.click('[data-role="editor-back"]');
+  await sleep(600);
+  const autoKinds = await page.$$eval(".tile:not([hidden])", (els) =>
+    els.map((e) => e.dataset.kind),
+  );
+  check(
+    "tiles: Auto gives a mix of bar and grid tiles",
+    autoKinds.includes("bar") && autoKinds.includes("grid"),
+    [...new Set(autoKinds)].join(","),
+  );
+  await page.screenshot({ path: `${shotDir}/e2e-tiles-auto.png` });
+
+  await previewAs(page, "matrix", { w: 64, h: 64 });
+  await page
+    .waitForFunction(
+      () =>
+        [...document.querySelectorAll(".tile:not([hidden])")].length > 0 &&
+        [...document.querySelectorAll(".tile:not([hidden])")]
+          .slice(0, 12)
+          .every((e) => e.dataset.kind === "grid" || e.dataset.kind === ""),
+      { timeout: 10000 },
+    )
+    .catch(() => null);
+  const matrixKinds = await page.$$eval(".tile:not([hidden])", (els) =>
+    els.slice(0, 12).map((e) => e.dataset.kind),
+  );
+  check(
+    "tiles: Preview as 64×64 matrix makes every tile square",
+    matrixKinds.every((k) => k === "grid" || k === ""),
+    [...new Set(matrixKinds)].join(","),
+  );
+  const captioned = await page.$$eval('[data-role="tile-caption"]', (els) =>
+    els.map((e) => (e.textContent ?? "").trim()),
+  );
+  check(
+    "tiles: a 1D pattern on a matrix is captioned",
+    captioned.some((c) => /^1D · /.test(c)),
+    captioned.slice(0, 3).join(" | "),
+  );
+  await page.screenshot({ path: `${shotDir}/e2e-tiles-matrix.png` });
+
+  await previewAs(page, "lattice", { n: 5 });
+  await sleep(1500);
+  const cloudKinds = await page.$$eval(".tile:not([hidden])", (els) =>
+    els.slice(0, 12).map((e) => e.dataset.kind),
+  );
+  check(
+    "tiles: Preview as 3D lattice makes every tile a cloud",
+    cloudKinds.every((k) => k === "cloud" || k === ""),
+    [...new Set(cloudKinds)].join(","),
+  );
+  await page.screenshot({ path: `${shotDir}/e2e-tiles-lattice.png` });
+  await previewAs(page, "auto");
 
   check("no page errors", pageErrors.length === 0, pageErrors.slice(0, 3).join(" | "));
 } finally {

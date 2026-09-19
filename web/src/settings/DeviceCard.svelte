@@ -16,7 +16,7 @@
     protocolOptions,
   } from "../stores/device";
   import { confirm } from "../stores/dialog";
-  import { layout } from "../stores/geometry";
+  import { setPreviewAs } from "../stores/geometry";
   import { note, notes } from "../stores/notify";
   import { previewFps, runtimeError } from "../stores/pattern";
 
@@ -30,9 +30,9 @@
       const r = await $device?.setConfig(n);
       if (r?.ok) {
         devicePixels.set(r.pixels ?? n);
-        // the arrangement resets to a plain strip at the new count (any grid/
-        // map was derived from the old count)
-        layout.set({ kind: "strip", pixels: $devicePixels });
+        // Any shape override was sized from the OLD count, so drop it: the
+        // Layout goes back to following the device (#463).
+        setPreviewAs({ mode: "auto" });
         dispatch("pixelchange");
       } else if (r) {
         deviceError.set(r.error ? `config: ${r.error}` : "config change failed");

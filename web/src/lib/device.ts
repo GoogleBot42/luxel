@@ -27,6 +27,21 @@ export interface DeviceStatus {
    *  a built-in default. Never assume a constant: the whole point of the
    *  field is that the UI clamps to the connected board, not to 2048. */
   max_pixels?: number;
+  /** The engine's EFFECTIVE geometry (Gitea #464) — what the device is
+   *  actually rendering through, which is NOT the installed map whenever the
+   *  engine supplied its own (the fabricated ceil(√n) grid reads
+   *  `source:"default"`). Absent on firmware older than the field, where the
+   *  UI falls back to `/api/map` + `pixels` (see `deviceLayout`).
+   *  docs/api.md "geom". */
+  geom?: {
+    dims: number;
+    regular: boolean;
+    w: number;
+    h: number;
+    source: "user" | "board" | "default";
+    /** What the RUNNING pattern wants (0 = no preference). */
+    pattern_dims: number;
+  };
   vmerr: string | null;
   /** Network input currently driving the strip (DDP/E1.31), if any. */
   live?: "ddp" | "e131" | null;
@@ -63,6 +78,19 @@ export interface DeviceStatus {
   vm_us?: number;
   pipe_us?: number;
   out_us?: number;
+}
+
+/** GET /api/map. */
+export interface DeviceMapStatus {
+  installed: boolean;
+  dims: number;
+  count: number;
+  kind?: "grid" | "coords";
+  w?: number;
+  h?: number;
+  proj1d?: string;
+  proj2d?: string;
+  proj3d?: string;
 }
 
 export type RunResult =
@@ -265,28 +293,14 @@ export class DeviceSession {
     await this.fetch(`/api/patterns/${id}`, { method: "DELETE" });
   }
 
-  /** Installed pixel map status. */
   /** The installed pixel map. A map stored in the procedural `grid W H` form
    *  also reports `kind: "grid"` with its `w`/`h` — the device's real matrix
-   *  geometry, which the playground adopts as the preview rig for a 2D
-   *  pattern (Gitea #372). `kind` is absent on firmware older than the field
-   *  and on an uninstalled map. */
-  async map(): Promise<{
-    installed: boolean;
-    dims: number;
-    count: number;
-    kind?: "grid" | "coords";
-    w?: number;
-    h?: number;
-  }> {
-    return (await (await this.fetch("/api/map")).json()) as {
-      installed: boolean;
-      dims: number;
-      count: number;
-      kind?: "grid" | "coords";
-      w?: number;
-      h?: number;
-    };
+   *  geometry. `kind` is absent on firmware older than the field and on an
+   *  uninstalled map. The `proj*` triple is the device's projection defaults
+   *  (docs/spec/projection.md §2); the mirror reports it today, firmware does
+   *  not, and `/api/layout` (#465) takes both over. */
+  async map(): Promise<DeviceMapStatus> {
+    return (await (await this.fetch("/api/map")).json()) as DeviceMapStatus;
   }
 
   /** Install a computed 2D/3D map so device patterns render with real geometry

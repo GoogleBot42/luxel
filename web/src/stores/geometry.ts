@@ -1,121 +1,219 @@
-// Geometry: the preview rig and how it is chosen.
+// Geometry: the ONE Layout every preview, tile, thumbnail and playlist row
+// renders through (Gitea #463, proposal §0–§2).
 //
-// PLACEHOLDER (Gitea #462 → #463). Today this is exactly the rig derivation
-// that lived in App.svelte — `layout` plus the #372 derive-once latch — moved
-// verbatim so that A2 (#463) can replace the *whole file* with the real
-// reconciler (device Layout × Engine.preferredDims() × user override) without
-// touching a single consumer. Every consumer already reads it from here.
+// There used to be three sources of truth — the preview rig (`layout`), the
+// device's pixel count (`devicePixels`) and the installed map (`deviceMap`) —
+// combined in one strip→grid-only function (`deriveRig`) once per pattern
+// load. This module replaces all of it with a reconciler:
 //
-// Known limits, all inherited and all A2's to fix (research/ui-audit.md §3):
-//   * `deriveRig` only ever UPGRADES a strip, and only to a grid (or a cloud
-//     in the playground).
-//   * `deviceMap` is consulted only when it is a procedural `grid W H`.
-//   * There are still three sources of truth for geometry (`layout`,
-//     `devicePixels`, `deviceMap`).
+//     device Layout (console)          [stores/device.ts `deviceLayout`]
+//   × "Preview as" choice (playground) [`previewAs`, persisted]
+//   × the compiled pattern's dims      [`patternDims`, from Engine.preferredDims()]
+//   × the projection defaults          [`projection`]
+//   ────────────────────────────────────────────────────────────────────────
+//   = `layout`                          — and NOTHING else is geometry.
+//
+// `devicePixels` / `deviceMap` stay in `stores/device.ts` as raw wire state
+// that only the adapter there reads. Consumers read this file.
+//
+// The derivation itself is pure and lives in `lib/geometry.ts`, so it is unit
+// tested (`web/tests/geometry.test.mjs`) rather than driven through a browser.
 
 import { derived, get, writable, type Readable, type Writable } from "svelte/store";
-import { DEFAULT_PATTERN, type Layout } from "../lib/examples";
-import type { Engine } from "../lib/luxel";
-import { device, deviceMap, devicePixels } from "./device";
+import {
+  AUTO_LATTICE,
+  AUTO_MATRIX,
+  DEFAULT_PREVIEW_AS,
+  DEFAULT_STRIP_PIXELS,
+  DEFAULT_PROJECTION,
+  effectiveFor,
+  layoutKey,
+  layoutLabel,
+  pixelCount as layoutPixels,
+  projectionCaption,
+  reconcileLayout,
+  thumbLayout,
+  tileShape,
+  wiringCoords,
+  type Dims,
+  type Effective,
+  type Layout,
+  type PatternDims,
+  type PreviewAs,
+  type Projection,
+  type TileShape,
+} from "../lib/geometry";
+import { Engine, type Diagnostic, type Luxel } from "../lib/luxel";
+import { loadPreviewAs, savePreviewAs } from "../lib/store";
+import { device, deviceLayout, deviceProjection } from "./device";
 
-export type { Layout };
+export {
+  AUTO_LATTICE,
+  AUTO_MATRIX,
+  DEFAULT_PREVIEW_AS,
+  DEFAULT_STRIP_PIXELS,
+  effectiveFor,
+  layoutKey,
+  layoutLabel,
+  projectionCaption,
+  thumbLayout,
+  tileShape,
+};
+export type { Dims, Effective, Layout, PatternDims, PreviewAs, Projection, TileShape };
 
-/** The preview rig: how the local engine arranges its pixels. */
-export const layout: Writable<Layout> = writable(DEFAULT_PATTERN.layout);
+// ---- the inputs ----
 
-/** Total pixels the current rig declares. */
+/** The playground's "Preview as" choice (§4) — the ONE new control this
+ *  ticket adds. Persisted like the old rig choice was, so it outlives a
+ *  reload AND a pattern load: it is the user's, not the pattern's. On the
+ *  console it is an override of the device's own shape (the editor's legacy
+ *  layout select writes it until A8 moves that to Settings). */
+export const previewAs: Writable<PreviewAs> = writable(loadPreviewAs() ?? DEFAULT_PREVIEW_AS);
+previewAs.subscribe((v) => savePreviewAs(v));
+
+/** What the pattern in the editor asks for (`Engine.preferredDims()`): 0 = no
+ *  preference. Auto follows it (D7). Written by the editor after each
+ *  successful compile — never parsed out of the source text. */
+export const patternDims: Writable<PatternDims> = writable(0);
+
+/** Coordinates the custom map program produced, when one has been run. Null
+ *  until then, which is why "Custom map program" previews as a strip of the
+ *  same size until the program runs. */
+export const mapCoords: Writable<number[][] | null> = writable(null);
+
+/** The projection defaults in force: the device's while connected (it owns
+ *  them — `/api/map`'s `proj*` triple today, `/api/layout` at A4), the
+ *  engine's no-op defaults in the playground. Per-item overrides are A9/A12
+ *  and layer on top of this. */
+export const projection: Readable<Projection> = derived(
+  [device, deviceProjection],
+  ([d, p]) => (d ? p : DEFAULT_PROJECTION),
+);
+
+// ---- the output ----
+
+/** The Layout for a pattern of `dims` — what a gallery tile that is not the
+ *  editor's pattern renders through. On the console every pattern gets the
+ *  device's shape; in the playground under Auto each one gets its own. */
+export function layoutFor(dims: PatternDims): Layout {
+  return reconcileLayout({
+    connected: get(device) !== null,
+    geom: get(deviceLayout),
+    previewAs: get(previewAs),
+    patternDims: dims,
+    mapCoords: get(mapCoords),
+    projection: get(projection),
+  });
+}
+
+/** THE Layout: the one the editor's preview, the header chip and every
+ *  consumer that isn't showing some other pattern renders through. */
+export const layout: Readable<Layout> = derived(
+  [device, deviceLayout, previewAs, patternDims, mapCoords, projection],
+  ([d, geom, choice, dims, coords, proj]) =>
+    reconcileLayout({
+      connected: d !== null,
+      geom,
+      previewAs: choice,
+      patternDims: dims,
+      mapCoords: coords,
+      projection: proj,
+    }),
+);
+
+/** Pixels the current Layout addresses — what an engine is compiled at. */
 export function pixelCount(l: Layout = get(layout)): number {
-  return l.kind === "strip" ? l.pixels : l.kind === "grid" ? l.w * l.h : l.coords.length;
+  return layoutPixels(l);
 }
 
-/** Reactive form of `pixelCount` — the Settings readout tracks the rig. */
-export const pixelTotal: Readable<number> = derived(layout, (l) => pixelCount(l));
+/** Reactive form of `pixelCount`. */
+export const pixelTotal: Readable<number> = derived(layout, (l) => layoutPixels(l));
 
-/** The user picked a rig by hand for the pattern in the editor, so nothing
- *  derived from the source may move it (Gitea #372). Cleared by every load of
- *  a different pattern — a new pattern is a new choice. */
-let rigChosen = false;
-/** A pattern was just LOADED (pasted, imported, opened from the library or the
- *  device, restored from a share link), so the rig is re-derived on the next
- *  successful compile. Never set by ordinary typing: the rig must not move
- *  under someone mid-edit. */
-let rigDerivePending = false;
+/** The shape every preview/tile/thumbnail draws (bar · grid · cloud · scatter). */
+export const shape: Readable<TileShape> = derived(layout, (l) => tileShape(l));
 
-/** A different pattern arrived (gallery/library/device pick, .epe import,
- *  share link, device connect): re-derive the rig, and forget any manual rig
- *  choice — it belonged to the pattern being replaced. */
-export function markPatternLoaded(): void {
-  rigChosen = false;
-  rigDerivePending = true;
+/** "64×64 matrix" / "300 px strip" — the console header chip and the
+ *  "Preview as" button label. */
+export const layoutName: Readable<string> = derived(layout, (l) => layoutLabel(l));
+
+/** The dim caption for a pattern that is not native to the current Layout
+ *  (`1D · along x`), or null when it is native. */
+export function captionFor(dims: PatternDims, l: Layout = get(layout)): string | null {
+  return projectionCaption(dims, l);
 }
 
-/** A paste landed in the editor: re-derive, but this is an edit to the pattern
- *  already open, so a rig its user chose by hand still stands. */
-export function markSourcePasted(): void {
-  rigDerivePending = true;
-}
+// ---- the one place an engine is told about geometry ----
 
-/** An explicit pick outranks anything derived (#372). */
-export function markRigChosen(): void {
-  rigChosen = true;
-}
-
-/** Consume the derive-once latch: true exactly once per pattern load. */
-export function takeRigDerivePending(): boolean {
-  const pending = rigDerivePending;
-  rigDerivePending = false;
-  return pending;
-}
-
-/** n×n×n lattice map — the default geometry for render3D patterns. */
-export function cubeLattice(n: number): number[][] {
-  const coords: number[][] = [];
-  for (let z = 0; z < n; z++)
-    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) coords.push([x, y, z]);
-  return coords;
-}
-
-/** Pick the preview rig from the COMPILED pattern (#372): a `render2D`
- *  pattern — or a `renderFrame` one that draws in coordinate/grid space —
- *  wants a grid; a `render3D`-only pattern wants the rotating point cloud.
- *  Read off the compiled program, so a `render2D` inside a comment or a string
- *  never counts, and every load path gets what a gallery pick has always got
- *  from the manifest's `kind`.
+/**
+ * Point `engine` at `l`: its map (or lack of one) and its projection, in that
+ * order. EVERY engine in the app goes through here — the editor's preview,
+ * the gallery tiles, the row thumbnails — so there is exactly one place that
+ * knows an irregular Layout needs `setMap` and a matrix does not.
  *
- *  Only ever upgrades a STRIP: a grid, a 2D map, or a rig the user chose by
- *  hand is left exactly as it is. Returns true when `layout` changed, so the
- *  caller can rebuild the engine at the new geometry. */
-export function deriveRig(e: Engine): boolean {
-  const l = get(layout);
-  if (rigChosen || l.kind !== "strip") return false;
-  const dims = e.preferredDims();
-  const dm = get(deviceMap);
-  const connected = get(device) !== null;
-  if (dims === 2) {
-    // A connected device's own matrix geometry beats the 16×16 default:
-    // previewing what the hardware will actually show is the whole point.
-    const dw = dm.kind === "grid" ? (dm.w ?? 0) : 0;
-    const dh = dm.kind === "grid" ? (dm.h ?? 0) : 0;
-    let w = 16;
-    let h = 16;
-    if (dw > 0 && dh > 0) {
-      w = dw;
-      h = dh;
-    } else if (connected) {
-      // no map installed: the same square the manual selector would build
-      // from the hardware pixel count
-      const side = Math.max(2, Math.round(Math.sqrt(get(devicePixels))));
-      w = side;
-      h = side;
-    }
-    layout.set({ kind: "grid", w, h });
-    return true;
-  }
-  if (dims === 3 && !connected) {
-    // The rig a gallery "cloud" pick installs. Playground only: on a device
-    // the pixel count is hardware truth and a 125-point lattice is not it.
-    layout.set({ kind: "map", coords: cubeLattice(5) });
-    return true;
-  }
-  return false;
+ * Call it immediately after `compile()`, before the first frame: under an
+ * along-axis projection `pixelCount` becomes the strip length, and the
+ * pattern's top-level init has already run (docs/spec/projection.md §3).
+ */
+export function configureEngine(engine: Engine, l: Layout = get(layout)): void {
+  const coords = wiringCoords(l);
+  if (coords && coords.length > 0) engine.setMap(coords);
+  else if (l.dims === 2 && l.regular && l.w > 0 && l.h > 0) engine.setMapGrid(l.w, l.h);
+  else engine.setStripLayout();
+  engine.setProjection(l.projection);
 }
+
+/** Record what the map program computed (it becomes the Layout when
+ *  "Custom map program" is the choice). */
+export function setMapCoords(coords: number[][] | null): void {
+  mapCoords.set(coords);
+}
+
+/** Switch the playground's (or, until A8, the console's) Layout choice. */
+export function setPreviewAs(choice: PreviewAs): void {
+  previewAs.set(choice);
+}
+
+/** Pixel caps for the small surfaces: a gallery tile and a row thumbnail keep
+ *  the Layout's shape but not its size — forty live 64×64 engines is 160 k
+ *  render calls a frame, and a 96 px tile cannot show them anyway. */
+export const TILE_MAX_CELLS = 1024;
+export const THUMB_MAX_CELLS = 400;
+
+/**
+ * Compile `src` onto the Layout it will actually be shown on, and configure
+ * the engine for it — the one entry point for every surface that renders a
+ * pattern it is not editing (gallery tiles, row thumbnails).
+ *
+ * Two passes only where they are needed: the Layout depends on the pattern's
+ * dimensionality under playground Auto, and the only honest source of that is
+ * the COMPILED program (`preferredDims`), not a regex over the source. On a
+ * console — where the device's shape is the Layout whatever the pattern is —
+ * the first compile is always the right one.
+ *
+ * `maxCells > 0` shrinks the Layout for a thumbnail (see `thumbLayout`).
+ * Returns the compiler's Diagnostic when the pattern does not compile.
+ */
+export function compileForLayout(
+  lx: Luxel,
+  src: string,
+  maxCells = 0,
+): { engine: Engine; layout: Layout; dims: PatternDims } | Diagnostic {
+  const shrink = (l: Layout): Layout => (maxCells > 0 ? thumbLayout(l, maxCells) : l);
+  const first = shrink(layoutFor(0));
+  let engine = lx.compile(src, first.pixels);
+  if (!(engine instanceof Engine)) return engine;
+  const dims = engine.preferredDims();
+  const want = shrink(layoutFor(dims));
+  if (want.pixels !== first.pixels) {
+    engine.free();
+    const again = lx.compile(src, want.pixels);
+    if (!(again instanceof Engine)) return again;
+    engine = again;
+  }
+  configureEngine(engine, want);
+  return { engine, layout: want, dims };
+}
+
+/** `layoutKey` of the current Layout — what a surface compares to know
+ *  whether its engines are still valid. */
+export const layoutSignature: Readable<string> = derived(layout, (l) => layoutKey(l));

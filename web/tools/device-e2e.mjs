@@ -194,16 +194,17 @@ try {
   const px = await page.$eval('[data-role="cfg-pixels"]', (el) => el.value);
   check("connect: pixel count from device", px === "120", `got ${px}`);
 
-  // ---- the rig follows the source and the device's map (Gitea #372) ----
-  // A device running a render2D pattern with a 64x64 grid map installed opens
-  // on a 64x64 grid preview — the rig is derived from the compiled pattern,
-  // and its geometry from the hardware, not from a 16x16 default.
+  // ---- the console's Layout is the DEVICE's (Gitea #463) ----
+  // A 64x64 panel console opens on a 64x64 grid preview whatever the pattern
+  // is, and every tile/thumbnail on it is square. `--board panel` is what
+  // lets a 4096 px layout exist at all (the strip cap is 2048), so this is
+  // also the panel-impersonation pass.
   {
     const MAP_PORT = E2E.mirror.map; // E2E_PORT + 25
     const MAPPED = `http://127.0.0.1:${MAP_PORT}`;
     const mappedDev = spawn(
       "../target/debug/luxel",
-      ["serve", ...NO_NETIN, "--port", String(MAP_PORT), "--pixels", "4096"],
+      ["serve", ...NO_NETIN, "--port", String(MAP_PORT), "--pixels", "4096", "--board", "panel"],
       { stdio: ["ignore", "pipe", "inherit"] },
     );
     await new Promise((resolve, reject) => {
@@ -229,6 +230,32 @@ try {
       await mappedPage.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(MAPPED)}`, {
         waitUntil: "networkidle0",
       });
+      // two stored patterns — one 2D, one 1D — so the Patterns list and the
+      // playlist rows have thumbnails to shape
+      const saveOn = async (base, name, src) =>
+        (
+          await (
+            await fetch(`${base}/api/patterns`, { method: "POST", body: await lxpBody(name, src) })
+          ).json()
+        ).id;
+      const id2d = await saveOn(
+        MAPPED,
+        "Panel 2D",
+        "export function render2D(index, x, y) { hsv(x, 1, y) }",
+      );
+      const id1d = await saveOn(
+        MAPPED,
+        "Panel 1D",
+        "export function render(index) { hsv(index / pixelCount, 1, 1) }",
+      );
+      await fetch(`${MAPPED}/api/playlist`, {
+        method: "POST",
+        body: `D 5\nX 0\nI ${id2d} -1\nI ${id1d} -1\n`,
+      });
+      await mappedPage.setViewport({ width: 1400, height: 900 });
+      await mappedPage.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(MAPPED)}`, {
+        waitUntil: "networkidle0",
+      });
       const r = await mappedPage
         .waitForFunction(
           () => {
@@ -242,11 +269,68 @@ try {
         .then((h) => h.jsonValue())
         .catch(() => "");
       check(
-        "rig: a device running render2D with a 64x64 map opens on a 64x64 grid",
+        "layout: a 64x64 panel console opens on a 64x64 grid",
         r === "grid 64x64",
         r,
       );
-      await mappedPage.screenshot({ path: `${shotDir}/device-e2e-rig-grid-64.png` });
+      const chip = await mappedPage
+        .$eval('[data-role="layout-label"]', (el) => (el.textContent ?? "").trim())
+        .catch(() => "");
+      check("layout: the console header states the device's layout", chip === "64×64 matrix", chip);
+      const shape = await mappedPage.$eval('[data-role="preview"]', (el) => el.dataset.shape);
+      check("layout: the console preview is a grid", shape === "grid", shape);
+      check(
+        "layout: the playground's Preview-as chip is absent on a console",
+        (await mappedPage.$('[data-role="preview-as"]')) === null,
+      );
+      await mappedPage.screenshot({ path: `${shotDir}/device-e2e-panel-editor.png` });
+
+      // a 1D pattern on the panel: still the panel's shape, with a caption
+      await fetch(`${MAPPED}/api/code`, {
+        method: "POST",
+        body: await lxpBody("", "export function render(index) { hsv(index / pixelCount, 1, 1) }"),
+      });
+      await mappedPage.reload({ waitUntil: "networkidle0" });
+      await sleep(1500);
+      const shape1d = await mappedPage.$eval('[data-role="preview"]', (el) => el.dataset.shape);
+      check("layout: a 1D pattern on a panel previews as the panel, not a bar", shape1d === "grid");
+
+      // Device Patterns + Playlist rows take the device's shape (#463: the
+      // thumbnail used to be a 64-px bar on every board)
+      await mappedPage.click('[data-role="editor-back"]');
+      await mappedPage.click('[data-role="tab-device"]');
+      await mappedPage.waitForSelector('[data-role="device-pattern"] .thumb', { timeout: 8000 });
+      await sleep(1500);
+      const thumbShapes = await mappedPage.$$eval('[data-role="device-pattern"] .thumb', (els) =>
+        els.map((e) => e.dataset.shape),
+      );
+      check(
+        "thumbs: Device Patterns rows are square on a panel console",
+        thumbShapes.length >= 2 && thumbShapes.every((s) => s === "grid"),
+        thumbShapes.join(","),
+      );
+      await mappedPage.screenshot({ path: `${shotDir}/device-e2e-panel-patterns.png` });
+
+      await mappedPage.click('[data-role="tab-playlist"]');
+      await mappedPage.waitForSelector('[data-role="playlist-item"] .thumb', { timeout: 8000 });
+      await sleep(1200);
+      const rowShapes = await mappedPage.$$eval('[data-role="playlist-item"] .thumb', (els) =>
+        els.map((e) => e.dataset.shape),
+      );
+      check(
+        "thumbs: playlist rows are square on a panel console",
+        rowShapes.length >= 2 && rowShapes.every((s) => s === "grid"),
+        rowShapes.join(","),
+      );
+      const rowCaption = await mappedPage.$$eval('[data-role="playlist-item"] .thumb', (els) =>
+        els.map((e) => e.getAttribute("title") ?? ""),
+      );
+      check(
+        "thumbs: the 1D playlist item says how it is projected",
+        rowCaption.some((t) => /^1D · /.test(t)),
+        rowCaption.join(" | "),
+      );
+      await mappedPage.screenshot({ path: `${shotDir}/device-e2e-panel-playlist.png` });
     } finally {
       await mappedPage.close();
       mappedDev.kill();
@@ -391,8 +475,10 @@ try {
     .catch(() => 0);
   check("preview: local engine renders (not the device stream)", lit > 60, `lit=${lit}`);
 
-  // layout dropdown is back in device mode (#3): strip/grid/2D map arrange the
-  // live stream in the local preview (the device's pixel count stays fixed)
+  // The CONSOLE keeps the shape select (#463): the Layout is the device's, and
+  // this re-shapes the preview and says what "install … on device" installs.
+  // The playground drives the same store from the header's "Preview as" chip
+  // instead; A8 (#469) moves this into Settings → LED layout.
   const layoutSel = await page.$('[data-role="layout-kind"]');
   check("layout: dropdown present on device", layoutSel !== null);
   const layoutOpts = await page.$$eval('[data-role="layout-kind"] option', (os) =>
@@ -863,6 +949,17 @@ try {
     .then(() => true)
     .catch(() => false);
   check("library: device pattern shows a preview thumbnail", hasThumb);
+  // and it takes the DEVICE's shape — a bar here, because this console is a
+  // 120 px strip (the panel console's square rows are checked above, #463)
+  const stripThumbs = await page.$$eval('[data-role="device-pattern"] .thumb', (els) =>
+    els.map((e) => e.dataset.shape),
+  );
+  check(
+    "thumbs: Device Patterns rows are bars on a strip console",
+    stripThumbs.length > 0 && stripThumbs.every((s) => s === "bar"),
+    stripThumbs.join(","),
+  );
+  await page.screenshot({ path: `${shotDir}/device-e2e-strip-patterns.png` });
   // the thumb spins while the source fetch + compile are in flight, then the
   // spinner drops once the first frame lands
   await page

@@ -1,14 +1,29 @@
 <script lang="ts">
+  // The live preview canvas. It draws whatever shape the ONE Layout says
+  // (Gitea #463): a bar on a strip, a pixel grid on a matrix, a rotating
+  // point cloud in 3D, a flat scatter for an irregular 2D map. Nothing here
+  // decides geometry — `stores/geometry.ts` does, and this component is
+  // handed the result. The painters are shared with the tiles (`lib/draw.ts`).
   import { createEventDispatcher } from "svelte";
-  import type { Layout } from "../lib/examples";
+  import { normalizePoints, paintBar, paintGrid, paintPoints } from "../lib/draw";
+  import { tileShape, type Layout, type TileShape } from "../lib/geometry";
 
   export let layout: Layout;
 
+  /** bar · grid · cloud · scatter. A dims>1 Layout whose coordinates we do
+   *  not know (an irregular map installed before this page loaded — see
+   *  `deviceLayout`; closed by #465) has nothing to scatter, so it degrades
+   *  to the index bar rather than drawing a lie. */
+  $: shape = (layout.coords === undefined && !layout.regular ? "bar" : tileShape(layout)) as TileShape;
+  $: points = layout.coords ? normalizePoints(layout.coords) : { pts: [], is3D: false };
+  $: is3D = shape === "cloud" && points.is3D;
+
   // Click/drag anywhere on the preview → an `inject` event with the
-  // normalized hit position — App feeds it to the engine's event queue
+  // normalized hit position — the editor feeds it to the engine's event queue
   // (readEvent) and, on a device, forwards it to the strip.
   const dispatch = createEventDispatcher<{ inject: { x: number; y: number } }>();
   let injecting = false;
+  let angle = 0;
 
   function injectAt(e: PointerEvent): void {
     const c = e.currentTarget as HTMLCanvasElement;
@@ -17,7 +32,7 @@
     dispatch("inject", {
       x: clamp((e.clientX - r.left) / r.width),
       // 1D previews (strip + waterfall) only have a meaningful x
-      y: layout.kind === "strip" ? 0 : clamp((e.clientY - r.top) / r.height),
+      y: shape === "bar" ? 0 : clamp((e.clientY - r.top) / r.height),
     });
   }
 
@@ -53,155 +68,30 @@
 
   /** Draw one frame of RGB bytes. */
   export function draw(px: Uint8Array): void {
-    if (layout.kind === "strip") {
+    if (shape === "bar") {
       drawStrip(px);
-    } else if (layout.kind === "grid") {
-      drawGrid(px, layout.w, layout.h);
-    } else {
-      drawMap(px);
+    } else if (shape === "grid") {
+      if (grid) paintGrid(grid, px, layout.w, layout.h);
+    } else if (map) {
+      if (is3D) angle += 0.012;
+      paintPoints(map, px, points, angle);
     }
   }
 
-  // mapped pixel positions, normalized to a centered unit cube, cached per
-  // layout. `is3D` is true when the z axis actually varies → a rotating cloud.
-  let mapNorm: { x: number; y: number; z: number }[] = [];
-  let map3D = false;
-  let mapAngle = 0;
-  $: if (layout.kind === "map") {
-    const r = normalizeMap(layout.coords);
-    mapNorm = r.pts;
-    map3D = r.is3D;
-  }
-
-  function normalizeMap(coords: number[][]): {
-    pts: { x: number; y: number; z: number }[];
-    is3D: boolean;
-  } {
-    const lo = [Infinity, Infinity, Infinity];
-    const hi = [-Infinity, -Infinity, -Infinity];
-    for (const c of coords) {
-      for (let d = 0; d < 3; d++) {
-        const v = c[d] ?? 0;
-        lo[d] = Math.min(lo[d]!, v);
-        hi[d] = Math.max(hi[d]!, v);
-      }
-    }
-    const is3D = hi[2]! - lo[2]! > 1e-6;
-    const s = [hi[0]! - lo[0]! || 1, hi[1]! - lo[1]! || 1, hi[2]! - lo[2]! || 1];
-    // centered on 0 so rotation is about the middle; y flipped (screen down)
-    const pts = coords.map((c) => ({
-      x: ((c[0] ?? 0) - lo[0]!) / s[0]! - 0.5,
-      y: ((c[1] ?? 0) - lo[1]!) / s[1]! - 0.5,
-      z: is3D ? ((c[2] ?? 0) - lo[2]!) / s[2]! - 0.5 : 0,
-    }));
-    return { pts, is3D };
-  }
-
-  function drawMap(px: Uint8Array): void {
-    const ctx = map?.getContext("2d");
-    if (!map || !ctx) return;
-    const { width: w, height: h } = map;
-    ctx.fillStyle = "#000";
-    ctx.fillRect(0, 0, w, h);
-    const baseR = Math.max(2, Math.min(7, Math.floor(w / Math.sqrt(mapNorm.length) / 4)));
-
-    if (!map3D) {
-      // flat 2D scatter
-      const pad = 8;
-      const span = w - 2 * pad;
-      for (let i = 0; i < mapNorm.length; i++) {
-        const p = mapNorm[i];
-        if (!p) continue;
-        ctx.fillStyle = `rgb(${px[i * 3] ?? 0},${px[i * 3 + 1] ?? 0},${px[i * 3 + 2] ?? 0})`;
-        ctx.beginPath();
-        ctx.arc(pad + (p.x + 0.5) * span, pad + (p.y + 0.5) * span, baseR, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      return;
-    }
-
-    // 3D: slowly rotate about the vertical axis, fixed tilt, orthographic
-    // projection, painter's algorithm + depth cue (farther = smaller/dimmer).
-    mapAngle += 0.012;
-    const cx = w / 2;
-    const cy = h / 2;
-    const scale = Math.min(w, h) * 0.72;
-    const ca = Math.cos(mapAngle);
-    const sa = Math.sin(mapAngle);
-    const tilt = 0.45;
-    const ct = Math.cos(tilt);
-    const st = Math.sin(tilt);
-    const proj: { sx: number; sy: number; depth: number; i: number }[] = [];
-    for (let i = 0; i < mapNorm.length; i++) {
-      const p = mapNorm[i];
-      if (!p) continue;
-      const x = p.x * ca - p.z * sa; // rotate about Y
-      const z = p.x * sa + p.z * ca;
-      const y2 = p.y * ct - z * st; // tilt about X
-      const z2 = p.y * st + z * ct;
-      proj.push({ sx: cx + x * scale, sy: cy + y2 * scale, depth: z2, i });
-    }
-    proj.sort((a, b) => a.depth - b.depth); // back to front
-    for (const q of proj) {
-      const cue = 0.55 + 0.45 * (q.depth + 0.6); // ~0.55..1.15
-      const bri = Math.max(0.35, Math.min(1, cue));
-      const rr = baseR * Math.max(0.6, Math.min(1.3, cue));
-      const r = Math.round((px[q.i * 3] ?? 0) * bri);
-      const g = Math.round((px[q.i * 3 + 1] ?? 0) * bri);
-      const b = Math.round((px[q.i * 3 + 2] ?? 0) * bri);
-      ctx.fillStyle = `rgb(${r},${g},${b})`;
-      ctx.beginPath();
-      ctx.arc(q.sx, q.sy, rr, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-
+  /** The bar plus its scrolling history (the PB preview-strip idiom). */
   function drawStrip(px: Uint8Array): void {
-    const n = px.length / 3;
     if (!strip || !waterfall) return;
-    const sc = strip.getContext("2d");
+    paintBar(strip, px);
     const wc = waterfall.getContext("2d");
-    if (!sc || !wc) return;
-    if (strip.width !== n) {
-      strip.width = n;
-      waterfall.width = n;
-    }
-    // current frame: one row, scaled up by CSS
-    const img = sc.createImageData(n, 1);
-    for (let i = 0; i < n; i++) {
-      img.data[i * 4] = px[i * 3] ?? 0;
-      img.data[i * 4 + 1] = px[i * 3 + 1] ?? 0;
-      img.data[i * 4 + 2] = px[i * 3 + 2] ?? 0;
-      img.data[i * 4 + 3] = 255;
-    }
-    sc.putImageData(img, 0, 0);
-    // waterfall: scroll history down one row (PB preview-strip style)
+    if (!wc) return;
+    if (waterfall.width !== strip.width) waterfall.width = strip.width;
     wc.drawImage(waterfall, 0, 1);
-    wc.putImageData(img, 0, 0);
-  }
-
-  function drawGrid(px: Uint8Array, w: number, h: number): void {
-    if (!grid) return;
-    const gc = grid.getContext("2d");
-    if (!gc) return;
-    if (grid.width !== w || grid.height !== h) {
-      grid.width = w;
-      grid.height = h;
-    }
-    const img = gc.createImageData(w, h);
-    const n = Math.min(px.length / 3, w * h);
-    for (let i = 0; i < n; i++) {
-      img.data[i * 4] = px[i * 3] ?? 0;
-      img.data[i * 4 + 1] = px[i * 3 + 1] ?? 0;
-      img.data[i * 4 + 2] = px[i * 3 + 2] ?? 0;
-      img.data[i * 4 + 3] = 255;
-    }
-    gc.putImageData(img, 0, 0);
+    wc.drawImage(strip, 0, 0);
   }
 </script>
 
-<div class="preview">
-  {#if layout.kind === "strip"}
+<div class="preview" data-role="preview" data-shape={shape}>
+  {#if shape === "bar"}
     <canvas
       class="strip"
       bind:this={strip}
@@ -222,7 +112,7 @@
       on:pointerup={onUp}
       on:pointercancel={onUp}
     ></canvas>
-  {:else if layout.kind === "grid"}
+  {:else if shape === "grid"}
     <canvas
       class="grid"
       bind:this={grid}
@@ -236,8 +126,8 @@
   {:else}
     <canvas
       class="map"
-      class:cube={map3D}
-      data-3d={map3D}
+      class:cube={is3D}
+      data-3d={is3D}
       bind:this={map}
       width="320"
       height="320"
@@ -246,7 +136,7 @@
       on:pointerup={onUp}
       on:pointercancel={onUp}
     ></canvas>
-    {#if map3D}<span class="map-3d-badge" data-role="map-3d">3D · auto-rotating</span>{/if}
+    {#if is3D}<span class="map-3d-badge" data-role="map-3d">3D · auto-rotating</span>{/if}
   {/if}
 </div>
 

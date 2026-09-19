@@ -7,7 +7,21 @@
 // keeps the dependency chain one-way: device ← geometry ← pattern.
 
 import { derived, get, writable, type Readable, type Writable } from "svelte/store";
-import { DeviceSession, type MqttStatus, type Playlist, type SyncStatus } from "../lib/device";
+import {
+  DeviceSession,
+  type DeviceStatus,
+  type MqttStatus,
+  type Playlist,
+  type SyncStatus,
+} from "../lib/device";
+import {
+  DEFAULT_PROJECTION,
+  normDims,
+  PROJECTION_CODES,
+  type DeviceGeom,
+  type Projection,
+  type ProjectionMode,
+} from "../lib/geometry";
 import { gatedFetch } from "../lib/fetchgate";
 import { browserBlocked } from "../lib/lna";
 import { reconcileTransport, transportIntent, type TransportIntent } from "../lib/playlist";
@@ -77,6 +91,78 @@ export interface DeviceMap {
   h?: number;
 }
 export const deviceMap = writable<DeviceMap>({ installed: false, dims: 0, count: 0 });
+
+/** `/api/status`'s `geom` (Gitea #464): the engine's EFFECTIVE geometry, as
+ *  reported. Raw wire state — read it through `deviceLayout`, never directly. */
+export const deviceGeomStatus = writable<DeviceStatus["geom"] | null>(null);
+
+/** The coordinates of an irregular device map, when they are known: a map
+ *  THIS session installed. `GET /api/map` reports only a count, so a map
+ *  installed before this page loaded has none until `/api/layout` (#465)
+ *  starts embedding it. */
+export const deviceMapCoords = writable<number[][] | null>(null);
+
+/** The device's projection defaults (docs/spec/projection.md §2). The mirror
+ *  carries them on `/api/map` today; firmware gets them with `/api/layout`. */
+export const deviceProjection = writable<Projection>(DEFAULT_PROJECTION);
+
+function asMode(v: string | undefined, fallback: ProjectionMode): ProjectionMode {
+  return v !== undefined && v in PROJECTION_CODES ? (v as ProjectionMode) : fallback;
+}
+
+/**
+ * THE DEVICE-LAYOUT ADAPTER (Gitea #463).
+ *
+ * Everything the UI knows about the device's geometry, in the ONE shape
+ * `stores/geometry.ts` reconciles against. Today it is assembled here from
+ * `/api/status`'s `geom` (#464) plus what we know locally about an installed
+ * map; when `/api/layout` (#465) lands, this body becomes one read of that
+ * endpoint — dims, source, w/h, wiring and the embedded map all arrive
+ * together — and not a single consumer changes.
+ *
+ * The `deviceMap` fallback keeps firmware older than `geom` working: a
+ * procedural `grid W H` is still a matrix, and a coords map is still a cloud.
+ */
+export const deviceLayout: Readable<DeviceGeom | null> = derived(
+  [deviceGeomStatus, devicePixels, deviceMap, deviceMapCoords],
+  ([g, pixels, dm, coords]) => {
+    if (pixels <= 0 && g === null) return null;
+    if (g) {
+      return {
+        dims: normDims(g.dims),
+        regular: g.regular,
+        w: g.w,
+        h: g.h,
+        source: g.source,
+        pixels: pixels || g.w * g.h,
+        coords: g.regular ? undefined : (coords ?? undefined),
+        // serpentine is #465's to report; row-major until then.
+      } satisfies DeviceGeom;
+    }
+    if (dm.installed && dm.kind === "grid" && dm.w && dm.h) {
+      return {
+        dims: 2,
+        regular: true,
+        w: dm.w,
+        h: dm.h,
+        source: "user",
+        pixels,
+      } satisfies DeviceGeom;
+    }
+    if (dm.installed && coords) {
+      return {
+        dims: normDims(dm.dims),
+        regular: false,
+        w: 0,
+        h: 0,
+        source: "user",
+        pixels,
+        coords,
+      } satisfies DeviceGeom;
+    }
+    return { dims: 1, regular: true, w: pixels, h: 1, source: "board", pixels } satisfies DeviceGeom;
+  },
+);
 
 /** The device's stored pattern library (empty on firmware without CRUD).
  *  `source` is filled lazily in the background so each row can show a live
@@ -229,6 +315,8 @@ export async function refreshStatus(): Promise<void> {
     const st = await d.status();
     deviceHeapFree.set(st.heap_free ?? 0);
     deviceEngineHeap.set(st.engine_heap ?? 0);
+    deviceGeomStatus.set(st.geom ?? null); // the device's Layout (#464)
+    if (st.pixels) devicePixels.set(st.pixels);
     deviceFps.set(st.fps);
     deviceOutFps.set(st.out_fps ?? 0);
     deviceRescanHz.set(st.rescan_hz ?? 0);
@@ -316,7 +404,14 @@ export async function refreshDeviceMap(): Promise<void> {
   const d = get(device);
   if (!d) return;
   try {
-    deviceMap.set(await d.map());
+    const m = await d.map();
+    deviceMap.set(m);
+    if (!m.installed) deviceMapCoords.set(null);
+    deviceProjection.set({
+      proj1d: asMode(m.proj1d, DEFAULT_PROJECTION.proj1d),
+      proj2d: asMode(m.proj2d, DEFAULT_PROJECTION.proj2d),
+      proj3d: asMode(m.proj3d, DEFAULT_PROJECTION.proj3d),
+    });
   } catch {
     /* older firmware without /api/map */
   }
@@ -397,20 +492,25 @@ export async function installDeviceMapCoords(
 ): Promise<boolean> {
   const r = await get(device)?.setMap(dims, coords);
   if (!r?.ok) return false;
-  deviceMap.set({ installed: true, dims, count: r.count ?? coords.length });
+  deviceMap.set({ installed: true, dims, count: r.count ?? coords.length, kind: "coords" });
+  // Remember the coordinates: `GET /api/map` gives a count back, not
+  // positions, and the console's preview draws the real scatter from these.
+  deviceMapCoords.set(coords);
   return true;
 }
 
 export async function installDeviceGridMap(w: number, h: number): Promise<boolean> {
   const r = await get(device)?.setGridMap(w, h);
   if (!r?.ok) return false;
-  deviceMap.set({ installed: true, dims: 2, count: r.count ?? w * h });
+  deviceMap.set({ installed: true, dims: 2, count: r.count ?? w * h, kind: "grid", w, h });
+  deviceMapCoords.set(null);
   return true;
 }
 
 export async function clearDeviceMap(): Promise<void> {
   await get(device)?.clearMap();
   deviceMap.set({ installed: false, dims: 0, count: 0 });
+  deviceMapCoords.set(null);
 }
 
 // ---- connect ----
@@ -438,6 +538,7 @@ export async function connectDevice(base: string, pullPattern = true): Promise<C
     device.set(session);
     deviceBase.set(base);
     devicePixels.set(st.pixels); // hardware pixel count (fixed; layout only rearranges)
+    deviceGeomStatus.set(st.geom ?? null); // the device's Layout (#464)
     // Per-board cap (#74). Status is authoritative and keeps being refreshed
     // by every later poll; /api/config's `max` is only the fallback for
     // firmware that predates the field — so remember which one we got and

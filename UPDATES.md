@@ -1,5 +1,69 @@
 # Update log
 
+## 2026-09-19 — web v2 A2: stores/geometry.ts, the one Layout reconciler (#463)
+
+Geometry had three sources of truth in the UI (`layout`, `devicePixels`,
+`deviceMap`), combined once per pattern load by a strip→grid-only `deriveRig`.
+It now has one, reconciled from the inputs that actually decide it:
+
+```
+device Layout (console) × "Preview as" (playground) × Engine.preferredDims()
+        × the projection defaults   ─→   layout
+```
+
+The derivation is pure (`web/src/lib/geometry.ts`) and unit-tested
+(`web/tests/geometry.test.mjs`, 16 cases: strip/matrix/custom-map/3D consoles
+against 1D/2D/3D patterns, playground Auto, each explicit choice, the
+thumbnail shrink, the serpentine wiring, the localStorage migration, plus a
+parity check of the projection tables against the ENGINE's own through the
+built wasm). `stores/geometry.ts` is the wiring: `layout`, `layoutFor(dims)`,
+`layoutSignature`, `layoutName`, `previewAs`, `patternDims`, `mapCoords`,
+`projection`, `configureEngine()`, `compileForLayout()`, `captionFor()`,
+`tileShape()`, `thumbLayout()`.
+
+Every consumer renders through it, so the mode-blind assumptions the audit
+listed (research/ui-audit.md §3) are gone:
+
+- `Preview.svelte` draws bar · grid · cloud · scatter for any Layout, not just
+  in the map branch.
+- Gallery tiles take the DEVICE's shape (square on a panel console, bars on a
+  strip) and their dimensionality from the compiled pattern
+  (`preferredDims()`), not gen-gallery's regex — which is now documented as an
+  advisory hint that only picks the first compile's pixel count. Tiles whose
+  pattern is not native to the Layout carry a dim caption (`1D · by index`).
+- `PatternThumb` (Device Patterns, playlist rows) is no longer a fixed 64-px
+  bar on every board; the fixed 16×16 / 64-px constants are gone, replaced by
+  `thumbLayout()` — the Layout's shape at tile size (≤1024 px tiles, ≤400 px
+  thumbs), so a 64×64 console does not run forty 4096-px engines.
+- The new-pattern template follows the Layout (`render2D` on a matrix).
+- Share links carry the PATTERN only: a map is the Layout's, not the
+  pattern's. Old `#pj=` links that carry one still decode.
+- Painting is shared (`web/src/lib/draw.ts`), so preview, tile and thumbnail
+  cannot drift.
+
+One new visible control: the playground header's `Preview as …▾` chip
+(mockup S5) — Auto · Strip [n] · Matrix w×h · 3D lattice · Custom map program,
+persisted like the old rig choice, default Auto. The console header instead
+states the device's own Layout (`● <name> · 64×64 matrix`). The playground's
+layout dropdown / pixel field / W×H are gone from the editor's playback bar;
+the console keeps them as the interim install-target control until A8/A10.
+
+Device side: `/api/status`'s `geom` (#464) is read through ONE adapter
+(`deviceLayout` in `stores/device.ts`), with a `/api/map` + pixel-count
+fallback for firmware older than the field. When `/api/layout` (#465) lands,
+that adapter's body is the only thing that changes. `serpentine` is wired
+through `wiringCoords()` and tested, but nothing sets it until #465 reports
+it, so the console previews row-major for now.
+
+Verified: `npm test` (52), `node tools/e2e.mjs` (including new checks for the
+chip, device-shaped tiles under Auto/Matrix/lattice, tile captions and the
+share-link change), `device-e2e.mjs` against the mirror as a strip AND with
+`serve --board panel` (a 64×64 console: square Device Patterns rows, square
+playlist rows, projected caption, header chip), `maxpixels-e2e`, `sync-e2e`,
+`flash-e2e`, `tools/ci.sh`. e2e drives `preview-as*` where it used to drive
+`layout-kind`/`layout-px`/`layout-w`/`layout-h`; those roles live on in the
+console only.
+
 ## 2026-09-19 (later still²) — web v2 A11: in-app dialogs (#472) + one E2E_PORT block (#496)
 
 **#472.** The eight `window.prompt`/`window.confirm` call sites are gone; there
@@ -90,6 +154,7 @@ ENGINE's frame on both kinds of board** — the direct path snapshots before the
 chain and the pipelined path's `preview()` reads the pre-output hand-off
 buffer — so the device cannot read its own outpipe back, and an outpipe change
 is judged by `pipe_us`, `heap_free` and by eye.
+
 ## 2026-09-19 — web v2 A1: App.svelte split into shell + stores + pages (#462)
 
 Behaviour-preserving decomposition of the 4052-line `App.svelte`, the seam
