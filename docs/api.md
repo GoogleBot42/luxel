@@ -454,13 +454,14 @@ a stored one.
 ```json
 {"defaultSec":30,"crossfadeMs":500,"playing":true,"index":2,
  "items":[{"id":"1a5e0001","name":"sparks","sec":null,
-           "controls":{"speed":[0.5]},"invalid":"needs 2D map"}]}
+           "controls":{"speed":[0.5]},"proj":"x","invalid":"needs 2D map"}]}
 ```
 
 `sec` is `null` when the item inherits `defaultSec`. `controls` values are
-**decimal**, and the `invalid` key is present only when the item's `assert()`
-invariants fail against the current config (pre-flight check) — absent means
-fine, or still being computed.
+**decimal**. `proj` is present only when the item overrides the device's
+projection default, and `invalid` only when the item's `assert()` invariants
+fail against the current config (pre-flight check) — absent means fine, or
+still being computed.
 
 `POST` body is line-based, not JSON:
 
@@ -470,9 +471,32 @@ fine, or still being computed.
 | `X <ms>` | crossfade milliseconds |
 | `I <patternId> <sec>` | an item; `sec` `-1` (or unparseable) = inherit the default |
 | `C <name> <raw…>` | a control override for the item most recently declared; **raw 16.16** |
+| `P <mode>` | projection override for the item most recently declared |
+
+`C` and `P` bind to the `I` above them, so an item's lines are a contiguous
+run. Both are optional and both are omitted when there is nothing to say —
+a playlist written before `P` existed parses byte-for-byte as it always did,
+and a device that does not know the line ignores it (Gitea #470).
+
+`<mode>` is one of `index|x|y|z|xy|xz|yz` (docs/spec/projection.md §2). It is
+applied to the slot matching the ITEM'S PATTERN's own dimensionality, so one
+token survives a pattern change; a token that means nothing for the current
+(pattern dims, Layout dims) pair falls back to that pair's first option, and
+an unparseable one leaves the item on the device default. The override is
+applied when the item activates, after its `C` values and after the device's
+own map/projection defaults.
 
 Unrecognized lines are ignored. Firmware persists the body verbatim to flash;
 both sides apply edits live if already playing.
+
+**Item budget.** The POST body shares the 4 KiB cap every POST has (firmware
+reads request bodies into 4 KB buffers). An item with no values is
+`I <8-hex-id> <sec>` — about 14 B — so a values-free playlist tops out around
+**270 items**, far past the ~128 patterns the store holds. A `C` line costs `3 + len(name) + 7` B per scalar
+value (raw 16.16 is up to 7 digits plus a sign), so a typical three-slider
+item is ~60 B and a `P` line 3–4 B: roughly **60 items** with values, **45**
+if every item carries three sliders and a projection. Past that the write is
+refused, not truncated.
 
 ## `/api/layout` — the one geometry object
 
@@ -754,6 +778,8 @@ All of these apply **live** and (on firmware) **persist to flash** — no reboot
   live on **`/api/layout`** (Gitea #465; the engine mechanism was #473) on
   both hosts, and are applied to the engine at boot and on every POST. The
   `proj*=` tokens the mirror briefly accepted on `POST /api/map` are gone.
+  A PER-ITEM override lives beside the item's values instead — the playlist's
+  `P` line, which both hosts carry (Gitea #470).
 - `POST /api/clock` accepts −840..=840 minutes.
 - Firmware settings whose flash write fails still apply live and add
   `"note":"not persisted: …"` to the `{"ok":true,…}` body (`/api/brightness`,

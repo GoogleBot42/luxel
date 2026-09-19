@@ -32,7 +32,8 @@ web/src/
     OutputCard, ClockCard, SyncCard, MqttCard, cards.css
   components/       reusable widgets (CodeMirror wrapper, Preview, Controls,
                     PinPanel, VarWatcher, Debugger, Gallery, PatternThumb,
-                    PlaylistRow, ProjectionRow, Dialog, PreviewAsChip) plus
+                    PlaylistRow, PatternPicker, ProjectionRow, Dialog,
+                    PreviewAsChip) plus
                     editor-frame.css, the chrome BOTH full-screen editors wear
   lib/              non-UI logic: device HTTP client, fetchgate, LNA classifier,
                     wasm bindings, control hints, playlist transport, audio, builtins
@@ -155,6 +156,7 @@ Registered cadences today:
 |---|---|---|---|
 | `status` | 1 Hz | `startSessionPoll()`, once from the shell | `/api/status` → fps readout, free heap, vmerr, per-board pixel cap |
 | `playlist` | 1 Hz | `pages/Playlist.svelte` while its tab is open | `/api/playlist`, reconciled against the optimistic transport intent (#431) |
+| `playlist-progress` | 2 Hz | `pages/Playlist.svelte` while its tab is open | nothing — it only ticks the now-playing clock (no fetch) |
 | `settings` | 0.5 Hz | `pages/Settings.svelte` while its tab is open | `/api/status` live field, `/api/mqtt`, `/api/sync`, `/api/clock` |
 
 `/api/output` is deliberately **not** polled: it is a form, and re-reading it
@@ -224,6 +226,45 @@ A7 (#468) did move naming into the inline-editable editor header, and exactly
 one `promptText` call went away with it. The dialog store is unchanged and
 still owns every confirmation (both deletes, playlist clear, the reboot
 prompts) plus the share-link fallback.
+
+## The playlist (Gitea #470, proposal §5.4)
+
+Three files and one rule: **an item owns its values.**
+
+| file | owns |
+|---|---|
+| `stores/device.ts` | the `playlist` store, `addToPlaylist()`, `queuePlaylistSave()`, `markTransport()` |
+| `pages/Playlist.svelte` | the transport group, the defaults, the ⋯ menu, the list, `+ Add` |
+| `components/PlaylistRow.svelte` | one row: the chips, the inline sliders, the Projection line |
+| `components/PatternPicker.svelte` | THE picker — what `+ Add` (and later the ⋯ menus) choose from |
+| `components/ProjectionRow.svelte` | the quiet Projection line, shared with the editor's Controls rail (#468) |
+
+`addToPlaylist(patternId, values?, proj?)` is the ONE path every "Add to
+playlist" affordance takes (the editor's button today; the Patterns tile ⋯
+menu at A6). It resolves the name from `devicePatterns`, appends
+optimistically and debounces the write — callers pass the values they have
+tuned and nothing else. There are no named presets (D6): the same pattern can
+sit in the playlist twice with two different looks, and each row edits its own.
+
+A value moved on the row that is CURRENTLY PLAYING is also pushed live with
+`POST /api/control`, because the saved playlist only reaches the engine at the
+next activation and a slider the fixture ignores is a broken slider.
+
+`PatternPicker` takes `patterns` as a prop rather than reading the store, and
+emits `pick: { id, kind }`. `kind` is always `"pattern"` today; Phase B
+(#478/#481) adds a `"scene"` SECTION to the same component — the search, the
+keyboard handling and the event shape are already shaped for it, and
+`PlaylistItem.kind` on the wire model is the row side of the same seam.
+
+The per-item **projection override** (§5.4d) rides beside the values, as the
+`P <mode>` line of the playlist wire format (docs/api.md). It is rendered by
+`components/ProjectionRow.svelte` — the same component the editor's Controls
+rail uses, so a projection can never be captioned two ways — which decides for
+itself whether to appear; the playlist row repeats the predicate
+(`projectionOptions(patternDims, layout.dims).length > 1`) one level up only so
+the chip that OPENS the panel is absent when there is nothing inside it. The
+row's thumbnail renders through the override, so what the row shows is what the
+device will play.
 
 `banners` is the longer-lived list for conditions rather than events
 (`setBanner(id, {level, text, role} | null)`, keyed upsert, insertion-ordered).
@@ -411,6 +452,7 @@ Derived helpers every consumer uses instead of re-deriving anything:
 | `effectiveFor(dims, l)` | what the pattern sees (pixelCount, w/h, projection) |
 | `captionFor(dims, l)` | `1D · along x`, or null when native |
 | `thumbLayout(l, n)` | the same shape at tile/thumbnail size |
+| `withProjectionOverride(l, dims, mode)` | the same Layout with ONE projection slot replaced — a playlist item's per-item override (§5.4d) |
 | `layoutKey(l)` | cheap identity: changed ⇒ rebuild your engines |
 | `configureEngine(e, l)` | the ONE place an engine is given a map + projection |
 | `compileForLayout(lx, src, max)` | compile a pattern onto the Layout it will be shown on |
@@ -438,7 +480,7 @@ playground. Per-item projection overrides are #470/#473's.
 `brightnessMax`, `deviceProtocol`, `protocolOptions`, `dataPin*`, `wifi*`,
 `mqtt*`, `outputStatus`, `palette*`, `clockStatus`, `syncStatus`, `netLive`,
 `playlist`; functions `connectDevice`, `detectDeviceBase`, `refresh*`,
-`queuePlaylistSave`, `markTransport`, `installDeviceMapCoords`,
+`addToPlaylist`, `queuePlaylistSave`, `markTransport`, `installDeviceMapCoords`,
 `installDeviceGridMap`, `clearDeviceMap`, `pollSubscribe`, `pollStopAll`,
 `startSessionPoll`.
 

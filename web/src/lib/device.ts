@@ -4,6 +4,7 @@
 // at the boundary, mirroring the wasm wrapper's conventions.
 
 import { gatedFetch } from "./fetchgate";
+import type { ProjectionMode } from "./geometry";
 
 export interface DeviceStatus {
   /** Frames the pattern RENDERED in the last second. On a pipelined board
@@ -527,7 +528,10 @@ export class DeviceSession {
   }
 
   /** Replace the stored playlist. `defaultSec` 0 = manual; per-item `sec` null
-   *  inherits the default. Serialized to the firmware's line format. */
+   *  inherits the default. Serialized to the firmware's line format — each
+   *  item's `C` (values) and `P` (projection override) lines follow its `I`,
+   *  and both are omitted when there is nothing to say, so what a
+   *  pre-#470 device stored round-trips byte-identically. */
   async setPlaylist(pl: Playlist): Promise<void> {
     const lines: string[] = [
       `D ${Math.max(0, Math.round(pl.defaultSec))}`,
@@ -538,6 +542,7 @@ export class DeviceSession {
       for (const [name, vals] of Object.entries(it.controls)) {
         lines.push(`C ${name} ${vals.map((v) => Math.round(v * RAW)).join(" ")}`);
       }
+      if (it.proj !== undefined) lines.push(`P ${it.proj}`);
     }
     await this.fetch("/api/playlist", { method: "POST", body: lines.join("\n") });
   }
@@ -559,10 +564,19 @@ export class DeviceSession {
 export interface PlaylistItem {
   id: string;
   name: string;
+  /** What the row plays. `pattern` is the only kind the wire carries today;
+   *  scene items are Phase B (#478/#481), so an absent `kind` reads as
+   *  `pattern` and the row model is already shaped for the second one. */
+  kind?: "pattern" | "scene";
   /** Per-item duration override in seconds; null = inherit the default. */
   sec: number | null;
   /** name → control values (floats). */
   controls: Record<string, number[]>;
+  /** Projection override for THIS item (§5.4d, Gitea #470): how its pattern
+   *  is shown on the device's Layout. Absent = the device's own default.
+   *  The token lands in the slot matching the pattern's own dimensionality,
+   *  so one value survives whatever the pattern turns out to be. */
+  proj?: ProjectionMode;
   /**
    * Device pre-flight verdict: the pattern's assert() invariants fail
    * against the device's CURRENT config, so this entry would play black.

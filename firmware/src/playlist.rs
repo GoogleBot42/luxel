@@ -8,8 +8,14 @@
 //! Wire/flash format is line-based (no JSON parser needed), matching the
 //! native mirror (crates/luxel-cli/src/serve.rs):
 //!   `D <sec>`                    default seconds (0 = manual)
+//!   `X <ms>`                     crossfade between items (0 = hard cut)
 //!   `I <patternId> <sec|-1>`     item; -1 = inherit default
 //!   `C <name> <raw...>`          a control for the last item (raw 16.16)
+//!   `P <mode>`                   projection override for the last item
+//!
+//! Every line after an `I` belongs to it, and every line but `I` is optional:
+//! a playlist written before `P` existed parses byte-for-byte as it always
+//! did (Gitea #470).
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -24,6 +30,7 @@ use embassy_time::{Duration, Timer};
 use esp_println::println;
 use luxel_core::fixed::Fx;
 use luxel_core::jsonview::{json_escape, push_i32, push_piece, push_u32};
+use luxel_core::projection::ProjectionMode;
 
 use crate::patterns;
 use crate::shared::{Msg, MSG_QUEUE};
@@ -35,6 +42,11 @@ struct Item {
     controls: Vec<(String, Vec<i32>)>,
     /// per-item override seconds; None = inherit the default.
     override_sec: Option<i32>,
+    /// per-item projection override as a `ProjectionMode` FFI code (§5.4d);
+    /// None = the device's own default. Stored as the code rather than the
+    /// enum so the item carries one byte and the token match lives in one
+    /// place (parse).
+    proj: Option<u8>,
 }
 
 #[derive(Clone)]
@@ -163,12 +175,22 @@ fn parse(body: &str) -> Playlist {
                     pattern_id: id,
                     controls: Vec::new(),
                     override_sec,
+                    proj: None,
                 });
             }
             Some("C") => {
                 if let (Some(item), Some(name)) = (pl.items.last_mut(), it.next()) {
                     let raw: Vec<i32> = it.filter_map(|v| v.parse().ok()).collect();
                     item.controls.push((name.into(), raw));
+                }
+            }
+            Some("P") => {
+                if let Some(item) = pl.items.last_mut() {
+                    // an unknown token leaves the item on the device default
+                    item.proj = it
+                        .next()
+                        .and_then(|t| t.parse::<ProjectionMode>().ok())
+                        .map(ProjectionMode::as_u8);
                 }
             }
             _ => {}
@@ -225,6 +247,12 @@ pub fn to_json() -> String {
                 push_piece(&mut out, "]");
             }
             push_piece(&mut out, "}");
+            // projection override (§5.4d) — absent = the device default
+            if let Some(mode) = it.proj.and_then(ProjectionMode::from_u8) {
+                push_piece(&mut out, ",\"proj\":\"");
+                push_piece(&mut out, mode.as_str());
+                push_piece(&mut out, "\"");
+            }
             // pre-flight verdict: the item's assert() invariants vs the
             // CURRENT config (absent = fine / still checking)
             if let Some(m) = preflight_violation(&it.pattern_id) {
@@ -334,6 +362,11 @@ async fn enter_item(i: usize) {
     for (name, raw) in item.controls {
         let vals: Vec<Fx> = raw.iter().map(|&r| Fx::from_raw(r)).collect();
         MSG_QUEUE.send(Msg::Control(name, vals)).await;
+    }
+    // …and its projection, last: the render task drains the whole queue
+    // before the next frame, so the engine is already the new item's.
+    if let Some(code) = item.proj {
+        MSG_QUEUE.send(Msg::Projection(code)).await;
     }
 }
 

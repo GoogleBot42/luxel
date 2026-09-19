@@ -32,16 +32,20 @@ import {
   layoutLabel,
   pixelCount as layoutPixels,
   projectionCaption,
+  projectionLabel,
+  projectionOptions,
   reconcileLayout,
   thumbLayout,
   tileShape,
   wiringCoords,
+  withProjectionOverride,
   type Dims,
   type Effective,
   type Layout,
   type PatternDims,
   type PreviewAs,
   type Projection,
+  type ProjectionMode,
   type TileShape,
 } from "../lib/geometry";
 import { Engine, type Diagnostic, type Luxel } from "../lib/luxel";
@@ -58,10 +62,22 @@ export {
   layoutKey,
   layoutLabel,
   projectionCaption,
+  projectionLabel,
+  projectionOptions,
   thumbLayout,
   tileShape,
+  withProjectionOverride,
 };
-export type { Dims, Effective, Layout, PatternDims, PreviewAs, Projection, TileShape };
+export type {
+  Dims,
+  Effective,
+  Layout,
+  PatternDims,
+  PreviewAs,
+  Projection,
+  ProjectionMode,
+  TileShape,
+};
 
 // ---- the inputs ----
 
@@ -212,19 +228,23 @@ export const THUMB_MAX_CELLS = 400;
  * the first compile is always the right one.
  *
  * `maxCells > 0` shrinks the Layout for a thumbnail (see `thumbLayout`).
+ * `proj` is a per-item projection override (a playlist row's, §5.4d): it
+ * replaces the slot for this pattern's dims, so the thumbnail shows what the
+ * device will actually render rather than the device default.
  * Returns the compiler's Diagnostic when the pattern does not compile.
  */
 export function compileForLayout(
   lx: Luxel,
   src: string,
   maxCells = 0,
+  proj: ProjectionMode | null = null,
 ): { engine: Engine; layout: Layout; dims: PatternDims } | Diagnostic {
   const shrink = (l: Layout): Layout => (maxCells > 0 ? thumbLayout(l, maxCells) : l);
   const first = shrink(layoutFor(0));
   let engine = lx.compile(src, first.pixels);
   if (!(engine instanceof Engine)) return engine;
   const dims = engine.preferredDims();
-  const want = shrink(layoutFor(dims));
+  const want = withProjectionOverride(shrink(layoutFor(dims)), dims, proj);
   if (want.pixels !== first.pixels) {
     engine.free();
     const again = lx.compile(src, want.pixels);

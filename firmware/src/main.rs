@@ -51,6 +51,7 @@ use esp_radio::wifi::sta::StationConfig;
 use esp_radio::wifi::{Config as WifiConfig, ControllerConfig, Interface, WifiController};
 use luxel_core::engine::Engine;
 use luxel_core::fixed::Fx;
+use luxel_core::projection::ProjectionMode;
 
 mod assets;
 mod board;
@@ -1290,6 +1291,21 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                 Msg::Var(name, value) => {
                     if let Some(eng) = engine.as_mut() {
                         eng.set_var(&name, value);
+                    }
+                }
+                // A playlist item's projection override (Gitea #470): the
+                // stored mode goes into the slot for the pattern's OWN
+                // dimensionality, so one token survives whatever the running
+                // pattern turns out to be. The engine re-derives its plan
+                // from the triple on every map install, so this survives the
+                // `devicemap::apply` that follows a swap.
+                Msg::Projection(code) => {
+                    if let (Some(eng), Some(mode)) =
+                        (engine.as_mut(), ProjectionMode::from_u8(code))
+                    {
+                        let mut p = eng.projection();
+                        p.set(eng.preferred_dims(), mode);
+                        eng.set_projection(p);
                     }
                 }
                 // Live pixel-count change (no reboot): resize the output

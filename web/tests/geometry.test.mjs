@@ -34,6 +34,7 @@ import {
   thumbLayout,
   tileShape,
   wiringCoords,
+  withProjectionOverride,
 } from "../src/lib/geometry.ts";
 
 /** A reconciler input with everything at its quiet default. */
@@ -333,6 +334,37 @@ test("a persisted choice is read back, and a pre-#463 rig migrates", () => {
   assert.equal(parsePreviewAs(null), null);
   assert.equal(parsePreviewAs({ mode: "nonsense" }), null);
   assert.equal(parsePreviewAs("strip"), null);
+});
+
+// ---- per-item projection override (Gitea #470) ----
+
+test("withProjectionOverride replaces only the slot for the pattern's dims", () => {
+  const l = reconcileLayout(input({ connected: true, geom: PANEL_CONSOLE, patternDims: 1 }));
+  assert.deepEqual(l.projection, DEFAULT_PROJECTION, "the Layout starts on the defaults");
+
+  const one = withProjectionOverride(l, 1, "x");
+  assert.equal(one.projection.proj1d, "x");
+  assert.equal(one.projection.proj2d, DEFAULT_PROJECTION.proj2d, "other slots untouched");
+  assert.equal(one.projection.proj3d, DEFAULT_PROJECTION.proj3d);
+  assert.equal(l.projection.proj1d, DEFAULT_PROJECTION.proj1d, "the input is not mutated");
+  assert.equal(one.pixels, l.pixels, "geometry itself is unchanged");
+
+  assert.equal(withProjectionOverride(l, 3, "yz").projection.proj3d, "yz");
+  assert.equal(withProjectionOverride(l, 2, "x").projection.proj2d, "x");
+  // preferredDims() reports 0 for "no preference"; that is the 1D slot
+  assert.equal(withProjectionOverride(l, 0, "y").projection.proj1d, "y");
+
+  // "no override" is not a special case at the call site
+  assert.equal(withProjectionOverride(l, 1, null), l);
+  assert.equal(withProjectionOverride(l, 1, undefined), l);
+});
+
+test("an overridden 1D pattern on a matrix renders as that strip", () => {
+  const l = reconcileLayout(input({ connected: true, geom: PANEL_CONSOLE, patternDims: 1 }));
+  assert.equal(effectiveFor(1, l).pixelCount, 4096, "by index: one call per pixel");
+  const along = withProjectionOverride(l, 1, "x");
+  assert.equal(effectiveFor(1, along).pixelCount, 64, "along x: one call per column");
+  assert.equal(projectionCaption(1, along), "1D · along x");
 });
 
 // ---- parity with the engine ----

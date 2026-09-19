@@ -89,6 +89,11 @@ struct PlaylistItem {
     /// Per-item duration override in seconds. `None` = inherit the playlist
     /// default; `Some(0)` = manual (wait for next); `Some(n)` = n seconds.
     override_sec: Option<i32>,
+    /// Per-item projection override (Gitea #470, docs/spec/projection.md
+    /// §2): how THIS item's pattern is shown on the Layout. `None` = the
+    /// device default. It lands in the slot matching the pattern's own dims,
+    /// so one token survives whatever the pattern turns out to be.
+    proj: Option<ProjectionMode>,
 }
 
 #[derive(Clone, Default)]
@@ -1141,6 +1146,13 @@ fn enter_item(state: &State, i: usize) -> Option<(Engine, String, Vec<u8>)> {
         eng.set_control(name, &vals);
     }
     apply_map(state, &mut eng);
+    // …then the item's own projection, which outranks the device default
+    // (§5.4d). After `apply_map`, which installs that default.
+    if let Some(mode) = item.proj {
+        let mut p = eng.projection();
+        p.set(eng.preferred_dims(), mode);
+        eng.set_projection(p);
+    }
     *state.pattern_src.lock().unwrap() = sp.source.clone();
     *state.pattern_bc.lock().unwrap() = sp.bc.clone();
     *state.controls_json.lock().unwrap() = jsonview::controls_json(&eng);
@@ -1585,12 +1597,15 @@ fn playlist_json(state: &State) -> String {
                 })
                 .map(|m| format!(",\"invalid\":\"{}\"", json_escape(&m)))
                 .unwrap_or_default();
+            // projection override (§5.4d) — absent = the device default
+            let proj = it.proj.map(|m| format!(",\"proj\":\"{m}\"")).unwrap_or_default();
             format!(
-                "{{\"id\":\"{}\",\"name\":\"{}\",\"sec\":{},\"controls\":{{{}}}{}}}",
+                "{{\"id\":\"{}\",\"name\":\"{}\",\"sec\":{},\"controls\":{{{}}}{}{}}}",
                 it.pattern_id,
                 json_escape(&name),
                 sec,
                 controls.join(","),
+                proj,
                 invalid
             )
         })
@@ -1606,8 +1621,11 @@ fn playlist_json(state: &State) -> String {
 }
 
 /// Parse the line-based playlist body (no JSON parser needed, mirrors the
-/// firmware). Lines: `D <sec>` default; `I <patternId> <sec|-1>` item
-/// (-1 = inherit default); `C <name> <raw...>` a control for the last item.
+/// firmware). Lines: `D <sec>` default; `X <ms>` crossfade;
+/// `I <patternId> <sec|-1>` item (-1 = inherit default);
+/// `C <name> <raw...>` a control for the last item; `P <mode>` its
+/// projection override. Every line but `I` is optional, so a playlist
+/// written before `P` existed parses unchanged (Gitea #470).
 fn parse_playlist(body: &str) -> Playlist {
     let mut pl = Playlist::default();
     for line in body.lines() {
@@ -1626,12 +1644,19 @@ fn parse_playlist(body: &str) -> Playlist {
                     pattern_id: id,
                     controls: Vec::new(),
                     override_sec,
+                    proj: None,
                 });
             }
             Some("C") => {
                 if let (Some(item), Some(name)) = (pl.items.last_mut(), it.next()) {
                     let raw: Vec<i32> = it.filter_map(|v| v.parse().ok()).collect();
                     item.controls.push((name.to_string(), raw));
+                }
+            }
+            Some("P") => {
+                if let Some(item) = pl.items.last_mut() {
+                    // an unknown token leaves the item on the device default
+                    item.proj = it.next().and_then(|t| t.parse::<ProjectionMode>().ok());
                 }
             }
             _ => {}

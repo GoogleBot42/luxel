@@ -13,6 +13,7 @@ import {
   type DeviceStatus,
   type MqttStatus,
   type Playlist,
+  type PlaylistItem,
   type SyncStatus,
 } from "../lib/device";
 import {
@@ -484,6 +485,36 @@ export function queuePlaylistSave(): void {
       }
     })();
   }, 400);
+}
+
+/**
+ * Append a device pattern to the playlist with a snapshot of its values —
+ * the ONE path behind every "Add to playlist" affordance (the editor's, the
+ * Patterns tile ⋯ menu's, the Playlist page's `+ Add` picker). Values live
+ * on the item and nowhere else (D6: no named presets), so the caller passes
+ * whatever it has tuned; `proj` is the per-item projection override (§5.4d),
+ * normally left off so the item follows the device default.
+ *
+ * Optimistic like every other playlist edit: the row appears at once and
+ * `queuePlaylistSave` debounces the write. The name is resolved from the
+ * device library so the row is not a bare id until the next poll.
+ */
+export function addToPlaylist(
+  patternId: string,
+  values: Record<string, number[]> = {},
+  proj?: ProjectionMode,
+): void {
+  const name = get(devicePatterns).find((p) => p.id === patternId)?.name ?? patternId;
+  const item: PlaylistItem = {
+    id: patternId,
+    name,
+    kind: "pattern",
+    sec: null,
+    controls: { ...values },
+  };
+  if (proj !== undefined) item.proj = proj;
+  playlist.update((pl) => ({ ...pl, items: [...pl.items, item] }));
+  queuePlaylistSave();
 }
 
 /** Show a transport request straight away and let the poll confirm it: the

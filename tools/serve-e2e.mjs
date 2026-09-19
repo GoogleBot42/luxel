@@ -6,9 +6,13 @@
 //   node tools/serve-e2e.mjs
 
 import { execSync, spawn } from "node:child_process";
+import { PORT as E2E } from "../web/tools/e2e-common.mjs";
 import { lxpBody } from "../web/tools/lxp.mjs"; // needs web/public/luxel.wasm (npm run wasm)
 
-const PORT = 8721;
+// `E2E_PORT + 70` (and +71 for the panel impersonation), so a concurrent
+// session's run of this harness does not fight this one for the port —
+// same plan every browser harness uses (web/tools/e2e-common.mjs).
+const PORT = E2E.serve;
 let failures = 0;
 function check(name, ok, extra = "") {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${extra ? `  (${extra})` : ""}`);
@@ -210,6 +214,77 @@ await fetch(`${base}/api/code`, {
   body: await lxpBody("", "export function render(index) { hsv(index / pixelCount, 1, 1) }"),
 });
 await sleep(300);
+
+// ---- playlist wire format (Gitea #470) ----
+// The line codec is the contract between the firmware, the mirror and the
+// web client, and its whole point is that it only ever GROWS: a playlist a
+// pre-#470 device wrote has no `P` line and must parse exactly as it did.
+const savePat = async (name, src) =>
+  (await (await fetch(`${base}/api/patterns`, { method: "POST", body: await lxpBody(name, src) })).json()).id;
+const plA = await savePat("PL one", "export function sliderHue(h) { g = h }\nexport function render(index) { hsv(g + index / pixelCount, 1, 1) }");
+const plB = await savePat("PL two", "export function render2D(index, x, y) { hsv(x, 1, y) }");
+
+// (1) the OLD format, byte-for-byte what a device wrote before `P` existed
+await fetch(`${base}/api/playlist`, {
+  method: "POST",
+  body: `D 7\nX 250\nI ${plA} -1\nC sliderHue 32768\nI ${plB} 3\n`,
+});
+const plOld = await (await fetch(`${base}/api/playlist`)).json();
+check(
+  "playlist: an old-format body parses unchanged",
+  plOld.defaultSec === 7 &&
+    plOld.crossfadeMs === 250 &&
+    plOld.items.length === 2 &&
+    plOld.items[0].sec === null &&
+    Math.abs(plOld.items[0].controls.sliderHue[0] - 0.5) < 0.001 &&
+    plOld.items[1].sec === 3,
+  JSON.stringify(plOld),
+);
+check(
+  "playlist: an old-format item carries no projection",
+  plOld.items.every((i) => i.proj === undefined),
+  JSON.stringify(plOld.items.map((i) => i.proj ?? null)),
+);
+
+// (2) `P` after an item is that item's projection override, echoed back
+await fetch(`${base}/api/playlist`, {
+  method: "POST",
+  body: `D 7\nX 250\nI ${plA} -1\nC sliderHue 32768\nP x\nI ${plB} 3\n`,
+});
+const plNew = await (await fetch(`${base}/api/playlist`)).json();
+check(
+  "playlist: a `P` line rides on its own item and round-trips",
+  plNew.items[0].proj === "x" &&
+    plNew.items[1].proj === undefined &&
+    Math.abs(plNew.items[0].controls.sliderHue[0] - 0.5) < 0.001,
+  JSON.stringify(plNew.items),
+);
+
+// (3) an unknown mode (or an unknown line) leaves the item on the default —
+// forward compatibility runs the same way backward compatibility does
+await fetch(`${base}/api/playlist`, {
+  method: "POST",
+  body: `D 7\nI ${plA} -1\nP sideways\nQ 1 2 3\nI ${plB} -1\nP yz\n`,
+});
+const plJunk = await (await fetch(`${base}/api/playlist`)).json();
+check(
+  "playlist: an unknown projection token and an unknown line are ignored",
+  plJunk.items.length === 2 && plJunk.items[0].proj === undefined && plJunk.items[1].proj === "yz",
+  JSON.stringify(plJunk.items.map((i) => i.proj ?? null)),
+);
+
+// (4) a `P` before any item has nothing to attach to and is dropped
+await fetch(`${base}/api/playlist`, { method: "POST", body: `P x\nD 7\nI ${plA} -1\n` });
+const plStray = await (await fetch(`${base}/api/playlist`)).json();
+check(
+  "playlist: a `P` with no item ahead of it is dropped",
+  plStray.items.length === 1 && plStray.items[0].proj === undefined,
+  JSON.stringify(plStray.items),
+);
+
+// clean up so the routing checks below see the mirror as they expect
+await fetch(`${base}/api/playlist`, { method: "POST", body: "D 0" });
+for (const id of [plA, plB]) await fetch(`${base}/api/patterns/${id}`, { method: "DELETE" });
 
 // ---- browser-level checks ----
 // ---- page routing (the mirror stands in for a device serving its assets) ----

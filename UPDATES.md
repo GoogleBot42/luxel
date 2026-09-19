@@ -1,5 +1,67 @@
 # Update log
 
+## 2026-09-19 — web v2 A9: the Playlist, and per-item values on the wire (#470)
+
+A playlist item is now **a pattern plus its own values plus how it is
+projected**, edited in place on the row (proposal §5.4/§5.4b, mockups S4/S4b).
+
+**Wire.** The line codec grew exactly one line. `C <name> <raw…>` already
+carried an item's control values, so the only new thing is
+`P <mode>` — a projection override (`index|x|y|z|xy|xz|yz`,
+docs/spec/projection.md) binding to the `I` above it, like `C` does. Both are
+optional, so a playlist a pre-#470 device wrote parses byte-for-byte as it
+always did, and a device that does not know `P` ignores it. Implemented in
+the firmware codec (`firmware/src/playlist.rs` → a new `Msg::Projection(u8)`
+the render task applies to the slot matching the running pattern's own dims),
+the mirror (`crates/luxel-cli/src/serve.rs`, applied after the device's own
+map + projection defaults) and `web/src/lib/device.ts`. `GET /api/playlist`
+echoes `"proj":"x"` only when an item overrides. docs/api.md carries the
+grammar and the practical item budget (~270 values-free items in the 4 KiB
+body, ~60 with values, ~45 with three sliders and a projection each).
+
+Firmware cost: **+544 B** on `c6-devkit` + `hosted-ui` (the tightest shipped
+image, 3.39 % of the OTA slot free), +832 B on `athom-music`; `.stack` on
+pixelblaze-v3 26,876 → 26,812 B, `tools/stack-check.sh` clean at both
+profiles. It is sub-kilobyte because #473 already linked the projection plan
+machinery unconditionally — no `format!`, no new monomorphizations, the `P`
+line parsed by the same `split_whitespace` walk `C` uses (docs/boards.md).
+
+**Page.** Transport is one group at the left (primary Play/Stop, prev/next,
+and a now-playing readout with a progress bar timed locally from each
+advance); the two settings that are not transport moved right; Clear went
+into ⋯ behind the danger confirm. A row is handle · device-shaped thumbnail ·
+name + type · duration chip · `N values ▾` chip · ✕, and both chips expand in
+place: the duration editor, and the item's own sliders (`Controls.svelte`,
+guess treatment and all) followed by the quiet Projection line —
+`components/ProjectionRow.svelte`, the same component the editor's rail uses
+(#468), which shows itself only when the pattern's dims differ from the
+Layout's AND the Layout offers more than one option. A value moved on the row that is PLAYING is pushed live with
+`POST /api/control` as well as saved. The row's thumbnail renders through the
+item's override, so the row shows what the device will play.
+
+**One picker.** `components/PatternPicker.svelte` is what `+ Add` opens: a
+searchable list of the device's patterns with the same device-shaped live
+thumbnails, built so Phase B adds a Scenes *section* rather than a second
+component (`pick` already carries a `kind`, and `PlaylistItem.kind` is the row
+side of the same seam). Exported for the editor's and the Patterns tile's ⋯
+menus. `stores/device.ts` gained `addToPlaylist(patternId, values?, proj?)` —
+the ONE path every "Add to playlist" affordance takes; the editor's button and
+the Patterns tile ⋯ menu (#467, merged while this was in flight) both call it
+instead of building an item literal of their own.
+
+**Mobile (≤ 600 px, D9).** Chips drop to their own line instead of squeezing
+the name, thumbnails shrink to 40 px, chips and ✕ become 32 px targets, the
+picker becomes a bottom sheet, and the page does not scroll sideways at
+390 px — all asserted in `device-e2e.mjs`, not just eyeballed. Reordering is
+the grip (drag) plus always-visible ↑/↓, because HTML5 drag is a mouse
+gesture and the phone is this page's primary surface.
+
+**Verification.** `device-e2e.mjs` grew the `+ Add` → picker → row flow, the
+inline value edit read back off `GET /api/playlist`, the projection override
+and its reset on a 1D item under `--board panel`, ✕, Clear cancelled then
+confirmed, and the 390 px pass (164 checks green, strip + panel consoles).
+`tools/serve-e2e.mjs` grew four wire checks including an old-format body and a
+stray `P`. Renamed/added data-roles are listed in the PR.
 ## 2026-09-19 — HUB75 panel arrangement: the boot-time panel→pixel remap (#475)
 
 A HUB75 chain is one ribbon — the driver shifts a single row `pw · panels`

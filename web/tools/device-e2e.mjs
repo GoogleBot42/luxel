@@ -265,10 +265,12 @@ try {
         "Panel 2D",
         "export function render2D(index, x, y) { hsv(x, 1, y) }",
       );
+      // carries a slider too, so the playlist row shows BOTH halves of the
+      // values chip: the item's own controls and the projection under them
       const id1d = await saveOn(
         MAPPED,
         "Panel 1D",
-        "export function render(index) { hsv(index / pixelCount, 1, 1) }",
+        "export function sliderHue(h) { g = h }\nexport function render(index) { hsv(g + index / pixelCount, 1, 1) }",
       );
       await fetch(`${MAPPED}/api/playlist`, {
         method: "POST",
@@ -434,7 +436,110 @@ try {
         rowCaption.some((t) => /^1D · /.test(t)),
         rowCaption.join(" | "),
       );
+
+      // ---- per-item projection override (#470 / §5.4d) ----
+      // The quiet Projection row is visible ONLY where it can matter: the
+      // 1D item on this 2D console offers three modes, the 2D item is
+      // native and offers none — so row 0 has no values chip at all.
+      const chips = await mappedPage.$$eval('[data-role="playlist-item"]', (rows) =>
+        rows.map((r) => (r.querySelector('[data-role="pl-values-toggle"]') === null ? "-" : "chip")),
+      );
+      check(
+        "projection: the native 2D item offers no values chip, the 1D one does",
+        chips[0] === "-" && chips[1] === "chip",
+        chips.join(","),
+      );
+      // the row reuses the EDITOR's ProjectionRow, so it carries the same
+      // data-roles — one component, one caption, one set of hooks (#468)
+      await mappedPage.$$eval('[data-role="pl-values-toggle"]', (els) => els[0].click());
+      await sleep(300);
+      check(
+        "projection: the 1D item's values open on the Projection row",
+        (await mappedPage.$('[data-role="pl-values"] [data-role="projection-row"]')) !== null,
+      );
       await mappedPage.screenshot({ path: `${shotDir}/device-e2e-panel-playlist.png` });
+      await mappedPage.click('[data-role="pl-values"] [data-role="projection-change"]');
+      await mappedPage.waitForSelector('[data-role="projection-options"]', { timeout: 2000 });
+      await mappedPage.click('[data-role="projection-opt-x"]');
+      await sleep(700);
+      const plProj = await (await fetch(`${MAPPED}/api/playlist`)).json();
+      check(
+        "projection: the override rides on the item and the device echoes it",
+        plProj.items[1].proj === "x" && plProj.items[0].proj === undefined,
+        JSON.stringify(plProj.items.map((i) => i.proj ?? null)),
+      );
+      const projVal = await mappedPage.$eval(
+        '[data-role="pl-values"] [data-role="projection-value"]',
+        (el) => (el.textContent ?? "").trim(),
+      );
+      check(
+        "projection: the row reads the override in accent, not the default",
+        /along x/i.test(projVal) && /override/i.test(projVal),
+        projVal,
+      );
+      await mappedPage.click('[data-role="pl-values"] [data-role="projection-reset"]');
+      await sleep(700);
+      check(
+        "projection: reset drops the override back to the device default",
+        (await (await fetch(`${MAPPED}/api/playlist`)).json()).items[1].proj === undefined,
+      );
+
+      await mappedPage.$$eval('[data-role="pl-values-toggle"]', (els) => els[0].click());
+      await sleep(200); // collapsed again, so the phone pass opens it itself
+      const deskThumb = await mappedPage.$$eval(
+        '[data-role="playlist-item"] .thumb canvas',
+        (els) => els.map((e) => Math.round(e.getBoundingClientRect().width)),
+      );
+      check(
+        "thumbs: a desktop row thumbnail is the full 48 px square",
+        deskThumb.length > 0 && deskThumb.every((w) => w === 48),
+        deskThumb.join(","),
+      );
+
+      // ---- the phone (D9: the playlist is the primary phone surface) ----
+      await mappedPage.setViewport({ width: 390, height: 820 });
+      await sleep(900);
+      const overflows = await mappedPage.evaluate(() => {
+        const panel = document.querySelector('[data-role="playlist-panel"]');
+        return {
+          doc: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+          panel: panel.scrollWidth > panel.clientWidth,
+        };
+      });
+      check(
+        "mobile: the playlist does not scroll sideways at 390 px",
+        overflows.doc === false && overflows.panel === false,
+        JSON.stringify(overflows),
+      );
+      // the values chip still works, and the thumbnails shrank
+      await mappedPage.$$eval('[data-role="pl-values-toggle"]', (els) => els[0].click());
+      await sleep(400);
+      check(
+        "mobile: the values chip still expands in place",
+        (await mappedPage.$('[data-role="pl-values"] [data-role="projection-row"]')) !== null,
+      );
+      const thumbPx = await mappedPage.$$eval('[data-role="playlist-item"] .thumb canvas', (els) =>
+        els.map((e) => Math.round(e.getBoundingClientRect().width)),
+      );
+      check(
+        "mobile: row thumbnails are the smaller size",
+        thumbPx.length > 0 && thumbPx.every((w) => w <= 40),
+        thumbPx.join(","),
+      );
+      const targets = await mappedPage.$$eval(
+        '[data-role="pl-values-toggle"], [data-role="pl-duration"], [data-role="pl-remove"]',
+        (els) => els.map((e) => Math.round(e.getBoundingClientRect().height)),
+      );
+      check(
+        "mobile: chips and ✕ are thumb-sized targets",
+        targets.length > 0 && targets.every((h) => h >= 30),
+        targets.join(","),
+      );
+      await mappedPage.screenshot({
+        path: `${shotDir}/device-e2e-panel-playlist-mobile.png`,
+        fullPage: true,
+      });
+      await mappedPage.setViewport({ width: 1400, height: 900 });
     } finally {
       await mappedPage.close();
       mappedDev.kill();
@@ -1575,7 +1680,9 @@ try {
     "playlist: crossfade persisted as ms",
     (await (await fetch(`${DEV}/api/playlist`)).json()).crossfadeMs === 500,
   );
-  // per-item override on the first row
+  // per-item override: the duration CHIP opens the editor in place (#470)
+  await page.$$eval('[data-role="pl-duration"]', (els) => els[0].click());
+  await sleep(200);
   await page.$$eval('[data-role="pl-override"]', (els) => {
     els[0].click();
   });
@@ -1589,6 +1696,31 @@ try {
     "playlist: per-item override persisted",
     (await (await fetch(`${DEV}/api/playlist`)).json()).items[0].sec === 2,
   );
+  const durChip = await page.$$eval('[data-role="pl-duration"]', (els) =>
+    (els[0].textContent ?? "").trim(),
+  );
+  check("playlist: the duration chip shows the override", /^2 s/.test(durChip), durChip);
+  await page.$$eval('[data-role="pl-duration"]', (els) => els[0].click()); // close again
+  await sleep(150);
+
+  // values edited INLINE on the row (#470, D6): the chip expands the item's
+  // own sliders and the edit lands on the device as that item's `C` line
+  await page.$$eval('[data-role="pl-values-toggle"]', (els) => els[0].click());
+  await sleep(300);
+  await page.$eval('[data-role="pl-values"] input[type="range"]', (el) => {
+    el.value = "0.33";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await sleep(700);
+  const plInline = await (await fetch(`${DEV}/api/playlist`)).json();
+  check(
+    "playlist: a value edited inline lands on the item, not the other copy",
+    Math.abs(plInline.items[0].controls.sliderHue[0] - 0.33) < 0.01 &&
+      Math.abs(plInline.items[1].controls.sliderHue[0] - 0.8) < 0.01,
+    JSON.stringify(plInline.items.map((i) => i.controls)),
+  );
+  await page.$$eval('[data-role="pl-values-toggle"]', (els) => els[0].click());
+  await sleep(150);
   // drag-to-reorder: move item 0 (hue 0.2) below item 1 (hue 0.8)
   await page.evaluate(() => {
     const rows = document.querySelectorAll('[data-role="playlist-item"]');
@@ -1634,11 +1766,64 @@ try {
     "playlist: transport returns to the play button after stop",
     (await page.$('[data-role="pl-play"]')) !== null,
   );
-  // total run-time summary (item0 override 2s + item1 default 5s = 7s)
+  // total run-time summary (item0 default 5s + item1 override 2s = 7s)
   const total = await page.$eval('[data-role="pl-total"]', (el) => el.textContent ?? "");
   check("playlist: total run-time shown", /2 items/.test(total) && /7s/.test(total), total.trim());
-  // clear empties the playlist
+
+  // ---- `+ Add` opens THE picker and appends what you choose (#470) ----
+  await page.click('[data-role="pl-add"]');
+  await page.waitForSelector('[data-role="pattern-picker"]', { timeout: 4000 });
+  const pickCount = await page.$$eval('[data-role="picker-item"]', (els) => els.length);
+  check("playlist: the picker lists the device's patterns", pickCount >= 1, String(pickCount));
+  await page.$eval('[data-role="picker-search"]', (el) => {
+    el.value = "zzzz-no-such-pattern";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await sleep(250);
+  check(
+    "playlist: the picker search narrows to nothing when nothing matches",
+    (await page.$('[data-role="picker-empty"]')) !== null &&
+      (await page.$$eval('[data-role="picker-item"]', (els) => els.length)) === 0,
+  );
+  await page.$eval('[data-role="picker-search"]', (el) => {
+    el.value = "";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await sleep(250);
+  await page.$$eval('[data-role="picker-item"]', (els) => els[0].click());
+  await sleep(700);
+  check(
+    "playlist: picking from + Add appends a row",
+    (await page.$$('[data-role="playlist-item"]')).length === 3 &&
+      (await (await fetch(`${DEV}/api/playlist`)).json()).items.length === 3,
+  );
+  check(
+    "playlist: the picker closes after a pick",
+    (await page.$('[data-role="pattern-picker"]')) === null,
+  );
+
+  // ---- ✕ removes one row ----
+  await page.$$eval('[data-role="pl-remove"]', (els) => els[2].click());
+  await sleep(700);
+  check(
+    "playlist: ✕ removes that item only",
+    (await (await fetch(`${DEV}/api/playlist`)).json()).items.length === 2,
+  );
+
+  // ---- Clear lives in ⋯ and is a danger confirm: cancel keeps it ----
+  await page.click('[data-role="pl-more"]');
+  await page.waitForSelector('[data-role="pl-clear"]', { timeout: 3000 });
   await page.click('[data-role="pl-clear"]');
+  await cancelDialog(page);
+  await sleep(500);
+  check(
+    "playlist: cancelling Clear keeps the items",
+    (await (await fetch(`${DEV}/api/playlist`)).json()).items.length === 2,
+  );
+  await page.click('[data-role="pl-more"]');
+  await page.waitForSelector('[data-role="pl-clear"]', { timeout: 3000 });
+  await page.click('[data-role="pl-clear"]');
+  check("playlist: Clear asks before emptying", (await dialogTitle(page)).includes("Clear"));
   await acceptDialog(page);
   await sleep(500);
   check(

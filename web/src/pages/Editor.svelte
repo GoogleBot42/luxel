@@ -41,6 +41,7 @@
     type StepKind,
   } from "../lib/luxel";
   import {
+    addToPlaylist as addPatternToPlaylist,
     brightness,
     device,
     deviceCaps,
@@ -59,8 +60,6 @@
     paletteAmount,
     paletteFlat,
     paletteSupported,
-    playlist,
-    queuePlaylistSave,
     refreshDevicePatterns,
     refreshStatus,
   } from "../stores/device";
@@ -870,15 +869,9 @@
    *  different params. */
   function addToPlaylist(): void {
     if (!$device || !$devicePatternId) return;
-    const id = $devicePatternId;
-    const name = $devicePatterns.find((p) => p.id === id)?.name ?? $patternName;
-    const itemControls: Record<string, number[]> = {};
-    for (const [k, v] of Object.entries($controlValues)) itemControls[k] = v;
-    playlist.update((pl) => ({
-      ...pl,
-      items: [...pl.items, { id, name, sec: null, controls: itemControls }],
-    }));
-    queuePlaylistSave();
+    // one path for every "Add to playlist" affordance (#470) — the item
+    // carries the values you tuned here, and nothing else does
+    addPatternToPlaylist($devicePatternId, { ...$controlValues });
     note("save", "added to playlist", 2000);
   }
 
