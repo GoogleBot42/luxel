@@ -53,8 +53,10 @@ Everything runs on the wall unit at http://192.168.0.205/ unless noted.
 
 - [ ] **WiFi form** — shows the saved network; changing creds reboots onto
   the new one (careful: typos strand it → AP mode should catch it now).
-- [ ] **Device map upload** (v0.1.16): "install on device" in the map
-  sub-tab; the wall renders with real geometry and it survives reboot.
+- [ ] **Device map upload** (v0.1.16): "install on device" in the editor
+  rail's **LED layout** block with the layout set to `2D map` (it was the map
+  sub-tab before #468, and #469 moves the whole block into Settings → LED
+  layout); the wall renders with real geometry and it survives reboot.
 - [ ] **Network input status row** — while LedFx/xLights (or my test
   script) streams DDP, the row says "receiving DDP" and the pattern resumes
   a few seconds after the stream stops.
