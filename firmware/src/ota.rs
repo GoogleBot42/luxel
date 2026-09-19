@@ -206,6 +206,7 @@ fn write_boot_attempts(n: u8) {
 }
 
 /// How many aborted takeover attempts have already rebooted to retry.
+#[cfg_attr(not(feature = "wled-takeover"), allow(dead_code))]
 pub fn takeover_retries() -> u8 {
     read_guard().takeover_retries
 }
@@ -215,6 +216,7 @@ pub fn takeover_retries() -> u8 {
 /// a controlled abort, it didn't crash — without the clear, two retry
 /// reboots would trip [boot_guard]'s rollback-to-the-other-slot (i.e.
 /// straight back to WLED) before the takeover's own retry cap is reached.
+#[cfg_attr(not(feature = "wled-takeover"), allow(dead_code))]
 pub fn bump_takeover_retries() {
     let g = read_guard();
     write_guard(Guard {
@@ -226,6 +228,7 @@ pub fn bump_takeover_retries() {
 
 /// Retry budget exhausted (or takeover no longer applicable): forget the
 /// counter so a later manual power cycle starts with a fresh budget.
+#[cfg_attr(not(feature = "wled-takeover"), allow(dead_code))]
 pub fn clear_takeover_retries() {
     let g = read_guard();
     if g.takeover_retries != 0 {

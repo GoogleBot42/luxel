@@ -61,6 +61,29 @@ board_target() {
   esac
 }
 
+# Which boards can be installed by uploading Luxel to WLED's own /update page
+# (the `wled-takeover` cargo feature, src/takeover.rs + src/wledfs.rs — ~25 KB
+# of image, Gitea #501). The feature itself is turned on by those boards'
+# features in firmware/Cargo.toml; this function is the SHELL-side copy that
+# tools/image-check.sh asserts against, so the two can only disagree by failing
+# a build. Sets TAKEOVER=1/0 from $1.
+#
+#   1 — athom-music, esp32-generic, c3-devkit, c6-devkit, s3-devkit: boards a
+#       user reaches through a WLED install.
+#   0 — pixelblaze-v3 (a stock PB v3 runs Pixelblaze firmware; the install is
+#       serial), seengreat-hub75 (ships XiaoZhi).
+#
+# Adding a board? Answer this question for it here AND in Cargo.toml.
+board_takeover() {
+  case "$1" in
+    board-pixelblaze-v3|board-seengreat-hub75) TAKEOVER=0 ;;
+    board-athom-music|board-esp32-generic|board-c3-devkit|board-c6-devkit|board-s3-devkit)
+      TAKEOVER=1 ;;
+    *)
+      echo "unknown BOARD '$1' — see docs/boards.md" >&2; return 1 ;;
+  esac
+}
+
 # Every board bakes its `board::NAME` (firmware/src/board.rs) into the image
 # as a plain string — main.rs prints it at boot, so it is always linked.
 # That string is the only thing in an app image that identifies the board:
@@ -165,12 +188,11 @@ remap_rustflags() {
   # -Zbuild-std compiles core/alloc out of the toolchain's rust-src
   sysroot=$("${RUSTC:-rustc}" --print sysroot 2>/dev/null || true)
   [ -n "$sysroot" ] && out="$out --remap-path-prefix=$sysroot/lib/rustlib/src/rust/="
-  # (The dozen `/rustc/<commit-hash>/library/core/…` Locations that survive on
-  # the RISC-V boards — 576 B — come from the PREBUILT core, whose paths rustc
-  # already virtualized upstream. `--remap-path-prefix` matches the real local
-  # path, so a second remap of the virtual name is a no-op: measured, zero
-  # bytes. Only -Zbuild-std (the Xtensa boards) can reach them, via the
-  # rust-src rule above.)
+  # (Before Gitea #501 the RISC-V boards kept a dozen
+  # `/rustc/<commit-hash>/library/core/…` Locations — 576 B — from the
+  # PREBUILT core, whose paths rustc had already virtualized upstream, and
+  # which `--remap-path-prefix` therefore could not match. Both arches now
+  # build core from rust-src, so the rule above reaches them.)
   # our own workspace (crates/luxel-core is a path dep of the firmware crate,
   # so cargo hands rustc an absolute path for it)
   d=$(cd .. && pwd) && out="$out --remap-path-prefix=$d/="

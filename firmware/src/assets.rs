@@ -97,7 +97,7 @@ pub fn map_region() {
     let m = match crate::flashmap::map(REGION_START, REGION_LEN) {
         Ok(m) => m,
         Err(e) => {
-            println!("flashmap: assets not mapped ({:?}) — flash-controller reads", e);
+            println!("flashmap: assets not mapped ({}) — flash-controller reads", e.name());
             return;
         }
     };

@@ -2,8 +2,9 @@
 # Build (and optionally flash) the firmware for any board. Despite the name
 # this drives every target, not just the classic ESP32: the chip, rust
 # target and toolchain all come from $BOARD via board-target.sh. Xtensa
-# boards (esp32, esp32s3) need Espressif's rustc fork + GNU linker and
-# -Zbuild-std; RISC-V boards (esp32c3, esp32c6) build with mainline Rust.
+# boards (esp32, esp32s3) need Espressif's rustc fork + GNU linker; RISC-V
+# boards (esp32c3, esp32c6) build with mainline Rust. Both build core/alloc
+# from source with -Zbuild-std -- see the STD_FLAGS comment below (#501).
 # Both toolchains come from the nix devshell — just `nix develop` and run
 # this script.
 #
@@ -115,10 +116,20 @@ build_assets() {
 # Xtensa boards: the devshell exports XTENSA_RUST_HOME (nix-built Espressif
 # rustc fork, nightly-based — which -Zbuild-std needs) and puts the xtensa
 # GNU linker on PATH. Fallback: an espup install at ~/.rustup/toolchains/esp.
-# RISC-V boards use the devshell's mainline Rust (targets are prebuilt, so
-# no -Zbuild-std).
+# RISC-V boards use the devshell's mainline Rust.
+# Both arches build core/alloc from source, with `optimize_for_size`
+# (Gitea #501). Two separate wins, measured on board-c6-devkit + hosted-ui:
+# -Zbuild-std alone is -6,992 B, because a from-source core/alloc joins the
+# binary's own fat LTO instead of arriving prebuilt at opt-level 3; the
+# optimize_for_size std feature is a further -5,952 B. On the Xtensa boards
+# -Zbuild-std was already mandatory (no prebuilt core for the fork) so only
+# the second half is new there: -4,368 B on board-pixelblaze-v3.
+# -Z flags need a nightly-ish rustc: the Xtensa fork is nightly-based, and
+# mainline stable takes RUSTC_BOOTSTRAP=1 (the RISC-V toolchain in the
+# devshell and in flake.nix both carry rust-src, which is what build-std
+# compiles from).
 CARGO=cargo
-STD_FLAGS=()
+STD_FLAGS=(-Zbuild-std=core,alloc -Zbuild-std-features=optimize_for_size)
 if [ "$XTENSA" = 1 ]; then
   TC="${XTENSA_RUST_HOME:-$HOME/.rustup/toolchains/esp}"
   if [ ! -x "$TC/bin/cargo" ]; then
@@ -129,7 +140,9 @@ if [ "$XTENSA" = 1 ]; then
   export RUSTC="$TC/bin/rustc"
   export RUSTDOC="$TC/bin/rustdoc"
   CARGO="$TC/bin/cargo"
-  STD_FLAGS=(-Zbuild-std=core,alloc)
+else
+  # mainline stable rustc: -Z is gated behind the bootstrap escape hatch
+  export RUSTC_BOOTSTRAP=1
 fi
 # Per-board luxel-core opt-level (CORE_O3 from board-target.sh, Gitea #260):
 # the VM hot path at opt-level 3 inside the size-optimized image. Cargo

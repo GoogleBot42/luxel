@@ -118,7 +118,10 @@
            , chip
            , target
            , extraFeatures ? [ ]
-           , buildStd ? false
+             # Espressif's rustc fork + GNU linker (esp32/esp32s3). The
+             # RISC-V boards use mainline Rust. BOTH build core/alloc from
+             # source — see stdFlags below.
+           , xtensa ? false
              # luxel-core (the VM hot path) at opt-level 3 inside the
              # size-optimized image — firmware/board-target.sh CORE_O3 is
              # the same per-board flag for devshell builds (Gitea #260)
@@ -137,8 +140,19 @@
               # imc = C3, imac = C6 (one letter of ISA extensions apart)
               riscvRust = pkgs.rust-bin.stable.latest.default.override {
                 targets = [ "riscv32imc-unknown-none-elf" "riscv32imac-unknown-none-elf" ];
+                # -Zbuild-std compiles core/alloc out of rust-src
+                extensions = [ "rust-src" ];
               };
-              stdFlags = lib.optionalString buildStd " -Zbuild-std=core,alloc";
+              # Gitea #501: build core/alloc from source on BOTH arches, with
+              # the optimize_for_size std feature. -Zbuild-std alone is worth
+              # -6,992 B on board-c6-devkit + hosted-ui (a from-source core
+              # joins the binary's fat LTO instead of arriving prebuilt at
+              # opt-level 3); optimize_for_size a further -5,952 B. On Xtensa
+              # -Zbuild-std was already mandatory (no prebuilt core for the
+              # fork), so only the size feature is new there: -4,368 B on
+              # board-pixelblaze-v3. Mirrored by firmware/build-esp32.sh and
+              # tools/stack-check.sh.
+              stdFlags = " -Zbuild-std=core,alloc -Zbuild-std-features=optimize_for_size";
               optFlags = lib.optionalString coreO3
                 " --config profile.release.package.luxel-core.opt-level=3";
             in
@@ -158,11 +172,15 @@
                 cp -r ${mkEspHub75Src pkgs} firmware/vendor/esp-hub75
               '';
               # -Zbuild-std additionally resolves the std workspace's own
-              # crates.io deps; firmware/rust-std.Cargo.lock is a pinned copy
-              # of the toolchain's library/Cargo.lock (re-copy from
-              # $XTENSA_RUST_HOME/lib/rustlib/src/rust/library/Cargo.lock on
-              # toolchain bumps). Our lock must come first: the setup hook
-              # validates the vendor dir's Cargo.lock against cargoRoot's.
+              # crates.io deps, and the two toolchains pin different ones
+              # (libc, today), so there is one pinned library/Cargo.lock copy
+              # per arch: firmware/rust-std.Cargo.lock from
+              # $XTENSA_RUST_HOME/lib/rustlib/src/rust/library/Cargo.lock and
+              # firmware/rust-std-riscv.Cargo.lock from `rustc --print
+              # sysroot`/lib/rustlib/src/rust/library/Cargo.lock. Re-copy the
+              # matching one on a toolchain bump. Our lock must come first:
+              # the setup hook validates the vendor dir's Cargo.lock against
+              # cargoRoot's.
               # name must stay "cargo-vendor-dir": importCargoLock's generated
               # .cargo/config.toml hardcodes that relative directory.
               cargoDeps = pkgs.symlinkJoin {
@@ -175,22 +193,30 @@
                     # fetch reproducibly without per-crate hashes
                     allowBuiltinFetchGit = true;
                   })
-                ] ++ lib.optional buildStd
-                  (pkgs.rustPlatform.importCargoLock { lockFile = ./firmware/rust-std.Cargo.lock; });
+                ] ++ [
+                  (pkgs.rustPlatform.importCargoLock {
+                    lockFile =
+                      if xtensa then ./firmware/rust-std.Cargo.lock
+                      else ./firmware/rust-std-riscv.Cargo.lock;
+                  })
+                ];
               };
 
               nativeBuildInputs = [
                 pkgs.rustPlatform.cargoSetupHook
                 pkgs.espflash
-              ] ++ (if buildStd then [ xtensaGcc ] else [ riscvRust ]);
+              ] ++ (if xtensa then [ xtensaGcc ] else [ riscvRust ]);
 
               env = {
                 LUXEL_SSID = lib.optionalString (ssid != null) ssid;
                 LUXEL_PASS = lib.optionalString (pass != null) pass;
-              } // lib.optionalAttrs buildStd {
+              } // (if xtensa then {
                 RUSTC = "${xtensaRust}/bin/rustc";
                 RUSTDOC = "${xtensaRust}/bin/rustdoc";
-              };
+              } else {
+                # -Z flags on mainline stable rustc
+                RUSTC_BOOTSTRAP = "1";
+              });
 
               buildPhase = ''
                 runHook preBuild
@@ -205,7 +231,7 @@
                 board_target ${board}
                 link_rustflags
                 export RUSTFLAGS="$LINK_RUSTFLAGS $(remap_rustflags)"
-                ${if buildStd then "${xtensaRust}/bin/cargo" else "cargo"} build --release --offline \
+                ${if xtensa then "${xtensaRust}/bin/cargo" else "cargo"} build --release --offline \
                   --no-default-features --features ${lib.concatStringsSep "," ([ board ] ++ iram ++ extraFeatures)} \
                   --target ${target}${stdFlags}${optFlags}
                 runHook postBuild
@@ -239,21 +265,21 @@
           board = "board-pixelblaze-v3";
           chip = "esp32";
           target = "xtensa-esp32-none-elf";
-          buildStd = true;
+          xtensa = true;
           iram = [ "iram-vm" "iram-builtins" "iram-math" ]; # board-target.sh
         };
         luxel-fw-athom-music = {
           board = "board-athom-music";
           chip = "esp32";
           target = "xtensa-esp32-none-elf";
-          buildStd = true;
+          xtensa = true;
           iram = [ "iram-vm" "iram-builtins" "iram-math" ]; # board-target.sh
         };
         luxel-fw-esp32-generic = {
           board = "board-esp32-generic";
           chip = "esp32";
           target = "xtensa-esp32-none-elf";
-          buildStd = true;
+          xtensa = true;
           iram = [ "iram-vm" "iram-builtins" "iram-math" ]; # board-target.sh
         };
         # UNTESTED ON METAL (no S3/C6 on the bench) — these build and pass
@@ -262,7 +288,7 @@
           board = "board-s3-devkit";
           chip = "esp32s3";
           target = "xtensa-esp32s3-none-elf";
-          buildStd = true;
+          xtensa = true;
           iram = [ "iram-vm" ]; # unified SRAM: the rest comes out of .stack
         };
         # NOT a release artifact since 2026-09-06: the extent allocator
@@ -299,7 +325,7 @@
           extraFeatures = [ "hub75" ];
           chip = "esp32s3";
           target = "xtensa-esp32s3-none-elf";
-          buildStd = true;
+          xtensa = true;
           iram = [ "iram-vm" ]; # unified SRAM: the rest comes out of .stack
         };
         # Seengreat RGB Matrix HUB75 S3 panel driver board (Gitea #73). The
@@ -308,7 +334,7 @@
           board = "board-seengreat-hub75";
           chip = "esp32s3";
           target = "xtensa-esp32s3-none-elf";
-          buildStd = true;
+          xtensa = true;
           iram = [ "iram-vm" ]; # unified SRAM: the rest comes out of .stack
         };
       };

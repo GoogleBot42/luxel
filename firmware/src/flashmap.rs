@@ -68,6 +68,21 @@ pub enum Error {
     Disabled,
 }
 
+impl Error {
+    /// The variant name, for the boot log. `{:?}` on an error type links
+    /// `<&str as Debug>::fmt` and the derive's name table for what is a
+    /// four-way constant — cheaper, and identical output, as a match
+    /// (Gitea #501).
+    pub fn name(self) -> &'static str {
+        match self {
+            Error::Unaligned => "Unaligned",
+            Error::Empty => "Empty",
+            Error::NoFreePages => "NoFreePages",
+            Error::Disabled => "Disabled",
+        }
+    }
+}
+
 /// A live mapping: `pages` consecutive MMU entries from `entry`, presenting
 /// flash `[phys, phys + pages * page)` at `vaddr`. Dropping the handle does
 /// NOT unmap (a leaked mapping is the common case — a partition mapped at

@@ -346,7 +346,19 @@ pub fn maybe_takeover() {
     // there — or WLED happened to write the upload into app0 — skip the
     // copy entirely and never risk touching the region we run from.
     let mut cands = app_entries(&live);
-    cands.sort_unstable_by_key(|a| if a.offset == dest.offset { 0u8 } else { 1 });
+    // Stable partition on a 0/1 key, hand-rolled over a handful of entries.
+    // `sort_unstable_by_key` instantiates the whole driftsort family for
+    // `Part` — quicksort + sort4_stable + bidirectional_merge + heapsort +
+    // median3_rec + ipnsort, 2,415 B of image measured on
+    // board-pixelblaze-v3 (Gitea #501) — for a list that is never longer
+    // than the app slots in a partition table.
+    for i in 1..cands.len() {
+        let mut j = i;
+        while j > 0 && cands[j - 1].offset != dest.offset && cands[j].offset == dest.offset {
+            cands.swap(j - 1, j);
+            j -= 1;
+        }
+    }
     let me = own_desc_bytes();
     let mut desc = alloc::vec![0u8; me.len()];
     let src = cands.iter().find(|c| {

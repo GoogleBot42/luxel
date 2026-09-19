@@ -68,11 +68,14 @@ LUXEL_SSID='net' LUXEL_PASS='secret' nix build .#luxel-fw-pixelblaze-v3 --impure
 (A git-untracked creds file wouldn't work: flakes only see tracked files.)
 Cred-baked images contain the password in plaintext (image + world-readable
 nix store) — don't build them on shared machines or share the .bin.
-Two lockfiles feed the hermetic build: `firmware/Cargo.lock` (our deps) and
-`firmware/rust-std.Cargo.lock` (the std workspace's deps, needed by
--Zbuild-std; re-copy from
-`$XTENSA_RUST_HOME/lib/rustlib/src/rust/library/Cargo.lock` on toolchain
-bumps).
+Three lockfiles feed the hermetic build: `firmware/Cargo.lock` (our deps) and
+one per arch for the std workspace's own deps, which `-Zbuild-std` has to
+resolve offline — `firmware/rust-std.Cargo.lock` (re-copy from
+`$XTENSA_RUST_HOME/lib/rustlib/src/rust/library/Cargo.lock`) and
+`firmware/rust-std-riscv.Cargo.lock` (from `` `rustc --print
+sysroot`/lib/rustlib/src/rust/library/Cargo.lock ``). Re-copy the matching
+one on a toolchain bump; the two toolchains pin different versions (libc,
+today), so a single shared copy does not work.
 
 WiFi credentials bake in at build time until NVS provisioning lands (M3):
 `LUXEL_SSID=net LUXEL_PASS=secret cargo build …`. Without them (or with

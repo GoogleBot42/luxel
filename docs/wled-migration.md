@@ -7,9 +7,32 @@ UPDATES.md.
 
 ## How the takeover works
 
-The takeover is always compiled into the firmware (`firmware/src/takeover.rs`,
-~17 KB of image incl. the littlefs reader; a no-op costing one 256-byte
-flash read on devices already running the Luxel layout).
+The takeover is the `wled-takeover` cargo feature (`firmware/src/takeover.rs`
++ `firmware/src/wledfs.rs`). On a board that has it, it is a no-op costing one
+256-byte flash read on devices already running the Luxel layout.
+
+**It is per board**, because it is **24,656 B on `board-pixelblaze-v3` /
+25,344 B on `board-c6-devkit` + `hosted-ui`** (measured 2026-09-19, Gitea
+#501) and only means anything where a user can reach the board through WLED's
+own `/update` page:
+
+| board | takeover | why |
+|---|---|---|
+| `board-athom-music` | **yes** | ships with WLED; this is the board the mechanism was proven on |
+| `board-esp32-generic` | **yes** | the catch-all for a WROOM running WLED |
+| `board-c3-devkit` | **yes** | WLED supports the C3 |
+| `board-c6-devkit` | **yes** | WLED supports the C6 |
+| `board-s3-devkit` | **yes** | WLED supports the S3 |
+| `board-pixelblaze-v3` | no | a stock PB v3 runs Pixelblaze firmware, not WLED — the install is serial |
+| `board-seengreat-hub75` | no | ships XiaoZhi, not WLED |
+
+The list lives in two places that a build failure keeps in step: the board
+features in `firmware/Cargo.toml` turn `wled-takeover` on, and
+`board_takeover` in `firmware/board-target.sh` is the shell-side copy
+`tools/image-check.sh` asserts **both directions** against — a WLED-capable
+board that lost the feature fails the build rather than shipping an installer
+that silently no-ops, and a serial-only board that kept it fails rather than
+carrying 25 KB of OTA slot it can never use.
 
 1. **Delivery.** WLED's `/update` accepts any ESP32 app image (it checks
    the `0xE9` magic and slot fit) and writes it to its inactive OTA slot.

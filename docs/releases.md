@@ -59,9 +59,13 @@ list and `CI_BOARD` builds just one variant):
 
    | variant | why it is in the gate |
    |---|---|
-   | `pixelblaze-v3` | Xtensa + `-Zbuild-std`; stands in for athom-music, esp32-generic, s3-devkit, s3-hub75 and seengreat-hub75 |
+   | `pixelblaze-v3` | the Xtensa toolchain; stands in for athom-music, esp32-generic, s3-devkit, s3-hub75 and seengreat-hub75. Since #501 it is also the one gated variant with `wled-takeover` **off**, so image-check's absent-marker half is exercised |
    | `c6-devkit-hosted` | the tightest image in the fleet, and the exact C6 variant `release.yml` ships — the one that trips image-check's 3 % OTA-slot floor first |
    | `c3-devkit` | the only `riscv32imc` target: no A extension, so no atomic read-modify-write |
+
+   (All three build `core`/`alloc` from source since #501 — the RISC-V pair
+   through `RUSTC_BOOTSTRAP=1` — so a std-side codegen break shows up on both
+   toolchain axes, not just the Xtensa one.)
 
    Gating one board was how two release-gate breakages merged green on the
    same day (2026-09-07): `board-c3-devkit` stopped compiling outright

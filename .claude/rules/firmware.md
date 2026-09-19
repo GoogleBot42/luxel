@@ -137,6 +137,17 @@ paths:
   images for `CI_VARIANTS` (pixelblaze-v3, c6-devkit-hosted, c3-devkit)
   because a C3 build break (#413) and a C6 under-floor image (#438) both
   merged green while only `CI_BOARD` was built.
+- **`.rodata` is NOT free — it costs image byte for byte.** A 16 KiB live
+  `#[used]` array in `.rodata` grew the app image by exactly 16,384 B on
+  BOTH `board-pixelblaze-v3` (1,011,392 → 1,027,776) and `board-c6-devkit`
+  + `hosted-ui` (1,012,048 → 1,028,432) — measured 2026-09-19, #501. A
+  sub-KB table can still land inside whatever segment-alignment slack
+  happens to exist at that moment (#465 put 1,640 B of rodata in for 0 B of
+  image, which is where the "rodata is free" idea came from), but that
+  window is a one-off of unknown size, not a property to plan around.
+  **Never trade code for tables on the assumption that the tables are
+  free** — measure the image, not the section. Same lesson as #473's
+  `match` → `const` table, which cost +496 B.
 - Diffing symbol tables between two builds: strip the `17h<hash>E` mangling
   hash and rustc's `.NNNN` local suffix first. A raw `nm` diff shows a
   renumbered symbol as one that vanished plus one that appeared, and that
@@ -213,7 +224,23 @@ paths:
   Cargo fingerprints per flag set, so
   switching back and forth is cached, not rebuilt — which also means a
   suspiciously fast "Finished in 0.1s" after changing flags is correct, not
-  a stale artifact. Verify what you are about to flash from the ELF
+  a stale artifact.
+- **Both arches build `core`/`alloc` from source** —
+  `-Zbuild-std=core,alloc -Zbuild-std-features=optimize_for_size`, in
+  `firmware/build-esp32.sh`, `tools/stack-check.sh` and `flake.nix`
+  alike (#501). On Xtensa that was already forced (no prebuilt core for
+  the fork) and the size feature is the new half, −4,368 B on
+  `board-pixelblaze-v3`; on RISC-V both halves are new — −6,992 B for
+  build-std (a from-source core joins the binary's fat LTO instead of
+  arriving prebuilt at opt-level 3) and −5,952 B for `optimize_for_size`,
+  on `board-c6-devkit` + `hosted-ui`. It needs `RUSTC_BOOTSTRAP=1` on
+  mainline stable and a toolchain carrying `rust-src`, plus a pinned copy
+  of that toolchain's `library/Cargo.lock` for the flake's offline vendor
+  dir — one per arch (`firmware/rust-std.Cargo.lock`,
+  `firmware/rust-std-riscv.Cargo.lock`), **re-copy the matching one on a
+  toolchain bump** or the sandboxed build fails resolving the std
+  workspace. Per-package `opt-level = "z"` is the trap in the same area:
+  measured on eight dependency crates it made the image 11,504 B BIGGER. Verify what you are about to flash from the ELF
   (`nm --print-size`, `objdump`), never from the build log.
 - **Placing a function in IRAM from a chip-agnostic crate**: `esp_hal::ram`
   expands to `#[link_section = ".rwtext"]`, so a crate that must not depend

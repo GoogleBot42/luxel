@@ -69,17 +69,36 @@ esp-idf-part = "0.6"
 [features]
 # Boards (pick exactly one; they pull in the right chip). See docs/firmware.md.
 default = ["board-c3-devkit"]
-board-c3-devkit = ["esp32c3"]
-board-athom-music = ["esp32"]
+# `wled-takeover` is per board, not fleet-wide: it is ~25 KB of image and it
+# only means anything on a board a user can reach by flashing Luxel through
+# WLED's own /update page. See the feature's own comment below.
+board-c3-devkit = ["esp32c3", "wled-takeover"]
+board-athom-music = ["esp32", "wled-takeover"]
 board-pixelblaze-v3 = ["esp32"]
-board-esp32-generic = ["esp32"]
+board-esp32-generic = ["esp32", "wled-takeover"]
 # Untested on metal (no bench hardware) — reviewed wiring only; see docs/boards.md.
-board-s3-devkit = ["esp32s3"]
-board-c6-devkit = ["esp32c6"]
+board-s3-devkit = ["esp32s3", "wled-takeover"]
+board-c6-devkit = ["esp32c6", "wled-takeover"]
 # Seengreat "RGB Matrix HUB75 S3" panel driver board — a panel board, so it
 # turns `hub75` on itself (unlike board-s3-devkit, where the panel is an
 # optional add-on and `hub75` is passed separately). Pin map in board.rs.
+# (no `wled-takeover`: the panel board ships XiaoZhi, not WLED.)
 board-seengreat-hub75 = ["esp32s3", "hub75", "psram-arena"]
+
+# WLED -> Luxel self-install (src/takeover.rs + src/wledfs.rs): boot under
+# WLED's foreign partition table, copy ourselves to the right sectors, inherit
+# the WiFi/LED config out of WLED's littlefs, rewrite the table and reboot.
+# Measured 24,656 B on board-pixelblaze-v3 / 25,344 B on board-c6-devkit +
+# hosted-ui (Gitea #501), so it is enabled by the BOARDS that can actually be
+# installed that way and left off where the install path is serial:
+#   on  — athom-music, esp32-generic, c3-devkit, c6-devkit, s3-devkit
+#   off — pixelblaze-v3 (a stock PB v3 runs Pixelblaze firmware and is
+#         flashed over serial), seengreat-hub75 (ships XiaoZhi)
+# A board feature turns it on for itself, like `hub75` — never a default.
+# tools/image-check.sh asserts BOTH directions off firmware/board-target.sh's
+# `board_takeover`, so a WLED-capable board that silently lost the feature
+# fails the build rather than shipping a no-op installer.
+wled-takeover = []
 # External PSRAM as a dedicated pattern-array arena (Gitea #253, src/psram.rs).
 # S3-only, and only on a board that actually carries a PSRAM die: the array
 # arena moves off internal DRAM into a SECOND esp-alloc heap, so the main

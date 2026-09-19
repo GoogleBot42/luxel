@@ -79,7 +79,9 @@ mod sensors;
 mod server;
 mod sntp;
 mod shared;
+#[cfg(feature = "wled-takeover")]
 mod takeover;
+#[cfg(feature = "wled-takeover")]
 mod wledfs;
 
 use leds::Protocol;
@@ -332,8 +334,13 @@ async fn main(spawner: Spawner) -> ! {
     // (they fail safe, but takeover reboots).
     // Load-bearing for the WLED migration path: this exact call shipped
     // commented out ("//SIZETEST") from v0.1.31 through v0.1.38-dev and
-    // nobody noticed until a real via-WLED install (2026-08-16). Don't
-    // disable it outside a local experiment, and never commit that.
+    // nobody noticed until a real via-WLED install (2026-08-16). Which is
+    // why it is a per-board cargo FEATURE and not an edit (#501): the boards
+    // that ship it are `wled-takeover` in firmware/Cargo.toml and
+    // `board_takeover` in firmware/board-target.sh, and tools/image-check.sh
+    // fails the build in both directions if those two ever disagree with
+    // what actually got linked. Never comment this call out instead.
+    #[cfg(feature = "wled-takeover")]
     takeover::maybe_takeover();
     // Map the assets partition through the cache MMU (flashmap.rs) before
     // the TOC parse so init() and every asset response read it as memory.
