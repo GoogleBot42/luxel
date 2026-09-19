@@ -34,16 +34,20 @@ credential-baking caveats.
 
 ## Supported boards
 
-| feature | chip | strip pins | defaults | pixel cap | status | notes |
-|---|---|---|---|---|---|---|
-| `board-c3-devkit` (default) | ESP32-C3 | CLK GPIO6, DATA GPIO7 | SK9822, 60 px | 2048 | supported (hardware-verified) | bare devkit |
-| `board-pixelblaze-v3` | ESP32 | CLK GPIO18, DATA GPIO23 | SK9822, 300 px | 2048 | supported (the dev unit) | official PB v3 Standard schematic; onboard 5 V level shifter; status LED GPIO12 (lit at boot = Luxel alive); button GPIO32 (unused) |
-| `board-athom-music` | ESP32 | CLK1 GPIO5, DATA1 GPIO18 | WS2812, 60 px | 2048 | builds, untested on hardware | Athom music-reactive WLED controller — demoted from bench hardware, config stays maintained; strip-VCC relay on GPIO2 must be driven high or the strip stays dark; channel 2 + mic + IR unused for now |
-| `board-esp32-generic` | ESP32 | CLK GPIO18, DATA GPIO23 | WS2812, 60 px | 2048 | builds, untested on hardware | VSPI defaults — most WROOM/DevKitC boards break these out |
-| `board-s3-devkit` | ESP32-S3 | CLK GPIO12, DATA GPIO11 | WS2812, 60 px | 2048 | **builds, UNTESTED ON METAL** | ESP32-S3-DevKitC-1; SPI2/FSPI IO_MUX pins (direct DMA route), clear of the octal-PSRAM pins GPIO33–37 |
-| `board-c6-devkit` | ESP32-C6 | CLK GPIO6, DATA GPIO7 | WS2812, 60 px | 2048 | **builds, UNTESTED ON METAL** | ESP32-C6-DevKitC-1; SPI2/FSPI IO_MUX pins (same numbers as the C3 by coincidence of the IO_MUX tables), clear of the onboard RGB LED on GPIO8 |
-| `board-s3-devkit` + `hub75` | ESP32-S3 | HUB75 (14 pins, `board::hub75_pins!`) | HUB75 64x64 panel, 4096 px | **4096** | **builds, UNTESTED ON METAL** | LCD_CAM + circular-DMA BCM rescan via patched esp-hub75 (firmware/patches/); pin map = the esp-hub75 S3 example's (a panel on jumper wires); strip SPI not wired at all; protocol switches rejected (fixed wire format); nix variant `luxel-fw-s3-hub75` |
-| `board-seengreat-hub75` | ESP32-S3 | HUB75 (14 pins, `board::hub75_pins!`) | HUB75 64x64 panel, 4096 px | **4096** | **on metal** (first light 2026-09-05; master re-verified 2026-09-06 — see "First light" & "Second light" below) | Seengreat "RGB Matrix HUB75 S3" (ESP32-S3-WROOM-1-N16R8): a purpose-built panel driver board, so the feature turns `hub75` on itself. Pin map transcribed from the [vendor wiki](https://seengreat.com/wiki/214/) — R1 IO5, G1 IO4, B1 IO6, R2 IO15, G2 IO7, B2 IO17, A IO8, B IO18, C IO10, D IO9, E IO16, CLK IO12, LAT IO11, OE IO13; both panel outputs (ribbon + plug-in header) share those pins. Codec/mics (Gitea #142), microSD, RTC and PSRAM unused (see below); nix variant `luxel-fw-seengreat-hub75` |
+`WLED` = the `wled-takeover` feature (install by uploading Luxel to WLED's own
+`/update` page — docs/wled-migration.md). It costs ~25 KB of app image, so it
+is on only where that install path exists.
+
+| feature | chip | strip pins | defaults | pixel cap | WLED | status | notes |
+|---|---|---|---|---|---|---|---|
+| `board-c3-devkit` (default) | ESP32-C3 | CLK GPIO6, DATA GPIO7 | SK9822, 60 px | 2048 | yes | supported (hardware-verified) | bare devkit |
+| `board-pixelblaze-v3` | ESP32 | CLK GPIO18, DATA GPIO23 | SK9822, 300 px | 2048 | no | supported (the dev unit) | official PB v3 Standard schematic; onboard 5 V level shifter; status LED GPIO12 (lit at boot = Luxel alive); button GPIO32 (unused) |
+| `board-athom-music` | ESP32 | CLK1 GPIO5, DATA1 GPIO18 | WS2812, 60 px | 2048 | yes | builds, untested on hardware | Athom music-reactive WLED controller — demoted from bench hardware, config stays maintained; strip-VCC relay on GPIO2 must be driven high or the strip stays dark; channel 2 + mic + IR unused for now |
+| `board-esp32-generic` | ESP32 | CLK GPIO18, DATA GPIO23 | WS2812, 60 px | 2048 | yes | builds, untested on hardware | VSPI defaults — most WROOM/DevKitC boards break these out |
+| `board-s3-devkit` | ESP32-S3 | CLK GPIO12, DATA GPIO11 | WS2812, 60 px | 2048 | yes | **builds, UNTESTED ON METAL** | ESP32-S3-DevKitC-1; SPI2/FSPI IO_MUX pins (direct DMA route), clear of the octal-PSRAM pins GPIO33–37 |
+| `board-c6-devkit` | ESP32-C6 | CLK GPIO6, DATA GPIO7 | WS2812, 60 px | 2048 | yes | **builds, UNTESTED ON METAL** | ESP32-C6-DevKitC-1; SPI2/FSPI IO_MUX pins (same numbers as the C3 by coincidence of the IO_MUX tables), clear of the onboard RGB LED on GPIO8 |
+| `board-s3-devkit` + `hub75` | ESP32-S3 | HUB75 (14 pins, `board::hub75_pins!`) | HUB75 64x64 panel, 4096 px | **4096** | yes | **builds, UNTESTED ON METAL** | LCD_CAM + circular-DMA BCM rescan via patched esp-hub75 (firmware/patches/); pin map = the esp-hub75 S3 example's (a panel on jumper wires); strip SPI not wired at all; protocol switches rejected (fixed wire format); nix variant `luxel-fw-s3-hub75` |
+| `board-seengreat-hub75` | ESP32-S3 | HUB75 (14 pins, `board::hub75_pins!`) | HUB75 64x64 panel, 4096 px | **4096** | no | **on metal** (first light 2026-09-05; master re-verified 2026-09-06 — see "First light" & "Second light" below) | Seengreat "RGB Matrix HUB75 S3" (ESP32-S3-WROOM-1-N16R8): a purpose-built panel driver board, so the feature turns `hub75` on itself. Pin map transcribed from the [vendor wiki](https://seengreat.com/wiki/214/) — R1 IO5, G1 IO4, B1 IO6, R2 IO15, G2 IO7, B2 IO17, A IO8, B IO18, C IO10, D IO9, E IO16, CLK IO12, LAT IO11, OE IO13; both panel outputs (ribbon + plug-in header) share those pins. Codec/mics (Gitea #142), microSD, RTC and PSRAM unused (see below); nix variant `luxel-fw-seengreat-hub75` |
 
 All eight combos build clean (verified compile + image-size check +
 `tools/image-check.sh` + `tools/stack-check.sh`). "Untested on hardware"
@@ -859,8 +863,8 @@ Two things that did NOT work, so nobody re-tries them:
   Locations on the RISC-V boards, 576 B) is a no-op. Those paths are rustc's
   own upstream virtualization of the prebuilt `core`;
   `--remap-path-prefix` matches the *real local* path, not a virtual name
-  already baked into the metadata. Only `-Zbuild-std` — i.e. the Xtensa
-  boards, via the rust-src rule — can reach them.
+  already baked into the metadata. Only `-Zbuild-std` — via the rust-src
+  rule — can reach them, which since 2026-09-19 (#501) both arches do.
 - Nothing is lost from `tools/decode-backtrace.sh` or `espflash monitor
   --elf`. The release profile carries no line tables (`[profile.release]` has
   no `debug`), so `addr2line` printed `luxel_fw.<hash>-cgu.0:?` before this
@@ -1661,7 +1665,11 @@ Three files, no other code paths involved — plus two cases in
 `firmware/board-target.sh`: one in `board_name` (always — it maps the
 board to the `board::NAME` string tools/ota-push.sh greps the image for,
 so an image of the wrong board is refused instead of pushed, Gitea #389),
-and one in `board_target` if the board is a chip we don't build yet
+one in `board_takeover` (always — whether the board can be installed by
+uploading Luxel to WLED's own `/update` page, which must match the
+`wled-takeover` feature in its `firmware/Cargo.toml` feature list; see
+docs/wled-migration.md), and one in `board_target` if the board is a chip we
+don't build yet
 (that file is the single board → chip / rust target / toolchain map,
 shared by build-esp32.sh and tools/stack-check.sh; its `CORE_O3` flag
 decides whether the VM crate gets opt-level 3 — see "The 1 MiB OTA-slot
@@ -1674,6 +1682,9 @@ execute from internal SRAM — see "IRAM budget" — and flake.nix's
    ```toml
    [features]
    board-my-thing = ["esp32"]      # or ["esp32c3"]
+   # …plus "wled-takeover" if the board ships WLED and users will install
+   # Luxel through its /update page (~25 KB of image; board_takeover in
+   # board-target.sh must agree, or tools/image-check.sh fails the build)
    ```
 
 2. **`firmware/src/board.rs`** — add the identity block:

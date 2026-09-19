@@ -27,10 +27,10 @@ IMG=${1:?usage: image-check.sh <elf-or-app-image>}
 
 # "<literal marker>|<what its absence means>"
 MARKERS=(
-  "takeover: foreign partition table|WLED takeover (src/takeover.rs) is not linked — via-WLED installs would silently no-op"
   "provisioning AP|AP-mode provisioning is not linked — credless (release) images would be unreachable after flashing"
   "boot guard:|boot-loop guard is not linked — a bad OTA would wedge devices instead of self-healing"
 )
+TAKEOVER_MARKER="takeover: foreign partition table"
 
 # Board identity (Gitea #389). If EXPECT_FEATURES names a board, the image
 # must contain THAT board's `board::NAME` string (main.rs prints it at
@@ -40,6 +40,13 @@ MARKERS=(
 # `board_name` drifting out of sync with firmware/src/board.rs. It is the
 # same string tools/ota-push.sh checks at the push — the wrong board's
 # image boots fine and differs only in RESERVED_PINS and pin defaults.
+# The WLED takeover (src/takeover.rs, the `wled-takeover` feature) is per
+# board — see `board_takeover` in firmware/board-target.sh. Assert BOTH
+# directions: a WLED-capable board that lost the feature would ship an
+# installer that silently no-ops, and a serial-only board that kept it would
+# carry ~25 KB it can never use (Gitea #501). No board named → no assertion,
+# which is how a bare `image-check.sh <elf>` on an unknown build still works.
+ABSENT_MARKERS=()
 for _f in ${EXPECT_FEATURES:-}; do
   case "$_f" in
     board-*)
@@ -47,6 +54,13 @@ for _f in ${EXPECT_FEATURES:-}; do
       . "$(dirname "$0")/../firmware/board-target.sh"
       if board_name "$_f"; then
         MARKERS+=("$BOARD_NAME|this image is not a $_f build — either the wrong board was built, or board_name in firmware/board-target.sh has drifted from board::NAME in firmware/src/board.rs")
+      fi
+      if board_takeover "$_f"; then
+        if [ "$TAKEOVER" = 1 ]; then
+          MARKERS+=("$TAKEOVER_MARKER|WLED takeover (src/takeover.rs) is not linked into a board that ships it — via-WLED installs would silently no-op. $_f must enable the wled-takeover feature in firmware/Cargo.toml")
+        else
+          ABSENT_MARKERS+=("$TAKEOVER_MARKER|WLED takeover (src/takeover.rs) is still linked into $_f, which is installed over serial — ~25 KB of OTA slot for code that can never run. Drop wled-takeover from its feature list in firmware/Cargo.toml")
+        fi
       fi
       ;;
   esac
@@ -61,11 +75,11 @@ if [[ " ${EXPECT_FEATURES:-} " == *" hub75 "* ]]; then
   )
 fi
 
-# Markers that must be ABSENT. `hosted-ui` (Gitea #11) is a subtractive mode:
-# the failure it can suffer is the opposite of //SIZETEST — the asset reader
-# still being linked, so the image ships the very code the mode exists to
-# remove and the measured saving quietly evaporates. Assert both directions.
-ABSENT_MARKERS=()
+# More markers that must be ABSENT. `hosted-ui` (Gitea #11) is a subtractive
+# mode: the failure it can suffer is the opposite of //SIZETEST — the asset
+# reader still being linked, so the image ships the very code the mode exists
+# to remove and the measured saving quietly evaporates. Assert both
+# directions. (ABSENT_MARKERS was opened above, with the takeover pair.)
 if [[ " ${EXPECT_FEATURES:-} " != *" hosted-ui "* ]]; then
   # The cache-MMU mapping of the assets partition (src/flashmap.rs, Gitea
   # #259): its absence would silently put every asset response back on the

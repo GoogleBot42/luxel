@@ -25,7 +25,10 @@ FEATURES="$BOARD${IRAM:+ $IRAM}${EXTRA_FEATURES:+ $EXTRA_FEATURES}"
 if [ "${IRAM_OFF:-0}" = 1 ]; then FEATURES="$BOARD${EXTRA_FEATURES:+ $EXTRA_FEATURES}"; fi
 
 CARGO=cargo
-STD_FLAGS=()
+# Same -Zbuild-std / optimize_for_size pair as firmware/build-esp32.sh and
+# flake.nix (Gitea #501) — the std this measures frames in must be the std
+# that ships, and optimize_for_size changes them.
+STD_FLAGS=(-Zbuild-std=core,alloc -Zbuild-std-features=optimize_for_size)
 # RUSTFLAGS overrides (does not merge with) the config's rustflags, so the
 # per-arch link flags and the #441 --remap-path-prefix set have to be
 # re-supplied here; both come from board-target.sh so build-esp32.sh,
@@ -40,7 +43,6 @@ if [ "$XTENSA" = 1 ]; then
   fi
   export RUSTC="$TC/bin/rustc" RUSTDOC="$TC/bin/rustdoc"
   CARGO="$TC/bin/cargo"
-  STD_FLAGS=(-Zbuild-std=core,alloc)
 else
   export RUSTC_BOOTSTRAP=1
 fi

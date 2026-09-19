@@ -157,6 +157,56 @@ which chip you are on.
 
 ## What we already fixed (measured)
 
+**`core`/`alloc` arrived prebuilt on RISC-V, and nobody had tried
+`optimize_for_size`** (2026-09-19, Gitea #501) — **−12,160 B on
+`board-c6-devkit` + `hosted-ui` and −11,664 B on `board-c3-devkit`** (credless
+flake images, this change alone), **−4,368 B on `board-pixelblaze-v3`**
+(devshell A/B — the Xtensa flake variants also carry the takeover change
+below, so their totals are not a clean split). Two independent halves,
+measured separately on the
+C6 hosted image: `-Zbuild-std=core,alloc` alone is −6,992 B, because a
+from-source `core`/`alloc` joins the binary's own fat LTO instead of arriving
+prebuilt at opt-level 3 with a hard optimization boundary in front of it;
+`-Zbuild-std-features=optimize_for_size` is a further −5,952 B on top. The
+Xtensa boards were always `-Zbuild-std` (there is no prebuilt `core` for the
+Espressif fork), so only the size feature is new there. Cost: `-Z` needs
+`RUSTC_BOOTSTRAP=1` on mainline stable, the RISC-V toolchain needs the
+`rust-src` component, and the flake needs a second pinned
+`library/Cargo.lock` (`firmware/rust-std-riscv.Cargo.lock`) because the two
+toolchains pin different std deps. No measured `.stack` cost on either board.
+
+**The WLED takeover was compiled into every board** (2026-09-19, Gitea #501)
+— **−24,656 B on `board-pixelblaze-v3`, −25,344 B on `board-c6-devkit` +
+`hosted-ui`**, on the boards that do not have it. `src/takeover.rs` +
+`src/wledfs.rs` are now the `wled-takeover` feature, on for the boards a user
+can reach through WLED's own `/update` page and off for `board-pixelblaze-v3`
+(serial install) and `board-seengreat-hub75` (ships XiaoZhi). Worth recording
+because the named symbols under-count it by more than half: `takeover::*` +
+`wledfs::*` are 11,432 B, but 6,726 B more inlines into the main task, ~2,415 B
+is the driftsort family (`quicksort` + `sort4_stable` + `bidirectional_merge`
++ `heapsort` + `median3_rec` + `ipnsort`) instantiated for ONE
+`sort_unstable_by_key` on a 0/1 key, and the rest is strings and the partition
+-table serializer. **Bucket totals under-count a feature; only an A/B of the
+image counts.** (The `sort_unstable_by_key` is a hand-rolled stable partition
+now, so the driftsort part is saved on the boards that keep the takeover too.)
+
+**Two things that were measured and NOT adopted:** per-package
+`[profile.release.package.X] opt-level = "z"` on eight dependency crates
+(smoltcp, rust-mqtt, sequential-storage, picoserve, embassy-net, edge-dhcp,
+esp-radio, esp-hal) made the image **11,504 B BIGGER** — "z" costs the
+inlining that fat LTO then cannot recover. And `ESP_LOG` in
+`firmware/.cargo/config.toml` is a **runtime** filter, not a compile-time
+one: dropping it from `info,esp_rtos::task=debug` to `error` moved the image
+64 B, inside the noise floor.
+
+**`.rodata` is not free.** A 16 KiB live `#[used]` array in `.rodata` grew the
+app image by **exactly 16,384 B** on both `board-pixelblaze-v3` and
+`board-c6-devkit` + `hosted-ui` (2026-09-19). A sub-KB table can still land
+inside whatever segment-alignment slack exists at that moment — #465 put
+1,640 B of rodata in for 0 B of image, which is where the idea came from —
+but that window is a one-off of unknown size. Trading code for tables is not
+a size strategy; measure the image.
+
 **Every HTTP response was its own monomorphization** (2026-08-30, Gitea #167)
 — **−24,384 B on `board-c6-devkit`** (1,005,168 → 980,784), −23.0 to −24.4 KB
 on every other board. The largest single win the firmware has taken since the

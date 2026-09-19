@@ -440,7 +440,7 @@ fn map_ext(start: u32) {
     let m = match crate::flashmap::map(start + EXT_OFF, EXT_LEN) {
         Ok(m) => m,
         Err(e) => {
-            println!("flashmap: pattern store not mapped ({:?}) — flash-controller reads", e);
+            println!("flashmap: pattern store not mapped ({}) — flash-controller reads", e.name());
             return;
         }
     };

@@ -1,5 +1,61 @@
 # Update log
 
+## 2026-09-19 — OTA-slot diet: build-std `optimize_for_size` fleet-wide, `wled-takeover` per board (#501)
+
+The 1 MiB app slot had run out of policy margin: the tightest shipped images
+sat at ~3.5 % free against `tools/image-check.sh`'s 3 % hard floor, and
+`/api/layout` (#465) alone is +15 KB — enough on its own to red-light CI. A measured survey (Gitea #501) found three low-risk items and
+two traps; this is the three.
+
+**1. Both arches now build `core`/`alloc` from source with
+`optimize_for_size`.** `-Zbuild-std=core,alloc
+-Zbuild-std-features=optimize_for_size` in `firmware/build-esp32.sh`,
+`tools/stack-check.sh` and `flake.nix` alike. On Xtensa `-Zbuild-std` was
+already mandatory (there is no prebuilt `core` for the Espressif fork), so
+only the size feature is new there. On RISC-V both halves are new, and they
+are worth more: a from-source `core` joins the binary's own fat LTO instead of
+arriving prebuilt at opt-level 3. Measured separately on `board-c6-devkit` +
+`hosted-ui`: −6,992 B for build-std, a further −5,952 B for the size feature.
+Mainline stable takes `-Z` behind `RUSTC_BOOTSTRAP=1`; the flake's RISC-V
+toolchain gains the `rust-src` component and a pinned copy of *its*
+`library/Cargo.lock` (`firmware/rust-std-riscv.Cargo.lock`, the RISC-V twin of
+the Xtensa `rust-std.Cargo.lock`) so the sandboxed offline build can resolve
+the std workspace's own deps.
+
+**2. The WLED takeover is a per-board cargo feature.** `src/takeover.rs` +
+`src/wledfs.rs` are 24,656 B on `board-pixelblaze-v3` / 25,344 B on
+`board-c6-devkit` + `hosted-ui` — bigger than the 11.4 KB of named
+`takeover::`/`wledfs::` symbols, because 6,726 B of it inlines into the main
+task and ~2.4 KB is the driftsort family instantiated for one
+`sort_unstable_by_key`. It only means anything on a board a user can reach
+through WLED's own `/update` page, so `wled-takeover` is on for
+`board-athom-music`, `board-esp32-generic`, `board-c3-devkit`,
+`board-c6-devkit` and `board-s3-devkit`, and off for `board-pixelblaze-v3` (a
+stock PB v3 runs Pixelblaze firmware; the install is serial) and
+`board-seengreat-hub75` (ships XiaoZhi). `tools/image-check.sh` asserts
+**both** directions off `board_takeover` in `firmware/board-target.sh`, so a
+WLED-capable board that lost the feature fails the build rather than shipping
+an installer that silently no-ops, and a serial-only board that kept it fails
+rather than carrying 25 KB it can never use.
+
+**3. Two micro items.** `takeover.rs` sorted a handful of partition entries
+with `sort_unstable_by_key` on a 0/1 key, instantiating quicksort +
+`sort4_stable` + `bidirectional_merge` + heapsort + `median3_rec` + ipnsort
+(2,415 B measured) — it is a hand-rolled stable partition now. And
+`flashmap::Error` gained a `name()` so the two boot-log sites print it without
+`{:?}`. The other two `{:?}` sites in the firmware were left alone
+deliberately: `core1`'s reset reason is the string `/api/status` reports as
+`core1.last.reset`, and esp-radio's `DisconnectReason` is `#[non_exhaustive]`
+with no cheaper spelling. Diagnostics beat 1.4 KB.
+
+**Rejected, measured:** per-package `opt-level = "z"` on eight dependency
+crates made the image **11,504 B bigger**, and `ESP_LOG=error` moved it 64 B
+(it is a runtime filter). Also corrected in `.claude/rules/firmware.md`:
+`.rodata` is **not** free — a 16 KiB live array cost exactly +16,384 B of
+image on both the classic ESP32 and the C6. #465's "1,640 B of rodata for 0 B
+of image" was a one-off alignment-pad windfall, not a property to plan around.
+
+`MIN_MARGIN_PCT` is untouched at 3 %. Per-board numbers: docs/boards.md.
 ## 2026-09-19 — web v2 A6: one Patterns page, device-shaped tiles, running marker (#467)
 
 The Patterns Library / PixelBlaze Library / Device Patterns tabs were three
