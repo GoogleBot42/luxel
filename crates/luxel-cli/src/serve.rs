@@ -2161,7 +2161,9 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
             reboot: false,
             ota: false,
             psram: false,
-            blur_glow: true,
+            // Matches board::BLUR_GLOW: a panel's compose window cannot take
+            // the two spatial stages (#476), a strip's can.
+            blur_glow: !panel,
         },
         geom: Mutex::new(luxel_core::caps::Geom::strip(pixels.clamp(1, max_pixels))),
         heap_free: AtomicU32::new(heap_free),

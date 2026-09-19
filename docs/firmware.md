@@ -220,6 +220,24 @@ which is what made the editor warn about patterns that load fine (Gitea
 the false alarm. A crossfade deliberately keeps the outgoing engine alive, so
 it records nothing and leaves the last clean measurement standing.
 
+**The device output chain's scratch is borrowed, not owned.** `apply_outpipe`
+(`firmware/src/main.rs`) works in a `Vec<[u8; 3]>` scratch copy of the frame —
+3 B/px, so **12.3 KB at 4096 px**, a third of the S3 panel's idle headroom. It
+is allocated lazily by the FIRST frame after any `/api/output` stage (gamma,
+brightness curve, power cap, blur, glow, palette, colour order) is switched
+on, and released by the first frame after the last one goes off again, along
+with the cooked gamma and palette LUTs (Gitea #446/#476). Before that release
+existed, one touch of one Settings slider cost that heap until the next
+reboot, because `Vec::clear` keeps capacity and the early return took it.
+The release lives inside `apply_outpipe` on purpose: the `PipeState` that owns
+the scratch has exactly one owner — the render task on a direct board, the
+output task on core 0 on a pipelined one (`pipeline.rs`) — so freeing it there
+cannot race the other core, and it costs one `dealloc` at the transition plus
+one capacity load per frame afterwards. The `caps.blur_glow` flag
+(`board::BLUR_GLOW`) is a separate, board-level question: it says whether the
+two SPATIAL stages fit the board's per-frame budget at all, and it is false on
+a HUB75 panel whose compose window is one ~8.66 ms rescan.
+
 **WS2812 (bit-serial protocols) requires the DMA SPI path, never blocking
 writes.** Blocking `Spi::write` splits every frame into 64-byte FIFO
 transactions with a busy-wait between them; 64 B = 512 SPI bits, not

@@ -1,5 +1,31 @@
 # Update log
 
+## 2026-09-19 (later) — the outpipe scratch comes back when you turn the stages off (#476/#446)
+
+The device output chain works in a `Vec<[u8; 3]>` scratch copy of the frame —
+3 B/px, **12.3 KB at 4096 px**. It was allocated by the first frame after ANY
+`/api/output` stage was switched on and never given back, so one touch of one
+Settings slider cost a third of the S3 panel's idle headroom until the next
+reboot (`Vec::clear` keeps capacity, and the all-off early return took it).
+It is now released — with the cooked gamma and palette LUTs — by the first
+frame after the last stage goes off, and re-grown lazily. The release runs
+inside `apply_outpipe`, which is the only place that can't race: `PipeState`
+has exactly one owner (the render task on a direct board, the output task on
+core 0 on a pipelined one), and the cost afterwards is one capacity load per
+frame.
+
+Measured on metal. **Seengreat panel, 4096 px:** `heap_free` 41,612 → 29,324
+with blur on (−12,288 B = exactly 3 B/px) → **41,612 with every stage off
+again**. **Athom, 2048 px:** 55,176 → 49,032 (−6,144 B) → 55,176.
+
+`caps.blur_glow` is now per board (D12, `board::BLUR_GLOW`): false on every
+HUB75 panel board, true on strips, so the v2 Settings page hides the two
+spatial stages where they don't fit rather than offering a setting that
+halves the refresh. The number behind the rule, measured the same session:
+`pipe_us` on the panel is 49 us idle, 4,508 us with blur 50 %, **8,780 us
+with blur+glow 50/50 — against the panel's 8,665 us rescan**. The
+pattern-side `setBlur`/`setGlow` are a different chain and are untouched.
+
 ## 2026-09-19 — `/api/status` gains `geom` and `caps` (#464)
 
 The two blocks the v2 UI gates every screen on. `geom` is the engine's
