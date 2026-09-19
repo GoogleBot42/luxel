@@ -647,6 +647,115 @@ pub extern "C" fn lx_preferred_dims(h: i32) -> i32 {
     with_engine(h, |s| s.engine.preferred_dims() as i32).unwrap_or(0)
 }
 
+/// Install the 1D Layout (no map) — the counterpart of `lx_set_map_grid` for
+/// a preview rig that really is a strip. Without it a 2D-only pattern keeps
+/// the fabricated ceil(√n) grid it is built with and the 2D→1D projections
+/// can never come into play (Gitea #473).
+#[no_mangle]
+pub extern "C" fn lx_set_strip_layout(h: i32) {
+    with_engine(h, |s| s.engine.set_strip_layout());
+}
+
+/// The Layout's dimensionality as the engine sees it: 1 = strip, 2 = matrix
+/// or 2D map, 3 = 3D map. Unaffected by any projection in force.
+#[no_mangle]
+pub extern "C" fn lx_layout_dims(h: i32) -> i32 {
+    with_engine(h, |s| s.engine.layout_dims() as i32).unwrap_or(1)
+}
+
+/// Install the projection defaults (Gitea #473): the `proj1d`/`proj2d`/
+/// `proj3d` triple as `ProjectionMode` codes (`index`=0, `x`=1, `y`=2,
+/// `z`=3, `xy`=4, `xz`=5, `yz`=6 — the same numbers the firmware and the
+/// mirror use). An unknown code leaves that field at its default. Returns 1
+/// on success, 0 for a bad handle.
+#[no_mangle]
+pub extern "C" fn lx_set_projection(h: i32, one: u32, two: u32, three: u32) -> i32 {
+    use luxel_core::projection::{Projection, ProjectionMode};
+    let pick = |v: u32, dflt: ProjectionMode| {
+        u8::try_from(v)
+            .ok()
+            .and_then(ProjectionMode::from_u8)
+            .unwrap_or(dflt)
+    };
+    let d = Projection::DEFAULT;
+    let p = Projection::new(
+        pick(one, d.proj1d),
+        pick(two, d.proj2d),
+        pick(three, d.proj3d),
+    );
+    with_engine(h, |s| {
+        s.engine.set_projection(p);
+        1
+    })
+    .unwrap_or(0)
+}
+
+/// The installed triple, packed one byte per field:
+/// `proj1d | proj2d << 8 | proj3d << 16`. -1 for a bad handle.
+#[no_mangle]
+pub extern "C" fn lx_projection(h: i32) -> i32 {
+    with_engine(h, |s| {
+        let p = s.engine.projection();
+        p.proj1d.as_u8() as i32 | (p.proj2d.as_u8() as i32) << 8 | (p.proj3d.as_u8() as i32) << 16
+    })
+    .unwrap_or(-1)
+}
+
+/// The projection choices that mean anything for a pattern of
+/// `pattern_dims` on a Layout of `layout_dims` (1/2/3 — 0 reads as 1), as
+/// JSON in the response buffer: `[{"mode":"x","label":"Along x"}, …]`.
+/// Empty for a native pair. Returns the number of options.
+///
+/// Engine-independent on purpose: a UI builds its pickers from the engine's
+/// own table (§5.4d) instead of restating it.
+#[no_mangle]
+pub extern "C" fn lx_projection_options(pattern_dims: u32, layout_dims: u32) -> i32 {
+    use luxel_core::projection::{projection_label, projection_options};
+    let (p, l) = (pattern_dims.min(255) as u8, layout_dims.min(255) as u8);
+    let opts = projection_options(p, l);
+    let mut out = String::from("[");
+    for (i, m) in opts.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(&format!(
+            "{{\"mode\":\"{}\",\"code\":{},\"label\":\"{}\"}}",
+            m.as_str(),
+            m.as_u8(),
+            projection_label(*m, p, l)
+        ));
+    }
+    out.push(']');
+    set_response(out);
+    opts.len() as i32
+}
+
+/// What the pattern actually sees once the projection is applied, as JSON in
+/// the response buffer: `{"pixelCount":64,"patternDims":1,"layoutDims":2,
+/// "w":64,"h":1,"mode":"x","label":"Along x"}` (`mode` is null when the
+/// pattern is native). Returns 1, or 0 for a bad handle.
+#[no_mangle]
+pub extern "C" fn lx_effective_geometry(h: i32) -> i32 {
+    use luxel_core::projection::projection_label;
+    with_engine(h, |s| {
+        let g = s.engine.effective_geometry();
+        let mode = match g.mode {
+            Some(m) => format!(
+                "\"{}\",\"label\":\"{}\"",
+                m.as_str(),
+                projection_label(m, g.pattern_dims, g.layout_dims)
+            ),
+            None => String::from("null,\"label\":null"),
+        };
+        set_response(format!(
+            "{{\"pixelCount\":{},\"patternDims\":{},\"layoutDims\":{},\"w\":{},\"h\":{},\"mode\":{mode}}}",
+            g.pixel_count, g.pattern_dims, g.layout_dims, g.w, g.h
+        ));
+        1
+    })
+    .unwrap_or(0)
+}
+
 /// Inject one sensor frame as 43 packed raw-16.16 i32s:
 /// [0..32) frequencyData, [32] energyAverage, [33] maxFrequencyMagnitude,
 /// [34] maxFrequency (Hz), [35] light, [36..39) accelerometer,

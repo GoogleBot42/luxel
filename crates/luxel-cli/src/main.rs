@@ -12,6 +12,12 @@
 //!   --out PATH     PPM output path           (default out.ppm; "-" = none)
 //!   --seed S       RNG seed                  (default 1)
 //!   --control NAME=V[,V,V]   invoke a UI control before rendering
+//!   --map-grid WxH installs a W×H 2D grid map (overrides --pixels)
+//!   --proj MODE    projection for a pattern whose dimensionality differs
+//!                  from the rig's: index|x|y|z|xy|xz|yz (Gitea #473,
+//!                  docs/spec/projection.md). Applies to the slot matching
+//!                  the pattern's own dims; an option the pair doesn't offer
+//!                  falls back to that pair's default.
 //!   --no-fuse      compile without the superinstruction peephole (#261 A/B)
 //!   --no-storefwd  compile without store forwarding (#320 A/B)
 //!                  (also on `luxel compile`, so a device can be handed an
@@ -39,6 +45,7 @@ use luxel_core::diag::line_col;
 use luxel_core::engine::Engine;
 use luxel_core::fixed::Fx;
 use luxel_core::parse::parse_program;
+use luxel_core::projection::ProjectionMode;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -309,7 +316,7 @@ fn vars_cmd(path: &str, rest: &[String]) -> ExitCode {
 
 pub(crate) fn usage() -> ExitCode {
     eprintln!(
-        "usage: luxel parse <pattern.js>\n       luxel run   <pattern.js> [--pixels N] [--frames N] [--fps F] [--out PATH] [--seed S] [--control NAME=V]\n       luxel bench <pattern.js> [--pixels N] [--frames N]\n       luxel check <pattern.js|.epe> [--grid WxH | --strip N]\n       luxel compile <pattern.js|.epe> [--out PATH.lxbc] [--no-fuse] [--no-storefwd] [--stats]\n       luxel serve [--pixels N] [--port P] [--fps F] [--out-fps F] [--rescan-hz HZ] [--heap-free BYTES] [--engine-heap BYTES] [--board strip|panel] [--outputs N]"
+        "usage: luxel parse <pattern.js>\n       luxel run   <pattern.js> [--pixels N] [--frames N] [--fps F] [--out PATH] [--seed S] [--control NAME=V] [--map-grid WxH] [--proj MODE]\n       luxel bench <pattern.js> [--pixels N] [--frames N] [--map-grid WxH] [--proj MODE]\n       luxel check <pattern.js|.epe> [--grid WxH | --strip N]\n       luxel compile <pattern.js|.epe> [--out PATH.lxbc] [--no-fuse] [--no-storefwd] [--stats]\n       luxel serve [--pixels N] [--port P] [--fps F] [--out-fps F] [--rescan-hz HZ] [--heap-free BYTES] [--engine-heap BYTES] [--board strip|panel] [--outputs N]"
     );
     ExitCode::from(2)
 }
@@ -471,6 +478,9 @@ struct Opts {
     controls: Vec<(String, Vec<Fx>)>,
     /// 2D grid map dimensions (cols, rows); overrides --pixels.
     grid: Option<(u32, u32)>,
+    /// `--proj MODE`: the projection for a pattern whose dimensionality
+    /// differs from the rig's (Gitea #473).
+    proj: Option<ProjectionMode>,
     /// `bench --profile`: dump dynamic opcode/bigram/builtin counts for
     /// the render pass (Gitea #261).
     profile: bool,
@@ -495,6 +505,7 @@ fn parse_opts(args: &[String], bench: bool) -> Result<Opts, ExitCode> {
         seed: 1,
         controls: Vec::new(),
         grid: None,
+        proj: None,
         profile: false,
         json: false,
         no_fuse: false,
@@ -522,6 +533,16 @@ fn parse_opts(args: &[String], bench: bool) -> Result<Opts, ExitCode> {
                     return Err(ExitCode::from(2));
                 };
                 o.grid = Some((num(w)?.max(1), num(h)?.max(1)));
+            }
+            "--proj" => {
+                let v = val()?;
+                match v.parse::<ProjectionMode>() {
+                    Ok(m) => o.proj = Some(m),
+                    Err(e) => {
+                        eprintln!("error: --proj {v}: {e}");
+                        return Err(ExitCode::from(2));
+                    }
+                }
             }
             "--profile" if bench => o.profile = true,
             "--json" if bench => o.json = true,
@@ -610,6 +631,21 @@ fn run_cmd(path: &str, rest: &[String], bench: bool) -> ExitCode {
             .collect();
         engine.set_map(2, &coords);
         let _ = h;
+    }
+    if let Some(mode) = o.proj {
+        // the slot for the pattern's own dimensionality; the engine clamps a
+        // mode this (pattern, Layout) pair does not offer (Gitea #473)
+        let mut p = engine.projection();
+        p.set(engine.preferred_dims(), mode);
+        engine.set_projection(p);
+        let g = engine.effective_geometry();
+        eprintln!(
+            "projection: {}D pattern on a {}D rig → {} (pixelCount {})",
+            g.pattern_dims,
+            g.layout_dims,
+            g.mode.map_or("native", |m| m.as_str()),
+            g.pixel_count
+        );
     }
     if let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
         engine.set_wall_clock(now.as_secs() as i64); // UTC; no tz handling yet

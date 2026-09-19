@@ -98,6 +98,12 @@ interface Exports {
   lx_vars(h: number): number;
   lx_set_var(h: number, namePtr: number, nameLen: number, raw: number): number;
   lx_set_map_grid(h: number, w: number, gridH: number): void;
+  lx_set_strip_layout(h: number): void;
+  lx_layout_dims(h: number): number;
+  lx_set_projection(h: number, one: number, two: number, three: number): number;
+  lx_projection(h: number): number;
+  lx_projection_options(patternDims: number, layoutDims: number): number;
+  lx_effective_geometry(h: number): number;
   lx_set_map(h: number, dims: number, ptr: number, count: number): void;
   lx_enable_map_mode(h: number): void;
   lx_run_map(h: number): number;
@@ -172,6 +178,62 @@ export interface DeviceModel {
   storedVmerr: string | null;
 }
 
+/** A projection wire token (`luxel_core::projection::ProjectionMode`). */
+export type ProjectionMode = "index" | "x" | "y" | "z" | "xy" | "xz" | "yz";
+
+/** FFI code per token — the numbers the engine, firmware and mirror share. */
+export const PROJECTION_CODES: Record<ProjectionMode, number> = {
+  index: 0,
+  x: 1,
+  y: 2,
+  z: 3,
+  xy: 4,
+  xz: 5,
+  yz: 6,
+};
+
+/** A device's projection defaults: one choice per PATTERN dimensionality.
+ *  Which of them is in play is decided by the Layout (see
+ *  `Luxel.projectionOptions`). Wire names match `/api/layout` (#465). */
+export interface Projection {
+  proj1d: ProjectionMode;
+  proj2d: ProjectionMode;
+  proj3d: ProjectionMode;
+}
+
+/** The engine's own defaults — a no-op on every (pattern, Layout) pair. */
+export const DEFAULT_PROJECTION: Projection = { proj1d: "index", proj2d: "z", proj3d: "xy" };
+
+/** One cell of the §5.4d table, as the engine lists it (display order,
+ *  first = default). Labels come from the engine so every surface captions a
+ *  projection identically. */
+export interface ProjectionOption {
+  mode: ProjectionMode;
+  code: number;
+  label: string;
+}
+
+/** What the pattern sees once the projection is applied — what a tile
+ *  caption, a thumbnail and a preview must all be sized from. */
+export interface EffectiveGeometry {
+  /** What `pixelCount` reads inside the pattern. */
+  pixelCount: number;
+  patternDims: 1 | 2 | 3;
+  layoutDims: 1 | 2 | 3;
+  /** The grid the pattern's grid-space builtins see; 0 when there is none. */
+  w: number;
+  h: number;
+  /** null when the pattern is native to the Layout. */
+  mode: ProjectionMode | null;
+  label: string | null;
+}
+
+const PROJECTION_NAMES: ProjectionMode[] = ["index", "x", "y", "z", "xy", "xz", "yz"];
+
+function projectionName(code: number): ProjectionMode {
+  return PROJECTION_NAMES[code] ?? "index";
+}
+
 const RAW = 65536;
 const I32_MIN = -2147483648;
 
@@ -243,6 +305,18 @@ export class Luxel {
     }
   }
 
+  /** The projection choices that mean anything for a pattern of
+   *  `patternDims` on a Layout of `layoutDims` (1/2/3; `preferredDims()`'s 0
+   *  reads as 1) — one row of the §5.4d table, in display order, first =
+   *  default. Empty for a native pair, so a UI shows the row only when this
+   *  has entries, and a one-option cell is a note rather than a control. */
+  projectionOptions(patternDims: number, layoutDims: number): ProjectionOption[] {
+    if (typeof this.e.lx_projection_options !== "function") return [];
+    const n = this.e.lx_projection_options(patternDims, layoutDims);
+    if (n <= 0) return [];
+    return JSON.parse(this.response()) as ProjectionOption[];
+  }
+
   putStr(str: string): { ptr: number; len: number; free: () => void } {
     const bytes = new TextEncoder().encode(str);
     const ptr = this.e.lx_alloc(bytes.length);
@@ -311,6 +385,65 @@ export class Engine {
 
   setMapGrid(w: number, h: number): void {
     this.e.lx_set_map_grid(this.h, w, h);
+  }
+
+  /** Install the 1D Layout: no map, so the pattern's x is the strip's own
+   *  `index / pixelCount`. Needed before the 2D→1D projections (middle row /
+   *  middle column) can apply — a 2D-only pattern is otherwise built on the
+   *  engine's fabricated ceil(√n) grid. */
+  setStripLayout(): void {
+    this.e.lx_set_strip_layout(this.h);
+  }
+
+  /** The Layout's dimensionality as the engine sees it (1/2/3), independent
+   *  of any projection. */
+  layoutDims(): 1 | 2 | 3 {
+    const d = this.e.lx_layout_dims(this.h);
+    return d === 3 ? 3 : d === 2 ? 2 : 1;
+  }
+
+  /** Install the projection defaults (device `/api/layout` triple, #465):
+   *  how a pattern whose dimensionality differs from the Layout's is shown.
+   *  Only the field matching this pattern's dims is consulted, so one triple
+   *  survives pattern and Layout changes. Call it before the first frame —
+   *  `pixelCount` under an along-axis projection becomes the strip length,
+   *  and the pattern's top-level init has already run. */
+  setProjection(p: Projection): void {
+    this.e.lx_set_projection(
+      this.h,
+      PROJECTION_CODES[p.proj1d] ?? 0,
+      PROJECTION_CODES[p.proj2d] ?? 3,
+      PROJECTION_CODES[p.proj3d] ?? 4,
+    );
+  }
+
+  /** The installed triple. */
+  projection(): Projection {
+    const packed = this.e.lx_projection(this.h);
+    if (packed < 0) return { ...DEFAULT_PROJECTION };
+    return {
+      proj1d: projectionName(packed & 0xff),
+      proj2d: projectionName((packed >> 8) & 0xff),
+      proj3d: projectionName((packed >> 16) & 0xff),
+    };
+  }
+
+  /** What the pattern sees this frame once the projection is applied:
+   *  `pixelCount`, its own dims, the grid its grid builtins read, and the
+   *  projection in force (`mode: null` = native). */
+  effectiveGeometry(): EffectiveGeometry {
+    if (this.e.lx_effective_geometry(this.h) !== 1) {
+      return {
+        pixelCount: this.pixelCount,
+        patternDims: 1,
+        layoutDims: 1,
+        w: 0,
+        h: 0,
+        mode: null,
+        label: null,
+      };
+    }
+    return JSON.parse(this.lx.response()) as EffectiveGeometry;
   }
 
   /** Install an arbitrary pixel map (one [x,y] or [x,y,z] per pixel, any

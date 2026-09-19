@@ -136,9 +136,58 @@ assert.strictEqual(e.lx_analog_read(h5, 33), 65536, "values above 1 clamp");
 assert.strictEqual(e.lx_set_analog_pin(h5, 64, 65536), 0);
 assert.strictEqual(e.lx_set_analog_pin(h5, -1, 65536), 0);
 
+// projection through the FFI (Gitea #473): the engine's §5.4d table, the
+// along-axis strip render, and the effective geometry a UI captions from.
+// Mirrors crates/luxel-core/tests/projection.rs.
+assert.deepStrictEqual(
+  JSON.parse((e.lx_projection_options(1, 2), response())).map((o) => o.mode),
+  ["index", "x", "y"],
+  "1D pattern on a 2D Layout",
+);
+assert.strictEqual(e.lx_projection_options(2, 2), 0, "a native pair offers nothing");
+assert.deepStrictEqual(
+  JSON.parse((e.lx_projection_options(3, 2), response())).map((o) => o.label),
+  ["Slice xy", "Slice xz", "Slice yz"],
+  "3D pattern on a 2D Layout, labelled by the engine",
+);
+
+const src6 = putStr("export function render(index) { rgb(index / 4, pixelCount / 8, 0) }");
+const h6 = e.lx_new(src6.ptr, src6.len, 8, 1);
+src6.free();
+assert.ok(h6 >= 0, response());
+e.lx_set_map_grid(h6, 4, 2);
+assert.strictEqual(e.lx_layout_dims(h6), 2);
+// default triple: by index, every Layout pixel rendered
+assert.strictEqual(e.lx_effective_geometry(h6), 1);
+assert.deepStrictEqual(JSON.parse(response()), {
+  pixelCount: 8,
+  patternDims: 1,
+  layoutDims: 2,
+  w: 4,
+  h: 2,
+  mode: "index",
+  label: "By index",
+});
+// along x: ONE strip of 4 renders, replicated over both rows
+assert.strictEqual(e.lx_set_projection(h6, 1, 3, 4), 1); // x, z, xy
+assert.strictEqual(e.lx_projection(h6), 1 | (3 << 8) | (4 << 16));
+assert.strictEqual(e.lx_effective_geometry(h6), 1);
+const geom = JSON.parse(response());
+assert.strictEqual(geom.pixelCount, 4, "pixelCount reads as the strip length");
+assert.strictEqual(geom.label, "Along x");
+const projected = e.lx_frame(h6, 0);
+const rows = [...mem().slice(projected, projected + 24)];
+assert.deepStrictEqual(rows.slice(0, 12), rows.slice(12), "the row is replicated");
+assert.deepStrictEqual(
+  rows.slice(0, 12),
+  [0, 127, 0, 63, 127, 0, 127, 127, 0, 191, 127, 0],
+  "index/4 across the row, pixelCount = 4",
+);
+
 e.lx_free(h);
 e.lx_free(h2);
 e.lx_free(h3);
 e.lx_free(h4);
 e.lx_free(h5);
+e.lx_free(h6);
 console.log("wasm smoke: all golden assertions pass (native ↔ wasm bit-identical)");

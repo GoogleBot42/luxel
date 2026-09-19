@@ -477,8 +477,8 @@ All of these apply **live** and (on firmware) **persist to flash** — no reboot
 | `/api/output` | POST | `<order> <gamma_tenths> <cap_ma> [<bright_curve_tenths> <blur_pct> <glow_pct>]` | `{"ok":true,"order","gamma","capMa","brightCurve","blur","glow"}` | both |
 | `/api/output/palette` | POST | `<amount_pct> <pos> <r> <g> <b> …` | firmware `{"ok":true}`; mirror `{"ok":true,"palette":[…],"paletteAmount":N}` | both |
 | `/api/output/palette` | DELETE | — | `{"ok":true}` | both |
-| `/api/map` | GET | — | `{"installed":bool,"dims":2\|3\|0,"count":N,"kind":"grid"\|"coords"[,"w":W,"h":H]}` (firmware; the mirror omits `kind`) | both |
-| `/api/map` | POST | `<dims> <raw…>` or `grid <w> <h>` | `{"ok":true,"installed":bool,"count":N}` | both |
+| `/api/map` | GET | — | `{"installed":bool,"dims":2\|3\|0,"count":N,"kind":"grid"\|"coords"[,"w":W,"h":H]}` (firmware; the mirror omits `kind` and adds the `proj*` triple) | both |
+| `/api/map` | POST | `<dims> <raw…>` or `grid <w> <h>` (mirror also: `proj1d=… proj2d=… proj3d=…`) | `{"ok":true,"installed":bool,"count":N}` (mirror adds the `proj*` triple) | both |
 | `/api/clock` | GET | — | `{"synced":bool,"local":<unix secs, local>,"tzMinutes":N}` | both |
 | `/api/clock` | POST | tz offset from UTC in minutes | `{"ok":true,"tzMinutes":N}` | both |
 
@@ -514,6 +514,16 @@ All of these apply **live** and (on firmware) **persist to flash** — no reboot
   Firmware request bodies are read into 4 KB buffers: a large coordinate
   map that does not arrive intact is treated as "clear", so prefer the grid
   form for matrices.
+- **Projection defaults** (`proj1d`/`proj2d`/`proj3d`, tokens
+  `index|x|y|z|xy|xz|yz`) say how a pattern whose dimensionality differs from
+  the Layout's is shown on it — `docs/spec/projection.md` has the table. Their
+  home is **`/api/layout`, reserved for ticket A4 (Gitea #465)**; the engine
+  mechanism landed first (#473). Until A4 lands, **the mirror only** accepts
+  them as extra whitespace-separated tokens anywhere in a `POST /api/map`
+  body (a body with nothing but `proj*` tokens keeps the installed map) and
+  reports them from `GET /api/map`. The firmware does not carry them yet, so
+  a console talking to a real device gets the defaults
+  (`proj1d=index proj2d=z proj3d=xy`), which are a no-op on every Layout.
 - `POST /api/clock` accepts −840..=840 minutes.
 - Firmware settings whose flash write fails still apply live and add
   `"note":"not persisted: …"` to the `{"ok":true,…}` body (`/api/brightness`,
