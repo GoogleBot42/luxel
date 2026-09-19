@@ -74,7 +74,7 @@ hand-rolled decimal parser in place of `str::parse` (−1.3 KB, since
 symbol-level breakdown in docs/boards.md — including that **`athom-music`,
 published but not one of the three CI-gated variants, lands at 2.44 %**:
 `pixelblaze-v3` stopped being a valid Xtensa stand-in for it when #501
-dropped `wled-takeover` on one and not the other. Filed separately.
+dropped `wled-takeover` on one and not the other. Filed as Gitea #513.
 
 ## 2026-09-19 — web v2 A7: the editor gets three owners (#468)
 

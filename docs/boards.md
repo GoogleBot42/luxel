@@ -1076,7 +1076,7 @@ the gate because it "stands in for athom-music, esp32-generic, s3-devkit,
 s3-hub75 and seengreat-hub75" — and #501 stopped that being true by dropping
 `wled-takeover` on `pixelblaze-v3` and keeping it on `athom-music`. The two
 now differ by ~21.6 KB, so the stand-in reads 4.51 % while the board it
-stands for reads 2.44 %. Tracked in its own ticket; the same shape as the
+stands for reads 2.44 %. Tracked as Gitea #513; the same shape as the
 breakages docs/releases.md already records for gating one board.
 
 Where the +14.9 KB sits on the C6 (`nm --print-size`, riscv32imc,
