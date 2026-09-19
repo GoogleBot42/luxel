@@ -41,6 +41,8 @@ export const PORT = {
     panel: p(24), //             panel mirror for the geometry section
     map: p(25), //               4096-px mirror for the map section
     slow: p(26), //              slow-fps mirror
+    outputs: p(27), //           two-output mirror for the Settings Outputs table
+    hub75: p(28), //             --board panel mirror for the Settings panel fields
     maxpixels: p(30), // maxpixels-e2e
     syncA: p(40), // sync-e2e leader
     syncB: p(41), // sync-e2e follower

@@ -23,7 +23,11 @@ export type NoteChannel =
   | "wifi"
   | "mqtt"
   | "datapin"
+  /** the LED layout section: what the last POST /api/layout answered */
+  | "layout"
   | "ap"
+  /** the OTA image upload in Advanced › Firmware & recovery */
+  | "ota"
   | "palette";
 
 export type Notes = Partial<Record<NoteChannel, string>>;

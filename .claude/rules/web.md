@@ -125,3 +125,21 @@ paths:
   called from the markup** with every dependency passed as an argument — a
   markup expression is patched with those dirty bits and is always current
   (2026-09-19, #468).
+- **"With every dependency passed as an argument" is the load-bearing half of
+  the rule above.** A markup expression is re-patched with the dirty bits of
+  what its own syntax NAMES, so `{summaryHint()}` names only the function and
+  re-runs **never** — the text freezes at whatever it computed on first render
+  and nothing anywhere errors. Same trap between two `$:` blocks: Svelte orders
+  them by syntactic dependency, so `$: hint = costHint()` (which names nothing)
+  is free to run BEFORE `$: eff = …` that `costHint` reads, and it throws on
+  the first pass. Both bit A8 (#469); both are invisible to a build and a
+  typecheck (2026-09-19, #469).
+- **An exception thrown while a component mounts surfaces as a MODE
+  regression, not a render error.** `connectDevice()` wraps its handshake in a
+  try/catch, and `{#if $device}<Settings/>` mounts inside the `device.set()`
+  that the catch then undoes — so one bad `$:` in a Settings card made the
+  whole console fall back to playground: no Settings panel, `Save` instead of
+  `Save to device`, and "connect: editor synced to the device's running
+  pattern" still passing. When a console e2e suddenly looks like a playground,
+  read the page's `pageerror`s before suspecting the session code
+  (2026-09-19, #469).

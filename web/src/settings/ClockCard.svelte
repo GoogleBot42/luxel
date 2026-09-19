@@ -18,26 +18,23 @@
   };
 </script>
 
-<section class="card">
-  <h2>Clock</h2>
-  <div class="field">
-    <span class="flabel">Device time</span>
-    <span class="mono" data-role="clock-status">
-      {$clockStatus?.synced ? fmtDeviceTime($clockStatus.local) : "not NTP-synced yet"}
-    </span>
-  </div>
-  <div class="field">
-    <span class="flabel">UTC offset</span>
-    <input
-      class="num"
-      data-role="clock-tz"
-      type="number"
-      step="0.5"
-      min="-14"
-      max="14"
-      value={($clockStatus?.tzMinutes ?? 0) / 60}
-      on:change={onTzChange}
-    />
-    <span class="dim">hours (e.g. -6 for Mountain DST) — drives clockHour() patterns</span>
-  </div>
-</section>
+<div class="field">
+  <span class="flabel">Device time</span>
+  <span class="mono" data-role="clock-status">
+    {$clockStatus?.synced ? fmtDeviceTime($clockStatus.local) : "not NTP-synced yet"}
+  </span>
+</div>
+<div class="field">
+  <span class="flabel">UTC offset</span>
+  <input
+    class="num"
+    data-role="clock-tz"
+    type="number"
+    step="0.5"
+    min="-14"
+    max="14"
+    value={($clockStatus?.tzMinutes ?? 0) / 60}
+    on:change={onTzChange}
+  />
+  <span class="dim">hours (e.g. -6 for Mountain DST) — drives clockHour() patterns</span>
+</div>

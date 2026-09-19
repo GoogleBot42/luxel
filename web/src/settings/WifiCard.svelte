@@ -1,9 +1,16 @@
 <script lang="ts">
-  // WiFi provisioning + the one-boot setup access point. Both reboot the
-  // device, so both confirm first.
+  // WiFi (proposal §5.3): the connected network, and the provisioning form
+  // COLLAPSED behind `Change network…` — joining a different network is a
+  // once-in-an-install action, and it reboots, so it does not deserve four
+  // permanently open fields above Advanced.
+  //
+  // `Reboot into setup AP` moved to Advanced › Firmware & recovery, where the
+  // other reboot-requiring actions are grouped.
   import { device, wifiForm, wifiSource, wifiSsid } from "../stores/device";
   import { confirm } from "../stores/dialog";
   import { note, notes } from "../stores/notify";
+
+  let open = false;
 
   /** Save WiFi creds — the device stores them and reboots to apply. */
   async function saveWifi(): Promise<void> {
@@ -26,35 +33,24 @@
       note("wifi", r?.error ? `failed: ${r.error}` : "save failed");
     }
   }
-
-  async function startApMode(): Promise<void> {
-    const ok = await confirm({
-      title: "Reboot into the setup access point?",
-      body: "The device leaves this network for one boot and comes back as an open AP (luxel-…, http://192.168.4.1/). Rejoin this network by saving WiFi from the AP, or just reboot it again.",
-      confirmLabel: "Reboot into AP",
-      reboot: true,
-    });
-    if (!ok) return;
-    const r = await $device?.startApMode();
-    note(
-      "ap",
-      r?.ok ? 'rebooting into AP "luxel-…" — connect to it at 192.168.4.1' : "failed",
-      8000,
-    );
-  }
 </script>
 
-<section class="card">
-  <h2>WiFi</h2>
-  <div class="field">
-    <span class="flabel">Current</span>
-    <span class="mono" data-role="wifi-current">
-      {$wifiSsid ?? "—"}
-      <span class="dim">
-        ({$wifiSource === "flash" ? "saved" : $wifiSource === "builtin" ? "compiled-in" : "none"})
-      </span>
+<div class="wifirow">
+  <span class="dot" class:live={$wifiSsid !== null}></span>
+  <span class="dim">Connected to</span>
+  <span class="mono" data-role="wifi-current">
+    {$wifiSsid ?? "—"}
+    <span class="dim">
+      ({$wifiSource === "flash" ? "saved" : $wifiSource === "builtin" ? "compiled-in" : "none"})
     </span>
-  </div>
+  </span>
+  <span class="spacer"></span>
+  <button data-role="wifi-change" aria-expanded={open} on:click={() => (open = !open)}>
+    {open ? "Cancel" : "Change network…"}
+  </button>
+</div>
+
+{#if open}
   <div class="field">
     <span class="flabel">Network</span>
     <input class="grow" data-role="wifi-ssid" placeholder="SSID" bind:value={$wifiForm.ssid} />
@@ -86,11 +82,29 @@
     (<span class="mono">luxel-xxxx</span> → <span class="mono">http://192.168.4.1/</span>)
     where this same page provisions it.
   </p>
-  <div class="field">
-    <button data-role="apmode" on:click={() => void startApMode()}>reboot into setup AP</button>
-    <span class="dim">
-      one boot only — good for re-provisioning; it comes back as a station afterwards
-    </span>
-    {#if $notes.ap}<span class="dim" data-role="apmode-note">{$notes.ap}</span>{/if}
-  </div>
-</section>
+{/if}
+
+<style>
+  .wifirow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .spacer {
+    flex: 1;
+  }
+
+  .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    flex: none;
+  }
+
+  .dot.live {
+    background: #4caf50;
+  }
+</style>

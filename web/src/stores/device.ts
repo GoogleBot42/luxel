@@ -11,6 +11,8 @@ import {
   DeviceSession,
   type DeviceCaps,
   type DeviceStatus,
+  type LayoutResult,
+  type LayoutWire,
   type MqttStatus,
   type Playlist,
   type PlaylistItem,
@@ -106,6 +108,19 @@ export const deviceGeomStatus = writable<DeviceStatus["geom"] | null>(null);
  *  preview's output chain should use. */
 export const deviceCaps = writable<DeviceCaps | null>(null);
 
+/** `GET /api/layout` (Gitea #465): the whole geometry object as the device
+ *  reports it. Raw wire state — the Settings page's LED layout section is its
+ *  only direct reader; everything that renders pixels goes through
+ *  `deviceLayout` below. Null until a device answers (and on firmware older
+ *  than the endpoint). */
+export const deviceLayoutWire = writable<LayoutWire | null>(null);
+
+/** Firmware version / OTA slot / pattern-store occupancy, from `/api/status`
+ *  — the Advanced section's Storage and Firmware rows. */
+export const deviceVersion = writable("");
+export const deviceSlot = writable("");
+export const deviceStore = writable<DeviceStatus["store"] | null>(null);
+
 /** The coordinates of an irregular device map, when they are known: a map
  *  THIS session installed. `GET /api/map` reports only a count, so a map
  *  installed before this page loaded has none until `/api/layout` (#465)
@@ -121,21 +136,47 @@ function asMode(v: string | undefined, fallback: ProjectionMode): ProjectionMode
 }
 
 /**
- * THE DEVICE-LAYOUT ADAPTER (Gitea #463).
+ * THE DEVICE-LAYOUT ADAPTER (Gitea #463, #469).
  *
  * Everything the UI knows about the device's geometry, in the ONE shape
- * `stores/geometry.ts` reconciles against. Today it is assembled here from
- * `/api/status`'s `geom` (#464) plus what we know locally about an installed
- * map; when `/api/layout` (#465) lands, this body becomes one read of that
- * endpoint — dims, source, w/h, wiring and the embedded map all arrive
- * together — and not a single consumer changes.
+ * `stores/geometry.ts` reconciles against. Since A8 it reads `/api/layout`
+ * (#465) **wholesale** — kind, dims, w/h, the chain's wiring and the
+ * embedded map all arrive in one fetch — and not a single consumer changed
+ * when it did.
  *
- * The `deviceMap` fallback keeps firmware older than `geom` working: a
- * procedural `grid W H` is still a matrix, and a coords map is still a cloud.
+ * Two fallbacks stay, in order:
+ *
+ *  1. `/api/status`'s `geom` (#464) — what answers during the connect
+ *     handshake, before `/api/layout` has been read, and the ONLY reporter
+ *     of the engine's fabricated ceil(√n) grid (`source:"default"`): a
+ *     `render2D`-only pattern on a strip board renders through a grid the
+ *     Layout does not describe, and the console preview must show it. So
+ *     `geom` WINS over the Layout in exactly that case.
+ *  2. `deviceMap` — firmware older than either field, where a procedural
+ *     `grid W H` is still a matrix and a coords map still a cloud.
  */
 export const deviceLayout: Readable<DeviceGeom | null> = derived(
-  [deviceGeomStatus, devicePixels, deviceMap, deviceMapCoords],
-  ([g, pixels, dm, coords]) => {
+  [deviceLayoutWire, deviceGeomStatus, devicePixels, deviceMap, deviceMapCoords],
+  ([wire, g, pixels, dm, coords]) => {
+    // the engine's own fabricated grid is not in the Layout; `geom` owns it
+    const fabricated = g?.source === "default";
+    if (wire && !fabricated) {
+      const px = wire.pixels || pixels;
+      const m = wire.matrix;
+      return {
+        dims: normDims(wire.dims),
+        regular: wire.regular,
+        w: wire.w,
+        h: wire.h,
+        source: wire.source === "map" ? "user" : "board",
+        pixels: px || wire.w * wire.h,
+        coords: wire.regular ? undefined : (coords ?? undefined),
+        // the device's REAL wiring, at last: a snaked matrix walks alternate
+        // rows backwards, so a by-index 1D pattern previews as the fixture
+        // shows it rather than row-major (#463's open item).
+        serpentine: m ? m.snake === 1 : undefined,
+      } satisfies DeviceGeom;
+    }
     if (pixels <= 0 && g === null) return null;
     if (g) {
       return {
@@ -332,6 +373,9 @@ export async function refreshStatus(): Promise<void> {
     deviceOutFps.set(st.out_fps ?? 0);
     deviceRescanHz.set(st.rescan_hz ?? 0);
     if (st.max_pixels) pixelMax.set(st.max_pixels); // per-board cap (#74)
+    if (st.version) deviceVersion.set(st.version);
+    if (st.slot) deviceSlot.set(st.slot);
+    deviceStore.set(st.store ?? null);
     deviceVmerr.set(st.vmerr);
   } catch {
     /* transient; the next poll retries */
@@ -409,6 +453,53 @@ export async function refreshOutput(): Promise<void> {
   } catch {
     /* older firmware without /api/output */
   }
+}
+
+/** Adopt a `/api/layout` body as the new state — the ONE place the Layout,
+ *  the pixel count, the embedded map and the projection defaults are written
+ *  together, so a GET and a POST reply land identically. */
+function adoptLayout(l: LayoutWire): void {
+  deviceLayoutWire.set(l);
+  if (l.pixels) devicePixels.set(l.pixels);
+  if (l.max) pixelMax.set(l.max);
+  if (l.map) {
+    deviceMap.set(l.map);
+    if (!l.map.installed) deviceMapCoords.set(null);
+  }
+  deviceProjection.set({
+    proj1d: asMode(l.proj?.proj1d, DEFAULT_PROJECTION.proj1d),
+    proj2d: asMode(l.proj?.proj2d, DEFAULT_PROJECTION.proj2d),
+    proj3d: asMode(l.proj?.proj3d, DEFAULT_PROJECTION.proj3d),
+  });
+}
+
+export async function refreshLayout(): Promise<void> {
+  const d = get(device);
+  if (!d) return;
+  try {
+    adoptLayout(await d.layout());
+  } catch {
+    /* older firmware without /api/layout — the geom/map fallbacks carry it */
+  }
+}
+
+/**
+ * Change the Layout: ONE `POST /api/layout` per user action, and the reply IS
+ * the new state (docs/api.md) — no re-GET, so the page never shows a value
+ * the device has not confirmed. A rejected body changes nothing on either
+ * side; the caller reports `error`/`line`.
+ */
+export async function applyLayout(lines: string): Promise<LayoutResult> {
+  const d = get(device);
+  if (!d) return { ok: false, error: "no device" };
+  let r: LayoutResult;
+  try {
+    r = await d.setLayout(lines);
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+  if (r.ok) adoptLayout(r);
+  return r;
 }
 
 export async function refreshDeviceMap(): Promise<void> {
@@ -537,6 +628,10 @@ export async function installDeviceMapCoords(
   // Remember the coordinates: `GET /api/map` gives a count back, not
   // positions, and the console's preview draws the real scatter from these.
   deviceMapCoords.set(coords);
+  // The Layout's KIND follows the map (docs/api.md: a user map makes it
+  // `map`), and `deviceLayout` reads the Layout first — so re-read it, or the
+  // console keeps previewing the shape it had before the map landed.
+  await refreshLayout();
   return true;
 }
 
@@ -545,6 +640,7 @@ export async function installDeviceGridMap(w: number, h: number): Promise<boolea
   if (!r?.ok) return false;
   deviceMap.set({ installed: true, dims: 2, count: r.count ?? w * h, kind: "grid", w, h });
   deviceMapCoords.set(null);
+  await refreshLayout();
   return true;
 }
 
@@ -552,6 +648,7 @@ export async function clearDeviceMap(): Promise<void> {
   await get(device)?.clearMap();
   deviceMap.set({ installed: false, dims: 0, count: 0 });
   deviceMapCoords.set(null);
+  await refreshLayout(); // back to the board's own kind
 }
 
 // ---- connect ----
@@ -592,6 +689,9 @@ export async function connectDevice(base: string, pullPattern = true): Promise<C
     deviceFps.set(st.fps); // seed the status-bar readout from the handshake
     deviceOutFps.set(st.out_fps ?? 0);
     deviceRescanHz.set(st.rescan_hz ?? 0);
+    if (st.version) deviceVersion.set(st.version);
+    if (st.slot) deviceSlot.set(st.slot);
+    deviceStore.set(st.store ?? null);
     deviceVmerr.set(st.vmerr);
     let source: string | null = null;
     if (pullPattern) source = await session.pattern(); // show what's running
@@ -650,6 +750,9 @@ export async function connectDevice(base: string, pullPattern = true): Promise<C
     await refreshDevicePatterns();
     await refreshPlaylist();
     await refreshDeviceMap();
+    // last, so it wins: `/api/layout` is the source of truth for geometry and
+    // overwrites the pixel count / map / projection the aliases above seeded
+    await refreshLayout();
     return { ok: true, source };
   } catch (e) {
     device.set(null);

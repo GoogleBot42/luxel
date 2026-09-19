@@ -19,55 +19,52 @@
   }
 </script>
 
-<section class="card">
-  <h2>MQTT / Home Assistant</h2>
-  <div class="field">
-    <span class="flabel">Status</span>
-    <span class="mono" data-role="mqtt-status">
-      {$mqttStatus?.connected ? "connected" : $mqttStatus?.enabled ? "not connected" : "disabled"}
-    </span>
-  </div>
-  <div class="field">
-    <span class="flabel">Broker</span>
-    <input
-      class="grow"
-      data-role="mqtt-host"
-      placeholder="host or IP (blank = disable)"
-      bind:value={$mqttForm.host}
-    />
-    <input
-      class="num"
-      data-role="mqtt-port"
-      type="number"
-      min="1"
-      max="65535"
-      bind:value={$mqttForm.port}
-    />
-  </div>
-  <div class="field">
-    <span class="flabel">User</span>
-    <input class="grow" data-role="mqtt-user" placeholder="optional" bind:value={$mqttForm.user} />
-  </div>
-  <div class="field">
-    <span class="flabel">Password</span>
-    <input
-      class="grow"
-      data-role="mqtt-pass"
-      type="password"
-      placeholder={$mqttStatus?.hasPass ? "(saved — retype to change)" : "optional"}
-      bind:value={$mqttForm.pass}
-    />
-  </div>
-  <div class="field">
-    <button class="primary" data-role="mqtt-save" disabled={!$device} on:click={saveMqtt}>
-      save
-    </button>
-    {#if $notes.mqtt}<span class="dim" data-role="mqtt-note">{$notes.mqtt}</span>{/if}
-  </div>
-  <p class="dim hint">
-    Point this at your MQTT broker (e.g. the Home Assistant Mosquitto add-on) and the
-    device shows up in HA automatically: a light (power + brightness) and a pattern
-    selector for the device library. Applied live, no reboot. Saving stores exactly what's
-    entered — including a blank password.
-  </p>
-</section>
+<div class="field">
+  <span class="flabel">Status</span>
+  <span class="mono" data-role="mqtt-status">
+    {$mqttStatus?.connected ? "connected" : $mqttStatus?.enabled ? "not connected" : "disabled"}
+  </span>
+</div>
+<div class="field">
+  <span class="flabel">Broker</span>
+  <input
+    class="grow"
+    data-role="mqtt-host"
+    placeholder="host or IP (blank = disable)"
+    bind:value={$mqttForm.host}
+  />
+  <input
+    class="num"
+    data-role="mqtt-port"
+    type="number"
+    min="1"
+    max="65535"
+    bind:value={$mqttForm.port}
+  />
+</div>
+<div class="field">
+  <span class="flabel">User</span>
+  <input class="grow" data-role="mqtt-user" placeholder="optional" bind:value={$mqttForm.user} />
+</div>
+<div class="field">
+  <span class="flabel">Password</span>
+  <input
+    class="grow"
+    data-role="mqtt-pass"
+    type="password"
+    placeholder={$mqttStatus?.hasPass ? "(saved — retype to change)" : "optional"}
+    bind:value={$mqttForm.pass}
+  />
+</div>
+<div class="field">
+  <button class="primary" data-role="mqtt-save" disabled={!$device} on:click={saveMqtt}>
+    save
+  </button>
+  {#if $notes.mqtt}<span class="dim" data-role="mqtt-note">{$notes.mqtt}</span>{/if}
+</div>
+<p class="dim hint">
+  Point this at your MQTT broker (e.g. the Home Assistant Mosquitto add-on) and the
+  device shows up in HA automatically: a light (power + brightness) and a pattern
+  selector for the device library. Applied live, no reboot. Saving stores exactly what's
+  entered — including a blank password.
+</p>

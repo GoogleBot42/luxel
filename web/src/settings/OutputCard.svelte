@@ -1,6 +1,12 @@
 <script lang="ts">
-  // The device's output chain: color order, gamma, power cap, brightness
-  // curve, blur, glow — and the output palette (Gitea #139).
+  // Advanced › Output processing: gamma, brightness curve, power cap, blur,
+  // glow — and the output palette (Gitea #139).
+  //
+  // Colour order left for LED layout (#469): it describes the STRIP's wiring,
+  // not the processing chain, and §5.7 files it with LED type and data pin.
+  // Power cap and blur/glow are caps-gated — a HUB75 panel is a fixed load on
+  // a supply sized for it, and the two spatial stages need neighbours the
+  // board can afford (`caps.power_cap` / `caps.blur_glow`, docs/api.md).
   import {
     device,
     outputStatus,
@@ -11,6 +17,12 @@
     type OutputStatus,
   } from "../stores/device";
   import { note, notes } from "../stores/notify";
+
+  /** Which fields this device advertises (`lib/settingsCaps.ts`). */
+  export let showPowerCap = true;
+  export let showBlurGlow = true;
+  /** How to word blur/glow: along the strip, or across the grid. */
+  export let scope: "strip" | "grid" = "strip";
 
   /** One editable stop: byte position along the luma ramp + an #rrggbb color. */
   type PaletteStop = { pos: number; hex: string };
@@ -116,35 +128,25 @@
   }
 </script>
 
-<section class="card">
-  <h2>Output</h2>
-  {#if out}
-    <div class="field">
-      <span class="flabel">Color order</span>
-      <select data-role="out-order" bind:value={out.order} on:change={onOutputChange}>
-        {#each ["rgb", "rbg", "grb", "gbr", "brg", "bgr"] as o}
-          <option value={o}>{o.toUpperCase()}</option>
-        {/each}
-      </select>
-      <span class="dim">match your strip's wiring (colors swapped? try GRB/BGR)</span>
-    </div>
-    <div class="field">
-      <span class="flabel">Gamma</span>
-      <input
-        class="num"
-        data-role="out-gamma"
-        type="number"
-        min="0"
-        max="5"
-        step="0.1"
-        value={out.gamma / 10}
-        on:change={(e) => {
-          if (out) out.gamma = Math.round(Number(e.currentTarget.value) * 10);
-          onOutputChange();
-        }}
-      />
-      <span class="dim">0 = off; 2.2 gives smoother dark fades on the strip</span>
-    </div>
+{#if out}
+  <div class="field">
+    <span class="flabel">Gamma</span>
+    <input
+      class="num"
+      data-role="out-gamma"
+      type="number"
+      min="0"
+      max="5"
+      step="0.1"
+      value={out.gamma / 10}
+      on:change={(e) => {
+        if (out) out.gamma = Math.round(Number(e.currentTarget.value) * 10);
+        onOutputChange();
+      }}
+    />
+    <span class="dim">0 = off; 2.2 gives smoother dark fades on the strip</span>
+  </div>
+  {#if showPowerCap}
     <div class="field">
       <span class="flabel">Power cap</span>
       <input
@@ -159,23 +161,25 @@
       />
       <span class="dim">mA — frames estimated above this get scaled down; 0 = off</span>
     </div>
-    <div class="field">
-      <span class="flabel">Brightness curve</span>
-      <input
-        class="num"
-        data-role="out-brightcurve"
-        type="number"
-        min="0"
-        max="5"
-        step="0.1"
-        value={out.brightCurve / 10}
-        on:change={(e) => {
-          if (out) out.brightCurve = Math.round(Number(e.currentTarget.value) * 10);
-          onOutputChange();
-        }}
-      />
-      <span class="dim">0 = off; 2.2 makes the dimmer feel linear</span>
-    </div>
+  {/if}
+  <div class="field">
+    <span class="flabel">Brightness curve</span>
+    <input
+      class="num"
+      data-role="out-brightcurve"
+      type="number"
+      min="0"
+      max="5"
+      step="0.1"
+      value={out.brightCurve / 10}
+      on:change={(e) => {
+        if (out) out.brightCurve = Math.round(Number(e.currentTarget.value) * 10);
+        onOutputChange();
+      }}
+    />
+    <span class="dim">0 = off; 2.2 makes the dimmer feel linear</span>
+  </div>
+  {#if showBlurGlow}
     <div class="field">
       <span class="flabel">Blur</span>
       <input
@@ -188,7 +192,9 @@
         bind:value={out.blur}
         on:change={onOutputChange}
       />
-      <span class="dim">% — softens the frame along the pixel index</span>
+      <span class="dim">
+        % — softens the frame {scope === "grid" ? "across the grid" : "along the strip"}
+      </span>
     </div>
     <div class="field">
       <span class="flabel">Glow</span>
@@ -204,79 +210,79 @@
       />
       <span class="dim">% — bright pixels bleed into their neighbours</span>
     </div>
-    {#if $paletteSupported}
-      <div class="field">
-        <span class="flabel">Palette</span>
-        <div class="palette-edit">
-          <div
-            class="palette-preview"
-            data-role="out-palette-preview"
-            style="background: {paletteCss(stops)}"
-          >
-            {#if stops.length === 0}<span class="dim">no device palette</span>{/if}
-          </div>
-          {#each stops as stop, i (i)}
-            <div class="palette-stop">
-              <input
-                type="color"
-                data-role="out-palette-color"
-                bind:value={stop.hex}
-                on:change={onPaletteChange}
-              />
-              <input
-                class="num"
-                type="number"
-                data-role="out-palette-pos"
-                min="0"
-                max="255"
-                bind:value={stop.pos}
-                on:change={onPaletteChange}
-              />
-              <button
-                data-role="out-palette-remove"
-                title="remove this stop"
-                on:click={() => removePaletteStop(i)}>remove</button
-              >
-            </div>
-          {/each}
-          <div class="palette-stop">
-            <button
-              data-role="out-palette-add"
-              disabled={stops.length >= MAX_PALETTE_STOPS}
-              on:click={addPaletteStop}>add stop</button
-            >
-            <button
-              data-role="out-palette-clear"
-              disabled={stops.length === 0}
-              on:click={clearPalette}>clear</button
-            >
-            <label class="dim">
-              amount
-              <input
-                class="num"
-                type="number"
-                data-role="out-palette-amount"
-                min="0"
-                max="100"
-                step="5"
-                bind:value={$paletteAmount}
-                on:change={onPaletteChange}
-              />
-              %
-            </label>
-          </div>
-          {#if $notes.palette}
-            <span class="dim" data-role="out-palette-note">{$notes.palette}</span>
-          {/if}
-        </div>
-        <span class="dim">
-          recolors every frame by brightness through these stops — persisted on the device
-          and stacked on top of whatever the pattern's own setOutputPalette did (max 32
-          stops)
-        </span>
-      </div>
-    {/if}
-  {:else}
-    <p class="dim hint">not available on this firmware</p>
   {/if}
-</section>
+  {#if $paletteSupported}
+    <div class="field">
+      <span class="flabel">Palette</span>
+      <div class="palette-edit">
+        <div
+          class="palette-preview"
+          data-role="out-palette-preview"
+          style="background: {paletteCss(stops)}"
+        >
+          {#if stops.length === 0}<span class="dim">no device palette</span>{/if}
+        </div>
+        {#each stops as stop, i (i)}
+          <div class="palette-stop">
+            <input
+              type="color"
+              data-role="out-palette-color"
+              bind:value={stop.hex}
+              on:change={onPaletteChange}
+            />
+            <input
+              class="num"
+              type="number"
+              data-role="out-palette-pos"
+              min="0"
+              max="255"
+              bind:value={stop.pos}
+              on:change={onPaletteChange}
+            />
+            <button
+              data-role="out-palette-remove"
+              title="remove this stop"
+              on:click={() => removePaletteStop(i)}>remove</button
+            >
+          </div>
+        {/each}
+        <div class="palette-stop">
+          <button
+            data-role="out-palette-add"
+            disabled={stops.length >= MAX_PALETTE_STOPS}
+            on:click={addPaletteStop}>add stop</button
+          >
+          <button
+            data-role="out-palette-clear"
+            disabled={stops.length === 0}
+            on:click={clearPalette}>clear</button
+          >
+          <label class="dim">
+            amount
+            <input
+              class="num"
+              type="number"
+              data-role="out-palette-amount"
+              min="0"
+              max="100"
+              step="5"
+              bind:value={$paletteAmount}
+              on:change={onPaletteChange}
+            />
+            %
+          </label>
+        </div>
+        {#if $notes.palette}
+          <span class="dim" data-role="out-palette-note">{$notes.palette}</span>
+        {/if}
+      </div>
+      <span class="dim">
+        recolors every frame by brightness through these stops — persisted on the device
+        and stacked on top of whatever the pattern's own setOutputPalette did (max 32
+        stops)
+      </span>
+    </div>
+  {/if}
+{:else}
+  <p class="dim hint">not available on this firmware</p>
+{/if}
