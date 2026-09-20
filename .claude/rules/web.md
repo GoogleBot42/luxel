@@ -192,6 +192,16 @@ paths:
   every opener that is not the `anchor`. The symptom is a handler that visibly
   runs while the popover never appears, and it reads like a reactivity bug
   (2026-09-19, #538).
+- **Svelte orders `$:` statements by the assignments it can SEE, and a value
+  assigned inside a called function is not one of them.** `$: if (x !== null)
+  fill(x)` where `fill` assigns `rows`, followed *earlier in the file* by
+  `$: view = rows.filter(…)`, runs `view` FIRST on the initial pass: the
+  derived value is computed from the empty array and stays empty until
+  something else invalidates `rows`. A grid whose items are fetched
+  asynchronously hides this (the fetch invalidates later); one whose items are
+  handed to it as a prop renders empty. Put the derived statement after the
+  one that fills it, and say why in a comment (2026-09-19, #538,
+  `components/Gallery.svelte`).
 - **The app opens on the Patterns page now (#538), not in the editor.** An
   ad-hoc puppeteer script must click `[data-role="new-pattern"]` (or a tile)
   before it can touch `.cm-content` — and gate that click on

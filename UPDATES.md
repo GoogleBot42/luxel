@@ -1,5 +1,80 @@
 # Update log
 
+## 2026-09-19 — Patterns page: the mock's tile, the mock's segment, and the projection filter (#538)
+
+The Patterns half of Jeremy's Phase A review round (Gitea #538 §A/§B/§E), on
+top of the engine/firmware half. `pages/Patterns.svelte`,
+`components/Gallery.svelte` and one helper in `lib/geometry.ts`.
+
+**The tile is the mock's card now** (mockups.html `.tile`, frames S1/S1b/S1c).
+It used to be a centred column on `--bg-inset` with a fixed 96x96 (or 128x18)
+canvas floating inside its padding, an 11 px dim name and a 10 px caption.
+It is now the card the mocks draw: panel ground, 1 px border, 8 px radius, a
+**full-bleed** canvas whose aspect carries the fixture's shape (`6/1` on a
+strip, the lattice's own `w:h` on a matrix, square for a point cloud), and a
+left-aligned meta block — 13 px name in `--text`, 11 px mono caption. The grid
+is the mock's fixed column count (6 squares / 3 bars / 2 on a phone) at
+`gap:16px; padding:20px`, not `auto-fill minmax(150px, …)`.
+
+The playing tile wears `0 0 0 2px var(--ok)` with a transparent border and the
+`▶ playing` pill **top-left** (dark translucent, `--ok` text) — and no verb
+strip at all, which is S1 and answers Jeremy's *"the pattern tile shows the
+Play button when that tile is already playing"*. The hover strip is the mock's
+bottom gradient with left-aligned `.btn.sm` verbs, fading in on opacity; the
+gradient itself is `pointer-events:none`, so a click anywhere on the thumb
+still plays/opens the pattern.
+
+**The segmented control** matches `.seg`: 32 px cells, active = `--accent-soft`
+ground + `--text` label + an inset 2 px amber underline (it used to be amber
+text on a heavier amber wash), count in 11 px mono, accent when active. The
+page bar is segment · search · spacer · `.btn.primary`; the free-standing
+"N patterns" span is gone — the count lives in the chip, as the mocks have it
+— and its loading/empty note moved to a line under the bar.
+
+**A fixture never offers a pattern it cannot show** (§B). With the projection
+tables above, "incompatible" is simply *the dims differ and no projection
+exists*: on a strip every 2D/3D pattern, on a plane every 3D one. Library,
+Mine and the PixelBlaze source just drop them, and the segment chip counts
+what is on screen. `On device` is the exception — those patterns are the
+user's own, stored on their own hardware — so they go into a collapsed
+`Not for this layout (N)` group under the grid, rendered in the playground's
+**Auto** style (their own shape, not the device's), with Edit and ⋯ but no
+Play. The heading is the whole explanation, per Jeremy.
+
+The rule only bites when the Layout is a real fixture (`source` `device` or
+`user`). Under playground Auto the Layout follows whatever the editor holds,
+so filtering by it would empty the library depending on what you last opened.
+
+Classification needs the pattern's dimensionality before the tile compiles, so
+`gallery.json`'s advisory `kind` is joined by `guessPatternDims(source)` for
+the sources that ship bare source (device patterns, `Mine`) — the same regex
+rule `tools/gen-gallery.mjs` and `engine.rs` use. `Engine.preferredDims()`
+replaces the guess the moment the tile compiles.
+
+**Two bugs found on the way.** `Gallery`'s `$: shown = tiles.filter(…)` has to
+sit *after* `$: if (items !== null) syncItems(items)`: Svelte orders reactive
+statements by the assignments it can see, and `tiles` is assigned inside
+`syncItems`, so source order is what decides — the other way round, a grid fed
+by `items` rendered empty until something else invalidated it. And the split
+grids **render** their half rather than hiding the other one, because both are
+mounted over the same item list and a merely-hidden tile still answers `.tile`
+queries in the neighbouring grid.
+
+New `data-role`s: `patterns-incompatible`, `patterns-incompatible-toggle`,
+`tile-name` (the card's `.nm`, which harnesses used to reach as `.tname`);
+`gallery-count` is gone, `gallery-note` replaces its empty-source half.
+
+Verified: `e2e.mjs` (170 checks, all pass — 13 new: tile metrics, grid
+columns, segment colours, the absent count span, the primary, and the
+Auto/strip/lattice filter triple), `device-e2e.mjs` (the strip console's
+collapsed group and its Auto-style tiles, the playing tile's pill/ring and
+absent strip, and the library filter on a strip vs a 64x64 panel),
+`maxpixels-e2e`, `sync-e2e`, `flash-e2e`, `npm test`, `tools/ci.sh`.
+Side-by-side shots against mock frames S1 / S1b / S1c in the PR.
+
+The device-e2e projection assertions that the projection-rule change left
+stale were found here and fixed in the editor PR that landed first (Gitea
+#551, closed).
 ## 2026-09-19 — Settings to the mocks: device name, 3D lattice, a reboot bar, real time zones (#538)
 
 The Settings third of Jeremy's Phase A review (Gitea #538 §A/§B/§C/§G). Web

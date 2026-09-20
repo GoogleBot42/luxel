@@ -28,10 +28,12 @@ import {
   DEFAULT_STRIP_PIXELS,
   DEFAULT_PROJECTION,
   effectiveFor,
+  guessPatternDims,
   layoutKey,
   layoutLabel,
   pixelCount as layoutPixels,
   projectionCaption,
+  projectionCompatible,
   projectionLabel,
   projectionOptions,
   reconcileLayout,
@@ -59,9 +61,11 @@ export {
   DEFAULT_PREVIEW_AS,
   DEFAULT_STRIP_PIXELS,
   effectiveFor,
+  guessPatternDims,
   layoutKey,
   layoutLabel,
   projectionCaption,
+  projectionCompatible,
   projectionLabel,
   projectionOptions,
   thumbLayout,
@@ -120,6 +124,24 @@ export function layoutFor(dims: PatternDims): Layout {
     previewAs: get(previewAs),
     patternDims: dims,
     mapCoords: get(mapCoords),
+    projection: get(projection),
+  });
+}
+
+/**
+ * The Layout the playground's "Auto" would pick for a pattern of `dims` — its
+ * OWN shape, with no device consulted (#538). It is what the Patterns page's
+ * "Not for this layout" group renders through: a 2D pattern the strip cannot
+ * show is drawn as the little matrix it wants to be, not squashed onto a rig
+ * that has no room for it.
+ */
+export function autoLayoutFor(dims: PatternDims): Layout {
+  return reconcileLayout({
+    connected: false,
+    geom: null,
+    previewAs: DEFAULT_PREVIEW_AS,
+    patternDims: dims,
+    mapCoords: null,
     projection: get(projection),
   });
 }
@@ -231,9 +253,12 @@ export const THUMB_MAX_CELLS = 400;
  * `proj` is a per-item projection override (a playlist row's, §5.4d): it
  * replaces the slot for this pattern's dims, so the thumbnail shows what the
  * device will actually render rather than the device default.
- * `on` renders against a Layout that is NOT the app's — the Settings page's
- * "this is the lattice you are about to install" preview (#538), which by
- * definition is not the shape the device has yet.
+ * `on` renders against a Layout that is NOT the app's: a fixed one for the
+ * Settings page's "this is the lattice you are about to install" preview
+ * (#538), which by definition is not the shape the device has yet, or a
+ * function of the pattern's dims — `autoLayoutFor` for the Patterns page's
+ * "Not for this layout" group (#538), which shows each pattern in its own
+ * shape instead of the device's.
  * Returns the compiler's Diagnostic when the pattern does not compile.
  */
 export function compileForLayout(
@@ -241,10 +266,11 @@ export function compileForLayout(
   src: string,
   maxCells = 0,
   proj: ProjectionMode | null = null,
-  on: Layout | null = null,
+  on: Layout | ((dims: PatternDims) => Layout) | null = null,
 ): { engine: Engine; layout: Layout; dims: PatternDims } | Diagnostic {
   const shrink = (l: Layout): Layout => (maxCells > 0 ? thumbLayout(l, maxCells) : l);
-  const rigFor = (d: PatternDims): Layout => (on ?? layoutFor(d));
+  const rigFor = (d: PatternDims): Layout =>
+    on === null ? layoutFor(d) : typeof on === "function" ? on(d) : on;
   const first = shrink(rigFor(0));
   let engine = lx.compile(src, first.pixels);
   if (!(engine instanceof Engine)) return engine;

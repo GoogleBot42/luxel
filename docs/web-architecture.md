@@ -240,15 +240,73 @@ opens on `On device`.
 
 `Gallery` owns geometry and scheduling only: `items` (a `GalleryItem[]` the
 page supplies — device patterns, saved patterns) or `src` (a generated JSON it
-fetches), plus `search`, `playingKey`, and bindable `count` / `loading` /
-`note` for the page's segment chips. A device pattern whose `source` has not
-streamed in yet is a spinning tile, and when it arrives only that tile's engine
-is rebuilt. The tile's verbs come from the page through two slots, `actions`
-(the hover strip) and `meta` (the mobile `Edit` link).
+fetches), plus `search`, `playingKey`, `only` / `autoStyle` (the layout split
+below), and bindable `count` / `loading` / `note` for the page's segment chips.
+A device pattern whose `source` has not streamed in yet is a spinning tile, and
+when it arrives only that tile's engine is rebuilt. The tile's verbs come from
+the page through two slots, `actions` (the hover strip) and `meta` (the mobile
+`Edit` link).
+
+The tile is the mock's card (`docs/design/webui-v2/mockups.html` `.tile`,
+frames S1/S1b/S1c): a `--bg-panel` box with a **full-bleed** canvas whose
+aspect ratio carries the fixture's shape — `6/1` on a strip, the lattice's own
+`w:h` on a matrix, square for a point cloud — over a left-aligned meta block
+(13 px name, 11 px mono caption). The grid uses the mock's fixed column counts
+(6 squares, 3 bars, 2 on a phone) rather than `auto-fill`, because what fits is
+decided by the tile's SHAPE, not its pixel width. The playing tile wears the
+`--ok` ring and the `▶ playing` pill and **no verb strip at all** (S1: nothing
+offers you Play for what is already playing); its `Edit` remains reachable
+through the `meta` link. The hover strip's gradient is `pointer-events:none`,
+so only the verbs take the mouse and a click anywhere else on the thumb still
+plays/opens the pattern.
+
+### A Layout never offers a pattern it cannot show (#538)
+
+Jeremy's projection rule — a fixture renders its own dimensionality and
+anything lower — reaches the Patterns page as a filter. "Incompatible" is
+`projectionCompatible(patternDims, layoutDims)` from `lib/geometry.ts`, i.e.
+*the dims differ and no projection exists for the pair*; nothing here has its
+own idea of the rule.
+
+* **Library · Mine · PixelBlaze** simply drop them, and the segment chip counts
+  what is on screen. The search still searches what is left.
+* **On device** does not: those patterns are the user's own, stored on their
+  own hardware. They go into a second `<Gallery only="incompatible" autoStyle>`
+  under the grid, behind a collapsed-by-default disclosure reading
+  `Not for this layout (N)`. `autoStyle` compiles each tile through
+  `autoLayoutFor` — the playground's "Auto", i.e. the pattern's own shape —
+  because the device's Layout is precisely the one that cannot show it. Those
+  tiles carry Edit and ⋯ but no Play. There is no explanatory prose beyond the
+  heading, by request.
+
+The filter only applies when the Layout is a real FIXTURE (`layout.source` is
+`device` or `user`). Under playground Auto the Layout follows whichever pattern
+the editor holds, so filtering by it would empty the library depending on what
+was last opened.
+
+A tile must be classified before it compiles, or the grid would resolve one
+tile at a time as they scroll into view. `gallery.json` ships an advisory
+`kind`; for the sources that arrive as bare source (device patterns, `Mine`)
+`guessPatternDims()` applies the same regex rule `tools/gen-gallery.mjs` and
+`engine.rs` use. `Engine.preferredDims()` replaces the guess as soon as the
+tile compiles, and the tile moves if it was wrong.
+
+Two things in `Gallery` are load-bearing and easy to undo by accident:
+
+* `$: shown = tiles.filter(…)` must stay **after** `$: if (items !== null)
+  syncItems(items)`. Svelte orders reactive statements by the assignments it
+  can see, and `tiles` is assigned inside `syncItems`, so source order decides
+  — the other way round, a grid fed by `items` renders empty until something
+  else invalidates it.
+* the split grids **render** only their half (`{#each shown}`) instead of
+  hiding the other one: both halves are mounted over the same item list, so a
+  merely-hidden tile would still answer `.tile` queries in the neighbouring
+  grid.
 
 Tile verbs (§5.1, §5.4b): a bare tile click **plays** an on-device pattern on a
 console and **opens** everything else in the editor; the hover strip is
-`▶ Play · Edit · ⋯`; `⋯` is Add to playlist (on-device only — a playlist item
+`▶ Play · Edit · ⋯` (and is absent entirely on the tile that is already
+playing, S1); `⋯` is Add to playlist (on-device only — a playlist item
 is a device pattern id, with no control overrides, i.e. the pattern's own
 defaults) · Duplicate · Delete (on-device only, through the `confirm` danger
 dialog). `Add to scene ▸` is Phase B (#480) and is absent, not disabled.
@@ -258,12 +316,15 @@ document never disagree.
 
 `data-role` contract: `patterns-panel` · `patterns-sources` ·
 `patterns-source-<device|library|mine|pixelblaze>` · `patterns-grid` (with
-`data-source`, and `hidden` on the inactive ones) · `tile` (with `data-kind`,
-`data-dims`, `data-key`) · `tile-face` · `tile-play` · `tile-edit` ·
+`data-source`, and `hidden` on the inactive ones) ·
+`patterns-incompatible` (the collapsed group, `hidden` when empty) ·
+`patterns-incompatible-toggle` (its disclosure, with `aria-expanded`) ·
+`tile` (with `data-kind`, `data-dims`, `data-key`) · `tile-face` ·
+`tile-name` · `tile-play` (absent on the playing tile) · `tile-edit` ·
 `tile-menu` · `tile-menu-popup` · `tile-menu-{playlist,duplicate,delete}` ·
-`tile-playing` · `tile-edit-link` · `tile-caption` · `tile-spinner` ·
-`gallery-search` · `gallery-count` · `gallery-loading` · `new-pattern` ·
-`device-offline`.
+`tile-playing` · `tile-edit-link` · `tile-caption` · `tile-dead` ·
+`tile-spinner` · `gallery-search` · `gallery-loading` · `gallery-note` ·
+`new-pattern` · `device-offline`.
 
 ## The poll scheduler (`stores/device.ts`)
 

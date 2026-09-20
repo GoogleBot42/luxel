@@ -85,6 +85,45 @@ export function projectionOptions(patternDims: number, layoutDims: number): Proj
   return [];
 }
 
+// Coordinate- and grid-space bulk builtins: a `renderFrame` pattern that
+// calls one of these draws in 2D even though it never says `render2D`. The
+// list is `uses_coordinate_bulk_op` in crates/luxel-core/src/engine.rs, and
+// web/tools/gen-gallery.mjs carries the same one for `gallery.json`'s `kind`
+// — all three move together.
+const BULK_2D_NAMES = [
+  "fillRect",
+  "fillCircle",
+  "splat",
+  "drawLine",
+  "fillCanvas",
+  "blit",
+  "gridWidth",
+  "gridHeight",
+];
+
+/**
+ * A cheap, ADVISORY guess at a pattern's dimensionality, straight from its
+ * source text — for the surfaces that must classify a pattern they have not
+ * compiled: `gallery.json` ships this as `kind`, but a device pattern and a
+ * browser-saved one arrive as bare source.
+ *
+ * It is a regex, so it is wrong about `render2D` inside a comment, and a
+ * pattern that defines its own `splat` helper is excluded the way the engine
+ * excludes it. `Engine.preferredDims()` remains the authority and replaces
+ * this the moment the tile compiles.
+ */
+export function guessPatternDims(source: string): PatternDims {
+  const has2D =
+    /\brender2D\b/.test(source) ||
+    BULK_2D_NAMES.some(
+      (n) =>
+        new RegExp(`\\b${n}\\s*\\(`).test(source) &&
+        !new RegExp(`function\\s+${n}\\s*\\(`).test(source),
+    );
+  if (/\brender3D\b/.test(source) && !has2D) return 3;
+  return has2D ? 2 : 1;
+}
+
 /** The human label for one cell (`Along x`, `Repeat along z`, …) —
  *  `Native` for a pair with no choice. */
 export function projectionLabel(

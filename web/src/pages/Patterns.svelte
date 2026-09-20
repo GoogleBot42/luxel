@@ -12,6 +12,14 @@
   // Tiles take the Layout's shape and carry the projection caption — that is
   // `components/Gallery.svelte`'s job; this page owns the source control and
   // the per-tile verbs (Play · Edit · ⋯).
+  //
+  // Since #538 the Layout also FILTERS: a fixture never offers a pattern it
+  // cannot show (a strip hides every 2D/3D pattern, a plane every 3D one), so
+  // each source's chip counts what is actually on screen. `On device` is the
+  // exception — the user's own stored patterns do not silently vanish, they
+  // drop into a collapsed "Not for this layout (N)" group under the grid,
+  // drawn in their own shape and with no Play verb. The heading is the whole
+  // explanation; Jeremy asked for no prose about the rule.
   import { createEventDispatcher } from "svelte";
   import Gallery, { type GalleryItem } from "../components/Gallery.svelte";
   import Popover from "../components/Popover.svelte";
@@ -68,16 +76,25 @@
   let corpusNote = "";
   let deviceNote = "";
   let mineNote = "";
+  /** What each source SHOWS on the current Layout — the segment chip's number
+   *  is the visible set, so it never promises patterns the filter removed. */
+  let deviceCount = 0;
+  let mineCount = 0;
+  /** The device patterns this Layout cannot show (§B, Jeremy): a second,
+   *  collapsed group under the grid rather than a silent disappearance —
+   *  they are the user's own, stored on their own hardware. */
+  let deviceIncompatible = 0;
+  let showIncompatible = false;
 
   $: sources = [
     {
       id: "device" as const,
       label: "On device",
       show: !$isPlayground,
-      count: $devicePatterns.length,
+      count: deviceCount,
     },
     { id: "library" as const, label: "Library", show: true, count: libraryCount },
-    { id: "mine" as const, label: "Mine", show: $isPlayground, count: $saved.length },
+    { id: "mine" as const, label: "Mine", show: $isPlayground, count: mineCount },
     {
       id: "pixelblaze" as const,
       label: "PixelBlaze Library",
@@ -115,7 +132,6 @@
    *  patterns it can also play; the playground only opens them (§5.7). */
   $: openVerb = $isPlayground ? "Open" : "Edit";
 
-  $: showing = sources.find((s) => s.id === sourceId);
   $: loading =
     sourceId === "library" ? libraryLoading : sourceId === "pixelblaze" ? corpusLoading : false;
   /** The active source's "nothing here" line, shown beside its count — but
@@ -238,25 +254,19 @@
       {/each}
     </div>
     <input
-      class="search"
+      class="inp search"
       data-role="gallery-search"
       type="search"
       placeholder="search patterns…"
       bind:value={search}
     />
     <span class="spacer"></span>
-    {#if loading}
-      <span class="spinner" aria-hidden="true"></span>
-      <span class="dim" data-role="gallery-loading">loading patterns…</span>
-    {:else}
-      <span class="dim" data-role="gallery-count">
-        {showing?.count ?? 0}
-        {(showing?.count ?? 0) === 1 ? "pattern" : "patterns"}{sourceNote ? ` · ${sourceNote}` : ""}
-      </span>
-    {/if}
+    <!-- S1: the ONE primary action of the page, and the only thing right of
+         the search. The count lives in the segment chip (`Library 307`). -->
     {#if sourceId !== "pixelblaze"}
-      <button class="btn primary" data-role="new-pattern" on:click={() => dispatch("new")}>
-        + New pattern
+      <button class="btn primary new" data-role="new-pattern" on:click={() => dispatch("new")}>
+        <span class="newfull">+ New pattern</span>
+        <span class="newicon" aria-hidden="true">+</span>
       </button>
     {/if}
   </div>
@@ -265,6 +275,15 @@
     <p class="dim hint" data-role="device-offline">
       device unreachable — {$deviceError || "reload to retry"}.
     </p>
+  {/if}
+  <!-- the count moved into the chip, but "still loading" and "nothing here"
+       are news, and stay a line of their own under the bar -->
+  {#if loading}
+    <p class="dim hint" data-role="gallery-loading">
+      <span class="spinner" aria-hidden="true"></span> loading patterns…
+    </p>
+  {:else if sourceNote}
+    <p class="dim hint" data-role="gallery-note">{sourceNote}</p>
   {/if}
 
   <div class="grids">
@@ -282,8 +301,10 @@
             luxel={$luxel}
             items={deviceItems}
             {search}
+            only="compatible"
             playingKey={$devicePatternId}
             emptyNote="no patterns stored on the device yet — “+ New pattern” makes one"
+            bind:count={deviceCount}
             bind:note={deviceNote}
             on:pick={(e) => dispatch("playDevice", e.detail.key)}
           >
@@ -294,18 +315,18 @@
                    deletable (Gitea #529). -->
               {#if !dead}
                 <button
-                  class="act"
+                  class="btn sm"
                   data-role="tile-play"
                   on:click|stopPropagation={() => dispatch("playDevice", item.key)}>▶ Play</button
                 >
               {/if}
               <button
-                class="act"
+                class="btn sm"
                 data-role="tile-edit"
                 on:click|stopPropagation={() => dispatch("openDevice", item.key)}>Edit</button
               >
               <button
-                class="act icon"
+                class="btn sm icon"
                 data-role="tile-menu"
                 title="more actions"
                 on:click|stopPropagation={(e) => openMenu(e, item)}>⋯</button
@@ -319,6 +340,59 @@
               >
             </svelte:fragment>
           </Gallery>
+
+          <!-- Patterns this fixture cannot show (§B): not hidden outright the
+               way a library pattern is — these are stored on the user's own
+               hardware, so they sit in a collapsed group, drawn in the
+               playground's "Auto" style (their own shape, not the device's)
+               and with no Play verb, since playing them is the thing the
+               rule forbids. The heading is the whole explanation. -->
+          <div class="incompat" data-role="patterns-incompatible" hidden={deviceIncompatible === 0}>
+            <button
+              class="slabel disc"
+              data-role="patterns-incompatible-toggle"
+              aria-expanded={showIncompatible}
+              on:click={() => (showIncompatible = !showIncompatible)}
+            >
+              <span class="caret" class:open={showIncompatible} aria-hidden="true">▸</span>
+              Not for this layout ({deviceIncompatible})
+            </button>
+            <div hidden={!showIncompatible}>
+              <Gallery
+                luxel={$luxel}
+                items={deviceItems}
+                {search}
+                only="incompatible"
+                autoStyle
+                playingKey={$devicePatternId}
+                bind:count={deviceIncompatible}
+                on:pick={(e) => dispatch("openDevice", e.detail.key)}
+              >
+                <svelte:fragment slot="actions" let:item let:dead>
+                  {#if !dead}
+                    <button
+                      class="btn sm"
+                      data-role="tile-edit"
+                      on:click|stopPropagation={() => dispatch("openDevice", item.key)}>Edit</button
+                    >
+                  {/if}
+                  <button
+                    class="btn sm icon"
+                    data-role="tile-menu"
+                    title="more actions"
+                    on:click|stopPropagation={(e) => openMenu(e, item)}>⋯</button
+                  >
+                </svelte:fragment>
+                <svelte:fragment slot="meta" let:item>
+                  <button
+                    class="elink"
+                    data-role="tile-edit-link"
+                    on:click|stopPropagation={() => dispatch("openDevice", item.key)}>Edit</button
+                  >
+                </svelte:fragment>
+              </Gallery>
+            </div>
+          </div>
         </div>
       {/if}
 
@@ -331,6 +405,7 @@
         <Gallery
           luxel={$luxel}
           {search}
+          only="compatible"
           bind:count={libraryCount}
           bind:loading={libraryLoading}
           bind:note={libraryNote}
@@ -341,7 +416,7 @@
                  below stays, so the source is still reachable (Gitea #529) -->
             {#if !dead}
               <button
-                class="act"
+                class="btn sm"
                 data-role="tile-edit"
                 on:click|stopPropagation={() =>
                   dispatch("pick", { name: item.name, source: item.source ?? "" })}
@@ -368,18 +443,20 @@
             luxel={$luxel}
             items={mineItems}
             {search}
+            only="compatible"
             emptyNote="nothing saved in this browser yet"
+            bind:count={mineCount}
             bind:note={mineNote}
             on:pick={(e) => dispatch("openSaved", e.detail.name)}
           >
             <svelte:fragment slot="actions" let:item>
               <button
-                class="act"
+                class="btn sm"
                 data-role="tile-edit"
                 on:click|stopPropagation={() => dispatch("openSaved", item.name)}>{openVerb}</button
               >
               <button
-                class="act icon"
+                class="btn sm icon"
                 data-role="tile-menu"
                 title="more actions"
                 on:click|stopPropagation={(e) => openMenu(e, item)}>⋯</button
@@ -407,6 +484,7 @@
             luxel={$luxel}
             src="pixelblaze-library.json"
             {search}
+            only="compatible"
             emptyNote="corpus unavailable (no pixelblaze-library.json)"
             bind:count={corpusCount}
             bind:loading={corpusLoading}
@@ -418,7 +496,7 @@
               <!-- §5.7: absent on a tile that does not compile (Gitea #529) -->
               {#if !dead}
                 <button
-                  class="act"
+                  class="btn sm"
                   data-role="tile-edit"
                   on:click|stopPropagation={() =>
                     dispatch("pick", { name: item.name, source: item.source ?? "" })}
@@ -493,39 +571,43 @@
   }
 
   .hint {
+    display: flex;
+    align-items: center;
+    gap: 7px;
     font-size: 12px;
-    margin: 6px 16px;
+    margin: 8px 20px 0;
   }
 
+  /* mockups.html `.pagebar` */
   .pagebar {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 10px 14px;
+    gap: 12px;
+    padding: 12px 20px;
     border-bottom: 1px solid var(--border);
-    font-size: 13px;
-    flex-wrap: wrap;
+    background: var(--bg);
   }
 
-  /* the segmented source control (D3) */
+  /* the segmented source control (D3) — mockups.html `.seg` */
   .seg {
     display: inline-flex;
     border: 1px solid var(--border);
-    border-radius: 7px;
+    border-radius: 6px;
     overflow: hidden;
     background: var(--bg-inset);
   }
 
   .segbtn {
-    display: inline-flex;
+    display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 7px;
+    height: 32px;
+    padding: 0 14px;
     border: none;
     border-radius: 0;
     background: transparent;
     color: var(--text-dim);
-    font-size: 13px;
-    padding: 5px 12px;
+    font: 13px/1 var(--sans);
     cursor: pointer;
   }
 
@@ -537,26 +619,33 @@
     color: var(--text);
   }
 
+  /* the active segment is BRIGHTER, not amber — an amber-soft ground with an
+     inset amber underline, and only the count keeps the accent colour
+     (Jeremy, 2026-09-19: "the colors don't match the mocks when activated") */
   .segbtn.on {
-    background: color-mix(in srgb, var(--accent) 18%, transparent);
-    color: var(--accent);
+    background: var(--accent-soft);
+    color: var(--text);
+    box-shadow: inset 0 -2px 0 var(--accent);
   }
 
   .ct {
-    font-size: 11px;
-    opacity: 0.8;
+    font: 11px/1 var(--mono);
+    color: var(--text-dim);
     font-variant-numeric: tabular-nums;
+  }
+
+  .segbtn.on .ct {
+    color: var(--accent);
   }
 
   .search {
     flex: none;
     width: 240px;
-    padding: 4px 8px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--bg-inset);
-    color: var(--text);
-    font-size: 13px;
+  }
+
+  /* S1c: the primary shrinks to a `+` icon beside the search on a phone */
+  .newicon {
+    display: none;
   }
 
   .grids {
@@ -566,11 +655,13 @@
     flex-direction: column;
   }
 
+  /* the GRID is the scroll container: the device source stacks two galleries
+     (the shown patterns and the collapsed "Not for this layout" group), and
+     they scroll as one page, not as two independent panes */
   .grid {
     flex: 1;
     min-height: 0;
-    display: flex;
-    flex-direction: column;
+    overflow-y: auto;
   }
 
   .grid[hidden] {
@@ -582,34 +673,47 @@
     font-size: 13px;
   }
 
-  /* per-tile verbs, rendered into Gallery's hover strip */
-  .act {
-    font-size: 11px;
-    padding: 3px 8px;
-    border-radius: 5px;
-    background: var(--bg-panel);
-    border: 1px solid var(--border);
-    color: var(--text);
+  /* the collapsed second category for patterns this fixture cannot show */
+  .incompat[hidden] {
+    display: none;
+  }
+
+  .incompat {
+    border-top: 1px solid var(--border);
+  }
+
+  .disc {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 14px 20px 0;
+    border: none;
+    border-radius: 0;
+    background: transparent;
     cursor: pointer;
   }
 
-  .act:hover {
-    border-color: var(--accent);
-    color: var(--accent);
+  .disc:hover {
+    color: var(--text);
   }
 
-  .act.icon {
-    padding: 3px 6px;
-    line-height: 1;
+  .caret {
+    display: inline-block;
+    transition: transform 0.12s;
   }
 
-  /* the mobile stand-in for the hover strip (S1c) */
+  .caret.open {
+    transform: rotate(90deg);
+  }
+
+  /* the mobile stand-in for the hover strip (S1c) — mockups.html `.elink` */
   .elink {
     display: none;
-    background: none;
-    border: none;
+    margin-top: 5px;
     padding: 0;
-    font-size: 11px;
+    border: none;
+    background: none;
+    font-size: 12px;
     color: var(--accent);
     cursor: pointer;
   }
@@ -630,10 +734,13 @@
     }
   }
 
+  /* S1c: the page bar becomes TWO rows — the segment full width, then the
+     search and the `+` icon sharing the line below it. */
   @media (max-width: 600px) {
     .pagebar {
-      gap: 8px;
-      padding: 10px 12px;
+      flex-wrap: wrap;
+      gap: 10px;
+      padding: 12px;
     }
 
     .seg {
@@ -650,9 +757,35 @@
       width: auto;
     }
 
+    .spacer {
+      display: none;
+    }
+
+    .new {
+      width: 32px;
+      padding: 0;
+    }
+
+    .newfull {
+      display: none;
+    }
+
+    .newicon {
+      display: inline;
+      font-size: 17px;
+    }
+
+    .hint {
+      margin: 8px 12px 0;
+    }
+
+    .disc {
+      padding: 14px 12px 0;
+    }
+
     /* the hover strip is gone on a phone — `Edit` lives under the name */
     .elink {
-      display: inline;
+      display: block;
     }
   }
 </style>
