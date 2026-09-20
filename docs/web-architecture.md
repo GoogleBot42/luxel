@@ -211,6 +211,14 @@ style what it was handed.
   tile's ⋯ stops being hovered the instant the popover covers the pointer, and
   a zero-sized rect would otherwise fling the menu into the corner.
 - Escape and an outside click both dispatch `close`; the OWNER holds `open`.
+- **A SECOND opener must `stopPropagation`.** The outside-click listener is on
+  `window`, so a click anywhere that is neither inside the popover nor inside
+  `anchor` dispatches `close` — including a click on a button whose own
+  handler just set `open = true`, which then flips straight back and the
+  popover never appears. The trigger you `bind:this` as `anchor` is exempt;
+  every other one (the projection row's value text, a swatch that is not the
+  anchor) needs `on:click|stopPropagation`. Costs a debug cycle every time,
+  because the handler visibly runs and the state visibly ends up false.
 
 ## The Patterns page (`pages/Patterns.svelte`, Gitea #467)
 
