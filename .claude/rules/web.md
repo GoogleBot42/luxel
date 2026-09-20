@@ -143,7 +143,8 @@ paths:
   mockdiff editor frames left a dirty 2D working copy behind, the console
   resumed it, and a 300 px strip console twenty frames later measured as an
   `18×17 matrix` with its `Not for this layout` group legitimately empty
-  (2026-09-20; the resume itself is Gitea #573, the same class as #539).
+  (2026-09-20; that was a real product bug, Gitea #573 — see the console-Layout
+  bullet below — but the instrument must not depend on frame order either way).
   Reproduce any such bug against BOTH an empty profile and a seeded one before
   blaming either side.
 - **A flex container blockifies its children's `display`**, so an `inline-flex`
@@ -173,6 +174,26 @@ paths:
   2D pattern is almost always a resolution or frame-rate assumption in the
   PATTERN, not in the harness (#285 was three of them, 2026-09-07). Since #463
   the chip can be set to `Matrix 64×64` to check that without hardware.
+- **A console's Layout is `deviceGeometry()`'s, and its parameters are DEVICE
+  readings only** (`web/src/lib/geometry.ts`; `stores/device.ts`'s
+  `deviceLayout` is wire parsing over it and decides nothing). The same
+  invariant has leaked twice through two different inputs — a persisted
+  `luxel.previewAs` (#539) and `/api/status`'s `geom.source:"default"`, the
+  grid the device's ENGINE fabricates for the program it was handed (#573,
+  which made a 300 px strip report `18×17 matrix` and took the chip, the tile
+  shapes, Settings' Projection section and the #538 filter with it). So the
+  function's SIGNATURE is the guard: if you are about to give it a parameter
+  the browser holds, or to read one of the browser's stores next to its call,
+  that is the bug. A running program never reshapes the fixture — it may only
+  caption ITSELF (`captionFor` / `effectiveFor`), or appear in the Patterns
+  page's `Not for this layout` group in the playground's Auto style. Add a
+  unit case per new input in `web/tests/geometry.test.mjs` (2026-09-20).
+- `vite preview` binds **`localhost`**, not `0.0.0.0` — and on this box that
+  resolves to `::1` first, so an ad-hoc puppeteer script that navigates to
+  `http://127.0.0.1:<port>` dies with `net::ERR_CONNECTION_REFUSED` while the
+  server is up and the harnesses are green. Use `http://localhost:<port>` for
+  the PAGE (the mirrors, reached by `fetch`, are fine on `127.0.0.1`)
+  (2026-09-20).
 - Terminology Jeremy set: the hardware-bound UI is the "device console"; the
   hardware-free UI is the "playground." The playground must not offer device
   affordances (connect/disconnect controls, device badges, etc.).
