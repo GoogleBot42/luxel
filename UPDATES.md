@@ -1,5 +1,36 @@
 # Update log
 
+## 2026-09-20 — On-device JIT: research, design, and the library kind census (#607)
+
+Jeremy reversed the 2026-09-05 "no JIT" decision: per-pixel compute is the bottleneck and
+native pattern code is wanted, as a firmware feature per board class, the JIT living on the
+device so LXBC stays the one portable format. `docs/research/on-device-jit.md` (PR #608) is
+the research: the compiler is browser-only, LXBC v5 is arch-independent, followers already
+pull the LXP1 envelope over HTTP, and the ceiling is decided by whether values are unboxed —
+boxed baseline JITs land at 1.4–2.5× (Sparkplug, MicroPython `@native`), typed ones at
+10–16× (`@viper` on the same ESP32). Jeremy's answer: keep the language untyped, let the
+browser compiler infer which slots never change kind and record it in the bytecode.
+
+`docs/jit-design.md` is the engineering design for v1 (ESP32-S3 / Xtensa LX7, everything
+else interprets): a six-point kind lattice (`Dyn` over `Num / Arr / ArrNum / Fun /
+Builtin`), a `kinds` section and one `Box` opcode in LXBC v6, a linear device-side verifier
+in the JVM stack-map style, the windowed-ABI calling convention (`ctx` in `a2`, params in
+`a3…a7`, static-depth operand-stack homes in `a8…a13`), a per-opcode instruction-selection
+table mirroring `fixed.rs` exactly (`mull`/`mulsh`/`src` for 16.16 mul), fuel at
+back-edges, a native per-pixel entry replacing the ~400-cycle interpreter entry, PSRAM as
+the code cache through the S3's `+0x0600_0000` instruction-bus mirror, and a test plan
+that pins the ABI with `xtensa-esp-elf-objdump` on the host and runs the interpreter as
+the bit-exact oracle on QEMU before any device sees native code.
+
+The census (`crates/luxel-cli/examples/jitcensus.rs`, docs/tools.md) measured the
+inference over all 307 library patterns: 291 (94.8 %) have a fully typed render path,
+95 % of locals and 96.8 % of array globals are provably numeric, only six causes of
+dynamic slots exist, and a v1 that refuses `CallValue`/callback builtins loses 6.2 % of
+the library. One rule is load-bearing: a global's declared init (`var hues = 0`) must not
+join its kind when the init code definitely assigns it before any read — folding it in
+would leave 180 patterns dynamic. Open questions for Jeremy are at the end of the design
+doc and on #607. No device was touched; nothing is implemented yet.
+
 ## 2026-09-20 — round-2 verification on metal: both boards deployed, and what a hardware mockdiff really measures (#538)
 
 Closing pass over #605/#612. No code changed; the boards did.
