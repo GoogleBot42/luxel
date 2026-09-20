@@ -8,7 +8,7 @@
   // other reboot-requiring actions are grouped.
   import { device, deviceHost, wifiForm, wifiSource, wifiSsid } from "../stores/device";
   import { confirm } from "../stores/dialog";
-  import { note, notes } from "../stores/notify";
+  import { clearApiError, note, notes, reportApiError } from "../stores/notify";
 
   let open = false;
   let ssidInput: HTMLInputElement | undefined;
@@ -40,8 +40,10 @@
       note("wifi", "saved — the device is rebooting to join the new network");
       wifiSsid.set(ssid);
       wifiSource.set("flash");
+      clearApiError();
     } else {
-      note("wifi", r?.error ? `failed: ${r.error}` : "save failed");
+      note("wifi", ""); // the banner carries it now — no stale "saving…"
+      reportApiError(r?.error ?? "save failed", { scope: "wifi", field: "wifi-ssid" });
     }
   }
 </script>

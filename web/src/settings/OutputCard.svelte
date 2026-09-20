@@ -16,7 +16,7 @@
     refreshOutput,
     type OutputStatus,
   } from "../stores/device";
-  import { note, notes } from "../stores/notify";
+  import { note, notes, reportApiError } from "../stores/notify";
 
   /** Which fields this device advertises (`lib/settingsCaps.ts`). */
   export let showPowerCap = true;
@@ -101,7 +101,8 @@
       const flat = flatFromStops(stops);
       const res =
         flat.length === 0 ? await d.clearPalette() : await d.setPalette(flat, $paletteAmount);
-      note("palette", res.ok ? "" : (res.error ?? "rejected"));
+      note("palette", "");
+      if (!res.ok) reportApiError(res.error ?? "rejected", { scope: "output" });
       void refreshOutput();
     })();
   }

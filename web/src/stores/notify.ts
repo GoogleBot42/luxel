@@ -13,6 +13,12 @@
 // and insertion-ordered so the render order is stable.
 
 import { writable, type Readable } from "svelte/store";
+import {
+  explainApiError,
+  type ApiErrorContext,
+  type ApiErrorExplained,
+  type ApiErrorScope,
+} from "../lib/apiErrors";
 
 /** The surfaces a transient note can be attached to. */
 export type NoteChannel =
@@ -32,6 +38,8 @@ export type NoteChannel =
   | "devname"
   /** Settings › Advanced › Clock & time zone — the zone POST and `Sync now` */
   | "clock"
+  /** the connection itself: `reconnected`, and what a failed write lost */
+  | "device"
   | "palette";
 
 export type Notes = Partial<Record<NoteChannel, string>>;
@@ -105,3 +113,43 @@ export function setBanner(id: string, banner: Omit<Banner, "id"> | null): void {
   });
 }
 
+
+// ---- the error banner (Gitea #538 round 2) ----
+//
+// A rejected settings POST used to be six words of 12px dim text at the
+// bottom of the form that raised it — "the change at the bottom is too
+// subtle" was Jeremy's verdict on the reboot note, and it is the same verdict
+// here. An error is now ONE thing, at the TOP of every screen, in the
+// `--error` palette, in the same pinned-strip family as `RebootBar`.
+//
+// There is at most one: a second rejection replaces the first, because a
+// stack of refusals is a stack of the same advice. `field` travels with it so
+// the bar can mark the control the device was talking about.
+
+export interface ApiErrorReport extends ApiErrorExplained {
+  scope: ApiErrorScope;
+  /** When it was raised — the bar keys its mount animation off this. */
+  at: number;
+}
+
+const apiErrorInner = writable<ApiErrorReport | null>(null);
+
+/** The one live API error, or null. Rendered by `components/ErrorBar.svelte`. */
+export const apiError: Readable<ApiErrorReport | null> = {
+  subscribe: apiErrorInner.subscribe,
+};
+
+/**
+ * Translate a device refusal and raise the banner. Returns the explanation so
+ * a caller that also wants it inline does not have to translate twice.
+ */
+export function reportApiError(raw: string, ctx: ApiErrorContext): ApiErrorExplained {
+  const ex = explainApiError(raw, ctx);
+  apiErrorInner.set({ ...ex, scope: ctx.scope, at: Date.now() });
+  return ex;
+}
+
+/** Dismiss it — the ✕, and any later success on the same form. */
+export function clearApiError(): void {
+  apiErrorInner.set(null);
+}

@@ -165,6 +165,9 @@ const MAX_PIXELS: u32 = 2048;
 const PANEL_MAX_PIXELS: u32 = 4096;
 const PANEL_W: u16 = 64;
 const PANEL_H: u16 = 64;
+/// `--board panel`: the external pattern-array arena the S3 panel board
+/// carries (Gitea #253) — what `/api/status` reports as `psram_total`.
+const PANEL_PSRAM_BYTES: u32 = 8 * 1024 * 1024;
 
 struct State {
     pixel_count: AtomicU32,
@@ -196,6 +199,13 @@ struct State {
     /// on pre-#287 firmware. `--engine-heap N` impersonates a device with an
     /// N-byte resident pattern.
     engine_heap: AtomicU32,
+    /// The external pattern-array arena `/api/status` reports as
+    /// `psram_free` / `psram_total` (Gitea #253, #538). `--board panel`
+    /// impersonates the Seengreat HUB75 S3, which has one, so the Settings
+    /// page's Storage row can state a real number without hardware; a strip
+    /// mirror has none and both stay 0, which is how the fields are omitted.
+    psram_free: AtomicU32,
+    psram_total: AtomicU32,
     inbox: Mutex<Vec<Msg>>,
     pixels: Mutex<Vec<u8>>,
     fps: AtomicU32,
@@ -851,8 +861,21 @@ fn status_json(state: &State) -> String {
     geom.push_json(&mut geom_s);
     let mut caps_s = String::new();
     luxel_core::caps::Caps::derive(state.hw, &geom, pixels).push_json(&mut caps_s);
+    // The external arena, on a board that has one — omitted entirely
+    // otherwise, exactly as the firmware's `#[cfg(feature = "psram-arena")]`
+    // block omits it (docs/api.md).
+    let psram_total = state.psram_total.load(Ordering::Relaxed);
+    let psram = if psram_total > 0 {
+        format!(
+            ",\"psram_free\":{},\"psram_total\":{}",
+            state.psram_free.load(Ordering::Relaxed),
+            psram_total
+        )
+    } else {
+        String::new()
+    };
     format!(
-        "{{\"name\":\"{}\",\"fps\":{},\"out_fps\":{},\"rescan_hz\":{},\"pixels\":{},\"max_pixels\":{},\"geom\":{},\"caps\":{},\"slot\":\"native\",\"version\":\"{}\",\"heap_free\":{},\"engine_heap\":{},\"live\":{},\"vmerr\":{}}}",
+        "{{\"name\":\"{}\",\"fps\":{},\"out_fps\":{},\"rescan_hz\":{},\"pixels\":{},\"max_pixels\":{},\"geom\":{},\"caps\":{},\"slot\":\"native\",\"version\":\"{}\",\"heap_free\":{},\"engine_heap\":{}{},\"live\":{},\"vmerr\":{}}}",
         json_escape(&state.name.lock().unwrap()),
         fps,
         state.out_fps.load(Ordering::Relaxed),
@@ -864,6 +887,7 @@ fn status_json(state: &State) -> String {
         env!("CARGO_PKG_VERSION"),
         state.heap_free.load(Ordering::Relaxed),
         state.engine_heap.load(Ordering::Relaxed),
+        psram,
         live,
         vmerr
     )
@@ -2541,7 +2565,11 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
             // OTA, no second allocator.
             reboot: false,
             ota: false,
-            psram: false,
+            // The panel mirror impersonates the Seengreat HUB75 S3, whose
+            // firmware is built with `psram-arena` (Gitea #253) — so the
+            // Storage row it drives is the one a real panel shows. A strip
+            // board has no arena and says so.
+            psram: panel,
             // Matches board::BLUR_GLOW: a panel's compose window cannot take
             // the two spatial stages (#476), a strip's can.
             blur_glow: !panel,
@@ -2549,6 +2577,12 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         geom: Mutex::new(luxel_core::caps::Geom::strip(pixels)),
         heap_free: AtomicU32::new(heap_free),
         engine_heap: AtomicU32::new(engine_heap),
+        // 8 MiB, the arena the S3 panel board carries. The mirror allocates
+        // pattern arrays on the host heap, so nothing consumes it and `free`
+        // stays `total` — an honest drift, listed with the others in
+        // docs/api.md.
+        psram_free: AtomicU32::new(if panel { PANEL_PSRAM_BYTES } else { 0 }),
+        psram_total: AtomicU32::new(if panel { PANEL_PSRAM_BYTES } else { 0 }),
         inbox: Mutex::new(Vec::new()),
         pixels: Mutex::new(Vec::new()),
         fps: AtomicU32::new(0),

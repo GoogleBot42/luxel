@@ -16,6 +16,7 @@
   import Patterns from "./pages/Patterns.svelte";
   import Playlist from "./pages/Playlist.svelte";
   import Settings from "./pages/Settings.svelte";
+  import ErrorBar from "./components/ErrorBar.svelte";
   import RebootBar from "./settings/RebootBar.svelte";
   import {
     connectDevice,
@@ -367,6 +368,11 @@
       {/if}
     </header>
   {/if}
+
+  <!-- THE error surface (#538 round 2): a refused request, or a device that
+       has stopped answering. At the TOP of every screen — the editor
+       included, which is why it is here and not in a page. -->
+  <ErrorBar />
 
   <!-- Browser-blocked device connection (#162). Not an error the app can
        retry: this page is https, the device is plain http, and Chromium's

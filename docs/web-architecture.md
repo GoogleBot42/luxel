@@ -591,6 +591,7 @@ when overridden) and the values chip keeps only its count.
 `playlist-item` · `pl-grip` · `pl-name` · `pl-duration` ·
 `pl-duration-inline` · `pl-duration-edit` · `pl-override` · `pl-sec` ·
 `pl-values-toggle` · `pl-values` · `pl-invalid` · `pl-remove` ·
+`pl-preempted` (why a direct play stopped the queue) ·
 `pattern-picker` · `picker-{backdrop,close,search,item,empty,busy,error}` ·
 `picker-section-{pattern,library}` · `picker-more-{pattern,library}`.
 
@@ -1126,7 +1127,8 @@ dark,map-link}` · `reboot-bar`, `reboot-bar-text`, `reboot-now` ·
 add,remove}` · `projection-block`, `projection-kind` (with `data-dims`),
 `projection-card` (with `data-mode`) · `wifi-change` ·
 `panel-{clock,planes,rescan}` · `storage-{patterns,bytes,heap,psram}` ·
-`fw-{version,update,file,note}`.
+`fw-{version,update,file,note}` · `api-error-{bar,text,details,dismiss}` ·
+`device-down-bar`.
 
 ### `data-reason` marks the one legal disabled control (Gitea #529)
 
@@ -1296,17 +1298,140 @@ The device's real wiring arrived with that switch: `/api/layout`'s
 `matrix.snake` fills `serpentine`, so a console previews a snaked matrix the
 way the fixture shows it rather than row-major. Per-item projection overrides are #470/#473's.
 
+## Errors and liveness — one strip at the top (Gitea #538 round 2)
+
+Two questions have the same answer — *did that work?* — so they share one
+surface: `components/ErrorBar.svelte`, mounted by `App.svelte` above every
+screen (the editor included, which is why it is not in a page). It is the
+`RebootBar` family in the `--error` palette; `RebootBar` is at the BOTTOM in
+`--warn` because it reports something that IS stored, this one reports
+something that did not happen.
+
+| condition | store | behaviour |
+|---|---|---|
+| the device is not answering | `deviceDown` / `deviceLastSeen` | `Device unreachable — retrying… last seen 12 s ago`, clocked live, no ✕ — it clears itself, and a `reconnected` note on the `device` channel marks the return |
+| a request was refused | `apiError` (`reportApiError`) | the translated sentence, the device's own words under it, a ✕, and the field it is about marked `data-field-error` |
+
+The connectivity banner wins when both are true: a refusal explained by a dead
+board is one fact, not two. Neither exists at rest, so nothing the mockups
+measure changes — `[data-field-error]` is one rule in `app.css` and is never
+present on a resting page.
+
+**Translation is a table, not prose at the call site.** `lib/apiErrors.ts`
+(`explainApiError(raw, ctx)`, tested in `web/tests/apiErrors.test.mjs`) maps
+each `luxel_core::layout` grammar error — the vocabulary the firmware AND the
+mirror share — onto a sentence built from what the FORM knows: the board's
+ceiling, the chain the user typed, the field. `pw*ph*cols*rows out of range
+for this board` becomes *"8,192 px — this board tops out at 4,096. The panel's
+two bitplane DMA frame buffers (28 KB each) must live in internal SRAM, and
+the DMA cannot read them from PSRAM fast enough (it needs 60 MB/s); a wider
+chain needs new firmware (#599), not a setting. At this size you can arrange
+two 32×64 tiles (`matrix 32 64 2 1 tr row 0 0`)."* The raw text is never
+dropped — it is the `details` line. `LayoutCard` pre-checks the chain against
+`max_pixels` before POSTing (#600), the way `latOverMax` already does for the
+lattice, so the explanation arrives with the numbers and nothing is sent that
+cannot land.
+
+**Liveness is measured in the gate.** `lib/fetchgate.ts` sees every request
+the app makes, so it counts consecutive transport failures (an HTTP error
+status is the device *answering* and resets the count) and publishes
+`subscribeGate(fn)`; `stores/device.ts` turns that into `deviceDown`. Two
+knobs come with it:
+
+- `gatedFetch(url, init, { fastFail })` drops the retry ladder and uses a 4 s
+  deadline. `/api/status` uses it (with `force`, so the probe that would clear
+  the latch is never the request the latch blocks): the 1 Hz poll is the
+  heartbeat, and it has to report a dead board in about a second rather than
+  spending ~30 s of patience in silence.
+- while the gate says the device is down, a **write** (anything but GET/HEAD)
+  fails immediately instead of retrying into a corpse. Reads keep the full
+  ladder — that patience is what keeps a cold load alive on a two-socket board
+  (#92/#592).
+
+Every optimistic write then has to roll back: a failed playlist POST re-reads
+the device's own list and says `playlist not saved` (`playlistWriteFailed` in
+`stores/device.ts`), and a refused activation reports through the banner.
+
+## Activation parks the playlist (Gitea #538 round 2)
+
+`activateDevicePattern()` is THE activation verb — `Play` on a tile, the
+Patterns page's play path and the editor's `▶ Play on device` all reach it —
+so the park lives in it and every caller gets it for free. A direct play is a
+takeover of the fixture, and a playlist that keeps auto-advancing replaces the
+chosen pattern a few seconds later with nothing on screen saying why. So the
+verb stops the auto-advance the way `‖ Pause` does (`POST /api/playlist/stop`
+with the index remembered, #549's park) and records the pattern that took over
+in `playlistPreemptedBy`. The transport then reads
+`stopped — playing <name> directly` (`pl-preempted`) and `▶ Play` resumes the
+parked item; any transport verb clears the explanation, because pressing one
+is the user taking the playlist back.
+
+This is a CLIENT fix. `POST /api/patterns/<id>/activate` from Home Assistant,
+MQTT or curl still leaves the firmware's playlist running — **Gitea #602**,
+named in docs/api.md.
+
+## Reordering the playlist is live (Gitea #538 round 2)
+
+The rows reorder VISUALLY while the pointer is down; the store and the POST
+change only on release. HTML5 drag-and-drop could not do that — its `drop` is
+the first moment anything is known, the drag image is the browser's, and it
+does not exist on touch — so it is pointer events plus one FLIP-ish rule, with
+`pages/Playlist.svelte` as the only thing that knows the geometry:
+
+- the grabbed row gets `lifted` (shadow, 1.012 scale, `position:relative`) and
+  `translateY(pointer travel)`;
+- every row between its origin and the slot it is over gets
+  `translateY(∓ the grabbed row's outer height)` — the hole;
+- `transform` only, with a 120 ms transition on the rows that are not being
+  dragged, so nothing reflows and nothing is measured twice;
+- geometry is measured ONCE at grab time, off `PlaylistRow.els()` — a row is
+  TWO elements whenever its values band is open, and `outer[i]` is the distance
+  to the next row's top, so the 8 px card margin is in the number;
+- Escape (or a cancelled pointer) snaps the target back to the origin and
+  animates the lifted row home before the drag state is dropped;
+- `touch-action: none` is on the **handle only**, so a drag from anywhere else
+  still scrolls the list;
+- the 1 Hz follow poll is suspended for the length of a drag: it would replace
+  `items` under a layout that was measured before it.
+
+`PlaylistRow`'s resting styles are untouched — `lifted`/`anim` are classes
+that only exist mid-drag, and `shift` is removed from the style attribute at 0
+— so mockdiff S4/S4b stay at zero. The handle's ↑/↓ keyboard reorder is
+unchanged. New `data-role`s: none; the drag is asserted through
+`data-lifted` on the row and computed `transform`.
+
+## A refresh of the device library keeps the sources it has (Gitea #538 round 2)
+
+`GET /api/patterns` answers ids and names only; each source is fetched
+separately and streams in. `refreshDevicePatterns()` used to replace
+`devicePatterns` with that bare list, which told `Gallery.syncItems` that every
+pattern's source had just changed — and it did the only correct thing with
+that: freed every tile engine and recompiled. Deleting ONE of N patterns
+re-fetched and re-compiled the other N−1.
+
+It now MERGES by id, keeping the source each surviving row already had. A row
+whose content changed under the same id — a save that overwrote a name — is
+not something the wire can tell us (no hash, no mtime), so the writer says so:
+`refreshDevicePatterns([id, …])` drops those cached sources and nothing else's.
+Both save paths (`pages/Editor.svelte`, `saveAndAddToPlaylist`) look the
+overwritten id up by name before saving and pass it.
+
+`Gallery` stamps `data-compiled` (a per-tile compile counter) on every tile, so
+the harness can prove a survivor's engine was not rebuilt rather than
+inferring it from a screenshot.
+
 ## Store reference
 
 `stores/device.ts` — `device`, `deviceBase`, `isPlayground`, `mode`,
 `deviceError`, `deviceBlocked`, `devicePixels`, `pixelMax`, `deviceHeapFree`,
 `deviceEngineHeap`, `deviceVmerr`, `deviceFps`, `deviceOutFps`,
-`deviceRescanHz`, `deviceMap`, `deviceLayoutWire`, `deviceCaps`,
+`deviceRescanHz`, `devicePsramFree`, `devicePsramTotal`, `deviceDown`,
+`deviceLastSeen`, `deviceMap`, `deviceLayoutWire`, `deviceCaps`,
 `deviceVersion`, `deviceSlot`, `deviceStore`, `deviceName`, `deviceLabel`,
 `devicePatterns`, `deviceRunningId`, `brightness`,
 `brightnessMax`, `deviceProtocol`, `protocolOptions`, `dataPin*`, `wifi*`,
 `mqtt*`, `outputStatus`, `palette*`, `clockStatus`, `syncStatus`, `netLive`,
-`playlist`; functions `connectDevice`, `detectDeviceBase`, `refresh*`,
+`playlist`, `playlistParked`, `playlistPreemptedBy`; functions `connectDevice`, `detectDeviceBase`, `refresh*`,
 `activateDevicePattern`,
 `addToPlaylist`, `queuePlaylistSave`, `markTransport`, `applyLayout`,
 `installDeviceMapCoords`, `installDeviceGridMap`, `clearDeviceMap`,
@@ -1329,7 +1454,8 @@ way the fixture shows it rather than row-major. Per-item projection overrides ar
 `exportEpe`, `encodeShare`, `decodeShare`.
 
 `stores/notify.ts` — `notes`, `note()`, `clearNote()`, `noteStore()`,
-`banners`, `setBanner()`, `clearBanners()`.
+`banners`, `setBanner()`, `clearBanners()`, `apiError`, `reportApiError()`,
+`clearApiError()`.
 
 ## Invariants worth not breaking
 

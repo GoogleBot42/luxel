@@ -2961,16 +2961,30 @@ try {
   );
   await page.$$eval('[data-role="pl-values-toggle"]', (els) => els[0].click());
   await sleep(150);
-  // drag-to-reorder: move item 0 (hue 0.2) below item 1 (hue 0.8)
-  await page.evaluate(() => {
-    const rows = document.querySelectorAll('[data-role="playlist-item"]');
-    const grip = rows[0].querySelector('[data-role="pl-grip"]');
-    const dt = new DataTransfer();
-    grip.dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer: dt }));
-    rows[1].dispatchEvent(new DragEvent("dragover", { bubbles: true, dataTransfer: dt }));
-    rows[1].dispatchEvent(new DragEvent("drop", { bubbles: true, dataTransfer: dt }));
-  });
-  await sleep(600);
+  // drag-to-reorder: move item 0 (hue 0.33) below item 1 (hue 0.8).
+  // POINTER events since #538 round 2 — the reorder is live and the store
+  // only changes on release, so the drag has to be a real pointer gesture
+  // (the deep checks on the intermediate transforms are in the r2-3 section
+  // at the foot of this file).
+  {
+    const at = async (sel, i) =>
+      page.$$eval(
+        sel,
+        (els, n) => {
+          const b = els[n].getBoundingClientRect();
+          return { x: b.x + b.width / 2, y: b.y + b.height / 2, h: b.height };
+        },
+        i,
+      );
+    const grip = await at('[data-role="pl-grip"]', 0);
+    const row1 = await at('[data-role="playlist-item"]', 1);
+    await page.mouse.move(grip.x, grip.y);
+    await page.mouse.down();
+    await page.mouse.move(grip.x, grip.y + row1.h * 0.7, { steps: 6 });
+    await sleep(150);
+    await page.mouse.up();
+  }
+  await sleep(1000);
   check(
     "playlist: drag reorders items",
     Math.abs(
@@ -4707,6 +4721,505 @@ try {
       resDev.kill();
     }
   }
+
+  // ---- Jeremy's round-2 items (Gitea #538, 2026-09-20) --------------------
+  //
+  // One dedicated `--board panel` mirror, because these five checks want a
+  // state of their own — a known 3-row playlist to drag, a known library to
+  // delete from, an arena to read, and (last of all) a device to KILL.
+  {
+    const R2_PORT = E2E.mirror.doomed;
+    const R2 = `http://127.0.0.1:${R2_PORT}`;
+    const r2Dev = spawn(
+      "../target/debug/luxel",
+      [
+        "serve",
+        ...NO_NETIN,
+        "--port",
+        String(R2_PORT),
+        "--board",
+        "panel",
+        "--pixels",
+        "4096",
+        "--name",
+        "luxel-r2",
+      ],
+      { stdio: ["ignore", "pipe", "inherit"] },
+    );
+    await new Promise((resolve, reject) => {
+      r2Dev.stdout.on("data", (d) => String(d).includes("luxel serve:") && resolve());
+      r2Dev.on("exit", () => reject(new Error("#538 r2 panel mirror died")));
+      setTimeout(() => reject(new Error("#538 r2 panel mirror start timeout")), 30000);
+    });
+    process.on("exit", () => r2Dev.kill());
+    let r2Ctx = null;
+    try {
+      const saveR2 = async (name, src) =>
+        (
+          await (
+            await fetch(`${R2}/api/patterns`, { method: "POST", body: await lxpBody(name, src, 4096) })
+          ).json()
+        ).id;
+      const mk = (h) =>
+        `export function render(index) { hsv(${h} + index / pixelCount, 1, 1) }`;
+      const idA = await saveR2("R2 Alpha", mk(0.1));
+      const idB = await saveR2("R2 Bravo", mk(0.4));
+      const idC = await saveR2("R2 Charlie", mk(0.7));
+      await fetch(`${R2}/api/playlist`, {
+        method: "POST",
+        body: `D 300\nX 0\nI ${idA} -1\nI ${idB} -1\nI ${idC} -1\n`,
+      });
+      await fetch(`${R2}/api/playlist/play`, { method: "POST" });
+      await sleep(700);
+
+      r2Ctx = await browser.createBrowserContext();
+      const pg = await r2Ctx.newPage();
+      await pg.setViewport({ width: 1400, height: 900 });
+      await gotoConsole(pg, R2, "#/playlist");
+      await pg.waitForSelector('[data-role="playlist-item"]', { timeout: 15000 });
+      await sleep(1500);
+
+      // ---- 1. PSRAM: the NUMBER, not the word "present" ----
+      {
+        await pg.click('[data-role="tab-settings"]');
+        await pg.waitForSelector('[data-role="adv-storage-toggle"]', { timeout: 10000 });
+        const collapsed = await pg.$eval(
+          '[data-role="adv-storage-status"]',
+          (el) => el.textContent.trim(),
+        );
+        check(
+          "r2-1: the collapsed Storage row carries the arena figure",
+          /PSRAM 8\.0 MB free of 8 MB/.test(collapsed),
+          collapsed,
+        );
+        await pg.click('[data-role="adv-storage-toggle"]');
+        await sleep(600);
+        const psram = await pg.$eval('[data-role="storage-psram"]', (el) => el.textContent.trim());
+        check("r2-1: Storage states `8.0 MB free of 8 MB`", psram === "8.0 MB free of 8 MB", psram);
+        const after = await pg.$eval('[data-role="storage-psram"]', (el) =>
+          (el.parentElement.textContent ?? "").trim(),
+        );
+        check(
+          "r2-1: …and the one-line explanation comes AFTER the number",
+          after.indexOf("8.0 MB") < after.indexOf("external arena"),
+          after.slice(0, 120),
+        );
+        await pg.screenshot({ path: `${shotDir}/device-e2e-r2-psram.png` });
+        await pg.click('[data-role="tab-playlist"]');
+        await sleep(800);
+      }
+
+      // ---- 3. drag to reorder: LIVE, and only the release writes ----
+      {
+        const posts = [];
+        const countPl = (r) => {
+          if (r.method() === "POST" && r.url() === `${R2}/api/playlist`) posts.push(r.postData());
+        };
+        const rowBox = async (n) =>
+          pg.$$eval(
+            '[data-role="playlist-item"]',
+            (els, i) => {
+              const b = els[i].getBoundingClientRect();
+              return { x: b.x + b.width / 2, y: b.y + b.height / 2, h: b.height };
+            },
+            n,
+          );
+        const gripBox = async (n) =>
+          pg.$$eval(
+            '[data-role="pl-grip"]',
+            (els, i) => {
+              const b = els[i].getBoundingClientRect();
+              return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+            },
+            n,
+          );
+        const names = () =>
+          pg.$$eval('[data-role="pl-name"]', (els) => els.map((e) => e.textContent.trim()));
+        const transforms = () =>
+          pg.$$eval('[data-role="playlist-item"]', (els) =>
+            els.map((e) => getComputedStyle(e).transform),
+          );
+
+        const before = await names();
+        check(
+          "r2-3 setup: three rows in the order they were queued",
+          before.join("|") === "R2 Alpha|R2 Bravo|R2 Charlie",
+          before.join("|"),
+        );
+        check(
+          "r2-3: a resting row carries no transform (the mock's row is untouched)",
+          (await transforms()).every((t) => t === "none"),
+          (await transforms()).join(" · "),
+        );
+
+        pg.on("request", countPl);
+        // grab row 0's handle and drag it down past row 1's middle
+        const g0 = await gripBox(0);
+        const r1 = await rowBox(1);
+        await pg.mouse.move(g0.x, g0.y);
+        await pg.mouse.down();
+        await pg.mouse.move(g0.x, g0.y + r1.h * 0.6, { steps: 8 });
+        await sleep(200);
+
+        const mid = await transforms();
+        const lifted = await pg.$$eval('[data-role="playlist-item"]', (els) =>
+          els.map((e) => e.getAttribute("data-lifted")),
+        );
+        check(
+          "r2-3: the grabbed row is LIFTED and follows the pointer",
+          lifted[0] === "1" && mid[0] !== "none" && /matrix/.test(mid[0]),
+          `${lifted[0]} / ${mid[0]}`,
+        );
+        check(
+          "r2-3: …and the row it is passing has slid up to open the hole",
+          mid[1] !== "none",
+          mid[1],
+        );
+        check(
+          "r2-3: …a row beyond the drop point has not moved",
+          mid[2] === "none",
+          mid[2],
+        );
+        const during = await names();
+        check(
+          "r2-3: the ORDER is unchanged while dragging",
+          during.join("|") === before.join("|"),
+          during.join("|"),
+        );
+        check("r2-3: …and nothing has been written yet", posts.length === 0, `${posts.length} POSTs`);
+        await pg.screenshot({ path: `${shotDir}/device-e2e-r2-drag.png` });
+
+        await pg.mouse.up();
+        await sleep(1400); // past the 400 ms edit debounce
+        pg.off("request", countPl);
+        const after = await names();
+        check(
+          "r2-3: the release reorders the list",
+          after.join("|") === "R2 Bravo|R2 Alpha|R2 Charlie",
+          after.join("|"),
+        );
+        check(
+          "r2-3: …with exactly ONE POST, carrying the new order",
+          posts.length === 1 && posts[0].indexOf(idB) < posts[0].indexOf(idA),
+          `${posts.length} POSTs`,
+        );
+        check(
+          "r2-3: …and every row is back to no transform",
+          (await transforms()).every((t) => t === "none"),
+          (await transforms()).join(" · "),
+        );
+        const onDevice = await (await fetch(`${R2}/api/playlist`)).json();
+        check(
+          "r2-3: …which is what the device now holds",
+          onDevice.items.map((i) => i.id).join("|") === [idB, idA, idC].join("|"),
+          onDevice.items.map((i) => i.id).join("|"),
+        );
+
+        // ---- Escape cancels, and writes nothing ----
+        const posts2 = [];
+        const countPl2 = (r) => {
+          if (r.method() === "POST" && r.url() === `${R2}/api/playlist`) posts2.push(1);
+        };
+        pg.on("request", countPl2);
+        const g2 = await gripBox(2);
+        const rr = await rowBox(0);
+        await pg.mouse.move(g2.x, g2.y);
+        await pg.mouse.down();
+        await pg.mouse.move(g2.x, g2.y - rr.h * 1.4, { steps: 8 });
+        await sleep(150);
+        check(
+          "r2-3: Escape case — the drag is live first",
+          (await transforms())[2] !== "none",
+        );
+        await pg.keyboard.press("Escape");
+        await sleep(400);
+        await pg.mouse.up();
+        await sleep(1200);
+        pg.off("request", countPl2);
+        check(
+          "r2-3: Escape cancels the reorder",
+          (await names()).join("|") === "R2 Bravo|R2 Alpha|R2 Charlie",
+          (await names()).join("|"),
+        );
+        check("r2-3: …and writes nothing", posts2.length === 0, `${posts2.length} POSTs`);
+        check(
+          "r2-3: …and animates every row back to rest",
+          (await transforms()).every((t) => t === "none"),
+          (await transforms()).join(" · "),
+        );
+
+        // the keyboard path the handle has always carried still works
+        await pg.$$eval('[data-role="pl-grip"]', (els) => els[0].focus());
+        await pg.keyboard.press("ArrowDown");
+        await sleep(1200);
+        check(
+          "r2-3: ↑/↓ on the handle still reorders (the a11y path)",
+          (await names()).join("|") === "R2 Alpha|R2 Bravo|R2 Charlie",
+          (await names()).join("|"),
+        );
+      }
+
+      // ---- 2. a direct Play parks the playlist ----
+      {
+        check(
+          "r2-2 setup: the playlist is playing",
+          (await (await fetch(`${R2}/api/playlist`)).json()).playing === true,
+        );
+        const parkedAt = (await (await fetch(`${R2}/api/playlist`)).json()).index;
+        await pg.click('[data-role="tab-patterns"]');
+        await pg.waitForSelector('[data-role="patterns-grid"][data-source="device"] .tile', {
+          timeout: 15000,
+        });
+        await sleep(1200);
+        // Play the pattern that is NOT the one the playlist is on
+        const target = "R2 Charlie";
+        const sel = `[data-role="patterns-grid"][data-source="device"] .tile[data-name="${target}"]`;
+        await tileAction(pg, sel, "tile-play");
+        await sleep(1800);
+        const pl = await (await fetch(`${R2}/api/playlist`)).json();
+        check(
+          "r2-2: Play on a tile STOPS the playlist first",
+          pl.playing === false,
+          JSON.stringify({ playing: pl.playing, index: pl.index }),
+        );
+        check(
+          "r2-2: …and the device is running the pattern that was played",
+          (await (await fetch(`${R2}/api/pattern`)).text()).includes("0.7"),
+        );
+        await pg.click('[data-role="tab-playlist"]');
+        await sleep(1200);
+        const nowName = await pg.$eval('[data-role="pl-now-name"]', (el) => el.textContent.trim());
+        check(
+          "r2-2: the transport parks on the item it left",
+          nowName === "R2 Alpha" || nowName === "R2 Bravo" || nowName === "R2 Charlie",
+          nowName,
+        );
+        const why = await pg.$eval('[data-role="pl-preempted"]', (el) =>
+          el.textContent.replace(/\s+/g, " ").trim(),
+        );
+        check(
+          "r2-2: …and the now-playing block SAYS why it is stopped",
+          why === `stopped — playing ${target} directly`,
+          why,
+        );
+        check(
+          "r2-2: …the transport offers Play (the parked item resumes)",
+          (await pg.$('[data-role="pl-play"]')) !== null,
+        );
+        await pg.screenshot({ path: `${shotDir}/device-e2e-r2-parked.png` });
+        await pg.click('[data-role="pl-play"]');
+        await sleep(1400);
+        const resumed = await (await fetch(`${R2}/api/playlist`)).json();
+        check(
+          "r2-2: Play resumes the playlist from the parked item",
+          resumed.playing === true && resumed.index === parkedAt,
+          JSON.stringify({ playing: resumed.playing, index: resumed.index, parkedAt }),
+        );
+        check(
+          "r2-2: …and the explanation is gone",
+          (await pg.$('[data-role="pl-preempted"]')) === null,
+        );
+      }
+
+      // ---- 6. deleting one pattern must not rebuild the other tiles ----
+      {
+        await pg.click('[data-role="tab-patterns"]');
+        await pg.waitForSelector('[data-role="patterns-grid"][data-source="device"] .tile', {
+          timeout: 15000,
+        });
+        await sleep(2500); // every tile has compiled and drawn
+        const GRID = '[data-role="patterns-grid"][data-source="device"]';
+        const stamp = async () =>
+          pg.$$eval(`${GRID} .tile`, (els) =>
+            els.map((e) => ({
+              name: e.dataset.name,
+              built: e.dataset.compiled,
+              spinner: !!e.querySelector('[data-role="tile-spinner"]'),
+            })),
+          );
+        // mark every surviving canvas so element identity can be checked after
+        await pg.$$eval(`${GRID} .tile canvas`, (els) => els.forEach((c, i) => (c.__r2 = i)));
+        const before = await stamp();
+        check("r2-6 setup: three tiles, all compiled", before.length === 3, JSON.stringify(before));
+
+        const fetched = [];
+        const countSrc = (r) => {
+          const m = /\/api\/patterns\/([0-9a-fx]+)$/.exec(r.url());
+          if (r.method() === "GET" && m) fetched.push(m[1]);
+        };
+        pg.on("request", countSrc);
+        await tileAction(pg, `${GRID} .tile[data-name="R2 Bravo"]`, "tile-menu");
+        await pg.waitForSelector('[data-role="tile-menu-delete"]', { timeout: 5000 });
+        await pg.click('[data-role="tile-menu-delete"]');
+        await acceptDialog(pg);
+        await sleep(2500);
+        pg.off("request", countSrc);
+
+        const after = await stamp();
+        check(
+          "r2-6: the deleted tile is gone and the others remain",
+          after.length === 2 && !after.some((t) => t.name === "R2 Bravo"),
+          JSON.stringify(after.map((t) => t.name)),
+        );
+        check(
+          "r2-6: the survivors' engines were NOT rebuilt (data-compiled unchanged)",
+          after.every(
+            (t) => t.built === before.find((b) => b.name === t.name)?.built && t.built === "1",
+          ),
+          JSON.stringify(after.map((t) => `${t.name}=${t.built}`)),
+        );
+        check(
+          "r2-6: …no survivor fell back to a spinner",
+          after.every((t) => !t.spinner),
+          JSON.stringify(after.map((t) => `${t.name}:${t.spinner}`)),
+        );
+        const sameCanvas = await pg.$$eval(`${GRID} .tile canvas`, (els) =>
+          els.every((c) => typeof c.__r2 === "number"),
+        );
+        check("r2-6: …and kept their canvas elements", sameCanvas);
+        check(
+          "r2-6: …and no source was re-fetched for them",
+          fetched.length === 0,
+          fetched.join(", "),
+        );
+      }
+
+      // ---- 4. a refused settings POST is a banner at the TOP, not a whisper ----
+      {
+        await pg.click('[data-role="tab-settings"]');
+        await pg.waitForSelector('[data-role="layout-cols"]', { timeout: 10000 });
+        await sleep(800);
+        // 2 x 1 panels of 64x64 = 8192 on a 4096-px board (#600). The card
+        // pre-checks it, so nothing is sent — and the banner still explains.
+        const layoutPosts = [];
+        const countLayout = (r) => {
+          if (r.method() === "POST" && r.url() === `${R2}/api/layout`) layoutPosts.push(1);
+        };
+        pg.on("request", countLayout);
+        await pg.$eval('[data-role="layout-cols"]', (el) => {
+          el.value = "2";
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+        });
+        await sleep(1200);
+        pg.off("request", countLayout);
+        const bar = await pg.$('[data-role="api-error-bar"]');
+        check("r2-4: an over-cap chain raises the error banner", bar !== null);
+        const text = await pg.$eval('[data-role="api-error-text"]', (el) =>
+          el.textContent.replace(/\s+/g, " ").trim(),
+        );
+        check(
+          "r2-4: …stating both numbers",
+          text.startsWith("8,192 px — this board tops out at 4,096."),
+          text.slice(0, 80),
+        );
+        check("r2-4: …and the reason", /bitplane DMA frame buffers/.test(text), text.slice(0, 200));
+        check(
+          "r2-4: …and an arrangement that fits",
+          // the banner renders the table's backticked wire line as real <code>,
+          // so the delimiters are gone from textContent
+          /two 32×64 tiles \(matrix 32 64 2 1 tr row 0 0\)/.test(text),
+          text.slice(-120),
+        );
+        check(
+          "r2-4: …with the device's own words kept in a details line",
+          /pw\*ph\*cols\*rows out of range/.test(
+            await pg.$eval('[data-role="api-error-details"]', (el) => el.textContent),
+          ),
+        );
+        check("r2-4: …and nothing was POSTed (#600 pre-check)", layoutPosts.length === 0);
+        const marked = await pg.$eval(
+          '[data-role="layout-cols"]',
+          (el) => el.hasAttribute("data-field-error"),
+        );
+        check("r2-4: …with the field it belongs to highlighted", marked);
+        // it is at the TOP: above the settings panel, not inside the form
+        const above = await pg.evaluate(() => {
+          const b = document.querySelector('[data-role="api-error-bar"]').getBoundingClientRect();
+          const p = document.querySelector('[data-role="settings-panel"]').getBoundingClientRect();
+          return b.bottom <= p.top + 1;
+        });
+        check("r2-4: …at the TOP of the page, above the settings panel", above);
+        await pg.screenshot({ path: `${shotDir}/device-e2e-r2-errorbar.png` });
+        await pg.click('[data-role="api-error-dismiss"]');
+        await sleep(400);
+        check(
+          "r2-4: …and it is dismissable",
+          (await pg.$('[data-role="api-error-bar"]')) === null,
+        );
+        check(
+          "r2-4: …which also clears the field highlight",
+          !(await pg.$eval('[data-role="layout-cols"]', (el) =>
+            el.hasAttribute("data-field-error"),
+          )),
+        );
+      }
+
+      // ---- 7. the device goes away, and the app SAYS so (last: it kills it) ----
+      {
+        r2Dev.kill();
+        await sleep(6000); // the 1 Hz fast-fail probe needs two misses
+        const bar = await pg.$('[data-role="device-down-bar"]');
+        check("r2-7: a dead device raises the unreachable banner within ~5 s", bar !== null);
+        const text = await pg.$eval('[data-role="device-down-bar"]', (el) =>
+          el.textContent.replace(/\s+/g, " ").trim(),
+        );
+        check(
+          "r2-7: …saying it is retrying, and when the device was last seen",
+          /^Device unreachable — retrying…/.test(text) && /last seen \d+ s ago/.test(text),
+          text,
+        );
+        await pg.screenshot({ path: `${shotDir}/device-e2e-r2-down.png` });
+
+        // a WRITE while down fails FAST — no 30 s of silent retries
+        await pg.click('[data-role="tab-patterns"]');
+        await sleep(600);
+        const t0 = Date.now();
+        await tileAction(
+          pg,
+          '[data-role="patterns-grid"][data-source="device"] .tile',
+          "tile-play",
+        );
+        await pg.waitForSelector('[data-role="api-error-bar"], [data-role="device-down-bar"]', {
+          timeout: 8000,
+        });
+        const dt = Date.now() - t0;
+        check("r2-7: a write while down reports at once, not after the retry ladder", dt < 8000, `${dt} ms`);
+
+        // bring it back: the banner clears itself and says so
+        const revived = spawn(
+          "../target/debug/luxel",
+          [
+            "serve",
+            ...NO_NETIN,
+            "--port",
+            String(R2_PORT),
+            "--board",
+            "panel",
+            "--pixels",
+            "4096",
+            "--name",
+            "luxel-r2",
+          ],
+          { stdio: ["ignore", "pipe", "inherit"] },
+        );
+        process.on("exit", () => revived.kill());
+        await new Promise((resolve, reject) => {
+          revived.stdout.on("data", (d) => String(d).includes("luxel serve:") && resolve());
+          setTimeout(() => reject(new Error("#538 r2 mirror restart timeout")), 30000);
+        });
+        await sleep(4000);
+        check(
+          "r2-7: the banner clears itself when the device answers again",
+          (await pg.$('[data-role="device-down-bar"]')) === null,
+        );
+        revived.kill();
+      }
+    } finally {
+      if (r2Ctx) await r2Ctx.close();
+      r2Dev.kill();
+    }
+  }
+
 } finally {
   await browser.close();
   device.kill();

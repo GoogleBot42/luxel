@@ -13,7 +13,7 @@
     deviceProtocol,
     setDeviceName,
   } from "../stores/device";
-  import { note, notes } from "../stores/notify";
+  import { clearApiError, note, notes, reportApiError } from "../stores/notify";
 
   /** Live brightness: the device applies it immediately and persists it. */
   function onBrightnessChange(e: Event): void {
@@ -34,9 +34,11 @@
     if (want === $deviceName) return;
     void (async () => {
       const r = await setDeviceName(want);
-      if (r.ok) note("devname", want ? "saved" : "cleared — back to the board's own name", 2500);
-      else {
-        note("devname", r.error ?? "rejected", 6000);
+      if (r.ok) {
+        note("devname", want ? "saved" : "cleared — back to the board's own name", 2500);
+        clearApiError();
+      } else {
+        reportApiError(r.error ?? "rejected", { scope: "name", field: "device-name" });
         el.value = $deviceName; // the device kept its old name; so does the field
       }
     })();

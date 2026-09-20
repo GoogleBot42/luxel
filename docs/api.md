@@ -271,6 +271,13 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   alive on purpose); treat 0 as `heap_free` alone, which is conservative.
   Added for Gitea #287, where predicting against `heap_free` made the
   playground warn about patterns that load fine.
+- `psram_free` / `psram_total` — the external pattern-array arena (Gitea
+  #253), in bytes. A SECOND heap: it is not part of `heap_free`, and a
+  pattern's arrays come out of here instead of out of that number. **Both are
+  absent entirely on a board without one** (they ride a
+  `#[cfg(feature = "psram-arena")]` block), which is what `caps.psram` says;
+  the mirror's `--board panel` reports 8 MiB for both. The Settings page's
+  Storage row states the figures rather than the word `present` (#538).
 - `live` — `"ddp"` / `"e131"` while a live pixel stream is driving the strip,
   else `null`.
 - `assets_mapped` — `true` when the web assets partition is memory-mapped
@@ -343,11 +350,14 @@ without hardware: `--heap-free` impersonates a device with that much free, and
 outgoing pattern.
 
 The mirror's `caps` advertise what **it** implements, which documents its drift
-from the firmware: `reboot:false`, `ota:false`, `psram:false`. `--board panel`
-makes it impersonate a 64×64 HUB75 board — `max_pixels` 4096, its own `64×64`
-grid installed at startup (and reinstalled when a map is cleared, as
-`devicemap::board_default` does on the firmware), `panel:true`,
-`strip_driver:false`, `power_cap:false`, `layers:2`, and the matching
+from the firmware: `reboot:false`, `ota:false`, and `psram:false` on a strip.
+`--board panel` makes it impersonate a 64×64 HUB75 board — `max_pixels` 4096,
+its own `64×64` grid installed at startup (and reinstalled when a map is
+cleared, as `devicemap::board_default` does on the firmware), `panel:true`,
+`strip_driver:false`, `power_cap:false`, `layers:2`, `psram:true` with
+`psram_free`/`psram_total` both **8 MiB** (the S3 panel board's arena; the
+mirror allocates pattern arrays on the host heap, so nothing consumes it and
+`free` stays `total`), and the matching
 `/api/layout` (`kind:"matrix"`, 64×64, 4096 px) — and `--outputs N` sets
 `caps.outputs`, which is what lets a two-output `/api/layout` be driven
 without the Athom. Together they let the Settings page's capability gating be
@@ -418,6 +428,13 @@ a stored one.
 
 - A missing `<id>` returns **200** with `{"ok":false,"error":"no such
   pattern"}`, not a 404 — on both sides, deliberately.
+- **Activation does NOT stop a playing playlist** (unlike `POST /api/code`,
+  which is a manual takeover). The playlist keeps auto-advancing, so a pattern
+  activated over this route is replaced at the next advance. The web console
+  works around it client-side since Gitea #538 — it parks the playlist
+  (`POST /api/playlist/stop`, index remembered) before activating — but Home
+  Assistant, MQTT and a bare `curl` do not. Making the firmware park it is
+  **Gitea #602**.
 - Saving under a name that already exists **overwrites** that entry and returns
   its existing `id`.
 - Firmware store limits: **32 KB of source** and **40 KB of bytecode** per

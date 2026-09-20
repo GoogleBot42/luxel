@@ -30,9 +30,10 @@ import {
   type Projection,
   type ProjectionMode,
 } from "../lib/geometry";
-import { gatedFetch } from "../lib/fetchgate";
+import { gatedFetch, subscribeGate } from "../lib/fetchgate";
 import { browserBlocked } from "../lib/lna";
 import { reconcileTransport, transportIntent, type TransportIntent } from "../lib/playlist";
+import { note, reportApiError } from "./notify";
 
 // ---- session ----
 
@@ -77,6 +78,12 @@ export const pixelMax = writable(2048);
 export const deviceHeapFree = writable(0);
 /** Heap the device's CURRENTLY loaded pattern occupies (0 pre-#287). */
 export const deviceEngineHeap = writable(0);
+/** The external pattern-array arena (Gitea #253), in bytes: what is free and
+ *  how big it is. Both 0 on a board without one (`caps.psram` false) and on
+ *  firmware older than the fields, where the Storage row falls back to the
+ *  bare `present`. */
+export const devicePsramFree = writable(0);
+export const devicePsramTotal = writable(0);
 /** The device's own post-push verdict (`/api/status` vmerr), if any. */
 export const deviceVmerr = writable<string | null>(null);
 /** The connected device's own frame rate, from `/api/status` (Gitea #381).
@@ -251,14 +258,50 @@ export const deviceRunningId = writable("");
  * format bump; the device has no compiler, so the CALLER re-saves from source
  * and retries (compiling lives in stores/pattern.ts, which this module may not
  * import — see the layering rule at the top).
+ *
+ * **It parks a playing playlist first** (Gitea #538 round 2). A direct play is
+ * a takeover of the fixture, and a playlist that keeps auto-advancing on top
+ * of it replaces the pattern the user just chose a few seconds later, with
+ * nothing on screen saying why. So this stops the auto-advance the way
+ * `‖ Pause` does — `POST /api/playlist/stop` with the index remembered (#549)
+ * — and records WHICH pattern took over, so the transport can say
+ * `stopped — playing <name> directly` and `▶ Play` resumes the parked item.
+ *
+ * The UI is the only thing this covers: an activation over `/api/patterns/
+ * <id>/activate` from Home Assistant, MQTT or curl still leaves the firmware's
+ * playlist running. That is a firmware fix — Gitea #602.
  */
 export async function activateDevicePattern(id: string): Promise<RunResult> {
   const d = get(device);
   if (!d) return { ok: false, error: "not connected" };
-  const r = await d.activatePattern(id);
-  if (r.ok) deviceRunningId.set(id);
+  const name = get(devicePatterns).find((p) => p.id === id)?.name || id;
+  if (get(playlist).playing) await playlistPause();
+  let r: RunResult;
+  try {
+    r = await d.activatePattern(id);
+  } catch {
+    // A write into a device the gate has already watched fail does not wait
+    // out the retry ladder — it lands here at once, and says so (#538 r2).
+    r = { ok: false, error: "the device did not answer" };
+  }
+  if (r.ok) {
+    deviceRunningId.set(id);
+    playlistPreemptedBy.set(name); // the transport prints this verbatim
+  } else if (r.code !== "bc-version") {
+    // `bc-version` is the caller's to heal (it re-saves from source and
+    // retries) — everything else is a refusal the user has to hear about.
+    reportApiError(r.error, { scope: "pattern", subject: name });
+  }
   return r;
 }
+
+/**
+ * The pattern a DIRECT play handed the fixture to while the playlist was
+ * parked, or `""`. It is the transport's explanation of a `stopped` it did not
+ * ask for, and every transport verb clears it — pressing Play (or Pause, or
+ * Stop) is the user taking the playlist back.
+ */
+export const playlistPreemptedBy = writable("");
 
 // ---- settings-page state ----
 
@@ -433,13 +476,45 @@ export function pollStopAll(): void {
   subscribers.clear();
   reconcileTicker();
   clearTimeout(playlistDebounce);
+  stopLiveness?.();
+  stopLiveness = undefined;
+  deviceDown.set(false);
 }
 
 // ---- refreshers ----
 
+// ---- liveness (Gitea #538 round 2) ----
+//
+// The 1 Hz status poll is also the app's heartbeat. `lib/fetchgate.ts` counts
+// consecutive transport failures across EVERY request; this turns that into
+// the one thing surfaces read, plus the timestamp the banner counts up from.
+//
+// It is a CONDITION, not an event — `components/ErrorBar.svelte` renders it
+// in the same pinned strip as a rejected POST, and it clears itself the
+// moment something answers.
+/** The device has stopped answering (`DOWN_AFTER` consecutive failures). */
+export const deviceDown = writable(false);
+/** `Date.now()` of the last answered request; 0 before the first. */
+export const deviceLastSeen = writable(0);
+
+/** Wire the gate's verdict into the two stores. Idempotent; called by
+ *  `startSessionPoll()` and torn down with it. */
+function watchLiveness(): () => void {
+  return subscribeGate((s) => {
+    if (s.lastOkAt) deviceLastSeen.set(s.lastOkAt);
+    const was = get(deviceDown);
+    if (s.down === was) return;
+    deviceDown.set(s.down);
+    // Coming back is news too, briefly — otherwise the banner just vanishes
+    // and nobody knows whether what they pressed went through.
+    if (was && !s.down) note("device", "reconnected", 3000);
+  });
+}
+
 /** Pull `/api/status` for the fps readout, the free-heap headroom and the
  *  device's own vmerr. Best-effort: a failed read leaves the last known
- *  values alone. */
+ *  values alone — but it is also the liveness probe, so the failure itself
+ *  is what raises the "device unreachable" banner (through the gate). */
 export async function refreshStatus(): Promise<void> {
   const d = get(device);
   if (!d) return;
@@ -447,6 +522,8 @@ export async function refreshStatus(): Promise<void> {
     const st = await d.status();
     deviceHeapFree.set(st.heap_free ?? 0);
     deviceEngineHeap.set(st.engine_heap ?? 0);
+    devicePsramFree.set(st.psram_free ?? 0); // the second heap, where there is one
+    devicePsramTotal.set(st.psram_total ?? 0);
     deviceGeomStatus.set(st.geom ?? null); // the device's Layout (#464)
     deviceCaps.set(st.caps ?? null); // what it can do (#464)
     if (st.pixels) devicePixels.set(st.pixels);
@@ -706,15 +783,42 @@ export async function refreshDeviceMap(): Promise<void> {
   }
 }
 
-export async function refreshDevicePatterns(): Promise<void> {
+/**
+ * Re-read the device's stored library, KEEPING the sources already held
+ * (Gitea #538 round 2).
+ *
+ * `GET /api/patterns` answers ids and names only — the source of each row is
+ * fetched separately and streams in. Replacing the store with that bare list
+ * therefore said "every pattern's source just changed", and `Gallery`'s
+ * diff (`components/Gallery.svelte` `syncItems`) does the only correct thing
+ * with that: frees every tile engine and recompiles. Deleting ONE of N
+ * patterns re-fetched and re-compiled the other N−1 — "deleting a single
+ * pattern from 'On device' seems to cause all the pattern previews to
+ * regenerate" (Jeremy, 2026-09-20).
+ *
+ * So a row that is still here keeps the source it already had. A row whose
+ * CONTENT changed under the same id — a save that overwrote a name — is not
+ * something the wire can tell us (no hash, no mtime), so the writer says so:
+ * `invalidate` drops those ids' cached sources and nothing else's.
+ */
+export async function refreshDevicePatterns(invalidate: readonly string[] = []): Promise<void> {
   const d = get(device);
   if (!d) return;
+  let rows: { id: string; name: string }[];
   try {
-    devicePatterns.set(await d.patterns());
+    rows = await d.patterns();
   } catch {
     devicePatterns.set([]); // older firmware — no /api/patterns yet
     return;
   }
+  const held = new Map(get(devicePatterns).map((p) => [p.id, p.source]));
+  const stale = new Set(invalidate);
+  devicePatterns.set(
+    rows.map((r) => {
+      const source = stale.has(r.id) ? undefined : held.get(r.id);
+      return source === undefined ? { id: r.id, name: r.name } : { id: r.id, name: r.name, source };
+    }),
+  );
   void loadDevicePreviewSources();
 }
 
@@ -762,6 +866,21 @@ export async function refreshPlaylist(): Promise<void> {
   }
 }
 
+/**
+ * A playlist write did not land (Gitea #538 round 2).
+ *
+ * Every playlist edit is OPTIMISTIC — the row moves, the slider sticks, and
+ * the POST follows 400 ms later. When that POST fails the list on screen is
+ * a list nothing agrees with, so it is rolled back to the device's own by
+ * re-reading it, and the user is told which it was. Silence here was the
+ * whole of "no error toast or anything".
+ */
+async function playlistWriteFailed(): Promise<void> {
+  note("save", "playlist not saved — the device did not answer", 6000);
+  playlistSaving = false; // let the follow-up read through
+  await refreshPlaylist(); // the device's list wins; the optimistic edit is gone
+}
+
 /** Persist the playlist to the device (debounced — edits stream in). */
 export function queuePlaylistSave(): void {
   clearTimeout(playlistDebounce);
@@ -771,6 +890,8 @@ export function queuePlaylistSave(): void {
     void (async () => {
       try {
         await get(device)?.setPlaylist(snapshot);
+      } catch {
+        await playlistWriteFailed();
       } finally {
         playlistSaving = false;
       }
@@ -796,6 +917,8 @@ export function savePlaylistNow(): Promise<void> {
   return (async () => {
     try {
       await get(device)?.setPlaylist(snapshot);
+    } catch {
+      await playlistWriteFailed();
     } finally {
       playlistSaving = false;
     }
@@ -856,9 +979,10 @@ export async function saveAndAddToPlaylist(
   if (!d) return { ok: false, error: "device unreachable" };
   let id: string;
   try {
+    const overwritten = get(devicePatterns).find((p) => p.name === name)?.id;
     const r = await d.savePattern(name, source, bytecode);
     if (!r.ok) return { ok: false, error: "error" in r ? r.error : "the device refused the save" };
-    await refreshDevicePatterns();
+    await refreshDevicePatterns(overwritten ? [overwritten] : []);
     // `id` is absent on firmware that does not echo it; fall back to the name
     // the device library now holds (the save just created or replaced it).
     const found = r.id || get(devicePatterns).find((p) => p.name === name)?.id;
@@ -924,6 +1048,7 @@ export async function playlistPause(): Promise<void> {
     /* unreachable mid-click — the store's idea is the best we have */
   }
   playlistParked.set(at);
+  playlistPreemptedBy.set(""); // a deliberate pause is not a preemption
   markTransport(false);
   await d?.playlistStop();
   void refreshPlaylist();
@@ -935,6 +1060,7 @@ export async function playlistResume(index?: number): Promise<void> {
   const want = index ?? get(playlistParked);
   const i = want >= 0 && want < pl.items.length ? want : 0;
   playlistParked.set(i);
+  playlistPreemptedBy.set(""); // the playlist is back; the takeover is history
   markTransport(true);
   playlist.update((p) => ({ ...p, index: i }));
   await get(device)?.playlistPlay(i);
@@ -946,6 +1072,7 @@ export async function playlistResume(index?: number): Promise<void> {
  *  buttons — Pause holds your place, Stop gives it up. */
 export async function playlistStop(): Promise<void> {
   playlistParked.set(0);
+  playlistPreemptedBy.set("");
   markTransport(false);
   await get(device)?.playlistStop();
   void refreshPlaylist();
@@ -1043,6 +1170,8 @@ export async function connectDevice(base: string): Promise<ConnectResult> {
     if (capFromStatus) pixelMax.set(capFromStatus);
     deviceHeapFree.set(st.heap_free ?? 0); // 0 on a mirror / older firmware
     deviceEngineHeap.set(st.engine_heap ?? 0); // 0 on pre-#287 firmware
+    devicePsramFree.set(st.psram_free ?? 0); // 0 on a board with no arena
+    devicePsramTotal.set(st.psram_total ?? 0);
     deviceFps.set(st.fps); // seed the status-bar readout from the handshake
     deviceOutFps.set(st.out_fps ?? 0);
     deviceRescanHz.set(st.rescan_hz ?? 0);
@@ -1168,4 +1297,7 @@ export async function detectDeviceBase(): Promise<string | null> {
  *  patterns (#259). */
 export function startSessionPoll(): void {
   pollSubscribe("status", 1000, refreshStatus);
+  stopLiveness?.();
+  stopLiveness = watchLiveness();
 }
+let stopLiveness: (() => void) | undefined;

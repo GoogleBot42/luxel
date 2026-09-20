@@ -28,6 +28,7 @@
     devicePatterns,
     playlist,
     playlistParked,
+    playlistPreemptedBy,
     playlistPause,
     playlistResume,
     playlistStep,
@@ -63,7 +64,7 @@
     unsubscribe = undefined;
     unsubscribeTick = undefined;
     if (active && $device) {
-      unsubscribe = pollSubscribe("playlist", 1000, refreshPlaylist);
+      unsubscribe = pollSubscribe("playlist", 1000, pollPlaylist);
       unsubscribeTick = pollSubscribe("playlist-progress", 500, () => {
         now = Date.now();
       });
@@ -73,6 +74,15 @@
     unsubscribe?.();
     unsubscribeTick?.();
   });
+
+  /** The 1 Hz follow poll, except while a reorder is in progress: the drag
+   *  measured the rows once, and a poll that replaced `items` under it would
+   *  animate a hole for a row that is no longer where it was measured. A
+   *  plain function, not an inline arrow in the subscribing `$:` block —
+   *  naming `dragFrom` there would re-subscribe on every grab. */
+  function pollPlaylist(): Promise<void> {
+    return dragFrom < 0 ? refreshPlaylist() : Promise.resolve();
+  }
 
   /** Total auto-advance run time (manual items — effective 0s — are excluded);
    *  also whether any item is manual. */
@@ -192,18 +202,165 @@
     queuePlaylistSave();
   }
 
-  /** drag-to-reorder: index the grip drag started from. */
-  let playlistDragFrom = -1;
-  function dropPlaylistItem(to: number): void {
-    const from = playlistDragFrom;
-    playlistDragFrom = -1;
-    if (from < 0 || from === to) return;
+  // ---- drag to reorder, LIVE (#538 round 2) ----
+  //
+  // The list reorders VISUALLY while the pointer is down and only really
+  // reorders on release. HTML5 drag-and-drop could not do that: its `drop` is
+  // the first moment anything is known, the drag image is the browser's, and
+  // it does not exist on touch at all. So this is pointer events plus one
+  // FLIP-ish rule:
+  //
+  //   * the grabbed row lifts (`lifted`) and gets `translateY(pointer travel)`,
+  //   * every row between its origin and the slot it is over gets
+  //     `translateY(∓ the grabbed row's outer height)` — the hole,
+  //   * `transform` only, so nothing reflows and nothing is measured twice,
+  //   * the STORE is untouched until pointerup.
+  //
+  // Geometry is measured ONCE, at grab time, off the row components' own
+  // elements (`els()` — a row is TWO elements whenever its values band is
+  // open). `outer[i]` is the distance to the next row's top, so the 8px
+  // margin between cards is in the number without being re-derived.
+  //
+  // Escape cancels: the target snaps back to the origin and the lifted row
+  // animates home before the drag state is dropped.
+  /** The row components, index-aligned with `$playlist.items`. */
+  let rowComps: (PlaylistRow | undefined)[] = [];
+  /** Index being dragged, or -1. */
+  let dragFrom = -1;
+  /** Slot it would drop into. */
+  let dragTo = -1;
+  /** Pointer travel in px since the grab. */
+  let dragDy = 0;
+  /** Per-index outer heights, measured at grab time. */
+  let dragOuter: number[] = [];
+  /** Per-index original top offsets, measured at grab time. */
+  let dragTops: number[] = [];
+  /** Transitions off for the one flush that re-renders the reordered list. */
+  let dragSettling = false;
+  /** The lifted row animates only while it is returning home (Escape/no-op). */
+  let dragReturning = false;
+
+  /** The offset row `i` is drawn at, given a drag state. Pure, so the
+   *  reactive statement below can name every dependency — a `$:` only tracks
+   *  what appears in its OWN syntax, never what the function it calls reads
+   *  (.claude/rules/web.md). */
+  function dragShiftAt(i: number, from: number, to: number, dy: number, outer: number[]): number {
+    if (from < 0) return 0;
+    if (i === from) return dy;
+    const h = outer[from] ?? 0;
+    if (to > from && i > from && i <= to) return -h;
+    if (to < from && i >= to && i < from) return h;
+    return 0;
+  }
+  /** One offset per row, recomputed on every pointer move. */
+  $: dragShifts = $playlist.items.map((_, i) =>
+    dragShiftAt(i, dragFrom, dragTo, dragDy, dragOuter),
+  );
+
+  function onGrab(i: number, e: PointerEvent): void {
+    if (e.button !== 0 && e.pointerType === "mouse") return;
+    if ($playlist.items.length < 2) return;
+    e.preventDefault();
+    const tops: number[] = [];
+    const bottoms: number[] = [];
+    for (let j = 0; j < $playlist.items.length; j++) {
+      const els = rowComps[j]?.els() ?? [];
+      const first = els[0];
+      const last = els[els.length - 1];
+      if (!first || !last) return; // a row that has not mounted — do not guess
+      tops.push(first.getBoundingClientRect().top);
+      bottoms.push(last.getBoundingClientRect().bottom);
+    }
+    dragTops = tops;
+    dragOuter = tops.map((t, j) =>
+      j + 1 < tops.length ? (tops[j + 1] as number) - t : (bottoms[j] as number) - t,
+    );
+    dragFrom = i;
+    dragTo = i;
+    dragDy = 0;
+    dragReturning = false;
+    dragStartY = e.clientY;
+    window.addEventListener("pointermove", onDragMove);
+    window.addEventListener("pointerup", onDragUp);
+    window.addEventListener("pointercancel", onDragCancel);
+    window.addEventListener("keydown", onDragKey, true);
+  }
+  let dragStartY = 0;
+
+  function onDragMove(e: PointerEvent): void {
+    if (dragFrom < 0) return;
+    e.preventDefault();
+    dragDy = e.clientY - dragStartY;
+    // which ORIGINAL slot the grabbed row's middle is over
+    const mid = (dragTops[dragFrom] as number) + dragDy + (dragOuter[dragFrom] as number) / 2;
+    let to = dragFrom;
+    for (let j = 0; j < dragTops.length; j++) {
+      const top = dragTops[j] as number;
+      if (mid >= top && mid < top + (dragOuter[j] as number)) {
+        to = j;
+        break;
+      }
+      if (j === 0 && mid < top) to = 0;
+      if (j === dragTops.length - 1 && mid >= top + (dragOuter[j] as number))
+        to = dragTops.length - 1;
+    }
+    dragTo = to;
+  }
+
+  function endDrag(): void {
+    window.removeEventListener("pointermove", onDragMove);
+    window.removeEventListener("pointerup", onDragUp);
+    window.removeEventListener("pointercancel", onDragCancel);
+    window.removeEventListener("keydown", onDragKey, true);
+    dragFrom = -1;
+    dragTo = -1;
+    dragDy = 0;
+    dragReturning = false;
+  }
+
+  /** Escape (or a cancelled pointer): animate the lifted row home, then let go. */
+  function abortDrag(): void {
+    if (dragFrom < 0) return;
+    dragTo = dragFrom;
+    dragDy = 0;
+    dragReturning = true; // the lifted row eases back rather than snapping
+    window.removeEventListener("pointermove", onDragMove);
+    window.removeEventListener("pointerup", onDragUp);
+    setTimeout(endDrag, 130);
+  }
+
+  function onDragKey(e: KeyboardEvent): void {
+    if (e.key !== "Escape" || dragFrom < 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    abortDrag();
+  }
+
+  function onDragCancel(): void {
+    abortDrag();
+  }
+
+  async function onDragUp(): Promise<void> {
+    const from = dragFrom;
+    const to = dragTo;
+    if (from < 0) return;
+    if (to === from) {
+      abortDrag();
+      return;
+    }
+    // The reorder and the transform reset land in the SAME flush, so the row
+    // that moved renders at its new place with no offset and nothing slides.
+    dragSettling = true;
+    endDrag();
     const items = [...$playlist.items];
     const [moved] = items.splice(from, 1);
-    if (moved === undefined) return;
-    items.splice(to, 0, moved);
-    playlist.update((pl) => ({ ...pl, items }));
-    queuePlaylistSave();
+    if (moved !== undefined) {
+      items.splice(to, 0, moved);
+      playlist.update((pl) => ({ ...pl, items }));
+      queuePlaylistSave(); // ONE debounced POST, on release only
+    }
+    await tick();
+    requestAnimationFrame(() => (dragSettling = false));
   }
 
   /** A value edited on the row that is PLAYING goes to the device at once as
@@ -410,6 +567,15 @@
         <b data-role="pl-now-name">{nowItem ? nowItem.name || nowItem.id : "Nothing queued"}</b>
         {#if nowSec > 0}<span class="t">{clock(elapsed)} / {clock(nowSec)}</span>{/if}
       </span>
+      <!-- Why the transport says `stopped` when nobody pressed stop: a tile's
+           `Play` (or the editor's `▶ Play on device`) took the fixture over,
+           and the playlist parked rather than advancing on top of it (#538
+           round 2). Absent in every state the mocks draw, which all play. -->
+      {#if !$playlist.playing && $playlistPreemptedBy}
+        <span class="preempt" data-role="pl-preempted">
+          stopped — playing <b>{$playlistPreemptedBy}</b> directly
+        </span>
+      {/if}
       <!-- the progress bar IS the seek control (S4's `.prog`: a 3px track with
            an `--ok` fill inside it). The bar PAINTS at the mock's 3px; the
            grab area is the wrapper's ::after overlay, 20px tall, so the
@@ -522,9 +688,13 @@
           {#each $playlist.items as item, i (i)}
             {#if $luxel}
               <PlaylistRow
+                bind:this={rowComps[i]}
                 luxel={$luxel}
                 source={itemSource(item.id, $devicePatterns)}
                 {item}
+                lifted={dragFrom === i}
+                shift={dragShifts[i] ?? 0}
+                anim={!dragSettling && (dragFrom !== i || dragReturning)}
                 defaultSec={$playlist.defaultSec}
                 missing={itemMissing(item.id, $devicePatterns)}
                 active={$playlist.playing && $playlist.index === i}
@@ -537,8 +707,7 @@
                 on:control={(e) => pushLive(i, e.detail)}
                 on:remove={() => removePlaylistItem(i)}
                 on:move={(e) => movePlaylistItem(i, e.detail)}
-                on:dragstart={() => (playlistDragFrom = i)}
-                on:drop={() => dropPlaylistItem(i)}
+                on:grab={(e) => onGrab(i, e.detail)}
               />
             {/if}
           {/each}
@@ -647,6 +816,20 @@
 
   .np1 b {
     font-weight: 600;
+  }
+
+  /* the preemption line — the mocks have no stopped-by-a-direct-play state,
+     so this is a line of its own rather than a variant of one of theirs */
+  .preempt {
+    display: block;
+    margin-top: 2px;
+    font-size: 11.5px;
+    color: var(--text-dim);
+  }
+
+  .preempt b {
+    font-weight: 600;
+    color: var(--text);
   }
 
   .np1 .t {

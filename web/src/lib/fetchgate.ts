@@ -24,10 +24,87 @@ const RETRIES = 6;
 // largest gated asset on device WiFi (~7 s observed for a 300 KB body).
 const ATTEMPT_MS = 30000;
 
-let inflight = 0;
-const waiters: (() => void)[] = [];
+// ---- liveness (Gitea #538 round 2) ----
+//
+// "If the device dies/goes down causing API calls/commands to fail, the user
+// is given no feedback" (Jeremy, 2026-09-20). The gate is the one place that
+// sees EVERY request the app makes, so it is where "is it answering?" is
+// known. It publishes that, and nothing more — the decision about what to
+// SHOW belongs to `stores/device.ts`, which is above this layer.
+//
+// Two numbers: consecutive transport failures (a thrown fetch — refused,
+// reset, timed out; an HTTP error status is the device ANSWERING and resets
+// the count), and when a request last succeeded.
+/** How many retries a fast-failing request gets, and its deadline. A
+ *  liveness probe or a write must report in about a second, not spend the
+ *  read path's ~30 s of patience in silence. */
+const FASTFAIL_ATTEMPT_MS = 4000;
+/** Consecutive failures after which the gate calls the device down — and,
+ *  from then until the next success, fails WRITES immediately. */
+export const DOWN_AFTER = 2;
 
-export async function gatedFetch(url: string, init?: RequestInit): Promise<Response> {
+export interface GateState {
+  /** Requests in flight right now. */
+  inflight: number;
+  /** Consecutive transport failures; 0 whenever something answered. */
+  fails: number;
+  /** `Date.now()` of the last answered request, 0 if none yet. */
+  lastOkAt: number;
+  /** `fails >= DOWN_AFTER` — the gate's own verdict. */
+  down: boolean;
+}
+
+let inflight = 0;
+let fails = 0;
+let lastOkAt = 0;
+const waiters: (() => void)[] = [];
+const gateWatchers = new Set<(s: GateState) => void>();
+
+export function gateState(): GateState {
+  return { inflight, fails, lastOkAt, down: fails >= DOWN_AFTER };
+}
+
+/** Watch the gate. Returns an unsubscribe; the callback fires on every
+ *  change, with the current state. */
+export function subscribeGate(fn: (s: GateState) => void): () => void {
+  gateWatchers.add(fn);
+  fn(gateState());
+  return () => gateWatchers.delete(fn);
+}
+
+function publish(): void {
+  const s = gateState();
+  for (const fn of gateWatchers) fn(s);
+}
+
+/** A write is anything but GET/HEAD — the requests whose failure the user
+ *  must hear about, and the ones it is pointless to retry into a dead board. */
+function isWrite(init?: RequestInit): boolean {
+  const m = (init?.method ?? "GET").toUpperCase();
+  return m !== "GET" && m !== "HEAD";
+}
+
+export interface GateOptions {
+  /** No retry ladder and a short deadline: liveness probes and writes. */
+  fastFail?: boolean;
+  /** Send it even while the gate says the device is down — the ONE request
+   *  that has to be allowed through is the probe that would clear the latch. */
+  force?: boolean;
+}
+
+export async function gatedFetch(
+  url: string,
+  init?: RequestInit,
+  opts?: GateOptions,
+): Promise<Response> {
+  // A WRITE into a device the gate has already watched fail twice does not
+  // get the read path's patience: it fails now, so the caller can say so
+  // while the user is still looking at the button they pressed. Reads keep
+  // the full ladder — that patience is what keeps a cold load alive on a
+  // two-socket board.
+  if (!opts?.force && isWrite(init) && fails >= DOWN_AFTER) {
+    throw new Error("device unreachable");
+  }
   // Local Network Access: from an https-hosted copy of the app (the Pages
   // build, reached via `?device=http://…`), every device request is also a
   // mixed-content / local-network request. The hint is what buys the
@@ -39,6 +116,7 @@ export async function gatedFetch(url: string, init?: RequestInit): Promise<Respo
     await new Promise<void>((wake) => waiters.push(wake));
   }
   inflight++;
+  publish();
   try {
     for (let attempt = 0; ; attempt++) {
       try {
@@ -48,11 +126,17 @@ export async function gatedFetch(url: string, init?: RequestInit): Promise<Respo
         // exact hole let 3+ connections pile onto the 2-socket device and
         // starve the boot handshake). Buffer inside the gate and hand back
         // a detached Response; a mid-body connection drop retries here too.
-        const deadline = AbortSignal.timeout(ATTEMPT_MS);
+        const deadline = AbortSignal.timeout(opts?.fastFail ? FASTFAIL_ATTEMPT_MS : ATTEMPT_MS);
         const signal = init?.signal ? AbortSignal.any([init.signal, deadline]) : deadline;
-        const opts: LnaInit = { ...init, ...hint, signal };
-        const res = await fetch(url, opts);
+        const reqInit: LnaInit = { ...init, ...hint, signal };
+        const res = await fetch(url, reqInit);
         const body = await res.arrayBuffer();
+        // It answered — an HTTP error status is still an answer.
+        lastOkAt = Date.now();
+        if (fails !== 0) {
+          fails = 0;
+          publish();
+        }
         const bodyless = res.status === 204 || res.status === 205 || res.status === 304;
         return new Response(bodyless ? null : body, {
           status: res.status,
@@ -62,13 +146,23 @@ export async function gatedFetch(url: string, init?: RequestInit): Promise<Respo
       } catch (err) {
         // Only the CALLER's abort ends the attempt loop — a deadline abort
         // (TimeoutError from AbortSignal.timeout) is a stall and retries.
-        if (init?.signal?.aborted || attempt >= RETRIES) throw err;
+        const budget = opts?.fastFail ? 0 : RETRIES;
+        if (init?.signal?.aborted || attempt >= budget) {
+          // A caller's own abort is not the device failing; everything else
+          // is, and is what the liveness banner counts.
+          if (!init?.signal?.aborted) {
+            fails++;
+            publish();
+          }
+          throw err;
+        }
         const backoff = 150 * 2 ** attempt + Math.random() * 100;
         await new Promise((r) => setTimeout(r, backoff));
       }
     }
   } finally {
     inflight--;
+    publish();
     waiters.shift()?.();
   }
 }

@@ -420,3 +420,12 @@ input[type="checkbox"]:indeterminate::before {
 .pop .inp.xs {
   width: 52px;
 }
+
+/* ---- the field an error banner is about (Gitea #538 round 2) ---- */
+/* Stamped by `components/ErrorBar.svelte` on the `data-role` the device's
+   refusal named, and removed when the banner goes. Never present at rest, so
+   nothing the mockups measure is affected. */
+[data-field-error] {
+  border-color: var(--error);
+  box-shadow: 0 0 0 2px rgba(224, 85, 85, 0.22);
+}

@@ -1032,13 +1032,17 @@
         note("save", "save failed: pattern does not compile", 3000);
         return;
       }
+      // A save under an existing name OVERWRITES that row, so its cached
+      // source is stale and must be re-read; every other row keeps its
+      // engine (#538 round 2, refreshDevicePatterns).
+      const overwritten = $devicePatterns.find((p) => p.name === name)?.id;
       const r = await $device?.savePattern(name, $source, bc);
       if (r?.ok) {
         patternName.set(name);
         exampleName.set("");
         dirty.set(false); // now stored on the device
         note("save", "saved to device", 3000);
-        await refreshDevicePatterns();
+        await refreshDevicePatterns(overwritten ? [overwritten] : []);
         // The id is what makes this an ON-DEVICE document — it is what "Add
         // to playlist" and "Delete" in the menu act on, and what the save
         // state reads. An overwrite (and older firmware) answers with no

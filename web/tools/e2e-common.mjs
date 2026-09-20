@@ -53,6 +53,7 @@ export const PORT = {
     mdLattice: p(34), // mockdiff: 3D lattice console (S3g)
     wipPanel: p(35), //  device-e2e: panel mirror for the #573 reverse case
     wipResume: p(36), // device-e2e: strip mirror for the #585 boot-resume section
+    doomed: p(37), //    device-e2e: the mirror the liveness section KILLS (#538 r2)
     syncA: p(40), // sync-e2e leader
     syncB: p(41), // sync-e2e follower
   },

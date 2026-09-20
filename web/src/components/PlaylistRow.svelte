@@ -8,6 +8,14 @@
   // handle is a real focusable control and ↑/↓ on it move the item, which is
   // the keyboard (and screen-reader) path those buttons used to carry.
   //
+  // The DRAG is pointer-driven and LIVE (Gitea #538 round 2): the grabbed row
+  // lifts and follows the pointer, the rows it passes slide out of its way,
+  // and only the release changes the order. The row owns none of that
+  // arithmetic — `pages/Playlist.svelte` measures the list and hands each row
+  // its `shift` — because a row cannot see its neighbours. All it does is
+  // paint the two transient states (`lifted`, `shift`) on the two elements it
+  // emits, and hand the page the elements to measure (`els()`).
+  //
   // Both chips expand IN PLACE. Values live on the item and nowhere else
   // (D6 — named presets were dropped), so the same pattern can sit in the
   // playlist twice with two different looks, and the sliders you see here are
@@ -43,6 +51,17 @@
   export let active = false;
   export let first = false;
   export let last = false;
+  /** THIS row is the one being dragged: it lifts out of the list and follows
+   *  the pointer. Set by the page for exactly one row at a time. */
+  export let lifted = false;
+  /** Vertical offset in px. On the lifted row it is the pointer's travel; on
+   *  every other row it is the hole the page is opening for the drop. */
+  export let shift = 0;
+  /** Animate `shift` changes (~120 ms). Off while the lifted row tracks the
+   *  pointer, and off for the one flush in which the release re-renders the
+   *  list in its new order — a transition there would slide every row back
+   *  from the offset it no longer has. */
+  export let anim = false;
 
   const dispatch = createEventDispatcher<{
     change: void;
@@ -51,11 +70,29 @@
     control: { name: string; values: number[] };
     remove: void;
     move: number;
-    dragstart: void;
-    drop: void;
+    /** The handle was grabbed — the page takes it from here (it owns the
+     *  window listeners, the measurements and the drop). */
+    grab: PointerEvent;
   }>();
 
-  let dragover = false;
+  let rowEl: HTMLLIElement;
+  let bandEl: HTMLLIElement | undefined;
+
+  /** The element(s) this row occupies, top to bottom — the row and, when a
+   *  chip is open, the `.plvals` band that is its SIBLING. The page measures
+   *  these to size the hole a drag opens. */
+  export function els(): HTMLElement[] {
+    return bandEl ? [rowEl, bandEl] : [rowEl];
+  }
+
+  // One transform for both elements. `null` removes the property entirely, so
+  // a resting row carries no inline style at all and the mock-verified
+  // computed styles are untouched (mockdiff S4/S4b).
+  $: xform = lifted
+    ? `translateY(${shift}px) scale(1.012)`
+    : shift
+      ? `translateY(${shift}px)`
+      : null;
   /** The two in-place disclosures (the chips). Values open by default on the
    *  playing row would fight the list; both start closed. */
   let valuesOpen = false;
@@ -156,17 +193,17 @@
   class="plrow"
   class:playing={active}
   class:missing
-  class:dragover
+  class:lifted
+  class:anim
+  bind:this={rowEl}
+  style:transform={xform}
   data-role="playlist-item"
-  on:dragover|preventDefault={() => (dragover = true)}
-  on:dragleave={() => (dragover = false)}
-  on:drop|preventDefault={() => {
-    dragover = false;
-    dispatch("drop");
-  }}
+  data-lifted={lifted ? "1" : null}
 >
   <!-- S4 `.hnd` — `⠿` normally, a green `▶` on the playing row. It is the
-       ONE reorder affordance: drag with a mouse, ↑/↓ with a keyboard. -->
+       ONE reorder affordance: drag with a pointer (mouse OR touch — the
+       handle is the only element that opts out of touch scrolling), ↑/↓ with
+       a keyboard. -->
   <span
     class="hnd"
     class:ok={active}
@@ -175,8 +212,7 @@
     role="button"
     tabindex="0"
     aria-label="reorder this item"
-    draggable="true"
-    on:dragstart={() => dispatch("dragstart")}
+    on:pointerdown={(e) => dispatch("grab", e)}
     on:keydown={onHandleKey}>{active ? "▶" : "⠿"}</span
   >
   {#if luxel && !missing}<PatternThumb {luxel} {source} proj={item.proj ?? null} />{/if}
@@ -244,7 +280,14 @@
      computes. ONE band for both chips (the mock only draws the values one), so
      `pl-values` is the band's role whichever chip opened it. -->
 {#if durOpen || valuesOpen}
-  <li class="plvals" data-role="pl-values">
+  <li
+    class="plvals"
+    class:lifted
+    class:anim
+    bind:this={bandEl}
+    style:transform={xform}
+    data-role="pl-values"
+  >
     {#if durOpen}
       <div class="dur-edit" data-role="pl-duration-edit">
         <label class="ovr-toggle" title="override the playlist default for this item">
@@ -314,9 +357,45 @@
     border-style: dashed;
   }
 
-  .plrow.dragover {
-    border-color: var(--accent);
-    border-style: dashed;
+  /* ---- the drag's two TRANSIENT states (#538 round 2) ----
+     Neither exists at rest, so the mock-verified resting row is untouched:
+     `.anim` only adds a transition, and `.lifted` only paints while a pointer
+     is down on a handle. The mocks have no dragging frame to match. */
+
+  /* the rows sliding out of the way — the FLIP half. `transform` alone, so
+     nothing reflows while the pointer moves. */
+  .plrow.anim,
+  .plvals.anim {
+    transition: transform 120ms ease;
+  }
+
+  /* the grabbed row: out of the list's plane, following the pointer */
+  .plrow.lifted {
+    position: relative;
+    z-index: 5;
+    border-color: #3a4150;
+    box-shadow: 0 10px 22px rgba(0, 0, 0, 0.5);
+    cursor: grabbing;
+  }
+
+  /* an open values band travels with the row it belongs to */
+  .plvals.lifted {
+    position: relative;
+    z-index: 5;
+  }
+
+  /* the lifted row's own transform tracks the pointer with no easing; the
+     RETURN (Escape, or a drop back where it started) animates like the rest */
+  .plrow.lifted.anim,
+  .plvals.lifted.anim {
+    transition: transform 120ms ease;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .plrow.anim,
+    .plvals.anim {
+      transition: none;
+    }
   }
 
   /* S4 `.hnd` — no line-height of its own: the mock's handle is one line of
@@ -329,6 +408,9 @@
     font-size: 14px;
     cursor: grab;
     user-select: none;
+    /* the ONE element that opts out of touch scrolling, so a drag from the
+       handle reorders and a drag anywhere else still scrolls the list */
+    touch-action: none;
   }
 
   .hnd.ok {
