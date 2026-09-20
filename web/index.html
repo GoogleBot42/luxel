@@ -8,6 +8,16 @@
   </head>
   <body>
     <div id="app"></div>
+    <!--
+      This tag is the page's ONLY browser-native subresource request (the
+      stylesheet is inlined at build time). On a device that request is the one
+      a full 3-socket pool refuses, and nothing retries a native tag — so the
+      PRODUCTION build does not emit it as a tag at all: `inlineBoot()` in
+      vite.config.ts rewrites it into a small loader that appends the script
+      once the document is parsed (reusing the document's keep-alive socket
+      instead of racing it for a second one) and re-appends it with backoff if
+      it is refused. Gitea #592. Dev keeps the plain tag.
+    -->
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

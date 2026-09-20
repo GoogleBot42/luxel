@@ -2,7 +2,9 @@
 // launches, cache disabled, counting refused/failed network requests and
 // requiring the full device-mode boot (the Patterns page, on the On device
 // source, with the running pattern's tile lit and a live device session)
-// every time. Usage: node coldload.mjs <device-url> [N]
+// every time — AND that the page is actually STYLED (#592: a refused
+// stylesheet used to give a silently unstyled console that passed every
+// other check). Usage: node coldload.mjs <device-url> [N]
 import puppeteer from "puppeteer-core";
 import { execSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -90,8 +92,26 @@ for (let i = 1; i <= N; i++) {
       '[data-role="patterns-grid"][data-source="device"] [data-role="tile"]',
       (els) => els.length,
     );
-    ok = tiles > 0;
-    detail = `chip="${chip}", ${tiles} on-device tile(s), playing tile lit`;
+    // Did the CSS actually APPLY? A refused `<link rel=stylesheet>` is a
+    // browser-native load that nothing retries, so before #592 a cold load
+    // could satisfy every assertion above and still render as raw unstyled
+    // HTML — the worst failure mode we have, because it is silent. The
+    // stylesheet is inlined into the document now; this is the check that
+    // says so from the browser's side rather than from `dist/index.html`.
+    const styled = await page.evaluate(() => {
+      const cs = getComputedStyle(document.body);
+      return {
+        bg: cs.backgroundColor,
+        token: getComputedStyle(document.documentElement).getPropertyValue("--bg").trim(),
+      };
+    });
+    // `--bg: #14161a` (web/src/app.css) — an unstyled body reports
+    // `rgba(0, 0, 0, 0)` and an empty token.
+    const cssOk = styled.bg === "rgb(20, 22, 26)" && styled.token === "#14161a";
+    ok = tiles > 0 && cssOk;
+    detail =
+      `chip="${chip}", ${tiles} on-device tile(s), playing tile lit, ` +
+      (cssOk ? "styled" : `UNSTYLED (body bg ${styled.bg}, --bg "${styled.token}")`);
   } catch (e) {
     detail = String(e).split("\n")[0];
   }

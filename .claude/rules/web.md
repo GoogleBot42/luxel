@@ -27,19 +27,35 @@ paths:
 - The device serves the UI from a tiny connection pool (3 sockets default,
   2 small-chip) and browser-NATIVE requests (script/stylesheet/preload
   tags) can't go through fetchgate — vite is deliberately configured with
-  `cssCodeSplit: false` + `modulePreload: false` so a cold load's native
-  burst stays at 2 concurrent sockets. Any change to `web/vite.config.ts`,
-  an entry HTML, or anything else that alters the emitted
-  `<script>`/`<link>` set of `dist/*.html` must re-run
-  `web/tools/coldload.mjs` against a real device before merging — the
-  installer page's second rollup entry silently grew the burst to 4 and
-  every device cold load ate a TCP RST for two weeks (Gitea #92).
+  `cssCodeSplit: false` + `modulePreload: false`, and the `inlineBoot()`
+  plugin in `web/vite.config.ts` then (a) folds that single stylesheet INTO
+  each entry HTML as a `<style>` and deletes the asset, and (b) replaces
+  the module `<script src>` TAG with a loader that appends the script after
+  `DOMContentLoaded` and re-appends it up to 3 times (2/4/6 s) if it is
+  refused (Gitea #592). **The emitted shape of `dist/*.html` is now: NO
+  browser-native subresource request at all — no `<script src>`, no
+  `<link rel=stylesheet>`, no `modulepreload`; one inline `<script>`
+  loader, one `<style>`, and a `data:` favicon (not a request).**
+  Two things made that necessary. A refused stylesheet is never retried, so
+  a busy pool gave a silently UNSTYLED console; and a tag is fetched by the
+  preload scanner while the document is still arriving, so it needs a
+  SECOND socket — with the panel's pool at `"web":[1,1,1]` even the lone
+  bundle request was refused on 5/5 cold loads (blank page), while the
+  post-parse loader rides the document's own keep-alive socket and landed
+  on 5/5. Any change to `web/vite.config.ts`, an entry HTML, or
+  anything else that alters that set must re-run `web/tools/coldload.mjs`
+  against a real device before merging — the installer page's second
+  rollup entry silently grew the burst to 4 and every device cold load ate
+  a TCP RST for two weeks (Gitea #92).
   Sharing a NEW module between the two entries does not trigger this on its
   own: `index.js` already statically imports a shared `app` chunk, and a
-  module both entries import lands inside it, adding no tag. Confirm by
-  reading `dist/index.html` after the build (one `<script>`, one
-  `<link rel=stylesheet>`, no `modulepreload`) rather than assuming either
-  way — that check is free; a device coldload run is not.
+  module both entries import lands inside it, adding no tag. The free half
+  of the check is `web/tests/bundleShape.test.mjs` (in `npm test`, which CI
+  runs after a build): it fails if either entry HTML asks the browser for
+  anything. `coldload.mjs` is the paid half and asserts the page is styled
+  (body `background-color` and the `--bg` token) as well as booted, because
+  "booted but unstyled" was a state every other assertion passed;
+  `web/tools/bootretry-check.mjs` exercises the retry on the mirror.
 - Set `E2E_PORT` when running e2e concurrently with another session, and set
   it to a **multiple of 100** (4200, 4300, …). Since #496 it is the base of a
   100-port block that the whole run owns: every web-preview port, every

@@ -5,8 +5,10 @@
 
    Primitives live here, not in a component, because Svelte compiles slotted
    markup in the PARENT's scope: a wrapper component cannot style what it was
-   handed. `cssCodeSplit:false` folds this into the one stylesheet the device
-   serves (docs/web-architecture.md, Gitea #92). */
+   handed. `cssCodeSplit:false` folds this into the one stylesheet the build
+   emits, which `inlineBoot()` (vite.config.ts) then inlines into the entry
+   HTMLs so the device serves no separate CSS request at all
+   (docs/web-architecture.md, Gitea #92 and #592). */
 
 :root {
   --bg: #14161a;

@@ -1,5 +1,45 @@
 # Update log
 
+## 2026-09-20 — a cold load now asks the browser for nothing (#592)
+
+A console served from a busy device rendered as completely unstyled HTML, silently: the
+`<link rel=stylesheet>` in `dist/index.html` is a BROWSER-native request, not one of the
+app's `fetchgate` calls, so when the device's 3-socket web pool had no slot free it came
+back `ERR_CONNECTION_REFUSED` and nothing ever retried it. Everything the app fetches
+itself — `luxel.wasm`, every `/api/*` — IS retried and lands, which is why the boot
+completed and the failure looked like a rendering bug (#592).
+
+`inlineBoot()` in `web/vite.config.ts` now takes the native subresource count to **zero**
+for both entries:
+
+- the one stylesheet (`cssCodeSplit: false` guarantees one) is folded into each entry HTML
+  as a `<style>` and the asset is deleted from the bundle;
+- the module `<script src>` TAG is replaced by a loader that appends the script after
+  `DOMContentLoaded` and re-appends it up to three times (2/4/6 s) if it is refused.
+
+The second half was not belt-and-braces, it was necessary. A tag is fetched by the preload
+scanner while the document is still arriving, so the browser opens a SECOND socket for it —
+and with the Seengreat panel's pool sitting at `"web":[1,1,1]` for minutes at a time, that
+socket was refused on **5 of 5** cold loads: inlining the CSS alone turned a silently
+unstyled console into a blank page. Appending the script after parse lets it ride the
+document's own idle keep-alive connection, so a whole cold load — document, bundle, wasm,
+every API call — fits in one socket. On the same panel, same pool state: **5/5 booted and
+styled** (2/5 with zero failed requests; the other three lost `luxel.wasm` or an
+`/api/status` to the pool and fetchgate retried them). Athom control, pool nearly idle:
+5/5 clean.
+
+Sizes: `dist/index.html` 0.55 KB → 54.85 KB raw, **0.37 KB → 10.98 KB gzipped**; the CSS
+asset (52.85 KB / 9.83 KB gz) is gone, so a first cold load moves about the same bytes in
+one request instead of two. The CSS now ships once per entry and loses its own immutable
+cache entry: the packed asset archive grows 859,282 → 870,144 bytes (+1.3 %, 88.5 % of the
+0xF0000 assets region).
+
+Guards: `web/tests/bundleShape.test.mjs` (in `npm test`, which CI runs after a build) fails
+if either entry HTML asks the browser for anything; `tools/coldload.mjs` now asserts the
+page is STYLED — body `background-color` and the `--bg` token — as well as booted, because
+"booted but unstyled" passed every assertion it had; `tools/bootretry-check.mjs` exercises
+the loader's retry and its bound against `vite preview`, no device needed.
+
 ## 2026-09-20 — the closure round on real hardware: two instruments were reading the old UI (#538)
 
 The #538 fidelity work is done on the mirror — `tools/mockdiff.mjs` reports **0 deltas over
