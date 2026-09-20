@@ -224,13 +224,46 @@ impl Layout {
     }
 
     /// Whether moving from `self` to `next` needs a reboot to take effect:
-    /// the chain wiring (#475) and the output table (#474) are built once at
-    /// boot. Pixel count, grid size, map and projection are all live.
-    pub fn reboot_required(&self, next: &Layout) -> bool {
-        (next.kind == LayoutKind::Matrix
+    /// the chain wiring (#475) and the output DRIVER INSTANCES (#474) are
+    /// built once at boot. Everything else applies on the next frame — the
+    /// pixel count, the grid, the map, the projection defaults, the run each
+    /// output drives (`count`, `rev`, re-read from the Layout by
+    /// `write_frame` every frame) and output 0's protocol and colour order,
+    /// because output 0 IS the strip the aliases describe: the render task
+    /// reconfigures its SPI and the output chain permutes the frame into its
+    /// order (Gitea #550).
+    ///
+    /// So an `out` line is compared on the three fields a BOOT reads: the
+    /// output exists, its pad, and — on a FURTHER output only — the wire
+    /// format its peripheral was configured for (`firmware/src/output.rs`,
+    /// `Chan`, which copies both when it is built).
+    ///
+    /// An EMPTY table is the one implicit output on `default_pin`
+    /// ([`Limits::default_pin`]), so a body that merely writes that same
+    /// output down explicitly rebuilds nothing — which is what lets a
+    /// Settings page POST the whole table on every edit.
+    pub fn reboot_required(&self, next: &Layout, default_pin: u8) -> bool {
+        if next.kind == LayoutKind::Matrix
             && (self.kind != LayoutKind::Matrix
-                || self.matrix.wiring() != next.matrix.wiring()))
-            || self.outputs != next.outputs
+                || self.matrix.wiring() != next.matrix.wiring())
+        {
+            return true;
+        }
+        let implicit = [Output { n: 0, pin: default_pin, proto: 0, order: 0, count: 0, rev: false }];
+        let a = if self.outputs.is_empty() { &implicit[..] } else { &self.outputs[..] };
+        let b = if next.outputs.is_empty() { &implicit[..] } else { &next.outputs[..] };
+        if a.len() != b.len() {
+            return true;
+        }
+        for (x, y) in a.iter().zip(b) {
+            if x.n != y.n || x.pin != y.pin {
+                return true;
+            }
+            if x.n != 0 && (x.proto != y.proto || x.order != y.order) {
+                return true;
+            }
+        }
+        false
     }
 
     /// The Layout as its own `POST` wire — what a host persists, the way the
@@ -384,6 +417,12 @@ pub struct Limits<'a> {
     pub panel: bool,
     /// May this GPIO carry a strip data line (`board::data_pin_ok`)?
     pub pin_ok: &'a dyn Fn(u8) -> bool,
+    /// The pad the host's ONE implicit output is on — [`View::default_pin`],
+    /// i.e. what an EMPTY output table means here. It is what lets
+    /// [`Layout::reboot_required`] tell a body that only writes the implicit
+    /// output down explicitly from one that moves the pad. 0 on a host with
+    /// no data pin of its own (the mirror).
+    pub default_pin: u8,
     /// Protocol name → host code, aliases included.
     pub proto_code: &'a dyn Fn(&str) -> Option<u8>,
     /// Enforce the cross-line invariant that the outputs partition the pixel
@@ -412,7 +451,9 @@ pub struct Edit {
     /// abbreviate a map Layout to the bare word `map`.
     pub map: Option<String>,
     /// True when a stored field only a reboot applies changed — the chain
-    /// wiring (#475) or the output table (#474).
+    /// wiring (#475) or an output's DRIVER INSTANCE (#474): which outputs
+    /// exist, the pad each is bound to, and the wire format a further
+    /// output's peripheral was built for. See [`Layout::reboot_required`].
     pub reboot_required: bool,
 }
 
@@ -588,7 +629,7 @@ pub fn parse(
         next.outputs = list;
     }
 
-    let reboot_required = cur.reboot_required(&next);
+    let reboot_required = cur.reboot_required(&next, lim.default_pin);
     Ok(Edit { layout: next, pixels, map, reboot_required })
 
 }
@@ -869,6 +910,7 @@ mod tests {
             outputs: 2,
             panel: false,
             pin_ok: &pin_ok,
+            default_pin: 18,
             proto_code: &proto_code,
             strict: true,
         }
@@ -883,6 +925,7 @@ mod tests {
             outputs: 1,
             panel: true,
             pin_ok: &pin_ok,
+            default_pin: 0,
             proto_code: &proto_code,
             strict: true,
         }
@@ -1051,6 +1094,95 @@ mod tests {
         assert!(e.reboot_required, "the table is built at boot (#474)");
         // and the emptied table does not have to add up to anything
         assert_eq!(e.pixels, None);
+    }
+
+    // --- what a reboot actually builds (#550) -------------------------------
+
+    /// A two-output table to POST variations of; 120 px, both on ws2812/grb.
+    const TWO: &str = "out 0 18 ws2812 grb 60\nout 1 19 ws2812 grb 60";
+
+    fn two_output_cur() -> Layout {
+        parse(TWO, &strip_layout(), 120, &strip_limits()).unwrap().layout
+    }
+
+    /// `reboot_required` for `body` applied to a 120 px two-output device.
+    fn reboot(body: &str) -> bool {
+        parse(body, &two_output_cur(), 120, &strip_limits()).unwrap().reboot_required
+    }
+
+    #[test]
+    fn writing_the_implicit_output_down_explicitly_rebuilds_nothing() {
+        // the one implicit output IS `out 0 <default_pin> … <pixels>`, so a
+        // Settings page that always POSTs the whole table must not be told
+        // to reboot for it
+        let cur = strip_layout();
+        let e = parse("out 0 18 ws2812 grb 60", &cur, 60, &strip_limits()).unwrap();
+        assert!(!e.reboot_required, "same output, same pad");
+        // …and back again
+        let e = parse("out none", &e.layout, 60, &strip_limits()).unwrap();
+        assert!(!e.reboot_required);
+        // a DIFFERENT pad is a rebind, which only a boot does
+        let e = parse("out 0 19 ws2812 grb 60", &cur, 60, &strip_limits()).unwrap();
+        assert!(e.reboot_required, "the SPI driver binds MOSI once, at boot");
+    }
+
+    #[test]
+    fn repartitioning_the_pixel_space_is_live() {
+        // the run boundaries are re-read from the Layout every frame
+        assert!(!reboot("out 0 18 ws2812 grb 90\nout 1 19 ws2812 grb 30"));
+        assert!(!reboot("out 0 18 ws2812 grb 30\nout 1 19 ws2812 grb 90"));
+    }
+
+    #[test]
+    fn reversing_a_run_is_live() {
+        // `rev` rides in the same `Run` the frame loop re-reads
+        assert!(!reboot("out 0 18 ws2812 grb 60 rev\nout 1 19 ws2812 grb 60"));
+        assert!(!reboot("out 0 18 ws2812 grb 60\nout 1 19 ws2812 grb 60 rev"));
+    }
+
+    #[test]
+    fn output_0s_protocol_and_colour_order_are_live() {
+        // output 0 IS the strip the aliases drive: the render task
+        // reconfigures its SPI and the output chain permutes into its order
+        assert!(!reboot("out 0 18 sk9822 grb 60\nout 1 19 ws2812 grb 60"));
+        assert!(!reboot("out 0 18 ws2812 bgr 60\nout 1 19 ws2812 grb 60"));
+    }
+
+    #[test]
+    fn a_further_outputs_wire_format_waits_for_its_driver() {
+        // output 1's SPI clock and colour order are captured when its
+        // peripheral is built (firmware/src/output.rs `Chan`)
+        assert!(reboot("out 0 18 ws2812 grb 60\nout 1 19 sk9822 grb 60"));
+        assert!(reboot("out 0 18 ws2812 grb 60\nout 1 19 ws2812 bgr 60"));
+    }
+
+    #[test]
+    fn moving_a_data_pad_needs_a_reboot() {
+        assert!(reboot("out 0 17 ws2812 grb 60\nout 1 19 ws2812 grb 60"));
+        assert!(reboot("out 0 18 ws2812 grb 60\nout 1 17 ws2812 grb 60"));
+    }
+
+    #[test]
+    fn gaining_or_losing_a_driver_instance_needs_a_reboot() {
+        // one output's driver is never built…
+        assert!(reboot("out 0 18 ws2812 grb 120"));
+        // …and `out none` gives the same answer for the same reason
+        assert!(reboot("out none"));
+        // the reverse direction too
+        let one = parse("out 0 18 ws2812 grb 120", &strip_layout(), 120, &strip_limits())
+            .unwrap()
+            .layout;
+        assert!(parse(TWO, &one, 120, &strip_limits()).unwrap().reboot_required);
+    }
+
+    #[test]
+    fn a_body_that_touches_no_output_leaves_the_answer_to_the_rest() {
+        // `out` lines are all-or-nothing: a proj-only body keeps the table
+        assert!(!reboot("proj1d y"));
+        // and the chain wiring still rebuilds on its own
+        assert!(parse("matrix 8 8 2 1 tl row 1 0", &strip_layout(), 64, &strip_limits())
+            .unwrap()
+            .reboot_required);
     }
 
     #[test]

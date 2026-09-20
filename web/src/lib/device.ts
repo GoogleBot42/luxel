@@ -436,9 +436,10 @@ export class DeviceSession {
   }
 
   /** Reboot the device (`caps.reboot`). The other half of
-   *  `reboot_required`: a stored chain arrangement or output table has no
-   *  other way to be applied, and neither `/api/wifi` nor `/api/datapin`
-   *  exists on a HUB75 board (Gitea #475). Firmware only. */
+   *  `reboot_required`: a stored chain arrangement, a moved data pad or an
+   *  output that has no driver instance yet has no other way to be applied
+   *  (#475/#550), and neither `/api/wifi` nor `/api/datapin` exists on a
+   *  HUB75 board. Firmware only. */
   async reboot(): Promise<{ ok: boolean; note?: string }> {
     const res = await this.fetch("/api/reboot", { method: "POST", body: "" });
     return (await res.json()) as { ok: boolean; note?: string };

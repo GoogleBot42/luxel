@@ -169,9 +169,14 @@ pub struct SpiStripOutput {
 /// One further physical channel: its own SPI peripheral, its own encode
 /// buffer sized to its own run, its own protocol and colour order.
 ///
-/// Its protocol is fixed at boot — the SPI clock is configured when the
-/// peripheral is built, and an `out` line is `reboot_required` anyway. Only
-/// output 0's protocol is live (`set_protocol`, `/api/protocol`).
+/// Its protocol AND its colour order are fixed at boot: the SPI clock is
+/// configured when the peripheral is built, and both are copied in here by
+/// `attach_second`. Only output 0's are live (`set_protocol` /
+/// `/api/protocol`, and `shared::COLOR_ORDER` which the output chain reads
+/// every frame) — which is exactly why `Layout::reboot_required` gates
+/// protocol and colour order on a FURTHER output but not on output 0
+/// (Gitea #550). Its run (`count`, `rev`) is live on both: `write_frame`
+/// re-reads the split from the Layout per frame.
 #[cfg(multi_output)]
 struct Chan {
     spi: SpiDma<'static, Blocking>,

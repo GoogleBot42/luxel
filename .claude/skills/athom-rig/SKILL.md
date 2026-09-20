@@ -122,6 +122,30 @@ Luxel in the first place is the takeover mechanism documented in
 docs/wled-migration.md, not this skill; this skill only covers the
 physical rig actions (power, serial, restore) that support it.
 
+## 5b. Seeing the wire without a camera (`out_us`)
+
+There is no camera on the bench, so "the strip followed the change" cannot
+be watched directly — but `/api/status`'s **`out_us` is linear in the run
+length actually clocked out**, which is enough to prove an output-wiring
+change took effect. Measured 2026-09-19 on the 144 px WS2812 strip (#550):
+144 px = 5,370 us · 100 px = 3,900 · 44 px = 2,026 — about 33.5 us/px plus
+~550 us of fixed setup and latch. Sample it three times a few seconds
+apart; it is stable to a few us while a playlist runs.
+
+Two things it can NOT tell you: `rev` (same run length either way), and how
+a SECOND output's run moved — splitting a fixed pixel count two ways leaves
+the total wire time unchanged, and the second pad has no strip on it
+(Gitea #518).
+
+**Output 0's run split can be exercised with no reboot and no OTA.** POST a
+two-output `out` table: output 1's driver instance is only built at boot, so
+nothing binds its pad, while `run_of(0, …)` is re-read every frame and
+output 0 immediately drives only its own `count`. `out none` puts it back.
+Keep output 0's `pin`/`proto`/`order` exactly as `GET /api/layout` just
+reported them — those three write through to the LIVE strip settings, and a
+changed `pin` arms `WANT_DATA_PIN` for the next boot, so carrying a guessed
+number in changes Jeremy's device.
+
 ## 6. The pre-guard heap-regions panic (root-caused + fixed 2026-08-16, PR #50)
 
 The intermittent first-boot panic `esp-alloc: Exceeded the maximum of 3

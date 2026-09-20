@@ -13,11 +13,12 @@
   //
   // Three fields deliberately keep their live endpoints on a SINGLE-output
   // board: LED type (`/api/protocol`), colour order (`/api/output`) and the
-  // data pin (`/api/datapin`). An `out` line is built once at BOOT (#474/#475),
-  // so routing a colour-order change through it would answer
-  // `reboot_required` for something that is live today. Whether the firmware
-  // should apply those two fields live instead — and the split then go away —
-  // is Gitea #524; see docs/api.md "Live vs reboot".
+  // data pin (`/api/datapin`). That split is now cosmetic for the first two:
+  // since Gitea #550 `/api/layout` answers `reboot_required:false` for
+  // output 0's protocol and colour order (and for any output's `count` /
+  // `rev`) — only a pad, a driver instance and a FURTHER output's wire
+  // format wait for a boot. Folding them onto `out 0` is Gitea #524; see
+  // docs/api.md "Live vs reboot".
   //
   // Every field is gated by `lib/settingsCaps.ts` — absent, never disabled.
   import { createEventDispatcher } from "svelte";
