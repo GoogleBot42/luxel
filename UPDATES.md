@@ -1,5 +1,41 @@
 # Update log
 
+## 2026-09-20 — round-2 verification on metal: both boards deployed, and what a hardware mockdiff really measures (#538)
+
+Closing pass over #605/#612. No code changed; the boards did.
+
+**Both boards were behind.** The Seengreat panel had #605's branch build and the Athom
+had neither #603 (the AppCpu watchdog gate) nor #605 (the live `proj` line), so both took
+a firmware + assets deploy off master: panel 969,792 B into `ota_0`, Athom 1,030,288 B
+into `ota_1`, both v0.1.40, both with the 876,198 B asset bundle behind it. Each OTA
+reboot came back `core1.last.reset = CoreSw` with `bb` all zero and `fence_timeouts` 0 —
+the first metal evidence that #603's gate does not false-trip across an OTA write plus a
+large `POST /api/assets` (noted on #604). The Athom's playlist resumed itself and kept
+advancing; the panel's was already parked with Jeremy's own pattern live, and came back
+exactly that way. Brightness was read on both and written on neither.
+
+**The gates.** `npm test` 133/133, `e2e` 187 checks, `device-e2e` 471, `maxpixels`,
+`sync`, `flash-e2e`; `tools/ci.sh` FULL green in 141 s with the c6 hosted image at
+1,017,040 B — 31,536 B / 3.00 % of the slot, **78 B** above the hard floor. `mockdiff`
+0 deltas over 27 frames and `--sweep` unchanged. `coldload.mjs <ip> 3` on each board:
+3/3 clean, styled, zero failed requests.
+
+**On hardware, mockdiff measures the board.** `--device` redirects only the
+`panel`-target frames, so the panel scored 25 deltas (all its own state: `On device 10`
+against the mock's 5, brightness `31 / 31`, and `S4`'s recipe wanting a playing row that
+a parked playlist does not have) and the 144 px Athom scored 48 (strip tiles, no
+Projection section, no HUB75 rows — every one correct capability trimming). Zero UI
+deltas on either, but the triage is a trap worth a tool fix: Gitea #616. docs/tools.md
+and the seengreat-panel skill now say so, along with the panel's other lesson of the day
+— a 30-60 s hole in the network that ends in `ChipPowerOn` is somebody power-cycling it
+at the bench, not a crash, and it reads as a HANG (`ERR_ADDRESS_UNREACHABLE`, curl HTTP
+000) rather than the `ECONNREFUSED` an exhausted web pool gives.
+
+**Left open.** #613's second half (the unreachable banner against a real dropout) still
+wants the Athom's plug; #615 is new — the `stopped — playing X directly` note lives in a
+client-side store, so a reloaded console names the parked item with nothing to say the
+LEDs are showing something else.
+
 ## 2026-09-20 — Jeremy's round-2 web review: storage, parking, live drag, and errors that are impossible to miss (#538)
 
 Seven items from the second pass over the v2 console. Mirror only (`luxel serve --board

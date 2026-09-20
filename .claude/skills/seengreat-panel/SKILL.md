@@ -33,6 +33,21 @@ Reading the panel (2026-09-07):
   repeated baseline in the same session before claiming a delta. `--clients 3`
   saturates the 3-socket web pool and returns nothing — use `--clients 1`.
 - Brightness is Jeremy's setting — read it, never set it.
+- **A 30-60 s hole in the network is not automatically a crash.** On 2026-09-20
+  the panel went fully unreachable mid-session — chromium
+  `net::ERR_ADDRESS_UNREACHABLE` after 3.1 s and `curl` HTTP 000 at its connect
+  timeout, i.e. a HANG, not the instant `ECONNREFUSED` an exhausted `web` pool
+  gives — and came back on its own about a minute later. `core1.last.reset` then
+  read `ChipPowerOn`: somebody power-cycled it at the bench. Read
+  `core1.last.reset` and `pass.n` (which restarts from 0) before escalating —
+  `ChipPowerOn` = a bench power cycle, `CoreSw` = an OTA's own reboot,
+  `SysRtcWdt` = the #294 flash wedge. Slot, playlist, brightness and the live
+  pattern all survived it.
+- **Screenshotting the console needs ~6 s of settle, not 2.** The app boots in
+  ~6 s on this board (`coldload.mjs` measures it) and `[data-role="patterns-panel"]`
+  exists while still `hidden`, so an early shot captures the `opening the pattern
+  running on the device…` splash. Wait for the role with `visible: true` AND for
+  `[data-role="pattern-loading"]` / `[data-role="gallery-loading"]` to be gone.
 - **`GET /api/pixels` is the ENGINE's frame, not the wire's.** On a pipelined
   board the preview reads the render → output hand-off buffer, which the
   firmware's output pipeline has not touched yet. A readback therefore shows a
