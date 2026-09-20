@@ -88,6 +88,17 @@ pre-authorized per CLAUDE.md — no need to ask before pushing.
   reports `fps`, `pixels`, `heap_free`, `live`, `src`, `bc`, `vmerr`).
   `ota-push.sh` already runs this polling loop itself and prints the
   post-reboot status line — read that line rather than just its exit code.
+- **`caps.assets` is NOT about the web-asset partition.** It is the scene
+  layer source cap (user-uploadable fonts/images), `false` on every board
+  and not planned (docs/api.md). The field that says `--assets-only` will
+  land is **`assets_mapped`** in `/api/status`. Read the wrong one and you
+  will talk yourself out of a push that works fine (nearly skipped shipping
+  a web fix to both bench boards that way, 2026-09-19). A `hosted-ui`
+  image is the case that genuinely refuses, and it says so in the reply.
+- **A web-only fix needs an `--assets-only` push to reach a device.** The
+  console is served from the device's flash, so merging to master changes
+  nothing on the bench until you push. It is a streamed POST with no
+  reboot — safe even on the panel, which has no reset path.
 - **Serial flash leaves assets stale.** A serial `espflash flash` rewrites
   only the app partition; the assets partition keeps whatever it had
   before. Any serial recovery (see athom-rig skill) must be followed by
