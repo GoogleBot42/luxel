@@ -862,6 +862,11 @@ const results = {};
 const allDeltas = [];
 /** The one page kept alive across --device-bundle frames (see below). */
 let devicePage = null;
+/** One reused page for every crop — opening a fresh one per crop was most of
+ *  the run's wall clock. It is declared HERE, not beside its function: `let`
+ *  is in the temporal dead zone until its own line runs, and the frame loop
+ *  below composes crops long before the bottom of the file is reached. */
+let composePage = null;
 
 for (const frameId of runIds) {
   const F = MAP.frames[frameId];
@@ -1278,10 +1283,6 @@ for (const frameId of runIds) {
 if (devicePage) await devicePage.close();
 
 // ── side-by-side crop composition (no image deps: chromium does it) ───────
-/** One reused page for every crop — opening a fresh one per crop was most of
- *  the run's wall clock. */
-let composePage = null;
-
 async function composeSideBySide(br, path, mockB64, appB64, label, size = { w: 400, h: 200 }) {
   const pg = composePage ?? (composePage = await br.newPage());
   // Lay the two crops side by side while they fit, and stack them when the
