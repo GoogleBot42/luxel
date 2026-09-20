@@ -254,9 +254,13 @@ aspect ratio carries the fixture's shape — `6/1` on a strip, the lattice's own
 (13 px name, 11 px mono caption). The grid uses the mock's fixed column counts
 (6 squares, 3 bars, 2 on a phone) rather than `auto-fill`, because what fits is
 decided by the tile's SHAPE, not its pixel width. The playing tile wears the
-`--ok` ring and the `▶ playing` pill and **no verb strip at all** (S1: nothing
-offers you Play for what is already playing); its `Edit` remains reachable
-through the `meta` link. The hover strip's gradient is `pointer-events:none`,
+`--ok` ring and the `▶ playing` pill, and its hover strip drops exactly one
+verb: **`▶ Play` is absent, `Edit` and `⋯` stay** (#555 — mock S1 draws the
+playing tile without a strip at all, but that is the frame showing one state
+per tile, not a rule; dropping the whole strip made the running pattern the
+one thing on the page you could not open or delete). The slot is handed
+`playing` alongside `item` and `dead` so the PAGE decides which verb goes.
+The hover strip's gradient is `pointer-events:none`,
 so only the verbs take the mouse and a click anywhere else on the thumb still
 plays/opens the pattern.
 
@@ -305,8 +309,8 @@ Two things in `Gallery` are load-bearing and easy to undo by accident:
 
 Tile verbs (§5.1, §5.4b): a bare tile click **plays** an on-device pattern on a
 console and **opens** everything else in the editor; the hover strip is
-`▶ Play · Edit · ⋯` (and is absent entirely on the tile that is already
-playing, S1); `⋯` is Add to playlist (on-device only — a playlist item
+`▶ Play · Edit · ⋯`, less `▶ Play` on the tile already playing (#555); `⋯`
+is Add to playlist (on-device only — a playlist item
 is a device pattern id, with no control overrides, i.e. the pattern's own
 defaults) · Duplicate · Delete (on-device only, through the `confirm` danger
 dialog). `Add to scene ▸` is Phase B (#480) and is absent, not disabled.
@@ -320,7 +324,8 @@ document never disagree.
 `patterns-incompatible` (the collapsed group, `hidden` when empty) ·
 `patterns-incompatible-toggle` (its disclosure, with `aria-expanded`) ·
 `tile` (with `data-kind`, `data-dims`, `data-key`) · `tile-face` ·
-`tile-name` · `tile-play` (absent on the playing tile) · `tile-edit` ·
+`tile-name` · `tile-play` (absent on a dead tile and on the playing one) ·
+`tile-edit` ·
 `tile-menu` · `tile-menu-popup` · `tile-menu-{playlist,duplicate,delete}` ·
 `tile-playing` · `tile-edit-link` · `tile-caption` · `tile-dead` ·
 `tile-spinner` · `gallery-search` · `gallery-loading` · `gallery-note` ·

@@ -1,5 +1,31 @@
 # Update log
 
+## 2026-09-19 — the playing tile keeps Edit and ⋯; only Play goes (#555)
+
+Follow-up to the Patterns PR. Mock S1 draws the playing tile with the pill and
+no hover strip, and that shipped literally — which took `Edit` and `⋯` off the
+running pattern too, on desktop leaving it the one tile on the page you could
+not open, rename, duplicate, add to a playlist or delete without playing
+something else first. The mock omits the strip because a static frame shows one
+state per tile, not because the strip is forbidden there.
+
+Jeremy's complaint was specific — *"the pattern tile shows the Play button when
+that tile is already playing"* — so that is all that goes. `Gallery` hands the
+`actions` slot a `playing` flag beside `item` and `dead`, and the page wraps
+`tile-play` in `{#if !dead && !playing}`. The `▶ playing` pill and the `--ok`
+ring are unchanged.
+
+The harness workarounds the old behaviour forced are gone with it: device-e2e
+reaches the running pattern through `tile-edit` again (the `tile-edit-link`
+meta link stays what it was, the mobile stand-in), the shell block no longer
+needs a second never-activated pattern, and the ⋯ flow no longer has to hand
+the ring back before it can drive the tile. New check: the playing tile has the
+pill, the ring, no `tile-play`, and both `tile-edit` and `tile-menu`.
+
+Verified: `e2e.mjs`, `device-e2e.mjs`, `npm test`, `tools/ci.sh
+CI_SKIP=firmware`, and a hover screenshot of the playing tile on a
+`--board panel` mirror.
+
 ## 2026-09-19 — the Playlist page to mockup S4/S4b: a real transport, mock rows, a Library in the picker (#538 §F, §A)
 
 Jeremy on the shipped playlist: *"playlist page header options, css, text,

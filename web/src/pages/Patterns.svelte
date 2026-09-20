@@ -308,12 +308,15 @@
             bind:note={deviceNote}
             on:pick={(e) => dispatch("playDevice", e.detail.key)}
           >
-            <svelte:fragment slot="actions" let:item let:dead>
+            <svelte:fragment slot="actions" let:item let:dead let:playing>
               <!-- §5.7: nothing to PLAY when the pattern does not compile, so
                    Play is absent (the tile says why). Edit and ⋯ stay — a
                    broken pattern of your own must still be fixable and
-                   deletable (Gitea #529). -->
-              {#if !dead}
+                   deletable (Gitea #529).
+                   Nothing to play on the tile that is already playing either
+                   (Jeremy) — but its Edit and ⋯ stay, or the running pattern
+                   would be the one thing on the page you cannot open (#555). -->
+              {#if !dead && !playing}
                 <button
                   class="btn sm"
                   data-role="tile-play"

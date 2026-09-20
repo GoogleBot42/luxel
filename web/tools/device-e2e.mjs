@@ -252,14 +252,6 @@ try {
         })
       ).json()
     ).id;
-    const shellIdle = (
-      await (
-        await fetch(`${DEV}/api/patterns`, {
-          method: "POST",
-          body: await lxpBody("Shell Idle", "export function render(index) { hsv(0.6, 1, 1) }"),
-        })
-      ).json()
-    ).id;
     const ranBefore = await (await fetch(`${DEV}/api/pattern`)).text();
     await fetch(`${DEV}/api/patterns/${shellId}/activate`, { method: "POST" });
     const brightBefore = (await (await fetch(`${DEV}/api/brightness`)).json()).brightness;
@@ -375,9 +367,8 @@ try {
       );
 
       // the editor is a screen of its own — the shell header goes away
-      await pg.$eval(
-        `[data-role="patterns-grid"]:not([hidden]) .tile[data-key="${shellIdle}"] [data-role="tile-edit"]`,
-        (el) => el.click(),
+      await pg.$$eval('[data-role="patterns-grid"]:not([hidden]) [data-role="tile-edit"]', (els) =>
+        els[0].click(),
       );
       await pg.waitForSelector('[data-role="editor-view"]:not([hidden])', { timeout: 8000 });
       check(
@@ -427,7 +418,6 @@ try {
         () => {},
       );
       await fetch(`${DEV}/api/patterns/${shellId}`, { method: "DELETE" }).catch(() => {});
-      await fetch(`${DEV}/api/patterns/${shellIdle}`, { method: "DELETE" }).catch(() => {});
       await fetch(`${DEV}/api/code`, { method: "POST", body: await lxpBody("", ranBefore) }).catch(
         () => {},
       );
@@ -2194,8 +2184,10 @@ try {
     check("patterns: the ring follows the newly played pattern", true);
     await page.screenshot({ path: `${shotDir}/device-e2e-strip-tile-playing.png` });
 
-    // S1 (Jeremy): the playing tile shows the ▶ pill and nothing else — no
-    // "Play" offered for what is already playing, and no hover strip at all.
+    // Jeremy, #555: the tile that is already playing wears the ▶ pill
+    // top-left and keeps its strip, MINUS the one verb that makes no sense
+    // there — no "Play" for what is already playing, but Edit and ⋯ stay, or
+    // the running pattern would be the only one you cannot open or delete.
     const playingTile = await page.evaluate((sel) => {
       const el = document.querySelector(sel);
       if (!el) return null;
@@ -2204,17 +2196,22 @@ try {
         pill: pill ? (pill.textContent ?? "").trim() : "",
         pillTop: pill ? pill.getBoundingClientRect().top - el.getBoundingClientRect().top : -1,
         play: el.querySelector('[data-role="tile-play"]') !== null,
-        strip: el.querySelector(".actions") !== null,
+        edit: el.querySelector('[data-role="tile-edit"]') !== null,
+        menu: el.querySelector('[data-role="tile-menu"]') !== null,
         ring: getComputedStyle(el).boxShadow,
       };
     }, victim);
     check(
-      "patterns: the playing tile has the ▶ pill top-left and NO verb strip",
+      "patterns: the playing tile has the ▶ pill top-left and no Play verb",
       playingTile !== null &&
         /playing/.test(playingTile.pill) &&
         playingTile.pillTop < 20 &&
-        !playingTile.play &&
-        !playingTile.strip,
+        !playingTile.play,
+      JSON.stringify(playingTile),
+    );
+    check(
+      "patterns: …but keeps Edit and ⋯ (#555)",
+      playingTile !== null && playingTile.edit && playingTile.menu,
       JSON.stringify(playingTile),
     );
     check(
@@ -2222,11 +2219,8 @@ try {
       playingTile !== null && playingTile.ring === "rgb(95, 191, 122) 0px 0px 0px 2px",
       playingTile?.ring,
     );
-
-    // hand the ring back to "device kept" so the victim is hoverable again
-    await tileAction(page, `${DTILE}[data-key="${savedId}"]`, "tile-play");
-    await page.waitForSelector(`${victim}:not(.playing)`, { timeout: 4000 });
-
+    // a tile the device is running is still a full citizen of the grid: the
+    // ⋯ checks below drive it WHILE it plays
     // ⋯ → Add to playlist appends an item through the playlist store
     await tileAction(page, victim, "tile-menu");
     await page.waitForSelector('[data-role="tile-menu-popup"]', { timeout: 3000 });
@@ -2521,12 +2515,7 @@ try {
   page.on("request", (r) => {
     if (r.url().includes("/api/patterns") && r.method() === "DELETE") seenReqs.push(r.url());
   });
-  // The editor still holds "device kept", so its tile is the one marked
-  // playing — and since #538 a playing tile wears the ▶ pill and NO verb
-  // strip (mock S1). Its `Edit` still exists in the meta block (the mobile
-  // link, display:none here), so drive that: same dispatch, no dependence on
-  // a hover strip this tile deliberately does not have.
-  await page.$eval(`${DTILE} [data-role="tile-edit-link"]`, (el) => el.click());
+  await tileAction(page, DTILE, "tile-edit");
   await sleep(1300);
   check("library: a tile's Edit opens the editor", (await page.$('[data-role="editor-back"]')) !== null);
   const activated = await (await fetch(`${DEV}/api/pattern`)).text();
@@ -3064,9 +3053,7 @@ try {
   await sleep(900);
   await page.click('[data-role="tab-patterns"]');
   await sleep(400);
-  // the running pattern's tile has no verb strip (#538) — its meta `Edit`
-  // link dispatches the same thing
-  await page.$eval(`${DTILE} [data-role="tile-edit-link"]`, (el) => el.click());
+  await tileAction(page, DTILE, "tile-edit");
   await sleep(1200);
   await setEditor(page, "export function render(index) { hsv(index / pixelCount, 1, 1) }");
   await sleep(1200);
