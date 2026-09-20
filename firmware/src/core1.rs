@@ -111,15 +111,23 @@ mod imp {
     /// [4] ProCpu parks, [5] AppCpu parks, [6] park-ack timeouts,
     /// [7] fences completed, [8] call-site tag of the fence in flight
     /// ([`tag`]), [9] the AppCpu park count the ProCpu saw when it entered
-    /// that flash op (behind [3] means the AppCpu was NOT parked for it).
+    /// that flash op (behind [3] means the AppCpu was NOT parked for it),
+    /// [10] stall tag ([`BB_STALL_APPCPU`] = the AppCpu heartbeat gate
+    /// stopped feeding the RWDT on purpose, Gitea #603), [11] how stale
+    /// that heartbeat was, in seconds.
     /// Phases: 0 idle, 1 waiting for the fence lock, 2 waiting for the
     /// park ack, 3 inside the flash op, 4 waiting for the release ack,
     /// 6 inside the driver call (esp-storage and the ROM SPI1 routine),
     /// 7 that call returned. 6 and 7 refine 3; which side a wedge lands
     /// on is the whole diagnosis.
+    pub const BB_LEN: usize = 12;
     #[esp_hal::ram(unstable(rtc_slow, persistent))]
-    static mut BLACKBOX: [u32; 10] = [0; 10];
-    const BB_MAGIC: u32 = 0x5EED_C0DE;
+    static mut BLACKBOX: [u32; BB_LEN] = [0; BB_LEN];
+    /// Bumped with the [10]/[11] slots (Gitea #603): the first boot after
+    /// an upgrade must not read the old layout's neighbours as a stall tag.
+    const BB_MAGIC: u32 = 0x5EED_C0DF;
+    /// `BLACKBOX[10]`: the AppCpu render loop was judged wedged.
+    pub const BB_STALL_APPCPU: u32 = 1;
 
     #[inline(always)]
     fn bb_write(i: usize, v: u32) {
@@ -136,7 +144,7 @@ mod imp {
 
     /// What the black box held at boot (copied out before it is re-armed)
     /// plus the reset reason — `/api/status` `core1.last`.
-    static LAST: [AtomicU32; 10] = [const { AtomicU32::new(0) }; 10];
+    static LAST: [AtomicU32; BB_LEN] = [const { AtomicU32::new(0) }; BB_LEN];
     /// Times the AppCpu entered [`park`] — DRAM (the AppCpu must not touch
     /// RTC memory inside the park), copied into the black box by the
     /// ProCpu at the moment it enters a flash op.
@@ -148,12 +156,22 @@ mod imp {
     /// Snapshot the black box from the previous run and re-arm it. Call
     /// once, early, on the ProCpu (heap up).
     pub fn boot_blackbox() {
-        let reason = alloc::format!("{:?}", esp_hal::system::reset_reason());
         let valid = bb_read(0) == BB_MAGIC;
-        for i in 0..10 {
+        for i in 0..BB_LEN {
             LAST[i].store(if valid { bb_read(i) } else { 0 }, Ordering::Relaxed);
         }
-        for i in 1..10 {
+        // The RWDT reset we asked for by starving it (Gitea #603) is
+        // indistinguishable from any other on the reset reason alone, and
+        // "the render core wedged" is the whole diagnosis — say so. A
+        // prefix ARGUMENT, not a second `format!` site or an `insert_str`:
+        // both cost image for one string (.claude/rules/firmware.md).
+        let stall = if LAST[10].load(Ordering::Relaxed) == BB_STALL_APPCPU {
+            "AppCpuStall/"
+        } else {
+            ""
+        };
+        let reason = alloc::format!("{}{:?}", stall, esp_hal::system::reset_reason());
+        for i in 1..BB_LEN {
             bb_write(i, 0);
         }
         bb_write(0, BB_MAGIC);
@@ -173,10 +191,10 @@ mod imp {
     }
 
     /// `(reset reason, black box of the previous run)` for `/api/status`.
-    pub fn last_run() -> (&'static str, [u32; 10]) {
+    pub fn last_run() -> (&'static str, [u32; BB_LEN]) {
         let p = LAST_RESET_STR.load(Ordering::Acquire);
         let reason = if p.is_null() { "?" } else { unsafe { (*p).as_str() } };
-        let mut bb = [0u32; 10];
+        let mut bb = [0u32; BB_LEN];
         for (i, v) in bb.iter_mut().enumerate() {
             *v = LAST[i].load(Ordering::Relaxed);
         }
@@ -209,8 +227,35 @@ mod imp {
     static RTC: core::sync::atomic::AtomicPtr<esp_hal::rtc_cntl::Rtc<'static>> =
         core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
 
-    /// Feed the RTC watchdog. No-op before [`arm_watchdog`].
+    /// Render-loop heartbeat: bumped once per iteration by `render_task`
+    /// (which on these boards runs on the AppCpu), read by
+    /// [`watchdog_task`] on the ProCpu. Plain DRAM — the AppCpu must not
+    /// touch RTC memory — and a plain load/store rather than a
+    /// `fetch_add`: there is exactly one writer, and the reader only ever
+    /// asks whether the value CHANGED.
+    static HEARTBEAT: AtomicU32 = AtomicU32::new(0);
+
+    /// Stamp the render-loop heartbeat. Called once per loop iteration,
+    /// not once per frame: a rejected pattern renders nothing (`out_fps`
+    /// 0) but the loop is still alive, and that is what the watchdog gate
+    /// judges (Gitea #603).
+    #[inline(always)]
+    pub fn beat() {
+        let n = HEARTBEAT.load(Ordering::Relaxed).wrapping_add(1);
+        HEARTBEAT.store(n, Ordering::Relaxed);
+    }
+
+    /// Latched by [`watchdog_task`] once the AppCpu gate trips: every feed
+    /// path stops, so the RWDT expires and resets the board within
+    /// [`WATCHDOG_SECS`]. One-way — the reset is the only way out.
+    static STALLED: AtomicBool = AtomicBool::new(false);
+
+    /// Feed the RTC watchdog. No-op before [`arm_watchdog`], and no-op
+    /// for good once the AppCpu gate has tripped.
     pub fn feed_watchdog() {
+        if STALLED.load(Ordering::Relaxed) {
+            return;
+        }
         let p = RTC.load(Ordering::Acquire);
         if !p.is_null() {
             // SAFETY: `p` points at the leaked Rtc; `feed` only writes the
@@ -247,11 +292,35 @@ mod imp {
         feed_watchdog();
     }
 
+    /// Feed the RTC watchdog on behalf of BOTH cores.
+    ///
+    /// The ProCpu half is the task's own liveness: it runs here, so it
+    /// feeds. The AppCpu half is the render loop's heartbeat, judged by
+    /// [`crate::appwdt::StallWatch`] — nothing else on the device observes
+    /// that core, and a render task that wedges used to leave a healthy
+    /// ProCpu feeding the watchdog forever (Gitea #603, #601). On a trip
+    /// we stop feeding rather than calling `software_reset()`: the RWDT
+    /// reset is the one the ROM bootloader and the boot-loop guard already
+    /// understand, and the black box records WHY before it lands.
     #[embassy_executor::task]
     pub async fn watchdog_task() -> ! {
+        let mut gate = crate::appwdt::StallWatch::new();
         loop {
-            feed_watchdog();
-            embassy_time::Timer::after_secs(3).await;
+            let now = Instant::now().duration_since_epoch().as_millis() as u32;
+            match gate.tick(now, HEARTBEAT.load(Ordering::Relaxed)) {
+                crate::appwdt::Tick::Feed => feed_watchdog(),
+                crate::appwdt::Tick::Stall { stalled_ms } => {
+                    if !STALLED.swap(true, Ordering::Relaxed) {
+                        bb_write(10, BB_STALL_APPCPU);
+                        bb_write(11, stalled_ms / 1000);
+                        println!(
+                            "core1: AppCpu render loop wedged {} s — starving the RTC watchdog",
+                            stalled_ms / 1000
+                        );
+                    }
+                }
+            }
+            embassy_time::Timer::after_millis(crate::appwdt::TICK_MS as u64).await;
         }
     }
 
@@ -632,9 +701,18 @@ pub fn fence_stats() -> (u32, u32) {
 }
 
 #[cfg(not(multi_core))]
-pub fn last_run() -> (&'static str, [u32; 10]) {
-    ("", [0; 10])
+pub const BB_LEN: usize = 12;
+
+#[cfg(not(multi_core))]
+pub fn last_run() -> (&'static str, [u32; BB_LEN]) {
+    ("", [0; BB_LEN])
 }
+
+/// Single-core: the render task shares the executor that feeds the RTC
+/// watchdog, so its liveness needs no separate observer (Gitea #603).
+#[cfg(not(multi_core))]
+#[inline(always)]
+pub fn beat() {}
 
 /// Single-core: no fence, so nothing to attribute.
 #[cfg(not(multi_core))]

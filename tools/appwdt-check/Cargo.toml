@@ -1,0 +1,18 @@
+# Host test rig for firmware/src/appwdt.rs — the AppCpu liveness gate that
+# decides whether the ProCpu may keep feeding the RTC watchdog (Gitea #603).
+# It compiles the exact on-device source file for the host so its unit tests
+# run under `cargo test --workspace`; a workspace member for exactly that
+# reason, like tools/patlog-check.
+#
+#   cargo test -p appwdt-check
+[package]
+name = "appwdt-check"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]

@@ -320,10 +320,13 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
     around an operation is its fence cost (Gitea #292).
   - `last` — the PREVIOUS run, from a black box in RTC memory that survives
     a reset: `reset` is the reset reason (`SysRtcWdt` = the RTC watchdog
-    caught a wedge) and `bb` is
+    caught a wedge; a `AppCpuStall/` prefix means the watchdog was starved
+    on purpose because the render loop on the AppCpu stopped iterating for
+    10 s of ProCpu-awake time — Gitea #603, docs/firmware.md) and `bb` is
     `[magic, ProCpu phase, AppCpu phase, fences begun, ProCpu parks,
     AppCpu parks, park-ack timeouts, fences completed, call-site tag,
-    AppCpu park count at the last fence]`. Phases: 0 idle, 1 waiting for
+    AppCpu park count at the last fence, stall tag, stall age in seconds]`.
+    The stall tag is `1` for that AppCpu stall and `0` otherwise. Phases: 0 idle, 1 waiting for
     the fence lock, 2 waiting for the park ack, 3 inside the fenced window,
     4 waiting for the release ack, 6 inside esp-storage/the ROM SPI1
     routine, 7 that call returned. Call-site tags: 0 other, 1/2/3 asset

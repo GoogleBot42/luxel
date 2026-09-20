@@ -2697,3 +2697,38 @@ hashes). The c6 hosted image keeps 31,664 B of slot — 206 B above the
 31,458 B `tools/image-check.sh`'s 3 % floor demands, where master itself had
 286 B. That margin, not the Xtensa boards' 18 KB, is the binding constraint
 on anything Phase A adds (#543).
+
+2026-09-20, **the RTC watchdog learns to watch the AppCpu** (Gitea #603 — the
+render core's heartbeat gates the RWDT feed, so a wedged render loop reboots
+within ~33 s instead of needing a hands-on power cycle; found by #601). The
+gate is `#[cfg(multi_core)]`, so the RISC-V boards pay **exactly nothing** —
+`core1::beat()` is an empty `#[inline(always)]` there and `appwdt.rs` is not
+compiled at all. Credless flake builds (`nix build .#luxel-fw-<variant>` →
+`luxel-fw-ota.bin`) of `origin/master` `cb7002f` against the branch:
+
+| board | before | after | Δ | slot margin |
+|---|---:|---:|---:|---:|
+| `board-athom-music` | 1,029,952 | 1,030,704 | **+752** | 17,872 B (1.70 %) |
+| `board-pixelblaze-v3` | 1,004,752 | 1,005,408 | **+656** | 43,168 B (4.12 %) |
+| `board-esp32-generic` | 1,025,776 | 1,026,576 | **+800** | 22,000 B (2.10 %) |
+| `board-s3-devkit` | 973,136 | 973,920 | **+784** | 74,656 B (7.12 %) |
+| `board-s3-devkit` + `hub75` | 980,720 | 981,616 | **+896** | 66,960 B (6.39 %) |
+| `board-seengreat-hub75` | 968,976 | 969,792 | **+816** | 78,784 B (7.51 %) |
+| `board-c3-devkit` | 973,040 | 973,040 | **0** | 75,536 B (7.20 %) |
+| `board-c6-devkit` | 1,033,024 | 1,033,024 | **0** | 15,552 B (1.48 %) |
+| `board-c6-devkit` + `hosted-ui` | 1,016,912 | 1,016,912 | **0** | 31,664 B (3.02 %) |
+
+The whole Xtensa cost is one task body: `watchdog_task`'s poll goes 108 →
+570 B (`xtensa-esp32-elf-nm --print-size` on the athom ELF), `render_task`
+grows 9 B for the heartbeat store, and the rest is `boot_blackbox`'s
+`AppCpuStall/` prefix plus two black-box slots. Two shapes were measured and
+dropped on the way: `String::insert_str` for that prefix plus a two-argument
+trip log, instead of a format ARGUMENT and one argument (together +144 B),
+and 64-bit millisecond arithmetic in the gate
+instead of 32-bit wrapping (+288 B) — the chip is 32-bit and every interval
+the gate measures is seconds against a counter that wraps every 49 days, so
+`wrapping_sub` is both exact and smaller. `tools/stack-check.sh` on
+`board-seengreat-hub75` and `board-pixelblaze-v3`: no function over the
+12,288 B budget, `render_task` frame unchanged at 5,488 B, `.stack` 27,180 B
+and 24,828 B. The c6 hosted image — the binding constraint on everything
+Phase A adds (#543) — is byte-identical either side.

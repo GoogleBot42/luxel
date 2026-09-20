@@ -124,6 +124,19 @@ paths:
   25 s, both against a 20 s timeout. `core1::fenced` feeds every 64 fences
   — taking a fence IS proof of progress, so the watchdog keeps catching a
   core that STOPPED without punishing one that is merely slow.
+- **The render loop's `core1::beat()` at the top of `loop {}` is
+  load-bearing on the dual-core boards, and it is a TRIPWIRE.** It is the
+  only thing that tells the ProCpu the AppCpu is alive; if the loop stops
+  iterating for 10 s of ProCpu-awake time, `core1::watchdog_task` stops
+  feeding the RWDT and the board reboots (Gitea #603, `firmware/src/appwdt.rs`,
+  docs/firmware.md). So: never move the stamp below a `continue`, never
+  make it conditional on an engine/frame being present (a rejected pattern
+  renders nothing and must still count as alive), and treat any new `await`
+  in the render loop that can block for many seconds *while the ProCpu
+  executor keeps running* as a reboot you just shipped. Blocking that also
+  blocks the ProCpu is already forgiven — the gate credits the watchdog
+  task's own lateness — but nothing else is. Changing either constant means
+  re-running `cargo test -p appwdt-check`.
 - Never take the flash driver out of the global (`ota::take_flash`) for a
   long burst of ops — every `with_flash` user reads busy for the whole
   window, and the failure shows up as UNRELATED symptoms (asset pushes

@@ -1,5 +1,55 @@
 # Update log
 
+## 2026-09-20 — the RTC watchdog now watches the render core too (#603)
+
+On the dual-core boards `render_task` runs on the AppCpu, while both RWDT feeders —
+`core1::watchdog_task` every 3 s and `core1::fenced` every 64 fences — are ProCpu-side.
+Nothing on the device observed the core that actually renders: a render loop that *wedged*
+(spun, or waited on something that never completed) left a healthy ProCpu feeding the
+20 s watchdog forever, the fixture dark, and only a hands-on power cycle to recover. That
+is the mechanism behind #601's "hard restart required" on the Seengreat panel, and it
+stands whatever triggers the wedge — a panic, by contrast, already reboots (`custom_halt`).
+
+`render_task` now stamps a counter once per loop ITERATION (`core1::beat`), and
+`watchdog_task` stops feeding the RWDT once that counter has been frozen for 10 s of
+ProCpu-awake time. Starving the watchdog beats calling `software_reset()`: the reset lands
+in the form the ROM bootloader and the boot-loop guard already understand, and the black
+box is written first, so the next boot reports `core1.last.reset` as `AppCpuStall/<reason>`
+with `bb[10] = 1` and `bb[11]` = the heartbeat's staleness in seconds. Worst-case recovery
+is 10 s + one 3 s tick + the RWDT's 20 s.
+
+The hard part is not the detection, it is **never tripping on a healthy device** — a false
+trip reboots inside the boot-guard window, mid-flash-write. Two properties carry that:
+
+- **The gate counts loop iterations, not frames.** A pattern rejected at load renders
+  nothing (`out_fps` 0) and an idle loop sleeps 50 ms a pass; both still iterate.
+- **Time the ProCpu could not run is credited back.** A 25 s garbage-collecting pattern
+  save or a 15 s asset install blocks the ProCpu executor in one blocking call; the AppCpu
+  is parked for every flash op, and on a pipelined board the render loop is *also* waiting
+  on `pipeline::output_task`, which lives on that blocked executor. `watchdog_task` is on
+  the same executor, so its own tick arrives late by exactly that much — the gate subtracts
+  the excess over one tick interval. What is left, a frozen heartbeat while the task keeps
+  ticking on time, is a wedged AppCpu and nothing else. The slowest legitimate frame in the
+  fleet (`ripples-2d`, 234 ms at 4096 px) is 40x under the limit.
+
+The decision itself is a pure function in the new `firmware/src/appwdt.rs` — no HAL, no
+atomics, no clock — so `tools/appwdt-check` (`cargo test -p appwdt-check`, the same
+`#[path]`-include trick as `patlog-check`) drives all eleven cases on the host, the
+false-trip states first.
+
+**Boards.** The gate is `#[cfg(multi_core)]`: the classic-ESP32 boards (`athom-music`,
+`pixelblaze-v3`, `esp32-generic`) and every S3 (`s3-devkit`, `s3-hub75`,
+`seengreat-hub75`) get it; the RISC-V single-core boards (`c3-devkit`, `c6-devkit`,
+`c6-devkit-hosted`) pay **zero bytes** — `core1::beat` is an empty `#[inline(always)]` no-op
+there, and a render wedge stops the feeder task itself, which is what the RWDT always
+caught. Measured, credless flake builds of `origin/master` `cb7002f` vs the branch:
+see docs/boards.md.
+
+Not done here: provoking the wedge on metal. A pattern that hangs the render loop cannot
+be written in the language (the VM's dispatch is bounded per frame), so the on-bench
+procedure and the debug-only hook it would need are #604.
+
+
 ## 2026-09-20 — a cold load now asks the browser for nothing (#592)
 
 A console served from a busy device rendered as completely unstyled HTML, silently: the
