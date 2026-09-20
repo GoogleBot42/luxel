@@ -326,6 +326,9 @@ function measureInPage(rootSel, entries, props) {
       found: true,
       count: n,
       tag: el.tagName.toLowerCase(),
+      // a leaf carries copy of its own; a container's textContent is the
+      // concatenation of everything under it and says nothing useful
+      leaf: el.children.length === 0,
       styles,
       box: {
         w: +r.width.toFixed(2),
@@ -1085,7 +1088,12 @@ for (const frameId of runIds) {
         });
     }
 
-    if (e.text && !allowed(e.id, "text") && normText(m.text) !== normText(a.text)) {
+    // The brief's copy sweep is word-for-word over EVERY label, hint,
+    // placeholder, menu item and caption — so a text leaf is compared whether
+    // or not the map asked for it. Containers stay opt-in (`text: true`),
+    // because their textContent is just everything underneath concatenated.
+    const checkText = e.text || (m.leaf && a.leaf && (m.text || a.text));
+    if (checkText && !allowed(e.id, "text") && normText(m.text) !== normText(a.text)) {
       push({
         element: e.id,
         family: "text",
