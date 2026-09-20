@@ -102,6 +102,17 @@ if skipped web; then echo "== web: SKIPPED"; else
   npm ci
   npm run build
   npm test
+  # The packed bundle must fit the assets partition (0xF0000 in
+  # firmware/partitions.csv). Nothing else measures this: an oversized
+  # archive only fails at `POST /api/assets`, on a device, after a build
+  # and an upload. Headroom was 11.5 % on 2026-09-20 (docs/boards.md).
+  luxa="$(mktemp -t ci-assets-XXXX.luxa)"
+  node tools/pack-assets.mjs "$luxa" >/dev/null
+  bytes=$(stat -c%s "$luxa"); rm -f "$luxa"
+  limit=983040
+  echo "   asset archive: $bytes B of $limit ($(( (limit - bytes) * 100 / limit ))% headroom)"
+  [ "$bytes" -le "$limit" ] || {
+    echo "asset archive is $((bytes - limit)) B over the assets partition" >&2; exit 1; }
   cd "$ROOT"
   done_step web
 fi

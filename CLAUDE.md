@@ -168,6 +168,9 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
 - `BUILTINS` in `crates/luxel-core/src/vm.rs` is append-only; never reorder.
 - A serial flash leaves the assets partition stale → follow with
   `tools/deploy.sh <ip> --assets-only`.
+- The web bundle must fit the assets partition (0xF0000 = 983,040 B): 870 KB used,
+  **11.5 % headroom** as of 2026-09-20 (docs/boards.md). Nothing measures this in CI —
+  an oversized archive only fails at `POST /api/assets` on a device.
 - `/api/status` `fps` is frames RENDERED. Where the output stage runs on the
   other core (HUB75 panels, `out_fps` nonzero) the render loop free-runs ahead
   of the wire, so `fps` can be double what reached the LEDs — quote `out_fps`
