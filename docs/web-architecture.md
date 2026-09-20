@@ -497,7 +497,7 @@ Three files and one rule: **an item owns its values.**
 |---|---|
 | `stores/device.ts` | the `playlist` store, `addToPlaylist()`, `saveAndAddToPlaylist()`, `queuePlaylistSave()`, `savePlaylistNow()`, `markTransport()`, `playlistPause()`/`playlistResume()`/`playlistStop()`/`playlistStep()` |
 | `pages/Playlist.svelte` | the transport group, the defaults, the ⋯ menu, the list, `+ Add` |
-| `components/PlaylistRow.svelte` | one row: the handle, the chips, the inline sliders, the Projection line |
+| `components/PlaylistRow.svelte` | one row — the handle, the chips, the ✕ — AND, as a SIBLING `<li>` below it, the `.plvals` band the chips open (the inline sliders, the Projection line). Mockup S4 draws the row as one flex line and the band as its own block under it, so the component emits two top-level elements rather than nesting the band inside the row |
 | `components/PatternPicker.svelte` | THE picker — what `+ Add` (and later the ⋯ menus) choose from |
 | `components/ProjectionRow.svelte` | the quiet Projection line, shared with the editor's Controls rail (#468) |
 
@@ -534,6 +534,11 @@ value; `play <index>` re-enters an item and restarts ITS clock at 0. So:
 | `▶ Play` | `play <remembered index>` | — |
 | stop | forget the index, then `stop` | the next Play starts the queue from the top — this is the difference between the two buttons |
 | seek (drag the progress bar) | `play <index>` + a local clock offset | the device restarts the item, so its own advance still arrives a full duration later and the bar parks at the end for the seconds you skipped |
+
+The bar itself is mockup S4's `.prog`: a 3px track with a real `--ok` fill
+element inside it (`[data-role="pl-progress"] i`), whose width is the fraction.
+The grab area for the seek is an overlay on its wrapper, not padding on the
+track — the transport has to be exactly as tall as S4 draws it.
 
 The progress readout is timed LOCALLY from the last `playing:index` change,
 because the wire carries no elapsed field. Gitea #509 adds one; when it lands,

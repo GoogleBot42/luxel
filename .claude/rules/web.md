@@ -147,6 +147,17 @@ paths:
   bullet below — but the instrument must not depend on frame order either way).
   Reproduce any such bug against BOTH an empty profile and a seeded one before
   blaming either side.
+- **…and the shared MIRROR carries state between them the same way.** One
+  `luxel serve` serves every frame of a mockdiff run, so a recipe that WRITES
+  leaves the next frames measuring a device nobody ships: an editor frame's
+  live push is a playlist takeover on the mirror exactly as on the firmware
+  (`pl_playing = false`, `crates/luxel-cli/src/serve.rs`), so by the time the
+  playlist frames ran, `S4` had no playing row and a `▶ Play` primary — which
+  the round-1 report duly filed as two app deltas that were nothing of the
+  kind. The fix in the harness is `"replay": true` on the frame (and on the
+  `sweep` screen) that needs the queue playing; the fix in your head is that a
+  frame passing ALONE and failing in a full run is a shared-fixture question,
+  not a flake (2026-09-20, #538).
 - **A flex container blockifies its children's `display`**, so an `inline-flex`
   `.btn` inside a `display:inline-flex` wrapper computes as `flex`. A mock-vs-app
   `display` delta is usually the WRAPPER's fault, not the element the report
