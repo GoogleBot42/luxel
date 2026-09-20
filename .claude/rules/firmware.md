@@ -124,6 +124,19 @@ paths:
   25 s, both against a 20 s timeout. `core1::fenced` feeds every 64 fences
   — taking a fence IS proof of progress, so the watchdog keeps catching a
   core that STOPPED without punishing one that is merely slow.
+- **The render loop's `core1::beat()` at the top of `loop {}` is
+  load-bearing on the dual-core boards, and it is a TRIPWIRE.** It is the
+  only thing that tells the ProCpu the AppCpu is alive; if the loop stops
+  iterating for 10 s of ProCpu-awake time, `core1::watchdog_task` stops
+  feeding the RWDT and the board reboots (Gitea #603, `firmware/src/appwdt.rs`,
+  docs/firmware.md). So: never move the stamp below a `continue`, never
+  make it conditional on an engine/frame being present (a rejected pattern
+  renders nothing and must still count as alive), and treat any new `await`
+  in the render loop that can block for many seconds *while the ProCpu
+  executor keeps running* as a reboot you just shipped. Blocking that also
+  blocks the ProCpu is already forgiven — the gate credits the watchdog
+  task's own lateness — but nothing else is. Changing either constant means
+  re-running `cargo test -p appwdt-check`.
 - Never take the flash driver out of the global (`ota::take_flash`) for a
   long burst of ops — every `with_flash` user reads busy for the whole
   window, and the failure shows up as UNRELATED symptoms (asset pushes
@@ -157,6 +170,16 @@ paths:
   images for `CI_VARIANTS` (pixelblaze-v3, c6-devkit-hosted, c3-devkit)
   because a C3 build break (#413) and a C6 under-floor image (#438) both
   merged green while only `CI_BOARD` was built.
+- **Take the BEFORE numbers from a separate detached worktree at
+  `origin/master`, never from your own tree before you start editing.**
+  `flake.nix` uses `src = lib.cleanSource ./.`, so the derivation sees the
+  whole repo: an edit ANYWHERE — a doc, a comment — invalidates every
+  variant, and a multi-variant sweep in your own worktree silently mixes
+  pre- and post-edit images as you work (measured the same variant three
+  ways in one session, 2026-09-20). Same source rule bites new files: a
+  `nix build` cannot see an untracked one, so `git add` a new module before
+  building or the build fails with "file not found for module" pointing at
+  a file that is right there.
 - **`.rodata` is NOT free — it costs image byte for byte.** A 16 KiB live
   `#[used]` array in `.rodata` grew the app image by exactly 16,384 B on
   BOTH `board-pixelblaze-v3` (1,011,392 → 1,027,776) and `board-c6-devkit`

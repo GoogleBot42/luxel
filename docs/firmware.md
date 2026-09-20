@@ -1116,6 +1116,46 @@ counts and timeouts, and which call site
 A `last.reset` of `SysRtcWdt` with a ProCpu phase of 3, 6 or 7 is the
 signature of the hangs above.
 
+**The watchdog watches the AppCpu too** (Gitea #603, found by #601). Both
+feeders above are ProCpu-side, so until 2026-09-20 nothing on the device
+observed the core the render task actually runs on: a `render_task` that
+wedged left a healthy ProCpu feeding the RWDT forever, the panel dark, and
+only a hands-on power cycle to recover — a class of failure a *panic* does
+not have (`custom_halt` reboots after 3 s). `render_task` now stamps a
+counter once per loop ITERATION (`core1::beat`), and `core1::watchdog_task`
+stops feeding once that counter has been frozen for 10 s of ProCpu-awake
+time (`firmware/src/appwdt.rs`, `STALL_LIMIT_MS`). Starving the RWDT rather
+than calling `software_reset()` keeps the reset in the form the ROM
+bootloader and the boot-loop guard already understand; worst-case recovery
+is 10 s + one 3 s tick + the RWDT's 20 s. The trip writes the black box
+first, so the boot after it reports `core1.last.reset` as
+`AppCpuStall/<reason>` with `bb[10] = 1` and `bb[11]` = how stale the
+heartbeat was, in seconds.
+
+Two properties make that safe to arm on an unattended device, and both are
+load-bearing:
+
+* **The gate is on loop iterations, not frames.** A rejected pattern
+  renders nothing (`out_fps` 0) and an idle loop sleeps 50 ms a pass —
+  both still iterate, and both must not reboot the board.
+* **Time the ProCpu could not run is credited back.** A 25 s
+  garbage-collecting pattern save or a 15 s asset install blocks the ProCpu
+  executor in one blocking call; the AppCpu is parked for every flash op,
+  and on a pipelined board the render loop is *also* waiting on
+  `pipeline::output_task`, which lives on that blocked executor. Because
+  `watchdog_task` is on the same executor, its own tick arrives late by
+  exactly that much, and the gate subtracts the excess over one tick
+  interval. What is left — a frozen heartbeat while this task keeps ticking
+  on time — is a wedged AppCpu and nothing else. The slowest legitimate
+  frame measured on any board (`ripples-2d`, 234 ms at 4096 px) is 40x
+  under the limit.
+
+Single-core boards pay nothing: `core1::beat` is an empty `#[inline(always)]`
+no-op there (a render wedge stops the feeder task itself, which is the case
+the RWDT always caught), and `appwdt.rs` is `#[cfg(multi_core)]`. The gate's
+decision is a pure function, host-tested through
+`cargo test -p appwdt-check` — including every false-trip state above.
+
 **The flash fence** is the one piece of real multicore machinery. SPI flash
 is shared between the cache (every instruction fetch from flash-resident
 code on EITHER core) and the flash driver; while the driver's ROM call runs,

@@ -53,6 +53,8 @@ use luxel_core::engine::Engine;
 use luxel_core::fixed::Fx;
 use luxel_core::projection::ProjectionMode;
 
+#[cfg(multi_core)]
+mod appwdt;
 mod assets;
 mod board;
 mod config;
@@ -1234,6 +1236,13 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
     let mut geom_dirty = true;
 
     loop {
+        // Liveness for the RTC watchdog, which is fed from the OTHER core
+        // (core1::watchdog_task, ProCpu): once per ITERATION, so an idle
+        // loop with no engine — or a rejected pattern rendering nothing —
+        // still counts as alive, and only a wedge stops it. No-op on
+        // single-core boards, where a wedge here stops the feeder too
+        // (Gitea #603).
+        core1::beat();
         while let Ok(msg) = MSG_QUEUE.try_receive() {
             // any of these can replace, free or re-shape the engine
             geom_dirty = true;
