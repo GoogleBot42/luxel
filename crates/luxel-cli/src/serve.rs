@@ -1186,7 +1186,32 @@ fn engine_now(state: &State, prog: luxel_core::vm::Program, pixel_count: u32) ->
         .duration_since(std::time::UNIX_EPOCH)
         .ok()
         .map(|d| d.as_secs() as i64 + state.tz_minutes.load(Ordering::Relaxed) as i64 * 60);
-    let mut e = Engine::from_program_budgeted_at(prog, pixel_count, 1, usize::MAX, wall);
+    // A mirror impersonating a board with an external array arena
+    // (`--board panel`, Gitea #253) has to enforce that board's ELEMENT
+    // ledger, not PB's 10,236: `library/fairies.js` at 4096 px needs 15,104
+    // and runs on the real panel, so a mirror keeping the PB count answered
+    // `/api/pixels` all zeroes for a pattern the hardware shows (the mirror
+    // half of the black-preview bug). Bytes are the host's — the mirror has
+    // no DRAM ceiling worth modelling — but the ledger is the board's.
+    let arena_free = state.psram_free.load(Ordering::Relaxed) as usize;
+    let elements = if arena_free == 0 {
+        luxel_core::vm::DEFAULT_ARRAY_BUDGET
+    } else {
+        luxel_core::budget::external_element_budget(
+            luxel_core::budget::external_array_budget(
+                state.heap_free.load(Ordering::Relaxed) as usize,
+                arena_free,
+            ),
+        )
+    };
+    let mut e = Engine::from_program_budgeted_at_ext(
+        prog,
+        pixel_count,
+        1,
+        usize::MAX,
+        elements,
+        wall,
+    );
     // Install the projection before the first frame: `pixelCount` under an
     // along-axis projection is the strip's length, and top-level init has
     // already run by the time anything else could set it (Gitea #473).

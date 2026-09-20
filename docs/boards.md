@@ -1483,6 +1483,15 @@ Raising the element ledger is a deliberate, board-scoped divergence from
 Pixel Blaze: a pattern PB rejects with "array element budget exceeded" can
 run here. Every board without the arena keeps the PB number exactly.
 
+Because it is board-scoped, the hosts that stand in for a board have to read
+it off the board rather than assume PB's: the console's preview engine and
+capacity model take it from `/api/status`'s `psram_free`
+(`lx_array_elements_for` / `lx_set_array_elements`, `stores/pattern.ts`'s
+`previewArrayElements`) and `luxel serve --board panel` enforces the panel's.
+Until then both kept the PB count: `library/fairies.js` (15,104 elements at
+4096 px) ran on the panel while the editor previewed it BLACK and the banner
+warned about a pattern the hardware was happily showing.
+
 `/api/status` reports `psram_free` / `psram_total` on this board (and only
 on this board — the fields are `#[cfg]`-gated, so no other image or JSON
 changes). `heap_free` does NOT include them.

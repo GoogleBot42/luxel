@@ -77,6 +77,20 @@ class Host {
     this.e.lx_set_default_wall_clock(unixSeconds);
   }
 
+  /** Raise (or restore, with 0) the array ELEMENT ledger every engine
+   *  compiled from here on enforces. The device's ledger, not the browser's:
+   *  a board with an external array arena (#253) grants ~1 M elements where
+   *  PB's default is 10,236, and a host stuck on PB's number renders BLACK
+   *  for an `array(pixelCount)` pattern the board runs (#420). */
+  setArrayElements(n) {
+    this.e.lx_set_array_elements(n);
+  }
+
+  /** The ledger a device reporting these `/api/status` figures enforces. */
+  arrayElementsFor(heapFree, engineHeap, psramFree) {
+    return this.e.lx_array_elements_for(heapFree, engineHeap, psramFree);
+  }
+
   /** Compile a pattern. Returns an Engine, or `{ compileError, diagnostic }`. */
   compile(source, pixelCount, seed = 1) {
     const s = this.putStr(source);

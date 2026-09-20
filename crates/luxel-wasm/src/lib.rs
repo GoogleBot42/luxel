@@ -36,6 +36,18 @@ use luxel_core::vm::{StepKind, Value};
 /// level against frame rendering.
 struct Counting;
 
+/// The array ELEMENT ledger every engine built from here on enforces.
+///
+/// PB's 10,236-unit count is a memory budget in disguise, and it is the right
+/// default for a host with no device behind it. A board with a dedicated
+/// external array arena (Gitea #253) has a real BYTE budget and raises the
+/// element ledger out of the way — so a preview that keeps the PB number
+/// renders BLACK for an `array(pixelCount)` pattern the device runs happily
+/// (`library/fairies.js` on the 64x64 panel: 15,104 elements). A console
+/// calls `lx_set_array_elements` with `lx_array_elements_for`'s answer for the
+/// device it is bound to; the playground leaves it at the PB default.
+static ARRAY_ELEMENTS: AtomicUsize = AtomicUsize::new(luxel_core::vm::DEFAULT_ARRAY_BUDGET);
+
 static LIVE: AtomicUsize = AtomicUsize::new(0);
 static PEAK: AtomicUsize = AtomicUsize::new(0);
 
@@ -160,7 +172,20 @@ pub unsafe extern "C" fn lx_new(
     seed: u32,
 ) -> i32 {
     let src = str_arg(src_ptr, src_len);
-    match Engine::new_at(src, pixel_count, seed as u64, default_wall_clock()) {
+    // `Engine::new_at` with the host's element ledger spliced in: the browser
+    // has no byte limit worth enforcing, but the ELEMENT count is the device's
+    // and a preview that ignores it renders black (see `ARRAY_ELEMENTS`).
+    let built = luxel_core::compile::compile(src).map(|prog| {
+        Engine::from_program_budgeted_at_ext(
+            prog,
+            pixel_count,
+            seed as u64,
+            usize::MAX,
+            ARRAY_ELEMENTS.load(Ordering::Relaxed),
+            default_wall_clock(),
+        )
+    });
+    match built {
         Ok(engine) => {
             let slot = EngineSlot {
                 engine,
@@ -282,6 +307,45 @@ fn alloc_bytes(n: usize) -> Vec<u8> {
 /// bytecode is assumed resident.
 ///
 /// `heap_free` is the device's `/api/status` `heap_free` and `engine_heap`
+/// Raise (or restore) the array ELEMENT ledger every engine built from here
+/// on enforces — `0` means the PB-compat default. See `ARRAY_ELEMENTS`.
+///
+/// Engines already built keep the ledger they were built with, so a host that
+/// changes this has to recompile to see the difference.
+#[no_mangle]
+pub extern "C" fn lx_set_array_elements(n: u32) {
+    let n = if n == 0 {
+        luxel_core::vm::DEFAULT_ARRAY_BUDGET
+    } else {
+        n as usize
+    };
+    ARRAY_ELEMENTS.store(n, Ordering::Relaxed);
+}
+
+/// The element ledger a device reporting these three `/api/status` figures
+/// enforces — `luxel_core::budget`'s own arithmetic, so a console never
+/// restates it in TypeScript and can never drift from the firmware
+/// (`firmware/src/main.rs`'s `element_budget`). `arena_free` 0 = a board
+/// without an external arena = the PB-compat count.
+#[no_mangle]
+pub extern "C" fn lx_array_elements_for(heap_free: u32, engine_heap: u32, arena_free: u32) -> u32 {
+    let base = luxel_core::budget::load_base(heap_free as usize, engine_heap as usize);
+    model_budget(base, arena_free as usize).1 as u32
+}
+
+/// The array-arena BYTE budget and ELEMENT ledger a load starting from
+/// `free` DRAM gets, on a board with `arena_free` bytes of external arena
+/// (0 = none). The twin of `firmware/src/main.rs`'s `array_budget_now` +
+/// `element_budget`, which is why both halves live in one place here too.
+fn model_budget(free: usize, arena_free: usize) -> (usize, usize) {
+    use luxel_core::budget;
+    if arena_free == 0 {
+        return (budget::array_budget(free), luxel_core::vm::DEFAULT_ARRAY_BUDGET);
+    }
+    let bytes = budget::external_array_budget(free, arena_free);
+    (bytes, budget::external_element_budget(bytes))
+}
+
 /// its `engine_heap` — what the CURRENTLY loaded pattern's engine costs, 0
 /// on firmware that doesn't report it. The firmware drops the outgoing
 /// engine before decoding the incoming one, so the load starts from
@@ -319,6 +383,7 @@ pub unsafe extern "C" fn lx_device_model(
     pixel_count: u32,
     heap_free: u32,
     engine_heap: u32,
+    arena_free: u32,
 ) -> i32 {
     use luxel_core::budget;
 
@@ -354,9 +419,16 @@ pub unsafe extern "C" fn lx_device_model(
         drop(env);
         // The device reads `HEAP.free()` inside `budgeted_engine`, i.e. with
         // the program decoded and the envelope gone.
-        let arena = budget::array_budget(base_free.saturating_sub(prog_bytes));
-        let mut eng =
-            Engine::from_program_budgeted_at(prog, pixel_count, 1, arena, default_wall_clock());
+        let (arena, elems) =
+            model_budget(base_free.saturating_sub(prog_bytes), arena_free as usize);
+        let mut eng = Engine::from_program_budgeted_at_ext(
+            prog,
+            pixel_count,
+            1,
+            arena,
+            elems,
+            default_wall_clock(),
+        );
         // Take the INIT error before rendering: top-level `array(...)` calls
         // are where the arena runs out, and the frames that follow would
         // overwrite that with the downstream "not an array" confusion.
@@ -397,9 +469,16 @@ pub unsafe extern "C" fn lx_device_model(
             }
         };
         let prog_bytes = LIVE.load(Ordering::Relaxed) - base;
-        let arena = budget::array_budget(base_free.saturating_sub(prog_bytes));
-        let mut eng =
-            Engine::from_program_budgeted_at(prog, pixel_count, 1, arena, default_wall_clock());
+        let (arena, elems) =
+            model_budget(base_free.saturating_sub(prog_bytes), arena_free as usize);
+        let mut eng = Engine::from_program_budgeted_at_ext(
+            prog,
+            pixel_count,
+            1,
+            arena,
+            elems,
+            default_wall_clock(),
+        );
         let init_err = eng.take_error();
         for _ in 0..3 {
             let _ = eng.frame(Fx::from_f64(16.7));

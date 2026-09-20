@@ -190,6 +190,14 @@ smaller buffers — a fixed-resolution canvas with `fillCanvas`, or folding two
 channels into one. A board with an external array arena (the Seengreat S3's
 PSRAM) raises the ledger; every other board keeps the PB number exactly.
 
+The ledger belongs to the DEVICE, so the hosts that stand in for one follow
+it: a console's preview engine and its capacity model are built with the
+ledger the connected device reports (`/api/status`'s `psram_free` decides),
+and `luxel serve --board panel` enforces the panel's. A host that kept PB's
+number while the board had an arena drew a BLACK preview for a pattern that
+was running on the LEDs in front of you. The playground — no device, no
+answer — keeps the PB number, which is also what `luxel check` reports.
+
 ## The frame model
 
 1. `beforeRender(delta)` — once per frame. Do your animation math here.
