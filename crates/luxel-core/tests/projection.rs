@@ -388,3 +388,40 @@ fn map_mode_is_never_projected() {
     assert_eq!(dims, 2);
     assert_eq!(coords.len(), 8, "a map program always plots every pixel");
 }
+
+#[test]
+fn a_projection_change_takes_effect_on_the_very_next_frame() {
+    // The live path every host relies on (Gitea #598): `POST /api/layout
+    // proj1d …` on the firmware and the mirror, a playlist item's `P`, and
+    // `POST /api/projection` for the console's per-pattern override. None of
+    // them rebuilds the engine — `set_projection` re-derives the plan, and
+    // the very next frame is already drawn through it.
+    let src = "export function render(index) { rgb(index / 4, pixelCount / 8, 0) }";
+    let mut e = Engine::new(src, 8, 1).unwrap();
+    e.set_grid_map(4, 2); // a 4x2 grid: 4 cells along x, 2 along y
+    let by_index = e.frame(Fx::ZERO).to_vec();
+
+    for mode in [ProjectionMode::X, ProjectionMode::Y, ProjectionMode::Index] {
+        let mut p = Projection::DEFAULT;
+        p.set(1, mode);
+        e.set_projection(p);
+        let px = e.frame(Fx::ZERO).to_vec();
+        match mode {
+            ProjectionMode::X => {
+                assert_eq!(px[0..4], px[4..8], "along x replicates down y at once");
+                assert_eq!(px[0][0], q(0.0), "and the row IS the strip");
+                assert_eq!(px[1][0], q(0.25));
+                assert_eq!(px[0][1], q(4.0 / 8.0), "pixelCount is the strip length");
+            }
+            ProjectionMode::Y => {
+                assert_ne!(px[0..4], px[4..8], "along y replicates across x");
+                for col in 0..4 {
+                    assert_eq!(px[col], px[0], "row 0 is flat");
+                    assert_eq!(px[4 + col], px[4], "row 1 is flat");
+                }
+                assert_eq!(px[4][0], q(0.25), "row 1 is strip index 1");
+            }
+            _ => assert_eq!(px, by_index, "and back to by-index on the next frame"),
+        }
+    }
+}

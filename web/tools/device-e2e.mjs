@@ -70,6 +70,48 @@ const DGRID = '[data-role="patterns-grid"][data-source="device"]';
 const DTILE = `${DGRID} .tile`;
 
 /**
+ * What a projection looks like in a FRAME, on a 64x64 fixture (Gitea #538,
+ * #598). A 1D pattern whose pixel is a pure function of `index` draws a hue
+ * ramp, so along x every ROW is identical (the strip runs along x and is
+ * replicated down y), along y every COLUMN is, and by index neither. These
+ * two read the same thing off the two ends of the console: the device's own
+ * engine frame, and the local preview canvas the user is looking at.
+ */
+async function mirrorProjShape(base) {
+  const buf = Buffer.from(await (await fetch(`${base}/api/pixels`)).arrayBuffer());
+  const px = [];
+  for (let i = 0; i < buf.length / 3; i++) px.push(`${buf[i * 3]},${buf[i * 3 + 1]},${buf[i * 3 + 2]}`);
+  const row = (y) => px.slice(y * 64, (y + 1) * 64).join("|");
+  const col = (x) => Array.from({ length: 64 }, (_, y) => px[y * 64 + x]).join("|");
+  const rows = row(0) === row(1) && row(0) === row(63);
+  const cols = col(0) === col(1) && col(0) === col(63);
+  return rows && !cols ? "along-x" : cols && !rows ? "along-y" : "index";
+}
+
+/** The same shape, read off the editor's own preview canvas (sampled on a
+ *  16x16 lattice, so it does not care how the cells are laid out). */
+async function previewProjShape(pg) {
+  return pg.evaluate(() => {
+    const c = document.querySelector('[data-role="editor-view"] [data-role="preview"] canvas');
+    if (!c) return "no-canvas";
+    const g = c.getContext("2d", { willReadFrequently: true });
+    const w = c.width;
+    const h = c.height;
+    if (!g || w < 16 || h < 16) return `small ${w}x${h}`;
+    const img = g.getImageData(0, 0, w, h).data;
+    const at = (x, y) => {
+      const i = (y * w + x) * 4;
+      return `${img[i]},${img[i + 1]},${img[i + 2]}`;
+    };
+    const rowAt = (y) => Array.from({ length: 16 }, (_, k) => at(Math.floor(((k + 0.5) * w) / 16), y)).join("|");
+    const colAt = (x) => Array.from({ length: 16 }, (_, k) => at(x, Math.floor(((k + 0.5) * h) / 16))).join("|");
+    const rows = rowAt(Math.floor(h * 0.2)) === rowAt(Math.floor(h * 0.8));
+    const cols = colAt(Math.floor(w * 0.2)) === colAt(Math.floor(w * 0.8));
+    return rows && !cols ? "along-x" : cols && !rows ? "along-y" : "index";
+  });
+}
+
+/**
  * Expand one Advanced disclosure on the Settings page (A8, Gitea #469).
  * Idempotent. Its body is UNMOUNTED while collapsed, so every field inside
  * one — output processing, clock, sync, MQTT, network input, storage,
@@ -707,12 +749,36 @@ try {
         (await mappedPage.$('[data-role="projection-reset"]')) !== null &&
           (await mappedPage.$('[data-role="projection-change"]')) === null,
       );
+      // …and it REACHES THE DEVICE (Gitea #598). Before this, the pick only
+      // reconfigured the local preview engine, so the row said "along x ·
+      // override" while the LEDs stayed on the device default — which is what
+      // #538's "per pattern override … definitely isn't applied live" was.
+      // It is live-only and per-working-copy, so the Layout's stored default
+      // must NOT move with it.
+      await sleep(600);
+      const ovrDev = await mirrorProjShape(MAPPED);
+      const ovrLayout = (await (await fetch(`${MAPPED}/api/layout`)).json()).proj.proj1d;
+      check(
+        "projection: an editor override is applied on the device, live",
+        ovrDev === "along-x" && ovrLayout === "index",
+        `${ovrDev} / device default ${ovrLayout}`,
+      );
+      check(
+        "projection: …and the preview shows the same thing",
+        (await previewProjShape(mappedPage)) === "along-x",
+      );
       await mappedPage.screenshot({ path: `${shotDir}/device-e2e-panel-projection.png` });
       await mappedPage.click('[data-role="projection-reset"]');
-      await sleep(500);
+      await sleep(800);
       check(
         "projection: reset goes back to the device default",
         (await mappedPage.$('[data-role="projection-change"]')) !== null,
+      );
+      const resetDev = await mirrorProjShape(MAPPED);
+      check(
+        "projection: reset puts the DEVICE back on its default too",
+        resetDev === "index",
+        resetDev,
       );
       // and the same reset lives INSIDE the popup, for the trip that starts
       // by opening it rather than by noticing the override
@@ -729,6 +795,36 @@ try {
         (await mappedPage.$('[data-role="projection-change"]')) !== null &&
           (await mappedPage.$('[data-role="projection-options"]')) === null,
       );
+      // ---- the Settings projection cards, the DEVICE DEFAULT half (#538) ----
+      // A card is one `POST /api/layout proj1d …`; the device re-reads it on
+      // the next frame and the console's whole Layout follows, preview
+      // included. Both ends are read as a frame, not as an echo.
+      await reloadInto(mappedPage, "#/settings");
+      await mappedPage.waitForSelector('[data-role="projection-block"]', { timeout: 8000 });
+      await mappedPage.screenshot({ path: `${shotDir}/device-e2e-panel-projection-settings.png` });
+      await mappedPage.click('[data-role="projection-block"] [data-role="projection-card"][data-mode="y"]');
+      await sleep(1200);
+      const defDev = await mirrorProjShape(MAPPED);
+      const defStored = (await (await fetch(`${MAPPED}/api/layout`)).json()).proj.proj1d;
+      check(
+        "projection: a Settings card applies on the device, live and stored",
+        defDev === "along-y" && defStored === "y",
+        `${defDev} / ${defStored}`,
+      );
+      await reloadInto(mappedPage, EDIT);
+      await sleep(1500);
+      const defPrev = await previewProjShape(mappedPage);
+      const defRow = await mappedPage
+        .$eval('[data-role="projection-value"]', (el) => (el.textContent ?? "").trim())
+        .catch(() => "");
+      check(
+        "projection: the console preview follows the new device default",
+        defPrev === "along-y" && defRow === "device default · along y",
+        `${defPrev} / ${defRow}`,
+      );
+      await fetch(`${MAPPED}/api/layout`, { method: "POST", body: "proj1d index" }); // as found
+      await sleep(600);
+
       // back to the 2D pattern: native on this Layout, so no row at all
       await fetch(`${MAPPED}/api/code`, {
         method: "POST",

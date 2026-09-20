@@ -363,10 +363,10 @@ async fn enter_item(i: usize) {
         let vals: Vec<Fx> = raw.iter().map(|&r| Fx::from_raw(r)).collect();
         MSG_QUEUE.send(Msg::Control(name, vals)).await;
     }
-    // …and its projection, last: the render task drains the whole queue
-    // before the next frame, so the engine is already the new item's.
+    // …and its projection: the render task installs it after draining the
+    // queue, so the engine it lands on is already the new item's (#470).
     if let Some(code) = item.proj {
-        MSG_QUEUE.send(Msg::Projection(code)).await;
+        crate::layout::want_projection(code);
     }
 }
 

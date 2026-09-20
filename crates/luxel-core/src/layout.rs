@@ -455,6 +455,19 @@ pub struct Edit {
     /// exist, the pad each is bound to, and the wire format a further
     /// output's peripheral was built for. See [`Layout::reboot_required`].
     pub reboot_required: bool,
+    /// A `proj` line: the projection the RUNNING pattern is to be shown
+    /// under, right now (Gitea #598). `Some(Some(mode))` installs an
+    /// override in the slot for the running pattern's OWN dimensionality,
+    /// `Some(None)` drops back to the `proj1d/2d/3d` defaults, `None` is
+    /// "the body said nothing about it".
+    ///
+    /// Deliberately NOT part of [`Layout`]: it is a property of what is
+    /// running, not of the rig, so it is never persisted, never in
+    /// [`Layout::to_wire`] and never `reboot_required`. It rides on this
+    /// endpoint because the host that owns the Layout is the host that owns
+    /// the engine — and because a separate route costs the tightest board in
+    /// the fleet more OTA slot than it has (docs/boards.md, Gitea #543).
+    pub proj_now: Option<Option<ProjectionMode>>,
 }
 
 /// Parse a `POST /api/layout` body against the current Layout.
@@ -483,6 +496,7 @@ pub fn parse(
     let mut map = None;
     let mut outs: Option<Vec<Output>> = None;
     let mut kind_seen = false;
+    let mut proj_now = None;
 
     for (i, raw) in body.lines().enumerate() {
         let line = i as u32 + 1;
@@ -608,7 +622,26 @@ pub fn parse(
                 };
                 next.proj.set(d, mode);
             }
-            _ => return Err(err("unknown line (want strip|matrix|map|out|proj1d|proj2d|proj3d)")),
+            // The RUNNING pattern's override (#598): ephemeral, so it goes
+            // to the engine and nowhere near the stored Layout. `default`
+            // (or a bare `proj`) clears it back to the defaults above.
+            "proj" => {
+                proj_now = Some(match it.next().unwrap_or("default") {
+                    "default" => None,
+                    // the same literal the proj1d/2d/3d arm uses, so the
+                    // linker merges it rather than adding a second copy
+                    t => Some(
+                        t.parse()
+                            .ok()
+                            .ok_or(err("expected one of index|x|y|z|xy|xz|yz"))?,
+                    ),
+                });
+            }
+            _ => {
+                return Err(err(
+                    "unknown line (want strip|matrix|map|out|proj|proj1d|proj2d|proj3d)",
+                ))
+            }
         }
     }
 
@@ -630,7 +663,7 @@ pub fn parse(
     }
 
     let reboot_required = cur.reboot_required(&next, lim.default_pin);
-    Ok(Edit { layout: next, pixels, map, reboot_required })
+    Ok(Edit { layout: next, pixels, map, reboot_required, proj_now })
 
 }
 fn parse_matrix<'a>(it: &mut impl Iterator<Item = &'a str>) -> Option<Matrix> {
@@ -1207,6 +1240,30 @@ mod tests {
             let e = parse(body, &cur, 60, &strip_limits()).unwrap_err();
             assert_eq!(e.line, line, "body {body:?}");
         }
+    }
+
+    #[test]
+    fn a_proj_line_is_the_running_pattern_s_override_and_is_not_stored() {
+        // Gitea #598: `proj` is ephemeral and `proj1d/2d/3d` are the stored
+        // defaults, so a body carrying both moves exactly one of each and the
+        // Layout that gets persisted never mentions the override.
+        let cur = strip_layout();
+        let e = parse("proj1d x\nproj y", &cur, 60, &strip_limits()).unwrap();
+        assert_eq!(e.layout.proj.proj1d, ProjectionMode::X, "the default moved");
+        assert_eq!(e.proj_now, Some(Some(ProjectionMode::Y)), "and the override");
+        assert!(!e.reboot_required);
+        assert!(!e.layout.to_wire(60, &proto_name).contains("\nproj y"));
+
+        // `default`, and a bare `proj`, mean "no override"
+        for body in ["proj default", "proj"] {
+            let e = parse(body, &cur, 60, &strip_limits()).unwrap();
+            assert_eq!(e.proj_now, Some(None), "body {body:?}");
+            assert_eq!(e.layout, cur, "body {body:?} stores nothing");
+        }
+        // absent = the body said nothing about it
+        assert_eq!(parse("proj1d y", &cur, 60, &strip_limits()).unwrap().proj_now, None);
+        // and an unknown token is a line error, like every other verb's
+        assert_eq!(parse("proj sideways", &cur, 60, &strip_limits()).unwrap_err().line, 1);
     }
 
     #[test]

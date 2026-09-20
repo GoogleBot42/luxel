@@ -127,9 +127,19 @@ Defaults: `proj1d=index proj2d=z proj3d=xy`.
 
 Where they live:
 
-- **Device default** — `/api/layout` (ticket A4, Gitea #465). Until that lands
-  the mirror (`luxel serve`) accepts them as extra tokens on `POST /api/map`
-  and reports them from `GET /api/map`; the firmware does not carry them yet.
+- **Device default** — `/api/layout`'s `proj1d/2d/3d` lines (ticket A4, Gitea
+  #465), persisted, applied to the running engine on the next frame.
+- **Running-pattern override** — `POST /api/layout` `proj <mode|default>`
+  (Gitea #598), on the firmware and the mirror. It installs the mode in the
+  slot for the RUNNING pattern's dimensionality and is **not persisted**: the
+  next activation, playlist item or `/api/code` push starts from the defaults
+  again. That is what a console's editor override is — a property of the
+  working copy, not of the rig — so the editor posts it on every pick and
+  re-posts it after every live code push, because a push rebuilds the
+  device's engine from the defaults. Before #598 an editor override reached
+  the local preview engine only, which is what #538's "the per pattern
+  override isn't applied live" was.
+
 - **Per-item override** — saved beside a playlist item's or a scene layer's
   control values. A projection is "how this pattern is presented on this
   Layout", so it belongs with the values, never in the pattern source. The

@@ -2732,3 +2732,36 @@ the gate measures is seconds against a counter that wraps every 49 days, so
 12,288 B budget, `render_task` frame unchanged at 5,488 B, `.stack` 27,180 B
 and 24,828 B. The c6 hosted image — the binding constraint on everything
 Phase A adds (#543) — is byte-identical either side.
+
+2026-09-20, **#598's live per-pattern projection — the shape that cost 192 B
+instead of 1,424.** The console's editor override had no wire at all, so it
+needed one. Three shapes, measured as credless flake `luxel-fw-ota.bin`
+builds of `origin/master` `cb7002f` against the branch, same machine:
+
+| shape | c6-devkit + `hosted-ui` | margin |
+|---|---:|---:|
+| `POST /api/projection`, `async fn` + `MSG_QUEUE.send` | +1,424 | 2.88 % — FAILS |
+| the same, sync + `try_send` (no future, no drop glue) | +2,000 | 2.83 % — FAILS |
+| a `proj` line on `POST /api/layout` → `Msg::Projection` | +576 | 2.96 % — FAILS |
+| **a `proj` line → the render task's existing projection flag** | **+192** | **3.00 %** |
+
+The lesson is the same one #538 and #550 recorded, one level up: at this size
+a NEW ROUTE is the expensive thing, not the logic behind it. A route arm that
+awaits costs a whole future type, its drop glue and a state-machine variant
+in the dispatcher — ~600 B before the handler does anything — and making it
+synchronous was *worse*, because `Channel::try_send` is not on the path
+`send` already linked. Merging the new `proj` verb into the existing
+`proj1d|proj2d|proj3d` match arm also cost more than leaving it separate
+(+368 vs +192): the shared arm has to branch on `verb` twice.
+
+The winner adds no route and no message. `Msg::Projection(u8)` is **gone**;
+the playlist's `P` and the new `proj` line both write one `AtomicU8`
+(`layout::PROJ_PENDING`) that the render task already consulted every frame
+as `PROJ_DIRTY`, so the whole feature is a parse arm, a widened flag and a
+`match` where a `bool` used to be — and it removed a `MSG_QUEUE.send().await`
+from the playlist task on the way in. `.stack` unchanged (`tools/stack-check.sh`:
+pb-v3 24,852 B, pb-v3 + `small-chip` 26,468 B, both as on master).
+
+The c6 hosted image is now **1,017,104 B, 31,472 B / 3.00 % of slot — 14 B
+above the floor**, where master had 206 B. Nothing else can land on that
+variant until Gitea #543 buys room back; measure before you write, not after.

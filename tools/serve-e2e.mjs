@@ -345,9 +345,12 @@ check(
   `status=${rootRes.status}`,
 );
 // `/` serves the built playground when web/dist exists, else the minimal
-// fallback page — either is a valid mirror state, so accept both.
-const builtUi = /(?:src|href)=["']\.?\/assets\//.test(rootBody);
+// fallback page — either is a valid mirror state, so accept both. Since
+// Gitea #592 the built page INLINES its script and stylesheet, so an
+// `/assets/` reference no longer identifies it; the fallback names itself,
+// so "not the fallback, and it is the app's page" is the honest probe.
 const minimalFallback = /isn['’]t installed/.test(rootBody);
+const builtUi = !minimalFallback && /<title>Luxel<\/title>/.test(rootBody);
 check(
   "GET /: playground when built, else minimal fallback",
   builtUi || minimalFallback,
@@ -433,6 +436,70 @@ check(
   "layout: a panel board refuses `strip`",
   (await postLayout(panelBase, "strip 60")).line === 1,
 );
+
+// ---- projection applies LIVE, on all three paths (Gitea #538/#598) ----
+//
+// The assertion is the FRAME, not the echo: a 1D pattern whose pixel is a
+// pure function of `index` draws a hue ramp, so on a 64x64 panel
+//   along x  → every row identical (the strip runs along x, replicated down y)
+//   along y  → every column identical
+//   by index → neither.
+// Nothing here reboots or re-activates anything: each POST has to land on
+// the engine that is already running.
+async function projShape(b) {
+  const buf = Buffer.from(await (await fetch(`${b}/api/pixels`)).arrayBuffer());
+  const px = [];
+  for (let i = 0; i < buf.length / 3; i++) px.push(`${buf[i * 3]},${buf[i * 3 + 1]},${buf[i * 3 + 2]}`);
+  const row = (y) => px.slice(y * 64, (y + 1) * 64).join("|");
+  const col = (x) => Array.from({ length: 64 }, (_, y) => px[y * 64 + x]).join("|");
+  const rows = row(0) === row(1) && row(0) === row(63);
+  const cols = col(0) === col(1) && col(0) === col(63);
+  return rows && !cols ? "along-x" : cols && !rows ? "along-y" : "index";
+}
+const RAMP_1D = "export function render(index) { hsv(index / pixelCount, 1, 1) }";
+await fetch(`${panelBase}/api/code`, { method: "POST", body: await lxpBody("", RAMP_1D) });
+await sleep(400);
+check("projection: a 1D pattern starts on the default (by index)", (await projShape(panelBase)) === "index");
+
+// (a) the DEVICE DEFAULT — `POST /api/layout proj1d …`, the Settings cards
+for (const [mode, want] of [["x", "along-x"], ["y", "along-y"], ["index", "index"]]) {
+  const r = await postLayout(panelBase, `proj1d ${mode}`);
+  await sleep(400);
+  const got = await projShape(panelBase);
+  check(`projection: \`proj1d ${mode}\` applies live, no reboot`, r.ok === true && r.reboot_required === false && got === want, got);
+}
+
+// (b) the PER-PATTERN OVERRIDE — a `proj` line, the editor's row.
+// It outranks the device default and is NOT persisted into the Layout.
+await postLayout(panelBase, "proj1d x");
+await sleep(400);
+const pj = await postLayout(panelBase, "proj y");
+await sleep(400);
+const ovr = await projShape(panelBase);
+const layoutAfter = await (await fetch(`${panelBase}/api/layout`)).json();
+check(
+  "projection: an override outranks the device default, live",
+  pj.ok === true && pj.reboot_required === false && ovr === "along-y" && layoutAfter.proj.proj1d === "x",
+  `${ovr} / layout ${layoutAfter.proj.proj1d}`,
+);
+const pjd = await postLayout(panelBase, "proj default");
+await sleep(400);
+check(
+  "projection: `proj default` clears the override back to the device's",
+  pjd.ok === true && (await projShape(panelBase)) === "along-x",
+);
+const pjBad = await postLayout(panelBase, "proj sideways");
+check("projection: an unknown token is refused and changes nothing", pjBad.ok === false && (await projShape(panelBase)) === "along-x", JSON.stringify(pjBad));
+
+// (c) the PLAYLIST ITEM's `P` — applied when the item activates, on top of
+// the device default the fresh engine starts from.
+const pid = (
+  await (await fetch(`${panelBase}/api/patterns`, { method: "POST", body: await lxpBody("Ramp 1D", RAMP_1D) })).json()
+).id;
+await fetch(`${panelBase}/api/playlist`, { method: "POST", body: `D 0\nI ${pid} -1\nP y\n` });
+await fetch(`${panelBase}/api/playlist/play`, { method: "POST", body: "0" });
+await sleep(600);
+check("projection: a playlist item's `P` is applied on activation", (await projShape(panelBase)) === "along-y");
 panel.kill();
 
 // ---- GET/POST /api/layout (Gitea #465) ----

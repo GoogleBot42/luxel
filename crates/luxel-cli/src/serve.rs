@@ -250,6 +250,12 @@ struct State {
     /// A mirror has no flash, so nothing here survives the process.
     layout: Mutex<luxel_core::layout::Layout>,
     map_dirty: AtomicBool,
+    /// The projection the render loop installs on the next frame — the twin
+    /// of the firmware's `layout::PROJ_PENDING` (Gitea #598). `0..=6` is a
+    /// [`ProjectionMode`] override for the RUNNING pattern, `PROJ_DEFAULTS`
+    /// the Layout's own triple, `PROJ_NONE` nothing pending. It is consumed
+    /// AFTER the map, which reinstalls the defaults.
+    proj_pending: AtomicU8,
     /// Network input (DDP/E1.31): assembled RGB frame + when it last moved.
     /// While packets flow the render loop shows this instead of the engine;
     /// LIVE_TIMEOUT after the last packet, the running pattern resumes.
@@ -1013,6 +1019,12 @@ fn apply_map(state: &State, engine: &mut Engine) {
 // `luxel_core::layout`, shared with the firmware; what follows is this
 // host's facts and the wiring into the state it already keeps.
 
+/// `State::proj_pending`: install the Layout's own defaults (no override).
+const PROJ_DEFAULTS: u8 = 0xFE;
+/// `State::proj_pending`: nothing pending. Neither sentinel is a
+/// `ProjectionMode` code (those are 0..=6), so `from_u8` tells them apart.
+const PROJ_NONE: u8 = 0xFF;
+
 /// The projection defaults the Layout currently holds.
 fn cur_projection(state: &State) -> Projection {
     state.layout.lock().unwrap().proj
@@ -1343,6 +1355,25 @@ fn render_loop(state: Arc<State>) {
             } else if let Ok(p) = luxel_core::bytecode::deserialize(&current_bc) {
                 // cleared → rebuild without a map
                 engine = Some(engine_now(&state, p, count()));
+            }
+        }
+
+        // …then the projection, because a map install re-derives the plan
+        // from the DEFAULTS and would otherwise drop an override (#598). An
+        // override goes into the slot for the running pattern's OWN
+        // dimensionality, so one token survives whatever is running.
+        let want_proj = state.proj_pending.swap(PROJ_NONE, Ordering::Relaxed);
+        if want_proj != PROJ_NONE {
+            geom_dirty = true;
+            if let Some(eng) = engine.as_mut() {
+                match ProjectionMode::from_u8(want_proj) {
+                    Some(mode) => {
+                        let mut p = eng.projection();
+                        p.set(eng.preferred_dims(), mode);
+                        eng.set_projection(p);
+                    }
+                    None => eng.set_projection(cur_projection(&state)),
+                }
             }
         }
 
@@ -2235,6 +2266,14 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
                     if let Some(n) = edit.pixels {
                         push(&state, Msg::Config(n));
                     }
+                    // `proj <mode>` — the RUNNING pattern's override (#598).
+                    // Live only, stored nowhere: the render loop installs it
+                    // on the next frame, and the next activation or code push
+                    // starts from the Layout's own defaults again.
+                    if let Some(o) = edit.proj_now {
+                        let code = o.map_or(PROJ_DEFAULTS, |m| m.as_u8());
+                        state.proj_pending.store(code, Ordering::Relaxed);
+                    }
                     // Output 0 IS the strip this host drives (#474 makes the
                     // rest real), so its protocol and colour order write
                     // through to the live settings the aliases expose.
@@ -2536,6 +2575,7 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         map_source: AtomicU8::new(0),
         layout: Mutex::new(board_default_layout(panel)),
         map_dirty: AtomicBool::new(false),
+        proj_pending: AtomicU8::new(PROJ_NONE),
         live_pixels: Mutex::new(Vec::new()),
         live_mark: Mutex::new(None),
         live_proto: AtomicU8::new(0),

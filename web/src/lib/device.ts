@@ -353,6 +353,28 @@ export class DeviceSession {
     await this.fetch("/api/control", { method: "POST", body });
   }
 
+  /**
+   * The RUNNING pattern's projection override (Gitea #598,
+   * docs/spec/projection.md §2) — the `proj` line on `/api/layout`. `null`
+   * clears it back to the device's own `proj1d/2d/3d` defaults.
+   *
+   * It is deliberately LIVE ONLY: the device stores nothing, so the next
+   * activation, playlist item or `/api/code` push starts from the defaults
+   * again. That matches what the override IS on this side — a property of
+   * the editor's working copy, not of the rig — which is also why it rides
+   * on the endpoint that owns the projection rather than getting a route of
+   * its own (the tightest board in the fleet has ~200 B of OTA slot to
+   * spare; docs/boards.md). The console re-posts it after every live code
+   * push (`Editor.devicePush`).
+   *
+   * False when the device rejected it — firmware older than #598 answers
+   * `{"ok":false,…,"line":1}` for the unknown line, so a caller can stay
+   * quiet rather than raising a device error.
+   */
+  async setProjection(mode: string | null): Promise<boolean> {
+    return (await this.setLayout(`proj ${mode ?? "default"}`)).ok === true;
+  }
+
   // ---- device pattern library (see serve.rs / server.rs contract) ----
 
   async patterns(): Promise<{ id: string; name: string }[]> {

@@ -30,7 +30,7 @@
 
 use alloc::string::String;
 use core::cell::RefCell;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicU8, Ordering};
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
@@ -44,9 +44,19 @@ use crate::patterns;
 type Shared<T> = BlockingMutex<CriticalSectionRawMutex, RefCell<T>>;
 
 static LAYOUT: Shared<Option<Layout>> = BlockingMutex::new(RefCell::new(None));
-/// Set when the projection triple changed; the render task installs it on
-/// the next frame (the map has its own flag in `devicemap`).
-static PROJ_DIRTY: AtomicBool = AtomicBool::new(false);
+/// The projection the render task is to install on the next frame — the ONE
+/// live-projection path on this device (Gitea #470/#598). `0..=6` is a
+/// [`ProjectionMode`] OVERRIDE for the running pattern (a playlist item's
+/// `P`, or a `proj` line on `POST /api/layout`); [`PROJ_DEFAULTS`] means the
+/// Layout's own `proj1d/2d/3d`; `PROJ_NONE` means nothing is pending. The map
+/// has its own flag in `devicemap`.
+static PROJ_PENDING: AtomicU8 = AtomicU8::new(PROJ_DEFAULTS);
+
+/// [`want_projection`]: install the Layout's own defaults (no override).
+pub const PROJ_DEFAULTS: u8 = 0xFE;
+/// Nothing pending. Not a [`ProjectionMode`] code (those are 0..=6), so
+/// `ProjectionMode::from_u8` tells all three cases apart on its own.
+const PROJ_NONE: u8 = 0xFF;
 
 /// The Layout a board with nothing stored comes up in: a HUB75 board IS its
 /// panel, a strip board is its strip — and either becomes `map` the moment
@@ -105,15 +115,23 @@ pub fn projection() -> Projection {
     LAYOUT.lock(|c| c.borrow().as_ref().map_or(Projection::DEFAULT, |l| l.proj))
 }
 
-/// Consume the "projection changed" flag (render task calls this each frame).
-/// load+store rather than `swap`: rv32imc has no atomic RMW, and the same
-/// reasoning as `devicemap::take_dirty` applies.
-pub fn take_proj_dirty() -> bool {
-    let was = PROJ_DIRTY.load(Ordering::Relaxed);
-    if was {
-        PROJ_DIRTY.store(false, Ordering::Relaxed);
+/// Ask the render task to install a projection on the next frame: a
+/// [`ProjectionMode`] code for an override, or [`PROJ_DEFAULTS`] for the
+/// Layout's own triple.
+pub fn want_projection(code: u8) {
+    PROJ_PENDING.store(code, Ordering::Relaxed);
+}
+
+/// Consume that request (the render task calls this each frame). load+store
+/// rather than `swap`: rv32imc has no atomic RMW, and the same reasoning as
+/// `devicemap::take_dirty` applies.
+pub fn take_projection() -> Option<u8> {
+    let want = PROJ_PENDING.load(Ordering::Relaxed);
+    if want == PROJ_NONE {
+        return None;
     }
-    was
+    PROJ_PENDING.store(PROJ_NONE, Ordering::Relaxed);
+    Some(want)
 }
 
 /// Note that the map changed OUTSIDE `/api/layout` — the `POST /api/map`
@@ -285,7 +303,6 @@ pub fn set_from_wire(body: &str) -> Result<Applied, String> {
             return Err(out);
         }
     };
-    let proj_changed = edit.layout.proj != cur.proj;
     // The first output IS the strip this board drives, so its protocol and
     // colour order write through to the live settings the aliases expose —
     // one source of truth, as the ticket requires. Its pin is persisted and
@@ -306,9 +323,16 @@ pub fn set_from_wire(body: &str) -> Result<Applied, String> {
             data_pin = Some(o.pin);
         }
     }
+    // A `proj` line is the RUNNING pattern's override and outranks the
+    // defaults in the same body; without one, a changed default is itself
+    // what the next frame installs (#598).
+    let proj_now = edit.proj_now;
+    let defaults_changed = edit.layout.proj != cur.proj;
     let persisted = store(edit.layout, edit.pixels.unwrap_or(pixels_now));
-    if proj_changed {
-        PROJ_DIRTY.store(true, Ordering::Relaxed);
+    match proj_now {
+        Some(o) => want_projection(o.map_or(PROJ_DEFAULTS, |m| m.as_u8())),
+        None if defaults_changed => want_projection(PROJ_DEFAULTS),
+        None => {}
     }
     Ok(Applied {
         pixels: edit.pixels,
@@ -351,5 +375,5 @@ pub fn init() {
     }
     println!("layout: {}", l.kind.as_str());
     LAYOUT.lock(|c| *c.borrow_mut() = Some(l));
-    PROJ_DIRTY.store(true, Ordering::Relaxed);
+    want_projection(PROJ_DEFAULTS);
 }
