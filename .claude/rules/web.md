@@ -53,6 +53,14 @@ paths:
   Not every multiple of 100 works: Chromium refuses to navigate to its
   blocked ports, so `E2E_PORT=6000` dies with `net::ERR_UNSAFE_PORT` before a
   single check runs (6000 is X11). Move to the next block.
+  **Borrowing a block that is not yours fails SILENTLY, and the failure looks
+  like your own regression.** The harnesses spawn `vite preview --strictPort`
+  with `stdio: "ignore"`, so when a sibling worktree already owns the port the
+  new preview exits unheard and the browser happily loads THEIR `dist/` — a
+  screenshot run then shows the old UI on a tree that builds the new one. Stay
+  in the block your task assigned you, and if a run's output disagrees with a
+  green e2e, check `ss -ltnp | grep <port>` and whose worktree that `vite
+  preview` argv names before debugging the code (2026-09-19, #538).
 - **The route is in the URL fragment** since #538 (`web/src/lib/router.ts`),
   which changes what "reload" means in a harness: `page.goto(url)` where the
   page is ALREADY on that URL is a same-document navigation — the app never
