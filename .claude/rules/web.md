@@ -97,6 +97,17 @@ paths:
   and changes NOTHING rather than throwing. Pick harness zones from the
   list the browser actually returns (#538, 2026-09-19).
 
+- **An e2e harness ABORTS on a stale selector; it does not just fail.** The
+  `check()` helper collects failures, but a bare `page.click` / `page.$eval` /
+  `elementHandle.click()` on something the UI no longer renders throws, and
+  the run dies there — so `node tools/device-e2e.mjs | grep FAIL` can print two
+  failures and hide that two thirds of the suite never executed. A run is only
+  a verdict when its TAIL says `all device-mode checks passed` or `N FAILURES`;
+  anything else is an abort, and the stack trace names the line. This bites
+  hardest after an engine/firmware change removes an affordance the web
+  harness still reaches for (#545 → #547 did exactly this: two stale
+  projection assertions threw and took the playlist, settings and capacity
+  phases with them, on master, for everyone).
 - In e2e scripts, write injected pattern bodies on one line — CodeMirror
   auto-closes `{`, so a trailing `}` on its own line doubles up and the
   compile silently breaks.
