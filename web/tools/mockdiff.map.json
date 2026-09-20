@@ -40,7 +40,7 @@
         },
         {
           "name": "Raindrops 2D",
-          "source": "export function render2D(index, x, y) {\n  var v = wave(y + time(.1))\n  hsv(.58, .7, v * v)\n}\n"
+          "source": "export function sliderSpeed(v) {\n  speed = v\n}\nvar speed = .1\nexport function render2D(index, x, y) {\n  var v = wave(y + time(speed))\n  hsv(.58, .7, v * v)\n}\n"
         },
         {
           "name": "Sunset Fade",
@@ -57,15 +57,16 @@
       ],
       "brightness": 3,
       "tzMinutes": -360,
-      "defaultSec": 8,
+      "defaultSec": 900,
       "crossfadeMs": 500,
       "playlist": [
-        "Sunset Fade|900",
-        "Raindrops 2D|900",
-        "Blinky Eyes 2D|900",
-        "Warm Sparkle|900"
+        "Sunset Fade",
+        "Raindrops 2D|15",
+        "Blinky Eyes 2D",
+        "Warm Sparkle"
       ],
-      "play": true
+      "play": true,
+      "why": "mockup S4's playlist: three controls on the playing item (`3 values ▴` over Hue · Speed · Sparkle), one on the row below it with the accent `15 s` override. The PLAYING item's duration has to be long — the panel mirror is shared by every frame of a run and the playing row (and S1's playing tile) must stay the same one throughout — and it is long by DEFAULT rather than by override, because an overridden playing item would wear the accent chip S4 does not draw on it."
     },
     "strip": {
       "patterns": [
@@ -2975,7 +2976,7 @@
             "sleep": 2500
           },
           {
-            "click": "[data-role=\"playlist-item\"]:not(.playing) [data-role=\"pl-values-toggle\"]"
+            "click": "[data-role=\"playlist-item\"].playing [data-role=\"pl-values-toggle\"]"
           },
           {
             "sleep": 900
@@ -3055,12 +3056,8 @@
         {
           "id": "prog-fill",
           "mock": ".prog i",
-          "app": "[data-role=\"pl-progress\"]",
-          "props": [
-            "background-color",
-            "height"
-          ],
-          "note": "mock fill is var(--ok); the app paints it as a gradient on the track itself"
+          "app": "[data-role=\"pl-progress\"] i",
+          "note": "S4 `.prog i`: the fill is a real element inside the 3px track"
         },
         {
           "id": "dur-label",
@@ -3191,7 +3188,30 @@
           "note": "mock: padding 2px 12px 12px, margin -4px 0 8px, border w/o top, radius 0 0 8px 8px, rgba(0,0,0,.2)",
           "noBoxH": true
         }
-      ]
+      ],
+      "allow": [
+        {
+          "element": "np-time",
+          "property": "text",
+          "why": "the mock frame is a still, frozen at `0:05 / 0:08`; the app's readout is a live clock. Its FORM (mono 11.5px dim, `m:ss / m:ss`) is compared"
+        },
+        {
+          "element": "prog-fill",
+          "property": "box width",
+          "why": "same still: the mock's fill is pinned at 62%. Everything else about it — a real `--ok` element inside the 3px track — is compared"
+        },
+        {
+          "element": "plrow-n",
+          "property": "text",
+          "why": "the mock's second row is `Blue Comet`; the panel mirror's five patterns are fixed by mock S1 (`On device 5`, five named tiles) and none of them is it"
+        },
+        {
+          "element": "plfoot",
+          "property": "text",
+          "why": "the loop total counts the playing item's duration, which the seed has to keep long so the playing row is the same one for a whole run; the FORM (`N items · loop ≈ <duration>`) is compared"
+        }
+      ],
+      "replay": true
     },
     "S4b": {
       "title": "Playlist — mobile 390 px",
@@ -3276,7 +3296,15 @@
           "note": "mock: padding 0 12px 16px",
           "noBox": true
         }
-      ]
+      ],
+      "allow": [
+        {
+          "element": "plfoot",
+          "property": "text",
+          "why": "as S4: the loop total counts the deliberately long playing-item duration; the form is compared"
+        }
+      ],
+      "replay": true
     },
     "S4menu": {
       "title": "Playlist — the ⋯ menu (mock frame S2's .menu)",
@@ -3316,6 +3344,23 @@
           "text": true,
           "noBox": true
         }
+      ],
+      "allow": [
+        {
+          "element": "menu",
+          "property": "box height",
+          "why": "the compared primitive is mock S2's EDITOR menu (six verbs and two rules); S4's ⋯ holds one — `Clear playlist` (mock S4 prose)"
+        },
+        {
+          "element": "mi-del",
+          "property": "text",
+          "why": "same borrowing: S2's destructive verb is `Delete`, S4's is `Clear playlist`"
+        },
+        {
+          "element": "menu",
+          "property": "position",
+          "why": "Jeremy 2026-09-19 — dropdowns must not be clipped by a scrolling parent and must dodge every viewport edge, so Popover places `fixed` off the anchor's viewport rect; the mock draws an inert `absolute` menu"
+        }
       ]
     },
     "S4picker": {
@@ -3349,7 +3394,7 @@
         {
           "element": "panel",
           "property": "width",
-          "why": "the picker is a 520px modal; the mock's .pop is a 296px popover — only the chrome (radius/border/shadow/background) is comparable"
+          "why": "the picker is a 520px modal over a 300-pattern list; the mock's .pop is a 296px popover — only the chrome (radius/border/shadow/background) is comparable"
         },
         {
           "element": "panel",
@@ -3385,6 +3430,30 @@
           "element": "panel",
           "property": "padding-left",
           "why": "same"
+        },
+        {
+          "element": "row",
+          "property": "box width",
+          "why": "a row of the 520px modal, not of the 296px popover"
+        },
+        {
+          "element": "row",
+          "property": "box height",
+          "why": "the picker's rows carry the device-shaped live thumbnail the playlist rows and tiles use; the compared primitive is a text-only radio row"
+        },
+        {
+          "element": "search",
+          "property": "box width",
+          "why": "the borrowed primitive is a field in a 1200px scene inspector; the picker's search fills the modal"
+        },
+        {
+          "element": "section-label",
+          "property": "text",
+          "why": "no mock frame has a picker section; the compared `.slabel` is Settings' `Device`"
+        },
+        {
+          "element": "reading order",
+          "why": "the picker has no mock frame: its four elements are borrowed from three different mock screens, whose page order is not the picker's"
         }
       ],
       "elements": [
@@ -3400,19 +3469,20 @@
           "mock": ".pop .pr:not(.on)",
           "app": "[data-role=\"picker-item\"]",
           "hover": true,
-          "note": "mock .pr: padding 8px 9px, radius 6, 13px, transparent until hover"
+          "note": "mock `.pop .pr`: padding 8px 9px, radius 6, 13px, gap 9, no border, transparent until hover"
         },
         {
           "id": "search",
-          "mock": ".pop .inp.xs",
+          "mock": "#S7 .irow .inp",
           "app": "[data-role=\"picker-search\"]",
-          "focus": true
+          "focus": true,
+          "note": "no mock analogue; the nearest primitive is a plain 32px `.inp` text field (the mock's own `.pop .inp.xs` is a 52px mono NUMBER field)"
         },
         {
           "id": "section-label",
-          "mock": ".popfoot",
+          "mock": "#S3 .secthead .slabel",
           "app": "[data-role=\"picker-section-library\"]",
-          "note": "no mock analogue; the .popfoot is the nearest dim explanatory line",
+          "note": "the app's section name IS the mock's `.slabel`; the mock has no picker to draw one in",
           "noBox": true
         }
       ]
@@ -3945,7 +4015,8 @@
           {
             "sleep": 1500
           }
-        ]
+        ],
+        "replay": true
       },
       {
         "name": "Playlist · values open",
@@ -3963,7 +4034,8 @@
           {
             "sleep": 800
           }
-        ]
+        ],
+        "replay": true
       },
       {
         "name": "Settings",

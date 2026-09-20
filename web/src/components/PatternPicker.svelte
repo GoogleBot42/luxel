@@ -236,33 +236,35 @@
     <div class="body">
       {#each sections as section (section.kind)}
         {#if section.items.length > 0}
-          <div class="slabel section-label" data-role={`picker-section-${section.kind}`}>
-            {section.label}
+          <div class="section">
+            <div class="slabel" data-role={`picker-section-${section.kind}`}>
+              {section.label}
+            </div>
+            <ul class="list">
+              {#each section.items as p (p.id)}
+                <li>
+                  <button
+                    class="item"
+                    data-role="picker-item"
+                    data-kind={section.kind}
+                    data-id={p.id}
+                    disabled={busy !== ""}
+                    data-reason={busy === "" ? undefined : "a pattern is being saved to the device"}
+                    on:click={() => choose(p.id, section.kind, p.name || p.id, p.source)}
+                  >
+                    {#if luxel}<PatternThumb {luxel} source={p.source} />{/if}
+                    <span class="name">{p.name || p.id}</span>
+                    {#if section.kind === "library"}<span class="tag">saves to device</span>{/if}
+                  </button>
+                </li>
+              {/each}
+            </ul>
+            {#if section.more > 0}
+              <p class="line dim" data-role={`picker-more-${section.kind}`}>
+                + {section.more} more — narrow the search to see them
+              </p>
+            {/if}
           </div>
-          <ul class="list">
-            {#each section.items as p (p.id)}
-              <li>
-                <button
-                  class="item"
-                  data-role="picker-item"
-                  data-kind={section.kind}
-                  data-id={p.id}
-                  disabled={busy !== ""}
-                  data-reason={busy === "" ? undefined : "a pattern is being saved to the device"}
-                  on:click={() => choose(p.id, section.kind, p.name || p.id, p.source)}
-                >
-                  {#if luxel}<PatternThumb {luxel} source={p.source} />{/if}
-                  <span class="name">{p.name || p.id}</span>
-                  {#if section.kind === "library"}<span class="tag">saves to device</span>{/if}
-                </button>
-              </li>
-            {/each}
-          </ul>
-          {#if section.more > 0}
-            <p class="line dim" data-role={`picker-more-${section.kind}`}>
-              + {section.more} more — narrow the search to see them
-            </p>
-          {/if}
         {/if}
       {/each}
       {#if libraryLoading && library.length === 0}
@@ -289,6 +291,10 @@
     z-index: 40;
   }
 
+  /* the picker has no mock frame of its own; it wears the `.pop` family's
+     chrome (mockups `.pop`: --bg-panel on a 1px --border, radius 8, the
+     0 16px 40px/.7 shadow) at the width a 300-pattern list needs. A BLOCK,
+     like every `.pop`: the scrolling is the list's, not the panel's. */
   .panel {
     position: fixed;
     z-index: 41;
@@ -296,21 +302,18 @@
     left: 50%;
     transform: translateX(-50%);
     width: min(520px, calc(100vw - 24px));
-    max-height: 76vh;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
     padding: 14px;
     background: var(--bg-panel);
     border: 1px solid var(--border);
-    border-radius: 10px;
-    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+    border-radius: 8px;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.7);
   }
 
   .head {
     display: flex;
     align-items: center;
     gap: 8px;
+    margin-bottom: 10px;
   }
 
   .title {
@@ -322,47 +325,53 @@
   }
 
   .search {
+    display: block;
     width: 100%;
   }
 
   .body {
+    margin-top: 10px;
+    max-height: 56vh;
     overflow-y: auto;
-    min-height: 0;
   }
 
-  .section-label {
-    margin: 8px 0 6px;
+  /* the label itself is a bare `.slabel` (the mock's primitive, no margins
+     of its own) — the SECTION spaces itself from the one above */
+  .section {
+    margin-top: 8px;
   }
 
-  .section-label:first-child {
+  .section:first-child {
     margin-top: 0;
   }
 
   .list {
     list-style: none;
-    margin: 0;
+    margin: 6px 0 0;
     padding: 0;
     display: flex;
     flex-direction: column;
     gap: 4px;
   }
 
+  /* mockups `.pop .pr`: 8px 9px in a 6px radius, 13px, no border at all,
+     transparent until it is hovered. The row is taller than a `.pr` because
+     it carries the device-shaped live thumbnail — that is the point of it. */
   .item {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 9px;
     width: 100%;
-    /* thumb-sized target on a phone (D9) */
-    min-height: 48px;
-    padding: 6px 8px;
+    padding: 8px 9px;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
     text-align: left;
     background: transparent;
-    border-color: transparent;
   }
 
   .item:hover {
-    background: var(--bg-inset);
-    border-color: var(--accent);
+    background: rgba(255, 255, 255, 0.04);
   }
 
   .item[disabled] {
@@ -387,7 +396,7 @@
 
   .line {
     font-size: 12px;
-    margin: 0;
+    margin: 10px 0 0;
   }
 
   .dim {
@@ -407,8 +416,11 @@
       left: 0;
       transform: none;
       width: 100vw;
-      max-height: 82vh;
       border-radius: 12px 12px 0 0;
+    }
+
+    .body {
+      max-height: 62vh;
     }
   }
 </style>

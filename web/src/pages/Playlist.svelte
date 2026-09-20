@@ -410,27 +410,37 @@
         <b data-role="pl-now-name">{nowItem ? nowItem.name || nowItem.id : "Nothing queued"}</b>
         {#if nowSec > 0}<span class="t">{clock(elapsed)} / {clock(nowSec)}</span>{/if}
       </span>
-      <!-- the progress bar IS the seek control (S4's `.prog`, 3px, --ok) -->
+      <!-- the progress bar IS the seek control (S4's `.prog`: a 3px track with
+           an `--ok` fill inside it). The bar PAINTS at the mock's 3px; the
+           grab area is the wrapper's ::after overlay, 20px tall, so the
+           transport keeps the height S4 draws. -->
       <span
-        class="prog"
+        class="progwrap"
         class:seekable
-        bind:this={seekEl}
-        data-role="pl-progress"
-        role="slider"
-        tabindex={seekable ? 0 : -1}
-        aria-label="seek within this item"
-        aria-valuemin={0}
-        aria-valuemax={Math.round(nowSec)}
-        aria-valuenow={Math.round(elapsed)}
-        aria-valuetext="{clock(elapsed)} of {clock(nowSec)}"
-        title="drag to a time in this item — the device restarts the item there"
-        style="--p:{shown * 100}%"
         on:pointerdown={onSeekDown}
         on:pointermove={onSeekMove}
         on:pointerup={(e) => void onSeekUp(e)}
         on:pointercancel={(e) => void onSeekUp(e)}
-        on:keydown={onSeekKey}
-      ></span>
+        role="presentation"
+      >
+        <span
+          class="prog"
+          class:seekable
+          bind:this={seekEl}
+          data-role="pl-progress"
+          role="slider"
+          tabindex={seekable ? 0 : -1}
+          aria-label="seek within this item"
+          aria-valuemin={0}
+          aria-valuemax={Math.round(nowSec)}
+          aria-valuenow={Math.round(elapsed)}
+          aria-valuetext="{clock(elapsed)} of {clock(nowSec)}"
+          title="drag to a time in this item — the device restarts the item there"
+          on:keydown={onSeekKey}
+        >
+          <i class="fil" style="width:{shown * 100}%"></i>
+        </span>
+      </span>
     </span>
 
     <span class="spacer"></span>
@@ -537,14 +547,15 @@
       <button class="btn quiet add" data-role="pl-add" on:click={() => (pickerOpen = true)}
         >+ Add</button
       >
-      {#if $playlist.items.length > 0}
-        <p class="foot" data-role="pl-total">
-          {$playlist.items.length} item{$playlist.items.length === 1 ? "" : "s"} · loop ≈ {fmtDuration(
-            playlistTotalSec,
-          )}{playlistHasManual ? " + manual stops" : ""}
-        </p>
-      {/if}
     </div>
+    <!-- S4 `.plfoot` — a sibling of the list, with its own page padding -->
+    {#if $playlist.items.length > 0}
+      <p class="foot" data-role="pl-total">
+        {$playlist.items.length} item{$playlist.items.length === 1 ? "" : "s"} · loop ≈ {fmtDuration(
+          playlistTotalSec,
+        )}{playlistHasManual ? " + manual stops" : ""}
+      </p>
+    {/if}
   {/if}
 
   <PatternPicker
@@ -617,12 +628,10 @@
     margin-left: 8px;
   }
 
-  /* S4 `.nowplaying` — always mounted, so Pause/Play never moves anything */
+  /* S4 `.nowplaying` — a plain block (it is a flex ITEM of the transport, so
+     it is blockified), always mounted, so Pause/Play never moves anything */
   .nowplaying {
-    display: flex;
-    flex-direction: column;
     min-width: 230px;
-    max-width: 320px;
     margin-left: 8px;
   }
 
@@ -630,52 +639,62 @@
     opacity: 0.55;
   }
 
+  /* S4 `.nowplaying .np1` — one line: a bold name and a mono clock beside it */
   .np1 {
-    display: flex;
-    align-items: baseline;
+    display: block;
     font-size: 13px;
-    min-width: 0;
   }
 
   .np1 b {
     font-weight: 600;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .np1 .t {
-    flex: none;
     margin-left: 8px;
     font-family: var(--mono);
     font-size: 11.5px;
     color: var(--text-dim);
   }
 
-  /* S4 `.prog` + `.prog i` — and it is the seek control.
-     A grabbable bar is bigger than 3px, so the hit area is padded while the
-     PAINT is not (`background-clip: content-box` keeps the 3px line the mock
-     draws). The box is unconditional — only the grabbing is gated — so the
-     transport is exactly as tall stopped as playing. */
+  /* a grab area bigger than the 3px the mock paints, without changing what is
+     painted or how tall the transport is: the overlay is the target */
+  .progwrap {
+    display: block;
+    position: relative;
+  }
+
+  .progwrap::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: -6px;
+    bottom: -11px;
+  }
+
+  /* S4 `.prog` + `.prog i` */
   .prog {
     display: block;
     margin-top: 5px;
-    box-sizing: content-box;
-    padding: 7px 0;
     height: 3px;
     border-radius: 2px;
     background: #272c35;
-    background-image: linear-gradient(var(--ok), var(--ok));
-    background-repeat: no-repeat;
-    background-size: var(--p) 100%;
-    background-clip: content-box;
-    background-origin: content-box;
-    transition: background-size 0.4s linear;
+    overflow: hidden;
+  }
+
+  .fil {
+    display: block;
+    height: 100%;
+    background: var(--ok);
+    transition: width 0.4s linear;
   }
 
   .prog.seekable {
-    cursor: pointer;
     touch-action: none;
+  }
+
+  .progwrap.seekable {
+    cursor: pointer;
   }
 
   .prog.seekable:focus-visible {
@@ -686,6 +705,10 @@
   .overflow {
     position: relative;
     display: inline-flex;
+  }
+
+  /* S4 draws the ⋯ with `margin-left:4px` on the BUTTON */
+  .overflow :global(.btn) {
     margin-left: 4px;
   }
 
@@ -707,8 +730,8 @@
 
   /* S4 `.plfoot` */
   .foot {
-    padding: 0 0 2px;
-    margin: 18px 0 0;
+    margin: 0;
+    padding: 0 20px 22px;
     font: 12px/1 var(--mono);
     color: var(--text-dim);
   }
@@ -736,9 +759,8 @@
 
     .nowplaying {
       order: 2;
-      flex-basis: 100%;
+      width: 100%;
       min-width: 0;
-      max-width: none;
       margin-left: 0;
     }
 
@@ -759,9 +781,8 @@
       padding: 12px;
     }
 
-    /* a touch target, on the shared button primitive (app.css) */
-    .transport :global(.btn) {
-      min-height: 36px;
+    .foot {
+      padding: 0 12px 16px;
     }
   }
 </style>

@@ -127,6 +127,21 @@
     dispatch("change");
   }
 
+  // ---- the values chip's label (S4 `3 values ▴` / S4b `3 ▴`) ----
+  //
+  // Built as ONE string per width rather than assembled from spans: the mock's
+  // `.chip` is a 5px-gap flex box whose content is a single text run, so every
+  // extra child element would add a gap the mock does not have and make the
+  // chip wider than it draws.
+  $: chipArrow = valuesOpen ? "▴" : "▾";
+  // a pattern with no controls still gets the chip when it has a projection to
+  // choose; "0 values" would be a lie about why
+  $: chipLabel =
+    params.length === 0
+      ? `Projection ${chipArrow}`
+      : `${params.length} ${params.length === 1 ? "value" : "values"} ${chipArrow}`;
+  $: chipLabelShort = params.length === 0 ? `Proj ${chipArrow}` : `${params.length} ${chipArrow}`;
+
   /** The handle's keyboard reorder — what the ↑/↓ mover buttons used to do. */
   function onHandleKey(e: KeyboardEvent): void {
     const dir = e.key === "ArrowUp" ? -1 : e.key === "ArrowDown" ? 1 : 0;
@@ -150,111 +165,114 @@
     dispatch("drop");
   }}
 >
-  <div class="head">
-    <!-- S4 `.hnd` — `⠿` normally, a green `▶` on the playing row. It is the
-         ONE reorder affordance: drag with a mouse, ↑/↓ with a keyboard. -->
-    <span
-      class="hnd"
-      class:ok={active}
-      data-role="pl-grip"
-      title="drag to reorder — or focus and press ↑/↓"
-      role="button"
-      tabindex="0"
-      aria-label="reorder this item"
-      draggable="true"
-      on:dragstart={() => dispatch("dragstart")}
-      on:keydown={onHandleKey}>{active ? "▶" : "⠿"}</span
-    >
-    {#if luxel && !missing}<PatternThumb {luxel} {source} proj={item.proj ?? null} />{/if}
-    <span class="who">
-      <span class="n" data-role="pl-name">
-        {item.name || item.id}{#if missing}<span class="miss"> (deleted)</span>{/if}
-      </span>
-      <span class="t">
-        {kindLabel}{#if projApplies && item.proj}<span class="ovr-note">· projected</span>{/if}
-        <!-- S4b folds the duration into this line; the chip beside it is
-             hidden at that width, so this stays the way to open it -->
-        <button
-          class="durline"
-          class:ovr={overridden}
-          data-role="pl-duration-inline"
-          aria-expanded={durOpen}
-          on:click={() => (durOpen = !durOpen)}>· {durationLabel}</button
-        >
-      </span>
+  <!-- S4 `.hnd` — `⠿` normally, a green `▶` on the playing row. It is the
+       ONE reorder affordance: drag with a mouse, ↑/↓ with a keyboard. -->
+  <span
+    class="hnd"
+    class:ok={active}
+    data-role="pl-grip"
+    title="drag to reorder — or focus and press ↑/↓"
+    role="button"
+    tabindex="0"
+    aria-label="reorder this item"
+    draggable="true"
+    on:dragstart={() => dispatch("dragstart")}
+    on:keydown={onHandleKey}>{active ? "▶" : "⠿"}</span
+  >
+  {#if luxel && !missing}<PatternThumb {luxel} {source} proj={item.proj ?? null} />{/if}
+  <span class="who">
+    <span class="n" data-role="pl-name">
+      {item.name || item.id}{#if missing}<span class="miss"> (deleted)</span>{/if}
     </span>
-    {#if item.invalid}
-      <span class="invalid" data-role="pl-invalid" title={item.invalid}>⚠ won't run</span>
-    {/if}
-    <button
-      class="chip dur"
-      class:ovr={overridden}
-      class:open={durOpen}
-      data-role="pl-duration"
-      title="how long this item plays"
-      aria-expanded={durOpen}
-      on:click={() => (durOpen = !durOpen)}>{durationLabel}</button
-    >
-    {#if params.length > 0 || projApplies}
+    <span class="t">
+      {kindLabel}{#if projApplies && item.proj}<span class="ovr-note">· projected</span>{/if}
+      <!-- S4b folds the duration into this line; the chip beside it is
+           hidden at that width, so this stays the way to open it. It PAINTS
+           as the mock's 11px type and TAPS at 24px: the height is real and
+           the negative block margin keeps it out of the line's own height. -->
       <button
-        class="chip"
-        class:open={valuesOpen}
-        class:ovr={item.proj !== undefined}
-        data-role="pl-values-toggle"
-        aria-expanded={valuesOpen}
-        on:click={() => (valuesOpen = !valuesOpen)}
+        class="durline"
+        class:ovr={overridden}
+        data-role="pl-duration-inline"
+        aria-expanded={durOpen}
+        aria-label="duration — {durationLabel}"
+        on:click={() => (durOpen = !durOpen)}>· {durationLabel}</button
       >
-        <!-- a pattern with no controls still gets the chip when it has a
-             projection to choose; "0 values" would be a lie about why -->
-        {#if params.length === 0}
-          Projection
-        {:else}
-          {params.length}<span class="vword">
-            {params.length === 1 ? "value" : "values"}</span
-          >
-        {/if}
-        {valuesOpen ? "▴" : "▾"}
-      </button>
-    {/if}
-    <button
-      class="btn icon quiet rm"
-      data-role="pl-remove"
-      title="remove"
-      aria-label="remove"
-      on:click={() => dispatch("remove")}>✕</button
-    >
-  </div>
-
-  {#if durOpen}
-    <div class="expand dur-edit" data-role="pl-duration-edit">
-      <label class="ovr-toggle" title="override the playlist default for this item">
-        <input
-          type="checkbox"
-          data-role="pl-override"
-          checked={overridden}
-          on:change={toggleOverride}
-        />
-        <span class="dim">custom duration</span>
-      </label>
-      {#if overridden}
-        <input
-          class="inp num xs"
-          data-role="pl-sec"
-          type="number"
-          min="0"
-          title="seconds (0 = manual)"
-          value={item.sec}
-          on:change={onSec}
-        />
-        <span class="dim">seconds (0 = wait for next)</span>
-      {:else}
-        <span class="dim">inherits the playlist default ({defaultSec || 0} s)</span>
-      {/if}
-    </div>
+    </span>
+  </span>
+  {#if item.invalid}
+    <span class="invalid" data-role="pl-invalid" title={item.invalid}>⚠ won't run</span>
   {/if}
+  <button
+    class="chip dur"
+    class:ovr={overridden}
+    class:open={durOpen}
+    data-role="pl-duration"
+    title="how long this item plays"
+    aria-expanded={durOpen}
+    on:click={() => (durOpen = !durOpen)}>{durationLabel}</button
+  >
+  {#if params.length > 0 || projApplies}
+    <button
+      class="chip"
+      class:open={valuesOpen}
+      class:ovr={item.proj !== undefined}
+      data-role="pl-values-toggle"
+      aria-expanded={valuesOpen}
+      on:click={() => (valuesOpen = !valuesOpen)}
+    >
+      <!-- ONE text run per width: S4's chip is `3 values ▴`, S4b's is `3 ▴`.
+           Two spans toggled by the media query rather than one span nested
+           inside the label, because `.chip` is a 5px-gap flex box and every
+           extra child would widen it past the mock's `.chip`. -->
+      <span class="lbl wide">{chipLabel}</span>
+      <span class="lbl narrow">{chipLabelShort}</span>
+    </button>
+  {/if}
+  <button
+    class="btn icon quiet rm"
+    data-role="pl-remove"
+    title="remove"
+    aria-label="remove"
+    on:click={() => dispatch("remove")}>✕</button
+  >
+</li>
 
-  {#if valuesOpen}
-    <div class="expand" class:bare={params.length === 0} data-role="pl-values">
+<!-- S4 `.plvals`: a band of its own UNDER the row, not a block inside it —
+     the row is the mock's flex line and nothing else lives in it. It stays an
+     `<li>` so the list holds only list items; `display:block` is what the mock
+     computes. ONE band for both chips (the mock only draws the values one), so
+     `pl-values` is the band's role whichever chip opened it. -->
+{#if durOpen || valuesOpen}
+  <li class="plvals" data-role="pl-values">
+    {#if durOpen}
+      <div class="dur-edit" data-role="pl-duration-edit">
+        <label class="ovr-toggle" title="override the playlist default for this item">
+          <input
+            type="checkbox"
+            data-role="pl-override"
+            checked={overridden}
+            on:change={toggleOverride}
+          />
+          <span class="dim">custom duration</span>
+        </label>
+        {#if overridden}
+          <input
+            class="inp num xs"
+            data-role="pl-sec"
+            type="number"
+            min="0"
+            title="seconds (0 = manual)"
+            value={item.sec}
+            on:change={onSec}
+          />
+          <span class="dim">seconds (0 = wait for next)</span>
+        {:else}
+          <span class="dim">inherits the playlist default ({defaultSec || 0} s)</span>
+        {/if}
+      </div>
+    {/if}
+    {#if valuesOpen}
       {#if params.length > 0}
         <Controls controls={params} values={item.controls} {readouts} {hints} on:set={onSet} />
       {/if}
@@ -266,13 +284,18 @@
         override={item.proj ?? null}
         on:set={onProj}
       />
-    </div>
-  {/if}
-</li>
+    {/if}
+  </li>
+{/if}
 
 <style>
-  /* S4 `.plrow` */
+  /* S4 `.plrow` — the ROW IS the flex line (handle · thumb · who · chips · ✕,
+     12px apart). Nothing else lives inside it: the opened values band is the
+     `.plvals` sibling below, exactly as the mock draws it. */
   .plrow {
+    display: flex;
+    align-items: center;
+    gap: 12px;
     padding: 10px 12px;
     margin-bottom: 8px;
     border: 1px solid var(--border);
@@ -296,14 +319,14 @@
     border-style: dashed;
   }
 
-  /* S4 `.hnd` */
+  /* S4 `.hnd` — no line-height of its own: the mock's handle is one line of
+     the inherited 1.45, which is what makes it 20px tall beside a 44px thumb */
   .hnd {
     flex: none;
     width: 14px;
     text-align: center;
     color: #555c6b;
     font-size: 14px;
-    line-height: 1;
     cursor: grab;
     user-select: none;
   }
@@ -340,39 +363,33 @@
     cursor: help;
   }
 
-  /* S4 row: handle · thumb · who · chips · ✕, 12px apart */
-  .head {
-    display: flex;
-    align-items: center;
-    gap: 12px;
+  /* S4 `.plrow canvas{flex:none}` — the thumbnail component owns its engine
+     and its default sizes, so the ROW states the size it wants */
+  .plrow :global(.thumb canvas) {
+    flex: none;
   }
 
-  /* S4 `.plrow canvas{width:44px;height:44px}` — the thumbnail component owns
-     its engine and its default sizes, so the ROW states the size it wants */
-  .head :global(.thumb canvas.sq) {
+  .plrow :global(.thumb canvas.sq) {
     width: 44px;
     height: 44px;
   }
 
-  .head :global(.thumb canvas.bar) {
+  .plrow :global(.thumb canvas.bar) {
     width: 66px;
     height: 16px;
   }
 
-  /* S4 `.who` */
+  /* S4 `.who` — a plain block, not a flex column: the name and the type line
+     are two block children of it */
   .who {
-    display: flex;
-    flex-direction: column;
     flex: 1;
     min-width: 0;
   }
 
   .n {
+    display: block;
     font-size: 13px;
     color: var(--text);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .t {
@@ -388,9 +405,14 @@
     color: var(--accent);
   }
 
-  /* the phone's duration affordance: plain text on the subtitle line (S4b) */
+  /* the phone's duration affordance: plain 11px type on the subtitle line
+     (S4b). 24px tall so it is a real tap target, with the extra height taken
+     back in margin so the subtitle line stays the 11px the mock draws. */
   .durline {
     display: none;
+    align-items: center;
+    height: 24px;
+    margin-block: -6.5px;
     padding: 0;
     border: none;
     background: transparent;
@@ -402,12 +424,17 @@
     color: var(--accent);
   }
 
-  /* S4 `.chip` — 26px, 6px radius, mono; NOT a pill */
+  .durline:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  /* S4 `.chip` — 26px, 6px radius, mono; NOT a pill. No `flex:none`: the
+     mock's chips are ordinary flex items that may shrink. */
   .chip {
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    flex: none;
     height: 26px;
     padding: 0 9px;
     border: 1px solid var(--border);
@@ -416,6 +443,11 @@
     color: var(--text-dim);
     font: 12px/1 var(--mono);
     white-space: nowrap;
+  }
+
+  /* one label per width — see the markup */
+  .lbl.narrow {
+    display: none;
   }
 
   .chip.open {
@@ -431,30 +463,29 @@
     border-color: rgba(232, 163, 61, 0.45);
   }
 
-  /* S4 `.btn.icon.quiet` — the ✕ has no outline until it is hovered */
-  .rm {
-    flex: none;
-  }
-
+  /* S4 `.btn.icon.quiet` — transparent fill, the shared border kept */
   .rm:hover {
     color: var(--error);
   }
 
-  /* S4 `.plvals`: the opened panel is a darker band filling the bottom of the
-     row, not an indented block inside it */
-  .expand {
-    margin: 10px -12px -10px;
+  /* S4 `.plvals`: a band UNDER the row — same width, tucked up under its
+     bottom edge, no top border, bottom corners only */
+  .plvals {
+    display: block;
     padding: 2px 12px 12px;
-    border-top: 1px solid var(--border);
-    border-radius: 0 0 7px 7px;
+    margin: -4px 0 8px;
+    border: 1px solid var(--border);
+    border-top: 0;
+    border-radius: 0 0 8px 8px;
     background: rgba(0, 0, 0, 0.2);
   }
 
-  /* a pattern with no controls opens straight onto ProjectionRow, which
-     draws its own hairline — two of them 10 px apart is the tell */
-  .expand.bare {
-    padding-top: 0;
-    border-top: none;
+  /* mockups `.plvals .ctlrow`: the band is narrower than the editor rail, so
+     the playlist states its own columns (70/1fr/74) and rhythm (10px) rather
+     than inheriting the rail's 82px/auto/12px */
+  .plvals :global(.control) {
+    grid-template-columns: 70px minmax(0, 1fr) 74px;
+    margin-top: 10px;
   }
 
   .dur-edit {
@@ -479,7 +510,7 @@
 
   /* ---- phone (S4b: the playlist is the primary phone surface) ---- */
   @media (max-width: 600px) {
-    .head {
+    .plrow {
       gap: 10px;
     }
 
@@ -490,26 +521,24 @@
     }
 
     .durline {
-      display: inline;
+      display: inline-flex;
     }
 
-    .vword {
+    .lbl.wide {
       display: none;
     }
 
-    .chip,
-    .rm {
-      /* thumb-sized targets */
-      min-height: 32px;
+    .lbl.narrow {
+      display: inline;
     }
 
     /* smaller thumbnails (S4b): the row is the same, the art is not */
-    .head :global(.thumb canvas.sq) {
+    .plrow :global(.thumb canvas.sq) {
       width: 40px;
       height: 40px;
     }
 
-    .head :global(.thumb canvas.bar) {
+    .plrow :global(.thumb canvas.bar) {
       width: 56px;
       height: 14px;
     }

@@ -1052,6 +1052,17 @@ for (const frameId of runIds) {
     await page.waitForSelector("#app > *", { timeout: 60000 }).catch(() => {});
     await sleep(3000);
   }
+  // A frame that needs the queue PLAYING says `replay`. It has to: a live code
+  // push takes the playlist over on both the firmware and the mirror (it stops
+  // the auto-advance — crates/luxel-cli/src/serve.rs), so by the time the
+  // playlist frames run in a full sweep every editor frame before them has left
+  // the mirror stopped, and the frame would measure a screen nobody ships.
+  // MIRRORS ONLY — a real board reached with `--device` is never written to,
+  // which is what keeps a `deviceSafe` frame device-safe.
+  if (F.replay && base && base !== String(DEVICE)) {
+    await fetch(`${base}/api/playlist/play`, { method: "POST" }).catch(() => {});
+    await sleep(700);
+  }
   await runSteps(page, app.steps, onDeviceBundle ? 45000 : 15000);
   if (onDeviceBundle) devicePage = page;
   await sleep(app.settle ?? 500);
@@ -1433,6 +1444,13 @@ if (has("--sweep")) {
           timeout: 45000,
         })
         .catch(() => {});
+      // same as the frames' `replay`: a screen that has to be swept while the
+      // queue is PLAYING says so, because an editor frame earlier in the run
+      // has stopped the mirror's playlist with its code push
+      if (screen.replay && !DEVICE) {
+        await fetch(`${base}/api/playlist/play`, { method: "POST" }).catch(() => {});
+        await sleep(700);
+      }
       await runSteps(pg, screen.steps);
       await sleep(1200);
       const r = await pg.evaluate(sweepInPage);

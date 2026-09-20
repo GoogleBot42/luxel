@@ -929,8 +929,10 @@ try {
         (els) => els.map((e) => Math.round(e.getBoundingClientRect().height)),
       );
       check(
+        // S4b draws `.chip{height:26px}` — above the 24px floor, below the
+        // 32px the row used to force
         "mobile: chips and ✕ are thumb-sized targets",
-        targets.length > 0 && targets.every((h) => h >= 30),
+        targets.length > 0 && targets.every((h) => h >= 26),
         targets.join(","),
       );
       // S4b folds the duration off the chip row and onto the subtitle line
@@ -2932,6 +2934,80 @@ try {
     "playlist: the now-playing block names the running item",
     nowName === playing.items[playing.index].name,
     `${nowName} vs ${playing.items[playing.index].name}`,
+  );
+
+  // ---- the S4 row treatments (mockdiff measures these; these are the
+  //      behavioural half — that the right ROW wears them) ----
+  const playMark = await page.evaluate(() => {
+    const row = document.querySelector('[data-role="playlist-item"].playing');
+    if (!row) return null;
+    const cs = getComputedStyle(row);
+    return {
+      edge: `${cs.borderLeftWidth} ${cs.borderLeftColor}`,
+      grip: (row.querySelector('[data-role="pl-grip"]')?.textContent ?? "").trim(),
+      gripColor: getComputedStyle(row.querySelector('[data-role="pl-grip"]')).color,
+    };
+  });
+  check(
+    "playlist: the playing row is marked with the --ok left edge and a ▶ handle (S4)",
+    playMark !== null &&
+      playMark.edge === "3px rgb(95, 191, 122)" &&
+      playMark.grip === "▶" &&
+      playMark.gripColor === "rgb(95, 191, 122)",
+    JSON.stringify(playMark),
+  );
+  // S4's `.prog` is a 3px track with a REAL fill element in it, not a
+  // gradient painted on the track
+  const fill = await page.evaluate(() => {
+    const bar = document.querySelector('[data-role="pl-progress"]');
+    const i = bar?.querySelector("i");
+    if (!i) return null;
+    return {
+      h: Math.round(bar.getBoundingClientRect().height),
+      bg: getComputedStyle(i).backgroundColor,
+      frac: i.getBoundingClientRect().width / bar.getBoundingClientRect().width,
+    };
+  });
+  check(
+    "playlist: the progress bar is a 3px track with an --ok fill element (S4)",
+    fill !== null && fill.h === 3 && fill.bg === "rgb(95, 191, 122)" && fill.frac >= 0 && fill.frac <= 1,
+    JSON.stringify(fill),
+  );
+  // S4 puts the values band UNDER the row as its own block, and the footer
+  // OUTSIDE the list with the page's own padding
+  await page.$$eval('[data-role="pl-values-toggle"]', (els) => els[0].click());
+  await sleep(400);
+  const band = await page.evaluate(() => {
+    const v = document.querySelector('[data-role="pl-values"]');
+    if (!v) return null;
+    const prev = v.previousElementSibling;
+    return {
+      sibling: prev?.getAttribute("data-role") ?? null,
+      nested: v.closest('[data-role="playlist-item"]') !== null,
+      display: getComputedStyle(v).display,
+    };
+  });
+  check(
+    "playlist: the values band is a sibling UNDER the row, not nested in it (S4 .plvals)",
+    band !== null && band.sibling === "playlist-item" && band.nested === false && band.display === "block",
+    JSON.stringify(band),
+  );
+  await page.$$eval('[data-role="pl-values-toggle"]', (els) => els[0].click());
+  await sleep(200);
+  const foot = await page.evaluate(() => {
+    const f = document.querySelector('[data-role="pl-total"]');
+    if (!f) return null;
+    const cs = getComputedStyle(f);
+    return {
+      inList: f.closest(".pl-list") !== null,
+      pad: `${cs.paddingTop} ${cs.paddingRight} ${cs.paddingBottom} ${cs.paddingLeft}`,
+      text: (f.textContent ?? "").trim(),
+    };
+  });
+  check(
+    "playlist: the footer is a sibling of the list with S4's own padding",
+    foot !== null && foot.inList === false && foot.pad === "0px 20px 22px 20px" && /^\d+ items? · loop ≈ /.test(foot.text),
+    JSON.stringify(foot),
   );
 
   // ---- seek: drag the progress bar to mid-item ----

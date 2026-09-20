@@ -1,5 +1,54 @@
 # Update log
 
+## 2026-09-20 — Playlist: fidelity closure (S4 / S4b / S4menu / S4picker at zero)
+
+`node tools/mockdiff.mjs --frames S4,S4b,S4menu,S4picker` went **156 deltas → 0** (Gitea
+#538, part of #461). The screen was close in spirit and wrong nearly everywhere in the
+measurements, so the fixes are structural rather than cosmetic:
+
+- **The row IS the mock's flex line.** `.plrow` was a block `<li>` wrapping an inner
+  `.head`, so every one of its children measured against a mock that lays them out with
+  `display:flex; gap:12px; align-items:center`. The row is now that line, and the opened
+  values band is a **sibling** `.plvals` under it (mockup S4) instead of a block nested
+  inside the row — same width as the row, tucked up under its bottom edge, no top border.
+- **The now-playing readout is the mock's block**, not a flex column: one 13px line with a
+  bold name and a mono clock beside it, and under it S4's `.prog` — a 3px track with a
+  real `--ok` fill element in it rather than a gradient painted on the track itself. The
+  seek target stays big (an overlay on a wrapper), so the transport is exactly as tall as
+  S4 draws it.
+- Chips lost `flex:none` and carry ONE text run (`3 values ▴` / `3 ▴` on a phone) — the
+  mock's `.chip` is a 5px-gap flex box and every extra child widened it; the handle lost
+  its `line-height:1`; the footer moved out of the list with S4's own `0 20px 22px`; the ⋯
+  takes the mock's own `margin-left`.
+- **`.btn.quiet` keeps its outline** (app.css): the mock's quiet button drops the fill, not
+  the 1px `--border` edge — that alone closed deltas on the editor and settings screens
+  too. `.menu .mi` takes the mock's inherited 1.45 line and wraps rather than running off
+  a 214px menu.
+- The **picker** wears the `.pop` family's chrome (radius 8, the 0 16px 40px/.7 shadow, a
+  BLOCK — the scrolling is the list's) and `.pop .pr`'s row treatment; its section name is
+  the mock's bare `.slabel`, spaced by the section rather than by margins of its own.
+- `pl-duration-inline` is a real 24px tap target at 390px that still PAINTS as the 11px
+  type S4b draws (the height is taken back in `margin-block`).
+- The values band states the mock's own `.plvals .ctlrow` columns (70/1fr/74) and 10px
+  rhythm rather than inheriting the editor rail's 82px/auto/12px.
+
+Instrument work the closure needed, in `mockdiff.mjs` / `.map.json`:
+
+- **`"replay": true`** on a frame or a sweep screen re-enters the playlist on the MIRROR
+  before the steps run. A live code push takes the playlist over on both the firmware and
+  the mirror, so in a full sweep every editor frame ahead of the playlist left it stopped —
+  S4 was measuring a screen nobody ships (that is why the round-1 report had
+  `plrow-playing` ABSENT and a `▶ Play` primary). Mirrors only, so `deviceSafe` still means
+  what it says.
+- The panel mirror's seed is mockup S4's playlist: three controls on the playing item, one
+  on the row below it with the accent `15 s` override.
+
+`device-e2e.mjs` gained the behavioural half of the treatments (the `--ok` edge and `▶`
+handle on the PLAYING row, the 3px track with a real fill, the values band as a sibling,
+the footer outside the list) and its phone chip-target floor came down to the mock's 26px.
+The sub-24px targets left at 390px are all in shared controls the mock draws small
+(`Controls.svelte`, `ProjectionRow.svelte`, `Gallery.svelte`, Settings) — Gitea #576.
+
 ## 2026-09-20 — a console's Layout comes from the DEVICE, and nothing else (#573, #572)
 
 **#573 — root cause.** A 300 px strip console reported itself an `18×17 matrix` whenever
@@ -161,7 +210,6 @@ matrix` — which is its own bug, now **Gitea #573** (a console must not resume,
 push, a pattern the fixture cannot show; and `/api/status`'s `geom` should describe the
 fixture, not the running program). Same class as #539.
 
-
 ## 2026-09-20 — mockdiff: the mocks become a measurement
 
 `web/tools/mockdiff.mjs` + `web/tools/mockdiff.map.json` (docs/tools.md). The approved
@@ -182,7 +230,6 @@ copy the board serves from flash; a real board only ever gets the frames the map
 First run against master `163a727`: **869 deltas over 27 frames** (report in the session
 scratchpad). Mirror and the real Seengreat panel produce **identical CSS** — every
 difference between the two runs is device data, not styling.
-
 
 ## 2026-09-20 — opening a pattern no longer hijacks the device (#563, #562, #564)
 
