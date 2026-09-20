@@ -150,6 +150,11 @@
       },
       "allow": [
         {
+          "element": "pagebar",
+          "property": "background-color",
+          "why": "Jeremy 2026-09-20: the Patterns bar follows the other pages’ scheme (the Playlist transport, the Settings top) and sits on the tab’s own --bg-panel; the mock paints this one strip the darker --bg"
+        },
+        {
           "element": "hdr-brightness",
           "why": "Jeremy: brightness is a slider in the header — beyond the mocks"
         },
@@ -401,6 +406,11 @@
           "element": "tile-bar-playing",
           "property": "box height",
           "why": "same rule: the mock's grid row is stretched by the captioned 2D tile beside it, which this fixture does not show"
+        },
+        {
+          "element": "pagebar",
+          "property": "background-color",
+          "why": "Jeremy 2026-09-20: the Patterns bar follows the other pages’ scheme (the Playlist transport, the Settings top) and sits on the tab’s own --bg-panel; the mock paints this one strip the darker --bg"
         }
       ],
       "elements": [
@@ -408,6 +418,12 @@
           "id": "header",
           "mock": ".hdr",
           "app": "header.hdr",
+          "noBoxH": true
+        },
+        {
+          "id": "pagebar",
+          "mock": ".pagebar",
+          "app": "[data-role=\"patterns-panel\"] .pagebar",
           "noBoxH": true
         },
         {

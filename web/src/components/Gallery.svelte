@@ -123,6 +123,10 @@
     last: number; // last stepped (ms)
     seen: number; // last visible (ms)
     visible: boolean;
+    /** How many times this tile has COMPILED an engine. Stamped on the DOM as
+     *  `data-compiled`, which is how device-e2e proves that deleting one
+     *  pattern does not rebuild the survivors (#538 round 2). */
+    built: number;
   }
 
   const dispatch = createEventDispatcher<{ pick: GalleryItem }>();
@@ -163,6 +167,7 @@
           last: 0,
           seen: 0,
           visible: false,
+          built: 0,
         };
       }
       by.delete(it.key);
@@ -288,6 +293,7 @@
       t.dims = r.dims;
       t.guess = r.dims; // the compiler's answer replaces the regex guess
       t.points = r.layout.coords ? normalizePoints(r.layout.coords) : undefined;
+      t.built++;
       tiles = tiles; // the tile's shape/caption follow the compiled pattern
     } else {
       t.dead = true;
@@ -400,6 +406,7 @@
             last: 0,
             seen: 0,
             visible: false,
+            built: 0,
           }));
       }
     } catch {
@@ -429,6 +436,7 @@
       data-dims={t.rig ? t.dims : ""}
       data-key={t.key}
       data-name={t.name}
+      data-compiled={t.built}
       hidden={hiddenBy(t, filter)}
       use:register={t.key}
     >

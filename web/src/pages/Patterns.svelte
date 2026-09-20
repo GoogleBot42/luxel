@@ -683,14 +683,19 @@
     margin: 8px 20px 0;
   }
 
-  /* mockups.html `.pagebar` */
+  /* mockups.html `.pagebar`, except for its ground.
+     The mock paints this strip `--bg` — a band DARKER than the page under it,
+     which no other screen has: the Playlist's `.transport` and the Settings
+     page's header both sit on their tab's own `--bg-panel`. "The Patterns
+     tab: 'On device' / 'Library' headerbar is so dark — follow the scheme of
+     the other pages" (Jeremy, 2026-09-20). So the background is dropped and
+     the strip inherits the tab's, leaving the hairline to separate it. */
   .pagebar {
     display: flex;
     align-items: center;
     gap: 12px;
     padding: 12px 20px;
     border-bottom: 1px solid var(--border);
-    background: var(--bg);
   }
 
   /* the segmented source control (D3) — mockups.html `.seg` */

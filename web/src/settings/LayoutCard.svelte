@@ -65,7 +65,8 @@
   } from "../stores/device";
   import { confirm } from "../stores/dialog";
   import { layout as geomLayout, layoutLabel, type Layout } from "../stores/geometry";
-  import { note, notes } from "../stores/notify";
+  import { clearApiError, note, notes, reportApiError } from "../stores/notify";
+  import type { ApiErrorContext } from "../lib/apiErrors";
   import { luxel } from "../stores/pattern";
   import ArrangementSvg from "./ArrangementSvg.svelte";
   import OutputsTable from "./OutputsTable.svelte";
@@ -202,12 +203,19 @@
    *  is still running the old one — that goes to the sticky reboot bar
    *  (`noteRebootPending`), which is on screen on every tab until the reboot,
    *  not into a line of dim text at the bottom of this form (#538). */
-  async function post(lines: string, field = "the wiring"): Promise<boolean> {
+  async function post(
+    lines: string,
+    field = "the wiring",
+    ctx: Partial<ApiErrorContext> = {},
+  ): Promise<boolean> {
     const r = await applyLayout(lines);
     if (!r.ok) {
-      note("layout", r.line ? `${r.error} (line ${r.line})` : r.error, 6000);
+      // The banner is the surface now (#538 round 2) — a refusal at the foot
+      // of a 760px form is a refusal nobody reads.
+      reportApiError(r.error, { scope: "layout", maxPixels: $pixelMax, line: r.line, ...ctx });
       return false;
     }
+    clearApiError();
     note("layout", "saved", 2500);
     if (r.reboot_required) noteRebootPending(field);
     return true;
@@ -219,8 +227,23 @@
   }
 
   function setMatrix(patch: Partial<ReturnType<typeof matrixOf>>): void {
+    const n = { ...m, ...patch };
+    const chain = { pw: n.pw, ph: n.ph, cols: n.cols, rows: n.rows };
     void (async () => {
-      if (await post(matrixLine(patch), "the panel arrangement")) dispatch("pixelchange");
+      // Pre-validate against the board's ceiling the way `latOverMax` already
+      // does for the lattice (#600). A chain over it is refused by the device
+      // anyway; catching it here means the explanation arrives with the
+      // numbers the FORM knows, and nothing is sent that cannot land.
+      if (chain.pw * chain.ph * chain.cols * chain.rows > $pixelMax) {
+        reportApiError("pw*ph*cols*rows out of range for this board", {
+          scope: "layout",
+          maxPixels: $pixelMax,
+          chain,
+        });
+        return;
+      }
+      if (await post(matrixLine(patch), "the panel arrangement", { chain }))
+        dispatch("pixelchange");
     })();
   }
 
@@ -289,7 +312,7 @@
     void (async () => {
       const r = await $device?.setProtocol(name);
       if (r?.ok && r.protocol) deviceProtocol.set(r.protocol);
-      else note("layout", r?.error ? `LED type: ${r.error}` : "LED type: rejected", 6000);
+      else reportApiError(r?.error ?? "rejected", { scope: "output", field: "layout-proto" });
     })();
   }
 
@@ -323,7 +346,12 @@
       note("layout", "installing…");
       const r = await installLattice(w, h, d);
       if (!r.ok) {
-        note("layout", r.error ?? "rejected", 6000);
+        reportApiError(r.error ?? "rejected", {
+          scope: "layout",
+          maxPixels: $pixelMax,
+          pixels: w * h * d,
+          field: "layout-lat-install",
+        });
         return;
       }
       kindChoice = null;
@@ -361,7 +389,7 @@
       dataPinChoice.set(null);
       noteRebootPending("the data pin");
     } else {
-      note("datapin", r?.error ? `failed: ${r.error}` : "save failed");
+      reportApiError(r?.error ?? "save failed", { scope: "layout", field: "layout-datapin" });
     }
   }
 

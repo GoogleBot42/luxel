@@ -11,7 +11,7 @@
   // The page owns the order, the 0.5 Hz refresh while it is visible, and the
   // two navigations out; each section owns its form and its endpoint.
   import { createEventDispatcher, onDestroy } from "svelte";
-  import { offsetLabel, settingsVisibility, uiLayoutKind } from "../lib/settingsCaps";
+  import { offsetLabel, psramLine, settingsVisibility, uiLayoutKind } from "../lib/settingsCaps";
   import {
     applyLayout,
     clockStatus,
@@ -20,6 +20,8 @@
     deviceLabel,
     deviceLayoutWire,
     deviceRescanHz,
+    devicePsramFree,
+    devicePsramTotal,
     deviceStore,
     devicePatterns,
     deviceVersion,
@@ -171,7 +173,11 @@
   $: storageLine = (() => {
     const n = $deviceStore?.patterns ?? $devicePatterns.length;
     const bytes = $deviceStore ? ` · ${kb($deviceStore.total - $deviceStore.used)} free` : "";
-    return `${n} pattern${n === 1 ? "" : "s"}${bytes}`;
+    // a collapsed row still answers "how much have I got?" — the arena is
+    // the biggest number on the page and belongs in the one-line status too
+    // (Jeremy, 2026-09-20)
+    const arena = vis.psram ? psramLine($devicePsramFree, $devicePsramTotal) : null;
+    return `${n} pattern${n === 1 ? "" : "s"}${bytes}${arena ? ` · PSRAM ${arena}` : ""}`;
   })();
 
   $: firmwareLine = [

@@ -3,7 +3,7 @@
 // local wasm engine. Raw 16.16 values cross the wire; this wrapper converts
 // at the boundary, mirroring the wasm wrapper's conventions.
 
-import { gatedFetch } from "./fetchgate";
+import { gatedFetch, type GateOptions } from "./fetchgate";
 import type { ProjectionMode } from "./geometry";
 
 export interface DeviceStatus {
@@ -79,6 +79,13 @@ export interface DeviceStatus {
    *  without `--engine-heap` and on pre-#287 firmware, where the fallback is
    *  `heap_free` alone — conservative, never optimistic. */
   engine_heap?: number;
+  /** The external pattern-array arena (Gitea #253), in bytes — a SECOND heap
+   *  that is not part of `heap_free`, so a big `array()` costs the engine
+   *  heap nothing. Both absent on every board without one, which is what
+   *  `caps.psram` says; the Settings page shows the numbers rather than the
+   *  word `present` (Jeremy, 2026-09-20). */
+  psram_free?: number;
+  psram_total?: number;
   /** Per-stage frame timing: average microseconds per rendered pattern frame
    *  over the last second. `frame_us` is the whole engine branch, `vm_us` the
    *  pattern evaluation, `pipe_us` the preview copy + output pipeline (gamma /
@@ -270,12 +277,22 @@ export class DeviceSession {
    *  refused connections. Retrying POSTs is safe here: a refused connection
    *  was never processed, and every mutating endpoint in this API is
    *  idempotent (set-value, overwrite-by-name, delete). */
-  private fetch(path: string, init?: RequestInit): Promise<Response> {
-    return gatedFetch(this.url(path), init);
+  private fetch(path: string, init?: RequestInit, opts?: GateOptions): Promise<Response> {
+    return gatedFetch(this.url(path), init, opts);
   }
 
+  /**
+   * `/api/status`, on the FAST path: no retry ladder and a 4 s deadline.
+   *
+   * It is the app's liveness probe as well as its readout — the 1 Hz poll is
+   * what tells the user the board went away (Gitea #538 round 2) — so it has
+   * to report a dead device in about a second rather than spending the read
+   * path's ~30 s of patience in silence. `force` because this is the ONE
+   * request that has to keep going out while the gate says the device is
+   * down: it is the probe that clears the latch.
+   */
   async status(): Promise<DeviceStatus> {
-    const res = await this.fetch("/api/status");
+    const res = await this.fetch("/api/status", undefined, { fastFail: true, force: true });
     return (await res.json()) as DeviceStatus;
   }
 

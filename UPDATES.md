@@ -1,5 +1,70 @@
 # Update log
 
+## 2026-09-20 — Jeremy's round-2 web review: storage, parking, live drag, and errors that are impossible to miss (#538)
+
+Seven items from the second pass over the v2 console. Mirror only (`luxel serve --board
+panel`); no hardware was touched.
+
+**PSRAM shows the number.** `Settings → Advanced → Storage` said `present`, which answers
+nothing about whether a big `array()` still fits. It now reads `8.0 MB free of 8 MB` from
+`/api/status`'s `psram_free`/`psram_total`, refreshed by the same 1 Hz poll as the heap
+line, with the one-line explanation after the figure and the figure repeated in the
+collapsed disclosure's status. `psramLine()` is a pure formatter in `lib/settingsCaps.ts`
+with its own tests. The mirror's `--board panel` now advertises `psram:true` and reports
+8 MiB for both fields, so the row can be driven without the Seengreat panel.
+
+**A direct play parks the playlist.** `Play` on a tile, `▶ Play on device` and the
+Patterns page all reach one verb, `activateDevicePattern()`, so the park went there: a
+playing playlist is stopped with its index remembered (#549) before the activation, the
+transport shows `stopped` on the parked item, and the now-playing block says
+`stopped — playing <pattern> directly`. Play resumes the parked item. Activation over the
+raw API (Home Assistant, MQTT, curl) is NOT covered by a UI change and is filed as #602,
+referenced from docs/api.md.
+
+**Drag-to-reorder is live.** The grabbed row lifts and follows the pointer, the rows it
+passes slide to open the hole (`transform` only, 120 ms), and the order — store and POST
+— changes on release alone. Escape animates it home and writes nothing. HTML5
+drag-and-drop is gone: it cannot show an intermediate state and does not exist on touch.
+`touch-action:none` is on the handle only, so the list still scrolls; the handle's ↑/↓
+keyboard reorder is untouched, and so are `PlaylistRow`'s mock-verified resting styles
+(mockdiff S4/S4b stay at zero).
+
+**Errors are never hidden.** A refused settings POST used to be six words of 12 px dim
+text at the foot of whichever form raised it. There is now ONE error surface,
+`components/ErrorBar.svelte`, pinned at the TOP of every screen in the `--error` palette —
+the `RebootBar` family, inverted — carrying a translated sentence, the device's own words
+underneath, a ✕, and a highlight on the field it is about. The translations are one
+table, `lib/apiErrors.ts`, covering every `luxel_core::layout` grammar error plus the
+name/wifi/mqtt/clock/output/playlist paths, and unit-tested. The HUB75 case is the
+verified one (#600, closed here): `LayoutCard` pre-checks `pw·ph·cols·rows` against
+`max_pixels` before POSTing and the banner explains why 8,192 px cannot work and what
+arrangement would (`matrix 32 64 2 1 tr row 0 0`).
+
+**A dead device says so.** `lib/fetchgate.ts` sees every request the app makes, so it
+counts consecutive transport failures and publishes them; `/api/status` now probes on a
+fast path (no retry ladder, 4 s deadline) and two misses raise
+`Device unreachable — retrying… last seen 12 s ago`, which clocks up live and clears
+itself. While the device is known down a WRITE fails immediately rather than spending
+~30 s of retries in silence — reads keep the full ladder, which is what keeps a cold load
+alive on a two-socket board — and a failed playlist write rolls the optimistic edit back
+by re-reading the device's list.
+
+**The Patterns bar follows the other pages.** Its `--bg` band was darker than the page
+under it, which no other screen does; it now sits on the tab's own `--bg-panel` like the
+Playlist transport and the Settings top. The mock paints it `--bg`, so this is an `allow`
+entry in `mockdiff.map.json` (S1 and S1b, which now measures the bar too).
+
+**Deleting one pattern no longer rebuilds the rest.** `refreshDevicePatterns()` replaced
+the store with `/api/patterns`' bare id+name list, which told `Gallery` that every
+pattern's source had changed — so it freed every tile engine, re-fetched N−1 sources over
+a two-socket device and recompiled them. It now merges by id and keeps the sources it
+has; a save that overwrote a name passes that id to be invalidated. `Gallery` stamps
+`data-compiled` per tile so the harness proves it.
+
+Verified: `npm test` (133), `e2e`, `device-e2e` (466 checks, 47 of them new),
+`maxpixels-e2e`, `sync-e2e`, `flash-e2e`, `tools/ci.sh CI_SKIP=firmware`, and
+`mockdiff.mjs` at **0 deltas over all 27 frames** with `--sweep` unchanged.
+
 ## 2026-09-20 — a projection now applies live on all three paths (#538/#598)
 
 Jeremy, review round 2: *"Setting the projection type seems to have no effect. It

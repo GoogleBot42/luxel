@@ -10,7 +10,7 @@
   // carry the IANA database (Gitea #538).
   import { offsetLabel, zoneLabel, zonesByRegion, zoneOffsetMinutes } from "../lib/settingsCaps";
   import { clockStatus, device, refreshClock, syncDeviceClock } from "../stores/device";
-  import { note, notes } from "../stores/notify";
+  import { note, notes, reportApiError } from "../stores/notify";
 
   /** Where the chosen ZONE NAME lives. The device stores only the offset, so
    *  the name is the browser's memory of which place that offset came from —
@@ -75,7 +75,8 @@
     }
     void (async () => {
       const r = await $device?.setClock(zoneOffsetMinutes(want));
-      if (r && r.ok === false) note("clock", r.error ?? "rejected", 6000);
+      if (r && r.ok === false)
+        reportApiError(r.error ?? "rejected", { scope: "clock", field: "clock-tz" });
       void refreshClock();
     })();
   }

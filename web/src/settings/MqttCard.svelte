@@ -1,7 +1,7 @@
 <script lang="ts">
   // MQTT / Home Assistant broker details. Applied live, no reboot.
   import { device, mqttForm, mqttStatus, refreshMqtt } from "../stores/device";
-  import { note, notes } from "../stores/notify";
+  import { clearApiError, note, notes, reportApiError } from "../stores/notify";
 
   /** Save is always live (§5.7): it validates and explains rather than
    *  greying itself out when the device is unreachable (Gitea #529). */
@@ -17,8 +17,10 @@
       if (r?.ok) {
         note("mqtt", host ? "saved — connecting to the broker…" : "saved — MQTT disabled");
         mqttForm.update((f) => ({ ...f, pass: "" }));
+        clearApiError();
       } else {
-        note("mqtt", r?.error ? `failed: ${r.error}` : "save failed");
+        note("mqtt", ""); // the banner carries it now — no stale "saving…"
+        reportApiError(r?.error ?? "save failed", { scope: "mqtt", field: "mqtt-host" });
       }
       void refreshMqtt();
     })();

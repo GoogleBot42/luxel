@@ -407,3 +407,30 @@ export function outputRanges(counts: readonly number[], unit: "pixels" | "panels
 export function outputsSum(counts: readonly number[]): number {
   return counts.reduce((a, b) => a + Math.max(0, Math.round(b)), 0);
 }
+
+// ---- the external pattern-array arena (Gitea #253, #538) ----
+
+/** `8 MB`, `512 KB` — the arena's size, with the `.0` of a whole number
+ *  dropped so `8.0 MB` never reads as a measurement it is not. */
+function arenaSize(bytes: number): string {
+  const mb = bytes / (1024 * 1024);
+  if (mb >= 1) return `${mb % 1 === 0 ? mb.toFixed(0) : mb.toFixed(1)} MB`;
+  return `${Math.round(bytes / 1024)} KB`;
+}
+
+/**
+ * The PSRAM readout: `8.0 MB free of 8 MB`.
+ *
+ * `present` was all the Storage row said until #538 round 2 — "show the
+ * number" (Jeremy, 2026-09-20). `null` means the device advertises the arena
+ * (`caps.psram`) but reports no figures for it: firmware older than the
+ * `psram_free`/`psram_total` fields, where `present` is still the honest
+ * answer. The FREE figure keeps one decimal even when whole, because it is a
+ * live measurement and a moving `7.4` next to a fixed `8` is the point.
+ */
+export function psramLine(free: number, total: number): string | null {
+  if (!(total > 0)) return null;
+  const mb = free / (1024 * 1024);
+  const f = mb >= 1 ? `${mb.toFixed(1)} MB` : `${Math.round(free / 1024)} KB`;
+  return `${f} free of ${arenaSize(total)}`;
+}

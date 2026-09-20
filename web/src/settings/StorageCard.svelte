@@ -7,10 +7,20 @@
     deviceEngineHeap,
     deviceHeapFree,
     devicePatterns,
+    devicePsramFree,
+    devicePsramTotal,
     deviceStore,
   } from "../stores/device";
+  import { psramLine } from "../lib/settingsCaps";
 
   const kb = (n: number): string => `${(n / 1024).toFixed(1)} KB`;
+
+  // "present" said nothing about whether a big `array()` still fits — show
+  // the number (Jeremy, 2026-09-20). It is live like every other line here:
+  // `/api/status` carries `psram_free`/`psram_total` and the 1 Hz status
+  // poll writes both stores. `null` = the board advertises the arena but
+  // this firmware predates the two fields.
+  $: psram = psramLine($devicePsramFree, $devicePsramTotal);
 </script>
 
 <div class="field">
@@ -47,7 +57,8 @@
   <div class="field">
     <span class="flabel">PSRAM</span>
     <div class="fctl row g10">
-      <span class="mono" data-role="storage-psram">present</span>
+      <!-- the NUMBER first, the explanation after it -->
+      <span class="mono" data-role="storage-psram">{psram ?? "present"}</span>
       <span class="dim hint">
         pattern arrays live in the external arena instead of internal DRAM, so a big
         <code>array()</code> costs the engine nothing
