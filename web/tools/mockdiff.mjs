@@ -1233,10 +1233,14 @@ for (const frameId of runIds) {
   );
 
   // ---- crops ------------------------------------------------------------
-  // A crop is a nicety, never a reason a run does not finish: every step of it
-  // (two re-measures, two screenshots, the compose) is raced against a
-  // deadline, and a slow element is named and skipped. Without this a single
-  // stubborn element stalled the whole 27-frame run with no output saying so.
+  // Screenshot the ELEMENT, not a clip rectangle. `page.screenshot({clip})`
+  // captures beyond the viewport, which on the mockups page — one document
+  // holding all 27 frames — can take tens of seconds or wedge outright; and an
+  // abandoned screenshot still owns the CDP session, so every later call on
+  // that page queues behind it and the whole run stalls with no error.
+  // `elementHandle.screenshot()` scrolls the element into view and clips to
+  // its own box. A crop is a nicety either way, so each one is raced against a
+  // deadline and a slow element is named and skipped.
   if (CROPS) {
     const worst = [...new Set(deltas.slice(0, 12).map((d) => d.element))].slice(0, 6);
     for (const id of worst) {
@@ -1244,28 +1248,25 @@ for (const frameId of runIds) {
       if (!e) continue;
       await withTimeout(
         (async () => {
-          // Re-measure right before cropping: the base pass ran before the
-          // hover and focus passes, which can move things.
-          const m = (await measure(mock, `#${mockId}`, [{ id, sel: scope(e.mock), nth: e.mockNth }]))[id];
-          const a = (await measure(page, app.root ?? "body", [{ id, sel: e.appSel, nth: e.nth }]))[id];
-          if (!m?.found || !a?.found) return;
-          const pad = 6;
-          const clip = (b) => ({
-            x: Math.max(0, b.px - pad),
-            y: Math.max(0, b.py - pad),
-            width: Math.max(8, b.w + pad * 2),
-            height: Math.max(8, b.h + pad * 2),
-          });
-          const shotA = await page.screenshot({ encoding: "base64", clip: clip(a.box) }).catch(() => null);
-          const shotM = await mock.screenshot({ encoding: "base64", clip: clip(m.box) }).catch(() => null);
-          if (!shotA || !shotM) return;
+          const pick = async (pg, sel, nth) => (await pg.$$(sel))[nth ?? 0] ?? null;
+          const hm = await pick(mock, scope(e.mock), e.mockNth);
+          const ha = await pick(page, e.appSel, e.nth);
+          if (!hm || !ha) return;
+          const shotM = await hm.screenshot({ encoding: "base64" }).catch(() => null);
+          const shotA = await ha.screenshot({ encoding: "base64" }).catch(() => null);
+          if (!shotM || !shotA) return;
+          const bm = await hm.boundingBox().catch(() => null);
+          const ba = await ha.boundingBox().catch(() => null);
           await composeSideBySide(
             browser,
             join(OUT, "mockdiff", `${frameId}-${id}.png`),
             shotM,
             shotA,
             `${frameId} · ${id}`,
-            { w: Math.max(m.box.w, a.box.w) + pad * 2, h: Math.max(m.box.h, a.box.h) + pad * 2 },
+            {
+              w: Math.max(bm?.width ?? 200, ba?.width ?? 200),
+              h: Math.max(bm?.height ?? 80, ba?.height ?? 80),
+            },
           );
         })(),
         20000,
