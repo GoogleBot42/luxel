@@ -871,7 +871,15 @@ await mock.goto(pathToFileURL(MOCKUPS).href, { waitUntil: "networkidle0" });
 await mock.addStyleTag({
   content: ".frame{border:0 !important;border-radius:0 !important;box-shadow:none !important}",
 });
-await sleep(800); // the mock's own <script> paints its canvases
+await sleep(1200); // the mock's own <script> paints its canvases
+// …and then keeps repainting them forever (mockups.html's `requestAnimationFrame(loop)`).
+// A page that never goes idle makes every screenshot slow — on this document,
+// which holds all 27 frames at once, slow enough to blow a 20s crop deadline.
+// The canvases keep whatever frame they last drew, which is all a crop needs.
+await mock.evaluate(() => {
+  window.requestAnimationFrame = () => 0;
+});
+await sleep(300);
 const mockClient = await mock.createCDPSession();
 await mockClient.send("DOM.enable");
 await mockClient.send("CSS.enable");
