@@ -483,116 +483,121 @@
        back · the title · the installed / in-use state · ONE primary action ·
        the ⋯ menu. No geometry fields, no transport. -->
   <header class="editor-header" data-role="map-editor-header">
-    <button
-      data-role="map-editor-back"
-      class="back"
-      title={`back to ${backLabel}`}
-      on:click={() => dispatch("back")}
-    >
-      ← {backLabel}
-    </button>
+    <!-- the code column's half: the document's own controls end at the rail's
+         hairline, not at the page's right edge (audit E4, mockup S2) -->
+    <div class="edhdr-main">
+      <button
+        data-role="map-editor-back"
+        class="btn quiet back"
+        title={`back to ${backLabel}`}
+        on:click={() => dispatch("back")}
+      >
+        <span class="backglyph" aria-hidden="true">←</span>
+        <span class="backlabel">{backLabel}</span>
+      </button>
 
-    <span class="title">Map program</span>
+      <!-- the map program has one name, so this is a label rather than the
+           pattern editor's editable `.nameedit` field -->
+      <span class="title">Map program</span>
 
-    <span class="savestate" data-role="map-state">
-      {#if $device}
-        {#if $deviceMap.installed}
-          <span data-role="map-installed">{$deviceMap.count}px {$deviceMap.dims}D on device</span>
+      <span class="savestate" data-role="map-state">
+        {#if $device}
+          {#if $deviceMap.installed}
+            <span data-role="map-installed">{$deviceMap.count}px {$deviceMap.dims}D on device</span>
+          {:else}
+            no map on the device
+          {/if}
+        {:else if inUse}
+          previewing this map
         {:else}
-          no map on the device
+          not used in the preview yet
         {/if}
-      {:else if inUse}
-        previewing this map
+      </span>
+
+      <span class="spacer"></span>
+
+      {#if $notes.save}<span class="dim note" data-role="map-note">{$notes.save}</span>{/if}
+
+      <!-- The screen's single primary action (proposal §4): the console
+           installs the points on the hardware, the playground adopts them as
+           what the page previews on. -->
+      {#if $device}
+        <button
+          class="btn primary"
+          data-role="map-install"
+          title="upload these points so the device renders 2D/3D through them"
+          on:click={installOnDevice}
+        >
+          Install on device
+        </button>
       {:else}
-        not used in the preview yet
+        <button
+          class="btn primary"
+          data-role="map-use"
+          title="preview every pattern on this page through these points"
+          on:click={useInPreview}
+        >
+          Use in preview
+        </button>
       {/if}
-    </span>
 
-    <span class="spacer"></span>
-
-    {#if $notes.save}<span class="dim note" data-role="map-note">{$notes.save}</span>{/if}
-
-    <!-- The screen's single primary action (proposal §4): the console installs
-         the points on the hardware, the playground adopts them as what the
-         page previews on. -->
-    {#if $device}
-      <button
-        class="btn primary"
-        data-role="map-install"
-        title="upload these points so the device renders 2D/3D through them"
-        on:click={installOnDevice}
-      >
-        Install on device
-      </button>
-    {:else}
-      <button
-        class="btn primary"
-        data-role="map-use"
-        title="preview every pattern on this page through these points"
-        on:click={useInPreview}
-      >
-        Use in preview
-      </button>
-    {/if}
-
-    <span class="overflow">
-      <button
-        class="btn icon"
-        bind:this={moreBtn}
-        data-role="map-overflow"
-        title="more actions"
-        aria-label="more actions"
-        on:click={() => (menuOpen = !menuOpen)}
-      >
-        ⋯
-      </button>
-      <Popover
-        open={menuOpen}
-        anchor={moreBtn}
-        dataRole="map-menu"
-        on:close={() => (menuOpen = false)}
-      >
-        <button class="mi" data-role="map-export" role="menuitem" on:click={exportProgram}>
-          Export map program
+      <span class="overflow">
+        <button
+          class="btn icon"
+          bind:this={moreBtn}
+          data-role="map-overflow"
+          title="more actions"
+          aria-label="more actions"
+          on:click={() => (menuOpen = !menuOpen)}
+        >
+          ⋯
         </button>
-        <button class="mi" data-role="map-import" role="menuitem" on:click={() => fileInput.click()}>
-          Import map program…
-        </button>
-        <div class="sepr"></div>
-        <button class="mi del" data-role="map-reset" role="menuitem" on:click={() => void resetProgram()}>
-          Reset program
-        </button>
-        <!-- Clearing the DEVICE's map exists only when there is one to clear
-             (§5.7: absent, never disabled). -->
-        {#if $device && $deviceMap.installed}
-          <button
-            class="mi del"
-            data-role="map-clear"
-            role="menuitem"
-            on:click={() => void onClearDeviceMap()}
-          >
-            Clear map from device
+        <Popover
+          open={menuOpen}
+          anchor={moreBtn}
+          dataRole="map-menu"
+          on:close={() => (menuOpen = false)}
+        >
+          <button class="mi" data-role="map-export" role="menuitem" on:click={exportProgram}>
+            Export map program
           </button>
-        {/if}
-      </Popover>
-    </span>
+          <button class="mi" data-role="map-import" role="menuitem" on:click={() => fileInput.click()}>
+            Import map program…
+          </button>
+          <div class="sepr"></div>
+          <button class="mi del" data-role="map-reset" role="menuitem" on:click={() => void resetProgram()}>
+            Reset program
+          </button>
+          <!-- Clearing the DEVICE's map exists only when there is one to clear
+               (§5.7: absent, never disabled). -->
+          {#if $device && $deviceMap.installed}
+            <button
+              class="mi del"
+              data-role="map-clear"
+              role="menuitem"
+              on:click={() => void onClearDeviceMap()}
+            >
+              Clear map from device
+            </button>
+          {/if}
+        </Popover>
+      </span>
 
-    <!-- WHICH device this screen is bound to. The shell header is not
-         rendered over an editor screen (#538), so the chip travels with it —
-         mockup S2 puts it at the end of the header, in its own rail segment
-         (the rail split itself is still to come, audit E4). -->
+      <input
+        class="file-input"
+        type="file"
+        accept=".js,.txt,text/plain"
+        bind:this={fileInput}
+        on:change={onImportPick}
+      />
+    </div>
+
+    <!-- WHICH device this screen is bound to, over the rail it describes. The
+         shell header is not rendered over an editor screen (#538), so the chip
+         travels with it — mockup S2 puts it in the header's rail column. -->
     {#if !$isPlayground}
-      <span class="edhdr-rail"><DeviceChip /></span>
+      <span class="edhdr-rail statusonly"><DeviceChip /></span>
     {/if}
-
-
-    <input
-      class="file-input"
-      type="file"
-      accept=".js,.txt,text/plain"
-      bind:this={fileInput}
-      on:change={onImportPick}
-    />
   </header>
 
   <!-- ── the code column holds only code, and owns its own errors ── -->
@@ -654,7 +659,7 @@
         </span>
         <span class="grp">
           <button
-            class="icon"
+            class="btn sm icon glyph"
             data-role="map-run"
             title="run the map program (⌘/Ctrl+Enter)"
             aria-label="run"
@@ -662,14 +667,16 @@
           >
             ▶
           </button>
+          <!-- labelled like the pattern editor's, and for the same reason
+               (audit E8): the bug glyph alone does not say "debugger" -->
           <button
-            class="icon"
+            class="btn sm"
             class:active={debugMode}
             data-role="map-debug"
             title="toggle the map debugger"
-            aria-label="debug"
             on:click={toggleDebug}
           >
+            Debug
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
               <rect x="8" y="7" width="8" height="12" rx="4" />
               <path d="M4 10h4M16 10h4M4 16h4M16 16h4M9.5 5l1 2M14.5 5l-1 2" />
@@ -708,7 +715,11 @@
 </main>
 
 <style>
+  /* The header split, the transport boxes and the phone stacking are
+     components/editor-frame.css — the pattern editor wears the same chrome. */
+
   .title {
+    font-size: 14px;
     font-weight: 600;
   }
 
@@ -726,5 +737,18 @@
     color: var(--error);
     font-family: ui-monospace, Menlo, Consolas, monospace;
     font-size: 12px;
+  }
+
+  /* ---- phone (D9) ---- S2b's back is icon-only: a 390 px header has no room
+     for a destination name it is about to show you anyway. */
+  @media (max-width: 600px) {
+    .back .backlabel {
+      display: none;
+    }
+
+    .back {
+      width: 32px;
+      padding: 0;
+    }
   }
 </style>

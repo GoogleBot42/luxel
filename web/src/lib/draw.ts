@@ -74,6 +74,32 @@ export function normalizePoints(coords: number[][]): PointRig {
   return { pts, is3D };
 }
 
+/** Is pixel `i` emitting anything at all? An OFF pixel is not a black dot the
+ *  viewer is meant to see through a lit one — it is a pixel that is simply not
+ *  on, and the black disc it used to paint punched holes in whatever was lit
+ *  behind it (Jeremy, 2026-09-19: "black scatter plot dots draw over other
+ *  dots"). */
+export function isLit(px: Uint8Array, i: number): boolean {
+  return (px[i * 3] ?? 0) > 0 || (px[i * 3 + 1] ?? 0) > 0 || (px[i * 3 + 2] ?? 0) > 0;
+}
+
+/** The order a scatter is painted in: every UNLIT point first, then the lit
+ *  ones, each group still back-to-front so the depth cue survives. Sorting by
+ *  depth alone is not enough — an unlit point that happens to be nearer than a
+ *  lit neighbour legitimately sorts on top of it, and paints it out. Pure and
+ *  exported so the rule has a unit test (web/tests/draw.test.mjs). */
+export function paintOrder<T extends { i: number; depth: number }>(
+  items: T[],
+  px: Uint8Array,
+): T[] {
+  return [...items].sort((a, b) => {
+    const la = isLit(px, a.i);
+    const lb = isLit(px, b.i);
+    if (la !== lb) return la ? 1 : -1;
+    return a.depth - b.depth;
+  });
+}
+
 /** A point cloud (3D lattice or custom map): orthographic projection with a
  *  fixed tilt, painter's algorithm and a depth cue. `angle` rotates a 3D rig
  *  about the vertical axis; a flat scatter ignores it. */
@@ -93,12 +119,16 @@ export function paintPoints(
   const baseR = Math.max(1, Math.min(7, (Math.min(w, h) / Math.sqrt(n)) * 0.3));
 
   if (!rig.is3D) {
+    // A flat scatter has no depth at all, so index order WAS the paint order:
+    // a dark pixel late in the strip covered a lit one that overlapped it.
+    // Same rule as the cloud below — unlit first (`depth` is a constant here).
     const pad = Math.max(2, Math.round(w * 0.025));
     const span = w - 2 * pad;
-    for (let i = 0; i < n; i++) {
-      const p = rig.pts[i];
-      if (!p) continue;
-      ctx.fillStyle = `rgb(${px[i * 3] ?? 0},${px[i * 3 + 1] ?? 0},${px[i * 3 + 2] ?? 0})`;
+    const flat: { i: number; depth: number }[] = [];
+    for (let i = 0; i < n; i++) if (rig.pts[i]) flat.push({ i, depth: 0 });
+    for (const q of paintOrder(flat, px)) {
+      const p = rig.pts[q.i]!;
+      ctx.fillStyle = `rgb(${px[q.i * 3] ?? 0},${px[q.i * 3 + 1] ?? 0},${px[q.i * 3 + 2] ?? 0})`;
       ctx.beginPath();
       ctx.arc(pad + (p.x + 0.5) * span, pad + (p.y + 0.5) * span, baseR, 0, Math.PI * 2);
       ctx.fill();
@@ -124,8 +154,8 @@ export function paintPoints(
       i,
     });
   }
-  proj.sort((a, b) => a.depth - b.depth); // back to front
-  for (const q of proj) {
+  // back to front, with every unlit point painted before any lit one
+  for (const q of paintOrder(proj, px)) {
     const cue = Math.max(0.35, Math.min(1, 0.55 + 0.45 * (q.depth + 0.6)));
     const r = baseR * Math.max(0.6, Math.min(1.3, cue));
     ctx.fillStyle = `rgb(${Math.round((px[q.i * 3] ?? 0) * cue)},${Math.round(

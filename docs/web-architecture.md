@@ -430,16 +430,50 @@ nothing crosses between them.
 
 | owner | what it holds | `data-role`s |
 |---|---|---|
-| the **header** (`editor-header`) | the DOCUMENT: back · inline-editable name · save state · **Save** (the one primary action) · the ⋯ menu of document verbs | `editor-back`, `pattern-name`, `name-input`, `name-error`, `save-state`, `save`, `overflow`, `add-to-playlist`, `duplicate`, `epe-export`, `epe-import`, `share`, `delete` |
+| the **header** (`editor-header`) | the DOCUMENT: back · the name field · save state · **Save** (the one primary action) · the ⋯ menu of document verbs | `editor-back`, `pattern-name`, `name-input`, `name-error`, `save-state`, `save`, `overflow`, `add-to-playlist`, `duplicate`, `epe-export`, `epe-import`, `share`, `delete` |
 | the **code pane** | its own errors: gutter dot + wavy underline on the line + one status strip pinned to the bottom of the pane | `compile-error`, `runtime-error`, `map-compile-error`, `.cm-err-dot`, `.cm-lintRange-error` |
-| the **preview header** | the TRANSPORT, next to the thing it controls | `preview-dims`, `pause`, `target-fps`, `mic-toggle`, `debug` |
+| the **preview header** | the TRANSPORT, next to the thing it controls | `preview-dims`, `pause`, `debug`, `mic-toggle`, `target-fps` |
+
+**The header splits at the rail** (mockup S2, Gitea #538). It is its own CSS
+grid with the frame's column template — `minmax(360px,1fr) minmax(320px,420px)`
+— so `.edhdr-main` (the document's controls) ends exactly where the code column
+does and `.edhdr-rail` (the device chip on a console, the "Preview as" rig chip
+in the playground) sits over the rail it describes, behind the same hairline.
+The mock's literal `width:344px` would only land on that boundary at one
+window width; the shared template lands on it at every width. The mock's
+`padding:0 16px` plus the rail's `padding-left`/`margin-left:16px` become the
+two halves' own padding, which is the same 16px either side of the rule.
+
+At ≤600px there is no rail beside the header to line up with, so it becomes a
+flex row: `.edhdr-main` is S2b's single 44px line (`[← icon] [name] [Save]
+[⋯]`, the back button's label dropped), and `.edhdr-rail` either disappears —
+`.statusonly`, the console's chip is a readout a phone can spare — or wraps to
+a second unruled row, which is what keeps the playground's rig chooser
+reachable.
 
 Rules that come out of the audit and must not drift back:
 
-- **The name is edited in place.** Click it, Enter or blur commits, Escape
-  cancels, an empty name is refused inline (`name-error`) — nothing is ever
-  disabled (§5.7). Save on an unnamed pattern opens that editor with the
-  reason rather than a dialog.
+- **The name is a persistent bordered field** (`.nameedit`, mockup S2) edited
+  in place. Click it, Enter or blur commits, Escape cancels, an empty name is
+  refused inline (`name-error`) — nothing is ever disabled (§5.7). Save on an
+  unnamed pattern opens that editor with the reason rather than a dialog. It
+  was a hover-only affordance until #538; a title you cannot see is a title
+  nobody knows they can change.
+- **The primary action reads `Save` in both modes.** WHERE it lands is the
+  save state's job (`saved · on device` / `saved · in browser`), not the
+  button's — "Save to device" put the destination on the verb and said
+  nothing the line beside it did not (#538). A library→device save must END
+  holding a `devicePatternId`, because that id is what the on-device verbs
+  (`add-to-playlist`, `delete`) and the save state key off; when the save
+  reply carries no `id`, it is re-read from `refreshDevicePatterns()` by name.
+- **The preview header states both frame rates** on a console —
+  `<layout> · <n> fps local · <n> fps on device` (`out_fps` on a pipelined
+  HUB75 board, else `fps`). The device's figure is already in the shell
+  header, so showing only that here told you nothing new; the local one is
+  what says whether this browser tab is the bottleneck (#538). The playground
+  has one loop and states one number. The transport is pause · **Debug** ·
+  [mic] · rate: the debugger sits beside the thing you reach for with it, and
+  is labelled because the bug glyph alone did not read as "debugger".
 - **No compile-error banner in the rail.** The rail's `banner` list is for
   *conditions* (the device is unreachable, the wasm failed to load); an error
   about line 14 belongs next to line 14.
@@ -470,8 +504,40 @@ along with `led-layout`, `layout-kind`, `layout-px/w/h`, `grid-install` and
 `subtab-map`. The device's Layout is Settings → LED layout's; the virtual one
 is the "Preview as" chip's; the map is its own screen's.
 
-`Add to scene ▸` (proposal §5.4b) is deliberately not rendered at all until
-scenes exist in Phase B (#480).
+The ⋯ menu's order is the mock's: `Add to playlist` · [`Add to scene ▸`] ·
+rule · `Duplicate` · `Export .epe` · `Import .epe…` [· `Share…`] · rule ·
+`Delete` (error-tinted, last). The first group is the on-device verbs, so the
+rule above `Duplicate` only appears when it does. `Add to scene ▸` (proposal
+§5.4b) is deliberately not rendered at all until scenes exist in Phase B
+(#480); `Share…` is the playground's and joins the document group, which is
+where the mock would have put it had a playground frame existed.
+
+### `components/ColorPicker.svelte` (Gitea #538)
+
+`hsvPicker`/`rgbPicker` controls used to be three raw 0..1 channels with a
+slider and a number box each — "should not be asking the user to input raw hsv
+numbers" (Jeremy, 2026-09-19). They are now the mock's swatch (S2
+`.swatches i`, 26×22) opening a `.pop` with a saturation/value field, a hue
+strip and direct numeric entry in BOTH spaces plus hex, because "put in values
+directly" was the other half of the request. Not `<input type="color">`: the
+browser picker is a different app, cannot be themed, and on some platforms
+cannot be driven from the keyboard at all.
+
+- **The wire is unchanged.** `kind` says which space the caller's triple is in,
+  and that is the space it gets back — unrounded. `hsv` in, `hsv` out. The
+  device push is byte-identical to what the raw channels produced; only the
+  display converts (`lib/color.ts`, a pure unit-float module with its own
+  tests).
+- **Hue is remembered across greys.** `rgbToHsv` reports hue 0 for any grey,
+  so a saturation drag to the left edge would snap the wheel to red and come
+  back somewhere else. The component keeps the last hue the user aimed at.
+- **Keyboard-reachable**: the field takes arrows (shift = coarse) and the hue
+  strip is a real `<input type=range>` wearing a gradient — a native range
+  paints its own track over the element's background, so the gradient lives on
+  a wrapper and the track is made transparent.
+- It is deliberately generic (kind + a triple in, a triple out, no control
+  awareness) because the palette editor (#537) needs exactly this widget per
+  stop.
 
 ## The map program — a screen, not a sub-tab (`pages/MapEditor.svelte`, #471)
 
@@ -496,6 +562,10 @@ a wrapper component could not have styled it anyway):
 | the **header** | back · "Map program" · the installed / in-use state · ONE primary action · ⋯ | `map-editor-header`, `map-editor-back`, `map-state`, `map-installed`, `map-note`, `map-install` (console) / `map-use` (playground), `map-overflow`, `map-export`, `map-import`, `map-reset`, `map-clear` |
 | the **code pane** | its own errors: gutter dot, squiggle, one status strip | `map-editor`, `map-compile-error` |
 | the **rail** | the plotted points + the transport that produces them, then the debugger | `map-badge`, `map-run`, `map-debug`, `map-error`, `map-3d` |
+
+It therefore inherits the split header and the 26px transport boxes with it
+(#538) — the whole point of the shared stylesheet is that the two screens
+cannot drift apart.
 
 Rules:
 
@@ -524,12 +594,26 @@ Rules:
 ### Projection (`components/ProjectionRow.svelte`, proposal §5.4d)
 
 One quiet row under a hairline, after the pattern's own controls, visible
-**only** when `Luxel.projectionOptions(patternDims, layoutDims)` returns more
-than one option — i.e. the pattern's dimensionality differs from the Layout's
-AND that Layout offers a choice. Labels come from the engine so every surface
-captions a projection identically. Inherited reads as plain text
+**only** when `Luxel.projectionOptions(patternDims, layoutDims)` returns
+anything at all. That table is also where the rule "a Layout never shows a
+pattern of higher dimensionality" lives (#545), so an empty list means "native,
+or impossible" and the row is simply absent — the UI never restates the table
+and never explains it. Labels come from the engine so every surface captions a
+projection identically. Inherited reads as plain text
 (`device default · along x`, `change`); an override reads in accent
 (`along y · override`, `reset`).
+
+**`change` opens the Settings widget in a popup** (`Popover kind="pop"`,
+`data-role="projection-options"`): the same `settings/ProjectionCard.svelte`,
+the same engine-supplied option list, each card a live preview of THIS pattern
+on THIS fixture, plus a `Use device default` reset under a rule. It used to be
+a wrapped row of bare 12px text buttons — "the projection option to override
+projection uses very different UI [from] the device-wide projection … the
+collapsed minimal row is perfect. I'm only talking about when the user decides
+to change the value" (Jeremy, 2026-09-19). The cards only compile and animate
+while the popup is open (`active={open}`), so a rail full of engines never runs
+behind a shut chooser. Two columns at the `.pop`'s 296px: three would leave each
+card a ~90px preview, which is not a picture of anything.
 
 The chosen mode lives in `stores/pattern.ts`'s `projectionOverride` — a value
 of the working copy, cleared by every pattern load exactly like
@@ -742,6 +826,15 @@ is an advisory hint that saves a second compile and is allowed to be wrong.
 
 Painting lives in `lib/draw.ts` (`paintBar` / `paintGrid` / `paintPoints`), so
 the editor preview, the gallery tiles and the row thumbnails cannot drift.
+
+A scatter (a custom map or a 3D lattice) paints **every unlit point first**,
+then the lit ones, each group still back-to-front (`paintOrder`, unit-tested in
+`web/tests/draw.test.mjs`). Depth alone is the right rule for opaque dots of a
+solid object, but a pixel that is OFF is not part of the object: sorted by
+depth it legitimately lands in front of a lit neighbour and paints a black
+disc over it, which is the "black scatter plot dots draw over other dots"
+Jeremy reported on the map preview (#538). The flat 2D case had the same bug in
+a simpler form — no depth at all, so index order was paint order.
 
 The device's real wiring arrived with that switch: `/api/layout`'s
 `matrix.snake` fills `serpentine`, so a console previews a snaked matrix the

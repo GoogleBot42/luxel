@@ -1,5 +1,88 @@
 # Update log
 
+## 2026-09-19 — the editor, against the mocks: header split, a real colour picker, projection in a popup (#538)
+
+The editor third of Jeremy's Phase A review (Gitea #538 §A/§B/§C/§D). Both
+editor screens, the two rail components they share, and the scatter painter.
+
+**The header splits at the rail (E4).** `.editor-header` is now its own CSS
+grid carrying the frame's column template, so `.edhdr-main` ends exactly where
+the code column does and `Save` + `⋯` end with it — they used to sit at the
+far right of the page, past the rail, which is what Jeremy meant by "the editor
+page is not split from top to bottom where the right panel is". `.edhdr-rail`
+is the rail COLUMN, behind the same hairline, holding the device chip (console)
+or the "Preview as" rig chip (playground). The mock's literal `width:344px`
+lands on that boundary at exactly one window width; the shared template lands
+on it at every width. Both screens get it: the map program wears the same
+stylesheet, which is the point of having one.
+
+**The document header (E1/E2/E3/E5).** The name is a persistent bordered
+`.nameedit` field (30px, the mock's metrics) instead of a hover-only
+affordance. The primary reads `Save` in both modes — where it lands is the
+save state's job, not the verb's. The ⋯ menu is the mock's order, with the
+on-device group ruled off above `Duplicate` and `Delete` last and error-tinted.
+At ≤600px the header is S2b's single 44px row with an icon-only back; the
+console's chip (a pure readout) drops, the playground's rig chooser wraps to
+its own row rather than squeezing the name field to two characters.
+
+**A library→device save now lands in the on-device state (E6).** The id from
+the save reply is what `Add to playlist`, `Delete` and the save state key off;
+when the reply carries none it is re-read from `refreshDevicePatterns()` by
+name (saving the same name overwrites, so names identify). Regression-tested
+in `device-e2e.mjs` on the menu's contents, not on the store.
+
+**The preview header (E7/E8/E9).** Both frame rates on a console —
+`64×64 matrix · 59 fps local · 111 fps on device` — because the device's
+number was already in the shell header and the local one is what says whether
+the browser is the bottleneck. Transport is pause · `Debug` · [mic] · rate:
+the pause box is the global 26×26 `.btn.sm.icon` with a 12px `‖` (it was
+inherited-size text in a padding-only button — the oversized icon Jeremy
+flagged), and the debugger moved next to it and grew a label, because the bug
+glyph alone did not read as "debugger".
+
+**Projection override opens the Settings widget (E10, §B).** The collapsed
+row is unchanged — Jeremy confirmed it was right — but `change` now opens a
+`.pop` holding the same `settings/ProjectionCard.svelte` cards, the same
+engine-supplied labels, each a live preview of this pattern on this fixture,
+plus a `Use device default` reset. The cards only compile and animate while
+the popup is open. The row's visibility gate moved from `options.length > 1`
+to `> 0`: since #545 that table also encodes "a Layout never shows a bigger
+pattern", so an empty list means native-or-impossible and the row is simply
+absent.
+
+**A real colour picker (§C).** `components/ColorPicker.svelte` +
+`lib/color.ts`: the mock's 26×22 swatch opens a saturation/value field, a hue
+strip and direct numeric entry in H/S/V, R/G/B and hex. Not
+`<input type="color">` — Jeremy ruled the browser picker out, and it cannot be
+themed or reliably driven from a keyboard. What it EMITS is the control's own
+space, unrounded, so the 16.16 values pushed to the device are identical to
+what the three raw channel rows produced; only the display converts.
+`Controls.svelte` also adopts the mock's `.ctlrow` three-column grid. The
+component is deliberately control-agnostic so the palette editor (#537) can
+take it per stop.
+
+**Black scatter dots no longer paint out lit ones (§A).** `paintPoints` sorted
+back-to-front, which is right for opaque dots of a solid object — but a pixel
+that is OFF is not part of the object, and by depth it lands in front of a lit
+neighbour and punches a black disc through it. `paintOrder` now paints every
+unlit point first, each group still depth-sorted; the flat 2D case had the same
+bug with index order standing in for depth. Unit-tested in
+`web/tests/draw.test.mjs`. Measured effect: e2e's 3D gallery-tile check went
+from 221 to 393 lit pixels on the same frame.
+
+**Harnesses.** `e2e.mjs` and `device-e2e.mjs` gained checks for every item
+above (bordered name, `Save` text, the header split measured against the rail
+column's own left edge, menu order, the E6 flip, both fps figures, Debug's
+position and label, the 26×26 pause box, the projection popup's cards and both
+resets, the picker end-to-end including a device push). Three device-e2e checks
+that #545 had left stale were repaired: a matrix's only non-native kind is 1D
+now, the projection-defaults block has to run while the fixture is 2D, and
+Settings' Projection section is conditional (a strip has nothing to configure).
+
+Verified on the mirror only (`--board panel`, `E2E_PORT=6500`): all five
+harnesses plus `npm test`, and side-by-side shots against mock frames S2, S2b,
+S2c and S2d. No hardware in this PR.
+
 ## 2026-09-19 — a Layout never shows a bigger pattern; device name; clock sync now (#538)
 
 The engine/firmware/mirror third of Jeremy's Phase A review (Gitea #538 §B/§C).

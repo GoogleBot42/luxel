@@ -453,7 +453,12 @@ try {
   // Share is playground-only and now lives in the editor's ⋯ menu (#468), so
   // the check has to open the menu — an absent role is otherwise vacuous.
   check("device: no Share in the ⋯ menu", (await menuHas(page, "share")) === false);
-  check("device: Save is labelled for the device", (await page.$eval('[data-role="save"]', (el) => el.textContent.trim())) === "Save to device");
+  // audit E2: one word in both modes — WHERE it lands is the save state's
+  // job, not the button's ("Save to device" was the wrong text, #538)
+  check(
+    "device: the primary action still reads Save",
+    (await page.$eval('[data-role="save"]', (el) => el.textContent.trim())) === "Save",
+  );
   check("device: no reconnect button", (await page.$('[data-role="reconnect"]')) === null);
   const hasDisconnect = await page.$$eval("header button", (btns) =>
     btns.some((b) => /disconnect/i.test(b.textContent ?? "")),
@@ -581,6 +586,18 @@ try {
       const shape1d = await mappedPage.$eval('[data-role="editor-view"] [data-role="preview"]', (el) => el.dataset.shape);
       check("layout: a 1D pattern on a panel previews as the panel, not a bar", shape1d === "grid");
 
+      // audit E9: a console runs two loops and states both — the device's own
+      // rate was already in the shell header, so showing only that here told
+      // you nothing new (Jeremy, 2026-09-19).
+      const dims = await mappedPage
+        .$eval('[data-role="preview-dims"]', (el) => (el.textContent ?? "").trim())
+        .catch(() => "");
+      check(
+        "E9: the console preview header states the local AND the device rate",
+        /fps local/.test(dims) && /fps on device/.test(dims) && /^64×64 matrix · /.test(dims),
+        dims,
+      );
+
       // ---- the quiet Projection row (#468, proposal §5.4d) ----
       // Visible only when it can matter: the pattern's dims differ from the
       // Layout's AND the Layout offers more than one option. A 1D pattern on
@@ -598,16 +615,30 @@ try {
         projText.startsWith("device default ·"),
         projText,
       );
+      // audit E10 (Jeremy: "it should be using the same widget as from
+      // settings in a popup") — the collapsed row stays, the CHANGE opens
+      // settings/ProjectionCard.svelte, the same component and the same
+      // engine-supplied labels.
       await mappedPage.click('[data-role="projection-change"]');
       await mappedPage.waitForSelector('[data-role="projection-options"]', { timeout: 2000 });
-      const projOpts = await mappedPage.$$eval('[data-role="projection-options"] button', (els) =>
-        els.map((e) => (e.textContent ?? "").trim().split(" ·")[0]),
+      const projCards = await mappedPage.$$eval(
+        '[data-role="projection-options"] [data-role="projection-card"]',
+        (els) => els.map((e) => e.dataset.mode),
       );
       check(
-        "projection: the engine lists by-index and the two axes",
-        projOpts.length >= 3,
-        projOpts.join(","),
+        "E10: change opens the Settings projection cards, one per engine option",
+        projCards.length === 3 && projCards.includes("index") && projCards.includes("x"),
+        projCards.join(","),
       );
+      check(
+        "E10: the popup carries its own reset to the device default",
+        (await mappedPage.$('[data-role="projection-use-default"]')) !== null,
+      );
+      check(
+        "E10: each card previews this pattern on this fixture (a live canvas)",
+        (await mappedPage.$$eval('[data-role="projection-options"] canvas', (els) => els.length)) === 3,
+      );
+      await mappedPage.screenshot({ path: `${shotDir}/device-e2e-panel-projection-popup.png` });
       await mappedPage.click('[data-role="projection-opt-x"]');
       await sleep(600);
       const projOvr = await mappedPage
@@ -625,6 +656,21 @@ try {
       check(
         "projection: reset goes back to the device default",
         (await mappedPage.$('[data-role="projection-change"]')) !== null,
+      );
+      // and the same reset lives INSIDE the popup, for the trip that starts
+      // by opening it rather than by noticing the override
+      await mappedPage.click('[data-role="projection-change"]');
+      await mappedPage.waitForSelector('[data-role="projection-options"]', { timeout: 2000 });
+      await mappedPage.click('[data-role="projection-opt-y"]');
+      await sleep(500);
+      await mappedPage.click('[data-role="projection-value"]');
+      await mappedPage.waitForSelector('[data-role="projection-use-default"]', { timeout: 2000 });
+      await mappedPage.click('[data-role="projection-use-default"]');
+      await sleep(500);
+      check(
+        "E10: 'use device default' in the popup clears the override",
+        (await mappedPage.$('[data-role="projection-change"]')) !== null &&
+          (await mappedPage.$('[data-role="projection-options"]')) === null,
       );
       // back to the 2D pattern: native on this Layout, so no row at all
       await fetch(`${MAPPED}/api/code`, {
@@ -670,9 +716,11 @@ try {
       const projRows = await mappedPage.$$eval('[data-role="projection-kind"]', (els) =>
         els.map((e) => e.dataset.dims).join(","),
       );
+      // Since #545 a Layout never shows a pattern of HIGHER dimensionality,
+      // so a matrix's only non-native kind is 1D.
       check(
         "settings: a panel console offers the projections of a matrix",
-        projRows === "1,3",
+        projRows === "1",
         projRows,
       );
       await mappedPage.click('[data-role="tab-patterns"]');
@@ -1019,24 +1067,31 @@ try {
   );
   const laySnake = await (await fetch(`${DEV}/api/layout`)).json();
   check("layout: the snake reached the device", laySnake.matrix?.snake === 1, JSON.stringify(laySnake.matrix));
-  await page.select('[data-role="layout-kind"]', "strip"); // restore
-  await sleep(600);
-
-  // the projection DEFAULTS live here too, and are POSTed as one `proj1d` line
+  // The projection DEFAULTS live here too, and are POSTed as one `proj*`
+  // line. Still on the MATRIX: since #545 a 1D fixture offers nothing at all
+  // (it never shows a 2D or 3D pattern), so the block only exists here.
   {
     const cards = await page.$$('[data-role="projection-card"]');
     check("projection: the block offers the non-native kinds", cards.length > 0, `${cards.length} cards`);
-    await page.$eval('[data-role="projection-kind"][data-dims="2"] [data-role="projection-card"]', (el) =>
-      el.click(),
+    const kinds = await page.$$eval('[data-role="projection-kind"]', (els) =>
+      els.map((e) => e.dataset.dims).join(","),
+    );
+    check("projection: a matrix's only non-native kind is 1D (#545)", kinds === "1", kinds);
+    await page.$eval(
+      '[data-role="projection-kind"][data-dims="1"] [data-role="projection-card"][data-mode="x"]',
+      (el) => el.click(),
     );
     await sleep(600);
     const proj = await (await fetch(`${DEV}/api/layout`)).json();
     check(
       "projection: picking a card sets the device default",
-      proj.proj?.proj2d === "x",
+      proj.proj?.proj1d === "x",
       JSON.stringify(proj.proj),
     );
   }
+
+  await page.select('[data-role="layout-kind"]', "strip"); // restore
+  await sleep(600);
 
   // The editor configures no geometry at all since A8 (#469): no shape
   // select, no pixel field, no install buttons, no map link. Two full-screen
@@ -1112,6 +1167,39 @@ try {
   await page.select('[data-role="layout-proto"]', "sk9822");
   await sleep(300); // restore
 
+  // ---- the colour picker pushes like any other control (#538) ----
+  // The widget is new; the WIRE is not. What it emits is still the control's
+  // own 16.16 triple, so the device's pixels are the proof.
+  await setEditor(
+    page,
+    [
+      "export var h = 0, s = 1, v = 1",
+      "export function hsvPickerTint(a, b, c) { h = a; s = b; v = c }",
+      "export function render(index) { hsv(h, s, v) }",
+    ].join("\n"),
+  );
+  await sleep(1400);
+  await page.waitForSelector('[data-role="color-swatch"]', { timeout: 5000 });
+  check(
+    "colour: a console control is a swatch, not three raw channels",
+    (await page.$('[data-role="editor-view"] input[type="color"]')) === null,
+  );
+  await page.click('[data-role="color-swatch"]');
+  await page.waitForSelector('[data-role="color-hex"]', { timeout: 3000 });
+  await page.$eval('[data-role="color-hex"]', (el) => {
+    el.value = "#0000ff";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await sleep(900);
+  const pxHsv = new Uint8Array(await (await fetch(`${DEV}/api/pixels`)).arrayBuffer());
+  check(
+    "colour: the picker pushes the control to the device (blue on the wire)",
+    pxHsv[2] === 255 && pxHsv[0] === 0 && pxHsv[1] === 0,
+    `rgb=${pxHsv[0]},${pxHsv[1]},${pxHsv[2]}`,
+  );
+  await page.keyboard.press("Escape");
+  await sleep(200);
+
   // live-code push: slider-controlled solid color + exported var
   await setEditor(
     page,
@@ -1146,6 +1234,7 @@ try {
   // vars watcher shows the exported var from the device
   const varsText = await page.evaluate(() => document.body.innerText);
   check("vars: exported var visible", varsText.includes("level"), "");
+
 
   // compile error path: line/col from the local compile; the broken source is
   // NOT pushed, so the device keeps running the previous pattern
@@ -1531,6 +1620,28 @@ try {
   await page.click('[data-role="save"]');
   await sleep(900);
   check("library: a stored pattern reads 'saved · on device'", (await saveState(page)) === "saved · on device");
+  // audit E6 (Jeremy 2026-09-19): "saving a pattern from the library doesn't
+  // automatically change the UI so that the pattern has playlist, delete, etc.
+  // options in the overflow menu". The on-device verbs key off the stored id,
+  // so the save must END with one — from the reply, or from the freshly-read
+  // list matched by name.
+  await page.click('[data-role="overflow"]');
+  await page.waitForSelector('[data-role="editor-menu"]', { timeout: 4000 });
+  const afterSaveMenu = await page.$$eval('[data-role="editor-menu"] > *', (els) =>
+    els.map((e) => (e.classList.contains("sepr") ? "—" : (e.dataset.role ?? "?"))),
+  );
+  check(
+    "E6: after a save the ⋯ menu gains Add to playlist and Delete",
+    afterSaveMenu.includes("add-to-playlist") && afterSaveMenu.includes("delete"),
+    afterSaveMenu.join(","),
+  );
+  check(
+    "E6: and the on-device group is ruled off first, as in the mock",
+    afterSaveMenu.join(",") === "add-to-playlist,—,duplicate,epe-export,epe-import,—,delete",
+    afterSaveMenu.join(","),
+  );
+  await page.keyboard.press("Escape");
+  await sleep(200);
   const apiList = await (await fetch(`${DEV}/api/patterns`)).json();
   check(
     "library: save-to-device stores it",
@@ -2230,34 +2341,43 @@ try {
   );
 
   // ---- "Add to playlist" captures the PROJECTION too (#470 + #468) ----
-  // This console fabricates an 11×11 grid for a non-1D pattern, so a 3D one
-  // is not native to it and the editor's quiet Projection row is live. The
-  // choice made there is a VALUE, and the playlist item it is added to is
+  // Since #545 a Layout never shows a pattern of higher dimensionality, so
+  // the only live Projection row is a 1D pattern on a 2D-or-better fixture —
+  // this console is a strip, so make it a matrix for the trip. The choice
+  // made in that row is a VALUE, and the playlist item it is added to is
   // where that value gets its durable home (stores/pattern.ts).
+  await page.click('[data-role="tab-settings"]');
+  await sleep(400);
+  await page.select('[data-role="layout-kind"]', "matrix");
+  await sleep(900);
   await page.click('[data-role="tab-patterns"]');
   await sleep(400);
   await tileAction(page, DTILE, "tile-edit");
   await sleep(1200);
-  await setEditor(page, "export function render3D(index, x, y, z) { hsv(x, 1, z) }");
+  await setEditor(page, "export function render(index) { hsv(index / pixelCount, 1, 1) }");
   await sleep(1200);
   await renameTo(page, "proj rider");
   await page.click('[data-role="save"]');
   await sleep(900);
   await page.click('[data-role="projection-change"]');
   await page.waitForSelector('[data-role="projection-options"]', { timeout: 2000 });
-  await page.click('[data-role="projection-opt-yz"]');
+  await page.click('[data-role="projection-opt-y"]');
   await sleep(400);
   await menuClick(page, "add-to-playlist");
   await sleep(700);
   const plWithProj = await (await fetch(`${DEV}/api/playlist`)).json();
   check(
     "playlist: Add to playlist carries the editor's projection onto the item",
-    plWithProj.items.length === 1 && plWithProj.items[0].proj === "yz",
+    plWithProj.items.length === 1 && plWithProj.items[0].proj === "y",
     JSON.stringify(plWithProj.items),
   );
   await fetch(`${DEV}/api/playlist`, { method: "POST", body: "D 5" }); // clean up
   await page.click('[data-role="editor-back"]'); // back to the tabs
   await sleep(400);
+  await page.click('[data-role="tab-settings"]');
+  await sleep(300);
+  await page.select('[data-role="layout-kind"]', "strip"); // restore the fixture
+  await sleep(700);
 
   // ---- playlist pre-flight: an item whose assert() fails at the current
   // pixel count is reported per-item ("invalid") and badged in the UI ----
@@ -2356,11 +2476,17 @@ try {
           )
           .filter(Boolean),
     );
+    // Projection is CONDITIONAL since #545: a 1D fixture (this one) can show
+    // no pattern of another dimensionality at all, so it has nothing to
+    // configure and the section is absent rather than empty. Where it does
+    // appear — the panel console above — it sits between LED layout and WiFi.
+    const heads = order.filter((x) => x.startsWith("#"));
     check(
-      "settings: Device · LED layout · WiFi · Advanced, in that order",
-      order.filter((x) => x.startsWith("#")).join(" ") ===
-        "#Device #LED layout #Projection #WiFi #Advanced",
-      order.filter((x) => x.startsWith("#")).join(" "),
+      "settings: Device · LED layout · [Projection ·] WiFi · Advanced, in that order",
+      heads.filter((x) => x !== "#Projection").join(" ") ===
+        "#Device #LED layout #WiFi #Advanced" &&
+        (!heads.includes("#Projection") || heads.indexOf("#Projection") === 2),
+      heads.join(" "),
     );
     check(
       "settings: brightness is the first control on the page",
