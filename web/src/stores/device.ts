@@ -304,17 +304,33 @@ interface Subscriber {
   everyMs: number;
   fn: () => void | Promise<void>;
   last: number;
+  /** A run that has not resolved yet. The next tick skips this subscriber
+   *  entirely rather than starting a second one. */
+  running: boolean;
 }
 
 const subscribers = new Map<string, Subscriber>();
 let ticker: ReturnType<typeof setInterval> | undefined;
 
+// A cadence is a ceiling, and a subscriber never runs twice at once (#540).
+// The old tick fired every subscriber on schedule whether or not its previous
+// run had finished — and when the device is congested a refresh does NOT
+// finish quickly: every fetch retries with backoff behind the gate, so one
+// run can span ten seconds while each tick queues three or four more requests
+// behind it. That is the latch Jeremy hit on the Athom: one slow moment and
+// the page piles work onto a device that is already refusing connections, and
+// it never climbs back out. Skipping instead of stacking costs nothing when
+// the device is healthy — `last` is still stamped at the START of a run, so
+// the cadences in the table above are unchanged.
 function tick(): void {
   const now = Date.now();
   for (const s of subscribers.values()) {
-    if (now - s.last < s.everyMs) continue;
+    if (s.running || now - s.last < s.everyMs) continue;
     s.last = now;
-    void s.fn();
+    const r = s.fn();
+    if (r === undefined) continue;
+    s.running = true;
+    void r.finally(() => (s.running = false));
   }
 }
 
@@ -339,7 +355,7 @@ export function pollSubscribe(
   everyMs: number,
   fn: () => void | Promise<void>,
 ): () => void {
-  subscribers.set(id, { everyMs, fn, last: Date.now() });
+  subscribers.set(id, { everyMs, fn, last: Date.now(), running: false });
   reconcileTicker();
   return () => {
     subscribers.delete(id);
@@ -377,18 +393,13 @@ export async function refreshStatus(): Promise<void> {
     if (st.slot) deviceSlot.set(st.slot);
     deviceStore.set(st.store ?? null);
     deviceVmerr.set(st.vmerr);
+    // DDP/E1.31 liveness rides along here (#540): it is a field of this same
+    // body, and the Settings tab used to re-GET the WHOLE of `/api/status` at
+    // 0.5 Hz just to read it — the heaviest endpoint on the device, fetched
+    // twice over, on a board with three sockets.
+    netLive.set(st.live ?? null);
   } catch {
     /* transient; the next poll retries */
-  }
-}
-
-export async function refreshNetLive(): Promise<void> {
-  const d = get(device);
-  if (!d) return;
-  try {
-    netLive.set((await d.status()).live ?? null);
-  } catch {
-    /* older firmware without the live field — stays idle */
   }
 }
 

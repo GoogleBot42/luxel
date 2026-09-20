@@ -305,10 +305,26 @@ try {
         method: "POST",
         body: `D 5\nX 0\nI ${id2d} -1\nI ${id1d} -1\n`,
       });
+      // Poison the persisted "Preview as" choice before the reload (Gitea
+      // #539). It is the PLAYGROUND's control, but it lives in localStorage
+      // and the pre-v2 editor's layout select wrote the same key, so a real
+      // console carries stale values. A `map` choice is the sharp one: its
+      // coordinates are never persisted, so the reconciler used to fall
+      // through to a bare strip and present this 64x64 panel as 4096 px in 1D
+      // — the header chip, every tile and Settings' projection block with it.
+      // Everything below this line now runs with that value in place.
+      await mappedPage.evaluate(() =>
+        localStorage.setItem("luxel.previewAs", JSON.stringify({ mode: "map", pixels: 4096 })),
+      );
       await mappedPage.setViewport({ width: 1400, height: 900 });
       await mappedPage.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(MAPPED)}`, {
         waitUntil: "networkidle0",
       });
+      check(
+        "layout: the stale Preview-as choice is in place for the checks below",
+        (await mappedPage.evaluate(() => localStorage.getItem("luxel.previewAs")))?.includes("map"),
+        "precondition",
+      );
       // Settings → LED layout states the fixture (A8, #469): the installed
       // 64×64 grid makes this Layout a `map`, and the headline is the shape.
       const r = await mappedPage
@@ -429,6 +445,22 @@ try {
         tileCaps.join("|"),
       );
       await mappedPage.screenshot({ path: `${shotDir}/device-e2e-panel-patterns.png` });
+
+      // Settings names the projections a 64x64 MATRIX offers — a row for the
+      // pattern kinds that are not native to it (1D and 3D), never a strip's
+      // 2D/3D rows (#539: the stale choice made the whole page a strip's).
+      await mappedPage.click('[data-role="tab-settings"]');
+      await sleep(800);
+      const projRows = await mappedPage.$$eval('[data-role="projection-kind"]', (els) =>
+        els.map((e) => e.dataset.dims).join(","),
+      );
+      check(
+        "settings: a panel console offers the projections of a matrix",
+        projRows === "1,3",
+        projRows,
+      );
+      await mappedPage.click('[data-role="tab-patterns"]');
+      await sleep(300);
 
       // mobile (D9, S1c): two columns on a 390 px console
       await mappedPage.setViewport({ width: 390, height: 780 });
@@ -1460,6 +1492,61 @@ try {
   // editor hides the settings panel: real clicks need the Settings tab open.
   await page.click('[data-role="tab-settings"]');
   await sleep(400);
+
+  // ---- what the Settings tab costs the device (Gitea #540) ----
+  // The device serves from three sockets and a closing one holds its slot for
+  // up to two seconds, so the page's steady-state poll load has to leave one
+  // free — on the Athom it did not, and a second client (or the page's own
+  // next poll) was refused. Two properties keep it there: `/api/status` is
+  // fetched ONCE per second by the session poll (the tab used to re-GET the
+  // whole body at 0.5 Hz as well, just to read `live`), and the tab's three
+  // reads go one at a time rather than as a burst that fills both gate slots.
+  {
+    const inflight = new Map();
+    const counts = new Map();
+    let maxConcurrent = 0;
+    let trioOverlap = 0;
+    const isTrio = (u) => /\/api\/(mqtt|sync|clock)$/.test(u);
+    const onReq = (r) => {
+      inflight.set(r, r.url());
+      maxConcurrent = Math.max(maxConcurrent, inflight.size);
+      const n = [...inflight.values()].filter(isTrio).length;
+      if (n > 1) trioOverlap++;
+      const key = new URL(r.url()).pathname;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    };
+    const onDone = (r) => inflight.delete(r);
+    page.on("request", onReq);
+    page.on("requestfinished", onDone);
+    page.on("requestfailed", onDone);
+    await sleep(10000);
+    page.off("request", onReq);
+    page.off("requestfinished", onDone);
+    page.off("requestfailed", onDone);
+    const status = counts.get("/api/status") ?? 0;
+    const mqtt = counts.get("/api/mqtt") ?? 0;
+    check(
+      "settings poll: /api/status is read once a second, not twice",
+      status > 0 && status <= 12,
+      `${status} in 10 s`,
+    );
+    check(
+      "settings poll: the tab's own reads stay at 0.5 Hz",
+      mqtt >= 3 && mqtt <= 7,
+      `${mqtt} mqtt in 10 s`,
+    );
+    check(
+      "settings poll: the tab's reads never overlap each other",
+      trioOverlap === 0,
+      `${trioOverlap} overlaps`,
+    );
+    check(
+      "settings poll: never more than the gate's two requests in flight",
+      maxConcurrent <= 2,
+      `${maxConcurrent} concurrent`,
+    );
+  }
+
   // device output palette (Gitea #139): the Output card's editor drives
   // POST/DELETE /api/output/palette, and GET /api/output echoes it back
   {

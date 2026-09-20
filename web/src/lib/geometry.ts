@@ -360,34 +360,38 @@ function fromDevice(g: DeviceGeom, projection: Projection): Layout {
 
 /** The ONE reconciler: device Layout × "Preview as" × the pattern's dims.
  *
- *  Console (`connected` with a `geom`): the device owns the geometry, and an
- *  explicit "Preview as" only re-SHAPES it — the pixel count stays hardware
- *  truth wherever the shape does not dictate it.
+ *  Console (`connected` with a `geom`): the DEVICE owns the geometry, full
+ *  stop — "Preview as" is not consulted at all.
  *  Playground: Auto follows the compiled pattern (3D › 2D › 1D, D7);
  *  anything else is exactly what the user asked for. */
 export function reconcileLayout(i: GeometryInput): Layout {
   const p = i.projection;
   const choice = i.previewAs;
-  const devicePixels = i.geom?.pixels ?? 0;
-  const onDevice = i.connected && i.geom !== null;
+
+  // A console renders through the device's own Layout and nothing else.
+  // "Preview as" is the PLAYGROUND's control — since A8 (#469) the chip is
+  // only mounted there — but the choice is persisted in localStorage, so one
+  // left behind by a playground session on the same origin, or written by the
+  // pre-v2 editor's layout select (which used this same key), outlived the
+  // device and silently re-shaped the console. A stored `map` choice was the
+  // worst of it: `mapCoords` is never persisted, so the fall-through below
+  // reconciled a 64x64 panel down to a 4096 px strip — every pattern drawn in
+  // 1D and Settings offering the projections of a strip (Gitea #539).
+  if (i.connected && i.geom !== null) return fromDevice(i.geom, p);
 
   if (choice.mode === "auto") {
-    if (onDevice) return fromDevice(i.geom as DeviceGeom, p);
     const pd = normDims(i.patternDims);
     if (pd === 3) return lattice(AUTO_LATTICE, "pattern", p);
     if (pd === 2) return matrix(AUTO_MATRIX, AUTO_MATRIX, "pattern", p);
     return strip(DEFAULT_STRIP_PIXELS, "default", p);
   }
-  if (choice.mode === "strip") {
-    // On a device the strip length is the hardware's, never the form's.
-    return strip(onDevice ? devicePixels : choice.pixels, "user", p);
-  }
+  if (choice.mode === "strip") return strip(choice.pixels, "user", p);
   if (choice.mode === "matrix") return matrix(choice.w, choice.h, "user", p);
   if (choice.mode === "lattice") return lattice(choice.n, "user", p);
   // Custom map program: its computed coordinates ARE the Layout. Until it has
   // run there is nothing to draw, so the rig stays a strip of the same size.
   if (i.mapCoords && i.mapCoords.length > 0) return cloud(i.mapCoords, "user", p);
-  return strip(onDevice ? devicePixels : choice.pixels, "user", p);
+  return strip(choice.pixels, "user", p);
 }
 
 /** Pixels this Layout addresses — what an engine is compiled at. */

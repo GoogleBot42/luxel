@@ -70,8 +70,6 @@
     layoutSignature,
     patternDims,
     pixelCount,
-    previewAs,
-    setPreviewAs,
   } from "../stores/geometry";
   import { banners, clearNote, note, notes, setBanner } from "../stores/notify";
   import {

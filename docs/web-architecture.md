@@ -162,15 +162,34 @@ Registered cadences today:
 | `status` | 1 Hz | `startSessionPoll()`, once from the shell | `/api/status` → fps readout, free heap, vmerr, per-board pixel cap |
 | `playlist` | 1 Hz | `pages/Playlist.svelte` while its tab is open | `/api/playlist`, reconciled against the optimistic transport intent (#431) |
 | `playlist-progress` | 2 Hz | `pages/Playlist.svelte` while its tab is open | nothing — it only ticks the now-playing clock (no fetch) |
-| `settings` | 0.5 Hz | `pages/Settings.svelte` while its tab is open | `/api/status` live field, `/api/mqtt`, `/api/sync`, `/api/clock` |
+| `settings` | 0.5 Hz | `pages/Settings.svelte` while its tab is open | `/api/mqtt`, `/api/sync`, `/api/clock` — awaited ONE AT A TIME (#540) |
 
 `/api/output` is deliberately **not** polled: it is a form, and re-reading it
 under the user's fingers would fight their edits. It is read once when the
-Settings tab becomes visible, and re-read after every write.
+Settings tab becomes visible, and re-read after every write. Nor is
+`/api/status` read anywhere but the `status` subscriber: DDP/E1.31 liveness is
+a field of that same body, and the Settings tab used to re-GET the whole thing
+at 0.5 Hz just to read it (#540).
 
 Do not add a bare `setInterval` to a component. Subscribe here instead — the
 device serves from a tiny connection pool and every extra poll competes with
 the UI's own fetches (docs/tools.md, `panel-load-bench`).
+
+**Count the CONNECTIONS the open tab needs, not just the requests.** A device
+runs three web tasks (two on a small chip) and a closing connection holds its
+slot for up to 2 s, so a page that keeps three sockets busy leaves nothing for
+anyone else — its own next poll included. Measured on the Athom (#540): the
+Settings tab firing its reads in parallel took `web[]` from `[0,1,1]` to all
+three busy, and a second client was refused on 28 of 31 samples. Serialised,
+the tab costs one connection beyond the status poll.
+
+**A cadence is a ceiling, and a subscriber never runs twice at once.** The tick
+skips any subscriber whose previous run has not resolved. It has to: under
+congestion `gatedFetch` retries with ~10 s of backoff, so a run can span many
+ticks, and firing anyway piles requests onto a device that is already refusing
+connections — the latch behind "it suddenly went slow and never came back".
+`last` is still stamped at the START of a run, so healthy cadences are exactly
+the table above.
 
 ## The notify primitive (`stores/notify.ts`)
 
@@ -568,8 +587,12 @@ Rules the reconciler encodes:
   of the engine's fabricated ceil(√n) grid (`source:"default"`, so it WINS
   over the Layout in that one case — a `render2D`-only pattern on a strip
   board really is rendering through a grid the Layout does not describe); then
-  `deviceMap`, for firmware older than either field. A "Preview as" choice
-  only re-shapes; the pixel count stays hardware truth.
+  `deviceMap`, for firmware older than either field. The "Preview as" choice
+  is **not consulted on a console at all** (#539) — it is the playground's
+  control, but it is persisted, and one left behind by a playground session on
+  the same origin (or by the pre-v2 editor's layout select, which wrote the
+  same key) used to re-shape the console for good: a stored `map` choice with
+  no coordinates reconciled a 64×64 panel down to a 4096 px strip.
 - **Playground**: `Auto` (the default, D7) follows the compiled pattern
   3D › 2D › 1D; anything else is the user's and outlives pattern loads.
 - `devicePixels` / `deviceMap` are **raw wire state** in `stores/device.ts`.
@@ -660,10 +683,10 @@ way the fixture shows it rather than row-major. Per-item projection overrides ar
   cycle stale — assign the derived values in that function too
   (`components/PatternThumb.svelte`'s `adopt()`), or it will draw the previous
   Layout's shape while holding the new Layout.
-- **Geometry comes from `stores/geometry.ts`.** One `layout`, reconciled from
-  the device / the "Preview as" choice / the compiled pattern's dims. No
-  component compiles at a pixel count of its own or installs a map of its own —
-  see the Geometry section above.
+- **Geometry comes from `stores/geometry.ts`.** One `layout`: the device's on a
+  console, the "Preview as" choice × the compiled pattern's dims in the
+  playground. No component compiles at a pixel count of its own or installs a
+  map of its own — see the Geometry section above.
 - **One phone breakpoint: `@media (max-width: 600px)`.** Every responsive rule
   in `web/src` hangs off it — the Patterns grid, the Gallery tiles, the
   Playlist page and its rows, the pattern picker. Mobile is a soft requirement
