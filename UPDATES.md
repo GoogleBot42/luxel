@@ -1,5 +1,44 @@
 # Update log
 
+## 2026-09-19 — a panel console shown as a strip (#539); the Settings tab starving the device (#540)
+
+Two bugs Jeremy hit on the bench, both root-caused against the real hardware.
+
+**The Seengreat panel presented as a strip.** The device was innocent all
+along: `GET /api/layout` answers `kind:"matrix"`, 64×64, 4096 px in ~0.1 s, and
+`/api/status.geom` says dims 2. The console was overriding it with a *persisted*
+"Preview as" choice — the playground's control, whose chip A8 stopped mounting
+on a console, but which lives in `localStorage` and which the pre-v2 editor's
+layout select used to write on a console too. `mode:"map"` is the sharp edge:
+`mapCoords` is never persisted, so `reconcileLayout()` fell through to
+`strip(devicePixels)` and a 64×64 panel became a 4096 px strip — tiles in 1D,
+and Settings offering a strip's 2D/3D projections. Reproduced in chromium
+against 192.168.0.238 by seeding the key, and fixed by the invariant that was
+already written down: on a console the device owns the geometry, full stop, and
+the reconciler does not look at `previewAs` at all.
+
+**The Athom "suddenly broken or massively laggy" after a Settings change.** The
+layout POST is innocent too — one 9-byte POST per commit, 79 ms, every field
+`on:change`. What hurt was the open Settings tab: `/api/status` fetched twice
+over (the 1 Hz session poll *and* `refreshNetLive()` re-GETting the whole body
+at 0.5 Hz for one field), and the tab's four reads fired in parallel, filling
+both fetchgate slots. The device has three web sockets and a closing one holds
+its slot for 2 s — `web[]` went from `[0,1,1]` on Patterns to all three busy on
+Settings, and a second client was refused on 28 of 31 samples over a minute
+while the page's own polls took ~20 % `ERR_CONNECTION_REFUSED`. The latch was
+in the poll scheduler: it re-fired a subscriber every `everyMs` whether or not
+the previous run had finished, so once `gatedFetch` started retrying with
+backoff each tick queued three or four MORE requests. Fixed on all three
+counts: `live` comes off the status body the 1 Hz poll already reads, the tab's
+reads are awaited one at a time, and a subscriber whose run is still in flight
+is skipped (cadences unchanged when the device is healthy).
+
+Measured on the Athom, 60 s on Settings, before → after: 182 → 151 device
+requests, 92 → 60 `/api/status`, 56 → 0 overlapping tab reads. Verified on both
+boards over `?device=` from a local build; `device-e2e.mjs` now runs its whole
+panel-console block with a poisoned `luxel.previewAs` in localStorage and
+asserts the Settings tab's request mix, concurrency and non-overlap.
+
 ## 2026-09-19 — "absent, never disabled" made mechanical (#529); the clipped `manual` placeholder (#530)
 
 The §5.7 rule the v2 console is built on — a control is ABSENT unless the

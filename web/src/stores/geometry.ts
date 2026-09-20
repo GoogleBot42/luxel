@@ -83,9 +83,9 @@ export type {
 
 /** The playground's "Preview as" choice (§4) — the ONE new control this
  *  ticket adds. Persisted like the old rig choice was, so it outlives a
- *  reload AND a pattern load: it is the user's, not the pattern's. On the
- *  console it is an override of the device's own shape (the editor's legacy
- *  layout select writes it until A8 moves that to Settings). */
+ *  reload AND a pattern load: it is the user's, not the pattern's. It is the
+ *  PLAYGROUND's alone: a console renders through the device's Layout and the
+ *  reconciler does not consult this at all (Gitea #539). */
 export const previewAs: Writable<PreviewAs> = writable(loadPreviewAs() ?? DEFAULT_PREVIEW_AS);
 previewAs.subscribe((v) => savePreviewAs(v));
 

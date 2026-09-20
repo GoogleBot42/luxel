@@ -246,12 +246,34 @@ test("custom map program: a strip of the same size until the program has run", (
   assert.equal(tileShape(after), "scatter");
 });
 
-test("on a console an explicit strip choice still takes the hardware's pixel count", () => {
-  const l = reconcileLayout(
-    input({ connected: true, geom: PANEL_CONSOLE, previewAs: { mode: "strip", pixels: 7 } }),
-  );
-  assert.equal(l.pixels, 4096);
+// A console renders through the device's Layout and NOTHING else (#539): the
+// "Preview as" choice is persisted, the chip that sets it is playground-only,
+// and a leftover choice used to re-shape the console for good. The `map` case
+// is the one Jeremy hit — `mapCoords` is never persisted, so a stored `map`
+// choice fell through to a bare strip of the hardware's pixel count and a
+// 64x64 panel presented as a 4096 px strip.
+for (const [name, choice] of [
+  ["strip", { mode: "strip", pixels: 7 }],
+  ["matrix", { mode: "matrix", w: 8, h: 8 }],
+  ["lattice", { mode: "lattice", n: 5 }],
+  ["map (no coordinates)", { mode: "map", pixels: 4096 }],
+]) {
+  test(`on a console a stored "${name}" Preview-as choice is ignored`, () => {
+    const l = reconcileLayout(input({ connected: true, geom: PANEL_CONSOLE, previewAs: choice }));
+    assert.equal(l.dims, 2);
+    assert.equal(l.regular, true);
+    assert.equal(l.w, 64);
+    assert.equal(l.h, 64);
+    assert.equal(l.pixels, 4096);
+    assert.equal(l.source, "device");
+    assert.equal(layoutLabel(l), "64×64 matrix");
+  });
+}
+
+test("a stored console choice still shapes the PLAYGROUND", () => {
+  const l = reconcileLayout(input({ previewAs: { mode: "strip", pixels: 7 } }));
   assert.equal(l.dims, 1);
+  assert.equal(l.pixels, 7);
 });
 
 // ---- helpers every consumer leans on ----

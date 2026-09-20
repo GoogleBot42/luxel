@@ -52,7 +52,7 @@
     refreshOutput,
   } from "../stores/device";
   import { confirm } from "../stores/dialog";
-  import { layout as geomLayout, layoutLabel, setPreviewAs } from "../stores/geometry";
+  import { layout as geomLayout, layoutLabel } from "../stores/geometry";
   import { note, notes } from "../stores/notify";
   import { luxel } from "../stores/pattern";
   import ArrangementSvg from "./ArrangementSvg.svelte";
@@ -180,12 +180,7 @@
   function setPixels(e: Event): void {
     const n = Math.max(1, Math.min($pixelMax, Number((e.target as HTMLInputElement).value) || 1));
     void (async () => {
-      if (await post(`strip ${n}`)) {
-        // any shape override was sized from the OLD count; the Layout goes
-        // back to following the device (#463)
-        setPreviewAs({ mode: "auto" });
-        dispatch("pixelchange");
-      }
+      if (await post(`strip ${n}`)) dispatch("pixelchange");
     })();
   }
 
@@ -208,10 +203,7 @@
         want === "strip"
           ? `strip ${px}`
           : matrixLine({ pw: m.pw > 1 ? m.pw : square.w, ph: m.ph > 1 ? m.ph : square.h });
-      if (await post(line)) {
-        setPreviewAs({ mode: "auto" });
-        dispatch("pixelchange");
-      }
+      if (await post(line)) dispatch("pixelchange");
     })();
   }
 

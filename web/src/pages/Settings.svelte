@@ -28,7 +28,6 @@
     refreshClock,
     refreshLayout,
     refreshMqtt,
-    refreshNetLive,
     refreshOutput,
     refreshSync,
     syncStatus,
@@ -61,12 +60,22 @@
   /** The polled half: the read-only status lines the disclosure rows carry.
    *  `/api/output` and `/api/layout` are read once on arrival instead — they
    *  are forms, and re-reading one under the user's fingers would fight their
-   *  edits (and a layout POST's reply already IS the new state). */
-  function refreshLive(): void {
-    void refreshNetLive();
-    void refreshMqtt();
-    void refreshSync();
-    void refreshClock();
+   *  edits (and a layout POST's reply already IS the new state). DDP/E1.31
+   *  liveness is NOT here: it is a field of `/api/status`, which the session
+   *  poll already reads every second (#540).
+   *
+   *  ONE AT A TIME, deliberately (#540). Fired in parallel these three filled
+   *  both fetchgate slots at once, and with the 1 Hz status poll alongside
+   *  them the browser needed a third TCP connection — which is one more than
+   *  a device has spare (`WEB_TASK_POOL_SIZE` 3, and a closing connection
+   *  holds its slot for up to 2 s). Measured on the Athom with the Settings
+   *  tab open: all three slots busy, a second client refused, and the page's
+   *  own polls failing and retrying. Awaited in sequence the tab costs at
+   *  most one connection beyond the status poll. */
+  async function refreshLive(): Promise<void> {
+    await refreshMqtt();
+    await refreshSync();
+    await refreshClock();
   }
 
   let unsubscribe: (() => void) | undefined;
@@ -74,9 +83,11 @@
     unsubscribe?.();
     unsubscribe = undefined;
     if (active && $device) {
-      refreshLive();
-      void refreshOutput();
-      void refreshLayout();
+      void (async () => {
+        await refreshLayout();
+        await refreshOutput();
+        await refreshLive();
+      })();
       unsubscribe = pollSubscribe("settings", 2000, refreshLive);
     }
   }
