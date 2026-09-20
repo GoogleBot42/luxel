@@ -120,6 +120,16 @@ clicks until LAST, and restore afterwards (`POST /api/playlist/play <index>`,
 Athom rig on 2026-09-19 before the cause was isolated; `coldload.mjs` itself is
 safe (it never clicks a tile).
 
+**Load the device's OWN bundle once per run, then navigate by fragment.** A
+harness that points chromium at `http://<device>/` for each case — rather than
+at `vite preview` with `?device=` — cold-loads index.html + the JS + the CSS +
+the wasm every time, and a browser opens several parallel connections per load.
+After a handful the device's web pool (3 sockets, 2 small-chip) is out and the
+next `goto` comes back `net::ERR_CONNECTION_REFUSED` *while `/api/status` keeps
+answering in 50ms* — so it reads as a page full of missing elements, not as the
+load failure it is. Keep one page alive and set `location.hash`, which is what
+the fragment router is for (Seengreat, 2026-09-20, Gitea #568).
+
 ### The hosted https copy can NOT be driven headless
 
 Verifying `https://googlebot42.github.io/luxel/?device=http://<lan-ip>` — the

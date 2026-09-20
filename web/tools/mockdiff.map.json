@@ -14,7 +14,14 @@
     "",
     "`allow` lists the deviations Jeremy asked for that the mocks do not show. Each is",
     "`<element>` (the whole element), or `<element>.<property>`. They are printed in the",
-    "report as ALLOWED and never counted as deltas."
+    "report as ALLOWED and never counted as deltas.",
+    "",
+    "SELECTOR TRAP, both sides: `:first-of-type` / `:nth-of-type(k)` count SIBLINGS OF",
+    "THE SAME TAG, not members of a class. `.srow`, `.ctlrow`, `.prow`, `.orow`, `.field`,",
+    "`.rsec`, `.group` and `.plrow` are all plain <div>s among other plain <div>s, so",
+    "`.srow:nth-of-type(2)` is the SECOND DIV — usually not the second `.srow`. Use the",
+    "bare class plus `mockNth`/`nth` (an index over the matches) instead. `.sect` in S3",
+    "is a real <section> and is the one place `:nth-of-type` means what it looks like."
   ],
   "$seeds": [
     "What each MIRROR holds before the frames are measured. A bare `luxel serve` has an",

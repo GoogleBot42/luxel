@@ -123,9 +123,16 @@ paths:
   `tileAction(DTILE, …)` dies on "Node is either not clickable or not an
   Element", 400 lines away from the cause. A section that drives a page-level
   control puts it back in its own `finally` (2026-09-19, #563).
-- In e2e scripts, write injected pattern bodies on one line — CodeMirror
-  auto-closes `{`, so a trailing `}` on its own line doubles up and the
-  compile silently breaks.
+- **Inject pattern source by PASTING it, not by typing it.** CodeMirror
+  auto-closes `{`, so a typed program's own `}` doubles up and the compile
+  silently breaks. "Write it on one line" only works for a body that IS one
+  statement: the language needs a newline or `;` between statements, so
+  `var f = index / pixelCount hsv(f, 1, 1)` is a parse error, and anything
+  with two statements cannot be a one-liner. `e2e.mjs`'s `pasteEditor`
+  delivers a real `ClipboardEvent` with a `DataTransfer`, which CodeMirror's
+  own paste handler drops in verbatim; `mockdiff.mjs`'s `code` step does the
+  same. Typing cost a whole run in #538's mockdiff work — the editor frames
+  measured a compile-error state instead of the Controls rail they exist for.
 - Since #471 **two full-screen editors are mounted at once** — the pattern
   editor (`[data-role="editor-view"]`) and the map program's screen
   (`map-editor-view`) — each with its own CodeMirror pane and its own
