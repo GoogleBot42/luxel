@@ -8,6 +8,7 @@
   // thumbnails, the editor's preview) renders through what this picks,
   // because they all read `stores/geometry.ts`.
   import { createEventDispatcher } from "svelte";
+  import Popover from "./Popover.svelte";
   import {
     AUTO_LATTICE,
     AUTO_MATRIX,
@@ -23,13 +24,8 @@
   const dispatch = createEventDispatcher<{ openmap: void }>();
 
   let open = false;
-  let wrapEl: HTMLElement;
-
-  /** Click anywhere outside the chip closes it (no click handler on the
-   *  popover itself, which would need a keyboard twin to be accessible). */
-  function onWindowClick(e: MouseEvent): void {
-    if (open && wrapEl && !wrapEl.contains(e.target as Node)) open = false;
-  }
+  /** The chip the chooser hangs off (components/Popover.svelte). */
+  let chipEl: HTMLElement;
 
   // The numbers the rows hold, seeded from the current choice so switching
   // back and forth keeps what you typed.
@@ -64,12 +60,10 @@
   }
 </script>
 
-<svelte:window on:click={onWindowClick} />
-
-<span class="wrap" bind:this={wrapEl}>
+<span class="wrap">
   <button
-    class="chip"
-    class:open
+    class="btn chip"
+    bind:this={chipEl}
     data-role="preview-as"
     title="what this playground previews on — every tile and preview uses it"
     on:click={() => (open = !open)}
@@ -81,128 +75,133 @@
     <span class="mono" data-role="preview-as-label">{$layoutName}</span>
     <span class="caret">▾</span>
   </button>
-  {#if open}
-    <div class="pop" data-role="preview-as-menu">
+  <Popover
+    {open}
+    anchor={chipEl}
+    kind="pop"
+    ariaRole="dialog"
+    dataRole="preview-as-menu"
+    on:close={() => (open = false)}
+  >
+    <button
+      class="pr"
+      class:on={mode === "auto"}
+      role="menuitemradio"
+      aria-checked={mode === "auto"}
+      data-role="preview-as-auto"
+      on:click={() => setPreviewAs({ mode: "auto" })}
+    >
+      <span class="radio"></span>
+      Auto — follow the pattern <span class="dim mono">3D›2D›1D</span>
+    </button>
+
+    <div class="pr" class:on={mode === "strip"}>
       <button
-        class="row"
-        class:on={mode === "auto"}
+        class="pick"
         role="menuitemradio"
-        aria-checked={mode === "auto"}
-        data-role="preview-as-auto"
-        on:click={() => setPreviewAs({ mode: "auto" })}
+        aria-checked={mode === "strip"}
+        data-role="preview-as-strip"
+        on:click={chooseStrip}
       >
-        <span class="radio"></span>
-        Auto — follow the pattern <span class="dim mono">3D›2D›1D</span>
+        <span class="radio"></span> Strip
       </button>
-
-      <div class="row" class:on={mode === "strip"}>
-        <button
-          class="pick"
-          role="menuitemradio"
-          aria-checked={mode === "strip"}
-          data-role="preview-as-strip"
-          on:click={chooseStrip}
-        >
-          <span class="radio"></span> Strip
-        </button>
-        <input
-          class="num"
-          data-role="preview-as-px"
-          type="number"
-          min="1"
-          max="4096"
-          value={px}
-          on:change={(e) => {
-            px = num(e);
-            chooseStrip();
-          }}
-        />
-        <span class="dim">px</span>
-      </div>
-
-      <div class="row" class:on={mode === "matrix"}>
-        <button
-          class="pick"
-          role="menuitemradio"
-          aria-checked={mode === "matrix"}
-          data-role="preview-as-matrix"
-          on:click={chooseMatrix}
-        >
-          <span class="radio"></span> Matrix
-        </button>
-        <input
-          class="num"
-          data-role="preview-as-w"
-          type="number"
-          min="1"
-          max="256"
-          value={w}
-          on:change={(e) => {
-            w = num(e);
-            chooseMatrix();
-          }}
-        />
-        <span class="dim">×</span>
-        <input
-          class="num"
-          data-role="preview-as-h"
-          type="number"
-          min="1"
-          max="256"
-          value={h}
-          on:change={(e) => {
-            h = num(e);
-            chooseMatrix();
-          }}
-        />
-      </div>
-
-      <div class="row" class:on={mode === "lattice"}>
-        <button
-          class="pick"
-          role="menuitemradio"
-          aria-checked={mode === "lattice"}
-          data-role="preview-as-lattice"
-          on:click={chooseLattice}
-        >
-          <span class="radio"></span> 3D lattice
-        </button>
-        <input
-          class="num"
-          data-role="preview-as-n"
-          type="number"
-          min="2"
-          max="32"
-          value={n}
-          on:change={(e) => {
-            n = num(e);
-            chooseLattice();
-          }}
-        />
-        <span class="dim">³</span>
-      </div>
-
-      <button
-        class="row"
-        class:on={mode === "map"}
-        role="menuitemradio"
-        aria-checked={mode === "map"}
-        data-role="preview-as-map"
-        on:click={() => {
-          setPreviewAs({ mode: "map", pixels: px });
-          open = false;
-          dispatch("openmap"); // the program that makes the points has a screen
+      <input
+        class="inp xs num"
+        data-role="preview-as-px"
+        type="number"
+        min="1"
+        max="4096"
+        value={px}
+        on:change={(e) => {
+          px = num(e);
+          chooseStrip();
         }}
-      >
-        <span class="radio"></span>
-        Custom map program →
-      </button>
-
-      <p class="foot">
-        Every preview and tile on this page uses this layout. On a device it is the device's own.
-      </p>
+      />
+      <span class="dim">px</span>
     </div>
-  {/if}
+
+    <div class="pr" class:on={mode === "matrix"}>
+      <button
+        class="pick"
+        role="menuitemradio"
+        aria-checked={mode === "matrix"}
+        data-role="preview-as-matrix"
+        on:click={chooseMatrix}
+      >
+        <span class="radio"></span> Matrix
+      </button>
+      <input
+        class="inp xs num"
+        data-role="preview-as-w"
+        type="number"
+        min="1"
+        max="256"
+        value={w}
+        on:change={(e) => {
+          w = num(e);
+          chooseMatrix();
+        }}
+      />
+      <span class="dim">×</span>
+      <input
+        class="inp xs num"
+        data-role="preview-as-h"
+        type="number"
+        min="1"
+        max="256"
+        value={h}
+        on:change={(e) => {
+          h = num(e);
+          chooseMatrix();
+        }}
+      />
+    </div>
+
+    <div class="pr" class:on={mode === "lattice"}>
+      <button
+        class="pick"
+        role="menuitemradio"
+        aria-checked={mode === "lattice"}
+        data-role="preview-as-lattice"
+        on:click={chooseLattice}
+      >
+        <span class="radio"></span> 3D lattice
+      </button>
+      <input
+        class="inp xs num"
+        data-role="preview-as-n"
+        type="number"
+        min="2"
+        max="32"
+        value={n}
+        on:change={(e) => {
+          n = num(e);
+          chooseLattice();
+        }}
+      />
+      <span class="dim">³</span>
+    </div>
+
+    <button
+      class="pr"
+      class:on={mode === "map"}
+      role="menuitemradio"
+      aria-checked={mode === "map"}
+      data-role="preview-as-map"
+      on:click={() => {
+        setPreviewAs({ mode: "map", pixels: px });
+        open = false;
+        dispatch("openmap"); // the program that makes the points has a screen
+      }}
+    >
+      <span class="radio"></span>
+      Custom map program →
+    </button>
+
+  <p class="popfoot">
+    Every preview and tile on this page uses this layout. On a device it is the device's own.
+  </p>
+  </Popover>
 </span>
 
 <style>
@@ -211,24 +210,11 @@
     display: inline-flex;
   }
 
+  /* mockup S5: the layout chooser is a `.btn` in the accent's own tint — the
+     one control in the header that is not neutral chrome */
   .chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 10px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: var(--bg-inset);
-    color: var(--text);
-    font-size: 12px;
-    cursor: pointer;
-  }
-
-  .chip:hover,
-  .chip.open {
     border-color: var(--accent);
-    color: var(--text);
-    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    background: var(--accent-soft);
   }
 
   .caret {
@@ -236,74 +222,18 @@
     font-size: 10px;
   }
 
-  .pop {
-    position: absolute;
-    top: calc(100% + 6px);
-    right: 0;
-    z-index: 40;
-    min-width: 280px;
-    padding: 6px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--bg-panel);
-    box-shadow: 0 8px 24px rgb(0 0 0 / 45%);
-  }
-
-  .row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    padding: 6px 8px;
-    border: none;
-    border-radius: 6px;
-    background: transparent;
-    color: var(--text);
-    font-size: 12.5px;
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .row:hover {
-    background: var(--bg-inset);
-  }
-
+  /* the radio row's clickable half (the label); the row itself carries the
+     global `.pop .pr` looks */
   .pick {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 9px;
     padding: 0;
     border: none;
     background: transparent;
     color: inherit;
-    font-size: inherit;
+    font: inherit;
     cursor: pointer;
-  }
-
-  .radio {
-    display: inline-block;
-    width: 11px;
-    height: 11px;
-    flex: none;
-    border: 1px solid var(--text-dim);
-    border-radius: 50%;
-  }
-
-  .row.on .radio {
-    border-color: var(--accent);
-    background:
-      radial-gradient(circle, var(--accent) 0 45%, transparent 46%);
-  }
-
-  .row.on {
-    color: var(--accent);
-  }
-
-  .num {
-    width: 54px;
-    padding: 2px 4px;
-    font-family: ui-monospace, Menlo, Consolas, monospace;
-    font-size: 12px;
   }
 
   .dim {
@@ -311,13 +241,6 @@
   }
 
   .mono {
-    font-family: ui-monospace, Menlo, Consolas, monospace;
-  }
-
-  .foot {
-    margin: 6px 4px 2px;
-    color: var(--text-dim);
-    font-size: 11px;
-    line-height: 1.4;
+    font-family: var(--mono);
   }
 </style>

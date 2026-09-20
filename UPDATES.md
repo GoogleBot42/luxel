@@ -1,5 +1,88 @@
 # Update log
 
+## 2026-09-19 — the shared layer of the mock-matching round: tokens, one button, one popover, a URL (#538)
+
+Jeremy reviewed Phase A on both bench boards and the verdict was "a pretty
+poor job of matching the mocks". This is the foundation pass of that round —
+the layer every page sits on, landed first so the page-level work can build on
+it. The mockups (`docs/design/webui-v2/mockups.html`) are the visual spec now:
+every number below is quoted from them rather than approximated.
+
+**Tokens and primitives (`web/src/app.css`).** `--ok`, `--accent-soft`,
+`--mono` and `--sans` join the palette; the four hard-coded greens
+(`#4caf50` twice, a `color-mix` of it, `#4bbd7a`) are `var(--ok)`. One `.btn`
+with `.primary` / `.quiet` / `.icon` / `.sm` / `.sm.icon`, one `.inp` scale
+(`.num` 72px, `.xs`), one `.slabel`. There were **four different `.primary`
+blocks** before this — filled in Dialog and Playlist, outline-only in the
+editor frame, and no rule at all behind `+ New pattern`, which is why Jeremy
+saw three different Save buttons. Modifiers only bite in combination
+(`.btn.primary`), so a page's own `.icon` or `.num` can never be captured.
+
+**One popover (`components/Popover.svelte`).** The editor ⋯, the map ⋯, the
+tile ⋯, the playlist ⋯ and the "Preview as" chooser had three divergent
+stylesheets and, between them, one viewport clamp. They all mount the same
+component now: mock `.menu` metrics (214px, 8px radius, `0 14px 34px
+rgba(0,0,0,.65)`, 13px rows, error-tinted `.del`), positioned `fixed` off the
+anchor so a menu inside the scrolling tile grid is not clipped — and therefore
+**dodging all four edges**, clamping left/right/top and flipping above when
+the bottom would overflow. It also keeps the last non-degenerate anchor rect,
+because a hover affordance like the tile's ⋯ stops being hovered the instant
+the popover covers the pointer. The looks live in `app.css`, not the
+component: Svelte compiles slotted markup in the caller's scope, so a wrapper
+cannot style what it was handed.
+
+**The shell header (mockup S1).** 44px, `padding:0 16px`, wordmark `luxel`
+with nothing after it on a console, then the device chip
+(`● <name> · 64×64 matrix`, 11.5px mono, 6px `--ok` dot) immediately after it.
+The active tab is `var(--text)` with the 2px amber underline flush to the
+header border — amber TEXT was the thing Jeremy called out. At ≤600px it is
+the mock's two rows (S1c): a 40px identity row and a 38px scrolling tab strip.
+The device is named from `/api/status`'s `name` when the firmware reports one
+(a concurrent change), else the host it answers on — never the word "device".
+Beyond the mocks, at Jeremy's request: a 96px brightness slider left of the
+fps readout, console only, writing **one** `POST /api/brightness` per drag
+(it writes on `change`, debounced 150ms, not on every `input`).
+
+**The header is gone while editing.** An editor screen carries its own header
+(mockup S2), so the shell's is not rendered at all — the session facts travel
+with it into a rail segment at the end of the editor header: the device chip
+on a console, the "Preview as" chip in the playground.
+
+**A URL per screen (`web/src/lib/router.ts`).** `#/`, `#/playlist`,
+`#/settings`, `#/editor`, `#/map`, with `pushState` on navigation, `popstate`
+handled and the fragment applied after the boot handshake so a refresh
+reopens what was open — Jeremy asked for it by name for Settings. It is the
+hash and not a path because the device's GET router is a flat match over
+flash assets with no SPA fallback: `http://luxel-f6b0a8/settings` would 404 on
+the one machine most people load this app from. There is deliberately no
+`?pattern=<id>`: a route names a SCREEN, and restoring a pattern id would make
+a page refresh re-activate it on the hardware.
+
+**The console opens on Patterns.** It used to force `editing = true` on device
+boot and drop you into the editor; it now lands on Patterns → On device with
+the running tile lit, and the handshake still pulls the running pattern into
+the working copy so opening the editor is instant. That needed one more fix:
+the running-pattern↔library match was gated on the editor being open, so with
+the editor closed nothing lit the tile.
+
+**Verification.** `npm test` (75), `npm run build` (bundle shape unchanged:
+one script, one stylesheet, no modulepreload), and all five browser harnesses
+green against the mirror, with new checks for the default page and its lit
+tile, the 44px header, the active-tab colours, the chip's name, one
+brightness POST per drag, the `#/settings` refresh round-trip, the absent
+shell header while editing, and the popover's edge dodging. Screenshots of
+each affected screen were put beside the mock frames at the same width.
+
+Two harness traps fell out of putting the route in the URL, both now
+documented in `docs/tools.md`: `page.goto()` to the URL a page is already on
+is a same-document navigation that re-boots nothing (use `page.reload()`, or
+`reloadInto(page, "#/editor")`), and `E2E_PORT=6000` is refused by Chromium
+as an unsafe port before any check runs.
+
+Still the page agents' work, deliberately left alone here: the tile design,
+the segmented control, the editor's name field / Save label / rail split /
+preview transport, the playlist transport and rows, and the Settings cards.
+
 ## 2026-09-19 — a panel console shown as a strip (#539); the Settings tab starving the device (#540)
 
 Two bugs Jeremy hit on the bench, both root-caused against the real hardware.

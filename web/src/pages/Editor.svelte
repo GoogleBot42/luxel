@@ -21,8 +21,11 @@
   import { createEventDispatcher, onDestroy, tick } from "svelte";
   import Controls from "../components/Controls.svelte";
   import Debugger from "../components/Debugger.svelte";
+  import DeviceChip from "../components/DeviceChip.svelte";
   import CodeEditor from "../components/Editor.svelte";
   import PinPanel from "../components/PinPanel.svelte";
+  import Popover from "../components/Popover.svelte";
+  import PreviewAsChip from "../components/PreviewAsChip.svelte";
   import Preview from "../components/Preview.svelte";
   import ProjectionRow from "../components/ProjectionRow.svelte";
   import VarWatcher from "../components/VarWatcher.svelte";
@@ -100,7 +103,7 @@
   /** What the back button returns to — the shell knows, the editor doesn't. */
   export let backLabel = "Patterns";
 
-  const dispatch = createEventDispatcher<{ open: void; back: void }>();
+  const dispatch = createEventDispatcher<{ open: void; back: void; openmap: void }>();
 
   let editor: CodeEditor;
   let preview: Preview;
@@ -140,6 +143,8 @@
   let patternLoading = false;
   /** The header's ⋯ menu (the document verbs). */
   let menuOpen = false;
+  /** The ⋯ button the menu hangs off (components/Popover.svelte). */
+  let moreBtn: HTMLElement;
   let importError = "";
   let debounce: ReturnType<typeof setTimeout> | undefined;
   let pushDebounce: ReturnType<typeof setTimeout> | undefined;
@@ -729,16 +734,18 @@
   // a saved device pattern, adopt that name/id (so the header isn't "untitled"
   // and Add-to-playlist works). Runs as device pattern sources stream in.
   // deps passed as args so Svelte tracks devicePatterns (source-fill re-runs it)
-  $: matchRunningToLibrary($devicePatterns, $source, $dirty, $devicePatternId, active, $device);
+  // NOT gated on `active`: since the console opens on the Patterns page
+  // (#538) rather than in the editor, this match is what lights the running
+  // tile there — it has to happen whether or not the editor is on screen.
+  $: matchRunningToLibrary($devicePatterns, $source, $dirty, $devicePatternId, $device);
   function matchRunningToLibrary(
     pats: { id: string; name: string; source?: string }[],
     src: string,
     drt: boolean,
     dpid: string,
-    edt: boolean,
     dev: unknown,
   ): void {
-    if (!dev || !edt || drt || dpid || !src) return;
+    if (!dev || drt || dpid || !src) return;
     const m = pats.find((p) => p.source && p.source.trim() === src.trim());
     if (m) {
       patternName.set(m.name);
@@ -1218,7 +1225,7 @@
   });
 </script>
 
-<svelte:window on:click={() => (menuOpen = false)} on:keydown={onKeydown} />
+<svelte:window on:keydown={onKeydown} />
 
 <main class="editor-view editor-frame" data-role="editor-view" hidden={!active}>
   {#if patternLoading}
@@ -1276,7 +1283,7 @@
     {#if $notes.share}<span class="dim note" data-role="share-note">{$notes.share}</span>{/if}
 
     <button
-      class="primary"
+      class="btn primary"
       data-role="save"
       title={$device ? "store this pattern on the device" : "store this pattern in this browser"}
       on:click={() => void saveCurrent()}
@@ -1286,53 +1293,73 @@
 
     <span class="overflow">
       <button
-        class="more"
+        class="btn icon"
+        bind:this={moreBtn}
         data-role="overflow"
         title="more actions"
         aria-label="more actions"
-        on:click|stopPropagation={() => (menuOpen = !menuOpen)}
+        on:click={() => (menuOpen = !menuOpen)}
       >
         ⋯
       </button>
-      {#if menuOpen}
-        <div class="menu" role="menu">
-          <!-- "Add to scene ▸" belongs here (proposal §5.4b) and is absent
-               until scenes exist — Phase B, Gitea #480. Not rendered rather
-               than rendered-disabled: a control is absent unless the thing it
-               acts on exists (§5.7). -->
-          {#if $device && $devicePatternId}
-            <button
-              data-role="add-to-playlist"
-              role="menuitem"
-              title="add this pattern, with its current values, to the playlist"
-              on:click={addToPlaylist}
-            >
-              Add to playlist
-            </button>
-          {/if}
-          <button data-role="duplicate" role="menuitem" on:click={duplicate}>Duplicate</button>
-          <div class="sepr"></div>
-          <button data-role="epe-export" role="menuitem" on:click={doExportEpe}>Export .epe</button>
-          <button data-role="epe-import" role="menuitem" on:click={() => fileInput.click()}>
-            Import .epe…
+      <Popover
+        open={menuOpen}
+        anchor={moreBtn}
+        dataRole="editor-menu"
+        on:close={() => (menuOpen = false)}
+      >
+        <!-- "Add to scene ▸" belongs here (proposal §5.4b) and is absent
+             until scenes exist — Phase B, Gitea #480. Not rendered rather
+             than rendered-disabled: a control is absent unless the thing it
+             acts on exists (§5.7). -->
+        {#if $device && $devicePatternId}
+          <button
+            class="mi"
+            data-role="add-to-playlist"
+            role="menuitem"
+            title="add this pattern, with its current values, to the playlist"
+            on:click={addToPlaylist}
+          >
+            Add to playlist
           </button>
-          {#if $isPlayground}
-            <button
-              data-role="share"
-              role="menuitem"
-              title="copy a link that carries this pattern in the URL"
-              on:click={() => void sharePattern()}
-            >
-              Share…
-            </button>
-          {/if}
-          {#if canDeleteNow($device, $devicePatternId, $exampleName, $patternName, $saved)}
-            <div class="sepr"></div>
-            <button class="del" data-role="delete" role="menuitem" on:click={() => void deleteSaved()}>
-              Delete
-            </button>
-          {/if}
-        </div>
+        {/if}
+        <button class="mi" data-role="duplicate" role="menuitem" on:click={duplicate}>Duplicate</button>
+        <div class="sepr"></div>
+        <button class="mi" data-role="epe-export" role="menuitem" on:click={doExportEpe}>Export .epe</button>
+        <button class="mi" data-role="epe-import" role="menuitem" on:click={() => fileInput.click()}>
+          Import .epe…
+        </button>
+        {#if $isPlayground}
+          <button
+            class="mi"
+            data-role="share"
+            role="menuitem"
+            title="copy a link that carries this pattern in the URL"
+            on:click={() => void sharePattern()}
+          >
+            Share…
+          </button>
+        {/if}
+        {#if canDeleteNow($device, $devicePatternId, $exampleName, $patternName, $saved)}
+          <div class="sepr"></div>
+          <button class="mi del" data-role="delete" role="menuitem" on:click={() => void deleteSaved()}>
+            Delete
+          </button>
+        {/if}
+      </Popover>
+    </span>
+
+    <!-- WHAT this screen renders through. The shell header is not rendered
+         over an editor screen (#538), so its rig control travels with it —
+         mockup S2 puts the device chip at the end of the editor header, in
+         its own rail segment (the rail split itself is still to come, audit
+         E4). A playground has no device, so it carries the "Preview as"
+         chooser here instead — the chip IS the playground's rig. -->
+    <span class="edhdr-rail">
+      {#if $isPlayground}
+        <PreviewAsChip on:openmap={() => dispatch("openmap")} />
+      {:else}
+        <DeviceChip />
       {/if}
     </span>
 

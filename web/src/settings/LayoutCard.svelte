@@ -658,7 +658,7 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: #4caf50;
+    background: var(--ok);
   }
 
   .refresh.amber .dot {

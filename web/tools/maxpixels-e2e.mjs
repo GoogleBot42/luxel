@@ -85,20 +85,9 @@ async function run(fakeCap, tag) {
     waitUntil: "networkidle2",
   });
   await sleep(2500);
-  // Real clicks: connecting drops straight into the editor, so back out to
-  // the home screen first, then open the Settings tab where Pixels lives.
-  const back = await page.$("button.back, [data-role='back']");
-  if (back) await back.click();
-  else {
-    for (const b of await page.$$("button")) {
-      const txt = await b.evaluate((e) => e.textContent?.trim());
-      if (txt?.includes("Device Patterns")) {
-        await b.click();
-        break;
-      }
-    }
-  }
-  await sleep(800);
+  // A console opens on the Patterns page since #538 (it used to drop straight
+  // into the editor and this had to back out first), so the tab strip is
+  // already there: go to Settings, where Pixels lives.
   await page.click('[data-role="tab-settings"]');
   await sleep(1200);
   const got = await page.$eval('[data-role="layout-pixels"]', (e) => ({

@@ -404,8 +404,8 @@
 
   /* the pattern the device is running right now (proposal §5.1) */
   .tile.playing {
-    border-color: #4caf50;
-    box-shadow: 0 0 0 1px #4caf50 inset;
+    border-color: var(--ok);
+    box-shadow: 0 0 0 1px var(--ok) inset;
   }
 
   .tile.dead {
@@ -468,7 +468,7 @@
     transform: translateX(-50%);
     padding: 1px 7px;
     border-radius: 999px;
-    background: color-mix(in srgb, #4caf50 82%, #000);
+    background: color-mix(in srgb, var(--ok) 82%, #000);
     color: #06210a;
     font-size: 10px;
     font-weight: 700;

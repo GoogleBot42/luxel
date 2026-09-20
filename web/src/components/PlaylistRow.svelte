@@ -276,7 +276,7 @@
 
   /* the playing row is marked with a green edge, not a full-row highlight */
   .row.active {
-    border-left: 3px solid #4bbd7a;
+    border-left: 3px solid var(--ok);
     padding-left: 8px;
   }
 
@@ -308,7 +308,7 @@
   }
 
   .row.active .grip {
-    color: #4bbd7a;
+    color: var(--ok);
     cursor: default;
   }
 

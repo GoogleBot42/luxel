@@ -7,6 +7,11 @@ import { gatedFetch } from "./fetchgate";
 import type { ProjectionMode } from "./geometry";
 
 export interface DeviceStatus {
+  /** The device's own mDNS-style name (`luxel-f6b0a8`) — what the console
+   *  calls it in the title bar. Absent on firmware older than the field and
+   *  on the native mirror started without `--name`; the UI falls back to the
+   *  host it answers on (`stores/device.ts` `deviceLabel`). */
+  name?: string;
   /** Frames the pattern RENDERED in the last second. On a pipelined board
    *  (HUB75 panels) the render loop is not the wire, so this is not what the
    *  fixture showed — read `out_fps` there instead (Gitea #378). */

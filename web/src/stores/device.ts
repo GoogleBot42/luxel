@@ -121,6 +121,35 @@ export const deviceVersion = writable("");
 export const deviceSlot = writable("");
 export const deviceStore = writable<DeviceStatus["store"] | null>(null);
 
+/** The device's own name, as `/api/status` reports it (`luxel-f6b0a8`). `""`
+ *  on firmware older than the field, and on a mirror started without
+ *  `--name` — read `deviceLabel`, never this, when you need something to
+ *  PRINT. */
+export const deviceName = writable("");
+
+/** What to call this device on screen: its name when it has one, else the
+ *  host it answers on. Never the word "device" — a title bar that says
+ *  "device" tells nobody which board they are looking at (Jeremy,
+ *  2026-09-19). Same-origin (`base === ""`) means the browser's own host,
+ *  which IS the device. */
+export const deviceLabel: Readable<string> = derived(
+  [deviceName, deviceBase],
+  ([n, b]) => n || hostOf(b) || "",
+);
+
+/** The host part of a device base URL (`http://192.168.0.183` →
+ *  `192.168.0.183`), or the page's own host when the UI is served from the
+ *  device itself. */
+function hostOf(base: string | null): string {
+  if (base === null) return "";
+  if (base === "") return typeof location === "undefined" ? "" : location.host;
+  try {
+    return new URL(base).host;
+  } catch {
+    return base.replace(/^https?:\/\//, "").replace(/\/+$/, "");
+  }
+}
+
 /** The coordinates of an irregular device map, when they are known: a map
  *  THIS session installed. `GET /api/map` reports only a count, so a map
  *  installed before this page loaded has none until `/api/layout` (#465)
@@ -389,6 +418,7 @@ export async function refreshStatus(): Promise<void> {
     deviceOutFps.set(st.out_fps ?? 0);
     deviceRescanHz.set(st.rescan_hz ?? 0);
     if (st.max_pixels) pixelMax.set(st.max_pixels); // per-board cap (#74)
+    if (st.name) deviceName.set(st.name);
     if (st.version) deviceVersion.set(st.version);
     if (st.slot) deviceSlot.set(st.slot);
     deviceStore.set(st.store ?? null);
@@ -700,6 +730,7 @@ export async function connectDevice(base: string, pullPattern = true): Promise<C
     deviceFps.set(st.fps); // seed the status-bar readout from the handshake
     deviceOutFps.set(st.out_fps ?? 0);
     deviceRescanHz.set(st.rescan_hz ?? 0);
+    if (st.name) deviceName.set(st.name);
     if (st.version) deviceVersion.set(st.version);
     if (st.slot) deviceSlot.set(st.slot);
     deviceStore.set(st.store ?? null);

@@ -141,9 +141,11 @@
         <p class="error" data-role="dialog-error">{error}</p>
       {/if}
       <div class="buttons">
-        <button data-role="dialog-cancel" on:click={cancelDialog}>{$dialog.cancelLabel}</button>
+        <button class="btn" data-role="dialog-cancel" on:click={cancelDialog}>
+          {$dialog.cancelLabel}
+        </button>
         <button
-          class="primary"
+          class="btn primary"
           class:danger={$dialog.danger}
           data-role="dialog-confirm"
           bind:this={okBtn}
@@ -248,17 +250,8 @@
     margin-top: 2px;
   }
 
-  .primary {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #1a1207;
-    font-weight: 600;
-  }
-
-  .primary:hover {
-    filter: brightness(1.08);
-  }
-
+  /* the destructive confirmation is the primary, recoloured (app.css owns
+     the fill/weight) */
   .primary.danger {
     background: var(--error);
     border-color: var(--error);
