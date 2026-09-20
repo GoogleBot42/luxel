@@ -9,7 +9,6 @@
   import Dialog from "./components/Dialog.svelte";
   import HeaderBrightness from "./components/HeaderBrightness.svelte";
   import PreviewAsChip from "./components/PreviewAsChip.svelte";
-  import { gatedFetch } from "./lib/fetchgate";
   import type { Luxel } from "./lib/luxel";
   import { parseRoute, pushRoute, replaceRoute, type Page, type Route } from "./lib/router";
   import Editor from "./pages/Editor.svelte";
@@ -71,8 +70,12 @@
   let bootLabel = "loading…";
   /** The "PixelBlaze Library" tab browses the scraped corpus (original
    *  Pixelblaze community patterns). It's a local-only convenience: the tab
-   *  only exists when tools/gen-corpus-gallery.mjs found a populated corpus/
-   *  and wrote public/pixelblaze-library.json (see onMount probe). */
+   *  only exists when tools/gen-gallery.mjs found a populated corpus/ and
+   *  wrote public/pixelblaze-library.json — which is a BUILD-time fact
+   *  (`__HAS_PIXELBLAZE_LIBRARY__`, vite.config.ts), not something to probe
+   *  for over the wire. It is also a playground affordance: a device bundle
+   *  never carries the file, so a console does not ask for it at all
+   *  (Gitea #564). Decided once the device probe has answered, below. */
   let hasPixelblazeLibrary = false;
 
   let editor: Editor;
@@ -195,13 +198,6 @@
       booting = false;
       return;
     }
-    // Probe for a local corpus gallery; its tab appears only when present.
-    void gatedFetch(`${import.meta.env.BASE_URL}pixelblaze-library.json`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((list) => {
-        hasPixelblazeLibrary = Array.isArray(list) && list.length > 0;
-      })
-      .catch(() => {});
     // In-progress work wins: a share link's pattern, else the autosaved
     // working copy. The editor opens on it (resume — never lose edits). A
     // device, though, only resumes it when it has *unsaved changes*; a clean
@@ -239,6 +235,10 @@
     startAutosave();
     // a share link never auto-connects to a device
     const base = shared ? null : await deviceProbe;
+    // The corpus tab, decided without a request (#564). Gated on the mode as
+    // well as on the build: an asset bundle packed from a dev tree that HAD a
+    // corpus would otherwise still ask the device for a file it never ships.
+    hasPixelblazeLibrary = __HAS_PIXELBLAZE_LIBRARY__ && base === null;
 
     if (base !== null) {
       // Device mode: keep the boot cover up (with device-aware text) through
@@ -423,10 +423,11 @@
       void editor.openDevicePattern(e.detail);
     }}
     on:playDevice={(e) => {
-      // Play WITHOUT opening the editor: the same call, minus `editing`. It
-      // activates the pattern on the device and adopts it as the editor's
-      // document, so the running marker and the editor agree.
-      void editor.openDevicePattern(e.detail);
+      // Play WITHOUT opening the editor: it activates the pattern on the
+      // device and adopts it as the editor's document, so the running marker
+      // and the editor agree. `openDevice` above is the other half of the
+      // #563 split — it opens the same pattern and touches nothing.
+      void editor.playDevicePattern(e.detail);
     }}
   />
 

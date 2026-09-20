@@ -165,7 +165,13 @@ export async function renameTo(page, name) {
   await nap(200);
 }
 
-/** `saved · on device` / `unsaved` / `saved · in browser` / `not saved yet`. */
+/**
+ * The editor header's save-state line. Playground / live push:
+ * `unsaved` · `saved · on device` · `saved · in browser` · `not saved yet`.
+ * A console in LOCAL PREVIEW (the editor is not driving the device, #563):
+ * `unsaved · preview only` · `saved · on device · preview only` ·
+ * `preview only · not on device`.
+ */
 export function saveState(page) {
   return page.$eval('[data-role="save-state"]', (el) => (el.textContent ?? "").trim());
 }

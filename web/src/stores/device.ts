@@ -16,6 +16,7 @@ import {
   type MqttStatus,
   type Playlist,
   type PlaylistItem,
+  type RunResult,
   type SyncStatus,
 } from "../lib/device";
 import {
@@ -255,6 +256,40 @@ export const deviceLayout: Readable<DeviceGeom | null> = derived(
  *  `source` is filled lazily in the background so each row can show a live
  *  preview thumbnail. */
 export const devicePatterns = writable<{ id: string; name: string; source?: string }[]>([]);
+
+/**
+ * Which stored pattern the DEVICE is running — the id the Patterns page rings
+ * and the pill names. `""` = the device is on something with no row in its
+ * store (a live push from the editor, or a pattern we have not matched yet).
+ *
+ * Distinct from `devicePatternId` (stores/pattern.ts), which is the id of the
+ * document the EDITOR holds. The two were one value until Gitea #563, which is
+ * exactly why merely opening a pattern used to run it: there was no way to
+ * hold one without claiming the device was playing it.
+ *
+ * Written by `activateDevicePattern()` below, by the connect handshake's
+ * source match (pages/Editor.svelte) and by the editor when a live push makes
+ * its own document the running program.
+ */
+export const deviceRunningId = writable("");
+
+/**
+ * Run a stored pattern on the device — THE activation verb (`Play` on a tile,
+ * `▶ Play on device` in the editor). A pattern the device already holds is
+ * activated by id, which the firmware does NOT treat as a playlist takeover.
+ *
+ * A `bc-version` rejection means the stored bytecode predates a firmware
+ * format bump; the device has no compiler, so the CALLER re-saves from source
+ * and retries (compiling lives in stores/pattern.ts, which this module may not
+ * import — see the layering rule at the top).
+ */
+export async function activateDevicePattern(id: string): Promise<RunResult> {
+  const d = get(device);
+  if (!d) return { ok: false, error: "not connected" };
+  const r = await d.activatePattern(id);
+  if (r.ok) deviceRunningId.set(id);
+  return r;
+}
 
 // ---- settings-page state ----
 
@@ -745,6 +780,14 @@ export async function refreshPlaylist(): Promise<void> {
     // stopped mid-queue should name the item it is stopped on, not item 0.
     if (r.playlist.playing || !parkedSeeded) playlistParked.set(r.playlist.index);
     parkedSeeded = true;
+    // A playing playlist is what decides the RUNNING pattern — it moves the
+    // device off whatever was activated last, and the Patterns page's ring
+    // (and the editor's "is this the one playing?" test) must follow it
+    // rather than stay on a stale id (#563).
+    if (r.playlist.playing) {
+      const item = r.playlist.items[r.playlist.index];
+      if (item) deviceRunningId.set(item.id);
+    }
   } catch {
     /* older firmware without /api/playlist — leave empty */
   }

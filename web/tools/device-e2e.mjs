@@ -7,6 +7,7 @@
 
 import { execSync, spawn } from "node:child_process";
 import dgram from "node:dgram";
+import fs from "node:fs";
 import puppeteer from "puppeteer-core";
 import {
   acceptDialog,
@@ -188,6 +189,18 @@ const THREE_CHANNELS = [
   "export function render(i) { rgb(r[i], g[i], b[i]) }",
 ].join("\n");
 
+// The generated clean-room library the console browses (`gallery.json`, from
+// `library/`). Two fixtures off it, by the generator's OWN `kind`, so the
+// layout-filter checks (#562/#563) never hard-code a pattern name: one the
+// 120 px strip mirror can show, and one it cannot.
+const galleryJson = JSON.parse(fs.readFileSync("public/gallery.json", "utf8"));
+const grid2d = galleryJson.find((p) => p.kind === "grid");
+const strip1d = galleryJson.find((p) => p.kind === "strip");
+if (!grid2d || !strip1d) {
+  // Fail loudly here rather than as a confusing TypeError 3000 lines down.
+  throw new Error("public/gallery.json has no grid/strip pattern — run `npm run build` first");
+}
+
 /** A real mouse click on a Settings control, scrolled into view first — the
  * Output card sits far down a scrolling panel, where a bare `page.click`
  * fails with "Node is either not clickable or not an HTMLElement". */
@@ -255,12 +268,32 @@ try {
     const ranBefore = await (await fetch(`${DEV}/api/pattern`)).text();
     await fetch(`${DEV}/api/patterns/${shellId}/activate`, { method: "POST" });
     const brightBefore = (await (await fetch(`${DEV}/api/brightness`)).json()).brightness;
+    // Every request a device-mode cold load makes, so the sweep below can say
+    // that none of them failed (Gitea #564: the corpus gallery was probed
+    // twice on every load and 404'd twice, against a 3-socket pool).
+    const badReqs = [];
+    pg.on("response", (r) => {
+      if (r.status() >= 400) badReqs.push(`${r.status()} ${r.url()}`);
+    });
     try {
       await pg.setViewport({ width: 1200, height: 800 });
       await pg.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(DEV)}`, {
         waitUntil: "networkidle0",
       });
       await pg.waitForSelector('[data-role="patterns-panel"]:not([hidden])', { timeout: 8000 });
+      check(
+        "shell: a device-mode load makes no failing request (#564)",
+        badReqs.length === 0,
+        badReqs.join(", "),
+      );
+      check(
+        "shell: …and never asks the device for the corpus gallery",
+        !badReqs.some((u) => u.includes("pixelblaze-library.json")),
+      );
+      check(
+        "shell: the corpus tab is a playground affordance — absent on a console",
+        (await pg.$('[data-role="patterns-source-pixelblaze"]')) === null,
+      );
 
       // Jeremy, 2026-09-19: a console opens on Patterns → On device with the
       // running pattern lit, NOT in the editor.
@@ -2509,8 +2542,11 @@ try {
   await page.click('[data-role="tab-patterns"]');
   await sleep(400);
 
-  // the tile's `Edit` verb opens the editor on it and activates it on the
-  // device (a bare tile click PLAYS it, checked above)
+  // The tile's `Edit` verb opens the editor on the stored pattern and writes
+  // NOTHING to the device (Gitea #563) — a bare tile click / `Play` is what
+  // changes the LEDs, checked above. The device is running the render2D
+  // pattern the map section pushed, and must still be running it after.
+  const beforeEdit = await (await fetch(`${DEV}/api/pattern`)).text();
   const seenReqs = [];
   page.on("request", (r) => {
     if (r.url().includes("/api/patterns") && r.method() === "DELETE") seenReqs.push(r.url());
@@ -2518,8 +2554,21 @@ try {
   await tileAction(page, DTILE, "tile-edit");
   await sleep(1300);
   check("library: a tile's Edit opens the editor", (await page.$('[data-role="editor-back"]')) !== null);
-  const activated = await (await fetch(`${DEV}/api/pattern`)).text();
-  check("library: selecting a device pattern activates it", activated.includes("0.4"));
+  const afterEdit = await (await fetch(`${DEV}/api/pattern`)).text();
+  check(
+    "library: Edit on a stored pattern does NOT activate it (#563)",
+    afterEdit === beforeEdit,
+    afterEdit.slice(0, 60),
+  );
+  check(
+    "library: …and the header says the editor is not driving the device",
+    (await saveState(page)) === "saved · on device · preview only",
+    await saveState(page),
+  );
+  check(
+    "library: …so ▶ Play on device is offered",
+    (await page.$('[data-role="editor-play-device"]')) !== null,
+  );
   check("library: editor shows the stored source", (await page.$eval(".cm-content", (el) => el.textContent ?? "")).includes("0.4"));
   // delete it from the editor — an in-app danger confirmation (Gitea #472),
   // cancelled once (nothing happens) before it is accepted
@@ -2551,6 +2600,17 @@ try {
   );
 
   // ---- dirty-aware resume across reload (#4) ----
+  // The delete above left the editor holding an orphaned document in local
+  // preview (#563); a clean reload re-adopts whatever the device is running,
+  // which is the live-push state the resume checks below are about.
+  await reloadInto(page);
+  await page.waitForSelector(".cm-content");
+  await sleep(1200);
+  check(
+    "resume: a clean reload opens the running pattern, so live push is back on",
+    !(await saveState(page)).includes("preview only"),
+    await saveState(page),
+  );
   // An unsaved edit must (a) survive a reload and (b) be re-pushed so the
   // device runs it — even when the device was changed out-of-band meanwhile.
   await setEditor(page, "export function render(index) { rgb(0.111, 0.222, 0.333) }");
@@ -2874,6 +2934,153 @@ try {
     afterStop.playing === true && afterStop.index === 0,
     JSON.stringify({ p: afterStop.playing, i: afterStop.index }),
   );
+
+  // ---- opening a pattern must not hijack the device (Gitea #563) ----
+  // The playlist is PLAYING right now — the exact state that made this a bug
+  // worth a ticket. Browsing to a Library pattern and opening it in the editor
+  // must leave it playing, write nothing, and say so; `Save` must store the
+  // pattern without activating it; `▶ Play on device` is the one click that
+  // changes the LEDs, and live push resumes from there.
+  {
+    const wires = [];
+    const logWire = (r) => {
+      if (r.method() !== "POST") return;
+      const u = r.url();
+      if (/\/api\/(code|control|events|sensors)$/.test(u) || /\/activate$/.test(u)) wires.push(u);
+    };
+    page.on("request", logWire);
+    try {
+      await page.click('[data-role="tab-patterns"]');
+      await sleep(400);
+      await page.click('[data-role="patterns-source-library"]');
+      await sleep(300);
+      await page.$eval(
+        '[data-role="gallery-search"]',
+        (el, v) => {
+          el.value = v;
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+        },
+        strip1d.name,
+      );
+      await sleep(900);
+      const LTILE = '[data-role="patterns-grid"][data-source="library"] .tile';
+      await tileAction(page, LTILE, "tile-edit");
+      await sleep(2000); // well past the 500 ms push debounce
+
+      check("563: a Library tile's Edit opens the editor", (await page.$('[data-role="editor-back"]')) !== null);
+      check("563: …and sends the device NOTHING", wires.length === 0, wires.join(", "));
+      const stillPlaying = await (await fetch(`${DEV}/api/playlist`)).json();
+      check(
+        "563: …the playlist keeps playing",
+        stillPlaying.playing === true,
+        JSON.stringify({ p: stillPlaying.playing, i: stillPlaying.index }),
+      );
+      check(
+        "563: …the header says preview only",
+        (await saveState(page)) === "preview only · not on device",
+        await saveState(page),
+      );
+      // the rail preview still runs the LOCAL engine: two canvas reads apart
+      const animates = await page.evaluate(async () => {
+        const cv = document.querySelector('main.editor-frame:not([hidden]) [data-role="preview"] canvas');
+        if (!cv) return "no canvas";
+        const a = cv.toDataURL();
+        await new Promise((r) => setTimeout(r, 600));
+        return cv.toDataURL() === a ? "frozen" : "animating";
+      });
+      check("563: …and the local preview animates", animates === "animating", animates);
+      await page.screenshot({ path: `${shotDir}/device-e2e-563-preview-only.png` });
+
+      // Save stores it WITHOUT activating: a row appears, the LEDs do not move
+      const runningBefore = await (await fetch(`${DEV}/api/pattern`)).text();
+      const patsBeforeSave = (await (await fetch(`${DEV}/api/patterns`)).json()).patterns.length;
+      await renameTo(page, "563 preview only");
+      await page.click('[data-role="save"]');
+      await sleep(1200);
+      const patsAfterSave = (await (await fetch(`${DEV}/api/patterns`)).json()).patterns;
+      check(
+        "563: Save creates the pattern on the device",
+        patsAfterSave.length === patsBeforeSave + 1 &&
+          patsAfterSave.some((p) => p.name === "563 preview only"),
+        `${patsBeforeSave} → ${patsAfterSave.length}`,
+      );
+      check(
+        "563: …without activating it (the running pattern is unchanged)",
+        (await (await fetch(`${DEV}/api/pattern`)).text()) === runningBefore,
+      );
+      check(
+        "563: …and the header still says preview only",
+        (await saveState(page)) === "saved · on device · preview only",
+        await saveState(page),
+      );
+      check(
+        "563: …and no activate/code request was sent by any of that",
+        wires.length === 0,
+        wires.join(", "),
+      );
+      await page.screenshot({ path: `${shotDir}/device-e2e-563-saved-preview-only.png` });
+
+      // ▶ Play on device: the one explicit activation
+      await page.click('[data-role="editor-play-device"]');
+      await sleep(1500);
+      check(
+        "563: ▶ Play on device activates it",
+        wires.some((u) => /\/activate$/.test(u)),
+        wires.join(", "),
+      );
+      const nowRunning = await (await fetch(`${DEV}/api/pattern`)).text();
+      check(
+        "563: …so the device is running the opened pattern",
+        nowRunning.trim() === strip1d.source.trim(),
+        nowRunning.slice(0, 60),
+      );
+      check(
+        "563: …the header drops the preview-only state",
+        !(await saveState(page)).includes("preview only"),
+        await saveState(page),
+      );
+      check(
+        "563: …and ▶ Play on device is gone (nothing left to play)",
+        (await page.$('[data-role="editor-play-device"]')) === null,
+      );
+      await page.screenshot({ path: `${shotDir}/device-e2e-563-playing-live.png` });
+
+      // …and live push is back: a subsequent edit reaches /api/code
+      wires.length = 0;
+      await setEditor(page, "export function render(index) { rgb(0.5, 0.25, 0.125) }");
+      await sleep(1500);
+      check(
+        "563: live push resumes once the editor IS the running pattern",
+        wires.some((u) => u.endsWith("/api/code")),
+        wires.join(", "),
+      );
+      check(
+        "563: …and the device runs the edit",
+        (await (await fetch(`${DEV}/api/pattern`)).text()).includes("0.125"),
+      );
+    } finally {
+      page.off("request", logWire);
+      // tidy: drop the pattern this section stored and leave the editor out
+      const pats = (await (await fetch(`${DEV}/api/patterns`)).json()).patterns ?? [];
+      const mine = pats.find((p) => p.name === "563 preview only");
+      if (mine) await fetch(`${DEV}/api/patterns/${mine.id}`, { method: "DELETE" }).catch(() => {});
+      await leaveEditor(page);
+      await sleep(300);
+      // Put the Patterns page back the way the rest of the run expects it:
+      // `On device`, with an empty search box (the search is the PAGE's, so a
+      // needle left in it filters the device grid too and every later
+      // `tileAction(DTILE, …)` then aborts on a hidden tile).
+      await page.click('[data-role="patterns-source-device"]').catch(() => {});
+      await page.$eval('[data-role="gallery-search"]', (el) => {
+        el.value = "";
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await sleep(400);
+      await page.click('[data-role="tab-playlist"]');
+      await sleep(500);
+    }
+  }
+
   await page.click('[data-role="pl-stop"]');
   await sleep(500);
 
@@ -2916,6 +3123,48 @@ try {
   );
   const pickCount = await page.$$eval('[data-role="picker-item"][data-kind="pattern"]', (els) => els.length);
   check("playlist: the picker lists the device's patterns", pickCount >= 1, String(pickCount));
+
+  // ---- the picker is LAYOUT-FILTERED, like every other grid (#562) ----
+  // The fixture here is a 120 px 1D strip, so the Library section must offer
+  // the strip patterns and none of the grid ones — picking a 2D pattern would
+  // write it to the device's store and queue an item the strip cannot show.
+  // Driven off gallery.json's own `kind` rather than a hard-coded name.
+  const pickerSearch = async (q) => {
+    await page.$eval(
+      '[data-role="picker-search"]',
+      (el, v) => {
+        el.value = v;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+      },
+      q,
+    );
+    await sleep(300);
+    return page.$$eval('[data-role="picker-item"][data-kind="library"]', (els) =>
+      els.map((e) => (e.querySelector(".name")?.textContent ?? "").trim()),
+    );
+  };
+  const offered2d = await pickerSearch(grid2d.name);
+  check(
+    "playlist: the picker hides 2D library patterns on a 1D strip (#562)",
+    offered2d.length === 0,
+    offered2d.length ? `still offered: ${offered2d.join(", ")}` : `searched "${grid2d.name}"`,
+  );
+  check(
+    "playlist: …and still offers the 1D ones",
+    (await pickerSearch(strip1d.name)).includes(strip1d.name),
+    strip1d.name,
+  );
+  await pickerSearch("");
+  const offered = await page.$$eval('[data-role="picker-item"][data-kind="library"]', (els) =>
+    els.map((e) => (e.querySelector(".name")?.textContent ?? "").trim()),
+  );
+  const kindOf = new Map(galleryJson.map((p) => [p.name, p.kind]));
+  check(
+    "playlist: every library row the picker offers fits the layout",
+    offered.every((n) => kindOf.get(n) === "strip" || kindOf.get(n) === undefined),
+    offered.filter((n) => kindOf.get(n) === "grid" || kindOf.get(n) === "cloud").join(", "),
+  );
+
   await page.$eval('[data-role="picker-search"]', (el) => {
     el.value = "zzzz-no-such-pattern";
     el.dispatchEvent(new Event("input", { bubbles: true }));
