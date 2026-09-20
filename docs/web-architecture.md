@@ -448,9 +448,9 @@ Three files and one rule: **an item owns its values.**
 
 | file | owns |
 |---|---|
-| `stores/device.ts` | the `playlist` store, `addToPlaylist()`, `queuePlaylistSave()`, `markTransport()` |
+| `stores/device.ts` | the `playlist` store, `addToPlaylist()`, `saveAndAddToPlaylist()`, `queuePlaylistSave()`, `savePlaylistNow()`, `markTransport()`, `playlistPause()`/`playlistResume()`/`playlistStop()`/`playlistStep()` |
 | `pages/Playlist.svelte` | the transport group, the defaults, the ⋯ menu, the list, `+ Add` |
-| `components/PlaylistRow.svelte` | one row: the chips, the inline sliders, the Projection line |
+| `components/PlaylistRow.svelte` | one row: the handle, the chips, the inline sliders, the Projection line |
 | `components/PatternPicker.svelte` | THE picker — what `+ Add` (and later the ⋯ menus) choose from |
 | `components/ProjectionRow.svelte` | the quiet Projection line, shared with the editor's Controls rail (#468) |
 
@@ -467,11 +467,79 @@ A value moved on the row that is CURRENTLY PLAYING is also pushed live with
 `POST /api/control`, because the saved playlist only reaches the engine at the
 next activation and a slider the fixture ignores is a broken slider.
 
-`PatternPicker` takes `patterns` as a prop rather than reading the store, and
-emits `pick: { id, kind }`. `kind` is always `"pattern"` today; Phase B
-(#478/#481) adds a `"scene"` SECTION to the same component — the search, the
-keyboard handling and the event shape are already shaped for it, and
-`PlaylistItem.kind` on the wire model is the row side of the same seam.
+### The transport (mockup S4, Gitea #538 §F)
+
+Four PERSISTENT controls, in one group, in the same places in every state:
+a primary that toggles `‖ Pause` / `▶ Play`, then stop, prev, next as 32px
+`.btn.icon` with inline SVGs. They go `disabled` (with `data-reason`) on an
+empty queue rather than disappearing — the one place §5.7's
+absent-never-disabled rule is deliberately set aside, because a transport that
+reshapes itself is what made Clear read as a flicker. The now-playing block
+(`min-width:230px`) is mounted for the same reason and merely dims when stopped.
+
+**There is no pause on the wire.** `POST /api/playlist/stop` halts the
+auto-advance and leaves the current item loaded and rendering; `index` keeps its
+value; `play <index>` re-enters an item and restarts ITS clock at 0. So:
+
+| UI verb | what it does | what it costs |
+|---|---|---|
+| `‖ Pause` | remember `index`, then `stop` | resuming replays the item from its start, not from where it stopped |
+| `▶ Play` | `play <remembered index>` | — |
+| stop | forget the index, then `stop` | the next Play starts the queue from the top — this is the difference between the two buttons |
+| seek (drag the progress bar) | `play <index>` + a local clock offset | the device restarts the item, so its own advance still arrives a full duration later and the bar parks at the end for the seconds you skipped |
+
+The progress readout is timed LOCALLY from the last `playing:index` change,
+because the wire carries no elapsed field. Gitea #509 adds one; when it lands,
+feed it into `itemStart` in `pages/Playlist.svelte` and the seek's remaining
+inaccuracy goes with it.
+
+`queuePlaylistSave()` debounces 400 ms because edits STREAM (a slider being
+dragged). A whole-list verb does not, so **Clear** calls `savePlaylistNow()`:
+the rows go in one DOM flush and the POST leaves immediately. The
+device-e2e harness asserts both — one MutationObserver batch, one POST.
+
+### The picker's sections
+
+`PatternPicker` emits `pick: { id, kind, name, source? }` and renders one
+section per source:
+
+* **On device** (`kind: "pattern"`) — `devicePatterns`, passed in as a prop
+  rather than read from the store. A pick queues the id directly.
+* **Library** (`kind: "library"`) — the generated `gallery.json`, fetched once
+  on the first open. A library pattern is source the device has never seen and
+  a playlist item is a reference to a STORED pattern, so the owner saves it
+  first (`saveAndAddToPlaylist()` → `POST /api/patterns`, then `addToPlaylist`)
+  and the row is appended only on success. The picker shows a saving line and,
+  on failure, says what happened and adds nothing. Names already on the device
+  are dropped from this section so a pick is never a silent overwrite.
+
+Each section renders at most 40 rows (every row is a live wasm engine); the
+search is how you reach the rest. Phase B (#478/#481) adds a `"scene"` section
+to the same list — the search, the keyboard handling and the event shape are
+already shaped for it, and `PlaylistItem.kind` on the wire model is the row
+side of the same seam.
+
+### The row (mockup S4)
+
+`⠿ handle · 44px device-shaped thumbnail · 13px name + mono `Pattern` ·
+`8 s` chip · `N values ▾` chip · ✕ (`.btn.icon.quiet`)`, on a `--bg-panel`
+card. The playing row carries a 3px `--ok` left border and a `--ok` `▶` in the
+handle's place.
+
+**The handle is the only reorder affordance.** S4 has no ↑/↓ movers, so they
+are gone; the handle is focusable and `↑`/`↓` on it move the item, which is
+the keyboard and screen-reader path those buttons used to carry. At 390px
+(S4b) the duration chip folds onto the subtitle line (`Pattern · 8 s`, accent
+when overridden) and the values chip keeps only its count.
+
+`data-role` contract: `playlist-panel` · `pl-{play,pause,stop,prev,next}` ·
+`pl-now` · `pl-now-name` · `pl-progress` · `pl-default-sec` · `pl-crossfade` ·
+`pl-more` · `pl-menu` · `pl-clear` · `pl-add` · `pl-total` · `pl-empty` ·
+`playlist-item` · `pl-grip` · `pl-name` · `pl-duration` ·
+`pl-duration-inline` · `pl-duration-edit` · `pl-override` · `pl-sec` ·
+`pl-values-toggle` · `pl-values` · `pl-invalid` · `pl-remove` ·
+`pattern-picker` · `picker-{backdrop,close,search,item,empty,busy,error}` ·
+`picker-section-{pattern,library}` · `picker-more-{pattern,library}`.
 
 The per-item **projection override** (§5.4d) rides beside the values, as the
 `P <mode>` line of the playlist wire format (docs/api.md). It is rendered by

@@ -1,8 +1,12 @@
 <script lang="ts">
   // One playlist entry (proposal §5.4, mockups S4/S4b):
   //
-  //   handle · device-shaped thumbnail · name + type · duration chip ·
-  //   `N values ▾` chip · ✕
+  //   ⠿ handle · 44px device-shaped thumbnail · name + type ·
+  //   `8 s` chip · `N values ▾` chip · ✕
+  //
+  // REORDERING IS THE HANDLE. S4 has no ↑/↓ movers, so they are gone; the
+  // handle is a real focusable control and ↑/↓ on it move the item, which is
+  // the keyboard (and screen-reader) path those buttons used to carry.
   //
   // Both chips expand IN PLACE. Values live on the item and nowhere else
   // (D6 — named presets were dropped), so the same pattern can sit in the
@@ -122,11 +126,20 @@
     item = item;
     dispatch("change");
   }
+
+  /** The handle's keyboard reorder — what the ↑/↓ mover buttons used to do. */
+  function onHandleKey(e: KeyboardEvent): void {
+    const dir = e.key === "ArrowUp" ? -1 : e.key === "ArrowDown" ? 1 : 0;
+    if (dir === 0) return;
+    if ((dir === -1 && first) || (dir === 1 && last)) return;
+    e.preventDefault();
+    dispatch("move", dir);
+  }
 </script>
 
 <li
-  class="row"
-  class:active
+  class="plrow"
+  class:playing={active}
   class:missing
   class:dragover
   data-role="playlist-item"
@@ -138,81 +151,73 @@
   }}
 >
   <div class="head">
-    <span class="handle">
-      <span
-        class="grip"
-        data-role="pl-grip"
-        title="drag to reorder"
-        role="button"
-        tabindex="-1"
-        aria-label="drag to reorder"
-        draggable="true"
-        on:dragstart={() => dispatch("dragstart")}>{active ? "▶" : "⠿"}</span
-      >
-      <!-- drag is a mouse gesture; these are the phone's (and the keyboard's)
-           way to reorder, so they are always rendered, never hover-only -->
-      <!-- §5.7: the first row has nothing above it to swap with, so the
-           control is absent rather than dimmed; a hidden twin holds the
-           column's width so the rows stay aligned (Gitea #529) -->
-      <span class="movers">
-        {#if first}
-          <span class="mv ph" aria-hidden="true">↑</span>
-        {:else}
-          <button class="mv" title="move up" aria-label="move up"
-            on:click={() => dispatch("move", -1)}>↑</button
-          >
-        {/if}
-        {#if last}
-          <span class="mv ph" aria-hidden="true">↓</span>
-        {:else}
-          <button class="mv" title="move down" aria-label="move down"
-            on:click={() => dispatch("move", 1)}>↓</button
-          >
-        {/if}
-      </span>
-    </span>
+    <!-- S4 `.hnd` — `⠿` normally, a green `▶` on the playing row. It is the
+         ONE reorder affordance: drag with a mouse, ↑/↓ with a keyboard. -->
+    <span
+      class="hnd"
+      class:ok={active}
+      data-role="pl-grip"
+      title="drag to reorder — or focus and press ↑/↓"
+      role="button"
+      tabindex="0"
+      aria-label="reorder this item"
+      draggable="true"
+      on:dragstart={() => dispatch("dragstart")}
+      on:keydown={onHandleKey}>{active ? "▶" : "⠿"}</span
+    >
     {#if luxel && !missing}<PatternThumb {luxel} {source} proj={item.proj ?? null} />{/if}
     <span class="who">
-      <span class="name" data-role="pl-name">
+      <span class="n" data-role="pl-name">
         {item.name || item.id}{#if missing}<span class="miss"> (deleted)</span>{/if}
       </span>
-      <span class="type dim">
+      <span class="t">
         {kindLabel}{#if projApplies && item.proj}<span class="ovr-note">· projected</span>{/if}
+        <!-- S4b folds the duration into this line; the chip beside it is
+             hidden at that width, so this stays the way to open it -->
+        <button
+          class="durline"
+          class:ovr={overridden}
+          data-role="pl-duration-inline"
+          aria-expanded={durOpen}
+          on:click={() => (durOpen = !durOpen)}>· {durationLabel}</button
+        >
       </span>
     </span>
     {#if item.invalid}
       <span class="invalid" data-role="pl-invalid" title={item.invalid}>⚠ won't run</span>
     {/if}
-    <span class="chips">
+    <button
+      class="chip dur"
+      class:ovr={overridden}
+      class:open={durOpen}
+      data-role="pl-duration"
+      title="how long this item plays"
+      aria-expanded={durOpen}
+      on:click={() => (durOpen = !durOpen)}>{durationLabel}</button
+    >
+    {#if params.length > 0 || projApplies}
       <button
         class="chip"
-        class:ovr={overridden}
-        class:open={durOpen}
-        data-role="pl-duration"
-        title="how long this item plays"
-        aria-expanded={durOpen}
-        on:click={() => (durOpen = !durOpen)}>{durationLabel} {durOpen ? "▴" : "▾"}</button
+        class:open={valuesOpen}
+        class:ovr={item.proj !== undefined}
+        data-role="pl-values-toggle"
+        aria-expanded={valuesOpen}
+        on:click={() => (valuesOpen = !valuesOpen)}
       >
-      {#if params.length > 0 || projApplies}
-        <button
-          class="chip"
-          class:open={valuesOpen}
-          class:ovr={item.proj !== undefined}
-          data-role="pl-values-toggle"
-          aria-expanded={valuesOpen}
-          on:click={() => (valuesOpen = !valuesOpen)}
-        >
-          <!-- a pattern with no controls still gets the chip when it has a
-               projection to choose; "0 values" would be a lie about why -->
-          {params.length === 0
-            ? "Projection"
-            : `${params.length} ${params.length === 1 ? "value" : "values"}`}
-          {valuesOpen ? "▴" : "▾"}
-        </button>
-      {/if}
-    </span>
+        <!-- a pattern with no controls still gets the chip when it has a
+             projection to choose; "0 values" would be a lie about why -->
+        {#if params.length === 0}
+          Projection
+        {:else}
+          {params.length}<span class="vword">
+            {params.length === 1 ? "value" : "values"}</span
+          >
+        {/if}
+        {valuesOpen ? "▴" : "▾"}
+      </button>
+    {/if}
     <button
-      class="rm"
+      class="btn icon quiet rm"
       data-role="pl-remove"
       title="remove"
       aria-label="remove"
@@ -233,7 +238,7 @@
       </label>
       {#if overridden}
         <input
-          class="num"
+          class="inp num xs"
           data-role="pl-sec"
           type="number"
           min="0"
@@ -266,73 +271,57 @@
 </li>
 
 <style>
-  .row {
+  /* S4 `.plrow` */
+  .plrow {
+    padding: 10px 12px;
+    margin-bottom: 8px;
     border: 1px solid var(--border);
     border-radius: 8px;
-    background: var(--bg-inset);
-    padding: 8px 10px;
-    margin-bottom: 8px;
+    background: var(--bg-panel);
   }
 
   /* the playing row is marked with a green edge, not a full-row highlight */
-  .row.active {
+  .plrow.playing {
     border-left: 3px solid var(--ok);
-    padding-left: 8px;
+    padding-left: 10px;
   }
 
-  .row.missing {
+  .plrow.missing {
     opacity: 0.6;
     border-style: dashed;
   }
 
-  .row.dragover {
+  .plrow.dragover {
     border-color: var(--accent);
     border-style: dashed;
   }
 
-  .handle {
-    display: inline-flex;
-    align-items: center;
-    gap: 2px;
+  /* S4 `.hnd` */
+  .hnd {
     flex: none;
-  }
-
-  .grip {
-    cursor: grab;
-    color: var(--text-dim);
-    user-select: none;
-    font-size: 14px;
-    line-height: 1;
     width: 14px;
     text-align: center;
+    color: #555c6b;
+    font-size: 14px;
+    line-height: 1;
+    cursor: grab;
+    user-select: none;
   }
 
-  .row.active .grip {
+  .hnd.ok {
     color: var(--ok);
+    font-size: 11px;
     cursor: default;
   }
 
-  .grip:active {
+  .hnd:active {
     cursor: grabbing;
   }
 
-  .movers {
-    display: inline-flex;
-    flex-direction: column;
-    gap: 1px;
-  }
-
-  .mv {
-    padding: 0 3px;
-    font-size: 9px;
-    line-height: 1.2;
-    color: var(--text-dim);
-    background: transparent;
-    border-color: transparent;
-  }
-
-  .mv.ph {
-    visibility: hidden;
+  .hnd:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 3px;
   }
 
   .miss {
@@ -351,92 +340,125 @@
     cursor: help;
   }
 
+  /* S4 row: handle · thumb · who · chips · ✕, 12px apart */
   .head {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
   }
 
+  /* S4 `.plrow canvas{width:44px;height:44px}` — the thumbnail component owns
+     its engine and its default sizes, so the ROW states the size it wants */
+  .head :global(.thumb canvas.sq) {
+    width: 44px;
+    height: 44px;
+  }
+
+  .head :global(.thumb canvas.bar) {
+    width: 66px;
+    height: 16px;
+  }
+
+  /* S4 `.who` */
   .who {
     display: flex;
     flex-direction: column;
-    gap: 1px;
     flex: 1;
     min-width: 0;
   }
 
-  .name {
+  .n {
+    font-size: 13px;
     color: var(--text);
-    font-weight: 500;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .type {
-    font-size: 11px;
+  .t {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 3px;
+    font: 11px/1 var(--mono);
+    color: var(--text-dim);
   }
 
   .ovr-note {
     color: var(--accent);
   }
 
-  .chips {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    flex: none;
+  /* the phone's duration affordance: plain text on the subtitle line (S4b) */
+  .durline {
+    display: none;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font: inherit;
   }
 
+  .durline.ovr {
+    color: var(--accent);
+  }
+
+  /* S4 `.chip` — 26px, 6px radius, mono; NOT a pill */
   .chip {
-    font-size: 12px;
-    padding: 3px 9px;
-    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex: none;
+    height: 26px;
+    padding: 0 9px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-inset);
     color: var(--text-dim);
+    font: 12px/1 var(--mono);
     white-space: nowrap;
   }
 
   .chip.open {
-    border-color: var(--accent);
     color: var(--text);
+    background: #1c2029;
+    border-color: #3a4150;
   }
 
   /* an OVERRIDDEN duration reads in accent, so a glance down the list says
      which items deviate from the playlist default (§5.4) */
   .chip.ovr {
     color: var(--accent);
-    border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+    border-color: rgba(232, 163, 61, 0.45);
   }
 
+  /* S4 `.btn.icon.quiet` — the ✕ has no outline until it is hovered */
   .rm {
-    padding: 2px 8px;
-    line-height: 1;
     flex: none;
-    color: var(--text-dim);
-    background: transparent;
-    border-color: transparent;
   }
 
   .rm:hover {
     color: var(--error);
-    border-color: var(--error);
   }
 
+  /* S4 `.plvals`: the opened panel is a darker band filling the bottom of the
+     row, not an indented block inside it */
   .expand {
-    margin-top: 8px;
-    padding-top: 8px;
+    margin: 10px -12px -10px;
+    padding: 2px 12px 12px;
     border-top: 1px solid var(--border);
+    border-radius: 0 0 7px 7px;
+    background: rgba(0, 0, 0, 0.2);
   }
 
   /* a pattern with no controls opens straight onto ProjectionRow, which
      draws its own hairline — two of them 10 px apart is the tell */
   .expand.bare {
-    margin-top: 0;
     padding-top: 0;
     border-top: none;
   }
 
   .dur-edit {
+    padding-top: 10px;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -451,42 +473,34 @@
     cursor: pointer;
   }
 
-  .num {
-    width: 64px;
-    font-family: ui-monospace, Menlo, Consolas, monospace;
-    font-size: 12px;
-  }
-
   .dim {
     color: var(--text-dim);
   }
 
-  /* ---- phone (D9: the playlist is the primary phone surface) ---- */
+  /* ---- phone (S4b: the playlist is the primary phone surface) ---- */
   @media (max-width: 600px) {
     .head {
-      flex-wrap: wrap;
-      gap: 8px;
+      gap: 10px;
     }
 
-    /* the chips drop to their own line rather than squeezing the name */
-    .chips {
-      flex-basis: 100%;
-      order: 1;
+    /* S4b: no duration chip — the duration moves onto the subtitle line, and
+       the values chip keeps only its count (`3 ▾`) */
+    .chip.dur {
+      display: none;
+    }
+
+    .durline {
+      display: inline;
+    }
+
+    .vword {
+      display: none;
     }
 
     .chip,
-    .rm,
-    .mv {
+    .rm {
       /* thumb-sized targets */
       min-height: 32px;
-    }
-
-    .chip {
-      padding: 6px 12px;
-    }
-
-    .rm {
-      padding: 6px 10px;
     }
 
     /* smaller thumbnails (S4b): the row is the same, the art is not */
@@ -499,6 +513,5 @@
       width: 56px;
       height: 14px;
     }
-
   }
 </style>

@@ -855,10 +855,17 @@ try {
         (els) => els.map((e) => Math.round(e.getBoundingClientRect().width)),
       );
       check(
-        "thumbs: a desktop row thumbnail is the full 48 px square",
-        deskThumb.length > 0 && deskThumb.every((w) => w === 48),
+        "thumbs: a desktop row thumbnail is the mock's 44 px square (S4)",
+        deskThumb.length > 0 && deskThumb.every((w) => w === 44),
         deskThumb.join(","),
       );
+      // S4 has no ↑/↓ movers: the handle is the reorder affordance, with
+      // arrow keys on it as the keyboard path (#538 §F)
+      const movers = await mappedPage.$$eval(
+        '[data-role="playlist-item"] button',
+        (els) => els.filter((e) => /move (up|down)/i.test(e.getAttribute("aria-label") ?? "")).length,
+      );
+      check("playlist: the row has no ↑/↓ mover buttons (S4)", movers === 0, String(movers));
 
       // ---- the phone (D9: the playlist is the primary phone surface) ----
       await mappedPage.setViewport({ width: 390, height: 820 });
@@ -891,13 +898,40 @@ try {
         thumbPx.join(","),
       );
       const targets = await mappedPage.$$eval(
-        '[data-role="pl-values-toggle"], [data-role="pl-duration"], [data-role="pl-remove"]',
+        '[data-role="pl-values-toggle"], [data-role="pl-remove"]',
         (els) => els.map((e) => Math.round(e.getBoundingClientRect().height)),
       );
       check(
         "mobile: chips and ✕ are thumb-sized targets",
         targets.length > 0 && targets.every((h) => h >= 30),
         targets.join(","),
+      );
+      // S4b folds the duration off the chip row and onto the subtitle line
+      const mobileDur = await mappedPage.evaluate(() => {
+        const row = document.querySelector('[data-role="playlist-item"]');
+        const chip = row.querySelector('[data-role="pl-duration"]');
+        const line = row.querySelector('[data-role="pl-duration-inline"]');
+        return {
+          chip: chip ? getComputedStyle(chip).display : "absent",
+          line: line ? getComputedStyle(line).display : "absent",
+          text: line ? (line.textContent ?? "").trim() : "",
+        };
+      });
+      check(
+        "mobile: the duration moves onto the subtitle line (S4b)",
+        mobileDur.chip === "none" && mobileDur.line !== "none" && /\d/.test(mobileDur.text),
+        JSON.stringify(mobileDur),
+      );
+      // the defaults field has to be READABLE at 390 as well as at 1400
+      // (Jeremy: "the text box is so small that … i cannot read it")
+      const defaults390 = await mappedPage.$eval('[data-role="pl-default-sec"]', (el) => ({
+        w: Math.round(el.getBoundingClientRect().width),
+        clipped: el.scrollWidth > el.clientWidth + 1,
+      }));
+      check(
+        "mobile: the default-duration field is readable at 390 px",
+        defaults390.w >= 64 && !defaults390.clipped,
+        JSON.stringify(defaults390),
       );
       await mappedPage.screenshot({
         path: `${shotDir}/device-e2e-panel-playlist-mobile.png`,
@@ -2693,26 +2727,144 @@ try {
     ) < 0.01,
     JSON.stringify((await (await fetch(`${DEV}/api/playlist`)).json()).items.map((i) => i.controls)),
   );
-  // play + advance
+  // …and the same reorder from the KEYBOARD: S4 deletes the ↑/↓ movers, so
+  // the handle itself has to carry the arrow keys (#538 §F). Move row 0
+  // (hue 0.8 after the drag) back down with ArrowDown on its handle.
+  await page.$$eval('[data-role="pl-grip"]', (els) => els[0].focus());
+  await page.keyboard.press("ArrowDown");
+  await sleep(700);
+  check(
+    "playlist: ↓ on the drag handle reorders from the keyboard",
+    Math.abs(
+      (await (await fetch(`${DEV}/api/playlist`)).json()).items[0].controls.sliderHue[0] - 0.33,
+    ) < 0.01,
+    JSON.stringify((await (await fetch(`${DEV}/api/playlist`)).json()).items.map((i) => i.controls)),
+  );
+
+  // ---- transport: the FOUR persistent controls of mockup S4 (#538 §F) ----
+  //
+  // A bed long enough that nothing auto-advances under the checks below: the
+  // 2 s override set above would roll the index while we were asserting it.
+  // One item inherits the (long) default, one overrides it, so the footer
+  // still exercises both halves of the run-time sum.
+  const bedIds = (await (await fetch(`${DEV}/api/playlist`)).json()).items.map((it) => it.id);
+  await fetch(`${DEV}/api/playlist`, {
+    method: "POST",
+    body: `D 60\nX 0\nI ${bedIds[0]} -1\nI ${bedIds[1]} 20\n`,
+  });
+  await sleep(1400); // the 1 Hz follow poll picks the bed up
+
+  /** The transport's roles, in DOM order. */
+  const transport = () =>
+    page.$$eval(
+      '[data-role="pl-play"],[data-role="pl-pause"],[data-role="pl-stop"],[data-role="pl-prev"],[data-role="pl-next"]',
+      (els) => els.map((e) => e.dataset.role).join(","),
+    );
+  check(
+    "playlist: four transport controls while stopped (S4)",
+    (await transport()) === "pl-play,pl-stop,pl-prev,pl-next",
+    await transport(),
+  );
+  check(
+    "playlist: the now-playing block stays mounted while stopped (S4)",
+    (await page.$('[data-role="pl-now"]')) !== null,
+  );
+  // next/prev while stopped move the PARKED position (both devices ignore a
+  // step while not playing), so the buttons are honest in every state
+  // (the two items are the same pattern, so the item the readout is parked on
+  // is told apart by its DURATION: item 0 inherits 60 s, item 1 overrides 20)
+  const parkedMax = () =>
+    page.$eval('[data-role="pl-progress"]', (el) => Number(el.getAttribute("aria-valuemax")));
+  const parked0 = await parkedMax();
+  await page.click('[data-role="pl-next"]');
+  await sleep(400);
+  const parked1 = await parkedMax();
+  const deviceUntouched = await (await fetch(`${DEV}/api/playlist`)).json();
+  check(
+    "playlist: next while stopped parks on the next item without waking the device",
+    parked0 === 60 && parked1 === 20 && deviceUntouched.playing === false,
+    `${parked0} → ${parked1}`,
+  );
+  await page.click('[data-role="pl-prev"]');
+  await sleep(1400); // long enough that a follow poll could have stolen it back
+  check("playlist: …and prev parks back", (await parkedMax()) === 60, String(await parkedMax()));
+
   await page.click('[data-role="pl-play"]');
-  await sleep(500);
+  await sleep(600);
   const playing = await (await fetch(`${DEV}/api/playlist`)).json();
   check("playlist: play starts at index 0", playing.playing === true && playing.index === 0, JSON.stringify({ p: playing.playing, i: playing.index }));
   // …and the transport follows the device rather than latching on "play" when
-  // the read-back beats the render loop (Gitea #431).
-  const transportShown = await page
-    .waitForSelector('[data-role="pl-next"]', { timeout: 2000 })
+  // the read-back beats the render loop (Gitea #431). The SAME four controls
+  // are there; only the primary's verb changes.
+  const pauseShown = await page
+    .waitForSelector('[data-role="pl-pause"]', { timeout: 3000 })
     .then(() => true)
     .catch(() => false);
-  check("playlist: transport switches to the playing controls", transportShown);
+  check("playlist: the primary becomes Pause while playing", pauseShown);
+  check(
+    "playlist: the same four controls while playing (S4)",
+    (await transport()) === "pl-pause,pl-stop,pl-prev,pl-next",
+    await transport(),
+  );
+  const nowName = await page.$eval('[data-role="pl-now-name"]', (el) => (el.textContent ?? "").trim());
+  check(
+    "playlist: the now-playing block names the running item",
+    nowName === playing.items[playing.index].name,
+    `${nowName} vs ${playing.items[playing.index].name}`,
+  );
+
+  // ---- seek: drag the progress bar to mid-item ----
+  // The wire has no seek, so this is `play <index>` + a local clock offset
+  // (stores/device.ts): the readout jumps, the device re-enters the item.
+  const progBox = await (await page.$('[data-role="pl-progress"]')).boundingBox();
+  await page.mouse.move(progBox.x + progBox.width * 0.5, progBox.y + progBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(progBox.x + progBox.width * 0.5, progBox.y + progBox.height / 2);
+  await page.mouse.up();
+  await sleep(700);
+  const seeked = await page.$eval('[data-role="pl-progress"]', (el) => ({
+    at: Number(el.getAttribute("aria-valuenow")),
+    max: Number(el.getAttribute("aria-valuemax")),
+  }));
+  check(
+    "playlist: dragging the progress bar seeks the clock into the item",
+    seeked.max === 60 && seeked.at >= 24 && seeked.at <= 36,
+    JSON.stringify(seeked),
+  );
+  const afterSeek = await (await fetch(`${DEV}/api/playlist`)).json();
+  check(
+    "playlist: a seek re-enters the same item rather than advancing",
+    afterSeek.playing === true && afterSeek.index === 0,
+    JSON.stringify({ p: afterSeek.playing, i: afterSeek.index }),
+  );
+
   await page.click('[data-role="pl-next"]');
-  await sleep(400);
+  await sleep(500);
   check(
     "playlist: next advances the device",
     (await (await fetch(`${DEV}/api/playlist`)).json()).index === 1,
   );
+
+  // ---- Pause holds the place; Stop gives it up ----
+  await page.click('[data-role="pl-pause"]');
+  await sleep(600);
+  const paused = await (await fetch(`${DEV}/api/playlist`)).json();
+  check(
+    "playlist: Pause halts the auto-advance and keeps the index",
+    paused.playing === false && paused.index === 1,
+    JSON.stringify({ p: paused.playing, i: paused.index }),
+  );
+  await page.waitForSelector('[data-role="pl-play"]', { timeout: 3000 });
+  await page.click('[data-role="pl-play"]');
+  await sleep(700);
+  const resumed = await (await fetch(`${DEV}/api/playlist`)).json();
+  check(
+    "playlist: Play after a Pause resumes that item, not the top",
+    resumed.playing === true && resumed.index === 1,
+    JSON.stringify({ p: resumed.playing, i: resumed.index }),
+  );
   await page.click('[data-role="pl-stop"]');
-  await sleep(400);
+  await sleep(600);
   check(
     "playlist: stop halts auto-advance",
     (await (await fetch(`${DEV}/api/playlist`)).json()).playing === false,
@@ -2721,14 +2873,55 @@ try {
     "playlist: transport returns to the play button after stop",
     (await page.$('[data-role="pl-play"]')) !== null,
   );
-  // total run-time summary (item0 default 5s + item1 override 2s = 7s)
+  await page.click('[data-role="pl-play"]');
+  await sleep(700);
+  const afterStop = await (await fetch(`${DEV}/api/playlist`)).json();
+  check(
+    "playlist: Play after a Stop starts the queue from the top",
+    afterStop.playing === true && afterStop.index === 0,
+    JSON.stringify({ p: afterStop.playing, i: afterStop.index }),
+  );
+  await page.click('[data-role="pl-stop"]');
+  await sleep(500);
+
+  // the defaults field has to be READABLE (Jeremy: the "manual" placeholder
+  // clipped to "mar" in a 56 px box). 72 px, and showing the number itself.
+  const defaults1400 = await page.$eval('[data-role="pl-default-sec"]', (el) => ({
+    w: Math.round(el.getBoundingClientRect().width),
+    h: Math.round(el.getBoundingClientRect().height),
+    value: el.value,
+    placeholder: el.placeholder,
+    clipped: el.scrollWidth > el.clientWidth + 1,
+  }));
+  check(
+    "playlist: the default-duration field is readable at 1400 px and shows the number",
+    defaults1400.w >= 70 && defaults1400.h <= 28 && defaults1400.value === "60" &&
+      defaults1400.placeholder === "" && !defaults1400.clipped,
+    JSON.stringify(defaults1400),
+  );
+  const labelled = await page.evaluate(() =>
+    ["pl-default-sec", "pl-crossfade"].every((r) => {
+      const el = document.querySelector(`[data-role="${r}"]`);
+      return el && el.id && document.querySelector(`label[for="${el.id}"]`) !== null;
+    }),
+  );
+  check("playlist: both settings fields have real <label for> elements", labelled);
+
+  // total run-time summary (item0 inherits 60s + item1 override 20s = 1m 20s)
   const total = await page.$eval('[data-role="pl-total"]', (el) => el.textContent ?? "");
-  check("playlist: total run-time shown", /2 items/.test(total) && /7s/.test(total), total.trim());
+  check("playlist: total run-time shown", /2 items/.test(total) && /1m 20s/.test(total), total.trim());
 
   // ---- `+ Add` opens THE picker and appends what you choose (#470) ----
   await page.click('[data-role="pl-add"]');
   await page.waitForSelector('[data-role="pattern-picker"]', { timeout: 4000 });
-  const pickCount = await page.$$eval('[data-role="picker-item"]', (els) => els.length);
+  // the picker has TWO sections now: the device's patterns, and the library
+  // (gallery.json, the same source the Patterns page browses) — #538 §F
+  await page.waitForSelector('[data-role="picker-section-library"]', { timeout: 15000 });
+  check(
+    "playlist: the picker offers both an On device and a Library section",
+    (await page.$('[data-role="picker-section-pattern"]')) !== null,
+  );
+  const pickCount = await page.$$eval('[data-role="picker-item"][data-kind="pattern"]', (els) => els.length);
   check("playlist: the picker lists the device's patterns", pickCount >= 1, String(pickCount));
   await page.$eval('[data-role="picker-search"]', (el) => {
     el.value = "zzzz-no-such-pattern";
@@ -2745,7 +2938,7 @@ try {
     el.dispatchEvent(new Event("input", { bubbles: true }));
   });
   await sleep(250);
-  await page.$$eval('[data-role="picker-item"]', (els) => els[0].click());
+  await page.$$eval('[data-role="picker-item"][data-kind="pattern"]', (els) => els[0].click());
   await sleep(700);
   check(
     "playlist: picking from + Add appends a row",
@@ -2756,6 +2949,39 @@ try {
     "playlist: the picker closes after a pick",
     (await page.$('[data-role="pattern-picker"]')) === null,
   );
+
+  // ---- a LIBRARY pick saves to the device first, then queues it ----
+  const patsBefore = (await (await fetch(`${DEV}/api/patterns`)).json()).patterns.length;
+  await page.click('[data-role="pl-add"]');
+  await page.waitForSelector('[data-role="picker-section-library"]', { timeout: 15000 });
+  const libName = await page.$eval(
+    '[data-role="picker-item"][data-kind="library"]',
+    (el) => (el.querySelector(".name")?.textContent ?? "").trim(),
+  );
+  await page.click('[data-role="picker-item"][data-kind="library"]');
+  await page
+    .waitForFunction(() => document.querySelector('[data-role="pattern-picker"]') === null, {
+      timeout: 20000,
+    })
+    .catch(() => {});
+  await sleep(1000);
+  const patsAfter = (await (await fetch(`${DEV}/api/patterns`)).json()).patterns;
+  check(
+    "playlist: a Library pick saves the pattern to the device",
+    patsAfter.length === patsBefore + 1 && patsAfter.some((p) => p.name === libName),
+    `${patsBefore} → ${patsAfter.length}, wanted "${libName}"`,
+  );
+  const plWithLib = await (await fetch(`${DEV}/api/playlist`)).json();
+  const libItem = plWithLib.items[plWithLib.items.length - 1];
+  check(
+    "playlist: …and appends it as the last item",
+    plWithLib.items.length === 4 &&
+      patsAfter.find((p) => p.id === libItem.id)?.name === libName,
+    JSON.stringify({ n: plWithLib.items.length, last: libItem?.name }),
+  );
+  // tidy: drop the library row again so the counts below are unchanged
+  await page.$$eval('[data-role="pl-remove"]', (els) => els[3].click());
+  await sleep(700);
 
   // ---- ✕ removes one row ----
   await page.$$eval('[data-role="pl-remove"]', (els) => els[2].click());
@@ -2779,11 +3005,43 @@ try {
   await page.waitForSelector('[data-role="pl-clear"]', { timeout: 3000 });
   await page.click('[data-role="pl-clear"]');
   check("playlist: Clear asks before emptying", (await dialogTitle(page)).includes("Clear"));
+  // Jeremy: "clearing the playlist flickers, waits, and then deletes" (#538
+  // §A). Two measurements pin the fix: the rows must leave in ONE DOM flush
+  // (no clear-then-refetch repaint), and the write must be ONE POST that
+  // leaves immediately instead of waiting out the 400 ms edit debounce.
+  let clearPosts = 0;
+  const countClearPost = (r) => {
+    if (r.method() === "POST" && r.url() === `${DEV}/api/playlist`) clearPosts++;
+  };
+  page.on("request", countClearPost);
+  await page.evaluate(() => {
+    window.__plBatches = 0;
+    const panel = document.querySelector('[data-role="playlist-panel"]');
+    window.__plObs = new MutationObserver(() => {
+      window.__plBatches++;
+    });
+    window.__plObs.observe(panel, { childList: true, subtree: true });
+  });
   await acceptDialog(page);
-  await sleep(500);
+  await sleep(2500); // past the old 400 ms debounce AND two follow polls
+  page.off("request", countClearPost);
+  const batches = await page.evaluate(() => {
+    window.__plObs.disconnect();
+    return window.__plBatches;
+  });
   check(
     "playlist: clear empties it",
     (await (await fetch(`${DEV}/api/playlist`)).json()).items.length === 0,
+  );
+  check(
+    "playlist: clear repaints the list exactly once (no flicker)",
+    batches === 1,
+    `${batches} mutation batches`,
+  );
+  check(
+    "playlist: clear writes ONE POST, immediately (no debounce wait)",
+    clearPosts === 1,
+    `${clearPosts} POSTs`,
   );
 
   // ---- "Add to playlist" captures the PROJECTION too (#470 + #468) ----
@@ -3229,25 +3487,41 @@ try {
     await fetch(`${DEV}/api/output/palette`, { method: "DELETE" });
     await page.click('[data-role="tab-playlist"]');
     await sleep(900);
+    // S4's transport is a FIXED four-button group (#538 §F), so on an empty
+    // queue it stays put and goes disabled — the one place §5.7's
+    // absent-never-disabled rule is deliberately set aside, and therefore the
+    // one place the buttons must carry `data-reason` (the sweep below proves
+    // they do). The ⋯ chip still follows §5.7: Clear would be its only entry.
     check(
-      "§5.7: an empty playlist has no Play button at all, just the empty state",
-      (await page.$('[data-role="pl-play"]')) === null &&
-        (await page.$('[data-role="pl-transport-empty"]')) !== null,
+      "§5.7: an empty playlist keeps the four controls, disabled WITH a reason",
+      (await page.$$eval(
+        '[data-role="pl-play"],[data-role="pl-stop"],[data-role="pl-prev"],[data-role="pl-next"]',
+        (els) =>
+          els.length === 4 &&
+          els.every((e) => e.hasAttribute("disabled") && (e.getAttribute("data-reason") ?? "") !== ""),
+      )) && (await page.$('[data-role="pl-empty"]')) !== null,
     );
     check(
       "§5.7: …and no ⋯ chip either, since Clear would be its only entry",
       (await page.$('[data-role="pl-more"]')) === null,
     );
     await page.screenshot({ path: `${shotDir}/no-disabled-playlist-empty.png` });
-    // #530: the Default-seconds placeholder must READ, not clip to "mar".
+    // #530 → #538 §F: the Default-seconds field must READ. The "manual"
+    // placeholder that clipped to "mar" is gone entirely — the field shows the
+    // default SECONDS — but the width requirement it produced still stands.
     for (const w of [1400, 390]) {
       await page.setViewport({ width: w, height: w === 390 ? 780 : 900 });
       await sleep(350);
-      const fits = await page.$eval(
-        '[data-role="pl-default-sec"]',
-        (el) => el.scrollWidth <= el.clientWidth + 1,
+      const fits = await page.$eval('[data-role="pl-default-sec"]', (el) => ({
+        ok: el.scrollWidth <= el.clientWidth + 1 && el.getBoundingClientRect().width >= 64,
+        placeholder: el.placeholder,
+        w: Math.round(el.getBoundingClientRect().width),
+      }));
+      check(
+        `playlist: the default-seconds field reads at ${w} px, with no "manual" placeholder (#530/#538)`,
+        fits.ok && fits.placeholder === "",
+        JSON.stringify(fits),
       );
-      check(`playlist: the "manual" placeholder is not clipped at ${w} px (#530)`, fits);
       await page.screenshot({ path: `${shotDir}/playlist-default-sec-${w}.png` });
     }
     await page.setViewport({ width: 1400, height: 900 });
@@ -3285,15 +3559,19 @@ try {
     await page.click('[data-role="tab-playlist"]');
     await sleep(1200);
     check(
-      "§5.7: Play is back once the playlist has an item",
-      (await page.$('[data-role="pl-play"]')) !== null &&
+      "§5.7: Play is live again — and the ⋯ chip is back — once there is an item",
+      (await page.$eval('[data-role="pl-play"]', (el) => !el.hasAttribute("disabled"))) &&
         (await page.$('[data-role="pl-more"]')) !== null,
     );
     check(
-      "§5.7: the first row has no dimmed ↑ — the control is simply absent",
+      "playlist: no row carries a mover button — the handle reorders (S4)",
       (await page.$$('[data-role="playlist-item"]')).length === 3 &&
         (await page.$$eval('[data-role="playlist-item"]', (els) =>
-          [...els[0].querySelectorAll("button")].every((b) => b.title !== "move up"),
+          els.every((row) =>
+            [...row.querySelectorAll("button")].every(
+              (b) => !/move (up|down)/i.test(`${b.title} ${b.getAttribute("aria-label") ?? ""}`),
+            ),
+          ),
         )),
     );
     await mountSettings();
