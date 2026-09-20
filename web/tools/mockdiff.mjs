@@ -1244,7 +1244,14 @@ for (const frameId of runIds) {
         })
         .catch(() => null);
       if (!shotA || !shotM) continue;
-      await composeSideBySide(browser, join(OUT, "mockdiff", `${frameId}-${id}.png`), shotM, shotA, `${frameId} · ${id}`);
+      await composeSideBySide(
+        browser,
+        join(OUT, "mockdiff", `${frameId}-${id}.png`),
+        shotM,
+        shotA,
+        `${frameId} · ${id}`,
+        { w: Math.max(m.box.w, a.box.w) + pad * 2, h: Math.max(m.box.h, a.box.h) + pad * 2 },
+      );
     }
   }
 
@@ -1271,18 +1278,28 @@ for (const frameId of runIds) {
 if (devicePage) await devicePage.close();
 
 // ── side-by-side crop composition (no image deps: chromium does it) ───────
-async function composeSideBySide(br, path, mockB64, appB64, label) {
+async function composeSideBySide(br, path, mockB64, appB64, label, size = { w: 400, h: 200 }) {
   const pg = await br.newPage();
-  await pg.setViewport({ width: 1200, height: 600, deviceScaleFactor: 1 });
+  // Lay the two crops side by side while they fit, and stack them when the
+  // element is wide (a full-width footer at 1200px would otherwise push the
+  // app half off the canvas entirely). Always 1:1 — a scaled crop cannot be
+  // compared to anything.
+  const stacked = size.w * 2 + 44 > 2600;
+  await pg.setViewport({
+    width: Math.min(2600, Math.max(320, stacked ? size.w + 24 : size.w * 2 + 44)),
+    height: Math.min(2000, Math.max(160, (stacked ? size.h * 2 + 96 : size.h) + 70)),
+    deviceScaleFactor: 1,
+  });
   await pg.setContent(
     `<style>body{margin:0;background:#0e1013;color:#d7dae0;font:12px/1.4 system-ui}
      .h{padding:6px 10px;font-weight:600}
      .r{display:flex;align-items:flex-start;gap:14px;padding:0 10px 12px}
+     .r.stack{flex-direction:column;gap:10px}
      .c{display:flex;flex-direction:column;gap:4px}
      .c b{font:11px/1 ui-monospace,monospace;color:#8a90a0;text-transform:uppercase;letter-spacing:.08em}
      img{display:block;border:1px solid #2b303a;image-rendering:pixelated}</style>
      <div class="h">${label}</div>
-     <div class="r">
+     <div class="r${stacked ? " stack" : ""}">
        <div class="c"><b>mock</b><img src="data:image/png;base64,${mockB64}"></div>
        <div class="c"><b>app</b><img src="data:image/png;base64,${appB64}"></div>
      </div>`,
