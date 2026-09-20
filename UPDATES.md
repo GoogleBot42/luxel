@@ -1,5 +1,57 @@
 # Update log
 
+## 2026-09-20 — the closure round on real hardware: two instruments were reading the old UI (#538)
+
+The #538 fidelity work is done on the mirror — `tools/mockdiff.mjs` reports **0 deltas over
+all 27 frames**, and the non-CSS sweep is clean at 1400/1200/1000/760/390 except the two
+controls whose height the mockups state outright (`input[type=range]` 16px,
+`input[type=checkbox]` 20px — #575). Taking the same bundle to the two boards that run
+Jeremy's playlists turned up no UI defect and two stale TOOLS, both asserting a UI that
+#538 replaced:
+
+- **`mockdiff.map.json`, frame S3f** waited for `[data-role="projection-block"]` on a
+  300 px strip — the very element the frame exists to prove is ABSENT (a 1D fixture is
+  never handed a 2D or 3D pattern, so it has no Projection section; all eleven of its
+  mapped elements are in the frame's `allow` list for exactly that). Every full run paid
+  15 s for a `step failed` line on a clean tree. It now waits for `[data-role="sect-layout"]`,
+  the LED layout card above it, like the other strip Settings frame already did.
+- **`tools/coldload.mjs`** required "the editor full-screen on the running pattern" as its
+  definition of a booted console. Since #538 a console boots on the PATTERNS page, so the
+  check could only ever time out: three healthy cold loads of the Athom reported
+  `boot FAILED` with **zero** failed requests. The boot it now requires is the real one —
+  the Patterns page on the On device source, the running pattern's tile lit, and a live
+  device session — and the session signal moved with the UI too: the shell's fps readout
+  prints a bare `123 fps` on a console, and only its `title` says whether the number came
+  from the device or from the local preview loop.
+
+**What the boards say.** Both are on v0.1.40, slot `ota_0`, firmware untouched since
+`64f9ea1`; only the asset bundle was pushed (859,282 bytes, 8 files, `ok:true`, no reboot),
+and both playlists kept playing across it.
+
+| | Athom · 144 px strip | Seengreat · 64x64 panel |
+|---|---|---|
+| mockdiff, the 6 `deviceSafe` frames | 48 deltas | 16 deltas |
+| of which UI | **0** | **0** |
+| cold loads (`coldload.mjs … 3`) | 3/3 CLEAN, 0 failed requests | boot ok 3/3, 8–10 refused requests |
+
+Every delta on the panel is device DATA — brightness 16 vs the mock's 3, `UTC+0` vs
+`UTC-6`, Jeremy's playlist names, and the duration chips (his first row carries a 60 s
+override, the mock's second row carries the 15 s one). On the Athom the rest is FIXTURE
+SHAPE: panel-shaped mock frames measured against a strip give bar tiles instead of square
+ones, no HUB75 fields, no Projection section, a `144 px strip` summary — and a brightness
+hint that is per-driver by design (proposal §5.7).
+
+**The one real finding is not the UI.** A browser-native `<link rel=stylesheet>` load is
+the one request in a cold load that nothing retries. When the panel's 3-socket pool is
+full — `/api/status` reported `web:[1,1,1]`, all three slots at stage 1 SERVING, for
+minutes at a time with a single `curl` as the only traffic of ours — the browser gets
+`ERR_CONNECTION_REFUSED` for it, the app boots anyway off its own fetchgate (which does
+retry, `luxel.wasm` included), and the console renders COMPLETELY UNSTYLED with no error
+anywhere. Reproduced on every cold load of the panel while the pool was full, never once
+on the Athom (`web:[0,0,1]`). Filed as its own ticket; the screenshots in this round were
+taken on a retry that got the stylesheet.
+
+
 ## 2026-09-20 — a page load is not a device action: no boot push (#585)
 
 The last path that still wrote to the device unasked was the console's own boot. The

@@ -1,7 +1,8 @@
 // Cold-load soak against a real 2-slot device: N fresh-profile chromium
 // launches, cache disabled, counting refused/failed network requests and
-// requiring the full device-mode boot (device tab + editor with the
-// running pattern) every time. Usage: node coldload.mjs <device-url> [N]
+// requiring the full device-mode boot (the Patterns page, on the On device
+// source, with the running pattern's tile lit and a live device session)
+// every time. Usage: node coldload.mjs <device-url> [N]
 import puppeteer from "puppeteer-core";
 import { execSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -54,27 +55,43 @@ for (let i = 1; i <= N; i++) {
   let detail = "";
   try {
     await page.goto(DEV + "/", { waitUntil: "domcontentloaded", timeout: 30000 });
-    // Device-mode boot opens the editor FULL-SCREEN on the running pattern.
-    // Since web v2 (#468) the back button names the TAB it returns to
-    // ("← Patterns") in BOTH modes, so it no longer says which mode this is.
-    // The signal that the whole handshake landed is the shell's fps readout
-    // reading `device …`: it says that only while a device SESSION is live.
-    // The device chip is NOT that signal — it appears as soon as the probe
-    // finds a base, i.e. before `/api/layout` answers, while the layout still
-    // names the 60 px default strip (a panel read there reports a strip).
-    await page.waitForSelector('[data-role="editor-back"]', { timeout: 30000 });
-    await page.waitForSelector(".cm-content", { timeout: 30000 });
+    // A console boots on the PATTERNS page since #538 — it no longer opens the
+    // editor full-screen on the running pattern, so waiting for `editor-back`
+    // /`.cm-content` could only ever time out (it did, on every load, against
+    // a perfectly healthy board on 2026-09-20). The boot this tool means is
+    // now: the Patterns page up, on the On device source, with the running
+    // pattern's tile lit — i.e. `/api/patterns` AND `/api/playlist` have both
+    // landed and been rendered.
+    //
+    // The signal that the whole handshake landed is still the shell's fps
+    // readout, but it is now in that readout's TITLE, not its text: a console
+    // prints the device's own rate as a bare `123 fps` (App.svelte's
+    // `fpsReadout`), and only the title says where the number came from —
+    // "local preview loop in this browser tab" with no session, "rendered by
+    // the device" / "displayed by the panel" with one. The device chip is NOT
+    // that signal — it appears as soon as the probe finds a base, i.e. before
+    // `/api/layout` answers, while the layout still names the 60 px default
+    // strip (a panel read there reports a strip).
+    await page.waitForSelector('[data-role="patterns-grid"][data-source="device"]:not([hidden])', {
+      timeout: 30000,
+    });
+    await page.waitForSelector('[data-role="tile-playing"]', { timeout: 30000 });
     await page.waitForFunction(
       () =>
-        (document.querySelector('[data-role="fps"]')?.textContent ?? "").trim().startsWith("device"),
+        /rendered by the device|displayed by the panel/.test(
+          document.querySelector('[data-role="fps"]')?.getAttribute("title") ?? "",
+        ),
       { timeout: 30000 },
     );
     const chip = await page.$eval('[data-role="layout-chip"]', (el) =>
       (el.textContent ?? "").replace(/\s+/g, " ").trim(),
     );
-    const src = await page.$eval(".cm-content", (el) => el.textContent ?? "");
-    ok = src.trim().length > 0;
-    detail = `chip="${chip}", editor has ${src.trim().length} chars`;
+    const tiles = await page.$$eval(
+      '[data-role="patterns-grid"][data-source="device"] [data-role="tile"]',
+      (els) => els.length,
+    );
+    ok = tiles > 0;
+    detail = `chip="${chip}", ${tiles} on-device tile(s), playing tile lit`;
   } catch (e) {
     detail = String(e).split("\n")[0];
   }
