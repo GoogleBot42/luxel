@@ -1169,9 +1169,17 @@ for (const frameId of runIds) {
     const worst = [...new Set(deltas.slice(0, 12).map((d) => d.element))].slice(0, 6);
     for (const id of worst) {
       const e = entries.find((x) => x.id === id);
-      const m = mockBase[id];
-      const a = appBase[id];
-      if (!e || !m?.found || !a?.found) continue;
+      if (!e) continue;
+      // Re-measure right before cropping. The base pass ran before the hover
+      // and focus passes, which scroll and move things, so `vx/vy` from it is
+      // a stale viewport position and the crop lands on the wrong pixels.
+      await mock
+        .$eval("#" + mockId, (el) => el.scrollIntoView({ block: "center" }))
+        .catch(() => {});
+      await sleep(120);
+      const m = (await measure(mock, `#${mockId}`, [{ id, sel: scope(e.mock), nth: e.mockNth }]))[id];
+      const a = (await measure(page, app.root ?? "body", [{ id, sel: e.appSel, nth: e.nth }]))[id];
+      if (!m?.found || !a?.found) continue;
       const pad = 6;
       const shotA = await page
         .screenshot({
