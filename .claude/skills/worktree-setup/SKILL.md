@@ -71,6 +71,11 @@ these before trusting any build/test failure as a real regression.
    `failed to read …/Cargo.toml` on a perfectly healthy tree (2026-08-31).
    Enter the shell from the worktree ROOT and `cd` inside it:
    `nix develop --command bash -c 'cd firmware && ./build-esp32.sh'`.
+   **Nix only sees files git tracks.** A NEW file the flake references
+   (a `firmware/patches/*.patch`, say) must be `git add`ed before
+   `nix develop` / `nix build`, or evaluation fails with
+   `Path '…' in the repository "…" is not tracked by Git` (2026-09-20).
+   Edits to already-tracked files need no staging.
    **Passing the flake path is not enough** — `nix develop /path/to/other
    --command …` run from worktree A materializes the symlink under A, so a
    firmware build in worktree B (a baseline build for an A/B, say) still

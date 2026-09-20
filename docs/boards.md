@@ -2313,7 +2313,8 @@ metal:**
 
 At the 256-column chain the same shape is 114,688 + 16,384 B internal against
 229,376 B — the #611 ledger. **Off by default** until Jeremy has looked at it
-on the bench: the verification is `pass.spare.torn_*` at 0 and no visible
+on the bench (`nix build .#luxel-fw-seengreat-hub75-spare`, or
+`EXTRA_FEATURES=hub75-spare-plane` with `build-esp32.sh`): the verification is `pass.spare.torn_*` at 0 and no visible
 artifact through a Raindrops / Infinite Snake / comet run, pattern saves and
 an OTA (Gitea #620).
 
