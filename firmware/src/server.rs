@@ -258,6 +258,73 @@ fn push_not_persisted(out: &mut String, e: &str) {
     push_piece(out, "\"}");
 }
 
+/// The dispatcher's ONE unsigned integer parser. `str::parse` instantiates
+/// its own ~700 B of `from_str_radix` **per integer width** at
+/// `opt-level = "s"` (Gitea #465, measured on riscv32imc), and these routes
+/// between them wanted `u8`, `u16` and `u32` — so they all come through
+/// here and narrow afterwards. Same acceptance as `parse`: digits only, no
+/// sign, no whitespace, overflow is a rejection.
+fn num(s: &str) -> Option<u32> {
+    if s.is_empty() {
+        return None;
+    }
+    let mut n: u32 = 0;
+    for b in s.bytes() {
+        let d = b.wrapping_sub(b'0');
+        if d > 9 {
+            return None;
+        }
+        n = n.checked_mul(10)?.checked_add(d as u32)?;
+    }
+    Some(n)
+}
+
+/// `"name":"…"` — the device's name as a JSON member (Gitea #538). No
+/// `json_escape`: `devname::valid` rejects `"`, `\` and control bytes, so
+/// the stored bytes ARE the JSON string, which is what keeps this free on
+/// `/api/status`'s continuously-polled path.
+fn push_name(out: &mut String) {
+    push_piece(out, "\"name\":\"");
+    crate::shared::with_device_name(|n| push_piece(out, n));
+    push_piece(out, "\"");
+}
+
+/// `POST /api/name`'s whole reply, out of line so the body does not land in
+/// the dispatcher's already-enormous poll frame.
+fn set_name(want: &str) -> String {
+    if !want.is_empty() && !crate::devname::valid(want) {
+        return String::from(
+            "{\"ok\":false,\"error\":\"name must be 1..=32 printable bytes, no \\\" or \\\\\"}",
+        );
+    }
+    let persisted = crate::devname::set(want);
+    let mut out = String::from("{\"ok\":true,");
+    push_name_members(&mut out);
+    push_piece(&mut out, ",\"reboot_required\":true");
+    if persisted {
+        push_piece(&mut out, "}");
+    } else {
+        push_not_persisted(&mut out, "pattern store refused the write");
+    }
+    out
+}
+
+/// [`push_name`] plus `"source":"stored"|"default"` — the members
+/// `GET /api/name` and the `POST /api/name` reply share.
+fn push_name_members(out: &mut String) {
+    push_name(out);
+    push_piece(out, ",\"source\":\"");
+    push_piece(
+        out,
+        if crate::shared::DEVICE_NAME_STORED.load(Ordering::Relaxed) {
+            "stored"
+        } else {
+            "default"
+        },
+    );
+    push_piece(out, "\"");
+}
+
 /// The installed device output palette as the flat `[pos,r,g,b,…]` JSON
 /// array the POST body and the `setOutputPalette` builtin both speak —
 /// 0..=255 per component. `[]` = no device palette.
@@ -363,7 +430,11 @@ fn status_json() -> String {
     // board allows 4096). The playground polls status continuously, so
     // carrying the cap here keeps its pixel control clamped to the real
     // device even if the one-shot /api/config probe at connect failed.
-    let mut out = String::from("{\"fps\":");
+    // name: what the console's title bar calls this device (Gitea #538) —
+    // one borrow of a ≤32-byte shared String, no flash read, no escaping.
+    let mut out = String::from("{");
+    push_name(&mut out);
+    push_piece(&mut out, ",\"fps\":");
     push_u32(&mut out, fps);
     // per-stage frame timing, average µs per rendered pattern frame over the
     // last second (Gitea #260) — see shared::FRAME_US for what each covers
@@ -1629,12 +1700,34 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
             };
             let text = |r: &[u8]| String::from_utf8_lossy(r).into_owned();
             let api: Option<ApiResponse> = match route {
+                // `/api/clock/sync` (body ignored) wakes the SNTP task so it
+                // re-syncs NOW instead of waiting out its 6 h period (or its
+                // backoff). The sync is ASYNCHRONOUS, so the reply is the
+                // clock as it stands at this instant — `synced` is still the
+                // PREVIOUS state on a first, successful call; poll
+                // `GET /api/clock` for the result. It shares this arm rather
+                // than taking its own because a second arm is a second copy
+                // of the response tail (.claude/rules/firmware.md).
+                "/api/clock/sync" => {
+                    crate::shared::SNTP_POKE.signal(());
+                    let local = crate::shared::wall_now_local();
+                    let mut out = String::from("{\"ok\":true,\"synced\":");
+                    push_piece(&mut out, if local.is_some() { "true" } else { "false" });
+                    push_piece(&mut out, ",\"local\":");
+                    push_i64(&mut out, local.unwrap_or(0));
+                    push_piece(&mut out, "}");
+                    Some(json_response(out))
+                }
                 // body: tz offset from UTC in minutes (e.g. "-360") →
                 // applied live + persisted (clock builtins shift with it)
                 "/api/clock" => {
-                    Some(json_response(match text(&raw).trim().parse::<i16>() {
-                        Ok(tz) if (-14 * 60..=14 * 60).contains(&(tz as i32)) => {
-                            crate::shared::TZ_MINUTES.store(tz as i32, Ordering::Relaxed);
+                    // i32, not i16: `i32` is already instantiated for the
+                    // control values below, and a second width is its own
+                    // ~700 B of `from_str_radix` (#465).
+                    Some(json_response(match text(&raw).trim().parse::<i32>() {
+                        Ok(tz) if (-14 * 60..=14 * 60).contains(&tz) => {
+                            crate::shared::TZ_MINUTES.store(tz, Ordering::Relaxed);
+                            let tz = tz as i16;
                             let cfg = DeviceConfig { tz_minutes: tz, ..crate::shared::device_config_snapshot() };
                             let _ = crate::config::write_device(&cfg);
                             let mut out = String::from("{\"ok\":true,\"tzMinutes\":");
@@ -1647,6 +1740,11 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                         ),
                     }))
                 }
+                // body: the device's name, or empty to go back to the board
+                // default. Persisted; the DHCP hostname (and, at #536, the
+                // setup AP) is built from it at boot, so the change is
+                // cosmetic until then — hence `reboot_required`.
+                "/api/name" => Some(json_response(set_name(text(&raw).trim()))),
                 // body: "<order> <gamma_tenths> <cap_ma> [<bright_curve_tenths>
                 // <blur_pct> <glow_pct>]" (e.g. "grb 22 1500 22 20 40") → the
                 // output pipeline, applied live + persisted. The last three are
@@ -1660,12 +1758,12 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                         .next()
                         .and_then(luxel_core::outpipe::ColorOrder::from_name);
                     let gamma: Option<u8> =
-                        it.next().and_then(|v| v.parse().ok()).filter(|g| *g <= 50);
+                        it.next().and_then(num).filter(|g| *g <= 50).map(|g| g as u8);
                     let cap: Option<u16> =
-                        it.next().and_then(|v| v.parse().ok()).filter(|c| *c <= 20_000);
+                        it.next().and_then(num).filter(|c| *c <= 20_000).map(|c| c as u16);
                     let opt = |tok: Option<&str>, cur: u8, max: u8| match tok {
                         None => Some(cur),
-                        Some(v) => v.parse::<u8>().ok().filter(|x| *x <= max),
+                        Some(v) => num(v).filter(|x| *x <= max as u32).map(|x| x as u8),
                     };
                     let curve = opt(
                         it.next(),
@@ -1788,7 +1886,10 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     let body = text(&raw);
                     let mut lines = body.lines();
                     let host = lines.next().unwrap_or("").trim();
-                    let port = lines.next().unwrap_or("").trim().parse::<u16>().unwrap_or(1883);
+                    let port = num(lines.next().unwrap_or("").trim())
+                        .filter(|p| *p <= u16::MAX as u32)
+                        .map(|p| p as u16)
+                        .unwrap_or(1883);
                     let user = lines.next().unwrap_or("").trim();
                     let pass = lines.next().unwrap_or("").trim();
                     let result = if host.is_empty() {
@@ -1816,8 +1917,9 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 // (the render task reads BRIGHTNESS every frame) and persisted
                 // to flash so it survives reboot. No reboot needed.
                 "/api/brightness" => {
-                    Some(json_response(match text(&raw).trim().parse::<u8>() {
-                        Ok(b) if b <= 31 => {
+                    Some(json_response(match num(text(&raw).trim()) {
+                        Some(b) if b <= 31 => {
+                            let b = b as u8;
                             BRIGHTNESS.store(b, Ordering::Relaxed);
                             // read-modify-write so we don't clobber the others
                             let cfg = DeviceConfig { brightness: b, ..crate::shared::device_config_snapshot() };
@@ -1837,8 +1939,8 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 // Applied live (render task rebuilds the engine + SPI buffer)
                 // and persisted. No reboot.
                 "/api/config" => {
-                    Some(json_response(match text(&raw).trim().parse::<u32>() {
-                        Ok(n) if n >= 1 && n <= MAX_PIXELS => {
+                    Some(json_response(match num(text(&raw).trim()) {
+                        Some(n) if n >= 1 && n <= MAX_PIXELS => {
                             // the render task is the sole writer of PIXEL_COUNT;
                             // it flips the atomic + rebuilds when it drains this.
                             // WANT_PIXEL_COUNT is the requested value — what
@@ -1876,8 +1978,8 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     let want = if body.eq_ignore_ascii_case("default") {
                         Ok(None)
                     } else {
-                        match body.parse::<u8>() {
-                            Ok(p) if crate::board::data_pin_ok(p) => Ok(Some(p)),
+                        match num(body).filter(|p| *p <= u8::MAX as u32).map(|p| p as u8) {
+                            Some(p) if crate::board::data_pin_ok(p) => Ok(Some(p)),
                             _ => Err(()),
                         }
                     };
@@ -2181,6 +2283,13 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                         },
                     };
                     Some(json_response(body))
+                }
+                // what this device calls itself (Gitea #538)
+                "/api/name" => {
+                    let mut out = String::from("{");
+                    push_name_members(&mut out);
+                    push_piece(&mut out, "}");
+                    Some(json_response(out))
                 }
                 "/api/brightness" => {
                     let mut out = String::from("{\"brightness\":");

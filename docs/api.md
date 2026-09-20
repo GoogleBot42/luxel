@@ -59,9 +59,10 @@ response as "no snapshot right now", not as an all-black frame.
 `GET /api/status` on **firmware**:
 
 ```json
-{"fps":42,"frame_us":8100,"vm_us":5200,"pipe_us":1400,"out_us":1300,"out_fps":0,
+{"name":"luxel-4ae0d4","fps":42,"frame_us":8100,"vm_us":5200,"pipe_us":1400,"out_us":1300,"out_fps":0,
  "rescan_hz":0,"dropped":0,"pixels":300,"max_pixels":2048,
- "geom":{"dims":1,"regular":true,"w":300,"h":1,"source":"board","pattern_dims":1},
+ "geom":{"dims":1,"regular":true,"w":300,"h":1,"source":"board","pattern_dims":1,
+        "compatible":true},
  "caps":{"strip_driver":true,"panel":false,"outputs":1,"power_cap":true,"blur_glow":true,
          "layers":3,"text_slots":0,"reboot":true,"ota":true,"psram":false,"assets":false},
  "slot":"ota_0","version":"0.1.39",
@@ -102,19 +103,20 @@ engine or the map changes (never per frame).
 | `w` / `h` | The lattice, when `regular`. A strip is `w = pixels`, `h = 1`. Both `0` when `regular` is false. |
 | `source` | `"user"` a map installed through `POST /api/map` (persisted in flash) · `"board"` the board's own geometry — a HUB75 panel's `64×64` grid, or a strip's bare index space · `"default"` the engine's fabricated square grid, which nothing else reports. |
 | `pattern_dims` | What the RUNNING PATTERN wants: `0` no preference (`renderFrame` in index space) · `1` `render` · `2` `render2D` · `3` `render3D`. Differs from `dims` exactly when the pattern is being projected onto a layout of another shape. `0` while no engine is resident. |
+| `compatible` | False when the LAYOUT cannot show a pattern of this dimensionality at all (Gitea #538): a strip handed a 2D/3D pattern, a plane handed a 3D one. A host never *offers* such a pattern — the UI hides or flags it — but the engine still renders one it is handed, so a stale playlist entry or a share link cannot black out a device. See docs/spec/projection.md §1a. **It reads the LAYOUT's dims, not `dims`**: a `source:"default"` geometry is the engine's fabricated grid papering over a bare strip, which is exactly the case to flag. |
 
 The combinations, in full:
 
-| situation | `dims` | `regular` | `w`/`h` | `source` |
-|---|:-:|:-:|---|---|
-| strip board, 1D or `renderFrame` pattern, no map | 1 | true | `pixels` / 1 | `board` |
-| strip board, `render2D`-only pattern, no map | 2 | true | the ceil(√n) grid | `default` |
-| HUB75 panel board, nothing installed | 2 | true | 64 / 64 | `board` |
-| `POST /api/map grid W H` | 2 | true | W / H | `user` |
-| `POST /api/map` 2D coords that `detect_grid` recognises | 2 | true | the detected grid | `user` |
-| `POST /api/map` 2D coords that it does not | 2 | false | 0 / 0 | `user` |
-| `POST /api/map` 3D coords (never a grid) | 3 | false | 0 / 0 | `user` |
-| no engine resident (frozen for an OTA) | the device map's | — | — | `board`/`user` |
+| situation | `dims` | `regular` | `w`/`h` | `source` | `compatible` |
+|---|:-:|:-:|---|---|:-:|
+| strip board, 1D or `renderFrame` pattern, no map | 1 | true | `pixels` / 1 | `board` | true |
+| strip board, `render2D`-only pattern, no map | 2 | true | the ceil(√n) grid | `default` | **false** |
+| HUB75 panel board, nothing installed | 2 | true | 64 / 64 | `board` | true unless the pattern is 3D |
+| `POST /api/map grid W H` | 2 | true | W / H | `user` | true unless the pattern is 3D |
+| `POST /api/map` 2D coords that `detect_grid` recognises | 2 | true | the detected grid | `user` | true unless the pattern is 3D |
+| `POST /api/map` 2D coords that it does not | 2 | false | 0 / 0 | `user` | true unless the pattern is 3D |
+| `POST /api/map` 3D coords (never a grid) | 3 | false | 0 / 0 | `user` | true |
+| no engine resident (frozen for an OTA) | the device map's | — | — | `board`/`user` | true (`pattern_dims` is 0) |
 
 A map whose pixel count does not match the device's is truncated to the device's
 by the engine, so a `grid 16 8` on a 60 px strip is 60 coordinates and no longer
@@ -739,6 +741,7 @@ All of these apply **live** and (on firmware) **persist to flash** — no reboot
 | `/api/layout` | POST | `strip`/`matrix`/`map`/`out`/`proj*` lines | the GET body + `"ok"`/`"reboot_required"`, or `{"ok":false,"error":…,"line":N}` | both |
 | `/api/clock` | GET | — | `{"synced":bool,"local":<unix secs, local>,"tzMinutes":N}` | both |
 | `/api/clock` | POST | tz offset from UTC in minutes | `{"ok":true,"tzMinutes":N}` | both |
+| `/api/clock/sync` | POST | (body ignored) | `{"ok":true,"synced":bool,"local":<unix secs, local>}` | both |
 
 - `POST /api/config` `max` is the board cap (2048, or 4096 on HUB75 boards);
   the mirror is always 2048.
@@ -781,6 +784,12 @@ All of these apply **live** and (on firmware) **persist to flash** — no reboot
   A PER-ITEM override lives beside the item's values instead — the playlist's
   `P` line, which both hosts carry (Gitea #470).
 - `POST /api/clock` accepts −840..=840 minutes.
+- `POST /api/clock/sync` asks the device to re-sync NOW (Gitea #538). On
+  firmware it wakes the SNTP task, which otherwise sleeps out a 6 h period
+  (or an exponential backoff after a failure). The sync is **asynchronous**:
+  the reply is the clock as it stands at that instant, so `synced` is still
+  the PREVIOUS state on a first successful call — poll `GET /api/clock` for
+  the result. A device in AP mode has no SNTP task and stays `false`.
 - Firmware settings whose flash write fails still apply live and add
   `"note":"not persisted: …"` to the `{"ok":true,…}` body (`/api/brightness`,
   `/api/config`, `/api/protocol`, `/api/layout`).
@@ -796,6 +805,8 @@ All of these apply **live** and (on firmware) **persist to flash** — no reboot
 
 | route | method | body | response | where |
 |---|---|---|---|---|
+| `/api/name` | GET | — | `{"name":"…","source":"stored"\|"default"}` | both |
+| `/api/name` | POST | the name, or empty to restore the default | `{"ok":true,"name":"…","source":"…","reboot_required":true}` | both |
 | `/api/wifi` | GET | — | `{"ssid":"…"\|null,"source":"flash"\|"builtin"\|"none"}` | both |
 | `/api/wifi` | POST | `ssid\npassword` | `{"ok":true,"ssid":"…","note":"rebooting to apply"}` — **firmware reboots** | both |
 | `/api/apmode` | GET | — | `{"ap":bool}` | both |
@@ -806,6 +817,25 @@ All of these apply **live** and (on firmware) **persist to flash** — no reboot
 | `/api/sync` | GET | — | `{"mode","timeMs","leader":{"bootId","ageMs","offsetMs"}\|null}` | both |
 | `/api/sync` | POST | `off` \| `leader` \| `follower` | `{"ok":true,"mode":"…"}` | both |
 
+- **`/api/name`** (Gitea #538) is what this device calls itself — the console
+  title bar, Settings → Device → Name, and Home Assistant. It lives in this
+  section rather than "Device settings" because it is *not* live: the DHCP
+  hostname is built from it at boot and the network stack never re-reads it,
+  so the POST persists, updates `/api/status` `name` immediately and answers
+  `"reboot_required":true`. The setup AP's SSID stays the board's
+  `luxel-<mac6>` for now; #536 moves it onto this name (with a password).
+  - Validation: 1..=32 bytes of printable UTF-8 — control bytes, `"` and
+    `\` rejected. 32 bytes is the 802.11 SSID limit, so one cap covers every
+    consumer; the two JSON metacharacters are out so the stored bytes ARE
+    the JSON string at every emit site, `/api/status`'s polled path
+    included. An empty body **clears** the name, restoring the default.
+  - `source` is `"stored"` when the user set one, `"default"` for the board's
+    `luxel-<mac6>`. The mirror has no MAC and defaults to `luxel-serve`
+    (`luxel serve --name NAME` sets it); it reports `"default"` whenever the
+    name equals that.
+  - It is persisted in the pattern store's reserved-key blob space, not the
+    nvs device record — the nvs partition's four sectors are full and the
+    record is a fixed-size struct (see firmware/src/devname.rs).
 - `POST /api/reboot` is the other half of `reboot_required` (Gitea #475): the
   other reboots are side effects of their own change (`/api/wifi`,
   `/api/datapin`) and neither exists on a HUB75 board, so a stored chain
@@ -830,7 +860,10 @@ All of these apply **live** and (on firmware) **persist to flash** — no reboot
   `{"ap":false}`, `POST /api/apmode` answers `{"ok":true,"note":"mirror: no
   radio; …"}` for parity, and `POST /api/wifi` stores the SSID without
   rebooting (it still returns the `"rebooting to apply"` note). Its
-  `GET /api/clock` is always `"synced":true` (host clock).
+  `GET /api/clock` is always `"synced":true` (host clock), and
+  `POST /api/clock/sync` answers `{"ok":true,"synced":true,…}` without doing
+  anything — there is no NTP client to poke. `POST /api/name` likewise stores
+  the name and returns `"reboot_required":true` for parity.
 
 ## Injection surfaces
 
@@ -940,6 +973,10 @@ At most `PIN_MAX_BATCH` writes per request.
 - **Two routes reboot the device**: `POST /api/wifi` and `POST /api/apmode`
   (immediately after replying), plus `POST /api/ota` on success. Nothing else
   does — brightness, pixel count, protocol, output, map and MQTT all apply live.
+  `POST /api/datapin` reboots too. `POST /api/name` is the one route that
+  needs a reboot and does NOT take one: the name is live in `/api/status`
+  immediately and only the hostname waits, so it answers
+  `"reboot_required":true` and leaves the timing to the caller.
 - **The device has 2–3 HTTP connection slots**, keep-alive, with a 45 s
   whole-body read timeout. An abandoned upload pins a slot until it expires.
   Client-side: serialize your requests (the playground gates every fetch to 2

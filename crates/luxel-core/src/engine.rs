@@ -126,9 +126,10 @@ enum ProjPlan {
     /// `axis` (0 = x, 1 = y, 2 = z). This is the engine win: a 1D pattern on
     /// a 64×64 panel costs 64 render calls, not 4096.
     Strip { axis: u8, len: u32 },
-    /// A `renderFrame` (whole-frame, 2D) pattern on a 1D Layout: it gets a
-    /// w×1 (middle row) or 1×h (middle column) grid so the grid-space bulk
-    /// builtins still describe the strip.
+    /// A `renderFrame` (whole-frame, 2D) pattern on a 1D Layout — an
+    /// incompatible pairing no host offers (#538), but one the engine still
+    /// has to render: it gets a w×1 grid so the grid-space bulk builtins
+    /// describe the strip instead of a grid that is not there.
     FrameGrid(crate::outpipe::GridMap),
 }
 
@@ -150,8 +151,16 @@ pub struct EffectiveGeometry {
     /// Grid the pattern's grid-space builtins see, `(0, 0)` when there is none.
     pub w: u16,
     pub h: u16,
-    /// The projection in force, or `None` when the pattern is native.
+    /// The projection in force, or `None` when the pattern is native — or
+    /// when it is incompatible, which has no projection to be in force.
     pub mode: Option<ProjectionMode>,
+    /// False when this Layout cannot show a pattern of this dimensionality
+    /// at all (#538): a strip handed a 2D/3D pattern, a plane handed a 3D
+    /// one. The frame still renders — on the engine's plain fallback
+    /// coordinates, see [`crate::projection::compatible`] — so a host that
+    /// activates one anyway (an old playlist entry, a share link, HA) does
+    /// not go dark; this is the flag a UI hides or marks the tile with.
+    pub compatible: bool,
 }
 
 /// One frame of sensor-board data (the PB sensor expansion board surface).
@@ -774,13 +783,15 @@ impl Engine {
     /// (`1D · along x`) or size a preview.
     pub fn effective_geometry(&self) -> EffectiveGeometry {
         let (w, h) = self.vm.frame_grid.map_or((0, 0), |g| (g.w, g.h));
+        let (pdims, ldims) = (self.render_dims(), self.layout_dims());
         EffectiveGeometry {
             pixel_count: self.vm.pixel_count,
-            pattern_dims: self.render_dims(),
-            layout_dims: self.layout_dims(),
+            pattern_dims: pdims,
+            layout_dims: ldims,
             w,
             h,
             mode: self.effective_projection(),
+            compatible: crate::projection::compatible(pdims, ldims),
         }
     }
 
@@ -883,14 +894,34 @@ impl Engine {
         let is_frame = matches!(render, RenderKind::Frame(_));
         let pdims = self.render_dims();
         let ldims = self.layout_dims();
+        if is_frame {
+            // A whole-frame pattern owns the buffer: there is no per-pixel
+            // strip to render and replicate, and no coordinate argument to
+            // substitute. The one thing it can need is a grid — a grid-space
+            // `renderFrame` on a 1D Layout is an incompatible pairing no host
+            // offers (#538), but if one is activated anyway it gets a w×1
+            // grid so `gridWidth`/`gridHeight` and the grid-space bulk
+            // builtins describe the strip instead of nothing.
+            if pdims == 2 && ldims == 1 {
+                let n = self.pixel_count.min(u16::MAX as u32) as u16;
+                return ProjPlan::FrameGrid(crate::outpipe::GridMap {
+                    w: n,
+                    h: 1,
+                    serpentine: false,
+                });
+            }
+            return ProjPlan::Native;
+        }
         let Some(mode) = self.projection.effective(pdims, ldims) else {
+            // Native, or an incompatible pairing: `pixel_coords` fills the
+            // axes the Layout does not have with mid-space, which is what an
+            // incompatible pattern renders on.
             return ProjPlan::Native;
         };
         if pdims == 1 {
-            // 1D pattern on a 2D/3D Layout. By index changes nothing, and a
-            // whole-frame pattern owns the buffer — there is no per-pixel
-            // strip to render and replicate — so both keep today's path.
-            let Some(axis) = mode.axis().filter(|_| !is_frame) else {
+            // 1D pattern on a 2D/3D Layout. By index changes nothing, so it
+            // keeps today's path.
+            let Some(axis) = mode.axis() else {
                 return ProjPlan::Native;
             };
             let len = self.axis_len(axis);
@@ -900,50 +931,15 @@ impl Engine {
                 ProjPlan::Strip { axis, len }
             };
         }
-        if is_frame {
-            // A grid-space `renderFrame` on a strip gets the matching w×1
-            // (middle row) or 1×h (middle column) grid. There is nothing
-            // meaningful to hand one on a 3D Layout.
-            if !(pdims == 2 && ldims == 1) {
-                return ProjPlan::Native;
-            }
-            let n = self.pixel_count.min(u16::MAX as u32) as u16;
-            return ProjPlan::FrameGrid(if mode == ProjectionMode::Y {
-                crate::outpipe::GridMap { w: 1, h: n, serpentine: false }
-            } else {
-                crate::outpipe::GridMap { w: n, h: 1, serpentine: false }
-            });
-        }
-        // `sel[k]` picks the Layout coordinate (0/1/2, or 3 for mid-space)
-        // feeding the pattern's k-th coordinate argument. `effective` has
-        // already clamped `mode` to one this pair offers, so every arm's
-        // catch-all is that pair's own default.
-        let sel = match (pdims, ldims, mode) {
-            // 2D pattern on a strip: middle row walks the pattern's x,
-            // middle column its y.
-            (2, 1, ProjectionMode::Y) => [3, 0, 3],
-            (2, 1, _) => [0, 3, 3],
-            // 2D pattern on a lattice: the xy image extruded along an axis —
-            // the pattern's two coordinates are the other two.
-            (2, 3, ProjectionMode::X) => [1, 2, 3],
-            (2, 3, ProjectionMode::Y) => [0, 2, 3],
-            // 3D pattern on a strip: a line through the centre of the cube.
-            (3, 1, ProjectionMode::Y) => [3, 0, 3],
-            (3, 1, ProjectionMode::Z) => [3, 3, 0],
-            (3, 1, _) => [0, 3, 3],
-            // 3D pattern on a matrix: one slice, third coordinate pinned.
-            (3, 2, ProjectionMode::Xz) => [0, 3, 1],
-            (3, 2, ProjectionMode::Yz) => [3, 0, 1],
-            // native pairs and every pair whose default is what
-            // `pixel_coords` already does
-            _ => return ProjPlan::Native,
-        };
-        if sel == [0, 1, 2] || sel == [0, 1, 3] {
-            // `pixel_coords` already fills an absent third axis with
-            // mid-space, so these are the identity.
-            ProjPlan::Native
-        } else {
-            ProjPlan::Select(sel)
+        // The only row left is a 2D pattern on a lattice: the xy image
+        // extruded along an axis, so the pattern's two coordinates are the
+        // other two. `sel[k]` picks the Layout coordinate (0/1/2, or 3 for
+        // mid-space) feeding the pattern's k-th coordinate argument.
+        match (pdims, ldims, mode) {
+            (2, 3, ProjectionMode::X) => ProjPlan::Select([1, 2, 3]),
+            (2, 3, ProjectionMode::Y) => ProjPlan::Select([0, 2, 3]),
+            // `repeat along z` is what `pixel_coords` already does
+            _ => ProjPlan::Native,
         }
     }
 

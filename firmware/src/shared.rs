@@ -752,6 +752,11 @@ pub fn get_current_controls() -> Vec<(String, Vec<i32>)> {
 pub static MQTT_POKE: embassy_sync::signal::Signal<CriticalSectionRawMutex, ()> =
     embassy_sync::signal::Signal::new();
 
+/// Poked by `POST /api/clock/sync` so the SNTP task re-syncs NOW instead of
+/// waiting out its 6 h period (or its backoff) — see sntp.rs (Gitea #538).
+pub static SNTP_POKE: embassy_sync::signal::Signal<CriticalSectionRawMutex, ()> =
+    embassy_sync::signal::Signal::new();
+
 /// Luxel-to-Luxel sync role (0 off, 1 leader, 2 follower). Seeded from
 /// flash at boot; POST /api/sync writes it live (and persists).
 pub static SYNC_MODE: AtomicU8 = AtomicU8::new(0);
@@ -973,4 +978,55 @@ pub fn snapshot(cell: &Shared<String>) -> String {
     } else {
         s
     }
+}
+
+/// The device's NAME (Gitea #538): the user's if one is stored, else the
+/// board's `luxel-<mac6>`. Seeded once at boot by `devname::init` and
+/// rewritten by `POST /api/name`; `/api/status` reports it, and the DHCP
+/// hostname / setup-AP SSID are built from it at boot (so a change here is
+/// cosmetic until the next one — the route says `reboot_required`).
+///
+/// A heap `String` rather than a `heapless::String<32>`, counter-intuitive
+/// as that is for a 32-byte bound: measured 2026-09-19 on #538, the
+/// heapless form cost `board-c6-devkit` + `hosted-ui` **2,032 B** of image
+/// (1,017,904 → 1,019,936) while saving 112 B on the Xtensa boards — the
+/// RISC-V codegen for its push/deref does not pay for itself. Measure, do
+/// not assume, before changing this back.
+pub static DEVICE_NAME: Shared<String> = BlockingMutex::new(RefCell::new(String::new()));
+
+/// The board's own `luxel-<mac6>` — what the name falls back to when the
+/// user clears theirs. Set once, beside [`DEVICE_NAME`].
+pub static DEVICE_NAME_DEFAULT: Shared<String> = BlockingMutex::new(RefCell::new(String::new()));
+
+/// True when [`DEVICE_NAME`] came from flash rather than the MAC default.
+pub static DEVICE_NAME_STORED: AtomicBool = AtomicBool::new(false);
+
+/// The one writer both name cells go through, so the clear/copy is written
+/// once instead of at each of `devname::init`, `devname::set` and `main()`.
+fn write_name(cell: &Shared<String>, name: &str) {
+    cell.lock(|c| {
+        let mut s = c.borrow_mut();
+        s.clear();
+        s.push_str(name);
+    });
+}
+
+/// Borrow the device name in place — no copy on the `/api/status` path,
+/// which the playground polls continuously.
+pub fn with_device_name<R>(f: impl FnOnce(&str) -> R) -> R {
+    DEVICE_NAME.lock(|c| f(&c.borrow()))
+}
+
+/// Install the effective name. `stored` says whether it came from flash.
+pub fn set_device_name(name: &str, stored: bool) {
+    write_name(&DEVICE_NAME, name);
+    DEVICE_NAME_STORED.store(stored, Ordering::Relaxed);
+}
+
+pub fn set_device_name_default(name: &str) {
+    write_name(&DEVICE_NAME_DEFAULT, name);
+}
+
+pub fn device_name_default() -> String {
+    share_get(&DEVICE_NAME_DEFAULT)
 }

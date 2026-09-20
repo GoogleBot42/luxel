@@ -549,6 +549,12 @@ pub fn parse(
                 let at = list.iter().position(|e: &Output| e.n > o.n).unwrap_or(list.len());
                 list.insert(at, o);
             }
+            // All three are accepted whatever the kind, because every
+            // PERSISTED Layout carries all three (`to_wire`) and a body this
+            // grammar rejects would drop the host back to its board default.
+            // Which of them is in FORCE is the projection table's business,
+            // not the parser's: since #538 `proj3d` never is, and `proj2d`
+            // only on a 3D Layout (`projection_options`).
             "proj1d" | "proj2d" | "proj3d" => {
                 let mode: ProjectionMode = it
                     .next()

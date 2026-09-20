@@ -32,26 +32,64 @@ default reproduces the engine's behaviour from before projections existed.
 
 | Layout dims | 1D patterns | 2D patterns (incl. `renderFrame`) | 3D patterns |
 |---|---|---|---|
-| 1D (strip) | *native* | Middle row `x` · Middle column `y` | Line along `x` · `y` · `z` |
-| 2D (matrix or 2D map) | By index `index` · Along x `x` · Along y `y` | *native* | Slice xy `xy` · xz `xz` · yz `yz` |
+| 1D (strip) | *native* | — | — |
+| 2D (matrix or 2D map) | By index `index` · Along x `x` · Along y `y` | *native* | — |
 | 3D (lattice or 3D map) | By index `index` · Along `x` · `y` · `z` | Repeat along z `z` · y `y` · x `x` | *native* |
 
-What each token names:
+**A Layout only ever shows a pattern of its own dimensionality or lower**
+(Gitea #538). A strip does not project a 2D or 3D pattern and a plane does not
+project a 3D one — it looks terrible, so the choice is not offered: those three
+cells are empty everywhere, in the engine, in `/api/layout`, in the mirror and
+in the UI's tables. There is no explanatory copy anywhere; the options simply
+are not there. What happens when one is activated anyway is §1a.
+
+What each remaining token names:
 
 - **1D pattern, `x`/`y`/`z`** — the Layout axis the strip is laid along. The
   pattern renders ONE strip; it is replicated across the other axes.
-- **2D pattern on a strip, `x`/`y`** — the pattern axis the strip walks. `x` is
-  the middle row (the pattern's `y` is pinned to 0.5), `y` the middle column.
 - **2D pattern on a lattice, `x`/`y`/`z`** — the Layout axis the image is
   repeated (extruded) along; the image occupies the complementary plane.
-- **3D pattern on a strip, `x`/`y`/`z`** — the pattern axis the line runs
-  along; the other two coordinates are pinned to 0.5.
-- **3D pattern on a matrix, `xy`/`xz`/`yz`** — the plane of the cube that is
-  sampled; the third coordinate is pinned to 0.5.
 
 `index` means the pixel's index in the Layout's own order — row-major on a
 grid, wiring order on a custom map. It is the engine's historical fallback and
 changes nothing.
+
+## 1a. Incompatible patterns
+
+A host must not *offer* a pattern the Layout cannot show, but it can still be
+*handed* one: a playlist saved before #538, a shared link, a Home Assistant
+call, `POST /api/code` from a script. **The engine renders it rather than going
+dark.** There is no projection in force (`effective_projection()` is `None`),
+so the pattern simply gets the engine's plain fallback coordinates:
+
+- a 2D pattern on a strip sees `x = index / pixelCount`, `y = 0.5` — which is
+  exactly what the old "middle row" produced;
+- a 3D pattern on a strip sees the same, with `z = 0.5` — the old "line along x";
+- a 3D pattern on a plane sees the Layout's `x, y` and `z = 0.5` — the old
+  "slice xy";
+- a grid-space `renderFrame` on a strip still gets a **w×1** grid, so
+  `gridWidth`/`gridHeight` and the grid-space bulk builtins describe the strip
+  instead of nothing. It owns the buffer, so there is no per-pixel fallback to
+  give it.
+- a 2D-only pattern that reaches an engine with no Layout installed keeps the
+  fabricated ceil(√n) grid it has always had.
+
+In other words the removed cells' *first* options survive as the fallback, and
+only the removed *choices* are gone. Upgrading a device therefore changes the
+picture only for someone who had explicitly picked middle-column, line-along-y
+or a non-xy slice.
+
+So that a UI can hide or flag such a pattern instead of showing it as normal,
+the engine reports the fact:
+
+- `luxel_core::projection::compatible(pattern_dims, layout_dims)` — the rule,
+  one line;
+- `Engine::effective_geometry().compatible` and the wasm
+  `lx_effective_geometry`'s `"compatible"`;
+- **`GET /api/status` → `geom.compatible`** (docs/api.md), on the firmware and
+  the mirror alike. It reads the LAYOUT's dimensionality, not `geom.dims`: a
+  `"source":"default"` geometry is the engine papering a fabricated grid over a
+  bare strip, and that is precisely the case to flag.
 
 ## 2. Wire form
 
@@ -59,16 +97,28 @@ Three fields, one per PATTERN dimensionality, each carrying one of seven
 tokens:
 
 ```
-proj1d = index | x | y | z
-proj2d = x | y | z
-proj3d = x | y | z | xy | xz | yz
+proj1d = index | x | y | z      ← in force on a 2D or 3D Layout
+proj2d = x | y | z              ← in force on a 3D Layout only
+proj3d = —                      ← never in force (#538)
 ```
 
 A host stores all three and sends only the ones meaningful for its Layout
 kind. A value that is not one this (pattern dims, Layout dims) pair offers
 falls back to that pair's first option, so one triple survives Layout and
-pattern changes without losing the user's other choices — `proj2d=z` on a
-strip reads as "middle row", `proj3d=xy` on a strip reads as "line along x".
+pattern changes without losing the user's other choices.
+
+Since #538 `proj3d` can never be in force (a 3D pattern is native to a 3D
+Layout and is not shown on a smaller one) and `proj2d` only on a 3D Layout.
+Both nevertheless stay in the grammar and in the stored triple, and
+`POST /api/layout` still **accepts** a `proj2d`/`proj3d` line whatever the
+kind — it is simply not in force. That is deliberate: `Layout::to_wire`
+persists all three lines, so a parser that rejected them would drop every
+device upgraded past #538 back to its board default on the first boot. A
+value with nowhere to apply is ignored, not an error.
+
+Likewise the three plane modes' FFI codes (`xy`/`xz`/`yz`) stay **reserved**
+rather than being reused: a `proj3d xy` written by an older build must keep
+parsing.
 
 The FFI codes (`ProjectionMode` discriminants, stable):
 `index`=0, `x`=1, `y`=2, `z`=3, `xy`=4, `xz`=5, `yz`=6.
@@ -100,12 +150,13 @@ Under **by index**, and under every native pair, nothing changes: one render
 call per Layout pixel, the Layout's own coordinates, `pixelCount` = the
 Layout's pixel count.
 
-Under a **coordinate substitution** (every 2D and 3D pattern row of the table)
-the call count and `pixelCount` are unchanged; only which Layout coordinate
-feeds which pattern argument changes. An argument the projection does not feed
-reads 0.5, exactly like an absent map axis does today. Transforms
-(`translate`/`rotate`/`scale`) still apply in PATTERN space, i.e. after the
-substitution.
+Under a **coordinate substitution** (the 2D-pattern-on-a-lattice row, the only
+one left) the call count and `pixelCount` are unchanged; only which Layout
+coordinate feeds which pattern argument changes. An argument the projection
+does not feed reads 0.5, exactly like an absent map axis does today.
+Transforms (`translate`/`rotate`/`scale`) still apply in PATTERN space, i.e.
+after the substitution. An *incompatible* pattern (§1a) takes the same path
+with no substitution at all: every axis the Layout does not have reads 0.5.
 
 Under an **along-axis projection** of a 1D pattern the engine renders one
 strip and replicates it:
@@ -126,11 +177,12 @@ Any other Layout — an irregular 2D cloud, any 3D Layout — has no cell count,
 so the strip is as long as the Layout and pixels sample it by coordinate: the
 same picture, without the saving.
 
-A grid-space `renderFrame` pattern on a 1D Layout gets a **w×1** grid (or 1×h
-for middle column) so `gridWidth`/`gridHeight` and the grid-space bulk
-builtins still describe the strip. A whole-frame pattern is **never**
-strip-rendered — it owns the buffer, so there is no per-pixel strip to
-replicate, and a 1D `renderFrame` on a matrix keeps by-index.
+A grid-space `renderFrame` pattern on a 1D Layout gets a **w×1** grid so
+`gridWidth`/`gridHeight` and the grid-space bulk builtins still describe the
+strip. That pairing is incompatible (§1a) rather than a choice, so there is no
+1×h transpose any more. A whole-frame pattern is **never** strip-rendered — it
+owns the buffer, so there is no per-pixel strip to replicate, and a 1D
+`renderFrame` on a matrix keeps by-index.
 
 One caveat: the pattern's top-level init has already run by the time a host
 installs a projection, so a pattern that sizes a buffer with
@@ -149,6 +201,7 @@ pub struct Projection { proj1d, proj2d, proj3d }          // + DEFAULT, new, get
                                                           //   field_name, effective
 pub fn projection_options(pattern_dims: u8, layout_dims: u8) -> &'static [ProjectionMode];
 pub fn projection_label(mode, pattern_dims, layout_dims) -> &'static str;
+pub const fn compatible(pattern_dims: u8, layout_dims: u8) -> bool;   // #538
 
 impl Engine {
     fn set_projection(&mut self, Projection);
@@ -162,7 +215,9 @@ impl Engine {
 
 UIs build their pickers from `projection_options` + `projection_label` rather
 than restating the table: an empty list means the pattern is native and the
-row is hidden, a one-entry list is a note rather than a control.
+row is hidden — or that it is INCOMPATIBLE (§1a), which `compatible` tells
+apart and the surface hides or flags. A one-entry list is a note rather than
+a control.
 
 wasm (`crates/luxel-wasm`, wrapped in `web/src/lib/luxel.ts`):
 
@@ -171,7 +226,7 @@ wasm (`crates/luxel-wasm`, wrapped in `web/src/lib/luxel.ts`):
 | `lx_set_projection(h, one, two, three)` | install the triple, by FFI code |
 | `lx_projection(h)` | `proj1d \| proj2d << 8 \| proj3d << 16` |
 | `lx_projection_options(pattern_dims, layout_dims)` | JSON `[{mode,code,label}]`, returns the count |
-| `lx_effective_geometry(h)` | JSON `{pixelCount,patternDims,layoutDims,w,h,mode,label}` |
+| `lx_effective_geometry(h)` | JSON `{pixelCount,patternDims,layoutDims,w,h,mode,label,compatible}` |
 | `lx_layout_dims(h)` | the Layout's dims |
 | `lx_set_strip_layout(h)` | install the 1D Layout |
 
@@ -180,6 +235,11 @@ pattern's own dims (`docs/tools.md`).
 
 Tests: `crates/luxel-core/tests/projection.rs` (one per cell of the table),
 `crates/luxel-core/src/projection.rs` unit tests (options, labels, string and
-code round-trips), `tools/wasm-smoke.mjs` (the FFI and the replicate).
+code round-trips, and that no Layout offers a bigger pattern),
+`crates/luxel-core/src/caps.rs` (`geom.compatible`), `tools/wasm-smoke.mjs`
+(the FFI and the replicate), `tools/serve-e2e.mjs` (`geom.compatible` over
+the wire), `web/tests/geometry.test.mjs` (the TS tables, cell by cell
+against wasm).
 
-Design: `docs/design/webui-v2/proposal.md` §5.4d. Ticket: Gitea #473.
+Design: `docs/design/webui-v2/proposal.md` §5.4d. Tickets: Gitea #473, and
+#538 for the "a Layout never shows a bigger pattern" rule.

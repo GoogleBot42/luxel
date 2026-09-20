@@ -75,6 +75,17 @@ pub struct Geom {
     /// index space), 1 (`render`), 2 (`render2D`), 3 (`render3D`). Differs
     /// from `dims` exactly when the pattern is being projected.
     pub pattern_dims: u8,
+    /// False when the LAYOUT cannot show a pattern of this dimensionality at
+    /// all (Gitea #538): a strip handed a 2D/3D pattern, a plane handed a 3D
+    /// one. Note this is the layout's own dimensionality, not `dims` — a
+    /// `source:"default"` geometry IS the engine papering over a strip, and
+    /// is exactly the case a UI must flag.
+    ///
+    /// The frame still renders (the engine falls back to mid-space
+    /// coordinates, and to its ceil(√n) grid for a 2D-only pattern) so a
+    /// playlist entry, a share link or a Home Assistant call cannot black
+    /// out a device. Hosts use this to hide or mark the pattern instead.
+    pub compatible: bool,
 }
 
 impl Geom {
@@ -88,6 +99,7 @@ impl Geom {
             h: 1,
             source: GeomSource::Board,
             pattern_dims: 0,
+            compatible: true,
         }
     }
 
@@ -120,10 +132,18 @@ impl Geom {
             DeviceMap::None if dims >= 2 => GeomSource::Default,
             DeviceMap::None => GeomSource::Board,
         };
-        Geom { dims, regular, w, h, source, pattern_dims }
+        // The LAYOUT's dimensionality, which `dims` is not: with no device
+        // map the rig is a strip whatever the engine fabricated on top of it.
+        let layout_dims = match dev_map {
+            DeviceMap::None => 1,
+            _ => dims,
+        };
+        let compatible = crate::projection::compatible(pattern_dims, layout_dims);
+        Geom { dims, regular, w, h, source, pattern_dims, compatible }
     }
 
-    /// `{"dims":D,"regular":B,"w":W,"h":H,"source":"…","pattern_dims":P}`.
+    /// `{"dims":D,"regular":B,"w":W,"h":H,"source":"…","pattern_dims":P,
+    /// "compatible":B}`.
     pub fn push_json(&self, out: &mut String) {
         push_piece(out, "{\"dims\":");
         push_u32(out, self.dims as u32);
@@ -137,6 +157,8 @@ impl Geom {
         push_piece(out, self.source.name());
         push_piece(out, "\",\"pattern_dims\":");
         push_u32(out, self.pattern_dims as u32);
+        push_piece(out, ",\"compatible\":");
+        push_piece(out, bool_str(self.compatible));
         push_piece(out, "}");
     }
 }
@@ -344,8 +366,32 @@ mod tests {
         Geom::strip(60).push_json(&mut s);
         assert_eq!(
             s,
-            "{\"dims\":1,\"regular\":true,\"w\":60,\"h\":1,\"source\":\"board\",\"pattern_dims\":0}"
+            "{\"dims\":1,\"regular\":true,\"w\":60,\"h\":1,\"source\":\"board\",\
+             \"pattern_dims\":0,\"compatible\":true}"
         );
+    }
+
+    /// Gitea #538: a Layout shows its own dimensionality and lower. The
+    /// interesting case is the fabricated grid — `dims` says 2, but the rig
+    /// underneath is a bare strip, so the pattern is NOT compatible.
+    #[test]
+    fn compatible_reads_the_layout_not_the_fabricated_grid() {
+        let fabricated = Geom::derive(DeviceMap::None, 2, Some(GridMap { w: 8, h: 8, serpentine: false }), 64, 2);
+        assert_eq!(fabricated.source, GeomSource::Default);
+        assert_eq!(fabricated.dims, 2);
+        assert!(!fabricated.compatible);
+        // a strip running a strip pattern, and one with no engine yet
+        assert!(Geom::derive(DeviceMap::None, 0, None, 60, 1).compatible);
+        assert!(Geom::derive(DeviceMap::None, 0, None, 60, 0).compatible);
+        // a real panel: 1D and 2D patterns yes, 3D no
+        let panel = |pd| Geom::derive(DeviceMap::Board, 2, Some(GridMap { w: 64, h: 64, serpentine: false }), 4096, pd);
+        assert!(panel(1).compatible);
+        assert!(panel(2).compatible);
+        assert!(!panel(3).compatible);
+        // a user 3D map takes everything
+        for pd in 0..=3 {
+            assert!(Geom::derive(DeviceMap::User, 3, None, 300, pd).compatible, "{pd}");
+        }
     }
 
     const STRIP_HW: Hw = Hw {

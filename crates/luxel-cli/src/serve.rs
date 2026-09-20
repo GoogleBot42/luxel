@@ -225,6 +225,10 @@ struct State {
     pl_playing: AtomicBool,
     pl_index: AtomicUsize,
     wifi_ssid: Mutex<Option<String>>,
+    /// What this device calls itself (Gitea #538) — `--name`, and
+    /// `GET/POST /api/name`. The firmware's default is `luxel-<mac6>`; a
+    /// mirror has no MAC, so it answers to `luxel-serve` until named.
+    name: Mutex<String>,
     /// Installed pixel map (dims, per-pixel [x,y,z] in Fx) + a re-apply flag.
     device_map: Mutex<Option<(u8, Vec<[Fx; 3]>)>>,
     /// The `grid W H` shape behind `device_map`, when the map arrived in the
@@ -305,6 +309,28 @@ struct State {
     /// it isn't built; then `/` falls back to the embedded minimal page,
     /// exactly like a device with no assets installed.
     web_dir: Option<std::path::PathBuf>,
+}
+
+/// The mirror's default device name (Gitea #538). The firmware's default is
+/// `luxel-<mac6>`, which means nothing on a host with no MAC.
+const DEFAULT_NAME: &str = "luxel-serve";
+
+/// `GET /api/name`'s body, or the `POST` reply when `posted`. Both hosts
+/// build the hostname from the name at boot, so the POST reply says
+/// `reboot_required` — the mirror never reboots, exactly as it echoes
+/// `/api/wifi`'s "rebooting to apply".
+fn name_json(state: &State, posted: bool) -> String {
+    let name = state.name.lock().unwrap().clone();
+    let source = if name == DEFAULT_NAME { "default" } else { "stored" };
+    if posted {
+        format!(
+            "{{\"ok\":true,\"name\":\"{}\",\"source\":\"{}\",\"reboot_required\":true}}",
+            json_escape(&name),
+            source
+        )
+    } else {
+        format!("{{\"name\":\"{}\",\"source\":\"{}\"}}", json_escape(&name), source)
+    }
 }
 
 /// The stored device palette as the flat `[pos,r,g,b,…]` JSON array the
@@ -820,7 +846,8 @@ fn status_json(state: &State) -> String {
     let mut caps_s = String::new();
     luxel_core::caps::Caps::derive(state.hw, &geom, pixels).push_json(&mut caps_s);
     format!(
-        "{{\"fps\":{},\"out_fps\":{},\"rescan_hz\":{},\"pixels\":{},\"max_pixels\":{},\"geom\":{},\"caps\":{},\"slot\":\"native\",\"version\":\"{}\",\"heap_free\":{},\"engine_heap\":{},\"live\":{},\"vmerr\":{}}}",
+        "{{\"name\":\"{}\",\"fps\":{},\"out_fps\":{},\"rescan_hz\":{},\"pixels\":{},\"max_pixels\":{},\"geom\":{},\"caps\":{},\"slot\":\"native\",\"version\":\"{}\",\"heap_free\":{},\"engine_heap\":{},\"live\":{},\"vmerr\":{}}}",
+        json_escape(&state.name.lock().unwrap()),
         fps,
         state.out_fps.load(Ordering::Relaxed),
         state.rescan_hz.load(Ordering::Relaxed),
@@ -1999,6 +2026,17 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
             };
             respond(&mut stream, 200, "application/json", r.as_bytes());
         }
+        ("POST", "/api/clock/sync") => {
+            // the firmware pokes its SNTP task; the mirror's clock is the
+            // host's, so it is already synced and there is nothing to do
+            let tz = state.tz_minutes.load(Ordering::Relaxed);
+            let local = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64 + tz as i64 * 60)
+                .unwrap_or(0);
+            let body = format!("{{\"ok\":true,\"synced\":true,\"local\":{}}}", local);
+            respond(&mut stream, 200, "application/json", body.as_bytes());
+        }
         ("GET", "/api/sync") => {
             let mode = sync_mode_name(state.sync_mode.load(Ordering::Relaxed));
             let time_ms = state.engine_time_ms.load(Ordering::Relaxed);
@@ -2137,6 +2175,32 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
             } else {
                 *state.wifi_ssid.lock().unwrap() = Some(ssid.clone());
                 format!("{{\"ok\":true,\"ssid\":\"{}\",\"note\":\"rebooting to apply\"}}", json_escape(&ssid))
+            };
+            respond(&mut stream, 200, "application/json", r.as_bytes());
+        }
+        // what this device calls itself (Gitea #538). The mirror has no
+        // MAC, so "default" here means `--name` was not given.
+        ("GET", "/api/name") => {
+            let body = name_json(&state, false);
+            respond(&mut stream, 200, "application/json", body.as_bytes());
+        }
+        ("POST", "/api/name") => {
+            // body = the name, or empty to go back to the default
+            let body = String::from_utf8_lossy(&req.body);
+            let want = body.trim();
+            let r = if want.is_empty() {
+                *state.name.lock().unwrap() = String::from(DEFAULT_NAME);
+                name_json(&state, true)
+            } else if want.len() > 32
+                || want.bytes().any(|b| b < 0x20 || b == 0x7f || b == b'"' || b == b'\\')
+            {
+                // same rule as the firmware's `devname::valid`
+                String::from(
+                    "{\"ok\":false,\"error\":\"name must be 1..=32 printable bytes, no \\\" or \\\\\"}",
+                )
+            } else {
+                *state.name.lock().unwrap() = want.to_string();
+                name_json(&state, true)
             };
             respond(&mut stream, 200, "application/json", r.as_bytes());
         }
@@ -2331,6 +2395,9 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
     // the installed grid and every capability the Settings page gates on.
     let mut panel = false;
     let mut outputs: u8 = 1;
+    // What this mirror calls itself (Gitea #538); a device defaults to
+    // luxel-<mac6>, which a mirror has no MAC for.
+    let mut name = String::from(DEFAULT_NAME);
     let mut it = rest.iter();
     while let Some(flag) = it.next() {
         match (flag.as_str(), it.next()) {
@@ -2390,6 +2457,7 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
                 Err(_) => return super::usage(),
             },
             ("--sync-target", Some(v)) => sync_target = v.clone(),
+            ("--name", Some(v)) => name = v.clone(),
             ("--sync-port", Some(v)) => match v.parse() {
                 Ok(n) => sync_port = n,
                 Err(_) => return super::usage(),
@@ -2459,6 +2527,7 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         pl_playing: AtomicBool::new(false),
         pl_index: AtomicUsize::new(0),
         wifi_ssid: Mutex::new(None),
+        name: Mutex::new(name),
         device_map: Mutex::new(None),
         device_grid: Mutex::new(None),
         map_source: AtomicU8::new(0),

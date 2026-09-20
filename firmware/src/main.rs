@@ -58,6 +58,7 @@ mod board;
 mod config;
 mod core1;
 mod devicemap;
+mod devname;
 mod patlog;
 mod flashmap;
 mod gpio;
@@ -257,10 +258,20 @@ async fn main(spawner: Spawner) -> ! {
     const SECOND_OUTPUT_RAM: usize = 1024;
     #[cfg(not(multi_output))]
     const SECOND_OUTPUT_RAM: usize = 0;
+    // Statics that have accumulated since the 80 KB figure was set, bought
+    // back from the heap for the same reason `SECOND_OUTPUT_RAM` is: on the
+    // classic ESP32 `.stack` is the DRAM LEFT OVER, so a growing static
+    // eats the stack floor rather than the heap. Measured 2026-09-19 with
+    // `tools/stack-check.sh`: `board-pixelblaze-v3` was already **116 B
+    // UNDER** the 24,576 B floor on master (24,460 B) before #538's device
+    // name and SNTP-poke statics took another 120 B; 512 B here puts it at
+    // 24,852 B and `board-athom-music` at 25,676 B. `tools/ci.sh` does not
+    // run stack-check, which is how master drifted under it — Gitea #515.
+    const STATICS_RESERVE: usize = 512;
     #[cfg(all(feature = "esp32", feature = "small-chip"))]
-    esp_alloc::heap_allocator!(size: 88 * 1024 - SECOND_OUTPUT_RAM);
+    esp_alloc::heap_allocator!(size: 88 * 1024 - SECOND_OUTPUT_RAM - STATICS_RESERVE);
     #[cfg(all(feature = "esp32", not(feature = "small-chip")))]
-    esp_alloc::heap_allocator!(size: 80 * 1024 - SECOND_OUTPUT_RAM);
+    esp_alloc::heap_allocator!(size: 80 * 1024 - SECOND_OUTPUT_RAM - STATICS_RESERVE);
     // Non-esp32 (C3/S3/C6): tuned on the C3's 313 KB DRAM, which is the
     // tightest of the three — the S3 (dram_seg ~334 KB) and C6 (~441 KB)
     // inherit it and simply keep a larger leftover .stack. UNTESTED ON
@@ -607,14 +618,23 @@ async fn main(spawner: Spawner) -> ! {
         (Some(s), Some(p)) if !s.is_empty() => Some((s, p)),
         _ => None,
     };
-    // "luxel-xxxxxx": the DHCP hostname as a station, the SSID as an AP.
+    // "luxel-xxxxxx": the board default. It is the SSID as an AP, and the
+    // DHCP hostname as a station unless the user has named the device
+    // (devname.rs, Gitea #538) — the name is read here, once, because the
+    // network stack takes the string at construction and never re-reads it.
+    // #536 will make the AP's SSID (and its password) follow the same name.
     let mac_addr = esp_hal::efuse::base_mac_address();
     let mac = mac_addr.as_bytes();
-    let mut hostname = heapless::String::<32>::new();
+    let mut ap_ssid = heapless::String::<32>::new();
     let _ = core::fmt::Write::write_fmt(
-        &mut hostname,
+        &mut ap_ssid,
         format_args!("luxel-{:02x}{:02x}{:02x}", mac[3], mac[4], mac[5]),
     );
+    devname::init(ap_ssid.as_str());
+    let mut hostname = heapless::String::<32>::new();
+    shared::with_device_name(|n| {
+        let _ = hostname.push_str(n);
+    });
     println!("hostname: {}", hostname);
 
     // Provisioning AP when there's no way onto a network (or on request via
@@ -638,11 +658,11 @@ async fn main(spawner: Spawner) -> ! {
         println!(
             "provisioning mode{}: open AP \"{}\"",
             if force_ap { " (requested)" } else { " (no wifi credentials)" },
-            hostname
+            ap_ssid
         );
         (
             WifiConfig::AccessPoint(
-                esp_radio::wifi::ap::AccessPointConfig::default().with_ssid(hostname.as_str()),
+                esp_radio::wifi::ap::AccessPointConfig::default().with_ssid(ap_ssid.as_str()),
             ),
             Interface::access_point(),
             embassy_net::Config::ipv4_static(embassy_net::StaticConfigV4 {
@@ -753,7 +773,7 @@ async fn main(spawner: Spawner) -> ! {
         spawner.spawn(server::web_task(task_id, stack).unwrap());
     }
     if ap_mode {
-        provision::log_started(hostname.as_str());
+        provision::log_started(ap_ssid.as_str());
         spawner.spawn(provision::dhcp_task(stack).unwrap());
         spawner.spawn(provision::dns_task(stack).unwrap());
     } else {

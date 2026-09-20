@@ -2,16 +2,30 @@
 //! every 6 h) seeds the wall clock, so `clockHour()`-family builtins work
 //! on-device. Failures back off and retry — until the first sync the
 //! clock builtins return 0, exactly as before.
+//!
+//! `POST /api/clock/sync` cuts a wait short by signalling
+//! [`crate::shared::SNTP_POKE`] (Gitea #538): the sleep below waits on it
+//! under a timeout, so "sync now" costs one wake, not a second socket.
 
 use embassy_net::dns::DnsQueryType;
 use embassy_net::udp::{PacketMetadata, UdpSocket};
 use embassy_net::{IpEndpoint, Stack};
-use embassy_time::{with_timeout, Duration, Timer};
+use embassy_time::{with_timeout, Duration};
 use esp_println::println;
 
 const NTP_HOST: &str = "pool.ntp.org";
 /// Seconds between the NTP epoch (1900) and the unix epoch (1970).
 const NTP_UNIX_DELTA: u32 = 2_208_988_800;
+
+/// Sleep for `secs`, or until `POST /api/clock/sync` asks for a sync now.
+/// `with_timeout` over the signal rather than a `select` of two futures:
+/// the timeout combinator is already linked here (`sync_once` uses it) and
+/// `Signal::wait` consumes the poke, so a pending one from during the last
+/// exchange is taken here instead of latching into the next nap. On a
+/// timeout the signal was never raised, so there is nothing to clear.
+async fn nap(secs: u64) {
+    let _ = with_timeout(Duration::from_secs(secs), crate::shared::SNTP_POKE.wait()).await;
+}
 
 #[embassy_executor::task]
 pub async fn sntp_task(stack: Stack<'static>) -> ! {
@@ -35,10 +49,10 @@ pub async fn sntp_task(stack: Stack<'static>) -> ! {
                 crate::shared::set_wall_clock(unix);
                 println!("sntp: wall clock synced (unix {})", unix);
                 backoff = 5;
-                Timer::after(Duration::from_secs(6 * 3600)).await;
+                nap(6 * 3600).await;
             }
             None => {
-                Timer::after(Duration::from_secs(backoff)).await;
+                nap(backoff).await;
                 backoff = (backoff * 2).min(900);
             }
         }

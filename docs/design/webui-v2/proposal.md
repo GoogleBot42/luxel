@@ -314,6 +314,14 @@ configurable. So:
   | 2D (matrix, or a custom map that plots x,y) | By index · Along x · Along y | native | Slice xy (z = 0.5) · xz · yz |
   | 3D (lattice, or a custom map that plots x,y,z) | By index · Along x · Along y · Along z | Repeat along z (xy image extruded) · y · x | native |
 
+  > **Amended by Gitea #538 (Jeremy, 2026-09-19):** a Layout never shows a
+  > pattern of a HIGHER dimensionality — "it just looks terrible". The three
+  > cells above the diagonal (2D and 3D patterns on a strip, 3D patterns on a
+  > plane) are gone from the engine, the API and the UI, with no explanatory
+  > copy; a pattern the Layout cannot show is hidden or flagged instead
+  > (`/api/status` `geom.compatible`). The live table is
+  > docs/spec/projection.md §1.
+
   **"Custom" is a coordinate SOURCE, not a dimensionality** (Jeremy, 2026-09-18): a Layout has
   `dims` (1/2/3) and a `source` (regular fields, or a map program whose `plot(x,y)` vs
   `plot(x,y,z)` fixes the dims). Projection keys off dims alone — a slice or an axis is a
