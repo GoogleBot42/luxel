@@ -1177,6 +1177,45 @@ try {
     )).join(",") === "mine",
   );
   await page.screenshot({ path: `${shotDir}/e2e-patterns-mine.png` });
+  // ⋯ → Import .epe… on a Mine tile puts the FILE in this browser's library
+  // (Gitea #572, mockup S2's menu) — the editor's import verb replaces the
+  // open document, which is not a thing a tile can mean.
+  {
+    const epePath = `${shotDir}/e2e-import-mine.epe`;
+    fs.writeFileSync(
+      epePath,
+      JSON.stringify({
+        name: "Imported Mine",
+        id: "e2eimportmineabcd",
+        sources: { main: "export function render(index) { hsv(0.1, 1, 1) }" },
+      }),
+    );
+    await page.hover(`${MINE} .tile`);
+    await sleep(150);
+    await page.click(`${MINE} .tile [data-role="tile-menu"]`);
+    await page.waitForSelector('[data-role="tile-menu-popup"]', { timeout: 3000 });
+    const items = await page.$$eval('[data-role="tile-menu-popup"] .mi', (els) =>
+      els.map((b) => (b.textContent ?? "").trim()),
+    );
+    check(
+      "#572: a Mine tile's ⋯ menu carries Import .epe…",
+      items.includes("Import .epe…"),
+      items.join("|"),
+    );
+    await page.keyboard.press("Escape");
+    await sleep(200);
+    const picker = await page.$('[data-role="tile-menu-import-file"]');
+    await picker.uploadFile(epePath);
+    await sleep(900);
+    const afterImport = await mineNames();
+    check(
+      "#572: the imported .epe lands in Mine, without opening the editor",
+      afterImport.includes("Imported Mine") &&
+        (await page.$('[data-role="editor-view"]:not([hidden])')) === null,
+      afterImport.join(","),
+    );
+    fs.unlinkSync(epePath);
+  }
   // reload → resumes the editor on the working copy
   await page.evaluate(() => history.replaceState(null, "", location.pathname));
   await page.reload({ waitUntil: "networkidle0" });

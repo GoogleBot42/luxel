@@ -21,10 +21,10 @@ import {
 } from "../lib/device";
 import {
   DEFAULT_PROJECTION,
+  deviceGeometry,
   latticeCoords,
   latticeMapFits,
   latticeMapLine,
-  normDims,
   PROJECTION_CODES,
   type DeviceGeom,
   type Projection,
@@ -179,77 +179,46 @@ function asMode(v: string | undefined, fallback: ProjectionMode): ProjectionMode
  * `stores/geometry.ts` reconciles against. Since A8 it reads `/api/layout`
  * (#465) **wholesale** — kind, dims, w/h, the chain's wiring and the
  * embedded map all arrive in one fetch — and not a single consumer changed
- * when it did.
+ * when it did; `/api/status`'s `geom` and `/api/map` are the fallbacks for
+ * firmware older than that endpoint.
  *
- * Two fallbacks stay, in order:
- *
- *  1. `/api/status`'s `geom` (#464) — what answers during the connect
- *     handshake, before `/api/layout` has been read, and the ONLY reporter
- *     of the engine's fabricated ceil(√n) grid (`source:"default"`): a
- *     `render2D`-only pattern on a strip board renders through a grid the
- *     Layout does not describe, and the console preview must show it. So
- *     `geom` WINS over the Layout in exactly that case.
- *  2. `deviceMap` — firmware older than either field, where a procedural
- *     `grid W H` is still a matrix and a coords map still a cloud.
+ * WHICH of them wins is not decided here: this is wire parsing, and the
+ * policy is `lib/geometry.ts`'s `deviceGeometry`, which is pure and unit
+ * tested (`web/tests/geometry.test.mjs`) precisely because it is the one
+ * place a console's Layout is decided. It takes DEVICE readings only — which
+ * is what keeps the browser's own state (a persisted "Preview as" #539, the
+ * working copy's dimensionality, the local engine's effective geometry #573)
+ * structurally out of a console's geometry.
  */
 export const deviceLayout: Readable<DeviceGeom | null> = derived(
   [deviceLayoutWire, deviceGeomStatus, devicePixels, deviceMap, deviceMapCoords],
-  ([wire, g, pixels, dm, coords]) => {
-    // the engine's own fabricated grid is not in the Layout; `geom` owns it
-    const fabricated = g?.source === "default";
-    if (wire && !fabricated) {
-      const px = wire.pixels || pixels;
-      const m = wire.matrix;
-      return {
-        dims: normDims(wire.dims),
-        regular: wire.regular,
-        w: wire.w,
-        h: wire.h,
-        source: wire.source === "map" ? "user" : "board",
-        pixels: px || wire.w * wire.h,
-        coords: wire.regular ? undefined : (coords ?? undefined),
-        // the device's REAL wiring, at last: a snaked matrix walks alternate
-        // rows backwards, so a by-index 1D pattern previews as the fixture
-        // shows it rather than row-major (#463's open item).
-        serpentine: m ? m.snake === 1 : undefined,
-      } satisfies DeviceGeom;
-    }
-    if (pixels <= 0 && g === null) return null;
-    if (g) {
-      return {
-        dims: normDims(g.dims),
-        regular: g.regular,
-        w: g.w,
-        h: g.h,
-        source: g.source,
-        pixels: pixels || g.w * g.h,
-        coords: g.regular ? undefined : (coords ?? undefined),
-        // serpentine is #465's to report; row-major until then.
-      } satisfies DeviceGeom;
-    }
-    if (dm.installed && dm.kind === "grid" && dm.w && dm.h) {
-      return {
-        dims: 2,
-        regular: true,
-        w: dm.w,
-        h: dm.h,
-        source: "user",
-        pixels,
-      } satisfies DeviceGeom;
-    }
-    if (dm.installed && coords) {
-      return {
-        dims: normDims(dm.dims),
-        regular: false,
-        w: 0,
-        h: 0,
-        source: "user",
-        pixels,
-        coords,
-      } satisfies DeviceGeom;
-    }
-    return { dims: 1, regular: true, w: pixels, h: 1, source: "board", pixels } satisfies DeviceGeom;
-  },
+  ([wire, g, pixels, dm, coords]) =>
+    deviceGeometry({
+      layout: wire
+        ? {
+            dims: wire.dims,
+            regular: wire.regular,
+            w: wire.w,
+            h: wire.h,
+            pixels: wire.pixels,
+            source: wire.source,
+            serpentine: wire.matrix ? wire.matrix.snake === 1 : undefined,
+          }
+        : null,
+      status: g
+        ? {
+            dims: g.dims,
+            regular: g.regular,
+            w: g.w,
+            h: g.h,
+            source: g.source,
+            patternDims: g.pattern_dims,
+          }
+        : null,
+      pixels,
+      map: dm,
+      coords,
+    }),
 );
 
 /** The device's stored pattern library (empty on firmware without CRUD).

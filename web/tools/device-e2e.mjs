@@ -2280,11 +2280,52 @@ try {
     }));
     check(
       "patterns: the tile ⋯ menu carries the mock's item list, separated",
-      menuShape.items.join("|") === "Add to playlist|Duplicate|Export .epe|Delete" &&
+      menuShape.items.join("|") ===
+        "Add to playlist|Duplicate|Export .epe|Import .epe…|Delete" &&
         menuShape.seprs === 2 &&
         menuShape.lastIsDelete,
       JSON.stringify(menuShape),
     );
+    // ⋯ → Import .epe… puts the FILE in this device's library (#572). The
+    // editor's import verb replaces the open document; on a tile it is the
+    // library verb instead — parse, compile, `POST /api/patterns`, and the
+    // editor is never opened.
+    {
+      const epePath = `${shotDir}/e2e-import.epe`;
+      fs.writeFileSync(
+        epePath,
+        JSON.stringify({
+          name: "Imported Tile",
+          id: "e2eimportabcdefgh",
+          sources: { main: SMALL },
+        }),
+      );
+      const before = (await (await fetch(`${DEV}/api/patterns`)).json()).patterns ?? [];
+      // the menu is dismissed first: the real verb closes it and then opens
+      // the OS file dialog, which puppeteer drives by feeding the input
+      await page.keyboard.press("Escape");
+      await sleep(200);
+      const picker = await page.$('[data-role="tile-menu-import-file"]');
+      check("#572: the tile ⋯ menu's import picker is on the page", picker !== null);
+      await picker.uploadFile(epePath);
+      await sleep(1500);
+      const after = (await (await fetch(`${DEV}/api/patterns`)).json()).patterns ?? [];
+      const added = after.find((p) => p.name === "Imported Tile");
+      check(
+        "#572: ⋯ → Import .epe… stores the file in the device's library",
+        added !== undefined && after.length === before.length + 1,
+        `${before.length} → ${after.length}`,
+      );
+      check(
+        "#572: …and it does NOT open the editor (importing is not a device action, #563)",
+        (await page.$('[data-role="editor-view"]:not([hidden])')) === null,
+      );
+      if (added) await fetch(`${DEV}/api/patterns/${added.id}`, { method: "DELETE" });
+      fs.unlinkSync(epePath);
+      await sleep(800); // let the grid settle back to the pre-import tiles
+      await tileAction(page, victim, "tile-menu");
+      await page.waitForSelector('[data-role="tile-menu-popup"]', { timeout: 3000 });
+    }
     await page.click('[data-role="tile-menu-playlist"]');
     await sleep(900); // the store's 400 ms save debounce
     const plAdded = await (await fetch(`${DEV}/api/playlist`)).json();
@@ -4124,6 +4165,198 @@ try {
     }
   } finally {
     tightDev.kill();
+  }
+
+  // ---- #573: a resumed working copy never reshapes the console ----
+  //
+  // A console's Layout is the FIXTURE's. The browser can arrive holding a
+  // DIRTY working copy from an earlier session, and the boot resumes it AND
+  // live-pushes it (`bootDevice`, #563) — so a 300 px strip ends up running a
+  // `render2D` program, `/api/status` then reports the grid the ENGINE
+  // fabricated for it (`source:"default"`, ceil(√300) = 18×17), and the
+  // console used to adopt THAT as its geometry: the header chip read
+  // `18×17 matrix`, every tile drew as a grid, Settings offered a matrix's
+  // projections and the #538 compatibility filter stopped hiding the 2D
+  // pattern (Gitea #573). Same class as #539, through a different input.
+  //
+  // Each half runs in its OWN browser context, so the seeded localStorage is
+  // the only state it carries, and against its OWN mirror, so the numbers in
+  // the assertions are the ticket's.
+  {
+    const WIP_STRIP = E2E.mirror.wipStrip;
+    const WIP = `http://127.0.0.1:${WIP_STRIP}`;
+    const REN2D = "export function render2D(index, x, y) { hsv(x, 1, y) }";
+    const REN1D = "export function render(index) { hsv(index / pixelCount, 1, 1) }";
+    /** Seed a mirror's pattern store; returns the new id. */
+    const saveOn = async (base, name, src) =>
+      (
+        await (
+          await fetch(`${base}/api/patterns`, { method: "POST", body: await lxpBody(name, src) })
+        ).json()
+      ).id;
+    /** Boot a console in a fresh context with `wip` as the DIRTY working copy
+     *  the browser is holding from an earlier session. */
+    const bootWithWip = async (base, wip) => {
+      const ctx = await browser.createBrowserContext();
+      const pg = await ctx.newPage();
+      await pg.setViewport({ width: 1400, height: 900 });
+      const url = `http://localhost:${PORT}/?device=${encodeURIComponent(base)}`;
+      // seed first: `luxel.current` is read during boot, so it must already be
+      // on the origin for the load that matters
+      await pg.goto(url, { waitUntil: "networkidle0" });
+      await pg.evaluate((src) => {
+        localStorage.setItem(
+          "luxel.current",
+          JSON.stringify({ source: src, patternName: "", exampleName: "", dirty: true }),
+        );
+      }, wip);
+      await pg.reload({ waitUntil: "networkidle0" });
+      await sleep(3500);
+      return { ctx, pg };
+    };
+
+    const wipDev = spawn(
+      "../target/debug/luxel",
+      ["serve", ...NO_NETIN, "--port", String(WIP_STRIP), "--pixels", "300"],
+      { stdio: ["ignore", "pipe", "inherit"] },
+    );
+    await new Promise((resolve, reject) => {
+      wipDev.stdout.on("data", (d) => String(d).includes("luxel serve:") && resolve());
+      wipDev.on("exit", () => reject(new Error("#573 strip mirror died")));
+      setTimeout(() => reject(new Error("#573 strip mirror start timeout")), 30000);
+    });
+    process.on("exit", () => wipDev.kill());
+    let wipCtx = null;
+    try {
+      // the ticket's fixture: one pattern the strip can show, one it cannot
+      await saveOn(WIP, "Strip 1D", REN1D);
+      await saveOn(WIP, "Strip 2D", REN2D);
+      const booted = await bootWithWip(WIP, REN2D);
+      wipCtx = booted.ctx;
+      const wipPage = booted.pg;
+
+      const chip = await wipPage.$eval('[data-role="layout-label"]', (el) =>
+        (el.textContent ?? "").trim(),
+      );
+      check(
+        "#573: a strip console holding a dirty 2D working copy still reads `300 px strip`",
+        chip === "300 px strip",
+        chip,
+      );
+
+      // the device really IS running the 2D program — this is the fabricated
+      // grid case, not a mirror that quietly refused the push
+      const geom = (await (await fetch(`${WIP}/api/status`)).json()).geom ?? {};
+      check(
+        "#573: …while the device reports the engine's fabricated grid",
+        geom.source === "default" && geom.dims === 2,
+        JSON.stringify(geom),
+      );
+
+      // the SHOWN tiles only: the `Not for this layout` group below deliberately
+      // draws in the playground's Auto style (each pattern's own shape, #538),
+      // so it is the one place on a strip console a grid is correct.
+      const kinds = await wipPage.$$eval(`${DGRID} [data-role="tile"]`, (els) =>
+        els
+          .filter((e) => e.closest('[data-role="patterns-incompatible"]') === null)
+          .map((e) => e.getAttribute("data-kind")),
+      );
+      check(
+        "#573: every device tile draws as a bar",
+        kinds.length > 0 && kinds.every((k) => k === "bar"),
+        kinds.join(","),
+      );
+
+      // the #538 filter follows the Layout, so it is back to hiding the 2D one
+      const incompat = await wipPage
+        .$eval('[data-role="patterns-incompatible"]', (el) => ({
+          hidden: el.hasAttribute("hidden"),
+          text: (el.textContent ?? "").trim(),
+        }))
+        .catch(() => ({ hidden: true, text: "" }));
+      check(
+        "#573: the `Not for this layout` group is back, with the 2D pattern in it",
+        !incompat.hidden && /Not for this layout \(1\)/.test(incompat.text),
+        `${incompat.hidden ? "hidden" : "shown"} ${incompat.text.slice(0, 60)}`,
+      );
+      const autoKinds = await wipPage.$$eval(
+        '[data-role="patterns-incompatible"] [data-role="tile"]',
+        (els) => els.map((e) => e.getAttribute("data-kind")),
+      );
+      check(
+        "#573: …and that group keeps the Auto style — the 2D pattern's OWN grid (#538)",
+        autoKinds.length === 1 && autoKinds[0] === "grid",
+        autoKinds.join(","),
+      );
+      await wipPage.screenshot({ path: `${shotDir}/device-e2e-573-strip-patterns.png` });
+
+      await wipPage.evaluate(() => {
+        location.hash = "#/settings";
+      });
+      await wipPage.reload({ waitUntil: "networkidle0" });
+      await sleep(1500);
+      check(
+        "#573: Settings shows no Projection section on a strip",
+        (await wipPage.$('[data-role="sect-projection"]')) === null,
+      );
+      await wipPage.screenshot({ path: `${shotDir}/device-e2e-573-strip-settings.png` });
+
+      // ---- the reverse: a panel console holding a dirty 1D working copy ----
+      const PANEL_PORT573 = E2E.mirror.wipPanel;
+      const PURL = `http://127.0.0.1:${PANEL_PORT573}`;
+      const panel573 = spawn(
+        "../target/debug/luxel",
+        [
+          "serve",
+          ...NO_NETIN,
+          "--port",
+          String(PANEL_PORT573),
+          "--board",
+          "panel",
+          "--pixels",
+          "4096",
+          "--max-pixels",
+          "4096",
+        ],
+        { stdio: ["ignore", "pipe", "inherit"] },
+      );
+      await new Promise((resolve, reject) => {
+        panel573.stdout.on("data", (d) => String(d).includes("luxel serve:") && resolve());
+        panel573.on("exit", () => reject(new Error("#573 panel mirror died")));
+        setTimeout(() => reject(new Error("#573 panel mirror start timeout")), 30000);
+      });
+      process.on("exit", () => panel573.kill());
+      let revCtx = null;
+      try {
+        await saveOn(PURL, "Panel 2D", REN2D);
+        const rev = await bootWithWip(PURL, REN1D);
+        revCtx = rev.ctx;
+        const rchip = await rev.pg.$eval('[data-role="layout-label"]', (el) =>
+          (el.textContent ?? "").trim(),
+        );
+        check(
+          "#573 reverse: a panel console holding a dirty 1D working copy still reads `64×64 matrix`",
+          rchip === "64×64 matrix",
+          rchip,
+        );
+        const rkinds = await rev.pg.$$eval(`${DGRID} [data-role="tile"]`, (els) =>
+          els
+            .filter((e) => e.closest('[data-role="patterns-incompatible"]') === null)
+            .map((e) => e.getAttribute("data-kind")),
+        );
+        check(
+          "#573 reverse: its device tiles draw as grids",
+          rkinds.length > 0 && rkinds.every((k) => k === "grid"),
+          rkinds.join(","),
+        );
+      } finally {
+        if (revCtx) await revCtx.close();
+        panel573.kill();
+      }
+    } finally {
+      if (wipCtx) await wipCtx.close();
+      wipDev.kill();
+    }
   }
 } finally {
   await browser.close();

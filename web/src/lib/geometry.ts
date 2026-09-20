@@ -454,6 +454,144 @@ export function cloudLayout(coords: number[][], projection: Projection = DEFAULT
   return cloud(coords, "user", projection);
 }
 
+// ---- the console's Layout: DEVICE data, and nothing else (#539, #573) ----
+
+/** `/api/status`'s `geom` (#464) as this module reads it: the RUNNING
+ *  ENGINE's effective geometry, which is a function of the PROGRAM as much as
+ *  of the fixture. */
+export interface StatusGeom {
+  dims: number;
+  regular: boolean;
+  w: number;
+  h: number;
+  /** `user` = the installed map, `board` = the board's own geometry, and
+   *  `default` = NEITHER — the grid the ENGINE fabricated for the program it
+   *  was handed, which describes no fixture at all. */
+  source: "user" | "board" | "default";
+  /** What the RUNNING pattern wants (0 = no preference). Reported, never an
+   *  input to the Layout. */
+  patternDims?: number;
+}
+
+/** `GET /api/layout` (#465) as this module reads it: THE FIXTURE. */
+export interface LayoutGeom {
+  dims: number;
+  regular: boolean;
+  w: number;
+  h: number;
+  pixels: number;
+  /** `map` = a map program's coordinates are the shape; `regular` = the
+   *  strip/matrix fields are. */
+  source: "regular" | "map";
+  /** Alternate rows run backwards (`matrix.snake` on the wire). */
+  serpentine?: boolean;
+}
+
+/** `GET /api/map` as this module reads it — the pre-`/api/layout` fallback. */
+export interface MapGeom {
+  installed: boolean;
+  dims: number;
+  kind?: "grid" | "coords";
+  w?: number;
+  h?: number;
+}
+
+/** Everything [`deviceGeometry`] is allowed to look at. Every field is
+ *  something the DEVICE said about itself; there is deliberately no slot for
+ *  anything the browser holds. */
+export interface DeviceGeomInput {
+  /** `GET /api/layout` (#465), null on firmware older than the endpoint. */
+  layout: LayoutGeom | null;
+  /** `/api/status`'s `geom` (#464), null on firmware older than the field. */
+  status: StatusGeom | null;
+  /** `/api/status`'s `pixels` — the hardware's own count. */
+  pixels: number;
+  /** `GET /api/map`. */
+  map: MapGeom;
+  /** The coordinates of an irregular map, when they are known. */
+  coords: number[][] | null;
+}
+
+/**
+ * THE console Layout — decided here and nowhere else, out of what the DEVICE
+ * reported about its FIXTURE (Gitea #539, #573).
+ *
+ * The invariant this function exists to make structural: on a console the
+ * Layout is the hardware's, so nothing the BROWSER holds may shape it — not
+ * the "Preview as" chip (#539), not the working copy's dimensionality, not
+ * the local engine's effective geometry, not the playground's map program.
+ * None of them is a parameter, so none of them can leak in.
+ *
+ * Precedence:
+ *  1. `/api/layout` (#465) — the fixture object, and it ALWAYS wins.
+ *  2. `/api/status`'s `geom` (#464) — what answers during the connect
+ *     handshake, and all there is on firmware older than `/api/layout`. Only
+ *     its FIXTURE readings count (`source` `user`/`board`): `source:"default"`
+ *     is the grid the ENGINE fabricated for the program it is running
+ *     (ceil(√n) × ceil(n/w) on a board with no map). Taking that as the
+ *     Layout is #573 — a 300 px strip handed a `render2D` program called
+ *     itself an `18×17 matrix`, and the chip, the tile shapes, the Settings
+ *     projections and the #538 compatibility filter all followed. A running
+ *     program never reshapes the fixture; it may only caption ITSELF
+ *     (`projectionCaption`, `effectiveFor`).
+ *  3. `GET /api/map` — older firmware still: a procedural `grid W H` is a
+ *     matrix, a coordinate map a cloud.
+ *  4. the pixel count alone — a strip, which is what a board with no map is.
+ *
+ * null only while nothing has answered at all.
+ */
+export function deviceGeometry(i: DeviceGeomInput): DeviceGeom | null {
+  const wire = i.layout;
+  if (wire) {
+    const px = wire.pixels || i.pixels;
+    return {
+      dims: normDims(wire.dims),
+      regular: wire.regular,
+      w: wire.w,
+      h: wire.h,
+      source: wire.source === "map" ? "user" : "board",
+      pixels: px || wire.w * wire.h,
+      coords: wire.regular ? undefined : (i.coords ?? undefined),
+      // the device's REAL wiring: a snaked matrix walks alternate rows
+      // backwards, so a by-index 1D pattern previews as the fixture shows it
+      // rather than row-major (#463's open item).
+      serpentine: wire.serpentine,
+    };
+  }
+  const g = i.status;
+  if (i.pixels <= 0 && g === null) return null;
+  // `source:"default"` describes the PROGRAM, not the fixture — drop it and
+  // fall through to the map/pixel-count readings, which are the hardware's.
+  if (g && g.source !== "default") {
+    return {
+      dims: normDims(g.dims),
+      regular: g.regular,
+      w: g.w,
+      h: g.h,
+      source: g.source,
+      pixels: i.pixels || g.w * g.h,
+      coords: g.regular ? undefined : (i.coords ?? undefined),
+      // serpentine is #465's to report; row-major until then.
+    };
+  }
+  const dm = i.map;
+  if (dm.installed && dm.kind === "grid" && dm.w && dm.h) {
+    return { dims: 2, regular: true, w: dm.w, h: dm.h, source: "user", pixels: i.pixels };
+  }
+  if (dm.installed && i.coords) {
+    return {
+      dims: normDims(dm.dims),
+      regular: false,
+      w: 0,
+      h: 0,
+      source: "user",
+      pixels: i.pixels,
+      coords: i.coords,
+    };
+  }
+  return { dims: 1, regular: true, w: i.pixels, h: 1, source: "board", pixels: i.pixels };
+}
+
 /** The Layout the device itself is rendering through. */
 function fromDevice(g: DeviceGeom, projection: Projection): Layout {
   if (g.dims === 1) {
@@ -502,7 +640,10 @@ export function reconcileLayout(i: GeometryInput): Layout {
   const p = i.projection;
   const choice = i.previewAs;
 
-  // A console renders through the device's own Layout and nothing else.
+  // A console renders through the device's own Layout and nothing else — and
+  // it RETURNS HERE whatever the device has said so far, so not one of the
+  // playground inputs below can reach a console even for a frame.
+  //
   // "Preview as" is the PLAYGROUND's control — since A8 (#469) the chip is
   // only mounted there — but the choice is persisted in localStorage, so one
   // left behind by a playground session on the same origin, or written by the
@@ -511,7 +652,15 @@ export function reconcileLayout(i: GeometryInput): Layout {
   // worst of it: `mapCoords` is never persisted, so the fall-through below
   // reconciled a 64x64 panel down to a 4096 px strip — every pattern drawn in
   // 1D and Settings offering the projections of a strip (Gitea #539).
-  if (i.connected && i.geom !== null) return fromDevice(i.geom, p);
+  //
+  // `geom` itself is [`deviceGeometry`]'s, which reads DEVICE data only: the
+  // other half of #573 was the engine's fabricated grid getting in there.
+  // Before the handshake answers there is no device Layout yet, and the
+  // honest placeholder is the starter strip — never the pattern's shape or a
+  // persisted playground choice (which is how #539 got in the first time).
+  if (i.connected) {
+    return i.geom !== null ? fromDevice(i.geom, p) : strip(DEFAULT_STRIP_PIXELS, "default", p);
+  }
 
   if (choice.mode === "auto") {
     const pd = normDims(i.patternDims);

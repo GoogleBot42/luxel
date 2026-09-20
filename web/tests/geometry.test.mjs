@@ -22,6 +22,7 @@ import {
   DEFAULT_PROJECTION,
   DEFAULT_STRIP_PIXELS,
   cloudLayout,
+  deviceGeometry,
   effectiveFor,
   LAYOUT_BODY_BUDGET,
   latticeCoords,
@@ -191,6 +192,143 @@ test("an irregular device map whose coordinates we don't have keeps its dims", (
   assert.equal(l.regular, false);
   assert.equal(l.coords, undefined);
   assert.equal(l.pixels, 90);
+});
+
+// ---- a console's Layout comes from the DEVICE, and from nothing else ----
+//
+// The invariant (#539, #573): on a console the Layout is the FIXTURE's, so
+// nothing the browser holds may shape it. `deviceGeometry` is where that is
+// made structural — it takes device readings only — and the table below is
+// one case per input that has leaked in, or could.
+
+/** The device readings of a 300 px strip board with no map installed. */
+function stripDevice(over = {}) {
+  return {
+    layout: {
+      dims: 1,
+      regular: true,
+      w: 300,
+      h: 1,
+      pixels: 300,
+      source: "regular",
+    },
+    status: { dims: 1, regular: true, w: 300, h: 1, source: "board", patternDims: 0 },
+    pixels: 300,
+    map: { installed: false, dims: 0, count: 0 },
+    coords: null,
+    ...over,
+  };
+}
+
+/** What `/api/status` reports once that strip has been handed a `render2D`
+ *  program: the engine's FABRICATED ceil(√300)×ceil(300/18) grid, which
+ *  describes the running program and no fixture at all. */
+const FABRICATED = { dims: 2, regular: true, w: 18, h: 17, source: "default", patternDims: 2 };
+
+test("#573: the engine's fabricated grid never becomes the console's Layout", () => {
+  const fixture = deviceGeometry(stripDevice());
+  const running2D = deviceGeometry(stripDevice({ status: FABRICATED }));
+  assert.deepEqual(running2D, fixture, "a running program does not reshape the fixture");
+  assert.equal(layoutLabel(reconcileLayout(input({ connected: true, geom: running2D }))), "300 px strip");
+});
+
+test("#573: a strip on firmware with no /api/layout still reads as a strip", () => {
+  // the pre-#465 path: `geom` is all there is, and its `source:"default"`
+  // reading is dropped for the hardware's own pixel count
+  const g = deviceGeometry(stripDevice({ layout: null, status: FABRICATED }));
+  assert.equal(g.dims, 1);
+  assert.equal(g.pixels, 300);
+  assert.equal(g.source, "board");
+  assert.equal(layoutLabel(reconcileLayout(input({ connected: true, geom: g }))), "300 px strip");
+});
+
+test("#573 reverse: a 64×64 panel handed a 1D program is still a 64×64 panel", () => {
+  const panel = {
+    layout: { dims: 2, regular: true, w: 64, h: 64, pixels: 4096, source: "regular" },
+    status: { dims: 2, regular: true, w: 64, h: 64, source: "board", patternDims: 1 },
+    pixels: 4096,
+    map: { installed: false, dims: 0, count: 0 },
+    coords: null,
+  };
+  const g = deviceGeometry(panel);
+  assert.equal(layoutLabel(reconcileLayout(input({ connected: true, geom: g }))), "64×64 matrix");
+  // and a 1D working copy in the editor does not flatten it either
+  for (const patternDims of [0, 1, 2, 3]) {
+    const l = reconcileLayout(input({ connected: true, geom: g, patternDims }));
+    assert.equal(layoutLabel(l), "64×64 matrix", `pattern dims ${patternDims}`);
+  }
+});
+
+test("#573: /api/layout is the fixture and always wins over /api/status geom", () => {
+  // even a geom that claims to BE a fixture (`source:"user"`) loses: the
+  // Layout object is the whole geometry, wiring and embedded map included
+  const g = deviceGeometry(
+    stripDevice({ status: { dims: 2, regular: true, w: 10, h: 30, source: "user", patternDims: 2 } }),
+  );
+  assert.equal(g.dims, 1);
+  assert.equal(g.pixels, 300);
+});
+
+test("#573: the console's Layout ignores every browser-held input", () => {
+  const geom = deviceGeometry(stripDevice({ status: FABRICATED }));
+  const base = { connected: true, geom };
+  const want = reconcileLayout(input(base));
+  assert.equal(layoutLabel(want), "300 px strip");
+  const leaks = {
+    // #539: a "Preview as" choice a playground session left in localStorage
+    previewAs: [
+      { mode: "matrix", w: 18, h: 17 },
+      { mode: "lattice", n: 5 },
+      { mode: "map", pixels: 90 },
+      { mode: "strip", pixels: 60 },
+    ],
+    // #573: the dimensionality of the working copy resumed at boot
+    patternDims: [0, 1, 2, 3],
+    // the map program's coordinates (the playground's map editor)
+    mapCoords: [null, latticeCoords(3, 3, 3), [[0, 0], [1, 1]]],
+  };
+  for (const [name, values] of Object.entries(leaks)) {
+    for (const v of values) {
+      const l = reconcileLayout(input({ ...base, [name]: v }));
+      assert.deepEqual(l, want, `${name} = ${JSON.stringify(v)} must not shape a console`);
+    }
+  }
+});
+
+test("#573: a console with no device answer yet falls back to the starter strip", () => {
+  // NOT to the pattern's shape and NOT to a persisted playground choice —
+  // that window is how #539 got in. `deviceGeometry` returns null only here.
+  assert.equal(deviceGeometry({ layout: null, status: null, pixels: 0, map: { installed: false, dims: 0, count: 0 }, coords: null }), null);
+  const l = reconcileLayout(
+    input({ connected: true, geom: null, patternDims: 2, previewAs: { mode: "matrix", w: 8, h: 8 } }),
+  );
+  assert.equal(l.dims, 1);
+  assert.equal(l.pixels, DEFAULT_STRIP_PIXELS);
+  assert.equal(l.source, "default");
+});
+
+test("#573: the pre-/api/layout map fallbacks survive the rewrite", () => {
+  const grid = deviceGeometry({
+    layout: null,
+    status: null,
+    pixels: 128,
+    map: { installed: true, dims: 2, count: 128, kind: "grid", w: 16, h: 8 },
+    coords: null,
+  });
+  assert.deepEqual(grid, { dims: 2, regular: true, w: 16, h: 8, source: "user", pixels: 128 });
+  const coords = [
+    [0, 0],
+    [1, 0.5],
+  ];
+  const cloudy = deviceGeometry({
+    layout: null,
+    status: null,
+    pixels: 2,
+    map: { installed: true, dims: 2, count: 2, kind: "coords" },
+    coords,
+  });
+  assert.equal(cloudy.regular, false);
+  assert.deepEqual(cloudy.coords, coords);
 });
 
 // ---- the playground: Auto follows the pattern (D7) ----

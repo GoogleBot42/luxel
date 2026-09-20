@@ -1,6 +1,44 @@
 # Update log
 
-<<<<<<< HEAD
+## 2026-09-20 — a console's Layout comes from the DEVICE, and nothing else (#573, #572)
+
+**#573 — root cause.** A 300 px strip console reported itself an `18×17 matrix` whenever
+the browser arrived holding a DIRTY 2D working copy from an earlier session. The boot
+resumes that copy AND live-pushes it (`Editor.bootDevice`, #563), the device's engine
+fabricates a `ceil(√300) × ceil(300/18)` grid for the `render2D` program it was handed,
+`/api/status` reports it as `geom.source:"default"` — and `stores/device.ts`'s
+`deviceLayout` *deliberately preferred that over `/api/layout`*
+(`const fabricated = g?.source === "default"; if (wire && !fabricated) …`). Chip, tile
+shapes, Settings' projection section and the #538 compatibility filter all followed the
+fabricated grid. Same class as #539, through a different input.
+
+The fix is structural rather than another special case: **`deviceGeometry()` in
+`lib/geometry.ts` is now the ONE function that decides a console's Layout**, and its
+parameters are device readings only (`/api/layout` · `/api/status` `geom` · the pixel
+count · `/api/map`). Nothing the browser holds is a parameter, so nothing the browser
+holds can leak in. `/api/layout` always wins; `geom` contributes only its FIXTURE
+readings (`source` `user`/`board`), never the engine's fabricated grid. `deviceLayout` is
+now wire parsing over that function and decides nothing itself, and `reconcileLayout`
+returns inside its `connected` branch, so no playground input (persisted `previewAs`, the
+working copy's dims, `mapCoords`) is reachable on a console even for a frame — before the
+handshake answers it is the starter strip, never the pattern's shape.
+
+A running program never reshapes the fixture; it may only caption ITSELF, and on the
+Patterns page it appears in the collapsed `Not for this layout` group in the playground's
+Auto style (#538). Seven unit cases in `web/tests/geometry.test.mjs` — one per input that
+must NOT influence a console — plus a `device-e2e.mjs` section that boots a 300 px strip
+mirror with a dirty 2D working copy in localStorage and asserts `300 px strip`, bar
+tiles, the group back at `(1)` and no Settings Projection section, and the reverse (a
+64×64 panel console holding a dirty 1D copy).
+
+**#572 — `Import .epe…` on the tile ⋯ menu.** Mockup S2's menu carries it; the tile now
+does too. The editor's import verb replaces the open DOCUMENT, which means nothing on a
+tile, so this is the library verb instead: parse → compile → `POST /api/patterns`
+(console) or `saveToLocalLibrary` (playground `Mine`), the `copyName()` path on a name
+collision, failures through `stores/notify`, and the editor is never opened and nothing is
+played (#563). `mockdiff` `S1menu` stays at 0 deltas and its remaining `menu.box height`
+allow now cites only the Phase-B `Add to scene ▸` (#480).
+
 ## 2026-09-20 — fidelity closure: the Settings screens (#538)
 
 `mockdiff` frames `S3 S3b S3e S3f S3g S3i S3j S3k S3reboot`: **403 deltas → 0**, the
@@ -41,7 +79,6 @@ pure-state lines (that board's brightness and time zone). What moved:
   the Layout picker at two widths), #581 (no route publishes a board identity, so the
   LED layout head cannot name the board).
 
-=======
 ## 2026-09-20 — editor screens: zero mockdiff deltas (#538)
 
 The eight EDITOR frames — `S2 S2b S2c S2d S2err S2cpop S2menu S2dialog` — now report
@@ -80,7 +117,6 @@ mockdiff compares, and both elements are `noBox` in the map.
 Filed: **#574** (a 1D pattern on a matrix defaults to `By index`; the mockups pick
 `Along x` — a core/firmware call), **#575** (the two phone touch targets left: the
 slider at 16px and the switch at 20px, the heights the mockups state outright).
->>>>>>> 4519597 (web: the editor screens become the mock, element for element (#538))
 
 ## 2026-09-20 — fidelity closure: shell, Patterns, playground chip, menu primitives (#538)
 
