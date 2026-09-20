@@ -28,7 +28,7 @@
 //   E2E_PORT=7500 node tools/mockdiff.mjs --sweep                 # + the non-CSS half
 //   E2E_PORT=7500 node tools/mockdiff.mjs --device http://192.168.0.238
 //   E2E_PORT=7500 node tools/mockdiff.mjs --device http://…  --device-bundle
-//   E2E_PORT=7500 node tools/mockdiff.mjs --out /tmp/md --no-crops
+//   E2E_PORT=7500 node tools/mockdiff.mjs --out /tmp/md --crops   # slow, see below
 //
 // `--device` runs THIS checkout's bundle against a real board's API;
 // `--device-bundle` loads the copy the board serves from its own flash, so the
@@ -41,7 +41,7 @@
 // Output (in `--out`, default /tmp/mockdiff):
 //   mockdiff-report.md   per frame, a ranked table of element·property·mock·app·source
 //   mockdiff.json        the same as data, for re-runs and diffs between runs
-//   mockdiff/<frame>-<element>.png   side-by-side crops of the worst offenders
+//   mockdiff/<frame>-<element>.png   side-by-side crops (only with `--crops`)
 //
 // Tolerance (stated in the report): lengths match within 1px, colours within
 // 4/255 per channel and 0.02 alpha, unitless numbers within 0.02. Deviations
@@ -76,7 +76,9 @@ const OUT = resolve(String(flag("--out", "/tmp/mockdiff")));
 const MAP_PATH = resolve(String(flag("--map", join(HERE, "mockdiff.map.json"))));
 const ONLY = flag("--frames", null);
 const DEVICE = flag("--device", null); // a real board, e.g. http://192.168.0.238
-const CROPS = !has("--no-crops");
+// Crops are OFF by default — see the crop block for why. `--no-crops` is kept
+// as a no-op spelling so existing invocations do not break.
+const CROPS = has("--crops");
 // `--device` keeps THIS checkout's bundle and only points it at a real board's
 // API, which is what you want while iterating. `--device-bundle` instead loads
 // the copy the board serves out of its own flash, so the two runs together say
@@ -1241,22 +1243,26 @@ for (const frameId of runIds) {
   );
 
   // ---- crops ------------------------------------------------------------
-  // Screenshot the ELEMENT, not a clip rectangle. `page.screenshot({clip})`
-  // captures beyond the viewport, which on the mockups page — one document
-  // holding all 27 frames — can take tens of seconds or wedge outright; and an
-  // abandoned screenshot still owns the CDP session, so every later call on
-  // that page queues behind it and the whole run stalls with no error.
-  // `elementHandle.screenshot()` scrolls the element into view and clips to
-  // its own box. A crop is a nicety either way, so each one is raced against a
-  // deadline and a slow element is named and skipped.
+  // OFF by default (`--crops` opts in). Screenshotting the mockups page is
+  // pathologically slow — it is a single 22,000px document, and the measuring
+  // pass needs a CDP session with the DOM and CSS agents on it for
+  // attribution, which makes a capture take 20s where a plain page takes 40ms.
+  // A second clean copy of the page is not the answer either: two documents
+  // that size slow the MEASURING pass down. Gitea #570 has the cheap fix (one
+  // capture per frame, windowed with CSS in the composer). Until then each
+  // crop is raced against a deadline and a slow one is named and skipped, so
+  // asking for crops can cost time but can never stall a run.
   if (CROPS) {
-    // The app never goes idle either: every tile thumbnail and the preview run
-    // their own `requestAnimationFrame` loop, and a screenshot of a page that
-    // is still painting can take tens of seconds. Measuring is finished by
-    // now, so freezing costs nothing — the canvases keep their last frame.
-    await page.evaluate(() => {
-      window.requestAnimationFrame = () => 0;
-    }).catch(() => {});
+    // Neither page ever goes idle on its own — the mockups' canvases and the
+    // app's tiles and preview each run a `requestAnimationFrame` loop, and
+    // asking for a picture of a page that is still painting is what is slow.
+    // Measuring is finished by now, so the canvases keeping their last frame
+    // costs nothing.
+    await page
+      .evaluate(() => {
+        window.requestAnimationFrame = () => 0;
+      })
+      .catch(() => {});
     await sleep(200);
     const worst = [...new Set(deltas.slice(0, 12).map((d) => d.element))].slice(0, 6);
     for (const id of worst) {
@@ -1264,25 +1270,33 @@ for (const frameId of runIds) {
       if (!e) continue;
       await withTimeout(
         (async () => {
-          const pick = async (pg, sel, nth) => (await pg.$$(sel))[nth ?? 0] ?? null;
-          const hm = await pick(mock, scope(e.mock), e.mockNth);
-          const ha = await pick(page, e.appSel, e.nth);
-          if (!hm || !ha) return;
-          const shotM = await hm.screenshot({ encoding: "base64" }).catch(() => null);
-          const shotA = await ha.screenshot({ encoding: "base64" }).catch(() => null);
+          const one = [{ id, sel: scope(e.mock), nth: e.mockNth }];
+          const m = (await measure(mock, `#${mockId}`, one))[id];
+          const a = (await measure(page, app.root ?? "body", [{ id, sel: e.appSel, nth: e.nth }]))[id];
+          if (!m?.found || !a?.found) return;
+          const pad = 6;
+          // page coordinates: a screenshot `clip` is in page space, and the
+          // mockups are one 22,000px document
+          const clip = (b) => ({
+            x: Math.max(0, b.px - pad),
+            y: Math.max(0, b.py - pad),
+            width: Math.max(8, b.w + pad * 2),
+            height: Math.max(8, b.h + pad * 2),
+          });
+          const shotM = await mock
+            .screenshot({ encoding: "base64", clip: clip(m.box) })
+            .catch(() => null);
+          const shotA = await page
+            .screenshot({ encoding: "base64", clip: clip(a.box) })
+            .catch(() => null);
           if (!shotM || !shotA) return;
-          const bm = await hm.boundingBox().catch(() => null);
-          const ba = await ha.boundingBox().catch(() => null);
           await composeSideBySide(
             browser,
             join(OUT, "mockdiff", `${frameId}-${id}.png`),
             shotM,
             shotA,
             `${frameId} · ${id}`,
-            {
-              w: Math.max(bm?.width ?? 200, ba?.width ?? 200),
-              h: Math.max(bm?.height ?? 80, ba?.height ?? 80),
-            },
+            { w: Math.max(m.box.w, a.box.w) + pad * 2, h: Math.max(m.box.h, a.box.h) + pad * 2 },
           );
         })(),
         20000,
