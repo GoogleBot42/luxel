@@ -447,8 +447,12 @@ if (name === null) return;          // cancelled; "" is never returned
 - `reboot: true` renders the standing "the device reboots to apply this" line
   (proposal §5.3: reboot-requiring actions are labelled as such). WiFi save,
   setup-AP and the strip data pin use it.
-- `danger: true` makes the primary button destructive-red. Both delete sites,
-  playlist clear and the installer's wrong-image guard use it.
+- `danger: true` marks the request destructive — both delete sites, playlist
+  clear and the installer's wrong-image guard use it. It is `data-danger` on
+  the panel, NOT a second button colour: the confirm button is the same
+  `.btn.primary` every screen wears, because the mockups define one primary
+  fill and their only red is `.mi.del`'s text (#538). The VERB says what the
+  action does.
 - Requests never stack: a second `confirm`/`promptText` while one is on screen
   resolves as cancelled rather than replacing what the user is reading.
 
@@ -457,7 +461,8 @@ confirms, Tab is trapped inside the panel, focus returns to whatever had it,
 and the buttons stack full-width under 420 px (D9). Exactly one instance is
 mounted per app entry: the shell, and `flash/Flash.svelte` for the installer.
 
-Its `data-role` contract (the e2e hooks): `dialog` on the panel,
+Its `data-role` contract (the e2e hooks): `dialog` on the panel (with
+`data-danger` when the request is destructive),
 `dialog-backdrop`, `dialog-title`, `dialog-body`, `dialog-input`,
 `dialog-reboot`, `dialog-error`, `dialog-confirm`, `dialog-cancel`. Harnesses
 drive it through `acceptDialog`/`cancelDialog` in `web/tools/e2e-common.mjs`
