@@ -50,11 +50,36 @@ paths:
   and the mirror ports were literals — so a second session either died on
   `Address already in use` or, worse, drove the browser against the other
   session's mirror and passed.
+  Not every multiple of 100 works: Chromium refuses to navigate to its
+  blocked ports, so `E2E_PORT=6000` dies with `net::ERR_UNSAFE_PORT` before a
+  single check runs (6000 is X11). Move to the next block.
+- **The route is in the URL fragment** since #538 (`web/src/lib/router.ts`),
+  which changes what "reload" means in a harness: `page.goto(url)` where the
+  page is ALREADY on that URL is a same-document navigation — the app never
+  re-boots, and a test that thought it was re-running the connect handshake is
+  silently asserting the old page's state. Use `page.reload()`, or
+  `reloadInto(page, "#/editor")` in `web/tools/device-e2e.mjs` to reload INTO
+  a named screen (a plain reload reopens whichever screen the URL last named,
+  which is the feature, not what a test that wants the editor means).
+- Puppeteer pages from the same `browser` share an ORIGIN, and therefore share
+  `localStorage` — which holds the autosaved working copy. A second page
+  opened against a second mirror will resume (and push!) whatever the first
+  page last autosaved, so a "fresh console" fixture needs its own
+  `browser.createBrowserContext()`. Two device-e2e sections were passing for
+  the wrong reason before that (2026-09-19).
 - Naming and confirmations are in-app dialogs (`components/Dialog.svelte` +
   `stores/dialog.ts`, #472), never `window.prompt`/`confirm`. Harnesses drive
   them with `acceptDialog`/`cancelDialog` from `web/tools/e2e-common.mjs`;
   never add a `page.on("dialog")` handler — a native dialog reaching the
   browser is the regression, and it hangs the run.
+- Svelte compiles SLOTTED markup in the PARENT's scope, so a wrapper
+  component cannot style what it was handed. That is why the shared chrome
+  lives in `app.css` as global classes (`.btn`, `.inp`, `.menu`, `.pop`,
+  `.slabel`) and `components/Popover.svelte` owns only geometry and
+  dismissal — and why `components/editor-frame.css` is a plain `.css` import
+  rather than a frame component. A new button wears `.btn` + a modifier and a
+  new dropdown mounts `Popover`; a local copy of either is how four different
+  `.primary` blocks and three divergent menu stylesheets happened (#538).
 - In e2e scripts, write injected pattern bodies on one line — CodeMirror
   auto-closes `{`, so a trailing `}` on its own line doubles up and the
   compile silently breaks.
