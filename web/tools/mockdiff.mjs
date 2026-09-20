@@ -332,8 +332,15 @@ function measureInPage(rootSel, entries, props) {
         h: +r.height.toFixed(2),
         rx: +(r.left - rb.left).toFixed(2),
         ry: +(r.top - rb.top).toFixed(2),
+        // viewport coords (for hover/focus bookkeeping)…
         vx: +r.left.toFixed(2),
         vy: +r.top.toFixed(2),
+        // …and PAGE coords, which is what a screenshot `clip` takes. The
+        // mockups are one long scrolling document, so cropping a frame near
+        // its end with viewport coords captures whatever is at those pixels
+        // at the top of the page instead.
+        px: +(r.left + window.scrollX).toFixed(2),
+        py: +(r.top + window.scrollY).toFixed(2),
       },
       text: (el.innerText ?? el.textContent ?? "").replace(/\s+/g, " ").trim(),
       placeholder: el.getAttribute ? (el.getAttribute("placeholder") ?? "") : "",
@@ -1170,13 +1177,8 @@ for (const frameId of runIds) {
     for (const id of worst) {
       const e = entries.find((x) => x.id === id);
       if (!e) continue;
-      // Re-measure right before cropping. The base pass ran before the hover
-      // and focus passes, which scroll and move things, so `vx/vy` from it is
-      // a stale viewport position and the crop lands on the wrong pixels.
-      await mock
-        .$eval("#" + mockId, (el) => el.scrollIntoView({ block: "center" }))
-        .catch(() => {});
-      await sleep(120);
+      // Re-measure right before cropping: the base pass ran before the hover
+      // and focus passes, which can move things.
       const m = (await measure(mock, `#${mockId}`, [{ id, sel: scope(e.mock), nth: e.mockNth }]))[id];
       const a = (await measure(page, app.root ?? "body", [{ id, sel: e.appSel, nth: e.nth }]))[id];
       if (!m?.found || !a?.found) continue;
@@ -1185,8 +1187,8 @@ for (const frameId of runIds) {
         .screenshot({
           encoding: "base64",
           clip: {
-            x: Math.max(0, a.box.vx - pad),
-            y: Math.max(0, a.box.vy - pad),
+            x: Math.max(0, a.box.px - pad),
+            y: Math.max(0, a.box.py - pad),
             width: Math.max(8, a.box.w + pad * 2),
             height: Math.max(8, a.box.h + pad * 2),
           },
@@ -1196,8 +1198,8 @@ for (const frameId of runIds) {
         .screenshot({
           encoding: "base64",
           clip: {
-            x: Math.max(0, m.box.vx - pad),
-            y: Math.max(0, m.box.vy - pad),
+            x: Math.max(0, m.box.px - pad),
+            y: Math.max(0, m.box.py - pad),
             width: Math.max(8, m.box.w + pad * 2),
             height: Math.max(8, m.box.h + pad * 2),
           },
