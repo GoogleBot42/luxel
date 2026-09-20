@@ -738,6 +738,11 @@ export async function refreshPlaylist(): Promise<void> {
     const r = reconcileTransport(read, playlistIntent, Date.now());
     playlist.set(r.playlist);
     playlistIntent = r.intent;
+    // The park follows live playback (so Pause always has somewhere to hold),
+    // and the FIRST read seeds it — a page opened on a device that is already
+    // stopped mid-queue should name the item it is stopped on, not item 0.
+    if (r.playlist.playing || !parkedSeeded) playlistParked.set(r.playlist.index);
+    parkedSeeded = true;
   } catch {
     /* older firmware without /api/playlist — leave empty */
   }
@@ -757,6 +762,30 @@ export function queuePlaylistSave(): void {
       }
     })();
   }, 400);
+}
+
+/**
+ * Persist NOW, cancelling any pending debounce.
+ *
+ * The 400 ms debounce exists for edits that STREAM — a slider being dragged,
+ * a duration being typed. A whole-list verb does not stream: Clear is one
+ * decision the user already confirmed in a modal, and the debounce turned it
+ * into "the rows vanish, nothing happens, then a write lands", which is
+ * exactly the lag Jeremy reported (Gitea #538 §A). One-shot verbs call this;
+ * streaming ones keep `queuePlaylistSave`.
+ */
+export function savePlaylistNow(): Promise<void> {
+  clearTimeout(playlistDebounce);
+  playlistDebounce = undefined;
+  playlistSaving = true;
+  const snapshot = get(playlist);
+  return (async () => {
+    try {
+      await get(device)?.setPlaylist(snapshot);
+    } finally {
+      playlistSaving = false;
+    }
+  })();
 }
 
 /**
@@ -789,12 +818,142 @@ export function addToPlaylist(
   queuePlaylistSave();
 }
 
+/**
+ * Save a LIBRARY pattern to the device and then queue it — the `+ Add`
+ * picker's Library section (Gitea #538 §F). A gallery pattern is source the
+ * device has never seen, and a playlist item is a reference to a STORED
+ * pattern (`I <patternId>`), so the save has to land first: an item pointing
+ * at an id the device does not hold plays nothing.
+ *
+ * Bytecode is compiled by the caller (`stores/pattern.ts` owns the wasm
+ * host; importing it here would close an import cycle). `savePattern`
+ * overwrites a same-named pattern, which is the behaviour the Patterns
+ * page's Duplicate/Save already has.
+ *
+ * The row is appended only on success, so a device that refused the save
+ * (out of store space, bad bytecode) leaves the playlist exactly as it was.
+ */
+export async function saveAndAddToPlaylist(
+  name: string,
+  source: string,
+  bytecode: Uint8Array,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const d = get(device);
+  if (!d) return { ok: false, error: "device unreachable" };
+  let id: string;
+  try {
+    const r = await d.savePattern(name, source, bytecode);
+    if (!r.ok) return { ok: false, error: "error" in r ? r.error : "the device refused the save" };
+    await refreshDevicePatterns();
+    // `id` is absent on firmware that does not echo it; fall back to the name
+    // the device library now holds (the save just created or replaced it).
+    const found = r.id || get(devicePatterns).find((p) => p.name === name)?.id;
+    if (!found) return { ok: false, error: "saved, but the device did not report its id" };
+    id = found;
+  } catch {
+    return { ok: false, error: "the device did not answer" };
+  }
+  addToPlaylist(id);
+  return { ok: true };
+}
+
 /** Show a transport request straight away and let the poll confirm it: the
  *  device applies play/stop in its render loop, so an immediate read-back
  *  can still report the state we just left (Gitea #431). */
 export function markTransport(playing: boolean): void {
   playlistIntent = transportIntent(playing, Date.now());
   playlist.update((pl) => ({ ...pl, playing }));
+}
+
+// ---- transport (mockup S4) ----
+//
+// The mock's primary is a PAUSE verb, and the wire has no pause: the routes
+// are `play <index>` / `stop` / `next` / `prev` (docs/api.md). What `stop`
+// actually does on both the firmware and the mirror is stop the AUTO-ADVANCE
+// — the item that was playing stays loaded and keeps rendering, and
+// `index` keeps its value. That is a pause of the playlist in every sense
+// except one: `play <index>` restarts the item's own clock at 0, so resuming
+// replays the current item from its beginning rather than from where it
+// stopped.
+//
+// So Pause is implemented as stop-with-remembered-index, and Play resumes at
+// that index. The remembered index is the store's, not the device's, because
+// a `stop` the device has not applied yet still reports the old index for a
+// poll or two (the #431 settle window).
+
+/**
+ * Where playback is PARKED while stopped — what Play will resume, and what
+ * the now-playing block names.
+ *
+ * It cannot live in `playlist.index`: that field is the DEVICE's, refreshed
+ * every second, and the device's index does not move while it is stopped. So
+ * a Pause that remembered its place there, or a `next` pressed while stopped,
+ * would be overwritten by the very next poll.
+ */
+export const playlistParked = writable(0);
+/** The first read seeds the park; after that it only tracks live playback. */
+let parkedSeeded = false;
+
+/** Pause: stop the auto-advance, hold this item. */
+export async function playlistPause(): Promise<void> {
+  const d = get(device);
+  // Park on the item the DEVICE is on, not the one the last poll happened to
+  // report. Both devices apply `next`/`prev` in their render loop, so a step
+  // from a moment ago can still be missing from the 1 Hz read the store holds
+  // (the #431 shape, for `index` instead of `playing`) — and parking on the
+  // wrong item is exactly the thing Pause exists to get right.
+  let at = get(playlist).index;
+  try {
+    const fresh = await d?.playlist();
+    if (fresh) at = fresh.index;
+  } catch {
+    /* unreachable mid-click — the store's idea is the best we have */
+  }
+  playlistParked.set(at);
+  markTransport(false);
+  await d?.playlistStop();
+  void refreshPlaylist();
+}
+
+/** Play/resume at `index`, or at the parked position when it is omitted. */
+export async function playlistResume(index?: number): Promise<void> {
+  const pl = get(playlist);
+  const want = index ?? get(playlistParked);
+  const i = want >= 0 && want < pl.items.length ? want : 0;
+  playlistParked.set(i);
+  markTransport(true);
+  playlist.update((p) => ({ ...p, index: i }));
+  await get(device)?.playlistPlay(i);
+  void refreshPlaylist();
+}
+
+/** Stop: leave the playlist AND give up the position, so the next Play starts
+ *  the queue from the top. This is the difference between the two left-hand
+ *  buttons — Pause holds your place, Stop gives it up. */
+export async function playlistStop(): Promise<void> {
+  playlistParked.set(0);
+  markTransport(false);
+  await get(device)?.playlistStop();
+  void refreshPlaylist();
+}
+
+/**
+ * Previous / next. While PLAYING that is the device's own step. While stopped
+ * both devices ignore `next`/`prev` outright, so this moves the parked
+ * position instead and sends nothing — which is what a paused music player
+ * does, and what makes the two buttons honest in every state rather than dead
+ * in one of them.
+ */
+export async function playlistStep(dir: 1 | -1): Promise<void> {
+  const pl = get(playlist);
+  if (pl.items.length === 0) return;
+  if (!pl.playing) {
+    const n = pl.items.length;
+    playlistParked.set((((get(playlistParked) + dir) % n) + n) % n);
+    return;
+  }
+  await (dir === 1 ? get(device)?.playlistNext() : get(device)?.playlistPrev());
+  void refreshPlaylist();
 }
 
 // ---- device map writes ----

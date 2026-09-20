@@ -7,7 +7,8 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
 
 ## Toolchain
 - Everything runs inside `nix develop` — cargo, node, python3, tea and chromium are
-  only on PATH there.
+  only on PATH there. There is no `perl` at all, in or out of the shell: for scripted
+  multi-line edits use `python3` inside the devshell (`sed` handles single lines).
 - New toolchains/deps must be Nix flake derivations, never imperative run-once setup scripts.
 - Third-party crate fixes are carried as PATCH FILES (`firmware/patches/` + a flake
   derivation materializing the patched source), never vendored source trees

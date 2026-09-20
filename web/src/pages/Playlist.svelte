@@ -1,16 +1,23 @@
 <script lang="ts">
   // The device playlist (proposal §5.4, mockups S4/S4b).
   //
-  // Transport is ONE group at the left — the primary action, the step
-  // buttons and the now-playing readout together, so the controls sit beside
-  // the thing they control. The two settings that are not transport (default
-  // duration, crossfade) live at the right, and the destructive one (Clear)
-  // is in ⋯ where a destructive action belongs.
+  // Transport is ONE group at the left — the four controls, then the
+  // now-playing readout, so the controls sit beside the thing they control.
+  // All four are PERSISTENT: the same buttons in the same places whether the
+  // queue is playing, paused or empty, because a transport that reshapes
+  // itself under the pointer is what made Clear read as a flicker (#538 §A).
+  // (This is the one place §5.7's absent-never-disabled rule is deliberately
+  // set aside: S4 is a fixed four-button group, and a Play button that
+  // disappears when the queue empties moves every control beside it.)
+  //
+  // The two settings that are not transport (default duration, crossfade)
+  // live at the right, and the destructive one (Clear) is in ⋯.
   //
   // Everything below is rows: `components/PlaylistRow.svelte`. `+ Add` at the
-  // foot opens `components/PatternPicker.svelte` — the ONE picker, which
-  // Phase B extends with a Scenes section rather than replacing.
-  import { onDestroy } from "svelte";
+  // foot opens `components/PatternPicker.svelte` — the ONE picker, which now
+  // offers the LIBRARY as well as the device (#538 §F) and which Phase B
+  // extends with a Scenes section rather than replacing.
+  import { onDestroy, tick } from "svelte";
   import PatternPicker from "../components/PatternPicker.svelte";
   import Popover from "../components/Popover.svelte";
   import PlaylistRow from "../components/PlaylistRow.svelte";
@@ -19,14 +26,20 @@
     device,
     deviceError,
     devicePatterns,
-    markTransport,
     playlist,
+    playlistParked,
+    playlistPause,
+    playlistResume,
+    playlistStep,
+    playlistStop,
     pollSubscribe,
     queuePlaylistSave,
     refreshPlaylist,
+    saveAndAddToPlaylist,
+    savePlaylistNow,
   } from "../stores/device";
   import { confirm } from "../stores/dialog";
-  import { luxel } from "../stores/pattern";
+  import { compileToBytecode, luxel } from "../stores/pattern";
 
   /** The tab is the visible one — gates the 1 Hz follow poll. */
   export let active = false;
@@ -69,11 +82,12 @@
   );
   $: playlistHasManual = $playlist.items.some((it) => (it.sec ?? $playlist.defaultSec) <= 0);
 
+  /** `39 s`, `1m 5s` — the mock's footer form (`loop ≈ 39 s`). */
   const fmtDuration = (sec: number): string => {
-    if (sec <= 0) return "0s";
+    if (sec <= 0) return "0 s";
     const m = Math.floor(sec / 60);
     const s = sec % 60;
-    return m > 0 ? `${m}m ${s}s` : `${s}s`;
+    return m > 0 ? `${m}m ${s}s` : `${s} s`;
   };
 
   /** `0:05` — the now-playing readout's clock form. */
@@ -90,21 +104,39 @@
   // changed, and re-zeroes on every advance the poll reports — a fresh page
   // opened mid-item under-reads until the next advance, and says nothing
   // false in the meantime because the item's own duration bounds it. An
-  // `elapsedSec` on the wire would make it exact: Gitea #509.
+  // `elapsedSec` on the wire would make it exact: Gitea #509 — when that
+  // lands, feed it into `itemStart` here and everything downstream is right.
   let now = Date.now();
   let itemStart = Date.now();
   let lastMark = "";
+  /** Seconds a just-issued seek asked for; consumed by the mark handler so
+   *  the re-entry the seek causes does not reset the clock back to 0. */
+  let seekSec: number | null = null;
   $: {
     const mark = `${$playlist.playing}:${$playlist.index}`;
     if (mark !== lastMark) {
       lastMark = mark;
-      itemStart = Date.now();
+      itemStart = Date.now() - (seekSec ?? 0) * 1000;
+      seekSec = null;
     }
   }
-  $: nowItem = $playlist.playing ? $playlist.items[$playlist.index] : undefined;
+  /** The block stays MOUNTED when stopped (S4 `.nowplaying` is always there,
+   *  min-width 230px) — it just goes dim and reads the item it is parked on,
+   *  so Pause/Play does not move every control beside it. While stopped the
+   *  device's own `index` is frozen where it left off, so the PARK is what
+   *  the readout follows (`stores/device.ts`). */
+  $: nowIndex = Math.min(
+    $playlist.playing ? $playlist.index : $playlistParked,
+    Math.max(0, $playlist.items.length - 1),
+  );
+  $: nowItem = $playlist.items[nowIndex];
   $: nowSec = nowItem === undefined ? 0 : (nowItem.sec ?? $playlist.defaultSec);
-  $: elapsed = Math.min((now - itemStart) / 1000, nowSec > 0 ? nowSec : Infinity);
+  $: elapsed = !$playlist.playing
+    ? 0
+    : Math.min((now - itemStart) / 1000, nowSec > 0 ? nowSec : Infinity);
   $: progress = nowSec > 0 ? Math.max(0, Math.min(1, elapsed / nowSec)) : 0;
+  /** Where the thumb sits: the drag position while scrubbing, else the clock. */
+  $: shown = scrub === null ? progress : scrub;
 
   /** A playlist item whose pattern was deleted from the device. */
   const itemMissing = (id: string, pats: typeof $devicePatterns): boolean =>
@@ -118,6 +150,9 @@
   /** The ⋯ button the menu hangs off (components/Popover.svelte). */
   let moreBtn: HTMLElement;
   let pickerOpen = false;
+  /** The picker's inline status line while a library pattern is being saved. */
+  let pickerBusy = "";
+  let pickerError = "";
 
   function removePlaylistItem(i: number): void {
     playlist.update((pl) => ({ ...pl, items: pl.items.filter((_, j) => j !== i) }));
@@ -135,10 +170,16 @@
       danger: true,
     });
     if (!ok) return;
+    // ONE render: the rows go in the same flush the dialog closes in, and the
+    // write leaves immediately rather than 400 ms later (#538 §A). The store's
+    // save flag suppresses the follow poll until the POST lands, so nothing
+    // comes back to repaint the list it just emptied.
     playlist.update((pl) => ({ ...pl, items: [] }));
-    queuePlaylistSave();
+    void savePlaylistNow();
   }
 
+  /** Keyboard reorder — the drag handle's arrow keys (the ↑/↓ buttons the
+   *  mock does not have are gone; this is the a11y path that replaces them). */
   function movePlaylistItem(i: number, dir: number): void {
     const j = i + dir;
     const items = [...$playlist.items];
@@ -173,11 +214,36 @@
     void $device?.setControl(detail.name, detail.values);
   }
 
-  function onPick(e: CustomEvent<{ id: string; kind: "pattern" | "scene" }>): void {
+  async function onPick(
+    e: CustomEvent<{ id: string; kind: "pattern" | "scene" | "library"; name: string; source?: string }>,
+  ): Promise<void> {
+    pickerError = "";
+    if (e.detail.kind !== "library") {
+      pickerOpen = false;
+      // no values: a freshly added item runs the pattern's own defaults until
+      // you open its chip and tune it (D6 — values live on the item)
+      addToPlaylist(e.detail.id);
+      return;
+    }
+    // A library pattern is not on the device yet — save it there first, then
+    // queue it. The picker stays open with a saving line so a failure has
+    // somewhere to be said (#538 §F).
+    const source = e.detail.source;
+    if (source === undefined) return;
+    pickerBusy = e.detail.name;
+    const bc = compileToBytecode(source);
+    if (!bc) {
+      pickerBusy = "";
+      pickerError = `“${e.detail.name}” does not compile — not added.`;
+      return;
+    }
+    const r = await saveAndAddToPlaylist(e.detail.name, source, bc);
+    pickerBusy = "";
+    if (!r.ok) {
+      pickerError = `“${e.detail.name}” could not be saved to the device (${r.error}) — not added.`;
+      return;
+    }
     pickerOpen = false;
-    // no values: a freshly added item runs the pattern's own defaults until
-    // you open its chip and tune it (D6 — values live on the item)
-    addToPlaylist(e.detail.id);
   }
 
   function onDefaultSecChange(e: Event): void {
@@ -197,117 +263,239 @@
     queuePlaylistSave();
   }
 
-  async function playlistPlay(): Promise<void> {
-    markTransport(true);
-    await $device?.playlistPlay(0);
-    void refreshPlaylist();
+  // ---- transport ----
+  //
+  // The primary is a PAUSE verb (S4). The wire has no pause — `stop` halts
+  // the auto-advance and keeps the item loaded, so Pause is stop-with-
+  // remembered-index and Play resumes at that index
+  // (`stores/device.ts` → playlistPause/playlistResume, docs/api.md).
+
+  $: canPlay = $playlist.items.length > 0;
+
+  async function togglePlay(): Promise<void> {
+    if (!canPlay) return;
+    await ($playlist.playing ? playlistPause() : playlistResume());
   }
-  async function playlistStop(): Promise<void> {
-    markTransport(false);
-    await $device?.playlistStop();
-    void refreshPlaylist();
+
+  // ---- seek ----
+  //
+  // The bar is a music-style slider over the CURRENT item. What the device
+  // can do is re-enter an item (`play <index>`), not start it part-way in, so
+  // a seek restarts the item and the readout jumps to where you dropped it;
+  // the device's own advance still arrives a full duration later, so the bar
+  // parks at the end for the seconds you skipped. #509 (elapsed on the wire)
+  // plus a firmware seek would make it exact — `seekSec` above is the hook.
+
+  /** Drag position while scrubbing (0..1); null = not scrubbing. */
+  let scrub: number | null = null;
+  let seekEl: HTMLElement;
+  /** Seeking needs something to seek WITHIN: a running, timed item. While
+   *  stopped the bar is a readout, not a control — a stray touch on a dim,
+   *  empty bar should not turn the fixture on. Its BOX is unconditional all
+   *  the same, so the transport's height never changes under the pointer. */
+  $: seekable = $playlist.playing && nowSec > 0;
+
+  const fracFromEvent = (e: { clientX: number }): number => {
+    const r = seekEl.getBoundingClientRect();
+    if (r.width <= 0) return 0;
+    return Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+  };
+
+  function onSeekDown(e: PointerEvent): void {
+    if (!seekable) return;
+    seekEl.setPointerCapture(e.pointerId);
+    scrub = fracFromEvent(e);
   }
-  async function playlistNext(): Promise<void> {
-    await $device?.playlistNext();
-    void refreshPlaylist();
+
+  function onSeekMove(e: PointerEvent): void {
+    if (scrub === null) return;
+    scrub = fracFromEvent(e);
   }
-  async function playlistPrev(): Promise<void> {
-    await $device?.playlistPrev();
-    void refreshPlaylist();
+
+  async function onSeekUp(e: PointerEvent): Promise<void> {
+    if (scrub === null) return;
+    const f = fracFromEvent(e);
+    scrub = null;
+    if (seekEl.hasPointerCapture(e.pointerId)) seekEl.releasePointerCapture(e.pointerId);
+    await commitSeek(f);
+  }
+
+  async function commitSeek(f: number): Promise<void> {
+    if (nowSec <= 0) return;
+    const i = nowIndex;
+    seekSec = f * nowSec;
+    itemStart = Date.now() - seekSec * 1000;
+    now = Date.now();
+    await playlistResume(i);
+    await tick();
+    seekSec = null;
+  }
+
+  /** ←/→ nudge by a second, Home/End jump to the ends (the slider's a11y). */
+  function onSeekKey(e: KeyboardEvent): void {
+    if (!seekable) return;
+    const step = 1 / nowSec;
+    let f: number | null = null;
+    if (e.key === "ArrowRight" || e.key === "ArrowUp") f = progress + step;
+    else if (e.key === "ArrowLeft" || e.key === "ArrowDown") f = progress - step;
+    else if (e.key === "Home") f = 0;
+    else if (e.key === "End") f = 1;
+    if (f === null) return;
+    e.preventDefault();
+    void commitSeek(Math.max(0, Math.min(1, f)));
   }
 </script>
 
 <div class="playlist-tab" data-role="playlist-panel" hidden={!active}>
   <div class="transport">
-    <!-- §5.7: absent, never disabled. There is nothing to play until the queue
-         has an item, so the transport carries the empty state as TEXT instead
-         of a dimmed dead button (Gitea #529). -->
-    {#if $device && $playlist.items.length > 0}
-      <span class="group">
-        {#if $playlist.playing}
-          <button class="btn primary" data-role="pl-stop" on:click={playlistStop}>■ Stop</button>
-          <button class="icon" data-role="pl-prev" title="previous" aria-label="previous"
-            on:click={playlistPrev}>⏮</button
-          >
-          <button class="icon" data-role="pl-next" title="next" aria-label="next"
-            on:click={playlistNext}>⏭</button
-          >
-        {:else}
-          <button class="btn primary" data-role="pl-play" on:click={playlistPlay}>▶ Play</button>
-        {/if}
-      </span>
-    {:else if $device}
-      <span class="dim tiny" data-role="pl-transport-empty">playlist empty</span>
-    {/if}
+    <!-- four persistent controls, S4's `.group`: primary toggle · stop ·
+         prev · next. With an empty queue they are disabled rather than
+         absent — see the header comment. -->
+    <span class="group">
+      <button
+        class="btn primary"
+        data-role={$playlist.playing ? "pl-pause" : "pl-play"}
+        disabled={!canPlay}
+        data-reason={canPlay ? undefined : "the playlist is empty"}
+        title={$playlist.playing ? "pause the playlist (holds this item)" : "play the playlist"}
+        on:click={() => void togglePlay()}
+      >
+        {#if $playlist.playing}‖ Pause{:else}▶ Play{/if}
+      </button>
+      <button
+        class="btn icon"
+        data-role="pl-stop"
+        disabled={!canPlay}
+        data-reason={canPlay ? undefined : "the playlist is empty"}
+        title="stop"
+        aria-label="stop"
+        on:click={() => void playlistStop()}
+      >
+        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+          <rect x="1" y="1" width="8" height="8" rx="1" fill="currentColor" />
+        </svg>
+      </button>
+      <button
+        class="btn icon"
+        data-role="pl-prev"
+        disabled={!canPlay}
+        data-reason={canPlay ? undefined : "the playlist is empty"}
+        title="previous"
+        aria-label="previous"
+        on:click={() => void playlistStep(-1)}
+      >
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+          <rect x="2" y="2" width="1.6" height="8" />
+          <path d="M10 2v8L4.6 6z" />
+        </svg>
+      </button>
+      <button
+        class="btn icon"
+        data-role="pl-next"
+        disabled={!canPlay}
+        data-reason={canPlay ? undefined : "the playlist is empty"}
+        title="next"
+        aria-label="next"
+        on:click={() => void playlistStep(1)}
+      >
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+          <rect x="8.4" y="2" width="1.6" height="8" />
+          <path d="M2 2v8l5.4-4z" />
+        </svg>
+      </button>
+    </span>
 
-    {#if nowItem}
-      <span class="nowplaying" data-role="pl-now">
-        <span class="np1">
-          <b>{nowItem.name || nowItem.id}</b>
-          {#if nowSec > 0}<span class="dim t">{clock(elapsed)} / {clock(nowSec)}</span>{/if}
-        </span>
-        <span class="prog" data-role="pl-progress" style="--p:{progress * 100}%"></span>
+    <span class="nowplaying" class:idle={!$playlist.playing} data-role="pl-now">
+      <span class="np1">
+        <b data-role="pl-now-name">{nowItem ? nowItem.name || nowItem.id : "Nothing queued"}</b>
+        {#if nowSec > 0}<span class="t">{clock(elapsed)} / {clock(nowSec)}</span>{/if}
       </span>
-    {/if}
+      <!-- the progress bar IS the seek control (S4's `.prog`, 3px, --ok) -->
+      <span
+        class="prog"
+        class:seekable
+        bind:this={seekEl}
+        data-role="pl-progress"
+        role="slider"
+        tabindex={seekable ? 0 : -1}
+        aria-label="seek within this item"
+        aria-valuemin={0}
+        aria-valuemax={Math.round(nowSec)}
+        aria-valuenow={Math.round(elapsed)}
+        aria-valuetext="{clock(elapsed)} of {clock(nowSec)}"
+        title="drag to a time in this item — the device restarts the item there"
+        style="--p:{shown * 100}%"
+        on:pointerdown={onSeekDown}
+        on:pointermove={onSeekMove}
+        on:pointerup={(e) => void onSeekUp(e)}
+        on:pointercancel={(e) => void onSeekUp(e)}
+        on:keydown={onSeekKey}
+      ></span>
+    </span>
 
     <span class="spacer"></span>
 
-    <span class="group defaults">
-      <span class="dim tiny">Default</span>
+    <span class="group">
+      <!-- S4b shortens it to "Default" on a phone -->
+      <label class="tiny dim" for="pl-default-sec">Default<span class="wide">&nbsp;duration</span></label>
       <input
-        class="num wide"
+        class="inp num xs"
+        id="pl-default-sec"
         data-role="pl-default-sec"
         type="number"
         min="0"
-        placeholder="manual"
-        title="seconds per item (blank/0 = manual advance); items can override"
-        value={$playlist.defaultSec || ""}
+        title="seconds each item plays unless it overrides this (0 = wait for next)"
+        value={$playlist.defaultSec}
         on:change={onDefaultSecChange}
       />
-      <span class="dim tiny">s</span>
-      <span class="dim tiny cf">Crossfade</span>
+      <span class="tiny dim">s</span>
+    </span>
+
+    <span class="group cf">
+      <label class="tiny dim" for="pl-crossfade">Crossfade</label>
       <input
-        class="num"
+        class="inp num xs"
+        id="pl-crossfade"
         data-role="pl-crossfade"
         type="number"
         min="0"
         step="0.1"
-        placeholder="0"
-        title="seconds to blend between items (blank/0 = hard cut)"
-        value={$playlist.crossfadeMs ? $playlist.crossfadeMs / 1000 : ""}
+        title="seconds to blend between items (0 = hard cut)"
+        value={$playlist.crossfadeMs ? $playlist.crossfadeMs / 1000 : 0}
         on:change={onCrossfadeChange}
       />
-      <span class="dim tiny">s</span>
-      <!-- Clear acts on the items; with none, the menu would be empty, so the
-           chip that OPENS it is absent too (§5.7, Gitea #529). -->
-      {#if $playlist.items.length > 0}
-        <span class="overflow">
-          <button
-            class="btn icon"
-            bind:this={moreBtn}
-            data-role="pl-more"
-            title="more actions"
-            aria-label="more actions"
-            on:click={() => (menuOpen = !menuOpen)}>⋯</button
-          >
-          <Popover
-            open={menuOpen}
-            anchor={moreBtn}
-            dataRole="pl-menu"
-            on:close={() => (menuOpen = false)}
-          >
-            <button
-              class="mi del"
-              data-role="pl-clear"
-              role="menuitem"
-              on:click={() => void clearPlaylist()}
-            >
-              Clear playlist
-            </button>
-          </Popover>
-        </span>
-      {/if}
+      <span class="tiny dim">s</span>
     </span>
+
+    <!-- Clear acts on the items; with none, the menu would be empty, so the
+         chip that OPENS it is absent too (§5.7, Gitea #529). -->
+    {#if $playlist.items.length > 0}
+      <span class="overflow">
+        <button
+          class="btn icon"
+          bind:this={moreBtn}
+          data-role="pl-more"
+          title="more actions"
+          aria-label="more actions"
+          on:click={() => (menuOpen = !menuOpen)}>⋯</button
+        >
+        <Popover
+          open={menuOpen}
+          anchor={moreBtn}
+          dataRole="pl-menu"
+          on:close={() => (menuOpen = false)}
+        >
+          <button
+            class="mi del"
+            data-role="pl-clear"
+            role="menuitem"
+            on:click={() => void clearPlaylist()}
+          >
+            Clear playlist
+          </button>
+        </Popover>
+      </span>
+    {/if}
   </div>
 
   {#if !$device}
@@ -316,8 +504,8 @@
     <div class="pl-list">
       {#if $playlist.items.length === 0}
         <p class="dim hint" data-role="pl-empty">
-          Nothing queued yet. <strong>+ Add</strong> picks from the patterns saved on this device —
-          add the same pattern more than once for different looks.
+          Nothing queued yet. <strong>+ Add</strong> picks from the patterns saved on this device or
+          from the library — add the same pattern more than once for different looks.
         </p>
       {:else}
         <ul class="rows">
@@ -346,9 +534,11 @@
           {/each}
         </ul>
       {/if}
-      <button class="add" data-role="pl-add" on:click={() => (pickerOpen = true)}>+ Add</button>
+      <button class="btn quiet add" data-role="pl-add" on:click={() => (pickerOpen = true)}
+        >+ Add</button
+      >
       {#if $playlist.items.length > 0}
-        <p class="foot dim" data-role="pl-total">
+        <p class="foot" data-role="pl-total">
           {$playlist.items.length} item{$playlist.items.length === 1 ? "" : "s"} · loop ≈ {fmtDuration(
             playlistTotalSec,
           )}{playlistHasManual ? " + manual stops" : ""}
@@ -361,8 +551,13 @@
     luxel={$luxel}
     open={pickerOpen}
     patterns={$devicePatterns}
-    on:pick={onPick}
-    on:close={() => (pickerOpen = false)}
+    busy={pickerBusy}
+    error={pickerError}
+    on:pick={(e) => void onPick(e)}
+    on:close={() => {
+      pickerOpen = false;
+      pickerError = "";
+    }}
   />
 </div>
 
@@ -384,7 +579,7 @@
   }
 
   .tiny {
-    font-size: 11px;
+    font-size: 12px;
   }
 
   .spacer {
@@ -396,82 +591,96 @@
     margin: 2px 0 10px;
   }
 
-  .num {
-    width: 56px;
-    font-family: ui-monospace, Menlo, Consolas, monospace;
-    font-size: 12px;
-  }
-
-  /* wide enough for the word "manual" — 56 px clipped the placeholder to
-     "mar" at every width (Gitea #530) */
-  .num.wide {
-    width: 88px;
-  }
-
+  /* S4 `.transport` */
   .transport {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
     flex-wrap: wrap;
-    padding: 12px 16px;
+    padding: 12px 20px;
     border-bottom: 1px solid var(--border);
   }
 
+  /* S4 `.group` */
   .group {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 4px;
   }
 
-  .defaults {
-    gap: 6px;
+  /* the two settings groups space their own label/field/unit */
+  .transport .group:not(:first-child) {
+    gap: 8px;
   }
 
   .cf {
     margin-left: 8px;
   }
 
-  .icon {
-    padding: 4px 9px;
-    line-height: 1;
-  }
-
+  /* S4 `.nowplaying` — always mounted, so Pause/Play never moves anything */
   .nowplaying {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    min-width: 180px;
+    min-width: 230px;
     max-width: 320px;
+    margin-left: 8px;
+  }
+
+  .nowplaying.idle {
+    opacity: 0.55;
   }
 
   .np1 {
     display: flex;
     align-items: baseline;
-    gap: 8px;
-    font-size: 12px;
+    font-size: 13px;
     min-width: 0;
   }
 
   .np1 b {
+    font-weight: 600;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .t {
-    font-family: ui-monospace, Menlo, Consolas, monospace;
+  .np1 .t {
     flex: none;
+    margin-left: 8px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--text-dim);
   }
 
+  /* S4 `.prog` + `.prog i` — and it is the seek control.
+     A grabbable bar is bigger than 3px, so the hit area is padded while the
+     PAINT is not (`background-clip: content-box` keeps the 3px line the mock
+     draws). The box is unconditional — only the grabbing is gated — so the
+     transport is exactly as tall stopped as playing. */
   .prog {
     display: block;
+    margin-top: 5px;
+    box-sizing: content-box;
+    padding: 7px 0;
     height: 3px;
     border-radius: 2px;
-    background: var(--border);
-    background-image: linear-gradient(var(--accent), var(--accent));
+    background: #272c35;
+    background-image: linear-gradient(var(--ok), var(--ok));
     background-repeat: no-repeat;
     background-size: var(--p) 100%;
+    background-clip: content-box;
+    background-origin: content-box;
     transition: background-size 0.4s linear;
+  }
+
+  .prog.seekable {
+    cursor: pointer;
+    touch-action: none;
+  }
+
+  .prog.seekable:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 2px;
   }
 
   .overflow {
@@ -480,9 +689,10 @@
     margin-left: 4px;
   }
 
+  /* S4 `.pllist` */
   .pl-list {
-    padding: 12px 16px;
-    max-width: 720px;
+    padding: 20px;
+    max-width: 820px;
   }
 
   .rows {
@@ -492,39 +702,56 @@
   }
 
   .add {
-    color: var(--text-dim);
-    border-style: dashed;
-    width: 100%;
-    padding: 8px;
+    margin-top: 4px;
   }
 
-  .add:hover {
-    color: var(--text);
-  }
-
+  /* S4 `.plfoot` */
   .foot {
-    font-size: 12px;
-    margin: 10px 2px 0;
+    padding: 0 0 2px;
+    margin: 18px 0 0;
+    font: 12px/1 var(--mono);
+    color: var(--text-dim);
   }
 
-  /* ---- phone (D9) ---- */
+  /* ---- phone (S4b, D9) ---- */
   @media (max-width: 600px) {
     .transport {
       padding: 12px;
-      gap: 8px;
+      gap: 10px;
+    }
+
+    /* S4b: the four buttons and ⋯ share the first row, ⋯ pushed to the end */
+    .transport .spacer {
+      display: none;
+    }
+
+    .transport .group:first-child {
+      flex: 1;
+    }
+
+    .overflow {
+      margin-left: auto;
+      order: 1;
     }
 
     .nowplaying {
+      order: 2;
       flex-basis: 100%;
+      min-width: 0;
       max-width: none;
+      margin-left: 0;
     }
 
-    .defaults {
-      flex-basis: 100%;
-      flex-wrap: wrap;
+    /* S4b: "Default" + "Crossfade" share the third row */
+    .transport .group:not(:first-child) {
+      order: 3;
     }
 
-    .spacer {
+    .cf {
+      margin-left: 8px;
+    }
+
+    .wide {
       display: none;
     }
 
@@ -533,7 +760,7 @@
     }
 
     /* a touch target, on the shared button primitive (app.css) */
-    .btn {
+    .transport :global(.btn) {
       min-height: 36px;
     }
   }

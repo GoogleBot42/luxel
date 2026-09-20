@@ -1,5 +1,97 @@
 # Update log
 
+## 2026-09-19 — the Playlist page to mockup S4/S4b: a real transport, mock rows, a Library in the picker (#538 §F, §A)
+
+Jeremy on the shipped playlist: *"playlist page header options, css, text,
+features, don't match the mock. it's super far off. There's supposed to be
+play, skip, prev, a music style duration slider, and the name of the pattern
+playing"*, *"tiny arrows not in the mocks"*, *"Add to the playlist search
+doesn't include items from library"*, *"clearing the playlist flickers, waits,
+and then deletes"*. This is that pass. `docs/design/webui-v2/mockups.html`
+frames **S4** and **S4b** are the spec; every number below is quoted from them.
+
+**Transport (`pages/Playlist.svelte`).** Four PERSISTENT controls in one
+group: a primary that toggles `‖ Pause` / `▶ Play`, then stop, prev and next
+as 32px `.btn.icon` with the mock's inline SVGs. Before, the page showed
+`▶ Play` alone when stopped and a different three when playing, and had **no
+pause verb at all**. The now-playing block (`min-width:230px`) is mounted in
+every state and merely dims when stopped, so Pause/Play no longer shifts every
+control beside it. On an empty queue the four go `disabled` with a
+`data-reason` rather than vanishing — the one place §5.7's
+absent-never-disabled rule is deliberately set aside (#529), for exactly the
+reason above.
+
+**Pause, with no pause on the wire.** `POST /api/playlist/stop` halts the
+auto-advance and leaves the item loaded and rendering, keeping `index`; `play
+<index>` re-enters an item and restarts its clock. So Pause is
+stop-with-remembered-index (`playlistPause()`) and Play is `play <remembered
+index>` (`playlistResume()`) — while the stop BUTTON forgets the index, so the
+next Play starts the queue from the top. That is the difference between the
+two left-hand buttons, and it is now in docs/api.md beside the routes.
+
+**The progress bar is a seek slider.** Drag it (or focus it and use
+←/→/Home/End) to a time inside the current item. The limit, on the record: the
+wire cannot place the device part-way into an item, so a seek is `play
+<index>` plus a local clock offset — the device restarts the item and its own
+advance still arrives a full duration later, so the bar parks at the end for
+the seconds you skipped. #509 (elapsed seconds on the wire) plus a firmware
+seek would make it exact; `seekSec` in the page is the hook.
+
+**Defaults.** `Default duration` and `Crossfade` are `.inp.num.xs` (72px,
+26px) with real `<label for>`s. The `manual` placeholder — which clipped to
+`mar` in the old 56px box and which Jeremy could not read — is gone entirely:
+the field shows the default seconds, and a per-item override still shows in
+accent on the row's chip.
+
+**Rows (`components/PlaylistRow.svelte`).** `.plrow` is the mock's card:
+`--bg-panel`, 8px radius, 10/12px padding, 12px gap, `⠿` handle · 44px
+device-shaped thumbnail · 13px name + mono `Pattern` · `8 s` chip ·
+`N values ▾` chip · `✕` as `.btn.icon.quiet`. Chips are 26px / 6px radius /
+mono, not pills. **The ↑/↓ movers are deleted** — they are in no mock; the
+handle is the reorder affordance, and ↑/↓ ON the handle is the keyboard path
+those buttons carried. At 390px (S4b) the duration folds onto the subtitle
+line and the values chip keeps only its count.
+
+**`+ Add` reaches the Library (`components/PatternPicker.svelte`).** Two
+sections: `On device` and `Library` (the generated `gallery.json`, fetched
+once on first open, device-shaped thumbs, searchable). A library pattern is
+source the device has never seen, so picking one SAVES it first
+(`saveAndAddToPlaylist()` → `POST /api/patterns`, the same path the Patterns
+page's save takes) and appends the row only on success; the picker shows a
+saving line and, on failure, says what happened and adds nothing. Names
+already on the device are dropped from that section so a pick is never a
+silent overwrite. Each section caps at 40 rows — every row is a live wasm
+engine — and the search reaches the rest.
+
+**Clear no longer flickers.** `queuePlaylistSave()`'s 400ms debounce is for
+edits that STREAM; a whole-list verb does not stream. `savePlaylistNow()` is
+the one-shot path, and Clear takes it: the dialog closes, the rows go in ONE
+DOM flush, and the POST leaves immediately. The harness asserts both
+measurements — one MutationObserver batch, one POST — so this cannot quietly
+regress.
+
+**Also here, because it blocked verification.** `device-e2e.mjs` aborted
+part-way on master after #545 trimmed the projection tables: a Layout never
+shows a pattern bigger than itself, so a strip console now offers no
+projection at all and a matrix offers the 1D row alone — while three checks
+still described the pre-#545 tables and two of them THREW, taking the whole
+run with them. Fixed here (Gitea #547): the matrix's row/card counts and the
+`proj1d` POST are asserted on the matrix, the strip asserts that it offers
+nothing, the settings-section order no longer demands a Projection section a
+strip cannot have, and the editor's "Add to playlist carries the projection"
+check wears a matrix for its own length. The product question — whether a
+strip console should say something instead of showing nothing — stays with
+#538 §B.
+
+**Verified**: all five web harnesses + `npm test` green; `tools/ci.sh`.
+`device-e2e.mjs` gained the four-control assertions (stopped and playing),
+pause/resume/stop-from-the-top semantics against the mirror, the seek, the
+now-playing name, keyboard reorder on the handle, the no-movers sweep, the
+defaults field's readability at 1400 and 390, the Library pick (mirror
+`GET /api/patterns` grows by one and the playlist gains the item), and the
+clear's single-batch/single-POST measurements. Side-by-side shots against
+mock frames S4/S4b on the `--board panel` mirror. No hardware was touched.
+
 ## 2026-09-19 — Patterns page: the mock's tile, the mock's segment, and the projection filter (#538)
 
 The Patterns half of Jeremy's Phase A review round (Gitea #538 §A/§B/§E), on
@@ -1136,7 +1228,6 @@ strip's Play, `⋯ → Add to playlist` landing a row on the device, tile Delete
 cancelled then confirmed, projection captions on a panel console, and the
 390 px two-column layout in both modes.
 
-
 ## 2026-09-19 — web v2 A2: stores/geometry.ts, the one Layout reconciler (#463)
 
 Geometry had three sources of truth in the UI (`layout`, `devicePixels`,
@@ -1840,7 +1931,6 @@ editing it), and ideas.md "Multi-pattern blend / transitions", where the
 firmware's playlist crossfade covers the transitions half but the
 engine-level compositor for layered effects does not exist.
 
-
 ## 2026-09-08 — the release gate builds three boards, and the two things that slipped past it (#413, #438)
 
 Both of yesterday's release-gate breakages merged green because
@@ -2088,7 +2178,6 @@ internal DRAM. Patterns that rendered black at 4096 px now run
 which retires the Gitea #420 ceilings on this board. What it does NOT lift is
 the upload transient: a 46 KB ad-hoc `/api/code` push still refuses, because
 the envelope + decode peak is internal heap.
-
 
 ## 2026-09-07 — firmware: `heap_largest`, and a refusal that names the real problem (#390)
 
@@ -4013,7 +4102,6 @@ the shipped hosted variant keeps 3.60 %.
 on-metal checklist is Gitea #365; #331 (the #330 pass) is superseded by it
 for the store half. The device **wipes on first boot** — expect
 `patterns: format 5 != 6, wiping storage` once, then an empty library.
-
 
 ## 2026-09-07 — Recalibrating "too large for this device": the outgoing engine's heap is part of the budget (#287)
 

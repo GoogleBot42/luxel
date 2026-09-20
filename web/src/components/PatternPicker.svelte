@@ -4,17 +4,25 @@
   // device-shaped live thumbnail the Patterns page and the playlist rows use,
   // so what you pick looks like what you will get.
   //
-  // Today it lists patterns. Scenes are Phase B (#478/#481) and slot in as a
-  // second SECTION, not a second component: `sections` below is the seam —
-  // give it a `{ kind: "scene", … }` group and the markup, the search, the
-  // keyboard handling and the `pick` event all work unchanged. That is why
-  // `pick` carries a `kind` nothing reads yet.
+  // TWO SECTIONS today (Gitea #538 §F): `On device` — patterns the device
+  // already holds, which a pick queues directly — and `Library`, the same
+  // clean-room `library/` collection the Patterns page browses. A library
+  // pattern is source the device has never seen, so picking one is a SAVE
+  // followed by an append; the owner does that work (`pages/Playlist.svelte`)
+  // and reports it back through `busy`/`error`, because a picker should not
+  // know how a device stores things.
+  //
+  // Scenes are Phase B (#478/#481) and slot in as a third section, not a
+  // second component: `sections` below is the seam — give it a
+  // `{ kind: "scene", … }` group and the markup, the search, the keyboard
+  // handling and the `pick` event all work unchanged.
   //
   // Exported for reuse: the editor's and the Patterns tile's ⋯ menus
   // ("Add to playlist", "Add to scene ▸") are the same choice made from a
   // different place (§5.4b).
   import { createEventDispatcher, tick } from "svelte";
   import PatternThumb from "./PatternThumb.svelte";
+  import { gatedFetch } from "../lib/fetchgate";
   import type { Luxel } from "../lib/luxel";
 
   /** The local wasm host the thumbnails render on. */
@@ -28,31 +36,110 @@
    *  does. Passed in rather than read here so the playground can offer the
    *  local library through the same component later. */
   export let patterns: { id: string; name: string; source?: string }[] = [];
+  /** Name of the library pattern currently being saved to the device — the
+   *  owner sets it while its `pick` handler is in flight. */
+  export let busy = "";
+  /** What went wrong with the last pick; the panel stays open to say it. */
+  export let error = "";
 
   const dispatch = createEventDispatcher<{
-    pick: { id: string; kind: "pattern" | "scene" };
+    pick: { id: string; kind: "pattern" | "scene" | "library"; name: string; source?: string };
     close: void;
   }>();
 
   let query = "";
   let searchEl: HTMLInputElement | undefined;
 
+  /** The generated clean-room library (`tools/gen-gallery.mjs` → gallery.json,
+   *  the same file the Patterns page's Library source reads). Fetched once,
+   *  on the first open, so a picker that is never opened costs nothing. */
+  let library: { key: string; name: string; source: string }[] = [];
+  let libraryLoading = false;
+  let libraryLoaded = false;
+
+  async function loadLibrary(): Promise<void> {
+    if (libraryLoaded || libraryLoading) return;
+    libraryLoading = true;
+    try {
+      const r = await gatedFetch(`${import.meta.env.BASE_URL}gallery.json`);
+      if (r.ok) {
+        const list = (await r.json()) as { name: string; source: string }[];
+        const seen = new Set<string>();
+        library = list
+          .filter((p) => {
+            const k = p.name.toLowerCase();
+            if (seen.has(k)) return false;
+            seen.add(k);
+            return true;
+          })
+          .map((p) => ({ key: p.name, name: p.name, source: p.source }));
+      }
+    } catch {
+      /* gallery.json missing (a device build without it) — the section is
+         simply empty, and the device section still works */
+    }
+    libraryLoading = false;
+    libraryLoaded = true;
+  }
+
   /** Focus the search as the panel appears — a phone keyboard opening on a
    *  list this long is the difference between typing and scrolling. */
-  $: if (open) void tick().then(() => searchEl?.focus());
+  $: if (open) {
+    void tick().then(() => searchEl?.focus());
+    void loadLibrary();
+  }
   // a fresh open starts from the whole list
   $: if (!open) query = "";
 
+  /** Every row carries a LIVE thumbnail, which is a compiled wasm engine and
+   *  a rAF of its own — the library is ~300 patterns, so a section shows at
+   *  most this many and the search is how you reach the rest. */
+  const SECTION_CAP = 40;
+
+  interface PickItem {
+    id: string;
+    name: string;
+    source?: string;
+  }
+
   $: needle = query.trim().toLowerCase();
-  $: matches = patterns.filter(
-    (p) => needle === "" || (p.name || p.id).toLowerCase().includes(needle),
-  );
+  const match = (label: string, n: string): boolean =>
+    n === "" || label.toLowerCase().includes(n);
+  $: deviceMatches = patterns
+    .filter((p) => match(p.name || p.id, needle))
+    .map((p): PickItem => ({ id: p.id, name: p.name, source: p.source }));
+  /** A library pattern already on the device would be a duplicate row in the
+   *  picker AND an overwrite on pick, so the device's copy wins. */
+  $: onDevice = new Set(patterns.map((p) => (p.name || p.id).toLowerCase()));
+  $: libraryMatches = library
+    .filter((p) => !onDevice.has(p.name.toLowerCase()) && match(p.name, needle))
+    .map((p): PickItem => ({ id: p.key, name: p.name, source: p.source }));
 
-  /** One group per item kind. Phase B appends `{ kind: "scene", … }` here. */
-  $: sections = [{ kind: "pattern" as const, label: "Patterns", items: matches }];
+  /** One group per source. Phase B appends `{ kind: "scene", … }` here. */
+  $: sections = [
+    {
+      kind: "pattern" as const,
+      label: "On device",
+      items: deviceMatches.slice(0, SECTION_CAP),
+      more: Math.max(0, deviceMatches.length - SECTION_CAP),
+    },
+    {
+      kind: "library" as const,
+      label: "Library",
+      items: libraryMatches.slice(0, SECTION_CAP),
+      more: Math.max(0, libraryMatches.length - SECTION_CAP),
+    },
+  ];
+  $: total = deviceMatches.length + libraryMatches.length;
 
-  function choose(id: string, kind: "pattern" | "scene"): void {
-    dispatch("pick", { id, kind });
+  function choose(
+    id: string,
+    kind: "pattern" | "scene" | "library",
+    name: string,
+    source?: string,
+  ): void {
+    if (busy) return; // one save at a time — the device serves ~2 connections
+    dispatch("pick", { id, kind, name, source });
   }
 
   function onKey(e: KeyboardEvent): void {
@@ -80,45 +167,64 @@
       <span class="title">{title}</span>
       <span class="spacer"></span>
       <button
-        class="x"
+        class="btn icon quiet"
         data-role="picker-close"
         aria-label="close"
         on:click={() => dispatch("close")}>✕</button
       >
     </div>
     <input
-      class="search"
+      class="inp search"
       data-role="picker-search"
       type="search"
       placeholder="Search patterns…"
       bind:this={searchEl}
       bind:value={query}
     />
+    {#if busy}
+      <p class="line dim" data-role="picker-busy">Saving “{busy}” to the device…</p>
+    {:else if error}
+      <p class="line err" data-role="picker-error">{error}</p>
+    {/if}
     <div class="body">
       {#each sections as section (section.kind)}
         {#if section.items.length > 0}
-          <div class="section-label">{section.label}</div>
+          <div class="slabel section-label" data-role={`picker-section-${section.kind}`}>
+            {section.label}
+          </div>
           <ul class="list">
             {#each section.items as p (p.id)}
               <li>
                 <button
                   class="item"
                   data-role="picker-item"
+                  data-kind={section.kind}
                   data-id={p.id}
-                  on:click={() => choose(p.id, section.kind)}
+                  disabled={busy !== ""}
+                  data-reason={busy === "" ? undefined : "a pattern is being saved to the device"}
+                  on:click={() => choose(p.id, section.kind, p.name || p.id, p.source)}
                 >
                   {#if luxel}<PatternThumb {luxel} source={p.source} />{/if}
                   <span class="name">{p.name || p.id}</span>
+                  {#if section.kind === "library"}<span class="tag">saves to device</span>{/if}
                 </button>
               </li>
             {/each}
           </ul>
+          {#if section.more > 0}
+            <p class="line dim" data-role={`picker-more-${section.kind}`}>
+              + {section.more} more — narrow the search to see them
+            </p>
+          {/if}
         {/if}
       {/each}
-      {#if matches.length === 0}
-        <p class="empty dim" data-role="picker-empty">
-          {patterns.length === 0
-            ? "This device has no saved patterns yet — save one from the editor first."
+      {#if libraryLoading && library.length === 0}
+        <p class="line dim" data-role="picker-loading">loading the library…</p>
+      {/if}
+      {#if total === 0 && !libraryLoading}
+        <p class="line dim" data-role="picker-empty">
+          {patterns.length === 0 && library.length === 0
+            ? "Nothing to add — save a pattern from the editor first."
             : `Nothing matches “${query}”.`}
         </p>
       {/if}
@@ -166,11 +272,6 @@
     flex: 1;
   }
 
-  .x {
-    padding: 2px 8px;
-    line-height: 1;
-  }
-
   .search {
     width: 100%;
   }
@@ -181,11 +282,11 @@
   }
 
   .section-label {
-    color: var(--text-dim);
-    font-size: 11px;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    margin: 2px 0 6px;
+    margin: 8px 0 6px;
+  }
+
+  .section-label:first-child {
+    margin-top: 0;
   }
 
   .list {
@@ -215,19 +316,37 @@
     border-color: var(--accent);
   }
 
+  .item[disabled] {
+    opacity: 0.5;
+    cursor: default;
+  }
+
   .name {
+    flex: 1;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .empty {
+  /* says what picking a LIBRARY row costs before you pick it */
+  .tag {
+    flex: none;
+    font: 11px/1 var(--mono);
+    color: var(--text-dim);
+  }
+
+  .line {
     font-size: 12px;
-    margin: 6px 2px;
+    margin: 0;
   }
 
   .dim {
     color: var(--text-dim);
+  }
+
+  .err {
+    color: var(--error);
   }
 
   /* the phone is the primary playlist surface (D9): the sheet fills the

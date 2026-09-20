@@ -451,6 +451,15 @@ a stored one.
 | `/api/playlist/next` | POST | — | `{"ok":true}` | both |
 | `/api/playlist/prev` | POST | — | `{"ok":true}` | both |
 
+**There is no pause route, and none is needed.** `stop` halts the
+auto-advance only: the item that was playing stays loaded and keeps rendering,
+and `index` keeps its value. `play <index>` re-enters an item and restarts
+THAT item's clock at zero. So a UI pause is `stop` plus a remembered index,
+and a resume is `play <that index>` — which replays the item from its start,
+not from where it stopped. There is likewise no seek: nothing can place the
+device part-way into an item. `GET` carries no elapsed field either, so a
+progress readout has to be timed client-side (Gitea #509 adds one).
+
 `GET`:
 
 ```json
