@@ -12,6 +12,18 @@ skill (`BOARD=board-seengreat-hub75 tools/ota-push.sh 192.168.0.238` —
 http://192.168.0.238/api/ota` is the fallback when the script fails silently).
 
 Reading the panel (2026-09-07):
+- **`/api/status`'s `web` array is the first thing to read when the board
+  "refuses connections".** It is the 3-socket web pool's per-slot stage
+  (0 accepting · 1 serving · 2-5 shutting down · 9 abort). `web:[1,1,1]` means
+  all three slots are held by live clients — one open console tab holds one for
+  as long as it is open — and then a browser cold load gets
+  `ERR_CONNECTION_REFUSED` on a native request. The stylesheet is the one
+  nothing retries, so the console comes up **completely unstyled** with no error
+  (Gitea #592); `luxel.wasm` and every `/api/*` go through the app's fetchgate
+  and do retry, so the page otherwise works and it reads as a CSS bug. Seen for
+  >10 minutes straight on 2026-09-20 with a single `curl` as our only traffic.
+  A bare `curl` that returns EMPTY, or two quick curls where the second returns
+  nothing, is the same condition — space reads a few seconds apart.
 - **A rejected pattern load leaves the panel DARK** with `out_fps` 0 and
   `rescan_hz` 0 — it reads like a hang but is the documented rejection path
   (array budget / `RUNTIME_FLOOR`). Check `vmerr` before diagnosing.
