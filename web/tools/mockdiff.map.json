@@ -1693,6 +1693,13 @@
           "noBox": true,
           "mockNth": 1
         }
+      ],
+      "allow": [
+        {
+          "element": "sect",
+          "property": "margin-bottom",
+          "why": "the mockup's excerpt frames set `margin-bottom` inline on `.sect` so the excerpt sits flush in the mockup page; the real rhythm is stated in S3, which the app matches"
+        }
       ]
     },
     "S3e": {
@@ -1849,6 +1856,13 @@
           "note": "mock: a 40x40 cube SVG at right 8 / bottom 6 on rgba(8,10,14,.74), radius 5 — the cut face filled rgba(232,163,61,.42)",
           "mockNth": 0
         }
+      ],
+      "allow": [
+        {
+          "element": "sect",
+          "property": "margin-bottom",
+          "why": "the mockup's excerpt frames set `margin-bottom` inline on `.sect` so the excerpt sits flush in the mockup page; the real rhythm is stated in S3, which the app matches"
+        }
       ]
     },
     "S3f": {
@@ -1952,6 +1966,13 @@
           "app": "[data-role=\"projection-kind\"][data-dims=\"3\"]",
           "mockNth": 1,
           "noBoxH": true
+        }
+      ],
+      "allow": [
+        {
+          "element": "sect",
+          "property": "margin-bottom",
+          "why": "the mockup's excerpt frames set `margin-bottom` inline on `.sect` so the excerpt sits flush in the mockup page; the real rhythm is stated in S3, which the app matches"
         }
       ]
     },
@@ -2076,6 +2097,13 @@
           "noBox": true,
           "mockNth": 1
         }
+      ],
+      "allow": [
+        {
+          "element": "sect",
+          "property": "margin-bottom",
+          "why": "the mockup's excerpt frames set `margin-bottom` inline on `.sect` so the excerpt sits flush in the mockup page; the real rhythm is stated in S3, which the app matches"
+        }
       ]
     },
     "S3i": {
@@ -2170,7 +2198,8 @@
           "mock": ".disclist .btn.sm",
           "app": "[data-role=\"out-palette-edit\"]"
         }
-      ]
+      ],
+      "allow": []
     },
     "S3j": {
       "title": "LED layout — 600 px strip across two outputs",
@@ -2340,6 +2369,13 @@
           "note": "mock: 12px dim lines at line-height 1.6",
           "noBox": true
         }
+      ],
+      "allow": [
+        {
+          "element": "sect",
+          "property": "margin-bottom",
+          "why": "the mockup's excerpt frames set `margin-bottom` inline on `.sect` so the excerpt sits flush in the mockup page; the real rhythm is stated in S3, which the app matches"
+        }
       ]
     },
     "S3k": {
@@ -2459,7 +2495,8 @@
           "app": "[data-role=\"outputs-note\"]",
           "noBox": true
         }
-      ]
+      ],
+      "allow": []
     },
     "S4": {
       "deviceSafe": true,

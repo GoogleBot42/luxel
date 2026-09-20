@@ -307,6 +307,20 @@ function measureInPage(rootSel, entries, props) {
     const cs = getComputedStyle(el);
     const styles = {};
     for (const p of props) styles[p] = cs.getPropertyValue(p);
+    // `getComputedStyle` resolves an auto margin to its USED pixels, so the
+    // mock's `margin-left:auto` reads back as e.g. "351.094px" and every
+    // element pushed right by one looks like a 351px difference from an app
+    // that does the same thing with a spacer. Typed OM returns the COMPUTED
+    // value, where `auto` is still `auto` — which is the decision we mean to
+    // compare.
+    if (el.computedStyleMap) {
+      const map = el.computedStyleMap();
+      for (const q of props) {
+        if (!q.startsWith("margin-")) continue;
+        const v = map.get(q);
+        if (v && String(v) === "auto") styles[q] = "auto";
+      }
+    }
     const r = el.getBoundingClientRect();
     out[e.id] = {
       found: true,
