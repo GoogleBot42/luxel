@@ -21,10 +21,13 @@ paths:
   and it panicked in production.
   **Measure the BASELINE too, and on the board you are shipping to.** On the
   classic ESP32 `.stack` is leftover DRAM and the floor is currently within
-  TENS of bytes: 2026-09-19 `board-pixelblaze-v3` cleared the 24,576 B floor
-  by 4 B while `board-athom-music` was already 68 B UNDER it on master — and
-  nothing catches that, because `tools/ci.sh` stack-checks pixelblaze-v3
-  only. So a red stack-check after your change is very possibly not your
+  TENS of bytes, and it DRIFTS: 2026-09-19 morning `board-pixelblaze-v3`
+  cleared the 24,576 B floor by 4 B; by that evening master had it 116 B
+  UNDER (24,460 B), and `board-athom-music` has been under before too.
+  **Nothing catches that: `tools/ci.sh` does NOT run stack-check at all**
+  (grep it — there is no call; an earlier version of this rule said it
+  checked pixelblaze-v3, and that was wrong). So a red stack-check after your
+  change is very possibly not your
   change: `git stash`, re-measure, compare. When it IS yours, the fix is the
   one the script names — take the bytes out of that board's
   `heap_allocator!` (see `SECOND_OUTPUT_RAM` in main.rs for the per-board
@@ -143,7 +146,14 @@ paths:
   source paths in panic `Location`s (~13.5 KB, #441), so the same commit
   weighed 1,010,432 B on the CI runner and 1,014,400 B locally
   (2026-09-08). Gate a percentage floor only on the flake artifact of the
-  machine you are quoting. `tools/ci.sh` now image-checks the release
+  machine you are quoting. **That host gap is now closed** — #441's
+  `--remap-path-prefix` set did it: on 2026-09-19 master's
+  `c6-devkit-hosted` flake image measured 1,015,440 B locally and
+  1,015,440 B in the runner's own `image-check` line (run 1858), byte for
+  byte. So you CAN pre-check a margin locally before pushing, and you
+  should: read the last green master run's `image-check: size ok` line out
+  of the Gitea job log and compare it with your own `nix build` of the same
+  commit before trusting either. `tools/ci.sh` now image-checks the release
   images for `CI_VARIANTS` (pixelblaze-v3, c6-devkit-hosted, c3-devkit)
   because a C3 build break (#413) and a C6 under-floor image (#438) both
   merged green while only `CI_BOARD` was built.
@@ -161,11 +171,30 @@ paths:
 - Size gotchas measured on riscv32imc at `opt-level = "s"` (#465): `str::parse`
   instantiates ~700 B of `from_str_radix` **per integer width**, so a parser
   wanting u8/u16/u32 pays three times — hand-roll one `fn(&str) -> Option<u32>`
-  and narrow with `try_from`. Persisting a struct as the wire format it
+  and narrow with `try_from`. **This is the cheapest kilobyte in the
+  firmware and it is still lying around**: 2026-09-19 `server.rs` alone was
+  parsing FIVE widths (`u8` ×3, `u16`, `u32`, `i16`, `i32`); routing the
+  unsigned ones through one `num()` and reading the timezone as the already-
+  instantiated `i32` was **−1,088 B** on `c6-devkit-hosted` — more than the
+  whole of `/api/name`, and what made #538 fit (#543). Two caveats: a width
+  another module still uses stays linked (`u8`/`u16` via `devicemap.rs` and
+  `outpipe.rs`), so the saving is well under "widths removed × 700 B";
+  and a hand-rolled parser drops `parse`'s leading `+`, which is a wire
+  behaviour change worth a doc line. Persisting a struct as the wire format it
   already parses beats a binary record by a serializer + a deserializer
   (−1.9 KB; see `PLAYLIST_KEY`/`LAYOUT_KEY`). And `slice::sort_by_key`
   instantiates driftsort, a **4,144 B stack frame** that `tools/stack-check.sh`
   will show you — for a list of a handful, insert in order instead.
+- **A size "optimisation" is a hypothesis until you have built the gated
+  board.** On riscv32imc the codegen's response to a small shape change is
+  routinely larger than the change: 2026-09-19 (#538) holding two ≤32-byte
+  device-name cells as `heapless::String<32>` instead of `String` cost
+  **+2,032 B** on `c6-devkit-hosted` while saving 112 B on the Xtensa
+  boards, and moving one `&'static str` into a `StaticCell` cost another
+  +256 B. Below ~500 B, differences between two shapes are noise you cannot
+  reason about — go find a structural saving (a dropped monomorphisation)
+  instead of shaving. Record the failed experiments in docs/boards.md so the
+  next person does not repeat them.
 - Diffing symbol tables between two builds: strip the `17h<hash>E` mangling
   hash and rustc's `.NNNN` local suffix first. A raw `nm` diff shows a
   renumbered symbol as one that vanished plus one that appeared, and that
