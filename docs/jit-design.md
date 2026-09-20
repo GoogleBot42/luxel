@@ -384,11 +384,42 @@ via `ctx.args`. That keeps the five callback builtins (`arrayForEach`,
 `arrayMutate`, `arrayMapTo`, `arrayReduce`, `arraySortBy`, `mapPixels`)
 native without any interpreter re-entry.
 
-Build order: the first JIT **refuses** programs that use `CallValue` or a
-callback-taking builtin (they run interpreted, reason `"callbacks"` in
-`/api/status`), which excludes 6.2 % of the library (§9); the
-`dispatch_direct` indirection and the `call_value` helper come after the
-numeric core is measured on metal.
+**Decided 2026-09-20 (Jeremy):** v1 compiles `CallValue` natively (it is
+native → native through the entry table; the callee's params and return
+are `Dyn`). The six callback builtins are all Pixelblaze API
+(`arrayForEach`, `arrayMutate`, `arrayMapTo`, `arrayReduce`,
+`arraySortBy`, `mapPixels`; 8 of 294 scraped PB patterns and 8 of 307
+library patterns use one) and **stay in the language**. They leave the
+JIT's hard set by **compiler lowering, not by a trampoline**: when the
+callback is a literal lambda or a named function — every call site in
+the library — the compiler lowers `arrayForEach`/`arrayMutate`/
+`arrayMapTo`/`arrayReduce` into an ordinary bytecode loop with a direct
+`CallFn`, which the interpreter runs unchanged and the JIT compiles like
+any other loop. The builtin remains the fallback for a callback that is
+only a run-time value. `arraySortBy` (a comparator sort) and `mapPixels`
+(needs per-index coordinates the bytecode cannot ask for) are not lowered
+and are a v1 **refusal** (§4a): 2 library patterns. The Rust → native
+trampoline (`dispatch_direct` indirection) is therefore not on the v1
+path and may never be needed.
+
+### 4a. Refusal semantics and the editor warning
+
+A refusal is **whole-program**: the pattern runs in the interpreter
+exactly as today, at the interpreter's speed, with the same pixels — no
+function-level mixing, ever (decision 2). `/api/status` carries
+`jit: {state: "interp", reason}` with `reason` one of `callbacks`
+(`arraySortBy`/`mapPixels` or a run-time callback), `too-large`, `psram`,
+`kinds` (verifier failure — a compiler bug, reported loudly), `debug`
+(debugger attached), `unsupported` (anything else, with the opcode).
+
+**Jeremy's note (2026-09-20): the editor must warn when a construct forces
+interpreter mode.** The compiler knows at compile time whether a program
+will be refused for `callbacks` (the only reason that is a property of
+the source), so the playground shows a warning at the offending call
+site — "`mapPixels` runs this pattern in the interpreter on JIT boards" —
+in the same channel as the `Dyn`-variable lint (§11 answer 3), before the
+pattern is ever pushed. The device-side reasons (`too-large`, `psram`)
+surface from `/api/status` next to the frame rate after activation.
 
 ## 5. Executable memory and lifecycle on the S3
 
@@ -580,12 +611,14 @@ those slots boxed.
 
 ## 11. Open questions for Jeremy
 
-1. Format bump to v6 (stale stored blobs until recompiled by a client)
-   vs. keeping v5 with a flag (old firmware would have to ignore an
-   unknown section — it does not today). Recommendation: bump.
-2. `Value` layout pinned by `repr` — fine on all boards? It is what rustc
-   picks today; the point is making it a contract.
-3. Should the browser show boxed (`Dyn`) variables as an editor lint once
-   the inference exists? Cheap, and it is how users learn the fast subset.
-4. v1 refuses `CallValue` / callback builtins (6.2 % of the library runs
-   interpreted until the follow-up) — acceptable as the first cut?
+All four answered by Jeremy on 2026-09-20 (Gitea #607):
+
+1. Format bump to v6 — **accepted** (stale stored blobs recompile through
+   the existing `bc-version` loop).
+2. `Value` layout pinned by `#[repr(C, u32)]` — **accepted**.
+3. Boxed (`Dyn`) variables shown as an editor lint — **accepted**.
+4. Callback builtins — **resolved as §4/§4a**: keep all six (they are
+   Pixelblaze API), lower the four loop-shaped ones in the compiler when
+   the callback is static, refuse only `arraySortBy`/`mapPixels` in v1,
+   and **warn in the editor** whenever a construct forces interpreter
+   mode.
