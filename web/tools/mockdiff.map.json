@@ -55,6 +55,8 @@
           "source": "export function render(index) { hsv(.1, .6, random(1) < .05) }\n"
         }
       ],
+      "brightness": 3,
+      "tzMinutes": -360,
       "defaultSec": 8,
       "crossfadeMs": 500,
       "playlist": [
@@ -95,6 +97,7 @@
       "activate": "Sunset Fade"
     },
     "outputs": {
+      "protocol": "ws2812",
       "patterns": [
         {
           "name": "Rainbow Sweep",
@@ -1358,6 +1361,10 @@
           "element": "titlerow-sub",
           "property": "text",
           "why": "the mock's version string is a mockup literal (v0.1.44)"
+        },
+        {
+          "element": "gradbar-edit",
+          "why": "the palette stop editor behind `Edit stops…` is Gitea #537; until it lands the stops are edited inline under the ramp"
         }
       ],
       "elements": [
@@ -1460,7 +1467,7 @@
         {
           "id": "hint",
           "mock": ".sect:first-of-type .hint",
-          "app": "[data-role=\"sect-device\"] > .hint.under",
+          "app": "[data-role=\"sect-device\"] .hint.under",
           "note": "mock: 12px, line-height 1.4, --text-dim"
         },
         {
@@ -1586,18 +1593,21 @@
           "mock": ".drow:not(.open)",
           "app": "[data-role=\"adv-clock-toggle\"]",
           "hover": true,
-          "note": "mock: padding 11px 14px, gap 10, border-bottom",
+          "note": "mock: padding 11px 14px, gap 10, border-bottom. mockNth 1 = `Clock & time zone`, which is the row the app side names (nth 0 is Panel driver)",
+          "mockNth": 1,
           "noBoxH": true
         },
         {
           "id": "drow-chev",
           "mock": ".drow:not(.open) .chev",
-          "app": "[data-role=\"adv-clock-toggle\"] .chev"
+          "app": "[data-role=\"adv-clock-toggle\"] .chev",
+          "mockNth": 1
         },
         {
           "id": "drow-st2",
           "mock": ".drow:not(.open) .st2",
           "app": "[data-role=\"adv-clock-status\"]",
+          "mockNth": 1,
           "note": "mock: margin-left auto, 11.5px mono dim",
           "noBox": true
         },
@@ -1739,16 +1749,18 @@
         },
         {
           "id": "datapin-sel",
-          "mock": ".sect:first-of-type .srow:nth-of-type(4) .sel",
-          "app": "[data-role=\"layout-datapin\"]"
+          "mock": ".sect:first-of-type .sel",
+          "app": "[data-role=\"layout-datapin\"]",
+          "note": "the Data pin picker, `GPIO 18 ▾`. It used to read `.srow:nth-of-type(4) .sel`, which is the :nth-of-type trap the header warns about — `.summary` is the first div in the form, so the 4th div is the LED TYPE row and this compared the wrong picker",
+          "mockNth": 3
         },
         {
           "id": "datapin-hint",
           "mock": ".sect:first-of-type .hint",
           "app": "[data-role=\"layout-datapin-note\"]",
-          "note": "mock copy: `applies after a reboot`",
+          "note": "mock copy: `applies after a reboot` — nth 0 is the summary's `SK9822 · GPIO 18`, nth 1 the Layout picker's, nth 2 this one",
           "noBox": true,
-          "mockNth": 1
+          "mockNth": 2
         }
       ],
       "allow": [
@@ -1756,6 +1768,24 @@
           "element": "sect",
           "property": "margin-bottom",
           "why": "the mockup's excerpt frames set `margin-bottom` inline on `.sect` so the excerpt sits flush in the mockup page; the real rhythm is stated in S3, which the app matches"
+        },
+        {
+          "element": "datapin-sel",
+          "why": "§5.7 absence: the native mirror publishes no `data_pins` (docs/api.md), so a host with no pads shows no Data pin row — Gitea #579 gives the mirror one; on a real strip board the row is there"
+        },
+        {
+          "element": "datapin-hint",
+          "why": "same — Gitea #579"
+        },
+        {
+          "element": "layout-sel",
+          "property": "box width",
+          "why": "the mockups draw the Layout picker 190px here and 150px in S3j and S3k; the app uses the width the two later frames agree on (Gitea #580)"
+        },
+        {
+          "element": "layout-sel",
+          "property": "width",
+          "why": "same — Gitea #580"
         }
       ]
     },
@@ -1919,6 +1949,35 @@
           "element": "sect",
           "property": "margin-bottom",
           "why": "the mockup's excerpt frames set `margin-bottom` inline on `.sect` so the excerpt sits flush in the mockup page; the real rhythm is stated in S3, which the app matches"
+        },
+        {
+          "element": "prow-3d",
+          "why": "Jeremy's projection rule: a 2D fixture is never given a 3D pattern, so the 3D row does not exist — and no copy says so (docs/spec/projection.md §1)"
+        },
+        {
+          "element": "pcard-3d-glyph",
+          "why": "same — the cube glyph belongs to the 3D row, which a matrix does not have. S3g measures it on the fixture that does"
+        },
+        {
+          "element": "prow",
+          "property": "margin-bottom",
+          "why": "same rule, one step on: with the 3D row gone the 1D row is `:last-child`, and the mockup's own `.prow:last-child{margin-bottom:0}` collapses it"
+        },
+        {
+          "element": "pcard-nm",
+          "why": "the mockup draws `Along x` as the CHOSEN 1D projection; a device's default is `By index`, so the selected and unselected cards trade places. The card wording itself matches — see pcard-hint"
+        },
+        {
+          "element": "pcard-nm-on",
+          "why": "same — a mockup state choice, not a difference in the UI"
+        },
+        {
+          "element": "pcard-hint",
+          "why": "same: `rows · 4096 unique pixels` is what the app writes under By index, and `stretched across · 64 unique pixels · 64× cheaper` is its Along x — verbatim the mockup's two strings, read off the other card"
+        },
+        {
+          "element": "reading order",
+          "why": "same again: `pcard` is `.pcard:not(.on)` and `pcard-on` is `.pcard.on`, so which of them is the LEFTMOST card is decided by which projection is chosen — the mockup's Along x, the device's By index"
         }
       ]
     },
@@ -2028,9 +2087,18 @@
       "allow": [
         {
           "element": "sect",
-          "property": "margin-bottom",
-          "why": "the mockup's excerpt frames set `margin-bottom` inline on `.sect` so the excerpt sits flush in the mockup page; the real rhythm is stated in S3, which the app matches"
-        }
+          "why": "Jeremy's projection rule: a 1D fixture is never given a 2D or a 3D pattern, so a strip has NO Projection section at all — not an empty one, and no copy explaining why (docs/spec/projection.md §1). Every element of this frame is inside that section, which is why the whole map is allowed here; S3e and S3g measure the block on the fixtures that have one"
+        },
+        { "element": "secthead-note", "why": "same — inside the absent section" },
+        { "element": "prow-2d", "why": "same" },
+        { "element": "prlab", "why": "same" },
+        { "element": "barcard-on", "why": "same" },
+        { "element": "barcard", "why": "same" },
+        { "element": "barcard-svg", "why": "same" },
+        { "element": "barcard-canvas", "why": "same" },
+        { "element": "barcard-nm", "why": "same" },
+        { "element": "barcard-hint", "why": "same" },
+        { "element": "prow-3d", "why": "same" }
       ]
     },
     "S3g": {
@@ -2256,7 +2324,36 @@
           "app": "[data-role=\"out-palette-edit\"]"
         }
       ],
-      "allow": []
+      "allow": [
+        {
+          "element": "gradbar-edit",
+          "why": "the palette stop editor behind `Edit stops…` is Gitea #537"
+        },
+        {
+          "element": "dbody",
+          "property": "padding-top",
+          "why": "`#S3i .dbody{padding:6px 14px 13px}` is an excerpt-frame tweak; the rhythm the spec states is S3's `4px 14px 16px`, which the app matches"
+        },
+        {
+          "element": "dbody",
+          "property": "padding-bottom",
+          "why": "same — `#S3i` only"
+        },
+        {
+          "element": "srow",
+          "property": "margin-bottom",
+          "why": "`#S3i .srow{margin-bottom:9px}` is the same excerpt tweak; S3 states 12px and the app matches that"
+        },
+        {
+          "element": "dbody",
+          "property": "border-bottom-color",
+          "why": "the excerpt ENDS after the open group, so the mockup zeroes the body's bottom border inline (`style=\"border-bottom:0\"`); in the real Advanced list another row follows it"
+        },
+        {
+          "element": "drow-st2",
+          "why": "S3i's status line describes the FIXTURE (`300 px SK9822 strip`, `custom map · 3D · 400 px`) to illustrate capability trimming; the status format the spec states is S3's `gamma 2.2 · blur 0 · glow 0`, which the app follows with the mirror's own numbers"
+        }
+      ]
     },
     "S3j": {
       "title": "LED layout — 600 px strip across two outputs",
@@ -2332,6 +2429,8 @@
           "mock": ".slabel",
           "app": "[data-role=\"outputs\"] > .slabel",
           "text": true,
+          "note": "nth 1: the OUTPUTS label above the table. nth 0 is the section head's `LED layout`, which is what this used to compare the app's `Outputs` against — and the reading-order check inherited the mistake",
+          "mockNth": 1,
           "noBox": true
         },
         {
@@ -2432,6 +2531,19 @@
           "element": "sect",
           "property": "margin-bottom",
           "why": "the mockup's excerpt frames set `margin-bottom` inline on `.sect` so the excerpt sits flush in the mockup page; the real rhythm is stated in S3, which the app matches"
+        },
+        {
+          "element": "orow-count",
+          "property": "box width",
+          "why": "Jeremy: `the pixel count input box in the output is too small` — the shared `.inp.num` is 72px, the mockup's 56px is the width he complained about"
+        },
+        {
+          "element": "orow-pin",
+          "why": "§5.7 absence: the native mirror publishes no `data_pins`, so the pad is a number field rather than the mockup's picker (Gitea #579). On a board that publishes pads it IS the `.sel` drawn here"
+        },
+        {
+          "element": "secthead-note",
+          "why": "the mockup names the BOARD (`Athom`); no route publishes a board identity, so the app's note is `<device> · N outputs` (Gitea #581)"
         }
       ]
     },
@@ -2458,24 +2570,49 @@
             "sleep": 1200
           },
           {
+            "$comment": "one field per POST, with room for the reply to land — the form re-renders from the device's answer, and a second edit mid-render is typed into an element that has already been replaced",
             "type": "[data-role=\"layout-pw\"]",
             "value": "16"
+          },
+          {
+            "sleep": 700
           },
           {
             "type": "[data-role=\"layout-ph\"]",
             "value": "16"
           },
           {
+            "sleep": 700
+          },
+          {
+            "type": "[data-role=\"layout-cols\"]",
+            "value": "2"
+          },
+          {
+            "sleep": 700
+          },
+          {
+            "type": "[data-role=\"layout-rows\"]",
+            "value": "2"
+          },
+          {
             "sleep": 900
           },
           {
-            "waitFor": "[data-role=\"output-add\"]"
+            "click": "[data-role=\"layout-snake\"]"
+          },
+          {
+            "sleep": 900
+          },
+          {
+            "$comment": "the outputs still partition the 600-pixel STRIP this mirror was; dropping back to one wire hands it the whole 4-panel chain, and adding the second then splits it 2/2 the way the mockup draws it. The remove fails harmlessly when only one output is left.",
+            "click": "[data-role=\"output-row\"][data-n=\"1\"] [data-role=\"output-remove\"]"
+          },
+          {
+            "sleep": 900
           },
           {
             "click": "[data-role=\"output-add\"]"
-          },
-          {
-            "sleep": 900
           },
           {
             "sleep": 1200
@@ -2553,7 +2690,23 @@
           "noBox": true
         }
       ],
-      "allow": []
+      "allow": [
+        {
+          "element": "orow-count",
+          "property": "box width",
+          "why": "Jeremy: `the pixel count input box in the output is too small` — the shared `.inp.num` is 72px; the mockup narrows it to 48px here"
+        },
+        {
+          "element": "panel-w",
+          "property": "box width",
+          "why": "`#S3k` narrows the per-panel size boxes to 56px with an inline style; the shared `.inp.num` the rest of the page uses (and S3 measures) is 72px, which is the size Jeremy asked for"
+        },
+        {
+          "element": "layout-sel",
+          "property": "display",
+          "why": "S3k's Layout row drops the `Strip · Matrix · 3D · custom map` hint that S3b and S3j both draw, so its picker is the only child of a plain cell; the app keeps the hint, which makes the picker a flex item (`inline-flex` blockifies to `flex`)"
+        }
+      ]
     },
     "S4": {
       "deviceSafe": true,

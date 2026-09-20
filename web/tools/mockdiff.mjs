@@ -637,6 +637,22 @@ const MIRROR_PORT = {
  */
 async function seedMirror(base, seed, pixels) {
   if (!seed) return;
+  // Device-wide settings the mockups draw a specific value of — brightness
+  // `3 / 31`, `UTC-6 · synced`, a WS2812 board. A bare mirror boots with its
+  // own defaults, and a frame that states one of these would otherwise report
+  // a "copy delta" that is only the mirror's state (Gitea #538).
+  if (typeof seed.brightness === "number")
+    await fetch(`${base}/api/brightness`, { method: "POST", body: String(seed.brightness) }).catch(
+      () => {},
+    );
+  if (typeof seed.tzMinutes === "number")
+    await fetch(`${base}/api/clock`, { method: "POST", body: String(seed.tzMinutes) }).catch(
+      () => {},
+    );
+  if (seed.protocol)
+    await fetch(`${base}/api/protocol`, { method: "POST", body: String(seed.protocol) }).catch(
+      () => {},
+    );
   const ids = new Map();
   for (const p of seed.patterns ?? []) {
     try {
@@ -1240,16 +1256,28 @@ for (const frameId of runIds) {
   // against the mock's. (Jeremy's round-1 notes are full of order: the device
   // chip after the wordmark, Debug right after pause, Delete last in a menu.)
   {
+    // The 8px row tolerance is a DISTANCE between the two tops, not a bucket
+    // each top is rounded into: a 13px label and a 32px input centred in the
+    // same row have tops 6.6px apart, and rounding `top/8` dropped them into
+    // one bucket or two depending only on where down the page the row happens
+    // to sit. Identical layouts then reported different orders in the mock and
+    // in the app. Comparing the gap makes the check independent of the offset
+    // (Gitea #538).
     const seq = (src) =>
       entries
         .filter((e) => src[e.id]?.found && mockBase[e.id]?.found && appBase[e.id]?.found)
         .map((e) => ({ id: e.id, b: src[e.id].box }))
-        .sort((x, y) => Math.round(x.b.ry / 8) - Math.round(y.b.ry / 8) || x.b.rx - y.b.rx)
+        .sort((x, y) =>
+          Math.abs(x.b.ry - y.b.ry) <= 8 ? x.b.rx - y.b.rx : x.b.ry - y.b.ry,
+        )
         .map((x) => x.id);
     const mSeq = seq(mockBase);
     const aSeq = seq(appBase);
     const at = mSeq.findIndex((id, i) => aSeq[i] !== id);
-    if (at !== -1 && !allow.has("reading order")) {
+    // `allowed(…)` rather than `allow.has("reading order")`, so the entry can
+    // be written as an object and carry its reason like every other one (a
+    // bare `"reading order"` string still works).
+    if (at !== -1 && !allowed("reading order", "reading order")) {
       push({
         element: "(frame)",
         family: "layout",

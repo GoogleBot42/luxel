@@ -7,7 +7,8 @@
  * lands in the single bundled stylesheet (cssCodeSplit is off — Gitea #92).
  *
  * Every number below is quotable from `docs/design/webui-v2/mockups.html`
- * (frames S3, S3b, S3e–S3k) — that file is the visual spec (Gitea #538). */
+ * (frames S3, S3b, S3e–S3k) — that file is the visual spec (Gitea #538), and
+ * `web/tools/mockdiff.mjs` is what holds this file to it. */
 
 .settings {
   max-width: 760px;
@@ -23,26 +24,50 @@
   color: var(--text);
 }
 
-/* A form row: a fixed label column, then the controls. `.field` keeps the
-   name it has had since v1 — the mockup calls it `.srow` — and stays FLEX
-   rather than the mockup's two-column grid, because a row here holds several
-   controls that must sit side by side rather than stack. The label column is
-   the mockup's 132px either way. */
+/* A form row (the mockup's `.srow`): a fixed 132px label column, then ONE
+   cell holding the controls. It is a GRID, not a flex line — that is what
+   keeps every label in the page on the same left edge no matter how many
+   controls its row carries. `.field` keeps the name it has had since v1. */
 .settings .field {
+  display: grid;
+  grid-template-columns: 132px 1fr;
+  gap: 14px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.settings .field:last-child {
+  margin-bottom: 0;
+}
+
+/* a row whose controls are tall (a slider + its hint) hangs its label at the
+   top rather than centring it against the whole stack (mockup S3) */
+.settings .field.top {
+  align-items: start;
+}
+
+.settings .flabel {
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+/* The row's second grid cell. Bare, it is a plain block — which is what keeps
+   a lone `<input>` INLINE-BLOCK, as the mockup draws it. `.row` is the
+   mockup's `<div style="display:flex;align-items:center;gap:8px">`. */
+.settings .fctl {
+  min-width: 0;
+}
+
+.settings .fctl.row {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
 }
 
-.settings .flabel {
-  width: 132px;
-  flex: none;
-  /* 8px gap + 6px = the mockup's 14px between the label column and the first
-     control, without widening the gaps inside the control group */
-  margin-right: 6px;
-  color: var(--text-dim);
-  font-size: 13px;
+/* the mockup uses a 10px gap wherever a control is followed by prose */
+.settings .fctl.g10 {
+  gap: 10px;
 }
 
 .settings .grow {
@@ -60,44 +85,152 @@
   margin: 0;
 }
 
-/* a hint that belongs to the row above it lines up under the controls */
-.settings .form > .hint.under {
-  margin-left: 140px;
-}
-
-.settings .num {
-  width: 72px;
-  font-family: var(--mono);
-  font-size: 12.5px;
+/* a hint that belongs to the controls above it sits INSIDE the row's cell,
+   8px under them (mockup S3's brightness row) */
+.settings .hint.under {
+  margin-top: 8px;
 }
 
 .settings .link {
+  margin-left: auto;
   background: transparent;
   border: none;
+  border-bottom: 1px dotted var(--border);
+  border-radius: 0;
   padding: 0;
-  color: var(--accent);
+  color: var(--text-dim);
   cursor: pointer;
-  text-decoration: underline;
-  font: inherit;
+  text-decoration: none;
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.settings .link:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+/* ---- native controls, drawn as the mockup's `.inp` / `.sel` ----
+ *
+ * The mockups fake a dropdown with a `<div class="sel">`; the app uses a real
+ * `<select>`, which is the accessible control and the one a phone knows how to
+ * open. The LOOK is the mockup's, to the pixel. */
+.settings select {
+  /* `appearance:none` is what lets a select take the mockup's type metrics at
+     all — Chrome pins a native select's line-height to `normal` and ignores
+     the `font` shorthand's. The chevron the native control drew comes back as
+     background art, in the mockup's `.sel i` colour and size. */
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  height: 32px;
+  padding: 0 9px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background-color: var(--bg-inset);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='7' viewBox='0 0 10 7'%3E%3Cpath d='M1 1.5L5 5.5L9 1.5' fill='none' stroke='%238a90a0' stroke-width='1.4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  color: var(--text);
+  font: 13px/1 var(--sans);
+  white-space: nowrap;
+}
+
+.settings select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* the widths the mockups set inline on each picker */
+.settings .w64 {
+  width: 64px;
+}
+.settings .w68 {
+  width: 68px;
+}
+.settings .w96 {
+  width: 96px;
+}
+.settings .w114 {
+  width: 114px;
+}
+.settings .w126 {
+  width: 126px;
+}
+.settings .w150 {
+  width: 150px;
+}
+.settings .w170 {
+  width: 170px;
+}
+
+/* a checkbox drawn as the mockup's 12px `.cbx` box — the real input stays in
+   the label (it is what a screen reader and the keyboard use), sized away so
+   the box beside it is what anyone sees */
+.settings .ckrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.settings .ckrow.sm {
+  font-size: 11.5px;
+}
+
+.settings .cbxin {
+  position: absolute;
+  width: 0;
+  height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+}
+
+.settings .cbx {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  border: 1px solid #4d545f;
+  background: transparent;
+  flex: none;
+}
+
+.settings .cbx.on {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #16110a;
+  font-size: 9px;
+  line-height: 1;
+}
+
+.settings .cbxin:focus-visible + .cbx {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 /* device output palette editor (Output card) */
 .settings .palette-edit {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  flex: 1;
-  min-width: 240px;
+  gap: 8px;
+  min-width: 0;
 }
 
+/* the mockup's `.gradbar` — the ramp itself, nothing written on it */
 .settings .palette-preview {
-  height: 26px;
+  height: 22px;
   border-radius: 4px;
   border: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
 }
 
 .settings .palette-stop {
@@ -116,7 +249,7 @@
   cursor: pointer;
 }
 
-.settings .palette-stop .num {
+.settings .palette-stop .inp.num {
   width: 64px;
 }
 
@@ -133,12 +266,8 @@
   margin: 0 0 28px;
 }
 
-.settings .titlerow h1 {
-  flex: none;
-}
-
 .settings .tiny {
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .settings .sect {
@@ -154,12 +283,6 @@
 
 .settings .secthead {
   margin-bottom: 14px;
-}
-
-/* `.slabel` itself is the global primitive (app.css); the settings page only
-   adds that its section labels never wrap. */
-.settings .slabel {
-  white-space: nowrap;
 }
 
 .settings .rule {
@@ -181,16 +304,49 @@
   border-radius: 8px;
   padding: 16px;
   background: var(--bg-panel);
+}
+
+/* the one-line form (WiFi) — a status and a button, with any expanded rows
+   wrapping onto their own full-width lines under it */
+.settings .form.row {
   display: flex;
-  flex-direction: column;
-  gap: 12px;
+  align-items: center;
+  gap: 14px;
+}
+
+/* …and only wraps once it HAS expanded rows to wrap onto their own lines */
+.settings .form.row:has(.field) {
+  flex-wrap: wrap;
+}
+
+.settings .form.row > .field,
+.settings .form.row > p {
+  flex: 1 0 100%;
+}
+
+/* a picture of the fixture, under the form's fields (mockups S3j/S3k) */
+.settings .arrbox {
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-inset);
+}
+
+/* the dim lines that close a form (mockups S3/S3j/S3k `.notes`) */
+.settings .notes {
+  margin-top: 14px;
+}
+
+.settings .notes > div {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-dim);
 }
 
 /* the Advanced list: a row is its own title + one-line status; the body
  * mounts only while it is open */
 .settings .disclist {
-  display: flex;
-  flex-direction: column;
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
@@ -223,38 +379,24 @@
 }
 
 .settings .drow.open .dhead {
-  border-bottom: none;
   background: rgba(255, 255, 255, 0.02);
 }
 
-.settings .chev {
-  font-style: normal;
-  color: var(--text-dim);
-  font-size: 10px;
-  width: 10px;
-  flex: none;
-}
+/* `.chev` itself is the global primitive (app.css) */
 
 .settings .dtitle {
   flex: none;
 }
 
 .settings .st2 {
-  flex: 1;
-  min-width: 0;
-  text-align: right;
+  margin-left: auto;
+  flex: 0 1 auto;
   font: 11.5px/1 var(--mono);
   color: var(--text-dim);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .settings .dbody {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 14px 14px 16px;
+  padding: 4px 14px 16px;
   background: rgba(0, 0, 0, 0.18);
 }
 
@@ -265,17 +407,18 @@
     padding: 18px 12px 32px;
   }
 
-  .settings .flabel {
-    width: 100%;
-    margin-right: 0;
-  }
-
-  .settings .form > .hint.under {
-    margin-left: 0;
-  }
-
   .settings .field {
+    grid-template-columns: minmax(0, 1fr);
     gap: 6px;
+  }
+
+  .settings .fctl.row {
+    gap: 6px;
+  }
+
+  /* a link is a touch target here, not a line of small print */
+  .settings .link {
+    min-height: 24px;
   }
 
   .settings .dhead {
@@ -284,6 +427,7 @@
 
   .settings .st2 {
     flex: 1 0 100%;
+    margin-left: 0;
     text-align: left;
     padding-left: 20px;
   }

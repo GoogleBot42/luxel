@@ -115,6 +115,25 @@
     ),
   });
 
+  /** The note at the right end of the LED layout header. It is there to say
+   *  WHICH fixture the section is about when there is more than one wire to
+   *  keep straight (mockups S3j/S3k); a single-output board's summary line
+   *  inside the form already says it, and S3 draws no note at all. */
+  $: layoutNote =
+    ($deviceCaps?.outputs ?? 1) > 1
+      ? [$deviceLabel, `${$deviceLayoutWire?.outputs?.length ?? 1} outputs`]
+          .filter(Boolean)
+          .join(" · ")
+      : "";
+
+  /** The fixture the Projection section is about (mockups S3e–S3g). A
+   *  lattice also states its pixel count, which its `8×8×8` alone does not
+   *  give you at a glance. */
+  $: projectionNote =
+    $geomLayout.dims === 3
+      ? `${layoutLabel($geomLayout)} · ${$geomLayout.pixels} px`
+      : layoutLabel($geomLayout);
+
   const kb = (n: number): string => `${(n / 1024).toFixed(0)} KB`;
 
   /** Every disclosure row carries a one-line status, so a collapsed page
@@ -177,7 +196,7 @@
       <DeviceCard />
     </Section>
 
-    <Section title="LED layout" role="sect-layout">
+    <Section title="LED layout" role="sect-layout" note={layoutNote}>
       <LayoutCard
         on:pixelchange={() => dispatch("pixelchange")}
         on:openmap={() => dispatch("openmap")}
@@ -190,7 +209,7 @@
          It is ABSENT where the Layout offers no choice — a strip shows only
          1D patterns since #538 — with no explanatory copy. -->
     {#if vis.projection}
-      <Section title="Projection" role="sect-projection" note={layoutLabel($geomLayout)}>
+      <Section title="Projection" role="sect-projection" note={projectionNote}>
         <ProjectionBlock
           luxel={$luxel ?? null}
           layout={$geomLayout}
@@ -201,7 +220,7 @@
       </Section>
     {/if}
 
-    <Section title="WiFi" role="sect-wifi">
+    <Section title="WiFi" role="sect-wifi" row>
       <WifiCard />
     </Section>
 

@@ -114,34 +114,38 @@
 
 <div class="field">
   <span class="flabel">Device time</span>
-  <span class="mono dtime" data-role="clock-status">
-    {#if $clockStatus?.synced}
-      {deviceTime($clockStatus.local, $clockStatus.tzMinutes, zone)}
-    {:else}
-      not NTP-synced yet
-    {/if}
-  </span>
-  <button class="btn sm" data-role="clock-sync" on:click={() => void syncNow()}>Sync now</button>
-  {#if $notes.clock}<span class="dim hint" data-role="clock-note">{$notes.clock}</span>{/if}
+  <div class="fctl row g10">
+    <span class="mono dtime" data-role="clock-status">
+      {#if $clockStatus?.synced}
+        {deviceTime($clockStatus.local, $clockStatus.tzMinutes, zone)}
+      {:else}
+        not NTP-synced yet
+      {/if}
+    </span>
+    <button class="btn sm" data-role="clock-sync" on:click={() => void syncNow()}>Sync now</button>
+    {#if $notes.clock}<span class="dim hint" data-role="clock-note">{$notes.clock}</span>{/if}
+  </div>
 </div>
 
 <div class="field">
   <span class="flabel">Time zone</span>
-  <select class="zonesel" data-role="clock-tz" value={zone} on:change={onZoneChange}>
-    {#if zone === ""}
-      <!-- the device's stored offset matches no zone we can name; saying so
-           is honest, and picking any zone below replaces it -->
-      <option value="">{offset} (no zone set)</option>
-    {/if}
-    {#each REGIONS as g (g.region)}
-      <optgroup label={g.region}>
-        {#each g.zones as z (z)}<option value={z}>{zoneLabel(z)}</option>{/each}
-      </optgroup>
-    {/each}
-  </select>
-  <span class="dim hint" data-role="clock-offset">
-    {offset} · {$clockStatus?.synced ? "synced" : "not synced"} — drives clockHour()
-  </span>
+  <div class="fctl row g10">
+    <select class="zonesel" data-role="clock-tz" value={zone} on:change={onZoneChange}>
+      {#if zone === ""}
+        <!-- the device's stored offset matches no zone we can name; saying so
+             is honest, and picking any zone below replaces it -->
+        <option value="">{offset} (no zone set)</option>
+      {/if}
+      {#each REGIONS as g (g.region)}
+        <optgroup label={g.region}>
+          {#each g.zones as z (z)}<option value={z}>{zoneLabel(z)}</option>{/each}
+        </optgroup>
+      {/each}
+    </select>
+    <span class="dim hint" data-role="clock-offset">
+      {offset} · {$clockStatus?.synced ? "synced" : "not synced"} — drives clockHour()
+    </span>
+  </div>
 </div>
 
 <style>
@@ -150,6 +154,7 @@
   }
 
   .zonesel {
-    max-width: 260px;
+    width: 260px;
+    max-width: 100%;
   }
 </style>

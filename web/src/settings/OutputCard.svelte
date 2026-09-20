@@ -129,99 +129,111 @@
 </script>
 
 {#if out}
+  <!-- Every row is the mockup's `.srow`: the field, then what the number DOES
+       in the mockup's own words (S3/S3i). -->
   <div class="field">
     <span class="flabel">Gamma</span>
-    <input
-      class="num"
-      data-role="out-gamma"
-      type="number"
-      min="0"
-      max="5"
-      step="0.1"
-      value={out.gamma / 10}
-      on:change={(e) => {
-        if (out) out.gamma = Math.round(Number(e.currentTarget.value) * 10);
-        onOutputChange();
-      }}
-    />
-    <span class="dim">0 = off; 2.2 gives smoother dark fades on the strip</span>
+    <div class="fctl row g10">
+      <input
+        class="inp num"
+        data-role="out-gamma"
+        type="number"
+        min="0"
+        max="5"
+        step="0.1"
+        value={out.gamma / 10}
+        on:change={(e) => {
+          if (out) out.gamma = Math.round(Number(e.currentTarget.value) * 10);
+          onOutputChange();
+        }}
+      />
+      <span class="dim hint">0 = off; 2.2 gives smoother dark fades</span>
+    </div>
+  </div>
+  <div class="field">
+    <span class="flabel">Brightness curve</span>
+    <div class="fctl row g10">
+      <input
+        class="inp num"
+        data-role="out-brightcurve"
+        type="number"
+        min="0"
+        max="5"
+        step="0.1"
+        value={out.brightCurve / 10}
+        on:change={(e) => {
+          if (out) out.brightCurve = Math.round(Number(e.currentTarget.value) * 10);
+          onOutputChange();
+        }}
+      />
+      <span class="dim hint">makes the dimmer end feel linear</span>
+    </div>
   </div>
   {#if showPowerCap}
     <div class="field">
       <span class="flabel">Power cap</span>
-      <input
-        class="num"
-        data-role="out-cap"
-        type="number"
-        min="0"
-        max="20000"
-        step="100"
-        bind:value={out.capMa}
-        on:change={onOutputChange}
-      />
-      <span class="dim">mA — frames estimated above this get scaled down; 0 = off</span>
+      <div class="fctl row g10">
+        <input
+          class="inp num"
+          data-role="out-cap"
+          type="number"
+          min="0"
+          max="20000"
+          step="100"
+          bind:value={out.capMa}
+          on:change={onOutputChange}
+        />
+        <span class="dim hint">mA — frames estimated above this get scaled down; 0 = off</span>
+      </div>
     </div>
   {/if}
-  <div class="field">
-    <span class="flabel">Brightness curve</span>
-    <input
-      class="num"
-      data-role="out-brightcurve"
-      type="number"
-      min="0"
-      max="5"
-      step="0.1"
-      value={out.brightCurve / 10}
-      on:change={(e) => {
-        if (out) out.brightCurve = Math.round(Number(e.currentTarget.value) * 10);
-        onOutputChange();
-      }}
-    />
-    <span class="dim">0 = off; 2.2 makes the dimmer feel linear</span>
-  </div>
   {#if showBlurGlow}
     <div class="field">
       <span class="flabel">Blur</span>
-      <input
-        class="num"
-        data-role="out-blur"
-        type="number"
-        min="0"
-        max="100"
-        step="5"
-        bind:value={out.blur}
-        on:change={onOutputChange}
-      />
-      <span class="dim">
-        % — softens the frame {scope === "grid" ? "across the grid" : "along the strip"}
-      </span>
+      <div class="fctl row g10">
+        <input
+          class="inp num"
+          data-role="out-blur"
+          type="number"
+          min="0"
+          max="100"
+          step="5"
+          bind:value={out.blur}
+          on:change={onOutputChange}
+        />
+        <span class="dim hint">
+          % — softens {scope === "grid" ? "across the panel" : "along the strip"}
+        </span>
+      </div>
     </div>
     <div class="field">
       <span class="flabel">Glow</span>
-      <input
-        class="num"
-        data-role="out-glow"
-        type="number"
-        min="0"
-        max="100"
-        step="5"
-        bind:value={out.glow}
-        on:change={onOutputChange}
-      />
-      <span class="dim">% — bright pixels bleed into their neighbours</span>
+      <div class="fctl row g10">
+        <input
+          class="inp num"
+          data-role="out-glow"
+          type="number"
+          min="0"
+          max="100"
+          step="5"
+          bind:value={out.glow}
+          on:change={onOutputChange}
+        />
+        <span class="dim hint">% — bright pixels bleed into their neighbours</span>
+      </div>
     </div>
   {/if}
   {#if $paletteSupported}
-    <div class="field">
+    <div class="field top">
       <span class="flabel">Palette</span>
       <div class="palette-edit">
+        <!-- the mockup's `.gradbar`: the ramp itself, with nothing written on
+             it — what it holds is said in the line under the controls -->
         <div
           class="palette-preview"
           data-role="out-palette-preview"
           style="background: {paletteCss(stops)}"
-        >
-          {#if stops.length === 0}<span class="dim">no device palette</span>{/if}
-        </div>
+        ></div>
         {#each stops as stop, i (i)}
           <div class="palette-stop">
             <input
@@ -231,7 +243,7 @@
               on:change={onPaletteChange}
             />
             <input
-              class="num"
+              class="inp num"
               type="number"
               data-role="out-palette-pos"
               min="0"
@@ -267,7 +279,7 @@
           <label class="dim">
             amount
             <input
-              class="num"
+              class="inp num"
               type="number"
               data-role="out-palette-amount"
               min="0"
@@ -285,14 +297,15 @@
           </span>
         {/if}
         {#if $notes.palette}
-          <span class="dim" data-role="out-palette-note">{$notes.palette}</span>
+          <span class="dim hint" data-role="out-palette-note">{$notes.palette}</span>
         {/if}
+        <span class="dim hint" data-role="out-palette-summary">
+          {stops.length === 0
+            ? "no device palette"
+            : `${stops.length} stop${stops.length === 1 ? "" : "s"}`} · applied on top of the
+          pattern's own palette
+        </span>
       </div>
-      <span class="dim">
-        recolors every frame by brightness through these stops — persisted on the device
-        and stacked on top of whatever the pattern's own setOutputPalette did (max 32
-        stops)
-      </span>
     </div>
   {/if}
 {:else}

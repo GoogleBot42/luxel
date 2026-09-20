@@ -64,7 +64,7 @@
     refreshOutput,
   } from "../stores/device";
   import { confirm } from "../stores/dialog";
-  import { layout as geomLayout, layoutLabel } from "../stores/geometry";
+  import { layout as geomLayout, layoutLabel, type Layout } from "../stores/geometry";
   import { note, notes } from "../stores/notify";
   import { luxel } from "../stores/pattern";
   import ArrangementSvg from "./ArrangementSvg.svelte";
@@ -93,6 +93,14 @@
     matrix: "Matrix",
     lattice: "3D",
     map: "Custom map",
+  };
+  /** The same four, as the hint beside the picker spells them (mockup S3b:
+   *  `Strip · Matrix · 3D · custom map` — a sentence, not four proper nouns). */
+  const KIND_HINT: Record<LayoutKind, string> = {
+    strip: "Strip",
+    matrix: "Matrix",
+    lattice: "3D",
+    map: "custom map",
   };
 
   /** The biggest side a lattice can have and still install in one POST. */
@@ -365,20 +373,38 @@
    * NAMES, so `{summaryHint()}` names only the function and would never run
    * again (.claude/rules/web.md — the mirror image of the `$:` trap).
    */
-  function summaryHint(px: number, tiles: number, isPanel: boolean, proto: string, pin: number): string {
+  function summaryHint(
+    px: number,
+    tiles: number,
+    isPanel: boolean,
+    proto: string,
+    pin: number,
+    wires: number,
+  ): string {
     const parts: string[] = [];
     if (kind === "matrix" && tiles > 1) parts.push(`${tiles} panels`);
-    parts.push(`${px} pixel${px === 1 ? "" : "s"}`);
+    // With more than one wire the interesting fact is how many (mockups
+    // S3j/S3k) — the pixel count is already the headline above.
+    if (wires > 1) parts.push(`${wires} outputs`);
+    else parts.push(`${px} pixel${px === 1 ? "" : "s"}`);
     if (isPanel) parts.push("HUB75");
     else if (proto) parts.push(proto.toUpperCase());
-    if (!isPanel && $dataPins.length) parts.push(`GPIO ${pin}`);
+    if (!isPanel && wires <= 1 && $dataPins.length) parts.push(`GPIO ${pin}`);
     return parts.join(" · ");
+  }
+
+  /** The big line above the form. The mockups space a matrix's dimensions —
+   *  `64 × 64 matrix` — where the header chip's compact `64×64 matrix` does
+   *  not, so the spacing lives HERE rather than in `layoutLabel`, which every
+   *  other surface shares (mockups S3, S3k). */
+  function headline(l: Layout): string {
+    return l.dims === 2 && l.regular ? `${l.w} × ${l.h} matrix` : layoutLabel(l);
   }
 </script>
 
 <div class="summary" data-role="layout-summary">
   <div>
-    <div class="big" data-role="layout-headline">{layoutLabel($geomLayout)}</div>
+    <div class="big" data-role="layout-headline">{headline($geomLayout)}</div>
     <div class="dim hint" data-role="layout-subhead">
       {summaryHint(
         $devicePixels || wire?.pixels || 0,
@@ -386,6 +412,7 @@
         $deviceCaps?.panel ?? false,
         $deviceProtocol,
         $dataPin,
+        outputs.length,
       )}
     </div>
   </div>
@@ -395,223 +422,231 @@
 {#if vis.kindPicker}
   <div class="field">
     <span class="flabel">Layout</span>
-    <select data-role="layout-kind" value={kind} on:change={setKind}>
-      {#each vis.kindOptions as k}
-        <option value={k}>{KIND_LABEL[k]}</option>
-      {/each}
-    </select>
-    <span class="dim hint">{vis.kindOptions.map((k) => KIND_LABEL[k]).join(" · ")}</span>
+    <div class="fctl row g10">
+      <select class="w150" data-role="layout-kind" value={kind} on:change={setKind}>
+        {#each vis.kindOptions as k}
+          <option value={k}>{KIND_LABEL[k]}</option>
+        {/each}
+      </select>
+      <span class="dim hint">{vis.kindOptions.map((k) => KIND_HINT[k]).join(" · ")}</span>
+    </div>
   </div>
 {/if}
 
 {#if vis.latticeFields}
   <!-- A 3D lattice: `w × h × d` cells wired as one run, installed as the
        device's coordinate map (#538 — "I cannot try 3D at all"). -->
-  <div class="field">
+  <div class="field top">
     <span class="flabel">Lattice</span>
-    <input
-      class="num"
-      data-role="layout-lat-w"
-      type="number"
-      min="2"
-      max={LAT_MAX}
-      value={lat.w}
-      on:change={(e) => (lat = { ...lat, w: Number(e.currentTarget.value) || 1 })}
-    />
-    <span class="dim">×</span>
-    <input
-      class="num"
-      data-role="layout-lat-h"
-      type="number"
-      min="2"
-      max={LAT_MAX}
-      value={lat.h}
-      on:change={(e) => (lat = { ...lat, h: Number(e.currentTarget.value) || 1 })}
-    />
-    <span class="dim">×</span>
-    <input
-      class="num"
-      data-role="layout-lat-d"
-      type="number"
-      min="2"
-      max={LAT_MAX}
-      value={lat.d}
-      on:change={(e) => (lat = { ...lat, d: Number(e.currentTarget.value) || 1 })}
-    />
-    <span class="dim hint" data-role="layout-lat-count">{latPixels} pixels</span>
-    {#if $luxel}
-      <span class="latthumb">
-        <PatternThumb luxel={$luxel} source={SAMPLE} previewRig={latPreview} size="summary" />
-      </span>
-    {/if}
-    <!-- absent, never disabled (§5.7) — except a lattice the device cannot
-         take, which is a BUDGET the user has to learn, so it says why -->
-    {#if latOverBody || latOverMax}
-      <button
-        class="btn sm"
-        data-role="layout-lat-install"
-        disabled
-        data-reason={latOverMax
-          ? `over this board's ${$pixelMax}-pixel ceiling`
-          : `more coordinates than one request can carry — up to ${LAT_MAX}×${LAT_MAX}×${LAT_MAX}`}
-      >
-        Install
-      </button>
-    {:else if !latSame}
-      <button class="btn sm primary" data-role="layout-lat-install" on:click={installLatticeNow}>
-        Install
-      </button>
-    {/if}
+    <div class="fctl">
+      <div class="row">
+      <input
+        class="inp num"
+        data-role="layout-lat-w"
+        type="number"
+        min="2"
+        max={LAT_MAX}
+        value={lat.w}
+        on:change={(e) => (lat = { ...lat, w: Number(e.currentTarget.value) || 1 })}
+      />
+      <span class="dim tiny">×</span>
+      <input
+        class="inp num"
+        data-role="layout-lat-h"
+        type="number"
+        min="2"
+        max={LAT_MAX}
+        value={lat.h}
+        on:change={(e) => (lat = { ...lat, h: Number(e.currentTarget.value) || 1 })}
+      />
+      <span class="dim tiny">×</span>
+      <input
+        class="inp num"
+        data-role="layout-lat-d"
+        type="number"
+        min="2"
+        max={LAT_MAX}
+        value={lat.d}
+        on:change={(e) => (lat = { ...lat, d: Number(e.currentTarget.value) || 1 })}
+      />
+      <span class="dim hint" data-role="layout-lat-count">{latPixels} pixels</span>
+      {#if $luxel}
+        <span class="latthumb">
+          <PatternThumb luxel={$luxel} source={SAMPLE} previewRig={latPreview} size="summary" />
+        </span>
+      {/if}
+      <!-- absent, never disabled (§5.7) — except a lattice the device cannot
+           take, which is a BUDGET the user has to learn, so it says why -->
+      {#if latOverBody || latOverMax}
+        <button
+          class="btn sm"
+          data-role="layout-lat-install"
+          disabled
+          data-reason={latOverMax
+            ? `over this board's ${$pixelMax}-pixel ceiling`
+            : `more coordinates than one request can carry — up to ${LAT_MAX}×${LAT_MAX}×${LAT_MAX}`}
+        >
+          Install
+        </button>
+      {:else if !latSame}
+        <button class="btn sm primary" data-role="layout-lat-install" on:click={installLatticeNow}>
+          Install
+        </button>
+      {/if}
+      </div>
+      <p class="dim hint under" data-role="layout-lat-note">
+        {#if latOverMax}
+          {latPixels} pixels is over this board's {$pixelMax}-pixel ceiling.
+        {:else if latOverBody}
+          A lattice goes to the device as one coordinate per pixel in a single request, so it stops
+          at {LAT_MAX}×{LAT_MAX}×{LAT_MAX} ({LAT_MAX ** 3} pixels) — Gitea #548 is the procedural
+          form that would lift it.
+        {:else}
+          One run of {latPixels} pixels, wired x first, then y, then z. Installed as the device's
+          coordinate map, so 3D patterns render natively and 1D/2D ones get the projections below.
+        {/if}
+      </p>
+    </div>
   </div>
-  <p class="dim hint under" data-role="layout-lat-note">
-    {#if latOverMax}
-      {latPixels} pixels is over this board's {$pixelMax}-pixel ceiling.
-    {:else if latOverBody}
-      A lattice goes to the device as one coordinate per pixel in a single request, so it stops at
-      {LAT_MAX}×{LAT_MAX}×{LAT_MAX} ({LAT_MAX ** 3} pixels) — Gitea #548 is the procedural form
-      that would lift it.
-    {:else}
-      One run of {latPixels} pixels, wired x first, then y, then z. Installed as the device's
-      coordinate map, so 3D patterns render natively and 1D/2D ones get the projections below.
-    {/if}
-  </p>
 {/if}
 
+<!-- mockup S3b: the Pixels cell is the field ALONE (an inline-block input),
+     with what it costs said underneath rather than beside it -->
 {#if kind === "strip"}
-  <div class="field">
+  <div class="field top">
     <span class="flabel">Pixels</span>
-    <input
-      class="num"
-      data-role="layout-pixels"
-      type="number"
-      min="1"
-      max={$pixelMax}
-      value={$devicePixels}
-      on:change={setPixels}
-    />
-    <span class="dim hint">resized live — max {$pixelMax}, no reboot</span>
+    <div class="fctl">
+      <input
+        class="inp num"
+        data-role="layout-pixels"
+        type="number"
+        min="1"
+        max={$pixelMax}
+        value={$devicePixels}
+        on:change={setPixels}
+      />
+      <p class="dim hint under">resized live — max {$pixelMax}, no reboot</p>
+    </div>
   </div>
 {/if}
 
 {#if kind === "matrix"}
   <div class="field">
     <span class="flabel">{vis.panelScan ? "Panel" : "Size"}</span>
-    <input
-      class="num"
-      data-role="layout-pw"
-      type="number"
-      min="1"
-      max="256"
-      value={m.pw}
-      on:change={(e) => setMatrix({ pw: Number(e.currentTarget.value) || 1 })}
-    />
-    <span class="dim">×</span>
-    <input
-      class="num"
-      data-role="layout-ph"
-      type="number"
-      min="1"
-      max="256"
-      value={m.ph}
-      on:change={(e) => setMatrix({ ph: Number(e.currentTarget.value) || 1 })}
-    />
-    <span class="dim">px</span>
-    {#if vis.panelScan}
-      <span class="dim">scan</span>
-      <select
-        data-role="layout-scan"
-        value={String(m.scan)}
-        on:change={(e) => setMatrix({ scan: Number(e.currentTarget.value) })}
-      >
-        {#each SCANS as s}
-          <option value={String(s)}>{s === 0 ? "board default" : `1/${s}`}</option>
-        {/each}
-      </select>
-    {/if}
+    <div class="fctl row">
+      <input
+        class="inp num"
+        data-role="layout-pw"
+        type="number"
+        min="1"
+        max="256"
+        value={m.pw}
+        on:change={(e) => setMatrix({ pw: Number(e.currentTarget.value) || 1 })}
+      />
+      <span class="dim tiny">×</span>
+      <input
+        class="inp num"
+        data-role="layout-ph"
+        type="number"
+        min="1"
+        max="256"
+        value={m.ph}
+        on:change={(e) => setMatrix({ ph: Number(e.currentTarget.value) || 1 })}
+      />
+      <span class="dim hint">px</span>
+    </div>
   </div>
+
+  <!-- mockup S3: the scan divisor is its OWN row, and its cell holds nothing
+       but the picker — it is a different question from the panel's size -->
+  {#if vis.panelScan}
+    <div class="field">
+      <span class="flabel">Panel scan</span>
+      <div class="fctl">
+        <select
+          class="w170"
+          data-role="layout-scan"
+          value={String(m.scan)}
+          on:change={(e) => setMatrix({ scan: Number(e.currentTarget.value) })}
+        >
+          {#each SCANS as s}
+            <option value={String(s)}>{s === 0 ? "board default" : `1/${s}`}</option>
+          {/each}
+        </select>
+      </div>
+    </div>
+  {/if}
 
   {#if vis.panelCounts}
     <div class="field">
       <span class="flabel">Panels</span>
-      <input
-        class="num"
-        data-role="layout-cols"
-        type="number"
-        min="1"
-        max="16"
-        value={m.cols}
-        on:change={(e) => setMatrix({ cols: Number(e.currentTarget.value) || 1 })}
-      />
-      <span class="dim">across ×</span>
-      <input
-        class="num"
-        data-role="layout-rows"
-        type="number"
-        min="1"
-        max="16"
-        value={m.rows}
-        on:change={(e) => setMatrix({ rows: Number(e.currentTarget.value) || 1 })}
-      />
-      <span class="dim">down</span>
+      <div class="fctl row">
+        <input
+          class="inp num"
+          data-role="layout-cols"
+          type="number"
+          min="1"
+          max="16"
+          value={m.cols}
+          on:change={(e) => setMatrix({ cols: Number(e.currentTarget.value) || 1 })}
+        />
+        <span class="dim tiny">across ×</span>
+        <input
+          class="inp num"
+          data-role="layout-rows"
+          type="number"
+          min="1"
+          max="16"
+          value={m.rows}
+          on:change={(e) => setMatrix({ rows: Number(e.currentTarget.value) || 1 })}
+        />
+        <span class="dim tiny">down</span>
+      </div>
     </div>
   {/if}
 
   {#if vis.wiringRow}
     <div class="field">
       <span class="flabel">{vis.wiringIsPixels ? "Pixel wiring" : "Chain"}</span>
-      <span class="dim">starts</span>
-      <select
-        data-role="layout-start"
-        value={m.start}
-        on:change={setStart}
-      >
-        {#each CORNERS as c}<option value={c.v}>{c.label}</option>{/each}
-      </select>
-      <span class="dim">runs</span>
-      <select
-        data-role="layout-dir"
-        value={m.dir}
-        on:change={setDir}
-      >
-        {#each DIRS as d}<option value={d.v}>{d.label}</option>{/each}
-      </select>
-      <label class="ckrow">
-        <input
-          type="checkbox"
-          data-role="layout-snake"
-          checked={m.snake === 1}
-          on:change={(e) => setMatrix({ snake: e.currentTarget.checked ? 1 : 0 })}
-        />
-        serpentine (snake)
-      </label>
-      {#if vis.rot180}
+      <div class="fctl row g10">
+        <span class="dim tiny">starts</span>
+        <select class="w126" data-role="layout-start" value={m.start} on:change={setStart}>
+          {#each CORNERS as c}<option value={c.v}>{c.label}</option>{/each}
+        </select>
+        <span class="dim tiny">runs</span>
+        <select class="w114" data-role="layout-dir" value={m.dir} on:change={setDir}>
+          {#each DIRS as d}<option value={d.v}>{d.label}</option>{/each}
+        </select>
         <label class="ckrow">
           <input
+            class="cbxin"
             type="checkbox"
-            data-role="layout-rot180"
-            checked={m.rot180 === 1}
-            on:change={(e) => setMatrix({ rot180: e.currentTarget.checked ? 1 : 0 })}
+            data-role="layout-snake-input"
+            checked={m.snake === 1}
+            on:change={(e) => setMatrix({ snake: e.currentTarget.checked ? 1 : 0 })}
           />
-          rotate alternate rows 180°
+          <span class="cbx" class:on={m.snake === 1} data-role="layout-snake"
+            >{m.snake === 1 ? "✓" : ""}</span
+          >
+          serpentine
         </label>
-      {/if}
+        {#if vis.rot180}
+          <label class="ckrow">
+            <input
+              class="cbxin"
+              type="checkbox"
+              data-role="layout-rot180-input"
+              checked={m.rot180 === 1}
+              on:change={(e) => setMatrix({ rot180: e.currentTarget.checked ? 1 : 0 })}
+            />
+            <span class="cbx" class:on={m.rot180 === 1} data-role="layout-rot180"
+              >{m.rot180 === 1 ? "✓" : ""}</span
+            >
+            rotate alternate rows 180°
+          </label>
+        {/if}
+      </div>
     </div>
-  {/if}
-
-  {#if showArrangement}
-    <ArrangementSvg
-      mode={arrangementMode}
-      pw={m.pw}
-      ph={m.ph}
-      cols={m.cols}
-      rows={m.rows}
-      start={m.start}
-      dir={m.dir}
-      snake={m.snake === 1}
-      rot180={m.rot180 === 1}
-      outputCounts={vis.outputsTable ? outputs.map((o) => o.count) : []}
-      drive={driven}
-    />
   {/if}
 
   {#if vis.estimatedRefresh}
@@ -645,69 +680,77 @@
     {/if}
   {/if}
 
-  <div class="notes dim hint" data-role="layout-notes">
-    {#if $deviceCaps?.panel}
-      <div>One chain per output on this board — its two headers are the same GPIOs wired twice.</div>
-      <div>Every panel in a chain must have the same size and scan.</div>
-    {/if}
-    <div>
-      Panel size applies live; the chain — panels across/down, start, direction, snake, rotation,
-      scan — is built once at boot.
-    </div>
-  </div>
 {/if}
 
 {#if vis.stripFields && !vis.outputsTable}
   <div class="field">
     <span class="flabel">LED type</span>
-    <select data-role="layout-proto" value={$deviceProtocol} on:change={setProtocol}>
-      {#each $protocolOptions as opt}<option value={opt}>{opt}</option>{/each}
-    </select>
-    {#if $outputStatus}
-      <span class="dim">colour order</span>
-      <select data-role="layout-order" value={$outputStatus.order} on:change={setOrder}>
-        {#each ["rgb", "rbg", "grb", "gbr", "brg", "bgr"] as c}
-          <option value={c}>{c.toUpperCase()}</option>
-        {/each}
+    <div class="fctl row">
+      <select class="w150" data-role="layout-proto" value={$deviceProtocol} on:change={setProtocol}>
+        {#each $protocolOptions as opt}<option value={opt}>{opt}</option>{/each}
       </select>
-    {/if}
-    <span class="dim hint">switched live — colours swapped? try GRB/BGR</span>
+      {#if $outputStatus}
+        <span class="dim tiny">Color order</span>
+        <select class="w96" data-role="layout-order" value={$outputStatus.order} on:change={setOrder}>
+          {#each ["rgb", "rbg", "grb", "gbr", "brg", "bgr"] as c}
+            <option value={c}>{c.toUpperCase()}</option>
+          {/each}
+        </select>
+      {/if}
+      <span class="dim hint">switched live — colours swapped? try GRB/BGR</span>
+    </div>
   </div>
 
+  <!-- Data pin, inline on a SINGLE-output board (mockup S3b). A board with
+       more than one output states its pads in the Outputs table instead, and
+       this row is absent there rather than saying the same thing twice.
+       Absent too where the host publishes no pad list (§5.7 — the native
+       mirror is one; Gitea #579). -->
   {#if $dataPins.length}
     <div class="field">
       <span class="flabel">Data pin</span>
-      <select
-        data-role="layout-datapin"
-        value={String($dataPinChoice ?? $dataPinNext ?? $dataPin)}
-        on:change={onDataPinPick}
-      >
-        {#each $dataPins as pin}
-          <option value={String(pin)}>
-            GPIO{pin}{pin === $dataPinDefault ? " (board default)" : ""}
-          </option>
-        {/each}
-      </select>
-      <!-- the button acts on a PENDING pin change; with none there is nothing
-           to apply, so it is absent rather than dimmed (§5.7, Gitea #529) -->
-      {#if $device && ($dataPinChoice !== null || $dataPinNext !== null)}
-        <button data-role="layout-datapin-apply" on:click={() => void applyDataPin()}>
-          apply &amp; reboot
-        </button>
-      {/if}
-      <span class="dim hint" data-role="layout-datapin-note">
-        {#if $notes.datapin}
-          {$notes.datapin}
-        {:else if $dataPinNext !== null}
-          stored GPIO{$dataPinNext}, driving GPIO{$dataPin} until the next reboot
-        {:else}
-          where the strip's DATA wire goes — applied on reboot
+      <div class="fctl row g10">
+        <select
+          class="w150"
+          data-role="layout-datapin"
+          value={String($dataPinChoice ?? $dataPinNext ?? $dataPin)}
+          on:change={onDataPinPick}
+        >
+          {#each $dataPins as pin}
+            <option value={String(pin)}>
+              GPIO {pin}{pin === $dataPinDefault ? " (board default)" : ""}
+            </option>
+          {/each}
+        </select>
+        <!-- the button acts on a PENDING pin change; with none there is
+             nothing to apply, so it is absent rather than dimmed (§5.7) -->
+        {#if $device && ($dataPinChoice !== null || $dataPinNext !== null)}
+          <button
+            class="btn sm"
+            data-role="layout-datapin-apply"
+            on:click={() => void applyDataPin()}
+          >
+            apply &amp; reboot
+          </button>
         {/if}
-      </span>
+        <span class="dim hint" data-role="layout-datapin-note">
+          {#if $notes.datapin}
+            {$notes.datapin}
+          {:else if $dataPinNext !== null}
+            stored GPIO{$dataPinNext}, driving GPIO{$dataPin} until the next reboot
+          {:else}
+            applies after a reboot
+          {/if}
+        </span>
+      </div>
     </div>
   {/if}
 {/if}
 
+<!-- The picture of the fixture comes AFTER the table that cuts it up and
+     BEFORE the notes that close the form (mockup S3k) — so on a board with an
+     Outputs table it is handed to the table as slot content rather than
+     rendered beside it. -->
 {#if vis.outputsTable}
   <OutputsTable
     {outputs}
@@ -717,7 +760,49 @@
     protocols={$protocolOptions}
     total={outTotal}
     on:apply={(e) => setOutputs(e.detail)}
+  >
+    {#if kind === "matrix" && showArrangement}
+      <ArrangementSvg
+        mode={arrangementMode}
+        pw={m.pw}
+        ph={m.ph}
+        cols={m.cols}
+        rows={m.rows}
+        start={m.start}
+        dir={m.dir}
+        snake={m.snake === 1}
+        rot180={m.rot180 === 1}
+        outputCounts={outputs.map((o) => o.count)}
+        drive={driven}
+      />
+    {/if}
+  </OutputsTable>
+{:else if kind === "matrix" && showArrangement}
+  <ArrangementSvg
+    mode={arrangementMode}
+    pw={m.pw}
+    ph={m.ph}
+    cols={m.cols}
+    rows={m.rows}
+    start={m.start}
+    dir={m.dir}
+    snake={m.snake === 1}
+    rot180={m.rot180 === 1}
+    drive={driven}
   />
+{/if}
+
+{#if kind === "matrix"}
+  <div class="notes" data-role="layout-notes">
+    {#if $deviceCaps?.panel}
+      <div>One chain per output on this board — its two headers are the same GPIOs wired twice.</div>
+      <div>Every panel in a chain must have the same size and scan.</div>
+    {/if}
+    <div>
+      Panel size applies live; the chain — panels across/down, start, direction, snake, rotation,
+      scan — is built once at boot.
+    </div>
+  </div>
 {/if}
 
 <div class="linkrow">
@@ -740,7 +825,7 @@
     display: flex;
     align-items: center;
     gap: 14px;
-    margin-bottom: 4px;
+    margin-bottom: 12px;
   }
 
   /* mockup S3/S3b: the headline and its sub-line sit on ONE baseline row */
@@ -753,19 +838,16 @@
     flex-wrap: wrap;
   }
 
+  /* mockup S3 `.summary canvas`: the fixture thumbnail goes to the far end */
+  .summary :global(canvas) {
+    margin-left: auto;
+  }
+
   /* mockup S3 `.summary .big` */
   .big {
     font-size: 17px;
     font-weight: 600;
     color: var(--text);
-  }
-
-  .ckrow {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 12px;
-    color: var(--text-dim);
   }
 
   .refresh {
@@ -795,17 +877,13 @@
     color: #e8a33d;
   }
 
-  .notes > div {
-    margin: 2px 0;
-  }
-
-  /* mockup S3 `.linkrow`: a hint and a link out, no rule above them */
+  /* mockup S3 `.linkrow`: a hint and a link out, no rule above them — the
+     link pushes itself to the far end with its own `margin-left:auto` */
   .linkrow {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     gap: 10px;
-    margin-top: 2px;
+    margin-top: 12px;
   }
 
   .latthumb {

@@ -27,46 +27,57 @@
 
 <div class="field">
   <span class="flabel">Status</span>
-  <span class="mono" data-role="mqtt-status">
-    {$mqttStatus?.connected ? "connected" : $mqttStatus?.enabled ? "not connected" : "disabled"}
-  </span>
+  <div class="fctl">
+    <span class="mono" data-role="mqtt-status">
+      {$mqttStatus?.connected ? "connected" : $mqttStatus?.enabled ? "not connected" : "disabled"}
+    </span>
+  </div>
 </div>
 <div class="field">
   <span class="flabel">Broker</span>
-  <input
-    class="grow"
-    data-role="mqtt-host"
-    placeholder="host or IP (blank = disable)"
-    bind:value={$mqttForm.host}
-  />
-  <input
-    class="num"
-    data-role="mqtt-port"
-    type="number"
-    min="1"
-    max="65535"
-    bind:value={$mqttForm.port}
-  />
+  <div class="fctl row">
+    <input
+      class="inp grow"
+      data-role="mqtt-host"
+      placeholder="host or IP (blank = disable)"
+      bind:value={$mqttForm.host}
+    />
+    <input
+      class="inp num"
+      data-role="mqtt-port"
+      type="number"
+      min="1"
+      max="65535"
+      bind:value={$mqttForm.port}
+    />
+  </div>
 </div>
 <div class="field">
   <span class="flabel">User</span>
-  <input class="grow" data-role="mqtt-user" placeholder="optional" bind:value={$mqttForm.user} />
+  <div class="fctl row">
+    <input class="inp grow" data-role="mqtt-user" placeholder="optional" bind:value={$mqttForm.user} />
+  </div>
 </div>
 <div class="field">
   <span class="flabel">Password</span>
-  <input
-    class="grow"
-    data-role="mqtt-pass"
-    type="password"
-    placeholder={$mqttStatus?.hasPass ? "(saved — retype to change)" : "optional"}
-    bind:value={$mqttForm.pass}
-  />
+  <div class="fctl row">
+    <input
+      class="inp grow"
+      data-role="mqtt-pass"
+      type="password"
+      placeholder={$mqttStatus?.hasPass ? "(saved — retype to change)" : "optional"}
+      bind:value={$mqttForm.pass}
+    />
+  </div>
 </div>
 <div class="field">
-  <button class="btn primary" data-role="mqtt-save" on:click={saveMqtt}>
-    save
-  </button>
-  {#if $notes.mqtt}<span class="dim" data-role="mqtt-note">{$notes.mqtt}</span>{/if}
+  <span class="flabel"></span>
+  <div class="fctl row g10">
+    <button class="btn primary" data-role="mqtt-save" on:click={saveMqtt}>
+      save
+    </button>
+    {#if $notes.mqtt}<span class="dim hint" data-role="mqtt-note">{$notes.mqtt}</span>{/if}
+  </div>
 </div>
 <p class="dim hint">
   Point this at your MQTT broker (e.g. the Home Assistant Mosquitto add-on) and the

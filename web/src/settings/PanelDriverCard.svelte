@@ -13,27 +13,33 @@
 
 <div class="field">
   <span class="flabel">Pixel clock</span>
-  <span class="mono" data-role="panel-clock">{PANEL_DRIVER_DEFAULT.clockHz / 1e6} MHz</span>
-  <span class="dim hint">
-    the FM6124 datasheet ceiling with no margin; 40 MHz mis-samples the panel's two halves
-  </span>
+  <div class="fctl row g10">
+    <span class="mono" data-role="panel-clock">{PANEL_DRIVER_DEFAULT.clockHz / 1e6} MHz</span>
+    <span class="dim hint">
+      the FM6124 datasheet ceiling with no margin; 40 MHz mis-samples the panel's two halves
+    </span>
+  </div>
 </div>
 <div class="field">
   <span class="flabel">Bit planes</span>
-  <span class="mono" data-role="panel-planes">{PANEL_DRIVER_DEFAULT.planes}</span>
-  <span class="dim hint">
-    BCM bit depth — the refresh halves per extra plane and each one costs a framebuffer
-  </span>
+  <div class="fctl row g10">
+    <span class="mono" data-role="panel-planes">{PANEL_DRIVER_DEFAULT.planes}</span>
+    <span class="dim hint">
+      BCM bit depth — the refresh halves per extra plane and each one costs a framebuffer
+    </span>
+  </div>
 </div>
 <div class="field">
   <span class="flabel">Rescan</span>
-  <span class="mono" data-role="panel-rescan">
-    {$deviceRescanHz > 0 ? `${$deviceRescanHz} Hz` : "—"}
-  </span>
-  <span class="dim hint">
-    measured on the device: how often the panel redraws itself. Frames the panel actually
-    displayed: {$deviceOutFps} fps.
-  </span>
+  <div class="fctl row g10">
+    <span class="mono" data-role="panel-rescan">
+      {$deviceRescanHz > 0 ? `${$deviceRescanHz} Hz` : "—"}
+    </span>
+    <span class="dim hint">
+      measured on the device: how often the panel redraws itself. Frames the panel actually
+      displayed: {$deviceOutFps} fps.
+    </span>
+  </div>
 </div>
 <p class="dim hint">
   Both values are this firmware build's constants, not settings — the LED layout section's

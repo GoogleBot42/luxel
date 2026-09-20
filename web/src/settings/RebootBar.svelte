@@ -60,27 +60,36 @@
 {/if}
 
 <style>
+  /* the mockups' `.capstrip`, to the number (padding, gap, radius, the
+     1px rgba(217,163,67,.32) border, 11.5px on rgba(217,163,67,.12)) — the
+     one thing that is NOT the mockup's is that it is pinned to the viewport
+     rather than sitting in the flow, which is what Jeremy asked for */
   .rebootbar {
     position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 0;
+    left: 16px;
+    right: 16px;
+    bottom: 16px;
     z-index: 70;
     display: flex;
     align-items: center;
-    justify-content: center;
-    gap: 14px;
-    padding: 11px 16px;
-    /* the mockups' `.capstrip` palette — the one warning surface in the app */
+    gap: 8px;
+    padding: 7px 10px;
+    border: 1px solid rgba(217, 163, 67, 0.32);
+    border-radius: 6px;
     background: rgba(217, 163, 67, 0.12);
-    border-top: 1px solid rgba(217, 163, 67, 0.32);
     color: #e5bd74;
-    font-size: 13px;
+    font-size: 11.5px;
+    white-space: nowrap;
     backdrop-filter: blur(6px);
   }
 
   .msg {
     min-width: 0;
+  }
+
+  /* the button goes to the far end, as `.capstrip a` does */
+  .rebootbar .rb {
+    margin-left: auto;
   }
 
   /* on the warning ground the button borrows the warning ink, not the
@@ -98,9 +107,10 @@
 
   @media (max-width: 560px) {
     .rebootbar {
-      gap: 10px;
-      padding: 9px 12px;
-      font-size: 12px;
+      left: 8px;
+      right: 8px;
+      bottom: 8px;
+      white-space: normal;
       text-align: left;
     }
   }

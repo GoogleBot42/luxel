@@ -289,14 +289,7 @@
 </div>
 
 <style>
-  .arrbox {
-    margin: 14px 0 4px;
-    padding: 10px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--bg);
-  }
-
+  /* `.arrbox` itself is the shared box in settings/cards.css (mockup S3k) */
   .arrsvg {
     display: block;
     width: 100%;

@@ -75,12 +75,18 @@
 {#if rows.length > 0}
   <div class="projection" data-role="projection-block">
     <p class="dim intro">
-      How patterns made for another layout are shown on this one. A playlist item can override it.
+      How patterns made for another layout are shown on this one. A playlist item or scene layer can
+      override it.
     </p>
     {#each rows as row (row.dims)}
       <div class="prow" data-role="projection-kind" data-dims={row.dims}>
         <div class="prlab">{row.label}</div>
-        <div class="cards" class:bars={barForm} style="--n:{Math.min(row.options.length, 4)}">
+        <div
+          class="cards"
+          class:bars={barForm}
+          class:c4={row.options.length >= 4}
+          style="--n:{Math.min(row.options.length, 4)}"
+        >
           {#each row.options as opt (opt.mode)}
             <ProjectionCard
               {luxel}
@@ -122,7 +128,6 @@
   .prlab {
     font-size: 13px;
     padding-top: 12px;
-    color: var(--text-dim);
   }
 
   .cards {
@@ -131,6 +136,13 @@
        long label would then widen the track past its share (Gitea #467) */
     grid-template-columns: repeat(var(--n), minmax(0, 1fr));
     gap: 12px;
+  }
+
+  /* four across (a lattice's 1D row): the mockup tightens the card and its
+     picture so four still fit the same 1fr track — `#S3g .pcard` */
+  .cards.c4 {
+    --pcard-pad: 8px;
+    --pcard-canvas: 100px;
   }
 
   /* a strip fixture's cards are full-width rows (mockup S3f) */
