@@ -997,7 +997,7 @@ try {
         .waitForFunction(
           () => {
             const t = (document.querySelector('[data-role="fps"]')?.textContent ?? "").trim();
-            const m = /^device (\d+) fps$/.exec(t);
+            const m = /^(\d+) fps$/.exec(t);
             return m && Number(m[1]) > 0 ? t : false;
           },
           { timeout: 8000 },
@@ -1005,8 +1005,8 @@ try {
         .then((h) => h.jsonValue())
         .catch(() => "");
       check(
-        "fps: status bar labels the number as the device's",
-        /^device \d+ fps$/.test(shown),
+        "fps: status bar reads the device's rate, bare (mockup S1 `27 fps`)",
+        /^\d+ fps$/.test(shown),
         shown,
       );
       const devFps = (await fetch(`${SLOW}/api/status`).then((r) => r.json())).fps;
@@ -1063,7 +1063,7 @@ try {
         .waitForFunction(
           () => {
             const t = (document.querySelector('[data-role="fps"]')?.textContent ?? "").trim();
-            return /^device \d+ fps \(panel\)$/.test(t) ? t : false;
+            return /^\d+ fps$/.test(t) ? t : false;
           },
           { timeout: 8000 },
         )
@@ -1071,15 +1071,15 @@ try {
         .catch(() => "");
       check(
         "fps: a panel board's displayed rate (out_fps) wins over the render rate",
-        shown === "device 112 fps (panel)",
+        shown === "112 fps",
         shown,
       );
       const title = await panelPage
         .$eval('[data-role="fps"]', (el) => el.getAttribute("title") ?? "")
         .catch(() => "");
       check(
-        "fps: tooltip names the rescan ceiling and the local preview",
-        /rescan 115 Hz/.test(title) && /local preview/.test(title),
+        "fps: tooltip names the panel, the rescan ceiling and the local preview",
+        /out_fps/.test(title) && /rescan 115 Hz/.test(title) && /local preview/.test(title),
         title,
       );
       await panelPage.screenshot({ path: `${shotDir}/device-e2e-fps-panel.png` });
@@ -2217,6 +2217,14 @@ try {
     check("patterns: the ring follows the newly played pattern", true);
     await page.screenshot({ path: `${shotDir}/device-e2e-strip-tile-playing.png` });
 
+    // mockups S1/S1b/S1c all draw the playing tile FIRST — the console opens
+    // on this page to see what the LEDs are doing (#538 fidelity closure)
+    const firstIsPlaying = await page.evaluate(
+      (grid) => document.querySelector(`${grid} > .tiles .tile`)?.classList.contains("playing") ?? false,
+      DGRID,
+    );
+    check("patterns: the playing tile sorts to the front of the grid", firstIsPlaying);
+
     // Jeremy, #555: the tile that is already playing wears the ▶ pill
     // top-left and keeps its strip, MINUS the one verb that makes no sense
     // there — no "Play" for what is already playing, but Edit and ⋯ stay, or
@@ -2258,6 +2266,20 @@ try {
     await tileAction(page, victim, "tile-menu");
     await page.waitForSelector('[data-role="tile-menu-popup"]', { timeout: 3000 });
     await page.screenshot({ path: `${shotDir}/device-e2e-tile-menu.png` });
+    // the menu is mockup S2's `.menu`: three separated groups, the document
+    // verbs in the middle, the destructive one last (#538 fidelity closure)
+    const menuShape = await page.$eval('[data-role="tile-menu-popup"]', (el) => ({
+      items: [...el.querySelectorAll(".mi")].map((b) => (b.textContent ?? "").trim()),
+      seprs: el.querySelectorAll(".sepr").length,
+      lastIsDelete: el.lastElementChild?.getAttribute("data-role") === "tile-menu-delete",
+    }));
+    check(
+      "patterns: the tile ⋯ menu carries the mock's item list, separated",
+      menuShape.items.join("|") === "Add to playlist|Duplicate|Export .epe|Delete" &&
+        menuShape.seprs === 2 &&
+        menuShape.lastIsDelete,
+      JSON.stringify(menuShape),
+    );
     await page.click('[data-role="tile-menu-playlist"]');
     await sleep(900); // the store's 400 ms save debounce
     const plAdded = await (await fetch(`${DEV}/api/playlist`)).json();

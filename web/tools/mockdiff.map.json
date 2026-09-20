@@ -157,6 +157,31 @@
           "element": "search",
           "property": "color",
           "why": "the mock fakes a placeholder with a `.ph` class on the input; the app has a real ::placeholder"
+        },
+        {
+          "element": "fps",
+          "property": "text",
+          "why": "the number is the device's live rate; the mock's `27 fps` is sample data (the wording matches exactly)"
+        },
+        {
+          "element": "seg-off",
+          "property": "text",
+          "why": "Jeremy's projection rule: the chip counts what is ON SCREEN, and a matrix hides the library's five 3D patterns — 307 stored, 302 offered (tools/check-library.sh reports the 307)"
+        },
+        {
+          "element": "seg-ct-off",
+          "property": "text",
+          "why": "same rule, the count read on its own"
+        },
+        {
+          "element": "tile-name",
+          "property": "text",
+          "why": "the mirror's seed plays the playlist's first item (Sunset Fade), so the mock's 2nd non-playing tile is a different pattern — mock S1 draws Aurora 2D playing while mock S4 draws Sunset Fade playing, and one mirror cannot be both"
+        },
+        {
+          "element": "tile-meta",
+          "property": "box height",
+          "why": "same misalignment: the mock's mapped tile is a 1D pattern and carries the projection caption, the mirror's is 2D and correctly carries none"
         }
       ],
       "elements": [
@@ -203,7 +228,8 @@
           "mockNth": 2,
           "app": "[data-role=\"tabs\"] .tab:not(.active)",
           "hover": true,
-          "noBox": true
+          "noBox": true,
+          "nth": 1
         },
         {
           "id": "fps",
@@ -362,6 +388,15 @@
         {
           "element": "hdr-brightness",
           "why": "header brightness is beyond the mocks"
+        },
+        {
+          "element": "tile-bar-sub",
+          "why": "Jeremy's projection rule: a strip shows NO 2D pattern, so the mock's `2D · shown as a strip` caption cannot exist on this page (the 2D pattern is in the collapsed `Not for this layout` group instead)"
+        },
+        {
+          "element": "tile-bar-playing",
+          "property": "box height",
+          "why": "same rule: the mock's grid row is stretched by the captioned 2D tile beside it, which this fixture does not show"
         }
       ],
       "elements": [
@@ -462,6 +497,21 @@
           "element": "search",
           "property": "color",
           "why": "the mock fakes a placeholder with a `.ph` class on the input; the app has a real ::placeholder"
+        },
+        {
+          "element": "fps",
+          "property": "text",
+          "why": "live device rate vs the mock's sample `27 fps` (wording matches)"
+        },
+        {
+          "element": "tile-name",
+          "property": "text",
+          "why": "the mirror's playing pattern is the seeded playlist's first item, so the first non-playing tile is a different pattern than the mock's"
+        },
+        {
+          "element": "tile-edit-link",
+          "property": "box height",
+          "why": "24px, not the mock's 17.4px text box: the brief's own non-CSS sweep fails any tap target under 24px at 390px, and this is the only verb on a phone tile"
         }
       ],
       "elements": [
@@ -2989,7 +3039,21 @@
             "click": "[data-role=\"preview-as\"]"
           },
           {
-            "sleep": 500
+            "sleep": 400
+          },
+          {
+            "type": "[data-role=\"preview-as-w\"]",
+            "value": "64"
+          },
+          {
+            "type": "[data-role=\"preview-as-h\"]",
+            "value": "64"
+          },
+          {
+            "click": "[data-role=\"preview-as-matrix\"]"
+          },
+          {
+            "sleep": 2500
           }
         ]
       },
@@ -2997,6 +3061,21 @@
         {
           "element": "tab-scenes",
           "why": "Scenes is Phase B (#480)"
+        },
+        {
+          "element": "pop",
+          "property": "position",
+          "why": "the popover is placed `fixed` off the anchor's viewport rect so it can dodge the viewport edges (Jeremy, 2026-09-19); the mock is a static `absolute` box inside `.menuwrap`"
+        },
+        {
+          "element": "tile-name",
+          "property": "text",
+          "why": "the mock's library grid is invented sample copy; the app browses the real clean-room library"
+        },
+        {
+          "element": "seg-on",
+          "property": "text",
+          "why": "Jeremy's projection rule: the chip counts what is ON SCREEN, and a matrix hides the library's five 3D patterns — 307 stored, 302 offered (tools/check-library.sh reports the 307)"
         }
       ],
       "elements": [
@@ -3168,6 +3247,18 @@
           "hover": true,
           "noBox": true
         }
+      ],
+      "allow": [
+        {
+          "element": "menu",
+          "property": "position",
+          "why": "the popover is placed `fixed` off the anchor's viewport rect so a menu opened inside the scrolling tile grid is not clipped by it and can dodge the viewport edges (Jeremy, 2026-09-19: dropdowns must not dodge sides of screen); the mock is a static `absolute` box inside `.menuwrap`"
+        },
+        {
+          "element": "menu",
+          "property": "box height",
+          "why": "two of the mock's six items are absent: `Add to scene ▸` is Phase B (#480) and `Import .epe…` into a device library is Gitea #572"
+        }
       ]
     },
     "S1incompat": {
@@ -3184,13 +3275,11 @@
             "required": false
           },
           {
-            "waitFor": "[data-role=\"patterns-panel\"]"
+            "waitFor": "[data-role=\"patterns-incompatible\"]:not([hidden])",
+            "timeout": 60000
           },
           {
-            "click": "[data-role=\"patterns-source-library\"]"
-          },
-          {
-            "sleep": 3000
+            "sleep": 1200
           }
         ]
       },
@@ -3198,7 +3287,7 @@
         {
           "id": "toggle-label",
           "mock": ".rsec:nth-of-type(3) .slabel",
-          "app": "[data-role=\"patterns-incompatible-toggle\"]",
+          "app": "[data-role=\"patterns-incompatible-toggle\"] .slabel",
           "hover": true,
           "text": true,
           "note": "mock's nearest analogue is the editor rail's `.disclose` (chev + .slabel)",
@@ -3207,8 +3296,15 @@
         {
           "id": "chev",
           "mock": ".rsec:nth-of-type(3) .chev",
-          "app": "[data-role=\"patterns-incompatible-toggle\"] .caret",
+          "app": "[data-role=\"patterns-incompatible-toggle\"] .chev",
           "note": "mock .chev: 10px, --text-dim, font-style normal"
+        }
+      ],
+      "allow": [
+        {
+          "element": "toggle-label",
+          "property": "text",
+          "why": "the collapsed `Not for this layout` group is Jeremy's rule, not a mock frame — the mapped mock element is the editor rail's `VARS (2)` disclosure, borrowed for its primitives"
         }
       ]
     },
