@@ -133,6 +133,23 @@ paths:
   own paste handler drops in verbatim; `mockdiff.mjs`'s `code` step does the
   same. Typing cost a whole run in #538's mockdiff work — the editor frames
   measured a compile-error state instead of the Controls rail they exist for.
+- **A harness that walks SEVERAL named app states in one chromium must clear
+  `localStorage`/`sessionStorage` between them**
+  (`page.evaluateOnNewDocument(() => localStorage.clear())`, which `mockdiff.mjs`
+  now does per frame). Every state shares one `vite preview` origin and the app
+  persists real state there (`luxel.previewAs`, `luxel.current`,
+  `luxel.patterns`, `luxel.mapSrc`), so state N silently re-shapes state N+1 —
+  and the symptom is a PRODUCT-shaped lie, not an obvious harness error: the
+  mockdiff editor frames left a dirty 2D working copy behind, the console
+  resumed it, and a 300 px strip console twenty frames later measured as an
+  `18×17 matrix` with its `Not for this layout` group legitimately empty
+  (2026-09-20; the resume itself is Gitea #573, the same class as #539).
+  Reproduce any such bug against BOTH an empty profile and a seeded one before
+  blaming either side.
+- **A flex container blockifies its children's `display`**, so an `inline-flex`
+  `.btn` inside a `display:inline-flex` wrapper computes as `flex`. A mock-vs-app
+  `display` delta is usually the WRAPPER's fault, not the element the report
+  names (#538, `PreviewAsChip`'s `.wrap`).
 - Since #471 **two full-screen editors are mounted at once** — the pattern
   editor (`[data-role="editor-view"]`) and the map program's screen
   (`map-editor-view`) — each with its own CodeMirror pane and its own

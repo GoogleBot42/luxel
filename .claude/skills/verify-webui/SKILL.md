@@ -182,6 +182,11 @@ nothing in this container is public.
   panel console had already said the reported bug wasn't there.
 - Reporting success off `npm run build` alone — it doesn't execute the app; a
   runtime-only regression (like the read-only editor) won't show up there.
+- A harness dying on `ENOENT … open '<shotdir>/….png'` partway through a long
+  suite — the screenshot directory is YOURS to create, the harnesses do not
+  `mkdir` it. `device-e2e.mjs` runs ~400 checks and takes its first screenshot
+  around check 20, so a missing dir throws away the whole run before it says
+  anything useful (2026-09-20). `mkdir -p` it before you start.
 - `e2e.mjs` dying instantly on `net::ERR_CONNECTION_REFUSED at http://localhost:<port>/`
   when nothing else is on the port — you ran it from the repo ROOT. It spawns
   `npx vite preview` with no `cwd`, so outside `web/` vite finds no config and never
