@@ -1017,12 +1017,16 @@ try {
   // is the new state (no re-GET).
   const layoutSel = await page.$('[data-role="layout-kind"]');
   check("layout: the kind picker is present on a strip board", layoutSel !== null);
+  check(
+    "reboot bar: absent until the device asks for one (#538)",
+    (await page.$('[data-role="reboot-bar"]')) === null,
+  );
   const layoutOpts = await page.$$eval('[data-role="layout-kind"] option', (os) =>
     os.map((o) => o.value),
   );
   check(
-    "layout: offers strip/matrix/custom map",
-    ["strip", "matrix", "map"].every((k) => layoutOpts.includes(k)),
+    "layout: offers strip/matrix/3D/custom map",
+    ["strip", "matrix", "lattice", "map"].every((k) => layoutOpts.includes(k)),
     layoutOpts.join(","),
   );
   // switching to Matrix POSTs one `matrix …` line and reveals its fields
@@ -1050,45 +1054,97 @@ try {
     "layout: a board with no panel driver has no refresh estimate",
     (await page.$('[data-role="refresh"]')) === null,
   );
-  // an arrangement change is stored-and-reported until a reboot builds it
-  // (#475), and the page says so rather than pretending it applied
+  // An arrangement change is stored-and-reported until a reboot builds it
+  // (#475). Since #538 that is a STICKY BAR pinned to the viewport, not a
+  // line of dim text at the bottom of the form — and it names the field.
   await page.$eval('[data-role="layout-snake"]', (el) => el.click());
   const rebootNote = await page
     .waitForFunction(
-      () => document.querySelector('[data-role="layout-note"]')?.textContent?.trim() ?? false,
+      () => {
+        const t = document.querySelector('[data-role="reboot-bar-text"]')?.textContent?.trim();
+        // the kind switch above already raised the bar, so wait for the bar
+        // to LIST this change rather than for it to exist
+        return t && /panel arrangement/i.test(t) ? t : false;
+      },
       { timeout: 6000 },
     )
     .then((h) => h.jsonValue())
     .catch(() => "");
   check(
-    "layout: an arrangement change reports reboot_required",
-    /reboot/i.test(rebootNote),
+    "reboot bar: an arrangement change raises it, naming the field",
+    /apply after a reboot/i.test(rebootNote) && /panel arrangement/i.test(rebootNote),
     rebootNote,
+  );
+  check(
+    "reboot bar: it is pinned to the bottom of the VIEWPORT",
+    await page
+      .$eval('[data-role="reboot-bar"]', (el) => {
+        const cs = getComputedStyle(el);
+        return cs.position === "fixed" && cs.bottom === "0px";
+      })
+      .catch(() => false),
+  );
+  // …and it is on screen wherever the user is, because the device is still
+  // running the old wiring wherever they are. This flow has the EDITOR open
+  // (the Settings panel stays mounted behind it), which is the screen that
+  // hides the shell header entirely — so if the bar is up here, it is up
+  // everywhere.
+  check(
+    "reboot bar: it is on screen even over the editor",
+    (await page.$('[data-role="editor-view"]:not([hidden])')) !== null &&
+      (await page.$('[data-role="reboot-bar"]')) !== null,
   );
   const laySnake = await (await fetch(`${DEV}/api/layout`)).json();
   check("layout: the snake reached the device", laySnake.matrix?.snake === 1, JSON.stringify(laySnake.matrix));
-  // The projection DEFAULTS live here too, and are POSTed as one `proj*`
-  // line. Still on the MATRIX: since #545 a 1D fixture offers nothing at all
-  // (it never shows a 2D or 3D pattern), so the block only exists here.
+
+  // Projection is its own SECTION (mockup S3e, #538) and it is ABSENT on a
+  // strip: a 1D Layout shows 1D patterns and nothing else, so there is
+  // nothing to choose — and no copy anywhere saying so.
+  await page.select('[data-role="layout-kind"]', "strip");
+  await sleep(700);
+  check(
+    "projection: a strip layout has no Projection section at all",
+    (await page.$('[data-role="sect-projection"]')) === null &&
+      (await page.$('[data-role="projection-block"]')) === null,
+  );
+
+  // On a matrix it exists, in its own section with its own rule, and picking
+  // a card POSTs one `proj1d` line.
+  await page.select('[data-role="layout-kind"]', "matrix");
+  await sleep(700);
   {
-    const cards = await page.$$('[data-role="projection-card"]');
-    check("projection: the block offers the non-native kinds", cards.length > 0, `${cards.length} cards`);
-    const kinds = await page.$$eval('[data-role="projection-kind"]', (els) =>
+    check(
+      "projection: a 2D layout gets the section, with the fixture in its head",
+      (await page.$('[data-role="sect-projection"]')) !== null,
+    );
+    const note = await page
+      .$eval('[data-role="sect-projection-note"]', (e) => e.textContent.trim())
+      .catch(() => "");
+    check("projection: the section head names the fixture", /matrix$/.test(note), note);
+    const projRows = await page.$$eval('[data-role="projection-kind"]', (els) =>
       els.map((e) => e.dataset.dims).join(","),
     );
-    check("projection: a matrix's only non-native kind is 1D (#545)", kinds === "1", kinds);
+    check("projection: a 2D layout offers the 1D row only (#538)", projRows === "1", projRows);
+    const cards = await page.$$('[data-role="projection-kind"][data-dims="1"] [data-role="projection-card"]');
+    check("projection: three 1D options on a matrix", cards.length === 3, `${cards.length} cards`);
     await page.$eval(
       '[data-role="projection-kind"][data-dims="1"] [data-role="projection-card"][data-mode="x"]',
       (el) => el.click(),
     );
-    await sleep(600);
+    await sleep(700);
     const proj = await (await fetch(`${DEV}/api/layout`)).json();
     check(
       "projection: picking a card sets the device default",
       proj.proj?.proj1d === "x",
       JSON.stringify(proj.proj),
     );
+    await page.$eval(
+      '[data-role="projection-kind"][data-dims="1"] [data-role="projection-card"][data-mode="index"]',
+      (el) => el.click(),
+    );
+    await sleep(600);
   }
+  await page.select('[data-role="layout-kind"]', "strip"); // restore
 
   await page.select('[data-role="layout-kind"]', "strip"); // restore
   await sleep(600);
@@ -1445,6 +1501,166 @@ try {
     check("outpipe: restoring the order restores the preview", restored[0] > 200, restored.join(","));
   }
 
+
+  // ---- Settings → Device → Name (Gitea #538) ----
+  //
+  // `POST /api/name` is the route Jeremy's "Cannot set the device's name like
+  // in the mocks" asked for. Two things have to be true at once: the device
+  // stores it, and every surface that says WHICH board this is follows
+  // immediately — the header chip, the Settings title row.
+  {
+    const before = await (await fetch(`${DEV}/api/name`)).json();
+    check(
+      "name: the mirror answers with its own default",
+      before.name === "luxel-serve" && before.source === "default",
+      JSON.stringify(before),
+    );
+    const field = await page.$('[data-role="device-name"]');
+    check("name: Settings → Device carries a text field, not a sentence", field !== null);
+    check(
+      "name: it shows what the device calls itself",
+      (await page.$eval('[data-role="device-name"]', (el) => el.value)) === "luxel-serve",
+    );
+    // the hint the old build carried ("no rename endpoint") is gone
+    const deviceForm = await page.$eval('[data-role="sect-device"]', (el) => el.textContent);
+    check(
+      "name: no `no rename endpoint` hint, and no `served from this device`",
+      !/rename endpoint/i.test(deviceForm) && !/served from this device/i.test(deviceForm),
+    );
+    await page.$eval('[data-role="device-name"]', (el) => {
+      el.value = "Kitchen Strip";
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await sleep(900);
+    const after = await (await fetch(`${DEV}/api/name`)).json();
+    check(
+      "name: the field POSTs it and the device stores it",
+      after.name === "Kitchen Strip" && after.source === "stored",
+      JSON.stringify(after),
+    );
+    const chip = await page
+      .$eval('[data-role="device-chip-name"]', (el) => el.textContent.trim())
+      .catch(() => "");
+    check("name: the header chip follows immediately", chip === "Kitchen Strip", chip);
+    const sub = await page
+      .$eval('[data-role="settings-subtitle"]', (el) => el.textContent.trim())
+      .catch(() => "");
+    check(
+      "name: the Settings title row reads `<name> · vX.Y.Z`",
+      /^Kitchen Strip · v\d/.test(sub),
+      sub,
+    );
+    // a name the device refuses leaves both the device and the field alone
+    await page.$eval('[data-role="device-name"]', (el) => {
+      el.value = 'a"b';
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await sleep(900);
+    const kept = await (await fetch(`${DEV}/api/name`)).json();
+    check("name: a rejected name does not stick on the device", kept.name === "Kitchen Strip");
+    check(
+      "name: …nor in the field",
+      (await page.$eval('[data-role="device-name"]', (el) => el.value)) === "Kitchen Strip",
+    );
+    // …and renaming asks for a reboot, because the hostname binds at boot
+    check(
+      "name: a rename raises the reboot bar (the hostname binds at boot)",
+      await page
+        .$eval('[data-role="reboot-bar-text"]', (el) => /device name/i.test(el.textContent))
+        .catch(() => false),
+    );
+    // restore: an empty body clears the name back to the board default
+    await page.$eval('[data-role="device-name"]', (el) => {
+      el.value = "";
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await sleep(900);
+    const cleared = await (await fetch(`${DEV}/api/name`)).json();
+    check("name: clearing it restores the default", cleared.source === "default", JSON.stringify(cleared));
+    await page.evaluate(() => {
+      // the bar is honest about a real pending reboot; the mirror never
+      // reboots, so clear it here rather than leaving it over every later shot
+      const bar = document.querySelector('[data-role="reboot-bar"]');
+      if (bar) bar.remove();
+    });
+  }
+
+  // ---- Settings → LED layout → 3D (Gitea #538) ----
+  //
+  // "I cannot use, try out, inspect 3D layout mode at all! The option isn't
+  // there." It is a lattice installed as the device's coordinate map: the
+  // pixel space is sized, the coordinates go out in ONE POST, and every
+  // surface follows — `geom.dims` 3, cloud tiles, the 1D+2D projection rows.
+  {
+    await page.select('[data-role="layout-kind"]', "lattice");
+    await sleep(500);
+    check(
+      "3D: picking it reveals w × h × d rather than POSTing anything",
+      (await page.$('[data-role="layout-lat-w"]')) !== null &&
+        (await (await fetch(`${DEV}/api/layout`)).json()).dims === 1,
+    );
+    const latCount = await page
+      .$eval('[data-role="layout-lat-count"]', (el) => el.textContent.trim())
+      .catch(() => "");
+    check("3D: the fields state the pixel count", latCount === "512 pixels", latCount);
+    await page.$eval('[data-role="layout-lat-install"]', (el) => el.click());
+    await sleep(2500);
+    const lay3d = await (await fetch(`${DEV}/api/layout`)).json();
+    check(
+      "3D: installing it makes the device a 3D map of w·h·d pixels",
+      lay3d.dims === 3 && lay3d.kind === "map" && lay3d.pixels === 512 && lay3d.map?.count === 512,
+      JSON.stringify({ dims: lay3d.dims, kind: lay3d.kind, pixels: lay3d.pixels, map: lay3d.map }),
+    );
+    const head = await page.$eval('[data-role="layout-headline"]', (el) => el.textContent.trim());
+    check("3D: the summary reads `8×8×8 lattice`", head === "8×8×8 lattice", head);
+    const sub3d = await page.$eval('[data-role="layout-subhead"]', (el) => el.textContent.trim());
+    check("3D: …with `512 pixels` under it", /^512 pixels/.test(sub3d), sub3d);
+    // the whole app follows the Layout, not just this form
+    const chipShape = await page
+      .$eval('[data-role="layout-label"]', (el) => el.textContent.trim())
+      .catch(() => "");
+    check("3D: the header chip says what shape the fixture is", chipShape === "8×8×8 lattice", chipShape);
+    const rows3d = await page.$$eval('[data-role="projection-kind"]', (els) =>
+      els.map((e) => e.dataset.dims).join(","),
+    );
+    check("3D: the Projection section offers the 1D and 2D rows (#538)", rows3d === "1,2", rows3d);
+    const opts1d = await page.$$eval(
+      '[data-role="projection-kind"][data-dims="1"] [data-role="projection-card"]',
+      (els) => els.map((e) => e.dataset.mode).join(","),
+    );
+    check("3D: a 1D pattern can go by index or along any axis", opts1d === "index,x,y,z", opts1d);
+    // every thumbnail follows the Layout, so a lattice draws as a CLOUD —
+    // the tiles on the Patterns tab are the same component
+    const thumbShapes = await page.$$eval('[data-role="sect-layout"] [data-shape]', (els) =>
+      els.map((e) => e.dataset.shape).join(","),
+    );
+    check(
+      "3D: the live thumbnails draw a cloud, not a bar",
+      thumbShapes.length > 0 && thumbShapes.split(",").every((x) => x === "cloud"),
+      thumbShapes,
+    );
+    await shotSettings(page, `${shotDir}/settings-lattice.png`);
+    // the Patterns tab draws it as a cloud, because that is what it is
+    // Restore the strip the rest of this file expects — through the UI, not
+    // a raw fetch: `applyLayout` is what teaches the browser the map is gone
+    // (a bare `fetch` leaves `deviceMapCoords` holding the lattice, and every
+    // thumbnail keeps drawing a cloud).
+    await fetch(`${DEV}/api/layout`, { method: "POST", body: "map" }); // clear the map
+    await page.select('[data-role="layout-kind"]', "strip");
+    await sleep(900);
+    await page.$eval('[data-role="layout-pixels"]', (el) => {
+      el.value = "120";
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await sleep(900);
+    const restored3d = await (await fetch(`${DEV}/api/layout`)).json();
+    check(
+      "3D: …and switching back to Strip leaves the fixture as it was",
+      restored3d.kind === "strip" && restored3d.dims === 1 && restored3d.pixels === 120,
+      JSON.stringify({ kind: restored3d.kind, dims: restored3d.dims, pixels: restored3d.pixels }),
+    );
+  }
+
   // wall clock: tz round-trips and local time tracks the host (mirror =
   // host clock; the device gets it from NTP)
   {
@@ -1476,6 +1692,79 @@ try {
     await fetch(`${DEV}/api/clock`, { method: "POST", body: "0" });
     const bad = await (await fetch(`${DEV}/api/clock`, { method: "POST", body: "9999" })).json();
     check("clock: silly tz rejected", bad.ok === false);
+  }
+
+  // Clock & time zone, through the FORM (Gitea #538): a zone is a place, not
+  // a number; there is a way to ask for a sync; and the device time is
+  // printed in the looking user's locale.
+  {
+    await openAdv(page, "adv-clock");
+    await sleep(500);
+    const tag = await page.$eval('[data-role="clock-tz"]', (el) => el.tagName);
+    check("clock: the time zone is a select of real zone names", tag === "SELECT", tag);
+    const groups = await page.$$eval('[data-role="clock-tz"] optgroup', (els) =>
+      els.map((e) => e.label),
+    );
+    check(
+      "clock: zones are grouped by region",
+      groups.includes("America") && groups.includes("Europe") && groups.length > 4,
+      groups.slice(0, 6).join(","),
+    );
+    const hasDenver = await page.$$eval('[data-role="clock-tz"] option', (els) =>
+      els.some((e) => e.value === "America/Denver"),
+    );
+    check("clock: …and they are IANA names, not offsets", hasDenver);
+    // picking one sends the zone's CURRENT offset as tzMinutes
+    // …a zone with a HALF-hour offset and no DST, so the expected number is
+    // stable and proves the wire is minutes rather than hours. (Chromium's
+    // list carries the legacy spelling, which is why this is not
+    // `Asia/Kolkata` — the select is built from that list.)
+    const ZONE = "Asia/Calcutta";
+    await page.select('[data-role="clock-tz"]', ZONE);
+    await sleep(900);
+    const tz = await (await fetch(`${DEV}/api/clock`)).json();
+    check(
+      "clock: picking a zone sends its offset in minutes",
+      tz.tzMinutes === 330,
+      JSON.stringify(tz),
+    );
+    const offLine = await page.$eval('[data-role="clock-offset"]', (el) => el.textContent.trim());
+    check("clock: the status line states `UTC+5:30 · synced`", /UTC\+5:30 · synced/.test(offLine), offLine);
+    // the device time is the user's locale format, with a DATE — never the
+    // old `en-US` 24-hour string
+    const shown = await page.$eval('[data-role="clock-status"]', (el) => el.textContent.trim());
+    const want = new Date(Date.now()).toLocaleString(undefined, {
+      timeZone: ZONE,
+      dateStyle: "medium",
+      timeStyle: "medium",
+    });
+    check(
+      "clock: device time is the browser locale's date + time in the chosen zone",
+      shown.slice(0, 12) === want.slice(0, 12),
+      `${shown} vs ${want}`,
+    );
+    // the zone NAME is the browser's memory; the device only ever knew minutes
+    const stored = await page.evaluate(() => localStorage.getItem("luxel.clock.zone"));
+    check("clock: the chosen zone name is remembered locally", stored === ZONE, stored);
+    // `Sync now` POSTs /api/clock/sync
+    check("clock: there is a Sync now button", (await page.$('[data-role="clock-sync"]')) !== null);
+    await page.$eval('[data-role="clock-sync"]', (el) => el.click());
+    const note = await page
+      .waitForFunction(
+        () => document.querySelector('[data-role="clock-note"]')?.textContent?.trim() ?? false,
+        { timeout: 6000 },
+      )
+      .then((h) => h.jsonValue())
+      .catch(() => "");
+    check("clock: Sync now reports what the device answered", /sync/i.test(note), note);
+    // (no screenshot here: this flow has the editor open over the Settings
+    // panel, so `shotSettings` would photograph the editor — the page's own
+    // shots are taken in the "Settings, ranked" block further down)
+    await page.select('[data-role="clock-tz"]', "UTC");
+    await sleep(700);
+    await fetch(`${DEV}/api/clock`, { method: "POST", body: "0" });
+    await page.$eval('[data-role="adv-clock-toggle"]', (el) => el.click()); // collapse again
+    await sleep(300);
   }
 
   // AP-mode provisioning surface (the real AP needs a radio; the mirror
@@ -2341,11 +2630,15 @@ try {
   );
 
   // ---- "Add to playlist" captures the PROJECTION too (#470 + #468) ----
-  // Since #545 a Layout never shows a pattern of higher dimensionality, so
-  // the only live Projection row is a 1D pattern on a 2D-or-better fixture —
-  // this console is a strip, so make it a matrix for the trip. The choice
-  // made in that row is a VALUE, and the playlist item it is added to is
+  // A projection exists only where the Layout can show the pattern AND the
+  // pattern is not native to it — since #545 that is a SMALLER pattern on a
+  // bigger fixture, never the other way round. So the rig is a 12×10 matrix
+  // with a 1D pattern in the editor; the quiet Projection row is live there,
+  // the choice made in it is a VALUE, and the playlist item it is added to is
   // where that value gets its durable home (stores/pattern.ts).
+  //
+  // Through the Settings PICKER, not a raw fetch: `deviceLayoutWire` is what
+  // the reconciler reads and only `applyLayout` writes it.
   await page.click('[data-role="tab-settings"]');
   await sleep(400);
   await page.select('[data-role="layout-kind"]', "matrix");
@@ -2372,6 +2665,8 @@ try {
     JSON.stringify(plWithProj.items),
   );
   await fetch(`${DEV}/api/playlist`, { method: "POST", body: "D 5" }); // clean up
+  await page.select('[data-role="layout-kind"]', "strip"); // restore
+  await sleep(900);
   await page.click('[data-role="editor-back"]'); // back to the tabs
   await sleep(400);
   await page.click('[data-role="tab-settings"]');
@@ -2465,8 +2760,10 @@ try {
     await page.waitForSelector('[data-role="settings-panel"]:not([hidden])', { timeout: 8000 });
     await sleep(800);
 
-    // Order (proposal §5.3): Device first, and BRIGHTNESS is the first
-    // control on the page — ahead of every field in LED layout.
+    // Order (proposal §5.3): Device first, and the NAME and BRIGHTNESS are
+    // the first controls on the page — ahead of every field in LED layout.
+    // There is no `Projection` heading on this strip: a 1D Layout shows 1D
+    // patterns and nothing else, so the section is absent (#538).
     const order = await page.$$eval(
       '[data-role="settings-panel"] .slabel, [data-role="settings-panel"] input, [data-role="settings-panel"] select',
       (els) =>
@@ -2489,8 +2786,9 @@ try {
       heads.join(" "),
     );
     check(
-      "settings: brightness is the first control on the page",
-      order.find((x) => !x.startsWith("#")) === "brightness",
+      "settings: Name then Brightness are the first controls (mockup S3)",
+      order.filter((x) => !x.startsWith("#")).slice(0, 2).join(",") ===
+        "device-name,brightness",
       order.join(","),
     );
     check(
@@ -2706,17 +3004,18 @@ try {
       check("panel: the mirror drives the whole chain, so nothing is dark", dark === null);
       const note = await hubPage
         .waitForFunction(
-          () => document.querySelector('[data-role="layout-note"]')?.textContent?.trim() ?? false,
+          () => document.querySelector('[data-role="reboot-bar-text"]')?.textContent?.trim() ?? false,
           { timeout: 6000 },
         )
         .then((h) => h.jsonValue())
         .catch(() => "");
-      check("panel: the arrangement change reports reboot_required", /reboot/i.test(note), note);
+      check("panel: the arrangement change raises the reboot bar", /reboot/i.test(note), note);
       // …and the action that applies it is caps-gated like everything else:
-      // the mirror advertises `reboot:false` and has no /api/reboot route.
+      // the mirror advertises `reboot:false` and has no /api/reboot route, so
+      // the bar states the fact and leaves the power cycle to the human.
       check(
-        "panel: no Reboot-to-apply button without caps.reboot (§5.7)",
-        (await hubPage.$('[data-role="layout-reboot"]')) === null,
+        "panel: no Reboot-now button without caps.reboot (§5.7)",
+        (await hubPage.$('[data-role="reboot-now"]')) === null,
       );
       check(
         "panel: Advanced gains the Panel driver row",

@@ -28,11 +28,19 @@
     REFRESH_AMBER_HZ,
     settingsVisibility,
     squarish,
+    uiLayoutKind,
     PANEL_DRIVER_DEFAULT,
     type Corner,
     type LayoutKind,
     type RunDir,
   } from "../lib/settingsCaps";
+  import {
+    cloudLayout,
+    latticeCoords,
+    latticeDimsOf,
+    latticeMapFits,
+    maxLatticeSide,
+  } from "../lib/geometry";
   import {
     applyLayout,
     dataPin,
@@ -43,9 +51,12 @@
     device,
     deviceCaps,
     deviceLayoutWire,
+    deviceMapCoords,
     deviceProtocol,
     devicePixels,
     deviceRescanHz,
+    installLattice,
+    noteRebootPending,
     outputStatus,
     pixelMax,
     protocolOptions,
@@ -57,10 +68,6 @@
   import { luxel } from "../stores/pattern";
   import ArrangementSvg from "./ArrangementSvg.svelte";
   import OutputsTable from "./OutputsTable.svelte";
-  import ProjectionBlock from "./ProjectionBlock.svelte";
-
-  /** The Settings tab is on screen — gates the projection cards' animation. */
-  export let active = false;
 
   const dispatch = createEventDispatcher<{ pixelchange: void; openmap: void }>();
 
@@ -83,12 +90,18 @@
   const KIND_LABEL: Record<LayoutKind, string> = {
     strip: "Strip",
     matrix: "Matrix",
+    lattice: "3D",
     map: "Custom map",
   };
 
-  /** The device's Layout, or a strip standing in until `/api/layout` answers. */
+  /** The biggest side a lattice can have and still install in one POST. */
+  const LAT_MAX = maxLatticeSide();
+
+  /** The device's Layout, or a strip standing in until `/api/layout` answers.
+   *  `kind` is the PICKER's vocabulary: a 3D lattice rides the wire's `map`
+   *  kind, and `uiLayoutKind` is the one place that tells them apart. */
   $: wire = $deviceLayoutWire;
-  $: kind = wire?.kind ?? "strip";
+  $: kind = kindChoice ?? uiLayoutKind(wire?.kind ?? "strip", $geomLayout.dims);
   // `$:` only tracks what its own syntax names, so the pixel count is an
   // ARGUMENT — `matrixOf` sizes a not-yet-configured matrix from it
   // (.claude/rules/web.md).
@@ -118,9 +131,32 @@
   /** Tiles past what the board's framebuffer can shift out are DARK (#475). */
   $: driven = m.drive ?? 0;
   $: darkTiles = driven > 0 ? Math.max(0, panels - driven) : 0;
-  /** A stored-but-not-applied change is outstanding: the device has to reboot
-   *  to build it (#475/#474), and there is a route for that now. */
-  $: needsReboot = ($notes.layout ?? "").startsWith("saved — applies");
+  /** The picker while the user is mid-change. A 3D lattice is not a field
+   *  edit but an INSTALL — picking `3D` reveals `w × h × d` and a button,
+   *  and the device stays what it is until that button is pressed. */
+  let kindChoice: LayoutKind | null = null;
+  /** The lattice in the fields: the installed one when there is one, else a
+   *  cube that fits (`LAT_MAX`³ is the biggest single POST — see
+   *  `lib/geometry.ts` `LAYOUT_BODY_BUDGET`). */
+  let lat = { w: 0, h: 0, d: 0 };
+  $: installedLat = $geomLayout.dims === 3 && $geomLayout.regular
+    ? { w: $geomLayout.w, h: $geomLayout.h, d: $geomLayout.d }
+    : ($deviceMapCoords ? latticeDimsOf($deviceMapCoords) : null);
+  $: if (lat.w === 0) lat = installedLat ?? { w: LAT_MAX, h: LAT_MAX, d: LAT_MAX };
+  $: latPixels = Math.max(1, lat.w) * Math.max(1, lat.h) * Math.max(1, lat.d);
+  /** The rig the thumbnail draws: what the fields describe, not what the
+   *  device is, so the picture answers "what am I about to install?". */
+  $: latPreview = cloudLayout(
+    latticeCoords(Math.max(1, lat.w), Math.max(1, lat.h), Math.max(1, lat.d)),
+    $geomLayout.projection,
+  );
+  $: latOverBody = !latticeMapFits(Math.max(1, lat.w), Math.max(1, lat.h), Math.max(1, lat.d));
+  $: latOverMax = latPixels > $pixelMax;
+  $: latSame =
+    installedLat !== null &&
+    installedLat.w === lat.w &&
+    installedLat.h === lat.h &&
+    installedLat.d === lat.d;
 
   function matrixOf(w: LayoutWire | null, px: number): {
     pw: number;
@@ -151,18 +187,20 @@
     );
   }
 
-  /** The one write path: POST, then let the reply be the state. */
-  async function post(lines: string): Promise<boolean> {
+  /** The one write path: POST, then let the reply be the state.
+   *
+   *  A `reboot_required` reply is the DEVICE saying it stored the change but
+   *  is still running the old one — that goes to the sticky reboot bar
+   *  (`noteRebootPending`), which is on screen on every tab until the reboot,
+   *  not into a line of dim text at the bottom of this form (#538). */
+  async function post(lines: string, field = "the wiring"): Promise<boolean> {
     const r = await applyLayout(lines);
     if (!r.ok) {
       note("layout", r.line ? `${r.error} (line ${r.line})` : r.error, 6000);
       return false;
     }
-    note(
-      "layout",
-      r.reboot_required ? "saved — applies after a reboot" : "saved",
-      r.reboot_required ? 0 : 2500,
-    );
+    note("layout", "saved", 2500);
+    if (r.reboot_required) noteRebootPending(field);
     return true;
   }
 
@@ -173,14 +211,14 @@
 
   function setMatrix(patch: Partial<ReturnType<typeof matrixOf>>): void {
     void (async () => {
-      if (await post(matrixLine(patch))) dispatch("pixelchange");
+      if (await post(matrixLine(patch), "the panel arrangement")) dispatch("pixelchange");
     })();
   }
 
   function setPixels(e: Event): void {
     const n = Math.max(1, Math.min($pixelMax, Number((e.target as HTMLInputElement).value) || 1));
     void (async () => {
-      if (await post(`strip ${n}`)) dispatch("pixelchange");
+      if (await post(`strip ${n}`, "the pixel count")) dispatch("pixelchange");
     })();
   }
 
@@ -194,6 +232,12 @@
       dispatch("openmap");
       return;
     }
+    if (want === "lattice") {
+      // Not a field edit: reveal `w × h × d` and wait for Install.
+      kindChoice = "lattice";
+      return;
+    }
+    kindChoice = null;
     void (async () => {
       const px = $devicePixels || wire?.pixels || 1;
       // Matrix keeps the pixel count: 120 px is 12×10, not 11×11 rounded up,
@@ -203,7 +247,7 @@
         want === "strip"
           ? `strip ${px}`
           : matrixLine({ pw: m.pw > 1 ? m.pw : square.w, ph: m.ph > 1 ? m.ph : square.h });
-      if (await post(line)) dispatch("pixelchange");
+      if (await post(line, "the layout")) dispatch("pixelchange");
     })();
   }
 
@@ -213,11 +257,7 @@
           .map((o, i) => `out ${i} ${o.pin} ${o.proto} ${o.order} ${Math.max(0, Math.round(o.count))}${o.rev ? " rev" : ""}`)
           .join("\n")
       : "out none";
-    void post(lines);
-  }
-
-  function setProjection(dims: number, mode: string): void {
-    void post(`proj${dims}d ${mode}`);
+    void post(lines, "the output table");
   }
 
   /** The two enum selects. Svelte's template parser does not take a TS `as`
@@ -257,21 +297,30 @@
   }
 
   /**
-   * Apply a stored arrangement / output table by rebooting (`POST /api/reboot`,
-   * Gitea #475). It is the only way those land, and it is a deliberate second
-   * step behind the standing reboot confirmation — nothing reboots from a bare
-   * button (§5.3).
+   * Install the lattice in the fields as the device's geometry (#538).
+   *
+   * Two POSTs — `strip <pixels>` to size the pixel space, then `map 3 …` to
+   * fill it — because a COORDINATE map does not resize anything and the
+   * grammar takes one shape line per body (`stores/device.ts`
+   * `installLattice`). The whole lattice has to fit ONE request, which is
+   * what caps the side at `LAT_MAX`; Gitea #548 is the procedural form that
+   * would lift it.
    */
-  async function rebootToApply(): Promise<void> {
-    const ok = await confirm({
-      title: "Reboot to apply the new wiring?",
-      body: "The chain arrangement and the output table are built once, at boot. The fixture goes dark for a few seconds and comes back with this layout.",
-      confirmLabel: "Reboot",
-      reboot: true,
-    });
-    if (!ok) return;
-    const r = await $device?.reboot();
-    note("layout", r?.ok ? "rebooting — the new wiring is live when it comes back" : "reboot failed", 0);
+  function installLatticeNow(): void {
+    const w = Math.max(1, lat.w);
+    const h = Math.max(1, lat.h);
+    const d = Math.max(1, lat.d);
+    void (async () => {
+      note("layout", "installing…");
+      const r = await installLattice(w, h, d);
+      if (!r.ok) {
+        note("layout", r.error ?? "rejected", 6000);
+        return;
+      }
+      kindChoice = null;
+      note("layout", `saved — ${w}×${h}×${d} lattice`, 2500);
+      dispatch("pixelchange");
+    })();
   }
 
   /** The strip DATA pin: NOT live — the device reboots to rebind its driver,
@@ -301,6 +350,7 @@
       note("datapin", `saved — the device is rebooting with data on GPIO${r.data_pin ?? pin}`);
       dataPinNext.set(pin);
       dataPinChoice.set(null);
+      noteRebootPending("the data pin");
     } else {
       note("datapin", r?.error ? `failed: ${r.error}` : "save failed");
     }
@@ -349,8 +399,81 @@
         <option value={k}>{KIND_LABEL[k]}</option>
       {/each}
     </select>
-    <span class="dim hint">Strip · Matrix · custom map</span>
+    <span class="dim hint">{vis.kindOptions.map((k) => KIND_LABEL[k]).join(" · ")}</span>
   </div>
+{/if}
+
+{#if vis.latticeFields}
+  <!-- A 3D lattice: `w × h × d` cells wired as one run, installed as the
+       device's coordinate map (#538 — "I cannot try 3D at all"). -->
+  <div class="field">
+    <span class="flabel">Lattice</span>
+    <input
+      class="num"
+      data-role="layout-lat-w"
+      type="number"
+      min="2"
+      max={LAT_MAX}
+      value={lat.w}
+      on:change={(e) => (lat = { ...lat, w: Number(e.currentTarget.value) || 1 })}
+    />
+    <span class="dim">×</span>
+    <input
+      class="num"
+      data-role="layout-lat-h"
+      type="number"
+      min="2"
+      max={LAT_MAX}
+      value={lat.h}
+      on:change={(e) => (lat = { ...lat, h: Number(e.currentTarget.value) || 1 })}
+    />
+    <span class="dim">×</span>
+    <input
+      class="num"
+      data-role="layout-lat-d"
+      type="number"
+      min="2"
+      max={LAT_MAX}
+      value={lat.d}
+      on:change={(e) => (lat = { ...lat, d: Number(e.currentTarget.value) || 1 })}
+    />
+    <span class="dim hint" data-role="layout-lat-count">{latPixels} pixels</span>
+    {#if $luxel}
+      <span class="latthumb">
+        <PatternThumb luxel={$luxel} source={SAMPLE} previewRig={latPreview} size="summary" />
+      </span>
+    {/if}
+    <!-- absent, never disabled (§5.7) — except a lattice the device cannot
+         take, which is a BUDGET the user has to learn, so it says why -->
+    {#if latOverBody || latOverMax}
+      <button
+        class="btn sm"
+        data-role="layout-lat-install"
+        disabled
+        data-reason={latOverMax
+          ? `over this board's ${$pixelMax}-pixel ceiling`
+          : `more coordinates than one request can carry — up to ${LAT_MAX}×${LAT_MAX}×${LAT_MAX}`}
+      >
+        Install
+      </button>
+    {:else if !latSame}
+      <button class="btn sm primary" data-role="layout-lat-install" on:click={installLatticeNow}>
+        Install
+      </button>
+    {/if}
+  </div>
+  <p class="dim hint under" data-role="layout-lat-note">
+    {#if latOverMax}
+      {latPixels} pixels is over this board's {$pixelMax}-pixel ceiling.
+    {:else if latOverBody}
+      A lattice goes to the device as one coordinate per pixel in a single request, so it stops at
+      {LAT_MAX}×{LAT_MAX}×{LAT_MAX} ({LAT_MAX ** 3} pixels) — Gitea #548 is the procedural form
+      that would lift it.
+    {:else}
+      One run of {latPixels} pixels, wired x first, then y, then z. Installed as the device's
+      coordinate map, so 3D patterns render natively and 1D/2D ones get the projections below.
+    {/if}
+  </p>
 {/if}
 
 {#if kind === "strip"}
@@ -596,14 +719,6 @@
   />
 {/if}
 
-<ProjectionBlock
-  luxel={$luxel ?? null}
-  layout={$geomLayout}
-  projection={$geomLayout.projection}
-  {active}
-  on:set={(e) => setProjection(e.detail.dims, e.detail.mode)}
-/>
-
 <div class="linkrow">
   <span class="dim hint">For rings, sculptures, irregular layouts</span>
   <button class="link" data-role="layout-map-link" on:click={() => dispatch("openmap")}>
@@ -611,13 +726,12 @@
   </button>
 </div>
 
+<!-- A saved/rejected note only. "…and it needs a reboot" is the sticky bar's
+     job now (settings/RebootBar.svelte, #538) — it has to be visible from the
+     Patterns tab too, and a line of dim 12px text at the bottom of this form
+     was not. -->
 {#if $notes.layout}
-  <div class="applyrow">
-    <p class="dim hint" data-role="layout-note">{$notes.layout}</p>
-    {#if needsReboot && vis.reboot}
-      <button data-role="layout-reboot" on:click={() => void rebootToApply()}>Reboot to apply</button>
-    {/if}
-  </div>
+  <p class="dim hint" data-role="layout-note">{$notes.layout}</p>
 {/if}
 
 <style>
@@ -628,13 +742,20 @@
     margin-bottom: 4px;
   }
 
+  /* mockup S3/S3b: the headline and its sub-line sit on ONE baseline row */
   .summary > div:first-child {
     flex: 1;
     min-width: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
   }
 
+  /* mockup S3 `.summary .big` */
   .big {
-    font-size: 20px;
+    font-size: 17px;
+    font-weight: 600;
     color: var(--text);
   }
 
@@ -677,24 +798,16 @@
     margin: 2px 0;
   }
 
-  .applyrow {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-  }
-
-  .applyrow p {
-    margin: 0;
-  }
-
+  /* mockup S3 `.linkrow`: a hint and a link out, no rule above them */
   .linkrow {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 10px;
-    margin-top: 14px;
-    padding-top: 10px;
-    border-top: 1px solid var(--border);
+    margin-top: 2px;
+  }
+
+  .latthumb {
+    line-height: 0;
   }
 </style>

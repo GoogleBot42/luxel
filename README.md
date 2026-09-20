@@ -34,8 +34,10 @@ clouds), step debugger with breakpoints, map editor (a debuggable map
 shareable pattern URLs, `.epe` import/export, and a **sound toggle** that
 drives sound-reactive patterns from your microphone — locally and on the
 device. Served from a device it is a console: the same editor plus Playlist
-and a Settings page that configures the fixture (brightness, LED layout and
-wiring, panel arrangement, outputs, WiFi, MQTT, firmware update).
+and a Settings page that configures the fixture (its name, brightness, LED
+layout and wiring — strip, matrix, 3D lattice or a custom map — panel
+arrangement, outputs, how patterns of another dimensionality are projected
+onto it, WiFi, the clock and time zone, MQTT, firmware update).
 
 **The firmware** (`firmware/`, esp-hal + embassy; release images for ESP32, C3, C6, S3, and HUB75-panel boards):
 

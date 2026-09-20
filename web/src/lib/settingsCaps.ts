@@ -17,8 +17,22 @@ import type { DeviceCaps } from "./device";
 
 /** What the LED layout section can be. `map` is a coordinate SOURCE, not a
  *  dimensionality (proposal §5.4d) — it is a kind here because that is what
- *  the `/api/layout` wire calls it. */
-export type LayoutKind = "strip" | "matrix" | "map";
+ *  the `/api/layout` wire calls it.
+ *
+ *  `lattice` is the PICKER's fourth entry (mockup S3b: "Strip · Matrix · 3D ·
+ *  custom map") and the one kind the wire does not name: a 3D lattice is
+ *  installed as a coordinate map, so `/api/layout` reports it as `map` with
+ *  `dims: 3`. [`uiLayoutKind`] is the one place that derives it. */
+export type LayoutKind = "strip" | "matrix" | "lattice" | "map";
+
+/**
+ * The kind the PICKER shows for a Layout the device reports. Everything but
+ * the 3D lattice is the wire's own word; a `map` Layout whose coordinates
+ * are 3D is the lattice the 3D kind installs (Gitea #538).
+ */
+export function uiLayoutKind(wireKind: "strip" | "matrix" | "map", dims: 1 | 2 | 3): LayoutKind {
+  return wireKind === "map" && dims === 3 ? "lattice" : wireKind;
+}
 
 /**
  * The conservative reading for a device that does not publish `caps` at all
@@ -86,8 +100,17 @@ export interface SettingsVisibility {
   outputsTable: boolean;
   /** `+ Add output`: a spare physical output exists. */
   addOutput: boolean;
-  /** The Projection block — the Layout offers a non-native pattern kind. */
+  /** The Projection SECTION — this Layout offers at least one choice.
+   *
+   *  Since #538 a Layout never shows a pattern BIGGER than itself, so the
+   *  whole table is: a 1D Layout offers nothing (2D and 3D patterns are not
+   *  shown on a strip at all) · a 2D Layout offers the 1D row · a 3D Layout
+   *  offers the 1D and 2D rows. The section is therefore ABSENT on a strip —
+   *  with no explanatory copy, which is the rule Jeremy asked for
+   *  (docs/spec/projection.md §1). */
   projection: boolean;
+  /** The `w × h × d` lattice fields (the 3D kind is the picked one). */
+  latticeFields: boolean;
 
   // ---- Advanced ----
   /** Power cap (mA): needs a per-pixel current model. */
@@ -119,7 +142,9 @@ export function settingsVisibility(
   const tiles = Math.max(1, Math.round(layout.panels) || 1);
   return {
     kindPicker: c.strip_driver,
-    kindOptions: c.strip_driver ? ["strip", "matrix", "map"] : ["matrix"],
+    // A 3D lattice is driven pixel by pixel down one wire, so it is offered
+    // exactly where a strip driver is (mockup S3b; Gitea #538).
+    kindOptions: c.strip_driver ? ["strip", "matrix", "lattice", "map"] : ["matrix"],
     stripFields: c.strip_driver,
     panelSize: matrix,
     panelScan: matrix && c.panel,
@@ -131,7 +156,8 @@ export function settingsVisibility(
     estimatedRefresh: matrix && c.panel,
     outputsTable: c.outputs > 1,
     addOutput: c.outputs > 1,
-    projection: true,
+    projection: layout.dims > 1,
+    latticeFields: layout.kind === "lattice",
     powerCap: c.power_cap,
     blurGlow: c.blur_glow,
     blurGlowScope: layout.dims === 1 ? "strip" : "grid",
@@ -140,6 +166,64 @@ export function settingsVisibility(
     ota: c.ota,
     reboot: c.reboot,
   };
+}
+
+// ---- time zones (mockup S3 `Clock & time zone`; Gitea #538) ----
+//
+// The device stores an OFFSET (`/api/clock` `tzMinutes`) — a board with 2 KB
+// of NVS is never going to carry the IANA database. The browser has it, so
+// the console offers real zone names and sends what the device understands.
+
+/**
+ * A zone's CURRENT offset from UTC, in minutes — DST included, because
+ * `longOffset` formats the INSTANT rather than the standard rule.
+ * `America/Denver` is −360 in winter and −300 in summer, which is exactly
+ * what a device driving `clockHour()` wants.
+ *
+ * Returns 0 for a zone this engine does not know (and for `UTC`).
+ */
+export function zoneOffsetMinutes(zone: string, at: Date = new Date()): number {
+  let text = "";
+  try {
+    text =
+      new Intl.DateTimeFormat("en-US", { timeZone: zone, timeZoneName: "longOffset" })
+        .formatToParts(at)
+        .find((p) => p.type === "timeZoneName")?.value ?? "";
+  } catch {
+    return 0;
+  }
+  const m = /GMT([+-])(\d{1,2})(?::(\d{2}))?/.exec(text);
+  if (!m) return 0;
+  const sign = m[1] === "-" ? -1 : 1;
+  return sign * (Number(m[2]) * 60 + Number(m[3] ?? 0));
+}
+
+/** `America/Indiana/Knox` → `Indiana · Knox`: the region heads the
+ *  `<optgroup>`, so the option itself need not repeat it. */
+export function zoneLabel(zone: string): string {
+  const parts = zone.split("/");
+  return parts.slice(1).join(" · ").replace(/_/g, " ") || zone;
+}
+
+/** Zones grouped into the picker's `<optgroup>`s, regions and zones sorted. */
+export function zonesByRegion(zones: readonly string[]): { region: string; zones: string[] }[] {
+  const by = new Map<string, string[]>();
+  for (const z of zones) {
+    const region = z.includes("/") ? (z.split("/")[0] ?? "Other") : "Other";
+    const list = by.get(region);
+    if (list) list.push(z);
+    else by.set(region, [z]);
+  }
+  return [...by.entries()]
+    .map(([region, list]) => ({ region, zones: [...list].sort() }))
+    .sort((a, b) => a.region.localeCompare(b.region));
+}
+
+/** `UTC-6`, `UTC+5:45`, `UTC+0` — the offset as the status line states it. */
+export function offsetLabel(tzMinutes: number): string {
+  const h = Math.trunc(Math.abs(tzMinutes) / 60);
+  const mm = Math.abs(tzMinutes) % 60;
+  return `UTC${tzMinutes < 0 ? "-" : "+"}${h}${mm ? `:${String(mm).padStart(2, "0")}` : ""}`;
 }
 
 // ---- estimated refresh (proposal §5.3, S3c; firmware side is Gitea #475) ----

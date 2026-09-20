@@ -6,14 +6,18 @@
   // Only the FORM carries a panel background — the header is type and a rule.
   // That is what kills the card-in-card look the nine v1 cards had.
   export let title: string;
+  /** The mono dim note at the right end of the header row — the fixture a
+   *  section is about (`64×64 matrix`). Absent when empty (mockup S3e). */
+  export let note = "";
   /** `data-role` for the section body, so a query can be scoped to it. */
   export let role = "";
 </script>
 
-<section class="sect">
+<section class="sect" data-role={role ? `${role}-section` : undefined}>
   <div class="secthead">
     <div class="slabel">{title}</div>
     <div class="rule"></div>
+    {#if note}<div class="mono tiny dim" data-role={role ? `${role}-note` : undefined}>{note}</div>{/if}
   </div>
   <div class="form" data-role={role || undefined}>
     <slot />

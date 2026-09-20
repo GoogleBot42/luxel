@@ -30,6 +30,8 @@
   export let total = 0;
 
   const ORDERS = ["rgb", "rbg", "grb", "gbr", "brg", "bgr"];
+  /** The identity colour of a wire, in output order (mockup S3j: amber, then
+   *  a blue that "means this wire and appears nowhere else in the UI"). */
   const COLORS = ["#e8a33d", "#5b9bd5", "#77b57a", "#c07ad0"];
 
   const dispatch = createEventDispatcher<{ apply: Output[] }>();
@@ -99,7 +101,13 @@
   <div class="outtable">
     {#each rows as o, i (o.n)}
       <div class="orow" data-role="output-row" data-n={o.n}>
-        <span class="ochip" style="background:{COLORS[i % COLORS.length]}">{o.n + 1}</span>
+        <span
+          class="ochip"
+          style="color:{COLORS[i % COLORS.length]};background:color-mix(in srgb, {COLORS[
+            i % COLORS.length
+          ]} 16%, transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb, {COLORS[
+            i % COLORS.length
+          ]} 55%, transparent)">{o.n + 1}</span>
         <span class="un">GPIO</span>
         {#if pins.length}
           <select
@@ -111,7 +119,7 @@
           </select>
         {:else}
           <input
-            class="num"
+            class="inp num"
             data-role="output-pin"
             type="number"
             min="0"
@@ -135,7 +143,7 @@
           {#each ORDERS as c}<option value={c}>{c.toUpperCase()}</option>{/each}
         </select>
         <input
-          class="num"
+          class="inp num"
           data-role="output-count"
           type="number"
           min="0"
@@ -157,7 +165,7 @@
         </span>
         {#if rows.length > 1}
           <button
-            class="link"
+            class="btn sm icon quiet"
             data-role="output-remove"
             title="remove this output"
             on:click={() => removeOutput(i)}>✕</button
@@ -168,7 +176,7 @@
   </div>
 
   {#if rows.length < maxOutputs}
-    <button class="link" data-role="output-add" on:click={addOutput}>+ Add output</button>
+    <button class="btn sm" data-role="output-add" on:click={addOutput}>+ Add output</button>
   {/if}
 
   {#if unit === "pixels" && total > 0}
@@ -209,64 +217,80 @@
 
 <style>
   .outputs {
-    margin-top: 16px;
-  }
-
-  .outtable {
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    margin: 6px 0;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  /* mockup S3j: ONE bordered table, hairlines between the rows */
+  .outtable {
+    align-self: stretch;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--bg-inset);
   }
 
   .orow {
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: 8px;
     flex-wrap: wrap;
-    padding: 6px 8px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--bg);
+    padding: 9px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .orow:last-child {
+    border-bottom: 0;
   }
 
   .ochip {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 18px;
-    height: 18px;
-    border-radius: 4px;
-    color: #14161b;
-    font-size: 11px;
-    font-weight: 700;
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
+    font: 11px/1 var(--mono);
     flex: none;
   }
 
   .un {
-    font-size: 11px;
+    font: 11px/1 var(--mono);
     color: var(--text-dim);
+    flex: none;
   }
 
-  .orow :global(.num) {
-    width: 52px;
+  /* the row's controls are the 28px scale of the shared primitives; the
+     pixel count keeps the full 72px — it was unreadable at 52 (Jeremy) */
+  .orow :global(.inp),
+  .orow select {
+    height: 28px;
+    padding: 0 7px;
+    font-size: 12px;
+    flex: none;
   }
 
   .orow select {
-    max-width: 96px;
+    max-width: 104px;
   }
 
   .ckrow {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
-    font-size: 12px;
+    gap: 7px;
+    font-size: 11.5px;
     color: var(--text-dim);
+    white-space: nowrap;
   }
 
   .range {
-    font-size: 11px;
-    color: var(--accent);
+    margin-left: auto;
+    font: 11px/1 var(--mono);
+    color: var(--text-dim);
+    white-space: nowrap;
+    flex: none;
   }
 
   .splitbar {

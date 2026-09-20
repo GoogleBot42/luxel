@@ -20,6 +20,9 @@ import {
 } from "../lib/device";
 import {
   DEFAULT_PROJECTION,
+  latticeCoords,
+  latticeMapFits,
+  latticeMapLine,
   normDims,
   PROJECTION_CODES,
   type DeviceGeom,
@@ -136,6 +139,10 @@ export const deviceLabel: Readable<string> = derived(
   [deviceName, deviceBase],
   ([n, b]) => n || hostOf(b) || "",
 );
+
+/** Where this device answers — `192.168.0.238`. The ADDRESS, never the name:
+ *  the WiFi row states both (mockup S3). */
+export const deviceHost: Readable<string> = derived(deviceBase, (b) => hostOf(b));
 
 /** The host part of a device base URL (`http://192.168.0.183` →
  *  `192.168.0.183`), or the page's own host when the UI is served from the
@@ -291,6 +298,29 @@ export const paletteAmount = writable(100);
 export const clockStatus = writable<{ synced: boolean; local: number; tzMinutes: number } | null>(
   null,
 );
+/**
+ * Settings the device has STORED but not yet built — what the reboot bar
+ * names (Gitea #538). One entry per field the user changed, in the order
+ * they changed them, so the bar reads "Changes to the output table, the data
+ * pin apply after a reboot" rather than a bare "some settings".
+ *
+ * A field lands here when the device itself answered `reboot_required` (or,
+ * for `/api/datapin`, when its own reply said it is rebooting) — never on
+ * the UI's guess about what is live. Protocol and colour order are LIVE on
+ * both hosts and never appear here; the data pin, the chain arrangement, the
+ * output table and the device name do (docs/api.md "Live vs reboot").
+ *
+ * Cleared by a reboot, and only by a reboot: it is deliberately NOT cleared
+ * by navigating away, because the whole point is that the device is running
+ * something other than what the page shows until it restarts.
+ */
+export const rebootPending = writable<readonly string[]>([]);
+
+/** Record that `field` is stored but waits for a reboot. Idempotent. */
+export function noteRebootPending(field: string): void {
+  rebootPending.update((list) => (list.includes(field) ? list : [...list, field]));
+}
+
 export const syncStatus = writable<SyncStatus | null>(null);
 /** Network input (DDP/E1.31) liveness, shown on the Settings tab. */
 export const netLive = writable<"ddp" | "e131" | null>(null);
@@ -496,6 +526,34 @@ export async function refreshOutput(): Promise<void> {
   }
 }
 
+/** Where the `w×h×d` of the lattice this browser installed is remembered.
+ *  `GET /api/map` reports a COUNT, so without it a reload turns
+ *  `8×8×8 lattice` back into `512 px custom map` (Gitea #538). It is only
+ *  ever believed when the device's own pixel count still matches. */
+const LATTICE_KEY = "luxel.layout.lattice";
+
+function rememberLattice(w: number, h: number, d: number): void {
+  try {
+    localStorage.setItem(LATTICE_KEY, `${w}x${h}x${d}`);
+  } catch {
+    /* private mode: the lattice still installs, only its name is forgotten */
+  }
+}
+
+/** The remembered lattice, if it accounts for exactly `pixels` points. */
+function rememberedLattice(pixels: number): [number, number, number] | null {
+  let raw = "";
+  try {
+    raw = localStorage.getItem(LATTICE_KEY) ?? "";
+  } catch {
+    return null;
+  }
+  const m = /^(\d+)x(\d+)x(\d+)$/.exec(raw);
+  if (!m) return null;
+  const dims: [number, number, number] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  return dims[0] * dims[1] * dims[2] === pixels ? dims : null;
+}
+
 /** Adopt a `/api/layout` body as the new state — the ONE place the Layout,
  *  the pixel count, the embedded map and the projection defaults are written
  *  together, so a GET and a POST reply land identically. */
@@ -506,6 +564,13 @@ function adoptLayout(l: LayoutWire): void {
   if (l.map) {
     deviceMap.set(l.map);
     if (!l.map.installed) deviceMapCoords.set(null);
+    // A 3D map whose count is the lattice this browser installed IS that
+    // lattice: rebuild its coordinates so the console can name it and draw
+    // it after a reload, instead of calling it a positionless cloud.
+    if (l.map.installed && l.map.dims === 3 && get(deviceMapCoords) === null) {
+      const lat = rememberedLattice(l.map.count);
+      if (lat) deviceMapCoords.set(latticeCoords(lat[0], lat[1], lat[2]));
+    }
   }
   deviceProjection.set({
     proj1d: asMode(l.proj?.proj1d, DEFAULT_PROJECTION.proj1d),
@@ -541,6 +606,81 @@ export async function applyLayout(lines: string): Promise<LayoutResult> {
   }
   if (r.ok) adoptLayout(r);
   return r;
+}
+
+/**
+ * Rename the device (`POST /api/name`, Gitea #538).
+ *
+ * The name is what the header chip, the Settings title row and Home
+ * Assistant call this board, and `/api/status` serves the new one
+ * immediately — so the store is updated from the REPLY and every surface
+ * follows within the frame. Only the DHCP hostname waits for a boot, which
+ * is why an accepted POST still answers `reboot_required`.
+ *
+ * An empty `name` clears it back to the board's own `luxel-<mac6>`.
+ */
+export async function setDeviceName(name: string): Promise<{ ok: boolean; error?: string }> {
+  const d = get(device);
+  if (!d) return { ok: false, error: "no device" };
+  let r;
+  try {
+    r = await d.setName(name);
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+  if (!r.ok) return { ok: false, error: r.error ?? "rejected" };
+  if (r.name !== undefined) deviceName.set(r.name);
+  if (r.reboot_required) noteRebootPending("the device name");
+  return { ok: true };
+}
+
+/** Ask the device to re-sync its clock now, then read the clock back — the
+ *  sync is asynchronous on firmware, so the reply alone proves nothing. */
+export async function syncDeviceClock(): Promise<boolean> {
+  const d = get(device);
+  if (!d) return false;
+  try {
+    const r = await d.syncClock();
+    await refreshClock();
+    return r.ok === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Install a `w`×`h`×`d` lattice as the device's geometry (Gitea #538) — the
+ * console half of "I cannot try 3D at all".
+ *
+ * TWO POSTs, deliberately, because `/api/layout` takes at most one
+ * `strip`/`matrix`/`map` line per body and a COORDINATE map does not resize
+ * the pixel space (only the procedural `map grid W H` form does — see
+ * `crates/luxel-core/src/layout.rs`). So: size the pixel space, then install
+ * the coordinates into it. A lattice installed into a smaller pixel space
+ * would be silently truncated by the engine.
+ *
+ * The second reply's `pixels` can still be the OLD count (the host applies a
+ * resize on its render loop), so this re-reads the Layout instead of
+ * adopting that reply.
+ */
+export async function installLattice(
+  w: number,
+  h: number,
+  d: number,
+): Promise<{ ok: boolean; error?: string }> {
+  const pixels = w * h * d;
+  if (!latticeMapFits(w, h, d)) {
+    return { ok: false, error: "that lattice is more coordinates than one request can carry" };
+  }
+  const sized = await applyLayout(`strip ${pixels}`);
+  if (!sized.ok) return { ok: false, error: sized.error ?? "rejected" };
+  const mapped = await applyLayout(latticeMapLine(w, h, d));
+  if (!mapped.ok) return { ok: false, error: mapped.error ?? "rejected" };
+  deviceMap.set({ installed: true, dims: 3, count: pixels, kind: "coords" });
+  deviceMapCoords.set(latticeCoords(w, h, d));
+  rememberLattice(w, h, d);
+  await refreshLayout();
+  return { ok: true };
 }
 
 export async function refreshDeviceMap(): Promise<void> {

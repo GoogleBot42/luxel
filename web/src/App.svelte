@@ -17,6 +17,7 @@
   import Patterns from "./pages/Patterns.svelte";
   import Playlist from "./pages/Playlist.svelte";
   import Settings from "./pages/Settings.svelte";
+  import RebootBar from "./settings/RebootBar.svelte";
   import {
     connectDevice,
     detectDeviceBase,
@@ -432,6 +433,11 @@
   {#if !$isPlayground}
     <Playlist active={!editing && !mapEditing && tab === "playlist"} />
   {/if}
+
+  <!-- "stored, but not running yet" — pinned to the bottom of the VIEWPORT on
+       every screen until the device reboots (#538). Here rather than inside
+       Settings: the user changes a data pin and walks off to Patterns. -->
+  <RebootBar />
 
   {#if $device}
     <Settings

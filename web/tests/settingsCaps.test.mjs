@@ -15,11 +15,16 @@ import {
   chainOrder,
   estimatedRefreshHz,
   FALLBACK_CAPS,
+  offsetLabel,
   outputRanges,
   outputsSum,
   PANEL_DRIVER_DEFAULT,
   settingsVisibility,
   squarish,
+  uiLayoutKind,
+  zoneLabel,
+  zonesByRegion,
+  zoneOffsetMinutes,
 } from "../src/lib/settingsCaps.ts";
 
 /** A device's `caps` block, with the fields a fixture doesn't care about
@@ -64,6 +69,19 @@ const MAP_3D = {
   layout: { kind: "map", dims: 3, regular: false, panels: 1 },
 };
 
+/** The 3D LATTICE kind (Gitea #538): a strip board driving a `w×h×d` cube of
+ *  pixels. The wire calls it `map`; the picker calls it `3D`. */
+const LATTICE = {
+  caps: caps({ strip_driver: true, panel: false, blur_glow: false, reboot: true, ota: true }),
+  layout: { kind: "lattice", dims: 3, regular: true, panels: 1 },
+};
+
+/** An irregular 2D map — a ring, a sculpture (mockup S3h). */
+const MAP_2D = {
+  caps: caps({ strip_driver: true, panel: false, blur_glow: false, reboot: true, ota: true }),
+  layout: { kind: "map", dims: 2, regular: false, panels: 1 },
+};
+
 const vis = (f) => settingsVisibility(f.caps, f.layout);
 
 // ---- LED layout ----
@@ -71,7 +89,7 @@ const vis = (f) => settingsVisibility(f.caps, f.layout);
 test("strip board: the kind picker offers all three, strip fields are real", () => {
   const v = vis(STRIP);
   assert.equal(v.kindPicker, true);
-  assert.deepEqual(v.kindOptions, ["strip", "matrix", "map"]);
+  assert.deepEqual(v.kindOptions, ["strip", "matrix", "lattice", "map"]);
   assert.equal(v.stripFields, true);
   // a strip has no panel anything
   assert.equal(v.panelSize, false);
@@ -309,4 +327,86 @@ test("a tile knows which chain LINE it is on (rot180 is per line, not per row)",
     row.map((t) => t.line),
     [0, 0, 1, 1, 2, 2],
   );
+});
+
+
+// ---- the Projection section (Gitea #538) ----
+//
+// A Layout never shows a pattern BIGGER than itself, so the section exists
+// only where something is left to choose: a strip offers nothing and the
+// section is absent — with no copy explaining why.
+
+test("projection: a 1D layout has no section at all", () => {
+  assert.equal(vis(STRIP).projection, false, "a strip shows 1D patterns and nothing else");
+});
+
+test("projection: a 2D layout has a section (the 1D row)", () => {
+  assert.equal(vis(PANEL).projection, true);
+  assert.equal(vis(MATRIX_FROM_STRIPS).projection, true);
+  assert.equal(vis(MAP_2D).projection, true, "an irregular 2D map still projects 1D patterns");
+});
+
+test("projection: a 3D layout has a section (the 1D and 2D rows)", () => {
+  assert.equal(vis(LATTICE).projection, true);
+  assert.equal(vis(MAP_3D).projection, true);
+});
+
+// ---- the 3D lattice kind ----
+
+test("the 3D kind is offered wherever a strip driver is", () => {
+  assert.deepEqual(vis(STRIP).kindOptions, ["strip", "matrix", "lattice", "map"]);
+  assert.deepEqual(vis(PANEL).kindOptions, ["matrix"], "a HUB75 board drives no cube");
+});
+
+test("the lattice fields appear only when 3D is the picked kind", () => {
+  assert.equal(vis(LATTICE).latticeFields, true);
+  assert.equal(vis(STRIP).latticeFields, false);
+  assert.equal(vis(MAP_3D).latticeFields, false, "a 3D map that is not a lattice");
+});
+
+test("uiLayoutKind: only a 3D map is the picker's `3D`", () => {
+  assert.equal(uiLayoutKind("map", 3), "lattice");
+  assert.equal(uiLayoutKind("map", 2), "map");
+  assert.equal(uiLayoutKind("strip", 1), "strip");
+  assert.equal(uiLayoutKind("matrix", 2), "matrix");
+});
+
+// ---- time zones (mockup S3 `Clock & time zone`; Gitea #538) ----
+
+test("zoneOffsetMinutes reads a zone's CURRENT offset, DST included", () => {
+  assert.equal(zoneOffsetMinutes("UTC"), 0);
+  // Denver is -7h in January and -6h in July; both must come back exactly
+  assert.equal(zoneOffsetMinutes("America/Denver", new Date("2026-01-15T12:00:00Z")), -420);
+  assert.equal(zoneOffsetMinutes("America/Denver", new Date("2026-07-15T12:00:00Z")), -360);
+  // a half-hour zone, and one that is not a whole hour either
+  assert.equal(zoneOffsetMinutes("Asia/Kolkata", new Date("2026-01-15T12:00:00Z")), 330);
+  assert.equal(zoneOffsetMinutes("Asia/Kathmandu", new Date("2026-01-15T12:00:00Z")), 345);
+  assert.equal(zoneOffsetMinutes("Europe/Berlin", new Date("2026-01-15T12:00:00Z")), 60);
+  // an unknown zone is 0, never a throw — the select is built from whatever
+  // this browser knows, but a persisted name can outlive an engine update
+  assert.equal(zoneOffsetMinutes("Middle/Earth"), 0);
+});
+
+test("zoneLabel drops the region and the underscores", () => {
+  assert.equal(zoneLabel("America/Denver"), "Denver");
+  assert.equal(zoneLabel("America/Indiana/Knox"), "Indiana · Knox");
+  assert.equal(zoneLabel("Europe/Isle_of_Man"), "Isle of Man");
+  assert.equal(zoneLabel("UTC"), "UTC");
+});
+
+test("zonesByRegion groups and sorts for the optgroups", () => {
+  const g = zonesByRegion(["Europe/Paris", "America/Denver", "UTC", "Europe/Berlin"]);
+  assert.deepEqual(
+    g.map((x) => x.region),
+    ["America", "Europe", "Other"],
+  );
+  assert.deepEqual(g[1].zones, ["Europe/Berlin", "Europe/Paris"]);
+  assert.deepEqual(g[2].zones, ["UTC"], "a zone with no region lands in Other");
+});
+
+test("offsetLabel is the status line's words", () => {
+  assert.equal(offsetLabel(-360), "UTC-6");
+  assert.equal(offsetLabel(0), "UTC+0");
+  assert.equal(offsetLabel(345), "UTC+5:45");
+  assert.equal(offsetLabel(-270), "UTC-4:30");
 });

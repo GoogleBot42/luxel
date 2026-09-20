@@ -28,6 +28,10 @@ export type NoteChannel =
   | "ap"
   /** the OTA image upload in Advanced › Firmware & recovery */
   | "ota"
+  /** Settings › Device › Name — what POST /api/name answered (#538) */
+  | "devname"
+  /** Settings › Advanced › Clock & time zone — the zone POST and `Sync now` */
+  | "clock"
   | "palette";
 
 export type Notes = Partial<Record<NoteChannel, string>>;
