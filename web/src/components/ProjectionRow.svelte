@@ -72,9 +72,9 @@
       on:click|stopPropagation={() => (open = !open)}
     >
       {#if override !== null}
-        {activeLabel} · override
+        {activeLabel.toLowerCase()} · override
       {:else}
-        {$isPlayground ? "default" : "device default"} · {activeLabel}
+        {$isPlayground ? "default" : "device default"} · {activeLabel.toLowerCase()}
       {/if}
     </button>
     {#if override !== null}
@@ -134,17 +134,33 @@
 {/if}
 
 <style>
+  /* mockup S2c `.hairline`: 1px of --border, 16px above and 12px below */
   .hairline {
     height: 1px;
-    margin: 10px 0 8px;
+    margin: 16px 0 12px;
     background: var(--border);
   }
 
+  /* mockup S2c `.projrow`: 12.5px, 3px above and below — 24.13px of row.
+     The height is PINNED to that so the two verbs can be 24px touch targets
+     (#575) by overflowing its padding box 3px either side instead of
+     stretching the row past what the mock draws. */
   .projrow {
     display: flex;
     align-items: center;
     gap: 10px;
+    height: calc(1.45em + 6px);
+    padding: 3px 0;
     font-size: 12.5px;
+  }
+
+  /* a phone-sized hit area on a line the mock draws at 18px. `min-height`
+     and `align-content` do it without touching the box the mock states —
+     no padding, no margin, the same line-height. */
+  .pv,
+  .pa {
+    min-height: 24px;
+    align-content: center;
   }
 
   .pl {
@@ -156,6 +172,7 @@
   .pv {
     background: transparent;
     border: none;
+    border-radius: 0;
     padding: 0;
     font: inherit;
     color: var(--text);
@@ -174,6 +191,7 @@
     margin-left: auto;
     background: transparent;
     border: none;
+    border-radius: 0;
     padding: 0;
     font: inherit;
     color: var(--accent);
@@ -184,11 +202,17 @@
     text-decoration: underline;
   }
 
-  /* two columns at the `.pop`'s 296px — three would give each card a 92px
-     preview, which is not a picture of anything */
+  /* The same cards Settings draws, at the same 160px (mockup S3e): two per
+     row, which is what sets this popover's width — a `.pop`-wide 296px
+     would give each card a 92px preview, and that is not a picture of
+     anything. `:global` because the box belongs to Popover.svelte. */
+  :global([data-role="projection-options"]) {
+    width: 344px;
+  }
+
   .popcards {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(2, 160px);
     gap: 8px;
     padding: 2px;
   }
@@ -207,7 +231,7 @@
     border-radius: 5px;
     background: transparent;
     color: var(--text);
-    font: 13px/1.3 var(--sans);
+    font-size: 13px;
     text-align: left;
     cursor: pointer;
   }

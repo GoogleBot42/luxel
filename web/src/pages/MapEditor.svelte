@@ -483,114 +483,110 @@
        back · the title · the installed / in-use state · ONE primary action ·
        the ⋯ menu. No geometry fields, no transport. -->
   <header class="editor-header" data-role="map-editor-header">
-    <!-- the code column's half: the document's own controls end at the rail's
-         hairline, not at the page's right edge (audit E4, mockup S2) -->
-    <div class="edhdr-main">
-      <button
-        data-role="map-editor-back"
-        class="btn quiet back"
-        title={`back to ${backLabel}`}
-        on:click={() => dispatch("back")}
-      >
-        <span class="backglyph" aria-hidden="true">←</span>
-        <span class="backlabel">{backLabel}</span>
-      </button>
+    <button
+      data-role="map-editor-back"
+      class="btn quiet back"
+      title={`back to ${backLabel}`}
+      on:click={() => dispatch("back")}
+    >
+      <span class="backglyph" aria-hidden="true">←</span>
+      <span class="backlabel">{backLabel}</span>
+    </button>
 
-      <!-- the map program has one name, so this is a label rather than the
-           pattern editor's editable `.nameedit` field -->
-      <span class="title">Map program</span>
+    <!-- the map program has one name, so this is a label rather than the
+         pattern editor's editable `.nameedit` field -->
+    <span class="title">Map program</span>
 
-      <span class="savestate" data-role="map-state">
-        {#if $device}
-          {#if $deviceMap.installed}
-            <span data-role="map-installed">{$deviceMap.count}px {$deviceMap.dims}D on device</span>
-          {:else}
-            no map on the device
-          {/if}
-        {:else if inUse}
-          previewing this map
-        {:else}
-          not used in the preview yet
-        {/if}
-      </span>
-
-      <span class="spacer"></span>
-
-      {#if $notes.save}<span class="dim note" data-role="map-note">{$notes.save}</span>{/if}
-
-      <!-- The screen's single primary action (proposal §4): the console
-           installs the points on the hardware, the playground adopts them as
-           what the page previews on. -->
+    <span class="savestate" data-role="map-state">
       {#if $device}
-        <button
-          class="btn primary"
-          data-role="map-install"
-          title="upload these points so the device renders 2D/3D through them"
-          on:click={installOnDevice}
-        >
-          Install on device
-        </button>
+        {#if $deviceMap.installed}
+          <span data-role="map-installed">{$deviceMap.count}px {$deviceMap.dims}D on device</span>
+        {:else}
+          no map on the device
+        {/if}
+      {:else if inUse}
+        previewing this map
       {:else}
-        <button
-          class="btn primary"
-          data-role="map-use"
-          title="preview every pattern on this page through these points"
-          on:click={useInPreview}
-        >
-          Use in preview
-        </button>
+        not used in the preview yet
       {/if}
+    </span>
 
-      <span class="overflow">
-        <button
-          class="btn icon"
-          bind:this={moreBtn}
-          data-role="map-overflow"
-          title="more actions"
-          aria-label="more actions"
-          on:click={() => (menuOpen = !menuOpen)}
-        >
-          ⋯
+    <span class="spacer"></span>
+
+    {#if $notes.save}<span class="dim note" data-role="map-note">{$notes.save}</span>{/if}
+
+    <!-- The screen's single primary action (proposal §4): the console
+         installs the points on the hardware, the playground adopts them as
+         what the page previews on. -->
+    {#if $device}
+      <button
+        class="btn primary"
+        data-role="map-install"
+        title="upload these points so the device renders 2D/3D through them"
+        on:click={installOnDevice}
+      >
+        Install on device
+      </button>
+    {:else}
+      <button
+        class="btn primary"
+        data-role="map-use"
+        title="preview every pattern on this page through these points"
+        on:click={useInPreview}
+      >
+        Use in preview
+      </button>
+    {/if}
+
+    <span class="overflow">
+      <button
+        class="btn icon"
+        bind:this={moreBtn}
+        data-role="map-overflow"
+        title="more actions"
+        aria-label="more actions"
+        on:click={() => (menuOpen = !menuOpen)}
+      >
+        ⋯
+      </button>
+      <Popover
+        open={menuOpen}
+        anchor={moreBtn}
+        dataRole="map-menu"
+        on:close={() => (menuOpen = false)}
+      >
+        <button class="mi" data-role="map-export" role="menuitem" on:click={exportProgram}>
+          Export map program
         </button>
-        <Popover
-          open={menuOpen}
-          anchor={moreBtn}
-          dataRole="map-menu"
-          on:close={() => (menuOpen = false)}
-        >
-          <button class="mi" data-role="map-export" role="menuitem" on:click={exportProgram}>
-            Export map program
+        <button class="mi" data-role="map-import" role="menuitem" on:click={() => fileInput.click()}>
+          Import map program…
+        </button>
+        <div class="sepr"></div>
+        <button class="mi del" data-role="map-reset" role="menuitem" on:click={() => void resetProgram()}>
+          Reset program
+        </button>
+        <!-- Clearing the DEVICE's map exists only when there is one to clear
+             (§5.7: absent, never disabled). -->
+        {#if $device && $deviceMap.installed}
+          <button
+            class="mi del"
+            data-role="map-clear"
+            role="menuitem"
+            on:click={() => void onClearDeviceMap()}
+          >
+            Clear map from device
           </button>
-          <button class="mi" data-role="map-import" role="menuitem" on:click={() => fileInput.click()}>
-            Import map program…
-          </button>
-          <div class="sepr"></div>
-          <button class="mi del" data-role="map-reset" role="menuitem" on:click={() => void resetProgram()}>
-            Reset program
-          </button>
-          <!-- Clearing the DEVICE's map exists only when there is one to clear
-               (§5.7: absent, never disabled). -->
-          {#if $device && $deviceMap.installed}
-            <button
-              class="mi del"
-              data-role="map-clear"
-              role="menuitem"
-              on:click={() => void onClearDeviceMap()}
-            >
-              Clear map from device
-            </button>
-          {/if}
-        </Popover>
-      </span>
+        {/if}
+      </Popover>
+    </span>
 
-      <input
-        class="file-input"
-        type="file"
-        accept=".js,.txt,text/plain"
-        bind:this={fileInput}
-        on:change={onImportPick}
-      />
-    </div>
+    <input
+      class="file-input"
+      type="file"
+      accept=".js,.txt,text/plain"
+      bind:this={fileInput}
+      on:change={onImportPick}
+    />
 
     <!-- WHICH device this screen is bound to, over the rail it describes. The
          shell header is not rendered over an editor screen (#538), so the chip
@@ -600,118 +596,129 @@
     {/if}
   </header>
 
-  <!-- ── the code column holds only code, and owns its own errors ── -->
-  <section class="left">
-    <div class="editor-host">
-      {#if mounted}
-        <div class="editor-slot" data-role="map-editor">
-          <CodeEditor
-            bind:this={editor}
-            value={$mapSrc}
-            {hoverValue}
-            on:change={onSourceChange}
-            on:breakpoints={onBreakpoints}
-          />
-        </div>
-      {/if}
-    </div>
-
-    {#if compileError}
-      <button class="codestatus err" data-role="map-compile-error" on:click={jumpToError}>
-        ✗ line {compileError.line} · {compileError.message}
-        <span class="jump">jump to line</span>
-      </button>
-    {/if}
-    <p class="code-hint">Editing code needs a wider screen — the map and its points are above.</p>
-  </section>
-
-  <section class="right">
-    {#each $banners as b (b.id)}
-      <div class="banner" class:error={b.level === "error"} class:warn={b.level === "warn"} data-role={b.role}>
-        {b.text}
+  <!-- The body is the mock's `.edbody`: code left, rail right, and the two
+       stacked with the rail first on a phone (S2b). -->
+  <div class="edbody" data-role="map-editor-body">
+    <!-- ── the code column holds only code, and owns its own errors ── -->
+    <section class="left">
+      <!-- S2b: on a phone the code column wears the same section header the
+           rail sections do, and its `.rdim` says why it is read-only. -->
+      <div class="code-head">
+        <span class="slabel">Code</span>
+        <span class="rdim code-hint">edit on a larger screen to change code</span>
       </div>
-    {/each}
-    {#if importError}
-      <div class="banner error" data-role="map-import-error">
-        {importError}
-        <button class="dismiss" on:click={() => (importError = "")}>×</button>
-      </div>
-    {/if}
-
-    {#if debugMode}
-      <div class="rsec">
-        <Debugger
-          snapshot={dbg}
-          runningHint="set a gutter breakpoint, then Run to step through the map"
-          on:step={(e) => step(e.detail)}
-          on:break={requestBreak}
-        />
-      </div>
-    {/if}
-
-    <!-- ── the plotted points: the scatter (2D) or cloud (3D) this program
-         computes, with its count and the dimensionality it chose ── -->
-    <div class="rsec">
-      <div class="rhead">
-        <span class="slabel">Map</span>
-        <span class="rdim" data-role="map-badge">
-          {#if plotted}{plotted.pixels} points · {plotted.dims}D{:else}not run yet{/if}
-        </span>
-        <span class="grp">
-          <button
-            class="btn sm icon glyph"
-            data-role="map-run"
-            title="run the map program (⌘/Ctrl+Enter)"
-            aria-label="run"
-            on:click={run}
-          >
-            ▶
-          </button>
-          <!-- labelled like the pattern editor's, and for the same reason
-               (audit E8): the bug glyph alone does not say "debugger" -->
-          <button
-            class="btn sm"
-            class:active={debugMode}
-            data-role="map-debug"
-            title="toggle the map debugger"
-            on:click={toggleDebug}
-          >
-            Debug
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-              <rect x="8" y="7" width="8" height="12" rx="4" />
-              <path d="M4 10h4M16 10h4M4 16h4M16 16h4M9.5 5l1 2M14.5 5l-1 2" />
-            </svg>
-          </button>
-        </span>
-      </div>
-      {#if plotted}
-        <!-- Points coloured by index, so the picture shows the WIRING ORDER as
-             well as the shape. Drag-editing them and the Fill/Contain framing
-             attach here (Gitea #355). -->
-        <Preview bind:this={preview} layout={plotted} />
-      {:else}
-        <p class="dim hint">
-          Run the program to see its points. Each <code>plot(x, y)</code> is one pixel, in strip
-          order; <code>plot(x, y, z)</code> makes it a 3D cloud.
-        </p>
-      {/if}
-      {#if $notes.map}<p class="map-error" data-role="map-error">{$notes.map}</p>{/if}
-    </div>
-
-    <div class="rsec">
-      <div class="rhead"><span class="slabel">About</span></div>
-      <p class="dim hint">
-        {#if $device}
-          The map is the DEVICE's geometry, not a pattern's: install it and every pattern on the
-          device renders <code>render2D</code>/<code>render3D</code> through these points.
-        {:else}
-          The map is the Layout, not a pattern's: use it and every preview, tile and thumbnail on
-          this page renders through these points.
+      <div class="editor-host">
+        {#if mounted}
+          <div class="editor-slot" data-role="map-editor">
+            <CodeEditor
+              bind:this={editor}
+              value={$mapSrc}
+              {hoverValue}
+              on:change={onSourceChange}
+              on:breakpoints={onBreakpoints}
+            />
+          </div>
         {/if}
-        It is a Luxel program on the VM, so it is debuggable — set a gutter breakpoint and step.
-      </p>
-    </div>
-  </section>
+      </div>
+
+      {#if compileError}
+        <button class="codestatus err" data-role="map-compile-error" on:click={jumpToError}>
+          ✗ line {compileError.line} · {compileError.message}
+          <span class="jump">jump to line</span>
+        </button>
+      {/if}
+    </section>
+
+    <section class="right">
+      <div class="railscroll">
+        {#each $banners as b (b.id)}
+          <div class="banner" class:error={b.level === "error"} class:warn={b.level === "warn"} data-role={b.role}>
+            {b.text}
+          </div>
+        {/each}
+        {#if importError}
+          <div class="banner error" data-role="map-import-error">
+            {importError}
+            <button class="dismiss" on:click={() => (importError = "")}>×</button>
+          </div>
+        {/if}
+
+        {#if debugMode}
+          <div class="rsec">
+            <Debugger
+              snapshot={dbg}
+              runningHint="set a gutter breakpoint, then Run to step through the map"
+              on:step={(e) => step(e.detail)}
+              on:break={requestBreak}
+            />
+          </div>
+        {/if}
+
+        <!-- ── the plotted points: the scatter (2D) or cloud (3D) this program
+             computes, with its count and the dimensionality it chose ── -->
+        <div class="rsec">
+          <div class="rhead">
+            <span class="slabel">Map</span>
+            <span class="rdim" data-role="map-badge">
+              {#if plotted}{plotted.pixels} points · {plotted.dims}D{:else}not run yet{/if}
+            </span>
+            <span class="grp">
+              <button
+                class="btn sm icon glyph"
+                data-role="map-run"
+                title="run the map program (⌘/Ctrl+Enter)"
+                aria-label="run"
+                on:click={run}
+              >
+                ▶
+              </button>
+              <!-- labelled like the pattern editor's, and for the same reason
+                   (audit E8): the bug glyph alone does not say "debugger" -->
+              <button
+                class="btn sm"
+                class:active={debugMode}
+                data-role="map-debug"
+                title="toggle the map debugger"
+                on:click={toggleDebug}
+              >
+                Debug
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                  <rect x="8" y="7" width="8" height="12" rx="4" />
+                  <path d="M4 10h4M16 10h4M4 16h4M16 16h4M9.5 5l1 2M14.5 5l-1 2" />
+                </svg>
+              </button>
+            </span>
+          </div>
+          {#if plotted}
+            <!-- Points coloured by index, so the picture shows the WIRING ORDER as
+                 well as the shape. Drag-editing them and the Fill/Contain framing
+                 attach here (Gitea #355). -->
+            <Preview bind:this={preview} layout={plotted} />
+          {:else}
+            <p class="dim hint">
+              Run the program to see its points. Each <code>plot(x, y)</code> is one pixel, in strip
+              order; <code>plot(x, y, z)</code> makes it a 3D cloud.
+            </p>
+          {/if}
+          {#if $notes.map}<p class="map-error" data-role="map-error">{$notes.map}</p>{/if}
+        </div>
+
+        <div class="rsec">
+          <div class="rhead"><span class="slabel">About</span></div>
+          <p class="dim hint">
+            {#if $device}
+              The map is the DEVICE's geometry, not a pattern's: install it and every pattern on the
+              device renders <code>render2D</code>/<code>render3D</code> through these points.
+            {:else}
+              The map is the Layout, not a pattern's: use it and every preview, tile and thumbnail on
+              this page renders through these points.
+            {/if}
+            It is a Luxel program on the VM, so it is debuggable — set a gutter breakpoint and step.
+          </p>
+        </div>
+      </div>
+    </section>
+  </div>
 </main>
 
 <style>

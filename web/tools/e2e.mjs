@@ -370,7 +370,7 @@ try {
   const fpsText = await page.$eval('[data-role="preview-dims"]', (el) => el.textContent ?? "");
   check(
     "engine renders (fps > 0)",
-    parseInt(/·\s*(\d+)\s*fps/.exec(fpsText)?.[1] ?? "0") > 10,
+    parseInt(/^\s*(\d+)\s*fps/.exec(fpsText)?.[1] ?? "0") > 10,
     fpsText.trim(),
   );
 
@@ -502,10 +502,14 @@ try {
     "E8: the debug button is labelled, not icon-only",
     (await page.$eval('[data-role="debug"]', (el) => el.textContent.trim())) === "Debug",
   );
+  // The readout leads with the RATE(S) and puts the layout after them, so a
+  // 360px rail ellipsises the layout rather than the number (mockup S2's
+  // `.rdim`). The playground has one loop, so one rate and no slash.
   check(
     "E9: the playground states the LOCAL rate",
-    /fps local/.test(await page.$eval('[data-role="preview-dims"]', (el) => el.textContent ?? "")) &&
-      !/on device/.test(await page.$eval('[data-role="preview-dims"]', (el) => el.textContent ?? "")),
+    /^\d+ fps · /.test(
+      (await page.$eval('[data-role="preview-dims"]', (el) => el.textContent ?? "")).trim(),
+    ) && !/\//.test(await page.$eval('[data-role="preview-dims"]', (el) => el.textContent ?? "")),
     await page.$eval('[data-role="preview-dims"]', (el) => (el.textContent ?? "").trim()),
   );
   // the old playback bar is gone: geometry and transport left the code column
@@ -1194,7 +1198,7 @@ try {
   check(
     "delete opens a danger confirmation",
     (await dialogTitle(page)) === "Delete pattern from the library?" &&
-      (await page.$eval('[data-role="dialog-confirm"]', (el) => el.className)).includes("danger"),
+      (await page.$eval('[data-role="dialog"]', (el) => el.hasAttribute("data-danger"))),
   );
   await page.screenshot({ path: `${shotDir}/e2e-dialog-delete.png` });
   await page.setViewport({ width: 390, height: 780 });

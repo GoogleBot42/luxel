@@ -107,8 +107,8 @@
   <div class="backdrop" data-role="dialog-backdrop" on:mousedown|self={cancelDialog}>
     <div
       class="panel"
-      class:danger={$dialog.danger}
       data-role="dialog"
+      data-danger={$dialog.danger ? "" : null}
       bind:this={panel}
       role="dialog"
       aria-modal="true"
@@ -144,9 +144,12 @@
         <button class="btn" data-role="dialog-cancel" on:click={cancelDialog}>
           {$dialog.cancelLabel}
         </button>
+        <!-- one primary, one look: a destructive confirmation is the same
+             `.btn.primary` every other screen uses, and the VERB is what
+             says it is destructive (the mock's only red is `.mi.del`'s
+             text). A second primary colour is how four of them happened. -->
         <button
           class="btn primary"
-          class:danger={$dialog.danger}
           data-role="dialog-confirm"
           bind:this={okBtn}
           on:click={submit}
@@ -179,15 +182,12 @@
     flex-direction: column;
     gap: 10px;
     padding: 16px 18px;
+    /* the surface chrome IS the `.menu` primitive's (app.css, mockup S2):
+       one border colour, one radius, one shadow for every floating panel */
     border: 1px solid var(--border);
-    border-top: 2px solid var(--accent);
     border-radius: 8px;
     background: var(--bg-panel);
-    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
-  }
-
-  .panel.danger {
-    border-top-color: var(--error);
+    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.65);
   }
 
   h2 {
@@ -248,14 +248,6 @@
     justify-content: flex-end;
     gap: 8px;
     margin-top: 2px;
-  }
-
-  /* the destructive confirmation is the primary, recoloured (app.css owns
-     the fill/weight) */
-  .primary.danger {
-    background: var(--error);
-    border-color: var(--error);
-    color: #1a0808;
   }
 
   /* D9: responsive stacking — on a phone the actions become full-width rows

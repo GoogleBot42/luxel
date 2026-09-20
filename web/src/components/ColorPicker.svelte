@@ -271,8 +271,10 @@
 </span>
 
 <style>
+  /* mockup S2 `.swatches` */
   .wrap {
     display: inline-flex;
+    gap: 6px;
   }
 
   /* mockup S2 `.swatches i` */

@@ -9,16 +9,21 @@
    style what it was handed anyway, and `cssCodeSplit: false` folds this into
    the one stylesheet (docs/web-architecture.md, Gitea #92). Every rule is
    prefixed with `.editor-frame` so nothing here can reach a card, a tile or a
-   chip that happens to use the same class name. */
+   chip that happens to use the same class name.
+
+   The numbers are mockup S2/S2b's, element for element (`.edhdr`, `.edbody`,
+   `.code`, `.rail`, `.rsec`, `.rhead`) — mockdiff (`web/tools/mockdiff.mjs`)
+   compares them against that file's `<style>` block, so a value here should be
+   quotable from it rather than approximated (#538). */
 
 .editor-frame {
   position: relative;
+  /* rows, not areas: the mock's `.edbody` is a plain flex row that the frame
+     gives the rest of its height to, and a grid row stretches it without the
+     `flex-grow` a flex column would need. */
   display: grid;
-  grid-template-columns: minmax(360px, 1fr) minmax(320px, 420px);
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
-  grid-template-areas:
-    "hdr hdr"
-    "code rail";
   flex: 1;
   min-height: 0;
 }
@@ -28,32 +33,22 @@
   display: none;
 }
 
-/* ---- the document header ----
-   Split at the RAIL (audit E4, mockup S2): the header is its own grid with
-   the frame's column template, so the hairline between the document's
-   controls and the device chip lands exactly on the code/rail boundary and
-   Save + the overflow menu end at the code column's right edge -- not the
-   page's. A flex row with the mock's literal 344px segment would drift off
-   that boundary at every width but one. The mock's `padding:0 16px` and the
-   rail's `padding-left`/`margin-left:16px` become the two halves' own
-   padding, which is the same 16px on either side of the rule. */
+/* ---- the document header (mockup S2 `.edhdr`) ----
+   ONE flex row, exactly as the mock draws it: the document's own controls,
+   a spacer, the primary action and ⋯, then a fixed 344px rail segment whose
+   `border-left` lands on the code/rail boundary (16px page padding + 344px +
+   16px margin = the 360px rail column). Save therefore ends at the code
+   column's right edge rather than the page's (audit E4). */
 
 .editor-frame .editor-header {
-  grid-area: hdr;
-  display: grid;
-  grid-template-columns: minmax(360px, 1fr) minmax(320px, 420px);
-  height: 48px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-panel);
-}
-
-/* everything the DOCUMENT owns: back, name, save state, Save, the menu */
-.editor-frame .edhdr-main {
   display: flex;
   align-items: center;
+  position: relative;
   gap: 12px;
-  min-width: 0;
+  height: 48px;
   padding: 0 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
 }
 
 /* the name is a persistent bordered field, not a hover affordance (audit E1,
@@ -64,17 +59,20 @@
   align-items: center;
   flex: 0 1 auto;
   min-width: 0;
-  max-width: 340px;
   height: 30px;
   padding: 0 9px;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.02);
   color: var(--text);
-  font: 600 14px/1 var(--sans);
-  white-space: nowrap;
+  font: 600 14px/1.45 var(--sans);
+}
+
+.editor-frame .nametext {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .editor-frame input.nameedit {
@@ -82,14 +80,16 @@
   width: 220px;
 }
 
-.editor-frame .back {
-  font-weight: 600;
+/* the `←` and the destination are two spans so a phone can drop the second;
+   the mock's is one text node, where the space between them is a 3.6px word
+   space rather than the `.btn`'s 6px flex gap */
+.editor-frame .back .backglyph {
+  margin-right: -2.4px;
 }
 
 .editor-frame .savestate {
   color: var(--text-dim);
   font: 11.5px/1 var(--mono);
-  white-space: nowrap;
 }
 
 .editor-frame .spacer {
@@ -107,22 +107,27 @@
 /* The screen's primary action and its ⋯ trigger are the GLOBAL button
    primitive now (app.css `.btn.primary` / `.btn.icon`), and the menu they
    open is components/Popover.svelte + the global `.menu` rules — three
-   near-identical local menu stylesheets is how they drifted apart. */
+   near-identical local menu stylesheets is how they drifted apart.
+   Positioned but NOT a flex container (mockup `.menuwrap`): a flex parent
+   would blockify the `.btn.icon` inside it from `inline-flex` to `flex`. */
 
 .editor-frame .overflow {
   position: relative;
-  display: inline-flex;
 }
 
-/* The header's rail COLUMN (mockup S2): the device chip sits over the rail it
-   describes, hairlined off from the document's own controls, because the
-   shell header does not exist over an editor screen (#538). */
+/* The header's rail COLUMN (mockup S2 `.edhdr-rail`): the device chip sits
+   over the rail it describes, hairlined off from the document's own controls,
+   because the shell header does not exist over an editor screen (#538). */
 .editor-frame .edhdr-rail {
+  flex: none;
+  width: 344px;
+  height: 100%;
   display: flex;
   align-items: center;
   justify-content: flex-end;
   min-width: 0;
-  padding: 0 16px;
+  padding-left: 16px;
+  margin-left: 16px;
   border-left: 1px solid var(--border);
 }
 
@@ -130,14 +135,25 @@
   display: none;
 }
 
-/* ---- the code column ---- */
+/* ---- the body: code left, rail right (mockup S2 `.edbody`) ---- */
 
-.editor-frame .left {
-  grid-area: code;
+.editor-frame .edbody {
   display: flex;
-  flex-direction: column;
+  align-items: stretch;
   min-width: 0;
   min-height: 0;
+}
+
+/* ---- the code column (mockup S2 `.code`) ---- */
+
+.editor-frame .left {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-inset);
+  border-right: 1px solid var(--border);
 }
 
 .editor-frame .editor-host {
@@ -154,32 +170,30 @@
   display: none;
 }
 
-/* the code pane's own error report: one line, pinned to its bottom edge */
+/* the code pane's own error report: one line, pinned to its bottom edge
+   (mockup S2 `.codestatus`) */
 .editor-frame .codestatus {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 7px 10px;
+  padding: 9px 14px;
   border: none;
   border-top: 1px solid var(--border);
   border-radius: 0;
   background: var(--bg-panel);
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 12px;
+  font: 12px/1 var(--mono);
   text-align: left;
 }
 
 .editor-frame .codestatus.err {
-  border-top-color: var(--error);
-  background: color-mix(in srgb, var(--error) 16%, transparent);
-  color: #f2b8b8;
+  background: rgba(224, 85, 85, 0.09);
+  color: #eda0a0;
   cursor: pointer;
 }
 
 .editor-frame .codestatus.warn {
-  border-top-color: var(--warn);
-  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  background: rgba(217, 163, 67, 0.09);
   color: #ecd9a8;
 }
 
@@ -189,47 +203,59 @@
   text-decoration: underline;
 }
 
-/* only ever shown on a phone, where the code is read-mostly (D9) */
-.editor-frame .code-hint {
+/* Only ever shown on a phone, where the code is read-mostly (D9). It is the
+   `.rdim` of the Code section's own header (mockup S2b), not a strip of its
+   own. */
+.editor-frame .code-head {
   display: none;
-  margin: 0;
-  padding: 6px 10px;
-  border-top: 1px solid var(--border);
-  color: var(--text-dim);
-  font-size: 11px;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 16px 10px;
 }
 
-/* ---- the rail ---- */
+/* ---- the rail (mockup S2 `.rail`) ----
+   360px fixed, on `--bg` so the code column's `--bg-inset` reads as the
+   inset it is. The SCROLLER is an inner wrapper: the mock's `.rail` has no
+   overflow of its own (its frame is a fixed-height crop), and putting
+   `overflow-y:auto` on the rail itself would also force `overflow-x`. */
 
 .editor-frame .right {
-  grid-area: rail;
-  padding: 0;
+  flex: none;
+  width: 360px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+.editor-frame .railscroll {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  background: var(--bg-panel);
 }
 
-/* one section per concern, separated by a hairline (S2) */
+/* one section per concern, separated by a hairline (S2 `.rsec`) */
 .editor-frame .rsec {
   padding: 14px 16px;
   border-bottom: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
 }
 
 .editor-frame .rhead {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  margin-bottom: 10px;
 }
 
 .editor-frame .rdim {
   min-width: 0;
   color: var(--text-dim);
-  font: 11px/1.35 var(--mono);
+  font: 11px/1 var(--mono);
+  white-space: nowrap;
+}
+
+.editor-frame [data-role="preview-dims"] {
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -261,15 +287,32 @@
   line-height: 1;
 }
 
-/* the frame-rate chooser: mockup S2's `.sel`, at the transport's 26px */
+/* The frame-rate chooser: mockup S2's `.sel`, at the transport's 26px. The
+   native arrow is replaced by the mock's own `▾` so the box is ours to size
+   (`appearance:none`), and the chooser is laid out like the mock's inert
+   `.sel` div — value left, caret right. */
 .editor-frame .grp .sel {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   height: 26px;
+  /* the mock's box for `60 fps ▾`: a native select sizes to its WIDEST
+     option (`max fps`), which is 3px narrower than that */
+  width: 69px;
   padding: 0 7px 0 8px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--bg-inset);
+  background-color: var(--bg-inset);
+  /* the same chevron the Settings selects draw (settings/cards.css), at this
+     26px control's size — one dropdown glyph across the app */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='6' viewBox='0 0 10 7'%3E%3Cpath d='M1 1.5L5 5.5L9 1.5' fill='none' stroke='%238a90a0' stroke-width='1.6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 5px center;
   color: var(--text);
   font: 12px/1 var(--sans);
+  white-space: nowrap;
 }
 
 /* conditions that persist until whatever caused them goes away */
@@ -309,39 +352,51 @@
    is for, and the code is read-mostly (mockup S2b). */
 @media (max-width: 600px) {
   .editor-frame {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto auto auto;
-    grid-template-areas:
-      "hdr"
-      "rail"
-      "code";
+    grid-template-rows: auto auto;
     overflow-y: auto;
   }
 
-  /* S2b: one 44px row -- [icon back] [name flex:1] [Save] [menu]. The
-     header stops being a two-column grid because there is no rail beside
-     it to line up with. */
-  .editor-frame .editor-header {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    height: auto;
+  .editor-frame .edbody {
+    flex-direction: column;
   }
 
-  .editor-frame .edhdr-main {
-    flex: 1 1 100%;
-    min-height: 44px;
+  .editor-frame .right {
+    order: 1;
+    width: auto;
+  }
+
+  .editor-frame .left {
+    order: 2;
+    border-right: none;
+    border-top: 1px solid var(--border);
+  }
+
+  .editor-frame .railscroll {
+    overflow-y: visible;
+  }
+
+  /* S2b: one 44px row -- [icon back] [name flex:1] [Save] [menu]. */
+  .editor-frame .editor-header {
+    height: 44px;
     gap: 8px;
     padding: 0 10px;
   }
 
-  .editor-frame .edhdr-main .nameedit {
+  /* …unless the rail half carries a CONTROL (the playground's "Preview as"
+     rig chooser), which is as wide as the whole document line: it then wraps
+     onto a second row instead of leaving the name field two characters wide.
+     A pure status readout is the first thing a 390px header gives up. */
+  .editor-frame .editor-header:has(.edhdr-rail:not(.statusonly)) {
+    height: auto;
+    flex-wrap: wrap;
+  }
+
+  .editor-frame .nameedit {
     flex: 1;
-    max-width: none;
     font-size: 13px;
   }
 
-  .editor-frame .edhdr-main input.nameedit {
+  .editor-frame input.nameedit {
     flex: 1;
     width: auto;
   }
@@ -351,16 +406,13 @@
     display: none;
   }
 
-  /* S2b carries no device chip: a pure status readout is the first thing a
-     390 px header gives up. A rail that holds a CONTROL (the playground's
-     "Preview as" rig chooser) stays — on its own row, because it is as wide
-     as the whole document line and squeezing it in would leave the name
-     field two characters wide. */
   .editor-frame .edhdr-rail {
     flex: 1 1 100%;
     justify-content: flex-start;
-    min-width: 0;
+    width: auto;
+    height: auto;
     padding: 0 10px 6px;
+    margin-left: 0;
     border-left: none;
   }
 
@@ -368,12 +420,8 @@
     display: none;
   }
 
-  .editor-frame .right {
-    overflow-y: visible;
-  }
-
-  .editor-frame .left {
-    border-top: 1px solid var(--border);
+  .editor-frame .overflow {
+    display: contents;
   }
 
   .editor-frame .editor-host {
@@ -381,7 +429,7 @@
     height: 260px;
   }
 
-  .editor-frame .code-hint {
-    display: block;
+  .editor-frame .code-head {
+    display: flex;
   }
 }

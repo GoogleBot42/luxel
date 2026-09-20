@@ -597,22 +597,34 @@ nothing crosses between them.
 | the **code pane** | its own errors: gutter dot + wavy underline on the line + one status strip pinned to the bottom of the pane | `compile-error`, `runtime-error`, `map-compile-error`, `.cm-err-dot`, `.cm-lintRange-error` |
 | the **preview header** | the TRANSPORT, next to the thing it controls | `preview-dims`, `pause`, `debug`, `mic-toggle`, `target-fps` |
 
-**The header splits at the rail** (mockup S2, Gitea #538). It is its own CSS
-grid with the frame's column template — `minmax(360px,1fr) minmax(320px,420px)`
-— so `.edhdr-main` (the document's controls) ends exactly where the code column
-does and `.edhdr-rail` (the device chip on a console, the "Preview as" rig chip
-in the playground) sits over the rail it describes, behind the same hairline.
-The mock's literal `width:344px` would only land on that boundary at one
-window width; the shared template lands on it at every width. The mock's
-`padding:0 16px` plus the rail's `padding-left`/`margin-left:16px` become the
-two halves' own padding, which is the same 16px either side of the rule.
+**The frame is the mock's, element for element** (mockup S2/S2b, Gitea #538):
+`.editor-frame` is a two-row grid (header, then `.edbody`), `.edbody` a flex
+row of `.left` (the code column, `flex:1`, `--bg-inset`, hairlined on its
+right) and `.right` (the rail, a fixed **360px** on `--bg`). The rail scrolls
+in an inner `.railscroll`, not on `.right` itself, because `overflow-y` on the
+rail would force `overflow-x` with it. The frame's single column track is
+`minmax(0,1fr)`: without a zero minimum a long code line or a `nowrap` header
+widens the whole document instead of scrolling inside its own pane.
 
-At ≤600px there is no rail beside the header to line up with, so it becomes a
-flex row: `.edhdr-main` is S2b's single 44px line (`[← icon] [name] [Save]
-[⋯]`, the back button's label dropped), and `.edhdr-rail` either disappears —
-`.statusonly`, the console's chip is a readout a phone can spare — or wraps to
-a second unruled row, which is what keeps the playground's rig chooser
-reachable.
+**The header is one flex row**, exactly as the mock draws it: `padding:0 16px`,
+`gap:12px`, the document's controls, a spacer, `Save`, `⋯`, and then
+`.edhdr-rail` — `width:344px` with `padding-left`/`margin-left:16px` and a
+`border-left`. 16px of page padding + 344 + 16 puts that rule exactly on the
+360px rail boundary, so `Save` ends at the code column's right edge rather
+than the page's (audit E4). `.edhdr-rail` holds the device chip on a console
+and the "Preview as" rig chip in the playground.
+
+At ≤600px the frame stacks (rail first, code second — S2b) and the header
+becomes S2b's single 44px line (`[← icon] [name] [Save] [⋯]`, the back
+button's label dropped). `.edhdr-rail` either disappears — `.statusonly`, the
+console's chip is a readout a phone can spare — or wraps to a second unruled
+row, which is what keeps the playground's rig chooser reachable; only that
+second case sets `flex-wrap`, via `:has()`.
+
+Element-for-element fidelity to that mock frame is checked by
+`web/tools/mockdiff.mjs --frames S2,S2b,S2c,S2d,S2err,S2cpop,S2menu,S2dialog`
+(docs/tools.md), which must report **zero** deltas outside the map's `allow`
+list.
 
 ### Opening a pattern is not a device action (the push rule, Gitea #563)
 

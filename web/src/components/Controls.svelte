@@ -145,10 +145,10 @@
 {/if}
 
 <style>
+  /* the rows are their own rhythm (mockup S2: `.ctlrow{margin-top:12px}`),
+     not a flex gap — the section around them is a plain block */
   .panel {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
+    display: block;
   }
 
   /* mockup S2 `.ctlrow`: name, the widget, its number — one grid so every
@@ -158,12 +158,12 @@
     grid-template-columns: 82px minmax(0, 1fr) auto;
     align-items: center;
     gap: 12px;
+    margin-top: 12px;
   }
 
+  /* mockup S2 `.ctlrow .tiny.dim` — a plain 12px line, not a flex row */
   .label {
-    display: flex;
-    align-items: center;
-    gap: 4px;
+    display: block;
     min-width: 0;
     color: var(--text-dim);
     font-size: 12px;
@@ -172,7 +172,9 @@
   /* the NAME ellipsizes; the placeholder flag beside it never does, or the
      one thing that explains the dimmed widget is the first thing clipped */
   .txt {
-    min-width: 0;
+    display: inline-block;
+    max-width: 100%;
+    vertical-align: bottom;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -186,7 +188,6 @@
   }
 
   .guessflag {
-    flex: none;
     color: var(--warn);
     font-weight: 700;
     cursor: help;
@@ -198,7 +199,6 @@
 
   input[type="range"] {
     width: 100%;
-    min-width: 0;
   }
 
   /* a switch or a swatch is its own width, not the column's */

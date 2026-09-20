@@ -36,7 +36,7 @@
       "patterns": [
         {
           "name": "Aurora 2D",
-          "source": "export function render2D(index, x, y) { hsv(.33 - y * .06, 1 - y * .35, y * y) }\n"
+          "source": "// Aurora 2D — slow green curtains with a violet shimmer\nexport var band = 0\nexport var shimmerAmp = 0\nvar cellSize = 1, speed = .4, ph = .33, sparkle = 1, t1 = 0\nexport function sliderCellSize(v) { cellSize = v }  //# min=.2 max=4 default=1\nexport function sliderSpeed(v) { speed = v }  //# min=0 max=1 default=.4\nexport function hsvPickerPalette(h, s, v) { ph = h }  //# default=.33\nexport function toggleSparkle(v) { sparkle = v }  //# default=1\nexport function beforeRender(delta) {\n  t1 = time(.1 * speed)\n  band = wave(t1) * .35 + .5\n  shimmerAmp = .12 + band * .08\n}\nexport function render2D(index, x, y) {\n  var curtain = clamp(1 - abs(y - band) * 3.2 * cellSize, 0, 1)\n  var v = clamp(curtain * (.55 + shimmerAmp * sparkle), 0, 1)\n  hsv(ph - v * .06, 1 - v * .35, v * v)\n}\n"
         },
         {
           "name": "Raindrops 2D",
@@ -44,7 +44,7 @@
         },
         {
           "name": "Sunset Fade",
-          "source": "export function render(index) {\n  var f = index / pixelCount\n  hsv(.08 - f * .06, 1, 1 - f * .3)\n}\n"
+          "source": "// Sunset Fade — a warm 1D ramp with three values\nvar hue = .1, speed = .08, sparkle = 1\nexport function sliderHue(v) { hue = v }  //# min=0 max=1 default=.1\nexport function sliderSpeed(v) { speed = v }  //# min=0 max=1 default=.08\nexport function toggleSparkle(v) { sparkle = v }  //# default=1\nexport function render(index) {\n  var f = index / pixelCount\n  var v = 1 - f * .3\n  if (sparkle && random(1) < .02) v = 1\n  hsv(hue - f * .06 + time(speed), 1, v)\n}\n"
         },
         {
           "name": "Blinky Eyes 2D",
@@ -620,21 +620,30 @@
       "height": 940,
       "app": {
         "target": "panel",
-        "route": "#/editor",
+        "route": "#/",
         "steps": [
           {
             "waitGone": "[data-role=\"boot\"]",
             "required": false
           },
           {
-            "waitFor": ".cm-content"
+            "waitFor": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"][data-name=\"Aurora 2D\"] [data-role=\"tile-edit\"]"
           },
           {
-            "code": "[data-role=\"editor-view\"]",
-            "value": "export function sliderCellSize(v) {\n  cellSize = v\n}\nexport function sliderSpeed(v) {\n  speed = v\n}\nexport function hsvPickerPalette(h, s, v) {\n  ph = h\n}\nexport function toggleSparkle(v) {\n  sparkle = v\n}\nvar cellSize = 1, speed = .4, ph = 0, sparkle = 1, t1 = 0\nexport var band = 0\nexport var shimmer = 0\nexport function beforeRender(delta) {\n  t1 = time(.1 * speed)\n  band = wave(t1)\n  shimmer = band * .12\n}\nexport function render2D(index, x, y) {\n  hsv(x * cellSize + ph, 1 - y, y + shimmer)\n}\n"
+            "sleep": 800
           },
           {
-            "sleep": 2500
+            "click": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"][data-name=\"Aurora 2D\"] [data-role=\"tile-edit\"]"
+          },
+          {
+            "waitFor": "[data-role=\"editor-view\"]:not([hidden]) .cm-content"
+          },
+          {
+            "waitGone": "[data-role=\"pattern-loading\"]",
+            "required": false
+          },
+          {
+            "sleep": 2200
           }
         ]
       },
@@ -651,6 +660,45 @@
         {
           "element": "capstrip",
           "why": "the tight-fit warning needs a heap-constrained device; no mirror in this map models one (see the report's coverage note)"
+        },
+        {
+          "element": "ed-savestate",
+          "property": "text",
+          "why": "the #563 push rule: a pattern that is not the one the LEDs are running opens for BROWSING, which puts `▶ Play on device` in the header and `· preview only` on the save state — neither exists in the mock, and both take header width from the spacer (docs/web-architecture.md)"
+        },
+        {
+          "element": "ed-spacer",
+          "property": "box width",
+          "why": "the #563 push rule: a pattern that is not the one the LEDs are running opens for BROWSING, which puts `▶ Play on device` in the header and `· preview only` on the save state — neither exists in the mock, and both take header width from the spacer (docs/web-architecture.md)"
+        },
+        {
+          "element": "prev-grp",
+          "property": "box width",
+          "why": "Jeremy: the Debug button carries the word `Debug` — the group is that much wider than the mock's three icons"
+        },
+        {
+          "element": "prev-dims",
+          "property": "overflow-x",
+          "why": "the both-fps readout Jeremy asked for has to clamp inside the 360px rail; the mock's `64×64 · 27 fps` needs no clamp"
+        },
+        {
+          "element": "prev-dims",
+          "property": "overflow-y",
+          "why": "same"
+        },
+        {
+          "element": "prev-dims",
+          "property": "text-overflow",
+          "why": "same"
+        },
+        {
+          "element": "ctl-swatch",
+          "property": "background-color",
+          "why": "Gitea #537: the mock's `.swatches` is a three-stop PALETTE illustration; the app's hsvPicker swatch is the single picked colour (hue from `//# default`)"
+        },
+        {
+          "element": "reading order",
+          "why": "Jeremy: `The debug icon should also go right after the pause button` — the mock puts the rate chooser between them"
         }
       ],
       "elements": [
@@ -671,7 +719,8 @@
           "mock": ".nameedit",
           "app": "[data-role=\"pattern-name\"]",
           "hover": true,
-          "note": "mock: ALWAYS a bordered 30px field, 14px/600"
+          "note": "mock: ALWAYS a bordered 30px field, 14px/600",
+          "text": true
         },
         {
           "id": "ed-savestate",
@@ -712,7 +761,7 @@
         {
           "id": "ed-body",
           "mock": ".edbody",
-          "app": "[data-role=\"editor-view\"]",
+          "app": "[data-role=\"editor-body\"]",
           "noBoxH": true
         },
         {
@@ -859,17 +908,30 @@
       "height": 940,
       "app": {
         "target": "panel",
-        "route": "#/editor",
+        "route": "#/",
         "steps": [
           {
             "waitGone": "[data-role=\"boot\"]",
             "required": false
           },
           {
-            "waitFor": ".cm-content"
+            "waitFor": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"][data-name=\"Aurora 2D\"] [data-role=\"tile-edit\"]"
           },
           {
-            "sleep": 3000
+            "sleep": 800
+          },
+          {
+            "click": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"][data-name=\"Aurora 2D\"] [data-role=\"tile-edit\"]"
+          },
+          {
+            "waitFor": "[data-role=\"editor-view\"]:not([hidden]) .cm-content"
+          },
+          {
+            "waitGone": "[data-role=\"pattern-loading\"]",
+            "required": false
+          },
+          {
+            "sleep": 2200
           },
           {
             "click": "[data-role=\"overflow\"]"
@@ -883,6 +945,16 @@
         {
           "element": "mi-scene",
           "why": "`Add to scene ▸` is Phase B (#480) — not built"
+        },
+        {
+          "element": "menu",
+          "property": "box height",
+          "why": "`Add to scene ▸` is Phase B (#480): one fewer row is 33px less menu"
+        },
+        {
+          "element": "menu",
+          "property": "position",
+          "why": "a popover is positioned off its anchor (`fixed`) so a menu opened from a scrolling grid cannot be clipped — Jeremy's dropdown complaint, 2026-09-19"
         }
       ],
       "elements": [
@@ -930,14 +1002,30 @@
       "height": 940,
       "app": {
         "target": "panel",
-        "route": "#/editor",
+        "route": "#/",
         "steps": [
           {
             "waitGone": "[data-role=\"boot\"]",
             "required": false
           },
           {
-            "waitFor": ".cm-content"
+            "waitFor": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"][data-name=\"Aurora 2D\"] [data-role=\"tile-edit\"]"
+          },
+          {
+            "sleep": 800
+          },
+          {
+            "click": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"][data-name=\"Aurora 2D\"] [data-role=\"tile-edit\"]"
+          },
+          {
+            "waitFor": "[data-role=\"editor-view\"]:not([hidden]) .cm-content"
+          },
+          {
+            "waitGone": "[data-role=\"pattern-loading\"]",
+            "required": false
+          },
+          {
+            "sleep": 2200
           },
           {
             "code": "[data-role=\"editor-view\"]",
@@ -975,17 +1063,30 @@
       "height": 844,
       "app": {
         "target": "panel",
-        "route": "#/editor",
+        "route": "#/",
         "steps": [
           {
             "waitGone": "[data-role=\"boot\"]",
             "required": false
           },
           {
-            "waitFor": "[data-role=\"editor-header\"]"
+            "waitFor": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"][data-name=\"Aurora 2D\"] [data-role=\"tile-edit\"]"
           },
           {
-            "sleep": 1800
+            "sleep": 800
+          },
+          {
+            "click": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"][data-name=\"Aurora 2D\"] [data-role=\"tile-edit\"]"
+          },
+          {
+            "waitFor": "[data-role=\"editor-view\"]:not([hidden]) .cm-content"
+          },
+          {
+            "waitGone": "[data-role=\"pattern-loading\"]",
+            "required": false
+          },
+          {
+            "sleep": 2200
           }
         ]
       },
@@ -1006,7 +1107,8 @@
           "id": "ed-name",
           "mock": ".nameedit",
           "app": "[data-role=\"pattern-name\"]",
-          "note": "mock: 13px, flex:1, min-width 0"
+          "note": "mock: 13px, flex:1, min-width 0",
+          "text": true
         },
         {
           "id": "ed-save",
@@ -1016,7 +1118,7 @@
         },
         {
           "id": "ed-overflow",
-          "mock": ".edhdr > .btn.icon",
+          "mock": ".edhdr > .btn.icon:not(.quiet)",
           "app": "[data-role=\"overflow\"]"
         },
         {
@@ -1056,6 +1158,33 @@
           "note": "mock copy: `edit on a larger screen to change code`",
           "noBox": true
         }
+      ],
+      "allow": [
+        {
+          "element": "ed-name",
+          "property": "box width",
+          "why": "the #563 push rule: a pattern that is not the one the LEDs are running opens for BROWSING, which puts `▶ Play on device` in the header and `· preview only` on the save state — neither exists in the mock, and both take header width from the spacer (docs/web-architecture.md)"
+        },
+        {
+          "element": "prev-dims",
+          "property": "overflow-x",
+          "why": "the both-fps readout clamps; the mock's `64×64` does not"
+        },
+        {
+          "element": "prev-dims",
+          "property": "overflow-y",
+          "why": "same"
+        },
+        {
+          "element": "prev-dims",
+          "property": "text-overflow",
+          "why": "same"
+        },
+        {
+          "element": "prev-dims",
+          "property": "text",
+          "why": "Jeremy: the preview header states BOTH the local and the device fps"
+        }
       ]
     },
     "S2c": {
@@ -1065,21 +1194,30 @@
       "height": 900,
       "app": {
         "target": "panel",
-        "route": "#/editor",
+        "route": "#/",
         "steps": [
           {
             "waitGone": "[data-role=\"boot\"]",
             "required": false
           },
           {
-            "waitFor": ".cm-content"
+            "waitFor": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"][data-name=\"Sunset Fade\"] [data-role=\"tile-edit\"]"
           },
           {
-            "code": "[data-role=\"editor-view\"]",
-            "value": "export function sliderHue(v) {\n  hue = v\n}\nexport function sliderSpeed(v) {\n  speed = v\n}\nexport function toggleSparkle(v) {\n  sparkle = v\n}\nvar hue = .1, speed = .08, sparkle = 1\nexport function render(index) {\n  hsv(hue + index / pixelCount, 1, 1)\n}\n"
+            "sleep": 800
           },
           {
-            "sleep": 2500
+            "click": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"][data-name=\"Sunset Fade\"] [data-role=\"tile-edit\"]"
+          },
+          {
+            "waitFor": "[data-role=\"editor-view\"]:not([hidden]) .cm-content"
+          },
+          {
+            "waitGone": "[data-role=\"pattern-loading\"]",
+            "required": false
+          },
+          {
+            "sleep": 2200
           }
         ]
       },
@@ -1154,6 +1292,28 @@
           "text": true,
           "noBox": true
         }
+      ],
+      "allow": [
+        {
+          "element": "rsec",
+          "property": "padding-top",
+          "why": "the mockups' excerpt frames inline-override `.rsec` (`padding:16px 16px 20px;border-bottom:0`) so the crop sits flush on the mockup page; the shared primitive is stated in S2 (`padding:14px 16px` + hairline), which the app matches"
+        },
+        {
+          "element": "rsec",
+          "property": "padding-bottom",
+          "why": "the mockups' excerpt frames inline-override `.rsec` (`padding:16px 16px 20px;border-bottom:0`) so the crop sits flush on the mockup page; the shared primitive is stated in S2 (`padding:14px 16px` + hairline), which the app matches"
+        },
+        {
+          "element": "rsec",
+          "property": "border-bottom-color",
+          "why": "the mockups' excerpt frames inline-override `.rsec` (`padding:16px 16px 20px;border-bottom:0`) so the crop sits flush on the mockup page; the shared primitive is stated in S2 (`padding:14px 16px` + hairline), which the app matches"
+        },
+        {
+          "element": "proj-value",
+          "property": "text",
+          "why": "Gitea #574: the engine defaults a 1D pattern on a matrix to `By index`; the mockups pick `Along x`. Changing `Projection::DEFAULT` is a core/firmware call, not a CSS one"
+        }
       ]
     },
     "S2cpop": {
@@ -1163,18 +1323,27 @@
       "height": 900,
       "app": {
         "target": "panel",
-        "route": "#/editor",
+        "route": "#/",
         "steps": [
           {
             "waitGone": "[data-role=\"boot\"]",
             "required": false
           },
           {
-            "waitFor": ".cm-content"
+            "waitFor": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"][data-name=\"Sunset Fade\"] [data-role=\"tile-edit\"]"
           },
           {
-            "code": "[data-role=\"editor-view\"]",
-            "value": "export function render(index) {\n  hsv(index / pixelCount, 1, 1)\n}\n"
+            "sleep": 800
+          },
+          {
+            "click": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"][data-name=\"Sunset Fade\"] [data-role=\"tile-edit\"]"
+          },
+          {
+            "waitFor": "[data-role=\"editor-view\"]:not([hidden]) .cm-content"
+          },
+          {
+            "waitGone": "[data-role=\"pattern-loading\"]",
+            "required": false
           },
           {
             "sleep": 2200
@@ -1183,7 +1352,7 @@
             "click": "[data-role=\"projection-change\"]"
           },
           {
-            "sleep": 500
+            "sleep": 600
           }
         ]
       },
@@ -1254,6 +1423,30 @@
           "element": "pop",
           "property": "padding-left",
           "why": "same"
+        },
+        {
+          "element": "pop",
+          "property": "position",
+          "why": "the mock target is the Settings form, not a popover; a popover is positioned off its anchor so it cannot be clipped (Jeremy, 2026-09-19)"
+        },
+        {
+          "element": "pop",
+          "property": "box-shadow",
+          "why": "same — the Settings form is inline, a popover floats"
+        },
+        {
+          "element": "pcard-name",
+          "property": "text",
+          "why": "Gitea #574: the engine defaults a 1D pattern on a matrix to `By index`; the mockups pick `Along x`. Changing `Projection::DEFAULT` is a core/firmware call, not a CSS one"
+        },
+        {
+          "element": "pcard-hint",
+          "property": "text",
+          "why": "Gitea #574: the engine defaults a 1D pattern on a matrix to `By index`; the mockups pick `Along x`. Changing `Projection::DEFAULT` is a core/firmware call, not a CSS one"
+        },
+        {
+          "element": "reading order",
+          "why": "Gitea #574: the engine defaults a 1D pattern on a matrix to `By index`; the mockups pick `Along x`. Changing `Projection::DEFAULT` is a core/firmware call, not a CSS one — which card is selected is what orders them"
         }
       ]
     },
@@ -1264,21 +1457,30 @@
       "height": 900,
       "app": {
         "target": "panel",
-        "route": "#/editor",
+        "route": "#/",
         "steps": [
           {
             "waitGone": "[data-role=\"boot\"]",
             "required": false
           },
           {
-            "waitFor": ".cm-content"
+            "waitFor": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"][data-name=\"Aurora 2D\"] [data-role=\"tile-edit\"]"
           },
           {
-            "code": "[data-role=\"editor-view\"]",
-            "value": "export function sliderCellSize(v) {\n  cellSize = v\n}\nexport function sliderSpeed(v) {\n  speed = v\n}\nvar cellSize = 1, speed = .4\nexport function render2D(index, x, y) {\n  hsv(x * cellSize, 1, y * speed + .3)\n}\n"
+            "sleep": 800
           },
           {
-            "sleep": 2500
+            "click": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"][data-name=\"Aurora 2D\"] [data-role=\"tile-edit\"]"
+          },
+          {
+            "waitFor": "[data-role=\"editor-view\"]:not([hidden]) .cm-content"
+          },
+          {
+            "waitGone": "[data-role=\"pattern-loading\"]",
+            "required": false
+          },
+          {
+            "sleep": 2200
           }
         ]
       },
@@ -1329,6 +1531,21 @@
         {
           "element": "no-projrow",
           "why": "S2d's point is that a 2D pattern on a matrix shows NO projection row — ABSENT here means the app is CORRECT"
+        },
+        {
+          "element": "rsec",
+          "property": "padding-top",
+          "why": "the mockups' excerpt frames inline-override `.rsec` (`padding:16px 16px 20px;border-bottom:0`) so the crop sits flush on the mockup page; the shared primitive is stated in S2 (`padding:14px 16px` + hairline), which the app matches"
+        },
+        {
+          "element": "rsec",
+          "property": "padding-bottom",
+          "why": "the mockups' excerpt frames inline-override `.rsec` (`padding:16px 16px 20px;border-bottom:0`) so the crop sits flush on the mockup page; the shared primitive is stated in S2 (`padding:14px 16px` + hairline), which the app matches"
+        },
+        {
+          "element": "rsec",
+          "property": "border-bottom-color",
+          "why": "the mockups' excerpt frames inline-override `.rsec` (`padding:16px 16px 20px;border-bottom:0`) so the crop sits flush on the mockup page; the shared primitive is stated in S2 (`padding:14px 16px` + hairline), which the app matches"
         }
       ]
     },
@@ -2089,16 +2306,46 @@
           "element": "sect",
           "why": "Jeremy's projection rule: a 1D fixture is never given a 2D or a 3D pattern, so a strip has NO Projection section at all — not an empty one, and no copy explaining why (docs/spec/projection.md §1). Every element of this frame is inside that section, which is why the whole map is allowed here; S3e and S3g measure the block on the fixtures that have one"
         },
-        { "element": "secthead-note", "why": "same — inside the absent section" },
-        { "element": "prow-2d", "why": "same" },
-        { "element": "prlab", "why": "same" },
-        { "element": "barcard-on", "why": "same" },
-        { "element": "barcard", "why": "same" },
-        { "element": "barcard-svg", "why": "same" },
-        { "element": "barcard-canvas", "why": "same" },
-        { "element": "barcard-nm", "why": "same" },
-        { "element": "barcard-hint", "why": "same" },
-        { "element": "prow-3d", "why": "same" }
+        {
+          "element": "secthead-note",
+          "why": "same — inside the absent section"
+        },
+        {
+          "element": "prow-2d",
+          "why": "same"
+        },
+        {
+          "element": "prlab",
+          "why": "same"
+        },
+        {
+          "element": "barcard-on",
+          "why": "same"
+        },
+        {
+          "element": "barcard",
+          "why": "same"
+        },
+        {
+          "element": "barcard-svg",
+          "why": "same"
+        },
+        {
+          "element": "barcard-canvas",
+          "why": "same"
+        },
+        {
+          "element": "barcard-nm",
+          "why": "same"
+        },
+        {
+          "element": "barcard-hint",
+          "why": "same"
+        },
+        {
+          "element": "prow-3d",
+          "why": "same"
+        }
       ]
     },
     "S3g": {
@@ -3594,7 +3841,8 @@
           "mock": ".edhdr .btn.primary",
           "app": "[data-role=\"dialog-confirm\"]",
           "hover": true,
-          "note": "the mock has no dialog frame; .btn.primary is the primitive it must wear"
+          "note": "the mock has no dialog frame; .btn.primary is the primitive it must wear",
+          "noBox": true
         },
         {
           "id": "cancel",
@@ -3608,7 +3856,8 @@
             "padding-left",
             "padding-right"
           ],
-          "note": "mock: a .btn is 32px/6px radius/13px whatever the variant"
+          "note": "mock: a .btn is 32px/6px radius/13px whatever the variant",
+          "noBox": true
         },
         {
           "id": "dialog-panel",
@@ -3621,7 +3870,24 @@
             "border-top-left-radius",
             "box-shadow"
           ],
-          "note": "no dialog mock; compare only the surface chrome against the .menu primitive"
+          "note": "no dialog mock; compare only the surface chrome against the .menu primitive",
+          "noBox": true
+        }
+      ],
+      "allow": [
+        {
+          "element": "confirm",
+          "property": "text",
+          "why": "the mockups draw no dialog: `.menu`/`.btn` are borrowed as the primitives this panel must WEAR, so only the chrome is comparable — not a menu's width, a menu's height, or the editor buttons' copy"
+        },
+        {
+          "element": "cancel",
+          "property": "text",
+          "why": "the mockups draw no dialog: `.menu`/`.btn` are borrowed as the primitives this panel must WEAR, so only the chrome is comparable — not a menu's width, a menu's height, or the editor buttons' copy"
+        },
+        {
+          "element": "reading order",
+          "why": "the mockups draw no dialog: `.menu`/`.btn` are borrowed as the primitives this panel must WEAR, so only the chrome is comparable — not a menu's width, a menu's height, or the editor buttons' copy — the three targets are borrowed from two different places in the mock frame"
         }
       ]
     }
