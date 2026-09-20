@@ -1285,9 +1285,10 @@ async function composeSideBySide(br, path, mockB64, appB64, label, size = { w: 4
   // app half off the canvas entirely). Always 1:1 — a scaled crop cannot be
   // compared to anything.
   const stacked = size.w * 2 + 44 > 2600;
+  // Viewport dimensions must be integers — a measured box is a float.
   await pg.setViewport({
-    width: Math.min(2600, Math.max(320, stacked ? size.w + 24 : size.w * 2 + 44)),
-    height: Math.min(2000, Math.max(160, (stacked ? size.h * 2 + 96 : size.h) + 70)),
+    width: Math.round(Math.min(2600, Math.max(320, stacked ? size.w + 24 : size.w * 2 + 44))),
+    height: Math.round(Math.min(2000, Math.max(160, (stacked ? size.h * 2 + 96 : size.h) + 70))),
     deviceScaleFactor: 1,
   });
   await pg.setContent(
