@@ -1,5 +1,51 @@
 # Update log
 
+## 2026-09-20 — opening a pattern no longer hijacks the device (#563, #562, #564)
+
+The three follow-ups from the #538 round-1 bench check, in one pass. Mirror
+only (`luxel serve`, strip + `--board panel`); no hardware was touched.
+
+**#563 — the push rule.** The v1 editor pushed `POST /api/code` on every
+recompile, unconditionally, so one click on a browsing page took the
+installation over: `Edit` on a Library tile stopped a running playlist, moved
+the LEDs to an unsaved ad-hoc program with no row in `On device` to get back
+from, and said nothing about it. The editor now writes to the device **only
+while its document IS the running program** (`livePush` in `stores/pattern.ts`
+— it gates `/api/code`, `/api/control`, `/api/events` and `/api/sensors`).
+Opening a Library/Mine tile, `+ New pattern`, a duplicate, an `.epe` import, or
+`Edit` on a stored pattern that is not playing all open in **local preview**:
+the rail preview runs the local engine as before, nothing is sent, the playlist
+keeps playing, the save-state line reads `preview only · not on device` (or
+`… · preview only`), and the header grows `▶ Play on device`
+(`data-role="editor-play-device"`) — save-then-activate, the one explicit verb
+that changes the LEDs. Live push resumes from there. `Play` on a tile is
+unchanged; the playground is unaffected. The running-pattern id split off into
+its own store (`deviceRunningId` in `stores/device.ts`) — the Patterns page's
+ring is the DEVICE's pattern, `devicePatternId` is the EDITOR's document, and
+conflating them was why holding a pattern implied playing it.
+
+**#562 — the `+ Add` picker is layout-filtered.** Both sections now use the
+same `projectionCompatible` gate the Patterns page's grids use, so a 1D strip
+is no longer offered 2D patterns (which a pick would have written to the
+device's store and queued as an item the fixture cannot show). Dims come from
+`gallery.json`'s advisory `kind` for a library row and `guessPatternDims()` for
+a device one; `picker-empty` now distinguishes "the layout filtered it" from
+"your search matched nothing".
+
+**#564 — no `/pixelblaze-library.json` 404s.** The scraped-corpus gallery is a
+build-time fact, not something to probe for: `vite.config.ts` defines
+`__HAS_PIXELBLAZE_LIBRARY__` from whether `gen-gallery.mjs` wrote the file, and
+the tab is additionally playground-only, so a console never requests it. Two
+404s per cold load against a 3-socket pool, gone.
+
+Verified in real chromium against the mirror: all five web harnesses plus
+`npm test` (`device-e2e` grew 19 checks — a playlist playing through the whole
+#563 scenario, the #562 picker filter driven off `gallery.json`'s own `kind`,
+and a no-failing-request sweep of a device-mode cold load), and `tools/ci.sh`.
+Screenshots `device-e2e-563-{preview-only,saved-preview-only,playing-live}.png`.
+The push rule is written up in docs/web-architecture.md — Jeremy, if you want
+`Edit` to keep taking the device over, that section is the one to reverse.
+
 ## 2026-09-20 — merged master on both bench boards; #538 round-1 verified on metal
 
 `64f9ea1` deployed firmware + assets to the Athom rig (192.168.0.183,

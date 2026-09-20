@@ -50,6 +50,23 @@ export const patternName = writable("");
 export const exampleName = writable(DEFAULT_PATTERN.name);
 /** Set while the editor holds a device-stored pattern. */
 export const devicePatternId = writable("");
+/**
+ * The editor's document IS the program the device is running, so every
+ * recompile LIVE-PUSHES it (`POST /api/code`) — the v1 editor model, kept for
+ * the one case where it is what the user means.
+ *
+ * False is LOCAL PREVIEW: the preview runs on the local engine as always and
+ * NOTHING is written to the device until an explicit `Save` (store it) or
+ * `▶ Play on device` (run it). Opening a pattern is browsing, not a device
+ * action — a live push stops a running playlist and leaves the device on an
+ * unsaved ad-hoc program (Gitea #563).
+ *
+ * It is the editor's own state rather than `devicePatternId === running id`
+ * because BOTH are empty for an ad-hoc program: the one pulled off the device
+ * at connect (live) and a library pattern just opened (preview) look
+ * identical by id.
+ */
+export const livePush = writable(false);
 /** Slider positions, keyed by control name. */
 export const controlValues = writable<Record<string, number[]>>({});
 /**

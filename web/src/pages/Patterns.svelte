@@ -28,6 +28,7 @@
     device,
     deviceError,
     devicePatterns,
+    deviceRunningId,
     isPlayground,
     refreshDevicePatterns,
   } from "../stores/device";
@@ -228,6 +229,7 @@
     if (!ok) return;
     await d.deletePattern(item.key);
     if ($devicePatternId === item.key) devicePatternId.set("");
+    if ($deviceRunningId === item.key) deviceRunningId.set(""); // no row to ring any more
     note("save", "deleted from device", 2000);
     await refreshDevicePatterns();
   }
@@ -290,7 +292,10 @@
     {#if mounted && $luxel}
       {#if !$isPlayground}
         <!-- On device: the running pattern wears the ring + pill, and a tile's
-             own click plays it (S1). -->
+             own click plays it (S1). `Play` is the ONLY verb here that changes
+             what the LEDs are doing — `Edit` opens the pattern in the editor
+             and writes nothing (Gitea #563); the editor's own
+             `▶ Play on device` is how you change your mind from in there. -->
         <div
           class="grid"
           data-role="patterns-grid"
@@ -302,7 +307,7 @@
             items={deviceItems}
             {search}
             only="compatible"
-            playingKey={$devicePatternId}
+            playingKey={$deviceRunningId}
             emptyNote="no patterns stored on the device yet — “+ New pattern” makes one"
             bind:count={deviceCount}
             bind:note={deviceNote}
@@ -367,7 +372,7 @@
                 {search}
                 only="incompatible"
                 autoStyle
-                playingKey={$devicePatternId}
+                playingKey={$deviceRunningId}
                 bind:count={deviceIncompatible}
                 on:pick={(e) => dispatch("openDevice", e.detail.key)}
               >

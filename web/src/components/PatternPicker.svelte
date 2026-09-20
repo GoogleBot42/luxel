@@ -12,6 +12,10 @@
   // and reports it back through `busy`/`error`, because a picker should not
   // know how a device stores things.
   //
+  // BOTH sections are filtered by the Layout the same way the Patterns page's
+  // grids are (§B, Gitea #562): a fixture is never offered a pattern it cannot
+  // show. See `fits` below.
+  //
   // Scenes are Phase B (#478/#481) and slot in as a third section, not a
   // second component: `sections` below is the seam — give it a
   // `{ kind: "scene", … }` group and the markup, the search, the keyboard
@@ -24,6 +28,12 @@
   import PatternThumb from "./PatternThumb.svelte";
   import { gatedFetch } from "../lib/fetchgate";
   import type { Luxel } from "../lib/luxel";
+  import {
+    guessPatternDims,
+    layout,
+    projectionCompatible,
+    type PatternDims,
+  } from "../stores/geometry";
 
   /** The local wasm host the thumbnails render on. */
   export let luxel: Luxel | null = null;
@@ -53,7 +63,7 @@
   /** The generated clean-room library (`tools/gen-gallery.mjs` → gallery.json,
    *  the same file the Patterns page's Library source reads). Fetched once,
    *  on the first open, so a picker that is never opened costs nothing. */
-  let library: { key: string; name: string; source: string }[] = [];
+  let library: { key: string; name: string; source: string; dims: PatternDims }[] = [];
   let libraryLoading = false;
   let libraryLoaded = false;
 
@@ -63,7 +73,7 @@
     try {
       const r = await gatedFetch(`${import.meta.env.BASE_URL}gallery.json`);
       if (r.ok) {
-        const list = (await r.json()) as { name: string; source: string }[];
+        const list = (await r.json()) as { name: string; kind?: string; source: string }[];
         const seen = new Set<string>();
         library = list
           .filter((p) => {
@@ -72,7 +82,14 @@
             seen.add(k);
             return true;
           })
-          .map((p) => ({ key: p.name, name: p.name, source: p.source }));
+          .map((p) => ({
+            key: p.name,
+            name: p.name,
+            source: p.source,
+            // gen-gallery's `kind` is the same advisory hint the Patterns
+            // page's tiles start from (components/Gallery.svelte)
+            dims: (p.kind === "grid" ? 2 : p.kind === "cloud" ? 3 : 1) as PatternDims,
+          }));
       }
     } catch {
       /* gallery.json missing (a device build without it) — the section is
@@ -105,14 +122,44 @@
   $: needle = query.trim().toLowerCase();
   const match = (label: string, n: string): boolean =>
     n === "" || label.toLowerCase().includes(n);
+
+  /**
+   * The Layout FILTER (§B, Gitea #562), the same rule the Patterns page's
+   * grids use (`components/Gallery.svelte`): a fixture is never offered a
+   * pattern it cannot show, so a 1D strip sees no 2D/3D entry and a plane no
+   * 3D one. Picking one would write it to the device's store and queue an
+   * item the fixture cannot play.
+   *
+   * It bites only when the Layout is a real FIXTURE — the picker is a console
+   * surface today, so that is always true here, but the gate is the Gallery's
+   * so the two cannot drift.
+   *
+   * Dimensionality is the same advisory each grid starts from: gen-gallery's
+   * `kind` for a library row, a regex guess at the source for a device one.
+   * A device pattern whose source has not streamed in yet counts as 1D (it is
+   * shown), exactly as a Gallery tile does.
+   */
+  $: fixture = $layout.source === "device" || $layout.source === "user";
+  const fits = (dims: PatternDims, ld: number, fix: boolean): boolean =>
+    !fix || projectionCompatible(dims, ld);
+
   $: deviceMatches = patterns
-    .filter((p) => match(p.name || p.id, needle))
+    .filter(
+      (p) =>
+        match(p.name || p.id, needle) &&
+        fits(p.source === undefined ? 1 : guessPatternDims(p.source), $layout.dims, fixture),
+    )
     .map((p): PickItem => ({ id: p.id, name: p.name, source: p.source }));
   /** A library pattern already on the device would be a duplicate row in the
    *  picker AND an overwrite on pick, so the device's copy wins. */
   $: onDevice = new Set(patterns.map((p) => (p.name || p.id).toLowerCase()));
   $: libraryMatches = library
-    .filter((p) => !onDevice.has(p.name.toLowerCase()) && match(p.name, needle))
+    .filter(
+      (p) =>
+        !onDevice.has(p.name.toLowerCase()) &&
+        match(p.name, needle) &&
+        fits(p.dims, $layout.dims, fixture),
+    )
     .map((p): PickItem => ({ id: p.key, name: p.name, source: p.source }));
 
   /** One group per source. Phase B appends `{ kind: "scene", … }` here. */
@@ -225,7 +272,9 @@
         <p class="line dim" data-role="picker-empty">
           {patterns.length === 0 && library.length === 0
             ? "Nothing to add — save a pattern from the editor first."
-            : `Nothing matches “${query}”.`}
+            : needle === ""
+              ? "Nothing here can play on this layout."
+              : `Nothing matches “${query}”.`}
         </p>
       {/if}
     </div>

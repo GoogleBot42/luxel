@@ -18,6 +18,17 @@
   // engine, and the device is a sink we send code + controls to. On a console
   // the preview additionally runs the DEVICE OUTPUT CHAIN over each frame
   // (#466), so what is drawn here is what the wire would carry.
+  //
+  // THE PUSH RULE (Gitea #563, docs/web-architecture.md): the editor writes to
+  // the device only while its document IS the device's running program
+  // (`livePush`). Opening a pattern is browsing — a Library tile, or `Edit` on
+  // a stored pattern that is not the one playing, opens in LOCAL PREVIEW:
+  // nothing is sent, a running playlist keeps playing, and the header says so.
+  // `Save` stores without activating; `▶ Play on device` is the one explicit
+  // verb that hands the pattern to the LEDs, and live push resumes from there.
+  // Before it, one click on a browsing page could stop a playlist and leave
+  // the device on an unsaved ad-hoc program with nothing in the UI saying so.
+  // The PLAYGROUND has no device and is unaffected.
   import { createEventDispatcher, onDestroy, tick } from "svelte";
   import Controls from "../components/Controls.svelte";
   import Debugger from "../components/Debugger.svelte";
@@ -44,6 +55,7 @@
     type StepKind,
   } from "../lib/luxel";
   import {
+    activateDevicePattern,
     addToPlaylist as addPatternToPlaylist,
     brightness,
     device,
@@ -56,6 +68,7 @@
     devicePatterns,
     devicePixels,
     deviceRescanHz,
+    deviceRunningId,
     deviceVmerr,
     isPlayground,
     outputStatus,
@@ -86,6 +99,7 @@
     exportEpe,
     findSaved,
     hints,
+    livePush,
     luxel,
     newPatternSource,
     parseEpe,
@@ -194,15 +208,32 @@
     return name || example || "untitled pattern";
   }
 
-  /** `saved · on device` / `unsaved` / `saved · in browser` — the one line
-   *  that answers "is what I am looking at stored anywhere?". */
+  /**
+   * The one line that answers "is what I am looking at stored anywhere — and
+   * is it what the LEDs are doing?". Its exact strings are a documented
+   * contract (`data-role="save-state"`, docs/web-architecture.md):
+   *
+   *   playground / live push   `unsaved` · `saved · on device`
+   *                            `saved · in browser` · `not saved yet`
+   *   console, local preview   `unsaved · preview only`
+   *                            `saved · on device · preview only`
+   *                            `preview only · not on device`
+   *
+   * The `preview only` half is the whole of the #563 disclosure: the editor is
+   * NOT driving the device, so nothing typed here is on the LEDs.
+   */
   function saveStateOf(
     drt: boolean,
     dev: unknown,
     dpid: string,
     name: string,
     lib: { name: string }[],
+    live: boolean,
   ): string {
+    if (dev && !live) {
+      if (drt) return "unsaved · preview only";
+      return dpid ? "saved · on device · preview only" : "preview only · not on device";
+    }
     if (drt) return "unsaved";
     if (dev && dpid) return "saved · on device";
     if (!dev && name !== "" && lib.some((s) => s.name === name)) return "saved · in browser";
@@ -472,6 +503,7 @@
   export async function devicePush(): Promise<void> {
     const d = $device;
     if (!d) return;
+    if (!$livePush) return; // local preview — the device is not ours to write (#563)
     if (compileError || !engine) return; // never push a pattern the local compile rejected
     const bc = engine.bytecode();
     try {
@@ -488,8 +520,9 @@
     await refreshStatus();
   }
 
-  /** Local recompile (for the preview) plus an immediate device push — used
-   *  when a whole new pattern is opened/created (typing debounces separately). */
+  /** Local recompile (for the preview) plus a device push when the document
+   *  is the running program — used when a whole new pattern is opened/created
+   *  (typing debounces separately). `devicePush` is the one gate (#563). */
   function applyEdit(): void {
     recompile();
     if ($device) void devicePush();
@@ -501,7 +534,7 @@
     // local preview recompiles fast; the device push (over WiFi) is throttled
     clearTimeout(debounce);
     debounce = setTimeout(recompile, 150);
-    if ($device) {
+    if ($device && $livePush) {
       clearTimeout(pushDebounce);
       pushDebounce = setTimeout(() => void devicePush(), 500);
     }
@@ -603,7 +636,11 @@
     startLoop();
     // A genuinely-unsaved edit is resumed AND pushed so the device runs it too
     // (editor, preview and device all agree). A clean copy instead opens
-    // whatever pattern is currently active on the device.
+    // whatever pattern is currently active on the device. EITHER WAY the
+    // document ends up being what the device runs, so this is the one boot
+    // that starts in live push (#563).
+    livePush.set(true);
+    deviceRunningId.set(""); // ad-hoc until the source match below names it
     const r = await connect(!wipDirty);
     if (r.ok) {
       // Nothing to reset: the console's Layout IS the device's, and the
@@ -637,13 +674,20 @@
   // ---- opening patterns ----
 
   /** Everything a fresh document resets. A projection override is a VALUE of
-   *  the working copy, so it is dropped exactly where the slider values are. */
+   *  the working copy, so it is dropped exactly where the slider values are.
+   *
+   *  It also drops LIVE PUSH: a document that has just been replaced is not
+   *  what the device is running, so the editor goes back to local preview
+   *  until something explicitly hands the new one to the LEDs (#563). The
+   *  callers that DO run it (`playDevicePattern`, `playOnDevice`) set it
+   *  after. In the playground the flag is inert — there is no device. */
   function resetDocumentState(): void {
     importError = "";
     controlValues.set({});
     projectionOverride.set(null);
     editingName = false;
     nameError = "";
+    livePush.set(false);
   }
 
   export function newPattern(): void {
@@ -685,48 +729,101 @@
     void tick().then(applyEdit);
   }
 
+  /**
+   * `Edit` on an On-device tile: open the stored pattern in the editor. NO
+   * device write — the LEDs keep doing whatever they were doing, a playlist
+   * keeps playing, and the editor is in local preview unless this pattern
+   * happens to be the one already running (#563).
+   */
   export async function openDevicePattern(id: string): Promise<void> {
     preview?.clear();
     patternLoading = true; // cover the editor until the source is fetched
     try {
-      await loadDevicePattern(id); // activates it on the device
-      recompile(); // build the local preview (no push — it's already running)
+      const running = $deviceRunningId === id;
+      await loadDevicePattern(id);
+      livePush.set(running); // editing the running pattern IS the live case
+      recompile(); // build the local preview (never a push: see devicePush)
     } finally {
       patternLoading = false;
     }
   }
 
+  /**
+   * `▶ Play on device` / a tile's `Play`: hand a stored pattern to the LEDs
+   * and adopt it as the editor's document, so the running marker, the editor
+   * and the device agree — and live push resumes from here.
+   */
+  export async function playDevicePattern(id: string): Promise<void> {
+    preview?.clear();
+    patternLoading = true;
+    try {
+      await loadDevicePattern(id);
+      recompile(); // local preview of the pattern we are about to run
+      await activateStored(id); // a refusal leaves the editor in local preview
+    } finally {
+      patternLoading = false;
+    }
+  }
+
+  /** Activate a stored pattern, healing a stale-bytecode rejection. Returns
+   *  whether the device is now running it (and `livePush` set to match). */
+  async function activateStored(id: string): Promise<boolean> {
+    const d = $device;
+    if (!d) return false;
+    let r = await activateDevicePattern(id);
+    if (!r.ok && r.code === "bc-version") {
+      // the stored bytecode predates a firmware format bump (the device
+      // can't recompile — it has no compiler): recompile from the stored
+      // source, re-save, and retry once
+      const bc = compileToBytecode($source);
+      if (bc) {
+        await d.savePattern($patternName, $source, bc);
+        r = await activateDevicePattern(id);
+      }
+    }
+    if (!r.ok) {
+      deviceError.set(`activate failed: ${r.error}`);
+      livePush.set(false);
+      return false;
+    }
+    livePush.set(true);
+    return true;
+  }
+
+  /** Fetch a stored pattern into the document. Activation is the CALLER's
+   *  decision (#563) — this only reads. */
   async function loadDevicePattern(id: string): Promise<void> {
     const d = $device;
     if (!d) return;
     try {
       const p = await d.patternSource(id);
-      let r = await d.activatePattern(id);
-      if (!r.ok && r.code === "bc-version") {
-        // the stored bytecode predates a firmware format bump (the device
-        // can't recompile — it has no compiler): recompile from the stored
-        // source, re-save, and retry once
-        const bc = compileToBytecode(p.source);
-        if (bc) {
-          await d.savePattern(p.name, p.source, bc);
-          r = await d.activatePattern(id);
-        }
-      }
-      if (!r.ok) {
-        deviceError.set(`activate failed: ${r.error}`);
-        return;
-      }
-      devicePatternId.set(id);
       patternName.set(p.name);
       exampleName.set("");
       source.set(p.source);
-      resetDocumentState();
-      dirty.set(false); // freshly loaded from the device — matches what's running
+      resetDocumentState(); // drops live push; the caller re-establishes it
+      devicePatternId.set(id);
+      dirty.set(false); // freshly loaded from the device — matches the stored copy
       compileError = null;
       // controls come from the local recompile the caller runs next
     } catch (e) {
       deviceError.set(`cannot load pattern: ${String(e)}`);
     }
+  }
+
+  /**
+   * The editor header's `▶ Play on device` (§5.2, #563): the one explicit
+   * "put this on the LEDs" verb. A pattern the device already stores is
+   * activated by id; anything else (a Library pick, an unsaved edit) is SAVED
+   * first, because the device can only run what it holds — which is also what
+   * gives it a row in `On device` to come back to.
+   */
+  async function playOnDevice(): Promise<void> {
+    if (!$device) return;
+    if ($dirty || !$devicePatternId) {
+      await saveCurrent();
+      if ($dirty || !$devicePatternId) return; // save refused (no name, no compile)
+    }
+    if (await activateStored($devicePatternId)) note("save", "playing on the device", 2500);
   }
 
   // The device streams only source, not which library entry it came from — so
@@ -737,19 +834,24 @@
   // NOT gated on `active`: since the console opens on the Patterns page
   // (#538) rather than in the editor, this match is what lights the running
   // tile there — it has to happen whether or not the editor is on screen.
-  $: matchRunningToLibrary($devicePatterns, $source, $dirty, $devicePatternId, $device);
+  $: matchRunningToLibrary($devicePatterns, $source, $dirty, $devicePatternId, $device, $livePush);
   function matchRunningToLibrary(
     pats: { id: string; name: string; source?: string }[],
     src: string,
     drt: boolean,
     dpid: string,
     dev: unknown,
+    live: boolean,
   ): void {
     if (!dev || drt || dpid || !src) return;
     const m = pats.find((p) => p.source && p.source.trim() === src.trim());
     if (m) {
       patternName.set(m.name);
       devicePatternId.set(m.id);
+      // While the editor IS the running program, naming the document also
+      // names what the device is playing — that is what lights the ring on
+      // the Patterns page (#563 split the two ids apart).
+      if (live) deviceRunningId.set(m.id);
     }
   }
 
@@ -796,6 +898,8 @@
     exampleName.set("");
     devicePatternId.set("");
     dirty.set(true);
+    // the copy is a new document the device has never seen (#563)
+    livePush.set(false);
     note("save", "duplicated — Save to store it", 2500);
   }
 
@@ -829,9 +933,14 @@
         // state after a library→device save (audit E6, Jeremy 2026-09-19).
         // The freshly-read list is the fallback: names are unique on the
         // device, because saving the same name overwrites.
-        devicePatternId.set(
-          r.id && r.id !== "" ? r.id : ($devicePatterns.find((p) => p.name === name)?.id ?? ""),
-        );
+        const id =
+          r.id && r.id !== "" ? r.id : ($devicePatterns.find((p) => p.name === name)?.id ?? "");
+        devicePatternId.set(id);
+        // Saving never ACTIVATES (#563) — `▶ Play on device` does. The one
+        // exception is bookkeeping: while the editor already drives the
+        // device, the freshly stored row IS what is playing, so the Patterns
+        // page's ring follows it instead of staying on an ad-hoc blank.
+        if ($livePush && id) deviceRunningId.set(id);
       } else {
         note("save", r && "error" in r ? `save failed: ${r.error}` : "save failed", 3000);
       }
@@ -856,6 +965,7 @@
       if (!ok) return;
       await $device?.deletePattern(id);
       devicePatternId.set("");
+      if ($deviceRunningId === id) deviceRunningId.set(""); // no row to ring any more
       note("save", "deleted from device", 2000);
       await refreshDevicePatterns();
       return;
@@ -945,7 +1055,10 @@
 
   function onControlSet(e: CustomEvent<{ name: string; values: number[] }>): void {
     engine?.setControl(e.detail.name, e.detail.values); // drives the local preview
-    if ($device) void $device.setControl(e.detail.name, e.detail.values); // and the strip
+    // …and the strip, but only while the strip is running THIS pattern: a
+    // slider moved in local preview would otherwise re-colour whatever the
+    // device happens to be playing (#563).
+    if ($device && $livePush) void $device.setControl(e.detail.name, e.detail.values);
   }
 
   // ---- debugger ----
@@ -1092,7 +1205,7 @@
 
   function onInject(e: CustomEvent<{ x: number; y: number }>): void {
     engine?.pushEvent(EV_POINTER, e.detail.x, e.detail.y, 1);
-    if (!$device) return;
+    if (!$device || !$livePush) return; // local preview writes nothing (#563)
     // batch drags into one POST per ~50 ms instead of a request per move
     evQueue.push([EV_POINTER, e.detail.x, e.detail.y, 1]);
     if (!evFlushTimer) evFlushTimer = setTimeout(flushEvents, 50);
@@ -1172,8 +1285,9 @@
       const sf = mic.frame();
       engine.setSensors(sf);
       // in device mode, the mic also stands in for the physical sensor
-      // board: stream frames to the strip (throttled, one in flight)
-      const d = $device;
+      // board: stream frames to the strip (throttled, one in flight) — but
+      // only while the device is running THIS pattern (#563)
+      const d = $livePush ? $device : null;
       if (d && !sensorInFlight && t - lastSensorPush > 50) {
         lastSensorPush = t;
         sensorInFlight = true;
@@ -1290,13 +1404,29 @@
       {#if nameError}<span class="name-error" data-role="name-error">{nameError}</span>{/if}
 
       <span class="savestate" data-role="save-state">
-        {saveStateOf($dirty, $device, $devicePatternId, $patternName, $saved)}
+        {saveStateOf($dirty, $device, $devicePatternId, $patternName, $saved, $livePush)}
       </span>
 
       <span class="spacer"></span>
 
       {#if $notes.save}<span class="dim note" data-role="save-note">{$notes.save}</span>{/if}
       {#if $notes.share}<span class="dim note" data-role="share-note">{$notes.share}</span>{/if}
+
+      <!-- The explicit "put this on the LEDs" verb, and the ONLY thing in the
+           editor that changes what the device is playing while the document
+           is not already the running one (#563). Absent once it IS — there is
+           then nothing to play, exactly as on the playing tile (#555) — and
+           absent in the playground, which has no device. -->
+      {#if $device && !$livePush}
+        <button
+          class="btn"
+          data-role="editor-play-device"
+          title="save this pattern to the device and run it on the LEDs"
+          on:click={() => void playOnDevice()}
+        >
+          ▶ Play on device
+        </button>
+      {/if}
 
       <!-- one word, in both modes: WHERE it lands is the save state's job,
            not the button's (audit E2 — "Save to device" was the wrong text) -->

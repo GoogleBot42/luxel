@@ -274,6 +274,14 @@ own idea of the rule.
 
 * **Library · Mine · PixelBlaze** simply drop them, and the segment chip counts
   what is on screen. The search still searches what is left.
+* **The playlist's `+ Add` picker** (`components/PatternPicker.svelte`) drops
+  them from BOTH of its sections, for the same reason and by the same rule
+  (#562): picking one would write it to the device's store and queue an item
+  the fixture cannot play. It has no tiles to compile, so the advisory dims are
+  all it uses — `gallery.json`'s `kind` for a library row, `guessPatternDims()`
+  for a device one, a device row whose source has not streamed in yet counted
+  as 1D. When the filter is what emptied the list, `picker-empty` says
+  `Nothing here can play on this layout.` rather than blaming the search.
 * **On device** does not: those patterns are the user's own, stored on their
   own hardware. They go into a second `<Gallery only="incompatible" autoStyle>`
   under the grid, behind a collapsed-by-default disclosure reading
@@ -572,7 +580,7 @@ nothing crosses between them.
 
 | owner | what it holds | `data-role`s |
 |---|---|---|
-| the **header** (`editor-header`) | the DOCUMENT: back · the name field · save state · **Save** (the one primary action) · the ⋯ menu of document verbs | `editor-back`, `pattern-name`, `name-input`, `name-error`, `save-state`, `save`, `overflow`, `add-to-playlist`, `duplicate`, `epe-export`, `epe-import`, `share`, `delete` |
+| the **header** (`editor-header`) | the DOCUMENT: back · the name field · save state · [**▶ Play on device**] · **Save** (the one primary action) · the ⋯ menu of document verbs | `editor-back`, `pattern-name`, `name-input`, `name-error`, `save-state`, `editor-play-device`, `save`, `overflow`, `add-to-playlist`, `duplicate`, `epe-export`, `epe-import`, `share`, `delete` |
 | the **code pane** | its own errors: gutter dot + wavy underline on the line + one status strip pinned to the bottom of the pane | `compile-error`, `runtime-error`, `map-compile-error`, `.cm-err-dot`, `.cm-lintRange-error` |
 | the **preview header** | the TRANSPORT, next to the thing it controls | `preview-dims`, `pause`, `debug`, `mic-toggle`, `target-fps` |
 
@@ -592,6 +600,67 @@ flex row: `.edhdr-main` is S2b's single 44px line (`[← icon] [name] [Save]
 `.statusonly`, the console's chip is a readout a phone can spare — or wraps to
 a second unruled row, which is what keeps the playground's rig chooser
 reachable.
+
+### Opening a pattern is not a device action (the push rule, Gitea #563)
+
+The v1 editor pushed on every recompile, unconditionally: the app *was* an
+editor and live-push-on-open was the feature. In v2 the Patterns page is a
+browser with explicit verbs, and the device may be running a playlist the user
+cares about — so one click on a browsing page must not take the installation
+over. It did: `Edit` on a Library tile pushed `POST /api/code`, which the
+firmware treats as a manual takeover (`playlist::stop()`), stopping the
+playlist and leaving the device on an unsaved ad-hoc program with no row in
+`On device` to get back from, and nothing in the UI saying so.
+
+**The rule.** The editor writes to the device only while its document IS the
+device's running program — `livePush` in `stores/pattern.ts`. Everything that
+crosses the wire from the editor is behind it: `/api/code` (the recompile
+push), `/api/control` (slider moves), `/api/events` (preview clicks) and
+`/api/sensors` (the mic standing in for a sensor board).
+
+| you did this | editor state |
+|---|---|
+| connect (the handshake pulls the running pattern, or re-pushes a dirty WIP) | **live push** |
+| `Play` on an On-device tile, `▶ Play on device` in the header | **live push** |
+| `Edit` on the On-device tile that IS running | **live push** |
+| `Edit` on an On-device tile that is not running | local preview |
+| a Library / Mine / PixelBlaze tile, `+ New pattern`, `Duplicate`, an `.epe` import | local preview |
+
+In **local preview** the rail preview runs the local engine exactly as always
+(through the device output chain, #466) — the difference is only that nothing
+is sent. The header says so in the save state, and grows the one verb that
+changes it:
+
+* `save-state` (`data-role="save-state"`) text is a contract the harnesses
+  assert. Playground or live push: `unsaved` · `saved · on device` ·
+  `saved · in browser` · `not saved yet`. Console in local preview:
+  `unsaved · preview only` · `saved · on device · preview only` ·
+  `preview only · not on device`.
+* `Save` stores the pattern and does **not** activate it — on a console that
+  is `POST /api/patterns`, which gives a Library pattern its row in
+  `On device` without touching the LEDs.
+* `editor-play-device` (`▶ Play on device`) is the explicit activation, and
+  the only thing in the editor that changes what is playing. A pattern the
+  device already stores is activated by id; anything else (a Library pick, an
+  unsaved edit) is saved first, because the device can only run what it holds.
+  It is absent once the document IS the running one — there is then nothing to
+  play, the same reasoning that removed `Play` from the playing tile (#555) —
+  and absent in the playground.
+
+**Two ids, not one.** `devicePatternId` (`stores/pattern.ts`) is the id of the
+document the EDITOR holds; `deviceRunningId` (`stores/device.ts`) is the id the
+DEVICE is running, which is what the Patterns page rings and pills. They were
+one value until #563, which is exactly why merely opening a pattern used to run
+it: there was no way to hold one without claiming the device was playing it.
+`deviceRunningId` is written by `activateDevicePattern()` (THE activation verb,
+used by both Play paths), by the connect handshake's source match, and by
+`refreshPlaylist()` while the playlist is playing — auto-advance moves the
+device off whatever was activated last.
+
+`livePush` is deliberately its own flag rather than `devicePatternId ===
+deviceRunningId`: both are `""` for an ad-hoc program, so the pattern pulled
+off the device at connect (live) and a Library pattern just opened (preview)
+are indistinguishable by id.
 
 Rules that come out of the audit and must not drift back:
 
@@ -1116,10 +1185,11 @@ way the fixture shows it rather than row-major. Per-item projection overrides ar
 `deviceEngineHeap`, `deviceVmerr`, `deviceFps`, `deviceOutFps`,
 `deviceRescanHz`, `deviceMap`, `deviceLayoutWire`, `deviceCaps`,
 `deviceVersion`, `deviceSlot`, `deviceStore`, `deviceName`, `deviceLabel`,
-`devicePatterns`, `brightness`,
+`devicePatterns`, `deviceRunningId`, `brightness`,
 `brightnessMax`, `deviceProtocol`, `protocolOptions`, `dataPin*`, `wifi*`,
 `mqtt*`, `outputStatus`, `palette*`, `clockStatus`, `syncStatus`, `netLive`,
 `playlist`; functions `connectDevice`, `detectDeviceBase`, `refresh*`,
+`activateDevicePattern`,
 `addToPlaylist`, `queuePlaylistSave`, `markTransport`, `applyLayout`,
 `installDeviceMapCoords`, `installDeviceGridMap`, `clearDeviceMap`,
 `pollSubscribe`, `pollStopAll`,
@@ -1133,7 +1203,7 @@ way the fixture shows it rather than row-major. Per-item projection overrides ar
 `layoutKey()`, `TILE_MAX_CELLS`, `THUMB_MAX_CELLS`. See **Geometry** below.
 
 `stores/pattern.ts` — `luxel`, `loadLuxel()`, `source`, `dirty`,
-`patternName`, `exampleName`, `devicePatternId`, `controlValues`,
+`patternName`, `exampleName`, `devicePatternId`, `livePush`, `controlValues`,
 `projectionOverride`, `hints`,
 `mapSrc`, `MAP_PROGRAM_TEMPLATE`, `NEW_PATTERN`, `newPatternSource()`, `previewFps`, `runtimeError`, `saved`,
 `saveToLocalLibrary`, `deleteFromLocalLibrary`, `findSaved`, `startAutosave`,
@@ -1149,6 +1219,11 @@ way the fixture shows it rather than row-major. Per-item projection overrides ar
   local wasm engine and pushes source + LXBC to `/api/code`. There is no pixel
   stream back (removed at Jeremy's request); only the connect handshake reads
   the device's running pattern.
+- **Nothing reaches the device unless the user asked for it** (#563). Browsing
+  a pattern, opening one in the editor, switching the Layout and reloading the
+  page all leave the LEDs alone; `Play`, `▶ Play on device`, `Save`, the
+  playlist transport and typing into a pattern the device is already running
+  are the writes. `livePush` is the gate — see the push rule above.
 - **`data-role` attributes are the e2e contract.** `web/tools/{e2e,device-e2e,
   maxpixels-e2e,sync-e2e,flash-e2e,coldload,lna-e2e}.mjs` drive them. Moving
   markup between components is fine; renaming or dropping a role is not,

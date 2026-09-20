@@ -116,6 +116,13 @@ paths:
   harness still reaches for (#545 → #547 did exactly this: two stale
   projection assertions threw and took the playlist, settings and capacity
   phases with them, on master, for everyone).
+  The other way a *later* section aborts is UI STATE an earlier one left
+  behind. The Patterns page's search box and source chip belong to the PAGE,
+  not to a grid, so a section that switched to `Library` and typed a needle
+  leaves every `[data-source="device"] .tile` hidden — and the next
+  `tileAction(DTILE, …)` dies on "Node is either not clickable or not an
+  Element", 400 lines away from the cause. A section that drives a page-level
+  control puts it back in its own `finally` (2026-09-19, #563).
 - In e2e scripts, write injected pattern bodies on one line — CodeMirror
   auto-closes `{`, so a trailing `}` on its own line doubles up and the
   compile silently breaks.
@@ -142,6 +149,17 @@ paths:
   WASM engine and pushes to the device; don't reintroduce a pixel-stream
   socket. The connect handshake on page load stays, though: the device
   reports its running pattern/status before the editor opens.
+- **The editor pushes only while its document IS the device's running
+  program** (`livePush`, #563 — it gates `/api/code`, `/api/control`,
+  `/api/events`, `/api/sensors`). Opening a pattern is BROWSING: a Library
+  tile, `+ New pattern`, or `Edit` on a stored pattern that is not playing all
+  open in local preview and write nothing, because a push is a playlist
+  takeover on the firmware (`playlist::stop()`) and one click on a browsing
+  page must not cost the user their installation. `▶ Play on device` /
+  a tile's `Play` is the explicit activation. Two ids, not one:
+  `deviceRunningId` (device) vs `devicePatternId` (editor document). The full
+  rule and the `save-state` string contract are in docs/web-architecture.md
+  ("Opening a pattern is not a device action").
 - `web/src` is shell (`App.svelte`) + stores (`stores/*.ts`) + pages
   (`pages/*.svelte`) + reusable components — see
   [docs/web-architecture.md](../../docs/web-architecture.md) for the store
