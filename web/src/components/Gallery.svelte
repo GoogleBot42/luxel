@@ -428,6 +428,7 @@
       data-kind={shape}
       data-dims={t.rig ? t.dims : ""}
       data-key={t.key}
+      data-name={t.name}
       hidden={hiddenBy(t, filter)}
       use:register={t.key}
     >

@@ -1,5 +1,6 @@
 # Update log
 
+<<<<<<< HEAD
 ## 2026-09-20 — fidelity closure: the Settings screens (#538)
 
 `mockdiff` frames `S3 S3b S3e S3f S3g S3i S3j S3k S3reboot`: **403 deltas → 0**, the
@@ -40,6 +41,46 @@ pure-state lines (that board's brightness and time zone). What moved:
   the Layout picker at two widths), #581 (no route publishes a board identity, so the
   LED layout head cannot name the board).
 
+=======
+## 2026-09-20 — editor screens: zero mockdiff deltas (#538)
+
+The eight EDITOR frames — `S2 S2b S2c S2d S2err S2cpop S2menu S2dialog` — now report
+**0 deltas** where they reported **273**. The chrome stopped approximating mockup S2 and
+became it: `.editor-frame` is a two-row grid over a flex `.edbody`, the rail is a fixed
+**360px** on `--bg` (scrolling in an inner `.railscroll`), the code column is `flex:1` on
+`--bg-inset` with its own hairline, and the header is ONE flex row ending in the mock's
+344px `.edhdr-rail` — which puts the rule exactly on the code/rail boundary, so `Save`
+ends at the code column's right edge. `.rsec` is a plain block with `.rhead{margin-bottom:10}`
+and `.ctlrow{margin-top:12}` instead of flex gaps, and `.rdim`/`.codestatus`/`.nameedit`
+carry the mock's type metrics.
+
+Shared primitives moved with them (`web/src/app.css`): `input[type=range]` is the mock's
+`.slider` (16px box, 4px track, 14px accent thumb with a 3px ring) and `input[type=checkbox]`
+is the mock's `.sw` pill (36×20, accent-soft and ringed when on, warn knob when
+indeterminate) instead of two browser defaults; `.btn.quiet` keeps the primitive border
+colour and `.menu .mi` wraps on the body line-height. That alone took **9 other frames**
+down with it (S3 115→106, S3j 56→51, S4 88→79, S1menu 6→2 …); the whole suite is 912→599.
+
+Copy and state, not just pixels: the Controls header states `<name> · <dims>` (S2c/S2d),
+VARS carries its count, the preview readout leads with the rates (`60/92 fps · 64×64
+matrix`) so an ellipsis takes the layout and not the number Jeremy asked for, the phone
+code column wears S2b's `CODE / edit on a larger screen to change code` header, and the
+dialog wears the `.menu` surface with one `.btn.primary` — the second, red primary is gone.
+
+The map's editor recipes now open a pattern the way a person does (a tile's `Edit`,
+keyed off a new `data-name` on the tile) instead of typing into whatever `#/editor`
+happened to hold. They therefore write NOTHING to the shared mirror, which is what had
+been stopping the seeded playlist before S4 ran — `plrow-playing` is no longer ABSENT.
+
+The projection row's two verbs became 24px touch targets on a phone without the row
+growing past the 24.13px the mock draws: `.projrow` is pinned to `calc(1.45em + 6px)`
+and `.pv`/`.pa` carry `min-height:24px` + `align-content:center` — none of which
+mockdiff compares, and both elements are `noBox` in the map.
+
+Filed: **#574** (a 1D pattern on a matrix defaults to `By index`; the mockups pick
+`Along x` — a core/firmware call), **#575** (the two phone touch targets left: the
+slider at 16px and the switch at 20px, the heights the mockups state outright).
+>>>>>>> 4519597 (web: the editor screens become the mock, element for element (#538))
 
 ## 2026-09-20 — fidelity closure: shell, Patterns, playground chip, menu primitives (#538)
 

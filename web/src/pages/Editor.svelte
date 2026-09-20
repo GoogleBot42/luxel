@@ -208,6 +208,12 @@
     return name || example || "untitled pattern";
   }
 
+  /** `1D`/`2D`/`3D` — `preferredDims()`'s 0 means "no preference", i.e. 1D
+   *  (mockups S2c `Sunset Fade · 1D`, S2d `Aurora 2D · 2D`). */
+  function dimsLabel(d: number): string {
+    return `${d === 0 ? 1 : d}D`;
+  }
+
   /**
    * The one line that answers "is what I am looking at stored anywhere — and
    * is it what the LEDs are doing?". Its exact strings are a documented
@@ -1030,18 +1036,21 @@
    *  (audit E9, 2026-09-19). The device figure is `out_fps` on a pipelined
    *  HUB75 board (frames the panel actually displayed), else `fps`. The
    *  playground has only the local loop. */
-  $: localRate = `${$previewFps.toFixed(0)} fps local`;
+  $: localRate = `${$previewFps.toFixed(0)} fps`;
   $: previewRate = !$device
     ? { text: localRate, title: "local preview loop in this browser tab" }
     : {
-        text: `${localRate} · ${$deviceOutFps > 0 ? $deviceOutFps : $deviceFps} fps on device`,
+        // `60/92 fps` — the RATES first and the layout after them, because
+        // this line lives in a 360px rail beside the transport and the tail
+        // is what an ellipsis takes. The layout is on the header chip too.
+        text: `${$previewFps.toFixed(0)}/${$deviceOutFps > 0 ? $deviceOutFps : $deviceFps} fps`,
         title:
           ($deviceOutFps > 0
             ? `${$deviceOutFps} fps displayed by the panel (out_fps)` +
               ($deviceRescanHz ? `, panel rescan ${$deviceRescanHz} Hz` : "") +
               `, device render loop ${$deviceFps} fps`
             : `${$deviceFps} fps rendered by the device`) +
-          ` — local preview loop ${$previewFps.toFixed(0)} fps in this browser tab`,
+          ` — local preview loop ${$previewFps.toFixed(0)} fps in this browser tab, ${$layoutName}`,
       };
 
   function onFpsChange(e: Event): void {
@@ -1367,147 +1376,145 @@
        back · inline-editable name · save state · one primary action · the ⋯
        menu of document verbs. No geometry, no transport, no sub-tabs. -->
   <header class="editor-header" data-role="editor-header">
-    <!-- the code column's half: everything the DOCUMENT owns, ending at the
-         rail's hairline rather than at the page's right edge (audit E4) -->
-    <div class="edhdr-main">
-      <button
-        data-role="editor-back"
-        class="btn quiet back"
-        title={`back to ${backLabel}`}
-        on:click={() => dispatch("back")}
-      >
-        <span class="backglyph" aria-hidden="true">←</span>
-        <span class="backlabel">{backLabel}</span>
-      </button>
+    <button
+      data-role="editor-back"
+      class="btn quiet back"
+      title={`back to ${backLabel}`}
+      on:click={() => dispatch("back")}
+    >
+      <span class="backglyph" aria-hidden="true">←</span>
+      <span class="backlabel">{backLabel}</span>
+    </button>
 
-      {#if editingName}
-        <input
-          class="nameedit"
-          data-role="name-input"
-          bind:this={nameInput}
-          bind:value={nameDraft}
-          aria-label="pattern name"
-          on:keydown={onNameKey}
-          on:blur={commitName}
-          on:click|stopPropagation
-        />
-      {:else}
-        <button
-          class="nameedit"
-          data-role="pattern-name"
-          title="click to rename"
-          on:click|stopPropagation={() => startRename()}
-        >
-          {nameOf($patternName, $exampleName)}
-        </button>
-      {/if}
-      {#if nameError}<span class="name-error" data-role="name-error">{nameError}</span>{/if}
-
-      <span class="savestate" data-role="save-state">
-        {saveStateOf($dirty, $device, $devicePatternId, $patternName, $saved, $livePush)}
-      </span>
-
-      <span class="spacer"></span>
-
-      {#if $notes.save}<span class="dim note" data-role="save-note">{$notes.save}</span>{/if}
-      {#if $notes.share}<span class="dim note" data-role="share-note">{$notes.share}</span>{/if}
-
-      <!-- The explicit "put this on the LEDs" verb, and the ONLY thing in the
-           editor that changes what the device is playing while the document
-           is not already the running one (#563). Absent once it IS — there is
-           then nothing to play, exactly as on the playing tile (#555) — and
-           absent in the playground, which has no device. -->
-      {#if $device && !$livePush}
-        <button
-          class="btn"
-          data-role="editor-play-device"
-          title="save this pattern to the device and run it on the LEDs"
-          on:click={() => void playOnDevice()}
-        >
-          ▶ Play on device
-        </button>
-      {/if}
-
-      <!-- one word, in both modes: WHERE it lands is the save state's job,
-           not the button's (audit E2 — "Save to device" was the wrong text) -->
-      <button
-        class="btn primary"
-        data-role="save"
-        title={$device ? "store this pattern on the device" : "store this pattern in this browser"}
-        on:click={() => void saveCurrent()}
-      >
-        Save
-      </button>
-
-      <span class="overflow">
-        <button
-          class="btn icon"
-          bind:this={moreBtn}
-          data-role="overflow"
-          title="more actions"
-          aria-label="more actions"
-          on:click={() => (menuOpen = !menuOpen)}
-        >
-          ⋯
-        </button>
-        <Popover
-          open={menuOpen}
-          anchor={moreBtn}
-          dataRole="editor-menu"
-          on:close={() => (menuOpen = false)}
-        >
-          <!-- "Add to scene ▸" belongs here (proposal §5.4b) and is absent
-               until scenes exist — Phase B, Gitea #480. Not rendered rather
-               than rendered-disabled: a control is absent unless the thing it
-               acts on exists (§5.7). -->
-          {#if $device && $devicePatternId}
-            <button
-              class="mi"
-              data-role="add-to-playlist"
-              role="menuitem"
-              title="add this pattern, with its current values, to the playlist"
-              on:click={addToPlaylist}
-            >
-              Add to playlist
-            </button>
-            <div class="sepr"></div>
-          {/if}
-          <!-- the mock's second group: what you can do to the DOCUMENT itself -->
-          <button class="mi" data-role="duplicate" role="menuitem" on:click={duplicate}>Duplicate</button>
-          <button class="mi" data-role="epe-export" role="menuitem" on:click={doExportEpe}>Export .epe</button>
-          <button class="mi" data-role="epe-import" role="menuitem" on:click={() => fileInput.click()}>
-            Import .epe…
-          </button>
-          {#if $isPlayground}
-            <!-- the mock has no Share (it is a console frame); a share link is
-                 a document verb, so it joins the document group -->
-            <button
-              class="mi"
-              data-role="share"
-              role="menuitem"
-              title="copy a link that carries this pattern in the URL"
-              on:click={() => void sharePattern()}
-            >
-              Share…
-            </button>
-          {/if}
-          {#if canDeleteNow($device, $devicePatternId, $exampleName, $patternName, $saved)}
-            <div class="sepr"></div>
-            <button class="mi del" data-role="delete" role="menuitem" on:click={() => void deleteSaved()}>
-              Delete
-            </button>
-          {/if}
-        </Popover>
-      </span>
-
+    {#if editingName}
       <input
-        class="file-input"
-        type="file"
-        accept=".epe,.json,application/json"
-        bind:this={fileInput}
-        on:change={onImportPick}
+        class="nameedit"
+        data-role="name-input"
+        bind:this={nameInput}
+        bind:value={nameDraft}
+        aria-label="pattern name"
+        on:keydown={onNameKey}
+        on:blur={commitName}
+        on:click|stopPropagation
       />
-    </div>
+    {:else}
+      <button
+        class="nameedit"
+        data-role="pattern-name"
+        title="click to rename"
+        on:click|stopPropagation={() => startRename()}
+      >
+        <!-- the clamp is on an INNER span: mockup `.nameedit` neither wraps
+             nor clips, and this element is measured against it -->
+        <span class="nametext">{nameOf($patternName, $exampleName)}</span>
+      </button>
+    {/if}
+    {#if nameError}<span class="name-error" data-role="name-error">{nameError}</span>{/if}
+
+    <span class="savestate" data-role="save-state">
+      {saveStateOf($dirty, $device, $devicePatternId, $patternName, $saved, $livePush)}
+    </span>
+
+    <span class="spacer"></span>
+
+    {#if $notes.save}<span class="dim note" data-role="save-note">{$notes.save}</span>{/if}
+    {#if $notes.share}<span class="dim note" data-role="share-note">{$notes.share}</span>{/if}
+
+    <!-- The explicit "put this on the LEDs" verb, and the ONLY thing in the
+         editor that changes what the device is playing while the document
+         is not already the running one (#563). Absent once it IS — there is
+         then nothing to play, exactly as on the playing tile (#555) — and
+         absent in the playground, which has no device. -->
+    {#if $device && !$livePush}
+      <button
+        class="btn"
+        data-role="editor-play-device"
+        title="save this pattern to the device and run it on the LEDs"
+        on:click={() => void playOnDevice()}
+      >
+        ▶ Play on device
+      </button>
+    {/if}
+
+    <!-- one word, in both modes: WHERE it lands is the save state's job,
+         not the button's (audit E2 — "Save to device" was the wrong text) -->
+    <button
+      class="btn primary"
+      data-role="save"
+      title={$device ? "store this pattern on the device" : "store this pattern in this browser"}
+      on:click={() => void saveCurrent()}
+    >
+      Save
+    </button>
+
+    <span class="overflow">
+      <button
+        class="btn icon"
+        bind:this={moreBtn}
+        data-role="overflow"
+        title="more actions"
+        aria-label="more actions"
+        on:click={() => (menuOpen = !menuOpen)}
+      >
+        ⋯
+      </button>
+      <Popover
+        open={menuOpen}
+        anchor={moreBtn}
+        dataRole="editor-menu"
+        on:close={() => (menuOpen = false)}
+      >
+        <!-- "Add to scene ▸" belongs here (proposal §5.4b) and is absent
+             until scenes exist — Phase B, Gitea #480. Not rendered rather
+             than rendered-disabled: a control is absent unless the thing it
+             acts on exists (§5.7). -->
+        {#if $device && $devicePatternId}
+          <button
+            class="mi"
+            data-role="add-to-playlist"
+            role="menuitem"
+            title="add this pattern, with its current values, to the playlist"
+            on:click={addToPlaylist}
+          >
+            Add to playlist
+          </button>
+          <div class="sepr"></div>
+        {/if}
+        <!-- the mock's second group: what you can do to the DOCUMENT itself -->
+        <button class="mi" data-role="duplicate" role="menuitem" on:click={duplicate}>Duplicate</button>
+        <button class="mi" data-role="epe-export" role="menuitem" on:click={doExportEpe}>Export .epe</button>
+        <button class="mi" data-role="epe-import" role="menuitem" on:click={() => fileInput.click()}>
+          Import .epe…
+        </button>
+        {#if $isPlayground}
+          <!-- the mock has no Share (it is a console frame); a share link is
+               a document verb, so it joins the document group -->
+          <button
+            class="mi"
+            data-role="share"
+            role="menuitem"
+            title="copy a link that carries this pattern in the URL"
+            on:click={() => void sharePattern()}
+          >
+            Share…
+          </button>
+        {/if}
+        {#if canDeleteNow($device, $devicePatternId, $exampleName, $patternName, $saved)}
+          <div class="sepr"></div>
+          <button class="mi del" data-role="delete" role="menuitem" on:click={() => void deleteSaved()}>
+            Delete
+          </button>
+        {/if}
+      </Popover>
+    </span>
+
+    <input
+      class="file-input"
+      type="file"
+      accept=".epe,.json,application/json"
+      bind:this={fileInput}
+      on:change={onImportPick}
+    />
 
     <!-- WHAT this screen renders through, over the rail it describes. The
          shell header is not rendered over an editor screen (#538), so its rig
@@ -1524,214 +1531,233 @@
     </span>
   </header>
 
-  <!-- ── the code column holds only code, and owns its own errors ── -->
-  <section class="left">
-    <div class="editor-host">
-      <div class="editor-slot">
-        <CodeEditor
-          bind:this={editor}
-          value={$source}
-          {hoverValue}
-          on:change={onSourceChange}
-          on:breakpoints={onBreakpoints}
-        />
+  <!-- The body is the mock's `.edbody`: code left, rail right, and the two
+       stacked with the rail first on a phone (S2b). -->
+  <div class="edbody" data-role="editor-body">
+    <!-- ── the code column holds only code, and owns its own errors ── -->
+    <section class="left">
+      <!-- S2b: on a phone the code column wears the same section header the
+           rail sections do, and its `.rdim` says why it is read-only. -->
+      <div class="code-head">
+        <span class="slabel">Code</span>
+        <span class="rdim code-hint">edit on a larger screen to change code</span>
       </div>
-    </div>
+      <div class="editor-host">
+        <div class="editor-slot">
+          <CodeEditor
+            bind:this={editor}
+            value={$source}
+            {hoverValue}
+            on:change={onSourceChange}
+            on:breakpoints={onBreakpoints}
+          />
+        </div>
+      </div>
 
-    <!-- The status strip pinned to the bottom of the pane: one plain sentence
-         about the line the gutter dot and the squiggle already point at
-         (proposal §5.2). Compile first, then the runtime error — never both,
-         and never a banner across the page from the cause. -->
-    {#if compileError}
-      <button class="codestatus err" data-role="compile-error" on:click={jumpToError}>
-        ✗ line {compileError.line} · {compileError.message}
-        <span class="jump">jump to line</span>
-      </button>
-    {:else if $runtimeError}
-      <div class="codestatus warn" data-role="runtime-error">
-        ⚠ runtime · {$runtimeError.message}
-        <button class="dismiss" title="dismiss" on:click={() => runtimeError.set(null)}>×</button>
-      </div>
-    {/if}
-    <p class="code-hint">Editing code needs a wider screen — the preview and its values are above.</p>
-  </section>
+      <!-- The status strip pinned to the bottom of the pane: one plain sentence
+           about the line the gutter dot and the squiggle already point at
+           (proposal §5.2). Compile first, then the runtime error — never both,
+           and never a banner across the page from the cause. -->
+      {#if compileError}
+        <button class="codestatus err" data-role="compile-error" on:click={jumpToError}>
+          ✗ line {compileError.line} · {compileError.message}
+          <span class="jump">jump to line</span>
+        </button>
+      {:else if $runtimeError}
+        <div class="codestatus warn" data-role="runtime-error">
+          ⚠ runtime · {$runtimeError.message}
+          <button class="dismiss" title="dismiss" on:click={() => runtimeError.set(null)}>×</button>
+        </div>
+      {/if}
+    </section>
 
-  <section class="right">
-    <!-- Conditions that persist until whatever caused them goes away: the
-         wasm failed to load, the device is unreachable. Pushed by whoever
-         knows (the shell, the push path) rather than derived here. Compile and
-         runtime errors are NOT here any more — they belong to the code pane. -->
-    {#each $banners as b (b.id)}
-      <div class="banner" class:error={b.level === "error"} class:warn={b.level === "warn"} data-role={b.role}>
-        {b.text}
-      </div>
-    {/each}
-    {#if importError}
-      <div class="banner error" data-role="import-error">
-        {importError}
-        <button class="dismiss" on:click={() => (importError = "")}>×</button>
-      </div>
-    {/if}
+    <section class="right">
+      <div class="railscroll">
+        <!-- Conditions that persist until whatever caused them goes away: the
+             wasm failed to load, the device is unreachable. Pushed by whoever
+             knows (the shell, the push path) rather than derived here. Compile and
+             runtime errors are NOT here any more — they belong to the code pane. -->
+        {#each $banners as b (b.id)}
+          <div class="banner" class:error={b.level === "error"} class:warn={b.level === "warn"} data-role={b.role}>
+            {b.text}
+          </div>
+        {/each}
+        {#if importError}
+          <div class="banner error" data-role="import-error">
+            {importError}
+            <button class="dismiss" on:click={() => (importError = "")}>×</button>
+          </div>
+        {/if}
 
-    {#if debugMode}
-      <div class="rsec">
-        <Debugger snapshot={dbg} on:step={(e) => step(e.detail)} on:break={requestBreak} />
-      </div>
-    {/if}
+        {#if debugMode}
+          <div class="rsec">
+            <Debugger snapshot={dbg} on:step={(e) => step(e.detail)} on:break={requestBreak} />
+          </div>
+        {/if}
 
-    <!-- ── Preview: its header owns the transport (mockup S2) ── -->
-    <div class="rsec">
-      <div class="rhead">
-        <span class="slabel">Preview</span>
-        <span class="rdim" data-role="preview-dims" title={previewRate.title}>
-          {$layoutName} · {previewRate.text}
-        </span>
-        <!-- transport order (audit E7/E8): pause, then Debug beside it — the
-             two things you reach for while writing a frame — then the rate.
-             The pause box is the global 26 px `.btn.sm.icon`; it used to be a
-             padding-only button around inherited-size text, which is the
-             oversized glyph Jeremy flagged. -->
-        <span class="grp">
-          <button
-            class="btn sm icon glyph"
-            data-role="pause"
-            title={running ? "pause the preview" : "resume the preview"}
-            aria-label={running ? "pause" : "play"}
-            on:click={togglePause}
-          >
-            {running ? "‖" : "▶"}
-          </button>
-          <!-- the preview runs on the local engine (even on a device), so the
-               step-debugger works everywhere. Labelled, not icon-only: the bug
-               glyph alone did not read as "debugger" (Jeremy, 2026-09-19). -->
-          <button
-            class="btn sm"
-            class:active={debugMode}
-            data-role="debug"
-            title="toggle the step debugger"
-            on:click={toggleDebug}
-          >
-            Debug
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-              <rect x="8" y="7" width="8" height="12" rx="4" />
-              <path d="M4 10h4M16 10h4M4 16h4M16 16h4M9.5 5l1 2M14.5 5l-1 2" />
-            </svg>
-          </button>
-          {#if wantsSensors}
-            <!-- ONLY when the pattern binds sensor variables (§5.7) — a
-                 pattern that reads no audio has no use for a microphone.
-                 Inline SVG rather than a glyph: a headless chromium without
-                 a symbol font draws ♪ and ⏿ as tofu (seen in the e2e shots). -->
-            <button
-              class="btn sm icon"
-              class:active={micOn}
-              data-role="mic-toggle"
-              title="feed microphone audio to sensor patterns (frequencyData, energyAverage, maxFrequency)"
-              aria-label="microphone"
-              on:click={toggleMic}
+        <!-- ── Preview: its header owns the transport (mockup S2) ── -->
+        <div class="rsec">
+          <div class="rhead">
+            <span class="slabel">Preview</span>
+            <span class="rdim" data-role="preview-dims" title={previewRate.title}>
+              {previewRate.text} · {$layoutName}
+            </span>
+            <!-- transport order (audit E7/E8): pause, then Debug beside it — the
+                 two things you reach for while writing a frame — then the rate.
+                 The pause box is the global 26 px `.btn.sm.icon`; it used to be a
+                 padding-only button around inherited-size text, which is the
+                 oversized glyph Jeremy flagged. -->
+            <span class="grp">
+              <button
+                class="btn sm icon glyph"
+                data-role="pause"
+                title={running ? "pause the preview" : "resume the preview"}
+                aria-label={running ? "pause" : "play"}
+                on:click={togglePause}
+              >
+                {running ? "‖" : "▶"}
+              </button>
+              <!-- the preview runs on the local engine (even on a device), so the
+                   step-debugger works everywhere. Labelled, not icon-only: the bug
+                   glyph alone did not read as "debugger" (Jeremy, 2026-09-19). -->
+              <button
+                class="btn sm"
+                class:active={debugMode}
+                data-role="debug"
+                title="toggle the step debugger"
+                on:click={toggleDebug}
+              >
+                Debug
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                  <rect x="8" y="7" width="8" height="12" rx="4" />
+                  <path d="M4 10h4M16 10h4M4 16h4M16 16h4M9.5 5l1 2M14.5 5l-1 2" />
+                </svg>
+              </button>
+              {#if wantsSensors}
+                <!-- ONLY when the pattern binds sensor variables (§5.7) — a
+                     pattern that reads no audio has no use for a microphone.
+                     Inline SVG rather than a glyph: a headless chromium without
+                     a symbol font draws ♪ and ⏿ as tofu (seen in the e2e shots). -->
+                <button
+                  class="btn sm icon"
+                  class:active={micOn}
+                  data-role="mic-toggle"
+                  title="feed microphone audio to sensor patterns (frequencyData, energyAverage, maxFrequency)"
+                  aria-label="microphone"
+                  on:click={toggleMic}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                    <rect x="9" y="3" width="6" height="11" rx="3" />
+                    <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
+                  </svg>
+                </button>
+              {/if}
+              <select
+                class="sel"
+                data-role="target-fps"
+                value={targetFps}
+                title="preview frame rate"
+                aria-label="preview frame rate"
+                on:change={onFpsChange}
+              >
+                <option value={0}>max fps</option>
+                <option value={60}>60 fps</option>
+                <option value={30}>30 fps</option>
+                <option value={15}>15 fps</option>
+                <option value={5}>5 fps</option>
+              </select>
+            </span>
+          </div>
+          <div class="preview-wrap">
+            <Preview bind:this={preview} layout={$layout} on:inject={onInject} />
+          </div>
+          {#if $notes.mic}<p class="note-error" data-role="mic-error">{$notes.mic}</p>{/if}
+
+          <!-- Capacity (Gitea #15), the existing idiom in its new place: a strip
+               under the preview it is about. Severity follows CERTAINTY, not size:
+               the device's own rejection is a fact and reads as an error; our local
+               model is advice and reads as a warning. Both are non-blocking — the
+               pattern keeps previewing locally either way. -->
+          {#if deviceRejectedForSize}
+            <div class="capstrip err" data-role="capacity-rejected">
+              the device rejected this pattern: {deviceRejectedForSize}
+            </div>
+          {:else if capacity}
+            <div
+              class="capstrip"
+              class:capacity-over={capacity.level === "over"}
+              data-role="capacity-warning"
+              data-level={capacity.level}
+              title={capacity.detail}
             >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                <rect x="9" y="3" width="6" height="11" rx="3" />
-                <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
-              </svg>
-            </button>
+              {capacity.level === "over" ? "⚠" : "△"}
+              {capacity.text}
+            </div>
           {/if}
-          <select
-            class="sel"
-            data-role="target-fps"
-            value={targetFps}
-            title="preview frame rate"
-            aria-label="preview frame rate"
-            on:change={onFpsChange}
-          >
-            <option value={0}>max fps</option>
-            <option value={60}>60 fps</option>
-            <option value={30}>30 fps</option>
-            <option value={15}>15 fps</option>
-            <option value={5}>5 fps</option>
-          </select>
-        </span>
-      </div>
-      <div class="preview-wrap">
-        <Preview bind:this={preview} layout={$layout} on:inject={onInject} />
-      </div>
-      {#if $notes.mic}<p class="note-error" data-role="mic-error">{$notes.mic}</p>{/if}
-
-      <!-- Capacity (Gitea #15), the existing idiom in its new place: a strip
-           under the preview it is about. Severity follows CERTAINTY, not size:
-           the device's own rejection is a fact and reads as an error; our local
-           model is advice and reads as a warning. Both are non-blocking — the
-           pattern keeps previewing locally either way. -->
-      {#if deviceRejectedForSize}
-        <div class="capstrip err" data-role="capacity-rejected">
-          the device rejected this pattern: {deviceRejectedForSize}
         </div>
-      {:else if capacity}
-        <div
-          class="capstrip"
-          class:capacity-over={capacity.level === "over"}
-          data-role="capacity-warning"
-          data-level={capacity.level}
-          title={capacity.detail}
-        >
-          {capacity.level === "over" ? "⚠" : "△"}
-          {capacity.text}
+
+        <!-- ── Controls, then the quiet Projection row (S2c/S2d) ── -->
+        <div class="rsec">
+          <div class="rhead">
+            <span class="slabel">Controls</span>
+            <!-- S2c/S2d: the section says WHOSE values these are and what
+                 dimensionality they were written for — the one fact the
+                 projection row below is about. -->
+            <span class="rdim" data-role="controls-dims">
+              {nameOf($patternName, $exampleName)} · {dimsLabel($patternDims)}
+            </span>
+          </div>
+          <Controls {controls} bind:values={$controlValues} {readouts} hints={$hints} on:set={onControlSet} />
+          {#if controls.length === 0}
+            <p class="dim hint">
+              export <code>function sliderName(v)</code> to add controls — bound them with
+              <code>//# min=0 max=5 step=0.5 default=2</code>
+            </p>
+          {/if}
+          <ProjectionRow
+            patternDims={$patternDims}
+            layout={$layout}
+            override={$projectionOverride}
+            on:set={onProjectionSet}
+          />
         </div>
-      {/if}
-    </div>
 
-    <!-- ── Controls, then the quiet Projection row (S2c/S2d) ── -->
-    <div class="rsec">
-      <div class="rhead"><span class="slabel">Controls</span></div>
-      <Controls {controls} bind:values={$controlValues} {readouts} hints={$hints} on:set={onControlSet} />
-      {#if controls.length === 0}
-        <p class="dim hint">
-          export <code>function sliderName(v)</code> to add controls — bound them with
-          <code>//# min=0 max=5 step=0.5 default=2</code>
-        </p>
-      {/if}
-      <ProjectionRow
-        patternDims={$patternDims}
-        layout={$layout}
-        override={$projectionOverride}
-        on:set={onProjectionSet}
-      />
-    </div>
+        <!-- VARS is absent entirely for a pattern that exports none (§5.7). -->
+        {#if Object.keys(vars).length > 0}
+          <div class="rsec" data-role="vars-section">
+            <div class="rhead"><span class="slabel">Vars ({Object.keys(vars).length})</span></div>
+            <VarWatcher {vars} />
+          </div>
+        {/if}
 
-    <!-- VARS is absent entirely for a pattern that exports none (§5.7). -->
-    {#if Object.keys(vars).length > 0}
-      <div class="rsec" data-role="vars-section">
-        <div class="rhead"><span class="slabel">Vars</span></div>
-        <VarWatcher {vars} />
+        {#if pins.length > 0 || analogPins.length > 0}
+          <div class="rsec">
+            <div class="rhead"><span class="slabel">Pins</span></div>
+            <PinPanel
+              {pins}
+              {analogPins}
+              levels={pinLevels}
+              idleHigh={pinIdleHigh}
+              bind:latched={pinLatched}
+              bind:analogValues
+              on:drive={onPinDrive}
+              on:analog={onAnalogDrive}
+            />
+            <p class="dim hint">
+              {#if pins.length > 0}<code>press</code> drives the pin while held; <code>hold</code> keeps
+                it driven after you let go. Releasing both returns the pin to its
+                <code>pinMode</code> idle level.{/if}{#if analogPins.length > 0}{" "}
+                An analog slider is what <code>analogRead</code>/<code>touchRead</code> read on that pin,
+                0..1 — it stays where you leave it.{/if}{#if $device}{" "}
+                Drives the local preview only: on the device these pins are real GPIO, read from and
+                written to the pads every frame.{/if}
+            </p>
+          </div>
+        {/if}
+
       </div>
-    {/if}
-
-    {#if pins.length > 0 || analogPins.length > 0}
-      <div class="rsec">
-        <div class="rhead"><span class="slabel">Pins</span></div>
-        <PinPanel
-          {pins}
-          {analogPins}
-          levels={pinLevels}
-          idleHigh={pinIdleHigh}
-          bind:latched={pinLatched}
-          bind:analogValues
-          on:drive={onPinDrive}
-          on:analog={onAnalogDrive}
-        />
-        <p class="dim hint">
-          {#if pins.length > 0}<code>press</code> drives the pin while held; <code>hold</code> keeps
-            it driven after you let go. Releasing both returns the pin to its
-            <code>pinMode</code> idle level.{/if}{#if analogPins.length > 0}{" "}
-            An analog slider is what <code>analogRead</code>/<code>touchRead</code> read on that pin,
-            0..1 — it stays where you leave it.{/if}{#if $device}{" "}
-            Drives the local preview only: on the device these pins are real GPIO, read from and
-            written to the pads every frame.{/if}
-        </p>
-      </div>
-    {/if}
-
-  </section>
+    </section>
+  </div>
 </main>
 
 <style>
@@ -1768,6 +1794,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
+    margin-top: 10px;
     padding: 7px 9px;
     border: 1px solid var(--warn);
     border-radius: 6px;
@@ -1796,7 +1823,7 @@
   }
 
   .note-error {
-    margin: 0;
+    margin: 8px 0 0;
     color: var(--error);
     font-family: ui-monospace, Menlo, Consolas, monospace;
     font-size: 12px;

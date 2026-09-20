@@ -625,9 +625,11 @@ try {
       const dims = await mappedPage
         .$eval('[data-role="preview-dims"]', (el) => (el.textContent ?? "").trim())
         .catch(() => "");
+      // `60/92 fps · 64×64 matrix` — RATES first, layout after, so the 360px
+      // rail's ellipsis takes the layout and not the numbers (mockup S2).
       check(
         "E9: the console preview header states the local AND the device rate",
-        /fps local/.test(dims) && /fps on device/.test(dims) && /^64×64 matrix · /.test(dims),
+        /^\d+\/\d+ fps · 64×64 matrix/.test(dims),
         dims,
       );
 
@@ -2324,7 +2326,7 @@ try {
     check(
       "patterns: ⋯ → Delete asks with a danger dialog",
       (await dialogTitle(page)) === "Delete pattern from the device?" &&
-        (await page.$eval('[data-role="dialog-confirm"]', (el) => el.className)).includes("danger"),
+        (await page.$eval('[data-role="dialog"]', (el) => el.hasAttribute("data-danger"))),
     );
     await cancelDialog(page);
     await sleep(600);
@@ -2603,7 +2605,7 @@ try {
   check(
     "library: delete asks with a danger dialog",
     (await dialogTitle(page)) === "Delete pattern from the device?" &&
-      (await page.$eval('[data-role="dialog-confirm"]', (el) => el.className)).includes("danger"),
+      (await page.$eval('[data-role="dialog"]', (el) => el.hasAttribute("data-danger"))),
   );
   await page.screenshot({ path: `${shotDir}/device-e2e-dialog-delete.png` });
   await cancelDialog(page);

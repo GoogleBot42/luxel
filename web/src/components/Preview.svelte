@@ -166,16 +166,25 @@
     height: 160px;
   }
 
+  /* mockup `.prev`: full width of the rail, square, no height cap — the
+     rail is a fixed 360px, so that is a 328px picture */
   .grid {
     aspect-ratio: 1;
-    max-height: 320px;
     object-fit: contain;
   }
 
   .map {
     aspect-ratio: 1;
-    max-height: 320px;
     image-rendering: auto; /* smooth dots, unlike the pixelated grid */
+  }
+
+  /* S2b: centred at 280px on a phone */
+  @media (max-width: 600px) {
+    .grid,
+    .map {
+      max-width: 280px;
+      margin: 0 auto;
+    }
   }
 
   .map-3d-badge {
