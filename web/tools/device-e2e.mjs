@@ -252,6 +252,14 @@ try {
         })
       ).json()
     ).id;
+    const shellIdle = (
+      await (
+        await fetch(`${DEV}/api/patterns`, {
+          method: "POST",
+          body: await lxpBody("Shell Idle", "export function render(index) { hsv(0.6, 1, 1) }"),
+        })
+      ).json()
+    ).id;
     const ranBefore = await (await fetch(`${DEV}/api/pattern`)).text();
     await fetch(`${DEV}/api/patterns/${shellId}/activate`, { method: "POST" });
     const brightBefore = (await (await fetch(`${DEV}/api/brightness`)).json()).brightness;
@@ -367,8 +375,9 @@ try {
       );
 
       // the editor is a screen of its own — the shell header goes away
-      await pg.$$eval('[data-role="patterns-grid"]:not([hidden]) [data-role="tile-edit"]', (els) =>
-        els[0].click(),
+      await pg.$eval(
+        `[data-role="patterns-grid"]:not([hidden]) .tile[data-key="${shellIdle}"] [data-role="tile-edit"]`,
+        (el) => el.click(),
       );
       await pg.waitForSelector('[data-role="editor-view"]:not([hidden])', { timeout: 8000 });
       check(
@@ -418,6 +427,7 @@ try {
         () => {},
       );
       await fetch(`${DEV}/api/patterns/${shellId}`, { method: "DELETE" }).catch(() => {});
+      await fetch(`${DEV}/api/patterns/${shellIdle}`, { method: "DELETE" }).catch(() => {});
       await fetch(`${DEV}/api/code`, { method: "POST", body: await lxpBody("", ranBefore) }).catch(
         () => {},
       );
@@ -688,10 +698,10 @@ try {
       // thumbnail used to be a 64-px bar on every board)
       await mappedPage.click('[data-role="editor-back"]');
       await mappedPage.click('[data-role="tab-patterns"]');
-      await mappedPage.waitForSelector(`${DTILE} .thumb`, { timeout: 8000 });
+      await mappedPage.waitForSelector(`${DTILE} canvas`, { timeout: 8000 });
       await sleep(1500);
-      const thumbShapes = await mappedPage.$$eval(`${DTILE} .thumb`, (els) =>
-        els.map((e) => e.dataset.shape),
+      const thumbShapes = await mappedPage.$$eval(`${DTILE}:not([hidden])`, (els) =>
+        els.map((e) => e.dataset.kind),
       );
       check(
         "thumbs: on-device tiles are square on a panel console",
@@ -707,6 +717,34 @@ try {
         tileCaps.join("|"),
       );
       await mappedPage.screenshot({ path: `${shotDir}/device-e2e-panel-patterns.png` });
+
+      // the other half of the projection-rule pair (#538): what a strip hides
+      // a 64x64 matrix shows, and only the 3D patterns are filtered here
+      await mappedPage.click('[data-role="patterns-source-library"]');
+      await sleep(2500);
+      const libOnPanel = await mappedPage.evaluate(() => {
+        const name = (e) => e.querySelector('[data-role="tile-name"]')?.textContent ?? "";
+        const tiles = [...document.querySelectorAll('[data-source="library"] .tile')];
+        const ct = document.querySelector('[data-role="patterns-source-library"] .ct');
+        return {
+          shown: tiles.length,
+          chip: Number((ct?.textContent ?? "").trim()),
+          plane: tiles.some((e) => /2D Fireworks Fade/.test(name(e))),
+          cloud: tiles.some((e) => /3D Rotation/.test(name(e))),
+        };
+      });
+      check(
+        "filter: a 2D library pattern IS offered on a 64x64 panel console",
+        libOnPanel.plane === true && libOnPanel.chip === libOnPanel.shown,
+        JSON.stringify(libOnPanel),
+      );
+      check(
+        "filter: …and only the 3D ones are dropped there",
+        libOnPanel.cloud === false && libOnPanel.shown > 250,
+        JSON.stringify(libOnPanel),
+      );
+      await mappedPage.click('[data-role="patterns-source-device"]');
+      await sleep(600);
 
       // Settings names the projections a 64x64 MATRIX offers — a row for the
       // pattern kinds that are not native to it (1D and 3D), never a strip's
@@ -1952,7 +1990,7 @@ try {
   check("library: device pattern shows a preview thumbnail", hasThumb);
   // and it takes the DEVICE's shape — a bar here, because this console is a
   // 120 px strip (the panel console's square tiles are checked above, #463)
-  const stripThumbs = await page.$$eval(`${DTILE} .thumb`, (els) => els.map((e) => e.dataset.shape));
+  const stripThumbs = await page.$$eval(`${DTILE}:not([hidden])`, (els) => els.map((e) => e.dataset.kind));
   check(
     "thumbs: on-device tiles are bars on a strip console",
     stripThumbs.length > 0 && stripThumbs.every((s) => s === "bar"),
@@ -2005,6 +2043,87 @@ try {
     await sleep(600);
     check("patterns: picking On device shows only that grid", (await shownSources()).join(",") === "device");
 
+    // ── the projection rule (Jeremy, #538): a 120 px STRIP cannot show a
+    //    2D pattern, so the library simply does not offer it — but a stored
+    //    one is the user's own and drops into "Not for this layout (N)",
+    //    drawn in its own shape with no Play verb.
+    const planeId = (
+      await (
+        await fetch(`${DEV}/api/patterns`, {
+          method: "POST",
+          body: await lxpBody("tile plane 2D", "export function render2D(i, x, y) { hsv(x, 1, y) }"),
+        })
+      ).json()
+    ).id;
+    await page.click('[data-role="patterns-source-device"]'); // re-reads /api/patterns
+    await sleep(1200);
+    check(
+      "filter: a stored 2D pattern is NOT in the strip console's grid",
+      (await page.$(`${DGRID} > .tiles .tile[data-key="${planeId}"]`)) === null,
+    );
+    const groupBefore = await page.evaluate(() => {
+      const g = document.querySelector('[data-role="patterns-incompatible"]');
+      const t = document.querySelector('[data-role="patterns-incompatible-toggle"]');
+      return {
+        shown: g !== null && !g.hidden,
+        label: (t?.textContent ?? "").replace(/\s+/g, " ").trim(),
+        expanded: t?.getAttribute("aria-expanded") ?? "",
+      };
+    });
+    check(
+      "filter: it lands in a collapsed 'Not for this layout' group",
+      groupBefore.shown && groupBefore.expanded === "false" && /\(1\)/.test(groupBefore.label),
+      JSON.stringify(groupBefore),
+    );
+    await page.click('[data-role="patterns-incompatible-toggle"]');
+    await sleep(1800);
+    const grouped = await page.evaluate((id) => {
+      const g = document.querySelector('[data-role="patterns-incompatible"]');
+      const tile = g?.querySelector(`.tile[data-key="${id}"]`);
+      return {
+        present: tile !== null && tile !== undefined && !tile.hidden,
+        kind: tile?.dataset.kind ?? "",
+        play: tile?.querySelector('[data-role="tile-play"]') !== null,
+        edit: tile?.querySelector('[data-role="tile-edit"]') !== null,
+      };
+    }, planeId);
+    check(
+      "filter: the group draws it in its OWN shape (Auto), with Edit but no Play",
+      grouped.present && grouped.kind === "grid" && !grouped.play && grouped.edit,
+      JSON.stringify(grouped),
+    );
+    await page.screenshot({ path: `${shotDir}/device-e2e-strip-incompatible.png` });
+    await page.click('[data-role="patterns-incompatible-toggle"]');
+    await sleep(300);
+    await fetch(`${DEV}/api/patterns/${planeId}`, { method: "DELETE" });
+    await page.click('[data-role="patterns-source-device"]');
+    await sleep(800);
+
+    // and the LIBRARY on a strip simply loses its 2D patterns — the chip
+    // counts what is on screen (the panel console's twin check is above)
+    await page.click('[data-role="patterns-source-library"]');
+    await sleep(2000);
+    const libOnStrip = await page.evaluate(() => {
+      const name = (e) => e.querySelector('[data-role="tile-name"]')?.textContent ?? "";
+      const tiles = [...document.querySelectorAll('[data-source="library"] .tile')];
+      const ct = document.querySelector('[data-role="patterns-source-library"] .ct');
+      return {
+        shown: tiles.length,
+        chip: Number((ct?.textContent ?? "").trim()),
+        plane: tiles.some((e) => /2D Fireworks Fade/.test(name(e))),
+      };
+    });
+    check(
+      "filter: a 2D library pattern is absent on a strip console",
+      libOnStrip.plane === false &&
+        libOnStrip.shown > 0 &&
+        libOnStrip.shown < 250 &&
+        libOnStrip.chip === libOnStrip.shown,
+      JSON.stringify(libOnStrip),
+    );
+    await page.click('[data-role="patterns-source-device"]');
+    await sleep(600);
+
     // a second stored pattern, so the tile verbs below have a victim nothing
     // else in this run depends on
     await fetch(`${DEV}/api/patterns`, {
@@ -2036,6 +2155,39 @@ try {
     await page.waitForSelector(`${victim}.playing`, { timeout: 4000 });
     check("patterns: the ring follows the newly played pattern", true);
     await page.screenshot({ path: `${shotDir}/device-e2e-strip-tile-playing.png` });
+
+    // S1 (Jeremy): the playing tile shows the ▶ pill and nothing else — no
+    // "Play" offered for what is already playing, and no hover strip at all.
+    const playingTile = await page.evaluate((sel) => {
+      const el = document.querySelector(sel);
+      if (!el) return null;
+      const pill = el.querySelector('[data-role="tile-playing"]');
+      return {
+        pill: pill ? (pill.textContent ?? "").trim() : "",
+        pillTop: pill ? pill.getBoundingClientRect().top - el.getBoundingClientRect().top : -1,
+        play: el.querySelector('[data-role="tile-play"]') !== null,
+        strip: el.querySelector(".actions") !== null,
+        ring: getComputedStyle(el).boxShadow,
+      };
+    }, victim);
+    check(
+      "patterns: the playing tile has the ▶ pill top-left and NO verb strip",
+      playingTile !== null &&
+        /playing/.test(playingTile.pill) &&
+        playingTile.pillTop < 20 &&
+        !playingTile.play &&
+        !playingTile.strip,
+      JSON.stringify(playingTile),
+    );
+    check(
+      "patterns: the playing tile wears the 2 px --ok ring",
+      playingTile !== null && playingTile.ring === "rgb(95, 191, 122) 0px 0px 0px 2px",
+      playingTile?.ring,
+    );
+
+    // hand the ring back to "device kept" so the victim is hoverable again
+    await tileAction(page, `${DTILE}[data-key="${savedId}"]`, "tile-play");
+    await page.waitForSelector(`${victim}:not(.playing)`, { timeout: 4000 });
 
     // ⋯ → Add to playlist appends an item through the playlist store
     await tileAction(page, victim, "tile-menu");
@@ -2331,7 +2483,12 @@ try {
   page.on("request", (r) => {
     if (r.url().includes("/api/patterns") && r.method() === "DELETE") seenReqs.push(r.url());
   });
-  await tileAction(page, DTILE, "tile-edit");
+  // The editor still holds "device kept", so its tile is the one marked
+  // playing — and since #538 a playing tile wears the ▶ pill and NO verb
+  // strip (mock S1). Its `Edit` still exists in the meta block (the mobile
+  // link, display:none here), so drive that: same dispatch, no dependence on
+  // a hover strip this tile deliberately does not have.
+  await page.$eval(`${DTILE} [data-role="tile-edit-link"]`, (el) => el.click());
   await sleep(1300);
   check("library: a tile's Edit opens the editor", (await page.$('[data-role="editor-back"]')) !== null);
   const activated = await (await fetch(`${DEV}/api/pattern`)).text();
@@ -2645,7 +2802,9 @@ try {
   await sleep(900);
   await page.click('[data-role="tab-patterns"]');
   await sleep(400);
-  await tileAction(page, DTILE, "tile-edit");
+  // the running pattern's tile has no verb strip (#538) — its meta `Edit`
+  // link dispatches the same thing
+  await page.$eval(`${DTILE} [data-role="tile-edit-link"]`, (el) => el.click());
   await sleep(1200);
   await setEditor(page, "export function render(index) { hsv(index / pixelCount, 1, 1) }");
   await sleep(1200);

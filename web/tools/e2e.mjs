@@ -190,7 +190,7 @@ try {
   // transient loading state, then confirm it clears once frames land.
   const cdpTiles = await page.createCDPSession();
   await cdpTiles.send("Emulation.setCPUThrottlingRate", { rate: 6 });
-  await page.$eval('[data-role="patterns-grid"]:not([hidden]) .tiles', (el) => {
+  await page.$eval(GRID, (el) => {
     el.scrollTop = el.scrollHeight;
   });
   const sawSpinner = await page
@@ -208,7 +208,7 @@ try {
   const spinLeft = await page.$$eval('[data-role="tile-spinner"]', (els) => els.length);
   check("spinners clear after the first frame", spinLeft === 0, `${spinLeft} left`);
   await cdpTiles.detach();
-  await page.$eval('[data-role="patterns-grid"]:not([hidden]) .tiles', (el) => {
+  await page.$eval(GRID, (el) => {
     el.scrollTop = 0;
   });
   await sleep(300);
@@ -228,6 +228,135 @@ try {
   await sleep(200);
   const backToAll = await page.$$eval(TILE, (els) => els.filter((e) => !e.hidden).length);
   check("gallery search clears", backToAll === tileCount, `${backToAll}`);
+
+  // ── 1c. the tile IS the mock card (S1, docs/design/webui-v2/mockups.html) ──
+  // Numbers quoted from `.tile` / `.tiles` / `.seg` there; Jeremy's review
+  // called the shipped tile out by name, so they are asserted, not eyeballed.
+  {
+    const tile = await page.$eval(`${TILE}:not([hidden])`, (el) => {
+      const c = getComputedStyle(el);
+      const meta = el.querySelector(".meta");
+      const nm = el.querySelector('[data-role="tile-name"]');
+      const cv = el.querySelector("canvas");
+      return {
+        radius: c.borderTopLeftRadius,
+        bg: c.backgroundColor,
+        border: c.borderTopWidth,
+        meta: meta ? getComputedStyle(meta).padding : "",
+        nmSize: nm ? getComputedStyle(nm).fontSize : "",
+        nmColor: nm ? getComputedStyle(nm).color : "",
+        // full-bleed: the canvas spans the card's content box edge to edge
+        bleed: cv ? Math.abs(cv.getBoundingClientRect().width - el.clientWidth) < 1 : false,
+      };
+    });
+    check(
+      "tile: mock card metrics (8px radius, 1px border, panel bg, 8/10px meta)",
+      tile.radius === "8px" &&
+        tile.border === "1px" &&
+        tile.bg === "rgb(28, 31, 38)" &&
+        tile.meta === "8px 10px 10px",
+      JSON.stringify(tile),
+    );
+    check(
+      "tile: 13px name in --text, over a full-bleed canvas",
+      tile.nmSize === "13px" && tile.nmColor === "rgb(215, 218, 224)" && tile.bleed,
+      JSON.stringify(tile),
+    );
+    const grid = await page.$eval(`${GRID} .tiles`, (el) => {
+      const c = getComputedStyle(el);
+      return { cols: c.gridTemplateColumns.split(" ").length, gap: c.gap, pad: c.padding };
+    });
+    check(
+      "tiles: fixed columns, 16px gap, 20px padding (mock `.tiles`)",
+      grid.cols === 6 && grid.gap === "16px" && grid.pad === "20px",
+      JSON.stringify(grid),
+    );
+    // the segmented control: active = accent-soft ground, --text label, an
+    // inset 2px amber underline, and the count in the accent (`.seg` in the
+    // mock). Jeremy: "the colors don't match the mocks when activated".
+    const seg = await page.$eval('[data-role="patterns-sources"] .segbtn.on', (el) => {
+      const c = getComputedStyle(el);
+      const ct = el.querySelector(".ct");
+      return {
+        bg: c.backgroundColor,
+        color: c.color,
+        shadow: c.boxShadow,
+        h: c.height,
+        ct: ct ? getComputedStyle(ct).color : "",
+        ctFont: ct ? getComputedStyle(ct).fontSize : "",
+      };
+    });
+    check(
+      "seg: the active segment is accent-soft + --text + an inset amber rule",
+      seg.bg === "rgba(232, 163, 61, 0.15)" &&
+        seg.color === "rgb(215, 218, 224)" &&
+        seg.shadow === "rgb(232, 163, 61) 0px -2px 0px 0px inset" &&
+        seg.h === "32px",
+      JSON.stringify(seg),
+    );
+    check(
+      "seg: the active count is 11px mono in the accent",
+      seg.ct === "rgb(232, 163, 61)" && seg.ctFont === "11px",
+      JSON.stringify(seg),
+    );
+    // the page bar holds the segment, the search and the ONE primary — the
+    // free-standing "N patterns" span is gone (the chip carries the count)
+    check(
+      "pagebar: no standalone pattern count (it lives in the chip)",
+      (await page.$('[data-role="gallery-count"]')) === null,
+    );
+    const prim = await page.$eval('[data-role="new-pattern"]', (el) => {
+      const c = getComputedStyle(el);
+      return { bg: c.backgroundColor, color: c.color, h: c.height, w: c.fontWeight };
+    });
+    check(
+      "pagebar: + New pattern is the filled primary",
+      prim.bg === "rgb(232, 163, 61)" && prim.color === "rgb(22, 17, 10)" && prim.h === "32px",
+      JSON.stringify(prim),
+    );
+  }
+
+  // ── 1d. a fixture never offers a pattern it cannot show (#538) ──
+  // The playground's Layout is a fixture only when the user picked one:
+  // under Auto it follows the editor's pattern, so nothing is filtered.
+  {
+    // both numbers in ONE evaluate: a tile reclassifies the moment it
+    // compiles (the regex guess yields to `preferredDims`), so two separate
+    // reads can straddle that and disagree for no good reason
+    const shownAndChip = (sel) =>
+      page.evaluate((tileSel) => {
+        const tiles = [...document.querySelectorAll(tileSel)];
+        const ct = document.querySelector('[data-role="patterns-source-library"] .ct');
+        return {
+          shown: tiles.filter((e) => !e.hidden).length,
+          chip: Number((ct?.textContent ?? "").trim()),
+        };
+      }, sel);
+    const auto = await shownAndChip(TILE);
+    check(
+      "filter: Auto is not a fixture — nothing is hidden",
+      auto.shown === tileCount,
+      `${auto.shown}/${tileCount}`,
+    );
+    await previewAs(page, "strip", { px: 300 });
+    await sleep(1500);
+    const strip = await shownAndChip(TILE);
+    check(
+      "filter: a 300 px strip hides the 2D/3D library patterns",
+      strip.shown > 0 && strip.shown < tileCount && strip.chip === strip.shown,
+      `${strip.shown} of ${tileCount}, chip says ${strip.chip}`,
+    );
+    await previewAs(page, "lattice", { n: 5 });
+    await sleep(1500);
+    const lattice = await shownAndChip(TILE);
+    check(
+      "filter: a 3D lattice shows every pattern again",
+      lattice.shown === tileCount,
+      `${lattice.shown}/${tileCount}`,
+    );
+    await previewAs(page, "auto");
+    await sleep(800);
+  }
 
   // ── 2. New pattern opens the editor full-screen ──
   await page.click('[data-role="new-pattern"]');
@@ -970,7 +1099,7 @@ try {
   //      page since #467 — they used to be a row of chips above the grid.
   const savedCount = () => page.$$eval(`${MINE} .tile`, (els) => els.length);
   const mineNames = () =>
-    page.$$eval(`${MINE} .tile .tname`, (els) => els.map((e) => (e.textContent ?? "").trim()));
+    page.$$eval(`${MINE} .tile [data-role="tile-name"]`, (els) => els.map((e) => (e.textContent ?? "").trim()));
   const savedBefore = await savedCount();
   await page.click('[data-role="pattern-name"]');
   await page.waitForSelector('[data-role="name-input"]', { timeout: 2000 });
@@ -1151,9 +1280,11 @@ try {
 
   // ── 12. gallery pick opens the editor on that pattern ──
   const pickName = await page.$$eval(TILE, (els) => {
-    const t = els.find((el) => !el.classList.contains("dead") && el.querySelector(".tname"));
+    const t = els.find(
+      (el) => !el.classList.contains("dead") && el.querySelector('[data-role="tile-name"]'),
+    );
     t?.scrollIntoView();
-    return t?.querySelector(".tname")?.textContent ?? "";
+    return t?.querySelector('[data-role="tile-name"]')?.textContent ?? "";
   });
   await page.click(`${TILE}:not(.dead) [data-role="tile-face"]`);
   await sleep(500);

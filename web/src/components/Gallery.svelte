@@ -35,6 +35,16 @@
   // couple dozen small engines even on a 64×64 console. A grid the page has
   // hidden intersects nothing, so an inactive source costs nothing either.
   //
+  // The tile itself is the mock's card (mockups.html `.tile`, frames S1/S1b/
+  // S1c): a panel-coloured box with a FULL-BLEED canvas whose aspect is the
+  // fixture's (a 6:1 bar on a strip, the lattice's own w:h on a matrix), a
+  // left-aligned meta block under it, and the verbs as a gradient strip that
+  // fades in on hover — except on the playing tile, which wears the ▶ pill
+  // and nothing else.
+  //
+  // `only` splits the grid by whether the Layout can show the pattern at all
+  // (#538) — see the prop.
+  //
   // The tile's verbs are the PAGE's (pages/Patterns.svelte fills the `actions`
   // and `meta` slots) — this component owns geometry and scheduling only.
   import { createEventDispatcher, onDestroy, onMount } from "svelte";
@@ -42,9 +52,13 @@
   import { Engine, Luxel } from "../lib/luxel";
   import { gatedFetch } from "../lib/fetchgate";
   import {
+    autoLayoutFor,
     captionFor,
     compileForLayout,
+    guessPatternDims,
+    layout,
     layoutSignature,
+    projectionCompatible,
     TILE_MAX_CELLS,
     tileShape,
     type Layout,
@@ -67,8 +81,26 @@
    *  the "playing" pill. Empty = nothing here is running. */
   export let playingKey = "";
 
-  /** How many patterns this source holds (bound by the page for its segment
-   *  chip), and whether it is still loading. */
+  /**
+   * Which half of the layout-compatibility split this grid shows (#538,
+   * Jeremy's rule: a strip never shows a 2D/3D pattern, a plane never a 3D
+   * one). `null` = no split, every pattern.
+   *
+   * The rule only bites when the Layout is a real FIXTURE — a device, or an
+   * explicit "Preview as" choice. Under playground Auto the Layout follows
+   * whichever pattern the editor happens to hold, so filtering by it would
+   * empty the library depending on what you last opened.
+   */
+  export let only: "compatible" | "incompatible" | null = null;
+  /** Render each tile on the Layout its own pattern asks for (the playground's
+   *  "Auto") instead of the device's — what the "Not for this layout" group
+   *  needs, since the device's Layout is precisely the one that cannot show
+   *  these patterns. */
+  export let autoStyle = false;
+
+  /** How many patterns this source SHOWS (bound by the page for its segment
+   *  chip — the split above is part of the count), and whether it is still
+   *  loading. */
   export let count = 0;
   export let loading = true;
   /** Set when the source loaded but holds nothing. */
@@ -76,6 +108,11 @@
 
   interface Tile extends GalleryItem {
     hint: PatternDims;
+    /** The best dimensionality known for this pattern: `hint` (or a regex
+     *  guess at its source) until it compiles, `preferredDims()` after. It is
+     *  what the compatibility split reads, so the split is complete from the
+     *  first render instead of resolving tile by tile as they scroll in. */
+    guess: PatternDims;
     engine?: Engine;
     rig?: Layout;
     points?: PointRig;
@@ -93,7 +130,9 @@
   const STEP_BUDGET = 6; // engine frames per rAF tick
   const TILE_FPS_MS = 90; // ~11 fps per tile
   const ENGINE_CAP = 40;
-  const CLOUD_PX = 96; // paintPoints draws at the canvas's intrinsic size
+  /** paintPoints draws at the canvas's INTRINSIC size; the tile then scales
+   *  it, so a cloud is drawn big enough to survive a full-bleed card. */
+  const CLOUD_PX = 192;
 
   let tiles: Tile[] = [];
   let raf = 0;
@@ -102,7 +141,6 @@
   const norm = (s: string): string => s.toLowerCase().trim();
   $: filter = norm(search);
   const hiddenBy = (t: Tile, f: string): boolean => f !== "" && !norm(t.name).includes(f);
-  $: count = tiles.length;
 
   /** Adopt a new `items` list without throwing away engines that are still
    *  valid: a device source re-publishes its array every time one pattern's
@@ -112,11 +150,13 @@
     const next: Tile[] = list.map((it) => {
       const prev = by.get(it.key);
       if (!prev) {
+        const hint = it.hint ?? (it.source === undefined ? 1 : guessPatternDims(it.source));
         return {
           key: it.key,
           name: it.name,
           source: it.source,
-          hint: it.hint ?? 1,
+          hint,
+          guess: hint,
           dims: 0,
           dead: false,
           ready: false,
@@ -135,6 +175,11 @@
         prev.ready = false;
         prev.dead = false;
         prev.source = it.source;
+        // …and so is the dimensionality that placed it in this grid
+        if (it.hint === undefined && it.source !== undefined) {
+          prev.hint = guessPatternDims(it.source);
+          prev.guess = prev.hint;
+        }
       }
       return prev;
     });
@@ -145,6 +190,30 @@
   }
 
   $: if (items !== null) syncItems(items);
+
+  // NB: everything below reads `tiles`, which `syncItems` fills — and Svelte
+  // orders reactive statements by the assignments it can SEE, which does not
+  // include one made inside a called function. Source order is the ordering
+  // here, so these must stay after the line above or a grid whose items are
+  // supplied (not fetched) renders empty until something else invalidates.
+
+  /** The Layout is a real FIXTURE — a device, or an explicit "Preview as"
+   *  choice — rather than playground Auto, which just follows whatever the
+   *  editor holds. Only a fixture filters the grid, and only a fixture's
+   *  shape decides the column count (under Auto the tiles are a mix). */
+  $: fixture = $layout.source === "device" || $layout.source === "user";
+  $: splitting = only !== null && fixture;
+  /** `preferredDims()` once the tile has compiled, the advisory guess before. */
+  const dimsOf = (t: Tile): PatternDims => (t.rig ? t.dims : t.guess);
+  const inThisGrid = (t: Tile, ld: number, split: boolean): boolean =>
+    !split || projectionCompatible(dimsOf(t), ld) === (only === "compatible");
+
+  /** The tiles this grid owns. A split grid RENDERS only its half rather
+   *  than hiding the other one: both halves are mounted over the same item
+   *  list, so a merely-hidden tile would still answer `.tile` queries in the
+   *  other grid — and the page has two of them stacked. */
+  $: shown = tiles.filter((t) => inThisGrid(t, $layout.dims, splitting));
+  $: count = shown.length;
 
   /** The Layout moved (the "Preview as" chip, or the device's own geometry
    *  changed): every tile engine was built for the old one, so drop them and
@@ -185,17 +254,32 @@
     const t = tiles.find((x) => x.key === key);
     if (t) t.canvas = node.querySelector("canvas") ?? undefined;
     io.observe(node);
-    return { destroy: () => io.unobserve(node) };
+    return {
+      destroy: () => {
+        io.unobserve(node);
+        // unobserving fires no final callback, so a tile the split just moved
+        // to the other grid would stay `visible` and keep stepping its engine
+        // into a detached canvas
+        if (t) t.visible = false;
+      },
+    };
   }
 
   function ensureEngine(t: Tile): void {
     if (t.engine || t.dead || t.source === undefined) return;
-    const r = compileForLayout(luxel, t.source, TILE_MAX_CELLS);
+    const r = compileForLayout(
+      luxel,
+      t.source,
+      TILE_MAX_CELLS,
+      null,
+      autoStyle ? autoLayoutFor : undefined,
+    );
     if ("engine" in r) {
       r.engine.setWallClock(Date.now() / 1000);
       t.engine = r.engine;
       t.rig = r.layout;
       t.dims = r.dims;
+      t.guess = r.dims; // the compiler's answer replaces the regex guess
       t.points = r.layout.coords ? normalizePoints(r.layout.coords) : undefined;
       tiles = tiles; // the tile's shape/caption follow the compiled pattern
     } else {
@@ -211,6 +295,16 @@
     if (!l) return t.hint === 0 || t.hint === 1 ? "bar" : t.hint === 3 ? "cloud" : "grid";
     if (l.coords === undefined && !l.regular) return "bar";
     return tileShape(l);
+  }
+
+  /** The card's canvas is full-bleed (mockups.html `.tile canvas`), so its
+   *  ASPECT carries the fixture's shape: the mock's 6:1 bar on a strip, the
+   *  lattice's own w:h on a matrix, a square for a point cloud. */
+  function aspectOf(t: Tile, shape: TileShape): string {
+    if (shape === "bar") return "6 / 1";
+    const l = t.rig;
+    if (shape === "grid" && l && l.w > 0 && l.h > 0) return `${l.w} / ${l.h}`;
+    return "1 / 1";
   }
 
   function draw(t: Tile, px: Uint8Array): void {
@@ -290,7 +384,8 @@
           .map((p) => ({
             key: p.name,
             name: p.name,
-            hint: p.kind === "grid" ? 2 : p.kind === "cloud" ? 3 : 1,
+            hint: (p.kind === "grid" ? 2 : p.kind === "cloud" ? 3 : 1) as PatternDims,
+            guess: (p.kind === "grid" ? 2 : p.kind === "cloud" ? 3 : 1) as PatternDims,
             source: p.source,
             dims: 0,
             dead: false,
@@ -314,8 +409,8 @@
   });
 </script>
 
-<div class="tiles">
-  {#each tiles as t (t.key)}
+<div class="tiles" class:bars={!autoStyle && fixture && tileShape($layout) === "bar"}>
+  {#each shown as t (t.key)}
     {@const shape = shapeOf(t)}
     {@const playing = playingKey !== "" && t.key === playingKey}
     <div
@@ -329,7 +424,7 @@
       hidden={hiddenBy(t, filter)}
       use:register={t.key}
     >
-      <div class="frame">
+      <div class="thumb">
         <!-- §5.7: absent, never disabled. A pattern that does not compile is
              not something to pick, so the face is a plain element instead of
              a dimmed dead button, and the tile SAYS why (Gitea #529). -->
@@ -341,89 +436,96 @@
           title={t.dead ? `${t.name} (does not compile)` : t.name}
           on:click={() => !t.dead && dispatch("pick", t)}
         >
-          <span class="thumb" class:strip={shape === "bar"} data-shape={shape}>
-            <canvas class:bar={shape === "bar"} class:sq={shape !== "bar"} width="96" height="96"
-            ></canvas>
-            {#if t.visible && !t.ready && !t.dead}
-              <span
-                class="spinner"
-                data-role="tile-spinner"
-                aria-label="loading"
-                title="computing preview…"
-              ></span>
-            {/if}
-          </span>
+          <canvas
+            class:pts={shape === "cloud" || shape === "scatter"}
+            style:aspect-ratio={aspectOf(t, shape)}
+            width="96"
+            height="96"
+          ></canvas>
+          {#if t.visible && !t.ready && !t.dead}
+            <span
+              class="spinner"
+              data-role="tile-spinner"
+              aria-label="loading"
+              title="computing preview…"
+            ></span>
+          {/if}
         </svelte:element>
         {#if playing}
           <span class="pill" data-role="tile-playing">▶ playing</span>
         {/if}
-        {#if $$slots.actions}
+        <!-- S1: the playing tile wears the pill and NOTHING else — no verb
+             strip over the pattern you are already watching (Jeremy). -->
+        {#if $$slots.actions && !playing}
           <div class="actions"><slot name="actions" item={t} dead={t.dead} /></div>
         {/if}
       </div>
-      <span class="tname">{t.name}</span>
-      {#if t.dead}<span class="tsub err" data-role="tile-dead">does not compile</span>{/if}
-      {#if t.rig}
-        {@const cap = captionFor(t.dims, t.rig)}
-        {#if cap}<span class="tsub" data-role="tile-caption">{cap}</span>{/if}
-      {/if}
-      <slot name="meta" item={t} dead={t.dead} />
+      <div class="meta">
+        <div class="nm" data-role="tile-name">{t.name}</div>
+        {#if t.dead}<div class="sub err" data-role="tile-dead">does not compile</div>{/if}
+        {#if t.rig}
+          {@const cap = captionFor(t.dims, t.rig)}
+          {#if cap}<div class="sub" data-role="tile-caption">{cap}</div>{/if}
+        {/if}
+        <slot name="meta" item={t} dead={t.dead} />
+      </div>
     </div>
   {/each}
 </div>
 
 <style>
+  /* Fixed column counts, not `auto-fill`: the mock's own grids (S1 `c6`,
+     S1b `c3`, S1c `c2`). Six squares on a matrix console, three 6:1 bars on
+     a strip — the tile's SHAPE decides how many fit, not its pixel width. */
   .tiles {
-    flex: 1;
-    overflow-y: auto;
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-    gap: 10px;
-    padding: 12px;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 16px;
+    padding: 20px;
     align-content: start;
+  }
+
+  .tiles.bars {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .tile[hidden] {
     display: none;
   }
 
+  /* mockups.html `.tile` */
   .tile {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 6px;
-    padding: 8px 6px;
     border: 1px solid var(--border);
     border-radius: 8px;
-    background: var(--bg-inset);
+    background: var(--bg-panel);
+    overflow: hidden;
   }
 
-  .tile:hover {
-    border-color: var(--accent);
-  }
-
-  /* the pattern the device is running right now (proposal §5.1) */
+  /* the pattern the device is running right now (proposal §5.1, S1) */
   .tile.playing {
-    border-color: var(--ok);
-    box-shadow: 0 0 0 1px var(--ok) inset;
+    box-shadow: 0 0 0 2px var(--ok);
+    border-color: transparent;
   }
 
   .tile.dead {
     opacity: 0.35;
   }
 
-  .frame {
+  .thumb {
     position: relative;
-    display: flex;
-    max-width: 100%;
+    background: #000;
+    line-height: 0;
   }
 
   .face {
     display: block;
+    position: relative;
+    width: 100%;
     padding: 0;
     border: none;
+    border-radius: 0;
     background: transparent;
-    max-width: 100%;
+    line-height: 0;
     cursor: pointer;
   }
 
@@ -431,73 +533,93 @@
     cursor: default;
   }
 
-  .thumb {
-    position: relative;
-    display: inline-flex;
-    max-width: 100%;
-  }
-
-  .thumb.strip {
-    width: 100%;
-    justify-content: center;
-  }
-
+  /* full-bleed: the canvas's intrinsic size is the pixel grid, and the card
+     stretches it to its own width at the shape's aspect (`aspectOf`) */
   .tile canvas {
-    image-rendering: pixelated;
-    border-radius: 3px;
-    background: #000;
-    max-width: 100%;
     display: block;
+    width: 100%;
+    image-rendering: pixelated;
+    background: #000;
   }
 
-  /* the canvas's intrinsic size is the pixel grid; CSS fixes how big it looks */
-  .tile canvas.bar {
-    width: 128px;
-    height: 18px;
+  /* a point cloud is drawn with round dots, not pixels — upscaling those
+     with `pixelated` turns every dot into a lego brick */
+  .tile canvas.pts {
+    image-rendering: auto;
   }
 
-  .tile canvas.sq {
-    width: 96px;
-    height: 96px;
+  .meta {
+    padding: 8px 10px 10px;
   }
 
+  .nm {
+    font-size: 13px;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* mockups.html `.pill`: top-left, dark translucent, --ok text */
   .pill {
     position: absolute;
-    left: 50%;
-    bottom: 4px;
-    transform: translateX(-50%);
-    padding: 1px 7px;
+    top: 8px;
+    left: 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 20px;
+    padding: 0 8px;
     border-radius: 999px;
-    background: color-mix(in srgb, var(--ok) 82%, #000);
-    color: #06210a;
-    font-size: 10px;
-    font-weight: 700;
+    background: rgba(8, 14, 10, 0.82);
+    border: 1px solid rgba(95, 191, 122, 0.55);
+    color: var(--ok);
+    font: 11px/1 var(--sans);
     white-space: nowrap;
     pointer-events: none;
   }
 
-  /* per-tile verbs live on the tile they act on, and only on hover (§5.1) */
-  /* Centred over the thumb, and never shorter than its own buttons — a bar
-     tile is only 18 px tall, so the strip has to overhang it. */
+  /* per-tile verbs live on the tile they act on, and only on hover (§5.1) —
+     a bottom gradient strip, left-aligned, that fades in (mockups.html
+     `.actions`). Kept in the layout at `opacity:0` so it never reflows. */
   .actions {
     position: absolute;
     left: 0;
     right: 0;
-    top: 50%;
-    transform: translateY(-50%);
-    min-height: 100%;
-    padding: 3px 0;
-    display: none;
+    bottom: 0;
+    display: flex;
     align-items: center;
-    justify-content: center;
-    gap: 4px;
-    background: color-mix(in srgb, #000 62%, transparent);
-    border-radius: 3px;
+    gap: 6px;
+    padding: 8px;
+    background: linear-gradient(
+      to top,
+      rgba(10, 12, 15, 0.94),
+      rgba(10, 12, 15, 0.72) 60%,
+      transparent
+    );
+    opacity: 0;
+    transition: opacity 0.12s;
+    /* The gradient is NOT a click target: it covers the whole thumb of a
+       6:1 bar tile, and a click there must still play/open the pattern the
+       way the rest of the card does. Only the verbs take the mouse. */
+    pointer-events: none;
   }
 
   .tile:hover .actions,
   .actions:focus-within {
-    display: flex;
+    opacity: 1;
+  }
+
+  /* mockups.html `.actions .btn` — the verbs sit on their own dark chip so
+     they stay legible over a bright pattern. Slot content, so `:global`. */
+  .actions :global(.btn) {
+    background: rgba(28, 31, 38, 0.95);
+    pointer-events: none;
+  }
+
+  .tile:hover .actions :global(.btn),
+  .actions:focus-within :global(.btn) {
+    pointer-events: auto;
   }
 
   .spinner {
@@ -519,29 +641,28 @@
     }
   }
 
-  .tname {
-    font-size: 11px;
+  /* mockups.html `.tile .sub` */
+  .sub {
+    margin-top: 4px;
+    font: 11px/1.2 var(--mono);
     color: var(--text-dim);
-    max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
   /* why a dead tile has no verbs (§5.7: absent, with the reason shown) */
-  .tsub.err {
+  .sub.err {
     color: var(--error);
-    opacity: 1;
   }
 
-  .tsub {
-    font-size: 10px;
-    color: var(--text-dim);
-    opacity: 0.75;
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  /* Between the mock's two console widths: six squares would be thumbnails
+     at 700 px. The mock pins 1200 px (6 / 3 by shape) and 390 px (2). */
+  @media (max-width: 1000px) {
+    .tiles,
+    .tiles.bars {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
   }
 
   /* Mobile (D9, S1c): two columns, and the hover strip is gone — a finger has
@@ -550,15 +671,16 @@
   @media (max-width: 600px) {
     /* `minmax(0, 1fr)`, not `1fr`: a column's implicit `auto` minimum is the
        item's min-content, and a long nowrap pattern name would widen it past
-       half the screen (the desktop track's 150 px minimum hid this). */
-    .tiles {
+       half the screen. */
+    .tiles,
+    .tiles.bars {
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 8px;
-      padding: 10px;
+      gap: 12px;
+      padding: 12px;
     }
 
     .actions {
-      display: none !important;
+      display: none;
     }
   }
 </style>
