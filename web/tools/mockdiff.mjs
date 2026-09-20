@@ -1233,50 +1233,42 @@ for (const frameId of runIds) {
   );
 
   // ---- crops ------------------------------------------------------------
+  // A crop is a nicety, never a reason a run does not finish: every step of it
+  // (two re-measures, two screenshots, the compose) is raced against a
+  // deadline, and a slow element is named and skipped. Without this a single
+  // stubborn element stalled the whole 27-frame run with no output saying so.
   if (CROPS) {
     const worst = [...new Set(deltas.slice(0, 12).map((d) => d.element))].slice(0, 6);
     for (const id of worst) {
       const e = entries.find((x) => x.id === id);
       if (!e) continue;
-      // Re-measure right before cropping: the base pass ran before the hover
-      // and focus passes, which can move things.
-      const m = (await measure(mock, `#${mockId}`, [{ id, sel: scope(e.mock), nth: e.mockNth }]))[id];
-      const a = (await measure(page, app.root ?? "body", [{ id, sel: e.appSel, nth: e.nth }]))[id];
-      if (!m?.found || !a?.found) continue;
-      const pad = 6;
-      const shotA = await page
-        .screenshot({
-          encoding: "base64",
-          clip: {
-            x: Math.max(0, a.box.px - pad),
-            y: Math.max(0, a.box.py - pad),
-            width: Math.max(8, a.box.w + pad * 2),
-            height: Math.max(8, a.box.h + pad * 2),
-          },
-        })
-        .catch(() => null);
-      const shotM = await mock
-        .screenshot({
-          encoding: "base64",
-          clip: {
-            x: Math.max(0, m.box.px - pad),
-            y: Math.max(0, m.box.py - pad),
-            width: Math.max(8, m.box.w + pad * 2),
-            height: Math.max(8, m.box.h + pad * 2),
-          },
-        })
-        .catch(() => null);
-      if (!shotA || !shotM) continue;
       await withTimeout(
-        composeSideBySide(
-        browser,
-        join(OUT, "mockdiff", `${frameId}-${id}.png`),
-        shotM,
-        shotA,
-        `${frameId} · ${id}`,
-          { w: Math.max(m.box.w, a.box.w) + pad * 2, h: Math.max(m.box.h, a.box.h) + pad * 2 },
-        ),
-        15000,
+        (async () => {
+          // Re-measure right before cropping: the base pass ran before the
+          // hover and focus passes, which can move things.
+          const m = (await measure(mock, `#${mockId}`, [{ id, sel: scope(e.mock), nth: e.mockNth }]))[id];
+          const a = (await measure(page, app.root ?? "body", [{ id, sel: e.appSel, nth: e.nth }]))[id];
+          if (!m?.found || !a?.found) return;
+          const pad = 6;
+          const clip = (b) => ({
+            x: Math.max(0, b.px - pad),
+            y: Math.max(0, b.py - pad),
+            width: Math.max(8, b.w + pad * 2),
+            height: Math.max(8, b.h + pad * 2),
+          });
+          const shotA = await page.screenshot({ encoding: "base64", clip: clip(a.box) }).catch(() => null);
+          const shotM = await mock.screenshot({ encoding: "base64", clip: clip(m.box) }).catch(() => null);
+          if (!shotA || !shotM) return;
+          await composeSideBySide(
+            browser,
+            join(OUT, "mockdiff", `${frameId}-${id}.png`),
+            shotM,
+            shotA,
+            `${frameId} · ${id}`,
+            { w: Math.max(m.box.w, a.box.w) + pad * 2, h: Math.max(m.box.h, a.box.h) + pad * 2 },
+          );
+        })(),
+        20000,
         `crop ${frameId}-${id}`,
       );
     }
