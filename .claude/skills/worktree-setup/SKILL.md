@@ -123,6 +123,12 @@ these before trusting any build/test failure as a real regression.
   your worktree path before the first edit to it, and if it does happen,
   `git -C /home/googlebot/workspace/pixler checkout -- <path>` immediately —
   after checking `git status` there so you don't revert someone's real WIP.
+- **A skill, rule or doc that "does not exist" — you read it out of the MAIN
+  checkout.** `/home/googlebot/workspace/pixler` is only as fresh as its last
+  pull (20+ merges behind on 2026-09-19), so `.claude/skills/<name>/SKILL.md`
+  can be genuinely absent there while it is on `origin/master` (the
+  `seengreat-panel` skill, that day). Read guidance from YOUR worktree — the
+  same tree you build from.
 - `npm run wasm` failing with an ENOENT on the `cp` into `web/public/` — you skipped step 2.
 - e2e gallery/tile-count assertions failing — almost always a stale `web/dist` (rerun
   `npm run build` after any `library/`, `corpus/`, or `gen-gallery.mjs` change), not a

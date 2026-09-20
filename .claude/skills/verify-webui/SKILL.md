@@ -106,6 +106,20 @@ per load. Watch `/api/status`'s `"web"` slot stages and (if wired)
 serial while it runs; check `slot` afterwards — a crash-looping build
 rolls back silently to the same version string.
 
+**Driving the console against a real device CHANGES that device.** The v2
+console is not a viewer: opening a **Library** tile (its `Edit`, or the tile
+face) pushes that pattern to the device as live code — `POST /api/code`, which
+the firmware treats as a takeover, so a running **playlist stops** and the LEDs
+switch to a pattern that was never saved; opening an **On device** tile
+`activate`s it, which also changes what is lit (the playlist keeps running and
+swaps back at the next item). Neither says so in the UI. So a browser pass over
+someone's live rig costs device state: read `/api/brightness`, `/api/layout`,
+`/api/name`, `/api/pattern`, `/api/playlist` first, leave the library/editor
+clicks until LAST, and restore afterwards (`POST /api/playlist/play <index>`,
+`POST /api/patterns/<id>/activate`). Cost three silent playlist stops on the
+Athom rig on 2026-09-19 before the cause was isolated; `coldload.mjs` itself is
+safe (it never clicks a tile).
+
 ### The hosted https copy can NOT be driven headless
 
 Verifying `https://googlebot42.github.io/luxel/?device=http://<lan-ip>` — the
