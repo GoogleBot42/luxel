@@ -199,6 +199,19 @@ unsafe fn dealloc(ptr: *mut u8, layout: Layout) {
     }
 }
 
+/// Zeroed allocation for a large buffer that is only ever touched from task
+/// context — the HUB75 spare-plane staging framebuffer (Gitea #610). Arena
+/// first, main heap if the arena is absent or full, exactly like the array
+/// hook; the caller never frees it. Null when neither has room.
+pub fn alloc_bulk_zeroed(layout: Layout) -> *mut u8 {
+    let p = unsafe { GlobalAlloc::alloc_zeroed(&ARENA, layout) };
+    if p.is_null() {
+        unsafe { alloc::alloc::alloc_zeroed(layout) }
+    } else {
+        p
+    }
+}
+
 /// `(free, total)` bytes of the arena — `None` when there is no arena.
 /// Reported by `/api/status` as `psram_free` / `psram_total`.
 pub fn stats() -> Option<(usize, usize)> {

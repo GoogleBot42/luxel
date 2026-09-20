@@ -107,6 +107,9 @@
           # frame-atomic swap: two descriptor rings, one per framebuffer
           # (Gitea #376). Applies on top of the esp-hal-git patch.
           ./firmware/patches/esp-hub75-0.14.0-atomic-swap.patch
+          # DMA position + last-EOF accessors for the spare-plane swap
+          # (Gitea #610). Applies on top of the atomic-swap patch.
+          ./firmware/patches/esp-hub75-0.14.0-dma-position.patch
         ];
         dontBuild = true;
         installPhase = "cp -r . $out";
@@ -336,6 +339,18 @@
           target = "xtensa-esp32s3-none-elf";
           xtensa = true;
           iram = [ "iram-vm" ]; # unified SRAM: the rest comes out of .stack
+        };
+        # The same board with the spare-plane swap on (Gitea #610): one DMA
+        # framebuffer + one spare MSB plane instead of two framebuffers, the
+        # frame staged in the PSRAM arena. Off by default in the shipped
+        # image until verified on metal (#620); this variant keeps it building.
+        luxel-fw-seengreat-hub75-spare = {
+          board = "board-seengreat-hub75";
+          chip = "esp32s3";
+          target = "xtensa-esp32s3-none-elf";
+          xtensa = true;
+          iram = [ "iram-vm" ];
+          extraFeatures = [ "hub75-spare-plane" ];
         };
       };
     in

@@ -581,6 +581,27 @@ fn status_json() -> String {
             dump(",\"tags\":[", &live, true);
             dump(",\"skip_tags\":[", &frozen, false);
         }
+        // Spare-plane swap forensics (#610). `torn_p1`/`torn_wrap` must be 0.
+        #[cfg(feature = "hub75-spare-plane")]
+        {
+            push_piece(&mut out, ",\"spare\":{\"flushes\":");
+            push_u32(&mut out, crate::shared::SPARE_FLUSHES.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"deferred\":");
+            push_u32(&mut out, crate::shared::SPARE_DEFERRED.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"abandoned\":");
+            push_u32(&mut out, crate::shared::SPARE_ABANDONED.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"torn_p1\":");
+            push_u32(&mut out, crate::shared::SPARE_TORN_P1.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"torn_wrap\":");
+            push_u32(&mut out, crate::shared::SPARE_TORN_WRAP.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"copy_us\":");
+            push_u32(&mut out, crate::shared::SPARE_COPY_US.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"copy_us_max\":");
+            push_u32(&mut out, crate::shared::SPARE_COPY_US_MAX.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"plane_us\":");
+            push_u32(&mut out, crate::shared::SPARE_PLANE_US.load(Ordering::Relaxed));
+            push_piece(&mut out, "}");
+        }
         push_piece(&mut out, ",\"shorts\":[");
         {
             let (n, log) = crate::shared::pass_shorts();

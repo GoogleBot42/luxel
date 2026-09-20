@@ -565,6 +565,16 @@ mod pipe {
         // `None` until the first one: there is no gap before it.
         let mut last_shown: Option<u32> = None;
         loop {
+            // A staged frame (spare-plane panel, Gitea #610) goes out inside
+            // a window of the rescan; poll the driver until it is through
+            // before taking another frame. Every other driver's `flush` is
+            // an unconditional `true`. The driver owns the liveness floor
+            // (it abandons a frame the window never opens for), so this
+            // cannot spin forever.
+            if !out.flush() {
+                Timer::after(VSYNC_POLL).await;
+                continue;
+            }
             // The timer half keeps the once-a-second publish running while
             // nothing renders, so the counters fall to 0 instead of
             // freezing at the last busy window's average.

@@ -27,6 +27,32 @@
 //! the WiFi blob's boot mallocs, when the heap is fresh enough that two
 //! contiguous 28 KB blocks are a certainty. Allocation failure disables
 //! output (render keeps ticking) rather than panicking.
+//!
+//! ## Spare-plane swap (`hub75-spare-plane`, Gitea #610)
+//!
+//! The same frame-atomic guarantee as the two-buffer swap — nothing is ever
+//! written where the DMA can read it — for one framebuffer plus ONE extra
+//! plane instead of two framebuffers. The circular ring is plane-major and
+//! plane 0 is the MSB, repeated `2^(PLANES-1)` times, so the first half of
+//! every pass reads nothing but plane 0; planes `1..PLANES` are idle then.
+//! The driver is handed two *views* ([`spare::PlaneView`]) over the same
+//! internal buffer that differ only in which block plane 0 names: the
+//! buffer's own, or a spare one. Per frame: `write_frame` composes into a
+//! full-size staging framebuffer (the PSRAM arena where the board has one)
+//! whenever the render task delivers; `flush`, polled by the output task,
+//! waits until the DMA is inside the MSB run with room to spare, arms the
+//! ring flip to the other view FIRST (the atomic-swap patch's single tail
+//! store, which lands at the wrap), then copies planes `1..` into the live
+//! buffer and the new MSB into the idle spare block. The next pass reads the
+//! new frame in full. Each copy has a deadline — plane 1 before the DMA
+//! leaves the MSB run, plane k before it reaches plane k, the spare before
+//! the wrap — and the copies are in that order, so plane 1's deadline is the
+//! only tight one and every later plane has exponentially more slack. The
+//! window check sizes itself from the measured per-plane copy time and the
+//! ISR's nominal pass length; a pass without room defers the frame (counted,
+//! `spare.deferred`); a copy that still overruns is counted as
+//! `spare.torn_p1`/`spare.torn_wrap` — the one way this mode can tear, and a
+//! bug if it ever moves off 0.
 
 use core::sync::atomic::Ordering;
 
@@ -35,6 +61,8 @@ use esp_hal::peripherals::{DMA_CH0, LCD_CAM};
 use esp_hal::time::Rate;
 use esp_hal::Blocking;
 use esp_hub75::framebuffer::bitplane::plain::DmaFrameBuffer;
+#[cfg(feature = "hub75-spare-plane")]
+use esp_hub75::framebuffer::FrameBuffer;
 use esp_hub75::framebuffer::compute_rows;
 use esp_hub75::{Color, Hub75, Hub75Pins16, Hub75Swap};
 use esp_println::println;
@@ -98,6 +126,131 @@ const PLANES: usize = 7;
 const CLOCK: Rate = Rate::from_mhz(30);
 
 type Fb = DmaFrameBuffer<NROWS, PANEL_COLS, PLANES>;
+
+/// Descriptors in one ring: `descs_per_plane * (2^PLANES - 1)`.
+const DESCS: usize = esp_hub75::dma_descriptor_count(Fb::bcm_chunk_count(), Fb::bcm_chunk_bytes());
+
+/// What the DMA driver is built against. Normally the framebuffer itself;
+/// in spare-plane mode a view over it (Gitea #610).
+#[cfg(feature = "hub75-spare-plane")]
+type DmaFb = spare::PlaneView;
+#[cfg(not(feature = "hub75-spare-plane"))]
+type DmaFb = Fb;
+
+/// Spare-plane swap (Gitea #610): the views, the buffers, the window maths.
+#[cfg(feature = "hub75-spare-plane")]
+mod spare {
+    use core::alloc::Layout;
+
+    use esp_hub75::framebuffer::FrameBuffer;
+
+    use super::{Fb, DESCS, PLANES};
+
+    /// Bytes in one bit-plane of `Fb` (all rows, all columns).
+    pub const PLANE_BYTES: usize = Fb::bcm_chunk_bytes();
+    /// Descriptors covering one plane once.
+    pub const DESCS_PER_PLANE: usize = DESCS / ((1 << PLANES) - 1);
+    /// Descriptors from the ring head to the end of the MSB run: plane 0
+    /// emitted `2^(PLANES-1)` times.
+    pub const MSB_DESCS: usize = DESCS_PER_PLANE << (PLANES - 1);
+    /// Margin the window check keeps beyond the measured copy cost.
+    pub const SLACK_NS: u64 = 300_000;
+    /// A staged frame no window opened for within this long is abandoned
+    /// rather than freezing the engine behind it — the same liveness floor
+    /// as the output task's vsync hold (a dead DMA must not stop the world).
+    pub const HOLD_US: u64 = 50_000;
+    /// Per-plane copy cost assumed until measured: 16 B/us, well under what
+    /// a cached PSRAM read achieves, so the first window check is the most
+    /// conservative one.
+    pub const PLANE_US_GUESS: u32 = (PLANE_BYTES / 16) as u32;
+    const _: () = assert!(DESCS % ((1 << PLANES) - 1) == 0);
+
+    /// `PLANES` plane spans. Both views share planes `1..PLANES` (the live
+    /// framebuffer's own) and differ only in plane 0, the MSB: one names the
+    /// framebuffer's, the other the spare block.
+    pub struct PlaneView {
+        planes: [(*const u8, usize); PLANES],
+    }
+
+    // SAFETY: raw pointers into leaked 'static DMA memory that only the
+    // driver and `Hub75Output` ever address; the view is never aliased
+    // mutably (it carries no data of its own).
+    unsafe impl Send for PlaneView {}
+    unsafe impl Sync for PlaneView {}
+
+    impl FrameBuffer for PlaneView {
+        type Word = u16;
+
+        fn plane_count(&self) -> usize {
+            PLANES
+        }
+
+        fn plane_ptr_len(&self, plane_idx: usize) -> (*const u8, usize) {
+            self.planes[plane_idx]
+        }
+    }
+
+    impl PlaneView {
+        /// The plane spans, as copy destinations.
+        pub fn planes(&self) -> [(*mut u8, usize); PLANES] {
+            self.planes.map(|(p, n)| (p.cast_mut(), n))
+        }
+    }
+
+    /// One internal framebuffer, one internal spare MSB block, one staging
+    /// framebuffer (arena where there is one), and the two views. `None`
+    /// disables output exactly like a framebuffer allocation failure. Where
+    /// the staging buffer landed is the third element.
+    #[allow(clippy::type_complexity)]
+    pub fn alloc_all() -> Option<(&'static mut PlaneView, &'static mut PlaneView, &'static mut Fb, &'static str)> {
+        let fb: &'static Fb = super::alloc_fb()?;
+        let layout = Layout::from_size_align(PLANE_BYTES, 2).ok()?;
+        // SAFETY: non-zero size; checked for null below.
+        let spare = unsafe { alloc::alloc::alloc_zeroed(layout) };
+        if spare.is_null() {
+            return None;
+        }
+        // Control bits (row address, OE/LAT placement) are the same in every
+        // plane, so plane 0 of a formatted buffer is the spare's template.
+        // SAFETY: both spans are `PLANE_BYTES` long, disjoint, and live.
+        unsafe { core::ptr::copy_nonoverlapping(fb.plane_ptr_len(0).0, spare, PLANE_BYTES) };
+        let (staging, place) = alloc_staging()?;
+        let mut a = [(core::ptr::null::<u8>(), 0usize); PLANES];
+        for (i, slot) in a.iter_mut().enumerate() {
+            *slot = fb.plane_ptr_len(i);
+        }
+        let mut b = a;
+        b[0] = (spare.cast_const(), PLANE_BYTES);
+        let va = alloc::boxed::Box::leak(alloc::boxed::Box::new(PlaneView { planes: a }));
+        let vb = alloc::boxed::Box::leak(alloc::boxed::Box::new(PlaneView { planes: b }));
+        Some((va, vb, staging, place))
+    }
+
+    /// The compose target: a whole `Fb`, formatted, never a DMA source. Only
+    /// task context touches it, so the PSRAM arena is the right home on a
+    /// `psram-arena` board (`psram.rs`'s fence argument); elsewhere the heap.
+    fn alloc_staging() -> Option<(&'static mut Fb, &'static str)> {
+        let layout = Layout::new::<Fb>();
+        #[cfg(feature = "psram-arena")]
+        let (p, place) = (crate::psram::alloc_bulk_zeroed(layout), "arena");
+        #[cfg(not(feature = "psram-arena"))]
+        let (p, place) = (unsafe { alloc::alloc::alloc_zeroed(layout) }, "heap");
+        if p.is_null() {
+            return None;
+        }
+        // SAFETY: zeroed, correctly laid out, leaked.
+        let fb = unsafe { &mut *p.cast::<Fb>() };
+        fb.format();
+        Some((fb, place))
+    }
+
+    /// Is there room in this pass for the copy? The arithmetic lives in
+    /// `luxel_hub75::spare_window_fits`, where the host tests it against
+    /// this board's ring geometry.
+    pub fn window_fits(idx: usize, eof_pending: bool, nominal_us: u32, plane_us: u32) -> bool {
+        luxel_hub75::spare_window_fits(idx, eof_pending, nominal_us, plane_us, DESCS, MSB_DESCS, PLANES, SLACK_NS)
+    }
+}
 
 /// Entries in one framebuffer, as the bulk packer counts them.
 const FB_WORDS: usize = luxel_hub75::words(NROWS, PANEL_COLS, PLANES);
@@ -242,12 +395,26 @@ fn alloc_fb() -> Option<&'static mut Fb> {
 pub struct Hub75Output {
     /// `None` = init failed (framebuffer alloc or LCD_CAM setup); output
     /// stays disabled while the engine keeps running.
-    hub75: Option<Hub75<Blocking, Fb>>,
-    /// The compose target while no swap is in flight.
-    back: Option<&'static mut Fb>,
+    hub75: Option<Hub75<Blocking, DmaFb>>,
+    /// The compose target while no swap is in flight (spare-plane mode: the
+    /// view whose MSB block is idle).
+    back: Option<&'static mut DmaFb>,
     /// The previous frame's swap; waited (instant by then) at the start
     /// of the next `write_frame` to reclaim the displaced buffer.
-    pending: Option<Hub75Swap<Fb>>,
+    pending: Option<Hub75Swap<DmaFb>>,
+    /// Spare-plane mode (Gitea #610): the compose target. The live DMA
+    /// framebuffer is written only by `flush`, inside the window.
+    #[cfg(feature = "hub75-spare-plane")]
+    staging: Option<&'static mut Fb>,
+    /// A composed frame is in `staging`, waiting for its window.
+    #[cfg(feature = "hub75-spare-plane")]
+    staged: bool,
+    /// When that frame was composed — the liveness floor's clock.
+    #[cfg(feature = "hub75-spare-plane")]
+    staged_at: esp_hal::time::Instant,
+    /// Slowest single-plane copy seen, microseconds; sizes the window check.
+    #[cfg(feature = "hub75-spare-plane")]
+    plane_us: u32,
     /// Panel rescan count when the last frame was handed to the DMA, for
     /// `pass_per_frame_max` (Gitea #395).
     last_shown_rescan: u32,
@@ -282,6 +449,14 @@ impl Hub75Output {
             tables: None,
             tables_b5: u8::MAX,
             remap: None,
+            #[cfg(feature = "hub75-spare-plane")]
+            staging: None,
+            #[cfg(feature = "hub75-spare-plane")]
+            staged: false,
+            #[cfg(feature = "hub75-spare-plane")]
+            staged_at: esp_hal::time::Instant::EPOCH,
+            #[cfg(feature = "hub75-spare-plane")]
+            plane_us: spare::PLANE_US_GUESS,
         };
         // esp-hub75's macro expands to `StaticCell::uninit().write([EMPTY; N])`
         // — the descriptor array is written straight into the static, but the
@@ -292,6 +467,11 @@ impl Hub75Output {
         // the real linked frames.
         #[allow(clippy::large_stack_arrays)]
         let tx_descriptors = esp_hub75::hub75_dma_descriptors!(Fb);
+        // Buffers. Two full framebuffers the DMA alternates between (#376),
+        // or — spare-plane mode (#610) — one framebuffer plus a spare MSB
+        // block, both internal, and a staging framebuffer only the compose
+        // writes.
+        #[cfg(not(feature = "hub75-spare-plane"))]
         let (front, back) = match (alloc_fb(), alloc_fb()) {
             (Some(f), Some(b)) => (f, b),
             _ => {
@@ -299,9 +479,31 @@ impl Hub75Output {
                 return dead;
             }
         };
+        #[cfg(feature = "hub75-spare-plane")]
+        let (front, back, mut staging) = match spare::alloc_all() {
+            Some((a, b, st, place)) => {
+                println!(
+                    "hub75: spare-plane swap — framebuffer {} B + spare MSB plane {} B internal, \
+                     staging {} B in the {}",
+                    core::mem::size_of::<Fb>(),
+                    spare::PLANE_BYTES,
+                    core::mem::size_of::<Fb>(),
+                    place,
+                );
+                (a, b, Some(st))
+            }
+            None => {
+                println!("hub75: framebuffer alloc failed — panel output disabled");
+                return dead;
+            }
+        };
+        #[cfg(not(feature = "hub75-spare-plane"))]
+        let layout_ok = probe_layout(back);
+        #[cfg(feature = "hub75-spare-plane")]
+        let layout_ok = staging.as_deref_mut().is_some_and(probe_layout);
         // Bulk packer (Gitea #329): used only if its layout assumption holds
         // on the buffer we actually got, and if its 2 KiB of tables fit.
-        let tables = if probe_layout(back) {
+        let tables = if layout_ok {
             match alloc_tables() {
                 Some(t) => {
                     println!(
@@ -342,8 +544,6 @@ impl Hub75Output {
             Ok(h) => {
                 // Descriptor cost is worth printing once: the frame-atomic
                 // swap (#376) doubles it, and it is static DMA-capable RAM.
-                const DESCS: usize =
-                    esp_hub75::dma_descriptor_count(Fb::bcm_chunk_count(), Fb::bcm_chunk_bytes());
                 println!(
                     "hub75: {}x{} panel, {} bitplanes, LCD_CAM @ {} MHz, circular DMA, \
                      {} descriptors x {} rings = {} B",
@@ -368,6 +568,14 @@ impl Hub75Output {
                     tables,
                     tables_b5: u8::MAX,
                     remap,
+                    #[cfg(feature = "hub75-spare-plane")]
+                    staging,
+                    #[cfg(feature = "hub75-spare-plane")]
+                    staged: false,
+                    #[cfg(feature = "hub75-spare-plane")]
+                    staged_at: esp_hal::time::Instant::EPOCH,
+                    #[cfg(feature = "hub75-spare-plane")]
+                    plane_us: spare::PLANE_US_GUESS,
                 }
             }
             Err(e) => {
@@ -451,7 +659,16 @@ impl OutputDriver for Hub75Output {
     /// landed? The pipelined output task waits on this instead of composing
     /// into a buffer the panel is about to overwrite (Gitea #387).
     fn ready_for_frame(&self) -> bool {
-        self.pending.as_ref().is_none_or(Hub75Swap::is_done)
+        #[cfg(feature = "hub75-spare-plane")]
+        {
+            // The staging buffer is the only thing `write_frame` touches; the
+            // swap's landing is `flush`'s business (Gitea #610).
+            !self.staged
+        }
+        #[cfg(not(feature = "hub75-spare-plane"))]
+        {
+            self.pending.as_ref().is_none_or(Hub75Swap::is_done)
+        }
     }
 
     /// The panel rescans on its own clock, so the render loop paces on it.
@@ -512,6 +729,70 @@ impl OutputDriver for Hub75Output {
         // rather than spin: output is best-effort (the trait contract),
         // this self-throttles compose to the panel's rescan rate, and a
         // stalled DMA can never hang the render task.
+        // Spare-plane mode (Gitea #610): compose into the staging buffer and
+        // stop — `flush` copies it into the live buffer inside the window.
+        #[cfg(feature = "hub75-spare-plane")]
+        {
+            if self.staged {
+                return false;
+            }
+            let Some(staging) = self.staging.take() else { return false };
+            compose_into(&mut self.tables, &mut self.tables_b5, self.remap, staging, rgb, brightness5);
+            self.staging = Some(staging);
+            self.staged = true;
+            self.staged_at = esp_hal::time::Instant::now();
+            true
+        }
+        #[cfg(not(feature = "hub75-spare-plane"))]
+        {
+            let back = match self.pending.take() {
+                Some(swap) => {
+                    if !swap.is_done() {
+                        self.pending = Some(swap);
+                        return false;
+                    }
+                    match swap.wait() {
+                        Ok(fb) => fb,
+                        Err((e, fb)) => {
+                            println!("hub75: swap error: {:?}", e);
+                            fb
+                        }
+                    }
+                }
+                None => match self.back.take() {
+                    Some(fb) => fb,
+                    None => return false,
+                },
+            };
+            compose_into(&mut self.tables, &mut self.tables_b5, self.remap, back, rgb, brightness5);
+            note_handoff(&mut self.last_shown_rescan, &mut self.next_seq, hub75);
+            self.pending = Some(hub75.swap(back));
+            true
+        }
+    }
+
+    /// Spare-plane mode (Gitea #610): copy the staged frame into the live
+    /// buffer if this pass has room for it. See the module docs for the
+    /// window and the deadlines.
+    #[cfg(feature = "hub75-spare-plane")]
+    fn flush(&mut self) -> bool {
+        use crate::shared;
+        if !self.staged {
+            return true;
+        }
+        let Some(hub75) = self.hub75.as_ref() else {
+            self.staged = false;
+            return true;
+        };
+        // Liveness floor: no window within HOLD_US means the panel stopped
+        // passing (a dead DMA). Drop the frame; never freeze the engine.
+        if self.staged_at.elapsed().as_micros() >= spare::HOLD_US {
+            self.staged = false;
+            shared::SPARE_ABANDONED.fetch_add(1, Ordering::Relaxed);
+            return true;
+        }
+        // The previous flip must have landed: only then is the DMA on the
+        // other ring and the displaced view's MSB block provably idle.
         let back = match self.pending.take() {
             Some(swap) => {
                 if !swap.is_done() {
@@ -519,86 +800,174 @@ impl OutputDriver for Hub75Output {
                     return false;
                 }
                 match swap.wait() {
-                    Ok(fb) => fb,
-                    Err((e, fb)) => {
+                    Ok(v) => v,
+                    Err((e, v)) => {
                         println!("hub75: swap error: {:?}", e);
-                        fb
+                        v
                     }
                 }
             }
             None => match self.back.take() {
-                Some(fb) => fb,
-                None => return false,
+                Some(v) => v,
+                None => {
+                    self.staged = false;
+                    return true;
+                }
             },
         };
-        // brightness5: no APA102-style hardware field on HUB75 — scale
-        // channels in software exactly like the WS2812 path.
-        //
-        // The bulk packer (Gitea #329) walks the frame per ROW PAIR, building
-        // all PLANES entry words for a pixel pair from one pair of table
-        // lookups per channel, with brightness folded into those tables. It
-        // writes every colour bit of every entry, so it subsumes the erase.
-        // The per-pixel path below is the fallback for a framebuffer whose
-        // layout the boot probe did not recognise.
-        if let Some(t) = self.tables.as_deref_mut() {
-            if self.tables_b5 != brightness5 {
-                t.build(&brightness_lut(brightness5));
-                self.tables_b5 = brightness5;
-            }
+        // Is the DMA inside the MSB run of this pass, with room?
+        let Some((ring, idx, eof_pending)) = hub75.dma_position() else {
+            self.back = Some(back);
+            shared::SPARE_DEFERRED.fetch_add(1, Ordering::Relaxed);
+            return false;
+        };
+        let nominal_us = hub75.pass_stats().3;
+        if !spare::window_fits(idx, eof_pending, nominal_us, self.plane_us) {
+            self.back = Some(back);
+            shared::SPARE_DEFERRED.fetch_add(1, Ordering::Relaxed);
+            return false;
         }
-        match (self.tables.as_deref(), self.remap) {
-            (Some(tables), None) => {
-                luxel_hub75::pack::<NROWS, PANEL_COLS, PLANES>(fb_words(back), rgb, tables);
-            }
-            (Some(tables), Some(lut)) => {
-                let fb = fb_words(back);
-                luxel_hub75::pack_remap::<NROWS, PANEL_COLS, PLANES>(fb, rgb, lut, tables);
-            }
-            (None, remap) => {
-                back.erase();
-                // At 0 the erase above already produced the all-black frame.
-                if brightness5 > 0 {
-                    let full = brightness5 >= 31;
-                    for i in 0..FB_PIXELS {
-                        // Driver pixel i takes its colour from engine pixel
-                        // `lut[i]`; unmapped and short frames stay erased.
-                        let src = match remap {
-                            Some(l) => usize::from(l[i]),
-                            None => i,
-                        };
-                        let Some([r, g, b]) = rgb.get(src).copied() else { continue };
-                        let (r, g, b) = if full {
-                            (r, g, b)
-                        } else {
-                            (scale5(r, brightness5), scale5(g, brightness5), scale5(b, brightness5))
-                        };
-                        let p = Point::new((i % PANEL_COLS) as i32, (i / PANEL_COLS) as i32);
-                        back.set_pixel(p, Color::new(r, g, b));
-                    }
+        let Some(staging) = self.staging.as_deref() else {
+            self.staged = false;
+            return true;
+        };
+        // Destinations: planes 1.. are the live buffer's own (both views
+        // name the same memory), plane 0 is the idle spare block.
+        let dst = back.planes();
+        // Arm the flip FIRST. It lands at the wrap — the patch's single tail
+        // store, taken while the DMA is provably short of the tail — so the
+        // next pass reads the other view whatever happens below. Arming after
+        // the copy could only make things worse: the shared planes would
+        // already be new against the old MSB.
+        note_handoff(&mut self.last_shown_rescan, &mut self.next_seq, hub75);
+        let swap = hub75.swap(back);
+        let t0 = esp_hal::time::Instant::now();
+        let mut worst: u32 = 0;
+        for (p, &(d, len)) in dst.iter().enumerate().skip(1) {
+            let (src, slen) = staging.plane_ptr_len(p);
+            debug_assert_eq!(len, slen);
+            let t = esp_hal::time::Instant::now();
+            // SAFETY: both spans are `len` bytes, live, and disjoint — the
+            // staging buffer is never a DMA source and the live plane is idle
+            // for the rest of this pass (window check above).
+            unsafe { core::ptr::copy_nonoverlapping(src, d, len) };
+            worst = worst.max(t.elapsed().as_micros() as u32);
+            if p == 1 {
+                // The tight deadline: plane 1 is the first thing the DMA reads
+                // after the MSB run. Still in the run on the same ring?
+                let ok = hub75.dma_position().is_some_and(|(r, i, _)| r == ring && i < spare::MSB_DESCS);
+                if !ok {
+                    shared::SPARE_TORN_P1.fetch_add(1, Ordering::Relaxed);
                 }
             }
         }
-        // Rescans between consecutive DISPLAYED frames, sampled at the only
-        // point that knows a frame is going out: 1 = every rescan showed
-        // something new, 2 = one repeat (Gitea #395).
-        let rescans = hub75.frame_count();
-        if self.last_shown_rescan != 0 {
-            let d = rescans.wrapping_sub(self.last_shown_rescan);
-            crate::shared::PASS_PER_FRAME_MAX.fetch_max(d, Ordering::Relaxed);
-            crate::shared::PASS_PER_FRAME_MIN.fetch_min(d, Ordering::Relaxed);
-            if d == 0 {
-                // Two frames handed over inside one rescan: the first was
-                // never scanned out. This is the skip, caught at the source.
-                crate::shared::PASS_ZERO_RESCAN.fetch_add(1, Ordering::Relaxed);
+        {
+            let (src, slen) = staging.plane_ptr_len(0);
+            let (d, len) = dst[0];
+            debug_assert_eq!(len, slen);
+            let t = esp_hal::time::Instant::now();
+            // SAFETY: as above; the spare block is in neither descriptor
+            // ring the DMA can reach before the flip lands.
+            unsafe { core::ptr::copy_nonoverlapping(src, d, len) };
+            worst = worst.max(t.elapsed().as_micros() as u32);
+        }
+        // The last deadline: the spare MSB must be in place before the wrap
+        // the flip lands on. A ring change here means it was not.
+        if hub75.dma_position().is_none_or(|(r, _, _)| r != ring) {
+            shared::SPARE_TORN_WRAP.fetch_add(1, Ordering::Relaxed);
+        }
+        let total = t0.elapsed().as_micros() as u32;
+        self.plane_us = self.plane_us.max(worst);
+        shared::SPARE_PLANE_US.store(self.plane_us, Ordering::Relaxed);
+        shared::SPARE_COPY_US.store(total, Ordering::Relaxed);
+        shared::SPARE_COPY_US_MAX.fetch_max(total, Ordering::Relaxed);
+        shared::SPARE_FLUSHES.fetch_add(1, Ordering::Relaxed);
+        self.pending = Some(swap);
+        self.staged = false;
+        true
+    }
+}
+
+/// Bookkeeping at the one point that knows a frame is going out: the rescans
+/// since the previous hand-off (Gitea #395) and the tag that makes the
+/// driver's shown-log read back as our sequence. Takes the two counters
+/// rather than `&mut self` so the caller can keep its driver borrow.
+fn note_handoff(last_shown_rescan: &mut u32, next_seq: &mut u32, hub75: &Hub75<Blocking, DmaFb>) {
+    // Rescans between consecutive DISPLAYED frames: 1 = every rescan showed
+    // something new, 2 = one repeat.
+    let rescans = hub75.frame_count();
+    if *last_shown_rescan != 0 {
+        let d = rescans.wrapping_sub(*last_shown_rescan);
+        crate::shared::PASS_PER_FRAME_MAX.fetch_max(d, Ordering::Relaxed);
+        crate::shared::PASS_PER_FRAME_MIN.fetch_min(d, Ordering::Relaxed);
+        if d == 0 {
+            // Two frames handed over inside one rescan: the first was never
+            // scanned out. This is the skip, caught at the source.
+            crate::shared::PASS_ZERO_RESCAN.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    *last_shown_rescan = rescans;
+    // Tag this frame so the driver's log of DISPLAYED passes reads back as
+    // our own sequence — no pointer mapping to go stale.
+    let seq = *next_seq;
+    *next_seq = next_seq.wrapping_add(1).max(1);
+    hub75.set_swap_tag(seq);
+}
+
+/// Compose `rgb` at `brightness5` into `target`.
+///
+/// brightness5: no APA102-style hardware field on HUB75 — scale channels in
+/// software exactly like the WS2812 path.
+///
+/// The bulk packer (Gitea #329) walks the frame per ROW PAIR, building all
+/// PLANES entry words for a pixel pair from one pair of table lookups per
+/// channel, with brightness folded into those tables. It writes every colour
+/// bit of every entry, so it subsumes the erase. The per-pixel path is the
+/// fallback for a framebuffer whose layout the boot probe did not recognise.
+fn compose_into(
+    tables: &mut Option<&'static mut luxel_hub75::Tables>,
+    tables_b5: &mut u8,
+    remap: Option<&'static [u16]>,
+    target: &mut Fb,
+    rgb: &[[u8; 3]],
+    brightness5: u8,
+) {
+    if let Some(t) = tables.as_deref_mut() {
+        if *tables_b5 != brightness5 {
+            t.build(&brightness_lut(brightness5));
+            *tables_b5 = brightness5;
+        }
+    }
+    match (tables.as_deref(), remap) {
+        (Some(tables), None) => {
+            luxel_hub75::pack::<NROWS, PANEL_COLS, PLANES>(fb_words(target), rgb, tables);
+        }
+        (Some(tables), Some(lut)) => {
+            let fb = fb_words(target);
+            luxel_hub75::pack_remap::<NROWS, PANEL_COLS, PLANES>(fb, rgb, lut, tables);
+        }
+        (None, remap) => {
+            target.erase();
+            // At 0 the erase above already produced the all-black frame.
+            if brightness5 > 0 {
+                let full = brightness5 >= 31;
+                for i in 0..FB_PIXELS {
+                    // Driver pixel i takes its colour from engine pixel
+                    // `lut[i]`; unmapped and short frames stay erased.
+                    let src = match remap {
+                        Some(l) => usize::from(l[i]),
+                        None => i,
+                    };
+                    let Some([r, g, b]) = rgb.get(src).copied() else { continue };
+                    let (r, g, b) = if full {
+                        (r, g, b)
+                    } else {
+                        (scale5(r, brightness5), scale5(g, brightness5), scale5(b, brightness5))
+                    };
+                    let p = Point::new((i % PANEL_COLS) as i32, (i / PANEL_COLS) as i32);
+                    target.set_pixel(p, Color::new(r, g, b));
+                }
             }
         }
-        self.last_shown_rescan = rescans;
-        // Tag this frame so the driver's log of DISPLAYED passes reads back
-        // as our own sequence — no pointer mapping to go stale (Gitea #395).
-        let seq = self.next_seq;
-        self.next_seq = self.next_seq.wrapping_add(1).max(1);
-        hub75.set_swap_tag(seq);
-        self.pending = Some(hub75.swap(back));
-        true
     }
 }

@@ -184,6 +184,33 @@ pub static PASS_PER_FRAME_MIN: AtomicU32 = AtomicU32::new(u32::MAX);
 pub static PASS_ZERO_RESCAN: AtomicU32 = AtomicU32::new(0);
 
 /// How many recent short passes [`pass_shorts`] keeps.
+/// Spare-plane swap forensics (Gitea #610, `hub75-spare-plane`). Frames
+/// whose staged copy went through: [`SPARE_FLUSHES`]. Polls that found the
+/// MSB run of the pass without room for the copy (a deferral, not a fault —
+/// the frame goes out one pass later): [`SPARE_DEFERRED`]. Frames abandoned
+/// because no window opened within the liveness floor: [`SPARE_ABANDONED`].
+/// Copies that overran their deadline — plane 1 not in place before the DMA
+/// left the MSB run, or the spare MSB not in place before the wrap — which
+/// is the ONE way this mode can tear, and must stay 0: [`SPARE_TORN_P1`],
+/// [`SPARE_TORN_WRAP`]. Copy cost, microseconds, last and worst:
+/// [`SPARE_COPY_US`], [`SPARE_COPY_US_MAX`]; slowest single plane seen,
+/// which sizes the window check: [`SPARE_PLANE_US`].
+pub static SPARE_FLUSHES: AtomicU32 = AtomicU32::new(0);
+/// See [`SPARE_FLUSHES`].
+pub static SPARE_DEFERRED: AtomicU32 = AtomicU32::new(0);
+/// See [`SPARE_FLUSHES`].
+pub static SPARE_ABANDONED: AtomicU32 = AtomicU32::new(0);
+/// See [`SPARE_FLUSHES`].
+pub static SPARE_TORN_P1: AtomicU32 = AtomicU32::new(0);
+/// See [`SPARE_FLUSHES`].
+pub static SPARE_TORN_WRAP: AtomicU32 = AtomicU32::new(0);
+/// See [`SPARE_FLUSHES`].
+pub static SPARE_COPY_US: AtomicU32 = AtomicU32::new(0);
+/// See [`SPARE_FLUSHES`].
+pub static SPARE_COPY_US_MAX: AtomicU32 = AtomicU32::new(0);
+/// See [`SPARE_FLUSHES`].
+pub static SPARE_PLANE_US: AtomicU32 = AtomicU32::new(0);
+
 pub const PASS_SHORT_LOG: usize = 8;
 static PASS_SHORT_US: [AtomicU32; PASS_SHORT_LOG] =
     [const { AtomicU32::new(0) }; PASS_SHORT_LOG];

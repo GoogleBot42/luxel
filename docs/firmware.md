@@ -183,6 +183,32 @@ this reason). A single upright panel — every device shipped so far —
 builds the table, finds it is the identity, frees it again, and holds
 nothing.
 
+**Spare-plane swap (`hub75-spare-plane`, Gitea #610, off by default until
+verified on metal).** The two-framebuffer atomic swap costs a second full
+bitplane buffer of internal SRAM — 28 KB at 64x64, 115 KB for a 256-column
+chain, which is what stood between this board and a 128x128 wall (#611). The
+spare-plane mode keeps the guarantee (nothing is ever written where the DMA
+can read it) for one framebuffer plus **one plane**. The circular ring is
+plane-major with plane 0 the MSB, repeated `2^(PLANES-1)` times, so the first
+half of every pass reads nothing but plane 0 and planes `1..` are idle. The
+driver is handed two *views* over the same buffer that differ only in which
+block plane 0 names — the buffer's own or a spare — and the existing
+two-ring flip (#376) does the rest unchanged. Per frame: `write_frame`
+composes into a full-size **staging** framebuffer (PSRAM arena on
+`psram-arena` boards, heap elsewhere) and stages it; the output task polls the
+driver's `flush` until the DMA is inside the MSB run with room, which arms
+the flip FIRST and then copies planes `1..` into the live buffer and the new
+MSB into the idle spare. Deadlines run plane 1 (before the DMA leaves the MSB
+run), plane k (before it reaches plane k), spare (before the wrap), and the
+copies go in that order, so only plane 1's is tight. The window check is
+sized from the measured per-plane copy time and the ISR's nominal pass
+length; a pass without room defers the frame (`pass.spare.deferred`), and a
+copy that overruns anyway is counted (`torn_p1`/`torn_wrap`, must stay 0).
+Cost: one plane of internal SRAM instead of a buffer, one full framebuffer
+of PSRAM, and one extra copy per frame (staging → live). RAM ledger and the
+option comparison (PSRAM-resident DMA rings, chased copies) on Gitea #610/#611.
+
+
 **Measure `.stack`, don't estimate it.** `readelf -S` (or
 `tools/stack-check.sh`, see docs/tools.md) is ground truth. v0.1.31 shipped
 on an arithmetic estimate of ~27 KB of leftover stack; the real, linked

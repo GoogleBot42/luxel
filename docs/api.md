@@ -237,6 +237,18 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   `tags` is the last 24 displayed frame numbers so the sequence can be read
   directly, and `swap.landing_mismatch` counts flips the driver refused to
   call landed because the engine was provably still on the old ring.
+- `pass.spare` — present only on a `hub75-spare-plane` build (Gitea #610):
+  the spare-plane swap's own forensics. `flushes` counts staged frames copied
+  into the live framebuffer; `deferred` counts polls that found the pass's
+  MSB run without room for the copy (the frame goes out one pass later — a
+  rate, not a fault); `abandoned` counts staged frames no window opened for
+  within 50 ms (a dead DMA; the frame is dropped so the engine never freezes
+  behind it). **`torn_p1` and `torn_wrap` must be 0**: they count copies that
+  overran a deadline — plane 1 not in place before the DMA left the MSB run,
+  or the spare MSB not in place before the wrap — which is the one way this
+  mode can show a mixed frame. `copy_us`/`copy_us_max` are the whole copy's
+  cost, `plane_us` the slowest single plane seen, which is what sizes the
+  window check.
 - `rescan_hz` — how many times a second the HUB75 panel is really redrawn
   from the framebuffer, read from the driver's own BCM frame counter. `0` on
   every board without a panel. This is the panel's clock **and** the render
