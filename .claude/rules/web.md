@@ -80,6 +80,23 @@ paths:
   rather than a frame component. A new button wears `.btn` + a modifier and a
   new dropdown mounts `Popover`; a local copy of either is how four different
   `.primary` blocks and three divergent menu stylesheets happened (#538).
+- **A harness that changes the device's LAYOUT must do it through the UI, not
+  a raw `fetch`.** `deviceLayoutWire` is what the geometry reconciler reads
+  and only `applyLayout()` writes it, so a `POST /api/layout` made behind the
+  page's back changes the device and nothing else: every tile, thumbnail and
+  Settings field keeps drawing the old shape, and the check that follows fails
+  for a reason that looks nothing like the cause. Drive
+  `[data-role="layout-kind"]` / the fields instead. (Cost two debug cycles in
+  #538, 2026-09-19 — a 3D lattice torn down by `fetch` left every thumbnail a
+  cloud, and a projection rig set by `fetch` left the row absent.)
+- **Chromium's `Intl.supportedValuesOf("timeZone")` carries the LEGACY zone
+  spellings** — `Asia/Calcutta`, `Asia/Katmandu`, not `Asia/Kolkata` /
+  `Asia/Kathmandu` — while node's ICU resolves either through
+  `DateTimeFormat`. So a zone name that a unit test accepts can be missing
+  from a `<select>` built from that list, and `page.select()` answers `[]`
+  and changes NOTHING rather than throwing. Pick harness zones from the
+  list the browser actually returns (#538, 2026-09-19).
+
 - In e2e scripts, write injected pattern bodies on one line — CodeMirror
   auto-closes `{`, so a trailing `}` on its own line doubles up and the
   compile silently breaks.

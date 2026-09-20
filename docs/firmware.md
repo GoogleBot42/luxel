@@ -490,8 +490,14 @@ installed. `luxel_core::layout` owns the grammar, shared with the
 `luxel serve` mirror.
 
 Caps: `MAX_SOURCE` 32 KiB and `MAX_BC` 40 KiB are sanity limits now that a
-file is exact-sized (the 16 KiB HTTP request buffer bounds a POST well below
-them anyway). There is **no `MAX_PATTERNS`**; `MAX_RECS` (192) is a heap
+file is exact-sized — `/api/code` and `/api/patterns` STREAM their bodies
+(dispatched before the body is read), which is what lets a 32 KiB source
+arrive at all. Every other POST is read into the connection's single 4 KiB
+picoserve buffer, **headers included**, so a line-oriented body's real
+ceiling is nearer 3.5 KB; a coordinate map that does not arrive intact is
+treated as "clear the map", which is why `POST /api/map`'s procedural `grid`
+form exists (#258) and why a 3D lattice installed from the console stops at
+8x8x8 (Gitea #548). There is **no `MAX_PATTERNS`**; `MAX_RECS` (192) is a heap
 guard on the RAM index (`Vec<Rec>`, 32 B each, no names — those are read
 back out of the mapping), not a format limit, and it sits well past the 119
 real patterns the 732 KiB actually holds. The *scan* is uncapped on purpose:
