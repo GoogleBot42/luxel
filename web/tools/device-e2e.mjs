@@ -746,9 +746,11 @@ try {
       await mappedPage.click('[data-role="patterns-source-device"]');
       await sleep(600);
 
-      // Settings names the projections a 64x64 MATRIX offers — a row for the
-      // pattern kinds that are not native to it (1D and 3D), never a strip's
-      // 2D/3D rows (#539: the stale choice made the whole page a strip's).
+      // Settings names the projections a 64x64 MATRIX offers. Since #545 a
+      // Layout never shows a pattern BIGGER than itself, so the rows are the
+      // kinds SMALLER than this one: 1D alone. (A 3D pattern is no longer
+      // offered on a matrix at all, and a strip's 2D/3D rows never were this
+      // page's — #539: the stale choice made the whole page a strip's.)
       await mappedPage.click('[data-role="tab-settings"]');
       await sleep(800);
       const projRows = await mappedPage.$$eval('[data-role="projection-kind"]', (els) =>
@@ -1217,9 +1219,11 @@ try {
     await sleep(600);
   }
   await page.select('[data-role="layout-kind"]', "strip"); // restore
-
-  await page.select('[data-role="layout-kind"]', "strip"); // restore
   await sleep(600);
+  check(
+    "projection: a strip console offers no projection cards — nothing is smaller than 1D (#545)",
+    (await page.$$('[data-role="projection-card"]')).length === 0,
+  );
 
   // The editor configures no geometry at all since A8 (#469): no shape
   // select, no pixel field, no install buttons, no map link. Two full-screen

@@ -289,6 +289,11 @@
   /** Drag position while scrubbing (0..1); null = not scrubbing. */
   let scrub: number | null = null;
   let seekEl: HTMLElement;
+  /** Seeking needs something to seek WITHIN: a running, timed item. While
+   *  stopped the bar is a readout, not a control — a stray touch on a dim,
+   *  empty bar should not turn the fixture on. Its BOX is unconditional all
+   *  the same, so the transport's height never changes under the pointer. */
+  $: seekable = $playlist.playing && nowSec > 0;
 
   const fracFromEvent = (e: { clientX: number }): number => {
     const r = seekEl.getBoundingClientRect();
@@ -297,7 +302,7 @@
   };
 
   function onSeekDown(e: PointerEvent): void {
-    if (!canPlay || nowSec <= 0) return;
+    if (!seekable) return;
     seekEl.setPointerCapture(e.pointerId);
     scrub = fracFromEvent(e);
   }
@@ -328,7 +333,7 @@
 
   /** ←/→ nudge by a second, Home/End jump to the ends (the slider's a11y). */
   function onSeekKey(e: KeyboardEvent): void {
-    if (!canPlay || nowSec <= 0) return;
+    if (!seekable) return;
     const step = 1 / nowSec;
     let f: number | null = null;
     if (e.key === "ArrowRight" || e.key === "ArrowUp") f = progress + step;
@@ -408,11 +413,11 @@
       <!-- the progress bar IS the seek control (S4's `.prog`, 3px, --ok) -->
       <span
         class="prog"
-        class:seekable={canPlay && nowSec > 0}
+        class:seekable
         bind:this={seekEl}
         data-role="pl-progress"
         role="slider"
-        tabindex={canPlay && nowSec > 0 ? 0 : -1}
+        tabindex={seekable ? 0 : -1}
         aria-label="seek within this item"
         aria-valuemin={0}
         aria-valuemax={Math.round(nowSec)}
@@ -647,26 +652,28 @@
     color: var(--text-dim);
   }
 
-  /* S4 `.prog` + `.prog i` — and it is the seek control */
+  /* S4 `.prog` + `.prog i` — and it is the seek control.
+     A grabbable bar is bigger than 3px, so the hit area is padded while the
+     PAINT is not (`background-clip: content-box` keeps the 3px line the mock
+     draws). The box is unconditional — only the grabbing is gated — so the
+     transport is exactly as tall stopped as playing. */
   .prog {
     display: block;
     margin-top: 5px;
+    box-sizing: content-box;
+    padding: 7px 0;
     height: 3px;
     border-radius: 2px;
     background: #272c35;
     background-image: linear-gradient(var(--ok), var(--ok));
     background-repeat: no-repeat;
     background-size: var(--p) 100%;
+    background-clip: content-box;
+    background-origin: content-box;
     transition: background-size 0.4s linear;
   }
 
-  /* a grabbable bar is bigger than 3px: the hit area is padded, the paint is
-     not (`background-clip: content-box` keeps the 3px line the mock draws) */
   .prog.seekable {
-    padding: 7px 0;
-    height: 17px;
-    background-clip: content-box;
-    background-origin: content-box;
     cursor: pointer;
     touch-action: none;
   }

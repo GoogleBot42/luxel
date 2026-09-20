@@ -70,6 +70,19 @@ DOM flush, and the POST leaves immediately. The harness asserts both
 measurements — one MutationObserver batch, one POST — so this cannot quietly
 regress.
 
+**Also here, because it blocked verification.** `device-e2e.mjs` aborted
+part-way on master after #545 trimmed the projection tables: a Layout never
+shows a pattern bigger than itself, so a strip console now offers no
+projection at all and a matrix offers the 1D row alone — while three checks
+still described the pre-#545 tables and two of them THREW, taking the whole
+run with them. Fixed here (Gitea #547): the matrix's row/card counts and the
+`proj1d` POST are asserted on the matrix, the strip asserts that it offers
+nothing, the settings-section order no longer demands a Projection section a
+strip cannot have, and the editor's "Add to playlist carries the projection"
+check wears a matrix for its own length. The product question — whether a
+strip console should say something instead of showing nothing — stays with
+#538 §B.
+
 **Verified**: all five web harnesses + `npm test` green; `tools/ci.sh`.
 `device-e2e.mjs` gained the four-control assertions (stopped and playing),
 pause/resume/stop-from-the-top semantics against the mirror, the seek, the
