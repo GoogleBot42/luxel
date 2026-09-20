@@ -41,7 +41,10 @@ onto it, WiFi, the clock and time zone, MQTT, firmware update).
 
 **The firmware** (`firmware/`, esp-hal + embassy; release images for ESP32, C3, C6, S3, and HUB75-panel boards):
 
-- Live coding over WiFi: type in the browser, the strip follows.
+- Live coding over WiFi: type in the browser, the strip follows — while the
+  pattern you are editing is the one the device is running. Browsing or
+  opening any other pattern previews it locally and leaves the LEDs alone;
+  `Play` / `▶ Play on device` is what hands it to them.
 - SK9822/APA102 + WS281x over SPI; runtime pixel count, protocol, color
   order, gamma, and power-cap settings — all changed live, all persisted.
 - HUB75 matrix panels on the ESP32-S3 (LCD_CAM + DMA; a 64x64 panel is
