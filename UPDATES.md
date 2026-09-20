@@ -1,5 +1,27 @@
 # Update log
 
+## 2026-09-20 — mockdiff: the mocks become a measurement
+
+`web/tools/mockdiff.mjs` + `web/tools/mockdiff.map.json` (docs/tools.md). The approved
+mockups are the visual spec, so "does it match the mock?" is now a number, not an opinion:
+for each of **27 (mock frame → app state) pairs** covering **341 mapped elements** the tool
+renders the mock frame and the app side by side in real chromium at the frame's drawn width
+and diffs `getComputedStyle` over a fixed property list plus the bounding box — resting,
+`:hover` and `:focus` — reporting only what differs, ranked layout → colour → typography,
+with the `web/src` file:line the app's value comes from (read back over CDP
+`CSS.getMatchedStylesForNode`, Svelte scope hash resolved to its authoring file).
+
+`--sweep` adds the non-CSS half: horizontal scroll, clipped text, escaping children,
+sub-24px touch targets, tab order and the §5.7 `data-reason` invariant at five widths.
+`--device` points this checkout's bundle at a real board and `--device-bundle` loads the
+copy the board serves from flash; a real board only ever gets the frames the map marks
+`deviceSafe`, so a state that would write to hardware is refused rather than run.
+
+First run against master `163a727`: **869 deltas over 27 frames** (report in the session
+scratchpad). Mirror and the real Seengreat panel produce **identical CSS** — every
+difference between the two runs is device data, not styling.
+
+
 ## 2026-09-20 — opening a pattern no longer hijacks the device (#563, #562, #564)
 
 The three follow-ups from the #538 round-1 bench check, in one pass. Mirror
