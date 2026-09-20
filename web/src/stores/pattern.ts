@@ -164,6 +164,7 @@ function queueAutosave(): void {
       patternName: get(patternName),
       exampleName: get(exampleName),
       dirty: get(dirty),
+      devicePatternId: get(devicePatternId),
     });
   }, 800);
 }
@@ -175,13 +176,15 @@ function queueAutosave(): void {
  *
  * Re-persists on any change to the fields the working copy stores — including
  * `dirty`, which flips to false on save WITHOUT a source change (so a reload
- * then correctly defers to the device instead of resuming a saved pattern).
+ * then correctly defers to the device instead of resuming a saved pattern),
+ * and `devicePatternId`, which says WHICH device pattern a dirty copy is an
+ * edit of and so decides whether the next boot may push it (#585).
  */
 export function startAutosave(): void {
   if (autosaveStarted) return;
   autosaveStarted = true;
   let first = true;
-  derived([source, dirty], (v) => v).subscribe(() => {
+  derived([source, dirty, devicePatternId], (v) => v).subscribe(() => {
     if (first) {
       first = false; // the subscribe-time callback is the current state, not a change
       return;

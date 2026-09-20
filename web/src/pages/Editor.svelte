@@ -29,6 +29,10 @@
   // Before it, one click on a browsing page could stop a playlist and leave
   // the device on an unsaved ad-hoc program with nothing in the UI saying so.
   // The PLAYGROUND has no device and is unaffected.
+  //
+  // BOOT obeys the same rule (Gitea #585): resuming the browser's autosaved
+  // working copy opens it in LOCAL PREVIEW unless it is an unsaved edit of the
+  // program the device is already running — see `bootDevice` / `lib/resume.ts`.
   import { createEventDispatcher, onDestroy, tick } from "svelte";
   import Controls from "../components/Controls.svelte";
   import Debugger from "../components/Debugger.svelte";
@@ -54,6 +58,7 @@
     type OutpipeSettings,
     type StepKind,
   } from "../lib/luxel";
+  import { bootResume } from "../lib/resume";
   import {
     activateDevicePattern,
     addToPlaylist as addPatternToPlaylist,
@@ -632,26 +637,49 @@
 
   // ---- boot ----
 
-  /** Device mode: a local engine first so the boot cover lifts onto a live
-   *  preview, then the handshake, then the pulled/resumed source. */
+  /** The source the device reported at connect, kept so the running pattern
+   *  can be named once the stored sources have streamed in. */
+  let runningSource = "";
+
+  /**
+   * Device mode: a local engine first so the boot cover lifts onto a live
+   * preview, then the handshake, then the pulled/resumed source.
+   *
+   * The handshake ALWAYS pulls the running program now (#585). It used to be
+   * skipped when the browser arrived holding a dirty working copy, because
+   * that copy was about to be pushed over the top anyway — which meant a page
+   * load replaced the user's installation and stopped a playing playlist
+   * before anything had been clicked. What the device is running is instead
+   * the INPUT to the decision: `lib/resume.ts`.
+   */
   export async function bootDevice(
-    connect: (pull: boolean) => Promise<{ ok: boolean; source: string | null }>,
-    wipDirty: boolean,
+    connect: () => Promise<{ ok: boolean; source: string | null }>,
+    wip: { dirty: boolean; devicePatternId: string },
   ): Promise<void> {
     recompile();
     startLoop();
-    // A genuinely-unsaved edit is resumed AND pushed so the device runs it too
-    // (editor, preview and device all agree). A clean copy instead opens
-    // whatever pattern is currently active on the device. EITHER WAY the
-    // document ends up being what the device runs, so this is the one boot
-    // that starts in live push (#563).
-    livePush.set(true);
-    deviceRunningId.set(""); // ad-hoc until the source match below names it
-    const r = await connect(!wipDirty);
-    if (r.ok) {
-      // Nothing to reset: the console's Layout IS the device's, and the
-      // handshake's `/api/status` + `/api/map` reads are what the reconciler
-      // is watching (#463).
+    livePush.set(false); // nothing is ours to write until the decision below
+    deviceRunningId.set(""); // ad-hoc until the handshake names what is running
+    // Nothing to reset for geometry: the console's Layout IS the device's, and
+    // the handshake's `/api/status` + `/api/map` reads are what the reconciler
+    // is watching (#463).
+    const r = await connect();
+    if (r.ok) compileError = null;
+    runningSource = r.source ?? "";
+    nameRunningPattern($devicePatterns, runningSource, $device, $deviceRunningId);
+    if (wip.dirty && wip.devicePatternId && !$deviceRunningId) {
+      // The one case the library match above cannot settle on its own: the
+      // pulled source is an ad-hoc-looking blob until the stored sources have
+      // streamed in, and the boot cannot wait for them. Ask the one pattern
+      // the answer depends on.
+      await confirmRunning(wip.devicePatternId, runningSource);
+    }
+    const how = bootResume({
+      dirty: wip.dirty,
+      wipPatternId: wip.devicePatternId,
+      runningId: $deviceRunningId,
+    });
+    if (how === "adopt-running") {
       if (r.source !== null) {
         source.set(r.source); // show what's running on the device
         dirty.set(false); // editor now matches the running pattern
@@ -660,10 +688,62 @@
         devicePatternId.set("");
         projectionOverride.set(null);
       }
-      compileError = null;
+      livePush.set(true); // the document IS the running program (#563)
+    } else {
+      // The resumed copy is the document either way; only `resume-live` —
+      // an unsaved edit OF the running program — may drive the LEDs.
+      devicePatternId.set(wip.devicePatternId);
+      livePush.set(how === "resume-live");
     }
     recompile(); // rebuild the preview from the pulled/resumed source
-    if (wipDirty && $device) await devicePush();
+    if (how === "resume-live" && $device) await devicePush();
+  }
+
+  /** Name the RUNNING pattern from the device library (the device streams
+   *  source, never which row it came from). Never overwrites an id we already
+   *  have: `refreshPlaylist()` names it authoritatively while a playlist is
+   *  playing, and every activation names it as it happens.
+   *
+   *  This is the running PROGRAM's identity, distinct from
+   *  `matchRunningToLibrary` below, which names the editor's DOCUMENT — the
+   *  two are the same string only while the editor is in live push (#563).
+   *
+   *  Deps as args, the house style below: the stored sources stream in one at
+   *  a time after the handshake, so this re-runs until one of them matches. */
+  $: nameRunningPattern($devicePatterns, runningSource, $device, $deviceRunningId);
+  function nameRunningPattern(
+    pats: { id: string; source?: string }[],
+    src: string,
+    dev: unknown,
+    rid: string,
+  ): void {
+    if (!dev || rid || src.trim() === "") return;
+    const m = pats.find((p) => p.source && p.source.trim() === src.trim());
+    if (m) deviceRunningId.set(m.id);
+  }
+
+  /** Is the device running the document the resumed working copy is an edit
+   *  of? Used only by the boot decision, when the library sources have not
+   *  streamed in yet and it cannot wait for them (#585). Sets
+   *  `deviceRunningId` when the answer is yes.
+   *
+   *  Two ways it can be yes: the device still holds the STORED version (no
+   *  edit has been pushed yet), or it is running this very working copy —
+   *  the session that dirtied it was in live push and had already sent the
+   *  edit before the reload, so the id it claims is still the honest one. */
+  async function confirmRunning(id: string, running: string): Promise<void> {
+    const d = $device;
+    if (!d || running.trim() === "") return;
+    if (running.trim() === $source.trim()) {
+      deviceRunningId.set(id);
+      return; // no read needed — the device is running what we are holding
+    }
+    try {
+      const p = await d.patternSource(id);
+      if (p.source.trim() === running.trim()) deviceRunningId.set(id);
+    } catch {
+      /* the pattern is gone from the device — it is not what's running */
+    }
   }
 
   /** Playground mode. A pre-#463 share link's map program is run by the shell

@@ -210,6 +210,28 @@ async function clickRole(page, role) {
   await page.click(sel);
 }
 
+/**
+ * Open a console on `base` with NO resumed working copy in the way (#585).
+ *
+ * Since #585 a boot only live-pushes the autosaved copy when it is an unsaved
+ * edit of the program the device is ALREADY RUNNING; anything else resumes in
+ * local preview and writes nothing. A copy left behind by an earlier section
+ * is never that for a mirror this run has just started, so a section that is
+ * about the push (the capacity model, below) has to arrive without one. The
+ * `luxel.current` key is per-origin and every page here shares it, hence the
+ * load-clear-reload rather than a plain `goto`.
+ */
+async function gotoConsole(pg, base, route = "") {
+  const url = `http://localhost:${PORT}/?device=${encodeURIComponent(base)}${route}`;
+  await pg.goto(url, { waitUntil: "networkidle0" });
+  const had = await pg.evaluate(() => {
+    const was = localStorage.getItem("luxel.current") !== null;
+    localStorage.removeItem("luxel.current");
+    return was;
+  });
+  if (had) await pg.reload({ waitUntil: "networkidle0" });
+}
+
 async function setEditor(page, text) {
   await page.click(".cm-content");
   await page.keyboard.down("Control");
@@ -2681,8 +2703,9 @@ try {
     !(await saveState(page)).includes("preview only"),
     await saveState(page),
   );
-  // An unsaved edit must (a) survive a reload and (b) be re-pushed so the
-  // device runs it — even when the device was changed out-of-band meanwhile.
+  // An unsaved edit must survive a reload — in the EDITOR. It must NOT be
+  // re-pushed when the device has moved on meanwhile: a page load is not a
+  // device action (#585).
   await setEditor(page, "export function render(index) { rgb(0.111, 0.222, 0.333) }");
   await sleep(1500); // push debounce (500) + working-copy autosave (800) + margin
   check(
@@ -2699,18 +2722,27 @@ try {
     "resume: device changed out-of-band",
     (await (await fetch(`${DEV}/api/pattern`)).text()).includes("0.9"),
   );
-  // reload — the dirty edit must win over the out-of-band device pattern
+  // reload — the edit wins in the EDITOR; the DEVICE keeps what it is running.
+  // Both ids are empty here (an ad-hoc edit on one side, an out-of-band ad-hoc
+  // push on the other) and two empty ids are not a match, so the copy resumes
+  // in local preview and the out-of-band program keeps the LEDs (#585). This
+  // used to assert the opposite — the boot push that cost Jeremy's playlist.
   await reloadInto(page);
   await page.waitForSelector(".cm-content");
   await sleep(500); // let the device handshake settle after reload
-  await sleep(1800); // let the resume push land on the device
+  await sleep(1800); // …and well past the push debounce, if there were a push
   check(
     "resume: editor restores the unsaved edit",
     (await page.$eval(".cm-content", (el) => el.textContent ?? "")).includes("0.111"),
   );
   check(
-    "resume: device re-runs the resumed edit (not the out-of-band one)",
-    (await (await fetch(`${DEV}/api/pattern`)).text()).includes("0.111"),
+    "#585 resume: the device keeps the out-of-band pattern — the boot pushes nothing",
+    (await (await fetch(`${DEV}/api/pattern`)).text()).includes("0.9"),
+  );
+  check(
+    "#585 resume: …and the resumed copy says it is preview only",
+    (await saveState(page)) === "unsaved · preview only",
+    await saveState(page),
   );
 
   // clean copy → defer to the device. Save (clean), change the device
@@ -4042,9 +4074,7 @@ try {
       (await fetch(`${TIGHT}/api/status`).then((r) => r.json())).heap_free === 30720,
     );
 
-    await page.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(TIGHT)}${EDIT}`, {
-      waitUntil: "networkidle0",
-    });
+    await gotoConsole(page, TIGHT, EDIT);
     await page.waitForSelector(".cm-content");
     await sleep(1500);
 
@@ -4138,9 +4168,7 @@ try {
         "capacity: mirror reports engine_heap",
         (await fetch(`${LOADED}/api/status`).then((r) => r.json())).engine_heap === 30720,
       );
-      await page.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(LOADED)}${EDIT}`, {
-        waitUntil: "networkidle0",
-      });
+      await gotoConsole(page, LOADED, EDIT);
       await page.waitForSelector(".cm-content");
       await sleep(1500);
       await setEditor(page, ARRAY_OVER);
@@ -4196,9 +4224,7 @@ try {
     });
     process.on("exit", () => panelDev.kill());
     try {
-      await page.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(PANEL)}${EDIT}`, {
-        waitUntil: "networkidle0",
-      });
+      await gotoConsole(page, PANEL, EDIT);
       await page.waitForSelector(".cm-content");
       await sleep(1500);
       await setEditor(page, THREE_CHANNELS);
@@ -4245,15 +4271,19 @@ try {
 
   // ---- #573: a resumed working copy never reshapes the console ----
   //
-  // A console's Layout is the FIXTURE's. The browser can arrive holding a
-  // DIRTY working copy from an earlier session, and the boot resumes it AND
-  // live-pushes it (`bootDevice`, #563) — so a 300 px strip ends up running a
-  // `render2D` program, `/api/status` then reports the grid the ENGINE
-  // fabricated for it (`source:"default"`, ceil(√300) = 18×17), and the
-  // console used to adopt THAT as its geometry: the header chip read
-  // `18×17 matrix`, every tile drew as a grid, Settings offered a matrix's
-  // projections and the #538 compatibility filter stopped hiding the 2D
-  // pattern (Gitea #573). Same class as #539, through a different input.
+  // A console's Layout is the FIXTURE's. Hand a 300 px strip a `render2D`
+  // program and `/api/status` reports the grid the ENGINE fabricated for it
+  // (`source:"default"`, ceil(√300) = 18×17); the console used to adopt THAT
+  // as its geometry: the header chip read `18×17 matrix`, every tile drew as a
+  // grid, Settings offered a matrix's projections and the #538 compatibility
+  // filter stopped hiding the 2D pattern (Gitea #573). Same class as #539,
+  // through a different input.
+  //
+  // The strip got handed that program by the console's own BOOT, which resumed
+  // a dirty working copy and live-pushed it — the #585 half of the same
+  // ticket, fixed here too: the push is gone (the copy resumes in local
+  // preview), so the fabricated grid is produced out of band below and the
+  // boot is checked to send nothing.
   //
   // Each half runs in its OWN browser context, so the seeded localStorage is
   // the only state it carries, and against its OWN mirror, so the numbers in
@@ -4271,8 +4301,10 @@ try {
         ).json()
       ).id;
     /** Boot a console in a fresh context with `wip` as the DIRTY working copy
-     *  the browser is holding from an earlier session. */
-    const bootWithWip = async (base, wip) => {
+     *  the browser is holding from an earlier session. `wipId` is the device
+     *  pattern that copy is an edit OF (#585); `wires`, when given, collects
+     *  the POST paths the page sends across the boot. */
+    const bootWithWip = async (base, wip, { wipId = "", wires = null } = {}) => {
       const ctx = await browser.createBrowserContext();
       const pg = await ctx.newPage();
       await pg.setViewport({ width: 1400, height: 900 });
@@ -4280,12 +4312,24 @@ try {
       // seed first: `luxel.current` is read during boot, so it must already be
       // on the origin for the load that matters
       await pg.goto(url, { waitUntil: "networkidle0" });
-      await pg.evaluate((src) => {
-        localStorage.setItem(
-          "luxel.current",
-          JSON.stringify({ source: src, patternName: "", exampleName: "", dirty: true }),
-        );
-      }, wip);
+      await pg.evaluate(
+        (src, id) => {
+          localStorage.setItem(
+            "luxel.current",
+            JSON.stringify({
+              source: src,
+              patternName: "",
+              exampleName: "",
+              dirty: true,
+              devicePatternId: id,
+            }),
+          );
+        },
+        wip,
+        wipId,
+      );
+      // attached before the reload: the boot IS what we are measuring
+      if (wires) pg.on("request", (r) => r.method() === "POST" && wires.push(new URL(r.url()).pathname));
       await pg.reload({ waitUntil: "networkidle0" });
       await sleep(3500);
       return { ctx, pg };
@@ -4307,7 +4351,14 @@ try {
       // the ticket's fixture: one pattern the strip can show, one it cannot
       await saveOn(WIP, "Strip 1D", REN1D);
       await saveOn(WIP, "Strip 2D", REN2D);
-      const booted = await bootWithWip(WIP, REN2D);
+      // Put the strip on the 2D program OUT OF BAND. Until #585 the console's
+      // own boot push did this, which was the bug; the fabricated-grid state
+      // is still reachable (any `POST /api/code` of a 2D program makes it), so
+      // it is produced here deliberately and the console is booted into it.
+      await fetch(`${WIP}/api/code`, { method: "POST", body: await lxpBody("", REN2D) });
+      await sleep(400);
+      const wipWires = [];
+      const booted = await bootWithWip(WIP, REN2D, { wires: wipWires });
       wipCtx = booted.ctx;
       const wipPage = booted.pg;
 
@@ -4327,6 +4378,14 @@ try {
         "#573: …while the device reports the engine's fabricated grid",
         geom.source === "default" && geom.dims === 2,
         JSON.stringify(geom),
+      );
+
+      // #585: and the boot itself wrote NOTHING — the dirty copy is the
+      // editor's document, not a program handed to the LEDs
+      check(
+        "#585: the boot resume sends the device no code push",
+        !wipWires.includes("/api/code"),
+        wipWires.join(", ") || "(no POSTs)",
       );
 
       // the SHOWN tiles only: the `Not for this layout` group below deliberately
@@ -4432,6 +4491,124 @@ try {
     } finally {
       if (wipCtx) await wipCtx.close();
       wipDev.kill();
+    }
+
+    // ---- #585: a boot never takes the device over ----
+    //
+    // The push rule (#563) applied to the one path that still broke it: a
+    // console resuming the browser's autosaved working copy. The copy is the
+    // user's and is never thrown away, but it only reaches the LEDs when it is
+    // an unsaved edit OF the program the device is already running — which is
+    // the ONE fact `lib/resume.ts` decides on (`tests/resume.test.mjs` pins the
+    // table; this pins that the console really asks it).
+    //
+    // The negative case is the ticket's: a playing playlist, a dirty 2D copy
+    // from an earlier session, and a reload that used to replace both.
+    const RES_PORT = E2E.mirror.wipResume;
+    const RES = `http://127.0.0.1:${RES_PORT}`;
+    const resDev = spawn(
+      "../target/debug/luxel",
+      ["serve", ...NO_NETIN, "--port", String(RES_PORT), "--pixels", "300"],
+      { stdio: ["ignore", "pipe", "inherit"] },
+    );
+    await new Promise((resolve, reject) => {
+      resDev.stdout.on("data", (d) => String(d).includes("luxel serve:") && resolve());
+      resDev.on("exit", () => reject(new Error("#585 strip mirror died")));
+      setTimeout(() => reject(new Error("#585 strip mirror start timeout")), 30000);
+    });
+    process.on("exit", () => resDev.kill());
+    let resCtx = null;
+    let liveCtx = null;
+    try {
+      const id1d = await saveOn(RES, "Resume 1D", REN1D);
+      await saveOn(RES, "Resume 2D", REN2D);
+      // a one-item playlist, so what the device is running stays deterministic
+      await fetch(`${RES}/api/playlist`, { method: "POST", body: `D 30\nX 0\nI ${id1d} -1\n` });
+      await fetch(`${RES}/api/playlist/play`, { method: "POST" });
+      await sleep(900);
+      check(
+        "#585 setup: the mirror's playlist is playing",
+        (await (await fetch(`${RES}/api/playlist`)).json()).playing === true,
+      );
+
+      const resWires = [];
+      const res = await bootWithWip(RES, REN2D, { wires: resWires });
+      resCtx = res.ctx;
+      check(
+        "#585: a console resuming a dirty working copy pushes no code",
+        !resWires.includes("/api/code"),
+        resWires.join(", ") || "(no POSTs)",
+      );
+      const stillPlaying = await (await fetch(`${RES}/api/playlist`)).json();
+      check(
+        "#585: …so the playlist is still playing",
+        stillPlaying.playing === true,
+        JSON.stringify({ p: stillPlaying.playing, i: stillPlaying.index }),
+      );
+      check(
+        "#585: …and the device is still running the playlist's pattern",
+        (await (await fetch(`${RES}/api/pattern`)).text()).trim() === REN1D.trim(),
+      );
+      const resChip = await res.pg.$eval('[data-role="layout-label"]', (el) =>
+        (el.textContent ?? "").trim(),
+      );
+      check("#585: …the chip is still the fixture's", resChip === "300 px strip", resChip);
+
+      // the copy IS the editor's document — in local preview, with the one
+      // verb that would hand it to the LEDs offered
+      await reloadInto(res.pg, EDIT);
+      await sleep(3000);
+      await res.pg.waitForSelector(".cm-content");
+      check(
+        "#585: …the editor holds the resumed working copy",
+        (await res.pg.$eval(".cm-content", (el) => el.textContent ?? "")).includes("render2D"),
+      );
+      check(
+        "#585: …and says it is preview only",
+        (await saveState(res.pg)) === "unsaved · preview only",
+        await saveState(res.pg),
+      );
+      check(
+        "#585: …with ▶ Play on device offered as the way to change that",
+        (await res.pg.$('[data-role="editor-play-device"]')) !== null,
+      );
+      check(
+        "#585: …and that second boot pushed nothing either",
+        !resWires.includes("/api/code"),
+        resWires.join(", ") || "(no POSTs)",
+      );
+      await res.pg.screenshot({ path: `${shotDir}/device-e2e-585-preview-only.png` });
+
+      // ---- the positive case: a dirty edit OF the running pattern ----
+      await fetch(`${RES}/api/playlist/stop`, { method: "POST" });
+      await fetch(`${RES}/api/patterns/${id1d}/activate`, { method: "POST" });
+      await sleep(900);
+      const EDITED = `${REN1D}\n// edited585`;
+      const liveWires = [];
+      const live = await bootWithWip(RES, EDITED, { wipId: id1d, wires: liveWires });
+      liveCtx = live.ctx;
+      check(
+        "#585: a dirty edit of the RUNNING pattern still live-pushes at boot",
+        liveWires.includes("/api/code"),
+        liveWires.join(", ") || "(no POSTs)",
+      );
+      check(
+        "#585: …so the device runs the edit",
+        (await (await fetch(`${RES}/api/pattern`)).text()).includes("edited585"),
+      );
+      await reloadInto(live.pg, EDIT);
+      await sleep(3000);
+      await live.pg.waitForSelector(".cm-content");
+      check(
+        "#585: …and the header does NOT say preview only",
+        (await saveState(live.pg)) === "unsaved",
+        await saveState(live.pg),
+      );
+      await live.pg.screenshot({ path: `${shotDir}/device-e2e-585-live-resume.png` });
+    } finally {
+      if (resCtx) await resCtx.close();
+      if (liveCtx) await liveCtx.close();
+      resDev.kill();
     }
   }
 } finally {

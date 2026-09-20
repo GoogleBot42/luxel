@@ -71,10 +71,14 @@ paths:
   which is the feature, not what a test that wants the editor means).
 - Puppeteer pages from the same `browser` share an ORIGIN, and therefore share
   `localStorage` — which holds the autosaved working copy. A second page
-  opened against a second mirror will resume (and push!) whatever the first
-  page last autosaved, so a "fresh console" fixture needs its own
+  opened against a second mirror will resume whatever the first page last
+  autosaved, so a "fresh console" fixture needs its own
   `browser.createBrowserContext()`. Two device-e2e sections were passing for
-  the wrong reason before that (2026-09-19).
+  the wrong reason before that (2026-09-19). Since #585 that resume no longer
+  PUSHES — which flips the trap: a section that needs the editor in live push
+  must arrive with no working copy at all (`gotoConsole` in `device-e2e.mjs`
+  clears `luxel.current`), or it silently tests a preview-only editor that
+  writes nothing (2026-09-20).
 - Naming and confirmations are in-app dialogs (`components/Dialog.svelte` +
   `stores/dialog.ts`, #472), never `window.prompt`/`confirm`. Harnesses drive
   them with `acceptDialog`/`cancelDialog` from `web/tools/e2e-common.mjs`;
@@ -220,7 +224,12 @@ paths:
   open in local preview and write nothing, because a push is a playlist
   takeover on the firmware (`playlist::stop()`) and one click on a browsing
   page must not cost the user their installation. `▶ Play on device` /
-  a tile's `Play` is the explicit activation. Two ids, not one:
+  a tile's `Play` is the explicit activation. **A console's BOOT obeys the
+  same rule** (#585): the autosaved working copy is always resumed in the
+  editor, but it is only pushed when it is an unsaved edit of the pattern the
+  device is already RUNNING — one pure function, `lib/resume.ts`. Two empty
+  ids are not a match; a page load never replaces the program on the LEDs.
+  Two ids, not one:
   `deviceRunningId` (device) vs `devicePatternId` (editor document). The full
   rule and the `save-state` string contract are in docs/web-architecture.md
   ("Opening a pattern is not a device action").

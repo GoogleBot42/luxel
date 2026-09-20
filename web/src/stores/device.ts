@@ -1009,7 +1009,7 @@ export async function clearDeviceMap(): Promise<void> {
 
 export interface ConnectResult {
   ok: boolean;
-  /** The device's running pattern, when `pullPattern` asked for it. */
+  /** The device's running pattern; null only when the handshake failed. */
   source: string | null;
 }
 
@@ -1017,10 +1017,13 @@ export interface ConnectResult {
  * Bind to the device and read its whole state. The base is always known
  * (served-from-device same-origin, or a `?device=` override). No pixel
  * streaming: the preview runs locally; the device is a sink we push code +
- * controls to. `pullPattern` fetches the device's running pattern — the
- * CALLER installs it in the editor (see the layering rule at the top).
+ * controls to. It always reads the device's running pattern — the CALLER
+ * decides what to do with it (see the layering rule at the top). It used to be
+ * optional, skipped when the browser arrived holding a dirty working copy that
+ * was about to be pushed over the top; since #585 nothing is pushed at boot
+ * until we know what is running, so there is nothing to skip.
  */
-export async function connectDevice(base: string, pullPattern = true): Promise<ConnectResult> {
+export async function connectDevice(base: string): Promise<ConnectResult> {
   deviceError.set("");
   deviceBlocked.set(false);
   base = base.trim().replace(/\/+$/, "");
@@ -1048,8 +1051,7 @@ export async function connectDevice(base: string, pullPattern = true): Promise<C
     if (st.slot) deviceSlot.set(st.slot);
     deviceStore.set(st.store ?? null);
     deviceVmerr.set(st.vmerr);
-    let source: string | null = null;
-    if (pullPattern) source = await session.pattern(); // show what's running
+    const source = await session.pattern(); // what the device is running
     try {
       const b = await session.brightness();
       brightness.set(b.brightness);
