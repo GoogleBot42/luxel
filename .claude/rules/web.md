@@ -149,7 +149,15 @@ paths:
 - **A flex container blockifies its children's `display`**, so an `inline-flex`
   `.btn` inside a `display:inline-flex` wrapper computes as `flex`. A mock-vs-app
   `display` delta is usually the WRAPPER's fault, not the element the report
-  names (#538, `PreviewAsChip`'s `.wrap`).
+  names (#538, `PreviewAsChip`'s `.wrap`). A GRID container does the same, which
+  is why a single-control cell in Settings is a plain block div — the mockups
+  draw those inputs `inline-block` (#538, `settings/cards.css` `.fctl`).
+- **Chrome ignores `line-height` on a `<select>`** — it computes `normal` however
+  you set it, `font: 13px/1` included — until the control is
+  `appearance: none`. With it the select takes the mockups' `.sel` metrics
+  exactly, and the native chevron comes back as a background image (2026-09-20,
+  #538). Drawing `<div class="sel">` instead is not the answer: the real control
+  is what the keyboard and a phone know how to open.
 - Since #471 **two full-screen editors are mounted at once** — the pattern
   editor (`[data-role="editor-view"]`) and the map program's screen
   (`map-editor-view`) — each with its own CodeMirror pane and its own
