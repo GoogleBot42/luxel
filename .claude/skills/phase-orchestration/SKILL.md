@@ -58,6 +58,30 @@ rebased cleanly on that alone.
   offset table); `tools/serve-e2e.mjs`/`mqtt-e2e.mjs` still collide (#502).
 - Two full-screen editors are mounted at once; scope harness selectors.
 
+## 4b. UI fidelity is measured, not eyeballed (learned the hard way, 2026-09-19/20)
+
+Phase A shipped green on every harness and Jeremy's verdict was "a pretty poor job of
+matching the mocks" (~45 items, #538) — the briefs said "mockups for reference" and
+agents treated them as inspiration. A second pass of side-by-side screenshots still left
+"big mistakes" he saw at once on the panel. What closed it:
+
+- **`web/tools/mockdiff.mjs` + `mockdiff.map.json`** — per mock frame, an element map
+  (mock selector ↔ app data-role) and a computed-style/box/hover/focus/reading-order/
+  copy diff with `file:line` attribution; `--sweep` for overflow, clipping, touch targets
+  and tab order at five widths; `--device http://ip` read-only against a real board.
+  912 deltas at first run; the hand-back bar is **0 deltas on the mirror and 0 UI deltas
+  on the real boards**, with `allow` entries only for (a) deviations Jeremy asked for,
+  (b) absences his product rules force, (c) ticketed features — each with a reason.
+- Run it as **one closure agent per screen** with a shared `closure-common.md`
+  (definition of done, allow-list policy, device read-only rules, shared-file etiquette);
+  shared primitives (`app.css` range/checkbox/menu) close deltas on other screens, so
+  re-run everything after each merge, and the orchestrator runs the full suite last.
+- Put the bar in the FIRST brief of any UI ticket: mock frame ids, the mock's CSS quoted,
+  and "mockdiff --frames X reads 0" as acceptance. It costs less than a review round.
+- The instrument finds product bugs too (a console adopting the pattern's or the
+  playground's geometry, #539/#573; opening a pattern hijacking the device, #563/#585) —
+  treat every non-CSS finding as a ticket, not noise.
+
 ## 5. Housekeeping
 
 - Finished agents' leftover CI pollers keep firing "completed"
