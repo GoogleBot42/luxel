@@ -63,44 +63,54 @@
 
 <div class="field">
   <span class="flabel">Version</span>
-  <span class="mono" data-role="fw-version">
-    {$deviceVersion ? `v${$deviceVersion}` : "—"}
-    {#if $deviceSlot}<span class="dim">· {$deviceSlot}</span>{/if}
-  </span>
+  <div class="fctl">
+    <span class="mono" data-role="fw-version">
+      {$deviceVersion ? `v${$deviceVersion}` : "—"}
+      {#if $deviceSlot}<span class="dim">· {$deviceSlot}</span>{/if}
+    </span>
+  </div>
 </div>
 
 {#if $deviceCaps?.ota}
   <div class="field">
-    <input
-      bind:this={fileInput}
-      type="file"
-      accept=".bin,application/octet-stream"
-      hidden
-      data-role="fw-file"
-      on:change={(e) => void onImagePicked(e)}
-    />
-    <!-- a push in flight is a PROGRESS state, not a capability gate: the
-         button steps aside for the progress line rather than greying out
-         (§5.7, Gitea #529) -->
-    {#if busy}
-      <span class="dim" data-role="fw-busy">uploading — the device reboots when it lands…</span>
-    {:else}
-      <button data-role="fw-update" on:click={() => fileInput?.click()}>Update…</button>
-    {/if}
-    <span class="dim hint">
-      pick a <span class="mono">luxel.bin</span> built for this board — it is written to the
-      other OTA slot and the device <strong>reboots</strong> into it
-    </span>
-    {#if $notes.ota}<span class="dim" data-role="fw-note">{$notes.ota}</span>{/if}
+    <span class="flabel"></span>
+    <div class="fctl row g10">
+      <input
+        bind:this={fileInput}
+        type="file"
+        accept=".bin,application/octet-stream"
+        hidden
+        data-role="fw-file"
+        on:change={(e) => void onImagePicked(e)}
+      />
+      <!-- a push in flight is a PROGRESS state, not a capability gate: the
+           button steps aside for the progress line rather than greying out
+           (§5.7, Gitea #529) -->
+      {#if busy}
+        <span class="dim hint" data-role="fw-busy">
+          uploading — the device reboots when it lands…
+        </span>
+      {:else}
+        <button data-role="fw-update" on:click={() => fileInput?.click()}>Update…</button>
+      {/if}
+      <span class="dim hint">
+        pick a <span class="mono">luxel.bin</span> built for this board — it is written to the
+        other OTA slot and the device <strong>reboots</strong> into it
+      </span>
+      {#if $notes.ota}<span class="dim hint" data-role="fw-note">{$notes.ota}</span>{/if}
+    </div>
   </div>
 {/if}
 
 {#if $deviceCaps?.reboot}
   <div class="field">
-    <button data-role="apmode" on:click={() => void startApMode()}>Reboot into setup AP</button>
-    <span class="dim hint">
-      one boot only — good for re-provisioning; it comes back as a station afterwards
-    </span>
-    {#if $notes.ap}<span class="dim" data-role="apmode-note">{$notes.ap}</span>{/if}
+    <span class="flabel"></span>
+    <div class="fctl row g10">
+      <button data-role="apmode" on:click={() => void startApMode()}>Reboot into setup AP</button>
+      <span class="dim hint">
+        one boot only — good for re-provisioning; it comes back as a station afterwards
+      </span>
+      {#if $notes.ap}<span class="dim hint" data-role="apmode-note">{$notes.ap}</span>{/if}
+    </div>
   </div>
 {/if}

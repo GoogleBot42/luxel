@@ -586,7 +586,7 @@ try {
           () => {
             const k = document.querySelector('[data-role="layout-kind"]')?.value;
             const head = document.querySelector('[data-role="layout-headline"]')?.textContent;
-            return head?.includes("64×64") ? `${k} ${head.trim()}` : false;
+            return head?.includes("64 × 64") ? `${k} ${head.trim()}` : false;
           },
           { timeout: 10000 },
         )
@@ -594,7 +594,7 @@ try {
         .catch(() => "");
       check(
         "layout: a 64x64 panel console opens on a 64x64 grid",
-        r === "map 64×64 matrix",
+        r === "map 64 × 64 matrix",
         r,
       );
       const chip = await mappedPage
@@ -1177,7 +1177,10 @@ try {
     await page
       .$eval('[data-role="reboot-bar"]', (el) => {
         const cs = getComputedStyle(el);
-        return cs.position === "fixed" && cs.bottom === "0px";
+        // inset, not flush: it wears the mockups' `.capstrip` — a 1px
+        // rgba(217,163,67,.32) border and a 6px radius — which only reads as
+        // a strip when the bottom edge is on screen (#538)
+        return cs.position === "fixed" && parseFloat(cs.bottom) <= 24;
       })
       .catch(() => false),
   );
@@ -3651,7 +3654,7 @@ try {
           (await hubPage.$('[data-role="out-blur"]')) === null,
       );
       const head = await hubPage.$eval('[data-role="layout-headline"]', (e) => e.textContent.trim());
-      check("panel: the summary line carries the kind", head === "64×64 matrix", head);
+      check("panel: the summary line carries the kind", head === "64 × 64 matrix", head);
       const scan = await hubPage.$('[data-role="layout-scan"]');
       check("panel: the HUB75 scan divisor is a real field here", scan !== null);
       // one panel: the refresh estimate, no chain picture yet

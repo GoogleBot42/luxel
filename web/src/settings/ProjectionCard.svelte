@@ -272,12 +272,11 @@
   /* ---- the tile form (mockups S3e/S3g/S3h `.pcard`) ---- */
   .pcard {
     display: block;
-    position: relative;
     /* the editor's popup puts the card inside a `.cardslot` wrapper rather
        than straight into a grid track, and a `display:block` button shrinks
        to its content unless it is told otherwise */
     width: 100%;
-    padding: 12px;
+    padding: var(--pcard-pad, 12px);
     border: 1px solid var(--border);
     border-radius: 8px;
     background: var(--bg-inset);
@@ -309,9 +308,11 @@
     image-rendering: pixelated;
   }
 
-  /* mockup `.pcard canvas`: 120px, centred — it does not grow with the card */
+  /* mockup `.pcard canvas`: 120px, centred — it does not grow with the card
+     (and 100px where four share a row, `#S3g`). `min()` rather than a
+     `max-width`, so a narrower slot — the editor's popup — still fits. */
   .pcard canvas {
-    max-width: 120px;
+    width: min(100%, var(--pcard-canvas, 120px));
     margin: 0 auto;
   }
 

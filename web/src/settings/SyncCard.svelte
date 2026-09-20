@@ -13,20 +13,22 @@
 
 <div class="field">
   <span class="flabel">Role</span>
-  <select data-role="sync-mode" value={$syncStatus?.mode ?? "off"} on:change={onSyncModeChange}>
-    <option value="off">off</option>
-    <option value="leader">leader</option>
-    <option value="follower">follower</option>
-  </select>
-  <span class="mono dim" data-role="sync-status">
-    {$syncStatus?.mode === "follower"
-      ? $syncStatus.leader
-        ? `following (offset ${$syncStatus.leader.offsetMs}ms)`
-        : "waiting for a leader…"
-      : $syncStatus?.mode === "leader"
-        ? "broadcasting the timebase"
-        : ""}
-  </span>
+  <div class="fctl row g10">
+    <select data-role="sync-mode" value={$syncStatus?.mode ?? "off"} on:change={onSyncModeChange}>
+      <option value="off">off</option>
+      <option value="leader">leader</option>
+      <option value="follower">follower</option>
+    </select>
+    <span class="mono dim" data-role="sync-status">
+      {$syncStatus?.mode === "follower"
+        ? $syncStatus.leader
+          ? `following (offset ${$syncStatus.leader.offsetMs}ms)`
+          : "waiting for a leader…"
+        : $syncStatus?.mode === "leader"
+          ? "broadcasting the timebase"
+          : ""}
+    </span>
+  </div>
 </div>
 <p class="dim hint">
   Run the same pattern on several Luxels and they stay phase-locked: one device leads

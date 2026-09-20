@@ -1,5 +1,46 @@
 # Update log
 
+## 2026-09-20 — fidelity closure: the Settings screens (#538)
+
+`mockdiff` frames `S3 S3b S3e S3f S3g S3i S3j S3k S3reboot`: **403 deltas → 0**, the
+`--sweep` non-CSS half clean at 1400/1200/1000/760/390, and a read-only
+`--device http://192.168.0.238` run of the two device-safe frames down to two
+pure-state lines (that board's brightness and time zone). What moved:
+
+- **A form row is the mockup's `.srow` grid**, not a flex line: a fixed 132px label
+  column and ONE cell holding the controls (`.fctl` / `.fctl.row` / `.fctl.g10`).
+  That is what puts every label in the page on the same left edge whatever its row
+  carries — and it is also what keeps a lone `<input>` inline-block, because a flex
+  or grid ITEM is blockified and the mockup's single-control cells are plain divs.
+- **Native `<select>`s are drawn as the mockup's `.sel`** (32px, radius 6, bg-inset,
+  13px/1, the chevron as background art). `appearance:none` is what makes that
+  possible at all: Chrome pins a native select's line-height to `normal` and ignores
+  the `font` shorthand's.
+- **The Data pin row, the field hints, the arrangement picture and the outputs note**
+  came back from the mockups — gamma's `0 = off; 2.2 gives smoother dark fades`, the
+  LED layout head's fixture note, S3j's tick-marked split-strip picture with an IN
+  marker per run, `.notes` as dim 12px lines rather than one paragraph.
+- **The reboot bar is the mockups' `.capstrip` to the number** — 7px/10px padding, an
+  8px gap, a 1px rgba(217,163,67,.32) border, 6px radius, 11.5px on
+  rgba(217,163,67,.12) — inset 16px from the viewport edges so that border and radius
+  read. Pinned rather than in-flow is Jeremy's deviation, and the only one.
+- **Checkboxes are the mockup's 12px `.cbx`**, the real input kept in the label for the
+  keyboard and screen readers. With it, Settings' last two sub-24px touch targets at
+  390px are gone.
+- **The projection cards** lost their stray `position:relative`, took the mockup's
+  `#S3g` four-across sizing (8px padding, a 100px canvas) through two custom
+  properties, and the 1D/2D row labels are full-strength text.
+- `mockdiff.mjs`: mirrors now seed `brightness` / `tzMinutes` / `protocol` from the map,
+  and the reading-order check compares the DISTANCE between two tops against its 8px row
+  tolerance instead of rounding each top into a bucket — bucketing split a label and its
+  input, or didn't, depending only on where down the page the row landed, so identical
+  layouts reported different orders on the two sides.
+- Left open, in the tracker: #579 (the mirror publishes no `data_pins`, so the Data pin
+  row and the Outputs pad picker cannot be measured against it), #580 (the mockups draw
+  the Layout picker at two widths), #581 (no route publishes a board identity, so the
+  LED layout head cannot name the board).
+
+
 ## 2026-09-20 — fidelity closure: shell, Patterns, playground chip, menu primitives (#538)
 
 `mockdiff` frames `S1 S1b S1c S1incompat S1menu S5`: **75 deltas → 0**, every allow entry

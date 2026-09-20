@@ -6,9 +6,11 @@
 
 <div class="field">
   <span class="flabel">Status</span>
-  <span class="mono" data-role="netin-status">
-    {$netLive === "ddp" ? "receiving DDP" : $netLive === "e131" ? "receiving E1.31" : "idle"}
-  </span>
+  <div class="fctl">
+    <span class="mono" data-role="netin-status">
+      {$netLive === "ddp" ? "receiving DDP" : $netLive === "e131" ? "receiving E1.31" : "idle"}
+    </span>
+  </div>
 </div>
 <p class="dim hint">
   The device listens for DDP on UDP :4048 and E1.31/sACN on UDP :5568 (universe 1 and

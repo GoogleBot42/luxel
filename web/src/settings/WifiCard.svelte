@@ -46,9 +46,13 @@
   }
 </script>
 
-<!-- mockup S3: `● Connected to  home-iot · 192.168.0.238    [Change network…]` -->
+<!-- mockup S3: `● Connected to  home-iot · 192.168.0.238    [Change network…]`
+     — the status and the button ARE the form's one line (`Section row`) -->
 <div class="wifirow">
-  <span class="dot" class:live={$wifiSsid !== null}></span>
+  <!-- green = this device is ON a network, which is a fact the page can only
+       be reading because it is (mockup S3 draws it green). The SSID beside it
+       is what the device STORED, and a host that stores none says so. -->
+  <span class="dot" class:live={$device !== null}></span>
   <span class="tiny dim">Connected to</span>
   <span
     class="mono tiny"
@@ -63,38 +67,45 @@
     <span class="dim">·</span>
     <span class="mono tiny" data-role="wifi-address">{$deviceHost}</span>
   {/if}
-  <span class="spacer"></span>
-  <button class="btn" data-role="wifi-change" aria-expanded={open} on:click={() => (open = !open)}>
-    {open ? "Cancel" : "Change network…"}
-  </button>
 </div>
+<span class="spacer"></span>
+<button class="btn" data-role="wifi-change" aria-expanded={open} on:click={() => (open = !open)}>
+  {open ? "Cancel" : "Change network…"}
+</button>
 
 {#if open}
   <div class="field">
     <span class="flabel">Network</span>
-    <input
-      class="inp grow"
-      data-role="wifi-ssid"
-      placeholder="SSID"
-      bind:this={ssidInput}
-      bind:value={$wifiForm.ssid}
-    />
+    <div class="fctl">
+      <input
+        class="inp wide"
+        data-role="wifi-ssid"
+        placeholder="SSID"
+        bind:this={ssidInput}
+        bind:value={$wifiForm.ssid}
+      />
+    </div>
   </div>
   <div class="field">
     <span class="flabel">Password</span>
-    <input
-      class="inp grow"
-      data-role="wifi-pass"
-      type="password"
-      placeholder="password"
-      bind:value={$wifiForm.password}
-    />
+    <div class="fctl">
+      <input
+        class="inp wide"
+        data-role="wifi-pass"
+        type="password"
+        placeholder="password"
+        bind:value={$wifiForm.password}
+      />
+    </div>
   </div>
   <div class="field">
-    <button class="btn primary" data-role="wifi-save" on:click={() => void saveWifi()}>
-      save &amp; reboot
-    </button>
-    {#if $notes.wifi}<span class="dim" data-role="wifi-note">{$notes.wifi}</span>{/if}
+    <span class="flabel"></span>
+    <div class="fctl row g10">
+      <button class="btn primary" data-role="wifi-save" on:click={() => void saveWifi()}>
+        save &amp; reboot
+      </button>
+      {#if $notes.wifi}<span class="dim hint" data-role="wifi-note">{$notes.wifi}</span>{/if}
+    </div>
   </div>
   <p class="dim hint">
     The device stores the credentials in flash and <strong>reboots</strong> to join the new
@@ -112,8 +123,9 @@
     flex-wrap: wrap;
   }
 
-  .tiny {
-    font-size: 11px;
+  .wide {
+    width: 100%;
+    max-width: 260px;
   }
 
   .spacer {

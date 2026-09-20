@@ -11,6 +11,10 @@
   export let note = "";
   /** `data-role` for the section body, so a query can be scoped to it. */
   export let role = "";
+  /** A form whose content is ONE line rather than a stack of labelled rows —
+   *  the WiFi section, which is a status and a button (mockup S3 sets
+   *  `display:flex;align-items:center;gap:14px` inline on exactly that one). */
+  export let row = false;
 </script>
 
 <section class="sect" data-role={role ? `${role}-section` : undefined}>
@@ -19,7 +23,7 @@
     <div class="rule"></div>
     {#if note}<div class="mono tiny dim" data-role={role ? `${role}-note` : undefined}>{note}</div>{/if}
   </div>
-  <div class="form" data-role={role || undefined}>
+  <div class="form" class:row data-role={role || undefined}>
     <slot />
   </div>
 </section>

@@ -49,7 +49,7 @@
   /** Per driver, because the number means something different on each
    *  (§5.7: "brightness hint text | per driver"). */
   $: brightnessHint = $deviceCaps?.panel
-    ? "The panel's global plane scale. Applied live and saved on the device — it dims the panel, not the previews on this page."
+    ? "The LED driver's current limit. Applied live and saved on the device — it dims the panel, not the previews on this page."
     : $deviceProtocol === "sk9822"
       ? "The SK9822's own 5-bit current limiter, so it dims without losing colour depth. Applied live and saved on the device."
       : "A software scale over every pixel before it reaches the strip. Applied live and saved on the device.";
@@ -60,46 +60,64 @@
 {#if $deviceName}
   <div class="field">
     <span class="flabel">Name</span>
-    <!-- `value`, not `bind:` — the DEVICE owns the name, and the field shows
-         what it last confirmed (a rejected POST puts the old one back) -->
-    <input
-      class="inp mono namefield"
-      data-role="device-name"
-      maxlength="32"
-      value={$deviceName}
-      on:change={onNameCommit}
-      on:keydown={onNameKey}
-    />
-    {#if $notes.devname}
-      <span class="dim hint" data-role="device-name-note">{$notes.devname}</span>
-    {/if}
+    <div class="fctl" class:row={!!$notes.devname}>
+      <!-- `value`, not `bind:` — the DEVICE owns the name, and the field shows
+           what it last confirmed (a rejected POST puts the old one back) -->
+      <input
+        class="inp mono namefield"
+        data-role="device-name"
+        maxlength="32"
+        value={$deviceName}
+        on:change={onNameCommit}
+        on:keydown={onNameKey}
+      />
+      {#if $notes.devname}
+        <span class="dim hint" data-role="device-name-note">{$notes.devname}</span>
+      {/if}
+    </div>
   </div>
 {/if}
 
-<div class="field" data-role="device-brightness">
+<!-- mockup S3: the label hangs at the top of a row whose cell is a slider
+     with its explanation under it -->
+<div class="field top" data-role="device-brightness">
   <span class="flabel">Brightness</span>
-  <input
-    type="range"
-    class="grow big"
-    data-role="brightness"
-    min="0"
-    max={$brightnessMax}
-    step="1"
-    value={$brightness}
-    on:input={onBrightnessChange}
-  />
-  <span class="mono bval" data-role="brightness-val">{$brightness} / {$brightnessMax}</span>
+  <div class="fctl">
+    <div class="big">
+      <input
+        type="range"
+        class="slider"
+        data-role="brightness"
+        min="0"
+        max={$brightnessMax}
+        step="1"
+        value={$brightness}
+        on:input={onBrightnessChange}
+      />
+      <span class="mono bval" data-role="brightness-val">{$brightness} / {$brightnessMax}</span>
+    </div>
+    <p class="dim hint under">{brightnessHint}</p>
+  </div>
 </div>
-<p class="dim hint under">{brightnessHint}</p>
 
 <style>
-  /* the page's first control, and it looks like it (mockup S3) */
+  /* the page's first control, and it looks like it — mockup S3's `.bigslider`
+     is the slider and its readout on one 14px-gapped line */
   .big {
-    height: 24px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    height: 20px;
+  }
+
+  .slider {
+    flex: 1;
+    min-width: 80px;
+    height: 20px;
   }
 
   .bval {
-    font-size: 13px;
+    font: 13px/1 var(--mono);
     min-width: 52px;
     text-align: right;
   }
@@ -107,6 +125,17 @@
   /* mockup S3: `<input class="inp mono" style="width:260px">` */
   .namefield {
     width: 260px;
-    max-width: 100%;
+  }
+
+  @media (max-width: 560px) {
+    .namefield {
+      max-width: 100%;
+    }
+
+    /* the mockup's 20px slider is a mouse target; a thumb is not */
+    .big,
+    .slider {
+      height: 24px;
+    }
   }
 </style>

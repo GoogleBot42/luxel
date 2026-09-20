@@ -94,8 +94,11 @@ async function run(fakeCap, tag) {
     max: e.getAttribute("max"),
     value: e.value,
   }));
+  // the ceiling is stated UNDER the field since #538 (mockup S3b puts the
+  // Pixels cell's control on its own line), so it is a `<p class="dim hint
+  // under">` rather than a span beside the input
   const note = await page.$eval('[data-role="layout-pixels"]', (e) =>
-    e.parentElement?.querySelector("span.dim")?.textContent?.trim(),
+    e.parentElement?.querySelector(".dim")?.textContent?.trim(),
   );
   await page.$eval('[data-role="layout-pixels"]', (e) =>
     e.scrollIntoView({ block: "center" }),
