@@ -1278,8 +1278,12 @@ for (const frameId of runIds) {
 if (devicePage) await devicePage.close();
 
 // ── side-by-side crop composition (no image deps: chromium does it) ───────
+/** One reused page for every crop — opening a fresh one per crop was most of
+ *  the run's wall clock. */
+let composePage = null;
+
 async function composeSideBySide(br, path, mockB64, appB64, label, size = { w: 400, h: 200 }) {
-  const pg = await br.newPage();
+  const pg = composePage ?? (composePage = await br.newPage());
   // Lay the two crops side by side while they fit, and stack them when the
   // element is wide (a full-width footer at 1200px would otherwise push the
   // app half off the canvas entirely). Always 1:1 — a scaled crop cannot be
@@ -1305,10 +1309,9 @@ async function composeSideBySide(br, path, mockB64, appB64, label, size = { w: 4
        <div class="c"><b>app</b><img src="data:image/png;base64,${appB64}"></div>
      </div>`,
   );
-  await sleep(120);
+  await sleep(40);
   const el = await pg.$("body");
   await el.screenshot({ path }).catch(() => {});
-  await pg.close();
 }
 
 // ── the sweep run ─────────────────────────────────────────────────────────
@@ -1461,6 +1464,7 @@ writeFileSync(
 );
 console.log(`\n${total} deltas → ${join(OUT, "mockdiff-report.md")}`);
 
+if (composePage) await composePage.close();
 await browser.close();
 procs.forEach((p) => p.kill());
 process.exit(0);
