@@ -2,6 +2,7 @@
   import type { ControlHint } from "../lib/hints";
   import type { Control } from "../lib/luxel";
   import { createEventDispatcher } from "svelte";
+  import ColorPicker from "./ColorPicker.svelte";
 
   export let controls: Control[] = [];
   /** Saved values by control name (bound — persisted across recompiles).
@@ -56,12 +57,6 @@
     if (!Number.isNaN(v)) set(name, [v]);
   }
 
-  function picker(name: string, i: number, e: Event): void {
-    const cur = [0, 1, 2].map((j) => values[name]?.[j] ?? (j === 0 ? 0 : 1));
-    cur[i] = numFrom(e);
-    set(name, cur);
-  }
-
   function toggle(name: string, e: Event): void {
     set(name, [(e.target as HTMLInputElement).checked ? 1 : 0]);
   }
@@ -72,11 +67,15 @@
     {#each controls as c (c.name)}
       {@const h = hints.get(c.name) ?? {}}
       {@const guess = isGuess(values[c.name], h.default, c.kind)}
+      <!-- mockup S2 `.ctlrow`: exactly three cells, always — name, the
+           widget, and whatever reads the widget out. The third is empty for a
+           swatch or a switch, which is what keeps every row's widget starting
+           on the same line. -->
       <div class="control" class:guess>
-        <span class="label" title={c.name}>{c.label}</span>
-        {#if guess}
-          <span class="guessflag" title={GUESS_TIP}>?</span>
-        {/if}
+        <span class="label" title={c.name}>
+          <span class="txt">{c.label}</span>
+          {#if guess}<span class="guessflag" title={GUESS_TIP}>?</span>{/if}
+        </span>
         {#if c.kind === "slider"}
           <input
             type="range"
@@ -87,7 +86,7 @@
             on:input={(e) => scalar(c.name, e)}
           />
           <input
-            class="num"
+            class="inp xs num"
             type="number"
             min={h.min ?? 0}
             max={h.max ?? 1}
@@ -97,7 +96,7 @@
           />
         {:else if c.kind === "inputNumber"}
           <input
-            class="num wide"
+            class="inp xs num"
             type="number"
             min={h.min}
             max={h.max}
@@ -105,33 +104,20 @@
             value={values[c.name]?.[0] ?? h.default ?? 0}
             on:change={(e) => scalar(c.name, e)}
           />
+          <span></span>
         {:else if c.kind === "hsvPicker" || c.kind === "rgbPicker"}
-          <!-- three channels stacked (H/S/V or R/G/B), each with a slider +
-               number field — a single row overflows the narrow rail -->
-          <div class="channels">
-            {#each c.kind === "hsvPicker" ? ["H", "S", "V"] : ["R", "G", "B"] as ch, i}
-              <div class="ch-row">
-                <span class="dim ch">{ch}</span>
-                <input
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.001"
-                  value={values[c.name]?.[i] ?? (i === 0 ? 0 : 1)}
-                  on:input={(e) => picker(c.name, i, e)}
-                />
-                <input
-                  class="num"
-                  type="number"
-                  min="0"
-                  max="1"
-                  step="0.001"
-                  value={values[c.name]?.[i] ?? (i === 0 ? 0 : 1)}
-                  on:change={(e) => picker(c.name, i, e)}
-                />
-              </div>
-            {/each}
-          </div>
+          <!-- a colour is picked, not typed as three raw channels (#538). The
+               swatch carries the value; the popover carries the field, the hue
+               strip and direct entry in both spaces. What it emits is still
+               the control's own triple, so the device push is unchanged. -->
+          <ColorPicker
+            kind={c.kind === "hsvPicker" ? "hsv" : "rgb"}
+            label={c.label}
+            value={values[c.name] ?? []}
+            dim={guess}
+            on:input={(e) => set(c.name, e.detail)}
+          />
+          <span></span>
         {:else if c.kind === "toggle"}
           <!-- native tri-state says "unknown" better than any badge can -->
           <input
@@ -140,14 +126,18 @@
             checked={(values[c.name]?.[0] ?? h.default ?? 0) > 0.5}
             on:change={(e) => toggle(c.name, e)}
           />
+          <span></span>
         {:else if c.kind === "trigger"}
-          <button on:click={() => dispatch("set", { name: c.name, values: [] })}>fire</button>
+          <button class="btn sm" on:click={() => dispatch("set", { name: c.name, values: [] })}>
+            fire
+          </button>
+          <span></span>
+        {:else if c.kind === "gauge"}
+          <meter min="0" max="1" value={Math.max(0, Math.min(1, readouts.get(c.name) ?? 0))}></meter>
+          <span class="mono readout">{(readouts.get(c.name) ?? 0).toFixed(4)}</span>
         {:else}
           <span class="mono readout">{(readouts.get(c.name) ?? 0).toFixed(4)}</span>
-          {#if c.kind === "gauge"}
-            <meter min="0" max="1" value={Math.max(0, Math.min(1, readouts.get(c.name) ?? 0))}
-            ></meter>
-          {/if}
+          <span></span>
         {/if}
       </div>
     {/each}
@@ -158,50 +148,34 @@
   .panel {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 10px;
   }
 
+  /* mockup S2 `.ctlrow`: name, the widget, its number — one grid so every
+     row's slider starts and ends on the same two lines */
   .control {
-    display: flex;
+    display: grid;
+    grid-template-columns: 82px minmax(0, 1fr) auto;
     align-items: center;
-    gap: 8px;
-  }
-
-  /* pickers stack their channels, so the label rides at the top */
-  .control:has(.channels) {
-    align-items: flex-start;
-  }
-
-  .channels {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .ch-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .ch {
-    width: 14px;
-    text-align: center;
+    gap: 12px;
   }
 
   .label {
-    min-width: 110px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
     color: var(--text-dim);
+    font-size: 12px;
+  }
+
+  /* the NAME ellipsizes; the placeholder flag beside it never does, or the
+     one thing that explains the dimmed widget is the first thing clipped */
+  .txt {
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .dim {
-    color: var(--text-dim);
-    font-size: 12px;
   }
 
   /* an untouched, undeclared control draws a placeholder position, not a real
@@ -212,8 +186,7 @@
   }
 
   .guessflag {
-    width: 12px;
-    text-align: center;
+    flex: none;
     color: var(--warn);
     font-weight: 700;
     cursor: help;
@@ -224,20 +197,16 @@
   }
 
   input[type="range"] {
-    flex: 1;
+    width: 100%;
+    min-width: 0;
   }
 
-  .num {
-    width: 76px;
-    font-family: ui-monospace, Menlo, Consolas, monospace;
-    font-size: 12px;
-  }
-
-  .num.wide {
-    width: 120px;
+  /* a switch or a swatch is its own width, not the column's */
+  input[type="checkbox"] {
+    justify-self: start;
   }
 
   meter {
-    flex: 1;
+    width: 100%;
   }
 </style>

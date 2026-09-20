@@ -819,10 +819,19 @@
       if (r?.ok) {
         patternName.set(name);
         exampleName.set("");
-        devicePatternId.set(r.id ?? "");
         dirty.set(false); // now stored on the device
         note("save", "saved to device", 3000);
         await refreshDevicePatterns();
+        // The id is what makes this an ON-DEVICE document — it is what "Add
+        // to playlist" and "Delete" in the menu act on, and what the save
+        // state reads. An overwrite (and older firmware) answers with no
+        // `id` at all, which used to leave the editor stuck in its library
+        // state after a library→device save (audit E6, Jeremy 2026-09-19).
+        // The freshly-read list is the fallback: names are unique on the
+        // device, because saving the same name overwrites.
+        devicePatternId.set(
+          r.id && r.id !== "" ? r.id : ($devicePatterns.find((p) => p.name === name)?.id ?? ""),
+        );
       } else {
         note("save", r && "error" in r ? `save failed: ${r.error}` : "save failed", 3000);
       }
@@ -904,23 +913,26 @@
 
   // ---- transport (the preview panel's own header) ----
 
-  /** The rate the preview header states: the DEVICE's own on a console
-   *  (`out_fps` on a pipelined HUB75 board — frames the panel displayed —
-   *  else `fps`), the browser loop's in the playground. */
+  /** The rate the preview header states. A console runs TWO loops — this
+   *  tab's preview and the device's own render — and Jeremy asked to see
+   *  both, because the device's number is already in the shell header and
+   *  the local one is what tells you whether the browser is the bottleneck
+   *  (audit E9, 2026-09-19). The device figure is `out_fps` on a pipelined
+   *  HUB75 board (frames the panel actually displayed), else `fps`. The
+   *  playground has only the local loop. */
+  $: localRate = `${$previewFps.toFixed(0)} fps local`;
   $: previewRate = !$device
-    ? { text: `${$previewFps.toFixed(0)} fps`, title: "local preview loop in this browser tab" }
-    : $deviceOutFps > 0
-      ? {
-          text: `${$deviceOutFps} fps on device`,
-          title:
-            `${$deviceOutFps} fps displayed by the panel (out_fps)` +
-            ($deviceRescanHz ? `, panel rescan ${$deviceRescanHz} Hz` : "") +
-            ` — device render loop ${$deviceFps} fps, local preview ${$previewFps.toFixed(0)} fps`,
-        }
-      : {
-          text: `${$deviceFps} fps on device`,
-          title: `${$deviceFps} fps rendered by the device — local preview ${$previewFps.toFixed(0)} fps`,
-        };
+    ? { text: localRate, title: "local preview loop in this browser tab" }
+    : {
+        text: `${localRate} · ${$deviceOutFps > 0 ? $deviceOutFps : $deviceFps} fps on device`,
+        title:
+          ($deviceOutFps > 0
+            ? `${$deviceOutFps} fps displayed by the panel (out_fps)` +
+              ($deviceRescanHz ? `, panel rescan ${$deviceRescanHz} Hz` : "") +
+              `, device render loop ${$deviceFps} fps`
+            : `${$deviceFps} fps rendered by the device`) +
+          ` — local preview loop ${$previewFps.toFixed(0)} fps in this browser tab`,
+      };
 
   function onFpsChange(e: Event): void {
     targetFps = Number((e.target as HTMLSelectElement).value);
@@ -1241,135 +1253,145 @@
        back · inline-editable name · save state · one primary action · the ⋯
        menu of document verbs. No geometry, no transport, no sub-tabs. -->
   <header class="editor-header" data-role="editor-header">
-    <button
-      data-role="editor-back"
-      class="back"
-      title={`back to ${backLabel}`}
-      on:click={() => dispatch("back")}
-    >
-      ← {backLabel}
-    </button>
-
-    {#if editingName}
-      <input
-        class="name-input"
-        data-role="name-input"
-        bind:this={nameInput}
-        bind:value={nameDraft}
-        aria-label="pattern name"
-        on:keydown={onNameKey}
-        on:blur={commitName}
-        on:click|stopPropagation
-      />
-    {:else}
+    <!-- the code column's half: everything the DOCUMENT owns, ending at the
+         rail's hairline rather than at the page's right edge (audit E4) -->
+    <div class="edhdr-main">
       <button
-        class="name"
-        data-role="pattern-name"
-        title="click to rename"
-        on:click|stopPropagation={() => startRename()}
+        data-role="editor-back"
+        class="btn quiet back"
+        title={`back to ${backLabel}`}
+        on:click={() => dispatch("back")}
       >
-        {nameOf($patternName, $exampleName)}
+        <span class="backglyph" aria-hidden="true">←</span>
+        <span class="backlabel">{backLabel}</span>
       </button>
-    {/if}
-    {#if nameError}<span class="name-error" data-role="name-error">{nameError}</span>{/if}
 
-    <span class="savestate" data-role="save-state">
-      {saveStateOf($dirty, $device, $devicePatternId, $patternName, $saved)}
-    </span>
-
-    <span class="spacer"></span>
-
-    {#if $notes.save}<span class="dim note" data-role="save-note">{$notes.save}</span>{/if}
-    {#if $notes.share}<span class="dim note" data-role="share-note">{$notes.share}</span>{/if}
-
-    <button
-      class="btn primary"
-      data-role="save"
-      title={$device ? "store this pattern on the device" : "store this pattern in this browser"}
-      on:click={() => void saveCurrent()}
-    >
-      {$device ? "Save to device" : "Save"}
-    </button>
-
-    <span class="overflow">
-      <button
-        class="btn icon"
-        bind:this={moreBtn}
-        data-role="overflow"
-        title="more actions"
-        aria-label="more actions"
-        on:click={() => (menuOpen = !menuOpen)}
-      >
-        ⋯
-      </button>
-      <Popover
-        open={menuOpen}
-        anchor={moreBtn}
-        dataRole="editor-menu"
-        on:close={() => (menuOpen = false)}
-      >
-        <!-- "Add to scene ▸" belongs here (proposal §5.4b) and is absent
-             until scenes exist — Phase B, Gitea #480. Not rendered rather
-             than rendered-disabled: a control is absent unless the thing it
-             acts on exists (§5.7). -->
-        {#if $device && $devicePatternId}
-          <button
-            class="mi"
-            data-role="add-to-playlist"
-            role="menuitem"
-            title="add this pattern, with its current values, to the playlist"
-            on:click={addToPlaylist}
-          >
-            Add to playlist
-          </button>
-        {/if}
-        <button class="mi" data-role="duplicate" role="menuitem" on:click={duplicate}>Duplicate</button>
-        <div class="sepr"></div>
-        <button class="mi" data-role="epe-export" role="menuitem" on:click={doExportEpe}>Export .epe</button>
-        <button class="mi" data-role="epe-import" role="menuitem" on:click={() => fileInput.click()}>
-          Import .epe…
+      {#if editingName}
+        <input
+          class="nameedit"
+          data-role="name-input"
+          bind:this={nameInput}
+          bind:value={nameDraft}
+          aria-label="pattern name"
+          on:keydown={onNameKey}
+          on:blur={commitName}
+          on:click|stopPropagation
+        />
+      {:else}
+        <button
+          class="nameedit"
+          data-role="pattern-name"
+          title="click to rename"
+          on:click|stopPropagation={() => startRename()}
+        >
+          {nameOf($patternName, $exampleName)}
         </button>
-        {#if $isPlayground}
-          <button
-            class="mi"
-            data-role="share"
-            role="menuitem"
-            title="copy a link that carries this pattern in the URL"
-            on:click={() => void sharePattern()}
-          >
-            Share…
-          </button>
-        {/if}
-        {#if canDeleteNow($device, $devicePatternId, $exampleName, $patternName, $saved)}
-          <div class="sepr"></div>
-          <button class="mi del" data-role="delete" role="menuitem" on:click={() => void deleteSaved()}>
-            Delete
-          </button>
-        {/if}
-      </Popover>
-    </span>
+      {/if}
+      {#if nameError}<span class="name-error" data-role="name-error">{nameError}</span>{/if}
 
-    <!-- WHAT this screen renders through. The shell header is not rendered
-         over an editor screen (#538), so its rig control travels with it —
-         mockup S2 puts the device chip at the end of the editor header, in
-         its own rail segment (the rail split itself is still to come, audit
-         E4). A playground has no device, so it carries the "Preview as"
-         chooser here instead — the chip IS the playground's rig. -->
-    <span class="edhdr-rail">
+      <span class="savestate" data-role="save-state">
+        {saveStateOf($dirty, $device, $devicePatternId, $patternName, $saved)}
+      </span>
+
+      <span class="spacer"></span>
+
+      {#if $notes.save}<span class="dim note" data-role="save-note">{$notes.save}</span>{/if}
+      {#if $notes.share}<span class="dim note" data-role="share-note">{$notes.share}</span>{/if}
+
+      <!-- one word, in both modes: WHERE it lands is the save state's job,
+           not the button's (audit E2 — "Save to device" was the wrong text) -->
+      <button
+        class="btn primary"
+        data-role="save"
+        title={$device ? "store this pattern on the device" : "store this pattern in this browser"}
+        on:click={() => void saveCurrent()}
+      >
+        Save
+      </button>
+
+      <span class="overflow">
+        <button
+          class="btn icon"
+          bind:this={moreBtn}
+          data-role="overflow"
+          title="more actions"
+          aria-label="more actions"
+          on:click={() => (menuOpen = !menuOpen)}
+        >
+          ⋯
+        </button>
+        <Popover
+          open={menuOpen}
+          anchor={moreBtn}
+          dataRole="editor-menu"
+          on:close={() => (menuOpen = false)}
+        >
+          <!-- "Add to scene ▸" belongs here (proposal §5.4b) and is absent
+               until scenes exist — Phase B, Gitea #480. Not rendered rather
+               than rendered-disabled: a control is absent unless the thing it
+               acts on exists (§5.7). -->
+          {#if $device && $devicePatternId}
+            <button
+              class="mi"
+              data-role="add-to-playlist"
+              role="menuitem"
+              title="add this pattern, with its current values, to the playlist"
+              on:click={addToPlaylist}
+            >
+              Add to playlist
+            </button>
+            <div class="sepr"></div>
+          {/if}
+          <!-- the mock's second group: what you can do to the DOCUMENT itself -->
+          <button class="mi" data-role="duplicate" role="menuitem" on:click={duplicate}>Duplicate</button>
+          <button class="mi" data-role="epe-export" role="menuitem" on:click={doExportEpe}>Export .epe</button>
+          <button class="mi" data-role="epe-import" role="menuitem" on:click={() => fileInput.click()}>
+            Import .epe…
+          </button>
+          {#if $isPlayground}
+            <!-- the mock has no Share (it is a console frame); a share link is
+                 a document verb, so it joins the document group -->
+            <button
+              class="mi"
+              data-role="share"
+              role="menuitem"
+              title="copy a link that carries this pattern in the URL"
+              on:click={() => void sharePattern()}
+            >
+              Share…
+            </button>
+          {/if}
+          {#if canDeleteNow($device, $devicePatternId, $exampleName, $patternName, $saved)}
+            <div class="sepr"></div>
+            <button class="mi del" data-role="delete" role="menuitem" on:click={() => void deleteSaved()}>
+              Delete
+            </button>
+          {/if}
+        </Popover>
+      </span>
+
+      <input
+        class="file-input"
+        type="file"
+        accept=".epe,.json,application/json"
+        bind:this={fileInput}
+        on:change={onImportPick}
+      />
+    </div>
+
+    <!-- WHAT this screen renders through, over the rail it describes. The
+         shell header is not rendered over an editor screen (#538), so its rig
+         control travels with it — mockup S2 puts the device chip in the
+         header's own rail column. A playground has no device, so it carries
+         the "Preview as" chooser here instead — the chip IS the playground's
+         rig, which is why only the console half is dropped on a phone. -->
+    <span class="edhdr-rail" class:statusonly={!$isPlayground}>
       {#if $isPlayground}
         <PreviewAsChip on:openmap={() => dispatch("openmap")} />
       {:else}
         <DeviceChip />
       {/if}
     </span>
-
-    <input
-      class="file-input"
-      type="file"
-      accept=".epe,.json,application/json"
-      bind:this={fileInput}
-      on:change={onImportPick}
-    />
   </header>
 
   <!-- ── the code column holds only code, and owns its own errors ── -->
@@ -1434,36 +1456,44 @@
         <span class="rdim" data-role="preview-dims" title={previewRate.title}>
           {$layoutName} · {previewRate.text}
         </span>
+        <!-- transport order (audit E7/E8): pause, then Debug beside it — the
+             two things you reach for while writing a frame — then the rate.
+             The pause box is the global 26 px `.btn.sm.icon`; it used to be a
+             padding-only button around inherited-size text, which is the
+             oversized glyph Jeremy flagged. -->
         <span class="grp">
           <button
-            class="icon"
+            class="btn sm icon glyph"
             data-role="pause"
             title={running ? "pause the preview" : "resume the preview"}
             aria-label={running ? "pause" : "play"}
             on:click={togglePause}
           >
-            {running ? "❚❚" : "▶"}
+            {running ? "‖" : "▶"}
           </button>
-          <select
-            class="fpssel"
-            data-role="target-fps"
-            value={targetFps}
-            title="preview frame rate"
-            on:change={onFpsChange}
+          <!-- the preview runs on the local engine (even on a device), so the
+               step-debugger works everywhere. Labelled, not icon-only: the bug
+               glyph alone did not read as "debugger" (Jeremy, 2026-09-19). -->
+          <button
+            class="btn sm"
+            class:active={debugMode}
+            data-role="debug"
+            title="toggle the step debugger"
+            on:click={toggleDebug}
           >
-            <option value={0}>max fps</option>
-            <option value={60}>60 fps</option>
-            <option value={30}>30 fps</option>
-            <option value={15}>15 fps</option>
-            <option value={5}>5 fps</option>
-          </select>
+            Debug
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <rect x="8" y="7" width="8" height="12" rx="4" />
+              <path d="M4 10h4M16 10h4M4 16h4M16 16h4M9.5 5l1 2M14.5 5l-1 2" />
+            </svg>
+          </button>
           {#if wantsSensors}
             <!-- ONLY when the pattern binds sensor variables (§5.7) — a
                  pattern that reads no audio has no use for a microphone.
                  Inline SVG rather than a glyph: a headless chromium without
                  a symbol font draws ♪ and ⏿ as tofu (seen in the e2e shots). -->
             <button
-              class="icon"
+              class="btn sm icon"
               class:active={micOn}
               data-role="mic-toggle"
               title="feed microphone audio to sensor patterns (frequencyData, energyAverage, maxFrequency)"
@@ -1476,21 +1506,20 @@
               </svg>
             </button>
           {/if}
-          <!-- the preview runs on the local engine (even on a device), so the
-               step-debugger works everywhere -->
-          <button
-            class="icon"
-            class:active={debugMode}
-            data-role="debug"
-            title="toggle the step debugger"
-            aria-label="debug"
-            on:click={toggleDebug}
+          <select
+            class="sel"
+            data-role="target-fps"
+            value={targetFps}
+            title="preview frame rate"
+            aria-label="preview frame rate"
+            on:change={onFpsChange}
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-              <rect x="8" y="7" width="8" height="12" rx="4" />
-              <path d="M4 10h4M16 10h4M4 16h4M16 16h4M9.5 5l1 2M14.5 5l-1 2" />
-            </svg>
-          </button>
+            <option value={0}>max fps</option>
+            <option value={60}>60 fps</option>
+            <option value={30}>30 fps</option>
+            <option value={15}>15 fps</option>
+            <option value={5}>5 fps</option>
+          </select>
         </span>
       </div>
       <div class="preview-wrap">
@@ -1596,42 +1625,12 @@
     color: var(--text-dim);
   }
 
-  /* the name reads as text and edits in place — not a form field with a
-     button beside it (proposal §5.2) */
-  .name {
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: 5px;
-    padding: 3px 6px;
-    font: inherit;
-    font-weight: 600;
-    color: var(--text);
-    cursor: text;
-    max-width: 340px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .name:hover {
-    border-color: var(--border);
-  }
-
-  .name-input {
-    font: inherit;
-    font-weight: 600;
-    padding: 3px 6px;
-    width: 220px;
-  }
+  /* The name field (`.nameedit`), the header split and the transport boxes
+     are components/editor-frame.css — the map screen wears the same chrome. */
 
   .name-error {
     color: var(--error);
     font-size: 12px;
-  }
-
-  .fpssel {
-    font-size: 12px;
-    padding: 1px 4px;
   }
 
   /* the capacity idiom, kept: certainty-graded and never blocking */
@@ -1693,11 +1692,18 @@
     }
   }
 
-  /* ---- phone (D9) ---- the frame does the stacking; this is the name's
-     share of it (components/editor-frame.css). */
+  /* ---- phone (D9) ---- the frame does the stacking and the header row
+     (components/editor-frame.css); this is the back button's share of it:
+     S2b's back is icon-only, because a 390 px header has no room for a
+     destination name it is about to show you anyway. */
   @media (max-width: 600px) {
-    .name {
-      max-width: 40vw;
+    .back .backlabel {
+      display: none;
+    }
+
+    .back {
+      width: 32px;
+      padding: 0;
     }
   }
 </style>

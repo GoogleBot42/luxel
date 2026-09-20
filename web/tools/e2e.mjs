@@ -295,6 +295,90 @@ try {
   check("the editor header states the save state", (await page.$('[data-role="save-state"]')) !== null);
   check("Duplicate is in the ⋯ menu", await menuHas(page, "duplicate"));
   check("Import .epe… is in the ⋯ menu", await menuHas(page, "epe-import"));
+
+  // ── the editor header, against mockup S2 (audit E1–E5, #538) ──
+  check("the primary action reads Save, everywhere", (await page.$eval('[data-role="save"]', (el) => el.textContent.trim())) === "Save");
+  const nameBox = await page.$eval('[data-role="pattern-name"]', (el) => {
+    const cs = getComputedStyle(el);
+    return {
+      h: Math.round(el.getBoundingClientRect().height),
+      bw: cs.borderTopWidth,
+      bc: cs.borderTopColor,
+      weight: cs.fontWeight,
+    };
+  });
+  check(
+    "E1: the name is a persistent bordered field (30px .nameedit)",
+    nameBox.h === 30 && nameBox.bw === "1px" && nameBox.bc !== "rgba(0, 0, 0, 0)" && nameBox.weight === "600",
+    JSON.stringify(nameBox),
+  );
+  // E4: the header's rail segment is the RAIL COLUMN, so Save + ⋯ end where
+  // the code does rather than at the page's right edge.
+  const split = await page.evaluate(() => {
+    const view = document.querySelector('[data-role="editor-view"]');
+    const rail = view?.querySelector(".right");
+    const hdrRail = view?.querySelector(".edhdr-rail");
+    const save = view?.querySelector('[data-role="save"]');
+    const menu = view?.querySelector('[data-role="overflow"]');
+    return {
+      rail: Math.round((rail?.getBoundingClientRect().left ?? -1)),
+      hdrRail: Math.round(hdrRail?.getBoundingClientRect().left ?? -2),
+      saveRight: Math.round(save?.getBoundingClientRect().right ?? 0),
+      menuRight: Math.round(menu?.getBoundingClientRect().right ?? 0),
+    };
+  });
+  check(
+    "E4: the header splits on the rail column's own edge",
+    Math.abs(split.rail - split.hdrRail) <= 1,
+    JSON.stringify(split),
+  );
+  check(
+    "E4: Save and ⋯ end inside the code column",
+    split.menuRight < split.rail && split.saveRight < split.rail,
+    JSON.stringify(split),
+  );
+  // E5: the mock's order — playlist group, rule, document verbs, rule, delete
+  await page.click('[data-role="overflow"]');
+  await page.waitForSelector('[data-role="editor-menu"]', { timeout: 3000 });
+  const menuOrder = await page.$$eval('[data-role="editor-menu"] > *', (els) =>
+    els.map((e) => (e.classList.contains("sepr") ? "—" : (e.dataset.role ?? "?"))),
+  );
+  check(
+    "E5: menu order is the mock's, delete last and error-tinted",
+    menuOrder.join(",") === "duplicate,epe-export,epe-import,share,—,delete",
+    menuOrder.join(","),
+  );
+  await page.keyboard.press("Escape");
+  await sleep(150);
+
+  // ── the preview header's transport (audit E7/E8) ──
+  const pauseBox = await page.$eval('[data-role="pause"]', (el) => {
+    const r = el.getBoundingClientRect();
+    return { w: Math.round(r.width), h: Math.round(r.height), fs: getComputedStyle(el).fontSize };
+  });
+  check(
+    "E7: pause is the 26×26 .btn.sm.icon with a 12px glyph",
+    pauseBox.w === 26 && pauseBox.h === 26 && pauseBox.fs === "12px",
+    JSON.stringify(pauseBox),
+  );
+  const transport = await page.$$eval('[data-role="editor-view"] .grp > *', (els) =>
+    els.map((e) => e.dataset.role ?? e.tagName.toLowerCase()),
+  );
+  check(
+    "E8: Debug sits immediately after pause, with the rate last",
+    transport[0] === "pause" && transport[1] === "debug" && transport[transport.length - 1] === "target-fps",
+    transport.join(","),
+  );
+  check(
+    "E8: the debug button is labelled, not icon-only",
+    (await page.$eval('[data-role="debug"]', (el) => el.textContent.trim())) === "Debug",
+  );
+  check(
+    "E9: the playground states the LOCAL rate",
+    /fps local/.test(await page.$eval('[data-role="preview-dims"]', (el) => el.textContent ?? "")) &&
+      !/on device/.test(await page.$eval('[data-role="preview-dims"]', (el) => el.textContent ?? "")),
+    await page.$eval('[data-role="preview-dims"]', (el) => (el.textContent ?? "").trim()),
+  );
   // the old playback bar is gone: geometry and transport left the code column
   check("no layout select in the playground editor", (await page.$('[data-role="layout-kind"]')) === null);
   check("no sub-tabs above the code", (await page.$('[data-role="editor-subtabs"]')) === null);
@@ -555,15 +639,56 @@ try {
   const rangeNow = await page.$eval('input[type="range"]', (el) => el.value);
   check("number entry moves the slider", Number(rangeNow) === 0.25, rangeNow);
 
-  // ── 5b. color-picker control stacks its channels, each with a number box ──
+  // ── 5b. a colour control is a SWATCH that opens a real picker (#538) ──
+  // Jeremy: "should not be asking the user to input raw hsv numbers. Use a
+  // real color picker (that lets putting in values directly too!) Do not use
+  // the browser color picker."
   await setEditor(
     page,
     "export var h = 0, s = 1, v = 1\nexport function hsvPickerPrimary(a, b, c) { h = a; s = b; v = c }\nexport function render(index) { hsv(h, s, v) }",
   );
   await sleep(400);
-  const chRows = await page.$$eval(".control .ch-row", (els) => els.length);
-  const chNums = await page.$$eval(".control .ch-row .num", (els) => els.length);
-  check("picker stacks 3 channels with number fields", chRows === 3 && chNums === 3, `rows=${chRows} nums=${chNums}`);
+  check(
+    "a colour control is a swatch, not three raw channels",
+    (await page.$('.control [data-role="color-swatch"]')) !== null &&
+      (await page.$$eval(".control .ch-row", (els) => els.length)) === 0,
+  );
+  check(
+    "no browser colour input anywhere in the editor",
+    (await page.$('[data-role="editor-view"] input[type="color"]')) === null,
+  );
+  const swBox = await page.$eval('[data-role="color-swatch"]', (el) => {
+    const r = el.getBoundingClientRect();
+    return { w: Math.round(r.width), h: Math.round(r.height) };
+  });
+  check("the swatch is the mock's 26×22 (S2 .swatches i)", swBox.w === 26 && swBox.h === 22, JSON.stringify(swBox));
+  await page.click('[data-role="color-swatch"]');
+  await page.waitForSelector('[data-role="color-pop"]', { timeout: 3000 });
+  check(
+    "the picker offers a field, a hue strip and direct entry",
+    (await page.$('[data-role="color-field"]')) !== null &&
+      (await page.$('[data-role="color-hue"]')) !== null &&
+      (await page.$('[data-role="color-hex"]')) !== null &&
+      (await page.$('[data-role="color-hsv"]')) !== null &&
+      (await page.$('[data-role="color-rgb"]')) !== null,
+  );
+  // typing a hex must move the CONTROL, not just the preview
+  await page.$eval('[data-role="color-hex"]', (el) => {
+    el.value = "#00ff00";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await sleep(300);
+  const hexed = await page.$eval('[data-role="color-swatch"]', (el) => el.dataset.value);
+  const hsvNow = await page.$$eval('[data-role="color-hsv"] input', (els) => els.map((e) => Number(e.value)));
+  check("hex entry sets the colour", hexed === "#00ff00", `${hexed}`);
+  check(
+    "and it lands on the control's own hsv channels",
+    Math.abs((hsvNow[0] ?? 0) - 1 / 3) < 0.005 && hsvNow[1] === 1 && hsvNow[2] === 1,
+    JSON.stringify(hsvNow),
+  );
+  await page.keyboard.press("Escape");
+  await sleep(200);
+  check("Escape closes the picker", (await page.$('[data-role="color-pop"]')) === null);
   const overflow = await page.$eval(".right", (el) => el.scrollWidth - el.clientWidth);
   check("picker does not overflow the rail", overflow === 0, `${overflow}px`);
 

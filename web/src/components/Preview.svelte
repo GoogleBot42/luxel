@@ -150,6 +150,7 @@
   canvas {
     width: 100%;
     image-rendering: pixelated;
+    border: 1px solid var(--border);
     border-radius: 6px;
     background: #000;
     /* preview clicks inject events; keep touch drags from scrolling */
