@@ -77,6 +77,16 @@ paths:
   in the block your task assigned you, and if a run's output disagrees with a
   green e2e, check `ss -ltnp | grep <port>` and whose worktree that `vite
   preview` argv names before debugging the code (2026-09-19, #538).
+- **Harnesses run BACK TO BACK flake on the concurrency assertions — re-run
+  the one that failed, alone, before debugging it.** A mirror that was killed
+  a second ago still holds its listening socket for a moment, and the checks
+  that count sockets rather than outcomes are the ones that notice:
+  `device-e2e`'s "never more than the gate's two requests in flight" / "the
+  tab's reads never overlap" (#540) and `maxpixels-e2e`'s status rewrite both
+  failed once in a `for h in …; do` loop and passed immediately on their own,
+  with no code between (2026-09-20, #538). This is the opposite of the
+  stale-selector rule below: a harness failure is usually real, but these
+  particular counters are not. One re-run decides it.
 - **The route is in the URL fragment** since #538 (`web/src/lib/router.ts`),
   which changes what "reload" means in a harness: `page.goto(url)` where the
   page is ALREADY on that URL is a same-document navigation — the app never
