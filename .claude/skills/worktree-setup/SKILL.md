@@ -13,7 +13,11 @@ these before trusting any build/test failure as a real regression.
    on whatever commit its last session left (detached at c18f1f3, well behind
    master, on 2026-09-05), so line numbers and even function bodies differ.
    An Edit planned from a main-checkout read fails or, worse, lands on the
-   wrong lines.
+   wrong lines. **This includes read-only subagents launched before the
+   worktree exists:** cut the worktree FIRST, then point Explore/research
+   agents at it — on 2026-09-20 the main checkout was 439 commits behind and
+   an agent reported bytecode v4, no flashmap and no builtin tiers as current
+   facts; the whole run was redone.
 0. Cut the branch from **`origin/master`, not the local `master`** — the main
    checkout's `master` is only as fresh as its last `git pull`, and with sessions
    merging PRs continuously it is routinely several merges behind (seen 4 behind on
