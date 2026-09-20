@@ -1167,6 +1167,36 @@ for (const frameId of runIds) {
     }
   }
 
+  // ---- reading order ----------------------------------------------------
+  // Comparing each element's box catches a wrong SIZE but not a wrong PLACE:
+  // a header whose tabs render after the fps readout measures identically to
+  // one that gets it right. So compare the order the mapped elements are laid
+  // out in — top to bottom, then left to right, with an 8px row tolerance —
+  // against the mock's. (Jeremy's round-1 notes are full of order: the device
+  // chip after the wordmark, Debug right after pause, Delete last in a menu.)
+  {
+    const seq = (src) =>
+      entries
+        .filter((e) => src[e.id]?.found && mockBase[e.id]?.found && appBase[e.id]?.found)
+        .map((e) => ({ id: e.id, b: src[e.id].box }))
+        .sort((x, y) => Math.round(x.b.ry / 8) - Math.round(y.b.ry / 8) || x.b.rx - y.b.rx)
+        .map((x) => x.id);
+    const mSeq = seq(mockBase);
+    const aSeq = seq(appBase);
+    const at = mSeq.findIndex((id, i) => aSeq[i] !== id);
+    if (at !== -1 && !allow.has("reading order")) {
+      push({
+        element: "(frame)",
+        family: "layout",
+        property: "reading order",
+        mock: mSeq.slice(Math.max(0, at - 1), at + 3).join(" → "),
+        app: aSeq.slice(Math.max(0, at - 1), at + 3).join(" → "),
+        weight: 12,
+        note: "the mapped elements are laid out in a different order than the mock lays them out",
+      });
+    }
+  }
+
   deltas.sort(
     (x, y) => FAMILY_RANK[x.family] - FAMILY_RANK[y.family] || y.weight - x.weight,
   );
