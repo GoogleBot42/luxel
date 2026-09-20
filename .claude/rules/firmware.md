@@ -170,6 +170,16 @@ paths:
   images for `CI_VARIANTS` (pixelblaze-v3, c6-devkit-hosted, c3-devkit)
   because a C3 build break (#413) and a C6 under-floor image (#438) both
   merged green while only `CI_BOARD` was built.
+- **Take the BEFORE numbers from a separate detached worktree at
+  `origin/master`, never from your own tree before you start editing.**
+  `flake.nix` uses `src = lib.cleanSource ./.`, so the derivation sees the
+  whole repo: an edit ANYWHERE — a doc, a comment — invalidates every
+  variant, and a multi-variant sweep in your own worktree silently mixes
+  pre- and post-edit images as you work (measured the same variant three
+  ways in one session, 2026-09-20). Same source rule bites new files: a
+  `nix build` cannot see an untracked one, so `git add` a new module before
+  building or the build fails with "file not found for module" pointing at
+  a file that is right there.
 - **`.rodata` is NOT free — it costs image byte for byte.** A 16 KiB live
   `#[used]` array in `.rodata` grew the app image by exactly 16,384 B on
   BOTH `board-pixelblaze-v3` (1,011,392 → 1,027,776) and `board-c6-devkit`
