@@ -1,5 +1,31 @@
 # Update log
 
+## 2026-09-20 — merged master on both bench boards; #538 round-1 verified on metal
+
+`64f9ea1` deployed firmware + assets to the Athom rig (192.168.0.183,
+`board-athom-music`, app 1,029,696 B) and the Seengreat HUB75 panel
+(192.168.0.238, `board-seengreat-hub75`, 968,752 B) — both v0.1.40, both now
+live on `ota_0`, both off the #538 branch builds they were carrying. 3/3 clean
+cold loads each (`web/tools/coldload.mjs`). Reboot-resume held: the Athom's
+4-item playlist came back `playing @2` on its own after the OTA, and the
+`Bench Athom` hostname residue cleared with the reboot.
+
+The round-1 checklist verifies on hardware, on both fixtures and with a
+poisoned `luxel.previewAs` seeded on the device origin — #539 stays fixed (the
+panel console still reads `64×64 matrix`, tiles `grid`, Settings offering only
+the 1D projection row). Details and the per-item results are in the #538
+comment thread.
+
+Three follow-ups filed, no product change here: **#562** the playlist `+ Add`
+picker is not layout-filtered (a 1D strip is offered 2D patterns, contra
+#538 §B), **#563** `Edit` on a Library tile live-pushes to the device and stops
+a running playlist, **#564** two `/pixelblaze-library.json` 404s per device page
+load. Both boards were restored to exactly the state they were found in.
+
+`.claude/skills/verify-webui` now says that driving the console against a real
+device mutates it (and how to restore), and `worktree-setup` that a "missing"
+skill usually means it was read out of the stale main checkout.
+
 ## 2026-09-19 — `reboot_required` now means what a boot actually builds (#550)
 
 `Layout::reboot_required` was `self.outputs != next.outputs`, so **any**
