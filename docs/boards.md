@@ -2762,6 +2762,7 @@ as `PROJ_DIRTY`, so the whole feature is a parse arm, a widened flag and a
 from the playlist task on the way in. `.stack` unchanged (`tools/stack-check.sh`:
 pb-v3 24,852 B, pb-v3 + `small-chip` 26,468 B, both as on master).
 
-The c6 hosted image is now **1,017,104 B, 31,472 B / 3.00 % of slot — 14 B
-above the floor**, where master had 206 B. Nothing else can land on that
-variant until Gitea #543 buys room back; measure before you write, not after.
+The c6 hosted image is now **1,017,040 B, 31,536 B / 3.00 % of slot — 78 B
+above the floor** (measured on the rebase over #603, which is byte-identical
+on this RISC-V variant), where master had 206 B. Nothing else can land here
+until Gitea #543 buys room back; measure before you write, not after.

@@ -352,3 +352,16 @@ paths:
   `.rwtext` is the same SRAM as `.stack`, so every byte comes off the stack
   and `tools/stack-check.sh`'s 24 KB floor is the real ceiling
   (docs/boards.md "IRAM budget", docs/firmware.md "Code placement").
+- **A new ROUTE is the expensive thing, not the handler behind it.** Adding
+  one awaiting arm to `server.rs`'s dispatcher costs a whole future type,
+  its drop glue and a state-machine variant — **+1,424 B on the c6 hosted
+  image** for a handler that parsed one token and sent one `Msg` (#598,
+  2026-09-20). Making it synchronous with `Channel::try_send` was WORSE
+  (+2,000 B: `try_send` is not on the path `send` already linked). Before
+  inventing a route for a small piece of live state, ask what endpoint
+  already owns that state and whether it can take one more line — the same
+  feature as an extra verb on `POST /api/layout`, feeding a flag the render
+  task already polled, cost **192 B** and deleted a `Msg` variant on the way
+  in. Merging a new verb into an existing `match` arm is not automatically
+  cheaper either (+368 B — the arm then branches on `verb` twice). Measure
+  the credless flake image per shape; docs/boards.md keeps the table.

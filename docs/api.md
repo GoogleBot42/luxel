@@ -768,7 +768,7 @@ All of these apply **live** and (on firmware) **persist to flash** — no reboot
 | `/api/map` | GET | — | `{"installed":bool,"dims":2\|3\|0,"count":N,"kind":"grid"\|"coords"[,"w":W,"h":H]}` | both |
 | `/api/map` | POST | `<dims> <raw…>` or `grid <w> <h>` | `{"ok":true,"installed":bool,"count":N}` | both |
 | `/api/layout` | GET | — | the whole Layout — see "`/api/layout` — the one geometry object" above | both |
-| `/api/layout` | POST | `strip`/`matrix`/`map`/`out`/`proj*` lines | the GET body + `"ok"`/`"reboot_required"`, or `{"ok":false,"error":…,"line":N}` | both |
+| `/api/layout` | POST | `strip`/`matrix`/`map`/`out`/`proj*`/`proj` lines | the GET body + `"ok"`/`"reboot_required"`, or `{"ok":false,"error":…,"line":N}` | both |
 | `/api/clock` | GET | — | `{"synced":bool,"local":<unix secs, local>,"tzMinutes":N}` | both |
 | `/api/clock` | POST | tz offset from UTC in minutes | `{"ok":true,"tzMinutes":N}` | both |
 | `/api/clock/sync` | POST | (body ignored) | `{"ok":true,"synced":bool,"local":<unix secs, local>}` | both |
@@ -812,7 +812,10 @@ All of these apply **live** and (on firmware) **persist to flash** — no reboot
   both hosts, and are applied to the engine at boot and on every POST. The
   `proj*=` tokens the mirror briefly accepted on `POST /api/map` are gone.
   A PER-ITEM override lives beside the item's values instead — the playlist's
-  `P` line, which both hosts carry (Gitea #470).
+  `P` line, which both hosts carry (Gitea #470). The RUNNING pattern's
+  override — the console's editor row — is the `proj` line on the same
+  endpoint: live, never stored, gone at the next activation or code push
+  (Gitea #598).
 - `POST /api/clock` accepts −840..=840 minutes.
 - `POST /api/clock/sync` asks the device to re-sync NOW (Gitea #538). On
   firmware it wakes the SNTP task, which otherwise sleeps out a 6 h period

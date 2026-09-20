@@ -44,6 +44,7 @@ next frame; the `proj` line parses, overrides and stores nothing), `tools/serve-
 (a Settings card and an editor override each checked against the mirror's `/api/pixels`
 AND the console's own preview canvas), image-check on the three CI variants, and
 `tools/stack-check.sh` unchanged.
+
 ## 2026-09-20 — the RTC watchdog now watches the render core too (#603)
 
 On the dual-core boards `render_task` runs on the AppCpu, while both RWDT feeders —
