@@ -23,7 +23,9 @@
   // (Gitea #355); the scatter below is where they will attach.
   import { createEventDispatcher, onDestroy } from "svelte";
   import Debugger from "../components/Debugger.svelte";
+  import DeviceChip from "../components/DeviceChip.svelte";
   import CodeEditor from "../components/Editor.svelte";
+  import Popover from "../components/Popover.svelte";
   import Preview from "../components/Preview.svelte";
   import "../components/editor-frame.css";
   import {
@@ -32,6 +34,7 @@
     deviceMap,
     devicePixels,
     installDeviceMapCoords,
+    isPlayground,
   } from "../stores/device";
   import { confirm } from "../stores/dialog";
   import {
@@ -66,6 +69,8 @@
   let breakpoints: number[] = [];
   let debounce: ReturnType<typeof setTimeout> | undefined;
   let menuOpen = false;
+  /** The ⋯ button the menu hangs off (components/Popover.svelte). */
+  let moreBtn: HTMLElement;
   let importError = "";
   let raf = 0;
 
@@ -471,7 +476,7 @@
   });
 </script>
 
-<svelte:window on:click={() => (menuOpen = false)} on:keydown={onKeydown} />
+<svelte:window on:keydown={onKeydown} />
 
 <main class="editor-view editor-frame" data-role="map-editor-view" hidden={!active}>
   <!-- ── the header owns the DOCUMENT ──
@@ -512,7 +517,7 @@
          page previews on. -->
     {#if $device}
       <button
-        class="primary"
+        class="btn primary"
         data-role="map-install"
         title="upload these points so the device renders 2D/3D through them"
         on:click={installOnDevice}
@@ -521,7 +526,7 @@
       </button>
     {:else}
       <button
-        class="primary"
+        class="btn primary"
         data-role="map-use"
         title="preview every pattern on this page through these points"
         on:click={useInPreview}
@@ -532,41 +537,54 @@
 
     <span class="overflow">
       <button
-        class="more"
+        class="btn icon"
+        bind:this={moreBtn}
         data-role="map-overflow"
         title="more actions"
         aria-label="more actions"
-        on:click|stopPropagation={() => (menuOpen = !menuOpen)}
+        on:click={() => (menuOpen = !menuOpen)}
       >
         ⋯
       </button>
-      {#if menuOpen}
-        <div class="menu" role="menu">
-          <button data-role="map-export" role="menuitem" on:click={exportProgram}>
-            Export map program
+      <Popover
+        open={menuOpen}
+        anchor={moreBtn}
+        dataRole="map-menu"
+        on:close={() => (menuOpen = false)}
+      >
+        <button class="mi" data-role="map-export" role="menuitem" on:click={exportProgram}>
+          Export map program
+        </button>
+        <button class="mi" data-role="map-import" role="menuitem" on:click={() => fileInput.click()}>
+          Import map program…
+        </button>
+        <div class="sepr"></div>
+        <button class="mi del" data-role="map-reset" role="menuitem" on:click={() => void resetProgram()}>
+          Reset program
+        </button>
+        <!-- Clearing the DEVICE's map exists only when there is one to clear
+             (§5.7: absent, never disabled). -->
+        {#if $device && $deviceMap.installed}
+          <button
+            class="mi del"
+            data-role="map-clear"
+            role="menuitem"
+            on:click={() => void onClearDeviceMap()}
+          >
+            Clear map from device
           </button>
-          <button data-role="map-import" role="menuitem" on:click={() => fileInput.click()}>
-            Import map program…
-          </button>
-          <div class="sepr"></div>
-          <button class="del" data-role="map-reset" role="menuitem" on:click={() => void resetProgram()}>
-            Reset program
-          </button>
-          <!-- Clearing the DEVICE's map exists only when there is one to clear
-               (§5.7: absent, never disabled). -->
-          {#if $device && $deviceMap.installed}
-            <button
-              class="del"
-              data-role="map-clear"
-              role="menuitem"
-              on:click={() => void onClearDeviceMap()}
-            >
-              Clear map from device
-            </button>
-          {/if}
-        </div>
-      {/if}
+        {/if}
+      </Popover>
     </span>
+
+    <!-- WHICH device this screen is bound to. The shell header is not
+         rendered over an editor screen (#538), so the chip travels with it —
+         mockup S2 puts it at the end of the header, in its own rail segment
+         (the rail split itself is still to come, audit E4). -->
+    {#if !$isPlayground}
+      <span class="edhdr-rail"><DeviceChip /></span>
+    {/if}
+
 
     <input
       class="file-input"

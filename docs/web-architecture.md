@@ -14,13 +14,15 @@ components — `stores/device.ts` decides which one you are looking at.
 web/src/
   App.svelte        the shell: mode, tab, editing, boot cover, header, blocked banner
   main.ts           mounts App
-  app.css           global tokens + element resets (dark only)
+  app.css           design tokens, element resets, and THE shared primitives
+                    (.btn/.inp/.slabel/.menu/.pop) — dark only
   stores/           plain-TS Svelte stores — all app state lives here
     device.ts       session lifecycle, hardware facts, settings state, ONE poll scheduler
     geometry.ts     THE Layout reconciler — every preview, tile and thumbnail reads it
     pattern.ts      the pattern document, the wasm host, local library, .epe + share codecs
     notify.ts       transient notes + the banner list
     dialog.ts       the modal primitive: promise-returning confirm/promptText
+  lib/router.ts     one fragment per screen; the shell is its only caller
   pages/            one component per surface
     Patterns.svelte       ONE pattern browser: the source control + tile verbs
     Playlist.svelte       transport, defaults, rows
@@ -38,7 +40,7 @@ web/src/
   components/       reusable widgets (CodeMirror wrapper, Preview, Controls,
                     PinPanel, VarWatcher, Debugger, Gallery, PatternThumb,
                     PlaylistRow, PatternPicker, ProjectionRow, Dialog,
-                    PreviewAsChip) plus
+                    PreviewAsChip, Popover, DeviceChip, HeaderBrightness) plus
                     editor-frame.css, the chrome BOTH full-screen editors wear
   lib/              non-UI logic: device HTTP client, fetchgate, LNA classifier,
                     wasm bindings, control hints, playlist transport, audio, builtins
@@ -75,7 +77,34 @@ The shell header does **not** carry the open document. Since A7 (#468) the
 editor renders its own header — back, name, save state, Save, ⋯ — and the
 shell only passes `backLabel` down and takes a `back` event up. What stays in
 the shell header is what is true of the *session*: the device chip / "Preview
-as" chip and the fps readout (proposal §5.7).
+as" chip, the brightness slider on a console, and the fps readout
+(proposal §5.7).
+
+Since #538 the shell header is **not rendered at all** while `editing ||
+mapEditing` (Jeremy: "when editing a file, 'luxel' and other things in the
+header bar hide"; mockup S2). The session facts travel with it: an editor
+screen ends its header with a rail segment (`.edhdr-rail`) holding
+`components/DeviceChip.svelte` on a console, and the "Preview as" chip in the
+playground. Anything that needs to be reachable from an editor screen has to
+live in the editor's own header — there is no bar above it.
+
+Header layout (mockup S1): 44px, `padding:0 16px`, and one row of
+`wordmark · device chip · tabs · spacer · control · fps`. At ≤600px it becomes
+the mock's two rows (S1c) — a 40px identity row and a 38px scrolling tab strip
+— by un-`display:contents`-ing the `.hdrtop` wrapper. The active tab is
+`var(--text)` with a 2px amber underline flush to the header border; amber
+TEXT is wrong (Jeremy, 2026-09-19).
+
+The device is named by `stores/device.ts`'s `deviceLabel`: `/api/status`'s
+`name` when the firmware reports one, else the host it answers on. Never the
+word "device" — a console that says "device" tells nobody which board is on
+the bench.
+
+`components/HeaderBrightness.svelte` is beyond the mocks (Jeremy asked for it):
+a 96px range left of the fps readout, console only. It writes on `change` —
+pointer release, or a settled run of arrow keys — debounced 150ms, so a drag
+is ONE `POST /api/brightness`, not one per step. Settings keeps its own
+control; both drive the `brightness` store.
 
 `openMapEditor(from)` is the shell's one route to the map program's screen
 (#471) — an exported component method, because every entry point is elsewhere:
@@ -89,6 +118,99 @@ Every page stays **mounted and `hidden`** when it is not the active tab, so its
 state (compiled gallery tiles, CodeMirror documents, scroll position) survives
 tab switching. Each page takes an `active` prop: it drives `hidden` and gates
 that page's poll subscription and lazy mounts.
+
+## The URL (`lib/router.ts`, Gitea #538)
+
+One fragment per screen, so a refresh reopens what was open (Jeremy asked for
+it by name for Settings):
+
+| route | screen |
+|---|---|
+| `#/` | Patterns |
+| `#/playlist` | Playlist |
+| `#/settings` | Settings |
+| `#/editor` | the pattern editor |
+| `#/map` | the map program screen |
+
+**Why the hash and not a path.** The device serves this console from flash and
+its GET router is a flat match over asset paths (`firmware/src/server.rs`): an
+unknown path falls through to 404, there is no SPA fallback, so
+`http://luxel-f6b0a8/settings` would be a dead link on the only machine most
+people ever load this app from. A fragment never reaches the server, so the
+same URL works on the device, on the native mirror and on the hosted copy.
+Real paths need a firmware fallback route first.
+
+The share link is a fragment too (`#p=…`, `stores/pattern.ts`); the two are
+told apart by the leading slash — a route always starts `#/`. A share link
+wins at boot and its fragment is left alone.
+
+There is deliberately **no `?pattern=<id>`**. A route names a SCREEN; which
+document the editor holds is the working copy's business (restored from the
+autosave, or pulled from the device's running pattern). Putting the id in the
+URL means a refresh re-activates that pattern on the hardware, and a page
+refresh must never change what the LEDs are doing.
+
+`App.svelte` is the only caller: `$: if (routing) syncUrl(currentPage)` pushes
+on a page change, `popstate` applies one, and boot applies the fragment AFTER
+the device handshake so the route wins over the boot default.
+
+**Testing note.** `page.goto(sameUrlWithHash)` is a same-document navigation —
+the app never re-boots. A harness that means "reload" must use `page.reload()`
+(see `reloadInto()` in `tools/device-e2e.mjs`).
+
+## Shared primitives (`app.css`, Gitea #538)
+
+The mockups (`docs/design/webui-v2/mockups.html`) are the visual spec; the
+numbers in `app.css` are quoted from it rather than approximated. Tokens:
+`--bg/--bg-panel/--bg-inset/--border/--text/--text-dim/--accent/--accent-soft/
+--error/--warn/--ok/--mono/--sans`. `--ok` is THE green (playing ring, device
+dot, playlist progress) — never a literal in a component.
+
+| class | what it is |
+|---|---|
+| `.btn` | 32px, 6px radius, `--bg-inset` |
+| `.btn.primary` | filled amber, `#16110a`, 600 — the ONE primary action of a screen |
+| `.btn.quiet` | transparent, `--text-dim` |
+| `.btn.icon` / `.btn.sm` / `.btn.sm.icon` | 32×32 / 26px / 26×26 |
+| `.inp`, `.inp.mono`, `.inp.num` (72px), `.inp.xs` | the field scale |
+| `.slabel` | the small-caps section label, `.08em` |
+| `.menu` / `.menu .mi` / `.mi.del` | the 214px verb list and its rows |
+| `.pop` / `.pop .pr` / `.popfoot` | the 296px chooser (mockup S5) |
+
+Modifiers only bite in combination (`.btn.primary`, `.inp.num`), so a page's
+own `.icon` or `.num` class can never be captured by the global sheet. There
+were four different `.primary` blocks and three menu stylesheets before this;
+one `.btn` and one `.menu` is the point.
+
+### `components/Popover.svelte`
+
+THE popover: the editor ⋯, the map ⋯, the tile ⋯, the playlist ⋯ and the
+"Preview as" chooser all mount through it. It owns geometry and dismissal
+only — the LOOKS are the global `.menu` / `.pop` rules, because Svelte
+compiles slotted markup in the CALLER's scope and a wrapper component cannot
+style what it was handed.
+
+```svelte
+<Popover open={menuOpen} anchor={moreBtn} kind="menu" align="end"
+         dataRole="editor-menu" on:close={() => (menuOpen = false)}>
+  <button class="mi" …>Duplicate</button>
+  <div class="sepr"></div>
+  <button class="mi del" …>Delete</button>
+</Popover>
+```
+
+- `anchor` is the element it hangs off (`bind:this` on the trigger).
+- `kind`: `menu` (214px verb list) or `pop` (296px chooser). A `menu` closes
+  when one of its items is clicked; a `pop` does not — you set several fields
+  in it before leaving.
+- Positioned `fixed` off the anchor's viewport rect, so a menu opened from a
+  tile inside the scrolling grid is not clipped by it — and therefore it
+  **dodges all four viewport edges**: clamp left/right/top, flip above when
+  the bottom would overflow. (Jeremy: "dropdowns don't dodge sides of screen".)
+- It keeps the last non-degenerate anchor rect: a hover affordance like the
+  tile's ⋯ stops being hovered the instant the popover covers the pointer, and
+  a zero-sized rect would otherwise fling the menu into the corner.
+- Escape and an outside click both dispatch `close`; the OWNER holds `open`.
 
 ## The Patterns page (`pages/Patterns.svelte`, Gitea #467)
 
@@ -631,7 +753,8 @@ way the fixture shows it rather than row-major. Per-item projection overrides ar
 `deviceError`, `deviceBlocked`, `devicePixels`, `pixelMax`, `deviceHeapFree`,
 `deviceEngineHeap`, `deviceVmerr`, `deviceFps`, `deviceOutFps`,
 `deviceRescanHz`, `deviceMap`, `deviceLayoutWire`, `deviceCaps`,
-`deviceVersion`, `deviceSlot`, `deviceStore`, `devicePatterns`, `brightness`,
+`deviceVersion`, `deviceSlot`, `deviceStore`, `deviceName`, `deviceLabel`,
+`devicePatterns`, `brightness`,
 `brightnessMax`, `deviceProtocol`, `protocolOptions`, `dataPin*`, `wifi*`,
 `mqtt*`, `outputStatus`, `palette*`, `clockStatus`, `syncStatus`, `netLive`,
 `playlist`; functions `connectDevice`, `detectDeviceBase`, `refresh*`,
@@ -695,6 +818,14 @@ way the fixture shows it rather than row-major. Per-item projection overrides ar
   not a second breakpoint: it is the width at which two side-by-side buttons
   stop fitting. Targets under it are thumb-sized (≥ 32 px) and no page may
   scroll sideways at 390 px — `device-e2e.mjs` asserts both on the Playlist.
+- **One `.btn`, one `.menu`, one Popover.** A new button wears `.btn` (+ a
+  modifier) and a new dropdown mounts `components/Popover.svelte`; a local
+  copy of either is how the four different `.primary` blocks and the three
+  divergent menu stylesheets happened (#538). The mockups are the spec —
+  quote a number from `docs/design/webui-v2/mockups.html` rather than
+  eyeballing one.
+- **The route names a screen, never a device action.** A refresh reopens the
+  page you were on and changes nothing on the hardware. See **The URL** above.
 - **No native dialogs.** `window.prompt` / `window.confirm` / `alert` do not
   appear anywhere under `web/src` — naming and confirmation go through
   `stores/dialog.ts` (#472). A native dialog also hangs the e2e harnesses,

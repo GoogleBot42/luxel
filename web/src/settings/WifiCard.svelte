@@ -83,7 +83,7 @@
     />
   </div>
   <div class="field">
-    <button class="primary" data-role="wifi-save" on:click={() => void saveWifi()}>
+    <button class="btn primary" data-role="wifi-save" on:click={() => void saveWifi()}>
       save &amp; reboot
     </button>
     {#if $notes.wifi}<span class="dim" data-role="wifi-note">{$notes.wifi}</span>{/if}
@@ -117,6 +117,6 @@
   }
 
   .dot.live {
-    background: #4caf50;
+    background: var(--ok);
   }
 </style>

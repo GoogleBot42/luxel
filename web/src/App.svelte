@@ -5,10 +5,13 @@
   // ./pages (surfaces) — see docs/web-architecture.md.
   import { onDestroy, onMount } from "svelte";
   import { get } from "svelte/store";
+  import DeviceChip from "./components/DeviceChip.svelte";
   import Dialog from "./components/Dialog.svelte";
+  import HeaderBrightness from "./components/HeaderBrightness.svelte";
   import PreviewAsChip from "./components/PreviewAsChip.svelte";
   import { gatedFetch } from "./lib/fetchgate";
   import type { Luxel } from "./lib/luxel";
+  import { parseRoute, pushRoute, replaceRoute, type Page, type Route } from "./lib/router";
   import Editor from "./pages/Editor.svelte";
   import MapEditor from "./pages/MapEditor.svelte";
   import Patterns from "./pages/Patterns.svelte";
@@ -29,7 +32,7 @@
     refreshPlaylist,
     startSessionPoll,
   } from "./stores/device";
-  import { layoutName, pixelTotal, runMapProgram, setPreviewAs } from "./stores/geometry";
+  import { pixelTotal, runMapProgram, setPreviewAs } from "./stores/geometry";
   import { setBanner } from "./stores/notify";
   import {
     decodeShare,
@@ -82,6 +85,51 @@
 
   /** The label/target the editor's back button returns to. */
   $: backLabel = tabs.find((t) => t.id === tab)?.label ?? "Patterns";
+
+  // ---- the URL ----
+  // One fragment per screen (lib/router.ts) so a reload reopens what was
+  // open — Jeremy's ask for Settings, 2026-09-19. The shell owns it because
+  // the shell owns `tab`/`editing`/`mapEditing`; nothing else writes it
+  // except the share link, which is also a fragment and is left alone.
+
+  /** Which page the shell's state IS, in route terms. */
+  $: currentPage = (mapEditing ? "map" : editing ? "editor" : tab) as Page;
+
+  /** The page the URL last named, so nothing is pushed twice. */
+  let urlPage: Page | "" = "";
+  /** Nothing writes the URL until boot has settled on a screen. */
+  let routing = false;
+
+  $: if (routing) syncUrl(currentPage);
+  function syncUrl(page: Page): void {
+    if (page === urlPage) return;
+    urlPage = page;
+    pushRoute({ page });
+  }
+
+  /** Put the shell on the screen a route names. Tabs that need hardware are
+   *  ignored without it (a `#/settings` link opened in the playground lands
+   *  on Patterns rather than on a page that cannot exist). */
+  function applyRoute(r: Route): void {
+    urlPage = r.page;
+    if (r.page === "map") {
+      mapEditing = true;
+      return;
+    }
+    mapEditing = false;
+    if (r.page === "editor") {
+      editing = true;
+      return;
+    }
+    editing = false;
+    tab = r.page === "patterns" || $device !== null ? r.page : "patterns";
+    if (tab === "playlist") void refreshPlaylist();
+  }
+
+  function onPopState(): void {
+    const r = parseRoute(location.hash);
+    if (r) applyRoute(r);
+  }
 
   /** What the status-bar counter says, and what it is allowed to claim.
    *  Connected: the DEVICE's own rate — `out_fps` on a pipelined HUB75 board
@@ -197,14 +245,32 @@
       // shows.
       bootLabel = "opening the pattern running on the device…";
       deviceBase.set(base);
-      tab = "patterns"; // the editor's back button lands on Patterns
-      editing = true;
+      // The console OPENS ON PATTERNS → On device, with the running tile lit
+      // (Jeremy, 2026-09-19 — it used to drop straight into the editor). The
+      // handshake below still pulls the running pattern into the working
+      // copy, so opening the editor afterwards is instant and already on it.
+      tab = "patterns";
+      editing = false;
       await editor.bootDevice((pull) => connectDevice(base, pull), wipDirty);
     } else {
       if (sharedMap) runMapProgram(lx, get(mapSrc), get(pixelTotal));
       editor.bootPlayground();
       editing = hadWip; // resume in the editor if there was work in progress
     }
+    // The URL wins over the boot default: a reload reopens the screen that
+    // was open. A share link is a fragment too, and it is NOT a route — it
+    // has already been decoded above, so leave its fragment in the bar.
+    const route = shared ? null : parseRoute(location.hash);
+    if (route) {
+      applyRoute(route);
+    } else if (!shared) {
+      // `currentPage` is reactive and has not been recomputed yet inside this
+      // handler — read the state directly.
+      const bootPage: Page = mapEditing ? "map" : editing ? "editor" : tab;
+      replaceRoute({ page: bootPage });
+      urlPage = bootPage;
+    }
+    routing = true;
     booting = false;
   });
 
@@ -213,6 +279,9 @@
     stopAutosave();
   });
 </script>
+
+<!-- back/forward between screens (lib/router.ts) -->
+<svelte:window on:popstate={onPopState} />
 
 <div
   class="shell"
@@ -230,11 +299,39 @@
       <span class="boot-label" data-role="boot-label">{bootLabel}</span>
     </div>
   {/if}
-  <header>
-    {#if !editing && !mapEditing}
-      <span class="wordmark">
-        luxel <span class="dim">{$isPlayground ? "playground" : ($device?.base ?? $deviceBase) || "device"}</span>
-      </span>
+  <!-- The shell header exists only over a HOME tab. An editor screen carries
+       its own header (mockup S2) — Jeremy, 2026-09-19: "when editing a file,
+       'luxel' and other things in the header bar hide". The device chip that
+       used to live here moves into the editor's header with it
+       (components/DeviceChip.svelte). -->
+  {#if !editing && !mapEditing}
+    <header class="hdr">
+      <div class="hdrtop">
+        <!-- the word `luxel`, and on a console nothing after it: WHICH device
+             is the chip's job (mockup S1), not a URL in the wordmark -->
+        <span class="wordmark"
+          >luxel{#if $isPlayground}&nbsp;<span>playground</span>{/if}</span
+        >
+        {#if !$isPlayground}
+          <span class="slot chip"><DeviceChip /></span>
+        {/if}
+
+        <span class="spacer"></span>
+
+        <!-- What this app is rendering through (#463). The console states the
+             device's own Layout in the chip above; the playground offers the
+             chip that chooses one. -->
+        {#if $isPlayground}
+          <span class="slot ctl">
+            <PreviewAsChip on:openmap={() => openMapEditor(backLabel)} />
+          </span>
+        {:else}
+          <span class="slot ctl bri"><HeaderBrightness /></span>
+        {/if}
+
+        <span class="fps mono" data-role="fps" title={fpsReadout.title}>{fpsReadout.text}</span>
+      </div>
+
       <nav class="tabs" data-role="tabs">
         {#each tabs as t (t.id)}
           <button
@@ -250,25 +347,8 @@
           </button>
         {/each}
       </nav>
-    {/if}
-
-    <span class="spacer"></span>
-
-    <!-- What this app is rendering through (#463). The console states the
-         device's own Layout; the playground offers the chip that chooses one. -->
-    {#if $isPlayground}
-      <PreviewAsChip on:openmap={() => openMapEditor(editing ? "Editor" : backLabel)} />
-    {:else}
-      <span class="layout-chip" data-role="layout-chip" title="the device's LED layout">
-        <span class="dot" class:live={$device !== null}></span>
-        <span class="dev-name">{($device?.base ?? $deviceBase) || "device"}</span>
-        <span class="dim">·</span>
-        <span class="mono" data-role="layout-label">{$layoutName}</span>
-      </span>
-    {/if}
-
-    <span class="mono dim" data-role="fps" title={fpsReadout.title}>{fpsReadout.text}</span>
-  </header>
+    </header>
+  {/if}
 
   <!-- Browser-blocked device connection (#162). Not an error the app can
        retry: this page is https, the device is plain http, and Chromium's
@@ -370,37 +450,84 @@
     height: 100%;
   }
 
-  header {
+  /* mockup S1: 44px, `padding:0 16px`, one row —
+     wordmark · device chip · tabs · spacer · controls · fps */
+  .hdr {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 8px 14px;
+    gap: 16px;
+    height: 44px;
+    padding: 0 16px;
     border-bottom: 1px solid var(--border);
     background: var(--bg-panel);
-    flex-wrap: wrap;
+  }
+
+  /* On a wide screen the header is ONE row, so this wrapper dissolves and its
+     children become the header's own flex items (ordered below). At phone
+     width it becomes the first of the two rows (mockup S1c) — which is the
+     only reason it exists. */
+  .hdrtop {
+    display: contents;
   }
 
   .wordmark {
-    font-weight: 700;
-    letter-spacing: 0.04em;
+    order: 1;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
     color: var(--accent);
+    white-space: nowrap;
   }
 
-  .dim {
-    color: var(--text-dim);
+  /* "playground" after the wordmark (mockup S5); a console says which DEVICE
+     in the chip instead, and puts nothing here */
+  .wordmark span {
+    color: var(--text);
+  }
+
+  .slot {
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .chip {
+    order: 2;
+    min-width: 0;
   }
 
   .tabs {
+    order: 3;
     display: flex;
-    gap: 2px;
+    align-self: stretch;
+    margin-left: 8px;
+  }
+
+  .spacer {
+    order: 4;
+    flex: 1;
+  }
+
+  .ctl {
+    order: 5;
+  }
+
+  .fps {
+    order: 6;
+    font: 11.5px/1 var(--mono);
+    color: var(--text-dim);
+    white-space: nowrap;
   }
 
   .tab {
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
     background: transparent;
     border: none;
+    /* flush with the header's own bottom border (mockup S1) */
     border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
     border-radius: 0;
-    padding: 6px 12px;
     color: var(--text-dim);
     font-size: 13px;
     cursor: pointer;
@@ -410,37 +537,43 @@
     color: var(--text);
   }
 
+  /* the active tab is BRIGHTER, not amber — the amber is the underline
+     (mockup S1; Jeremy, 2026-09-19) */
   .tab.active {
-    color: var(--accent);
+    color: var(--text);
     border-bottom-color: var(--accent);
   }
 
-  .spacer {
-    flex: 1;
-  }
+  /* mockup S1c: two rows — [wordmark · chip · spacer · fps] then a scrolling
+     tab strip. */
+  @media (max-width: 600px) {
+    .hdr {
+      flex-direction: column;
+      align-items: stretch;
+      height: auto;
+      gap: 0;
+      padding: 0;
+    }
 
-  /* the console's "● luxel-f6b0a8 · 64×64 matrix" (proposal §4) */
-  .layout-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    color: var(--text-dim);
-  }
+    .hdrtop {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      height: 40px;
+      padding: 0 12px;
+    }
 
-  .layout-chip .dev-name {
-    color: var(--text);
-  }
+    .tabs {
+      height: 38px;
+      margin-left: 0;
+      padding: 0 8px;
+      overflow-x: auto;
+    }
 
-  .layout-chip .dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: var(--text-dim);
-  }
-
-  .layout-chip .dot.live {
-    background: #4caf50;
+    /* no room for it beside the chip; Settings keeps its own */
+    .bri {
+      display: none;
+    }
   }
 
   /* first-load cover over the whole app (header included) */

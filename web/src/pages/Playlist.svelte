@@ -12,6 +12,7 @@
   // Phase B extends with a Scenes section rather than replacing.
   import { onDestroy } from "svelte";
   import PatternPicker from "../components/PatternPicker.svelte";
+  import Popover from "../components/Popover.svelte";
   import PlaylistRow from "../components/PlaylistRow.svelte";
   import {
     addToPlaylist,
@@ -114,6 +115,8 @@
 
   // ---- the ⋯ menu (Clear lives here) ----
   let menuOpen = false;
+  /** The ⋯ button the menu hangs off (components/Popover.svelte). */
+  let moreBtn: HTMLElement;
   let pickerOpen = false;
 
   function removePlaylistItem(i: number): void {
@@ -214,10 +217,6 @@
   }
 </script>
 
-<!-- only while the menu is open: this page stays mounted behind every other
-     tab, and a permanent app-wide click listener is not free -->
-<svelte:window on:click={menuOpen ? () => (menuOpen = false) : undefined} />
-
 <div class="playlist-tab" data-role="playlist-panel" hidden={!active}>
   <div class="transport">
     <!-- §5.7: absent, never disabled. There is nothing to play until the queue
@@ -226,7 +225,7 @@
     {#if $device && $playlist.items.length > 0}
       <span class="group">
         {#if $playlist.playing}
-          <button class="primary" data-role="pl-stop" on:click={playlistStop}>■ Stop</button>
+          <button class="btn primary" data-role="pl-stop" on:click={playlistStop}>■ Stop</button>
           <button class="icon" data-role="pl-prev" title="previous" aria-label="previous"
             on:click={playlistPrev}>⏮</button
           >
@@ -234,7 +233,7 @@
             on:click={playlistNext}>⏭</button
           >
         {:else}
-          <button class="primary" data-role="pl-play" on:click={playlistPlay}>▶ Play</button>
+          <button class="btn primary" data-role="pl-play" on:click={playlistPlay}>▶ Play</button>
         {/if}
       </span>
     {:else if $device}
@@ -284,24 +283,28 @@
       {#if $playlist.items.length > 0}
         <span class="overflow">
           <button
-            class="icon"
+            class="btn icon"
+            bind:this={moreBtn}
             data-role="pl-more"
             title="more actions"
             aria-label="more actions"
-            on:click|stopPropagation={() => (menuOpen = !menuOpen)}>⋯</button
+            on:click={() => (menuOpen = !menuOpen)}>⋯</button
           >
-          {#if menuOpen}
-            <div class="menu" data-role="pl-menu" role="menu">
-              <button
-                class="danger"
-                data-role="pl-clear"
-                role="menuitem"
-                on:click|stopPropagation={() => void clearPlaylist()}
-              >
-                Clear playlist
-              </button>
-            </div>
-          {/if}
+          <Popover
+            open={menuOpen}
+            anchor={moreBtn}
+            dataRole="pl-menu"
+            on:close={() => (menuOpen = false)}
+          >
+            <button
+              class="mi del"
+              data-role="pl-clear"
+              role="menuitem"
+              on:click={() => void clearPlaylist()}
+            >
+              Clear playlist
+            </button>
+          </Popover>
         </span>
       {/if}
     </span>
@@ -428,17 +431,6 @@
     margin-left: 8px;
   }
 
-  .primary {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #1a1207;
-    font-weight: 600;
-  }
-
-  .primary:hover {
-    filter: brightness(1.08);
-  }
-
   .icon {
     padding: 4px 9px;
     line-height: 1;
@@ -486,33 +478,6 @@
     position: relative;
     display: inline-flex;
     margin-left: 4px;
-  }
-
-  .menu {
-    position: absolute;
-    top: 100%;
-    right: 0;
-    margin-top: 4px;
-    z-index: 20;
-    display: flex;
-    flex-direction: column;
-    min-width: 160px;
-    padding: 4px;
-    background: var(--bg-panel);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
-  }
-
-  .menu button {
-    text-align: left;
-    background: transparent;
-    border-color: transparent;
-    white-space: nowrap;
-  }
-
-  .menu button.danger {
-    color: var(--error);
   }
 
   .pl-list {
@@ -567,8 +532,8 @@
       padding: 12px;
     }
 
-    .primary,
-    .icon {
+    /* a touch target, on the shared button primitive (app.css) */
+    .btn {
       min-height: 36px;
     }
   }

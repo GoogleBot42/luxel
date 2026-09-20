@@ -63,7 +63,7 @@
   />
 </div>
 <div class="field">
-  <button class="primary" data-role="mqtt-save" on:click={saveMqtt}>
+  <button class="btn primary" data-role="mqtt-save" on:click={saveMqtt}>
     save
   </button>
   {#if $notes.mqtt}<span class="dim" data-role="mqtt-note">{$notes.mqtt}</span>{/if}

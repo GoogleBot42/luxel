@@ -14,6 +14,7 @@
   // the per-tile verbs (Play · Edit · ⋯).
   import { createEventDispatcher } from "svelte";
   import Gallery, { type GalleryItem } from "../components/Gallery.svelte";
+  import Popover from "../components/Popover.svelte";
   import {
     addToPlaylist as addPatternToPlaylist,
     device,
@@ -140,11 +141,10 @@
   // One popup for the whole page, positioned from the button that opened it:
   // a menu inside the scrolling tile grid would be clipped by it.
 
-  let menu: { item: GalleryItem; x: number; y: number } | null = null;
+  let menu: { item: GalleryItem; anchor: HTMLElement } | null = null;
 
   function openMenu(e: MouseEvent, item: GalleryItem): void {
-    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    menu = { item, x: Math.min(r.right, window.innerWidth - 8), y: r.bottom + 4 };
+    menu = { item, anchor: e.currentTarget as HTMLElement };
   }
 
   function closeMenu(): void {
@@ -217,7 +217,7 @@
   }
 </script>
 
-<svelte:window on:click={closeMenu} on:keydown={(e) => e.key === "Escape" && closeMenu()} />
+<!-- dismissal is the popover's (components/Popover.svelte) -->
 
 <div class="patterns-tab" data-role="patterns-panel" hidden={!active}>
   <div class="pagebar">
@@ -255,7 +255,7 @@
       </span>
     {/if}
     {#if sourceId !== "pixelblaze"}
-      <button class="primary" data-role="new-pattern" on:click={() => dispatch("new")}>
+      <button class="btn primary" data-role="new-pattern" on:click={() => dispatch("new")}>
         + New pattern
       </button>
     {/if}
@@ -449,7 +449,7 @@
        not exist until Phase B, so it is absent rather than disabled: Gitea
        #480 adds the entry. -->
   {@const item = menu.item}
-  <div class="menu" data-role="tile-menu-popup" style={`left:${menu.x}px;top:${menu.y}px`}>
+  <Popover open anchor={menu.anchor} dataRole="tile-menu-popup" on:close={closeMenu}>
     {#if sourceId === "device"}
       <button class="mi" data-role="tile-menu-playlist" on:click={() => addToPlaylist(item)}>
         Add to playlist
@@ -460,14 +460,14 @@
     </button>
     {#if sourceId === "device"}
       <button
-        class="mi danger"
+        class="mi del"
         data-role="tile-menu-delete"
         on:click={() => void removeFromDevice(item)}
       >
         Delete
       </button>
     {/if}
-  </div>
+  </Popover>
 {/if}
 
 <style>
@@ -612,39 +612,6 @@
     font-size: 11px;
     color: var(--accent);
     cursor: pointer;
-  }
-
-  .menu {
-    position: fixed;
-    z-index: 60;
-    transform: translateX(-100%);
-    min-width: 168px;
-    padding: 4px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--bg-panel);
-    box-shadow: 0 8px 24px rgb(0 0 0 / 45%);
-    display: flex;
-    flex-direction: column;
-  }
-
-  .mi {
-    text-align: left;
-    background: none;
-    border: none;
-    border-radius: 5px;
-    padding: 6px 10px;
-    font-size: 13px;
-    color: var(--text);
-    cursor: pointer;
-  }
-
-  .mi:hover {
-    background: var(--bg-inset);
-  }
-
-  .mi.danger {
-    color: var(--error);
   }
 
   .spinner {

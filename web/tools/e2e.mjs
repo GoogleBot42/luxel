@@ -125,7 +125,7 @@ async function previewAs(page, choice, nums = {}) {
   }
   await page.click(`[data-role="preview-as-${choice}"]`);
   await sleep(150);
-  await page.click('[data-role="fps"]'); // click away to close the popover
+  await page.keyboard.press("Escape"); // the popover dismisses on Escape (#538)
   await sleep(400);
 }
 
@@ -235,8 +235,15 @@ try {
   await page.waitForSelector(".cm-content");
   await sleep(400);
   check("New opens the editor (back button)", (await page.$('[data-role="editor-back"]')) !== null);
-  const fpsText = await page.$eval('[data-role="fps"]', (el) => el.textContent ?? "");
-  check("engine renders (fps > 0)", parseInt(fpsText) > 10, fpsText.trim());
+  // The shell header (and with it the fps readout) does not exist over an
+  // editor screen since #538 — the editor states its own rate in the preview
+  // section's header instead (mockup S2).
+  const fpsText = await page.$eval('[data-role="preview-dims"]', (el) => el.textContent ?? "");
+  check(
+    "engine renders (fps > 0)",
+    parseInt(/·\s*(\d+)\s*fps/.exec(fpsText)?.[1] ?? "0") > 10,
+    fpsText.trim(),
+  );
 
   // The header owns the document (A7, #468): the name edits INLINE — there is
   // no naming dialog any more, and an unnamed pattern is refused in place.

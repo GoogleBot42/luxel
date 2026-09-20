@@ -138,11 +138,9 @@
   gap: 10px;
 }
 
+/* `.slabel` itself is the global primitive (app.css); the settings page only
+   adds that its section labels never wrap. */
 .settings .slabel {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--text-dim);
   white-space: nowrap;
 }
 

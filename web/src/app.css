@@ -1,3 +1,13 @@
+/* The one global stylesheet: design tokens and the shared primitives every
+   screen builds from. Values come from the approved mockups
+   (docs/design/webui-v2/mockups.html) — that file is the visual spec, so a
+   number here should be quotable from it rather than approximated.
+
+   Primitives live here, not in a component, because Svelte compiles slotted
+   markup in the PARENT's scope: a wrapper component cannot style what it was
+   handed. `cssCodeSplit:false` folds this into the one stylesheet the device
+   serves (docs/web-architecture.md, Gitea #92). */
+
 :root {
   --bg: #14161a;
   --bg-panel: #1c1f26;
@@ -6,8 +16,15 @@
   --text: #d7dae0;
   --text-dim: #8a90a0;
   --accent: #e8a33d;
+  /* the accent at a tint you can put text on — active tabs, segments, radios */
+  --accent-soft: rgba(232, 163, 61, 0.15);
   --error: #e05555;
   --warn: #d9a343;
+  /* "this is live/good": the playing ring, the device dot, playlist progress.
+     ONE green — never a literal in a component. */
+  --ok: #5fbf7a;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "DejaVu Sans Mono", monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "DejaVu Sans", sans-serif;
   color-scheme: dark;
 }
 
@@ -25,13 +42,13 @@ body,
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: ui-sans-serif, system-ui, sans-serif;
-  font-size: 14px;
+  font: 14px/1.45 var(--sans);
+  -webkit-font-smoothing: antialiased;
 }
 
 code,
 .mono {
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-family: var(--mono);
 }
 
 button,
@@ -62,4 +79,232 @@ input[type="range"] {
 
 input[type="checkbox"] {
   accent-color: var(--accent);
+}
+
+/* ---------- buttons ----------
+   ONE button, four modifiers. Anything that reads as a button wears `.btn`;
+   the modifiers only bite in combination (`.btn.primary`) so a page's own
+   `.icon`/`.sm` class can never be captured by this file. */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-inset);
+  color: var(--text);
+  font: 13px/1 var(--sans);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* the ONE primary action of a screen — filled, never an outline */
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #16110a;
+  font-weight: 600;
+}
+
+.btn.primary:hover {
+  border-color: var(--accent);
+  filter: brightness(1.08);
+}
+
+.btn.quiet {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-dim);
+}
+
+.btn.quiet:hover {
+  color: var(--text);
+}
+
+.btn.icon {
+  width: 32px;
+  padding: 0;
+}
+
+.btn.sm {
+  height: 26px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.btn.sm.icon {
+  width: 26px;
+  padding: 0;
+}
+
+.btn svg {
+  display: block;
+}
+
+.btn[disabled] {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* ---------- fields ---------- */
+
+.inp {
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-inset);
+  color: var(--text);
+  font: 13px/1 var(--sans);
+}
+
+.inp.mono {
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+/* a number you have to be able to READ — 72px fits "manual" and a 4-digit
+   pixel count, which the 52–64px one-offs did not (Jeremy, 2026-09-19) */
+.inp.num {
+  width: 72px;
+  text-align: left;
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+.inp.xs {
+  height: 26px;
+  padding: 0 7px;
+  font-size: 12px;
+}
+
+/* ---------- text ---------- */
+
+/* a section's name: the small caps line above a form or a rail section */
+.slabel {
+  font: 11px/1 var(--sans);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+}
+
+/* ---------- popovers ----------
+   Geometry and outside-click live in components/Popover.svelte; the looks
+   live here because the menu's ITEMS are slot content, compiled in the
+   caller's scope. `.menu` is the verb list (the ⋯ menus); `.pop` is the
+   wider chooser (Preview as, the projection override). */
+
+.menu,
+.pop {
+  position: fixed;
+  z-index: 60;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-panel);
+}
+
+.menu {
+  width: 214px;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.65);
+}
+
+.pop {
+  width: 296px;
+  padding: 6px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.7);
+}
+
+.menu .mi {
+  display: block;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  font: 13px/1.3 var(--sans);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.menu .mi:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: transparent;
+}
+
+/* a destructive verb is last and error-tinted */
+.menu .mi.del {
+  color: var(--error);
+}
+
+.menu .sepr,
+.pop .sepr {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
+
+/* a radio row in a `.pop` */
+.pop .pr {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 9px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: 13px/1.3 var(--sans);
+  text-align: left;
+  cursor: pointer;
+}
+
+.pop .pr:hover {
+  border-color: transparent;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.pop .pr.on {
+  background: var(--accent-soft);
+}
+
+.pop .radio {
+  position: relative;
+  width: 13px;
+  height: 13px;
+  flex: none;
+  border: 1px solid #4d545f;
+  border-radius: 50%;
+}
+
+.pop .pr.on .radio {
+  border-color: var(--accent);
+}
+
+.pop .pr.on .radio::after {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.pop .popfoot {
+  margin: 4px 0 0;
+  padding: 9px 10px 6px;
+  border-top: 1px solid var(--border);
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--text-dim);
+}
+
+.pop .inp.xs {
+  width: 52px;
 }

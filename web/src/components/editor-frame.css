@@ -58,63 +58,28 @@
   font-size: 12px;
 }
 
-/* the ONE primary action of the screen */
-.editor-frame .primary {
-  border-color: var(--accent);
-  color: var(--accent);
-  font-weight: 600;
-}
+/* The screen's primary action and its ⋯ trigger are the GLOBAL button
+   primitive now (app.css `.btn.primary` / `.btn.icon`), and the menu they
+   open is components/Popover.svelte + the global `.menu` rules — three
+   near-identical local menu stylesheets is how they drifted apart. */
 
 .editor-frame .overflow {
   position: relative;
   display: inline-flex;
 }
 
-.editor-frame .more {
-  padding: 2px 8px;
-  line-height: 1;
-}
-
-.editor-frame .menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
-  z-index: 20;
+/* The header's rail segment (mockup S2): the device chip sits at the end of
+   the header, hairlined off from the document's own controls, because the
+   shell header does not exist over an editor screen (#538). Audit E4 widens
+   this to the rail COLUMN (`minmax(320px, 420px)`) so Save + ⋯ end at the
+   code column's right edge; until then it is just the segment. */
+.editor-frame .edhdr-rail {
   display: flex;
-  flex-direction: column;
-  min-width: 160px;
-  padding: 4px;
-  gap: 2px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-panel);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
-}
-
-.editor-frame .menu button {
-  background: transparent;
-  border: none;
-  border-radius: 4px;
-  text-align: left;
-  padding: 6px 8px;
-  font-size: 12px;
-  cursor: pointer;
-  color: var(--text);
-}
-
-.editor-frame .menu button:hover {
-  background: var(--bg-inset);
-}
-
-/* a destructive verb is last and error-tinted (S2) */
-.editor-frame .menu button.del {
-  color: var(--error);
-}
-
-.editor-frame .sepr {
-  height: 1px;
-  margin: 3px 2px;
-  background: var(--border);
+  align-items: center;
+  align-self: stretch;
+  padding-left: 16px;
+  margin-left: 16px;
+  border-left: 1px solid var(--border);
 }
 
 .editor-frame .file-input {
@@ -215,13 +180,6 @@
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-}
-
-.editor-frame .slabel {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--text-dim);
 }
 
 .editor-frame .rdim {

@@ -33,6 +33,35 @@ const DEV_PORT = E2E.mirror.device; // E2E_PORT + 20
 const DEV = `http://127.0.0.1:${DEV_PORT}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Since #538 a console OPENS ON THE PATTERNS PAGE, not in the editor (that is
+// what the "default page" checks at the end of this file assert). Every flow
+// here that starts inside the editor therefore asks for it by route — which
+// is also the round-trip test that `lib/router.ts` honours a fragment on a
+// cold load.
+const EDIT = "#/editor";
+
+/**
+ * Reload INTO a screen. Two traps now that the route lives in the hash
+ * (#538): `goto` to the URL we are already on is a same-document fragment
+ * navigation (no boot at all), and a plain `reload` reopens whatever screen
+ * the URL last named — which is the point of the feature, but not what a
+ * test that wants the editor means. Set the fragment, then reload for real.
+ */
+/** Leave the editor IF it is open: a fresh console boot lands on the Patterns
+ *  page since #538, so a "back out first" setup step is now conditional. */
+async function leaveEditor(pg) {
+  if (await pg.$('[data-role="editor-view"]:not([hidden])')) {
+    await pg.click('[data-role="editor-back"]');
+  }
+}
+
+async function reloadInto(pg, route = EDIT) {
+  await pg.evaluate((r) => {
+    location.hash = r;
+  }, route);
+  await pg.reload({ waitUntil: "networkidle0" });
+}
+
 // The Patterns page (#467) replaced the Device Patterns tab: one page, one
 // grid per SOURCE, all mounted with the inactive ones hidden — so a tile
 // selector always names its source's grid.
@@ -208,12 +237,201 @@ try {
     await boot.close();
   }
 
+  // ---- the shell: default page, header, routes (#538) ----
+  // Its own browser context (so the working copy is this page's alone) and
+  // its own stored pattern, removed again at the end: everything after this
+  // block expects DEV's library empty.
+  {
+    const shellCtx = await browser.createBrowserContext();
+    const pg = await shellCtx.newPage();
+    const shellId = (
+      await (
+        await fetch(`${DEV}/api/patterns`, {
+          method: "POST",
+          body: await lxpBody("Shell Check", "export function render(index) { hsv(0.3, 1, 1) }"),
+        })
+      ).json()
+    ).id;
+    const ranBefore = await (await fetch(`${DEV}/api/pattern`)).text();
+    await fetch(`${DEV}/api/patterns/${shellId}/activate`, { method: "POST" });
+    const brightBefore = (await (await fetch(`${DEV}/api/brightness`)).json()).brightness;
+    try {
+      await pg.setViewport({ width: 1200, height: 800 });
+      await pg.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(DEV)}`, {
+        waitUntil: "networkidle0",
+      });
+      await pg.waitForSelector('[data-role="patterns-panel"]:not([hidden])', { timeout: 8000 });
+
+      // Jeremy, 2026-09-19: a console opens on Patterns → On device with the
+      // running pattern lit, NOT in the editor.
+      check(
+        "shell: a console opens on the Patterns page, not in the editor",
+        (await pg.$('[data-role="editor-view"]:not([hidden])')) === null,
+      );
+      check(
+        "shell: …on the On device source",
+        await pg.$eval(
+          '[data-role="patterns-grid"][data-source="device"]',
+          (el) => !el.hasAttribute("hidden"),
+        ),
+      );
+      await pg
+        .waitForFunction(() => document.querySelector('[data-role="tile-playing"]') !== null, {
+          timeout: 8000,
+        })
+        .catch(() => null);
+      check(
+        "shell: …with the running pattern's tile lit",
+        (await pg.$('[data-role="tile-playing"]')) !== null,
+      );
+
+      // header geometry + colours (mockup S1)
+      const hdr = await pg.$eval("header", (el) => {
+        const cs = getComputedStyle(el);
+        return { h: el.getBoundingClientRect().height, pad: cs.paddingLeft };
+      });
+      check("shell: the header is the mock's 44px bar", hdr.h === 44 && hdr.pad === "16px", JSON.stringify(hdr));
+      const tabs = await pg.$$eval('[data-role="tabs"] button', (els) =>
+        els.map((e) => {
+          const cs = getComputedStyle(e);
+          return { on: e.classList.contains("active"), color: cs.color, rule: cs.borderBottomColor };
+        }),
+      );
+      const on = tabs.find((t) => t.on);
+      const off = tabs.find((t) => !t.on);
+      check(
+        "shell: the active tab is bright text with an amber underline, not amber text",
+        on?.color === "rgb(215, 218, 224)" &&
+          on?.rule === "rgb(232, 163, 61)" &&
+          off?.color === "rgb(138, 144, 160)",
+        JSON.stringify(tabs),
+      );
+
+      // the device chip names the DEVICE — never the literal word "device"
+      const st = await (await fetch(`${DEV}/api/status`)).json();
+      const wantName = st.name ?? `127.0.0.1:${DEV_PORT}`;
+      const chipName = await pg.$eval('[data-role="device-chip-name"]', (e) =>
+        (e.textContent ?? "").trim(),
+      );
+      check("shell: the header chip names the device", chipName === wantName, chipName);
+      check(
+        "shell: …followed by its layout",
+        (await pg.$eval('[data-role="layout-label"]', (e) => (e.textContent ?? "").trim())) ===
+          "120 px strip",
+      );
+
+      // brightness in the header (Jeremy): one write per drag, not per step
+      let brightPosts = 0;
+      pg.on(
+        "request",
+        (r) => r.method() === "POST" && r.url().includes("/api/brightness") && brightPosts++,
+      );
+      await pg.$eval('[data-role="hdr-brightness"]', (el) => {
+        for (const v of [1, 2, 3, 4, 5]) {
+          el.value = String(v);
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      await sleep(700);
+      check("shell: the header brightness writes once per drag", brightPosts === 1, String(brightPosts));
+      check(
+        "shell: …and the device took the value",
+        (await (await fetch(`${DEV}/api/brightness`)).json()).brightness === 5,
+      );
+      check(
+        "shell: …and the readout tracks it",
+        (await pg.$eval('[data-role="hdr-brightness-val"]', (e) => e.textContent.trim())) === "5",
+      );
+
+      // a route per page; a refresh reopens it (Jeremy asked for Settings)
+      await pg.click('[data-role="tab-settings"]');
+      await pg.waitForSelector('[data-role="settings-panel"]:not([hidden])', { timeout: 8000 });
+      check(
+        "route: opening a tab names it in the URL",
+        (await pg.evaluate(() => location.hash)) === "#/settings",
+        await pg.evaluate(() => location.hash),
+      );
+      await pg.reload({ waitUntil: "networkidle0" });
+      await pg.waitForSelector('[data-role="settings-panel"]:not([hidden])', { timeout: 8000 });
+      check(
+        "route: a refresh reopens Settings",
+        (await pg.$('[data-role="settings-panel"]:not([hidden])')) !== null &&
+          (await pg.evaluate(() => location.hash)) === "#/settings",
+      );
+      await pg.goBack({ waitUntil: "domcontentloaded" });
+      await sleep(600);
+      check(
+        "route: back returns to the Patterns page",
+        (await pg.$('[data-role="patterns-panel"]:not([hidden])')) !== null,
+      );
+
+      // the editor is a screen of its own — the shell header goes away
+      await pg.$$eval('[data-role="patterns-grid"]:not([hidden]) [data-role="tile-edit"]', (els) =>
+        els[0].click(),
+      );
+      await pg.waitForSelector('[data-role="editor-view"]:not([hidden])', { timeout: 8000 });
+      check(
+        "shell: the shell header is gone while editing",
+        (await pg.$('[data-role="tabs"]')) === null && (await pg.$('[data-role="fps"]')) === null,
+      );
+      check(
+        "shell: …and the editor carries the device chip instead",
+        (await pg.$('[data-role="editor-view"] [data-role="layout-chip"]')) !== null,
+      );
+      check("route: the editor has its own path", (await pg.evaluate(() => location.hash)) === "#/editor");
+
+      // Popovers dodge the viewport instead of hanging off it (Jeremy). The
+      // editor's ⋯ is the worst case: hard against the right edge, and on a
+      // short viewport there is no room BELOW it either.
+      await pg.setViewport({ width: 420, height: 380 });
+      await sleep(400);
+      await pg.click('[data-role="overflow"]');
+      await pg.waitForSelector('[data-role="editor-menu"]', { timeout: 4000 });
+      const box = await pg.$eval('[data-role="editor-menu"]', (e) => {
+        const r = e.getBoundingClientRect();
+        const a = document.querySelector('[data-role="overflow"]').getBoundingClientRect();
+        return { l: r.left, r: r.right, t: r.top, b: r.bottom, w: innerWidth, h: innerHeight, ar: a.right };
+      });
+      check(
+        "popover: it dodges every viewport edge",
+        box.l >= 0 && box.r <= box.w && box.t >= 0 && box.b <= box.h,
+        JSON.stringify(box),
+      );
+      check(
+        "popover: it is the mock's 214px menu, hung off its anchor",
+        Math.round(box.r - box.l) === 214 && Math.abs(box.r - Math.min(box.ar, box.w - 8)) < 2,
+        JSON.stringify(box),
+      );
+      await pg.screenshot({ path: `${shotDir}/device-e2e-shell-menu-420.png` });
+      await pg.keyboard.press("Escape");
+      await sleep(200);
+      check("popover: Escape closes it", (await pg.$('[data-role="editor-menu"]')) === null);
+      await pg.setViewport({ width: 1200, height: 800 });
+      await sleep(300);
+      await pg.click('[data-role="editor-back"]');
+      await sleep(300);
+    } finally {
+      // put DEV back exactly as it was found: same brightness, same running
+      // pattern, empty library
+      await fetch(`${DEV}/api/brightness`, { method: "POST", body: String(brightBefore) }).catch(
+        () => {},
+      );
+      await fetch(`${DEV}/api/patterns/${shellId}`, { method: "DELETE" }).catch(() => {});
+      await fetch(`${DEV}/api/code`, { method: "POST", body: await lxpBody("", ranBefore) }).catch(
+        () => {},
+      );
+      await pg.close();
+      await shellCtx.close();
+    }
+  }
+
   const page = await browser.newPage();
   await page.setViewport({ width: 1400, height: 900 });
   // No device-URL field any more: a real device serves the UI from its own
   // flash (auto-connect to same origin); here we use the `?device=` dev
   // override to point the built playground at the mirror, and it auto-connects.
-  await page.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(DEV)}`, {
+  await page.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(DEV)}${EDIT}`, {
     waitUntil: "networkidle0",
   });
   await page.waitForSelector(".cm-content");
@@ -278,7 +496,7 @@ try {
         body: await lxpBody("", "export function render2D(index, x, y) { hsv(x, 1, y) }"),
       });
       await mappedPage.setViewport({ width: 1400, height: 900 });
-      await mappedPage.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(MAPPED)}`, {
+      await mappedPage.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(MAPPED)}${EDIT}`, {
         waitUntil: "networkidle0",
       });
       // two stored patterns — one 2D, one 1D — so the Patterns list and the
@@ -317,9 +535,7 @@ try {
         localStorage.setItem("luxel.previewAs", JSON.stringify({ mode: "map", pixels: 4096 })),
       );
       await mappedPage.setViewport({ width: 1400, height: 900 });
-      await mappedPage.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(MAPPED)}`, {
-        waitUntil: "networkidle0",
-      });
+      await reloadInto(mappedPage);
       check(
         "layout: the stale Preview-as choice is in place for the checks below",
         (await mappedPage.evaluate(() => localStorage.getItem("luxel.previewAs")))?.includes("map"),
@@ -360,7 +576,7 @@ try {
         method: "POST",
         body: await lxpBody("", "export function render(index) { hsv(index / pixelCount, 1, 1) }"),
       });
-      await mappedPage.reload({ waitUntil: "networkidle0" });
+      await reloadInto(mappedPage);
       await sleep(1500);
       const shape1d = await mappedPage.$eval('[data-role="editor-view"] [data-role="preview"]', (el) => el.dataset.shape);
       check("layout: a 1D pattern on a panel previews as the panel, not a bar", shape1d === "grid");
@@ -415,7 +631,7 @@ try {
         method: "POST",
         body: await lxpBody("", "export function render2D(index, x, y) { hsv(x, 1, y) }"),
       });
-      await mappedPage.reload({ waitUntil: "networkidle0" });
+      await reloadInto(mappedPage);
       await sleep(1500);
       check(
         "projection: no row for a 2D pattern on a matrix",
@@ -1770,9 +1986,7 @@ try {
     (await (await fetch(`${DEV}/api/pattern`)).text()).includes("0.9"),
   );
   // reload — the dirty edit must win over the out-of-band device pattern
-  await page.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(DEV)}`, {
-    waitUntil: "networkidle0",
-  });
+  await reloadInto(page);
   await page.waitForSelector(".cm-content");
   await sleep(500); // let the device handshake settle after reload
   await sleep(1800); // let the resume push land on the device
@@ -1795,9 +2009,7 @@ try {
     body: await lxpBody("", "export function render(index) { rgb(0.44, 0.55, 0.66) }"),
   });
   await sleep(300);
-  await page.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(DEV)}`, {
-    waitUntil: "networkidle0",
-  });
+  await reloadInto(page);
   await page.waitForSelector(".cm-content");
   await sleep(500); // let the device handshake settle after reload
   await sleep(1200);
@@ -2091,9 +2303,7 @@ try {
     body: await lxpBody("Named Thing", uniq),
   }); // save same source
   await sleep(400);
-  await page.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(DEV)}`, {
-    waitUntil: "networkidle0",
-  });
+  await reloadInto(page);
   await page.waitForSelector(".cm-content");
   await sleep(1800); // connect + device pattern sources stream in, then match
   // the device streams each stored pattern's source in the background, so the
@@ -2249,7 +2459,7 @@ try {
       await outPage.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(OUT)}`, {
         waitUntil: "networkidle0",
       });
-      await outPage.click('[data-role="editor-back"]');
+      await leaveEditor(outPage);
       await outPage.click('[data-role="tab-settings"]');
       await outPage.waitForSelector('[data-role="outputs"]', { timeout: 8000 });
       check("outputs: the table appears when caps.outputs > 1", true);
@@ -2320,7 +2530,7 @@ try {
       await hubPage.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(HUB)}`, {
         waitUntil: "networkidle0",
       });
-      await hubPage.click('[data-role="editor-back"]');
+      await leaveEditor(hubPage);
       await hubPage.click('[data-role="tab-settings"]');
       await hubPage.waitForSelector('[data-role="layout-pw"]', { timeout: 8000 });
       check(
@@ -2586,7 +2796,7 @@ try {
       (await fetch(`${TIGHT}/api/status`).then((r) => r.json())).heap_free === 30720,
     );
 
-    await page.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(TIGHT)}`, {
+    await page.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(TIGHT)}${EDIT}`, {
       waitUntil: "networkidle0",
     });
     await page.waitForSelector(".cm-content");
@@ -2682,7 +2892,7 @@ try {
         "capacity: mirror reports engine_heap",
         (await fetch(`${LOADED}/api/status`).then((r) => r.json())).engine_heap === 30720,
       );
-      await page.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(LOADED)}`, {
+      await page.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(LOADED)}${EDIT}`, {
         waitUntil: "networkidle0",
       });
       await page.waitForSelector(".cm-content");
@@ -2740,7 +2950,7 @@ try {
     });
     process.on("exit", () => panelDev.kill());
     try {
-      await page.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(PANEL)}`, {
+      await page.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(PANEL)}${EDIT}`, {
         waitUntil: "networkidle0",
       });
       await page.waitForSelector(".cm-content");
