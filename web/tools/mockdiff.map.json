@@ -2212,7 +2212,8 @@
             "required": false
           },
           {
-            "waitFor": "[data-role=\"projection-block\"]"
+            "comment": "NOT the projection block: a 1D fixture has no Projection section at all (this frame's whole allow list), so waiting for it could only time out. Wait for the LED layout card instead — the section above it — which is what says Settings has finished rendering on a strip console.",
+            "waitFor": "[data-role=\"sect-layout\"]"
           },
           {
             "sleep": 1800
