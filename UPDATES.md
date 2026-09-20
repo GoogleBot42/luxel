@@ -1,5 +1,50 @@
 # Update log
 
+## 2026-09-20 — a projection now applies live on all three paths (#538/#598)
+
+Jeremy, review round 2: *"Setting the projection type seems to have no effect. It
+definitely isn't applied live. In device settings or per pattern override."* Measured
+on the Seengreat 64x64 panel with a static 1D ramp and `/api/pixels` readback, two of
+the three paths were already live and one had no wire at all.
+
+- **Device default** (Settings → Projection → a card → `POST /api/layout proj1d …`)
+  **already applied live**, on the firmware and the mirror alike. On the panel:
+  `proj1d x` → every row identical, `proj1d y` → every column identical, `index` →
+  neither, no reboot. It *looked* dead because projection keys off the PATTERN's
+  dimensionality and the panel was running `DNA Helix 2D`, which is native to a 2D
+  layout — so the "1D patterns" default correctly changes nothing on screen.
+- **Editor per-pattern override** (the quiet Projection row) **never reached the
+  device**: `onProjectionSet` reconfigured the local wasm preview and nothing else, so
+  the row read `along y · override` while the LEDs stayed on the device default. That
+  is the real bug.
+- **Playlist item `P`** was already applied on activation; now verified with a frame,
+  not an echo.
+
+The fix gives the override a wire: a **`proj <mode|default>` line on `POST
+/api/layout`**. Unlike every other line on that endpoint it configures the RUNNING
+PATTERN, not the rig — it installs the mode in the slot for the running pattern's own
+dimensionality, is never persisted, and is never `reboot_required`, so the next
+activation, playlist item or `/api/code` push starts from the `proj1d/2d/3d` defaults
+again. That is exactly what the override is on the console side (a property of the
+editor's working copy), which is why `Editor.devicePush` re-posts it after every live
+code push.
+
+It rides on an existing endpoint rather than a `POST /api/projection` of its own for a
+measured reason: a new awaiting route arm costs the c6 hosted image ~1.4 KB and that
+image has 206 B of OTA slot to spare. The shipped shape costs **192 B** — see
+docs/boards.md for the four shapes and their numbers. `Msg::Projection` is gone
+entirely: the playlist's `P` and the new line both write the `AtomicU8` the render task
+already consulted every frame, so there is now exactly ONE place on the device that
+installs a projection, and it runs after the message drain and after the map — which
+is also what stopped a map install from dropping an override on the mirror.
+
+Verified: `crates/luxel-core` unit tests (a projection change takes effect on the very
+next frame; the `proj` line parses, overrides and stores nothing), `tools/serve-e2e.mjs`
+(all three paths asserted as FRAMES on a 64x64 panel mirror), `web/tools/device-e2e.mjs`
+(a Settings card and an editor override each checked against the mirror's `/api/pixels`
+AND the console's own preview canvas), image-check on the three CI variants, and
+`tools/stack-check.sh` unchanged.
+
 ## 2026-09-20 — the RTC watchdog now watches the render core too (#603)
 
 On the dual-core boards `render_task` runs on the AppCpu, while both RWDT feeders —

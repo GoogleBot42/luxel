@@ -525,6 +525,10 @@
       deviceError.set(`push failed: ${String(e)}`);
       return;
     }
+    // A push rebuilds the device's engine from its Layout defaults, so the
+    // working copy's projection override has to be re-stated (Gitea #598) —
+    // and before the read-back, so `/api/status` describes what is running.
+    await devicePushProjection();
     // Read the device back: a capacity rejection happens on the render task
     // AFTER /api/code has already answered 200, so the vmerr is the only place
     // it surfaces. This also refreshes the headroom the next prediction uses.
@@ -570,12 +574,35 @@
     engine.setProjection({ ...$layout.projection, [key]: mode });
   }
 
+  /**
+   * Send the working copy's projection override to the device (Gitea #598).
+   * The device's engine is built from its Layout DEFAULTS, so the override
+   * has to be stated — on a pick, and again after every code push, because a
+   * push rebuilds that engine. `null` posts "no override", which puts the
+   * device back on its own defaults.
+   *
+   * Silent on failure: firmware older than #598 rejects the `proj` line as
+   * an unknown one, and an unreachable device is already reported by
+   * `devicePush`.
+   */
+  async function devicePushProjection(): Promise<void> {
+    const d = $device;
+    if (!d || !$livePush) return;
+    try {
+      await d.setProjection($projectionOverride);
+    } catch {
+      /* the device-error banner already covers an unreachable device */
+    }
+  }
+
   /** A pick from the quiet Projection row. The engine reads `pixelCount` at
    *  init time under an along-axis projection, so this rebuilds rather than
-   *  patching a running VM. */
+   *  patching a running VM — locally, and on the device (#598), which is not
+   *  a rebuild there: its `pixelCount` follows `set_projection`. */
   function onProjectionSet(e: CustomEvent<ProjectionMode | null>): void {
     projectionOverride.set(e.detail);
     recompile();
+    void devicePushProjection();
   }
 
   // ---- the device output chain (Gitea #466) ----

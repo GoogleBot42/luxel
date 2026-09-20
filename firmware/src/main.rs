@@ -1322,21 +1322,6 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                         eng.set_var(&name, value);
                     }
                 }
-                // A playlist item's projection override (Gitea #470): the
-                // stored mode goes into the slot for the pattern's OWN
-                // dimensionality, so one token survives whatever the running
-                // pattern turns out to be. The engine re-derives its plan
-                // from the triple on every map install, so this survives the
-                // `devicemap::apply` that follows a swap.
-                Msg::Projection(code) => {
-                    if let (Some(eng), Some(mode)) =
-                        (engine.as_mut(), ProjectionMode::from_u8(code))
-                    {
-                        let mut p = eng.projection();
-                        p.set(eng.preferred_dims(), mode);
-                        eng.set_projection(p);
-                    }
-                }
                 // Live pixel-count change (no reboot): resize the output
                 // buffers and rebuild the engine at the new count from the
                 // current source. This task is the sole writer of PIXEL_COUNT.
@@ -1572,12 +1557,27 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
             }
         }
 
-        // projection defaults changed (POST /api/layout) — they apply live,
-        // and they change the effective geometry (Gitea #465)
-        if layout::take_proj_dirty() {
+        // The ONE live-projection path (Gitea #465/#470/#598): the Layout's
+        // defaults changed (`POST /api/layout proj1d …`), or something asked
+        // for an override on the RUNNING pattern — a playlist item's `P`, or
+        // a `proj` line on the same endpoint. An override goes into the slot
+        // for the pattern's OWN dimensionality, so one token survives
+        // whatever is running; the engine re-derives its plan from the triple
+        // on every map install, so it also survives the `devicemap::apply`
+        // that follows a swap. It runs AFTER the message drain, so a playlist
+        // item's override lands on the engine that item just built. Either
+        // way the effective geometry moves.
+        if let Some(code) = layout::take_projection() {
             geom_dirty = true;
             if let Some(eng) = engine.as_mut() {
-                eng.set_projection(layout::projection());
+                match ProjectionMode::from_u8(code) {
+                    Some(mode) => {
+                        let mut p = eng.projection();
+                        p.set(eng.preferred_dims(), mode);
+                        eng.set_projection(p);
+                    }
+                    None => eng.set_projection(layout::projection()),
+                }
             }
         }
 
