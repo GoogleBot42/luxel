@@ -208,6 +208,8 @@ input[type="checkbox"]:indeterminate::before {
   filter: brightness(1.08);
 }
 
+/* the mock's quiet button drops the FILL, not the outline (S2 `← Patterns`,
+   S4's ✕ and `+ Add`) — it is the same 1px `--border` edge as every other */
 .btn.quiet {
   background: transparent;
   color: var(--text-dim);
@@ -334,6 +336,8 @@ input[type="checkbox"]:indeterminate::before {
   border-radius: 5px;
   background: transparent;
   color: var(--text);
+  /* the mock sets only the size: a menu item is one line of the inherited
+     1.45, and it WRAPS rather than running off a 214px menu */
   font: 13px/1.45 var(--sans);
   text-align: left;
   cursor: pointer;
