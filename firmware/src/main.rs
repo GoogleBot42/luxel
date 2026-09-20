@@ -66,6 +66,8 @@ mod flashmap;
 mod gpio;
 #[cfg(feature = "hub75")]
 mod hub75;
+#[cfg(all(feature = "hub75-spare-plane", not(feature = "hub75")))]
+compile_error!("`hub75-spare-plane` is a HUB75 driver mode and needs the `hub75` feature");
 mod layout;
 mod leds;
 mod mqtt;

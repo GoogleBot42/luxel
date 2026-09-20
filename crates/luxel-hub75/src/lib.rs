@@ -257,6 +257,45 @@ fn pack_inner<const NROWS: usize, const COLS: usize, const PLANES: usize>(
     }
 }
 
+/// Spare-plane swap window check (Gitea #610), pure so the firmware's
+/// `hub75.rs` can delegate and this crate can test it on the host.
+///
+/// The DMA ring is plane-major with plane 0 the MSB repeated `2^(planes-1)`
+/// times, so descriptor indices `0..msb_descs` of a pass read only plane 0.
+/// `idx` is the engine's descriptor index from the ring head, `eof_pending`
+/// whether an unserviced `out_eof` says the reading is from the instant of a
+/// wrap, `nominal_us` the ISR's pass length (0 = not yet known), `plane_us`
+/// the slowest single-plane copy seen, `descs` the ring length, `slack_ns`
+/// the margin kept beyond the copy cost.
+///
+/// Room means: plane 1 (the first thing read after the MSB run, and the
+/// first plane copied once the flip is armed) can land before the DMA leaves
+/// the run — two copies' worth, the second being margin — and all `planes`
+/// copies can land before the wrap.
+#[must_use]
+pub fn spare_window_fits(
+    idx: usize,
+    eof_pending: bool,
+    nominal_us: u32,
+    plane_us: u32,
+    descs: usize,
+    msb_descs: usize,
+    planes: usize,
+    slack_ns: u64,
+) -> bool {
+    if eof_pending || idx >= msb_descs || descs == 0 {
+        return false;
+    }
+    if nominal_us == 0 {
+        return idx <= msb_descs / 2;
+    }
+    let desc_ns = u64::from(nominal_us) * 1000 / descs as u64;
+    let plane_ns = u64::from(plane_us) * 1000;
+    let left_msb = (msb_descs - idx) as u64 * desc_ns;
+    let left_wrap = (descs - idx) as u64 * desc_ns;
+    left_msb >= 2 * plane_ns + slack_ns && left_wrap >= planes as u64 * plane_ns + slack_ns
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -639,5 +678,50 @@ mod tests {
         pack::<NROWS, COLS, PLANES>(as_words_mut(&mut a), &half, &t);
         pack_remap::<NROWS, COLS, PLANES>(as_words_mut(&mut b), &frame, &lut, &t);
         assert_eq!(as_words(&a), as_words(&b));
+    }
+
+    /// The 64x64 / 7-plane bench ring: 254 descriptors, MSB run = 128 of
+    /// them, 8,700 us per pass (~34 us per descriptor).
+    #[test]
+    fn spare_window_bench_geometry() {
+        let (descs, msb, planes, slack) = (254usize, 128usize, 7usize, 300_000u64);
+        let fits = |idx, eof, nominal, plane_us| spare_window_fits(idx, eof, nominal, plane_us, descs, msb, planes, slack);
+        // Head of the pass, 200 us per plane: 4.4 ms of MSB run left. Fits.
+        assert!(fits(0, false, 8_700, 200));
+        // A pending EOF is a reading from the wrap: never trust it.
+        assert!(!fits(0, true, 8_700, 200));
+        // Past the MSB run the low planes are being read: never.
+        assert!(!fits(128, false, 8_700, 200));
+        assert!(!fits(253, false, 8_700, 200));
+        // 20 descriptors before the run ends = ~685 us left: two 200 us
+        // copies plus 300 us slack is 700 us — just too tight.
+        assert!(!fits(108, false, 8_700, 200));
+        // 25 descriptors = ~856 us: fits.
+        assert!(fits(103, false, 8_700, 200));
+        // Wrap constraint: 7 planes x 1,000 us + slack = 7.3 ms, but from
+        // idx 100 only ~5.3 ms of the pass remain.
+        assert!(!fits(100, false, 8_700, 1_000));
+        // From the head 8.7 ms remain: fits (MSB run 4.4 ms vs 2.3 ms needed).
+        assert!(fits(0, false, 8_700, 1_000));
+        // No pass length known yet: first half of the run only.
+        assert!(fits(64, false, 0, 200));
+        assert!(!fits(65, false, 0, 200));
+    }
+
+    /// The 256-column chain at 7 planes plain BCM: 635 descriptors, MSB run
+    /// 320, 34.7 ms per pass. Plane copies of ~450 us fit from anywhere in
+    /// the first ~90 % of the run.
+    #[test]
+    fn spare_window_wide_chain() {
+        let fits = |idx| spare_window_fits(idx, false, 34_700, 450, 635, 320, 7, 300_000);
+        assert!(fits(0));
+        assert!(fits(290));
+        assert!(!fits(319));
+        assert!(!fits(320));
+    }
+
+    #[test]
+    fn spare_window_empty_ring() {
+        assert!(!spare_window_fits(0, false, 8_700, 200, 0, 0, 7, 0));
     }
 }

@@ -105,6 +105,15 @@ wled-takeover = []
 # heap (and everything measured against it) is unchanged. Never a default —
 # a board turns it on for itself, like `hub75`.
 psram-arena = []
+# HUB75 spare-plane swap (Gitea #610, src/hub75.rs): ONE internal DMA
+# framebuffer plus one spare MSB plane instead of two full framebuffers, with
+# the frame composed into a staging buffer (PSRAM arena where there is one)
+# and copied into the live buffer inside the MSB run of a pass — the half of
+# every pass in which the DMA reads nothing but the MSB plane. Same
+# frame-atomic guarantee as the two-ring swap (nothing is written where the
+# DMA can read it), at ~1/PLANES of the second buffer's RAM. Off by default
+# until verified on metal; needs `hub75`.
+hub75-spare-plane = []
 # RAM-constrained profile (S2/C2 tier, see docs/boards.md): web pool 3→2
 # (+8 KB heap on esp32) at the cost of an occasionally-refused FIRST
 # browser navigation — Chromium preconnect wants 3 sockets at cold nav.

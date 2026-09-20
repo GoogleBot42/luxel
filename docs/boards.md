@@ -2272,6 +2272,52 @@ still *dropped* (`write_frame` returned early while a swap was pending), and
 which is why the table above reads `out_fps` 113–120 against a 115 Hz
 rescan. See "Vsync: the panel is the clock" below (Gitea #387, #378).
 
+## Spare-plane swap: the second framebuffer becomes one plane (2026-09-20, Gitea #610)
+
+Jeremy's target is a 128x128 wall (four chained 64x64, electrically one 256
+x 64 chain). The two-framebuffer atomic swap above needs 229 KB of internal
+SRAM for that — the whole reason #521/#599 called 128x128 unreachable. The
+DMA ring cannot move to PSRAM (an octal-PSRAM-resident HUB75 ring caps at ~13
+MHz in prior art, and the cache is off during every flash write — the option
+E record on #611), but the second buffer does not have to be a whole buffer.
+
+**Mechanism.** The ring is plane-major, plane 0 = MSB repeated 64 times at 7
+planes, so the first half of every pass reads only plane 0 and planes 1..6
+are idle. The driver is built against two *views* over ONE internal
+framebuffer that differ only in which block is plane 0: the buffer's own, or
+a spare plane. The #376 two-ring flip works unchanged on views. Per frame
+(`hub75.rs`, feature `hub75-spare-plane`): compose into a staging framebuffer
+in the PSRAM arena; when the output task's poll finds the DMA inside the MSB
+run with room (measured per-plane copy cost against the ISR's nominal pass
+length, via the new `Hub75::dma_position()` from
+`firmware/patches/esp-hub75-0.14.0-dma-position.patch`), arm the flip FIRST,
+copy planes 1..6 into the live buffer, then the MSB into the idle spare. The
+next pass reads the new frame in full. Deadlines: plane 1 before the DMA
+leaves the MSB run (~4.4 ms after the EOF), plane k before it reaches plane k
+(exponentially later), the spare before the wrap. Copies go in that order,
+so only plane 1's deadline is tight, and a poll that arrives late simply
+defers the frame to the next pass rather than starting a copy that cannot
+finish. `/api/status` `pass.spare` carries `deferred`, `torn_p1`,
+`torn_wrap` (the last two must stay 0), `copy_us` and `plane_us`.
+
+**Cost on this board (64x64, 7 planes), from the build — NOT yet measured on
+metal:**
+
+| | two framebuffers (default) | spare-plane |
+|---|---:|---:|
+| internal DMA memory (heap-leaked) | 57,344 B | 32,768 B (28,672 + 4,096) |
+| staging (PSRAM arena) | — | 28,672 B |
+| descriptor rings (`.bss`) | 6,096 B | 6,096 B |
+| app image | 970,128 B | 973,744 B |
+| `.stack` | 27,188 B | 27,124 B |
+
+At the 256-column chain the same shape is 114,688 + 16,384 B internal against
+229,376 B — the #611 ledger. **Off by default** until Jeremy has looked at it
+on the bench (`nix build .#luxel-fw-seengreat-hub75-spare`, or
+`EXTRA_FEATURES=hub75-spare-plane` with `build-esp32.sh`): the verification is `pass.spare.torn_*` at 0 and no visible
+artifact through a Raindrops / Infinite Snake / comet run, pattern saves and
+an OTA (Gitea #620).
+
 ## Vsync: the panel is the clock (2026-09-07, Gitea #387, #378)
 
 With the swap made atomic (above), the panel still showed fewer frames than

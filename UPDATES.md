@@ -1,5 +1,39 @@
 # Update log
 
+## 2026-09-20 — HUB75 spare-plane swap: the second framebuffer becomes one plane (#610)
+
+Jeremy did not believe "128x128 is out of reach because of RAM" (#599), and he was right:
+the ledger on #599 and #611 shows a 256x64 electrical chain fits internal SRAM once the
+driver stops double-buffering whole framebuffers. This is the enabling driver change,
+**behind the `hub75-spare-plane` feature and OFF in the shipped image** until it has been
+seen on the bench (#620). No device was touched.
+
+**Mechanism.** The circular ring is plane-major with plane 0 the MSB, repeated
+`2^(PLANES-1)` times, so the first half of every pass reads only plane 0 and planes `1..`
+are idle. `Hub75` is now built against two *views* over one internal framebuffer that
+differ only in which block plane 0 names (the buffer's own or a spare plane); the #376
+two-ring flip works on views unchanged. `write_frame` composes into a staging framebuffer
+in the PSRAM arena and stages it; a new `OutputDriver::flush`, polled by the output task,
+waits until the DMA is inside the MSB run with room for the copy, arms the flip FIRST
+and then copies planes `1..` into the live buffer and the MSB into the idle spare. The
+next pass reads the new frame whole. The copies go in deadline order (plane 1 before the
+DMA leaves the MSB run, plane k before it reaches plane k, the spare before the wrap), so
+only plane 1's deadline is tight and a late poll defers the frame rather than tearing
+it. The window check sizes itself from the measured per-plane copy time and the ISR's
+nominal pass length, via `Hub75::dma_position()` — a two-accessor addition to the
+esp-hub75 patch set (`firmware/patches/esp-hub75-0.14.0-dma-position.patch`).
+
+**Cost on the 64x64 board.** Internal DMA memory 57,344 → 32,768 B (one framebuffer +
+one 4,096 B plane); 28,672 B of staging in the arena; descriptor rings unchanged;
+image +3,616 B over the default image (973,744 vs 970,128 B, 7.13 % of the OTA slot free); `.stack` 27,124 B vs
+27,188 B. At the 256-column chain the same shape is 131,072 B internal
+against 229,376 B for two framebuffers.
+
+**Forensics.** `/api/status` `pass.spare`: `flushes`, `deferred` (a rate, not a
+fault), `abandoned` (50 ms liveness floor), `torn_p1`/`torn_wrap` (**must be 0** — the
+one way this mode can tear), `copy_us`, `copy_us_max`, `plane_us`. docs/api.md,
+docs/firmware.md and docs/boards.md ("Spare-plane swap") describe it; #611 records the
+options that lost (PSRAM-resident DMA rings, chased per-plane copies) and why.
 ## 2026-09-20 — On-device JIT: research, design, and the library kind census (#607)
 
 Jeremy reversed the 2026-09-05 "no JIT" decision: per-pixel compute is the bottleneck and

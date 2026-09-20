@@ -44,3 +44,15 @@ bench panel. The patch header has the full mechanism, including how the
 frame-count ISR observes the flip landing (GDMA `OUT_DSCR`) and the
 single-ring fallback that keeps upstream behaviour for callers who allocate
 their own descriptors. Offer it upstream.
+
+## esp-hub75-0.14.0-dma-position.patch
+
+Applies on top of the atomic-swap patch. Two read-only accessors on `Hub75`
+for the spare-plane swap (Gitea #610, `firmware/src/hub75.rs`
+`hub75-spare-plane`): `dma_position()` — which ring and which descriptor the
+engine is on right now, plus whether an `out_eof` is pending, from the same
+GDMA `OUT_DSCR` probe the atomic swap already registers — and
+`last_eof_us()`, the frame-count ISR's timestamp of the current pass's
+start. No behaviour change; nothing in the ISR moves. The firmware uses the
+position to decide whether the MSB run of the current pass still has room
+for the plane copy, and to count a copy that overran it.

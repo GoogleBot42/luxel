@@ -1,0 +1,53 @@
+diff -ruN hub75-a/src/isr.rs hub75-b/src/isr.rs
+--- a/src/isr.rs	2026-09-20 17:06:01.731742253 -0600
++++ b/src/isr.rs	2026-09-20 17:06:06.757606740 -0600
+@@ -1099,6 +1099,49 @@
+             (0, 0)
+         }
+     }
++
++    /// Luxel local patch (Gitea #610): where the DMA engine is right now.
++    ///
++    /// `(ring, descriptor index within that ring, out_eof pending)` from the
++    /// platform probe (GDMA `OUT_DSCR` + `OUT_INT_RAW.out_eof` on the S3), or
++    /// `None` when there is no probe, no running transfer, or the address is
++    /// outside the caller's descriptor rings. The index counts from the ring
++    /// head, so with the plain BCM chain (plane 0 = the most-repeated MSB
++    /// plane first) `idx < descs_per_plane << (planes - 1)` means the engine
++    /// is still inside the MSB run of this pass. A pending, unserviced EOF
++    /// means the reading is from the instant of a wrap and should not be
++    /// trusted for windowing; callers re-poll.
++    ///
++    /// Task-context only (reads two peripheral registers under
++    /// `critical_section`); never blocks.
++    #[cfg(feature = "circular-dma")]
++    pub fn dma_position(&self) -> Option<(usize, usize, bool)> {
++        critical_section::with(|cs| {
++            let probe = *DMA_PROBE.borrow_ref(cs).as_ref()?;
++            let (cur, eof_pending) = (probe)();
++            let borrow = CIRCULAR_STATE.borrow_ref(cs);
++            let st = borrow.as_ref()?;
++            let per = core::mem::size_of::<esp_hal::dma::DmaDescriptor>();
++            let base = st.descriptors as usize;
++            if st.desc_count == 0 || cur < base {
++                return None;
++            }
++            let off = (cur - base) / per;
++            let ring = off / st.desc_count;
++            if ring >= st.ring_count {
++                return None;
++            }
++            Some((ring, off % st.desc_count, eof_pending))
++        })
++    }
++
++    /// Luxel local patch (Gitea #610): microsecond timestamp of the last
++    /// `suc_eof` the frame-count ISR serviced (the start of the current pass),
++    /// 0 before the first. Same clock as `esp_hal::time::Instant`.
++    #[cfg(feature = "circular-dma")]
++    pub fn last_eof_us(&self) -> u32 {
++        PASS_LAST_US.load(Ordering::Relaxed)
++    }
+ }
+ 
+ #[cfg(not(feature = "circular-dma"))]

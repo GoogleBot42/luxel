@@ -96,6 +96,19 @@ pub trait OutputDriver {
     fn paces_frames(&self) -> bool {
         false
     }
+
+    /// Hand a staged frame to the fixture if this is the moment to do it.
+    ///
+    /// A driver whose `write_frame` only STAGES the frame — the spare-plane
+    /// panel (Gitea #610) composes into a staging buffer and may copy it into
+    /// the live DMA buffer only inside a window of each rescan — finishes the
+    /// hand-off here. The output task polls this until it returns `true`
+    /// before taking another frame. `true` = nothing is (or remains) staged;
+    /// `false` = staged and not yet through, poll again. Drivers whose
+    /// `write_frame` is the whole hand-off never have anything staged.
+    fn flush(&mut self) -> bool {
+        true
+    }
 }
 
 /// SPI config for a protocol (only the clock rate differs; mode 0 for both).
