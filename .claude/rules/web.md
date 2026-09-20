@@ -277,3 +277,16 @@ paths:
   `offsetParent !== null`, because a RELOAD restores the last-opened pattern
   into the editor and the Patterns panel is then present-but-boxless
   (2026-09-19, #538).
+- **A `<select>` cannot wear the mockups' `.sel` box without
+  `appearance:none`** — Chrome pins a native select's line-height to
+  `normal` and ignores the `font` shorthand's — and once it is bare, the
+  chevron has to come back as background art. It still sizes to its WIDEST
+  option, not to the current value, which is why the editor's fps chooser
+  carries an explicit `width` (`max fps` is 3px wider than the `60 fps` the
+  mock draws). `.settings select` and `.editor-frame .grp .sel` are the two
+  copies; keep the chevron identical (2026-09-20, #538).
+- **A flex GAP is not a word space.** Splitting a run of text into spans so
+  each can carry a `data-role` puts the container's `gap` between them where
+  the mock has a rendered space — 6px vs 3.66px per separator, which is how
+  the device chip measured 4.7px wide. Keep the text one inline run and scope
+  the roles inside it (2026-09-20, #538, `components/DeviceChip.svelte`).
