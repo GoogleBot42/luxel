@@ -145,6 +145,17 @@ nothing in this container is public.
 
 ## Failure modes
 
+- **A fresh-profile repro that looks perfect when Jeremy says it's broken.**
+  The app persists real state in `localStorage` (`luxel.previewAs`,
+  `luxel.current`, `luxel.patterns`, `luxel.mapSrc`) and those keys outlive
+  UI versions — a value written by an older build, or by the playground on
+  the same origin, is still there and still read. Every chromium harness here
+  launches with a throwaway `userDataDir`, so it reproduces an empty profile,
+  not his. When a bug won't reproduce, SEED the keys and reload before
+  concluding the device is at fault: navigate to a cheap same-origin URL
+  (`http://<ip>/api/status`), `page.evaluate` the key in, then `goto` the app.
+  That is what finally reproduced #539 — two clean fresh-profile loads of a
+  panel console had already said the reported bug wasn't there.
 - Reporting success off `npm run build` alone — it doesn't execute the app; a
   runtime-only regression (like the read-only editor) won't show up there.
 - `e2e.mjs` dying instantly on `net::ERR_CONNECTION_REFUSED at http://localhost:<port>/`
