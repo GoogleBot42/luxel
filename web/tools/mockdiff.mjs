@@ -1250,6 +1250,14 @@ for (const frameId of runIds) {
   // its own box. A crop is a nicety either way, so each one is raced against a
   // deadline and a slow element is named and skipped.
   if (CROPS) {
+    // The app never goes idle either: every tile thumbnail and the preview run
+    // their own `requestAnimationFrame` loop, and a screenshot of a page that
+    // is still painting can take tens of seconds. Measuring is finished by
+    // now, so freezing costs nothing — the canvases keep their last frame.
+    await page.evaluate(() => {
+      window.requestAnimationFrame = () => 0;
+    }).catch(() => {});
+    await sleep(200);
     const worst = [...new Set(deltas.slice(0, 12).map((d) => d.element))].slice(0, 6);
     for (const id of worst) {
       const e = entries.find((x) => x.id === id);
