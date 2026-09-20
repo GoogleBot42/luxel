@@ -43,7 +43,8 @@ web/src/
                     PreviewAsChip, Popover, DeviceChip, HeaderBrightness) plus
                     editor-frame.css, the chrome BOTH full-screen editors wear
   lib/              non-UI logic: device HTTP client, fetchgate, LNA classifier,
-                    wasm bindings, control hints, playlist transport, audio, builtins
+                    wasm bindings, control hints, playlist transport, audio,
+                    builtins, the boot resume rule (resume.ts)
   flash/            a SECOND rollup entry (flash.html) — the WLED takeover installer;
                     it shares only app.css and lib/lna.ts
 ```
@@ -671,11 +672,58 @@ push), `/api/control` (slider moves), `/api/events` (preview clicks) and
 
 | you did this | editor state |
 |---|---|
-| connect (the handshake pulls the running pattern, or re-pushes a dirty WIP) | **live push** |
+| connect with no unsaved work (the handshake pulls the running pattern) | **live push** |
+| connect holding an unsaved edit OF the running pattern | **live push** |
+| connect holding any other unsaved working copy | local preview |
 | `Play` on an On-device tile, `▶ Play on device` in the header | **live push** |
 | `Edit` on the On-device tile that IS running | **live push** |
 | `Edit` on an On-device tile that is not running | local preview |
 | a Library / Mine / PixelBlaze tile, `+ New pattern`, `Duplicate`, an `.epe` import | local preview |
+
+### Boot obeys it too (Gitea #585)
+
+The last path that still pushed unasked was the console's own boot. The browser
+autosaves the working copy (`luxel.current`, `lib/store.ts`), and a console used
+to *resume and push* it whenever it was dirty — so opening the app replaced the
+running program and, because `/api/code` is a takeover on the firmware
+(`playlist::stop()`), stopped a playing playlist, before anything had been
+clicked. It is also how a 300 px strip came to be running a `render2D` program
+in #573.
+
+The handshake now always pulls the running program, and what it is running is
+the INPUT to the decision rather than a thing to overwrite. The rule is one
+pure function, `bootResume` in **`lib/resume.ts`** (`tests/resume.test.mjs`),
+over two ids — the device pattern the copy is an edit of (persisted in the
+working copy since #585) and the one the device is running:
+
+| the browser was holding | boot does |
+|---|---|
+| a clean copy | opens the RUNNING pattern, live push (unchanged) |
+| a dirty edit of the pattern the device is running | keeps the copy, live push resumes, it is pushed |
+| a dirty edit of anything else | keeps the copy in **local preview**; the device is not touched |
+
+So a dirty copy is never thrown away — it is the editor's document either way,
+with `unsaved · preview only` in the header and `▶ Play on device` as the one
+click that changes that. Nothing about the fabricated-grid caption of #573/#586
+can trigger from a boot any more, because the boot no longer hands a fixture a
+program it cannot show.
+
+**Two empty ids are not a match.** When the working copy was the running
+*ad-hoc* program of an earlier session, both ids are `""` — and so are they when
+the device is on some unrelated ad-hoc program. There is no way to tell those
+apart by id, so the device's current program wins and the copy resumes in local
+preview: whatever is on the LEDs now was chosen after that copy was last
+touched. The one exception is not a special case in the rule but in how the
+running id is *found*: if the device is running exactly the source the working
+copy holds, the copy's own `devicePatternId` is still the honest name for what
+is playing (a live-push session that reloaded), so `Editor.svelte`'s
+`confirmRunning` names it and the normal id match then applies.
+
+`deviceRunningId` is also filled at boot by matching the pulled source against
+the stored patterns as their sources stream in (`nameRunningPattern`), so the
+Patterns page rings the right tile even when the editor is holding something
+else entirely. That is the RUNNING program's identity; `matchRunningToLibrary`
+below names the editor's DOCUMENT, and the two coincide only in live push.
 
 In **local preview** the rail preview runs the local engine exactly as always
 (through the device output chain, #466) — the difference is only that nothing
@@ -1198,10 +1246,12 @@ Rules the reconciler encodes:
     pattern's shape.
   - `geom.source:"default"` (#573) — the grid the ENGINE fabricated for the
     program it was handed (ceil(√n) × ceil(n/w) on a board with no map). The
-    boot resumes a DIRTY working copy and live-pushes it (`bootDevice`,
-    #563), so a browser holding a `render2D` edit from an earlier session made
+    boot used to resume a DIRTY working copy and live-push it (`bootDevice`),
+    so a browser holding a `render2D` edit from an earlier session made
     a 300 px strip report itself an `18×17 matrix` — chip, tile shapes,
-    Settings projections and the #538 filter all followed. A running program
+    Settings projections and the #538 filter all followed. The Layout fix is
+    here; the push that caused it is gone too (#585, the push rule above), so
+    a boot can no longer create the state at all. A running program
     never reshapes the fixture; it may only caption ITSELF (`captionFor`,
     `effectiveFor`), and on the Patterns page it may appear in the
     `Not for this layout` group in the playground's Auto style.

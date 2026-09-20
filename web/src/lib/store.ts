@@ -62,6 +62,11 @@ export interface WorkingCopy {
    *  (or saved as) — i.e. the reload has genuinely unsaved changes. Drives the
    *  device resume decision (resume a dirty edit vs. show what's running). */
   dirty: boolean;
+  /** The device pattern this copy is an edit OF, or "" (a library pick, a new
+   *  pattern, an ad-hoc program). With `dirty` it is the whole input to the
+   *  boot resume decision — only an edit of the pattern the device is RUNNING
+   *  may resume live push (`lib/resume.ts`, Gitea #585). */
+  devicePatternId: string;
 }
 
 export function saveWorkingCopy(wc: WorkingCopy): void {
@@ -74,7 +79,13 @@ export function saveWorkingCopy(wc: WorkingCopy): void {
 export function loadWorkingCopy(): WorkingCopy | null {
   const wc = read<WorkingCopy>(CUR_KEY);
   if (!wc || typeof wc.source !== "string") return null;
-  return { ...wc, dirty: wc.dirty === true }; // default legacy copies to clean
+  return {
+    ...wc,
+    dirty: wc.dirty === true, // default legacy copies to clean
+    // a copy written before #585 carries no id: treat it as an edit of nothing,
+    // which is the conservative answer (local preview, no boot push)
+    devicePatternId: typeof wc.devicePatternId === "string" ? wc.devicePatternId : "",
+  };
 }
 
 /** The playground's Layout choice (the "Preview as" chip). Falls back to the

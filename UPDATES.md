@@ -1,5 +1,56 @@
 # Update log
 
+## 2026-09-20 — a page load is not a device action: no boot push (#585)
+
+The last path that still wrote to the device unasked was the console's own boot. The
+browser autosaves the working copy (`luxel.current`), and `Editor.bootDevice` resumed it
+AND live-pushed it whenever it was dirty — `if (wipDirty && $device) await devicePush()`.
+So opening the app on a console replaced the running program, and because `/api/code` is
+a takeover on the firmware (`playlist::stop()`), **stopped a playing playlist**, before
+anything had been clicked. It is also how a 300 px strip came to be running a `render2D`
+program in #573.
+
+That contradicted the #563 rule the rest of the UI now spends its time obeying: the
+editor writes to the device only while its document IS the running program.
+
+**The rule at boot.** The handshake now ALWAYS pulls the running program, and what the
+device is running is the INPUT to the decision instead of something to overwrite. The
+decision is one pure function — `bootResume` in `web/src/lib/resume.ts`, over two ids:
+
+| the browser was holding | boot does |
+|---|---|
+| a clean copy | opens the RUNNING pattern, live push (unchanged) |
+| a dirty edit of the pattern the device is RUNNING | keeps the copy, live push resumes, it is pushed |
+| a dirty edit of anything else | keeps the copy in **local preview**; the device is untouched |
+
+A dirty copy is never thrown away — it is the editor's document either way, with
+`unsaved · preview only` in the header and `▶ Play on device` as the one click that
+changes that. **Two empty ids are not a match**: when the copy was the running *ad-hoc*
+program of an earlier session both ids are `""`, and so are they when the device is on an
+unrelated ad-hoc program, so the device's current program wins — whatever is on the LEDs
+now was chosen after that copy was last touched. The exception lives in how the running
+id is FOUND, not in the rule: if the device is running exactly the source the copy holds,
+`confirmRunning` names it by the copy's own id (a live-push session that reloaded) and
+the ordinary id match applies. The fabricated-grid caption of #573/#586 can no longer be
+triggered by a boot at all, because a boot no longer hands a fixture a program it cannot
+show.
+
+Supporting changes: the working copy persists `devicePatternId` (`lib/store.ts`,
+`startAutosave`); `connectDevice()` lost its now-dead `pullPattern` parameter; and
+`deviceRunningId` is filled at boot by matching the pulled source against the stored
+patterns as their sources stream in (`nameRunningPattern`), so the Patterns page rings
+the right tile even when the editor is holding something else.
+
+Verified: `web/tests/resume.test.mjs` (6 cases over the decision table) in `npm test`
+(113 pass); `device-e2e.mjs` gains a #585 section — a mirror with a playing playlist and
+a dirty 2D copy in localStorage boots with **no `/api/code`**, the playlist still
+playing, the chip still `300 px strip` and the editor showing the copy as
+`unsaved · preview only`; and the positive case (a dirty edit of the running pattern
+still pushes at boot). The old "resume: device re-runs the resumed edit" check asserted
+the behaviour this ticket removes and now asserts the opposite. All five browser
+harnesses green, `mockdiff --frames S2,S2b,S2c,S2d` at 0 deltas, `tools/ci.sh` green.
+Mirror only — no hardware was touched.
+
 ## 2026-09-20 — Playlist: fidelity closure (S4 / S4b / S4menu / S4picker at zero)
 
 `node tools/mockdiff.mjs --frames S4,S4b,S4menu,S4picker` went **156 deltas → 0** (Gitea

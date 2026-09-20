@@ -223,7 +223,9 @@
       patternName.set("shared pattern");
     }
     let hadWip = shared !== null;
-    let wipDirty = shared !== null; // a shared link is itself an unsaved edit to resume
+    // What a console has to decide about (#585): a shared link is itself an
+    // unsaved edit to resume, and it is an edit of no device pattern.
+    let wip = { dirty: shared !== null, devicePatternId: "" };
     if (!shared) {
       const wc = loadWorkingCopy();
       if (wc) {
@@ -232,7 +234,7 @@
         exampleName.set(wc.exampleName);
         dirty.set(wc.dirty);
         hadWip = true; // the playground always resumes the last working copy
-        wipDirty = wc.dirty; // the device only resumes it if it's genuinely dirty
+        wip = { dirty: wc.dirty, devicePatternId: wc.devicePatternId };
       }
     }
     startAutosave();
@@ -255,7 +257,7 @@
       // copy, so opening the editor afterwards is instant and already on it.
       tab = "patterns";
       editing = false;
-      await editor.bootDevice((pull) => connectDevice(base, pull), wipDirty);
+      await editor.bootDevice(() => connectDevice(base), wip);
     } else {
       if (sharedMap) runMapProgram(lx, get(mapSrc), get(pixelTotal));
       editor.bootPlayground();
