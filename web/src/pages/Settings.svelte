@@ -11,11 +11,13 @@
   // The page owns the order, the 0.5 Hz refresh while it is visible, and the
   // two navigations out; each section owns its form and its endpoint.
   import { createEventDispatcher, onDestroy } from "svelte";
-  import { settingsVisibility } from "../lib/settingsCaps";
+  import { offsetLabel, settingsVisibility, uiLayoutKind } from "../lib/settingsCaps";
   import {
+    applyLayout,
     clockStatus,
     device,
     deviceCaps,
+    deviceLabel,
     deviceLayoutWire,
     deviceRescanHz,
     deviceStore,
@@ -32,7 +34,8 @@
     refreshSync,
     syncStatus,
   } from "../stores/device";
-  import { layout as geomLayout } from "../stores/geometry";
+  import { layout as geomLayout, layoutLabel } from "../stores/geometry";
+  import { luxel } from "../stores/pattern";
   import ClockCard from "../settings/ClockCard.svelte";
   import DeviceCard from "../settings/DeviceCard.svelte";
   import Disclosure from "../settings/Disclosure.svelte";
@@ -42,6 +45,7 @@
   import NetworkInputCard from "../settings/NetworkInputCard.svelte";
   import OutputCard from "../settings/OutputCard.svelte";
   import PanelDriverCard from "../settings/PanelDriverCard.svelte";
+  import ProjectionBlock from "../settings/ProjectionBlock.svelte";
   import Section from "../settings/Section.svelte";
   import StorageCard from "../settings/StorageCard.svelte";
   import SyncCard from "../settings/SyncCard.svelte";
@@ -93,8 +97,16 @@
   }
   onDestroy(() => unsubscribe?.());
 
+  /** `luxel-f6b0a8 · v0.1.44` (mockup S3) — WHICH board, and what it runs.
+   *  Never the base URL, and never the words "served from this device": a
+   *  line that does not name the device tells nobody which one they are
+   *  looking at (Jeremy, 2026-09-19). */
+  $: subtitle = [$deviceLabel, $deviceVersion ? `v${$deviceVersion}` : ""]
+    .filter(Boolean)
+    .join(" · ");
+
   $: vis = settingsVisibility($deviceCaps, {
-    kind: $deviceLayoutWire?.kind ?? "strip",
+    kind: uiLayoutKind($deviceLayoutWire?.kind ?? "strip", $geomLayout.dims),
     dims: $geomLayout.dims,
     regular: $geomLayout.regular,
     panels: Math.max(
@@ -116,10 +128,9 @@
     return parts.join(" · ");
   })();
 
+  // mockup S3: `UTC-6 · synced` — the same words the open form states.
   $: clockLine = $clockStatus
-    ? `UTC${$clockStatus.tzMinutes >= 0 ? "+" : ""}${($clockStatus.tzMinutes / 60).toFixed(
-        Math.abs($clockStatus.tzMinutes % 60) > 0 ? 1 : 0,
-      )} · ${$clockStatus.synced ? "synced" : "not synced"}`
+    ? `${offsetLabel($clockStatus.tzMinutes)} · ${$clockStatus.synced ? "synced" : "not synced"}`
     : "not reported";
 
   $: syncLine =
@@ -159,7 +170,7 @@
   <div class="settings">
     <div class="titlerow">
       <h1>Settings</h1>
-      <span class="mono tiny dim">{$device?.base || "served from this device"}</span>
+      <span class="mono tiny dim" data-role="settings-subtitle">{subtitle}</span>
     </div>
 
     <Section title="Device" role="sect-device">
@@ -168,11 +179,27 @@
 
     <Section title="LED layout" role="sect-layout">
       <LayoutCard
-        {active}
         on:pixelchange={() => dispatch("pixelchange")}
         on:openmap={() => dispatch("openmap")}
       />
     </Section>
+
+    <!-- Projection is its OWN section (mockup S3e), not a block inside the
+         LED layout form: it is about patterns, not about wiring, and it needs
+         the section rule to separate the two (Jeremy, 2026-09-19).
+         It is ABSENT where the Layout offers no choice — a strip shows only
+         1D patterns since #538 — with no explanatory copy. -->
+    {#if vis.projection}
+      <Section title="Projection" role="sect-projection" note={layoutLabel($geomLayout)}>
+        <ProjectionBlock
+          luxel={$luxel ?? null}
+          layout={$geomLayout}
+          projection={$geomLayout.projection}
+          {active}
+          on:set={(e) => void applyLayout(`proj${e.detail.dims}d ${e.detail.mode}`)}
+        />
+      </Section>
+    {/if}
 
     <Section title="WiFi" role="sect-wifi">
       <WifiCard />

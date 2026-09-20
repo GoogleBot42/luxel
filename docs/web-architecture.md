@@ -639,14 +639,23 @@ became a ranked page: the three things people open Settings for are full
 sections at the top, and everything else collapses into one `Advanced` list.
 
 ```
-Device      name (read-only) · Brightness — the page's FIRST control
+Settings    <device name> · vX.Y.Z        (never the base URL)
+Device      Name (a text field) · Brightness — the page's FIRST control
 LED layout  the summary + thumbnail, the kind picker, the fields, the
-            arrangement, the Outputs table, Projection, the map link
+            arrangement, the Outputs table, the map link
+Projection  its own section — present only where the Layout offers a choice
 WiFi        the connected network + a collapsed `Change network…`
 — Advanced —
   Output processing · Panel driver · Clock & time zone · Multi-device sync ·
   MQTT · Home Assistant · Network input · Storage · Firmware & recovery
 ```
+
+Section rhythm is the mockups' (`web/src/settings/cards.css`): a 760px wrap
+with 28px of top padding, a 22px/600 `h1`, 32px between sections, a 14px gap
+under each `.secthead`, `.form` on the panel background at 16px padding, and a
+132px label column. `Section.svelte` takes an optional `note`, the mono dim
+line at the right end of the header row that names the fixture a section is
+about (`64×64 matrix`).
 
 Chrome is two primitives. `Section.svelte` is a small uppercase label, a
 hairline rule and a `.form` panel — only FORMS get a background, which is what
@@ -683,30 +692,143 @@ The section's own pieces:
 | piece | what it is |
 |---|---|
 | the summary | `layoutLabel()` in big type + a live `PatternThumb` of the FIXTURE, so the shape comes from the geometry store and nothing here re-derives it |
-| the kind picker | Strip / Matrix / Custom map — **only where the board offers a choice**; a HUB75 board has none and the summary line carries the kind |
+| the kind picker | Strip / Matrix / **3D** / Custom map — **only where the board offers a choice**; a HUB75 board has none and the summary line carries the kind. `3D` is the one kind `/api/layout` does not name (see below) |
+| the lattice fields | `w × h × d` with a live cloud thumbnail of what is about to be installed, and an `Install` button — picking `3D` changes nothing until it is pressed |
 | `ArrangementSvg` | the panel chain: tiles, the path numbered from the `IN` connector, per-tile scan direction, the 180° markers, the total size, and output tinting. The same widget one level down (`mode="pixels"`) draws the pixel run through a strip-built matrix |
 | the refresh readout | the device's own `matrix.est_hz` (#475) when it reports one, else `estimatedRefreshHz()` — the same formula over the same inputs, for a host that does not. Amber under 100 Hz with the fix named, and the panel's live `rescan_hz` beside it. The browser model's clock and plane count are the firmware's build-time constants until Gitea #525 puts them on the wire |
 | the dark-tile note | `matrix.drive` is how many leading tiles this board's framebuffer can shift out; past it the picture dashes them and the page says how many stay dark (#475/#401) |
-| `Reboot to apply` | appears next to the "applies after a reboot" note when a stored chain arrangement or output table is outstanding AND `caps.reboot` — `POST /api/reboot` behind `confirm({reboot: true})`, because those are built once at boot and nothing else applies them |
+| the reboot bar | see "Stored, but not running yet" below — the per-field note this row used to carry is gone |
 | `OutputsTable` | one row per output when `caps.outputs > 1`, each computing the run it owns (`pixels 300–599`), plus the strip split graphic. `out` lines are all-or-nothing, so a row edit POSTs the whole table |
-| `ProjectionBlock` | one row per pattern kind that is NOT native here, with a live card per option. Labels and options come from the ENGINE (`Luxel.projectionOptions`), a single option is a one-line note, and there is no row at all for a native kind |
+| `ProjectionBlock` | mounted by the PAGE now, in its own `Projection` section (below) |
 
-`data-role` contract: `settings-panel` · `sect-{device,layout,wifi}` ·
+### A 3D lattice, and why it takes two POSTs
+
+`/api/layout`'s `kind` is `strip`/`matrix`/`map`; a 3D lattice is a
+coordinate map, so the wire reports it as `map` with `dims: 3`.
+`uiLayoutKind(wireKind, dims)` in `lib/settingsCaps.ts` is the ONE place that
+turns that back into the picker's `lattice`, and `latticeDimsOf(coords)` in
+`lib/geometry.ts` is what recovers the `w×h×d` — a cloud that IS a lattice is
+reported as a **regular** 3D Layout, so it reads `8×8×8 lattice · 512 pixels`
+rather than `512 px custom map`, and `thumbLayout` can subsample it.
+
+Installing one (`installLattice()` in `stores/device.ts`) is two POSTs:
+
+1. `strip <w·h·d>` — sizes the pixel space. A COORDINATE map does not resize
+   anything (only the procedural `map grid W H` form does,
+   `crates/luxel-core/src/layout.rs`), and a lattice installed into a smaller
+   pixel space is silently truncated by the engine.
+2. `map 3 <coords…>` — the coordinates. The grammar takes at most one
+   `strip`/`matrix`/`map` line per body, which is why this cannot be one
+   request.
+
+The reply to (2) can still carry the OLD pixel count — a resize lands on the
+host's render loop — so this re-reads `/api/layout` instead of adopting it.
+
+**The size ceiling is the request buffer.** A device serves each connection
+out of one 4 KiB buffer holding the request line, the headers and the body
+together (`firmware/src/server.rs`), and a coordinate map that does not
+arrive intact is treated as "clear the map" (docs/api.md). So
+`latticeMapLine()` writes the lattice INDICES (`0 0 0`, `1 0 0`, …) rather
+than 16.16 fractions of 1.0: the engine normalizes a map per axis before
+anything reads it (`Engine::set_map_vec`), so the two install the identical
+lattice, and indices are what decides whether it fits — 8×8×8 is **3,077
+bytes** as indices and 8,257 as fractions. `LAYOUT_BODY_BUDGET` is 3,500 B
+and `maxLatticeSide()` derives the cap from it: **8 per side, 512 pixels**,
+today. Gitea #548 is the procedural `map lattice W H D` form that would lift
+it. The `w × h × d` fields cap at that side, and a lattice over it (or over
+the board's pixel ceiling) disables `Install` with a `data-reason` — the one
+legal disabled control, a budget the user has to learn.
+
+The browser remembers the lattice it installed (`luxel.layout.lattice` in
+localStorage) and believes it again only when the device's own pixel count
+still matches: `GET /api/map` reports a COUNT, so without that a reload turns
+`8×8×8 lattice` back into `512 px custom map`.
+
+### Projection is its own section (mockups S3e–S3h)
+
+`ProjectionBlock` used to hang off the bottom of the LED layout form, with no
+rule and no heading of its own. It is a sibling `Section` now — it is about
+PATTERNS, not about wiring — with the fixture in its header note and an 18px
+intro line above the rows.
+
+One row per pattern kind that is not native here, and a live `ProjectionCard`
+per option; labels and options come from the ENGINE
+(`Luxel.projectionOptions`), which mirrors
+`crates/luxel-core/src/projection.rs`. Since #538 **a Layout never shows a
+pattern bigger than itself**, so the whole table is:
+
+| Layout | rows the section shows |
+|---|---|
+| 1D (strip) | none — **the section is absent**, with no copy explaining why |
+| 2D (matrix, 2D map) | `1D patterns`: By index · Along x · Along y |
+| 3D (lattice, 3D map) | `1D patterns`: By index · Along x · y · z, and `2D patterns`: Repeat along z · y · x |
+
+`settingsVisibility().projection` is that rule (`layout.dims > 1`).
+
+`ProjectionCard` has two forms, chosen by the fixture's shape: the 120px tile
+(`.pcard`, S3e/S3g/S3h) and, on a 1D fixture, the 200×24 row (`.barcard`,
+S3f). A 40×40 SVG glyph appears where the picture alone cannot say which cut
+it is — the cube badge on a slice, the grid/cube diagram beside a bar. Its
+props are a contract (`luxel`, `layout`, `patternDims`, `mode`, `label`,
+`selected`, `active`, and the `select` event): the editor's per-item
+projection popup mounts the same component.
+
+### Stored, but not running yet — the reboot bar (`settings/RebootBar.svelte`)
+
+Some settings are built once at boot: the chain arrangement and the output
+table (#474/#475), the strip data pin, and the device name (its DHCP
+hostname). The device says so itself — `reboot_required` on `/api/layout`
+and `/api/name` — and `noteRebootPending(field)` in `stores/device.ts`
+records the FIELD, never the UI's guess about what is live. Protocol and
+colour order are live on both hosts and never appear.
+
+`<RebootBar/>` is mounted by `App.svelte`, not by Settings: it is pinned to
+the bottom of the viewport in the `--warn` palette on **every** screen, the
+editor included, until the device reboots — the user changes a data pin and
+walks off to Patterns, and the device is still running the old wiring
+wherever they are. `Reboot now` is `POST /api/reboot` behind
+`confirm({reboot: true})` and, like everything else, is absent rather than
+disabled where `caps.reboot` is false (the mirror), which leaves the power
+cycle to the human. The list is cleared by a reboot and by nothing else.
+
+### Clock & time zone
+
+A zone is a place, not a number. The select is built from
+`Intl.supportedValuesOf("timeZone")`, grouped into `<optgroup>`s by region;
+picking one computes its CURRENT offset (DST included) with
+`Intl.DateTimeFormat(…, {timeZoneName: "longOffset"})` and POSTs
+`tzMinutes` exactly as before — **no firmware change**, because a board with
+2 KB of NVS is never going to carry the IANA database. The zone NAME is the
+browser's memory of which place that offset came from
+(`luxel.clock.zone` in localStorage) and is believed again only when its
+offset still matches what the device reports.
+
+Device time is `toLocaleString(undefined, {timeZone, dateStyle, timeStyle})`
+of the UTC instant (`local − tzMinutes`), so it is a date AND a time in the
+looking user's locale. `Sync now` is `POST /api/clock/sync`, which is
+**asynchronous** on firmware — the reply is the clock as it stands, so the
+button re-reads `/api/clock` after it.
+
+`data-role` contract: `settings-panel` · `settings-subtitle` ·
+`sect-{device,layout,wifi,projection}` (+ `sect-<x>-section`,
+`sect-<x>-note`) ·
 `advanced` · `adv-<row>-{row,toggle,status,body}` · `brightness` ·
-`device-name` · `layout-{summary,headline,subhead,kind,pixels,pw,ph,scan,
+`device-name`, `device-name-note` · `layout-{summary,headline,subhead,kind,lat-w,lat-h,lat-d,lat-count,lat-install,lat-note,pixels,pw,ph,scan,
 cols,rows,start,dir,snake,rot180,proto,order,datapin,datapin-apply,notes,note,
-dark,reboot,map-link}` · `arrangement` (with `data-mode`) · `refresh`, `refresh-hz`,
+dark,map-link}` · `reboot-bar`, `reboot-bar-text`, `reboot-now` ·
+`clock-{status,sync,tz,offset,note}` · `wifi-address` · `arrangement` (with `data-mode`) · `refresh`, `refresh-hz`,
 `refresh-measured` · `outputs`, `output-{row,pin,proto,order,count,rev,range,
 add,remove}` · `projection-block`, `projection-kind` (with `data-dims`),
-`projection-card` (with `data-mode`), `projection-only` · `wifi-change` ·
+`projection-card` (with `data-mode`) · `wifi-change` ·
 `panel-{clock,planes,rescan}` · `storage-{patterns,bytes,heap,psram}` ·
 `fw-{version,update,file,note}`.
 
 ### `data-reason` marks the one legal disabled control (Gitea #529)
 
 "Absent, never disabled" has exactly one exception in the proposal: a control
-gating a **budget the user has to learn** (today only `out-palette-add` at its
-32-stop cap). Such a control stays `disabled` AND carries `data-reason` with
+gating a **budget the user has to learn** — `out-palette-add` at its 32-stop
+cap, and `layout-lat-install` at the lattice a single request can carry
+(#538). Such a control stays `disabled` AND carries `data-reason` with
 the budget it is enforcing, in the same words a sibling element puts on screen
 — the attribute is the machine-readable half of an explanation the user can
 already read. Nothing else in the app may be `disabled` or
@@ -735,7 +857,8 @@ settingsVisibility(caps: DeviceCaps | null, layout: LayoutFacts): SettingsVisibi
 `caps` is `/api/status`'s block (#464); `layout` is `{kind, dims, regular,
 panels}` off `/api/layout`. The result is one flat record of booleans the
 markup reads with `{#if}` — `kindPicker`, `stripFields`, `panelScan`,
-`arrangement`, `estimatedRefresh`, `outputsTable`, `powerCap`, `blurGlow` (+
+`arrangement`, `estimatedRefresh`, `outputsTable`, `projection`,
+`latticeFields`, `powerCap`, `blurGlow` (+
 `blurGlowScope`, which words it "along the strip" or "across the grid"),
 `panelDriver`, `psram`, `ota`, `reboot`, and the rest. `caps === null` (firmware
 older than #464) falls back to `FALLBACK_CAPS` — what every build has always
@@ -746,7 +869,8 @@ The module also owns the pure arithmetic the section draws with:
 tiles line by line, a line being a tile row under `dir: "row"` and a column
 under `"col"`, `snake` reversing the odd lines and `rot180` marking their
 tiles as mounted upside-down; the same walk #475's boot-time remap does),
-`outputRanges()` and
+`outputRanges()`, the time-zone helpers (`zoneOffsetMinutes`, `zoneLabel`,
+`zonesByRegion`, `offsetLabel`) and
 `squarish()` (picking Matrix factors the pixel count — 120 px is 12×10, not
 11×11 rounded up, so Strip → Matrix → Strip round-trips). All of it is tested
 in `web/tests/settingsCaps.test.mjs` against the four `caps` fixtures of the

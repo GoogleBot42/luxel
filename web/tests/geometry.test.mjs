@@ -21,8 +21,14 @@ import {
   AUTO_MATRIX,
   DEFAULT_PROJECTION,
   DEFAULT_STRIP_PIXELS,
+  cloudLayout,
   effectiveFor,
+  LAYOUT_BODY_BUDGET,
   latticeCoords,
+  latticeDimsOf,
+  latticeMapFits,
+  latticeMapLine,
+  maxLatticeSide,
   layoutKey,
   layoutLabel,
   parsePreviewAs,
@@ -429,4 +435,59 @@ test("the projection tables match the engine's, cell by cell", async () => {
       );
     }
   }
+});
+
+
+// ---- the 3D lattice a console can install (Gitea #538) ----
+
+test("latticeMapLine is a `map 3 …` body of lattice INDICES", () => {
+  const line = latticeMapLine(2, 2, 2);
+  assert.equal(line, "map 3 0 0 0 1 0 0 0 1 0 1 1 0 0 0 1 1 0 1 0 1 1 1 1 1");
+});
+
+test("an 8×8×8 lattice fits one POST body; 9³ does not", () => {
+  // Indices, not 16.16 fractions, are what makes this fit at all: the same
+  // 512 points as fractions of 1.0 are 8,257 bytes.
+  assert.equal(latticeMapLine(8, 8, 8).length, 3077);
+  assert.ok(latticeMapFits(8, 8, 8));
+  assert.ok(!latticeMapFits(9, 9, 9), `9³ is ${latticeMapLine(9, 9, 9).length} bytes`);
+  assert.ok(latticeMapLine(8, 8, 8).length <= LAYOUT_BODY_BUDGET);
+  assert.equal(maxLatticeSide(), 8, "what the `w × h × d` fields cap each side at");
+});
+
+test("latticeDimsOf recognises the lattice this console installed", () => {
+  assert.deepEqual(latticeDimsOf(latticeCoords(8, 8, 8)), { w: 8, h: 8, d: 8 });
+  assert.deepEqual(latticeDimsOf(latticeCoords(4, 6, 2)), { w: 4, h: 6, d: 2 });
+  // …and nothing else
+  assert.equal(latticeDimsOf([]), null);
+  assert.equal(latticeDimsOf(latticeCoords(8, 8, 8).slice(0, 500)), null, "truncated");
+  const scrambled = latticeCoords(4, 4, 4);
+  [scrambled[5], scrambled[9]] = [scrambled[9], scrambled[5]];
+  assert.equal(latticeDimsOf(scrambled), null, "out of order");
+  const ring = Array.from({ length: 16 }, (_, i) => [Math.cos(i), Math.sin(i), 0]);
+  assert.equal(latticeDimsOf(ring), null, "a ring is not a lattice");
+  assert.equal(latticeDimsOf(latticeCoords(8, 8, 8).map((c) => [c[0], c[1]])), null, "2D");
+});
+
+test("a cloud that IS a lattice reports as a regular 3D Layout", () => {
+  const l = cloudLayout(latticeCoords(8, 8, 8));
+  assert.equal(l.dims, 3);
+  assert.equal(l.regular, true);
+  assert.equal(l.pixels, 512);
+  assert.equal(layoutLabel(l), "8×8×8 lattice", "not `512 px custom map`");
+  assert.equal(tileShape(l), "cloud");
+  // a 3D cloud that is not a lattice keeps saying so
+  const ring = Array.from({ length: 64 }, (_, i) => [Math.cos(i), Math.sin(i), i / 64]);
+  assert.equal(cloudLayout(ring).regular, false);
+  assert.equal(layoutLabel(cloudLayout(ring)), "64 px custom map");
+});
+
+test("a 3D layout offers the 1D and 2D rows, a 1D layout offers none (#538)", () => {
+  const l = cloudLayout(latticeCoords(8, 8, 8));
+  assert.deepEqual(projectionOptions(1, l.dims), ["index", "x", "y", "z"]);
+  assert.deepEqual(projectionOptions(2, l.dims), ["z", "y", "x"]);
+  assert.deepEqual(projectionOptions(3, l.dims), [], "native");
+  assert.deepEqual(projectionOptions(2, 1), []);
+  assert.deepEqual(projectionOptions(3, 1), []);
+  assert.deepEqual(projectionOptions(3, 2), []);
 });

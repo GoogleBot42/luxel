@@ -451,6 +451,37 @@ export class DeviceSession {
     return (await res.json()) as { ok: boolean; bytes?: number; error?: string };
   }
 
+  /** What this device calls itself (Gitea #538) — `luxel-<mac6>` until
+   *  somebody renames it. `/api/status` carries the same string, so the
+   *  console only reads this route when Settings wants `source`. */
+  async name(): Promise<{ name: string; source: "stored" | "default" }> {
+    return (await (await this.fetch("/api/name")).json()) as {
+      name: string;
+      source: "stored" | "default";
+    };
+  }
+
+  /** Rename the device. 1..=32 printable bytes, no `"` or `\`; an EMPTY
+   *  string clears the name back to the board default. The name is live in
+   *  `/api/status` at once, but the DHCP hostname is built at boot — hence
+   *  `reboot_required` on every accepted POST. */
+  async setName(name: string): Promise<{
+    ok: boolean;
+    name?: string;
+    source?: "stored" | "default";
+    reboot_required?: boolean;
+    error?: string;
+  }> {
+    const res = await this.fetch("/api/name", { method: "POST", body: name });
+    return (await res.json()) as {
+      ok: boolean;
+      name?: string;
+      source?: "stored" | "default";
+      reboot_required?: boolean;
+      error?: string;
+    };
+  }
+
   /** Which network the device will join next boot (never the password). */
   async wifi(): Promise<{ ssid: string | null; source: string }> {
     return (await (await this.fetch("/api/wifi")).json()) as {
@@ -564,6 +595,16 @@ export class DeviceSession {
       local: number;
       tzMinutes: number;
     };
+  }
+
+  /** Ask the device to re-sync its clock NOW (Gitea #538). Asynchronous on
+   *  firmware — it wakes the SNTP task, which otherwise sleeps out a 6 h
+   *  period — so the reply is the clock as it stands at that instant and
+   *  `synced` can still be the PREVIOUS state. Poll `clock()` for the
+   *  result. */
+  async syncClock(): Promise<{ ok: boolean; synced?: boolean; local?: number }> {
+    const res = await this.fetch("/api/clock/sync", { method: "POST", body: "" });
+    return (await res.json()) as { ok: boolean; synced?: boolean; local?: number };
   }
 
   /** Set the UTC offset in minutes; applied live + persisted. */

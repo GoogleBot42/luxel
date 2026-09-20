@@ -235,6 +235,44 @@ function latticeSide(n: number): number {
   return Math.max(2, Math.min(32, Math.round(n) || AUTO_LATTICE));
 }
 
+/**
+ * The `w`×`h`×`d` a coordinate cloud IS, when it is exactly the lattice
+ * [`latticeCoords`] builds — x fastest, then y, then z, one point per cell.
+ * null for anything else (a ring, a sculpture, a sparse cube).
+ *
+ * The device cannot tell us: `GET /api/map` reports a COUNT, and a 3D map is
+ * `regular:false` on the wire whatever its shape. So the console recognises
+ * its own lattice from the coordinates and says `8×8×8 lattice · 512 pixels`
+ * instead of `512 px custom map` (Gitea #538).
+ */
+export function latticeDimsOf(
+  coords: readonly (readonly number[])[],
+): { w: number; h: number; d: number } | null {
+  const n = coords.length;
+  if (n < 8 || (coords[0]?.length ?? 0) < 3) return null;
+  const first = coords[0];
+  if (!first || first[0] !== 0 || first[1] !== 0 || first[2] !== 0) return null;
+  // x runs fastest, so the first row is the whole width
+  let w = 1;
+  while (w < n && coords[w]?.[1] === 0 && coords[w]?.[2] === 0) w++;
+  // …then y, so the first layer is the whole height
+  let h = 1;
+  while (h * w < n && coords[h * w]?.[2] === 0) h++;
+  if (w < 2 || h < 1 || n % (w * h) !== 0) return null;
+  const d = n / (w * h);
+  if (d < 2) return null;
+  let i = 0;
+  for (let z = 0; z < d; z++) {
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++, i++) {
+        const c = coords[i];
+        if (!c || c[0] !== x || c[1] !== y || c[2] !== z) return null;
+      }
+    }
+  }
+  return { w, h, d };
+}
+
 /** `n`×`n`×`n` lattice coordinates, row-major in x, then y, then z — the rig
  *  a 3D pattern previews on. */
 export function latticeCoords(w: number, h: number, d: number): number[][] {
@@ -242,6 +280,56 @@ export function latticeCoords(w: number, h: number, d: number): number[][] {
   for (let z = 0; z < d; z++)
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) coords.push([x, y, z]);
   return coords;
+}
+
+/**
+ * How many bytes of `POST /api/layout` body a DEVICE will actually read.
+ *
+ * The firmware serves each connection out of ONE 4 KiB buffer that holds the
+ * request line, the headers and the body together (`firmware/src/server.rs`
+ * — `http_buffer.resize(4 * 1024, 0)`), and a coordinate map that does not
+ * arrive intact is treated as "clear the map" (docs/api.md). A browser's
+ * request line + headers are ~500 B, so the body budget is this, with room
+ * left for a long User-Agent.
+ */
+export const LAYOUT_BODY_BUDGET = 3500;
+
+/**
+ * The `map 3 …` line that installs a `w`×`h`×`d` lattice as the device map.
+ *
+ * Coordinates go out as the lattice INDICES (`0 0 0`, `1 0 0`, …) rather
+ * than 16.16 fractions of 1.0. The engine normalizes a map per axis into
+ * world units before anything reads it (`Engine::set_map_vec`), so index
+ * units and fractional units install the exact same lattice — and indices
+ * are the most compact encoding there is, which is what decides whether a
+ * lattice fits ONE request at all. `8×8×8` is 3,077 bytes as indices and
+ * 8,257 as fractions; only the first can be installed (see
+ * [`LAYOUT_BODY_BUDGET`], and Gitea #548 for lifting the ceiling with a
+ * procedural `map lattice W H D` form).
+ *
+ * Call [`latticeMapFits`] first — the caller is expected to keep the user
+ * out of a body the device would silently truncate.
+ */
+export function latticeMapLine(w: number, h: number, d: number): string {
+  const parts: (string | number)[] = ["map", "3"];
+  for (const [x, y, z] of latticeCoords(w, h, d)) parts.push(x ?? 0, y ?? 0, z ?? 0);
+  return parts.join(" ");
+}
+
+/** Does this lattice fit one `POST /api/layout` body? */
+export function latticeMapFits(w: number, h: number, d: number): boolean {
+  return latticeMapLine(w, h, d).length <= LAYOUT_BODY_BUDGET;
+}
+
+/**
+ * The biggest cubic lattice a device takes in one POST — what the `w×h×d`
+ * fields cap each side at, so the form cannot express a body the device
+ * would drop. 8 today (512 px, 3,077 B); 9 is 729 px and 4,375 B.
+ */
+export function maxLatticeSide(): number {
+  let side = 2;
+  while (side < 32 && latticeMapFits(side + 1, side + 1, side + 1)) side++;
+  return side;
 }
 
 /** The index→coordinate map of a `w`×`h` grid whose wiring snakes: row 0 runs
@@ -291,6 +379,22 @@ function lattice(n: number, source: LayoutSource, projection: Projection): Layou
 
 function cloud(coords: number[][], source: LayoutSource, projection: Projection): Layout {
   const dims: Dims = (coords[0]?.length ?? 2) >= 3 ? 3 : 2;
+  // A cloud that IS a lattice is a lattice: it has a w×h×d to name, and
+  // `thumbLayout` can subsample it instead of leaving it at full size.
+  const lat = dims === 3 ? latticeDimsOf(coords) : null;
+  if (lat) {
+    return {
+      dims: 3,
+      regular: true,
+      source,
+      w: lat.w,
+      h: lat.h,
+      d: lat.d,
+      pixels: coords.length,
+      coords,
+      projection,
+    };
+  }
   return {
     dims,
     regular: false,

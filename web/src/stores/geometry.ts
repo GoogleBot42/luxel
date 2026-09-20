@@ -231,6 +231,9 @@ export const THUMB_MAX_CELLS = 400;
  * `proj` is a per-item projection override (a playlist row's, §5.4d): it
  * replaces the slot for this pattern's dims, so the thumbnail shows what the
  * device will actually render rather than the device default.
+ * `on` renders against a Layout that is NOT the app's — the Settings page's
+ * "this is the lattice you are about to install" preview (#538), which by
+ * definition is not the shape the device has yet.
  * Returns the compiler's Diagnostic when the pattern does not compile.
  */
 export function compileForLayout(
@@ -238,13 +241,15 @@ export function compileForLayout(
   src: string,
   maxCells = 0,
   proj: ProjectionMode | null = null,
+  on: Layout | null = null,
 ): { engine: Engine; layout: Layout; dims: PatternDims } | Diagnostic {
   const shrink = (l: Layout): Layout => (maxCells > 0 ? thumbLayout(l, maxCells) : l);
-  const first = shrink(layoutFor(0));
+  const rigFor = (d: PatternDims): Layout => (on ?? layoutFor(d));
+  const first = shrink(rigFor(0));
   let engine = lx.compile(src, first.pixels);
   if (!(engine instanceof Engine)) return engine;
   const dims = engine.preferredDims();
-  const want = withProjectionOverride(shrink(layoutFor(dims)), dims, proj);
+  const want = withProjectionOverride(shrink(rigFor(dims)), dims, proj);
   if (want.pixels !== first.pixels) {
     engine.free();
     const again = lx.compile(src, want.pixels);

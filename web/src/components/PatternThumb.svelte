@@ -15,6 +15,7 @@
   import {
     captionFor,
     compileForLayout,
+    layoutKey,
     layoutSignature,
     THUMB_MAX_CELLS,
     tileShape,
@@ -35,6 +36,10 @@
    *  is the larger one the Settings page's LED layout headline sits beside
    *  (Gitea #469). Same engine, same shape — only the CSS size differs. */
   export let size: "row" | "summary" = "row";
+  /** Render on a Layout that is NOT the app's — the Settings page's preview
+   *  of the lattice you are about to install (Gitea #538). Null (the usual
+   *  case) follows `stores/geometry.ts` like everything else. */
+  export let previewRig: Layout | null = null;
 
   const FPS_MS = 100; // ~10 fps is plenty for a thumbnail
 
@@ -58,8 +63,9 @@
   let points: PointRig = { pts: [], is3D: false };
   /** `1D · by index` when the pattern is not native to this Layout. */
   let caption: string | null = null;
-  /** Rebuild when the Layout actually moves, not on every store tick. */
-  $: rigKey = $layoutSignature;
+  /** Rebuild when the Layout actually moves, not on every store tick. An
+   *  explicit `previewRig` is its own signature — the store's would never change. */
+  $: rigKey = previewRig ? layoutKey(previewRig) : $layoutSignature;
 
   function adopt(l: Layout | undefined, d: PatternDims): void {
     rig = l;
@@ -75,7 +81,7 @@
     engine = undefined;
     dead = false;
     ready = false;
-    const r = compileForLayout(luxel, src, THUMB_MAX_CELLS, proj);
+    const r = compileForLayout(luxel, src, THUMB_MAX_CELLS, proj, previewRig);
     if ("engine" in r) {
       r.engine.setWallClock(Date.now() / 1000);
       engine = r.engine;
@@ -171,15 +177,20 @@
     height: 48px;
   }
 
-  /* the Settings LED-layout summary (#469): same engine, more room */
+  /* the Settings LED-layout summary (#469; mockups S3/S3b `.summary canvas`) */
+  .thumb.summary canvas {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+
   .thumb.summary .bar {
-    width: 148px;
-    height: 26px;
+    width: 120px;
+    height: 20px;
   }
 
   .thumb.summary .sq {
-    width: 76px;
-    height: 76px;
+    width: 56px;
+    height: 56px;
   }
 
   .thumb.dead canvas {

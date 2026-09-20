@@ -6,7 +6,7 @@
   //
   // `Reboot into setup AP` moved to Advanced › Firmware & recovery, where the
   // other reboot-requiring actions are grouped.
-  import { device, wifiForm, wifiSource, wifiSsid } from "../stores/device";
+  import { device, deviceHost, wifiForm, wifiSource, wifiSsid } from "../stores/device";
   import { confirm } from "../stores/dialog";
   import { note, notes } from "../stores/notify";
 
@@ -46,17 +46,25 @@
   }
 </script>
 
+<!-- mockup S3: `● Connected to  home-iot · 192.168.0.238    [Change network…]` -->
 <div class="wifirow">
   <span class="dot" class:live={$wifiSsid !== null}></span>
-  <span class="dim">Connected to</span>
-  <span class="mono" data-role="wifi-current">
-    {$wifiSsid ?? "—"}
-    <span class="dim">
-      ({$wifiSource === "flash" ? "saved" : $wifiSource === "builtin" ? "compiled-in" : "none"})
-    </span>
-  </span>
+  <span class="tiny dim">Connected to</span>
+  <span
+    class="mono tiny"
+    data-role="wifi-current"
+    title={$wifiSource === "flash"
+      ? "saved on the device"
+      : $wifiSource === "builtin"
+        ? "compiled into this firmware"
+        : "no network stored"}>{$wifiSsid ?? "—"}</span
+  >
+  {#if $deviceHost}
+    <span class="dim">·</span>
+    <span class="mono tiny" data-role="wifi-address">{$deviceHost}</span>
+  {/if}
   <span class="spacer"></span>
-  <button data-role="wifi-change" aria-expanded={open} on:click={() => (open = !open)}>
+  <button class="btn" data-role="wifi-change" aria-expanded={open} on:click={() => (open = !open)}>
     {open ? "Cancel" : "Change network…"}
   </button>
 </div>
@@ -65,7 +73,7 @@
   <div class="field">
     <span class="flabel">Network</span>
     <input
-      class="grow"
+      class="inp grow"
       data-role="wifi-ssid"
       placeholder="SSID"
       bind:this={ssidInput}
@@ -75,7 +83,7 @@
   <div class="field">
     <span class="flabel">Password</span>
     <input
-      class="grow"
+      class="inp grow"
       data-role="wifi-pass"
       type="password"
       placeholder="password"
@@ -104,13 +112,17 @@
     flex-wrap: wrap;
   }
 
+  .tiny {
+    font-size: 11px;
+  }
+
   .spacer {
     flex: 1;
   }
 
   .dot {
-    width: 7px;
-    height: 7px;
+    width: 6px;
+    height: 6px;
     border-radius: 50%;
     background: var(--text-dim);
     flex: none;

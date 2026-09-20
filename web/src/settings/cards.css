@@ -4,34 +4,45 @@
  * scoped <style> block: every rule is confined to `.settings`, which exists
  * only as the Settings page's own wrapper, and the cards contain no child
  * components for it to leak into. Imported by pages/Settings.svelte, so it
- * lands in the single bundled stylesheet (cssCodeSplit is off — Gitea #92). */
+ * lands in the single bundled stylesheet (cssCodeSplit is off — Gitea #92).
+ *
+ * Every number below is quotable from `docs/design/webui-v2/mockups.html`
+ * (frames S3, S3b, S3e–S3k) — that file is the visual spec (Gitea #538). */
 
 .settings {
-  max-width: 720px;
+  max-width: 760px;
   margin: 0 auto;
-  padding: 20px 16px 40px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
+  padding: 28px 20px 40px;
 }
 
 .settings h1 {
-  font-size: 18px;
-  margin: 4px 0 6px;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0;
   color: var(--text);
 }
 
+/* A form row: a fixed label column, then the controls. `.field` keeps the
+   name it has had since v1 — the mockup calls it `.srow` — and stays FLEX
+   rather than the mockup's two-column grid, because a row here holds several
+   controls that must sit side by side rather than stack. The label column is
+   the mockup's 132px either way. */
 .settings .field {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
 .settings .flabel {
-  width: 96px;
+  width: 132px;
+  flex: none;
+  /* 8px gap + 6px = the mockup's 14px between the label column and the first
+     control, without widening the gaps inside the control group */
+  margin-right: 6px;
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .settings .grow {
@@ -45,13 +56,19 @@
 
 .settings .hint {
   font-size: 12px;
-  margin: 2px 0;
+  line-height: 1.4;
+  margin: 0;
+}
+
+/* a hint that belongs to the row above it lines up under the controls */
+.settings .form > .hint.under {
+  margin-left: 140px;
 }
 
 .settings .num {
-  width: 64px;
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 12px;
+  width: 72px;
+  font-family: var(--mono);
+  font-size: 12.5px;
 }
 
 .settings .link {
@@ -112,13 +129,12 @@
 .settings .titlerow {
   display: flex;
   align-items: baseline;
-  gap: 10px;
-  margin: 4px 0 2px;
+  gap: 12px;
+  margin: 0 0 28px;
 }
 
 .settings .titlerow h1 {
-  margin: 0;
-  flex: 1;
+  flex: none;
 }
 
 .settings .tiny {
@@ -126,16 +142,18 @@
 }
 
 .settings .sect {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  margin-bottom: 32px;
 }
 
 .settings .secthead,
 .settings .advdiv {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
+}
+
+.settings .secthead {
+  margin-bottom: 14px;
 }
 
 /* `.slabel` itself is the global primitive (app.css); the settings page only
@@ -151,21 +169,21 @@
 }
 
 .settings .advdiv {
-  margin-top: 16px;
+  margin: 40px 0 6px;
 }
 
 .settings .advnote {
-  margin: 0;
+  margin: 0 0 14px;
 }
 
 .settings .form {
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 12px 14px;
-  background: var(--bg-inset);
+  padding: 16px;
+  background: var(--bg-panel);
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
 
 /* the Advanced list: a row is its own title + one-line status; the body
@@ -176,6 +194,7 @@
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
+  background: var(--bg-panel);
 }
 
 .settings .drow + .dbody {
@@ -185,9 +204,9 @@
 .settings .dhead {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   width: 100%;
-  padding: 10px 12px;
+  padding: 11px 14px;
   background: transparent;
   border: none;
   border-bottom: 1px solid var(--border);
@@ -200,16 +219,18 @@
 }
 
 .settings .dhead:hover {
-  background: var(--bg-inset);
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .settings .drow.open .dhead {
   border-bottom: none;
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .settings .chev {
   font-style: normal;
   color: var(--text-dim);
+  font-size: 10px;
   width: 10px;
   flex: none;
 }
@@ -222,7 +243,7 @@
   flex: 1;
   min-width: 0;
   text-align: right;
-  font-size: 12px;
+  font: 11.5px/1 var(--mono);
   color: var(--text-dim);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -232,20 +253,25 @@
 .settings .dbody {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 4px 14px 14px;
-  background: var(--bg-inset);
+  gap: 12px;
+  padding: 14px 14px 16px;
+  background: rgba(0, 0, 0, 0.18);
 }
 
 /* Mobile (390 px): the label column stops reserving width it hasn't got and
  * the fields wrap under it (D9 — the phone is a first-class surface). */
 @media (max-width: 560px) {
   .settings {
-    padding: 14px 10px 32px;
+    padding: 18px 12px 32px;
   }
 
   .settings .flabel {
     width: 100%;
+    margin-right: 0;
+  }
+
+  .settings .form > .hint.under {
+    margin-left: 0;
   }
 
   .settings .field {
@@ -259,6 +285,6 @@
   .settings .st2 {
     flex: 1 0 100%;
     text-align: left;
-    padding-left: 18px;
+    padding-left: 20px;
   }
 }

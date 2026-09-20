@@ -1,5 +1,95 @@
 # Update log
 
+## 2026-09-19 — Settings to the mocks: device name, 3D lattice, a reboot bar, real time zones (#538)
+
+The Settings third of Jeremy's Phase A review (Gitea #538 §A/§B/§C/§G). Web
+only; it sits on top of the engine/firmware entry further down (#545), whose
+`/api/name`, `/api/clock/sync` and trimmed projection table it is the console
+half of, and lands alongside the editor's pass (#553), which imports
+`settings/ProjectionCard.svelte` into its projection popup.
+
+**Section rhythm is the mockups' now** (`web/src/settings/cards.css`, frames
+S3/S3b/S3e–S3k): a 760px wrap with 28px of top padding, a 22px/600 `h1`, 32px
+between sections, `.form` on the PANEL background at 16px, a 132px label
+column, and the Advanced rows at the mockups' 11/14px with an
+`rgba(0,0,0,.18)` body. The title row reads `<device name> · vX.Y.Z` — it
+used to print the base URL, or the words "served from this device", which
+told nobody which board they were looking at.
+
+**Device → Name is a field** (`POST /api/name`). It is 260px of mono, it
+commits on blur/Enter rather than per keystroke, the header chip and the
+title row follow from the device's own reply, and a rejected name puts the
+old one back in both. The "this build has no rename endpoint" hint is gone.
+
+**Projection is its own section** (mockup S3e), a sibling of LED layout with
+its own rule and the fixture in its header note — it used to hang off the
+bottom of the LED layout form with no heading at all. The cards are the
+mockups': 12px padding, an accent ring when on, a 120px canvas, 13px name,
+11px hint, and a 40×40 SVG glyph where the picture cannot say which cut it is
+(the cube badge on a slice, the grid/cube diagram beside a bar).
+`ProjectionCard` grew the row form (`.barcard`, S3f) for a 1D fixture.
+Under the new rule the section is **absent** on a strip — a 1D Layout shows
+1D patterns and nothing else — with no copy explaining why; a 2D Layout
+offers the 1D row, a 3D Layout the 1D and 2D rows.
+
+**3D is a layout kind** ("I cannot use, try out, inspect 3D layout mode at
+all! The option isn't there"). The picker offers `Strip · Matrix · 3D ·
+Custom map` wherever there is a strip driver; picking `3D` reveals `w × h ×
+d` with a live cloud thumbnail of what is about to be installed and an
+`Install` button, and changes nothing until it is pressed. Installing is two
+POSTs — `strip w·h·d` to size the pixel space, then `map 3 …` — because a
+coordinate map does not resize anything and the grammar takes one shape line
+per body. After that `geom.dims` is 3 and everything follows: the summary
+reads `8×8×8 lattice · 512 pixels`, the tiles draw clouds, the Projection
+section offers `By index · Along x · y · z` and `Repeat along z · y · x`.
+
+Two things make that work. `latticeDimsOf()` recognises a coordinate cloud
+that IS a lattice and reports it as a REGULAR 3D Layout, so it has a `w×h×d`
+to name; and `latticeMapLine()` sends the lattice INDICES rather than 16.16
+fractions of 1.0 — the engine normalizes a map per axis anyway
+(`Engine::set_map_vec`), and 8×8×8 is 3,077 bytes as indices against 8,257 as
+fractions. That is the difference between fitting a device's single 4 KiB
+request buffer and not. The ceiling is therefore **8 per side, 512 pixels**,
+on every board; the fields cap there and say so, and #548 is the procedural
+`map lattice W H D` form that would lift it.
+
+**Reboot-required is a sticky bar** (`settings/RebootBar.svelte`), pinned to
+the bottom of the viewport in the `--warn` palette on every screen — the
+editor included — until the device reboots: "Changes to the output table and
+the data pin apply after a reboot · Reboot now". It replaces the line of dim
+12px text at the bottom of the LED layout form ("too subtle. It should be
+much more significant"), and it is mounted by `App.svelte` because the user
+changes a data pin and walks off to Patterns while the device is still
+running the old wiring. What lands in it is the DEVICE's own
+`reboot_required`, never a guess: protocol and colour order are live on both
+hosts and never appear.
+
+Auditing which fields really do need one turned up #550: `reboot_required`
+is `self.outputs != next.outputs`, so ANY output-table edit claims one —
+including a colour order or a re-split, which docs/api.md says are live.
+That is almost certainly Jeremy's "changing the output protocol needs a
+reboot?", and it is a false alarm rather than a reboot. Filed, not fixed
+here; the console trusts the device, as it should.
+
+**Clock & time zone.** The zone is a `<select>` of real IANA names grouped by
+region, built from `Intl.supportedValuesOf("timeZone")`; picking one computes
+its current offset (DST included) with `timeZoneName: "longOffset"` and sends
+`tzMinutes` exactly as before, so no firmware knows anything changed. The
+name is remembered in localStorage and believed again only while its offset
+still matches the device's. Device time is `toLocaleString()` in the looking
+user's locale — a date AND a time — instead of a hard-coded `en-US` 24-hour
+string, and `Sync now` POSTs `/api/clock/sync` and re-reads the clock (the
+sync is asynchronous on firmware).
+
+**Outputs table** to S3j: a single bordered table with hairline rows at 9/10px
+padding, 22×22 tinted index chips in the output's identity colour, the shared
+`.inp`/`.btn` primitives at the row's 28px scale, and the pixel count at the
+full 72px — it was 52 and unreadable.
+
+Verified on the mirror in real chromium: `npm test` (100), all five browser
+harnesses, and side-by-side shots at 760 and 390 against S3, S3b, S3e, S3f,
+S3g, S3j. No hardware.
+
 ## 2026-09-19 — the editor, against the mocks: header split, a real colour picker, projection in a popup (#538)
 
 The editor third of Jeremy's Phase A review (Gitea #538 §A/§B/§C/§D). Both
