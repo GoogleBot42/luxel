@@ -1351,10 +1351,25 @@ way the fixture shows it rather than row-major. Per-item projection overrides ar
   A7–A10 reporting `boot FAILED` on healthy loads because it read a label the
   editor's back button no longer carries. A harness's own assertion can be the
   only thing failing — read its zero-failed-request line before believing it.
-- **Bundle shape is load-bearing** (Gitea #92): `dist/index.html` must emit one
-  `<script>`, one stylesheet and no `modulepreload`. `cssCodeSplit: false` is
-  what lets a page component or a plain `.css` import (e.g.
-  `settings/cards.css`) land in that single stylesheet.
+- **Bundle shape is load-bearing** (Gitea #92, #592): `dist/*.html` must ask
+  the browser for NOTHING — no `<script src>` tag, no stylesheet link, no
+  `modulepreload`. A browser-native request cannot go through `fetchgate`, so
+  nothing retries it, and it needs a socket of its own while the document is
+  still arriving. Both halves bit: a refused stylesheet rendered the console
+  as unstyled HTML, silently; and with the panel's pool at `"web":[1,1,1]`
+  even a single remaining `<script src>` tag was refused on every cold load.
+  `cssCodeSplit: false` is what lets a page component or a plain `.css`
+  import (e.g. `settings/cards.css`) land in a single stylesheet; the
+  `inlineBoot()` plugin in `vite.config.ts` then inlines that stylesheet into
+  both entry HTMLs as a `<style>`, drops the asset, and replaces the module
+  tag with a loader that appends the script after `DOMContentLoaded` — so it
+  reuses the document's keep-alive socket — and re-appends it up to three
+  times (2/4/6 s) if it is refused. A whole cold load, bundle and wasm and
+  every `/api/*` included, then fits in one socket. Cost: the CSS ships twice
+  (once per entry) and loses its own immutable cache entry — about +10 KB
+  gzipped on the packed asset archive. `web/tests/bundleShape.test.mjs`
+  guards the shape; `tools/coldload.mjs` (styled + booted) and
+  `tools/bootretry-check.mjs` (the retry) guard the behaviour.
 - **`$:` only tracks what appears in its own syntax.** Name every dependency in
   the block, not just inside the function it calls. And a `$:` whose input is
   assigned *inside a function another reactive block calls* can render one

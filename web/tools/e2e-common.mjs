@@ -32,6 +32,7 @@ export const PORT = {
     maxpixels: p(6),
     debug: p(8), // tools/debug.mjs, the manual poke-at-it helper
     mockdiff: p(10), // tools/mockdiff.mjs, the mock-fidelity instrument
+    bootRetry: p(12), // tools/bootretry-check.mjs, the #592 refused-bundle retry
   },
   /** `luxel serve` mirrors standing in for a device. */
   mirror: {

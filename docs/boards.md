@@ -1377,8 +1377,12 @@ Gitea #73). A 16 MB module runs it fine — the last 12 MB is simply
 unallocated. Growing the table would buy nothing today and cost real
 complexity: the OTA app slots are capped at 1 MiB by the tripwire above
 either way, the storage partition (1 MB) is nowhere near full, and the
-assets partition (0xF0000 = 983,040 B) currently holds a 641 KB bundle
-with ~35% headroom. Against that, a second table would need a per-board
+assets partition (0xF0000 = 983,040 B) holds an 870 KB bundle as of
+2026-09-20 — **11.5% headroom, down from ~35% when this was written**
+(most of it `gallery.json`; +11 KB is #592 inlining the stylesheet into
+both entry HTMLs). That margin is now the one worth watching: a bundle
+over 983,040 B fails the `POST /api/assets` install outright. Against
+that, a second table would need a per-board
 partition file threaded through `build-esp32.sh`, `flake.nix`, the
 release workflow, `build.rs`'s `esp-idf-part` serialization *and*
 `src/takeover.rs` (which writes the table during a WLED takeover) — and

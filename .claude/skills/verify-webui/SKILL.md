@@ -102,7 +102,22 @@ probe, boot cover), the mirror is not enough: browser connection-pool
 behavior vs the device's tiny socket pool only shows on hardware. Use
 `web/tools/coldload.mjs <device-url> [N]` — N fresh-profile chromium
 launches, cache off, per-request tracing (`TRACE=1`), clean/dirty verdict
-per load. Watch `/api/status`'s `"web"` slot stages and (if wired)
+per load. Since #592 a load is only `ok` if the page is also STYLED (body
+`background-color` = `rgb(20, 22, 26)` and the `--bg` token resolving),
+because the failure that ticket found — a stylesheet refused by a busy
+socket pool, never retried, console rendered as raw HTML — passed every
+other assertion in this tool. `inlineBoot()` in `web/vite.config.ts` now
+inlines the stylesheet AND replaces the module tag with a post-parse
+loader, so the shape to expect in `dist/*.html` is: no `<script src>`, no
+stylesheet link, no `modulepreload` — one inline loader `<script>` and one
+`<style>`. `npm test` fails if that drifts; `tools/bootretry-check.mjs`
+(mirror, no device) checks the loader's retry and its bound.
+A pool that is FULL (`"web":[1,1,1]` for minutes at a time, as the
+Seengreat panel was on 2026-09-20) refuses the app's own `/api/*` and
+`luxel.wasm` fetches too — those ARE retried, so the run still boots; read
+coldload's per-load `boot ok`/`styled` before treating `N failed reqs` as
+a regression in the page.
+Watch `/api/status`'s `"web"` slot stages and (if wired)
 serial while it runs; check `slot` afterwards — a crash-looping build
 rolls back silently to the same version string.
 
