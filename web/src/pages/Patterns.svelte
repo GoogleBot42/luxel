@@ -37,6 +37,7 @@
   import {
     compileToBytecode,
     devicePatternId,
+    exportEpe,
     luxel,
     saved,
     saveToLocalLibrary,
@@ -181,6 +182,15 @@
     // values, so the item runs the pattern's own defaults
     addPatternToPlaylist(item.key);
     note("save", "added to playlist", 2000);
+  }
+
+  /** Download the tile's pattern as a `.epe` — the same document verb the
+   *  editor's ⋯ menu carries (mockup S2's menu), acting on the tile instead
+   *  of on the open document, so exporting does not mean opening first. */
+  function exportPattern(item: GalleryItem): void {
+    closeMenu();
+    if (item.source === undefined) return; // still streaming in from the device
+    exportEpe(item.name, item.source);
   }
 
   /** "<name> copy", "<name> copy 2", … — whichever is free in `taken`. */
@@ -356,14 +366,18 @@
                and with no Play verb, since playing them is the thing the
                rule forbids. The heading is the whole explanation. -->
           <div class="incompat" data-role="patterns-incompatible" hidden={deviceIncompatible === 0}>
+            <!-- mockups.html `.disclose`: the chevron is a SIBLING of the
+                 `.slabel`, so it reads chevron-then-label and keeps its own
+                 10px type instead of inheriting the label's uppercase and
+                 letter-spacing -->
             <button
-              class="slabel disc"
+              class="disc"
               data-role="patterns-incompatible-toggle"
               aria-expanded={showIncompatible}
               on:click={() => (showIncompatible = !showIncompatible)}
             >
-              <span class="caret" class:open={showIncompatible} aria-hidden="true">▸</span>
-              Not for this layout ({deviceIncompatible})
+              <i class="chev" class:open={showIncompatible} aria-hidden="true">▸</i>
+              <span class="slabel">Not for this layout ({deviceIncompatible})</span>
             </button>
             <div hidden={!showIncompatible}>
               <Gallery
@@ -536,15 +550,23 @@
        #480 adds the entry. -->
   {@const item = menu.item}
   <Popover open anchor={menu.anchor} dataRole="tile-menu-popup" on:close={closeMenu}>
+    <!-- the mock's three groups, separated the way it separates them: what
+         this pattern can JOIN, what you can do to the document, and the
+         destructive verb last and error-tinted -->
     {#if sourceId === "device"}
       <button class="mi" data-role="tile-menu-playlist" on:click={() => addToPlaylist(item)}>
         Add to playlist
       </button>
+      <div class="sepr"></div>
     {/if}
     <button class="mi" data-role="tile-menu-duplicate" on:click={() => void duplicate(item)}>
       Duplicate
     </button>
+    <button class="mi" data-role="tile-menu-export" on:click={() => exportPattern(item)}>
+      Export .epe
+    </button>
     {#if sourceId === "device"}
+      <div class="sepr"></div>
       <button
         class="mi del"
         data-role="tile-menu-delete"
@@ -612,15 +634,18 @@
     height: 32px;
     padding: 0 14px;
     border: none;
+    /* mockups.html `.seg > div`: the divider is a RIGHT border, dropped on
+       the last segment — not a left border on every one but the first */
+    border-right: 1px solid var(--border);
     border-radius: 0;
     background: transparent;
     color: var(--text-dim);
-    font: 13px/1 var(--sans);
+    font: 13px/1.45 var(--sans);
     cursor: pointer;
   }
 
-  .segbtn + .segbtn {
-    border-left: 1px solid var(--border);
+  .segbtn:last-child {
+    border-right: none;
   }
 
   .segbtn:hover {
@@ -647,7 +672,6 @@
   }
 
   .search {
-    flex: none;
     width: 240px;
   }
 
@@ -690,10 +714,12 @@
     border-top: 1px solid var(--border);
   }
 
+  /* mockups.html `.disclose` (the S2 rail's collapsed section), plus the
+     page's own 14px/20px inset */
   .disc {
     display: flex;
     align-items: center;
-    gap: 7px;
+    gap: 8px;
     padding: 14px 20px 0;
     border: none;
     border-radius: 0;
@@ -701,28 +727,27 @@
     cursor: pointer;
   }
 
-  .disc:hover {
+  .disc:hover :global(.slabel) {
     color: var(--text);
   }
 
-  .caret {
-    display: inline-block;
-    transition: transform 0.12s;
-  }
-
-  .caret.open {
-    transform: rotate(90deg);
-  }
-
-  /* the mobile stand-in for the hover strip (S1c) — mockups.html `.elink` */
+  /* the mobile stand-in for the hover strip (S1c) — mockups.html `.elink`.
+     Block and full width, like the mock's `<div>`: a `<button>` shrink-wraps
+     its text otherwise, which made the tap target the width of the word.
+     `min-height` — which the mock has no need for — lifts the row over the
+     24px touch-target floor without moving the text the mock's 5px down. */
   .elink {
     display: none;
+    width: 100%;
+    min-height: 24px;
     margin-top: 5px;
     padding: 0;
     border: none;
+    border-radius: 0;
     background: none;
     font-size: 12px;
     color: var(--accent);
+    text-align: left;
     cursor: pointer;
   }
 
@@ -747,7 +772,9 @@
   @media (max-width: 600px) {
     .pagebar {
       flex-wrap: wrap;
-      gap: 10px;
+      /* S1c: 10px between the segment row and the search row, 8px between
+         the search box and the `+` beside it */
+      gap: 10px 8px;
       padding: 12px;
     }
 

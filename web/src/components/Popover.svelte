@@ -30,8 +30,9 @@
 
   const dispatch = createEventDispatcher<{ close: void }>();
 
-  /** Gap between the anchor and the popover (mockup `.menu` top offset). */
-  const GAP = 7;
+  /** Gap between the anchor and the popover. The mock sets it per kind —
+   *  `.menu{top:calc(100% + 7px)}`, `.pop{top:calc(100% + 8px)}`. */
+  $: GAP = kind === "pop" ? 8 : 7;
   /** Minimum distance kept from every viewport edge. */
   const EDGE = 8;
 

@@ -211,8 +211,15 @@
   /** The tiles this grid owns. A split grid RENDERS only its half rather
    *  than hiding the other one: both halves are mounted over the same item
    *  list, so a merely-hidden tile would still answer `.tile` queries in the
-   *  other grid — and the page has two of them stacked. */
-  $: shown = tiles.filter((t) => inThisGrid(t, $layout.dims, splitting));
+   *  other grid — and the page has two of them stacked.
+   *
+   *  The pattern that is RUNNING sorts to the front (mockups S1/S1b/S1c all
+   *  draw the playing tile first): the console opens on this page to see what
+   *  the LEDs are doing, and hunting for the green ring in row four is not
+   *  that. Everything else keeps the source's own order. */
+  $: shown = tiles
+    .filter((t) => inThisGrid(t, $layout.dims, splitting))
+    .sort((a, b) => Number(b.key === playingKey) - Number(a.key === playingKey));
   $: count = shown.length;
 
   /** The Layout moved (the "Preview as" chip, or the device's own geometry
@@ -542,7 +549,6 @@
     display: block;
     width: 100%;
     image-rendering: pixelated;
-    background: #000;
   }
 
   /* a point cloud is drawn with round dots, not pixels — upscaling those
@@ -578,7 +584,6 @@
     border: 1px solid rgba(95, 191, 122, 0.55);
     color: var(--ok);
     font: 11px/1 var(--sans);
-    white-space: nowrap;
     pointer-events: none;
   }
 
@@ -649,9 +654,6 @@
     margin-top: 4px;
     font: 11px/1.2 var(--mono);
     color: var(--text-dim);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   /* why a dead tile has no verbs (§5.7: absent, with the reason shown) */
@@ -678,7 +680,8 @@
     .tiles,
     .tiles.bars {
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 12px;
+      /* the mock keeps the 16px gutter on a phone and only tightens the
+         padding to 12px (S1c `.tiles.c2`) */
       padding: 12px;
     }
 

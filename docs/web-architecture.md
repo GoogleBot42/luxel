@@ -95,6 +95,17 @@ the mock's two rows (S1c) — a 40px identity row and a 38px scrolling tab strip
 `var(--text)` with a 2px amber underline flush to the header border; amber
 TEXT is wrong (Jeremy, 2026-09-19).
 
+DOM order in that header is the VISUAL order, and deliberately so: the one
+focusable control right of the tabs (the brightness slider on a console, the
+"Preview as" chip in the playground) is authored AFTER `<nav class="tabs">`,
+outside `.hdrtop`, so Tab visits wordmark → chip → tabs → brightness → fps.
+`order:` is only ever put on things nobody can focus (the spacer, the fps
+readout). Before #538's closure the whole `.hdrtop` preceded the tabs and
+`hdr-brightness` was the FIRST stop on every console screen. The readout
+itself is bare — `27 fps`, the mock's own copy — and what the number is
+(panel `out_fps` vs render `fps`, the rescan ceiling, the local preview rate)
+lives in its `title`.
+
 The device is named by `stores/device.ts`'s `deviceLabel`: `/api/status`'s
 `name` when the firmware reports one, else the host it answers on. Never the
 word "device" — a console that says "device" tells nobody which board is on
@@ -334,7 +345,9 @@ document never disagree.
 `tile` (with `data-kind`, `data-dims`, `data-key`) · `tile-face` ·
 `tile-name` · `tile-play` (absent on a dead tile and on the playing one) ·
 `tile-edit` ·
-`tile-menu` · `tile-menu-popup` · `tile-menu-{playlist,duplicate,delete}` ·
+`tile-menu` · `tile-menu-popup` ·
+`tile-menu-{playlist,duplicate,export,delete}` (mockup S2's `.menu`: three
+groups, two `.sepr`s, the destructive verb last) ·
 `tile-playing` · `tile-edit-link` · `tile-caption` · `tile-dead` ·
 `tile-spinner` · `gallery-search` · `gallery-loading` · `gallery-note` ·
 `new-pattern` · `device-offline`.

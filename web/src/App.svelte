@@ -141,7 +141,10 @@
    *  the same loop, so there render == wire). `out_fps` has been bounded by
    *  `rescan_hz` since #394, so it is shown as measured rather than clamped
    *  to the ceiling; the ceiling goes in the tooltip. Not connected: the
-   *  browser preview loop, which is the only frame rate a playground has. */
+   *  browser preview loop, which is the only frame rate a playground has.
+   *  The READOUT is bare — `27 fps`, exactly the mock's header (S1/S5); what
+   *  the number is and where it came from is the tooltip's job, not four
+   *  extra words in 44px of chrome. */
   $: fpsReadout = !$device
     ? {
         text: `${$previewFps.toFixed(0)} fps`,
@@ -149,14 +152,14 @@
       }
     : $deviceOutFps > 0
       ? {
-          text: `device ${$deviceOutFps} fps (panel)`,
+          text: `${$deviceOutFps} fps`,
           title:
             `${$deviceOutFps} fps displayed by the panel (out_fps)` +
             ($deviceRescanHz ? `, panel rescan ${$deviceRescanHz} Hz` : "") +
             ` — device render loop ${$deviceFps} fps, local preview ${$previewFps.toFixed(0)} fps`,
         }
       : {
-          text: `device ${$deviceFps} fps`,
+          text: `${$deviceFps} fps`,
           title: `${$deviceFps} fps rendered by the device — local preview ${$previewFps.toFixed(0)} fps`,
         };
 
@@ -306,6 +309,13 @@
        used to live here moves into the editor's header with it
        (components/DeviceChip.svelte). -->
   {#if !editing && !mapEditing}
+    <!-- DOM order IS the visual order here, so Tab walks the header the way
+         the eye does: wordmark · chip · tabs · brightness · fps. The `.hdrtop`
+         wrapper carries no focusable control past the chip, and the one
+         header control that IS focusable (the brightness slider / the
+         playground's Layout chip) is authored AFTER the tab strip — which is
+         where it renders. `order:` is left to place the non-focusable spacer
+         and readout (#538 sweep: "tab order follows visual order"). -->
     <header class="hdr">
       <div class="hdrtop">
         <!-- the word `luxel`, and on a console nothing after it: WHICH device
@@ -319,18 +329,12 @@
 
         <span class="spacer"></span>
 
-        <!-- What this app is rendering through (#463). The console states the
-             device's own Layout in the chip above; the playground offers the
-             chip that chooses one. -->
-        {#if $isPlayground}
-          <span class="slot ctl">
-            <PreviewAsChip on:openmap={() => openMapEditor(backLabel)} />
-          </span>
-        {:else}
-          <span class="slot ctl bri"><HeaderBrightness /></span>
-        {/if}
-
-        <span class="fps mono" data-role="fps" title={fpsReadout.title}>{fpsReadout.text}</span>
+        <span
+          class="fps mono"
+          class:pg={$isPlayground}
+          data-role="fps"
+          title={fpsReadout.title}>{fpsReadout.text}</span
+        >
       </div>
 
       <nav class="tabs" data-role="tabs">
@@ -348,6 +352,17 @@
           </button>
         {/each}
       </nav>
+
+      <!-- What this app is rendering through (#463). The console states the
+           device's own Layout in the chip above; the playground offers the
+           chip that chooses one. -->
+      {#if $isPlayground}
+        <span class="slot ctl">
+          <PreviewAsChip on:openmap={() => openMapEditor(backLabel)} />
+        </span>
+      {:else}
+        <span class="slot ctl bri"><HeaderBrightness /></span>
+      {/if}
     </header>
   {/if}
 
@@ -472,7 +487,8 @@
   /* On a wide screen the header is ONE row, so this wrapper dissolves and its
      children become the header's own flex items (ordered below). At phone
      width it becomes the first of the two rows (mockup S1c) — which is the
-     only reason it exists. */
+     only reason it exists. It holds nothing focusable but the device chip,
+     so dissolving it cannot disturb the tab order. */
   .hdrtop {
     display: contents;
   }
@@ -523,6 +539,12 @@
     font: 11.5px/1 var(--mono);
     color: var(--text-dim);
     white-space: nowrap;
+  }
+
+  /* mockup S5 sets the playground readout off from the Layout chip by a
+     further 14px — the console's fps has the spacer to its left instead */
+  .fps.pg {
+    margin-left: 14px;
   }
 
   .tab {
@@ -577,9 +599,16 @@
       overflow-x: auto;
     }
 
-    /* no room for it beside the chip; Settings keeps its own */
+    /* no room for it beside the chip; Settings keeps its own. A console's
+       header is then exactly the mock's two rows (S1c). */
     .bri {
       display: none;
+    }
+
+    /* the playground's Layout chip has no such fallback, so it keeps a row of
+       its own under the tab strip rather than crowding the identity line */
+    .ctl {
+      padding: 0 12px 10px;
     }
   }
 

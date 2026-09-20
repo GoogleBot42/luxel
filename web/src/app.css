@@ -192,6 +192,21 @@ input[type="checkbox"] {
   color: var(--text-dim);
 }
 
+/* the disclosure triangle beside a `.slabel` (mockups.html `.chev`, the S2
+   rail's collapsed VARS section). A SIBLING of the label, never inside it:
+   the mock reads chevron-then-label, and an arrow glued into the label text
+   would also inherit the label's uppercase + letter-spacing. */
+.chev {
+  color: var(--text-dim);
+  font-size: 10px;
+  font-style: normal;
+  transition: transform 0.12s;
+}
+
+.chev.open {
+  transform: rotate(90deg);
+}
+
 /* ---------- popovers ----------
    Geometry and outside-click live in components/Popover.svelte; the looks
    live here because the menu's ITEMS are slot content, compiled in the
@@ -227,9 +242,8 @@ input[type="checkbox"] {
   border-radius: 5px;
   background: transparent;
   color: var(--text);
-  font: 13px/1.3 var(--sans);
+  font: 13px/1.45 var(--sans);
   text-align: left;
-  white-space: nowrap;
   cursor: pointer;
 }
 
@@ -261,7 +275,7 @@ input[type="checkbox"] {
   border-radius: 6px;
   background: transparent;
   color: var(--text);
-  font: 13px/1.3 var(--sans);
+  font: 13px/1.45 var(--sans);
   text-align: left;
   cursor: pointer;
 }

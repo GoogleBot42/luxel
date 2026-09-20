@@ -68,7 +68,7 @@
     title="what this playground previews on — every tile and preview uses it"
     on:click={() => (open = !open)}
   >
-    Preview as
+    Preview as &nbsp;<!-- the mock's own gap before the Layout name -->
     <!-- under Auto each pattern gets its own shape, so say so: the label is
          then what the pattern in the editor resolved to, not a page-wide rig -->
     {#if mode === "auto"}<span class="dim">Auto ·</span>{/if}
@@ -205,9 +205,11 @@
 </span>
 
 <style>
+  /* mockups.html `.menuwrap`: a plain positioned block, NOT a flex container.
+     A flex container blockifies its children, which turned the `inline-flex`
+     `.btn` inside into a `flex` one. */
   .wrap {
     position: relative;
-    display: inline-flex;
   }
 
   /* mockup S5: the layout chooser is a `.btn` in the accent's own tint — the
@@ -240,7 +242,10 @@
     color: var(--text-dim);
   }
 
+  /* mockup S5 sets the Layout's own name in `.mono.tiny` — 12px mono beside
+     the chip's 13px sans label */
   .mono {
     font-family: var(--mono);
+    font-size: 12px;
   }
 </style>

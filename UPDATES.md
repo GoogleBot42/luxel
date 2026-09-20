@@ -1,5 +1,49 @@
 # Update log
 
+## 2026-09-20 — fidelity closure: shell, Patterns, playground chip, menu primitives (#538)
+
+`mockdiff` frames `S1 S1b S1c S1incompat S1menu S5`: **75 deltas → 0**, every allow entry
+carrying a reason (two mock items absent by ticket, the rest live data the static mock
+cannot have). What moved:
+
+- **Header DOM order = visual order.** The brightness slider used to be the FIRST Tab stop
+  on every console screen, because `.hdrtop` preceded `<nav class="tabs">` and the visual
+  order was restored with `order:`. The one focusable control right of the tabs is now
+  authored after them; `order:` survives only on the spacer and the fps readout, which
+  nobody can focus. Tab now walks wordmark → chip → tabs → brightness → fps.
+- **The status readout is the mock's own copy** — `112 fps`, not `device 112 fps (panel)`.
+  Which number it is (panel `out_fps`, the rescan ceiling, the local preview rate) stays in
+  the tooltip. `device-e2e.mjs` asserts the new shape.
+- **The playing tile sorts to the front of the grid** (mockups S1/S1b/S1c all draw it
+  first) — you open the console to see what the LEDs are doing.
+- **The tile ⋯ menu is mockup S2's `.menu`**: three groups, two separators, `Export .epe`
+  added, the destructive verb last. `Import .epe…` into a library is Gitea #572.
+- **The `incompatible` disclosure is the mock's `.disclose`** — a `.chev` sibling of the
+  `.slabel`, not an arrow glued inside the label inheriting its uppercase and tracking.
+  `.chev` is now an app.css primitive.
+- Segments take their divider from the mock (a right border dropped on the last), the
+  popover's anchor gap is the mock's per kind (`.menu` 7px, `.pop` 8px), menu/radio rows
+  inherit the body's 1.45 line-height instead of 1.3, tile canvases and captions lose the
+  paint and clamping the mock does not have, and the phone grid keeps its 16px gutter.
+- **Touch targets**: the phone tile's `Edit` link was a 23px-wide, 17px-tall button; it is
+  now a full-width block over the 24px floor. `--sweep` is clean for Patterns and
+  Patterns · Library at all five widths.
+
+Map corrections (not tolerance changes): `S1`'s idle-tab comparison pointed at two
+different tabs (the mock has a Scenes tab, the app does not); `S1incompat`'s recipe walked
+to Library, where the group it measures is `hidden`; `S5`'s recipe only opened the Layout
+chooser instead of picking the Matrix the mock draws picked, so every selected/unselected
+style was compared the wrong way round.
+
+`mockdiff.mjs` now clears `localStorage`/`sessionStorage` before every frame. A frame is a
+NAMED STATE and every frame shares one `vite preview` origin, so the app's persisted keys
+were leaking between them: the editor frames leave a dirty 2D working copy, the console
+resumes it, and a 300 px strip console twenty frames later reports itself as an `18×17
+matrix` — which is its own bug, now **Gitea #573** (a console must not resume, let alone
+push, a pattern the fixture cannot show; and `/api/status`'s `geom` should describe the
+fixture, not the running program). Same class as #539.
+
+
 ## 2026-09-20 — mockdiff: the mocks become a measurement
 
 `web/tools/mockdiff.mjs` + `web/tools/mockdiff.map.json` (docs/tools.md). The approved

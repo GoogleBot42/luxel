@@ -670,6 +670,29 @@ async function seedMirror(base, seed, pixels) {
   }
 }
 
+/**
+ * Every frame is a NAMED STATE, so it must start from an empty profile.
+ * The app persists real state on the `vite preview` origin every frame
+ * shares — `luxel.previewAs`, `luxel.current` (the autosaved working copy),
+ * `luxel.patterns`, `luxel.mapSrc` — so one frame's leftovers silently
+ * re-shape the next one's. Measured 2026-09-20: the editor frames leave a
+ * DIRTY 2D working copy behind, the console resumes it, and a 300 px strip
+ * console two frames later reports itself as an `18×17 matrix` — which made
+ * `S1incompat`'s group legitimately empty and its elements zero-sized. That
+ * resume is its own bug (Gitea #573); the instrument must not depend on it
+ * either way.
+ */
+async function freshProfile(pg) {
+  await pg.evaluateOnNewDocument(() => {
+    try {
+      localStorage.clear();
+      sessionStorage.clear();
+    } catch {
+      /* storage blocked — nothing to clear */
+    }
+  });
+}
+
 const procs = [];
 async function startMirror(kind) {
   const port = MIRROR_PORT[kind];
@@ -973,6 +996,7 @@ for (const frameId of runIds) {
   // does — by fragment.
   const reusing = DEVICE_BUNDLE && devicePage !== null && (F.app?.target === "panel");
   const page = reusing ? devicePage : await browser.newPage();
+  if (!reusing) await freshProfile(page);
   await page.setViewport({ width, height, deviceScaleFactor: 1 });
   const base = app.target && app.target !== "playground" ? bases[app.target] : null;
   if (app.target && app.target !== "playground" && !base) {
@@ -1372,6 +1396,7 @@ if (has("--sweep")) {
   for (const screen of MAP.sweep?.screens ?? []) {
     for (const width of MAP.sweep?.widths ?? [1400, 1200, 1000, 760, 390]) {
       const pg = await browser.newPage();
+      await freshProfile(pg);
       await pg.setViewport({ width, height: 900 });
       await pg
         .goto(`http://localhost:${WEB_PORT}/?device=${encodeURIComponent(base)}${screen.route}`, {
