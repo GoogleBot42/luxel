@@ -1,5 +1,84 @@
 # Update log
 
+## 2026-09-19 — a Layout never shows a bigger pattern; device name; clock sync now (#538)
+
+The engine/firmware/mirror third of Jeremy's Phase A review (Gitea #538 §B/§C).
+No web components were touched — the filtering/hiding half is a separate PR.
+
+**Projection rules (Jeremy's decision).** A 1D Layout no longer projects 2D or
+3D patterns, and a 2D Layout no longer projects 3D ones. `projection_options`
+is empty for those three pairs, so `MiddleRow` / `MiddleColumn` / `Line along …`
+/ `Slice …` are gone from `luxel_core::projection`, from `Engine::compute_plan`,
+from the labels, from the wasm FFI's tables and from the TypeScript mirror in
+`web/src/lib/geometry.ts`. The whole remaining table is
+
+| Layout | 1D patterns | 2D patterns | 3D patterns |
+|---|---|---|---|
+| 1D | native | — | — |
+| 2D | `index` · `x` · `y` | native | — |
+| 3D | `index` · `x` · `y` · `z` | `z` · `y` · `x` | native |
+
+No explanatory copy anywhere; the options simply are not offered. The wire
+enum values (`xy`/`xz`/`yz`) stay **reserved** and `POST /api/layout` still
+accepts a `proj2d`/`proj3d` line whatever the kind — `Layout::to_wire`
+persists all three, so a parser that rejected them would have dropped every
+upgraded device back to its board default on the first boot. A stored value
+with nowhere to apply is ignored, not an error.
+
+**What the engine does with an incompatible pattern** (a playlist entry, a
+share link, HA): it renders it, on the plain fallback coordinates — which are
+exactly what the removed cells' FIRST options produced (middle row, line along
+x, slice xy), plus the w×1 grid a grid-space `renderFrame` on a strip has
+always had. Nothing goes dark. What is new is that the fact is now reported:
+`luxel_core::projection::compatible()`, `EffectiveGeometry::compatible`, the
+wasm `lx_effective_geometry`'s `compatible`, and **`geom.compatible` in
+`GET /api/status`** on both hosts. It reads the LAYOUT's dims, not `geom.dims`:
+a `source:"default"` geometry is the engine's fabricated ceil(√n) grid papering
+over a bare strip, which is precisely the case a UI must flag.
+
+**Device name** — `GET/POST /api/name` on both hosts, 1..=32 bytes of
+printable UTF-8, empty body restores the board's `luxel-<mac6>`. Reported as
+`name` in `/api/status` (one borrow of a shared String, no flash read).
+Persisted in the pattern store's reserved-key blob space (`NAME_KEY`,
+`firmware/src/devname.rs`) because the nvs partition's four sectors are full
+and `DeviceConfig` is a fixed struct. The DHCP hostname is built from it at
+boot and the network stack never re-reads it, so the POST answers
+`"reboot_required":true`. The setup AP's SSID deliberately stays the MAC
+default for now — #536 moves it, with a password, onto the same string, and
+`main()` is already shaped for that (`ap_ssid` vs `hostname`). Mirror parity:
+`luxel serve --name NAME`, default `luxel-serve`.
+
+**Clock sync now** — `POST /api/clock/sync` wakes the SNTP task, which
+otherwise sleeps out a 6 h period or an exponential backoff, via a new
+`shared::SNTP_POKE` signal (the `MQTT_POKE` idiom). The reply is the clock as
+it stands at that instant, so `synced` is still the previous state on a first
+successful call; poll `GET /api/clock` for the result. The mirror's clock is
+the host's, so it answers `{"ok":true,"synced":true,…}` and does nothing.
+
+**Size, and the parser that paid for it.** The three endpoints cost +2,480 B
+on `board-c6-devkit` + `hosted-ui`, which had **1,679 B** of CI margin
+(3.16 %) — so `tools/image-check.sh`'s 3 % floor failed. Micro-optimising the
+feature could not close the gap (two attempts made it *worse*; both are
+written down in docs/boards.md so nobody repeats them). What closed it was
+#465's `str::parse` lesson: `firmware/src/server.rs` was parsing **five**
+integer widths and each instantiates its own `from_str_radix`. Every unsigned
+one now goes through a hand-rolled `fn num(&str) -> Option<u32>` and narrows
+with `as`, and the timezone reads as the `i32` the control path already
+instantiates — **−1,088 B** on the C6, more than the whole of `/api/name`.
+Net: pixelblaze-v3 **+1,664 B** (4.18 %), athom-music **+1,584 B** (1.78 %),
+c6-devkit-hosted **+1,392 B** (**3.03 %**, green). The underlying squeeze on
+that variant is Gitea #543.
+
+One behaviour change falls out of it: those routes no longer accept a leading
+`+` (`parse` did). `/api/brightness` `+5` is now a rejection, not 5.
+
+**`.stack`.** `board-pixelblaze-v3` was already **116 B under**
+`tools/stack-check.sh`'s 24,576 B floor on master (24,460 B) — `tools/ci.sh`
+does not run stack-check, which is how it drifted there unnoticed (Gitea
+#515). #538's statics took another 120 B, so the classic-ESP32
+`heap_allocator!` gives 512 B back as `STATICS_RESERVE`: pb-v3 24,852 B,
+athom-music 25,676 B, pb-v3 + `small-chip` 26,468 B, all green again.
+
 ## 2026-09-19 — the shared layer of the mock-matching round: tokens, one button, one popover, a URL (#538)
 
 Jeremy reviewed Phase A on both bench boards and the verdict was "a pretty

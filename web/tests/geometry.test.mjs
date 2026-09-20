@@ -81,12 +81,17 @@ test("strip console: every pattern renders on the device's 300 px strip", () => 
   }
 });
 
-test("strip console: a 2D pattern is captioned with its projection, a 1D one is not", () => {
+test("strip console: a 2D or 3D pattern is incompatible, never captioned (#538)", () => {
   const l = reconcileLayout(input({ connected: true, geom: STRIP_CONSOLE, patternDims: 2 }));
-  assert.equal(projectionCaption(2, l), "2D · middle row");
-  assert.equal(projectionCaption(3, l), "3D · line along x");
-  assert.equal(projectionCaption(1, l), null);
-  assert.equal(projectionCaption(0, l), null);
+  for (const pd of [2, 3]) {
+    assert.equal(projectionCaption(pd, l), null, `${pd}D has no projection to name`);
+    assert.equal(effectiveFor(pd, l).compatible, false, `${pd}D on a strip`);
+    assert.equal(effectiveFor(pd, l).mode, null);
+  }
+  for (const pd of [0, 1]) {
+    assert.equal(projectionCaption(pd, l), null);
+    assert.equal(effectiveFor(pd, l).compatible, true);
+  }
 });
 
 test("matrix console: every pattern renders on the device's 64×64 grid", () => {
@@ -105,7 +110,10 @@ test("matrix console: the 1D tile says how it is projected, the 2D one is native
   const l = reconcileLayout(input({ connected: true, geom: PANEL_CONSOLE, patternDims: 1 }));
   assert.equal(projectionCaption(1, l), "1D · by index");
   assert.equal(projectionCaption(2, l), null);
-  assert.equal(projectionCaption(3, l), "3D · slice xy");
+  // #538: a plane never shows a 3D pattern
+  assert.equal(projectionCaption(3, l), null);
+  assert.equal(effectiveFor(3, l).compatible, false);
+  assert.equal(effectiveFor(2, l).compatible, true);
   // by index renders one call per layout pixel; along x renders one strip
   assert.equal(effectiveFor(1, l).pixelCount, 4096);
   const alongX = reconcileLayout(

@@ -752,8 +752,10 @@ pub extern "C" fn lx_projection_options(pattern_dims: u32, layout_dims: u32) -> 
 
 /// What the pattern actually sees once the projection is applied, as JSON in
 /// the response buffer: `{"pixelCount":64,"patternDims":1,"layoutDims":2,
-/// "w":64,"h":1,"mode":"x","label":"Along x"}` (`mode` is null when the
-/// pattern is native). Returns 1, or 0 for a bad handle.
+/// "w":64,"h":1,"mode":"x","label":"Along x","compatible":true}` (`mode` is
+/// null when the pattern is native, and also when it is incompatible —
+/// `compatible` false, a Layout asked to show more dimensions than it has,
+/// Gitea #538). Returns 1, or 0 for a bad handle.
 #[no_mangle]
 pub extern "C" fn lx_effective_geometry(h: i32) -> i32 {
     use luxel_core::projection::projection_label;
@@ -768,8 +770,9 @@ pub extern "C" fn lx_effective_geometry(h: i32) -> i32 {
             None => String::from("null,\"label\":null"),
         };
         set_response(format!(
-            "{{\"pixelCount\":{},\"patternDims\":{},\"layoutDims\":{},\"w\":{},\"h\":{},\"mode\":{mode}}}",
-            g.pixel_count, g.pattern_dims, g.layout_dims, g.w, g.h
+            "{{\"pixelCount\":{},\"patternDims\":{},\"layoutDims\":{},\"w\":{},\"h\":{},\
+             \"mode\":{mode},\"compatible\":{}}}",
+            g.pixel_count, g.pattern_dims, g.layout_dims, g.w, g.h, g.compatible
         ));
         1
     })

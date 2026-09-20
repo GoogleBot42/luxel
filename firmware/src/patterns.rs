@@ -323,6 +323,9 @@ pub const PALETTE_KEY: u32 = 0x7FFF_FFFA;
 /// `/api/config` and `/api/map` remain honest aliases rather than a second,
 /// drifting copy (Gitea #465).
 pub const LAYOUT_KEY: u32 = 0x7FFF_FFF9;
+/// The device's user-set name (see devname.rs) — variable-length, and the
+/// nvs device record is a fixed struct with no room for a string.
+pub const NAME_KEY: u32 = 0x7FFF_FFF8;
 
 /// Store a small blob under a reserved key. False if storage is unavailable or
 /// the blob is too large for one page.

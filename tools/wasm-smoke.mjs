@@ -145,10 +145,15 @@ assert.deepStrictEqual(
   "1D pattern on a 2D Layout",
 );
 assert.strictEqual(e.lx_projection_options(2, 2), 0, "a native pair offers nothing");
+// #538: a Layout never shows a pattern of a higher dimensionality, so those
+// three cells are empty and `compatible` says why.
+assert.strictEqual(e.lx_projection_options(3, 2), 0, "a 2D Layout shows no 3D pattern");
+assert.strictEqual(e.lx_projection_options(2, 1), 0, "a strip shows no 2D pattern");
+assert.strictEqual(e.lx_projection_options(3, 1), 0, "a strip shows no 3D pattern");
 assert.deepStrictEqual(
-  JSON.parse((e.lx_projection_options(3, 2), response())).map((o) => o.label),
-  ["Slice xy", "Slice xz", "Slice yz"],
-  "3D pattern on a 2D Layout, labelled by the engine",
+  JSON.parse((e.lx_projection_options(2, 3), response())).map((o) => o.label),
+  ["Repeat along z", "Repeat along y", "Repeat along x"],
+  "2D pattern on a 3D Layout, labelled by the engine",
 );
 
 const src6 = putStr("export function render(index) { rgb(index / 4, pixelCount / 8, 0) }");
@@ -167,6 +172,7 @@ assert.deepStrictEqual(JSON.parse(response()), {
   h: 2,
   mode: "index",
   label: "By index",
+  compatible: true,
 });
 // along x: ONE strip of 4 renders, replicated over both rows
 assert.strictEqual(e.lx_set_projection(h6, 1, 3, 4), 1); // x, z, xy
@@ -183,6 +189,22 @@ assert.deepStrictEqual(
   [0, 127, 0, 63, 127, 0, 127, 127, 0, 191, 127, 0],
   "index/4 across the row, pixelCount = 4",
 );
+
+// #538: a 2D pattern on a strip Layout is INCOMPATIBLE — no mode in force,
+// but it still renders (mid-space y), so nothing goes dark.
+const src6b = putStr("export function render2D(index, x, y) { rgb(x, y, 0) }");
+const h6b = e.lx_new(src6b.ptr, src6b.len, 8, 1);
+src6b.free();
+assert.ok(h6b >= 0, response());
+e.lx_set_strip_layout(h6b);
+assert.strictEqual(e.lx_layout_dims(h6b), 1);
+assert.strictEqual(e.lx_effective_geometry(h6b), 1);
+const incompat = JSON.parse(response());
+assert.strictEqual(incompat.compatible, false, "2D pattern on a strip");
+assert.strictEqual(incompat.mode, null, "no projection is in force");
+assert.strictEqual(incompat.patternDims, 2);
+assert.strictEqual(incompat.layoutDims, 1);
+assert.ok(e.lx_frame(h6b, 0) > 0, "and it still renders a frame");
 
 // ---- the device output chain (lx_outpipe, Gitea #466) ----
 // The playground now runs the SAME chain the firmware does, so a console

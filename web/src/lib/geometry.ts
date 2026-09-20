@@ -61,27 +61,31 @@ export function normDims(d: number): Dims {
 
 const OPT_1_ON_2: ProjectionMode[] = ["index", "x", "y"];
 const OPT_1_ON_3: ProjectionMode[] = ["index", "x", "y", "z"];
-const OPT_2_ON_1: ProjectionMode[] = ["x", "y"];
 const OPT_2_ON_3: ProjectionMode[] = ["z", "y", "x"];
-const OPT_3_ON_1: ProjectionMode[] = ["x", "y", "z"];
-const OPT_3_ON_2: ProjectionMode[] = ["xy", "xz", "yz"];
+
+/** Whether this Layout can show a pattern of `patternDims` at all (#538): a
+ *  Layout shows its own dimensionality and lower, never higher. A host never
+ *  OFFERS an incompatible pattern, but the engine still renders one it is
+ *  handed (an old playlist entry, a share link, HA) — `/api/status`'s
+ *  `geom.compatible` and `EffectiveGeometry.compatible` report this. */
+export function projectionCompatible(patternDims: number, layoutDims: number): boolean {
+  return normDims(patternDims) <= normDims(layoutDims);
+}
 
 /** The projection choices that mean anything for a pattern of `patternDims`
  *  on a Layout of `layoutDims` — one row of the §5.4d table, display order,
- *  first = default. Empty when the pattern is native to the Layout. */
+ *  first = default. Empty when there is nothing to project: the pattern is
+ *  native to the Layout, or it is incompatible with it. */
 export function projectionOptions(patternDims: number, layoutDims: number): ProjectionMode[] {
   const pd = normDims(patternDims);
   const ld = normDims(layoutDims);
   if (pd === 1 && ld === 2) return OPT_1_ON_2;
   if (pd === 1 && ld === 3) return OPT_1_ON_3;
-  if (pd === 2 && ld === 1) return OPT_2_ON_1;
   if (pd === 2 && ld === 3) return OPT_2_ON_3;
-  if (pd === 3 && ld === 1) return OPT_3_ON_1;
-  if (pd === 3 && ld === 2) return OPT_3_ON_2;
   return [];
 }
 
-/** The human label for one cell (`Along x`, `Middle row`, `Slice xz`, …) —
+/** The human label for one cell (`Along x`, `Repeat along z`, …) —
  *  `Native` for a pair with no choice. */
 export function projectionLabel(
   mode: ProjectionMode,
@@ -96,31 +100,18 @@ export function projectionLabel(
     if (mode === "y") return "Along y";
     if (mode === "z" && ld === 3) return "Along z";
   }
-  if (pd === 2 && ld === 1) {
-    if (mode === "x") return "Middle row";
-    if (mode === "y") return "Middle column";
-  }
   if (pd === 2 && ld === 3) {
     if (mode === "x") return "Repeat along x";
     if (mode === "y") return "Repeat along y";
     if (mode === "z") return "Repeat along z";
   }
-  if (pd === 3 && ld === 1) {
-    if (mode === "x") return "Line along x";
-    if (mode === "y") return "Line along y";
-    if (mode === "z") return "Line along z";
-  }
-  if (pd === 3 && ld === 2) {
-    if (mode === "xy") return "Slice xy";
-    if (mode === "xz") return "Slice xz";
-    if (mode === "yz") return "Slice yz";
-  }
   return "Native";
 }
 
-/** The mode actually in force for this pair: null when the pattern is native
- *  to the Layout, otherwise the stored choice — or the pair's first option
- *  when the stored choice is not one this pair offers. */
+/** The mode actually in force for this pair: null when there is nothing to
+ *  project (the pattern is native to the Layout, or incompatible with it),
+ *  otherwise the stored choice — or the pair's first option when the stored
+ *  choice is not one this pair offers. */
 export function effectiveProjection(
   p: Projection,
   patternDims: number,
@@ -414,9 +405,13 @@ export function layoutLabel(l: Layout): string {
 export interface Effective {
   patternDims: Dims;
   layoutDims: Dims;
-  /** null when the pattern is native to the Layout. */
+  /** null when the pattern is native to the Layout — and also when it is
+   *  incompatible with it, which has no projection to be in force. */
   mode: ProjectionMode | null;
   label: string | null;
+  /** False when the Layout cannot show a pattern of this dimensionality at
+   *  all (#538) — the twin of `/api/status`'s `geom.compatible`. */
+  compatible: boolean;
   /** What `pixelCount` reads inside the pattern: the strip length under an
    *  along-axis projection of a 1D pattern, the Layout's count otherwise. */
   pixelCount: number;
@@ -433,14 +428,16 @@ export function effectiveFor(patternDims: PatternDims, l: Layout): Effective {
     layoutDims: l.dims,
     mode,
     label: mode === null ? null : projectionLabel(mode, pd, l.dims),
+    compatible: projectionCompatible(pd, l.dims),
     pixelCount: l.pixels,
     w: l.dims === 2 && l.regular ? l.w : 0,
     h: l.dims === 2 && l.regular ? l.h : 0,
   };
   if (pd === 2 && l.dims === 1) {
-    // a grid-space renderFrame on a strip gets a w×1 (or 1×h) grid
-    eff.w = mode === "y" ? 1 : l.pixels;
-    eff.h = mode === "y" ? l.pixels : 1;
+    // incompatible, but a grid-space renderFrame still owns the buffer and
+    // gets a w×1 grid so its grid-space builtins describe the strip (#538)
+    eff.w = l.pixels;
+    eff.h = 1;
     return eff;
   }
   if (pd === 1 && mode !== null && mode !== "index" && l.regular) {
@@ -453,7 +450,9 @@ export function effectiveFor(patternDims: PatternDims, l: Layout): Effective {
 }
 
 /** The dim caption a tile or a row carries when the pattern is not native to
- *  the Layout — `1D · along x` (§5.4d). null when it is native. */
+ *  the Layout — `1D · along x` (§5.4d). null when it is native, and null for
+ *  an incompatible pattern too: there is no projection to name, and the
+ *  surface should be flagging `compatible` instead (#538). */
 export function projectionCaption(patternDims: PatternDims, l: Layout): string | null {
   const e = effectiveFor(patternDims, l);
   if (e.label === null) return null;

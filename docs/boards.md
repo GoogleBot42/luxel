@@ -2618,3 +2618,50 @@ positions** against the panel's own clock rows, never by counting dark frames
 or trusting the camera's nominal rate: a real skip is two adjacent lit
 positions of the **same** colour (parity), and `/api/status` `pass.skips` /
 `pass.repeats` (#398) are the firmware-side ground truth to compare against.
+
+2026-09-19, **#538's three new endpoints, paid for by one integer parser.**
+`GET/POST /api/name` (a device name — a reserved-key blob plus its boot
+read, `firmware/src/devname.rs`), `POST /api/clock/sync` (an SNTP poke
+signal) and `geom.compatible` in `/api/status`. Credless flake builds of
+`origin/master` `3727234` vs the branch, on the same machine — and these are
+the CI runner's own numbers for master byte for byte (run 1858), so the
+`--remap-path-prefix` set from #441 really has closed the host gap:
+
+| board | before | after | Δ | slot margin |
+|---|---:|---:|---:|---:|
+| `board-pixelblaze-v3` | 1,003,040 | 1,004,704 | +1,664 | 43,872 B (4.18 %) |
+| `board-athom-music` | 1,028,288 | 1,029,872 | +1,584 | 18,704 B (1.78 %) |
+| `board-c6-devkit` + `hosted-ui` | 1,015,440 | 1,016,832 | +1,392 | 31,744 B (3.03 %) |
+
+**The C6 hosted image had 1,679 B of CI margin and the feature cost 2,480 B**
+(3.16 % → 2.92 %, under `tools/image-check.sh`'s 3 % floor, which
+`tools/ci.sh` gates). Micro-optimising the feature could not close that —
+two attempts made it WORSE, recorded below. What closed it was #465's
+`str::parse` lesson applied to `firmware/src/server.rs`: it was parsing
+**five** integer widths (`u8` ×3, `u16`, `u32`, `i16`, `i32`) and each width
+instantiates its own `from_str_radix`. Routing every unsigned one through a
+hand-rolled `fn num(&str) -> Option<u32>` and narrowing with `as`, plus
+reading the timezone as the `i32` the control path already instantiates, is
+**−1,088 B** on the C6 — more than the whole of `/api/name`. `u8`/`u16`
+remain linked via `devicemap.rs` and `outpipe.rs`, so the saving is smaller
+than five-widths-minus-two would suggest; measure, do not extrapolate.
+
+The projection half pays 480 B of its own way (`Engine::sync_plan` −340,
+`main` −140). Removing the four now-unreachable modes buys no more than
+that: the firmware never linked `projection_label` or the option tables'
+display path, so only the plan arms were live.
+
+Two micro-experiments that did NOT pay, so nobody repeats them: holding the
+two device-name cells as `heapless::String<32>` instead of `String` cost
+**+2,032 B** on this variant (1,017,904 → 1,019,936) while saving 112 B on
+the Xtensa boards, and parking the board default in a `StaticCell` as a
+`&'static str` cost another **+256 B**. At this size the RISC-V codegen's
+response to a small shape change is larger than the change itself — measure
+the image, on the board that is gated. The underlying squeeze is Gitea #543.
+
+`.stack` (`tools/stack-check.sh`): `board-pixelblaze-v3` was already **116 B
+UNDER** the 24,576 B floor on master (24,460 B) and #538's statics took
+another 120 B, so the classic-ESP32 `heap_allocator!` gives 512 B back as
+`STATICS_RESERVE` — pb-v3 **24,852 B**, athom-music **25,676 B**,
+pb-v3 + `small-chip` **26,468 B**, all green. `tools/ci.sh` does not run
+stack-check, which is how master drifted under it unnoticed (Gitea #515).

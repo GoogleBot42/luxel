@@ -159,40 +159,40 @@ fn one_d_on_lattice_along_z() {
     }
 }
 
-// ---- 2D patterns on a 1D Layout: middle row · middle column ----
+// ---- 2D patterns on a 1D Layout: not a pairing a host offers (#538) ----
 
 #[test]
-fn two_d_on_strip_middle_row() {
-    let mut e = with_proj(COORDS_2D, 4, 2, ProjectionMode::X);
-    e.set_strip_layout();
-    assert_eq!(e.layout_dims(), 1);
-    assert_eq!(e.effective_geometry().mode, Some(ProjectionMode::X));
-    let px = e.frame(Fx::ZERO).to_vec();
-    for (i, p) in px.iter().enumerate() {
-        assert_eq!(p[0], q(i as f64 / 4.0), "x walks the strip");
-        assert_eq!(p[1], MID, "y pinned to the middle row");
-    }
-}
-
-#[test]
-fn two_d_on_strip_middle_column() {
-    let mut e = with_proj(COORDS_2D, 4, 2, ProjectionMode::Y);
-    e.set_strip_layout();
-    let px = e.frame(Fx::ZERO).to_vec();
-    for (i, p) in px.iter().enumerate() {
-        assert_eq!(p[0], MID, "x pinned to the middle column");
-        assert_eq!(p[1], q(i as f64 / 4.0), "y walks the strip");
+fn two_d_on_a_strip_is_incompatible_and_falls_back() {
+    // No option, nothing in force — but the frame still renders, on the
+    // engine's plain fallback coordinates (x walks the strip, y mid-space),
+    // so a playlist entry or a share link cannot black the device out.
+    for mode in [ProjectionMode::X, ProjectionMode::Y, ProjectionMode::Z] {
+        let mut e = with_proj(COORDS_2D, 4, 2, mode);
+        e.set_strip_layout();
+        assert_eq!(e.layout_dims(), 1);
+        let g = e.effective_geometry();
+        assert_eq!(g.mode, None, "{mode}");
+        assert!(!g.compatible, "{mode}");
+        let px = e.frame(Fx::ZERO).to_vec();
+        for (i, p) in px.iter().enumerate() {
+            assert_eq!(p[0], q(i as f64 / 4.0), "{mode}: x walks the strip");
+            assert_eq!(p[1], MID, "{mode}: y mid-space");
+        }
     }
 }
 
 #[test]
 fn render_frame_on_strip_gets_a_row_grid() {
+    // A grid-space `renderFrame` on a strip is incompatible too, but it owns
+    // the buffer: hand it a w×1 grid so gridWidth/gridHeight describe the
+    // strip rather than nothing. There is no choice to make about it.
     let src = "export var w = 0\nexport var h = 0\n\
                export function renderFrame() { w = gridWidth()\n h = gridHeight()\n fillRect(0, 0, 1, 1) }";
     let mut e = with_proj(src, 6, 2, ProjectionMode::X);
     e.set_strip_layout();
     let g = e.effective_geometry();
     assert_eq!((g.w, g.h), (6, 1), "a whole-frame pattern gets a w×1 grid");
+    assert!(!g.compatible);
     e.frame(Fx::ZERO);
     assert_eq!(e.var("w"), Some(Value::Num(Fx::from_int(6))));
     assert_eq!(e.var("h"), Some(Value::Num(Fx::from_int(1))));
@@ -201,7 +201,7 @@ fn render_frame_on_strip_gets_a_row_grid() {
     p.set(2, ProjectionMode::Y);
     e.set_projection(p);
     let g = e.effective_geometry();
-    assert_eq!((g.w, g.h), (1, 6), "middle column transposes it");
+    assert_eq!((g.w, g.h), (6, 1), "and no stored value transposes it");
 }
 
 #[test]
@@ -249,50 +249,36 @@ fn two_d_on_lattice_repeat_along_each_axis() {
     }
 }
 
-// ---- 3D patterns on a 1D Layout: a line through the centre ----
+// ---- 3D patterns on a 1D or 2D Layout: not a pairing a host offers ----
 
 #[test]
-fn three_d_on_strip_line_along_each_axis() {
-    for (mode, axis) in [
-        (ProjectionMode::X, 0usize),
-        (ProjectionMode::Y, 1),
-        (ProjectionMode::Z, 2),
-    ] {
+fn three_d_below_three_dimensions_is_incompatible_and_falls_back() {
+    for mode in [ProjectionMode::Y, ProjectionMode::Z, ProjectionMode::Yz] {
+        // on a strip: x walks it, y and z mid-space
         let mut e = with_proj(COORDS_3D, 4, 3, mode);
         e.set_strip_layout();
         assert_eq!(e.layout_dims(), 1);
+        let g = e.effective_geometry();
+        assert_eq!(g.mode, None, "{mode} on a strip");
+        assert!(!g.compatible, "{mode} on a strip");
         let px = e.frame(Fx::ZERO).to_vec();
         for (i, p) in px.iter().enumerate() {
-            for a in 0..3 {
-                let want = if a == axis { q(i as f64 / 4.0) } else { MID };
-                assert_eq!(p[a], want, "{mode} pixel {i} axis {a}");
-            }
+            assert_eq!(p[0], q(i as f64 / 4.0), "{mode} pixel {i} x");
+            assert_eq!(p[1], MID, "{mode} pixel {i} y");
+            assert_eq!(p[2], MID, "{mode} pixel {i} z");
         }
-    }
-}
 
-// ---- 3D patterns on a 2D Layout: slice xy · xz · yz ----
-
-#[test]
-fn three_d_on_grid_slices() {
-    for (mode, slot) in [
-        (ProjectionMode::Xy, [Some(0usize), Some(1), None]),
-        (ProjectionMode::Xz, [Some(0), None, Some(1)]),
-        (ProjectionMode::Yz, [None, Some(0), Some(1)]),
-    ] {
+        // on a grid: the xy plane, z mid-space
         let mut e = with_proj(COORDS_3D, 8, 3, mode);
         e.set_grid_map(4, 2);
-        assert_eq!(e.effective_geometry().mode, Some(mode));
+        let g = e.effective_geometry();
+        assert_eq!(g.mode, None, "{mode} on a grid");
+        assert!(!g.compatible, "{mode} on a grid");
         let px = e.frame(Fx::ZERO).to_vec();
         for i in 0..8usize {
-            let layout = [qcell(i % 4, 4), qcell(i / 4, 2)];
-            for a in 0..3 {
-                let want = match slot[a] {
-                    Some(k) => layout[k],
-                    None => MID,
-                };
-                assert_eq!(px[i][a], want, "{mode} pixel {i} axis {a}");
-            }
+            assert_eq!(px[i][0], qcell(i % 4, 4), "{mode} pixel {i} x");
+            assert_eq!(px[i][1], qcell(i / 4, 2), "{mode} pixel {i} y");
+            assert_eq!(px[i][2], MID, "{mode} pixel {i} z");
         }
     }
 }

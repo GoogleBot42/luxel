@@ -449,6 +449,7 @@ in it at all any more, not even their directory:**
 | `RESUME_KEY` | ~16 | per swap (skipped when unchanged) |
 | `PALETTE_KEY` | ≤ 64 | per palette edit |
 | `LAYOUT_KEY` | ~40–110 | per Layout edit |
+| `NAME_KEY` | ≤ 33 | per `POST /api/name` |
 
 `LAYOUT_KEY` is the **Layout** (`/api/layout`, Gitea #465) — the kind
 (`strip`/`matrix`/`map`), the matrix arrangement
@@ -460,6 +461,13 @@ byte: an unreadable record just leaves the board default standing (the
 store's no-migration rule), and a record is legible with `curl`. It costs
 image, too — the binary form this replaced was 2.2 KB of `.text` on the C6
 (docs/boards.md).
+
+`NAME_KEY` is the device's user-set name (`/api/name`, Gitea #538) — a
+version byte plus ≤ 32 UTF-8 bytes, read at boot by `devname::init` *before*
+the network stack is built, because the DHCP hostname is made from it and
+nothing re-reads it afterwards. It is here rather than in the nvs device
+record for the same reason the palette is: the nvs partition's four sectors
+are full, and `DeviceConfig` is a fixed-size struct.
 
 Two consequences of re-parsing worth knowing:
 

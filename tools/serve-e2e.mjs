@@ -85,6 +85,55 @@ check(
   JSON.stringify(g2d),
 );
 
+// ---- geom.compatible (Gitea #538) ----
+// A Layout shows its own dimensionality and lower, never higher. The strip
+// mirror above is still on the render2D pattern's FABRICATED grid, so this
+// is the case that matters: dims says 2, the rig is a strip, compatible is
+// false — and the frame still renders, so nothing goes dark.
+check("geom: 1D pattern on a strip is compatible", status.geom?.compatible === true);
+check(
+  "geom: 2D pattern on a strip is NOT compatible (the grid is fabricated)",
+  g2d.compatible === false,
+  JSON.stringify(g2d),
+);
+const pxIncompat = new Uint8Array(await (await fetch(`${base}/api/pixels`)).arrayBuffer());
+check("geom: an incompatible pattern still renders", pxIncompat.some((b) => b > 0));
+
+// ---- device name (GET/POST /api/name, Gitea #538) ----
+const name0 = await (await fetch(`${base}/api/name`)).json();
+check("name: defaults to the mirror's own", name0.name === "luxel-serve" && name0.source === "default", JSON.stringify(name0));
+const nameSet = await (await fetch(`${base}/api/name`, { method: "POST", body: "Kitchen Strip" })).json();
+check(
+  "name: POST stores it and asks for a reboot",
+  nameSet.ok === true && nameSet.name === "Kitchen Strip" && nameSet.source === "stored" && nameSet.reboot_required === true,
+  JSON.stringify(nameSet),
+);
+check(
+  "name: /api/status reports it",
+  (await (await fetch(`${base}/api/status`)).json()).name === "Kitchen Strip",
+);
+const nameBad = await (await fetch(`${base}/api/name`, { method: "POST", body: "x".repeat(33) })).json();
+check("name: over 32 bytes is rejected", nameBad.ok === false, JSON.stringify(nameBad));
+const nameQuote = await (await fetch(`${base}/api/name`, { method: "POST", body: 'a"b' })).json();
+check("name: a JSON metacharacter is rejected", nameQuote.ok === false, JSON.stringify(nameQuote));
+check(
+  "name: the rejected name did not stick",
+  (await (await fetch(`${base}/api/name`)).json()).name === "Kitchen Strip",
+);
+const nameClear = await (await fetch(`${base}/api/name`, { method: "POST", body: "" })).json();
+check("name: empty body restores the default", nameClear.name === "luxel-serve" && nameClear.source === "default", JSON.stringify(nameClear));
+
+// ---- clock sync now (POST /api/clock/sync, Gitea #538) ----
+await fetch(`${base}/api/clock`, { method: "POST", body: "-360" });
+const syncNow = await (await fetch(`${base}/api/clock/sync`, { method: "POST" })).json();
+const clockNow = await (await fetch(`${base}/api/clock`)).json();
+check(
+  "clock/sync: mirror answers ok + already synced",
+  syncNow.ok === true && syncNow.synced === true && Math.abs(syncNow.local - clockNow.local) < 5,
+  JSON.stringify({ syncNow, clockNow }),
+);
+await fetch(`${base}/api/clock`, { method: "POST", body: "0" });
+
 // A user map takes over, and an irregular one hides blur/glow (no neighbours).
 await fetch(`${base}/api/map`, { method: "POST", body: "grid 12 10" });
 await sleep(400);

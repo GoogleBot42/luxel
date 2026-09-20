@@ -255,9 +255,15 @@ export interface EffectiveGeometry {
   /** The grid the pattern's grid-space builtins see; 0 when there is none. */
   w: number;
   h: number;
-  /** null when the pattern is native to the Layout. */
+  /** null when the pattern is native to the Layout — and also when it is
+   *  incompatible with it, which has no projection to be in force. */
   mode: ProjectionMode | null;
   label: string | null;
+  /** False when the Layout cannot show a pattern of this dimensionality at
+   *  all (#538): a strip handed a 2D/3D pattern, a plane handed a 3D one. It
+   *  still renders — on the engine's fallback coordinates — so a host that
+   *  activates one anyway does not go dark. */
+  compatible: boolean;
 }
 
 const PROJECTION_NAMES: ProjectionMode[] = ["index", "x", "y", "z", "xy", "xz", "yz"];
@@ -420,9 +426,10 @@ export class Engine {
   }
 
   /** Install the 1D Layout: no map, so the pattern's x is the strip's own
-   *  `index / pixelCount`. Needed before the 2D→1D projections (middle row /
-   *  middle column) can apply — a 2D-only pattern is otherwise built on the
-   *  engine's fabricated ceil(√n) grid. */
+   *  `index / pixelCount`. Without it a 2D-only pattern keeps the engine's
+   *  fabricated ceil(√n) grid, and the Layout reads as 2D — which is also
+   *  what makes `compatible` false instead of hiding a strip behind a grid
+   *  that is not there (#538). */
   setStripLayout(): void {
     this.e.lx_set_strip_layout(this.h);
   }
@@ -473,6 +480,7 @@ export class Engine {
         h: 0,
         mode: null,
         label: null,
+        compatible: true,
       };
     }
     return JSON.parse(this.lx.response()) as EffectiveGeometry;
