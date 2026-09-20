@@ -10,7 +10,7 @@ native** — no interpreter/native mode switching inside a running pattern.
 Inspiration: HolyC (single pass, no IR, emit straight into memory, every
 function native, the runtime is a call away).
 
-This document is the research behind the design position taken on the
+The engineering design that follows from it is `docs/jit-design.md`. This document is the research behind the design position taken on the
 Gitea ticket. Sources: the current tree (`cb7002f`), Gitea #260/#312/#354
 history, esp-hal 1.1.0 (git `7c7f3726`) sources, ESP-IDF sources, and the
 prior art listed at the end. `[C]` = verified against a primary source,

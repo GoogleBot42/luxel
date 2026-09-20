@@ -343,6 +343,7 @@ dependencies = [
  "luxel-core",
  "luxel-hub75",
  "rumqttc",
+ "serde",
  "serde_json",
 ]
 

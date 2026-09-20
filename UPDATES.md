@@ -34,6 +34,72 @@ fault), `abandoned` (50 ms liveness floor), `torn_p1`/`torn_wrap` (**must be 0**
 one way this mode can tear), `copy_us`, `copy_us_max`, `plane_us`. docs/api.md,
 docs/firmware.md and docs/boards.md ("Spare-plane swap") describe it; #611 records the
 options that lost (PSRAM-resident DMA rings, chased per-plane copies) and why.
+## 2026-09-20 — On-device JIT: research, design, and the library kind census (#607)
+
+Jeremy reversed the 2026-09-05 "no JIT" decision: per-pixel compute is the bottleneck and
+native pattern code is wanted, as a firmware feature per board class, the JIT living on the
+device so LXBC stays the one portable format. `docs/research/on-device-jit.md` (PR #608) is
+the research: the compiler is browser-only, LXBC v5 is arch-independent, followers already
+pull the LXP1 envelope over HTTP, and the ceiling is decided by whether values are unboxed —
+boxed baseline JITs land at 1.4–2.5× (Sparkplug, MicroPython `@native`), typed ones at
+10–16× (`@viper` on the same ESP32). Jeremy's answer: keep the language untyped, let the
+browser compiler infer which slots never change kind and record it in the bytecode.
+
+`docs/jit-design.md` is the engineering design for v1 (ESP32-S3 / Xtensa LX7, everything
+else interprets): a six-point kind lattice (`Dyn` over `Num / Arr / ArrNum / Fun /
+Builtin`), a `kinds` section and one `Box` opcode in LXBC v6, a linear device-side verifier
+in the JVM stack-map style, the windowed-ABI calling convention (`ctx` in `a2`, params in
+`a3…a7`, static-depth operand-stack homes in `a8…a13`), a per-opcode instruction-selection
+table mirroring `fixed.rs` exactly (`mull`/`mulsh`/`src` for 16.16 mul), fuel at
+back-edges, a native per-pixel entry replacing the ~400-cycle interpreter entry, PSRAM as
+the code cache through the S3's `+0x0600_0000` instruction-bus mirror, and a test plan
+that pins the ABI with `xtensa-esp-elf-objdump` on the host and runs the interpreter as
+the bit-exact oracle on QEMU before any device sees native code.
+
+The census (`crates/luxel-cli/examples/jitcensus.rs`, docs/tools.md) measured the
+inference over all 307 library patterns: 291 (94.8 %) have a fully typed render path,
+95 % of locals and 96.8 % of array globals are provably numeric, only six causes of
+dynamic slots exist, and a v1 that refuses `CallValue`/callback builtins loses 6.2 % of
+the library. One rule is load-bearing: a global's declared init (`var hues = 0`) must not
+join its kind when the init code definitely assigns it before any read — folding it in
+would leave 180 patterns dynamic. Open questions for Jeremy are at the end of the design
+doc and on #607. No device was touched; nothing is implemented yet.
+
+## 2026-09-20 — round-2 verification on metal: both boards deployed, and what a hardware mockdiff really measures (#538)
+
+Closing pass over #605/#612. No code changed; the boards did.
+
+**Both boards were behind.** The Seengreat panel had #605's branch build and the Athom
+had neither #603 (the AppCpu watchdog gate) nor #605 (the live `proj` line), so both took
+a firmware + assets deploy off master: panel 969,792 B into `ota_0`, Athom 1,030,288 B
+into `ota_1`, both v0.1.40, both with the 876,198 B asset bundle behind it. Each OTA
+reboot came back `core1.last.reset = CoreSw` with `bb` all zero and `fence_timeouts` 0 —
+the first metal evidence that #603's gate does not false-trip across an OTA write plus a
+large `POST /api/assets` (noted on #604). The Athom's playlist resumed itself and kept
+advancing; the panel's was already parked with Jeremy's own pattern live, and came back
+exactly that way. Brightness was read on both and written on neither.
+
+**The gates.** `npm test` 133/133, `e2e` 187 checks, `device-e2e` 471, `maxpixels`,
+`sync`, `flash-e2e`; `tools/ci.sh` FULL green in 141 s with the c6 hosted image at
+1,017,040 B — 31,536 B / 3.00 % of the slot, **78 B** above the hard floor. `mockdiff`
+0 deltas over 27 frames and `--sweep` unchanged. `coldload.mjs <ip> 3` on each board:
+3/3 clean, styled, zero failed requests.
+
+**On hardware, mockdiff measures the board.** `--device` redirects only the
+`panel`-target frames, so the panel scored 25 deltas (all its own state: `On device 10`
+against the mock's 5, brightness `31 / 31`, and `S4`'s recipe wanting a playing row that
+a parked playlist does not have) and the 144 px Athom scored 48 (strip tiles, no
+Projection section, no HUB75 rows — every one correct capability trimming). Zero UI
+deltas on either, but the triage is a trap worth a tool fix: Gitea #616. docs/tools.md
+and the seengreat-panel skill now say so, along with the panel's other lesson of the day
+— a 30-60 s hole in the network that ends in `ChipPowerOn` is somebody power-cycling it
+at the bench, not a crash, and it reads as a HANG (`ERR_ADDRESS_UNREACHABLE`, curl HTTP
+000) rather than the `ECONNREFUSED` an exhausted web pool gives.
+
+**Left open.** #613's second half (the unreachable banner against a real dropout) still
+wants the Athom's plug; #615 is new — the `stopped — playing X directly` note lives in a
+client-side store, so a reloaded console names the parked item with nothing to say the
+LEDs are showing something else.
 
 ## 2026-09-20 — Jeremy's round-2 web review: storage, parking, live drag, and errors that are impossible to miss (#538)
 
