@@ -31,6 +31,7 @@ export const PORT = {
     flash: p(4),
     maxpixels: p(6),
     debug: p(8), // tools/debug.mjs, the manual poke-at-it helper
+    mockdiff: p(10), // tools/mockdiff.mjs, the mock-fidelity instrument
   },
   /** `luxel serve` mirrors standing in for a device. */
   mirror: {
@@ -44,6 +45,10 @@ export const PORT = {
     outputs: p(27), //           two-output mirror for the Settings Outputs table
     hub75: p(28), //             --board panel mirror for the Settings panel fields
     maxpixels: p(30), // maxpixels-e2e
+    mdPanel: p(31), //   mockdiff: 64x64 HUB75 console (the S1/S2/S3/S4 frames)
+    mdStrip: p(32), //   mockdiff: 300 px strip console (S1b, S3b, S3f)
+    mdOutputs: p(33), // mockdiff: two-output strip console (S3j/S3k)
+    mdLattice: p(34), // mockdiff: 3D lattice console (S3g)
     syncA: p(40), // sync-e2e leader
     syncB: p(41), // sync-e2e follower
   },

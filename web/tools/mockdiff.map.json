@@ -1,0 +1,3496 @@
+{
+  "$comment": [
+    "The element map for tools/mockdiff.mjs: for each (mock frame -> app state) pair,",
+    "which mock element is which app element. `mock` is scoped to the frame automatically",
+    "(`.hdr` means `#S1 .hdr`); `app` is a live-DOM selector, a data-role wherever one exists.",
+    "",
+    "`mock` at FRAME level overrides which mockup frame the entries are read from — several",
+    "app states share one drawn frame (S2 draws the overflow menu open, the compile-error",
+    "strip and a healthy rail at once, which no single app state can be in).",
+    "",
+    "`hoverOnly` entries are compared in the :hover state only, because the mock paints that",
+    "state permanently (`.tile.hov .actions`). `hoverMock`/`hoverApp` say what to put the",
+    "pointer ON when that is not the element itself.",
+    "",
+    "`allow` lists the deviations Jeremy asked for that the mocks do not show. Each is",
+    "`<element>` (the whole element), or `<element>.<property>`. They are printed in the",
+    "report as ALLOWED and never counted as deltas."
+  ],
+  "$seeds": [
+    "What each MIRROR holds before the frames are measured. A bare `luxel serve` has an",
+    "empty library and a stopped playlist, so a Patterns page would have no tiles and a",
+    "Playlist page no rows. Names and counts follow the mocks (S1 shows `On device 5`,",
+    "S1b shows six bars, S4 four rows). Durations are deliberately huge: the playing tile",
+    "and the playing row must be the SAME one for the whole run.",
+    "Mirrors only — a real board reached with --device is never written to."
+  ],
+  "seeds": {
+    "panel": {
+      "patterns": [
+        {
+          "name": "Aurora 2D",
+          "source": "export function render2D(index, x, y) { hsv(.33 - y * .06, 1 - y * .35, y * y) }\n"
+        },
+        {
+          "name": "Raindrops 2D",
+          "source": "export function render2D(index, x, y) {\n  var v = wave(y + time(.1))\n  hsv(.58, .7, v * v)\n}\n"
+        },
+        {
+          "name": "Sunset Fade",
+          "source": "export function render(index) {\n  var f = index / pixelCount\n  hsv(.08 - f * .06, 1, 1 - f * .3)\n}\n"
+        },
+        {
+          "name": "Blinky Eyes 2D",
+          "source": "export function render2D(index, x, y) { hsv(.12, 1, abs(x - .5) < .1 && abs(y - .5) < .1) }\n"
+        },
+        {
+          "name": "Warm Sparkle",
+          "source": "export function render(index) { hsv(.1, .6, random(1) < .05) }\n"
+        }
+      ],
+      "defaultSec": 8,
+      "crossfadeMs": 500,
+      "playlist": [
+        "Sunset Fade|900",
+        "Raindrops 2D|900",
+        "Blinky Eyes 2D|900",
+        "Warm Sparkle|900"
+      ],
+      "play": true
+    },
+    "strip": {
+      "patterns": [
+        {
+          "name": "Sunset Fade",
+          "source": "export function render(index) {\n  var f = index / pixelCount\n  hsv(.08 - f * .06, 1, 1 - f * .3)\n}\n"
+        },
+        {
+          "name": "Blue Comet",
+          "source": "export function render(index) {\n  var f = index / pixelCount\n  hsv(.6, 1, wave(f + time(.05)))\n}\n"
+        },
+        {
+          "name": "Aurora 2D",
+          "source": "export function render2D(index, x, y) { hsv(.33 - y * .06, 1 - y * .35, y * y) }\n"
+        },
+        {
+          "name": "Warm Sparkle",
+          "source": "export function render(index) { hsv(.1, .6, random(1) < .05) }\n"
+        },
+        {
+          "name": "Rainbow Sweep",
+          "source": "export function render(index) { hsv(index / pixelCount + time(.1), 1, 1) }\n"
+        },
+        {
+          "name": "Ember Fire",
+          "source": "export function render(index) {\n  var f = index / pixelCount\n  hsv(.04, 1, 1 - f)\n}\n"
+        }
+      ],
+      "activate": "Sunset Fade"
+    },
+    "outputs": {
+      "patterns": [
+        {
+          "name": "Rainbow Sweep",
+          "source": "export function render(index) { hsv(index / pixelCount + time(.1), 1, 1) }\n"
+        }
+      ],
+      "activate": "Rainbow Sweep"
+    },
+    "lattice": {
+      "patterns": [
+        {
+          "name": "Rainbow Sweep",
+          "source": "export function render(index) { hsv(index / pixelCount + time(.1), 1, 1) }\n"
+        }
+      ],
+      "activate": "Rainbow Sweep"
+    }
+  },
+  "frames": {
+    "S1": {
+      "deviceSafe": true,
+      "title": "Patterns — console, 64x64 matrix",
+      "width": 1200,
+      "height": 940,
+      "app": {
+        "target": "panel",
+        "route": "#/",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"patterns-panel\"]"
+          },
+          {
+            "click": "[data-role=\"patterns-source-library\"]"
+          },
+          {
+            "sleep": 2500
+          },
+          {
+            "click": "[data-role=\"patterns-source-device\"]"
+          },
+          {
+            "sleep": 1200
+          }
+        ]
+      },
+      "allow": [
+        {
+          "element": "hdr-brightness",
+          "why": "Jeremy: brightness is a slider in the header — beyond the mocks"
+        },
+        {
+          "element": "tab-scenes",
+          "why": "Scenes is Phase B (#480); the mock's 4th tab is not built"
+        },
+        {
+          "element": "search",
+          "property": "color",
+          "why": "the mock fakes a placeholder with a `.ph` class on the input; the app has a real ::placeholder"
+        }
+      ],
+      "elements": [
+        {
+          "id": "header",
+          "mock": ".hdr",
+          "app": "header.hdr",
+          "noBoxH": true
+        },
+        {
+          "id": "wordmark",
+          "mock": ".wordmark",
+          "app": ".hdr .wordmark",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "devchip",
+          "mock": ".devchip",
+          "app": ".hdr [data-role=\"layout-chip\"]",
+          "noBox": true
+        },
+        {
+          "id": "devchip-dot",
+          "mock": ".devchip .dot",
+          "app": ".hdr [data-role=\"layout-chip\"] .dot"
+        },
+        {
+          "id": "tabs",
+          "mock": ".tabs",
+          "app": "[data-role=\"tabs\"]",
+          "noBox": true
+        },
+        {
+          "id": "tab-active",
+          "mock": ".tabs a.on",
+          "app": "[data-role=\"tabs\"] .tab.active",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "tab-idle",
+          "mock": ".tabs a:not(.on)",
+          "mockNth": 2,
+          "app": "[data-role=\"tabs\"] .tab:not(.active)",
+          "hover": true,
+          "noBox": true
+        },
+        {
+          "id": "fps",
+          "mock": ".fps",
+          "app": "[data-role=\"fps\"]",
+          "noBox": true
+        },
+        {
+          "id": "pagebar",
+          "mock": ".pagebar",
+          "app": "[data-role=\"patterns-panel\"] .pagebar",
+          "noBoxH": true
+        },
+        {
+          "id": "seg",
+          "mock": ".seg",
+          "app": "[data-role=\"patterns-sources\"]"
+        },
+        {
+          "id": "seg-on",
+          "mock": ".seg > div.on",
+          "app": "[data-role=\"patterns-sources\"] .segbtn.on",
+          "text": true
+        },
+        {
+          "id": "seg-off",
+          "mock": ".seg > div:not(.on)",
+          "app": "[data-role=\"patterns-sources\"] .segbtn:not(.on)",
+          "hover": true,
+          "text": true
+        },
+        {
+          "id": "seg-ct-on",
+          "mock": ".seg > div.on .ct",
+          "app": "[data-role=\"patterns-sources\"] .segbtn.on .ct",
+          "noBox": true
+        },
+        {
+          "id": "seg-ct-off",
+          "mock": ".seg > div:not(.on) .ct",
+          "app": "[data-role=\"patterns-sources\"] .segbtn:not(.on) .ct",
+          "noBox": true
+        },
+        {
+          "id": "search",
+          "mock": ".pagebar input.inp",
+          "app": "[data-role=\"gallery-search\"]",
+          "focus": true,
+          "text": true
+        },
+        {
+          "id": "new-pattern",
+          "mock": ".pagebar .btn.primary",
+          "app": "[data-role=\"new-pattern\"]",
+          "hover": true,
+          "text": true
+        },
+        {
+          "id": "tiles-grid",
+          "mock": ".tiles",
+          "app": "[data-role=\"patterns-grid\"][data-source=\"device\"] .tiles",
+          "noBoxH": true
+        },
+        {
+          "id": "tile",
+          "mock": ".tile:not(.playing)",
+          "mockNth": 1,
+          "app": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"]:not(.playing)",
+          "noBoxH": true
+        },
+        {
+          "id": "tile-thumb",
+          "mock": ".tile:not(.playing) .thumb",
+          "mockNth": 1,
+          "app": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"]:not(.playing) .thumb",
+          "noBoxH": true
+        },
+        {
+          "id": "tile-canvas",
+          "mock": ".tile:not(.playing) canvas",
+          "mockNth": 1,
+          "app": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"]:not(.playing) [data-role=\"tile-face\"] canvas"
+        },
+        {
+          "id": "tile-meta",
+          "mock": ".tile:not(.playing) .meta",
+          "mockNth": 1,
+          "app": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"]:not(.playing) .meta"
+        },
+        {
+          "id": "tile-name",
+          "mock": ".tile:not(.playing) .nm",
+          "mockNth": 1,
+          "app": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"]:not(.playing) [data-role=\"tile-name\"]"
+        },
+        {
+          "id": "tile-playing",
+          "mock": ".tile.playing",
+          "app": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"].playing",
+          "noBoxH": true
+        },
+        {
+          "id": "tile-pill",
+          "mock": ".tile.playing .pill",
+          "app": "[data-role=\"tile-playing\"]",
+          "text": true
+        },
+        {
+          "id": "tile-actions",
+          "mock": ".tile.hov .actions",
+          "app": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"]:not(.playing) .actions",
+          "hoverOnly": true,
+          "hoverMock": ".tile.hov",
+          "hoverApp": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"]:not(.playing)"
+        },
+        {
+          "id": "tile-act-play",
+          "mock": ".tile.hov .actions .btn.sm:not(.icon)",
+          "app": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"]:not(.playing) [data-role=\"tile-play\"]",
+          "hoverOnly": true,
+          "hoverMock": ".tile.hov",
+          "hoverApp": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"]:not(.playing)",
+          "note": "mock: `▶ Play`, 26px .btn.sm on rgba(28,31,38,.95)"
+        },
+        {
+          "id": "tile-act-menu",
+          "mock": ".tile.hov .actions .btn.sm.icon",
+          "app": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"]:not(.playing) [data-role=\"tile-menu\"]",
+          "hoverOnly": true,
+          "hoverMock": ".tile.hov",
+          "hoverApp": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"]:not(.playing)"
+        }
+      ]
+    },
+    "S1b": {
+      "title": "Patterns — console, 300 px strip",
+      "width": 1200,
+      "height": 940,
+      "app": {
+        "target": "strip",
+        "route": "#/",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"patterns-panel\"]"
+          },
+          {
+            "sleep": 1500
+          }
+        ]
+      },
+      "allow": [
+        {
+          "element": "hdr-brightness",
+          "why": "header brightness is beyond the mocks"
+        }
+      ],
+      "elements": [
+        {
+          "id": "header",
+          "mock": ".hdr",
+          "app": "header.hdr",
+          "noBoxH": true
+        },
+        {
+          "id": "devchip",
+          "mock": ".devchip",
+          "app": ".hdr [data-role=\"layout-chip\"]",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "tabs",
+          "mock": ".tabs",
+          "app": "[data-role=\"tabs\"]",
+          "noBox": true
+        },
+        {
+          "id": "tiles-grid",
+          "mock": ".tiles",
+          "app": "[data-role=\"patterns-grid\"][data-source=\"device\"] .tiles",
+          "note": "mock: 3 columns of 6:1 bars on a strip",
+          "noBoxH": true
+        },
+        {
+          "id": "tile-bar",
+          "mock": ".tile.bar:not(.playing)",
+          "app": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"]:not(.playing)",
+          "noBoxH": true
+        },
+        {
+          "id": "tile-bar-canvas",
+          "mock": ".tile.bar:not(.playing) canvas",
+          "app": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"]:not(.playing) [data-role=\"tile-face\"] canvas",
+          "note": "mock: aspect-ratio 6/1, width 100%"
+        },
+        {
+          "id": "tile-bar-meta",
+          "mock": ".tile.bar:not(.playing) .meta",
+          "app": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"]:not(.playing) .meta"
+        },
+        {
+          "id": "tile-bar-name",
+          "mock": ".tile.bar:not(.playing) .nm",
+          "app": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"]:not(.playing) [data-role=\"tile-name\"]"
+        },
+        {
+          "id": "tile-bar-sub",
+          "mock": ".tile.bar .sub",
+          "app": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile-caption\"]",
+          "noBox": true
+        },
+        {
+          "id": "tile-bar-playing",
+          "mock": ".tile.bar.playing",
+          "app": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"].playing"
+        },
+        {
+          "id": "tile-bar-pill",
+          "mock": ".tile.bar.playing .pill",
+          "app": "[data-role=\"tile-playing\"]"
+        }
+      ]
+    },
+    "S1c": {
+      "deviceSafe": true,
+      "title": "Patterns — mobile 390 px",
+      "mock": "S1c",
+      "width": 390,
+      "height": 844,
+      "app": {
+        "target": "panel",
+        "route": "#/",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"patterns-panel\"]"
+          },
+          {
+            "sleep": 1500
+          }
+        ]
+      },
+      "allow": [
+        {
+          "element": "hdr-brightness",
+          "why": "hidden at <=600px by design (App.svelte)"
+        },
+        {
+          "element": "search",
+          "property": "color",
+          "why": "the mock fakes a placeholder with a `.ph` class on the input; the app has a real ::placeholder"
+        }
+      ],
+      "elements": [
+        {
+          "id": "header",
+          "mock": ".hdr",
+          "app": "header.hdr",
+          "note": "mock: two rows, height auto, padding 0",
+          "noBoxH": true
+        },
+        {
+          "id": "hdr-row1",
+          "mock": ".hdr > div:first-child",
+          "app": ".hdr > .hdrtop",
+          "note": "mock: 40px identity row, padding 0 12px",
+          "noBoxH": true
+        },
+        {
+          "id": "wordmark",
+          "mock": ".wordmark",
+          "app": ".hdr .wordmark",
+          "noBox": true
+        },
+        {
+          "id": "devchip",
+          "mock": ".devchip",
+          "app": ".hdr [data-role=\"layout-chip\"]",
+          "noBox": true
+        },
+        {
+          "id": "fps",
+          "mock": ".fps",
+          "app": "[data-role=\"fps\"]",
+          "noBox": true
+        },
+        {
+          "id": "tabs",
+          "mock": ".tabs",
+          "app": "[data-role=\"tabs\"]",
+          "note": "mock: 38px, overflow-x auto, padding 0 8px, margin-left 0",
+          "noBox": true
+        },
+        {
+          "id": "tab-active",
+          "mock": ".tabs a.on",
+          "app": "[data-role=\"tabs\"] .tab.active",
+          "noBox": true
+        },
+        {
+          "id": "seg",
+          "mock": ".seg",
+          "app": "[data-role=\"patterns-sources\"]",
+          "note": "mock: full width, each half flex:1 centred"
+        },
+        {
+          "id": "seg-on",
+          "mock": ".seg > div.on",
+          "app": "[data-role=\"patterns-sources\"] .segbtn.on"
+        },
+        {
+          "id": "search",
+          "mock": "input.inp.ph",
+          "app": "[data-role=\"gallery-search\"]",
+          "text": true
+        },
+        {
+          "id": "new-pattern",
+          "mock": ".btn.primary.icon",
+          "app": "[data-role=\"new-pattern\"]",
+          "note": "mock: 32x32 icon button showing `+`"
+        },
+        {
+          "id": "tiles-grid",
+          "mock": ".tiles.c2",
+          "app": "[data-role=\"patterns-grid\"][data-source=\"device\"] .tiles",
+          "note": "mock: 2 columns, padding 12px, gap 16px",
+          "noBoxH": true
+        },
+        {
+          "id": "tile",
+          "mock": ".tile:not(.playing)",
+          "app": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"]:not(.playing)",
+          "noBoxH": true
+        },
+        {
+          "id": "tile-name",
+          "mock": ".tile:not(.playing) .nm",
+          "app": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"]:not(.playing) [data-role=\"tile-name\"]"
+        },
+        {
+          "id": "tile-edit-link",
+          "mock": ".tile:not(.playing) .elink",
+          "app": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"]:not(.playing) [data-role=\"tile-edit-link\"]",
+          "text": true,
+          "note": "mock: `.elink` 12px accent, margin-top 5px, under the name"
+        }
+      ]
+    },
+    "S2": {
+      "title": "Editor — console, 64x64 matrix (healthy rail)",
+      "mock": "S2",
+      "width": 1200,
+      "height": 940,
+      "app": {
+        "target": "panel",
+        "route": "#/editor",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": ".cm-content"
+          },
+          {
+            "code": "[data-role=\"editor-view\"]",
+            "value": "export function sliderCellSize(v) {\n  cellSize = v\n}\nexport function sliderSpeed(v) {\n  speed = v\n}\nexport function hsvPickerPalette(h, s, v) {\n  ph = h\n}\nexport function toggleSparkle(v) {\n  sparkle = v\n}\nvar cellSize = 1, speed = .4, ph = 0, sparkle = 1, t1 = 0\nexport var band = 0\nexport var shimmer = 0\nexport function beforeRender(delta) {\n  t1 = time(.1 * speed)\n  band = wave(t1)\n  shimmer = band * .12\n}\nexport function render2D(index, x, y) {\n  hsv(x * cellSize + ph, 1 - y, y + shimmer)\n}\n"
+          },
+          {
+            "sleep": 2500
+          }
+        ]
+      },
+      "allow": [
+        {
+          "element": "prev-debug",
+          "why": "Jeremy: Debug carries the word `Debug` and sits right after pause — supersedes the mock's icon-only button"
+        },
+        {
+          "element": "prev-dims",
+          "property": "text",
+          "why": "Jeremy: the preview header states BOTH the local and the device fps"
+        },
+        {
+          "element": "capstrip",
+          "why": "the tight-fit warning needs a heap-constrained device; no mirror in this map models one (see the report's coverage note)"
+        }
+      ],
+      "elements": [
+        {
+          "id": "edhdr",
+          "mock": ".edhdr",
+          "app": "[data-role=\"editor-header\"]"
+        },
+        {
+          "id": "ed-back",
+          "mock": ".edhdr .btn.quiet",
+          "app": "[data-role=\"editor-back\"]",
+          "hover": true,
+          "text": true
+        },
+        {
+          "id": "ed-name",
+          "mock": ".nameedit",
+          "app": "[data-role=\"pattern-name\"]",
+          "hover": true,
+          "note": "mock: ALWAYS a bordered 30px field, 14px/600"
+        },
+        {
+          "id": "ed-savestate",
+          "mock": ".savestate",
+          "app": "[data-role=\"save-state\"]",
+          "noBox": true
+        },
+        {
+          "id": "ed-spacer",
+          "mock": ".edhdr .spacer",
+          "app": "[data-role=\"editor-header\"] .spacer"
+        },
+        {
+          "id": "ed-save",
+          "mock": ".edhdr .btn.primary",
+          "app": "[data-role=\"save\"]",
+          "hover": true,
+          "text": true,
+          "note": "mock copy is `Save`, not `Save to device`"
+        },
+        {
+          "id": "ed-overflow",
+          "mock": ".menuwrap > .btn.icon",
+          "app": "[data-role=\"overflow\"]",
+          "hover": true
+        },
+        {
+          "id": "ed-rail-seg",
+          "mock": ".edhdr-rail",
+          "app": "[data-role=\"editor-header\"] .edhdr-rail",
+          "note": "mock: 344px, border-left, padding-left 16, margin-left 16 — this is what puts Save at the code column's right edge"
+        },
+        {
+          "id": "ed-rail-chip",
+          "mock": ".edhdr-rail .devchip",
+          "app": "[data-role=\"editor-header\"] [data-role=\"layout-chip\"]"
+        },
+        {
+          "id": "ed-body",
+          "mock": ".edbody",
+          "app": "[data-role=\"editor-view\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "ed-code",
+          "mock": ".code",
+          "app": "[data-role=\"editor-view\"] .left",
+          "noBoxH": true
+        },
+        {
+          "id": "ed-rail",
+          "mock": ".rail",
+          "app": "[data-role=\"editor-view\"] .right",
+          "note": "mock: 360px fixed, background var(--bg)",
+          "noBoxH": true
+        },
+        {
+          "id": "rsec-preview",
+          "mock": ".rail > div:nth-child(1)",
+          "app": "[data-role=\"editor-view\"] .right .rsec:has([data-role=\"pause\"])",
+          "note": "mock .rsec: padding 14px 16px, border-bottom",
+          "noBoxH": true
+        },
+        {
+          "id": "rhead",
+          "mock": ".rail > div:nth-child(1) .rhead",
+          "app": "[data-role=\"editor-view\"] .rsec:has([data-role=\"pause\"]) > .rhead"
+        },
+        {
+          "id": "rhead-label",
+          "mock": ".rail > div:nth-child(1) .rhead .slabel",
+          "app": "[data-role=\"editor-view\"] .rsec:has([data-role=\"pause\"]) > .rhead > .slabel",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "prev-dims",
+          "mock": ".rail > div:nth-child(1) .rdim",
+          "app": "[data-role=\"preview-dims\"]",
+          "noBox": true
+        },
+        {
+          "id": "prev-grp",
+          "mock": ".rail > div:nth-child(1) .grp",
+          "app": "[data-role=\"editor-view\"] .rsec:has([data-role=\"pause\"]) .grp"
+        },
+        {
+          "id": "prev-pause",
+          "mock": ".rail > div:nth-child(1) .grp .btn.sm.icon:first-child",
+          "app": "[data-role=\"pause\"]",
+          "hover": true,
+          "note": "mock: 26x26, 12px glyph `‖` — Jeremy: the app icon is too big for the button"
+        },
+        {
+          "id": "prev-fps-sel",
+          "mock": ".rail > div:nth-child(1) .grp .sel",
+          "app": "[data-role=\"target-fps\"]"
+        },
+        {
+          "id": "prev-debug",
+          "mock": ".rail > div:nth-child(1) .grp .btn.sm.icon:last-child",
+          "app": "[data-role=\"debug\"]"
+        },
+        {
+          "id": "preview",
+          "mock": "canvas.prev",
+          "app": "[data-role=\"preview\"] canvas",
+          "note": "mock: width 100%, aspect 1/1, 1px border, radius 6"
+        },
+        {
+          "id": "capstrip",
+          "mock": ".capstrip",
+          "app": "[data-role=\"capacity-warning\"]",
+          "note": "mock: amber-tinted 7px/10px strip, radius 6"
+        },
+        {
+          "id": "rsec-controls",
+          "mock": ".rail > div:nth-child(2)",
+          "app": "[data-role=\"editor-view\"] .rsec:has(.panel)",
+          "noBoxH": true
+        },
+        {
+          "id": "ctl-head-label",
+          "mock": ".rail > div:nth-child(2) .rhead .slabel",
+          "app": "[data-role=\"editor-view\"] .rsec:has(.panel) > .rhead > .slabel",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "ctlrow",
+          "mock": ".rail > div:nth-child(2) .ctlrow",
+          "app": "[data-role=\"editor-view\"] .rsec .panel > .control",
+          "note": "mock: grid 82px 1fr auto, gap 12, margin-top 12",
+          "noBoxH": true
+        },
+        {
+          "id": "ctl-label",
+          "mock": ".rail > div:nth-child(2) .ctlrow .tiny.dim",
+          "app": "[data-role=\"editor-view\"] .rsec .panel > .control .label",
+          "noBox": true
+        },
+        {
+          "id": "ctl-slider",
+          "mock": ".rail > div:nth-child(2) .ctlrow .slider",
+          "app": "[data-role=\"editor-view\"] .rsec .panel > .control input[type=\"range\"]",
+          "note": "mock: 16px tall, 4px track #2b303a, 14px accent thumb with a 3px accent-soft ring"
+        },
+        {
+          "id": "ctl-num",
+          "mock": ".rail > div:nth-child(2) .ctlrow .inp.num.xs",
+          "app": "[data-role=\"editor-view\"] .rsec .panel > .control input.inp.xs.num",
+          "focus": true
+        },
+        {
+          "id": "ctl-swatches",
+          "mock": ".rail > div:nth-child(2) .swatches",
+          "app": "[data-role=\"editor-view\"] .rsec .panel .wrap"
+        },
+        {
+          "id": "ctl-swatch",
+          "mock": ".rail > div:nth-child(2) .swatches i",
+          "app": "[data-role=\"color-swatch\"]",
+          "hover": true,
+          "note": "mock: 26x22, radius 4, 1px rgba(255,255,255,.14)"
+        },
+        {
+          "id": "ctl-toggle",
+          "mock": ".rail > div:nth-child(2) .sw.on",
+          "app": "[data-role=\"editor-view\"] .rsec .panel > .control input[type=\"checkbox\"]",
+          "note": "mock: a 36x20 pill switch, not a native checkbox"
+        },
+        {
+          "id": "vars-head",
+          "mock": ".rail > div:nth-child(3) .slabel",
+          "app": "[data-role=\"vars-section\"] .slabel",
+          "text": true,
+          "noBox": true
+        }
+      ]
+    },
+    "S2menu": {
+      "title": "Editor — the ⋯ overflow menu (mock frame S2)",
+      "mock": "S2",
+      "width": 1200,
+      "height": 940,
+      "app": {
+        "target": "panel",
+        "route": "#/editor",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": ".cm-content"
+          },
+          {
+            "sleep": 3000
+          },
+          {
+            "click": "[data-role=\"overflow\"]"
+          },
+          {
+            "sleep": 500
+          }
+        ]
+      },
+      "allow": [
+        {
+          "element": "mi-scene",
+          "why": "`Add to scene ▸` is Phase B (#480) — not built"
+        }
+      ],
+      "elements": [
+        {
+          "id": "menu",
+          "mock": ".menu",
+          "app": "[data-role=\"editor-menu\"]",
+          "note": "mock: 214px, padding 4, radius 8, shadow 0 14px 34px rgba(0,0,0,.65), top calc(100% + 7px)"
+        },
+        {
+          "id": "mi",
+          "mock": ".menu > div:nth-child(1)",
+          "app": "[data-role=\"editor-menu\"] .mi:first-child",
+          "hover": true,
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "mi-sep",
+          "mock": ".menu > div:nth-child(3)",
+          "app": "[data-role=\"editor-menu\"] .sepr"
+        },
+        {
+          "id": "mi-dup",
+          "mock": ".menu > div:nth-child(4)",
+          "app": "[data-role=\"duplicate\"]",
+          "text": true,
+          "note": "mock order: Add to playlist · Add to scene ▸ · — · Duplicate · Export .epe · Import .epe… · — · Delete",
+          "noBox": true
+        },
+        {
+          "id": "mi-del",
+          "mock": ".menu > div.mi.del",
+          "app": "[data-role=\"delete\"]",
+          "hover": true,
+          "text": true,
+          "noBox": true
+        }
+      ]
+    },
+    "S2err": {
+      "title": "Editor — the compile-error strip (mock frame S2)",
+      "mock": "S2",
+      "width": 1200,
+      "height": 940,
+      "app": {
+        "target": "panel",
+        "route": "#/editor",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": ".cm-content"
+          },
+          {
+            "code": "[data-role=\"editor-view\"]",
+            "value": "export function render2D(index, x, y) {\n  hsv(nosie(x), 1, y)\n}\n"
+          },
+          {
+            "waitFor": "[data-role=\"compile-error\"]"
+          },
+          {
+            "sleep": 600
+          }
+        ]
+      },
+      "elements": [
+        {
+          "id": "codestatus",
+          "mock": ".codestatus",
+          "app": "[data-role=\"compile-error\"]",
+          "note": "mock: padding 9px 14px, rgba(224,85,85,.09) on #eda0a0, 12px mono, border-top"
+        },
+        {
+          "id": "codestatus-jump",
+          "mock": ".codestatus .jump",
+          "app": "[data-role=\"compile-error\"] .jump",
+          "hover": true,
+          "text": true,
+          "noBox": true
+        }
+      ]
+    },
+    "S2b": {
+      "title": "Editor — mobile 390 px",
+      "mock": "S2b",
+      "width": 390,
+      "height": 844,
+      "app": {
+        "target": "panel",
+        "route": "#/editor",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"editor-header\"]"
+          },
+          {
+            "sleep": 1800
+          }
+        ]
+      },
+      "elements": [
+        {
+          "id": "edhdr",
+          "mock": ".edhdr",
+          "app": "[data-role=\"editor-header\"]",
+          "note": "mock: 44px, padding 0 10px, gap 8"
+        },
+        {
+          "id": "ed-back",
+          "mock": ".edhdr .btn.quiet.icon",
+          "app": "[data-role=\"editor-back\"]",
+          "note": "mock: icon-only `←` at 390px"
+        },
+        {
+          "id": "ed-name",
+          "mock": ".nameedit",
+          "app": "[data-role=\"pattern-name\"]",
+          "note": "mock: 13px, flex:1, min-width 0"
+        },
+        {
+          "id": "ed-save",
+          "mock": ".edhdr .btn.primary",
+          "app": "[data-role=\"save\"]",
+          "text": true
+        },
+        {
+          "id": "ed-overflow",
+          "mock": ".edhdr > .btn.icon",
+          "app": "[data-role=\"overflow\"]"
+        },
+        {
+          "id": "rsec-preview",
+          "mock": ".rsec:nth-child(1)",
+          "app": "[data-role=\"editor-view\"] .rsec:has([data-role=\"pause\"])",
+          "noBoxH": true
+        },
+        {
+          "id": "rhead-label",
+          "mock": ".rsec:nth-child(1) .slabel",
+          "app": "[data-role=\"editor-view\"] .rsec:has([data-role=\"pause\"]) > .rhead > .slabel",
+          "noBox": true
+        },
+        {
+          "id": "prev-dims",
+          "mock": ".rsec:nth-child(1) .rdim",
+          "app": "[data-role=\"preview-dims\"]",
+          "noBox": true
+        },
+        {
+          "id": "prev-pause",
+          "mock": ".rsec:nth-child(1) .grp .btn.sm.icon:first-child",
+          "app": "[data-role=\"pause\"]"
+        },
+        {
+          "id": "preview",
+          "mock": "canvas.prev",
+          "app": "[data-role=\"preview\"] canvas",
+          "note": "mock: max-width 280px, centred"
+        },
+        {
+          "id": "code-hint",
+          "mock": ".rsec:nth-child(3) .rdim",
+          "app": "[data-role=\"editor-view\"] .code-hint",
+          "text": true,
+          "note": "mock copy: `edit on a larger screen to change code`",
+          "noBox": true
+        }
+      ]
+    },
+    "S2c": {
+      "title": "Editor Controls — a 1D pattern on a matrix (projection row)",
+      "mock": "S2c",
+      "width": 360,
+      "height": 900,
+      "app": {
+        "target": "panel",
+        "route": "#/editor",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": ".cm-content"
+          },
+          {
+            "code": "[data-role=\"editor-view\"]",
+            "value": "export function sliderHue(v) {\n  hue = v\n}\nexport function sliderSpeed(v) {\n  speed = v\n}\nexport function toggleSparkle(v) {\n  sparkle = v\n}\nvar hue = .1, speed = .08, sparkle = 1\nexport function render(index) {\n  hsv(hue + index / pixelCount, 1, 1)\n}\n"
+          },
+          {
+            "sleep": 2500
+          }
+        ]
+      },
+      "elements": [
+        {
+          "id": "rsec",
+          "mock": ".rsec",
+          "app": "[data-role=\"editor-view\"] .rsec:has([data-role=\"projection-row\"])",
+          "noBoxH": true
+        },
+        {
+          "id": "rhead-label",
+          "mock": ".rhead .slabel",
+          "app": "[data-role=\"editor-view\"] .rsec:has([data-role=\"projection-row\"]) > .rhead > .slabel",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "rhead-dim",
+          "mock": ".rhead .rdim",
+          "app": "[data-role=\"editor-view\"] .rsec:has([data-role=\"projection-row\"]) > .rhead > .rdim",
+          "note": "mock copy: `Sunset Fade · 1D`",
+          "noBox": true
+        },
+        {
+          "id": "ctlrow",
+          "mock": ".ctlrow",
+          "app": "[data-role=\"editor-view\"] .rsec .panel > .control",
+          "noBoxH": true
+        },
+        {
+          "id": "ctl-label",
+          "mock": ".ctlrow .tiny.dim",
+          "app": "[data-role=\"editor-view\"] .rsec .panel > .control .label",
+          "noBox": true
+        },
+        {
+          "id": "ctl-num",
+          "mock": ".ctlrow .inp.num.xs",
+          "app": "[data-role=\"editor-view\"] .rsec .panel > .control input.inp.xs.num"
+        },
+        {
+          "id": "hairline",
+          "mock": ".hairline",
+          "app": "[data-role=\"editor-view\"] .rsec .hairline",
+          "note": "mock: 1px --border, margin 16px 0 12px"
+        },
+        {
+          "id": "projrow",
+          "mock": ".projrow",
+          "app": "[data-role=\"projection-row\"]",
+          "note": "mock: flex, gap 10, 12.5px, padding 3px 0"
+        },
+        {
+          "id": "proj-label",
+          "mock": ".projrow .pl",
+          "app": "[data-role=\"projection-row\"] .pl",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "proj-value",
+          "mock": ".projrow .pv",
+          "app": "[data-role=\"projection-value\"]",
+          "noBox": true
+        },
+        {
+          "id": "proj-change",
+          "mock": ".projrow .pa",
+          "app": "[data-role=\"projection-change\"]",
+          "hover": true,
+          "text": true,
+          "noBox": true
+        }
+      ]
+    },
+    "S2cpop": {
+      "title": "Editor Controls — the projection override popover (mock frame S3e cards)",
+      "mock": "S3e",
+      "width": 900,
+      "height": 900,
+      "app": {
+        "target": "panel",
+        "route": "#/editor",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": ".cm-content"
+          },
+          {
+            "code": "[data-role=\"editor-view\"]",
+            "value": "export function render(index) {\n  hsv(index / pixelCount, 1, 1)\n}\n"
+          },
+          {
+            "sleep": 2200
+          },
+          {
+            "click": "[data-role=\"projection-change\"]"
+          },
+          {
+            "sleep": 500
+          }
+        ]
+      },
+      "elements": [
+        {
+          "id": "pop",
+          "mock": ".form",
+          "app": "[data-role=\"projection-options\"]",
+          "note": "no mock frame for the popover itself — Jeremy asked for the SETTINGS widget in a popup, so the cards inside it are the comparison",
+          "noBoxH": true
+        },
+        {
+          "id": "pcard",
+          "mock": ".pcard:not(.on)",
+          "app": "[data-role=\"projection-options\"] [data-role^=\"projection-opt-\"] .pcard:not(.on)",
+          "noBoxH": true
+        },
+        {
+          "id": "pcard-on",
+          "mock": ".pcard.on",
+          "app": "[data-role=\"projection-options\"] [data-role^=\"projection-opt-\"] .pcard.on",
+          "noBoxH": true
+        },
+        {
+          "id": "pcard-canvas",
+          "mock": ".pcard:not(.on) canvas",
+          "app": "[data-role=\"projection-options\"] [data-role^=\"projection-opt-\"] .pcard:not(.on) canvas"
+        },
+        {
+          "id": "pcard-name",
+          "mock": ".pcard:not(.on) .pnm",
+          "app": "[data-role=\"projection-options\"] [data-role^=\"projection-opt-\"] .pcard:not(.on) .pnm"
+        },
+        {
+          "id": "pcard-hint",
+          "mock": ".pcard:not(.on) .phint",
+          "app": "[data-role=\"projection-options\"] [data-role^=\"projection-opt-\"] .pcard:not(.on) .phint",
+          "noBox": true
+        }
+      ],
+      "allow": [
+        {
+          "element": "pop",
+          "property": "box width",
+          "why": "the mock target is the 720px Settings form; only the CARDS inside are comparable"
+        },
+        {
+          "element": "pop",
+          "property": "box height",
+          "why": "same"
+        },
+        {
+          "element": "pop",
+          "property": "padding-top",
+          "why": "same"
+        },
+        {
+          "element": "pop",
+          "property": "padding-right",
+          "why": "same"
+        },
+        {
+          "element": "pop",
+          "property": "padding-bottom",
+          "why": "same"
+        },
+        {
+          "element": "pop",
+          "property": "padding-left",
+          "why": "same"
+        }
+      ]
+    },
+    "S2d": {
+      "title": "Editor Controls — a 2D pattern on a matrix (no projection row)",
+      "mock": "S2d",
+      "width": 360,
+      "height": 900,
+      "app": {
+        "target": "panel",
+        "route": "#/editor",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": ".cm-content"
+          },
+          {
+            "code": "[data-role=\"editor-view\"]",
+            "value": "export function sliderCellSize(v) {\n  cellSize = v\n}\nexport function sliderSpeed(v) {\n  speed = v\n}\nvar cellSize = 1, speed = .4\nexport function render2D(index, x, y) {\n  hsv(x * cellSize, 1, y * speed + .3)\n}\n"
+          },
+          {
+            "sleep": 2500
+          }
+        ]
+      },
+      "elements": [
+        {
+          "id": "rsec",
+          "mock": ".rsec",
+          "app": "[data-role=\"editor-view\"] .rsec:has(.panel)",
+          "note": "mock: padding 16px 16px 20px, border-bottom 0",
+          "noBoxH": true
+        },
+        {
+          "id": "rhead-label",
+          "mock": ".rhead .slabel",
+          "app": "[data-role=\"editor-view\"] .rsec:has(.panel) > .rhead > .slabel",
+          "noBox": true
+        },
+        {
+          "id": "rhead-dim",
+          "mock": ".rhead .rdim",
+          "app": "[data-role=\"editor-view\"] .rsec:has(.panel) > .rhead > .rdim",
+          "noBox": true
+        },
+        {
+          "id": "ctlrow",
+          "mock": ".ctlrow",
+          "app": "[data-role=\"editor-view\"] .rsec .panel > .control",
+          "noBoxH": true
+        },
+        {
+          "id": "ctl-slider",
+          "mock": ".ctlrow .slider",
+          "app": "[data-role=\"editor-view\"] .rsec .panel > .control input[type=\"range\"]"
+        },
+        {
+          "id": "ctl-num",
+          "mock": ".ctlrow .inp.num.xs",
+          "app": "[data-role=\"editor-view\"] .rsec .panel > .control input.inp.xs.num"
+        },
+        {
+          "id": "no-projrow",
+          "mock": ".rsec",
+          "app": "[data-role=\"projection-row\"]",
+          "note": "S2d's point: a 2D pattern on a matrix shows NO projection row — this entry reports ABSENT when the app is right (expected)"
+        }
+      ],
+      "allow": [
+        {
+          "element": "no-projrow",
+          "why": "S2d's point is that a 2D pattern on a matrix shows NO projection row — ABSENT here means the app is CORRECT"
+        }
+      ]
+    },
+    "S3": {
+      "deviceSafe": true,
+      "title": "Settings — console, 64x64 matrix on a HUB75 board",
+      "width": 1200,
+      "height": 1000,
+      "app": {
+        "target": "panel",
+        "route": "#/settings",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"settings-panel\"]"
+          },
+          {
+            "click": "[data-role=\"adv-output-toggle\"]"
+          },
+          {
+            "sleep": 900
+          }
+        ]
+      },
+      "allow": [
+        {
+          "element": "titlerow-sub",
+          "property": "text",
+          "why": "the mock's version string is a mockup literal (v0.1.44)"
+        }
+      ],
+      "elements": [
+        {
+          "id": "setwrap",
+          "mock": ".setwrap",
+          "app": "[data-role=\"settings-panel\"] > .settings",
+          "note": "mock: max-width 760, padding 28px 20px 40px, margin 0 auto",
+          "noBoxH": true
+        },
+        {
+          "id": "titlerow",
+          "mock": ".titlerow",
+          "app": "[data-role=\"settings-panel\"] .titlerow",
+          "note": "mock: align-items baseline, gap 12, margin-bottom 28",
+          "noBoxH": true
+        },
+        {
+          "id": "titlerow-h1",
+          "mock": ".titlerow h1",
+          "app": "[data-role=\"settings-panel\"] .titlerow h1",
+          "text": true,
+          "note": "mock: 22px/600, letter-spacing -.01em",
+          "noBox": true
+        },
+        {
+          "id": "titlerow-sub",
+          "mock": ".titlerow .mono.tiny.dim",
+          "app": "[data-role=\"settings-subtitle\"]",
+          "text": true,
+          "note": "mock copy: `luxel-f6b0a8 · v0.1.44` — the device NAME, never a base URL",
+          "noBox": true
+        },
+        {
+          "id": "sect",
+          "mock": ".sect:first-of-type",
+          "app": "[data-role=\"sect-device-section\"]",
+          "note": "mock: margin-bottom 32",
+          "noBoxH": true
+        },
+        {
+          "id": "secthead",
+          "mock": ".sect:first-of-type .secthead",
+          "app": "[data-role=\"sect-device-section\"] > .secthead",
+          "note": "mock: gap 12, margin-bottom 14",
+          "noBoxH": true
+        },
+        {
+          "id": "secthead-label",
+          "mock": ".sect:first-of-type .secthead .slabel",
+          "app": "[data-role=\"sect-device-section\"] .slabel",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "secthead-rule",
+          "mock": ".sect:first-of-type .secthead .rule",
+          "app": "[data-role=\"sect-device-section\"] .rule"
+        },
+        {
+          "id": "form",
+          "mock": ".sect:first-of-type .form",
+          "app": "[data-role=\"sect-device\"]",
+          "note": "mock: padding 16, 1px border, radius 8, background var(--bg-panel) — the app uses bg-inset",
+          "noBoxH": true
+        },
+        {
+          "id": "srow",
+          "mock": ".sect:first-of-type .srow",
+          "app": "[data-role=\"sect-device\"] .field",
+          "note": "mock: grid 132px 1fr, gap 14, margin-bottom 12",
+          "noBoxH": true
+        },
+        {
+          "id": "srow-lab",
+          "mock": ".sect:first-of-type .srow .lab",
+          "app": "[data-role=\"sect-device\"] .field .flabel",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "name-input",
+          "mock": ".sect:first-of-type .inp.mono",
+          "app": "[data-role=\"device-name\"]",
+          "focus": true,
+          "note": "mock: a 260px mono text input the user can type in"
+        },
+        {
+          "id": "bigslider",
+          "mock": ".bigslider",
+          "app": "[data-role=\"device-brightness\"] .big",
+          "note": "mock: 20px slider, 6px track, 18px thumb"
+        },
+        {
+          "id": "bigslider-val",
+          "mock": ".bigslider .val",
+          "app": "[data-role=\"brightness-val\"]",
+          "note": "mock: 13px mono, min-width 52, right-aligned"
+        },
+        {
+          "id": "hint",
+          "mock": ".sect:first-of-type .hint",
+          "app": "[data-role=\"sect-device\"] > .hint.under",
+          "note": "mock: 12px, line-height 1.4, --text-dim"
+        },
+        {
+          "id": "layout-sect",
+          "mock": ".sect:nth-of-type(2)",
+          "app": "[data-role=\"sect-layout-section\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "layout-form",
+          "mock": ".sect:nth-of-type(2) .form",
+          "app": "[data-role=\"sect-layout\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "summary",
+          "mock": ".summary",
+          "app": "[data-role=\"layout-summary\"]",
+          "note": "mock: flex, gap 14, margin-bottom 12",
+          "noBoxH": true
+        },
+        {
+          "id": "summary-big",
+          "mock": ".summary .big",
+          "app": "[data-role=\"layout-headline\"]",
+          "note": "mock: 17px/600",
+          "noBox": true
+        },
+        {
+          "id": "summary-hint",
+          "mock": ".summary .hint",
+          "app": "[data-role=\"layout-subhead\"]",
+          "noBox": true
+        },
+        {
+          "id": "summary-canvas",
+          "mock": ".summary canvas",
+          "app": "[data-role=\"layout-summary\"] canvas",
+          "note": "mock: 56x56, 1px border, radius 6, margin-left auto"
+        },
+        {
+          "id": "layout-num",
+          "mock": ".sect:nth-of-type(2) .inp.num",
+          "app": "[data-role=\"layout-pw\"]",
+          "note": "mock .inp.num: 72px, 32px tall, mono 12.5px"
+        },
+        {
+          "id": "layout-sel",
+          "mock": ".sect:nth-of-type(2) .sel",
+          "app": "[data-role=\"layout-scan\"]",
+          "note": "mock .sel: 32px, radius 6, padding 0 9px 0 10px, bg-inset"
+        },
+        {
+          "id": "linkrow",
+          "mock": ".linkrow",
+          "app": "[data-role=\"sect-layout\"] .linkrow"
+        },
+        {
+          "id": "linkrow-a",
+          "mock": ".linkrow a",
+          "app": "[data-role=\"layout-map-link\"]",
+          "hover": true,
+          "text": true,
+          "note": "mock copy: `Custom map program →`, 12.5px dim with a dotted underline",
+          "noBox": true
+        },
+        {
+          "id": "wifi-form",
+          "mock": ".sect:nth-of-type(3) .form",
+          "app": "[data-role=\"sect-wifi\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "wifi-dot",
+          "mock": ".sect:nth-of-type(3) .dot",
+          "app": "[data-role=\"sect-wifi\"] .dot"
+        },
+        {
+          "id": "wifi-change",
+          "mock": ".sect:nth-of-type(3) .btn",
+          "app": "[data-role=\"wifi-change\"]",
+          "hover": true,
+          "text": true
+        },
+        {
+          "id": "advdiv",
+          "mock": ".advdiv",
+          "app": "[data-role=\"settings-panel\"] .advdiv",
+          "note": "mock: margin 40px 0 6px"
+        },
+        {
+          "id": "advdiv-label",
+          "mock": ".advdiv .slabel",
+          "app": "[data-role=\"settings-panel\"] .advdiv .slabel",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "advnote",
+          "mock": ".setwrap > .hint",
+          "app": "[data-role=\"settings-panel\"] .advnote",
+          "text": true,
+          "note": "mock copy: `Settings most installs never touch.`",
+          "noBox": true
+        },
+        {
+          "id": "disclist",
+          "mock": ".disclist",
+          "app": "[data-role=\"advanced\"]",
+          "note": "mock: 1px border, radius 8, overflow hidden, background var(--bg-panel)",
+          "noBoxH": true
+        },
+        {
+          "id": "drow-open",
+          "mock": ".drow.open",
+          "app": "[data-role=\"advanced\"] .drow.open > .dhead",
+          "hover": true,
+          "note": "mock: padding 11px 14px, 13px, rgba(255,255,255,.02) when open",
+          "noBoxH": true
+        },
+        {
+          "id": "drow",
+          "mock": ".drow:not(.open)",
+          "app": "[data-role=\"adv-clock-toggle\"]",
+          "hover": true,
+          "note": "mock: padding 11px 14px, gap 10, border-bottom",
+          "noBoxH": true
+        },
+        {
+          "id": "drow-chev",
+          "mock": ".drow:not(.open) .chev",
+          "app": "[data-role=\"adv-clock-toggle\"] .chev"
+        },
+        {
+          "id": "drow-st2",
+          "mock": ".drow:not(.open) .st2",
+          "app": "[data-role=\"adv-clock-status\"]",
+          "note": "mock: margin-left auto, 11.5px mono dim",
+          "noBox": true
+        },
+        {
+          "id": "dbody",
+          "mock": ".dbody",
+          "app": "[data-role=\"adv-output-body\"]",
+          "note": "mock: padding 4px 14px 16px, background rgba(0,0,0,.18)",
+          "noBoxH": true
+        },
+        {
+          "id": "dbody-num",
+          "mock": ".dbody .inp.num",
+          "app": "[data-role=\"out-gamma\"]",
+          "note": "mock uses the SAME .inp.num as everywhere else (72px/32px/mono)"
+        },
+        {
+          "id": "dbody-hint",
+          "mock": ".dbody .hint",
+          "app": "[data-role=\"adv-output-body\"] .field .hint"
+        },
+        {
+          "id": "gradbar",
+          "mock": ".gradbar",
+          "app": "[data-role=\"out-palette-preview\"]",
+          "note": "mock: 22px tall, radius 4, 1px border — and ONE `Edit stops…` button, not 32 inline rows"
+        },
+        {
+          "id": "gradbar-edit",
+          "mock": ".dbody .btn.sm",
+          "app": "[data-role=\"out-palette-edit\"]",
+          "note": "mock: a `.btn.sm` reading `Edit stops…`"
+        }
+      ]
+    },
+    "S3b": {
+      "title": "Settings LED layout — SK9822 strip board",
+      "width": 760,
+      "height": 1000,
+      "app": {
+        "target": "strip",
+        "route": "#/settings",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"sect-layout\"]"
+          },
+          {
+            "sleep": 1200
+          }
+        ]
+      },
+      "elements": [
+        {
+          "id": "sect",
+          "mock": ".sect:first-of-type",
+          "app": "[data-role=\"sect-layout-section\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "secthead",
+          "mock": ".sect:first-of-type .secthead",
+          "app": "[data-role=\"sect-layout-section\"] > .secthead",
+          "noBoxH": true
+        },
+        {
+          "id": "form",
+          "mock": ".sect:first-of-type .form",
+          "app": "[data-role=\"sect-layout\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "summary",
+          "mock": ".sect:first-of-type .summary",
+          "app": "[data-role=\"layout-summary\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "summary-big",
+          "mock": ".sect:first-of-type .summary .big",
+          "app": "[data-role=\"layout-headline\"]",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "summary-strip",
+          "mock": ".sect:first-of-type .summary canvas.strip",
+          "app": "[data-role=\"layout-summary\"] canvas",
+          "note": "mock: 120x20 strip thumbnail",
+          "noBox": true
+        },
+        {
+          "id": "srow",
+          "mock": ".sect:first-of-type .srow",
+          "app": "[data-role=\"sect-layout\"] .field",
+          "noBoxH": true
+        },
+        {
+          "id": "srow-lab",
+          "mock": ".sect:first-of-type .srow .lab",
+          "app": "[data-role=\"sect-layout\"] .field .flabel",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "layout-sel",
+          "mock": ".sect:first-of-type .srow .sel",
+          "app": "[data-role=\"layout-kind\"]",
+          "note": "mock: 190px wide .sel; its hint says `Strip · Matrix · 3D · custom map`"
+        },
+        {
+          "id": "layout-hint",
+          "mock": ".sect:first-of-type .srow .hint",
+          "app": "[data-role=\"sect-layout\"] .field .hint",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "pixels",
+          "mock": ".sect:first-of-type .inp.num",
+          "app": "[data-role=\"layout-pixels\"]",
+          "mockNth": 0
+        },
+        {
+          "id": "proto-sel",
+          "mock": ".sect:first-of-type .sel",
+          "app": "[data-role=\"layout-proto\"]",
+          "mockNth": 1
+        },
+        {
+          "id": "order-sel",
+          "mock": ".sect:first-of-type .sel",
+          "app": "[data-role=\"layout-order\"]",
+          "note": "mock: 96px wide",
+          "mockNth": 2
+        },
+        {
+          "id": "datapin-sel",
+          "mock": ".sect:first-of-type .srow:nth-of-type(4) .sel",
+          "app": "[data-role=\"layout-datapin\"]"
+        },
+        {
+          "id": "datapin-hint",
+          "mock": ".sect:first-of-type .hint",
+          "app": "[data-role=\"layout-datapin-note\"]",
+          "note": "mock copy: `applies after a reboot`",
+          "noBox": true,
+          "mockNth": 1
+        }
+      ],
+      "allow": [
+        {
+          "element": "sect",
+          "property": "margin-bottom",
+          "why": "the mockup's excerpt frames set `margin-bottom` inline on `.sect` so the excerpt sits flush in the mockup page; the real rhythm is stated in S3, which the app matches"
+        }
+      ]
+    },
+    "S3e": {
+      "deviceSafe": true,
+      "title": "Projection — 64x64 matrix",
+      "width": 760,
+      "height": 1000,
+      "app": {
+        "target": "panel",
+        "route": "#/settings",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"projection-block\"]"
+          },
+          {
+            "sleep": 1800
+          }
+        ]
+      },
+      "elements": [
+        {
+          "id": "sect",
+          "mock": ".sect",
+          "app": "[data-role=\"sect-projection-section\"]",
+          "note": "mock: Projection is its OWN section with its own head + rule + form",
+          "noBoxH": true
+        },
+        {
+          "id": "secthead",
+          "mock": ".secthead",
+          "app": "[data-role=\"sect-projection-section\"] > .secthead",
+          "noBoxH": true
+        },
+        {
+          "id": "secthead-label",
+          "mock": ".secthead .slabel",
+          "app": "[data-role=\"sect-projection-section\"] .slabel",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "secthead-rule",
+          "mock": ".secthead .rule",
+          "app": "[data-role=\"sect-projection-section\"] .rule"
+        },
+        {
+          "id": "secthead-note",
+          "mock": ".secthead .mono.tiny.dim",
+          "app": "[data-role=\"sect-projection-note\"]",
+          "noBox": true
+        },
+        {
+          "id": "form",
+          "mock": ".form",
+          "app": "[data-role=\"sect-projection\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "intro",
+          "mock": ".form > .hint",
+          "app": "[data-role=\"projection-block\"] > .intro",
+          "text": true,
+          "note": "mock: margin-bottom 18",
+          "noBox": true
+        },
+        {
+          "id": "prow",
+          "mock": ".prow",
+          "app": "[data-role=\"projection-kind\"][data-dims=\"1\"]",
+          "note": "mock: grid 168px minmax(0,1fr), gap 14, margin-bottom 20, align-items start",
+          "mockNth": 0,
+          "noBoxH": true
+        },
+        {
+          "id": "prlab",
+          "mock": ".prow .prlab",
+          "app": "[data-role=\"projection-kind\"][data-dims=\"1\"] > .prlab",
+          "text": true,
+          "note": "mock: 13px, padding-top 12",
+          "noBox": true,
+          "mockNth": 0
+        },
+        {
+          "id": "cards",
+          "mock": ".prow .cards",
+          "app": "[data-role=\"projection-kind\"][data-dims=\"1\"] > .cards",
+          "note": "mock: grid, 3 equal columns, gap 12",
+          "mockNth": 0,
+          "noBoxH": true
+        },
+        {
+          "id": "pcard",
+          "mock": ".prow .pcard:not(.on)",
+          "app": "[data-role=\"projection-kind\"][data-dims=\"1\"] [data-role=\"projection-card\"].pcard:not(.on)",
+          "hover": true,
+          "note": "mock: padding 12, radius 8, bg-inset",
+          "mockNth": 0,
+          "noBoxH": true
+        },
+        {
+          "id": "pcard-on",
+          "mock": ".prow .pcard.on",
+          "app": "[data-role=\"projection-kind\"][data-dims=\"1\"] [data-role=\"projection-card\"].pcard.on",
+          "note": "mock: accent border + accent-soft fill + 0 0 0 1px rgba(232,163,61,.3) ring",
+          "mockNth": 0,
+          "noBoxH": true
+        },
+        {
+          "id": "pcard-canvas",
+          "mock": ".prow .pcard:not(.on) canvas",
+          "app": "[data-role=\"projection-kind\"][data-dims=\"1\"] [data-role=\"projection-card\"].pcard:not(.on) canvas",
+          "note": "mock: 120x120, radius 4, centred",
+          "mockNth": 0
+        },
+        {
+          "id": "pcard-nm",
+          "mock": ".prow .pcard:not(.on) .pnm",
+          "app": "[data-role=\"projection-kind\"][data-dims=\"1\"] [data-role=\"projection-card\"].pcard:not(.on) .pnm",
+          "note": "mock: 13px, margin-top 10, centred",
+          "noBox": true,
+          "mockNth": 0
+        },
+        {
+          "id": "pcard-nm-on",
+          "mock": ".prow .pcard.on .pnm",
+          "app": "[data-role=\"projection-kind\"][data-dims=\"1\"] [data-role=\"projection-card\"].pcard.on .pnm",
+          "note": "mock: font-weight 600 when active",
+          "noBox": true,
+          "mockNth": 0
+        },
+        {
+          "id": "pcard-hint",
+          "mock": ".prow .pcard:not(.on) .phint",
+          "app": "[data-role=\"projection-kind\"][data-dims=\"1\"] [data-role=\"projection-card\"].pcard:not(.on) .phint",
+          "note": "mock: 11px/1.45, centred, normal wrap",
+          "noBox": true,
+          "mockNth": 0
+        },
+        {
+          "id": "prow-3d",
+          "mock": ".prow",
+          "app": "[data-role=\"projection-kind\"][data-dims=\"3\"]",
+          "mockNth": 1,
+          "noBoxH": true
+        },
+        {
+          "id": "pcard-3d-glyph",
+          "mock": ".pcard.on .gl",
+          "app": "[data-role=\"projection-kind\"][data-dims=\"3\"] [data-role=\"projection-card\"].pcard.on .gl",
+          "note": "mock: a 40x40 cube SVG at right 8 / bottom 6 on rgba(8,10,14,.74), radius 5 — the cut face filled rgba(232,163,61,.42)",
+          "mockNth": 0
+        }
+      ],
+      "allow": [
+        {
+          "element": "sect",
+          "property": "margin-bottom",
+          "why": "the mockup's excerpt frames set `margin-bottom` inline on `.sect` so the excerpt sits flush in the mockup page; the real rhythm is stated in S3, which the app matches"
+        }
+      ]
+    },
+    "S3f": {
+      "title": "Projection — 300 px strip (bar cards)",
+      "width": 760,
+      "height": 1000,
+      "app": {
+        "target": "strip",
+        "route": "#/settings",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"projection-block\"]"
+          },
+          {
+            "sleep": 1800
+          }
+        ]
+      },
+      "elements": [
+        {
+          "id": "sect",
+          "mock": ".sect",
+          "app": "[data-role=\"sect-projection-section\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "secthead-note",
+          "mock": ".secthead .mono.tiny.dim",
+          "app": "[data-role=\"sect-projection-note\"]",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "prow-2d",
+          "mock": ".prow",
+          "app": "[data-role=\"projection-kind\"][data-dims=\"2\"]",
+          "note": "mock: on a strip the block STARTS at 2D — there is no 1D row",
+          "mockNth": 0,
+          "noBoxH": true
+        },
+        {
+          "id": "prlab",
+          "mock": ".prow .prlab",
+          "app": "[data-role=\"projection-kind\"][data-dims=\"2\"] > .prlab",
+          "text": true,
+          "noBox": true,
+          "mockNth": 0
+        },
+        {
+          "id": "barcard-on",
+          "mock": ".prow .barcard.on",
+          "app": "[data-role=\"projection-kind\"][data-dims=\"2\"] [data-role=\"projection-card\"].barcard.on",
+          "note": "mock: flex row, gap 12, padding 10px 12px, margin-bottom 10, radius 8",
+          "mockNth": 0,
+          "noBoxH": true
+        },
+        {
+          "id": "barcard",
+          "mock": ".prow .barcard:not(.on)",
+          "app": "[data-role=\"projection-kind\"][data-dims=\"2\"] [data-role=\"projection-card\"].barcard:not(.on)",
+          "hover": true,
+          "mockNth": 0,
+          "noBoxH": true
+        },
+        {
+          "id": "barcard-svg",
+          "mock": ".prow .barcard:not(.on) > svg",
+          "app": "[data-role=\"projection-kind\"][data-dims=\"2\"] [data-role=\"projection-card\"].barcard:not(.on) .gl",
+          "note": "mock: a 40x40 grid/cube diagram left of the bar",
+          "mockNth": 0
+        },
+        {
+          "id": "barcard-canvas",
+          "mock": ".prow .barcard:not(.on) canvas",
+          "app": "[data-role=\"projection-kind\"][data-dims=\"2\"] [data-role=\"projection-card\"].barcard:not(.on) canvas",
+          "note": "mock: 200x24, radius 3, flex:none",
+          "mockNth": 0
+        },
+        {
+          "id": "barcard-nm",
+          "mock": ".prow .barcard:not(.on) .bnm",
+          "app": "[data-role=\"projection-kind\"][data-dims=\"2\"] [data-role=\"projection-card\"].barcard:not(.on) .pnm",
+          "noBox": true,
+          "mockNth": 0
+        },
+        {
+          "id": "barcard-hint",
+          "mock": ".prow .barcard:not(.on) .bhint",
+          "app": "[data-role=\"projection-kind\"][data-dims=\"2\"] [data-role=\"projection-card\"].barcard:not(.on) .phint",
+          "note": "mock: 11px, margin-top 3, LEFT aligned (not centred like a pcard)",
+          "noBox": true,
+          "mockNth": 0
+        },
+        {
+          "id": "prow-3d",
+          "mock": ".prow",
+          "app": "[data-role=\"projection-kind\"][data-dims=\"3\"]",
+          "mockNth": 1,
+          "noBoxH": true
+        }
+      ],
+      "allow": [
+        {
+          "element": "sect",
+          "property": "margin-bottom",
+          "why": "the mockup's excerpt frames set `margin-bottom` inline on `.sect` so the excerpt sits flush in the mockup page; the real rhythm is stated in S3, which the app matches"
+        }
+      ]
+    },
+    "S3g": {
+      "title": "Projection — 8x8x8 lattice",
+      "width": 760,
+      "height": 1000,
+      "app": {
+        "target": "lattice",
+        "route": "#/settings",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"layout-kind\"]"
+          },
+          {
+            "select": "[data-role=\"layout-kind\"]",
+            "value": "lattice"
+          },
+          {
+            "sleep": 700
+          },
+          {
+            "type": "[data-role=\"layout-lat-w\"]",
+            "value": "8"
+          },
+          {
+            "type": "[data-role=\"layout-lat-h\"]",
+            "value": "8"
+          },
+          {
+            "type": "[data-role=\"layout-lat-d\"]",
+            "value": "8"
+          },
+          {
+            "sleep": 400
+          },
+          {
+            "click": "[data-role=\"layout-lat-install\"]"
+          },
+          {
+            "sleep": 2500
+          },
+          {
+            "waitFor": "[data-role=\"projection-block\"]"
+          },
+          {
+            "sleep": 1200
+          }
+        ]
+      },
+      "elements": [
+        {
+          "id": "sect",
+          "mock": ".sect",
+          "app": "[data-role=\"sect-projection-section\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "secthead-note",
+          "mock": ".secthead .mono.tiny.dim",
+          "app": "[data-role=\"sect-projection-note\"]",
+          "text": true,
+          "note": "mock copy: `8×8×8 lattice · 512 px`",
+          "noBox": true
+        },
+        {
+          "id": "prow-1d",
+          "mock": ".prow",
+          "app": "[data-role=\"projection-kind\"][data-dims=\"1\"]",
+          "mockNth": 0,
+          "noBoxH": true
+        },
+        {
+          "id": "cards4",
+          "mock": ".prow .cards.c4",
+          "app": "[data-role=\"projection-kind\"][data-dims=\"1\"] > .cards",
+          "note": "mock: FOUR columns on a lattice (index · x · y · z)",
+          "mockNth": 0,
+          "noBoxH": true
+        },
+        {
+          "id": "pcard",
+          "mock": ".prow .pcard:not(.on)",
+          "app": "[data-role=\"projection-kind\"][data-dims=\"1\"] [data-role=\"projection-card\"].pcard:not(.on)",
+          "note": "mock #S3g: padding 8, canvas 100x100",
+          "mockNth": 0,
+          "noBoxH": true
+        },
+        {
+          "id": "pcard-canvas",
+          "mock": ".prow .pcard:not(.on) canvas",
+          "app": "[data-role=\"projection-kind\"][data-dims=\"1\"] [data-role=\"projection-card\"].pcard:not(.on) canvas",
+          "note": "mock: 100x100, image-rendering auto (`.smooth`)",
+          "mockNth": 0
+        },
+        {
+          "id": "prow-2d",
+          "mock": ".prow",
+          "app": "[data-role=\"projection-kind\"][data-dims=\"2\"]",
+          "note": "mock: a lattice has NO 3D row — 3D is native here",
+          "mockNth": 1,
+          "noBoxH": true
+        },
+        {
+          "id": "prow-2d-lab",
+          "mock": ".prow .prlab",
+          "app": "[data-role=\"projection-kind\"][data-dims=\"2\"] > .prlab",
+          "text": true,
+          "noBox": true,
+          "mockNth": 1
+        },
+        {
+          "id": "pcard-2d-nm",
+          "mock": ".prow .pcard.on .pnm",
+          "app": "[data-role=\"projection-kind\"][data-dims=\"2\"] [data-role=\"projection-card\"].pcard.on .pnm",
+          "text": true,
+          "note": "mock copy: `Repeat along z`",
+          "noBox": true,
+          "mockNth": 1
+        }
+      ],
+      "allow": [
+        {
+          "element": "sect",
+          "property": "margin-bottom",
+          "why": "the mockup's excerpt frames set `margin-bottom` inline on `.sect` so the excerpt sits flush in the mockup page; the real rhythm is stated in S3, which the app matches"
+        }
+      ]
+    },
+    "S3i": {
+      "title": "Output processing — capability-trimmed group (strip)",
+      "width": 760,
+      "height": 1000,
+      "app": {
+        "target": "strip",
+        "route": "#/settings",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"adv-output-toggle\"]"
+          },
+          {
+            "click": "[data-role=\"adv-output-toggle\"]"
+          },
+          {
+            "sleep": 900
+          }
+        ]
+      },
+      "elements": [
+        {
+          "id": "disclist",
+          "mock": ".disclist",
+          "app": "[data-role=\"advanced\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "drow-open",
+          "mock": ".disclist .drow.open",
+          "app": "[data-role=\"adv-output-row\"] > .dhead",
+          "noBoxH": true
+        },
+        {
+          "id": "drow-st2",
+          "mock": ".disclist .drow.open .st2",
+          "app": "[data-role=\"adv-output-status\"]",
+          "note": "mock copy on a strip: `300 px SK9822 strip`",
+          "noBox": true
+        },
+        {
+          "id": "dbody",
+          "mock": ".disclist .dbody",
+          "app": "[data-role=\"adv-output-body\"]",
+          "note": "mock #S3i: padding 6px 14px 13px, srow margin-bottom 9",
+          "noBoxH": true
+        },
+        {
+          "id": "srow",
+          "mock": ".disclist .srow",
+          "app": "[data-role=\"adv-output-body\"] .field",
+          "noBoxH": true
+        },
+        {
+          "id": "srow-lab",
+          "mock": ".disclist .srow .lab",
+          "app": "[data-role=\"adv-output-body\"] .field .flabel",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "gamma",
+          "mock": ".disclist .srow .inp.num",
+          "app": "[data-role=\"out-gamma\"]"
+        },
+        {
+          "id": "gamma-hint",
+          "mock": ".disclist .srow .hint",
+          "app": "[data-role=\"adv-output-body\"] .field .hint",
+          "text": true,
+          "note": "mock copy: `0 = off; 2.2 gives smoother dark fades`",
+          "noBox": true
+        },
+        {
+          "id": "cap",
+          "mock": ".disclist .srow:nth-of-type(3) .inp.num",
+          "app": "[data-role=\"out-cap\"]",
+          "note": "mock: Power cap exists on a strip, is ABSENT on the HUB75 board"
+        },
+        {
+          "id": "gradbar",
+          "mock": ".disclist .gradbar",
+          "app": "[data-role=\"out-palette-preview\"]"
+        },
+        {
+          "id": "gradbar-edit",
+          "mock": ".disclist .btn.sm",
+          "app": "[data-role=\"out-palette-edit\"]"
+        }
+      ],
+      "allow": []
+    },
+    "S3j": {
+      "title": "LED layout — 600 px strip across two outputs",
+      "width": 760,
+      "height": 1000,
+      "app": {
+        "target": "outputs",
+        "route": "#/settings",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"outputs\"]"
+          },
+          {
+            "sleep": 1200
+          },
+          {
+            "waitFor": "[data-role=\"output-add\"]"
+          },
+          {
+            "click": "[data-role=\"output-add\"]"
+          },
+          {
+            "sleep": 900
+          },
+          {
+            "type": "[data-role=\"output-row\"][data-n=\"0\"] [data-role=\"output-count\"]",
+            "value": "300"
+          },
+          {
+            "type": "[data-role=\"output-row\"][data-n=\"1\"] [data-role=\"output-count\"]",
+            "value": "300"
+          },
+          {
+            "sleep": 1200
+          }
+        ]
+      },
+      "elements": [
+        {
+          "id": "sect",
+          "mock": ".sect",
+          "app": "[data-role=\"sect-layout-section\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "secthead-note",
+          "mock": ".secthead .mono.tiny.dim",
+          "app": "[data-role=\"sect-layout-note\"]",
+          "note": "mock: the section head carries `luxel-4ae0d4 · Athom · 2 outputs`",
+          "noBox": true
+        },
+        {
+          "id": "summary-big",
+          "mock": ".summary .big",
+          "app": "[data-role=\"layout-headline\"]",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "summary-hint",
+          "mock": ".summary .hint",
+          "app": "[data-role=\"layout-subhead\"]",
+          "text": true,
+          "note": "mock copy: `2 outputs · WS2812`",
+          "noBox": true
+        },
+        {
+          "id": "outputs-label",
+          "mock": ".slabel",
+          "app": "[data-role=\"outputs\"] > .slabel",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "outtable",
+          "mock": ".outtable",
+          "app": "[data-role=\"outputs\"] > .outtable",
+          "note": "mock: 1px border, radius 8, overflow hidden, bg-inset, margin-top 8",
+          "noBoxH": true
+        },
+        {
+          "id": "orow",
+          "mock": ".orow",
+          "app": "[data-role=\"output-row\"][data-n=\"0\"]",
+          "note": "mock: flex, gap 8, padding 9px 10px, border-bottom",
+          "noBoxH": true
+        },
+        {
+          "id": "ochip1",
+          "mock": ".ochip.o1",
+          "app": "[data-role=\"output-row\"][data-n=\"0\"] .ochip",
+          "note": "mock: 22x22, radius 5, 11px mono, accent tint + inset ring"
+        },
+        {
+          "id": "ochip2",
+          "mock": ".ochip.o2",
+          "app": "[data-role=\"output-row\"][data-n=\"1\"] .ochip",
+          "note": "mock: the SECOND output is blue (#7db4e6 on rgba(91,155,213,.16)) — an identity colour, not a second accent"
+        },
+        {
+          "id": "orow-un",
+          "mock": ".orow .un",
+          "app": "[data-role=\"output-row\"][data-n=\"0\"] .un",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "orow-pin",
+          "mock": ".orow .sel",
+          "app": "[data-role=\"output-row\"][data-n=\"0\"] [data-role=\"output-pin\"]",
+          "note": "mock .orow .sel: 28px tall, 12px, padding 0 7px 0 8px"
+        },
+        {
+          "id": "orow-proto",
+          "mock": ".orow .sel",
+          "app": "[data-role=\"output-row\"][data-n=\"0\"] [data-role=\"output-proto\"]",
+          "note": "mock: 96px wide",
+          "mockNth": 1
+        },
+        {
+          "id": "orow-order",
+          "mock": ".orow .sel",
+          "app": "[data-role=\"output-row\"][data-n=\"0\"] [data-role=\"output-order\"]",
+          "note": "mock: 68px wide",
+          "mockNth": 2
+        },
+        {
+          "id": "orow-count",
+          "mock": ".orow .inp.mono",
+          "app": "[data-role=\"output-row\"][data-n=\"0\"] [data-role=\"output-count\"]",
+          "focus": true,
+          "note": "mock: 56px wide at 28px tall — Jeremy: `the pixel count input box in the output is too small`"
+        },
+        {
+          "id": "orow-rev",
+          "mock": ".orow .ckrow.sm",
+          "app": "[data-role=\"output-row\"][data-n=\"0\"] .ckrow"
+        },
+        {
+          "id": "orow-range",
+          "mock": ".orow .orange",
+          "app": "[data-role=\"output-range\"]",
+          "note": "mock: margin-left auto, 11px mono dim, `pixels 0–299`",
+          "noBox": true
+        },
+        {
+          "id": "orow-remove",
+          "mock": ".orow:nth-of-type(2) .btn.icon.quiet",
+          "app": "[data-role=\"output-row\"][data-n=\"1\"] [data-role=\"output-remove\"]",
+          "hover": true,
+          "note": "mock .orow .btn.icon: 24x24"
+        },
+        {
+          "id": "arrbox",
+          "mock": ".arrbox",
+          "app": "[data-role=\"arrangement\"]",
+          "note": "mock: margin-top 16, padding 12, radius 8, 1px border, bg-inset"
+        },
+        {
+          "id": "notes",
+          "mock": ".notes",
+          "app": "[data-role=\"outputs-note\"]",
+          "note": "mock: 12px dim lines at line-height 1.6",
+          "noBox": true
+        }
+      ],
+      "allow": [
+        {
+          "element": "sect",
+          "property": "margin-bottom",
+          "why": "the mockup's excerpt frames set `margin-bottom` inline on `.sect` so the excerpt sits flush in the mockup page; the real rhythm is stated in S3, which the app matches"
+        }
+      ]
+    },
+    "S3k": {
+      "title": "LED layout — 32x32 matrix from four panels, two outputs",
+      "width": 760,
+      "height": 1000,
+      "app": {
+        "target": "outputs",
+        "route": "#/settings",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"layout-kind\"]"
+          },
+          {
+            "select": "[data-role=\"layout-kind\"]",
+            "value": "matrix"
+          },
+          {
+            "sleep": 1200
+          },
+          {
+            "type": "[data-role=\"layout-pw\"]",
+            "value": "16"
+          },
+          {
+            "type": "[data-role=\"layout-ph\"]",
+            "value": "16"
+          },
+          {
+            "sleep": 900
+          },
+          {
+            "waitFor": "[data-role=\"output-add\"]"
+          },
+          {
+            "click": "[data-role=\"output-add\"]"
+          },
+          {
+            "sleep": 900
+          },
+          {
+            "sleep": 1200
+          }
+        ]
+      },
+      "elements": [
+        {
+          "id": "summary-big",
+          "mock": ".summary .big",
+          "app": "[data-role=\"layout-headline\"]",
+          "noBox": true
+        },
+        {
+          "id": "layout-sel",
+          "mock": ".srow .sel",
+          "app": "[data-role=\"layout-kind\"]"
+        },
+        {
+          "id": "panel-w",
+          "mock": ".inp.num",
+          "app": "[data-role=\"layout-pw\"]",
+          "note": "mock S3k narrows the per-panel size boxes to 56px inline",
+          "mockNth": 0
+        },
+        {
+          "id": "ckrow",
+          "mock": ".ckrow",
+          "app": "[data-role=\"sect-layout\"] .ckrow",
+          "note": "mock: inline-flex, gap 7, 12.5px, nowrap"
+        },
+        {
+          "id": "cbx-on",
+          "mock": ".cbx.on",
+          "app": "[data-role=\"layout-snake\"]",
+          "note": "mock: a 12x12 accent-filled box with a 9px ✓, NOT a native checkbox"
+        },
+        {
+          "id": "outtable",
+          "mock": ".outtable",
+          "app": "[data-role=\"outputs\"] > .outtable",
+          "noBoxH": true
+        },
+        {
+          "id": "orow",
+          "mock": ".orow",
+          "app": "[data-role=\"output-row\"][data-n=\"0\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "ochip1",
+          "mock": ".ochip.o1",
+          "app": "[data-role=\"output-row\"][data-n=\"0\"] .ochip"
+        },
+        {
+          "id": "orow-count",
+          "mock": ".orow .inp.mono",
+          "app": "[data-role=\"output-row\"][data-n=\"0\"] [data-role=\"output-count\"]"
+        },
+        {
+          "id": "orow-range",
+          "mock": ".orow .orange",
+          "app": "[data-role=\"output-range\"]",
+          "noBox": true
+        },
+        {
+          "id": "arrbox",
+          "mock": ".arrbox",
+          "app": "[data-role=\"arrangement\"]"
+        },
+        {
+          "id": "notes",
+          "mock": ".notes",
+          "app": "[data-role=\"outputs-note\"]",
+          "noBox": true
+        }
+      ],
+      "allow": []
+    },
+    "S4": {
+      "deviceSafe": true,
+      "title": "Playlist — console, 64x64 matrix",
+      "width": 1200,
+      "height": 940,
+      "app": {
+        "target": "panel",
+        "route": "#/playlist",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"playlist-panel\"]"
+          },
+          {
+            "sleep": 2500
+          },
+          {
+            "click": "[data-role=\"playlist-item\"]:not(.playing) [data-role=\"pl-values-toggle\"]"
+          },
+          {
+            "sleep": 900
+          }
+        ]
+      },
+      "elements": [
+        {
+          "id": "transport",
+          "mock": ".transport",
+          "app": "[data-role=\"playlist-panel\"] > .transport",
+          "note": "mock: padding 12px 20px, gap 12, border-bottom, wrap",
+          "noBoxH": true
+        },
+        {
+          "id": "group",
+          "mock": ".transport > .group",
+          "app": "[data-role=\"playlist-panel\"] .transport > .group:first-of-type",
+          "note": "mock: inline-flex, gap 4 — four persistent controls",
+          "mockNth": 0
+        },
+        {
+          "id": "pl-primary",
+          "mock": ".transport .btn.primary",
+          "app": "[data-role=\"pl-play\"], [data-role=\"pl-pause\"]",
+          "hover": true,
+          "text": true,
+          "note": "mock copy while playing: `‖ Pause`; the app has no Pause verb at all"
+        },
+        {
+          "id": "pl-stop",
+          "mock": ".transport .btn.icon[title=\"stop\"]",
+          "app": "[data-role=\"pl-stop\"]",
+          "hover": true
+        },
+        {
+          "id": "pl-prev",
+          "mock": ".transport .btn.icon[title=\"previous\"]",
+          "app": "[data-role=\"pl-prev\"]"
+        },
+        {
+          "id": "pl-next",
+          "mock": ".transport .btn.icon[title=\"next\"]",
+          "app": "[data-role=\"pl-next\"]"
+        },
+        {
+          "id": "nowplaying",
+          "mock": ".nowplaying",
+          "app": "[data-role=\"pl-now\"]",
+          "note": "mock: min-width 230"
+        },
+        {
+          "id": "np1",
+          "mock": ".nowplaying .np1",
+          "app": "[data-role=\"pl-now\"] > .np1",
+          "noBox": true
+        },
+        {
+          "id": "np-name",
+          "mock": ".nowplaying .np1 b",
+          "app": "[data-role=\"pl-now-name\"]",
+          "noBox": true
+        },
+        {
+          "id": "np-time",
+          "mock": ".nowplaying .np1 .t",
+          "app": "[data-role=\"pl-now\"] .t",
+          "note": "mock: mono 11.5px dim, margin-left 8",
+          "noBox": true
+        },
+        {
+          "id": "prog",
+          "mock": ".prog",
+          "app": "[data-role=\"pl-progress\"]",
+          "note": "mock: 3px tall on #272c35, radius 2, margin-top 5"
+        },
+        {
+          "id": "prog-fill",
+          "mock": ".prog i",
+          "app": "[data-role=\"pl-progress\"]",
+          "props": [
+            "background-color",
+            "height"
+          ],
+          "note": "mock fill is var(--ok); the app paints it as a gradient on the track itself"
+        },
+        {
+          "id": "dur-label",
+          "mock": ".transport .group .tiny.dim",
+          "app": "[data-role=\"playlist-panel\"] label[for=\"pl-default-sec\"]",
+          "text": true,
+          "noBox": true,
+          "mockNth": 0
+        },
+        {
+          "id": "dur-input",
+          "mock": ".transport .inp.num.xs",
+          "app": "[data-role=\"pl-default-sec\"]",
+          "focus": true,
+          "note": "mock .inp.num.xs: 72px wide, 26px tall — wide enough to read `manual`",
+          "mockNth": 0
+        },
+        {
+          "id": "cf-input",
+          "mock": ".transport .inp.num.xs",
+          "app": "[data-role=\"pl-crossfade\"]",
+          "mockNth": 1
+        },
+        {
+          "id": "pl-more",
+          "mock": ".transport > .btn.icon",
+          "app": "[data-role=\"pl-more\"]",
+          "hover": true
+        },
+        {
+          "id": "pllist",
+          "mock": ".pllist",
+          "app": "[data-role=\"playlist-panel\"] .pl-list",
+          "note": "mock: max-width 820, padding 20",
+          "noBoxH": true
+        },
+        {
+          "id": "plrow",
+          "mock": ".plrow:not(.playing)",
+          "app": "[data-role=\"playlist-item\"]:not(.playing)",
+          "note": "mock: padding 10px 12px, margin-bottom 8, radius 8, background var(--bg-panel)",
+          "noBoxH": true
+        },
+        {
+          "id": "plrow-playing",
+          "mock": ".plrow.playing",
+          "app": "[data-role=\"playlist-item\"].playing",
+          "note": "mock: border-left 3px var(--ok), padding-left 10",
+          "noBoxH": true
+        },
+        {
+          "id": "plrow-hnd",
+          "mock": ".plrow:not(.playing) .hnd",
+          "app": "[data-role=\"playlist-item\"]:not(.playing) [data-role=\"pl-grip\"]",
+          "note": "mock: `⠿` 14px #555c6b, width 14, centred"
+        },
+        {
+          "id": "plrow-canvas",
+          "mock": ".plrow:not(.playing) canvas",
+          "app": "[data-role=\"playlist-item\"]:not(.playing) .thumb canvas",
+          "note": "mock: 44x44, radius 4"
+        },
+        {
+          "id": "plrow-who",
+          "mock": ".plrow:not(.playing) .who",
+          "app": "[data-role=\"playlist-item\"]:not(.playing) .who"
+        },
+        {
+          "id": "plrow-n",
+          "mock": ".plrow:not(.playing) .who .n",
+          "app": "[data-role=\"playlist-item\"]:not(.playing) [data-role=\"pl-name\"]"
+        },
+        {
+          "id": "plrow-t",
+          "mock": ".plrow:not(.playing) .who .t",
+          "app": "[data-role=\"playlist-item\"]:not(.playing) .who .t",
+          "note": "mock: mono 11px dim, margin-top 3, copy is `Pattern`"
+        },
+        {
+          "id": "chip",
+          "mock": ".plrow:not(.playing) .chip:not(.ovr):not(.open)",
+          "app": "[data-role=\"playlist-item\"]:not(.playing) [data-role=\"pl-values-toggle\"]",
+          "hover": true,
+          "note": "mock .chip: 26px, padding 0 9px, radius 6, mono 12px, bg-inset — NOT a 999px pill"
+        },
+        {
+          "id": "chip-dur",
+          "mock": ".plrow:not(.playing) .chip",
+          "app": "[data-role=\"playlist-item\"]:not(.playing) [data-role=\"pl-duration\"]"
+        },
+        {
+          "id": "chip-ovr",
+          "mock": ".chip.ovr",
+          "app": "[data-role=\"playlist-item\"] [data-role=\"pl-duration\"].ovr",
+          "note": "mock: accent text + rgba(232,163,61,.45) border"
+        },
+        {
+          "id": "chip-open",
+          "mock": ".chip.open",
+          "app": "[data-role=\"playlist-item\"] .chip.open",
+          "note": "mock: --text on #1c2029 with a #3a4150 border"
+        },
+        {
+          "id": "plrow-rm",
+          "mock": ".plrow:not(.playing) .btn.icon.quiet",
+          "app": "[data-role=\"playlist-item\"]:not(.playing) [data-role=\"pl-remove\"]",
+          "hover": true
+        },
+        {
+          "id": "pl-add",
+          "mock": ".pllist > .btn.quiet",
+          "app": "[data-role=\"pl-add\"]",
+          "hover": true,
+          "text": true,
+          "note": "mock: a quiet inline button, not a full-width dashed box"
+        },
+        {
+          "id": "plfoot",
+          "mock": ".plfoot",
+          "app": "[data-role=\"pl-total\"]",
+          "note": "mock: padding 0 20px 22px, 12px MONO dim",
+          "noBox": true
+        },
+        {
+          "id": "plvals",
+          "mock": ".plvals",
+          "app": "[data-role=\"pl-values\"]",
+          "note": "mock: padding 2px 12px 12px, margin -4px 0 8px, border w/o top, radius 0 0 8px 8px, rgba(0,0,0,.2)",
+          "noBoxH": true
+        }
+      ]
+    },
+    "S4b": {
+      "title": "Playlist — mobile 390 px",
+      "width": 390,
+      "height": 844,
+      "app": {
+        "target": "panel",
+        "route": "#/playlist",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"playlist-panel\"]"
+          },
+          {
+            "sleep": 1500
+          }
+        ]
+      },
+      "elements": [
+        {
+          "id": "transport",
+          "mock": ".transport",
+          "app": "[data-role=\"playlist-panel\"] > .transport",
+          "note": "mock: padding 12, gap 10, wraps to three lines",
+          "noBoxH": true
+        },
+        {
+          "id": "pl-primary",
+          "mock": ".transport .btn.primary",
+          "app": "[data-role=\"pl-play\"], [data-role=\"pl-pause\"]"
+        },
+        {
+          "id": "nowplaying",
+          "mock": ".nowplaying",
+          "app": "[data-role=\"pl-now\"]",
+          "note": "mock: full width on its own line"
+        },
+        {
+          "id": "prog",
+          "mock": ".prog",
+          "app": "[data-role=\"pl-progress\"]"
+        },
+        {
+          "id": "pllist",
+          "mock": ".pllist",
+          "app": "[data-role=\"playlist-panel\"] .pl-list",
+          "note": "mock: padding 12",
+          "noBoxH": true
+        },
+        {
+          "id": "plrow",
+          "mock": ".plrow:not(.playing)",
+          "app": "[data-role=\"playlist-item\"]:not(.playing)",
+          "note": "mock: gap 10 at 390px",
+          "noBoxH": true
+        },
+        {
+          "id": "plrow-canvas",
+          "mock": ".plrow:not(.playing) canvas",
+          "app": "[data-role=\"playlist-item\"]:not(.playing) .thumb canvas",
+          "note": "mock: 40x40 on a phone"
+        },
+        {
+          "id": "plrow-t",
+          "mock": ".plrow:not(.playing) .who .t",
+          "app": "[data-role=\"playlist-item\"]:not(.playing) .who .t",
+          "note": "mock folds the duration into this line: `Pattern · 8 s`"
+        },
+        {
+          "id": "chip",
+          "mock": ".plrow:not(.playing) .chip",
+          "app": "[data-role=\"playlist-item\"]:not(.playing) [data-role=\"pl-values-toggle\"]",
+          "note": "mock shrinks the copy to `1 ▾`"
+        },
+        {
+          "id": "plfoot",
+          "mock": ".plfoot",
+          "app": "[data-role=\"pl-total\"]",
+          "note": "mock: padding 0 12px 16px",
+          "noBox": true
+        }
+      ]
+    },
+    "S4menu": {
+      "title": "Playlist — the ⋯ menu (mock frame S2's .menu)",
+      "mock": "S2",
+      "width": 1200,
+      "height": 940,
+      "app": {
+        "target": "panel",
+        "route": "#/playlist",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"pl-more\"]"
+          },
+          {
+            "click": "[data-role=\"pl-more\"]"
+          },
+          {
+            "sleep": 400
+          }
+        ]
+      },
+      "elements": [
+        {
+          "id": "menu",
+          "mock": ".menu",
+          "app": "[data-role=\"pl-menu\"]"
+        },
+        {
+          "id": "mi-del",
+          "mock": ".menu > div.mi.del",
+          "app": "[data-role=\"pl-clear\"]",
+          "hover": true,
+          "text": true,
+          "noBox": true
+        }
+      ]
+    },
+    "S4picker": {
+      "title": "Playlist — the + Add picker (mock frame S5's .pop is the nearest primitive)",
+      "mock": "S5",
+      "width": 1200,
+      "height": 940,
+      "app": {
+        "target": "panel",
+        "route": "#/playlist",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"pl-add\"]"
+          },
+          {
+            "click": "[data-role=\"pl-add\"]"
+          },
+          {
+            "waitFor": "[data-role=\"pattern-picker\"]"
+          },
+          {
+            "sleep": 1200
+          }
+        ]
+      },
+      "allow": [
+        {
+          "element": "panel",
+          "property": "width",
+          "why": "the picker is a 520px modal; the mock's .pop is a 296px popover — only the chrome (radius/border/shadow/background) is comparable"
+        },
+        {
+          "element": "panel",
+          "property": "box width",
+          "why": "same"
+        },
+        {
+          "element": "panel",
+          "property": "box height",
+          "why": "same"
+        },
+        {
+          "element": "panel",
+          "property": "position",
+          "why": "same"
+        },
+        {
+          "element": "panel",
+          "property": "padding-top",
+          "why": "same"
+        },
+        {
+          "element": "panel",
+          "property": "padding-right",
+          "why": "same"
+        },
+        {
+          "element": "panel",
+          "property": "padding-bottom",
+          "why": "same"
+        },
+        {
+          "element": "panel",
+          "property": "padding-left",
+          "why": "same"
+        }
+      ],
+      "elements": [
+        {
+          "id": "panel",
+          "mock": ".pop",
+          "app": "[data-role=\"pattern-picker\"]",
+          "note": "compare chrome only: border, radius, background, shadow",
+          "noBoxH": true
+        },
+        {
+          "id": "row",
+          "mock": ".pop .pr:not(.on)",
+          "app": "[data-role=\"picker-item\"]",
+          "hover": true,
+          "note": "mock .pr: padding 8px 9px, radius 6, 13px, transparent until hover"
+        },
+        {
+          "id": "search",
+          "mock": ".pop .inp.xs",
+          "app": "[data-role=\"picker-search\"]",
+          "focus": true
+        },
+        {
+          "id": "section-label",
+          "mock": ".popfoot",
+          "app": "[data-role=\"picker-section-library\"]",
+          "note": "no mock analogue; the .popfoot is the nearest dim explanatory line",
+          "noBox": true
+        }
+      ]
+    },
+    "S5": {
+      "title": "Playground — the `Preview as` chip and its popover",
+      "width": 1200,
+      "height": 940,
+      "app": {
+        "target": "playground",
+        "route": "#/",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"preview-as\"]"
+          },
+          {
+            "sleep": 2500
+          },
+          {
+            "click": "[data-role=\"preview-as\"]"
+          },
+          {
+            "sleep": 500
+          }
+        ]
+      },
+      "allow": [
+        {
+          "element": "tab-scenes",
+          "why": "Scenes is Phase B (#480)"
+        }
+      ],
+      "elements": [
+        {
+          "id": "header",
+          "mock": ".hdr",
+          "app": "header.hdr",
+          "noBoxH": true
+        },
+        {
+          "id": "wordmark",
+          "mock": ".wordmark",
+          "app": ".hdr .wordmark",
+          "text": true,
+          "note": "mock copy: `luxel playground`, the second word in --text",
+          "noBox": true
+        },
+        {
+          "id": "wordmark-span",
+          "mock": ".wordmark span",
+          "app": ".hdr .wordmark > span",
+          "noBox": true
+        },
+        {
+          "id": "chip",
+          "mock": ".menuwrap > .btn",
+          "app": "[data-role=\"preview-as\"]",
+          "hover": true,
+          "note": "mock: a 6px-radius .btn with accent border on accent-soft — NOT a 999px pill"
+        },
+        {
+          "id": "chip-label",
+          "mock": ".menuwrap > .btn .mono.tiny",
+          "app": "[data-role=\"preview-as-label\"]",
+          "noBox": true
+        },
+        {
+          "id": "chip-caret",
+          "mock": ".menuwrap > .btn i",
+          "app": "[data-role=\"preview-as\"] .caret"
+        },
+        {
+          "id": "fps",
+          "mock": ".fps",
+          "app": "[data-role=\"fps\"]",
+          "noBox": true
+        },
+        {
+          "id": "pop",
+          "mock": ".pop",
+          "app": "[data-role=\"preview-as-menu\"]",
+          "note": "mock: 296px, padding 6, radius 8, shadow 0 16px 40px rgba(0,0,0,.7)",
+          "noBoxH": true
+        },
+        {
+          "id": "pr",
+          "mock": ".pop .pr:not(.on)",
+          "app": "[data-role=\"preview-as-auto\"]",
+          "hover": true
+        },
+        {
+          "id": "pr-on",
+          "mock": ".pop .pr.on",
+          "app": "[data-role=\"preview-as-menu\"] .pr.on",
+          "note": "mock: accent-soft background"
+        },
+        {
+          "id": "radio",
+          "mock": ".pop .pr:not(.on) .radio",
+          "app": "[data-role=\"preview-as-auto\"] .radio",
+          "note": "mock: 13x13 circle, 1px #4d545f"
+        },
+        {
+          "id": "radio-on",
+          "mock": ".pop .pr.on .radio",
+          "app": "[data-role=\"preview-as-menu\"] .pr.on .radio"
+        },
+        {
+          "id": "pop-inp",
+          "mock": ".pop .inp.xs",
+          "app": "[data-role=\"preview-as-px\"]",
+          "note": "mock: 52px wide inside a .pop"
+        },
+        {
+          "id": "popfoot",
+          "mock": ".popfoot",
+          "app": "[data-role=\"preview-as-menu\"] .popfoot",
+          "text": true,
+          "note": "mock copy: `Every preview and tile on this page uses this layout. On a device it is the device's own.`",
+          "noBox": true
+        },
+        {
+          "id": "seg-on",
+          "mock": ".seg > div.on",
+          "app": "[data-role=\"patterns-sources\"] .segbtn.on",
+          "text": true,
+          "note": "mock: the playground segment reads `Library 307` / `Mine 12`"
+        },
+        {
+          "id": "tile",
+          "mock": ".tile",
+          "app": "[data-role=\"patterns-grid\"][data-source=\"library\"] [data-role=\"tile\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "tile-name",
+          "mock": ".tile .nm",
+          "app": "[data-role=\"patterns-grid\"][data-source=\"library\"] [data-role=\"tile-name\"]"
+        },
+        {
+          "id": "tile-sub",
+          "mock": ".tile .sub",
+          "app": "[data-role=\"patterns-grid\"][data-source=\"library\"] [data-role=\"tile-caption\"]",
+          "noBox": true
+        }
+      ]
+    },
+    "S1menu": {
+      "deviceSafe": true,
+      "title": "Patterns — a tile's ⋯ menu (mock frame S2's .menu)",
+      "mock": "S2",
+      "width": 1200,
+      "height": 940,
+      "app": {
+        "target": "panel",
+        "route": "#/",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"]"
+          },
+          {
+            "sleep": 1500
+          },
+          {
+            "hover": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"]:not(.playing)"
+          },
+          {
+            "sleep": 300
+          },
+          {
+            "click": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"]:not(.playing) [data-role=\"tile-menu\"]"
+          },
+          {
+            "sleep": 400
+          }
+        ]
+      },
+      "elements": [
+        {
+          "id": "menu",
+          "mock": ".menu",
+          "app": "[data-role=\"tile-menu-popup\"]"
+        },
+        {
+          "id": "mi",
+          "mock": ".menu > div:nth-child(1)",
+          "app": "[data-role=\"tile-menu-playlist\"]",
+          "hover": true,
+          "noBox": true
+        },
+        {
+          "id": "mi-del",
+          "mock": ".menu > div.mi.del",
+          "app": "[data-role=\"tile-menu-delete\"]",
+          "hover": true,
+          "noBox": true
+        }
+      ]
+    },
+    "S1incompat": {
+      "title": "Patterns — the collapsed `incompatible` group on a strip (mock: the .slabel/.chev primitives)",
+      "mock": "S2",
+      "width": 1200,
+      "height": 940,
+      "app": {
+        "target": "strip",
+        "route": "#/",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"patterns-panel\"]"
+          },
+          {
+            "click": "[data-role=\"patterns-source-library\"]"
+          },
+          {
+            "sleep": 3000
+          }
+        ]
+      },
+      "elements": [
+        {
+          "id": "toggle-label",
+          "mock": ".rsec:nth-of-type(3) .slabel",
+          "app": "[data-role=\"patterns-incompatible-toggle\"]",
+          "hover": true,
+          "text": true,
+          "note": "mock's nearest analogue is the editor rail's `.disclose` (chev + .slabel)",
+          "noBox": true
+        },
+        {
+          "id": "chev",
+          "mock": ".rsec:nth-of-type(3) .chev",
+          "app": "[data-role=\"patterns-incompatible-toggle\"] .caret",
+          "note": "mock .chev: 10px, --text-dim, font-style normal"
+        }
+      ]
+    },
+    "S3reboot": {
+      "title": "Settings — the reboot bar (mock: the .capstrip palette, the only warn-tinted strip drawn)",
+      "mock": "S2",
+      "width": 1200,
+      "height": 1000,
+      "app": {
+        "target": "strip",
+        "route": "#/settings",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"device-name\"]"
+          },
+          {
+            "sleep": 1000
+          },
+          {
+            "type": "[data-role=\"device-name\"]",
+            "value": "luxel-mockdiff"
+          },
+          {
+            "focus": "[data-role=\"device-name\"]"
+          },
+          {
+            "keys": [
+              "Enter"
+            ]
+          },
+          {
+            "sleep": 2000
+          }
+        ]
+      },
+      "allow": [
+        {
+          "element": "rebootbar",
+          "property": "position",
+          "why": "Jeremy asked for the reboot notice pinned to the viewport — the mock's .capstrip is an in-flow rail strip"
+        },
+        {
+          "element": "rebootbar",
+          "property": "box width",
+          "why": "same"
+        },
+        {
+          "element": "rebootbar",
+          "property": "width",
+          "why": "same"
+        },
+        {
+          "element": "rebootbar",
+          "property": "margin-top",
+          "why": "same"
+        },
+        {
+          "element": "reboot-now",
+          "why": "§5.7: a host that cannot reboot itself (the mirror) shows no Reboot button — verify this one on a real board"
+        }
+      ],
+      "elements": [
+        {
+          "id": "rebootbar",
+          "mock": ".capstrip",
+          "app": "[data-role=\"reboot-bar\"]",
+          "note": "mock .capstrip palette: rgba(217,163,67,.12) on a rgba(217,163,67,.32) border, text #e5bd74, radius 6, padding 7px 10px"
+        },
+        {
+          "id": "rebootbar-text",
+          "mock": ".capstrip",
+          "app": "[data-role=\"reboot-bar-text\"]",
+          "props": [
+            "color",
+            "font-size",
+            "font-family"
+          ],
+          "noBox": true
+        },
+        {
+          "id": "reboot-now",
+          "mock": ".capstrip a",
+          "app": "[data-role=\"reboot-now\"]",
+          "hover": true
+        }
+      ]
+    },
+    "S2dialog": {
+      "title": "Dialogs — the primary/secondary pair (mock frame S2's .btn primitives)",
+      "mock": "S2",
+      "width": 1200,
+      "height": 940,
+      "app": {
+        "target": "panel",
+        "route": "#/",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"]"
+          },
+          {
+            "sleep": 1500
+          },
+          {
+            "hover": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"]"
+          },
+          {
+            "sleep": 300
+          },
+          {
+            "click": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"] [data-role=\"tile-menu\"]"
+          },
+          {
+            "sleep": 400
+          },
+          {
+            "click": "[data-role=\"tile-menu-delete\"]"
+          },
+          {
+            "sleep": 700
+          }
+        ]
+      },
+      "elements": [
+        {
+          "id": "confirm",
+          "mock": ".edhdr .btn.primary",
+          "app": "[data-role=\"dialog-confirm\"]",
+          "hover": true,
+          "note": "the mock has no dialog frame; .btn.primary is the primitive it must wear"
+        },
+        {
+          "id": "cancel",
+          "mock": ".edhdr .btn.quiet",
+          "app": "[data-role=\"dialog-cancel\"]",
+          "props": [
+            "height",
+            "border-top-left-radius",
+            "font-size",
+            "font-family",
+            "padding-left",
+            "padding-right"
+          ],
+          "note": "mock: a .btn is 32px/6px radius/13px whatever the variant"
+        },
+        {
+          "id": "dialog-panel",
+          "mock": ".menu",
+          "app": "[data-role=\"dialog\"]",
+          "props": [
+            "background-color",
+            "border-top-width",
+            "border-top-color",
+            "border-top-left-radius",
+            "box-shadow"
+          ],
+          "note": "no dialog mock; compare only the surface chrome against the .menu primitive"
+        }
+      ]
+    }
+  },
+  "$sweep": [
+    "`--sweep`: the non-CSS half. Each screen is walked at every width and checked for",
+    "horizontal scroll, text clipped without an ellipsis, children escaping a clipping",
+    "parent, sub-24px touch targets on a phone, the tab order, and the §5.7 invariant",
+    "that every disabled control carries a data-reason."
+  ],
+  "sweep": {
+    "target": "panel",
+    "widths": [
+      1400,
+      1200,
+      1000,
+      760,
+      390
+    ],
+    "screens": [
+      {
+        "name": "Patterns",
+        "route": "#/",
+        "steps": [
+          {
+            "waitFor": "[data-role=\"patterns-panel\"]"
+          },
+          {
+            "sleep": 1500
+          }
+        ]
+      },
+      {
+        "name": "Patterns · Library",
+        "route": "#/",
+        "steps": [
+          {
+            "waitFor": "[data-role=\"patterns-sources\"]"
+          },
+          {
+            "click": "[data-role=\"patterns-source-library\"]"
+          },
+          {
+            "sleep": 3000
+          }
+        ]
+      },
+      {
+        "name": "Playlist",
+        "route": "#/playlist",
+        "steps": [
+          {
+            "waitFor": "[data-role=\"playlist-panel\"]"
+          },
+          {
+            "sleep": 1500
+          }
+        ]
+      },
+      {
+        "name": "Playlist · values open",
+        "route": "#/playlist",
+        "steps": [
+          {
+            "waitFor": "[data-role=\"playlist-item\"]"
+          },
+          {
+            "sleep": 1500
+          },
+          {
+            "click": "[data-role=\"playlist-item\"] [data-role=\"pl-values-toggle\"]"
+          },
+          {
+            "sleep": 800
+          }
+        ]
+      },
+      {
+        "name": "Settings",
+        "route": "#/settings",
+        "steps": [
+          {
+            "waitFor": "[data-role=\"settings-panel\"]"
+          },
+          {
+            "sleep": 1500
+          }
+        ]
+      },
+      {
+        "name": "Settings · Advanced open",
+        "route": "#/settings",
+        "steps": [
+          {
+            "waitFor": "[data-role=\"adv-output-toggle\"]"
+          },
+          {
+            "click": "[data-role=\"adv-output-toggle\"]"
+          },
+          {
+            "click": "[data-role=\"adv-clock-toggle\"]"
+          },
+          {
+            "click": "[data-role=\"adv-storage-toggle\"]"
+          },
+          {
+            "click": "[data-role=\"adv-firmware-toggle\"]"
+          },
+          {
+            "sleep": 1200
+          }
+        ]
+      },
+      {
+        "name": "Editor",
+        "route": "#/editor",
+        "steps": [
+          {
+            "waitFor": ".cm-content"
+          },
+          {
+            "sleep": 2500
+          }
+        ]
+      }
+    ]
+  }
+}
