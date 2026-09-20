@@ -761,6 +761,24 @@ async function tabOrder(page, limit = 24) {
 }
 
 // ── report helpers ────────────────────────────────────────────────────────
+/** Bound a promise, so one stubborn element cannot stall a 27-frame run. */
+async function withTimeout(promise, ms, what) {
+  let timer;
+  const bail = new Promise((res) => {
+    timer = setTimeout(() => {
+      console.warn(`    ${what} timed out after ${ms}ms — skipped`);
+      res();
+    }, ms);
+  });
+  try {
+    await Promise.race([promise, bail]);
+  } catch (err) {
+    console.warn(`    ${what}: ${err.message}`);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const md = (s) => String(s).replace(/\|/g, "\\|").replace(/\n/g, " ");
 const trunc = (s, n) => (String(s).length > n ? `${String(s).slice(0, n - 1)}…` : String(s));
 
@@ -1249,13 +1267,17 @@ for (const frameId of runIds) {
         })
         .catch(() => null);
       if (!shotA || !shotM) continue;
-      await composeSideBySide(
+      await withTimeout(
+        composeSideBySide(
         browser,
         join(OUT, "mockdiff", `${frameId}-${id}.png`),
         shotM,
         shotA,
         `${frameId} · ${id}`,
-        { w: Math.max(m.box.w, a.box.w) + pad * 2, h: Math.max(m.box.h, a.box.h) + pad * 2 },
+          { w: Math.max(m.box.w, a.box.w) + pad * 2, h: Math.max(m.box.h, a.box.h) + pad * 2 },
+        ),
+        15000,
+        `crop ${frameId}-${id}`,
       );
     }
   }
@@ -1309,6 +1331,7 @@ async function composeSideBySide(br, path, mockB64, appB64, label, size = { w: 4
        <div class="c"><b>mock</b><img src="data:image/png;base64,${mockB64}"></div>
        <div class="c"><b>app</b><img src="data:image/png;base64,${appB64}"></div>
      </div>`,
+    { waitUntil: "domcontentloaded", timeout: 10000 },
   );
   await sleep(40);
   const el = await pg.$("body");
