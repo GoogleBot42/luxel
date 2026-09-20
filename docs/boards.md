@@ -2665,3 +2665,31 @@ another 120 B, so the classic-ESP32 `heap_allocator!` gives 512 B back as
 `STATICS_RESERVE` — pb-v3 **24,852 B**, athom-music **25,676 B**,
 pb-v3 + `small-chip` **26,468 B**, all green. `tools/ci.sh` does not run
 stack-check, which is how master drifted under it unnoticed (Gitea #515).
+
+2026-09-19, **#550's finer `reboot_required` — four shapes, one of them
+nearly free.** `Layout::reboot_required` stopped comparing the whole output
+table and started comparing only what a boot BUILDS. That is strictly more
+code than the `self.outputs != next.outputs` it replaced (which reused the
+`Vec<Output>` equality `Layout: PartialEq` already links), so the only
+question was how much. Credless flake builds of `origin/master` `e0005a0`
+against the branch, same machine, `luxel-fw-ota.bin`:
+
+| shape | athom-music | c6-devkit + `hosted-ui` | pixelblaze-v3 |
+|---|---:|---:|---:|
+| `Option<(pin, proto, order)>` per index, `(0..lim.outputs).any(…)` | +400 | +144 | +400 |
+| the same packed into one `u32`, `while` loop | +448 | +128 | +448 |
+| normalise both tables into `Vec<Output>` and reuse `Vec` equality | +304 | +272 | +320 |
+| **in-place: a 1-element `implicit` array, `zip`, compare 3 fields** | **+64** | **+80** | **+80** |
+
+The winner allocates nothing and instantiates nothing: the empty table is
+covered by a one-element stack array, and the comparison is three byte
+compares in a `zip`. The two "clever" shapes above it are the same lesson
+#538 already recorded — at this size the codegen's answer to a shape change
+is bigger than the change — and the `Vec` one shows that reusing an
+already-linked `PartialEq` is NOT automatically cheaper than writing the
+comparison out (`<Layout>::drivers` was 162 B of new function plus 88 B
+inside `parse`, read out of `nm --print-size` after stripping the mangling
+hashes). The c6 hosted image keeps 31,664 B of slot — 206 B above the
+31,458 B `tools/image-check.sh`'s 3 % floor demands, where master itself had
+286 B. That margin, not the Xtensa boards' 18 KB, is the binding constraint
+on anything Phase A adds (#543).

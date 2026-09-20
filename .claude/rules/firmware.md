@@ -194,7 +194,15 @@ paths:
   +256 B. Below ~500 B, differences between two shapes are noise you cannot
   reason about — go find a structural saving (a dropped monomorphisation)
   instead of shaving. Record the failed experiments in docs/boards.md so the
-  next person does not repeat them.
+  next person does not repeat them. The same applies in reverse when you ADD
+  a comparison or a small routine: reusing an already-linked generic is NOT
+  automatically the cheap option. #550 measured four shapes of one predicate
+  — `Option` tuples per index, a packed `u32`, normalising into `Vec<Output>`
+  to reuse the derived `PartialEq`, and an allocation-free in-place `zip` —
+  at +400/+448/+272/**+80** B on `c6-devkit-hosted`. The `Vec` one, which
+  wrote the least new source, was among the worst; the winner allocates and
+  instantiates nothing. Write the three candidates, build the gated board
+  three times, keep the number.
 - Diffing symbol tables between two builds: strip the `17h<hash>E` mangling
   hash and rustc's `.NNNN` local suffix first. A raw `nm` diff shows a
   renumbered symbol as one that vanished plus one that appeared, and that

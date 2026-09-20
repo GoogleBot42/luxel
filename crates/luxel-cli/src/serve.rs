@@ -1046,6 +1046,9 @@ fn layout_limits(state: &State, strict: bool) -> luxel_core::layout::Limits<'sta
         outputs: state.hw.outputs,
         panel: state.hw.panel,
         pin_ok: &|p| p < 64,
+        // the mirror has no data pin, so its implicit output reports 0 —
+        // the same value `with_layout_view` gives `View::default_pin`
+        default_pin: 0,
         proto_code: &protocol_code,
         strict,
     }

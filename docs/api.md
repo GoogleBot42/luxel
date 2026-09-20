@@ -682,26 +682,28 @@ Measured on the Athom (60 px WS2812, `/api/status` `out_us`): 2,524 us for one
 60 px output, 2,827 us for `30` + `30 rev` — the +303 us is the second
 protocol latch tail, not a second frame. docs/boards.md has the full table.
 
-**Live vs reboot.** These apply on the next frame, no reboot:
+**Live vs reboot.** `reboot_required` is true for exactly what a boot BUILDS
+— the panel→pixel chain remap (Gitea #475) and an output's driver INSTANCE
+(#474) — and false for everything a frame re-reads. Field by field (Gitea
+#550):
 
-- `pixels` (`strip N`, `matrix …`, `map grid W H`), the engine grid, the map,
-  and the `proj*` defaults. `/api/status`'s `geom` follows within a frame.
+| field | applies |
+|---|---|
+| `pixels` — `strip N`, `matrix …`, `map grid W H` | **live** (`/api/status`'s `geom` follows within a frame) |
+| the map, and the `proj*` defaults | **live** |
+| `matrix` `pw` `ph` | **live** — they only resize the grid |
+| `matrix` `cols` `rows` `start` `dir` `snake` `rot180` `scan` | **reboot** — the chain remap is built once (#475) |
+| `out` `count` (the split) | **live** on every output — the run boundaries are re-read from the Layout each frame, so an output whose run shrank drives fewer pixels at once and one the table no longer covers goes dark |
+| `out` `rev` | **live** on every output — it rides in the same run |
+| `out 0` `proto`, `out 0` `order` | **live** — output 0 IS the strip the aliases describe, so they write through to `/api/protocol` and `/api/output` |
+| `out <n≥1>` `proto`, `out <n≥1>` `order` | **reboot** — a further output's SPI clock and colour order are captured when its peripheral is built |
+| `out` `pin`, on any output | **reboot** — the SPI driver binds MOSI once (the same reason `/api/datapin` reboots) |
+| gaining or losing an output (`out 1 …`, `out none`) | **reboot** — that output's driver instance |
 
-These are **stored and reported only** until a reboot builds them, and a POST
-that changes one answers `"reboot_required":true`:
-
-- the chain wiring — `cols`, `rows`, `start`, `dir`, `snake`, `rot180`, `scan`
-  (the boot-time panel→pixel remap is Gitea #475);
-- every `out` line, because each output's driver INSTANCE — its SPI
-  peripheral, its DATA pin, its protocol clock — is built once, at boot (the
-  same reason `/api/datapin` reboots). Two parts of an `out` line do not
-  actually wait, which is worth knowing when reading `out_us`: the run
-  BOUNDARIES are re-read from the Layout every frame, so a re-partition takes
-  effect immediately (an output whose run shrank drives fewer pixels at once,
-  and one the table no longer covers goes dark), and output 0's protocol and
-  colour order write through live because output 0 IS the strip the aliases
-  describe. What the reboot adds is the driver for an output that did not
-  have one, and a moved DATA pin.
+Writing the device's ONE implicit output down explicitly — `out 0 <the pin
+/api/config reports> <its protocol> <its order> <pixels>` — rebuilds nothing
+and answers `"reboot_required":false`, so a Settings page may POST the whole
+table on every edit without inventing a reboot prompt.
 
 **Persistence.** Firmware stores the Layout as a ~20-byte record (plus 9 B per
 output) under the pattern store's reserved `LAYOUT_KEY`. It deliberately does

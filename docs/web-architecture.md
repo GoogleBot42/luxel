@@ -815,10 +815,11 @@ reply is what the "applies after a reboot" note reads.
 
 Three fields are deliberately NOT on that endpoint: on a **single-output**
 board, LED type and colour order keep `/api/protocol` and `/api/output`, and
-the data pin keeps `/api/datapin`. An `out` line is built once at BOOT
-(#474/#475, docs/api.md "Live vs reboot"), so routing a colour-order change
-through it would make a live setting need a reboot. Whether the firmware
-should apply those two live and the split go away is Gitea #524, named in the
+the data pin keeps `/api/datapin`. That split was there because an `out` line
+used to be reported as boot-built in its entirety; since Gitea #550 only what
+a boot really builds says so (docs/api.md "Live vs reboot"), and output 0's
+protocol and colour order on `/api/layout` answer `reboot_required:false`
+like the aliases do. Folding them onto `out 0` is Gitea #524, named in the
 code comment.
 
 The section's own pieces:
@@ -909,12 +910,14 @@ projection popup mounts the same component.
 
 ### Stored, but not running yet — the reboot bar (`settings/RebootBar.svelte`)
 
-Some settings are built once at boot: the chain arrangement and the output
-table (#474/#475), the strip data pin, and the device name (its DHCP
-hostname). The device says so itself — `reboot_required` on `/api/layout`
-and `/api/name` — and `noteRebootPending(field)` in `stores/device.ts`
-records the FIELD, never the UI's guess about what is live. Protocol and
-colour order are live on both hosts and never appear.
+Some settings are built once at boot: the chain arrangement (#475), an
+output's driver INSTANCE — whether it exists, its data pad, and a further
+output's wire format (#474) — and the device name (its DHCP hostname). The
+device says so itself — `reboot_required` on `/api/layout` and `/api/name` —
+and `noteRebootPending(field)` in `stores/device.ts` records the FIELD, never
+the UI's guess about what is live. Protocol and colour order on output 0, and
+every output's run (`count`, `rev`), are live on both hosts and never appear
+(#550).
 
 `<RebootBar/>` is mounted by `App.svelte`, not by Settings: it is pinned to
 the bottom of the viewport in the `--warn` palette on **every** screen, the

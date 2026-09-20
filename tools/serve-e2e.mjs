@@ -544,6 +544,29 @@ check(
 // outputs: stored, validated, reported; the firmware drives one run per
 // output (#474) — the mirror models the table they are driven from
 await postLayout(base, "strip 120");
+// …and writing the ONE implicit output down explicitly rebuilds nothing, so
+// a Settings page that always POSTs the whole table gets no reboot prompt
+// for it (#550). The mirror's implicit output is on pin 0 (it has no pad).
+const lImplicit = await postLayout(base, "strip 120\nout 0 0 ws2812 grb 120");
+check(
+  "layout: spelling out the implicit output is not a reboot",
+  lImplicit.ok === true && lImplicit.reboot_required === false,
+  JSON.stringify(lImplicit),
+);
+check(
+  "layout: `out none` back to the same implicit output is not a reboot",
+  (await postLayout(base, "out none")).reboot_required === false,
+);
+const lImplicitPin = await postLayout(base, "strip 120\nout 0 4 ws2812 grb 120");
+check(
+  "layout: moving the implicit output's pad IS a reboot",
+  lImplicitPin.ok === true && lImplicitPin.reboot_required === true,
+  JSON.stringify(lImplicitPin.outputs),
+);
+check(
+  "layout: …and so is dropping back off it",
+  (await postLayout(base, "out none")).reboot_required === true,
+);
 const outs2 = spawn(
   "target/debug/luxel",
   ["serve", "--port", String(PORT + 2), "--pixels", "120", "--outputs", "2"],
@@ -588,7 +611,41 @@ check(
   JSON.stringify(lOutsGet.outputs) === JSON.stringify(lOuts.outputs),
   JSON.stringify(lOutsGet.outputs),
 );
+// Which parts of an `out` line a reboot actually builds (#550). Each POST
+// below starts from the table the previous one left, so the ONE field named
+// is the only thing that moved.
+const reboots = [
+  // re-partition, keeping every wiring field
+  ["out 0 18 ws2812 grb 90\nout 1 19 sk9822 rgb 30 rev", false, "a re-split is live"],
+  // rev, on each output in turn
+  ["out 0 18 ws2812 grb 90 rev\nout 1 19 sk9822 rgb 30", false, "reversing a run is live"],
+  // output 0's protocol and colour order ARE the strip's
+  ["out 0 18 sk9822 bgr 90 rev\nout 1 19 sk9822 rgb 30", false, "output 0's proto/order are live"],
+  // a further output's are captured when its peripheral is built
+  ["out 0 18 sk9822 bgr 90 rev\nout 1 19 ws2812 rgb 30", true, "output 1's protocol needs a boot"],
+  ["out 0 18 sk9822 bgr 90 rev\nout 1 19 ws2812 bgr 30", true, "output 1's order needs a boot"],
+  // a pad binds once, on either output
+  ["out 0 17 sk9822 bgr 90 rev\nout 1 19 ws2812 bgr 30", true, "moving output 0's pad needs a boot"],
+  ["out 0 17 sk9822 bgr 90 rev\nout 1 21 ws2812 bgr 30", true, "moving output 1's pad needs a boot"],
+];
+for (const [body, want, why] of reboots) {
+  const r = await postLayout(outsBase, body);
+  check(`layout: ${why}`, r.ok === true && r.reboot_required === want, JSON.stringify(r));
+}
+check(
+  "layout: output 0's protocol reached /api/protocol without a reboot",
+  (await (await fetch(`${outsBase}/api/protocol`)).json()).protocol === "sk9822",
+);
+check(
+  "layout: output 0's colour order reached /api/output without a reboot",
+  (await (await fetch(`${outsBase}/api/output`)).json()).order === "bgr",
+);
 const lRev = await postLayout(outsBase, "strip 120\nout 0 18 ws2812 grb 120 rev");
+check(
+  "layout: losing output 1's driver instance needs a reboot",
+  lRev.reboot_required === true,
+  JSON.stringify(lRev),
+);
 check(
   "layout: one output can be the whole space, wired backwards",
   lRev.ok === true && lRev.outputs.length === 1 && lRev.outputs[0].rev === true,
@@ -618,9 +675,12 @@ check(
 );
 const lCleared = await postLayout(outsBase, "out none");
 check(
-  "layout: `out none` goes back to the one implicit output",
-  lCleared.ok === true && lCleared.outputs.length === 1 && lCleared.outputs[0].count === 120,
-  JSON.stringify(lCleared.outputs),
+  "layout: `out none` goes back to the one implicit output, and rebuilds output 1's driver away",
+  lCleared.ok === true &&
+    lCleared.outputs.length === 1 &&
+    lCleared.outputs[0].count === 120 &&
+    lCleared.reboot_required === true,
+  JSON.stringify(lCleared),
 );
 outs2.kill();
 

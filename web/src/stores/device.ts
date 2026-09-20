@@ -306,9 +306,11 @@ export const clockStatus = writable<{ synced: boolean; local: number; tzMinutes:
  *
  * A field lands here when the device itself answered `reboot_required` (or,
  * for `/api/datapin`, when its own reply said it is rebooting) — never on
- * the UI's guess about what is live. Protocol and colour order are LIVE on
- * both hosts and never appear here; the data pin, the chain arrangement, the
- * output table and the device name do (docs/api.md "Live vs reboot").
+ * the UI's guess about what is live. Protocol and colour order on output 0
+ * are LIVE on both hosts, and so is every output's run (`count`, `rev`), so
+ * none of those appear here; the data pin, the chain arrangement, an output
+ * gained or lost, a FURTHER output's wire format and the device name do
+ * (docs/api.md "Live vs reboot", Gitea #550).
  *
  * Cleared by a reboot, and only by a reboot: it is deliberately NOT cleared
  * by navigating away, because the whole point is that the device is running

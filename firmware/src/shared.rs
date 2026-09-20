@@ -510,8 +510,9 @@ pub fn set_want_data_pin(p: Option<u8>) {
 
 /// The GPIO the SECOND output's DATA line is on, or [`NO_PIN`] when this
 /// board has no second output or the Layout does not configure one
-/// (Gitea #474). Bound once at boot, like `DATA_PIN` — `out` lines are
-/// `reboot_required`. Doubles as "is the second SPI live", which
+/// (Gitea #474). Bound once at boot, like `DATA_PIN` — an `out` line's pad
+/// is one of the few parts of it that IS `reboot_required` (Gitea #550).
+/// Doubles as "is the second SPI live", which
 /// `output::transfer_busy` needs before it reads that peripheral's
 /// registers.
 #[cfg(multi_output)]

@@ -1,5 +1,54 @@
 # Update log
 
+## 2026-09-19 — `reboot_required` now means what a boot actually builds (#550)
+
+`Layout::reboot_required` was `self.outputs != next.outputs`, so **any**
+difference in the output table answered `"reboot_required":true` — including
+the parts docs/api.md has always described as live. On a two-output board
+(the Athom) LED type, colour order and the split only exist inside the
+Outputs table, so re-splitting 144 px as 100/44 popped the sticky reboot bar
+for a change that had already taken effect. That is what Jeremy saw in the
+#538 review ("changing the output protocol needs a reboot?").
+
+It now compares the **driver instances** a boot builds, not the table:
+
+| `out` field | applies |
+|---|---|
+| `count` (the split), `rev` | **live**, on every output — `write_frame` re-reads the run from the Layout each frame |
+| `proto`, `order` on output **0** | **live** — output 0 IS the strip the aliases drive |
+| `proto`, `order` on output **≥1** | **reboot** — `Chan` copies both when the peripheral is built |
+| `pin`, on any output | **reboot** — the SPI driver binds MOSI once |
+| an output gained or lost (`out 1 …`, `out none`) | **reboot** — the driver instance itself |
+
+The chain wiring (`cols rows start dir snake rot180 scan`, #475) is unchanged:
+still a reboot, still only when the next Layout is a matrix.
+
+An EMPTY table is the one implicit output on the host's live data pin, which
+is why `Limits` gained `default_pin` (`View::default_pin`'s twin). Without it
+a Settings page that POSTs the whole table on every edit would ask for a
+reboot the first time it wrote the implicit output down explicitly — the same
+false alarm one level up.
+
+A finer comparison is strictly more code than the `self.outputs !=
+next.outputs` it replaces, and the c6 hosted image has ~280 B over
+`image-check`'s 3 % floor, so the shape was chosen by measurement: four of
+them, from +448 B down to **+64/+80/+80 B** on athom-music / c6-hosted /
+pixelblaze-v3 (docs/boards.md has the table, including the two that made it
+worse). The winner allocates nothing — the implicit output is a one-element
+stack array and the comparison is three byte compares in a `zip`.
+
+**Measured on the Athom** (192.168.0.183, v0.1.40 — i.e. BEFORE this change,
+which is the point: the liveness is what the predicate was lying about).
+`out_us` against the split, 144 px WS2812, found state restored afterwards:
+144 px → 5,370 us, `out 0 … 100` → 3,900 us, `out 0 … 44` → 2,026 us, back to
+144 rev → 5,372 us. Every one of those POSTs answered `reboot_required:true`
+on the old predicate and none of them needed a reboot. The second output's
+own run could not be watched — the Athom's DATA2 has no strip on it — but it
+is the same `run_of(n, px)` call in the same per-frame loop; the *boot*-bound
+half of that output (its SPI clock and colour order) is what stays gated, and
+making those live is #558, and #518 is the bench check that wants a second
+strip on DATA2.
+
 ## 2026-09-19 — the playing tile keeps Edit and ⋯; only Play goes (#555)
 
 Follow-up to the Patterns PR. Mock S1 draws the playing tile with the pill and

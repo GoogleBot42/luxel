@@ -19,10 +19,14 @@
 //! triple, re-parsed at boot — one codec, no version to migrate.
 //!
 //! **Live vs reboot.** The pixel count, the grid, the map and the projection
-//! defaults apply on the next frame. The chain wiring (`cols rows start dir
-//! snake rot180 scan`) and the output table are built once at boot — #475
-//! and #474 respectively — so a POST that changes them answers
-//! `"reboot_required":true`.
+//! defaults apply on the next frame, and so does most of an `out` line: the
+//! run boundaries (`count`, `rev`) are re-read from the Layout every frame,
+//! and output 0's protocol and colour order write through to the live strip
+//! settings below. What a boot BUILDS is the chain wiring (`cols rows start
+//! dir snake rot180 scan`, #475) and each output's driver INSTANCE (#474) —
+//! whether it exists at all, its DATA pad, and the SPI clock a further
+//! output's peripheral was configured for. A POST that changes one of those
+//! answers `"reboot_required":true` (Gitea #550).
 
 use alloc::string::String;
 use core::cell::RefCell;
@@ -187,6 +191,9 @@ fn limits_strict(strict: bool) -> Limits<'static> {
         outputs: crate::board::OUTPUTS,
         panel: cfg!(feature = "hub75"),
         pin_ok: &crate::board::data_pin_ok,
+        // what an empty `out` table means here: the one implicit output on
+        // the pad the SPI driver actually bound at boot (Gitea #550)
+        default_pin: crate::shared::DATA_PIN.load(Ordering::Relaxed),
         proto_code: &|s| Protocol::from_name(s).map(|p| p.as_u8()),
         strict,
     }
