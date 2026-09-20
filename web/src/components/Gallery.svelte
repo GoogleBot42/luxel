@@ -39,8 +39,8 @@
   // S1c): a panel-coloured box with a FULL-BLEED canvas whose aspect is the
   // fixture's (a 6:1 bar on a strip, the lattice's own w:h on a matrix), a
   // left-aligned meta block under it, and the verbs as a gradient strip that
-  // fades in on hover — except on the playing tile, which wears the ▶ pill
-  // and nothing else.
+  // fades in on hover. The playing tile wears the ▶ pill AND its strip — the
+  // page drops only the Play verb from it (#555).
   //
   // `only` splits the grid by whether the Layout can show the pattern at all
   // (#538) — see the prop.
@@ -454,10 +454,13 @@
         {#if playing}
           <span class="pill" data-role="tile-playing">▶ playing</span>
         {/if}
-        <!-- S1: the playing tile wears the pill and NOTHING else — no verb
-             strip over the pattern you are already watching (Jeremy). -->
-        {#if $$slots.actions && !playing}
-          <div class="actions"><slot name="actions" item={t} dead={t.dead} /></div>
+        <!-- The playing tile keeps its verbs; what it must not offer is
+             PLAY, and that is the page's call — `playing` is handed to the
+             slot so the strip drops one verb instead of all of them (#555). -->
+        {#if $$slots.actions}
+          <div class="actions">
+            <slot name="actions" item={t} dead={t.dead} {playing} />
+          </div>
         {/if}
       </div>
       <div class="meta">
