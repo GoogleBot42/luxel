@@ -187,8 +187,14 @@ origin master && git rebase origin/master`.
 - Grep the WHOLE file, not just the hunk you resolved: markers have
   already reached `master` this way, so a conflict you are resolving can
   contain someone else's stray `=======` / `>>>>>>> theirs` with no opening
-  marker (seen 2026-09-06; fixed in PR #317). If you find them, delete them
-  as part of your PR and say so in the description.
+  marker (seen 2026-09-06, fixed in PR #317; again 2026-09-20 — a whole
+  `<<<<<<< HEAD` / `=======` / `>>>>>>>` triple around two #538 entries rode
+  into `master` and was cleaned in PR #586). If you find them, delete them
+  as part of your PR and say so in the description. The cheapest way to be
+  sure your own resolution is clean is not to hand-edit the markers at all:
+  rebuild the file as `# Update log` + your entry + `git show
+  origin/master:UPDATES.md | tail -n +3`, which cannot preserve a marker
+  the upstream side already had.
 - **Never chain `git rebase … && git push` in one call.** A conflict stop
   still exits 0 through a `| tail`, and the push then publishes a
   mid-rebase branch. Rebase alone, read `git status`, then push (2026-09-07).
