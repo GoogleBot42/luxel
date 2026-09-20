@@ -38,6 +38,11 @@ export interface DeviceStatus {
    *  engine supplied its own (the fabricated ceil(√n) grid reads
    *  `source:"default"`). Absent on firmware older than the field, where the
    *  UI falls back to `/api/map` + `pixels` (see `deviceLayout`).
+   *
+   *  It is therefore NOT the fixture, and it is not a Layout: a strip handed a
+   *  `render2D` program still has the geometry of a strip. Only
+   *  `lib/geometry.ts`'s `deviceGeometry` may read it, and it takes only the
+   *  `source` `user`/`board` readings (Gitea #573).
    *  docs/api.md "geom". */
   geom?: {
     dims: number;

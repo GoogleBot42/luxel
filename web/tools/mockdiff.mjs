@@ -693,10 +693,11 @@ async function seedMirror(base, seed, pixels) {
  * `luxel.patterns`, `luxel.mapSrc` — so one frame's leftovers silently
  * re-shape the next one's. Measured 2026-09-20: the editor frames leave a
  * DIRTY 2D working copy behind, the console resumes it, and a 300 px strip
- * console two frames later reports itself as an `18×17 matrix` — which made
+ * console two frames later reported itself as an `18×17 matrix` — which made
  * `S1incompat`'s group legitimately empty and its elements zero-sized. That
- * resume is its own bug (Gitea #573); the instrument must not depend on it
- * either way.
+ * resume was its own bug, fixed in #573 (a console's Layout is now decided by
+ * `deviceGeometry()` from device readings alone); this stays regardless,
+ * because a frame is a named state and must not depend on frame order.
  */
 async function freshProfile(pg) {
   await pg.evaluateOnNewDocument(() => {

@@ -44,11 +44,13 @@ export const PORT = {
     slow: p(26), //              slow-fps mirror
     outputs: p(27), //           two-output mirror for the Settings Outputs table
     hub75: p(28), //             --board panel mirror for the Settings panel fields
+    wipStrip: p(29), //          300 px strip mirror for the #573 working-copy section
     maxpixels: p(30), // maxpixels-e2e
     mdPanel: p(31), //   mockdiff: 64x64 HUB75 console (the S1/S2/S3/S4 frames)
     mdStrip: p(32), //   mockdiff: 300 px strip console (S1b, S3b, S3f)
     mdOutputs: p(33), // mockdiff: two-output strip console (S3j/S3k)
     mdLattice: p(34), // mockdiff: 3D lattice console (S3g)
+    wipPanel: p(35), //  device-e2e: panel mirror for the #573 reverse case
     syncA: p(40), // sync-e2e leader
     syncB: p(41), // sync-e2e follower
   },

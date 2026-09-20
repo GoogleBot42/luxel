@@ -275,6 +275,22 @@ The hover strip's gradient is `pointer-events:none`,
 so only the verbs take the mouse and a click anywhere else on the thumb still
 plays/opens the pattern.
 
+The tile's `⋯` is mockup S2's `.menu`: `Add to playlist` (console) · rule ·
+`Duplicate` · `Export .epe` · `Import .epe…` · rule · `Delete` (console).
+`Add to scene ▸` is the one item still missing, and it is Phase B (#480) —
+the `menu.box height` allow in `mockdiff.map.json`'s `S1menu` says exactly
+that. These are LIBRARY verbs acting on a tile, not the editor's document
+verbs under another name: **`Import .epe…` parses, compiles and stores the
+file in the library the tile came from** — `On device` via
+`POST /api/patterns`, `Mine` via `saveToLocalLibrary` — taking the same
+`copyName()` path as `Duplicate` on a name collision, reporting failures
+through `stores/notify`, and never opening the editor or touching what the
+device is playing (#563, #572). The editor's own `Import .epe…` still means
+"replace the open document"; the two are deliberately different verbs with
+the same name. Its `<input type="file">` (`tile-menu-import-file`) lives
+outside the popover — the menu closes before the file dialog opens, and an
+input inside an unmounted popover never fires `change`.
+
 ### A Layout never offers a pattern it cannot show (#538)
 
 Jeremy's projection rule — a fixture renders its own dimensionality and
@@ -1131,6 +1147,8 @@ the compiled pattern's dims  `patternDims` (preferredDims())    │
 projection defaults          `projection` (the device's)       ─┘
 ```
 
+On a console only the FIRST row is read — see `deviceGeometry()` below.
+
 `reconcileLayout()` and everything derived from it are **pure** and live in
 `lib/geometry.ts`, tested in `web/tests/geometry.test.mjs` (one case per cell
 of the console-shape × pattern-dims × choice table, plus a parity check of the
@@ -1152,21 +1170,36 @@ interface Layout {
 
 Rules the reconciler encodes:
 
-- **Console**: the device owns the geometry. Since A8 (#469) the adapter
-  `deviceLayout` in `stores/device.ts` reads **`/api/layout` wholesale**
-  (#465) — kind, dims, w/h, the chain's wiring and the embedded map in one
-  fetch — and not a single consumer changed when it did, which is what that
-  adapter exists for. Two fallbacks stay, in order: `/api/status`'s `geom`
-  (#464), which answers during the connect handshake AND is the only reporter
-  of the engine's fabricated ceil(√n) grid (`source:"default"`, so it WINS
-  over the Layout in that one case — a `render2D`-only pattern on a strip
-  board really is rendering through a grid the Layout does not describe); then
-  `deviceMap`, for firmware older than either field. The "Preview as" choice
-  is **not consulted on a console at all** (#539) — it is the playground's
-  control, but it is persisted, and one left behind by a playground session on
-  the same origin (or by the pre-v2 editor's layout select, which wrote the
-  same key) used to re-shape the console for good: a stored `map` choice with
-  no coordinates reconciled a 64×64 panel down to a 4096 px strip.
+- **Console**: the device owns the geometry, and **`deviceGeometry()` in
+  `lib/geometry.ts` is the ONE function that decides it** (#539, #573). It
+  takes nothing but DEVICE readings — `/api/layout`, `/api/status`'s `geom`,
+  the pixel count, `/api/map` — so nothing the browser holds is even a
+  parameter. Precedence: `/api/layout` (#465, since A8/#469 read **wholesale**
+  — kind, dims, w/h, the chain's wiring and the embedded map in one fetch)
+  always wins; then `/api/status`'s `geom` (#464), which answers during the
+  connect handshake and is all there is on older firmware, but **only its
+  fixture readings** (`source` `user`/`board`); then `deviceMap`; then the
+  pixel count, i.e. a strip. `stores/device.ts`'s `deviceLayout` is wire
+  parsing over that function and decides nothing itself.
+
+  Two inputs used to leak past that and re-shape a console:
+  - the persisted "Preview as" choice (#539) — the playground's control, but
+    one left behind by a playground session on the same origin (or by the
+    pre-v2 editor's layout select, which wrote the same key) re-shaped the
+    console for good: a stored `map` choice with no coordinates reconciled a
+    64×64 panel down to a 4096 px strip. `reconcileLayout` now returns inside
+    its `connected` branch, so not one playground input is reachable on a
+    console — before the handshake answers it is the starter strip, never the
+    pattern's shape.
+  - `geom.source:"default"` (#573) — the grid the ENGINE fabricated for the
+    program it was handed (ceil(√n) × ceil(n/w) on a board with no map). The
+    boot resumes a DIRTY working copy and live-pushes it (`bootDevice`,
+    #563), so a browser holding a `render2D` edit from an earlier session made
+    a 300 px strip report itself an `18×17 matrix` — chip, tile shapes,
+    Settings projections and the #538 filter all followed. A running program
+    never reshapes the fixture; it may only caption ITSELF (`captionFor`,
+    `effectiveFor`), and on the Patterns page it may appear in the
+    `Not for this layout` group in the playground's Auto style.
 - **Playground**: `Auto` (the default, D7) follows the compiled pattern
   3D › 2D › 1D; anything else is the user's and outlives pattern loads.
 - `devicePixels` / `deviceMap` are **raw wire state** in `stores/device.ts`.

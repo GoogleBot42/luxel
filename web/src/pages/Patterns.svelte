@@ -39,6 +39,7 @@
     devicePatternId,
     exportEpe,
     luxel,
+    parseEpe,
     saved,
     saveToLocalLibrary,
   } from "../stores/pattern";
@@ -160,6 +161,8 @@
   // a menu inside the scrolling tile grid would be clipped by it.
 
   let menu: { item: GalleryItem; anchor: HTMLElement } | null = null;
+  /** The ⋯ menu's `Import .epe…` file picker (#572). */
+  let importInput: HTMLInputElement | undefined;
 
   function openMenu(e: MouseEvent, item: GalleryItem): void {
     menu = { item, anchor: e.currentTarget as HTMLElement };
@@ -191,6 +194,58 @@
     closeMenu();
     if (item.source === undefined) return; // still streaming in from the device
     exportEpe(item.name, item.source);
+  }
+
+  /**
+   * `Import .epe…` (mockup S2's menu, Gitea #572). The EDITOR's import verb
+   * replaces the open document; on a tile that means nothing, so this one is
+   * the library verb it reads as: parse the file, compile it, and put it in
+   * the library the tile came from — `On device` on a console, `Mine` in the
+   * playground. The editor is not opened, and nothing is played: importing is
+   * stocking a shelf, not a device action (#563).
+   */
+  function importEpeFile(): void {
+    closeMenu();
+    importInput?.click();
+  }
+
+  async function onImportPick(e: Event): Promise<void> {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = ""; // let the same file be picked again
+    if (!file) return;
+    let epe: { name: string; source: string };
+    try {
+      epe = await parseEpe(file);
+    } catch (err) {
+      note("save", `import failed: ${err instanceof Error ? err.message : String(err)}`, 4000);
+      return;
+    }
+    if (sourceId === "mine") {
+      // the local library keys on the name, so a collision takes the same
+      // "<name> copy" path the Duplicate verb does
+      const taken = $saved.map((s) => s.name);
+      const name = taken.includes(epe.name) ? copyName(epe.name, taken) : epe.name;
+      saveToLocalLibrary(name, epe.source);
+      note("save", "imported", 2000);
+      return;
+    }
+    const d = $device;
+    if (!d) return;
+    const bc = compileToBytecode(epe.source);
+    if (!bc) {
+      note("save", "import failed: pattern does not compile", 4000);
+      return;
+    }
+    const taken = $devicePatterns.map((p) => p.name);
+    const name = taken.includes(epe.name) ? copyName(epe.name, taken) : epe.name;
+    const r = await d.savePattern(name, epe.source, bc);
+    if (!r.ok) {
+      note("save", "error" in r ? `import failed: ${r.error}` : "import failed", 4000);
+      return;
+    }
+    note("save", "imported to the device", 2000);
+    await refreshDevicePatterns();
   }
 
   /** "<name> copy", "<name> copy 2", … — whichever is free in `taken`. */
@@ -542,6 +597,18 @@
       <div class="tab-empty dim">loading patterns…</div>
     {/if}
   </div>
+
+  <!-- `Import .epe…`'s picker (#572). It lives out here rather than in the
+       popover: the menu closes before the file dialog opens, and an input
+       inside an unmounted popover never fires its change event. -->
+  <input
+    class="file-input"
+    type="file"
+    accept=".epe,.json,application/json"
+    data-role="tile-menu-import-file"
+    bind:this={importInput}
+    on:change={(e) => void onImportPick(e)}
+  />
 </div>
 
 {#if menu}
@@ -564,6 +631,9 @@
     </button>
     <button class="mi" data-role="tile-menu-export" on:click={() => exportPattern(item)}>
       Export .epe
+    </button>
+    <button class="mi" data-role="tile-menu-import" on:click={importEpeFile}>
+      Import .epe…
     </button>
     {#if sourceId === "device"}
       <div class="sepr"></div>
@@ -594,6 +664,11 @@
 
   .dim {
     color: var(--text-dim);
+  }
+
+  /* the ⋯ menu's `Import .epe…` picker — driven by .click(), never shown */
+  .file-input {
+    display: none;
   }
 
   .spacer {

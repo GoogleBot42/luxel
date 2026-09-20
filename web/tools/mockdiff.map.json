@@ -3657,7 +3657,7 @@
         {
           "element": "menu",
           "property": "box height",
-          "why": "two of the mock's six items are absent: `Add to scene ▸` is Phase B (#480) and `Import .epe…` into a device library is Gitea #572"
+          "why": "ONE of the mock's six items is absent: `Add to scene ▸`, which is Phase B (Gitea #480). `Import .epe…` landed with #572"
         }
       ]
     },
