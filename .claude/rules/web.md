@@ -168,3 +168,16 @@ paths:
   pattern" still passing. When a console e2e suddenly looks like a playground,
   read the page's `pageerror`s before suspecting the session code
   (2026-09-19, #469).
+- **`Popover.svelte` closes on ANY window click that is not inside itself or
+  inside its `anchor`** — so a second opener (a status line beside the anchored
+  trigger, a swatch that is not the bound element) sets `open = true` and the
+  same click immediately dispatches `close`. Add `on:click|stopPropagation` to
+  every opener that is not the `anchor`. The symptom is a handler that visibly
+  runs while the popover never appears, and it reads like a reactivity bug
+  (2026-09-19, #538).
+- **The app opens on the Patterns page now (#538), not in the editor.** An
+  ad-hoc puppeteer script must click `[data-role="new-pattern"]` (or a tile)
+  before it can touch `.cm-content` — and gate that click on
+  `offsetParent !== null`, because a RELOAD restores the last-opened pattern
+  into the editor and the Patterns panel is then present-but-boxless
+  (2026-09-19, #538).
