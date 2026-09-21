@@ -330,7 +330,7 @@ fn vars_cmd(path: &str, rest: &[String]) -> ExitCode {
 
 pub(crate) fn usage() -> ExitCode {
     eprintln!(
-        "usage: luxel parse <pattern.js>\n       luxel run   <pattern.js> [--pixels N] [--frames N] [--fps F] [--out PATH] [--seed S] [--control NAME=V] [--map-grid WxH] [--proj MODE]\n       luxel bench <pattern.js> [--pixels N] [--frames N] [--map-grid WxH] [--proj MODE]\n       luxel check <pattern.js|.epe> [--grid WxH | --strip N]\n       luxel compile <pattern.js|.epe> [--out PATH.lxbc] [--no-fuse] [--no-storefwd] [--no-kinds] [--kinds] [--stats]\n       luxel serve [--pixels N] [--max-pixels N] [--port P] [--fps F] [--out-fps F] [--rescan-hz HZ] [--heap-free BYTES] [--engine-heap BYTES] [--ddp-port P] [--e131-port P] [--board strip|panel] [--outputs N] [--name NAME]"
+        "usage: luxel parse <pattern.js>\n       luxel run   <pattern.js> [--pixels N] [--frames N] [--fps F] [--out PATH] [--seed S] [--control NAME=V] [--map-grid WxH] [--proj MODE]\n       luxel bench <pattern.js> [--pixels N] [--frames N] [--map-grid WxH] [--proj MODE]\n       luxel check <pattern.js|.epe> [--grid WxH | --strip N]\n       luxel compile <pattern.js|.epe> [--out PATH.lxbc] [--no-fuse] [--no-storefwd] [--no-kinds] [--kinds] [--stats]\n       luxel serve [--pixels N] [--max-pixels N] [--port P] [--fps F] [--out-fps F] [--rescan-hz HZ] [--heap-free BYTES] [--engine-heap BYTES] [--ddp-port P] [--e131-port P] [--board strip|panel] [--outputs N] [--name NAME] [--board-name NAME] [--bc-format N] [--stale-store] [--accept-ota]"
     );
     ExitCode::from(2)
 }

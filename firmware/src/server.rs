@@ -641,7 +641,18 @@ fn status_json() -> String {
     push_piece(&mut out, slot);
     push_piece(&mut out, "\",\"version\":\"");
     push_piece(&mut out, version);
-    push_piece(&mut out, "\",\"heap_free\":");
+    // `board` is this image's `board::NAME` — the same string tools/ota-push.sh
+    // greps an image for (#389) — so a client holding a release package can
+    // refuse one built for another board before it reaches the OTA slot.
+    // `bc_format` is the LXBC format version THIS build reads: a console whose
+    // compiler emits an older one knows not to save here, and a current one
+    // knows it may recompile a store this firmware can no longer read (#643).
+    // Both are static strings/constants — no flash read on a status poll.
+    push_piece(&mut out, "\",\"board\":\"");
+    push_piece(&mut out, crate::board::NAME);
+    push_piece(&mut out, "\",\"bc_format\":");
+    push_u32(&mut out, luxel_core::bytecode::FORMAT_VERSION as u32);
+    push_piece(&mut out, ",\"heap_free\":");
     push_u32(&mut out, heap as u32);
     // `heap_free` is a SUM; this is the largest single allocation that
     // would succeed right now. The two diverge as the heap fragments, and

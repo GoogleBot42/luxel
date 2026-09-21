@@ -333,6 +333,16 @@ pub extern "C" fn lx_array_elements_for(heap_free: u32, engine_heap: u32, arena_
     model_budget(base, arena_free as usize).1 as u32
 }
 
+/// The LXBC format version this bundle's compiler EMITS. The console
+/// compares it with `/api/status`'s `bc_format` (what the device READS): a
+/// device that reads a newer format cannot run anything saved from here, and
+/// one that reads an older format cannot run what is already in its store.
+/// Gitea #643 — the Athom went dark across exactly that skew.
+#[no_mangle]
+pub extern "C" fn lx_bc_format() -> u32 {
+    luxel_core::bytecode::FORMAT_VERSION as u32
+}
+
 /// The array-arena BYTE budget and ELEMENT ledger a load starting from
 /// `free` DRAM gets, on a board with `arena_free` bytes of external arena
 /// (0 = none). The twin of `firmware/src/main.rs`'s `array_budget_now` +

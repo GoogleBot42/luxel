@@ -101,6 +101,19 @@ export interface DeviceStatus {
    *  disclosure's status line. Absent on firmware older than the fields. */
   version?: string;
   slot?: string;
+  /** This image's `board::NAME` (`"Pixelblaze v3 Standard"`) — the same
+   *  string a `.luxr` release package names and `tools/ota-push.sh` greps an
+   *  image for (#389), so the console can refuse a package built for another
+   *  board before it reaches an OTA slot. Absent on firmware older than the
+   *  field; the mirror reports `"native mirror"` unless `--board-name`
+   *  impersonates one. */
+  board?: string;
+  /** The LXBC format version this build READS. Compare it with the bundle's
+   *  own (`Luxel.bcFormat()`): a device reading a newer format cannot run
+   *  anything this console compiles, and one reading an older format cannot
+   *  run what its store already holds. Absent on firmware older than the
+   *  field, which means "unknown" — never assume they agree (Gitea #643). */
+  bc_format?: number;
   /** Pattern-store occupancy in bytes, and how many patterns are in it.
    *  Firmware only — the mirror keeps its store in memory and omits it. */
   store?: { used: number; total: number; dead: number; patterns: number };
@@ -126,6 +139,15 @@ export interface DeviceCaps {
   ota: boolean;
   psram: boolean;
   assets: boolean;
+}
+
+/** One row of `GET /api/patterns`. */
+export interface DevicePatternRow {
+  id: string;
+  name: string;
+  /** The device cannot decode this pattern's stored blob — see
+   *  `DeviceSession.patterns`. */
+  stale?: boolean;
 }
 
 /** GET /api/map. */
@@ -394,11 +416,25 @@ export class DeviceSession {
 
   // ---- device pattern library (see serve.rs / server.rs contract) ----
 
-  async patterns(): Promise<{ id: string; name: string }[]> {
+  /** The stored library. `stale` marks a pattern whose compiled blob the
+   *  device can no longer read — its source is intact, so a console with a
+   *  current compiler recompiles and re-saves it by name (Gitea #643).
+   *  Absent on firmware older than the field, which means "not known to be
+   *  stale", never "known to be fine". */
+  async patterns(): Promise<DevicePatternRow[]> {
     const r = (await (await this.fetch("/api/patterns")).json()) as {
-      patterns?: { id: string; name: string }[];
+      patterns?: DevicePatternRow[];
     };
     return r.patterns ?? [];
+  }
+
+  /** Stream the packed web app (a LUXA/LUX2 archive) into the assets
+   *  partition. No reboot — the device serves the new bundle immediately,
+   *  so the caller reloads the page afterwards. Firmware only; the mirror
+   *  answers this under `--accept-ota`. */
+  async assetsUpload(archive: ArrayBuffer): Promise<{ ok: boolean; bytes?: number; error?: string }> {
+    const res = await this.fetch("/api/assets", { method: "POST", body: archive });
+    return (await res.json()) as { ok: boolean; bytes?: number; error?: string };
   }
 
   async patternSource(id: string): Promise<{ id: string; name: string; source: string }> {

@@ -16,6 +16,7 @@
   import Patterns from "./pages/Patterns.svelte";
   import Playlist from "./pages/Playlist.svelte";
   import Settings from "./pages/Settings.svelte";
+  import BcBanner from "./components/BcBanner.svelte";
   import ErrorBar from "./components/ErrorBar.svelte";
   import RebootBar from "./settings/RebootBar.svelte";
   import {
@@ -373,6 +374,13 @@
        has stopped answering. At the TOP of every screen — the editor
        included, which is why it is here and not in a page. -->
   <ErrorBar />
+
+  <!-- Bytecode-format skew between this bundle and the device, and the
+       stored-pattern repair it implies (#643). Renders nothing when the two
+       agree, which is every normal session; it sits under ErrorBar for the
+       same reason ErrorBar is here — the editor is full-screen, and "every
+       save is being refused" has to be explainable from inside it. -->
+  <BcBanner />
 
   <!-- Browser-blocked device connection (#162). Not an error the app can
        retry: this page is https, the device is plain http, and Chromium's

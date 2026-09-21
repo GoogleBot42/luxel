@@ -10,6 +10,7 @@ import { derived, get, writable, type Readable, type Writable } from "svelte/sto
 import {
   DeviceSession,
   type DeviceCaps,
+  type DevicePatternRow,
   type DeviceStatus,
   type LayoutResult,
   type LayoutWire,
@@ -132,6 +133,17 @@ export const deviceVersion = writable("");
 export const deviceSlot = writable("");
 export const deviceStore = writable<DeviceStatus["store"] | null>(null);
 
+/** `/api/status`'s `board` — this image's `board::NAME`, the string a
+ *  `.luxr` release package names (Gitea #643). `""` on firmware older than
+ *  the field, which means "cannot be checked", never "matches". */
+export const deviceBoard = writable("");
+
+/** `/api/status`'s `bc_format` — the LXBC format version the DEVICE reads.
+ *  0 on firmware older than the field. Compare with `Luxel.bcFormat()` (what
+ *  this bundle COMPILES) through `lib/bcskew.ts`; never assume they agree
+ *  just because both are present (Gitea #643). */
+export const deviceBcFormat = writable(0);
+
 /** The device's own name, as `/api/status` reports it (`luxel-f6b0a8`). `""`
  *  on firmware older than the field, and on a mirror started without
  *  `--name` — read `deviceLabel`, never this, when you need something to
@@ -230,8 +242,11 @@ export const deviceLayout: Readable<DeviceGeom | null> = derived(
 
 /** The device's stored pattern library (empty on firmware without CRUD).
  *  `source` is filled lazily in the background so each row can show a live
- *  preview thumbnail. */
-export const devicePatterns = writable<{ id: string; name: string; source?: string }[]>([]);
+ *  preview thumbnail. `stale` is the device saying it can no longer decode
+ *  that pattern's blob (Gitea #643) — `lib/heal.ts` recompiles those. */
+export const devicePatterns = writable<
+  { id: string; name: string; source?: string; stale?: boolean }[]
+>([]);
 
 /**
  * Which stored pattern the DEVICE is running — the id the Patterns page rings
@@ -535,6 +550,8 @@ export async function refreshStatus(): Promise<void> {
     if (st.version) deviceVersion.set(st.version);
     if (st.slot) deviceSlot.set(st.slot);
     deviceStore.set(st.store ?? null);
+    deviceBoard.set(st.board ?? "");
+    deviceBcFormat.set(st.bc_format ?? 0);
     deviceVmerr.set(st.vmerr);
     // DDP/E1.31 liveness rides along here (#540): it is a field of this same
     // body, and the Settings tab used to re-GET the WHOLE of `/api/status` at
@@ -804,7 +821,7 @@ export async function refreshDeviceMap(): Promise<void> {
 export async function refreshDevicePatterns(invalidate: readonly string[] = []): Promise<void> {
   const d = get(device);
   if (!d) return;
-  let rows: { id: string; name: string }[];
+  let rows: DevicePatternRow[];
   try {
     rows = await d.patterns();
   } catch {
@@ -812,11 +829,19 @@ export async function refreshDevicePatterns(invalidate: readonly string[] = []):
     return;
   }
   const held = new Map(get(devicePatterns).map((p) => [p.id, p.source]));
-  const stale = new Set(invalidate);
+  const dropped = new Set(invalidate);
   devicePatterns.set(
     rows.map((r) => {
-      const source = stale.has(r.id) ? undefined : held.get(r.id);
-      return source === undefined ? { id: r.id, name: r.name } : { id: r.id, name: r.name, source };
+      const source = dropped.has(r.id) ? undefined : held.get(r.id);
+      const row: { id: string; name: string; source?: string; stale?: boolean } = {
+        id: r.id,
+        name: r.name,
+      };
+      if (source !== undefined) row.source = source;
+      // Carried through so the self-heal and the Patterns page read one
+      // list rather than each re-GETting /api/patterns (#643).
+      if (r.stale) row.stale = true;
+      return row;
     }),
   );
   void loadDevicePreviewSources();
@@ -1179,6 +1204,8 @@ export async function connectDevice(base: string): Promise<ConnectResult> {
     if (st.version) deviceVersion.set(st.version);
     if (st.slot) deviceSlot.set(st.slot);
     deviceStore.set(st.store ?? null);
+    deviceBoard.set(st.board ?? "");
+    deviceBcFormat.set(st.bc_format ?? 0);
     deviceVmerr.set(st.vmerr);
     const source = await session.pattern(); // what the device is running
     try {

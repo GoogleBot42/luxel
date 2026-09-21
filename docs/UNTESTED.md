@@ -187,6 +187,22 @@ value while collapsed. Everything below is on the new page.
   path remains, tracked as Gitea #162 (hardware-confirmed blocked in
   headless chromium; needs a headful browser).
 
+- [ ] **One-file release install and the store self-heal** (Gitea #643) — the
+  whole flow has never run on metal. On a real board: Settings → Advanced →
+  Firmware & recovery → **Update…**, pick that board's
+  `luxel-<board>-<ver>.luxr`, and watch it write the firmware, wait out the
+  reboot, install the web app and reload itself. Things to confirm that a
+  mirror cannot: that the 60 s boot window is actually enough over WiFi, that
+  the browser survives the device going away mid-flow, and that an image for
+  ANOTHER board is refused by name before anything is written. Then the
+  repair half, which is only reproducible across a real LXBC format bump:
+  after such an OTA the console should say "N stored patterns were compiled
+  for an older engine — recompiling…", come back with the playlist playing,
+  and leave every pattern id (and therefore every playlist entry) untouched.
+  Machine-verified end to end against `luxel serve --accept-ota` /
+  `--stale-store` / `--bc-format` (`web/tools/device-e2e.mjs`, 24 checks) and
+  in unit tests; the hardware run is tracked as Gitea #526.
+
 ## Verified hard by machines, low review value (FYI only)
 
 - Boot-loop guard (bad OTA self-heals by flipping slots) — exercised in

@@ -325,11 +325,45 @@ struct State {
     /// it isn't built; then `/` falls back to the embedded minimal page,
     /// exactly like a device with no assets installed.
     web_dir: Option<std::path::PathBuf>,
+    // ---- release-package impersonation (Gitea #643) ----
+    /// What `/api/status` reports as `board` — the firmware reports its
+    /// `board::NAME`, which is what a `.luxr` package names and the console
+    /// refuses a mismatch against. `--board-name` sets it so both the match
+    /// and the mismatch are drivable without two boards on a bench.
+    board_name: String,
+    /// The LXBC format `/api/status` CLAIMS to read (`--bc-format`). It
+    /// changes what the mirror REPORTS, not what it can execute: the point
+    /// is to drive a console's reaction to skew in either direction. The
+    /// default is this build's real `bytecode::FORMAT_VERSION`, so a mirror
+    /// and the bundle it serves agree unless a test says otherwise.
+    bc_format: u32,
+    /// `--stale-store`: a store filled by an OLDER console. A pattern
+    /// entering the library for the first time has its blob's format word
+    /// decremented, so it genuinely fails to decode — `GET /api/patterns`
+    /// marks it `stale`, the playlist marks it `invalid`, activation refuses
+    /// with `bc-version`. An overwrite (save by the same name) is stored as
+    /// given, which is exactly what the console's recompile does, so the
+    /// heal converges instead of re-staling what it just fixed.
+    stale_store: bool,
+    /// `--accept-ota`: take `POST /api/ota` and `POST /api/assets` as
+    /// no-ops, recording the byte counts, and advertise `caps.ota`. A real
+    /// device reboots into a new image; the mirror instead reports a
+    /// version with an `+otaN` suffix, which is the "it came back as
+    /// something else" signal the console's post-OTA wait looks for.
+    accept_ota: bool,
+    ota_count: AtomicU32,
+    ota_bytes: AtomicU32,
+    assets_bytes: AtomicU32,
 }
 
 /// The mirror's default device name (Gitea #538). The firmware's default is
 /// `luxel-<mac6>`, which means nothing on a host with no MAC.
 const DEFAULT_NAME: &str = "luxel-serve";
+
+/// What `/api/status` reports as `board` with no `--board-name` (Gitea
+/// #643). A device reports its `board::NAME`; the mirror is not a board, and
+/// saying so is more useful than impersonating one nobody asked for.
+const DEFAULT_BOARD_NAME: &str = "native mirror";
 
 /// `GET /api/name`'s body, or the `POST` reply when `posted`. Both hosts
 /// build the hostname from the name at boot, so the POST reply says
@@ -881,8 +915,33 @@ fn status_json(state: &State) -> String {
     // rather than omitting the key and making every client handle two
     // shapes. See docs/api.md.
     let partitions = ",\"partitions\":{\"layout\":\"native\",\"migrated\":true,\"ota_slot_bytes\":0,\"storage_bytes\":0,\"assets_bytes\":0}";
+    // `board` + `bc_format` (Gitea #643): the board a release package must
+    // name, and the LXBC format this host reads. Both mirror firmware fields
+    // and are always present, so a client tells "this device says 6" from
+    // "this firmware predates the field" the same way on either host.
+    let otas = state.ota_count.load(Ordering::Relaxed);
+    let version = if otas == 0 {
+        String::from(env!("CARGO_PKG_VERSION"))
+    } else {
+        format!("{}+ota{}", env!("CARGO_PKG_VERSION"), otas)
+    };
+    // `--accept-ota` only: what the mirror was handed. A device proves an
+    // install by running the new image; a mirror discards it, so it reports
+    // the byte counts instead and a test can assert that BOTH halves of a
+    // release package arrived. Absent without the flag, like every other
+    // impersonation knob.
+    let ota = if state.accept_ota {
+        format!(
+            ",\"ota\":{{\"installs\":{},\"app\":{},\"assets\":{}}}",
+            otas,
+            state.ota_bytes.load(Ordering::Relaxed),
+            state.assets_bytes.load(Ordering::Relaxed)
+        )
+    } else {
+        String::new()
+    };
     format!(
-        "{{\"name\":\"{}\",\"fps\":{},\"out_fps\":{},\"rescan_hz\":{},\"pixels\":{},\"max_pixels\":{},\"geom\":{},\"caps\":{},\"slot\":\"native\",\"version\":\"{}\",\"heap_free\":{},\"engine_heap\":{}{},\"live\":{},\"vmerr\":{}{}}}",
+        "{{\"name\":\"{}\",\"fps\":{},\"out_fps\":{},\"rescan_hz\":{},\"pixels\":{},\"max_pixels\":{},\"geom\":{},\"caps\":{},\"slot\":\"native\",\"version\":\"{}\",\"board\":\"{}\",\"bc_format\":{},\"heap_free\":{},\"engine_heap\":{}{},\"live\":{},\"vmerr\":{}{}{}}}",
         json_escape(&state.name.lock().unwrap()),
         fps,
         state.out_fps.load(Ordering::Relaxed),
@@ -891,13 +950,16 @@ fn status_json(state: &State) -> String {
         state.max_pixels,
         geom_s,
         caps_s,
-        env!("CARGO_PKG_VERSION"),
+        version,
+        json_escape(&state.board_name),
+        state.bc_format,
         state.heap_free.load(Ordering::Relaxed),
         state.engine_heap.load(Ordering::Relaxed),
         psram,
         live,
         vmerr,
-        partitions
+        partitions,
+        ota
     )
 }
 
@@ -1632,11 +1694,27 @@ fn api_control_or_var(state: &State, body: &str, is_var: bool) -> String {
 
 // ---- pattern library (see the StoredPattern contract above) ----
 
+/// The LXBC format version a stored blob carries — the `u16` right after the
+/// magic. 0 = too short to say. The firmware reads the same two bytes off
+/// flash for the same purpose (`patterns::rec_bc_format`, Gitea #643).
+fn blob_bc_format(bc: &[u8]) -> u32 {
+    let at = luxel_core::bytecode::MAGIC.len();
+    if bc.len() < at + 2 {
+        return 0;
+    }
+    u16::from_le_bytes([bc[at], bc[at + 1]]) as u32
+}
+
 fn patterns_list_json(state: &State) -> String {
     let lib = state.library.lock().unwrap();
     let items: Vec<String> = lib
         .iter()
-        .map(|p| format!("{{\"id\":\"{}\",\"name\":\"{}\"}}", p.id, json_escape(&p.name)))
+        .map(|p| {
+            // `stale` = a blob this host can no longer read, so a console
+            // with a current compiler recompiles it from source (#643).
+            let stale = if blob_bc_format(&p.bc) == state.bc_format { "" } else { ",\"stale\":true" };
+            format!("{{\"id\":\"{}\",\"name\":\"{}\"{}}}", p.id, json_escape(&p.name), stale)
+        })
         .collect();
     format!("{{\"patterns\":[{}]}}", items.join(","))
 }
@@ -1658,12 +1736,19 @@ fn patterns_save(state: &State, raw: &[u8]) -> String {
         return format!("{{\"ok\":true,\"id\":\"{}\"}}", p.id);
     }
     let id = format!("{:08x}", state.next_id.fetch_add(1, Ordering::Relaxed) ^ 0x5eed_1e55);
-    lib.push(StoredPattern {
-        id: id.clone(),
-        name,
-        source: env.source.to_string(),
-        bc: env.bytecode.to_vec(),
-    });
+    let mut bc = env.bytecode.to_vec();
+    // `--stale-store`: a store that was filled by an OLDER console. Only a
+    // pattern arriving for the FIRST time is aged — the console's recompile
+    // saves by the same name, which lands here as the overwrite above and
+    // stores exactly what it was handed, so the heal converges (#643).
+    if state.stale_store {
+        let at = luxel_core::bytecode::MAGIC.len();
+        if bc.len() >= at + 2 {
+            let v = blob_bc_format(&bc).saturating_sub(1) as u16;
+            bc[at..at + 2].copy_from_slice(&v.to_le_bytes());
+        }
+    }
+    lib.push(StoredPattern { id: id.clone(), name, source: env.source.to_string(), bc });
     format!("{{\"ok\":true,\"id\":\"{}\"}}", id)
 }
 
@@ -1708,13 +1793,19 @@ fn playlist_json(state: &State) -> String {
             // config. The firmware checks off the render task and caches;
             // natively it's cheap enough to compute inline (and free for
             // assert-less patterns).
-            let invalid = stored
-                .and_then(|p| luxel_core::bytecode::deserialize_lean(&p.bc).ok())
-                .and_then(|prog| {
+            // A blob this build cannot decode at all is invalid for a
+            // different reason, and the firmware says so (Gitea #643 saw
+            // every item come back `"invalid":"bytecode format v5 …"`);
+            // report it identically rather than swallowing it as "fine".
+            let invalid = match stored.map(|p| luxel_core::bytecode::deserialize_lean(&p.bc)) {
+                Some(Ok(prog)) => {
                     luxel_core::engine::check_asserts(&prog, pixel_count, usize::MAX)
-                })
-                .map(|m| format!(",\"invalid\":\"{}\"", json_escape(&m)))
-                .unwrap_or_default();
+                }
+                Some(Err(e)) => Some(e.to_string()),
+                None => None,
+            }
+            .map(|m| format!(",\"invalid\":\"{}\"", json_escape(&m)))
+            .unwrap_or_default();
             // projection override (§5.4d) — absent = the device default
             let proj = it.proj.map(|m| format!(",\"proj\":\"{m}\"")).unwrap_or_default();
             format!(
@@ -2016,6 +2107,28 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
                 "application/json",
                 b"{\"ok\":true,\"note\":\"mirror: no radio; a device would reboot into the setup AP\"}",
             );
+        }
+        // `--accept-ota` only (Gitea #643): the two uploads a release package
+        // is made of. The mirror writes no flash and reboots into nothing —
+        // it records the byte count and, for the app image, starts reporting
+        // a `+otaN` version so a client's "wait for it to come back as
+        // something else" actually completes. Without the flag both routes
+        // stay absent, which is the honest default (`caps.ota` is false and
+        // the console's Update… row is not rendered at all).
+        ("POST", "/api/ota") if state.accept_ota => {
+            state.ota_bytes.store(req.body.len() as u32, Ordering::Relaxed);
+            state.ota_count.fetch_add(1, Ordering::Relaxed);
+            let body = format!(
+                "{{\"ok\":true,\"bytes\":{},\"note\":\"mirror: image discarded; version now reports +ota\"}}",
+                req.body.len()
+            );
+            respond(&mut stream, 200, "application/json", body.as_bytes());
+        }
+        ("POST", "/api/assets") if state.accept_ota => {
+            state.assets_bytes.store(req.body.len() as u32, Ordering::Relaxed);
+            let body =
+                format!("{{\"ok\":true,\"bytes\":{}}}", req.body.len());
+            respond(&mut stream, 200, "application/json", body.as_bytes());
         }
         ("GET", "/api/output") => {
             let body = format!(
@@ -2497,10 +2610,34 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
     // What this mirror calls itself (Gitea #538); a device defaults to
     // luxel-<mac6>, which a mirror has no MAC for.
     let mut name = String::from(DEFAULT_NAME);
+    // Release-package impersonation (Gitea #643) — see the State fields.
+    let mut board_name = String::from(DEFAULT_BOARD_NAME);
+    let mut bc_format = luxel_core::bytecode::FORMAT_VERSION as u32;
+    let mut stale_store = false;
+    let mut accept_ota = false;
     let mut it = rest.iter();
     while let Some(flag) = it.next() {
+        // Value-LESS flags first: the pair match below calls `it.next()`
+        // unconditionally, so a switch handled there would swallow the
+        // argument after it.
+        match flag.as_str() {
+            "--stale-store" => {
+                stale_store = true;
+                continue;
+            }
+            "--accept-ota" => {
+                accept_ota = true;
+                continue;
+            }
+            _ => {}
+        }
         match (flag.as_str(), it.next()) {
             ("--web-dir", Some(v)) => web_dir_arg = Some(v.clone()),
+            ("--board-name", Some(v)) => board_name = v.clone(),
+            ("--bc-format", Some(v)) => match v.parse::<u32>() {
+                Ok(n) if n >= 1 => bc_format = n,
+                _ => return super::usage(),
+            },
             ("--pixels", Some(v)) => match v.parse() {
                 Ok(n) => pixels = Some(n),
                 Err(_) => return super::usage(),
@@ -2595,9 +2732,12 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
             panel,
             outputs,
             // Honest drift (docs/api.md "mirror differences"): no reboot, no
-            // OTA, no second allocator.
+            // second allocator. `--accept-ota` turns the OTA capability on so
+            // the console's package-install flow can be driven end to end
+            // against a mirror (Gitea #643); without it there is nothing
+            // behind `POST /api/ota` and the capability stays false.
             reboot: false,
-            ota: false,
+            ota: accept_ota,
             // The panel mirror impersonates the Seengreat HUB75 S3, whose
             // firmware is built with `psram-arena` (Gitea #253) — so the
             // Storage row it drives is the one a real panel shows. A strip
@@ -2669,6 +2809,13 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         engine_time_ms: std::sync::atomic::AtomicU64::new(0),
         sync_leader: Mutex::new(None),
         web_dir: locate_web_dir(web_dir_arg),
+        board_name,
+        bc_format,
+        stale_store,
+        accept_ota,
+        ota_count: AtomicU32::new(0),
+        ota_bytes: AtomicU32::new(0),
+        assets_bytes: AtomicU32::new(0),
     });
 
     // A panel mirror comes up on its own grid, the way a HUB75 board does.

@@ -1,5 +1,79 @@
 # Update log
 
+## 2026-09-20 — A firmware update installs the console that matches it (#643)
+
+The Athom went dark earlier today taking an OTA across an LXBC format bump. Nothing
+was lost and nothing was broken — every source was byte-identical throughout — but the
+new engine could not read one compiled blob in the store (`vmerr: "bytecode format v5
+(this build reads v6) — recompile the pattern"`, every playlist item `invalid`, the
+strip off), and the console the device was serving was the one that shipped with the
+OLD firmware, so it could not compile a replacement either. Recovering it took a
+checkout and `web/tools/lxp.mjs`. Jeremy's call on #643: make the two halves arrive
+together, make the skew visible, and make the repair automatic.
+
+**One release package.** `luxel-<board>-<version>.luxr` (`LUXR` magic, container
+version, board name, both lengths, both sha256s, then the app image and the LUXA
+archive). `web/src/lib/luxr.ts` is the whole codec and it has exactly one
+implementation: the browser imports it, `web/tools/pack-luxr.mjs` imports it, and
+`web/tests/luxr.test.mjs` tests it (11 cases — round trip, both truncation shapes,
+both corrupted payloads, a future container version, a firmware-only package). Both
+producers call that packer: `tools/deploy.sh --package <out.luxr>` for the bench and
+`.github/workflows/release.yml` for every board but `c6-devkit-hosted`, which serves no
+console and gets none. Both hashes are verified on parse, because what follows them
+gets written into an OTA slot.
+
+**Update… installs both halves.** Settings → Advanced → Firmware & recovery takes a
+`.luxr`, checks the package's board against `/api/status`'s new `board` field and
+refuses a mismatch by name (#389's lesson, one step earlier than `ota-push.sh`'s image
+grep), streams the app, waits out the reboot (slot or version changing, 60 s), then
+streams the assets and reloads itself. The order is not negotiable: the assets
+partition is served by the RUNNING firmware, so assets first would put the new console
+in front of the old engine. A bare `.bin` still works and now says out loud that the
+on-device web app was not updated. `lib/install.ts` holds the sequence as a pure
+module so the order, the board rule and the reboot-settled rule are unit-tested rather
+than inferred from a screenshot.
+
+**The skew is a number now.** `/api/status` gains `bc_format` — the LXBC format this
+build READS — and `board`. luxel-wasm gains `lx_bc_format()` for what the bundle
+COMPILES. `components/BcBanner.svelte` sits in the shell under `ErrorBar` (the editor
+is full-screen; "every save is being refused" has to be explainable from inside it)
+and renders nothing when the two agree. Bundle older than the device → a warn banner
+with the `.luxr`/`.luxa` upload right there. Bundle newer → "update the firmware".
+A missing number on either side is `unknown`, never a match.
+
+**And the store repairs itself.** `GET /api/patterns` flags each row whose blob this
+build cannot decode with `"stale":true` — two bytes read off the mapped store, no new
+walk. When the formats AGREE and blobs are behind, the console fetches each stale
+pattern's source, compiles it here and saves it back **by name**: `patterns::save`
+upserts by name, so ids and every playlist reference survive, which is what makes this
+a repair rather than a rebuild. It is idempotent, resumable, never touches an
+unflagged pattern, leaves a pattern that no longer compiles exactly as it was and
+lists it — and it never runs while the bundle is the older half, because recompiling
+with the wrong compiler would replace unreadable blobs with unreadable blobs.
+
+**Driving it without a bench.** `luxel serve` grew four impersonation flags:
+`--board-name`, `--bc-format N` (what it reports, in either direction), `--stale-store`
+(a pattern entering the library for the first time is aged by one format version; an
+overwrite is stored as given, so a repair converges) and `--accept-ota` (both upload
+routes become recording no-ops, `caps.ota` turns true, and the version becomes
+`<ver>+otaN`). `device-e2e.mjs` adds 24 checks over three new mirrors: both banners,
+the wrong-board refusal with nothing written, the full package install with both byte
+counts asserted on the device, the bare-`.bin` warning, and stale store → heal →
+playlist plays → a reload that repairs nothing.
+
+**Firmware cost** (credless flake builds, measured against the same master in a
+detached worktree): +272 B on c3-devkit, +240 B on pixelblaze-v3, athom-music and
+s3-devkit, +256 B esp32-generic, +288 B c6-devkit-hosted, +304 B c6-devkit. Of that,
++96 B is `board` + `bc_format` in `/api/status` and the rest is the per-pattern `stale`
+flag. Worst case leaves athom-music — the tightest image the release workflow actually
+builds — 7.5 KB inside the old 1 MiB slot the migrating release is weighed against.
+
+`npm test` 177, all five browser harnesses green, `mockdiff` 0 deltas over 27 frames.
+Docs: api.md (`board`, `bc_format`, `stale`, the four mirror flags), releases.md (the
+container, byte for byte), firmware.md ("Bytecode format bumps" — the policy that a
+format bump must ship with this machinery), web-architecture.md, tools.md, UNTESTED.md.
+The one real-hardware run is Gitea #526.
+
 ## 2026-09-20 — JIT phase 1: the ABI is code now — pinned `Value`, `JitCtx`, the builtin entry table (#642)
 
 Phase 1 of the on-device JIT (#607, docs/jit-design.md). **No native code is

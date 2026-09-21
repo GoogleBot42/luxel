@@ -1,17 +1,36 @@
 <script lang="ts">
   // Advanced › Firmware & recovery — the version, and the two actions that
   // reboot the device. Both are caps-gated (`caps.ota` / `caps.reboot`): the
-  // mirror advertises neither, so on a mirror this row is a version line and
-  // nothing else — absent, never disabled (§5.7).
+  // mirror advertises neither (unless `--accept-ota` says otherwise), so on a
+  // mirror this row is a version line and nothing else — absent, never
+  // disabled (§5.7).
   //
   // Neither reboots from a bare button: each goes through `confirm({reboot})`,
   // which renders the standing "the device reboots to apply this" line.
-  import { device, deviceCaps, deviceSlot, deviceVersion } from "../stores/device";
+  //
+  // Update… takes a `.luxr` release package (lib/luxr.ts) and installs BOTH
+  // halves — firmware, then the web assets built from the same commit — in
+  // one action (Gitea #643). A bare `.bin` is still accepted, because every
+  // existing release artifact and every local `nix build` is one; the
+  // difference is that the console then says out loud that the console
+  // itself was NOT updated, which is the state the Athom went dark in.
+  import {
+    device,
+    deviceBoard,
+    deviceCaps,
+    deviceSlot,
+    deviceVersion,
+    refreshStatus,
+  } from "../stores/device";
   import { confirm } from "../stores/dialog";
-  import { note, notes } from "../stores/notify";
+  import { note, notes, reportApiError } from "../stores/notify";
+  import { boardMismatch, installRelease, readUpload, type Upload } from "../lib/install";
+  import { LuxrError } from "../lib/luxr";
 
   let fileInput: HTMLInputElement | undefined;
   let busy = false;
+  let progressText = "";
+  let progressPct = 0;
 
   async function startApMode(): Promise<void> {
     const ok = await confirm({
@@ -29,34 +48,97 @@
     );
   }
 
-  /** Stream a firmware image to the inactive OTA slot. The device writes it,
-   *  replies, and reboots into it ~400 ms later. */
+  /** The confirm dialog's body, which is where the honest difference between
+   *  a package and a bare image belongs — the user is about to authorise an
+   *  OTA either way, and this is the last point at which "the console will
+   *  still be the old one" is cheap to say. */
+  function confirmBody(up: Upload, size: number): string {
+    if (up.kind === "package")
+      return (
+        `${Math.round(up.pkg.app.length / 1024)} KB of firmware (v${up.pkg.version}, built for ` +
+        `${up.pkg.board}) is written to the inactive OTA slot and the device reboots into it; ` +
+        `the ${Math.round(up.pkg.assets.length / 1024)} KB web app from the same release is ` +
+        `installed after it comes back, and this page reloads. A bad image rolls back on the ` +
+        `next boot.`
+      );
+    return (
+      `${Math.round(size / 1024)} KB is written to the inactive OTA slot and the device reboots ` +
+      `into it. This is a firmware image ONLY — the web app on the device stays as it is, and ` +
+      `if the new firmware reads a newer bytecode format, the console it serves will not be ` +
+      `able to compile for it. Install the matching web assets afterwards, or use the ` +
+      `release's .luxr package instead. A bad image rolls back on the next boot.`
+    );
+  }
+
+  /** Install a release: `.luxr` package (firmware + its web assets) or a bare
+   *  app image. */
   async function onImagePicked(e: Event): Promise<void> {
     const input = e.target as HTMLInputElement;
     const file = input.files?.[0];
     input.value = ""; // so picking the same file twice fires again
-    if (!file) return;
+    if (!file || !$device) return;
+
+    let up: Upload;
+    try {
+      up = await readUpload(new Uint8Array(await file.arrayBuffer()));
+    } catch (err) {
+      const why = err instanceof LuxrError ? err.message : String(err);
+      reportApiError(why, { scope: "ota", subject: file.name });
+      return;
+    }
+
+    // #389's lesson, one step earlier than ota-push.sh's image grep: a
+    // wrong-board image installs cleanly and differs only in its pin map.
+    if (up.kind === "package") {
+      const bad = boardMismatch(up.pkg.board, $deviceBoard || undefined);
+      if (bad) {
+        reportApiError(bad, { scope: "ota", subject: file.name });
+        return;
+      }
+    }
+
     const ok = await confirm({
       title: `Install ${file.name}?`,
-      body: `${(file.size / 1024).toFixed(0)} KB is written to the inactive OTA slot and the device reboots into it. A bad image rolls back on the next boot.`,
-      confirmLabel: "Install & reboot",
+      body: confirmBody(up, file.size),
+      confirmLabel: up.kind === "package" ? "Install & reboot" : "Install firmware only",
       reboot: true,
     });
     if (!ok) return;
+
     busy = true; // the button steps aside for `fw-busy` while this runs
+    progressText = "reading…";
+    progressPct = 0;
     try {
-      const r = await $device?.otaUpload(await file.arrayBuffer());
-      note(
-        "ota",
-        r?.ok
-          ? `wrote ${r.bytes ?? file.size} bytes — the device is rebooting into the new image`
-          : `failed: ${r?.error ?? "rejected"}`,
-        0,
+      const r = await installRelease(
+        $device,
+        up,
+        { version: $deviceVersion, slot: $deviceSlot },
+        (p) => {
+          progressText = p.text;
+          progressPct = p.pct;
+        },
       );
+      if (!r.ok) {
+        note("ota", `failed: ${r.error ?? "rejected"}`, 0);
+        return;
+      }
+      await refreshStatus();
+      if (r.assetsInstalled) {
+        note("ota", `installed v${r.version ?? "?"} — reloading the console…`, 0);
+        location.reload();
+      } else {
+        note(
+          "ota",
+          `installed v${r.version ?? "?"}. The web app on the device was NOT updated — ` +
+            `install the matching web assets if this release changed them.`,
+          0,
+        );
+      }
     } catch (err) {
       note("ota", `failed: ${String(err)}`, 0);
     } finally {
       busy = false;
+      progressText = "";
     }
   }
 </script>
@@ -68,6 +150,9 @@
       {$deviceVersion ? `v${$deviceVersion}` : "—"}
       {#if $deviceSlot}<span class="dim">· {$deviceSlot}</span>{/if}
     </span>
+    {#if $deviceBoard}
+      <span class="dim hint" data-role="fw-board">{$deviceBoard}</span>
+    {/if}
   </div>
 </div>
 
@@ -78,7 +163,7 @@
       <input
         bind:this={fileInput}
         type="file"
-        accept=".bin,application/octet-stream"
+        accept=".luxr,.bin,application/octet-stream"
         hidden
         data-role="fw-file"
         on:change={(e) => void onImagePicked(e)}
@@ -87,15 +172,16 @@
            button steps aside for the progress line rather than greying out
            (§5.7, Gitea #529) -->
       {#if busy}
-        <span class="dim hint" data-role="fw-busy">
-          uploading — the device reboots when it lands…
-        </span>
+        <span class="dim hint" data-role="fw-busy">{progressText}</span>
+        <progress data-role="fw-progress" value={progressPct} max="1"></progress>
       {:else}
         <button data-role="fw-update" on:click={() => fileInput?.click()}>Update…</button>
       {/if}
       <span class="dim hint">
-        pick a <span class="mono">luxel.bin</span> built for this board — it is written to the
-        other OTA slot and the device <strong>reboots</strong> into it
+        pick the <span class="mono">.luxr</span> release package for this board — it carries the
+        firmware <strong>and</strong> the matching web app, and the device
+        <strong>reboots</strong> between them. A bare
+        <span class="mono">luxel.bin</span> installs firmware only.
       </span>
       {#if $notes.ota}<span class="dim hint" data-role="fw-note">{$notes.ota}</span>{/if}
     </div>
@@ -114,3 +200,11 @@
     </div>
   </div>
 {/if}
+
+<style>
+  progress {
+    flex: none;
+    width: 140px;
+    height: 6px;
+  }
+</style>
