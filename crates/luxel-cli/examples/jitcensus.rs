@@ -12,7 +12,7 @@
 //! the call graph) — plain counting over the word stream.
 
 use luxel_core::kinds::{self, DynCause, DynSlot, Kind};
-use luxel_core::vm::{builtin_sig, Program, BUILTINS};
+use luxel_core::vm::Program;
 use std::collections::{BTreeMap, BTreeSet};
 
 // ---- opcodes (mirror of bytecode::op, which is pub(crate)) ----
@@ -217,14 +217,6 @@ fn scan(prog: &Program) -> Scan {
                 }
                 CALL_FN => {
                     s.callees[fi].insert(imm16(w) as usize);
-                }
-                CALL_BUILTIN | CALL_BUILTIN_C | CALL_BUILTIN_CC => {
-                    let b = imm16(w);
-                    if builtin_sig(b).callback.is_some() {
-                        s.hof_builtins.insert(BUILTINS[b as usize].name.to_string());
-                        s.fn_uses_dyncall[fi] = true;
-                        s.hof_with_fun_cb = true;
-                    }
                 }
                 STORE_IDX => s.nonnum_arrstore |= true,
                 BOX => s.boxes += 1,
@@ -754,7 +746,7 @@ fn main() {
         println!("{c:4} slots  {whyt}");
     }
 
-    println!("\n== first-JIT exclusion (bail on CallValue or a callback builtin) ==");
+    println!("\n== first-JIT exclusion (bail on CallValue; no builtin reaches pattern code since #626) ==");
     let excl = |r: &&Rec| r.uses_call_value || r.hof_fun_cb;
     let e = cnt(&excl);
     println!("excluded: {e} / {n} ({:.1}%)", 100.0 * e as f64 / n as f64);

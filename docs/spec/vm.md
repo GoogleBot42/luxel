@@ -135,8 +135,11 @@ WORD index into the program's word region (bytecode.md).
 - **Calling convention**: `CallFn`/`CallValue` pop `argc` arguments (max
   16). Missing parameters default to `Num(0)`; extra arguments are popped
   and dropped. Every function returns exactly one value (`RetNull` returns
-  0). Builtins may re-enter the VM (higher-order builtins like `arrayMap`
-  run their callback to completion — no debug pausing inside).
+  0). **A builtin never calls pattern code.** The only call into a pattern
+  function is `CallFn`/`CallValue` from the instruction stream, so the
+  debugger can step every call there is, and no builtin re-enters the VM.
+  (Six higher-order builtins used to; they are prelude functions written
+  in the pattern language since v6 — Gitea #626, `crate::prelude`.)
 - The interpreter is resumable: `start`/`resume` return `Done(Value)` or
   `Paused` (breakpoint/step hit). Frames, locals, and the operand stack
   stay intact while paused; the engine builds mid-frame pause and stepping
@@ -222,11 +225,22 @@ The builtin table (`vm::BUILTINS`) is part of this specification: a
 frontend resolves builtin names to stable indices at compile time.
 Builtins are first-class (`Const(Builtin(i))` makes them assignable and
 passable, matching PB). The set covers PB's documented API: math,
-waveforms, array HOFs, `hsv`/`rgb`, coordinate transforms, time/clock,
-pixel maps, perlin noise, prng, GPIO stubs. See the table in
+waveforms, `hsv`/`rgb`, coordinate transforms, time/clock, pixel maps,
+perlin noise, prng, GPIO stubs. See the table in
 `crates/luxel-core/src/vm.rs` for the authoritative list; semantics that
 diverge from real PB hardware are documented in
 `docs/research/04-oracle-findings.md`.
+
+An entry has one of three kinds. `Impl` is a real builtin. `Todo` is a
+documented PB name we have not implemented: it resolves at compile time so
+the corpus compiles, and raises a runtime error if called. **`Removed` is a
+TOMBSTONE** — a name that was implemented and no longer is. The table is
+append-only, so a retired name keeps its slot rather than shifting every
+id after it; the compiler never resolves one, and the decoder rejects a
+blob that imports one (bytecode.md). The six array/pixel higher-order
+helpers (`arrayForEach`, `arrayMutate`, `arrayMapTo`, `arrayReduce`,
+`arraySortBy`, `mapPixels`) are the tombstones today: they became prelude
+functions in v6, which is why a builtin can no longer call pattern code.
 
 ## 5. Host interface (engine contract)
 

@@ -27,7 +27,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::fixed::Fx;
-use crate::vm::{lookup_builtin, FnDef, GlobalDef, PoolEntry, Program, Words, BUILTINS};
+use crate::vm::{builtin_removed, lookup_builtin, FnDef, GlobalDef, PoolEntry, Program, Words, BUILTINS};
 
 pub const MAGIC: [u8; 4] = *b"LXBC";
 /// v2: jump operands are function-relative BYTE offsets (v1 used
@@ -923,6 +923,15 @@ fn decode(
         let name = r.str8()?;
         let id = r.u16()?;
         match lookup_builtin(name) {
+            // A TOMBSTONE (Gitea #626): the name still holds its id — the
+            // table is append-only — but nothing implements it any more.
+            // Only a blob from a pre-v6 compiler can import one, and the
+            // store keeps source, so recompiling is the whole fix.
+            Some(b) if b == id && builtin_removed(id) => {
+                return Err(BcError::Malformed(format!(
+                    "`{name}` is a prelude function since v6, not a builtin — recompile the pattern"
+                )))
+            }
             Some(b) if b == id => imports.push(id),
             Some(b) => {
                 return Err(BcError::Malformed(format!(

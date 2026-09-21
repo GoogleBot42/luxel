@@ -704,7 +704,6 @@ fn walk_fn(
                     if arr.k == Kind::ArrNum && arr.ann {
                         let stored = match wk {
                             SigWrite::Num => Kind::Num,
-                            SigWrite::Dyn => Kind::Dyn,
                             SigWrite::ArgsFrom(i) => {
                                 let mut k = Kind::Num;
                                 for j in i as usize..argc {
@@ -798,10 +797,17 @@ fn walk_fn(
 #[cfg(feature = "kinds")]
 #[inline]
 fn elem_kind(arr: Kind) -> Kind {
-    if arr == Kind::ArrNum {
-        Kind::Num
-    } else {
-        Kind::Dyn
+    match arr {
+        Kind::ArrNum => Kind::Num,
+        Kind::Arr | Kind::Dyn => Kind::Dyn,
+        // Indexing a non-array ALWAYS traps (`Vm::index_read`: "indexing a
+        // non-array value"), so the value this pushes is unreachable.
+        // `Infer::elem_of` has always said `Num` here; this arm is what
+        // keeps the verifier from disagreeing with it, which it did until
+        // the prelude produced the first program that indexes a slot proven
+        // `Num` (`arrayForEach(5, f)` — the helper's parameter is a plain
+        // number because that is the only thing any call site passes it).
+        _ => Kind::Num,
     }
 }
 
@@ -1329,7 +1335,7 @@ impl<'p> An<'p> {
         }
     }
 
-    /// A function value used as a callback is callable from anywhere with
+    /// A function value CALLED AS A VALUE is callable from anywhere with
     /// anything: every `ConstFun`-referenced function's params go `Dyn`.
     fn callback(&mut self, cb: K) {
         if matches!(cb, K::Bi) {
@@ -1341,15 +1347,10 @@ impl<'p> An<'p> {
     fn classify_builtin(&mut self, fi: usize, at: usize, id: u16, args: &[K]) -> K {
         let sig = builtin_sig(id);
         let a = |i: u8| args.get(i as usize).copied().unwrap_or(K::Bot);
-        if let Some(cbi) = sig.callback {
-            self.callback(a(cbi));
-        }
         // What the builtin writes into its array argument.
         if let Some((ai, wk)) = sig.writes {
             let v = match wk {
                 SigWrite::Num => K::Num,
-                // the callback's return kind; conservatively unknown
-                SigWrite::Dyn => K::Top(DynCause::CallbackParam),
                 SigWrite::ArgsFrom(i) => {
                     let mut k = K::Bot;
                     for x in args.iter().skip(i as usize) {
@@ -1698,8 +1699,8 @@ fn analyze(prog: &Program) -> (Kinds, Vec<DynReason>) {
 }
 
 /// Per function: which globals it can read, transitively through its
-/// calls, and whether it can read ANY of them (a `CallValue` or a callback
-/// builtin goes somewhere this analysis cannot follow).
+/// calls, and whether it can read ANY of them (a `CallValue` goes somewhere
+/// this analysis cannot follow; no BUILTIN can, since #626).
 #[cfg(feature = "kinds")]
 fn global_reads(prog: &Program) -> (Vec<BTreeSet<usize>>, Vec<bool>) {
     let nf = prog.fns.len();
@@ -1723,11 +1724,6 @@ fn global_reads(prog: &Program) -> (Vec<BTreeSet<usize>>, Vec<bool>) {
                     callees[fi].insert(enc::imm16(w) as usize);
                 }
                 op::CALL_VALUE => all[fi] = true,
-                op::CALL_BUILTIN | op::CALL_BUILTIN_C | op::CALL_BUILTIN_CC => {
-                    if builtin_sig(enc::imm16(w)).callback.is_some() {
-                        all[fi] = true;
-                    }
-                }
                 _ => {}
             }
             at += ilen(o);
@@ -1858,18 +1854,13 @@ fn init_definitely_assigns(prog: &Program) -> BTreeSet<usize> {
         }
         // A call before the store matters only if the callee can READ the
         // global — that is the whole reason the init value has to stay in
-        // the join. A `CallValue` or a callback builtin could go anywhere,
-        // so it reads everything.
+        // the join. A `CallValue` could go anywhere, so it reads everything;
+        // a builtin cannot reach pattern code at all since #626.
         match o {
             op::CALL_FN => {
                 calls.insert(at, Some(enc::imm16(w) as usize));
             }
             op::CALL_VALUE => {
-                calls.insert(at, None);
-            }
-            op::CALL_BUILTIN | op::CALL_BUILTIN_C | op::CALL_BUILTIN_CC
-                if builtin_sig(enc::imm16(w)).callback.is_some() =>
-            {
                 calls.insert(at, None);
             }
             _ => {}

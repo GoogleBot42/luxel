@@ -45,5 +45,7 @@ pub mod noise;
 pub mod outpipe;
 #[cfg(feature = "frontend")]
 pub mod parse;
+#[cfg(feature = "frontend")]
+pub mod prelude;
 pub mod projection;
 pub mod vm;

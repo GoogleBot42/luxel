@@ -19,7 +19,8 @@ use crate::bytecode::op;
 use crate::diag::{line_col, Diagnostic, Span};
 use crate::fixed::Fx;
 use crate::parse::parse_program;
-use crate::vm::{lookup_builtin, lookup_method, FnDef, GlobalDef, PoolEntry, Program, Value, Words};
+use crate::prelude::{self, PreludeFn};
+use crate::vm::{lookup_builtin, method_global, FnDef, GlobalDef, PoolEntry, Program, Value, Words};
 
 /// Compiler IR: one virtual instruction, jump targets as INSTRUCTION
 /// INDICES. This never reaches the VM — [`assemble`] lowers it to the
@@ -153,10 +154,24 @@ pub fn compile(src: &str) -> Result<Program, Diagnostic> {
 }
 
 pub fn compile_with(src: &str, opts: CompileOpts) -> Result<Program, Diagnostic> {
-    let ast = parse_program(src)?;
+    let mut ast = parse_program(src)?;
+    // Link the pattern-language prelude (Gitea #626, docs/jit-design.md §4):
+    // the helpers the pattern can reach, prepended as ordinary top-level
+    // function declarations, so everything downstream — registration,
+    // scoping, the rewrite passes, the kinds fixpoint — treats them as
+    // pattern code, which is exactly what they are.
+    let shadowed = shadowing_names(&ast);
+    let prelude_decls = prelude::link(&ast, &shadowed)?;
+    if !prelude_decls.is_empty() {
+        let mut with_prelude = prelude_decls.clone();
+        with_prelude.append(&mut ast);
+        ast = with_prelude;
+    }
     let mut c = Compiler::new(src);
+    c.prelude_decls = prelude_decls;
     c.collect(&ast)?;
     c.emit_program(&ast)?;
+    c.prune_unused_prelude();
     Ok(assemble(
         c.fns,
         c.globals,
@@ -1217,6 +1232,25 @@ struct Compiler<'s> {
     /// AST becomes a compile error instead of a stack overflow on the
     /// firmware's small task stack.
     depth: u32,
+    // ---- pattern-language prelude (Gitea #626) ----
+    /// The prelude helper declarations linked into this program, in prelude
+    /// source order. Kept so a call site can CLONE one to specialise it.
+    prelude_decls: Vec<Stmt>,
+    /// `(helper name, function index)` for each linked helper.
+    prelude_linked: Vec<(String, u16)>,
+    /// One specialised clone per `(helper, callback function)` pair.
+    specialised: Vec<(String, u16, u16)>,
+    /// While emitting a specialised clone: the callback parameter's name and
+    /// the function it is bound to. A call of that name is a direct
+    /// `CallFn`, which is the whole point of specialising.
+    callback_bind: Option<(String, u16)>,
+    /// While emitting prelude code, the position every instruction is
+    /// attributed to. `prelude.js` has no position in the PATTERN's source,
+    /// so a shared helper copy uses `(0, 0)` — the VM's "unknown" — and a
+    /// specialised clone, which exists for exactly one call site, uses that
+    /// call site: a runtime error inside `arrayMutate` then points where a
+    /// reader would look, which is where the builtin's error pointed.
+    prelude_pos: Option<(u32, u32)>,
 }
 
 /// Matches the parser's nesting bound (see parse.rs MAX_DEPTH).
@@ -1243,7 +1277,20 @@ impl<'s> Compiler<'s> {
             data_map: BTreeMap::new(),
             assert_msgs: Vec::new(),
             depth: 0,
+            prelude_decls: Vec::new(),
+            prelude_linked: Vec::new(),
+            specialised: Vec::new(),
+            callback_bind: None,
+            prelude_pos: None,
         }
+    }
+
+    /// The (line, column) an instruction is attributed to. Prelude code has
+    /// no position in the pattern's source, and the VM already spells that
+    /// `(0, 0)` (`VmError::line`/`col`).
+    fn pos_of(&self, span: Span) -> (u32, u32) {
+        self.prelude_pos
+            .unwrap_or_else(|| line_col(self.src, span.start))
     }
 
     fn global_idx(&self, name: &str) -> Option<u16> {
@@ -1283,6 +1330,13 @@ impl<'s> Compiler<'s> {
         // nesting (corpus patterns call functions declared inside other
         // functions), and duplicates are allowed — the last definition wins.
         register_fns(self, top);
+        for d in &self.prelude_decls {
+            if let StmtKind::Func { name, .. } = &d.kind {
+                if let Some(&(_, idx, _)) = self.named_fns.iter().find(|(n, _, _)| n == name) {
+                    self.prelude_linked.push((name.clone(), idx));
+                }
+            }
+        }
         // reserve placeholder defs so indices are stable during emission
         for (name, _, _) in self.named_fns.clone() {
             self.fns.push(FnIr::placeholder(name));
@@ -1487,7 +1541,13 @@ impl<'s> Compiler<'s> {
                 .find(|(n, _, _)| n == name)
                 .map(|&(_, i, _)| i)
                 .expect("registered in collect");
+            self.prelude_pos = self
+                .prelude_linked
+                .iter()
+                .any(|(n, i)| n == name && *i == idx)
+                .then_some((0, 0));
             let def = self.emit_function(name.clone(), params, body, s.span)?;
+            self.prelude_pos = None;
             self.fns[idx as usize] = def;
             if *export && !self.exported_fns.iter().any(|(n, _)| n == name) {
                 self.exported_fns.push((name.clone(), idx));
@@ -1558,7 +1618,7 @@ impl<'s> Compiler<'s> {
             LambdaBody::Expr(e) => {
                 let locals = function_scope(params, &[]);
                 let mut ctx = FnCtx::new(locals, false);
-                ctx.set_pos(line_col(self.src, e.span.start));
+                ctx.set_pos(self.pos_of(e.span));
                 self.emit_expr(&mut ctx, e)?;
                 ctx.push(Insn::Ret);
                 ctx.finish(name.clone(), params.len() as u8)
@@ -1595,7 +1655,7 @@ impl<'s> Compiler<'s> {
         if let Some(i) = self.global_idx(name) {
             return Ok(Place::Global(i));
         }
-        if let Some(b) = lookup_builtin(name) {
+        if let Some(b) = callable_builtin(name) {
             return Ok(Place::Builtin(b));
         }
         Err(Diagnostic::new(
@@ -1616,7 +1676,7 @@ impl<'s> Compiler<'s> {
     }
 
     fn emit_stmt_inner(&mut self, ctx: &mut FnCtx, s: &Stmt) -> Result<(), Diagnostic> {
-        ctx.set_pos(line_col(self.src, s.span.start));
+        ctx.set_pos(self.pos_of(s.span));
         match &s.kind {
             StmtKind::Empty => Ok(()),
             // nested named functions were already bound at function entry
@@ -2115,47 +2175,91 @@ impl<'s> Compiler<'s> {
                 if args.len() > 15 {
                     return Err(Diagnostic::new(e.span, "too many arguments".to_string()));
                 }
-                let argc = args.len() as u8;
-                // method form: a.mutate(f) → arrayMutate(a, f)
-                if let ExprKind::Member { obj, name } = &callee.kind {
-                    let Some(b) = lookup_method(name) else {
-                        return Err(Diagnostic::new(
-                            callee.span,
-                            format!("unknown method `.{name}()`"),
-                        ));
-                    };
-                    self.emit_expr(ctx, obj)?;
-                    for a in args {
-                        self.emit_expr(ctx, a)?;
-                    }
-                    ctx.push(Insn::CallBuiltin { b, argc: argc + 1 });
-                    return Ok(());
-                }
-                // direct call of a named function or builtin
+                // Inside a specialised prelude clone the callback parameter
+                // is bound to a known function, so its call is a direct
+                // `CallFn` and the callee keeps its typed parameters — the
+                // whole point of specialising (docs/jit-design.md §4).
                 if let ExprKind::Ident(name) = &callee.kind {
-                    match self.resolve(ctx, name, callee.span)? {
+                    if let Some(target) = self.callback_target(name) {
+                        for a in args {
+                            self.emit_expr(ctx, a)?;
+                        }
+                        ctx.push(Insn::CallFn {
+                            fn_idx: target,
+                            argc: args.len() as u8,
+                        });
+                        return Ok(());
+                    }
+                }
+                // Resolve a named callee, folding a method form's receiver
+                // in as argument 0: `a.mutate(f)` IS `arrayMutate(a, f)`,
+                // and since #626 that name is a prelude function.
+                let mut eargs: Vec<&Expr> = Vec::with_capacity(args.len() + 1);
+                let place = match &callee.kind {
+                    ExprKind::Member { obj, name } => {
+                        let unknown = || {
+                            Diagnostic::new(callee.span, format!("unknown method `.{name}()`"))
+                        };
+                        let global = method_global(name).ok_or_else(unknown)?;
+                        eargs.push(obj);
+                        eargs.extend(args.iter());
+                        Some(self.resolve_callable(global).ok_or_else(unknown)?)
+                    }
+                    ExprKind::Ident(name) => {
+                        eargs.extend(args.iter());
+                        match self.resolve(ctx, name, callee.span)? {
+                            p @ (Place::Func(_) | Place::Builtin(_)) => Some(p),
+                            _ => None, // a variable holding a function value
+                        }
+                    }
+                    _ => None,
+                };
+                if let Some(place) = place {
+                    if eargs.len() > 15 {
+                        return Err(Diagnostic::new(e.span, "too many arguments".to_string()));
+                    }
+                    let argc = eargs.len() as u8;
+                    match place {
                         Place::Func(fn_idx) => {
-                            for a in args {
+                            if let Some(pf) = self.prelude_of(fn_idx) {
+                                if let Some(spec) =
+                                    self.specialise_for(ctx, pf, &eargs, e.span)?
+                                {
+                                    let cb = pf.callback_param as usize;
+                                    for (i, a) in eargs.iter().enumerate() {
+                                        if i != cb {
+                                            self.emit_expr(ctx, a)?;
+                                        }
+                                    }
+                                    ctx.push(Insn::CallFn {
+                                        fn_idx: spec,
+                                        argc: argc - 1,
+                                    });
+                                    return Ok(());
+                                }
+                            }
+                            for a in &eargs {
                                 self.emit_expr(ctx, a)?;
                             }
                             ctx.push(Insn::CallFn { fn_idx, argc });
-                            return Ok(());
                         }
                         Place::Builtin(b) => {
-                            for a in args {
+                            for a in &eargs {
                                 self.emit_expr(ctx, a)?;
                             }
                             ctx.push(Insn::CallBuiltin { b, argc });
-                            return Ok(());
                         }
-                        _ => {} // fall through to value call
+                        Place::Local(_) | Place::Global(_) => unreachable!("filtered above"),
                     }
+                    return Ok(());
                 }
                 self.emit_expr(ctx, callee)?;
                 for a in args {
                     self.emit_expr(ctx, a)?;
                 }
-                ctx.push(Insn::CallValue { argc });
+                ctx.push(Insn::CallValue {
+                    argc: args.len() as u8,
+                });
                 Ok(())
             }
             ExprKind::Index { obj, index } => {
@@ -2184,6 +2288,207 @@ impl<'s> Compiler<'s> {
         }
     }
 }
+
+// ---- the pattern-language prelude (Gitea #626, docs/jit-design.md §4) ----
+
+impl<'s> Compiler<'s> {
+    /// Inside a specialised clone: the function `name` is bound to.
+    fn callback_target(&self, name: &str) -> Option<u16> {
+        match &self.callback_bind {
+            Some((n, t)) if n == name => Some(*t),
+            _ => None,
+        }
+    }
+
+    /// The method form's target. It desugars to a GLOBAL name, which cannot
+    /// be shadowed by a local, so this is [`Compiler::resolve`] without the
+    /// local and global steps: a user function first (that was already the
+    /// precedence for the ident form), then the builtin.
+    fn resolve_callable(&self, name: &str) -> Option<Place> {
+        if !self.demoted.iter().any(|n| n == name) {
+            if let Some(&(_, idx, _)) = self.named_fns.iter().find(|(n, _, _)| n == name) {
+                return Some(Place::Func(idx));
+            }
+        }
+        callable_builtin(name).map(Place::Builtin)
+    }
+
+    /// Is `fn_idx` a linked prelude helper, and what is its shape?
+    fn prelude_of(&self, fn_idx: u16) -> Option<&'static PreludeFn> {
+        let name = self
+            .prelude_linked
+            .iter()
+            .find(|(_, i)| *i == fn_idx)
+            .map(|(n, _)| n)?;
+        prelude::info(name)
+    }
+
+    /// The specialised clone of prelude helper `pf` for this call site's
+    /// callback, if the site qualifies.
+    ///
+    /// It qualifies when the callback argument is a literal lambda or an
+    /// identifier naming a function — the shape of every call site in
+    /// `library/` and in the scraped corpus. A callback that is only a
+    /// run-time value (a variable, an array element, a call result) goes
+    /// through the unspecialised helper, whose `CallValue` is correct and
+    /// merely boxed. The helper must also use its callback parameter ONLY
+    /// as a callee; if it passed it on or stored it, the parameter cannot
+    /// be dropped, and this refuses.
+    fn specialise_for(
+        &mut self,
+        ctx: &FnCtx,
+        pf: &'static PreludeFn,
+        eargs: &[&Expr],
+        site: Span,
+    ) -> Result<Option<u16>, Diagnostic> {
+        let cb = pf.callback_param as usize;
+        let Some(arg) = eargs.get(cb) else {
+            return Ok(None); // the call omits the callback entirely
+        };
+        let Some(decl) = self
+            .prelude_decls
+            .iter()
+            .find(|d| matches!(&d.kind, StmtKind::Func { name, .. } if name == pf.name))
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let StmtKind::Func { params, body, .. } = &decl.kind else {
+            return Ok(None);
+        };
+        if cb >= params.len() || !prelude::callback_is_call_only(body, &params[cb]) {
+            return Ok(None);
+        }
+        let target = match &arg.kind {
+            ExprKind::Ident(n) => match self.resolve(ctx, n, arg.span) {
+                Ok(Place::Func(i)) => i,
+                _ => return Ok(None),
+            },
+            ExprKind::Lambda {
+                params: lp,
+                body: lb,
+            } => {
+                // No `ConstFun` is emitted for it, so the lambda is never
+                // "referenced as a value" and its parameters stay typed.
+                self.emit_lambda(lp, lb, arg.span)?
+            }
+            _ => return Ok(None),
+        };
+        if let Some(&(_, _, idx)) = self
+            .specialised
+            .iter()
+            .find(|(n, t, _)| n == pf.name && *t == target)
+        {
+            return Ok(Some(idx));
+        }
+        let idx = self.emit_specialised(&decl, cb, target, site)?;
+        self.specialised.push((pf.name.to_string(), target, idx));
+        Ok(Some(idx))
+    }
+
+    /// Emit a copy of prelude helper `decl` with parameter `cb` dropped and
+    /// every call of it rewritten to a direct call of `target`.
+    ///
+    /// The dropped parameter is not always the last one (`arrayReduce(a,
+    /// fn, init)`), so the clone's parameter list is the original minus the
+    /// callback, in order, and the call site emits its arguments the same
+    /// way.
+    fn emit_specialised(
+        &mut self,
+        decl: &Stmt,
+        cb: usize,
+        target: u16,
+        site: Span,
+    ) -> Result<u16, Diagnostic> {
+        let StmtKind::Func { name, params, body, .. } = &decl.kind else {
+            unreachable!("prelude declarations are functions")
+        };
+        if self.fns.len() >= MAX_FNS {
+            return Err(Diagnostic::new(
+                decl.span,
+                format!("too many functions (max {MAX_FNS})"),
+            ));
+        }
+        let idx = self.fns.len() as u16;
+        let clone_name = format!("{name}${idx}");
+        self.fns.push(FnIr::placeholder(clone_name.clone()));
+        let cb_name = params[cb].clone();
+        let mut locals: Vec<String> = params
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != cb)
+            .map(|(_, p)| p.clone())
+            .collect();
+        let nparams = locals.len();
+        // the helper's own `var`s follow the kept parameters; the callback
+        // parameter gets no slot at all, and `callback_is_call_only` has
+        // already proved nothing else can name it
+        for l in function_scope(params, body).into_iter().skip(params.len()) {
+            if !locals.contains(&l) {
+                locals.push(l);
+            }
+        }
+        if locals.len() > MAX_LOCALS {
+            return Err(Diagnostic::new(
+                decl.span,
+                format!("too many locals in `{clone_name}` (max {MAX_LOCALS})"),
+            ));
+        }
+        let mut ctx = FnCtx::new(locals, false);
+        // A clone belongs to one call site, so that is where its runtime
+        // errors are reported — and a clone built while emitting other
+        // prelude code inherits that code's attribution.
+        let at = self.pos_of(site);
+        let saved_bind = self.callback_bind.replace((cb_name, target));
+        let saved_pos = self.prelude_pos.replace(at);
+        for st in body {
+            self.emit_stmt(&mut ctx, st)?;
+        }
+        self.prelude_pos = saved_pos;
+        self.callback_bind = saved_bind;
+        ctx.push(Insn::RetNull);
+        self.fns[idx as usize] = ctx.finish(clone_name, nparams as u8);
+        Ok(idx)
+    }
+
+    /// Empty out a linked prelude helper nothing ended up calling — the
+    /// usual outcome once every call site specialised. The slot stays (a
+    /// function index is a wire-format id), the body does not.
+    fn prune_unused_prelude(&mut self) {
+        let linked: Vec<u16> = self.prelude_linked.iter().map(|&(_, i)| i).collect();
+        for idx in linked {
+            let used = self.fns.iter().any(|f| {
+                f.code.iter().any(|i| {
+                    matches!(i, Insn::CallFn { fn_idx, .. } if *fn_idx == idx)
+                        || matches!(i, Insn::Const(Value::Fun(f)) if *f == idx as u32)
+                })
+            });
+            if used {
+                continue;
+            }
+            let name = core::mem::take(&mut self.fns[idx as usize].name);
+            self.fns[idx as usize] = FnIr {
+                name,
+                params: 0,
+                code: alloc::vec![Insn::RetNull],
+                pos: alloc::vec![(0, 0)],
+                local_names: Vec::new(),
+            };
+        }
+    }
+}
+
+/// The builtin id `name` resolves to in CALL position. A TOMBSTONE resolves
+/// to nothing: the six retired names are prelude functions, and a program
+/// that reaches here for one of them shadowed the prelude with a variable,
+/// so "unknown identifier" is the honest answer (Gitea #626).
+fn callable_builtin(name: &str) -> Option<u16> {
+    lookup_builtin(name).filter(|b| !crate::vm::builtin_removed(*b))
+}
+
+/// The decoder's cap on functions per program (`bytecode.rs`), mirrored so
+/// specialisation errors here rather than producing an unloadable blob.
+const MAX_FNS: usize = 1024;
 
 /// The literal's elements as compile-time constants, if EVERY element is a
 /// numeric literal (optionally under unary +/-). Nested arrays, idents,
@@ -2386,6 +2691,28 @@ fn walk_fns<'a>(stmts: &'a [Stmt], f: &mut impl FnMut(&'a Stmt)) {
             _ => {}
         }
     }
+}
+
+/// Names the pattern binds itself, which therefore shadow a prelude helper
+/// and keep it out of the blob: every `function` declaration (at any depth —
+/// PB flattens them all to global scope) and every top-level `var`/`let`/
+/// `const`. That is today's precedence, kept: a user function outranked a
+/// builtin, and a top-level variable outranked it too.
+fn shadowing_names(top: &[Stmt]) -> BTreeSet<String> {
+    let mut out: BTreeSet<String> = BTreeSet::new();
+    walk_fns(top, &mut |s| {
+        if let StmtKind::Func { name, .. } = &s.kind {
+            out.insert(name.clone());
+        }
+    });
+    for s in top {
+        if let StmtKind::Var { decls, .. } = &s.kind {
+            for d in decls {
+                out.insert(d.name.clone());
+            }
+        }
+    }
+    out
 }
 
 fn register_fns(c: &mut Compiler, top: &[Stmt]) {
