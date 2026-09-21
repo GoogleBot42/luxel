@@ -913,8 +913,10 @@ fn status_json(state: &State) -> String {
     // the pre-#501 1 MiB-slot table. The mirror has no flash at all, so it
     // reports the honest answer — a native layout, nothing to migrate —
     // rather than omitting the key and making every client handle two
-    // shapes. See docs/api.md.
-    let partitions = ",\"partitions\":{\"layout\":\"native\",\"migrated\":true,\"ota_slot_bytes\":0,\"storage_bytes\":0,\"assets_bytes\":0}";
+    // shapes. `ceiling_bytes` 0 for the same reason (Gitea #634): there is no
+    // flash part and no bootloader, so there is no ceiling. `upgrade_available`
+    // is absent, which is what "no" looks like on a device too. See docs/api.md.
+    let partitions = ",\"partitions\":{\"layout\":\"native\",\"migrated\":true,\"ota_slot_bytes\":0,\"storage_bytes\":0,\"assets_bytes\":0,\"ceiling_bytes\":0}";
     // `board` + `bc_format` (Gitea #643): the board a release package must
     // name, and the LXBC format this host reads. Both mirror firmware fields
     // and are always present, so a client tells "this device says 6" from

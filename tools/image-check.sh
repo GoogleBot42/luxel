@@ -243,6 +243,19 @@ echo "image-check: OTA slot $OTA_MAX B, floor $MIN_MARGIN_PCT % — $OTA_MAX_RUL
 if [ -n "$MIGRATING_NOTE" ]; then
   echo "image-check: *** $MIGRATING_NOTE ***"
 fi
+# The one board with TWO live slot sizes (Gitea #634). A 16 MB board whose
+# BOOTLOADER was flashed for a smaller part migrates to the 4 MB table
+# instead of refusing, and then its ota_0 is 1.25 MiB, not the 3 MiB its own
+# table gives. The gate stays on the nominal slot on purpose — the image is a
+# release artifact and which tier a given device is on is a property of that
+# device — so say so rather than letting the number mislead. The device is
+# the backstop: /api/ota sizes every push against the table on flash.
+if [ "$BOARD_OTA_MAX_FOR" = board-seengreat-hub75 ] && [ -z "$OTA_MAX_ENV" ] && [ "$MIGRATING" != 1 ]; then
+  echo "image-check: NOTE — this board has two tiers: a device whose bootloader was"
+  echo "             flashed for 4 MB runs the partitions.csv fallback, where ota_0 is"
+  echo "             1310720 B, not the $OTA_MAX B gated here. /api/status reports"
+  echo "             upgrade_available:true there. docs/boards.md tracks both (Gitea #634)."
+fi
 
 magic=$(od -An -tx1 -N1 "$IMG" | tr -d ' \n')
 if [ "$magic" != "e9" ]; then

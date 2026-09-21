@@ -131,17 +131,25 @@ value while collapsed. Everything below is on the new page.
   emulation, not on the bench: the 16 MB image now runs on QEMU's `esp32s3`
   machine and the whole migration passes there from either slot, cut at
   every stage, with the asset bundle byte-identical at `0xa10000`
-  (`tools/qemu/run-all.py -k migrate-s3`). The firmware now refuses this
-  case by name instead of dying mid-run.
-  **What is still untested on metal** is everything after that refusal.
-  Getting the panel across needs a **one-time serial flash of the
-  bootloader** — Jeremy's hands and the panel's USB port —
+  (`tools/qemu/run-all.py -k migrate-s3`).
+  **And it no longer refuses.** As of #634's second half a 16 MB image
+  embeds the 4 MB table as well and takes the largest layout that fits under
+  the bootloader ceiling, so the panel is expected to migrate to
+  `partitions.csv` — 1.25 MiB slots, a 512 KiB store, `assets` left at
+  `0x310000` — and report `upgrade_available:true`. **What is untested on
+  metal is that fallback**, both hops of it, and the panel is the only board
+  that can test either. Emulated end to end (`migrate-s3-fallback-*`,
+  `migrate-s3-fallback-then-16mb`).
+  Getting the panel onto its own 16 MB table still needs a **one-time serial
+  flash of the bootloader** — Jeremy's hands and the panel's USB port —
   `BOARD=board-seengreat-hub75 firmware/build-esp32.sh flash`, which writes
-  bootloader + table + app with `--flash-size 16mb`. That also makes the
-  migration moot for this device (it lands on the new table directly), so
+  bootloader + table + app with `--flash-size 16mb`. If that happens before
+  the panel ever takes the fallback it lands on the new table directly and
   the *self-applied* 16 MB path stays emulator-only until there is a second
-  16 MB board. The residual risk on any such device is unchanged: a cut
-  inside the single 4 KiB table write, milliseconds, serial-recovery-only.
+  16 MB board; if it happens after, the device migrates a second time and
+  that hop gets its first metal run. The residual risk on any such device is
+  unchanged: a cut inside the single 4 KiB table write, milliseconds,
+  serial-recovery-only.
   **The panel is currently off the LAN** and needs a power cycle (the #294
   wedge ate the diagnostic OTA mid-upload) — #634 has the timeline.
 - [ ] **AP-mode provisioning** (v0.1.22): Settings → "reboot into setup

@@ -190,7 +190,10 @@ Two tables, one per flash size, both tracked in `firmware/`.
 `firmware/build.rs` picks between them from the board cargo feature and
 serializes the chosen one into the image — `parttab::EMBEDDED`, the exact
 bytes `espflash` writes at `0x8000`, entries plus the trailing MD5 row the
-bootloader verifies. `board_partitions` in `firmware/board-target.sh` is
+bootloader verifies. A 16 MB board additionally embeds the 4 MB table as
+`parttab::FALLBACK`, for the case in "The bootloader ceiling" below; every
+other board's image is byte-identical to one built without that mechanism.
+`board_partitions` in `firmware/board-target.sh` is
 the shell-side copy of the same map, and it is what `build-esp32.sh`,
 `flake.nix` and the release workflow pass as `--partition-table`. The two
 must agree: a device whose embedded table and flashed table disagree OTAs
@@ -266,9 +269,9 @@ composes flash images byte by byte and must name offsets.
 
 ## Layout migration
 
-`firmware/src/migrate.rs` moves a device from the pre-#501 table to the one
-its image embeds, on the first boot of the migrating release, with no serial
-port involved — which is the whole point: nothing on the bench has a serial
+`firmware/src/migrate.rs` moves a device from whatever table is on flash to
+the best one its image can install here, on the first boot of the migrating
+release, with no serial port involved — which is the whole point: nothing on the bench has a serial
 path today, and neither does a user's device. The table-writing primitives
 it uses (`firmware/src/parttab.rs` + `parttab/raw.rs`) were split out of
 `takeover.rs` and are now built on **every** board, because the two boards
@@ -329,6 +332,57 @@ power cut must not look like a crash loop to `preboot_guard` — which, once
 staging has begun, would "roll back" to an `ota_1` that is no longer a
 bootable image.
 
+### The bootloader ceiling, and the two-hop board
+
+`g_rom_flashchip.chip_size` — the number every `esp_rom_spiflash_*` op is
+bounds-checked against, which is every op `esp-storage` makes — is programmed
+by the second-stage bootloader out of **its own image header**, and an OTA
+replaces the app but never the bootloader. A board serially flashed while its
+table was smaller therefore carries that old number for the rest of its life,
+and its bootloader will additionally refuse to **boot** under a table with an
+entry running past it (`partition N invalid — offset … exceeds flash chip
+size …`, then `load partition table error!`). The Seengreat panel is exactly
+that board: 16 MB of silicon behind a bootloader flashed for 4 MB, which is
+why its migration declined on 2026-09-21 (Gitea #634).
+
+Raising the ceiling at runtime is possible (ESP-IDF's own
+`bootloader_flash_update_size()` does it) and is a **brick**: the migration
+completes and the device then reboots into a bootloader that rejects the table
+it just installed, forever, on a board with no serial console. Verified under
+emulation. So the ceiling is read, never written —
+`parttab::bootloader_flash_ceiling()`, and `parttab::flash_ceiling()` is
+`min(that, the chip's own JEDEC capacity)`.
+
+What such a board does instead is take **the largest embedded layout that fits
+under the ceiling** (`parttab::target_table`). On the Seengreat that is the
+4 MB table: the same layout, through the same code, that the Athom migrated to
+— store relocated with the overlap handling, `assets` left at `0x310000`. It
+is a complete, correct migration, not a holding pattern: 1.25 MiB slots and a
+512 KiB store instead of 1 MiB and 1 MiB. `/api/status` then reports
+`layout:"partitions.csv"`, `migrated:true`, `ceiling_bytes:4194304` and
+`upgrade_available:true`, and the boot log says the same thing on every boot.
+
+After a one-time serial re-flash (`BOARD=board-seengreat-hub75
+firmware/build-esp32.sh flash`, which writes bootloader + table + app together
+with `--flash-size 16mb`) the ceiling becomes 16 MB, the target becomes the
+board's own table, `migrated` goes back to `false` and **the migrator runs a
+second time** — `storage` `0x290000` → `0x610000`, `assets` `0x310000` →
+`0xA10000`, staged in the 4 MB layout's `ota_1` exactly as the first hop was
+staged in the pre-#501 one. That is why `migrated:true` is defined as "the
+live table is the best one available today" and never as a terminal state,
+and why the `LXMG` staging header is keyed to the **target** table: the header
+the first hop left behind is tagged for a different layout, so the second hop
+ignores it and stages from scratch.
+
+Two consequences worth stating. The `"bootloader was flashed for a smaller
+part"` refusal still exists but is now only reachable when *no* embedded
+layout fits — on a part smaller than the 4 MB table, which no bootloader could
+get far enough to boot anyway. And such a board's **OTA slot is the fallback
+table's**, 1.25 MiB, not the 3 MiB its nominal table would give:
+`tools/image-check.sh` gates the release against the nominal slot, so the two
+tiers differ and docs/boards.md tracks both. `/api/ota` always measures against
+the table on flash and says which of the three situations a refusal is.
+
 **The 4 MB half ran on metal 2026-09-20** — the Athom, the first device on
 the new table (Gitea #634): one reboot, 8.6 s from last answer to first
 answer on the new layout, patterns / playlist / settings / asset bundle all
@@ -342,13 +396,16 @@ migration finished before a power cut could be timed against it, and a
 migrated device never migrates again (Gitea #644), so the `LXMG` stage marks
 remain host- and QEMU-verified only.
 
-The 16 MB half of this has never executed: QEMU's `esp32s3` machine reads
-`partitions-16mb.csv` correctly out of the merged image and loads `ota_0`,
-and then the app produces no serial output at all, so `move_assets`' copy
-branch — the only stage the 4 MB layout does not take — is covered by
-assertion and a host-computed store move rather than by emulation
-(`tools/qemu/migrate-test.py --plan-16mb`). That is the second reason the
-bench order is the Athom first and the Seengreat only after it.
+The 16 MB half has never run on metal, and after the Seengreat's bootloader
+is re-flashed it never will — that flash lands the panel directly on the new
+table, and it is the only 16 MB device. It is fully emulated instead: since
+Gitea #634 `tools/qemu/migrate-test.py --board s3` boots the real image on
+QEMU's `esp32s3` machine (five emulator bugs fixed in `tools/qemu/patches/`,
+guest byte-identical), from either slot, cut at every re-runnable stage, and
+`--old-bootloader 4mb` / `--reflash-bootloader 16mb` run the two-hop board
+end to end — fall back to the 4 MB table, then migrate again to the 16 MB one
+with the 960 KiB bundle arriving byte-identical at `0xA10000`.
+`--plan-16mb` remains as the fast assertion-only model of the same layout.
 
 **The residual risk, stated plainly.** The table write is the one
 non-idempotent step. A cut *inside* that single 4 KiB erase-and-write leaves
@@ -389,10 +446,12 @@ migrator and gets its ~12 KB of OTA slot back. It is a deliberate flag, not
 an edit: `tools/image-check.sh` asserts the migrator's boot-line marker is
 present unless `migrate-off` is named, and absent when it is.
 
-`/api/status` carries a `partitions` object — layout name, whether the live
-table matches the embedded one, and the three sizes — so a fleet tool can
-tell a migrated device from one still on the old table without a serial
-console (docs/api.md).
+`/api/status` carries a `partitions` object — the live layout's name, whether
+it is the best one this image can install here, the three sizes,
+`ceiling_bytes`, and `upgrade_available` when a serial re-flash of the
+bootloader would unlock a larger one — so a fleet tool can tell a migrated
+device from one still on the old table, and a fallen-back one from either,
+without a serial console (docs/api.md).
 
 ## Stack & heap invariants
 

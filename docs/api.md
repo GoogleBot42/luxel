@@ -71,7 +71,7 @@ response as "no snapshot right now", not as an all-black frame.
  "store":{"used":18452,"total":225280,"dead":0,"patterns":3},
  "src":true,"bc":true,"web":[0,1,0],"vmerr":null,
  "partitions":{"layout":"partitions.csv","migrated":true,"ota_slot_bytes":1310720,
-               "storage_bytes":524288,"assets_bytes":983040}}
+               "storage_bytes":524288,"assets_bytes":983040,"ceiling_bytes":4194304}}
 ```
 
 A HUB75 panel additionally carries the pipelined-output members — `out_fps`,
@@ -382,26 +382,41 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
 
   | field | meaning |
   |---|---|
-  | `layout` | the csv this image was built from — `"partitions.csv"` (4 MB) or `"partitions-16mb.csv"` (the Seengreat). The mirror reports `"native"`. |
-  | `migrated` | `false` means the table on flash is **not** the one this image embeds: the device is running an older layout and the migrator either has not run yet or refused. `true` on a device that is where it belongs, and always on the mirror. |
-  | `ota_slot_bytes` | the LIVE `ota_0` size — 1,048,576 before migration, 1,310,720 / 3,145,728 after. This, not the build, is what an OTA image has to fit. |
+  | `layout` | the csv describing the table **on flash** — `"partitions.csv"` (4 MB) or `"partitions-16mb.csv"` (the Seengreat's own). A device still on the pre-#501 table has no name to report and says the one it is heading for, paired with `migrated:false`. The mirror reports `"native"`. |
+  | `migrated` | `false` means the table on flash is **not** the best one this image can install here: the device is running an older layout and the migrator either has not run yet or refused. `true` on a device that is where it belongs, and always on the mirror. It is not a terminal state — see `upgrade_available`. |
+  | `ota_slot_bytes` | the LIVE `ota_0` size — 1,048,576 before migration, 1,310,720 / 3,145,728 after. This, not the build, is what an OTA image has to fit, and `POST /api/ota` enforces it off the same on-flash table. |
   | `storage_bytes` | the live `storage` partition. `store.total` is this minus the key area and the ad-hoc slot. |
   | `assets_bytes` | the live `assets` partition. |
+  | `ceiling_bytes` | the highest flash offset this device can reach: `min(chip size, bootloader ceiling)`. Normally the chip size; lower on a board whose bootloader was flashed for a smaller part (Gitea #634 — the ROM's `g_rom_flashchip.chip_size` comes from the bootloader's image header, and an OTA never replaces the bootloader). 0 on the mirror. |
+  | `upgrade_available` | present, and `true`, **only** when the chip is larger than that bootloader ceiling and this image embeds a layout the chip could back. A one-time serial re-flash of the bootloader (`BOARD=… firmware/build-esp32.sh flash`) unlocks it, and the device migrates again on the next boot. Absent means no. |
 
   Three more fields appear **only when a migration refused to start**, which
   it does rather than lose data:
 
   | field | meaning |
   |---|---|
-  | `migration_blocked` | why, as a short string. Two families. **Refusals decided before anything is written** — `"pattern library too large for the new layout"`, `"pattern store did not come up"`, `"flash too small for the new layout"`, `"bootloader was flashed for a smaller part — reflash it over serial"` — where the usual fix is to delete patterns and reboot, except the last, which needs a one-time serial flash of the bootloader (its image header is what tells the ROM how big the part is, and an OTA never replaces it — Gitea #634). And **mid-run flash failures** — `"staging write failed"`, `"could not build the staged log"`, `"new storage erase failed"`, `"reserved blob did not re-store"`, `"staged log copy failed"`, `"asset copy failed"`, `"asset regions overlap"`, `"partition table write failed"` — which retry on the next boot. Either way the device keeps working on its old table with its data intact. |
+  | `migration_blocked` | why, as a short string. Two families. **Refusals decided before anything is written** — `"pattern library too large for the new layout"`, `"pattern store did not come up"`, `"flash too small for the new layout"`, `"bootloader was flashed for a smaller part — reflash it over serial"`, `"staging area overlaps the running image"` — where the usual fix is to delete patterns and reboot. The bootloader one is now only reachable when NO embedded layout fits under the ceiling: a board that embeds a smaller one takes it and reports `upgrade_available` instead (Gitea #634). And **mid-run flash failures** — `"staging write failed"`, `"could not build the staged log"`, `"new storage erase failed"`, `"reserved blob did not re-store"`, `"staged log copy failed"`, `"asset copy failed"`, `"asset regions overlap"`, `"partition table write failed"` — which retry on the next boot. Either way the device keeps working on its old table with its data intact. |
   | `blocked_need_bytes` | what the migration needed — or, for a mid-run flash failure, the first of the two flash offsets involved. |
   | `blocked_have_bytes` | what the new layout offers — or the second offset. |
 
   ```json
   "partitions":{"layout":"partitions.csv","migrated":false,
                 "ota_slot_bytes":1048576,"storage_bytes":1048576,"assets_bytes":983040,
+                "ceiling_bytes":4194304,
                 "migration_blocked":"pattern library too large for the new layout",
                 "blocked_need_bytes":245760,"blocked_have_bytes":225280}
+  ```
+
+  A 16 MB board whose bootloader was flashed for 4 MB, after it migrates to
+  the largest layout that bootloader can back. Nothing is blocked — it is
+  running the 4 MB layout correctly, with a 1.25 MiB OTA slot — and
+  `upgrade_available` is the whole difference between this and an ordinary
+  4 MB board:
+
+  ```json
+  "partitions":{"layout":"partitions.csv","migrated":true,
+                "ota_slot_bytes":1310720,"storage_bytes":524288,"assets_bytes":983040,
+                "ceiling_bytes":4194304,"upgrade_available":true}
   ```
 
 `GET /api/status` on the **mirror** carries `fps`, `pixels`, `max_pixels`,
@@ -412,7 +427,7 @@ passed), `live`, `vmerr`, and `partitions` — **no `src`, `bc`, `web`, or the
 `*_us` stage timers.** Its `partitions` is the honest answer for a host with
 no flash rather than an omission, so no client has to handle two shapes:
 `{"layout":"native","migrated":true,"ota_slot_bytes":0,"storage_bytes":0,
-"assets_bytes":0}`.
+"assets_bytes":0,"ceiling_bytes":0}`.
 The two heap flags are how the playground's capacity warning is exercised
 without hardware: `--heap-free` impersonates a device with that much free, and
 `--engine-heap` a device with that much of it about to be handed back by the
@@ -1087,6 +1102,15 @@ At most `PIN_MAX_BATCH` writes per request.
   (docs/firmware.md, "Layout migration") answering for itself, because
   after #501 a normal release image may be up to 1.25 MiB and "it just
   failed" would be a mystery on exactly the devices with no serial console.
+  A third case since Gitea #634: a 16 MB board running the 4 MB **fallback**
+  layout because its bootloader was flashed for a smaller part has a
+  1.25 MiB slot, not the 3 MiB its nominal table would give — so an image
+  built for the big slot is refused with "its bootloader was flashed for a
+  smaller part … re-flash the bootloader over serial to unlock the full
+  one". The slot size always comes from the table **on flash**
+  (`partitions.ota_slot_bytes`), never from the one the image was built
+  with; `tools/image-check.sh` gates the release against the NOMINAL slot,
+  so on that board the two tiers differ and docs/boards.md tracks both.
 - `POST /api/assets` streams the web-app archive into the assets flash region
   and hot-reloads the TOC — **no reboot**. A serial flash leaves this partition
   stale, so follow one with `tools/deploy.sh <ip> --assets-only`.

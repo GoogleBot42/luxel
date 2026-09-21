@@ -116,6 +116,33 @@ The 16 MB layout
 table encoding and the host store move); it needs no emulator and runs in a
 second, so both are kept.
 
+The bootloader ceiling, and the two-hop board
+---------------------------------------------
+
+    --old-bootloader 4mb   stamp the composed image's BOOTLOADER header for a
+                  smaller part.  `g_rom_flashchip.chip_size` comes from that
+                  header and an OTA never replaces the bootloader, so this is
+                  the Seengreat as found on 2026-09-21 (Gitea #634): 16 MB of
+                  silicon whose ROM bounds-checks every flash op at 4 MB and
+                  whose bootloader would refuse to BOOT under a table reaching
+                  past it.  The device does not refuse to migrate — it takes
+                  the largest embedded layout that fits under the ceiling,
+                  which is `partitions.csv`, through the identical code the
+                  Athom ran — and narrates the ceiling on every boot.  Works
+                  with `--from` and `--cut`, because the fallback is an
+                  ordinary migration in every other respect.
+
+    --reflash-bootloader 16mb   then restamp that header on the SAME flash and
+                  boot again: Jeremy's one-time serial re-flash.  The ceiling
+                  rises, `parttab::target_table` answers with the board's own
+                  table, and the migrator runs a SECOND time — storage
+                  0x290000 -> 0x610000, assets 0x310000 -> 0xa10000, staged in
+                  the 4 MB layout's ota_1 rather than the pre-#501 one.  This
+                  is the variant that proves `migrated: true` never means
+                  "stop looking"; a board that fell back once and then stuck
+                  on the small table forever is the failure this design is
+                  built to avoid.
+
 QEMU quirks you will see in the log: the SW_RESET boot that `software_reset()`
 triggers dies partway through the ROM banner, the TG0 watchdog fires, and
 *that* reset is the one that actually loads the app. It happens before the
@@ -134,6 +161,10 @@ Usage:
     nix build .#luxel-fw-seengreat-hub75 --out-link result-s3
     nix develop -c python3 tools/qemu/migrate-test.py --board s3
     nix develop -c python3 tools/qemu/migrate-test.py --board s3 --from ota_1
+    nix develop -c python3 tools/qemu/migrate-test.py --board s3 \
+        --old-bootloader 4mb
+    nix develop -c python3 tools/qemu/migrate-test.py --board s3 \
+        --old-bootloader 4mb --reflash-bootloader 16mb
 
 Exit 0 with a PASS summary listing every assertion; nonzero on the first
 failure, with a tail of the serial log.
@@ -201,10 +232,15 @@ OLD_OTA0 = 0x10000
 OLD_OTA1 = 0x110000
 OLD_STORAGE = 0x210000
 OLD_STORAGE_LEN = 0x100000
-# The 4 MB layout this image embeds (firmware/partitions.csv).
+# The 4 MB layout (firmware/partitions.csv) — what every board but the
+# Seengreat embeds, and what the Seengreat FALLS BACK to when its bootloader
+# cannot back the big table (Gitea #634).  `NEW_STORAGE`/`NEW_STORAGE_LEN`
+# are rebound per run by `select_board`; these two never move.
 NEW_OTA0 = 0x10000
-NEW_STORAGE = 0x290000
-NEW_STORAGE_LEN = 0x80000
+NEW_STORAGE_4MB = 0x290000
+NEW_STORAGE_LEN_4MB = 0x80000
+NEW_STORAGE = NEW_STORAGE_4MB
+NEW_STORAGE_LEN = NEW_STORAGE_LEN_4MB
 # Unchanged across the migration, which is the 4 MB layout's entire point.
 ASSETS = 0x310000
 ASSETS_LEN = 0xF0000
@@ -319,6 +355,12 @@ NEW_ROWS_16MB = [
 NEW_ROWS = NEW_ROWS_4MB
 MACHINE = "esp32"
 TABLE_NAME = "partitions.csv"
+# The board's OWN table — the one its merged image carries at 0x8000, which
+# is what `check_encoder` weighs the hand-rolled encoder against.  It is the
+# same as NEW_ROWS except in `--fallback`, where the device deliberately
+# migrates to the SMALLER layout its bootloader can back.
+NOMINAL_ROWS = NEW_ROWS_4MB
+NOMINAL_TABLE_NAME = "partitions.csv"
 
 
 def check_encoder(merged: bytes, c: Checks) -> bytes:
@@ -333,16 +375,21 @@ def check_encoder(merged: bytes, c: Checks) -> bytes:
     OLD table below it was encoded by the same code and is equally real.
     """
     truth = merged[TABLE_OFFSET:TABLE_OFFSET + TABLE_LEN]
-    mine = part_table(NEW_ROWS)
+    mine = part_table(NOMINAL_ROWS)
     c.require(mine == truth,
-              f"encoder: hand-built {TABLE_NAME} byte-equals esp-idf-part's",
+              f"encoder: hand-built {NOMINAL_TABLE_NAME} byte-equals esp-idf-part's",
               f"first differing byte at {first_diff(mine, truth)}\n"
               f"  mine  {mine[:32].hex()}…\n  truth {truth[:32].hex()}…")
     tail = merged[TABLE_OFFSET + TABLE_LEN:TABLE_OFFSET + SECTOR]
     c.require(tail == b"\xff" * len(tail),
               "encoder: the table is exactly 0x100 B, the rest of the sector erased",
               f"first non-0xFF at {first_diff(tail, b'\xff' * len(tail))}")
-    return truth
+    if NEW_ROWS is NOMINAL_ROWS:
+        return truth
+    # `--fallback`: the target is the OTHER embedded layout, so the expected
+    # post-migration bytes are hand-built — licensed by the check just above,
+    # which proved this encoder reproduces esp-idf-part exactly.
+    return part_table(NEW_ROWS)
 
 
 def otadata_note() -> str:
@@ -515,6 +562,11 @@ M_START = "migrate: partition table on flash is an older Luxel layout — moving
 M_REBOOT_OTA0 = "migrate: rebooting into ota_0 to free the staging slot"
 M_ALREADY = f"migrate: image already at {NEW_OTA0:#x}"
 M_ERASING = f"migrate: new storage {NEW_STORAGE:#x} + {NEW_STORAGE_LEN // 1024} KiB — erasing"
+# The every-boot line a board behind an older bootloader prints (migrate.rs'
+# boot snapshot) — the serial face of `/api/status`' `upgrade_available`.
+M_UPGRADE = ("partitions: this board's BOOTLOADER caps flash at {have} B of the "
+             "{cap} B the chip holds, so {target} is the largest layout it can "
+             "boot — re-flash the bootloader over serial to unlock {nominal}")
 M_RELOCATED = "migrate: store relocated"
 M_ASSETS_STAY = f"migrate: assets stay at {ASSETS:#x} — nothing to move"
 M_ASSETS_MOVE = f"migrate: moving assets {ASSETS:#x} → {NEW_ASSETS:#x}"
@@ -522,7 +574,12 @@ M_INSTALLING = "migrate: installing the new partition table"
 M_INSTALLED = "migrate: partition table installed — rebooting into the new layout"
 M_BLOCKED_OVERFILL = ("migrate: BLOCKED — pattern library too large for the new layout"
                       f" (need {{need}} B, have {NEW_LOG_LEN} B)")
-# The refusal a device whose BOOTLOADER predates its table has to produce.
+# The refusal a device whose BOOTLOADER predates its table produces when it
+# embeds NO layout that fits under the ceiling.  Since Gitea #634 the 16 MB
+# board also embeds the 4 MB table, so this is what must NOT appear there —
+# the board falls back instead of refusing.  (It stays reachable in principle:
+# a part smaller than the 4 MB layout, which no bootloader could boot far
+# enough to reach anyway, so it has no emulated fixture.)
 M_BLOCKED_BOOTLOADER = ("migrate: BLOCKED — bootloader was flashed for a smaller part"
                         " — reflash it over serial (need {need} B, have {have} B)")
 
@@ -570,7 +627,7 @@ ABORT_HINTS = {
 DONE_MARKER = f"(storage @ {NEW_STORAGE:#x})"
 
 
-def select_board(board: str) -> None:
+def select_board(board: str, target: str | None = None) -> None:
     """Point every layout-dependent constant above at `board`'s tables.
 
     The two boards run the SAME migrator over different geometry — migrate.rs
@@ -578,19 +635,38 @@ def select_board(board: str) -> None:
     the numbers swapped.  Rebinding module globals here rather than threading
     a layout object through thirty call sites keeps that symmetry visible and
     the diff against the 4 MB original readable.
+
+    `target` names the layout the device is expected to END UP on when that is
+    not the board's own — `"partitions.csv"` on the 16 MB board is the
+    FALLBACK case (Gitea #634): 16 MB of silicon behind a bootloader flashed
+    for 4 MB, which can back the small table and not the big one.  The board's
+    nominal table stays in `NOMINAL_ROWS`, because that is still what its
+    merged image carries at 0x8000 and what the encoder is checked against.
     """
     global BOARD, MACHINE, FLASH_SIZE, NEW_ROWS, NEW_STORAGE, NEW_STORAGE_LEN
     global NEW_ASSETS, NEW_LOG_LEN, TABLE_NAME
+    global NOMINAL_ROWS, NOMINAL_TABLE_NAME
     global M_START, M_ERASING, M_ASSETS_STAY, M_ASSETS_MOVE, M_BLOCKED_OVERFILL
     global DONE_MARKER
     BOARD = BOARDS[board]
     MACHINE = BOARD["machine"]
-    TABLE_NAME = BOARD["table"]
     FLASH_SIZE = BOARD["flash"]
-    NEW_ROWS = NEW_ROWS_16MB if board == "s3" else NEW_ROWS_4MB
-    NEW_STORAGE = BOARD["storage"]
-    NEW_STORAGE_LEN = BOARD["storage_len"]
-    NEW_ASSETS = BOARD["new_assets"]
+    NOMINAL_TABLE_NAME = BOARD["table"]
+    NOMINAL_ROWS = NEW_ROWS_16MB if board == "s3" else NEW_ROWS_4MB
+    if target in (None, NOMINAL_TABLE_NAME):
+        TABLE_NAME = NOMINAL_TABLE_NAME
+        NEW_ROWS = NOMINAL_ROWS
+        NEW_STORAGE = BOARD["storage"]
+        NEW_STORAGE_LEN = BOARD["storage_len"]
+        NEW_ASSETS = BOARD["new_assets"]
+    elif target == "partitions.csv":
+        TABLE_NAME = target
+        NEW_ROWS = NEW_ROWS_4MB
+        NEW_STORAGE = NEW_STORAGE_4MB
+        NEW_STORAGE_LEN = NEW_STORAGE_LEN_4MB
+        NEW_ASSETS = ASSETS          # the 4 MB layout leaves the bundle put
+    else:
+        raise Fail(f"no embedded layout called {target!r}")
     NEW_LOG_LEN = NEW_STORAGE_LEN - LOG_AT
     M_START = ("migrate: partition table on flash is an older Luxel layout — "
                f"moving to {TABLE_NAME}")
@@ -764,8 +840,14 @@ def stop_on_stage(stage: int, staging_at: int):
 
 
 def check_serial(log: str, from_slot: str, ota_len: int, side: dict,
-                 c: Checks, resume_stage: int | None = None) -> None:
+                 c: Checks, resume_stage: int | None = None,
+                 old_ota1: int = OLD_OTA1) -> None:
     """The migrator's narration for this variant.
+
+    `old_ota1` is the LIVE table's ota_1 — the slot the migrator stages into
+    and, for `--from ota_1`, the one it copies itself out of. It is the
+    pre-#501 0x110000 for a first migration and the 4 MB layout's 0x150000
+    for the second hop of a chained one (Gitea #634).
 
     `resume_stage` is the stage the `LXMG` staging header recorded when the
     plug came out — read off the FLASH after the cut, not inferred from the
@@ -790,7 +872,7 @@ def check_serial(log: str, from_slot: str, ota_len: int, side: dict,
               "patterns::init did not resolve the old storage partition — "
               "regenerate the fixture with tools/storegen")
 
-    copy_line = f"migrate: copying {ota_len} B {OLD_OTA1:#x} → {NEW_OTA0:#x}"
+    copy_line = f"migrate: copying {ota_len} B {old_ota1:#x} → {NEW_OTA0:#x}"
     if from_slot == "ota_1" and resume_stage is None:
         c.line(before, copy_line, "migrate")
         # copy_region narrates every 64th sector; the LAST such line is the
@@ -817,7 +899,7 @@ def check_serial(log: str, from_slot: str, ota_len: int, side: dict,
                   "migrate.rs took the interrupted-copy branch unexpectedly")
 
     stage_line = (f"migrate: staging {len(side['patterns'])} live pattern(s), "
-                  f"{side['staged_bytes']} B of log → {OLD_OTA1 + SECTOR:#x} "
+                  f"{side['staged_bytes']} B of log → {old_ota1 + SECTOR:#x} "
                   f"(new log holds {NEW_LOG_LEN} B)")
     if resume_stage:
         c.line(before, f"migrate: resuming at stage {resume_stage} "
@@ -968,7 +1050,8 @@ def check_otadata(flash: bytes, c: Checks) -> None:
 
 
 def check_store(flash_path: str, store_bin: str, sidecar: str, workdir: str,
-                c: Checks) -> None:
+                c: Checks, pre_len: int | None = None,
+                tag: str = "store-modelled.bin") -> None:
     """Hand the post-run image to the host verifier: every reserved blob byte
     identical, every live pattern present with byte-identical source and
     bytecode, no dead records, nothing extra.
@@ -989,9 +1072,10 @@ def check_store(flash_path: str, store_bin: str, sidecar: str, workdir: str,
         if line.startswith("  ok  "):
             c.ok(line[6:])
 
-    modelled = os.path.join(workdir, "store-modelled.bin")
+    modelled = os.path.join(workdir, tag)
     storegen("migrate", "--pre", store_bin, "--sidecar", sidecar,
-             "--new-len", hex(NEW_STORAGE_LEN), "--out", modelled)
+             "--new-len", hex(NEW_STORAGE_LEN), "--out", modelled,
+             *(("--pre-len", hex(pre_len)) if pre_len else ()))
     with open(modelled, "rb") as f:
         want = f.read()
     with open(flash_path, "rb") as f:
@@ -1198,7 +1282,19 @@ def main(argv: list[str] | None = None) -> int:
                          "this flash size — i.e. a device serially flashed "
                          "before its table grew. `--board s3 "
                          "--old-bootloader 4mb` is the Seengreat as found on "
-                         "2026-09-21 (Gitea #634); the migration must refuse")
+                         "2026-09-21 (Gitea #634): 16 MB of silicon behind a "
+                         "4 MB bootloader, which migrates to the LARGEST "
+                         "layout that bootloader can back — partitions.csv — "
+                         "and says so. Works with --from and --cut")
+    ap.add_argument("--reflash-bootloader", choices=tuple(BOOTLOADER_FLASH_NIBBLE),
+                    help="after the first migration completes, restamp the "
+                         "BOOTLOADER header to this size on the SAME flash "
+                         "and boot again — i.e. Jeremy's one-time serial "
+                         "re-flash. `--board s3 --old-bootloader 4mb "
+                         "--reflash-bootloader 16mb` is the whole Seengreat "
+                         "story: fall back to partitions.csv now, then "
+                         "migrate AGAIN to partitions-16mb.csv (store "
+                         "0x290000 -> 0x610000, assets 0x310000 -> 0xa10000)")
     ap.add_argument("--plan-16mb", action="store_true",
                     help="assertion-only coverage of the 16 MB layout (no "
                          "emulation — see plan_16mb's docstring)")
@@ -1207,7 +1303,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--timeout", type=float, default=600.0,
                     help="overall boot timeout in seconds (default 600)")
     args = ap.parse_args(argv)
-    select_board(args.board)
+    # Which layout the device can actually reach on the first boot: the
+    # board's own, unless a stamped-down bootloader cannot back it, in which
+    # case parttab::target_table picks the largest embedded one that fits.
+    target = None
+    if args.old_bootloader:
+        nominal = NEW_ROWS_16MB if args.board == "s3" else NEW_ROWS_4MB
+        if max(r[2] + r[3] for r in nominal) > BOOTLOADER_FLASH_SIZE[args.old_bootloader]:
+            target = "partitions.csv"
+    select_board(args.board, target)
     if args.cut == "copy" and args.from_slot != "ota_1":
         ap.error("--cut copy needs --from ota_1 (there is no self-copy otherwise)")
     if args.cut and args.cut != "copy" and args.from_slot != "ota_0":
@@ -1215,13 +1319,27 @@ def main(argv: list[str] | None = None) -> int:
                  "reboot would land the re-run in ota_0 anyway")
     if args.overfill and (args.cut or args.from_slot != "ota_0"):
         ap.error("--overfill is its own variant; it takes no --cut/--from")
-    if args.old_bootloader and (args.cut or args.overfill):
-        ap.error("--old-bootloader is a refusal variant; it takes no "
-                 "--cut/--overfill")
+    if args.old_bootloader and args.overfill:
+        ap.error("--old-bootloader picks a smaller TARGET; --overfill is "
+                 "about the store not fitting one. Run them separately")
     if args.old_bootloader and args.board == "athom":
-        ap.error("--old-bootloader only bites where the new table runs past "
-                 "the old ceiling, i.e. --board s3 (the 4 MB table fits any "
-                 "part that ever ran Luxel)")
+        ap.error("--old-bootloader only bites where the board's table runs "
+                 "past the stamped ceiling, i.e. --board s3 (the 4 MB table "
+                 "fits any part that ever ran Luxel)")
+    if args.reflash_bootloader:
+        if not args.old_bootloader:
+            ap.error("--reflash-bootloader is the SECOND half of an "
+                     "--old-bootloader run; there is nothing to re-flash "
+                     "otherwise")
+        if target is None:
+            ap.error(f"--old-bootloader {args.old_bootloader} already backs "
+                     "this board's own table, so the first migration lands "
+                     "on it and there is no second hop")
+        if (max(r[2] + r[3] for r in NOMINAL_ROWS)
+                > BOOTLOADER_FLASH_SIZE[args.reflash_bootloader]):
+            ap.error(f"--reflash-bootloader {args.reflash_bootloader} still "
+                     f"cannot back {NOMINAL_TABLE_NAME}; the second migration "
+                     "would not happen")
 
     workdir = args.workdir or tempfile.mkdtemp(prefix="luxel-migrate-")
     os.makedirs(workdir, exist_ok=True)
@@ -1252,7 +1370,10 @@ def label(args: argparse.Namespace) -> str:
         return "plan-16mb"
     tag = f"{args.board} " if args.board != "athom" else ""
     if args.old_bootloader:
-        return f"{tag}old-bootloader:{args.old_bootloader}"
+        tag += f"bootloader:{args.old_bootloader}"
+        if args.reflash_bootloader:
+            tag += f"->{args.reflash_bootloader}"
+        tag += " "
     if args.overfill:
         return tag + "overfill"
     return tag + args.from_slot + (f" cut:{args.cut}" if args.cut else "")
@@ -1348,14 +1469,23 @@ def run(args: argparse.Namespace, workdir: str, log: str) -> int:
     blocked = None
     if args.overfill:
         blocked = M_BLOCKED_OVERFILL.format(need=side["staged_bytes"])
-    elif args.old_bootloader:
-        need = max(r[2] + r[3] for r in NEW_ROWS)
+    upgrade_line = None
+    if args.old_bootloader:
+        # The fixture only means something if the stamped ceiling really does
+        # exclude the board's own table and really does admit the fallback —
+        # otherwise the run would quietly become an ordinary migration.
+        nominal_need = max(r[2] + r[3] for r in NOMINAL_ROWS)
+        target_need = max(r[2] + r[3] for r in NEW_ROWS)
         have = BOOTLOADER_FLASH_SIZE[args.old_bootloader]
-        c.require(need > have,
-                  f"fixture: {TABLE_NAME} needs {need} B and the stamped "
-                  f"bootloader offers {have} B, so the refusal is reachable",
-                  "this bootloader size already covers the new table")
-        blocked = M_BLOCKED_BOOTLOADER.format(need=need, have=have)
+        c.require(nominal_need > have >= target_need,
+                  f"fixture: the stamped bootloader offers {have} B — too "
+                  f"little for {NOMINAL_TABLE_NAME} ({nominal_need} B), enough "
+                  f"for {TABLE_NAME} ({target_need} B), so the FALLBACK is "
+                  "what is under test",
+                  f"{have} B against {nominal_need}/{target_need} B")
+        upgrade_line = M_UPGRADE.format(have=have, cap=FLASH_SIZE,
+                                        target=TABLE_NAME,
+                                        nominal=NOMINAL_TABLE_NAME)
     if blocked:
         print(f"   booting (expecting: {blocked})…")
         text, dt, _ = run_qemu(
@@ -1462,6 +1592,19 @@ def run(args: argparse.Namespace, workdir: str, log: str) -> int:
     total += dt
     print(f"   migrated and rebooted in {dt:.1f}s wall")
 
+    if upgrade_line:
+        # Before AND after: the ceiling is a standing fact about the board,
+        # so migrate.rs' boot snapshot prints it on every boot — which is
+        # what lets `/api/status` keep answering `upgrade_available: true`
+        # on a device that is now fully migrated to the smaller layout.
+        before, after = text.split(M_INSTALLED, 1)
+        c.line(before, upgrade_line, "migrate")
+        c.line(after, upgrade_line, "after")
+        c.require(M_BLOCKED_BOOTLOADER.split(" (need")[0] not in text,
+                  "serial[migrate]: the bootloader ceiling did NOT block the "
+                  "migration — it selected a smaller layout instead",
+                  "the board refused rather than falling back (Gitea #634)")
+
     # Every cut re-runs from ota_0: `copy` erases otadata before the plug comes
     # out, and the others never left it.
     slot_for_serial = "ota_0" if args.cut else args.from_slot
@@ -1478,10 +1621,88 @@ def run(args: argparse.Namespace, workdir: str, log: str) -> int:
     check_flash(written, composed, expected_table, app, c)
     check_store(flash, store_bin, sidecar, workdir, c)
 
+    if args.reflash_bootloader:
+        total += phase_two(args, workdir, qemu, efuse, flash, composed, ota,
+                           app, store_bin, sidecar, side, c)
+
     print(f"\nPASS [{label(args)}] — {len(c.passed)} assertions in {total:.1f}s")
     for a in c.passed:
         print(f"  ok  {a}")
     return 0
+
+
+def phase_two(args: argparse.Namespace, workdir: str, qemu: str, efuse: str,
+              flash: str, composed: bytes, ota: bytes, app: bytes,
+              store_bin: str, sidecar: str, side: dict, c: Checks) -> float:
+    """Jeremy re-flashes the bootloader, and the device migrates AGAIN.
+
+    The first half of this run left a 16 MB board fully migrated to the 4 MB
+    layout because that is the largest one its bootloader could back.  Here
+    that bootloader is replaced — one byte of its image header, the same
+    nibble `compose` stamped down, which is exactly what
+    `firmware/build-esp32.sh flash` rewrites over serial — and the SAME flash
+    is booted again.  `parttab::target_table` now answers with the board's own
+    table, `migrated` goes back to false, and the migrator runs a second time:
+    storage 0x290000 -> 0x610000, assets 0x310000 -> 0xa10000, staged in the
+    4 MB layout's ota_1 (0x150000) rather than the pre-#501 one.
+
+    This is the half that proves `migrated: true` never becomes "stop
+    looking" — the failure mode this whole ticket exists to avoid is a board
+    that falls back once and is then stuck on the small table forever.
+    """
+    # The LIVE table for this hop is the one the first migration installed.
+    live_rows = {r[4]: r for r in NEW_ROWS}
+    live_ota1 = live_rows["ota_1"][2]
+    live_storage, live_storage_len = live_rows["storage"][2], live_rows["storage"][3]
+    # Lift the store the first hop produced out of flash: it is the SOURCE
+    # the host model has to reproduce this hop from.
+    pre2 = os.path.join(workdir, "store-4mb.bin")
+    with open(flash, "rb") as f:
+        f.seek(live_storage)
+        with open(pre2, "wb") as g:
+            g.write(f.read(live_storage_len))
+
+    # Re-point every layout constant at the board's OWN table…
+    select_board(args.board, None)
+    # …and re-flash the bootloader in place.
+    boot_at = BOARD["bootloader"]
+    with open(flash, "r+b") as f:
+        f.seek(boot_at + 3)
+        b = f.read(1)[0]
+        f.seek(boot_at + 3)
+        f.write(bytes([(b & 0x0F) | (BOOTLOADER_FLASH_NIBBLE[args.reflash_bootloader] << 4)]))
+    print(f"\n   -- bootloader re-flashed for {args.reflash_bootloader} "
+          f"(header nibble at {boot_at + 3:#x}) — booting again --")
+    print(f"   layout    : {TABLE_NAME}, storage {NEW_STORAGE:#x} + "
+          f"{NEW_STORAGE_LEN // 1024} KiB, assets -> {NEW_ASSETS:#x}")
+
+    log2 = os.path.join(workdir, "serial-phase2.log")
+    text, dt, _ = run_qemu(qemu, flash, efuse, log2, args.timeout,
+                           stop=stop_on_done, poll=0.05)
+    print(f"   migrated again and rebooted in {dt:.1f}s wall")
+
+    # The ceiling is gone, so the nag must be too — on BOTH boots of this
+    # phase, the migrating one and the one that came back on the big table.
+    c.require("re-flash the bootloader over serial to unlock" not in text,
+              "serial[phase2]: the upgrade nag is gone — the re-flashed "
+              "bootloader backs this board's own layout",
+              "migrate.rs still reports upgrade_available after the re-flash")
+    check_serial(text, "ota_0", len(ota), side, c, old_ota1=live_ota1)
+
+    with open(flash, "rb") as f:
+        written = f.read()
+    # Licensed by check_encoder's run in phase one: the same encoder built
+    # the table that byte-equals esp-idf-part's output for this board.
+    check_flash(written, composed, part_table(NEW_ROWS), app, c)
+    check_store(flash, pre2, sidecar, workdir, c, pre_len=live_storage_len,
+                tag="store-modelled-16mb.bin")
+    # The abandoned 4 MB `storage` is now inside the new ota_1; nothing reads
+    # it again, and nothing is expected to have cleaned it up either.
+    c.require(NEW_STORAGE != live_storage and NEW_ASSETS != ASSETS,
+              f"phase2: both regions really moved — storage {live_storage:#x} "
+              f"-> {NEW_STORAGE:#x}, assets {ASSETS:#x} -> {NEW_ASSETS:#x}",
+              "the second hop was a no-op")
+    return dt
 
 
 if __name__ == "__main__":

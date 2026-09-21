@@ -1,11 +1,20 @@
-//! Self-applied partition-layout migration (Gitea #501).
+//! Self-applied partition-layout migration (Gitea #501, #634).
 //!
 //! A device flashed before #501 runs the 1 MiB-slot table. This image
-//! embeds a different one ([crate::parttab::EMBEDDED]). On the first boot
-//! of the *migrating release* this module notices the difference, moves
-//! the device's data into the new layout, installs the new table and
-//! reboots — so no device needs Jeremy's hands on a serial port, which is
-//! the whole point: nothing on the bench has a serial path today.
+//! embeds a different one. On the first boot of the *migrating release*
+//! this module notices the difference, moves the device's data into the
+//! new layout, installs the new table and reboots — so no device needs
+//! Jeremy's hands on a serial port, which is the whole point: nothing on
+//! the bench has a serial path today.
+//!
+//! It is **table-to-table**, not "old table to the one this image embeds":
+//! the source is whatever is on flash and the destination is whichever
+//! embedded table this board can actually back right now
+//! ([crate::parttab::target_table]). The two are not always the same
+//! layout twice running — see "The bootloader ceiling" below — so a device
+//! can migrate more than once over its life, and `migrated: true` on
+//! `/api/status` means "live == the best table available today", never
+//! "done forever".
 //!
 //! # What has to move
 //!
@@ -17,8 +26,29 @@
 //! | assets  | 0x310000 + 960 KiB     | UNCHANGED            | 0xA10000 + ~3.9 MiB |
 //!
 //! Every one of those numbers is read from a partition table — the live one
-//! for "old", [crate::parttab::EMBEDDED] for "new". This module contains no
-//! partition offsets.
+//! for "old", the selected target for "new". This module contains no
+//! partition offsets. The 4 MB → 16 MB hop in the last two columns is a
+//! real transition, not a hypothetical: it is what a Seengreat runs the
+//! second time, after its bootloader is re-flashed.
+//!
+//! # The bootloader ceiling
+//!
+//! `g_rom_flashchip.chip_size` comes from the BOOTLOADER's image header and
+//! an OTA replaces the app but never the bootloader, so a 16 MB board
+//! serially flashed while its table was still 4 MB has a ROM that
+//! bounds-checks every flash op at 4 MB — and a bootloader that would
+//! refuse to boot under a table reaching past it. The Seengreat panel is
+//! exactly that board (Gitea #634).
+//!
+//! Such a device does NOT refuse to migrate. It takes the largest embedded
+//! table that fits under `min(chip size, bootloader ceiling)` — on the
+//! Seengreat the 4 MB layout, byte-for-byte the one the Athom migrated to
+//! and through the same code — and reports `upgrade_available: true` so the
+//! playground can say that a one-time serial re-flash of the bootloader
+//! would unlock the 16 MB layout. After that re-flash the ceiling becomes
+//! 16 MB, the target becomes the big table, and this module runs a second
+//! time: storage 0x290000 → 0x610000, assets 0x310000 → 0xA10000, staged in
+//! the discarded slot exactly as the first hop was.
 //!
 //! The store's own geometry makes this a byte move rather than a format
 //! change: the key area is [crate::patterns::KEY_AREA_LEN] on every layout
@@ -85,7 +115,7 @@
 //! still retry on the next boot; they are now just visible while they do.
 
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
@@ -131,18 +161,21 @@ struct Hdr {
 }
 
 /// FNV-1a of the target table: a staging header only applies to the layout
-/// it was written for.
-fn target_tag() -> u32 {
-    patlog::fnv1a(parttab::EMBEDDED)
+/// it was written for. That keying is what makes a SECOND migration safe —
+/// the header a 16 MB board left behind when it moved to the 4 MB layout is
+/// tagged for that table, so the later 4 MB → 16 MB run ignores it and
+/// stages from scratch instead of "resuming" someone else's work.
+fn target_tag(target: &[u8]) -> u32 {
+    patlog::fnv1a(target)
 }
 
-fn read_hdr(at: u32) -> Option<Hdr> {
+fn read_hdr(at: u32, target: &[u8]) -> Option<Hdr> {
     let mut b = [0u8; HDR_WORDS * 4];
     if !crate::assets::read_chunk(at, &mut b) {
         return None;
     }
     let w = |i: usize| u32::from_le_bytes(b[i * 4..i * 4 + 4].try_into().unwrap());
-    if w(0) != HDR_MAGIC || w(1) != HDR_VER || w(4) != target_tag() {
+    if w(0) != HDR_MAGIC || w(1) != HDR_VER || w(4) != target_tag(target) {
         return None;
     }
     if w(5) != patlog::fnv1a(&b[..(HDR_WORDS - 1) * 4]) {
@@ -151,9 +184,9 @@ fn read_hdr(at: u32) -> Option<Hdr> {
     Some(Hdr { stage: w(2), log_bytes: w(3) })
 }
 
-fn write_hdr(at: u32, stage: u32, log_bytes: u32) -> bool {
+fn write_hdr(at: u32, stage: u32, log_bytes: u32, target: &[u8]) -> bool {
     let mut b = [0u8; HDR_WORDS * 4];
-    for (i, v) in [HDR_MAGIC, HDR_VER, stage, log_bytes, target_tag()]
+    for (i, v) in [HDR_MAGIC, HDR_VER, stage, log_bytes, target_tag(target)]
         .into_iter()
         .enumerate()
     {
@@ -173,8 +206,32 @@ fn write_hdr(at: u32, stage: u32, log_bytes: u32) -> bool {
 static LIVE_SLOT: AtomicU32 = AtomicU32::new(0);
 static LIVE_STORE: AtomicU32 = AtomicU32::new(0);
 static LIVE_ASSETS: AtomicU32 = AtomicU32::new(0);
+/// `min(chip size, bootloader ceiling)` — the highest flash offset this
+/// device can reach. Snapshotted with the rest: reading it costs a flash
+/// transaction, and it cannot change without a reboot either.
+static CEILING: AtomicU32 = AtomicU32::new(0);
+/// Which embedded layout the live table is: 0 = neither (still pre-#501),
+/// 1 = the board's nominal table, 2 = its smaller fallback. A `&'static str`
+/// would need a lock; the index is one byte and `push_status` maps it back.
+static LIVE_LAYOUT: AtomicU8 = AtomicU8::new(0);
+/// Is the live table the one [parttab::target_table] would install today?
+/// NOT "the table this image was built with": a 16 MB board behind a 4 MB
+/// bootloader is fully migrated while running the smaller layout, and
+/// becomes un-migrated again the moment its bootloader is re-flashed.
+static MIGRATED: AtomicBool = AtomicBool::new(false);
 
 fn snapshot(table: &[u8]) {
+    let (_, target) = parttab::target_table();
+    MIGRATED.store(table == target, Ordering::Relaxed);
+    CEILING.store(parttab::flash_ceiling(), Ordering::Relaxed);
+    LIVE_LAYOUT.store(
+        match parttab::live_layout_name(table) {
+            None => 0,
+            Some(n) if n == parttab::TABLE_NAME => 1,
+            Some(_) => 2,
+        },
+        Ordering::Relaxed,
+    );
     LIVE_SLOT.store(
         parttab::app_slot(table, parttab::SUBTYPE_OTA0).map(|p| p.len).unwrap_or(0),
         Ordering::Relaxed,
@@ -187,6 +244,22 @@ fn snapshot(table: &[u8]) {
         parttab::data_labelled(table, "assets").map(|p| p.len).unwrap_or(0),
         Ordering::Relaxed,
     );
+    // The one line a board behind an older bootloader prints, and it prints
+    // it on EVERY boot — before and after it takes the smaller layout —
+    // because the condition is a standing fact about the hardware, not an
+    // event. It is the serial counterpart of `/api/status`'
+    // `upgrade_available`, and dead code on a board with one layout.
+    if parttab::upgrade_available() {
+        println!(
+            "partitions: this board's BOOTLOADER caps flash at {} B of the {} B the chip \
+             holds, so {} is the largest layout it can boot — re-flash the bootloader over \
+             serial to unlock {} (Gitea #634)",
+            parttab::bootloader_flash_ceiling(),
+            parttab::chip_capacity(),
+            parttab::target_table().0,
+            parttab::TABLE_NAME
+        );
+    }
 }
 
 /// `,"partitions":{…}` for `/api/status` — what layout this device is
@@ -199,15 +272,33 @@ pub fn push_status(out: &mut alloc::string::String) {
         LIVE_ASSETS.load(Ordering::Relaxed),
     );
     push_piece(out, ",\"partitions\":{\"layout\":\"");
-    push_piece(out, parttab::TABLE_NAME);
+    // The layout the device is RUNNING, which on a board that embeds more
+    // than one is not necessarily the one this image was built with. A
+    // device still on the pre-#501 table has no name to report, so it keeps
+    // saying the target's — paired with `migrated: false`, as it always was.
+    push_piece(
+        out,
+        match LIVE_LAYOUT.load(Ordering::Relaxed) {
+            #[cfg(fallback_table)]
+            2 => parttab::FALLBACK_NAME,
+            _ => parttab::TABLE_NAME,
+        },
+    );
     push_piece(out, "\",\"migrated\":");
-    push_piece(out, if parttab::matches_flash() { "true" } else { "false" });
+    push_piece(out, if MIGRATED.load(Ordering::Relaxed) { "true" } else { "false" });
     push_piece(out, ",\"ota_slot_bytes\":");
     push_u32(out, slot);
     push_piece(out, ",\"storage_bytes\":");
     push_u32(out, store);
     push_piece(out, ",\"assets_bytes\":");
     push_u32(out, assets);
+    push_piece(out, ",\"ceiling_bytes\":");
+    push_u32(out, CEILING.load(Ordering::Relaxed));
+    // Absent means false. On a board with one embedded layout this whole
+    // branch — the string literal included — is dead code.
+    if parttab::upgrade_available() {
+        push_piece(out, ",\"upgrade_available\":true");
+    }
     let why = BLOCKED.lock(|c| *c.borrow());
     if !why.is_empty() {
         push_piece(out, ",\"migration_blocked\":\"");
@@ -227,7 +318,9 @@ pub fn push_status(out: &mut alloc::string::String) {
 /// already serving) and before anything that writes to it.
 ///
 /// No-op — one 3 KiB flash read — when the table on flash is already the
-/// one this image embeds, which is every boot after the first.
+/// best one this board can install, which is every boot after the last
+/// migration. "Best" and "the one this image embeds" are the same thing on
+/// every board but a 16 MB one behind an older bootloader (Gitea #634).
 pub fn maybe_migrate() {
     let Some(live) = parttab::live_table() else { return };
     snapshot(&live);
@@ -240,7 +333,13 @@ pub fn maybe_migrate() {
     if cfg!(feature = "migrate-off") {
         return;
     }
-    if live == parttab::EMBEDDED {
+    // The destination: the LARGEST embedded layout this board can back
+    // today. Deliberately not "the table this image was built with" — a
+    // device already on a smaller fallback must still be able to move up
+    // when its bootloader ceiling rises, so `migrated: true` is never
+    // allowed to mean "stop looking".
+    let (target_name, target) = parttab::target_table();
+    if live == target {
         return;
     }
     // A FOREIGN table (WLED's, or anything that is not ours) is the
@@ -251,29 +350,30 @@ pub fn maybe_migrate() {
     }
     println!(
         "migrate: partition table on flash is an older Luxel layout — moving to {}",
-        parttab::TABLE_NAME
+        target_name
     );
-
     // Never write a table this BOARD cannot back — the chip has to be big
     // enough AND the bootloader has to accept a table that reaches that
-    // far, which on the Seengreat it did not (Gitea #634). Either way the
-    // result of getting it wrong is a board that will not boot and has no
-    // serial console, so this is the one check that runs before any other.
-    if let Some((why, need, have)) = parttab::flash_refusal(parttab::EMBEDDED) {
+    // far, which on the Seengreat it did not (Gitea #634). `target_table`
+    // has already preferred a smaller layout where one fits, so reaching a
+    // refusal here means nothing this image embeds fits at all. Either way
+    // the result of getting it wrong is a board that will not boot and has
+    // no serial console, so this is the one check that runs before any other.
+    if let Some((why, need, have)) = parttab::flash_refusal(target) {
         block(why, need, have);
         return;
     }
 
     let (Some(old_store), Some(new_store)) = (
         parttab::data_labelled(&live, "storage"),
-        parttab::data_labelled(parttab::EMBEDDED, "storage"),
+        parttab::data_labelled(target, "storage"),
     ) else {
         block("no storage partition", 0, 0);
         return;
     };
     let (Some(old_ota1), Some(new_ota0)) = (
         parttab::app_slot(&live, parttab::SUBTYPE_OTA1),
-        parttab::app_slot(parttab::EMBEDDED, parttab::SUBTYPE_OTA0),
+        parttab::app_slot(target, parttab::SUBTYPE_OTA0),
     ) else {
         block("no OTA slots", 0, 0);
         return;
@@ -290,7 +390,7 @@ pub fn maybe_migrate() {
     // Reading the staging header first is safe under either slot: if we are
     // executing out of the staging slot, the read finds our own image rather
     // than an LXMG header and correctly reports "not staged".
-    let hdr = read_hdr(staging.offset);
+    let hdr = read_hdr(staging.offset, target);
     let resuming = hdr.as_ref().is_some_and(|h| h.stage >= S_STAGED);
     let plan = if resuming {
         // The old log is already gone or going; re-planning it would be
@@ -308,6 +408,18 @@ pub fn maybe_migrate() {
     if !settle_into_ota0(&live, new_ota0) {
         return; // rebooted, or aborted with the old table intact
     }
+    // …and the staging area must start past the image we are now executing.
+    // On every shipped transition it does by arithmetic (staging is the LIVE
+    // ota_1, one live slot above the live ota_0, and a running image had to
+    // fit that slot) — but "by arithmetic" now depends on WHICH pair of
+    // tables, and a device can take more than one hop. Check it instead of
+    // arguing it: an unreadable header is not proof of anything, so only a
+    // positive overlap refuses.
+    if parttab::image_len(new_ota0.offset).is_some_and(|len| new_ota0.offset + len > staging.offset)
+    {
+        block("staging area overlaps the running image", new_ota0.offset, staging.offset);
+        return;
+    }
 
     // 3 — stage (or resume).
     let log_bytes = match hdr {
@@ -315,12 +427,12 @@ pub fn maybe_migrate() {
             println!("migrate: resuming at stage {} ({} B of log staged)", h.stage, h.log_bytes);
             h.log_bytes
         }
-        _ => match plan.and_then(|p| stage_log(staging, p, new_log_len)) {
+        _ => match plan.and_then(|p| stage_log(staging, p, new_log_len, target)) {
             Some(n) => n,
             None => return, // blocked or failed; old table untouched
         },
     };
-    let stage = read_hdr(staging.offset).map(|h| h.stage).unwrap_or(S_NONE);
+    let stage = read_hdr(staging.offset, target).map(|h| h.stage).unwrap_or(S_NONE);
     if stage < S_STAGED {
         block("staging header did not stick", 0, 0);
         return;
@@ -333,20 +445,20 @@ pub fn maybe_migrate() {
             println!("migrate: store relocation failed — old table intact, will retry next boot");
             return;
         }
-        if !write_hdr(staging.offset, S_STORED, log_bytes) {
+        if !write_hdr(staging.offset, S_STORED, log_bytes, target) {
             block("staging header write failed", 0, 0);
             return;
         }
     }
 
     // 5 — assets (16 MB layout only; the 4 MB one keeps the offset).
-    if read_hdr(staging.offset).map(|h| h.stage).unwrap_or(S_NONE) < S_ASSETS {
-        if !move_assets(&live) {
+    if read_hdr(staging.offset, target).map(|h| h.stage).unwrap_or(S_NONE) < S_ASSETS {
+        if !move_assets(&live, target) {
             // move_assets has already recorded WHICH step failed.
             println!("migrate: asset move failed — old table intact, will retry next boot");
             return;
         }
-        if !write_hdr(staging.offset, S_ASSETS, log_bytes) {
+        if !write_hdr(staging.offset, S_ASSETS, log_bytes, target) {
             block("staging header write failed", 0, 0);
             return;
         }
@@ -354,7 +466,7 @@ pub fn maybe_migrate() {
 
     // 6 — the point of no return.
     println!("migrate: installing the new partition table");
-    if !parttab::install(parttab::EMBEDDED, "migrate") {
+    if !parttab::install(target, "migrate") {
         block("partition table write failed", parttab::TABLE_OFFSET, 0);
         return;
     }
@@ -503,12 +615,18 @@ fn plan_log(staging: Part, new_log_len: u32) -> Option<(Vec<patlog::Rec>, Vec<pa
 /// length in bytes, or None on a flash failure (the OLD store is untouched
 /// either way — this only ever reads it).
 ///
-/// Safe against the image we are executing from by construction: staging
-/// starts at the OLD ota_1 offset, which is one old slot above ota_0, and a
-/// running image had to fit that old slot — so it ends at or below the
-/// staging header's sector and the two never meet. [settle_into_ota0] has
-/// already guaranteed we are running from ota_0 by the time this is called.
-fn stage_log(staging: Part, plan: (Vec<patlog::Rec>, Vec<patlog::Place>, u32), new_log_len: u32) -> Option<u32> {
+/// Safe against the image we are executing from: staging starts at the LIVE
+/// ota_1 offset, which is one live slot above ota_0, and a running image had
+/// to fit that slot — so it ends at or below the staging header's sector and
+/// the two never meet. [maybe_migrate] asserts that rather than assuming it,
+/// and [settle_into_ota0] has already guaranteed we are running from ota_0
+/// by the time this is called.
+fn stage_log(
+    staging: Part,
+    plan: (Vec<patlog::Rec>, Vec<patlog::Place>, u32),
+    new_log_len: u32,
+    target: &[u8],
+) -> Option<u32> {
     let (recs, places, bytes) = plan;
     println!(
         "migrate: staging {} live pattern(s), {} B of log → {:#x} (new log holds {} B)",
@@ -535,7 +653,7 @@ fn stage_log(staging: Part, plan: (Vec<patlog::Rec>, Vec<patlog::Place>, u32), n
             return None;
         }
     }
-    if !write_hdr(staging.offset, S_STAGED, bytes) {
+    if !write_hdr(staging.offset, S_STAGED, bytes, target) {
         block("staging header write failed", 0, 0);
         return None;
     }
@@ -604,10 +722,10 @@ fn write_new_store(old_store: Part, new_store: Part, staging: Part, log_bytes: u
 /// Move the web-asset bundle when the new layout puts it somewhere else
 /// (16 MB boards). A no-op when the offset is unchanged, which is the 4 MB
 /// layout's entire point — the bundle survives untouched.
-fn move_assets(live: &[u8]) -> bool {
+fn move_assets(live: &[u8], target: &[u8]) -> bool {
     let (Some(old), Some(new)) = (
         parttab::data_labelled(live, "assets"),
-        parttab::data_labelled(parttab::EMBEDDED, "assets"),
+        parttab::data_labelled(target, "assets"),
     ) else {
         println!("migrate: no assets partition to move");
         return true;

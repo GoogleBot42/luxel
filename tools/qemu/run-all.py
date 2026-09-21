@@ -29,12 +29,13 @@ The suite's three families:
 
   takeover-*   WLED -> Luxel self-install (firmware/src/takeover.rs)
   migrate-*    the self-applied partition migration (firmware/src/migrate.rs,
-               Gitea #501) — on BOTH layouts: the 4 MB table on the esp32
-               machine and the 16 MB one on esp32s3, each from either OTA
-               slot and cut at every re-runnable stage, plus the two refusal
-               paths (a library too large, and a bootloader flashed for a
-               smaller part) and a fast assertion-only model of the 16 MB
-               table
+               Gitea #501/#634) — on BOTH layouts: the 4 MB table on the
+               esp32 machine and the 16 MB one on esp32s3, each from either
+               OTA slot and cut at every re-runnable stage; the refusal path
+               (a library too large); a fast assertion-only model of the
+               16 MB table; and the two-hop board — 16 MB silicon behind a
+               4 MB bootloader falls back to the 4 MB table now and migrates
+               again to the 16 MB one once the bootloader is re-flashed
   flashmap /   cache-MMU mapping and the heap-region self-heal
   heap-regions
 
@@ -180,10 +181,41 @@ def main() -> int:
          ["--board", "s3", "--cut", "assets", "--result-dir-16mb", s3], False),
         # The Seengreat as found on 2026-09-21: 16 MB of silicon behind a
         # bootloader serially flashed for 4 MB, which an OTA cannot replace.
-        # The migration must refuse — installing the table would leave a
-        # board whose own bootloader will not load it (Gitea #634).
-        ("migrate-s3-old-bootloader", "migrate-test.py",
+        # It migrates to the LARGEST layout that bootloader can back — the
+        # 4 MB table, the Athom's path, byte for byte — instead of refusing,
+        # and reports that a serial re-flash would unlock the big one
+        # (Gitea #634). From both slots, because the self-copy is the same
+        # code here as anywhere.
+        ("migrate-s3-fallback-ota0", "migrate-test.py",
          ["--board", "s3", "--old-bootloader", "4mb", "--result-dir-16mb", s3], False),
+        ("migrate-s3-fallback-ota1", "migrate-test.py",
+         ["--board", "s3", "--old-bootloader", "4mb", "--from", "ota_1",
+          "--result-dir-16mb", s3], False),
+        # …and cut at every re-runnable stage of it. The fallback is an
+        # ordinary migration in every respect but which table it targets, so
+        # anything the 4 MB board is covered for, this board is too.
+        ("migrate-s3-fallback-cut-copy", "migrate-test.py",
+         ["--board", "s3", "--old-bootloader", "4mb", "--from", "ota_1",
+          "--cut", "copy", "--result-dir-16mb", s3], False),
+        ("migrate-s3-fallback-cut-staged", "migrate-test.py",
+         ["--board", "s3", "--old-bootloader", "4mb", "--cut", "staged",
+          "--result-dir-16mb", s3], False),
+        ("migrate-s3-fallback-cut-stored", "migrate-test.py",
+         ["--board", "s3", "--old-bootloader", "4mb", "--cut", "stored",
+          "--result-dir-16mb", s3], False),
+        ("migrate-s3-fallback-cut-assets", "migrate-test.py",
+         ["--board", "s3", "--old-bootloader", "4mb", "--cut", "assets",
+          "--result-dir-16mb", s3], False),
+        # Then Jeremy re-flashes the bootloader over serial and the SAME
+        # device migrates a second time, 4 MB layout -> 16 MB: the store
+        # moves 0x290000 -> 0x610000 and the bundle 0x310000 -> 0xa10000.
+        # This is what stops `migrated: true` from meaning "stop looking".
+        ("migrate-s3-fallback-then-16mb", "migrate-test.py",
+         ["--board", "s3", "--old-bootloader", "4mb",
+          "--reflash-bootloader", "16mb", "--result-dir-16mb", s3], False),
+        ("migrate-s3-fallback-then-16mb-ota1", "migrate-test.py",
+         ["--board", "s3", "--old-bootloader", "4mb", "--from", "ota_1",
+          "--reflash-bootloader", "16mb", "--result-dir-16mb", s3], False),
     ]
 
     results: list[tuple[str, str, float]] = []

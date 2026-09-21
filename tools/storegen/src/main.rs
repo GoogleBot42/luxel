@@ -461,9 +461,21 @@ fn cmd_migrate(args: &[String]) -> Result<(), String> {
     let pre = std::fs::read(pre_path).map_err(|e| format!("{}: {}", pre_path, e))?;
     let text = std::fs::read_to_string(sidecar_path).map_err(|e| format!("{}: {}", sidecar_path, e))?;
     let side = json::parse(&text)?;
-    let old_len = side.u32("store_len")?;
+    // `--pre-len` overrides the sidecar's `store_len` for the SECOND hop of a
+    // chained migration (Gitea #634): the source is then the partition the
+    // first hop produced — a 4 MB layout's 512 KiB `storage` — while the
+    // sidecar still describes the pre-#501 1 MiB one it came from. The
+    // pattern ground truth in the sidecar is length-independent, so only this
+    // one number has to be told.
+    let old_len = match arg(args, "--pre-len") {
+        Some(v) => parse_int(v)?,
+        None => side.u32("store_len")?,
+    };
     if pre.len() as u32 != old_len {
-        return Err(format!("{} is {} B, sidecar says {}", pre_path, pre.len(), old_len));
+        return Err(format!("{} is {} B, expected {}", pre_path, pre.len(), old_len));
+    }
+    if old_len <= LOG_AT {
+        return Err(format!("--pre-len {:#x} leaves no log at all", old_len));
     }
     if new_len <= LOG_AT {
         return Err(format!("--new-len {:#x} leaves no log at all", new_len));
@@ -790,6 +802,7 @@ storegen — build and check a Luxel `storage` partition image (Gitea #501)
 
   storegen gen     --out <image> --sidecar <json> [--overfill] [--store-len N]
   storegen migrate --pre <image> --sidecar <json> --new-len <len> --out <image>
+                   [--pre-len <len>]
   storegen verify  --flash <image> --sidecar <json> --at <off> --len <len>
                    [--allow-dead] [--label <name>]
 

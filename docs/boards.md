@@ -89,6 +89,27 @@ number per board; `tools/image-check.sh` resolves the slot through it and
 prints which rule it used on every size line, because a margin percentage
 is meaningless without knowing which slot it is a fraction of.
 
+**`board-seengreat-hub75` has two tiers, and the gate only knows the upper
+one.** Since Gitea #634 a 16 MB board whose *bootloader* was flashed for a
+smaller part migrates to the 4 MB table rather than refusing, and then its
+live `ota_0` is **1,310,720 B**, not the 3,145,728 B `board_ota_max` reports:
+
+| the panel is… | live table | its real slot | gated against |
+|---|---|---:|---:|
+| on the fallback (bootloader flashed for 4 MB) | `partitions.csv` | 1,310,720 B | 3,145,728 B |
+| on its own table (bootloader re-flashed for 16 MB) | `partitions-16mb.csv` | 3,145,728 B | 3,145,728 B |
+
+`image-check.sh` deliberately keeps gating against the nominal slot — the
+image it gates is a *release artifact*, and which tier a given device is on
+is a property of that device, not of the build. The device is the backstop:
+`/api/ota` sizes every push against the table on flash and refuses an
+over-size one up front, naming the bootloader as the reason
+(docs/api.md). So the practical rule for this board is **1.25 MiB until its
+bootloader is re-flashed**, and `partitions.upgrade_available` on
+`/api/status` is how a tool tells which tier it is looking at. Today's image
+is 991,456 B, inside both tiers with 319,264 B (24.4 %) of the smaller one
+free.
+
 ### The migrating release: every image weighed against the OLD slot
 
 For exactly one release, the gate runs with `MIGRATING_RELEASE=1` and
@@ -188,7 +209,7 @@ its own release and a format bump.
 | device | board | migrated | live slot | `ota_slot_bytes` | `storage_bytes` | margin now |
 |---|---|---|---|---:|---:|---|
 | Athom rig `192.168.0.183` | `board-athom-music` | **yes, 2026-09-20** | `ota_0` | 1,310,720 | 524,288 | 270,160 B (20.6 %) |
-| Seengreat panel `192.168.0.238` | `board-seengreat-hub75` | **no — and it must not until its bootloader is re-flashed** (Gitea #634) | `ota_0` | 1,048,576 | 1,048,576 | old table, unchanged |
+| Seengreat panel `192.168.0.238` | `board-seengreat-hub75` | **not yet — expected to land on the 4 MB FALLBACK table** (Gitea #634); off the LAN since 2026-09-21 awaiting a power cycle | `ota_0` | 1,048,576 | 1,048,576 | old table, unchanged |
 | dev unit `192.168.0.205` | `board-pixelblaze-v3` | not yet (offline) | — | — | — | — |
 
 The Athom is the first device on the new table (Gitea #634). It went across
@@ -270,11 +291,50 @@ in this state reports
 "blocked_need_bytes":14680064,"blocked_have_bytes":4194304
 ```
 
-every boot, changes nothing, and keeps working. **Getting the Seengreat onto
-the 16 MB table needs a one-time serial flash of the bootloader** (Jeremy's
-hands, the panel's USB port) — `BOARD=board-seengreat-hub75
+every boot, changes nothing, and keeps working.
+
+#### …and then it stopped refusing: the fallback (Gitea #634, second half)
+
+Refusing outright left the panel on the pre-#501 1 MiB slots for no reason.
+The 4 MB table fits under a 4 MB ceiling perfectly well, and it is the same
+layout — and the same code — the Athom migrated to. So a board that embeds
+the 16 MB table now embeds the 4 MB one as well, `parttab::target_table()`
+picks **the largest embedded layout that fits under
+`min(chip size, bootloader ceiling)`**, and the panel migrates to
+`partitions.csv`: 1.25 MiB slots, a 512 KiB store, `assets` staying put at
+`0x310000` with no copy. `/api/status` then reads
+
+```json
+"partitions":{"layout":"partitions.csv","migrated":true,
+              "ota_slot_bytes":1310720,"storage_bytes":524288,"assets_bytes":983040,
+              "ceiling_bytes":4194304,"upgrade_available":true}
+```
+
+and the boot log carries the same sentence every boot. **Getting the panel
+onto the 16 MB table still needs a one-time serial flash of the bootloader**
+(Jeremy's hands, the panel's USB port) — `BOARD=board-seengreat-hub75
 firmware/build-esp32.sh flash` writes bootloader + table + app together with
-`--flash-size 16mb`. After that the migration runs on the next boot.
+`--flash-size 16mb`. What changed is that this is now an *upgrade* rather
+than a rescue, and that it is no longer the only way forward.
+
+If instead the bootloader is re-flashed on a device already on the fallback,
+the migrator runs a **second** time on the next boot — `storage` `0x290000`
+→ `0x610000`, `assets` `0x310000` → `0xA10000`, staged in the 4 MB layout's
+`ota_1` — because `migrated:true` is defined as "the live table is the best
+one available today", never as a terminal state. Both hops, from either OTA
+slot and cut at every re-runnable stage, are emulated:
+`tools/qemu/migrate-test.py --board s3 --old-bootloader 4mb
+[--reflash-bootloader 16mb]`, 8 cases in `tools/qemu/run-all.py`.
+
+The cost of all this on the boards that will never use it is **0 B**: the
+second table and the selection are behind the same board feature that picks
+the first, so every 4 MB image is byte-identical to one built without the
+mechanism. What the 4 MB boards do pay is the table-to-table generality and
+the two new `/api/status` fields — measured 2026-09-21, `+320 B` on
+`board-c6-devkit` (1,044,608 → **1,044,928 B**, `MIGRATING_RELEASE=1` margin
+3,968 → **3,648 B**) and `+368 B` on `board-athom-music`. `board-
+seengreat-hub75` pays `+4,608 B` (986,848 → 991,456 B) for the whole of it,
+against 57,120 B of old-slot margin.
 
 ### Measurement history (the 1 MiB era)
 
