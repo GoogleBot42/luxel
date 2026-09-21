@@ -1,6 +1,10 @@
 //! Per-function planning: the frame layout of docs/jit-design.md §3.3 and
 //! the register plan of §3.4, decided once before a byte is emitted.
 //!
+//! The frame does NOT match §3.3's sketch, and the difference is the one
+//! that mattered: the window save areas are 32 bytes at the TOP, not 16 at
+//! `a1+0` (see [`WINDOW_SAVE`] — Gitea #658).
+//!
 //! Everything here is a pure function of the bytecode and its `kinds`
 //! section, so the emitter never has to reconsider a decision mid-stream —
 //! which is what lets it be a single pass with no allocator.
@@ -14,9 +18,38 @@ use luxel_core::vm::Program;
 
 use crate::Refusal;
 
-/// The 16 bytes at `a1+0` that the window mechanism may spill into. Never
-/// touched by generated code (§3.3).
-pub const WINDOW_SAVE: u32 = 16;
+/// Bytes at the **TOP** of every generated frame — `[a1 + frame - 32,
+/// a1 + frame)` — that the window mechanism may spill into. Never touched
+/// by generated code.
+///
+/// **§3.3 had this wrong in both the place and the size, and it was a real
+/// crash** (Gitea #658). The design put 16 bytes at `a1+0`, the BOTTOM.
+/// The Xtensa windowed ABI puts the save areas just below the CALLER's
+/// stack pointer, and `entry a1, N` sets `a1 = caller_sp - N`, so they
+/// live at the top of the callee's frame:
+///
+/// ```text
+///   a1 + frame      ── caller's sp
+///   a1 + frame - 16 ── base save area:  caller's a0…a3
+///   a1 + frame - 32 ── call8 extra:     caller's a4…a7
+///   …                  locals, operand-stack homes, boxed-args scratch
+///   a1 + 0
+/// ```
+///
+/// Those are not hypothetical: `xtensa-lx-rt`'s `_WindowOverflow8` writes
+/// `a0…a3` with `s32e aX, a9, -16…-4` and `a4…a7` with
+/// `s32e aX, a0, -32…-20`, both relative to the saved sp. With the old
+/// layout, any generated function deep enough to take a window-overflow
+/// exception had its TOP 32 bytes of data silently overwritten by the
+/// handler — and on the way back the underflow handler reloaded a
+/// corrupted `a1`, which is the wild store `tools/qemu/jit-test.py` caught
+/// on `aurora-2d.js` and `bulk-canvas-ripples-2d.js`.
+///
+/// 32 and not 48: 48 is what a `call12` caller needs, and nothing calls
+/// generated code with one. The emitter only ever emits `callx8`, and the
+/// engine enters through a Rust `extern "C"` pointer, which is `call8` on
+/// these targets.
+pub const WINDOW_SAVE: u32 = 32;
 
 /// Uniform stride of a frame home: eight bytes, laid out as a
 /// [`luxel_core::vm::ValueRaw`] (tag at +0, payload at +4) whether or not
@@ -275,9 +308,10 @@ fn plan_fn(
         });
     }
 
-    // Frame: window save area, then locals, then one home per operand-stack
-    // depth, then the boxed-argument scratch.
-    let mut off = WINDOW_SAVE;
+    // Frame, from the BOTTOM up: locals, then one home per operand-stack
+    // depth, then the boxed-argument scratch — and the window save areas
+    // reserved at the TOP, above all of it (see `WINDOW_SAVE`).
+    let mut off = 0u32;
     let mut local_home = Vec::with_capacity(locals);
     for i in 0..locals {
         if conv == ParamConv::Regs && i < params {
@@ -309,7 +343,12 @@ fn plan_fn(
     let scratch_off = off;
     off += scratch_n as u32 * dev32::VALUE;
 
-    let frame = off.next_multiple_of(16);
+    // `WINDOW_SAVE` is added HERE, once, at the top: `off` is the size of
+    // the data the function owns, and the frame is that plus the spill
+    // area the window mechanism will use, rounded to `entry`'s 16-byte
+    // granularity. A leaf with no data still reserves the full save area,
+    // which is why the minimum frame is 32 and not 0.
+    let frame = (off + WINDOW_SAVE).next_multiple_of(16);
     if frame > 32_760 {
         return Err(Refusal::FrameTooLarge {
             fn_idx: fi as u16,
