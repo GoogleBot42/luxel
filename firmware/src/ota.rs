@@ -438,12 +438,16 @@ impl Drop for OtaWriter {
 /// [OtaWriter::commit] activates. Dropping without commit leaves otadata
 /// untouched (the half-written slot stays inactive).
 ///
-/// `expected` is the request's Content-Length (0 when there isn't one). An
-/// image too big for the slot is refused HERE, before a single sector is
-/// erased — and on a device still carrying the pre-#501 1 MiB table the
-/// error says so, because after #501 a normal release image is up to
-/// 1.25 MiB and "it just failed" would be a mystery on exactly the devices
-/// that have no serial console (Gitea #501).
+/// `expected` is the request's Content-Length (0 when there isn't one). The
+/// slot size comes from the table ON FLASH, never from the one this image was
+/// built with — those differ on a device that has not migrated, and again on
+/// a 16 MB board running the 4 MB fallback layout because its bootloader was
+/// flashed for a smaller part (Gitea #634). An image too big for that slot is
+/// refused HERE, before a single sector is erased, and
+/// [crate::parttab::oversize_message] says WHICH of the three situations it
+/// is: a release image is up to 1.25 MiB (3 MiB on the Seengreat's nominal
+/// table) and "it just failed" would be a mystery on exactly the devices that
+/// have no serial console (Gitea #501).
 pub fn begin(expected: u32) -> Result<OtaWriter, &'static str> {
     // claim flag + driver together inside the FLASH critical section (the
     // C3 target has no atomic swap, so the mutex provides the atomicity)
@@ -508,11 +512,7 @@ pub fn begin(expected: u32) -> Result<OtaWriter, &'static str> {
 
     if expected > capacity {
         FLASH.lock(|c| *c.borrow_mut() = Some(flash));
-        return Err(if crate::parttab::matches_flash() {
-            "image larger than the OTA slot"
-        } else {
-            "image larger than this device's OTA slot — its partition table has not been migrated yet; install the migrating release (an image that still fits the old 1 MiB slot) first, then retry"
-        });
+        return Err(crate::parttab::oversize_message());
     }
 
     let slot = slot_name(next);

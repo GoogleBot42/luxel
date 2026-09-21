@@ -14,8 +14,9 @@ fn main() {
     let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
     std::fs::write(out_dir.join("default.lxbc"), blob).expect("write default.lxbc");
 
-    // Partition table binary for the wled-takeover feature (src/takeover.rs):
-    // the exact bytes a serial flash puts at 0x8000 — entries plus the
+    // Partition table binary for src/parttab.rs — the WLED takeover
+    // (src/takeover.rs) and the layout migrator (src/migrate.rs) both write
+    // it: the exact bytes a serial flash puts at 0x8000, entries plus the
     // trailing MD5 row the bootloader verifies. esp-idf-part is the same
     // crate espflash uses, so the output matches byte for byte.
     //
@@ -31,45 +32,44 @@ fn main() {
     // shell-side copy of this same map.
     println!("cargo:rerun-if-changed=partitions.csv");
     println!("cargo:rerun-if-changed=partitions-16mb.csv");
-    // (csv name, flash size, expected end of the last partition). The end is
-    // declared rather than derived: a fat-fingered offset or size in the csv
-    // then fails HERE, at build time, instead of on a device that can no
-    // longer be reached over the network. The 4 MB table fills its part
-    // exactly; the 16 MB one deliberately leaves its top 2 MiB unallocated.
-    let (partitions, flash_size, expect_end) =
-        if std::env::var_os("CARGO_FEATURE_BOARD_SEENGREAT_HUB75").is_some() {
-            ("partitions-16mb.csv", 0x100_0000u32, 0xE0_0000u32)
-        } else {
-            ("partitions.csv", 0x40_0000u32, 0x40_0000u32)
-        };
-    let csv = std::fs::read_to_string(partitions)
-        .unwrap_or_else(|e| panic!("read {partitions}: {e}"));
-    let table = esp_idf_part::PartitionTable::try_from(csv)
-        .unwrap_or_else(|e| panic!("parse {partitions}: {e}"));
-    let end = table
-        .partitions()
-        .iter()
-        .map(|p| p.offset() + p.size())
-        .max()
-        .expect("empty partition table");
-    assert!(
-        end <= flash_size,
-        "{partitions} runs past the end of flash: last byte {end:#x} > {flash_size:#x}"
-    );
-    assert_eq!(
-        end, expect_end,
-        "{partitions} ends at {end:#x}, not the {expect_end:#x} this board expects — \
-         if the layout really changed, update the constant in firmware/build.rs"
-    );
-    let bin = table.to_bin().expect("serialize partition table");
-    assert_eq!(bin[0..2], [0xAA, 0x50], "unexpected partition-table binary layout");
-    assert!(
-        bin.windows(2).any(|w| w == [0xEB, 0xEB]),
-        "partition-table binary missing its MD5 row"
-    );
-    std::fs::write(out_dir.join("partition-table.bin"), bin).expect("write partition-table.bin");
+    // (csv name, flash size, expected end of the last partition — see
+    // `serialize_table` for why the end is declared rather than derived).
+    let big = std::env::var_os("CARGO_FEATURE_BOARD_SEENGREAT_HUB75").is_some();
+    let (partitions, flash_size, expect_end) = if big {
+        ("partitions-16mb.csv", 0x100_0000u32, 0xE0_0000u32)
+    } else {
+        ("partitions.csv", 0x40_0000u32, 0x40_0000u32)
+    };
+    serialize_table(&out_dir, "partition-table.bin", partitions, flash_size, expect_end);
     // So the image can print the table it embeds (firmware/src).
     println!("cargo::rustc-env=LUXEL_PARTITIONS={partitions}");
+
+    // A board on the 16 MB table embeds the 4 MB one as well (Gitea #634).
+    //
+    // `g_rom_flashchip.chip_size` comes from the BOOTLOADER's image header,
+    // and an OTA replaces the app but never the bootloader — so a 16 MB
+    // board serially flashed back when its table was 4 MB has a ROM that
+    // bounds-checks every flash op at 4 MB and a bootloader that refuses to
+    // boot under a table reaching past it. Such a board migrates to the
+    // LARGEST embedded table its bootloader can back (src/parttab.rs
+    // `target_table`) instead of refusing outright, and migrates again to
+    // the big one after the bootloader is re-flashed over serial.
+    //
+    // Cost is one 0x100-byte table plus the selection branch, and it is
+    // keyed off the same board feature as the table itself, so every 4 MB
+    // board's image is byte-identical to what it was.
+    println!("cargo::rustc-check-cfg=cfg(fallback_table)");
+    if big {
+        serialize_table(
+            &out_dir,
+            "partition-table-fallback.bin",
+            "partitions.csv",
+            0x40_0000,
+            0x40_0000,
+        );
+        println!("cargo::rustc-env=LUXEL_PARTITIONS_FALLBACK=partitions.csv");
+        println!("cargo:rustc-cfg=fallback_table");
+    }
 
     build_index_html(&out_dir);
 
@@ -104,6 +104,49 @@ fn main() {
     if std::env::var_os("CARGO_FEATURE_BOARD_ATHOM_MUSIC").is_some() {
         println!("cargo:rustc-cfg=multi_output");
     }
+}
+
+/// Serialize one `firmware/partitions*.csv` into `OUT_DIR/<name>` as the exact
+/// bytes espflash would write at 0x8000 — entries plus the trailing MD5 row the
+/// bootloader verifies.
+///
+/// `expect_end` is declared rather than derived: a fat-fingered offset or size
+/// in the csv then fails HERE, at build time, instead of on a device that can no
+/// longer be reached over the network. The 4 MB table fills its part exactly;
+/// the 16 MB one deliberately leaves its top 2 MiB unallocated.
+fn serialize_table(
+    out_dir: &std::path::Path,
+    name: &str,
+    partitions: &str,
+    flash_size: u32,
+    expect_end: u32,
+) {
+    let csv = std::fs::read_to_string(partitions)
+        .unwrap_or_else(|e| panic!("read {partitions}: {e}"));
+    let table = esp_idf_part::PartitionTable::try_from(csv)
+        .unwrap_or_else(|e| panic!("parse {partitions}: {e}"));
+    let end = table
+        .partitions()
+        .iter()
+        .map(|p| p.offset() + p.size())
+        .max()
+        .expect("empty partition table");
+    assert!(
+        end <= flash_size,
+        "{partitions} runs past the end of flash: last byte {end:#x} > {flash_size:#x}"
+    );
+    assert_eq!(
+        end, expect_end,
+        "{partitions} ends at {end:#x}, not the {expect_end:#x} this board expects — \
+         if the layout really changed, update the constant in firmware/build.rs"
+    );
+    let bin = table.to_bin().expect("serialize partition table");
+    assert_eq!(bin[0..2], [0xAA, 0x50], "unexpected partition-table binary layout");
+    assert!(
+        bin.windows(2).any(|w| w == [0xEB, 0xEB]),
+        "partition-table binary missing its MD5 row"
+    );
+    std::fs::write(out_dir.join(name), bin).unwrap_or_else(|e| panic!("write {name}: {e}"));
 }
 
 /// Resolve the embedded fallback page's build-mode blocks (src/index.html,

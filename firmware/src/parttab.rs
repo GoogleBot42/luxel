@@ -39,6 +39,27 @@ pub const TABLE_NAME: &str = match option_env!("LUXEL_PARTITIONS") {
     None => "partitions.csv",
 };
 
+/// The SMALLER layout a 16 MB board also embeds (Gitea #634), and its csv
+/// name. Only `board-seengreat-hub75` has one — `build.rs` sets the
+/// `fallback_table` cfg off the same board feature that picks [EMBEDDED], so
+/// every 4 MB board compiles as if none of this existed.
+///
+/// Why a second table at all: `g_rom_flashchip.chip_size` is programmed from
+/// the BOOTLOADER's image header and an OTA never replaces the bootloader, so
+/// a 16 MB board serially flashed back when its table was 4 MB is stuck
+/// behind a 4 MB ceiling until someone re-flashes it over serial (see
+/// [bootloader_flash_ceiling]). Refusing to migrate at all left such a board
+/// on the pre-#501 1 MiB slots for no reason: the 4 MB layout fits under that
+/// ceiling perfectly well, and it is the same layout — and the same code
+/// path — the Athom runs. So the board takes the largest table its bootloader
+/// can back now ([target_table]) and migrates AGAIN to the big one once the
+/// bootloader is re-flashed.
+#[cfg(fallback_table)]
+pub const FALLBACK: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/partition-table-fallback.bin"));
+#[cfg(fallback_table)]
+pub const FALLBACK_NAME: &str = env!("LUXEL_PARTITIONS_FALLBACK");
+
 /// Where the second-stage bootloader reads the table from. Fixed by the
 /// ESP-IDF bootloader, not by our layout — not a partition offset.
 pub const TABLE_OFFSET: u32 = 0x8000;
@@ -146,7 +167,7 @@ pub fn bootloader_flash_ceiling() -> u32 {
 /// Seengreat.
 pub fn flash_refusal(table: &[u8]) -> Option<(&'static str, u32, u32)> {
     let needed = flash_needed(table);
-    let cap = crate::ota::with_flash(|f| f.capacity() as u32).unwrap_or(0);
+    let cap = chip_capacity();
     let boot = bootloader_flash_ceiling();
     if boot < needed && boot <= cap {
         println!(
@@ -173,9 +194,110 @@ pub fn flash_refusal(table: &[u8]) -> Option<(&'static str, u32, u32)> {
 
 /// [flash_refusal] as a yes/no, for the takeover (which narrates its own
 /// refusals to the serial console and has no `/api/status` to report to —
-/// it runs before the network exists).
+/// it runs before the network exists). The takeover always writes
+/// [EMBEDDED]: it only ships on 4 MB boards, which have no [FALLBACK].
 pub fn flash_fits(table: &[u8]) -> bool {
     flash_refusal(table).is_none()
+}
+
+/// What the flash chip itself says it holds (JEDEC RDID, read by
+/// esp-storage). On the Seengreat this correctly said 16 MB while the
+/// bootloader's ceiling said 4 — which is the whole of Gitea #634.
+pub fn chip_capacity() -> u32 {
+    crate::ota::with_flash(|f| f.capacity() as u32).unwrap_or(0)
+}
+
+/// The highest flash offset this device can actually reach *today*: the part
+/// has to hold it AND the bootloader has to accept a table reaching that far.
+/// `/api/status` reports it as `ceiling_bytes`.
+pub fn flash_ceiling() -> u32 {
+    chip_capacity().min(bootloader_flash_ceiling())
+}
+
+/// The layout this image should install on this device: the largest one it
+/// embeds that fits under [flash_ceiling].
+///
+/// Boards with a single embedded table always answer with it — the `#[cfg]`
+/// below compiles away entirely there, so this is a constant and every 4 MB
+/// image is byte-for-byte what it was before Gitea #634. When nothing fits
+/// (a part smaller than the 4 MB layout — not a shipping configuration) the
+/// nominal table is returned anyway, so [flash_refusal] reports the board's
+/// own requirement rather than a fallback's.
+///
+/// Deliberately does NOT go through [flash_refusal]: this is a choice, not a
+/// refusal, and it runs on every boot — narrating "the bootloader would not
+/// boot that table" each time we quietly pick the smaller one would be both
+/// noise and a lie. The one line a device in that state does print comes
+/// from [crate::migrate]'s boot snapshot, and says what the fix is.
+pub fn target_table() -> (&'static str, &'static [u8]) {
+    #[cfg(fallback_table)]
+    {
+        let ceiling = flash_ceiling();
+        if flash_needed(EMBEDDED) > ceiling && flash_needed(FALLBACK) <= ceiling {
+            return (FALLBACK_NAME, FALLBACK);
+        }
+    }
+    (TABLE_NAME, EMBEDDED)
+}
+
+/// Which embedded layout the table on flash IS, if it is one of ours. `None`
+/// for the pre-#501 table (and for anything foreign) — a device that has not
+/// migrated yet.
+pub fn live_layout_name(live: &[u8]) -> Option<&'static str> {
+    if live == EMBEDDED {
+        return Some(TABLE_NAME);
+    }
+    #[cfg(fallback_table)]
+    if live == FALLBACK {
+        return Some(FALLBACK_NAME);
+    }
+    None
+}
+
+/// Would a one-time serial re-flash of the bootloader unlock a LARGER
+/// embedded layout? True exactly when the chip could back [EMBEDDED] but the
+/// bootloader's ceiling cannot — the Seengreat's state (Gitea #634).
+/// `/api/status` reports it as `upgrade_available`, so the playground can say
+/// what the fix is. Constant `false`, and dead code, on a board with one
+/// embedded table.
+pub fn upgrade_available() -> bool {
+    #[cfg(fallback_table)]
+    {
+        // Cached like [matches_flash]: `/api/status` is polled continuously
+        // by the playground and the answer needs a flash transaction it
+        // cannot change without a reboot.
+        use core::sync::atomic::{AtomicU8, Ordering};
+        static CACHE: AtomicU8 = AtomicU8::new(0); // 0 unknown, 1 yes, 2 no
+        return match CACHE.load(Ordering::Relaxed) {
+            1 => true,
+            2 => false,
+            _ => {
+                let need = flash_needed(EMBEDDED);
+                let yes = need > bootloader_flash_ceiling() && need <= chip_capacity();
+                CACHE.store(if yes { 1 } else { 2 }, Ordering::Relaxed);
+                yes
+            }
+        };
+    }
+    #[cfg(not(fallback_table))]
+    false
+}
+
+/// What `/api/ota` says when an image does not fit the slot the LIVE table
+/// offers. Three situations with three different fixes, and on a fleet with
+/// no serial consoles the difference has to be in the error string.
+pub fn oversize_message() -> &'static str {
+    if matches_flash() {
+        return "image larger than the OTA slot";
+    }
+    #[cfg(fallback_table)]
+    if live_table().is_some_and(|l| l == FALLBACK) {
+        return "image larger than this device's OTA slot — its bootloader was flashed for a \
+                smaller part, so it is running the 4 MB layout with a 1.25 MiB slot; re-flash \
+                the bootloader over serial to unlock the full one (Gitea #634)";
+    }
+    "image larger than this device's OTA slot — its partition table has not been migrated yet; \
+     install the migrating release (an image that still fits the old 1 MiB slot) first, then retry"
 }
 
 pub fn erase_sector(at: u32) -> bool {

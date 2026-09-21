@@ -1,5 +1,57 @@
 # Update log
 
+## 2026-09-21 — A 16 MB board behind an older bootloader migrates to the 4 MB table instead of refusing (#634)
+
+#659 taught the migrator to read the bootloader's flash ceiling and refuse when the
+board's own table runs past it. Correct, and on the Seengreat it meant: stay on the
+pre-#501 1 MiB slots forever, for no reason — the 4 MB table fits under a 4 MB ceiling
+perfectly well, and it is the same layout, through the same code, that the Athom
+migrated to on 2026-09-20.
+
+So a board on the 16 MB table now embeds **both**. `parttab::target_table()` picks the
+largest embedded layout that fits under `min(chip JEDEC size, bootloader header size)`,
+and `migrate.rs` became **table-to-table**: the source is whatever is on flash, the
+destination is whatever was selected. The Seengreat's path is therefore exactly the
+Athom's — store relocated with the overlap handling, `assets` left at `0x310000`, no
+bundle copy — and it ends `migrated:true` on a 1.25 MiB slot and a 512 KiB store.
+
+`migrated:true` is now defined as "the live table is the best one available today",
+never as a terminal state. After a one-time serial re-flash of the bootloader the
+ceiling rises, the target becomes the board's own table, and the device **migrates
+again** — `storage` `0x290000` → `0x610000`, `assets` `0x310000` → `0xA10000`, staged
+in the 4 MB layout's `ota_1` rather than the pre-#501 one. The `LXMG` staging header
+being keyed to the *target* table is what makes that safe: the header the first hop
+left behind is tagged for a different layout, so the second hop ignores it.
+
+`/api/status.partitions` gained `ceiling_bytes` (`min(chip, bootloader)`) and
+`upgrade_available` (present, `true`, only when a serial re-flash would unlock a larger
+embedded layout), `layout` now names the table **on flash** rather than the one the
+image was built with, and the boot log carries the same sentence on every boot. The
+mirror reports `ceiling_bytes:0`.
+
+`/api/ota` already sized pushes against the on-flash table; its error message now
+distinguishes the third case — a board on the fallback has a 1.25 MiB slot, not the
+3 MiB its nominal table would give — so `tools/image-check.sh` keeps gating the release
+artifact against the nominal slot and the device is the backstop. docs/boards.md tracks
+both tiers.
+
+**Tests.** `tools/qemu/migrate-test.py --old-bootloader` stopped being a refusal variant
+and became a full migration one, composable with `--from` and `--cut`;
+`--reflash-bootloader 16mb` restamps the bootloader on the same flash and boots again
+for the second hop. Eight new cases in `run-all.py` (`migrate-s3-fallback-ota0/ota1`,
+the four `-cut-` stages, and `-then-16mb` from both slots) — **30 QEMU cases green**,
+the existing 22 included. `storegen migrate` gained `--pre-len` so the host model can
+start from the partition the first hop produced; both hops are asserted byte-for-byte
+against it, and the 960 KiB bundle arrives byte-identical at `0xa10000`.
+
+**Size.** The fallback mechanism costs 4 MB boards **0 B** — the second table and the
+selection sit behind the same board feature that picks the first. What every board pays
+is the table-to-table generality, the new status fields and a staging/running-image
+overlap guard: **+320 B** on `board-c6-devkit` (1,044,608 → 1,044,928 B, the
+`MIGRATING_RELEASE=1` margin 3,968 → 3,648 B), +368 B on `board-athom-music`.
+`board-seengreat-hub75` pays +4,608 B (986,848 → 991,456 B) for the whole thing.
+
+
 ## 2026-09-21 — The 16 MB migration runs under QEMU, and the Seengreat's decline has a cause (#634)
 
 `-machine esp32s3` used to load the Luxel app and print **nothing** — not a panic, not

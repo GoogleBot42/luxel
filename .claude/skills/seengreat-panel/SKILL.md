@@ -74,19 +74,32 @@ under emulation 2026-09-21).
 
 What this means in practice:
 
-- **`partitions.migrated` will stay `false` no matter how many times you OTA
-  it**, and since the fix it says so: `migration_blocked: "bootloader was
-  flashed for a smaller part — reflash it over serial"`, `blocked_have_bytes:
-  4194304`. That is the expected, healthy answer — not a regression to chase.
+- **This board migrates to the 4 MB table, not its own** (Gitea #634, second
+  half). A 16 MB image embeds both, and `parttab::target_table()` takes the
+  largest layout that fits under `min(chip size, bootloader ceiling)`. Expect
+  `layout:"partitions.csv"`, `migrated:true`, `ota_slot_bytes:1310720`,
+  `storage_bytes:524288`, `ceiling_bytes:4194304`, `upgrade_available:true` —
+  a complete, correct migration, not a holding pattern, and the same code path
+  the Athom ran. `assets` stays at `0x310000`, so the bundle is untouched.
+  **That is the expected, healthy answer — not a regression to chase.**
+- **`upgrade_available:true` is what says the big table is still on the
+  table.** `migrated:true` here does NOT mean "done forever": re-flash the
+  bootloader and the device migrates a second time on the next boot, to
+  `partitions-16mb.csv`.
+- **Its OTA slot is 1.25 MiB while it is on the fallback**, not the 3 MiB
+  `board_ota_max` says. `tools/image-check.sh` gates releases against the
+  nominal slot; the device refuses an over-size push itself and names the
+  bootloader (docs/boards.md, "two tiers").
 - **Do NOT "fix" it by raising the ROM ceiling at runtime.** It works, the
   migration completes, and the board then boots into a bootloader that refuses
   the table it just installed (`load partition table error!`) forever. Emulated
   and asserted (`tools/qemu/migrate-test.py --board s3 --old-bootloader 4mb`).
-- The only cure is one serial flash of bootloader + table + app together —
-  `BOARD=board-seengreat-hub75 firmware/build-esp32.sh flash`, which needs the
-  BOOT-button hold and is therefore **Jeremy's**. It **erases the store and the
-  assets**: read `/api/patterns` (+ each source), `/api/playlist`, `/api/layout`
-  and `/api/brightness` out over HTTP first and restore them afterwards.
+- Getting it onto the 16 MB table is one serial flash of bootloader + table +
+  app together — `BOARD=board-seengreat-hub75 firmware/build-esp32.sh flash`,
+  which needs the BOOT-button hold and is therefore **Jeremy's**, and is now an
+  upgrade rather than a rescue. It **erases the store and the assets**: read
+  `/api/patterns` (+ each source), `/api/playlist`, `/api/layout` and
+  `/api/brightness` out over HTTP first and restore them afterwards.
 
 ## The USB port is not a serial console
 
