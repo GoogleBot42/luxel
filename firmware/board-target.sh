@@ -55,8 +55,19 @@
 # default is off until someone can measure it on metal.
 RISCV_IRAM="${RISCV_IRAM:-}"
 
+#   JIT         1 -> the board builds the on-device JIT (the `jit` cargo
+#               feature: luxel-core's ABI surface + the luxel-jit emitter +
+#               firmware/src/jit.rs). Gitea #658, docs/jit-design.md §8.
+#               XTENSA ONLY, and only where there is slot and `.rwtext`
+#               room for it: the two S3 boards. The classic ESP32 has the
+#               IRAM but not the OTA slot, and the RISC-V boards have no
+#               backend at all. `JIT_OFF=1` builds the same board without
+#               it — the A/B lever, exactly like IRAM_OFF.
+#               `EXTRA_FEATURES=jit` on a classic-ESP32 board is the QEMU
+#               gate's build (tools/qemu/jit-test.py), never a release.
 board_target() {
   IRAM=""
+  JIT=0
   case "$1" in
     board-pixelblaze-v3|board-athom-music|board-esp32-generic)
       # 128 KB of dedicated IRAM (SRAM0), separate from the DRAM the stack
@@ -68,7 +79,25 @@ board_target() {
       # iram-vm alone). The other two would leave <1 KB over the 24 KB
       # floor for ~1 % — measured on the panel, not worth it (Gitea #328).
       CHIP=esp32s3;  TARGET=xtensa-esp32s3-none-elf;    XTENSA=1; CORE_O3=1
-      IRAM="iram-vm" ;;
+      JIT=1
+      # `iram-vm` and the JIT's exec buffer are the SAME budget here, and
+      # they cannot both fit over the 24 KB stack floor: measured
+      # 2026-09-21 on board-seengreat-hub75, `.stack` is 27,364 B with
+      # iram-vm and no JIT, and the JIT's own statics take a further
+      # ~1.0 KB of DRAM — leaving 1.7 KB for executable RAM, which compiles
+      # `rainbow` and nothing else (Gitea #658).
+      #
+      # So on a JIT board iram-vm gives way to the exec buffer, because
+      # iram-vm holds `Vm::run` — the INTERPRETER's per-pixel loop, which
+      # is exactly the code a natively-compiled pattern does not execute.
+      # Fast-pathing the fallback at the cost of not having the fast path
+      # is the wrong way round. A pattern the JIT refuses (`too-large`) is
+      # then interpreted from the flash cache, which is the pre-#328
+      # behaviour and the price of this trade.
+      #
+      # JIT_OFF=1 puts it back, so the A/B lever still measures
+      # like-for-like against the shipped interpreter build.
+      if [ "${JIT_OFF:-0}" = 1 ]; then IRAM="iram-vm"; else IRAM=""; fi ;;
     board-c3-devkit)
       CHIP=esp32c3;  TARGET=riscv32imc-unknown-none-elf;  XTENSA=0; CORE_O3=1
       IRAM="$RISCV_IRAM" ;;

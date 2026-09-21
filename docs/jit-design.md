@@ -462,7 +462,38 @@ which parameters happen to be `Dyn`; one bit per function lets caller and
 callee agree by looking at the same thing. `NativeImage::abi` reports it.
 The common case — all-`Num`, few parameters — still lands in registers.
 
-**§3.3, frame.** Every frame home is a uniform 8 bytes laid out as a
+**§3.3, frame — and §3.3 WAS WRONG about the window save area.** The
+sketch reserves "16 bytes of window spill area at `a1+0`". Both halves of
+that are wrong, and it was a device crash (Gitea #658): the Xtensa windowed
+ABI puts the save areas just below the CALLER's stack pointer, and `entry
+a1, N` sets `a1 = caller_sp - N`, so they sit at the **TOP** of the
+callee's frame — and a `call8` chain needs **32** bytes there, not 16:
+
+```
+   a1 + F        caller's sp
+   a1 + F - 16   base save area:  caller's a0...a3
+   a1 + F - 32   call8 extra:     caller's a4...a7
+   ...           locals, operand-stack homes, boxed-args scratch
+   a1 + 0
+```
+
+`xtensa-lx-rt`'s `_WindowOverflow8` is the authority: `s32e aX, a9, -16...-4`
+for `a0...a3` and `s32e aX, a0, -32...-20` for `a4...a7`, both relative to
+the saved sp. With the layout as designed, any generated function deep
+enough to take a window-overflow exception had the top 32 bytes of its own
+data overwritten by the handler, and the underflow handler then reloaded a
+corrupted `a1`. §7.1's ISA model has a flat 64-register file and never
+spills, so every host gate passed it for two phases; §7.2 caught it on the
+first patterns whose builtin calls nest deep enough (`aurora-2d`,
+`bulk-canvas-ripples-2d`). The model now TRAPS a generated store into any
+live frame's save area, with a self-test that the old layout would have
+tripped.
+
+32 and not 48 (a `call12` caller's requirement): nothing calls generated
+code with one — the emitter emits `callx8` only, and the engine enters
+through a Rust `extern "C"` pointer, which is `call8` on these targets.
+
+Every frame home is a uniform 8 bytes laid out as a
 `Value` (tag at +0, payload at +4) rather than 4 or 8 by kind. One stride
 means one offset formula for locals, operand-stack homes and boxed
 arguments alike, and a `Dyn` home is then byte-identical to the `Value` a
@@ -751,6 +782,77 @@ still stands.
 - The interpreter path is byte-for-byte the same code as today when
   `native` is `None`; on boards without the `jit` feature the field does
   not exist.
+
+### 5 and 6 as built (phase 3, Gitea #658)
+
+**SHIPPED**: `luxel_core::jit::native` (the engine's half),
+`Engine::install_native` + the two call sites, `firmware/src/jit.rs` (the
+exec buffer, the call, compile-at-activation), `/api/status`'s `jit`
+object, `POST /api/jit`, `tools/qemu/jit-test.py`.
+
+**§7.2's gate earned its keep immediately.** It found a trap §7.1's
+could not: two patterns (`aurora-2d`, `bulk-canvas-ripples-2d`) compiled,
+started, and then took the AppCpu down with a clobbered stack guard and
+EXCCAUSE 0. The cause was §3.3's window save area — see the frame note
+above. It is fixed, both patterns now run natively to completion, and the
+ISA model traps that whole class from now on.
+
+**Still BUILT INTO THE S3 IMAGES AND OFF AT RUNTIME.** Not because
+anything is known to be wrong, but because §7.3 has not run: no S3 has
+executed a byte of this. `LUXEL_JIT_ENABLED` defaults to false so turning
+it on stays a deliberate act, with someone watching the panel.
+
+Everything above is as designed except the following.
+
+**`native` lives on the `Engine`, not on the `Program`.** §6's first bullet
+says `Program` gains it. `Program` is `Clone` and a claim on executable
+memory is not; making it clonable would mean either refcounting the exec
+buffer or a `Program` whose clone silently loses its code. The engine is
+also the thing whose LIFETIME the code has to match — activation builds it,
+`drop_prev` frees it — so it is where the field belongs.
+
+**The call is behind a trait.** §6 describes `Engine::render_pixels`
+calling the native entry directly. It calls
+`NativeCall::enter(addr, ctx, abi, args)` instead, and that indirection is
+the phase's most useful decision: the device installs `XtensaCall`, which
+transmutes the address to a typed `extern "C"` pointer, and the host test
+suite installs a caller that runs the same image through the phase-2 ISA
+model. `Engine`'s own path is then literally the same code under both,
+which is what makes `crates/luxel-jit/tests/engine_diff.rs` — 307 of 307
+library patterns, four frames each, bit-identical — a test of the GLUE and
+not of a second implementation of it. A `renderFrame` pattern is only
+reachable this way at all: the frame builtins need the engine's lent
+buffer, which `library_diff.rs`'s by-hand harness does not have.
+
+**No inline assembly on the call path.** §3.2's windowed convention is
+exactly what Rust's `extern "C"` emits a `callx8` for on these targets, so
+a typed fn-pointer call is enough for every `FnAbi` shape. The engine reads
+no result, so the pointer is declared `-> i32` even for `ret_dyn` — a
+two-word return arrives in `a10:a11` with no hidden `sret`. The one `asm!`
+in the tree is a bare `isync` after writing the exec buffer.
+
+**`FnAbi` gained `dyn_params`** and `luxel_core::jit::ctx_arg_words` is the
+`ParamConv::CtxArgs` layout, written once and used by both callers: a
+caller and a callee that disagree about which handoff word is a tag is a
+wild read of somebody's frame, so there is exactly one place to get it
+wrong.
+
+**§5's PSRAM arena is NOT built.** Phase 3 ships the `.rwtext` static and
+only that. On the S3 that is a real limitation rather than a staging step:
+`.rwtext` and `.stack` are one budget, and after the 24 KB stack floor
+there is **1.7 KB** left — enough for `rainbow` and nothing else. The
+buffer is instead bought by trading `iram-vm` away on a JIT board (it holds
+`Vm::run`, the interpreter loop a native pattern never enters), which gets
+the Seengreat to 14 KB / 7 KB per image / 91 % of `library/`. That is a
+working JIT, but §5's PSRAM route — 8 MB already mapped, costing no
+internal SRAM — is what actually lifts the cap, and the measurement is the
+argument for building it. docs/firmware.md "JIT" carries the table.
+
+**The refusal vocabulary grew three device-only reasons** — `init-error`
+(§2.3's exemption needs init to have completed), `no-buffer` (both exec
+halves in flight) and `disabled` (the `POST /api/jit` switch) — beside
+§4a's `debug`. All four are things no compile-time lint could predict,
+which is why §4a routes them through `/api/status`.
 
 ## 7. Verification plan
 

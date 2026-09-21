@@ -63,6 +63,12 @@ pub const CODE_BASE: u32 = 0x4200_0000;
 /// Where [`Cpu::boot`] points `a1`. The stack grows DOWN from here.
 pub const STACK_TOP: u32 = 0x3fca_0000;
 
+/// Bytes at the top of every frame that the window mechanism owns — the
+/// model's copy of `luxel_jit::plan::WINDOW_SAVE`, spelled here because
+/// the two are the same fact seen from either side: the planner reserves
+/// them, and this model refuses to let generated code write them.
+pub const SPILL_BYTES: u32 = 32;
+
 // --------------------------------------------------------------- traps
 
 /// Why execution stopped. Every one of these is a normal `Err` — the model
@@ -88,6 +94,17 @@ pub enum Trap {
     /// window is already rotated as the callee's `entry` would have left
     /// it; see [`Cpu::native_args`] and [`Cpu::return_from_native`].
     NativeCall(u32),
+    /// Generated code stored into a frame's WINDOW SAVE AREA — the 32
+    /// bytes below a caller's stack pointer that the window overflow
+    /// handler owns (`plan::WINDOW_SAVE`).
+    ///
+    /// The model has a flat 64-register file and never spills, so it would
+    /// otherwise execute such a store harmlessly forever — which is
+    /// exactly what happened: `WINDOW_SAVE` sat at `a1+0` instead of the
+    /// top of the frame, every host gate passed, and the real overflow
+    /// handler ate the generated function's data on a device (Gitea #658).
+    /// This trap is the model learning that lesson.
+    SpillAreaWrite { pc: u32, addr: u32 },
     /// `retw.n` with no outstanding call: the function the harness entered
     /// has returned. [`Cpu::run`] turns this into `Ok(Halted)`.
     Halt,
@@ -215,6 +232,13 @@ pub struct Cpu {
     /// How many windows deep a call chain may go before
     /// [`Trap::WindowOverflow`].
     pub max_depth: usize,
+    /// One `[lo, hi)` per live frame: the window save area its `entry`
+    /// carved out. Pushed by `entry`, popped by `retw.n`. Generated code
+    /// storing into any of them is [`Trap::SpillAreaWrite`]. The third
+    /// field is the call depth the frame was opened at, so a `retw` from a
+    /// NATIVE call — which increments depth without ever running `entry`
+    /// — does not pop its caller's area.
+    spill_areas: Vec<(u32, u32, usize)>,
 }
 
 impl Default for Cpu {
@@ -238,6 +262,7 @@ impl Cpu {
             mem: Mem::new(),
             steps: 0,
             max_depth: 4,
+            spill_areas: Vec::new(),
         }
     }
 
@@ -269,6 +294,7 @@ impl Cpu {
         self.sar = 0;
         self.pc = addr;
         self.set_ar(1, STACK_TOP);
+        self.spill_areas.clear();
     }
 
     // ------------------------------------------------------- registers
@@ -603,6 +629,9 @@ impl Cpu {
                 }
                 0x6 => {
                     let addr = self.ar(s).wrapping_add(imm8 * 4);
+                    if self.in_spill_area(addr) {
+                        return Err(Trap::SpillAreaWrite { pc, addr });
+                    }
                     let v = self.ar(t);
                     match self.mem.write32(addr, v) {
                         Ok(()) => Ok(()),
@@ -733,6 +762,9 @@ impl Cpu {
             }
             0x9 => {
                 let addr = self.ar(s).wrapping_add(r as u32 * 4);
+                if self.in_spill_area(addr) {
+                    return Err(Trap::SpillAreaWrite { pc, addr });
+                }
                 let v = self.ar(t);
                 match self.mem.write32(addr, v) {
                     Ok(()) => Ok(()),
@@ -856,11 +888,28 @@ impl Cpu {
     /// window save area at the new `a1 + 0` (§3.3) are ORDINARY MEMORY:
     /// `entry` does not write them.
     fn do_entry(&mut self, s: u8, frame: u32) {
-        let sp = self.ar(s).wrapping_sub(frame);
+        let caller_sp = self.ar(s);
+        let sp = caller_sp.wrapping_sub(frame);
+        // The window save areas live just below the CALLER's sp, i.e. at
+        // the TOP of the frame this `entry` just opened
+        // (`plan::WINDOW_SAVE`). Nothing generated may write there.
+        self.spill_areas.push((
+            caller_sp.wrapping_sub(SPILL_BYTES),
+            caller_sp,
+            self.depth,
+        ));
         let rot = self.pending_rotate;
         self.pending_rotate = 0;
         self.rotate(rot);
         self.set_ar(s, sp);
+    }
+
+    /// Is `addr` inside any live frame's window save area? A store there
+    /// by generated code is a bug in the frame plan.
+    fn in_spill_area(&self, addr: u32) -> bool {
+        self.spill_areas
+            .iter()
+            .any(|&(lo, hi, _)| addr >= lo && addr < hi)
     }
 
     /// `retw.n`: the rotation to undo and the return pc both come out of
@@ -880,6 +929,9 @@ impl Cpu {
         let rot = ((link >> 30) & 3) as usize;
         self.pc = (self.pc & 0xc000_0000) | (link & 0x3fff_ffff);
         self.unrotate(rot);
+        if self.spill_areas.last().is_some_and(|a| a.2 == self.depth) {
+            self.spill_areas.pop();
+        }
         self.depth -= 1;
         Ok(())
     }

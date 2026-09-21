@@ -48,11 +48,16 @@ struct Golden {
 /// noise-heavy probe #260 uses as its stateless benchmark, and a
 /// `renderFrame` pattern.
 const GOLDENS: [Golden; 5] = [
-    Golden { name: "rainbow.js", bytes: 160, pool: 4, fns: 2, digest: 0x10cf423d0ccdee7d },
-    Golden { name: "snake.js", bytes: 1200, pool: 12, fns: 8, digest: 0x850db8012e3d2027 },
-    Golden { name: "snake-2d.js", bytes: 11492, pool: 51, fns: 19, digest: 0xcec154411b17beab },
-    Golden { name: "perlin-fire-wind-tunnel.js", bytes: 2556, pool: 22, fns: 10, digest: 0xcfda693b3e695e4c },
-    Golden { name: "bulk-canvas-ripples-2d.js", bytes: 3628, pool: 19, fns: 11, digest: 0x059e73a2d2dd7421 },
+    // Re-pinned for the corrected frame layout (Gitea #658): the window
+    // save areas moved from `a1+0` to the top of the frame, so every
+    // local, stack home and scratch slot shifted DOWN by 16 bytes. Four
+    // of the five images shrank — offsets now start at 0, and more of
+    // them fit `l32i.n`/`s32i.n`'s 4-bit scaled field.
+    Golden { name: "rainbow.js", bytes: 160, pool: 4, fns: 2, digest: 0x18af292747f563fd },
+    Golden { name: "snake.js", bytes: 1172, pool: 12, fns: 8, digest: 0xb659400b6f6cff15 },
+    Golden { name: "snake-2d.js", bytes: 11256, pool: 51, fns: 19, digest: 0xd8a73584af0e02d7 },
+    Golden { name: "perlin-fire-wind-tunnel.js", bytes: 2536, pool: 22, fns: 10, digest: 0x7acb31222a526137 },
+    Golden { name: "bulk-canvas-ripples-2d.js", bytes: 3576, pool: 19, fns: 11, digest: 0xafeb58cfc53c5133 },
 ];
 
 #[test]

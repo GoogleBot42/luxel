@@ -270,6 +270,19 @@ pub struct Engine {
     /// index space is a strip pattern and stays one. Scanned once at load —
     /// [`uses_coordinate_bulk_op`] walks the bytecode.
     frame_is_2d: bool,
+    /// This program compiled to native code (Gitea #658,
+    /// docs/jit-design.md §6). `Some` means WHOLE-program native: every
+    /// entry the engine calls has a native entry point, and the
+    /// interpreter is not used for `beforeRender`/`render*`/`renderFrame`
+    /// until this is dropped.
+    ///
+    /// docs/jit-design.md §6 puts this on `Program`. It lives here
+    /// instead, deliberately: a [`Program`] is `Clone` and a claim on
+    /// executable memory is not, and the ENGINE is the thing whose
+    /// lifetime the code has to match anyway (activation builds it,
+    /// `drop_prev` frees it). See "§6 as built" in the design.
+    #[cfg(feature = "jit")]
+    native: Option<crate::jit::NativeProgram>,
 }
 
 impl Engine {
@@ -466,6 +479,11 @@ impl Engine {
             layout_map: None,
             strip_scratch: Vec::new(),
             frame_is_2d: false,
+            // Compilation happens AFTER construction, because it needs the
+            // init errors this constructor collects (§2.3's exemption is
+            // only sound when init ran to completion).
+            #[cfg(feature = "jit")]
+            native: None,
         };
 
         // A pattern that renders ONLY in 2D/3D gets a default square-ish
@@ -597,6 +615,206 @@ impl Engine {
             if self.map_dims == 0 { 2 } else { self.map_dims },
             &self.map_coords,
         )
+    }
+
+    // ---- native code (Gitea #658, docs/jit-design.md §6) ----
+
+    /// Hand this engine a compiled image of its own program.
+    ///
+    /// Whole-program or nothing: the caller has already decided that every
+    /// function compiled (a [`luxel_jit::Refusal`] is never partial), so
+    /// from here on `beforeRender`, `render*` and `renderFrame` are native
+    /// calls and the interpreter is the fallback only for the debugger.
+    ///
+    /// Callers MUST NOT install native code when [`Engine::debug_enabled`]
+    /// is set or when init errored — see `jit_eligible`, which is the one
+    /// place those preconditions are spelled.
+    #[cfg(feature = "jit")]
+    pub fn install_native(&mut self, np: crate::jit::NativeProgram) {
+        self.native = Some(np);
+    }
+
+    /// Drop the compiled image and fall back to the interpreter. Idempotent.
+    #[cfg(feature = "jit")]
+    pub fn drop_native(&mut self) {
+        self.native = None;
+    }
+
+    /// Is a compiled image installed AND currently in use?
+    ///
+    /// False while the debugger is attached: §3.6 makes the debugger step
+    /// the interpreter, and `debug_set_enabled(true)` on a live engine is
+    /// allowed, so this is a per-call question rather than a load-time one.
+    #[cfg(feature = "jit")]
+    #[inline]
+    pub fn native_active(&self) -> bool {
+        self.native.is_some() && !self.debug_enabled && !self.is_map
+    }
+
+    /// `(code_bytes, compile_us)` of the installed image — `/api/status`'s
+    /// `jit.code_bytes` / `jit.compile_us`.
+    #[cfg(feature = "jit")]
+    pub fn native_stats(&self) -> Option<(usize, u32)> {
+        self.native.as_ref().map(|n| (n.code_bytes, n.compile_us))
+    }
+
+    /// Whether this engine may run native code at all, and why not when it
+    /// may not (docs/jit-design.md §4a's `jit.reason` vocabulary).
+    ///
+    /// Two preconditions live here rather than in the firmware so that the
+    /// host tests and the device answer them the same way:
+    ///
+    /// - **`debug`** — the debugger steps the interpreter (§3.6).
+    /// - **`init-error`** — §2.3's init exemption is only sound if init ran
+    ///   to completion. An aborted init leaves `ArrNum`-annotated globals
+    ///   holding `Num(0)`, and unboxing on the strength of those kinds
+    ///   would read a number as an array handle.
+    ///
+    /// `None` = eligible.
+    #[cfg(feature = "jit")]
+    pub fn jit_ineligible(&self) -> Option<&'static str> {
+        if self.debug_enabled {
+            return Some("debug");
+        }
+        if self.last_error.is_some() {
+            return Some("init-error");
+        }
+        None
+    }
+
+    /// Everything one pass of native calls needs, assembled once.
+    ///
+    /// The raw pointers borrow `self`'s fields for exactly as long as the
+    /// returned context is used; `err` is a caller-owned slot the helpers
+    /// fill (§3.8 — `VmError` owns a `String`, so it cannot live inside a
+    /// `repr(C)` struct).
+    ///
+    /// # Safety
+    /// The returned [`JitCtx`] holds pointers into `self` and into `*err`.
+    /// It must not outlive either, and nothing may take a `&mut` to
+    /// `self.vm` while native code is running through it.
+    #[cfg(feature = "jit")]
+    unsafe fn native_ctx(&mut self, err: *mut Option<VmError>) -> crate::jit::JitCtx {
+        use crate::jit::{JitCtx, CTX_ARGS, STATUS_OK};
+        let (stack_limit, fn_table) = match self.native.as_ref() {
+            Some(np) => (np.stack_limit, np.entries.as_ptr()),
+            None => (0, core::ptr::null()),
+        };
+        // One `&mut self.vm`, reborrowed as a raw pointer: `vm` and
+        // `globals` point into the same object, so taking two `&mut`s in
+        // the literal below would be two live mutable borrows of it.
+        let vm: *mut Vm = &mut self.vm;
+        let globals = (*vm).globals.as_mut_ptr().cast::<crate::vm::ValueRaw>();
+        JitCtx {
+            vm,
+            prog: &self.prog,
+            status: STATUS_OK,
+            insn_at: 0,
+            fn_idx: 0,
+            _pad: 0,
+            fuel: crate::vm::FUEL as i32,
+            stack_limit,
+            args: [0; CTX_ARGS],
+            err,
+            fn_table,
+            builtins: crate::jit::BUILTIN_ENTRIES.as_ptr(),
+            globals,
+        }
+    }
+
+    /// One native host entry: reset the budget exactly as
+    /// [`crate::vm::Vm::render_pixel`] does, call, and turn a raised
+    /// `status` back into the `Err(VmError)` the interpreter would have
+    /// returned.
+    ///
+    /// # Safety
+    /// `ctx` must be one built by [`Engine::native_ctx`] for the image
+    /// currently installed, and `err` the slot it points at.
+    #[cfg(feature = "jit")]
+    unsafe fn native_enter(
+        np: &crate::jit::NativeProgram,
+        ctx: *mut crate::jit::JitCtx,
+        fn_idx: u16,
+        args: &[i32],
+    ) -> Result<(), VmError> {
+        let Some((addr, abi)) = np.entry(fn_idx) else {
+            // Cannot happen: the image covers every bytecode function.
+            // Reported rather than panicked — a panic here takes the render
+            // task down on a board with no serial port.
+            return Err(VmError {
+                message: String::from("native entry missing (JIT bug)"),
+                fn_idx,
+                pc: 0,
+                line: 0,
+                col: 0,
+                is_assert: false,
+            });
+        };
+        // Every host entry resets the fuel budget (§3.6 / `Vm::call`).
+        (*ctx).fuel = crate::vm::FUEL as i32;
+        (*ctx).status = crate::jit::STATUS_OK;
+        (*ctx).fn_idx = fn_idx;
+        (*ctx).insn_at = 0;
+        // The error slot is reached only through `ctx.err`: taking a second
+        // `&mut` to the caller's local would invalidate the pointer the
+        // helpers write through.
+        let err = &mut *(*ctx).err;
+        *err = None;
+        np.call.enter(addr, ctx, abi, args);
+        if (*ctx).status == crate::jit::STATUS_OK {
+            return Ok(());
+        }
+        (*ctx).status = crate::jit::STATUS_OK;
+        Err((*(*ctx).err).take().unwrap_or_else(|| VmError {
+            // A raised status with no error is a helper bug; report it
+            // rather than losing the failure.
+            message: String::from("native call failed without an error (JIT bug)"),
+            fn_idx,
+            pc: 0,
+            line: 0,
+            col: 0,
+            is_assert: false,
+        }))
+    }
+
+    /// Start one of [`drive`]'s stage entries (`beforeRender`,
+    /// `renderFrame`) — natively when an image is installed and the
+    /// debugger is not attached, through the interpreter otherwise.
+    ///
+    /// Native code is never resumable, which is exactly why it is off
+    /// while debugging: a native stage always returns `Done` or `Err`,
+    /// never `Paused`.
+    fn start_stage(&mut self, fn_idx: u16, args: &[Value]) -> Result<Outcome, VmError> {
+        #[cfg(feature = "jit")]
+        if self.native_active() {
+            let mut raw = [0i32; 4];
+            let n = args.len().min(raw.len());
+            for (slot, a) in raw.iter_mut().zip(args) {
+                *slot = a.num().raw();
+            }
+            return self.native_stage(fn_idx, &raw[..n]);
+        }
+        self.vm.start(&self.prog, fn_idx, args, self.debug_enabled)
+    }
+
+    /// One native call standing in for a whole [`drive`] stage
+    /// (`beforeRender`, `renderFrame`). The stage entries run once a frame,
+    /// so the context is built per call rather than hoisted the way the
+    /// per-pixel pass hoists it.
+    #[cfg(feature = "jit")]
+    fn native_stage(&mut self, fn_idx: u16, args: &[i32]) -> Result<Outcome, VmError> {
+        let np: *const crate::jit::NativeProgram =
+            self.native.as_ref().expect("native_stage without an image");
+        let mut errslot: Option<VmError> = None;
+        // SAFETY: `ctx` borrows `self.vm`, `self.prog` and `errslot` for
+        // the length of this function and nothing else touches them while
+        // the call runs; `np` addresses the image the context was built
+        // for, which is not replaced here.
+        unsafe {
+            let mut ctx = self.native_ctx(&mut errslot);
+            Self::native_enter(&*np, &mut ctx, fn_idx, args)
+                .map(|()| Outcome::Done(Value::default()))
+        }
     }
 
     // ---- debugger ----
@@ -1497,15 +1715,13 @@ impl Engine {
                         self.vm.pixel = [Fx::ZERO; 3];
                         self.vm.pixel_written = false;
                         self.frame_buffer_out();
-                        self.vm.start(&self.prog, f, &[], self.debug_enabled)
+                        // The frame-buffer lend is unchanged by native code
+                        // (§6): the bulk ops are builtins and reach
+                        // `Vm::frame` through the same helpers.
+                        self.start_stage(f, &[])
                     }
                     RunStage::Before => match self.before {
-                        Some(b) => self.vm.start(
-                            &self.prog,
-                            b,
-                            &[Value::Num(self.cur_delta)],
-                            self.debug_enabled,
-                        ),
+                        Some(b) => self.start_stage(b, &[Value::Num(self.cur_delta)]),
                         None => Ok(Outcome::Done(Value::default())),
                     },
                     RunStage::Pixel(i) => {
@@ -1660,6 +1876,36 @@ impl Engine {
             RenderKind::R1(f) => self.prog.fns[f as usize].params < 2,
             _ => false,
         };
+        // Native code replaces `render_pixel` and nothing else: the
+        // coordinate work, the projection, the brush read-back, the
+        // first-error rule and the frame tail below are shared, so there is
+        // one per-pixel pass and not two (docs/jit-design.md §6).
+        //
+        // The context is built ONCE per pass — it is 180 bytes, most of it
+        // the argument handoff area, and rebuilding it per pixel would put
+        // a memset back on the path #260 took one off.
+        #[cfg(feature = "jit")]
+        let mut errslot: Option<VmError> = None;
+        #[cfg(feature = "jit")]
+        let native: Option<(*const crate::jit::NativeProgram, crate::jit::JitCtx)> =
+            if self.native_active() {
+                let np: *const crate::jit::NativeProgram =
+                    self.native.as_ref().expect("native_active");
+                // SAFETY: the context borrows `self.vm`, `self.prog` and
+                // `errslot` as raw pointers for the length of this
+                // function; nothing below takes a conflicting reference to
+                // `self.vm` while native code is running, and the image
+                // `np` points at is not touched until the pass ends.
+                let ctx = unsafe { self.native_ctx(&mut errslot) };
+                Some((np, ctx))
+            } else {
+                None
+            };
+        #[cfg(feature = "jit")]
+        let mut native = native;
+        // `begin_pixel_pass` also clears any suspended run, which is what
+        // makes a swap from a paused interpreter run into a native pass
+        // safe, so it runs on both paths; native code ignores the plan.
         let plan = self.vm.begin_pixel_pass(&self.prog, fn_idx, argc);
         // A coordinate-substituting projection (§5.4d) is a loop-invariant
         // 3-byte selector; a strip projection needs nothing here, because the
@@ -1695,7 +1941,42 @@ impl Engine {
                 args[2] = Value::Num(p[1]);
                 args[3] = Value::Num(p[2]);
             }
-            if let Err(e) = self.vm.render_pixel(&self.prog, &plan, &args) {
+            // One call, two implementations of the SAME entry. Everything
+            // around it — coordinates, projection, brush, error policy —
+            // is shared, which is what makes the two paths comparable
+            // pixel for pixel (docs/jit-design.md §7).
+            #[cfg(feature = "jit")]
+            let outcome = match native.as_mut() {
+                // SAFETY: `ctx` was built for `np` above and both are
+                // still live; `args` holds four words in parameter order.
+                Some((np, ctx)) => unsafe {
+                    let raw = [
+                        args[0].num().raw(),
+                        args[1].num().raw(),
+                        args[2].num().raw(),
+                        args[3].num().raw(),
+                    ];
+                    // Re-derive the VM pointer from a fresh `&mut` each
+                    // pixel. The loop touches `self.vm` between calls
+                    // (`pixel_coords`, the brush), and a raw pointer taken
+                    // before that is stale provenance the moment it does.
+                    // One store per pixel, next to a call that costs
+                    // hundreds of cycles.
+                    (*ctx).vm = &mut self.vm;
+                    // Only `argc` arguments are live for this entry, and a
+                    // function declaring MORE parameters than its render
+                    // kind supplies must see the interpreter's default (0)
+                    // in the rest — not the mid-space 0.5 the coordinate
+                    // array is pre-filled with. `NativeCall::enter` reads
+                    // 0 past the end of this slice, which is exactly
+                    // `push_frame`'s rule.
+                    Self::native_enter(&**np, ctx, fn_idx, &raw[..argc.min(raw.len())])
+                },
+                None => self.vm.render_pixel(&self.prog, &plan, &args),
+            };
+            #[cfg(not(feature = "jit"))]
+            let outcome = self.vm.render_pixel(&self.prog, &plan, &args);
+            if let Err(e) = outcome {
                 let fatal = e.is_assert || e.is_resource_guard();
                 if (self.last_error.is_none() || fatal) && !self.arrays_refused {
                     self.last_error = Some(e);

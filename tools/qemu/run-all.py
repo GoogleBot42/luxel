@@ -216,6 +216,14 @@ def main() -> int:
         ("migrate-s3-fallback-then-16mb-ota1", "migrate-test.py",
          ["--board", "s3", "--old-bootloader", "4mb", "--from", "ota_1",
           "--reflash-bootloader", "16mb", "--result-dir-16mb", s3], False),
+        # The on-device JIT (Gitea #658): the boot pattern rendered natively
+        # and interpreted, compared bit for bit out of guest RAM. Builds its
+        # OWN image (`.#luxel-fw-esp32-generic-jit`) — the shipped classic
+        # images are interpreter-only — and drives the runtime switch
+        # through the gdbstub, because QEMU has no network. ~50 s.
+        # `--patterns @five` covers the §7.1 set at a firmware build each;
+        # that is minutes, so it is not in the default suite.
+        ("jit", "jit-test.py", [], False),
     ]
 
     results: list[tuple[str, str, float]] = []

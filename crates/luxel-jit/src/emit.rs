@@ -756,6 +756,17 @@ impl<'a> Emitter<'a> {
             args_in_regs: plan.conv == ParamConv::Regs,
             params: plan.params as u8,
             ret_dyn: plan.boxed_return(),
+            // The caller's half of the `ctx.args` layout (§3.2): which
+            // parameters cost two words. `ParamConv::Regs` has none by
+            // construction, and a parameter past 32 cannot be described —
+            // `plan_all` has already refused far smaller lists.
+            dyn_params: plan
+                .slot_kind
+                .iter()
+                .take(plan.params.min(32))
+                .enumerate()
+                .filter(|(_, k)| **k == Kind::Dyn)
+                .fold(0u32, |m, (i, _)| m | (1 << i)),
         });
 
         let f = &self.prog.fns[fi];

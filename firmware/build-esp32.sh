@@ -70,8 +70,12 @@ fi
 # Per-board IRAM placement of the interpreter's per-pixel code (IRAM from
 # board-target.sh, Gitea #328). IRAM_OFF=1 builds the same board with
 # everything executing from the flash cache — the A/B lever.
+# Per-board on-device JIT (JIT from board-target.sh, Gitea #658).
+# JIT_OFF=1 builds the same board interpreter-only — the A/B lever, and the
+# second image the QEMU differential gate compares against.
 FEATURES="$BOARD${IRAM:+ $IRAM}"
 if [ "${IRAM_OFF:-0}" = 1 ]; then FEATURES="$BOARD"; fi
+if [ "${JIT:-0}" = 1 ] && [ "${JIT_OFF:-0}" != 1 ]; then FEATURES="$FEATURES jit"; fi
 # Extra non-board cargo features, space-separated. The one in practical use
 # is `small-chip` (RAM-constrained profile: web pool 2 + 88 KB heap + tuned
 # WiFi buffer pools — docs/boards.md tiers). Example:

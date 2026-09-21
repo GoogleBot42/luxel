@@ -112,6 +112,48 @@ export function jitWarning(
 /** What a refusal costs, in the words docs/jit-design.md §4a asks for. */
 const JIT_PREFIX = "Runs in the interpreter on JIT boards: ";
 
+/** The device-side half of the same vocabulary (Gitea #658).
+ *
+ *  `jitWarning` above is a PREDICTION the browser makes from the kinds
+ *  section; this is what the device actually did, out of `/api/status`'s
+ *  `jit` object. The `reason` ids are shared by construction — the emitter's
+ *  `Refusal::id`, `jitlint::JitRefusal::id` and `firmware/src/jit.rs`'s
+ *  `REASONS` are one list — so the wording lives here, once, for both.
+ *
+ *  Returns null for the cases with nothing to say: no device, firmware
+ *  older than #658, a board with no backend (`off` — most of the fleet),
+ *  and the happy path (`native`, which the frame-rate marker reports
+ *  instead). */
+export function deviceJitReason(
+  jit: { state: string; reason: string | null } | null | undefined,
+): string | null {
+  if (!jit || jit.state !== "interp") return null;
+  const why = DEVICE_JIT_REASONS[jit.reason ?? ""];
+  return "This device is running it in the interpreter: " + (why ?? jit.reason ?? "unknown reason");
+}
+
+/** One phrase per reason id. Deliberately plain: the person reading it
+ *  wants to know whether they can do anything about it. */
+const DEVICE_JIT_REASONS: Record<string, string> = {
+  // the emitter's, shared with the compile-time lint
+  unsupported: "the compiler emitted an instruction this device's backend does not have yet",
+  "too-large": "the compiled pattern is bigger than the device's code buffer",
+  "l32r-reach": "the compiled pattern's literal pool is out of reach (a compiler limit)",
+  "frame-size": "a function needs a bigger stack frame than the backend can express",
+  kinds: "the bytecode's type annotations did not verify — please report this",
+  "param-overflow": "a function takes more arguments than the backend can hand over",
+  "offset-reach": "a function addresses further from its frame than the backend can reach",
+  scratch: "the backend ran out of registers on this pattern — please report this",
+  "address-region": "the device's code buffer and its helpers are too far apart",
+  "jump-reach": "a jump in this pattern is further than the backend can reach",
+  untyped: "this pattern was compiled by an older browser build — re-save it",
+  // device-only: nothing a compile-time lint could predict
+  debug: "the debugger is attached, and debugging steps the interpreter",
+  "init-error": "the pattern's setup raised an error, so its type annotations cannot be trusted",
+  "no-buffer": "both code buffers are busy — a crossfade is still finishing",
+  disabled: "the JIT is switched off on this device",
+};
+
 /** The code pane's one-line status: how many variables are boxed, and the
  *  first reason. Empty when there is nothing to say — the caller renders
  *  no strip at all rather than an empty one. */

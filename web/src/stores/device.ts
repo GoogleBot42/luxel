@@ -95,6 +95,12 @@ export const deviceFps = writable(0);
 export const deviceOutFps = writable(0);
 export const deviceRescanHz = writable(0);
 
+/** What the live pattern is running as on the device: `/api/status`'s `jit`
+ *  object (Gitea #658). `null` until the first poll, and on firmware that
+ *  predates it. `state: "off"` is a board with no JIT backend, which is
+ *  most of the fleet — the console says nothing at all in that case. */
+export const deviceJit = writable<DeviceStatus["jit"] | null>(null);
+
 /** Whether a pixel map is installed on the device (render2D geometry), and
  *  — for one stored in the procedural `grid W H` form — its shape, which is
  *  the rig a 2D pattern is previewed on while connected (#372). */
@@ -553,6 +559,7 @@ export async function refreshStatus(): Promise<void> {
     deviceBoard.set(st.board ?? "");
     deviceBcFormat.set(st.bc_format ?? 0);
     deviceVmerr.set(st.vmerr);
+    deviceJit.set(st.jit ?? null); // native / interpreted, and why (#658)
     // DDP/E1.31 liveness rides along here (#540): it is a field of this same
     // body, and the Settings tab used to re-GET the WHOLE of `/api/status` at
     // 0.5 Hz just to read it — the heaviest endpoint on the device, fetched
@@ -1207,6 +1214,7 @@ export async function connectDevice(base: string): Promise<ConnectResult> {
     deviceBoard.set(st.board ?? "");
     deviceBcFormat.set(st.bc_format ?? 0);
     deviceVmerr.set(st.vmerr);
+    deviceJit.set(st.jit ?? null); // native / interpreted, and why (#658)
     const source = await session.pattern(); // what the device is running
     try {
       const b = await session.brightness();

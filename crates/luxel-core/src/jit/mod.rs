@@ -8,7 +8,7 @@
 //! interpreter on the host — so that phase 2's emitter has a contract to
 //! compile against rather than a document to re-read.
 //!
-//! Three things live here:
+//! Four things live here:
 //!
 //! - [`JitCtx`] — the single pointer every generated function and every
 //!   helper carries (`a2` under the windowed ABI). Its field offsets are
@@ -23,6 +23,11 @@
 //!   creation, `CallValue` resolution, `Div`/`Pow`, and the §3.6 bails.
 //!   Each is a thin wrapper over the interpreter's own arm and is
 //!   differentially tested against it (`tests/jithelpers.rs`).
+//! - [`NativeProgram`] / [`NativeCall`] / [`ExecLease`] (`native.rs`, Gitea
+//!   #658) — the ENGINE's half: entry addresses, the per-function calling
+//!   convention, and the one object that turns an address into a call.
+//!   Nothing here knows the emitter (`luxel-jit` depends on this crate, not
+//!   the other way round) or where executable memory comes from.
 //! - [`RetDyn`] — a boxed [`crate::vm::Value`] returned by value in two
 //!   words (`a2:a3` on Xtensa, §3.2). Errors never travel in the return
 //!   value: a failing call sets [`JitCtx::status`] non-zero and fills
@@ -36,6 +41,7 @@
 
 pub mod ctx;
 mod helpers;
+pub mod native;
 mod table;
 #[cfg(test)]
 mod tests;
@@ -45,6 +51,7 @@ pub use ctx::{
     OFFSET_FN_TABLE, OFFSET_FUEL, OFFSET_GLOBALS, OFFSET_INSN_AT, OFFSET_PROG, OFFSET_STACK_LIMIT,
     OFFSET_STATUS, OFFSET_VM, SIZEOF_JITCTX, STATUS_ERR, STATUS_OK,
 };
+pub use native::{ctx_arg_words, ExecLease, NativeAbi, NativeCall, NativeProgram};
 pub use helpers::{
     arr_len, arr_load_dyn, arr_load_num, arr_store, assert_fail, bail_depth, bail_fuel,
     call_value_target, const_arr, fx_div, fx_pow, new_array, CALL_TARGET_BUILTIN, CALL_TARGET_ERR,

@@ -1090,7 +1090,13 @@ pub fn is_array_budget_error(message: &str) -> bool {
         || message.starts_with("array memory budget exceeded")
 }
 
-const FUEL: u32 = 8_000_000;
+/// Instruction budget one host entry may spend before `ERR_EXEC_LIMIT`.
+///
+/// `pub` since Gitea #658: native code charges the SAME budget out of
+/// [`crate::jit::JitCtx::fuel`], and the engine resets it per native entry
+/// exactly as [`Vm::render_pixel`] and [`Vm::call`] do here
+/// (docs/jit-design.md §3.6).
+pub const FUEL: u32 = 8_000_000;
 
 /// One arena array: owned storage, or an index into the program's
 /// const-array pool (until first mutation — copy-on-write). Every `[…]`

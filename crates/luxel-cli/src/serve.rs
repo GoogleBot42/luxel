@@ -337,6 +337,19 @@ struct State {
     /// default is this build's real `bytecode::FORMAT_VERSION`, so a mirror
     /// and the bundle it serves agree unless a test says otherwise.
     bc_format: u32,
+    /// `--jit <state>[:<reason>]`: what `/api/status` reports for the
+    /// on-device JIT (Gitea #658). Pure impersonation, like `--board-name`
+    /// and `--out-fps` — the mirror has no JIT and never will; the emitter
+    /// is a device backend and this process IS the native code. The point
+    /// is that the console's two surfaces — the quiet `native` marker
+    /// beside the frame rate and the amber refusal strip under the preview
+    /// — are drivable without an S3 on the bench.
+    ///
+    /// Default `off`, which is the honest answer for a host and is also
+    /// what most of the fleet reports, so nothing appears unless a test
+    /// asks for it.
+    jit_state: String,
+    jit_reason: Option<String>,
     /// `--stale-store`: a store filled by an OLDER console. A pattern
     /// entering the library for the first time has its blob's format word
     /// decremented, so it genuinely fails to decode — `GET /api/patterns`
@@ -917,6 +930,20 @@ fn status_json(state: &State) -> String {
     // flash part and no bootloader, so there is no ceiling. `upgrade_available`
     // is absent, which is what "no" looks like on a device too. See docs/api.md.
     let partitions = ",\"partitions\":{\"layout\":\"native\",\"migrated\":true,\"ota_slot_bytes\":0,\"storage_bytes\":0,\"assets_bytes\":0,\"ceiling_bytes\":0}";
+    // `jit` (Gitea #658): always present, same argument as `partitions`
+    // above — a client must be able to tell "this host has no JIT" from
+    // "this firmware predates the field", and only one of those is a
+    // reason to say nothing in the UI.
+    let jit = format!(
+        ",\"jit\":{{\"state\":\"{}\",\"reason\":{},\"code_bytes\":{},\"compile_us\":{}}}",
+        json_escape(&state.jit_state),
+        match &state.jit_reason {
+            Some(r) => format!("\"{}\"", json_escape(r)),
+            None => String::from("null"),
+        },
+        if state.jit_state == "native" { 4312 } else { 0 },
+        if state.jit_state == "native" { 1800 } else { 0 },
+    );
     // `board` + `bc_format` (Gitea #643): the board a release package must
     // name, and the LXBC format this host reads. Both mirror firmware fields
     // and are always present, so a client tells "this device says 6" from
@@ -943,7 +970,7 @@ fn status_json(state: &State) -> String {
         String::new()
     };
     format!(
-        "{{\"name\":\"{}\",\"fps\":{},\"out_fps\":{},\"rescan_hz\":{},\"pixels\":{},\"max_pixels\":{},\"geom\":{},\"caps\":{},\"slot\":\"native\",\"version\":\"{}\",\"board\":\"{}\",\"bc_format\":{},\"heap_free\":{},\"engine_heap\":{}{},\"live\":{},\"vmerr\":{}{}{}}}",
+        "{{\"name\":\"{}\",\"fps\":{},\"out_fps\":{},\"rescan_hz\":{},\"pixels\":{},\"max_pixels\":{},\"geom\":{},\"caps\":{},\"slot\":\"native\",\"version\":\"{}\",\"board\":\"{}\",\"bc_format\":{},\"heap_free\":{},\"engine_heap\":{}{},\"live\":{},\"vmerr\":{}{}{}{}}}",
         json_escape(&state.name.lock().unwrap()),
         fps,
         state.out_fps.load(Ordering::Relaxed),
@@ -960,6 +987,7 @@ fn status_json(state: &State) -> String {
         psram,
         live,
         vmerr,
+        jit,
         partitions,
         ota
     )
@@ -2614,6 +2642,9 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
     let mut name = String::from(DEFAULT_NAME);
     // Release-package impersonation (Gitea #643) — see the State fields.
     let mut board_name = String::from(DEFAULT_BOARD_NAME);
+    // "off" = no JIT backend, the honest answer for a host; see State::jit_state
+    let mut jit_state = String::from("off");
+    let mut jit_reason: Option<String> = None;
     let mut bc_format = luxel_core::bytecode::FORMAT_VERSION as u32;
     let mut stale_store = false;
     let mut accept_ota = false;
@@ -2636,6 +2667,17 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         match (flag.as_str(), it.next()) {
             ("--web-dir", Some(v)) => web_dir_arg = Some(v.clone()),
             ("--board-name", Some(v)) => board_name = v.clone(),
+            // impersonate a device with (or without) a working JIT (#658):
+            //   --jit native            the quiet marker by the frame rate
+            //   --jit interp:too-large  the amber strip under the preview
+            //   --jit off               (default) no backend, no UI at all
+            ("--jit", Some(v)) => match v.split_once(':') {
+                Some((st, why)) => {
+                    jit_state = st.to_string();
+                    jit_reason = Some(why.to_string());
+                }
+                None => jit_state = v.clone(),
+            },
             ("--bc-format", Some(v)) => match v.parse::<u32>() {
                 Ok(n) if n >= 1 => bc_format = n,
                 _ => return super::usage(),
@@ -2812,6 +2854,8 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         sync_leader: Mutex::new(None),
         web_dir: locate_web_dir(web_dir_arg),
         board_name,
+        jit_state,
+        jit_reason,
         bc_format,
         stale_store,
         accept_ota,

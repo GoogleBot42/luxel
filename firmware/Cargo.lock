@@ -1524,6 +1524,7 @@ dependencies = [
  "heapless 0.9.3",
  "luxel-core",
  "luxel-hub75",
+ "luxel-jit",
  "picoserve",
  "rust-mqtt",
  "sequential-storage",
@@ -1532,6 +1533,13 @@ dependencies = [
 
 [[package]]
 name = "luxel-hub75"
+version = "0.1.0"
+dependencies = [
+ "luxel-core",
+]
+
+[[package]]
+name = "luxel-jit"
 version = "0.1.0"
 dependencies = [
  "luxel-core",

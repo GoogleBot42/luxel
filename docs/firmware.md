@@ -1314,6 +1314,199 @@ moved 76 %.
    build in this table. It is pure placement, and only pinning the code in
    SRAM makes it reproducible.
 
+## JIT: compiling a pattern to native code on the device
+
+**Status: built into the two S3 images, and OFF at runtime.** Every host
+gate is green (307 of 307 library patterns render bit-identical frames
+through a real `Engine`) and so is the QEMU gate, which executes emitted
+code on an emulated ESP32. It is off because §7.3 has not run: **no S3
+has executed a byte of this**, and turning it on should be a deliberate
+act with someone watching the panel. `LUXEL_JIT_ENABLED` defaults to
+`false`; `POST /api/jit {"on":true}` turns it on for a session, and
+`JIT_OFF=1` removes it from the image entirely.
+
+That gate has already paid for itself once — see "The trap the QEMU gate
+caught" at the end of this section, which is also why the frame layout
+here does not match docs/jit-design.md §3.3's sketch.
+
+Gitea #658, phase 3 of #607. The engineering design is **docs/jit-design.md**
+(§5 executable memory and lifecycle, §6 engine integration); this section is
+what the FIRMWARE does with it. The backend is Xtensa-only and the feature is
+on for `board-s3-devkit` and `board-seengreat-hub75` alone — every other
+board ships the interpreter and pays nothing.
+
+### Lifecycle
+
+Compilation happens at **activation**, in `try_budgeted_engine`, which every
+swap funnels through — boot default, `/api/code`, store activate, library
+swap, crossfade. Two things about the timing are load-bearing:
+
+- It runs **after init**, because docs/jit-design.md §2.3's kind exemption is
+  only sound when init ran to completion. An aborted init leaves an
+  `ArrNum`-annotated global holding `Num(0)`, and native code that unboxed on
+  the strength of that annotation would read a number as an array handle.
+  `Engine::jit_ineligible` is where that precondition and the debugger one
+  live, so the host tests and the device answer them the same way.
+- It runs **on the render task**, which is already blocked for decode and
+  engine construction during a swap. `compile_us` in `/api/status` reports
+  what it cost; a few ms is expected.
+
+The boot default is the one activation that does NOT go through
+`try_budgeted_engine` — there is no heap floor to fail against, because the
+blob is rodata and there is nothing to fall back to — so `main.rs` repeats
+the hook there explicitly.
+
+**Whole-program or nothing, and a refusal is never a failed pattern.** The
+interpreter runs it, at the interpreter's speed, with the same pixels; the
+reason appears in `/api/status`'s `jit.reason` (docs/api.md) and on serial:
+
+| reason | when |
+|---|---|
+| `disabled` | the runtime switch is off — `POST /api/jit {"on":false}` |
+| `debug` | a debugger is attached; debugging steps the interpreter (§3.6) |
+| `init-error` | init did not complete — see above |
+| `untyped` | the blob carries no `kinds` section (an older compiler) |
+| `no-buffer` | both exec halves are in flight (a crossfade still finishing) |
+| `too-large` and the emitter's rest | `luxel_jit::Refusal`, whole-program |
+
+A crossfade holds **two** images, so the buffer is split in half and the
+outgoing half is freed by `drop_prev` — the lease lives in the
+`NativeProgram` the outgoing engine owns, so the code is released exactly
+when nothing can enter it any more.
+
+### The exec buffer
+
+ONE implementation this phase: a `#[link_section = ".rwtext"] static mut` in
+`firmware/src/jit.rs`, written with 32-bit stores through its own address and
+fenced with a single `isync`. `.rwtext` is instruction-bus RAM on both Xtensa
+parts, so the address written is the address executed — no DBUS/IBUS
+translation, no cache maintenance, and no MMU work. 32-bit stores are not a
+style choice: SRAM0 on the classic ESP32 is instruction memory and a sub-word
+access to it faults.
+
+**Size is per board, and on the S3 it had to be bought.** Measured
+2026-09-21:
+
+| board | `.rwtext` | `.stack` | buffer | half | of `library/` |
+|---|---:|---:|---:|---:|---:|
+| `board-esp32-generic` + `jit` | 67,224 B | 23,516 B | 24 KB | 12 KB | 96 % |
+| `board-seengreat-hub75` (before) | 30,152 B | 27,364 B | — | — | — |
+| `board-seengreat-hub75` + `jit` | 30,472 B | 25,484 B | 14 KB | 7 KB | 91 % |
+
+On the classic ESP32 `.rwtext` is SRAM0, a dedicated 128 KB instruction
+region, so the buffer costs flash image and no stack at all; the limit is the
+region (67,224 + 51,800 B of `.rwtext.wifi` of 131,072, ~12 KB spare).
+
+On the S3 `.rwtext` and `.stack` are the same unified SRAM, exactly as the
+"Code placement" section above says of `iram-vm`. A 16 KB buffer takes
+`.stack` from 27,364 B to **9,924 B**, far under the 24 KB floor, and the
+floor leaves only 1.7 KB once the module's own ~1.0 KB of DRAM statics are
+paid for. So **`board-target.sh` trades `iram-vm` for the exec buffer on a
+JIT board**: `iram-vm` is `Vm::run`, the interpreter's per-pixel loop, which
+is precisely the code a natively-compiled pattern never enters — fast-pathing
+the fallback at the cost of not having the fast path is the wrong way round.
+`JIT_OFF=1` puts `iram-vm` back, so the A/B lever still measures
+like-for-like. The price is real and should be stated: a pattern the JIT
+refuses is now interpreted from the flash cache, which is the pre-#328
+behaviour.
+
+docs/jit-design.md §5 always intended S3 code to live in **PSRAM** — the
+Seengreat's 8 MB is already mapped and costs no internal SRAM — and these
+numbers are the argument for building that allocator. It is not built yet.
+
+### The call, and the stack floor
+
+`XtensaCall` in `firmware/src/jit.rs` is **the one place in the tree where an
+integer becomes a function pointer**. Every `FnAbi` shape the emitter
+produces has a typed `extern "C"` signature there; generated functions are
+ordinary windowed-ABI functions (`entry` / `retw.n`), which is what Rust's
+`extern "C"` already emits a `callx8` for, so nothing on the call path is
+assembly. The return is declared `i32` for every shape — the engine reads no
+result, and a two-word return arrives in registers with no hidden `sret`
+pointer, so the narrower declaration is ABI-compatible with both.
+
+The prologue's depth guard (§3.6) replaces the interpreter's `MAX_DEPTH`, and
+its floor is the tighter of two bounds: `STACK_BUDGET` (8 KB) below the stack
+pointer at activation, and `core1::stack_floor()` plus a reserve where the
+render task is on the AppCpu's own stack and that base is known. Embassy
+tasks borrow the thread's stack rather than owning one, which is why the
+first bound exists at all; it is measured on the render task, at the same
+depth a pattern entry will see.
+
+### Verification
+
+Three gates, in order of what they can prove:
+
+1. `cargo test -p luxel-jit` — the encoder against the vendor objdump, the
+   generated code against the interpreter through an Xtensa ISA model
+   (`library_diff.rs`), and **the engine glue** through the same model with
+   a real `Engine` on top (`engine_diff.rs`): 307 of 307 library patterns
+   render bit-identical frames. The model also enforces the frame contract
+   the section below is about — a generated store into a window save area
+   is `Trap::SpillAreaWrite`, not a silent write.
+2. `tools/qemu/jit-test.py` — the only gate that EXECUTES emitted code. It
+   boots the classic-ESP32 JIT image under QEMU and compares the frame the
+   render task published natively against the same image with the JIT
+   switched off. See docs/tools.md for what emulation can and cannot reach.
+3. On metal: not yet run — there is no S3 on the bench that this session
+   could touch (docs/jit-design.md §7.3).
+
+### The trap the QEMU gate caught, and what it was
+
+`aurora-2d.js` and `bulk-canvas-ripples-2d.js` compiled, started running,
+and then took the AppCpu down:
+
+```
+jit: native, 6 fns, 5684 B code (96 B pool), 15916 us, sp 0x3ffeb5fc floor 0x3ffe9f70/0x3ffe7f70
+====================== PANIC ======================
+Detected a write to the stack guard value on AppCpu
+EXCCAUSE: 0, A1: 0x3ffe9b60
+```
+
+Reproducibly, while the same patterns rendered correctly interpreted on
+the same image and correctly through the host ISA model with the same
+compiled bytes. `rainbow`, `snake`, `snake-2d` and `bulk-rainbow` were
+fine, so it was neither size nor function count nor `renderFrame`.
+
+**The cause was the frame layout, and it was a design error.**
+docs/jit-design.md §3.3 reserved "16 bytes of window spill area at
+`a1+0`". The Xtensa windowed ABI puts the save areas just below the
+CALLER's stack pointer, and `entry a1, N` sets `a1 = caller_sp - N`, so
+they are at the **TOP** of the callee's frame — and a `call8` chain needs
+**32** bytes there, not 16:
+
+```
+   a1 + F        caller's sp
+   a1 + F - 16   base save area:  caller's a0..a3
+   a1 + F - 32   call8 extra:     caller's a4..a7
+   ...           locals, operand-stack homes, boxed-args scratch
+   a1 + 0
+```
+
+`xtensa-lx-rt`'s `_WindowOverflow8` writes exactly those offsets
+(`s32e aX, a9, -16..-4` and `s32e aX, a0, -32..-20`). So any generated
+function deep enough to take a window-overflow exception had the top 32
+bytes of its own data overwritten by the handler; the underflow handler
+then reloaded a corrupted `a1`, which is the wild store — `a1` about
+1 KB below `stack_limit`, the guard 7.5 KB lower clobbered.
+
+**Why every host gate missed it:** the ISA model has a flat 64-register
+file and never spills, so the overwrite has no analogue there. That is
+fixed too — the model now traps a generated store into any live frame's
+window save area (`Trap::SpillAreaWrite`), with a self-test that the old
+layout would have tripped, so the class cannot come back silently.
+
+**Both patterns now run natively to completion**, and so does everything
+else tried: **35 patterns, 35 ran natively, 20 bit-identical, 0 crashes,
+0 refusals.** What separates the other 15 from a comparison is only the
+clock — `time()`, or `beforeRender`'s `delta`, which is elapsed wall
+time, and the native boot spends its `compile_us` before frame one. The
+gate reports those rather than asserting on them.
+
+**It is still off by default**, and that is now about §7.3 rather than
+about this: no S3 has executed a byte of it. Turning it on should be a
+deliberate act with someone watching the panel.
+
 ## Cores & tasks: the render task runs on the second core
 
 Classic ESP32 and ESP32-S3 are dual-core; the C3/C6/S2/C2 are not. Until

@@ -12,6 +12,13 @@
 
 #![no_std]
 #![no_main]
+// The JIT writes instruction memory and has to fence the prefetch against
+// it (`isync`, firmware/src/jit.rs). `asm!` on Xtensa is still behind a
+// feature gate; the gate is opened ONLY for the builds that need it — the
+// `jit` feature is Xtensa-only and those builds use Espressif's
+// nightly-based rustc fork, while every RISC-V board compiles this file
+// with the attribute absent.
+#![cfg_attr(feature = "jit", feature(asm_experimental_arch))]
 // the picoserve router's nested type (one layer per route) exceeds the
 // default query depth
 #![recursion_limit = "256"]
@@ -66,6 +73,14 @@ mod flashmap;
 mod parttab;
 mod migrate;
 mod gpio;
+/// On-device JIT (Gitea #658). Xtensa only — the emitter has one backend.
+#[cfg(feature = "jit")]
+mod jit;
+#[cfg(all(feature = "jit", not(target_arch = "xtensa")))]
+compile_error!(
+    "the `jit` feature is Xtensa-only: luxel-jit emits LX6/LX7 code and \
+     firmware/src/jit.rs's exec buffer assumes instruction-bus `.rwtext`"
+);
 #[cfg(feature = "hub75")]
 mod hub75;
 #[cfg(all(feature = "hub75-spare-plane", not(feature = "hub75")))]
@@ -153,7 +168,11 @@ const PASSWORD: Option<&str> = option_env!("LUXEL_PASS");
 
 /// Built-in default pattern: source for `GET /api/pattern`, bytecode (built
 /// by build.rs — the firmware links no compiler) for execution.
-const PATTERN: &str = include_str!("../../library/rainbow.js");
+///
+/// Both halves come out of `OUT_DIR`, so the source served and the
+/// bytecode executed are provably the same file — `library/rainbow.js`
+/// unless `LUXEL_DEFAULT_PATTERN` named another (build.rs).
+const PATTERN: &str = include_str!(concat!(env!("OUT_DIR"), "/default.js"));
 
 /// `include_bytes!` gives alignment 1, and `deserialize_lean_static` only
 /// BORROWS a blob whose word region is 4-aligned in memory (it silently
@@ -985,15 +1004,26 @@ fn budgeted_engine(prog: luxel_core::vm::Program, count: u32) -> Engine {
 /// so error messages report the pressure that caused the rejection, not
 /// the comfortable number after freeing.
 fn try_budgeted_engine(prog: luxel_core::vm::Program, count: u32) -> Result<Engine, usize> {
-    let e = budgeted_engine(prog, count);
+    #[allow(unused_mut)]
+    let mut e = budgeted_engine(prog, count);
     let free = esp_alloc::HEAP.free() as usize;
     if free < RUNTIME_FLOOR {
         println!(
             "pattern rejected: {} B heap left after load (< {} floor)",
             free, RUNTIME_FLOOR
         );
+        #[cfg(feature = "jit")]
+        jit::note_interpreted("init-error");
         return Err(free); // drops the engine, freeing its heap
     }
+    // Compile HERE and nowhere else: every activation — boot default,
+    // /api/code, store activate, library swap, crossfade — funnels through
+    // this function, and it runs AFTER init, which is what makes the kind
+    // annotations trustworthy (docs/jit-design.md §2.3, §5 "Lifecycle").
+    // Whole-program or nothing, and a refusal leaves a working interpreted
+    // pattern rather than a failed one.
+    #[cfg(feature = "jit")]
+    jit::try_compile(&mut e);
     Ok(e)
 }
 
@@ -1134,7 +1164,19 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
     // from boot rather than only after the first swap (Gitea #287).
     let boot_free = esp_alloc::HEAP.free() as usize;
     let mut engine = match luxel_core::bytecode::deserialize_lean_static(PATTERN_BC) {
-        Ok(p) => Some(budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed))),
+        Ok(p) => {
+            // The boot default is the ONE activation that does not go
+            // through `try_budgeted_engine`: there is no heap floor to
+            // fail against, because the blob is rodata and there is
+            // nothing to fall back TO. So the JIT hook is repeated here —
+            // without it the built-in pattern would be the only one on the
+            // device that never compiled (Gitea #658).
+            #[allow(unused_mut)]
+            let mut e = budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed));
+            #[cfg(feature = "jit")]
+            jit::try_compile(&mut e);
+            Some(e)
+        }
         Err(e) => {
             println!("embedded pattern bytecode error (build bug?): {}", e);
             None

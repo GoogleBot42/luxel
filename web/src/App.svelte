@@ -26,6 +26,7 @@
     deviceBase,
     deviceBlocked,
     deviceFps,
+    deviceJit,
     deviceOutFps,
     deviceRescanHz,
     isPlayground,
@@ -333,6 +334,21 @@
 
         <span class="spacer"></span>
 
+        <!-- The device compiled the live pattern (#658, docs/jit-design.md
+             §4a: "next to the frame rate"). A quiet marker and nothing
+             more — it says why the number to its left is what it is. Its
+             own element, because the fps readout is asserted BARE
+             (`/^\d+ fps$/`, web/tools/device-e2e.mjs) and because a
+             refusal is not reported here at all: that one has a reason
+             worth reading, and it gets the amber strip under the preview. -->
+        {#if $deviceJit?.state === "native"}
+          <span
+            class="jitmark mono"
+            data-role="jit-native"
+            title="This device compiled the pattern to native code: {$deviceJit
+              .code_bytes} bytes in {$deviceJit.compile_us} µs.">native</span
+          >
+        {/if}
         <span
           class="fps mono"
           class:pg={$isPlayground}
@@ -551,10 +567,22 @@
   }
 
   .fps {
-    order: 6;
+    order: 7;
     font: 11.5px/1 var(--mono);
     color: var(--text-dim);
     white-space: nowrap;
+  }
+
+  /* The JIT marker sits immediately left of the readout it explains, in
+     the same 11.5px mono, one shade further back: it is context for the
+     number, not a second number. (#658) */
+  .jitmark {
+    order: 6;
+    font: 11.5px/1 var(--mono);
+    color: var(--text-dim);
+    opacity: 0.62;
+    white-space: nowrap;
+    margin-right: 8px;
   }
 
   /* mockup S5 sets the playground readout off from the Layout chip by a

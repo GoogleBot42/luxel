@@ -14,6 +14,7 @@ fn every_library_pattern_compiles() {
     let mut total = 0usize;
     let mut worst = (0usize, String::new());
     let mut n = 0usize;
+    let mut sizes: Vec<usize> = Vec::new();
 
     for (name, src) in library() {
         let (prog, kinds) = program_of(&src).unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -21,6 +22,7 @@ fn every_library_pattern_compiles() {
             Ok(img) => {
                 n += 1;
                 total += img.len_bytes();
+                sizes.push(img.len_bytes());
                 if img.len_bytes() > worst.0 {
                     worst = (img.len_bytes(), name.clone());
                 }
@@ -56,6 +58,30 @@ fn every_library_pattern_compiles() {
         worst.1,
         worst.0
     );
+    // The DISTRIBUTION, not just the total: an exec buffer is sized per
+    // board (firmware/src/jit.rs `JIT_STATIC_KB`) and what matters there
+    // is how much of the library a given cap covers, which a mean skewed
+    // by one 32 KB outlier does not say. Phase 4's code cache wants the
+    // same numbers. Printed, never asserted — pinning a percentile would
+    // make every codegen improvement a test failure.
+    sizes.sort_unstable();
+    let pct = |p: usize| sizes[(sizes.len() * p / 100).min(sizes.len() - 1)];
+    eprintln!(
+        "image size: p50 {} B, p75 {} B, p90 {} B, p99 {} B, mean {} B",
+        pct(50),
+        pct(75),
+        pct(90),
+        pct(99),
+        total / n.max(1)
+    );
+    for cap in [2048usize, 4096, 7168, 8192, 16384, 32768] {
+        let fit = sizes.iter().filter(|s| **s <= cap).count();
+        eprintln!(
+            "  a {:>5} B buffer holds {fit}/{n} ({} %)",
+            cap,
+            fit * 100 / n.max(1)
+        );
+    }
     assert!(
         refusals.is_empty(),
         "{} patterns refused:\n{}",

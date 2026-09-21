@@ -1,5 +1,188 @@
 # Update log
 
+## 2026-09-21 — JIT phase 3: patterns compile and run on the device (#658)
+
+Phase 3 of the on-device JIT (#607, docs/jit-design.md §5/§6). Phase 2 built
+an Xtensa emitter that executed nothing; **this one puts its output behind
+`Engine::render_pixels` on two boards, and adds the gate that proves emitted
+code actually runs on an Xtensa core without a device in the room.**
+
+**What happens now, at every activation.** `try_budgeted_engine` — the choke
+point every swap funnels through — compiles the whole program or none of it,
+AFTER init has run, because §2.3's kind exemption is only sound when init
+completed. A refusal is never a failed pattern: the interpreter runs it,
+with the reason in `/api/status`'s new `jit` object. The vocabulary is the
+one the emitter and the browser's #627 lint already share, plus three the
+device alone can know (`init-error`, `no-buffer`, `debug`) and `disabled`
+for the new `POST /api/jit` switch. The boot default needed the hook
+repeated in `main.rs` — it is the one activation that does not go through
+`try_budgeted_engine`, and without it the built-in pattern would have been
+the only one on the device that never compiled.
+
+**The call is behind a trait, and that is the phase's most useful
+decision.** §6 has `render_pixels` calling the entry directly; it calls
+`NativeCall::enter` instead. The device installs `XtensaCall`, which
+transmutes the address to a typed `extern "C"` pointer — one signature per
+`FnAbi` shape, no assembly on the call path, because §3.2's windowed
+convention is exactly what `extern "C"` already emits a `callx8` for. The
+host test suite installs a caller that runs the same image through phase 2's
+ISA model. `Engine`'s own path is then **literally the same code under
+both**, which is what makes the new gate a test of the glue rather than of a
+second implementation of it:
+
+**`crates/luxel-jit/tests/engine_diff.rs`: 307 of 307 library patterns render
+bit-identical frames** through a real `Engine`, four frames each at 60 px,
+errors compared down to message, function and word index. It reaches
+`renderFrame` patterns, which `library_diff.rs` cannot touch at all (the
+frame builtins need the engine's lent buffer), and it caught the two bugs
+worth catching: a function declaring more parameters than its render kind
+supplies must see the interpreter's default 0, not the 0.5 the coordinate
+array is pre-filled with; and the VM pointer in the per-pass `JitCtx` has to
+be re-derived each pixel, because the loop touches `self.vm` between calls.
+
+**The exec buffer, and what it cost on the S3.** One implementation: a
+`#[link_section = ".rwtext"]` static, split in two so a crossfade can hold
+both images, written with 32-bit stores and fenced with a single `isync` —
+the only `asm!` in the JIT. `.rwtext` is instruction-bus RAM on both Xtensa
+parts, so the address written is the address executed: no DBUS/IBUS
+translation, no cache step, no MMU work.
+
+Then the measurement, which did not go the way §5 hoped. On the S3
+`.rwtext` and `.stack` are the same SRAM. `board-seengreat-hub75` has
+`.stack` 27,364 B before this; a 16 KB buffer takes it to **9,924 B**, and
+the 24 KB floor leaves **1.7 KB** once the module's own DRAM statics are
+paid — enough for `rainbow` and nothing else. So `board-target.sh` **trades
+`iram-vm` for the exec buffer on a JIT board**: `iram-vm` is `Vm::run`, the
+interpreter's per-pixel loop, which is precisely the code a
+natively-compiled pattern never enters, and fast-pathing the fallback at the
+cost of not having the fast path is the wrong way round. `JIT_OFF=1` puts it
+back, so the A/B still measures like-for-like. The price is real: a pattern
+the JIT refuses is now interpreted from the flash cache, which is the
+pre-#328 behaviour.
+
+| board | JIT | `.rwtext` | `.stack` | buffer | per image | of `library/` | app image | Δ |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| `board-seengreat-hub75` | built, off | 30,472 | 25,484 | 14 KB | 7 KB | 91 % | 1,073,136 | +86,880 |
+| `board-s3-devkit` | built, off | 30,472 | 25,484 | 14 KB | 7 KB | 91 % | 1,068,320 | +86,272 |
+| `board-esp32-generic` + `jit` | test only | 67,224 | 23,516 | 24 KB | 12 KB | 96 % | 1,122,496 | +87,472 |
+| `board-pixelblaze-v3` | no | — | — | — | — | — | 1,021,504 | **−16** |
+| `board-c6-devkit` + `hosted-ui` | no | — | — | — | — | — | 1,027,472 | **+96** |
+| `board-c3-devkit` | no | — | — | — | — | — | 983,088 | **+96** |
+
+The three non-JIT boards move by ±96 bytes, which is the `build.rs` change
+that now emits the default pattern's SOURCE alongside its bytecode (so the
+pattern served and the pattern executed are provably the same file) — not
+the JIT, which they do not link at all. `tools/stack-check.sh` is green on
+the S3 at 25,484 B and reports no function over the 12 KB frame budget.
+
+**docs/jit-design.md §5 always intended S3 code to live in PSRAM** — the
+Seengreat's 8 MB is already mapped and costs no internal SRAM — and these
+numbers are the argument for building that allocator. It is not built.
+
+**The QEMU gate, and the part of §7.2 that turned out to be impossible.**
+§7.2 assumed the differential would drive `/api/code` and snapshot
+`/api/pixels`. It cannot: QEMU's `esp32` machine models no radio, so
+`WifiController::new` panics inside the PHY blob and the web server —
+spawned after that line — never exists. There is no network and no console
+command interface, so no request ever reaches the guest.
+
+What works instead is better. The render task lives on the **AppCpu**, on an
+executor started before the WiFi call, so it decodes, compiles and publishes
+a frame regardless of what the ProCpu is doing; QEMU's gdbstub reads guest
+memory, which `heap-regions-test.py` already relies on. So
+`tools/qemu/jit-test.py` boots the image, reads the frame straight out of
+`shared::PIXELS`, then boots the SAME image again with one byte of
+`LUXEL_JIT_ENABLED` written to 0 — the same switch `POST /api/jit` flips,
+which is why that static is `#[no_mangle]` — and compares bit for bit.
+Nothing guest-side is conditional on emulation.
+
+Two limits follow from the panic, both documented rather than worked around:
+one frame per boot (the embassy-time alarm is bound to the spinning ProCpu)
+and one pattern per boot (the ProCpu executor never runs, so playlist and
+resume never swap) — hence `LUXEL_DEFAULT_PATTERN`, a general build knob that
+lets `--patterns` rebuild the image per pattern. And one that is not the
+panic's fault: a pattern whose first frame is built out of `time()` renders
+legitimately differently on the two sides, because the native boot spends its
+`compile_us` first. That is excused only when the source actually names a
+wall-clock builtin; a match is never explained away, and a mismatch without a
+clock input is a failure.
+
+**What it found within the hour: a device-only crash every host gate had
+passed for two phases.** `aurora-2d.js` and `bulk-canvas-ripples-2d.js`
+compiled, started running, and then took the AppCpu down with
+`Detected a write to the stack guard value`, EXCCAUSE 0, `a1` about 1 KB
+below `stack_limit` while the guard 7.5 KB further down had been clobbered
+— a wild store, on patterns that render correctly INTERPRETED on the
+same image and correctly through the host ISA model with the same compiled
+bytes.
+
+**The cause was the frame layout, and it was an error in the design.**
+docs/jit-design.md §3.3 reserved "16 bytes of window spill area at
+`a1+0`". The Xtensa windowed ABI puts the save areas just below the
+CALLER's stack pointer, and `entry a1, N` sets `a1 = caller_sp - N`, so
+they live at the **TOP** of the callee's frame — and a `call8` chain needs
+**32** bytes there, not 16. `xtensa-lx-rt`'s `_WindowOverflow8` is the
+authority: `s32e aX, a9, -16..-4` for the caller's `a0..a3` and
+`s32e aX, a0, -32..-20` for its `a4..a7`. So any generated function deep
+enough to take a window-overflow exception had the top 32 bytes of its own
+data eaten by the handler, and the underflow handler then reloaded a
+corrupted `a1`.
+
+`plan.rs` now reserves the top 32 bytes and lays locals, operand-stack
+homes and the boxed-args scratch from `a1+0` up. Four of the five golden
+images got SMALLER as a side effect (`snake-2d` 11,492 → 11,256 B): the
+offsets now start at zero, so more of them fit `l32i.n`/`s32i.n`'s 4-bit
+scaled field. 307 of 307 still render bit-identical through the engine
+gate, and the firmware images are byte-for-byte the size they were — this
+is pure codegen.
+
+**And the model learned the lesson.** §7.1's ISA model has a flat
+64-register file and never spills, which is exactly why it could not see
+this. It now records each frame's save area at `entry`, releases it at
+`retw`, and TRAPS any store into one by generated code
+(`Trap::SpillAreaWrite`) — with a self-test that emits the old layout and
+asserts it trips, so the class cannot come back quietly.
+
+**After the fix**, over 35 patterns on the emulated ESP32: **35 ran
+natively, 20 bit-identical, 0 crashes, 0 refusals** (753 s — each pattern
+costs a firmware build, because the boot default is the only one
+emulation can reach). The 15 remaining are clock-dependent, reported and
+not asserted; one of those is an audio-reactive pattern where both sides
+agree on an all-black frame, which the gate now calls vacuous rather than
+counting it.
+The two ex-crashers run natively to completion; what still separates them
+from a bit-for-bit comparison is only the clock, because both integrate
+`beforeRender`'s `delta` — elapsed wall time, and the native boot spends
+its `compile_us` before frame one. That is the same class as `time()` and
+the gate reports it rather than asserting on it.
+
+**The JIT still ships OFF**, but for a different reason than it was
+yesterday: not a known bug, just that §7.3 has not run and **no S3 has
+executed a byte of this**. `LUXEL_JIT_ENABLED` defaults to false so
+turning it on stays a deliberate act with someone watching the panel;
+`POST /api/jit {"on":true}` does it for a session.
+
+**`/api/status` gains `jit {state, reason, code_bytes, compile_us}`** on every
+board — `off` where the feature is not built, so a client cannot mistake "no
+backend" for "old firmware". The console shows it in two places and the rule
+between them is severity: `native` is a quiet marker beside the frame rate,
+because it explains the number rather than being news, while a refusal has a
+reason worth reading and gets the amber strip under the preview — the same
+row #627's compile-time prediction uses, and they cannot both fire.
+`luxel serve --jit native|interp:REASON|off` impersonates all three, verified
+in real chromium and now guarded by three checks in `device-e2e.mjs`.
+
+`POST /api/jit {"on":…}` is neither live nor persisted, both deliberately:
+swapping a running program between two implementations mid-frame is the one
+thing that could tear a frame, so it applies at the next activation; and a
+reboot comes back with the JIT on, which is what you want from a switch whose
+whole purpose is a measurement.
+
+**Still untested on metal**, and it should stay that way until the trap
+above is closed: §7.3 — the on-panel differential, the PSRAM-vs-SRAM
+microbench and the #260 table — is the phase that comes after it.
+
+
 ## 2026-09-21 — A 16 MB board behind an older bootloader migrates to the 4 MB table instead of refusing (#634)
 
 #659 taught the migrator to read the bootloader's flash ceiling and refuse when the

@@ -3,16 +3,34 @@
 //! precompiled blob (main.rs includes OUT_DIR/default.lxbc).
 
 fn main() {
-    let src_path = "../library/rainbow.js";
+    // Which pattern boots. `LUXEL_DEFAULT_PATTERN` is a path relative to
+    // firmware/ (or absolute); unset means `library/rainbow.js`, which is
+    // what every shipped image carries.
+    //
+    // It exists because the pattern a device boots into is the ONLY one
+    // some environments can select: tools/qemu/jit-test.py drives the
+    // emulator, where the network never comes up and the playlist task
+    // never runs, so the boot default is the whole reachable corpus
+    // (Gitea #658). A general knob, not an emulator one — nothing in the
+    // firmware ever asks whether it was set.
+    println!("cargo:rerun-if-env-changed=LUXEL_DEFAULT_PATTERN");
+    let src_path =
+        std::env::var("LUXEL_DEFAULT_PATTERN").unwrap_or_else(|_| "../library/rainbow.js".into());
     println!("cargo:rerun-if-changed={src_path}");
-    let src = std::fs::read_to_string(src_path).expect("read default pattern");
+    let src = std::fs::read_to_string(&src_path)
+        .unwrap_or_else(|e| panic!("read default pattern {src_path}: {e}"));
     let prog = match luxel_core::compile::compile(&src) {
         Ok(p) => p,
-        Err(d) => panic!("default pattern does not compile: {}", d.message),
+        Err(d) => panic!("default pattern {src_path} does not compile: {}", d.message),
     };
     let blob = luxel_core::bytecode::serialize(&prog).expect("serialize default pattern");
     let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
     std::fs::write(out_dir.join("default.lxbc"), blob).expect("write default.lxbc");
+    // The SOURCE too, so main.rs includes the file this bytecode was
+    // compiled from rather than naming `library/rainbow.js` a second time
+    // — two independent paths to the same fact is a drift waiting to
+    // happen, and with the override above it would be a live one.
+    std::fs::write(out_dir.join("default.js"), &src).expect("write default.js");
 
     // Partition table binary for src/parttab.rs — the WLED takeover
     // (src/takeover.rs) and the layout migrator (src/migrate.rs) both write

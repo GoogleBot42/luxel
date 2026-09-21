@@ -1536,6 +1536,56 @@ board stays over image-check's 3 % floor; `board-c6-devkit`, which carries no
 IRAM features at all, still pays ~1.1 KB for the builtin hot/cold split
 (3.27 % → 3.17 % of slot free).
 
+## JIT: which boards compile patterns to native code
+
+Since Gitea #658 an S3 board CAN compile the running pattern to Xtensa
+machine code at activation instead of interpreting it (docs/jit-design.md,
+docs/firmware.md "JIT"). **It is built into those images and OFF at
+runtime** until §7.3 runs — no S3 has executed a byte of it yet — and
+`POST /api/jit {"on":true}` turns it on for a session. It is a cargo feature — `JIT` in
+`firmware/board-target.sh`, mirrored by `extraFeatures = [ "jit" ]` in
+flake.nix's `firmwareVariants`, and the two must agree — and `JIT_OFF=1`
+builds the same board without it.
+
+| board | JIT | exec buffer | per image | of `library/` | image Δ | `.stack` |
+|---|---|---:|---:|---:|---:|---:|
+| `board-seengreat-hub75` | built, off | 14 KB | 7 KB | 91 % | +86,880 | 25,484 |
+| `board-s3-devkit` | built, off | 14 KB | 7 KB | 91 % | +86,272 | 25,484 |
+| `board-esp32-generic` + `EXTRA_FEATURES=jit` | test only | 24 KB | 12 KB | 96 % | +87,472 | 23,516 |
+| `board-pixelblaze-v3` | no | — | — | — | —16 | unchanged |
+| `board-athom-music` | no | — | — | — | —16 | unchanged |
+| `board-c3-devkit` | no | — | — | — | +96 | unchanged |
+| `board-c6-devkit` | no | — | — | — | +96 | unchanged |
+
+- **Xtensa only.** `luxel-jit` has one backend, LX6/LX7; the RISC-V boards
+  have none and the `jit` feature refuses to compile for them.
+- **The S3 boards only**, of the ones that ship. The classic ESP32 has the
+  IRAM for it but not the OTA slot: +88 KB on a 1.25 MiB slot would take
+  `board-pixelblaze-v3` from 22 % margin to 15 %, which is survivable, and
+  `board-c6-devkit` has no backend anyway — but nobody has measured the win
+  on a classic part, and the design (§4, decision 4) puts the S3
+  architecture first on purpose. The `EXTRA_FEATURES=jit` row exists because
+  QEMU models the classic ESP32 and not the S3, so it is the only image on
+  which emitted code can be executed without hardware
+  (`tools/qemu/jit-test.py`). **It is not a release artifact.**
+- **On the S3 the buffer is bought from `iram-vm`,** because `.rwtext` and
+  `.stack` are one budget there (see "IRAM budget" above) and they do not
+  both fit over the 24 KB floor. `iram-vm` is the INTERPRETER's per-pixel
+  loop, which a natively-compiled pattern never enters. The full measurement
+  and the argument are in docs/firmware.md "JIT"; the short version is that
+  a JIT board's `IRAM` list is empty and `JIT_OFF=1` puts `iram-vm` back.
+- **"of `library/`"** is how many of the 307 patterns fit the per-image cap
+  (`cargo test -p luxel-jit --test compile_all -- --nocapture` prints the
+  curve). The rest refuse with `too-large` and are interpreted — a correct
+  outcome, visible in `/api/status`'s `jit.reason`, not a failure.
+- **The non-JIT boards move by ±96 bytes and not one byte more.** The
+  firmware depends on luxel-core with `default-features = false` and names
+  neither `jit` nor `luxel-jit` unless a board asks, so none of them links
+  an emitter (the same property #642's phase-1 zero delta had). The ±96 is
+  the `build.rs` change that emits the default pattern's SOURCE beside its
+  bytecode — `include_str!` now reads it out of `OUT_DIR`, so the pattern
+  served and the pattern executed are provably the same file.
+
 ## Hosted-UI builds (no on-device web app)
 
 `hosted-ui` is a cargo feature, not a board — combine it with a board

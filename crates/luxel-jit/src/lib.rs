@@ -138,6 +138,20 @@ pub struct FnAbi {
     /// The result comes back in `a10:a11` (tag, payload) rather than in
     /// `a10` alone.
     pub ret_dyn: bool,
+    /// Bit `i` set = parameter `i` is `Dyn` and occupies TWO handoff words
+    /// (tag then payload) rather than one (Gitea #658).
+    ///
+    /// Only meaningful when `args_in_regs` is false — `ParamConv::Regs`
+    /// exists precisely because no parameter is `Dyn`. The CALLER has to
+    /// know this to lay `JitCtx::args` out the way the callee's prologue
+    /// will read it, and it is reported rather than re-derived so the two
+    /// sides read one fact (`luxel_core::jit::ctx_arg_words` is the
+    /// layout, shared by the device and the ISA-model harness).
+    ///
+    /// Bits past `params` are zero; a function with more than 32
+    /// parameters cannot be described here, and `plan_all` refuses one
+    /// long before that on `ParamOverflow`.
+    pub dyn_params: u32,
 }
 
 impl NativeImage {
