@@ -393,9 +393,9 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
 
   | field | meaning |
   |---|---|
-  | `migration_blocked` | why, as a short string — e.g. `"pattern library too large for the new layout"`, `"pattern store did not come up"`, `"flash too small for the new layout"`. The device keeps working on its old table; the usual fix is to delete patterns and reboot. |
-  | `blocked_need_bytes` | what the migration needed. |
-  | `blocked_have_bytes` | what the new layout offers. |
+  | `migration_blocked` | why, as a short string. Two families. **Refusals decided before anything is written** — `"pattern library too large for the new layout"`, `"pattern store did not come up"`, `"flash too small for the new layout"` — where the usual fix is to delete patterns and reboot. And **mid-run flash failures** — `"staging write failed"`, `"could not build the staged log"`, `"new storage erase failed"`, `"reserved blob did not re-store"`, `"staged log copy failed"`, `"asset copy failed"`, `"asset regions overlap"`, `"partition table write failed"` — which retry on the next boot. Either way the device keeps working on its old table with its data intact. |
+  | `blocked_need_bytes` | what the migration needed — or, for a mid-run flash failure, the first of the two flash offsets involved. |
+  | `blocked_have_bytes` | what the new layout offers — or the second offset. |
 
   ```json
   "partitions":{"layout":"partitions.csv","migrated":false,
