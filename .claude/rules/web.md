@@ -291,6 +291,15 @@ paths:
   moment the item model grows a field (#470 added `kind` and `proj`). Pages own
   layout and intent; `stores/device.ts` owns what an edit MEANS.
 - Strict TypeScript only.
+- `npm test` loads `src/lib/*.ts` modules DIRECTLY through node's type
+  stripping, and node's ESM resolver does no extension guessing. A **type-only**
+  import (`import type { X } from "./device"`) is erased and works
+  extensionless — which is why every pre-existing tested module got away with
+  it — but a **value** import must be spelled `"./luxr.ts"`, or the test dies
+  with `ERR_MODULE_NOT_FOUND` on a path svelte-check and vite both resolve
+  fine. `tsconfig.json` carries `allowImportingTsExtensions` + `noEmit` so tsc
+  accepts the explicit form; use it only in modules a test loads, and leave the
+  rest of `src/` extensionless (Gitea #643).
 - **The web UI v2 spec is `docs/design/webui-v2/proposal.md`** (approved
   2026-09-18, epic #461). Any v2 work follows it: geometry comes from the one
   `Layout` store, and a control is *absent* unless the device's advertised
