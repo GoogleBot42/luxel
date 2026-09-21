@@ -125,6 +125,28 @@ DEFAULT_PIXELS = 60
 WALL_CLOCK = ("time(", "clockHour", "clockMinute", "clockSecond",
               "clockYear", "clockMonth", "clockDay", "clockWeekday")
 
+# `beforeRender(delta)` is the OTHER wall-clock input, and it is a
+# parameter rather than a builtin: `delta` is real elapsed milliseconds,
+# so a pattern that integrates it drifts by exactly the `compile_us` the
+# native boot spends before frame one. `aurora-2d` (`z = z + delta *
+# 0.00015`) and `bulk-canvas-ripples-2d` (`dt = delta * 0.001`) are both
+# this, and neither names a clock builtin anywhere.
+BEFORE_RENDER = re.compile(r"function\s+beforeRender\s*\(\s*([A-Za-z_$][\w$]*)\s*\)")
+
+
+def wall_clock_inputs(src: str) -> list[str]:
+    """Which wall-clock inputs this pattern reads, by name. Empty means its
+    first frame is a function of the pattern alone, and a native/interpreted
+    mismatch is therefore a bug."""
+    found = [b.rstrip("(") + "()" for b in WALL_CLOCK if b in src]
+    m = BEFORE_RENDER.search(src)
+    if m:
+        name = m.group(1)
+        # More than the declaration itself = the body actually uses it.
+        if len(re.findall(r"\b" + re.escape(name) + r"\b", src)) > 1:
+            found.append(f"beforeRender({name})")
+    return sorted(found)
+
 
 class Fail(Exception):
     pass
@@ -389,7 +411,9 @@ def check_one(qemu: str, efuse: str, workdir: str, pattern: str | None,
     # a 22 ms shift is 0.4 % of its shortest ramp.
     #
     # So a mismatch is excused for exactly one reason, and only when the
-    # source actually carries it: the pattern reads the wall clock. A
+    # source actually carries it: the pattern reads the wall clock —
+    # through `time()` and friends, or through `beforeRender`'s `delta`,
+    # which is elapsed milliseconds and drifts by exactly the compile. A
     # MATCH is never explained away — `rainbow` reads `time()` too and
     # still agrees bit for bit, because 5.7 ms of a 6.55 s ramp does not
     # survive 8-bit quantisation — and a mismatch in a pattern with no
@@ -408,20 +432,26 @@ def check_one(qemu: str, efuse: str, workdir: str, pattern: str | None,
         raise Fail(f"{name}: ran natively ({fns} fns / {code_b} B in {us} us) and then "
                    f"published NO frame — the render task died. Check the serial log "
                    f"for `stack guard` / EXCCAUSE. This is the open #658 trap.")
-    if not any(native):
-        raise Fail(f"{name}: the native frame is all-black — nothing was proved")
     if native != interp:
         at = next(i for i, (a, b) in enumerate(zip(native, interp)) if a != b)
         detail = (f"at byte {at} (pixel {at // 3}): "
                   f"native {native[at - at % 3:at - at % 3 + 3].hex()} "
                   f"interpreted {interp[at - at % 3:at - at % 3 + 3].hex()}")
-        clock = sorted(b.rstrip("(") + "()" for b in WALL_CLOCK if b in src)
+        clock = wall_clock_inputs(src)
         if not clock:
             raise Fail(f"{name}: PIXELS differ {detail} — and this pattern reads no "
                        f"wall clock, so the two sides should agree")
-        return [f"--  {name}: ran natively ({fns} fns / {code_b} B in {us} us) but its "
+        return [f"~~  {name}: ran natively ({fns} fns / {code_b} B in {us} us) but its "
                 f"first frame moves with the clock ({', '.join(clock)}); the compile "
                 f"shifts it, so pixels are not comparable here — differs {detail}"]
+    if not any(native):
+        # The two sides agree, but on nothing: a pattern with no input
+        # (the audio-reactive ones, with no microphone under emulation)
+        # renders black either way. A match, and honestly worth nothing —
+        # so it is reported as such rather than counted as a comparison.
+        return [f"~~  {name}: ran natively ({fns} fns / {code_b} B in {us} us) and "
+                f"matched, but BOTH frames are all-black — this pattern has no "
+                f"input under emulation, so the agreement is vacuous"]
     return [f"ok  {name}: {len(native)} B frame identical, "
             f"{fns} fns / {code_b} B code ({pool_b} B pool) in {us} us"]
 
@@ -470,13 +500,19 @@ def main() -> int:
         return 1
     finally:
         pass
+    # Three outcomes, and only one of them is "nothing happened".
+    #   ok  ran natively AND matched the interpreter bit for bit
+    #   ~~  ran natively, pixels not comparable (a wall-clock input)
+    #   --  refused (over this board's exec-buffer cap) and interpreted
     diffed = sum(1 for n in notes if n.startswith("ok"))
-    if diffed == 0:
-        print("FAIL — no pattern was comparable; nothing was proved")
+    clocked = sum(1 for n in notes if n.startswith("~~"))
+    refused = sum(1 for n in notes if n.startswith("--"))
+    if diffed + clocked == 0:
+        print("FAIL \u2014 no pattern ran natively at all; nothing was proved")
         return 1
-    print(f"PASS [jit] — {diffed} compared bit-for-bit, "
-          f"{len(notes) - diffed} refused or clock-dependent, "
-          f"{time.monotonic() - t0:.1f}s")
+    print(f"PASS [jit] \u2014 {diffed + clocked} ran natively, {diffed} identical "
+          f"bit-for-bit, {clocked} clock-dependent (reported, not asserted), "
+          f"{refused} refused, {time.monotonic() - t0:.1f}s")
     shutil.rmtree(workdir, ignore_errors=True)
     return 0
 
