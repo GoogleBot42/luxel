@@ -390,17 +390,32 @@ are `Dyn`). The six callback builtins are all Pixelblaze API
 (`arrayForEach`, `arrayMutate`, `arrayMapTo`, `arrayReduce`,
 `arraySortBy`, `mapPixels`; 8 of 294 scraped PB patterns and 8 of 307
 library patterns use one) and **stay in the language**. They leave the
-JIT's hard set by **compiler lowering, not by a trampoline**: when the
-callback is a literal lambda or a named function — every call site in
-the library — the compiler lowers `arrayForEach`/`arrayMutate`/
-`arrayMapTo`/`arrayReduce` into an ordinary bytecode loop with a direct
-`CallFn`, which the interpreter runs unchanged and the JIT compiles like
-any other loop. The builtin remains the fallback for a callback that is
-only a run-time value. `arraySortBy` (a comparator sort) and `mapPixels`
-(needs per-index coordinates the bytecode cannot ask for) are not lowered
-and are a v1 **refusal** (§4a): 2 library patterns. The Rust → native
-trampoline (`dispatch_direct` indirection) is therefore not on the v1
-path and may never be needed.
+JIT's hard set by being **defined in the pattern language as a prelude**
+(Jeremy's idea, 2026-09-20, Gitea #626), not by a trampoline: the
+compiler bundles their definitions, links in the ones a program uses, and
+on the wire and on the device they are ordinary pattern functions. Two
+rules make it hold:
+
+- **Always, never per target.** One blob runs everywhere (store, sync
+  pull, playlist), so the interpreter runs the prelude loop too. Cost:
+  ~10 ops/element at ~100 cycles/op ≈ 17 ms per 4096-element call on the
+  S3 interpreter — irrelevant for the init-time fills that are 9 of the
+  10 library call sites, ~2 frames for the one per-frame use
+  (`arrayMapTo` in `bulk-canvas-ripples-2d`), measured in #626.
+- **Specialise on a static callback.** Inside a prelude function the
+  callback is a parameter, so its call is `CallValue` and its params
+  would be `Dyn` (§2.3). When the call-site argument is a literal lambda
+  or a named function — every library and corpus call site — the compiler
+  clones the prelude function for that site and binds the callback into a
+  direct `CallFn`, so the callback keeps typed params. A run-time callback
+  value goes through the unspecialised copy, boxed.
+
+`arraySortBy` is an insertion sort in the prelude; `mapPixels` needs one
+small builtin returning a pixel's mapped coordinates by index and then
+lowers the same way. With #626 landed the §4a refusal list is empty for
+the library, and the Rust → native trampoline (`dispatch_direct`
+indirection) is never built. The builtin arms in `vm.rs` stay as the
+reference implementation and for pre-v6 blobs.
 
 ### 4a. Refusal semantics and the editor warning
 
@@ -408,7 +423,7 @@ A refusal is **whole-program**: the pattern runs in the interpreter
 exactly as today, at the interpreter's speed, with the same pixels — no
 function-level mixing, ever (decision 2). `/api/status` carries
 `jit: {state: "interp", reason}` with `reason` one of `callbacks`
-(`arraySortBy`/`mapPixels` or a run-time callback), `too-large`, `psram`,
+(a callback that is only a run-time value — the prelude's unspecialised copy is `CallValue`, which v1 compiles; so this reason exists only for a construct the prelude cannot express yet), `too-large`, `psram`,
 `kinds` (verifier failure — a compiler bug, reported loudly), `debug`
 (debugger attached), `unsupported` (anything else, with the opcode).
 
