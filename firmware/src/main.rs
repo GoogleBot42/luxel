@@ -63,6 +63,8 @@ mod devicemap;
 mod devname;
 mod patlog;
 mod flashmap;
+mod parttab;
+mod migrate;
 mod gpio;
 #[cfg(feature = "hub75")]
 mod hub75;
@@ -376,6 +378,13 @@ async fn main(spawner: Spawner) -> ! {
     assets::map_region();
     assets::init();
     patterns::init();
+    // Partition-layout migration (Gitea #501): the device may still carry
+    // the pre-#501 1 MiB-slot table. AFTER patterns::init, which resolves
+    // and scans the OLD store — the migrator carries exactly the records
+    // the device was already serving — and before anything writes to it.
+    // Reboots into the new layout when it runs; a no-op (one table read)
+    // on every boot after that.
+    migrate::maybe_migrate();
     playlist::init(); // after patterns::init (shares the storage partition)
     devicemap::init();
     layout::init();

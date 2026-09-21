@@ -19,6 +19,10 @@ What it composes (4 MiB, from the two gitignored dumps in the main checkout):
     0x190000  app1  <- the Luxel OTA image, "WLED just accepted the upload"
     0x310000  configured WLED littlefs, ssid "MOMCorp Intranet" (from --fs)
 
+Since Gitea #501 the table the takeover installs is the 4 MB repartitioned one
+(1.25 MiB OTA slots, `storage` at 0x290000, `assets` unmoved at 0x310000), so
+the post-takeover flash assertions below are derived from THAT layout.
+
 Two variants:
 
     --slot app1  (default) the realistic post-upload state.  Exercises the full
@@ -99,7 +103,11 @@ LXDV_OFFSET = 0xA000  # config.rs DEV_OFFSET
 DEV_VER = 8  # config.rs DEV_VER (v8 took a v7 pad byte for the data pin)
 LXBG_OFFSET = 0xC000  # ota.rs GUARD_OFFSET (4th nvs sector under both layouts)
 LUXEL_OTADATA = 0xD000  # partitions.csv: otadata, 0xd000, 0x2000
-LUXEL_STORAGE = 0x210000  # partitions.csv: storage, 0x210000, 0x100000
+# partitions.csv: storage, 0x290000, 0x80000 — MOVED by the #501 repartition
+# (it was 0x210000 + 1 MiB), and the takeover installs the new table directly,
+# so these are the offsets a post-takeover boot uses.
+LUXEL_STORAGE = 0x290000
+LUXEL_STORAGE_LEN = 0x80000
 SECTOR = 0x1000
 ESP_OTA_IMG_VALID = 2
 
@@ -127,7 +135,7 @@ ABORT_MARKERS = (
     "takeover: verify failed at",
     "takeover: read failed at",
     "takeover: copy failed",
-    "takeover: flash too small",
+    "partitions: flash too small",
     "takeover: own image not found",
     "takeover: cannot size own image",
     "takeover: config wipe failed",
@@ -153,7 +161,7 @@ FAULT_ABORT_MARKERS = tuple(
 
 # Markers that mean something more specific than "the takeover gave up".
 ABORT_HINTS = {
-    "takeover: flash too small": (
+    "partitions: flash too small": (
         "this is a NEW QEMU divergence, not a firmware bug: esp-storage's "
         "FlashStorage::capacity() has previously reported the real 4 MiB "
         "under emulation.  Report it rather than working around it."
@@ -417,6 +425,8 @@ def check_serial(log: str, slot: str, ota_len: int, c: Checks,
     c.ok(f"serial[boot1]: {REBOOT_LINE!r}")
 
     c.line(boot2, "booted from: ota_0", "boot2")
+    c.line(boot2, "patterns: format 0 != 6, wiping storage", "boot2")
+    c.line(boot2, f"(storage @ {LUXEL_STORAGE:#x})", "boot2")
     c.line(boot2, KILL_MARKER, "boot2")
 
 
@@ -464,22 +474,30 @@ def check_flash(flash: bytes, expected_table: bytes, ota: bytes, fs: bytes,
               f"first differing byte at {first_diff(got, ota)}")
 
     if slot == "app1":
-        # The takeover never writes to its source.  Only the first 0x80000 of
-        # WLED's app1 survives the *boot* though: under the freshly installed
-        # Luxel table 0x210000 is the `storage` partition, and boot 2's pattern
-        # store finds a foreign format there and wipes it ("patterns: format 0
-        # != 4, wiping storage").  That reclaim is the new table working as
-        # designed, so assert the takeover-owned half and the reclaim
-        # separately rather than the whole slot.
-        got = flash[APP1:LUXEL_STORAGE]
-        want = ota[: LUXEL_STORAGE - APP1]
-        c.require(got == want, "flash: copy source 0x190000..0x210000 left untouched",
-                  f"first differing byte at {first_diff(got, want)}")
-        tail_before = ota[LUXEL_STORAGE - APP1 :]
-        tail_after = flash[LUXEL_STORAGE : APP1 + len(ota)]
-        c.require(tail_after != tail_before,
-                  "flash: 0x210000+ reclaimed as Luxel `storage` (old app1 tail gone)",
-                  "the pattern store did not wipe storage — did the new table take effect?")
+        # The takeover never writes to its source, and since #501 nothing else
+        # does either: the new table's `storage` starts at 0x290000, above the
+        # end of WLED's app1 image (0x190000 + ~1016 KiB), so the whole copy
+        # source survives.  Before the repartition `storage` was 0x210000 and
+        # this assertion had to be split in two, because boot 2's pattern store
+        # reclaimed the slot's tail.
+        got = flash[APP1:APP1 + len(ota)]
+        c.require(got == ota, "flash: copy source 0x190000 left wholly untouched",
+                  f"first differing byte at {first_diff(got, ota)}")
+        c.require(APP1 + len(ota) <= LUXEL_STORAGE,
+                  f"flash: WLED's app1 image ends at {APP1 + len(ota):#x}, below "
+                  f"the new `storage` at {LUXEL_STORAGE:#x}",
+                  "the app image has grown into the storage partition — this "
+                  "assertion (and the takeover's arithmetic) needs revisiting")
+
+    # `storage` moved to 0x290000, which is erased in the stock dump; boot 2's
+    # pattern store finds no format marker there, wipes the key area and writes
+    # its own.  That the region is no longer erased is the proof the NEW table
+    # took effect — under WLED's table 0x290000 belongs to its spiffs.
+    key_area = flash[LUXEL_STORAGE:LUXEL_STORAGE + 0x1000]
+    c.require(any(b != 0xFF for b in key_area),
+              f"flash: the new `storage` key area at {LUXEL_STORAGE:#x} was "
+              "formatted by the pattern store",
+              "still erased — did the new table take effect?")
 
     got = flash[FS_OFFSET : FS_OFFSET + len(fs)]
     c.require(got == fs, "flash: WLED littlefs at 0x310000 untouched",

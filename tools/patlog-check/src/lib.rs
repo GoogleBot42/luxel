@@ -12,6 +12,11 @@
 pub mod patlog;
 pub mod store;
 
+/// The #501 repartition's log repack, driven end to end on the host: the
+/// old 732 KiB log staged into the new 220 KiB one and read back.
+#[cfg(test)]
+mod migrate;
+
 #[cfg(test)]
 mod library_fill {
     use super::patlog::*;

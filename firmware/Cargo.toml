@@ -89,7 +89,10 @@ board-seengreat-hub75 = ["esp32s3", "hub75", "psram-arena"]
 # WLED's foreign partition table, copy ourselves to the right sectors, inherit
 # the WiFi/LED config out of WLED's littlefs, rewrite the table and reboot.
 # Measured 24,656 B on board-pixelblaze-v3 / 25,344 B on board-c6-devkit +
-# hosted-ui (Gitea #501), so it is enabled by the BOARDS that can actually be
+# hosted-ui (Gitea #501) — BEFORE #501 split the table-writing half into
+# src/parttab.rs, which every board now carries for the layout migrator, so
+# that figure overstates what this feature costs on its own today (#637).
+# Enabled by the BOARDS that can actually be
 # installed that way and left off where the install path is serial:
 #   on  — athom-music, esp32-generic, c3-devkit, c6-devkit, s3-devkit
 #   off — pixelblaze-v3 (a stock PB v3 runs Pixelblaze firmware and is
@@ -126,6 +129,17 @@ small-chip = []
 # `POST /api/assets` installer from the app image, and drops the ~641 KB
 # bundle from what has to be flashed. See docs/boards.md.
 hosted-ui = []
+# Retirement knob for the partition-layout migrator (src/migrate.rs, Gitea
+# #501). The migrator is ~12 KB of image that a device needs exactly ONCE:
+# the first boot of the migrating release moves it from the pre-#501 1 MiB
+# table to the board's new one, and from then on it is a single table read
+# per boot. A release cut AFTER the fleet has migrated can set this and get
+# those 12 KB of OTA slot back — deliberately, because tools/image-check.sh
+# asserts the migrator's marker is linked unless this feature is named.
+# Never a default; never combine it with a release that anyone might install
+# on a device that has not migrated yet (the OTA would land in a 1 MiB slot
+# and /api/ota refuses an over-size image, which is the safe failure).
+migrate-off = []
 # Bisect knob: never map flash through the cache MMU (src/flashmap.rs).
 # Every consumer keeps its esp-storage read_nor path and takes it when the
 # mapping is absent, so this is the "old behaviour" build — see

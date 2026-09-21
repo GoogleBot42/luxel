@@ -758,6 +758,11 @@ fn status_json() -> String {
         }
         None => push_piece(&mut out, "null"),
     }
+    // Which partition layout this device is actually running (Gitea #501):
+    // a fleet tool reads it to tell a migrated device from one still on
+    // the pre-#501 1 MiB-slot table, and `migration_blocked` says why one
+    // refused to move.
+    crate::migrate::push_status(&mut out);
     push_piece(&mut out, "}");
     out
 }
