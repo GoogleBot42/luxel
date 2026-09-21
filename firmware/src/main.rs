@@ -1164,7 +1164,19 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
     // from boot rather than only after the first swap (Gitea #287).
     let boot_free = esp_alloc::HEAP.free() as usize;
     let mut engine = match luxel_core::bytecode::deserialize_lean_static(PATTERN_BC) {
-        Ok(p) => Some(budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed))),
+        Ok(p) => {
+            // The boot default is the ONE activation that does not go
+            // through `try_budgeted_engine`: there is no heap floor to
+            // fail against, because the blob is rodata and there is
+            // nothing to fall back TO. So the JIT hook is repeated here —
+            // without it the built-in pattern would be the only one on the
+            // device that never compiled (Gitea #658).
+            #[allow(unused_mut)]
+            let mut e = budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed));
+            #[cfg(feature = "jit")]
+            jit::try_compile(&mut e);
+            Some(e)
+        }
         Err(e) => {
             println!("embedded pattern bytecode error (build bug?): {}", e);
             None

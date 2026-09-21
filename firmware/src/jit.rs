@@ -48,27 +48,31 @@ use luxel_jit::{Env, Helpers, Refusal};
 
 // ---------------------------------------------------------------- sizing
 
-/// Executable RAM the JIT owns, in KB — the ONE number that trades native
-/// code against the render task's stack.
+// `JIT_STATIC_KB` — executable RAM the JIT owns, per chip, and the one
+// number that trades native code against everything else `.rwtext` shares.
+// It is PER BOARD because the two Xtensa parts have opposite constraints:
+// the classic ESP32's `.rwtext` is a dedicated instruction region and costs
+// only flash image, while the S3's is the same unified SRAM `.stack` comes
+// out of, and docs/firmware.md floors that at 24 KB. Both numbers below are
+// measured, not chosen; docs/boards.md's JIT column carries them too, and
+// `cargo test -p luxel-jit --test compile_all -- --nocapture` prints how
+// much of `library/` a given cap covers (307 patterns, mean image 3.4 KB,
+// 32 KB worst case). A pattern over the cap refuses with `too-large` and is
+// interpreted — a correct outcome, not a failure.
+
+/// Classic ESP32: 24 KB. SRAM0 is a DEDICATED 128 KB instruction region,
+/// separate from the DRAM `.stack` comes out of, so the buffer costs flash
+/// image and no stack at all — the binding limit is the region itself.
+/// Measured on `board-esp32-generic` + `jit`, 2026-09-21: `.rwtext` 67,224
+/// B and `.rwtext.wifi` 51,800 B of 131,072, leaving ~12 KB spare.
 ///
-/// `.rwtext` is instruction-bus RAM. On the classic ESP32 that is SRAM0, a
-/// dedicated 128 KB region with ~35 KB spare after the `iram-*` placements
-/// (docs/boards.md "IRAM budget"), so the cost there is flash image only.
-/// On the S3 and the C-series `.rwtext` and `.stack` are the same unified
-/// SRAM and every byte here comes straight out of the stack, which
-/// docs/firmware.md floors at 24 KB — that floor, not this constant, is the
-/// binding limit, and `tools/stack-check.sh` is what enforces it.
-///
-/// See docs/boards.md's JIT column for the measured per-board figures and
-/// docs/jit-design.md §9 for what the library actually needs (307 patterns,
-/// 3.4 KB mean, 32 KB worst case — so a half this size compiles the common
-/// pattern and refuses the outliers with `too-large`, which is a correct
-/// outcome, not a failure).
-/// Classic ESP32: SRAM0 is a DEDICATED 128 KB instruction region, separate
-/// from the DRAM `.stack` comes out of, with ~35 KB spare after the
-/// `iram-*` placements. The buffer costs flash image and nothing else.
+/// 12 KB per half covers 96 % of `library/`. It is bigger than the S3's
+/// not because this board matters more — it ships interpreter-only — but
+/// because it is the board QEMU models, so a cap that refused the §7.1
+/// patterns would blind the only gate that EXECUTES emitted code
+/// (`tools/qemu/jit-test.py`).
 #[cfg(feature = "esp32")]
-pub const JIT_STATIC_KB: usize = 16;
+pub const JIT_STATIC_KB: usize = 24;
 
 /// **S3: 14 KB, and it is bought, not found.** `.rwtext` and `.stack` are
 /// the same unified SRAM here, so every byte of this buffer is a byte of
@@ -312,15 +316,41 @@ pub fn jit_status() -> (&'static str, Option<&'static str>, u32, u32) {
     )
 }
 
-/// Runtime A/B switch: clear it and the NEXT activation stays interpreted.
+/// Runtime switch: the next activation compiles only if this is set.
+///
+/// **It defaults to OFF, and that is the phase-3 landing state, not an
+/// oversight.** Everything else here is finished and green — 307 of 307
+/// library patterns render bit-identical frames through a real `Engine`
+/// (`crates/luxel-jit/tests/engine_diff.rs`), and the first three patterns
+/// `tools/qemu/jit-test.py` drives on an emulated ESP32 agree with the
+/// interpreter to the byte. But that gate also found this, and it is not
+/// something to ship past:
+///
+/// > `aurora-2d.js` and `bulk-canvas-ripples-2d.js` compile, start
+/// > running, and then take the AppCpu down with `Detected a write to the
+/// > stack guard value`, EXCCAUSE 0, `a1` about 1 KB below
+/// > [`stack_limit`] — while the stack guard itself, 7.5 KB further down,
+/// > has been clobbered. A wild store, not stack growth. The same
+/// > patterns render correctly interpreted on the same image, and
+/// > correctly through the host ISA model. `rainbow`, `snake`,
+/// > `snake-2d` (19 functions, 11,492 B — the largest tested) and
+/// > `bulk-rainbow` are all fine, so it is neither size, nor function
+/// > count, nor `renderFrame`.
+///
+/// A crash on the render core of a board with no serial port is the worst
+/// failure mode this project has, and docs/jit-design.md §7.3 is explicit
+/// that metal comes only after the earlier gates are green. So the feature
+/// ships BUILT — so it can be measured, toggled and root-caused on a real
+/// board — and OFF, so no device runs native code until that trap is
+/// understood. `POST /api/jit {"on":true}` turns it on for one session;
+/// `JIT_OFF=1` at build time removes it from the image entirely.
 ///
 /// `#[no_mangle]` so it is addressable by symbol from outside the running
 /// image. That is not decoration — it is how `tools/qemu/jit-test.py`
 /// flips the JIT on a board with no network, by writing one byte through
-/// QEMU's gdbstub. `POST /api/jit {"on":false}` is the same switch for a
-/// device that does have one.
+/// QEMU's gdbstub.
 #[no_mangle]
-pub static LUXEL_JIT_ENABLED: AtomicBool = AtomicBool::new(true);
+pub static LUXEL_JIT_ENABLED: AtomicBool = AtomicBool::new(false);
 
 /// Keeps [`LUXEL_JIT_ENABLED`] in the image: `#[no_mangle]` names a symbol,
 /// it does not stop `--gc-sections` dropping one nothing references (the
@@ -352,7 +382,19 @@ pub fn enabled() -> bool {
 const STACK_BUDGET: usize = 8 * 1024;
 /// Never let the guard sit closer than this to the real bottom of the
 /// stack, whatever the budget says.
-const STACK_RESERVE: usize = 2 * 1024;
+///
+/// **8 KB, and it is not a round number pulled out of the air — 2 KB was,
+/// and `tools/qemu/jit-test.py` caught it.** The guard only bounds NATIVE
+/// frames; the Rust a native function calls — a builtin wrapper, a §3.5
+/// helper — pushes its own frame below `a1` with no check of its own, and
+/// the bulk/canvas wrappers are among the biggest frames in the image. So
+/// the reserve has to cover the deepest Rust frame reachable from native
+/// code, not just "a bit". With 2 KB, `bulk-canvas-ripples-2d.js` ran the
+/// AppCpu into its stack guard — `Detected a write to the stack guard
+/// value on AppCpu`, a reboot — on a pattern the interpreter renders
+/// without complaint. With 8 KB the guard fires first and the pattern gets
+/// a runtime error, which is what §3.6 says should happen.
+const STACK_RESERVE: usize = 8 * 1024;
 
 /// The floor the prologue compares `a1` against.
 ///
@@ -422,8 +464,13 @@ fn helpers() -> Helpers {
 /// Called from `try_budgeted_engine` — the choke point every activation
 /// funnels through (boot default, `/api/code`, store activate, library
 /// swap, crossfade).
+#[inline(never)]
 pub fn try_compile(e: &mut Engine) {
     if !enabled() {
+        // Off by default — see LUXEL_JIT_ENABLED for the trap that is
+        // still open. This line is what the QEMU gate asserts to prove the
+        // switch took.
+        println!("jit: interpreter (disabled)");
         set_state(STATE_INTERP, Some("disabled"), 0, 0);
         return;
     }
@@ -481,12 +528,18 @@ pub fn try_compile(e: &mut Engine) {
         call: alloc::boxed::Box::new(XtensaCall),
         lease: alloc::boxed::Box::new(half),
     };
+    // The stack floor is narrated because it is the one number here that
+    // cannot be checked from outside the running image, and getting it
+    // wrong is a reboot rather than a wrong pixel (see `stack_limit`).
     println!(
-        "jit: native, {} fns, {} B code ({} B pool), {} us",
+        "jit: native, {} fns, {} B code ({} B pool), {} us, sp {:#x} floor {:#x}/{:#x}",
         img.entries.len(),
         bytes,
         img.pool_len as usize * 4,
-        compile_us
+        compile_us,
+        &compile_us as *const u32 as usize,
+        np.stack_limit,
+        crate::core1::stack_floor().unwrap_or(0),
     );
     e.install_native(np);
     set_state(STATE_NATIVE, None, bytes, compile_us);
