@@ -1,5 +1,53 @@
 # Update log
 
+## 2026-09-20 — The Athom is the first device on the new partition table (#634, from #501)
+
+Hardware phase of the repartition, Athom only. Built `78a24d0` with
+`MIGRATING_RELEASE=1` (1,040,240 B — 8,336 B / 0.79 % of the OLD 1 MiB slot left),
+pushed firmware **only** with `BOARD=board-athom-music tools/ota-push.sh`, and the
+device carried itself across: `partitions` now reports `migrated:true`,
+`ota_slot_bytes` 1,310,720, `storage_bytes` 524,288, live `ota_0`.
+
+**Under 8.6 s, one reboot.** From the moment `/api/status` stopped answering to the
+moment it answered again on the new table: 8,629 ms, covering the log repack, the
+512 KiB store erase, the reserved-blob carry, the table write, the reboot and the WiFi
+rejoin. `#634` had budgeted up to ~90 s and two reboots because it assumed
+`settle_into_ota0`'s ~1 MiB self-copy — but the device was live on `ota_1`, so the OTA
+wrote the new image into `ota_0`, which is the offset the *new* table also calls
+`ota_0`, and `settle_into_ota0` returned without copying or rebooting. That is the
+common case for a device whose last OTA left it on `ota_1`.
+
+**Everything came across.** All three pattern sources byte-identical; ids unchanged;
+`/api/playlist` identical and still playing with the index advancing; `/api/layout`,
+`/api/config`, `/api/name` identical; brightness 6 never touched. `store.dead` went
+31,024 → 0 — the staged log *is* a packed image, so the migration compacts for free.
+Assets were not pushed and did not need to be: `web/tools/coldload.mjs` gave 3/3 clean,
+styled cold loads of the console straight off the untouched assets partition.
+
+**The power-cut experiment did not happen**, and the guard that skipped it was right:
+at the authorised cut moment the device was already serving on the new table, so
+cutting would have power-cycled an already-migrated board for nothing. The real cut
+window on a 4 MB board with a small store is about T0+2 s to T0+6 s, not the 8–15 s
+#634 estimated. A migrated device never migrates again, so the Athom cannot provide
+that coverage now — `migrate.rs`'s resume-from-staging path stays host- and
+QEMU-verified only (Gitea #644).
+
+**One thing was not green, and it is not the migration.** The Athom came back with
+`vmerr: "bytecode format v5 (this build reads v6) — recompile the pattern"`, every
+playlist item annotated `invalid`, and the strip dark. The repartition carried every
+byte correctly — the *sources* are byte-identical — but the device was on a pre-#625
+build and master reads LXBC v6, so its compiled blobs were all v5. Devices never
+compile, and the console the device itself serves compiled v5 too, so it could not fix
+itself. Recovered by recompiling each stored source with the current
+`web/tools/lxp.mjs` and re-POSTing under the same name (`patterns::save` upserts by
+name, so ids and playlist references survived), then `tools/deploy.sh --assets-only`.
+End state: `vmerr:null`, fps 122 (was 123), plug 5.3 W (was 5.3 W). The general
+problem — the migrating release makes this near-certain fleet-wide — is Gitea #643.
+
+The Seengreat is untouched and stays that way until #634's second half is run
+deliberately: it is the only 16 MB board, its migration also moves the asset bundle,
+and that stage has never executed anywhere.
+
 ## 2026-09-20 — Repartition: 1.25 MiB OTA slots, a 16 MB table, and a migration devices apply to themselves (#501)
 
 The OTA slot ran out. Measured on master the morning this landed, three of the nine
