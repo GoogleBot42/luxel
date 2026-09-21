@@ -34,15 +34,19 @@ mod emit;
 mod plan;
 
 pub use emit::compile;
-pub use plan::{FramePlan, SlotHome};
+pub use plan::{FnPlan, ParamConv, SlotHome};
 
 /// Absolute addresses of every Rust helper generated code can call
 /// (docs/jit-design.md §3.5, `luxel_core::jit::helpers`).
 ///
 /// The emitter puts each one in the literal pool and reaches it with
 /// `l32r` + `callx8`; it never needs to know what any of them does beyond
-/// the signature the design names. Build one with
-/// [`Helpers::from_core`] so the wiring lives in exactly one place.
+/// the signature the design names.
+///
+/// Addresses, not function pointers: the emitter compiles for a 32-bit
+/// device however wide the machine it is running on is, so the test
+/// harness hands it synthetic addresses and intercepts the calls
+/// (`tests/isa/`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Helpers {
     /// `extern "C" fn(i32, i32) -> i32` — `Fx / Fx`, cannot fail.
@@ -62,8 +66,10 @@ pub struct Helpers {
     pub new_array: u32,
     /// `extern "C" fn(*mut JitCtx, u32 d) -> u32`, fallible.
     pub const_arr: u32,
-    /// `extern "C" fn(*mut JitCtx, u32 tag, u32 payload, *const ValueRaw,
-    /// u32 argc) -> RetDyn`, fallible.
+    /// `luxel_core::jit::call_value_target`:
+    /// `extern "C" fn(*mut JitCtx, u32 tag, u32 payload) -> Ret2`, which
+    /// RESOLVES a `CallValue` callee and does not call it — see the
+    /// deviation note on `emit::Emitter::call_value`.
     pub call_value: u32,
     /// `extern "C" fn(*mut JitCtx, u32 msg)` — always fails.
     pub assert_fail: u32,
@@ -113,6 +119,25 @@ pub struct NativeImage {
     /// The engine's entry points by name (`Program::exported_fns`), as
     /// byte offsets into `words`.
     pub exports: Vec<(String, u32)>,
+    /// How to call each function, in the same index order as `entries`.
+    pub abi: Vec<FnAbi>,
+}
+
+/// The calling convention one compiled function ended up with — what phase
+/// 3's engine glue, and the ISA-model harness that stands in for it today,
+/// need in order to enter it (docs/jit-design.md §3.2).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FnAbi {
+    /// `entry`'s frame size in bytes.
+    pub frame: u32,
+    /// Parameters in `a11…a15` (caller view). When false they are handed
+    /// over through `JitCtx::args`, one word for a non-`Dyn` parameter and
+    /// two for a `Dyn` one, in parameter order.
+    pub args_in_regs: bool,
+    pub params: u8,
+    /// The result comes back in `a10:a11` (tag, payload) rather than in
+    /// `a10` alone.
+    pub ret_dyn: bool,
 }
 
 impl NativeImage {
@@ -151,6 +176,18 @@ pub enum Refusal {
     /// A parameter list the frame plan cannot express: more argument words
     /// than [`luxel_core::jit::CTX_ARGS`] handoff slots.
     ParamOverflow { fn_idx: u16, words: usize },
+    /// A frame or globals-array offset past what one `addmi` reaches.
+    OffsetReach { fn_idx: u16, off: u32 },
+    /// One instruction wanted more scratch registers than the v1 register
+    /// plan has. An emitter bug rather than a property of the program —
+    /// but reported as a refusal, because a panic in the compiler would
+    /// take the render task down on a board with no serial port.
+    ScratchExhausted { fn_idx: u16, word: u32, op: u8 },
+    /// A helper sits in a different gigabyte from the generated code.
+    /// `retw` restores only the low 30 bits of the return address
+    /// (`PC ← PC[31:30] || a0[29:0]`), so such a call would return into
+    /// the wrong gigabyte — a wild jump, not a wrong value.
+    AddressRegion { name: &'static str, addr: u32 },
     /// A `j` target further than `j`'s ±128 KB.
     JumpReach { fn_idx: u16, word: u32, distance: usize },
     /// The program has no `kinds` section at all (an untyped v6 blob).
@@ -169,6 +206,9 @@ impl Refusal {
             Refusal::Verifier { .. } => "kinds",
             Refusal::ParamOverflow { .. } => "param-overflow",
             Refusal::JumpReach { .. } => "jump-reach",
+            Refusal::OffsetReach { .. } => "offset-reach",
+            Refusal::ScratchExhausted { .. } => "scratch",
+            Refusal::AddressRegion { .. } => "address-region",
             Refusal::Untyped => "untyped",
         }
     }
@@ -179,7 +219,8 @@ impl Refusal {
         match *self {
             Refusal::UnsupportedOpcode { fn_idx, word, .. }
             | Refusal::L32rReach { fn_idx, word, .. }
-            | Refusal::JumpReach { fn_idx, word, .. } => (fn_idx, word),
+            | Refusal::JumpReach { fn_idx, word, .. }
+            | Refusal::ScratchExhausted { fn_idx, word, .. } => (fn_idx, word),
             Refusal::FrameTooLarge { fn_idx, .. } | Refusal::ParamOverflow { fn_idx, .. } => {
                 (fn_idx, 0)
             }
@@ -208,8 +249,17 @@ impl Refusal {
             Refusal::ParamOverflow { fn_idx, words } => {
                 format!("fn {fn_idx} takes {words} argument words, over the handoff area")
             }
+            Refusal::OffsetReach { fn_idx, off } => {
+                format!("fn {fn_idx} addresses {off} B from a base, past addmi's reach")
+            }
+            Refusal::ScratchExhausted { fn_idx, word, op } => {
+                format!("fn {fn_idx} word {word} (op {op:#04x}) ran out of scratch registers")
+            }
             Refusal::JumpReach { distance, .. } => {
                 format!("jump target is {distance} B away, past j's reach")
+            }
+            Refusal::AddressRegion { name, addr } => {
+                format!("helper {name} at {addr:#010x} is outside the code's gigabyte")
             }
             Refusal::Untyped => String::from("the blob carries no kinds section"),
         }

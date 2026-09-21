@@ -451,9 +451,20 @@ impl Asm {
     // ---------------------------------------------------------- shifts
 
     /// `ssai sa` — set SAR to a constant 0..=31.
-    pub fn ssai(&mut self, sa: u32) {
-        debug_assert!(sa < 32);
+    ///
+    /// Like the three constant shifts below this returns `false` rather
+    /// than asserting on an out-of-range amount: the failure mode is not a
+    /// panic but a DIFFERENT INSTRUCTION — `ssai(32)` would encode SAR 0,
+    /// `slli(r, s, 0)` encodes `srai r, a0, s`, and `srli(r, t, 16)`
+    /// overflows the `sa` nibble into the `r` field and corrupts the
+    /// destination register. Found by the ISA model.
+    #[must_use]
+    pub fn ssai(&mut self, sa: u32) -> bool {
+        if sa >= 32 {
+            return false;
+        }
         self.rrr(0x4, 0, 0x4, sa & 0xf, sa >> 4, 0);
+        true
     }
     /// `ssl as` — SAR := 32 − (as & 31), the setup for `sll`.
     pub fn ssl(&mut self, s: Reg) {
@@ -476,22 +487,38 @@ impl Asm {
         self.rrr(0xb, 0x1, r as u32, 0, t as u32, 0);
     }
     /// `srai ar, at, sa` — arithmetic shift right by a constant 0..=31.
-    pub fn srai(&mut self, r: Reg, t: Reg, sa: u32) {
-        debug_assert!(sa < 32);
+    #[must_use]
+    pub fn srai(&mut self, r: Reg, t: Reg, sa: u32) -> bool {
+        if sa >= 32 {
+            return false;
+        }
         self.rrr(0x2 | (sa >> 4), 0x1, r as u32, sa & 0xf, t as u32, 0);
+        true
     }
-    /// `srli ar, at, sa` — logical shift right by a constant 0..=15.
-    pub fn srli(&mut self, r: Reg, t: Reg, sa: u32) {
-        debug_assert!(sa < 16);
+    /// `srli ar, at, sa` — logical shift right by a constant 0..=**15**.
+    /// There is no `srli` by 16; see [`Asm::ssai`] for why this is a
+    /// `bool` and not an assertion.
+    #[must_use]
+    pub fn srli(&mut self, r: Reg, t: Reg, sa: u32) -> bool {
+        if sa >= 16 {
+            return false;
+        }
         self.rrr(0x4, 0x1, r as u32, sa, t as u32, 0);
+        true
     }
-    /// `slli ar, as, sa` — shift left by a constant 1..=31.
-    pub fn slli(&mut self, r: Reg, s: Reg, sa: u32) {
-        debug_assert!(sa >= 1 && sa < 32);
+    /// `slli ar, as, sa` — shift left by a constant **1**..=31. A shift by
+    /// zero has no encoding (the field is `32 - sa`); the caller wanting
+    /// one wants a `mov.n`.
+    #[must_use]
+    pub fn slli(&mut self, r: Reg, s: Reg, sa: u32) -> bool {
+        if sa == 0 || sa >= 32 {
+            return false;
+        }
         let f = 32 - sa;
         // op2 is bit 4 of `32 - sa`, NOT `1 | …`: sa 1..16 encodes op2 = 1
         // and sa 17..31 encodes op2 = 0. objdump-pinned.
         self.rrr(f >> 4, 0x1, r as u32, s as u32, f & 0xf, 0);
+        true
     }
 
     // ----------------------------------------------------------- memory
@@ -644,6 +671,114 @@ impl Asm {
         }
         self.w24(((d as u32) & 0x3ffff) << 6 | 0x6);
         Ok(())
+    }
+
+    /// An `l32r` whose literal's final position is not known yet — the
+    /// pool is prepended after the code is laid out (§3.7), so every
+    /// `l32r` in a program is patched. Returns the site.
+    pub fn l32r_placeholder(&mut self, t: Reg) -> usize {
+        let at = self.here();
+        self.w24((t as u32) << 4 | 0x1);
+        at
+    }
+
+    /// Fill in an `l32r` emitted by [`Asm::l32r_placeholder`].
+    pub fn patch_l32r(&mut self, at: usize, target: usize) -> Result<(), OutOfReach> {
+        let base = (at + 3) & !3;
+        let dist = target as isize - base as isize;
+        if target % 4 != 0 || dist >= 0 || dist < -(1 << 18) || dist % 4 != 0 {
+            return Err(OutOfReach {
+                at,
+                target,
+                distance: dist,
+                form: Form::L32r,
+            });
+        }
+        let imm16 = ((dist / 4) as u32) & 0xffff;
+        self.bytes[at + 1] = imm16 as u8;
+        self.bytes[at + 2] = (imm16 >> 8) as u8;
+        Ok(())
+    }
+
+    /// A two-register conditional branch whose target is a LOCAL label a
+    /// few bytes ahead — the `skip this sequence` branches of §3.5. Returns
+    /// the site for [`Asm::patch_branch`].
+    pub fn branch_forward(&mut self, cond: Cond, s: Reg, t: Reg) -> usize {
+        let at = self.here();
+        self.rri8(0, cond as u32, s as u32, t as u32, 0x7);
+        at
+    }
+
+    /// Fill in the offset of a [`Asm::branch_forward`].
+    pub fn patch_branch(&mut self, at: usize, target: usize) -> Result<(), OutOfReach> {
+        let d = target as isize - (at as isize + 4);
+        if !(-128..=127).contains(&d) {
+            return Err(OutOfReach {
+                at,
+                target,
+                distance: d,
+                form: Form::Bri8,
+            });
+        }
+        self.bytes[at + 2] = d as u8;
+        Ok(())
+    }
+
+    /// `beqi`/`bnei` to a local label ahead. `imm` must be in
+    /// [`B4CONST`]; the emitter only ever compares against small tags.
+    pub fn branch_i_forward(&mut self, eq: bool, s: Reg, imm: i32) -> usize {
+        let at = self.here();
+        let k = b4const(imm).expect("branch_i_forward: value outside B4CONST");
+        let mn: u32 = if eq { 0b0010 } else { 0b0110 };
+        self.rri8(0, k as u32, s as u32, mn, 0x6);
+        at
+    }
+
+    /// Fill in the offset of a [`Asm::branch_i_forward`].
+    pub fn patch_branch_i(&mut self, at: usize, target: usize) -> Result<(), OutOfReach> {
+        let d = target as isize - (at as isize + 4);
+        if !(-128..=127).contains(&d) {
+            return Err(OutOfReach {
+                at,
+                target,
+                distance: d,
+                form: Form::Bri8,
+            });
+        }
+        self.bytes[at + 2] = d as u8;
+        Ok(())
+    }
+
+    /// `beqz`/`bnez` to a local label ahead.
+    pub fn branch_z_forward(&mut self, cond: ZCond, s: Reg) -> usize {
+        let at = self.here();
+        self.w24((s as u32) << 8 | cond.mn() << 4 | 0x6);
+        at
+    }
+
+    /// Fill in the offset of a [`Asm::branch_z_forward`].
+    pub fn patch_branch_z(&mut self, at: usize, target: usize) -> Result<(), OutOfReach> {
+        let d = target as isize - (at as isize + 4);
+        if !(-2048..=2047).contains(&d) {
+            return Err(OutOfReach {
+                at,
+                target,
+                distance: d,
+                form: Form::Bri12,
+            });
+        }
+        let imm12 = (d as u32) & 0xfff;
+        // bits 23..12 of the instruction: the low nibble shares byte 1 with
+        // `s`, the high byte is byte 2.
+        self.bytes[at + 1] = (self.bytes[at + 1] & 0x0f) | ((imm12 & 0xf) << 4) as u8;
+        self.bytes[at + 2] = (imm12 >> 4) as u8;
+        Ok(())
+    }
+
+    /// Append raw bytes — how the finished code is placed after the
+    /// literal pool once the pool's size is known.
+    pub fn append(&mut self, bytes: &[u8]) {
+        self.bytes.extend_from_slice(bytes);
     }
 
     /// A `j` whose target is not known yet: emits three bytes and returns
