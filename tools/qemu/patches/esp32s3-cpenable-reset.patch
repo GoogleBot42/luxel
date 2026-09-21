@@ -1,0 +1,35 @@
+ESP32-S3: come out of reset with CPENABLE=0xff, like the silicon.
+
+This is the esp32s3 half of the fix qemu-espressif.nix already applies to
+`hw/xtensa/esp32.c` by substituteInPlace (see espressif/qemu#154 and the
+unmerged PR #155, whose note in that file says it "only fixes esp32s3" --
+upstream, not in this release tarball, so the S3 machine still has it).
+
+Espressif parts come out of reset with all coprocessors enabled, but the
+generic xtensa `cpu_reset()` only sets CPENABLE under CONFIG_USER_ONLY.  In
+system mode the guest's first FP instruction therefore traps Cp0Disabled,
+and xtensa-lx-rt's `save_context` re-faults while spilling f0..f15 -- a
+silent double exception.  On the S3 that showed up as an endless boot loop:
+the app printed esp-rtos' "Main task created" and then reset with
+`rst:0xc (RTC_SW_CPU_RST)`, over and over, with `_DoubleExceptionVector`
+the last thing executed before the reset vector.
+
+Applied after esp32s3-appcpu-stall.patch, which touches the same reset
+block.
+
+--- a/hw/xtensa/esp32s3.c
++++ b/hw/xtensa/esp32s3.c
+@@ -216,11 +216,13 @@
+         xtensa_select_static_vectors(&s->cpu[0].env, s->rtc_cntl.stat_vector_sel[0]);
+         remove_cpu_watchpoints(&s->cpu[0]);
+         cpu_reset(CPU(&s->cpu[0]));
++        s->cpu[0].env.sregs[CPENABLE] = 0xff;
+     }
+     if (s->requested_reset & ESP32S3_SOC_RESET_APPCPU && (ESP32S3_CPU_COUNT > 1)) {
+         xtensa_select_static_vectors(&s->cpu[1].env, s->rtc_cntl.stat_vector_sel[1]);
+         remove_cpu_watchpoints(&s->cpu[1]);
+         cpu_reset(CPU(&s->cpu[1]));
++        s->cpu[1].env.sregs[CPENABLE] = 0xff;
+         /* Silicon holds the APP CPU in reset (SYSTEM_CORE_1_CONTROL_0 comes
+          * out of reset with the clock gated) until the running core starts
+          * it.  Reproduce that: without it the second core free-runs from the

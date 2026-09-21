@@ -1,0 +1,87 @@
+esp_timg: three divide-by-zero crashes reachable from a guest register write.
+
+`hw/timer/esp_timg.c` backs the C3/S3 timer groups (the classic ESP32 has
+its own `esp32_timg.c`, which is why only the newer machines were hit).
+Three of its divisors come straight from guest-written register fields with
+no guard, and each one takes the whole emulator down with SIGFPE rather
+than misbehaving:
+
+  * `esp_t0_config_update()` divides by TIMG_Tx_DIVIDER.  A DIVIDER field of
+    0 means 65536 on silicon (TRM) and is the reset value, so ANY guest that
+    read-modify-writes T0CONFIG before programming its own prescaler crashes
+    QEMU.  esp-hal does exactly that while `esp_rtos::start` brings up the
+    scheduler tick -- the S3 guest died there, a few instructions after its
+    first "Main task created" line, every time.
+  * `esp_timg_rtc_cali_update()` indexes a three-entry frequency table with
+    the 2-bit CLK_SEL field, so selection 3 reads past the array and can
+    divide by whatever is next in memory (zero, here).
+  * `esp_virtual_counter_update()` / `_alarm_in_ticks()` divide by a counter
+    frequency that the two above can legitimately leave at zero.
+
+Guard all three the way the WDT prescaler in the same file already does:
+DIVIDER 0 is 65536, an out-of-range CLK_SEL falls back to the slow RC
+oscillator, and a zero-frequency counter simply never ticks.
+
+Harness-side per CLAUDE.md's QEMU isolation rule -- the guest image is
+byte-identical to what ships.
+
+--- a/hw/timer/esp_timg.c
++++ b/hw/timer/esp_timg.c
+@@ -47,6 +47,12 @@
+ {
+     const int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+     const int64_t elapsed_ns = now - counter->base;
++    if (counter->frequency == 0) {
++        /* A counter whose guest-programmed frequency is zero never ticks --
++         * it must not take QEMU down with a division by zero. */
++        counter->base = now;
++        return counter->value;
++    }
+     const int64_t ticks = (elapsed_ns * (counter->frequency / 1000)) / 1000000;
+     counter->value += ticks;
+     counter->base = now;
+@@ -60,6 +66,9 @@
+ 
+ static void esp_virtual_counter_alarm_in_ticks(ESPVirtualCounter *counter, int64_t ticks)
+ {
++    if (counter->frequency == 0) {
++        return;
++    }
+     int64_t delay_ns = (ticks * (1000000000UL / counter->frequency));
+     const int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+     /* This function will reschedule the clock if it was already scheduled */
+@@ -104,9 +113,13 @@
+     /* Check if a start (one-time or periodic) was triggered */
+     if (value & (R_TIMG_RTCCALICFG_START_MASK | R_TIMG_RTCCALICFG_START_CYCLING_MASK)) {
+ 
+-        /* Get the clock that is being calibrated */
++        /* Get the clock that is being calibrated.  CLK_SEL is a 2-bit
++         * field and the table has three entries, so an out-of-range
++         * selection read past the end of the array and could divide by
++         * zero below; fall back to the slow RC oscillator. */
+         const uint32_t clk = FIELD_EX32(value, TIMG_RTCCALICFG, CLK_SEL);
+-        const uint32_t freq = osc_freq_arr[clk];
++        const uint32_t freq = (clk < ARRAY_SIZE(osc_freq_arr) && osc_freq_arr[clk])
++                              ? osc_freq_arr[clk] : ESP_RC_SLOW_FREQ;
+ 
+         /* And the counter that should be reached by this clock */
+         const uint32_t max_count = FIELD_EX32(value, TIMG_RTCCALICFG, MAX);
+@@ -424,8 +437,16 @@
+         esp_t0_update_counter(t0);
+     }
+ 
+-    /* Calculate the new frequency */
+-    const uint32_t new_divider = FIELD_EX32(value, TIMG_T0CONFIG, DIVIDER);
++    /* Calculate the new frequency.  A DIVIDER field of 0 means 65536 on
++     * silicon (TRM, TIMG_Tx_DIVIDER), and it is what the register reads out
++     * of reset -- so a guest that does a read-modify-write on T0CONFIG
++     * before setting its own prescaler writes 0 here.  Dividing by it
++     * killed QEMU with SIGFPE; the WDT prescaler below has always guarded
++     * the same way. */
++    uint32_t new_divider = FIELD_EX32(value, TIMG_T0CONFIG, DIVIDER);
++    if (new_divider == 0) {
++        new_divider = 65536;
++    }
+     const uint64_t new_clk = FIELD_EX32(value, TIMG_T0CONFIG, USE_XTAL) ? ESP_XTAL_CLK : ESP_APB_CLK;
+     const uint64_t new_freq = new_clk / new_divider;
+     if (new_freq != t0->counter.frequency) {

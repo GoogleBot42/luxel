@@ -116,6 +116,66 @@ immediately. Easy to hit under slow emulation, where a deadline routinely
 lands in the past by the time it's programmed. Upstream fixed this only
 for the C3 systimer (PR #148).
 
+## The esp32s3 machine — four more, and a fifth shared (2026-09-21)
+
+Until this sitting the harness had only ever run `-machine esp32`. The
+16 MB Seengreat image was the reason to try `esp32s3`, and the first
+attempt looked hopeless in a familiar way: the second-stage bootloader
+worked *perfectly* — read the 16 MB table, verified five segments, loaded
+the app from ota_0 — and then the app printed **nothing at all**. Not a
+panic, not a partial banner. Everything below is emulator-side
+(`tools/qemu/patches/`, `tools/qemu/qemu-espressif.nix`); the guest image
+is byte-identical to what ships.
+
+The technique that cracked it, and the one to reach for next time: start
+QEMU with `-monitor unix:/tmp/mon.sock,server,nowait`, let it hang, then
+`echo "info registers" | socat - UNIX-CONNECT:/tmp/mon.sock` and feed the
+PC to `xtensa-esp32s3-elf-addr2line -f -C -e result-s3/luxel-fw.elf`. One
+command turns "prints nothing" into a function name. For a guest that
+*resets* rather than hangs, `-d exec -D trace.log` and grep the trace for
+the reset vector (`/0000000040000400/`), then symbolize the PCs just
+before it — that is what identified the double-exception loop below.
+
+1. **`esp32s3-bbpll-cal-done.patch`** — the silence. The machine models no
+   analog-master block, so `I2C_ANA_MST.ANA_CONF0` (0x6000_E040) read 0
+   through the catch-all iomem region, and esp-hal's
+   `clocks::request_pll_clk` spins on bit 24 (`BBPLL_CAL_DONE`) forever —
+   inside `esp_hal::init`, *before* esp-println exists. ESP-IDF walks past
+   it, which is why the bootloader was fine. Model the register and OR the
+   bit in on read.
+2. **`esp32s3-cpenable-reset.patch`** — root cause 1 all over again, on
+   the machine PR #155 claimed to fix (it is unmerged and not in this
+   release tarball). Without it the app printed esp-rtos' "Main task
+   created" and reset with `rst:0xc (RTC_SW_CPU_RST)`, forever.
+3. **`esp32s3-appcpu-stall.patch`** — `esp32s3_cpu_stall()` is an empty
+   stub and `SYSTEM_CORE_1_CONTROL_0` is unmodelled, so the APP CPU
+   free-ran from power-on into the ROM's APP-CPU path and printed a Guru
+   Meditation on core 1 while core 0 was still booting. The classic esp32
+   machine has always stalled it properly.
+4. **`esp-timg-div-by-zero.patch`** — three SIGFPEs in `hw/timer/esp_timg.c`
+   (shared C3/S3; the classic ESP32 has its own file). The one that fires
+   on every S3 boot is `esp_t0_config_update()` dividing by
+   `TIMG_Tx_DIVIDER`, whose reset value 0 means 65536 on silicon.
+5. **`esp32s3-cache-mmu-bounds.patch`** — a guest MMU entry naming a flash
+   page past the end of the part made the cache model memset 64 KiB
+   out of bounds and SIGSEGV. Only reachable with a big flash image.
+
+With all five, `board-seengreat-hub75` boots to the HUB75 bring-up and the
+whole 16 MB partition migration runs and is asserted
+(`tools/qemu/migrate-test.py --board s3`). **Known divergence:** PSRAM is
+absent, so the guest takes its graceful `psram: not present` path, and
+`core1::start` then panics with esp-rtos' "Second core scheduler failed to
+initialize" — both well after everything the migration asserts, in the
+same class as the WiFi PHY panic on the esp32 machine. Boot it with
+`-machine esp32s3` and **no efuse drive** (that device is the classic
+ESP32's; the S3 machine's own defaults already boot).
+
+That run is also what root-caused Gitea #634: with the fixture's
+*bootloader* header restamped to 4 MB (`--old-bootloader 4mb`) the
+migration declines exactly as the panel did, and raising the ROM's flash
+ceiling to "fix" it produces a bootloader that refuses the new table — a
+brick. See docs/boards.md.
+
 ## The eFuse image
 
 *Committed: `tools/qemu/make-efuse.py`.*

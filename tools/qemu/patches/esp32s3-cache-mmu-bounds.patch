@@ -1,0 +1,89 @@
+ESP32-S3 cache: bound MMU writes to the table and to the emulated flash.
+
+`esp32s3_write_mmu_value()` takes a 14-bit page number straight out of a
+guest-written MMU entry, multiplies it by 64 KiB and uses the result as an
+offset into the RAM mirror of the flash part -- to memset the old page with
+0xdeadbeef on an unmap, and to blk_pread the new one on a map.  Nothing
+checks that the page is inside the part.  On a 16 MB image, an entry naming
+page 256 makes the unmap path write 64 KiB past the end of the mirror, and
+QEMU dies with SIGSEGV instead of the guest merely reading garbage (which
+is what silicon gives you).
+
+The table index has the same problem in the other direction: it is
+`reg_addr / 4` with no check against ESP32S3_MMU_TABLE_ENTRY_COUNT, so a
+write to the far end of the register window walks off `s->mmu[]`.
+
+Bound both.  An out-of-range page is ignored, an out-of-range index reads
+back 0 and drops the write.
+
+Hit while bringing the 16 MB Seengreat image up under the esp32s3 machine
+for Gitea #634.  Harness-side per CLAUDE.md's QEMU isolation rule -- the
+guest image is byte-identical to what ships.
+
+--- a/hw/misc/esp32s3_cache.c
++++ b/hw/misc/esp32s3_cache.c
+@@ -53,10 +53,27 @@
+ {
+     /* Make the assumption that the address is aligned on sizeof(uint32_t) */
+     const uint32_t index = reg_addr / sizeof(uint32_t);
++    if (index >= ESP32S3_MMU_TABLE_ENTRY_COUNT) {
++        return 0;
++    }
+     return (uint32_t) s->mmu[index].val;
+ }
+ 
+ 
++/**
++ * @brief Is a whole 64 KiB page at `phys_addr` inside the emulated flash?
++ *        Guest-written MMU entries are not bounded by the part's size.
++ */
++static inline bool esp32s3_flash_page_in_range(ESP32S3CacheState *s, hwaddr phys_addr)
++{
++    if (s->flash_blk == NULL) {
++        return false;
++    }
++    const uint64_t size = memory_region_size(&s->flash_mr);
++    return phys_addr + ESP32S3_PAGE_SIZE <= size;
++}
++
++
+ static void esp32s3_mmu_invalidate_page(ESP32S3CacheState *s, hwaddr virt_addr, hwaddr phys_addr, bool is_psram, bool clear_mr)
+ {
+     IOMMUTLBEvent event = {
+@@ -70,8 +87,12 @@
+     };
+     memory_region_notify_iommu(&s->iommu, 0, event);
+ 
+-    /* If the page was mapped to flash, clear the content */
+-    if (!is_psram && clear_mr) {
++    /* If the page was mapped to flash, clear the content.  `phys_addr` comes
++     * from a 14-bit page number in a guest-written MMU entry, so it can point
++     * past the end of the emulated flash -- which used to be a 64 KiB
++     * out-of-bounds write and an instant SIGSEGV.  Silicon simply reads
++     * garbage there; ignore the page instead. */
++    if (!is_psram && clear_mr && esp32s3_flash_page_in_range(s, phys_addr)) {
+         const uint32_t invalid_value = 0xdeadbeef;
+         uint32_t* cache_word_data = (void*) ((uintptr_t) memory_region_get_ram_ptr(&s->flash_mr) + phys_addr);
+ 
+@@ -87,6 +108,11 @@
+     ESP32S3XtsAesClass *xts_aes_class = ESP32S3_XTS_AES_GET_CLASS(s->xts_aes);
+     /* Make the assumption that the address is aligned on sizeof(uint32_t) */
+     const uint32_t index = reg_addr / sizeof(uint32_t);
++    if (index >= ESP32S3_MMU_TABLE_ENTRY_COUNT) {
++        /* The register window is wider than the modelled table; a write past
++         * its end must not run off the end of s->mmu[]. */
++        return;
++    }
+     /* Reserved bits shall always be 0 */
+     ESP32S3MMUEntry e = { .val = value };
+     const ESP32S3MMUEntry former = s->mmu[index];
+@@ -104,7 +130,8 @@
+         esp32s3_mmu_invalidate_page(s, virtaddr, former_physaddr, former.type == ESP32S3_MMU_TYPE_PSRAM, e.invalid);
+ 
+         if (!e.invalid) {
+-            if (e.type == ESP32S3_MMU_TYPE_FLASH && s->flash_blk != NULL) {
++            if (e.type == ESP32S3_MMU_TYPE_FLASH
++                && esp32s3_flash_page_in_range(s, physical_address)) {
+                 uint8_t* cache_data = ((uint8_t*) memory_region_get_ram_ptr(&s->flash_mr)) + physical_address;
+                 blk_pread(s->flash_blk, physical_address, ESP32S3_PAGE_SIZE, cache_data, 0);
+ 

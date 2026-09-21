@@ -58,6 +58,30 @@ in
   # alarm value already behind the counter silently disarmed instead of firing
   # immediately (espressif/qemu#69).
   #
+  # esp32s3-bbpll-cal-done: the esp32s3 machine models no analog-master
+  # register block, so esp-hal's BBPLL self-calibration wait
+  # (I2C_ANA_MST.ANA_CONF0 bit 24) never completes and EVERY esp-hal guest
+  # hangs inside esp_hal::init, before esp-println exists — an app that the
+  # bootloader loads and verifies and that then prints nothing at all. That
+  # is what kept the 16 MB Seengreat image off the emulator (Gitea #634).
+  #
+  # esp32s3-appcpu-stall: the esp32s3 machine's cpu-stall handler is an empty
+  # stub and SYSTEM_CORE_1_CONTROL_0 is unmodelled, so the APP CPU free-ran
+  # from power-on and printed a Guru Meditation on core 1 while core 0 was
+  # still booting. The classic esp32 machine has always stalled it properly.
+  #
+  # esp-timg-div-by-zero: three SIGFPEs in the shared C3/S3 timer-group model,
+  # each reachable from an ordinary guest register write (the TIMG_Tx_DIVIDER
+  # one fires during esp_rtos::start on every S3 boot).
+  #
+  # esp32s3-cache-mmu-bounds: a guest MMU entry naming a flash page past the
+  # end of the part made the S3 cache model write 64 KiB out of bounds and
+  # SIGSEGV. Bound the page and the table index.
+  #
+  # esp32s3-cpenable-reset: the esp32s3 half of the CPENABLE fix the
+  # substituteInPlace below applies to esp32.c — without it every esp-hal S3
+  # guest double-faults out of its first FP instruction and boot-loops.
+  #
   # m25p80-luxel-fault-injection: opt-in write-fault injection for the
   # takeover reboot-to-retry test (LUXEL_FLAKY_WRITE env var, inert when
   # unset) — takeover-test.py --inject-fault. Harness-side per the
@@ -66,6 +90,11 @@ in
     ./patches/esp32-dport-intr-status.patch
     ./patches/esp32-timg-level-int.patch
     ./patches/m25p80-luxel-fault-injection.patch
+    ./patches/esp32s3-bbpll-cal-done.patch
+    ./patches/esp32s3-appcpu-stall.patch
+    ./patches/esp-timg-div-by-zero.patch
+    ./patches/esp32s3-cache-mmu-bounds.patch
+    ./patches/esp32s3-cpenable-reset.patch
   ];
   buildInputs = (o.buildInputs or []) ++ [ pkgs.libgcrypt pkgs.libslirp ];
   configureFlags = (o.configureFlags or []) ++ [ "--enable-gcrypt" ];
