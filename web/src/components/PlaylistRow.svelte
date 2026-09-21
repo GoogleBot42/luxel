@@ -111,7 +111,7 @@
     const e = luxel.compile(source, 64);
     if (e instanceof Engine) {
       controls = e.controls();
-      dims = e.preferredDims();
+      dims = e.patternDims(); // DECLARED: 0 = dimensionless, no projection
       e.free();
     } else {
       controls = [];

@@ -50,13 +50,29 @@ export const DEFAULT_PROJECTION: Projection = { proj1d: "index", proj2d: "z", pr
 /** A Layout's dimensionality. */
 export type Dims = 1 | 2 | 3;
 
-/** What a compiled pattern asks for: `Engine.preferredDims()`'s 0 (no
- *  preference — a `renderFrame` in index space) reads as 1. */
+/**
+ * What a compiled pattern declares (`Engine.patternDims()`).
+ *
+ * **0 is "any", not 1.** A pattern that exports only `renderFrame` and paints
+ * in index space names no geometry — it is a field over `pixelCount` that
+ * looks the same on a strip, a panel or a cloud (`library/fairies.js`). It is
+ * native on every Layout: no projection options, no caption, never filtered,
+ * and the Layout draws it in its own shape. A 1D pattern is a different
+ * thing — a strip drawn on this Layout, projectable along an axis.
+ */
 export type PatternDims = 0 | 1 | 2 | 3;
 
-/** Normalize a dimensionality the way `luxel_core::projection::dims` does. */
+/** Normalize a dimensionality to a RENDER SPACE the way
+ *  `luxel_core::projection::dims` does: 0 and 1 both render in index space.
+ *  Right for the projection SLOT a value is stored in, wrong for whether a
+ *  pattern has a projection at all — the functions below test the raw 0. */
 export function normDims(d: number): Dims {
   return d >= 3 ? 3 : d === 2 ? 2 : 1;
+}
+
+/** A dimensionless pattern (`patternDims === 0`): native on every Layout. */
+function dimensionless(patternDims: number): boolean {
+  return patternDims === 0;
 }
 
 const OPT_1_ON_2: ProjectionMode[] = ["index", "x", "y"];
@@ -69,7 +85,8 @@ const OPT_2_ON_3: ProjectionMode[] = ["z", "y", "x"];
  *  handed (an old playlist entry, a share link, HA) — `/api/status`'s
  *  `geom.compatible` and `EffectiveGeometry.compatible` report this. */
 export function projectionCompatible(patternDims: number, layoutDims: number): boolean {
-  return normDims(patternDims) <= normDims(layoutDims);
+  // 0 is "any" — never filtered, never flagged, on any Layout.
+  return dimensionless(patternDims) || normDims(patternDims) <= normDims(layoutDims);
 }
 
 /** The projection choices that mean anything for a pattern of `patternDims`
@@ -77,6 +94,7 @@ export function projectionCompatible(patternDims: number, layoutDims: number): b
  *  first = default. Empty when there is nothing to project: the pattern is
  *  native to the Layout, or it is incompatible with it. */
 export function projectionOptions(patternDims: number, layoutDims: number): ProjectionMode[] {
+  if (dimensionless(patternDims)) return []; // native everywhere
   const pd = normDims(patternDims);
   const ld = normDims(layoutDims);
   if (pd === 1 && ld === 2) return OPT_1_ON_2;
@@ -120,8 +138,13 @@ export function guessPatternDims(source: string): PatternDims {
         new RegExp(`\\b${n}\\s*\\(`).test(source) &&
         !new RegExp(`function\\s+${n}\\s*\\(`).test(source),
     );
-  if (/\brender3D\b/.test(source) && !has2D) return 3;
-  return has2D ? 2 : 1;
+  if (has2D) return 2;
+  if (/\brender3D\b/.test(source)) return 3;
+  // No `render(index)` either: a `renderFrame`-only pattern painting in index
+  // space is DIMENSIONLESS (0), not 1D — it declares no geometry, so nothing
+  // projects it. `renderFrame` alongside `render` is still a 1D pattern,
+  // which is what the engine's `pattern_dims()` says too.
+  return /\brender\s*\(/.test(source) ? 1 : 0;
 }
 
 /** The human label for one cell (`Along x`, `Repeat along z`, …) —
@@ -131,6 +154,7 @@ export function projectionLabel(
   patternDims: number,
   layoutDims: number,
 ): string {
+  if (dimensionless(patternDims)) return "Native";
   const pd = normDims(patternDims);
   const ld = normDims(layoutDims);
   if (pd === 1 && ld !== 1) {
@@ -158,7 +182,7 @@ export function effectiveProjection(
 ): ProjectionMode | null {
   const opts = projectionOptions(patternDims, layoutDims);
   const first = opts[0];
-  if (first === undefined) return null;
+  if (first === undefined) return null; // native, dimensionless, or incompatible
   const want = normDims(patternDims) === 3 ? p.proj3d : normDims(patternDims) === 2 ? p.proj2d : p.proj1d;
   return opts.includes(want) ? want : first;
 }
@@ -695,7 +719,8 @@ export function layoutLabel(l: Layout): string {
  *  applied — the pure twin of `Engine.effectiveGeometry()`, for the surfaces
  *  that caption a pattern without holding an engine for it. */
 export interface Effective {
-  patternDims: Dims;
+  /** 0 = dimensionless (native everywhere), else the render space. */
+  patternDims: PatternDims;
   layoutDims: Dims;
   /** null when the pattern is native to the Layout — and also when it is
    *  incompatible with it, which has no projection to be in force. */
@@ -713,7 +738,9 @@ export interface Effective {
 }
 
 export function effectiveFor(patternDims: PatternDims, l: Layout): Effective {
-  const pd = normDims(patternDims);
+  // A dimensionless pattern keeps its 0: there is nothing to project, nothing
+  // to caption and nothing to flag, and it renders the Layout's own pixels.
+  const pd: PatternDims = patternDims === 0 ? 0 : normDims(patternDims);
   const mode = effectiveProjection(l.projection, pd, l.dims);
   const eff: Effective = {
     patternDims: pd,
@@ -766,7 +793,9 @@ export function withProjectionOverride(
   patternDims: PatternDims,
   mode: ProjectionMode | null | undefined,
 ): Layout {
-  if (!mode) return l;
+  // A dimensionless pattern has no slot to override — an item that carries a
+  // stale `P <mode>` from before it was classified is ignored, not applied.
+  if (!mode || patternDims === 0) return l;
   const pd = normDims(patternDims);
   const field = pd === 3 ? "proj3d" : pd === 2 ? "proj2d" : "proj1d";
   return { ...l, projection: { ...l.projection, [field]: mode } };

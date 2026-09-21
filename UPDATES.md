@@ -1,5 +1,50 @@
 # Update log
 
+## 2026-09-20 — Dimensionality 0 is "any", not 1D (#629)
+
+Jeremy, on the Seengreat panel: *"setting the projection type makes no difference at all —
+it is always doing index"* for `library/fairies.js`, and then the real question: *"Why is
+fairies considered a 1D pattern when it isn't?"*
+
+It isn't. `_Fairies` exports only `renderFrame` and paints with `fillHSV` — index space, no
+coordinates, no `render(index)` geometry — so the engine classes it `pattern_dims() == 0`,
+"no preference". Three places then collapsed that 0 into 1:
+`projection::dims(0) → 1` (so `projection_options(0, 2)` handed back the 1D row),
+`Engine::render_dims()` (1 for any non-grid `renderFrame`), and, on the web,
+`guessPatternDims`'s fallback plus `gen-gallery.mjs`'s `kind: "strip"` and stores reading
+`preferredDims()` (which has no 1 at all). The console therefore captioned it
+`_Fairies · 1D`, offered a Projection row reading `device default · along x`, and let
+Settings' "1D patterns" cards claim it — while `compute_plan` short-circuits every
+whole-frame pattern to `Native`, so none of it did anything. Proof:
+`luxel run library/fairies.js --map-grid 32x32 --proj index|x|y` gives three byte-identical
+outputs.
+
+**0 now means "any": native on every Layout.** `projection_options(0, L)` is empty,
+`effective_projection()` is `None`, `compatible(0, L)` is true, there is no caption, no
+Projection row and no per-item override slot, and the Patterns page and the playlist picker
+never filter such a pattern. `gallery.json` carries it as a new kind `"any"` (12 of 302
+library patterns), drawn in the Layout's own shape. `dims()` still normalizes 0 → 1 for the
+`proj1d` storage SLOT — 0 and 1 render in the same space — but every picker, caption and
+filter function tests the raw 0 first, in Rust and in its TypeScript mirror alike. The web
+now asks `Engine.patternDims()` (new `lx_pattern_dims`) where it used to ask
+`preferredDims()`.
+
+**Firmware cost: the C6 hosted image SHRINKS 32 B** (1,017,040 → 1,017,008; headroom above
+image-check's 3 % floor 78.7 B → 110.7 B), `pixelblaze-v3` −48 B, `c3-devkit` −16 B. Not
+blocked on #501.
+
+What this does NOT do: a `renderFrame` pattern that genuinely IS positional — the index a
+place along a strip, e.g. `library/bulk-comet-trails.js`, `library/rainbow-comet.js` — is
+dims 0 too and still renders by index on a panel. Replicating one along an axis needs the
+projection installed before program init (`array(pixelCount)` is sized there); that is #628.
+
+Verified: `cargo test --workspace`, `tools/wasm-smoke.mjs` (dims 0 empty on every Layout;
+an engine running such a pattern reports `patternDims: 0`, `mode: null`, `compatible: true`
+even with `proj1d = x` installed), `web/tests/geometry.test.mjs` (135 tests, incl. the
+cell-by-cell TS↔wasm parity now starting at pd 0), `tools/serve-e2e.mjs`, `tools/e2e.mjs`,
+and `device-e2e` 474/474 with a panel console showing `_Fairies` captioned by nothing and no
+Projection row (`fairies-editor.png`).
+
 ## 2026-09-20 — The array element ledger belongs to the device, not the host (#623)
 
 Jeremy on the Seengreat panel: *"when I open fairies in the web editor, the preview is

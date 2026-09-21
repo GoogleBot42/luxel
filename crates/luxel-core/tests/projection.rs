@@ -205,24 +205,39 @@ fn render_frame_on_strip_gets_a_row_grid() {
 }
 
 #[test]
-fn an_index_space_render_frame_is_a_strip_pattern() {
-    // `renderFrame` + `fillHSV` never asked for a geometry: it stays 1D, gets
-    // no fabricated grid on a strip, and is never strip-projected on a matrix
-    // (a whole-frame pattern owns the buffer).
+fn an_index_space_render_frame_is_dimensionless() {
+    // `renderFrame` + `fillHSV` never asked for a geometry: it is a field over
+    // `pixelCount`, not a strip drawn on the Layout. So it reports dims 0 —
+    // native on every Layout, no options, no caption, never flagged — gets no
+    // fabricated grid on a strip, and is not strip-projected on a matrix (a
+    // whole-frame pattern owns the buffer, which is exactly why calling it 1D
+    // offered an along-x choice that changed nothing: `library/fairies.js`,
+    // 2026-09-20).
     let src = "export function renderFrame() { fillHSV(0, 0, 0, 1, 1, 1) }";
     let mut e = Engine::new(src, 8, 1).unwrap();
     assert_eq!(e.layout_dims(), 1, "no fabricated grid");
-    assert_eq!(e.effective_geometry().pattern_dims, 1);
+    assert_eq!(e.effective_geometry().pattern_dims, 0);
     assert_eq!(e.effective_projection(), None);
+    assert!(e.effective_geometry().compatible);
 
     e.set_grid_map(4, 2);
     let mut p = Projection::DEFAULT;
     p.set(1, ProjectionMode::X);
     e.set_projection(p);
     let g = e.effective_geometry();
+    assert_eq!(g.pattern_dims, 0, "still dimensionless on a matrix");
+    assert_eq!(e.effective_projection(), None, "and nothing is in force");
+    assert!(g.compatible, "never filtered by the #538 rule");
     assert_eq!(g.pixel_count, 8, "not strip-rendered");
     assert_eq!((g.w, g.h), (4, 2), "and it keeps the Layout's grid");
     assert_eq!(e.frame(Fx::ZERO).len(), 8);
+
+    // …on a lattice too
+    e.set_map(3, &lattice(2, 2, 2));
+    let g = e.effective_geometry();
+    assert_eq!((g.pattern_dims, g.layout_dims), (0, 3));
+    assert_eq!(e.effective_projection(), None);
+    assert!(g.compatible);
 }
 
 // ---- 2D patterns on a 3D Layout: repeat along z · y · x ----

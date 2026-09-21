@@ -3249,7 +3249,13 @@ try {
         strip1d.name,
       );
       await sleep(900);
-      const LTILE = '[data-role="patterns-grid"][data-source="library"] .tile';
+      // Scope to the tile the search left VISIBLE, by key. A filtered-out
+      // tile stays in the DOM at 0x0, so "the first .tile in the grid" is
+      // whatever sorts first in the whole library — it only ever worked
+      // because that pattern happened to be the one this section searches
+      // for, and `tileAction` aborts the whole run on a 0x0 hover
+      // (.claude/rules/web.md, 2026-09-20).
+      const LTILE = `[data-role="patterns-grid"][data-source="library"] .tile[data-key="${strip1d.name}"]`;
       await tileAction(page, LTILE, "tile-edit");
       await sleep(2000); // well past the 500 ms push debounce
 
@@ -3445,9 +3451,13 @@ try {
     els.map((e) => (e.querySelector(".name")?.textContent ?? "").trim()),
   );
   const kindOf = new Map(galleryJson.map((p) => [p.name, p.kind]));
+  // "any" is the generator's DIMENSIONLESS kind — an index-space
+  // `renderFrame` that declares no geometry and is native on EVERY Layout, so
+  // a strip offers it exactly as it offers a "strip" one. Only "grid" and
+  // "cloud" are the ones a 1D fixture must hide (#538/#629).
   check(
     "playlist: every library row the picker offers fits the layout",
-    offered.every((n) => kindOf.get(n) === "strip" || kindOf.get(n) === undefined),
+    offered.every((n) => ["strip", "any", undefined].includes(kindOf.get(n))),
     offered.filter((n) => kindOf.get(n) === "grid" || kindOf.get(n) === "cloud").join(", "),
   );
 

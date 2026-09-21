@@ -328,8 +328,17 @@ A tile must be classified before it compiles, or the grid would resolve one
 tile at a time as they scroll into view. `gallery.json` ships an advisory
 `kind`; for the sources that arrive as bare source (device patterns, `Mine`)
 `guessPatternDims()` applies the same regex rule `tools/gen-gallery.mjs` and
-`engine.rs` use. `Engine.preferredDims()` replaces the guess as soon as the
+`engine.rs` use. `Engine.patternDims()` replaces the guess as soon as the
 tile compiles, and the tile moves if it was wrong.
+
+`patternDims()`, not `preferredDims()`: the latter answers "does this pattern
+want a map installed" and folds `render` and `renderFrame` into one `0`, while a
+caption, a filter and a projection picker have to tell a **1D** pattern (a
+strip drawn on this Layout, projectable along an axis) from a **dimensionless**
+one (`0` — a field over `pixelCount`, native everywhere, `gallery.json` kind
+`"any"`). They pick the same Auto rig, so only the projection surfaces notice
+— which is why the collapse survived until `library/fairies.js` was offered an
+"along x" that changed nothing (#629).
 
 Two things in `Gallery` are load-bearing and easy to undo by accident:
 
@@ -1198,7 +1207,7 @@ never set:
 ```
 device Layout (console)      stores/device.ts `deviceLayout`   ─┐
 "Preview as" choice          `previewAs` (persisted)            ├─→  layout
-the compiled pattern's dims  `patternDims` (preferredDims())    │
+the compiled pattern's dims  `patternDims` (patternDims())      │
 projection defaults          `projection` (the device's)       ─┘
 ```
 
@@ -1279,7 +1288,7 @@ Derived helpers every consumer uses instead of re-deriving anything:
 **The invariant: every consumer reads geometry from here.** A component must
 not compile an engine at a pixel count of its own, install a map of its own,
 or decide a shape from a pattern's source text. Gallery tiles take their
-dimensionality from the ENGINE (`preferredDims()`); `gen-gallery.mjs`'s `kind`
+dimensionality from the ENGINE (`patternDims()`); `gen-gallery.mjs`'s `kind`
 is an advisory hint that saves a second compile and is allowed to be wrong.
 
 Painting lives in `lib/draw.ts` (`paintBar` / `paintGrid` / `paintPoints`), so

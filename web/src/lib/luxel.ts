@@ -120,6 +120,7 @@ interface Exports {
   lx_set_default_wall_clock(unixSeconds: number): void;
   lx_wants_sensors(h: number): number;
   lx_preferred_dims(h: number): number;
+  lx_pattern_dims(h: number): number;
   lx_set_sensors(h: number, ptr: number, len: number): void;
   lx_push_event(h: number, t: number, x: number, y: number, v: number): void;
   lx_set_pin(h: number, pin: number, level: number): number;
@@ -605,6 +606,24 @@ export class Engine {
   preferredDims(): 0 | 2 | 3 {
     const d = this.e.lx_preferred_dims(this.h);
     return d === 2 ? 2 : d === 3 ? 3 : 0;
+  }
+
+  /** The dimensionality the pattern DECLARES: 0 = dimensionless (only
+   *  `renderFrame`, painting in index space — native on every Layout, no
+   *  projection anywhere), 1 = `render(index)`, 2 = `render2D` or a
+   *  grid-space `renderFrame`, 3 = `render3D`.
+   *
+   *  This, not [`preferredDims`], is what a projection surface asks: that one
+   *  answers "does this pattern want a map installed" and folds `render` and
+   *  `renderFrame` into one 0, while a picker has to tell a 1D pattern
+   *  (projectable along an axis) from a dimensionless one. A build older than
+   *  the export falls back to the old collapse. */
+  patternDims(): 0 | 1 | 2 | 3 {
+    if (typeof this.e.lx_pattern_dims !== "function") {
+      return this.preferredDims() || 1;
+    }
+    const d = this.e.lx_pattern_dims(this.h);
+    return d === 1 ? 1 : d === 2 ? 2 : d === 3 ? 3 : 0;
   }
 
   /** Inject one sensor frame (PB sensor-board surface). All values 0..1

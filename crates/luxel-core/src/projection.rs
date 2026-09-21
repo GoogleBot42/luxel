@@ -40,9 +40,18 @@
 //!
 //! A `renderFrame` pattern follows the 2D row when it actually draws in grid
 //! space (it names a coordinate/grid-space bulk builtin — the same signal the
-//! default-grid rule uses). One that paints only in index space is a strip
-//! pattern and stays one, and a whole-frame pattern is never strip-rendered:
-//! it owns the buffer.
+//! default-grid rule uses).
+//!
+//! **Dimensionality 0 is "any": native on every Layout.** A pattern that
+//! exports only `renderFrame` and paints in index space
+//! ([`crate::engine::Engine::pattern_dims`] `== 0`) is not a 1D pattern — it
+//! names no geometry at all, just a field over `pixelCount`, and
+//! `library/fairies.js` is the example: a point field that looks the same on a
+//! strip, a panel or a cloud. Collapsing that 0 to 1 gave it a `1D · by index`
+//! caption, a Projection row in Settings and along-x/along-y options that
+//! change nothing, because a whole-frame pattern is never strip-rendered (it
+//! owns the buffer). So 0 offers no options, has no projection in force and is
+//! compatible with everything; the Layout draws it in its own shape.
 
 use core::fmt;
 use core::str::FromStr;
@@ -243,8 +252,14 @@ impl Projection {
     }
 }
 
-/// Normalize a dimensionality: `preferred_dims`' 0 means a strip, i.e. 1;
-/// anything above 3 clamps to 3.
+/// Normalize a dimensionality to a RENDER SPACE: 0 and 1 both render in index
+/// space, so both read as 1; anything above 3 clamps to 3.
+///
+/// This is the right answer for the slot a value is stored in
+/// ([`Projection::get`]/[`Projection::set`]) and the wrong one for whether a
+/// pattern has a projection AT ALL — [`projection_options`] and
+/// [`compatible`] look at the raw 0 first, because 0 is "any" and 1 is "a
+/// strip drawn on this Layout".
 pub const fn dims(d: u8) -> u8 {
     match d {
         0 | 1 => 1,
@@ -269,12 +284,18 @@ const OPT_2_ON_3: [ProjectionMode; 3] =
 /// table, in display order, first = default.
 ///
 /// Empty when there is nothing to project: the pattern is native to the
-/// Layout (`pattern_dims == layout_dims`), or the pattern needs more
-/// dimensions than the Layout has, which since #538 is never shown
+/// Layout (`pattern_dims == layout_dims`), the pattern is DIMENSIONLESS
+/// (`pattern_dims == 0` — native everywhere, see the module docs), or it needs
+/// more dimensions than the Layout has, which since #538 is never shown
 /// ([`compatible`]). UIs build their pickers from this rather than restating
 /// the table: a single-option cell is a one-line note, never a disabled
 /// control, and an empty one shows nothing at all.
 pub fn projection_options(pattern_dims: u8, layout_dims: u8) -> &'static [ProjectionMode] {
+    // 0 is "any": the pattern names no geometry, so no Layout has anything to
+    // bridge and no surface has anything to offer. NOT `dims(0)` = 1.
+    if pattern_dims == 0 {
+        return &[];
+    }
     match (dims(pattern_dims), dims(layout_dims)) {
         (1, 2) => &OPT_1_ON_2,
         (1, 3) => &OPT_1_ON_3,
@@ -292,7 +313,8 @@ pub fn projection_options(pattern_dims: u8, layout_dims: u8) -> &'static [Projec
 /// ([`crate::engine::EffectiveGeometry::compatible`], `/api/status`
 /// `geom.compatible`).
 pub const fn compatible(pattern_dims: u8, layout_dims: u8) -> bool {
-    dims(pattern_dims) <= dims(layout_dims)
+    // 0 is "any" — never filtered, never flagged, on any Layout.
+    pattern_dims == 0 || dims(pattern_dims) <= dims(layout_dims)
 }
 
 /// The human label for one cell of the table (`Along x`, `Repeat along z`,
@@ -304,6 +326,9 @@ pub fn projection_label(
     layout_dims: u8,
 ) -> &'static str {
     use ProjectionMode::*;
+    if pattern_dims == 0 {
+        return "Native"; // dimensionless: nothing to caption
+    }
     match (dims(pattern_dims), dims(layout_dims), mode) {
         (1, 2 | 3, Index) => "By index",
         (1, 2 | 3, X) => "Along x",
@@ -347,8 +372,8 @@ mod tests {
         assert_eq!(names(1, 2), ["index", "x", "y"]);
         assert_eq!(names(1, 3), ["index", "x", "y", "z"]);
         assert_eq!(names(2, 3), ["z", "y", "x"]);
-        // preferred_dims()'s 0 is the 1D slot
-        assert_eq!(names(0, 2), names(1, 2));
+        // 0 is "any", NOT the 1D row — see dimensionless_patterns_are_native_everywhere
+        assert_eq!(names(0, 2), Vec::<&str>::new());
     }
 
     #[test]
@@ -367,8 +392,33 @@ mod tests {
         for (p, l) in [(1, 1), (1, 2), (1, 3), (2, 2), (2, 3), (3, 3)] {
             assert!(compatible(p, l), "{p}D on {l}D");
         }
-        // preferred_dims()'s 0 is a 1D pattern: compatible with everything
+        // 0 is "any": compatible with everything
         assert!(compatible(0, 1));
+        assert!(compatible(0, 3));
+    }
+
+    /// Dimensionality 0 is "any": native on every Layout, nothing offered,
+    /// nothing in force, never flagged incompatible. `dims(0)` still reads 1
+    /// because 0 and 1 render in the same space — the slot functions want
+    /// that, the picker functions must not (`library/fairies.js`, 2026-09-20).
+    #[test]
+    fn dimensionless_patterns_are_native_everywhere() {
+        for l in 1..=3u8 {
+            assert!(projection_options(0, l).is_empty(), "options on {l}D");
+            assert!(compatible(0, l), "compatible on {l}D");
+            for m in PROJECTION_MODES {
+                let mut proj = Projection::DEFAULT;
+                proj.set(0, m);
+                assert_eq!(proj.effective(0, l), None, "{m} on {l}D");
+                assert_eq!(projection_label(m, 0, l), "Native", "{m} on {l}D");
+            }
+        }
+        // a 1D pattern on the same Layouts is the contrast: it IS projected
+        assert_eq!(projection_options(1, 2).len(), 3);
+        assert_eq!(Projection::DEFAULT.effective(1, 2), Some(ProjectionMode::Index));
+        // …and the storage slot is still shared, so a host that writes the
+        // 1D slot through `set(0, …)` still round-trips
+        assert_eq!(dims(0), 1);
     }
 
     #[test]

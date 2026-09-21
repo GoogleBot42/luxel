@@ -8,13 +8,30 @@ A **Layout** is the rig: how many pixels there are and where they sit. Its
 `dims` is 1 (a strip — no map), 2 (a matrix, or a map that plots `x, y`) or 3
 (a lattice, or a map that plots `x, y, z`).
 
-A **pattern** has its own dimensionality: 1 for `render(index[, x])`, 2 for
+A **pattern** has its own dimensionality: **0** for a pattern that declares no
+geometry at all, 1 for `render(index[, x])`, 2 for
 `render2D`, 3 for `render3D`. A `renderFrame` pattern follows the 2D row when
 it actually draws in grid space — i.e. it names one of the coordinate/grid-space
 bulk builtins (`gridWidth`, `fillRect`, `splat`, `blit`, …), the same signal
 the engine already uses to decide whether to fabricate a default grid.
-A `renderFrame` that paints only in index space (`fillHSV`, `fade`,
-`setPixel`) is a strip pattern and stays one.
+**Dimensionality 0 is "any", and it is native on every Layout.** A pattern
+whose only render entry is `renderFrame` painting in index space (`fillHSV`,
+`fade`, `setPixel`) names no geometry: it is a field over `pixelCount` that
+looks the same on a strip, a panel or a cloud — `library/fairies.js` is the
+example. It is **not** a 1D pattern. A 1D pattern is a strip drawn on this
+Layout and can be replicated along an axis; a whole-frame pattern owns the
+buffer and never is. Collapsing that 0 to 1 gave such a pattern a
+`1D · by index` caption, a Projection row and along-x/along-y options that
+changed nothing at all (Jeremy, 2026-09-20). So dims 0 offers no options, has
+no projection in force, is never flagged incompatible, and the Layout draws it
+in its own shape.
+
+`luxel_core::projection::dims()` still normalizes 0 to 1, because 0 and 1
+render in the same space and share the `proj1d` storage slot — but
+`projection_options`, `compatible` and `projection_label` test the raw 0 first.
+Same split in the TypeScript mirror (`normDims` vs
+`projectionOptions`/`projectionCompatible`), and `gallery.json`'s advisory
+`kind` carries it as `"any"` rather than `"strip"`.
 
 When they differ the engine has to decide what coordinates — and how many
 render calls — the pattern gets. That decision is the **projection**.
@@ -30,11 +47,11 @@ and how cheaply an along-axis projection can be run (below).
 Options are listed in display order; the **first is the default**, and every
 default reproduces the engine's behaviour from before projections existed.
 
-| Layout dims | 1D patterns | 2D patterns (incl. `renderFrame`) | 3D patterns |
-|---|---|---|---|
-| 1D (strip) | *native* | — | — |
-| 2D (matrix or 2D map) | By index `index` · Along x `x` · Along y `y` | *native* | — |
-| 3D (lattice or 3D map) | By index `index` · Along `x` · `y` · `z` | Repeat along z `z` · y `y` · x `x` | *native* |
+| Layout dims | dims 0 (any) | 1D patterns | 2D patterns (incl. grid-space `renderFrame`) | 3D patterns |
+|---|---|---|---|---|
+| 1D (strip) | *native* | *native* | — | — |
+| 2D (matrix or 2D map) | *native* | By index `index` · Along x `x` · Along y `y` | *native* | — |
+| 3D (lattice or 3D map) | *native* | By index `index` · Along `x` · `y` · `z` | Repeat along z `z` · y `y` · x `x` | *native* |
 
 **A Layout only ever shows a pattern of its own dimensionality or lower**
 (Gitea #538). A strip does not project a 2D or 3D pattern and a plane does not
@@ -191,8 +208,17 @@ A grid-space `renderFrame` pattern on a 1D Layout gets a **w×1** grid so
 `gridWidth`/`gridHeight` and the grid-space bulk builtins still describe the
 strip. That pairing is incompatible (§1a) rather than a choice, so there is no
 1×h transpose any more. A whole-frame pattern is **never** strip-rendered — it
-owns the buffer, so there is no per-pixel strip to replicate, and a 1D
-`renderFrame` on a matrix keeps by-index.
+owns the buffer, so there is no per-pixel strip to replicate. That is exactly
+why an index-space `renderFrame` is dims **0** and not 1: there is no
+projection for a host to offer it, so it must not be offered one.
+
+A `renderFrame` pattern that genuinely IS positional — one where the index is
+a place along a strip, e.g. `library/bulk-comet-trails.js` or
+`library/rainbow-comet.js` — is classed dims 0 too, and so is shown by index
+on a panel rather than replicated along an axis. Serving those means rendering
+a w-long frame and replicating it, which needs the projection installed BEFORE
+program init (`array(pixelCount)` is sized there); that is Gitea #628,
+deliberately out of scope here.
 
 One caveat: the pattern's top-level init has already run by the time a host
 installs a projection, so a pattern that sizes a buffer with

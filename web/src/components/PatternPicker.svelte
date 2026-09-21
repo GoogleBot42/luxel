@@ -147,7 +147,7 @@
     .filter(
       (p) =>
         match(p.name || p.id, needle) &&
-        fits(p.source === undefined ? 1 : guessPatternDims(p.source), $layout.dims, fixture),
+        fits(p.source === undefined ? 0 : guessPatternDims(p.source), $layout.dims, fixture),
     )
     .map((p): PickItem => ({ id: p.id, name: p.name, source: p.source }));
   /** A library pattern already on the device would be a duplicate row in the

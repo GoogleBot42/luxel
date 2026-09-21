@@ -93,9 +93,16 @@ export type {
 export const previewAs: Writable<PreviewAs> = writable(loadPreviewAs() ?? DEFAULT_PREVIEW_AS);
 previewAs.subscribe((v) => savePreviewAs(v));
 
-/** What the pattern in the editor asks for (`Engine.preferredDims()`): 0 = no
- *  preference. Auto follows it (D7). Written by the editor after each
- *  successful compile — never parsed out of the source text. */
+/** What the pattern in the editor DECLARES (`Engine.patternDims()`):
+ *  0 = dimensionless (an index-space `renderFrame` — native on every Layout),
+ *  1 = `render`, 2 = `render2D` or a grid-space `renderFrame`, 3 = `render3D`.
+ *  Auto follows it (D7). Written by the editor after each successful compile
+ *  — never parsed out of the source text.
+ *
+ *  Not `preferredDims()`, which answers "does this pattern want a map" and
+ *  folds `render` and `renderFrame` into the same 0: the two pick the same
+ *  Auto rig, but only this one tells a 1D pattern (projectable along an axis)
+ *  from a dimensionless one (nothing to project). */
 export const patternDims: Writable<PatternDims> = writable(0);
 
 /** Coordinates the custom map program produced, when one has been run. Null
@@ -274,7 +281,10 @@ export function compileForLayout(
   const first = shrink(rigFor(0));
   let engine = lx.compile(src, first.pixels);
   if (!(engine instanceof Engine)) return engine;
-  const dims = engine.preferredDims();
+  // The DECLARED dims, not `preferredDims()`: both pick the same Auto rig
+  // (0 and 1 are the same strip), but the caption, the #538 filter and the
+  // projection override downstream need a dimensionless pattern to stay 0.
+  const dims = engine.patternDims();
   const want = withProjectionOverride(shrink(rigFor(dims)), dims, proj);
   if (want.pixels !== first.pixels) {
     engine.free();
