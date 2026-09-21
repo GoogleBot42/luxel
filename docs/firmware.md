@@ -271,6 +271,19 @@ power cut must not look like a crash loop to `preboot_guard` — which, once
 staging has begun, would "roll back" to an `ota_1` that is no longer a
 bootable image.
 
+**The 4 MB half ran on metal 2026-09-20** — the Athom, the first device on
+the new table (Gitea #634): one reboot, 8.6 s from last answer to first
+answer on the new layout, patterns / playlist / settings / asset bundle all
+intact and `store.dead` 31,024 → 0. The reboot count is worth knowing: a
+device whose last OTA left it on `ota_1` takes the **one**-reboot path,
+because the migrating image is written into `ota_0`, which is the offset the
+new table also calls `ota_0`, so `settle_into_ota0` neither copies nor
+reboots. Only a device already live on `ota_0` pays for the self-copy and
+the second reboot. What that run did *not* cover is the resume path: the
+migration finished before a power cut could be timed against it, and a
+migrated device never migrates again (Gitea #644), so the `LXMG` stage marks
+remain host- and QEMU-verified only.
+
 The 16 MB half of this has never executed: QEMU's `esp32s3` machine reads
 `partitions-16mb.csv` correctly out of the merged image and loads `ota_0`,
 and then the app produces no serial output at all, so `move_assets`' copy

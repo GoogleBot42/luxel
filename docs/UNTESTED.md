@@ -112,30 +112,27 @@ value while collapsed. Everything below is on the new page.
 
 ## Needs you physically (I can't do these)
 
-- [ ] **The partition repartition on metal** (Gitea #634, from #501,
-  2026-09-20 — that ticket carries the exact per-device procedure): the
-  fleet's OTA slots went 1 MiB → 1.25 MiB (3 MiB on the Seengreat) and every
-  device rewrites its own partition table on the first boot of the migrating
-  release — pattern library, playlist and settings carried across, no serial
-  involved (docs/firmware.md, "Layout migration"). **No hardware has run any
-  of this.** What is verified is the host suite (`cargo test -p patlog-check`
-  for the repack, the refusal and a cut mid-staging; `cargo test -p
-  parttab-check` for the table arithmetic against the real CSVs) and the
-  QEMU suite; what that cannot reach is a real flash part, a real power cut,
-  and real WiFi credentials surviving in nvs. The bench order is deliberate:
-  the **Athom first**, because it is the one board on an agent-controllable
-  power plug, so the resume-after-a-cut path can actually be exercised at
-  each stage; the **Seengreat second and only after the Athom is proven**,
-  because it is the only 16 MB device, its table moves the asset bundle too,
-  and there is no second one. Neither board has a serial console — the
-  residual risk is a cut inside the single 4 KiB table write, which is
-  milliseconds and is serial-recovery-only, and you are the serial recovery.
-  One more gap the emulator cannot close: the **asset move** only happens on
-  the 16 MB layout, and QEMU's `esp32s3` machine reads the 16 MB table and
-  loads the app but then prints nothing at all, so that copy has never run
-  anywhere — which is the other reason the Seengreat goes second.
-  Both boards run your playlists, and the playlist blob is a store record:
-  it has to come through the relocation intact and resume.
+- [x] **The partition repartition on metal — the 4 MB half** (Gitea #634,
+  from #501): done on the **Athom** 2026-09-20. One reboot, under 8.6 s end
+  to end, patterns / playlist / layout / name / brightness / asset bundle all
+  intact, `partitions.migrated true`, slot 1,310,720 B, store 524,288 B.
+  Timeline and the full before/after tables are on #634; the fleet status
+  table is in docs/boards.md ("On metal"). Two things came out of it: the
+  resume-after-a-cut path got **no** coverage (the migration finished before
+  the cut window could open — Gitea #644), and an OTA across an LXBC format
+  bump leaves every stored blob unreadable on a device that cannot recompile
+  itself (Gitea #643).
+- [ ] **The partition repartition on metal — the Seengreat** (Gitea #634):
+  still to do, and the Athom going well does not make it easier. It is the
+  only 16 MB device, its table moves the 960 KiB **asset bundle** as well as
+  the store, and that copy — the one stage the 4 MB layout does not take —
+  has never run anywhere: QEMU's `esp32s3` machine reads the 16 MB table and
+  loads the app but then prints nothing at all, so it is covered by
+  assertion (`tools/qemu/migrate-test.py --plan-16mb`) rather than by
+  execution. It has no serial console and no power plug, it runs your
+  playlist, and the residual risk is a cut inside the single 4 KiB table
+  write — milliseconds, serial-recovery-only, and you are the serial
+  recovery.
 - [ ] **AP-mode provisioning** (v0.1.22): Settings → "reboot into setup
   AP", then join `luxel-4ae0d4` from your phone — a captive portal should
   pop with the settings page; save WiFi and it reboots back onto your

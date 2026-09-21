@@ -183,6 +183,31 @@ log 396 KiB instead of 220 KiB (Gitea #636) — but `LOG_OFF` being shared by th
 new geometries is exactly what makes the migration a byte move, so it needs
 its own release and a format bump.
 
+### On metal: the fleet's migration status
+
+| device | board | migrated | live slot | `ota_slot_bytes` | `storage_bytes` | margin now |
+|---|---|---|---|---:|---:|---|
+| Athom rig `192.168.0.183` | `board-athom-music` | **yes, 2026-09-20** | `ota_0` | 1,310,720 | 524,288 | 270,160 B (20.6 %) |
+| Seengreat panel `192.168.0.238` | `board-seengreat-hub75` | not yet (Gitea #634) | — | — | — | — |
+| dev unit `192.168.0.205` | `board-pixelblaze-v3` | not yet (offline) | — | — | — | — |
+
+The Athom is the first device on the new table (Gitea #634). It went across
+on one reboot in **under 8.6 s** end to end — including the 512 KiB store
+erase and the WiFi rejoin — with its 3 patterns, its playlist, its layout,
+its name, its brightness and its untouched asset bundle all intact, and
+`store.dead` 31,024 → 0 because the staged log is a packed image. The run
+also showed that a device already live on `ota_1` takes the **one**-reboot
+path: `ota-push` writes the new image into `ota_0`, which is the offset the
+new table also calls `ota_0`, so `settle_into_ota0` neither copies nor
+reboots. Budget ~10 s of silence for such a device, not the ~90 s a
+self-copying one needs.
+
+One thing that bit and is not the migration's fault: a device OTA'd across
+an LXBC format bump comes back with every stored blob unreadable
+(`vmerr: bytecode format v5 (this build reads v6)`) and cannot recompile
+itself — Gitea #643, which the migrating release makes near-certain
+fleet-wide.
+
 ### Measurement history (the 1 MiB era)
 
 Everything below was measured against the 1,048,576 B slot, and the

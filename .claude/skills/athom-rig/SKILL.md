@@ -32,6 +32,20 @@ it, and covers only the agent-side procedure for driving that rig.
   exception (granted 2026-07-26) to the broker's publish-only-under-`luxel/*`
   care rule (jeremy-ha-broker.md memory) — don't extend the exception to any
   other topic on that broker.
+- **`switch.sh claude-switch state` does not work on THIS plug** — it exits 3
+  with "no answer … (unknown switch name, or device offline)" while the plug
+  is perfectly healthy. It ignores zigbee2mqtt's `/get` request; what it does
+  do is publish unsolicited state reports every few seconds and immediately
+  after any `/set`. So read it with **`switch.sh claude-switch watch <secs>`**
+  instead, and confirm an `on`/`off` by the next report's `"state"` rather
+  than by `state`. A failed `state` is NOT evidence the rig is unpowered
+  (cost a "the plug is gone" detour on 2026-09-20).
+- **For a TIMED cut, put mosquitto on PATH first.** `mosquitto_pub` is not in
+  the container's PATH, so `switch.sh` falls back to `nix shell
+  nixpkgs#mosquitto -c …`, which costs **~5 s** per invocation — useless when
+  the cut has to land inside a several-second window. Resolve it once
+  (`nix shell nixpkgs#mosquitto -c sh -c 'command -v mosquitto_pub'`) and
+  prepend that store `bin` to PATH: the publish then takes ~3 ms.
 - **Liveness signal**: the plug reports power draw; roughly 0.7 W idle
   confirms the board is powered, without needing serial or network to
   answer.

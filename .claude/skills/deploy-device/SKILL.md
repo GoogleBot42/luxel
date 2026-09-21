@@ -211,6 +211,21 @@ pre-authorized per CLAUDE.md — no need to ask before pushing.
 
 - Sanity check `GET /api/status`: confirm `version`/`slot` match what you
   just pushed and `vmerr` is null.
+- **`vmerr: "bytecode format vN (this build reads vM)"` after an OTA is the
+  format-bump trap, not a broken push** (hit on the Athom 2026-09-20, Gitea
+  #643). Devices never compile — they store the blob a client compiled — so
+  an OTA that crosses an LXBC `FORMAT_VERSION` bump leaves every stored
+  pattern unreadable: dark output, `fps` at idle, and every `/api/playlist`
+  item annotated `"invalid"`. The sources are fine. Recover with a client
+  that is CURRENT: for each id, `GET /api/patterns/<id>`, compile its
+  `source` with your worktree's `web/tools/lxp.mjs` (`npm run wasm` first),
+  and `POST /api/patterns` an envelope carrying the **same name** —
+  `patterns::save` upserts by name, so the id and every playlist reference
+  survive. The console the DEVICE serves is not a current client (it is
+  whatever the assets partition last got, and it will be rejected with
+  `{"ok":false,"code":"bc-version"}`), so follow with
+  `tools/deploy.sh <ip> --assets-only`. Check the device's compiler with
+  `curl <ip>/luxel.wasm | gunzip` and read bytes 4..5 of anything it emits.
 - Exercising a settings POST as a smoke test? GET the current state FIRST
   and restore it after — multi-field bodies make it easy to clobber a
   field you weren't testing (`POST /api/output` with a guessed `capMa 0`
