@@ -798,10 +798,17 @@ fn walk_fn(
 #[cfg(feature = "kinds")]
 #[inline]
 fn elem_kind(arr: Kind) -> Kind {
-    if arr == Kind::ArrNum {
-        Kind::Num
-    } else {
-        Kind::Dyn
+    match arr {
+        Kind::ArrNum => Kind::Num,
+        Kind::Arr | Kind::Dyn => Kind::Dyn,
+        // Indexing a non-array ALWAYS traps (`Vm::index_read`: "indexing a
+        // non-array value"), so the value this pushes is unreachable.
+        // `Infer::elem_of` has always said `Num` here; this arm is what
+        // keeps the verifier from disagreeing with it, which it did until
+        // the prelude produced the first program that indexes a slot proven
+        // `Num` (`arrayForEach(5, f)` — the helper's parameter is a plain
+        // number because that is the only thing any call site passes it).
+        _ => Kind::Num,
     }
 }
 

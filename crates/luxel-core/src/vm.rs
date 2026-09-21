@@ -431,6 +431,10 @@ pub enum Builtin {
     PaintCanvas,
     Stencil2D,
     ArrayMaxAbs,
+    // Luxel extension builtins, batch 12: the one engine primitive the
+    // pattern-language prelude needed when `mapPixels` stopped being a
+    // builtin (Gitea #626).
+    PixelCoord,
 }
 
 pub struct BuiltinDef {
@@ -563,6 +567,10 @@ pub static BUILTINS: &[BuiltinDef] = &[
     b!("fillNoise2D", FillNoise2D), b!("fillNoise3D", FillNoise3D),
     b!("paintCanvas", PaintCanvas),
     b!("stencil2D", Stencil2D), b!("arrayMaxAbs", ArrayMaxAbs),
+    // Luxel extension builtins, batch 12 (Gitea #626): the mapped
+    // coordinate of one pixel, which is everything the `mapPixels` prelude
+    // function needs from the engine. Id 187.
+    b!("pixelCoord", PixelCoord),
 ];
 
 // ---- builtin kind signatures (Gitea #607, docs/jit-design.md §2.3) ----
@@ -692,9 +700,13 @@ pub fn lookup_builtin(name: &str) -> Option<u16> {
         .map(|i| i as u16)
 }
 
-/// Method-form array API: `a.mutate(f)` etc.
-pub fn lookup_method(name: &str) -> Option<u16> {
-    let global = match name {
+/// Method-form array API: the global name `a.<name>(...)` desugars to.
+/// Five of these (`forEach`, `mutate`, `mapTo`, `reduce`, `sortBy`) name
+/// PRELUDE functions rather than builtins since Gitea #626, so the compiler
+/// resolves the global NAME (user function, then prelude) instead of
+/// calling [`lookup_builtin`] on it.
+pub fn method_global(name: &str) -> Option<&'static str> {
+    Some(match name {
         "forEach" => "arrayForEach",
         "mutate" => "arrayMutate",
         "mapTo" => "arrayMapTo",
@@ -704,9 +716,9 @@ pub fn lookup_method(name: &str) -> Option<u16> {
         "sortBy" => "arraySortBy",
         "sum" => "arraySum",
         _ => return None,
-    };
-    lookup_builtin(global)
+    })
 }
+
 
 /// Shared by the three bounce easings: piecewise parabolas, n1 = 7.5625,
 /// d1 = 2.75 (the standard fit). "in" and "in-out" are reflections of it.
@@ -3718,6 +3730,17 @@ impl Vm {
             } else {
                 Fx::ZERO
             }),
+            // pixelCoord(i, axis): the mapped coordinate of pixel `i` on
+            // axis 0/1/2 (x/y/z) with the current transform applied — the
+            // "outside a render pass" coordinate the deleted `mapPixels`
+            // arm computed per pixel, now reachable from the prelude
+            // (Gitea #626). Unmapped axes read 0, exactly as the map
+            // fallback fills them; an out-of-range axis clamps.
+            PixelCoord => {
+                let i = n(0).to_int_trunc().max(0) as u32;
+                let p = self.apply_transform(self.pixel_coords(i, [Fx::ZERO; 3]));
+                num(p[n(1).to_int_trunc().clamp(0, 2) as usize])
+            }
             MapPixels => {
                 let f = a(0);
                 for i in 0..self.pixel_count {

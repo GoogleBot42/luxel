@@ -150,18 +150,45 @@ fn an_exported_global_the_host_can_poke_joins_num() {
 
 #[test]
 fn a_callback_functions_params_are_dyn() {
+    // A callback that is only a RUN-TIME value: the call site cannot bind
+    // it, so it goes through the shared prelude copy's `CallValue` and the
+    // lambda is reachable from anywhere with anything (Gitea #626).
+    let (p, k) = kinds_of(
+        "var a = array(4)\n\
+         var f = (v, i) => i / 4\n\
+         var pick = 1\n\
+         a.mutate(pick > 0 ? f : f)\n\
+         export function render(i) { hsv(a[i % 4], 1, 1) }\n",
+    );
+    let lam = (0..p.fns.len())
+        .find(|&f| p.fns[f].params == 2 && p.fns[f].name.starts_with("<lambda"))
+        .expect("the lambda");
+    assert_eq!(k.slot(lam, 0), Kind::Dyn);
+    // and the array it mutated is no longer provably all-numeric
+    assert_eq!(global_kind(&p, &k, "a"), Kind::Arr);
+}
+
+/// …but a STATIC callback is specialised: the prelude helper is cloned for
+/// this call site, the callback is called with `CallFn`, and its parameters
+/// keep their kinds (Gitea #626, docs/jit-design.md §4).
+#[test]
+fn a_static_callback_keeps_typed_params() {
     let (p, k) = kinds_of(
         "var a = array(4)\n\
          a.mutate((v, i) => i / 4)\n\
          export function render(i) { hsv(a[i % 4], 1, 1) }\n",
     );
-    // the lambda is reachable as a value, so its params are Dyn
     let lam = (0..p.fns.len())
-        .find(|&f| p.fns[f].params == 2 && f != 0)
+        .find(|&f| p.fns[f].params == 2 && p.fns[f].name.starts_with("<lambda"))
         .expect("the lambda");
-    assert_eq!(k.slot(lam, 0), Kind::Dyn);
-    // and the array it mutated is no longer provably all-numeric
-    assert_eq!(global_kind(&p, &k, "a"), Kind::Arr);
+    assert_eq!(k.slot(lam, 0), Kind::Num, "the callback's value param");
+    assert_eq!(k.slot(lam, 1), Kind::Num, "the callback's index param");
+    assert!(
+        p.fns.iter().any(|f| f.name.starts_with("arrayMutate$")),
+        "the helper should have been cloned for this call site"
+    );
+    // a numeric callback keeps the array provably all-numeric too
+    assert_eq!(global_kind(&p, &k, "a"), Kind::ArrNum);
 }
 
 // ------------------------------------------------------------- verifier
