@@ -414,8 +414,11 @@ rules make it hold:
 small builtin returning a pixel's mapped coordinates by index and then
 lowers the same way. With #626 landed the §4a refusal list is empty for
 the library, and the Rust → native trampoline (`dispatch_direct`
-indirection) is never built. The builtin arms in `vm.rs` stay as the
-reference implementation and for pre-v6 blobs.
+indirection) is never built. **They are no longer builtins at all**
+(Jeremy, 2026-09-20): the `vm.rs` arms, `dispatch_direct` and `run_on_top`
+are deleted — no old blob can reach them after the v6 bump — and the six
+`BUILTINS` ids become append-only tombstones (`BKind::Removed`); the
+Pixelblaze oracle is the reference for the prelude's correctness.
 
 ### 4a. Refusal semantics and the editor warning
 
