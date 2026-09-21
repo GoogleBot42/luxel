@@ -752,6 +752,76 @@ still stands.
   `native` is `None`; on boards without the `jit` feature the field does
   not exist.
 
+### 5 and 6 as built (phase 3, Gitea #658)
+
+**SHIPPED**: `luxel_core::jit::native` (the engine's half),
+`Engine::install_native` + the two call sites, `firmware/src/jit.rs` (the
+exec buffer, the call, compile-at-activation), `/api/status`'s `jit`
+object, `POST /api/jit`, `tools/qemu/jit-test.py`.
+
+**BUILT INTO THE S3 IMAGES AND OFF AT RUNTIME.** §7.2's gate found a trap
+that §7.1's could not, which is what §7.2 is for: two of seven patterns
+(`aurora-2d`, `bulk-canvas-ripples-2d`) compile, start, and then take the
+AppCpu down with a clobbered stack guard and EXCCAUSE 0 — a wild store,
+about 1 KB below `stack_limit`, on patterns that render correctly
+interpreted on the same image and correctly through the host ISA model
+with the same compiled bytes. §7.3 says metal comes after the earlier
+gates are green, and this one is not. `LUXEL_JIT_ENABLED` therefore
+defaults to false; docs/firmware.md "The open trap" carries the registers,
+the reproducer and where to look next.
+
+Everything above is as designed except the following.
+
+**`native` lives on the `Engine`, not on the `Program`.** §6's first bullet
+says `Program` gains it. `Program` is `Clone` and a claim on executable
+memory is not; making it clonable would mean either refcounting the exec
+buffer or a `Program` whose clone silently loses its code. The engine is
+also the thing whose LIFETIME the code has to match — activation builds it,
+`drop_prev` frees it — so it is where the field belongs.
+
+**The call is behind a trait.** §6 describes `Engine::render_pixels`
+calling the native entry directly. It calls
+`NativeCall::enter(addr, ctx, abi, args)` instead, and that indirection is
+the phase's most useful decision: the device installs `XtensaCall`, which
+transmutes the address to a typed `extern "C"` pointer, and the host test
+suite installs a caller that runs the same image through the phase-2 ISA
+model. `Engine`'s own path is then literally the same code under both,
+which is what makes `crates/luxel-jit/tests/engine_diff.rs` — 307 of 307
+library patterns, four frames each, bit-identical — a test of the GLUE and
+not of a second implementation of it. A `renderFrame` pattern is only
+reachable this way at all: the frame builtins need the engine's lent
+buffer, which `library_diff.rs`'s by-hand harness does not have.
+
+**No inline assembly on the call path.** §3.2's windowed convention is
+exactly what Rust's `extern "C"` emits a `callx8` for on these targets, so
+a typed fn-pointer call is enough for every `FnAbi` shape. The engine reads
+no result, so the pointer is declared `-> i32` even for `ret_dyn` — a
+two-word return arrives in `a10:a11` with no hidden `sret`. The one `asm!`
+in the tree is a bare `isync` after writing the exec buffer.
+
+**`FnAbi` gained `dyn_params`** and `luxel_core::jit::ctx_arg_words` is the
+`ParamConv::CtxArgs` layout, written once and used by both callers: a
+caller and a callee that disagree about which handoff word is a tag is a
+wild read of somebody's frame, so there is exactly one place to get it
+wrong.
+
+**§5's PSRAM arena is NOT built.** Phase 3 ships the `.rwtext` static and
+only that. On the S3 that is a real limitation rather than a staging step:
+`.rwtext` and `.stack` are one budget, and after the 24 KB stack floor
+there is **1.7 KB** left — enough for `rainbow` and nothing else. The
+buffer is instead bought by trading `iram-vm` away on a JIT board (it holds
+`Vm::run`, the interpreter loop a native pattern never enters), which gets
+the Seengreat to 14 KB / 7 KB per image / 91 % of `library/`. That is a
+working JIT, but §5's PSRAM route — 8 MB already mapped, costing no
+internal SRAM — is what actually lifts the cap, and the measurement is the
+argument for building it. docs/firmware.md "JIT" carries the table.
+
+**The refusal vocabulary grew three device-only reasons** — `init-error`
+(§2.3's exemption needs init to have completed), `no-buffer` (both exec
+halves in flight) and `disabled` (the `POST /api/jit` switch) — beside
+§4a's `debug`. All four are things no compile-time lint could predict,
+which is why §4a routes them through `/api/status`.
+
 ## 7. Verification plan
 
 ### 7.1 Host (no device, every CI run)

@@ -687,8 +687,19 @@ before, and a pattern with nothing to say renders no extra element at all.
   edit here). A refusal shows as a persistent amber `capstrip` under the
   preview (`jit-warning`) saying "Runs in the interpreter on JIT boards: …",
   clickable to jump to the call site, which is also squiggled. The
-  device-only reasons (`too-large`, `psram`, `debug`) are not knowable here
-  and surface from `/api/status` instead.
+  device-only reasons are not knowable here and surface from `/api/status`
+  instead — which since Gitea #658 they do, in the SAME row:
+  `lints.ts`'s `deviceJitReason` turns `/api/status`'s `jit` object into one
+  sentence in the same amber `capstrip` (`jit-device`), and the two cannot
+  both fire because the local prediction wins when it has one (it can point
+  at a line; `too-large` and `no-buffer` cannot). The reason ids are one
+  vocabulary across `luxel_jit::Refusal::id`, `jitlint::JitRefusal::id` and
+  `firmware/src/jit.rs`, so the wording lives once, in `lints.ts`.
+  The happy path is not a strip at all: a device that COMPILED the pattern
+  gets a quiet `native` marker beside the frame rate in the shell header
+  (`jit-native`), because it explains the number rather than being news.
+  `luxel serve --jit native|interp:REASON|off` drives all three without an
+  S3 on the bench (docs/api.md).
 
 `lx_kinds`'s JSON is `{jit:{eligible,reason?},dyn:[…],stats:{typed_slots,
 total_slots}}`; `web/src/lib/lints.ts` is the whole mapping from it to what
