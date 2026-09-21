@@ -99,6 +99,17 @@ pre-authorized per CLAUDE.md — no need to ask before pushing.
   console is served from the device's flash, so merging to master changes
   nothing on the bench until you push. It is a streamed POST with no
   reboot — safe even on the panel, which has no reset path.
+- **`ota-push.sh` waits only 60 s, and `deploy.sh` aborts when it gives up.**
+  The wait loop is 30 × (2 s curl + 2 s sleep); `deploy.sh` runs under
+  `set -e`, so a device that takes longer ends the script **before the asset
+  push**, leaving firmware and console from different releases — the exact
+  skew #643 exists to prevent. That window is tight for a migrating device:
+  a board that has to self-copy into the new `ota_0` needs ~90 s (#634), and
+  a slow-rendering board answers `/api/status` in 10–20 s, over the 2 s
+  timeout (#259). When you expect a long boot, run `tools/deploy.sh <ip>
+  --fw-only` (or `ota-push.sh`), poll `/api/status` yourself with a 20 s
+  timeout for as long as the situation warrants, then
+  `tools/deploy.sh <ip> --assets-only`. Same two pushes, a wait you control.
 - **Serial flash leaves assets stale.** A serial `espflash flash` rewrites
   only the app partition; the assets partition keeps whatever it had
   before. Any serial recovery (see athom-rig skill) must be followed by

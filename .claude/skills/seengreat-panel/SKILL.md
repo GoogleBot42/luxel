@@ -162,11 +162,23 @@ device answers in 10–20 s and a 4 s timeout reads as "down", #259).
   If it comes up `boot:0x3 (DOWNLOAD…)` after espflash's reset, BOOT is held —
   Jeremy presses EN. Stock-restore image: `seengreat-stock.bin` (repo root, gitignored).
 - **OTA to this board wedges the ProCpu inside a flash op about 44 % of the
-  time (#294)** — silent, no serial, RTC-watchdog recovered, and the board
-  comes back on the OLD slot. Push in a retry loop and check `slot` after each
-  attempt. Before taking any measurement, **push the same image to BOTH slots**
-  so a rollback can't move you onto a different build mid-run, and read
-  `core1.last` afterwards (`SysRtcWdt` + ProCpu fence phase 3 = it happened).
+  time (#294)** — silent, no serial, and usually RTC-watchdog recovered with
+  the board back on the OLD slot. Check `slot` after each attempt, and before
+  taking any measurement **push the same image to BOTH slots** so a rollback
+  can't move you onto a different build mid-run; read `core1.last` afterwards
+  (`SysRtcWdt` + ProCpu fence phase 3 = it happened).
+  **"Recovered" is not guaranteed, so "push in a retry loop" is not safe
+  advice on this board.** On 2026-09-21 (#655) a 986 KB push wedged *during
+  the upload* — `POST /api/ota` never answered, `curl` timed out at 300 s
+  having received 0 bytes — and the board then went fully off the LAN (no
+  ARP entry, HTTP 000 connect hang) and was still gone 9 minutes later. It
+  has **no serial node and no agent-controllable plug**, so that is a hard
+  stop: a physical power cycle from Jeremy is the only way back. Budget one
+  per plan that OTAs this board, decide up front how many attempts you are
+  willing to spend, and prefer a single push you have prepared carefully
+  over a loop. An earlier push in the same session, same size and same
+  script, completed in 11.9 s — the failure is not predictable from the
+  previous attempt.
 - The OTA half of `tools/deploy.sh`/`ota-push.sh` needs `BOARD=board-seengreat-hub75`
   in the environment (they read the board map for the ELF path and `--chip`).
 - Physical EN/BOOT presses and re-plugging are Jeremy's; everything else here
