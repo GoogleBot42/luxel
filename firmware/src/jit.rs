@@ -319,30 +319,20 @@ pub fn jit_status() -> (&'static str, Option<&'static str>, u32, u32) {
 /// Runtime switch: the next activation compiles only if this is set.
 ///
 /// **It defaults to OFF, and that is the phase-3 landing state, not an
-/// oversight.** Everything else here is finished and green — 307 of 307
-/// library patterns render bit-identical frames through a real `Engine`
-/// (`crates/luxel-jit/tests/engine_diff.rs`), and the first three patterns
-/// `tools/qemu/jit-test.py` drives on an emulated ESP32 agree with the
-/// interpreter to the byte. But that gate also found this, and it is not
-/// something to ship past:
+/// oversight.** Every gate is green: 307 of 307 library patterns render
+/// bit-identical frames through a real `Engine`
+/// (`crates/luxel-jit/tests/engine_diff.rs`), and `tools/qemu/jit-test.py`
+/// runs emitted code on an emulated ESP32 and compares the published
+/// frame against the same image interpreting.
 ///
-/// > `aurora-2d.js` and `bulk-canvas-ripples-2d.js` compile, start
-/// > running, and then take the AppCpu down with `Detected a write to the
-/// > stack guard value`, EXCCAUSE 0, `a1` about 1 KB below
-/// > [`stack_limit`] — while the stack guard itself, 7.5 KB further down,
-/// > has been clobbered. A wild store, not stack growth. The same
-/// > patterns render correctly interpreted on the same image, and
-/// > correctly through the host ISA model. `rainbow`, `snake`,
-/// > `snake-2d` (19 functions, 11,492 B — the largest tested) and
-/// > `bulk-rainbow` are all fine, so it is neither size, nor function
-/// > count, nor `renderFrame`.
-///
-/// A crash on the render core of a board with no serial port is the worst
-/// failure mode this project has, and docs/jit-design.md §7.3 is explicit
-/// that metal comes only after the earlier gates are green. So the feature
-/// ships BUILT — so it can be measured, toggled and root-caused on a real
-/// board — and OFF, so no device runs native code until that trap is
-/// understood. `POST /api/jit {"on":true}` turns it on for one session;
+/// It is off because docs/jit-design.md §7.3 has not run: **no S3 has
+/// executed a byte of this.** A crash on the render core of a board with
+/// no serial port is the worst failure mode this project has, and the
+/// QEMU gate has already caught one bug that every host gate passed
+/// (docs/firmware.md, "The trap the QEMU gate caught"), which is the
+/// argument for making the first on-metal run a deliberate act with
+/// someone watching the panel rather than something that happens on the
+/// next OTA. `POST /api/jit {"on":true}` turns it on for one session;
 /// `JIT_OFF=1` at build time removes it from the image entirely.
 ///
 /// `#[no_mangle]` so it is addressable by symbol from outside the running
@@ -383,17 +373,19 @@ const STACK_BUDGET: usize = 8 * 1024;
 /// Never let the guard sit closer than this to the real bottom of the
 /// stack, whatever the budget says.
 ///
-/// **8 KB, and it is not a round number pulled out of the air — 2 KB was,
-/// and `tools/qemu/jit-test.py` caught it.** The guard only bounds NATIVE
-/// frames; the Rust a native function calls — a builtin wrapper, a §3.5
-/// helper — pushes its own frame below `a1` with no check of its own, and
-/// the bulk/canvas wrappers are among the biggest frames in the image. So
-/// the reserve has to cover the deepest Rust frame reachable from native
-/// code, not just "a bit". With 2 KB, `bulk-canvas-ripples-2d.js` ran the
-/// AppCpu into its stack guard — `Detected a write to the stack guard
-/// value on AppCpu`, a reboot — on a pattern the interpreter renders
-/// without complaint. With 8 KB the guard fires first and the pattern gets
-/// a runtime error, which is what §3.6 says should happen.
+/// **8 KB, because the guard only bounds NATIVE frames.** The Rust a
+/// native function calls — a builtin wrapper, a §3.5 helper — pushes its
+/// own frame below `a1` with no check of its own, and the bulk/canvas
+/// wrappers are among the biggest frames in the image
+/// (`tools/stack-check.py` lists them). So the reserve has to cover the
+/// deepest Rust frame reachable from native code, not just "a bit"; the
+/// 2 KB this started at was chosen without measuring.
+///
+/// It was NOT the cause of the crash `tools/qemu/jit-test.py` found —
+/// raising it changed nothing, and the real cause was the window save
+/// area at the wrong end of the frame (`luxel_jit::plan::WINDOW_SAVE`,
+/// docs/firmware.md "The trap the QEMU gate caught"). It is kept at 8 KB
+/// on its own merits.
 const STACK_RESERVE: usize = 8 * 1024;
 
 /// The floor the prologue compares `a1` against.
