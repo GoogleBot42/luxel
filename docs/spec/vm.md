@@ -11,12 +11,30 @@ now; a serialized format will be added when patterns are stored on-device.
 
 A value (`Value`) is one of:
 
-| variant      | payload | meaning                                     |
-|--------------|---------|---------------------------------------------|
-| `Num(Fx)`    | 16.16   | number (the default; `0` when uninitialized) |
-| `Arr(u32)`   | handle  | array reference into the VM array arena      |
-| `Fun(u16)`   | fn index| reference to a pattern function              |
-| `Builtin(u16)`| table index | reference to a builtin function          |
+| variant      | tag | payload | meaning                                |
+|--------------|----:|---------|----------------------------------------|
+| `Num(Fx)`    | 0 | 16.16 word  | number (the default; `0` when uninitialized) |
+| `Arr(u32)`   | 1 | handle      | array reference into the VM array arena      |
+| `Fun(u32)`   | 2 | fn index    | reference to a pattern function              |
+| `Builtin(u32)`| 3 | table index | reference to a builtin function             |
+
+**The byte layout is a contract, not an implementation detail** (Gitea #642,
+docs/jit-design.md §2.5 and §11 answer 2). `Value` is
+`#[repr(C, u32)]` with those explicit discriminants: **eight bytes,
+four-byte aligned, a `u32` tag at offset 0 and the payload word at offset
+4** — i.e. exactly `vm::ValueRaw { tag: u32, payload: u32 }`, which
+`Value::raw()` / `Value::from_raw()` convert to and from. Every payload is
+32 bits so the tag is a `u32` too (a `u16` payload would make rustc pick a
+`u16` tag, which costs the interpreter a literal-pool load per `match` on
+Xtensa — Gitea #312).
+
+Two consumers depend on it. On-device native code (`luxel_core::jit`) loads
+and stores a boxed value as two words at those offsets and builds a builtin
+call's boxed arguments as a literal `[Value; n]` in its frame; and a builtin
+returning a boxed value returns those two words by value
+(`jit::RetDyn`). A frontend or host may therefore rely on the layout, and
+must not renumber or reorder the variants — the tag values are also the
+`Box` tags the bytecode's kind bytes use.
 
 ### 1.1 Numbers: 16.16 fixed point (`Fx`)
 

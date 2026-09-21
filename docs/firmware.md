@@ -1119,6 +1119,30 @@ The tiering is measured, not guessed — `tools/profile-library.mjs` over all
 (≤ 0.016 calls/px); tiers 1+2 answer 99.4 % of every builtin call the library
 makes.
 
+**A flat table exists beside the ladder, and it is off.** The JIT's builtin
+entry table (Gitea #642, docs/jit-design.md §4) gives every one of the 188
+ids an `extern "C"` `generic` wrapper that runs the same arm the ladder runs
+— `Vm::builtin_ladder` is shared between the two, so there is exactly one
+implementation. `luxel-core`'s `dispatch-table` feature routes
+`Vm::call_builtin` through `BUILTIN_ENTRIES[id].generic` instead of walking
+the tiers, and the firmware exposes it as a feature of its own:
+
+```
+cd firmware && EXTRA_FEATURES=dispatch-table BOARD=board-seengreat-hub75 ./build-esp32.sh
+```
+
+It is **not enabled on any board** and must not be turned on from a host
+benchmark. The tiers are a cache budget, and the two things we know about
+changes of this shape both say the same: #328's hot/cold split alone swung
++80 % on one pattern and was a wash on another with `Vm::run` byte-identical,
+and #312 test 2b was +9 % on x86 and −2.3 % on the S3. The table costs
+**+8,288 B of app image on `board-seengreat-hub75`** (188 × 23 B of thunks
+plus a shared body, the direct entry points, and 2,256 B of table in
+`.rodata`) and buys one indirect call in place of two-to-three tier tests —
+which is a question for `tools/patbench.mjs` on the panel and the Athom, both
+chips, builtin-heavy and loop-only probes. Until that A/B runs, every board
+ships the ladder.
+
 **Then the hot tiers go into internal SRAM.** `luxel-core` carries three
 device-only cargo features that add `#[link_section = ".rwtext"]` — what
 `esp_hal::ram` expands to, spelled by hand because `luxel-core` does not

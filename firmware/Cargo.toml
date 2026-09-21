@@ -154,6 +154,15 @@ flashmap-off = []
 iram-vm = ["luxel-core/iram-vm"]
 iram-builtins = ["luxel-core/iram-builtins"]
 iram-math = ["luxel-core/iram-math"]
+# A/B lever for the JIT's builtin entry table (Gitea #642,
+# docs/jit-design.md §4): route the interpreter's `CallBuiltin` through
+# `BUILTIN_ENTRIES[id].generic` instead of the three-tier ladder. Adds the
+# whole 188-entry table to the image, so this is BOTH the correctness build
+# and the size measurement. Never a board profile and never a default — the
+# decision is a measurement on the Seengreat (#328's I-cache lesson), and
+# until that runs every board ships the ladder.
+#   EXTRA_FEATURES=dispatch-table BOARD=board-seengreat-hub75 ./build-esp32.sh
+dispatch-table = ["luxel-core/dispatch-table"]
 # HUB75 panel output (ESP32-S3 LCD_CAM only — C3/S2 have no parallel-output
 # peripheral; classic-ESP32/C6 support exists in esp-hub75 but is not wired
 # up here yet). Compose-per-frame into a DMA framebuffer that autonomously
