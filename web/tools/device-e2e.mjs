@@ -1145,6 +1145,86 @@ try {
     }
   }
 
+  // ── The on-device JIT (#658, docs/jit-design.md §4a) ────────────────
+  // Two surfaces, and the rule between them: `native` is a quiet marker
+  // beside the frame rate (it explains the number, it is not news), while
+  // a refusal has a REASON worth reading and gets the amber strip under
+  // the preview — the same row #627's compile-time prediction uses. A
+  // board with no backend (`off`, most of the fleet) says nothing at all.
+  // The mirror impersonates all three with `--jit`; it has no JIT and the
+  // emitter is a device backend, so impersonation is the only way to drive
+  // this without an S3 on the bench.
+  for (const [name, flag, role, want] of [
+    ["native", "native", "jit-native", true],
+    ["interp", "interp:too-large", "jit-device", true],
+    ["off", "off", "jit-native", false],
+  ]) {
+    const port = name === "interp" ? E2E.mirror.jitInterp : E2E.mirror.jitNative;
+    const base = `http://127.0.0.1:${port}`;
+    const dev = spawn(
+      "../target/debug/luxel",
+      ["serve", ...NO_NETIN, "--port", String(port), "--pixels", "120", "--fps", "24",
+       "--jit", flag],
+      { stdio: ["ignore", "pipe", "inherit"] },
+    );
+    await new Promise((resolve, reject) => {
+      dev.stdout.on("data", (d) => String(d).includes("luxel serve:") && resolve());
+      dev.on("exit", () => reject(new Error(`jit mirror (${flag}) died`)));
+      setTimeout(() => reject(new Error(`jit mirror (${flag}) start timeout`)), 30000);
+    });
+    process.on("exit", () => dev.kill());
+    const page = await browser.newPage();
+    try {
+      await page.setViewport({ width: 1400, height: 900 });
+      // the refusal strip lives under the editor's preview; the marker is
+      // in the shell header and shows on any screen
+      const hash = name === "interp" ? "#/editor" : "";
+      await page.goto(`http://localhost:${PORT}/?device=${encodeURIComponent(base)}${hash}`, {
+        waitUntil: "networkidle0",
+      });
+      // wait for the poll to have landed at all, so "absent" means absent
+      // rather than "not yet"
+      await page
+        .waitForFunction(
+          () => /\d/.test(document.querySelector('[data-role="fps"]')?.textContent ?? ""),
+          { timeout: 15000 },
+        )
+        .catch(() => {});
+      const seen = await page
+        .waitForFunction(
+          (sel) => document.querySelector(sel)?.textContent?.trim() ?? false,
+          { timeout: want ? 8000 : 2500 },
+          `[data-role="${role}"]`,
+        )
+        .then((h) => h.jsonValue())
+        .catch(() => "");
+      check(
+        `jit: --jit ${flag} ${want ? "shows" : "shows no"} [data-role=${role}]`,
+        want ? Boolean(seen) : !seen,
+        seen || "(absent)",
+      );
+      if (name === "native") {
+        const st = (await fetch(`${base}/api/status`).then((r) => r.json())).jit;
+        check(
+          "jit: the marker agrees with /api/status.jit.state",
+          st?.state === "native" && seen === "native",
+          `${JSON.stringify(st)} / readout ${seen}`,
+        );
+      }
+      if (name === "interp") {
+        check(
+          "jit: the device's reason is spelled out, not left as an id",
+          /interpreter/.test(seen) && !/too-large/.test(seen),
+          seen,
+        );
+      }
+      await page.screenshot({ path: `${shotDir}/device-e2e-jit-${name}.png` });
+    } finally {
+      await page.close();
+      dev.kill();
+    }
+  }
+
   // A pipelined HUB75 board reports what the PANEL displayed in `out_fps`,
   // with `rescan_hz` as its ceiling — the readout must prefer it over `fps`
   // and say so. The mirror impersonates one (it drives no panel).

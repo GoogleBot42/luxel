@@ -60,6 +60,8 @@ export const PORT = {
     syncB: p(41), // sync-e2e follower
     otaAccept: p(45), // device-e2e: --accept-ota mirror for the Update… flow (#643)
     staleStore: p(46), // device-e2e: --stale-store mirror for the self-heal (#643)
+    jitNative: p(47), // device-e2e: --jit native, the #658 marker
+    jitInterp: p(48), // device-e2e: --jit interp:REASON, the #658 refusal strip
   },
   /** sync-e2e's UDP beacon group port. */
   sync: p(42),

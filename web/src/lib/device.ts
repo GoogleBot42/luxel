@@ -54,6 +54,22 @@ export interface DeviceStatus {
     pattern_dims: number;
   };
   vmerr: string | null;
+  /** What the LIVE pattern is running as, and why (Gitea #658,
+   *  docs/jit-design.md §4a). `state` is `"native"` when the device
+   *  compiled it, `"interp"` when it has a JIT and refused, `"off"` when
+   *  the board carries no backend. `reason` is the shared refusal
+   *  vocabulary — the same spellings `jitlint` uses for the compile-time
+   *  half, plus the three only a device can know (`debug`, `init-error`,
+   *  `no-buffer`) and `disabled` for the `POST /api/jit` switch. Absent
+   *  only from firmware older than #658. */
+  jit?: {
+    state: "native" | "interp" | "off";
+    reason: string | null;
+    /** Bytes of native code, literal pool included. 0 when not native. */
+    code_bytes: number;
+    /** What compiling it cost. 0 when not native. */
+    compile_us: number;
+  };
   /** Network input currently driving the strip (DDP/E1.31), if any. */
   live?: "ddp" | "e131" | null;
   /** Free heap in bytes, measured with the CURRENT pattern still loaded.

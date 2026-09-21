@@ -48,7 +48,13 @@
   import { MicSource, toSensorBoardFrame } from "../lib/audio";
   import { lxpEnvelope } from "../lib/device";
   import type { ProjectionMode } from "../lib/geometry";
-  import { editorLints, jitWarning, lintSummary, type KindsReport } from "../lib/lints";
+  import {
+    deviceJitReason,
+    editorLints,
+    jitWarning,
+    lintSummary,
+    type KindsReport,
+  } from "../lib/lints";
   import {
     Engine,
     type ColorOrder,
@@ -72,6 +78,7 @@
     deviceHeapFree,
     deviceOutFps,
     devicePatterns,
+    deviceJit,
     devicePixels,
     devicePsramFree,
     deviceRescanHz,
@@ -1332,6 +1339,12 @@
   // pattern has nothing boxed, which is the common case.
   $: lints = editorLints(kindsReport);
   $: jitNote = jitWarning(kindsReport);
+  // What the DEVICE says the live pattern is running as (#658). A fact
+  // rather than a prediction, but it is still advice about speed and
+  // blocks nothing, so it shares the amber strip. `off` (no backend —
+  // most of the fleet) and `native` say nothing here; `native` is the
+  // quiet marker beside the frame rate instead.
+  $: deviceJitNote = deviceJitReason($deviceJit);
   $: boxedSummary = lintSummary(lints);
   $: firstBoxed = lints.find((l) => l.role === "boxed") ?? null;
   $: if (editor) editor.setLints(lints);
@@ -1848,6 +1861,16 @@
             <button class="capstrip" data-role="jit-warning" on:click={() => jumpToLint(jitNote)}>
               ⚠ {jitNote.text} (line {jitNote.line})
             </button>
+          {:else if deviceJitNote}
+            <!-- The DEVICE's answer (#658), in the same row and the same
+                 amber. It only appears where the compile-time lint has
+                 nothing to say, because when both fire they are the same
+                 fact and the local one can point at a line. Not a button:
+                 `too-large`, `no-buffer` and `debug` have no source
+                 position to jump to. -->
+            <div class="capstrip" data-role="jit-device">
+              ⚠ {deviceJitNote}
+            </div>
           {/if}
           <!-- Capacity (Gitea #15), the existing idiom in its new place: a strip
                under the preview it is about. Severity follows CERTAINTY, not size:
