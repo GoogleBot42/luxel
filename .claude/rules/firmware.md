@@ -175,8 +175,11 @@ paths:
   provisioning keeps the WiFi stack linked either way — the old warning
   that credless builds dead-code-eliminate WiFi stopped being true when
   provisioning landed). Just never compare a credless number against a
-  creds-baked one — and never compare a number measured on one HOST
-  against one from another: every build embeds its absolute dependency
+  creds-baked one; never compare one measured BEFORE a rebase against one
+  measured after (master moves — a JIT-phase-0 merge landed mid-#501 and
+  shifted every board by ±100 B, so both columns of a before/after table
+  have to be re-taken against the master you actually sit on); and never
+  compare a number measured on one HOST against one from another: every build embeds its absolute dependency
   source paths in panic `Location`s (~13.5 KB, #441), so the same commit
   weighed 1,010,432 B on the CI runner and 1,014,400 B locally
   (2026-09-08). Gate a percentage floor only on the flake artifact of the
@@ -212,6 +215,13 @@ paths:
   **Never trade code for tables on the assumption that the tables are
   free** — measure the image, not the section. Same lesson as #473's
   `match` → `const` table, which cost +496 B.
+- **`riscv32imc` (board-c3-devkit) has no atomic read-modify-write.**
+  `AtomicU32::swap` / `fetch_add` / `compare_exchange` are a HARD COMPILE
+  ERROR there and nowhere else, so a static that compiles on every other
+  board can still red-light CI (#413, and again in #501 where a
+  region-tracking `swap` had to become load-then-store under the flash
+  lease). Load/store are fine. Build board-c3-devkit before trusting a new
+  atomic.
 - Size gotchas measured on riscv32imc at `opt-level = "s"` (#465): `str::parse`
   instantiates ~700 B of `from_str_radix` **per integer width**, so a parser
   wanting u8/u16/u32 pays three times — hand-roll one `fn(&str) -> Option<u32>`

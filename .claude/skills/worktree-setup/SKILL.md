@@ -9,7 +9,8 @@ these before trusting any build/test failure as a real regression.
 
 ## Procedure
 
-0a. Read and grep files in YOUR worktree, never in the main checkout: it sits
+0a. **Cut the worktree in your FIRST tool call, before you read a single
+   file.** Read and grep files in YOUR worktree, never in the main checkout: it sits
    on whatever commit its last session left (detached at c18f1f3, well behind
    master, on 2026-09-05), so line numbers and even function bodies differ.
    An Edit planned from a main-checkout read fails or, worse, lands on the
@@ -17,7 +18,12 @@ these before trusting any build/test failure as a real regression.
    worktree exists:** cut the worktree FIRST, then point Explore/research
    agents at it — on 2026-09-20 the main checkout was 439 commits behind and
    an agent reported bytecode v4, no flashmap and no builtin tiers as current
-   facts; the whole run was redone.
+   facts; the whole run was redone. **It is not only subagents**: later that
+   day the #501 session read the whole firmware out of the main checkout (463
+   commits behind) with its own Bash calls before cutting a worktree, and had
+   to throw the entire survey away — `parttab.rs`, `patlog.rs`, `flashmap.rs`
+   and `tools/ci.sh` did not exist in what it had read, and `patterns.rs` had
+   been rewritten twice since.
 0. Cut the branch from **`origin/master`, not the local `master`** — the main
    checkout's `master` is only as fresh as its last `git pull`, and with sessions
    merging PRs continuously it is routinely several merges behind (seen 4 behind on
