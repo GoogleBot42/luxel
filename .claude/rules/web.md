@@ -77,6 +77,15 @@ paths:
   in the block your task assigned you, and if a run's output disagrees with a
   green e2e, check `ss -ltnp | grep <port>` and whose worktree that `vite
   preview` argv names before debugging the code (2026-09-19, #538).
+- **Never `pkill -f` a pattern that also appears in your own command line.**
+  `pkill` matches the agent's own shell and SIGKILLs it, so
+  `pkill -9 -f 'vite preview --port 4200'` typed at a Bash tool kills the tool
+  call — and a harness launched earlier in that same call dies with it. Three
+  device-e2e runs "failed with exit 1" and left half-written logs, which reads
+  exactly like the harness silently skipping sections and cost a long detour
+  into the wrong file (2026-09-20, #629). Break the self-match with a
+  bracket — `pkill -9 -f 'vite prev[i]ew --port 4200'` — or kill by PID from
+  `ss -ltnp`. Same trap for `luxel serve` mirrors.
 - **Harnesses run BACK TO BACK flake on the concurrency assertions — re-run
   the one that failed, alone, before debugging it.** A mirror that was killed
   a second ago still holds its listening socket for a moment, and the checks
@@ -86,7 +95,10 @@ paths:
   failed once in a `for h in …; do` loop and passed immediately on their own,
   with no code between (2026-09-20, #538). This is the opposite of the
   stale-selector rule below: a harness failure is usually real, but these
-  particular counters are not. One re-run decides it.
+  particular counters are not. One re-run decides it. `device-e2e`'s
+  "playlist: clear repaints the list exactly once" is a third — it counts
+  MutationObserver batches, read 5 once and 1 on the very next run with no
+  code between (2026-09-20, #629).
 - **The route is in the URL fragment** since #538 (`web/src/lib/router.ts`),
   which changes what "reload" means in a harness: `page.goto(url)` where the
   page is ALREADY on that URL is a same-document navigation — the app never
@@ -153,6 +165,13 @@ paths:
   `tileAction(DTILE, …)` dies on "Node is either not clickable or not an
   Element", 400 lines away from the cause. A section that drives a page-level
   control puts it back in its own `finally` (2026-09-19, #563).
+  That same search is why **a tile is addressed by `data-key`, never as "the
+  first `.tile` in the grid"**: a filtered-out tile stays in the DOM at 0x0,
+  so the first match is whatever sorts first in the WHOLE library and
+  `tileAction`'s hover aborts the run on it. A section that searches for a
+  pattern and then clicks "a tile" only works while those are the same
+  pattern — device-e2e's #563 section did for months and broke the moment the
+  first `kind: "strip"` entry in `gallery.json` changed (2026-09-20, #629).
 - **Inject pattern source by PASTING it, not by typing it.** CodeMirror
   auto-closes `{`, so a typed program's own `}` doubles up and the compile
   silently breaks. "Write it on one line" only works for a body that IS one

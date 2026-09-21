@@ -264,6 +264,7 @@ wasm (`crates/luxel-wasm`, wrapped in `web/src/lib/luxel.ts`):
 | `lx_projection_options(pattern_dims, layout_dims)` | JSON `[{mode,code,label}]`, returns the count |
 | `lx_effective_geometry(h)` | JSON `{pixelCount,patternDims,layoutDims,w,h,mode,label,compatible}` |
 | `lx_layout_dims(h)` | the Layout's dims |
+| `lx_pattern_dims(h)` | what the pattern DECLARES: 0 dimensionless · 1 `render` · 2 `render2D`/grid-space `renderFrame` · 3 `render3D`. What a projection surface asks — `lx_preferred_dims` answers a different question and folds 0 and 1 together |
 | `lx_set_strip_layout(h)` | install the 1D Layout |
 
 `luxel run|bench --proj MODE` applies a mode to the slot matching the
