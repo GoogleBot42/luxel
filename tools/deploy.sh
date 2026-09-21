@@ -2,6 +2,7 @@
 # One-shot deploy to a device: firmware OTA + web asset bundle.
 #
 #   tools/deploy.sh <device-ip> [--fw-only | --assets-only]
+#   tools/deploy.sh --package <out.luxr>
 #
 # Builds everything from the working tree: wasm → playground → LUXA asset
 # archive, and the ESP32 firmware (creds via firmware/creds.env, see
@@ -9,13 +10,50 @@
 # for it to come back); assets stream after via POST /api/assets (hot
 # reload, no reboot). Run from the repo root inside `nix develop`.
 #
+# `--package <out.luxr>` builds both halves and writes them into ONE release
+# package instead of pushing anything (Gitea #643). That is the file the
+# console's Settings → Firmware & recovery → Update… installs, and the same
+# container .github/workflows/release.yml publishes per board — the bench and
+# CI go through web/tools/pack-luxr.mjs either way, so they cannot drift.
+# The package names the board by its `board::NAME`, which is what
+# /api/status reports, so the console can refuse a wrong-board package.
+#
 # NOTE a serial `espflash flash` writes ONLY the app image — the assets
 # partition (0x310000) keeps whatever it had. After any serial recovery,
 # run `tools/deploy.sh <ip> --assets-only` to bring the web app current.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-IP="${1:?usage: tools/deploy.sh <device-ip> [--fw-only|--assets-only]}"
+# Exported so tools/ota-push.sh sees the same board (and verifies the image
+# was built for it).
+export BOARD="${BOARD:-board-pixelblaze-v3}"
+# shellcheck source=../firmware/board-target.sh
+. firmware/board-target.sh
+
+# --- package mode: build both halves, write a .luxr, push nothing ---
+if [ "${1:-}" = "--package" ]; then
+    OUT="${2:?usage: tools/deploy.sh --package <out.luxr>}"
+    case "$OUT" in /*) ;; *) OUT="$PWD/$OUT" ;; esac
+    board_target "$BOARD"
+    board_name "$BOARD"
+    VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' firmware/Cargo.toml | head -1)"
+    echo "== firmware: build ($BOARD) =="
+    (cd firmware && BOARD="$BOARD" ./build-esp32.sh)
+    APP="$(mktemp --suffix=.bin)"
+    LUXA="$(mktemp -t luxel-assets-XXXX.luxa)"
+    trap 'rm -f "$APP" "$LUXA"' EXIT
+    espflash save-image --chip "$CHIP" "firmware/target/$TARGET/release/luxel-fw" "$APP"
+    echo "== assets: build + pack =="
+    (cd web && npm run build >/dev/null && node tools/pack-assets.mjs "$LUXA")
+    # The codec is web/src/lib/luxr.ts — TypeScript, shared with the browser
+    # and the unit test, hence the type-stripping flag.
+    (cd web && node --experimental-strip-types --disable-warning=ExperimentalWarning \
+        tools/pack-luxr.mjs --board "$BOARD_NAME" --version "$VERSION" \
+        --app "$APP" --assets "$LUXA" "$OUT")
+    exit 0
+fi
+
+IP="${1:?usage: tools/deploy.sh <device-ip> [--fw-only|--assets-only] | tools/deploy.sh --package <out.luxr>}"
 # The board is never a positional here either (Gitea #389) — $1 is the
 # device address. Catch the mistake before it turns into a DNS failure.
 case "$IP" in
@@ -25,9 +63,6 @@ case "$IP" in
     exit 2 ;;
 esac
 MODE="${2:-}"
-# Exported so tools/ota-push.sh sees the same board (and verifies the image
-# was built for it).
-export BOARD="${BOARD:-board-pixelblaze-v3}"
 LUXA="$(mktemp -t luxel-assets-XXXX.luxa)"
 trap 'rm -f "$LUXA"' EXIT
 

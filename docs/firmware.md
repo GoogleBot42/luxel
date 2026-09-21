@@ -126,6 +126,64 @@ to write into — requires ONE serial flash of the merged image:
 A device on an *older Luxel* table needs no serial at all: it rewrites its
 own table on the first boot of the migrating release ("Layout migration").
 
+### The firmware and the console it serves are ONE release
+
+An app image and the web bundle in the assets partition are built from the
+same commit and are not independently versioned. `POST /api/ota` and
+`POST /api/assets` are separate routes, so for a long time nothing made
+anyone do the second — and the failure that causes is not gradual.
+
+Since Gitea #643 the intended path for an installed device is the **release
+package**, `luxel-<board>-<ver>.luxr` (docs/releases.md): one file holding
+the app image and that release's LUXA archive, installed from the device's
+own console — Settings → Advanced → Firmware & recovery → **Update…**. It
+streams the app, waits out the reboot (`/api/status`'s `slot`/`version`
+changing, 60 s window), then streams the assets and reloads the page. The
+order is fixed: the assets partition is served by the RUNNING firmware, so
+assets first would put the new console in front of the old engine. Locally,
+`tools/deploy.sh <ip>` still does both over the network, and
+`tools/deploy.sh --package <out.luxr>` writes the same container the release
+workflow publishes.
+
+A bare `.bin` is still accepted everywhere it was, and the console now says
+out loud that the on-device web app was **not** updated.
+
+### Bytecode format bumps
+
+`luxel_core::bytecode::FORMAT_VERSION` is the LXBC container version. The
+firmware only DECODES; it has no compiler. So when that constant is bumped:
+
+- every blob already in a device's pattern store becomes unreadable. The
+  SOURCES are untouched — the store holds both — so nothing is lost, but
+  nothing runs: `/api/status` reports `vmerr` "bytecode format v5 (this
+  build reads v6) — recompile the pattern", every playlist item comes back
+  `invalid`, and the fixture goes dark;
+- the console bundled in the device's assets partition is the one that
+  shipped with the OLD firmware. Its compiler emits the old format, so every
+  save it attempts is refused `{"ok":false,"code":"bc-version"}`. The device
+  cannot be repaired from the UI it is serving.
+
+That happened on the Athom on 2026-09-20 (Gitea #643) and took a checkout's
+worth of off-device tooling to undo. **A format bump must therefore ship with
+the machinery that survives it**, which is now in the tree and must not be
+taken back out:
+
+1. `/api/status` reports `bc_format` — the format THIS build reads —
+   alongside `board` (docs/api.md), so a client can see the skew as a number
+   rather than parsing free text.
+2. `GET /api/patterns` flags each row it can no longer decode with
+   `"stale":true`, read as two bytes off the mapped store.
+3. The console compares `bc_format` with its own `lx_bc_format()` and, when
+   they AGREE but blobs are behind, recompiles each stale pattern from its
+   stored source and saves it back **under the same name** — `patterns::save`
+   upserts by name, so ids and every playlist reference survive. When they
+   disagree it shows a banner instead and repairs nothing: recompiling with
+   the wrong compiler would replace unreadable blobs with unreadable blobs.
+4. The release package (above) makes the firmware and its console arrive
+   together, so the skew is a transient rather than a resting state.
+
+The release notes for a format-bumping release should still say so.
+
 ## Partition tables
 
 Two tables, one per flash size, both tracked in `firmware/`.

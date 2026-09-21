@@ -154,6 +154,7 @@ interface Exports {
   ): number;
   lx_set_array_elements(n: number): void;
   lx_array_elements_for(heapFree: number, engineHeap: number, arenaFree: number): number;
+  lx_bc_format(): number;
 }
 
 /** Wire colour order, as `GET /api/output` reports it. */
@@ -342,6 +343,15 @@ export class Luxel {
   arrayElementsFor(heapFree: number, engineHeap: number, psramFree: number): number {
     if (typeof this.e.lx_array_elements_for !== "function") return 0;
     return this.e.lx_array_elements_for(heapFree, engineHeap, psramFree);
+  }
+
+  /** The LXBC format version THIS bundle's compiler emits, to compare with
+   *  `/api/status`'s `bc_format` (what the device reads). 0 means the wasm
+   *  predates the export — treat the skew as unknown and say nothing, rather
+   *  than accusing a device of being out of step (Gitea #643). */
+  bcFormat(): number {
+    if (typeof this.e.lx_bc_format !== "function") return 0;
+    return this.e.lx_bc_format();
   }
 
   /** Model this compiled blob's cost on a device with `heapFree` bytes free.

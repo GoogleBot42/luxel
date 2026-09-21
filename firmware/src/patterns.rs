@@ -1018,8 +1018,10 @@ fn payload_vec(off: u32, len: u32) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// `GET /api/patterns` → `{"patterns":[{"id","name"},…]}` (from the RAM
-/// index; names come out of the mapping).
+/// `GET /api/patterns` → `{"patterns":[{"id","name"[,"stale":true]},…]}`
+/// (from the RAM index; names come out of the mapping). `stale` marks a
+/// pattern whose compiled blob this firmware can no longer read — a console
+/// with a current compiler recompiles those from source (#643).
 pub fn list_json() -> String {
     let recs: Vec<Rec> = INDEX.lock(|c| c.borrow().clone());
     let mut out = String::new();
@@ -1035,7 +1037,25 @@ pub fn list_json() -> String {
         push_piece(&mut out, &id_hex(r.seq));
         push_piece(&mut out, "\",\"name\":\"");
         push_piece(&mut out, &json_escape(&name));
-        push_piece(&mut out, "\"}");
+        push_piece(&mut out, "\"");
+        // `stale` (Gitea #643): the blob's own LXBC format word — two bytes
+        // off the mapping, right after the magic — against the one this
+        // build reads. Deliberately the MAPPED read only: with the mapping
+        // off there is no claim to make, and a client that gets no flag
+        // falls back to the `vmerr` / playlist `invalid` text, which is what
+        // pre-#643 firmware gives it anyway.
+        // The slice PATTERN (not `s[0]`/`s[1]`) is deliberate: indexing would
+        // link a bounds-check panic — and its `Location` string — into a path
+        // that runs once per stored pattern.
+        match payload_slice(r.bc_off() + luxel_core::bytecode::MAGIC.len() as u32, 2) {
+            Some(&[lo, hi])
+                if u16::from_le_bytes([lo, hi]) != luxel_core::bytecode::FORMAT_VERSION =>
+            {
+                push_piece(&mut out, ",\"stale\":true");
+            }
+            _ => {}
+        }
+        push_piece(&mut out, "}");
     }
     push_piece(&mut out, "]}");
     out

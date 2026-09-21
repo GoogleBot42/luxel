@@ -28,6 +28,8 @@ export type ApiErrorScope =
   | "output"
   | "playlist"
   | "pattern"
+  /** Installing a firmware image or a release package (Gitea #643). */
+  | "ota"
   | "device";
 
 export interface ApiErrorContext {
@@ -228,6 +230,7 @@ const FALLBACK: Record<ApiErrorScope, string> = {
   output: "The device refused this output setting.",
   playlist: "The device refused this playlist change and kept the one it had.",
   pattern: "The device refused this pattern.",
+  ota: "The release was not installed; the device is running what it was.",
   device: "The device refused the request.",
 };
 

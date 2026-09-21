@@ -22,6 +22,12 @@ name: release
 #                                 build (Gitea #11): no on-device web app,
 #                                 so the -full.bin leaves the assets
 #                                 partition erased. See docs/boards.md.
+#   luxel-<board>-<ver>.luxr      release PACKAGE: the app image AND the web
+#                                 assets in one container, installed as one
+#                                 action by the console's Settings ->
+#                                 Firmware & recovery -> Update... (Gitea
+#                                 #643). Absent for the hosted-UI build,
+#                                 which serves no on-device console.
 #   luxel-web-assets-<ver>.luxa   the packed web app alone: POST /api/assets
 #   luxel-web-dist-<ver>.tar.gz   the playground as plain static files
 #                                 (host anywhere; playground mode needs no
@@ -207,6 +213,26 @@ jobs:
               *) dd if=dist-luxa/web-assets.luxa "of=dist/luxel-$board-$V-full.bin" \
                     bs=4096 seek=$((ASSETS_OFF / 4096)) conv=notrunc status=none;;
             esac
+            # ...and the one-file release package: this board's app image
+            # plus the web assets built from this same commit (Gitea #643).
+            # A device that takes the firmware without the console that
+            # matches it goes dark across an LXBC format bump, so the
+            # package exists to make the two arrive together. Packed by the
+            # same web/tools/pack-luxr.mjs tools/deploy.sh uses, and named
+            # by board::NAME so the console can refuse a wrong-board file.
+            # Hosted-UI images serve no console, so they get no package.
+            case "$board" in
+              *-hosted) ;;
+              *) BOARD_NAME=$( . firmware/board-target.sh
+                               board_name "$BOARD_FEAT"
+                               printf '%s' "$BOARD_NAME" )
+                 nix develop --command bash -c "cd web && node \
+                   --experimental-strip-types --disable-warning=ExperimentalWarning \
+                   tools/pack-luxr.mjs --board '$BOARD_NAME' --version '$V' \
+                   --app '../result-$board/luxel-fw-ota.bin' \
+                   --assets '../dist-luxa/web-assets.luxa' \
+                   '../dist/luxel-$board-$V.luxr'" ;;
+            esac
             cp "result-$board/luxel-fw.elf" "elfs/luxel-$board-$V.elf"
             echo "::endgroup::"
           done
@@ -233,7 +259,8 @@ jobs:
 
             - **WLED device takeover**: use the [installer page](https://googlebot42.github.io/luxel/flash.html), or upload `luxel-<board>-*-ota.bin` via WLED's update page
             - **New device** (or full reset): `espflash write-bin 0x0 luxel-<board>-*-full.bin`
-            - **Update over the network**: `curl --data-binary @luxel-<board>-*-ota.bin http://<device>/api/ota`
+            - **Update an installed device**: open its console, Settings → Advanced → Firmware & recovery → **Update…**, and pick `luxel-<board>-*.luxr` — it installs the firmware and the matching web app in one action
+            - **Update over the network (firmware only)**: `curl --data-binary @luxel-<board>-*-ota.bin http://<device>/api/ota` — follow it with the web-assets push below, or the device keeps serving the console that shipped with its old firmware
             - **Web app only**: `curl --data-binary @luxel-web-assets-*.luxa http://<device>/api/assets`
 
 # The installer site (GitHub Pages) is deployed by pages.yml, which this

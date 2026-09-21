@@ -1397,6 +1397,46 @@ Every optimistic write then has to roll back: a failed playlist POST re-reads
 the device's own list and says `playlist not saved` (`playlistWriteFailed` in
 `stores/device.ts`), and a refused activation reports through the banner.
 
+## Version skew is a shell banner, and the repair is automatic (#643)
+
+Two numbers meet at a device: the LXBC format this bundle's compiler EMITS
+(`Luxel.bcFormat()`, from `lx_bc_format()` in luxel.wasm) and the one the
+firmware READS (`/api/status`'s `bc_format`). They ship together and normally
+agree. A firmware OTA installed without the matching web assets pulls them
+apart, and on the Athom that meant a dark strip and a console whose every save
+was refused.
+
+`components/BcBanner.svelte` is mounted once in the shell, directly under
+`ErrorBar`, and renders **nothing** when the two agree and no stored blob is
+behind. It is under ErrorBar for the same reason ErrorBar is in the shell at
+all: the editor is full-screen, and "every save is being refused" has to be
+explainable from inside it.
+
+The rules are pure modules, so they are stated once and tested without a
+browser:
+
+| module | what it decides | test |
+|---|---|---|
+| `lib/bcskew.ts` | `bcSkew(bundle, device)` → `match` / `bundle-older` / `bundle-newer` / `unknown` (a missing number on either side is NEVER a match), the banner wording, and `stalePatternIds()` — the `stale` row flags when the firmware reports them, else the `vmerr` / playlist-`invalid` text | `tests/bcskew.test.mjs` |
+| `lib/heal.ts` | the repair: fetch each stale pattern's source, compile it here, save it back **by name** so the id and every playlist reference survive. Idempotent, resumable, leaves a pattern that no longer compiles exactly as it was and lists it | `tests/install.test.mjs` |
+| `lib/install.ts` | the install sequence (app → reboot wait → assets, never the other order), the board check, and `rebootSettled()` | `tests/install.test.mjs` |
+| `lib/luxr.ts` | the `.luxr` container codec, shared with `tools/pack-luxr.mjs` and the release workflow | `tests/luxr.test.mjs` |
+
+The one rule that matters most: **the console never recompiles a store while
+its own compiler is older than the device.** That case is a banner carrying
+the web-asset upload, not a repair — recompiling with the wrong compiler
+would replace unreadable blobs with equally unreadable ones.
+
+Those four modules are loaded directly by `npm test` through node's type
+stripping, which does no extension guessing — so they spell their sibling
+imports `./luxr.ts`, and `tsconfig.json` carries `allowImportingTsExtensions`
+(with its prerequisite `noEmit`; vite/esbuild does the emitting anyway) to
+let tsc agree. Everything else in `src/` keeps the extensionless form.
+
+`device-e2e.mjs` drives all of it against `luxel serve`'s impersonation flags
+— `--bc-format` for either direction of skew, `--stale-store` for a store the
+bump aged, `--accept-ota` for the Update… flow (docs/api.md).
+
 ## Activation parks the playlist (Gitea #538 round 2)
 
 `activateDevicePattern()` is THE activation verb — `Play` on a tile, the

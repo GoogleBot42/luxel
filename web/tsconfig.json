@@ -3,6 +3,14 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
+    // A module that `npm test` loads directly through node's type stripping
+    // must spell its sibling imports with the `.ts` extension — node's ESM
+    // resolver does no extension guessing (src/lib/{luxr,bcskew,install,heal}.ts,
+    // Gitea #643). Vite resolves those paths unchanged; this pair is what
+    // stops tsc calling them an error. `noEmit` is its prerequisite and is
+    // the truth anyway — vite/esbuild does the emitting.
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,

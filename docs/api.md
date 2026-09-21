@@ -261,6 +261,24 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   the panel"). Sampled where the frames are, so it reads 0 whenever nothing
   is rendering — exactly when `out_fps` does.
 - `max_pixels` — this board's cap: 4096 on HUB75-panel boards, 2048 otherwise.
+- `board` — this image's `board::NAME` (`"Pixelblaze v3 Standard"`), the
+  string `firmware/board-target.sh`'s `board_name` prints and
+  `tools/ota-push.sh` greps an image for (Gitea #389). A `.luxr` release
+  package names the board the same way, so a client can refuse a wrong-board
+  package **before** it reaches an OTA slot. The mirror reports
+  `"native mirror"` unless `--board-name` impersonates one. Absent on
+  firmware older than the field, which means "cannot be checked" — never
+  "matches". Note the name can be a SUPERSTRING of `board_name`'s
+  (`board-s3-devkit` under `hub75` is "ESP32-S3 devkit + HUB75 panel"), so
+  compare by containment, as `ota-push.sh` does.
+- `bc_format` — the LXBC bytecode format version **this build reads**
+  (`luxel_core::bytecode::FORMAT_VERSION`). A client compares it with the
+  format its own compiler EMITS (the console reads `lx_bc_format()` out of
+  luxel.wasm): equal is the normal case; a device reading a NEWER format
+  cannot run anything that client saves, and one reading an OLDER format
+  cannot run what is already in its store. Absent on firmware older than the
+  field. Gitea #643 — before this existed the only evidence of skew was the
+  free text in `vmerr`. See docs/firmware.md, "Bytecode format bumps".
 - `slot` — `factory` / `ota_0` / `ota_1` / `ota_?` / `unknown` (which app
   partition booted). Check this after a power-cycle test: a rollback shows up
   here and nowhere else.
@@ -387,7 +405,8 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   ```
 
 `GET /api/status` on the **mirror** carries `fps`, `pixels`, `max_pixels`,
-`geom`, `caps`, `slot` (always `"native"`), `version`, `heap_free` (0 unless
+`geom`, `caps`, `slot` (always `"native"`), `version`, `board`, `bc_format`,
+`heap_free` (0 unless
 `--heap-free N` was passed), `engine_heap` (0 unless `--engine-heap N` was
 passed), `live`, `vmerr`, and `partitions` — **no `src`, `bc`, `web`, or the
 `*_us` stage timers.** Its `partitions` is the honest answer for a host with
@@ -412,6 +431,16 @@ mirror allocates pattern arrays on the host heap, so nothing consumes it and
 `caps.outputs`, which is what lets a two-output `/api/layout` be driven
 without the Athom. Together they let the Settings page's capability gating be
 driven without the hardware; see docs/tools.md.
+
+Four more flags impersonate the release/upgrade machinery (Gitea #643), all
+absent by default:
+
+| flag | what it changes |
+|---|---|
+| `--board-name NAME` | what `/api/status` reports as `board` (default `"native mirror"`), so both a matching and a mismatched `.luxr` package can be driven. |
+| `--bc-format N` | what `/api/status` reports as `bc_format`, and which stored blobs count as `stale`. It changes what the mirror REPORTS, not what it can execute — the point is a client's reaction to skew in either direction. |
+| `--stale-store` | a store filled by an OLDER console: a pattern entering the library for the FIRST time has its blob's format word decremented, so it genuinely fails to decode. An overwrite (a save under the same name — what a recompile does) is stored as given, so a repair converges instead of re-staling what it just fixed. |
+| `--accept-ota` | `POST /api/ota` and `POST /api/assets` become recording no-ops and `caps.ota` turns true. The mirror writes no flash and reboots into nothing, so it reports a `version` of `<ver>+otaN` instead — the "it came back as something else" a client's post-OTA wait looks for — and adds `"ota":{"installs":N,"app":BYTES,"assets":BYTES}` to `/api/status` so a test can assert BOTH halves of a package landed. |
 
 The mirror's Layout is **not persisted** — it has no flash, so a restart comes
 back to the board default. Everything else about `/api/layout` is identical by
@@ -470,12 +499,22 @@ a stored one.
 
 | route | method | body | response | where |
 |---|---|---|---|---|
-| `/api/patterns` | GET | — | `{"patterns":[{"id","name"},…]}` | both |
+| `/api/patterns` | GET | — | `{"patterns":[{"id","name"[,"stale":true]},…]}` | both |
 | `/api/patterns` | POST | LXP1 envelope with a name | `{"ok":true,"id":"<hex>"}` | both |
 | `/api/patterns/<id>` | GET | — | `{"id","name","source"}` | both |
 | `/api/patterns/<id>` | DELETE | — | `{"ok":true}` | both |
 | `/api/patterns/<id>/activate` | POST | — | `{"ok":true}` | both |
 
+- `stale` (Gitea #643) marks a pattern whose compiled blob this build can no
+  longer decode — its LXBC format word is not `bc_format`. The SOURCE is
+  intact, so the repair is "a client with a current compiler recompiles it and
+  saves it back under the same name" (see `activate`'s `bc-version` below and
+  docs/firmware.md, "Bytecode format bumps"). The key is **absent**, never
+  `false`: absent means "not known to be stale", which is also what firmware
+  predating the field says, and what firmware running with the pattern store
+  unmapped (`flashmap-off`) says — there the two bytes cannot be read cheaply
+  and no claim is made. A client that gets no flags falls back to the
+  `vmerr` / playlist `invalid` text.
 - A missing `<id>` returns **200** with `{"ok":false,"error":"no such
   pattern"}`, not a 404 — on both sides, deliberately.
 - **Activation does NOT stop a playing playlist** (unlike `POST /api/code`,
@@ -1054,8 +1093,19 @@ At most `PIN_MAX_BATCH` writes per request.
 - On a **`hosted-ui`** image `/api/assets` exists but refuses:
   `{"ok":false,"error":"hosted-ui build: this image has no on-device web app"}`
   — deliberately, so `--assets-only` gets an explanation instead of a 404.
-- The mirror serves neither route (a POST 404s): it has no flash and its
-  playground comes from `web/dist` on disk.
+- The two are **one action** from the console since Gitea #643: Settings →
+  Advanced → Firmware & recovery → **Update…** takes a `.luxr` release
+  package (the app image and the LUXA archive built from the same commit, in
+  one container — see docs/releases.md) and streams the app, waits out the
+  reboot, then streams the assets. Installing firmware alone is still
+  possible with a bare `.bin` and says out loud what it did not do. The
+  order is not negotiable: the assets partition is served by the RUNNING
+  firmware, so assets first would put the new console in front of the old
+  engine.
+- The mirror serves neither route (a POST 404s) **unless started with
+  `--accept-ota`**: it has no flash and its playground comes from
+  `web/dist` on disk. With the flag both routes record the byte count and
+  answer `{"ok":true,"bytes":N}`; see the mirror-differences section above.
 
 ## Pages and static assets
 

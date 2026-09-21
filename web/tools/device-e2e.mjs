@@ -5286,6 +5286,330 @@ try {
     }
   }
 
+  // ---- release packages, format skew and the store self-heal (Gitea #643) --
+  //
+  // The Athom went dark on 2026-09-20 taking a firmware OTA across an LXBC
+  // format bump: the new engine could not read one blob in its store, and the
+  // console it served — the one that shipped with the OLD firmware — could
+  // not compile anything the new engine would run. Three mechanisms came out
+  // of that, and all three are driven here:
+  //
+  //   1. a `.luxr` release package that installs firmware AND the matching
+  //      web assets as one action (the mirror takes both under --accept-ota);
+  //   2. a banner when the two bytecode formats disagree, in either
+  //      direction (--bc-format impersonates a device on either side);
+  //   3. an automatic recompile of the stored patterns when only the BLOBS
+  //      are behind (--stale-store ages a store the way the bump did).
+  {
+    const tmp = fs.mkdtempSync("/tmp/luxr-e2e-");
+    const PKG_BOARD = "Pixelblaze v3 Standard";
+    const appBytes = 2048;
+    const assetBytes = 512;
+    fs.writeFileSync(`${tmp}/app.bin`, Buffer.alloc(appBytes, 0xe9));
+    fs.writeFileSync(`${tmp}/web.luxa`, Buffer.alloc(assetBytes, 0x4c));
+    // Built by the SAME packer tools/deploy.sh and release.yml use, so the
+    // container the console parses here is the one the bench produces.
+    const packLuxr = (out, board) =>
+      execSync(
+        "node --experimental-strip-types --disable-warning=ExperimentalWarning " +
+          `tools/pack-luxr.mjs --board '${board}' --version 9.9.9 ` +
+          `--app ${tmp}/app.bin --assets ${tmp}/web.luxa ${tmp}/${out}`,
+        { stdio: "pipe" },
+      );
+    packLuxr("right.luxr", PKG_BOARD);
+    packLuxr("wrong.luxr", "Athom music-reactive WLED controller");
+    check(
+      "643: pack-luxr.mjs writes a container of exactly header + both payloads",
+      fs.statSync(`${tmp}/right.luxr`).size === 80 + PKG_BOARD.length + 5 + appBytes + assetBytes,
+      String(fs.statSync(`${tmp}/right.luxr`).size),
+    );
+
+    // ---- 2. the two skew banners ----
+    for (const [role, fmt, needle] of [
+      ["bc-bundle-older", 99, /compiles v\d+, device reads v99/],
+      ["bc-bundle-newer", 1, /device reads v1/],
+    ]) {
+      const port = role.endsWith("older") ? E2E.mirror.bcOld : E2E.mirror.bcNew;
+      const dev = spawn(
+        "../target/debug/luxel",
+        ["serve", ...NO_NETIN, "--port", String(port), "--pixels", "60", "--bc-format", String(fmt)],
+        { stdio: ["ignore", "pipe", "inherit"] },
+      );
+      await new Promise((resolve, reject) => {
+        dev.stdout.on("data", (d) => String(d).includes("luxel serve:") && resolve());
+        dev.on("exit", () => reject(new Error("#643 skew mirror died")));
+        setTimeout(() => reject(new Error("#643 skew mirror start timeout")), 30000);
+      });
+      process.on("exit", () => dev.kill());
+      const pg = await browser.newPage();
+      try {
+        await pg.setViewport({ width: 1400, height: 900 });
+        await gotoConsole(pg, `http://127.0.0.1:${port}`);
+        await pg.waitForSelector(`[data-role="${role}"]`, { timeout: 15000 });
+        const text = await pg.$eval('[data-role="bc-banner-text"]', (el) => el.textContent.trim());
+        check(`643: ${role} banner names both formats`, needle.test(text), text);
+        // the OTHER banner must not be on screen at the same time
+        const other = role.endsWith("older") ? "bc-bundle-newer" : "bc-bundle-older";
+        check(
+          `643: ${role} is the only skew banner`,
+          (await pg.$(`[data-role="${other}"]`)) === null,
+        );
+        // the upload is offered only where the fix is a file the user has
+        check(
+          `643: ${role} offers the web-asset upload only when that is the fix`,
+          ((await pg.$('[data-role="bc-assets-upload"]')) !== null) === role.endsWith("older"),
+        );
+        // ...and a skewed device is never healed: a recompile with the wrong
+        // compiler would replace unreadable blobs with unreadable blobs
+        check(
+          `643: ${role} does not start a recompile`,
+          (await pg.$('[data-role="bc-healing"]')) === null &&
+            (await pg.$('[data-role="bc-healed"]')) === null,
+        );
+        await pg.screenshot({ path: `${shotDir}/device-e2e-643-${role}.png` });
+      } finally {
+        await pg.close();
+        dev.kill();
+      }
+    }
+
+    // ---- 1. Settings → Firmware & recovery → Update… installs a package ----
+    {
+      const OTA_PORT = E2E.mirror.otaAccept;
+      const OTA = `http://127.0.0.1:${OTA_PORT}`;
+      const otaDev = spawn(
+        "../target/debug/luxel",
+        [
+          "serve",
+          ...NO_NETIN,
+          "--port",
+          String(OTA_PORT),
+          "--pixels",
+          "60",
+          "--accept-ota",
+          "--board-name",
+          PKG_BOARD,
+        ],
+        { stdio: ["ignore", "pipe", "inherit"] },
+      );
+      await new Promise((resolve, reject) => {
+        otaDev.stdout.on("data", (d) => String(d).includes("luxel serve:") && resolve());
+        otaDev.on("exit", () => reject(new Error("#643 OTA mirror died")));
+        setTimeout(() => reject(new Error("#643 OTA mirror start timeout")), 30000);
+      });
+      process.on("exit", () => otaDev.kill());
+      const pg = await browser.newPage();
+      try {
+        await pg.setViewport({ width: 1400, height: 900 });
+        await gotoConsole(pg, OTA);
+        await pg.click('[data-role="tab-settings"]');
+        await openAdv(pg, "adv-firmware");
+        check(
+          "643: the Firmware row names the board the package must match",
+          (await pg.$eval('[data-role="fw-board"]', (el) => el.textContent.trim())) === PKG_BOARD,
+        );
+
+        // A wrong-board package is refused BEFORE anything is streamed —
+        // #389's lesson, one step earlier than ota-push.sh's image grep.
+        const before = await (await fetch(`${OTA}/api/status`)).json();
+        await (await pg.$('[data-role="fw-file"]')).uploadFile(`${tmp}/wrong.luxr`);
+        await pg.waitForSelector('[data-role="api-error-bar"]', { timeout: 8000 });
+        const err = await pg.$eval('[data-role="api-error-details"]', (el) => el.textContent);
+        check("643: a wrong-board package is refused by name", /built for Athom/.test(err), err);
+        const stillBefore = await (await fetch(`${OTA}/api/status`)).json();
+        check(
+          "643: the refused package never reached the OTA slot",
+          stillBefore.version === before.version,
+          stillBefore.version,
+        );
+        await pg.screenshot({ path: `${shotDir}/device-e2e-643-board-mismatch.png` });
+        await pg.click('[data-role="api-error-dismiss"]');
+
+        // The real thing: firmware, the reboot wait, then the assets.
+        await (await pg.$('[data-role="fw-file"]')).uploadFile(`${tmp}/right.luxr`);
+        await waitDialog(pg);
+        const title = await dialogTitle(pg);
+        check("643: the install is confirmed by file name", /right\.luxr/.test(title), title);
+        const body = await pg.$eval('[data-role="dialog"]', (el) => el.textContent);
+        check(
+          "643: the confirm says both halves are installed",
+          /web app from the same release/.test(body),
+          body.slice(0, 160),
+        );
+        await acceptDialog(pg);
+        await pg.waitForSelector('[data-role="fw-progress"]', { timeout: 8000 });
+        await pg.screenshot({ path: `${shotDir}/device-e2e-643-installing.png` });
+        // The mirror discards the bytes but reports a `+otaN` version, which
+        // is the "it came back as something else" the flow waits for.
+        let got = null;
+        for (let i = 0; i < 60; i++) {
+          const st = await (await fetch(`${OTA}/api/status`)).json();
+          if (st.version !== before.version) {
+            got = st;
+            break;
+          }
+          await sleep(500);
+        }
+        check("643: the device came back as a different build", got !== null, got?.version ?? "never");
+        // The console reloads itself once the assets land, so the assertion
+        // that they DID land is made against the device, not the page.
+        let landed = null;
+        for (let i = 0; i < 40; i++) {
+          const st = await (await fetch(`${OTA}/api/status`)).json();
+          if (st.ota?.assets > 0) {
+            landed = st.ota;
+            break;
+          }
+          await sleep(500);
+        }
+        check(
+          "643: the web assets followed the firmware without being asked for",
+          landed !== null && landed.app === appBytes && landed.assets === assetBytes,
+          JSON.stringify(landed),
+        );
+
+        // A bare .bin is still accepted — and says out loud what it did NOT do.
+        await gotoConsole(pg, OTA);
+        await pg.click('[data-role="tab-settings"]');
+        await openAdv(pg, "adv-firmware");
+        await (await pg.$('[data-role="fw-file"]')).uploadFile(`${tmp}/app.bin`);
+        await waitDialog(pg);
+        const bareBody = await pg.$eval('[data-role="dialog"]', (el) => el.textContent);
+        check(
+          "643: a bare image warns that the console is NOT updated",
+          /firmware image ONLY/.test(bareBody),
+          bareBody.slice(0, 200),
+        );
+        await cancelDialog(pg);
+      } finally {
+        await pg.close();
+        otaDev.kill();
+      }
+    }
+
+    // ---- 3. a stale store heals itself, and the playlist plays again ----
+    {
+      const ST_PORT = E2E.mirror.staleStore;
+      const ST = `http://127.0.0.1:${ST_PORT}`;
+      const stDev = spawn(
+        "../target/debug/luxel",
+        [
+          "serve",
+          ...NO_NETIN,
+          "--port",
+          String(ST_PORT),
+          "--pixels",
+          "60",
+          "--fps",
+          "24",
+          "--stale-store",
+        ],
+        { stdio: ["ignore", "pipe", "inherit"] },
+      );
+      await new Promise((resolve, reject) => {
+        stDev.stdout.on("data", (d) => String(d).includes("luxel serve:") && resolve());
+        stDev.on("exit", () => reject(new Error("#643 stale mirror died")));
+        setTimeout(() => reject(new Error("#643 stale mirror start timeout")), 30000);
+      });
+      process.on("exit", () => stDev.kill());
+      const pg = await browser.newPage();
+      try {
+        // Seed the store the way an older console would have: every pattern
+        // entering it for the first time is aged by one format version.
+        const ids = [];
+        for (const [name, hue] of [
+          ["Stale Aurora", "0.1"],
+          ["Stale Fairies", "0.6"],
+        ]) {
+          const r = await fetch(`${ST}/api/patterns`, {
+            method: "POST",
+            body: await lxpBody(
+              name,
+              `export function render(index) { hsv(${hue} + index / pixelCount, 1, 1) }`,
+              60,
+            ),
+          });
+          ids.push((await r.json()).id);
+        }
+        const listed = await (await fetch(`${ST}/api/patterns`)).json();
+        check(
+          "643: the device flags every blob it cannot read",
+          listed.patterns.length === 2 && listed.patterns.every((p) => p.stale === true),
+          JSON.stringify(listed),
+        );
+        await fetch(`${ST}/api/playlist`, {
+          method: "POST",
+          body: `D 3\nI ${ids[0]} -1\nI ${ids[1]} -1\n`,
+        });
+        const plBefore = await (await fetch(`${ST}/api/playlist`)).json();
+        check(
+          "643: every playlist item is invalid while the blobs are stale",
+          plBefore.items.length === 2 &&
+            plBefore.items.every((i) => /bytecode format/.test(i.invalid ?? "")),
+          JSON.stringify(plBefore.items.map((i) => i.invalid)),
+        );
+
+        // Opening the console is the whole user action.
+        await pg.setViewport({ width: 1400, height: 900 });
+        await gotoConsole(pg, ST);
+        await pg.waitForSelector('[data-role="bc-healed"]', { timeout: 25000 });
+        const healed = await pg.$eval('[data-role="bc-healed-text"]', (el) => el.textContent.trim());
+        check(
+          "643: the console reports what it recompiled",
+          /recompiled 2 stored patterns/.test(healed),
+          healed,
+        );
+        check(
+          "643: no skew banner — the formats agreed, only the blobs were behind",
+          (await pg.$('[data-role="bc-bundle-older"]')) === null,
+        );
+        await pg.screenshot({ path: `${shotDir}/device-e2e-643-healed.png` });
+
+        const after = await (await fetch(`${ST}/api/patterns`)).json();
+        check(
+          "643: nothing is stale afterwards",
+          after.patterns.every((p) => p.stale !== true),
+          JSON.stringify(after),
+        );
+        check(
+          "643: the ids survived, so every playlist reference did too",
+          after.patterns
+            .map((p) => p.id)
+            .sort()
+            .join() === ids.slice().sort().join(),
+          `${after.patterns.map((p) => p.id)} vs ${ids}`,
+        );
+        const plAfter = await (await fetch(`${ST}/api/playlist`)).json();
+        check(
+          "643: the playlist re-validates clean",
+          plAfter.items.length === 2 && plAfter.items.every((i) => i.invalid === undefined),
+          JSON.stringify(plAfter.items.map((i) => i.invalid)),
+        );
+
+        // ...and it actually plays: a repaired blob really does decode.
+        await fetch(`${ST}/api/playlist/play`, { method: "POST", body: "0" });
+        await sleep(2500);
+        const st = await (await fetch(`${ST}/api/status`)).json();
+        check("643: the strip is lit again", st.vmerr === null && st.fps > 0, `fps ${st.fps} vmerr ${st.vmerr}`);
+        await fetch(`${ST}/api/playlist/stop`, { method: "POST", body: "" });
+
+        // Idempotent: a reload over a healthy store repairs nothing.
+        await gotoConsole(pg, ST);
+        await sleep(3000);
+        check(
+          "643: a reload over a healthy store recompiles nothing",
+          (await pg.$('[data-role="bc-healed"]')) === null &&
+            (await pg.$('[data-role="bc-healing"]')) === null,
+        );
+      } finally {
+        await pg.close();
+        stDev.kill();
+      }
+    }
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+
+
 } finally {
   await browser.close();
   device.kill();

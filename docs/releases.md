@@ -256,6 +256,43 @@ restoring it is Gitea #291:
 |---|---|
 | `luxel-<board>-<ver>-ota.bin` | App-only image: `POST /api/ota`, and the image WLED's `/update` page accepts for the WLED→Luxel takeover (docs/wled-migration.md). Size-guarded against the board's OTA slot — or against the old 1 MiB one while `MIGRATING_RELEASE=1` is set, see above. |
 | `luxel-<board>-<ver>-full.bin` | Full-flash image (bootloader + partition table + app + **web assets**): `espflash write-bin 0x0 <file>` — new-device bring-up and full restores. Composed exactly like `firmware/build-esp32.sh image`. |
+| `luxel-<board>-<ver>.luxr` | **Release package** (Gitea #643): the app image AND that release's web assets in one container, installed as a single action from an already-running device's own console — Settings → Advanced → Firmware & recovery → **Update…**. This is the recommended way to update an installed device. Not built for `c6-devkit-hosted`, which serves no on-device console. |
+
+### The `.luxr` container
+
+A small header then the two payloads, little-endian:
+
+    off  len  field
+      0    4  magic "LUXR"
+      4    2  container format (u16), currently 1
+      6    1  board-name length (bytes)
+      7    1  firmware-version length (bytes)
+      8    4  app image length (u32)
+     12    4  assets archive length (u32; 0 = firmware only)
+     16   32  sha256 of the app image
+     48   32  sha256 of the assets archive
+     80    n  board name, UTF-8 — the image's `board::NAME`
+     ..    m  firmware version, UTF-8
+     ..    .  app image bytes
+     ..    .  LUXA/LUX2 assets archive bytes
+
+Both hashes are verified on parse, because what follows them is written into
+an OTA slot. The board name is the same string `/api/status` reports as
+`board` and `tools/ota-push.sh` greps an image for, so the console refuses a
+package built for another board before streaming a byte (#389's lesson).
+
+One codec, three callers: `web/src/lib/luxr.ts` is shared by the browser, by
+`web/tools/pack-luxr.mjs` (which this workflow and `tools/deploy.sh --package
+<out.luxr>` both run) and by `web/tests/luxr.test.mjs`. The bench and CI
+therefore cannot produce different containers.
+
+**Why the package exists.** Firmware and the on-device console are versioned
+together and were shipped separately, and nothing made anyone install the
+second. A device that took a firmware OTA across an LXBC format bump kept
+serving the console that came with its OLD firmware — which could not compile
+anything the new engine would run, on a store the new engine could not read.
+The Athom went dark exactly that way on 2026-09-20 (Gitea #643). See
+docs/firmware.md, "Bytecode format bumps", for the policy that goes with it.
 
 One extra pseudo-board, `c6-devkit-hosted`, ships the same two images built
 with the **`hosted-ui`** cargo feature (Gitea #11): no on-device playground
