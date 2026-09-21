@@ -254,11 +254,13 @@ pub fn maybe_migrate() {
         parttab::TABLE_NAME
     );
 
-    // Never write a table this chip cannot back (a 16 MB table on a 4 MB
-    // module is a brick). The 16 MB layout ships only on a board whose
-    // module is known, but a mis-set BOARD would otherwise reach flash.
-    if !parttab::flash_fits(parttab::EMBEDDED) {
-        block("flash too small for the new layout", parttab::flash_needed(parttab::EMBEDDED), 0);
+    // Never write a table this BOARD cannot back — the chip has to be big
+    // enough AND the bootloader has to accept a table that reaches that
+    // far, which on the Seengreat it did not (Gitea #634). Either way the
+    // result of getting it wrong is a board that will not boot and has no
+    // serial console, so this is the one check that runs before any other.
+    if let Some((why, need, have)) = parttab::flash_refusal(parttab::EMBEDDED) {
+        block(why, need, have);
         return;
     }
 

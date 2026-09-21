@@ -29,8 +29,12 @@ The suite's three families:
 
   takeover-*   WLED -> Luxel self-install (firmware/src/takeover.rs)
   migrate-*    the self-applied partition migration (firmware/src/migrate.rs,
-               Gitea #501) — from either OTA slot, four power-cut points, the
-               refusal path, and an assertion-only pass over the 16 MB layout
+               Gitea #501) — on BOTH layouts: the 4 MB table on the esp32
+               machine and the 16 MB one on esp32s3, each from either OTA
+               slot and cut at every re-runnable stage, plus the two refusal
+               paths (a library too large, and a bootloader flashed for a
+               smaller part) and a fast assertion-only model of the 16 MB
+               table
   flashmap /   cache-MMU mapping and the heap-region self-heal
   heap-regions
 
@@ -111,6 +115,7 @@ def main() -> int:
         print("  dumps: NOT FOUND — takeover/heap tests will be skipped "
               "(pass --stock/--fs or set LUXEL_ATHOM_STOCK/_FS)")
 
+    s3 = os.path.join(REPO, "result-s3")
     common = ["--qemu", qemu, "--result-dir", result_dir]
     dump_args = ["--stock", stock or "", "--fs", fs or ""]
 
@@ -149,10 +154,36 @@ def main() -> int:
         # A library that cannot fit the 4 MB layout's log: refuse, change
         # nothing, keep working.
         ("migrate-overfill", "migrate-test.py", ["--overfill"], False),
-        # The 16 MB layout, assertion-only: QEMU's esp32s3 machine boots the
-        # bootloader but the app never speaks.  See plan_16mb's docstring.
+        # The 16 MB layout, assertion-only (table encoding + the host store
+        # move).  Fast, and it runs ahead of the emulated S3 cases so that
+        # when both fail you can tell the layout from the migrator.
         ("migrate-plan-16mb", "migrate-test.py",
-         ["--plan-16mb", "--result-dir-16mb", os.path.join(REPO, "result-s3")], False),
+         ["--plan-16mb", "--result-dir-16mb", s3], False),
+        # The 16 MB layout FOR REAL, on QEMU's esp32s3 machine (Gitea #634).
+        # The only layout whose `assets` partition moves, so the only one
+        # that executes migrate::move_assets' copy branch.
+        ("migrate-s3-from-ota0", "migrate-test.py",
+         ["--board", "s3", "--result-dir-16mb", s3], False),
+        ("migrate-s3-from-ota1", "migrate-test.py",
+         ["--board", "s3", "--from", "ota_1", "--result-dir-16mb", s3], False),
+        ("migrate-s3-cut-copy", "migrate-test.py",
+         ["--board", "s3", "--from", "ota_1", "--cut", "copy",
+          "--result-dir-16mb", s3], False),
+        ("migrate-s3-cut-staged", "migrate-test.py",
+         ["--board", "s3", "--cut", "staged", "--result-dir-16mb", s3], False),
+        ("migrate-s3-cut-stored", "migrate-test.py",
+         ["--board", "s3", "--cut", "stored", "--result-dir-16mb", s3], False),
+        # A cut between "the store is recorded" and the table write — on this
+        # layout that window contains the 960 KiB asset move, so unlike the
+        # 4 MB board it is a wide, re-runnable stage rather than a race.
+        ("migrate-s3-cut-assets", "migrate-test.py",
+         ["--board", "s3", "--cut", "assets", "--result-dir-16mb", s3], False),
+        # The Seengreat as found on 2026-09-21: 16 MB of silicon behind a
+        # bootloader serially flashed for 4 MB, which an OTA cannot replace.
+        # The migration must refuse — installing the table would leave a
+        # board whose own bootloader will not load it (Gitea #634).
+        ("migrate-s3-old-bootloader", "migrate-test.py",
+         ["--board", "s3", "--old-bootloader", "4mb", "--result-dir-16mb", s3], False),
     ]
 
     results: list[tuple[str, str, float]] = []

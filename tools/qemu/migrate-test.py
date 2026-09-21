@@ -101,8 +101,20 @@ construction (the `LXMG` staging header at the head of the staging slot).
 The 16 MB layout
 ----------------
 
-Covered by `--plan-16mb`, which is NOT an emulation: see that flag's help and
-the comment above `plan_16mb`.
+    --board s3    compose and boot the SEENGREAT image
+                  (`nix build .#luxel-fw-seengreat-hub75`, 16 MiB) on QEMU's
+                  `esp32s3` machine and migrate it to
+                  `firmware/partitions-16mb.csv`.  Everything `--from`,
+                  `--cut` and `--overfill` do works here too; the difference
+                  that matters is that this is the ONLY layout whose `assets`
+                  partition moves, so it is the only one that reaches
+                  `migrate::move_assets`' copy branch — the stage the
+                  Seengreat's 2026-09-21 decline was suspected in (Gitea
+                  #634).
+
+`--plan-16mb` remains as the assertion-only model of the same layout (the
+table encoding and the host store move); it needs no emulator and runs in a
+second, so both are kept.
 
 QEMU quirks you will see in the log: the SW_RESET boot that `software_reset()`
 triggers dies partway through the ROM banner, the TG0 watchdog fires, and
@@ -119,6 +131,9 @@ Usage:
     nix develop -c python3 tools/qemu/migrate-test.py --cut stored
     nix develop -c python3 tools/qemu/migrate-test.py --overfill
     nix develop -c python3 tools/qemu/migrate-test.py --plan-16mb
+    nix build .#luxel-fw-seengreat-hub75 --out-link result-s3
+    nix develop -c python3 tools/qemu/migrate-test.py --board s3
+    nix develop -c python3 tools/qemu/migrate-test.py --board s3 --from ota_1
 
 Exit 0 with a PASS summary listing every assertion; nonzero on the first
 failure, with a tail of the serial log.
@@ -199,11 +214,30 @@ ASSETS_LEN = 0xF0000
 LOG_AT = 0x49000
 NEW_LOG_LEN = NEW_STORAGE_LEN - LOG_AT   # 0x37000 = 225,280 B
 
-# firmware/partitions-16mb.csv — only --plan-16mb uses these.
+# firmware/partitions-16mb.csv.
 FLASH_SIZE_16MB = 16 * 1024 * 1024
 S3_STORAGE = 0x610000
 S3_STORAGE_LEN = 0x400000
 S3_ASSETS = 0xA10000
+
+# Which machine and which built image each board runs under.  The S3 needs no
+# efuse drive: `nvram.esp32.efuse` is the classic-ESP32 device and the esp32s3
+# machine has its own (`nvram.esp32s3.efuse`), whose defaults already boot.
+BOARDS = {
+    "athom": dict(machine="esp32", flake="luxel-fw-athom-music", efuse=True,
+                  table="partitions.csv", flash=FLASH_SIZE,
+                  storage=NEW_STORAGE, storage_len=NEW_STORAGE_LEN,
+                  new_assets=ASSETS, bootloader=0x1000),
+    # The S3's second-stage bootloader lives at 0x0, not 0x1000 — a chip
+    # property, not a layout one, and the merged image reflects it.
+    "s3": dict(machine="esp32s3", flake="luxel-fw-seengreat-hub75", efuse=False,
+               table="partitions-16mb.csv", flash=FLASH_SIZE_16MB,
+               storage=S3_STORAGE, storage_len=S3_STORAGE_LEN,
+               new_assets=S3_ASSETS, bootloader=0x0),
+}
+# Where the bundle ends up.  On the 4 MB layout that is where it already is —
+# the whole point of keeping `assets` put — and on the 16 MB one it moves.
+NEW_ASSETS = ASSETS
 
 SSID = "MOMCorp Intranet"
 PASSWORD = "hypnotoad-all-glory"
@@ -259,7 +293,7 @@ OLD_ROWS = [
 # be checked against ground truth — see `check_encoder`.  Everything that
 # asserts on the installed table compares against the merged image's own 0x8000
 # sector, which espflash wrote with esp-idf-part.
-NEW_ROWS = [
+NEW_ROWS_4MB = [
     (TYPE_DATA, SUB_NVS,     0x9000,   0x4000,   "nvs"),
     (TYPE_DATA, SUB_OTADATA, 0xD000,   0x2000,   "otadata"),
     (TYPE_DATA, SUB_PHY,     0xF000,   0x1000,   "phy_init"),
@@ -269,7 +303,7 @@ NEW_ROWS = [
     (TYPE_DATA, SUB_SPIFFS,  0x310000, 0xF0000,  "assets"),
 ]
 
-# firmware/partitions-16mb.csv — used only by --plan-16mb.
+# firmware/partitions-16mb.csv (`--board s3`, and `--plan-16mb`'s model).
 NEW_ROWS_16MB = [
     (TYPE_DATA, SUB_NVS,     0x9000,   0x4000,   "nvs"),
     (TYPE_DATA, SUB_OTADATA, 0xD000,   0x2000,   "otadata"),
@@ -279,6 +313,12 @@ NEW_ROWS_16MB = [
     (TYPE_DATA, SUB_SPIFFS,  0x610000, 0x400000, "storage"),
     (TYPE_DATA, SUB_SPIFFS,  0xA10000, 0x3F0000, "assets"),
 ]
+
+# The table under test, and the machine to boot it on — `select_board` swaps
+# both (and everything else that differs) for the 16 MB board.
+NEW_ROWS = NEW_ROWS_4MB
+MACHINE = "esp32"
+TABLE_NAME = "partitions.csv"
 
 
 def check_encoder(merged: bytes, c: Checks) -> bytes:
@@ -295,7 +335,7 @@ def check_encoder(merged: bytes, c: Checks) -> bytes:
     truth = merged[TABLE_OFFSET:TABLE_OFFSET + TABLE_LEN]
     mine = part_table(NEW_ROWS)
     c.require(mine == truth,
-              "encoder: hand-built 4 MB table byte-equals esp-idf-part's",
+              f"encoder: hand-built {TABLE_NAME} byte-equals esp-idf-part's",
               f"first differing byte at {first_diff(mine, truth)}\n"
               f"  mine  {mine[:32].hex()}…\n  truth {truth[:32].hex()}…")
     tail = merged[TABLE_OFFSET + TABLE_LEN:TABLE_OFFSET + SECTOR]
@@ -378,13 +418,24 @@ def storegen(*args: str) -> str:
 # compose
 
 
+# esp_image_header_t byte 3, high nibble: the flash size espflash stamped
+# into an image header.  2 = 4 MB, 4 = 16 MB.  The SECOND-STAGE BOOTLOADER's
+# copy of this is what programs `g_rom_flashchip.chip_size`, and an OTA never
+# replaces the bootloader — so it is the one number on a field device that
+# still reflects how it was FLASHED rather than what it is running.
+BOOTLOADER_FLASH_NIBBLE = {"4mb": 0x2, "8mb": 0x3, "16mb": 0x4}
+BOOTLOADER_FLASH_SIZE = {"4mb": 4 << 20, "8mb": 8 << 20, "16mb": 16 << 20}
+
+
 def compose(merged: bytes, ota: bytes, store: bytes, assets: bytes,
-            from_slot: str) -> bytearray:
-    if merged[0x1000:0x1001] != b"\xe9" or merged[0x10000:0x10001] != b"\xe9":
-        raise Fail("result/luxel-fw.bin: no 0xE9 image magic at 0x1000 "
+            from_slot: str, old_bootloader: str | None = None) -> bytearray:
+    boot_at = BOARD["bootloader"]
+    if merged[boot_at:boot_at + 1] != b"\xe9" or merged[0x10000:0x10001] != b"\xe9":
+        raise Fail(f"luxel-fw.bin: no 0xE9 image magic at {boot_at:#x} "
                    "(bootloader) / 0x10000 (app) — not a merged esp32 image?")
     if len(merged) > FLASH_SIZE:
-        raise Fail(f"merged image is {len(merged)} B — larger than the 4 MiB flash")
+        raise Fail(f"merged image is {len(merged)} B — larger than the "
+                   f"{FLASH_SIZE // (1024 * 1024)} MiB flash")
     if ota[:1] != b"\xe9":
         raise Fail("result/luxel-fw-ota.bin does not start with the 0xE9 image magic")
     if len(store) != OLD_STORAGE_LEN:
@@ -427,6 +478,16 @@ def compose(merged: bytes, ota: bytes, store: bytes, assets: bytes,
 
     img[OLD_STORAGE:OLD_STORAGE + len(store)] = store
     img[ASSETS:ASSETS + len(assets)] = assets
+
+    # A device flashed before its table grew: restamp the bootloader's image
+    # header so the ROM (and the bootloader's own table check) believe the
+    # part is that size.  One byte, no checksum to fix — esptool patches this
+    # same nibble at flash time, and the bootloader's SHA-256 is only enforced
+    # under secure boot (the guest prints "Attempting to boot anyway").
+    if old_bootloader:
+        boot_at = BOARD["bootloader"]
+        nibble = BOOTLOADER_FLASH_NIBBLE[old_bootloader]
+        img[boot_at + 3] = (img[boot_at + 3] & 0x0F) | (nibble << 4)
     return img
 
 
@@ -449,16 +510,21 @@ def make_assets() -> bytes:
 # emulator
 
 # The narration migrate.rs prints.  Grep it for these; they are the contract.
+# The ones that name an offset or a table are rebuilt by `select_board`.
 M_START = "migrate: partition table on flash is an older Luxel layout — moving to partitions.csv"
 M_REBOOT_OTA0 = "migrate: rebooting into ota_0 to free the staging slot"
 M_ALREADY = f"migrate: image already at {NEW_OTA0:#x}"
 M_ERASING = f"migrate: new storage {NEW_STORAGE:#x} + {NEW_STORAGE_LEN // 1024} KiB — erasing"
 M_RELOCATED = "migrate: store relocated"
 M_ASSETS_STAY = f"migrate: assets stay at {ASSETS:#x} — nothing to move"
+M_ASSETS_MOVE = f"migrate: moving assets {ASSETS:#x} → {NEW_ASSETS:#x}"
 M_INSTALLING = "migrate: installing the new partition table"
 M_INSTALLED = "migrate: partition table installed — rebooting into the new layout"
 M_BLOCKED_OVERFILL = ("migrate: BLOCKED — pattern library too large for the new layout"
                       f" (need {{need}} B, have {NEW_LOG_LEN} B)")
+# The refusal a device whose BOOTLOADER predates its table has to produce.
+M_BLOCKED_BOOTLOADER = ("migrate: BLOCKED — bootloader was flashed for a smaller part"
+                        " — reflash it over serial (need {need} B, have {have} B)")
 
 # Anything here means the migration gave up; fail fast rather than burning the
 # whole timeout waiting for a marker that will not come.
@@ -504,6 +570,39 @@ ABORT_HINTS = {
 DONE_MARKER = f"(storage @ {NEW_STORAGE:#x})"
 
 
+def select_board(board: str) -> None:
+    """Point every layout-dependent constant above at `board`'s tables.
+
+    The two boards run the SAME migrator over different geometry — migrate.rs
+    contains no partition offsets at all — so the test is the same test, with
+    the numbers swapped.  Rebinding module globals here rather than threading
+    a layout object through thirty call sites keeps that symmetry visible and
+    the diff against the 4 MB original readable.
+    """
+    global BOARD, MACHINE, FLASH_SIZE, NEW_ROWS, NEW_STORAGE, NEW_STORAGE_LEN
+    global NEW_ASSETS, NEW_LOG_LEN, TABLE_NAME
+    global M_START, M_ERASING, M_ASSETS_STAY, M_ASSETS_MOVE, M_BLOCKED_OVERFILL
+    global DONE_MARKER
+    BOARD = BOARDS[board]
+    MACHINE = BOARD["machine"]
+    TABLE_NAME = BOARD["table"]
+    FLASH_SIZE = BOARD["flash"]
+    NEW_ROWS = NEW_ROWS_16MB if board == "s3" else NEW_ROWS_4MB
+    NEW_STORAGE = BOARD["storage"]
+    NEW_STORAGE_LEN = BOARD["storage_len"]
+    NEW_ASSETS = BOARD["new_assets"]
+    NEW_LOG_LEN = NEW_STORAGE_LEN - LOG_AT
+    M_START = ("migrate: partition table on flash is an older Luxel layout — "
+               f"moving to {TABLE_NAME}")
+    M_ERASING = (f"migrate: new storage {NEW_STORAGE:#x} + "
+                 f"{NEW_STORAGE_LEN // 1024} KiB — erasing")
+    M_ASSETS_STAY = f"migrate: assets stay at {ASSETS:#x} — nothing to move"
+    M_ASSETS_MOVE = f"migrate: moving assets {ASSETS:#x} → {NEW_ASSETS:#x}"
+    M_BLOCKED_OVERFILL = ("migrate: BLOCKED — pattern library too large for the "
+                          f"new layout (need {{need}} B, have {NEW_LOG_LEN} B)")
+    DONE_MARKER = f"(storage @ {NEW_STORAGE:#x})"
+
+
 def run_qemu(qemu: str, flash: str, efuse: str, log: str, timeout: float,
              stop, abort_markers=ABORT_MARKERS, poll: float = 0.05):
     """Boot the composed image; return (serial log, wall seconds, outcome).
@@ -514,12 +613,18 @@ def run_qemu(qemu: str, flash: str, efuse: str, log: str, timeout: float,
     emulator on that same file.
     """
     cmd = [
-        qemu, "-display", "none", "-monitor", "none", "-machine", "esp32",
+        qemu, "-display", "none", "-monitor", "none", "-machine", MACHINE,
         "-drive", f"file={flash},if=mtd,format=raw",
-        "-drive", f"file={efuse},if=none,format=raw,id=efuse,snapshot=on",
-        "-global", "driver=nvram.esp32.efuse,property=drive,value=efuse",
-        "-serial", f"file:{log}",
     ]
+    if efuse:
+        # The classic-ESP32 efuse device only. The esp32s3 machine has its
+        # own (`nvram.esp32s3.efuse`) whose defaults already boot, so the S3
+        # variants pass no efuse drive at all.
+        cmd += [
+            "-drive", f"file={efuse},if=none,format=raw,id=efuse,snapshot=on",
+            "-global", "driver=nvram.esp32.efuse,property=drive,value=efuse",
+        ]
+    cmd += ["-serial", f"file:{log}"]
     open(log, "wb").close()
     start = time.monotonic()
     with open(os.devnull, "rb") as devnull:
@@ -740,12 +845,22 @@ def check_serial(log: str, from_slot: str, ota_len: int, side: dict,
                   "the staging header recorded STORED but the migrator rebuilt "
                   "the region anyway")
     # S_ASSETS (3) means the asset stage is already recorded done, so the
-    # re-run skips it — and on the 4 MB layout that stage is only ever the
-    # "nothing to move" line, so its absence is the whole observable.
+    # re-run skips it.  On the 4 MB layout that stage is only ever the
+    # "nothing to move" line; on the 16 MB one it is a real 960 KiB copy,
+    # which is the branch no emulator had ever reached before this board
+    # was added (Gitea #634).
+    moves = NEW_ASSETS != ASSETS
+    asset_line = M_ASSETS_MOVE if moves else M_ASSETS_STAY
     if not resume_stage or resume_stage < S_ASSETS:
-        c.line(before, M_ASSETS_STAY, "migrate")
+        c.line(before, asset_line, "migrate")
+        if moves:
+            sectors = -(-ASSETS_LEN // SECTOR)
+            last = ((sectors - 1) // 64) * 64 * SECTOR // 1024
+            c.line(before,
+                   f"migrate: copied {last}/{sectors * SECTOR // 1024} KiB",
+                   "migrate")
     else:
-        c.require(M_ASSETS_STAY not in before,
+        c.require(asset_line not in before,
                   f"serial[migrate]: stage {resume_stage} skipped the asset stage",
                   "the staging header recorded ASSETS but the migrator ran it again")
     c.line(before, M_INSTALLING, "migrate")
@@ -767,23 +882,35 @@ def check_serial(log: str, from_slot: str, ota_len: int, side: dict,
 
 
 def check_flash(flash: bytes, composed: bytes, expected_table: bytes,
-                ota: bytes, c: Checks) -> None:
+                app: bytes, c: Checks) -> None:
+    """`app` is the image the fixture put in the slot the device booted from,
+    which is what has to end up in the new ota_0 — literally the same bytes
+    when it was already there, and byte-for-byte after the self-copy when it
+    was not.  It is NOT always `luxel-fw-ota.bin`: espflash rewrites the
+    flash-size nibble of the image header when it merges (0x20 -> 0x40 on the
+    16 MB board), so the merged image's copy of the app differs from the OTA
+    one in exactly that byte."""
     got = flash[TABLE_OFFSET:TABLE_OFFSET + SECTOR]
     want = expected_table + b"\xff" * (SECTOR - len(expected_table))
-    c.require(got == want, "flash: 4 MB partition table installed at 0x8000",
+    c.require(got == want, f"flash: {TABLE_NAME} installed at 0x8000",
               f"first differing byte at {first_diff(got, want)}")
 
-    got = flash[NEW_OTA0:NEW_OTA0 + len(ota)]
-    c.require(got == ota,
-              f"flash: ota_0 (0x10000) holds the {len(ota)} B app image byte-for-byte",
-              f"first differing byte at {first_diff(got, ota)}")
+    got = flash[NEW_OTA0:NEW_OTA0 + len(app)]
+    c.require(got == app,
+              f"flash: ota_0 ({NEW_OTA0:#x}) holds the {len(app)} B app image "
+              "byte-for-byte",
+              f"first differing byte at {first_diff(got, app)}")
 
     # The 4 MB layout's entire point: `assets` does not move, so a migrating
-    # device keeps a valid web bundle where assets.rs already maps it.
-    got = flash[ASSETS:ASSETS + ASSETS_LEN]
+    # device keeps a valid web bundle where assets.rs already maps it.  The
+    # 16 MB one DOES move it, and then the same assertion runs against the
+    # new offset: every byte of the bundle has to arrive.
+    got = flash[NEW_ASSETS:NEW_ASSETS + ASSETS_LEN]
     want = composed[ASSETS:ASSETS + ASSETS_LEN]
     c.require(got == want,
-              f"flash: assets {ASSETS:#x}+{ASSETS_LEN:#x} byte-identical to before the run",
+              f"flash: the {ASSETS_LEN:#x} B web bundle is byte-identical at "
+              f"{NEW_ASSETS:#x}"
+              + ("" if NEW_ASSETS == ASSETS else f" (moved from {ASSETS:#x})"),
               f"first differing byte at {first_diff(got, want)}")
 
     check_nvs(flash, composed, c)
@@ -922,36 +1049,29 @@ def check_refusal(log: str, flash: bytes, composed: bytes, blocked: str,
 
 
 def plan_16mb(workdir: str, c: Checks) -> None:
-    """Coverage of `firmware/partitions-16mb.csv` WITHOUT the emulator.
+    """A fast, emulator-free model of `firmware/partitions-16mb.csv`.
 
-    What was tried, and what happened (2026-09-20, this worktree):
+    `--board s3` now boots that layout for real (see this file's docstring),
+    so this is no longer the ONLY coverage the 16 MB table has — but it is
+    still the cheap one: the table encoding, the geometric invariants the
+    migration depends on, and the host store move, in about a second and with
+    no QEMU at all.  Keep it in the suite ahead of the emulated variants: when
+    both fail, this one says whether the layout or the migrator is at fault.
 
-        qemu-system-xtensa -machine esp32s3 -drive file=<16 MiB>,if=mtd,format=raw
+    The history is worth keeping, because it is what the S3 emulation had to
+    undo.  Until 2026-09-21 `-machine esp32s3` loaded the app and then printed
+    NOTHING — not a panic, not a partial banner.  It was not the firmware: the
+    guest was spinning inside `esp_hal::init` on a BBPLL calibration-done bit
+    the machine does not model, before esp-println exists.  That plus three
+    more emulator bugs (a free-running APP CPU, three divide-by-zero SIGFPEs
+    in the timer-group model, and an unbounded MMU page write that SIGSEGVed
+    QEMU on a 16 MB part) are fixed in `tools/qemu/patches/`, guest-side
+    unchanged, per CLAUDE.md's isolation rule.
 
-      * The machine exists in Espressif's fork and the *bootloader* works
-        end to end: it reads the 16 MB table off flash, prints all seven
-        partitions at their partitions-16mb.csv offsets, verifies the five
-        image segments, loads the app from ota_0 and sets ota_seq=1.
-      * The app then prints NOTHING.  Not a panic, not a partial banner —
-        the first `println!` never appears, so it is dying or stalling in
-        esp-hal's S3 startup before esp-println is up.  Retried with
-        `-m 8M` and with `-global driver=ssi_psram,property=size_mbytes,value=8`
-        (the board is an N16R8 and its arena lives in PSRAM); identical
-        silence either way.  The harness has only ever run `-machine esp32`,
-        and nothing here is going to change that — CLAUDE.md's hard rule is
-        that emulation fixes live in tools/qemu/, never guest-side.
-
-    So the 16 MB path is covered by (a) the shared code path — migrate.rs
-    contains no partition offsets at all, every address comes from a table —
-    (b) the host tests below, and (c) the 4 MB emulation, which exercises
-    every stage of that shared code against real flash semantics.
-
-    The strongest of the three is the store move: `storegen migrate` runs
-    `stage_log` + `write_new_store`'s algorithm on the host, and the 4 MB
-    variants assert that its output is byte-identical to what the emulated
-    device writes.  Running that same model over the 16 MB partition and
-    verifying the result is therefore a computation with a checked model, not
-    an extrapolation.
+    The store move here is still the cross-check that licenses the model:
+    `storegen migrate` runs `stage_log` + `write_new_store`'s algorithm on the
+    host, and the emulated variants assert its output is byte-identical to
+    what the device writes.
     """
     merged = os.path.join(workdir, "s3-merged.bin")
     with open(merged, "rb") as f:
@@ -973,8 +1093,8 @@ def plan_16mb(workdir: str, c: Checks) -> None:
               "ota_0 needs no self-copy — the same branch --from ota_0 emulates")
     c.require(rows["assets"][2] != old["assets"][2],
               "16mb: `assets` MOVES (0x310000 -> 0xa10000) — the ONLY layout "
-              "that reaches migrate::move_assets' copy branch, which is "
-              "therefore the one thing here with no emulator coverage at all",
+              "that reaches migrate::move_assets' copy branch, which "
+              "`--board s3` is what actually executes",
               f"{rows['assets'][2]:#x} vs {old['assets'][2]:#x}")
     old_a, new_a = old["assets"], rows["assets"]
     length = min(old_a[3], new_a[3])
@@ -1046,7 +1166,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--result-dir", default="result",
                     help="nix build .#luxel-fw-athom-music output (default ./result)")
     ap.add_argument("--result-dir-16mb", default="result-s3",
-                    help="nix build .#luxel-fw-seengreat-hub75 output (--plan-16mb)")
+                    help="nix build .#luxel-fw-seengreat-hub75 output "
+                         "(--board s3 and --plan-16mb)")
+    ap.add_argument("--board", choices=tuple(BOARDS), default="athom",
+                    help="which board's layout to migrate: `athom` is the "
+                         "4 MB table on the esp32 machine, `s3` is the 16 MB "
+                         "table (firmware/partitions-16mb.csv) on the esp32s3 "
+                         "machine — the only layout whose `assets` partition "
+                         "moves")
     ap.add_argument("--qemu", help="qemu-system-xtensa (or its store dir); default: nix build")
     ap.add_argument("--from", dest="from_slot", choices=("ota_0", "ota_1"),
                     default="ota_0",
@@ -1066,6 +1193,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--overfill", action="store_true",
                     help="generate a store too large for the 4 MB log and "
                          "assert the migration refuses, leaving flash alone")
+    ap.add_argument("--old-bootloader", choices=tuple(BOOTLOADER_FLASH_NIBBLE),
+                    help="stamp the composed image's BOOTLOADER header with "
+                         "this flash size — i.e. a device serially flashed "
+                         "before its table grew. `--board s3 "
+                         "--old-bootloader 4mb` is the Seengreat as found on "
+                         "2026-09-21 (Gitea #634); the migration must refuse")
     ap.add_argument("--plan-16mb", action="store_true",
                     help="assertion-only coverage of the 16 MB layout (no "
                          "emulation — see plan_16mb's docstring)")
@@ -1074,6 +1207,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--timeout", type=float, default=600.0,
                     help="overall boot timeout in seconds (default 600)")
     args = ap.parse_args(argv)
+    select_board(args.board)
     if args.cut == "copy" and args.from_slot != "ota_1":
         ap.error("--cut copy needs --from ota_1 (there is no self-copy otherwise)")
     if args.cut and args.cut != "copy" and args.from_slot != "ota_0":
@@ -1081,6 +1215,13 @@ def main(argv: list[str] | None = None) -> int:
                  "reboot would land the re-run in ota_0 anyway")
     if args.overfill and (args.cut or args.from_slot != "ota_0"):
         ap.error("--overfill is its own variant; it takes no --cut/--from")
+    if args.old_bootloader and (args.cut or args.overfill):
+        ap.error("--old-bootloader is a refusal variant; it takes no "
+                 "--cut/--overfill")
+    if args.old_bootloader and args.board == "athom":
+        ap.error("--old-bootloader only bites where the new table runs past "
+                 "the old ceiling, i.e. --board s3 (the 4 MB table fits any "
+                 "part that ever ran Luxel)")
 
     workdir = args.workdir or tempfile.mkdtemp(prefix="luxel-migrate-")
     os.makedirs(workdir, exist_ok=True)
@@ -1109,9 +1250,12 @@ def main(argv: list[str] | None = None) -> int:
 def label(args: argparse.Namespace) -> str:
     if args.plan_16mb:
         return "plan-16mb"
+    tag = f"{args.board} " if args.board != "athom" else ""
+    if args.old_bootloader:
+        return f"{tag}old-bootloader:{args.old_bootloader}"
     if args.overfill:
-        return "overfill"
-    return args.from_slot + (f" cut:{args.cut}" if args.cut else "")
+        return tag + "overfill"
+    return tag + args.from_slot + (f" cut:{args.cut}" if args.cut else "")
 
 
 def run(args: argparse.Namespace, workdir: str, log: str) -> int:
@@ -1131,17 +1275,21 @@ def run(args: argparse.Namespace, workdir: str, log: str) -> int:
             print(f"  ok  {a}")
         return 0
 
-    ota_path = os.path.join(args.result_dir, "luxel-fw-ota.bin")
-    merged_path = os.path.join(args.result_dir, "luxel-fw.bin")
+    result_dir = args.result_dir_16mb if args.board == "s3" else args.result_dir
+    ota_path = os.path.join(result_dir, "luxel-fw-ota.bin")
+    merged_path = os.path.join(result_dir, "luxel-fw.bin")
     for p in (ota_path, merged_path):
         if not os.path.exists(p):
-            raise Fail(f"missing input: {p}\n  run: nix build .#luxel-fw-athom-music")
+            raise Fail(f"missing input: {p}\n  run: nix build "
+                       f".#{BOARD['flake']} --out-link {result_dir}")
     with open(ota_path, "rb") as f:
         ota = f.read()
     with open(merged_path, "rb") as f:
         merged = f.read()
 
     print(f"== partition migration test [{label(args)}] ==")
+    print(f"   layout    : {TABLE_NAME} on -machine {MACHINE}, "
+          f"{FLASH_SIZE // (1024 * 1024)} MiB flash")
     print(f"   app image : {ota_path} ({len(ota)} B)")
     print(f"   work dir  : {workdir}")
 
@@ -1177,13 +1325,16 @@ def run(args: argparse.Namespace, workdir: str, log: str) -> int:
     with open(store_bin, "rb") as f:
         store = f.read()
     assets = make_assets()
-    img = compose(merged, ota, store, assets, args.from_slot)
+    img = compose(merged, ota, store, assets, args.from_slot,
+                  old_bootloader=args.old_bootloader)
     flash = os.path.join(workdir, "flash.bin")
     with open(flash, "wb") as f:
         f.write(img)
     composed = bytes(img)
-    efuse = os.path.join(workdir, "efuse.bin")
-    make_efuse(efuse)
+    efuse = ""
+    if BOARD["efuse"]:
+        efuse = os.path.join(workdir, "efuse.bin")
+        make_efuse(efuse)
 
     qemu = resolve_qemu(args.qemu)
     print(f"   qemu      : {qemu}")
@@ -1194,7 +1345,17 @@ def run(args: argparse.Namespace, workdir: str, log: str) -> int:
     total = 0.0
     # One variant ends in a refusal rather than a migration: the library that
     # cannot fit the new log.  Everything else migrates.
-    blocked = M_BLOCKED_OVERFILL.format(need=side["staged_bytes"]) if args.overfill else None
+    blocked = None
+    if args.overfill:
+        blocked = M_BLOCKED_OVERFILL.format(need=side["staged_bytes"])
+    elif args.old_bootloader:
+        need = max(r[2] + r[3] for r in NEW_ROWS)
+        have = BOOTLOADER_FLASH_SIZE[args.old_bootloader]
+        c.require(need > have,
+                  f"fixture: {TABLE_NAME} needs {need} B and the stamped "
+                  f"bootloader offers {have} B, so the refusal is reachable",
+                  "this bootloader size already covers the new table")
+        blocked = M_BLOCKED_BOOTLOADER.format(need=need, have=have)
     if blocked:
         print(f"   booting (expecting: {blocked})…")
         text, dt, _ = run_qemu(
@@ -1308,7 +1469,13 @@ def run(args: argparse.Namespace, workdir: str, log: str) -> int:
 
     with open(flash, "rb") as f:
         written = f.read()
-    check_flash(written, composed, expected_table, ota, c)
+    # What the device booted from: the merged image's app when it was already
+    # in ota_0, the OTA image when the fixture put it in ota_1 for the
+    # self-copy variant (and after any --cut, which re-runs from ota_0 but
+    # over flash the self-copy may already have rewritten).
+    app = (bytes(composed[NEW_OTA0:NEW_OTA0 + len(ota)])
+           if args.from_slot == "ota_0" else ota)
+    check_flash(written, composed, expected_table, app, c)
     check_store(flash, store_bin, sidecar, workdir, c)
 
     print(f"\nPASS [{label(args)}] — {len(c.passed)} assertions in {total:.1f}s")

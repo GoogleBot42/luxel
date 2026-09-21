@@ -1,5 +1,53 @@
 # Update log
 
+## 2026-09-21 — The 16 MB migration runs under QEMU, and the Seengreat's decline has a cause (#634)
+
+`-machine esp32s3` used to load the Luxel app and print **nothing** — not a panic, not
+a partial banner — which is why `firmware/partitions-16mb.csv` had never executed
+anywhere and why the panel's silent decline had to be guessed at. Five emulator bugs
+later it boots all the way to the HUB75 bring-up. All five are in `tools/qemu/`
+(CLAUDE.md's isolation rule; the guest image is byte-identical to what ships): a BBPLL
+calibration-done bit the machine never modelled, which esp-hal spins on forever inside
+`esp_hal::init`; the CPENABLE reset value, i.e. the 2026-08-16 double-exception bug on
+the machine upstream's unmerged PR claimed to fix; a free-running APP CPU
+(`esp32s3_cpu_stall()` is an empty stub and `SYSTEM_CORE_1_CONTROL_0` is unmodelled);
+three divide-by-zero SIGFPEs in the shared C3/S3 timer-group model, one of which fires
+on every S3 boot; and an unbounded MMU page write that memset 64 KiB past the end of
+the flash mirror and SIGSEGVed QEMU on a 16 MB part.
+
+`tools/qemu/migrate-test.py` grew `--board s3`, and the suite six cases with it: the
+16 MB migration from either slot, cut at each re-runnable stage, with the 960 KiB
+bundle asserted byte-identical at its new home. It all passes. `migrate::move_assets`'
+copy branch — the one stage the 4 MB layout never takes — now has execution coverage
+rather than a host-side model.
+
+**So what stopped the panel was not the migrator.** `g_rom_flashchip.chip_size` is
+programmed by the second-stage bootloader out of the **bootloader's own image header**,
+and an OTA replaces the app, never the bootloader. The Seengreat was serially flashed
+when `board-seengreat-hub75` still used `partitions.csv`; `--flash-size 16mb` only
+arrived for it with #501. Its bootloader therefore tells the ROM the part is 4 MB on
+16 MB of silicon, and every `esp_rom_spiflash_*` op — which is every op esp-storage
+makes — is bounds-checked against that. `write_new_store`'s erase of the new `storage`
+region at `0x610000` failed on its *first* sector. Instant, deterministic, and (before
+#654) silent. Reproduced exactly by stamping one byte of the fixture's bootloader
+header: `migrate-test.py --board s3 --old-bootloader 4mb`.
+
+The obvious fix is a brick, and the emulator proved that too. Raising the ROM ceiling
+at runtime (ESP-IDF's own `bootloader_flash_update_size()`) lets the whole migration
+finish — and then the device reboots into a bootloader that refuses the table it just
+installed (`partition 4 invalid … exceeds flash chip size 0x400000`, `load partition
+table error!`), forever, on a board with no serial console. So `parttab::flash_refusal`
+now reads the bootloader's ceiling alongside the chip's and refuses when the new table
+runs past it, naming the fix; `migrate.rs` reports it as
+`migration_blocked: "bootloader was flashed for a smaller part — reflash it over
+serial"` with the two numbers. +32 B to +560 B of image depending on board; every
+variant still fits the old 1 MiB slot under `MIGRATING_RELEASE=1`.
+
+Getting the panel across needs one serial flash of the bootloader (`BOARD=
+board-seengreat-hub75 firmware/build-esp32.sh flash`), which is Jeremy's hands and its
+USB port — and which lands it on the new table directly. Docs: docs/boards.md ("The
+16 MB half declined — and the bootloader is why"), docs/UNTESTED.md, docs/api.md,
+docs/tools.md, docs/research/qemu-emulation-spike.md ("The esp32s3 machine").
 ## 2026-09-21 — JIT phase 2: the Xtensa emitter, and a gate that runs it on x86 (#651)
 
 Phase 2 of the on-device JIT (#607, docs/jit-design.md §3). **Still nothing

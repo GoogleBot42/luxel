@@ -123,25 +123,27 @@ value while collapsed. Everything below is on the new page.
   bump leaves every stored blob unreadable on a device that cannot recompile
   itself (Gitea #643).
 - [ ] **The partition repartition on metal — the Seengreat** (Gitea #634):
-  **attempted 2026-09-21; it declined.** The migrating image installed fine
-  and the device stayed healthy, but `partitions.migrated` stayed `false` on
-  two boots with the pre-#501 table untouched — and `/api/status` could not
-  say why, because four of the migrator's failure paths reported only to a
-  serial console this board does not have. Those paths now `block()` (see
-  docs/boards.md, "The 16 MB half declined"), so a retry will name the
-  stage. Nothing was lost: the store, patterns, playlist, layout, name and
-  brightness all came through unchanged, which is the "refusing beats
-  losing" design working.
-  Still the only 16 MB device; its table moves the 960 KiB **asset bundle**
-  as well as the store, and that copy — the one stage the 4 MB layout does
-  not take — has never run anywhere: QEMU's `esp32s3` machine reads the 16 MB
-  table and loads the app but then prints nothing at all, so it is covered by
-  assertion (`tools/qemu/migrate-test.py --plan-16mb`) rather than by
-  execution. It has no serial console and no power plug, it runs your
-  playlist, and the residual risk is a cut inside the single 4 KiB table
-  write — milliseconds, serial-recovery-only, and you are the serial
-  recovery. **The panel is currently off the LAN** and needs a power cycle
-  (the #294 wedge ate the diagnostic OTA mid-upload) — #634 has the timeline.
+  **attempted 2026-09-21; it declined, and the cause is now known.** Its
+  bootloader was serially flashed when this board still used
+  `partitions.csv`, so it tells the ROM the part is 4 MB on 16 MB of
+  silicon — and the ROM bounds-checks every flash op against that, so the
+  new `storage` erase at `0x610000` failed on its first sector. Found under
+  emulation, not on the bench: the 16 MB image now runs on QEMU's `esp32s3`
+  machine and the whole migration passes there from either slot, cut at
+  every stage, with the asset bundle byte-identical at `0xa10000`
+  (`tools/qemu/run-all.py -k migrate-s3`). The firmware now refuses this
+  case by name instead of dying mid-run.
+  **What is still untested on metal** is everything after that refusal.
+  Getting the panel across needs a **one-time serial flash of the
+  bootloader** — Jeremy's hands and the panel's USB port —
+  `BOARD=board-seengreat-hub75 firmware/build-esp32.sh flash`, which writes
+  bootloader + table + app with `--flash-size 16mb`. That also makes the
+  migration moot for this device (it lands on the new table directly), so
+  the *self-applied* 16 MB path stays emulator-only until there is a second
+  16 MB board. The residual risk on any such device is unchanged: a cut
+  inside the single 4 KiB table write, milliseconds, serial-recovery-only.
+  **The panel is currently off the LAN** and needs a power cycle (the #294
+  wedge ate the diagnostic OTA mid-upload) — #634 has the timeline.
 - [ ] **AP-mode provisioning** (v0.1.22): Settings → "reboot into setup
   AP", then join `luxel-4ae0d4` from your phone — a captive portal should
   pop with the settings page; save WiFi and it reboots back onto your

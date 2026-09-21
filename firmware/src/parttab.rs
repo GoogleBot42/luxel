@@ -82,18 +82,100 @@ pub fn matches_flash() -> bool {
     }
 }
 
-/// Flash-size preflight: refuse to install a table this chip cannot back.
-pub fn flash_fits(table: &[u8]) -> bool {
+// ------------------------------------------- the BOOTLOADER flash ceiling
+
+/// How much flash the running **bootloader** believes this part holds.
+///
+/// This is not the same question as "how big is the chip", and on the
+/// Seengreat the two answers differed by 12 MB (Gitea #634).
+///
+/// The ESP-IDF second-stage bootloader programs `g_rom_flashchip.chip_size`
+/// from its OWN image header, and **an OTA replaces the app, never the
+/// bootloader**. A board serially flashed when its table was smaller
+/// therefore carries that old number for the rest of its life. Two things
+/// then bound every access to it:
+///
+/// * every `esp_rom_spiflash_*` op — which is every op esp-storage makes —
+///   is bounds-checked against it and fails above it;
+/// * the bootloader **refuses to boot at all** under a partition table with
+///   an entry that runs past it (`partition N invalid — offset … size …
+///   exceeds flash chip size …`, then `load partition table error!`).
+///
+/// The second is why this is a hard refusal and not something to work
+/// around. `g_rom_flashchip.chip_size` can be raised at runtime — ESP-IDF's
+/// own `bootloader_flash_update_size()` does exactly that — and doing so
+/// *does* let the whole 16 MB migration run to completion. It then reboots
+/// into a bootloader that rejects the table it just installed, on a board
+/// with no serial console. Verified under emulation
+/// (`tools/qemu/migrate-test.py --board s3 --old-bootloader 4mb`): raising
+/// the ceiling turns a harmless decline into an unrecoverable boot loop.
+/// So the ceiling is read, never written.
+///
+/// The classic ESP32 needs none of this: esp-storage reads its capacity FROM
+/// this same global, so the two can never disagree there.
+#[cfg(not(feature = "esp32"))]
+pub fn bootloader_flash_ceiling() -> u32 {
+    unsafe extern "C" {
+        /// The ROM's `spiflash_legacy_data_t *`. That struct starts with an
+        /// `esp_rom_spiflash_chip_t` whose words are `device_id` then
+        /// `chip_size`, so `chip_size` is its second word.
+        static rom_spiflash_legacy_data: *mut u32;
+    }
+    // SAFETY: a ROM data symbol placed by the chip's own linker script and
+    // live for the whole program; the bootloader wrote through this same
+    // pointer moments ago.
+    let chip = unsafe { rom_spiflash_legacy_data };
+    if chip.is_null() {
+        return u32::MAX; // unknown — let `capacity()` be the only bound
+    }
+    unsafe { core::ptr::read_volatile(chip.add(1)) }
+}
+
+#[cfg(feature = "esp32")]
+pub fn bootloader_flash_ceiling() -> u32 {
+    u32::MAX
+}
+
+/// Flash-size preflight: refuse to install a table this board cannot back.
+///
+/// Two ceilings have to clear it, not one — the part has to be big enough
+/// (esp-storage's `capacity`, read off the chip) **and** the bootloader has
+/// to accept a table that reaches that far
+/// ([bootloader_flash_ceiling]). They are the same number on every board
+/// flashed with the table it is running, and they were not on the
+/// Seengreat.
+pub fn flash_refusal(table: &[u8]) -> Option<(&'static str, u32, u32)> {
     let needed = flash_needed(table);
     let cap = crate::ota::with_flash(|f| f.capacity() as u32).unwrap_or(0);
+    let boot = bootloader_flash_ceiling();
+    if boot < needed && boot <= cap {
+        println!(
+            "partitions: this board's BOOTLOADER was flashed for {} B of flash and the \
+             new layout needs {} B — it would refuse the new table and the board would \
+             not boot. Re-flash the bootloader over serial first (Gitea #634).",
+            boot, needed
+        );
+        return Some((
+            "bootloader was flashed for a smaller part — reflash it over serial",
+            needed,
+            boot,
+        ));
+    }
     if cap < needed {
         println!(
             "partitions: flash too small ({} B < {} B needed) — refusing to repartition",
             cap, needed
         );
-        return false;
+        return Some(("flash too small for the new layout", needed, cap));
     }
-    true
+    None
+}
+
+/// [flash_refusal] as a yes/no, for the takeover (which narrates its own
+/// refusals to the serial console and has no `/api/status` to report to —
+/// it runs before the network exists).
+pub fn flash_fits(table: &[u8]) -> bool {
+    flash_refusal(table).is_none()
 }
 
 pub fn erase_sector(at: u32) -> bool {

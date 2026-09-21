@@ -1,0 +1,64 @@
+ESP32-S3: model I2C_ANA_MST.ANA_CONF0's BBPLL_CAL_DONE bit.
+
+The esp32s3 machine has no model for the analog-master register block
+(I2C_ANA_MST, 0x6000_E040), so it falls through to the catch-all
+esp32s3.iomem region, whose read handler returns 0 for everything.
+
+esp-hal's `clocks::request_pll_clk` -> `configure_bbpll` starts the BBPLL
+self-calibration and then spins:
+
+    while I2C_ANA_MST::regs().ana_conf0().read().bbpll_cal_done().bit_is_clear() {}
+
+Bit 24 never sets in the emulator, so EVERY esp-hal guest hangs there --
+inside `esp_hal::init`, before esp-println exists.  The symptom is an app
+that the second-stage bootloader loads and verifies and that then prints
+literally nothing (the bootloader is ESP-IDF C and never touches this
+register, which is why the boot log looks perfect right up to
+"Loaded app from partition").
+
+Model just enough to be correct from the guest's point of view: remember
+what the guest wrote to ANA_CONF0 and OR in BBPLL_CAL_DONE on read, i.e.
+"the calibration you just started has already converged".  The two
+stop_force bits stay writable/readable so the guest's read-modify-writes
+behave; nothing else about the block is claimed.
+
+Harness-side per CLAUDE.md's QEMU isolation rule -- the guest image is
+byte-identical to what ships.
+
+--- a/hw/xtensa/esp32s3.c
++++ b/hw/xtensa/esp32s3.c
+@@ -458,8 +458,23 @@
+ }
+ 
+ 
++/*
++ * I2C_ANA_MST (analog master) — only ANA_CONF0 is modelled, and of it only
++ * enough that a guest which starts a BBPLL self-calibration sees it finish.
++ * Offsets are relative to ESP32S3_IO_START_ADDR.
++ */
++#define ESP32S3_I2C_ANA_MST_ANA_CONF0   0xe040
++#define ESP32S3_BBPLL_CAL_DONE          (1u << 24)
++
++static uint32_t esp32s3_ana_conf0;
++
+ static uint64_t esp32s3_io_read(void *opaque, hwaddr addr, unsigned int size)
+ {
++    if (addr == ESP32S3_I2C_ANA_MST_ANA_CONF0) {
++        /* BBPLL calibration is instantaneous here: the guest's
++         * `while (!bbpll_cal_done) {}` would otherwise never terminate. */
++        return esp32s3_ana_conf0 | ESP32S3_BBPLL_CAL_DONE;
++    }
+ #if ESP32S3_IO_WARNING
+     warn_report("[ESP32-S3] Unsupported read to $%08lx, size = %i\n", ESP32S3_IO_START_ADDR + addr, size);
+ #endif
+@@ -469,6 +484,10 @@
+ 
+ static void esp32s3_io_write(void *opaque, hwaddr addr, uint64_t value, unsigned int size)
+ {
++    if (addr == ESP32S3_I2C_ANA_MST_ANA_CONF0) {
++        esp32s3_ana_conf0 = (uint32_t) value & ~ESP32S3_BBPLL_CAL_DONE;
++        return;
++    }
+ #if ESP32S3_IO_WARNING
+         warn_report("[ESP32-S3] Unsupported write $%08lx = %08lx\n", ESP32S3_IO_START_ADDR + addr, value);
+ #endif

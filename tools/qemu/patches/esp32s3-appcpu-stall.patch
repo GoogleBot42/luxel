@@ -1,0 +1,108 @@
+ESP32-S3: hold the APP CPU stalled until the guest starts it.
+
+`esp32s3_cpu_stall()` in the esp32s3 machine is an empty stub and
+SYSTEM_CORE_1_CONTROL_0 (0x600C_0000) is not modelled at all -- reads
+returned 0 through the catch-all iomem region and writes were dropped.
+Two consequences:
+
+  1. The APP CPU free-runs from power-on.  On silicon it is held in reset
+     (the register comes out of reset with the core-1 clock gated) until
+     the running core starts it.  An esp-hal guest never starts it during
+     boot, so under emulation core 1 wandered off into the ROM's APP-CPU
+     path and printed a Guru Meditation (IllegalInstruction) a few seconds
+     in, while core 0 was still bringing the app up.
+  2. Every read-modify-write the guest does on that register lost the other
+     bits, because the read returned 0.  esp-hal's core-1 start sequence is
+     four such modifies (set CLKGATE_EN, clear RUNSTALL, set then clear
+     RESETING), so it could never have worked either.
+
+Model the register (bit 0 RUNSTALL, bit 1 CLKGATE_EN, bit 2 RESETING) and
+drive `xtensa_runstall` off it, with the core stalled on every SOC reset.
+The classic esp32 machine has always done the equivalent through
+`esp32_cpu_stall()`, which is why only the S3 was affected.
+
+Harness-side per CLAUDE.md's QEMU isolation rule -- the guest image is
+byte-identical to what ships.
+
+--- a/hw/xtensa/esp32s3.c	2026-09-21 00:09:19.832770224 -0600
++++ b/hw/xtensa/esp32s3.c	2026-09-21 00:09:20.090733109 -0600
+@@ -221,6 +221,14 @@
+         xtensa_select_static_vectors(&s->cpu[1].env, s->rtc_cntl.stat_vector_sel[1]);
+         remove_cpu_watchpoints(&s->cpu[1]);
+         cpu_reset(CPU(&s->cpu[1]));
++        /* Silicon holds the APP CPU in reset (SYSTEM_CORE_1_CONTROL_0 comes
++         * out of reset with the clock gated) until the running core starts
++         * it.  Reproduce that: without it the second core free-runs from the
++         * reset vector into whatever the ROM's APP-CPU path finds, which on
++         * an esp-hal guest is a Guru Meditation on core 1 seconds into boot.
++         * esp32s3_clock_write() releases it. */
++        s->clock.core_1_control_0 = 0;
++        xtensa_runstall(&s->cpu[1].env, true);
+     }
+     s->requested_reset = 0;
+ }
+--- a/hw/xtensa/esp32s3_clk.c	2026-09-21 00:09:19.832770224 -0600
++++ b/hw/xtensa/esp32s3_clk.c	2026-09-21 00:09:20.091110569 -0600
+@@ -19,6 +19,7 @@
+ #include "hw/qdev-properties.h"
+ #include "hw/xtensa/esp32s3_clk.h"
+ #include "hw/xtensa/esp32s3_clk_defs.h"
++#include "target/xtensa/cpu.h"
+ 
+ #define CLOCK_DEBUG      0
+ #define CLOCK_WARNING    0
+@@ -46,12 +47,32 @@
+     return s->sys_ext_dev_enc_dec_ctrl;
+ }
+ 
++/*
++ * SYSTEM_CORE_1_CONTROL_0: bit 0 RUNSTALL, bit 1 CLKGATE_EN, bit 2 RESETING.
++ * The register was not modelled at all, so reads returned 0 and writes were
++ * dropped -- the APP CPU was never stalled and every read-modify-write the
++ * guest did on it lost the other bits.  The second core therefore free-ran
++ * from power-on instead of waiting to be started.
++ */
++static void esp32s3_set_core_1_control_0(ESP32S3ClockState *s, uint32_t value)
++{
++    s->core_1_control_0 = value;
++    CPUState *cs = qemu_get_cpu(1);
++    if (cs != NULL) {
++        const bool run = (value & BIT(1)) && !(value & BIT(0)) && !(value & BIT(2));
++        xtensa_runstall(&XTENSA_CPU(cs)->env, !run);
++    }
++}
++
+ static uint64_t esp32s3_clock_read(void *opaque, hwaddr addr, unsigned int size)
+ {
+     ESP32S3ClockState *s = ESP32S3_CLOCK(opaque);
+     uint64_t r = 0;
+ 
+     switch(addr) {
++        case A_SYSTEM_CORE_1_CONTROL_0_REG:
++                r = s->core_1_control_0;
++            break;
+         case A_SYSTEM_CORE_1_CONTROL_1_REG:
+                 r = s->app_cpu_addr;
+             break;
+@@ -85,6 +106,9 @@
+     ESP32S3ClockState *s = ESP32S3_CLOCK(opaque);
+ 
+     switch(addr) {
++        case A_SYSTEM_CORE_1_CONTROL_0_REG:
++                esp32s3_set_core_1_control_0(s, (uint32_t) value);
++            break;
+         case A_SYSTEM_CORE_1_CONTROL_1_REG:
+                 s->app_cpu_addr = (uint32_t)value;
+             break;
+--- a/include/hw/xtensa/esp32s3_clk.h	2026-09-21 00:09:27.471686131 -0600
++++ b/include/hw/xtensa/esp32s3_clk.h	2026-09-21 00:09:27.730493864 -0600
+@@ -56,6 +56,9 @@
+     /* Bitmap that keeps the level of the IRQs */
+     uint32_t levels;
+     
++    /* SYSTEM_CORE_1_CONTROL_0: APP-CPU runstall/clkgate/reset */
++    uint32_t core_1_control_0;
++
+     uint32_t app_cpu_addr;
+     
+     uint32_t sys_ext_dev_enc_dec_ctrl;

@@ -188,7 +188,7 @@ its own release and a format bump.
 | device | board | migrated | live slot | `ota_slot_bytes` | `storage_bytes` | margin now |
 |---|---|---|---|---:|---:|---|
 | Athom rig `192.168.0.183` | `board-athom-music` | **yes, 2026-09-20** | `ota_0` | 1,310,720 | 524,288 | 270,160 B (20.6 %) |
-| Seengreat panel `192.168.0.238` | `board-seengreat-hub75` | **no — declined silently, 2026-09-21** (Gitea #634) | `ota_0` | 1,048,576 | 1,048,576 | old table, unchanged |
+| Seengreat panel `192.168.0.238` | `board-seengreat-hub75` | **no — and it must not until its bootloader is re-flashed** (Gitea #634) | `ota_0` | 1,048,576 | 1,048,576 | old table, unchanged |
 | dev unit `192.168.0.205` | `board-pixelblaze-v3` | not yet (offline) | — | — | — | — |
 
 The Athom is the first device on the new table (Gitea #634). It went across
@@ -208,33 +208,73 @@ an LXBC format bump comes back with every stored blob unreadable
 itself — Gitea #643, which the migrating release makes near-certain
 fleet-wide.
 
-#### The 16 MB half declined, silently (2026-09-21, Gitea #634)
+#### The 16 MB half declined — and the bootloader is why (2026-09-21, Gitea #634)
 
 The Seengreat took the migrating image cleanly and **did not migrate**, on
 two consecutive boots: `partitions.migrated` stayed `false`, the live table
 stayed the pre-#501 one (`ota_slot_bytes` 1,048,576, `storage_bytes`
 1,048,576), and the store, the patterns, the playlist, the layout, the name
 and the brightness were all exactly as found. The device stayed healthy
-throughout — `vmerr: null`, 116 fps, `rescan_hz` 115.
+throughout — `vmerr: null`, 116 fps, `rescan_hz` 115 — and `/api/status`
+could not say why, because four of `migrate.rs`' failure paths returned with
+only a `println!`. Those now `block()` (#654), and the same session's
+diagnostic OTA wedged before it could report anything.
 
-What makes it a finding rather than a data point is that **`/api/status`
-could not say why**. `migration_blocked` was absent, because four of
-`migrate.rs`' failure paths — the two in `stage_log`, `write_new_store`,
-`move_assets` and the `parttab::install` refusal — returned with only a
-`println!`. On a fleet where *no device has a serial console*, which is the
-stated reason the migration is self-applied at all, "it failed" and "it was
-never attempted" were the same three JSON fields. Those five sites now call
-`block()` like every other refusal in the file, so the reason and the two
-flash offsets involved reach `/api/status`.
+**The cause was found off the bench, under emulation.** The 16 MB image now
+runs on QEMU's `esp32s3` machine (five emulator bugs fixed in
+`tools/qemu/patches/`, guest-side untouched), and with a clean fixture the
+whole 16 MB migration passes — from either slot, cut at every stage, with
+the 960 KiB bundle arriving byte-identical at `0xa10000`. What reproduces
+the panel's decline exactly is one byte of the fixture:
 
-Which stage actually fails is still unknown, and the 16 MB path is where to
-look: it is the only layout whose `assets` partition moves, and it has never
-executed anywhere — QEMU's `esp32s3` machine loads the app and then prints
-nothing, so `--plan-16mb` checks a host-side model of the table rather than
-running the migrator (tools/qemu/migrate-test.py). The diagnostic build that
-would have answered it never landed: the OTA carrying it wedged mid-upload
-(the #294 flash wedge, ~44 % of this board's pushes) and the panel dropped
-off the LAN, which is Jeremy's power cycle to undo.
+> **`g_rom_flashchip.chip_size` comes from the BOOTLOADER's image header,
+> and an OTA never replaces the bootloader.**
+
+The panel was serially flashed when `board-seengreat-hub75` still used
+`partitions.csv`; `firmware/board-target.sh` only started passing
+`--flash-size 16mb` for it with #501. Its bootloader therefore tells the ROM
+the part is **4 MB**, on 16 MB of silicon — and every `esp_rom_spiflash_*`
+op (which is every op esp-storage makes) is bounds-checked against that
+number. `write_new_store`'s erase of the new `storage` region at `0x610000`
+failed on its *first* sector, which is why the decline was both instant and
+total:
+
+```
+migrate: new storage 0x610000 + 4096 KiB — erasing
+partitions: erase failed at 0x610000
+```
+
+esp-storage's own `capacity()` reads the JEDEC RDID and correctly says
+16 MB, which is why `flash_fits` waved it through.
+
+**The tempting fix is a brick.** `g_rom_flashchip.chip_size` can be raised at
+runtime — ESP-IDF's `bootloader_flash_update_size()` does exactly that — and
+doing so *does* let the entire migration run to completion. The device then
+reboots into a bootloader that will not load the table it just installed:
+
+```
+E flash_parts: partition 4 invalid - offset 0x310000 size 0x300000 exceeds flash chip size 0x400000
+E boot: Failed to verify partition table
+E boot: load partition table error!
+```
+
+…forever, on a board with no serial console. Both halves of that are
+emulated and asserted (`migrate-test.py --board s3 --old-bootloader 4mb`).
+
+So `parttab::flash_refusal` now reads the bootloader's ceiling as well as the
+chip's and refuses when the new table runs past it, naming the fix. A panel
+in this state reports
+
+```json
+"migration_blocked":"bootloader was flashed for a smaller part — reflash it over serial",
+"blocked_need_bytes":14680064,"blocked_have_bytes":4194304
+```
+
+every boot, changes nothing, and keeps working. **Getting the Seengreat onto
+the 16 MB table needs a one-time serial flash of the bootloader** (Jeremy's
+hands, the panel's USB port) — `BOARD=board-seengreat-hub75
+firmware/build-esp32.sh flash` writes bootloader + table + app together with
+`--flash-size 16mb`. After that the migration runs on the next boot.
 
 ### Measurement history (the 1 MiB era)
 
