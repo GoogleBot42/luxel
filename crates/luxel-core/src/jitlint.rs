@@ -28,9 +28,9 @@ use crate::vm::{builtin_sig, BKind, Program, SigRet, BUILTINS};
 
 // ------------------------------------------------------------- refusals
 
-/// A compile-time reason the JIT will refuse the whole program
-/// (docs/jit-design.md §4a). One variant today; the list is expected to
-/// grow, and the editor renders whatever it is handed.
+/// A reason the JIT will refuse the whole program (docs/jit-design.md
+/// §4a). The editor renders whatever it is handed; the list grows with
+/// each phase.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum JitRefusal {
     /// The program reaches one of the callback-taking builtins
@@ -50,6 +50,31 @@ pub enum JitRefusal {
         line: u32,
         col: u32,
     },
+    /// The BACKEND refused the program (Gitea #651, phase 2). The reasons
+    /// are `luxel_jit::Refusal`'s — `too-large`, `frame-size`,
+    /// `l32r-reach`, `scratch` and the rest — and they are decided by an
+    /// emitter this crate deliberately does not depend on: `luxel-jit`
+    /// takes luxel-core, not the other way round, so the one place that
+    /// holds the whole vocabulary stays the backend and this variant just
+    /// carries what it said.
+    ///
+    /// Nothing produces it yet. Phase 3 wires the compile through here (or
+    /// through `/api/status`, for a device-side compile), and every
+    /// surface — the editor lint, the CLI, the status object — already
+    /// renders whatever it is handed.
+    Backend {
+        /// `Refusal::id()`: the stable machine reason, the same spelling
+        /// `/api/status`'s `jit.reason` uses.
+        id: &'static str,
+        /// `Refusal::reason()`: the human wording.
+        detail: String,
+        /// Where it was decided, or `(u16::MAX, 0)` for a whole-program
+        /// refusal.
+        fn_idx: u16,
+        word: u32,
+        line: u32,
+        col: u32,
+    },
 }
 
 impl JitRefusal {
@@ -58,6 +83,7 @@ impl JitRefusal {
     pub fn id(&self) -> &'static str {
         match self {
             JitRefusal::Callbacks { .. } => "callbacks",
+            JitRefusal::Backend { id, .. } => id,
         }
     }
 
@@ -65,6 +91,8 @@ impl JitRefusal {
     pub fn name(&self) -> &str {
         match self {
             JitRefusal::Callbacks { name, .. } => name,
+            // a backend refusal is about the whole program, not a name
+            JitRefusal::Backend { .. } => "",
         }
     }
 
@@ -73,6 +101,7 @@ impl JitRefusal {
     pub fn pos(&self) -> (u32, u32) {
         match self {
             JitRefusal::Callbacks { line, col, .. } => (*line, *col),
+            JitRefusal::Backend { line, col, .. } => (*line, *col),
         }
     }
 
@@ -82,6 +111,9 @@ impl JitRefusal {
         match self {
             JitRefusal::Callbacks { name, .. } => {
                 format!("`{name}` takes a callback, which the JIT does not compile yet")
+            }
+            JitRefusal::Backend { detail, .. } => {
+                format!("the native backend refused this program: {detail}")
             }
         }
     }

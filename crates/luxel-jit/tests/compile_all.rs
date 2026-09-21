@@ -109,3 +109,35 @@ fn over_the_cap_is_a_refusal() {
     let r = luxel_jit::compile(&prog, &kinds, &env).unwrap_err();
     assert_eq!(r.id(), "too-large", "{}", r.reason());
 }
+
+/// Every refusal the backend can produce maps cleanly onto the editor's
+/// lint vocabulary (`luxel_core::jitlint::JitRefusal::Backend`), so phase
+/// 3 can surface one without inventing wording.
+#[test]
+fn refusals_carry_into_the_editor_lint() {
+    use luxel_core::jitlint::JitRefusal;
+    let (prog, kinds) = program_of("export function render(i) { hsv(i, 1, 1) }").unwrap();
+    let mut env = env_with_fake_addresses();
+    env.max_code = 8;
+    let r = luxel_jit::compile(&prog, &kinds, &env).unwrap_err();
+    let (fn_idx, word) = r.site();
+    let lint = JitRefusal::Backend {
+        id: r.id(),
+        detail: r.reason(),
+        fn_idx,
+        word,
+        line: 0,
+        col: 0,
+    };
+    assert_eq!(lint.id(), "too-large");
+    assert!(lint.text().contains("over the 8 B cap"), "{}", lint.text());
+    assert_eq!(lint.pos(), (0, 0));
+
+    // And a helper in the wrong gigabyte, which is the refusal the ISA
+    // model found (`retw` restores only 30 address bits).
+    let mut bad = env_with_fake_addresses();
+    bad.helpers.fx_div = 0x1000_0000;
+    let r = luxel_jit::compile(&prog, &kinds, &bad).unwrap_err();
+    assert_eq!(r.id(), "address-region", "{}", r.reason());
+    assert!(r.reason().contains("fx_div"), "{}", r.reason());
+}

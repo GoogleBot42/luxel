@@ -1,5 +1,132 @@
 # Update log
 
+## 2026-09-21 — JIT phase 2: the Xtensa emitter, and a gate that runs it on x86 (#651)
+
+Phase 2 of the on-device JIT (#607, docs/jit-design.md §3). **Still nothing
+native executes on a device, and nothing is linked into the firmware or the
+wasm playground** — what lands is the backend and, more importantly, the two
+host gates that make it safe to put on metal in phase 3.
+
+**The new crate is `crates/luxel-jit`** (Apache-2.0, `no_std` + alloc, not a
+workspace dependency of anything that ships yet). `compile(prog, kinds, env)
+-> Result<NativeImage, Refusal>` is a pure function: it executes nothing,
+allocates nothing executable and touches no device. That is the property the
+whole verification story rests on.
+
+**307 of 307 `library/` patterns compile, and all 307 render identically to
+the interpreter** — `Vm::pixel`, `Vm::pixel_written`, every global and the
+error verdict, bit for bit, with errors compared down to the message, the
+function index, the word index and the source position. 1,016 KB of native
+code across the library (mean 3,390 B, largest `music-sequencer-for-v3-only`
+at 32,024 B — a quarter of `JIT_MAX_CODE`).
+
+### Two gates, both plain `cargo test`
+
+**The encoder gate** (`tests/objdump.rs`, 150 forms). Every form
+`xtensa::Asm` can emit goes into a buffer, the buffer goes to the devshell's
+own disassembler, and mnemonic and operands are compared. **Correction to
+§7.1: the oracle is `xtensa-esp32s3-elf-objdump`, not the generic
+`xtensa-esp-elf-objdump`** — the generic build is for an unknown Xtensa
+configuration, so its instruction LENGTHS are not ours and it desynchronises
+(it reads `entry a1, 32` as `excw`). It caught four encodings on its first
+run, three of which would have been wild jumps rather than wrong values:
+`movi`'s 12-bit split, `slli`'s `op2` (shifts of 17..31 encoded 1..15),
+`beqi`/`bnei`'s `op0` (6, not 7 — the wrong one decodes as `bnone`/`bbsi`),
+and the 24-bit `nop`'s `r` field (with 0 the same word is `callx12 a0`).
+
+**The differential gate** (`tests/isa/` + `tests/library_diff.rs`, ~20 s).
+§7.1 as written had nothing that EXECUTED generated code on a host, which
+left "does this compute what the interpreter computes" to QEMU and metal. It
+does not have to. A ~900-line Xtensa interpreter covers exactly the 48 forms
+the encoder emits, windowed ABI included; a `callx8` to a helper or a builtin
+wrapper traps out of the model and the harness marshals the register and
+memory state into a REAL Rust call and the result back, with a real `Vm`
+behind the context and `Vm::globals` mirrored into model memory. Then every
+library pattern runs init, `beforeRender` and eight pixel indices both ways.
+
+**These two are phase 3's entry criteria.** Nothing goes near the Seengreat
+until both are green: a codegen bug on metal is a crash on core 1 → watchdog
+reboot, on a board without serial.
+
+### What the design had wrong
+
+Two ISA facts, both silent miscompiles on hardware:
+
+- **`retw` restores only the low 30 bits of the return address**
+  (`PC ← PC[31:30] || a0[29:0]`), so **every `callx8` target must share bits
+  31..30 with the code calling it**. `compile` now checks every helper
+  address against `Env::code_base`. The ISA model hit this on its first run,
+  because the test harness had put its synthetic helper addresses a gigabyte
+  away.
+- **`l32r`'s 16-bit field is one-extended, not sign-extended** — always a
+  negative word offset, so the reach is the full 256 KB backwards, not 128 KB.
+
+Four §3.5 rows:
+
+- **`Shl`/`Shr`: `srai t, b, 16` is a FLOOR and the semantic is TRUNCATION
+  toward zero.** `Fx`'s shift count is `to_int_trunc() & 31`, which is
+  `wrapping_div(65536)`, so `x << -0.5` — oracle-pinned as a shift by zero —
+  would have shifted by 31. One `quos` by a constant 65536 is exact and
+  cannot trap.
+- **`==`/`!=` are reference identity, so "unbox a `Dyn` operand to 0" is
+  wrong for them**: `arr == 0` is false, and unboxing makes it true.
+- Truthiness on a `Dyn` operand is `tag != 0 OR payload != 0` — a reference
+  is always truthy — which binds `Not`, `JmpIfFalse`, both peeking jumps and
+  `Assert`.
+- `BitNot`'s low-16 clear needs two `srli`s; the immediate is four bits.
+
+And two shapes the design assumed but the inference does not give:
+
+- **§3.5's `CallValue` helper cannot resolve AND call** — that is a
+  Rust → native trampoline, which §4 says this design does not have and which
+  cannot be host-tested. `call_value_target` resolves only.
+- **A function reachable as a value does not necessarily return `Dyn`.**
+  `function twice(v) { return v * 2 }` used as a value keeps a `Num` return,
+  and a `CallValue` on it would have read a garbage tag. Every
+  `ConstFun`-referenced function now returns boxed.
+
+### Register plan v1 is not §3.4's
+
+`a8`/`a9` hold operand-stack depths 0–1 and `a10…a15` are scratch, because
+two scratch registers are nowhere near enough (the `value_eq` sequence alone
+wants three live) and a four-scratch cut still ran out on real patterns. The
+census says the median function's peak depth is 2, so the two homes cover the
+shape that matters. Register homing is intra-basic-block only — spilled
+before every branch, at every branch target and before every call — which
+removes the cross-edge agreement problem entirely.
+
+### Four bugs the ISA gate caught that reading would not have
+
+`Rem`'s zero guard materialises its 0 before reading the operands, so its
+destination must not alias one (`i % 7` was 0). The fall-through edge into a
+branch target never spilled, so a register-homed value was lost at the join
+(`i > 3 ? 10 : 20` was 0). `CallValue` on a `Num`-returning function read a
+garbage tag. And the helper-address region, above.
+
+`tests/ops.rs` — one snippet per §3.5 row — is the microscope that isolated
+three of those four in minutes; `library_diff.rs` is the net that caught
+them.
+
+### luxel-core, beside the backend
+
+`jit::helpers` (the twelve `extern "C"` entry points, each CALLING the
+interpreter's own arm rather than restating it, 27 differential tests);
+`JitCtx::globals` so generated code can find `Vm::globals` (which since #642
+already IS the `repr(C)` array §3.8 wants — `Vm` just is not `repr(C)` and
+cannot be offset into); `jit::ctx::dev32`, the 32-bit DEVICE layout as
+literals, because `offset_of!` on a 64-bit host gives the emitter the wrong
+numbers; `kinds::stack_maps`, the abstract operand stack at every word
+recorded by the verifier's OWN walk so the emitter cannot fork §2.4's rules;
+and a `JitRefusal::Backend` variant so phase 3 can surface a backend refusal
+in the editor without inventing wording. **`luxel-core` image size is
+unchanged on every board** — the firmware still names neither `jit` nor
+`kinds`.
+
+Deviations are listed as-built in docs/jit-design.md §3.9; the gates are in
+docs/tools.md.
+
+
+
 ## 2026-09-21 — The Seengreat declined to migrate, and could not say why (#634)
 
 The 16 MB half of the repartition bench run. The panel took the migrating image

@@ -67,7 +67,9 @@ fn a_removed_builtin_in_the_words_still_refuses() {
     words[at] = 0x39 | (removed << 8) | (words[at] & 0xFF00_0000);
     prog.words = Words::Owned(words);
     let err = jit_eligibility(&prog, &kinds).expect_err("a tombstone call is refused");
-    let JitRefusal::Callbacks { name, .. } = &err;
+    let JitRefusal::Callbacks { name, .. } = &err else {
+        panic!("expected a callbacks refusal, got {err:?}")
+    };
     assert_eq!(*name, "arrayMutate");
     assert_eq!(err.id(), "callbacks");
 }
