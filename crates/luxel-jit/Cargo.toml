@@ -1,0 +1,14 @@
+[package]
+name = "luxel-jit"
+version = "0.1.0"
+description = "Xtensa LX7 code generator for Luxel bytecode (docs/jit-design.md §3)"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+luxel-core = { path = "../luxel-core", default-features = false, features = ["kinds", "jit"] }
+
+[dev-dependencies]
+# The differential gate compiles `library/*.js`, so the tests need the
+# frontend; the LIBRARY (non-dev) build stays frontend-free and no_std.
+luxel-core = { path = "../luxel-core", default-features = false, features = ["kinds", "jit", "frontend"] }

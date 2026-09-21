@@ -425,6 +425,132 @@ methods. Globals are the exception: a `LoadG`/`StoreG` on a typed global
 is `l32i`/`s32i` into a `#[repr(C)]` globals array the helper side shares
 (`Vm::globals` becomes that array; the interpreter reads it as before).
 
+### 3.9 §3 as built (phase 2, Gitea #651)
+
+**SHIPPED: `crates/luxel-jit`** — `xtensa.rs` (the encoder), `plan.rs` (the
+frame and register plan), `emit.rs` (the selection table). `no_std` +
+alloc, not linked into the firmware or the wasm playground yet.
+`compile(prog, kinds, env) -> Result<NativeImage, Refusal>` is a pure
+function: it executes nothing, allocates nothing executable and touches no
+device, which is what lets `tests/library_diff.rs` run its output through
+an Xtensa ISA model on x86 and compare against the interpreter.
+
+Everything above is as designed except the following, all deliberate and
+all found by building it.
+
+**Two ISA facts the design had wrong.** Both would have been silent
+miscompiles on metal:
+
+- **`retw` restores only the low 30 bits of the return address**
+  (`PC ← PC[31:30] || a0[29:0]`), so **every `callx8` target must share
+  bits 31..30 with the code calling it**. A helper a gigabyte away returns
+  into the wrong gigabyte — a wild jump, not a wrong value. `compile`
+  checks every `Helpers` address against `Env::code_base` and refuses
+  (`address-region`). On the S3 the IBUS window, the flash mapping and
+  IRAM are all in `0x4…`, so this only fires on a wiring mistake — but the
+  test harness hit it on its first run.
+- **`l32r`'s 16-bit field is ONE-extended, not sign-extended**: the target
+  is `((pc+3) & !3) + ((0xFFFF0000 | imm16) << 2)`, always a negative word
+  offset. The reach is therefore the full 256 KB backwards, not 128 KB.
+
+**§3.2, calling convention.** The register/`ctx.args` split is per
+FUNCTION, not per parameter: `ParamConv::Regs` (at most five parameters,
+none `Dyn`, in `a3…a7`) or `ParamConv::CtxArgs` (every parameter through
+the handoff area, one word for a non-`Dyn` one and two for a `Dyn` one).
+Mixing the two per parameter would make the register assignment depend on
+which parameters happen to be `Dyn`; one bit per function lets caller and
+callee agree by looking at the same thing. `NativeImage::abi` reports it.
+The common case — all-`Num`, few parameters — still lands in registers.
+
+**§3.3, frame.** Every frame home is a uniform 8 bytes laid out as a
+`Value` (tag at +0, payload at +4) rather than 4 or 8 by kind. One stride
+means one offset formula for locals, operand-stack homes and boxed
+arguments alike, and a `Dyn` home is then byte-identical to the `Value` a
+builtin wrapper wants. A function's median frame is a few dozen bytes
+either way.
+
+**§3.4, register plan.** `a8`/`a9` hold operand-stack depths 0 and 1;
+`a10…a15` are scratch. The design's six register-homed depths with two
+scratch registers does not work: the `value_eq` sequence alone wants three
+scratch live at once, a `Dyn` operand costs one more each, and a wide
+frame offset borrows another — a four-scratch first cut still ran out on
+real library patterns. The census (§9b) puts the median function's peak
+depth at 2, so two register homes cover the shape that matters and
+everything deeper was going to spill under any v1 plan.
+
+Register homing is **intra-basic-block only**: every register-homed depth
+is spilled to its frame home before any branch, at every branch target and
+before every `callx8`. That removes the cross-edge agreement problem
+entirely — no two edges into a block can disagree about what is where —
+at the cost of reloading across a branch. A `Dyn` depth is never
+register-homed; one register cannot hold a tag and a payload.
+
+**§3.5, selection.** Four rows were wrong or incomplete:
+
+- **`Shl`/`Shr`: `srai t, b, 16` is a FLOOR and the semantic is TRUNCATION
+  TOWARD ZERO.** `Fx`'s shift count is `rhs.to_int_trunc() & 31` and
+  `to_int_trunc` is `wrapping_div(65536)`, so a right-hand side in (−1, 0)
+  — `x << -0.5`, which the oracle pins as a shift by zero — would have
+  shifted by 31. Emitted as `l32r k, 65536; quos k, b, k; ssl/ssr k;
+  sll/sra`: one `quos` is the exact truncating divide and its divisor is a
+  constant, so it can never trap.
+- **`==`/`!=` are REFERENCE IDENTITY, so the "unbox a `Dyn` operand to 0"
+  rule is wrong for them.** `vm::value_eq` is false across kinds, so
+  `arr == 0` is false — unboxing the array to 0 would make it true.
+  Emitted as a tag compare then a payload compare; two operands whose
+  static kinds have different tags fold to a constant.
+- **Truthiness on a `Dyn` operand is `tag ≠ 0 OR payload ≠ 0`**, not just
+  a payload test: a reference is always truthy (`Value::truthy`). That
+  binds `Not`, `JmpIfFalse`, both peeking jumps and `Assert`.
+- **`BitNot`'s low-16 clear needs two `srli`s.** `srli`'s immediate is
+  four bits, so a shift of 16 does not exist: `xor r, a, -1; srli r, r,
+  15; srli r, r, 1; slli r, r, 16`.
+
+And two rows are narrower than designed:
+
+- **The `direct` tier-1 path is used only when the call's arity matches
+  the signature EXACTLY.** §4 wanted the emitter to materialise a
+  builtin's defaults (the 0.5 duty of a one-argument `square`); it carries
+  no table of defaults, and a mismatched arity falls back to `generic`,
+  which is the interpreter's own marshalling and cannot be wrong.
+- **`CallValue` uses a RESOLVE-ONLY helper.** §3.5 has the helper resolve
+  the callee and call it, which is a Rust → native trampoline that §4 says
+  this design does not have and which cannot be modelled on a host.
+  `call_value_target` returns a native address, a builtin id or an error,
+  and the three-way dispatch is native code.
+
+**§3.6.** The site store is BOTH `insn_at` and `fn_idx`, not just
+`insn_at`: a returning `CallFn` has left `ctx.fn_idx` set to the callee's,
+so an error after a call would otherwise be attributed to the wrong
+function. Fuel is charged at every backward-branch TARGET and before every
+`CallFn`/`CallValue`.
+
+**§3.7.** The pool goes first in the image as designed, but its size is
+not known until the last function is emitted — so code is emitted into its
+own buffer at code-local offsets and the pool is PREPENDED. Branches and
+`j` are pc-relative and survive a uniform shift untouched, and every
+`l32r` was going to be a fixup anyway.
+
+**§3.8.** `JitCtx` gained `globals: *mut ValueRaw` (appended, so no offset
+moved). §3.8 says a typed `LoadG`/`StoreG` is an `l32i`/`s32i` into a
+`repr(C)` globals array, and since #642 `Vm::globals` already IS one; what
+was missing was a way for generated code to FIND it, because `Vm` is not
+`repr(C)` and cannot be offset into. Beside it, `jit::ctx::dev32` spells
+the 32-bit device layout as literal numbers: the `OFFSET_*` constants are
+`offset_of!` on the host, where `OFFSET_PROG` is 8 and not 4, and the
+emitter must encode device offsets whatever machine it runs on.
+
+**Refusals** (§4a's vocabulary, all of them whole-program and none a
+panic): `unsupported`, `too-large`, `l32r-reach`, `frame-size`, `kinds`,
+`param-overflow`, `offset-reach`, `scratch`, `address-region`,
+`jump-reach`, `untyped`. Over `library/` **none of them occurs**: 307 of
+307 patterns compile.
+
+**Not done in phase 2**, and deliberately: no `loop`, no branch islands,
+no liveness analysis, and `Div`/`Pow` are helper calls per §3.5 even
+though `Div` is on the per-pixel path. A real register allocator is the
+phase-4 lever if measurement asks for one.
+
 ## 4. Builtin table
 
 **SHIPPED (Gitea #642): `crates/luxel-core/src/jit/table.rs`.**
@@ -631,10 +757,22 @@ still stands.
 ### 7.1 Host (no device, every CI run)
 
 - **Encoder**: each instruction form is emitted into a buffer and
-  disassembled with the devshell's `xtensa-esp-elf-objdump -D -m xtensa
-  -b binary`; the test compares mnemonics and operands. This is the whole
-  "did I get the bit layout right" question, answered by the vendor
-  toolchain.
+  disassembled with the devshell's own objdump; the test compares
+  mnemonics and operands. This is the whole "did I get the bit layout
+  right" question, answered by the vendor toolchain.
+
+  **SHIPPED (Gitea #651): `crates/luxel-jit/tests/objdump.rs`, 150 forms.**
+  **Correction: the oracle is `xtensa-esp32s3-elf-objdump`, not
+  `xtensa-esp-elf-objdump`.** The latter is built for a GENERIC Xtensa
+  configuration and desynchronises on our byte stream — it reads `entry
+  a1, 32` as `excw`, invents FLIX bundles and drifts by a byte, because
+  the instruction lengths of an unknown configuration are not ours. The S3
+  variant, from the same derivation, is exact. It caught four encodings
+  that reasoning from the field layout had wrong: `movi`'s 12-bit split,
+  `slli`'s `op2` (bit 4 of `32 - sa`, so shifts of 17..31 were encoding
+  1..15), `beqi`/`bnei`'s `op0` (6, not 7 — the wrong one decodes as
+  `bnone`/`bbsi`, a wild branch), and the 24-bit `nop`'s `r` field (2, not
+  0 — with 0 the same word is `callx12 a0`).
 - **ABI pins**: a Rust `extern "C"` helper returning `Ret2` is compiled
   for `xtensa-esp32s3-none-elf` and its disassembly asserted to return in
   `a2:a3`; `JitCtx`/`Value`/`BuiltinEntry` offsets are `const`-asserted
@@ -674,6 +812,36 @@ still stands.
 - **Emitter as pure function**: `compile(&Program) -> Result<Vec<u32>,
   Refusal>` runs on x86; a golden test pins the bytes for a handful of
   patterns so an accidental codegen change is a visible diff.
+
+  **SHIPPED (Gitea #651): `crates/luxel-jit/tests/golden.rs`** — size,
+  pool length, function count and an FNV-1a digest for five patterns
+  (`rainbow`, `snake`, `snake-2d`, `perlin-fire-wind-tunnel`, the
+  `renderFrame` pattern `bulk-canvas-ripples-2d`), plus the library-wide
+  size total phase 4's code cache is sized against.
+- **The ISA gate — and it is the one that matters**
+  (**SHIPPED, Gitea #651**: `crates/luxel-jit/tests/isa/` +
+  `tests/library_diff.rs`). §7.1 as written had nothing that EXECUTED the
+  generated code on a host, which left "does this code compute what the
+  interpreter computes" to QEMU (§7.2) and metal (§7.3). It does not have
+  to: a ~900-line Xtensa interpreter covering exactly the forms the
+  encoder emits — the windowed ABI included, as a flat 64-register file
+  with a window base — runs the real image, and a `callx8` to a helper or
+  a builtin wrapper traps out to the harness, which marshals the register
+  and memory state into a REAL Rust call and the result back. A real `Vm`
+  sits behind the context, `Vm::globals` is mirrored into model memory and
+  synchronised around every such call, and the frame's boxed-argument
+  scratch is read out of model memory as a real `[Value]`.
+
+  Then: compile every `library/*.js`, run init and `beforeRender`
+  natively, render a spread of pixel indices, and compare `Vm::pixel`,
+  `Vm::pixel_written`, every global and the error/no-error verdict against
+  the interpreter, bit for bit. Errors are compared down to the message,
+  the function index, the word index and the source position.
+
+  **These two gates are phase 3's entry criteria.** No image goes near the
+  Seengreat until both are green on every library pattern: a codegen bug
+  on metal is a crash on core 1 → watchdog reboot, on a board without
+  serial.
 
 ### 7.2 QEMU (no device)
 
