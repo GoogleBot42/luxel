@@ -769,6 +769,37 @@ fn status_json() -> String {
         }
         None => push_piece(&mut out, "null"),
     }
+    // What the LIVE pattern is running as, and why (Gitea #658,
+    // docs/jit-design.md §4a/§5). Always present, on every board: a client
+    // that has to handle a missing key cannot tell "this board has no
+    // backend" from "this firmware predates the JIT", and the first is the
+    // common case. `off` = the feature is not built in; `interp` = built
+    // in and refused, with the reason; `native` = compiled.
+    push_piece(&mut out, ",\"jit\":{\"state\":\"");
+    #[cfg(feature = "jit")]
+    {
+        let (state, reason, code_bytes, compile_us) = crate::jit::jit_status();
+        push_piece(&mut out, state);
+        push_piece(&mut out, "\",\"reason\":");
+        match reason {
+            Some(r) => {
+                push_piece(&mut out, "\"");
+                push_piece(&mut out, r);
+                push_piece(&mut out, "\"");
+            }
+            None => push_piece(&mut out, "null"),
+        }
+        push_piece(&mut out, ",\"code_bytes\":");
+        push_u32(&mut out, code_bytes);
+        push_piece(&mut out, ",\"compile_us\":");
+        push_u32(&mut out, compile_us);
+    }
+    #[cfg(not(feature = "jit"))]
+    push_piece(
+        &mut out,
+        "off\",\"reason\":null,\"code_bytes\":0,\"compile_us\":0",
+    );
+    push_piece(&mut out, "}");
     // Which partition layout this device is actually running (Gitea #501):
     // a fleet tool reads it to tell a migrated device from one still on
     // the pre-#501 1 MiB-slot table, and `migration_blocked` says why one
@@ -1970,6 +2001,39 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                             out
                         }
                         _ => String::from("{\"ok\":false,\"error\":\"brightness must be 0..=31\"}"),
+                    }))
+                }
+                // POST /api/jit — body `{"on":true}` / `{"on":false}` (or
+                // a bare `on`/`off`). The A/B lever for the on-device JIT
+                // (Gitea #658): NOT persisted and NOT applied to the live
+                // pattern, which keeps running as whatever it was compiled
+                // as — switching a running program between two
+                // implementations mid-frame is the one thing that could
+                // tear a frame. It takes effect at the next activation, so
+                // the differential is "push the pattern, flip, push it
+                // again". Only exists on a board that has the feature.
+                #[cfg(feature = "jit")]
+                "/api/jit" => {
+                    let body = text(&raw);
+                    let body = body.trim();
+                    let want = if body.contains("false") || body.eq_ignore_ascii_case("off") {
+                        Some(false)
+                    } else if body.contains("true") || body.eq_ignore_ascii_case("on") {
+                        Some(true)
+                    } else {
+                        None
+                    };
+                    Some(json_response(match want {
+                        Some(on) => {
+                            crate::jit::set_enabled(on);
+                            let mut out = String::from("{\"ok\":true,\"on\":");
+                            push_piece(&mut out, if on { "true" } else { "false" });
+                            push_piece(&mut out, ",\"applies\":\"next activation\"}");
+                            out
+                        }
+                        None => String::from(
+                            "{\"ok\":false,\"error\":\"body must be {\\\"on\\\":true|false}\"}",
+                        ),
                     }))
                 }
                 // POST /api/config — body is a pixel count 1..=MAX_PIXELS.

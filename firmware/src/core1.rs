@@ -659,6 +659,21 @@ mod imp {
         let untouched = s[SKIP..].iter().take_while(|&&b| b == FILL).count();
         Some(((STACK_BYTES - SKIP - untouched) as u32, STACK_BYTES as u32))
     }
+
+    /// Lowest address the AppCpu stack may reach — the bottom of the
+    /// allocation, above esp-hal's guard word (Gitea #658).
+    ///
+    /// The render task runs on this stack, and the JIT's prologue depth
+    /// guard needs a floor to compare `a1` against (docs/jit-design.md
+    /// §3.6). `None` before [`start`] / on a single-core build, where the
+    /// render task is on the main executor's stack and the JIT falls back
+    /// to a budget measured from the stack pointer instead.
+    pub fn stack_floor() -> Option<usize> {
+        match STACK_BASE.load(Ordering::Acquire) {
+            0 => None,
+            base => Some(base + SKIP),
+        }
+    }
 }
 
 #[cfg(multi_core)]
@@ -692,6 +707,14 @@ pub fn fenced<R>(f: impl FnOnce() -> R) -> R {
 
 #[cfg(not(multi_core))]
 pub fn stack_high_water() -> Option<(u32, u32)> {
+    None
+}
+
+/// Single-core: the render task is on the main executor's stack, whose
+/// base this module does not own. The JIT's depth guard falls back to a
+/// budget measured from the stack pointer (firmware/src/jit.rs).
+#[cfg(not(multi_core))]
+pub fn stack_floor() -> Option<usize> {
     None
 }
 

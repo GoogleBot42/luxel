@@ -24,6 +24,11 @@ embedded-storage-async = "0.4"
 # default-features = false drops the "frontend" (lexer/parser/compiler):
 # the device only executes LXBC bytecode compiled by the browser/CLI.
 luxel-core = { path = "../crates/luxel-core", default-features = false }
+# The Xtensa code generator (Gitea #651). Optional and named only by the
+# firmware's own `jit` feature, so a board without a backend — and the wasm
+# playground, which never depends on this crate at all — does not link an
+# emitter. `no_std` + alloc, like luxel-core.
+luxel-jit = { path = "../crates/luxel-jit", default-features = false, optional = true }
 # HUB75 matrix panels (S3 LCD_CAM, DMA BCM rescan; patched, see the
 # [patch.crates-io] note below). circular-dma: the descriptor chain loops
 # in hardware — refresh costs no ISR work; swaps repoint buffer pointers
@@ -163,6 +168,18 @@ iram-math = ["luxel-core/iram-math"]
 # until that runs every board ships the ladder.
 #   EXTRA_FEATURES=dispatch-table BOARD=board-seengreat-hub75 ./build-esp32.sh
 dispatch-table = ["luxel-core/dispatch-table"]
+# On-device JIT (Gitea #658, phase 3 of #607; docs/jit-design.md §5/§6,
+# docs/firmware.md "JIT"). Pulls in luxel-core's ABI surface (`JitCtx`, the
+# 188-entry builtin table, the §3.5 helpers) and the Xtensa LX7/LX6 emitter
+# crate, and adds src/jit.rs: the `.rwtext` exec buffer, the typed
+# `extern "C"` call, compile-at-activation and the `/api/status` object.
+#
+# XTENSA ONLY — the emitter has one backend. `board-target.sh` turns it on
+# with JIT=1 for board-seengreat-hub75 and board-s3-devkit, and `JIT_OFF=1`
+# is the A/B lever that builds the same board without it. The classic-ESP32
+# boards SHIP interpreter-only; `EXTRA_FEATURES=jit` on one is the QEMU
+# gate's build (tools/qemu/jit-test.py), not a release profile.
+jit = ["luxel-core/jit", "dep:luxel-jit"]
 # HUB75 panel output (ESP32-S3 LCD_CAM only — C3/S2 have no parallel-output
 # peripheral; classic-ESP32/C6 support exists in esp-hub75 but is not wired
 # up here yet). Compose-per-frame into a DMA framebuffer that autonomously

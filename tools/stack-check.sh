@@ -21,8 +21,12 @@ board_target "$BOARD"
 # checked separately from the default build's.
 # The per-board IRAM feature list matters here on the S3/C-series, where
 # `.rwtext` and `.stack` are the same SRAM (board-target.sh IRAM, #328).
+# The JIT's exec buffer is a `.rwtext` static (Gitea #658), so it comes out
+# of the same SRAM on the S3 — which is precisely the measurement this
+# script exists to make. JIT/JIT_OFF are board-target.sh's, same as IRAM.
 FEATURES="$BOARD${IRAM:+ $IRAM}${EXTRA_FEATURES:+ $EXTRA_FEATURES}"
 if [ "${IRAM_OFF:-0}" = 1 ]; then FEATURES="$BOARD${EXTRA_FEATURES:+ $EXTRA_FEATURES}"; fi
+if [ "${JIT:-0}" = 1 ] && [ "${JIT_OFF:-0}" != 1 ]; then FEATURES="$FEATURES jit"; fi
 
 CARGO=cargo
 # Same -Zbuild-std / optimize_for_size pair as firmware/build-esp32.sh and
