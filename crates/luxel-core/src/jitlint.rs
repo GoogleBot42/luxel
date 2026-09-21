@@ -24,7 +24,7 @@ use alloc::vec::Vec;
 
 use crate::bytecode::{enc, op};
 use crate::kinds::{ilen, DynCause, DynSlot, Kind, Kinds};
-use crate::vm::{builtin_sig, Program, SigRet, BUILTINS};
+use crate::vm::{builtin_sig, BKind, Program, SigRet, BUILTINS};
 
 // ------------------------------------------------------------- refusals
 
@@ -106,8 +106,11 @@ pub fn jit_eligibility(prog: &Program, kinds: &Kinds) -> Result<(), JitRefusal> 
         while at < code.len() {
             let w = code[at];
             let o = enc::opcode(w);
-            // A callback builtin reached either as a call or as a VALUE
-            // (`arrayMutate` handed to something else) is equally fatal.
+            // A REMOVED builtin (a tombstone in `BUILTINS` — the six callback
+            // helpers that became prelude functions in #626) reached as a
+            // call or as a VALUE. The compiler never emits one, and the
+            // decoder rejects a blob that imports one, so this is a defence
+            // against a stale or hand-built blob, not a source construct.
             let id = match o {
                 op::CALL_BUILTIN | op::CALL_BUILTIN_C | op::CALL_BUILTIN_CC | op::CONST_BUILTIN => {
                     Some(enc::imm16(w))
@@ -115,7 +118,7 @@ pub fn jit_eligibility(prog: &Program, kinds: &Kinds) -> Result<(), JitRefusal> 
                 _ => None,
             };
             if let Some(id) = id {
-                if builtin_sig(id).callback.is_some() {
+                if matches!(BUILTINS.get(id as usize).map(|b| &b.kind), Some(BKind::Removed)) {
                     let name = BUILTINS.get(id as usize).map(|b| b.name).unwrap_or("?");
                     let (line, col) = f.pos_at(at as u32);
                     return Err(JitRefusal::Callbacks {

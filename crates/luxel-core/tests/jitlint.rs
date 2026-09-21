@@ -18,32 +18,10 @@ fn kinds_of(prog: &Program) -> luxel_core::kinds::Kinds {
 // ------------------------------------------------------------ eligibility
 
 #[test]
-fn a_callback_builtin_refuses_the_whole_program() {
-    let prog = build(
-        "var a = array(4)\n\
-         export function beforeRender(delta) {\n\
-           arrayMutate(a, (v, i) => 1)\n\
-         }\n\
-         export function render(i) { hsv(a[0], 1, 1) }\n",
-    );
-    let kinds = kinds_of(&prog);
-    let err = jit_eligibility(&prog, &kinds).expect_err("arrayMutate is refused");
-    let JitRefusal::Callbacks { name, line, .. } = &err;
-    assert_eq!(*name, "arrayMutate");
-    assert_eq!(*line, 3, "anchored on the call site");
-    assert_eq!(err.id(), "callbacks");
-    assert!(
-        err.text().contains("arrayMutate") && err.text().contains("callback"),
-        "unhelpful wording: {}",
-        err.text()
-    );
-}
-
-#[test]
-fn every_callback_builtin_is_found_by_signature_not_by_name() {
-    // The six of docs/jit-design.md §4. They are found through
-    // `builtin_sig(..).callback`, so #626 removing them removes the refusal
-    // with no edit here.
+fn every_callback_helper_is_eligible_since_it_is_a_prelude_function() {
+    // The six of docs/jit-design.md §4 are pattern-language prelude
+    // functions since #626: the compiler never emits a builtin call for
+    // them, so nothing in the source forces interpreter mode.
     for call in [
         "arrayForEach(a, (v, i) => 0)",
         "arrayMutate(a, (v, i) => 1)",
@@ -57,18 +35,41 @@ fn every_callback_builtin_is_found_by_signature_not_by_name() {
         );
         let prog = build(&src);
         let kinds = kinds_of(&prog);
-        assert!(
-            jit_eligibility(&prog, &kinds).is_err(),
-            "{call} must force interpreter mode"
+        assert_eq!(
+            jit_eligibility(&prog, &kinds),
+            Ok(()),
+            "{call} is a prelude function and must not force interpreter mode"
         );
     }
 }
 
 #[test]
-fn a_callback_builtin_used_as_a_value_still_refuses() {
-    let prog = build("var f = arrayMutate\nexport function render(i) { hsv(0, 1, 1) }\n");
+fn a_removed_builtin_in_the_words_still_refuses() {
+    // The tombstone check: a stale or hand-built blob that calls one of
+    // the removed ids is refused at the call word. The compiler cannot
+    // produce this, so the word is patched in by hand.
+    use luxel_core::vm::{BKind, Words, BUILTINS};
+    let removed = BUILTINS
+        .iter()
+        .position(|b| b.name == "arrayMutate" && matches!(b.kind, BKind::Removed))
+        .expect("arrayMutate is a tombstone") as u32;
+    let mut prog = build("export function render(i) { hsv(sin(i), 1, 1) }\n");
     let kinds = kinds_of(&prog);
-    assert!(jit_eligibility(&prog, &kinds).is_err());
+    assert_eq!(jit_eligibility(&prog, &kinds), Ok(()));
+    // Replace the `sin` call with the tombstone: CallBuiltin = 0x39,
+    // id in bits 8..24, argc in bits 24..32.
+    let sin = BUILTINS.iter().position(|b| b.name == "sin").unwrap() as u32;
+    let mut words: Vec<u32> = prog.words.to_vec();
+    let at = words
+        .iter()
+        .position(|&w| w & 0xFF == 0x39 && (w >> 8) & 0xFFFF == sin)
+        .expect("the sin call word");
+    words[at] = 0x39 | (removed << 8) | (words[at] & 0xFF00_0000);
+    prog.words = Words::Owned(words);
+    let err = jit_eligibility(&prog, &kinds).expect_err("a tombstone call is refused");
+    let JitRefusal::Callbacks { name, .. } = &err;
+    assert_eq!(*name, "arrayMutate");
+    assert_eq!(err.id(), "callbacks");
 }
 
 #[test]
@@ -126,9 +127,14 @@ fn a_two_kind_global_is_named_and_anchored_on_the_widening_store() {
 
 #[test]
 fn a_callback_param_is_named_from_debug_info_and_anchored_in_its_function() {
+    // A callback held in a VARIABLE is a run-time value: #626's
+    // specialisation cannot bind it, so the prelude's shared copy calls it
+    // through `CallValue` and its params are boxed. (A literal lambda or a
+    // named function at the call site is specialised and stays typed.)
     let src = "var a = array(4)\n\
+               var bump = (v, i) => v + 1\n\
                export function beforeRender(delta) {\n\
-                 arrayMutate(a, (v, i) => v + 1)\n\
+                 arrayMutate(a, bump)\n\
                }\n\
                export function render(i) { hsv(a[0], 1, 1) }\n";
     let prog = build(src);
@@ -139,7 +145,7 @@ fn a_callback_param_is_named_from_debug_info_and_anchored_in_its_function() {
         .find(|l| l.name == "v" && l.scope == DynScope::Local)
         .unwrap_or_else(|| panic!("no lint for the lambda's `v`: {lints:?}"));
     assert_eq!(v.cause, DynCause::CallbackParam);
-    assert_eq!(v.line, 3, "the lambda's own line");
+    assert_eq!(v.line, 2, "the lambda's own line");
     assert!(
         !v.fn_name.is_empty(),
         "a local lint names the function it lives in"
