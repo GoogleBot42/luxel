@@ -47,6 +47,29 @@ on:
 permissions:
   contents: write        # create releases + upload assets (never commits)
 
+# ===========================================================================
+# REMOVE THIS BLOCK IN THE RELEASE *AFTER* THE REPARTITION SHIPS (Gitea #501)
+# ===========================================================================
+# MIGRATING_RELEASE=1 tells tools/image-check.sh to weigh every board's image
+# against the OLD 1 MiB OTA slot instead of the board's new slot, with the
+# margin floor relaxed to 0 % — "it fits the old slot" is the whole
+# requirement for this one release.
+#
+# Why it has to be on for exactly one release: a device still running the
+# pre-#501 table installs this image INTO A 1 MiB SLOT — its own running
+# firmware is what writes it — so an image that only fits the new 1.25 MiB
+# slot would be rejected at /api/ota and nobody could migrate. And the floor
+# has to come down because the repartition is the thing that ends the
+# squeeze; holding 3 % of the old slot would block the release that makes the
+# slot bigger.
+#
+# Once a release has shipped with this on, every reachable device is on the
+# new table and this block must go — leaving it would silently keep gating
+# the fleet at 1 MiB and throw away the headroom #501 bought. The release
+# checklist in docs/releases.md carries the same reminder.
+env:
+  MIGRATING_RELEASE: "1"
+
 jobs:
   release:
     # Gitea Actions also picks up .github/workflows/ — this guard makes sure
@@ -103,7 +126,9 @@ jobs:
           V=${{ steps.ver.outputs.version }}
           cp dist-luxa/web-assets.luxa "dist/luxel-web-assets-$V.luxa"
           tar -C web/dist -czf "dist/luxel-web-dist-$V.tar.gz" .
-          # the LUXA must fit the 0x0F0000 assets partition
+          # the LUXA must fit the 0x0F0000 assets partition — the SMALLEST
+          # one in the fleet (partitions.csv; the 16 MB board's is 0x3F0000),
+          # and one bundle ships to all of them, so the small one is the bound
           LUXA_MAX=$((0x0F0000))
           SZ=$(stat -c%s dist-luxa/web-assets.luxa)
           [ "$SZ" -le "$LUXA_MAX" ] || { echo "::error::web-assets.luxa ($SZ B) exceeds the assets partition ($LUXA_MAX B)"; exit 1; }
@@ -113,7 +138,6 @@ jobs:
         # Sequential in one job so the Xtensa toolchain downloads once.
         run: |
           V=${{ steps.ver.outputs.version }}
-          ASSETS_OFF=$((0x310000))
           mkdir -p elfs
           # s3-devkit/c6-devkit/s3-hub75/seengreat-hub75 are UNTESTED ON METAL
           # (no bench hardware) — they ship as build artifacts only; see
@@ -145,16 +169,35 @@ jobs:
               c6-devkit-hosted)  EXTRAS="$EXTRAS board-c6-devkit";;
               *)                 EXTRAS="$EXTRAS board-$board";;
             esac
+            # Where the web bundle is written into the merged image. Per
+            # board since Gitea #501: the 16 MB table (board-seengreat-hub75)
+            # puts assets at 0xA10000, the 4 MB one at 0x310000, and the old
+            # literal would have landed the bundle in the middle of ota_1 on
+            # the 16 MB board. Read it out of the very csv the image was
+            # merged with, same as firmware/build-esp32.sh does.
+            BOARD_FEAT=""
+            for e in $EXTRAS; do case "$e" in board-*) BOARD_FEAT="$e";; esac; done
+            ASSETS_OFF=$( . firmware/board-target.sh
+                          board_partitions "$BOARD_FEAT"
+                          awk -F, '$1 ~ /^[[:space:]]*assets[[:space:]]*$/ {
+                                     gsub(/[[:space:]]/, "", $4); print $4; exit }' \
+                              "firmware/$PARTITIONS" )
+            [ -n "$ASSETS_OFF" ] || { echo "::error::no assets row for $BOARD_FEAT"; exit 1; }
+            echo "assets partition offset for $board: $ASSETS_OFF"
             nix build ".#luxel-fw-$board" --print-build-logs --out-link "result-$board"
             # load-bearing features must be linked (the //SIZETEST guard) AND
-            # the app image must keep a margin in the 1 MiB OTA slot — both
-            # live in image-check.sh; the margin floor is Gitea #160.
+            # the app image must keep a margin in its OTA slot (per board
+            # since #501; EXPECT_FEATURES names the board, so image-check
+            # resolves the slot itself — and the workflow-level
+            # MIGRATING_RELEASE above overrides it while the fleet migrates)
+            # — both live in image-check.sh; the margin floor is Gitea #160.
             EXPECT_FEATURES="$EXTRAS" tools/image-check.sh "result-$board/luxel-fw-ota.bin" \
               || { echo "::error::$board image failed tools/image-check.sh (missing load-bearing feature, or too little OTA-slot margin — see its output above)"; exit 1; }
             cp "result-$board/luxel-fw-ota.bin" "dist/luxel-$board-$V-ota.bin"
             # full image = merged (bootloader + partitions + app, 0xFF-padded
-            # to 4 MB) with the web assets written into their partition —
-            # the same composition as firmware/build-esp32.sh `image`
+            # to the table's flash size) with the web assets written into
+            # their partition — the same composition as
+            # firmware/build-esp32.sh `image`
             cp "result-$board/luxel-fw.bin" "dist/luxel-$board-$V-full.bin"
             chmod +w "dist/luxel-$board-$V-full.bin"
             # hosted-UI images have no asset reader — leave their assets

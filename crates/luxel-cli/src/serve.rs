@@ -874,8 +874,15 @@ fn status_json(state: &State) -> String {
     } else {
         String::new()
     };
+    // `partitions` (Gitea #501): the firmware reports the flash layout it is
+    // running so a fleet tool can tell a migrated device from one still on
+    // the pre-#501 1 MiB-slot table. The mirror has no flash at all, so it
+    // reports the honest answer — a native layout, nothing to migrate —
+    // rather than omitting the key and making every client handle two
+    // shapes. See docs/api.md.
+    let partitions = ",\"partitions\":{\"layout\":\"native\",\"migrated\":true,\"ota_slot_bytes\":0,\"storage_bytes\":0,\"assets_bytes\":0}";
     format!(
-        "{{\"name\":\"{}\",\"fps\":{},\"out_fps\":{},\"rescan_hz\":{},\"pixels\":{},\"max_pixels\":{},\"geom\":{},\"caps\":{},\"slot\":\"native\",\"version\":\"{}\",\"heap_free\":{},\"engine_heap\":{}{},\"live\":{},\"vmerr\":{}}}",
+        "{{\"name\":\"{}\",\"fps\":{},\"out_fps\":{},\"rescan_hz\":{},\"pixels\":{},\"max_pixels\":{},\"geom\":{},\"caps\":{},\"slot\":\"native\",\"version\":\"{}\",\"heap_free\":{},\"engine_heap\":{}{},\"live\":{},\"vmerr\":{}{}}}",
         json_escape(&state.name.lock().unwrap()),
         fps,
         state.out_fps.load(Ordering::Relaxed),
@@ -889,7 +896,8 @@ fn status_json(state: &State) -> String {
         state.engine_heap.load(Ordering::Relaxed),
         psram,
         live,
-        vmerr
+        vmerr,
+        partitions
     )
 }
 

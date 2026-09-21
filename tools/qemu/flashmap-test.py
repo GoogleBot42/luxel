@@ -18,9 +18,9 @@ serial narration that:
   3. the archive parsed THROUGH the mapping (`assets: 2 files installed`)
      — the TOC bytes came out of the mapped window, not read_nor;
   4. the pattern store mapped its EXTENT REGION the same way
-     (`flashmap: pattern store 0x230000+0xe0000 -> 0x3f4xxxxx (14 x 64 KiB
+     (`flashmap: pattern store 0x2b0000+0x60000 -> 0x3f4xxxxx (6 x 64 KiB
      pages from entry M), self-check ok`) into the entries right after the
-     assets mapping, and WALKED ITS FILE LOG on it (`patterns: log 749568
+     assets mapping, and WALKED ITS FILE LOG on it (`patterns: log 225280
      B, 0 patterns, 0 B used, 0 B reclaimable, 0 files (0 torn, 0
      resyncs), cursor 0` — a virgin flash, so the format key mismatches,
      the key area is wiped and the log holds nothing; a non-zero count
@@ -67,21 +67,29 @@ ASSETS_OFFSET = 0x310000  # partitions.csv: assets, 0x310000, 0xF0000
 ASSETS_LEN = 0xF0000
 DROM_BASE = 0x3F400000
 PAGE = 0x10000
-# The extent region: everything after the 128 KiB key area
-# (firmware/src/patterns.rs EXT_OFF / EXT_LEN), mapped read-only at boot.
-STORE_OFFSET = 0x230000
-STORE_LEN = 0xE0000
-# The packed file log is everything left in it after the ad-hoc live-coding
-# slot: 0x49000..0x100000 partition-relative (patterns.rs LOG_OFF / LOG_LEN),
-# 183 x 4 KiB = 732 KiB.
-LOG_BYTES = 0x100000 - 0x49000
+# The `storage` partition and the EXTENT REGION inside it: everything after
+# the 128 KiB key area (firmware/src/patterns.rs EXT_OFF), mapped read-only at
+# boot.  Both derived from partitions.csv rather than typed twice — the #501
+# repartition moved storage from 0x210000+1 MiB to 0x290000+512 KiB and these
+# were the constants that silently went stale.
+STORAGE_OFFSET = 0x290000   # partitions.csv: storage, 0x290000, 0x80000
+STORAGE_LEN = 0x80000
+KEY_AREA_LEN = 0x20000      # patterns.rs STORE_LEN / KEY_AREA_LEN — layout-independent
+STORE_OFFSET = STORAGE_OFFSET + KEY_AREA_LEN
+STORE_LEN = STORAGE_LEN - KEY_AREA_LEN
+# The packed file log is everything left in the partition after the ad-hoc
+# live-coding slot: it starts at 0x49000 partition-relative (patterns.rs
+# LOG_OFF) and runs to the end — 55 x 4 KiB = 220 KiB on this layout.
+LOG_AT = 0x49000
+LOG_BYTES = STORAGE_LEN - LOG_AT
 
 MAP_LINE = re.compile(
     r"flashmap: assets 0x310000\+0xf0000 -> 0x([0-9a-f]+) \((\d+) x 64 KiB pages from entry (\d+)\), self-check ok"
 )
 TOC_LINE = "assets: 2 files installed"
 CODE_LINE = re.compile(
-    r"flashmap: pattern store 0x230000\+0xe0000 -> 0x([0-9a-f]+) \((\d+) x 64 KiB pages from entry (\d+)\), self-check ok"
+    rf"flashmap: pattern store {STORE_OFFSET:#x}\+{STORE_LEN:#x} -> 0x([0-9a-f]+) "
+    r"\((\d+) x 64 KiB pages from entry (\d+)\), self-check ok"
 )
 STORE_LINE = re.compile(
     r"patterns: log (\d+) B, (\d+) patterns, (\d+) B used, (\d+) B reclaimable, "

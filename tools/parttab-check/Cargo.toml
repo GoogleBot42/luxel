@@ -1,0 +1,34 @@
+# Host test rig for firmware/src/parttab/raw.rs — the partition-table codec
+# the repartition (Gitea #501) reasons with: entry decoding, label lookup,
+# the "is this table mine?" discriminator, and the flash-size arithmetic.
+#
+# It exists because none of that is testable on the device: the only way to
+# find out whether the firmware reads a table correctly would be to write
+# one to flash and reboot, and getting it wrong is a brick recoverable only
+# over serial — which nothing on the bench currently has. So the codec is
+# kept pure (`alloc` and nothing else), this crate compiles that exact file
+# for the host, and it tests it against tables built at test time from the
+# REAL firmware/partitions*.csv by esp-idf-part, the same crate espflash and
+# firmware/build.rs use to produce the bytes that actually ship.
+#
+# Same idiom as tools/patlog-check: a workspace member so `cargo test
+# --workspace` covers it.
+#
+#   cargo test -p parttab-check
+[package]
+name = "parttab-check"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+
+# The tables under test are serialized from the real CSVs by the same crate
+# the build script uses, so a test sees the bytes the device sees — not a
+# hand-transcribed copy that can drift from the CSV silently.
+[dev-dependencies]
+esp-idf-part = "0.6"

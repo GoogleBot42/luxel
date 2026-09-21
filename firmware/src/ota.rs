@@ -205,6 +205,15 @@ fn write_boot_attempts(n: u8) {
     });
 }
 
+/// Zero the failed-boot counter before a DELIBERATE reboot. The layout
+/// migrator (migrate.rs) reboots up to twice on its way through, and a
+/// migration that resumes across a power cut must not look like a
+/// crash-loop to [preboot_guard] — which, once staging has begun, would
+/// roll back to an ota_1 that is no longer a bootable image (Gitea #501).
+pub fn clear_boot_attempts() {
+    write_boot_attempts(0);
+}
+
 /// How many aborted takeover attempts have already rebooted to retry.
 #[cfg_attr(not(feature = "wled-takeover"), allow(dead_code))]
 pub fn takeover_retries() -> u8 {
@@ -428,7 +437,14 @@ impl Drop for OtaWriter {
 /// locates the inactive slot. Stream sectors with [OtaWriter::write];
 /// [OtaWriter::commit] activates. Dropping without commit leaves otadata
 /// untouched (the half-written slot stays inactive).
-pub fn begin() -> Result<OtaWriter, &'static str> {
+///
+/// `expected` is the request's Content-Length (0 when there isn't one). An
+/// image too big for the slot is refused HERE, before a single sector is
+/// erased — and on a device still carrying the pre-#501 1 MiB table the
+/// error says so, because after #501 a normal release image is up to
+/// 1.25 MiB and "it just failed" would be a mystery on exactly the devices
+/// that have no serial console (Gitea #501).
+pub fn begin(expected: u32) -> Result<OtaWriter, &'static str> {
     // claim flag + driver together inside the FLASH critical section (the
     // C3 target has no atomic swap, so the mutex provides the atomicity)
     let claimed = FLASH.lock(|c| {
@@ -489,6 +505,15 @@ pub fn begin() -> Result<OtaWriter, &'static str> {
         FLASH.lock(|c| *c.borrow_mut() = Some(flash));
         return Err("next OTA slot missing from partition table");
     };
+
+    if expected > capacity {
+        FLASH.lock(|c| *c.borrow_mut() = Some(flash));
+        return Err(if crate::parttab::matches_flash() {
+            "image larger than the OTA slot"
+        } else {
+            "image larger than this device's OTA slot — its partition table has not been migrated yet; install the migrating release (an image that still fits the old 1 MiB slot) first, then retry"
+        });
+    }
 
     let slot = slot_name(next);
     println!("ota: writing {} at {:#x} (capacity {})", slot, offset, capacity);

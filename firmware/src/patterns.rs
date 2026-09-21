@@ -162,10 +162,13 @@ impl anf::NorFlash for AsyncFlash<'_> {
 }
 impl anf::MultiwriteNorFlash for AsyncFlash<'_> {}
 
-/// The `storage` partition — ours exclusively (partitions.csv). Expected
-/// bounds; the actual region is resolved from the live table at boot.
-pub const PAT_START: u32 = 0x21_0000;
-pub const PAT_LEN: u32 = 0x10_0000;
+/// The `storage` partition is ours exclusively, and BOTH its offset and
+/// its length come from the live partition table — never from a constant
+/// here (Gitea #501: the 4 MB layout's store is 512 KiB and the 16 MB
+/// layout's is 4 MiB, and a device carrying the pre-#501 1 MiB one has to
+/// keep working long enough to migrate itself). The key area below is
+/// fixed-size on every layout; everything after it scales with the
+/// partition.
 
 /// Erase-page size — the reclaim unit, and the map's page.
 const PAGE: u32 = 4096;
@@ -178,16 +181,24 @@ const PAGE: u32 = 4096;
 const STORE_LEN: u32 = 0x2_0000;
 
 /// The EXTENT REGION: everything after the key area, mapped read-only
-/// through the cache MMU at boot. Both bounds are 64 KiB-aligned (the MMU
-/// page size), so this is 14 MMU entries.
+/// through the cache MMU at boot. Its START is 64 KiB-aligned by
+/// construction ([STORE_LEN] is a multiple of the MMU page size) and its
+/// END is the partition's, which every table keeps 64 KiB-aligned — both
+/// asserted against the live table in [init].
 const EXT_OFF: u32 = STORE_LEN;
-const EXT_LEN: u32 = PAT_LEN - STORE_LEN;
-const _: () = assert!((PAT_START + EXT_OFF) % 0x1_0000 == 0);
-const _: () = assert!(EXT_LEN % 0x1_0000 == 0);
+const _: () = assert!(EXT_OFF % 0x1_0000 == 0);
+/// Length of the extent region on THIS device: the storage partition minus
+/// the key area. Zero until [init] resolves the partition.
+fn ext_len() -> u32 {
+    REGION_LEN.load(Ordering::Relaxed).saturating_sub(EXT_OFF)
+}
 
-/// Resolved flash offset of the `storage` partition, or 0 if absent (old
-/// table) — every op then refuses / reads empty. Set once in [init].
+/// Resolved flash offset of the `storage` partition, or 0 if absent (a
+/// foreign table) — every op then refuses / reads empty. Set once in
+/// [init].
 static REGION: AtomicU32 = AtomicU32::new(0);
+/// …and its length, from the same table entry. 0 whenever REGION is 0.
+static REGION_LEN: AtomicU32 = AtomicU32::new(0);
 /// Next pattern seq (monotonic). API id = `seq ^ ID_MASK` (mirrors serve.rs).
 static NEXT_SEQ: AtomicU32 = AtomicU32::new(0);
 /// Next write stamp (monotonic). The highest stamp for a seq is its current
@@ -261,12 +272,20 @@ const PAGES: usize = (STORE_LEN / PAGE) as usize;
 /// the driver is out, and nothing else writes this range (the extent
 /// region starts at [EXT_OFF] = `STORE_LEN`, past the map's range). Any
 /// write that goes AROUND sequential-storage inside the range (the format
-/// wipe in [init]) must call `invalidate_cache_state()`.
+/// wipe in [init]) must reset it (`*store_cache() = PageStateCache::new()`).
 struct StoreCache(core::cell::UnsafeCell<PageStateCache<PAGES>>);
 // SAFETY: only reachable through `store_cache`, whose caller holds the
 // exclusive flash lease (see above).
 unsafe impl Sync for StoreCache {}
 static STORE_CACHE: StoreCache = StoreCache(core::cell::UnsafeCell::new(PageStateCache::new()));
+
+/// Which key-area base [STORE_CACHE] currently describes. The cache is
+/// per-REGION state, and the layout migrator (migrate.rs) addresses TWO
+/// key areas in one boot — the old partition's and the new one's — so
+/// `with_store!` invalidates the cache whenever the base changes. Without
+/// it sequential-storage would trust page states read from the other
+/// region's flash (Gitea #501).
+static CACHE_BASE: AtomicU32 = AtomicU32::new(u32::MAX);
 
 /// The shared cache. Call only from inside a `with_store!` body or a
 /// helper it calls — i.e. while the flash lease is held.
@@ -295,9 +314,19 @@ macro_rules! with_store {
         match lease.0.as_mut() {
             None => None,
             Some(flash) => {
+                let base: u32 = $start;
+                // Not `swap`: riscv32imc has no atomic read-modify-write.
+                // A plain load/store is enough — the flash LEASE taken two
+                // lines up is what serializes this, across both cores.
+                if CACHE_BASE.load(core::sync::atomic::Ordering::Relaxed) != base {
+                    CACHE_BASE.store(base, core::sync::atomic::Ordering::Relaxed);
+                    // sequential-storage keeps `invalidate_cache_state`
+                    // crate-private; a fresh cache is the same thing.
+                    *store_cache() = PageStateCache::new();
+                }
                 #[allow(unused_mut)]
                 let mut $af = AsyncFlash::new(flash);
-                let $range: Range<u32> = $start..($start + STORE_LEN);
+                let $range: Range<u32> = base..(base + STORE_LEN);
                 let mut buf_vec = alloc::vec![0u8; BUF];
                 let $buf: &mut [u8] = buf_vec.as_mut_slice();
                 Some(block_on(async move { $body }))
@@ -327,13 +356,30 @@ pub const LAYOUT_KEY: u32 = 0x7FFF_FFF9;
 /// nvs device record is a fixed struct with no room for a string.
 pub const NAME_KEY: u32 = 0x7FFF_FFF8;
 
+/// The reserved keys live in this range, top-down. The migrator
+/// (migrate.rs) sweeps the WHOLE range rather than a hand-written list, so
+/// adding a key above never needs a second edit there — and a device
+/// carrying a key from a NEWER firmware than the one migrating it keeps it.
+pub const RESERVED_LO: u32 = 0x7FFF_FFF0;
+pub const RESERVED_HI: u32 = 0x7FFF_FFFF;
+const _: () = assert!(NAME_KEY >= RESERVED_LO && FORMAT_KEY <= RESERVED_HI);
+
 /// Store a small blob under a reserved key. False if storage is unavailable or
 /// the blob is too large for one page.
 pub fn store_blob(key: u32, bytes: &[u8]) -> bool {
+    let start = REGION.load(Ordering::Relaxed);
+    store_blob_at(start, key, bytes)
+}
+
+/// [store_blob] against an EXPLICIT key-area base — the migrator writes the
+/// new region's key area before the partition table that names it exists,
+/// so it cannot go through [REGION]. The key area is [STORE_LEN] bytes on
+/// every layout, which is what makes one `PageStateCache<PAGES>` legal for
+/// both; the caller must invalidate that cache when it switches regions.
+pub fn store_blob_at(start: u32, key: u32, bytes: &[u8]) -> bool {
     if bytes.len() > BLOB_MAX {
         return false;
     }
-    let start = REGION.load(Ordering::Relaxed);
     if start == 0 {
         return false;
     }
@@ -349,7 +395,11 @@ pub fn store_blob(key: u32, bytes: &[u8]) -> bool {
 
 /// Read a blob previously written with [store_blob].
 pub fn read_blob(key: u32) -> Option<Vec<u8>> {
-    let start = REGION.load(Ordering::Relaxed);
+    read_blob_at(REGION.load(Ordering::Relaxed), key)
+}
+
+/// [read_blob] against an EXPLICIT key-area base — see [store_blob_at].
+pub fn read_blob_at(start: u32, key: u32) -> Option<Vec<u8>> {
     if start == 0 {
         return None;
     }
@@ -384,7 +434,7 @@ pub fn read_blob(key: u32) -> Option<Vec<u8>> {
 //   CUR_BC_OFF       ad-hoc LXBC bytes, TWO sides of CUR_BC_MAX: a push
 //                    writes the side the running engine is NOT executing
 //                    from, so a mapped engine never sees its code change
-//   LOG_OFF          the packed file log: LOG_LEN bytes of exact-sized,
+//   LOG_OFF          the packed file log: log_len() bytes of exact-sized,
 //                    4-byte-aligned, self-describing pattern files
 //                    (patlog.rs)
 const CUR_OFF: u32 = EXT_OFF;
@@ -398,14 +448,27 @@ const CUR_MAGIC: u32 = 0x4C58_4350; // "LXCP"
 /// The bc side holding the RUNNING ad-hoc blob (the last successful
 /// store_current); the next store writes the other one.
 static CUR_BC_SIDE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
-/// The file log: everything left in the extent region after the ad-hoc
-/// slot. 0x49000..0x100000 = 732 KiB = 183 pages.
+/// Where the file log starts inside the partition — everything left in the
+/// extent region after the ad-hoc slot. IDENTICAL on every layout, which is
+/// what makes a layout migration a byte move of the log rather than a
+/// reinterpretation of it (Gitea #501); only [log_len] differs.
 const LOG_OFF: u32 = CUR_BC_OFF + 2 * CUR_BC_MAX;
-const LOG_LEN: u32 = EXT_OFF + EXT_LEN - LOG_OFF;
+/// The log's length on THIS device: everything the storage partition has
+/// left after the key area and the ad-hoc slot. 732 KiB under the pre-#501
+/// 1 MiB layout, 220 KiB in the 4 MB layout's 512 KiB store, ~3.9 MiB in
+/// the 16 MB layout's.
+fn log_len() -> u32 {
+    REGION_LEN.load(Ordering::Relaxed).saturating_sub(LOG_OFF)
+}
+/// The smallest storage partition this layout can live in: the ad-hoc slot
+/// plus enough log for one largest-possible pattern and a page of slack.
+/// [init] refuses anything smaller rather than running a store whose log
+/// cannot hold a single file.
+pub const MIN_STORAGE: u32 = LOG_OFF + MAX_SOURCE as u32 + MAX_BC as u32 + 2 * PAGE;
 const _: () = assert!(CUR_SRC_MAX as usize >= MAX_SOURCE);
 const _: () = assert!(CUR_BC_MAX as usize >= MAX_BC);
-const _: () = assert!(LOG_OFF % PAGE == 0 && LOG_LEN % PAGE == 0);
-const _: () = assert!(LOG_LEN as usize >= MAX_SOURCE + MAX_BC);
+const _: () = assert!(LOG_OFF % PAGE == 0);
+const _: () = assert!(MIN_STORAGE % PAGE == 0);
 const _: () = assert!(PAGE == patlog::PAGE);
 
 fn cur_bc_off(side: u8) -> u32 {
@@ -447,7 +510,7 @@ pub fn raw() -> Option<&'static [u8]> {
 /// assets::map_region. Once, from init, right after REGION resolves.
 #[inline(never)]
 fn map_ext(start: u32) {
-    let m = match crate::flashmap::map(start + EXT_OFF, EXT_LEN) {
+    let m = match crate::flashmap::map(start + EXT_OFF, ext_len()) {
         Ok(m) => m,
         Err(e) => {
             println!("flashmap: pattern store not mapped ({}) — flash-controller reads", e.name());
@@ -469,7 +532,7 @@ fn map_ext(start: u32) {
     println!(
         "flashmap: pattern store 0x{:x}+0x{:x} -> 0x{:x} ({} x {} KiB pages from entry {}), self-check ok",
         m.phys(),
-        EXT_LEN,
+        ext_len(),
         m.vaddr(),
         m.pages(),
         crate::flashmap::page_size() / 1024,
@@ -543,25 +606,26 @@ struct NorLog {
     buf: Vec<u8>,
     at: u32,
     n: u32,
+    len: u32,
 }
 
 impl NorLog {
-    fn new(base: u32) -> NorLog {
-        NorLog { base, buf: alloc::vec![0u8; PAGE as usize], at: 0, n: 0 }
+    fn new(base: u32, len: u32) -> NorLog {
+        NorLog { base, len, buf: alloc::vec![0u8; PAGE as usize], at: 0, n: 0 }
     }
 }
 
 impl Arena for NorLog {
     fn len(&self) -> u32 {
-        LOG_LEN
+        self.len
     }
     fn view(&mut self, off: u32, want: usize) -> Option<&[u8]> {
-        if off >= LOG_LEN {
+        if off >= self.len {
             return None;
         }
-        let need = (want as u32).min(LOG_LEN - off);
+        let need = (want as u32).min(self.len - off);
         if off < self.at || off + need > self.at + self.n {
-            let n = PAGE.min(LOG_LEN - off);
+            let n = PAGE.min(self.len - off);
             if !crate::assets::read_chunk(self.base + off, &mut self.buf[..n as usize]) {
                 self.n = 0;
                 return None;
@@ -586,8 +650,45 @@ fn with_log<R>(f: impl FnOnce(&mut dyn Arena) -> R) -> Option<R> {
     if region == 0 {
         return None;
     }
-    let mut a = NorLog::new(region + LOG_OFF);
+    let mut a = NorLog::new(region + LOG_OFF, log_len());
     Some(f(&mut a))
+}
+
+// --- what the layout migrator needs (migrate.rs, Gitea #501) ---
+
+/// Offset of the packed file log inside the storage partition. Identical on
+/// every layout — which is the whole reason a migration only has to move
+/// bytes, never reinterpret them.
+pub const LOG_AT: u32 = LOG_OFF;
+/// The key area's length: also identical on every layout.
+pub const KEY_AREA_LEN: u32 = STORE_LEN;
+
+/// The live records, ascending by log offset — the migrator's input to
+/// `patlog::plan`.
+pub fn index_snapshot() -> Vec<Rec> {
+    INDEX.lock(|c| c.borrow().clone())
+}
+
+/// Did the store come up this boot? False when the `storage` partition was
+/// absent, unusable, or unreadable — in which case the RAM index is empty
+/// for a reason that is NOT "no patterns", and a migration must refuse
+/// rather than carry an empty library across.
+pub fn store_ready() -> bool {
+    REGION.load(Ordering::Relaxed) != 0
+}
+
+/// True when the log holds more distinct patterns than the RAM index can
+/// name. Every mutation already refuses in that state, and so must a
+/// migration: it would repack the log from an index that does not name
+/// every live file and silently drop the rest.
+pub fn index_overfull() -> bool {
+    OVERFULL.load(Ordering::Relaxed)
+}
+
+/// Run `f` over THIS device's log as an [Arena] — the migrator reads the
+/// old log through exactly the reader everything else uses.
+pub fn with_log_arena<R>(f: impl FnOnce(&mut dyn Arena) -> R) -> Option<R> {
+    with_log(f)
 }
 
 // --- the RAM index ---
@@ -773,21 +874,30 @@ fn reload() -> patlog::Scan {
 /// table).
 pub fn init() {
     let start = match crate::ota::data_partition("storage") {
-        Some((off, len)) if len >= PAT_LEN => off,
+        // Both bounds must be MMU-page aligned: the extent region is mapped
+        // read-only at boot, and flashmap::map only takes aligned offsets.
+        Some((off, len))
+            if len >= MIN_STORAGE && off % 0x1_0000 == 0 && len % 0x1_0000 == 0 =>
+        {
+            REGION_LEN.store(len, Ordering::Relaxed);
+            off
+        }
         Some((off, len)) => {
-            println!("patterns: storage partition too small ({} B at {:#x})", len, off);
+            println!(
+                "patterns: storage partition unusable ({} B at {:#x}; need >= {} B, 64 KiB-aligned)",
+                len, off, MIN_STORAGE
+            );
             REGION.store(0, Ordering::Relaxed);
+            REGION_LEN.store(0, Ordering::Relaxed);
             return;
         }
         None => {
             println!("patterns: no storage partition — library disabled (reflash to enable)");
             REGION.store(0, Ordering::Relaxed);
+            REGION_LEN.store(0, Ordering::Relaxed);
             return;
         }
     };
-    if start != PAT_START {
-        println!("patterns: storage @ {:#x}, expected {:#x} (csv drift?)", start, PAT_START);
-    }
     REGION.store(start, Ordering::Relaxed);
     map_ext(start);
     if raw().is_none() {
@@ -833,7 +943,7 @@ pub fn init() {
     );
     println!(
         "patterns: log {} B, {} patterns, {} B used, {} B reclaimable, {} files ({} torn, {} resyncs), cursor {} (storage @ {:#x})",
-        LOG_LEN, npat, s.live, dead, s.recs, s.torn, s.resync, s.cursor, start
+        log_len(), npat, s.live, dead, s.recs, s.torn, s.resync, s.cursor, start
     );
     if OVERFULL.load(Ordering::Relaxed) {
         println!(
@@ -1072,7 +1182,7 @@ pub fn store_stats() -> (u32, u32, u32, u32) {
         let idx = c.borrow();
         (idx.iter().map(|r| r.size()).sum::<u32>(), idx.len() as u32)
     });
-    let total = if REGION.load(Ordering::Relaxed) == 0 { 0 } else { LOG_LEN };
+    let total = if REGION.load(Ordering::Relaxed) == 0 { 0 } else { log_len() };
     (used, total, n, DEAD_BYTES.load(Ordering::Relaxed))
 }
 
@@ -1678,13 +1788,13 @@ async fn compact(region: u32, need: u32) -> bool {
         return false;
     };
     let old_end = CURSOR.load(Ordering::Relaxed);
-    if packed + need > LOG_LEN {
+    if packed + need > log_len() {
         // The TAIL will not take it. That is not the whole question when a
         // pinned record holds the cursor high: the space this repack frees
         // is then all *below* it, and `place_free` can use it. Refusing on
         // the tail alone is what left the rig at 49 of 119 patterns
         // (Gitea #388). Only erase nothing when there is nothing to gain.
-        if patlog::free_run_after(&places, LOG_LEN) < patlog::align_page(need) {
+        if patlog::free_run_after(&places, log_len()) < patlog::align_page(need) {
             return false;
         }
     }
@@ -1736,7 +1846,7 @@ async fn compact(region: u32, need: u32) -> bool {
         "patterns: compacted — {} files, {} B used, {} B free, {} B held below a pin ({} torn){}",
         s.recs,
         s.live,
-        LOG_LEN - s.cursor,
+        log_len() - s.cursor,
         DEAD_BYTES.load(Ordering::Relaxed),
         s.torn,
         if swept { "" } else { " — SWEEP FAILED" }

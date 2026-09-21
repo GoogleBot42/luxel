@@ -1,5 +1,100 @@
 # Update log
 
+## 2026-09-20 — Repartition: 1.25 MiB OTA slots, a 16 MB table, and a migration devices apply to themselves (#501)
+
+The OTA slot ran out. Measured on master the morning this landed, three of the nine
+release variants were already under `image-check`'s 3 % floor — `athom-music` 1.71 %,
+`esp32-generic` 2.09 %, `c6-devkit` 1.45 % — and only survived because `tools/ci.sh`
+gates three variants while release.yml gates all nine; a release cut would have failed.
+The cheap diets were spent (#501's own survey, 2026-09-19). So the table moved.
+
+**Two tables.** `firmware/partitions.csv` gives the 4 MB boards **1.25 MiB** app slots
+(`0x140000` each) and takes the 512 KiB out of `storage`, which drops 1 MiB → 512 KiB;
+`assets` keeps its offset *and* its size (`0x310000` + `0x0F0000`), so a migrating
+device's web bundle survives untouched where `assets.rs` already maps it. New
+`firmware/partitions-16mb.csv` gives `board-seengreat-hub75` — the one board whose
+module is known to carry 16 MB — 3 MiB slots, a 4 MiB store and a 3.9375 MiB assets
+partition, with the top 2 MiB deliberately unallocated. `board-s3-devkit` deliberately
+stays on the 4 MB table: generic S3 devkits ship 4/8/16 MB indistinguishably and a
+16 MB table on a 4 MB part is a serial-recovery brick. `firmware/build.rs` asserts each
+table's end offset and serializes the chosen one into the image;
+`board_partitions`/`board_ota_max` in `firmware/board-target.sh` are the shell-side copy.
+
+**Devices move themselves.** `firmware/src/migrate.rs`: on the first boot of the
+migrating release a device on the pre-#501 table copies itself into the new ota_0 if it
+is not already there, points the bootloader at it by erasing otadata (deliberately NOT
+the takeover's nvs wipe — nvs holds the WiFi credentials and nothing on the bench has
+serial), repacks the live pattern log into the old ota_1 as a staging area, writes the
+new `storage` region (reserved blobs through the store's own API, then the staged log),
+moves assets on 16 MB boards, and writes the table LAST as one sector. Every stage is
+re-runnable and marked in an `LXMG` header keyed to the target table, so a power cut
+costs work and not data. The device is **single-image from the start of staging until
+its next OTA** — that is what makes the old ota_1 free scratch. The residual risk is
+honest and documented: a cut inside that single 4 KiB table write is serial-recovery
+only, milliseconds, and the same window the WLED takeover has always had. A library that
+does not fit the smaller log **refuses** (`migration_blocked` on `/api/status`) rather
+than dropping patterns. The table primitives moved out of `takeover.rs` into
+`parttab.rs` + `parttab/raw.rs` and are now built on every board, because the two boards
+that ship no WLED installer are exactly the ones that still have to migrate; the
+takeover now writes the new table directly, so a via-WLED install lands on the new
+layout and never migrates.
+
+**The numbers** (credless flake builds against `origin/master` `b9c0632`). Weighed
+against the OLD 1 MiB slot, which is what a device that has not repartitioned writes
+into: `c6-devkit` 1,045,584 B — **2,992 B, 0.28 %** free — `athom-music` 1,040,560 B
+(8,016 B, 0.76 %), `esp32-generic` 1.15 %, `c6-devkit-hosted` 1.84 %, `pixelblaze-v3`
+2.43 %, the rest 5.4–6.2 %. The image grew +9,888…+17,808 B per variant; the two boards
+without `wled-takeover` pay most because they gain the whole table-writing layer the
+takeover boards already carried. The same images against the slot they land in:
+**20.2–25.0 %** free on the 4 MB boards, and 2,157,936 B / **68.6 %** on the Seengreat.
+Store: the pattern log goes 732 KiB (183 pages) → **220 KiB (55 pages)** on 4 MB,
+~3.7 MiB on 16 MB. A 12-pattern churned device repacks 61,820 B of live records into
+65,536 B, 29.1 % of the new log; **38 library-sized patterns** is the ceiling a 4 MB
+device can carry across (the old log held ~119; the Athom fill reached 118).
+
+**No hard-coded offsets, anywhere.** `tools/offset-check.py`, wired into `tools/ci.sh`,
+fails the gate on a literal partition offset in `firmware/src/**` or the flashing shell
+scripts; every address is read from a table by label or subtype. `patterns.rs` now takes
+both the offset AND the length of `storage` from the live table — the key area is a
+fixed 128 KiB and the log always starts at `0x49000` on every layout, which is precisely
+what makes the migration a byte move.
+
+**Two releases, one switch.** `MIGRATING_RELEASE=1` makes `tools/image-check.sh` weigh
+every image against the old 1,048,576 B slot with the margin floor at **0 %** — "it
+fits" is the whole requirement, because holding a floor against the old slot would block
+the release that makes the slot bigger. `.github/workflows/release.yml` carries it
+workflow-wide and it **must be removed in the next release**. Every release after this
+one may exceed 1 MiB and therefore cannot be installed on an un-migrated device;
+`/api/ota` now refuses an over-size image up front from Content-Length, before erasing a
+sector, and on an un-migrated device the error names the migrating release. A
+`migrate-off` cargo feature retires the migrator's ~12 KB later, with image-check
+asserting the marker in both directions so retiring it stays deliberate.
+`/api/status` gained a `partitions` object (layout, `migrated`, the three sizes, and the
+refusal fields when one applies); the native mirror reports `"layout":"native"` and
+zeroes so no client handles two shapes.
+
+**Verified: host and emulator. Not verified: any hardware.** `cargo test -p
+parttab-check` (six cases, tables serialized at test time from the real CSVs by the same
+`esp-idf-part` the build uses) covers the table arithmetic and both migration sums;
+`cargo test -p patlog-check`'s new `migrate.rs` unit-tests the staging repack, the
+byte-for-byte recovery, the refusal and a 16-point cut matrix. The QEMU suite grew from
+eight tests to sixteen: `tools/qemu/migrate-test.py` composes a pre-#501 flash — a
+hand-built old table (self-checked against `esp-idf-part`'s output for the new one), a
+real store written by the new `tools/storegen` with the real `sequential-storage` and
+`patlog` code, real credentials in nvs — and boots the stock image against it. It covers
+the migration from ota_0 and from ota_1 (self-copy + the extra reboot), a power cut at
+each re-runnable stage, the refusal, and the 16 MB layout by assertion. It earned its
+keep on its first run: the self-copy overlap guard compared the running image against the
+destination SLOT length rather than the copy length, so every device whose last OTA
+landed in ota_1 — half the fleet — would have refused to migrate, silently and forever.
+**No device has run any of this.** Two gaps are named rather than papered over: a cut
+inside the single table-sector write, and `move_assets`' copy branch, which only the
+16 MB layout takes and which QEMU's `esp32s3` machine will not run (it boots the
+bootloader and reads the table correctly, then the app prints nothing at all). The bench sequence is the Athom first — it is the one board on an
+agent-controllable power plug, so power-cut resume can actually be exercised — then the
+Seengreat, and only after the Athom is proven. Neither has serial. docs/UNTESTED.md
+carries that as its own item; docs/firmware.md ("Partition tables", "Layout migration")
+is the full story and docs/boards.md the per-board numbers.
 ## 2026-09-20 — JIT phase 0: kinds in the bytecode, LXBC v6 (#625)
 
 The first phase of the on-device JIT (#607, docs/jit-design.md) lands entirely on
@@ -5666,7 +5761,7 @@ OTA'd, `opbench` and `patbench` in the same run):
 | Athom, master | 104.9 | 6.379 | 167.51 | 626.23 | 15.469 |
 | Athom, shipped | **100.8** | **6.184** | **58.53** | **150.20** | **14.322** |
 | | −3.9 % | −3.1 % | **−65 % (2.86×)** | **−76 % (4.17×)** | −7.4 % |
-| panel, master | 84.0 | 4.752 | 45.39 | 102.36 | 11.696 |
+| panel, master | 84.0 | 4.752 | 45.41 | 102.36 | 11.696 |
 | panel, shipped | **83.4** | **4.719** | **44.79** | **101.16** | **11.531** |
 | | −0.7 % | −0.7 % | −1.3 % | −1.2 % | −1.4 % |
 

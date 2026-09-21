@@ -37,6 +37,36 @@ ticket); a self-review step; a ≤60-line final-report format that names the
 new store/API/wire names the NEXT agents need. Ticket bodies go in a sibling
 `tickets.md` fetched from the API so agents don't each hit Gitea.
 
+## 2b. The other shape: ONE big ticket, several agents, ONE worktree
+
+Some tickets are too big for one agent and too entangled to split into
+PRs — #501 (repartition + self-applied migration) was firmware, build
+plumbing, host tests, an emulator suite and eight docs at once. That runs
+as **one worktree, one branch, agents partitioned by FILE OWNERSHIP**, and
+it worked with zero conflicts:
+
+- The main agent keeps the hard-reasoning core (here `firmware/src/*.rs`)
+  and hands each subagent an explicit **"do not edit" list** naming every
+  file someone else owns, plus "you may READ all of them".
+- Subagents do NOT commit, push or open PRs — they leave the worktree
+  dirty and report. The main agent commits at the end, splitting by path
+  into reviewable commits. (Exactly one file straddled the split; the fix
+  was to stage a cut-down version for the earlier commit and the full one
+  for the later, so each commit still builds.)
+- When two agents legitimately need the same file (two rows of
+  `docs/tools.md`), scope them to their rows and tell both to **re-read
+  the file immediately before each edit**. That was enough.
+- A subagent's `git add` can stage build artifacts (`tools/storegen/target`)
+  — check `git status` for junk before committing and extend `.gitignore`.
+- **Freeze the core and announce it.** Once firmware stops changing,
+  `SendMessage` every running agent the final strings/behaviours they
+  assert on. The emulator agent had already composed images against an
+  older build; without that message its assertions would have been stale.
+- Their reports are worth more than their diffs: the QEMU agent found a
+  real overlap-guard bug that a code review, the host tests and the author
+  had all missed. Give the test-writing agent enough context to reason
+  about the code, not just to exercise it.
+
 ## 3. Feed later agents from earlier reports
 
 Each report's "for later agents" section becomes the "what master already

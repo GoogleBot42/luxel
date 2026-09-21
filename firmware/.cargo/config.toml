@@ -4,6 +4,14 @@
 # toolchain explicitly.
 target = "riscv32imc-unknown-none-elf"
 
+# NOTE: `--partition-table=partitions.csv` in the runners below is the 4 MB
+# table, hard-coded because cargo config has no conditionals. It is only what a
+# bare `cargo run` would flash; firmware/build-esp32.sh (the supported path)
+# overrides the runner with CARGO_TARGET_<TRIPLE>_RUNNER carrying the BOARD's
+# own table from `board_partitions` in firmware/board-target.sh, so a 16 MB
+# board flashes the 16 MB table (Gitea #501). Do not `cargo run` a
+# board-seengreat-hub75 build directly.
+#
 # NOTE: the rustflags below are what a bare `cargo build` / rust-analyzer uses.
 # The real builds (firmware/build-esp32.sh, tools/stack-check.sh, flake.nix) all
 # export RUSTFLAGS to add --remap-path-prefix (Gitea #441), and RUSTFLAGS

@@ -68,8 +68,10 @@ response as "no snapshot right now", not as an all-black frame.
  "slot":"ota_0","version":"0.1.39",
  "heap_free":104832,"heap_largest":73728,"engine_heap":21504,"live":null,
  "assets_mapped":true,"code_mapped":true,
- "store":{"used":18452,"total":749568,"dead":0,"patterns":3},
- "src":true,"bc":true,"web":[0,1,0],"vmerr":null}
+ "store":{"used":18452,"total":225280,"dead":0,"patterns":3},
+ "src":true,"bc":true,"web":[0,1,0],"vmerr":null,
+ "partitions":{"layout":"partitions.csv","migrated":true,"ota_slot_bytes":1310720,
+               "storage_bytes":524288,"assets_bytes":983040}}
 ```
 
 A HUB75 panel additionally carries the pipelined-output members — `out_fps`,
@@ -304,14 +306,16 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   build, or a refused boot self-check) — the pattern still runs, its
   bytecode is just read into a transient Vec first.
 - `store` — the pattern store's file log, in **BYTES** (they were 4 KiB
-  pages before Gitea #340): `used` by live files, `total` in the log
-  (749,568 = 183 × 4 KiB of the `storage` partition), `dead` held by
-  superseded and deleted files that the next compaction gives back, and how
-  many `patterns` are stored. One file holds a pattern's header, name,
-  source text and bytecode packed to its exact size — see docs/firmware.md
-  "The pattern store: a packed file log in a mapped region + a small key
-  area". `total` 0 means the store never came up — no `storage` partition,
-  or one too small.
+  pages before Gitea #340): `used` by live files, `total` in the log,
+  `dead` held by superseded and deleted files that the next compaction
+  gives back, and how many `patterns` are stored. One file holds a
+  pattern's header, name, source text and bytecode packed to its exact size
+  — see docs/firmware.md "The pattern store: a packed file log in a mapped
+  region + a small key area". **`total` follows the `storage` partition**,
+  so it says which layout the device is on as surely as `partitions` does:
+  225,280 (55 × 4 KiB) on the 4 MB table, ~3.7 MiB on the 16 MB one, and
+  749,568 (183 × 4 KiB) on a device that has not migrated yet. `total` 0
+  means the store never came up — no `storage` partition, or one too small.
 - `src` / `bc` — whether the running pattern's source / bytecode are still
   readable back (`GET /api/pattern`); `false` means a flash write shed the copy.
 - `web` — per-HTTP-slot lifecycle stage, one entry per connection slot
@@ -351,11 +355,45 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
     routine, 7 that call returned. Call-site tags: 0 other, 1/2/3 asset
     erase/write/read, 4/5 OTA erase/write, 6/7/8 pattern-store
     read/erase/write, 9/10 raw-region erase/write, 11 flash map.
+- `partitions` — the flash layout this device is actually running (Gitea
+  #501, docs/firmware.md "Partition tables"). Always present, on both hosts,
+  so a fleet tool can tell a migrated device from one still on the pre-#501
+  1 MiB-slot table without a serial console. Snapshotted once at boot: none
+  of it can change without a reboot, and re-parsing a 3 KiB table per poll
+  would put a flash read on `/api/status`'s hot path.
+
+  | field | meaning |
+  |---|---|
+  | `layout` | the csv this image was built from — `"partitions.csv"` (4 MB) or `"partitions-16mb.csv"` (the Seengreat). The mirror reports `"native"`. |
+  | `migrated` | `false` means the table on flash is **not** the one this image embeds: the device is running an older layout and the migrator either has not run yet or refused. `true` on a device that is where it belongs, and always on the mirror. |
+  | `ota_slot_bytes` | the LIVE `ota_0` size — 1,048,576 before migration, 1,310,720 / 3,145,728 after. This, not the build, is what an OTA image has to fit. |
+  | `storage_bytes` | the live `storage` partition. `store.total` is this minus the key area and the ad-hoc slot. |
+  | `assets_bytes` | the live `assets` partition. |
+
+  Three more fields appear **only when a migration refused to start**, which
+  it does rather than lose data:
+
+  | field | meaning |
+  |---|---|
+  | `migration_blocked` | why, as a short string — e.g. `"pattern library too large for the new layout"`, `"pattern store did not come up"`, `"flash too small for the new layout"`. The device keeps working on its old table; the usual fix is to delete patterns and reboot. |
+  | `blocked_need_bytes` | what the migration needed. |
+  | `blocked_have_bytes` | what the new layout offers. |
+
+  ```json
+  "partitions":{"layout":"partitions.csv","migrated":false,
+                "ota_slot_bytes":1048576,"storage_bytes":1048576,"assets_bytes":983040,
+                "migration_blocked":"pattern library too large for the new layout",
+                "blocked_need_bytes":245760,"blocked_have_bytes":225280}
+  ```
 
 `GET /api/status` on the **mirror** carries `fps`, `pixels`, `max_pixels`,
 `geom`, `caps`, `slot` (always `"native"`), `version`, `heap_free` (0 unless
 `--heap-free N` was passed), `engine_heap` (0 unless `--engine-heap N` was
-passed), `live`, `vmerr` — **no `src`, `bc`, `web`, or the `*_us` stage timers.**
+passed), `live`, `vmerr`, and `partitions` — **no `src`, `bc`, `web`, or the
+`*_us` stage timers.** Its `partitions` is the honest answer for a host with
+no flash rather than an omission, so no client has to handle two shapes:
+`{"layout":"native","migrated":true,"ota_slot_bytes":0,"storage_bytes":0,
+"assets_bytes":0}`.
 The two heap flags are how the playground's capacity warning is exercised
 without hardware: `--heap-free` impersonates a device with that much free, and
 `--engine-heap` a device with that much of it about to be handed back by the
@@ -999,6 +1037,17 @@ At most `PIN_MAX_BATCH` writes per request.
   first to free heap for the flash phase. Failures answer
   `{"ok":false,"error":"…"}` and do **not** reboot. Driven by
   `tools/ota-push.sh` / `tools/deploy.sh`; see `docs/firmware.md`.
+- **An over-size image is refused up front**, from the request's
+  `Content-Length`, before a single sector is erased (Gitea #501) — so a
+  rejected push leaves the inactive slot exactly as it was. On a device
+  whose partition table matches its firmware the error is
+  `{"ok":false,"error":"image larger than the OTA slot"}`; on a device
+  still carrying the pre-#501 1 MiB table it says the partition table has
+  not been migrated yet and to install the migrating release — an image
+  that still fits the old slot — first. That is the two-release rule
+  (docs/firmware.md, "Layout migration") answering for itself, because
+  after #501 a normal release image may be up to 1.25 MiB and "it just
+  failed" would be a mystery on exactly the devices with no serial console.
 - `POST /api/assets` streams the web-app archive into the assets flash region
   and hot-reloads the TOC — **no reboot**. A serial flash leaves this partition
   stale, so follow one with `tools/deploy.sh <ip> --assets-only`.

@@ -83,15 +83,20 @@ empty values) the firmware runs offline (render-only).
 
 ## OTA updates
 
-The partition table (firmware/partitions.csv) is pure A/B: ota_0 + ota_1
-app slots (1 MB each), no factory partition (this device has no distinct
-golden image — the serial flash is the same build that ships OTA, so
-factory was 1 MB of dead weight). Serial flash lands in ota_0; OTA writes
-alternate ota_0/ota_1. The bootloader validates images before jumping, so a
-corrupt upload falls back to the currently working slot; if both OTA slots
-are ever bad it boots ota_0 (the bootloader's default when no factory
-partition exists). Serial recovery always works regardless. The 1 MB freed
-by dropping factory is the `storage` partition (device pattern library).
+The partition table is pure A/B: ota_0 + ota_1 app slots, no factory
+partition (this device has no distinct golden image — the serial flash is
+the same build that ships OTA, so factory was 1 MB of dead weight). Serial
+flash lands in ota_0; OTA writes alternate ota_0/ota_1. The bootloader
+validates images before jumping, so a corrupt upload falls back to the
+currently working slot; if both OTA slots are ever bad it boots ota_0 (the
+bootloader's default when no factory partition exists). Serial recovery
+always works regardless.
+
+Slot size is **per board** since the 2026-09-20 repartition (Gitea #501) —
+1.25 MiB on the 4 MB boards, 3 MiB on the 16 MB Seengreat — and a device
+flashed before it still carries the 1 MiB table until it migrates itself.
+"Partition tables" and "Layout migration" below are that story; read the
+two-release rule there before cutting any release after the migrating one.
 
 ```sh
 # push the current devshell Xtensa build (BOARD, not a positional!):
@@ -115,9 +120,208 @@ reboots ~400 ms after replying. `/api/status` reports `slot` (which app
 partition is running) and `version` — ota-push.sh uses it to confirm the
 device came back.
 
-Migrating a device that predates the OTA layout requires ONE serial flash
-of the merged image (it rewrites the partition table):
-`espflash write-bin 0 result/luxel-fw.bin` — after that, everything is OTA.
+Migrating a device that predates the OTA layout *entirely* — no ota_0/ota_1
+to write into — requires ONE serial flash of the merged image:
+`espflash write-bin 0 result/luxel-fw.bin`; after that, everything is OTA.
+A device on an *older Luxel* table needs no serial at all: it rewrites its
+own table on the first boot of the migrating release ("Layout migration").
+
+## Partition tables
+
+Two tables, one per flash size, both tracked in `firmware/`.
+`firmware/build.rs` picks between them from the board cargo feature and
+serializes the chosen one into the image — `parttab::EMBEDDED`, the exact
+bytes `espflash` writes at `0x8000`, entries plus the trailing MD5 row the
+bootloader verifies. `board_partitions` in `firmware/board-target.sh` is
+the shell-side copy of the same map, and it is what `build-esp32.sh`,
+`flake.nix` and the release workflow pass as `--partition-table`. The two
+must agree: a device whose embedded table and flashed table disagree OTAs
+into a slot the bootloader is not looking at.
+
+**`firmware/partitions.csv` — every board but the Seengreat (4 MB flash):**
+
+| label | type / subtype | offset | size | |
+|---|---|---:|---:|---|
+| `nvs` | data / nvs | `0x9000` | `0x4000` | WiFi credentials + device records |
+| `otadata` | data / ota | `0xd000` | `0x2000` | which slot boots |
+| `phy_init` | data / phy | `0xf000` | `0x1000` | |
+| `ota_0` | app / ota_0 | `0x10000` | `0x140000` | **1.25 MiB** |
+| `ota_1` | app / ota_1 | `0x150000` | `0x140000` | **1.25 MiB** |
+| `storage` | data / spiffs | `0x290000` | `0x80000` | 512 KiB — the pattern store |
+| `assets` | data / spiffs | `0x310000` | `0x0F0000` | 960 KiB — the packed playground |
+
+**`firmware/partitions-16mb.csv` — `board-seengreat-hub75` only (16 MB):**
+
+| label | type / subtype | offset | size | |
+|---|---|---:|---:|---|
+| `nvs` / `otadata` / `phy_init` | | | | as above, byte for byte |
+| `ota_0` | app / ota_0 | `0x10000` | `0x300000` | 3 MiB |
+| `ota_1` | app / ota_1 | `0x310000` | `0x300000` | 3 MiB |
+| `storage` | data / spiffs | `0x610000` | `0x400000` | 4 MiB |
+| `assets` | data / spiffs | `0xA10000` | `0x3F0000` | 3.9375 MiB |
+
+Why each number is what it is:
+
+- **The app slots are 1.25 MiB, not 1 MiB, because the 1 MiB one was spent.**
+  Measured 2026-09-20 on master, three of the nine release variants were
+  already under `tools/image-check.sh`'s 3 % floor before this branch added
+  a byte — `board-athom-music` 1.71 %, `board-esp32-generic` 2.09 %,
+  `board-c6-devkit` 1.45 % — and a release cut (release.yml gates all nine)
+  would have failed on them. `tools/ci.sh` gates three variants, which is
+  the only reason master was green. At 1.25 MiB the same images sit at
+  20.2–25.0 % of their slot; the per-board table is docs/boards.md.
+- **The 512 KiB comes out of `storage`**, which drops 1 MiB → 512 KiB. That
+  is the one region with slack: the store's key area is a fixed 128 KiB on
+  every layout and only the packed file log shrinks, 732 KiB → 220 KiB —
+  enough for ~38 library-sized patterns, against the ~119 the old log held
+  (measured, `cargo test -p patlog-check`). A device whose live library does
+  not fit refuses to migrate rather than dropping patterns; see below.
+- **`assets` does not move on the 4 MB table** — same offset, same size.
+  That is deliberate and it is what keeps the migration cheap: a migrating
+  device keeps a valid web bundle exactly where `src/assets.rs` already maps
+  it, so the playground survives the repartition instead of needing a
+  re-upload. Everything below `0x310000` does move.
+- **The 4 MB table sums to exactly `0x400000`; the 16 MB one stops at
+  `0xE00000`** and leaves the top 2 MiB unallocated. `firmware/build.rs`
+  asserts both end offsets, so a fat-fingered offset fails the build rather
+  than a device that can no longer be reached.
+- **`board-s3-devkit` stays on the 4 MB table** even though it is the same
+  chip as the Seengreat. Generic ESP32-S3 devkits ship 4, 8 or 16 MB modules
+  and nothing in the image can tell them apart at flash time; a 16 MB table
+  on a 4 MB part puts `ota_1` and both data partitions past the end of flash
+  — an image that never boots, with no OTA path back. A too-small table on a
+  big module merely wastes flash. 16 MB is opt-in **per board**, never per
+  chip, and the Seengreat qualifies because its module is known: an
+  ESP32-S3-WROOM-1-N16R8 soldered to the panel driver board.
+
+**Nothing in the firmware may hard-code a partition offset.** Since #501 a
+running image can meet three layouts — its own, the other board size's, and
+the pre-#501 one a field device still carries — so a written-down offset is
+wrong on two of the three, in the way that erases user data rather than the
+way that fails to compile. Every address comes from a table, by label or
+subtype (`ota::data_partition("storage")`, `parttab::data_labelled`,
+`parttab::app_slot`), and `tools/offset-check.py` (wired into
+`tools/ci.sh`) fails the gate on a literal partition offset anywhere in
+`firmware/src/**` or the flashing shell scripts. Comments and docs are
+excluded — the numbers belong here — and so is `tools/qemu/`, which
+composes flash images byte by byte and must name offsets.
+
+## Layout migration
+
+`firmware/src/migrate.rs` moves a device from the pre-#501 table to the one
+its image embeds, on the first boot of the migrating release, with no serial
+port involved — which is the whole point: nothing on the bench has a serial
+path today, and neither does a user's device. The table-writing primitives
+it uses (`firmware/src/parttab.rs` + `parttab/raw.rs`) were split out of
+`takeover.rs` and are now built on **every** board, because the two boards
+that do not ship the WLED installer (`board-pixelblaze-v3`,
+`board-seengreat-hub75`) are exactly the ones that still have to migrate.
+
+What has to move, all of it read from a table rather than written down:
+
+| region | pre-#501 | 4 MB layout | 16 MB layout |
+|---|---|---|---|
+| `ota_0` | `0x10000` + 1 MiB | same offset, 1.25 MiB | same offset, 3 MiB |
+| `ota_1` | `0x110000` + 1 MiB | `0x150000` + 1.25 MiB | `0x310000` + 3 MiB |
+| `storage` | `0x210000` + 1 MiB | `0x290000` + 512 KiB | `0x610000` + 4 MiB |
+| `assets` | `0x310000` + 960 KiB | **unchanged** | `0xA10000` + 3.9375 MiB |
+
+The store's geometry is what makes this a byte move rather than a format
+change: the key area is 128 KiB and the packed log starts at `0x49000` on
+*every* layout, so only the log's length differs. The migration therefore
+re-uses the store's own machinery — `patlog::plan` + `patlog::build_page`
+place and rewrite the live records exactly as a compaction does, and the
+reserved blobs (playlist, playback state, pixel map, resume record, output
+palette, Layout, device name) go through `patterns::{read,store}_blob_at`.
+It sweeps the whole reserved key range rather than a hand-written list, so a
+key written by a *newer* firmware than the one migrating the device still
+travels.
+
+**The staging area is the old `ota_1`, and the device is deliberately
+single-image from then until its next OTA.** On the 4 MB layout the new
+store region sits *inside* the old log (`0x290000..0x310000` against
+`0x259000..0x310000`), so writing the repacked log straight to its new home
+would overwrite source bytes it has not read yet. The repacked image is
+built into the old `ota_1` first — free scratch, because the other slot's
+image has been discarded — and only then written to its new home. That is a
+real consequence, not a footnote: from the start of staging until the device
+takes its next OTA there is no second bootable image and the boot-loop
+guard has nothing to roll back to. The 16 MB layout does not overlap and
+takes the same path anyway; one code path costs fewer bytes of an OTA slot
+than two.
+
+Stage by stage, each one re-runnable, each marked in an `LXMG` staging
+header at the head of the staging area that is keyed to the target table (so
+a header left by a different release is ignored):
+
+| mark | what is true, and what a power cut costs |
+|---|---|
+| *(none)* | Copy ourselves into what the new table calls `ota_0` if we are not already executing there, point the bootloader at it by **erasing `otadata`** (with no factory partition, an empty `otadata` means "boot ota_0"), reboot. Idempotent — the copy is skipped when the image is already in place. A cut here leaves the old table and the old store entirely untouched. |
+| `STAGED` | The repacked log image is complete in staging. Until this mark the OLD store has not been written at all, so a cut just re-stages. |
+| `STORED` | The new `storage` region holds the key area and the log. The old log is gone from here on; a cut re-runs this stage from staging, which is still intact. |
+| `ASSETS` | The web bundle is at its new home (16 MB layout only; on the 4 MB one this stage is a no-op by construction). |
+| — | The table is written LAST, as ONE sector erase + write + read-back verify, and the device reboots into the new layout. |
+
+The `otadata` erase is not the takeover's config wipe, and the difference
+matters: `nvs` holds the WiFi credentials and the device settings, and a
+device that came back without them would be unreachable. It is deliberately
+left alone. `ota::clear_boot_attempts` zeroes the failed-boot counter around
+the migration's reboots (at most two), because a migration resuming across a
+power cut must not look like a crash loop to `preboot_guard` — which, once
+staging has begun, would "roll back" to an `ota_1` that is no longer a
+bootable image.
+
+The 16 MB half of this has never executed: QEMU's `esp32s3` machine reads
+`partitions-16mb.csv` correctly out of the merged image and loads `ota_0`,
+and then the app produces no serial output at all, so `move_assets`' copy
+branch — the only stage the 4 MB layout does not take — is covered by
+assertion and a host-computed store move rather than by emulation
+(`tools/qemu/migrate-test.py --plan-16mb`). That is the second reason the
+bench order is the Athom first and the Seengreat only after it.
+
+**The residual risk, stated plainly.** The table write is the one
+non-idempotent step. A cut *inside* that single 4 KiB erase-and-write leaves
+a table whose MD5 row does not verify, and the ESP-IDF second-stage
+bootloader will not boot that: serial recovery only, and stock IDF
+bootloaders keep no backup table to fall back on. It is milliseconds, it is
+last, and it is the same window the WLED takeover has always had
+(docs/wled-migration.md). Everything before it survives a cut with nothing
+worse than repeated work.
+
+**It refuses rather than losing data.** If the live records do not fit the
+new log the migration does not start: the old table stays, the device keeps
+working exactly as it did, and `/api/status` reports `migration_blocked`
+with `blocked_need_bytes` / `blocked_have_bytes` so the user can delete
+patterns and reboot (docs/api.md). The same refusal covers a store that did
+not come up, an index the RAM cap left incomplete, and a flash part too
+small for the table this image embeds — in every case the old table is left
+where it is. Measured on the host suite (`cargo test -p patlog-check`,
+2026-09-20): a churned 12-pattern device repacks 61,820 B of records (plus
+31,180 B dead) into 65,536 B, 29.1 % of the new 225,280 B log; 38
+library-sized patterns is the most that log takes; 20 oversized patterns
+repack to 245,760 B and are refused.
+
+**The two-release rule.** The migrating release must fit the **old** 1 MiB
+slot, because a device that has not repartitioned is what writes it — into a
+1 MiB slot, with its own running firmware. Every release *after* it may use
+the full per-board slot, and therefore **cannot be installed on a device
+that has not migrated**. `/api/ota` enforces that with a real message
+rather than a mystery: an over-size image is refused up front from
+`Content-Length`, before a single sector is erased, and on a device still on
+the old table the error says the partition table has not been migrated yet
+and to install the migrating release first. `tools/image-check.sh`'s
+`MIGRATING_RELEASE=1` is the build-side half of the same rule — see
+docs/releases.md, which also carries the reminder to take it back out.
+
+Once the fleet has moved, the `migrate-off` cargo feature retires the
+migrator and gets its ~12 KB of OTA slot back. It is a deliberate flag, not
+an edit: `tools/image-check.sh` asserts the migrator's boot-line marker is
+present unless `migrate-off` is named, and absent when it is.
+
+`/api/status` carries a `partitions` object — layout name, whether the live
+table matches the embedded one, and the three sizes — so a fleet tool can
+tell a migrated device from one still on the old table without a serial
+console (docs/api.md).
 
 ## Stack & heap invariants
 
@@ -341,9 +545,12 @@ decision, 2026-09-05; design and per-chip page arithmetic in
 docs/research/flash-mmap.md). The web assets partition is mapped at boot
 (`assets::map_region`, 15 × 64 KiB pages; `/api/status` reports
 `assets_mapped`), and the pattern store's extent region is the other
-consumer (`patterns::map_ext`, 14 × 64 KiB pages, mapped into the entries
-right after the assets mapping — 29 of the classic ESP32's 64 DROM0
-entries in total). What a consumer must and must not do:
+consumer (`patterns::map_ext`, mapped into the entries right after the
+assets mapping). That second one is sized by the live `storage` partition,
+so its page count is per layout since #501: 6 × 64 KiB for the 4 MB
+layout's 512 KiB store — 21 of the classic ESP32's 64 DROM0 entries in
+total — against 14 under the pre-#501 1 MiB store. What a consumer must
+and must not do:
 
 - **Read it from task context only, never from an interrupt handler.** A
   mapped read is a cache miss to SPI0, and no SPI0 fill may happen while an
@@ -361,7 +568,7 @@ entries in total). What a consumer must and must not do:
   read.** A load from an invalid MMU entry is a cache-error fault, not a
   recoverable error. Mappings are normally made once at boot and leaked.
 - **Page-aligned offsets only** (64 KiB on the ESP32/S3/C3; the C6's page
-  size is a register, 64 KiB by default). `partitions.csv` keeps every
+  size is a register, 64 KiB by default). Both partition tables keep every
   mappable region aligned; lengths round up to whole pages.
 - **Keep the read_nor fallback.** `map` can fail (`flashmap-off` build, no
   free entries, or the boot self-check refusing a mapping that does not
@@ -374,23 +581,36 @@ entries in total). What a consumer must and must not do:
 
 ### The pattern store: a packed file log in a mapped region + a small key area
 
-The `storage` partition (`0x210000`, 1 MiB) is split by **what the device
-does with the bytes**, not in half (Gitea #330):
+The `storage` partition is split by **what the device does with the
+bytes**, not in half (Gitea #330). Both its offset and its length come from
+the live partition table — `patterns.rs` holds no constant for either — so
+one image serves the 512 KiB store of the 4 MB layout, the 4 MiB store of
+the 16 MB one, and the 1 MiB store of a device that has not migrated yet
+(see "Partition tables"). Everything up to the file log is the same on all
+three; only the log's length scales:
 
-| partition-relative | absolute | size | region |
-|---|---|---:|---|
-| `0x00000` | `0x210000` | 128 KiB (32 pages) | **key area** — a `sequential-storage` map |
-| `0x20000` | `0x230000` | 896 KiB (224 pages) | **extent region** — mapped read-only at boot (14 × 64 KiB MMU entries) |
+| partition-relative | size | region |
+|---|---:|---|
+| `0x00000` | 128 KiB (32 pages) | **key area** — a `sequential-storage` map, fixed on every layout |
+| `0x20000` | the rest of the partition | **extent region** — mapped read-only at boot |
 
-`patterns.rs` maps the whole region once at boot (`map_ext`, self-check on
-the first page read both ways, leaked) and it holds:
+`patterns.rs` maps the whole extent region once at boot (`map_ext`,
+self-check on the first page read both ways, leaked) and it holds:
 
 | partition-relative | size | what |
 |---|---:|---|
 | `0x20000` | 4 KiB | ad-hoc header page: magic, src/bc lengths, bc side |
 | `0x21000` | 32 KiB | ad-hoc (live-coding) source |
 | `0x29000` | 2 × 64 KiB | ad-hoc bytecode, TWO sides — `store_current` writes the side the running engine is not executing from and flips `CUR_BC_SIDE`, so a mapped engine never sees its code change |
-| `0x49000` | **732 KiB** | the **file log**, 183 erase pages |
+| `0x49000` | the remainder | the **file log** |
+
+The log is therefore **220 KiB (55 pages) on the 4 MB layout**, ~3.7 MiB on
+the 16 MB one, and was 732 KiB (183 pages) on the pre-#501 table — the
+numbers the rest of this section quotes were measured against that 732 KiB
+log and are re-stated per layout in docs/boards.md. `init` refuses a
+`storage` partition too small to hold the ad-hoc slot plus one
+largest-possible file (`MIN_STORAGE`) rather than running a store whose log
+cannot take a single pattern.
 
 #### The file log (Gitea #340)
 
@@ -416,6 +636,11 @@ median source 2,853 B, median bytecode 2,008 B, 219/305 sources ≤ 4 KiB):
 |---|---:|---:|
 | page-granular (#330) | 32 (its table cap) | 328 KiB, 44.8 % |
 | exact-packed (#340) | **119** | 722 KiB, 98.7 % |
+
+That was the pre-#501 log. The same measurement against the 4 MB layout's
+220 KiB log gives **38** library-sized patterns (docs/boards.md, "Store
+capacity"); the packing density is a property of the format, not of the
+partition, so only the count moves.
 
 Four is both the floor and the ceiling of the alignment tax:
 `bytecode::deserialize_lean_static` borrows a blob's word region only when
@@ -525,8 +750,9 @@ treated as "clear the map", which is why `POST /api/map`'s procedural `grid`
 form exists (#258) and why a 3D lattice installed from the console stops at
 8x8x8 (Gitea #548). There is **no `MAX_PATTERNS`**; `MAX_RECS` (192) is a heap
 guard on the RAM index (`Vec<Rec>`, 32 B each, no names — those are read
-back out of the mapping), not a format limit, and it sits well past the 119
-real patterns the 732 KiB actually holds. The *scan* is uncapped on purpose:
+back out of the mapping), not a format limit, and it sits well past what any
+shipped log holds — 119 real patterns in the pre-#501 732 KiB, 38 in the
+4 MB layout's 220 KiB. The *scan* is uncapped on purpose:
 `cursor` must be the end of the last record in the log or an append would
 land on top of live ones, so only what the index keeps is capped. A log with
 more than `MAX_RECS` distinct patterns leaves the index incomplete, says so
@@ -905,7 +1131,7 @@ each build OTA'd and measured with `tools/opbench.mjs` in the same run:
 |---|---:|---:|---:|---:|---:|
 | Athom, no placement | 104.9 | 6.379 | 167.51 | 626.23 | 15.469 |
 | Athom, shipped | **100.8** | **6.184** | **58.53** (2.86×) | **150.20** (4.17×) | **14.322** |
-| panel, no placement | 84.0 | 4.752 | 45.39 | 102.36 | 11.696 |
+| panel, no placement | 84.0 | 4.752 | 45.41 | 102.36 | 11.696 |
 | panel, shipped | **83.4** | **4.719** | **44.79** | **101.16** | **11.531** |
 
 The classic ESP32 gains 2.9–4.2× on builtin-heavy patterns; the S3 gains 1 %.

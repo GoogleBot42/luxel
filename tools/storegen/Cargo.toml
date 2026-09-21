@@ -1,0 +1,28 @@
+# Host generator + verifier for a realistic Luxel `storage` partition image
+# (Gitea #501). Used by tools/qemu/migrate-test.py: `gen` writes the
+# pre-migration image the emulated device boots with, `verify` reads the
+# post-migration one back out of the flash file and checks every byte
+# against the sidecar `gen` emitted.
+#
+#   cargo run --manifest-path tools/storegen/Cargo.toml -- gen --help
+#
+# Deliberately STANDALONE (its own `[workspace]`, its own lock) rather than
+# a workspace member: it pulls `sequential-storage` — a firmware-only
+# dependency — and nothing in the workspace build should grow it. Same
+# reasoning as tools/wledfs-check.
+[package]
+name = "storegen"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+publish = false
+
+[dependencies]
+# EXACTLY what firmware/Cargo.toml pins: the key area this writes has to be
+# byte-identical to what the device's own `patterns::store_blob_at` writes,
+# and the on-flash item layout is this crate's.
+sequential-storage = "4"
+embedded-storage-async = "0.4"
+embassy-futures = "0.1"
+
+[workspace]

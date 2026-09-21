@@ -157,20 +157,22 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
   time, a newer push cancels the older run; not yet a required check (Gitea #246).
 
 ## Tripwires
-- Firmware app must fit the 1 MiB OTA slot — docs/boards.md tracks per-board margin;
-  `tools/ci.sh` measures it on every run (`build-esp32.sh` alone only checks the ELF).
-  **The margin is thin and the cheap diets are spent** (2026-09-19, #501/#465): the
-  tightest shipped image sits ~1.7 pp above `image-check`'s 3 % floor, and one medium
-  feature is ~1.5 pp. Probe the image cost EARLY — a skeleton
-  `nix build .#luxel-fw-c6-devkit-hosted` against master — not after it is written;
-  #465 was finished before anyone knew it did not fit.
+- Firmware app must fit the board's OTA slot — 1.25 MiB, or 3 MiB on the 16 MB
+  Seengreat, since the #501 repartition; docs/boards.md tracks per-board margin and
+  `tools/ci.sh` measures it every run (`build-esp32.sh` alone only checks the ELF).
+  20–25 % free after a device migrates, but the **migrating release itself** is gated
+  against the OLD 1 MiB slot at a 0 % floor (`MIGRATING_RELEASE=1`), so probe the image
+  cost EARLY until that switch comes out — docs/releases.md.
+- Never hard-code a partition offset in `firmware/src/**` or a flashing script — read
+  it from the table (`tools/offset-check.py` in `tools/ci.sh` fails the gate).
 - Boot-time multi-KB loads wait for `wait_config_up()` — WiFi mallocs don't null-check.
 - `BUILTINS` in `crates/luxel-core/src/vm.rs` is append-only; never reorder.
 - A serial flash leaves the assets partition stale → follow with
   `tools/deploy.sh <ip> --assets-only`.
-- The web bundle must fit the assets partition (0xF0000 = 983,040 B): 870 KB used,
-  **11.5 % headroom** as of 2026-09-20 (docs/boards.md). Nothing measures this in CI —
-  an oversized archive only fails at `POST /api/assets` on a device.
+- The web bundle must fit the assets partition (0xF0000 = 983,040 B on every board but
+  the 16 MB Seengreat, and one bundle ships to all of them, so the small one binds):
+  870 KB used, **11.5 % headroom** as of 2026-09-20 (docs/boards.md). Nothing measures
+  this in CI — an oversized archive only fails at `POST /api/assets` on a device.
 - `/api/status` `fps` is frames RENDERED. Where the output stage runs on the
   other core (HUB75 panels, `out_fps` nonzero) the render loop free-runs ahead
   of the wire, so `fps` can be double what reached the LEDs — quote `out_fps`
@@ -181,8 +183,8 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
 - `tools/qemu/flashmap-test.py` and `takeover-test.py` assert on firmware
   boot-line TEXT — rewording `patterns::init` or the takeover narration breaks
   them silently. A change under
-  `firmware/src/{takeover,ota,flashmap,config,patterns,patlog}.rs` or
-  `partitions.csv` → run the QEMU suite (`CI_QEMU=1 tools/ci.sh`).
+  `firmware/src/{takeover,migrate,parttab,ota,flashmap,config,patterns,patlog}.rs`
+  or either `partitions*.csv` → run the QEMU suite (`CI_QEMU=1 tools/ci.sh`).
 - `compile failed: unknown identifier` from `web/tools/lxp.mjs` = stale
   build artifacts: the main checkout's `web/public/luxel.wasm` and
   `target/*/luxel` lag master (nobody rebuilds them). `npm run wasm` /

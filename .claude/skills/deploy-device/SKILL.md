@@ -205,7 +205,7 @@ pre-authorized per CLAUDE.md — no need to ask before pushing.
 - **1 MiB OTA slot ceiling.** The app image must fit the OTA slot or
   `/api/ota` rejects it before writing. Per-board margins and how to
   reclaim space if a push starts failing for size live in docs/boards.md
-  ("The 1 MiB OTA-slot ceiling").
+  ("The OTA-slot ceiling" — 1.25 MiB per board since Gitea #501, or 3 MiB on the Seengreat).
 
 ## 4. After deploying
 

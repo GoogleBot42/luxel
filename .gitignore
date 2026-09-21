@@ -4,6 +4,8 @@ node_modules/
 # second nix out-link used by the QEMU harness (tools/qemu/run-all.py) so
 # building .#qemu-espressif doesn't clobber ./result
 /result-qemu
+# …and the 16 MB Seengreat image run-all.py builds for the migration test
+/result-s3
 __pycache__/
 *.ppm
 .direnv/
@@ -29,6 +31,7 @@ web/public/pixelblaze-library.json
 # Device flash dumps — may contain WiFi creds (never commit)
 athom-wled-*.bin
 tools/wledfs-check/target/
+tools/storegen/target/
 # esp-hub75 patched source — materialized by the flake (firmware/patches/README.md)
 firmware/vendor/
 

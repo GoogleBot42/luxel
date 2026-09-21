@@ -1,0 +1,30 @@
+# Luxel partition table for 16 MB flash (Gitea #501). Same shape as
+# partitions.csv — no factory partition, pure A/B, storage ahead of assets —
+# with every region scaled to the bigger part: 3 MiB (0x300000) app slots,
+# 4 MiB (0x400000) storage for the device pattern library, and a 3.9375 MiB
+# (0x3F0000) assets partition for the packed playground.
+#
+# ONLY board-seengreat-hub75 uses this table. That board is the one piece of
+# Luxel hardware whose module is known to carry 16 MB — an
+# ESP32-S3-WROOM-1-N16R8 (16 MB flash + 8 MB PSRAM) soldered to the panel
+# driver board — so the size is a property of the board, not a guess.
+#
+# board-s3-devkit deliberately STAYS on the 4 MB table even though it is the
+# same chip: generic ESP32-S3 devkits ship with 4, 8 or 16 MB modules and
+# nothing in the image can tell them apart at flash time. Writing this table
+# onto a 4 MB module puts ota_1 and both data partitions past the end of
+# flash — the app never boots and there is no OTA path back, i.e. a brick
+# recoverable only over serial. A too-small table on a big module merely
+# wastes flash. So: 16 MB tables are opt-in per board, never per chip.
+#
+# The top 2 MiB (0xE00000..0x1000000) is deliberately left unallocated —
+# firmware/build.rs asserts the exact end offset, so growing into it is an
+# edit here plus the constant there, never a silent overrun.
+# Name,   Type, SubType, Offset,   Size,     Flags
+nvs,      data, nvs,     0x9000,   0x4000,
+otadata,  data, ota,     0xd000,   0x2000,
+phy_init, data, phy,     0xf000,   0x1000,
+ota_0,    app,  ota_0,   0x10000,  0x300000,
+ota_1,    app,  ota_1,   0x310000, 0x300000,
+storage,  data, spiffs,  0x610000, 0x400000,
+assets,   data, spiffs,  0xA10000, 0x3F0000,

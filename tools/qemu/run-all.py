@@ -7,11 +7,13 @@ is the single entry point that builds their shared inputs once and executes
 them all, so "the emulator tests" is one command, not a checklist.
 
 What it does:
-  1. Builds the athom firmware (`.#luxel-fw-athom-music`) to ./result and
-     Espressif's patched QEMU (`.#qemu-espressif`) to ./result-qemu — both
-     nix-cached, seconds when warm. Separate out-links on purpose: building
-     one flake output reuses the default ./result symlink and would clobber
-     the other (worktree gotcha, .claude/skills/worktree-setup).
+  1. Builds the athom firmware (`.#luxel-fw-athom-music`) to ./result,
+     Espressif's patched QEMU (`.#qemu-espressif`) to ./result-qemu, and —
+     for the 16 MB layout check — the Seengreat firmware
+     (`.#luxel-fw-seengreat-hub75`) to ./result-s3. All nix-cached, seconds
+     when warm. Separate out-links on purpose: building one flake output
+     reuses the default ./result symlink and would clobber the other
+     (worktree gotcha, .claude/skills/worktree-setup).
   2. Locates the two gitignored Athom dumps the takeover/heap tests need
      (athom-wled-stock.bin, athom-wled-fs-configured.bin) — via --stock/--fs,
      the LUXEL_ATHOM_STOCK / LUXEL_ATHOM_FS env vars, or autodetection in the
@@ -20,12 +22,23 @@ What it does:
 
 Tests that need the dumps are skipped (not failed) when the dumps aren't
 found, so the runner still works in a checkout without them — it just reports
-what it couldn't run.
+what it couldn't run. The migration and flashmap tests need no dumps: they
+compose their fixtures from the stock merged image plus `tools/storegen`.
+
+The suite's three families:
+
+  takeover-*   WLED -> Luxel self-install (firmware/src/takeover.rs)
+  migrate-*    the self-applied partition migration (firmware/src/migrate.rs,
+               Gitea #501) — from either OTA slot, four power-cut points, the
+               refusal path, and an assertion-only pass over the 16 MB layout
+  flashmap /   cache-MMU mapping and the heap-region self-heal
+  heap-regions
 
 Usage:
     nix develop -c python3 tools/qemu/run-all.py
     nix develop -c python3 tools/qemu/run-all.py --stock <dump> --fs <fs>
     nix develop -c python3 tools/qemu/run-all.py -k heap   # filter by name
+    nix develop -c python3 tools/qemu/run-all.py -k migrate
 """
 
 from __future__ import annotations
@@ -85,6 +98,7 @@ def main() -> int:
     else:
         result_dir = build("luxel-fw-athom-music", args.result_dir)
         qemu = build("qemu-espressif", os.path.join(REPO, "result-qemu"))
+        build("luxel-fw-seengreat-hub75", os.path.join(REPO, "result-s3"))
     if not os.path.exists(os.path.join(qemu, "bin", "qemu-system-xtensa")):
         raise SystemExit(f"no qemu-system-xtensa under {qemu} (run without --no-build?)")
 
@@ -118,6 +132,27 @@ def main() -> int:
         # cache-MMU flash mapping (firmware/src/flashmap.rs) — stock merged
         # image + a synthetic LUX2 archive, no dumps needed
         ("flashmap", "flashmap-test.py", [], False),
+        # The #501 partition migration.  No dumps: the pre-#501 flash is
+        # composed here (hand-built old table + a tools/storegen store).
+        ("migrate-from-ota0", "migrate-test.py", ["--from", "ota_0"], False),
+        # The variant that caught the overlap-guard bug: a device whose last
+        # OTA landed in ota_1 has to copy itself down before it can stage.
+        ("migrate-from-ota1", "migrate-test.py", ["--from", "ota_1"], False),
+        # Power cuts, one per re-runnable stage.  `table` is deliberately
+        # absent — a cut inside that one sector write is the known
+        # unrecoverable window (see migrate-test.py's docstring).
+        ("migrate-cut-copy", "migrate-test.py",
+         ["--from", "ota_1", "--cut", "copy"], False),
+        ("migrate-cut-staged", "migrate-test.py", ["--cut", "staged"], False),
+        ("migrate-cut-stored", "migrate-test.py", ["--cut", "stored"], False),
+        ("migrate-cut-assets", "migrate-test.py", ["--cut", "assets"], False),
+        # A library that cannot fit the 4 MB layout's log: refuse, change
+        # nothing, keep working.
+        ("migrate-overfill", "migrate-test.py", ["--overfill"], False),
+        # The 16 MB layout, assertion-only: QEMU's esp32s3 machine boots the
+        # bootloader but the app never speaks.  See plan_16mb's docstring.
+        ("migrate-plan-16mb", "migrate-test.py",
+         ["--plan-16mb", "--result-dir-16mb", os.path.join(REPO, "result-s3")], False),
     ]
 
     results: list[tuple[str, str, float]] = []

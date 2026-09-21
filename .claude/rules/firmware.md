@@ -146,16 +146,40 @@ paths:
   (see `patterns::write_raw`, the OTA/assets writers); reserve `take_flash`
   for sequential-storage transactions that genuinely need exclusive
   multi-op ownership, and keep those short.
-- The app must fit in a 1 MiB OTA slot; `firmware/Cargo.toml` sets
+- **Never write a partition offset down.** Since #501 an image can meet
+  three layouts — its own, the other flash size's, and the pre-#501 one a
+  field device still carries — so a literal offset is wrong on two of them,
+  in the way that erases user data rather than the way that fails to
+  compile. Read the table: `ota::data_partition("storage")`,
+  `parttab::data_labelled(table, "assets")`,
+  `parttab::app_slot(table, SUBTYPE_OTA1)`; a shell script parses the csv
+  the board selected (`$PARTITIONS`, `board_partitions` in
+  `firmware/board-target.sh`). `tools/offset-check.py` runs in `tools/ci.sh`
+  and fails the gate on a literal in `firmware/src/**` or a flashing script
+  — comments, docs and `tools/qemu/` are exempt. The same rule is why the
+  pattern store's geometry is resolved at boot: the key area is a fixed
+  128 KiB, the log starts at `LOG_OFF` on every layout, and only the log's
+  LENGTH comes from the partition (`patterns::log_len`).
+- The app must fit its board's OTA slot; `firmware/Cargo.toml` sets
   `opt-level = "s"` to stay under it (see docs/boards.md for the ceiling
-  history). The canonical size measure is the CREDLESS flake build
+  history). **The slot is per board since #501** — 1,310,720 B on the 4 MB
+  boards, 3,145,728 B on `board-seengreat-hub75`, from `board_ota_max` in
+  `firmware/board-target.sh`; a margin percentage means nothing until you
+  say which slot it is a fraction of, and `tools/image-check.sh` prints the
+  rule it used on every size line. While `MIGRATING_RELEASE=1` is set every
+  image is weighed against the OLD 1,048,576 B slot at a 0 % floor instead,
+  because a device that has not repartitioned is what installs that one
+  release (docs/releases.md). The canonical size measure is the CREDLESS flake build
   (`nix build .#luxel-fw-<board>` — what release CI gates); a creds-baked
   devshell build reads ~1.5 KB larger, not hugely different (AP-mode
   provisioning keeps the WiFi stack linked either way — the old warning
   that credless builds dead-code-eliminate WiFi stopped being true when
   provisioning landed). Just never compare a credless number against a
-  creds-baked one — and never compare a number measured on one HOST
-  against one from another: every build embeds its absolute dependency
+  creds-baked one; never compare one measured BEFORE a rebase against one
+  measured after (master moves — a JIT-phase-0 merge landed mid-#501 and
+  shifted every board by ±100 B, so both columns of a before/after table
+  have to be re-taken against the master you actually sit on); and never
+  compare a number measured on one HOST against one from another: every build embeds its absolute dependency
   source paths in panic `Location`s (~13.5 KB, #441), so the same commit
   weighed 1,010,432 B on the CI runner and 1,014,400 B locally
   (2026-09-08). Gate a percentage floor only on the flake artifact of the
@@ -191,6 +215,13 @@ paths:
   **Never trade code for tables on the assumption that the tables are
   free** — measure the image, not the section. Same lesson as #473's
   `match` → `const` table, which cost +496 B.
+- **`riscv32imc` (board-c3-devkit) has no atomic read-modify-write.**
+  `AtomicU32::swap` / `fetch_add` / `compare_exchange` are a HARD COMPILE
+  ERROR there and nowhere else, so a static that compiles on every other
+  board can still red-light CI (#413, and again in #501 where a
+  region-tracking `swap` had to become load-then-store under the flash
+  lease). Load/store are fine. Build board-c3-devkit before trusting a new
+  atomic.
 - Size gotchas measured on riscv32imc at `opt-level = "s"` (#465): `str::parse`
   instantiates ~700 B of `from_str_radix` **per integer width**, so a parser
   wanting u8/u16/u32 pays three times — hand-roll one `fn(&str) -> Option<u32>`
