@@ -11,10 +11,21 @@ The takeover is the `wled-takeover` cargo feature (`firmware/src/takeover.rs`
 + `firmware/src/wledfs.rs`). On a board that has it, it is a no-op costing one
 256-byte flash read on devices already running the Luxel layout.
 
+Since the #501 repartition the feature is only the **WLED-specific** half:
+the littlefs reader, the credential and settings inheritance, and the nvs
+wipe. Reading the live table, finding our own image in a foreign slot, the
+verified self-copy and installing a table are `firmware/src/parttab.rs`,
+built on every board — because `firmware/src/migrate.rs` needs exactly the
+same primitives, and the two boards that ship no WLED installer are the
+ones that still have to migrate themselves (docs/firmware.md, "Layout
+migration").
+
 **It is per board**, because it is **24,656 B on `board-pixelblaze-v3` /
-25,344 B on `board-c6-devkit` + `hosted-ui`** (measured 2026-09-19, Gitea
-#501) and only means anything where a user can reach the board through WLED's
-own `/update` page:
+25,344 B on `board-c6-devkit` + `hosted-ui`** — measured 2026-09-19, before
+the parttab split, so that figure is the feature plus the table-writing
+layer every board now carries anyway; the WLED-specific remainder has not
+been re-measured on its own (Gitea #637). It only means anything where a user can reach
+the board through WLED's own `/update` page:
 
 | board | takeover | why |
 |---|---|---|
@@ -44,7 +55,12 @@ carrying 25 KB of OTA slot it can never use.
    boots the slot; ESP32 apps are position-independent across slots via
    the flash MMU, so Luxel runs fine from WLED's layout.
 3. **Takeover** (early in boot, after the boot-loop guard):
-   - partition table at 0x8000 ≠ embedded Luxel table → proceed;
+   - partition table at 0x8000 ≠ embedded Luxel table, **and it is not an
+     older Luxel table either** → proceed. That second test is what keeps
+     the two paths apart since #501: an older Luxel layout is
+     `migrate.rs`'s job, which carries the pattern store across and must
+     NOT do the nvs wipe below; a foreign table is this one's, and has no
+     Luxel store to carry;
    - guards: flash chip must fit the new table; the copy destination must
      not overlap the running image;
    - **inheritance**: mount WLED's littlefs read-only (`wledfs.rs`) and
@@ -66,12 +82,20 @@ carrying 25 KB of OTA slot it can never use.
      output and the second has to be re-stated with `POST /api/layout`
      `out 1 …` (Gitea #516; multi-output driving itself is #474);
    - locate self by comparing its own `esp_app_desc` (image offset 0x20)
-     against each app slot; copy itself to ota_0 @0x10000 if not already
-     there (sector-wise erase+write+verify);
+     against each app slot; copy itself to the new table's ota_0 if not
+     already there (sector-wise erase+write+verify);
    - wipe nvs/otadata sectors 0x9000..0x10000; persist inherited creds
      via `config::write_wifi` (Luxel's normal creds record);
    - rewrite the partition table (the only non-re-runnable ~ms window)
      and reboot. Empty otadata → bootloader falls back to ota_0 → Luxel.
+
+   **The table it writes is the CURRENT one** — `parttab::EMBEDDED`, the
+   table this image was built with, which since 2026-09-20 is the #501
+   layout (docs/firmware.md, "Partition tables"). So a WLED device
+   converted with this release or later lands directly on the new layout
+   and never migrates again: one table write, not two. A device converted
+   *before* it is on the old Luxel table like any other and migrates itself
+   on the first boot of the migrating release.
 4. **Recovery paths.** Everything before the table write re-runs under
    WLED's intact table after a power cut. A crash-looping takeover build
    trips the boot guard, which flips otadata back to the WLED slot —

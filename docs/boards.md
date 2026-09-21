@@ -67,16 +67,131 @@ new boards: the PB sensor-expansion UART (GPIO3, `#[cfg(feature =
 "esp32")]` in main.rs — devkits have no such header) and the Athom strip
 relay.
 
-## The 1 MiB OTA-slot ceiling
+## The OTA-slot ceiling
 
-The partition table (firmware/partitions.csv) is pure A/B with 1 MiB
-(1,048,576-byte) app slots, so the app image — what `espflash save-image`
-emits and `/api/ota` writes — must stay under that or OTA rejects it
-(crossed once at v0.1.17; opt-level "s" bought it back — history and diet
-options in docs/size-report.md). Per-board app images at v0.1.39,
-remeasured 2026-08-29 (devshell builds with WiFi creds baked in — a
-credless build strips the WiFi stack and reads ~1.5 KB smaller, which is
-what CI measures):
+(This section was "The 1 MiB OTA-slot ceiling" until the 2026-09-20
+repartition, Gitea #501. Other docs may still call it that.)
+
+The app image — what `espflash save-image` emits and `/api/ota` writes —
+must fit the board's OTA slot or OTA rejects it (crossed once at v0.1.17;
+opt-level "s" bought it back — history and diet options in
+docs/size-report.md). **The slot is per board**, from the partition table
+the board's flash size selects (docs/firmware.md, "Partition tables"):
+
+| table | boards | slot |
+|---|---|---:|
+| `firmware/partitions.csv` | every board but the Seengreat | **1,310,720 B** (1.25 MiB) |
+| `firmware/partitions-16mb.csv` | `board-seengreat-hub75` | **3,145,728 B** (3 MiB) |
+| *(pre-#501, still on un-migrated devices)* | — | 1,048,576 B (1 MiB) |
+
+`board_ota_max` in `firmware/board-target.sh` is the single source of that
+number per board; `tools/image-check.sh` resolves the slot through it and
+prints which rule it used on every size line, because a margin percentage
+is meaningless without knowing which slot it is a fraction of.
+
+### The migrating release: every image weighed against the OLD slot
+
+For exactly one release, the gate runs with `MIGRATING_RELEASE=1` and
+weighs every board's image against the **1,048,576 B pre-#501 slot** with
+the margin floor at **0 %** — "it fits" is the whole requirement. The
+reason is that a device which has not repartitioned yet is what installs
+this image, into a 1 MiB slot, with its own running firmware; and holding
+any floor against the old slot would block the very release that makes the
+slot bigger. Measured 2026-09-20 (credless flake builds,
+`nix build .#luxel-fw-<v>` → `luxel-fw-ota.bin`, `origin/master` `b9c0632`
+as the baseline column):
+
+| variant | master | migrating release | Δ | free of the OLD 1 MiB slot | % |
+|---|---:|---:|---:|---:|---:|
+| `c3-devkit` | 973,120 | 985,984 | +12,864 | 62,592 | 5.96 |
+| `pixelblaze-v3` | 1,005,424 | 1,023,056 | +17,632 | 25,520 | 2.43 |
+| `athom-music` | 1,030,576 | 1,040,560 | +9,984 | **8,016** | **0.76** |
+| `esp32-generic` | 1,026,608 | 1,036,496 | +9,888 | 12,080 | 1.15 |
+| `s3-devkit` | 973,680 | 983,600 | +9,920 | 64,976 | 6.19 |
+| `c6-devkit` | 1,033,296 | 1,045,584 | +12,288 | **2,992** | **0.28** |
+| `s3-hub75` | 981,776 | 991,680 | +9,904 | 56,896 | 5.42 |
+| `seengreat-hub75` | 969,984 | 987,792 | +17,808 | 60,784 | 5.79 |
+| `c6-devkit-hosted` | 1,017,168 | 1,029,264 | +12,096 | 19,312 | 1.84 |
+
+The delta varies because the boards **without** `wled-takeover`
+(`pixelblaze-v3`, `seengreat-hub75`) gain the whole table-writing layer,
+which the takeover boards already carried; the rest gain only
+`migrate.rs`. Those are not comfortable numbers and they are not meant to
+be — but three of the nine (`athom-music` 1.71 %, `esp32-generic` 2.09 %,
+`c6-devkit` 1.45 %) were **already** under the 3 % floor on master before
+this branch added a byte. `tools/ci.sh` gates three variants and
+release.yml gates all nine, which is the only reason master was green: a
+release cut would have failed on them. That squeeze is what the
+repartition ends, not something it introduced.
+
+`MIGRATING_RELEASE` must come back out in the release after this one
+(Gitea #635) — see
+docs/releases.md.
+
+### After the migration: the payoff
+
+The same images, against the slot they land in the moment the device
+reboots into the new table. 4 MB boards, 1,310,720 B slot:
+
+| variant | image | free | % |
+|---|---:|---:|---:|
+| `c3-devkit` | 985,984 | 324,736 | 24.8 |
+| `pixelblaze-v3` | 1,023,056 | 287,664 | 21.9 |
+| `athom-music` | 1,040,560 | 270,160 | 20.6 |
+| `esp32-generic` | 1,036,496 | 274,224 | 20.9 |
+| `s3-devkit` | 983,600 | 327,120 | 25.0 |
+| `c6-devkit` | 1,045,584 | 265,136 | 20.2 |
+| `s3-hub75` | 991,680 | 319,040 | 24.3 |
+| `c6-devkit-hosted` | 1,029,264 | 281,456 | 21.5 |
+
+`board-seengreat-hub75` on the 16 MB table gets a 3,145,728 B slot for a
+987,792 B image: **2,157,936 B, 68.6 % free.**
+
+The 3 % floor returns in the next release, where there is finally room
+under it. The C6 stays the fleet's tightest board — it is ~92 KB fatter
+than the C3 for identical source — it just stops being the board that
+decides whether a feature can ship.
+
+### Store capacity, before and after
+
+The 512 KiB the app slots gained comes out of `storage`. Inside it the
+geometry is unchanged — key area (the `sequential-storage` reserved blobs)
+= the first `0x20000`, the ad-hoc read-back slot `0x20000..0x49000`, the
+packed pattern log from `LOG_OFF` `0x49000` to the end of the partition —
+so only the **log** shrinks:
+
+| | pre-#501 | 4 MB layout | 16 MB layout |
+|---|---:|---:|---:|
+| `storage` partition | `0x100000` (1 MiB) | `0x80000` (512 KiB) | `0x400000` (4 MiB) |
+| pattern log | `0xB7000` (732 KiB, 183 pages) | `0x37000` (220 KiB, 55 pages) | `0x3B7000` (~3.7 MiB) |
+| library-sized patterns it holds | ~119 (the Athom fill reached 118) | **38** | far more than `MAX_RECS` |
+
+Measured on the host migration suite (`cargo test -p patlog-check`,
+2026-09-20): a churned 12-pattern device stages 61,820 B of live records
+(31,180 B dead) and repacks to 65,536 B — 29.1 % of the new 225,280 B log —
+so a normal device crosses with ~70 % of its new log free. The ceiling is
+that **38**; a device above it refuses to migrate and says so on
+`/api/status` rather than dropping patterns (docs/firmware.md, "Layout
+migration"). 38 is the number to quote at anyone who asks what the store
+cost; the answer to wanting more is the 16 MB table, not a bigger 4 MB
+`storage`.
+
+Worth a ticket rather than a scramble: the ad-hoc read-back slot spends
+2 × 64 KiB on bytecode sides against a 40 KiB `MAX_BC` cap. Sizing them to
+the cap would move `LOG_OFF` from `0x49000` to `0x1D000` and give the 4 MB
+log 396 KiB instead of 220 KiB (Gitea #636) — but `LOG_OFF` being shared by the old and
+new geometries is exactly what makes the migration a byte move, so it needs
+its own release and a format bump.
+
+### Measurement history (the 1 MiB era)
+
+Everything below was measured against the 1,048,576 B slot, and the
+margins quoted in it are fractions of that. The deltas are still the
+interesting part — what a feature costs does not change with the
+partition table — and this repo keeps its measurement history. Per-board
+app images at v0.1.39, remeasured 2026-08-29 (devshell builds with WiFi
+creds baked in — a credless build strips the WiFi stack and reads ~1.5 KB
+smaller, which is what CI measures):
 
 | board | app image | slot margin |
 |---|---:|---:|
@@ -382,7 +497,7 @@ same way, at the same revision:
 
 | board | app image | slot margin | + `hosted-ui` | margin | saved |
 |---|---:|---:|---:|---:|---:|
-| `board-c3-devkit` | 889,136 B | 159,440 B | 875,200 B | 173,376 B | 13,936 B |
+| `board-c3-devkit` | 889,136 B | 159,440 B | 875,200 B | 173,136 B | 13,936 B |
 | `board-pixelblaze-v3` | 934,928 B | 113,648 B | 920,432 B | 128,144 B | 14,496 B |
 | `board-athom-music` | 934,848 B | 113,728 B | 920,336 B | 128,240 B | 14,512 B |
 | `board-esp32-generic` | 934,768 B | 113,808 B | 920,352 B | 128,224 B | 14,416 B |
@@ -1011,11 +1126,11 @@ candidates on real builds; this is the three that were low-risk): **−4.3 to
 | `pixelblaze-v3` † | 1,011,648 | 985,248 | −26,400 | 63,328 B (6.04 %) |
 | `athom-music` | 1,011,680 | 1,007,248 | −4,432 | 41,328 B (3.94 %) |
 | `esp32-generic` | 1,011,264 | 1,006,896 | −4,368 | 41,680 B (3.97 %) |
-| `c3-devkit` | 964,848 | 953,200 | −11,648 | 95,376 B (9.10 %) |
+| `c3-devkit` | 964,832 | 953,200 | −11,648 | 95,376 B (9.10 %) |
 | `s3-devkit` | 958,240 | 953,920 | −4,320 | 94,656 B (9.03 %) |
 | `s3-hub75` | 965,360 | 960,928 | −4,432 | 87,648 B (8.36 %) |
 | `seengreat-hub75` † | 974,640 | 948,896 | −25,744 | 99,680 B (9.51 %) |
-| `c6-devkit` *(not a release artifact)* | 1,029,024 | 1,016,224 | −12,800 | 32,352 B (3.09 %) |
+| `c6-devkit` *(not a release artifact)* | 1,029,120 | 1,016,224 | −12,800 | 32,352 B (3.09 %) |
 
 Credless flake builds (`nix build .#luxel-fw-<v>` → `luxel-fw-ota.bin`), both
 columns against `origin/master` `eeb6e03`; † = `wled-takeover` dropped on this
@@ -1300,11 +1415,13 @@ as a LUXA archive, and `/` serves `/index.html` out of it. With `hosted-ui`:
   assets partition alone and an `image` composes a full-flash binary without
   it. The release workflow does the same for `luxel-c6-devkit-hosted`.
 
-What it buys: **~14 KB of the 1 MiB OTA slot on every board** and ~4.7 KB of
+What it buys: **~14 KB of the OTA slot on every board** and ~4.7 KB of
 DRAM back into the main stack (numbers in the ceiling section above), plus
 the ~641 KB bundle never having to be written to a device at all. The
 `assets` partition's 983,040 B stays allocated-to-nothing; reclaiming it
-needs a partition-table fork and is Gitea #199, not this mode.
+needs a third partition table and the migration to carry devices onto it —
+the mechanism now exists (#501), the table does not. Still Gitea #199, not
+this mode.
 
 What it costs: the device is **useless without internet** (or at least
 without a copy of the playground hosted somewhere), which is the opposite of
@@ -1369,26 +1486,46 @@ editor's pixel control clamps to whatever board is actually connected.
 ## Big-flash and PSRAM modules (the Seengreat board)
 
 The Seengreat board carries an ESP32-S3-WROOM-1-**N16R8**: 16 MB of flash
-and 8 MB of octal PSRAM. Luxel leaves the flash alone deliberately and uses
-the PSRAM as the pattern-array arena (Gitea #253).
+and 8 MB of octal PSRAM. The PSRAM is the pattern-array arena (Gitea #253);
+since 2026-09-20 the flash is its own partition table too.
 
-**Flash: the standard 4 MB `firmware/partitions.csv` stays** (decision for
-Gitea #73). A 16 MB module runs it fine — the last 12 MB is simply
-unallocated. Growing the table would buy nothing today and cost real
-complexity: the OTA app slots are capped at 1 MiB by the tripwire above
-either way, the storage partition (1 MB) is nowhere near full, and the
-assets partition (0xF0000 = 983,040 B) holds an 870 KB bundle as of
-2026-09-20 — **11.5% headroom, down from ~35% when this was written**
-(most of it `gallery.json`; +11 KB is #592 inlining the stylesheet into
-both entry HTMLs). That margin is now the one worth watching: a bundle
-over 983,040 B fails the `POST /api/assets` install outright. Against
-that, a second table would need a per-board
-partition file threaded through `build-esp32.sh`, `flake.nix`, the
-release workflow, `build.rs`'s `esp-idf-part` serialization *and*
-`src/takeover.rs` (which writes the table during a WLED takeover) — and
-would fork the "one image, one layout" property that makes OTA and the
-installer page simple. Revisit only when something actually needs the
-space — Gitea #143 records the conditions that would justify it.
+**Flash: `firmware/partitions-16mb.csv`, this board only** (Gitea #501,
+reversing the #73/#143 decision recorded below). 3 MiB app slots, a 4 MiB
+`storage`, a 3.9375 MiB `assets`, and the top 2 MiB deliberately
+unallocated — the layout is in docs/firmware.md, "Partition tables". The
+board's 987,952 B image leaves **68.6 %** of its slot free. Nothing about
+this board *needed* the space; what changed is that the cost of a second
+table went to near zero once the 4 MB boards had to be repartitioned
+anyway, so the per-board partition file, the build-time table selection and
+the migrator all exist for other reasons and this board just names a
+different csv.
+
+The 16 MB table is **opt-in per board, never per chip**:
+`board-s3-devkit` is the same silicon and stays on the 4 MB table, because
+generic S3 devkits ship 4, 8 or 16 MB modules indistinguishably at flash
+time and a 16 MB table on a 4 MB part is a serial-recovery brick. The
+Seengreat qualifies because its module is known by inspection.
+
+The reasoning this replaces, kept because the conditions it named are the
+ones that actually changed: **the standard 4 MB table stays** (decision for
+Gitea #73) — a 16 MB module runs it fine with the last 12 MB unallocated,
+the OTA slots are capped at 1 MiB either way, the storage partition is
+nowhere near full, and a second table would need a per-board partition file
+threaded through `build-esp32.sh`, `flake.nix`, the release workflow,
+`build.rs`'s `esp-idf-part` serialization *and* `src/takeover.rs`, forking
+the "one image, one layout" property. Three of those four premises are
+gone: the slot cap moved, the threading was built, and takeover.rs's table
+half became `parttab.rs`, shared. Gitea #143's conditions were met by #501
+rather than by this board.
+
+What did **not** change is the assets margin, which is still the number
+worth watching on every board: the 4 MB `assets` partition
+(0xF0000 = 983,040 B) holds an 870 KB bundle as of 2026-09-20 — **11.5 %
+headroom, down from ~35 %** (most of it `gallery.json`; +11 KB is #592
+inlining the stylesheet into both entry HTMLs). One bundle ships to every
+board, so the *small* partition is the bound even though this board's is
+four times the size, and a bundle over 983,040 B fails the
+`POST /api/assets` install outright.
 
 ## First light: the Seengreat board on metal (2026-09-05)
 
@@ -1918,21 +2055,24 @@ small-chip profile, documented just above.)
 
 ## Adding a board (a five-minute diff)
 
-Three files, no other code paths involved — plus two cases in
-`firmware/board-target.sh`: one in `board_name` (always — it maps the
-board to the `board::NAME` string tools/ota-push.sh greps the image for,
-so an image of the wrong board is refused instead of pushed, Gitea #389),
-one in `board_takeover` (always — whether the board can be installed by
-uploading Luxel to WLED's own `/update` page, which must match the
-`wled-takeover` feature in its `firmware/Cargo.toml` feature list; see
-docs/wled-migration.md), and one in `board_target` if the board is a chip we
-don't build yet
-(that file is the single board → chip / rust target / toolchain map,
-shared by build-esp32.sh and tools/stack-check.sh; its `CORE_O3` flag
-decides whether the VM crate gets opt-level 3 — see "The 1 MiB OTA-slot
-ceiling" — and its `IRAM` flag which of the interpreter's hot functions
-execute from internal SRAM — see "IRAM budget" — and flake.nix's
-`firmwareVariants` entry must say the same for both):
+Three files, no other code paths involved — plus a case in **every**
+function of `firmware/board-target.sh`, each of which errors on an unknown
+board rather than guessing:
+
+| function | what it decides |
+|---|---|
+| `board_name` | the `board::NAME` string tools/ota-push.sh greps the image for, so an image of the wrong board is refused instead of pushed (Gitea #389) |
+| `board_takeover` | whether the board can be installed by uploading Luxel to WLED's own `/update` page — must match the `wled-takeover` feature in its `firmware/Cargo.toml` feature list (docs/wled-migration.md) |
+| `board_partitions` | which partition csv the board's flash takes, and the matching `espflash --flash-size`. `partitions.csv` + `4mb` unless the MODULE is known to carry 16 MB — "it's an S3" is not enough (Gitea #501; `firmware/build.rs` makes the same choice from the cargo feature for the table it EMBEDS, and the two must agree) |
+| `board_ota_max` | the board's app-slot size in bytes: `1310720` on the 4 MB table, `3145728` on the 16 MB one. `tools/image-check.sh`'s margin gate reads it, so the number lives in exactly one place per board |
+| `board_target` | only if the board is a chip we don't build yet |
+
+(`board_target` is the board → chip / rust target / toolchain map shared by
+build-esp32.sh and tools/stack-check.sh; its `CORE_O3` flag decides whether
+the VM crate gets opt-level 3 — see "The OTA-slot ceiling" — and its `IRAM`
+flag which of the interpreter's hot functions execute from internal SRAM —
+see "IRAM budget" — and flake.nix's `firmwareVariants` entry must say the
+same for both.)
 
 1. **`firmware/Cargo.toml`** — add the feature, selecting the chip:
 

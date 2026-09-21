@@ -203,6 +203,44 @@ finishes (~30–60 min; four of the six boards are slow Xtensa
 `-Zbuild-std` builds). The job is idempotent: re-run it to recover from a
 transient failure — it upserts the release and re-uploads missing assets.
 
+### The migrating release (Gitea #501) — and taking the switch back out
+
+The 2026-09-20 repartition gave the fleet bigger OTA slots (docs/firmware.md,
+"Partition tables"). Devices move themselves, on the first boot of ONE
+release, and that release has a different size gate from every other:
+
+- **`MIGRATING_RELEASE=1`** makes `tools/image-check.sh` weigh every board's
+  image against the **old 1,048,576 B slot** instead of the board's new one,
+  with the margin floor relaxed to **0 %**. The reason is not a preference:
+  a device still on the pre-#501 table is what installs this image, and its
+  own running firmware writes it into a 1 MiB slot. An image that only fits
+  the new 1.25 MiB slot would be rejected at `/api/ota` and nobody could
+  migrate. The floor comes down because the repartition is the thing that
+  ends the squeeze — holding 3 % of the old slot would block the release
+  that makes the slot bigger. Margins as measured are in docs/boards.md;
+  the tightest is 2,992 B (0.28 %) on `board-c6-devkit`.
+- **`.github/workflows/release.yml` carries it workflow-wide**
+  (`env: MIGRATING_RELEASE: "1"`), and `tools/ci.sh` exports it through to
+  image-check when it is set in the environment.
+- **It must be REMOVED in the release after this one.** Leaving it in
+  silently keeps gating the whole fleet at 1 MiB and throws away the
+  headroom the repartition bought; the floor then goes back to 3 % of the
+  per-board slot, where there is finally room under it (20–25 % free on the
+  4 MB boards, 68.6 % on the Seengreat). The block in release.yml says so
+  above itself; this is the second copy of that reminder.
+- **The release notes for this version must say it is a prerequisite for
+  every later one.** A release after this one may exceed 1 MiB and therefore
+  cannot be installed on a device that has not migrated. `/api/ota` refuses
+  such an upload up front, before erasing a sector, and on an un-migrated
+  device the error names the migrating release — but a user reading release
+  notes should not have to discover that from an error string.
+- **Later, `migrate-off`** (tracked with the switch removal as Gitea #635).
+  Once the fleet has moved, a release can be built
+  with that cargo feature and get the migrator's ~12 KB of OTA slot back.
+  It is deliberate by construction: image-check asserts the migrator's
+  marker is linked unless the feature is named, and absent when it is. Do
+  not combine it with anything a device on the old table might be handed.
+
 ## What gets published
 
 Per board (`c3-devkit`, `pixelblaze-v3`, `athom-music`, `esp32-generic`,
@@ -216,7 +254,7 @@ restoring it is Gitea #291:
 
 | asset | what it's for |
 |---|---|
-| `luxel-<board>-<ver>-ota.bin` | App-only image: `POST /api/ota`, and the image WLED's `/update` page accepts for the WLED→Luxel takeover (docs/wled-migration.md). Size-guarded against the 1 MiB OTA slot. |
+| `luxel-<board>-<ver>-ota.bin` | App-only image: `POST /api/ota`, and the image WLED's `/update` page accepts for the WLED→Luxel takeover (docs/wled-migration.md). Size-guarded against the board's OTA slot — or against the old 1 MiB one while `MIGRATING_RELEASE=1` is set, see above. |
 | `luxel-<board>-<ver>-full.bin` | Full-flash image (bootloader + partition table + app + **web assets**): `espflash write-bin 0x0 <file>` — new-device bring-up and full restores. Composed exactly like `firmware/build-esp32.sh image`. |
 
 One extra pseudo-board, `c6-devkit-hosted`, ships the same two images built

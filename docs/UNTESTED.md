@@ -112,6 +112,30 @@ value while collapsed. Everything below is on the new page.
 
 ## Needs you physically (I can't do these)
 
+- [ ] **The partition repartition on metal** (Gitea #634, from #501,
+  2026-09-20 — that ticket carries the exact per-device procedure): the
+  fleet's OTA slots went 1 MiB → 1.25 MiB (3 MiB on the Seengreat) and every
+  device rewrites its own partition table on the first boot of the migrating
+  release — pattern library, playlist and settings carried across, no serial
+  involved (docs/firmware.md, "Layout migration"). **No hardware has run any
+  of this.** What is verified is the host suite (`cargo test -p patlog-check`
+  for the repack, the refusal and a cut mid-staging; `cargo test -p
+  parttab-check` for the table arithmetic against the real CSVs) and the
+  QEMU suite; what that cannot reach is a real flash part, a real power cut,
+  and real WiFi credentials surviving in nvs. The bench order is deliberate:
+  the **Athom first**, because it is the one board on an agent-controllable
+  power plug, so the resume-after-a-cut path can actually be exercised at
+  each stage; the **Seengreat second and only after the Athom is proven**,
+  because it is the only 16 MB device, its table moves the asset bundle too,
+  and there is no second one. Neither board has a serial console — the
+  residual risk is a cut inside the single 4 KiB table write, which is
+  milliseconds and is serial-recovery-only, and you are the serial recovery.
+  One more gap the emulator cannot close: the **asset move** only happens on
+  the 16 MB layout, and QEMU's `esp32s3` machine reads the 16 MB table and
+  loads the app but then prints nothing at all, so that copy has never run
+  anywhere — which is the other reason the Seengreat goes second.
+  Both boards run your playlists, and the playlist blob is a store record:
+  it has to come through the relocation intact and resume.
 - [ ] **AP-mode provisioning** (v0.1.22): Settings → "reboot into setup
   AP", then join `luxel-4ae0d4` from your phone — a captive portal should
   pop with the settings page; save WiFi and it reboots back onto your

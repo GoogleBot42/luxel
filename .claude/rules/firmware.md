@@ -146,9 +146,30 @@ paths:
   (see `patterns::write_raw`, the OTA/assets writers); reserve `take_flash`
   for sequential-storage transactions that genuinely need exclusive
   multi-op ownership, and keep those short.
-- The app must fit in a 1 MiB OTA slot; `firmware/Cargo.toml` sets
+- **Never write a partition offset down.** Since #501 an image can meet
+  three layouts — its own, the other flash size's, and the pre-#501 one a
+  field device still carries — so a literal offset is wrong on two of them,
+  in the way that erases user data rather than the way that fails to
+  compile. Read the table: `ota::data_partition("storage")`,
+  `parttab::data_labelled(table, "assets")`,
+  `parttab::app_slot(table, SUBTYPE_OTA1)`; a shell script parses the csv
+  the board selected (`$PARTITIONS`, `board_partitions` in
+  `firmware/board-target.sh`). `tools/offset-check.py` runs in `tools/ci.sh`
+  and fails the gate on a literal in `firmware/src/**` or a flashing script
+  — comments, docs and `tools/qemu/` are exempt. The same rule is why the
+  pattern store's geometry is resolved at boot: the key area is a fixed
+  128 KiB, the log starts at `LOG_OFF` on every layout, and only the log's
+  LENGTH comes from the partition (`patterns::log_len`).
+- The app must fit its board's OTA slot; `firmware/Cargo.toml` sets
   `opt-level = "s"` to stay under it (see docs/boards.md for the ceiling
-  history). The canonical size measure is the CREDLESS flake build
+  history). **The slot is per board since #501** — 1,310,720 B on the 4 MB
+  boards, 3,145,728 B on `board-seengreat-hub75`, from `board_ota_max` in
+  `firmware/board-target.sh`; a margin percentage means nothing until you
+  say which slot it is a fraction of, and `tools/image-check.sh` prints the
+  rule it used on every size line. While `MIGRATING_RELEASE=1` is set every
+  image is weighed against the OLD 1,048,576 B slot at a 0 % floor instead,
+  because a device that has not repartitioned is what installs that one
+  release (docs/releases.md). The canonical size measure is the CREDLESS flake build
   (`nix build .#luxel-fw-<board>` — what release CI gates); a creds-baked
   devshell build reads ~1.5 KB larger, not hugely different (AP-mode
   provisioning keeps the WiFi stack linked either way — the old warning
