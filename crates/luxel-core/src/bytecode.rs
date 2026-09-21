@@ -153,7 +153,10 @@ pub fn decode_envelope(bytes: &[u8]) -> Result<Envelope<'_>, BcError> {
 
 // ---- opcodes ----
 
-pub(crate) mod op {
+/// **`pub` so the out-of-crate JIT emitter (`luxel-jit`) can decode the same
+/// stream the interpreter does.** Not a stability promise to the world; it is
+/// the in-repo instruction encoding, documented in docs/spec/bytecode.md.
+pub mod op {
     pub const CONST_NUM: u8 = 0x01;
     pub const CONST_FUN: u8 = 0x02;
     pub const CONST_BUILTIN: u8 = 0x03;
@@ -255,7 +258,7 @@ pub(crate) mod op {
 /// Sub-opcodes accepted by [`op::CONST_OP`] / [`op::LOAD_L_CONST_OP`] /
 /// [`op::LOAD_G_CONST_OP`]: the two-operand value ops, which are exactly
 /// the base opcodes they stand for.
-pub(crate) fn is_binop_sub(o: u8) -> bool {
+pub fn is_binop_sub(o: u8) -> bool {
     matches!(
         o,
         op::ADD
@@ -279,7 +282,7 @@ pub(crate) fn is_binop_sub(o: u8) -> bool {
 }
 
 /// Sub-opcodes accepted by [`op::CMP_JF`].
-pub(crate) fn is_cmp_sub(o: u8) -> bool {
+pub fn is_cmp_sub(o: u8) -> bool {
     matches!(
         o,
         op::LT | op::LE | op::GT | op::GE | op::EQ | op::NE
@@ -292,7 +295,7 @@ pub(crate) fn is_cmp_sub(o: u8) -> bool {
 /// 8..24 / 24..32) or a 24-bit word index depending on the opcode.
 /// `CONST_NUM` is the only two-word instruction: its immediate (raw
 /// 16.16 `i32`) is the following word.
-pub(crate) mod enc {
+pub mod enc {
     #[inline(always)]
     pub const fn opcode(w: u32) -> u8 {
         w as u8

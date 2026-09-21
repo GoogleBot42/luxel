@@ -232,7 +232,7 @@ use crate::bytecode::{enc, is_binop_sub, op};
 /// without its validation — every caller here runs on words a decoder has
 /// already accepted, or on the compiler's own freshly laid-out stream.
 #[cfg(feature = "kinds")]
-pub(crate) fn ilen(o: u8) -> usize {
+pub fn ilen(o: u8) -> usize {
     match o {
         op::CONST_NUM
         | op::CONST_OP
