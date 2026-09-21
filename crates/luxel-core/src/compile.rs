@@ -2424,7 +2424,7 @@ impl<'s> Compiler<'s> {
         // parameter gets no slot at all, and `callback_is_call_only` has
         // already proved nothing else can name it
         for l in function_scope(params, body).into_iter().skip(params.len()) {
-            if !locals.iter().any(|x| *x == l) {
+            if !locals.contains(&l) {
                 locals.push(l);
             }
         }

@@ -88,8 +88,13 @@ function arraySortBy(a, cmp) {
 
 // `pixelCoord(i, axis)` is the one builtin this needed: the mapped
 // coordinate of pixel `i` on axis 0/1/2 with the current transform applied,
-// which is what the old `mapPixels` arm computed per pixel. Returns 0 (the
-// builtin's value, not a return) — the old arm returned 0 too.
+// which is what the old `mapPixels` arm computed per pixel. Falling off the
+// end returns 0, as the arm did.
+//
+// The loop bound is the `pixelCount` GLOBAL where the arm read the engine's
+// own count. The engine keeps the two in step, so they differ only for a
+// pattern that assigns to `pixelCount` itself — which was already a way to
+// break a pattern.
 function mapPixels(fn) {
   var i = 0
   while (i < pixelCount) {
