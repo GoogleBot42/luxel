@@ -1,5 +1,66 @@
 # Update log
 
+## 2026-09-20 — JIT phase 0: kinds in the bytecode, LXBC v6 (#625)
+
+The first phase of the on-device JIT (#607, docs/jit-design.md) lands entirely on
+the HOST side: the compiler now proves, for every global, parameter, local and
+function return, that only one kind of value can ever reach it, and records that
+proof in the blob. Nothing about the interpreter changes — `Box`, the one new
+opcode, is an empty arm — and no device was touched.
+
+**The lattice.** `Dyn` on top; `Num`, `Arr`, `Fun`, `Builtin` under it; `ArrNum`
+(an array whose elements are all numbers) under `Arr`. A kind is a PROOF, not a
+declaration: a slot may be `Num` only if every value that can reach it is a
+number. That includes values the engine itself writes, which the design's §2.3
+did not model and which this implementation does: `Engine::set_var` pokes a
+`Value::Num` into any EXPORTED global, and `Engine::from_program*` seeds
+`frequencyData`/`accelerometer`/`analogInputs` with arrays. Four library
+patterns lose their fully-typed render path to the first of those; they are
+right to.
+
+**Inference** (`crates/luxel-core/src/kinds.rs`, `infer`) is a flow-insensitive
+whole-program fixpoint over the COMPILED word stream, so the folds, the store
+forwarding and the superinstructions all see the same kinds the verifier does
+and one implementation serves the compiler, the CLI and the decoder. Arrays get
+per-allocation-site provenance (that is what separates `ArrNum` from `Arr`) with
+the poison rule for stores through an array of unknown provenance; builtin
+return and array-store kinds come from one name-keyed table beside `BUILTINS`
+(`vm::builtin_sig`), which cannot drift the way a parallel array would. A
+global's declared init value is a store too, dropped only when the init function
+definitely assigns it first — dominators on init's CFG, and no call that can
+READ the global before that store (refining the design's "no call at all" to
+"no call that can reach a `LoadG g`" is worth 22 of the 307 patterns, because a
+top-level init that builds several arrays calls helpers between them).
+
+**Verification** (`verify`) is the §2.4 stack-map walk, run by the compiler on
+everything it emits (`debug_assert`) and by every decoder built with luxel-core's
+new `kinds` feature — on by default, so the browser wasm, the CLI and the mirror
+all check; the firmware depends on luxel-core with `default-features = false` and
+only reads PAST the section. Where the compiler's inference and the verifier's
+linear walk disagree — a conditional join whose edges carry different kinds — the
+compiler inserts `Box` on the narrower edge and lays the function out again,
+until verification passes. Eight `Box` instructions across six library patterns.
+
+**LXBC v6.** `FORMAT_VERSION` 5 → 6; header flag bit 1 = `TYPED`; a `kinds`
+section after `exports` (one byte per global, then `1 + locals` bytes per
+function, zero-padded to a multiple of 4). Its length follows from the header
+and the fns table alone, which is the point: a decoder that does not care skips
+it by arithmetic. A v6 blob WITHOUT the flag is legal and means "everything
+`Dyn`" — that is what `luxel compile --no-kinds` produces. Every stored blob on
+every device goes stale and is recompiled from its stored source through the
+existing `bc-version` loop, exactly as at the 4 → 5 bump.
+
+**Measured, 307 library patterns**: 307/307 typed and verified; 848 globals
+proven `ArrNum`, 29 `Arr`, 79 `Dyn`; 94.5 % of locals and 94.0 % of render-path
+locals proven `Num`; **286 patterns with a fully typed render path**. The
+prototype census in §9 reported 291, without modelling the engine's writes
+(−4 patterns) or the declared init value (−2, +1 elsewhere). The image cost on
+boards that carry none of this: **+160 B** on `board-c6-devkit` + `hosted-ui`,
+**+16 B** on `board-pixelblaze-v3` (4.11 % slot margin, still over the floor),
+and **−96 B** on `board-seengreat-hub75`. The C6 hosted-ui image was already
+2.99 % — under the 3 % floor — at the merge base; that is #543, not this.
+
+
 ## 2026-09-20 — Dimensionality 0 is "any", not 1D (#629)
 
 Jeremy, on the Seengreat panel: *"setting the projection type makes no difference at all —

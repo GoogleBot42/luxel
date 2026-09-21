@@ -1,6 +1,6 @@
 # LXBC — serialized pattern bytecode
 
-Status: **v5, implemented** (`crates/luxel-core/src/bytecode.rs`). This is the
+Status: **v6, implemented** (`crates/luxel-core/src/bytecode.rs`). This is the
 wire/flash encoding of the in-memory `vm::Program` (see `vm.md` §2). It exists
 so devices can *execute* patterns without linking the lexer/parser/compiler:
 the browser (wasm) or CLI compiles source → LXBC; the device stores the blob
@@ -37,8 +37,10 @@ All integers little-endian. `str8` = `u8` length + UTF-8 bytes.
 
 ```
 0   4   magic "LXBC"
-4   u16 version          (currently 5)
-6   u16 flags            bit0: debug info present; others reserved (0)
+4   u16 version          (currently 6)
+6   u16 flags            bit0: debug info present
+                         bit1: TYPED — a `kinds` section follows `exports`
+                         others reserved (0)
 8   u16 pixel_count_g    global slot holding pixelCount
 10  u16 n_globals        (≤ 256)
 12  u16 n_fns            (≥ 1, ≤ 1024; fn 0 is top-level init)
@@ -49,6 +51,7 @@ All integers little-endian. `str8` = `u8` length + UTF-8 bytes.
 22  u32 words_off        byte offset of the word region (multiple of 4, ≥ 30)
 26  u32 n_words          word-region length in u32 words (≤ 65 536)
 30  …   tables, in order: imports, globals, pool, msgs, fns, exports
+    …   kinds section, when flags.TYPED (v6 — see below)
     …   zero padding to a multiple of 4 (0–3 bytes)
 words_off  n_words × u32   the word region: code, then the constant pool
 ```
@@ -113,6 +116,32 @@ locations and the debugger's frame pcs are all word indices.
 
 **exports** — `n_exports × { str8 name, u16 fn_idx }`.
 
+**kinds** (v6, present only when `flags` bit 1 `TYPED` is set) — the static
+representation proof the JIT reads (Gitea #607, docs/jit-design.md §2):
+
+```
+n_globals × u8          one kind byte per global slot
+per function:
+  u8                    the function's return kind
+  locals × u8           one kind byte per local slot (params first)
+zero padding to a multiple of 4
+```
+
+Kind byte: `0 Dyn, 1 Num, 2 Arr, 3 ArrNum, 4 Fun, 5 Builtin`; any other value
+is a format error. `locals` is the function's TOTAL slot count with params
+included — the same `u16 locals` the fns table already carries — so the
+section is `(n_globals + Σ(1 + locals))` bytes rounded up to a multiple of 4,
+derivable from the header and the fns table alone. That is deliberate: **a
+decoder that does not care about kinds skips the section by computing that
+length**, which is exactly what a board with no JIT backend does (luxel-core's
+`kinds` cargo feature is on by default — browser wasm, CLI, mirror — and the
+firmware, which depends on luxel-core with `default-features = false`, never
+names it).
+
+A v6 blob WITHOUT the flag is legal and means "every slot `Dyn`": nothing is
+proven and the program can only be interpreted. The interpreter ignores kinds
+either way — `Box` is a no-op arm and no other opcode changes meaning.
+
 ## Instruction words
 
 One `u32` per instruction: **bits 0..8 the opcode, bits 8..32 a 24-bit
@@ -169,7 +198,8 @@ proves every jump lands on an instruction boundary (i.e. never on a
 | 0x3F | RetNull | |
 | 0x40 | Assert | u16 msg-table index |
 | 0x41–0x4E | superinstructions | fused sequences — see below |
-| 0x4F–0xFF | *reserved* | |
+| 0x4F | Box | — (v6: widen the stack top to `Dyn`) |
+| 0x50–0xFF | *reserved* | |
 
 `Assert` pops the condition; falsy aborts the run with an `is_assert`
 error carrying the message (plus pixelCount context). The compiler only
@@ -216,7 +246,7 @@ selection criterion.
 | 0x4D | CmpJf | u8 sub-opcode (+ 1 word: target) | `<cmp>; JmpIfFalse t` |
 | 0x4E | PopRetNull | — | `Pop; RetNull` |
 
-`0x4F..0xFF` stay free.
+`0x50..0xFF` stay free (`0x4F` is v6's `Box`).
 
 **Sub-opcodes** are the base opcode bytes of the operation they stand for.
 `ConstOp` / `LoadLConstOp` / `LoadGConstOp` accept the two-operand value
@@ -373,6 +403,53 @@ An accepted blob's word region is used verbatim and re-encodes
 byte-identically (the corpus round-trip test asserts this). Every invariant
 the in-place interpreter relies on is proven here.
 
+### Kind verification (v6)
+
+A decoder built with luxel-core's `kinds` feature also runs the **stack-map
+walk** of docs/jit-design.md §2.4 over a `TYPED` blob, once per function,
+with an abstract stack of kinds (`crates/luxel-core/src/kinds.rs`). It is the
+compiler's own self-check as well: `compile` runs it on everything it emits
+and a failure is a compiler bug, not a user error.
+
+- `ConstNum` pushes `Num`, `ConstFun` `Fun`, `ConstBuiltin` `Builtin`;
+  `LoadL`/`LoadG` push the slot's annotated kind.
+- `StoreL`/`StoreG` require the stack top ⊑ the slot's kind (`Num` into a
+  `Dyn` slot boxes and is fine; `Dyn` into a `Num` slot is a failure). The
+  peek forms leave the value on the stack.
+- Arithmetic, bitwise, comparison, `Not`, `Neg` pop anything and push `Num`
+  (non-numbers coerce to 0, so `Dyn` never propagates through an expression).
+- `LoadIdx` pushes `Num` when the array operand is `ArrNum`, else `Dyn`.
+  `StoreIdx` pushes the stored value's kind; storing a non-`Num` into an
+  `ArrNum` array is a failure. `ArrLen` pushes `Num`.
+- `CallFn` requires each argument ⊑ the callee's param kind and pushes the
+  callee's return kind; `CallBuiltin*` pushes the kind from the signature
+  table beside `BUILTINS` (`vm::builtin_sig`); `CallValue` pushes `Dyn`.
+- A jump target must see an **identical** abstract stack from every edge: the
+  first visit records it, later visits compare. A join whose edges differ in
+  kind is a failure — the compiler is required to have inserted `Box` on the
+  narrower edge, and it iterates layout/infer/verify until that holds.
+- `Ret` requires the top ⊑ the return kind. `Box` requires a non-`Dyn` top
+  and replaces it with `Dyn`. `Dup` on an empty stack is a failure (the
+  interpreter would push `Num 0`; the JIT never has to materialize that).
+
+`ArrNum` is a property of an array OBJECT, which a linear walk cannot follow
+through the heap. The verifier therefore tracks, per stack entry, whether the
+value is reachable through an ANNOTATED slot: a value fresh out of
+`array(n)`/`NewArray`/`ConstArr` genuinely holds only numbers at that
+instant, and the moment it is stored into a slot whose annotation is exactly
+its kind, that annotation becomes a promise about it and later non-`Num`
+writes through it are rejected. This is what makes `arr = array(8);
+arr.mutate(f)` pass (store forwarding hands the fresh array straight to the
+builtin, and the inference has already demoted `arr` to `Arr`) while a blob
+that *claims* `ArrNum` for a mutated array does not.
+
+**Precondition on the annotation** (docs/jit-design.md §2.3): the inference
+drops a global's declared init value when the init function definitely
+assigns it first. That is only true if init RUNS TO COMPLETION. A runtime
+error in init aborts it and the engine still renders, so a consumer that
+unboxes on the strength of these kinds must fall back to the interpreter when
+init errored.
+
 ## Debug info
 
 `flags.debug` gates source positions (pc-keyed runs — statement granularity,
@@ -396,6 +473,11 @@ present. Producers always emit debug info.
   instead of rewritten; the borrowing decoder for memory-mapped stores.
 - v5 (no version bump): superinstructions `0x41..0x4E`, appended. Old v5
   blobs keep running; producers that do not emit them stay valid.
+- v6: the `kinds` section + the `TYPED` flag bit, and the `Box` opcode
+  (`0x4F`). The section is new CONTAINER content, which is what forced the
+  bump — the opcode alone would not have (Gitea #607). Every stored blob on
+  every device goes stale at once and is recompiled from its stored source
+  through the existing `bc-version` loop, same as the 4 → 5 bump.
 
 ## What LXBC is not
 

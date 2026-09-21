@@ -66,8 +66,10 @@ measured share).
 ### 2.2 What is annotated
 
 Per program: one kind byte per global. Per function: a return kind, then
-one kind byte per param and per local (`params + locals` bytes, in slot
-order). Nothing per instruction: the operand stack's kinds at every word
+one kind byte per local SLOT (`locals` bytes — `FnDef::locals` counts the
+params, which occupy slots `0..params`, so this is one byte per param and
+per local and no more), in slot order. Nothing per instruction: the operand
+stack's kinds at every word
 are derived by the verifier's linear walk (§2.4), exactly like the JVM's
 stack-map verification. Encoding of a kind byte: `0 Dyn, 1 Num, 2 Arr,
 3 ArrNum, 4 Fun, 5 Builtin`; other values are a format error.
@@ -124,6 +126,29 @@ serves the compiler, the CLI and the verifier).
 Iterate to a fixpoint (kinds only move up the lattice; at most three
 steps per slot). Cost is linear in program size per iteration.
 
+**Two things this section missed, found while implementing it (#625):**
+
+- **The ENGINE writes globals too, and they are stores like any other.**
+  `Engine::set_var` pokes a `Value::Num` into any *exported* global (the
+  `/api/vars` surface), so an exported array global cannot be proven
+  `ArrNum` — 4 library patterns. `Engine::from_program*` seeds
+  `frequencyData`/`accelerometer`/`analogInputs` with arrays before init
+  runs, so those globals carry an implicit allocation site. Both are
+  modelled in `kinds::infer`; leaving either out would let the JIT unbox a
+  slot the host can overwrite.
+- **The init exemption assumes init RUNS TO COMPLETION.** A runtime error
+  in init (an out-of-bounds read, an array-budget refusal) aborts it, and
+  the engine still renders — `var buf = array(n)` would then never have
+  executed and `buf` holds `Num(0)` while the annotation says `ArrNum`. A
+  consumer that unboxes on the strength of these kinds must therefore fall
+  back to the interpreter when init errored (`Engine::take_error` after
+  construction). Cheap, and it is the only way to keep the exemption, which
+  is worth the whole `ArrNum` result.
+- Refining "no call precedes that store" to "no call that can REACH a
+  `LoadG g` precedes that store" is sound, cheap (a transitive read-set per
+  function) and worth 22 of 307 patterns: a top-level init that builds
+  several arrays routinely calls helpers between them.
+
 ### 2.4 Verification (device side, and the compiler's own self-check)
 
 A single linear pass per function with an abstract stack of kinds:
@@ -152,15 +177,20 @@ validation"); the kind walk piggybacks on the same pass. Failure is a
 exactly like `bc-version`, so the playground recompiles and, if the blob
 is still wrong, shows the message — a verifier failure is a compiler bug
 and should be loud. The pass costs O(words) at load. It is compiled in
-under the `jit` feature only; boards without a backend parse and skip the
-section (kinds are advisory to the interpreter), so the C6's 14 B of slot
-margin is untouched.
+under luxel-core's `kinds` feature (ON by default, so the browser, the CLI
+and the mirror all verify; the firmware depends on luxel-core with
+`default-features = false` and never names it). Boards without a backend
+skip the
+section (kinds are advisory to the interpreter). Measured cost of that skip
+on a board that carries no verifier: +160 B on `board-c6-devkit` +
+`hosted-ui`, +16 B on `board-pixelblaze-v3`, −96 B on
+`board-seengreat-hub75` (#625).
 
 ### 2.5 Format changes
 
 - `FORMAT_VERSION` 5 → 6. Header `flags` bit 1 = `TYPED`. A `kinds`
   section is appended after `exports` (before the padding to `words_off`):
-  `n_globals` kind bytes, then per function `1 + params + locals` kind
+  `n_globals` kind bytes, then per function `1 + locals` kind
   bytes, then zero padding to a multiple of 4. A v6 blob without `TYPED`
   is legal (everything `Dyn`) and runs only in the interpreter.
 - One new opcode, `Box` = `0x4F` (no operand). The interpreter treats it
@@ -562,11 +592,39 @@ without serial; hence the order above, and the boot-loop guard stays.
   must be checked, #543).
 - No other board's behaviour changes: same blob, same interpreter.
 
-## 9. Library census (measured 2026-09-20)
+## 9. Library census
 
-`crates/luxel-cli/examples/jitcensus.rs` compiles every `library/*.js`
-(307 patterns, shipping options: folded, fused, store-forwarded), walks
-the v5 word stream and runs a prototype of the §2.3 inference — per-site
+### 9a. As shipped (phase 0, Gitea #625)
+
+The prototype's numbers are in §9b below; these are what
+`crates/luxel-core/src/kinds.rs` — the code the compiler runs, the decoder
+checks and `jitcensus` now drives — actually produces over the 307
+`library/*.js` patterns. They are pinned by
+`crates/luxel-core/tests/kinds.rs`.
+
+| result | shipped | prototype (§9b) |
+|---|---:|---:|
+| patterns typed + verified | 307 / 307 | — |
+| **fully typed render path** | **286 / 307** | 291 / 307 |
+| locals proven `Num` | 94.5 % | 95.1 % |
+| render-path locals proven `Num` | 94.0 % | 94.0 % |
+| globals `ArrNum` / `Arr` / `Dyn` | 848 / 29 / 79 | 899 / 30 / 17 |
+| `Box` sites (patterns) | 8 (6) | 11 (9) |
+
+The gap to the prototype is entirely the two soundness rules §2.3 was
+missing: 4 patterns to the exported-global host write, 2 to the declared
+init value (which the prototype dropped unconditionally). Nothing regressed.
+
+### 9b. Prototype census (measured 2026-09-20)
+
+This is the ONE-OFF measurement that sized the design, taken with a
+throwaway inference that lived inside `jitcensus.rs`. That copy is gone —
+the example drives `luxel_core::kinds` now (§9a) — so the table below is
+history, kept because the design's decisions were made against it.
+
+The prototype compiled every `library/*.js`
+(307 patterns, shipping options: folded, fused, store-forwarded), walked
+the v5 word stream and ran a prototype of the §2.3 inference — per-site
 array provenance, callee sets for function values, globals seeded from
 stores only (the §2.3 init rule). Self-check: the abstract walk reaches
 99.8 % of all instructions; the rest are dead epilogues after an explicit
