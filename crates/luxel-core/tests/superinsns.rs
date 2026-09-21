@@ -18,6 +18,7 @@ const UNFUSED: CompileOpts = CompileOpts {
     superinstructions: false,
     const_folding: true,
     store_forwarding: true,
+    kinds: true,
 };
 
 /// One source per fusion family, plus the shapes that must NOT fuse.

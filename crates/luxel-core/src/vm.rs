@@ -13,10 +13,13 @@
 //! - Fuel and call-depth guards keep hostile/buggy patterns from hanging a
 //!   host.
 //!
-//! The VM executes LXBC bytecode IN PLACE: `Program.code` is the flat byte
-//! encoding (docs/spec/bytecode.md), `pc` is a function-relative byte
-//! offset, and jump operands are byte offsets too. Nothing is materialized
-//! per instruction — a decoded Program costs roughly its blob size, which
+//! The VM executes LXBC bytecode IN PLACE: `Program.words` is one
+//! 4-byte-aligned region of fixed-width `u32` instruction words shared with
+//! the constant pool (docs/spec/bytecode.md), `pc` is a function-relative
+//! WORD index, and jump operands are word indices too. Nothing is
+//! materialized per instruction — a decoded Program costs roughly its blob
+//! size (and costs no RAM at all when the blob is a mapped flash slot,
+//! `Words::Static`), which
 //! is what lets 50–80 KB-of-heap devices run real patterns (like PB, whose
 //! device VM also runs its bytecode directly). Every host — firmware,
 //! wasm, native — runs THIS interpreter, so semantics can't drift between
@@ -175,6 +178,14 @@ pub struct Program {
     pub assert_msgs: Vec<String>,
     /// Global slot holding `pixelCount`.
     pub pixel_count_g: u16,
+    /// LXBC v6 `kinds` section: the static representation proof for every
+    /// global, parameter, local and return (Gitea #607,
+    /// docs/jit-design.md §2). `None` = an untyped blob. The field only
+    /// EXISTS under the `kinds` feature: a firmware decoder reads past the
+    /// section without materializing it, which is what keeps the decoder
+    /// delta on a JIT-less board down to a length computation.
+    #[cfg(feature = "kinds")]
+    pub kinds: Option<crate::kinds::Kinds>,
 }
 
 impl Program {
@@ -553,6 +564,90 @@ pub static BUILTINS: &[BuiltinDef] = &[
     b!("paintCanvas", PaintCanvas),
     b!("stencil2D", Stencil2D), b!("arrayMaxAbs", ArrayMaxAbs),
 ];
+
+// ---- builtin kind signatures (Gitea #607, docs/jit-design.md §2.3) ----
+
+/// What a builtin call pushes, in the [`crate::kinds`] lattice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SigRet {
+    /// A number — nearly every builtin.
+    Num,
+    /// A freshly allocated all-numeric array: `array(n)` zero-fills.
+    NewArrNum,
+    /// Argument `n` verbatim (the array-returning bulk ops).
+    Arg(u8),
+    /// Unknown — a value that came out of a user callback.
+    Dyn,
+}
+
+/// What a builtin WRITES into the array argument it mutates. Only the
+/// non-`Num` cases are listed: writing numbers can never demote an
+/// `ArrNum` array, so the bulk math ops need no entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SigWrite {
+    Num,
+    /// A user callback's return value.
+    Dyn,
+    /// The join of arguments `n..argc`.
+    ArgsFrom(u8),
+}
+
+/// One builtin's kind signature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BuiltinSig {
+    pub ret: SigRet,
+    /// `(array argument index, kind written)` when the builtin stores
+    /// something that is not provably a number into one of its arguments.
+    pub writes: Option<(u8, SigWrite)>,
+    /// Argument index holding a callback (a higher-order builtin).
+    pub callback: Option<u8>,
+}
+
+/// The kind signature of builtin `id` (docs/jit-design.md §2.3, §4).
+///
+/// Keyed by NAME, not by index: [`BUILTINS`] is append-only and its order
+/// is the runtime id, so a name-keyed table cannot drift out of step with
+/// it the way a parallel array would. One place — the inference, the
+/// verifier and (later) the JIT's `BUILTIN_ENTRIES` all read this.
+///
+/// The classification comes from reading every `Ok(a(i))` arm of
+/// [`Vm::call_builtin`]: `array` is the only builtin that ALLOCATES,
+/// twenty-three return one of their array arguments verbatim,
+/// `arrayReduce` returns whatever the callback returned, and everything
+/// else returns a number.
+#[cfg(feature = "kinds")]
+pub fn builtin_sig(id: u16) -> BuiltinSig {
+    let name = match BUILTINS.get(id as usize) {
+        Some(b) => b.name,
+        // an id the decoder would already have rejected
+        None => return BuiltinSig { ret: SigRet::Dyn, writes: None, callback: None },
+    };
+    let sig = |ret, writes, callback| BuiltinSig { ret, writes, callback };
+    match name {
+        "array" => sig(SigRet::NewArrNum, None, None),
+        // higher-order: the callback is a pattern function (or any value)
+        "arrayForEach" => sig(SigRet::Arg(0), None, Some(1)),
+        "arrayMutate" => sig(SigRet::Arg(0), Some((0, SigWrite::Dyn)), Some(1)),
+        "arrayMapTo" => sig(SigRet::Arg(1), Some((1, SigWrite::Dyn)), Some(2)),
+        "arrayReduce" => sig(SigRet::Dyn, None, Some(1)),
+        "arraySortBy" => sig(SigRet::Arg(0), None, Some(1)),
+        "mapPixels" => sig(SigRet::Num, None, Some(0)),
+        // splat the caller's values into the array
+        "arrayReplace" => sig(SigRet::Arg(0), Some((0, SigWrite::ArgsFrom(1))), None),
+        "arrayReplaceAt" => sig(SigRet::Arg(0), Some((0, SigWrite::ArgsFrom(2))), None),
+        // canvasSet(buf, w, x, y, v) stores v and returns it
+        "canvasSet" => sig(SigRet::Arg(4), Some((0, SigWrite::ArgsFrom(4))), None),
+        // return an array argument verbatim, writing only numbers into it
+        "arraySort" | "blur1D" | "feedback" | "arrayScale" | "blur2D" | "arrayAdd"
+        | "arraySub" | "arrayMix" | "fillNoise2D" | "fillNoise3D" | "stencil2D" => {
+            sig(SigRet::Arg(0), Some((0, SigWrite::Num)), None)
+        }
+        "curl2" => sig(SigRet::Arg(2), Some((2, SigWrite::Num)), None),
+        "hsv2rgb" | "rgb2hsv" | "curl3" => sig(SigRet::Arg(3), Some((3, SigWrite::Num)), None),
+        "mixColors" => sig(SigRet::Arg(7), Some((7, SigWrite::Num)), None),
+        _ => sig(SigRet::Num, None, None),
+    }
+}
 
 /// Channels the per-pixel state buffer can hold (`setPixelState(i, ch, v)`
 /// with `ch` in `0..MAX_STATE_CHANNELS`) — enough for a colour plus one
@@ -2607,6 +2702,10 @@ impl Vm {
                             at = t;
                         }
                     }
+                    // v6: a representation barrier for the JIT (Gitea
+                    // #607) — the value is already a boxed `Value` here,
+                    // so there is nothing to do.
+                    op::BOX => {}
                     op::POP_RET_NULL => {
                         // Pop; RetNull
                         pop!();

@@ -41,7 +41,11 @@ pub const MAGIC: [u8; 4] = *b"LXBC";
 /// shared with the constant pool; pcs, jump targets and debug offsets are
 /// word indices; builtin operands are runtime ids (import table kept for
 /// validation only). Executable in place from memory-mapped flash.
-pub const FORMAT_VERSION: u16 = 5;
+/// v6: the `kinds` section (Gitea #607, docs/jit-design.md §2) — one kind
+/// byte per global and per function slot, flagged by `FLAG_TYPED`, plus the
+/// `Box` opcode. A v6 blob WITHOUT the flag is legal and means "everything
+/// Dyn"; the interpreter ignores kinds either way.
+pub const FORMAT_VERSION: u16 = 6;
 
 /// Fixed header size (bytes) before the variable-length tables.
 const HEADER_LEN: usize = 30;
@@ -63,6 +67,9 @@ const MAX_ASSERT_MSGS: usize = 4096;
 const MAX_WORDS: usize = MAX_BLOB / 4;
 
 const FLAG_DEBUG: u16 = 1;
+/// The blob carries a `kinds` section (docs/jit-design.md §2.5). A v6 blob
+/// without it is legal and means "every slot Dyn".
+const FLAG_TYPED: u16 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BcError {
@@ -235,7 +242,14 @@ pub(crate) mod op {
     pub const CMP_JF: u8 = 0x4D;
     /// `Pop; RetNull` — the tail of every void function body.
     pub const POP_RET_NULL: u8 = 0x4E;
-    // 0x4F..=0xFF: free for further superinstructions.
+    /// v6: widen the operand-stack top to `Dyn` (Gitea #607). No operand,
+    /// and a NO-OP in the interpreter — a `Value` is already boxed. It
+    /// exists so a conditional join whose edges carry different kinds can
+    /// be made to agree, which is what lets the verifier reject a join it
+    /// would otherwise have to guess at. A fusion barrier: the peephole
+    /// never folds or forwards across it.
+    pub const BOX: u8 = 0x4F;
+    // 0x50..=0xFF: free for further superinstructions.
 }
 
 /// Sub-opcodes accepted by [`op::CONST_OP`] / [`op::LOAD_L_CONST_OP`] /
@@ -570,7 +584,7 @@ fn walk_word(w: u32) -> Result<Walk, BcError> {
             k.jump_next = true;
             U8
         }
-        op::POP_RET_NULL => NONE,
+        op::POP_RET_NULL | op::BOX => NONE,
         op::LOAD_IDX | op::STORE_IDX | op::ARR_LEN | op::DUP | op::DUP2 | op::POP | op::ADD
         | op::SUB | op::MUL | op::DIV | op::REM | op::POW | op::NEG | op::NOT | op::BIT_NOT
         | op::BIT_AND | op::BIT_OR | op::BIT_XOR | op::SHL | op::SHR | op::LT | op::LE
@@ -622,10 +636,28 @@ pub fn serialize(prog: &Program) -> Result<Vec<u8>, BcError> {
         }
     }
 
+    // A blob is TYPED iff a `kinds` section will be written; the section's
+    // shape must match the program's, or nothing downstream could index it.
+    #[cfg(feature = "kinds")]
+    if let Some(k) = &prog.kinds {
+        if k.globals.len() != prog.globals.len() || k.fns.len() != prog.fns.len() {
+            return err("kinds section does not match the program's shape");
+        }
+        for (f, fk) in prog.fns.iter().zip(&k.fns) {
+            if fk.slots.len() != f.locals as usize {
+                return err("kinds section slot count does not match the function");
+            }
+        }
+    }
+
     let mut w = Writer { out: Vec::new() };
     w.out.extend_from_slice(&MAGIC);
     w.u16(FORMAT_VERSION);
-    w.u16(FLAG_DEBUG);
+    #[cfg(feature = "kinds")]
+    let typed_out = prog.kinds.is_some();
+    #[cfg(not(feature = "kinds"))]
+    let typed_out = false;
+    w.u16(FLAG_DEBUG | if typed_out { FLAG_TYPED } else { 0 });
     w.u16(prog.pixel_count_g);
     w.u16(prog.globals.len() as u16);
     w.u16(prog.fns.len() as u16);
@@ -682,6 +714,27 @@ pub fn serialize(prog: &Program) -> Result<Vec<u8>, BcError> {
     for (name, idx) in &prog.exported_fns {
         w.str8(name)?;
         w.u16(*idx);
+    }
+
+    // kinds section (v6): one byte per global, then per function the
+    // return kind followed by one byte per local slot (params first), zero
+    // padded to a multiple of 4. Everything needed to find its length is
+    // already in the header, so a decoder that does not care can skip it.
+    #[cfg(feature = "kinds")]
+    if let Some(k) = &prog.kinds {
+        let start = w.out.len();
+        for g in &k.globals {
+            w.u8(g.as_byte());
+        }
+        for fk in &k.fns {
+            w.u8(fk.ret.as_byte());
+            for s in &fk.slots {
+                w.u8(s.as_byte());
+            }
+        }
+        while !(w.out.len() - start).is_multiple_of(4) {
+            w.u8(0);
+        }
     }
 
     // pad to a word boundary, then the word region verbatim
@@ -822,6 +875,7 @@ fn decode(
     }
     let flags = r.u16()?;
     let debug = flags & FLAG_DEBUG != 0;
+    let typed = flags & FLAG_TYPED != 0;
     let pixel_count_g = r.u16()?;
     let n_globals = r.u16()? as usize;
     let n_fns = r.u16()? as usize;
@@ -942,6 +996,17 @@ fn decode(
     if collect {
         reserve(&mut fns, n_fns)?;
     }
+    // Running size of the v6 `kinds` section, before its padding: one byte
+    // per global plus `1 + locals` per function. EVERY decoder needs it,
+    // because even one that skips the section has to know how far to skip
+    // — and an integer is the whole cost on a board with no JIT backend.
+    let mut kinds_bytes = n_globals;
+    // The function table the verifier walks. Only a build that VERIFIES
+    // needs it, so the firmware never allocates it.
+    #[cfg(feature = "kinds")]
+    let mut fn_shape: Vec<crate::kinds::FnView> = Vec::new();
+    #[cfg(feature = "kinds")]
+    reserve(&mut fn_shape, n_fns)?;
     // instruction-boundary bitmap, reused across functions (transient)
     let mut bits: Vec<u64> = Vec::new();
     for _ in 0..n_fns {
@@ -1081,6 +1146,14 @@ fn decode(
                 local_names,
             });
         }
+        kinds_bytes += 1 + locals;
+        #[cfg(feature = "kinds")]
+        fn_shape.push(crate::kinds::FnView {
+            params,
+            locals: locals as u8,
+            code_start: code_start as u32,
+            code_len: code_len as u32,
+        });
     }
 
     let mut exported_fns: Vec<(String, u16)> = Vec::new();
@@ -1095,6 +1168,67 @@ fn decode(
         }
         if collect {
             exported_fns.push((String::from(name), idx));
+        }
+    }
+
+    // ---- kinds section (v6) ----
+    //
+    // Its length is a function of header counts alone, so a build without
+    // the `kinds` feature (the firmware) reads straight past it: that is
+    // the whole decoder delta on a board with no JIT backend.
+    #[cfg(feature = "kinds")]
+    let mut kinds: Option<crate::kinds::Kinds> = None;
+    if typed {
+        let section = r.take(kinds_bytes.next_multiple_of(4))?;
+        // without the feature the section is simply stepped over
+        #[cfg(not(feature = "kinds"))]
+        let _ = section;
+        #[cfg(feature = "kinds")]
+        {
+            let raw = section;
+            let mut k = crate::kinds::Kinds {
+                globals: Vec::new(),
+                fns: Vec::new(),
+            };
+            reserve(&mut k.globals, n_globals)?;
+            let mut at = 0usize;
+            // `raw` is exactly long enough by construction (its length is
+            // derived from the same counts), but this decoder must never
+            // panic on untrusted bytes, so it is a checked read.
+            let next = |at: &mut usize| -> Result<crate::kinds::Kind, BcError> {
+                let Some(&b) = raw.get(*at) else {
+                    return err("kinds section truncated");
+                };
+                *at += 1;
+                match crate::kinds::Kind::from_byte(b) {
+                    Some(k) => Ok(k),
+                    None => err("invalid kind byte"),
+                }
+            };
+            for _ in 0..n_globals {
+                let v = next(&mut at)?;
+                k.globals.push(v);
+            }
+            reserve(&mut k.fns, n_fns)?;
+            for f in &fn_shape {
+                let ret = next(&mut at)?;
+                let mut slots: Vec<crate::kinds::Kind> = Vec::new();
+                reserve(&mut slots, f.locals as usize)?;
+                for _ in 0..f.locals {
+                    let v = next(&mut at)?;
+                    slots.push(v);
+                }
+                k.fns.push(crate::kinds::FnKinds { ret, slots });
+            }
+            if raw[at..].iter().any(|&b| b != 0) {
+                return err("kinds section padding is not zero");
+            }
+            // The stack-map walk of docs/jit-design.md §2.4. A failure here
+            // is a COMPILER bug, so it is loud: the device answers
+            // `bc-kinds` and the playground recompiles.
+            crate::kinds::verify_words(&fn_shape, n_globals, &k, &|i| wb.get(i))
+                .map_err(|e| BcError::Malformed(format!("kind verification failed: {e}")))?;
+            kinds = Some(k);
         }
     }
 
@@ -1142,6 +1276,8 @@ fn decode(
         exported_fns,
         assert_msgs,
         pixel_count_g,
+        #[cfg(feature = "kinds")]
+        kinds,
     }))
 }
 
@@ -1234,6 +1370,7 @@ pub fn op_name(o: u8) -> &'static str {
         op::CALL_BUILTIN_CC => "CALL_BUILTIN_CC",
         op::CMP_JF => "CMP_JF",
         op::POP_RET_NULL => "POP_RET_NULL",
+        op::BOX => "BOX",
         _ => "?",
     }
 }

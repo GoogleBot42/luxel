@@ -22,11 +22,13 @@ const UNFORWARDED: CompileOpts = CompileOpts {
     superinstructions: true,
     const_folding: true,
     store_forwarding: false,
+    kinds: true,
 };
 const BARE: CompileOpts = CompileOpts {
     superinstructions: false,
     const_folding: false,
     store_forwarding: false,
+    kinds: true,
 };
 
 /// One source per shape the pass fires on, plus the shapes it must refuse.
@@ -140,6 +142,7 @@ fn forwarding_is_independent_of_the_other_two_passes() {
                         superinstructions: fuse,
                         const_folding: fold,
                         store_forwarding: fwd,
+                        kinds: true,
                     };
                     assert_eq!(
                         frames(src, Some(opts), 6),
@@ -176,9 +179,11 @@ fn the_rewrite_fires_where_it_should_and_nowhere_else() {
         superinstructions: false,
         const_folding: true,
         store_forwarding: true,
+        kinds: true,
     };
     let off = CompileOpts {
         store_forwarding: false,
+        kinds: true,
         ..on
     };
     // cases 0-2, 6, 8 and 9 contain at least one forwardable site. Case 9
