@@ -10,14 +10,21 @@
 #
 # Usage: [BOARD=board-pixelblaze-v3|board-s3-devkit|…] ./build-esp32.sh [flash|image|log]
 #   (none)  build only
-#   flash   flash app + WEB ASSETS + monitor. The assets partition
-#           (0x310000) gets the freshly packed playground too, so a serial
-#           flash never leaves a stale web app (SKIP_ASSETS=1 to opt out;
-#           EXTRA_FEATURES=hosted-ui skips it by construction).
+#   flash   flash app + WEB ASSETS + monitor. The assets partition gets the
+#           freshly packed playground too, so a serial flash never leaves a
+#           stale web app (SKIP_ASSETS=1 to opt out; EXTRA_FEATURES=hosted-ui
+#           skips it by construction).
 #   image   write target/luxel-full.bin — a single full-flash image
 #           (bootloader + partition table + app + assets) for
 #           `espflash write-bin 0x0 target/luxel-full.bin`.
 #   log     attach the serial monitor only.
+#
+# The partition table is per board (Gitea #501): `board_partitions` in
+# board-target.sh picks partitions.csv (4 MB) or partitions-16mb.csv (16 MB,
+# board-seengreat-hub75 only), and the assets offset is PARSED out of that
+# csv rather than written here — the two tables put assets in different
+# places, and a literal offset would quietly write the bundle into whatever
+# partition happens to live there on the other table.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -43,6 +50,18 @@ BOARD="${BOARD:-board-pixelblaze-v3}"
 # shellcheck source=board-target.sh
 . ./board-target.sh
 board_target "$BOARD"
+board_partitions "$BOARD"
+
+# Where the LUXA asset bundle goes, read straight out of the selected table
+# (firmware/build.rs embeds the same csv into the image, so this cannot drift
+# from what the device believes). The row is `assets, data, spiffs, <off>,
+# <size>,` with arbitrary padding, hence the whitespace strip.
+ASSETS_OFF=$(awk -F, '$1 ~ /^[[:space:]]*assets[[:space:]]*$/ {
+                        gsub(/[[:space:]]/, "", $4); print $4; exit }' "$PARTITIONS")
+if [ -z "$ASSETS_OFF" ]; then
+  echo "no 'assets' row in firmware/$PARTITIONS — cannot place the web bundle" >&2
+  exit 1
+fi
 
 # The WLED→Luxel takeover self-install (src/takeover.rs) is always built
 # in — a no-op on devices already running the Luxel partition layout. To
@@ -61,8 +80,8 @@ if [ -n "${EXTRA_FEATURES:-}" ]; then
   FEATURES="$FEATURES $EXTRA_FEATURES"
 fi
 # `hosted-ui` (Gitea #11): the image has no asset reader and no /api/assets,
-# so there is nothing to pack and nothing to write at 0x310000 — the web app
-# lives on the hosted playground instead. See docs/boards.md.
+# so there is nothing to pack and nothing to write into the assets partition —
+# the web app lives on the hosted playground instead. See docs/boards.md.
 HOSTED_UI=0
 case " $FEATURES " in *" hosted-ui "*) HOSTED_UI=1 ;; esac
 
@@ -93,7 +112,7 @@ if [ "${1:-}" = "flash" ]; then CMD=run; fi
 if [ "${1:-}" = "image" ]; then CMD=image; fi
 
 # Pack the current playground into the LUXA archive that fills the assets
-# partition (0x310000 in partitions.csv, served by src/assets.rs).
+# partition ($ASSETS_OFF in $PARTITIONS, served by src/assets.rs).
 ASSETS_BIN="target/dist.luxa"
 build_assets() {
   if [ "$HOSTED_UI" = 1 ]; then
@@ -169,13 +188,22 @@ fi
 link_rustflags
 export RUSTFLAGS="$LINK_RUSTFLAGS $(remap_rustflags)${EXTRA_RUSTFLAGS:+ $EXTRA_RUSTFLAGS}"
 
-echo "board: $BOARD (chip $CHIP, target $TARGET)"
+echo "board: $BOARD (chip $CHIP, target $TARGET, partitions $PARTITIONS)"
 if [ "$CMD" = "run" ]; then
+  # `cargo run` flashes through the runner in firmware/.cargo/config.toml,
+  # which is keyed on target_arch and therefore hard-codes
+  # --partition-table=partitions.csv — a serial flash of the 16 MB board
+  # would write the 4 MB table under a 16 MB image. CARGO_TARGET_<TRIPLE>_
+  # RUNNER is the more specific setting and wins, so re-supply the runner
+  # with THIS board's table (Gitea #501). Keep the rest of the command in
+  # step with .cargo/config.toml, which a bare `cargo run` still uses.
+  RUNNER_VAR="CARGO_TARGET_$(printf '%s' "$TARGET" | tr 'a-z-' 'A-Z_')_RUNNER"
+  export "$RUNNER_VAR=espflash flash --monitor --partition-table=$PARTITIONS --erase-parts otadata,storage"
   # write the fresh asset bundle first (same serial session, independent
   # partition), then flash the app + attach the monitor
   if build_assets; then
-    echo "flashing assets partition (0x310000)…"
-    espflash write-bin 0x310000 "$ASSETS_BIN"
+    echo "flashing assets partition ($ASSETS_OFF, from $PARTITIONS)…"
+    espflash write-bin "$ASSETS_OFF" "$ASSETS_BIN"
   fi
   # flash + monitor: tee the monitor session (symbolicated by espflash)
   # into serial.log so it's remotely readable
@@ -195,13 +223,15 @@ elif [ "$CMD" = "image" ]; then
   fi
   OUT=target/luxel-full.bin
   # merged image = bootloader + partition table + app, laid out from 0x0…
-  espflash save-image --chip "$CHIP" --merge --partition-table partitions.csv \
+  espflash save-image --chip "$CHIP" --merge \
+    --flash-size "$FLASH_SIZE" --partition-table "$PARTITIONS" \
     "target/$TARGET/release/luxel-fw" "$OUT"
   # …then the asset bundle is written INTO the image at its partition
-  # offset (espflash pads the merged image to the full 4 MB with 0xFF).
+  # offset (espflash pads the merged image out to the flash size the table
+  # describes with 0xFF, so the seek always lands inside the file).
   # A hosted-ui image skips this: the assets partition stays erased.
   if [ "$HAVE_ASSETS" = 1 ]; then
-    dd if="$ASSETS_BIN" of="$OUT" bs=4096 seek=$((0x310000 / 4096)) conv=notrunc status=none
+    dd if="$ASSETS_BIN" of="$OUT" bs=4096 seek=$((ASSETS_OFF / 4096)) conv=notrunc status=none
   fi
   echo "full-flash image: firmware/$OUT ($(du -h "$OUT" | cut -f1)) — flash with:"
   echo "  espflash write-bin 0x0 firmware/$OUT"

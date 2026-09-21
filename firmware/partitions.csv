@@ -1,16 +1,30 @@
-# Luxel partition table (4 MB flash). No factory partition: this device has
-# no distinct golden image — the serially-flashed build is the same one that
+# Luxel partition table (4 MB flash — every board but the Seengreat HUB75 S3,
+# which uses partitions-16mb.csv). No factory partition: this device has no
+# distinct golden image — the serially-flashed build is the same one that
 # ships over OTA — so factory was 1 MB of dead weight. Instead we run pure
 # A/B: serial flash lands in ota_0, OTA alternates ota_0/ota_1, and if both
 # OTA slots ever fail the bootloader falls back to ota_0 (its default when no
-# factory partition exists). The freed 1 MB becomes `storage`, slotted in
-# ahead of the (unmoved) assets region, for the device pattern library and
-# future device config.
+# factory partition exists).
+#
+# Repartitioned 2026-09-20 (Gitea #501). The app slots are 1.25 MiB
+# (0x140000) each, not 1 MiB: the fleet's tightest image sat a few percent
+# under a 1 MiB ceiling and two medium features at a time were eating the
+# whole margin (Gitea #160). The 512 KiB (0x80000) that buys comes out of
+# `storage`, which drops 1 MiB → 512 KiB — the device pattern library and
+# device config are small, and flash is the wrong place to grow them.
+#
+# `assets` does NOT move: same offset (0x310000) and same size (0x0F0000).
+# That is deliberate — a device migrating to this table keeps a valid web
+# bundle where src/assets.rs already maps it, so the playground survives the
+# repartition instead of needing a re-upload. Everything below it DOES move,
+# so a migrating device re-flashes its app; see docs/releases.md.
+#
+# Sums to exactly 0x400000 (firmware/build.rs asserts it).
 # Name,   Type, SubType, Offset,   Size,     Flags
 nvs,      data, nvs,     0x9000,   0x4000,
 otadata,  data, ota,     0xd000,   0x2000,
 phy_init, data, phy,     0xf000,   0x1000,
-ota_0,    app,  ota_0,   0x10000,  0x100000,
-ota_1,    app,  ota_1,   0x110000, 0x100000,
-storage,  data, spiffs,  0x210000, 0x100000,
+ota_0,    app,  ota_0,   0x10000,  0x140000,
+ota_1,    app,  ota_1,   0x150000, 0x140000,
+storage,  data, spiffs,  0x290000, 0x80000,
 assets,   data, spiffs,  0x310000, 0x0F0000,

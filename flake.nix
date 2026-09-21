@@ -134,6 +134,15 @@
              # same per-board list for devshell builds (Gitea #328). Kept out
              # of `pname` on purpose: it is a per-board default, not a variant.
            , iram ? [ ]
+             # Which partition table the merged full-flash image carries
+             # (Gitea #501). firmware/board-target.sh's `board_partitions` is
+             # the same per-board map for devshell builds, and
+             # firmware/build.rs picks the same csv from the board cargo
+             # feature for the copy it EMBEDS — all three must agree, or a
+             # device's flashed table and its self-install table describe
+             # different slots. Default 4 MB; only a board whose MODULE is
+             # known to carry 16 MB overrides it.
+           , partitions ? "partitions.csv"
            , ssid ? envOr "LUXEL_SSID"
            , pass ? envOr "LUXEL_PASS"
            }:
@@ -158,6 +167,14 @@
               stdFlags = " -Zbuild-std=core,alloc -Zbuild-std-features=optimize_for_size";
               optFlags = lib.optionalString coreO3
                 " --config profile.release.package.luxel-core.opt-level=3";
+              # espflash ASSUMES a 4 MB part and refuses a table that does not
+              # fit one ("the partition table does not fit into the flash
+              # (4MB)"), so --flash-size has to follow the table. Derived
+              # rather than a second argument: the table already says which
+              # part it describes, and two knobs would only be a way to
+              # disagree. firmware/board-target.sh's `board_partitions` sets
+              # PARTITIONS and FLASH_SIZE together for the same reason.
+              flashSize = if partitions == "partitions-16mb.csv" then "16mb" else "4mb";
             in
             pkgs.stdenv.mkDerivation {
               # extras in the name so `luxel-fw-board-s3-devkit` (strip) and
@@ -247,7 +264,7 @@
                 # merged full-flash image (bootloader + OTA partition table +
                 # app in the factory slot): espflash write-bin 0 …
                 espflash save-image --chip ${chip} --merge \
-                  --partition-table partitions.csv \
+                  --flash-size ${flashSize} --partition-table ${partitions} \
                   $out/luxel-fw.elf $out/luxel-fw.bin
                 # app-only image for OTA: curl --data-binary @… /api/ota
                 espflash save-image --chip ${chip} \
@@ -333,12 +350,21 @@
         };
         # Seengreat RGB Matrix HUB75 S3 panel driver board (Gitea #73). The
         # board feature turns `hub75` on itself — no extraFeatures needed.
+        #
+        # The ONE 16 MB board (Gitea #501): its ESP32-S3-WROOM-1-N16R8 carries
+        # 16 MB of flash, so it gets 3 MiB app slots instead of 1.25 MiB.
+        # luxel-fw-s3-devkit and luxel-fw-s3-hub75 are the same CHIP and stay
+        # on the 4 MB table on purpose — a generic S3 devkit may be a 4 MB
+        # module, and a 16 MB table there is an unbootable brick with no OTA
+        # path back (firmware/partitions-16mb.csv spells it out). Flash size
+        # is a property of the board, never of the chip.
         luxel-fw-seengreat-hub75 = {
           board = "board-seengreat-hub75";
           chip = "esp32s3";
           target = "xtensa-esp32s3-none-elf";
           xtensa = true;
           iram = [ "iram-vm" ]; # unified SRAM: the rest comes out of .stack
+          partitions = "partitions-16mb.csv";
         };
         # The same board with the spare-plane swap on (Gitea #610): one DMA
         # framebuffer + one spare MSB plane instead of two framebuffers, the
@@ -351,6 +377,11 @@
           xtensa = true;
           iram = [ "iram-vm" ];
           extraFeatures = [ "hub75-spare-plane" ];
+          # Same BOARD, so the same 16 MB flash — and firmware/build.rs keys
+          # the embedded table off the board cargo feature, so leaving this
+          # on the 4 MB table would ship an image whose flashed table and
+          # self-install table describe different slots.
+          partitions = "partitions-16mb.csv";
         };
       };
     in

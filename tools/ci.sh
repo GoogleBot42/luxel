@@ -14,6 +14,7 @@
 #   1. web build   (wasm + gallery + svelte-check + vite build) + web tests
 #   2. cargo test --workspace
 #   3. tools/check-library.sh          (the library sweep, five rigs)
+#   3b. tools/offset-check.py          (no hard-coded partition offsets, #501)
 #   4a. devshell firmware build (CI_BOARD, default board-pixelblaze-v3) —
 #       covers build-esp32.sh itself + the linked-feature markers
 #   4b. tools/image-check.sh over the THREE release images the flake builds
@@ -36,6 +37,10 @@
 #                empty string skips the whole image-check half)
 #   CI_SKIP      space-separated step names to skip: web cargo library firmware
 #   CI_QEMU      set to 1 to add the (opt-in) QEMU suite as a final step
+#   MIGRATING_RELEASE
+#                passed through to tools/image-check.sh. **DEFAULTS TO 1**
+#                while the #501 repartition is in flight (see below); set it
+#                to 0 to see what the gate will look like afterwards.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
@@ -74,6 +79,29 @@ BOARD="${CI_BOARD:-board-pixelblaze-v3}"
 # artifact's anyway.
 VARIANTS="${CI_VARIANTS-pixelblaze-v3 c6-devkit-hosted c3-devkit}"
 SKIP=" ${CI_SKIP:-} "
+
+# ===========================================================================
+# REMOVE THIS DEFAULT IN THE RELEASE AFTER THE #501 REPARTITION SHIPS (#635).
+#
+# This release is the MIGRATING one: it carries devices from the pre-#501
+# 1 MiB-slot partition table to the board's new one, which means a device
+# that has not migrated yet is what installs it — into a 1 MiB slot. So the
+# gate has to weigh every image against 1,048,576 B, NOT against the board's
+# new 1.25/3 MiB slot, or CI would cheerfully pass an image no field device
+# can take. Defaulting to 1 (rather than relying on the CI runner to set it)
+# is deliberate: a developer running tools/ci.sh locally must see the same
+# gate the release does.
+#
+# Afterwards: delete these lines, delete `MIGRATING_RELEASE` from
+# .github/workflows/release.yml, and the 3 % floor returns against the
+# per-board slot — where there is finally room under it. docs/releases.md.
+# ===========================================================================
+MIGRATING_RELEASE="${MIGRATING_RELEASE:-1}"
+export MIGRATING_RELEASE
+if [ "$MIGRATING_RELEASE" = 1 ]; then
+  echo "MIGRATING_RELEASE=1 — image-check gates every image against the OLD"
+  echo "1 MiB OTA slot (floor 0 %: it only has to FIT), not the board's new one."
+fi
 
 start=$(date +%s)
 step_start=0
@@ -131,6 +159,16 @@ if skipped library; then echo "== library: SKIPPED"; else
   done_step library
 fi
 
+# ------------------------------------------------------------- offsets
+# Cheap and unconditional (a few dozen file reads): no module may hard-code
+# a partition OFFSET. Since Gitea #501 the fleet has two layouts plus the
+# pre-#501 one a field device still carries, and a written-down offset is
+# wrong on two of the three — in the way that erases user data. Every
+# address comes from the partition table, by label or subtype.
+step "tools/offset-check.py (no hard-coded partition offsets)"
+python3 tools/offset-check.py
+done_step offsets
+
 # ----------------------------------------------------------- firmware
 # firmware/build-esp32.sh with no argument builds only (no flash, no
 # monitor, no device) and ends by running tools/image-check.sh over the ELF
@@ -164,6 +202,17 @@ if skipped firmware; then echo "== firmware: SKIPPED"; else
       c6-devkit-hosted) extras="$extras board-c6-devkit";;
       *)                extras="$extras board-$v";;
     esac
+    # Which OTA slot this variant is weighed against — per board since the
+    # #501 repartition, so a green run has to say what it actually gated on.
+    # Resolved in a subshell: board_ota_max sets OTA_MAX, and leaking that
+    # into image-check's environment would look like an explicit override.
+    vboard=""
+    for _e in $extras; do case "$_e" in board-*) vboard="$_e" ;; esac; done
+    if [ "${MIGRATING_RELEASE:-0}" = 1 ]; then
+      echo "   OTA slot: 1048576 B — MIGRATING_RELEASE=1 (old 1 MiB slot, floor 0 %)"
+    elif [ -n "$vboard" ]; then
+      echo "   OTA slot: $( . "$ROOT/firmware/board-target.sh"; board_ota_max "$vboard" && echo "$OTA_MAX" ) B — board_ota_max $vboard"
+    fi
     out="$ROOT/firmware/target/ci-result-$v"
     nix build ".#luxel-fw-$v" --out-link "$out"
     EXPECT_FEATURES="$extras" tools/image-check.sh "$out/luxel-fw-ota.bin"

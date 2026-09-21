@@ -37,10 +37,27 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use esp_println::println;
 
+/// The `assets` partition, resolved from the LIVE partition table at boot
+/// — never a constant (Gitea #501: the 16 MB layout puts it somewhere
+/// else entirely, and a device still on a pre-#501 table has to keep
+/// serving its bundle until it migrates). 0 until [map_region] runs, and 0
+/// forever under a foreign table, where every read below refuses.
 #[cfg(not(feature = "hosted-ui"))]
-pub const REGION_START: u32 = 0x31_0000;
+static REGION: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 #[cfg(not(feature = "hosted-ui"))]
-pub const REGION_LEN: u32 = 0x0F_0000;
+static REGION_BYTES: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+#[cfg(not(feature = "hosted-ui"))]
+#[inline]
+pub fn region_start() -> u32 {
+    REGION.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(not(feature = "hosted-ui"))]
+#[inline]
+pub fn region_len() -> u32 {
+    REGION_BYTES.load(core::sync::atomic::Ordering::Relaxed)
+}
 
 #[cfg(not(feature = "hosted-ui"))]
 #[derive(Clone)]
@@ -94,7 +111,22 @@ pub fn mapped() -> Option<&'static [u8]> {
 #[cfg(not(feature = "hosted-ui"))]
 pub fn map_region() {
     use core::sync::atomic::Ordering;
-    let m = match crate::flashmap::map(REGION_START, REGION_LEN) {
+    // Resolve the partition first — everything below, and every reader in
+    // this module, addresses flash through it. By LABEL, from the live
+    // table: the offset differs between the 4 MB and 16 MB layouts and is
+    // different again on a device that has not migrated yet (Gitea #501).
+    match crate::ota::data_partition("assets") {
+        Some((off, len)) => {
+            REGION.store(off, Ordering::Relaxed);
+            REGION_BYTES.store(len, Ordering::Relaxed);
+            println!("assets: partition {:#x} + {} KiB", off, len / 1024);
+        }
+        None => {
+            println!("assets: no assets partition in the live table — nothing to serve");
+            return;
+        }
+    }
+    let m = match crate::flashmap::map(region_start(), region_len()) {
         Ok(m) => m,
         Err(e) => {
             println!("flashmap: assets not mapped ({}) — flash-controller reads", e.name());
@@ -108,7 +140,7 @@ pub fn map_region() {
     // serve garbage.
     const CHECK: usize = 4096;
     let mut via_nor = alloc::vec![0u8; CHECK];
-    let ok = read_chunk(REGION_START, &mut via_nor) && via_nor[..] == m.bytes()[..CHECK];
+    let ok = read_chunk(region_start(), &mut via_nor) && via_nor[..] == m.bytes()[..CHECK];
     drop(via_nor);
     if !ok {
         println!(
@@ -121,7 +153,7 @@ pub fn map_region() {
     println!(
         "flashmap: assets 0x{:x}+0x{:x} -> 0x{:x} ({} x {} KiB pages from entry {}), self-check ok",
         m.phys(),
-        REGION_LEN,
+        region_len(),
         m.vaddr(),
         m.pages(),
         crate::flashmap::page_size() / 1024,
@@ -187,7 +219,7 @@ pub fn init() {
     let read_chunk = |at: u32, buf: &mut [u8]| -> bool {
         match mapped {
             Some(m) => {
-                let s = (at - REGION_START) as usize;
+                let s = (at - region_start()) as usize;
                 match m.get(s..s + buf.len()) {
                     Some(src) => {
                         buf.copy_from_slice(src);
@@ -200,7 +232,7 @@ pub fn init() {
         }
     };
     let mut header = [0u8; 8];
-    let magic = read_chunk(REGION_START, &mut header);
+    let magic = read_chunk(region_start(), &mut header);
     let has_etag = &header[0..4] == b"LUX2";
     if !magic || !(has_etag || &header[0..4] == b"LUXA") {
         println!("assets: none installed");
@@ -213,7 +245,7 @@ pub fn init() {
         return;
     }
     let mut entries = Vec::new();
-    let mut at = REGION_START + 8;
+    let mut at = region_start() + 8;
     for _ in 0..n {
         let mut b1 = [0u8; 1];
         if !read_chunk(at, &mut b1) {
@@ -260,7 +292,7 @@ pub fn init() {
             ctype,
             gzip,
             len,
-            offset: REGION_START + rel,
+            offset: region_start() + rel,
             etag,
         });
     }
@@ -280,7 +312,7 @@ pub struct AssetWriter {
 
 #[cfg(not(feature = "hosted-ui"))]
 pub async fn begin(expected: u32) -> Result<AssetWriter, &'static str> {
-    if expected == 0 || expected > REGION_LEN {
+    if expected == 0 || expected > region_len() {
         return Err("archive larger than the assets region");
     }
     // invalidate the TOC while the region is inconsistent
@@ -302,7 +334,7 @@ impl AssetWriter {
             return Err("archive exceeds declared length");
         }
         const SECTOR: u32 = 4096;
-        let at = REGION_START + self.written;
+        let at = region_start() + self.written;
         let end = at + chunk.len() as u32;
         let mut s = self.erased_end.max(at & !(SECTOR - 1));
         while s < end {

@@ -26,8 +26,29 @@
 #               docs/firmware.md "Code placement".
 #               flake.nix's firmwareVariants carry the same list (iram).
 #
-# Adding a board? Add its case here as well as the three files in
-# docs/boards.md ("Adding a board").
+# …and, from the smaller per-board functions further down:
+#   TAKEOVER    `board_takeover`: 1 → the board ships the WLED→Luxel
+#               self-install (the `wled-takeover` feature)
+#   BOARD_NAME  `board_name`: the board::NAME string baked into the image
+#   PARTITIONS / FLASH_SIZE
+#               `board_partitions`: which partition csv the board's flash
+#               takes — `partitions-16mb.csv` for the one 16 MB board,
+#               `partitions.csv` (4 MB) for everything else (Gitea #501).
+#               firmware/build.rs keys the EMBEDDED table off the board
+#               cargo feature the same way; the two must agree.
+#   OTA_MAX     `board_ota_max`: the board's app-slot size in bytes AFTER
+#               the #501 repartition — 0x300000 on the 16 MB board,
+#               0x140000 elsewhere. tools/image-check.sh's margin gate
+#               reads it, so a board's slot size is stated once.
+#
+# Adding a board? Add its case to EVERY function here — board_target,
+# board_takeover, board_name, board_partitions and board_ota_max, each of
+# which errors on an unknown board rather than guessing — as well as the
+# three files in docs/boards.md ("Adding a board"). A new board on 4 MB
+# flash is `partitions.csv` + 1310720; only claim 16 MB when the MODULE is
+# known to carry it (see partitions-16mb.csv on why "it's an S3" is not
+# enough).
+#
 # The RISC-V parts (C3 16 KB icache, C6 32 KB) have no Luxel on the bench, so
 # their placement is UNMEASURED — see Gitea #337. `.rwtext` there is the same
 # unified SRAM as the stack, and the C6 has the fleet's tightest budget, so the
@@ -107,6 +128,61 @@ board_name() {
     board-c6-devkit)       BOARD_NAME="ESP32-C6 devkit" ;;
     board-s3-devkit)       BOARD_NAME="ESP32-S3 devkit" ;;
     board-seengreat-hub75) BOARD_NAME="Seengreat RGB Matrix HUB75 S3" ;;
+    *)
+      echo "unknown BOARD '$1' — see docs/boards.md" >&2; return 1 ;;
+  esac
+}
+
+# Which partition table the board's flash takes (Gitea #501). Sets
+# PARTITIONS from $1 to a csv filename relative to firmware/, and FLASH_SIZE
+# to the matching `espflash --flash-size` value — one function, because a
+# table and the part it describes are the same fact, and espflash ASSUMES
+# 4 MB: `save-image --merge` with the 16 MB table and no --flash-size fails
+# with "the partition table does not fit into the flash (4MB)".
+#
+#   partitions-16mb.csv — board-seengreat-hub75 ONLY. Its panel driver board
+#       carries an ESP32-S3-WROOM-1-N16R8 (16 MB flash, 8 MB PSRAM), so the
+#       size is a property of the hardware and not a guess.
+#   partitions.csv (4 MB) — every other board, INCLUDING board-s3-devkit.
+#       Generic S3 devkits ship 4/8/16 MB modules indistinguishably at flash
+#       time, and a 16 MB table on a 4 MB part puts ota_1 and both data
+#       partitions off the end of flash: an unbootable image with no OTA path
+#       back. A too-small table just wastes flash. 16 MB is opt-in per BOARD,
+#       never per chip.
+#
+# firmware/build.rs makes the same choice from the board cargo feature for
+# the table it EMBEDS (src/parttab.rs writes it, for both the WLED takeover
+# and the layout migrator); this is the shell-side
+# copy that build-esp32.sh and flake.nix pass to `espflash --partition-table`.
+# They must agree — a device whose embedded table and flashed table disagree
+# OTAs into a slot that is not where the bootloader looks.
+board_partitions() {
+  case "$1" in
+    board-seengreat-hub75) PARTITIONS=partitions-16mb.csv; FLASH_SIZE=16mb ;;
+    board-pixelblaze-v3|board-athom-music|board-esp32-generic|board-c3-devkit|board-c6-devkit|board-s3-devkit)
+      PARTITIONS=partitions.csv; FLASH_SIZE=4mb ;;
+    *)
+      echo "unknown BOARD '$1' — see docs/boards.md" >&2; return 1 ;;
+  esac
+}
+
+# The board's app-slot (ota_0/ota_1) size in bytes AFTER the #501
+# repartition — i.e. the number an image has to fit on a device running the
+# table board_partitions names. Sets OTA_MAX from $1.
+#
+#   3145728 (0x300000) — board-seengreat-hub75, from partitions-16mb.csv
+#   1310720 (0x140000) — every other board, from partitions.csv
+#
+# tools/image-check.sh's margin gate resolves its slot size through here, so
+# the number lives in exactly one place per board. NOTE the transition: an
+# image cut DURING the migrating release still has to fit the OLD 1 MiB slot
+# on devices that have not repartitioned yet — that is image-check.sh's
+# MIGRATING_RELEASE=1, not a change here.
+board_ota_max() {
+  case "$1" in
+    board-seengreat-hub75) OTA_MAX=3145728 ;;
+    board-pixelblaze-v3|board-athom-music|board-esp32-generic|board-c3-devkit|board-c6-devkit|board-s3-devkit)
+      OTA_MAX=1310720 ;;
     *)
       echo "unknown BOARD '$1' — see docs/boards.md" >&2; return 1 ;;
   esac

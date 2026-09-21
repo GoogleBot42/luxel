@@ -804,7 +804,7 @@ impl picoserve::response::Content for FlashAsset {
         // slices with a yield between them keep the pool slot cooperative
         // with the other web tasks and the render loop (#259).
         if let Some(all) = crate::assets::mapped() {
-            let start = (self.0.offset - crate::assets::REGION_START) as usize;
+            let start = (self.0.offset - crate::assets::region_start()) as usize;
             if let Some(body) = all.get(start..start + self.0.len as usize) {
                 for slice in body.chunks(4096) {
                     writer.write_all(slice).await?;
@@ -1338,7 +1338,7 @@ impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, Pat
             // the full budget.
             let body = request.body_connection.body();
             let expected = body.content_length() as u32;
-            match crate::ota::begin() {
+            match crate::ota::begin(expected) {
                 Err(e) => Err(e),
                 Ok(mut writer) => {
                     let mut reader = body.reader();
