@@ -21,6 +21,7 @@ import {
   saveWorkingCopy,
   type SavedPattern,
 } from "../lib/store";
+import { deviceEngineHeap, deviceHeapFree, devicePsramFree } from "./device";
 import { pixelCount, type Dims } from "./geometry";
 
 // ---- the wasm engine host ----
@@ -35,6 +36,38 @@ export async function loadLuxel(): Promise<Luxel> {
   luxel.set(lx);
   return lx;
 }
+
+/**
+ * The array ELEMENT ledger the local preview engines enforce — the connected
+ * device's own, 0 (= the PB-compat 10,236) in the playground.
+ *
+ * The ledger is a COUNT, and `array(pixelCount)` costs what the RIG says, so
+ * it is the one capacity number a preview cannot take from the browser. Since
+ * the panel board grew an 8 MB array arena (#253) the two answers diverge by
+ * a hundredfold: `library/fairies.js` needs 15,104 elements at 4096 px, the
+ * panel grants ~1 M and shows it, and the preview — still on PB's 10,236 —
+ * failed `array()` during init and drew a BLACK canvas for a pattern that was
+ * running on the LEDs in front of the user (the #420 wall, from the preview
+ * side).
+ *
+ * Derived rather than set imperatively so it follows the 1 Hz status poll;
+ * the subscription below is what actually installs it, and every compile from
+ * then on gets it. An engine keeps the ledger it was built with, so a surface
+ * that holds engines re-compiles when this changes (the editor names it in
+ * its rebuild guard).
+ */
+export const previewArrayElements: Readable<number> = derived(
+  [luxel, deviceHeapFree, deviceEngineHeap, devicePsramFree],
+  ([lx, heapFree, engineHeap, psramFree]) =>
+    lx ? lx.arrayElementsFor(heapFree, engineHeap, psramFree) : 0,
+);
+
+// Install it into the wasm module. A module-scope subscription (never torn
+// down) so the ledger is in force before any surface compiles anything.
+previewArrayElements.subscribe((n) => {
+  const lx = get(luxel);
+  if (lx) lx.setArrayElements(n);
+});
 
 // ---- the document ----
 

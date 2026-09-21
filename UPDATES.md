@@ -1,5 +1,33 @@
 # Update log
 
+## 2026-09-20 — The array element ledger belongs to the device, not the host (#623)
+
+Jeremy on the Seengreat panel: *"when I open fairies in the web editor, the preview is
+black; it is running on the device fine."* The ledger is a COUNT, and `array(pixelCount)`
+costs what the rig says: `library/fairies.js` at 4096 px wants 15,104 elements against PB's
+`DEFAULT_ARRAY_BUDGET` of 10,236, so `array()` failed during init and every
+`fillHSV(hue, satB, briB)` bounded its run at zero. The panel does not hit this — since #253
+its 8 MB arena raises the ledger to ~1 M — but nothing had told the three hosts that stand
+in for a board: the wasm preview engine, the capacity model (`lx_device_model`, which then
+warned "would render black" about a pattern the LEDs were showing) and
+`luxel serve --board panel` (which reported `psram_total` and answered `/api/pixels` all
+zeroes).
+
+Fixed by reading the ledger off the board instead of assuming PB's: `lx_array_elements_for`
+returns `luxel_core::budget`'s own answer for a device's `heap_free`/`engine_heap`/
+`psram_free` (no TypeScript restatement of the arithmetic), `lx_set_array_elements` installs
+it for every engine compiled after, and `stores/pattern.ts`'s `previewArrayElements` derives
+it from the 1 Hz status poll — the editor rebuilds its engine when it changes, the way it
+already does for a Layout change. `lx_device_model` takes the arena as a parameter. The
+playground, which has no device to ask, keeps the PB number.
+
+Verified: `tools/wasm-smoke.mjs` (PB's ledger refuses three `array(pixelCount)` channels at
+4096 px and the panel's runs them, with `lx_array_elements_for` answering 10,236 / >900k),
+`tools/serve-e2e.mjs` (a `--board panel` mirror loads and RENDERS them), `device-e2e`
+(_Fairies opened from the library on a panel console previews non-black within 2 s and
+raises no capacity banner — `panel-fairies-preview.png`), 474/474 device-mode checks.
+
+
 ## 2026-09-20 — HUB75 spare-plane swap: the second framebuffer becomes one plane (#610)
 
 Jeremy did not believe "128x128 is out of reach because of RAM" (#599), and he was right:

@@ -72,6 +72,7 @@
     deviceOutFps,
     devicePatterns,
     devicePixels,
+    devicePsramFree,
     deviceRescanHz,
     deviceRunningId,
     deviceVmerr,
@@ -109,6 +110,7 @@
     newPatternSource,
     parseEpe,
     patternName,
+    previewArrayElements,
     previewFps,
     projectionOverride,
     runtimeError,
@@ -178,7 +180,15 @@
    *  Layout every second without changing it. A Layout change NEVER pushes to
    *  the device; it only rearranges what this browser draws. */
   let builtRig = "";
-  $: if ($layoutSignature !== builtRig && $luxel) recompile();
+  /** The array element ledger `engine` was built with. An engine keeps the
+   *  ledger it was constructed with, so a device that grants a bigger one
+   *  than the last compile assumed (connecting to the panel, whose 8 MB
+   *  arena raises it a hundredfold — #253/#420) needs a rebuild, not just a
+   *  re-model: otherwise the preview stays black for a pattern the device
+   *  shows. */
+  let builtElements = -1;
+  $: if (($layoutSignature !== builtRig || $previewArrayElements !== builtElements) && $luxel)
+    recompile();
 
   /** The device's vmerr, but only when it is a capacity rejection — other
    *  runtime errors are the local engine's business and are reported by the
@@ -349,6 +359,7 @@
     $deviceHeapFree;
     $deviceEngineHeap;
     $devicePixels;
+    $devicePsramFree;
     if (!compileError) checkCapacity();
   }
 
@@ -376,6 +387,10 @@
       $devicePixels,
       $deviceHeapFree,
       $deviceEngineHeap,
+      // the board's external array arena, where it has one (#253): without it
+      // the model enforced PB's element ledger and warned "would render
+      // black" about patterns the panel runs (#420's other side)
+      $devicePsramFree,
     );
     if (!m) {
       capacity = null;
@@ -469,6 +484,7 @@
       applyProjection(); // …then this pattern's own override, if any (§5.4d)
       applyOutpipe(); // the device output chain the console previews through
       builtRig = $layoutSignature; // this engine matches the current Layout
+      builtElements = $previewArrayElements; // …and the device's element ledger
       engine.setWallClock(Date.now() / 1000);
       controls = engine.controls();
       vars = engine.vars(); // VARS is absent for a pattern that exports none

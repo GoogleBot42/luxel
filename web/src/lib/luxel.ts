@@ -147,7 +147,10 @@ interface Exports {
     pixelCount: number,
     heapFree: number,
     engineHeap: number,
+    arenaFree: number,
   ): number;
+  lx_set_array_elements(n: number): void;
+  lx_array_elements_for(heapFree: number, engineHeap: number, arenaFree: number): number;
 }
 
 /** Wire colour order, as `GET /api/output` reports it. */
@@ -308,6 +311,36 @@ export class Luxel {
     return eng;
   }
 
+  /**
+   * Raise (or restore) the array ELEMENT ledger every engine compiled from
+   * here on enforces — 0 means the PB-compat 10,236 (Gitea #420/#253).
+   *
+   * The ledger is a COUNT, not a size, and it is the device's, not the
+   * browser's: `array(pixelCount)` costs what the rig says, so a pattern that
+   * fits a 300 px strip blows PB's count on a 4096 px panel. Since #253 the
+   * panel board answers that with an 8 MB external arena and runs those
+   * patterns — while the preview engine kept PB's number and rendered BLACK
+   * for a pattern the LEDs were showing (`library/fairies.js`). A console
+   * therefore installs the connected device's own ledger
+   * ([`arrayElementsFor`]); the playground keeps the PB default, which is the
+   * honest answer with no device behind it.
+   *
+   * Engines already built keep the ledger they were built with — recompile.
+   */
+  setArrayElements(n: number): void {
+    if (typeof this.e.lx_set_array_elements !== "function") return;
+    this.e.lx_set_array_elements(Math.max(0, Math.round(n)));
+  }
+
+  /** The element ledger a device reporting these `/api/status` figures
+   *  enforces (`luxel_core::budget`, the same arithmetic the firmware runs).
+   *  `psramFree` 0 = a board with no arena = the PB-compat count. 0 back
+   *  means this wasm build predates the export, so leave the ledger alone. */
+  arrayElementsFor(heapFree: number, engineHeap: number, psramFree: number): number {
+    if (typeof this.e.lx_array_elements_for !== "function") return 0;
+    return this.e.lx_array_elements_for(heapFree, engineHeap, psramFree);
+  }
+
   /** Model this compiled blob's cost on a device with `heapFree` bytes free.
    *
    *  Runs the firmware's decode → budgeted-engine → frames sequence inside
@@ -323,6 +356,8 @@ export class Luxel {
     pixelCount: number,
     heapFree: number,
     engineHeap: number,
+    /** `/api/status`'s `psram_free` — 0 on a board with no array arena. */
+    psramFree = 0,
   ): DeviceModel | null {
     if (typeof this.e.lx_device_model !== "function") return null;
     const ptr = this.e.lx_alloc(bytecode.length);
@@ -335,6 +370,7 @@ export class Luxel {
         pixelCount,
         heapFree,
         engineHeap,
+        psramFree,
       );
       if (rc < 0) return null;
       return JSON.parse(this.response()) as DeviceModel;

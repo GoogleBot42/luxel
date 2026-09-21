@@ -437,6 +437,30 @@ check(
   (await postLayout(panelBase, "strip 60")).line === 1,
 );
 
+// ---- a panel mirror enforces the PANEL's array ledger (Gitea #253/#420) ----
+// PB's 10,236-element ledger is a memory budget in disguise; a board with an
+// external array arena has a real byte budget and raises the count out of the
+// way. A mirror that reports `psram_total` and still enforced PB's number
+// answered `/api/pixels` all-zeroes for patterns the panel shows —
+// `library/fairies.js` (15,104 elements at 4096 px) is the one that found it.
+const CHANNELS_4096 = [
+  "var a = array(pixelCount)",
+  "var b = array(pixelCount)",
+  "var c = array(pixelCount)",
+  "export function render(i) { a[i] = 1; b[i] = 1; c[i] = 1; rgb(1, 1, 1) }",
+].join("\n");
+await fetch(`${panelBase}/api/code`, { method: "POST", body: await lxpBody("", CHANNELS_4096) });
+await sleep(600);
+const ledger = await (await fetch(`${panelBase}/api/status`)).json();
+const litPx = new Uint8Array(
+  await (await fetch(`${panelBase}/api/pixels`)).arrayBuffer(),
+).reduce((n, v) => n + (v ? 1 : 0), 0);
+check(
+  "--board panel: three array(pixelCount) channels load and RENDER at 4096 px",
+  ledger.vmerr === null && litPx === 4096 * 3,
+  `vmerr=${ledger.vmerr} lit=${litPx}`,
+);
+
 // ---- projection applies LIVE, on all three paths (Gitea #538/#598) ----
 //
 // The assertion is the FRAME, not the echo: a 1D pattern whose pixel is a

@@ -272,6 +272,47 @@ assert.strictEqual(e.lx_outpipe_set(h7, tiny, 2), 0, "a short settings buffer is
 e.lx_dealloc(tiny, 8);
 assert.strictEqual(e.lx_outpipe(-1), 0, "a bad handle returns null");
 
+// ---- the array ELEMENT ledger is the DEVICE's, not the host's -----------
+// PB's 10,236-element count is what a board with no array arena enforces and
+// the right default here. A board with an external arena (Gitea #253) raises
+// it a hundredfold — and a preview that keeps PB's number renders BLACK for a
+// pattern the board runs, which is what `library/fairies.js` did on the 64x64
+// panel (the preview half of #420). Two arrays of pixelCount at 4096 px are
+// 8,200 units; a third puts it past PB's ledger and inside the panel's.
+const THREE_CHANNELS = [
+  "var a = array(pixelCount)",
+  "var b = array(pixelCount)",
+  "var c = array(pixelCount)",
+  "export function render(i) { a[i] = 1; b[i] = 1; c[i] = 1; rgb(1, 1, 1) }",
+].join("\n");
+const litPixels = (handle, n) => {
+  const p = e.lx_frame(handle, 0);
+  return mem().slice(p, p + n * 3).reduce((acc, v) => acc + (v ? 1 : 0), 0);
+};
+{
+  const s = putStr(THREE_CHANNELS);
+  const hPb = e.lx_new(s.ptr, s.len, 4096, 1);
+  assert.ok(hPb >= 0, `three-channel compile failed: ${response()}`);
+  assert.strictEqual(litPixels(hPb, 4096), 0, "PB's ledger refuses the arrays: a black frame");
+  assert.ok(e.lx_take_error(hPb) === 1 && /array element budget/.test(response()));
+  e.lx_free(hPb);
+
+  // a board with an 8 MB arena and 30 KB of DRAM free: the arena's bytes
+  // decide, and the ledger stops binding
+  const panel = e.lx_array_elements_for(30 * 1024, 0, 8 * 1024 * 1024);
+  assert.ok(panel > 900_000, `panel ledger ${panel}`);
+  assert.strictEqual(e.lx_array_elements_for(30 * 1024, 0, 0), 10_236, "no arena = PB's count");
+
+  e.lx_set_array_elements(panel);
+  const hArena = e.lx_new(s.ptr, s.len, 4096, 1);
+  assert.ok(hArena >= 0, `arena compile failed: ${response()}`);
+  assert.strictEqual(e.lx_take_error(hArena), 0, "no init error under the panel's ledger");
+  assert.strictEqual(litPixels(hArena, 4096), 4096 * 3, "every pixel lit under the arena ledger");
+  e.lx_free(hArena);
+  e.lx_set_array_elements(0); // back to the PB default for anything after
+  s.free();
+}
+
 e.lx_free(h);
 e.lx_free(h2);
 e.lx_free(h3);

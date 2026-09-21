@@ -3898,6 +3898,62 @@ try {
         waitUntil: "networkidle0",
       });
       await leaveEditor(hubPage);
+
+      // ---- the preview enforces the PANEL's array ledger (#253/#420) ----
+      // PB's 10,236-element count is what a board with no array arena
+      // enforces; the panel's 8 MB arena raises it a hundredfold. A preview
+      // engine stuck on PB's number failed `array(pixelCount)` during init and
+      // drew a BLACK canvas for a pattern the LEDs were showing — which is
+      // exactly what `library/fairies.js` (15,104 elements at 4096 px) did on
+      // the bench. The canvas is the assertion: a compile error or a capacity
+      // banner would be a different (and visible) failure.
+      await hubPage.click('[data-role="patterns-source-library"]');
+      await hubPage.waitForFunction(
+        () => document.querySelectorAll('[data-source="library"] .tile').length > 50,
+        { timeout: 15000 },
+      );
+      const tagged = await hubPage.evaluate(() => {
+        const name = (e) => e.querySelector('[data-role="tile-name"]')?.textContent ?? "";
+        const t = [...document.querySelectorAll('[data-source="library"] .tile')].find((e) =>
+          /Fairies/i.test(name(e)),
+        );
+        if (t) {
+          t.setAttribute("data-probe", "fairies");
+          t.scrollIntoView({ block: "center" });
+        }
+        return t !== undefined;
+      });
+      check("panel: the library carries _Fairies (the #420 fixture)", tagged);
+      if (tagged) {
+        await tileAction(hubPage, '[data-probe="fairies"]', "tile-edit");
+        await hubPage.waitForSelector('[data-role="editor-view"]:not([hidden])', { timeout: 8000 });
+        const litPx = await hubPage
+          .waitForFunction(
+            () => {
+              const c = document.querySelector(
+                'main.editor-frame:not([hidden]) [data-role="preview"] canvas',
+              );
+              if (!c) return false;
+              const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+              let n = 0;
+              for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 8) n++;
+              return n > 50 && n;
+            },
+            { timeout: 2000, polling: 100 },
+          )
+          .then((h) => h.jsonValue())
+          .catch(() => 0);
+        check("panel: _Fairies previews at 4096 px instead of rendering black", litPx > 50, `lit=${litPx}`);
+        check(
+          "panel: …and no capacity banner cries wolf about the panel's arena",
+          (await hubPage.$('[data-role="capacity-rejected"], [data-role="capacity-warning"]')) === null,
+        );
+        await hubPage.screenshot({ path: `${shotDir}/panel-fairies-preview.png` });
+        await leaveEditor(hubPage);
+      }
+      await hubPage.click('[data-role="patterns-source-device"]');
+      await sleep(400);
+
       await hubPage.click('[data-role="tab-settings"]');
       await hubPage.waitForSelector('[data-role="layout-pw"]', { timeout: 8000 });
       check(
