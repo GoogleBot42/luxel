@@ -24,6 +24,8 @@ import {
   cloudLayout,
   deviceGeometry,
   effectiveFor,
+  effectiveProjection,
+  guessPatternDims,
   LAYOUT_BODY_BUDGET,
   latticeCoords,
   latticeDimsOf,
@@ -73,6 +75,16 @@ const PANEL_CONSOLE = {
   h: 64,
   source: "board",
   pixels: 4096,
+};
+
+const LATTICE_CONSOLE = {
+  dims: 3,
+  regular: false,
+  w: 0,
+  h: 0,
+  source: "user",
+  pixels: 512,
+  coords: latticeCoords(8, 8, 8),
 };
 
 // ---- the console: the device owns the geometry ----
@@ -525,12 +537,53 @@ test("withProjectionOverride replaces only the slot for the pattern's dims", () 
 
   assert.equal(withProjectionOverride(l, 3, "yz").projection.proj3d, "yz");
   assert.equal(withProjectionOverride(l, 2, "x").projection.proj2d, "x");
-  // preferredDims() reports 0 for "no preference"; that is the 1D slot
-  assert.equal(withProjectionOverride(l, 0, "y").projection.proj1d, "y");
+  // A DIMENSIONLESS pattern has no slot: a stale override from before it was
+  // classified is ignored, not written into the 1D one (library/fairies.js).
+  assert.equal(withProjectionOverride(l, 0, "y"), l);
 
   // "no override" is not a special case at the call site
   assert.equal(withProjectionOverride(l, 1, null), l);
   assert.equal(withProjectionOverride(l, 1, undefined), l);
+});
+
+test("a dimensionless pattern is native on every Layout", () => {
+  // `patternDims === 0` is an index-space `renderFrame`: a field over
+  // pixelCount that names no geometry. It is NOT a 1D pattern — nothing
+  // projects it, nothing captions it, and no Layout filters it out. Calling
+  // it 1D gave library/fairies.js a "1D · by index" caption and along-x /
+  // along-y options that changed nothing (2026-09-20).
+  for (const geom of [STRIP_CONSOLE, PANEL_CONSOLE, LATTICE_CONSOLE]) {
+    const l = reconcileLayout(input({ connected: true, geom, patternDims: 0 }));
+    assert.deepEqual(projectionOptions(0, l.dims), [], `no options on ${l.dims}D`);
+    assert.equal(effectiveProjection(l.projection, 0, l.dims), null);
+    assert.equal(projectionCaption(0, l), null, `no caption on ${l.dims}D`);
+    const e = effectiveFor(0, l);
+    assert.equal(e.patternDims, 0, "it keeps its 0");
+    assert.equal(e.mode, null);
+    assert.equal(e.compatible, true, "never filtered (#538)");
+    assert.equal(e.pixelCount, l.pixels, "it renders the whole Layout");
+    // …and a device default of "along x" changes none of that
+    const along = { ...l, projection: { ...l.projection, proj1d: "x" } };
+    assert.equal(effectiveProjection(along.projection, 0, along.dims), null);
+    assert.equal(effectiveFor(0, along).pixelCount, l.pixels);
+  }
+  // the contrast: a 1D pattern on the same panel IS projected
+  const panel = reconcileLayout(input({ connected: true, geom: PANEL_CONSOLE, patternDims: 1 }));
+  assert.deepEqual(projectionOptions(1, panel.dims), ["index", "x", "y"]);
+  assert.equal(projectionCaption(1, panel), "1D · by index");
+});
+
+test("guessPatternDims tells a dimensionless renderFrame from a 1D pattern", () => {
+  const frameOnly = "export function renderFrame() { fillHSV(0, 1, 1) }";
+  assert.equal(guessPatternDims(frameOnly), 0, "renderFrame alone declares nothing");
+  assert.equal(
+    guessPatternDims(`${frameOnly}\nexport function render(i) { hsv(0, 1, 1) }`),
+    1,
+    "…but `render` alongside it is a strip pattern",
+  );
+  assert.equal(guessPatternDims("export function render(index) { hsv(0, 1, 1) }"), 1);
+  assert.equal(guessPatternDims("export function renderFrame() { fillRect(0, 0, 1, 1) }"), 2);
+  assert.equal(guessPatternDims("export function render3D(i, x, y, z) { hsv(z, 1, 1) }"), 3);
 });
 
 test("an overridden 1D pattern on a matrix renders as that strip", () => {
@@ -556,7 +609,8 @@ test("the projection tables match the engine's, cell by cell", async () => {
     new TextDecoder().decode(
       new Uint8Array(e.memory.buffer, e.lx_response_ptr(), e.lx_response_len()),
     );
-  for (let pd = 1; pd <= 3; pd++) {
+  // pd 0 is DIMENSIONLESS and must be empty on both sides, not the 1D row.
+  for (let pd = 0; pd <= 3; pd++) {
     for (let ld = 1; ld <= 3; ld++) {
       const n = e.lx_projection_options(pd, ld);
       const fromEngine = n > 0 ? JSON.parse(response()) : [];

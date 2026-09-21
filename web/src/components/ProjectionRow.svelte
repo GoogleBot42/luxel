@@ -25,7 +25,8 @@
   import { luxel } from "../stores/pattern";
   import Popover from "./Popover.svelte";
 
-  /** What the compiled pattern asks for (`preferredDims()`; 0 reads as 1D). */
+  /** What the compiled pattern DECLARES (`patternDims()`). 0 = dimensionless:
+   *  native on every Layout, so this row is absent for it. */
   export let patternDims: PatternDims = 0;
   /** The Layout it is being shown on — its `projection` triple is the default. */
   export let layout: Layout;
@@ -37,8 +38,10 @@
   let open = false;
   let anchor: HTMLElement | null = null;
 
-  /** 1/2/3 — `preferredDims()`'s 0 means "no preference", i.e. a 1D pattern. */
-  $: pd = (patternDims === 0 ? 1 : patternDims) as 1 | 2 | 3;
+  /** 0/1/2/3, passed to the engine unchanged: 0 is "any" and its option list
+   *  is empty, which is what makes this row absent rather than a control that
+   *  changes nothing (`library/fairies.js`, 2026-09-20). */
+  $: pd = patternDims;
   $: options = $luxel ? $luxel.projectionOptions(pd, layout.dims) : ([] as ProjectionOption[]);
   /** The device's (or the playground's) default for a pattern of these dims. */
   $: inherited =

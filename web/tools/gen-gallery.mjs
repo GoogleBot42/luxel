@@ -5,7 +5,11 @@
 //
 // `kind` is an ADVISORY hint at the pattern's dimensionality — "cloud" for
 // render3D-only, "grid" for render2D (or a renderFrame that calls a
-// coordinate/grid-space bulk builtin), "strip" for 1D. Since Gitea #463 the
+// coordinate/grid-space bulk builtin), "strip" for a `render(index)` 1D
+// pattern, and "any" for a DIMENSIONLESS one: `renderFrame` alone, painting
+// in index space, which names no geometry and is native on every Layout
+// (`library/fairies.js`). "any" must not read as "strip" — a strip pattern is
+// projectable along an axis and a dimensionless one is not. Since Gitea #463 the
 // playground does NOT take a tile's shape from it: the shape is the Layout's
 // and the dimensionality comes from the COMPILED pattern
 // (`Engine.preferredDims()`), which a regex over source text cannot know (a
@@ -54,10 +58,12 @@ const usesBulk2D = (source) =>
       !new RegExp(`function\\s+${n}\\s*\\(`).test(source),
   );
 
+// Mirrors `guessPatternDims` in web/src/lib/geometry.ts and, through it, the
+// engine's `pattern_dims()` — all three move together.
 const kindOf = (source) => {
-  const has2D = /render2D/.test(source) || usesBulk2D(source);
-  const has3D = /render3D/.test(source);
-  return has3D && !has2D ? "cloud" : has2D ? "grid" : "strip";
+  if (/render2D/.test(source) || usesBulk2D(source)) return "grid";
+  if (/render3D/.test(source)) return "cloud";
+  return /\brender\s*\(/.test(source) ? "strip" : "any";
 };
 
 // Collect entries, disambiguating duplicate names (append " (2)", " (3)", …)

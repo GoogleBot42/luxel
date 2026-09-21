@@ -223,10 +223,14 @@
     return name || example || "untitled pattern";
   }
 
-  /** `1D`/`2D`/`3D` — `preferredDims()`'s 0 means "no preference", i.e. 1D
-   *  (mockups S2c `Sunset Fade · 1D`, S2d `Aurora 2D · 2D`). */
+  /** `1D`/`2D`/`3D` (mockups S2c `Sunset Fade · 1D`, S2d `Aurora 2D · 2D`),
+   *  and "" for a DIMENSIONLESS pattern: an index-space `renderFrame` declares
+   *  no geometry, so there is no dimensionality to state and the name stands
+   *  alone. Calling it `1D` was the visible half of the bug — it read as "a
+   *  strip pattern", which is what the projection row then offered to project
+   *  (`library/fairies.js`, 2026-09-20). */
   function dimsLabel(d: number): string {
-    return `${d === 0 ? 1 : d}D`;
+    return d === 0 ? "" : `${d}D`;
   }
 
   /**
@@ -467,7 +471,9 @@
       // what playground Auto follows (D7). Telling the store can move the
       // Layout, and a moved Layout is a different pixel count, so the engine
       // is rebuilt at it. Recurses exactly once: the second pass agrees.
-      const dims = result.preferredDims();
+      // DECLARED, not `preferredDims()`: 0 must stay 0 so a dimensionless
+      // pattern is captioned, filtered and projected as "any" (§5.4d).
+      const dims = result.patternDims();
       if (dims !== $patternDims) {
         patternDims.set(dims);
         if (pixelCount() !== result.pixelCount) {
@@ -586,6 +592,7 @@
     if (!engine) return;
     const mode = $projectionOverride;
     if (mode === null) return; // configureEngine already installed the default
+    if ($patternDims === 0) return; // dimensionless: no slot, nothing to apply
     const key = $patternDims === 3 ? "proj3d" : $patternDims === 2 ? "proj2d" : "proj1d";
     engine.setProjection({ ...$layout.projection, [key]: mode });
   }
@@ -1831,7 +1838,9 @@
                  dimensionality they were written for — the one fact the
                  projection row below is about. -->
             <span class="rdim" data-role="controls-dims">
-              {nameOf($patternName, $exampleName)} · {dimsLabel($patternDims)}
+              {nameOf($patternName, $exampleName)}{dimsLabel($patternDims)
+                ? ` · ${dimsLabel($patternDims)}`
+                : ""}
             </span>
           </div>
           <Controls {controls} bind:values={$controlValues} {readouts} hints={$hints} on:set={onControlSet} />

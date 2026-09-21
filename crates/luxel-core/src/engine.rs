@@ -141,10 +141,11 @@ pub struct EffectiveGeometry {
     /// What `pixelCount` reads inside the pattern (the strip length under an
     /// along-axis projection, the Layout's pixel count otherwise).
     pub pixel_count: u32,
-    /// The space the pattern renders in: 1 = strip, 2 = plane, 3 = volume.
-    /// The RESOLVED entry's dimensionality, so it can differ from
-    /// `/api/status`'s `geom.pattern_dims` (what the pattern declares) for a
-    /// pattern that exports more than one render entry.
+    /// The space the pattern renders in: 0 = none (a dimensionless
+    /// index-space `renderFrame` — native on every Layout), 1 = strip,
+    /// 2 = plane, 3 = volume. The RESOLVED entry's dimensionality, so it can
+    /// differ from `/api/status`'s `geom.pattern_dims` (what the pattern
+    /// declares) for a pattern that exports more than one render entry.
     pub pattern_dims: u8,
     /// The Layout's own dimensionality.
     pub layout_dims: u8,
@@ -804,8 +805,15 @@ impl Engine {
     /// Not [`pattern_dims`](Self::pattern_dims), which is what the pattern
     /// DECLARES: they differ for a pattern exporting several entries (both
     /// `render` and `render2D` declares 2, but renders 1D on a strip) and
-    /// whenever a late-bound entry changes between frames. Never 0 — a
-    /// dimensionless `renderFrame` renders on the strip's index space.
+    /// whenever a late-bound entry changes between frames.
+    ///
+    /// `0` means DIMENSIONLESS — an index-space `renderFrame` that names no
+    /// geometry — and is native on every Layout
+    /// ([`crate::projection::projection_options`]). It is not 1: a 1D pattern
+    /// is a strip drawn on this Layout and can be projected along an axis,
+    /// while a whole-frame pattern owns the buffer and never is, so calling it
+    /// 1D offered an along-x choice that changed nothing (`library/fairies.js`,
+    /// 2026-09-20).
     fn render_dims(&self) -> u8 {
         match self.render {
             Some(RenderKind::R1(_)) => 1,
@@ -815,10 +823,10 @@ impl Engine {
                 if self.frame_is_2d {
                     2
                 } else {
-                    1
+                    0
                 }
             }
-            None => norm_dims(self.preferred_dims()),
+            None => self.preferred_dims(),
         }
     }
 
@@ -897,7 +905,9 @@ impl Engine {
         if is_frame {
             // A whole-frame pattern owns the buffer: there is no per-pixel
             // strip to render and replicate, and no coordinate argument to
-            // substitute. The one thing it can need is a grid — a grid-space
+            // substitute. That is why an index-space one is `render_dims() ==
+            // 0` (dimensionless) rather than 1 — there is no projection for a
+            // host to offer it. The one thing it can need is a grid — a grid-space
             // `renderFrame` on a 1D Layout is an incompatible pairing no host
             // offers (#538), but if one is activated anyway it gets a w×1
             // grid so `gridWidth`/`gridHeight` and the grid-space bulk

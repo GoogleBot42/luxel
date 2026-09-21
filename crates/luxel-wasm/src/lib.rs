@@ -746,6 +746,22 @@ pub extern "C" fn lx_preferred_dims(h: i32) -> i32 {
     with_engine(h, |s| s.engine.preferred_dims() as i32).unwrap_or(0)
 }
 
+/// The dimensionality the pattern DECLARES: `0` = dimensionless (only
+/// `renderFrame`, and it paints in index space — native on every Layout),
+/// `1` = `render(index)`, `2` = `render2D` or a grid-space `renderFrame`,
+/// `3` = `render3D`.
+///
+/// This, not [`lx_preferred_dims`], is what a projection surface asks:
+/// `preferred_dims` answers "does this pattern want a map installed", where
+/// `render` and `renderFrame` are the same `0`, while a picker has to tell a
+/// 1D pattern (projectable along an axis) from a dimensionless one (nothing
+/// to project). Collapsing the two gave `library/fairies.js` a `1D · by index`
+/// caption and along-x/along-y options that changed nothing (2026-09-20).
+#[no_mangle]
+pub extern "C" fn lx_pattern_dims(h: i32) -> i32 {
+    with_engine(h, |s| s.engine.pattern_dims() as i32).unwrap_or(0)
+}
+
 /// Install the 1D Layout (no map) — the counterpart of `lx_set_map_grid` for
 /// a preview rig that really is a strip. Without it a 2D-only pattern keeps
 /// the fabricated ceil(√n) grid it is built with and the 2D→1D projections

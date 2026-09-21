@@ -154,7 +154,10 @@
     const next: Tile[] = list.map((it) => {
       const prev = by.get(it.key);
       if (!prev) {
-        const hint = it.hint ?? (it.source === undefined ? 1 : guessPatternDims(it.source));
+        // No source yet (a device tile still streaming): 0 = dimensionless,
+        // which is the permissive answer — it is never filtered out and the
+        // compile replaces it.
+        const hint = it.hint ?? (it.source === undefined ? 0 : guessPatternDims(it.source));
         return {
           key: it.key,
           name: it.name,
@@ -208,8 +211,15 @@
    *  shape decides the column count (under Auto the tiles are a mix). */
   $: fixture = $layout.source === "device" || $layout.source === "user";
   $: splitting = only !== null && fixture;
-  /** `preferredDims()` once the tile has compiled, the advisory guess before. */
+  /** `patternDims()` once the tile has compiled, the advisory guess before. */
   const dimsOf = (t: Tile): PatternDims => (t.rig ? t.dims : t.guess);
+
+  /** `gallery.json`'s advisory `kind` as a dimensionality. "any" is the
+   *  DIMENSIONLESS kind (0) — a `renderFrame` painting in index space, native
+   *  on every Layout — and must not collapse to 1, which is a strip pattern
+   *  the Layout projects along an axis. */
+  const kindDims = (kind: string | undefined): PatternDims =>
+    kind === "grid" ? 2 : kind === "cloud" ? 3 : kind === "strip" ? 1 : 0;
   const inThisGrid = (t: Tile, ld: number, split: boolean): boolean =>
     !split || projectionCompatible(dimsOf(t), ld) === (only === "compatible");
 
@@ -397,8 +407,10 @@
           .map((p) => ({
             key: p.name,
             name: p.name,
-            hint: (p.kind === "grid" ? 2 : p.kind === "cloud" ? 3 : 1) as PatternDims,
-            guess: (p.kind === "grid" ? 2 : p.kind === "cloud" ? 3 : 1) as PatternDims,
+            // "any" is the generator's DIMENSIONLESS kind (0) — never 1: a
+            // strip pattern is projected along an axis and this one is not.
+            hint: kindDims(p.kind),
+            guess: kindDims(p.kind),
             source: p.source,
             dims: 0,
             dead: false,
