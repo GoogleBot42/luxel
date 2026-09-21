@@ -304,6 +304,71 @@ pub fn plan_boxes(prog: &Program, kinds: &Kinds) -> Result<Vec<BoxFix>, KindErro
     Ok(fixes)
 }
 
+/// The abstract operand stack on ARRIVAL at each fn-relative word index,
+/// or `None` at a word nothing reaches (a dead epilogue after an explicit
+/// `return` — 0.2 % of the library's instructions).
+///
+/// Indexed by word, so continuation words of a two- or three-word
+/// instruction are `None` too.
+#[cfg(feature = "kinds")]
+pub type StackMap = Vec<Option<Vec<Kind>>>;
+
+/// One [`StackMap`] per function, from the SAME walk [`verify`] runs
+/// (Gitea #651). The JIT's emitter needs the kind and depth of every
+/// operand at every instruction, and this is how it gets them without
+/// forking the semantics: a second implementation of §2.4's rules that
+/// disagreed by one push would be a silent miscompile.
+///
+/// Verifies as it goes, so a `Ok` result is also a successful [`verify`].
+#[cfg(feature = "kinds")]
+pub fn stack_maps(prog: &Program, kinds: &Kinds) -> Result<Vec<StackMap>, KindError> {
+    let views: Vec<FnView> = prog
+        .fns
+        .iter()
+        .map(|f| FnView {
+            params: f.params,
+            locals: f.locals,
+            code_start: f.code_start,
+            code_len: f.code_len,
+        })
+        .collect();
+    let words: &[u32] = &prog.words;
+    let word = |i: usize| words.get(i).copied().unwrap_or(0);
+    if kinds.fns.len() != views.len() || kinds.globals.len() != prog.globals.len() {
+        return Err(KindError {
+            fn_idx: 0,
+            word: 0,
+            what: "kinds section does not match the program's shape".to_string(),
+        });
+    }
+    let mut out = Vec::with_capacity(views.len());
+    for (fi, f) in views.iter().enumerate() {
+        if kinds.fns[fi].slots.len() != f.locals as usize {
+            return Err(KindError {
+                fn_idx: fi as u16,
+                word: 0,
+                what: format!(
+                    "kinds section has {} slots, the function has {}",
+                    kinds.fns[fi].slots.len(),
+                    f.locals
+                ),
+            });
+        }
+        let mut m: StackMap = alloc::vec![None; f.code_len as usize];
+        walk_fn(
+            fi,
+            &views,
+            prog.globals.len(),
+            kinds,
+            &word,
+            None,
+            Some(&mut m),
+        )?;
+        out.push(m);
+    }
+    Ok(out)
+}
+
 /// [`verify`] over a decoder's view of a blob: the function table it has
 /// already validated plus a word accessor, with no `Program` in hand.
 #[cfg(feature = "kinds")]
@@ -353,7 +418,7 @@ fn walk_all(
                 ),
             });
         }
-        walk_fn(fi, fns, n_globals, kinds, word, fixes.as_deref_mut())?;
+        walk_fn(fi, fns, n_globals, kinds, word, fixes.as_deref_mut(), None)?;
     }
     Ok(())
 }
@@ -399,6 +464,7 @@ fn walk_fn(
     kinds: &Kinds,
     word: &dyn Fn(usize) -> u32,
     mut fixes: Option<&mut Vec<BoxFix>>,
+    mut map: Option<&mut StackMap>,
 ) -> Result<(), KindError> {
     let f = fns[fi];
     let base = f.code_start as usize;
@@ -453,6 +519,15 @@ fn walk_fn(
             at += len;
             continue;
         };
+        // The JIT's emitter needs the abstract stack at every word, and it
+        // has to be THIS walk's answer rather than a second implementation
+        // of the same rules (Gitea #651). Recording it here is the only
+        // hook that cannot drift: `st` is the state on ARRIVAL, before the
+        // instruction's own effect, which is exactly what the emitter
+        // reads to know each operand's kind and home.
+        if let Some(m) = map.as_deref_mut() {
+            m[at] = Some(st.iter().map(|a| a.k).collect());
+        }
 
         macro_rules! pop {
             () => {
@@ -796,7 +871,7 @@ fn walk_fn(
 /// What a `LoadIdx` off an array of kind `arr` pushes.
 #[cfg(feature = "kinds")]
 #[inline]
-fn elem_kind(arr: Kind) -> Kind {
+pub fn elem_kind(arr: Kind) -> Kind {
     match arr {
         Kind::ArrNum => Kind::Num,
         Kind::Arr | Kind::Dyn => Kind::Dyn,

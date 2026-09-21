@@ -78,6 +78,20 @@ pub struct JitCtx {
     /// [`crate::jit::BUILTIN_ENTRIES`], so a `CallBuiltin` is one load plus
     /// an indirect call rather than an `l32r` of a global per call site.
     pub builtins: *const BuiltinEntry,
+    /// `Vm::globals`'s first element (Gitea #651, phase 2). docs/jit-design.md
+    /// §3.8 says a `LoadG`/`StoreG` on a typed global is an `l32i`/`s32i`
+    /// into "a `#[repr(C)]` globals array the helper side shares" — and
+    /// since #642 pinned [`Value`] as `#[repr(C, u32)]`, `Vm::globals`
+    /// ALREADY is that array: 8 bytes per global, tag at +0, payload at +4.
+    /// What was missing was a way for generated code to find it, because
+    /// `Vm` itself is not `repr(C)` and so cannot be offset into. Hence this
+    /// field, appended so every offset above is unchanged.
+    ///
+    /// # Invariant
+    /// `Vm::globals` is sized once by `Vm::new` and never grows, so the
+    /// pointer stays valid for the VM's life. A helper that ever resized it
+    /// would dangle this — nothing does, and nothing may.
+    pub globals: *mut crate::vm::ValueRaw,
 }
 
 // ---------------------------------------------------------------- offsets
@@ -104,6 +118,8 @@ pub const OFFSET_ERR: usize = core::mem::offset_of!(JitCtx, err);
 pub const OFFSET_FN_TABLE: usize = core::mem::offset_of!(JitCtx, fn_table);
 /// Byte offset of [`JitCtx::builtins`].
 pub const OFFSET_BUILTINS: usize = core::mem::offset_of!(JitCtx, builtins);
+/// Byte offset of [`JitCtx::globals`].
+pub const OFFSET_GLOBALS: usize = core::mem::offset_of!(JitCtx, globals);
 /// Size of the whole context, for whoever allocates one.
 pub const SIZEOF_JITCTX: usize = core::mem::size_of::<JitCtx>();
 
@@ -137,10 +153,95 @@ mod pinned32 {
     const _: () = assert!(OFFSET_ERR == 164);
     const _: () = assert!(OFFSET_FN_TABLE == 168);
     const _: () = assert!(OFFSET_BUILTINS == 172);
-    const _: () = assert!(SIZEOF_JITCTX == 176);
+    const _: () = assert!(OFFSET_GLOBALS == 176);
+    const _: () = assert!(SIZEOF_JITCTX == 180);
     // every offset generated code encodes is inside `l32i`'s reach
     const _: () = assert!(SIZEOF_JITCTX <= 1020);
+    // …and `dev32` is the same layout, which is the point of that module.
+    const _: () = assert!(super::dev32::VM as usize == OFFSET_VM);
+    const _: () = assert!(super::dev32::PROG as usize == OFFSET_PROG);
+    const _: () = assert!(super::dev32::STATUS as usize == OFFSET_STATUS);
+    const _: () = assert!(super::dev32::INSN_AT as usize == OFFSET_INSN_AT);
+    const _: () = assert!(super::dev32::FN_IDX as usize == OFFSET_FN_IDX);
+    const _: () = assert!(super::dev32::FUEL as usize == OFFSET_FUEL);
+    const _: () = assert!(super::dev32::STACK_LIMIT as usize == OFFSET_STACK_LIMIT);
+    const _: () = assert!(super::dev32::ARGS as usize == OFFSET_ARGS);
+    const _: () = assert!(super::dev32::ERR as usize == OFFSET_ERR);
+    const _: () = assert!(super::dev32::FN_TABLE as usize == OFFSET_FN_TABLE);
+    const _: () = assert!(super::dev32::BUILTINS as usize == OFFSET_BUILTINS);
+    const _: () = assert!(super::dev32::GLOBALS as usize == OFFSET_GLOBALS);
+    const _: () = assert!(super::dev32::SIZEOF as usize == SIZEOF_JITCTX);
+    const _: () =
+        assert!(super::dev32::BUILTIN_ENTRY as usize == core::mem::size_of::<BuiltinEntry>());
+    const _: () =
+        assert!(super::dev32::ENTRY_DIRECT as usize == core::mem::offset_of!(BuiltinEntry, direct));
+    const _: () = assert!(
+        super::dev32::ENTRY_DIRECT_SIG as usize == core::mem::offset_of!(BuiltinEntry, direct_sig)
+    );
+    const _: () = assert!(
+        super::dev32::ENTRY_RET_KIND as usize == core::mem::offset_of!(BuiltinEntry, ret_kind)
+    );
+    const _: () = assert!(
+        super::dev32::FN_TABLE_STRIDE as usize == core::mem::size_of::<usize>()
+    );
 }
+
+/// **The layout the EMITTER compiles for**, as literal numbers.
+///
+/// The `OFFSET_*` constants above are `offset_of!` on the HOST, and the
+/// emitter runs on a 64-bit host in every test and every CI run — where
+/// `OFFSET_PROG` is 8, not 4. Generated code must carry the 32-bit device
+/// offsets whatever it was generated on, so those are spelled here as
+/// literals, and the `pinned32` module above asserts the two agree on the
+/// one target where both are meaningful. Change a field and the device
+/// build fails; change it without touching this module and the device build
+/// fails too.
+pub mod dev32 {
+    pub const VM: u32 = 0;
+    pub const PROG: u32 = 4;
+    pub const STATUS: u32 = 8;
+    pub const INSN_AT: u32 = 12;
+    pub const FN_IDX: u32 = 16;
+    pub const FUEL: u32 = 20;
+    pub const STACK_LIMIT: u32 = 24;
+    pub const ARGS: u32 = 28;
+    pub const ERR: u32 = 164;
+    pub const FN_TABLE: u32 = 168;
+    pub const BUILTINS: u32 = 172;
+    pub const GLOBALS: u32 = 176;
+    pub const SIZEOF: u32 = 180;
+
+    /// `size_of::<BuiltinEntry>()` on the device: two words plus the two
+    /// `u8` columns, padded to the 4-byte alignment of a function pointer.
+    pub const BUILTIN_ENTRY: u32 = 12;
+    /// `offset_of!(BuiltinEntry, generic)`.
+    pub const ENTRY_GENERIC: u32 = 0;
+    /// `offset_of!(BuiltinEntry, direct)`.
+    pub const ENTRY_DIRECT: u32 = 4;
+    /// `offset_of!(BuiltinEntry, direct_sig)`.
+    pub const ENTRY_DIRECT_SIG: u32 = 8;
+    /// `offset_of!(BuiltinEntry, ret_kind)`.
+    pub const ENTRY_RET_KIND: u32 = 9;
+
+    /// `size_of::<Value>()` — the same on every target (#642 pinned it).
+    pub const VALUE: u32 = 8;
+    /// `offset_of!(ValueRaw, tag)`.
+    pub const VALUE_TAG: u32 = 0;
+    /// `offset_of!(ValueRaw, payload)`.
+    pub const VALUE_PAYLOAD: u32 = 4;
+
+    /// One `usize` of `JitCtx::fn_table`.
+    pub const FN_TABLE_STRIDE: u32 = 4;
+}
+
+// `Value`'s layout is target-independent, so these can be asserted
+// everywhere rather than only on a 32-bit build.
+const _: () = assert!(dev32::VALUE as usize == core::mem::size_of::<crate::vm::ValueRaw>());
+const _: () =
+    assert!(dev32::VALUE_TAG as usize == core::mem::offset_of!(crate::vm::ValueRaw, tag));
+const _: () =
+    assert!(dev32::VALUE_PAYLOAD as usize == core::mem::offset_of!(crate::vm::ValueRaw, payload));
+const _: () = assert!(dev32::ENTRY_GENERIC as usize == core::mem::offset_of!(BuiltinEntry, generic));
 
 impl JitCtx {
     /// A context for a bare builtin call — no native frame, no fuel
@@ -155,6 +256,7 @@ impl JitCtx {
     /// wrapper is running through it — exactly the aliasing rule the
     /// interpreter already keeps for `&mut self`.
     pub fn for_builtin_call(vm: &mut Vm, prog: &Program, err: &mut Option<VmError>) -> JitCtx {
+        let globals = vm.globals.as_mut_ptr().cast::<crate::vm::ValueRaw>();
         JitCtx {
             vm,
             prog,
@@ -168,6 +270,7 @@ impl JitCtx {
             err,
             fn_table: core::ptr::null(),
             builtins: crate::jit::BUILTIN_ENTRIES.as_ptr(),
+            globals,
         }
     }
 

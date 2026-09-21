@@ -1777,13 +1777,17 @@ impl Vm {
     /// Read view by id — arena ids come from the VM itself, so `id` is
     /// always valid at these call sites (matches the old direct indexing).
     #[inline]
-    fn arr<'a>(&'a self, prog: &'a Program, id: u32) -> ArrView<'a> {
+    pub(crate) fn arr<'a>(&'a self, prog: &'a Program, id: u32) -> ArrView<'a> {
         self.arrays[id as usize].view(prog)
     }
 
     /// Mutable storage by id, materializing const-backed arrays
     /// (copy-on-write). Fails only if the copy can't be allocated.
-    fn arr_mut(&mut self, prog: &Program, id: u32) -> Result<&mut ArrVec<Value>, String> {
+    pub(crate) fn arr_mut(
+        &mut self,
+        prog: &Program,
+        id: u32,
+    ) -> Result<&mut ArrVec<Value>, String> {
         if self.palette_src == Some(id) {
             self.palette_dirty = true;
         }
@@ -2132,7 +2136,12 @@ impl Vm {
     /// array-heavy pattern lost 18 % and `colourful-fireflies` 21 % on
     /// x86, which the wasm playground would pay too (Gitea #312).
     #[inline]
-    fn index_read(&mut self, prog: &Program, arr: Value, idx: Fx) -> Result<Value, &'static str> {
+    pub(crate) fn index_read(
+        &mut self,
+        prog: &Program,
+        arr: Value,
+        idx: Fx,
+    ) -> Result<Value, &'static str> {
         let Value::Arr(a) = arr else {
             return Err("indexing a non-array value");
         };
@@ -2151,7 +2160,7 @@ impl Vm {
     /// per pattern (Gitea #312).
     #[cold]
     #[inline(never)]
-    fn assert_failed(&mut self, prog: &Program, m: u16) -> VmError {
+    pub(crate) fn assert_failed(&mut self, prog: &Program, m: u16) -> VmError {
         // decoder-validated: m < assert_msgs.len()
         let px = self.globals[prog.pixel_count_g as usize]
             .num()
@@ -2918,7 +2927,7 @@ impl Vm {
     /// Arena entry sharing a const-pool array (copy-on-write). Elements
     /// still count against the PB-compat element budget; bytes only for
     /// the entry itself — the data is shared with the program.
-    fn alloc_const_array(&mut self, d: u32, len: usize) -> Result<Value, String> {
+    pub(crate) fn alloc_const_array(&mut self, d: u32, len: usize) -> Result<Value, String> {
         self.charge_array(len, CONST_ENTRY_COST)?;
         self.array_elems += len + ARRAY_HEADER_UNITS;
         self.array_bytes += CONST_ENTRY_COST;
@@ -2930,7 +2939,7 @@ impl Vm {
     /// BEFORE any memory is reserved, and the reservation itself is
     /// fallible — on a small-heap device a huge `array(n)` must be a
     /// recorded runtime error, never an allocator panic (= reboot).
-    fn alloc_array_zeroed(&mut self, len: usize) -> Result<Value, String> {
+    pub(crate) fn alloc_array_zeroed(&mut self, len: usize) -> Result<Value, String> {
         self.charge_array(len, Self::array_cost(len))?;
         let mut elems: ArrVec<Value> = crate::arena::empty();
         if elems.try_reserve_exact(len).is_err() {
