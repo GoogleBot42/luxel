@@ -166,7 +166,13 @@ paths:
   boards, 3,145,728 B on `board-seengreat-hub75`, from `board_ota_max` in
   `firmware/board-target.sh`; a margin percentage means nothing until you
   say which slot it is a fraction of, and `tools/image-check.sh` prints the
-  rule it used on every size line. While `MIGRATING_RELEASE=1` is set every
+  rule it used on every size line. `board-seengreat-hub75` has TWO tiers
+  (#634): a 16 MB device whose *bootloader* was flashed for a smaller part
+  migrates to the 4 MB fallback layout, where its live `ota_0` is
+  1,310,720 B, not the 3,145,728 B the gate uses — the gate stays on the
+  nominal slot because the image is a release artifact and the tier is a
+  property of the device, and `/api/ota` sizes every push against the table
+  on flash. While `MIGRATING_RELEASE=1` is set every
   image is weighed against the OLD 1,048,576 B slot at a 0 % floor instead,
   because a device that has not repartitioned is what installs that one
   release (docs/releases.md). The canonical size measure is the CREDLESS flake build
