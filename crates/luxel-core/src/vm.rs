@@ -219,6 +219,17 @@ pub enum BKind {
     /// Documented PB builtin we haven't implemented yet: resolves at compile
     /// time (so the corpus compiles) but raises a runtime error when called.
     Todo,
+    /// A builtin id that used to be implemented and no longer is — a
+    /// TOMBSTONE. [`BUILTINS`] is append-only, so a retired name keeps its
+    /// slot forever rather than letting every later id shift.
+    ///
+    /// The six callback helpers became pattern-language prelude functions in
+    /// LXBC v6 (Gitea #626, `crate::prelude`). The compiler never emits one:
+    /// the name resolves to the prelude function instead. A blob that
+    /// imports one was built by an older compiler, and the decoder rejects
+    /// it by name with a "recompile" message — the same loop a version skew
+    /// already uses.
+    Removed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -279,14 +290,9 @@ pub enum Builtin {
     Array,
     ArrayLength,
     ArraySum,
-    ArrayForEach,
-    ArrayMutate,
-    ArrayMapTo,
-    ArrayReduce,
     ArrayReplace,
     ArrayReplaceAt,
     ArraySort,
-    ArraySortBy,
     // transforms & map
     ResetTransform,
     Transform,
@@ -301,7 +307,6 @@ pub enum Builtin {
     PixelMapDimensions,
     Has2DMap,
     Has3DMap,
-    MapPixels,
     // noise & palettes
     Perlin,
     PerlinFbm,
@@ -457,6 +462,16 @@ macro_rules! b {
     };
 }
 
+/// A retired id: the name keeps its slot, nothing implements it.
+macro_rules! gone {
+    ($name:literal) => {
+        BuiltinDef {
+            name: $name,
+            kind: BKind::Removed,
+        }
+    };
+}
+
 /// All documented builtins. Order is the builtin id — append only.
 #[rustfmt::skip]
 pub static BUILTINS: &[BuiltinDef] = &[
@@ -481,10 +496,11 @@ pub static BUILTINS: &[BuiltinDef] = &[
     b!("bezierQuadratic", BezierQuadratic), b!("bezierCubic", BezierCubic),
     b!("hsv", Hsv), b!("hsv24", Hsv), b!("rgb", Rgb),
     b!("array", Array), b!("arrayLength", ArrayLength), b!("arraySum", ArraySum),
-    b!("arrayForEach", ArrayForEach), b!("arrayMutate", ArrayMutate),
-    b!("arrayMapTo", ArrayMapTo), b!("arrayReduce", ArrayReduce),
+    // prelude functions since v6, not builtins — tombstoned (Gitea #626)
+    gone!("arrayForEach"), gone!("arrayMutate"),
+    gone!("arrayMapTo"), gone!("arrayReduce"),
     b!("arrayReplace", ArrayReplace), b!("arrayReplaceAt", ArrayReplaceAt),
-    b!("arraySort", ArraySort), b!("arraySortBy", ArraySortBy),
+    b!("arraySort", ArraySort), gone!("arraySortBy"),
     b!("perlin", Perlin), b!("perlinFbm", PerlinFbm), b!("perlinRidge", PerlinRidge),
     b!("perlinTurbulence", PerlinTurbulence), b!("setPerlinWrap", SetPerlinWrap),
     b!("resetTransform", ResetTransform), b!("transform", Transform),
@@ -492,7 +508,7 @@ pub static BUILTINS: &[BuiltinDef] = &[
     b!("translate3D", Translate3D), b!("scale3D", Scale3D), b!("rotateX", RotateX),
     b!("rotateY", RotateY), b!("rotateZ", RotateZ),
     b!("pixelMapDimensions", PixelMapDimensions), b!("has2DMap", Has2DMap),
-    b!("has3DMap", Has3DMap), b!("mapPixels", MapPixels),
+    b!("has3DMap", Has3DMap), gone!("mapPixels"),
     b!("setPalette", SetPalette), b!("paint", Paint),
     b!("pinMode", PinMode), b!("digitalWrite", DigitalWrite),
     b!("digitalRead", DigitalRead), b!("analogRead", AnalogRead),
@@ -594,8 +610,6 @@ pub enum SigRet {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SigWrite {
     Num,
-    /// A user callback's return value.
-    Dyn,
     /// The join of arguments `n..argc`.
     ArgsFrom(u8),
 }
@@ -607,9 +621,12 @@ pub struct BuiltinSig {
     /// `(array argument index, kind written)` when the builtin stores
     /// something that is not provably a number into one of its arguments.
     pub writes: Option<(u8, SigWrite)>,
-    /// Argument index holding a callback (a higher-order builtin).
-    pub callback: Option<u8>,
 }
+
+// No entry carries a CALLBACK any more: the six higher-order builtins are
+// prelude functions since v6 (Gitea #626), so a builtin call can no longer
+// reach pattern code and every "this builtin could go anywhere" branch in
+// `crate::kinds` went with them.
 
 /// The kind signature of builtin `id` (docs/jit-design.md §2.3, §4).
 ///
@@ -620,40 +637,32 @@ pub struct BuiltinSig {
 ///
 /// The classification comes from reading every `Ok(a(i))` arm of
 /// [`Vm::call_builtin`]: `array` is the only builtin that ALLOCATES,
-/// twenty-three return one of their array arguments verbatim,
-/// `arrayReduce` returns whatever the callback returned, and everything
-/// else returns a number.
+/// twenty-three return one of their array arguments verbatim, and
+/// everything else returns a number.
 #[cfg(feature = "kinds")]
 pub fn builtin_sig(id: u16) -> BuiltinSig {
     let name = match BUILTINS.get(id as usize) {
         Some(b) => b.name,
         // an id the decoder would already have rejected
-        None => return BuiltinSig { ret: SigRet::Dyn, writes: None, callback: None },
+        None => return BuiltinSig { ret: SigRet::Dyn, writes: None },
     };
-    let sig = |ret, writes, callback| BuiltinSig { ret, writes, callback };
+    let sig = |ret, writes| BuiltinSig { ret, writes };
     match name {
-        "array" => sig(SigRet::NewArrNum, None, None),
-        // higher-order: the callback is a pattern function (or any value)
-        "arrayForEach" => sig(SigRet::Arg(0), None, Some(1)),
-        "arrayMutate" => sig(SigRet::Arg(0), Some((0, SigWrite::Dyn)), Some(1)),
-        "arrayMapTo" => sig(SigRet::Arg(1), Some((1, SigWrite::Dyn)), Some(2)),
-        "arrayReduce" => sig(SigRet::Dyn, None, Some(1)),
-        "arraySortBy" => sig(SigRet::Arg(0), None, Some(1)),
-        "mapPixels" => sig(SigRet::Num, None, Some(0)),
+        "array" => sig(SigRet::NewArrNum, None),
         // splat the caller's values into the array
-        "arrayReplace" => sig(SigRet::Arg(0), Some((0, SigWrite::ArgsFrom(1))), None),
-        "arrayReplaceAt" => sig(SigRet::Arg(0), Some((0, SigWrite::ArgsFrom(2))), None),
+        "arrayReplace" => sig(SigRet::Arg(0), Some((0, SigWrite::ArgsFrom(1)))),
+        "arrayReplaceAt" => sig(SigRet::Arg(0), Some((0, SigWrite::ArgsFrom(2)))),
         // canvasSet(buf, w, x, y, v) stores v and returns it
-        "canvasSet" => sig(SigRet::Arg(4), Some((0, SigWrite::ArgsFrom(4))), None),
+        "canvasSet" => sig(SigRet::Arg(4), Some((0, SigWrite::ArgsFrom(4)))),
         // return an array argument verbatim, writing only numbers into it
         "arraySort" | "blur1D" | "feedback" | "arrayScale" | "blur2D" | "arrayAdd"
         | "arraySub" | "arrayMix" | "fillNoise2D" | "fillNoise3D" | "stencil2D" => {
-            sig(SigRet::Arg(0), Some((0, SigWrite::Num)), None)
+            sig(SigRet::Arg(0), Some((0, SigWrite::Num)))
         }
-        "curl2" => sig(SigRet::Arg(2), Some((2, SigWrite::Num)), None),
-        "hsv2rgb" | "rgb2hsv" | "curl3" => sig(SigRet::Arg(3), Some((3, SigWrite::Num)), None),
-        "mixColors" => sig(SigRet::Arg(7), Some((7, SigWrite::Num)), None),
-        _ => sig(SigRet::Num, None, None),
+        "curl2" => sig(SigRet::Arg(2), Some((2, SigWrite::Num))),
+        "hsv2rgb" | "rgb2hsv" | "curl3" => sig(SigRet::Arg(3), Some((3, SigWrite::Num))),
+        "mixColors" => sig(SigRet::Arg(7), Some((7, SigWrite::Num))),
+        _ => sig(SigRet::Num, None),
     }
 }
 
@@ -698,6 +707,16 @@ pub fn lookup_builtin(name: &str) -> Option<u16> {
         .iter()
         .position(|d| d.name == name)
         .map(|i| i as u16)
+}
+
+/// Is builtin id `b` a TOMBSTONE — a name that keeps its slot in the
+/// append-only [`BUILTINS`] table but is no longer implemented? The decoder
+/// rejects a blob that imports one, and the compiler never resolves one.
+pub fn builtin_removed(b: u16) -> bool {
+    matches!(
+        BUILTINS.get(b as usize).map(|d| d.kind),
+        Some(BKind::Removed)
+    )
 }
 
 /// Method-form array API: the global name `a.<name>(...)` desugars to.
@@ -1791,15 +1810,6 @@ impl Vm {
             self.stack.clear();
             self.locals.clear();
         }
-        self.run_on_top(prog, fn_idx, args)
-    }
-
-    fn run_on_top(
-        &mut self,
-        prog: &Program,
-        fn_idx: u16,
-        args: &[Value],
-    ) -> Result<Value, VmError> {
         let base = self.frames.len();
         self.push_frame(prog, fn_idx, args)?;
         let result = self.run(prog, base, false);
@@ -2977,8 +2987,10 @@ impl Vm {
         let def = &BUILTINS[id as usize];
         let builtin = match def.kind {
             BKind::Impl(b) => b,
-            BKind::Todo => {
-                // pop args, then report
+            BKind::Todo | BKind::Removed => {
+                // Unreachable through a loaded blob — the decoder rejects a
+                // `Removed` import (`bytecode.rs`) and the compiler never
+                // emits one. Pop args, then report.
                 for _ in 0..argc {
                     self.stack.pop();
                 }
@@ -3498,75 +3510,6 @@ impl Vm {
                 }
                 num(sum)
             }
-            ArrayForEach | ArrayMutate => {
-                let Value::Arr(arr) = a(0) else {
-                    return Err(no_site("array method on a non-array".into()));
-                };
-                let f = a(1);
-                let mutate = builtin == ArrayMutate;
-                let mut i = 0usize;
-                while i < self.arr(prog, arr).len() {
-                    let v = self.arr(prog, arr).at(i);
-                    let r = self.dispatch_direct(
-                        prog,
-                        f,
-                        &[v, Value::Num(Fx::from_int(i as i32)), a(0)],
-                    )?;
-                    if mutate {
-                        if let Some(slot) = self
-                            .arr_mut(prog, arr)
-                            .map_err(no_site)?
-                            .get_mut(i)
-                        {
-                            *slot = r;
-                        }
-                    }
-                    i += 1;
-                }
-                Ok(a(0))
-            }
-            ArrayMapTo => {
-                let (Value::Arr(src), Value::Arr(dst)) = (a(0), a(1)) else {
-                    return Err(no_site("arrayMapTo needs two arrays".into()));
-                };
-                let f = a(2);
-                let mut i = 0usize;
-                while i < self.arr(prog, src).len() && i < self.arr(prog, dst).len() {
-                    let v = self.arr(prog, src).at(i);
-                    let r = self.dispatch_direct(
-                        prog,
-                        f,
-                        &[v, Value::Num(Fx::from_int(i as i32)), a(0)],
-                    )?;
-                    if let Some(slot) = self
-                        .arr_mut(prog, dst)
-                        .map_err(no_site)?
-                        .get_mut(i)
-                    {
-                        *slot = r;
-                    }
-                    i += 1;
-                }
-                Ok(a(1))
-            }
-            ArrayReduce => {
-                let Value::Arr(arr) = a(0) else {
-                    return Err(no_site("arrayReduce of a non-array".into()));
-                };
-                let f = a(1);
-                let mut acc = a(2);
-                let mut i = 0usize;
-                while i < self.arr(prog, arr).len() {
-                    let v = self.arr(prog, arr).at(i);
-                    acc = self.dispatch_direct(
-                        prog,
-                        f,
-                        &[acc, v, Value::Num(Fx::from_int(i as i32)), a(0)],
-                    )?;
-                    i += 1;
-                }
-                Ok(acc)
-            }
             ArrayReplace | ArrayReplaceAt => {
                 let Value::Arr(arr) = a(0) else {
                     return Err(no_site("arrayReplace of a non-array".into()));
@@ -3612,47 +3555,29 @@ impl Vm {
                 }
                 Ok(a(0))
             }
-            ArraySort | ArraySortBy => {
+            ArraySort => {
                 let Value::Arr(arr) = a(0) else {
                     return Err(no_site("arraySort of a non-array".into()));
                 };
-                let cmp = a(1);
-                let by = builtin == ArraySortBy;
                 self.arr_mut(prog, arr).map_err(no_site)?; // materialize (CoW)
                 let ArrRepr::Owned(mut data) = core::mem::take(&mut self.arrays[arr as usize])
                 else {
                     unreachable!("materialized above")
                 };
-                let mut err = None;
-                // insertion sort (documented as not stable; small arrays)
-                'outer: for i in 1..data.len() {
+                // insertion sort (documented as not stable; small arrays).
+                // `arraySortBy` is the prelude's now — same algorithm, same
+                // comparison direction (Gitea #626).
+                for i in 1..data.len() {
                     let key = data[i];
                     let mut j = i;
-                    while j > 0 {
-                        let before = if by {
-                            match self.dispatch_direct(prog, cmp, &[data[j - 1], key]) {
-                                Ok(r) => r.num() > Fx::ZERO,
-                                Err(e) => {
-                                    err = Some(e);
-                                    break 'outer;
-                                }
-                            }
-                        } else {
-                            data[j - 1].num() > key.num()
-                        };
-                        if !before {
-                            break;
-                        }
+                    while j > 0 && data[j - 1].num() > key.num() {
                         data[j] = data[j - 1];
                         j -= 1;
                     }
                     data[j] = key;
                 }
                 self.arrays[arr as usize] = ArrRepr::Owned(data);
-                match err {
-                    Some(e) => Err(e),
-                    None => Ok(a(0)),
-                }
+                Ok(a(0))
             }
             // ---- coordinate transforms (see field docs for conventions) ----
             ResetTransform => {
@@ -3740,24 +3665,6 @@ impl Vm {
                 let i = n(0).to_int_trunc().max(0) as u32;
                 let p = self.apply_transform(self.pixel_coords(i, [Fx::ZERO; 3]));
                 num(p[n(1).to_int_trunc().clamp(0, 2) as usize])
-            }
-            MapPixels => {
-                let f = a(0);
-                for i in 0..self.pixel_count {
-                    let p = self.pixel_coords(i, [Fx::ZERO; 3]);
-                    let p = self.apply_transform(p);
-                    self.dispatch_direct(
-                        prog,
-                        f,
-                        &[
-                            Value::Num(Fx::from_int(i as i32)),
-                            Value::Num(p[0]),
-                            Value::Num(p[1]),
-                            Value::Num(p[2]),
-                        ],
-                    )?;
-                }
-                Ok(Value::default())
             }
             SetPerlinWrap => {
                 for (i, w) in self.perlin_wrap.iter_mut().enumerate() {
@@ -4573,33 +4480,6 @@ impl Vm {
         &self.palette
     }
 
-    /// Call a function value with explicit args (used by array HOFs and
-    /// mapPixels). Runs to completion — debug pausing never fires inside a
-    /// builtin callback (documented v1 limitation).
-    fn dispatch_direct(
-        &mut self,
-        prog: &Program,
-        callee: Value,
-        args: &[Value],
-    ) -> Result<Value, VmError> {
-        match callee {
-            Value::Fun(f) => self.run_on_top(prog, f as u16, args),
-            Value::Builtin(b) => {
-                for v in args {
-                    self.stack.push(*v);
-                }
-                self.call_builtin(prog, b as u16, args.len())
-            }
-            _ => Err(VmError {
-                message: "callback is not a function".into(),
-                fn_idx: u16::MAX,
-                pc: u32::MAX,
-                line: 0,
-                col: 0,
-                is_assert: false,
-            }),
-        }
-    }
 }
 
 /// The numeric core: every sub-opcode with both operands already reduced

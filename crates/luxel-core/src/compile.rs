@@ -154,36 +154,18 @@ pub fn compile(src: &str) -> Result<Program, Diagnostic> {
 }
 
 pub fn compile_with(src: &str, opts: CompileOpts) -> Result<Program, Diagnostic> {
-    compile_inner(src, opts, true)
-}
-
-/// Compile with the prelude LINKER disabled, so the six helper names fall
-/// through to the builtins that used to implement them.
-///
-/// The only caller is `tests/prelude.rs`, which records the builtins'
-/// behaviour as golden data before they are deleted (Gitea #626). It goes
-/// away with the arms.
-#[doc(hidden)]
-pub fn compile_without_prelude(src: &str) -> Result<Program, Diagnostic> {
-    compile_inner(src, CompileOpts::default(), false)
-}
-
-fn compile_inner(src: &str, opts: CompileOpts, link_prelude: bool) -> Result<Program, Diagnostic> {
     let mut ast = parse_program(src)?;
     // Link the pattern-language prelude (Gitea #626, docs/jit-design.md §4):
     // the helpers the pattern can reach, prepended as ordinary top-level
     // function declarations, so everything downstream — registration,
     // scoping, the rewrite passes, the kinds fixpoint — treats them as
     // pattern code, which is exactly what they are.
-    let mut prelude_decls: Vec<Stmt> = Vec::new();
-    if link_prelude {
-        let shadowed = shadowing_names(&ast);
-        prelude_decls = prelude::link(&ast, &shadowed)?;
-        if !prelude_decls.is_empty() {
-            let mut with_prelude = prelude_decls.clone();
-            with_prelude.append(&mut ast);
-            ast = with_prelude;
-        }
+    let shadowed = shadowing_names(&ast);
+    let prelude_decls = prelude::link(&ast, &shadowed)?;
+    if !prelude_decls.is_empty() {
+        let mut with_prelude = prelude_decls.clone();
+        with_prelude.append(&mut ast);
+        ast = with_prelude;
     }
     let mut c = Compiler::new(src);
     c.prelude_decls = prelude_decls;
@@ -1673,7 +1655,7 @@ impl<'s> Compiler<'s> {
         if let Some(i) = self.global_idx(name) {
             return Ok(Place::Global(i));
         }
-        if let Some(b) = lookup_builtin(name) {
+        if let Some(b) = callable_builtin(name) {
             return Ok(Place::Builtin(b));
         }
         Err(Diagnostic::new(
@@ -2328,7 +2310,7 @@ impl<'s> Compiler<'s> {
                 return Some(Place::Func(idx));
             }
         }
-        lookup_builtin(name).map(Place::Builtin)
+        callable_builtin(name).map(Place::Builtin)
     }
 
     /// Is `fn_idx` a linked prelude helper, and what is its shape?
@@ -2494,6 +2476,14 @@ impl<'s> Compiler<'s> {
             };
         }
     }
+}
+
+/// The builtin id `name` resolves to in CALL position. A TOMBSTONE resolves
+/// to nothing: the six retired names are prelude functions, and a program
+/// that reaches here for one of them shadowed the prelude with a variable,
+/// so "unknown identifier" is the honest answer (Gitea #626).
+fn callable_builtin(name: &str) -> Option<u16> {
+    lookup_builtin(name).filter(|b| !crate::vm::builtin_removed(*b))
 }
 
 /// The decoder's cap on functions per program (`bytecode.rs`), mirrored so

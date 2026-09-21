@@ -371,12 +371,9 @@ fn render_path(prog: &Program) -> (BTreeSet<usize>, Vec<BTreeSet<usize>>) {
                 CALL_FN => {
                     callees[fi].insert((w >> 8) as u16 as usize);
                 }
+                // No builtin can reach pattern code since #626, so a
+                // `CallValue` is the only way out of the call graph.
                 CALL_VALUE => dyncall[fi] = true,
-                0x39 | 0x4B | 0x4C => {
-                    if luxel_core::vm::builtin_sig((w >> 8) as u16).callback.is_some() {
-                        dyncall[fi] = true;
-                    }
-                }
                 _ => {}
             }
             match o {

@@ -280,14 +280,7 @@ fn cases() -> Vec<(&'static str, &'static str)> {
 /// init-time error (if any) and two rendered frames.
 fn record(name: &str, src: &str) -> String {
     let (px, map2, body) = directives(src);
-    let built = if std::env::var("LUXEL_GOLDEN_BUILTINS").is_ok() {
-        // Recording the goldens: compile with the prelude linker off so the
-        // six names fall through to the builtin arms (Gitea #626 commit 1).
-        luxel_core::compile::compile_without_prelude(body)
-    } else {
-        compile(body)
-    };
-    let prog = match built {
+    let prog = match compile(body) {
         Ok(p) => p,
         Err(d) => return format!("{name}\tCOMPILE-ERROR\t{}", d.message),
     };
@@ -572,11 +565,7 @@ fn the_callback_patterns_render_as_the_builtins_did() {
         if !helpers.iter().any(|h| src.contains(h)) {
             continue;
         }
-        let prog = match std::env::var("LUXEL_GOLDEN_BUILTINS") {
-            Ok(_) => luxel_core::compile::compile_without_prelude(&src),
-            Err(_) => compile(&src),
-        }
-        .unwrap_or_else(|d| panic!("{name}: {}", d.message));
+        let prog = compile(&src).unwrap_or_else(|d| panic!("{name}: {}", d.message));
         lines.push(format!("{name}\t{:016x}", library_frames_hash(prog)));
     }
     assert!(lines.len() >= 8, "expected the callback patterns, got {lines:?}");
@@ -592,20 +581,81 @@ fn the_callback_patterns_render_as_the_builtins_did() {
     assert_eq!(produced, want);
 }
 
-/// The whole library, A/B: the prelude against the builtins it replaces,
-/// pattern by pattern, frame by frame. This test goes away with the arms —
-/// `the_callback_patterns_render_as_the_builtins_did` is the golden that
-/// outlives it.
+/// The retired ids are TOMBSTONES: the names keep their slots (the table is
+/// append-only), nothing implements them, the compiler never resolves one,
+/// and the decoder rejects a blob that imports one (Gitea #626).
 #[test]
-fn the_whole_library_renders_identically_without_the_prelude() {
-    for (name, src) in library() {
-        let with = compile(&src).unwrap_or_else(|d| panic!("{name}: {}", d.message));
-        let without = luxel_core::compile::compile_without_prelude(&src)
-            .unwrap_or_else(|d| panic!("{name}: {}", d.message));
-        assert_eq!(
-            library_frames_hash(with),
-            library_frames_hash(without),
-            "{name}: the prelude renders differently from the builtins"
-        );
+fn the_retired_builtin_ids_are_tombstones() {
+    use luxel_core::vm::{builtin_removed, lookup_builtin, BUILTINS};
+    for name in [
+        "arrayForEach",
+        "arrayMutate",
+        "arrayMapTo",
+        "arrayReduce",
+        "arraySortBy",
+        "mapPixels",
+    ] {
+        let id = lookup_builtin(name).unwrap_or_else(|| panic!("{name} lost its slot"));
+        assert_eq!(BUILTINS[id as usize].name, name, "{name} moved");
+        assert!(builtin_removed(id), "{name} should be a tombstone");
     }
+    // …and the ids around them did not move: `arraySort` and `arrayReplace`
+    // are still builtins and still where they were.
+    assert!(!builtin_removed(lookup_builtin("arraySort").unwrap()));
+    assert!(!builtin_removed(lookup_builtin("arrayReplace").unwrap()));
+    // A blob built today never emits one: the name resolves to the prelude
+    // function, so the import table lists nothing retired.
+    let prog = compile(
+        "var a = array(4)\n\
+         arrayMutate(a, (v) => 1)\n\
+         export function render(i) { hsv(a[i % 4], 1, 1) }\n",
+    )
+    .unwrap();
+    let blob = luxel_core::bytecode::serialize(&prog).unwrap();
+    luxel_core::bytecode::deserialize(&blob).expect("a v6 blob loads");
+    for f in &prog.fns {
+        let code = &prog.words[f.code_start as usize..(f.code_start + f.code_len) as usize];
+        let mut at = 0usize;
+        while at < code.len() {
+            let o = code[at] as u8;
+            if matches!(o, 0x39 | 0x4B | 0x4C) {
+                let b = (code[at] >> 8) as u16;
+                assert!(!builtin_removed(b), "the compiler emitted a retired builtin");
+            }
+            at += match o {
+                0x01 | 0x48 | 0x49 | 0x4A | 0x4B | 0x4D => 2,
+                0x4C => 3,
+                _ => 1,
+            };
+        }
+    }
+
+    // …and an OLD blob that does import one is rejected by NAME, with the
+    // message that tells the user what to do about it. Built by renaming
+    // one import in a fresh blob: `arrayLength` and `arrayMutate` are both
+    // eleven bytes, so the layout is untouched.
+    let live = compile(
+        "var a = array(4)\n\
+         export function render(i) { hsv(arrayLength(a) / 8, 1, 1) }\n",
+    )
+    .unwrap();
+    let mut blob = luxel_core::bytecode::serialize(&live).unwrap();
+    let live_id = lookup_builtin("arrayLength").unwrap();
+    let dead_id = lookup_builtin("arrayMutate").unwrap();
+    let at = blob
+        .windows(11)
+        .position(|w| w == b"arrayLength")
+        .expect("the import table names it");
+    assert_eq!(
+        u16::from_le_bytes([blob[at + 11], blob[at + 12]]),
+        live_id,
+        "that was not the import-table entry"
+    );
+    blob[at..at + 11].copy_from_slice(b"arrayMutate");
+    blob[at + 11..at + 13].copy_from_slice(&dead_id.to_le_bytes());
+    let e = luxel_core::bytecode::deserialize(&blob).expect_err("a retired import must be refused");
+    let msg = format!("{e}");
+    assert!(msg.contains("arrayMutate"), "{msg}");
+    assert!(msg.contains("prelude function"), "{msg}");
+    assert!(msg.contains("recompile"), "{msg}");
 }
