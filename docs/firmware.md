@@ -1316,14 +1316,18 @@ moved 76 %.
 
 ## JIT: compiling a pattern to native code on the device
 
-**Status: built into the two S3 images, and OFF at runtime.** Everything
-below works and every host gate is green — 307 of 307 library patterns
-render bit-identical frames through a real `Engine` — but
-`tools/qemu/jit-test.py`, the only gate that executes emitted code, found a
-trap that is not safe to ship past. `LUXEL_JIT_ENABLED` therefore defaults
-to `false`; `POST /api/jit {"on":true}` turns it on for a session, and
-`JIT_OFF=1` removes it from the image. See "The open trap" at the end of
-this section.
+**Status: built into the two S3 images, and OFF at runtime.** Every host
+gate is green (307 of 307 library patterns render bit-identical frames
+through a real `Engine`) and so is the QEMU gate, which executes emitted
+code on an emulated ESP32. It is off because §7.3 has not run: **no S3
+has executed a byte of this**, and turning it on should be a deliberate
+act with someone watching the panel. `LUXEL_JIT_ENABLED` defaults to
+`false`; `POST /api/jit {"on":true}` turns it on for a session, and
+`JIT_OFF=1` removes it from the image entirely.
+
+That gate has already paid for itself once — see "The trap the QEMU gate
+caught" at the end of this section, which is also why the frame layout
+here does not match docs/jit-design.md §3.3's sketch.
 
 Gitea #658, phase 3 of #607. The engineering design is **docs/jit-design.md**
 (§5 executable memory and lifecycle, §6 engine integration); this section is
@@ -1437,7 +1441,9 @@ Three gates, in order of what they can prove:
    generated code against the interpreter through an Xtensa ISA model
    (`library_diff.rs`), and **the engine glue** through the same model with
    a real `Engine` on top (`engine_diff.rs`): 307 of 307 library patterns
-   render bit-identical frames.
+   render bit-identical frames. The model also enforces the frame contract
+   the section below is about — a generated store into a window save area
+   is `Trap::SpillAreaWrite`, not a silent write.
 2. `tools/qemu/jit-test.py` — the only gate that EXECUTES emitted code. It
    boots the classic-ESP32 JIT image under QEMU and compares the frame the
    render task published natively against the same image with the JIT
@@ -1445,10 +1451,10 @@ Three gates, in order of what they can prove:
 3. On metal: not yet run — there is no S3 on the bench that this session
    could touch (docs/jit-design.md §7.3).
 
-### The open trap
+### The trap the QEMU gate caught, and what it was
 
-Two of the seven patterns driven through `tools/qemu/jit-test.py` compile,
-start running, and then take the AppCpu down:
+`aurora-2d.js` and `bulk-canvas-ripples-2d.js` compiled, started running,
+and then took the AppCpu down:
 
 ```
 jit: native, 6 fns, 5684 B code (96 B pool), 15916 us, sp 0x3ffeb5fc floor 0x3ffe9f70/0x3ffe7f70
@@ -1457,28 +1463,49 @@ Detected a write to the stack guard value on AppCpu
 EXCCAUSE: 0, A1: 0x3ffe9b60
 ```
 
-`aurora-2d.js` and `bulk-canvas-ripples-2d.js`, reproducibly. The same
-patterns render correctly INTERPRETED on the same image, and correctly
-through the host ISA model with the same compiled bytes. `rainbow`,
-`snake`, `snake-2d` (19 functions, 11,492 B — the largest tried) and
-`bulk-rainbow` (a `renderFrame` pattern) are all fine, so it is neither
-size, nor function count, nor `renderFrame`.
+Reproducibly, while the same patterns rendered correctly interpreted on
+the same image and correctly through the host ISA model with the same
+compiled bytes. `rainbow`, `snake`, `snake-2d` and `bulk-rainbow` were
+fine, so it was neither size nor function count nor `renderFrame`.
 
-What the registers say: `a1` is about 1 KB below `stack_limit`, while the
-stack guard — 7.5 KB further down — has been clobbered, and `EXCCAUSE` is
-0 (illegal instruction). That is a **wild store**, not stack growth: the
-depth guard is doing its job and something wrote far outside the frame it
-was in. Raising `STACK_RESERVE` from 2 KB to 8 KB did not change it (the
-2 KB value was genuinely too small for the Rust frames a builtin wrapper
-pushes below `a1`, and is fixed, but it was not this).
+**The cause was the frame layout, and it was a design error.**
+docs/jit-design.md §3.3 reserved "16 bytes of window spill area at
+`a1+0`". The Xtensa windowed ABI puts the save areas just below the
+CALLER's stack pointer, and `entry a1, N` sets `a1 = caller_sp - N`, so
+they are at the **TOP** of the callee's frame — and a `call8` chain needs
+**32** bytes there, not 16:
 
-Next steps for whoever picks it up: the two patterns are the harness's
-reproducer (`tools/qemu/jit-test.py --patterns aurora-2d.js`), the ISA
-model can execute the same image on the host with full memory
-instrumentation (`crates/luxel-jit/tests/engine_diff.rs`), and the
-difference between the two environments is the device's real memory map —
-so a store the model services harmlessly out of a sparse address space is
-the shape to look for first.
+```
+   a1 + F        caller's sp
+   a1 + F - 16   base save area:  caller's a0..a3
+   a1 + F - 32   call8 extra:     caller's a4..a7
+   ...           locals, operand-stack homes, boxed-args scratch
+   a1 + 0
+```
+
+`xtensa-lx-rt`'s `_WindowOverflow8` writes exactly those offsets
+(`s32e aX, a9, -16..-4` and `s32e aX, a0, -32..-20`). So any generated
+function deep enough to take a window-overflow exception had the top 32
+bytes of its own data overwritten by the handler; the underflow handler
+then reloaded a corrupted `a1`, which is the wild store — `a1` about
+1 KB below `stack_limit`, the guard 7.5 KB lower clobbered.
+
+**Why every host gate missed it:** the ISA model has a flat 64-register
+file and never spills, so the overwrite has no analogue there. That is
+fixed too — the model now traps a generated store into any live frame's
+window save area (`Trap::SpillAreaWrite`), with a self-test that the old
+layout would have tripped, so the class cannot come back silently.
+
+**Both patterns now run natively to completion**, and so does everything
+else tried: **35 patterns, 35 ran natively, 20 bit-identical, 0 crashes,
+0 refusals.** What separates the other 15 from a comparison is only the
+clock — `time()`, or `beforeRender`'s `delta`, which is elapsed wall
+time, and the native boot spends its `compile_us` before frame one. The
+gate reports those rather than asserting on them.
+
+**It is still off by default**, and that is now about §7.3 rather than
+about this: no S3 has executed a byte of it. Turning it on should be a
+deliberate act with someone watching the panel.
 
 ## Cores & tasks: the render task runs on the second core
 

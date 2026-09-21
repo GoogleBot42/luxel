@@ -1541,8 +1541,8 @@ IRAM features at all, still pays ~1.1 KB for the builtin hot/cold split
 Since Gitea #658 an S3 board CAN compile the running pattern to Xtensa
 machine code at activation instead of interpreting it (docs/jit-design.md,
 docs/firmware.md "JIT"). **It is built into those images and OFF at
-runtime** pending the open trap docs/firmware.md records — `POST /api/jit
-{"on":true}` turns it on for a session. It is a cargo feature — `JIT` in
+runtime** until §7.3 runs — no S3 has executed a byte of it yet — and
+`POST /api/jit {"on":true}` turns it on for a session. It is a cargo feature — `JIT` in
 `firmware/board-target.sh`, mirrored by `extraFeatures = [ "jit" ]` in
 flake.nix's `firmwareVariants`, and the two must agree — and `JIT_OFF=1`
 builds the same board without it.

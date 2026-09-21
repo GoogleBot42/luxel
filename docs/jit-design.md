@@ -462,7 +462,38 @@ which parameters happen to be `Dyn`; one bit per function lets caller and
 callee agree by looking at the same thing. `NativeImage::abi` reports it.
 The common case — all-`Num`, few parameters — still lands in registers.
 
-**§3.3, frame.** Every frame home is a uniform 8 bytes laid out as a
+**§3.3, frame — and §3.3 WAS WRONG about the window save area.** The
+sketch reserves "16 bytes of window spill area at `a1+0`". Both halves of
+that are wrong, and it was a device crash (Gitea #658): the Xtensa windowed
+ABI puts the save areas just below the CALLER's stack pointer, and `entry
+a1, N` sets `a1 = caller_sp - N`, so they sit at the **TOP** of the
+callee's frame — and a `call8` chain needs **32** bytes there, not 16:
+
+```
+   a1 + F        caller's sp
+   a1 + F - 16   base save area:  caller's a0...a3
+   a1 + F - 32   call8 extra:     caller's a4...a7
+   ...           locals, operand-stack homes, boxed-args scratch
+   a1 + 0
+```
+
+`xtensa-lx-rt`'s `_WindowOverflow8` is the authority: `s32e aX, a9, -16...-4`
+for `a0...a3` and `s32e aX, a0, -32...-20` for `a4...a7`, both relative to
+the saved sp. With the layout as designed, any generated function deep
+enough to take a window-overflow exception had the top 32 bytes of its own
+data overwritten by the handler, and the underflow handler then reloaded a
+corrupted `a1`. §7.1's ISA model has a flat 64-register file and never
+spills, so every host gate passed it for two phases; §7.2 caught it on the
+first patterns whose builtin calls nest deep enough (`aurora-2d`,
+`bulk-canvas-ripples-2d`). The model now TRAPS a generated store into any
+live frame's save area, with a self-test that the old layout would have
+tripped.
+
+32 and not 48 (a `call12` caller's requirement): nothing calls generated
+code with one — the emitter emits `callx8` only, and the engine enters
+through a Rust `extern "C"` pointer, which is `call8` on these targets.
+
+Every frame home is a uniform 8 bytes laid out as a
 `Value` (tag at +0, payload at +4) rather than 4 or 8 by kind. One stride
 means one offset formula for locals, operand-stack homes and boxed
 arguments alike, and a `Dyn` home is then byte-identical to the `Value` a
@@ -759,16 +790,17 @@ still stands.
 exec buffer, the call, compile-at-activation), `/api/status`'s `jit`
 object, `POST /api/jit`, `tools/qemu/jit-test.py`.
 
-**BUILT INTO THE S3 IMAGES AND OFF AT RUNTIME.** §7.2's gate found a trap
-that §7.1's could not, which is what §7.2 is for: two of seven patterns
-(`aurora-2d`, `bulk-canvas-ripples-2d`) compile, start, and then take the
-AppCpu down with a clobbered stack guard and EXCCAUSE 0 — a wild store,
-about 1 KB below `stack_limit`, on patterns that render correctly
-interpreted on the same image and correctly through the host ISA model
-with the same compiled bytes. §7.3 says metal comes after the earlier
-gates are green, and this one is not. `LUXEL_JIT_ENABLED` therefore
-defaults to false; docs/firmware.md "The open trap" carries the registers,
-the reproducer and where to look next.
+**§7.2's gate earned its keep immediately.** It found a trap §7.1's
+could not: two patterns (`aurora-2d`, `bulk-canvas-ripples-2d`) compiled,
+started, and then took the AppCpu down with a clobbered stack guard and
+EXCCAUSE 0. The cause was §3.3's window save area — see the frame note
+above. It is fixed, both patterns now run natively to completion, and the
+ISA model traps that whole class from now on.
+
+**Still BUILT INTO THE S3 IMAGES AND OFF AT RUNTIME.** Not because
+anything is known to be wrong, but because §7.3 has not run: no S3 has
+executed a byte of this. `LUXEL_JIT_ENABLED` defaults to false so turning
+it on stays a deliberate act, with someone watching the panel.
 
 Everything above is as designed except the following.
 
