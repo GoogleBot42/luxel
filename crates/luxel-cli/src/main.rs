@@ -22,6 +22,8 @@
 //!   --no-storefwd  compile without store forwarding (#320 A/B)
 //!                  (also on `luxel compile`, so a device can be handed an
 //!                  unfused blob against unchanged firmware)
+//!   --no-kinds     compile without kind inference + Box barriers (#607 A/B);
+//!                  the blob is then an UNTYPED v6 and must render identically
 //!
 //! bench-only options:
 //!   --profile      dump dynamic opcode/pair/triple/builtin counts for the run
@@ -31,6 +33,8 @@
 //!   --stats        one JSON line of the blob's STATIC shape (per-function
 //!                  instruction counts); writes no .lxbc unless --out is given
 //!                  (tools/oracle/opcount.mjs, Gitea #312)
+//!   --kinds        print every global/fn slot kind and why each Dyn slot is
+//!                  Dyn (Gitea #607); writes no .lxbc unless --out is given
 //!
 //! The PPM is one row per frame (like PB's preview strips): width = pixels,
 //! height = frames.
@@ -158,6 +162,16 @@ fn check_at(path: &str, rig: Rig) -> ExitCode {
             return report("compile", Some(format!("{line}:{col}: {}", d.message)), None);
         }
     };
+    // Kind verification (Gitea #607): the LXBC v6 stack-map walk over what
+    // the compiler just emitted. `deserialize` below runs it too, but
+    // reporting it as its own stage is what makes a compiler regression
+    // legible in the corpus report instead of arriving as "invalid
+    // bytecode".
+    if let Some(k) = prog.kinds.as_ref() {
+        if let Err(e) = luxel_core::kinds::verify(&prog, k) {
+            return report("kinds", Some(e.to_string()), None);
+        }
+    }
     // LXBC round-trip: encode must decode to a byte-identical re-encode, and
     // the decoded program must render exactly like the fresh compile — this
     // is the device's execution path, so the corpus report exercises it.
@@ -316,7 +330,7 @@ fn vars_cmd(path: &str, rest: &[String]) -> ExitCode {
 
 pub(crate) fn usage() -> ExitCode {
     eprintln!(
-        "usage: luxel parse <pattern.js>\n       luxel run   <pattern.js> [--pixels N] [--frames N] [--fps F] [--out PATH] [--seed S] [--control NAME=V] [--map-grid WxH] [--proj MODE]\n       luxel bench <pattern.js> [--pixels N] [--frames N] [--map-grid WxH] [--proj MODE]\n       luxel check <pattern.js|.epe> [--grid WxH | --strip N]\n       luxel compile <pattern.js|.epe> [--out PATH.lxbc] [--no-fuse] [--no-storefwd] [--stats]\n       luxel serve [--pixels N] [--max-pixels N] [--port P] [--fps F] [--out-fps F] [--rescan-hz HZ] [--heap-free BYTES] [--engine-heap BYTES] [--ddp-port P] [--e131-port P] [--board strip|panel] [--outputs N] [--name NAME]"
+        "usage: luxel parse <pattern.js>\n       luxel run   <pattern.js> [--pixels N] [--frames N] [--fps F] [--out PATH] [--seed S] [--control NAME=V] [--map-grid WxH] [--proj MODE]\n       luxel bench <pattern.js> [--pixels N] [--frames N] [--map-grid WxH] [--proj MODE]\n       luxel check <pattern.js|.epe> [--grid WxH | --strip N]\n       luxel compile <pattern.js|.epe> [--out PATH.lxbc] [--no-fuse] [--no-storefwd] [--no-kinds] [--kinds] [--stats]\n       luxel serve [--pixels N] [--max-pixels N] [--port P] [--fps F] [--out-fps F] [--rescan-hz HZ] [--heap-free BYTES] [--engine-heap BYTES] [--ddp-port P] [--e131-port P] [--board strip|panel] [--outputs N] [--name NAME]"
     );
     ExitCode::from(2)
 }
@@ -340,6 +354,14 @@ fn compile_cmd(path: &str, rest: &[String]) -> ExitCode {
     rest.retain(|a| a != "--no-fold");
     let no_storefwd = rest.iter().any(|a| a == "--no-storefwd");
     rest.retain(|a| a != "--no-storefwd");
+    // `--no-kinds`: an UNTYPED v6 blob (Gitea #607) — no inference, no
+    // `Box` barriers. The A/B lever, and the proof that `Box` is a no-op.
+    let no_kinds = rest.iter().any(|a| a == "--no-kinds");
+    rest.retain(|a| a != "--no-kinds");
+    // `--kinds`: print the inferred kind of every global and function slot,
+    // and why each `Dyn` one is `Dyn`. Writes no .lxbc on its own.
+    let show_kinds = rest.iter().any(|a| a == "--kinds");
+    rest.retain(|a| a != "--kinds");
     // `--stats`: report the STATIC shape of the blob (per-function
     // instruction counts) as one JSON line — the Luxel half of the
     // Pixelblaze op-count comparison (tools/oracle/opcount.mjs, Gitea #312).
@@ -350,7 +372,7 @@ fn compile_cmd(path: &str, rest: &[String]) -> ExitCode {
     let rest = &rest[..];
     let out_path = match rest {
         [flag, p] if flag == "--out" => Some(p.clone()),
-        [] if stats => None,
+        [] if stats || show_kinds => None,
         [] => {
             let stem = path.rsplit_once('.').map(|(s, _)| s).unwrap_or(path);
             Some(format!("{stem}.lxbc"))
@@ -381,6 +403,7 @@ fn compile_cmd(path: &str, rest: &[String]) -> ExitCode {
             superinstructions: !no_fuse,
             const_folding: !no_fold,
             store_forwarding: !no_storefwd,
+            kinds: !no_kinds,
         },
     ) {
         Ok(p) => p,
@@ -397,6 +420,9 @@ fn compile_cmd(path: &str, rest: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if show_kinds {
+        print_kinds(path, &prog);
+    }
     if stats {
         let mut fns = Vec::new();
         let mut total = 0u32;
@@ -451,6 +477,84 @@ fn compile_cmd(path: &str, rest: &[String]) -> ExitCode {
     }
 }
 
+/// `luxel compile --kinds`: the inferred kind of every global and every
+/// function slot, with a reason beside each `Dyn` one (Gitea #607,
+/// docs/jit-design.md §2). This is the text form of the playground lint —
+/// a `Dyn` slot is one the JIT has to keep boxed.
+fn print_kinds(path: &str, prog: &luxel_core::vm::Program) {
+    use luxel_core::kinds::{self, DynSlot, Kind};
+    let Some(kinds) = prog.kinds.as_ref() else {
+        println!("{path}: untyped blob (compiled with --no-kinds)");
+        return;
+    };
+    let reasons = kinds::explain(prog, kinds);
+    let why = |slot: DynSlot| -> String {
+        reasons
+            .iter()
+            .find(|d| d.slot == slot)
+            .map(|d| format!("  -- {}", d.cause.text()))
+            .unwrap_or_default()
+    };
+    let verdict = match kinds::verify(prog, kinds) {
+        Ok(()) => "ok".to_string(),
+        Err(e) => format!("FAILED: {e}"),
+    };
+    println!("{path}: verify {verdict}");
+    println!("globals:");
+    for (g, def) in prog.globals.iter().enumerate() {
+        if def.predefined && kinds.global(g) == Kind::Num {
+            continue;
+        }
+        println!(
+            "  {:<24} {}{}",
+            def.name,
+            kinds.global(g).name(),
+            why(DynSlot::Global(g as u16))
+        );
+    }
+    for (f, fd) in prog.fns.iter().enumerate() {
+        let name = if f == 0 { "(init)" } else { fd.name.as_str() };
+        println!(
+            "fn {name} -> {}{}",
+            kinds.ret(f).name(),
+            why(DynSlot::Ret(f as u16))
+        );
+        for i in 0..fd.locals as usize {
+            let slot = fd
+                .local_names
+                .get(i)
+                .cloned()
+                .unwrap_or_else(|| format!("slot{i}"));
+            let role = if i < fd.params as usize {
+                "param"
+            } else {
+                "local"
+            };
+            println!(
+                "  {role} {:<20} {}{}",
+                slot,
+                kinds.slot(f, i).name(),
+                why(DynSlot::Local {
+                    fn_idx: f as u16,
+                    slot: i as u8
+                })
+            );
+        }
+    }
+    let dyn_slots = prog
+        .fns
+        .iter()
+        .enumerate()
+        .map(|(f, fd)| {
+            (0..fd.locals as usize)
+                .filter(|&i| kinds.slot(f, i) == Kind::Dyn)
+                .count()
+        })
+        .sum::<usize>()
+        + kinds.globals.iter().filter(|&&k| k == Kind::Dyn).count();
+    println!("Dyn slots: {dyn_slots}");
+}
+
 fn parse_cmd(path: &str) -> ExitCode {
     let src = match read(path) {
         Ok(s) => s,
@@ -494,6 +598,10 @@ struct Opts {
     /// pass, so `x = …` followed by a read of `x` pops and reloads it.
     no_storefwd: bool,
     no_fold: bool,
+    /// `--no-kinds`: compile WITHOUT kind inference and the `Box` barriers
+    /// it inserts (Gitea #607) — the A/B lever, and the way to prove that
+    /// `Box` really is a no-op: the pixels must be bit-identical.
+    no_kinds: bool,
 }
 
 fn parse_opts(args: &[String], bench: bool) -> Result<Opts, ExitCode> {
@@ -511,6 +619,7 @@ fn parse_opts(args: &[String], bench: bool) -> Result<Opts, ExitCode> {
         no_fuse: false,
         no_storefwd: false,
         no_fold: false,
+        no_kinds: false,
     };
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -549,6 +658,7 @@ fn parse_opts(args: &[String], bench: bool) -> Result<Opts, ExitCode> {
             "--no-fuse" => o.no_fuse = true,
             "--no-fold" => o.no_fold = true,
             "--no-storefwd" => o.no_storefwd = true,
+            "--no-kinds" => o.no_kinds = true,
             "--control" => {
                 let v = val()?;
                 let Some((name, vals)) = v.split_once('=') else {
@@ -603,6 +713,7 @@ fn run_cmd(path: &str, rest: &[String], bench: bool) -> ExitCode {
             superinstructions: !o.no_fuse,
             const_folding: !o.no_fold,
             store_forwarding: !o.no_storefwd,
+            kinds: !o.no_kinds,
         },
     );
     let mut engine = match compiled {
