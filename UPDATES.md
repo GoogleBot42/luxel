@@ -1,5 +1,53 @@
 # Update log
 
+## 2026-09-20 — The editor says what the JIT will do with your pattern (#627)
+
+Two advisories, both driven by the kind inference that shipped with #607, both
+strictly non-blocking — the pattern previews, saves and pushes exactly as before, and
+a pattern with nothing to say adds no element to the screen.
+
+**One core API, not a hardcoded list.** New `crates/luxel-core/src/jitlint.rs`:
+`jit_eligibility(prog, kinds) -> Result<(), JitRefusal>` is now the single place a
+compile-time JIT refusal is decided (docs/jit-design.md §4a). Today it returns
+`Callbacks { name, line, col }` when the program reaches one of the six
+callback-taking builtins — found through `vm::builtin_sig(..).callback`, NOT by name,
+so when #626 turns them into prelude functions there is no `CallBuiltin` left to find
+and the refusal disappears with no edit here. Later phases (`TooLarge`, …) add variants
+and every surface follows. The same module's `dyn_lints` enriches `kinds::explain`'s
+`DynReason`s with what a person needs: the variable NAME (`GlobalDef.name`,
+`FnDef.local_names`) and a source anchor — the first store that visibly widened the
+slot, so a two-kind global reports `heat = array(8)` on line 3, not the `var heat = 0`
+that declared it. `kinds.rs` itself is untouched but for making `ilen` crate-visible,
+which keeps it out of #626's way.
+
+**One new wasm export.** `lx_kinds(h)` returns
+`{jit:{eligible,reason?},dyn:[{name,scope,fn,line,col,cause,message}],stats:{typed_slots,
+total_slots}}` through the usual response buffer. The web app calls it after every
+successful compile (`Engine.kinds()`, feature-detected so a stale `luxel.wasm` just
+shows no lints).
+
+**Two surfaces, both existing visual language.** Every boxed variable becomes a
+WARNING-severity CodeMirror diagnostic — amber `.cm-lintRange-warning`, never the red
+squiggle or the gutter dot, which stay the compile error's — plus one amber
+`.codestatus.warn` strip under the code pane (`boxed-lint`) counting them and quoting
+the first reason ("`heat` is assigned two different kinds of value …, so it runs
+boxed"). A whole-program refusal becomes a persistent `capstrip` under the preview
+(`jit-warning`): "Runs in the interpreter on JIT boards: `arrayMutate` takes a
+callback …", clickable to jump to the call site, which is squiggled too. The compile
+error still outranks both, and a failed compile drops the report rather than pointing
+at lines that have moved. `web/src/lib/lints.ts` holds the whole JSON → UI mapping so
+it is unit-testable; `components/Editor.svelte` merges error and lints into
+CodeMirror's one diagnostic set.
+
+Verified in real chromium (screenshots): a two-kind global shows one squiggle and the
+strip; `arrayMutate` shows the banner at line 3; a clean pattern shows nothing at all;
+a syntax error still owns the red channel with no stale lints. Gates: `cargo test
+--workspace` green (10 new in `crates/luxel-core/tests/jitlint.rs`), `npm test` 143
+(8 new in `web/tests/lints.test.mjs`), `npm run build` (svelte-check 0 errors),
+`web/tools/e2e.mjs` 187 checks green. None of the mockdiff seed patterns carries a
+`Dyn` slot, so no mock frame gains an element.
+
+
 ## 2026-09-20 — The Athom is the first device on the new partition table (#634, from #501)
 
 Hardware phase of the repartition, Athom only. Built `78a24d0` with

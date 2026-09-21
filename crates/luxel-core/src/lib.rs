@@ -33,6 +33,8 @@ pub mod fixed;
 pub mod color;
 pub mod fmath;
 pub mod hamqtt;
+#[cfg(feature = "kinds")]
+pub mod jitlint;
 pub mod jsonview;
 pub mod kinds;
 pub mod layout;

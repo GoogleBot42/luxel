@@ -8,7 +8,7 @@
   } from "@codemirror/autocomplete";
   import { javascript } from "@codemirror/lang-javascript";
   import { BUILTINS, GLOBALS } from "../lib/builtins";
-  import { setDiagnostics } from "@codemirror/lint";
+  import { setDiagnostics, type Diagnostic } from "@codemirror/lint";
   import { RangeSet, StateEffect, StateField } from "@codemirror/state";
   import { oneDark } from "@codemirror/theme-one-dark";
   import {
@@ -107,6 +107,10 @@
   // last part. The dot is what makes an error findable after scrolling away.
 
   const setErrLine = StateEffect.define<number | null>(); // line-start pos
+  /** The compile error and the advisory lints share CodeMirror's one
+   *  diagnostic set, so both are kept here and re-applied together. */
+  let errorRange: { from: number; to: number; message: string } | null = null;
+  let lintRanges: { line: number; col: number; message: string }[] = [];
   class ErrMarker extends GutterMarker {
     override toDOM(): Node {
       const el = document.createElement("span");
@@ -273,6 +277,14 @@
             textDecoration: "underline wavy #e05555 1px",
             textUnderlineOffset: "3px",
           },
+          // advisory lints (#627) wear the app's amber, never red — the
+          // pattern compiled and runs, this is only what the JIT will do
+          // with it
+          ".cm-lintRange-warning": {
+            backgroundImage: "none",
+            textDecoration: "underline wavy #d9a343 1px",
+            textUnderlineOffset: "3px",
+          },
         }),
         EditorView.updateListener.of((u) => {
           if (u.docChanged && !applyingExternal) {
@@ -321,21 +333,60 @@
    *  the gutter on that line; null clears both. */
   export function setErrorRange(range: { from: number; to: number; message: string } | null): void {
     if (!view) return;
+    errorRange = range;
     const len = view.state.doc.length;
-    const diags =
-      range === null
-        ? []
-        : [
-            {
-              from: Math.min(range.from, len),
-              to: Math.min(Math.max(range.to, range.from + 1), len),
-              severity: "error" as const,
-              message: range.message,
-            },
-          ];
-    view.dispatch(setDiagnostics(view.state, diags));
+    applyDiagnostics();
     const line = range === null ? null : view.state.doc.lineAt(Math.min(range.from, len)).from;
     view.dispatch({ effects: setErrLine.of(line) });
+  }
+
+  /** Warning-severity lints (Gitea #627: boxed variables, interpreter-only
+   *  constructs) anchored at 1-based line/col. They share the diagnostic
+   *  channel with the compile error — `setDiagnostics` replaces the whole
+   *  set, so both go through `applyDiagnostics` — but never the gutter dot
+   *  or the red squiggle: an advisory is not an error. */
+  export function setLints(lints: { line: number; col: number; message: string }[]): void {
+    lintRanges = lints;
+    applyDiagnostics();
+  }
+
+  /** The word at a 1-based line/col, so a lint underlines the identifier it
+   *  is about rather than a whole statement; falls back to the line's text. */
+  function spanAt(v: EditorView, line: number, col: number): { from: number; to: number } {
+    const doc = v.state.doc;
+    const l = doc.line(Math.min(Math.max(line, 1), doc.lines));
+    const pos = Math.min(l.from + Math.max(col - 1, 0), l.to);
+    const word = v.state.wordAt(pos);
+    if (word && word.to > word.from) return { from: word.from, to: word.to };
+    const text = l.text;
+    const lead = text.length - text.trimStart().length;
+    const from = Math.max(l.from + lead, l.from);
+    return { from, to: Math.max(l.to, from + 1) };
+  }
+
+  function applyDiagnostics(): void {
+    if (!view) return;
+    const len = view.state.doc.length;
+    const diags: Diagnostic[] = [];
+    if (errorRange !== null) {
+      diags.push({
+        from: Math.min(errorRange.from, len),
+        to: Math.min(Math.max(errorRange.to, errorRange.from + 1), len),
+        severity: "error" as const,
+        message: errorRange.message,
+      });
+    }
+    for (const l of lintRanges) {
+      const span = spanAt(view, l.line, l.col);
+      diags.push({
+        from: Math.min(span.from, len),
+        to: Math.min(span.to, len),
+        severity: "warning" as const,
+        message: l.message,
+      });
+    }
+    diags.sort((a, b) => a.from - b.from || a.to - b.to);
+    view.dispatch(setDiagnostics(view.state, diags));
   }
 
   /** Highlight (and reveal) the paused line; null clears. */
