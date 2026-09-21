@@ -10,7 +10,7 @@ allocator-api2 = { version = "0.3", default-features = false, features = ["alloc
 logos = { version = "0.15", default-features = false, features = ["export_derive"], optional = true }
 
 [features]
-default = ["frontend", "panel"]
+default = ["frontend", "panel", "kinds"]
 # The lexer/parser/compiler. Off = execute-only builds (device firmware):
 # patterns arrive as LXBC bytecode and the frontend never gets linked.
 frontend = ["dep:logos"]
@@ -20,6 +20,14 @@ frontend = ["dep:logos"]
 # strip board's image is byte-identical to one built before it existed.
 # The firmware turns it on from its own `hub75` feature.
 panel = []
+# Kind inference + the LXBC v6 stack-map verifier (Gitea #607,
+# docs/jit-design.md §2). ON by default, so the browser wasm, the CLI and
+# the mirror all compute kinds and check every blob they decode. The
+# FIRMWARE depends on luxel-core with `default-features = false` and must
+# NOT name it: a board with no JIT backend only has to read PAST the kinds
+# section, which the decoder does whether or not this is on. Turning it on
+# costs the inference, the verifier and their error strings.
+kinds = []
 depth-probe = []
 # Dynamic opcode/bigram/builtin counters in the VM loop (`luxel bench
 # --profile`, tools/profile-library.mjs). Host tooling only: the firmware

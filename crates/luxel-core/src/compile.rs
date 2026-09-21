@@ -94,6 +94,12 @@ pub(crate) enum Insn {
     CallBuiltinCC { b: u16, argc: u8, c1: Fx, c2: Fx }, // Const; Const; CallBuiltin
     CmpJf(u8, u32),        // <cmp>; JmpIfFalse t   (t = instruction index)
     PopRetNull,            // Pop; RetNull
+
+    /// v6 representation barrier (Gitea #607): widen the stack top to
+    /// `Dyn`. A no-op for the interpreter. Produced ONLY by
+    /// [`insert_boxes`], after every rewrite pass has run, so no fold,
+    /// forward or fusion can ever move across one.
+    Box,
 }
 
 const MAX_GLOBALS: usize = 256;
@@ -122,6 +128,13 @@ pub struct CompileOpts {
     /// switch: `tests/storefwd.rs` renders forwarded and unforwarded and
     /// compares them, and `luxel compile --no-storefwd` is the A/B lever.
     pub store_forwarding: bool,
+    /// Infer kinds, insert the `Box` barriers a conditional join needs and
+    /// attach the result to the `Program` (Gitea #607). Off = an UNTYPED
+    /// v6 blob, which is legal and means "everything Dyn" — the A/B lever
+    /// (`luxel compile --no-kinds`) and the escape hatch if the inference
+    /// ever refuses a program. `Box` is a no-op in the interpreter, so on
+    /// or off must render bit-identically.
+    pub kinds: bool,
 }
 
 impl Default for CompileOpts {
@@ -130,6 +143,7 @@ impl Default for CompileOpts {
             superinstructions: true,
             const_folding: true,
             store_forwarding: true,
+            kinds: true,
         }
     }
 }
@@ -172,13 +186,12 @@ fn assemble(
     assert_msgs: Vec<String>,
     opts: CompileOpts,
 ) -> Program {
-    let mut code: Vec<u32> = Vec::new();
-    let mut defs: Vec<FnDef> = Vec::with_capacity(fns.len());
+    let mut fns = fns;
     // Which globals can never change over the whole run? A whole-program
     // question, so it is answered once, before any function is lowered
     // (Gitea #312).
     let frozen = frozen_globals(&fns, &globals);
-    for mut f in fns {
+    for f in &mut fns {
         // pass 0a: constant folding — literal arithmetic the source wrote
         // out, and reads of the frozen globals wherever a constant fuses
         // better than the load does (Gitea #312).
@@ -203,6 +216,75 @@ fn assemble(
             f.code = fcode;
             f.pos = fpos;
         }
+    }
+
+    // ---- passes 1+2, plus the kind fixpoint ----
+    //
+    // Layout is now a function of the IR, because inserting a `Box`
+    // changes every word index after it: infer → verify → insert → lay out
+    // again, until the verifier is happy (§2.3 "Joins"). It terminates
+    // because a `Box` only ever raises a kind, and a raised kind is never
+    // lowered again.
+    #[cfg(feature = "kinds")]
+    if opts.kinds {
+        // A cap, not the termination argument: the argument is monotonicity.
+        // Blowing through it means the inference and the verifier disagree
+        // about something, and the sound answer is an UNTYPED blob.
+        const MAX_ROUNDS: usize = 64;
+        // The IR as the rewrite passes left it. If the fixpoint gives up,
+        // the blob is laid out from THIS, not from the half-boxed IR: an
+        // untyped blob with stray `Box` instructions would still run (they
+        // are no-ops) but it would not be the code `--no-kinds` produces,
+        // and the A/B lever has to compare like with like.
+        let pristine = fns.clone();
+        let mut gave_up = false;
+        for _ in 0..MAX_ROUNDS {
+            let (prog, offsets) = layout(&fns, &globals, &exported_fns, &data_arrays, &assert_msgs);
+            let kinds = crate::kinds::infer(&prog);
+            match crate::kinds::plan_boxes(&prog, &kinds) {
+                Ok(fixes) if fixes.is_empty() => {
+                    debug_assert!(
+                        crate::kinds::verify(&prog, &kinds).is_ok(),
+                        "compiler emitted a program its own verifier rejects"
+                    );
+                    let mut prog = prog;
+                    prog.kinds = Some(kinds);
+                    return prog;
+                }
+                Ok(fixes) => insert_boxes(&mut fns, &offsets, &fixes),
+                Err(_e) => {
+                    // A failure a `Box` cannot repair. Shipping an untyped
+                    // blob is always sound (everything reads as `Dyn`);
+                    // shipping a wrong annotation is not.
+                    debug_assert!(false, "kind verification failed: {_e}");
+                    gave_up = true;
+                    break;
+                }
+            }
+        }
+        if gave_up {
+            fns = pristine;
+        }
+    }
+    layout(&fns, &globals, &exported_fns, &data_arrays, &assert_msgs).0
+}
+
+/// Lower the finished IR to words: per function, measure each
+/// instruction's word index, then emit with jump targets mapped from
+/// instruction indices to word indices. Returns the `Program` (untyped)
+/// and, per function, that `offsets` table — which is what maps a word
+/// index the verifier reports back to an IR instruction index.
+fn layout(
+    fns: &[FnIr],
+    globals: &[GlobalDef],
+    exported_fns: &[(String, u16)],
+    data_arrays: &[Vec<i32>],
+    assert_msgs: &[String],
+) -> (Program, Vec<Vec<u32>>) {
+    let mut code: Vec<u32> = Vec::new();
+    let mut defs: Vec<FnDef> = Vec::with_capacity(fns.len());
+    let mut all_offsets: Vec<Vec<u32>> = Vec::with_capacity(fns.len());
+    for f in fns {
         // pass 1: word index of each instruction (+ end)
         let mut offsets: Vec<u32> = Vec::with_capacity(f.code.len() + 1);
         let mut at = 0u32;
@@ -226,32 +308,99 @@ fn assemble(
             }
         }
         defs.push(FnDef {
-            name: f.name,
+            name: f.name.clone(),
             params: f.params,
             locals: f.local_names.len() as u8,
             code_start,
             code_len,
             pos,
-            local_names: f.local_names,
+            local_names: f.local_names.clone(),
         });
+        all_offsets.push(offsets);
     }
     // const pool: raw words appended after the code
     let mut pool: Vec<PoolEntry> = Vec::with_capacity(data_arrays.len());
-    for d in &data_arrays {
+    for d in data_arrays {
         pool.push(PoolEntry {
             start: code.len() as u32,
             len: d.len() as u32,
         });
         code.extend(d.iter().map(|&r| r as u32));
     }
-    Program {
-        words: Words::Owned(code),
-        pool,
-        fns: defs,
-        globals,
-        exported_fns,
-        assert_msgs,
-        pixel_count_g: 0,
+    (
+        Program {
+            words: Words::Owned(code),
+            pool,
+            fns: defs,
+            globals: globals.to_vec(),
+            exported_fns: exported_fns.to_vec(),
+            assert_msgs: assert_msgs.to_vec(),
+            pixel_count_g: 0,
+            #[cfg(feature = "kinds")]
+            kinds: None,
+        },
+        all_offsets,
+    )
+}
+
+/// Insert the `Box` instructions the verifier asked for.
+///
+/// Each fix names a fn-relative WORD index; `offsets[fi]` maps it back to
+/// an IR instruction index `p`, and the `Box` goes BEFORE instruction `p`.
+/// Jump targets are relocated exactly as [`peephole`] does for removals,
+/// mirrored for insertion: a target `t >= p` becomes `t + 1`, so a branch
+/// that used to land on `p` still lands on the original instruction and
+/// SKIPS the `Box` — which is precisely what "box the fall-through edge"
+/// has to mean. Control reaching `p` by falling through executes it.
+///
+/// The `Box` inherits its predecessor's source position, so the
+/// statement-granular position runs `layout` builds are unchanged and the
+/// debugger stops in the same places.
+#[cfg(feature = "kinds")]
+fn insert_boxes(fns: &mut [FnIr], offsets: &[Vec<u32>], fixes: &[crate::kinds::BoxFix]) {
+    use Insn::*;
+    for fi in 0..fns.len() {
+        let mut points: Vec<usize> = fixes
+            .iter()
+            .filter(|f| f.fn_idx as usize == fi)
+            .filter_map(|f| offsets[fi].iter().position(|&w| w == f.at))
+            .collect();
+        if points.is_empty() {
+            continue;
+        }
+        points.sort_unstable();
+        points.dedup();
+        let f = &mut fns[fi];
+        let n = f.code.len();
+        let mut out: Vec<Insn> = Vec::with_capacity(n + points.len());
+        let mut outpos: Vec<(u32, u32)> = Vec::with_capacity(n + points.len());
+        // old instruction index → new instruction index
+        let mut map = alloc::vec![0u32; n + 1];
+        let mut next = 0usize;
+        for i in 0..=n {
+            if next < points.len() && points[next] == i {
+                out.push(Insn::Box);
+                // join the PRECEDING statement's position run, so no run
+                // starts one instruction earlier than it used to
+                outpos.push(f.pos.get(i.saturating_sub(1)).copied().unwrap_or((0, 0)));
+                next += 1;
+            }
+            map[i] = out.len() as u32;
+            if i < n {
+                out.push(f.code[i]);
+                outpos.push(f.pos.get(i).copied().unwrap_or((0, 0)));
+            }
+        }
+        for insn in &mut out {
+            match insn {
+                Jmp(t) | JmpIfFalse(t) | JmpIfTruePeek(t) | JmpIfFalsePeek(t) | CmpJf(_, t) => {
+                    *t = map[(*t as usize).min(n)];
+                }
+                _ => {}
+            }
+        }
+        f.code = out;
+        f.pos = outpos;
     }
 }
 
@@ -768,9 +917,15 @@ fn peephole(code: Vec<Insn>, pos: Vec<(u32, u32)>) -> (Vec<Insn>, Vec<(u32, u32)
     }
     let is_target = jump_targets(&code);
     // May instructions i..i+len fuse into one? (i itself may be a target.)
+    // `Box` (Gitea #607) is a FUSION BARRIER: nothing may be folded across
+    // one, because the whole point of the instruction is that the kind of
+    // the value under it changes there. No template names it, so this is
+    // belt and braces — and it is what keeps that true if a template ever
+    // grows a wildcard.
     let joinable = |i: usize, len: usize| {
         i + len <= n
             && (1..len).all(|k| !is_target[i + k] && pos[i + k] == pos[i])
+            && !code[i..i + len].contains(&Insn::Box)
     };
     let sub = binop_sub;
     let cmp = |insn: &Insn| -> Option<u8> {
@@ -925,6 +1080,7 @@ fn emit_insn(out: &mut Vec<u32>, insn: &Insn, offsets: &[u32]) {
         CallValue { argc } => enc::with_u8(op::CALL_VALUE, *argc),
         Ret => enc::bare(op::RET),
         RetNull => enc::bare(op::RET_NULL),
+        Insn::Box => enc::bare(op::BOX),
 
         // superinstructions — the trailing immediate/target word (where
         // there is one) is pushed after the opcode word, like Const.
@@ -1015,6 +1171,7 @@ fn predefined() -> Vec<GlobalDef> {
 
 /// One function in compiler IR form (see [`Insn`]); [`assemble`] turns the
 /// full set into the byte-coded [`Program`].
+#[derive(Clone)]
 struct FnIr {
     name: String,
     params: u8,

@@ -336,6 +336,7 @@ fn insn_count_walks_every_function() {
             superinstructions,
             const_folding: true,
             store_forwarding: true,
+            kinds: true,
         }).unwrap();
         let mut total = 0u32;
         for f in &prog.fns {

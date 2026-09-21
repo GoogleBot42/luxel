@@ -34,6 +34,7 @@ pub mod color;
 pub mod fmath;
 pub mod hamqtt;
 pub mod jsonview;
+pub mod kinds;
 pub mod layout;
 #[cfg(feature = "frontend")]
 pub mod lex;
