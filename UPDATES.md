@@ -61,12 +61,30 @@ the wrong-board refusal with nothing written, the full package install with both
 counts asserted on the device, the bare-`.bin` warning, and stale store → heal →
 playlist plays → a reload that repairs nothing.
 
-**Firmware cost** (credless flake builds, measured against the same master in a
-detached worktree): +272 B on c3-devkit, +240 B on pixelblaze-v3, athom-music and
-s3-devkit, +256 B esp32-generic, +288 B c6-devkit-hosted, +304 B c6-devkit. Of that,
-+96 B is `board` + `bc_format` in `/api/status` and the rest is the per-pattern `stale`
-flag. Worst case leaves athom-music — the tightest image the release workflow actually
-builds — 7.5 KB inside the old 1 MiB slot the migrating release is weighed against.
+**Firmware cost.** Credless flake builds, every variant, both sides measured in
+detached worktrees at the merge base `9234701`:
+
+| variant | master | with #643 | Δ |
+|---|---:|---:|---:|
+| esp32-generic | 1,034,496 | 1,034,720 | +224 |
+| s3-devkit | 981,616 | 981,840 | +224 |
+| athom-music | 1,038,544 | 1,038,784 | +240 |
+| seengreat-hub75 | 985,792 | 986,032 | +240 |
+| pixelblaze-v3 | 1,021,056 | 1,021,312 | +256 |
+| s3-hub75 | 989,664 | 989,920 | +256 |
+| seengreat-hub75-spare | 989,168 | 989,424 | +256 |
+| c3-devkit | 982,880 | 983,168 | +288 |
+| c6-devkit-hosted | 1,027,120 | 1,027,408 | +288 |
+| c6-devkit | 1,043,408 | 1,043,712 | +304 |
+
+Of that, **+96 B** is `board` + `bc_format` in `/api/status` (measured on its own) and
+the rest is the per-pattern `stale` flag. `tools/ci.sh` with `MIGRATING_RELEASE=1`
+passes all three gated variants against the OLD 1 MiB slot: pixelblaze-v3 27,264 B
+free, c6-devkit-hosted 21,168 B, c3-devkit comfortably more. The `stale` flag earns its
+~190 B — without it the console can only infer staleness from the `vmerr` /
+playlist-`invalid` text and would miss a stored pattern that is neither running nor in
+the playlist; that fallback is implemented and tested anyway, for firmware predating
+the field and for `flashmap-off`.
 
 `npm test` 177, all five browser harnesses green, `mockdiff` 0 deltas over 27 frames.
 Docs: api.md (`board`, `bc_format`, `stale`, the four mirror flags), releases.md (the
