@@ -52,6 +52,13 @@ away (`rainbow` reads `time()` and still agrees), and a mismatch with no
 clock input is a failure. `engine_diff.rs` covers those patterns properly on
 the host, four frames each, with a fixed delta and a frozen clock.
 
+Pinning the guest clock instead was considered and dropped: `Vm::time_ms`
+is a heap field of an `Engine` with no stable symbol to find it through,
+and the render loop rewrites it from `Instant::now()` every frame, so
+holding it still would take a `#[no_mangle]` override static in the
+firmware — test-only code in a shipped image, for a case the host gate
+already covers properly.
+
 **One frame per boot.** The embassy-time alarm is bound to the ProCpu,
 which is spinning at INTLEVEL 3 inside the panic halt, so the render
 loop's `Timer::after` never wakes. The frame compared is therefore frame
