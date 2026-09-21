@@ -1,5 +1,32 @@
 # Update log
 
+## 2026-09-21 — The Seengreat declined to migrate, and could not say why (#634)
+
+The 16 MB half of the repartition bench run. The panel took the migrating image
+cleanly and then simply did not migrate: `partitions.migrated` stayed `false` across
+two boots, the pre-#501 table stayed on flash, and the store, the 11 patterns, the
+playlist, the layout, the name and Jeremy's brightness all came through exactly as
+found. `vmerr: null`, 116 fps, `rescan_hz` 115 the whole time. That half is the design
+working — "refusing beats losing" leaves the old table and the old data alone.
+
+The other half is a hole. `/api/status` reported no `migration_blocked`, so over the
+API a device that *tried and failed* looked identical to one that had never tried.
+Four of `migrate.rs`' failure paths — both writes in `stage_log`, `write_new_store`,
+`move_assets`, and the `parttab::install` refusal — returned with nothing but a
+`println!`, on a fleet where no device has a serial console, which is the stated reason
+the migration is self-applied in the first place. Those five sites now `block()` like
+every other refusal in the file, carrying the reason and the two flash offsets
+involved out to `/api/status`.
+
+Which stage fails is still open, and the 16 MB layout is the place to look: it is the
+only one whose `assets` partition moves, and it has never executed anywhere. QEMU's
+`esp32s3` machine reads the 16 MB table, loads the app, and then prints nothing at all,
+so `--plan-16mb` checks a host model of the table rather than running the migrator.
+The diagnostic build that would have answered it never landed — the OTA carrying it hit
+the #294 flash wedge mid-upload and the panel went off the LAN. It needs a power cycle,
+which is Jeremy's to give.
+
+
 ## 2026-09-20 — A firmware update installs the console that matches it (#643)
 
 The Athom went dark earlier today taking an OTA across an LXBC format bump. Nothing

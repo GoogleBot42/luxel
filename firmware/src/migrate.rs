@@ -74,6 +74,15 @@
 //! stays, the device keeps working exactly as it did, and `/api/status`
 //! reports `migration_blocked` with the numbers so the user can delete
 //! patterns and reboot. Losing a pattern silently is not on the menu.
+//!
+//! The same applies to a flash write that fails mid-run: every stage that
+//! gives up records why through [block], because no device in this fleet
+//! has a serial console — which is the whole reason the migration is
+//! self-applied. A stage that reported only to `println!` made "it failed"
+//! and "it was never attempted" the same three fields on `/api/status`,
+//! which is exactly what the Seengreat's 2026-09-21 decline looked like
+//! (Gitea #634). Mid-run failures still leave the old table intact and
+//! still retry on the next boot; they are now just visible while they do.
 
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -100,8 +109,10 @@ const S_ASSETS: u32 = 3;
 /// refusal (either it is not needed, it is not applicable, or it ran).
 static BLOCKED: BlockingMutex<CriticalSectionRawMutex, core::cell::RefCell<&'static str>> =
     BlockingMutex::new(core::cell::RefCell::new(""));
-/// Bytes the live pattern log needs, and bytes the new layout offers —
-/// only meaningful alongside a "store too large" refusal.
+/// Two diagnostic numbers whose meaning depends on the refusal: bytes
+/// needed vs bytes offered for the "too large" family, and the flash
+/// offsets involved for the mid-run flash failures. Zero when the reason
+/// needs no numbers.
 static BLOCK_NEED: AtomicU32 = AtomicU32::new(0);
 static BLOCK_HAVE: AtomicU32 = AtomicU32::new(0);
 
@@ -316,6 +327,7 @@ pub fn maybe_migrate() {
     // 4 — build the new store region.
     if stage < S_STORED {
         if !write_new_store(old_store, new_store, staging, log_bytes) {
+            // write_new_store has already recorded WHICH step failed.
             println!("migrate: store relocation failed — old table intact, will retry next boot");
             return;
         }
@@ -328,6 +340,7 @@ pub fn maybe_migrate() {
     // 5 — assets (16 MB layout only; the 4 MB one keeps the offset).
     if read_hdr(staging.offset).map(|h| h.stage).unwrap_or(S_NONE) < S_ASSETS {
         if !move_assets(&live) {
+            // move_assets has already recorded WHICH step failed.
             println!("migrate: asset move failed — old table intact, will retry next boot");
             return;
         }
@@ -340,6 +353,7 @@ pub fn maybe_migrate() {
     // 6 — the point of no return.
     println!("migrate: installing the new partition table");
     if !parttab::install(parttab::EMBEDDED, "migrate") {
+        block("partition table write failed", parttab::TABLE_OFFSET, 0);
         return;
     }
     println!("migrate: partition table installed — rebooting into the new layout");
@@ -509,11 +523,13 @@ fn stage_log(staging: Part, plan: (Vec<patlog::Rec>, Vec<patlog::Place>, u32), n
         });
         if built != Some(true) {
             println!("migrate: could not build log page {} — aborting (old store intact)", page);
+            block("could not build the staged log", page * patlog::PAGE, bytes);
             return None;
         }
-        if !parttab::write_sector_verified(staging.offset + SECTOR + page * patlog::PAGE, &buf, "migrate")
-        {
+        let at = staging.offset + SECTOR + page * patlog::PAGE;
+        if !parttab::write_sector_verified(at, &buf, "migrate") {
             println!("migrate: staging write failed at page {} — aborting (old store intact)", page);
+            block("staging write failed", at, bytes);
             return None;
         }
     }
@@ -541,6 +557,7 @@ fn write_new_store(old_store: Part, new_store: Part, staging: Part, log_bytes: u
         return false;
     }
     if !parttab::erase_range(new_store.offset, new_store.end()) {
+        block("new storage erase failed", new_store.offset, new_store.len);
         return false;
     }
 
@@ -556,6 +573,7 @@ fn write_new_store(old_store: Part, new_store: Part, staging: Part, log_bytes: u
             moved += 1;
         } else {
             println!("migrate: blob {:#x} ({} B) did not re-store — aborting", key, v.len());
+            block("reserved blob did not re-store", key, v.len() as u32);
             return false;
         }
     }
@@ -570,6 +588,11 @@ fn write_new_store(old_store: Part, new_store: Part, staging: Part, log_bytes: u
             "migrate",
         )
     {
+        block(
+            "staged log copy failed",
+            staging.offset + SECTOR,
+            new_store.offset + crate::patterns::LOG_AT,
+        );
         return false;
     }
     println!("migrate: store relocated");
@@ -595,8 +618,13 @@ fn move_assets(live: &[u8]) -> bool {
     if old.offset < new.offset + len && new.offset < old.offset + len {
         // Cannot happen with either shipped table; a guard for the next one.
         println!("migrate: asset regions overlap {:#x}/{:#x} — not moving", old.offset, new.offset);
+        block("asset regions overlap", old.offset, new.offset);
         return false;
     }
     println!("migrate: moving assets {:#x} → {:#x}", old.offset, new.offset);
-    parttab::copy_region(old.offset, new.offset, len, "migrate")
+    if !parttab::copy_region(old.offset, new.offset, len, "migrate") {
+        block("asset copy failed", old.offset, new.offset);
+        return false;
+    }
+    true
 }

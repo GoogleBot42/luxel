@@ -188,7 +188,7 @@ its own release and a format bump.
 | device | board | migrated | live slot | `ota_slot_bytes` | `storage_bytes` | margin now |
 |---|---|---|---|---:|---:|---|
 | Athom rig `192.168.0.183` | `board-athom-music` | **yes, 2026-09-20** | `ota_0` | 1,310,720 | 524,288 | 270,160 B (20.6 %) |
-| Seengreat panel `192.168.0.238` | `board-seengreat-hub75` | not yet (Gitea #634) | — | — | — | — |
+| Seengreat panel `192.168.0.238` | `board-seengreat-hub75` | **no — declined silently, 2026-09-21** (Gitea #634) | `ota_0` | 1,048,576 | 1,048,576 | old table, unchanged |
 | dev unit `192.168.0.205` | `board-pixelblaze-v3` | not yet (offline) | — | — | — | — |
 
 The Athom is the first device on the new table (Gitea #634). It went across
@@ -207,6 +207,34 @@ an LXBC format bump comes back with every stored blob unreadable
 (`vmerr: bytecode format v5 (this build reads v6)`) and cannot recompile
 itself — Gitea #643, which the migrating release makes near-certain
 fleet-wide.
+
+#### The 16 MB half declined, silently (2026-09-21, Gitea #634)
+
+The Seengreat took the migrating image cleanly and **did not migrate**, on
+two consecutive boots: `partitions.migrated` stayed `false`, the live table
+stayed the pre-#501 one (`ota_slot_bytes` 1,048,576, `storage_bytes`
+1,048,576), and the store, the patterns, the playlist, the layout, the name
+and the brightness were all exactly as found. The device stayed healthy
+throughout — `vmerr: null`, 116 fps, `rescan_hz` 115.
+
+What makes it a finding rather than a data point is that **`/api/status`
+could not say why**. `migration_blocked` was absent, because four of
+`migrate.rs`' failure paths — the two in `stage_log`, `write_new_store`,
+`move_assets` and the `parttab::install` refusal — returned with only a
+`println!`. On a fleet where *no device has a serial console*, which is the
+stated reason the migration is self-applied at all, "it failed" and "it was
+never attempted" were the same three JSON fields. Those five sites now call
+`block()` like every other refusal in the file, so the reason and the two
+flash offsets involved reach `/api/status`.
+
+Which stage actually fails is still unknown, and the 16 MB path is where to
+look: it is the only layout whose `assets` partition moves, and it has never
+executed anywhere — QEMU's `esp32s3` machine loads the app and then prints
+nothing, so `--plan-16mb` checks a host-side model of the table rather than
+running the migrator (tools/qemu/migrate-test.py). The diagnostic build that
+would have answered it never landed: the OTA carrying it wedged mid-upload
+(the #294 flash wedge, ~44 % of this board's pushes) and the panel dropped
+off the LAN, which is Jeremy's power cycle to undo.
 
 ### Measurement history (the 1 MiB era)
 
