@@ -631,7 +631,7 @@ nothing crosses between them.
 | owner | what it holds | `data-role`s |
 |---|---|---|
 | the **header** (`editor-header`) | the DOCUMENT: back · the name field · save state · [**▶ Play on device**] · **Save** (the one primary action) · the ⋯ menu of document verbs | `editor-back`, `pattern-name`, `name-input`, `name-error`, `save-state`, `editor-play-device`, `save`, `overflow`, `add-to-playlist`, `duplicate`, `epe-export`, `epe-import`, `share`, `delete` |
-| the **code pane** | its own errors: gutter dot + wavy underline on the line + one status strip pinned to the bottom of the pane | `compile-error`, `runtime-error`, `map-compile-error`, `.cm-err-dot`, `.cm-lintRange-error` |
+| the **code pane** | its own errors AND its advisory lints: gutter dot + wavy underline on the line + one status strip pinned to the bottom of the pane | `compile-error`, `runtime-error`, `boxed-lint`, `map-compile-error`, `.cm-err-dot`, `.cm-lintRange-error`, `.cm-lintRange-warning` |
 | the **preview header** | the TRANSPORT, next to the thing it controls | `preview-dims`, `pause`, `debug`, `mic-toggle`, `target-fps` |
 
 **The frame is the mock's, element for element** (mockup S2/S2b, Gitea #538):
@@ -662,6 +662,42 @@ Element-for-element fidelity to that mock frame is checked by
 `web/tools/mockdiff.mjs --frames S2,S2b,S2c,S2d,S2err,S2cpop,S2menu,S2dialog`
 (docs/tools.md), which must report **zero** deltas outside the map's `allow`
 list.
+
+### Lints: boxed variables and interpreter mode (Gitea #627)
+
+After every SUCCESSFUL compile the editor asks the engine one more question
+— `lx_kinds` → `luxel_core::jitlint` — and renders the two answers as advice.
+Neither blocks anything: the pattern previews, saves and pushes exactly as
+before, and a pattern with nothing to say renders no extra element at all.
+
+- **Boxed variables.** `kinds::explain` says which slots the inference had to
+  leave `Dyn` (docs/jit-design.md §2); `jitlint::dyn_lints` adds the variable
+  NAME (`GlobalDef.name` / `FnDef.local_names`) and a source position — the
+  first store that widened the slot, so `heat = array(8)` and not the
+  `var heat = 0` above it. Each becomes a WARNING-severity CodeMirror
+  diagnostic (amber `.cm-lintRange-warning`, never the red squiggle or the
+  gutter dot — those stay the compile error's), plus one amber
+  `.codestatus.warn` line (`boxed-lint`) counting them and quoting the first
+  reason. It is the same strip the runtime error uses, and the compile error
+  still outranks both.
+- **Interpreter mode.** `jitlint::jit_eligibility` answers whether a JIT
+  board will refuse the whole program for a reason visible at compile time
+  (today: a callback-taking builtin — detected through `builtin_sig`'s
+  `callback` field, so Gitea #626's prelude removes the refusal without an
+  edit here). A refusal shows as a persistent amber `capstrip` under the
+  preview (`jit-warning`) saying "Runs in the interpreter on JIT boards: …",
+  clickable to jump to the call site, which is also squiggled. The
+  device-only reasons (`too-large`, `psram`, `debug`) are not knowable here
+  and surface from `/api/status` instead.
+
+`lx_kinds`'s JSON is `{jit:{eligible,reason?},dyn:[…],stats:{typed_slots,
+total_slots}}`; `web/src/lib/lints.ts` is the whole mapping from it to what
+the two surfaces render (unit-tested in `web/tests/lints.test.mjs`), and
+`components/Editor.svelte` merges the error and the lints into CodeMirror's
+one diagnostic set (`setDiagnostics` replaces it wholesale, so both go
+through `applyDiagnostics`). The report is dropped the moment a compile
+fails: lints from the last good program would point at lines that have
+moved.
 
 ### Opening a pattern is not a device action (the push rule, Gitea #563)
 

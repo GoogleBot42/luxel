@@ -3,6 +3,7 @@
 // converts at the boundary so the app deals in plain numbers.
 
 import { gatedFetch } from "./fetchgate";
+import type { KindsReport } from "./lints";
 import {
   DEFAULT_PROJECTION,
   PROJECTION_CODES,
@@ -141,6 +142,7 @@ interface Exports {
   lx_debug_step(h: number, kind: number): number;
   lx_debug_state(h: number): number;
   lx_globals(h: number): number;
+  lx_kinds(h: number): number;
   lx_device_model(
     blobPtr: number,
     blobLen: number,
@@ -430,6 +432,16 @@ export class Engine {
   controls(): Control[] {
     this.e.lx_controls(this.h);
     return JSON.parse(this.lx.response()) as Control[];
+  }
+
+  /** What the compiler knows about this pattern and the JIT (Gitea #627):
+   *  every boxed (`Dyn`) variable with the reason, and whether a JIT board
+   *  will run the whole thing interpreted. Advisory only — null means this
+   *  wasm build predates the export, and the editor then shows no lints. */
+  kinds(): KindsReport | null {
+    if (typeof this.e.lx_kinds !== "function") return null;
+    if (this.e.lx_kinds(this.h) === 0) return null;
+    return JSON.parse(this.lx.response()) as KindsReport;
   }
 
   /** Invoke a control; returns the shown value for showNumber/gauge. */

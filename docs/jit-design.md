@@ -460,6 +460,14 @@ function-level mixing, ever (decision 2). `/api/status` carries
 `kinds` (verifier failure — a compiler bug, reported loudly), `debug`
 (debugger attached), `unsupported` (anything else, with the opcode).
 
+**SHIPPED (Gitea #627):** `luxel_core::jitlint::jit_eligibility(prog, kinds)`
+is the one place a compile-time refusal is decided, and
+`jitlint::dyn_lints` names and anchors every `Dyn` slot; the browser reads
+both through the wasm export `lx_kinds` and renders them as described in
+docs/web-architecture.md ("Lints: boxed variables and interpreter mode").
+Later phases add their reasons (`TooLarge`, …) to `JitRefusal` and every
+surface follows.
+
 **Jeremy's note (2026-09-20): the editor must warn when a construct forces
 interpreter mode.** The compiler knows at compile time whether a program
 will be refused for `callbacks` (the only reason that is a property of

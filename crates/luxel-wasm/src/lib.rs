@@ -1302,3 +1302,73 @@ pub extern "C" fn lx_globals(h: i32) -> i32 {
     })
     .unwrap_or(0)
 }
+
+/// What the editor tells you about the JIT, for the pattern this handle is
+/// running (Gitea #627, docs/jit-design.md §4a). One call after every
+/// successful compile; JSON in the response buffer, always 1:
+///
+/// ```json
+/// {"jit":{"eligible":false,
+///         "reason":{"kind":"callbacks","name":"arrayMutate",
+///                   "line":3,"col":3,"message":"…"}},
+///  "dyn":[{"name":"heat","scope":"global","fn":"","line":3,"col":3,
+///          "cause":"assign-merge","message":"`heat` is assigned …"}],
+///  "stats":{"typed_slots":12,"total_slots":14}}
+/// ```
+///
+/// `reason` is absent when `eligible` is true. `scope` is `global`,
+/// `local` or `ret` (a function's return value); `fn` is the function the
+/// slot lives in, empty for a global. Positions are 1-based and are `0`
+/// only for a program with no debug info, which a browser compile never is.
+#[no_mangle]
+pub extern "C" fn lx_kinds(h: i32) -> i32 {
+    use luxel_core::jitlint::{cause_id, dyn_lints, jit_eligibility, slot_stats};
+    with_engine(h, |s| {
+        let prog = s.engine.program();
+        // `compile()` always infers; `infer` is the belt-and-braces path for
+        // a program that arrived some other way.
+        let kinds = match prog.kinds.clone() {
+            Some(k) => k,
+            None => luxel_core::kinds::infer(prog),
+        };
+        let mut out = String::from("{\"jit\":{");
+        match jit_eligibility(prog, &kinds) {
+            Ok(()) => out.push_str("\"eligible\":true"),
+            Err(r) => {
+                let (line, col) = r.pos();
+                out.push_str(&format!(
+                    "\"eligible\":false,\"reason\":{{\"kind\":\"{}\",\"name\":\"{}\",\
+                     \"line\":{line},\"col\":{col},\"message\":\"{}\"}}",
+                    r.id(),
+                    json_escape(r.name()),
+                    json_escape(&r.text()),
+                ));
+            }
+        }
+        out.push_str("},\"dyn\":[");
+        for (i, l) in dyn_lints(prog, &kinds).iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            out.push_str(&format!(
+                "{{\"name\":\"{}\",\"scope\":\"{}\",\"fn\":\"{}\",\"line\":{},\"col\":{},\
+                 \"cause\":\"{}\",\"message\":\"{}\"}}",
+                json_escape(&l.name),
+                l.scope.id(),
+                json_escape(&l.fn_name),
+                l.line,
+                l.col,
+                cause_id(l.cause),
+                json_escape(&l.message),
+            ));
+        }
+        let stats = slot_stats(prog, &kinds);
+        out.push_str(&format!(
+            "],\"stats\":{{\"typed_slots\":{},\"total_slots\":{}}}}}",
+            stats.typed, stats.total
+        ));
+        set_response(out);
+        1
+    })
+    .unwrap_or(0)
+}

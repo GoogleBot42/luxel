@@ -48,6 +48,7 @@
   import { MicSource, toSensorBoardFrame } from "../lib/audio";
   import { lxpEnvelope } from "../lib/device";
   import type { ProjectionMode } from "../lib/geometry";
+  import { editorLints, jitWarning, lintSummary, type KindsReport } from "../lib/lints";
   import {
     Engine,
     type ColorOrder,
@@ -133,6 +134,11 @@
 
   let engine: Engine | undefined;
   let compileError: Diagnostic | null = null;
+  /** What the compiler knows about this pattern and the JIT (Gitea #627):
+   *  boxed variables and whether a JIT board runs it interpreted. Advisory —
+   *  it never blocks preview or push, and it is null for a wasm build that
+   *  predates `lx_kinds`. */
+  let kindsReport: KindsReport | null = null;
   let controls: Control[] = [];
   let readouts = new Map<string, number>();
   let vars: Record<string, number | number[]> = {};
@@ -493,6 +499,7 @@
       builtElements = $previewArrayElements; // …and the device's element ledger
       engine.setWallClock(Date.now() / 1000);
       controls = engine.controls();
+      kindsReport = engine.kinds(); // boxed-variable + JIT lints (#627)
       vars = engine.vars(); // VARS is absent for a pattern that exports none
       wantsSensors = engine.wantsSensors();
       if (!wantsSensors && micOn) toggleMic(); // nothing consumes the audio
@@ -526,6 +533,9 @@
       checkCapacity();
     } else {
       compileError = result; // keep the old engine running while typing
+      // the lints describe the last program that COMPILED; while the source
+      // is mid-edit and broken they would point at moved lines
+      kindsReport = null;
     }
   }
 
@@ -1317,6 +1327,19 @@
     if (compileError) editor.jumpTo(compileError.line, compileError.col);
   }
 
+  // Advisory lints (#627). Same channel as the compile error — warning
+  // severity, amber, never the gutter dot — and they simply vanish when the
+  // pattern has nothing boxed, which is the common case.
+  $: lints = editorLints(kindsReport);
+  $: jitNote = jitWarning(kindsReport);
+  $: boxedSummary = lintSummary(lints);
+  $: firstBoxed = lints.find((l) => l.role === "boxed") ?? null;
+  $: if (editor) editor.setLints(lints);
+
+  function jumpToLint(l: { line: number; col: number } | null | undefined): void {
+    if (l) editor.jumpTo(l.line, l.col);
+  }
+
   // ---- microphone → sensor patterns (frequencyData etc.) ----
   const mic = new MicSource();
   let micOn = false;
@@ -1702,6 +1725,15 @@
           ⚠ runtime · {$runtimeError.message}
           <button class="dismiss" title="dismiss" on:click={() => runtimeError.set(null)}>×</button>
         </div>
+      {:else if boxedSummary}
+        <!-- Boxed variables (#627): advice about how the JIT will run this
+             pattern, in the same strip and the same amber as a runtime
+             warning. The squiggles in the pane are the detail; this is the
+             count and the first reason. -->
+        <button class="codestatus warn" data-role="boxed-lint" on:click={() => jumpToLint(firstBoxed)}>
+          △ {boxedSummary}
+          <span class="jump">jump to line</span>
+        </button>
       {/if}
     </section>
 
@@ -1807,6 +1839,16 @@
           </div>
           {#if $notes.mic}<p class="note-error" data-role="mic-error">{$notes.mic}</p>{/if}
 
+          <!-- Interpreter-mode warning (#627, docs/jit-design.md §4a): the
+               compiler can already tell this pattern will be refused by a
+               JIT board and run interpreted. A prediction, so it wears the
+               capacity strip's amber, persists until the source changes, and
+               blocks nothing — the pattern previews and pushes as always. -->
+          {#if jitNote}
+            <button class="capstrip" data-role="jit-warning" on:click={() => jumpToLint(jitNote)}>
+              ⚠ {jitNote.text} (line {jitNote.line})
+            </button>
+          {/if}
           <!-- Capacity (Gitea #15), the existing idiom in its new place: a strip
                under the preview it is about. Severity follows CERTAINTY, not size:
                the device's own rejection is a fact and reads as an error; our local
@@ -1937,6 +1979,16 @@
     background: color-mix(in srgb, var(--warn) 14%, transparent);
     color: #ecd9a8;
     font-size: 12px;
+  }
+
+  /* the interpreter-mode strip (#627) is a clickable capstrip: a button so
+     it can jump to the call site, styled as the strip it sits beside */
+  button.capstrip {
+    width: 100%;
+    font-family: inherit;
+    text-align: left;
+    line-height: 1.35;
+    cursor: pointer;
   }
 
   /* "will not fit" vs "getting close" — same amber family (both are
