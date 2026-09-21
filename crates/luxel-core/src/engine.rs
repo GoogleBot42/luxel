@@ -1956,7 +1956,21 @@ impl Engine {
                         args[2].num().raw(),
                         args[3].num().raw(),
                     ];
-                    Self::native_enter(&**np, ctx, fn_idx, &raw)
+                    // Re-derive the VM pointer from a fresh `&mut` each
+                    // pixel. The loop touches `self.vm` between calls
+                    // (`pixel_coords`, the brush), and a raw pointer taken
+                    // before that is stale provenance the moment it does.
+                    // One store per pixel, next to a call that costs
+                    // hundreds of cycles.
+                    (*ctx).vm = &mut self.vm;
+                    // Only `argc` arguments are live for this entry, and a
+                    // function declaring MORE parameters than its render
+                    // kind supplies must see the interpreter's default (0)
+                    // in the rest — not the mid-space 0.5 the coordinate
+                    // array is pre-filled with. `NativeCall::enter` reads
+                    // 0 past the end of this slice, which is exactly
+                    // `push_frame`'s rule.
+                    Self::native_enter(&**np, ctx, fn_idx, &raw[..argc.min(raw.len())])
                 },
                 None => self.vm.render_pixel(&self.prog, &plan, &args),
             };

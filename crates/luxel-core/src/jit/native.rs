@@ -139,11 +139,18 @@ pub struct NativeProgram {
     /// render task's stack.
     pub stack_limit: usize,
     /// The thing that actually makes the call.
-    pub call: Box<dyn NativeCall>,
+    ///
+    /// `+ Send` on both boxes because [`crate::engine::Engine`] must stay
+    /// `Send`: the wasm playground keeps its engines in a
+    /// `static Mutex<Vec<Option<…>>>`, and a trait object with no auto
+    /// traits would silently take that away. Not `Sync` — the ISA-model
+    /// caller in `luxel-jit`'s tests owns a `RefCell`, and nothing shares
+    /// a `NativeProgram` between threads.
+    pub call: Box<dyn NativeCall + Send>,
     /// Kept alive, never read. Its `Drop` releases the exec buffer, and it
     /// is declared AFTER `call` so the code outlives nothing that could
     /// still enter it.
-    pub lease: Box<dyn ExecLease>,
+    pub lease: Box<dyn ExecLease + Send>,
 }
 
 impl core::fmt::Debug for NativeProgram {

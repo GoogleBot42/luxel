@@ -418,6 +418,46 @@ fn engine_named_patterns_match_the_interpreter() {
     }
 }
 
+/// Shapes `library/` does not happen to contain, so the engine glue is
+/// tested on them deliberately rather than by luck.
+#[test]
+fn engine_edge_cases_match_the_interpreter() {
+    const CASES: [(&str, &str); 4] = [
+        (
+            // MORE parameters than the render kind supplies. `render2D` is
+            // entered with (index, x, y) — three — so `z` must read the
+            // interpreter's default of 0, NOT the 0.5 the engine's
+            // coordinate array is pre-filled with for missing dimensions.
+            // Get this wrong and every 2D pattern with a spare parameter
+            // renders mid-space instead of black.
+            "extra render parameter defaults to 0",
+            "export function render2D(index, x, y, z) { hsv(z, 1, 1) }",
+        ),
+        (
+            // FEWER: the spare arguments are simply dropped.
+            "missing render parameters are dropped",
+            "export function render3D(index) { hsv(index / pixelCount, 1, 1) }",
+        ),
+        (
+            // A runtime error mid-frame: both sides must raise the same
+            // one, at the same site, and keep the pre-error brush (the PB
+            // blast radius the engine implements).
+            "a mid-render error agrees, message and site",
+            "var a = [1, 2]\nexport function render(index) { hsv(0.3, 1, 1); hsv(a[index + 5], 1, 1) }",
+        ),
+        (
+            // `beforeRender` state carried across frames, which is what
+            // FRAMES > 1 is for.
+            "beforeRender state carries across frames",
+            "var t = 0\nexport function beforeRender(delta) { t = t + delta / 1000 }\n\
+             export function render(index) { hsv(t + index / pixelCount, 1, 1) }",
+        ),
+    ];
+    for (what, src) in CASES {
+        diff(what, src).unwrap_or_else(|e| panic!("{e}"));
+    }
+}
+
 /// The whole library. Slow — the ISA model runs a few hundred thousand
 /// instructions a second in a debug build and this renders 60 px × 4
 /// frames × 307 patterns — so it is `#[ignore]` by default and run
