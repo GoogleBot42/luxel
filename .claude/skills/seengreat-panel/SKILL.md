@@ -61,6 +61,33 @@ Reading the panel (2026-09-07):
   (`heap_free` 41,492 → 26,928 → 29,324 on 2026-09-08). Read `heap_free`
   before and after, and say so when you hand the panel back.
 
+## Its bootloader says 4 MB, so it cannot take the 16 MB table over the air
+
+This panel was serially flashed when `board-seengreat-hub75` still used
+`partitions.csv`; `--flash-size 16mb` only arrived for it with #501. The
+second-stage bootloader programs `g_rom_flashchip.chip_size` out of **its own**
+image header, **an OTA replaces the app and never the bootloader**, and the ROM
+bounds-checks every flash op against that number. So on 16 MB of silicon this
+board refuses every access at or above `0x400000` — which is what silently
+stopped the #501 migration's `storage` erase at `0x610000` (#634, root-caused
+under emulation 2026-09-21).
+
+What this means in practice:
+
+- **`partitions.migrated` will stay `false` no matter how many times you OTA
+  it**, and since the fix it says so: `migration_blocked: "bootloader was
+  flashed for a smaller part — reflash it over serial"`, `blocked_have_bytes:
+  4194304`. That is the expected, healthy answer — not a regression to chase.
+- **Do NOT "fix" it by raising the ROM ceiling at runtime.** It works, the
+  migration completes, and the board then boots into a bootloader that refuses
+  the table it just installed (`load partition table error!`) forever. Emulated
+  and asserted (`tools/qemu/migrate-test.py --board s3 --old-bootloader 4mb`).
+- The only cure is one serial flash of bootloader + table + app together —
+  `BOARD=board-seengreat-hub75 firmware/build-esp32.sh flash`, which needs the
+  BOOT-button hold and is therefore **Jeremy's**. It **erases the store and the
+  assets**: read `/api/patterns` (+ each source), `/api/playlist`, `/api/layout`
+  and `/api/brightness` out over HTTP first and restore them afterwards.
+
 ## The USB port is not a serial console
 
 The data USB-C is the S3's **native USB-Serial/JTAG** (303a:1001 → `/dev/ttyACM0`
