@@ -15,7 +15,7 @@
 #[path = "isa/mod.rs"]
 mod isa;
 
-use isa::{Cpu, Trap, CODE_BASE, STACK_TOP};
+use isa::{Cpu, Trap, CODE_BASE, SPILL_BYTES, STACK_TOP};
 use luxel_jit::xtensa::{
     Asm, Cond, Reg, ZCond, A0, A1, A10, A11, A12, A13, A14, A15, A2, A3, A4, A5, A6, A7, A8, A9,
     B4CONST,
@@ -624,8 +624,10 @@ fn the_window_contract_holds_two_levels_deep() {
     a.align4();
     let f1_off = a.here();
     assert!(a.entry(A1, 48));
-    // Prove the frame: store f1's own a1 just above the 16-byte save area.
-    assert!(a.s32i_n(A1, A1, 16));
+    // Prove the frame: store f1's own a1 at the BOTTOM of it. The save
+    // areas are the top 32 bytes (`isa::SPILL_BYTES`), so a1+0 is the
+    // first word this function owns.
+    assert!(a.s32i_n(A1, A1, 0));
     // Clobber every caller-saved register before setting up the call, so
     // a leak from f2 into f1's a2..a7 would show up.
     for r in [A8, A9, A10, A11, A12, A13, A14, A15] {
@@ -638,7 +640,7 @@ fn the_window_contract_holds_two_levels_deep() {
     a.callx8(A8);
     // Stash the raw result, then fold in a3/a4 — which must still be the
     // 7 and 9 f1 was called with.
-    assert!(a.s32i_n(A10, A1, 20));
+    assert!(a.s32i_n(A10, A1, 4));
     a.add_n(A2, A10, A3);
     a.add_n(A2, A2, A4);
     a.retw_n();
@@ -658,7 +660,7 @@ fn the_window_contract_holds_two_levels_deep() {
     let main_sp = STACK_TOP - 32;
     let f1_sp = main_sp - 48;
     // f2 returned 7 + 9; f1 added its own surviving a3/a4 on top.
-    assert_eq!(cpu.mem.read32(f1_sp + 20).unwrap(), 16, "f2's result");
+    assert_eq!(cpu.mem.read32(f1_sp + 4).unwrap(), 16, "f2's result");
     assert_eq!(cpu.ar(A14), 16 + 7 + 9, "f1's a3/a4 survived its call");
     // The caller's a0..a7 are exactly what they were. (a8..a15 are
     // clobbered by design: a8 takes the return address, a9 the callee's
@@ -669,15 +671,18 @@ fn the_window_contract_holds_two_levels_deep() {
         assert_eq!(cpu.ar(r), v, "caller register a{r} was clobbered");
     }
     // f1's frame was the caller's minus its own frame size.
-    assert_eq!(cpu.mem.read32(f1_sp + 16).unwrap(), f1_sp, "f1's a1");
+    assert_eq!(cpu.mem.read32(f1_sp).unwrap(), f1_sp, "f1's a1");
     assert_eq!(cpu.window_base(), 0, "the window rotated all the way back");
     assert_eq!(cpu.depth(), 0);
 }
 
 #[test]
 fn nothing_writes_the_window_save_area() {
-    // §3.3 reserves 16 bytes at a1+0 for the window spill the hardware
-    // would do; the emitter never touches them and neither may the model.
+    // The window save areas are the TOP 32 bytes of a frame —
+    // `[a1 + frame - 32, a1 + frame)`, which is the 32 bytes just below
+    // the CALLER's sp, where the overflow handler puts the caller's
+    // a0..a3 and (for a call8 chain) a4..a7. §3.3 said 16 bytes at
+    // `a1+0`, the bottom, and that was a device crash (Gitea #658).
     let mut a = Asm::with_pool(4);
     let main_off = a.here();
     assert!(a.entry(A1, 32));
@@ -696,8 +701,12 @@ fn nothing_writes_the_window_save_area() {
     let mut cpu = Cpu::boot(a.bytes(), main_off);
     let main_sp = STACK_TOP - 32;
     let f_sp = main_sp - 16;
-    cpu.mem.watch(main_sp, main_sp + 16);
-    cpu.mem.watch(f_sp, f_sp + 16);
+    // The areas belong to the frame BELOW the sp they hang off, so
+    // main's is [STACK_TOP - 32, STACK_TOP) and f's is
+    // [main_sp - 32, main_sp).
+    cpu.mem.watch(STACK_TOP - SPILL_BYTES, STACK_TOP);
+    cpu.mem.watch(main_sp - SPILL_BYTES, main_sp);
+    let _ = f_sp;
     cpu.run(1000).expect("ran");
     assert_eq!(cpu.ar(A10), 7, "the call still worked");
     assert!(
@@ -705,6 +714,72 @@ fn nothing_writes_the_window_save_area() {
         "writes landed in a save area: {:x?}",
         cpu.mem.watch_hits
     );
+}
+
+/// **The layout the design had, caught by the model that used to miss it.**
+///
+/// A 32-byte frame whose only data lives at `a1+16` """ + D + """ exactly where
+/// `plan.rs` put its first local when `WINDOW_SAVE` was 16 bytes at the
+/// BOTTOM. With a 32-byte frame that word is inside
+/// `[a1 + 32 - 32, a1 + 32)`, i.e. the caller's base save area, so the
+/// real overflow handler would eat it. Every host gate passed this for
+/// two phases because the model has a flat register file and never
+/// spills; now it traps.
+#[test]
+fn a_store_into_the_window_save_area_traps() {
+    let mut a = Asm::with_pool(4);
+    let main_off = a.here();
+    assert!(a.entry(A1, 32));
+    assert!(a.movi_n(A11, 3));
+    a.l32r(A8, 0).unwrap();
+    a.callx8(A8);
+    a.retw_n();
+    a.align4();
+    let f_off = a.here();
+    // The old plan.rs frame: 32 bytes, first local at WINDOW_SAVE = 16.
+    assert!(a.entry(A1, 32));
+    assert!(a.movi_n(A8, 42));
+    assert!(a.s32i_n(A8, A1, 16)); // <- inside [a1+0, a1+32)'s save area
+    a.retw_n();
+    a.put_word(0, CODE_BASE + f_off as u32);
+
+    let mut cpu = Cpu::boot(a.bytes(), main_off);
+    match cpu.run(1000) {
+        Err(Trap::SpillAreaWrite { addr, .. }) => {
+            // f's frame is [main_sp - 32, main_sp); its save area is the
+            // top 32 bytes of that, which is all of it.
+            let main_sp = STACK_TOP - 32;
+            assert_eq!(addr, main_sp - 32 + 16, "the store the old layout made");
+        }
+        other => panic!("the old frame layout was not caught: {other:?}"),
+    }
+}
+
+/// ...and the corrected layout does not trap: the same function with its
+/// data at `a1+0` and the 32 bytes reserved above it runs clean.
+#[test]
+fn the_corrected_frame_layout_does_not_trap() {
+    let mut a = Asm::with_pool(4);
+    let main_off = a.here();
+    assert!(a.entry(A1, 32));
+    a.l32r(A8, 0).unwrap();
+    a.callx8(A8);
+    a.retw_n();
+    a.align4();
+    let f_off = a.here();
+    // One home of data (8 B) + 32 B reserved, rounded to 16 => 48.
+    assert!(a.entry(A1, 48));
+    assert!(a.movi_n(A8, 42));
+    assert!(a.s32i_n(A8, A1, 0));
+    assert!(a.s32i_n(A8, A1, 4));
+    assert!(a.l32i_n(A2, A1, 0));
+    a.retw_n();
+    a.put_word(0, CODE_BASE + f_off as u32);
+
+    let mut cpu = Cpu::boot(a.bytes(), main_off);
+    cpu.run(1000).expect("the corrected layout runs clean");
+    let f_sp = STACK_TOP - 32 - 48;
+    assert_eq!(cpu.mem.read32(f_sp).unwrap(), 42, "the local landed");
 }
 
 #[test]
