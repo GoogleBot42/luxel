@@ -1,5 +1,89 @@
 # Update log
 
+## 2026-09-20 — The six callback builtins become a pattern-language prelude (#626)
+
+`arrayForEach`, `arrayMutate`, `arrayMapTo`, `arrayReduce`, `arraySortBy` and
+`mapPixels` are no longer builtins. They are written in the pattern language, in a
+bundled `crates/luxel-core/src/prelude.js` the compiler parses and links into a
+program **only when it uses one** (transitively tree-shaken). On the wire and on the
+device they are ordinary pattern functions; a pattern author sees no difference.
+
+**Why.** They were the only builtins that called back into pattern code
+(`Vm::dispatch_direct`), and that is the one shape the on-device JIT (#607,
+docs/jit-design.md §4) cannot compile without a Rust → native trampoline. As pattern
+code they need no trampoline, and the JIT's refusal list for `library/` is now empty:
+the twelve patterns still excluded from the first JIT are genuine `CallValue` users,
+none is a callback builtin (was nineteen).
+
+**Specialisation is what makes it free.** Inside a helper the callback is a parameter,
+so its call is a `CallValue` and the kinds inference (#625) has to give the CALLBACK's
+parameters `Dyn`. When the call site hands over a literal lambda or an identifier
+naming a function — every call site in `library/` and in the corpus — the compiler
+clones the helper for that callback, drops the callback parameter and rewrites the
+call inside the clone into a direct `CallFn`. The callback keeps typed parameters, so
+`arrayMutate(ambR, (v) => 0.05)` costs the kinds nothing. A callback that is only a
+run-time value goes through the shared copy: correct, merely boxed. Census over the
+307 library patterns, against the pre-#626 tree: fully typed render paths stay
+286/307 and the `Box` sites are unchanged, but fully-typed-AND-v1-eligible goes
+**281 → 286** and array globals recover 10 slots from `Arr` to `ArrNum`.
+
+**One new builtin**, `pixelCoord(i, axis)` (id 187, appended): the mapped coordinate
+of pixel `i` on axis 0/1/2 with the current transform applied. It is everything
+`mapPixels` needed from the engine and the smallest thing that could be — one `Num`
+return, no allocation.
+
+**The arms are gone, the ids are tombstones.** `BUILTINS` is append-only, so the six
+ids keep their slots as a new `BKind::Removed` and nothing after them moves. The
+compiler never resolves one; the decoder rejects a blob that imports one by NAME —
+"`arrayMutate` is a prelude function since v6, not a builtin — recompile the pattern"
+— which is the recompile loop a version skew already drives, and the store keeps
+source. `BuiltinSig::callback` and `SigWrite::Dyn` went with them, and with them the
+three "this builtin could go anywhere" branches in `crate::kinds`: `CallValue` is now
+the only way out of the call graph.
+
+**How it was gated.** The prelude landed FIRST, with the arms still present, and
+34 small programs — empty arrays, length mismatches in `arrayMapTo`, `arrayReduce`
+with and without `init`, `arraySortBy` with equal keys, `mapPixels` on a 2D map with
+a transform, every "not an array" error — were run through the OLD builtin path and
+recorded as `tests/data/prelude-golden.txt`. All 307 library patterns were A/B'd
+frame-for-frame against the builtins in the same commit; the eight that use a helper
+are pinned permanently in `tests/data/library-callbacks.txt`. The arms were deleted in
+the next commit and the goldens still pass.
+
+Seven ERROR MESSAGES changed and no pixels did: a helper is ordinary pattern code, so
+a non-array argument fails at `.length` rather than with a guard of the builtin's own,
+and a non-function callback fails at the call. Reported positions are unchanged — a
+specialised clone is attributed to its call site — except for a run-time callback
+value, which goes through the shared copy and reports position (0, 0).
+
+This also fixed a latent verifier/inference disagreement that `arrayForEach(5, f)` was
+the first program in the repo to expose: `kinds::elem_kind` said `Dyn` for an index
+into a slot proven `Num`, where `kinds::Infer::elem_of` had always said `Num`
+(indexing a non-array traps, so the pushed value is unreachable).
+
+**Cost.** Nine of the ten library call sites are init-time fills, where nothing is
+measurable. The one per-frame use — `bulk-canvas-ripples-2d.js`, two `arrayMapTo` over
+256 cells every frame — costs **+10.75 µs/frame on the host** (22.00 → 32.75 µs,
+`luxel bench --map-grid 64x64 --frames 4000`, median of 9, +48.9 %). Host numbers
+only; the S3 ratio will differ and is not measured yet. Firmware image, `nix build`
+release images, deleting the arms (the prelude itself is compiler-side and costs the
+firmware nothing):
+
+| board | with the arms | without | delta |
+|---|---:|---:|---:|
+| `board-c6-devkit` + `hosted-ui` | 1 029 248 | 1 027 104 | **−2 144** |
+| `board-pixelblaze-v3` | 1 023 248 | 1 021 056 | **−2 192** |
+| `board-seengreat-hub75` | 987 984 | 985 792 | **−2 192** |
+
+(Against master `78a24d0` the net is −2 160 / −2 000 / −2 000: the prelude commit
+itself adds +192 B on the two Xtensa boards for `pixelCoord` and the de-branched
+`arraySort`, and −16 B on the C6.)
+
+Docs: `docs/lang.md` (Arrays, Mapped coordinates), `docs/spec/vm.md` (the builtin
+re-entry rule is deleted; `BKind::Removed` documented), `docs/spec/bytecode.md` (the
+decoder's retired-import rule), `docs/jit-design.md` §2.3/§4/§4a/§6/§9a/§11.
+
+
 ## 2026-09-20 — The editor says what the JIT will do with your pattern (#627)
 
 Two advisories, both driven by the kind inference that shipped with #607, both

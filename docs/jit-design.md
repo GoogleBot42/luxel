@@ -103,10 +103,11 @@ serves the compiler, the CLI and the verifier).
 - **Returns**: join of every `Ret` value kind; `RetNull` contributes `Num`
   (the interpreter returns `Value::default()` = `Num(0)`).
 - **Builtins**: a signature table beside `BUILTINS` gives each entry a
-  return kind (`Num` for nearly all; `Arr`/`ArrNum` for `array(n)`; `Dyn`
-  for the few that return an element or a callback result), and, for the
-  array-writing builtins, the kind they store (`Num` for the bulk math
-  ops; the callback's return kind for `arrayMapTo` / `arrayMutate`).
+  return kind (`Num` for nearly all; `ArrNum` for `array(n)`; an argument
+  verbatim for the twenty-three that return one of their arrays), and, for
+  the array-writing builtins, the kind they store. Since #626 no builtin
+  takes a callback, so no builtin call can reach pattern code and none can
+  store a non-`Num` it did not receive as an argument.
 - **Arrays**: `ArrNum` is a property of the array *object*, so it is
   computed per allocation site (`NewArray`, `ConstArr`, `array()` calls)
   by a points-to pass: every `Arr`-kinded slot carries the set of sites
@@ -407,58 +408,54 @@ pub struct BuiltinEntry {
 The `generic` wrappers call exactly the arms `builtin_fast` / `builtin_hot`
 / `builtin_cold` run today (the interpreter's dispatch is not changed by
 this design — #328 showed its tiers are about I-cache residency, and the
-JIT does not go through them). Higher-order builtins call back through
-`Vm::dispatch_direct`, which becomes an indirection: interpreter mode →
-`run_on_top`; native mode → the callee's native entry with `Dyn` params
-via `ctx.args`. That keeps the five callback builtins (`arrayForEach`,
-`arrayMutate`, `arrayMapTo`, `arrayReduce`, `arraySortBy`, `mapPixels`)
-native without any interpreter re-entry.
+JIT does not go through them). **No wrapper ever calls back into pattern
+code**, so there is no Rust → native trampoline in this design at all.
 
-**Decided 2026-09-20 (Jeremy):** v1 compiles `CallValue` natively (it is
-native → native through the entry table; the callee's params and return
-are `Dyn`). The six callback builtins are all Pixelblaze API
-(`arrayForEach`, `arrayMutate`, `arrayMapTo`, `arrayReduce`,
-`arraySortBy`, `mapPixels`; 8 of 294 scraped PB patterns and 8 of 307
-library patterns use one) and **stay in the language**. They leave the
-JIT's hard set by being **defined in the pattern language as a prelude**
-(Jeremy's idea, 2026-09-20, Gitea #626), not by a trampoline: the
-compiler bundles their definitions, links in the ones a program uses, and
-on the wire and on the device they are ordinary pattern functions. Two
-rules make it hold:
+**DONE (Gitea #626).** The six higher-order builtins (`arrayForEach`,
+`arrayMutate`, `arrayMapTo`, `arrayReduce`, `arraySortBy`, `mapPixels`)
+were the only builtins that re-entered the VM. They are now written in the
+pattern language, in `crates/luxel-core/src/prelude.js`, linked into a
+program only when it uses one. `Vm::dispatch_direct` and the six arms are
+deleted and the ids are `BKind::Removed` tombstones; v1 compiles
+`CallValue` natively (native → native through the entry table, `Dyn` params
+and return), so nothing is left for the JIT to refuse. Two rules make the
+prelude hold, and both are implemented:
 
 - **Always, never per target.** One blob runs everywhere (store, sync
-  pull, playlist), so the interpreter runs the prelude loop too. Cost:
-  ~10 ops/element at ~100 cycles/op ≈ 17 ms per 4096-element call on the
-  S3 interpreter — irrelevant for the init-time fills that are 9 of the
-  10 library call sites, ~2 frames for the one per-frame use
-  (`arrayMapTo` in `bulk-canvas-ripples-2d`), measured in #626.
+  pull, playlist), so the interpreter runs the prelude loop too. Nine of
+  the ten library call sites are init-time fills, where the cost is
+  invisible. The one per-frame use (`arrayMapTo` twice over 256 cells in
+  `bulk-canvas-ripples-2d`) costs **+10.75 µs/frame on the host** (22.00 →
+  32.75 µs, `luxel bench --map-grid 64x64`, median of 9); the S3 ratio
+  will differ and is not measured yet.
 - **Specialise on a static callback.** Inside a prelude function the
-  callback is a parameter, so its call is `CallValue` and its params
-  would be `Dyn` (§2.3). When the call-site argument is a literal lambda
-  or a named function — every library and corpus call site — the compiler
-  clones the prelude function for that site and binds the callback into a
-  direct `CallFn`, so the callback keeps typed params. A run-time callback
-  value goes through the unspecialised copy, boxed.
+  callback is a parameter, so its call is `CallValue` and its params would
+  be `Dyn` (§2.3). When the call-site argument is a literal lambda or an
+  identifier naming a function — every library and corpus call site — the
+  compiler clones the helper for that site, drops the callback parameter
+  and binds the call into a direct `CallFn`, so the callback keeps typed
+  params. A callback that is only a run-time value goes through the shared
+  copy, boxed and correct.
 
-`arraySortBy` is an insertion sort in the prelude; `mapPixels` needs one
-small builtin returning a pixel's mapped coordinates by index and then
-lowers the same way. With #626 landed the §4a refusal list is empty for
-the library, and the Rust → native trampoline (`dispatch_direct`
-indirection) is never built. **They are no longer builtins at all**
-(Jeremy, 2026-09-20): the `vm.rs` arms, `dispatch_direct` and `run_on_top`
-are deleted — no old blob can reach them after the v6 bump — and the six
-`BUILTINS` ids become append-only tombstones (`BKind::Removed`); the
-Pixelblaze oracle is the reference for the prelude's correctness.
+`arraySortBy` is an insertion sort in the prelude. `mapPixels` needed one
+new builtin, `pixelCoord(i, axis)` (id 187): the mapped coordinate of one
+pixel with the transform applied, returning `Num`.
+
+Census effect over `library/` (§9a's harness, against the pre-#626 tree):
+patterns with a fully typed render path stay 286 / 307 and the `Box` sites
+are unchanged, but the v1 exclusion set drops from 19 to 12 — every
+remaining one is a genuine `CallValue`, none is a callback builtin — so
+**fully typed AND v1-eligible goes 281 → 286**.
 
 ### 4a. Refusal semantics and the editor warning
 
 A refusal is **whole-program**: the pattern runs in the interpreter
 exactly as today, at the interpreter's speed, with the same pixels — no
 function-level mixing, ever (decision 2). `/api/status` carries
-`jit: {state: "interp", reason}` with `reason` one of `callbacks`
-(a callback that is only a run-time value — the prelude's unspecialised copy is `CallValue`, which v1 compiles; so this reason exists only for a construct the prelude cannot express yet), `too-large`, `psram`,
-`kinds` (verifier failure — a compiler bug, reported loudly), `debug`
-(debugger attached), `unsupported` (anything else, with the opcode).
+`jit: {state: "interp", reason}` with `reason` one of `too-large`,
+`psram`, `kinds` (verifier failure — a compiler bug, reported loudly),
+`debug` (debugger attached), `unsupported` (anything else, with the
+opcode).
 
 **SHIPPED (Gitea #627):** `luxel_core::jitlint::jit_eligibility(prog, kinds)`
 is the one place a compile-time refusal is decided, and
@@ -468,14 +465,15 @@ docs/web-architecture.md ("Lints: boxed variables and interpreter mode").
 Later phases add their reasons (`TooLarge`, …) to `JitRefusal` and every
 surface follows.
 
-**Jeremy's note (2026-09-20): the editor must warn when a construct forces
-interpreter mode.** The compiler knows at compile time whether a program
-will be refused for `callbacks` (the only reason that is a property of
-the source), so the playground shows a warning at the offending call
-site — "`mapPixels` runs this pattern in the interpreter on JIT boards" —
-in the same channel as the `Dyn`-variable lint (§11 answer 3), before the
-pattern is ever pushed. The device-side reasons (`too-large`, `psram`)
-surface from `/api/status` next to the frame rate after activation.
+**The `callbacks` reason no longer exists** (#626): v1 compiles
+`CallValue`, and no builtin reaches pattern code, so no construct in
+`library/` forces interpreter mode. The refusal list is empty and the
+editor has nothing to warn about at compile time; the remaining reasons
+are all device-side and surface from `/api/status` next to the frame rate
+after activation. Should a future construct become compile-time
+refusable, the warning belongs in the same channel as the `Dyn`-variable
+lint (§11 answer 3) — that was Jeremy's instruction on 2026-09-20 and it
+still stands.
 
 ## 5. Executable memory and lifecycle on the S3
 
@@ -534,9 +532,9 @@ surface from `/api/status` next to the frame rate after activation.
 - `beforeRender(delta)` and `renderFrame()` call their entries the same
   way; the frame-buffer lend (`frame_buffer_out/in`) is unchanged because
   bulk ops are builtins and read `Vm::frame` through helpers.
-- `Vm::dispatch_direct` becomes the mode indirection (§4). `Value` gets
-  its `repr`. `Vm::globals` becomes a `#[repr(C)]` word array. Everything
-  else in `Vm` is untouched.
+- `Value` gets its `repr`. `Vm::globals` becomes a `#[repr(C)]` word
+  array. Everything else in `Vm` is untouched — there is no mode
+  indirection to build, because no builtin calls pattern code (§4).
 - The interpreter path is byte-for-byte the same code as today when
   `native` is `None`; on boards without the `jit` feature the field does
   not exist.
@@ -610,18 +608,23 @@ checks and `jitcensus` now drives — actually produces over the 307
 `library/*.js` patterns. They are pinned by
 `crates/luxel-core/tests/kinds.rs`.
 
-| result | shipped | prototype (§9b) |
-|---|---:|---:|
-| patterns typed + verified | 307 / 307 | — |
-| **fully typed render path** | **286 / 307** | 291 / 307 |
-| locals proven `Num` | 94.5 % | 95.1 % |
-| render-path locals proven `Num` | 94.0 % | 94.0 % |
-| globals `ArrNum` / `Arr` / `Dyn` | 848 / 29 / 79 | 899 / 30 / 17 |
-| `Box` sites (patterns) | 8 (6) | 11 (9) |
+| result | with prelude (#626) | phase 0 (#625) | prototype (§9b) |
+|---|---:|---:|---:|
+| patterns typed + verified | 307 / 307 | 307 / 307 | — |
+| **fully typed render path** | **286 / 307** | 286 / 307 | 291 / 307 |
+| **… AND v1-eligible** | **286** | 281 | — |
+| v1-excluded (`CallValue`) | 12 | 19 | — |
+| locals proven `Num` | 94.7 % | 94.5 % | 95.1 % |
+| render-path locals proven `Num` | 94.1 % | 94.0 % | 94.0 % |
+| globals `ArrNum` / `Arr` / `Dyn` | 858 / 22 / 72 | 848 / 29 / 79 | 899 / 30 / 17 |
+| `Box` sites (patterns) | 8 (6) | 8 (6) | 11 (9) |
 
-The gap to the prototype is entirely the two soundness rules §2.3 was
-missing: 4 patterns to the exported-global host write, 2 to the declared
-init value (which the prototype dropped unconditionally). Nothing regressed.
+The gap from the prototype to phase 0 is entirely the two soundness rules
+§2.3 was missing: 4 patterns to the exported-global host write, 2 to the
+declared init value (which the prototype dropped unconditionally). Nothing
+regressed. The #626 column is the prelude: specialisation keeps the
+callbacks' parameters typed, which recovers 7 patterns from the exclusion
+set and 10 array globals from `Arr` to `ArrNum`.
 
 ### 9b. Prototype census (measured 2026-09-20)
 
@@ -673,9 +676,9 @@ cause (`arrayReduce` is unused), and nothing triggers the poison rule.
 Refining callback-argument kinds or `array(n)`'s zero fill each moves the
 total by one pattern — not worth building.
 
-**v1 scope check**: refusing every program that uses `CallValue` or a
-callback-taking builtin (§3.5 lists them as native, but they are the
-last thing to build) excludes 19 / 307 (6.2 %); `renderFrame` patterns
+**v1 scope check** (as measured then — the callback-builtin half of it is
+moot since #626, see §9a): refusing every program that uses `CallValue` or
+a callback-taking builtin excludes 19 / 307 (6.2 %); `renderFrame` patterns
 are not meaningfully over-represented (4 of 35, three from one author's
 sequencer family). **286 / 307 (93.2 %) are both v1-eligible and fully
 typed**; of the 288 eligible, exactly two carry a `Dyn` slot on the render
@@ -701,8 +704,8 @@ All four answered by Jeremy on 2026-09-20 (Gitea #607):
    the existing `bc-version` loop).
 2. `Value` layout pinned by `#[repr(C, u32)]` — **accepted**.
 3. Boxed (`Dyn`) variables shown as an editor lint — **accepted**.
-4. Callback builtins — **resolved as §4/§4a**: keep all six (they are
-   Pixelblaze API), lower the four loop-shaped ones in the compiler when
-   the callback is static, refuse only `arraySortBy`/`mapPixels` in v1,
-   and **warn in the editor** whenever a construct forces interpreter
-   mode.
+4. Callback builtins — **resolved as §4/§4a, and shipped as #626**: all
+   six keep their Pixelblaze names and semantics but stop being builtins,
+   becoming pattern-language prelude functions the compiler links and
+   specialises. Nothing is refused, so the editor has nothing to warn
+   about.

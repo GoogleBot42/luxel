@@ -24,7 +24,11 @@ Design constraints, in priority order:
    id a blob uses is also listed by *name* in its import table. The decoder
    checks each name resolves to exactly that id on this build; a blob from a
    newer compiler fails with the builtin's name ("`foo` is not available on
-   this firmware — recompile the pattern"), never with a bare index.
+   this firmware — recompile the pattern"), never with a bare index. A name
+   this build has RETIRED (`BKind::Removed`, vm.md "Builtins") is refused
+   the same way — "`arrayMutate` is a prelude function since v6, not a
+   builtin — recompile the pattern" — so an id can be withdrawn without
+   moving any other.
 4. **Version skew is detectable, not survivable.** A `version` mismatch is a
    distinct error (`BcError::Version`) so hosts can react (the web IDE
    recompiles from the stored source and re-saves). Devices cannot recompile;
@@ -391,7 +395,8 @@ trailing bytes; counts over the caps above; invalid UTF-8; a word region
 that is not 4-aligned or does not end the blob; unknown opcode; reserved
 operand bits set; a `Const Num` whose immediate would fall past its
 function's code; `fn_idx ≥ n_fns` (in `Const Fun`, `CallFn`, exports); an
-import whose name is unknown or resolves to a different id on this build; a
+import whose name is unknown, resolves to a different id on this build, or
+names a RETIRED builtin; a
 builtin operand not in the import table; global operand ≥ `n_globals`;
 `pixel_count_g ≥ n_globals`; local operand ≥ `locals`; `params > locals`;
 `argc > 16`; a jump target past `code_len` or not on an instruction

@@ -513,6 +513,25 @@ curve shapes only how the master dimmer responds (control).
 `arrayReduce(a, fn, init)`, `arrayReplace(a, v1, v2, …)`,
 `arrayReplaceAt(a, i, v)`, `arraySort(a)`, `arraySortBy(a, cmp)`.
 
+The callback is called `(value, index, array)` — `(acc, value, index,
+array)` for `arrayReduce`. `arrayForEach`, `arrayMutate` and `arraySortBy`
+return the array they were given; `arrayMapTo` returns the DESTINATION and
+stops at the shorter of the two arrays, handing the callback the source;
+`arrayReduce` returns the accumulator (its `init`, untouched, for an empty
+array). `arraySortBy` is an insertion sort, so `cmp(x, y) > 0` means "x
+sorts after y" and equal keys keep their order.
+
+**`arrayForEach`, `arrayMutate`, `arrayMapTo`, `arrayReduce`, `arraySortBy`
+and `mapPixels` are PRELUDE functions, not builtins** (Gitea #626): they are written in this same language and linked
+into your pattern only when you use one. Nothing about writing a pattern
+changes — same names, same arguments, same results — but they are ordinary
+functions now, so a function of your own with one of those names simply
+wins, and passing something that is not an array fails the way any other
+array access fails (`.length of a non-array value`) rather than with a
+message of the builtin's own. The source is
+`crates/luxel-core/src/prelude.js`; its cost is the interpreter's, which
+matters only if you call one per frame over a large array.
+
 Both `replace` forms take any number of values and store them from the
 offset onwards (`arrayReplace` starts at 0; `a.replace(…)` is that form).
 Neither is a fill: `arrayReplace(a, 0)` writes only `a[0]`. Zero a whole
@@ -649,6 +668,13 @@ y = mod(y + v[1] * 0.09 * dt, 1)
 `translate3D`, `scale3D`, `rotateX/Y/Z`, full `transform(…)`;
 `pixelMapDimensions()`, `has2DMap()`, `has3DMap()`;
 `mapPixels(fn(index, x, y, z))` iterates every pixel with coordinates.
+
+`pixelCoord(i, axis)` is the single-pixel form: the mapped coordinate of
+pixel `i` on axis 0 (x), 1 (y) or 2 (z), with the current transform
+applied. Axes the map does not carry read 0, and the axis clamps to 0..2.
+It is what `mapPixels` is built out of (it is a prelude function — see
+Arrays), and it is the way to ask for one pixel's coordinates outside a
+render pass without walking them all.
 
 ### Device & environment
 
