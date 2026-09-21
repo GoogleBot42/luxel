@@ -27,6 +27,13 @@ const ONE_RAW: i32 = 1 << FRAC_BITS;
 
 /// 16.16 fixed-point number. Ordering/equality on the raw word is numeric
 /// ordering (two's complement), so the derives are correct.
+///
+/// `#[repr(transparent)]` is a CONTRACT, not a hint (Gitea #642): it is the
+/// `i32` the JIT keeps in a register, and it is what makes
+/// `crate::vm::Value`'s `#[repr(C, u32)]` payload a plain 32-bit word at
+/// offset 4. Every generated `Num` load/store and every `direct` builtin in
+/// `crate::jit` assumes `Fx` IS its raw word.
+#[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Fx(i32);
 

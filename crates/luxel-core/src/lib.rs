@@ -33,6 +33,8 @@ pub mod fixed;
 pub mod color;
 pub mod fmath;
 pub mod hamqtt;
+#[cfg(any(feature = "jit", feature = "dispatch-table"))]
+pub mod jit;
 #[cfg(feature = "kinds")]
 pub mod jitlint;
 pub mod jsonview;

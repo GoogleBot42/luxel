@@ -48,12 +48,82 @@ use crate::fmath;
 /// re-loaded at every use: the `Add` arm alone carried four of them. All
 /// payloads 32-bit ⇒ a `u32` tag ⇒ the mask and the literal disappear.
 /// Keep them 32-bit; `fn_idx`/builtin ids stay `u16` everywhere else.
+///
+/// **The layout is PINNED** (`#[repr(C, u32)]` with explicit discriminants,
+/// Gitea #642 / docs/jit-design.md §2.5, §11 answer 2): a `u32` tag at
+/// offset 0, the payload word at offset 4, eight bytes, four-byte aligned —
+/// i.e. exactly [`ValueRaw`]. Generated code reads and writes boxed values
+/// with two `l32i`/`s32i` pairs and the boxed-argument scratch it builds
+/// for a builtin call must literally BE a `[Value; n]`, so this is an ABI,
+/// not an implementation detail. The discriminants are the `Box` tags of
+/// docs/jit-design.md §3.5 (`Num 0, Arr 1, Fun 2, Builtin 3`) and the kind
+/// bytes' order in `crate::kinds`; never renumber or reorder them.
+///
+/// This is what rustc already picked — the `crate::jit` tests pin the
+/// size, the tag width, the offsets and the discriminant of every variant,
+/// and the Xtensa `.text` of `luxel-core` did not move when the attribute
+/// went on (measured on `board-seengreat-hub75`, #642).
+#[repr(C, u32)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Value {
-    Num(Fx),
-    Arr(u32),
-    Fun(u32),
-    Builtin(u32),
+    Num(Fx) = 0,
+    Arr(u32) = 1,
+    Fun(u32) = 2,
+    Builtin(u32) = 3,
+}
+
+/// [`Value`]'s pinned byte image: what the JIT's emitted code sees, and the
+/// shape a two-word builtin return (`crate::jit::RetDyn`) carries.
+///
+/// `Value` and `ValueRaw` are transmute-compatible in both directions for
+/// every variant — `crates/luxel-core/tests/jitabi.rs` round-trips them.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ValueRaw {
+    pub tag: u32,
+    pub payload: u32,
+}
+
+/// Tag values, i.e. [`Value`]'s discriminants. Spelled out so the emitter
+/// and the tests name them rather than repeating literals.
+pub const TAG_NUM: u32 = 0;
+pub const TAG_ARR: u32 = 1;
+pub const TAG_FUN: u32 = 2;
+pub const TAG_BUILTIN: u32 = 3;
+
+const _: () = assert!(core::mem::size_of::<Value>() == 8);
+const _: () = assert!(core::mem::align_of::<Value>() == 4);
+const _: () = assert!(core::mem::size_of::<ValueRaw>() == 8);
+const _: () = assert!(core::mem::align_of::<ValueRaw>() == 4);
+const _: () = assert!(core::mem::offset_of!(ValueRaw, tag) == 0);
+const _: () = assert!(core::mem::offset_of!(ValueRaw, payload) == 4);
+// `Fx` is the raw 16.16 word, so a `Num` payload is a plain i32 slot.
+const _: () = assert!(core::mem::size_of::<Fx>() == 4);
+const _: () = assert!(core::mem::align_of::<Fx>() == 4);
+
+impl Value {
+    /// The pinned byte image of this value (tag, payload).
+    #[inline]
+    pub const fn raw(self) -> ValueRaw {
+        // SAFETY: both are 8-byte, 4-aligned, `repr(C)`; the const
+        // assertions above pin that, and every bit pattern of `ValueRaw`
+        // that this can produce came from a `Value`.
+        unsafe { core::mem::transmute(self) }
+    }
+
+    /// Rebuild a value from a (tag, payload) pair produced by [`Value::raw`]
+    /// or by generated code. A tag outside `0..=3` is not a `Value`; it is
+    /// read as `Num` rather than being allowed to become an invalid
+    /// discriminant.
+    #[inline]
+    pub const fn from_raw(r: ValueRaw) -> Value {
+        match r.tag {
+            TAG_ARR => Value::Arr(r.payload),
+            TAG_FUN => Value::Fun(r.payload),
+            TAG_BUILTIN => Value::Builtin(r.payload),
+            _ => Value::Num(Fx::from_raw(r.payload as i32)),
+        }
+    }
 }
 
 impl Default for Value {
@@ -639,31 +709,80 @@ pub struct BuiltinSig {
 /// [`Vm::call_builtin`]: `array` is the only builtin that ALLOCATES,
 /// twenty-three return one of their array arguments verbatim, and
 /// everything else returns a number.
-#[cfg(feature = "kinds")]
-pub fn builtin_sig(id: u16) -> BuiltinSig {
-    let name = match BUILTINS.get(id as usize) {
-        Some(b) => b.name,
+///
+/// **This function IS the table** (Gitea #642): it is a `const fn`, and
+/// `crate::jit::BUILTIN_ENTRIES[id].ret_kind` is initialised from it at
+/// compile time, so the inference, the verifier and the JIT's entry table
+/// cannot disagree about what a builtin returns. Being const is also why
+/// the arms are `str_eq` chains rather than a `match` on `&str` — string
+/// patterns are not const-evaluable on this toolchain (rustc 1.96).
+#[cfg(any(feature = "kinds", feature = "jit", feature = "dispatch-table"))]
+pub const fn builtin_sig(id: u16) -> BuiltinSig {
+    let i = id as usize;
+    if i >= BUILTINS.len() {
         // an id the decoder would already have rejected
-        None => return BuiltinSig { ret: SigRet::Dyn, writes: None },
-    };
-    let sig = |ret, writes| BuiltinSig { ret, writes };
-    match name {
-        "array" => sig(SigRet::NewArrNum, None),
-        // splat the caller's values into the array
-        "arrayReplace" => sig(SigRet::Arg(0), Some((0, SigWrite::ArgsFrom(1)))),
-        "arrayReplaceAt" => sig(SigRet::Arg(0), Some((0, SigWrite::ArgsFrom(2)))),
-        // canvasSet(buf, w, x, y, v) stores v and returns it
-        "canvasSet" => sig(SigRet::Arg(4), Some((0, SigWrite::ArgsFrom(4)))),
-        // return an array argument verbatim, writing only numbers into it
-        "arraySort" | "blur1D" | "feedback" | "arrayScale" | "blur2D" | "arrayAdd"
-        | "arraySub" | "arrayMix" | "fillNoise2D" | "fillNoise3D" | "stencil2D" => {
-            sig(SigRet::Arg(0), Some((0, SigWrite::Num)))
-        }
-        "curl2" => sig(SigRet::Arg(2), Some((2, SigWrite::Num))),
-        "hsv2rgb" | "rgb2hsv" | "curl3" => sig(SigRet::Arg(3), Some((3, SigWrite::Num))),
-        "mixColors" => sig(SigRet::Arg(7), Some((7, SigWrite::Num))),
-        _ => sig(SigRet::Num, None),
+        return BuiltinSig { ret: SigRet::Dyn, writes: None };
     }
+    let name = BUILTINS[i].name;
+    if str_eq(name, "array") {
+        BuiltinSig { ret: SigRet::NewArrNum, writes: None }
+    // splat the caller's values into the array
+    } else if str_eq(name, "arrayReplace") {
+        BuiltinSig { ret: SigRet::Arg(0), writes: Some((0, SigWrite::ArgsFrom(1))) }
+    } else if str_eq(name, "arrayReplaceAt") {
+        BuiltinSig { ret: SigRet::Arg(0), writes: Some((0, SigWrite::ArgsFrom(2))) }
+    // canvasSet(buf, w, x, y, v) stores v and returns it
+    } else if str_eq(name, "canvasSet") {
+        BuiltinSig { ret: SigRet::Arg(4), writes: Some((0, SigWrite::ArgsFrom(4))) }
+    // return an array argument verbatim, writing only numbers into it
+    } else if str_in(
+        name,
+        &[
+            "arraySort", "blur1D", "feedback", "arrayScale", "blur2D", "arrayAdd", "arraySub",
+            "arrayMix", "fillNoise2D", "fillNoise3D", "stencil2D",
+        ],
+    ) {
+        BuiltinSig { ret: SigRet::Arg(0), writes: Some((0, SigWrite::Num)) }
+    } else if str_eq(name, "curl2") {
+        BuiltinSig { ret: SigRet::Arg(2), writes: Some((2, SigWrite::Num)) }
+    } else if str_in(name, &["hsv2rgb", "rgb2hsv", "curl3"]) {
+        BuiltinSig { ret: SigRet::Arg(3), writes: Some((3, SigWrite::Num)) }
+    } else if str_eq(name, "mixColors") {
+        BuiltinSig { ret: SigRet::Arg(7), writes: Some((7, SigWrite::Num)) }
+    } else {
+        BuiltinSig { ret: SigRet::Num, writes: None }
+    }
+}
+
+/// `a == b` in a const context (rustc 1.96 has no const `PartialEq`).
+#[cfg(any(feature = "kinds", feature = "jit", feature = "dispatch-table"))]
+const fn str_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// `list.contains(&a)` in a const context — the `|`-pattern arms of
+/// [`builtin_sig`], spelled so they stay one readable list each.
+#[cfg(any(feature = "kinds", feature = "jit", feature = "dispatch-table"))]
+const fn str_in(a: &str, list: &[&str]) -> bool {
+    let mut i = 0;
+    while i < list.len() {
+        if str_eq(a, list[i]) {
+            return true;
+        }
+        i += 1;
+    }
+    false
 }
 
 /// Channels the per-pixel state buffer can hold (`setPixelState(i, ch, v)`
@@ -859,9 +978,12 @@ const CONST_ENTRY_COST: usize = 32;
 
 const MAX_DEPTH: usize = 48;
 const MAX_STACK: usize = 1024;
-const MAX_ARGS: usize = 16;
+/// Argument slots the interpreter marshals a builtin call into. The
+/// decoder caps `argc` at this (`MAX_ARGC`, `bytecode.rs`), and the JIT
+/// boxed-args scratch (docs/jit-design.md §3.3) is sized by it.
+pub const MAX_ARGS: usize = 16;
 /// Arg slots for the in-loop builtin fast path (the hot builtins take ≤ 3).
-const FAST_ARGS: usize = 4;
+pub(crate) const FAST_ARGS: usize = 4;
 /// PB's element ledger, oracle-bisected (fw 3.67, 2026-08-29): every array
 /// costs its length plus a 4-unit header against a 10,236-unit budget —
 /// equivalently a 40 KiB pool of 4-byte elements with 16-byte headers, 16
@@ -2869,7 +2991,7 @@ impl Vm {
     /// [`Vm::call_builtin`]); `call_builtin` delegates here first so the
     /// semantics live in exactly one place. `None` = not a fast builtin.
     #[inline(always)]
-    fn builtin_fast(
+    pub(crate) fn builtin_fast(
         &mut self,
         builtin: Builtin,
         args: [Value; FAST_ARGS],
@@ -2975,6 +3097,7 @@ impl Vm {
     /// actually executes. `builtin_cold` deliberately stays in flash.
     #[cfg_attr(feature = "iram-builtins", link_section = ".rwtext")]
     #[cfg_attr(feature = "iram-builtins", inline(never))]
+    #[cfg(not(feature = "dispatch-table"))]
     fn call_builtin(&mut self, prog: &Program, id: u16, argc: usize) -> Result<Value, VmError> {
         let no_site = |message: String| VmError {
             message,
@@ -3002,16 +3125,117 @@ impl Vm {
         };
         let mut args = [Value::default(); MAX_ARGS];
         let argc = self.pop_args_into(&mut args, argc);
+        self.builtin_ladder(prog, id, builtin, &args, argc)
+    }
+
+    /// The builtin ladder proper, entered with the arguments already
+    /// marshalled into the interpreter's `[Value; MAX_ARGS]` buffer:
+    /// [`Vm::builtin_fast`] (the in-loop arms, inlined here so the
+    /// semantics live in one place), then [`Vm::builtin_hot`], which falls
+    /// through to [`Vm::builtin_cold`].
+    ///
+    /// Split out of [`Vm::call_builtin`] for Gitea #642 so the JIT's
+    /// `generic` wrappers (`crate::jit`), which are handed their
+    /// arguments rather than popping them off the value stack, run EXACTLY
+    /// the arm the interpreter runs. `#[inline(always)]`: the interpreter's
+    /// path must come out of this refactor byte-identical.
+    #[inline(always)]
+    pub(crate) fn builtin_ladder(
+        &mut self,
+        prog: &Program,
+        id: u16,
+        builtin: Builtin,
+        args: &[Value; MAX_ARGS],
+        argc: usize,
+    ) -> Result<Value, VmError> {
         // `builtin_fast` reads at most the first four arguments and treats
-        // an index at or past `argc` as 0 — the same contract the old
-        // `&args[..argc]` slice had, so a call with more than FAST_ARGS
-        // arguments still resolves here rather than falling through to the
-        // `unreachable!` arm at the bottom of `builtin_cold`.
+        // an index at or past the argument count as 0 — the same contract
+        // the old `&args[..argc]` slice had, so a call with more than
+        // FAST_ARGS arguments still resolves here rather than falling
+        // through to the `unreachable!` arm at the bottom of `builtin_cold`.
         let fast: [Value; FAST_ARGS] = [args[0], args[1], args[2], args[3]];
         if let Some(v) = self.builtin_fast(builtin, fast, argc) {
             return Ok(v);
         }
-        self.builtin_hot(prog, id, builtin, &args, argc)
+        self.builtin_hot(prog, id, builtin, args, argc)
+    }
+
+    /// Test hook (Gitea #642): run the WHOLE interpreter `CallBuiltin`
+    /// path — the value-stack marshalling included — for one builtin id.
+    /// `crate::jit::tests` compares `BUILTIN_ENTRIES[id].generic` against
+    /// exactly this, which is why it pushes and pops rather than handing
+    /// the arguments over: the marshalling is half of what has to agree.
+    ///
+    /// `#[cfg(test)]`, so no shipped build carries it.
+    #[cfg(test)]
+    pub(crate) fn call_builtin_from_stack(
+        &mut self,
+        prog: &Program,
+        id: u16,
+        args: &[Value],
+    ) -> Result<Value, VmError> {
+        for &a in args {
+            self.stack.push(a);
+        }
+        let r = self.call_builtin(prog, id, args.len());
+        self.stack.clear();
+        r
+    }
+
+    /// The error a `Todo`/`Removed` tombstone raises — site-less, exactly
+    /// as [`Vm::call_builtin`] raises it, so the JIT's generic wrapper for a
+    /// tombstoned id is parity-testable against the interpreter.
+    ///
+    /// The message is DELIBERATELY duplicated from `call_builtin`'s own
+    /// tombstone arm rather than factored out of it: factoring it out was
+    /// measured to cost +48 B of app image (and 48 B of `.rwtext` on the
+    /// `iram-builtins` boards, where `call_builtin` lives in internal SRAM),
+    /// and this copy exists only in builds that carry the JIT table. The two
+    /// are held together by
+    /// `jit::tests::tombstoned_and_unimplemented_ids_raise_the_interpreters_error`,
+    /// which compares them string for string.
+    ///
+    /// `#[cold] #[inline(never)]`: unreachable through a loaded blob — the
+    /// decoder rejects the import and the compiler never emits one.
+    #[cfg(any(feature = "jit", feature = "dispatch-table"))]
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn builtin_unimplemented(name: &str) -> VmError {
+        VmError {
+            message: format!("builtin `{}` is not implemented yet", name),
+            fn_idx: u16::MAX,
+            pc: u32::MAX,
+            line: 0,
+            col: 0,
+            is_assert: false,
+        }
+    }
+
+    /// The `dispatch-table` variant of [`Vm::call_builtin`] (Gitea #642,
+    /// docs/jit-design.md §4): the same marshalling, but the arm is reached
+    /// through `crate::jit::BUILTIN_ENTRIES[id].generic` — one indirect
+    /// call into a per-id `extern "C"` wrapper — instead of walking the
+    /// three-tier ladder inline.
+    ///
+    /// **Off by default on every board.** #328 showed the interpreter's
+    /// tiers are an I-cache budget, and whether a table indirection beats
+    /// them is a question only the Seengreat can answer; until that A/B
+    /// runs, this exists so the shape is built, tested and size-measured,
+    /// not so anything ships through it.
+    #[cfg(feature = "dispatch-table")]
+    fn call_builtin(&mut self, prog: &Program, id: u16, argc: usize) -> Result<Value, VmError> {
+        let mut args = [Value::default(); MAX_ARGS];
+        let argc = self.pop_args_into(&mut args, argc);
+        let mut err: Option<VmError> = None;
+        let entry = &crate::jit::BUILTIN_ENTRIES[id as usize];
+        let mut ctx = crate::jit::JitCtx::for_builtin_call(self, prog, &mut err);
+        // SAFETY: `ctx` outlives the call; `args` is a live `[Value; 16]`
+        // and `argc <= MAX_ARGS`; the wrapper touches nothing else.
+        let ret = unsafe { (entry.generic)(&mut ctx, args.as_ptr(), argc as u32) };
+        if ctx.status != crate::jit::STATUS_OK {
+            return Err(err.expect("jit generic wrapper set status without an error"));
+        }
+        Ok(ret.to_value())
     }
 
     /// Tier 2 of the builtin ladder (Gitea #328): the ~30 builtins a real

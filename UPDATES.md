@@ -1,5 +1,107 @@
 # Update log
 
+## 2026-09-20 — JIT phase 1: the ABI is code now — pinned `Value`, `JitCtx`, the builtin entry table (#642)
+
+Phase 1 of the on-device JIT (#607, docs/jit-design.md). **No native code is
+emitted or executed by anything in this change.** What lands is the *contract*
+phase 2's emitter will compile against, pinned by `const` assertions and
+differentially tested against the interpreter on the host — plus the flat
+builtin-dispatch variant the design says is a hardware measurement, built and
+left off.
+
+**`Value`'s layout is now a contract** (§2.5, §11 answer 2). `#[repr(C, u32)]`
+with explicit discriminants `Num = 0, Arr = 1, Fun = 2, Builtin = 3`; `Fx`
+gains `#[repr(transparent)]` because the payload has to *be* the raw 16.16
+word. Eight bytes, four-byte aligned, `u32` tag at offset 0, payload at 4 —
+named as `vm::ValueRaw`, with `Value::raw()`/`from_raw()` and
+`TAG_NUM…TAG_BUILTIN`, and round-tripped through raw bytes per variant by
+test. docs/spec/vm.md §1 states it as a contract (and its `Fun(u16)` /
+`Builtin(u16)` rows were stale — both payloads are `u32`).
+
+It really was what rustc already picked: on `board-seengreat-hub75` the whole
+`luxel-core` text is **117,514 B before and after**, every symbol the same
+size, `Vm::run` byte-identical at 13,256 B. Only the linker's function order
+moved. Two risk-table rows in the design retire on that.
+
+**`JitCtx`** (`src/jit/ctx.rs`): `#[repr(C)]`, with a `pub const OFFSET_*` per
+field and `SIZEOF_JITCTX` — *the only things the emitter may read about it* —
+derived with `core::mem::offset_of!` and, for the 32-bit device layout,
+pinned by literal `const` assertions so a reorder is a build failure. Two
+deviations from §3.8, both documented in place: `err` is a
+`*mut Option<VmError>` pointing at a caller-owned slot (`VmError` owns a
+`String`, so inlining it would make every later offset rustc's choice), and
+`prog: *const Program` was ADDED because the generic wrappers run the
+interpreter's own arms, which need the constant pool, and `Vm` holds no
+`Program` (a program can be a borrowed flash slot).
+
+**`BUILTIN_ENTRIES: [BuiltinEntry; 188]`** (`src/jit/table.rs`), indexed by
+builtin id in `BUILTINS` order, with a `const` assertion holding the two
+lengths equal so an appended builtin without a table line fails the build.
+Per entry: a `generic` wrapper, a one-word `direct`, a `direct_sig`, and a
+`ret_kind`.
+
+- `generic` is `extern "C" fn(*mut JitCtx, *const Value, u32) -> RetDyn`,
+  where `RetDyn` is `#[repr(C)] { tag, payload }` — a `Value` by value in two
+  words. **Errors never travel in the return value**: a failing call sets
+  `ctx.status` and fills `*ctx.err`, so all 188 wrappers have one shape,
+  tombstones included (a `Removed`/`Todo` id raises the interpreter's own
+  "not implemented yet"). Each wrapper runs *literally* the arm the
+  interpreter runs: `Vm::builtin_ladder` was split out of `Vm::call_builtin`
+  (`#[inline(always)]`) and the wrappers enter it with the interpreter's own
+  marshalling. On Xtensa each is a 23-byte thunk tail-calling one shared
+  body, so the table costs I-cache like one function rather than 188.
+- `direct` is the tier-1 numeric set of §3.5 on raw 16.16 words, keyed on the
+  `Builtin` so the aliases come along: `abs floor ceil round trunc frac sqrt
+  sin cos wave triangle` (N1), `min max mod square` (N2), `clamp mix` (N3),
+  `random prng time` (C1), `hsv rgb` (C3), plus `fract`/`lerp`/`hsv24`. On
+  the S3 `d_abs` is `entry / abs a2, a2 / retw.n`. It is a one-word
+  `#[repr(C)] union` rather than the `usize` the design wrote, because a
+  function pointer cannot be cast to an integer during const evaluation.
+- `ret_kind` is **derived from `vm::builtin_sig` at compile time** —
+  `builtin_sig` became a `const fn` for that — so the §2.3 signature table
+  stays the single source of truth and `kinds`/`jitlint` read it unchanged.
+
+**Interpreter-through-table: built, tested, and OFF.** A luxel-core
+`dispatch-table` feature routes `Vm::call_builtin` through
+`BUILTIN_ENTRIES[id].generic` instead of walking the three-tier ladder; the
+firmware exposes it as `EXTRA_FEATURES=dispatch-table`. The design says this
+is a measurement on the Seengreat (#328's I-cache lesson, #312 test 2b) and
+no Luxel hardware was reachable, so it ships off on every board — with the
+whole luxel-core suite including the library render gate passing with it ON,
+and the cost measured: **+8,288 B of app image** on `board-seengreat-hub75`
+(0.26 % of its slot). The A/B is the open item.
+
+**The Xtensa two-word return convention is answered by reading** (§7.1).
+`jit::lx_abi_probe_ret2` is a `#[no_mangle]` `extern "C" fn(i32,i32) -> Ret2`
+kept alive by a `#[used]` static — `#[no_mangle]` alone does not survive
+`--gc-sections`, and the first S3 build dropped it. In the S3 image it is
+`entry a1,32 / add.n a8,a3,a2 / xor a3,a3,a2 / mov.n a2,a8 / retw.n`: both
+words in `a2:a3`, no `sret` pointer. The `generic` thunks agree
+(`callx8 / mov.n a2,a10 / mov.n a3,a11 / retw.n`). Phase 2 still owes the
+checked-in disassembly assertion.
+
+**Tests.** `src/jit/tests.rs` (inside the crate, because the interpreter path
+it compares against is private) calls every one of the 188 ids through
+`generic` at every arity 0..=`MAX_ARGS` with mixed-kind arguments and compares
+against the interpreter's own `CallBuiltin` path — return value, error message,
+error site, and every piece of VM state a builtin can touch (the brush, the
+plot coordinate, the arena charge, the globals). **Nothing is skipped**: the
+stateful builtins are deterministic functions of VM state and both sides start
+from the same freshly seeded VM, which is why the harness builds a new VM per
+call. Every `direct` entry is swept against its own `generic` over the `Fx`
+extremes, ±1, ±0.5 and zero (5,625 comparisons). `tests/jitabi.rs` checks the
+public surface the emitter is allowed to read; `tests/abi_probe.rs` the
+two-word return.
+
+**Sizes** (app image, before → after): `board-c6-devkit` + `hosted-ui`
+1,026,752 → 1,026,752; `board-pixelblaze-v3` 1,020,848 → 1,020,848;
+`board-seengreat-hub75` 985,632 → 985,632. **Zero on every board** — the
+firmware takes luxel-core with `default-features = false` and never names
+`jit`, and the `Value` repr moved nothing. Getting the last 48 B out took
+leaving `call_builtin`'s tombstone message where it was rather than factoring
+it out (it is `.rwtext` on the `iram-builtins` boards); the duplicate copy in
+`Vm::builtin_unimplemented` is held to it by test.
+
 ## 2026-09-20 — The six callback builtins become a pattern-language prelude (#626)
 
 `arrayForEach`, `arrayMutate`, `arrayMapTo`, `arrayReduce`, `arraySortBy` and

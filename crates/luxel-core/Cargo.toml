@@ -10,7 +10,7 @@ allocator-api2 = { version = "0.3", default-features = false, features = ["alloc
 logos = { version = "0.15", default-features = false, features = ["export_derive"], optional = true }
 
 [features]
-default = ["frontend", "panel", "kinds"]
+default = ["frontend", "panel", "kinds", "jit"]
 # The lexer/parser/compiler. Off = execute-only builds (device firmware):
 # patterns arrive as LXBC bytecode and the frontend never gets linked.
 frontend = ["dep:logos"]
@@ -28,6 +28,26 @@ panel = []
 # section, which the decoder does whether or not this is on. Turning it on
 # costs the inference, the verifier and their error strings.
 kinds = []
+# The JIT's ABI surface (Gitea #642, docs/jit-design.md §3.2/§3.8/§4):
+# `JitCtx`, the `BuiltinEntry` table and the `RetDyn` return shape. NO
+# emitter and no native code — phase 1 ships the layout, `const`-asserted
+# and differentially tested against the interpreter on the host. Implies
+# `kinds`: the table's `ret_kind` column IS `vm::builtin_sig`, evaluated at
+# compile time, which keeps the inference and the JIT from disagreeing.
+#
+# ON by default, like `kinds`, so the browser wasm, the CLI and every
+# `cargo test` carry it. The FIRMWARE depends on luxel-core with
+# `default-features = false` and does not name it, so a board with no
+# backend pays nothing for the table.
+jit = ["kinds"]
+# Route the interpreter's `CallBuiltin` through `BUILTIN_ENTRIES[id].generic`
+# instead of walking the three-tier ladder inline (docs/jit-design.md §4).
+# OFF EVERYWHERE and meant to stay that way until the Seengreat A/B says
+# otherwise: #328 showed the tiers are an I-cache budget, and whether one
+# indirect call through a table beats them is a measurement, not an opinion.
+# Does NOT imply `jit` — the firmware A/B build must carry the table and
+# nothing else, so the module compiles under either feature.
+dispatch-table = []
 depth-probe = []
 # Dynamic opcode/bigram/builtin counters in the VM loop (`luxel bench
 # --profile`, tools/profile-library.mjs). Host tooling only: the firmware
