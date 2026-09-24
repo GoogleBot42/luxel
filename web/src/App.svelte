@@ -164,6 +164,14 @@
     }
     editing = false;
     if (r.page === "scenes") {
+      // …but only where the tab exists: a `#/scenes` link opened against a
+      // strip console lands on Patterns, the way `#/settings` does in the
+      // playground, rather than on a screen that has no fixture to draw on.
+      if (!scenesReady) {
+        sceneEditing = false;
+        tab = "patterns";
+        return;
+      }
       tab = "scenes";
       sceneId = r.id ?? "";
       sceneEditing = sceneId !== "";
