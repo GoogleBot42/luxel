@@ -23,7 +23,13 @@ paths:
   normal standard — took `board-pixelblaze-v3` from 24,708 B to 24,164 B and
   failed the 24,576 B floor (2026-09-24, #484). The fix was to allocate the
   table on first use instead; prefer that to shrinking a board's heap
-  whenever the data is optional. Measure, don't estimate: v0.1.31-33
+  whenever the data is optional. **Adding an HTTP ROUTE costs `.stack` too**:
+  the web task's future is a `.bss` static replicated
+  `server::WEB_TASK_POOL_SIZE` times and sized by the largest arm of the route
+  table, so four new arms grew `web_task::POOL` by 1,224 B on pixelblaze-v3
+  (2026-09-24, #478). Factoring an arm into its own `async fn` does NOT help
+  (measured: 0 bytes) — the only levers are `STATICS_RESERVE` and the
+  per-chip `heap_allocator!` in `main.rs`. Measure, don't estimate: v0.1.31-33
   shipped an estimated stack size that was well above the real, measured one,
   and it panicked in production.
   **Measure the BASELINE too, and on the board you are shipping to.** On the
@@ -73,6 +79,17 @@ paths:
   Validate the count against the writer's own cap and `try_reserve`; see
   `patterns::read_source`. This is the same class v0.1.25's "fallible
   everything" sweep fixed elsewhere — check for it in any new read path.
+- **Nothing on the RENDER path may allocate infallibly — including code you
+  did not write.** `luxel-core` is `no_std` + `alloc` and uses plain
+  `Vec::resize`/`extend_from_slice`, which panic (i.e. reboot the device)
+  when the heap is short. When the firmware drives a core structure that
+  allocates lazily, budget it in `luxel_core::budget` BEFORE the frame that
+  makes the allocation, the way `scenes::build_runtime` reserves
+  `budget::compositor_scratch` before it builds any engine. The compositor's
+  12 KB text scratch took the Seengreat panel down exactly this way on
+  2026-09-24 — `memory allocation of 2688 bytes failed`, one frame after the
+  engine AND its JIT compile had both been accepted with heap to spare
+  (Gitea #702). The post-build `RUNTIME_FLOOR` check cannot see it.
 - **A response body sized by the pixel count is a big allocation on a small
   heap.** At 4096 px a frame is 12 KB, and a heavy pattern can leave under
   30 KB free — so `GET /api/pixels` must be ONE *fallible* allocation, and it

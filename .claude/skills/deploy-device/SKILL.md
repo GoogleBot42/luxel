@@ -279,6 +279,19 @@ pre-authorized per CLAUDE.md — no need to ask before pushing.
 
 ## Failure modes
 
+- **`curl: (7) Failed to connect … after 10 ms` on the OTA POST while a
+  `GET /api/status` immediately before it succeeded** — the device is fine,
+  the SYN was refused. Seen repeatedly on the Seengreat panel 2026-09-24:
+  1–3 failures in a row, then a clean push. Retry with ~45 s between
+  attempts; do not start diagnosing the image or the network. Same family:
+  two `curl`s issued back to back with no gap make the second return an
+  EMPTY body and exit 0 — space device requests a second or two apart, and
+  never read one empty response as "the POST did nothing".
+- **A reboot resumes the resume RECORD, not what was on screen.** After a
+  `POST /api/reboot` or an OTA the device comes back on whatever `resume.rs`
+  last persisted — seen coming back on the built-in Rainbow, and on
+  `_Fairies`, when something else was live. Re-activate what you meant to
+  leave running and confirm with `GET /api/pattern`.
 - **Push hangs or times out**: confirm the device is actually reachable
   first (`curl /api/status`) — the dev unit in particular is not always
   powered.
