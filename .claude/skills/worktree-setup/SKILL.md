@@ -58,9 +58,10 @@ these before trusting any build/test failure as a real regression.
    never reads it (it's written by `tools/corpus/report.mjs` and consumed only by
    docs/narrative, not by any build step).
 2. `web/public/` (gitignored, holds build outputs `luxel.wasm`, `gallery.json`,
-   `pixelblaze-library.json`) — absent in a fresh worktree, and `npm run wasm`'s `cp`
-   step fails hard because the destination directory doesn't exist. Fix: `mkdir -p
-   web/public` before the first `npm run wasm` / `npm run dev` / `npm run build`.
+   `pixelblaze-library.json`) — absent in a fresh worktree, and `gen-gallery.mjs`
+   writes into it without creating it. Fix: `mkdir -p web/public` before the first
+   `npm run dev` / `npm run build`. (`npm run wasm` itself stopped caring when it
+   became `web/tools/build-wasm.sh`, which mkdirs — Gitea #683.)
 3. `web/node_modules` — run `npm ci` inside `nix develop` (bare shells have no `node`).
 3b. `firmware/creds.env` (gitignored WiFi creds) — required by any firmware build
    (`build-esp32.sh` reads it). Copy it from the main checkout:
@@ -144,7 +145,7 @@ these before trusting any build/test failure as a real regression.
   can be genuinely absent there while it is on `origin/master` (the
   `seengreat-panel` skill, that day). Read guidance from YOUR worktree — the
   same tree you build from.
-- `npm run wasm` failing with an ENOENT on the `cp` into `web/public/` — you skipped step 2.
+- `gen-gallery.mjs` failing with an ENOENT writing `web/public/gallery.json` — you skipped step 2.
 - e2e gallery/tile-count assertions failing — almost always a stale `web/dist` (rerun
   `npm run build` after any `library/`, `corpus/`, or `gen-gallery.mjs` change), not a
   missing `corpus/` symlink.
