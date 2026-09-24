@@ -4117,6 +4117,148 @@ try {
     }
   }
 
+  // ---- Scenes on a console (Gitea #480; mockups S6 · S6c · S7) ----------
+  //
+  // D10, the visibility rule: a matrix console ALWAYS has the Scenes tab, a
+  // strip console never does. The main mirror here is a 120 px strip, so it
+  // is the negative case; a `--board panel` mirror beside it is the positive
+  // one.
+  //
+  // The rest is the #563 live-push discipline applied to a scene: editing the
+  // scene the device is SHOWING reaches it as it happens, editing any other
+  // one reaches it only on Save. That is the half a computed-style frame
+  // cannot see, so it is asserted here.
+  {
+    check(
+      "scenes: a strip console has no Scenes tab (D10)",
+      (await page.$('[data-role="tab-scenes"]')) === null,
+    );
+
+    const SC_PORT = E2E.mirror.devScenes; // E2E_PORT + 51
+    const SC = `http://127.0.0.1:${SC_PORT}`;
+    const scDev = spawn(
+      "../target/debug/luxel",
+      ["serve", ...NO_NETIN, "--port", String(SC_PORT), "--board", "panel", "--pixels", "4096"],
+      { stdio: ["ignore", "pipe", "inherit"] },
+    );
+    await new Promise((resolve, reject) => {
+      scDev.stdout.on("data", (d) => String(d).includes("luxel serve:") && resolve());
+      scDev.on("exit", () => reject(new Error("scenes mirror died")));
+      setTimeout(() => reject(new Error("scenes mirror start timeout")), 30000);
+    });
+    process.on("exit", () => scDev.kill());
+    const scPage = await browser.newPage();
+    try {
+      await scPage.setViewport({ width: 1400, height: 950 });
+      await gotoConsole(scPage, SC);
+      await scPage.waitForSelector('[data-role="tab-scenes"]', { timeout: 15000 });
+      check("scenes: a matrix console always has the Scenes tab (D10)", true);
+
+      await scPage.click('[data-role="tab-scenes"]');
+      await scPage.waitForSelector('[data-role="scenes-empty"]', { timeout: 10000 });
+      check("scenes: an empty matrix console shows the empty state, not a grid (S6c)", true);
+      await scPage.screenshot({ path: `${shotDir}/device-e2e-scenes-empty.png` });
+
+      // create one, give it a colour layer, and save it to the device
+      await scPage.$eval('[data-role="new-scene"]', (el) => el.click());
+      await scPage.waitForSelector('[data-role="scene-editor-view"]:not([hidden])', {
+        timeout: 10000,
+      });
+      await sleep(800);
+      await scPage.click('[data-role="scene-add-layer"]');
+      await sleep(300);
+      await scPage.click('[data-role="scene-add-color"]');
+      await sleep(500);
+      await scPage.click('[data-role="scene-save"]');
+      await sleep(900);
+      const stored = await fetch(`${SC}/api/scenes`).then((r) => r.json());
+      check(
+        "scenes: Save writes the record to the device",
+        stored.scenes.length === 1 && stored.scenes[0].layers.length === 1,
+        JSON.stringify(stored.scenes?.[0]?.layers?.length),
+      );
+      check(
+        "scenes: the device reports the shared blob's budget",
+        stored.max === 3840 && stored.used > 0,
+        `${stored.used} of ${stored.max}`,
+      );
+
+      // NOT the running scene yet → an edit must not reach the device (#563)
+      const sceneId = stored.scenes[0].id;
+      await scPage.$eval('[data-role="scene-layer-name"]', (el) => {
+        el.value = "Quiet edit";
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      await sleep(700);
+      const quiet = await fetch(`${SC}/api/scenes/${sceneId}`).then((r) => r.json());
+      check(
+        "scenes: editing a scene the device is NOT showing touches nothing (#563)",
+        quiet.layers[0].name !== "Quiet edit",
+        quiet.layers[0].name,
+      );
+      const st = await scPage.$eval('[data-role="scene-save-state"]', (el) =>
+        (el.textContent ?? "").trim(),
+      );
+      check("scenes: an unsaved edit says so", st === "unsaved changes", st);
+      await scPage.click('[data-role="scene-save"]');
+      await sleep(800);
+
+      // play it, then edit again: now the device gets it as it happens
+      await scPage.click('[data-role="scene-overflow"]');
+      await sleep(300);
+      await scPage.click('[data-role="scene-play-device"]');
+      await sleep(1200);
+      const active = await fetch(`${SC}/api/scenes`).then((r) => r.json());
+      check(
+        "scenes: Play on device activates the scene",
+        active.active === sceneId,
+        String(active.active),
+      );
+      await scPage.$eval('[data-role="scene-layer-name"]', (el) => {
+        el.value = "Live edit";
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      await sleep(900);
+      const live = await fetch(`${SC}/api/scenes/${sceneId}`).then((r) => r.json());
+      check(
+        "scenes: editing the RUNNING scene live-pushes (#563)",
+        live.layers[0].name === "Live edit",
+        live.layers[0].name,
+      );
+      await scPage.screenshot({ path: `${shotDir}/device-e2e-scenes-editor.png` });
+
+      // the shared 3840 B blob is a budget the user has to be told about:
+      // fill it from outside and let the next save be refused
+      for (let i = 0; i < 40; i++) {
+        const body =
+          `S - Filler ${i}\n` +
+          "L color 0 0 0 0 normal 100 none fill 1\nN A very long layer name here\nK 112233\n";
+        const r = await fetch(`${SC}/api/scenes`, { method: "POST", body }).then((x) => x.json());
+        if (!r.ok) break;
+      }
+      // GROW the record — replacing a scene with one the same size fits the
+      // blob that already holds it, so the refusal needs another layer.
+      await scPage.click('[data-role="scene-add-layer"]');
+      await sleep(300);
+      await scPage.click('[data-role="scene-add-color"]');
+      await sleep(400);
+      await scPage.click('[data-role="scene-save"]');
+      await sleep(1000);
+      const bar = await scPage
+        .$eval('[data-role="api-error-bar"]', (el) => (el.textContent ?? "").trim())
+        .catch(() => "");
+      check(
+        "scenes: a full store is refused in the ONE error strip, with the numbers",
+        /shares 3,840 bytes of storage/.test(bar),
+        bar.slice(0, 120),
+      );
+      await scPage.screenshot({ path: `${shotDir}/device-e2e-scenes-full.png` });
+    } finally {
+      await scPage.close();
+      scDev.kill();
+    }
+  }
+
   // ---- §5.7 sweep: absent, never disabled (Gitea #529) ------------------
   //
   // The rule the console is built on: a control is ABSENT unless the thing it

@@ -1,5 +1,59 @@
 # Update log
 
+## 2026-09-24 — web: the Scenes page and the scene editor (#480)
+
+The web half of Phase B: a `Scenes` tab, a grid of live COMPOSITE thumbnails,
+and the three-column editor from mockups S7/S7b/S7d/S7e/S7f/S7g. `mockdiff`
+reads **0 deltas on all twelve named frames** (S5 · S6 · S6b · S6c · S6d · S7 ·
+S7b · S7d · S7e · S7f · S7g · S9), and on S1 with the five stale `allow`s that
+excused the missing tab deleted.
+
+**The tab's rule is D10, and it is the one tab not gated on "is there a
+device".** A scene needs a regular 2D grid and nothing else: a matrix console
+always has it (empty or not — S6c says what a scene is rather than showing an
+empty grid), a strip/3D/map console never does, and the playground always does
+because hiding it there would make the feature undiscoverable. The playground's
+page carries the S6b empty state whose one action sets the fixture.
+
+**`lib/scene.ts` is a faithful mirror of `luxel_core::scene`**, not a
+convenience shape: the same wire grammar, the same defaults omitted on
+serialize, the same `scene: line N: …` refusals, the same `/api/scenes` JSON
+and the same sprite tag. `web/tests/scene.test.mjs` pins it against the Rust
+unit tests' own fixtures byte for byte — the JSON one is `push_json`'s expected
+string, copied verbatim — so the browser can build a block the device parses
+and parse a block the device wrote.
+
+**The live-push rule is the pattern editor's (#563/#585), applied to a
+document that has no `dirty` flag of its own:** an edit reaches the device only
+while the scene being edited is the one the device is SHOWING; opening a scene,
+or editing any other one, touches nothing until Save. Pushes coalesce at 10 Hz,
+because dragging the marquee is a pointermove storm and each push is a whole
+record.
+
+**`#/scenes/<id>` is the first route with an argument.** `lib/router.ts` still
+refuses `?pattern=<id>` for the reason it always did — restoring it would
+re-activate a pattern on the hardware — and that reason is exactly why a scene
+id is safe: opening a scene does not run it.
+
+**Two Svelte traps, both found the hard way and both now commented at the
+site.** A `bind:this` into an `{#each}` item writes back through the array,
+which invalidates it, which re-runs the keyed block, which re-fires the
+binding — an unbreakable flush loop that froze the scene grid solid; the grid
+captures its canvases with an action into a non-reactive `Map` instead. And a
+`$:` that both reads and assigns the same variable is its own dependency
+(`stopPoll = stopPoll ?? startScenePoll()`), which is the same trap in the
+shape `.claude/rules/web.md` already warns about.
+
+`lib/sceneThumb.ts` is the one-shot composite other screens import (#482, the
+playlist rows); `lib/sceneRender.ts` holds the machinery — the wasm
+`Compositor` plus one engine per pattern/sprite layer and the host half of a
+text layer, since the compositor reads no wall clock. Harnesses: a Scenes
+section in `web/tools/e2e.mjs` (the tab, both empty states, add/reorder/hide,
+save and reload) and one in `device-e2e.mjs` (the tab only on a matrix console,
+create/save/activate, live-push on the running scene and silence on any other,
+and the store-full refusal in the one error strip). Mirror ports `+49`
+(mockdiff's scenes console) and `+51` (device-e2e's) are in `docs/tools.md`.
+
 ## 2026-09-24 — bundle diet: the .luxa archive is back to 12.2 % headroom (#683)
 
 The web asset bundle had quietly filled to **975,855 B** of the 983,040 B

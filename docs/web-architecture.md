@@ -139,6 +139,8 @@ it by name for Settings):
 | route | screen |
 |---|---|
 | `#/` | Patterns |
+| `#/scenes` | Scenes |
+| `#/scenes/<id>` | the scene editor, on that scene |
 | `#/playlist` | Playlist |
 | `#/settings` | Settings |
 | `#/editor` | the pattern editor |
@@ -161,6 +163,11 @@ document the editor holds is the working copy's business (restored from the
 autosave, or pulled from the device's running pattern). Putting the id in the
 URL means a refresh re-activates that pattern on the hardware, and a page
 refresh must never change what the LEDs are doing.
+
+`#/scenes/<id>` is the ONE route with an argument, and the reason above is
+exactly why it is allowed: opening a scene does not run it. Restoring that
+route changes nothing on the fixture, which is what lets a playlist row link
+straight at a scene (`App.openScene(id)`, Gitea #480).
 
 `App.svelte` is the only caller: `$: if (routing) syncUrl(currentPage)` pushes
 on a page change, `popstate` applies one, and boot applies the fragment AFTER
@@ -991,6 +998,109 @@ applies it by re-installing the Layout's projection triple with this pattern's
 axis substituted, then recompiling — `pixelCount` changes under an along-axis
 projection, and the engine reads it at init.
 
+## Scenes (`pages/Scenes.svelte` + `pages/SceneEditor.svelte`, Gitea #480)
+
+A scene is an ordered stack of layers drawn onto one frame. The RECORD, the
+blend kernels and the sprite format live in `luxel-core`
+(`docs/spec/scenes.md`); the web's job is to build that record, show what it
+will look like, and push it.
+
+### Where the tab comes from (D10, proposal §5.4c)
+
+`Scenes` is the one tab NOT gated on "is there a device" — it needs a regular
+2D grid to draw on and nothing else:
+
+* **console** — strictly the DEVICE's Layout kind
+  (`uiLayoutKind($deviceLayoutWire.kind, $layout.dims) === "matrix"`). A strip,
+  3D or custom-map board never shows it; an empty matrix always does, and the
+  page says what a scene is instead of showing an empty grid (mockup S6c).
+* **playground** — always. Hiding it there would make the feature
+  undiscoverable, so the page carries the S6b empty state whose one action —
+  `Preview as a 64×64 matrix` — sets the fixture.
+
+### Three files, three jobs
+
+| file | owns |
+|---|---|
+| `lib/scene.ts` | the WIRE codec: parse/serialize with the same defaults omitted and the same `scene: line N: …` refusals as `luxel_core::scene`, the `/api/scenes` JSON, and the sprite tag. Pure; pinned against the Rust fixtures by `web/tests/scene.test.mjs` |
+| `stores/scenes.ts` | the library — `/api/scenes` on a console, `localStorage` (`luxel.scenes`, the same wire blob) in the playground — plus the verbs and the live-push gate |
+| `lib/sceneRender.ts` | the wasm `Compositor` plus one engine per pattern/sprite layer and the host half of a text layer. `lib/sceneThumb.ts` is the one-shot form other screens import |
+
+### The live-push rule is the editor's, applied to a scene (#563/#585)
+
+An edit reaches the device **only while the scene being edited is the one the
+device is showing** (`shouldLivePush(id)`). Opening a scene, or editing any
+other one, touches nothing until Save. Pushes are coalesced to 10 Hz, because
+dragging the marquee is a pointermove storm and each push is a whole-record
+POST.
+
+### The editor's three columns (mockups S7 · S7b · S7d · S7e · S7f · S7g)
+
+`pages/SceneEditor.svelte` is the THIRD full-screen screen, a peer of the
+pattern editor and the map editor; its `<main>` carries
+`data-role="scene-editor-view"`, because all three are mounted at once and an
+unscoped harness selector would silently resolve to the pattern editor's.
+
+* **LAYERS** (`components/scene/LayerList.svelte`) — top = front, so the list
+  is the reverse of the wire and translates indices at its own edge. Drag to
+  reorder (the destination is a 2px accent rule between rows; the list never
+  reflows under the pointer), the eye to hide, click to select. Visibility
+  lives HERE and never as a checkbox in the inspector.
+* **PREVIEW** (`components/scene/SceneStage.svelte`) — the composite in the
+  device's shape, the selected layer's box as a dashed marquee you can drag
+  and resize pixel-snapped, and the frame-cost line with its meter. The cost
+  line reads `caps.layers`, never a constant. It does NOT mount
+  `components/Preview.svelte`: that one is the pattern editor's and already
+  appears twice in the DOM.
+* **INSPECTOR** — one component per type (`PatternInspector`, `TextInspector`,
+  `SpriteInspector`, `ColorInspector`, all ending in the shared `StyleTail`).
+  *Transparent* is a key on which pixels count and is shown only under
+  `Blend = Normal`; under any other blend the row is GONE, not greyed (S7g).
+
+### Two Svelte traps this screen found
+
+* **`bind:this` into an `{#each}` item is a flush loop.** Writing back through
+  the array invalidates it, which re-runs the keyed block, which re-fires the
+  binding. It froze the scene grid solid. `components/scene/SceneGrid.svelte`
+  captures its canvases with an ACTION into a non-reactive `Map` instead.
+* **A `$:` that both reads and assigns the same variable is its own
+  dependency** (`stopPoll = stopPoll ?? startScenePoll()`,
+  `rafId = rafId || requestAnimationFrame(tick)`). Both are `onMount` now.
+
+### Its `data-role`s
+
+Page: `scenes-panel`, `scenes-lede`, `new-scene`, `scenes-empty`,
+`scenes-empty-fixture`, `scenes-preview-as-matrix`, `scenes-grid`,
+`scene-tile` (`data-scene`), `scene-tile-play`, `scene-tile-edit`,
+`scene-tile-edit-link`, `scene-tile-menu`, `scene-tile-menu-popup`,
+`scene-menu-play`/`-edit`/`-duplicate`/`-delete`, `scene-tile-name`,
+`scene-tile-layers`, `scene-playing`.
+
+Editor: `scene-editor-view`, `scene-editor-header`, `scene-editor-back`,
+`scene-name`, `scene-name-input`, `scene-save-state`, `scene-save`,
+`scene-overflow`, `scene-menu`, `scene-play-device`, `scene-duplicate`,
+`scene-delete`; `scene-layers`, `scene-layer` (`data-layer`),
+`scene-layer-grip`, `scene-layer-eye`, `scene-layer-pick`, `scene-drop`,
+`scene-add-layer`, `scene-add-menu`,
+`scene-add-pat`/`-text`/`-sprite`/`-color`; `scene-preview`,
+`scene-preview-dims`, `scene-pause`, `scene-stage`, `scene-marquee`,
+`scene-handle-nw`/`-ne`/`-sw`/`-se`, `scene-cost`; `scene-inspector`,
+`scene-layer-name`, `scene-pattern`, `scene-pattern-name`,
+`scene-pattern-shape`, `scene-pattern-change`, `scene-controls`,
+`scene-controls-label`, `scene-ramp`, `scene-ramp-stops`, `scene-ramp-stop`,
+`scene-ramp-edit`, `scene-ramp-editor`,
+`scene-ramp-color`/`-pos`/`-add`/`-remove`/`-amount`/`-clear`, `scene-box`
+(+`-x`/`-y`/`-w`/`-h`), `scene-fit`, `scene-blend`, `scene-key`,
+`scene-key-fixed`, `scene-opacity`, `scene-opacity-value`,
+`scene-delete-layer`,
+`scene-text-fixed`/`-clock`/`-slot`/`-lit`/`-fmt`/`-font`/`-color`/`-align`/`-scroll`/`-speed`,
+`scene-align-l`/`-c`/`-r`, `scene-wash-color`, `scene-sprite-size`,
+`scene-sprite-frames`, `scene-sprite-change`, `scene-sprite-fit`.
+
+The ONE legal disabled control on this screen is `scene-add-pat` at
+`caps.layers`, and it carries `data-reason` with the same words the reason
+line under it shows (D4).
+
 ## The Settings page (`pages/Settings.svelte`, Gitea #469)
 
 Proposal §5.3/§5.3b/§5.4d/§5.7, mockups S3, S3b–S3k. Nine equal-weight cards
@@ -1548,6 +1658,13 @@ inferring it from a screenshot.
 `saveToLocalLibrary`, `deleteFromLocalLibrary`, `findSaved`, `startAutosave`,
 `stopAutosave`, `loadWorkingCopy`, `compileToBytecode`, `parseEpe`,
 `exportEpe`, `encodeShare`, `decodeShare`.
+
+`stores/scenes.ts` — `scenes`, `activeSceneId`, `sceneBytes`, `layerCap`,
+`sceneSaving`, `refreshScenes()`, `sceneById()`, `saveScene()`,
+`deleteScene()`, `duplicateScene()`, `activateScene()`, `livePushScene()`,
+`shouldLivePush()`, `cancelLivePush()`, `startScenePoll()`, `newScene()`,
+`randomSceneId()`, `nextCopyName()`, `isSceneId()`, `FALLBACK_LAYER_CAP`.
+See **Scenes** above.
 
 `stores/notify.ts` — `notes`, `note()`, `clearNote()`, `noteStore()`,
 `banners`, `setBanner()`, `clearBanners()`, `apiError`, `reportApiError()`,

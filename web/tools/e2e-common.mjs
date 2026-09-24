@@ -62,6 +62,8 @@ export const PORT = {
     staleStore: p(46), // device-e2e: --stale-store mirror for the self-heal (#643)
     jitNative: p(47), // device-e2e: --jit native, the #658 marker
     jitInterp: p(48), // device-e2e: --jit interp:REASON, the #658 refusal strip
+    mdScenes: p(49), // mockdiff: 64x64 HUB75 console seeded with SCENES (S6, S6d, S7…)
+    devScenes: p(51), // device-e2e: panel mirror for the scenes section (#480)
   },
   /** sync-e2e's UDP beacon group port. */
   sync: p(42),

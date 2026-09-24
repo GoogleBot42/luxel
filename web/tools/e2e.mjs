@@ -162,9 +162,16 @@ try {
   check("has a New pattern button", (await page.$('[data-role="new-pattern"]')) !== null);
   check("the examples dropdown is gone", (await page.$('[data-role="pattern-picker"]')) === null);
   // One Patterns tab (#467): the library / corpus / saved split is a source
-  // control on the page, not a tab set. The playground has no other tab.
+  // control on the page, not a tab set. Scenes joined it in the playground
+  // (D10, #480) — it needs a 2D fixture, not a device, and hiding it here
+  // would make the feature undiscoverable. Playlist and Settings still need
+  // hardware and are still absent.
   const tabs = await page.$$eval('[data-role="tabs"] .tab', (e) => e.map((x) => x.textContent.trim()));
-  check("the playground's only tab is Patterns", tabs.length === 1 && tabs[0] === "Patterns", tabs.join(","));
+  check(
+    "the playground's tabs are Patterns and Scenes",
+    tabs.join(",") === "Patterns,Scenes",
+    tabs.join(","),
+  );
   const segs = await page.$$eval('[data-role="patterns-sources"] button', (e) =>
     e.map((x) => x.textContent.replace(/\s+/g, " ").trim()),
   );
@@ -1466,6 +1473,165 @@ try {
   );
   await page.screenshot({ path: `${shotDir}/e2e-tiles-lattice.png` });
   await previewAs(page, "auto");
+
+  // ── Scenes, the playground half (Gitea #480; mockups S6b · S6c · S7 · S9) ──
+  //
+  // D10: the tab is ALWAYS here, because hiding it in the playground would
+  // make the feature undiscoverable — the page carries the empty state that
+  // sets the fixture instead. The library is a localStorage blob in the same
+  // WIRE FORMAT the device stores, so what survives a reload here is exactly
+  // what a device would have taken.
+  {
+    await page.click('[data-role="editor-back"]').catch(() => {});
+    await sleep(400);
+    check(
+      "scenes: the tab is present in the playground",
+      (await page.$('[data-role="tab-scenes"]')) !== null,
+    );
+
+    // A named state: under Auto the Layout follows whatever pattern the
+    // editor happens to hold, so SAY what the fixture is rather than inherit
+    // the previous section's — the empty state below is about not having a
+    // 2D one.
+    await previewAs(page, "strip", { px: 60 });
+    await page.click('[data-role="tab-scenes"]');
+    await sleep(700);
+    check(
+      "scenes: no 2D fixture → the empty state that sets one (S6b)",
+      (await page.$('[data-role="scenes-empty-fixture"]')) !== null,
+    );
+
+    await page.click('[data-role="scenes-preview-as-matrix"]');
+    await sleep(900);
+    check(
+      "scenes: the empty state's one action makes the fixture a matrix (S6c)",
+      (await page.$('[data-role="scenes-empty"]')) !== null,
+    );
+    await page.screenshot({ path: `${shotDir}/e2e-scenes-empty.png` });
+
+    // `+ New scene` creates one and opens the editor ON it — the route
+    // carries the id, because opening a scene does not run it (lib/router.ts)
+    await page.$eval('[data-role="new-scene"]', (el) => el.click());
+    await sleep(1000);
+    check(
+      "scenes: + New scene opens the editor on #/scenes/<id>",
+      /#\/scenes\/[0-9a-f]{8}$/.test(page.url()),
+      page.url(),
+    );
+
+    // Add layer ▾ — text then colour. TOP = FRONT, so the last one added is
+    // the FIRST row and the wire index the row carries counts the other way.
+    for (const role of ["scene-add-text", "scene-add-color"]) {
+      await page.click('[data-role="scene-add-layer"]');
+      await sleep(300);
+      await page.click(`[data-role="${role}"]`);
+      await sleep(500);
+    }
+    // The TYPE badges, not `data-layer`: the badge says which layer a row IS,
+    // while `data-layer` is its wire index — and with two layers the indices
+    // read `1,0` whichever way round the stack is.
+    const kinds = () =>
+      page.$$eval('[data-role="scene-editor-view"] [data-role="scene-layer"] .ty', (els) =>
+        els.map((e) => e.textContent.trim()).join(","),
+      );
+    check("scenes: the layer list is top = front", (await kinds()) === "▭,T", await kinds());
+
+    // the eye hides a layer; the row keeps its place and its metadata says so
+    await page.click('[data-role="scene-layer"][data-layer="0"] [data-role="scene-layer-eye"]');
+    await sleep(400);
+    const hidden = await page.$eval(
+      '[data-role="scene-layer"][data-layer="0"] .meta2',
+      (el) => (el.textContent ?? "").trim(),
+    );
+    check("scenes: the eye hides a layer and the row reads `hidden`", hidden === "hidden", hidden);
+    await page.click('[data-role="scene-layer"][data-layer="0"] [data-role="scene-layer-eye"]');
+    await sleep(300);
+
+    // selection links the list, the marquee and the inspector, and nothing
+    // else (mockups.html :1285-87)
+    await page.click('[data-role="scene-layer"][data-layer="0"] [data-role="scene-layer-pick"]');
+    await sleep(400);
+    check(
+      "scenes: selecting a text layer mounts the text inspector",
+      (await page.$('[data-role="scene-text-fixed"]')) !== null,
+    );
+    check(
+      "scenes: the selected layer's box is the marquee on the stage",
+      (await page.$('[data-role="scene-marquee"]')) !== null,
+    );
+
+    // drag the bottom row to the top: the destination is a 2px accent rule
+    // BETWEEN rows, and the list must not reflow under the pointer (S7e)
+    await page.evaluate(() => {
+      const v = document.querySelector('[data-role="scene-editor-view"]');
+      const rows = [...v.querySelectorAll('[data-role="scene-layer"]')];
+      const g = rows[1].querySelector('[data-role="scene-layer-grip"]');
+      const top = rows[0].getBoundingClientRect();
+      const o = { bubbles: true, pointerId: 1, pointerType: "mouse", isPrimary: true, buttons: 1 };
+      g.dispatchEvent(
+        new PointerEvent("pointerdown", { ...o, clientX: top.left + 6, clientY: top.bottom + 4 }),
+      );
+      g.dispatchEvent(
+        new PointerEvent("pointermove", { ...o, clientX: top.left + 6, clientY: top.top + 2 }),
+      );
+    });
+    await sleep(250);
+    check(
+      "scenes: a drag lifts the row and shows the drop rule",
+      (await page.$('[data-role="scene-layer"].drag')) !== null &&
+        (await page.$('[data-role="scene-drop"]')) !== null,
+    );
+    await page.screenshot({ path: `${shotDir}/e2e-scenes-drag.png` });
+    await page.evaluate(() => {
+      const v = document.querySelector('[data-role="scene-editor-view"]');
+      const g = v.querySelector('[data-role="scene-layer"].drag [data-role="scene-layer-grip"]');
+      g.dispatchEvent(
+        new PointerEvent("pointerup", { bubbles: true, pointerId: 1, pointerType: "mouse" }),
+      );
+    });
+    await sleep(400);
+    const reordered = await kinds();
+    check("scenes: the drag reordered the stack", reordered === "T,▭", reordered);
+
+    // Save, reload, and see the record come back — through the same wire
+    // block a device would have stored
+    await page.click('[data-role="scene-save"]');
+    await sleep(700);
+    const state = await page.$eval('[data-role="scene-save-state"]', (el) =>
+      (el.textContent ?? "").trim(),
+    );
+    check("scenes: saving settles the save state", state === "saved", state);
+    const wire = await page.evaluate(() => localStorage.getItem("luxel.scenes") ?? "");
+    check(
+      "scenes: the playground stores the WIRE block, not JSON",
+      /^S [0-9a-f]{8} .*\nL (text|color) /m.test(wire),
+      wire.slice(0, 60),
+    );
+
+    await page.reload({ waitUntil: "networkidle2" });
+    await sleep(1800);
+    const back = await page.$$eval(
+      '[data-role="scene-editor-view"] [data-role="scene-layer"]',
+      (els) => els.length,
+    );
+    check("scenes: a reload reopens the scene the route named", back === 2, String(back));
+    await page.screenshot({ path: `${shotDir}/e2e-scenes-editor.png` });
+
+    // back to the grid: the tile grid is the composite, and `3 layers` is the
+    // one piece of scene-specific metadata it carries (S6)
+    await page.click('[data-role="scene-editor-back"]');
+    await sleep(900);
+    const sub = await page.$eval('[data-role="scene-tile-layers"]', (el) =>
+      (el.textContent ?? "").trim(),
+    );
+    check("scenes: the tile says how many layers", sub === "2 layers", sub);
+    await page.screenshot({ path: `${shotDir}/e2e-scenes-grid.png` });
+
+    // leave the playground the way the later sections expect it
+    await page.click('[data-role="tab-patterns"]');
+    await sleep(500);
+    await previewAs(page, "auto");
+  }
 
   // ── §5.7 sweep on the playground's surfaces (Gitea #529) ──
   // Same invariant device-e2e asserts on the console: a control is ABSENT

@@ -24,6 +24,26 @@ paths:
   that ran its program on open showed "not run yet" every single time, while
   clicking Run — an event handler, i.e. its own flush — worked). Applies to a
   plain `let`, not just to stores (next bullet).
+- **A `$:` that both READS and ASSIGNS the same variable is its own
+  dependency, and re-runs forever.** `stopPoll = stopPoll ?? startPoll()` and
+  `rafId = rafId || requestAnimationFrame(tick)` are the shapes; both froze a
+  page solid in #480. Put the assignment in a function the block calls, or in
+  `onMount`.
+- **`bind:this` into an `{#each}` item is a flush loop.** `bind:this={t.canvas}`
+  inside `{#each tiles as t}` writes back through the array, which invalidates
+  `tiles`, which re-runs the keyed block, which re-fires the binding — the
+  scene grid was unkillably busy until the canvases were captured with an
+  ACTION (`use:tileCanvas={id}`) into a non-reactive `Map` instead (#480).
+- **A page polls only while it is `active`.** Every page stays MOUNTED and
+  `hidden` when another tab is open (docs/web-architecture.md), so a
+  `pollSubscribe` registered in `onMount` keeps asking the device forever from
+  behind whatever is on screen — through the two sockets the transport needs.
+  #480 shipped one for an afternoon and device-e2e's playlist section saw the
+  DOM lag the API because of it. Gate it on the `active` prop.
+- **`mockdiff.map.json`'s `nth` / `mockNth` are 0-based INDEXES**, not
+  ordinals (`mockdiff.mjs`: `all[e.nth ?? 0]`). An out-of-range one reports
+  `NOT FOUND: <selector>` rather than a delta, which reads like a bad
+  selector; an off-by-one silently measures the element next door and passes.
 - **The packed bundle is gated at 983,040 B and the margin is thin.** Every
   new page, component and dependency lands in the one `.luxa` archive that
   ships to every board (the `assets` partition, docs/boards.md), and

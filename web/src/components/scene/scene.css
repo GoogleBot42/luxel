@@ -1,0 +1,868 @@
+/* The scenes design system, element for element from the approved mockups
+   (docs/design/webui-v2/mockups.html, the "batch 2 · scenes" <style> block at
+   :1078 plus the batch-6 additions at :2609). Frames S6, S6b, S6c, S6d, S7,
+   S7b, S7d, S7e, S7f, S7g, S9 — `web/tools/mockdiff.mjs` compares these
+   computed values against that file, so a number here should be QUOTABLE from
+   it rather than approximated (Gitea #480, #538).
+
+   A plain .css import, like components/editor-frame.css: the scene inspector
+   hands markup to child components, and Svelte compiles slotted markup in the
+   PARENT's scope, so a component could not style what it was given.
+   `cssCodeSplit:false` folds this into the one inlined stylesheet (#92/#592).
+
+   Everything is scoped under `.scenes`, which both `pages/Scenes.svelte` and
+   `pages/SceneEditor.svelte` wear, so nothing here can reach a settings card
+   or a gallery tile that happens to share a class name. */
+
+/* ---------- the three columns (mock `.scene3`) ---------- */
+
+.scenes .scene3 {
+  display: flex;
+  align-items: stretch;
+  min-height: 0;
+}
+
+.scenes .lcol {
+  flex: none;
+  width: 260px;
+  padding: 14px 12px;
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+}
+
+.scenes .ccol {
+  flex: 1;
+  min-width: 0;
+  padding: 14px 16px;
+  overflow-y: auto;
+}
+
+.scenes .rcol {
+  flex: none;
+  width: 320px;
+  padding: 14px 16px;
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
+}
+
+/* the column headers reuse the editor rail's (`.rhead`/`.rdim`,
+   components/editor-frame.css) — same 8px gap, same mono dim */
+.scenes .rhead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.scenes .rdim {
+  min-width: 0;
+  color: var(--text-dim);
+  font: 11px/1 var(--mono);
+  white-space: nowrap;
+}
+
+.scenes .rhead .grp {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.scenes .spacer {
+  flex: 1;
+}
+
+/* ---------- the layer list (mock `.lrow`) ---------- */
+
+.scenes .lrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  margin-bottom: 2px;
+  border: none;
+  border-left: 2px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: 13px/1.45 var(--sans);
+  text-align: left;
+}
+
+.scenes .lrow:hover {
+  border-color: transparent;
+  border-left-color: transparent;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.scenes .lrow.sel,
+.scenes .lrow.sel:hover {
+  background: var(--accent-soft);
+  border-left-color: var(--accent);
+}
+
+/* a hidden layer keeps its place and its metadata; only the eye and the
+   opacity say so (S7e) */
+.scenes .lrow.off {
+  opacity: 0.45;
+}
+
+/* the row under the cursor: a lighter fill and a shadow, no rotation and no
+   placeholder gap — the list never reflows under the pointer (S7e) */
+.scenes .lrow.drag {
+  background: #242833;
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.6);
+}
+
+/* where it would land: a 2px accent rule BETWEEN rows (S7e) */
+.scenes .dropline {
+  height: 2px;
+  margin: 2px 0 2px 8px;
+  border-radius: 1px;
+  background: var(--accent);
+}
+
+.scenes .lrow .hnd {
+  flex: none;
+  width: 12px;
+  color: #555c6b;
+  font-size: 13px;
+  text-align: center;
+  cursor: grab;
+}
+
+.scenes .lrow .eye {
+  flex: none;
+  display: block;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-dim);
+  overflow: hidden;
+}
+
+.scenes .lrow .eye:hover {
+  border-color: transparent;
+  color: var(--text);
+}
+
+/* the single-glyph type badge: T text · ▦ sprite · ▤ pattern · ▭ color */
+.scenes .lrow .ty {
+  flex: none;
+  width: 14px;
+  text-align: center;
+  font: 11px/1 var(--mono);
+  color: var(--text-dim);
+}
+
+.scenes .lrow .nm2 {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scenes .lrow .meta2 {
+  font: 11px/1 var(--mono);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+/* ---------- Add layer ▾ (mock `.addwrap` / `.menu.full`) ---------- */
+
+.scenes .addwrap {
+  position: relative;
+  margin-top: 14px;
+}
+
+.scenes .addwrap .btn.primary {
+  width: 100%;
+  justify-content: center;
+}
+
+/* The add-layer menu spans the LAYERS column rather than the global 214px
+   (mock `.menu.full{left:0;right:0;width:auto}`). `components/Popover.svelte`
+   places it `fixed` off the button, so the span is a width: the column is
+   260px with 12px of padding either side. */
+.scenes .addwrap .menu {
+  width: 236px;
+}
+
+@media (max-width: 600px) {
+  /* stacked, the column is the viewport less its 16px padding */
+  .scenes .addwrap .menu {
+    width: calc(100vw - 32px);
+  }
+}
+
+/* D4's ONE deliberate disabled control: the layer budget, greyed WITH its
+   count and its reason (S7d). `data-reason` carries the same words. */
+.scenes .menu .mi.dis,
+.scenes .menu .mi.dis:hover {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  color: #5b6070;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.scenes .menu .mdim {
+  margin-left: auto;
+  font: 10px/1 var(--mono);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.scenes .menu .reason {
+  padding: 1px 10px 7px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--text-dim);
+  white-space: normal;
+}
+
+/* ---------- the stage (mock `.stage`) ---------- */
+
+.scenes .stage {
+  position: relative;
+  width: 460px;
+  line-height: 0;
+}
+
+.scenes .stage canvas {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  image-rendering: pixelated;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #000;
+  /* the marquee is dragged on the canvas; keep touch drags from scrolling */
+  touch-action: none;
+}
+
+/* the selected layer's box, dashed in the accent (S7) */
+.scenes .marq {
+  position: absolute;
+  border: 1px dashed var(--accent);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+  cursor: move;
+}
+
+.scenes .hdl {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  padding: 0;
+  border: none;
+  border-radius: 1px;
+  background: var(--accent);
+}
+
+.scenes .hdl:hover {
+  border-color: transparent;
+}
+
+/* the frame-cost meter under the cost line (mock `.budget`) */
+.scenes .budget {
+  max-width: 460px;
+  height: 4px;
+  margin-top: 7px;
+  border-radius: 2px;
+  background: #272c35;
+  overflow: hidden;
+}
+
+.scenes .budget i {
+  display: block;
+  height: 100%;
+  background: var(--warn);
+}
+
+/* ---------- the inspector (mock `.irow` …) ---------- */
+
+.scenes .irow {
+  display: grid;
+  grid-template-columns: 86px 1fr;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 11px;
+}
+
+.scenes .irow > * {
+  min-width: 0;
+}
+
+.scenes .irow.wide {
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+
+.scenes .irow.start {
+  align-items: start;
+}
+
+.scenes .irow.start .ilab {
+  padding-top: 7px;
+}
+
+.scenes .ilab {
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.scenes .irule {
+  height: 1px;
+  background: var(--border);
+  margin: 16px 0;
+}
+
+.scenes .hint {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-dim);
+}
+
+.scenes .dim {
+  color: var(--text-dim);
+}
+
+.scenes .tiny {
+  font-size: 12px;
+}
+
+.scenes .lnk {
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+/* a radio row inside the inspector (mock `.rrow`) — a button with a drawn
+   radio, the same idiom `components/PreviewAsChip.svelte` uses in a `.pop` */
+.scenes .rrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: 13px/1.45 var(--sans);
+  text-align: left;
+}
+
+.scenes .rrow:hover {
+  border-color: transparent;
+}
+
+.scenes .rrow .radio {
+  position: relative;
+  white-space: normal;
+  flex: none;
+  width: 13px;
+  height: 13px;
+  border: 1px solid #4d545f;
+  border-radius: 50%;
+}
+
+.scenes .rrow.on .radio {
+  border-color: var(--accent);
+}
+
+.scenes .rrow.on .radio::after {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/* ---------- the box row (mock `.boxrow`) ---------- */
+
+.scenes .boxrow {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.scenes .boxrow label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font: 11px/1 var(--mono);
+  color: var(--text-dim);
+}
+
+.scenes .boxrow .inp {
+  width: 46px;
+  height: 26px;
+  padding: 0 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+/* ---------- selects (mock `.sel`) ----------
+   The mockups fake a dropdown with a `<div class="sel">`; the app uses a real
+   `<select>`, which is the accessible control and the one a phone knows how
+   to open. Byte-for-byte the rule `web/src/settings/cards.css` uses — the two
+   chevrons must stay identical (.claude/rules/web.md). */
+
+.scenes select.sel {
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  height: 32px;
+  padding: 0 9px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background-color: var(--bg-inset);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='7' viewBox='0 0 10 7'%3E%3Cpath d='M1 1.5L5 5.5L9 1.5' fill='none' stroke='%238a90a0' stroke-width='1.4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  color: var(--text);
+  font: 13px/1 var(--sans);
+  white-space: nowrap;
+}
+
+.scenes select.sel.wide {
+  width: 100%;
+}
+
+.scenes select.sel.xs {
+  height: 26px;
+  padding: 0 7px 0 8px;
+  font-size: 12px;
+}
+
+.scenes select.sel:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ---------- the align segment (mock `.seg.sm`) ---------- */
+
+.scenes .seg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg-inset);
+}
+
+.scenes .seg > button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 14px;
+  border: none;
+  border-right: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font: 13px/1.45 var(--sans);
+}
+
+.scenes .seg > button:last-child {
+  border-right: 0;
+}
+
+.scenes .seg > button:hover {
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.scenes .seg > button.on {
+  background: var(--accent-soft);
+  color: var(--text);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.scenes .seg.sm > button {
+  height: 26px;
+  padding: 0 11px;
+  font-size: 12px;
+}
+
+/* ---------- the colour swatch button (mock `.swatchbtn`) ---------- */
+
+.scenes .swatchbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 26px;
+  padding: 0 9px 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-inset);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.scenes .swatchbtn i {
+  display: block;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+/* the destructive verb, alone at the bottom and far from Save (S7) */
+.scenes .btn.del {
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--error);
+}
+
+.scenes .btn.del:hover {
+  border-color: transparent;
+  filter: brightness(1.15);
+}
+
+/* ---------- the colour ramp (mock `.gradbar` / `.stoprow`, S7g) ----------
+   The same control Settings › Output › Palette has — one editor, two places
+   (§5.5). */
+
+.scenes .gradbar {
+  height: 22px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+
+.scenes .stoprow {
+  position: relative;
+  height: 12px;
+  margin-top: 4px;
+}
+
+.scenes .stopmk {
+  position: absolute;
+  top: 0;
+  width: 9px;
+  height: 9px;
+  margin-left: -5px;
+  padding: 0;
+  border-radius: 2px;
+  transform: rotate(45deg);
+  border: 1px solid rgba(255, 255, 255, 0.45);
+}
+
+.scenes .stopmk.on {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(232, 163, 61, 0.25);
+}
+
+/* ---------- the quiet projection row (mock `.projrow`, S2c/S7g) ---------- */
+
+.scenes .hairline {
+  height: 1px;
+  background: var(--border);
+  margin: 16px 0 12px;
+}
+
+/* ---------- the Scenes page ---------- */
+
+/* mockups.html `.pagebar`, except for its ground — Jeremy 2026-09-20: a page
+   bar follows the tab's own background, the mock paints this one strip the
+   darker `--bg` (the same deviation `pages/Patterns.svelte` carries). */
+.scenes .pagebar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* mock S6b/S6c `.empty`: one sentence, one primary, centred, no card */
+.scenes .empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  height: 212px;
+  text-align: center;
+}
+
+/* the tile grid — mock S6 `.tiles.c4`, S9 `.c5`, S6d `.c2` */
+.scenes .tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  padding: 20px;
+  align-content: start;
+}
+
+.scenes .tile {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  overflow: hidden;
+}
+
+.scenes .tile.playing {
+  box-shadow: 0 0 0 2px var(--ok);
+  border-color: transparent;
+}
+
+.scenes .thumb {
+  position: relative;
+  background: #000;
+  line-height: 0;
+}
+
+.scenes .face {
+  display: block;
+  position: relative;
+  width: 100%;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  line-height: 0;
+}
+
+.scenes .face:hover {
+  border-color: transparent;
+}
+
+.scenes .tile canvas {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  image-rendering: pixelated;
+}
+
+.scenes .meta {
+  padding: 8px 10px 10px;
+}
+
+.scenes .nm {
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.scenes .sub {
+  margin-top: 4px;
+  font: 11px/1.2 var(--mono);
+  color: var(--text-dim);
+}
+
+/* S6d: `Edit` as a small accent link under the name on a phone */
+.scenes .elink {
+  border-radius: 0;
+  display: none;
+  margin-top: 5px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.scenes .elink:hover {
+  border-color: transparent;
+}
+
+.scenes .pill {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(8, 14, 10, 0.82);
+  border: 1px solid rgba(95, 191, 122, 0.55);
+  color: var(--ok);
+  font: 11px/1 var(--sans);
+  pointer-events: none;
+}
+
+/* per-tile verbs on hover, exactly as a pattern tile has them (S1/§5.1) */
+.scenes .actions {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  background: linear-gradient(
+    to top,
+    rgba(10, 12, 15, 0.94),
+    rgba(10, 12, 15, 0.72) 60%,
+    transparent
+  );
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.scenes .tile:hover .actions,
+.scenes .tile:focus-within .actions {
+  opacity: 1;
+}
+
+.scenes .actions .btn {
+  background: rgba(28, 31, 38, 0.95);
+}
+
+/* the playground's Scenes grid is five up (S9) */
+.scenes.playground .tiles {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+@media (max-width: 1000px) {
+  .scenes .tiles,
+  .scenes.playground .tiles {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* ---------- mobile (D9; S6d, S7f) ---------- */
+
+@media (max-width: 600px) {
+  .scenes .tiles,
+  .scenes.playground .tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 12px;
+  }
+
+  .scenes .actions {
+    display: none;
+  }
+
+  .scenes .elink {
+    display: block;
+  }
+
+  .scenes .pagebar {
+    padding: 12px 12px 0;
+    border-bottom: 0;
+  }
+
+  /* the one-line explanation loses its second sentence beside an icon-sized
+     primary (S6d) */
+  .scenes .pagebar .second {
+    display: none;
+  }
+
+  /* S7f: the three panes become three sections in reading order — preview,
+     layers, inspector — with the preview sticky at the top, which is the only
+     reason editing a scene on a phone works at all. */
+  .scenes .scene3 {
+    flex-direction: column;
+    height: auto !important;
+  }
+
+  .scenes .lcol,
+  .scenes .ccol,
+  .scenes .rcol {
+    width: 100%;
+    flex: 0 1 auto;
+    padding: 14px 16px;
+    border: 0;
+    border-bottom: 1px solid var(--border);
+    overflow: visible;
+  }
+
+  .scenes .ccol {
+    order: -1;
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    background: var(--bg);
+    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.45);
+  }
+
+  .scenes .rcol {
+    border-bottom: 0;
+  }
+
+  .scenes .stage {
+    width: 300px;
+    margin: 0 auto;
+  }
+
+  .scenes .budget {
+    max-width: none;
+  }
+
+  /* S7f's header is one 44px row: [icon back] [name] [Save] [⋯] */
+  .scenes .editor-header .back {
+    width: 32px;
+    padding: 0;
+  }
+
+  .scenes .editor-header .back .backlabel {
+    display: none;
+  }
+
+  /* Touch targets (§5.7's 24px floor, asserted by `mockdiff --sweep`). The
+     mock keeps the eye and the marquee's corner grabs at their drawn size on
+     a phone (S7f: "full-size drag handles and eyes"), so the PAINTED square
+     stays what it is and only the hit area grows. */
+  .scenes .lrow .eye {
+    width: 24px;
+    height: 24px;
+    padding: 5px;
+  }
+
+  .scenes .lrow .pick {
+    min-height: 24px;
+  }
+
+  /* 24px of finger, 7px of paint: the negative margin keeps the enlarged box
+     centred exactly where the 7px one was, so the marquee's corners do not
+     move. */
+  .scenes .hdl {
+    width: 24px;
+    height: 24px;
+    margin: -8.5px;
+    background: transparent;
+  }
+
+  .scenes .hdl::after {
+    content: "";
+    position: absolute;
+    inset: 8.5px;
+    border-radius: 1px;
+    background: var(--accent);
+  }
+
+  /* the rest of the 24px floor: the source radios, the colour chip and the
+     opacity track. All three keep what they PAINT — the box grows around it */
+  .scenes .rrow .pick {
+    min-height: 24px;
+  }
+
+  .scenes .swatchbtn {
+    height: 32px;
+  }
+
+  .scenes input[type="range"] {
+    height: 24px;
+  }
+}

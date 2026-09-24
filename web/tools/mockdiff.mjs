@@ -616,14 +616,19 @@ const MIRROR_ARGS = {
   strip: ["--board", "strip", "--pixels", "300", "--name", "luxel-4ae0d4"],
   outputs: ["--board", "strip", "--pixels", "600", "--outputs", "2", "--name", "luxel-4ae0d4"],
   lattice: ["--board", "strip", "--pixels", "512", "--name", "luxel-lattice"],
+  // The SCENES console (#480): the same 64x64 HUB75 board as `panel`, but its
+  // own mirror because seeding a scene and PLAYING it parks the playlist —
+  // which the S1/S4 frames on the shared panel mirror need left running.
+  scenes: ["--board", "panel", "--pixels", "4096", "--name", "luxel-f6b0a8"],
 };
 /** The pixel count each mirror runs, so a seed pattern compiles for it. */
-const MIRROR_PIXELS = { panel: 4096, strip: 300, outputs: 600, lattice: 512 };
+const MIRROR_PIXELS = { panel: 4096, strip: 300, outputs: 600, lattice: 512, scenes: 4096 };
 const MIRROR_PORT = {
   panel: E2E.mirror.mdPanel,
   strip: E2E.mirror.mdStrip,
   outputs: E2E.mirror.mdOutputs,
   lattice: E2E.mirror.mdLattice,
+  scenes: E2E.mirror.mdScenes,
 };
 
 /**
@@ -653,6 +658,12 @@ async function seedMirror(base, seed, pixels) {
     await fetch(`${base}/api/protocol`, { method: "POST", body: String(seed.protocol) }).catch(
       () => {},
     );
+  // A Layout line or two — the projection DEFAULTS a frame states (S7g's
+  // quiet `device default · along x` row is the device's own `proj1d`).
+  if (seed.layout)
+    await fetch(`${base}/api/layout`, { method: "POST", body: String(seed.layout) }).catch(
+      () => {},
+    );
   const ids = new Map();
   for (const p of seed.patterns ?? []) {
     try {
@@ -680,6 +691,28 @@ async function seedMirror(base, seed, pixels) {
     await sleep(600);
   } else if (seed.activate && ids.has(seed.activate)) {
     await fetch(`${base}/api/patterns/${ids.get(seed.activate)}/activate`, {
+      method: "POST",
+    }).catch(() => {});
+    await sleep(400);
+  }
+  // Scenes (#480). Each entry is a WIRE BLOCK — the same text the console
+  // posts — with `{{Pattern Name}}` standing in for the store id the device
+  // just assigned, because a seed cannot know one. `activateScene` names the
+  // one to play, which parks the playlist exactly as a direct play does.
+  const sceneIds = new Map();
+  for (const block of seed.scenes ?? []) {
+    const body = String(block).replace(/\{\{([^}]+)\}\}/g, (_, n) => ids.get(n.trim()) ?? "00000000");
+    try {
+      const r = await fetch(`${base}/api/scenes`, { method: "POST", body });
+      const j = await r.json();
+      if (j.id) sceneIds.set(String(body.split("\n")[0] ?? "").replace(/^S \S+ ?/, ""), j.id);
+      else console.warn(`    seed scene: ${j.error ?? "no id"}`);
+    } catch (err) {
+      console.warn(`    seed scene: ${err.message}`);
+    }
+  }
+  if (seed.activateScene && sceneIds.has(seed.activateScene)) {
+    await fetch(`${base}/api/scenes/${sceneIds.get(seed.activateScene)}/activate`, {
       method: "POST",
     }).catch(() => {});
     await sleep(400);

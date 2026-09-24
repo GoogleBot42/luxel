@@ -40,7 +40,9 @@ export type NoteChannel =
   | "clock"
   /** the connection itself: `reconnected`, and what a failed write lost */
   | "device"
-  | "palette";
+  | "palette"
+  /** the Scenes page and the scene editor's save state (Gitea #480) */
+  | "scene";
 
 export type Notes = Partial<Record<NoteChannel, string>>;
 

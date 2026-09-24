@@ -28,6 +28,8 @@ export type ApiErrorScope =
   | "output"
   | "playlist"
   | "pattern"
+  /** The Scenes page and the scene editor (Gitea #480). */
+  | "scene"
   /** Installing a firmware image or a release package (Gitea #643). */
   | "ota"
   | "device";
@@ -47,6 +49,10 @@ export interface ApiErrorContext {
   /** What the action was about, for the scopes that name a thing
    *  (`Couldn't save "Aurora 2D"`). */
   subject?: string;
+  /** The raw message. `explainApiError` fills this in itself, so an entry can
+   *  read numbers back out of the device's own words without every caller
+   *  having to repeat them. */
+  raw?: string;
 }
 
 export interface ApiErrorExplained {
@@ -197,6 +203,39 @@ const TABLE: Entry[] = [
       "The device did not understand what the console sent. This is a bug in the app, " +
       "not something you did — please report it.",
   },
+  // ---- scenes (crates/luxel-core/src/scene.rs, Gitea #480) ----
+  // The console serializes the block the device parses, so a `scene: line N`
+  // is the APP's bug and says so. `scenes: store full` is the user's to act
+  // on: every scene shares ONE 3840-byte blob, and the numbers say by how
+  // much this save misses.
+  {
+    match: /^scenes: store full/,
+    field: "scene-save",
+    text: (c) => {
+      const m = /\((\d+) of (\d+) B\)/.exec(c.raw ?? "");
+      const want = m ? Number(m[1]) : 0;
+      const cap = m ? Number(m[2]) : 3840;
+      const over = want > cap ? ` — ${group(want - cap)} B over` : "";
+      return (
+        `Every scene on this device shares ${group(cap)} bytes of storage, and this save ` +
+        `needs ${group(want)}${over}. Delete a scene, or take a layer out of this one.`
+      );
+    },
+  },
+  {
+    match: /^scene: layer \d+ does not fit/,
+    field: "scene-layers",
+    text: () =>
+      "One layer's box falls outside the fixture. Move it back onto the grid, or set its " +
+      "width and height to 0 so it covers the whole thing.",
+  },
+  {
+    match: /^scene: line \d+:/,
+    field: "scene-save",
+    text: () =>
+      "The device could not read the scene the console sent. This is a bug in the app, not " +
+      "something you did — please report it.",
+  },
   // ---- stores and persistence, on every endpoint ----
   {
     match: /store refused to persist/,
@@ -230,6 +269,7 @@ const FALLBACK: Record<ApiErrorScope, string> = {
   output: "The device refused this output setting.",
   playlist: "The device refused this playlist change and kept the one it had.",
   pattern: "The device refused this pattern.",
+  scene: "The device refused this scene and kept the one it had.",
   ota: "The release was not installed; the device is running what it was.",
   device: "The device refused the request.",
 };
@@ -245,8 +285,9 @@ export function explainApiError(raw: string, ctx: ApiErrorContext): ApiErrorExpl
   const msg = (raw ?? "").trim();
   const hit = TABLE.find((e) => e.match.test(msg));
   const details = ctx.line ? `${msg || "no message"} (line ${ctx.line})` : msg || "no message";
+  const c = { ...ctx, raw: msg };
   return {
-    text: hit ? hit.text(ctx) : FALLBACK[ctx.scope],
+    text: hit ? hit.text(c) : FALLBACK[ctx.scope],
     details,
     field: hit?.field ?? ctx.field,
   };

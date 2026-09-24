@@ -14,10 +14,19 @@
 // The share link uses the fragment too (`#p=…`, `stores/pattern.ts`), so the
 // two are kept apart by the leading slash: a route ALWAYS starts `#/`.
 
-export type Page = "patterns" | "playlist" | "settings" | "editor" | "map";
+export type Page = "patterns" | "scenes" | "playlist" | "settings" | "editor" | "map";
 
 export interface Route {
   page: Page;
+  /**
+   * The scene the SCENE editor holds — `#/scenes/5eed1c92` (Gitea #480).
+   *
+   * The pattern editor deliberately has no such argument (see below), and the
+   * reason does not apply here: opening a scene does not run it. Nothing on
+   * the fixture changes when this route is restored, so the id can live in
+   * the URL, which is what lets a playlist row link straight at a scene.
+   */
+  id?: string;
 }
 
 // WHY THERE IS NO `?pattern=<id>`: a route names a SCREEN. Which DOCUMENT the
@@ -27,7 +36,7 @@ export interface Route {
 // hardware, overwriting whatever the device was actually running. A page
 // refresh must never change what the LEDs are doing.
 
-const PAGES: Page[] = ["patterns", "playlist", "settings", "editor", "map"];
+const PAGES: Page[] = ["patterns", "scenes", "playlist", "settings", "editor", "map"];
 
 /** Parse a `location.hash`. Returns null when it is not a route — an empty
  *  hash, or a share fragment, which must not be mistaken for one. */
@@ -38,13 +47,22 @@ export function parseRoute(hash: string): Route | null {
   const path = q === -1 ? raw : raw.slice(0, q); // a query is tolerated, never read
   const seg = path.replace(/^\/+/, "").replace(/\/+$/, "");
   if (seg === "") return { page: "patterns" };
-  const page = PAGES.find((p) => p === seg);
-  return page ? { page } : null;
+  const [head, arg] = seg.split("/");
+  const page = PAGES.find((p) => p === head);
+  if (!page) return null;
+  // `#/scenes/<id>` is the only route with an argument, and only an 8-hex id
+  // is one — anything else is a link to the Scenes page, not a 404.
+  if (page === "scenes" && arg !== undefined && /^[0-9a-f]{8}$/.test(arg)) {
+    return { page, id: arg };
+  }
+  return { page };
 }
 
 /** The fragment for a route, `#` included. Patterns is the root (`#/`). */
 export function routeHash(r: Route): string {
-  return r.page === "patterns" ? "#/" : `#/${r.page}`;
+  if (r.page === "patterns") return "#/";
+  if (r.page === "scenes" && r.id) return `#/scenes/${r.id}`;
+  return `#/${r.page}`;
 }
 
 /** Push a route onto the history stack, unless it is already the current
