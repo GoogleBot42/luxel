@@ -798,7 +798,67 @@ export class DeviceSession {
   async playlistPrev(): Promise<void> {
     await this.fetch("/api/playlist/prev", { method: "POST" });
   }
+
+  // ---- scenes (Gitea #480; routes in docs/api.md, record in
+  //      docs/spec/scenes.md) -------------------------------------------
+  // WEB-A owns this block. Everything crosses as the SCENE WIRE BLOCK
+  // (`serializeScene`), never JSON: the device's parser is the one in
+  // `luxel_core::scene`, and its refusals come back as the
+  // `scene: line N: …` / `scenes: store full (…)` strings `lib/apiErrors.ts`
+  // translates. A POST with `S -` means "assign an id" and the reply names
+  // the one it gave.
+
+  /** Every stored scene plus the blob budget and which one is running. */
+  async scenes(): Promise<ScenesWire> {
+    return (await (await this.fetch("/api/scenes")).json()) as ScenesWire;
+  }
+
+  /** One scene. */
+  async scene(id: string): Promise<SceneWire> {
+    return (await (await this.fetch(`/api/scenes/${id}`)).json()) as SceneWire;
+  }
+
+  /** Create (`id` empty → the body must start `S -`) or replace a scene.
+   *  Replacing the ACTIVE scene live-applies it on the device. */
+  async saveScene(id: string, block: string): Promise<SceneSaveResult> {
+    const res = await this.fetch(id === "" ? "/api/scenes" : `/api/scenes/${id}`, {
+      method: "POST",
+      body: block,
+    });
+    return (await res.json()) as SceneSaveResult;
+  }
+
+  async deleteScene(id: string): Promise<{ ok: boolean; error?: string }> {
+    const res = await this.fetch(`/api/scenes/${id}`, { method: "DELETE" });
+    return (await res.json()) as { ok: boolean; error?: string };
+  }
+
+  /** Play a scene — parks the playlist exactly as playing a pattern does. */
+  async activateScene(id: string, crossfadeMs?: number): Promise<{ ok: boolean; error?: string }> {
+    const res = await this.fetch(`/api/scenes/${id}/activate`, {
+      method: "POST",
+      body: crossfadeMs === undefined ? "" : String(Math.max(0, Math.round(crossfadeMs))),
+    });
+    return (await res.json()) as { ok: boolean; error?: string };
+  }
+  // ---- end scenes ---------------------------------------------------
 }
+
+/** `GET /api/scenes/<id>` — the JSON shape of `scene::push_json`. Typed in
+ *  `lib/scene.ts` (`SceneJson`); re-declared loosely here so `lib/device.ts`
+ *  does not depend on the codec. */
+export type SceneWire = Record<string, unknown>;
+
+/** `GET /api/scenes`. `used`/`max` are the shared blob's bytes. */
+export interface ScenesWire {
+  active: string | null;
+  layers_max: number;
+  used: number;
+  max: number;
+  scenes: SceneWire[];
+}
+
+export type SceneSaveResult = { ok: true; id: string } | { ok: false; error: string };
 
 export interface PlaylistItem {
   id: string;

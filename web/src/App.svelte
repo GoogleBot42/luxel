@@ -15,7 +15,11 @@
   import MapEditor from "./pages/MapEditor.svelte";
   import Patterns from "./pages/Patterns.svelte";
   import Playlist from "./pages/Playlist.svelte";
+  import Scenes from "./pages/Scenes.svelte";
+  import SceneEditor from "./pages/SceneEditor.svelte";
   import Settings from "./pages/Settings.svelte";
+  import { uiLayoutKind } from "./lib/settingsCaps";
+  import { refreshScenes } from "./stores/scenes";
   import BcBanner from "./components/BcBanner.svelte";
   import ErrorBar from "./components/ErrorBar.svelte";
   import RebootBar from "./settings/RebootBar.svelte";
@@ -25,6 +29,7 @@
     device,
     deviceBase,
     deviceBlocked,
+    deviceLayoutWire,
     deviceFps,
     deviceJit,
     deviceOutFps,
@@ -35,7 +40,7 @@
     refreshPlaylist,
     startSessionPoll,
   } from "./stores/device";
-  import { pixelTotal, runMapProgram, setPreviewAs } from "./stores/geometry";
+  import { layout, pixelTotal, runMapProgram, setPreviewAs } from "./stores/geometry";
   import { setBanner } from "./stores/notify";
   import {
     decodeShare,
@@ -52,12 +57,11 @@
   } from "./stores/pattern";
 
   // ---- navigation ----
-  // Home tabs (proposal §4): `Patterns` always, `Playlist` + `Settings` on a
-  // console. `Scenes` is Phase B — Gitea #480 adds ONE entry to `tabs` below.
-  // The editor is NOT a tab: it opens full-screen over the home tab when you
-  // pick a pattern or create one, with a back button. `tab` is the home you
-  // return to.
-  type Tab = "patterns" | "playlist" | "settings";
+  // Home tabs (proposal §4): `Patterns` always, `Scenes` by Layout kind (D10,
+  // §5.4c — see `tabs` below), `Playlist` + `Settings` on a console. The
+  // editors are NOT tabs: each opens full-screen over the home tab, with a
+  // back button. `tab` is the home you return to.
+  type Tab = "patterns" | "scenes" | "playlist" | "settings";
   let tab: Tab = "patterns";
   /** Full-screen editor open (over the home tab). */
   let editing = false;
@@ -67,6 +71,11 @@
   let mapEditing = false;
   /** What the map screen's back button says; the opener sets it. */
   let mapBackLabel = "back";
+  /** The scene editor's screen (#480) — the third full-screen one. It IS
+   *  reached from a tab, so `tab` stays `scenes` while it is open. */
+  let sceneEditing = false;
+  /** Which scene it holds; the route carries it (`#/scenes/<id>`). */
+  let sceneId = "";
   /** First-load cover: hides the app until we've decided playground vs device
    *  (and, on a device, loaded its running pattern) so nothing flashes first. */
   let booting = true;
@@ -83,9 +92,23 @@
 
   let editor: Editor;
 
-  /** The tab strip, data-driven so Scenes (#480) is one more entry. */
+  /**
+   * The tab strip, data-driven so Scenes (#480) is one more entry.
+   *
+   * SCENES (D10, proposal §5.4c) is the one tab that is NOT gated on "is
+   * there a device": it needs a regular 2D grid to draw on, nothing else. On
+   * a console that is strictly the DEVICE's Layout kind — a strip, 3D or
+   * custom-map board never shows it, and an empty matrix always does (S6c).
+   * In the playground there is no hardware constraint, so the tab is always
+   * present and the page carries the S6b empty state that sets the fixture;
+   * hiding it there would make the feature undiscoverable.
+   */
+  $: scenesReady =
+    $device === null ||
+    ($deviceLayoutWire !== null && uiLayoutKind($deviceLayoutWire.kind, $layout.dims) === "matrix");
   $: tabs = [
     { id: "patterns" as const, label: "Patterns", show: true },
+    { id: "scenes" as const, label: "Scenes", show: scenesReady },
     { id: "playlist" as const, label: "Playlist", show: $device !== null },
     { id: "settings" as const, label: "Settings", show: $device !== null },
   ].filter((t) => t.show);
@@ -99,26 +122,37 @@
   // the shell owns `tab`/`editing`/`mapEditing`; nothing else writes it
   // except the share link, which is also a fragment and is left alone.
 
-  /** Which page the shell's state IS, in route terms. */
-  $: currentPage = (mapEditing ? "map" : editing ? "editor" : tab) as Page;
+  /** Which page the shell's state IS, in route terms. The scene editor is
+   *  the one screen with an argument — `#/scenes/<id>` — because opening a
+   *  scene, unlike opening a pattern, does not run it (lib/router.ts). */
+  $: currentRoute = (
+    mapEditing
+      ? { page: "map" }
+      : editing
+        ? { page: "editor" }
+        : sceneEditing
+          ? { page: "scenes", id: sceneId }
+          : { page: tab }
+  ) as Route;
 
-  /** The page the URL last named, so nothing is pushed twice. */
-  let urlPage: Page | "" = "";
+  /** The route the URL last named, so nothing is pushed twice. */
+  let urlHref = "";
   /** Nothing writes the URL until boot has settled on a screen. */
   let routing = false;
 
-  $: if (routing) syncUrl(currentPage);
-  function syncUrl(page: Page): void {
-    if (page === urlPage) return;
-    urlPage = page;
-    pushRoute({ page });
+  $: if (routing) syncUrl(currentRoute);
+  function syncUrl(r: Route): void {
+    const href = r.page + (r.id ?? "");
+    if (href === urlHref) return;
+    urlHref = href;
+    pushRoute(r);
   }
 
   /** Put the shell on the screen a route names. Tabs that need hardware are
    *  ignored without it (a `#/settings` link opened in the playground lands
    *  on Patterns rather than on a page that cannot exist). */
   function applyRoute(r: Route): void {
-    urlPage = r.page;
+    urlHref = r.page + (r.id ?? "");
     if (r.page === "map") {
       mapEditing = true;
       return;
@@ -129,8 +163,24 @@
       return;
     }
     editing = false;
+    if (r.page === "scenes") {
+      tab = "scenes";
+      sceneId = r.id ?? "";
+      sceneEditing = sceneId !== "";
+      return;
+    }
+    sceneEditing = false;
     tab = r.page === "patterns" || $device !== null ? r.page : "patterns";
     if (tab === "playlist") void refreshPlaylist();
+  }
+
+  /** Open a scene in the full-screen scene editor. Exported for the same
+   *  reason `openMapEditor` is: the playlist row and the Patterns tile's
+   *  `Add to scene ▸` (#478) reach it from somewhere else entirely. */
+  export function openScene(id: string): void {
+    tab = "scenes";
+    sceneId = id;
+    sceneEditing = true;
   }
 
   function onPopState(): void {
@@ -273,12 +323,16 @@
     if (route) {
       applyRoute(route);
     } else if (!shared) {
-      // `currentPage` is reactive and has not been recomputed yet inside this
-      // handler — read the state directly.
+      // `currentRoute` is reactive and has not been recomputed yet inside
+      // this handler — read the state directly.
       const bootPage: Page = mapEditing ? "map" : editing ? "editor" : tab;
       replaceRoute({ page: bootPage });
-      urlPage = bootPage;
+      urlHref = bootPage;
     }
+    // The scene library, once, at boot — like the playlist. A `#/scenes/<id>`
+    // deep link opens the scene EDITOR without the Scenes page ever mounting
+    // active, so the library cannot be the page's to fetch (#480).
+    void refreshScenes();
     routing = true;
     booting = false;
   });
@@ -313,7 +367,7 @@
        'luxel' and other things in the header bar hide". The device chip that
        used to live here moves into the editor's header with it
        (components/DeviceChip.svelte). -->
-  {#if !editing && !mapEditing}
+  {#if !editing && !mapEditing && !sceneEditing}
     <!-- DOM order IS the visual order here, so Tab walks the header the way
          the eye does: wordmark · chip · tabs · brightness · fps. The `.hdrtop`
          wrapper carries no focusable control past the chip, and the one
@@ -365,6 +419,9 @@
             class:active={tab === t.id}
             on:click={() => {
               tab = t.id;
+              // clicking the Scenes tab leaves the scene editor, exactly as
+              // clicking Patterns leaves the pattern editor
+              sceneEditing = false;
               if (t.id === "playlist") void refreshPlaylist();
             }}
           >
@@ -451,7 +508,7 @@
   />
 
   <Patterns
-    active={!editing && !mapEditing && tab === "patterns"}
+    active={!editing && !mapEditing && !sceneEditing && tab === "patterns"}
     {hasPixelblazeLibrary}
     on:new={() => {
       openEditor();
@@ -478,8 +535,25 @@
     }}
   />
 
+  <!-- The scene editor (#480): the THIRD full-screen screen, a peer of the
+       pattern and map editors. It is reached from the Scenes tab, so the tab
+       stays `scenes` underneath it. -->
+  <SceneEditor
+    active={sceneEditing && !editing && !mapEditing}
+    {sceneId}
+    on:back={() => (sceneEditing = false)}
+    on:open={(e) => openScene(e.detail)}
+  />
+
+  <!-- Scenes is NOT wrapped in `{#if !$isPlayground}`: the playground has the
+       tab too (D10), with the empty state that sets the fixture. -->
+  <Scenes
+    active={!editing && !mapEditing && !sceneEditing && tab === "scenes"}
+    on:open={(e) => openScene(e.detail)}
+  />
+
   {#if !$isPlayground}
-    <Playlist active={!editing && !mapEditing && tab === "playlist"} />
+    <Playlist active={!editing && !mapEditing && tab === "playlist" && !sceneEditing} />
   {/if}
 
   <!-- "stored, but not running yet" — pinned to the bottom of the VIEWPORT on
@@ -489,7 +563,7 @@
 
   {#if $device}
     <Settings
-      active={!editing && !mapEditing && tab === "settings"}
+      active={!editing && !mapEditing && tab === "settings" && !sceneEditing}
       on:navigate={(e) => (tab = e.detail)}
       on:openmap={() => openMapEditor("Settings")}
       on:pixelchange={() => editor.clearPreview()}
