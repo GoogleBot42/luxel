@@ -20,7 +20,8 @@ Blaze, the firmware executes bytecode only — no parser on the chip, so no
 compile-time stack or RAM spikes there either). The full
 documented builtin surface (waveforms, math, arrays, color incl. oklch,
 transforms, perlin/simplex, palettes, clock, pixel maps, sensors) plus
-Luxel extensions (easings, `blur1D`/`feedback`, `beatSin`, `hash`, …).
+Luxel extensions (easings, `blur1D`/`feedback`, `beatSin`, `hash`, text on a
+2D grid with `drawText`/`drawNumber`/`font`, …).
 Differentially tested against a real Pixel Blaze — rendering is
 **pixel-bit-exact** (quantization, hsv, palettes) and semantics match on
 every probe that isn't PB's own float noise. All 283 valid community
@@ -33,10 +34,10 @@ clouds), step debugger with breakpoints, map editor (a debuggable map
 *program*, on its own screen), auto-generated controls, var watcher,
 shareable pattern URLs, `.epe` import/export, and a **sound toggle** that
 drives sound-reactive patterns from your microphone — locally and on the
-device. Served from a device it is a console: the same editor plus Playlist
-and a Settings page that configures the fixture (its name, brightness, LED
-layout and wiring — strip, matrix, 3D lattice or a custom map — panel
-arrangement, outputs, how patterns of another dimensionality are projected
+device. Served from a device it is a console: the same editor plus Scenes,
+Playlist and a Settings page that configures the fixture (its name,
+brightness, LED layout and wiring — strip, matrix, 3D lattice or a custom
+map — panel arrangement, outputs, how patterns of another dimensionality are projected
 onto it, WiFi, the clock and time zone, MQTT, firmware update).
 
 **The firmware** (`firmware/`, esp-hal + embassy; release images for ESP32, C3, C6, S3, and HUB75-panel boards):
@@ -49,12 +50,16 @@ onto it, WiFi, the clock and time zone, MQTT, firmware update).
   order, gamma, and power-cap settings — all changed live, all persisted.
 - HUB75 matrix panels on the ESP32-S3 (LCD_CAM + DMA; a 64x64 panel is
   4096 px) — see docs/boards.md for the Seengreat panel board.
-- **Playlists** with per-item parameters, durations, and crossfades;
-  survive reboots.
+- **Playlists** of patterns *or scenes*, with per-item parameters,
+  durations, and crossfades; survive reboots.
+- **Scenes**: layered compositions — pattern, text, sprite and colour
+  layers with blend modes, transparency keys, per-layer boxes and
+  opacity. Text layers show a literal, the clock, or one of eight text
+  slots the API and Home Assistant write.
 - **Home Assistant** via MQTT discovery: light (power + brightness),
-  pattern select, playlist switch + next/prev, diagnostics, and an
-  event topic for automations — full topic reference in
-  [docs/mqtt.md](docs/mqtt.md).
+  pattern select, playlist switch + next/prev, eight text entities for the
+  scene text slots, diagnostics, and an event topic for automations — full
+  topic reference in [docs/mqtt.md](docs/mqtt.md).
 - **DDP + E1.31/sACN input** — xLights/LedFx/Resolume drive the strip
   directly; the pattern resumes when the stream stops.
 - **Luxel-to-Luxel sync**: leader broadcasts its timebase, sensor data,

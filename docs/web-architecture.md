@@ -70,9 +70,10 @@ the fps readout and the LNA blocked banner, and it wires page events to
 `Editor` methods (`newPattern`, `loadSaved`, `loadGalleryPick`,
 `openDevicePattern`, `importEpeFile`, `bootDevice`, `bootPlayground`).
 
-The tab set is `Patterns · Playlist · Settings` on a console and `Patterns`
-alone in the playground (proposal §4), built from one `tabs` array so Scenes
-(Phase B, Gitea #480) is one more entry, not another `{#if}`.
+The tab set is `Patterns · Scenes · Playlist · Settings` on a console and
+`Patterns · Scenes` in the playground (proposal §4 and D10), built from one
+`tabs` array — which is how Scenes (#480) became one more entry rather than
+another `{#if}`.
 
 The shell header does **not** carry the open document. Since A7 (#468) the
 editor renders its own header — back, name, save state, Save, ⋯ — and the
@@ -283,11 +284,15 @@ The hover strip's gradient is `pointer-events:none`,
 so only the verbs take the mouse and a click anywhere else on the thumb still
 plays/opens the pattern.
 
-The tile's `⋯` is mockup S2's `.menu`: `Add to playlist` (console) · rule ·
-`Duplicate` · `Export .epe` · `Import .epe…` · rule · `Delete` (console).
-`Add to scene ▸` is the one item still missing, and it is Phase B (#480) —
-the `menu.box height` allow in `mockdiff.map.json`'s `S1menu` says exactly
-that. These are LIBRARY verbs acting on a tile, not the editor's document
+The tile's `⋯` is mockup S2's `.menu`: `Add to playlist` (console) ·
+`Add to scene ▸` · rule · `Duplicate` · `Export .epe` · `Import .epe…` ·
+rule · `Delete` (console).
+`Add to scene ▸` (#480/#478) is a submenu of the same group wherever scenes
+can exist — the playground, or a console whose Layout is a matrix. Anywhere
+else it is absent, not disabled: the shell's one `scenesReady` predicate is
+passed down and `components/AddToSceneMenu.svelte` is simply not rendered.
+
+These are LIBRARY verbs acting on a tile, not the editor's document
 verbs under another name: **`Import .epe…` parses, compiles and stores the
 file in the library the tile came from** — `On device` via
 `POST /api/patterns`, `Mine` via `saveToLocalLibrary` — taking the same
@@ -365,7 +370,8 @@ console and **opens** everything else in the editor; the hover strip is
 is Add to playlist (on-device only — a playlist item
 is a device pattern id, with no control overrides, i.e. the pattern's own
 defaults) · Duplicate · Delete (on-device only, through the `confirm` danger
-dialog). `Add to scene ▸` is Phase B (#480) and is absent, not disabled.
+dialog) · `Add to scene ▸` (only where `scenesReady` — on a strip console it
+is absent, not disabled).
 Play and Edit both go through the shell to `Editor.openDevicePattern(id)` —
 Play simply does not set `editing`, so the running marker and the editor's
 document never disagree.
@@ -957,8 +963,9 @@ The ⋯ menu's order is the mock's: `Add to playlist` · [`Add to scene ▸`] ·
 rule · `Duplicate` · `Export .epe` · `Import .epe…` [· `Share…`] · rule ·
 `Delete` (error-tinted, last). The first group is the on-device verbs, so the
 rule above `Duplicate` only appears when it does. `Add to scene ▸` (proposal
-§5.4b) is deliberately not rendered at all until scenes exist in Phase B
-(#480); `Share…` is the playground's and joins the document group, which is
+§5.4b) is rendered only where `scenesReady` — the playground, or a matrix
+console; on a strip console it is absent, not disabled. `Share…` is the
+playground's and joins the document group, which is
 where the mock would have put it had a playground frame existed.
 
 ### `components/ColorPicker.svelte` (Gitea #538)

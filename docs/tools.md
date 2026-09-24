@@ -137,6 +137,10 @@ lowers that ceiling explicitly, which is how a strip mirror is driven at a
 panel's pixel count without impersonating a panel; `--board panel` is the other
 route when you want the panel's capabilities too.
 
+`--scenes FILE` seeds the mirror's scene store from a file of wire blocks
+(Gitea #478) — the flag a harness reaches for to bring a mirror up with
+scenes already in it; the store, like the text slots, is in-memory only.
+
 `--ddp-port` / `--e131-port` move the network-input listeners off the standard
 DDP 4048 / sACN 5568 (Gitea #496). Those ports are global, so a mirror left
 running by another session owns them for everyone; the e2e harnesses give the

@@ -1,5 +1,64 @@
 # Update log
 
+## 2026-09-24 — Web UI v2 Phase B + C shipped: scenes, layers, sprites and text (#461 · #477–#486)
+
+The consolidated entry for the night; the per-PR entries below carry the
+detail. **Ten tickets, fourteen PRs, all merged.** A Luxel device can now
+render a **scene** — an ordered stack of layers — instead of a single pattern,
+and patterns can draw text.
+
+| ticket | what | PR | merged |
+|---|---|---|---|
+| #477 | core B1: persistent two-layer blend — five blend kernels, keys, per-layer ramp | #684 #690 #692 | `11d6664` `71f3240` `f9bd9c9` |
+| #478 | core+fw B2: native text/sprite/color layers, the scene record, `/api/scenes`, playlist scene items | #690 #692 #708 | `71f3240` `f9bd9c9` `0cd54f1` |
+| #479 | fw B3: budget accounting for two resident engines | #692 | `f9bd9c9` |
+| #480 | web B4: the Scenes page and the scene editor | #699 | `af27db2` |
+| #481 | web+core B5: the sprite layer, native blit, pixel drawing | #684 #714 | `11d6664` `63260b7` |
+| #482 | web B6: composite thumbnails | #708 | `0cd54f1` |
+| #483 | core C1: strings section, string literals as text-builtin arguments | #687 | `599cef9` |
+| #484 | core C2: three PSF2 fonts, `drawText`/`drawNumber`/`textWidth`/`font` | #687 | `599cef9` |
+| #485 | fw C3: text slots, `/api/text`, eight HA `text` entities, `textSlot(n)` | #690 #695 | `71f3240` `e26d2ff` |
+| #486 | web C4: the text-layer inspector, Layout-gated completions and docs | #714 | `63260b7` |
+
+Landed alongside, because the phase needed them: **#679** the Phase B/C mock
+frames (`a73b625`), **#681** the per-board OTA-slot gate back on (`70a93d3`,
+#635 partial), **#694** the bundle diet (`fe536c8`, #683), **#710** the
+compositor's fast paths and the staging buffer's lifecycle (`8423d44`, #704
+#705), and **#716** engine frames into the PSRAM arena, which is what makes the
+panel's second pattern layer real (`25ad81a`, #709).
+
+**Integrated verification on `25ad81a`,** the merge of all fourteen — not on
+any one branch:
+
+| gate | result |
+|---|---|
+| `npm run build` + `npm test` | 208 tests pass |
+| `web/tools/e2e.mjs` | 219 checks pass |
+| `tools/serve-e2e.mjs` | 140 checks pass |
+| `web/tools/device-e2e.mjs` | 542 checks pass |
+| `web/tools/mockdiff.mjs` (every frame) | **0 deltas over 48 frames** |
+| `mockdiff --sweep` | clean at 1400/1200/1000/760/390 except the two standing #703 screens at 390 |
+| `tools/ci.sh` | GREEN in 206 s |
+
+Both screens this phase added — Scenes and the scene editor — are sweep-clean
+at every width. The three release images clear the 3 % floor on their own
+board's slot: `pixelblaze-v3` 1,190,176 B (9.19 % free), `c6-devkit-hosted`
+1,091,744 B (16.70 %), `c3-devkit` 1,058,192 B (19.26 %). The web asset
+archive is **908,132 B of 983,040 (7 % headroom)** — the phase spent ~45 kB of
+the 12.2 % the #683 diet had just bought, and the build-side levers are
+already spent, so the next 100 kB is content (#691) or brotli (#686).
+
+Review page (Tailscale): https://claude-luxel-v2-phase-bc.sites.neet.dev/ —
+every Phase B/C mock frame beside the shipped app in the same state.
+
+**What is deliberately not here.** #707 `Add to scene ▸` is console-only;
+#713 a bound sprite layer cannot be re-pointed; #712 no undo on the sprite
+canvas; #701 `--scenes FILE` leaves an empty id on the mirror; #703 three
+app-wide primitives are under the 24 px touch floor on a phone; #697 the
+palette stop editor is written twice; #698 the mocks contradict themselves on
+S7 vs S7d (the app is built to S7d) and need Jeremy to say which copy ships;
+#635 the `MIGRATING_RELEASE` pin is still on.
+
 ## 2026-09-24 — engine frames move to the PSRAM arena; the panel's second pattern layer is real (#709)
 
 Two 4096-px pattern layers did not fit the Seengreat panel's internal DRAM.
