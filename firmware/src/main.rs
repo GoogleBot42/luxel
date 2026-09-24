@@ -1075,6 +1075,13 @@ pub(crate) fn try_budgeted_engine(
 fn note_engine_heap(free_before: usize) {
     let now = esp_alloc::HEAP.free() as usize;
     shared::ENGINE_HEAP.store(free_before.saturating_sub(now) as u32, Ordering::Relaxed);
+    // `free_before` was sampled with NO engine resident, which is exactly
+    // `budget::load_base` — measured, not reconstructed from two numbers
+    // that overlap during a swap. That overlap is why `caps.layers` must not
+    // recompute it in the HTTP handler: a `/api/status` landing between the
+    // teardown and the build sees the freed heap AND the outgoing engine's
+    // cost, and reads 15 KB too high (seen on the panel, 2026-09-24).
+    shared::note_heap_base(free_before as u32);
 }
 
 /// Drop the crossfade's outgoing engine AND release the arena pin that kept

@@ -419,9 +419,15 @@ pub fn scene_layer_cap() -> u8 {
     } else {
         luxel_core::caps::MAX_LAYERS
     };
+    // The render task's HIGH-WATER `load_base`, not a reading taken here:
+    // see `shared::HEAP_BASE_MAX` for the two measurements that made that
+    // necessary. Before the first load there is no mark yet, so fall back to
+    // the local reconstruction (which is exact while nothing is resident).
+    let mark = crate::shared::HEAP_BASE_MAX.load(Ordering::Relaxed) as usize;
+    let base = if mark > 0 { mark } else { load_base(heap, resident) };
     luxel_core::caps::layers_for_headroom(
         PIXEL_COUNT.load(Ordering::Relaxed),
-        load_headroom(load_base(heap, resident)),
+        load_headroom(base),
         ceiling,
     )
 }

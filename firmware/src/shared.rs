@@ -922,6 +922,42 @@ pub fn wall_now_local() -> Option<i64> {
     Some(base + at.elapsed().as_secs() as i64 + TZ_MINUTES.load(Ordering::Relaxed) as i64 * 60)
 }
 
+/// High-water `budget::load_base` (free heap + every resident engine) since
+/// boot, in bytes — the board's steady-state DRAM budget, which is what
+/// `caps.layers` is derived from (Gitea #479).
+///
+/// Written by the render task from [`note_engine_heap`]'s `free_before`,
+/// which is sampled with NO engine resident — so it is `load_base` measured
+/// rather than reconstructed, and it is never taken mid-swap.
+///
+/// Two measurements on the Seengreat panel (2026-09-24) forced this shape:
+///
+/// * A LIVE reading is not usable for an advertised capability. Four
+///   *identical* pattern activations reported `heap_free` 18,904 / 23,000 /
+///   33,332 / 37,508 — ±18 KB of WiFi and HTTP transient against a ~16 KB
+///   per-layer cost, so the number flapped 1 ↔ 2 with nothing but poll
+///   traffic. A maximum converges on the idle figure in a few samples and
+///   cannot over-promise on a board that never reaches it.
+/// * Reconstructing it in the HTTP handler as `heap_free + engine_heap`
+///   double-counts during a swap: a `/api/status` landing between the
+///   teardown and the build sees the freed heap AND the outgoing engine's
+///   `engine_heap`, and reads ~15 KB too high — which the maximum then
+///   keeps forever. Hence the render task publishes it instead.
+pub static HEAP_BASE_MAX: AtomicU32 = AtomicU32::new(0);
+
+/// Fold a fresh `load_base` reading into [`HEAP_BASE_MAX`] and return the
+/// mark. load+store rather than `fetch_max`: rv32imc (the C3) has no atomic
+/// RMW, and a lost update only delays convergence by one sample.
+pub fn note_heap_base(v: u32) -> u32 {
+    let m = HEAP_BASE_MAX.load(Ordering::Relaxed);
+    if v > m {
+        HEAP_BASE_MAX.store(v, Ordering::Relaxed);
+        v
+    } else {
+        m
+    }
+}
+
 /// The control plane's copy of the eight text slots (Gitea #485).
 ///
 /// `luxel_core::text`'s table is written ONLY by the render task, because it
