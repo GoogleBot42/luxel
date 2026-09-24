@@ -701,6 +701,12 @@ impl Compositor {
     pub fn set_text(&mut self, layer: usize, s: &str) {
         if let Some(l) = self.layers.get_mut(layer) {
             l.resolved.clear();
+            // Render-loop allocation, so fallible (Gitea #702): a frame that
+            // cannot afford 64 bytes draws no text rather than rebooting.
+            let want = s.len().min(crate::scene::MAX_NAME);
+            if want > l.resolved.capacity() && l.resolved.try_reserve_exact(want).is_err() {
+                return;
+            }
             push_truncated(&mut l.resolved, s, crate::scene::MAX_NAME);
         }
     }
@@ -764,11 +770,15 @@ impl Compositor {
                 if is_frame_copy(&style, &grid, src.len(), dst.len()) {
                     dst[..n].copy_from_slice(&src[..n]);
                     palette_remap_frame(&mut dst[..n], lut, amount);
-                } else {
-                    scratch.clear();
-                    scratch.extend_from_slice(src);
+                } else if scratch_for(scratch, src.len()) {
+                    scratch.copy_from_slice(src);
                     palette_remap_frame(scratch, lut, amount);
                     composite_frame(Canvas { px: dst, grid: &grid }, scratch, &style);
+                } else {
+                    // No heap for the scratch this frame (#702). The ramp is
+                    // a colour treatment, so drop the TREATMENT rather than
+                    // the layer: an unramped layer beats a reboot.
+                    composite_frame(Canvas { px: dst, grid: &grid }, src, &style);
                 }
             }
             None => composite_frame(Canvas { px: dst, grid: &grid }, src, &style),
@@ -798,10 +808,12 @@ impl Compositor {
             LayerKind::Text => {
                 let (_, _, bw, bh) = resolved_rect(&l.style, &grid);
                 let scroll = scroll_offset(&l.text, &l.resolved, bw, bh, l.scroll_mpx);
-                let n = grid.len();
-                if scratch.len() != n {
-                    scratch.clear();
-                    scratch.resize(n, [0, 0, 0]);
+                // A grid-sized scratch — 12,288 B on a 64x64 panel — taken
+                // INSIDE the host's render loop. Infallibly, that is an
+                // allocator panic, i.e. a device reboot, and it is what took
+                // the Seengreat panel down on 2026-09-24 (Gitea #702).
+                if !scratch_for(scratch, grid.len()) {
+                    return;
                 }
                 draw_text_layer(canvas, scratch, &l.resolved, &l.text, &l.style, scroll);
             }
@@ -819,8 +831,33 @@ impl Compositor {
     }
 }
 
+/// Size the shared scratch to `n` pixels without ever panicking.
+///
+/// Every caller is inside the host's RENDER LOOP, where `luxel-core`'s
+/// ordinary `Vec::resize` is an allocator panic — a device reboot — on a
+/// heap a scene has already filled (Gitea #702). `false` means "this frame
+/// has no scratch"; each caller says what it draws instead.
+///
+/// The capacity survives, so this is one reservation per scene and a
+/// compare per frame after it.
+fn scratch_for(scratch: &mut Vec<[u8; 3]>, n: usize) -> bool {
+    if scratch.len() == n {
+        return true;
+    }
+    scratch.clear();
+    if n > scratch.capacity() && scratch.try_reserve_exact(n).is_err() {
+        return false;
+    }
+    scratch.resize(n, [0, 0, 0]);
+    true
+}
+
 /// Cook a layer's ramp into a 256-entry luma → colour LUT, cached behind
 /// the compositor's scene epoch (the `DeviceChain`/`Engine` idiom).
+///
+/// Fallible for the same reason [`scratch_for`] is: it runs on the first
+/// frame a ramped layer draws. A cook that cannot be afforded leaves `lut`
+/// as it was, and `pattern_layer` composites the layer unramped.
 fn ensure_lut(ramp: &Ramp, lut: &mut Option<(u32, Box<[[u8; 3]; 256]>)>, epoch: u32) {
     if lut.as_ref().map(|(e, _)| *e) == Some(epoch) {
         return;
@@ -828,12 +865,23 @@ fn ensure_lut(ramp: &Ramp, lut: &mut Option<(u32, Box<[[u8; 3]; 256]>)>, epoch: 
     // byte domain → 16.16 0..1, the scaling DeviceChain uses for the
     // device palette (no fixed-point divide on this path)
     let b = |v: u8| crate::fixed::Fx::from_raw(((v as i32) << 16) / 255);
-    let pal: Vec<(crate::fixed::Fx, [crate::fixed::Fx; 3])> = ramp
-        .stops
-        .iter()
-        .map(|(p, c)| (b(*p), [b(c[0]), b(c[1]), b(c[2])]))
-        .collect();
-    let mut cooked = Box::new([[0u8; 3]; 256]);
+    let mut pal: Vec<(crate::fixed::Fx, [crate::fixed::Fx; 3])> = Vec::new();
+    if pal.try_reserve_exact(ramp.stops.len()).is_err() {
+        return;
+    }
+    pal.extend(
+        ramp.stops
+            .iter()
+            .map(|(p, c)| (b(*p), [b(c[0]), b(c[1]), b(c[2])])),
+    );
+    let mut flat: Vec<[u8; 3]> = Vec::new();
+    if flat.try_reserve_exact(256).is_err() {
+        return;
+    }
+    flat.resize(256, [0, 0, 0]);
+    let Ok(mut cooked) = <Box<[[u8; 3]; 256]>>::try_from(flat.into_boxed_slice()) else {
+        return;
+    };
     crate::outpipe::fill_palette_lut(&pal, &mut cooked);
     *lut = Some((epoch, cooked));
 }
@@ -919,6 +967,24 @@ impl From<&Layer> for LayerRt {
 
 #[cfg(test)]
 mod tests {
+    /// The scratch is what #702 rebooted the panel over, so its shape is a
+    /// test: ONE reservation per scene, a compare per frame after it, and
+    /// never a fresh allocation just because the grid shrank.
+    #[test]
+    fn the_render_scratch_is_reserved_once_and_then_only_compared() {
+        let mut sc: Vec<[u8; 3]> = Vec::new();
+        assert!(scratch_for(&mut sc, 4096));
+        assert_eq!(sc.len(), 4096);
+        let cap = sc.capacity();
+        assert!(scratch_for(&mut sc, 4096));
+        assert_eq!(sc.capacity(), cap, "a second frame must not reallocate");
+        assert!(scratch_for(&mut sc, 16));
+        assert_eq!(sc.len(), 16);
+        assert_eq!(sc.capacity(), cap, "a smaller grid reuses the allocation");
+        assert!(scratch_for(&mut sc, 0));
+        assert!(sc.is_empty());
+    }
+
     use super::*;
     use crate::scene::{Align, Rect};
     use alloc::vec;

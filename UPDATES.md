@@ -1,5 +1,45 @@
 # Update log
 
+## 2026-09-24 — saving a scene while one is playing no longer reboots the panel (#724, #702)
+
+On the Seengreat panel, `POST /api/scenes` **reset the board** whenever a
+scene at the two-pattern-layer cap was live — and "edit the live scene,
+save" is the scene editor's normal flow. Serial caught three separate
+infallible allocations panicking on a heap the scene had already filled
+(`heap_largest` ~7 KB):
+
+* **4,096 B** — `with_store!`'s sequential-storage page buffer, taken on
+  every store op. It now reserves with `try_reserve_exact` and answers "no
+  record" / "refused", which the pattern store, the playlist, resume, layout,
+  name and palette writes all already handle.
+* **12,288 B** — `Compositor::native_layer`'s grid-sized text scratch,
+  allocated INSIDE the render loop. This was #702's core fix: the scratch is
+  fallible now (`scratch_for`), a text layer that cannot afford it draws
+  nothing and a ramped layer composites unramped, rather than the device
+  rebooting. The ramp LUT cook is fallible for the same reason.
+* the blob build itself — `scenestore::blob_of` ran TWICE per save (once in
+  `upsert` to check the cap, once in `commit` to write it) and `upsert`
+  deep-copied a list the caller had already cloned. `upsert` now takes the
+  list by value and returns the blob, which is one exact, fallible
+  reservation (`blob_try`) sized from `scenes::BLOB_LEN` + the body +
+  `SLACK`; a reservation that fails is `scenes: not enough memory to save
+  (N B free)`, and `web/src/lib/apiErrors.ts` turns that into "stop the
+  running scene and save again". `GET /api/scenes` reads `used` out of
+  `BLOB_LEN` instead of rebuilding the blob a third time.
+
+**On metal** (panel, `board-seengreat-hub75`, serial attached, reboots
+counted from `ESP-ROM` banners): the unfixed image rebooted **4 times in 10
+saves** at the cap, with `memory allocation of 4096 bytes failed` and
+`… of 12288 bytes failed` in the log. With both fixes, **0 reboots in 12
+saves**, `heap_largest` down to 6,196 B, every save persisted and `engines`
+stayed 2. The 4,096 B and 12,288 B panics are gone from the log entirely.
+
+**Still open**: the same log shows `/api/status` and `/api/scenes` growing
+their JSON response `String` infallibly (2,560–2,688 B) and panicking when a
+poll lands at the cap — read-only GETs, a different class from the write
+path, tracked separately. Image cost: +528…+864 B per board; the Athom keeps
+7.82 % of its slot free.
+
 ## 2026-09-24 — web UI v2 Phase B+C on metal: both bench boards deployed and verified
 
 Master `6855bf5` is on the **Athom** (`board-athom-music`, 1,207,232 B,

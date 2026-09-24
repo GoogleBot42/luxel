@@ -327,9 +327,22 @@ macro_rules! with_store {
                 #[allow(unused_mut)]
                 let mut $af = AsyncFlash::new(flash);
                 let $range: Range<u32> = base..(base + STORE_LEN);
-                let mut buf_vec = alloc::vec![0u8; BUF];
-                let $buf: &mut [u8] = buf_vec.as_mut_slice();
-                Some(block_on(async move { $body }))
+                // sequential-storage's page buffer, [BUF] bytes, on EVERY
+                // store op — including one an HTTP handler starts on a heap
+                // a live scene has already eaten. `alloc::vec![0u8; BUF]`
+                // there is an allocator panic, i.e. a reboot: this is the
+                // 4 KiB that took the Seengreat panel down on a scene save
+                // (Gitea #724). Reserve it FALLIBLY and answer "no record" /
+                // "refused" instead — every caller already handles that.
+                let mut buf_vec = alloc::vec::Vec::<u8>::new();
+                if buf_vec.try_reserve_exact(BUF).is_err() {
+                    esp_println::println!("store: no heap for the {} B page buffer", BUF);
+                    None
+                } else {
+                    buf_vec.resize(BUF, 0);
+                    let $buf: &mut [u8] = buf_vec.as_mut_slice();
+                    Some(block_on(async move { $body }))
+                }
             }
         }
     }};

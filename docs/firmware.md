@@ -532,6 +532,15 @@ without a serial console (docs/api.md).
 
 ## Stack & heap invariants
 
+**Nothing a request or a frame can reach may allocate infallibly.** The
+store's 4 KiB page buffer (`patterns::with_store!`), the compositor's
+grid-sized scratch (`compose::scratch_for`) and the scene blob
+(`scenestore::blob_try`) are all `try_reserve_exact` + a degraded answer,
+because a scene at a board's layer cap leaves `heap_largest` around 7 KB and
+an allocator panic there is a reset (Gitea #724, #702). A new buffer on
+either path follows them.
+
+
 Three real incidents — the v0.1.4 OTA-crash root cause (2026-07-06), the
 v0.1.19 boot brick, and the v0.1.31-33 deterministic stack panics
 (2026-07-27) — all trace back to the same memory model. This section is
