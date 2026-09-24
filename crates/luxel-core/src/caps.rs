@@ -240,6 +240,47 @@ pub const fn layers_for(pixel_count: u32) -> u8 {
     }
 }
 
+/// [`layers_for`] narrowed by the heap the device actually has (Gitea #479).
+///
+/// The pixel-count tier above is a static *upper* bound — it says what the
+/// board's shape affords when the heap is healthy. This is the same number
+/// with two live corrections applied:
+///
+/// * `headroom` — what the device could spend on resident engines with the
+///   current stack torn down, i.e.
+///   `budget::load_headroom(budget::load_base(heap_free, engine_heap))`.
+///   Measuring it that way rather than against bare `heap_free` keeps the
+///   advertised number from dropping every time a scene loads. Each layer
+///   costs [`crate::budget::layer_cost`]; a device under real memory
+///   pressure advertises fewer layers instead of accepting a scene it will
+///   then refuse at activation.
+/// * `ceiling` — a hard per-board cap, [`MAX_LAYERS`] at most. The firmware
+///   passes 2 on a `small-chip` board (the C3/C6 class, whose whole heap is
+///   the size of one panel frame) and [`MAX_LAYERS`] elsewhere.
+///
+/// Never 0: a device that cannot afford a second layer still runs one, which
+/// is the single-pattern case every board has always handled.
+///
+/// Worked numbers (docs/boards.md "Scene layers"): the S3 panel at 4096 px
+/// has ~36 KB of headroom against an 18 KB layer → 2, and the tier says 2 →
+/// **2**. A 300-px strip on a classic ESP32 has ~85 KB against a 7 KB layer
+/// → 12, clamped by the tier → **3**. A c3-devkit is capped by `ceiling` →
+/// **2**. A panel whose heap has been eaten by the device blur+glow chain
+/// falls to **1** rather than promising a layer it cannot build.
+pub const fn layers_for_headroom(pixel_count: u32, headroom: usize, ceiling: u8) -> u8 {
+    let per = crate::budget::layer_cost(pixel_count);
+    let afford = (headroom / per) as u32;
+    let tier = layers_for(pixel_count) as u32;
+    let cap = if ceiling < MAX_LAYERS { ceiling } else { MAX_LAYERS } as u32;
+    let n = if afford < tier { afford } else { tier };
+    let n = if n < cap { n } else { cap };
+    if n < 1 {
+        1
+    } else {
+        n as u8
+    }
+}
+
 impl Caps {
     /// Combine fixed hardware facts with the CURRENT layout.
     pub fn derive(hw: Hw, geom: &Geom, pixel_count: u32) -> Caps {
@@ -467,5 +508,52 @@ mod tests {
              \"blur_glow\":true,\"layers\":3,\"text_slots\":8,\"reboot\":true,\"ota\":true,\
              \"psram\":false,\"assets\":false}"
         );
+    }
+}
+
+#[cfg(test)]
+mod layer_tests {
+    use super::*;
+    use crate::budget::{load_base, load_headroom};
+
+    fn layers(pixels: u32, heap_free: usize, engine_heap: usize, ceiling: u8) -> u8 {
+        layers_for_headroom(
+            pixels,
+            load_headroom(load_base(heap_free, engine_heap)),
+            ceiling,
+        )
+    }
+
+    /// Gitea #479's acceptance numbers, board by board.
+    #[test]
+    fn the_measured_boards_land_where_the_design_says() {
+        // Seengreat S3 @4096 px, rainbow resident (docs/boards.md:611)
+        assert_eq!(layers(4096, 51_704, 17_000, MAX_LAYERS), 2);
+        // Athom / classic ESP32 @300 px idle (104,832 B)
+        assert_eq!(layers(300, 104_832, 18_000, MAX_LAYERS), 3);
+        // classic ESP32 @1024 px — the tier caps it at 2
+        assert_eq!(layers(1024, 90_000, 18_000, MAX_LAYERS), 2);
+        // a small-chip board is capped whatever the arithmetic says
+        assert_eq!(layers(300, 104_832, 18_000, 2), 2);
+    }
+
+    #[test]
+    fn a_starved_device_advertises_one_not_zero() {
+        // the panel with the device blur+glow chain eating the heap
+        assert_eq!(layers(4096, 26_928, 0, MAX_LAYERS), 1);
+        assert_eq!(layers(4096, 0, 0, MAX_LAYERS), 1);
+        assert_eq!(layers_for_headroom(4096, 0, 0), 1);
+    }
+
+    #[test]
+    fn it_never_exceeds_the_static_tier_or_the_hard_ceiling() {
+        // An absurdly roomy host is still bounded by the pixel-count tier,
+        // which is what keeps MAX_LAYERS a backstop rather than a target.
+        assert_eq!(layers_for_headroom(64, usize::MAX / 2, 100), layers_for(64));
+        assert_eq!(
+            layers_for_headroom(4096, usize::MAX / 2, MAX_LAYERS),
+            layers_for(4096)
+        );
+        assert!(layers_for_headroom(64, usize::MAX / 2, 100) <= MAX_LAYERS);
     }
 }

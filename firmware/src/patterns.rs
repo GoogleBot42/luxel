@@ -355,6 +355,9 @@ pub const LAYOUT_KEY: u32 = 0x7FFF_FFF9;
 /// The device's user-set name (see devname.rs) — variable-length, and the
 /// nvs device record is a fixed struct with no room for a string.
 pub const NAME_KEY: u32 = 0x7FFF_FFF8;
+/// Scene records (see scenes.rs) — ONE blob holding every scene block back
+/// to back, in the same line format the wire uses, capped by [BLOB_MAX].
+pub const SCENES_KEY: u32 = 0x7FFF_FFF7;
 
 /// The reserved keys live in this range, top-down. The migrator
 /// (migrate.rs) sweeps the WHOLE range rather than a hand-written list, so
@@ -362,7 +365,7 @@ pub const NAME_KEY: u32 = 0x7FFF_FFF8;
 /// carrying a key from a NEWER firmware than the one migrating it keeps it.
 pub const RESERVED_LO: u32 = 0x7FFF_FFF0;
 pub const RESERVED_HI: u32 = 0x7FFF_FFFF;
-const _: () = assert!(NAME_KEY >= RESERVED_LO && FORMAT_KEY <= RESERVED_HI);
+const _: () = assert!(SCENES_KEY >= RESERVED_LO && FORMAT_KEY <= RESERVED_HI);
 
 /// Store a small blob under a reserved key. False if storage is unavailable or
 /// the blob is too large for one page.
@@ -1669,8 +1672,17 @@ pub async fn delete(id: &str) -> String {
 //
 // An UNPINNED pattern's mapped bytes are covered by the [MapRead] guard
 // instead — see [BUSY].
-static PINS: BlockingMutex<CriticalSectionRawMutex, Cell<[Option<u32>; 3]>> =
-    BlockingMutex::new(Cell::new([None; 3]));
+/// Scene-layer pin slots (Gitea #478): slots `3..3+PIN_LAYERS` name the
+/// patterns a resident SCENE's extra layer engines execute from — the
+/// compositor keeps one engine per pattern layer and one per sprite layer,
+/// and a sprite's const arrays are read in place out of mapped flash, so
+/// every one of them is as pinnable as the running pattern. The render task
+/// republishes the whole set with [set_layer_pins] whenever the resident
+/// set changes; ids past the end fall back to the [MapRead] guard.
+pub const PIN_LAYERS: usize = 8;
+const PIN_SLOTS: usize = 3 + PIN_LAYERS;
+static PINS: BlockingMutex<CriticalSectionRawMutex, Cell<[Option<u32>; PIN_SLOTS]>> =
+    BlockingMutex::new(Cell::new([None; PIN_SLOTS]));
 
 fn set_pin(slot: usize, seq: Option<u32>) {
     PINS.lock(|c| {
@@ -1724,9 +1736,25 @@ pub fn unpin_prev() {
     set_pin(2, None);
 }
 
+/// Replace the whole scene-layer pin set (slots 3..). `ids` is the union of
+/// every pattern a resident scene's layer engines execute from, incoming and
+/// outgoing; an empty slice clears them. Call it on every scene install and
+/// teardown — a stale pin here is conservative (it wastes log bytes until
+/// the next call) but a MISSING one is a use-after-free, so republish the
+/// whole set rather than patching slots.
+pub fn set_layer_pins(ids: &[String]) {
+    PINS.lock(|c| {
+        let mut p = c.get();
+        for (i, slot) in p[3..].iter_mut().enumerate() {
+            *slot = ids.get(i).and_then(|id| seq_of(id));
+        }
+        c.set(p);
+    });
+}
+
 /// Every seq an engine may be executing from, as a slice-able buffer.
-fn pins() -> ([u32; 4], usize) {
-    let mut out = [0u32; 4];
+fn pins() -> ([u32; PIN_SLOTS + 1], usize) {
+    let mut out = [0u32; PIN_SLOTS + 1];
     let mut n = 0;
     let mut push = |s: Option<u32>| {
         if let Some(s) = s {

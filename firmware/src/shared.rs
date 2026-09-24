@@ -48,6 +48,12 @@ pub enum Msg {
     /// source Vec, no envelope Vec) or, without a slot, from a transient
     /// chunk-store read. Identity/read-back come from patterns::source_stat.
     Library { id: String, ms: u32 },
+    /// Show a stored SCENE (Gitea #478), crossfading over `ms` (0 = cut).
+    /// Like [Msg::Library] nothing but the id travels: the render task reads
+    /// the record from `scenes::get` and decodes each pattern/sprite layer
+    /// straight from its mapped arena slot. An empty id tears the scene down
+    /// and leaves the single-pattern engine on screen.
+    Scene { id: String, ms: u32 },
 }
 
 pub static MSG_QUEUE: Channel<CriticalSectionRawMutex, Msg, 8> = Channel::new();
@@ -358,6 +364,13 @@ pub static RESCANS: AtomicU32 = AtomicU32::new(0);
 /// charged every incoming pattern for the resident one and warned about
 /// patterns that load fine.
 pub static ENGINE_HEAP: AtomicU32 = AtomicU32::new(0);
+
+/// Resident engines the render task is holding (Gitea #479): 1 for a plain
+/// pattern, one per pattern/sprite layer for a scene, 0 with nothing loaded.
+/// [`ENGINE_HEAP`] is the SUM across them, so this is the divisor a client
+/// needs to reason about per-layer cost — `/api/status` reports it as
+/// `engines` beside `engine_heap`.
+pub static ENGINES: AtomicU32 = AtomicU32::new(0);
 
 /// The engine's EFFECTIVE geometry, published as `/api/status`'s `geom`
 /// (Gitea #464).

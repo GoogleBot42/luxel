@@ -1,5 +1,104 @@
 # Update log
 
+## 2026-09-24 — scenes on the device: a layer compositor in the render loop, `/api/scenes`, playlist scene items, and a heap-aware layer budget (#478-fw #479)
+
+**The crossfade became the general case.** The render task's ad-hoc
+`prev + blend_px` is gone. A **scene** is an ordered layer stack — pattern,
+text, sprite, colour — composited by `luxel_core::compose::Compositor` into
+the sink's staging buffer, which is exactly where the crossfade blended and
+is, on a pipelined board, the buffer already travelling to the output core.
+A plain single pattern is the same thing with one layer and no record, so
+there is no "scene mode" branch: `engine` still holds the render task's
+primary engine and, for a scene, that engine renders the FIRST pattern layer
+(`scenes::Slot::Base`). Controls, vars, sensors, injected events, the
+projection override, the pin host and the published `geom` all keep
+addressing it, unchanged.
+
+Crossfades now happen between *stacks*: the incoming one composites into the
+stage, the outgoing one blends over it with
+`compose::blend_px_mode(dst, src, Blend::Normal, t)`, `dst` being the
+outgoing pixel. That is `b + ((l−b)·t >> 16)`, the old `blend_px`'s
+`(a·(65536−t) + b·t) >> 16` rearranged — both shifts arithmetic, both
+flooring identically — so **a single-pattern crossfade is bit-for-bit what
+shipped before** (`compose::tests::a_two_layer_stack_reproduces_the_crossfade_exactly`).
+An outgoing bare pattern still blends straight out of its own engine's frame;
+only an outgoing *scene* allocates a composite buffer, and only for the
+duration of the fade.
+
+**The transition rule.** If the outgoing and incoming stacks together need
+more pattern layers than `caps.layers`, the transition is a **hard cut**.
+There is neither the heap for both stacks nor, on a JIT board, a second exec
+half — `jit.rs` has exactly `HALVES = 2`, sized for a transient crossfade, and
+a third resident engine finds none. That third engine fails **softly**:
+`claim` returns `no-buffer`, `try_compile` logs
+`jit: interpreter (no-buffer: no exec memory)` and the layer runs
+interpreted. Nothing is refused, nothing panics.
+
+**Storage.** One reserved-key blob under `patterns::SCENES_KEY`
+(`0x7FFF_FFF7`, beside `NAME_KEY`; the low-watermark assert moved with it),
+every scene block back to back in the wire format, capped at
+`patterns::BLOB_MAX` = 3840 B. A write that would exceed the cap is
+**refused** — `scenes: store full (N of 3840 B)`, nothing changes — because
+`store_blob`'s bool is checked here, unlike the playlist's, whose oversized
+definition is applied live and silently lost at the next reboot. The
+list algebra lives in `firmware/src/scenestore.rs`, which touches no flash
+and no locks and is compiled for the host by `tools/patlog-check`: eleven
+tests cover id assignment, upsert/replace, delete, the blob round trip
+through `scene::parse_all`, the store-full refusal, the playlist's
+`S<sceneId>` token and the civil-date conversion the clock layer needs.
+
+**Routes** (`GET`/`POST` `/api/scenes`, `GET`/`POST`/`DELETE`
+`/api/scenes/<id>`, `POST /api/scenes/<id>/activate`) all return
+`Some(ApiResponse)` through the shared tails. The DELETE block was folded
+into one tail while a third arm was added to it, which pays for itself. A
+scene delete also drops every playlist item naming it.
+
+**Playlist scene items.** `I S<sceneId> <sec>`; `C`/`P` under one are
+ignored (a scene carries its own per-layer overrides). `GET` items gain
+`"kind":"pattern"|"scene"`, and a scene item carries `"name"` and `"layers"`.
+The body still persists verbatim, so the id-prefix trick is forward- and
+backward-compatible in both directions.
+
+**#479: the budget learned to count past one.** `budget::load_base`'s premise
+("the outgoing engine is dropped before the incoming one is built",
+singular) was falsified for a few seconds by every crossfade and is
+falsified permanently by a scene. `engine_heap` is now the **sum** over the
+resident engines and `/api/status` reports `engines` beside it. New:
+`budget::LAYER_BASE` (6 KiB, from the measured fleet), `layer_cost(pixels)`
+= that plus the layer's 3 B/px frame, and `layer_fits(heap_free, pixels)`,
+which pre-flights a layer *before* the decode peak rather than only after
+it — an over-budget layer becomes a no-op slot and reports
+`scene: layer N does not fit` on activate, leaving the rest of the scene up.
+`caps::layers_for_headroom(pixels, headroom, ceiling)` narrows the old
+pixel-count tier by live heap and by a per-board ceiling (2 under
+`small-chip`), never below 1: **2** on the S3 panel at 4096 px, **3** on a
+≤300-px strip, **1** on a panel whose heap the device blur+glow chain has
+eaten. Taking headroom against `heap_free + engine_heap` rather than bare
+`heap_free` keeps the advertised number from dropping the moment a scene
+loads, which is exactly when a UI reads it.
+
+Arena pins generalized with it: `PINS` gained `PIN_LAYERS = 8` slots and
+`patterns::set_layer_pins`, republished on every scene install and teardown
+with the incoming and outgoing stacks together — every layer engine borrows
+its bytecode in place from the mapped extent, sprites included, and a
+compaction on the other core does not ask.
+
+**The static budget moved, and it had to be paid.** `tools/stack-check.sh`
+measures the main-task stack as the DRAM left over after statics, and the new
+route arms grow the WEB TASK's future — picoserve's whole response path,
+replicated `WEB_TASK_POOL_SIZE` times — by ~400 B per slot (`web_task::POOL`
+28,368 → 29,592 B on pb-v3). Master was **already under the 24,576 B floor**
+before this branch (23,484 on pb-v3, 24,340 on athom-music — #484's text
+statics), and this took it to 21,252 / 22,100 / 24,004 (Seengreat). The
+classic ESP32's `STATICS_RESERVE` goes 512 → 4096 B and the psram-arena
+board's heap 154 → 152 KB, putting all three back over the floor at 24,836 /
+25,684 / 26,052. The C3 (32,424) and C6 (133,952) have DRAM to spare and are
+untouched. Same trade `SECOND_OUTPUT_RAM` already makes, for the same reason.
+
+Docs: docs/firmware.md "Scenes: the layer compositor in the render loop",
+docs/boards.md "Scene layers: how many a board affords" + the `.stack` table,
+docs/api.md (playlist scene items, `engines`, the `layers` cap).
+
 ## 2026-09-24 — mirror: `/api/scenes`, `/api/text`, playlist scene items, and a render loop that composites (#478 #485)
 
 `luxel serve` is what the web app develops against, so every route the firmware

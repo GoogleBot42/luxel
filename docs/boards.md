@@ -1763,6 +1763,52 @@ poll (falling back to `/api/config`'s `max` for older firmware), so the
 editor's pixel control clamps to whatever board is actually connected.
 `web/tools/maxpixels-e2e.mjs` is the regression check.
 
+## Scene layers: how many a board affords (Gitea #479)
+
+A scene's **pattern layers** each cost a resident engine, and `caps.layers`
+on `/api/status` is what the editor budgets against. The number is derived,
+not per-board configuration, by `luxel_core::caps::layers_for_headroom`:
+
+```
+layers = clamp(1, min(tier, headroom / layer_cost), ceiling)
+  tier       = caps::layers_for(pixel_count)    — 3 at ≤512 px, else 2
+  headroom   = budget::load_headroom(budget::load_base(heap_free, engine_heap))
+             = heap_free + engine_heap − RUNTIME_FLOOR (20 KiB)
+  layer_cost = budget::LAYER_BASE (6 KiB) + pixel_count × 3
+  ceiling    = 2 on a `small-chip` board, else caps::MAX_LAYERS (4)
+```
+
+`layer_cost` is a frame buffer plus a flat base rather than a per-pattern
+model, because it sizes an *advertised* number and a *pre-flight* refusal.
+The real gate stays the post-build `RUNTIME_FLOOR` check in
+`try_budgeted_engine`, which measures the engine that was actually built; a
+layer that fails it is reported as `scene: layer N does not fit` on activate
+and renders nothing, leaving the rest of the scene up.
+
+`LAYER_BASE` = 6 KiB comes from the measured fleet
+(`docs/design/webui-v2/research/engine-constraints.md` §2): a second
+rainbow-class engine on the S3 panel costs ~17 KB of which 12.3 KB is its own
+frame; an arena-backed Aurora 2D costs 14 KB of which 12.3 KB is its frame.
+
+Taking `headroom` against `heap_free + engine_heap` rather than bare
+`heap_free` is deliberate: the advertised number would otherwise drop every
+time a scene loaded, which is exactly when a UI is reading it.
+
+| board / layout | heap_free + engine_heap | layer_cost | layers |
+|---|---:|---:|---:|
+| Seengreat S3 @4096 px, one engine resident | 68.7 KB | 18.4 KB | **2** (tier) |
+| Seengreat S3 @4096 px, device blur+glow on | 26.9 KB | 18.4 KB | **1** |
+| Athom / classic ESP32 @300 px | 122.8 KB | 6.9 KB | **3** (tier) |
+| classic ESP32 @1024 px | 108 KB | 9.1 KB | **2** (tier) |
+| c3-devkit / c6-devkit (`small-chip`) | — | — | **2** (ceiling) |
+
+Two further things bound a stack in practice, both documented in
+docs/firmware.md "Scenes: the layer compositor in the render loop": the JIT
+has exactly two exec halves, so a third resident engine falls back to the
+interpreter (softly — it is logged, never refused); and a transition whose
+two stacks together exceed `caps.layers` is a hard cut rather than a
+crossfade.
+
 ## Big-flash and PSRAM modules (the Seengreat board)
 
 The Seengreat board carries an ESP32-S3-WROOM-1-**N16R8**: 16 MB of flash
@@ -3286,6 +3332,25 @@ another 120 B, so the classic-ESP32 `heap_allocator!` gives 512 B back as
 `STATICS_RESERVE` — pb-v3 **24,852 B**, athom-music **25,676 B**,
 pb-v3 + `small-chip` **26,468 B**, all green. `tools/ci.sh` does not run
 stack-check, which is how master drifted under it unnoticed (Gitea #515).
+
+**2026-09-24, `STATICS_RESERVE` 512 → 4096.** Phase C's text-slot table
+(#484/#485) and Phase B's scene routes (#478) took another ~3.3 KB of DRAM
+statics between them, most of it the **web task's future** — picoserve's
+whole response path, replicated `server::WEB_TASK_POOL_SIZE` times, which
+four new route arms grow by ~400 B per slot (measured: `web_task::POOL`
+28,368 → 29,592 B on pb-v3). Master was already under the floor before this
+branch touched it:
+
+| board | master | #478 branch | after the reserve bump |
+|---|---:|---:|---:|
+| `board-pixelblaze-v3` | 23,484 | 21,252 | **24,836** |
+| `board-athom-music` | 24,340 | 22,100 | **25,684** |
+| `board-c3-devkit` | 34,648 | 32,424 | 32,424 (unchanged — non-esp32) |
+
+The classic ESP32 gives up 3.5 KB of heap for it, the same trade
+`SECOND_OUTPUT_RAM` makes and for the same reason: on that chip `.stack` is
+the DRAM left over, so a growing static eats the stack floor rather than the
+heap. The RISC-V and S3 boards have DRAM to spare and are untouched.
 
 2026-09-19, **#550's finer `reboot_required` — four shapes, one of them
 nearly free.** `Layout::reboot_required` stopped comparing the whole output

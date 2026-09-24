@@ -114,23 +114,65 @@ pub const fn external_element_budget(array_byte_budget: usize) -> usize {
 }
 
 /// Free heap a pattern load actually starts from, given the two numbers
-/// `/api/status` reports: `heap_free` (free right now, with the CURRENT
-/// pattern's engine resident) and `engine_heap` (what that engine costs).
+/// `/api/status` reports: `heap_free` (free right now, with every RESIDENT
+/// engine alive) and `engine_heap` (what those engines cost, summed).
 ///
-/// The firmware drops the outgoing engine *before* it decodes the incoming
+/// The firmware drops the resident engines *before* it decodes the incoming
 /// program — `engine = None; drop_prev(&mut prev);` is the first thing both
-/// `Msg::Code` and a non-crossfading `Msg::Library` do — so the heap the new
-/// pattern is measured against is `heap_free` PLUS everything the old engine
-/// gives back. Predicting against `heap_free` alone charges the incoming
-/// pattern for the outgoing one, which is how the editor came to warn about
+/// `Msg::Code` and a non-crossfading `Msg::Library` do, and a scene swap
+/// tears the whole outgoing stack down the same way — so the heap the new
+/// pattern is measured against is `heap_free` PLUS everything they give
+/// back. Predicting against `heap_free` alone charges the incoming pattern
+/// for the outgoing one, which is how the editor came to warn about
 /// patterns that load fine (Gitea #287): the fatter the resident pattern,
 /// the lower `heap_free`, the more the editor cried wolf.
+///
+/// **N resident engines (Gitea #479).** Before scenes this function's
+/// premise was "the outgoing engine is dropped before the incoming one is
+/// built", singular — the crossfade already falsified it for a few seconds
+/// and a scene falsifies it permanently. `engine_heap` is now the SUM over
+/// the resident engines (`/api/status` reports `engines` beside it), so the
+/// identity below still holds for a load that REPLACES the stack. What it
+/// does NOT model is adding a layer to a live scene, where nothing is freed
+/// first: that load starts from `heap_free` alone and is sized by
+/// [`layer_fits`].
 ///
 /// `engine_heap` 0 means the firmware doesn't report it (pre-#287 builds, the
 /// native mirror): fall back to `heap_free`, which is the old, conservative
 /// behaviour.
 pub const fn load_base(heap_free: usize, engine_heap: usize) -> usize {
     heap_free.saturating_add(engine_heap)
+}
+
+/// Fixed heap one more resident engine costs beyond its frame buffer:
+/// `Program` tables, VM globals and stack, the arena's bookkeeping.
+///
+/// Deliberately a flat number rather than a per-pattern model — this sizes
+/// the ADVERTISED layer count ([`crate::caps::layers_for_headroom`]) and a
+/// pre-flight refusal, both of which want a conservative constant. The real
+/// gate stays the post-build `RUNTIME_FLOOR` check in `try_budgeted_engine`,
+/// which measures the engine that was actually built.
+///
+/// 6 KiB from the measured fleet numbers in
+/// `docs/design/webui-v2/research/engine-constraints.md` §2: a second
+/// rainbow-class engine on the S3 panel costs ~17 KB of which 12.3 KB is its
+/// frame, and an arena-backed Aurora 2D costs 14 KB of which 12.3 KB is its
+/// frame. See docs/boards.md "Scene layers" for the resulting per-board
+/// layer counts.
+pub const LAYER_BASE: usize = 6 * 1024;
+
+/// Resident bytes one more pattern layer costs at this pixel count: the
+/// engine's own 3 B/px RGB888 frame (internal DRAM on every board — the
+/// PSRAM arena holds array storage only) plus [`LAYER_BASE`].
+pub const fn layer_cost(pixel_count: u32) -> usize {
+    LAYER_BASE + pixel_count as usize * 3
+}
+
+/// Whether one more resident layer fits without breaching [`RUNTIME_FLOOR`],
+/// given free heap NOW (nothing is dropped first when a layer is added to a
+/// live scene).
+pub const fn layer_fits(heap_free: usize, pixel_count: u32) -> bool {
+    heap_free >= RUNTIME_FLOOR + layer_cost(pixel_count)
 }
 
 /// How many bytes of RESIDENT engine a pattern may leave behind before the
@@ -316,5 +358,41 @@ mod tests {
         assert_eq!(fit(69_633, 0, base), Fit::Tight);
         assert_eq!(fit(80 * 1024, 0, base), Fit::Tight);
         assert_eq!(fit(80 * 1024 + 1, 0, base), Fit::Over);
+    }
+}
+
+#[cfg(test)]
+mod layer_tests {
+    use super::*;
+
+    /// The fleet numbers in `docs/design/webui-v2/research/engine-constraints.md`
+    /// §2 and docs/boards.md "Scene layers", turned into assertions so a
+    /// change to [`LAYER_BASE`] has to face them.
+    #[test]
+    fn a_layer_costs_its_frame_plus_a_fixed_base() {
+        // the S3 panel: 12,288 B of RGB888 frame dominates
+        assert_eq!(layer_cost(4096), LAYER_BASE + 12_288);
+        // a 300-px strip: the frame is noise
+        assert_eq!(layer_cost(300), LAYER_BASE + 900);
+    }
+
+    #[test]
+    fn a_layer_fits_only_above_the_runtime_floor() {
+        let per = layer_cost(4096);
+        assert!(layer_fits(RUNTIME_FLOOR + per, 4096));
+        assert!(!layer_fits(RUNTIME_FLOOR + per - 1, 4096));
+        // an empty heap never affords one
+        assert!(!layer_fits(0, 1));
+    }
+
+    #[test]
+    fn load_base_is_still_the_whole_resident_sum() {
+        // one engine, the pre-scene case
+        assert_eq!(load_base(30_000, 17_000), 47_000);
+        // three layers summed into engine_heap: the same identity, because a
+        // scene swap tears the whole stack down before it decodes
+        assert_eq!(load_base(20_000, 51_000), 71_000);
+        // a host that does not report it falls back to free heap
+        assert_eq!(load_base(30_000, 0), 30_000);
     }
 }

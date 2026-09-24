@@ -395,7 +395,35 @@ fn device_caps(geom: &luxel_core::caps::Geom, pixels: u32) -> luxel_core::caps::
         psram: cfg!(feature = "psram-arena"),
         blur_glow: crate::board::BLUR_GLOW,
     };
-    luxel_core::caps::Caps::derive(hw, geom, pixels)
+    let mut caps = luxel_core::caps::Caps::derive(hw, geom, pixels);
+    caps.layers = scene_layer_cap();
+    caps
+}
+
+/// `caps.layers` for THIS device right now (Gitea #479): the pixel-count
+/// tier from `luxel_core::caps`, narrowed by the heap the device could
+/// actually spend on resident engines and by a per-board ceiling.
+///
+/// `small-chip` boards (the C3/C6 class, whose whole heap is about the size
+/// of one panel frame) are capped at two whatever the arithmetic says — the
+/// same feature that already trims their WiFi buffers.
+///
+/// This is the ONE number the scene compositor, the playlist transition rule
+/// and the editor's "N of N used" note all read, so they cannot disagree.
+pub fn scene_layer_cap() -> u8 {
+    use luxel_core::budget::{load_base, load_headroom};
+    let heap = esp_alloc::HEAP.free() as usize;
+    let resident = crate::shared::ENGINE_HEAP.load(Ordering::Relaxed) as usize;
+    let ceiling = if cfg!(feature = "small-chip") {
+        2
+    } else {
+        luxel_core::caps::MAX_LAYERS
+    };
+    luxel_core::caps::layers_for_headroom(
+        PIXEL_COUNT.load(Ordering::Relaxed),
+        load_headroom(load_base(heap, resident)),
+        ceiling,
+    )
 }
 
 fn status_json() -> String {
@@ -667,6 +695,10 @@ fn status_json() -> String {
     // `luxel_core::budget::load_base` (Gitea #287).
     push_piece(&mut out, ",\"engine_heap\":");
     push_u32(&mut out, crate::shared::ENGINE_HEAP.load(Ordering::Relaxed));
+    // Resident engines behind that sum (Gitea #479): 1 for a plain pattern,
+    // one per pattern/sprite layer for a scene, 0 with nothing loaded.
+    push_piece(&mut out, ",\"engines\":");
+    push_u32(&mut out, crate::shared::ENGINES.load(Ordering::Relaxed));
     // External pattern-array arena (Gitea #253) — present only on a board
     // that has one, so no other board's JSON (or image) changes. This is a
     // SECOND heap: it is not part of `heap_free`, and a pattern's arrays
@@ -1580,6 +1612,58 @@ async fn api_patterns_activate(id: &str) -> String {
     }
 }
 
+/// `POST /api/scenes` (`want` None) and `POST /api/scenes/<id>` (replace).
+///
+/// Factored out of the route table for the same reason
+/// [api_patterns_activate] is: the handler's locals would otherwise live in
+/// the web task's FUTURE, which is a `.bss` static replicated
+/// [WEB_TASK_POOL_SIZE] times and comes straight out of the main-task stack
+/// floor (tools/stack-check.sh).
+async fn api_scenes_save(body: &str, want: Option<&str>) -> String {
+    match crate::scenes::set_from_wire(body, want) {
+        Ok(id) => {
+            // a live-applying edit: re-push it if it is what the render task
+            // is showing, so one POST is all the scene editor needs
+            if crate::scenes::active_id() == id {
+                let _ = crate::scenes::activate(&id, 0).await;
+            }
+            let mut out = String::from("{\"ok\":true,\"id\":\"");
+            push_piece(&mut out, &id);
+            push_piece(&mut out, "\"}");
+            out
+        }
+        Err(e) => api_error_esc(&e),
+    }
+}
+
+/// Everything under `POST /api/scenes/<…>`: a replace, or `<id>/activate`.
+async fn api_scenes_id(tail: &str, raw: &[u8]) -> String {
+    match tail.strip_suffix("/activate") {
+        Some(id) if !id.contains('/') => {
+            // optional `<ms>` crossfade body; absent/unparseable = hard cut
+            let ms = core::str::from_utf8(raw)
+                .ok()
+                .and_then(|s| s.trim().parse::<u32>().ok())
+                .unwrap_or(0);
+            match crate::scenes::activate(id, ms).await {
+                // Same treatment as a direct PATTERN activate: controls
+                // reset, and a playing playlist is NOT stopped here — the
+                // console parks it client-side first (Gitea #538), and doing
+                // it server-side would diverge from
+                // /api/patterns/<id>/activate and from the mirror.
+                Ok(()) => {
+                    crate::shared::set_current_controls(Vec::new());
+                    String::from("{\"ok\":true}")
+                }
+                Err(e) => api_error_esc(&e),
+            }
+        }
+        Some(_) => api_error("bad scenes route"),
+        None if tail.contains('/') => api_error("bad scenes route"),
+        None => api_scenes_save(&String::from_utf8_lossy(raw), Some(tail)).await,
+    }
+}
+
 /// Body: `name raw0 [raw1 raw2]` — whitespace-separated, values raw 16.16.
 async fn api_control(body: String) -> ApiResponse {
     let mut it = body.split_whitespace();
@@ -2255,6 +2339,14 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     crate::playlist::set_from_wire(&text(&raw));
                     Some(json_response(String::from("{\"ok\":true}")))
                 }
+                // POST /api/scenes — one scene block, `S - <name>`; the
+                // store assigns the id and hands it back.
+                "/api/scenes" => Some(json_response(api_scenes_save(&text(&raw), None).await)),
+                // POST /api/scenes/<id>            — replace that scene
+                // POST /api/scenes/<id>/activate   — show it (body: ms)
+                r if r.starts_with("/api/scenes/") => Some(json_response(
+                    api_scenes_id(&r["/api/scenes/".len()..], &raw).await,
+                )),
                 "/api/playlist/play"
                 | "/api/playlist/stop"
                 | "/api/playlist/next"
@@ -2289,20 +2381,28 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 return response.write_to(conn, response_writer).await;
             }
         } else if method.eq_ignore_ascii_case("DELETE") {
-            // clear the device output palette (record erased, stage off)
-            if route == "/api/output/palette" {
-                let body = if crate::outpal::clear() {
+            // One shared tail, like the GET and POST tables: a second
+            // `finalize().await? + write_to` costs ~650 B of image.
+            let api: Option<ApiResponse> = if route == "/api/output/palette" {
+                // clear the device output palette (record erased, stage off)
+                Some(json_response(if crate::outpal::clear() {
                     String::from("{\"ok\":true}")
                 } else {
                     api_error("cleared live, but the store refused to persist it")
-                };
-                let response = json_response(body);
-                let conn = request.body_connection.finalize().await?;
-                return response.write_to(conn, response_writer).await;
-            }
-            if let Some(id) = route.strip_prefix("/api/patterns/") {
+                }))
+            } else if let Some(id) = route.strip_prefix("/api/scenes/") {
+                // deleting a scene also drops every playlist item naming it
+                Some(json_response(match crate::scenes::delete(id) {
+                    Ok(()) => String::from("{\"ok\":true}"),
+                    Err(e) => api_error_esc(&e),
+                }))
+            } else if let Some(id) = route.strip_prefix("/api/patterns/") {
                 crate::playlist::preflight_mark_dirty();
-                let response = json_response(crate::patterns::delete(id).await);
+                Some(json_response(crate::patterns::delete(id).await))
+            } else {
+                None
+            };
+            if let Some(response) = api {
                 let conn = request.body_connection.finalize().await?;
                 return response.write_to(conn, response_writer).await;
             }
@@ -2581,6 +2681,13 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 }
                 "/api/layout" => Some(json_response(crate::layout::to_json())),
                 "/api/playlist" => Some(json_response(crate::playlist::to_json())),
+                "/api/scenes" => Some(json_response(crate::scenes::to_json())),
+                // GET /api/scenes/<id> → the scene object; missing id
+                // returns 200 + {"ok":false,…} like /api/patterns/<id>.
+                r if r.starts_with("/api/scenes/") => Some(json_response(
+                    crate::scenes::get_json(&r["/api/scenes/".len()..])
+                        .unwrap_or_else(|| api_error("no such scene")),
+                )),
                 "/api/map" => Some(json_response(crate::devicemap::to_json())),
                 "/api/protocol" => {
                     let mut out = String::from("{\"protocol\":\"");
