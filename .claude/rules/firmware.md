@@ -16,7 +16,14 @@ paths:
   want).
 - After touching large statics/buffers, run `tools/stack-check.sh` — it
   measures every linked function's frame (not just your own source) and
-  enforces a total `.stack` floor. Measure, don't estimate: v0.1.31-33
+  enforces a total `.stack` floor. **"Firmware change" includes a
+  `luxel-core` change**: `.stack` is leftover DRAM, so a `static` added in a
+  crate the firmware links comes straight out of the main task's stack. A
+  544 B slot table in `text.rs` — eight 64-byte strings, nothing by any
+  normal standard — took `board-pixelblaze-v3` from 24,708 B to 24,164 B and
+  failed the 24,576 B floor (2026-09-24, #484). The fix was to allocate the
+  table on first use instead; prefer that to shrinking a board's heap
+  whenever the data is optional. Measure, don't estimate: v0.1.31-33
   shipped an estimated stack size that was well above the real, measured one,
   and it panicked in production.
   **Measure the BASELINE too, and on the board you are shipping to.** On the

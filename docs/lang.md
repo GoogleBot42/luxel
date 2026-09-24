@@ -992,6 +992,52 @@ export function renderFrame() {
 }
 ```
 
+### Text (Luxel extension)
+
+Grid space, like `blit`, and a silent no-op without a grid. Full spec:
+`docs/spec/text.md`.
+
+The language has **no string type**, and these are the only place a quoted
+literal is legal: as an argument of `drawText`, `textWidth` or `font`.
+Anywhere else a string is still a compile error. What the builtins actually
+take is a *text handle*, which is an ordinary number — a literal's handle, or
+`textSlot(n)`.
+
+- `drawText(text, x, y, align = 0)` — draw at grid cell `(x, y)`, **top-left
+  origin, y growing down**, in the brush colour and the current font; returns
+  the advance width in pixels. `align` 0 left / 1 centre / 2 right decides
+  what `x` anchors. Clipped at all four edges.
+- `textWidth(text)` — the same advance width without drawing. Pure
+  arithmetic, so it answers even on a fixture with no grid.
+- `drawNumber(value, x, y, digits, decimals)` — the same, for a number.
+  `digits` is the **minimum** integer digits (zero-padded, max 10),
+  `decimals` the fraction digits (max 4, rounded half-up); a negative value
+  gets a leading `-`. Fixed-point aware: `drawNumber(0.5, 0, 0, 1, 2)` draws
+  `0.50`.
+- `font("tiny" | "regular" | "large")` — pick the face. **Modal and
+  persistent across frames**, unlike the brush. `tiny` is Tom Thumb (3×6
+  cell, 4 px pitch — about 16 characters across a 64-wide panel), `regular`
+  X11 misc-fixed 5×7, `large` Spleen 5×8. An unrecognised name changes
+  nothing, so `font("")` just returns the active face's index (0/1/2).
+- `textSlot(n)` — the handle of device text slot `n` (0..7): a string the
+  UI, `POST /api/text`, MQTT or a Home Assistant text entity set. Usable
+  wherever a literal is, which is how outside text reaches a panel with no
+  pattern edit. An empty or missing slot draws nothing and measures 0.
+
+Only printable ASCII (`0x20..0x7E`) has glyphs; anything else draws `?`.
+
+```js
+export function renderFrame() {
+  if (gridWidth() == 0) return       // not a matrix — nothing to draw on
+  clear()
+  rgb(1, .6, 0)
+  font("tiny")
+  drawText("HELLO", gridWidth() / 2, 1, 1)    // centred on the panel
+  drawText(textSlot(0), 0, 8)                 // whatever the API last set
+  drawNumber(time(.1) * 100, 0, 16, 3, 1)     // 000.0 … 100.0
+}
+```
+
 ### Predefined globals
 
 `pixelCount`; math constants `PI PI2 PI3_4 PISQ E SQRT2 SQRT1_2 LN2 LN10
