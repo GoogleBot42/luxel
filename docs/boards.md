@@ -2231,7 +2231,7 @@ brightness 4, read and restored, never set.
 | `bulk-canvas-ripples-2d` | 8,191 (113) | 3,983 (114) | **2.06×** | — | — |
 | `snake-2d` | 79,350 (13) | refused `no-memory` | — | 11,256 | — |
 
-<!-- TODO(p4): bulk-canvas-ripples-2d's code B and compile_us were not captured -->
+
 
 `rainbow`'s 115 fps is the panel's 115 Hz rescan ceiling, not the engine's:
 past that point the JIT is buying headroom, not frames, which is the same
@@ -2348,8 +2348,8 @@ board with eight megabytes of PSRAM sitting idle beside it, which is what
 keeps `snake-2d` interpreted at 4096 px. Moving it into the arena is the open
 follow-up (docs/jit-design.md §10).
 
-<!-- TODO(p4): library differential (tools/jit-diff.mjs) — native vs interpreted pixels over all of library/ on both boards -->
-<!-- TODO(p4): soak (tools/hw-bench.mjs) with the JIT on -->
+**Library differential on metal** (`tools/jit-diff.mjs`, 2026-09-24). Athom, 144 px, all 307 patterns: **295 ran natively** (54 pixel-identical, 241 differing only through a wall-clock input), **0 mismatches, 0 vmerr, 0 crashes**; 11 refused — 7 `too-large` over the classic board's 12 KB half (dbzbattlefinal, fireworks-finale, flash-posterize-music-sequencer-framework, multisegment-demo, snake-2d-v2, stargen-polar-2d, utility-palettes) and 4 `no-memory` (2d-fireworks-fade, frogger-2d, the two music sequencers); 1 `unstable` (beat-bounce, sound-reactive, the interpreter does not repeat itself either). Seengreat, 4096 px, 141 patterns (every third plus every 2D one — the full sweep is ~90 s a pattern at this pixel count): **131 ran natively** (10 identical, 121 clock), **0 mismatches, 0 vmerr**, 7 refused `no-memory` (bouncy-boxes, lightning-strike, snake-2d, snake-2d-v2, sound-spectrokalidamandala, sunrise-2d, stargen-polar-2d), 1 upload refused for heap fragmentation, and 2 rows (frogger-2d, music-sequencer-for-v2) whose 30–35 KB blobs the board rejects at 4096 px with the JIT off as well — that rejection leaves ~3.6 KB of heap and the next HTTP request panics, which is Gitea #678, not the JIT.
+**Soak with the JIT on** (2026-09-24): Athom, Jeremy's own 4-item playlist swapping every 5 s, 55 min native — 0 resets, `fence_timeouts` 0, 118 watcher samples all `native`; Seengreat, a 2-item playlist (_Fairies, Aurora 2D) swapping every 30 s, 33 min — 0 resets, `fence_timeouts` 0, 66 samples all `native`, heap 30.6–37.6 KB, 41 native activations narrated on serial and no panic. Not `tools/hw-bench.mjs`: that pushes every gallery pattern, which on the panel is Gitea #678 waiting to happen, and the library differential had already activated every pattern natively once.
 
 ## Beyond the current boards: chip-support assessment (2026-07-29)
 

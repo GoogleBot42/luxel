@@ -64,6 +64,15 @@ pre-authorized per CLAUDE.md — no need to ask before pushing.
 
 ## 3. Gotchas
 
+- **`tools/ota-push.sh` pushes the ELF at the board's target path, and
+  `tools/stack-check.sh` REBUILDS that ELF with different bytes.** Build →
+  copy the ELF aside → stack-check → build again → push; and symbolicate
+  a later panic against the copy, not against whatever is in target/ now
+  (2026-09-24, the JIT bring-up).
+- **Kill a `socat` serial reader before any S3 OTA** and re-attach only
+  after `boot_ok` (~75 s) — the reboot re-enumerates the USB node and the
+  host re-applies termios, which is itself a reset (seengreat-panel skill).
+
 - **Found state is READ, never carried as a target.** A brief that names a
   brightness / pattern / pixel count invites an agent to "restore" the
   number in the brief — one restored brightness 31 over Jeremy's 3 that way

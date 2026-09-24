@@ -160,6 +160,38 @@ Symbolicate a backtrace with the S3 ELF:
 (inside `nix develop`; tools/decode-backtrace.sh defaults to the classic
 ESP32 ELF — pass the S3 one).
 
+## The JIT on this board (Gitea #665, 2026-09-24)
+
+- **Native code lives in PSRAM and is ON by default.** `/api/status`'s
+  `jit` says `native` + `place:"psram"` for the live pattern;
+  `POST /api/jit {"on":false}` is the kill switch for a session,
+  `{"place":"internal"}` forces the SRAM1 heap alias (the microbench
+  lever). Neither persists; a reboot comes back ON.
+- **`reason:"no-memory"` is the normal answer for the big 2D programs at
+  4096 px** (snake-2d, snake-2d-v2, sunrise-2d, stargen-polar-2d…): the
+  emitter's bookkeeping needs `words*24 + fns*240 + 1 KB` of INTERNAL heap
+  beside the engine and this board has 26–37 KB left. Not a failure — the
+  interpreter runs them. Follow-up #671.
+- **Bench with ONE socket at a time.** `tools/patbench.mjs` (and a `curl`
+  beside it) exhaust the 3-socket web pool — rows come back `TypeError:
+  fetch failed` / `ECONNREFUSED` and `restore pattern failed`, which reads
+  like a crash and is not. `tools/jit-diff.mjs` is single-socket with
+  `connection: close` + retry; copy that shape (Gitea #675).
+- **A reboot is invisible to a push-based tool now that the JIT boots ON**:
+  after a reset the board comes back running the default pattern with the
+  switch on, and the tool's next POST/push just proceeds. Run a watcher
+  that logs `pass.n` every 30 s (it restarts from 0) beside any long run,
+  and read it before believing "0 crashed".
+- **The serial reader recipe above WORKS as written** (2026-09-24): the
+  long `socat` open attached passively (0 bytes for minutes), the second
+  2-second open reset the chip, and the reader then captured every boot,
+  `jit:` narration line and PANIC backtrace. Symbolicate against the ELF
+  you PUSHED (keep a copy — `tools/stack-check.sh` overwrites the target).
+- **A rejected 30–35 KB pattern load leaves ~3.6 KB of heap and the next
+  HTTP request panics** (frogger-2d, music-sequencer-for-v2 at 4096 px,
+  JIT off too) — Gitea #678. Expect it in any sweep that pushes the whole
+  library; it is why two rows of a jit-diff run read `no-baseline`.
+
 ## Reproducing a soak finding
 
 hw-bench rows only say "crashed" or "vmerr"; to tell a panic from
