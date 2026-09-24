@@ -48,6 +48,15 @@ pub enum Msg {
     /// source Vec, no envelope Vec) or, without a slot, from a transient
     /// chunk-store read. Identity/read-back come from patterns::source_stat.
     Library { id: String, ms: u32 },
+    /// Install a host-set text slot (Gitea #485).
+    ///
+    /// `luxel_core::text`'s slot table is a lock-free single-writer
+    /// structure — an `UnsafeCell` behind a documented contract, like the
+    /// arena's hook — and on a dual-core board the web and MQTT tasks run on
+    /// the OTHER core from the render loop. So nothing but the render task
+    /// ever calls `text::set_slot`; the control plane queues the write here
+    /// and keeps its own read-back copy ([`set_text_slot`]).
+    TextSlot { n: u8, text: String },
     /// Show a stored SCENE (Gitea #478), crossfading over `ms` (0 = cut).
     /// Like [Msg::Library] nothing but the id travels: the render task reads
     /// the record from `scenes::get` and decodes each pattern/sprite layer
@@ -911,6 +920,40 @@ pub fn wall_now_local() -> Option<i64> {
     use core::sync::atomic::Ordering;
     let (base, at) = share_get(&WALL_CLOCK)?;
     Some(base + at.elapsed().as_secs() as i64 + TZ_MINUTES.load(Ordering::Relaxed) as i64 * 60)
+}
+
+/// The control plane's copy of the eight text slots (Gitea #485).
+///
+/// `luxel_core::text`'s table is written ONLY by the render task, because it
+/// is lock-free single-writer and on a dual-core board the web and MQTT
+/// tasks are on the other core. This copy is what `GET /api/text` and the
+/// HA text entities' state publishes read, written under a critical section
+/// by whoever accepted the value. The two can't disagree: both are the same
+/// already-truncated string, and [`Msg::TextSlot`] carries it.
+///
+/// Empty until the first write — 8 × 64 B of `.bss` is not free on a board
+/// where `.stack` is the DRAM left over (docs/boards.md).
+static TEXT_SLOTS: Shared<Vec<String>> = BlockingMutex::new(RefCell::new(Vec::new()));
+
+/// Record slot `n`'s (already truncated) text for read-back. Out-of-range
+/// slots are ignored, like `text::set_slot`.
+pub fn set_text_slot(n: u8, s: &str) {
+    if n as usize >= luxel_core::text::SLOTS {
+        return;
+    }
+    TEXT_SLOTS.lock(|c| {
+        let mut v = c.borrow_mut();
+        if v.len() < luxel_core::text::SLOTS {
+            v.resize(luxel_core::text::SLOTS, String::new());
+        }
+        v[n as usize].clear();
+        v[n as usize].push_str(s);
+    });
+}
+
+/// Slot `n`'s text, or the empty string.
+pub fn text_slot(n: u8) -> String {
+    TEXT_SLOTS.lock(|c| c.borrow().get(n as usize).cloned().unwrap_or_default())
 }
 
 /// Latest sensor frame (PB sensor-board serial or POST /api/sensors) + a

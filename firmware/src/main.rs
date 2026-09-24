@@ -1563,6 +1563,13 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                         eng.set_control(&name, &values);
                     }
                 }
+                // The ONE writer of `luxel_core::text`'s slot table
+                // (Gitea #485): it is lock-free single-writer, and on a
+                // dual-core board the web and MQTT tasks are on the other
+                // core. Every resident engine and the compositor's `slot`
+                // text source read that table directly, so one write here
+                // reaches the whole stack with no per-engine copy.
+                Msg::TextSlot { n, text } => luxel_core::text::set_slot(n, &text),
                 Msg::Var(name, value) => {
                     if let Some(eng) = engine.as_mut() {
                         eng.set_var(&name, value);

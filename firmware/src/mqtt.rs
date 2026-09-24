@@ -29,6 +29,24 @@ use crate::shared::{self, Msg, BRIGHTNESS, MQTT_POKE, MSG_QUEUE, POWER};
 /// Broker session currently up (for /api/mqtt's `connected`).
 pub static CONNECTED: AtomicBool = AtomicBool::new(false);
 
+/// Generation counter for the text slots (Gitea #485). Bumped by whoever
+/// accepts a new value — `POST /api/text` on a web task, or the HA text
+/// entity's own command here — and compared by the session loop, which
+/// republishes every slot's state topic when it moves. A counter rather
+/// than eight cached `String`s: the change can come from another task, and
+/// 512 B of cache is real DRAM on the boards where `.stack` is the leftover.
+static TEXT_DIRTY: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// Tell the MQTT session a text slot changed.
+pub fn mark_text_dirty() {
+    // load+store, not fetch_add: rv32imc (the C3) has no atomic RMW, and a
+    // lost bump only delays a state publish to the next change.
+    TEXT_DIRTY.store(
+        TEXT_DIRTY.load(Ordering::Relaxed).wrapping_add(1),
+        Ordering::Relaxed,
+    );
+}
+
 /// embassy-net 0.9 implements embedded-io-async **0.7**; rust-mqtt is built
 /// against **0.6**. Paper-thin adapter delegating to TcpSocket's inherent
 /// async methods (which is all the 0.7 impls do too).
@@ -193,11 +211,30 @@ async fn session(stack: Stack<'static>, cfg: &config::MqttConfig) -> Result<(), 
             true
         );
     }
+    // one `text` entity per host-settable slot (Gitea #485). Each payload is
+    // ~430 B, far inside the 4096 B out buffer, and `max` is stated so HA
+    // does not cut at its own 100-character default while the device cuts
+    // at 64 bytes.
+    for slot in 0..luxel_core::text::SLOTS as u8 {
+        publish!(
+            &hamqtt::text_config_topic(&id, slot),
+            hamqtt::text_discovery_json(&id, &id, version, slot),
+            true
+        );
+    }
     let light_set = hamqtt::light_set_topic(&id);
     let pattern_set = hamqtt::pattern_set_topic(&id);
     let playlist_cmd = hamqtt::playlist_cmd_topic(&id);
     let event_cmd = hamqtt::event_topic(&id);
-    for t in [&light_set, &pattern_set, &playlist_cmd, &event_cmd] {
+    // the subscribe list is a Vec now, not a fixed four-element array — the
+    // text slots add eight more (hamqtt::command_topics is the same list)
+    let text_sets: alloc::vec::Vec<String> = (0..luxel_core::text::SLOTS as u8)
+        .map(|slot| hamqtt::text_set_topic(&id, slot))
+        .collect();
+    let mut subs: alloc::vec::Vec<&String> =
+        alloc::vec![&light_set, &pattern_set, &playlist_cmd, &event_cmd];
+    subs.extend(text_sets.iter());
+    for t in subs {
         client
             .subscribe_to_topic(t)
             .await
@@ -208,6 +245,11 @@ async fn session(stack: Stack<'static>, cfg: &config::MqttConfig) -> Result<(), 
     let mut last_light = String::new();
     let mut last_pattern: Option<String> = None;
     let mut last_playing: Option<bool> = None;
+    // Text slots publish on a dirty flag rather than by diffing eight
+    // cached Strings every tick: they change from outside this task
+    // (`POST /api/text`) as well as from inside it, and 8 × 64 B of cache
+    // is real DRAM on the boards where `.stack` is what is left over.
+    let mut text_seen: u32 = TEXT_DIRTY.load(Ordering::Relaxed).wrapping_sub(1);
     let mut ticks: u32 = 0;
     loop {
         // ---- publish dirty state ----
@@ -234,6 +276,19 @@ async fn session(stack: Stack<'static>, cfg: &config::MqttConfig) -> Result<(), 
             );
             last_playing = Some(playing);
         }
+        // text slots: publish every slot once at session start, and again
+        // whenever one changes (from here or from `POST /api/text`)
+        let text_gen = TEXT_DIRTY.load(Ordering::Relaxed);
+        if text_seen != text_gen {
+            text_seen = text_gen;
+            for slot in 0..luxel_core::text::SLOTS as u8 {
+                publish!(
+                    &hamqtt::text_state_topic(&id, slot),
+                    shared::text_slot(slot),
+                    false
+                );
+            }
+        }
 
         // ---- wait for a command, ~5s at a time ----
         match select(client.receive_message(), Timer::after(Duration::from_secs(5))).await {
@@ -259,6 +314,19 @@ async fn session(stack: Stack<'static>, cfg: &config::MqttConfig) -> Result<(), 
                         "prev" => crate::playlist::step(-1),
                         other => println!("mqtt: unknown playlist cmd \"{}\"", other),
                     }
+                } else if let Some(slot) = text_sets.iter().position(|t| *t == topic) {
+                    // an HA text entity's new value: same path as
+                    // POST /api/text, including the single-writer rule for
+                    // `luxel_core::text`'s table (the render task writes it)
+                    let text = crate::server::truncate_slot(payload);
+                    shared::set_text_slot(slot as u8, text);
+                    MSG_QUEUE
+                        .send(Msg::TextSlot {
+                            n: slot as u8,
+                            text: String::from(text),
+                        })
+                        .await;
+                    mark_text_dirty();
                 } else if topic == event_cmd {
                     // pattern event injection: "type [x [y [value]]]" per
                     // line → the readEvent() queue, same as POST /api/events

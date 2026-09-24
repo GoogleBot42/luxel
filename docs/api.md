@@ -788,8 +788,21 @@ predates them.
 The text is the **rest of the line** after the slot number, capped at **64
 bytes** and truncated on a char boundary; an empty rest clears the slot. A
 slot number outside `0..7` is refused
-(`{"ok":false,"error":"text: slot 8 out of range (0..7)"}`). Slots are **not
-persisted** across a reboot in v1.
+(`{"ok":false,"error":"text: slot 8 out of range (0..7)"}`); a body with no
+number at all is `text: slot number required`. Slots are **not persisted**
+across a reboot in v1.
+
+On a device each slot is also a Home Assistant `text` entity —
+`luxel/<id>/text/<n>/set` in, `luxel/<id>/text/<n>` out, `max` 64 —
+announced beside the playlist buttons (docs/mqtt.md). Writing one is exactly
+this POST, truncation included.
+
+**One writer.** `luxel_core::text`'s slot table is lock-free single-writer,
+and on a dual-core board the web and MQTT tasks run on the other core from
+the render loop — so the firmware queues every write as `Msg::TextSlot` and
+only the render task calls `text::set_slot`. The read-back `GET` serves is
+the control plane's own copy, truncated identically at the door, so the two
+cannot disagree. The mirror does the same for the same reason (threads).
 
 ## `/api/layout` — the one geometry object
 
