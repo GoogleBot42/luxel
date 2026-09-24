@@ -26,7 +26,7 @@ fn every_library_pattern_compiles() {
                 if img.len_bytes() > worst.0 {
                     worst = (img.len_bytes(), name.clone());
                 }
-                assert_eq!(img.words.len() % 1, 0);
+                assert_eq!(img.bytes.len() % 4, 0);
                 assert!(
                     img.pool_len as usize * 4 <= img.len_bytes(),
                     "{name}: pool larger than the image"
@@ -111,18 +111,17 @@ fn only_fn_address_literals_depend_on_code_base() {
     b.code_base = 0x4100_0000;
     let ia = luxel_jit::compile(&prog, &kinds, &a).unwrap();
     let ib = luxel_jit::compile(&prog, &kinds, &b).unwrap();
-    assert_eq!(ia.words.len(), ib.words.len());
+    let (wa, wb) = (ia.words(), ib.words());
+    assert_eq!(wa.len(), wb.len());
     assert_eq!(ia.entries, ib.entries);
-    let differ: Vec<usize> = (0..ia.words.len())
-        .filter(|&i| ia.words[i] != ib.words[i])
-        .collect();
+    let differ: Vec<usize> = (0..wa.len()).filter(|&i| wa[i] != wb[i]).collect();
     assert!(!differ.is_empty(), "the callee address must be in the pool");
     for i in differ {
         assert!(
             i < ia.pool_len as usize,
             "word {i} is code and must not depend on code_base"
         );
-        assert_eq!(ib.words[i] - ia.words[i], 0x0100_0000);
+        assert_eq!(wb[i] - wa[i], 0x0100_0000);
     }
 }
 

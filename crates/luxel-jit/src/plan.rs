@@ -325,12 +325,7 @@ fn plan_fn(
     // Peak operand-stack depth. The map records the stack on ARRIVAL, and
     // the deepest an instruction can leave it is two above that (`Dup2`),
     // so two homes of slack cover every opcode without a second walk.
-    let peak = map
-        .iter()
-        .filter_map(|s| s.as_ref().map(|v| v.len()))
-        .max()
-        .unwrap_or(0)
-        + 2;
+    let peak = map.max_depth() + 2;
     let mut stack_home = Vec::with_capacity(peak);
     for _ in 0..peak {
         stack_home.push(off);

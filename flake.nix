@@ -287,6 +287,7 @@
           target = "xtensa-esp32-none-elf";
           xtensa = true;
           iram = [ "iram-vm" "iram-builtins" "iram-math" ]; # board-target.sh
+          extraFeatures = [ "jit" ]; # #666: JIT=1 in board-target.sh
         };
         luxel-fw-athom-music = {
           board = "board-athom-music";
@@ -294,6 +295,7 @@
           target = "xtensa-esp32-none-elf";
           xtensa = true;
           iram = [ "iram-vm" "iram-builtins" "iram-math" ]; # board-target.sh
+          extraFeatures = [ "jit" ]; # #666: JIT=1 in board-target.sh
         };
         luxel-fw-esp32-generic = {
           board = "board-esp32-generic";
@@ -301,15 +303,15 @@
           target = "xtensa-esp32-none-elf";
           xtensa = true;
           iram = [ "iram-vm" "iram-builtins" "iram-math" ]; # board-target.sh
+          extraFeatures = [ "jit" ]; # #666: JIT=1 in board-target.sh
         };
         # The QEMU differential gate's image (Gitea #658,
-        # tools/qemu/jit-test.py). **Not a release artifact and not a board
-        # profile**: the shipped classic-ESP32 images are interpreter-only
-        # (board-target.sh sets JIT=1 on the S3 boards and nowhere else).
-        # It exists because QEMU models the classic ESP32 and not the S3, so
-        # this is the only image on which emitted code can be EXECUTED
-        # without hardware — and because SRAM0 is a dedicated instruction
-        # region there, the exec buffer costs image and no stack at all.
+        # tools/qemu/jit-test.py). Since #666 the classic-ESP32 boards ship
+        # the JIT themselves, so this is the SAME image as
+        # luxel-fw-esp32-generic; the name is kept because the gate and its
+        # docs are written against it. It exists because QEMU models the
+        # classic ESP32 and not the S3, so this is the only image on which
+        # emitted code can be EXECUTED without hardware.
         luxel-fw-esp32-generic-jit = {
           board = "board-esp32-generic";
           chip = "esp32";
@@ -325,10 +327,9 @@
           chip = "esp32s3";
           target = "xtensa-esp32s3-none-elf";
           xtensa = true;
-          # #658: on a JIT board `iram-vm` gives way to the exec buffer —
-          # `.rwtext` and `.stack` are one budget on the S3 and they do not
-          # both fit over the 24 KB floor. Mirrors firmware/board-target.sh.
-          iram = [ ];
+          # #665: the JIT's code lives in PSRAM / a heap alias, not in
+          # `.rwtext`, so `iram-vm` stays. Mirrors firmware/board-target.sh.
+          iram = [ "iram-vm" ];
           extraFeatures = [ "jit" ];
         };
         # NOT a release artifact since 2026-09-06: the extent allocator
@@ -365,10 +366,9 @@
           chip = "esp32s3";
           target = "xtensa-esp32s3-none-elf";
           xtensa = true;
-          # #658: on a JIT board `iram-vm` gives way to the exec buffer —
-          # `.rwtext` and `.stack` are one budget on the S3 and they do not
-          # both fit over the 24 KB floor. Mirrors firmware/board-target.sh.
-          iram = [ ];
+          # #665: the JIT's code lives in PSRAM / a heap alias, not in
+          # `.rwtext`, so `iram-vm` stays. Mirrors firmware/board-target.sh.
+          iram = [ "iram-vm" ];
           extraFeatures = [ "jit" "hub75" ];
         };
         # Seengreat RGB Matrix HUB75 S3 panel driver board (Gitea #73). The
@@ -386,10 +386,9 @@
           chip = "esp32s3";
           target = "xtensa-esp32s3-none-elf";
           xtensa = true;
-          # #658: on a JIT board `iram-vm` gives way to the exec buffer —
-          # `.rwtext` and `.stack` are one budget on the S3 and they do not
-          # both fit over the 24 KB floor. Mirrors firmware/board-target.sh.
-          iram = [ ];
+          # #665: the JIT's code lives in PSRAM / a heap alias, not in
+          # `.rwtext`, so `iram-vm` stays. Mirrors firmware/board-target.sh.
+          iram = [ "iram-vm" ];
           extraFeatures = [ "jit" ];
           partitions = "partitions-16mb.csv";
         };
@@ -402,10 +401,9 @@
           chip = "esp32s3";
           target = "xtensa-esp32s3-none-elf";
           xtensa = true;
-          # #658: on a JIT board `iram-vm` gives way to the exec buffer —
-          # `.rwtext` and `.stack` are one budget on the S3 and they do not
-          # both fit over the 24 KB floor. Mirrors firmware/board-target.sh.
-          iram = [ ];
+          # #665: the JIT's code lives in PSRAM / a heap alias, not in
+          # `.rwtext`, so `iram-vm` stays. Mirrors firmware/board-target.sh.
+          iram = [ "iram-vm" ];
           extraFeatures = [ "jit" "hub75-spare-plane" ];
           # Same BOARD, so the same 16 MB flash — and firmware/build.rs keys
           # the embedded table off the board cargo feature, so leaving this

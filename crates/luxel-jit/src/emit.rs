@@ -46,7 +46,7 @@ use crate::plan::{
     REG_DEPTHS, REG_DEPTH_BASE, SCRATCH,
 };
 use crate::xtensa::{Asm, Cond, OutOfReach, Reg, ZCond, A1, A10, A2, A8, A9};
-use crate::{Env, FnAbi, NativeImage, Refusal};
+use crate::{Placed, Env, FnAbi, NativeImage, Refusal};
 
 
 
@@ -59,6 +59,37 @@ const ONE: i32 = 1 << 16;
 /// A refusal is whole-program and never a panic: the caller runs the
 /// interpreter, at the interpreter's speed, with the same pixels.
 pub fn compile(prog: &Program, kinds: &Kinds, env: &Env) -> Result<NativeImage, Refusal> {
+    // The host path: an owned buffer the size of the cap, trimmed to the
+    // image afterwards. The device does not come through here — it hands
+    // `compile_into` the exec block itself (#665).
+    let mut buf = Vec::new();
+    buf.try_reserve_exact(env.max_code)
+        .map_err(|_| Refusal::NoMemory {
+            bytes: env.max_code,
+        })?;
+    buf.resize(env.max_code, 0);
+    let placed = compile_into(prog, kinds, env, &mut buf)?;
+    buf.truncate(placed.len_bytes);
+    Ok(NativeImage {
+        bytes: buf,
+        pool_len: placed.pool_len,
+        entries: placed.entries,
+        exports: placed.exports,
+        abi: placed.abi,
+    })
+}
+
+/// [`compile`], but the image is emitted straight into `out` — which is
+/// also the cap: an image that does not fit it is [`Refusal::TooLarge`].
+/// The firmware passes the executable block's data-side alias, so the
+/// only heap the compile touches is its own bookkeeping (plans, the
+/// literal pool index, fixup lists), never a copy of the image.
+pub fn compile_into(
+    prog: &Program,
+    kinds: &Kinds,
+    env: &Env,
+    out: &mut [u8],
+) -> Result<Placed, Refusal> {
     if env.code_base % 4 != 0 {
         return Err(Refusal::Verifier {
             detail: "code_base must be 4-aligned".to_string(),
@@ -91,11 +122,13 @@ pub fn compile(prog: &Program, kinds: &Kinds, env: &Env) -> Result<NativeImage, 
         }
     }
     let plans = plan_all(prog, kinds)?;
+    let cap = env.max_code.min(out.len());
+    let code = Asm::into_slice(&mut out[..cap]);
     let mut e = Emitter {
         prog,
         kinds,
         env,
-        code: Asm::new(),
+        code,
         pool: Pool::default(),
         l32r_fix: Vec::new(),
         entries: Vec::with_capacity(prog.fns.len()),
@@ -106,6 +139,12 @@ pub fn compile(prog: &Program, kinds: &Kinds, env: &Env) -> Result<NativeImage, 
 
     for fi in 0..prog.fns.len() {
         e.function(fi, &plans[fi])?;
+        if e.code.overflowed() {
+            return Err(Refusal::TooLarge {
+                bytes: e.code.here(),
+                max: cap,
+            });
+        }
     }
     e.finish()
 }
@@ -141,16 +180,31 @@ impl Pool {
 
 // ------------------------------------------------------------ per-function
 
+/// `Frame::word_off` entry for a word not laid out yet.
+const NO_OFF: u32 = u32::MAX;
+
+/// Byte offset of a bytecode word's first instruction, once laid out.
+#[inline]
+fn word_off_at(word_off: &[u32], target: u32) -> Option<usize> {
+    match word_off.get(target as usize).copied() {
+        Some(NO_OFF) | None => None,
+        Some(off) => Some(off as usize),
+    }
+}
+
 struct Frame {
     fn_idx: u16,
     /// Code-local offset of each word's first instruction.
-    word_off: Vec<Option<usize>>,
+    /// `NO_OFF` = not laid out yet. `u32`, not `Option<usize>`: this is
+    /// one entry per bytecode word and the device compiles beside a
+    /// resident engine (#665; `tests/alloc_peak.rs` gates the total).
+    word_off: Vec<u32>,
     /// Forward `j` sites waiting for a word target. Every forward
     /// conditional is `b<inverted> +6; j target` (§3.7), so a `j` is the
     /// only thing ever patched against a word index.
-    fix: Vec<(usize, u32)>,
+    fix: Vec<(u32, u32)>,
     /// `j` sites aimed at this function's bail epilogue.
-    bail_fix: Vec<usize>,
+    bail_fix: Vec<u32>,
     /// The emitter's running copy of the abstract stack. Re-seeded from the
     /// verifier's map at every word so it cannot drift; the copy exists so
     /// a fused superinstruction can push and pop its parts.
@@ -182,10 +236,10 @@ struct Emitter<'a> {
     prog: &'a Program,
     kinds: &'a Kinds,
     env: &'a Env,
-    code: Asm,
+    code: Asm<'a>,
     pool: Pool,
     /// `(code-local site, literal index)`.
-    l32r_fix: Vec<(usize, usize)>,
+    l32r_fix: Vec<(u32, u32)>,
     entries: Vec<u32>,
     abi: Vec<FnAbi>,
     /// Every function's plan: a `CallFn` has to know the CALLEE's
@@ -264,7 +318,7 @@ impl<'a> Emitter<'a> {
     fn load_lit(&mut self, r: Reg, l: Lit) {
         let i = self.pool.intern(l);
         let site = self.code.l32r_placeholder(r);
-        self.l32r_fix.push((site, i));
+        self.l32r_fix.push((site as u32, i as u32));
     }
 
     /// Materialise a 32-bit constant: `movi`/`movi.n` when it fits, a pool
@@ -628,7 +682,7 @@ impl<'a> Emitter<'a> {
         plan: &FnPlan,
     ) -> Result<(), Refusal> {
         self.spill_all(plan)?;
-        if let Some(off) = self.f.word_off.get(target as usize).copied().flatten() {
+        if let Some(off) = word_off_at(&self.f.word_off, target) {
             if self.code.branch(cond, s, t, off).is_ok() {
                 return Ok(());
             }
@@ -638,7 +692,7 @@ impl<'a> Emitter<'a> {
             .branch(cond.invert(), s, t, here + 6)
             .map_err(|e| self.reach(e))?;
         let site = self.code.j_forward();
-        self.f.fix.push((site, target));
+        self.f.fix.push((site as u32, target));
         Ok(())
     }
 
@@ -651,7 +705,7 @@ impl<'a> Emitter<'a> {
         plan: &FnPlan,
     ) -> Result<(), Refusal> {
         self.spill_all(plan)?;
-        if let Some(off) = self.f.word_off.get(target as usize).copied().flatten() {
+        if let Some(off) = word_off_at(&self.f.word_off, target) {
             if self.code.branch_z(cond, s, off).is_ok() {
                 return Ok(());
             }
@@ -661,25 +715,25 @@ impl<'a> Emitter<'a> {
             .branch_z(cond.invert(), s, here + 6)
             .map_err(|e| self.reach(e))?;
         let site = self.code.j_forward();
-        self.f.fix.push((site, target));
+        self.f.fix.push((site as u32, target));
         Ok(())
     }
 
     /// An unconditional jump to a bytecode word.
     fn jump_word(&mut self, target: u32, plan: &FnPlan) -> Result<(), Refusal> {
         self.spill_all(plan)?;
-        if let Some(off) = self.f.word_off.get(target as usize).copied().flatten() {
+        if let Some(off) = word_off_at(&self.f.word_off, target) {
             return self.code.j(off).map_err(|e| self.reach(e));
         }
         let site = self.code.j_forward();
-        self.f.fix.push((site, target));
+        self.f.fix.push((site as u32, target));
         Ok(())
     }
 
     /// `j` to this function's bail epilogue, which is emitted last.
     fn goto_bail(&mut self) {
         let site = self.code.j_forward();
-        self.f.bail_fix.push(site);
+        self.f.bail_fix.push(site as u32);
     }
 
     /// The status check after every fallible call (§3.6). Uses `a8`, which
@@ -774,7 +828,7 @@ impl<'a> Emitter<'a> {
         let n = f.code_len as usize;
         self.f = Frame {
             fn_idx: fi as u16,
-            word_off: alloc::vec![None; n + 1],
+            word_off: alloc::vec![NO_OFF; n + 1],
             fix: Vec::new(),
             bail_fix: Vec::new(),
             stack: Vec::new(),
@@ -791,7 +845,7 @@ impl<'a> Emitter<'a> {
             self.f.sc = 0;
             let w = self.prog.words[base + at];
             let o = enc::opcode(w);
-            let Some(st) = plan.map[at].clone() else {
+            let Some(st) = plan.map.get(at).map(|s| s.to_vec()) else {
                 // Unreachable: a dead epilogue after an explicit `return`.
                 // Nothing branches here (a branch target is reachable by
                 // definition), so nothing has to be emitted.
@@ -812,7 +866,7 @@ impl<'a> Emitter<'a> {
                 self.spill_all(plan)?;
                 self.f.sc = 0;
             }
-            self.f.word_off[at] = Some(self.code.here());
+            self.f.word_off[at] = self.code.here() as u32;
             self.f.stack = st;
             if plan.back_target[at] {
                 self.fuel()?;
@@ -829,7 +883,7 @@ impl<'a> Emitter<'a> {
             at += ilen(o);
         }
         // Falling off the end is the implicit `RetNull`.
-        self.f.word_off[n] = Some(self.code.here());
+        self.f.word_off[n] = self.code.here() as u32;
         self.f.stack.clear();
         self.ret_null(plan)?;
 
@@ -908,7 +962,7 @@ impl<'a> Emitter<'a> {
         let here = self.code.here();
         let fixes = core::mem::take(&mut self.f.bail_fix);
         for site in fixes {
-            self.code.patch_j(site, here).map_err(|e| self.reach(e))?;
+            self.code.patch_j(site as usize, here).map_err(|e| self.reach(e))?;
         }
         self.imm(A8, STATUS_ERR);
         let ok = self.code.s32i(A8, A2, dev32::STATUS);
@@ -920,14 +974,14 @@ impl<'a> Emitter<'a> {
     fn patch_function(&mut self) -> Result<(), Refusal> {
         let fixes = core::mem::take(&mut self.f.fix);
         for (site, target) in fixes {
-            let Some(off) = self.f.word_off.get(target as usize).copied().flatten() else {
+            let Some(off) = word_off_at(&self.f.word_off, target) else {
                 return Err(Refusal::JumpReach {
                     fn_idx: self.f.fn_idx,
                     word: target,
                     distance: 0,
                 });
             };
-            self.code.patch_j(site, off).map_err(|e| self.reach(e))?;
+            self.code.patch_j(site as usize, off).map_err(|e| self.reach(e))?;
         }
         Ok(())
     }
@@ -2054,12 +2108,21 @@ impl<'a> Emitter<'a> {
 
 impl<'a> Emitter<'a> {
     /// Prepend the literal pool, fill it in, and patch every `l32r`.
-    fn finish(mut self) -> Result<NativeImage, Refusal> {
+    fn finish(mut self) -> Result<Placed, Refusal> {
 
         let pool_len = self.pool.keys.len() as u32;
         let p = pool_len as usize * 4;
-        let mut img = Asm::with_pool(p);
-        img.append(self.code.bytes());
+        // The pool goes at the FRONT (§3.7) and its size is only known
+        // now, so the code is shifted up in place inside the one bounded
+        // buffer rather than copied into a second one.
+        self.code.pad_to_word();
+        if !self.code.prepend_pool(p) {
+            return Err(Refusal::TooLarge {
+                bytes: self.code.here(),
+                max: self.env.max_code,
+            });
+        }
+        let mut img = self.code;
 
         for e in self.entries.iter_mut() {
             *e += p as u32;
@@ -2072,7 +2135,7 @@ impl<'a> Emitter<'a> {
             img.put_word(i * 4, w);
         }
         for (site, li) in &self.l32r_fix {
-            img.patch_l32r(p + site, li * 4)
+            img.patch_l32r(p + *site as usize, *li as usize * 4)
                 .map_err(|e| Refusal::L32rReach {
                     fn_idx: u16::MAX,
                     word: 0,
@@ -2080,22 +2143,21 @@ impl<'a> Emitter<'a> {
                 })?;
         }
 
-        let words = img.into_words();
-        let bytes = words.len() * 4;
-        if bytes > self.env.max_code {
+        if img.overflowed() || img.here() > self.env.max_code {
             return Err(Refusal::TooLarge {
-                bytes,
+                bytes: img.here(),
                 max: self.env.max_code,
             });
         }
+        let len_bytes = img.here();
         let exports = self
             .prog
             .exported_fns
             .iter()
             .map(|(n, i)| (n.clone(), self.entries[*i as usize]))
             .collect();
-        Ok(NativeImage {
-            words,
+        Ok(Placed {
+            len_bytes,
             pool_len,
             entries: self.entries,
             exports,

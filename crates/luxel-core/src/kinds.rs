@@ -310,8 +310,71 @@ pub fn plan_boxes(prog: &Program, kinds: &Kinds) -> Result<Vec<BoxFix>, KindErro
 ///
 /// Indexed by word, so continuation words of a two- or three-word
 /// instruction are `None` too.
+///
+/// **Flat, not a `Vec` per word.** It was `Vec<Option<Vec<Kind>>>`, and
+/// that was 55 B per bytecode word of heap on the host (a `Vec` header
+/// plus an allocator block for every word) — the single largest thing the
+/// JIT's planner allocated, and what took the panel down when a 4096-px
+/// engine had left it 33 KB (Gitea #665). Now one pool of kinds plus a
+/// `(start, len)` per word: ~9 B/word. `crates/luxel-jit/tests/alloc_peak.rs`
+/// gates the total.
 #[cfg(feature = "kinds")]
-pub type StackMap = Vec<Option<Vec<Kind>>>;
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StackMap {
+    /// Per word: index into `pool`, or [`StackMap::NONE`].
+    start: Vec<u32>,
+    /// Per word: entries at `start`.
+    len: Vec<u16>,
+    pool: Vec<Kind>,
+}
+
+#[cfg(feature = "kinds")]
+impl StackMap {
+    const NONE: u32 = u32::MAX;
+
+    /// `words` entries, all unreached.
+    pub fn new(words: usize) -> StackMap {
+        StackMap {
+            start: alloc::vec![Self::NONE; words],
+            len: alloc::vec![0; words],
+            pool: Vec::new(),
+        }
+    }
+
+    /// Record the stack on arrival at `at`. Setting a word twice keeps
+    /// the last (the earlier entries stay in the pool, unreferenced).
+    pub fn set<I: IntoIterator<Item = Kind>>(&mut self, at: usize, stack: I) {
+        let s = self.pool.len();
+        self.pool.extend(stack);
+        self.start[at] = s as u32;
+        self.len[at] = (self.pool.len() - s) as u16;
+    }
+
+    /// The stack on arrival at `at`, or `None` at an unreached word (or
+    /// past the end).
+    pub fn get(&self, at: usize) -> Option<&[Kind]> {
+        let s = *self.start.get(at)?;
+        if s == Self::NONE {
+            return None;
+        }
+        let s = s as usize;
+        Some(&self.pool[s..s + self.len[at] as usize])
+    }
+
+    /// Words covered.
+    pub fn len(&self) -> usize {
+        self.start.len()
+    }
+
+    /// The deepest stack recorded at any reached word.
+    pub fn max_depth(&self) -> usize {
+        self.len.iter().map(|&l| l as usize).max().unwrap_or(0)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.start.is_empty()
+    }
+}
 
 /// One [`StackMap`] per function, from the SAME walk [`verify`] runs
 /// (Gitea #651). The JIT's emitter needs the kind and depth of every
@@ -354,7 +417,7 @@ pub fn stack_maps(prog: &Program, kinds: &Kinds) -> Result<Vec<StackMap>, KindEr
                 ),
             });
         }
-        let mut m: StackMap = alloc::vec![None; f.code_len as usize];
+        let mut m = StackMap::new(f.code_len as usize);
         walk_fn(
             fi,
             &views,
@@ -526,7 +589,7 @@ fn walk_fn(
         // instruction's own effect, which is exactly what the emitter
         // reads to know each operand's kind and home.
         if let Some(m) = map.as_deref_mut() {
-            m[at] = Some(st.iter().map(|a| a.k).collect());
+            m.set(at, st.iter().map(|a| a.k));
         }
 
         macro_rules! pop {

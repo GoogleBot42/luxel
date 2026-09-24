@@ -778,7 +778,7 @@ fn status_json() -> String {
     push_piece(&mut out, ",\"jit\":{\"state\":\"");
     #[cfg(feature = "jit")]
     {
-        let (state, reason, code_bytes, compile_us) = crate::jit::jit_status();
+        let (state, reason, code_bytes, compile_us, place) = crate::jit::jit_status();
         push_piece(&mut out, state);
         push_piece(&mut out, "\",\"reason\":");
         match reason {
@@ -793,11 +793,23 @@ fn status_json() -> String {
         push_u32(&mut out, code_bytes);
         push_piece(&mut out, ",\"compile_us\":");
         push_u32(&mut out, compile_us);
+        // Where the live image is (Gitea #665): `psram`, `internal`
+        // (S3 heap alias) or `rwtext` (classic ESP32); null while nothing
+        // native is loaded.
+        push_piece(&mut out, ",\"place\":");
+        match place {
+            Some(p) => {
+                push_piece(&mut out, "\"");
+                push_piece(&mut out, p);
+                push_piece(&mut out, "\"");
+            }
+            None => push_piece(&mut out, "null"),
+        }
     }
     #[cfg(not(feature = "jit"))]
     push_piece(
         &mut out,
-        "off\",\"reason\":null,\"code_bytes\":0,\"compile_us\":0",
+        "off\",\"reason\":null,\"code_bytes\":0,\"compile_us\":0,\"place\":null",
     );
     push_piece(&mut out, "}");
     // Which partition layout this device is actually running (Gitea #501):
@@ -2023,17 +2035,40 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     } else {
                         None
                     };
-                    Some(json_response(match want {
-                        Some(on) => {
-                            crate::jit::set_enabled(on);
+                    // Optional `"place":"psram"|"internal"|"auto"` (Gitea
+                    // #665): where the NEXT image goes — the lever behind
+                    // docs/jit-design.md §7.3's PSRAM-vs-internal
+                    // microbench. Also next-activation only.
+                    let place = if body.contains("\"internal\"") {
+                        Some(crate::jit::PLACE_INTERNAL)
+                    } else if body.contains("\"psram\"") {
+                        Some(crate::jit::PLACE_PSRAM)
+                    } else if body.contains("\"auto\"") {
+                        Some(crate::jit::PLACE_AUTO)
+                    } else {
+                        None
+                    };
+                    Some(json_response(match (want, place) {
+                        (None, None) => String::from(
+                            "{\"ok\":false,\"error\":\"body must be {\\\"on\\\":true|false} and/or {\\\"place\\\":\\\"psram\\\"|\\\"internal\\\"|\\\"auto\\\"}\"}",
+                        ),
+                        (want, place) => {
+                            if let Some(on) = want {
+                                crate::jit::set_enabled(on);
+                            }
+                            if let Some(p) = place {
+                                crate::jit::set_place(p);
+                            }
                             let mut out = String::from("{\"ok\":true,\"on\":");
-                            push_piece(&mut out, if on { "true" } else { "false" });
+                            push_piece(&mut out, if crate::jit::enabled() { "true" } else { "false" });
+                            if let Some(p) = place {
+                                push_piece(&mut out, ",\"place\":\"");
+                                push_piece(&mut out, crate::jit::place_name(p));
+                                push_piece(&mut out, "\"");
+                            }
                             push_piece(&mut out, ",\"applies\":\"next activation\"}");
                             out
                         }
-                        None => String::from(
-                            "{\"ok\":false,\"error\":\"body must be {\\\"on\\\":true|false}\"}",
-                        ),
                     }))
                 }
                 // POST /api/config — body is a pixel count 1..=MAX_PIXELS.

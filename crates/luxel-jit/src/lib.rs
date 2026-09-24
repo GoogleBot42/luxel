@@ -33,7 +33,13 @@ pub mod xtensa;
 mod emit;
 mod plan;
 
-pub use emit::compile;
+pub use emit::{compile, compile_into};
+/// `plan_all` on its own, for `tests/alloc_peak.rs` to attribute the
+/// emitter's heap between planning and emission. Not API.
+#[doc(hidden)]
+pub fn __plan_all(prog: &luxel_core::vm::Program, kinds: &luxel_core::kinds::Kinds) -> Result<Vec<FnPlan>, Refusal> {
+    plan::plan_all(prog, kinds)
+}
 pub use plan::{FnPlan, ParamConv, SlotHome};
 
 /// Absolute addresses of every Rust helper generated code can call
@@ -103,14 +109,34 @@ pub struct Env {
     pub max_code: usize,
 }
 
+/// What [`compile_into`] leaves behind: the image is in the caller's
+/// buffer, this is everything else [`NativeImage`] would carry.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Placed {
+    /// Bytes of image written to the front of the buffer (a multiple of 4).
+    pub len_bytes: usize,
+    /// Words of literal pool at the front of the image.
+    pub pool_len: u32,
+    /// Per bytecode function index: BYTE offset of its `entry` instruction.
+    pub entries: Vec<u32>,
+    /// The engine's entry points by name, as byte offsets.
+    pub exports: Vec<(String, u32)>,
+    /// How to call each function, in the same index order as `entries`.
+    pub abi: Vec<FnAbi>,
+}
+
 /// A compiled program: the whole buffer, plus where to enter it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NativeImage {
-    /// `[literal pool][fn 0][fn 1]…`, 4-aligned, as little-endian words
-    /// (Xtensa instructions are byte-packed 24-bit and 16-bit forms; this
-    /// is the byte image viewed as words, and its length is always a
-    /// multiple of 4 bytes).
-    pub words: Vec<u32>,
+    /// `[literal pool][fn 0][fn 1]…`, zero-padded to a multiple of 4
+    /// bytes, exactly as it is to be laid down in memory (Xtensa
+    /// instructions are byte-packed 24-bit and 16-bit forms). Bytes rather
+    /// than words since #665: the device copies this straight into its
+    /// exec buffer, and a second, word-typed copy of the image was the
+    /// difference between a compile that fits the panel's heap and one
+    /// that does not. [`NativeImage::words`] is the word view for the
+    /// host tests and the ISA model.
+    pub bytes: Vec<u8>,
     /// Words of literal pool at the front of `words`.
     pub pool_len: u32,
     /// Per bytecode function index: BYTE offset of its `entry` instruction
@@ -158,7 +184,16 @@ impl NativeImage {
     /// Total size of the image in bytes.
     #[inline]
     pub fn len_bytes(&self) -> usize {
-        self.words.len() * 4
+        self.bytes.len()
+    }
+
+    /// The image as little-endian words — the view the ISA model and the
+    /// classic ESP32's word-only exec buffer want. Allocates; host-side.
+    pub fn words(&self) -> Vec<u32> {
+        self.bytes
+            .chunks_exact(4)
+            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect()
     }
     /// Bytes of native code, excluding the literal pool.
     #[inline]
@@ -206,6 +241,11 @@ pub enum Refusal {
     JumpReach { fn_idx: u16, word: u32, distance: usize },
     /// The program has no `kinds` section at all (an untyped v6 blob).
     Untyped,
+    /// The allocator could not give the emitter its output buffer
+    /// (`bytes` = what was asked for). Device-only in practice: the
+    /// compile runs on the render task beside a resident engine, and a
+    /// heap too full for the image is a refusal, never a panic (#665).
+    NoMemory { bytes: usize },
 }
 
 impl Refusal {
@@ -224,6 +264,7 @@ impl Refusal {
             Refusal::ScratchExhausted { .. } => "scratch",
             Refusal::AddressRegion { .. } => "address-region",
             Refusal::Untyped => "untyped",
+            Refusal::NoMemory { .. } => "no-memory",
         }
     }
 
@@ -276,6 +317,9 @@ impl Refusal {
                 format!("helper {name} at {addr:#010x} is outside the code's gigabyte")
             }
             Refusal::Untyped => String::from("the blob carries no kinds section"),
+            Refusal::NoMemory { bytes } => {
+                format!("no heap for a {bytes} B code buffer")
+            }
         }
     }
 }

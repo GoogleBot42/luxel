@@ -343,7 +343,7 @@ fn install(engine: &mut Engine) -> Result<(), String> {
         compile_us: 0,
         // The model's own floor; the engine only carries the number.
         stack_limit: (common::isa::STACK_TOP - STACK_ROOM) as usize,
-        call: Box::new(ModelCall::new(&img.words)),
+        call: Box::new(ModelCall::new(&img.words())),
         lease: Box::new(ModelLease),
     };
     engine.install_native(np);

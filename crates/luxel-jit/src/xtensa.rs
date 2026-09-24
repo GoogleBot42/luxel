@@ -172,50 +172,191 @@ pub fn b4const(v: i32) -> Option<u8> {
 
 /// The code buffer. Bytes in, bytes out; every method appends, and
 /// [`Asm::here`] is the byte offset the next instruction will start at.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Asm {
-    bytes: Vec<u8>,
+///
+/// **Two backings, one of them the exec memory itself** (Gitea #665). The
+/// device hands the emitter the block the image will EXECUTE from (the
+/// PSRAM arena's data-side alias, or a heap block) as `&mut [u8]`, and the
+/// image is written there directly — the internal heap never holds a
+/// copy of it, which on the panel is the difference between a compile
+/// that fits beside a 4096-px engine and one that takes the board down.
+/// The owned `Vec` backing is for the host tests and tools.
+///
+/// **Bounded either way, and it never reallocates.** A byte that would
+/// not fit is COUNTED rather than stored: [`Asm::here`] keeps reporting
+/// the logical offset so the emitter's bookkeeping stays consistent,
+/// [`Asm::overflowed`] says the image is over its cap, and the emitter
+/// turns that into [`crate::Refusal::TooLarge`] at the next function
+/// boundary. Patches into the unstored tail are dropped — the image is
+/// being refused, so nothing will read them.
+#[derive(Debug)]
+pub struct Asm<'a> {
+    store: Store<'a>,
+    /// Bytes past the cap that were asked for and not stored.
+    dropped: usize,
 }
 
-impl Asm {
-    pub fn new() -> Asm {
-        Asm { bytes: Vec::new() }
+#[derive(Debug)]
+enum Store<'a> {
+    /// Host: grows on demand, no cap.
+    Owned(Vec<u8>),
+    /// Device: the caller's block, filled from the front; `len` is how
+    /// much of it is the image so far.
+    Slice { buf: &'a mut [u8], len: usize },
+}
+
+impl Default for Asm<'_> {
+    fn default() -> Self {
+        Asm::new()
+    }
+}
+
+impl<'a> Asm<'a> {
+    /// An unbounded, owned buffer — for the host tests and tools.
+    pub fn new() -> Asm<'static> {
+        Asm {
+            store: Store::Owned(Vec::new()),
+            dropped: 0,
+        }
     }
 
     /// Start with `n` bytes of zeroed literal pool already in place, so
-    /// offsets are image offsets from the first instruction on.
-    pub fn with_pool(n_bytes: usize) -> Asm {
+    /// offsets are image offsets from the first instruction on. Owned and
+    /// unbounded; the by-hand test images use it. The emitter itself opens
+    /// its pool with [`Asm::prepend_pool`] once the size is known.
+    pub fn with_pool(n_bytes: usize) -> Asm<'static> {
         Asm {
-            bytes: alloc::vec![0u8; n_bytes],
+            store: Store::Owned(alloc::vec![0u8; n_bytes]),
+            dropped: 0,
         }
     }
 
-    /// Byte offset the next emitted instruction will start at.
+    /// Emit into `buf`, which is the cap: nothing past its end is stored.
+    pub fn into_slice(buf: &'a mut [u8]) -> Asm<'a> {
+        Asm {
+            store: Store::Slice { buf, len: 0 },
+            dropped: 0,
+        }
+    }
+
+    /// Byte offset the next emitted instruction will start at (logical:
+    /// it keeps counting past the cap, see the type docs).
     #[inline]
     pub fn here(&self) -> usize {
-        self.bytes.len()
+        self.stored_len() + self.dropped
     }
 
     #[inline]
+    fn stored_len(&self) -> usize {
+        match &self.store {
+            Store::Owned(v) => v.len(),
+            Store::Slice { len, .. } => *len,
+        }
+    }
+
+    /// Is the image over its cap?
+    #[inline]
+    pub fn overflowed(&self) -> bool {
+        self.dropped != 0
+    }
+
+    /// The stored bytes.
+    #[inline]
     pub fn bytes(&self) -> &[u8] {
-        &self.bytes
+        match &self.store {
+            Store::Owned(v) => v,
+            Store::Slice { buf, len } => &buf[..*len],
+        }
+    }
+
+    #[inline]
+    fn bytes_mut(&mut self) -> &mut [u8] {
+        match &mut self.store {
+            Store::Owned(v) => v,
+            Store::Slice { buf, len } => &mut buf[..*len],
+        }
+    }
+
+    #[inline]
+    fn push(&mut self, b: u8) {
+        match &mut self.store {
+            Store::Owned(v) => v.push(b),
+            Store::Slice { buf, len } => {
+                if *len < buf.len() {
+                    buf[*len] = b;
+                    *len += 1;
+                } else {
+                    self.dropped += 1;
+                }
+            }
+        }
+    }
+
+    /// Open `n` zeroed bytes at the FRONT of the buffer — the literal
+    /// pool, whose size is only known once every function is emitted
+    /// (§3.7) — shifting the code up in place. Every offset the caller
+    /// holds moves by `n`. `false` when the pool does not fit the cap.
+    pub fn prepend_pool(&mut self, n: usize) -> bool {
+        if self.dropped != 0 {
+            return false;
+        }
+        match &mut self.store {
+            Store::Owned(v) => {
+                let len = v.len();
+                v.resize(len + n, 0);
+                v.copy_within(0..len, n);
+                v[..n].fill(0);
+            }
+            Store::Slice { buf, len } => {
+                if *len + n > buf.len() {
+                    self.dropped += n;
+                    return false;
+                }
+                buf.copy_within(0..*len, n);
+                buf[..n].fill(0);
+                *len += n;
+            }
+        }
+        true
+    }
+
+    /// Pad to a word boundary with zero bytes (the image is handed out
+    /// as words).
+    pub fn pad_to_word(&mut self) {
+        while self.here() % 4 != 0 {
+            self.push(0);
+        }
+    }
+
+    /// The finished image as an owned buffer, zero-padded to a word
+    /// boundary. Copies when the backing is a caller's slice (the host
+    /// path); the device reads the slice it handed in and never calls
+    /// this.
+    pub fn into_bytes(mut self) -> Vec<u8> {
+        self.pad_to_word();
+        match self.store {
+            Store::Owned(v) => v,
+            Store::Slice { buf, len } => buf[..len].to_vec(),
+        }
     }
 
     /// The buffer as little-endian words, zero-padded to a word boundary.
-    pub fn into_words(mut self) -> Vec<u32> {
-        while self.bytes.len() % 4 != 0 {
-            self.bytes.push(0);
-        }
-        self.bytes
+    /// Host-side convenience for the by-hand test images.
+    pub fn into_words(self) -> Vec<u32> {
+        self.into_bytes()
             .chunks_exact(4)
             .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect()
     }
 
     /// Overwrite a word of the literal pool (or anywhere else) in place.
+    /// A word past the stored end is ignored — that only happens on an
+    /// image already over its cap, which is being refused.
     pub fn put_word(&mut self, at: usize, w: u32) {
         debug_assert!(at % 4 == 0);
-        self.bytes[at..at + 4].copy_from_slice(&w.to_le_bytes());
+        if at + 4 > self.stored_len() {
+            return;
+        }
+        self.bytes_mut()[at..at + 4].copy_from_slice(&w.to_le_bytes());
     }
 
     // ------------------------------------------------------ raw emitters
@@ -223,16 +364,16 @@ impl Asm {
     /// One 24-bit instruction, little-endian.
     fn w24(&mut self, v: u32) {
         debug_assert!(v < 1 << 24);
-        self.bytes.push(v as u8);
-        self.bytes.push((v >> 8) as u8);
-        self.bytes.push((v >> 16) as u8);
+        self.push(v as u8);
+        self.push((v >> 8) as u8);
+        self.push((v >> 16) as u8);
     }
 
     /// One 16-bit (density) instruction, little-endian.
     fn w16(&mut self, v: u32) {
         debug_assert!(v < 1 << 16);
-        self.bytes.push(v as u8);
-        self.bytes.push((v >> 8) as u8);
+        self.push(v as u8);
+        self.push((v >> 8) as u8);
     }
 
     /// `RRR`: `op2 | op1 | r | s | t | op0`.
@@ -694,9 +835,15 @@ impl Asm {
                 form: Form::L32r,
             });
         }
+        if at + 3 > self.stored_len() {
+            // Past the stored end: the image overflowed its cap and is
+            // being refused, so there is nothing to patch (see the type
+            // docs).
+            return Ok(());
+        }
         let imm16 = ((dist / 4) as u32) & 0xffff;
-        self.bytes[at + 1] = imm16 as u8;
-        self.bytes[at + 2] = (imm16 >> 8) as u8;
+        self.bytes_mut()[at + 1] = imm16 as u8;
+        self.bytes_mut()[at + 2] = (imm16 >> 8) as u8;
         Ok(())
     }
 
@@ -720,7 +867,13 @@ impl Asm {
                 form: Form::Bri8,
             });
         }
-        self.bytes[at + 2] = d as u8;
+        if at + 3 > self.stored_len() {
+            // Past the stored end: the image overflowed its cap and is
+            // being refused, so there is nothing to patch (see the type
+            // docs).
+            return Ok(());
+        }
+        self.bytes_mut()[at + 2] = d as u8;
         Ok(())
     }
 
@@ -745,7 +898,13 @@ impl Asm {
                 form: Form::Bri8,
             });
         }
-        self.bytes[at + 2] = d as u8;
+        if at + 3 > self.stored_len() {
+            // Past the stored end: the image overflowed its cap and is
+            // being refused, so there is nothing to patch (see the type
+            // docs).
+            return Ok(());
+        }
+        self.bytes_mut()[at + 2] = d as u8;
         Ok(())
     }
 
@@ -767,18 +926,26 @@ impl Asm {
                 form: Form::Bri12,
             });
         }
+        if at + 3 > self.stored_len() {
+            // Past the stored end: the image overflowed its cap and is
+            // being refused, so there is nothing to patch (see the type
+            // docs).
+            return Ok(());
+        }
         let imm12 = (d as u32) & 0xfff;
         // bits 23..12 of the instruction: the low nibble shares byte 1 with
         // `s`, the high byte is byte 2.
-        self.bytes[at + 1] = (self.bytes[at + 1] & 0x0f) | ((imm12 & 0xf) << 4) as u8;
-        self.bytes[at + 2] = (imm12 >> 4) as u8;
+        self.bytes_mut()[at + 1] = (self.bytes()[at + 1] & 0x0f) | ((imm12 & 0xf) << 4) as u8;
+        self.bytes_mut()[at + 2] = (imm12 >> 4) as u8;
         Ok(())
     }
 
     /// Append raw bytes — how the finished code is placed after the
     /// literal pool once the pool's size is known.
     pub fn append(&mut self, bytes: &[u8]) {
-        self.bytes.extend_from_slice(bytes);
+        for &b in bytes {
+            self.push(b);
+        }
     }
 
     /// A `j` whose target is not known yet: emits three bytes and returns
@@ -800,10 +967,16 @@ impl Asm {
                 form: Form::Jump,
             });
         }
+        if at + 3 > self.stored_len() {
+            // Past the stored end: the image overflowed its cap and is
+            // being refused, so there is nothing to patch (see the type
+            // docs).
+            return Ok(());
+        }
         let v = ((d as u32) & 0x3ffff) << 6 | 0x6;
-        self.bytes[at] = v as u8;
-        self.bytes[at + 1] = (v >> 8) as u8;
-        self.bytes[at + 2] = (v >> 16) as u8;
+        self.bytes_mut()[at] = v as u8;
+        self.bytes_mut()[at + 1] = (v >> 8) as u8;
+        self.bytes_mut()[at + 2] = (v >> 16) as u8;
         Ok(())
     }
 }
