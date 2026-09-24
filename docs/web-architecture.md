@@ -1592,6 +1592,19 @@ inferring it from a screenshot.
   gzipped on the packed asset archive. `web/tests/bundleShape.test.mjs`
   guards the shape; `tools/coldload.mjs` (styled + booted) and
   `tools/bootretry-check.mjs` (the retry) guard the behaviour.
+- **The bundle has a hard ceiling: 983,040 B packed**, the `assets` partition
+  on every board (docs/boards.md), gated by `tools/ci.sh` — a build over it
+  FAILS, and `POST /api/assets` refuses the install. So the build is tuned for
+  size in three places, all of them now spent (Gitea #683): `npm run wasm` is
+  `web/tools/build-wasm.sh` (`--profile wasm-release` + `wasm-opt -Oz`),
+  `build.minify` is `"terser"` with two compress passes rather than esbuild,
+  and `tools/pack-assets.mjs` gzips with zopfli. **Not `drop_console`**: the
+  e2e harness fails a run on any page-level `console.error`, so dropping those
+  would disable an assertion rather than save much. Two thirds of what is left
+  is content — `gallery.json` (307 pattern sources, shipped verbatim on
+  purpose) and the CodeMirror editor — so the cost of a new surface is
+  measured, not estimated: `cd web && npm run build && node
+  tools/pack-assets.mjs /tmp/x.luxa`.
 - **`$:` only tracks what appears in its own syntax.** Name every dependency in
   the block, not just inside the function it calls. And a `$:` whose input is
   assigned *inside a function another reactive block calls* can render one

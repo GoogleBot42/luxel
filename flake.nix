@@ -445,6 +445,14 @@
               # local broker for tools/mqtt-e2e.mjs (also ships
               # mosquitto_pub/_sub, which the script drives)
               pkgs.mosquitto
+              # `wasm-opt -Oz` shrinks web/public/luxel.wasm after cargo
+              # (the `wasm` script in web/package.json) — Gitea #683. It is
+              # always on PATH here, so CI and a dev build agree byte for byte.
+              pkgs.binaryen
+              # zopfli writes the .luxa bundle's gzip streams
+              # (web/tools/pack-assets.mjs): same format, ~5 % smaller than
+              # zlib level 9, which stays the fallback when it is absent.
+              pkgs.zopfli
               # throwaway self-signed cert for web/tools/lna-e2e.mjs — the
               # browser-blocked device state only exists on a genuine https
               # origin, so that harness has to serve the app over TLS

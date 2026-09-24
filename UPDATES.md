@@ -1,5 +1,80 @@
 # Update log
 
+## 2026-09-24 — bundle diet: the .luxa archive is back to 12.2 % headroom (#683)
+
+The web asset bundle had quietly filled to **975,855 B** of the 983,040 B
+`assets` partition — **7,185 B, 0.73 % headroom**, with three Phase B
+surfaces and the Phase C font blobs still queued to land on top of it.
+`tools/ci.sh` fails a build over that line, so the next web PR but one would
+have discovered it as a red run. Three levers, each measured, none of them
+touching the `.luxa` format, the firmware or the partition table:
+
+| blob (gzipped, as packed) | before | after | saved |
+|---|---:|---:|---:|
+| `gallery.json` | 371,233 | 354,277 | 16,956 |
+| `assets/index-*.js` | 310,962 | 287,734 | 23,228 |
+| `luxel.wasm` | 254,096 | 183,725 | 70,371 |
+| `index.html` | 11,417 | 10,912 | 505 |
+| `flash.html` | 11,233 | 10,745 | 488 |
+| `assets/flash-*.js` | 10,294 | 9,474 | 820 |
+| `assets/app-*.js` | 6,161 | 5,834 | 327 |
+| **packed `.luxa`** | **975,855** | **863,167** | **112,688** |
+
+Both columns measured on master `71f3240`, so the compositor and scene
+mirror (#478 #485) are in both.
+
+Headroom: 7,185 B (0.73 %) → **119,873 B (12.2 %)**, past the 12 % the
+Phase B/C work was briefed against — with no margin to spare after that, so
+the next surface is measured, not estimated.
+
+The wasm profile is the biggest single win and the one with a cost worth
+recording. The playground animates ~40 tiles through that module, so the new
+`web/tools/wasm-bench.mjs` (five `library/` patterns × 300 frames at 1024 px,
+best of six) was the gate:
+
+| build | raw | gzip -9 | zopfli | bench |
+|---|---:|---:|---:|---:|
+| `release` (opt-level 3, thin LTO) — the old one | 759,257 | 253,990 | 242,055 | 193.5 ms |
+| **`wasm-release` "s" + `wasm-opt -Oz`** — shipped | **468,447** | **193,060** | **183,725** | **208.4 ms** |
+
+And, on the pre-rebase tree where the whole ladder was walked (same relative
+shape, smaller absolute numbers):
+
+| build | raw | gzip -9 | bench |
+|---|---:|---:|---:|
+| `release` | 705,473 | 235,064 | 195.8 ms |
+| `wasm-release` opt-level 3 | 586,715 | 207,314 | 196.4 ms |
+| `wasm-release` opt-level "s" | 504,025 | 179,224 | 215.6 ms |
+| `wasm-release` "s" + `wasm-opt -Oz` | 435,518 | 178,375 | 209.3 ms |
+| `wasm-release` opt-level "z" | 465,400 | 164,777 | **510.0 ms** |
+
+`opt-level = "z"` is 8 % smaller again and **2.6x slower** — rejected. The
+shipped pick is +7.7 % on render time for −24 % on the gzipped artifact and
+−38 % on the raw module the browser parses. `wasm-opt --converge` was worth
+295 B and a second optimisation pass: not taken. Neither was terser
+`passes: 3` + `mangle.toplevel` — 24 B.
+
+Brotli and zstd would beat all of this and are **not available**: a browser
+only advertises `Accept-Encoding: br`/`zstd` on a secure origin, and the
+device is plain http on a LAN IP. gzip is the ceiling, which is why zopfli —
+a harder-searching encoder for the same DEFLATE format, so no firmware change
+and the same `Content-Encoding: gzip` — is what there was to take.
+`pack-assets.mjs` gunzips every blob back and compares it to the source
+before writing the archive, so a broken external compressor cannot ship; with
+no zopfli on PATH it warns and falls back to zlib level 9, which is the loose
+direction (a bundle that fits on a bare checkout fits in CI too).
+
+`binaryen` and `zopfli` are now devshell packages, so CI and a dev build
+produce the same bytes. `npm run wasm` moved into
+`web/tools/build-wasm.sh`; `npm run build`, `tools/ci.sh` and
+`firmware/build-esp32.sh`'s asset half all go through it unchanged. Not done:
+`drop_console` (the e2e harness fails a run on any page-level
+`console.error` — dropping them would disable that assertion) and splitting
+the 922 kB JS chunk. What is left in the bundle is mostly content —
+`gallery.json` is 354 kB of the 863 and CodeMirror is most of the JS — so the
+three levers here are spent and the next 100 kB is a product decision or a
+partition migration — written up as Gitea #691.
+
 ## 2026-09-24 — scenes on the device: a layer compositor in the render loop, `/api/scenes`, playlist scene items, and a heap-aware layer budget (#478-fw #479)
 
 **The crossfade became the general case.** The render task's ad-hoc
