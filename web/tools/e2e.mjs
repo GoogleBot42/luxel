@@ -1489,6 +1489,11 @@ try {
       (await page.$('[data-role="tab-scenes"]')) !== null,
     );
 
+    // A named state: under Auto the Layout follows whatever pattern the
+    // editor happens to hold, so SAY what the fixture is rather than inherit
+    // the previous section's — the empty state below is about not having a
+    // 2D one.
+    await previewAs(page, "strip", { px: 60 });
     await page.click('[data-role="tab-scenes"]');
     await sleep(700);
     check(
