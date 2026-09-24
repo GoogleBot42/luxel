@@ -1170,7 +1170,8 @@ assert(pixelCount >= 100, "needs at least 100 pixels")
   Restrictions: `assert` is only legal as a **top-level statement** —
   not inside functions (it would fire per frame), not nested in blocks
   or branches (a conditional invariant isn't an invariant). The quoted
-  message is the language's only string literal and exists only there.
+  message is a string literal — legal here and as an argument of the
+  text builtins (see Text), nowhere else.
   A runtime error *inside* the condition (e.g. indexing out of bounds)
   is an ordinary vmerr, not a violation.
 
