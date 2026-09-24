@@ -1,5 +1,56 @@
 # Update log
 
+## 2026-09-24 — web UI v2 Phase B+C on metal: both bench boards deployed and verified
+
+Master `6855bf5` is on the **Athom** (`board-athom-music`, 1,207,232 B,
+**7.89 %** free of its 1,310,720 B slot) and the **Seengreat panel**
+(`board-seengreat-hub75`, 1,137,872 B, 63.8 % free of 3,145,728 B), both on
+`ota_0` with the same 908,132 B asset bundle. Both came back `jit.state
+native` — `rwtext` on the Athom, `psram` on the panel — `vmerr` null and
+`partitions.migrated` true. `CLASSIC_JIT=1` was not used and does not exist
+any more: #676 made `JIT=1` the default for all five Xtensa boards.
+
+**What the boards say.** `mockdiff --device`, read-only: **0 UI deltas on
+both**. Every scenes / playlist-scenes / sprite / text frame reads 0. The
+panel's 29 deltas are all device data (23 of them frame `S4`, whose mock
+draws a playlist the panel does not have); the Athom's 51 are fixture shape —
+`--device` substitutes the board only for `panel`-target frames, so a 144 px
+strip gets measured against 64x64 matrix mocks. Cold loads: Athom 6/6 clean,
+panel 3/6 with `ERR_CONNECTION_REFUSED`, which is its documented 3-socket-pool
+trait and better than the 8–10 refusals per 3 loads recorded on 2026-09-19.
+
+**Phase C works on real hardware.** A 4-layer scene (two pattern layers, a
+colour band, a text layer) activated at `engines:2`, `vmerr` null,
+`frame_us` **69,536 µs** — the ~72 ms #716 predicted. `POST /api/text 0
+HELLO` draws: `/api/pixels` shows 58 lit pixels spelling HELLO at rows 28–33
+from x=17, i.e. `align: c` and the regular 5x7 face both honoured. A sprite
+painted in the console's scene editor became `// @sprite w=16 h=16 frames=1
+fps=0` in the device's **pattern** store with three lit cells, and the panel
+rendered exactly those three cells — `(255,0,0)` at (25,25) (29,27) (33,31)
+for a layer boxed at (24,24). A playlist item `I S<id>` round-tripped as
+`{"kind":"scene",…,"layers":2}` and the playlist advanced onto it. In real
+chromium the matrix console has the Scenes tab, the editor opens, `Play on
+device` moves `/api/scenes.active` and the playing ring with it; the strip
+console has **no** Scenes tab and no `Add to scene`, and neither board has a
+disabled control without a `data-reason`.
+
+**One crash found — Gitea #724.** `POST /api/scenes` reboots the panel when a
+2-engine scene is live. At that point `heap_largest` is ~6.6 KB and
+`firmware/src/scenes.rs` `commit()` builds the whole scene blob as a `String`
+with infallible allocation, so the allocator panics. Reproduced 2/2; the
+write is lost but the store is not corrupted and the slot does not roll back.
+It is the same class as #702 (the compositor's render-loop scratch) and is
+made reachable by #704 (~18 KB of stage buffers going permanently resident),
+so the three want fixing together. It matters because "edit the live scene,
+save" is the scene editor's normal flow.
+
+Both boards were restored to the state they were found in and every captured
+endpoint diffed: the Athom's `brightness` (6, read and never set),
+`patterns`, `config` and `layout` are byte-identical and its playlist never
+stopped playing; the panel's `brightness` (4), `playlist`, `scenes`, `text`,
+`patterns`, `config` and `layout` are all byte-identical, with Aurora 2D live
+again. The Athom's playlist items gained a `"kind":"pattern"` field and its
+`caps.text_slots` went 0 -> 8; those are Phase C, not drift.
 ## 2026-09-24 — Web UI v2 Phase B + C shipped: scenes, layers, sprites and text (#461 · #477–#486)
 
 The consolidated entry for the night; the per-PR entries below carry the
