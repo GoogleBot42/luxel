@@ -894,7 +894,7 @@ fn with_text<R>(prog: &Program, h: Fx, f: impl FnOnce(&str) -> R) -> R {
 /// move for the duration of the call).
 #[inline(never)]
 fn draw_text_at(vm: &mut Vm, s: &str, x: Fx, y: Fx, align: crate::text::Align) -> Fx {
-    let mut frame = core::mem::take(&mut vm.frame);
+    let mut frame = core::mem::replace(&mut vm.frame, crate::arena::empty());
     let w = match vm.frame_grid.filter(|g| !g.is_empty() && g.len() >= frame.len()) {
         Some(g) => {
             let c = vm.pixel;
@@ -1328,7 +1328,7 @@ pub struct Vm {
     /// for the duration of a `renderFrame` call so the bulk builtins can
     /// write RGB888 straight into it. Empty at every other moment, which
     /// is what makes every bulk op a no-op outside the whole-frame entry.
-    pub frame: Vec<[u8; 3]>,
+    pub frame: crate::arena::FrameVec,
     /// The installed map read as a regular W×H grid, when it is one —
     /// mirrors `Engine::grid` and is maintained at map install, not per
     /// frame. `gridWidth`/`gridHeight` report it and the coordinate-space
@@ -1597,7 +1597,7 @@ impl Vm {
             transform_active: false,
             transform_ops: 0,
             map: None,
-            frame: Vec::new(),
+            frame: crate::arena::empty(),
             frame_grid: None,
             pixel_count: 0,
             pixel_state: None,

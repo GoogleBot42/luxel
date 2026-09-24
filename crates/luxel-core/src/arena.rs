@@ -1,13 +1,14 @@
 //! Where the VM's array arena gets its memory.
 //!
-//! Pattern arrays are the one part of a running engine that is both large
-//! and cold enough to live somewhere other than internal SRAM. On a board
-//! with external PSRAM (Gitea #253) the firmware installs a hook here and
-//! every `ArrRepr::Owned` allocation goes to that external arena instead of
-//! the main heap; everything else the VM owns — globals, the operand stack,
-//! locals, the arena's own slot vector, the engine's per-frame pixel
-//! buffers — stays on the ordinary allocator, because those are touched per
-//! pixel per frame and PSRAM is several times slower per access.
+//! Pattern arrays and the per-frame pixel buffer are the parts of a running
+//! engine that are both large and cold enough to live somewhere other than
+//! internal SRAM. On a board with external PSRAM (Gitea #253) the firmware
+//! installs a hook here and every `ArrRepr::Owned` allocation — plus each
+//! engine's [`FrameVec`] (Gitea #709) — goes to that external arena instead
+//! of the main heap; everything else the VM owns — globals, the operand
+//! stack, locals, the arena's own slot vector — stays on the ordinary
+//! allocator, because those are touched per *instruction* and PSRAM is
+//! several times slower per access.
 //!
 //! With no hook installed (every host build, the wasm playground, and every
 //! board without PSRAM) [`ArenaAlloc`] is exactly the global allocator, so
@@ -106,9 +107,61 @@ pub const fn empty<T>() -> ArrVec<T> {
     ArrVec::new_in(ArenaAlloc)
 }
 
+/// One engine's per-frame RGB888 pixel buffer (Gitea #709).
+///
+/// Same hook as the arrays, for the same reason it exists: at 4096 px a
+/// frame is 12,288 B of internal DRAM, and two pattern layers plus the
+/// host's staging frame plus the runtime floor is more internal DRAM than
+/// the Seengreat panel has. It is the largest single thing a resident
+/// engine owns and the only one that is not touched per *instruction* — the
+/// VM writes it once per pixel per frame and the compositor reads it once
+/// per pixel per frame, both sequentially enough for the S3's data cache to
+/// carry (measured on metal: see docs/boards.md "Engine frames in PSRAM").
+///
+/// Every consumer still sees `&[[u8; 3]]` — [`crate::Engine::pixels`] and
+/// the bulk ops deref to a slice exactly as they did.
+pub type FrameVec = ArrVec<[u8; 3]>;
+
+/// An engine frame of `pixel_count` black pixels, from the arena if one is
+/// installed and the main heap otherwise.
+///
+/// Infallible, like the `alloc::vec![[0u8; 3]; n]` it replaces: the hook
+/// itself already falls back to the main heap when the external arena is
+/// full, so the only way this aborts is the way the old code aborted.
+pub fn frame(pixel_count: usize) -> FrameVec {
+    let mut v: FrameVec = empty();
+    v.resize(pixel_count, [0u8; 3]);
+    v
+}
+
+/// Whether an engine frame allocated *now* would come from the external
+/// arena — i.e. whether [`crate::budget::layer_cost`] should charge a
+/// layer's 3 B/px to internal DRAM.
+///
+/// Exactly [`installed`] today: there is one hook and the frame rides it.
+/// It is a separate name because the two questions are separate — an
+/// embedder could install a hook whose arena is too small for frames — and
+/// because the budget's caller reads better for it.
+pub fn frames_external() -> bool {
+    installed()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// No hook → no external frames, which is every host, the wasm
+    /// playground and every board without PSRAM. The budget's
+    /// `frame_external` argument is this, so those boards charge a layer
+    /// its 3 B/px exactly as before (Gitea #709).
+    #[test]
+    fn frames_are_internal_without_a_hook() {
+        assert!(!frames_external());
+        let f = frame(300);
+        assert_eq!(f.len(), 300);
+        assert!(f.iter().all(|p| *p == [0, 0, 0]));
+        assert_eq!(crate::budget::layer_cost(300, frames_external()), 4 * 1024 + 900);
+    }
 
     /// Without a hook the arena is the global allocator, which is what
     /// every host and wasm build gets.

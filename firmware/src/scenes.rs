@@ -446,7 +446,12 @@ pub fn build_runtime(
         // `try_budgeted_engine` is the real gate, but reaching it costs the
         // whole decode + build peak, and on a device already holding two
         // engines that peak is what panics rather than rejects (#479).
-        if !luxel_core::budget::layer_fits_with(esp_alloc::HEAP.free() as usize, count, scratch) {
+        if !luxel_core::budget::layer_fits_with(
+            esp_alloc::HEAP.free() as usize,
+            count,
+            scratch,
+            luxel_core::arena::frames_external(),
+        ) {
             fail(&mut err, i, "does not fit");
             rt.slots.push(Slot::Native);
             continue;

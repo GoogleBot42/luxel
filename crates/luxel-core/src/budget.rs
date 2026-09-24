@@ -164,22 +164,47 @@ pub const fn load_base(heap_free: usize, engine_heap: usize) -> usize {
 /// that board at 1. See docs/boards.md "Scene layers".
 pub const LAYER_BASE: usize = 4 * 1024;
 
-/// Resident bytes one more pattern layer costs at this pixel count: the
-/// engine's own 3 B/px RGB888 frame (internal DRAM on every board — the
-/// PSRAM arena holds array storage only) plus [`LAYER_BASE`].
-pub const fn layer_cost(pixel_count: u32) -> usize {
-    LAYER_BASE + pixel_count as usize * 3
+/// Resident INTERNAL bytes one more pattern layer costs at this pixel
+/// count: [`LAYER_BASE`], plus the engine's own 3 B/px RGB888 frame unless
+/// that frame comes from an external arena.
+///
+/// `frame_external` is [`crate::arena::frames_external`] on the host doing
+/// the asking — true exactly on a board with a PSRAM arena installed
+/// (Gitea #709), where the frame is no longer internal DRAM and a layer
+/// costs only its program tables, VM globals and stack. At 4096 px that is
+/// the difference between 16,384 B and 4,096 B a layer, i.e. between one
+/// layer and two on the Seengreat panel. It is a parameter rather than a
+/// read of the hook because this module is pure arithmetic that the wasm
+/// model runs for a device it is not running on.
+///
+/// Conservative in the one direction it can be wrong: the arena hook falls
+/// back to the main heap when the arena is full, so a `true` here could
+/// under-count. An 8 MB arena against a 12 KB frame makes that unreachable
+/// in practice, and the post-build [`RUNTIME_FLOOR`] check is still the
+/// real gate.
+pub const fn layer_cost(pixel_count: u32, frame_external: bool) -> usize {
+    if frame_external {
+        LAYER_BASE
+    } else {
+        LAYER_BASE + pixel_count as usize * 3
+    }
 }
 
 /// Whether one more resident layer fits without breaching [`RUNTIME_FLOOR`],
 /// given free heap NOW (nothing is dropped first when a layer is added to a
 /// live scene).
-pub const fn layer_fits(heap_free: usize, pixel_count: u32) -> bool {
-    layer_fits_with(heap_free, pixel_count, 0)
+pub const fn layer_fits(heap_free: usize, pixel_count: u32, frame_external: bool) -> bool {
+    layer_fits_with(heap_free, pixel_count, 0, frame_external)
 }
 
 /// Bytes the compositor's shared per-frame scratch costs at this pixel
 /// count: one RGB888 frame.
+///
+/// Always internal DRAM, even where [`layer_cost`]'s frames are not: this
+/// one is the compositor's own working buffer, read and written per pixel
+/// *within* a frame while the layer frames are also being read, and it is
+/// one buffer rather than one per layer. Moving it bought nothing worth the
+/// risk (Gitea #709).
 ///
 /// `luxel_core::compose::Compositor` allocates it with an **infallible**
 /// `Vec::resize`, inside the render loop, the first time a text layer draws
@@ -194,8 +219,13 @@ pub const fn compositor_scratch(pixel_count: u32) -> usize {
 
 /// [`layer_fits`] with `reserve` further bytes held back above the floor —
 /// [`compositor_scratch`] when the scene has a text or ramp layer.
-pub const fn layer_fits_with(heap_free: usize, pixel_count: u32, reserve: usize) -> bool {
-    heap_free >= RUNTIME_FLOOR + reserve + layer_cost(pixel_count)
+pub const fn layer_fits_with(
+    heap_free: usize,
+    pixel_count: u32,
+    reserve: usize,
+    frame_external: bool,
+) -> bool {
+    heap_free >= RUNTIME_FLOOR + reserve + layer_cost(pixel_count, frame_external)
 }
 
 /// How many bytes of RESIDENT engine a pattern may leave behind before the
@@ -394,18 +424,42 @@ mod layer_tests {
     #[test]
     fn a_layer_costs_its_frame_plus_a_fixed_base() {
         // the S3 panel: 12,288 B of RGB888 frame dominates
-        assert_eq!(layer_cost(4096), LAYER_BASE + 12_288);
+        assert_eq!(layer_cost(4096, false), LAYER_BASE + 12_288);
         // a 300-px strip: the frame is noise
-        assert_eq!(layer_cost(300), LAYER_BASE + 900);
+        assert_eq!(layer_cost(300, false), LAYER_BASE + 900);
+    }
+
+    /// Gitea #709: on a `psram-arena` board the frame is not internal DRAM,
+    /// so a layer costs the fixed base and nothing else — which is what
+    /// takes the Seengreat panel from one 4096-px layer to two.
+    #[test]
+    fn an_external_frame_leaves_only_the_fixed_base() {
+        assert_eq!(layer_cost(4096, true), LAYER_BASE);
+        assert_eq!(layer_cost(300, true), LAYER_BASE);
+        // the panel's measured steady `load_base` (47.1–49.1 KB, #709) with
+        // the staging frame charged: two layers fit where one did.
+        let free = 47_121;
+        assert!(!layer_fits_with(free, 4096, compositor_scratch(4096), false));
+        assert!(layer_fits_with(free, 4096, compositor_scratch(4096), true));
+        // 20,480 + 2*4,096 + 12,288 = 41,152 — and it is 65,536 internal
+        assert_eq!(
+            RUNTIME_FLOOR + 2 * layer_cost(4096, true) + compositor_scratch(4096),
+            40_960
+        );
+        assert_eq!(
+            RUNTIME_FLOOR + 2 * layer_cost(4096, false) + compositor_scratch(4096),
+            65_536
+        );
     }
 
     #[test]
     fn a_layer_fits_only_above_the_runtime_floor() {
-        let per = layer_cost(4096);
-        assert!(layer_fits(RUNTIME_FLOOR + per, 4096));
-        assert!(!layer_fits(RUNTIME_FLOOR + per - 1, 4096));
+        let per = layer_cost(4096, false);
+        assert!(layer_fits(RUNTIME_FLOOR + per, 4096, false));
+        assert!(!layer_fits(RUNTIME_FLOOR + per - 1, 4096, false));
         // an empty heap never affords one
-        assert!(!layer_fits(0, 1));
+        assert!(!layer_fits(0, 1, false));
+        assert!(!layer_fits(0, 1, true));
     }
 
     #[test]
@@ -431,12 +485,12 @@ mod scratch_tests {
     #[test]
     fn a_text_layer_reserves_the_compositors_scratch() {
         assert_eq!(compositor_scratch(4096), 12_288);
-        assert!(layer_fits(45_000, 4096), "the engine alone fits");
+        assert!(layer_fits(45_000, 4096, false), "the engine alone fits");
         assert!(
-            !layer_fits_with(45_000, 4096, compositor_scratch(4096)),
+            !layer_fits_with(45_000, 4096, compositor_scratch(4096), false),
             "…but not beside the scratch the scene will also need"
         );
         // a scene with no text and no ramp is unchanged
-        assert!(layer_fits_with(45_000, 4096, 0));
+        assert!(layer_fits_with(45_000, 4096, 0, false));
     }
 }

@@ -8,15 +8,29 @@
 //!
 //! ## What lives here and what must not
 //!
-//! ONLY `ArrRepr::Owned` element storage — routed through
-//! `luxel_core::arena`'s hook, which this module installs. Deliberately NOT
-//! here, because PSRAM is cache-backed over an octal SPI bus and several
-//! times slower per access than DRAM:
+//! `ArrRepr::Owned` element storage and each engine's per-frame pixel
+//! buffer (`luxel_core::arena::FrameVec`, Gitea #709) — both routed through
+//! `luxel_core::arena`'s hook, which this module installs. The frame joined
+//! the arrays because it is the largest thing a resident engine owns
+//! (12,288 B at 4096 px) and, unlike everything below, is touched once per
+//! pixel per frame rather than once per instruction: the VM writes it
+//! sequentially-ish and the compositor reads it straight through, which the
+//! S3's data cache carries. Measured on the panel before it was believed —
+//! docs/boards.md "Engine frames in PSRAM". Two 4096-px pattern layers do
+//! not fit internal DRAM otherwise (65,536 B needed against a steady
+//! `load_base` of 47–49 KB) and the panel advertised a layer it could not
+//! build.
 //!
-//! * the HUB75 DMA framebuffers and the bitplane tables (`hub75.rs`) — DMA
-//!   cannot reach PSRAM at all;
-//! * the engine's per-frame pixel buffer, the pipeline's travelling frame,
-//!   the crossfade stage buffer, the strip output buffer;
+//! Deliberately NOT here, because PSRAM is cache-backed over an octal SPI
+//! bus and several times slower per access than DRAM:
+//!
+//! * the HUB75 DMA framebuffers and the bitplane tables (`hub75.rs`). Not
+//!   because DMA cannot reach PSRAM — the S3's GDMA can (docs/boards.md
+//!   #521) — but because the panel's refresh reads every plane of every row
+//!   continuously, which is the one access pattern the cache cannot help;
+//! * the pipeline's travelling frame, the crossfade stage buffer, the
+//!   compositor's per-frame scratch, the strip output buffer — all shared,
+//!   all read and written *within* one frame beside the layer frames;
 //! * the VM's operand stack, locals, globals and the arena's own slot
 //!   vector (`Vm::arrays`) — all touched per instruction;
 //! * everything the WiFi blob mallocs. esp-radio's `malloc` shim asks

@@ -1,5 +1,55 @@
 # Update log
 
+## 2026-09-24 — engine frames move to the PSRAM arena; the panel's second pattern layer is real (#709)
+
+Two 4096-px pattern layers did not fit the Seengreat panel's internal DRAM.
+`RUNTIME_FLOOR` 20,480 + two `layer_cost` 16,384 + the 12,288 staging frame
+is 65,536 B against a steady `load_base` of 47–49 KB, so the board
+advertised 2 layers (off a boot-time `HEAP_BASE_MAX` well above steady
+state) and refused layer 2 at activation with `scene: layer 2 does not fit`.
+
+**Each engine's per-frame RGB888 pixel buffer now comes from the PSRAM
+arena** on a `psram-arena` board, through the same
+`luxel_core::arena` hook the pattern arrays have used since #253:
+`Engine::pixels`, `Vm::frame` and the strip-projection replicate buffer are
+`arena::FrameVec` (`allocator_api2::vec::Vec<[u8;3], ArenaAlloc>`), and
+every consumer still sees `&[[u8; 3]]`. With no hook installed — every
+board without PSRAM, the CLI, the wasm playground — `ArenaAlloc` *is* the
+global allocator and nothing changes.
+
+The budget follows: `budget::layer_cost`, `layer_fits[_with]` and
+`caps::layers_for_headroom` take a `frame_external` flag, which the
+firmware passes as `arena::frames_external()`. At 4096 px a layer costs
+`LAYER_BASE` (4 KB) instead of 16.4 KB, so the two-layer stack is 40,960 B
+and fits the low end of the panel's measured range outright. `engine_heap`
+follows for free — it measures the internal heap — so `load_base` stops
+counting the frames.
+
+The old doctrine in `psram.rs` said the frame was too hot for PSRAM.
+Measured on the panel 2026-09-24, four one-second `/api/status` samples per
+row, the two images built from the same tree:
+
+| | frames in DRAM | frames in PSRAM |
+|---|---:|---:|
+| `Aurora 2D` bare, JIT native | 51,784 µs | **51,702 µs** (−0.2 %) |
+| scene: `pat(Aurora 2D)` + colour band | 51,950 µs | 52,182 µs |
+| scene: `Aurora 2D` + `_Fairies` | `layer 2 does not fit`, `engines:1` | **72,042 µs, `engines:2`, both native** |
+| `load_base` idle / after 5 activations | 46.5 / 49.9 KB | 47.0 / 49.8 KB |
+
+`_Fairies` alone is 17,725 µs native, so 72.0 ms is 51.7 + 17.7 + ~2.6 ms of
+compositing — arithmetic that only closes with both layers on the JIT. A
+60 s soak of the two-pattern scene held `heap_free`, `psram_free` and
+`engine_heap` flat with `vmerr` null.
+
+What deliberately did NOT move: the HUB75 DMA framebuffers and bitplanes,
+the pipeline's travelling frame, the crossfade stage, the compositor's
+scratch, the strip output buffer, and everything the VM touches per
+instruction. The line is per-*frame* sequential access (the cache carries
+it) versus shared within-a-frame traffic and continuous DMA reads.
+
+Non-PSRAM images are unchanged in behaviour; `board-seengreat-hub75` grew
+464 B.
+
 ## 2026-09-24 — web: sprite drawing, the text inspector, gated text completions (#481 · #486)
 
 The editor halves of Phase B's sprite layer and Phase C's text layer.

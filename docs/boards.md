@@ -1777,8 +1777,19 @@ layers = clamp(1, min(tier, (headroom − stage) / layer_cost), ceiling)
                − RUNTIME_FLOOR (20 KiB)
   stage      = budget::compositor_scratch(pixel_count) = pixel_count × 3
   layer_cost = budget::LAYER_BASE (4 KiB) + pixel_count × 3
+             = budget::LAYER_BASE alone on a `psram-arena` board
   ceiling    = 2 on a `small-chip` board, else caps::MAX_LAYERS (4)
 ```
+
+**On a `psram-arena` board a layer's frame is not internal DRAM** (Gitea
+#709). Each engine's per-frame RGB888 buffer comes from the PSRAM arena
+alongside its pattern arrays, so `layer_cost` is the flat `LAYER_BASE` and
+nothing more — 4 KB instead of 16.4 KB at 4096 px. `budget::layer_cost`,
+`layer_fits[_with]` and `caps::layers_for_headroom` all take that as a
+`frame_external` argument, which every host passes as
+`luxel_core::arena::frames_external()`; on every board without an arena it
+is `false` and the arithmetic is byte-for-byte what it was. The staging
+frame is NOT moved — see "Engine frames in PSRAM" below for why.
 
 **The staging frame comes off the top** (Gitea #704). Every scene
 composites into the sink's staging buffer — 12.3 KB at 4096 px — and that
@@ -1811,13 +1822,16 @@ Taking `headroom` against `heap_free + engine_heap` rather than bare
 `heap_free` is deliberate: the advertised number would otherwise drop every
 time a scene loaded, which is exactly when a UI is reading it.
 
-**Two pattern layers do not fit the Seengreat panel at 4096 px**, and the
-arithmetic says so plainly: `RUNTIME_FLOOR` 20,480 + two `layer_cost`
-16,384 + the 12,288 staging frame is 65,536 B against a measured steady
-`load_base` of 47–49 KB (2026-09-24). What still advertises 2 there is
-`shared::HEAP_BASE_MAX`: it is a maximum over the whole uptime and its
-boot-time reading is ~16 KB above steady state, so the *live* arithmetic
-would already say 1. That is Gitea #709, not this rule.
+**Two pattern layers fit the Seengreat panel at 4096 px since Gitea #709.**
+They did not before it: `RUNTIME_FLOOR` 20,480 + two `layer_cost` 16,384 +
+the 12,288 staging frame is 65,536 B against a measured steady `load_base`
+of 47–49 KB, so the board advertised 2 (off a boot-time `HEAP_BASE_MAX`
+~16 KB above steady state) and refused layer 2 at activation. With the
+engine frames in the PSRAM arena the same stack is 20,480 + 2×4,096 +
+12,288 = **40,960 B**, which the low end of that steady range affords
+outright — the advertised 2 no longer depends on the high-water mark being
+generous. Measured on metal 2026-09-24: a two-pattern scene activates,
+`engines: 2`, both layers JIT-native.
 
 ### What compositing a scene actually costs
 
@@ -1843,35 +1857,33 @@ A full-layout, opaque, unkeyed, unmirrored `normal` layer is a
 | board / layout | load_base | layer_cost | layers |
 |---|---:|---:|---:|
 | Seengreat S3 @4096 px (design's 2026-09 figure) | 68.7 KB | 16.4 KB | **2** (tier) |
-| **Seengreat S3 @4096 px, MEASURED 2026-09-24** | **46.5 KB** | 16.4 KB | **1** |
+| Seengreat S3 @4096 px, MEASURED 2026-09-24, frames in DRAM | 46.5 KB | 16.4 KB | **1** |
+| **Seengreat S3 @4096 px, MEASURED 2026-09-24, frames in PSRAM (#709)** | **47.0 KB** | **4.1 KB** | **2** |
 | Seengreat S3 @4096 px, device blur+glow on | 26.9 KB | 16.4 KB | **1** |
 | Athom / classic ESP32 @300 px | 122.8 KB | 4.9 KB | **3** (tier) |
 | classic ESP32 @1024 px | 108 KB | 7.2 KB | **2** (tier) |
 | c3-devkit / c6-devkit (`small-chip`) | — | — | **2** (ceiling) |
 
-**The panel advertises 2 and delivers 1 — and that is the design working.**
-Measured on metal 2026-09-24: the board's boot-time `load_base` high-water
-puts `caps.layers` at **2**, matching the tier and the mirror, but a real
-4096-px engine costs 15.3 KB (`_Fairies`) to 19.7 KB (`Aurora 2D`) against a
-steady-state pool of ~46.5 KB, so the *second* one lands under the 20 KiB
-`RUNTIME_FLOOR` and `budget::layer_fits` refuses it at activation:
+**The panel advertises 2 and delivers 2** (since Gitea #709; on metal
+2026-09-24). Until then it advertised 2 and delivered 1: a real 4096-px
+engine cost 15.3 KB (`_Fairies`) to 19.7 KB (`Aurora 2D`) against a
+steady-state pool of ~46.5 KB, so the *second* one landed under the 20 KiB
+`RUNTIME_FLOOR` and `budget::layer_fits` refused it at activation:
 
 ```
 "vmerr":"scene: layer 2 does not fit"   "engines":1
 ```
 
-The scene still runs — the refused layer becomes a no-op slot and every
-other layer draws — which is exactly the split the advertised number is for.
-`caps.layers` is a board-shaped estimate a UI budgets against; the
-authoritative gate is the per-layer heap check at activation, because only
-it knows what the pattern actually costs. Being one too optimistic costs a
-clear message; being one too pessimistic would make scenes unusable on the
-flagship board, so the estimate leans optimistic on purpose.
+That refusal is still the authoritative gate, and it is still a split rather
+than a failure: the refused layer becomes a no-op slot and every other layer
+draws. `caps.layers` is a board-shaped estimate a UI budgets against; only
+the per-layer heap check at activation knows what the pattern actually
+costs. Being one too optimistic costs a clear message; being one too
+pessimistic would make scenes unusable on the flagship board, so the
+estimate leans optimistic on purpose.
 
 Text, sprite and colour layers are free — they need no engine — so the
-flagship "clock over a pattern" scene fits comfortably. Reclaiming the ~22 KB
-the panel has lost since the design's measurement (JIT off on the panel, the
-spare-plane swap of #610) would buy the second pattern layer back.
+flagship "clock over a pattern" scene fits comfortably.
 
 Two further things bound a stack in practice, both documented in
 docs/firmware.md "Scenes: the layer compositor in the render loop": the JIT
@@ -2015,10 +2027,10 @@ Gitea #75. What the first evening established, so nobody re-derives it:
 
 **PSRAM is the pattern-array arena** (Gitea #253, `psram-arena` cargo
 feature, `firmware/src/psram.rs`). It is initialised on this board only.
-The rule that made it uninteresting elsewhere still holds — DMA
-framebuffers must live in internal SRAM, and the engine's hot per-frame
-buffers would be slower on PSRAM than in DRAM — so exactly one thing moved
-there: `ArrRepr::Owned` element storage, the pattern arrays.
+Two things live there: `ArrRepr::Owned` element storage — the pattern
+arrays — and, since Gitea #709, each engine's per-frame RGB888 pixel buffer
+(see below). Everything the VM touches per *instruction* stays in internal
+DRAM, and so does every buffer the output path shares within a frame.
 
 The arena is a **second, separate `esp_alloc::EspHeap`**, never a third
 region of the global one. That matters more than it sounds: esp-radio's
@@ -2092,6 +2104,46 @@ bind on this board.
 free)"* — the upload envelope plus program decode is an internal-heap
 transient that PSRAM does not touch. Activating from the store (the borrowing
 path) is the route for a program that big.
+
+### Engine frames in PSRAM (Gitea #709)
+
+The engine's per-frame pixel buffer joined the arrays there on 2026-09-24.
+It is 3 B/px — **12,288 B at 4096 px**, the largest single thing a resident
+engine owns — and two pattern layers plus the staging frame plus
+`RUNTIME_FLOOR` needed 65,536 B of internal DRAM against a steady
+`load_base` of 47–49 KB. With the frames external the same stack is 40,960 B
+and the panel's second layer became real.
+
+The old doctrine said the frame was too hot for PSRAM. Measured, it is not:
+the VM writes it once per pixel per frame and the compositor or the outpipe
+reads it straight through, which the S3's data cache carries. Arrays were
+the same story (+0.16 % above). What stays internal is anything read and
+written *within* a frame beside those layer frames — the compositor's
+scratch, the pipeline's travelling buffer, the crossfade stage, the strip
+output buffer — and the HUB75 DMA framebuffers, which the panel refresh
+reads continuously and no cache can help. (The S3's GDMA *can* reach PSRAM
+— see #521 below — so that one is a bandwidth call, not a reachability one.)
+
+Measured on the panel 2026-09-24, `/api/status` `frame_us` averaged over
+four one-second samples, both images built from the same tree:
+
+| what is running | frames in DRAM | frames in PSRAM |
+|---|---:|---:|
+| `Aurora 2D` bare, JIT native | 51,784 µs | **51,702 µs** (−0.2 %) |
+| a scene of `pat(Aurora 2D)` + a colour band | 51,950 µs | 52,182 µs (+0.4 %) |
+| a two-pattern scene (`Aurora 2D` + `_Fairies`) | `scene: layer 2 does not fit`, `engines:1`, 51,657 µs | **72,042 µs, `engines:2`**, both layers native |
+| `load_base` idle / after five scene activations | 46.5 / 49.9 KB | 47.0 / 49.8 KB |
+
+`_Fairies` alone is 17,725 µs native, so the two-layer 72.0 ms is
+51.7 + 17.7 + ~2.6 ms of compositing — arithmetic that only closes with both
+layers on the JIT. A 60 s soak of the two-pattern scene held `heap_free`,
+`psram_free` and `engine_heap` flat with `vmerr` null.
+
+One reporting consequence: `/api/status` `engine_heap` is an **internal-DRAM**
+figure, and on this board it now reads 0–5 KB rather than 13–20 KB, because
+the frame it used to be dominated by is no longer internal. `load_base`
+(`heap_free + engine_heap`) is unchanged in meaning — it was always the
+internal pool.
 
 Two ordering rules the code depends on, both documented in
 `firmware/src/psram.rs`:

@@ -303,7 +303,10 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   measured" (nothing loaded, or a crossfade, which keeps the outgoing engine
   alive on purpose); treat 0 as `heap_free` alone, which is conservative.
   Added for Gitea #287, where predicting against `heap_free` made the
-  playground warn about patterns that load fine.
+  playground warn about patterns that load fine. It counts **internal DRAM
+  only**: on a `psram-arena` board a pattern's arrays and its per-frame
+  pixel buffer come from PSRAM (`psram_free`, Gitea #253/#709), so a 4096-px
+  engine reports 0–5 KB there rather than the 13–20 KB it did before #709.
 - `engines` — how many resident engines that sum is over (Gitea #479): 1 for
   a plain pattern, one per pattern and sprite layer while a scene is up, 0
   with nothing loaded. Device only.

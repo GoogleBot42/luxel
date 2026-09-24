@@ -408,6 +408,10 @@ fn device_caps(geom: &luxel_core::caps::Geom, pixels: u32) -> luxel_core::caps::
 /// of one panel frame) are capped at two whatever the arithmetic says — the
 /// same feature that already trims their WiFi buffers.
 ///
+/// `arena::frames_external()` is what makes the panel's answer honest: with
+/// a PSRAM arena installed the layer engines' frames are not internal DRAM,
+/// so a 4096-px layer costs 4 KB rather than 16 KB (Gitea #709).
+///
 /// This is the ONE number the scene compositor, the playlist transition rule
 /// and the editor's "N of N used" note all read, so they cannot disagree.
 pub fn scene_layer_cap() -> u8 {
@@ -429,6 +433,7 @@ pub fn scene_layer_cap() -> u8 {
         PIXEL_COUNT.load(Ordering::Relaxed),
         load_headroom(base),
         ceiling,
+        luxel_core::arena::frames_external(),
     )
 }
 
