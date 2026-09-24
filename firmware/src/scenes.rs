@@ -70,7 +70,15 @@ fn commit(list: Vec<Scene>, blob: String) -> Result<(), String> {
         return Err(scenestore::too_big(blob.len(), patterns::BLOB_MAX));
     }
     if !patterns::store_blob(patterns::SCENES_KEY, blob.as_bytes()) {
-        return Err(String::from("scenes: the store refused the record"));
+        // `store_blob` answers false for "no flash driver", "over BLOB_MAX"
+        // and — since #724 — "no heap for the store's 4 KiB page buffer".
+        // The last is the one a user at the layer cap actually hits and the
+        // only one they can act on, so say so when the heap is short.
+        return Err(if free_heap() < 3 * patterns::BLOB_MAX {
+            scenestore::no_memory(free_heap())
+        } else {
+            String::from("scenes: the store refused the record")
+        });
     }
     BLOB_LEN.store(blob.len(), Ordering::Relaxed);
     SCENES.lock(|c| *c.borrow_mut() = list);
