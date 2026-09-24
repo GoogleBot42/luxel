@@ -104,7 +104,11 @@ these before trusting any build/test failure as a real regression.
    edits go through `nix develop … --command python3 <file>`), so a one-liner that pipes API JSON through `python3`/`node`
    dies with "command not found" (`tools/stack-check.sh` uses python3 and is fine
    because it runs inside the shell). Outside it, parse with `grep`/`sed` or dump the
-   response to a file and read it. If you need ImageMagick or similar one-off tools not
+   response to a file and read it — or, for a run of Gitea API calls that do not want a
+   devshell each, put the store binary on PATH:
+   `export PATH=$(dirname $(ls -d /nix/store/*-jq-*/bin/jq | head -1)):$PATH`
+   (same trick as the `tea` binary in the git-forges skill; 2026-09-24).
+   If you need ImageMagick or similar one-off tools not
    in the flake, `nix-shell -p <pkg>` alongside it rather than assuming it's present.
    A `python3 -c '…'` one-liner inside `nix develop … --command bash -c '…'`
    dies on any apostrophe in the script text — write the script to the

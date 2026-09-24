@@ -143,6 +143,13 @@ pre-authorized per CLAUDE.md — no need to ask before pushing.
   `curl --data-binary @app.bin http://<ip>/api/ota` of the same image
   worked. (The script now prints curl's exit status and the response body
   on failure and exits non-zero loudly.)
+- **For an OTA you want `build-esp32.sh` with NO action, not `image`.** The
+  `image` action builds the web bundle too and dies with `web asset build
+  failed` / `image needs the assets` in a worktree that has no
+  `web/node_modules` — and a merged full-flash image is not what `/api/ota`
+  wants anyway. A bare `BOARD=… firmware/build-esp32.sh` builds only the ELF,
+  which is what `ota-push.sh` (or `espflash save-image --chip <chip> <elf>
+  app.bin` + `curl --data-binary @app.bin`) needs (2026-09-24).
 - **`firmware/build-esp32.sh <board>` does NOT take a board.** The
   positional is the ACTION (`flash`, `image`, `log`); the board comes from
   `$BOARD`. It used to quietly build board-pixelblaze-v3 and push that to
