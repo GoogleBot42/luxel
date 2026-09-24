@@ -135,16 +135,19 @@
         },
         {
           "name": "Heart",
-          "source": "// @sprite w=9 h=8 frames=1 fps=0\nvar sprH = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]\nvar sprS = [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]\nvar sprV = [0,1,1,0,0,0,1,1,0,1,1,1,1,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,1,1,1,1,1,1,1,0,0,0,1,1,1,1,1,0,0,0,0,0,1,1,1,0,0,0,0,0,0,0,1,0,0,0,0]\nexport function renderFrame() {\n  blit(sprH, sprS, sprV, 9, 8, 0, 0, 3)\n}\n"
+          "source": "// @sprite w=9 h=8 frames=1 fps=0\n// Heart\n\nvar sprH = [0, 0.0102, 0.0144, 0, 0, 0, 0.0112, 0.1126, 0, 0.0994, 0.3934, 0.5678, 0.7514, 0, 0.0102, 0.0102, 0.0102, 0.0102, 0.0102, 0.0102, 0.0102, 0.0102, 0.0102, 0.0102, 0.0102, 0.0102, 0.0102, 0.0102, 0.0102, 0.0102, 0.0102, 0.0102, 0.0102, 0.0102, 0.0102, 0.0102, 0, 0.0102, 0.0102, 0.0102, 0.0102, 0.0102, 0.0102, 0.0102, 0, 0, 0, 0.0102, 0.0102, 0.0102, 0.0102, 0.0102, 0, 0, 0, 0, 0, 0.0102, 0.0102, 0.0102, 0, 0, 0, 0, 0, 0, 0, 0.0102, 0, 0, 0, 0]\nvar sprS = [0, 0.7321, 0.498, 0, 0, 0, 0.8322, 0.1529, 0, 0.7371, 0.6869, 0.6696, 0.5701, 0, 0.7321, 0.7321, 0.7321, 0.7321, 0.7321, 0.7321, 0.7321, 0.7321, 0.7321, 0.7321, 0.7321, 0.7321, 0.7321, 0.7321, 0.7321, 0.7321, 0.7321, 0.7321, 0.7321, 0.7321, 0.7321, 0.7321, 0, 0.7321, 0.7321, 0.7321, 0.7321, 0.7321, 0.7321, 0.7321, 0, 0, 0, 0.7321, 0.7321, 0.7321, 0.7321, 0.7321, 0, 0, 0, 0, 0, 0.7321, 0.7321, 0.7321, 0, 0, 0, 0, 0, 0, 0, 0.7321, 0, 0, 0, 0]\nvar sprV = [0, 0.8784, 1, 0, 0, 0, 0.5608, 0.949, 0, 0.9098, 0.7765, 0.8784, 0.8392, 0, 0.8784, 0.8784, 0.8784, 0.8784, 0.8784, 0.8784, 0.8784, 0.8784, 0.8784, 0.8784, 0.8784, 0.8784, 0.8784, 0.8784, 0.8784, 0.8784, 0.8784, 0.8784, 0.8784, 0.8784, 0.8784, 0.8784, 0, 0.8784, 0.8784, 0.8784, 0.8784, 0.8784, 0.8784, 0.8784, 0, 0, 0, 0.8784, 0.8784, 0.8784, 0.8784, 0.8784, 0, 0, 0, 0, 0, 0.8784, 0.8784, 0.8784, 0, 0, 0, 0, 0, 0, 0, 0.8784, 0, 0, 0, 0]\n\nvar sprW = 9\nvar sprHt = 8\n\nexport function renderFrame() {\n  blit(sprH, sprS, sprV, sprW, sprHt, 0, 0, 3)\n}\n"
         }
       ],
       "scenes": [
         "S - Clock overlay\nL pat 0 0 0 0 normal 100 none fill 1\nN Rainbow\nI {{Sunset Fade}}\nL color 0 58 64 6 normal 45 none fill 1\nN Bottom bar\nK e8a33d\nL text 0 28 64 8 normal 100 none fill 1\nN Time\nT clock HH:MM\nF regular ffffff c none 0\n",
-        "S - Aurora + ticker\nL pat 0 0 0 0 multiply 60 none fill 1\nN Rainbow\nI {{Sunset Fade}}\nC hue 6553\nC speed 5242\nR 100 0:000000 86:2a1060 173:c23a6b 255:f7e08a\nL color 0 58 64 6 normal 45 none fill 0\nN Bottom bar\nK e8a33d\nL pat 0 0 0 0 normal 60 black fill 1\nN Aurora 2D\nI {{Aurora 2D}}\nC cellSize 5242\nC speed 26214\nL sprite 27 20 9 8 normal 100 black fill 1\nN Heart\nI {{Heart}}\nL text 0 28 64 8 normal 100 none fill 1\nN Time\nT clock HH:MM\nF regular ffffff c none 0\n",
+        "S - Aurora + ticker\nL pat 0 0 0 0 multiply 60 none fill 1\nN Rainbow\nI {{Sunset Fade}}\nC hue 6553\nC speed 5242\nR 100 0:000000 86:2a1060 173:c23a6b 255:f7e08a\nL color 0 58 64 6 normal 45 none fill 0\nN Bottom bar\nK e8a33d\nL pat 0 0 0 0 normal 60 black fill 1\nN Aurora 2D\nI {{Aurora 2D}}\nC cellSize 5242\nC speed 26214\nL sprite 4 4 9 8 normal 100 black fill 1\nN Heart\nI {{Heart}}\nL text 0 28 64 8 normal 100 none fill 1\nN Time\nT clock HH:MM\nF regular ffffff c none 0\n",
         "S - Party wall\nL pat 0 0 0 0 normal 100 none fill 1\nN Base\nI {{Aurora 2D}}\nL color 0 0 0 0 add 30 none fill 1\nN Wash\nK 2a1060\nL sprite 27 20 9 8 normal 100 black fill 1\nN Heart\nI {{Heart}}\nL text 0 4 64 8 normal 100 none fill 1\nN Ticker\nT lit PARTY\n"
       ],
       "activateScene": "Clock overlay",
-      "why": "mockups S6/S6d: three scene tiles, the first PLAYING. S7's stack, bottom to top: a 1D base under a projection override (the quiet Projection row, S7g), a colour wash, a 2D pattern at 60 % (S7b/S7g's inspector), a 9x8 sprite and a clock text layer — two pattern layers, which is exactly `caps.layers` on this board, so the Add-layer menu is at the cap (S7d). `Aurora + ticker` is NOT the active scene: the inspector frames edit it, and an edit to the active scene would live-push and change what a later frame sees."
+      "why": "mockups S6/S6d: three scene tiles, the first PLAYING. S7's stack, bottom to top: a 1D base under a projection override (the quiet Projection row, S7g), a colour wash, a 2D pattern at 60 % (S7b/S7g's inspector), a 9x8 sprite and a clock text layer — two pattern layers, which is exactly `caps.layers` on this board, so the Add-layer menu is at the cap (S7d). `Aurora + ticker` is NOT the active scene: the inspector frames edit it, and an edit to the active scene would live-push and change what a later frame sees.",
+      "text": {
+        "0": "PARTY 21:00"
+      }
     },
     "plscenes": {
       "brightness": 3,
@@ -6665,6 +6668,1008 @@
           "element": "menu",
           "property": "position",
           "why": "the app's popover is `fixed` off its anchor so it cannot be clipped by a scrolling parent (Jeremy, 2026-09-19); the mock is an `absolute` box in `.menuwrap`"
+        }
+      ]
+    },
+    "S7c": {
+      "title": "Scene editor — a SPRITE layer selected: the tool row and the palette",
+      "width": 1200,
+      "height": 1000,
+      "app": {
+        "target": "scenes",
+        "route": "#/scenes",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"scenes-grid\"]"
+          },
+          {
+            "sleep": 1500
+          },
+          {
+            "js": "document.querySelectorAll('[data-role=\"scene-tile-edit\"]')[1].click()"
+          },
+          {
+            "waitFor": "[data-role=\"scene-editor-view\"]:not([hidden])"
+          },
+          {
+            "sleep": 1600
+          },
+          {
+            "click": "[data-role=\"scene-layer\"][data-layer=\"3\"] [data-role=\"scene-layer-pick\"]"
+          },
+          {
+            "sleep": 900
+          },
+          {
+            "js": "(() => { const c = document.querySelector('[data-role=\"scene-stage\"]'); const r = c.getBoundingClientRect(); c.dispatchEvent(new PointerEvent('pointermove', { clientX: r.left + r.width * 0.195, clientY: r.top + r.height * 0.115, bubbles: true })); })()"
+          },
+          {
+            "sleep": 300
+          }
+        ]
+      },
+      "allow": [
+        {
+          "element": "lcol",
+          "property": "overflow-y",
+          "why": "the mock frame is a fixed-height crop, so its columns cannot scroll; the real three columns each scroll on their own or a long layer list would push Add layer off the screen"
+        },
+        {
+          "element": "ccol",
+          "property": "overflow-y",
+          "why": "same: a fixed-height crop cannot scroll"
+        },
+        {
+          "element": "rcol",
+          "property": "overflow-y",
+          "why": "same: a fixed-height crop cannot scroll"
+        },
+        {
+          "element": "lcol",
+          "property": "overflow-x",
+          "why": "the paired value of overflow-y: `overflow-y:auto` computes `overflow-x:auto` unless it is set, and a column that scrolls sideways is prevented by its own min-width:0 children"
+        },
+        {
+          "element": "ccol",
+          "property": "overflow-x",
+          "why": "see lcol.overflow-x"
+        },
+        {
+          "element": "rcol",
+          "property": "overflow-x",
+          "why": "see lcol.overflow-x"
+        },
+        {
+          "element": "savestate",
+          "property": "text",
+          "why": "the mock states a document state (`saved · on device` / `unsaved changes`); which one is live and is asserted by web/tools/device-e2e.mjs instead"
+        },
+        {
+          "element": "preview-dims",
+          "property": "text",
+          "why": "the mock's `64x64 · 24 fps on device` carries the mirror's live frame rate; the wording and the separator match exactly"
+        },
+        {
+          "element": "cost",
+          "property": "text",
+          "why": "the mock's cost line predates the cap wording (Gitea #698); S7d/S7e/S7f all draw `Frame cost: 2 of 2 pattern layers · 24 fps`, which is what is built and what S7d asserts"
+        },
+        {
+          "element": "budget-fill",
+          "property": "box width",
+          "why": "the mock draws the meter at 70 % with the pre-cap cost line; the built meter is `pattern layers / caps.layers`, which at the cap is 100 % — S7d/S7e draw it there"
+        },
+        {
+          "element": "swatchbtn",
+          "property": "text",
+          "why": "the mock labels the chip with a colour NAME (`red`); the app's is the same `SceneSwatch` primitive S7/S7e use, whose name comes from the picked colour — here the Heart sprite's own, which is what the recents row is seeded from"
+        }
+      ],
+      "elements": [
+        {
+          "id": "edhdr",
+          "mock": ".edhdr",
+          "app": "[data-role=\"scene-editor-header\"]",
+          "noBoxW": true
+        },
+        {
+          "id": "savestate",
+          "mock": ".savestate",
+          "app": "[data-role=\"scene-save-state\"]",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "scene3",
+          "mock": ".scene3",
+          "app": "[data-role=\"scene-editor-view\"] .scene3",
+          "noBoxH": true
+        },
+        {
+          "id": "lcol",
+          "mock": ".lcol",
+          "app": "[data-role=\"scene-layers\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "ccol",
+          "mock": ".ccol",
+          "app": "[data-role=\"scene-preview\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "ccol-label",
+          "mock": ".ccol .slabel",
+          "app": "[data-role=\"scene-preview\"] .slabel",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "preview-dims",
+          "mock": ".ccol .rdim",
+          "app": "[data-role=\"scene-preview-dims\"]",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "pause",
+          "mock": ".ccol .btn.sm.icon",
+          "app": "[data-role=\"scene-pause\"]"
+        },
+        {
+          "id": "stage",
+          "mock": ".stage",
+          "app": "[data-role=\"scene-editor-view\"] .stage"
+        },
+        {
+          "id": "stage-canvas",
+          "mock": ".stage canvas",
+          "app": "[data-role=\"scene-stage\"]"
+        },
+        {
+          "id": "marq",
+          "mock": ".marq",
+          "app": "[data-role=\"scene-marquee\"]",
+          "noBox": true
+        },
+        {
+          "id": "hdl",
+          "mock": ".hdl",
+          "app": "[data-role=\"scene-handle-nw\"]",
+          "noBox": true
+        },
+        {
+          "id": "cost",
+          "mock": ".ccol > .hint",
+          "app": "[data-role=\"scene-cost\"]",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "budget",
+          "mock": ".budget",
+          "app": "[data-role=\"scene-editor-view\"] .budget"
+        },
+        {
+          "id": "budget-fill",
+          "mock": ".budget i",
+          "app": "[data-role=\"scene-editor-view\"] .budget i",
+          "noBoxH": true
+        },
+        {
+          "id": "rcol",
+          "mock": ".rcol",
+          "app": "[data-role=\"scene-inspector\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "rcol-label",
+          "mock": ".rcol .slabel",
+          "app": "[data-role=\"scene-inspector\"] .slabel",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Sprite layer`"
+        },
+        {
+          "id": "toolrow",
+          "mock": ".toolrow",
+          "app": "[data-role=\"sprite-tools\"]",
+          "noBoxW": true
+        },
+        {
+          "id": "tool-on",
+          "mock": ".toolrow .btn.sm.icon.on",
+          "app": "[data-role=\"sprite-tool-pencil\"]"
+        },
+        {
+          "id": "tool-off",
+          "mock": ".toolrow .btn.sm.icon:not(.on)",
+          "app": "[data-role=\"sprite-tool-eraser\"]"
+        },
+        {
+          "id": "tool-fill",
+          "mock": ".toolrow .btn.sm.icon:not(.on)",
+          "mockNth": 1,
+          "app": "[data-role=\"sprite-tool-fill\"]"
+        },
+        {
+          "id": "swatchbtn",
+          "mock": ".toolrow .swatchbtn",
+          "app": "[data-role=\"sprite-color\"]",
+          "text": true
+        },
+        {
+          "id": "swatch-chip",
+          "mock": ".toolrow .swatchbtn i",
+          "app": "[data-role=\"sprite-color\"] button.swatch"
+        },
+        {
+          "id": "recents",
+          "mock": ".recents",
+          "app": "[data-role=\"sprite-recents\"]",
+          "noBoxW": true
+        },
+        {
+          "id": "recent",
+          "mock": ".recents i",
+          "app": "[data-role=\"sprite-recent\"]",
+          "noBox": true
+        },
+        {
+          "id": "tool-hint",
+          "mock": ".toolrow .hint",
+          "app": "[data-role=\"sprite-tools-hint\"]",
+          "text": true,
+          "noBoxW": true
+        },
+        {
+          "id": "cellmark",
+          "mock": ".cellmark",
+          "app": "[data-role=\"scene-cellmark\"]",
+          "noBox": true
+        },
+        {
+          "id": "irow",
+          "mock": ".rcol .irow",
+          "app": "[data-role=\"scene-inspector\"] .irow",
+          "noBoxH": true
+        },
+        {
+          "id": "ilab",
+          "mock": ".rcol .ilab",
+          "app": "[data-role=\"scene-inspector\"] .ilab",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Name`"
+        },
+        {
+          "id": "name-input",
+          "mock": ".rcol .irow input.inp",
+          "app": "[data-role=\"scene-layer-name\"]"
+        },
+        {
+          "id": "size-row",
+          "mock": ".rcol .boxrow",
+          "app": "[data-role=\"scene-sprite-size\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "size-w",
+          "mock": ".rcol .boxrow .inp",
+          "app": "[data-role=\"scene-sprite-w\"]"
+        },
+        {
+          "id": "size-unit",
+          "mock": ".rcol .boxrow .un",
+          "app": "[data-role=\"scene-sprite-size\"] .un",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `px`"
+        },
+        {
+          "id": "frames-input",
+          "mock": ".rcol .inp.num.xs",
+          "app": "[data-role=\"scene-sprite-frames\"]"
+        },
+        {
+          "id": "frames-hint",
+          "mock": ".rcol .irow.start .hint",
+          "app": "[data-role=\"scene-sprite-frames-hint\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `animation frames — a frame strip appears at 2+`"
+        },
+        {
+          "id": "pal",
+          "mock": ".pal",
+          "app": "[data-role=\"scene-sprite-palette\"]"
+        },
+        {
+          "id": "pal-used",
+          "mock": ".pal i:not(.empty)",
+          "app": "[data-role=\"scene-sprite-palette\"] i:not(.empty)",
+          "noBox": true
+        },
+        {
+          "id": "pal-empty",
+          "mock": ".pal i.empty",
+          "app": "[data-role=\"scene-sprite-palette\"] i.empty",
+          "noBox": true
+        },
+        {
+          "id": "pal-hint",
+          "mock": ".rcol .irow.start .hint",
+          "mockNth": 1,
+          "app": "[data-role=\"scene-sprite-palette-hint\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `16 colours` — the CAP, not a count"
+        },
+        {
+          "id": "key-line",
+          "mock": ".rcol .irow:not(.start):not(.wide) > .hint",
+          "app": "[data-role=\"scene-sprite-key\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `black pixels · sprites are always keyed`"
+        },
+        {
+          "id": "irule",
+          "mock": ".irule",
+          "app": "[data-role=\"scene-inspector\"] .irule",
+          "noBoxW": true
+        },
+        {
+          "id": "boxrow",
+          "mock": ".rcol .boxrow",
+          "mockNth": 1,
+          "app": "[data-role=\"scene-box\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "box-input",
+          "mock": ".rcol .irow.wide .boxrow .inp",
+          "app": "[data-role=\"scene-box-x\"]"
+        },
+        {
+          "id": "fit-line",
+          "mock": ".rcol .irow:not(.start):not(.wide) > .hint",
+          "mockNth": 1,
+          "app": "[data-role=\"scene-sprite-fit\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `1:1 · sprites are never scaled`"
+        },
+        {
+          "id": "blend-sel",
+          "mock": ".rcol .sel",
+          "app": "[data-role=\"scene-blend\"]"
+        },
+        {
+          "id": "opacity",
+          "mock": ".slider",
+          "app": "[data-role=\"scene-opacity\"]"
+        },
+        {
+          "id": "opacity-value",
+          "mock": ".mono.tiny.dim",
+          "app": "[data-role=\"scene-opacity-value\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `100 %`"
+        },
+        {
+          "id": "delete",
+          "mock": ".btn.del",
+          "app": "[data-role=\"scene-delete-layer\"]",
+          "text": true,
+          "note": "mock copy: `Delete layer`"
+        }
+      ]
+    },
+    "S7h": {
+      "mock": "S7h",
+      "title": "Text layer — source = clock, with no clock yet (S7h, column 1)",
+      "width": 1200,
+      "height": 1000,
+      "app": {
+        "target": "scenes",
+        "route": "#/scenes",
+        "steps": [
+          {
+            "js": "(() => { const f = window.fetch.bind(window); window.fetch = (u, o) => (String(u).includes('/api/clock') && !(o && o.method === 'POST') ? Promise.resolve(new Response('{\"synced\":false,\"local\":0,\"tzMinutes\":0}', { headers: { 'content-type': 'application/json' } })) : f(u, o)); })()"
+          },
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"scenes-grid\"]"
+          },
+          {
+            "sleep": 1500
+          },
+          {
+            "js": "document.querySelectorAll('[data-role=\"scene-tile-edit\"]')[1].click()"
+          },
+          {
+            "waitFor": "[data-role=\"scene-editor-view\"]:not([hidden])"
+          },
+          {
+            "sleep": 1600
+          },
+          {
+            "click": "[data-role=\"scene-layer\"][data-layer=\"4\"] [data-role=\"scene-layer-pick\"]"
+          },
+          {
+            "sleep": 900
+          },
+          {
+            "sleep": 2600
+          }
+        ]
+      },
+      "allow": [],
+      "elements": [
+        {
+          "id": "rcol-label",
+          "mock": ".varcols > .rcol:nth-of-type(1) .slabel",
+          "app": "[data-role=\"scene-inspector\"] .slabel",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Text layer`"
+        },
+        {
+          "id": "ilab",
+          "mock": ".varcols > .rcol:nth-of-type(1) .ilab",
+          "app": "[data-role=\"scene-inspector\"] .ilab",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Name`"
+        },
+        {
+          "id": "name-input",
+          "mock": ".varcols > .rcol:nth-of-type(1) input.inp",
+          "app": "[data-role=\"scene-layer-name\"]"
+        },
+        {
+          "id": "rrow",
+          "mock": ".varcols > .rcol:nth-of-type(1) .rrow",
+          "app": "[data-role=\"scene-inspector\"] .rrow",
+          "noBoxH": true
+        },
+        {
+          "id": "rrow-on",
+          "mock": ".varcols > .rcol:nth-of-type(1) .rrow.on",
+          "app": "[data-role=\"scene-inspector\"] .rrow.on",
+          "noBoxH": true
+        },
+        {
+          "id": "radio",
+          "mock": ".varcols > .rcol:nth-of-type(1) .rrow .radio",
+          "app": "[data-role=\"scene-inspector\"] .rrow .radio"
+        },
+        {
+          "id": "radio-on",
+          "mock": ".varcols > .rcol:nth-of-type(1) .rrow.on .radio",
+          "app": "[data-role=\"scene-inspector\"] .rrow.on .radio"
+        },
+        {
+          "id": "lit-input",
+          "mock": ".varcols > .rcol:nth-of-type(1) .rrow .inp.xs",
+          "app": "[data-role=\"scene-text-lit\"]"
+        },
+        {
+          "id": "fmt-sel",
+          "mock": ".varcols > .rcol:nth-of-type(1) .rrow .sel.xs",
+          "app": "[data-role=\"scene-text-fmt\"]"
+        },
+        {
+          "id": "clock-state",
+          "mock": ".varcols > .rcol:nth-of-type(1) .irow.start .hint",
+          "mockNth": 1,
+          "app": "[data-role=\"scene-clock-state\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `not synced — the layer draws --:-- until the device gets the time`"
+        },
+        {
+          "id": "clock-link",
+          "mock": ".varcols > .rcol:nth-of-type(1) .lnk",
+          "app": "[data-role=\"scene-clock-settings\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Settings › Clock & time zone`"
+        },
+        {
+          "id": "font-sel",
+          "mock": ".varcols > .rcol:nth-of-type(1) .sel",
+          "mockNth": 1,
+          "app": "[data-role=\"scene-text-font\"]",
+          "note": "mock copy: `5×7 regular` — a `<select>`'s text is every option, and the mock's `▾` is a glyph where the app's is the shared chevron background (S7 maps its selects the same way)"
+        },
+        {
+          "id": "scroll-sel",
+          "mock": ".varcols > .rcol:nth-of-type(1) .sel",
+          "mockNth": 2,
+          "app": "[data-role=\"scene-text-scroll\"]"
+        }
+      ]
+    },
+    "S7hslot": {
+      "mock": "S7h",
+      "title": "Text layer — source = text slot, with the slot's value echoed (S7h, column 2)",
+      "width": 1200,
+      "height": 1000,
+      "app": {
+        "target": "scenes",
+        "route": "#/scenes",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"scenes-grid\"]"
+          },
+          {
+            "sleep": 1500
+          },
+          {
+            "js": "document.querySelectorAll('[data-role=\"scene-tile-edit\"]')[1].click()"
+          },
+          {
+            "waitFor": "[data-role=\"scene-editor-view\"]:not([hidden])"
+          },
+          {
+            "sleep": 1600
+          },
+          {
+            "click": "[data-role=\"scene-layer\"][data-layer=\"4\"] [data-role=\"scene-layer-pick\"]"
+          },
+          {
+            "sleep": 900
+          },
+          {
+            "click": "[data-role=\"scene-text-slot\"]"
+          },
+          {
+            "sleep": 700
+          }
+        ]
+      },
+      "allow": [],
+      "elements": [
+        {
+          "id": "rrow-on",
+          "mock": ".varcols > .rcol:nth-of-type(2) .rrow.on",
+          "app": "[data-role=\"scene-inspector\"] .rrow.on",
+          "noBoxH": true
+        },
+        {
+          "id": "slot-sel",
+          "mock": ".varcols > .rcol:nth-of-type(2) .rrow.on .sel.xs",
+          "app": "[data-role=\"scene-text-slot-n\"]"
+        },
+        {
+          "id": "slot-hint",
+          "mock": ".varcols > .rcol:nth-of-type(2) .irow.start .hint",
+          "app": "[data-role=\"scene-text-slot-hint\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `set from the API or Home Assistant`"
+        },
+        {
+          "id": "slot-how",
+          "mock": ".varcols > .rcol:nth-of-type(2) .irow.start .hint",
+          "mockNth": 1,
+          "app": "[data-role=\"scene-text-slot-how\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `slots 0–7 · POST /api/text · one HA text entity each`"
+        },
+        {
+          "id": "now-value",
+          "mock": ".varcols > .rcol:nth-of-type(2) .mono.tiny",
+          "app": "[data-role=\"scene-text-slot-value\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `PARTY 21:00` — the seed writes that into slot 0"
+        }
+      ]
+    },
+    "S7hscroll": {
+      "mock": "S7h",
+      "title": "Text layer — Speed appears with Scroll ≠ none (S7h, column 3)",
+      "width": 1200,
+      "height": 1000,
+      "app": {
+        "target": "scenes",
+        "route": "#/scenes",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"scenes-grid\"]"
+          },
+          {
+            "sleep": 1500
+          },
+          {
+            "js": "document.querySelectorAll('[data-role=\"scene-tile-edit\"]')[1].click()"
+          },
+          {
+            "waitFor": "[data-role=\"scene-editor-view\"]:not([hidden])"
+          },
+          {
+            "sleep": 1600
+          },
+          {
+            "click": "[data-role=\"scene-layer\"][data-layer=\"4\"] [data-role=\"scene-layer-pick\"]"
+          },
+          {
+            "sleep": 900
+          },
+          {
+            "select": "[data-role=\"scene-text-scroll\"]",
+            "value": "left"
+          },
+          {
+            "sleep": 600
+          },
+          {
+            "type": "[data-role=\"scene-text-speed\"]",
+            "value": "20"
+          },
+          {
+            "sleep": 500
+          }
+        ]
+      },
+      "allow": [],
+      "elements": [
+        {
+          "id": "scroll-sel",
+          "mock": ".varcols > .rcol:nth-of-type(3) .irow .sel",
+          "mockNth": 1,
+          "app": "[data-role=\"scene-text-scroll\"]",
+          "note": "mock copy: `left` — the row under the `with Scroll = left:` caption — a `<select>`'s text is every option, and the mock's `▾` is a glyph where the app's is the shared chevron background (S7 maps its selects the same way)"
+        },
+        {
+          "id": "speed-slider",
+          "mock": ".varcols > .rcol:nth-of-type(3) .slider",
+          "app": "[data-role=\"scene-text-speed\"]"
+        },
+        {
+          "id": "speed-value",
+          "mock": ".varcols > .rcol:nth-of-type(3) .mono.tiny.dim",
+          "app": "[data-role=\"scene-text-speed-value\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `20 px/s`"
+        },
+        {
+          "id": "boxrow",
+          "mock": ".varcols > .rcol:nth-of-type(3) .boxrow",
+          "mockNth": 1,
+          "app": "[data-role=\"scene-box\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "box-input",
+          "mock": ".varcols > .rcol:nth-of-type(3) .boxrow .inp",
+          "mockNth": 4,
+          "app": "[data-role=\"scene-box-x\"]"
+        },
+        {
+          "id": "window-hint",
+          "mock": ".varcols > .rcol:nth-of-type(3) > .hint",
+          "app": "[data-role=\"scene-scroll-window\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: the scroll-window paragraph"
+        }
+      ]
+    },
+    "S7i": {
+      "title": "Text layer — the font picker open, three built-ins with 1:1 samples",
+      "width": 1200,
+      "height": 1000,
+      "app": {
+        "target": "scenes",
+        "route": "#/scenes",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"scenes-grid\"]"
+          },
+          {
+            "sleep": 1500
+          },
+          {
+            "js": "document.querySelectorAll('[data-role=\"scene-tile-edit\"]')[1].click()"
+          },
+          {
+            "waitFor": "[data-role=\"scene-editor-view\"]:not([hidden])"
+          },
+          {
+            "sleep": 1600
+          },
+          {
+            "click": "[data-role=\"scene-layer\"][data-layer=\"4\"] [data-role=\"scene-layer-pick\"]"
+          },
+          {
+            "sleep": 900
+          },
+          {
+            "click": "[data-role=\"scene-text-font\"]"
+          },
+          {
+            "waitFor": "[data-role=\"scene-font-menu\"]"
+          },
+          {
+            "sleep": 700
+          }
+        ]
+      },
+      "allow": [
+        {
+          "element": "menu",
+          "property": "position",
+          "why": "a popover is placed `fixed` off its anchor so it can dodge the viewport edges (Jeremy, 2026-09-19); the mock is a static `absolute` box inside `.addwrap`"
+        }
+      ],
+      "elements": [
+        {
+          "id": "rcol-label",
+          "mock": ".rcol .slabel",
+          "app": "[data-role=\"scene-inspector\"] .slabel",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Text layer`"
+        },
+        {
+          "id": "trigger",
+          "mock": ".addwrap .sel",
+          "app": "[data-role=\"scene-text-font\"]",
+          "note": "mock copy: `5×7 regular`, accent-bordered while the menu is open — a `<select>`'s text is every option, and the mock's `▾` is a glyph where the app's is the shared chevron background (S7 maps its selects the same way)"
+        },
+        {
+          "id": "menu",
+          "mock": ".menu.full",
+          "app": "[data-role=\"scene-font-menu\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "fontrow",
+          "mock": ".mi.fontrow:not(.hi)",
+          "app": "[data-role=\"scene-font-tiny\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "fontrow-hi",
+          "mock": ".mi.fontrow.hi",
+          "app": "[data-role=\"scene-font-regular\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "fmeta",
+          "mock": ".fontrow .fmeta",
+          "app": "[data-role=\"scene-font-tiny\"] .fmeta",
+          "noBox": true
+        },
+        {
+          "id": "fnm",
+          "mock": ".fontrow .fnm",
+          "app": "[data-role=\"scene-font-tiny\"] .fnm",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `4×6 tiny`"
+        },
+        {
+          "id": "fhint",
+          "mock": ".fontrow .hint",
+          "app": "[data-role=\"scene-font-tiny\"] .hint",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Tom Thumb · ~16 chars wide` — 64 px / 4 px advance"
+        },
+        {
+          "id": "fnm-hi",
+          "mock": ".fontrow.hi .fnm",
+          "app": "[data-role=\"scene-font-regular\"] .fnm",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `5×7 regular`"
+        },
+        {
+          "id": "fhint-hi",
+          "mock": ".fontrow.hi .hint",
+          "app": "[data-role=\"scene-font-regular\"] .hint",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `misc-fixed · current`"
+        },
+        {
+          "id": "fnm-large",
+          "mock": ".fontrow .fnm",
+          "mockNth": 2,
+          "app": "[data-role=\"scene-font-large\"] .fnm",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `5×8 large`"
+        },
+        {
+          "id": "fhint-large",
+          "mock": ".fontrow .hint",
+          "mockNth": 2,
+          "app": "[data-role=\"scene-font-large\"] .hint",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Spleen · ~10 chars wide`"
+        },
+        {
+          "id": "glyph-tiny",
+          "mock": ".fontrow .glyph",
+          "app": "[data-role=\"scene-font-tiny\"] .glyph",
+          "note": "38x12 CSS px = a 19x6 device-pixel sample at 2x — `12:48` in Tom Thumb, drawn through the real font blob by the wasm"
+        },
+        {
+          "id": "glyph-regular",
+          "mock": ".fontrow .glyph",
+          "mockNth": 1,
+          "app": "[data-role=\"scene-font-regular\"] .glyph"
+        },
+        {
+          "id": "glyph-large",
+          "mock": ".fontrow .glyph",
+          "mockNth": 2,
+          "app": "[data-role=\"scene-font-large\"] .glyph"
+        }
+      ]
+    },
+    "S2f": {
+      "title": "Editor — the text builtins in completions and docs (matrix console)",
+      "width": 1200,
+      "height": 1000,
+      "app": {
+        "target": "panel",
+        "route": "#/",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"][data-name=\"Aurora 2D\"] [data-role=\"tile-edit\"]"
+          },
+          {
+            "sleep": 800
+          },
+          {
+            "click": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"][data-name=\"Aurora 2D\"] [data-role=\"tile-edit\"]"
+          },
+          {
+            "waitFor": "[data-role=\"editor-view\"]:not([hidden]) .cm-content"
+          },
+          {
+            "waitGone": "[data-role=\"pattern-loading\"]",
+            "required": false
+          },
+          {
+            "sleep": 2200
+          },
+          {
+            "focus": "[data-role=\"editor-view\"]:not([hidden]) .cm-content"
+          },
+          {
+            "keys": [
+              "End"
+            ]
+          },
+          {
+            "keys": [
+              "Enter",
+              "d",
+              "r",
+              "a",
+              "w",
+              "T"
+            ]
+          },
+          {
+            "sleep": 900
+          }
+        ]
+      },
+      "allow": [
+        {
+          "element": "acrow",
+          "why": "a completion popup shows what MATCHES what you typed: `drawT` is the one prefix that selects drawText deterministically, so the frame measures one row (the selected one). The mock's five-entry list is asserted, as a list, by web/tools/e2e.mjs"
+        },
+        {
+          "element": "acpop",
+          "property": "position",
+          "why": "a CodeMirror tooltip is placed `fixed` off the caret so it can dodge the viewport edges and escape the code pane's scroll container — the same rule every popover in this app follows (Jeremy, 2026-09-19); the mock is a static `absolute` box inside `.codebody`"
+        }
+      ],
+      "elements": [
+        {
+          "id": "acpop",
+          "mock": ".acpop",
+          "app": "[data-role=\"editor-view\"]:not([hidden]) .cm-tooltip-autocomplete",
+          "noBoxH": true
+        },
+        {
+          "id": "acrow-on",
+          "mock": ".acrow.on",
+          "app": "[data-role=\"editor-view\"]:not([hidden]) .cm-tooltip-autocomplete li[aria-selected]",
+          "noBoxW": true
+        },
+        {
+          "id": "ak",
+          "mock": ".acrow.on .ak",
+          "app": "[data-role=\"editor-view\"]:not([hidden]) li[aria-selected] .cm-completionLabel",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `drawText`"
+        },
+        {
+          "id": "asig",
+          "mock": ".acrow.on .asig",
+          "app": "[data-role=\"editor-view\"]:not([hidden]) li[aria-selected] .cm-completionDetail",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `(text, x, y[, align])`"
+        },
+        {
+          "id": "acdoc",
+          "mock": ".acdoc",
+          "app": "[data-role=\"editor-view\"]:not([hidden]) .cm-completionInfo",
+          "noBoxH": true
+        },
+        {
+          "id": "sigl",
+          "mock": ".acdoc .sigl",
+          "app": "[data-role=\"editor-view\"]:not([hidden]) .cm-completionInfo .sigl",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `drawText(text, x, y[, align])`"
+        },
+        {
+          "id": "acdoc-p",
+          "mock": ".acdoc p",
+          "app": "[data-role=\"editor-view\"]:not([hidden]) .cm-completionInfo p",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: the `Draws text with the current font…` paragraph"
+        },
+        {
+          "id": "acdoc-p2",
+          "mock": ".acdoc p",
+          "mockNth": 1,
+          "app": "[data-role=\"editor-view\"]:not([hidden]) .cm-completionInfo p",
+          "nth": 1,
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Needs a real 2D grid — a no-op without one, like blit.`"
+        },
+        {
+          "id": "acdoc-ex",
+          "mock": ".acdoc .ex",
+          "app": "[data-role=\"editor-view\"]:not([hidden]) .cm-completionInfo .ex",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `drawText(textSlot(0), x, 28)`"
         }
       ]
     }

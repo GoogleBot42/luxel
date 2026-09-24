@@ -1,26 +1,26 @@
 <script lang="ts">
-  // The TEXT layer's inspector — mockup S7, field for field.
+  // The TEXT layer's inspector — mockups S7 (the whole column) and S7h (the
+  // three source states side by side), field for field.
   //
-  // First cut (#480): name · source (fixed | clock | text slot) · font ·
-  // colour · align · scroll (+ speed only when scroll ≠ none) · box · blend ·
-  // opacity · Delete layer. WEB-C extends it against S7h/S7i (#486): the
-  // clock's "not synced" state line, the slot picker's echoed value, and the
-  // font picker with its 1:1 glyph samples. Keep the file here so that work
-  // is an edit rather than a second component.
-  //
-  // Speed is ABSENT at scroll = none, not disabled (§5.7 / mockups :1289-91),
-  // and visibility is not here at all — it lives on the eye in the layer list.
+  // One inspector, three sources, and the rows that come WITH them (S7h's
+  // note): Clock adds a format select and, when the device has no time yet,
+  // one dim state line saying exactly what will be drawn instead — no toast,
+  // no banner, and the row stays usable. Text slot adds the slot number, says
+  // in one line who writes it, and echoes the current value under `Now` so
+  // the layer is not a black box when the panel is in another room. Scroll is
+  // the conditional-visibility rule again: Speed does not EXIST while
+  // Scroll = none and appears directly under it the moment a direction is
+  // chosen (§5.7 / mockups :1289-91).
   import { createEventDispatcher } from "svelte";
   import BoxRow from "./BoxRow.svelte";
+  import FontPicker from "./FontPicker.svelte";
   import SceneSwatch from "./SceneSwatch.svelte";
   import StyleTail from "./StyleTail.svelte";
   import {
     ALIGNS,
     CLOCK_FMTS,
-    FONTS,
     SCROLLS,
     MAX_LAYER_NAME,
-    TEXT_SLOTS,
     truncateUtf8,
     type Align,
     type ClockFmt,
@@ -29,21 +29,23 @@
     type Scroll,
     type TextLayer,
   } from "../../lib/scene";
+  import { clockStatus, isPlayground } from "../../stores/device";
+  import { setTextSlot, textSlotCount, textSlots } from "../../stores/textSlots";
 
   export let layer: Layer;
+  /** The layout's width, for the font picker's "~N chars wide" line. */
+  export let gridW = 64;
 
   const dispatch = createEventDispatcher<{ change: Layer }>();
 
   $: text = layer.body.kind === "text" ? layer.body.text : null;
 
-  /** The mock's own labels (S7 `5×7 regular`, S7i the three built-ins). */
-  const FONT_LABEL: Record<SceneFont, string> = {
-    tiny: "4×6 tiny",
-    regular: "5×7 regular",
-    large: "5×8 large",
-  };
-
   const ALIGN_LABEL: Record<Align, string> = { l: "left", c: "center", r: "right" };
+
+  /** The device has a clock only once SNTP has answered; the playground never
+   *  does — the browser's own clock is the one the layer draws from, and it
+   *  is always right, so the state line is a console thing (S7h). */
+  $: clockSynced = $isPlayground || ($clockStatus?.synced ?? false);
 
   function patch(next: Partial<TextLayer>): void {
     if (!text) return;
@@ -80,6 +82,9 @@
   $: if (text?.source.kind === "clock") fmtDraft = text.source.fmt;
   $: if (text?.source.kind === "slot") slotDraft = text.source.slot;
 
+  $: slotValue = $textSlots[slotDraft] ?? "";
+  $: slots = Array.from({ length: $textSlotCount }, (_, i) => i);
+
   // The narrowing lives in the script, not in the markup: a TS assertion
   // inside a template expression is not something svelte-check parses.
   function setFmt(v: string): void {
@@ -87,8 +92,13 @@
     patch({ source: { kind: "clock", fmt: fmtDraft } });
   }
 
-  function setFont(v: string): void {
-    patch({ font: v as SceneFont });
+  function setSlot(v: string): void {
+    slotDraft = Number(v);
+    patch({ source: { kind: "slot", slot: slotDraft } });
+  }
+
+  function setFont(f: SceneFont): void {
+    patch({ font: f });
   }
 
   function setScroll(v: string): void {
@@ -146,25 +156,91 @@
           {#each CLOCK_FMTS as f (f)}<option value={f}>{f}</option>{/each}
         </select>
       </div>
-      <div class="rrow" class:on={text.source.kind === "slot"}>
-        <button class="pick" data-role="scene-text-slot" on:click={() => setSource("slot")}>
-          <span class="radio"></span>Text slot {slotDraft + 1}
-        </button>
-      </div>
-      <div class="hint" style="padding-left:21px">set from the API or Home Assistant</div>
+
+      <!-- Absent, not greyed, on a host with no slots: `caps.text_slots = 0`
+           is firmware that predates the endpoint (docs/api.md). -->
+      {#if $textSlotCount > 0}
+        <div class="rrow" class:on={text.source.kind === "slot"}>
+          <button class="pick" data-role="scene-text-slot" on:click={() => setSource("slot")}>
+            <span class="radio"></span>Text slot{text.source.kind === "slot" ? "" : ` ${slotDraft}`}
+          </button>
+          {#if text.source.kind === "slot"}
+            <select
+              class="sel xs"
+              style="flex:1"
+              data-role="scene-text-slot-n"
+              value={slotDraft}
+              on:change={(e) => setSlot(e.currentTarget.value)}
+            >
+              {#each slots as n (n)}<option value={n}>{n}</option>{/each}
+            </select>
+          {/if}
+        </div>
+        <div class="hint" style="padding-left:21px" data-role="scene-text-slot-hint">
+          set from the API or Home Assistant
+        </div>
+        {#if text.source.kind === "slot"}
+          <div class="hint" style="padding-left:21px;margin-top:4px" data-role="scene-text-slot-how">
+            slots 0–{$textSlotCount - 1} · <span class="mono" style="white-space:nowrap"
+              >POST /api/text</span
+            > · one HA text entity each
+          </div>
+        {/if}
+      {/if}
     </div>
   </div>
 
+  <!-- Clock, without a clock: one dim state line saying exactly what WILL be
+       drawn, and the settings group that fixes it. The row above stays
+       usable (S7h). -->
+  {#if text.source.kind === "clock" && !clockSynced}
+    <div class="irow start">
+      <div class="ilab" style="padding-top:1px">Clock</div>
+      <div>
+        <div class="hint" data-role="scene-clock-state">
+          not synced — the layer draws <span class="mono" style="white-space:nowrap">--:--</span> until
+          the device gets the time
+        </div>
+        <div class="hint" style="margin-top:5px">
+          <a class="lnk" href="#/settings" data-role="scene-clock-settings"
+            >Settings › Clock &amp; time zone</a
+          >
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  <!-- The slot's current value, echoed: "so the layer is not a black box when
+       the panel is in another room" (S7h). -->
+  {#if text.source.kind === "slot"}
+    <div class="irow start">
+      <div class="ilab" style="padding-top:1px">Now</div>
+      <div>
+        {#if $isPlayground}
+          <!-- The playground has no API and no Home Assistant to be written
+               FROM, so the row that echoes the slot is where you type it —
+               the same trade the `Preview as` chip makes for a fixture. On a
+               console it is the read-only echo S7h draws. -->
+          <input
+            class="inp xs"
+            style="width:100%"
+            data-role="scene-text-slot-value"
+            placeholder="type what the API would write"
+            value={slotValue}
+            on:input={(e) => void setTextSlot(slotDraft, e.currentTarget.value)}
+          />
+        {:else}
+          <div class="mono tiny" style="color:var(--text)" data-role="scene-text-slot-value">
+            {slotValue}
+          </div>
+        {/if}
+      </div>
+    </div>
+  {/if}
+
   <div class="irow">
     <div class="ilab">Font</div>
-    <select
-      class="sel wide"
-      data-role="scene-text-font"
-      value={text.font}
-      on:change={(e) => setFont(e.currentTarget.value)}
-    >
-      {#each FONTS as f (f)}<option value={f}>{FONT_LABEL[f]}</option>{/each}
-    </select>
+    <FontPicker value={text.font} {gridW} on:input={(e) => setFont(e.detail)} />
   </div>
 
   <div class="irow">
@@ -183,8 +259,10 @@
     <div class="ilab">Align</div>
     <div class="seg sm" data-role="scene-text-align">
       {#each ALIGNS as a (a)}
-        <button class:on={text.align === a} data-role={`scene-align-${a}`} on:click={() => patch({ align: a })}
-          >{ALIGN_LABEL[a]}</button
+        <button
+          class:on={text.align === a}
+          data-role={`scene-align-${a}`}
+          on:click={() => patch({ align: a })}>{ALIGN_LABEL[a]}</button
         >
       {/each}
     </div>
@@ -203,34 +281,41 @@
   </div>
 
   <!-- ABSENT at `none`, never greyed: a speed with nothing to move is not a
-       control (mockups.html :1289-91). -->
+       control (S7h's third column, mockups.html :1289-91). In px/s, the unit
+       the firmware takes. -->
   {#if text.scroll !== "none"}
     <div class="irow">
       <div class="ilab">Speed</div>
       <div class="speed">
         <input
-          class="inp num"
-          type="number"
+          type="range"
           min="0"
-          max="65535"
+          max="120"
           data-role="scene-text-speed"
           value={text.speed}
-          on:change={(e) => patch({ speed: Number(e.currentTarget.value) })}
+          on:input={(e) => patch({ speed: Number(e.currentTarget.value) })}
         />
-        <span class="hint">px/s</span>
+        <span class="mono tiny dim" data-role="scene-text-speed-value">{text.speed} px/s</span>
       </div>
     </div>
   {/if}
 
   <BoxRow rect={layer.style.rect} on:input={(e) => patchLayer({ style: { ...layer.style, rect: e.detail } })} />
 
+  {#if text.scroll !== "none"}
+    <div class="hint" style="margin-top:12px" data-role="scene-scroll-window">
+      The box is the scroll window: text longer than <i>w</i> is what scrolling is for, and it is
+      clipped to the box in every direction.
+    </div>
+  {/if}
+
   <div class="irule"></div>
 
-  <StyleTail
-    style={layer.style}
-    on:change={(e) => patchLayer({ style: e.detail })}
-    on:delete
-  />
+  <!-- No Transparent row: text is ALWAYS black-keyed (the glyphs are the
+       layer, the space around them is not — `compose::draw_text_layer`), so
+       there is nothing to offer. S7 draws Blend · Opacity · Delete and
+       nothing between them. -->
+  <StyleTail style={layer.style} on:change={(e) => patchLayer({ style: e.detail })} on:delete />
 {/if}
 
 <style>

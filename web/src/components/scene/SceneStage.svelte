@@ -30,12 +30,21 @@
   /** `64×64 · 24 fps on device` — the column header's dim line. */
   export let dimsLine = "";
   export let paused = false;
+  /** A sprite layer is selected and a drawing tool is live (#481): the box is
+   *  a GUIDE, not a grab — every pointer on the canvas paints, and geometry
+   *  moves with the inspector's Box numbers. Without this the marquee sits on
+   *  top of exactly the pixels you are trying to paint. */
+  export let paintMode = false;
+  /** The cell the pointer is over while painting — the mock's `.cellmark`. */
+  export let markCell: { col: number; row: number } | null = null;
 
   const dispatch = createEventDispatcher<{
     rect: Rect;
     pause: boolean;
     /** A pointer landed on a cell — the sprite tools' hook (#481). */
     cell: { col: number; row: number; down: boolean };
+    /** Which cell the pointer is over, or null once it leaves (#481). */
+    hover: { col: number; row: number } | null;
   }>();
 
   let canvas: HTMLCanvasElement | undefined;
@@ -156,8 +165,9 @@
   }
 
   function onCanvasMove(e: PointerEvent): void {
-    if (e.buttons === 0) return;
     const c = cellAt(e);
+    dispatch("hover", c);
+    if (e.buttons === 0) return;
     dispatch("cell", { ...c, down: false });
   }
 
@@ -179,6 +189,10 @@
     </div>
   </div>
 
+  <!-- the sprite tool row, when there is one: "directly above the canvas it
+       acts on" (S7c) -->
+  <slot name="tools" />
+
   <div class="stage" bind:this={stage}>
     <canvas
       bind:this={canvas}
@@ -187,10 +201,12 @@
       data-role="scene-stage"
       on:pointerdown={onCanvasDown}
       on:pointermove={onCanvasMove}
+      on:pointerleave={() => dispatch("hover", null)}
     ></canvas>
     {#if marq}
       <div
         class="marq"
+        class:guide={paintMode}
         data-role="scene-marquee"
         style={`left:${marq.left};top:${marq.top};width:${marq.width};height:${marq.height}`}
         on:pointerdown={(e) => start(e, "move")}
@@ -202,6 +218,7 @@
       {#each CORNERS as corner (corner)}
         <button
           class="hdl"
+          class:guide={paintMode}
           data-role={`scene-handle-${corner}`}
           aria-label={`resize ${corner}`}
           style={handleStyle(corner, marq)}
@@ -212,11 +229,29 @@
         ></button>
       {/each}
     {/if}
+    {#if markCell}
+      <div
+        class="cellmark"
+        data-role="scene-cellmark"
+        style={`left:${(markCell.col / w) * 100}%;top:${(markCell.row / h) * 100}%`}
+      ></div>
+    {/if}
   </div>
 
   <div class="hint" style="margin-top:12px" data-role="scene-cost">{costLine}</div>
   <div class="budget"><i style={`width:${fill}%`}></i></div>
 </div>
+
+<style>
+  /* Paint mode: the box is a GUIDE. Letting the marquee keep the pointer
+     would mean every click inside the sprite dragged the layer instead of
+     painting the pixel under the cursor (S7c draws the paint cursor INSIDE
+     the marquee). Geometry moves with the inspector's Box numbers there. */
+  :global(.scenes .marq.guide),
+  :global(.scenes .hdl.guide) {
+    pointer-events: none;
+  }
+</style>
 
 <script context="module" lang="ts">
   /** The four 7px corner grabs, centred on the marquee's corners (mock

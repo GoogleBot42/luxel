@@ -1626,6 +1626,244 @@ try {
     check("scenes: a reload reopens the scene the route named", back === 2, String(back));
     await page.screenshot({ path: `${shotDir}/e2e-scenes-editor.png` });
 
+    // ── Sprite drawing + the text inspector (Gitea #481 / #486) ───────────
+    //
+    // Still inside the scene the block above opened. Three things that have
+    // no other home: that drawing on the preview rewrites the sprite's
+    // PATTERN (and the composite shows it on the same frame), that the text
+    // inspector's three source states carry the rows S7h draws, and that the
+    // font picker lists the three built-ins with samples drawn through the
+    // real font blobs.
+    {
+      // Add layer › Sprite with nothing sprite-shaped in the store MAKES one
+      // (S1 and S7 draw no `New sprite…` anywhere, so this is the path).
+      await page.click('[data-role="scene-add-layer"]');
+      await sleep(300);
+      await page.click('[data-role="scene-add-sprite"]');
+      await sleep(1200);
+      check(
+        "sprite: Add layer › Sprite on an empty store creates a blank one",
+        (await page.$('[data-role="sprite-tools"]')) !== null,
+      );
+      const made = await page.evaluate(() =>
+        JSON.parse(localStorage.getItem("luxel.patterns") ?? "[]").some(
+          (p) => p.name === "Sprite 1" && p.source.startsWith("// @sprite w=16 h=16"),
+        ),
+      );
+      check("sprite: the new sprite is a sprite-tagged PATTERN in the store", made);
+
+      // paint three cells, pixel-snapped, through the stage's own pointer path
+      const paint = async (col, row) => {
+        await page.$eval(
+          '[data-role="scene-stage"]',
+          (c, cx, cy, w, h) => {
+            const r = c.getBoundingClientRect();
+            c.dispatchEvent(
+              new PointerEvent("pointerdown", {
+                clientX: r.left + ((cx + 0.5) / w) * r.width,
+                clientY: r.top + ((cy + 0.5) / h) * r.height,
+                bubbles: true,
+              }),
+            );
+          },
+          col,
+          row,
+          await page.$eval('[data-role="scene-stage"]', (c) => c.width),
+          await page.$eval('[data-role="scene-stage"]', (c) => c.height),
+        );
+        await sleep(120);
+      };
+      await paint(2, 3);
+      await paint(3, 3);
+      await paint(4, 3);
+      await sleep(1200); // the store write is debounced
+
+      // the SOURCE is what round-trips: the three texels are opaque, the rest
+      // transparent, and the arrays still match the tag
+      const shape = await page.evaluate(() => {
+        const p = JSON.parse(localStorage.getItem("luxel.patterns") ?? "[]").find(
+          (x) => x.name === "Sprite 1",
+        );
+        if (!p) return null;
+        const arr = (n) =>
+          JSON.parse(
+            (new RegExp(`var ${n} = (\\[[^\\]]*\\])`).exec(p.source) ?? [])[1] ?? "null",
+          );
+        const v = arr("sprV");
+        const h = arr("sprH");
+        return v && h
+          ? {
+              len: v.length,
+              lit: v.filter((x) => x > 0).length,
+              row3: [v[3 * 16 + 2], v[3 * 16 + 3], v[3 * 16 + 4]],
+              hue: h[3 * 16 + 2],
+              tag: p.source.split("\n")[0],
+            }
+          : null;
+      });
+      check(
+        "sprite: three painted cells round-trip through the pattern source",
+        shape !== null &&
+          shape.len === 256 &&
+          shape.lit === 3 &&
+          shape.row3.every((x) => x === 1) &&
+          shape.tag === "// @sprite w=16 h=16 frames=1 fps=0",
+        JSON.stringify(shape),
+      );
+
+      // …and the composite shows it. The brush starts at pure red on a blank
+      // sprite, so the cell is (255, 0, 0) once the engine is rebound.
+      const px = await page.$eval('[data-role="scene-stage"]', (c) => {
+        const d = c.getContext("2d").getImageData(3, 3, 1, 1).data;
+        return [d[0], d[1], d[2]];
+      });
+      check(
+        "sprite: the painted pixel is in the composite",
+        px[0] > 200 && px[1] < 60 && px[2] < 60,
+        JSON.stringify(px),
+      );
+
+      // the palette counts what is used, and the cap is 16 cells
+      const pal = await page.$eval('[data-role="scene-sprite-palette"]', (el) => ({
+        used: el.getAttribute("data-used"),
+        cells: el.children.length,
+      }));
+      check(
+        "sprite: the palette is 16 cells and says how many are used",
+        pal.used === "1" && pal.cells === 16,
+        JSON.stringify(pal),
+      );
+      await page.screenshot({ path: `${shotDir}/e2e-sprite-tools.png` });
+
+      // ---- the text inspector's three source states (S7h) ----
+      // the text layer is the one the block above added first; select it by
+      // its type badge
+      const textRow = await page.$$eval('[data-role="scene-layer"]', (els) =>
+        els.findIndex((el) => (el.querySelector(".ty")?.textContent ?? "").trim() === "T"),
+      );
+      await page.$$eval(
+        '[data-role="scene-layer"] [data-role="scene-layer-pick"]',
+        (els, i) => els[i].click(),
+        textRow,
+      );
+      await sleep(500);
+
+      // scroll = none has NO speed row; picking a direction brings one
+      check(
+        "text: Speed does not exist at Scroll = none (§5.7)",
+        (await page.$('[data-role="scene-text-speed"]')) === null,
+      );
+      await page.select('[data-role="scene-text-scroll"]', "left");
+      await sleep(400);
+      check(
+        "text: choosing a direction brings the Speed row (px/s)",
+        (await page.$('[data-role="scene-text-speed"]')) !== null &&
+          /px\/s$/.test(
+            await page.$eval('[data-role="scene-text-speed-value"]', (el) =>
+              (el.textContent ?? "").trim(),
+            ),
+          ),
+      );
+      await page.select('[data-role="scene-text-scroll"]', "none");
+      await sleep(300);
+
+      // the slot source: the picker, the two hint lines, and the echo
+      await page.click('[data-role="scene-text-slot"]');
+      await sleep(400);
+      const slotRows = await page.evaluate(() => ({
+        picker: !!document.querySelector('[data-role="scene-text-slot-n"]'),
+        opts: document.querySelectorAll('[data-role="scene-text-slot-n"] option').length,
+        hint: (
+          document.querySelector('[data-role="scene-text-slot-hint"]')?.textContent ?? ""
+        ).trim(),
+        how: (document.querySelector('[data-role="scene-text-slot-how"]')?.textContent ?? "")
+          .replace(/\s+/g, " ")
+          .trim(),
+      }));
+      check(
+        "text: the slot source adds a 0–7 picker and says who writes it (S7h)",
+        slotRows.picker &&
+          slotRows.opts === 8 &&
+          slotRows.hint === "set from the API or Home Assistant" &&
+          slotRows.how === "slots 0–7 · POST /api/text · one HA text entity each",
+        JSON.stringify(slotRows),
+      );
+
+      // the playground has no API to be written from, so `Now` is where you
+      // type what the API would have said — and the layer draws it
+      await page.type('[data-role="scene-text-slot-value"]', "HI");
+      await sleep(600);
+      const drew = await page.$eval('[data-role="scene-stage"]', (c) => {
+        const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+        let lit = 0;
+        for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 60) lit++;
+        return lit;
+      });
+      check("text: a slot's text reaches the composite", drew > 0, String(drew));
+
+      // the clock source's format list is the wire's own
+      await page.click('[data-role="scene-text-clock"]');
+      await sleep(400);
+      const fmts = await page.$$eval('[data-role="scene-text-fmt"] option', (els) =>
+        els.map((e) => e.value).join(","),
+      );
+      check(
+        "text: the clock formats are the wire's six",
+        fmts === "HH:MM,HH:MM:SS,hh:MM,hh:MM:SS,MM-DD,YYYY-MM-DD",
+        fmts,
+      );
+
+      // ---- the font picker (S7i) ----
+      await page.click('[data-role="scene-text-font"]');
+      await page.waitForSelector('[data-role="scene-font-menu"]', { timeout: 5000 });
+      await sleep(400);
+      const fonts = await page.evaluate(() =>
+        ["tiny", "regular", "large"].map((f) => {
+          const row = document.querySelector(`[data-role="scene-font-${f}"]`);
+          const c = row?.querySelector("canvas.glyph");
+          let ink = 0;
+          if (c) {
+            const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+            for (let i = 3; i < d.length; i += 4) if (d[i] > 0) ink++;
+          }
+          return {
+            name: (row?.querySelector(".fnm")?.textContent ?? "").trim(),
+            w: c?.width ?? 0,
+            h: c?.height ?? 0,
+            ink,
+          };
+        }),
+      );
+      check(
+        "fonts: three built-ins, each sampled through its REAL blob (S7i)",
+        fonts.length === 3 &&
+          fonts.map((f) => f.name).join(",") === "4×6 tiny,5×7 regular,5×8 large" &&
+          fonts.every((f) => f.ink > 10) &&
+          // the samples differ in size, which is the thing S7i exists to show
+          new Set(fonts.map((f) => `${f.w}x${f.h}`)).size === 3,
+        JSON.stringify(fonts),
+      );
+      check(
+        "fonts: there is no Upload… row (user fonts are filed, not planned)",
+        !/upload/i.test(
+          await page.$eval('[data-role="scene-font-menu"]', (el) => el.textContent ?? ""),
+        ),
+      );
+      await page.screenshot({ path: `${shotDir}/e2e-font-picker.png` });
+      await page.click('[data-role="scene-font-tiny"]');
+      await sleep(400);
+      const picked = await page.$eval('[data-role="scene-text-font"]', (el) =>
+        (el.textContent ?? "").trim(),
+      );
+      check("fonts: picking one closes the menu and shows it", picked === "4×6 tiny", picked);
+    }
+
+    // Everything above this line is UNSAVED (the scene was saved with two
+    // layers before it). Reload back onto the stored record so the tile check
+    // below still counts what the store holds.
+    await page.reload({ waitUntil: "networkidle2" });
+    await sleep(1800);
+
     // back to the grid: the tile grid is the composite, and `3 layers` is the
     // one piece of scene-specific metadata it carries (S6)
     await page.click('[data-role="scene-editor-back"]');
@@ -1641,6 +1879,128 @@ try {
     await sleep(500);
     await previewAs(page, "auto");
   }
+  // ── Layout-gated text completions and docs (Gitea #486, mockup S2f) ──────
+  //
+  // "The editor never offers a builtin that would silently do nothing on the
+  // device you are connected to" (S2f's note): the five text builtins are in
+  // the completion list and the docs index only on a regular 2D matrix — the
+  // same Layout gate that hides the Scenes tab. In the playground that gate
+  // is the `Preview as` chip, which is why this runs here and not only on a
+  // console.
+  {
+    const TEXT_BUILTINS = ["drawText", "drawNumber", "textWidth", "font", "textSlot"];
+    const CM = '[data-role="editor-view"]:not([hidden]) .cm-content';
+    /** Type `prefix` on a FRESH line and let the popup settle.
+     *
+     *  A new line, not a cleared document: `completeFromList` hands CodeMirror
+     *  a result with a `validFor`, and CM keeps filtering that result while the
+     *  word at the same offset still matches it — so a second prefix typed at
+     *  offset 0 is filtered against the FIRST prefix's options and comes back
+     *  empty, which reads exactly like "the builtin is gated". */
+    const typePrefix = async (prefix) => {
+      await page.$eval(CM, (el) => el.focus());
+      await page.keyboard.down("Control");
+      await page.keyboard.press("End");
+      await page.keyboard.up("Control");
+      await page.keyboard.press("Enter");
+      for (const ch of prefix) await page.keyboard.press(ch);
+      await sleep(900);
+    };
+    const read = () =>
+      page.evaluate(() =>
+        [...document.querySelectorAll(".cm-tooltip-autocomplete li .cm-completionLabel")].map((e) =>
+          (e.textContent ?? "").trim(),
+        ),
+      );
+    /** The completion labels a FRESH editor offers for `prefix`.
+     *
+     *  Fresh, because CodeMirror's completion state is sticky within one
+     *  editor: `completeFromList` hands it a result with a `validFor`, and a
+     *  second prefix in the same session is filtered against the FIRST one's
+     *  options and comes back empty — which reads exactly like "the builtin
+     *  is gated", and cost this harness three runs to see. */
+    const offered = async (prefix) => {
+      await page.click('[data-role="editor-back"]').catch(() => {});
+      await sleep(400);
+      await page.click('[data-role="new-pattern"]');
+      await page.waitForSelector(CM, { timeout: 8000 });
+      await sleep(900);
+      await typePrefix(prefix);
+      let labels = await read();
+      for (let i = 0; i < 6 && labels.length === 0; i++) {
+        await sleep(400);
+        labels = await read();
+      }
+      return labels;
+    };
+
+    await page.click('[data-role="tab-patterns"]');
+    await sleep(400);
+    await previewAs(page, "matrix", { w: 32, h: 32 });
+
+    const onMatrix = [
+      ...(await offered("text")),
+      ...(await offered("draw")),
+      // `font` matches neither prefix — a popup only ever shows what matches
+      // what you typed
+      ...(await offered("fon")),
+    ];
+    check(
+      "completions: the five text builtins are offered on a matrix (S2f)",
+      TEXT_BUILTINS.every((b) => onMatrix.includes(b)),
+      JSON.stringify([...new Set(onMatrix)]),
+    );
+
+    // the docs card carries the signature, the grid rule and the example
+    await offered("drawT");
+    const card = await page.evaluate(() => {
+      const el = document.querySelector('[data-role="editor-view"]:not([hidden]) .cm-completionInfo');
+      return el
+        ? {
+            sig: (el.querySelector(".sigl")?.textContent ?? "").trim(),
+            ps: [...el.querySelectorAll("p")].map((p) => (p.textContent ?? "").trim()),
+            ex: (el.querySelector(".ex")?.textContent ?? "").trim(),
+          }
+        : null;
+    });
+    check(
+      "docs: the card is signature · what it does · the grid rule · an example (S2f)",
+      card !== null &&
+        card.sig === "drawText(text, x, y[, align])" &&
+        card.ps.length === 2 &&
+        /Needs a real 2D grid/.test(card.ps[1] ?? "") &&
+        card.ex === "drawText(textSlot(0), x, 28)",
+      JSON.stringify(card),
+    );
+    await page.screenshot({ path: `${shotDir}/e2e-text-completions.png` });
+    await page.keyboard.press("Escape");
+    await sleep(200);
+
+    // …and absent on a strip, in both the list and the docs index
+    await page.click('[data-role="editor-back"]');
+    await sleep(400);
+    await previewAs(page, "strip", { px: 60 });
+    const onStrip = [
+      ...(await offered("text")),
+      ...(await offered("draw")),
+      ...(await offered("fon")),
+    ];
+    check(
+      "completions: the text builtins are ABSENT on a strip (S2f's note)",
+      onStrip.length > 0 && TEXT_BUILTINS.every((b) => !onStrip.includes(b)),
+      JSON.stringify(onStrip),
+    );
+    // the other builtins are still there — the gate is per-entry, not a kill
+    check(
+      "completions: a strip still offers everything that works on one",
+      onStrip.includes("drawLine"),
+      JSON.stringify(onStrip.slice(0, 8)),
+    );
+    await page.click('[data-role="editor-back"]');
+    await sleep(400);
+    await previewAs(page, "auto");
+  }
+
 
   // ── §5.7 sweep on the playground's surfaces (Gitea #529) ──
   // Same invariant device-e2e asserts on the console: a control is ABSENT

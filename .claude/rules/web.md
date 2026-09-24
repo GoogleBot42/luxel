@@ -29,6 +29,7 @@ paths:
   `rafId = rafId || requestAnimationFrame(tick)` are the shapes; both froze a
   page solid in #480. Put the assignment in a function the block calls, or in
   `onMount`.
+- **A `void x` inside a reactive EXPRESSION is not a dependency.** `$: y = cond ? (void drafts, f(id)) : ""` compiles, reads honestly, and NEVER re-runs when `drafts` changes — the state a helper reads through a closure has to be passed as an ARGUMENT (`$: y = pick(id, drafts)`), or named as a bare statement in a reactive BLOCK. It cost #481 an hour: three brush strokes each applied to the same stale sprite, so only the last pixel survived, and every surface downstream (the palette count, the preview) looked merely "slow".
 - **`bind:this` into an `{#each}` item is a flush loop.** `bind:this={t.canvas}`
   inside `{#each tiles as t}` writes back through the array, which invalidates
   `tiles`, which re-runs the keyed block, which re-fires the binding — the

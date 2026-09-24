@@ -866,3 +866,142 @@
     height: 24px;
   }
 }
+
+/* ---------- the sprite tool row + palette (mockups.html :1402-1411) -------
+   Quoted from the mock's own sprite block, class for class. The tool row sits
+   between the preview header and the stage, because it acts on the canvas
+   directly under it (S7c's note). */
+
+.scenes .toolrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 10px;
+}
+
+.scenes .btn.sm.icon.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #16110a;
+}
+
+.scenes .recents {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+
+.scenes .toolrow .hint {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+}
+
+/* the cell under the pointer while a sprite layer is selected */
+.scenes .cellmark {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.65);
+  pointer-events: none;
+}
+
+/* the inspector's ≤16-colour palette (S7c) */
+.scenes .pal {
+  display: grid;
+  grid-template-columns: repeat(8, 14px);
+  gap: 4px;
+}
+
+.scenes .pal i {
+  display: block;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.scenes .pal i.empty {
+  background: transparent;
+  border: 1px dashed #3d4450;
+}
+
+/* ---------- the font picker's trigger (mockup S7i) ------------------------
+   S7i draws the font control as a `.sel` that turns accent-bordered while
+   its menu is open, so it is a BUTTON (a popover with glyph samples in it is
+   not something `<select>` can hold). These mirror `select.sel` above rather
+   than editing it — the chevron and the metrics must stay identical between
+   the two spellings (.claude/rules/web.md). */
+
+.scenes button.sel {
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  height: 32px;
+  padding: 0 9px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background-color: var(--bg-inset);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='7' viewBox='0 0 10 7'%3E%3Cpath d='M1 1.5L5 5.5L9 1.5' fill='none' stroke='%238a90a0' stroke-width='1.4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  color: var(--text);
+  font: 13px/1 var(--sans);
+  white-space: nowrap;
+}
+
+.scenes button.sel.wide {
+  width: 100%;
+}
+
+/* open: accent border on accent-soft (S7i) */
+.scenes button.sel.open {
+  border-color: var(--accent);
+  background-color: var(--accent-soft);
+}
+
+.scenes button.sel:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* the font rows inside that menu (mockups.html :2623-2626) */
+.scenes .menu .mi.fontrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.scenes .menu .fontrow .fmeta {
+  flex: 1;
+  min-width: 0;
+}
+
+.scenes .menu .fontrow .fnm {
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.scenes .menu .glyph {
+  display: block;
+  flex: none;
+}
+
+/* `.menu.full` inside the INSPECTOR spans that column the way the add-layer
+   menu spans the layer list (mock `.menu.full{left:0;right:0;width:auto}`):
+   320px of column less 16px of padding either side. The popover is placed
+   `fixed`, so the span is a width. */
+.scenes .rcol .menu {
+  width: 288px;
+}
+
+@media (max-width: 600px) {
+  /* stacked, the column is the viewport less its 16px padding */
+  .scenes .rcol .menu {
+    width: calc(100vw - 32px);
+  }
+}

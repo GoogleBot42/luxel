@@ -686,6 +686,24 @@ export class DeviceSession {
     return (await res.json()) as { ok: boolean; error?: string };
   }
 
+  // ---- text slots (Gitea #485, docs/api.md `/api/text`) ----
+
+  /** The eight host-settable text values a `textSlot(n)` reads. */
+  async text(): Promise<string[]> {
+    const r = (await (await this.fetch("/api/text")).json()) as { slots?: string[] };
+    return r.slots ?? [];
+  }
+
+  /** `POST /api/text` body `<slot> <utf8…>` — one line, the text is the rest
+   *  of it, ≤ 64 B truncated on a char boundary by the device. Empty clears. */
+  async setText(slot: number, text: string): Promise<{ ok: boolean; error?: string }> {
+    const res = await this.fetch("/api/text", {
+      method: "POST",
+      body: `${Math.round(slot)} ${text}`,
+    });
+    return (await res.json()) as { ok: boolean; error?: string };
+  }
+
   /** Wall clock: NTP sync status, local unix seconds, tz offset. */
   async clock(): Promise<{ synced: boolean; local: number; tzMinutes: number }> {
     return (await (await this.fetch("/api/clock")).json()) as {

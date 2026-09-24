@@ -1,5 +1,81 @@
 # Update log
 
+## 2026-09-24 — web: sprite drawing, the text inspector, gated text completions (#481 · #486)
+
+The editor halves of Phase B's sprite layer and Phase C's text layer.
+`mockdiff` reads **0 deltas** on S7c, S7h (three frames — see below), S7i and
+S2f, and WEB-A's twelve frames are unchanged at 0.
+
+**A sprite is still just a pattern, so drawing on one is a source codec.**
+`web/src/lib/sprite.ts` reads the three `spr*` literal arrays back out of a
+pattern's source (`parseSprite`) and writes the canonical sprite pattern out
+again (`emitSprite`) — tag line, arrays, and a `renderFrame` body that plays it
+alone. The assertion that matters is not that the codec round-trips its own
+strings: `web/tests/sprite.test.mjs` compiles what `emitSprite` wrote **in the
+real wasm**, binds it as a sprite layer of a real `Compositor` and checks the
+composite texels, so the emitter and `compose::sprite_view` cannot drift.
+
+**Selecting a sprite layer puts the stage in paint mode.** The tool row
+(pencil · eraser · fill · colour · recents) mounts between the preview header
+and the canvas, because "the tool row sits directly above the canvas it acts
+on" (S7c), and the marquee and its handles become a guide — otherwise every
+click inside the sprite would drag the layer instead of painting the pixel
+under it. A stroke paints into a DRAFT source the preview compiles on the same
+frame; the store write is debounced 600 ms behind it, because a device taking
+one `POST /api/patterns` per painted pixel would spend a drag rewriting flash.
+The ≤ 16-colour palette is the EDITOR's rule: at the cap the colour control is
+the second legal disabled control on this screen and carries its `data-reason`.
+**Undo is out of scope** — #481 does not ask for one and nothing else in the
+app has one; filed as a follow-up.
+
+**`Add layer › Sprite` IS the creation path.** Neither S1 nor S7 draws a
+`New sprite…` entry anywhere, so with no sprite-tagged pattern in the store the
+menu item makes a blank 16×16 and binds it; with one or more it opens the
+picker, filtered to sprites (#700). The inspector's `Sprite` row exists only in
+the empty state, because S7c draws a bound layer and has no row for
+re-pointing one.
+
+**One text inspector, three source states, and the rows that come with them.**
+Clock adds the format select and — when `/api/clock` says the device has no
+time yet — one dim line saying exactly what will be drawn instead, with the
+Settings group that fixes it. Text slot adds the 0–7 picker, one line saying
+who writes it, and the slot's current value echoed under `Now`; the source is
+absent entirely on a host advertising `caps.text_slots = 0`. `Speed` does not
+exist at `Scroll = none`. S7h draws all three side by side, which no single app
+state can be in, so it is three map frames against one mock frame (`S7h`,
+`S7hslot`, `S7hscroll`).
+
+**The font picker's samples are drawn by the device's own code.** Each of the
+three built-ins shows `12:48` rendered in that face at 1:1 device pixels by
+running `luxel_core::text::draw` through the wasm compositor on a grid the size
+of the sample — not a bitmap in the repo, which would go stale the first time a
+font blob changed. There is no `Upload…` row: user fonts are filed and not
+planned (#487).
+
+**The text builtins are gated on the Layout, in completions AND in the docs
+hover.** `BuiltinDoc.requires: "matrix"` plus `visibleBuiltins(matrix)` and the
+new `matrixLayout` store — the same gate that hides the Scenes tab, so a
+console reads its device Layout through it and the playground its `Preview as`
+choice. "The editor never offers a builtin that would silently do nothing on
+the device you are connected to" (S2f). The completion popup and its docs card
+are CodeMirror's own DOM themed to the mock's `.acpop`/`.acrow`/`.acdoc`; the
+card is the signature, a paragraph per chunk of the doc, and the example under
+a rule.
+
+`stores/textSlots.ts` is the browser's copy of the eight slots — polled from
+`GET /api/text` while the scene editor is up, written with `POST /api/text`,
+and mirrored into the wasm through `Luxel.setTextSlot` so a pattern drawing
+`textSlot(n)` previews what the device has. The playground has no API to be
+written from, so there the `Now` row is an input rather than the console's
+readout — the same trade the `Preview as` chip makes for a fixture.
+
+Verified: `npm test` (202, including nine new sprite-codec cases against the
+real wasm), `node tools/e2e.mjs` and `node tools/device-e2e.mjs` with new
+sprite/text/font/completion sections, `mockdiff --frames` on the five new
+frames plus WEB-A's twelve, and `--sweep` clean. The `.luxa` bundle is
+907,828 B of 983,040 (7.6 % headroom) on this branch; the sprite codec, the
+tool row, the font picker and the completion theme are +10,187 B of it.
+
 ## 2026-09-24 — scene compositing: the staging buffer is given back, and the kernels stop walking cells (#704, #705)
 
 Two panel-found bugs from the compositor landing (#692/#695), and one of
