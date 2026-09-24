@@ -589,10 +589,10 @@ rather than panicking. The remap is the one that varies with a device
 setting: it is 2 B per driver pixel, one seventh of the framebuffers it
 accompanies, and it is read once per pixel inside the 8.66 ms compose
 window — which is why it stays in internal DRAM and not in the PSRAM
-arena (`psram.rs` keeps every per-frame buffer out of PSRAM for exactly
-this reason). A single upright panel — every device shipped so far —
-builds the table, finds it is the identity, frees it again, and holds
-nothing.
+arena (`psram.rs` keeps every buffer the output path reads within a frame
+out of PSRAM for exactly this reason). A single upright panel — every
+device shipped so far — builds the table, finds it is the identity, frees
+it again, and holds nothing.
 
 **Spare-plane swap (`hub75-spare-plane`, Gitea #610, off by default until
 verified on metal).** The two-framebuffer atomic swap costs a second full
@@ -645,21 +645,35 @@ itself as `esp_alloc::HEAP.free() - (RUNTIME_FLOOR + 4 KiB)`, clamped to a
 16 KB minimum — byte-accurate per array element, so one big array isn't
 taxed for overhead that only swarms of tiny arrays pay.
 
-**An external array arena changes where arrays come from, not the rules.**
-On a board with `psram-arena` (today only the Seengreat S3 —
+**An external arena changes where arrays and engine frames come from, not
+the rules.** On a board with `psram-arena` (today only the Seengreat S3 —
 `firmware/src/psram.rs`, docs/boards.md) `ArrRepr::Owned` element storage
-is allocated from a SECOND `esp_alloc::EspHeap` backed by PSRAM, through
-the hook in `luxel_core::arena`. Nothing else moves: DMA framebuffers, the
-per-frame pixel/pipeline/crossfade buffers, the VM's stack, locals,
-globals and the arena's own slot vector all stay in internal DRAM, and the
-global `HEAP` is untouched — so `HEAP.free()`, `RUNTIME_FLOOR` and the
-post-load floor check mean exactly what they meant before. What changes is
-`budgeted_engine`'s byte budget (the arena's free space, via
-`budget::external_array_budget`) and the PB element ledger (raised out of
-the way by `budget::external_element_budget`, with `vm::MAX_ARENA_SLOTS`
-taking over as the bound on the slot vector). With no hook installed —
-every other board, the CLI, the wasm playground — `arena::ArenaAlloc` *is*
-the global allocator and none of this exists.
+and each engine's per-frame RGB888 pixel buffer
+(`luxel_core::arena::FrameVec`, Gitea #709) are allocated from a SECOND
+`esp_alloc::EspHeap` backed by PSRAM, through the hook in
+`luxel_core::arena`. Nothing else moves: DMA framebuffers, the pipeline's
+travelling frame, the crossfade stage, the compositor's scratch, the VM's
+stack, locals, globals and the arena's own slot vector all stay in internal
+DRAM, and the global `HEAP` is untouched — so `HEAP.free()`,
+`RUNTIME_FLOOR` and the post-load floor check mean exactly what they meant
+before. What changes is `budgeted_engine`'s byte budget (the arena's free
+space, via `budget::external_array_budget`), the PB element ledger (raised
+out of the way by `budget::external_element_budget`, with
+`vm::MAX_ARENA_SLOTS` taking over as the bound on the slot vector), and
+what a resident layer costs internal DRAM: `budget::layer_cost`,
+`layer_fits[_with]` and `caps::layers_for_headroom` all take a
+`frame_external` flag, which every host passes as
+`arena::frames_external()`. At 4096 px that is 4 KB a layer instead of
+16.4 KB, which is what makes two pattern layers fit the panel. With no hook
+installed — every other board, the CLI, the wasm playground —
+`arena::ArenaAlloc` *is* the global allocator, `frames_external()` is
+`false`, and none of this exists.
+
+One consequence for anything reading `/api/status`: `engine_heap` is an
+**internal-DRAM** figure. On an arena board it no longer includes the frame,
+so a 4096-px engine reports 0–5 KB rather than 13–20 KB. `load_base`
+(`heap_free + engine_heap`) still means the internal pool a load starts
+from, which is what it always meant.
 
 Both numbers live in **`luxel_core::budget`**, not in `main.rs`: the web
 editor imports the same constants through the wasm build to warn the user,

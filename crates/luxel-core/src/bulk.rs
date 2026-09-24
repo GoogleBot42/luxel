@@ -394,7 +394,7 @@ fn paint_shape(vm: &mut Vm, bx: (Fx, Fx), by: (Fx, Fx), f: &mut dyn FnMut(&mut [
     if bx.1 < bx.0 || by.1 < by.0 {
         return;
     }
-    let mut frame = core::mem::take(&mut vm.frame);
+    let mut frame = core::mem::replace(&mut vm.frame, crate::arena::empty());
     let n = frame.len();
     if n != 0 {
         match grid_view(vm, n) {
@@ -527,7 +527,7 @@ fn fill_channels(
     args: &[Value],
     hsv: bool,
 ) -> Result<Value, String> {
-    let mut frame = core::mem::take(&mut vm.frame);
+    let mut frame = core::mem::replace(&mut vm.frame, crate::arena::empty());
     let r = fill_channels_into(vm, prog, args, hsv, &mut frame);
     vm.frame = frame;
     r
@@ -562,7 +562,7 @@ pub(crate) fn fill_gradient(vm: &mut Vm, args: &[Value]) -> Value {
     let a = [num(args, 0), num(args, 1), num(args, 2)];
     let b = [num(args, 3), num(args, 4), num(args, 5)];
     let axis = num(args, 6).to_int_trunc();
-    let mut frame = core::mem::take(&mut vm.frame);
+    let mut frame = core::mem::replace(&mut vm.frame, crate::arena::empty());
     let n = frame.len();
     if n != 0 {
         let lerp = |t: Fx| grad_texel(&a, &b, t);
@@ -783,7 +783,7 @@ fn canvas_fill(
 /// as one call. On a procedural grid that is an integer multiple of the
 /// canvas (1× included) it degenerates to a block expand.
 pub(crate) fn fill_canvas(vm: &mut Vm, prog: &Program, args: &[Value]) -> Result<Value, String> {
-    let mut frame = core::mem::take(&mut vm.frame);
+    let mut frame = core::mem::replace(&mut vm.frame, crate::arena::empty());
     let r = fill_canvas_into(vm, prog, args, &mut frame);
     vm.frame = frame;
     r
@@ -826,7 +826,7 @@ fn fill_canvas_into(
 /// The brush is left alone: this is a fill, not a `paint()` call, so the
 /// pattern's current colour survives it.
 pub(crate) fn paint_canvas(vm: &mut Vm, prog: &Program, args: &[Value]) -> Result<Value, String> {
-    let mut frame = core::mem::take(&mut vm.frame);
+    let mut frame = core::mem::replace(&mut vm.frame, crate::arena::empty());
     let r = paint_canvas_into(vm, prog, args, &mut frame);
     vm.frame = frame;
     r
@@ -878,7 +878,7 @@ fn palette_texel(pal: &[(Fx, [Fx; 3])], v: Fx, b: Fx) -> [u8; 3] {
 /// whenever the strip is not a rectangle (60 px → 8×8), and the tail
 /// cells of the last row have no pixel behind them, so they are skipped.
 pub(crate) fn blit(vm: &mut Vm, prog: &Program, args: &[Value]) -> Result<Value, String> {
-    let mut frame = core::mem::take(&mut vm.frame);
+    let mut frame = core::mem::replace(&mut vm.frame, crate::arena::empty());
     let r = blit_into(vm, prog, args, &mut frame);
     vm.frame = frame;
     r

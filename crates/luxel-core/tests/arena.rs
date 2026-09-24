@@ -7,8 +7,8 @@
 //! The fake arena here stands in for the firmware's PSRAM heap: a fixed
 //! static extent, bump-allocated, with frees routed by address exactly the
 //! way `firmware/src/psram.rs` routes them. What it proves is the property
-//! the device change depends on — pattern-array storage lands in the arena,
-//! and the VM's own working memory does not.
+//! the device change depends on — pattern-array storage and each engine's
+//! per-frame pixel buffer (Gitea #709) land in the arena.
 
 use core::alloc::Layout;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -102,9 +102,19 @@ fn pattern_arrays_come_from_the_arena_and_the_vm_does_not() {
     let px = e.frame(luxel_core::fixed::Fx::from_int(16)).to_vec();
     assert_eq!(px.len(), 256);
 
-    // ...and the engine's own hot buffer is NOT in the arena
+    // ...and so does the engine's own per-frame pixel buffer (Gitea #709).
+    // 3 B/px is the largest single thing a resident engine owns — 12,288 B
+    // at 4096 px — and two pattern layers do not fit the Seengreat panel's
+    // internal DRAM with it there.
+    assert!(arena::frames_external());
     assert!(
-        !in_arena(e.frame(luxel_core::fixed::Fx::from_int(16)).as_ptr()),
-        "the per-frame pixel buffer must stay on the ordinary allocator"
+        in_arena(e.frame(luxel_core::fixed::Fx::from_int(16)).as_ptr()),
+        "the per-frame pixel buffer must come from the arena"
     );
+    // It is lent to the VM by move for a `renderFrame` call and taken back;
+    // rendering again must not have quietly reallocated it on the heap.
+    let px = e.frame(luxel_core::fixed::Fx::from_int(16));
+    assert_eq!(px.len(), 256);
+    assert!(in_arena(px.as_ptr()));
+    assert_eq!(FALLBACKS.load(Ordering::Relaxed), 0, "arena was big enough");
 }

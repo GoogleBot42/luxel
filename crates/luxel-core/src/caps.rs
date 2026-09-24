@@ -257,6 +257,10 @@ pub const fn layers_for(pixel_count: u32) -> u8 {
 /// * `ceiling` — a hard per-board cap, [`MAX_LAYERS`] at most. The firmware
 ///   passes 2 on a `small-chip` board (the C3/C6 class, whose whole heap is
 ///   the size of one panel frame) and [`MAX_LAYERS`] elsewhere.
+/// * `frame_external` — [`crate::arena::frames_external`], passed through to
+///   [`crate::budget::layer_cost`]: on a `psram-arena` board the layer
+///   engines' frames are not internal DRAM and a layer costs 4 KB rather
+///   than 16 KB at 4096 px (Gitea #709).
 ///
 /// Never 0: a device that cannot afford a second layer still runs one, which
 /// is the single-pattern case every board has always handled.
@@ -267,8 +271,13 @@ pub const fn layers_for(pixel_count: u32) -> u8 {
 /// → 12, clamped by the tier → **3**. A c3-devkit is capped by `ceiling` →
 /// **2**. A panel whose heap has been eaten by the device blur+glow chain
 /// falls to **1** rather than promising a layer it cannot build.
-pub const fn layers_for_headroom(pixel_count: u32, headroom: usize, ceiling: u8) -> u8 {
-    let per = crate::budget::layer_cost(pixel_count);
+pub const fn layers_for_headroom(
+    pixel_count: u32,
+    headroom: usize,
+    ceiling: u8,
+    frame_external: bool,
+) -> u8 {
+    let per = crate::budget::layer_cost(pixel_count, frame_external);
     // The compositor's own frame comes off the top FIRST (Gitea #704): a
     // scene composites into the host's staging buffer, 3 B/px, and that is
     // spent before a single layer engine is built. Leaving it out is what
@@ -538,6 +547,17 @@ mod layer_tests {
             pixels,
             load_headroom(load_base(heap_free, engine_heap)),
             ceiling,
+            false,
+        )
+    }
+
+    /// The same board with its engine frames in the PSRAM arena (#709).
+    fn layers_psram(pixels: u32, heap_free: usize, engine_heap: usize, ceiling: u8) -> u8 {
+        layers_for_headroom(
+            pixels,
+            load_headroom(load_base(heap_free, engine_heap)),
+            ceiling,
+            true,
         )
     }
 
@@ -569,23 +589,44 @@ mod layer_tests {
         assert_eq!(layers(300, 104_832, 18_000, 2), 2);
     }
 
+    /// Gitea #709: the panel's frames move to the PSRAM arena and its
+    /// MEASURED steady-state numbers — the ones that said 1 above — deliver
+    /// the 2 the tier promises. 20,480 floor + 12,288 stage leaves 14.3 KB
+    /// of the 47.1 KB low reading, which is three 4,096 B layers, clamped by
+    /// the tier to 2.
+    #[test]
+    fn psram_frames_make_the_panels_second_layer_real() {
+        assert_eq!(layers_psram(4096, 47_121, 0, MAX_LAYERS), 2);
+        assert_eq!(layers_psram(4096, 31_200, 15_348, MAX_LAYERS), 2);
+        // it is not a blank cheque: a genuinely starved board still says 1
+        assert_eq!(layers_psram(4096, 26_928, 0, MAX_LAYERS), 1);
+        assert_eq!(layers_psram(4096, 0, 0, MAX_LAYERS), 1);
+        // the exact two-layer edge: 20,480 floor + 12,288 stage + 2x4,096
+        assert_eq!(layers_psram(4096, 40_960, 0, MAX_LAYERS), 2);
+        assert_eq!(layers_psram(4096, 40_959, 0, MAX_LAYERS), 1);
+    }
+
     #[test]
     fn a_starved_device_advertises_one_not_zero() {
         // the panel with the device blur+glow chain eating the heap
         assert_eq!(layers(4096, 26_928, 0, MAX_LAYERS), 1);
         assert_eq!(layers(4096, 0, 0, MAX_LAYERS), 1);
-        assert_eq!(layers_for_headroom(4096, 0, 0), 1);
+        assert_eq!(layers_for_headroom(4096, 0, 0, false), 1);
+        assert_eq!(layers_for_headroom(4096, 0, 0, true), 1);
     }
 
     #[test]
     fn it_never_exceeds_the_static_tier_or_the_hard_ceiling() {
         // An absurdly roomy host is still bounded by the pixel-count tier,
         // which is what keeps MAX_LAYERS a backstop rather than a target.
-        assert_eq!(layers_for_headroom(64, usize::MAX / 2, 100), layers_for(64));
         assert_eq!(
-            layers_for_headroom(4096, usize::MAX / 2, MAX_LAYERS),
+            layers_for_headroom(64, usize::MAX / 2, 100, false),
+            layers_for(64)
+        );
+        assert_eq!(
+            layers_for_headroom(4096, usize::MAX / 2, MAX_LAYERS, false),
             layers_for(4096)
         );
-        assert!(layers_for_headroom(64, usize::MAX / 2, 100) <= MAX_LAYERS);
+        assert!(layers_for_headroom(64, usize::MAX / 2, 100, false) <= MAX_LAYERS);
     }
 }

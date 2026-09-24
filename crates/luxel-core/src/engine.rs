@@ -189,7 +189,7 @@ pub struct Engine {
     /// The resolved entry for the current frame (see [`resolve_render`]).
     render: Option<RenderKind>,
     controls: Vec<Control>,
-    pixels: Vec<[u8; 3]>,
+    pixels: crate::arena::FrameVec,
     /// Pattern-local time in ms, 16-frac for sub-ms delta accumulation.
     time_acc: u64,
     /// `time_acc` as of the last frame the pattern actually ran — the
@@ -263,7 +263,7 @@ pub struct Engine {
     /// One frame of the rendered strip, for the replicate pass. Grown once
     /// when a strip plan is installed (fallibly — a refusal falls back to
     /// by-index), reused every frame: no per-frame and no per-pixel alloc.
-    strip_scratch: Vec<[u8; 3]>,
+    strip_scratch: crate::arena::FrameVec,
     /// This pattern's `renderFrame` names a coordinate/grid-space bulk op,
     /// so it is a 2D pattern for projection purposes (proposal §5.4d: bulk
     /// patterns follow the 2D row). A `renderFrame` that only paints in
@@ -445,7 +445,7 @@ impl Engine {
         }
 
         let mut engine = Engine {
-            pixels: alloc::vec![[0u8; 3]; pixel_count as usize],
+            pixels: crate::arena::frame(pixel_count as usize),
             prog,
             vm,
             pixel_count,
@@ -477,7 +477,7 @@ impl Engine {
             plan: ProjPlan::Native,
             render_count: pixel_count,
             layout_map: None,
-            strip_scratch: Vec::new(),
+            strip_scratch: crate::arena::empty(),
             frame_is_2d: false,
             // Compilation happens AFTER construction, because it needs the
             // init errors this constructor collects (§2.3's exemption is
@@ -2030,13 +2030,13 @@ impl Engine {
     /// frame. The VM's bulk builtins (`crate::bulk`) write it in place and
     /// never change its length.
     fn frame_buffer_out(&mut self) {
-        self.vm.frame = core::mem::take(&mut self.pixels);
+        self.vm.frame = core::mem::replace(&mut self.pixels, crate::arena::empty());
     }
 
     /// Take it back. Paired with every [`frame_buffer_out`] on every exit
     /// path — normal return, pattern error, and debug pause.
     fn frame_buffer_in(&mut self) {
-        self.pixels = core::mem::take(&mut self.vm.frame);
+        self.pixels = core::mem::replace(&mut self.vm.frame, crate::arena::empty());
         debug_assert_eq!(self.pixels.len(), self.pixel_count as usize);
     }
 
