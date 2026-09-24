@@ -75,4 +75,13 @@
     border-radius: 3px;
     border: 1px solid rgba(255, 255, 255, 0.2);
   }
+
+  /* a finger needs 24px (§5.7, `mockdiff --sweep`); the CHIP is the mock’s
+     14px everywhere it is drawn, which is every width above a phone */
+  @media (max-width: 600px) {
+    .swatchbtn :global(button.swatch) {
+      width: 24px;
+      height: 24px;
+    }
+  }
 </style>

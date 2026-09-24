@@ -819,4 +819,50 @@
   .scenes .editor-header .back .backlabel {
     display: none;
   }
+
+  /* Touch targets (§5.7's 24px floor, asserted by `mockdiff --sweep`). The
+     mock keeps the eye and the marquee's corner grabs at their drawn size on
+     a phone (S7f: "full-size drag handles and eyes"), so the PAINTED square
+     stays what it is and only the hit area grows. */
+  .scenes .lrow .eye {
+    width: 24px;
+    height: 24px;
+    padding: 5px;
+  }
+
+  .scenes .lrow .pick {
+    min-height: 24px;
+  }
+
+  /* 24px of finger, 7px of paint: the negative margin keeps the enlarged box
+     centred exactly where the 7px one was, so the marquee's corners do not
+     move. */
+  .scenes .hdl {
+    width: 24px;
+    height: 24px;
+    margin: -8.5px;
+    background: transparent;
+  }
+
+  .scenes .hdl::after {
+    content: "";
+    position: absolute;
+    inset: 8.5px;
+    border-radius: 1px;
+    background: var(--accent);
+  }
+
+  /* the rest of the 24px floor: the source radios, the colour chip and the
+     opacity track. All three keep what they PAINT — the box grows around it */
+  .scenes .rrow .pick {
+    min-height: 24px;
+  }
+
+  .scenes .swatchbtn {
+    height: 32px;
+  }
+
+  .scenes input[type="range"] {
+    height: 24px;
+  }
 }
