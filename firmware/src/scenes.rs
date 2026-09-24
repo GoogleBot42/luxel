@@ -311,7 +311,17 @@ impl Runtime {
                 self.comp.set_text(i, &s);
             }
         }
+        // The host's staging buffer is released while a plain pattern runs
+        // (Gitea #704), so a scene's first frame after an activation grows
+        // it — 3 B/px, INSIDE the render loop, which is exactly the shape
+        // that panicked the Seengreat panel in #702. Fallibly, then: a frame
+        // this board cannot afford is a frame not drawn, not a reboot. The
+        // capacity survives, so this is one `try_reserve` per activation and
+        // a compare per frame after that.
         dst.clear();
+        if dst.try_reserve_exact(n).is_err() {
+            return;
+        }
         dst.resize(n, [0, 0, 0]);
         let Runtime { comp, slots, .. } = self;
         for (i, slot) in slots.iter_mut().enumerate() {

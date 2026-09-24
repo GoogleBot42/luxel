@@ -1497,6 +1497,25 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
         while let Ok(msg) = MSG_QUEUE.try_receive() {
             // any of these can replace, free or re-shape the engine
             geom_dirty = true;
+            // A message that REPLACES the stack frees the staging buffer with
+            // it (Gitea #704), before anything is decoded or built: the 12 KB
+            // it holds at 4096 px is the difference between the incoming
+            // pattern's JIT compiling and falling back to the interpreter.
+            // Only these — a `Var` or a `TextSlot` arriving while a scene is
+            // live must NOT pull the buffer out from under it.
+            // A scene takes it back after its own teardown (`install_scene`)
+            // and a crossfade does so fallibly on its first frame.
+            if matches!(
+                msg,
+                Msg::Code { .. }
+                    | Msg::Library { .. }
+                    | Msg::Crossfade { .. }
+                    | Msg::Scene { .. }
+                    | Msg::Config(_)
+                    | Msg::Freeze
+            ) {
+                sink.release_stage();
+            }
             match msg {
                 Msg::Code { env, id } => {
                     // Envelope-validated by the sender. Drop the outgoing
@@ -1932,22 +1951,27 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
         // LIVE_TIMEOUT_MS after the stream stops, the pattern takes back over
         if shared::live_proto(Instant::now().as_millis() as u32).is_some() {
             let count = PIXEL_COUNT.load(Ordering::Relaxed) as usize;
-            shared::LIVE_PIXELS.lock(|c| {
-                let live = c.borrow();
-                let stage = sink.stage();
-                stage.clear();
-                for i in 0..count {
-                    let p = i * 3;
-                    stage.push(match live.get(p..p + 3) {
-                        Some(px) => [px[0], px[1], px[2]],
-                        None => [0, 0, 0],
-                    });
-                }
-            });
-            let grid = engine.as_ref().and_then(|e| e.grid());
-            // through the same sink as a pattern frame, so live input is
-            // pipelined too where the board pipelines
-            emit_staged!(sink, grid);
+            // the staging buffer is released while a plain pattern runs
+            // (Gitea #704), so claim it here — fallibly, because the fill
+            // below pushes infallibly
+            if sink.reserve_stage(count) {
+                shared::LIVE_PIXELS.lock(|c| {
+                    let live = c.borrow();
+                    let stage = sink.stage();
+                    stage.clear();
+                    for i in 0..count {
+                        let p = i * 3;
+                        stage.push(match live.get(p..p + 3) {
+                            Some(px) => [px[0], px[1], px[2]],
+                            None => [0, 0, 0],
+                        });
+                    }
+                });
+                let grid = engine.as_ref().and_then(|e| e.grid());
+                // through the same sink as a pattern frame, so live input is
+                // pipelined too where the board pipelines
+                emit_staged!(sink, grid);
+            }
             last = Instant::now(); // keep the pattern clock fresh for resume
         } else if engine.is_some() || scene.is_some() {
             let now = Instant::now();
@@ -2003,7 +2027,15 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
             // The blend lives in the sink's staging buffer: on a pipelined
             // board that buffer IS the one handed to the output task, so a
             // crossfade costs the pipeline no extra copy.
-            let fading = (prev.is_some() || prev_scene.is_some()) && t < 65536;
+            // A crossfade blends INTO the staging buffer, which a plain
+            // pattern released (Gitea #704) — claim it fallibly here, and
+            // treat a refusal as a hard cut. Everything below fills the
+            // stage with infallible `extend_from_slice`/`resize` calls, and
+            // a fade that cannot be afforded is worth less than the frame it
+            // would panic on (#702).
+            let fading = (prev.is_some() || prev_scene.is_some())
+                && t < 65536
+                && sink.reserve_stage(count);
             let (vm_t1, pipe_us, out_us, handoff_us) = if fading {
                 // The INCOMING stack lands in the stage…
                 match scene.as_mut() {
@@ -2057,6 +2089,13 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                         (vm_t1, p, o, w)
                     }
                     None => {
+                        // Neither a scene nor a crossfade is live, so the
+                        // staging buffer is nobody's — give it back rather
+                        // than hold 3 B/px of the layer budget until the
+                        // next reboot (Gitea #704). A no-op after the first
+                        // frame; live input reclaims it the same way the
+                        // outpipe chain reclaims its scratch.
+                        sink.release_stage();
                         let frame = engine.as_mut().unwrap().frame(delta);
                         let vm_t1 = Instant::now();
                         let (p, o, w) = emit!(sink, frame, grid);
@@ -2104,6 +2143,10 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
             if let Some(eng) = engine.as_ref() {
                 shared::set_engine_time_ms(eng.time_ms());
             }
+        } else {
+            // nothing is rendering at all — the staging buffer is nobody's
+            // here either (Gitea #704)
+            sink.release_stage();
         }
 
         frames += 1;
