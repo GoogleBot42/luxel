@@ -64,7 +64,7 @@ response as "no snapshot right now", not as an all-black frame.
  "geom":{"dims":1,"regular":true,"w":300,"h":1,"source":"board","pattern_dims":1,
         "compatible":true},
  "caps":{"strip_driver":true,"panel":false,"outputs":1,"power_cap":true,"blur_glow":true,
-         "layers":3,"text_slots":0,"reboot":true,"ota":true,"psram":false,"assets":false},
+         "layers":3,"text_slots":8,"reboot":true,"ota":true,"psram":false,"assets":false},
  "slot":"ota_0","version":"0.1.39",
  "heap_free":104832,"heap_largest":73728,"engine_heap":21504,"live":null,
  "assets_mapped":true,"code_mapped":true,
@@ -142,7 +142,7 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
 | `power_cap` | A per-pixel current model exists. True on strips; false on a panel, which is a fixed load on a supply sized for it. |
 | `blur_glow` | The device output chain's blur and glow stages are offered. Two independent gates, ANDed: they need neighbours — index order on a strip, rows/columns on a regular grid — so it follows `geom.regular`; and they need to fit the board's per-frame budget, so `board::BLUR_GLOW` is **false on every HUB75 panel board**, whose compose window is one ~8.66 ms rescan that the two spatial stages over a 64×64 grid overrun (Gitea #476/#446, proposal D12). The pattern-side `setBlur`/`setGlow` are a different chain and are unaffected either way. |
 | `layers` | Pattern layers this board affords for a scene (Phase B): 3 at ≤512 px, 2 above — the per-layer 3 B/px frame in internal DRAM is the binding constraint, which is the "2 on the S3 panel" in the design. It sizes the scene editor's "2 of 2 used" note; the real gate is the editor's own budget check against live heap. |
-| `text_slots` | Host-settable text slots (proposal §6). `0` everywhere until Phase C. |
+| `text_slots` | Host-settable text slots — how many `GET`/`POST /api/text` addresses and `textSlot(n)` reads (proposal §6, Gitea #485). `8` on a host that implements them; `0` on firmware predating Phase C, which is what hides the Scene text layer's "Text slot" source. |
 | `reboot` | Can reboot itself (setup AP, data-pin change, WiFi change). |
 | `ota` | Accepts a firmware image over the network. |
 | `psram` | Has the external pattern-array arena (Gitea #253). |
@@ -491,6 +491,11 @@ mirror allocates pattern arrays on the host heap, so nothing consumes it and
 without the Athom. Together they let the Settings page's capability gating be
 driven without the hardware; see docs/tools.md.
 
+`--scenes FILE` preloads the scene store from a file of scene blocks — the
+same text the store persists (Gitea #478) — so a harness can bring a mirror up
+with scenes already in it instead of POSTing them one at a time. A file that
+does not parse is a startup error, not a silently empty store.
+
 Four more flags impersonate the release/upgrade machinery (Gitea #643), all
 absent by default:
 
@@ -503,9 +508,10 @@ absent by default:
 | `--accept-ota` | `POST /api/ota` and `POST /api/assets` become recording no-ops and `caps.ota` turns true. The mirror writes no flash and reboots into nothing, so it reports a `version` of `<ver>+otaN` instead — the "it came back as something else" a client's post-OTA wait looks for — and adds `"ota":{"installs":N,"app":BYTES,"assets":BYTES}` to `/api/status` so a test can assert BOTH halves of a package landed. |
 
 The mirror's Layout is **not persisted** — it has no flash, so a restart comes
-back to the board default. Everything else about `/api/layout` is identical by
+back to the board default. Neither is its scene store or its text slots. Every
+other thing about `/api/layout` and `/api/scenes` is identical by
 construction: the grammar, the validation and the JSON all live in
-`luxel_core::layout`, which both hosts call.
+`luxel_core::{layout,scene}`, which both hosts call.
 
 ## Live coding and the running pattern
 
@@ -633,8 +639,9 @@ progress readout has to be timed client-side (Gitea #509 adds one).
 
 ```json
 {"defaultSec":30,"crossfadeMs":500,"playing":true,"index":2,
- "items":[{"id":"1a5e0001","name":"sparks","sec":null,
-           "controls":{"speed":[0.5]},"proj":"x","invalid":"needs 2D map"}]}
+ "items":[{"kind":"pattern","id":"1a5e0001","name":"sparks","sec":null,
+           "controls":{"speed":[0.5]},"proj":"x","invalid":"needs 2D map"},
+          {"kind":"scene","id":"5ce4e5ff","name":"clock wall","layers":3,"sec":20}]}
 ```
 
 `sec` is `null` when the item inherits `defaultSec`. `controls` values are
@@ -643,6 +650,13 @@ projection default, and `invalid` only when the item's `assert()` invariants
 fail against the current config (pre-flight check) — absent means fine, or
 still being computed.
 
+`kind` is `"pattern"` or `"scene"` (Gitea #478). A **scene item** carries the
+scene's `name` and its `layers` count instead of `controls`/`proj`/`invalid`:
+what it names is a record, not a blob, so there is nothing to pre-flight and
+the layers carry their own overrides. Entering one activates the scene with
+the playlist's own crossfade — subject to the transition rule under
+"Scenes" below.
+
 `POST` body is line-based, not JSON:
 
 | line | meaning |
@@ -650,13 +664,20 @@ still being computed.
 | `D <sec>` | default seconds per item |
 | `X <ms>` | crossfade milliseconds |
 | `I <patternId> <sec>` | an item; `sec` `-1` (or unparseable) = inherit the default |
+| `I S<sceneId> <sec>` | a **scene** item (Gitea #478) — `S` + the scene's 8-hex id |
 | `C <name> <raw…>` | a control override for the item most recently declared; **raw 16.16** |
 | `P <mode>` | projection override for the item most recently declared |
 
 `C` and `P` bind to the `I` above them, so an item's lines are a contiguous
 run. Both are optional and both are omitted when there is nothing to say —
 a playlist written before `P` existed parses byte-for-byte as it always did,
-and a device that does not know the line ignores it (Gitea #470).
+and a device that does not know the line ignores it (Gitea #470). Both are
+**ignored under a scene item**, whose layers carry their own overrides.
+
+Only `S` followed by a real 8-lowercase-hex id is a scene item; anything else
+is a pattern id, `S`-prefixed or not — so no playlist written before scenes
+existed changes meaning. Pattern ids and scene ids are separate namespaces,
+which is why the prefix is needed at all.
 
 `<mode>` is one of `index|x|y|z|xy|xz|yz` (docs/spec/projection.md §2). It is
 applied to the slot matching the ITEM'S PATTERN's own dimensionality, so one
@@ -677,6 +698,95 @@ value (raw 16.16 is up to 7 digits plus a sign), so a typical three-slider
 item is ~60 B and a `P` line 3–4 B: roughly **60 items** with values, **45**
 if every item carries three sliders and a projection. Past that the write is
 refused, not truncated.
+
+## Scenes
+
+A **scene** is an ordered stack of layers — pattern, text, sprite, colour —
+composited into one frame (proposal §5.5/§5.5b, Gitea #478). The wire record,
+the blend kernels and the compositor all live in `luxel_core::{scene,compose}`
+and are specified in **docs/spec/scenes.md**; this section is the HTTP surface
+only.
+
+| route | method | body | response | where |
+|---|---|---|---|---|
+| `/api/scenes` | GET | — | see below | both |
+| `/api/scenes` | POST | one scene block, `S - <name>` | `{"ok":true,"id":"<8hex>"}` | both |
+| `/api/scenes/<id>` | GET | — | one scene object | both |
+| `/api/scenes/<id>` | POST | one scene block | `{"ok":true,"id":"<id>"}` | both |
+| `/api/scenes/<id>` | DELETE | — | `{"ok":true}` | both |
+| `/api/scenes/<id>/activate` | POST | optional `<ms>` crossfade | `{"ok":true}` | both |
+
+`GET /api/scenes`:
+
+```json
+{"active":"5ce4e5ff","layers_max":3,"used":312,"max":3840,"scenes":[ … ]}
+```
+
+`active` is the id of the scene on screen, or `null`. `layers_max` is
+`caps.layers` — the pattern layers this board affords. `used`/`max` are the
+scene store's byte budget (below). Each entry, and the body of
+`GET /api/scenes/<id>`, is the object in **docs/spec/scenes.md §3**; control
+values are decimal, like the playlist's.
+
+`POST` takes ONE scene block in the line format of docs/spec/scenes.md §1.
+`S -` means "assign me an id"; on `/api/scenes/<id>` the route's id wins, so
+the same body replaces in place (and live-applies if that scene is on screen).
+Ids are 8 lowercase hex and live in **their own namespace** — a scene id and a
+pattern id can collide harmlessly.
+
+`DELETE` drops the record **and every playlist item that named it**. A scene
+that was on screen stays on screen until something else is pushed; `active`
+goes `null` with the record.
+
+`POST /api/scenes/<id>/activate` shows the scene, crossfading over the
+optional `<ms>` body (absent or `0` = hard cut). It **parks the playlist**,
+exactly like activating a pattern directly.
+
+**Storage.** Every scene block concatenated is ONE blob — on a device, one
+flash record beside the palette — capped at **3840 B** (`max`). A write that
+would not fit is REFUSED, not truncated:
+
+```json
+{"ok":false,"error":"scenes: store full (3912 of 3840 B)"}
+```
+
+**Errors** are the core parser's own message, verbatim, naming the line:
+
+```json
+{"ok":false,"error":"scene: line 4: unknown blend \"foo\""}
+{"ok":false,"error":"scene: layer 3 does not fit"}
+{"ok":false,"error":"no such scene"}
+```
+
+`scene: layer N does not fit` is the `caps.layers` refusal: a scene may hold
+no more `pat` layers than the board affords resident engines (text, sprite and
+colour layers are free — they need no engine). It is checked on POST, so the
+store never holds a scene the board could not show.
+
+**Transition rule.** Both stacks are resident while a crossfade runs, so a
+transition where `pattern_layers(outgoing) + pattern_layers(incoming)` exceeds
+`caps.layers` is a **hard cut**, whatever `<ms>` or the playlist's `X` line
+says. Pattern→pattern is 1 + 1, which every board affords, so the classic
+crossfade is unchanged; two two-layer scenes on a 3-layer board cut.
+
+## Text slots
+
+Eight device-level text values (Gitea #485, proposal §6). A scene's `text`
+layer can draw one (`T slot <n>`), and so can a pattern —
+`drawText(textSlot(0), x, y)` — which is how text reaches a device that has no
+string type. `caps.text_slots` is how many there are; `0` means the host
+predates them.
+
+| route | method | body | response | where |
+|---|---|---|---|---|
+| `/api/text` | GET | — | `{"slots":["","", … 8]}` | both |
+| `/api/text` | POST | `<slot> <utf8…>` | `{"ok":true}` | both |
+
+The text is the **rest of the line** after the slot number, capped at **64
+bytes** and truncated on a char boundary; an empty rest clears the slot. A
+slot number outside `0..7` is refused
+(`{"ok":false,"error":"text: slot 8 out of range (0..7)"}`). Slots are **not
+persisted** across a reboot in v1.
 
 ## `/api/layout` — the one geometry object
 

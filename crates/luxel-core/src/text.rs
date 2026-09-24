@@ -610,7 +610,10 @@ struct Slot {
 ///
 /// On the device, both the API task and the frame loop live on the same
 /// executor and a frame never yields mid-render, so the rule holds by
-/// construction; the mirror and the playground are single-threaded.
+/// construction; the playground is single-threaded. **The mirror is not** —
+/// `luxel serve` handles each connection on its own thread — so it queues
+/// every write to its render thread (`Msg::TextSlot`) rather than calling
+/// this from a handler, and keeps its own `Mutex`'d copy for read-back.
 struct SlotTable(UnsafeCell<Option<Box<[Slot]>>>);
 
 // SAFETY: see the single-writer rule above — the embedder guarantees the

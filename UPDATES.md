@@ -1,5 +1,61 @@
 # Update log
 
+## 2026-09-24 — mirror: `/api/scenes`, `/api/text`, playlist scene items, and a render loop that composites (#478 #485)
+
+`luxel serve` is what the web app develops against, so every route the firmware
+grows has to exist here first. This lands the mirror half of Phase B/C: the
+scene store, the scene-aware playlist, the compositor in the render loop, and
+the eight text slots.
+
+**The render loop composites.** `prev: Option<Engine>` + `blend_px` is gone; the
+loop now holds a `Stage` — either one pattern (the classic path, no composite
+pass) or a scene: a `luxel_core::compose::Compositor` plus one engine per `pat`
+layer, one never-stepped engine per `sprite` layer (its const pool is where
+`sprite_view` reads the three `spr*` arrays), and the native text/colour layers
+drawn straight in. Clock and slot text are resolved by the host each frame, as
+the compositor's contract requires — the mirror's own `civil_local` feeds
+`text::format_clock`. **The crossfade is unchanged, provably:** it is now
+`compose::blend_px_mode(Normal, t)`, and a unit test in `serve.rs` pins it
+against the old `blend_px` for every t and colour pair, because
+`b + ((l − b)·t >> 16)` is the value `(b·(65536−t) + l·t) >> 16` floors to.
+A transition is a **hard cut** when the two stacks' pattern layers would exceed
+`caps.layers` — two stacks are resident while a fade runs.
+
+**`/api/scenes`** — GET (with `active`, `layers_max`, `used`/`max`), POST
+(`S -` assigns an 8-hex id), GET/POST/DELETE `/<id>`, POST `/<id>/activate`
+with an optional `<ms>` body. Records go through `luxel_core::scene`, so the
+JSON is byte-identical to the firmware's and parse errors are the core's own
+`scene: line N: …`. The store is the device's ONE blob: a write whose
+re-serialized total passes 3840 B is refused with
+`scenes: store full (N of 3840 B)`, and a scene with more `pat` layers than the
+board affords is refused at the door with `scene: layer N does not fit` — so
+the store never holds a scene the board could not show. DELETE drops the record
+and every playlist item that named it.
+
+**Playlist scene items.** `I S<sceneId> <sec>` in `parse_playlist`; items gain
+`"kind":"pattern"|"scene"`, and a scene item carries `name` + `layers` instead
+of controls. `C`/`P` under a scene item are ignored. Only `S` + a real 8-hex id
+is a scene item, so nothing a pre-#478 device wrote changes meaning.
+
+**`/api/text` + `caps.text_slots` = 8.** GET returns the eight slots, POST
+`<slot> <utf8…>` sets one (rest of line, 64 B, truncated on a char boundary,
+empty clears). `luxel_core::caps::TEXT_SLOTS` is now `text::SLOTS` itself, so a
+firmware and the mirror cannot advertise different sizes. `luxel_core::text`'s
+table is lock-free behind a **single-writer rule** and a mirror handles each
+connection on its own thread, so a write is queued to the render loop
+(`Msg::TextSlot`) — the one thread allowed to call `set_slot`, which is what a
+pattern's `textSlot(n)` reads — while the mirror's own `Mutex`'d copy serves
+GET and a scene's `slot` text layer. (`text.rs`'s comment said the mirror was
+single-threaded; corrected.)
+
+**`--scenes <file>`** preloads the store from a file of scene blocks, so a
+harness need not POST records one at a time.
+
+`tools/serve-e2e.mjs` grew 27 checks over all of it, including a `--board
+panel` mirror proving `layers_max` 2, its third-layer refusal and a
+two-pattern scene compositing at 4096 px. docs/api.md gains `## Scenes` and
+`## Text slots`; docs/spec/scenes.md remains the format's spec.
+
 ## 2026-09-24 — text in patterns: string literals, three PSF2 fonts, `drawText`/`textWidth`/`drawNumber`/`font`/`textSlot`, and eight host-set text slots (#483 #484 #485-core)
 
 **Strings without a string type, and without a format bump.** The parser now
