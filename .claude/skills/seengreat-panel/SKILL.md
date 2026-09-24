@@ -210,6 +210,25 @@ ESP32 ELF — pass the S3 one).
   2-second open reset the chip, and the reader then captured every boot,
   `jit:` narration line and PANIC backtrace. Symbolicate against the ELF
   you PUSHED (keep a copy — `tools/stack-check.sh` overwrites the target).
+- **Do NOT write a scene while a 2-engine scene is ACTIVE — it reboots the
+  board** (Gitea #724, reproduced 2/2 on 2026-09-24). At the 2-pattern-layer
+  cap the panel sits at `heap_free` ~10.7 KB / `heap_largest` ~6.6 KB, and
+  `scenes.rs commit()` builds the whole scene blob as a `String` with
+  infallible allocation, so `POST /api/scenes` panics the allocator. The POST
+  returns an EMPTY body (indistinguishable from the socket-pool case above),
+  the write is lost, and the board comes back with the scene deactivated. Same
+  class as #702; made reachable by #704's resident buffers. Until it is fixed:
+  deactivate first (`POST /api/patterns/<id>/activate`), then write.
+- **`/api/pixels` is the camera-less proof for a PANEL feature — and it stops
+  answering exactly when you need it.** 12,288 B = 4096 px of raw RGB; decode
+  3 bytes per pixel, index `y*64 + x`, and print it as ASCII art. That is how
+  the Phase C text layer and a console-painted sprite were verified on
+  2026-09-24 (HELLO legible at rows 28-33; three sprite cells at the exact
+  painted coordinates). But it answers an **empty body** under a 2-engine
+  scene — a 12 KB response against `heap_largest` 6.6 KB — so the richest
+  scene is the one you cannot read back. Short bodies are the socket pool, not
+  an encoding problem: plain `curl` returns the full 12,288 B on an idle
+  board, so check the length and retry rather than adding headers.
 - **A rejected 30–35 KB pattern load leaves ~3.6 KB of heap and the next
   HTTP request panics** (frogger-2d, music-sequencer-for-v2 at 4096 px,
   JIT off too) — Gitea #678. Expect it in any sweep that pushes the whole
