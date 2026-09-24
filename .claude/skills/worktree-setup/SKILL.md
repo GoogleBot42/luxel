@@ -122,6 +122,14 @@ these before trusting any build/test failure as a real regression.
    and would have driven the wrong bindings without a word (2026-08-30). Pass the
    worktree explicitly — `nix develop /path/to/worktree --command …` — and give every
    command inside it ABSOLUTE paths.
+   **The shared scratchpad is a second route to the same damage.** Node resolves a
+   bare import by walking up from the SCRIPT's directory, not the cwd — so a driver
+   script left in the session scratchpad picks up whatever `node_modules` is there,
+   and other sessions leave symlinks in it (found 2026-09-24 pointing at
+   `pixler-closure/web/node_modules`; `puppeteer-core` loaded from that worktree
+   without a word, exactly as in the 2026-08-30 case). Keep any script that imports
+   from `web/` INSIDE your own worktree (`<worktree>/web/.scratch/`), not in the
+   scratchpad, and delete it before committing.
 5. Regenerate the gallery after the above: `node web/tools/gen-gallery.mjs` (or just run
    `npm run build`/`npm run dev`, which call it as a step). It writes
    `web/public/gallery.json` from `library/*.js` unconditionally, and
