@@ -1,5 +1,71 @@
 # Update log
 
+## 2026-09-23 — `/api/ota` can no longer brick a device: the running slot is never the target, the image is verified before `otadata` moves (#655)
+
+**The Seengreat brick of 2026-09-21, root-caused off the bench.** The OTA
+that "wedged mid-upload" was written **over the slot the panel was running
+from**. Its migration had reached `settle_into_ota0` — which ERASES
+`otadata` — and then declined at the store erase (the #659 bootloader
+ceiling), leaving the device executing `ota_0` with `otadata` erased until
+the next reboot (the ESP-IDF bootloader writes `seq=1 → ota_0` back only on
+boot). In that state esp-bootloader-esp-idf's `next_partition()` answers
+`ota_0`: `current_app_partition()` reads erased as `Factory`, `next` becomes
+`Ota0`, and the "don't pick the booted slot" guard is `(Factory.ota_app_number()
++ 2) % 2` — a `u8` underflow (`0 - 0x10` → 240) that lands on `Ota0` again.
+`ota.rs` erased sector `0x10000` — the running image's header — and streamed
+the new image over the code being executed; the ProCpu ran into its own
+rewritten flash (curl's "300 s, 0 bytes received" was a dead CPU, not a
+stall), and the power cycle booted into a slot holding the new image's head
+over the old image's tail. Segment 3's header read as `.rodata` text
+(`vaddr 0x33697053` "Spi3", `size 0x63616d48` "Hmac"); the bootloader hit
+`assert(load_end > load_addr)`, reset, and looped — it never tries the
+other slot after an assert, and the other slot was the migration's staging
+scratch anyway. Boot log in the #655 comment; mechanism with file:line on
+#634. None of #654/#659/#662 touched it: `settle_into_ota0` still erases
+`otadata` (correctly) and any post-settle decline recreates the window.
+
+**What holds the invariant now** (`firmware/src/ota.rs`, docs/firmware.md
+"OTA updates"):
+
+1. **Target = the slot the running image is NOT in.** `ota::init` records
+   the MMU-mapped offset (`booted_partition()`), `parttab::ota_target` picks
+   the other OTA app slot of the on-flash table, `otadata` is not an input.
+   Unknown running slot, no second slot, or a free slot overlapping the
+   running image → refused before a sector is touched. Every boot prints
+   `ota: updates go to ota_1 at 0x150000 (1310720 B)`.
+2. **The first sector stays in RAM until commit.** A slot whose head is
+   still erased is not an image to the bootloader's fallback or to
+   `preboot_guard`, however far a wedged upload got.
+3. **Verify before activate.** `appimg::verify` — segment table with the
+   bootloader's `load_end > load_addr` as an error, exact length (segments +
+   padded checksum byte + appended SHA-256), and the ROM XOR checksum over a
+   full read-back — then `otadata` is set to THIS slot explicitly (never
+   `activate_next_partition`, which with `otadata` erased would have
+   re-selected `ota_0` whatever was written) and read back.
+4. `migrate::ota_hold`: on the 4 MB layout, from `write_new_store`'s first
+   erase (the new store overlaps the old log) until the table is installed,
+   the staging area is the library's only copy and it is the slot an update
+   writes — `/api/ota` refuses with "layout migration is mid-flight".
+
+**Verified.** `cargo test -p parttab-check`: 22 green (+16), including
+`LUXEL_OTA_IMAGE=result/luxel-fw-ota.bin` against a real `espflash
+save-image` output and the panel's literal garbage segment header. QEMU
+(`tools/qemu/run-all.py`): every migrate/takeover boot now pairs `booted
+from: X` with `ota: updates go to Y` and asserts X ≠ Y — 15 non-S3 cases
+green (`migrate-cut-assets` is #660's known race); the 16 `migrate-s3-*`
+cases fail on master's own Seengreat image being over the old 1 MiB slot,
+filed as #669. No `/api/ota` can reach a QEMU guest (no radio), so the
+handler path itself is an on-metal check: #668. `tools/ci.sh` green,
+`tools/stack-check.sh` ok. **No device was touched.**
+
+**Size** (credless flake, `origin/master` `4adee91` baseline): `pixelblaze-v3`
+1,022,336 → 1,024,928 (+2,592); `athom-music` 1,039,792 → 1,042,336
+(+2,544, 6,240 B of the old slot left); `c6-devkit` 1,045,008 → 1,046,928
+(+1,920, **1,648 B left** under `MIGRATING_RELEASE=1`); `c6-devkit-hosted`
+1,028,736 → 1,030,384 (+1,648); `c3-devkit` 985,328 → 987,248 (+1,920);
+`seengreat-hub75` 1,078,464 → 1,080,704 (+2,240, over the old slot either
+way — #669).
+
 ## 2026-09-21 — JIT phase 3: patterns compile and run on the device (#658)
 
 Phase 3 of the on-device JIT (#607, docs/jit-design.md §5/§6). Phase 2 built

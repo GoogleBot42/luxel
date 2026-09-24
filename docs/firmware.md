@@ -86,11 +86,72 @@ empty values) the firmware runs offline (render-only).
 The partition table is pure A/B: ota_0 + ota_1 app slots, no factory
 partition (this device has no distinct golden image — the serial flash is
 the same build that ships OTA, so factory was 1 MB of dead weight). Serial
-flash lands in ota_0; OTA writes alternate ota_0/ota_1. The bootloader
-validates images before jumping, so a corrupt upload falls back to the
-currently working slot; if both OTA slots are ever bad it boots ota_0 (the
-bootloader's default when no factory partition exists). Serial recovery
-always works regardless.
+flash lands in ota_0; OTA writes alternate ota_0/ota_1. If both OTA slots
+are ever bad the bootloader boots ota_0 (its default when no factory
+partition exists). Serial recovery always works regardless.
+
+**An interrupted update must never leave the device without a bootable
+slot.** That sentence used to lean on "the bootloader validates images
+before jumping, so a corrupt upload falls back to the working slot", and
+on 2026-09-21 the Seengreat panel showed both halves of it to be false
+(Gitea #655): the update was written over the slot the device was
+*running*, and the torn image it left did not fail validation gracefully —
+the ESP-IDF bootloader hit `assert(load_end > load_addr)` on a garbage
+segment header, reset, and looped without ever trying the other slot. Three
+things in `firmware/src/ota.rs` hold the invariant up now:
+
+1. **The target slot is where the running image is NOT.** `ota::init`
+   records the flash offset the bootloader MMU-mapped the app from
+   (`booted_partition()`), and `parttab::ota_target` picks the other OTA
+   app slot of the table on flash. `otadata` is not an input. It used to be:
+   esp-bootloader-esp-idf's `next_partition()` answers `ota_0` for a device
+   executing from `ota_0` whenever `otadata` is erased — its
+   "don't pick the booted slot" guard is arithmetic on a factory subtype
+   that underflows — and the layout migration leaves `otadata` erased on
+   any boot in which it runs and then declines after `settle_into_ota0`
+   (the panel's boot, every boot, until #634's fallback). The bootloader
+   only writes the choice back (`seq=1 → ota_0`) on the *next* boot. A
+   device that cannot tell where it is running from does not update; a
+   table with no second OTA slot, or one whose free slot overlaps the
+   running image, is refused before a sector is touched. Every boot prints
+   `ota: updates go to ota_1 at 0x150000 (1310720 B)` so the choice can be
+   read off serial — and asserted under QEMU, where no `/api/ota` can reach
+   the guest.
+2. **The image's first sector stays in RAM until the end.** Every sector is
+   erased before it is written, but the head — image magic and segment
+   table — is only landed by `commit`, after everything behind it has been
+   verified. A slot whose first sector is still erased is not an image to
+   anyone: not to the bootloader's "try the other partitions" fallback, not
+   to `preboot_guard`'s rollback, however far a wedged upload got.
+3. **The image is verified where it sits before `otadata` moves.**
+   `appimg::verify` walks the segment table (each header inside the image,
+   `load_addr + size` not wrapping — the bootloader's assertion as an
+   error), requires the byte length to be exactly what the table implies
+   (segments, checksum byte padded to 16, the 32-byte SHA-256 when the
+   header says one is appended), and checks the ROM checksum byte — the XOR
+   of every segment byte seeded with `0xEF` — against a full read-back. Not
+   the SHA-256 itself (a hash implementation the image cannot afford); the
+   checksum already catches a truncated upload, trailing junk, and one
+   image's head over another's tail. Only then is `otadata` pointed at THIS
+   slot — explicitly, never "the next one" recomputed from `otadata` (with
+   `otadata` erased that would have selected `ota_0` whatever was just
+   written, and the device would reboot into the old image believing itself
+   updated) — and read back.
+
+The pure halves (`parttab::ota_target`, `appimg::verify`) are host-tested
+in `tools/parttab-check` against every table this repo ships and against a
+real `espflash save-image` output (`LUXEL_OTA_IMAGE=result/luxel-fw-ota.bin
+cargo test -p parttab-check`), including the panel's literal garbage
+segment header. The handler path itself has no emulator coverage — QEMU's
+ESP32 models no radio, so nothing reaches `/api/ota` — which is why the
+boot line exists and why the on-metal check is a ticket (Gitea #655).
+
+The wedge that took the panel off the LAN for 13 minutes was this, not a
+new flash hang: the ProCpu ran into its own rewritten flash. `picoserve`'s
+45 s `read_request` budget on the body reader is armed the moment the
+reader is taken, so a client that genuinely stalls at zero bytes is cut off
+at 45 s with the writer dropped and `otadata` untouched; no server-side
+timeout can help a CPU that is executing garbage.
 
 Slot size is **per board** since the 2026-09-20 repartition (Gitea #501) —
 1.25 MiB on the 4 MB boards, 3 MiB on the 16 MB Seengreat — and a device
@@ -331,6 +392,21 @@ the migration's reboots (at most two), because a migration resuming across a
 power cut must not look like a crash loop to `preboot_guard` — which, once
 staging has begun, would "roll back" to an `ota_1` that is no longer a
 bootable image.
+
+Two consequences of that erase are worth knowing (Gitea #655). The ESP-IDF
+bootloader writes the choice back as `seq=1 → ota_0` on the next boot, so
+`otadata` is only *erased* between the app's migration attempt and the
+following reboot — and a run that gets past `settle_into_ota0` and then
+declines leaves the device in exactly that window, every boot, until the
+block clears. That window is where `/api/ota` used to pick the running slot
+("OTA updates" above), which is why slot selection no longer reads
+`otadata`. And on the 4 MB layout, from the moment `write_new_store` starts
+erasing (the new store region overlaps the old log) until the table is
+installed, the staging area — the live `ota_1`, the slot an update writes —
+holds the only complete copy of the pattern library; `migrate::ota_hold`
+makes `/api/ota` refuse with "layout migration is mid-flight — reboot to let
+it finish" for that window. The 16 MB layout never sets it: its old store is
+untouched until the table lands, and an update over staging just re-stages.
 
 ### The bootloader ceiling, and the two-hop board
 

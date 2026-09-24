@@ -74,8 +74,8 @@ mod raw;
 // allow covers the configurations that do not.
 #[allow(unused_imports)]
 pub use raw::{
-    app_entries, app_slot, data_labelled, entries, flash_needed, is_luxel, Part, SUBTYPE_OTA0,
-    SUBTYPE_OTA1, TYPE_APP, TYPE_DATA,
+    app_entries, app_slot, data_labelled, entries, flash_needed, is_luxel, ota_target, Part,
+    SUBTYPE_OTA0, SUBTYPE_OTA1, SUBTYPE_OTADATA, TYPE_APP, TYPE_DATA,
 };
 
 /// Read the live table off flash, as many bytes as [EMBEDDED] is long.

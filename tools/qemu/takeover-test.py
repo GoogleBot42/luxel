@@ -425,6 +425,13 @@ def check_serial(log: str, slot: str, ota_len: int, c: Checks,
     c.ok(f"serial[boot1]: {REBOOT_LINE!r}")
 
     c.line(boot2, "booted from: ota_0", "boot2")
+    # A taken-over device runs ota_0 under Luxel's 4 MB table; the first
+    # Luxel OTA must go to that table's ota_1 (0x150000), not over the code
+    # it is running (Gitea #655).  ota::init prints the choice every boot.
+    c.line(boot2, "ota: updates go to ota_1 at 0x150000", "boot2")
+    c.require("ota: updates go to ota_0 at" not in boot2,
+              "serial[boot2]: the running slot is never the OTA target",
+              "ota::init named ota_0 while executing from it")
     c.line(boot2, "patterns: format 0 != 6, wiping storage", "boot2")
     c.line(boot2, f"(storage @ {LUXEL_STORAGE:#x})", "boot2")
     c.line(boot2, KILL_MARKER, "boot2")

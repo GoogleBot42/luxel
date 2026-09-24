@@ -1131,11 +1131,23 @@ At most `PIN_MAX_BATCH` writes per request.
 | `/api/ota` | POST | raw app image (streamed) | `{"ok":true,"bytes":N}` — **then reboots** | firmware only |
 | `/api/assets` | POST | LUXA asset archive (streamed) | `{"ok":true,"bytes":N,"files":N}` | firmware only |
 
-- `POST /api/ota` writes the inactive OTA slot, then reboots ~400 ms after
-  replying so the response reaches the client. It freezes the render engine
-  first to free heap for the flash phase. Failures answer
-  `{"ok":false,"error":"…"}` and do **not** reboot. Driven by
-  `tools/ota-push.sh` / `tools/deploy.sh`; see `docs/firmware.md`.
+- `POST /api/ota` writes the OTA slot the device is **not executing from**
+  (decided from where the running image is MMU-mapped, never from
+  `otadata` — Gitea #655), verifies the written image (segment table, exact
+  length, ROM checksum) and only then points `otadata` at it, then reboots
+  ~400 ms after replying so the response reaches the client. It freezes the
+  render engine first to free heap for the flash phase. Failures answer
+  `{"ok":false,"error":"…"}` and do **not** reboot — and leave `otadata`
+  untouched, with the written slot headless (its first sector is landed
+  last, after verification), so nothing can boot it. Refusals before a
+  sector is touched: `cannot tell which slot is running — not updating`,
+  `no second OTA slot to update into`, `the free OTA slot overlaps the
+  running image`, `layout migration is mid-flight — reboot to let it
+  finish, then retry` (the 4 MB migration's staging area holds the only
+  copy of the pattern library); after the upload: `corrupt segment table`,
+  `image length does not match its segment table`, `image checksum
+  mismatch`. Driven by `tools/ota-push.sh` / `tools/deploy.sh`; see
+  `docs/firmware.md` "OTA updates".
 - **An over-size image is refused up front**, from the request's
   `Content-Length`, before a single sector is erased (Gitea #501) — so a
   rejected push leaves the inactive slot exactly as it was. On a device

@@ -176,6 +176,7 @@ import argparse
 import hashlib
 import importlib.util
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -839,6 +840,28 @@ def stop_on_stage(stage: int, staging_at: int):
 # assertions
 
 
+OTA_TARGET_RE = re.compile(r"booted from: (ota_[01])(?:(?!booted from:).)*?ota: updates go to (ota_[01]) at (0x[0-9a-f]+)", re.S)
+
+
+def check_ota_targets(log: str, c: Checks) -> None:
+    """Every boot in `log` — a run can have several — pairs its `booted from:`
+    with the `ota: updates go to` line ota::init prints right after it.  The
+    two must never name the same slot: that pairing IS the Seengreat brick
+    (Gitea #655), and the boots after `settle_into_ota0` run with otadata
+    ERASED, the exact state in which the pre-#655 selection got it wrong."""
+    boots = OTA_TARGET_RE.findall(log)
+    c.require(bool(boots), "serial: every boot names its OTA target",
+              "no `booted from:` / `ota: updates go to` pair found")
+    for booted, target, at in boots:
+        c.require(booted != target,
+                  f"serial: booted from {booted} → updates go to {target} at {at}",
+                  "ota::init named the slot it is executing from — the #655 brick")
+    # and no boot was left without a target at all
+    c.require("ota: no update target" not in log,
+              "serial: no boot refused to pick an update target",
+              log[log.find("ota: no update target"):][:120] if "ota: no update target" in log else "")
+
+
 def check_serial(log: str, from_slot: str, ota_len: int, side: dict,
                  c: Checks, resume_stage: int | None = None,
                  old_ota1: int = OLD_OTA1) -> None:
@@ -871,6 +894,17 @@ def check_serial(log: str, from_slot: str, ota_len: int, side: dict,
               "serial[migrate]: the composed pre-#501 store came up",
               "patterns::init did not resolve the old storage partition — "
               "regenerate the fixture with tools/storegen")
+
+    # Where `/api/ota` would write, printed by ota::init on every boot and the
+    # ONLY thing the emulator can assert about slot selection (no network
+    # reaches a QEMU guest).  On the first boot the device runs the OLD table
+    # from `from_slot` — and for --from ota_0 the fixture's otadata is ERASED,
+    # which is precisely the state in which the pre-#655 firmware picked the
+    # running slot and bricked the Seengreat (Gitea #655).  The target must be
+    # the OTHER slot, at the LIVE table's offset for it.
+    other, other_at = ("ota_1", old_ota1) if from_slot == "ota_0" else ("ota_0", NEW_OTA0)
+    c.line(before, f"ota: updates go to {other} at {other_at:#x}", "migrate")
+    check_ota_targets(log, c)
 
     copy_line = f"migrate: copying {ota_len} B {old_ota1:#x} → {NEW_OTA0:#x}"
     if from_slot == "ota_1" and resume_stage is None:
@@ -948,8 +982,12 @@ def check_serial(log: str, from_slot: str, ota_len: int, side: dict,
     c.line(before, M_INSTALLING, "migrate")
     c.ok(f"serial[migrate]: {M_INSTALLED!r}")
 
-    # The boot that came back on the new table.
+    # The boot that came back on the new table: running ota_0, so updates go
+    # to the NEW table's ota_1 — 0x150000 on the 4 MB layout, 0x310000 on the
+    # 16 MB one — never to 0x10000.
     c.line(after, "booted from: ota_0", "after")
+    new_ota1 = next(r[2] for r in NEW_ROWS if r[4] == "ota_1")
+    c.line(after, f"ota: updates go to ota_1 at {new_ota1:#x}", "after")
     want = (f"patterns: log {NEW_LOG_LEN} B, {len(side['patterns'])} patterns, "
             f"{side['pre_live_bytes']} B used, 0 B reclaimable, "
             f"{len(side['patterns'])} files (0 torn, 0 resyncs), "
