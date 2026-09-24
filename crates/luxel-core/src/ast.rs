@@ -19,6 +19,11 @@ pub struct Expr {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExprKind {
     Num(Fx),
+    /// A string literal, which the language has no *type* for: the parser
+    /// only produces one in a text builtin's argument list (Gitea #483),
+    /// and the compiler lowers it to the numeric handle of an interned
+    /// message. Nothing downstream of `compile` ever sees a string.
+    Str(String),
     Ident(String),
     ArrayLit(Vec<Expr>),
     Unary {

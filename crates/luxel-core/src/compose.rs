@@ -1221,13 +1221,20 @@ mod tests {
         let mut c = Compositor::new(grid(8, 8, false));
         c.set_scene(&scene);
         assert!(matches!(c.text_source(0), Some(TextSource::Slot(0))));
-        let long: String = core::iter::repeat('é').take(40).collect(); // 80 bytes
+        let long: String = core::iter::repeat('\u{2603}').take(40).collect(); // 120 bytes
+        // 64 is not a char boundary in this string, so it backs off to 63
+        let mut cut = String::new();
+        push_truncated(&mut cut, &long, crate::scene::MAX_NAME);
+        assert_eq!(cut.len(), 63);
+        assert_eq!(cut.chars().count(), 21);
+
         c.set_text(0, &long);
-        // 64 is not a char boundary in this string, so it backs off to 62
         let mut px = vec![[0u8; 3]; 64];
         c.begin(&mut px);
-        c.native_layer(&mut px, 0, None); // the stub font draws nothing
-        assert!(px.iter().all(|p| *p == [0, 0, 0]));
+        c.native_layer(&mut px, 0, None);
+        // the snowman is outside the ASCII sheet, so every glyph draws `?` — what
+        // matters here is that the truncated text reached the kernel at all
+        assert!(px.iter().any(|p| *p != [0, 0, 0]));
     }
 
     #[test]
@@ -1237,10 +1244,12 @@ mod tests {
             speed: 10,
             ..TextLayer::default()
         };
-        // the stub font measures 0, so the wrap is the box width alone
+        // "HI" is 12 px in the default face, so the wrap is 12 + the box
+        assert_eq!(text::width("HI", t.font), 12);
         assert_eq!(scroll_offset(&t, "HI", 8, 8, 0), 0);
         assert_eq!(scroll_offset(&t, "HI", 8, 8, 3_000), -3);
-        assert_eq!(scroll_offset(&t, "HI", 8, 8, 8_000), 0); // wrapped
+        assert_eq!(scroll_offset(&t, "HI", 8, 8, 19_000), -19);
+        assert_eq!(scroll_offset(&t, "HI", 8, 8, 20_000), 0); // wrapped
         let still = TextLayer::default();
         assert_eq!(scroll_offset(&still, "HI", 8, 8, 9_999), 0);
     }

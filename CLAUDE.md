@@ -124,7 +124,8 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
 - Web UI change → drive it in real chromium (puppeteer-core) and screenshot before
   calling it done — .claude/skills/verify-webui. Build/typecheck alone is not verification.
 - Firmware change touching statics or buffers → run `tools/stack-check.sh`.
-  Measure, don't estimate.
+  Measure, don't estimate. A new `static` in `luxel-core` counts: `.stack` is
+  leftover DRAM, so 544 B of table there failed the floor (#484).
 - Per-pixel / frame-time performance claims → the `frame_us`/`vm_us`/`pipe_us`/
   `out_us` split in `/api/status` on the target board (docs/firmware.md). Host
   `luxel bench` is only a smoke test: the Xtensa costs that matter (ROM libgcc

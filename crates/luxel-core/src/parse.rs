@@ -17,6 +17,18 @@ use crate::diag::{Diagnostic, Span};
 use crate::fixed::Fx;
 use crate::lex::{lex, Tok, Token};
 
+/// The builtins whose argument list accepts a quoted string (Gitea #483).
+///
+/// This is the WHOLE of the language's string surface: a literal here is
+/// interned into the program's message table and compiled to the numeric
+/// handle of that entry, so no string ever reaches the VM, the bytecode
+/// gains no section, and the format does not bump. A string anywhere else
+/// is still the error in `primary_expr`.
+///
+/// `drawNumber` takes a number and `textSlot` an index, so neither is
+/// listed; both still consume a *handle*, which is just a number.
+pub const TEXT_BUILTINS: [&str; 3] = ["drawText", "textWidth", "font"];
+
 pub fn parse_program(src: &str) -> Result<Vec<Stmt>, Diagnostic> {
     let toks = lex(src)?;
     let mut p = Parser {
@@ -649,7 +661,13 @@ impl<'s> Parser<'s> {
             match self.peek() {
                 Some(Tok::LParen) => {
                     self.bump();
-                    let args = self.call_args()?;
+                    // A quoted string is an expression ONLY here, in the
+                    // argument list of a text builtin called by name
+                    // (Gitea #483). Everywhere else `primary_expr` still
+                    // rejects it, so the language gains no string type.
+                    let strings = matches!(&e.kind,
+                        ExprKind::Ident(n) if TEXT_BUILTINS.contains(&n.as_str()));
+                    let args = self.call_args(strings)?;
                     let span = e.span.to(self.prev_span);
                     e = Expr {
                         kind: ExprKind::Call {
@@ -706,10 +724,24 @@ impl<'s> Parser<'s> {
         Ok(e)
     }
 
-    fn call_args(&mut self) -> Result<Vec<Expr>, Diagnostic> {
+    /// `strings`: accept a quoted string as a whole argument (a text
+    /// builtin's argument list — see [`TEXT_BUILTINS`]). A string in any
+    /// other position falls through to `primary_expr`'s error.
+    fn call_args(&mut self, strings: bool) -> Result<Vec<Expr>, Diagnostic> {
         let mut args = Vec::new();
         while !self.at(Tok::RParen) {
-            args.push(self.assign_expr()?);
+            if strings && self.at(Tok::Str) {
+                let t = self.bump();
+                // the lexer's token includes the quotes and no escapes are
+                // recognised — exactly what `assert_stmt` does
+                let quoted = self.slice(t.span);
+                args.push(Expr {
+                    kind: ExprKind::Str(quoted[1..quoted.len() - 1].to_string()),
+                    span: t.span,
+                });
+            } else {
+                args.push(self.assign_expr()?);
+            }
             if !self.eat(Tok::Comma) {
                 break;
             }
@@ -835,7 +867,8 @@ impl<'s> Parser<'s> {
             }
             Some(Tok::Str) => Err(self.err_here(
                 "the pattern language has no string values — a quoted string \
-                 is only allowed as `assert(cond, \"message\")`"
+                 is only allowed as `assert(cond, \"message\")` or as an \
+                 argument of drawText(), textWidth() or font()"
                     .into(),
             )),
             _ => Err(self.err_here("expected an expression".into())),

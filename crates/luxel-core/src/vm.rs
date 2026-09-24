@@ -510,6 +510,14 @@ pub enum Builtin {
     // pattern-language prelude needed when `mapPixels` stopped being a
     // builtin (Gitea #626).
     PixelCoord,
+    // Luxel extension builtins, batch 13 (Gitea #483/#484/#485): text.
+    // `crate::text` holds the fonts and the kernels; these five are the
+    // pattern-facing verbs.
+    DrawText,
+    TextWidth,
+    DrawNumber,
+    Font,
+    TextSlot,
 }
 
 pub struct BuiltinDef {
@@ -657,6 +665,14 @@ pub static BUILTINS: &[BuiltinDef] = &[
     // coordinate of one pixel, which is everything the `mapPixels` prelude
     // function needs from the engine. Id 187.
     b!("pixelCoord", PixelCoord),
+    // Luxel extension builtins, batch 13 (appended, Gitea #483/#484/#485):
+    // text. A "text handle" is a plain number — a string literal is the
+    // index of its entry in the program's message table, `textSlot(n)` is
+    // `-(n + 1)` — so nothing here needs a new Value, a new opcode or a
+    // format bump. Ids 188..=192.
+    b!("drawText", DrawText), b!("textWidth", TextWidth),
+    b!("drawNumber", DrawNumber), b!("font", Font),
+    b!("textSlot", TextSlot),
 ];
 
 // ---- builtin kind signatures (Gitea #607, docs/jit-design.md §2.3) ----
@@ -836,6 +852,72 @@ pub fn builtin_removed(b: u16) -> bool {
         BUILTINS.get(b as usize).map(|d| d.kind),
         Some(BKind::Removed)
     )
+}
+
+// ---- text handles (Gitea #483/#485, docs/spec/text.md) ----
+
+/// Run `f` on the string a text handle names.
+///
+/// The encoding is the whole of C1's "no string type" trick, and it is a
+/// plain number so `builtin_sig` needs no new return shape and the JIT sees
+/// an ordinary numeric argument:
+///
+/// * `h >= 0` — entry `h` of the program's message table, which is where
+///   `intern_msg` put every string literal (the same table `assert()`
+///   uses, so no new bytecode section and no format bump);
+/// * `h < 0` — host-set text slot `-(h + 1)` (`textSlot(n)`).
+///
+/// Anything out of range reads as the empty string: a pattern that asks
+/// for a slot that does not exist draws nothing rather than erroring.
+#[inline(never)]
+fn with_text<R>(prog: &Program, h: Fx, f: impl FnOnce(&str) -> R) -> R {
+    let k = h.to_int_floor();
+    if k >= 0 {
+        match prog.assert_msgs.get(k as usize) {
+            Some(s) => f(s),
+            None => f(""),
+        }
+    } else if k > -256 {
+        crate::text::with_slot((-k - 1) as u8, f)
+    } else {
+        f("")
+    }
+}
+
+/// Shared tail of `drawText` and `drawNumber`: draw `s` at grid cell
+/// (`x`, `y`) — top-left origin, y growing down — in the brush colour and
+/// the modal font, and return its advance width.
+///
+/// No regular grid behind the frame → nothing drawn and 0 returned, the
+/// same silent contract `blit` and every other grid-space bulk op keeps
+/// (`bulk.rs`'s guard, mirrored here because the frame is lent out by
+/// move for the duration of the call).
+#[inline(never)]
+fn draw_text_at(vm: &mut Vm, s: &str, x: Fx, y: Fx, align: crate::text::Align) -> Fx {
+    let mut frame = core::mem::take(&mut vm.frame);
+    let w = match vm.frame_grid.filter(|g| !g.is_empty() && g.len() >= frame.len()) {
+        Some(g) => {
+            let c = vm.pixel;
+            let rgb = [
+                crate::engine::quantize(c[0]),
+                crate::engine::quantize(c[1]),
+                crate::engine::quantize(c[2]),
+            ];
+            crate::text::draw_aligned(
+                &mut frame,
+                &g,
+                x.to_int_floor(),
+                y.to_int_floor(),
+                s,
+                vm.text_font,
+                rgb,
+                align,
+            )
+        }
+        None => 0,
+    };
+    vm.frame = frame;
+    Fx::from_int(w)
 }
 
 /// Method-form array API: the global name `a.<name>(...)` desugars to.
@@ -1224,6 +1306,10 @@ pub struct Vm {
     frame_cap_fps: Fx,
     /// Set by hsv()/rgb() — the engine reads this after each render call.
     pub pixel: [Fx; 3],
+    /// `font(name)`: the face `drawText`/`drawNumber`/`textWidth` use.
+    /// Modal like `setFrameRate` and the palette — it persists across
+    /// frames, unlike the brush, which starts each frame black.
+    pub text_font: crate::text::Font,
     pub pixel_written: bool,
     /// Set by plot() in a map program — the engine reads this after each
     /// per-pixel map call to build the coordinate list. `plot_dims` is 2 or 3
@@ -1551,6 +1637,7 @@ impl Vm {
             frame_min_raw: 0,
             frame_cap_fps: Fx::ZERO,
             pixel: [Fx::ZERO; 3],
+            text_font: crate::text::Font::Regular,
             pixel_written: false,
             plot_coord: [Fx::ZERO; 3],
             plot_dims: 0,
@@ -4427,6 +4514,60 @@ impl Vm {
             DrawLine => Ok(crate::bulk::draw_line(self, &args[..argc])),
             FillCanvas => crate::bulk::fill_canvas(self, prog, &args[..argc]).map_err(no_site),
             Blit => crate::bulk::blit(self, prog, &args[..argc]).map_err(no_site),
+            // ---- Luxel extensions, batch 13: text (Gitea #483/#484/#485) ----
+            // Grid space, top-left origin, the current brush colour, the
+            // modal `font()` face — and, like every bulk op, a silent
+            // no-op when the frame has no regular grid behind it. Kernels
+            // and fonts live in `crate::text`; see docs/spec/text.md.
+            //
+            // drawText(handle, x, y[, align]) -> advance width in px
+            DrawText => num(with_text(prog, n(0), |s| {
+                draw_text_at(self, s, n(1), n(2), crate::text::Align::from_code(n(3).to_int_floor()))
+            })),
+            // textWidth(handle) -> px. Measurable with no grid: a pattern
+            // needs the width to decide where to draw before it knows it
+            // cannot.
+            TextWidth => num(with_text(prog, n(0), |s| {
+                Fx::from_int(crate::text::width(s, self.text_font) as i32)
+            })),
+            // drawNumber(v, x, y, digits, decimals) -> advance width.
+            // `digits` is the MINIMUM integer digits (zero-padded),
+            // `decimals` the fraction digits; both saturate at
+            // `text::MAX_DIGITS` / `text::MAX_DECIMALS`.
+            DrawNumber => {
+                let mut buf = crate::text::TextString::new();
+                crate::text::format_number(
+                    n(0),
+                    n(3).to_int_floor().clamp(0, 255) as u8,
+                    n(4).to_int_floor().clamp(0, 255) as u8,
+                    &mut buf,
+                );
+                num(draw_text_at(
+                    self,
+                    buf.as_str(),
+                    n(1),
+                    n(2),
+                    crate::text::Align::Left,
+                ))
+            }
+            // font(handle) -> the active face's index (0 tiny, 1 regular,
+            // 2 large). An unrecognised name changes nothing, so
+            // `font("")` reads the current face.
+            Font => {
+                if let Some(f) = with_text(prog, n(0), crate::text::Font::from_wire) {
+                    self.text_font = f;
+                }
+                num(Fx::from_int(
+                    crate::text::FONTS
+                        .iter()
+                        .position(|&f| f == self.text_font)
+                        .unwrap_or(0) as i32,
+                ))
+            }
+            // textSlot(n) -> the handle of host-set slot n, which is
+            // `-(n + 1)` (a literal's handle is its non-negative message
+            // index, so the two halves cannot collide).
+            TextSlot => num(Fx::from_int(-(n(0).to_int_floor().clamp(0, 255) + 1))),
             // ---- Luxel extensions, batch 11 (Gitea #373) ----
             // fillNoise2D(dst, w, h, sx, sy, ox, oy, seed) and
             // fillNoise3D(dst, w, h, sx, sy, ox, oy, z, seed): fill the

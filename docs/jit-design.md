@@ -587,7 +587,7 @@ phase-4 lever if measurement asks for one.
 **SHIPPED (Gitea #642): `crates/luxel-core/src/jit/table.rs`.**
 
 `BUILTINS` stays the append-only name table. Beside it, under the `jit`
-feature, `BUILTIN_ENTRIES: [BuiltinEntry; 188]` with one entry per id, in
+feature, `BUILTIN_ENTRIES: [BuiltinEntry; 193]` with one entry per id, in
 the same order (a `const` assertion holds the two lengths equal, so a
 builtin appended without a table line fails the build):
 
@@ -985,7 +985,7 @@ before it can take a release (docs/boards.md, docs/releases.md).
   helper exists. The `Value`/`RetDyn`/`JitCtx`/`BuiltinEntry` layouts are
   already `const`-asserted and host-tested (`src/jit/tests.rs`,
   `tests/jitabi.rs`, `tests/abi_probe.rs`).
-- **Builtin table parity** (shipped, #642): every one of the 188 ids is
+- **Builtin table parity** (shipped, #642): every one of the 193 ids is
   called through `BUILTIN_ENTRIES[id].generic` at every arity from 0 to
   `MAX_ARGS` with mixed-kind arguments and compared against the
   interpreter's own `CallBuiltin` path — return value, error message, error

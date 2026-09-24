@@ -1444,7 +1444,7 @@ impl<'s> Compiler<'s> {
 
     fn scan_expr(&mut self, e: &Expr, locals: &[String]) -> Result<(), Diagnostic> {
         match &e.kind {
-            ExprKind::Num(_) => Ok(()),
+            ExprKind::Num(_) | ExprKind::Str(_) => Ok(()),
             ExprKind::Ident(_) => Ok(()), // reads checked during emission
             ExprKind::ArrayLit(elems) => {
                 for el in elems {
@@ -2058,6 +2058,16 @@ impl<'s> Compiler<'s> {
         match &e.kind {
             ExprKind::Num(v) => {
                 ctx.push(Insn::Const(Value::Num(*v)));
+                Ok(())
+            }
+            // A text handle is a plain number (Gitea #483): a literal
+            // interns into the message table — the same `str8`, dedup and
+            // lean-decode survival `assert()` already gets — and compiles
+            // to that entry's index. `textSlot(n)` produces the negative
+            // half of the same encoding at runtime.
+            ExprKind::Str(s) => {
+                let idx = self.intern_msg(s.clone(), e.span)?;
+                ctx.push(Insn::Const(Value::Num(Fx::from_int(idx as i32))));
                 Ok(())
             }
             ExprKind::Ident(name) => {

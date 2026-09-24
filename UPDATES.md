@@ -1,5 +1,68 @@
 # Update log
 
+## 2026-09-24 — text in patterns: string literals, three PSF2 fonts, `drawText`/`textWidth`/`drawNumber`/`font`/`textSlot`, and eight host-set text slots (#483 #484 #485-core)
+
+**Strings without a string type, and without a format bump.** The parser now
+accepts a quoted literal in exactly one position — the argument list of
+`drawText`, `textWidth` or `font`, called by name (`parse::TEXT_BUILTINS`).
+Everywhere else the old error stands, now naming those three. A literal
+interns through `Compiler::intern_msg` into the **existing assert-message
+table** (≤255 B, truncated on a char boundary, deduplicated, kept by a lean
+decode) and compiles to `Const(Num)` holding its index. A *text handle* is
+therefore a plain number — `k ≥ 0` is message `k`, `k < 0` is text slot
+`−(k+1)` — so `builtin_sig` needs no new return shape, the JIT sees an
+ordinary numeric argument, LXBC gains no section and no header field, and
+`FORMAT_VERSION` stays 6. A blob compiled before any of this still decodes
+and runs; `crates/luxel-core/tests/data/pre-text-v6.lxbc` is that assertion
+in the suite (Gitea #643 is the failure mode being avoided).
+
+**Five builtins, ids 188..=192**, appended to `BUILTINS`, dispatched from
+`builtin_cold`, with `jit::BUILTIN_ENTRIES` bumped to 193 (its `const`
+length assertion and the differential ABI tests in `tests/jitabi.rs` /
+`src/jit/tests.rs` cover them automatically — every id goes through
+`BUILTIN_ENTRIES[id].generic` and is compared against the interpreter):
+`drawText(handle, x, y[, align])` → advance width · `textWidth(handle)` ·
+`drawNumber(v, x, y, digits, decimals)` · `font(handle)` (modal, persistent
+across frames, unknown name = no change) · `textSlot(n)`. Grid space,
+top-left origin, the current brush colour, clipped at all four edges, and —
+like every kernel in `bulk.rs` — a **silent no-op without a regular grid**,
+returning 0 rather than erroring on a strip. `textWidth` is pure arithmetic
+and answers anyway, so a pattern can measure before it learns it cannot
+draw.
+
+**Three fonts, 2,091 B of `include_bytes!`** in `crates/luxel-core/fonts/`:
+`tiny` = Tom Thumb 3×6 (BSD-3-Clause), `regular` = X11 misc-fixed 5×7
+(public domain), `large` = Spleen 5×8 (BSD-2-Clause) — licences read at the
+primary source and quoted in full in `fonts/README.md`, along with the
+upstream URLs and the exact command line. PSF2, 95 glyphs (`0x20..=0x7E`) in
+order and no Unicode table, so a glyph lookup is `codepoint - 0x20` times
+`charsize`; any other code point draws `?`. Advance is `cell + 1`
+uniformly, which puts Tom Thumb on its designed 4 px pitch. The converter is
+`tools/fonts/bdf2psf2.py` (indexed in docs/tools.md) — a checked-in script,
+not a hand-edited binary.
+
+**Eight text slots** (`text::set_slot`/`with_slot`, 64 B UTF-8 each,
+truncated on a char boundary) are how content reaches a panel with zero
+pattern code: `drawText(textSlot(0), x, y)`. `luxel-core` does not depend on
+`critical-section`, so the table is a `static` behind an `UnsafeCell` with
+the same documented single-writer contract `arena.rs`'s hook uses — written
+from the control path, read from the render, never concurrently — and
+**allocated on the first write**, because 544 B of `.bss` on every board is
+544 B off the main task's stack headroom and `tools/stack-check.sh` failed
+the first version that took it. The wasm
+export `lx_text_slot_set(n, ptr, len)` and `Luxel.setTextSlot()` give the
+playground the same surface; `POST /api/text` and the Home Assistant text
+entities are the firmware/mirror half of #485 and land separately.
+
+Also in `luxel-core`: `text::format_number` (fixed-point aware, minimum
+integer digits, up to 4 fraction digits, rounded half-up with carry) and
+`text::format_clock` for the six scene clock layouts (`HH:MM`, `HH:MM:SS`,
+`hh:MM`, `hh:MM:SS`, `MM-DD`, `YYYY-MM-DD`) — `format_number` writes into a
+`no_std` fixed-capacity `TextString` so `drawNumber` allocates nothing per
+frame. Spec: `docs/spec/text.md`; the strings paragraph is in
+`docs/spec/bytecode.md`. The compositor's text layers (#478) draw through
+`text::draw` as of this commit rather than through the seam stub.
+
 ## 2026-09-24 — The classic ESP32 ships the JIT too, and the migrating-release gate comes out (#676)
 
 Phase 5 left the classic tier one env var away, waiting on slot arithmetic.

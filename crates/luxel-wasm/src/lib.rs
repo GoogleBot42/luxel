@@ -1572,3 +1572,16 @@ pub extern "C" fn lx_comp_frame(ch: i32, delta_raw: i32) -> *const u8 {
     }
     c.out.as_ptr()
 }
+
+/// `text::set_slot(n, s)` — the playground's stand-in for `POST /api/text`
+/// (Gitea #485). Slots are device-level state, not per-engine, so this is a
+/// free function like `lx_alloc` rather than a handle method: a pattern
+/// drawing `textSlot(0)` in the preview sees what the UI typed, exactly as
+/// it would on the device, and so does a scene's `slot` text layer.
+///
+/// # Safety
+/// `ptr`/`len` per `str_arg`.
+#[no_mangle]
+pub unsafe extern "C" fn lx_text_slot_set(n: u32, ptr: *const u8, len: u32) {
+    luxel_core::text::set_slot(n.min(255) as u8, str_arg(ptr, len as usize));
+}

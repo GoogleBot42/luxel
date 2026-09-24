@@ -162,6 +162,7 @@ interface Exports {
   lx_set_array_elements(n: number): void;
   lx_array_elements_for(heapFree: number, engineHeap: number, arenaFree: number): number;
   lx_bc_format(): number;
+  lx_text_slot_set(n: number, ptr: number, len: number): void;
 }
 
 /** Wire colour order, as `GET /api/output` reports it. */
@@ -372,6 +373,19 @@ export class Luxel {
   bcFormat(): number {
     if (typeof this.e.lx_bc_format !== "function") return 0;
     return this.e.lx_bc_format();
+  }
+
+  /** Write text slot `n` (0..7) — the playground's `POST /api/text`
+   *  (Gitea #485). Slots are device-level state, not per-engine, so this
+   *  lives on the module and every preview sees the same value: a pattern
+   *  drawing `textSlot(0)` shows what the UI typed, as it would on metal.
+   *  Truncated to 64 B on a char boundary by the core. No-op on a wasm
+   *  build that predates the export. */
+  setTextSlot(n: number, text: string): void {
+    if (typeof this.e.lx_text_slot_set !== "function") return;
+    const s = this.putStr(text);
+    this.e.lx_text_slot_set(n, s.ptr, s.len);
+    s.free();
   }
 
   /** Model this compiled blob's cost on a device with `heapFree` bytes free.
