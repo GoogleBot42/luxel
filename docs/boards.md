@@ -1550,53 +1550,94 @@ IRAM features at all, still pays ~1.1 KB for the builtin hot/cold split
 
 ## JIT: which boards compile patterns to native code
 
-Since Gitea #658 an S3 board CAN compile the running pattern to Xtensa
-machine code at activation instead of interpreting it (docs/jit-design.md,
-docs/firmware.md "JIT"). **It is built into those images and OFF at
-runtime** until §7.3 runs — no S3 has executed a byte of it yet — and
-`POST /api/jit {"on":true}` turns it on for a session. It is a cargo feature — `JIT` in
-`firmware/board-target.sh`, mirrored by `extraFeatures = [ "jit" ]` in
-flake.nix's `firmwareVariants`, and the two must agree — and `JIT_OFF=1`
-builds the same board without it.
+Since Gitea #658 a board CAN compile the running pattern to Xtensa machine
+code at activation instead of interpreting it (docs/jit-design.md,
+docs/firmware.md "JIT"). Since #665/#666 there is a backend for **every
+Xtensa board in the fleet**, but the two halves ship differently:
 
-| board | JIT | exec buffer | per image | of `library/` | image Δ | `.stack` |
-|---|---|---:|---:|---:|---:|---:|
-| `board-seengreat-hub75` | built, off | 14 KB | 7 KB | 91 % | +86,880 | 25,484 |
-| `board-s3-devkit` | built, off | 14 KB | 7 KB | 91 % | +86,272 | 25,484 |
-| `board-esp32-generic` + `EXTRA_FEATURES=jit` | test only | 24 KB | 12 KB | 96 % | +87,472 | 23,516 |
-| `board-pixelblaze-v3` | no | — | — | — | —16 | unchanged |
-| `board-athom-music` | no | — | — | — | —16 | unchanged |
-| `board-c3-devkit` | no | — | — | — | +96 | unchanged |
-| `board-c6-devkit` | no | — | — | — | +96 | unchanged |
+- **The two S3 boards ship it, ON.** Their code lives in the PSRAM arena, so
+  it costs no internal SRAM at all, and `LUXEL_JIT_ENABLED` defaults to
+  `true`. `POST /api/jit {"on":false}` is the kill switch for one session; a
+  reboot comes back native.
+- **The three classic-ESP32 boards have the tier and do not ship it yet.**
+  It is built and verified on metal (a 24 KB `.rwtext` static in SRAM0;
+  1.9–5.2× on the Athom, "JIT on metal" below) but the image with the
+  emitter is ~72 KB over the **1,048,576 B pre-#501 slot**, and until the
+  migrating release has gone out every release image is still weighed
+  against that slot ("The migrating release" above, Gitea #635). So
+  `board-target.sh` sets `JIT="${CLASSIC_JIT:-0}"` there, and `CLASSIC_JIT=1`
+  builds it for a device that has already repartitioned — which is what ran
+  on the Athom. `tools/ci.sh` is what caught it. Flipping that default is a
+  one-line follow-up filed against #635.
+
+It is a cargo feature — `JIT` in `firmware/board-target.sh`, mirrored by
+`extraFeatures = [ "jit" ]` in flake.nix's `firmwareVariants`, and the two
+must agree — and `JIT_OFF=1` builds the same board without it.
+
+| board | JIT | exec memory | per image | of `library/` | app image | free of 1.25 MiB | `.stack` |
+|---|---|---|---:|---:|---:|---:|---:|
+| `board-seengreat-hub75` | ships, **on** | PSRAM arena | 128 KB | all 307 | 1,066,576 | 66.1 % † | 26,268 |
+| `board-s3-devkit` | ships, **on** | PSRAM arena, or heap alias | 128 KB / 8 KB | all 307 / — | not rebuilt | — | not measured |
+| `board-athom-music` | `CLASSIC_JIT=1`, not shipped (#635) | 24 KB `.rwtext` | 12 KB | 96 % | 1,137,504 | 13.2 % | 24,380 |
+| `board-esp32-generic` | `CLASSIC_JIT=1`, not shipped (#635) | 24 KB `.rwtext` | 12 KB | 96 % | 1,132,704 | 13.6 % | 23,476 |
+| `board-pixelblaze-v3` | `CLASSIC_JIT=1`, not shipped (#635) | 24 KB `.rwtext` | 12 KB | 96 % | 1,120,480 | 14.5 % | 23,524 |
+| `board-c3-devkit` | no backend | — | — | — | not rebuilt | — | unchanged |
+| `board-c6-devkit` | no backend | — | — | — | not rebuilt | — | unchanged |
+
+Measured 2026-09-24 on this branch; `.stack` from `tools/stack-check.sh`,
+image bytes from `tools/image-check.sh`. † the Seengreat's slot is
+3,145,728 B, not 1,310,720 B, so its column is free-of-3-MiB. Read the
+classic rows twice: they clear the **post**-migration 1.25 MiB slot with
+13–15 % to spare, and they miss the migrating release's 1,048,576 B by
+~72 KB. That is the whole of why they are not shipped yet.
+
+**`board-s3-devkit` was not built or measured tonight** — it is the same
+target and the same feature list as the panel minus `hub75`, so its numbers
+should track, but nothing here is a measurement of it. Likewise the two
+RISC-V images were not rebuilt: they link no emitter at all (see the last
+bullet), and `tools/image-check.sh` in `tools/ci.sh` is what catches it if
+that ever stops being true.
 
 - **Xtensa only.** `luxel-jit` has one backend, LX6/LX7; the RISC-V boards
-  have none and the `jit` feature refuses to compile for them.
-- **The S3 boards only**, of the ones that ship. The classic ESP32 has the
-  IRAM for it but not the OTA slot: +88 KB on a 1.25 MiB slot would take
-  `board-pixelblaze-v3` from 22 % margin to 15 %, which is survivable, and
-  `board-c6-devkit` has no backend anyway — but nobody has measured the win
-  on a classic part, and the design (§4, decision 4) puts the S3
-  architecture first on purpose. The `EXTRA_FEATURES=jit` row exists because
-  QEMU models the classic ESP32 and not the S3, so it is the only image on
-  which emitted code can be executed without hardware
-  (`tools/qemu/jit-test.py`). **It is not a release artifact.**
-- **On the S3 the buffer is bought from `iram-vm`,** because `.rwtext` and
-  `.stack` are one budget there (see "IRAM budget" above) and they do not
-  both fit over the 24 KB floor. `iram-vm` is the INTERPRETER's per-pixel
-  loop, which a natively-compiled pattern never enters. The full measurement
-  and the argument are in docs/firmware.md "JIT"; the short version is that
-  a JIT board's `IRAM` list is empty and `JIT_OFF=1` puts `iram-vm` back.
+  have none and the `jit` feature refuses to compile for them. `jit.state`
+  is `"off"` on a C3 or C6 forever, not "not yet".
+- **The classic tier exists now, and the reason it exists is a
+  measurement.** The design (§4, decision 4) put the S3 architecture first
+  and deferred the classic part because nobody had measured the win on one.
+  Now someone has — 1.9–5.2× on the Athom — and the only thing standing
+  between that and a release is a slot arithmetic that ends with the
+  migrating release. `nix build .#luxel-fw-esp32-generic-jit` is still the
+  only classic-ESP32 flake output that carries the emitter (the three board
+  variants deliberately do not): QEMU models the classic ESP32 and not the
+  S3, so it remains the only image on which emitted code can be executed
+  without hardware (`tools/qemu/jit-test.py`).
+- **The S3 no longer buys its buffer from `iram-vm`.** Phase 3 had to: its
+  exec buffer was a 14 KB `.rwtext` static, and `.rwtext` and `.stack` are
+  one budget on this chip (see "IRAM budget" above), so the interpreter's
+  per-pixel loop was traded away for it. #665 moved the code into the PSRAM
+  arena — which costs no internal SRAM at all — and `iram-vm` came back:
+  `.stack` 26,268 B with both, against 25,484 B in phase 3 (static, no
+  `iram-vm`) and 27,364 B interpreter-only. That matters precisely because a
+  pattern the JIT refuses runs on the interpreter, on the same board.
+- **The classic ESP32 still uses a static, and that is the right answer
+  there.** SRAM0 is a dedicated 128 KB instruction region, separate from the
+  DRAM `.stack` comes out of, so 24 KB of `.rwtext` costs flash image and
+  not one byte of stack: `.rwtext` 67,224 + `.rwtext.wifi` 51,800 of 131,072
+  on all three boards, ~12 KB spare. There is no PSRAM on these parts and
+  SRAM0 is the only instruction-bus RAM, so there is nothing else to use.
 - **"of `library/`"** is how many of the 307 patterns fit the per-image cap
   (`cargo test -p luxel-jit --test compile_all -- --nocapture` prints the
-  curve). The rest refuse with `too-large` and are interpreted — a correct
-  outcome, visible in `/api/status`'s `jit.reason`, not a failure.
-- **The non-JIT boards move by ±96 bytes and not one byte more.** The
-  firmware depends on luxel-core with `default-features = false` and names
-  neither `jit` nor `luxel-jit` unless a board asks, so none of them links
-  an emitter (the same property #642's phase-1 zero delta had). The ±96 is
-  the `build.rs` change that emits the default pattern's SOURCE beside its
-  bytecode — `include_str!` now reads it out of `OUT_DIR`, so the pattern
-  served and the pattern executed are provably the same file.
+  curve). At the S3's 128 KB the cap binds nothing — the largest image in
+  `library/` is a tenth of it. At the classic 12 KB the tail refuses with
+  `too-large` and is interpreted: a correct outcome, visible in
+  `/api/status`'s `jit.reason`, not a failure. The S3's 8 KB internal-alias
+  fallback is tighter still, and is a fallback, not a target — no PSRAM-less
+  S3 is on the bench to measure its share.
+- **The non-JIT boards link no emitter.** The firmware depends on luxel-core
+  with `default-features = false` and names neither `jit` nor `luxel-jit`
+  unless a board asks, so a C3 or C6 image carries none of it (the same
+  property #642's phase-1 zero delta had). Nothing was rebuilt to re-confirm
+  that tonight; CI's image-check is the standing gate.
 
 ## Hosted-UI builds (no on-device web app)
 
@@ -2169,6 +2210,146 @@ The full gallery soak on the same build agrees: `tools/hw-bench.mjs`,
 2026-09-02, so the interpreter work plus #335 took two thirds of the slow tail
 out. The sweep's lowest `heap_free` moved the other way, 83,448 → 59,668 B;
 still far above the ~20 KB floor and nothing errored, unexplained, Gitea #368.
+
+## JIT on metal (2026-09-24, Gitea #665/#666)
+
+The first bytes of emitted code any real chip has executed. Two boards, the
+same emitter, two different places to put the image: the panel runs it out of
+the PSRAM arena, the Athom out of its `.rwtext` static. `vm_us` and `fps` are
+medians of `/api/status` samples after a settle, JIT off then on across the
+same blob; docs/jit-design.md §7.3 is the plan these rows answer.
+
+**Seengreat HUB75 S3**, 4096 px, v0.1.40, `partitions-16mb.csv`. Found
+brightness 4, read and restored, never set.
+
+| pattern | interp `vm_us` (fps) | native PSRAM `vm_us` (fps) | speedup | code B | `compile_us` |
+|---|---:|---:|---:|---:|---:|
+| `rainbow` | 19,861 (50) | 7,276 (115) | **2.73×** | 160 | 3,968 |
+| `snake` | 47,617 (21) | 9,277 (105) | **5.13×** | 1,172 | 10,083 |
+| `perlin-fire-wind-tunnel` | 187,369 (6) | 62,010 (16) | **3.02×** | 2,536 | 14,335 |
+| `aurora-2d` | 104,045 (10) | 50,082 (20) | **2.08×** | 5,612 | 9,631 |
+| `bulk-canvas-ripples-2d` | 8,191 (113) | 3,983 (114) | **2.06×** | — | — |
+| `snake-2d` | 79,350 (13) | refused `no-memory` | — | 11,256 | — |
+
+<!-- TODO(p4): bulk-canvas-ripples-2d's code B and compile_us were not captured -->
+
+`rainbow`'s 115 fps is the panel's 115 Hz rescan ceiling, not the engine's:
+past that point the JIT is buying headroom, not frames, which is the same
+wall the bulk rewrites hit above. `bulk-canvas-ripples-2d` shows the other
+edge of the same coin — a `renderFrame` pattern is already one call per
+frame, so the 2.06× is the win on the *non-bulk* part of its work and
+nothing more.
+
+`snake-2d` is the honest failure: at 4096 px the engine leaves ~26 KB of
+internal heap, the emitter's bookkeeping rule wants 31.6 KB for its 1,085
+words and 19 functions, and the compile is refused before it starts. It runs
+interpreted at 13 fps, and it compiles and runs natively on the Athom at 144
+px, where the heap is not the constraint. `aurora-2d` is the case that sits
+just the other side of the line, and it is the reason `COMPILE_FLOOR` is a
+separate, smaller number than `RUNTIME_FLOOR` (docs/firmware.md "The
+compile's own heap"): 31,148 B free against 14,848 B needed clears 12 KB and
+not 20 KB, and with the shipped gate it compiles and runs 2.08× — verified,
+not inferred.
+
+The arena side has one cost worth stating plainly: **an image is allocated at
+the full `JIT_MAX_CODE` cap, so `psram_free` drops by ~128 KB per native
+image regardless of how big the code actually is** (160 B for `rainbow`).
+Irrelevant against 8 MB and two images in flight, but shrinking the block to
+the emitted length once the size is known is an obvious follow-up.
+Internal `heap_free` does not move either way — which is the arena's entire
+reason for existing.
+
+**Athom music-reactive**, classic ESP32, 144 px ws2812, a `CLASSIC_JIT=1`
+image (the tier does not ship until #635 — see "JIT: which boards compile
+patterns to native code" above). Found brightness 6 and a playing playlist,
+read and restored, never set.
+
+| pattern | px | interp `vm_us` (fps) | native `.rwtext` `vm_us` (fps) | speedup | code B | `compile_us` |
+|---|---:|---:|---:|---:|---:|---:|
+| `rainbow` | 144 | 1,055 (122) | 570 (122) | **1.85×** | 160 | 3,465 |
+| `snake` | 144 | 2,287 (121) | 660 (122) | **3.47×** | 1,172 | 5,345 |
+| `perlin-fire-wind-tunnel` | 144 | 8,810 (68) | 2,765 (115) | **3.19×** | 2,536 | 9,707 |
+| `snake-2d` | 144 | 2,738 (117) | 765 (122) | **3.58×** | 11,256 | 29,086 |
+| `snake` | 2048 | 28,948 (11) | 5,618 (14) | **5.15×** | 1,172 | 5,246 |
+| `perlin-fire-wind-tunnel` | 2048 | 120,099 (6) | 34,964 (10) | **3.43×** | 2,536 | 7,664 |
+
+At 144 px four of these are frame-cap bound at 122 fps with or without the
+JIT, so read the `vm_us` column and not the `fps` one — the 2048-px rows are
+where the frame rate has room to move. 1.9–5.2× across the set, on the part
+the design deferred for want of exactly this measurement.
+
+### PSRAM instruction fetch costs about 1 %
+
+The §7.3 question: the S3 fetches native code through a 32 KB instruction
+cache from octal SPI PSRAM, and nobody knew what that cost. `POST /api/jit
+{"place":"internal"}` forces the same image into a main-heap block executed
+through SRAM1's instruction alias, so the same function can be timed out of
+both.
+
+| pattern | PSRAM `vm_us` | internal SRAM `vm_us` | PSRAM cost |
+|---|---:|---:|---:|
+| `rainbow` | 7,276 | 7,305 | −0.4 % |
+| `perlin-fire-wind-tunnel` | 62,010 | 61,353 | +1.1 % |
+
+**About 1 %, and inside the noise on the smaller image.** These patterns'
+images are 160 B and 2,536 B, so both are resident in the instruction cache
+after the first frame and the bus never comes into it again — which is the
+whole argument for the arena: a place to put code that costs no internal
+SRAM, for a price the frame timer cannot really see. It also retires the
+risk docs/jit-design.md §10 carried against it.
+
+`compile_us` is the one number that does move with placement, and not
+consistently: `rainbow` 3,968 µs in PSRAM against 4,357 µs internal,
+`perlin-fire-wind-tunnel` 14,335 against 6,487. The PSRAM side pays a
+cache write-back, an instruction-cache invalidate and first-touch misses on
+a freshly mapped block; on a 2,536 B image that is several milliseconds,
+on a 160 B one it is lost in the measurement. Either way it is a
+one-off at activation, not per frame.
+
+### The crash that produced the bookkeeping gate
+
+The **first** on-metal native run of `snake-2d` at 4096 px took the panel
+down. The panic was not in generated code at all:
+
+```text
+memory allocation of 1 bytes failed
+  <alloc::vec::Vec<luxel_core::kinds::Kind> as core::clone::Clone>::clone
+  ← luxel_firmware::jit::try_compile ← try_budgeted_engine
+resume: heap too tight (48 free)          → RTC_SW_SYS_RST
+```
+
+The emitter is a pure function that allocates only its own bookkeeping, and
+the bookkeeping was enormous: `luxel_core::kinds::StackMap` was
+`Vec<Option<Vec<Kind>>>` — a `Vec` header and an allocator block **per
+bytecode word**, ~55 B/word on the host. Beside a resident 4096-px engine
+with 33 KB free, planning a 1,085-word pattern simply ran the heap out, with
+48 bytes left, on the render core.
+
+Two fixes, and both were needed:
+
+1. **`StackMap` went flat** — one pool of kinds plus a `(start, len)` per
+   word, ~9 B/word. Measured peaks over `library/` fell from 61,455 → 24,412 B
+   for `snake-2d` and 174,595 → 67,460 B for `music-sequencer-for-v3-only`,
+   the largest pattern in the tree.
+2. **The compile now asks first.** `crates/luxel-jit/tests/alloc_peak.rs`
+   wraps the global allocator, compiles all 307 library patterns and fits a
+   rule to the peak of live bytes: `words × 24 + fns × 240 + 1024`, in host
+   bytes, so it overstates the device by about a third. `firmware/src/jit.rs`
+   applies the same rule to the heap it actually has before claiming any exec
+   memory, and refuses `no-memory` rather than running out half way. The
+   constants live in both files and move together; the test is the gate.
+
+Measured bookkeeping peaks, for scale: `rainbow` 1,054 B · `perlin-fire-wind-tunnel`
+7,470 B · `aurora-2d` 10,486 B (516 words) · `snake-2d` 24,412 B (1,085 words,
+19 fns) · `music-sequencer-for-v3-only` 67,460 B (3,126 words).
+
+The remaining cost is that the bookkeeping is still *internal* heap on a
+board with eight megabytes of PSRAM sitting idle beside it, which is what
+keeps `snake-2d` interpreted at 4096 px. Moving it into the arena is the open
+follow-up (docs/jit-design.md §10).
+
+<!-- TODO(p4): library differential (tools/jit-diff.mjs) — native vs interpreted pixels over all of library/ on both boards -->
+<!-- TODO(p4): soak (tools/hw-bench.mjs) with the JIT on -->
 
 ## Beyond the current boards: chip-support assessment (2026-07-29)
 

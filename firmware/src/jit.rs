@@ -1,5 +1,5 @@
 //! On-device JIT: compile at activation, run the engine's entries natively
-//! (Gitea #658, phase 3 of #607; docs/jit-design.md §5 "Executable memory
+//! (Gitea #658/#665/#666, phases 3–5 of #607; docs/jit-design.md §5 "Executable memory
 //! and lifecycle", §6 "Engine integration").
 //!
 //! Three things live here, and nothing else in the firmware knows about
@@ -33,8 +33,9 @@
 //!        ▼
 //!   jit::try_compile ─refusal─► interpreter, jit.state = "interp"
 //!        │ ok
-//!        ├─ luxel_jit::compile(prog, kinds, env)   pure, no device
-//!        ├─ ExecBuf::write  (32-bit stores + isync)
+//!        ├─ claim()          exec memory: PSRAM / SRAM1 alias / .rwtext half
+//!        ├─ luxel_jit::compile_into(prog, kinds, env, block)   emits IN PLACE
+//!        ├─ publish()        cache write-back + invalidate, or word copy; isync
 //!        └─ Engine::install_native(NativeProgram { entries, abi, … })
 //!                 │
 //!                 ▼
@@ -534,7 +535,7 @@ static REASON: AtomicU8 = AtomicU8::new(u8::MAX);
 /// same spellings (`luxel_core::jitlint::JitRefusal::id`), so one word
 /// means one thing wherever it is read.
 ///
-/// The three device-only reasons — `debug`, `init-error`, `no-buffer` —
+/// The device-only reasons — `debug`, `init-error`, `no-buffer`, `no-memory` —
 /// are the ones no compile-time lint can predict, which is exactly why
 /// §4a routes them through `/api/status` instead.
 const REASONS: [&str; 16] = [
@@ -738,7 +739,8 @@ fn helpers() -> Helpers {
 /// | `debug` | the debugger is attached — it steps the interpreter (§3.6) |
 /// | `init-error` | init did not run to completion, so §2.3's kind exemption does not hold |
 /// | `untyped` | the blob carries no `kinds` section |
-/// | `no-buffer` | both exec halves are in flight (two crossfades deep) |
+/// | `no-buffer` | no exec memory: the arena is full / the heap alias cannot be placed (S3), or both `.rwtext` halves are in flight (classic) |
+/// | `no-memory` | the heap cannot hold the emitter's bookkeeping beside this engine (`emit_heap_need`) |
 /// | `too-large` and the rest | [`Refusal`], whole-program, from the emitter |
 ///
 /// Called from `try_budgeted_engine` — the choke point every activation

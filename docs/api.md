@@ -70,7 +70,7 @@ response as "no snapshot right now", not as an all-black frame.
  "assets_mapped":true,"code_mapped":true,
  "store":{"used":18452,"total":225280,"dead":0,"patterns":3},
  "src":true,"bc":true,"web":[0,1,0],"vmerr":null,
- "jit":{"state":"off","reason":null,"code_bytes":0,"compile_us":0},
+ "jit":{"state":"off","reason":null,"code_bytes":0,"compile_us":0,"place":null},
  "partitions":{"layout":"partitions.csv","migrated":true,"ota_slot_bytes":1310720,
                "storage_bytes":524288,"assets_bytes":983040,"ceiling_bytes":4194304}}
 ```
@@ -347,17 +347,22 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   render pass records nothing further, so that refusal stands until the next
   load rather than being overwritten a frame later by the missing-buffer
   errors it causes (Gitea #420).
-- `jit` — what the LIVE pattern is running as, and why (Gitea #658,
+- `jit` — what the LIVE pattern is running as, and why (Gitea #658/#665/#666,
   docs/jit-design.md §4a/§5). Always present, on every board:
-  `{"state":…,"reason":…,"code_bytes":…,"compile_us":…}`.
+  `{"state":…,"reason":…,"code_bytes":…,"compile_us":…,"place":…}`.
   - `state` — `"native"` (the device compiled this pattern to machine
-    code), `"interp"` (it has a JIT and did not compile this pattern) or
-    `"off"` (this board carries no backend at all — the whole fleet
-    except the two S3 boards). The key is never omitted, so a client
-    cannot mistake "no backend" for "firmware older than #658", which are
-    different answers. **A board that HAS the backend still reports
-    `interp` / `disabled` until someone turns it on**: the JIT ships off,
-    see docs/firmware.md "JIT".
+    code), `"interp"` (the image has a JIT and did not compile this
+    pattern) or `"off"` (this image carries no backend at all). Every
+    Xtensa board can BUILD the backend since #665/#666, but in shipped
+    images that means the two S3 boards; the three classic-ESP32 boards
+    build it only with `CLASSIC_JIT=1` until the migrating release is out
+    (docs/boards.md), and the two RISC-V boards have no code generator at
+    all. The key is never omitted, so a client cannot mistake "no
+    backend" for "firmware older than #658", which are different answers.
+    In an image that HAS the backend it is on by default and the expected
+    answer is `native`; `POST /api/jit {"on":false}` is the kill switch
+    that turns the next activation back into `interp` / `disabled`. See
+    docs/firmware.md "JIT".
   - `reason` — `null` when `native`, else one word from the vocabulary the
     emitter, the browser's compile-time lint (`luxel_core::jitlint`) and
     the firmware share: `unsupported`, `too-large`, `l32r-reach`,
@@ -365,14 +370,26 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
     `address-region`, `jump-reach`, `untyped` (the emitter's), plus
     `debug` (a debugger is attached — debugging steps the interpreter),
     `init-error` (the pattern's init did not complete, so its kind
-    annotations cannot be trusted), `no-buffer` (both exec halves are in
-    flight) and `disabled` (`POST /api/jit`). **A refusal is never a failed
-    pattern** — it runs interpreted, at the interpreter's speed, with the
-    same pixels.
+    annotations cannot be trusted), `no-buffer` (no exec memory: both
+    `.rwtext` halves in flight on a classic ESP32, or a full PSRAM arena
+    with no internal fallback left), `no-memory` (the heap cannot hold the
+    EMITTER's own bookkeeping beside the engine that was just built — the
+    compile is refused before it starts rather than half way through;
+    docs/firmware.md "The compile's own heap") and `disabled`
+    (`POST /api/jit`). **A refusal is never a failed pattern** — it runs
+    interpreted, at the interpreter's speed, with the same pixels.
   - `code_bytes` — the compiled image, literal pool included; 0 unless
     `native`.
   - `compile_us` — what compiling it cost, measured at activation; 0
     unless `native`.
+  - `place` — where the live image physically is: `"psram"` (a block of
+    the S3's PSRAM arena, executed through the IBUS mirror), `"internal"`
+    (the S3's fallback — a main-heap block executed through SRAM1's
+    instruction alias, capped at 8 KB), `"rwtext"` (the classic ESP32's
+    static in SRAM0) or `null` while nothing native is loaded. It is a
+    measurement surface, not a knob: the same native function fetched from
+    PSRAM and from internal SRAM is within ~1 % (docs/boards.md "JIT on
+    metal"), which is the number that made the arena the default.
 
 - `core1` — dual-core boards only (`esp32`, `esp32s3`); `null` elsewhere.
   The second core and the cross-core flash fence (docs/firmware.md
@@ -911,7 +928,7 @@ table.
 | `/api/config` | GET | — | `{"pixels":N,"max":N,"protocol":"sk9822"}` + on strip-board firmware `"data_pin":N,"data_pin_default":N,"data_pin_next":N\|null,"data_pins":[…]` | both (pin fields firmware only) |
 | `/api/config` | POST | pixel count `1..=max` | `{"ok":true,"pixels":N}` | both |
 | `/api/datapin` | POST | GPIO number from `data_pins`, or `default` | `{"ok":true,"data_pin":N,"note":"rebooting to apply"}` — **firmware reboots**; a rejected pin answers `{"ok":false,…}` and does not | firmware only (strip boards) |
-| `/api/jit` | POST | `{"on":true}` / `{"on":false}` (or bare `on`/`off`) | `{"ok":true,"on":B,"applies":"next activation"}` | firmware only, and only on a board with the `jit` feature |
+| `/api/jit` | POST | `{"on":true}` / `{"on":false}` (or bare `on`/`off`), and/or `{"place":"psram"\|"internal"\|"auto"}` | `{"ok":true,"on":B[,"place":"…"],"applies":"next activation"}` | firmware only, and only on a board with the `jit` feature |
 | `/api/protocol` | GET | — | `{"protocol":"sk9822","options":["sk9822","ws2812"]}` | both |
 | `/api/protocol` | POST | protocol name | `{"ok":true,"protocol":"…"}` | both |
 | `/api/output` | GET | — | see below | both |
@@ -933,19 +950,29 @@ table.
   device reboots. `data_pin_next` in `GET /api/config` is non-null only
   between a POST and that reboot. See docs/boards.md "Runtime pins" for
   which pins a board allows and why.
-- `/api/jit` (Gitea #658) is the on-device JIT's A/B lever, and it is
+- `/api/jit` (Gitea #658, #665) is the on-device JIT's A/B lever, and it is
   neither live nor persisted — the two ways this table's other routes
   differ from everything else, both deliberately. Not live: the pattern
   that is RUNNING keeps running as whatever it was compiled as, because
   swapping a live program between two implementations mid-frame is the one
   thing that could tear a frame; it takes effect at the NEXT activation, so
   a differential is "push the pattern, flip, push it again". Not persisted:
-  a reboot comes back with the JIT on, which is what you want from a switch
-  whose whole purpose is a measurement. The route only exists on a board
-  that carries the feature; `GET /api/status`'s `jit.state` is `"off"`
-  elsewhere. The same switch is the `LUXEL_JIT_ENABLED` symbol, which
-  `tools/qemu/jit-test.py` writes through a debugger on a board with no
-  network.
+  a reboot comes back with the JIT ON, which is what you want from a switch
+  whose whole purpose is a measurement — it is an **OFF switch**, a kill
+  switch for one session, not how the JIT gets turned on in the first
+  place. The route only exists on a board that carries the feature;
+  `GET /api/status`'s `jit.state` is `"off"` elsewhere. The same switch is
+  the `LUXEL_JIT_ENABLED` symbol, which `tools/qemu/jit-test.py` writes
+  through a debugger on a board with no network.
+  - The body may also carry `"place"`, which asks where the NEXT image
+    goes: `"psram"` (refuse with `no-buffer` if the arena cannot serve it),
+    `"internal"` (force the S3's heap-alias fallback, ≤8 KB) or `"auto"`
+    (PSRAM when the arena has room, internal otherwise — the default). It
+    is the lever behind docs/jit-design.md §7.3's microbench, and the reply
+    echoes the placement it recorded. `"on"` and `"place"` are independent:
+    either alone is a valid body, both together set both, neither is the
+    one `{"ok":false,…}` this route returns. On a classic ESP32 there is
+    only one place (`rwtext`) and the field is ignored.
 - Protocol names accepted: `sk9822`/`apa102`, and
   `ws2812`/`ws2811`/`ws2815`/`ws281x`. The reply always echoes the canonical
   `sk9822` or `ws2812`.

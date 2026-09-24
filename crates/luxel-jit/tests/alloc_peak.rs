@@ -10,7 +10,7 @@
 //! still do. This test wraps the global allocator, compiles every
 //! `library/*.js` into a pre-allocated buffer, and records the peak of
 //! LIVE bytes above the entry level. `firmware/src/jit.rs`'s
-//! `EMIT_HEAP_BYTES` must cover [`CEILING`]; if this test moves the number,
+//! `EMIT_PER_WORD`/`EMIT_PER_FN`/`EMIT_FIXED` are the same rule; if this test moves the number,
 //! move that constant with it.
 
 mod common;
@@ -104,7 +104,7 @@ fn emitter_bookkeeping_peak_over_the_library() {
     assert!(
         worst.0 <= CEILING,
         "{}: the emitter's bookkeeping peaked at {} B, over the {CEILING} B ceiling — \
-         raise CEILING here AND EMIT_HEAP_BYTES in firmware/src/jit.rs together",
+         raise CEILING here (and refit the rule in firmware/src/jit.rs) together",
         worst.1,
         worst.0
     );

@@ -801,6 +801,8 @@ ISA model traps that whole class from now on.
 anything is known to be wrong, but because §7.3 has not run: no S3 has
 executed a byte of this. `LUXEL_JIT_ENABLED` defaults to false so turning
 it on stays a deliberate act, with someone watching the panel.
+*(Superseded 2026-09-24 by phase 4 — §7.3 ran and the default is now
+`true`. See "5 and 6 as built (phases 4 and 5)" below.)*
 
 Everything above is as designed except the following.
 
@@ -847,12 +849,93 @@ the Seengreat to 14 KB / 7 KB per image / 91 % of `library/`. That is a
 working JIT, but §5's PSRAM route — 8 MB already mapped, costing no
 internal SRAM — is what actually lifts the cap, and the measurement is the
 argument for building it. docs/firmware.md "JIT" carries the table.
+*(Built in phase 4 — below.)*
 
 **The refusal vocabulary grew three device-only reasons** — `init-error`
 (§2.3's exemption needs init to have completed), `no-buffer` (both exec
 halves in flight) and `disabled` (the `POST /api/jit` switch) — beside
 §4a's `debug`. All four are things no compile-time lint could predict,
-which is why §4a routes them through `/api/status`.
+which is why §4a routes them through `/api/status`. *(Phase 4 added a
+fourth, `no-memory`.)*
+
+### 5 and 6 as built (phases 4 and 5, Gitea #665 / #666)
+
+**SHIPPED**: `psram::alloc_exec` + the arena `Lease` and its cache steps,
+the internal-SRAM fallback, `compile_into` (the emitter writes into the
+caller's buffer), the `no-memory` gate, `jit.place` / `POST /api/jit
+{"place":…}`, the classic-ESP32 tier, `tools/jit-diff.mjs`,
+`crates/luxel-jit/tests/alloc_peak.rs`. §7.3 ran on 2026-09-24 on two
+boards; the numbers live in docs/boards.md "JIT on metal".
+
+**§5's PSRAM arena is built, and built as designed.** `psram::alloc_exec`
+takes 64 B-aligned blocks out of the same second `EspHeap` that already
+holds pattern arrays — arena only, never the main heap, because the caller
+executes through the PSRAM window's mirror and a main-heap block needs a
+different alias entirely. The publish step is exactly §5's: the image is
+written through the DBUS pointer, `rom_Cache_WriteBack_Addr` pushes the
+data cache out (with `Cache_Suspend_DCache_Autoload` around it, as esp-hal
+does), `Cache_Invalidate_Addr` drops the instruction side's copy of the
+same lines, `isync` last; execution is at `+0x0600_0000`. One deviation in
+the spelling: the write-back is the ROM symbol out of `esp32s3.rom.ld`, not
+esp-hal's `#[doc(hidden)]` `cache_writeback_addr` wrapper this section
+named. A block that lands outside the window we know how to mirror is
+freed and refused rather than executed through a guessed alias. No MMU
+programming, so no `flashmap::quiesced` fence and no other-core park, as
+designed.
+
+**The internal-SRAM fallback is built too**, at §5's `JIT_INTERNAL_MAX`
+= 8 KB, through `dram_seg` `0x3FC8_8000` ≡ `iram_seg` `0x4037_8000`
+(`+0x006F_0000`), with `isync` as the whole coherency step. It is charged
+against `RUNTIME_FLOOR`, since the block stays for the pattern's life. It
+is also the §7.3 microbench's lever, which is why it is reachable on
+purpose from `POST /api/jit {"place":"internal"}` and not only by accident
+on a PSRAM-less board.
+
+**There is no `JIT_MAX_CODE`-sized internal buffer any more.** §5 assumed
+the emitter produced an owned image that the firmware then copied into exec
+memory. `luxel_jit::compile_into(prog, kinds, env, out: &mut [u8])` emits
+straight into the caller's slice instead (`xtensa::Asm` gained a
+slice backing beside its owned `Vec`; `compile()` is now a host wrapper,
+and `NativeImage::words` became `bytes` with a word view for the ISA
+model). On the S3 that slice IS the exec block, so the internal heap never
+holds a copy of the image. The classic ESP32 is the exception and has to
+be: SRAM0 faults on a sub-word access, so there the image is staged in a
+fallibly-reserved heap `Vec` and copied over with 32-bit stores. The block
+is still allocated at the full 128 KB cap, so `psram_free` drops by that
+much per native image whatever the code weighs — shrinking it to the
+emitted length is a follow-up.
+
+**§5 counted the wrong allocation.** "No allocation beyond the output
+buffer and the fixup list" was wrong about the one that mattered:
+`luxel_core::kinds::StackMap` was `Vec<Option<Vec<Kind>>>`, a `Vec` header
+and an allocator block per bytecode word, and beside a resident 4096-px
+engine it took the panel down on the first native run of `snake-2d` — a
+`Vec<Kind>` clone inside `plan_all` with 48 bytes of heap left. Two fixes:
+the map went flat (~9 B/word instead of ~55), and the compile now asks
+before it starts. `crates/luxel-jit/tests/alloc_peak.rs` fits a rule to the
+emitter's bookkeeping peak over all 307 library patterns under a counting
+allocator — `words × 24 + fns × 240 + 1024` host bytes — and
+`jit::emit_heap_need` applies the same rule on the device against
+`HEAP.free()`, refusing `no-memory` rather than running out half way. The
+floor left under it is `COMPILE_FLOOR`, 12 KB, deliberately smaller than
+`RUNTIME_FLOOR`'s 20 KB: the bookkeeping lives for one compile on the
+render task, not for the pattern's life. docs/firmware.md "The compile's
+own heap" is the full argument.
+
+**`iram-vm` came back on the S3.** Phase 3's trade is off: arena code costs
+no internal SRAM, so `board-target.sh` and flake.nix put the interpreter's
+per-pixel loop back on the JIT boards. `.stack` 26,268 B, against 25,484 B
+for phase 3's static-without-`iram-vm` build.
+
+**Phase 5 shipped the classic-ESP32 tier** — `#666`, a 24 KB `.rwtext`
+static in SRAM0 split into two halves, verified on the Athom at 1.9–5.2×.
+§8's "the classic ESP32 and RISC-V boards do not carry the feature" is
+retired for the Xtensa half: `board-target.sh` sets
+`JIT="${CLASSIC_JIT:-0}"` on those three boards, so the tier is one env var
+away and not a rebuild of anything. It does not ship yet, and the reason is
+slot arithmetic rather than doubt: the image with the emitter is ~72 KB over
+the 1,048,576 B pre-#501 slot that the migrating release still weighs every
+image against (Gitea #635, docs/boards.md).
 
 ## 7. Verification plan
 
@@ -969,6 +1052,36 @@ snapshots per pattern — the interpreter is the oracle, bit-exact.
 A codegen bug on metal is a crash on core 1 → watchdog reboot, on a board
 without serial; hence the order above, and the boot-loop guard stays.
 
+**RAN 2026-09-24 (Gitea #665/#666).** All three, on two boards — the
+Seengreat panel at 4096 px with the image in PSRAM, and the Athom at 144
+and 2048 px with it in `.rwtext`. Every number is in docs/boards.md "JIT
+on metal"; the headlines:
+
+1. **Differential.** `tools/jit-diff.mjs` is the harness — the hardware
+   counterpart of §7.2's gate, running the same off-then-on frame
+   comparison over HTTP, with the honest caveat that a live board's clock
+   cannot be frozen so time-dependent patterns are filtered rather than
+   asserted. Both boards rendered correct pixels on every pattern tried.
+   <!-- TODO(p4): the full library sweep's results (jit-diff.mjs) and the soak -->
+2. **Microbench: PSRAM instruction fetch costs about 1 %** — `rainbow`
+   7,276 µs from PSRAM against 7,305 µs from internal SRAM,
+   `perlin-fire-wind-tunnel` 62,010 against 61,353. Both images are
+   resident in the 32 KB instruction cache after the first frame, which is
+   the answer §5 hoped for and the reason the arena is the default.
+   `POST /api/jit {"place":"internal"}` is the lever that made it
+   measurable.
+3. **Speedups, panel** (4096 px, interpreted → native): `rainbow` 2.73× ·
+   `snake` 5.13× · `perlin-fire-wind-tunnel` 3.02× · `aurora-2d` 2.08× ·
+   `bulk-canvas-ripples-2d` 2.06×. **Athom** 1.85–5.15× at 144 and 2048 px.
+   `compile_us` is 3.5–30 ms depending on program size and placement, once,
+   at activation. `heap_free` does not move with a native image on the S3;
+   `psram_free` drops by the 128 KB cap per image.
+
+`snake-2d` at 4096 px is the one refusal on the panel, and not for a
+codegen reason: the emitter's bookkeeping does not fit beside the engine
+(`no-memory`, §5 as-built above). It compiles and runs natively on the
+Athom.
+
 ## 8. Size, features, boards
 
 - `luxel-core` feature `jit` (implies the verifier and the emitter; `no_std`,
@@ -976,6 +1089,15 @@ without serial; hence the order above, and the boot-loop guard stays.
   cache steps and the `/api/status` object. `board-target.sh` sets
   `JIT=1` for `board-s3-devkit` and `board-seengreat-hub75`, `0`
   elsewhere, next to `IRAM`/`CORE_O3`; `JIT_OFF=1` is the A/B lever.
+
+  **Updated by phase 5 (#666).** The three classic-ESP32 boards
+  (`board-pixelblaze-v3`, `board-athom-music`, `board-esp32-generic`) have
+  the tier as well, and `board-target.sh` sets `JIT="${CLASSIC_JIT:-0}"`
+  for them — built and verified on the Athom, but not in a shipped image
+  until the migrating release retires the 1,048,576 B slot check (Gitea
+  #635; the image is ~72 KB over it). Flipping that default to 1 is the
+  follow-up. The two RISC-V boards still set `0` and always will: there is
+  no backend for them.
 
   As of #642 the luxel-core half exists and is **ON by default** (like
   `kinds`), so the browser wasm, the CLI and every `cargo test` carry the
@@ -1086,10 +1208,11 @@ those slots boxed.
 | risk | retired by |
 |---|---|
 | windowed-ABI or `Ret2` return mismatch → wild jump | **retired for the two-word return** (#642): objdump of `lx_abi_probe_ret2` and of the `generic` thunks on the S3 image shows `a2:a3`, §7.1. The rest of §7.1's pins still owed before any device run |
-| PSRAM instruction fetch slower than expected | §7.3 microbench; internal-SRAM placement for `render` only is the fallback |
+| PSRAM instruction fetch slower than expected | **retired** (#665): the §7.3 microbench measured the same native function from both places — `rainbow` 7,276 vs 7,305 µs, `perlin-fire-wind-tunnel` 62,010 vs 61,353 — **~1 %**, because a few-KB image is resident in the 32 KB icache after frame one. The internal-SRAM placement stayed anyway, as the no-PSRAM fallback and as the lever that made this measurable |
 | inference proves too little (`Dyn` on hot paths) | §9 census before the emitter is written; per-site array provenance is the refinement |
 | `Value` `repr` change moves interpreter numbers | **retired** (#642): it was indeed the layout rustc already picks — `luxel-core` text 117,514 B before and after on the S3, every symbol the same size, `Vm::run` byte-identical, so there is no number to move |
-| compile at activation blocks the render task | `compile_us` measured; persisted blobs are the lever |
+| compile at activation blocks the render task | **retired** (#665/#666): `compile_us` on metal is 3,968–14,335 µs on the panel and 3,465–29,086 µs on the Athom (`snake-2d`'s 11 KB image is the 29 ms outlier) — 4 to 30 ms, once, at an activation that is already blocked for decode and engine construction. Nobody watching a panel can see it. Persisted blobs remain the lever if it ever matters |
+| planner heap beside a 4096-px engine | **retired** (#665), the hard way: it was not a risk, it was a crash — `StackMap`'s `Vec`-per-word took the panel down on the first native run of `snake-2d`. Retired by the flat `StackMap`, the `tests/alloc_peak.rs` rule and the `no-memory` refusal that applies it before claiming exec memory. **Still open:** the bookkeeping is internal heap on a board with 8 MB of PSRAM idle beside it, which is why `snake-2d` stays interpreted at 4096 px — moving the planner's allocations into the arena is the follow-up |
 | runaway native loop | fuel at back-edges, depth check in prologues, watchdog unchanged |
 
 ## 11. Open questions for Jeremy
