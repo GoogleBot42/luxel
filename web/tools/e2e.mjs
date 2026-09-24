@@ -1524,10 +1524,10 @@ try {
     for (const role of ["scene-add-text", "scene-add-color"]) {
       await page.click('[data-role="scene-add-layer"]');
       await sleep(300);
-      await page.click(`[data-role="\${role}"]`);
+      await page.click(`[data-role="${role}"]`);
       await sleep(500);
     }
-    const order = await page.$eval(
+    const order = await page.$$eval(
       '[data-role="scene-editor-view"] [data-role="scene-layer"]',
       (els) => els.map((e) => e.dataset.layer).join(","),
     );
@@ -1587,7 +1587,7 @@ try {
       );
     });
     await sleep(400);
-    const reordered = await page.$eval(
+    const reordered = await page.$$eval(
       '[data-role="scene-editor-view"] [data-role="scene-layer"]',
       (els) => els.map((e) => e.dataset.layer).join(","),
     );
@@ -1610,7 +1610,7 @@ try {
 
     await page.reload({ waitUntil: "networkidle2" });
     await sleep(1800);
-    const back = await page.$eval(
+    const back = await page.$$eval(
       '[data-role="scene-editor-view"] [data-role="scene-layer"]',
       (els) => els.length,
     );
