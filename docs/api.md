@@ -352,17 +352,16 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   `{"state":…,"reason":…,"code_bytes":…,"compile_us":…,"place":…}`.
   - `state` — `"native"` (the device compiled this pattern to machine
     code), `"interp"` (the image has a JIT and did not compile this
-    pattern) or `"off"` (this image carries no backend at all). Every
-    Xtensa board can BUILD the backend since #665/#666, but in shipped
-    images that means the two S3 boards; the three classic-ESP32 boards
-    build it only with `CLASSIC_JIT=1` until the migrating release is out
-    (docs/boards.md), and the two RISC-V boards have no code generator at
-    all. The key is never omitted, so a client cannot mistake "no
-    backend" for "firmware older than #658", which are different answers.
-    In an image that HAS the backend it is on by default and the expected
-    answer is `native`; `POST /api/jit {"on":false}` is the kill switch
-    that turns the next activation back into `interp` / `disabled`. See
-    docs/firmware.md "JIT".
+    pattern) or `"off"` (this image carries no backend at all). Since #676
+    every **Xtensa** board ships the backend — the two S3 boards and the
+    three classic-ESP32 ones (docs/boards.md) — while the two RISC-V
+    boards have no code generator at all, so `off` there is the permanent
+    answer and not "not yet". The key is never omitted, so a client cannot
+    mistake "no backend" for "firmware older than #658", which are
+    different answers. In an image that HAS the backend it is on by default
+    and the expected answer is `native`; `POST /api/jit {"on":false}` is
+    the kill switch that turns the next activation back into `interp` /
+    `disabled`. See docs/firmware.md "JIT".
   - `reason` — `null` when `native`, else one word from the vocabulary the
     emitter, the browser's compile-time lint (`luxel_core::jitlint`) and
     the firmware share: `unsupported`, `too-large`, `l32r-reach`,
@@ -960,8 +959,9 @@ table.
   a reboot comes back with the JIT ON, which is what you want from a switch
   whose whole purpose is a measurement — it is an **OFF switch**, a kill
   switch for one session, not how the JIT gets turned on in the first
-  place. The route only exists on a board that carries the feature;
-  `GET /api/status`'s `jit.state` is `"off"` elsewhere. The same switch is
+  place. The route only exists on a board that carries the feature — since
+  #676 that is every Xtensa board, and only those; `GET /api/status`'s
+  `jit.state` is `"off"` on the RISC-V boards. The same switch is
   the `LUXEL_JIT_ENABLED` symbol, which `tools/qemu/jit-test.py` writes
   through a debugger on a board with no network.
   - The body may also carry `"place"`, which asks where the NEXT image

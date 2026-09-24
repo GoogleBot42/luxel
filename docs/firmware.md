@@ -514,8 +514,9 @@ rather than a mystery: an over-size image is refused up front from
 `Content-Length`, before a single sector is erased, and on a device still on
 the old table the error says the partition table has not been migrated yet
 and to install the migrating release first. `tools/image-check.sh`'s
-`MIGRATING_RELEASE=1` is the build-side half of the same rule — see
-docs/releases.md, which also carries the reminder to take it back out.
+`MIGRATING_RELEASE=1` is the build-side half of the same rule; since Gitea
+#676 it is a by-hand switch rather than a release default, and what it gates
+is the `JIT_OFF=1` build a stale device migrates on — see docs/releases.md.
 
 Once the fleet has moved, the `migrate-off` cargo feature retires the
 migrator and gets its ~12 KB of OTA slot back. It is a deliberate flag, not
@@ -1392,27 +1393,31 @@ moved 76 %.
 
 ## JIT: compiling a pattern to native code on the device
 
-**Status: shipped ON in the two S3 images; built and verified on the classic
-ESP32 but not shipped there yet.** Every host gate is green (307 of 307
-library patterns render bit-identical frames through a real `Engine`), so is
-the QEMU gate, which executes emitted code on an emulated ESP32 — and since
-2026-09-24 **real chips have executed it**. The Seengreat panel ran `rainbow`
-2.7×, `snake` 5.1×, `perlin-fire-wind-tunnel` 3.0× and `aurora-2d` 2.1×
-faster than the interpreter at 4096 px with the image in PSRAM; the Athom ran
-1.9–5.2× with the image in `.rwtext`; the panel showed the right pixels
-throughout, which is the claim that matters (all of it in docs/boards.md "JIT
-on metal"). `LUXEL_JIT_ENABLED` now defaults to `true` in any image that
-builds the feature, `POST /api/jit {"on":false}` is the kill switch for one
-session — an OFF switch, so a reboot comes back native — and `JIT_OFF=1`
-removes it from the image entirely.
+**Status: shipped ON in every Xtensa image — the two S3 boards and, since
+Gitea #676, the three classic-ESP32 ones.** Every host gate is green (307
+of 307 library patterns render bit-identical frames through a real
+`Engine`), so is the QEMU gate, which executes emitted code on an emulated
+ESP32 — and since 2026-09-24 **real chips have executed it**. The Seengreat
+panel ran `rainbow` 2.7×, `snake` 5.1×, `perlin-fire-wind-tunnel` 3.0× and
+`aurora-2d` 2.1× faster than the interpreter at 4096 px with the image in
+PSRAM; the Athom ran 1.9–5.2× with the image in `.rwtext`; the panel showed
+the right pixels throughout, which is the claim that matters (all of it in
+docs/boards.md "JIT on metal"). `LUXEL_JIT_ENABLED` now defaults to `true`
+in any image that builds the feature, `POST /api/jit {"on":false}` is the
+kill switch for one session — an OFF switch, so a reboot comes back native —
+and `JIT_OFF=1` removes it from the image entirely.
 
-The classic tier's hold-up is slot arithmetic, not confidence: with the
-emitter those images are ~1,120–1,138 KB and every release is still weighed
-against the **1,048,576 B pre-#501 slot** until the migrating release has
-gone out (docs/boards.md "The migrating release", Gitea #635). `tools/ci.sh`
-caught it; `board-target.sh` sets `JIT="${CLASSIC_JIT:-0}"` on those three
-boards and `CLASSIC_JIT=1` is what built the image the Athom ran. Flipping
-the default is a one-line follow-up filed against #635.
+The classic tier's hold-up was never confidence, it was which slot the image
+was weighed against. With the emitter those images are ~1,120–1,138 KB:
+13–15 % free inside the **1,310,720 B** slot the #501 repartition gave the
+4 MB boards, and ~72 KB over the old 1,048,576 B one. #676 retired the
+migrating-release gate instead of the tier — `tools/ci.sh` now defaults
+`MIGRATING_RELEASE=0` — so `board-target.sh` sets `JIT=1` on all five Xtensa
+boards and the `CLASSIC_JIT=1` lever is gone. The price it pays is that a
+device still on the pre-#501 table cannot take a normal release at all any
+more: it takes a `JIT_OFF=1` build (~1,040 KB, migrator included) over the
+air first and repartitions on that boot (docs/boards.md "The migrating
+release", docs/releases.md).
 
 Getting there cost two crashes, and both are worth reading before touching
 this code: "The trap the QEMU gate caught" at the end of this section (which
@@ -1425,8 +1430,9 @@ the classic-ESP32 tier), all of #607. The engineering design is
 **docs/jit-design.md** (§5 executable memory and lifecycle, §6 engine
 integration); this section is what the FIRMWARE does with it. The backend is
 Xtensa-only, so the two RISC-V boards ship the interpreter and pay nothing;
-which of the five Xtensa boards carries it in a shipped image is
-docs/boards.md "JIT: which boards compile patterns to native code".
+all five Xtensa boards carry it in a shipped image, and the per-board exec
+memory, image size and `.stack` numbers are docs/boards.md "JIT: which
+boards compile patterns to native code".
 
 ### Lifecycle
 

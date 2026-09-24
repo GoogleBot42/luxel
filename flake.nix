@@ -287,9 +287,7 @@
           target = "xtensa-esp32-none-elf";
           xtensa = true;
           iram = [ "iram-vm" "iram-builtins" "iram-math" ]; # board-target.sh
-          # #666: the classic tier exists (CLASSIC_JIT=1 in board-target.sh)
-          # but ships only after the migrating release (Gitea #635) — the
-          # image would not fit the old 1 MiB slot.
+          extraFeatures = [ "jit" ]; # #666/#676: JIT=1 in board-target.sh
         };
         luxel-fw-athom-music = {
           board = "board-athom-music";
@@ -297,9 +295,7 @@
           target = "xtensa-esp32-none-elf";
           xtensa = true;
           iram = [ "iram-vm" "iram-builtins" "iram-math" ]; # board-target.sh
-          # #666: the classic tier exists (CLASSIC_JIT=1 in board-target.sh)
-          # but ships only after the migrating release (Gitea #635) — the
-          # image would not fit the old 1 MiB slot.
+          extraFeatures = [ "jit" ]; # #666/#676: JIT=1 in board-target.sh
         };
         luxel-fw-esp32-generic = {
           board = "board-esp32-generic";
@@ -307,17 +303,15 @@
           target = "xtensa-esp32-none-elf";
           xtensa = true;
           iram = [ "iram-vm" "iram-builtins" "iram-math" ]; # board-target.sh
-          # #666: the classic tier exists (CLASSIC_JIT=1 in board-target.sh)
-          # but ships only after the migrating release (Gitea #635) — the
-          # image would not fit the old 1 MiB slot.
+          extraFeatures = [ "jit" ]; # #666/#676: JIT=1 in board-target.sh
         };
         # The QEMU differential gate's image (Gitea #658,
-        # tools/qemu/jit-test.py) — and, until the migrating release lets
-        # the classic boards ship the tier (#666, Gitea #635), the only
-        # classic-ESP32 image that carries it (`CLASSIC_JIT=1` in
-        # board-target.sh is the devshell spelling). It exists because QEMU
-        # models the classic ESP32 and not the S3, so this is the only image
-        # on which emitted code can be EXECUTED without hardware.
+        # tools/qemu/jit-test.py). Since #676 the classic boards ship the
+        # JIT themselves, so this is the SAME image as luxel-fw-esp32-generic;
+        # the name is kept because the gate and its docs are written against
+        # it. It exists because QEMU models the classic ESP32 and not the S3,
+        # so this is the only image on which emitted code can be EXECUTED
+        # without hardware.
         luxel-fw-esp32-generic-jit = {
           board = "board-esp32-generic";
           chip = "esp32";

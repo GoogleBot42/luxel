@@ -145,12 +145,9 @@ release.yml gates all nine, which is the only reason master was green: a
 release cut would have failed on them. That squeeze is what the
 repartition ends, not something it introduced.
 
-`MIGRATING_RELEASE` must come back out in the release after this one
-(Gitea #635) — see
-docs/releases.md. Half of that is done: since #635 `tools/ci.sh` no longer
-defaults it to 1, so the PR gate again weighs each image against its own
-board's slot at the 3 % floor; only `.github/workflows/release.yml` still
-pins `MIGRATING_RELEASE: "1"`.
+`MIGRATING_RELEASE` had to come back out in the release after this one
+(Gitea #635) — and it did, on 2026-09-24; see the closer below and
+docs/releases.md.
 
 Re-measured 2026-09-23 for the `/api/ota` invariant work (Gitea #655,
 `origin/master` `4adee91` as the baseline column): `pixelblaze-v3`
@@ -163,6 +160,23 @@ Re-measured 2026-09-23 for the `/api/ota` invariant work (Gitea #655,
 image) — Gitea #669 — so a Seengreat still on the pre-#501 table cannot
 take the migrating release at all, and every `migrate-s3-*` QEMU case fails
 at its fixture check until the image fits again.
+
+**Retired 2026-09-24 (Gitea #676).** The gate is gone: `tools/ci.sh`
+defaults `MIGRATING_RELEASE=0` and `.github/workflows/release.yml` no longer
+sets it, so every release image is weighed against its own board's slot at
+the normal 3 % floor. What forced the decision is the classic-ESP32 JIT tier
+("JIT: which boards compile patterns to native code" below) — with the
+emitter those images are ~1,120–1,138 KB, comfortable inside 1.25 MiB and
+hopeless against 1 MiB — and the trade Jeremy accepted is that a device
+still on the pre-#501 4 MB table can no longer take a normal release over
+the air at all. Its migration is two OTAs instead of one: a
+`JIT_OFF=1 BOARD=<board> firmware/build-esp32.sh` build first (~1,040 KB, so
+it fits the old slot, and it still carries the migrator, so the device
+repartitions on that boot), then the normal release. `MIGRATING_RELEASE=1`
+stays available by hand for exactly that — gating such a build against the
+old slot — and the tables above are the history of the release it was
+written for. Only the switch-removal half of #635 is done; `migrate-off` is
+not, because devices still need the migrator.
 
 ### After the migration: the payoff
 
@@ -1556,34 +1570,39 @@ IRAM features at all, still pays ~1.1 KB for the builtin hot/cold split
 Since Gitea #658 a board CAN compile the running pattern to Xtensa machine
 code at activation instead of interpreting it (docs/jit-design.md,
 docs/firmware.md "JIT"). Since #665/#666 there is a backend for **every
-Xtensa board in the fleet**, but the two halves ship differently:
+Xtensa board in the fleet**, and since #676 every one of them **ships it,
+ON** — the two halves differ only in where the code goes:
 
-- **The two S3 boards ship it, ON.** Their code lives in the PSRAM arena, so
-  it costs no internal SRAM at all, and `LUXEL_JIT_ENABLED` defaults to
-  `true`. `POST /api/jit {"on":false}` is the kill switch for one session; a
-  reboot comes back native.
-- **The three classic-ESP32 boards have the tier and do not ship it yet.**
-  It is built and verified on metal (a 24 KB `.rwtext` static in SRAM0;
-  1.9–5.2× on the Athom, "JIT on metal" below) but the image with the
-  emitter is ~72 KB over the **1,048,576 B pre-#501 slot**, and until the
-  migrating release has gone out every release image is still weighed
-  against that slot ("The migrating release" above, Gitea #635). So
-  `board-target.sh` sets `JIT="${CLASSIC_JIT:-0}"` there, and `CLASSIC_JIT=1`
-  builds it for a device that has already repartitioned — which is what ran
-  on the Athom. `tools/ci.sh` is what caught it. Flipping that default is a
-  one-line follow-up filed against #635.
+- **The two S3 boards.** Their code lives in the PSRAM arena, so it costs no
+  internal SRAM at all. `POST /api/jit {"on":false}` is the kill switch for
+  one session; a reboot comes back native.
+- **The three classic-ESP32 boards.** A 24 KB `.rwtext` static in SRAM0,
+  split into two 12 KB halves so a crossfade can hold both images; SRAM0 is
+  a dedicated instruction region, so it costs flash image and not one byte
+  of stack. Built and verified on metal (1.9–5.2× on the Athom, "JIT on
+  metal" below), and shipped since #676: `board-target.sh` sets `JIT=1`
+  there like everywhere else, and the `CLASSIC_JIT=1` lever #666 carried is
+  gone. The arithmetic did not change, the slot it is weighed against did —
+  these images are ~1,120–1,138 KB, which clears the 1,310,720 B slot the
+  #501 repartition gave the 4 MB boards with 13–15 % to spare and misses the
+  pre-#501 1 MiB slot by ~72 KB. #676 retired the migrating-release gate
+  rather than the tier; the price is that a device still on the old table
+  needs a `JIT_OFF=1` build over the air first ("The migrating release"
+  above).
 
-It is a cargo feature — `JIT` in `firmware/board-target.sh`, mirrored by
-`extraFeatures = [ "jit" ]` in flake.nix's `firmwareVariants`, and the two
-must agree — and `JIT_OFF=1` builds the same board without it.
+`LUXEL_JIT_ENABLED` defaults to `true` in every image that carries the
+backend. It is a cargo feature — `JIT` in `firmware/board-target.sh`,
+mirrored by `extraFeatures = [ "jit" ]` in flake.nix's `firmwareVariants`,
+and the two must agree — and `JIT_OFF=1` builds the same board without it,
+which is both the A/B lever and the image a stale device migrates on.
 
 | board | JIT | exec memory | per image | of `library/` | app image | free of 1.25 MiB | `.stack` |
 |---|---|---|---:|---:|---:|---:|---:|
 | `board-seengreat-hub75` | ships, **on** | PSRAM arena | 128 KB | all 307 | 1,066,576 | 66.1 % † | 26,268 |
 | `board-s3-devkit` | ships, **on** | PSRAM arena, or heap alias | 128 KB / 8 KB | all 307 / — | not rebuilt | — | not measured |
-| `board-athom-music` | `CLASSIC_JIT=1`, not shipped (#635) | 24 KB `.rwtext` | 12 KB | 96 % | 1,137,504 | 13.2 % | 24,380 |
-| `board-esp32-generic` | `CLASSIC_JIT=1`, not shipped (#635) | 24 KB `.rwtext` | 12 KB | 96 % | 1,132,704 | 13.6 % | 23,476 |
-| `board-pixelblaze-v3` | `CLASSIC_JIT=1`, not shipped (#635) | 24 KB `.rwtext` | 12 KB | 96 % | 1,120,480 | 14.5 % | 23,524 |
+| `board-athom-music` | ships, **on** | 24 KB `.rwtext` | 12 KB | 96 % | 1,140,000 | 13.0 % | 24,380 |
+| `board-esp32-generic` | ships, **on** | 24 KB `.rwtext` | 12 KB | 96 % | 1,136,256 | 13.3 % | 23,476 |
+| `board-pixelblaze-v3` | ships, **on** | 24 KB `.rwtext` | 12 KB | 96 % | 1,122,768 | 14.3 % | 23,524 |
 | `board-c3-devkit` | no backend | — | — | — | not rebuilt | — | unchanged |
 | `board-c6-devkit` | no backend | — | — | — | not rebuilt | — | unchanged |
 
@@ -1591,8 +1610,10 @@ Measured 2026-09-24 on this branch; `.stack` from `tools/stack-check.sh`,
 image bytes from `tools/image-check.sh`. † the Seengreat's slot is
 3,145,728 B, not 1,310,720 B, so its column is free-of-3-MiB. Read the
 classic rows twice: they clear the **post**-migration 1.25 MiB slot with
-13–15 % to spare, and they miss the migrating release's 1,048,576 B by
-~72 KB. That is the whole of why they are not shipped yet.
+13–15 % to spare, and they miss the old 1,048,576 B slot by ~72 KB. Since
+#676 that second number gates no release — but it is still the whole of what
+a device on the pre-#501 table can accept, which is why such a device takes
+a `JIT_OFF=1` build before it can take one of these.
 
 **`board-s3-devkit` was not built or measured tonight** — it is the same
 target and the same feature list as the panel minus `hub75`, so its numbers
@@ -1607,13 +1628,13 @@ that ever stops being true.
 - **The classic tier exists now, and the reason it exists is a
   measurement.** The design (§4, decision 4) put the S3 architecture first
   and deferred the classic part because nobody had measured the win on one.
-  Now someone has — 1.9–5.2× on the Athom — and the only thing standing
-  between that and a release is a slot arithmetic that ends with the
-  migrating release. `nix build .#luxel-fw-esp32-generic-jit` is still the
-  only classic-ESP32 flake output that carries the emitter (the three board
-  variants deliberately do not): QEMU models the classic ESP32 and not the
-  S3, so it remains the only image on which emitted code can be executed
-  without hardware (`tools/qemu/jit-test.py`).
+  Now someone has — 1.9–5.2× on the Athom — and since #676 that measurement
+  ships: all three classic variants in flake.nix carry
+  `extraFeatures = [ "jit" ]`. `nix build .#luxel-fw-esp32-generic-jit` is
+  therefore the same image as `luxel-fw-esp32-generic` now; the name is kept
+  because QEMU models the classic ESP32 and not the S3, so that output is
+  what `tools/qemu/jit-test.py` asks for and the only image on which emitted
+  code can be executed without hardware.
 - **The S3 no longer buys its buffer from `iram-vm`.** Phase 3 had to: its
   exec buffer was a 14 KB `.rwtext` static, and `.rwtext` and `.stack` are
   one budget on this chip (see "IRAM budget" above), so the interpreter's
@@ -2263,9 +2284,11 @@ Internal `heap_free` does not move either way — which is the arena's entire
 reason for existing.
 
 **Athom music-reactive**, classic ESP32, 144 px ws2812, a `CLASSIC_JIT=1`
-image (the tier does not ship until #635 — see "JIT: which boards compile
-patterns to native code" above). Found brightness 6 and a playing playlist,
-read and restored, never set.
+image — that lever is how the tier was built the night these rows were
+taken; since #676 the shipped `board-athom-music` image is the same build
+with `JIT=1` as its default ("JIT: which boards compile patterns to native
+code" above). Found brightness 6 and a playing playlist, read and restored,
+never set.
 
 | pattern | px | interp `vm_us` (fps) | native `.rwtext` `vm_us` (fps) | speedup | code B | `compile_us` |
 |---|---:|---:|---:|---:|---:|---:|

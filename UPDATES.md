@@ -1,5 +1,31 @@
 # Update log
 
+## 2026-09-24 — The classic ESP32 ships the JIT too, and the migrating-release gate comes out (#676)
+
+Phase 5 left the classic tier one env var away, waiting on slot arithmetic.
+What moved is the gate, not the image: **all five Xtensa boards now ship the
+JIT, ON.** `firmware/board-target.sh` sets `JIT=1` for
+`board-pixelblaze-v3`, `board-athom-music` and `board-esp32-generic`,
+flake.nix's three classic variants carry `extraFeatures = [ "jit" ]`, and
+`CLASSIC_JIT=1` is gone; `luxel-fw-esp32-generic-jit` is now the same image
+as `luxel-fw-esp32-generic`, the name kept because the QEMU gate asks for it.
+
+With the emitter a classic image is **1,122,768 B** (pixelblaze-v3),
+**1,140,000 B** (athom-music) and **1,136,256 B** (esp32-generic): 13–15 %
+free of the 1,310,720 B slot #501 gave these boards, ~72 KB over the
+pre-#501 1 MiB one. So `MIGRATING_RELEASE` stops being a release default —
+`tools/ci.sh` defaults it to 0, release.yml no longer sets it — and every
+image is weighed against its own board's slot at the 3 % floor again.
+
+**The trade, accepted rather than discovered.** A device still on the
+pre-#501 4 MB table can no longer take a normal release over the air; it
+migrates in two OTAs. First a `JIT_OFF=1 BOARD=<board>
+firmware/build-esp32.sh` build — ~1,040 KB, fits the old slot, still carries
+the migrator, so the device repartitions on that boot — then the normal
+release. `MIGRATING_RELEASE=1` survives as the by-hand switch for that build
+alone. The `migrate-off` half of #635 stays undone: devices still need the
+migrator.
+
 ## 2026-09-24 — scenes: one compositor for every host — layer record, five blend kernels, sprite-tagged patterns, wasm exports (#477 #478 #481 #482)
 
 The crossfade was the only blend Luxel had: `blend_px` in `firmware/src/main.rs`,
