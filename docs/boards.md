@@ -1770,14 +1770,21 @@ on `/api/status` is what the editor budgets against. The number is derived,
 not per-board configuration, by `luxel_core::caps::layers_for_headroom`:
 
 ```
-layers = clamp(1, min(tier, headroom / layer_cost), ceiling)
+layers = clamp(1, min(tier, (headroom − stage) / layer_cost), ceiling)
   tier       = caps::layers_for(pixel_count)    — 3 at ≤512 px, else 2
   headroom   = budget::load_headroom(shared::HEAP_BASE_MAX)
              = (max since boot of the render task's measured load_base)
                − RUNTIME_FLOOR (20 KiB)
+  stage      = budget::compositor_scratch(pixel_count) = pixel_count × 3
   layer_cost = budget::LAYER_BASE (4 KiB) + pixel_count × 3
   ceiling    = 2 on a `small-chip` board, else caps::MAX_LAYERS (4)
 ```
+
+**The staging frame comes off the top** (Gitea #704). Every scene
+composites into the sink's staging buffer — 12.3 KB at 4096 px — and that
+is spent before a single layer engine is built, so it is not headroom a
+layer can have. Leaving it out is what let the panel advertise 2 and refuse
+the second layer at activation.
 
 **The headroom is a high-water mark, not a live reading.** Measured on the
 Seengreat panel 2026-09-24, four *identical* pattern activations reported
@@ -1803,6 +1810,35 @@ arena-backed Aurora 2D costs 14 KB of which 12.3 KB is its frame.
 Taking `headroom` against `heap_free + engine_heap` rather than bare
 `heap_free` is deliberate: the advertised number would otherwise drop every
 time a scene loaded, which is exactly when a UI is reading it.
+
+**Two pattern layers do not fit the Seengreat panel at 4096 px**, and the
+arithmetic says so plainly: `RUNTIME_FLOOR` 20,480 + two `layer_cost`
+16,384 + the 12,288 staging frame is 65,536 B against a measured steady
+`load_base` of 47–49 KB (2026-09-24). What still advertises 2 there is
+`shared::HEAP_BASE_MAX`: it is a maximum over the whole uptime and its
+boot-time reading is ~16 KB above steady state, so the *live* arithmetic
+would already say 1. That is Gitea #709, not this rule.
+
+### What compositing a scene actually costs
+
+Measured on the panel 2026-09-24 at 4096 px, `/api/status` `frame_us`
+averaged over four one-second samples, Aurora 2D native on the JIT:
+
+| what is running | frame_us | compose |
+|---|---:|---:|
+| `Aurora 2D` bare (`emit!`, no compositor) | 51,114 | — |
+| a scene of `pat(Aurora 2D)` + a colour band | 51,768 | **654 µs** |
+
+Gitea #705 reported that second row at 106,679 µs and read the 54 ms
+difference as compositing cost. It was not: the scene's staging buffer had
+made the board 12.3 KB poorer (#704), the JIT then refused the base layer
+(`jit: interp/no-memory`) and Aurora 2D ran interpreted. **A doubled
+`frame_us` on this board is a JIT fallback until `/api/status` `jit.state`
+says otherwise** — read that field before attributing a frame to any stage.
+
+The 654 µs is a full-layout pattern layer plus a colour band over 4096 px.
+A full-layout, opaque, unkeyed, unmirrored `normal` layer is a
+`copy_from_slice` since #705; everything else walks rows, not cells.
 
 | board / layout | load_base | layer_cost | layers |
 |---|---:|---:|---:|

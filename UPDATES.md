@@ -1,5 +1,68 @@
 # Update log
 
+## 2026-09-24 — scene compositing: the staging buffer is given back, and the kernels stop walking cells (#704, #705)
+
+Two panel-found bugs from the compositor landing (#692/#695), and one of
+them turned out to be the other one wearing a disguise.
+
+**#704 — the staging buffer became permanently resident.** A scene
+composites into the sink's staging buffer (`emit_staged!`); a plain pattern
+goes through `emit!` and never touches it. On the pipelined HUB75 path
+`emit_staged` SWAPS the stage with the travelling buffer, so once a scene
+had rendered the board held TWO full frames for ever — 12.3 KB at 4096 px
+that came back only across a reboot. It is now claimed and released like
+the outpipe's scratch (`DeviceChain::release`, #446/#476):
+`pipeline::{DirectSink,RenderSide}::release_stage` runs whenever nothing is
+using it — the render loop's plain-pattern branch, and the top of the
+message dispatch for every message that replaces the stack — and
+`reserve_stage` takes it back fallibly for a crossfade. A scene's own first
+frame grows it with a `try_reserve_exact` in `scenes::Runtime::render`
+rather than the infallible `resize` that was there (#702's shape, one
+buffer over). Releasing is safe on the pipelined path because the hand-off
+MOVES buffers: after the swap the stage holds the one the output task
+already gave back, and the frame in flight lives in `SLOT`.
+
+`caps::layers_for_headroom` now also charges that frame before dividing by
+the per-layer cost, because a scene spends it before a single layer engine
+is built.
+
+**#705 — compositing one full-layout pattern layer was reported at ~54 ms.
+It is 0.65 ms.** The 54 ms was #704: the resident stage left the panel
+12.3 KB poorer, the JIT then refused the scene's base layer
+(`jit: interp/no-memory`) and Aurora 2D ran interpreted at 105 ms instead
+of native at 51. On the panel at 4096 px, before and after:
+
+| what is running | before | after |
+|---|---:|---:|
+| `Aurora 2D` bare (`emit!`) | 50,988 µs | 51,114 µs |
+| a scene of `pat(Aurora 2D)` + a colour band | 53,950 µs | **51,768 µs** |
+| the same, five activations later, back on the bare pattern | 105,048 µs (interpreted) | **51,314 µs** (native) |
+| `load_base` after five scene activations | 35,344 B | **49,052 B** |
+
+The kernels were worth fixing anyway. A full-layout, opaque, unkeyed,
+unmirrored `normal` layer — the base of almost every scene, and exactly what
+`emit!` used to serve — is now a `copy_from_slice`: `GridMap::index` is a
+bijection on `0..len`, so "every cell takes the source's value at the same
+cell" needs no index math, no key test and no blend call. The general path
+clips the box once per axis and walks each row as the contiguous run it is
+(a serpentine row is the same run backwards), with the blend kernel inlined
+into one out-of-line per-ROW function — 64 calls a frame at 4096 px where
+there were 4096 — and no division or 64-bit multiply left per pixel. A
+ramped full-layout layer remaps in place instead of copying through the
+compositor's scratch, so it holds 3 B/px less too.
+
+Bit-exactness is the point, and a new differential test replays 10k+
+style/geometry cases against the pre-#705 kernel kept verbatim beside it.
+`cargo test -p luxel-cli --release --test composebench -- --nocapture` is
+the host micro-benchmark (docs/tools.md), which keeps the old kernels as its
+"before" column: the frame-copy case is ~190x, the ramped layer 2.6x, the
+per-pixel paths 1.0–1.2x on x86 (where a call and a divide are cheap).
+
+What is NOT fixed: two pattern layers still do not fit this panel at
+4096 px — `20,480 + 2x16,384 + 12,288 = 65,536 B` against a steady
+`load_base` of 47–49 KB — and `caps.layers` still reads 2 there because
+`shared::HEAP_BASE_MAX` is a boot-time high-water (**#709**).
+
 ## 2026-09-24 — web: playlist scene items, one picker with a Scenes section, composite thumbnails, `Add to scene ▸` (#478 #482)
 
 The web half of Phase B's scene plumbing: a playlist can hold a scene, the ONE
