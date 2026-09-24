@@ -2415,7 +2415,12 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 }
                 // POST /api/scenes — one scene block, `S - <name>`; the
                 // store assigns the id and hands it back.
-                "/api/scenes" => Some(json_response(api_scenes_save(&text(&raw), None).await)),
+                // `String::from_utf8_lossy` rather than `text`: the latter
+                // takes an owned COPY of the body, and this route runs on
+                // whatever heap a live scene left (Gitea #724).
+                "/api/scenes" => Some(json_response(
+                    api_scenes_save(&String::from_utf8_lossy(&raw), None).await,
+                )),
                 // POST /api/text — `<slot> <utf8…>`, one line (Gitea #485)
                 "/api/text" => Some(json_response(api_text_post(&text(&raw)).await)),
                 // POST /api/scenes/<id>            — replace that scene

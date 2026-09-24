@@ -230,6 +230,23 @@ const TABLE: Entry[] = [
       "width and height to 0 so it covers the whole thing.",
   },
   {
+    // The scene store is written from an HTTP handler on whatever heap the
+    // RUNNING scene left — two pattern layers on the Seengreat panel leave
+    // ~10 KB. The device now refuses the save instead of rebooting on it
+    // (Gitea #724), and the way out is to stop the scene first.
+    match: /^scenes: not enough memory/,
+    field: "scene-save",
+    text: (c) => {
+      const m = /\((\d+) B free\)/.exec(c.raw ?? "");
+      const free = m ? ` — ${group(Number(m[1]))} bytes left` : "";
+      return (
+        `The device did not have the memory to write its scene store${free}. ` +
+        "The scene that is playing is holding most of it: stop it (or play a lighter one) " +
+        "and save again. Nothing was changed."
+      );
+    },
+  },
+  {
     match: /^scene: line \d+:/,
     field: "scene-save",
     text: () =>

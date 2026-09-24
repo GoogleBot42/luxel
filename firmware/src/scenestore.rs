@@ -44,12 +44,69 @@ pub fn next_seq(list: &[Scene]) -> u32 {
 
 /// The flash/wire bytes for a whole scene list: every block back to back, in
 /// exactly the format `POST /api/scenes` accepts.
+///
+/// Grows a `String` the ordinary way, so the device uses [`blob_try`]
+/// instead — this one is for the host tests and for callers with a real
+/// allocator.
 pub fn blob_of(list: &[Scene]) -> String {
     let mut out = String::new();
     for s in list {
         scene::serialize(s, &mut out);
     }
     out
+}
+
+/// The most `serialize` ∘ `parse` can ADD to a body.
+///
+/// Every `L` line already needs all ten fields and every binding line is
+/// echoed verbatim or dropped, so the only growth is `S -` (3 B) becoming
+/// `S <8 hex>` (10 B). 128 B is margin on top of that; the host test
+/// `serialize_never_outgrows_its_body` is what holds it.
+pub const SLACK: usize = 128;
+
+/// [`blob_of`] in ONE fallible allocation of `hint` bytes.
+///
+/// The device builds this blob from an HTTP handler, on a heap a live scene
+/// has already eaten — on the Seengreat panel at the two-pattern-layer cap
+/// `heap_largest` is ~6.6 KB. A `String` that doubles its way to 4 KiB there
+/// is an allocator panic, i.e. a reboot (Gitea #724), so the caller passes
+/// the size it knows the result cannot exceed (the stored blob's length plus
+/// the body plus [`SLACK`]) and a failure to reserve it becomes an error the
+/// console can show.
+pub fn blob_try(list: &[Scene], hint: usize, free: usize) -> Result<String, String> {
+    let mut out = String::new();
+    if out.try_reserve_exact(hint).is_err() {
+        return Err(no_memory(free));
+    }
+    for s in list {
+        scene::serialize(s, &mut out);
+    }
+    Ok(out)
+}
+
+/// `scenes: not enough memory to save (N B free)` — the scene write path
+/// REPORTING an out-of-memory instead of taking it (Gitea #724). `free` is
+/// the device's free heap at the attempt, so the number in the log says how
+/// close it was.
+pub fn no_memory(free: usize) -> String {
+    let mut m = String::from("scenes: not enough memory to save (");
+    push_u32(&mut m, free as u32);
+    push_piece(&mut m, " B free)");
+    m
+}
+
+/// What a scene write needs to know about the device beyond the list and
+/// the body it was handed.
+pub struct Limits {
+    /// The whole blob's ceiling — [`crate::patterns::BLOB_MAX`].
+    pub max: usize,
+    /// Pattern layers this board can hold resident.
+    pub layers: usize,
+    /// Bytes the stored blob occupies TODAY, so the new one is one exact
+    /// reservation rather than a doubling `String`.
+    pub cur_len: usize,
+    /// Free heap at the attempt, for [`no_memory`].
+    pub free: usize,
 }
 
 /// `scenes: store full (N of MAX B)` — assembled without `format!`, which
@@ -94,15 +151,14 @@ pub fn fits_layers(s: &Scene, max: usize) -> Result<(), String> {
 /// which case NOTHING changes, unlike the playlist, whose oversized
 /// definition is applied live and silently lost at the next reboot.
 pub fn upsert(
-    list: &[Scene],
+    mut list: Vec<Scene>,
     body: &str,
     id: Option<&str>,
     next: u32,
-    max: usize,
-    max_layers: usize,
-) -> Result<(Vec<Scene>, String), String> {
+    lim: &Limits,
+) -> Result<(Vec<Scene>, String, String), String> {
     let mut sc = scene::parse(body)?;
-    fits_layers(&sc, max_layers)?;
+    fits_layers(&sc, lim.layers)?;
     // The route's id outranks the block's, so `S -` replaces in place.
     if let Some(r) = id {
         sc.id = String::from(r);
@@ -118,26 +174,31 @@ pub fn upsert(
         sc.id = id_hex(next);
     }
     let target = sc.id.clone();
-    let mut out = list.to_vec();
+    // The list is taken BY VALUE and edited in place: the caller already
+    // holds a clone of the resident one, and a second `to_vec` here was a
+    // whole extra copy of every scene on the write path's peak (#724).
     match at {
-        Some(i) => out[i] = sc,
-        None => out.push(sc),
+        Some(i) => list[i] = sc,
+        None => list.push(sc),
     }
-    let blob = blob_of(&out);
-    if blob.len() > max {
-        return Err(too_big(blob.len(), max));
+    // A replace only ever shrinks what it replaced, so the stored length
+    // plus this body plus SLACK bounds the result either way.
+    let blob = blob_try(&list, lim.cur_len + body.len() + SLACK, lim.free)?;
+    if blob.len() > lim.max {
+        return Err(too_big(blob.len(), lim.max));
     }
-    Ok((out, target))
+    Ok((list, target, blob))
 }
 
-/// The list a DELETE would produce.
-pub fn remove(list: &[Scene], id: &str) -> Result<Vec<Scene>, String> {
-    let mut out = list.to_vec();
-    out.retain(|s| s.id != id);
-    if out.len() == list.len() {
+/// The list a DELETE would produce. Takes `list` by value for the same
+/// reason [`upsert`] does.
+pub fn remove(mut list: Vec<Scene>, id: &str) -> Result<Vec<Scene>, String> {
+    let before = list.len();
+    list.retain(|s| s.id != id);
+    if list.len() == before {
         return Err(String::from("no such scene"));
     }
-    Ok(out)
+    Ok(list)
 }
 
 /// Split a playlist `I` line's first token: `S<sceneId>` is a scene item,
@@ -223,6 +284,17 @@ mod tests {
     /// checked, and the fixtures below are colour layers.
     const LAYERS: usize = 2;
 
+    /// The host has a real allocator, so `cur_len`/`free` only have to be
+    /// honest enough that `blob_try`'s reservation is an upper bound.
+    fn lim(list: &[Scene], layers: usize) -> Limits {
+        Limits {
+            max: MAX,
+            layers,
+            cur_len: blob_of(list).len(),
+            free: usize::MAX,
+        }
+    }
+
     fn one(name: &str, layers: usize) -> String {
         let mut s = String::from("S - ");
         s.push_str(name);
@@ -248,10 +320,11 @@ mod tests {
 
     #[test]
     fn a_bare_post_assigns_an_id_and_a_second_one_appends() {
-        let (list, a) = upsert(&[], &one("first", 1), None, 1, MAX, LAYERS).unwrap();
+        let (list, a, _) = upsert(Vec::new(), &one("first", 1), None, 1, &lim(&[], LAYERS)).unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(a, id_hex(1));
-        let (list, b) = upsert(&list, &one("second", 1), None, 2, MAX, LAYERS).unwrap();
+        let l = lim(&list, LAYERS);
+        let (list, b, _) = upsert(list, &one("second", 1), None, 2, &l).unwrap();
         assert_eq!(list.len(), 2);
         assert_eq!(b, id_hex(2));
         assert_eq!(next_seq(&list), 3);
@@ -259,8 +332,9 @@ mod tests {
 
     #[test]
     fn posting_to_an_id_replaces_in_place() {
-        let (list, a) = upsert(&[], &one("first", 1), None, 1, MAX, LAYERS).unwrap();
-        let (list, b) = upsert(&list, &one("edited", 2), Some(&a), 9, MAX, LAYERS).unwrap();
+        let (list, a, _) = upsert(Vec::new(), &one("first", 1), None, 1, &lim(&[], LAYERS)).unwrap();
+        let l = lim(&list, LAYERS);
+        let (list, b, _) = upsert(list, &one("edited", 2), Some(&a), 9, &l).unwrap();
         assert_eq!(a, b);
         assert_eq!(list.len(), 1, "a replace must not append");
         assert_eq!(list[0].name, "edited");
@@ -273,8 +347,9 @@ mod tests {
         let mut list: Vec<Scene> = Vec::new();
         let mut seq = 1u32;
         loop {
-            match upsert(&list, &one("filler", 8), None, seq, MAX, LAYERS) {
-                Ok((next, _)) => {
+            let l = lim(&list, LAYERS);
+            match upsert(list.clone(), &one("filler", 8), None, seq, &l) {
+                Ok((next, _, _)) => {
                     list = next;
                     seq += 1;
                 }
@@ -289,15 +364,17 @@ mod tests {
         // the list that survived still fits, and the refusal left it alone
         let before = blob_of(&list);
         assert!(before.len() <= MAX);
-        assert!(upsert(&list, &one("one more", 8), None, seq, MAX, LAYERS).is_err());
+        let l = lim(&list, LAYERS);
+        assert!(upsert(list.clone(), &one("one more", 8), None, seq, &l).is_err());
         assert_eq!(blob_of(&list), before);
     }
 
     #[test]
     fn a_blob_round_trips_through_parse_all() {
-        let (list, _) = upsert(&[], &one("a", 2), None, 1, MAX, LAYERS).unwrap();
-        let (list, _) = upsert(&list, &one("b", 1), None, 2, MAX, LAYERS).unwrap();
-        let blob = blob_of(&list);
+        let (list, _, _) = upsert(Vec::new(), &one("a", 2), None, 1, &lim(&[], LAYERS)).unwrap();
+        let l = lim(&list, LAYERS);
+        let (list, _, blob) = upsert(list, &one("b", 1), None, 2, &l).unwrap();
+        assert_eq!(blob, blob_of(&list), "upsert's blob is the list's blob");
         let back = scene::parse_all(&blob).expect("parse_all");
         assert_eq!(back, list, "flash bytes must reload identically");
         assert_eq!(blob_of(&back), blob, "and re-serialize to a fixed point");
@@ -305,12 +382,16 @@ mod tests {
 
     #[test]
     fn delete_removes_exactly_one() {
-        let (list, a) = upsert(&[], &one("a", 1), None, 1, MAX, LAYERS).unwrap();
-        let (list, _) = upsert(&list, &one("b", 1), None, 2, MAX, LAYERS).unwrap();
-        let after = remove(&list, &a).unwrap();
+        let (list, a, _) = upsert(Vec::new(), &one("a", 1), None, 1, &lim(&[], LAYERS)).unwrap();
+        let l = lim(&list, LAYERS);
+        let (list, _, _) = upsert(list, &one("b", 1), None, 2, &l).unwrap();
+        let after = remove(list, &a).unwrap();
         assert_eq!(after.len(), 1);
         assert_eq!(after[0].name, "b");
-        assert!(remove(&after, &a).is_err(), "a second delete is an error");
+        assert!(
+            remove(after, &a).is_err(),
+            "a second delete is an error"
+        );
     }
 
     #[test]
@@ -319,7 +400,7 @@ mod tests {
         // and the same message, so the web translates one string
         for id in ["nope", "00ZZ0011", "5cef0a16"] {
             assert_eq!(
-                upsert(&[], &one("x", 1), Some(id), 1, MAX, LAYERS).unwrap_err(),
+                upsert(Vec::new(), &one("x", 1), Some(id), 1, &lim(&[], LAYERS)).unwrap_err(),
                 "no such scene"
             );
         }
@@ -336,18 +417,96 @@ mod tests {
                     L pat 0 0 0 0 normal 100 none fill 1\nI 5eed1c9d\n\
                     L pat 0 0 0 0 normal 100 none fill 1\nI 5eed1c9c\n";
         assert_eq!(
-            upsert(&[], body, None, 1, MAX, 2).unwrap_err(),
+            upsert(Vec::new(), body, None, 1, &lim(&[], 2)).unwrap_err(),
             "scene: layer 5 does not fit"
         );
         // the same scene on a board that affords three is fine
-        assert!(upsert(&[], body, None, 1, MAX, 3).is_ok());
+        assert!(upsert(Vec::new(), body, None, 1, &lim(&[], 3)).is_ok());
     }
 
     #[test]
     fn a_parse_error_names_its_line() {
-        let e = upsert(&[], "S - x\nL bogus 0 0 0 0 normal 100 none fill 1\n", None, 1, MAX, LAYERS)
-            .unwrap_err();
+        let e = upsert(
+            Vec::new(),
+            "S - x\nL bogus 0 0 0 0 normal 100 none fill 1\n",
+            None,
+            1,
+            &lim(&[], LAYERS),
+        )
+        .unwrap_err();
         assert!(e.starts_with("scene: line 2: "), "{e}");
+    }
+
+    // ---- the fallible blob build (Gitea #724) ----
+
+    /// `blob_try`'s reservation is `cur_len + body.len() + SLACK`, and it is
+    /// an UPPER bound only because `serialize` never writes more than the
+    /// body it parsed plus a fresh id. If this ever fails, the device's
+    /// scene save is one infallible `String` growth away from an allocator
+    /// panic again — raise SLACK, do not relax the test.
+    #[test]
+    fn serialize_never_outgrows_its_body() {
+        let bodies = [
+            // the smallest legal block
+            "S -\n",
+            // `S -` becoming a real id is the only growth there is
+            "S - probe scene\nL color 0 0 0 0 normal 100 none fill 1\nK 101010\n",
+            // every layer kind, every binding line
+            "S - everything\n\
+             L pat -3 4 16 16 add 50 black contain 3\n\
+             N base\n\
+             I 5eed1c92\n\
+             C speed 32768 100\n\
+             P xy\n\
+             R 60 0:ff0000 128:00ff00 255:0000ff\n\
+             L text 0 0 0 0 normal 100 none fill 1\n\
+             T lit HELLO WORLD\n\
+             F large ffcc00 c bounce 40\n\
+             L text 0 0 0 0 normal 100 none fill 1\n\
+             T clock HH:MM\n\
+             L sprite 24 24 16 16 normal 100 none fill 1\n\
+             I 5eed1e57\n\
+             L color 0 0 0 0 multiply 12 luma tile 0\n\
+             K ff8800\n",
+            // a name at the 64-byte ceiling
+            "S - 0123456789012345678901234567890123456789012345678901234567890123\n\
+             L color 0 0 0 0 normal 100 none fill 1\n",
+        ];
+        for body in bodies {
+            let sc = scene::parse(body).expect(body);
+            let mut out = String::new();
+            scene::serialize(&sc, &mut out);
+            assert!(
+                out.len() <= body.len() + SLACK,
+                "{} B in, {} B out (slack {}): {body}",
+                body.len(),
+                out.len(),
+                SLACK
+            );
+            // and with the id assigned, which is where the growth is
+            let mut with_id = sc.clone();
+            with_id.id = id_hex(1);
+            let mut out = String::new();
+            scene::serialize(&with_id, &mut out);
+            assert!(out.len() <= body.len() + SLACK, "{body}");
+        }
+    }
+
+    #[test]
+    fn blob_try_is_blob_of_with_a_reservation() {
+        let (list, _, _) = upsert(Vec::new(), &one("a", 2), None, 1, &lim(&[], LAYERS)).unwrap();
+        let want = blob_of(&list);
+        let got = blob_try(&list, want.len(), 0).expect("host always has the memory");
+        assert_eq!(got, want);
+        // a hint under the true size still produces the right bytes (the
+        // host grows it); the device's bound is what keeps that off the
+        // Xtensa allocator
+        assert_eq!(blob_try(&list, 1, 0).unwrap(), want);
+    }
+
+    #[test]
+    fn the_out_of_memory_message_carries_the_free_heap() {
+        assert_eq!(no_memory(6616), "scenes: not enough memory to save (6616 B free)");
     }
 
     // ---- the playlist's scene items ----

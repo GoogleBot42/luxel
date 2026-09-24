@@ -19,7 +19,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::RefCell;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
@@ -43,17 +43,36 @@ static SCENES: Shared<Vec<Scene>> = BlockingMutex::new(RefCell::new(Vec::new()))
 /// The scene the render task is showing (empty = a plain single pattern).
 static ACTIVE: Shared<String> = BlockingMutex::new(RefCell::new(String::new()));
 static NEXT_SEQ: AtomicU32 = AtomicU32::new(1);
+/// Bytes the stored blob occupies, kept in step with flash by [`commit`].
+///
+/// It is what `GET /api/scenes` reports as `used`, and — the reason it
+/// exists — the exact size the NEXT blob build reserves. Rebuilding the
+/// blob just to measure it cost the write path a second 4 KiB-capable
+/// `String`, which on the Seengreat panel at the two-pattern-layer cap
+/// (`heap_largest` ~6.6 KB) was one of the infallible allocations that
+/// rebooted the board instead of refusing the save (Gitea #724).
+static BLOB_LEN: AtomicUsize = AtomicUsize::new(0);
 
-/// Persist `list` and, only if the store took it, adopt it. Every mutation
-/// funnels through here so a refused write leaves RAM and flash agreeing.
-fn commit(list: Vec<Scene>) -> Result<(), String> {
-    let blob = scenestore::blob_of(&list);
+/// Free internal heap, for the out-of-memory message.
+fn free_heap() -> usize {
+    esp_alloc::HEAP.free() as usize
+}
+
+/// Persist `blob` (the bytes `list` serializes to) and, only if the store
+/// took it, adopt it. Every mutation funnels through here so a refused
+/// write leaves RAM and flash agreeing.
+///
+/// The caller hands the blob in rather than letting this rebuild it: the
+/// whole write path is now ONE fallible allocation of the blob plus the
+/// store's own page buffer, which is what fits under a live scene.
+fn commit(list: Vec<Scene>, blob: String) -> Result<(), String> {
     if blob.len() > patterns::BLOB_MAX {
         return Err(scenestore::too_big(blob.len(), patterns::BLOB_MAX));
     }
     if !patterns::store_blob(patterns::SCENES_KEY, blob.as_bytes()) {
         return Err(String::from("scenes: the store refused the record"));
     }
+    BLOB_LEN.store(blob.len(), Ordering::Relaxed);
     SCENES.lock(|c| *c.borrow_mut() = list);
     Ok(())
 }
@@ -105,7 +124,7 @@ pub fn to_json() -> String {
         push_piece(&mut out, ",\"layers_max\":");
         push_u32(&mut out, layers_max as u32);
         push_piece(&mut out, ",\"used\":");
-        push_u32(&mut out, scenestore::blob_of(&list).len() as u32);
+        push_u32(&mut out, BLOB_LEN.load(Ordering::Relaxed) as u32);
         push_piece(&mut out, ",\"max\":");
         push_u32(&mut out, patterns::BLOB_MAX as u32);
         push_piece(&mut out, ",\"scenes\":[");
@@ -143,25 +162,27 @@ pub fn set_from_wire(body: &str, id: Option<&str>) -> Result<String, String> {
     // Reserve the id only once the record is known good, so a rejected POST
     // does not burn a number.
     let next = NEXT_SEQ.load(Ordering::Relaxed);
-    let (list, target) = scenestore::upsert(
-        &list,
-        body,
-        id,
-        next,
-        patterns::BLOB_MAX,
-        crate::server::scene_layer_cap() as usize,
-    )?;
+    let lim = scenestore::Limits {
+        max: patterns::BLOB_MAX,
+        layers: crate::server::scene_layer_cap() as usize,
+        cur_len: BLOB_LEN.load(Ordering::Relaxed),
+        free: free_heap(),
+    };
+    let (list, target, blob) = scenestore::upsert(list, body, id, next, &lim)?;
     if id.is_none() && target == scenestore::id_hex(next) {
         NEXT_SEQ.store(next.wrapping_add(1), Ordering::Relaxed);
     }
-    commit(list)?;
+    commit(list, blob)?;
     Ok(target)
 }
 
 /// `DELETE /api/scenes/<id>` — also drops every playlist item that named it.
 pub fn delete(id: &str) -> Result<(), String> {
-    let list = SCENES.lock(|c| c.borrow().clone());
-    commit(scenestore::remove(&list, id)?)?;
+    let list = scenestore::remove(SCENES.lock(|c| c.borrow().clone()), id)?;
+    // A delete only ever shrinks the blob, so the stored length is the
+    // reservation.
+    let blob = scenestore::blob_try(&list, BLOB_LEN.load(Ordering::Relaxed), free_heap())?;
+    commit(list, blob)?;
     // `active` names a STORED scene, so it clears with the record — the
     // pixels stay until something else is pushed, which is all a deleted
     // scene can honestly claim. Same as the mirror.
@@ -204,6 +225,7 @@ pub fn init() {
     match scene::parse_all(&text) {
         Ok(list) => {
             NEXT_SEQ.store(scenestore::next_seq(&list), Ordering::Relaxed);
+            BLOB_LEN.store(text.len(), Ordering::Relaxed);
             println!("scenes: {} loaded ({} B)", list.len(), text.len());
             SCENES.lock(|c| *c.borrow_mut() = list);
         }

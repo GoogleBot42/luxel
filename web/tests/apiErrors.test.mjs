@@ -143,3 +143,17 @@ test("psramLine shows the number, not the word `present`", () => {
 test("psramLine is null when the device advertises an arena but reports no size", () => {
   assert.equal(psramLine(0, 0), null);
 });
+
+test("a scene save the device had no heap for says to stop the running scene", () => {
+  const ex = explainApiError("scenes: not enough memory to save (6616 B free)", {
+    scope: "scene",
+    subject: "BC sprite",
+  });
+  // the number the device measured, grouped
+  assert.match(ex.text, /6,616 bytes left/);
+  // what the user can actually do about it, and that nothing was lost
+  assert.match(ex.text, /stop it \(or play a lighter one\)/);
+  assert.match(ex.text, /Nothing was changed\./);
+  assert.equal(ex.field, "scene-save");
+  assert.equal(ex.details, "scenes: not enough memory to save (6616 B free)");
+});
