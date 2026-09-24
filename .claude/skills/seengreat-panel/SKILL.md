@@ -175,6 +175,14 @@ ESP32 ELF — pass the S3 one).
   "compositing one layer costs 54 ms" when compositing costs 654 µs and the
   real bug was a resident buffer (#704). Same for a HALVED number: the JIT
   coming back looks like a speedup in whatever you last changed.
+- **`jit` is ONE global block and reports the LAST compile — in a scene it
+  does not tell you the base layer's state.** A scene compiles bottom → top,
+  so what `/api/status` shows is the TOP layer, and a base layer that fell
+  back is overwritten by the next success. Read the per-layer state off the
+  arithmetic instead: measure each pattern bare, and the scene's `frame_us`
+  should be their sum plus ~2.6 ms of compositing at 4096 px (2026-09-24,
+  #709: Aurora 2D 51.7 + `_Fairies` 17.7 + 2.6 = 72.0 ms measured). Anything
+  far above that is a layer interpreting. Per-layer reporting is #718.
 - **`reason:"no-memory"` is the normal answer for the big 2D programs at
   4096 px** (snake-2d, snake-2d-v2, sunrise-2d, stargen-polar-2d…): the
   emitter's bookkeeping needs `words*24 + fns*240 + 1 KB` of INTERNAL heap
@@ -185,6 +193,13 @@ ESP32 ELF — pass the S3 one).
   fetch failed` / `ECONNREFUSED` and `restore pattern failed`, which reads
   like a crash and is not. `tools/jit-diff.mjs` is single-socket with
   `connection: close` + retry; copy that shape (Gitea #675).
+- **A POST fired right behind another request can come back with an EMPTY
+  body AND not take effect** — the 3-socket pool again, but silent. Seen
+  twice on 2026-09-24 (#709): `POST /api/scenes/<id>/activate` returned
+  nothing, `GET /api/scenes` still showed the previous scene `active`, and
+  four perfectly steady `frame_us` samples were of the WRONG scene. Sleep
+  2–3 s between device calls, and after any activate re-read the thing that
+  proves it landed (`active`, `engines`, `vmerr`) before sampling.
 - **A reboot is invisible to a push-based tool now that the JIT boots ON**:
   after a reset the board comes back running the default pattern with the
   switch on, and the tool's next POST/push just proceeds. Run a watcher
