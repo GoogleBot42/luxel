@@ -57,19 +57,18 @@ RISCV_IRAM="${RISCV_IRAM:-}"
 
 #   JIT         1 -> the board builds the on-device JIT (the `jit` cargo
 #               feature: luxel-core's ABI surface + the luxel-jit emitter +
-#               firmware/src/jit.rs). Gitea #658, docs/jit-design.md §8.
-#               XTENSA ONLY. The two S3 boards ship it (#665: code in
-#               PSRAM, or a heap alias without it). The three classic-ESP32
-#               boards HAVE the tier (#666: a 24 KB `.rwtext` static in
-#               SRAM0, verified on the Athom 2026-09-24) but do not ship
-#               it yet: with the emitter the image is ~1,120 KB, and until
-#               the #501 migrating release has gone out every release must
-#               still fit the OLD 1 MiB slot (docs/boards.md "The migrating
-#               release", Gitea #635). `CLASSIC_JIT=1` builds it for a
-#               device that has already repartitioned; flipping the default
-#               is the one-line follow-up filed against #635. The RISC-V
-#               boards have no backend at all. `JIT_OFF=1` builds the same
-#               board without it — the A/B lever, exactly like IRAM_OFF.
+#               firmware/src/jit.rs). Gitea #658/#665/#666, docs/jit-design.md
+#               §8. XTENSA ONLY, and on for every Xtensa board: the two S3
+#               boards (code in PSRAM, or a heap alias without it) and the
+#               three classic-ESP32 boards (a 24 KB `.rwtext` static in
+#               SRAM0). With the emitter a classic image is ~1,120 KB, which
+#               fits the 1.25 MiB slots of #641 and NOT the pre-#501 1 MiB
+#               one — Jeremy accepted that 2026-09-24 (#676): a device still
+#               on the old table takes a `JIT_OFF=1` build first (it fits and
+#               carries the migrator), then the normal release
+#               (docs/boards.md "The migrating release"). The RISC-V boards
+#               have no backend at all. `JIT_OFF=1` builds any board without
+#               it — the A/B lever, exactly like IRAM_OFF.
 board_target() {
   IRAM=""
   JIT=0
@@ -77,10 +76,9 @@ board_target() {
     board-pixelblaze-v3|board-athom-music|board-esp32-generic)
       # 128 KB of dedicated IRAM (SRAM0), separate from the DRAM the stack
       # comes out of: the whole per-pixel path fits, and the JIT's 24 KB
-      # exec static beside it leaves ~12 KB spare (Gitea #666). JIT off by
-      # default until the migrating release is out — see JIT above.
+      # exec static beside it leaves ~12 KB spare (Gitea #666, #676).
       CHIP=esp32;    TARGET=xtensa-esp32-none-elf;      XTENSA=1; CORE_O3=1
-      JIT="${CLASSIC_JIT:-0}"
+      JIT=1
       IRAM="iram-vm iram-builtins iram-math" ;;
     board-s3-devkit|board-seengreat-hub75)
       # unified SRAM: .rwtext comes out of .stack (46.0 -> 33.0 KB for

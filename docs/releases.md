@@ -203,43 +203,47 @@ finishes (~30–60 min; four of the six boards are slow Xtensa
 `-Zbuild-std` builds). The job is idempotent: re-run it to recover from a
 transient failure — it upserts the release and re-uploads missing assets.
 
-### The migrating release (Gitea #501) — and taking the switch back out
+### The migrating release (Gitea #501) — and the switch that came back out (#676)
 
 The 2026-09-20 repartition gave the fleet bigger OTA slots (docs/firmware.md,
-"Partition tables"). Devices move themselves, on the first boot of ONE
-release, and that release has a different size gate from every other:
+"Partition tables"). Devices move themselves, on the first boot of a release
+that still fits the OLD slot, and for a few days the gate enforced that
+fleet-wide. **Since 2026-09-24 (Gitea #676) it does not.** The history and
+what is left of it:
 
 - **`MIGRATING_RELEASE=1`** makes `tools/image-check.sh` weigh every board's
   image against the **old 1,048,576 B slot** instead of the board's new one,
   with the margin floor relaxed to **0 %**. The reason is not a preference:
-  a device still on the pre-#501 table is what installs this image, and its
-  own running firmware writes it into a 1 MiB slot. An image that only fits
-  the new 1.25 MiB slot would be rejected at `/api/ota` and nobody could
-  migrate. The floor comes down because the repartition is the thing that
-  ends the squeeze — holding 3 % of the old slot would block the release
-  that makes the slot bigger. Margins as measured are in docs/boards.md;
-  the tightest is 2,992 B (0.28 %) on `board-c6-devkit`.
-- **`.github/workflows/release.yml` carries it workflow-wide**
-  (`env: MIGRATING_RELEASE: "1"`), and `tools/ci.sh` exports it through to
-  image-check when it is set in the environment. Since Gitea #635 `tools/ci.sh`
-  no longer **defaults** it to 1: the PR gate is back to the 3 % floor against
-  each board's own slot, and `MIGRATING_RELEASE=1` is now an opt-in you set by
-  hand (or that release.yml sets) when you actually cut a migrating release.
-- **It must be REMOVED in the release after this one.** Leaving it in
-  silently keeps gating the whole fleet at 1 MiB and throws away the
-  headroom the repartition bought; the floor then goes back to 3 % of the
-  per-board slot, where there is finally room under it (20–25 % free on the
-  4 MB boards, 68.6 % on the Seengreat). The block in release.yml says so
-  above itself; this is the second copy of that reminder.
-- **The release notes for this version must say it is a prerequisite for
-  every later one.** A release after this one may exceed 1 MiB and therefore
-  cannot be installed on a device that has not migrated. `/api/ota` refuses
-  such an upload up front, before erasing a sector, and on an un-migrated
-  device the error names the migrating release — but a user reading release
-  notes should not have to discover that from an error string.
-- **Later, `migrate-off`** (tracked with the switch removal as Gitea #635).
-  Once the fleet has moved, a release can be built
-  with that cargo feature and get the migrator's ~12 KB of OTA slot back.
+  a device still on the pre-#501 table is what installs such an image, and
+  its own running firmware writes it into a 1 MiB slot. An image that only
+  fits the new 1.25 MiB slot is rejected at `/api/ota`, and a device that
+  sees only those can never migrate. Margins as measured are in
+  docs/boards.md; the tightest was 2,992 B (0.28 %) on `board-c6-devkit`.
+- **It is no longer a release default.** `tools/ci.sh` defaults
+  `MIGRATING_RELEASE=0` and `.github/workflows/release.yml` no longer sets
+  it, so every release image is weighed against its own board's slot at the
+  normal 3 % floor (20–25 % free on the 4 MB boards, 68.6 % on the
+  Seengreat). What forced it out on that date rather than later is the
+  classic-ESP32 JIT tier: with the emitter those images are ~1,120–1,138 KB,
+  which fits 1.25 MiB with 13–15 % to spare and does not fit 1 MiB at all
+  (docs/boards.md "JIT: which boards compile patterns to native code").
+- **What it is FOR now: one build, by hand.** A device still on the pre-#501
+  4 MB table cannot take a normal release over the air any more. It migrates
+  in two OTAs: first a `JIT_OFF=1 BOARD=<board> firmware/build-esp32.sh`
+  build — ~1,040 KB, so it fits the old slot, and it still carries the
+  migrator, so the device repartitions on that boot — and then the normal
+  release. `MIGRATING_RELEASE=1` on that first build is what proves it fits;
+  keep the switch for that and nothing else.
+- **Say it in the release notes, once per release.** A release may exceed
+  1 MiB and therefore cannot be installed on a device that has not migrated.
+  `/api/ota` refuses such an upload up front, before erasing a sector, and
+  on an un-migrated device the error says the table has not been migrated
+  yet — but a user reading release notes should not have to discover that
+  from an error string, and the recipe above is the answer to give them.
+- **`migrate-off` is still NOT done** (the other half of Gitea #635; the
+  switch-removal half is what #676 did). Once the fleet has moved, a release
+  can be built with that cargo feature and get the migrator's ~12 KB of OTA
+  slot back — but devices still need the migrator, so not yet.
   It is deliberate by construction: image-check asserts the migrator's
   marker is linked unless the feature is named, and absent when it is. Do
   not combine it with anything a device on the old table might be handed.
@@ -257,7 +261,7 @@ restoring it is Gitea #291:
 
 | asset | what it's for |
 |---|---|
-| `luxel-<board>-<ver>-ota.bin` | App-only image: `POST /api/ota`, and the image WLED's `/update` page accepts for the WLED→Luxel takeover (docs/wled-migration.md). Size-guarded against the board's OTA slot — or against the old 1 MiB one while `MIGRATING_RELEASE=1` is set, see above. |
+| `luxel-<board>-<ver>-ota.bin` | App-only image: `POST /api/ota`, and the image WLED's `/update` page accepts for the WLED→Luxel takeover (docs/wled-migration.md). Size-guarded against the board's OTA slot — or against the old 1 MiB one when `MIGRATING_RELEASE=1` is set by hand for a stale device's migration build, see above. |
 | `luxel-<board>-<ver>-full.bin` | Full-flash image (bootloader + partition table + app + **web assets**): `espflash write-bin 0x0 <file>` — new-device bring-up and full restores. Composed exactly like `firmware/build-esp32.sh image`. |
 | `luxel-<board>-<ver>.luxr` | **Release package** (Gitea #643): the app image AND that release's web assets in one container, installed as a single action from an already-running device's own console — Settings → Advanced → Firmware & recovery → **Update…**. This is the recommended way to update an installed device. Not built for `c6-devkit-hosted`, which serves no on-device console. |
 

@@ -39,8 +39,9 @@
 #   CI_QEMU      set to 1 to add the (opt-in) QEMU suite as a final step
 #   MIGRATING_RELEASE
 #                passed through to tools/image-check.sh. Defaults to 0 since
-#                #635: set it to 1 to weigh images against the pre-#501 1 MiB
-#                slot, which is only right for a migrating release.
+#                #676; set it to 1 to gate a `JIT_OFF=1` build against the
+#                pre-#501 1 MiB slot for a device that has not migrated yet
+#                (see below).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
@@ -80,10 +81,16 @@ BOARD="${CI_BOARD:-board-pixelblaze-v3}"
 VARIANTS="${CI_VARIANTS-pixelblaze-v3 c6-devkit-hosted c3-devkit}"
 SKIP=" ${CI_SKIP:-} "
 
-# Opt-in since #635: set MIGRATING_RELEASE=1 to weigh images against the
-# pre-#501 1 MiB slot (floor 0 %) instead of the board's own — only for a
-# migrating release, which is installed by a device still on the old
-# partition table. See docs/releases.md.
+# ===========================================================================
+# MIGRATING_RELEASE defaulted to 1 from #501 (2026-09-20) until #676
+# (2026-09-24): while the fleet was on the pre-#501 table every image had to
+# fit the OLD 1,048,576 B slot, because that is what a not-yet-migrated
+# device installs it into. The classic-ESP32 JIT tier (#666) ended that —
+# with the emitter those images are ~1,120 KB, and Jeremy accepted that the
+# 1.25 MiB slots are now the floor. A device still on the old table takes a
+# `JIT_OFF=1` build first (docs/boards.md "The migrating release"); set
+# MIGRATING_RELEASE=1 by hand to gate THAT build the old way. The 3 % floor
+# now runs against the per-board slot, where there is finally room under it.
 MIGRATING_RELEASE="${MIGRATING_RELEASE:-0}"
 export MIGRATING_RELEASE
 if [ "$MIGRATING_RELEASE" = 1 ]; then

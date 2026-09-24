@@ -930,12 +930,15 @@ for phase 3's static-without-`iram-vm` build.
 **Phase 5 shipped the classic-ESP32 tier** — `#666`, a 24 KB `.rwtext`
 static in SRAM0 split into two halves, verified on the Athom at 1.9–5.2×.
 §8's "the classic ESP32 and RISC-V boards do not carry the feature" is
-retired for the Xtensa half: `board-target.sh` sets
-`JIT="${CLASSIC_JIT:-0}"` on those three boards, so the tier is one env var
-away and not a rebuild of anything. It does not ship yet, and the reason is
-slot arithmetic rather than doubt: the image with the emitter is ~72 KB over
-the 1,048,576 B pre-#501 slot that the migrating release still weighs every
-image against (Gitea #635, docs/boards.md).
+retired for the Xtensa half outright: since **#676** `board-target.sh` sets
+`JIT=1` on those three boards too, and the `CLASSIC_JIT=1` lever #666
+carried is gone. The arithmetic that held it back for a few days was which
+slot the image is weighed against, never doubt about the codegen: with the
+emitter a classic image is ~1,120–1,138 KB — 13–15 % free inside the
+1,310,720 B slot the #501 repartition gave these boards, ~72 KB over the old
+1,048,576 B one — so #676 retired the migrating-release gate rather than the
+tier, at the cost of a stale device needing a `JIT_OFF=1` build over the air
+before it can take a release (docs/boards.md, docs/releases.md).
 
 ## 7. Verification plan
 
@@ -1090,14 +1093,16 @@ Athom.
   `JIT=1` for `board-s3-devkit` and `board-seengreat-hub75`, `0`
   elsewhere, next to `IRAM`/`CORE_O3`; `JIT_OFF=1` is the A/B lever.
 
-  **Updated by phase 5 (#666).** The three classic-ESP32 boards
+  **Updated by phase 5 (#666) and #676.** The three classic-ESP32 boards
   (`board-pixelblaze-v3`, `board-athom-music`, `board-esp32-generic`) have
-  the tier as well, and `board-target.sh` sets `JIT="${CLASSIC_JIT:-0}"`
-  for them — built and verified on the Athom, but not in a shipped image
-  until the migrating release retires the 1,048,576 B slot check (Gitea
-  #635; the image is ~72 KB over it). Flipping that default to 1 is the
-  follow-up. The two RISC-V boards still set `0` and always will: there is
-  no backend for them.
+  the tier as well (#666), and since **#676** `board-target.sh` sets
+  `JIT=1` for them too — so all **five** Xtensa boards ship it, and the
+  `CLASSIC_JIT=1` lever that gated the classic three in between is gone.
+  flake.nix's three classic variants carry `extraFeatures = [ "jit" ]`
+  accordingly, which makes `luxel-fw-esp32-generic-jit` the same image as
+  `luxel-fw-esp32-generic`; that output's name is kept because it is what
+  the QEMU gate asks for. The two RISC-V boards still set `0` and always
+  will: there is no backend for them.
 
   As of #642 the luxel-core half exists and is **ON by default** (like
   `kinds`), so the browser wasm, the CLI and every `cargo test` carry the
@@ -1111,9 +1116,10 @@ Athom.
 - Budget: emitter + verifier + helpers + builtin table, estimated 25–40 KB
   at `opt-level = "s"` (MicroPython's Xtensa emitter is ~900 lines; ESPB's
   two-backend JIT is 56 KB). The S3 boards have ~170 KB of slot; the
-  classic ESP32 and RISC-V boards do not carry the feature and gain only
-  the kinds-section skip in the decoder (a few dozen bytes — the C6 gate
-  must be checked, #543).
+  classic ESP32 boards carry it too since #676 and land at 13–15 % of their
+  1.25 MiB slot free (as built, docs/boards.md), and the RISC-V boards do
+  not carry the feature and gain only the kinds-section skip in the decoder
+  (a few dozen bytes — the C6 gate must be checked, #543).
 - No other board's behaviour changes: same blob, same interpreter.
 
 ## 9. Library census
