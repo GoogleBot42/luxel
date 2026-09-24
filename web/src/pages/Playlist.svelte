@@ -17,7 +17,7 @@
   // foot opens `components/PatternPicker.svelte` — the ONE picker, which now
   // offers the LIBRARY as well as the device (#538 §F) and which Phase B
   // extends with a Scenes section rather than replacing.
-  import { onDestroy, tick } from "svelte";
+  import { createEventDispatcher, onDestroy, tick } from "svelte";
   import PatternPicker from "../components/PatternPicker.svelte";
   import Popover from "../components/Popover.svelte";
   import PlaylistRow from "../components/PlaylistRow.svelte";
@@ -41,9 +41,17 @@
   } from "../stores/device";
   import { confirm } from "../stores/dialog";
   import { compileToBytecode, luxel } from "../stores/pattern";
+  import { playgroundPatternId } from "../lib/sceneRender";
+  import type { Scene } from "../lib/scene";
+  import { listPatterns } from "../lib/store";
+  import { refreshScenes, scenes } from "../stores/scenes";
 
   /** The tab is the visible one — gates the 1 Hz follow poll. */
   export let active = false;
+
+  /** `Edit scene ›` on a scene row — the shell opens the scene editor, the
+   *  same way the Scenes page's tiles do (App's `openScene`). */
+  const dispatch = createEventDispatcher<{ openscene: string }>();
 
   // Follow the device while the Playlist tab is open (light status poll, not
   // pixel streaming) so the current entry highlights as it advances — and so
@@ -148,18 +156,66 @@
   /** Where the thumb sits: the drag position while scrubbing, else the clock. */
   $: shown = scrub === null ? progress : scrub;
 
-  /** A playlist item whose pattern was deleted from the device. */
-  const itemMissing = (id: string, pats: typeof $devicePatterns): boolean =>
-    !pats.some((p) => p.id === id);
+  /** A playlist item whose pattern — or scene (#478) — was deleted. */
+  const itemMissing = (
+    it: { id: string; kind?: string },
+    pats: typeof $devicePatterns,
+    scs: readonly Scene[],
+  ): boolean =>
+    it.kind === "scene" ? !scs.some((s) => s.id === it.id) : !pats.some((p) => p.id === it.id);
   /** Source for a playlist item's thumbnail/params, from the device library. */
   const itemSource = (id: string, pats: typeof $devicePatterns): string | undefined =>
     pats.find((p) => p.id === id)?.source;
+  /** The scene record a scene row composites (#482). */
+  const itemScene = (it: { id: string; kind?: string }, scs: readonly Scene[]): Scene | null =>
+    it.kind === "scene" ? (scs.find((s) => s.id === it.id) ?? null) : null;
+
+  // ---- scenes (#478) ----
+  //
+  // The library is `stores/scenes.ts` — the ONE scene store, shared with the
+  // Scenes page and the scene editor, so a scene edited there is the record
+  // this page's rows composite.
+  //
+  // READ ON DEMAND, deliberately: this page already owns two of the four poll
+  // subscriptions the app is allowed (docs/web-architecture.md), the device
+  // serves ~2 connections, and scenes change when somebody edits one — not
+  // while a playlist advances. So it reads when the tab comes forward, when
+  // the picker opens, and when a row names a scene the library has not got.
+
+  /** The scene ids the queue names. A row that names a scene the library does
+   *  not hold asks for ONE refresh (the picker adding a scene is the usual
+   *  reason), guarded so a genuinely missing record cannot re-fetch on every
+   *  render. */
+  $: sceneSig = $playlist.items
+    .filter((it) => it.kind === "scene")
+    .map((it) => it.id)
+    .sort()
+    .join(",");
+  let sceneSigSeen: string | null = null;
+  $: if (active && $device && sceneSig !== sceneSigSeen) {
+    sceneSigSeen = sceneSig;
+    void refreshScenes();
+  }
+  // a fresh visit re-reads even when the queue has not changed
+  $: if (!active) sceneSigSeen = null;
+
+  /** Layer sources for the composite thumbnails — the device's library on a
+   *  console, this browser's in the playground. The same resolver the Scenes
+   *  page gives its tiles. */
+  function sceneLookup(id: string): string | null {
+    const dev = $devicePatterns.find((p) => p.id === id);
+    if (dev?.source !== undefined) return dev.source;
+    for (const p of listPatterns()) if (playgroundPatternId(p.name) === id) return p.source;
+    return null;
+  }
 
   // ---- the ⋯ menu (Clear lives here) ----
   let menuOpen = false;
   /** The ⋯ button the menu hangs off (components/Popover.svelte). */
   let moreBtn: HTMLElement;
   let pickerOpen = false;
+  /** The `+ Add` button the picker hangs under (S4c `.addwrap`). */
+  let addBtn: HTMLElement;
   /** The picker's inline status line while a library pattern is being saved. */
   let pickerBusy = "";
   let pickerError = "";
@@ -375,6 +431,20 @@
     e: CustomEvent<{ id: string; kind: "pattern" | "scene" | "library"; name: string; source?: string }>,
   ): Promise<void> {
     pickerError = "";
+    if (e.detail.kind === "scene") {
+      // A scene item names a RECORD (#478): no values of its own, so nothing
+      // to seed — the layers inside it carry theirs.
+      pickerOpen = false;
+      playlist.update((pl) => ({
+        ...pl,
+        items: [
+          ...pl.items,
+          { id: e.detail.id, name: e.detail.name, kind: "scene", sec: null, controls: {} },
+        ],
+      }));
+      queuePlaylistSave();
+      return;
+    }
     if (e.detail.kind !== "library") {
       pickerOpen = false;
       // no values: a freshly added item runs the pattern's own defaults until
@@ -695,8 +765,10 @@
                 lifted={dragFrom === i}
                 shift={dragShifts[i] ?? 0}
                 anim={!dragSettling && (dragFrom !== i || dragReturning)}
+                scene={itemScene(item, $scenes)}
+                {sceneLookup}
                 defaultSec={$playlist.defaultSec}
-                missing={itemMissing(item.id, $devicePatterns)}
+                missing={itemMissing(item, $devicePatterns, $scenes)}
                 active={$playlist.playing && $playlist.index === i}
                 first={i === 0}
                 last={i === $playlist.items.length - 1}
@@ -707,15 +779,42 @@
                 on:control={(e) => pushLive(i, e.detail)}
                 on:remove={() => removePlaylistItem(i)}
                 on:move={(e) => movePlaylistItem(i, e.detail)}
+                on:editscene={(e) => dispatch("openscene", e.detail)}
                 on:grab={(e) => onGrab(i, e.detail)}
               />
             {/if}
           {/each}
         </ul>
       {/if}
-      <button class="btn quiet add" data-role="pl-add" on:click={() => (pickerOpen = true)}
-        >+ Add</button
-      >
+      <!-- S4c `.addwrap`: the picker is a dropdown UNDER `+ Add`, in the list
+           it adds to — 360 px on a console, the width of the list on a phone
+           (S4d). The wrapper is what positions it. -->
+      <div class="addwrap">
+        <button
+          class="btn quiet add"
+          bind:this={addBtn}
+          data-role="pl-add"
+          on:click={() => {
+            pickerOpen = !pickerOpen;
+            if (pickerOpen) void refreshScenes();
+          }}>+ Add</button
+        >
+        <PatternPicker
+          luxel={$luxel}
+          open={pickerOpen}
+          anchor={addBtn}
+          patterns={$devicePatterns}
+          scenes={$scenes}
+          {sceneLookup}
+          busy={pickerBusy}
+          error={pickerError}
+          on:pick={(e) => void onPick(e)}
+          on:close={() => {
+            pickerOpen = false;
+            pickerError = "";
+          }}
+        />
+      </div>
     </div>
     <!-- S4 `.plfoot` — a sibling of the list, with its own page padding -->
     {#if $playlist.items.length > 0}
@@ -727,18 +826,6 @@
     {/if}
   {/if}
 
-  <PatternPicker
-    luxel={$luxel}
-    open={pickerOpen}
-    patterns={$devicePatterns}
-    busy={pickerBusy}
-    error={pickerError}
-    on:pick={(e) => void onPick(e)}
-    on:close={() => {
-      pickerOpen = false;
-      pickerError = "";
-    }}
-  />
 </div>
 
 <style>
@@ -907,8 +994,16 @@
     padding: 0;
   }
 
-  .add {
+  /* S4c `.addwrap{position:relative;width:360px;margin-top:4px}` — the box the
+     picker drops out of. The width is the PICKER's, not the button's. */
+  .addwrap {
+    position: relative;
+    width: 360px;
     margin-top: 4px;
+  }
+
+  .add {
+    margin-top: 0;
   }
 
   /* S4 `.plfoot` */
@@ -962,6 +1057,12 @@
 
     .pl-list {
       padding: 12px;
+    }
+
+    /* S4d: the picker is the full width of the list, not a 360px popover —
+       D9 responsive stacking, not a second flow */
+    .addwrap {
+      width: auto;
     }
 
     .foot {

@@ -569,11 +569,20 @@ device-e2e harness asserts both — one MutationObserver batch, one POST.
 
 ### The picker's sections
 
-`PatternPicker` emits `pick: { id, kind, name, source? }` and renders one
-section per source:
+`PatternPicker` is the mock's `.addwrap > .menu.full.pick` (S4c/S4d): a
+dropdown anchored under `+ Add`, inside the list it adds to, 360px wide on a
+console and the full width of the list on a phone. The search field is FIRST,
+then one `.slabel` per section. It emits
+`pick: { id, kind, name, source?, layers? }` and renders one section per
+source:
 
-* **On device** (`kind: "pattern"`) — `devicePatterns`, passed in as a prop
+* **Patterns** (`kind: "pattern"`) — `devicePatterns`, passed in as a prop
   rather than read from the store. A pick queues the id directly.
+* **Scenes** (`kind: "scene"`, Gitea #478) — the scene library
+  (`stores/scenes.ts`), refreshed when the picker opens. A pick appends a SCENE
+  item, which carries no values of its own (`layers` rides along so the new row
+  can say `Scene ▤ · N layers` before the device's next read comes back). Empty
+  off a regular 2D console, where scenes cannot exist.
 * **Library** (`kind: "library"`) — the generated `gallery.json`, fetched once
   on the first open. A library pattern is source the device has never seen and
   a playlist item is a reference to a STORED pattern, so the owner saves it
@@ -582,11 +591,14 @@ section per source:
   on failure, says what happened and adds nothing. Names already on the device
   are dropped from this section so a pick is never a silent overwrite.
 
+Every row is the SAME row (S4c): a device-shaped 26px thumbnail, the name, and
+ONE dim fact — a pattern's dimensionality and its projection (`2D`,
+`1D · along x`, from `captionFor`), a scene's layer count, and for a library
+row what picking it costs (`saves to device`). A scene's thumbnail is its
+composite, so what you pick looks like what you will get.
+
 Each section renders at most 40 rows (every row is a live wasm engine); the
-search is how you reach the rest. Phase B (#478/#481) adds a `"scene"` section
-to the same list — the search, the keyboard handling and the event shape are
-already shaped for it, and `PlaylistItem.kind` on the wire model is the row
-side of the same seam.
+search is how you reach the rest.
 
 ### The row (mockup S4)
 
@@ -608,8 +620,71 @@ when overridden) and the values chip keeps only its count.
 `pl-duration-inline` · `pl-duration-edit` · `pl-override` · `pl-sec` ·
 `pl-values-toggle` · `pl-values` · `pl-invalid` · `pl-remove` ·
 `pl-preempted` (why a direct play stopped the queue) ·
-`pattern-picker` · `picker-{backdrop,close,search,item,empty,busy,error}` ·
-`picker-section-{pattern,library}` · `picker-more-{pattern,library}`.
+`pattern-picker` · `picker-{search,item,empty,busy,error,loading}` ·
+`picker-section-{pattern,scene,library}` ·
+`picker-more-{pattern,scene,library}` · `pl-edit-scene` · `scene-thumb`.
+
+### Scene items (Gitea #478, mockups S4c/S4d)
+
+A playlist item is a pattern or a **scene** — `PlaylistItem.kind`, and
+`I S<sceneId> <sec>` on the wire (`lib/playlist.ts` owns both halves:
+`playlistWire()` serializes, `normalizePlaylist()` fills in the `kind` a
+pre-#478 device omits and the `controls` a scene item does not have; unit tests
+in `web/tests/playlist.test.mjs`). A scene item NEVER carries `C` or `P` lines:
+its layers own their values.
+
+The row is a playlist row like any other — same handle, same card, same
+duration chip — with three differences (S4c): its type line reads
+`Scene ▤ · N layers`, it has **no values chip**, and `Edit scene ›`
+(`pl-edit-scene` → `#/scenes/<id>`) stands where the chip would have been. At
+390px the duration folds into the type line and the link shortens to `Edit ›`,
+exactly as a pattern row's chip does.
+
+### Composite thumbnails (`components/SceneThumb.svelte`, Gitea #482)
+
+A scene's picture is the same compositing the device does, run locally:
+`lib/sceneRender.ts`'s `SceneRenderer` — `Luxel.compositor(w, h)` over a
+tile-sized copy of the device's grid (`luxel_core::compose` in the wasm, #477),
+one `Engine` per pattern layer, one per sprite layer (built and then only READ),
+and text resolved by the host because the compositor reads no clock.
+`SceneThumb` paints its frames through the ordinary `lib/draw.ts` painter, so
+the composite is finished BEFORE paint (the painters are single-buffer and
+opaque), and wears the same `.thumb > canvas.sq` markup `PatternThumb` does —
+every surface that already sizes a thumbnail sizes this one, and a row cannot
+tell the two apart.
+
+Cost is the design: a composite is N engines on a grid, not one 400-cell
+engine, so every scene thumbnail on the page shares ONE ticker in the
+component's module scope, with a step budget (2 composites per animation frame,
+~8 fps each) and an admission cap (8 resident). The Scenes page's tile grid
+keeps its own of the same shape (`components/scene/SceneGrid.svelte`), and both
+are `Gallery.svelte`'s discipline: a page full of composites refreshes slower
+rather than starving the editor's preview. A surface that wants ONE still frame
+instead calls `lib/sceneThumb.ts`'s `sceneThumb(lx, scene, lookup, w, h)`.
+
+### `Add to scene ▸` (proposal §5.4b, mockup S2e)
+
+`components/AddToSceneMenu.svelte` is one row of a ⋯ menu — in the editor's
+header menu and in a Patterns tile's menu, identically — with a submenu of the
+scene library (`stores/scenes.ts`) and `New scene…`. Picking a scene is
+read-modify-write through the ONE store: `withPatternOnTop(scene, id, values,
+proj)` (`lib/scene.ts`, pure and tested) → `saveScene`. The pattern lands as
+the scene's TOP layer — full box, normal blend, 100 %, unkeyed — carrying the
+values it is being shown at, and a refusal reaches the ONE error strip because
+that is what `saveScene` does with one. `New scene…` saves a one-layer scene
+named after the pattern and asks the shell to open it (`openscene` →
+`App.openScene`, which leaves the pattern editor); the playlist row's `Edit
+scene ›` takes the same path.
+
+**It exists only where a scene can**: the shell's `scenesReady` (a regular 2D
+console, or the playground) passed down as a prop, AND a pattern the device
+actually holds. On a strip, a lattice or a custom-map console the menu is
+simply one item shorter — ABSENT, never disabled (§5.7). The parent row is a
+`<div role="menuitem">` rather than a button because `Popover` closes a menu on
+any button click inside it, and the submenu stays mounted (hidden) so a harness
+and a screen reader can find it.
+Roles: `add-to-scene` · `add-to-scene-menu` · `add-to-scene-item` ·
+`add-to-scene-new`.
 
 The per-item **projection override** (§5.4d) rides beside the values, as the
 `P <mode>` line of the playlist wire format (docs/api.md). It is rendered by

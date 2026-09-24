@@ -40,6 +40,14 @@ paths:
   behind whatever is on screen — through the two sockets the transport needs.
   #480 shipped one for an afternoon and device-e2e's playlist section saw the
   DOM lag the API because of it. Gate it on the `active` prop.
+- **An element that only exists on hover must stay in the DOM.** A mock draws
+  a hover state permanently (a submenu, a tile's action strip), so the map
+  compares it with `hoverOnly` — but mockdiff still looks the app element up
+  in the RESTING measurement first, and an unmounted one is reported as
+  `ABSENT` however the entry is flagged (`mockdiff.mjs`, the `!a?.found`
+  arm). Render it and hide it (`display:none` toggled by a class) instead of
+  `{#if open}`; a screen reader and a harness both find it that way too.
+  (#478's `Add to scene ▸` submenu, 2026-09-24.)
 - **`mockdiff.map.json`'s `nth` / `mockNth` are 0-based INDEXES**, not
   ordinals (`mockdiff.mjs`: `all[e.nth ?? 0]`). An out-of-range one reports
   `NOT FOUND: <selector>` rather than a delta, which reads like a bad

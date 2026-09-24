@@ -64,6 +64,8 @@ export const PORT = {
     jitInterp: p(48), // device-e2e: --jit interp:REASON, the #658 refusal strip
     mdScenes: p(49), // mockdiff: 64x64 HUB75 console seeded with SCENES (S6, S6d, S7…)
     devScenes: p(51), // device-e2e: panel mirror for the scenes section (#480)
+    mdPlScenes: p(52), // mockdiff: 64x64 console with a SCENE ITEM playing (S4c/S4d/S2e, #478)
+    plScenes: p(53), //  device-e2e: panel mirror for the playlist/menu scene sections (#478)
   },
   /** sync-e2e's UDP beacon group port. */
   sync: p(42),

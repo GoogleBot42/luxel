@@ -30,7 +30,10 @@
   import { createEventDispatcher } from "svelte";
   import Controls from "./Controls.svelte";
   import PatternThumb from "./PatternThumb.svelte";
+  import SceneThumb from "./SceneThumb.svelte";
   import ProjectionRow from "./ProjectionRow.svelte";
+  import type { SourceLookup } from "../lib/sceneRender";
+  import type { Scene } from "../lib/scene";
   import { Engine, Luxel } from "../lib/luxel";
   import type { Control } from "../lib/luxel";
   import { parseControlHints } from "../lib/hints";
@@ -46,6 +49,13 @@
   export let luxel: Luxel;
   export let source: string | undefined;
   export let item: PlaylistItem;
+  /** The scene record this row names (Gitea #478) — the thumbnail composites
+   *  it locally (`stores/scenes.ts` holds the library). Null on a pattern row,
+   *  and on a scene row whose record the device no longer has (`missing`). */
+  export let scene: Scene | null = null;
+  /** Resolves a scene layer's stored pattern to its source — the same lookup
+   *  the Scenes page hands its tiles (`lib/sceneRender.ts`). */
+  export let sceneLookup: SourceLookup = () => null;
   export let defaultSec: number;
   export let missing = false;
   export let active = false;
@@ -69,6 +79,8 @@
      *  this row is the one playing, so the fixture follows the slider. */
     control: { name: string; values: number[] };
     remove: void;
+    /** `Edit scene ›` — the shell opens the scene editor (App's `openScene`). */
+    editscene: string;
     move: number;
     /** The handle was grabbed — the page takes it from here (it owns the
      *  window listeners, the measurements and the drop). */
@@ -126,14 +138,23 @@
   $: effective = item.sec ?? defaultSec;
   $: durationLabel = effective > 0 ? `${effective} s` : "manual";
   $: overridden = item.sec !== null;
-  $: kindLabel = (item.kind ?? "pattern") === "scene" ? "Scene" : "Pattern";
+  /** A SCENE row (Gitea #478). Everything a pattern row's values chip is for
+   *  belongs to the scene's own layers, so the row says what the scene is and
+   *  links to where it is edited instead (mock S4c). */
+  $: isScene = (item.kind ?? "pattern") === "scene";
+  $: sceneLayers = item.layers ?? scene?.layers.length ?? 0;
+  /** S4c: `Pattern` · `Scene ▤ · 2 layers`. `▤` is the scene editor's own
+   *  pattern-layer badge, so the two screens name the same thing the same way. */
+  $: kindLabel = isScene
+    ? `Scene ▤ · ${sceneLayers} layer${sceneLayers === 1 ? "" : "s"}`
+    : "Pattern";
 
   // ---- projection (§5.4d) ----
   // `ProjectionRow` decides for itself whether to render; this predicate is
   // the same test, needed one level up so the chip that OPENS the panel is
   // itself absent when there is nothing inside it. (The pure table here and
   // the engine's list `ProjectionRow` reads are parity-tested — #463.)
-  $: projApplies = projectionOptions(dims, $layout.dims).length > 1;
+  $: projApplies = !isScene && projectionOptions(dims, $layout.dims).length > 1;
 
   function onSet(e: CustomEvent<{ name: string; values: number[] }>): void {
     item.controls = { ...item.controls, [e.detail.name]: e.detail.values };
@@ -215,7 +236,15 @@
     on:pointerdown={(e) => dispatch("grab", e)}
     on:keydown={onHandleKey}>{active ? "▶" : "⠿"}</span
   >
-  {#if luxel && !missing}<PatternThumb {luxel} {source} proj={item.proj ?? null} />{/if}
+  {#if luxel && !missing}
+    {#if isScene}
+      <!-- the scene's own COMPOSITE, blended by the same `luxel_core::compose`
+           the device runs (#482) — not one layer's picture -->
+      {#if scene}<SceneThumb {luxel} {scene} lookup={sceneLookup} />{/if}
+    {:else}
+      <PatternThumb {luxel} {source} proj={item.proj ?? null} />
+    {/if}
+  {/if}
   <span class="who">
     <span class="n" data-role="pl-name">
       {item.name || item.id}{#if missing}<span class="miss"> (deleted)</span>{/if}
@@ -248,7 +277,22 @@
     aria-expanded={durOpen}
     on:click={() => (durOpen = !durOpen)}>{durationLabel}</button
   >
-  {#if params.length > 0 || projApplies}
+  {#if isScene}
+    <!-- S4c: a scene row has NO values chip — its layers own their values —
+         and `Edit scene ›` stands where the chip would have been. A link,
+         because it goes to another screen (the scene editor, Gitea #480);
+         S4d shortens it to `Edit ›` on a phone, the same two-run trick the
+         values chip uses. -->
+    <a
+      class="lnk"
+      data-role="pl-edit-scene"
+      href={`#/scenes/${item.id}`}
+      on:click|preventDefault={() => dispatch("editscene", item.id)}
+    >
+      <span class="lbl wide">Edit scene ›</span>
+      <span class="lbl narrow">Edit ›</span>
+    </a>
+  {:else if params.length > 0 || projApplies}
     <button
       class="chip"
       class:open={valuesOpen}
@@ -530,6 +574,19 @@
   /* one label per width — see the markup */
   .lbl.narrow {
     display: none;
+  }
+
+  /* S4c `.lnk` — `Edit scene ›` in the place a pattern row's values chip
+     takes. Quiet type, not a chip and not a button: it LEAVES this screen. */
+  .lnk {
+    font-size: 12.5px;
+    color: var(--text-dim);
+    white-space: nowrap;
+    text-decoration: none;
+  }
+
+  .lnk:hover {
+    color: var(--text);
   }
 
   .chip.open {

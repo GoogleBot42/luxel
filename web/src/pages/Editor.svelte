@@ -34,6 +34,7 @@
   // working copy opens it in LOCAL PREVIEW unless it is an unsaved edit of the
   // program the device is already running — see `bootDevice` / `lib/resume.ts`.
   import { createEventDispatcher, onDestroy, tick } from "svelte";
+  import AddToSceneMenu from "../components/AddToSceneMenu.svelte";
   import Controls from "../components/Controls.svelte";
   import Debugger from "../components/Debugger.svelte";
   import DeviceChip from "../components/DeviceChip.svelte";
@@ -47,6 +48,7 @@
   import "../components/editor-frame.css";
   import { MicSource, toSensorBoardFrame } from "../lib/audio";
   import { lxpEnvelope } from "../lib/device";
+  import { withPatternOnTop } from "../lib/scene";
   import type { ProjectionMode } from "../lib/geometry";
   import {
     deviceJitReason,
@@ -76,6 +78,7 @@
     deviceError,
     deviceFps,
     deviceHeapFree,
+    deviceLayoutWire,
     deviceOutFps,
     devicePatterns,
     deviceJit,
@@ -102,6 +105,7 @@
     pixelCount,
   } from "../stores/geometry";
   import { banners, clearNote, note, notes, setBanner } from "../stores/notify";
+  import { newScene, refreshScenes, saveScene, scenes } from "../stores/scenes";
   import {
     compileToBytecode,
     controlValues,
@@ -131,8 +135,18 @@
   export let active = false;
   /** What the back button returns to — the shell knows, the editor doesn't. */
   export let backLabel = "Patterns";
+  /** Whether scenes can exist here at all — the shell's predicate (a regular
+   *  2D console, or the playground). `Add to scene ▸` is ABSENT without it,
+   *  never disabled (§5.7, mock S2e). */
+  export let scenesReady = false;
 
-  const dispatch = createEventDispatcher<{ open: void; back: void; openmap: void }>();
+  const dispatch = createEventDispatcher<{
+    open: void;
+    back: void;
+    openmap: void;
+    /** `New scene…` in the ⋯ menu — the shell opens the scene editor. */
+    openscene: string;
+  }>();
 
   let editor: CodeEditor;
   let preview: Preview;
@@ -1152,6 +1166,38 @@
     note("save", "added to playlist", 2000);
   }
 
+  // ---- Add to scene ▸ (proposal §5.4b, mock S2e) ----
+  //
+  // The shortcut from the place you just tuned the look: it carries the same
+  // snapshot `Add to playlist` does (the sliders AND the projection), as the
+  // new TOP layer of the scene you choose. The primary path stays the scene
+  // editor's own `Add layer → Pattern` (Gitea #480).
+  //
+  // A scene needs a regular 2D grid, so on a strip, 3D or custom-map console
+  // the item is ABSENT — not disabled (§5.7; the S2e strip menu is simply one
+  // item shorter).
+  $: canAddToScene = scenesReady && $device !== null && $devicePatternId !== "";
+
+  async function addToScene(sceneId: string, sceneName: string): Promise<void> {
+    menuOpen = false;
+    const scene = $scenes.find((s) => s.id === sceneId);
+    if (!scene || !$devicePatternId) return;
+    const r = await saveScene(
+      withPatternOnTop(scene, $devicePatternId, { ...$controlValues }, $projectionOverride),
+    );
+    // A refusal already reached the ONE error strip (`stores/scenes.ts`).
+    if (r.ok) note("save", `added to “${sceneName}”`, 2500);
+  }
+
+  async function newSceneFromPattern(): Promise<void> {
+    menuOpen = false;
+    if (!$devicePatternId) return;
+    const r = await saveScene(
+      withPatternOnTop(newScene($patternName), $devicePatternId, { ...$controlValues }, $projectionOverride),
+    );
+    if (r.ok && r.id) dispatch("openscene", r.id);
+  }
+
   // ---- share links ----
 
   async function sharePattern(): Promise<void> {
@@ -1624,7 +1670,10 @@
         data-role="overflow"
         title="more actions"
         aria-label="more actions"
-        on:click={() => (menuOpen = !menuOpen)}
+        on:click={() => {
+          menuOpen = !menuOpen;
+          if (menuOpen && canAddToScene) void refreshScenes();
+        }}
       >
         ⋯
       </button>
@@ -1634,10 +1683,10 @@
         dataRole="editor-menu"
         on:close={() => (menuOpen = false)}
       >
-        <!-- "Add to scene ▸" belongs here (proposal §5.4b) and is absent
-             until scenes exist — Phase B, Gitea #480. Not rendered rather
-             than rendered-disabled: a control is absent unless the thing it
-             acts on exists (§5.7). -->
+        <!-- S2e's first group: where this pattern can be PUT. `Add to
+             scene ▸` is rendered only on a regular 2D console — absent rather
+             than disabled, because a control is absent unless the thing it
+             acts on can exist (§5.7, Gitea #478). -->
         {#if $device && $devicePatternId}
           <button
             class="mi"
@@ -1648,6 +1697,13 @@
           >
             Add to playlist
           </button>
+          {#if canAddToScene}
+            <AddToSceneMenu
+              scenes={$scenes}
+              on:pick={(e) => void addToScene(e.detail.id, e.detail.name)}
+              on:create={() => void newSceneFromPattern()}
+            />
+          {/if}
           <div class="sepr"></div>
         {/if}
         <!-- the mock's second group: what you can do to the DOCUMENT itself -->

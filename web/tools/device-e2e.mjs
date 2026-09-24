@@ -3490,7 +3490,7 @@ try {
   // (gallery.json, the same source the Patterns page browses) — #538 §F
   await page.waitForSelector('[data-role="picker-section-library"]', { timeout: 15000 });
   check(
-    "playlist: the picker offers both an On device and a Library section",
+    "playlist: the picker offers both a Patterns and a Library section",
     (await page.$('[data-role="picker-section-pattern"]')) !== null,
   );
   const pickCount = await page.$$eval('[data-role="picker-item"][data-kind="pattern"]', (els) => els.length);
@@ -3512,7 +3512,7 @@ try {
     );
     await sleep(300);
     return page.$$eval('[data-role="picker-item"][data-kind="library"]', (els) =>
-      els.map((e) => (e.querySelector(".name")?.textContent ?? "").trim()),
+      els.map((e) => (e.querySelector(".pknm")?.textContent ?? "").trim()),
     );
   };
   const offered2d = await pickerSearch(grid2d.name);
@@ -3528,7 +3528,7 @@ try {
   );
   await pickerSearch("");
   const offered = await page.$$eval('[data-role="picker-item"][data-kind="library"]', (els) =>
-    els.map((e) => (e.querySelector(".name")?.textContent ?? "").trim()),
+    els.map((e) => (e.querySelector(".pknm")?.textContent ?? "").trim()),
   );
   const kindOf = new Map(galleryJson.map((p) => [p.name, p.kind]));
   // "any" is the generator's DIMENSIONLESS kind — an index-space
@@ -3574,7 +3574,7 @@ try {
   await page.waitForSelector('[data-role="picker-section-library"]', { timeout: 15000 });
   const libName = await page.$eval(
     '[data-role="picker-item"][data-kind="library"]',
-    (el) => (el.querySelector(".name")?.textContent ?? "").trim(),
+    (el) => (el.querySelector(".pknm")?.textContent ?? "").trim(),
   );
   await page.click('[data-role="picker-item"][data-kind="library"]');
   await page
@@ -4257,6 +4257,306 @@ try {
       await scPage.close();
       scDev.kill();
     }
+  }
+
+
+  // ── Scenes on the playlist, in the picker and in the ⋯ menus (#478/#482) ──
+  //
+  // Its own 64×64 mirror: scenes need a regular 2D grid (§5.4c), and the main
+  // mirror here is a 120 px strip — which is exactly what the LAST check in
+  // this block uses, to prove the menu item is ABSENT there rather than
+  // disabled (mock S2e).
+  {
+    const SC_PORT = E2E.mirror.plScenes; // E2E_PORT + 53
+    const SC = `http://127.0.0.1:${SC_PORT}`;
+    // `--scenes FILE` preloads the scene store (docs/api.md): the flag exists
+    // so a harness can bring a mirror up with scenes already in it. This one
+    // needs no pattern ids — colour and text layers name nothing.
+    const preload = `${shotDir}/e2e-playlist-scenes-preload.txt`;
+    fs.writeFileSync(
+      preload,
+      [
+        // an EXPLICIT id: a mirror started with `--scenes` does not assign one
+        // to an `S -` block, so such a scene cannot be referenced at all (Gitea
+        // #701) — the preload names its own.
+        "S 5eed0001 Wall clock",
+        "L color 0 0 0 0 normal 100 none fill 1",
+        "K 101030",
+        "L text 0 0 0 0 normal 100 none fill 1",
+        "T clock HH:MM",
+        "F regular ffffff c none 0",
+        "",
+      ].join("\n"),
+    );
+    const plDev = spawn(
+      "../target/debug/luxel",
+      [
+        "serve",
+        ...NO_NETIN,
+        "--port",
+        String(SC_PORT),
+        "--board",
+        "panel",
+        "--pixels",
+        "4096",
+        "--name",
+        "luxel-scenes",
+        "--scenes",
+        preload,
+      ],
+      { stdio: ["ignore", "pipe", "inherit"] },
+    );
+    await new Promise((resolve, reject) => {
+      plDev.stdout.on("data", (d) => String(d).includes("luxel serve:") && resolve());
+      plDev.on("exit", () => reject(new Error("playlist-scenes mirror died")));
+      setTimeout(() => reject(new Error("playlist-scenes mirror start timeout")), 30000);
+    });
+    process.on("exit", () => plDev.kill());
+    const plPage = await browser.newPage();
+    try {
+      const preloaded = await (await fetch(`${SC}/api/scenes`)).json();
+      check(
+        "scenes: `--scenes FILE` preloads the store",
+        preloaded.scenes.length === 1 &&
+          preloaded.scenes[0].name === "Wall clock" &&
+          preloaded.scenes[0].id === "5eed0001",
+        JSON.stringify(preloaded.scenes.map((s) => `${s.id}:${s.name}`)),
+      );
+
+      // two patterns, then a TWO-layer scene over the API (the shape a row
+      // has to describe: `Scene ▤ · 2 layers`)
+      const pid = {};
+      for (const [name, src] of [
+        ["Aurora 2D", "export function render2D(index, x, y) { hsv(.33, 1, y) }\n"],
+        ["Blue Comet", "export function render2D(index, x, y) { hsv(.6, 1, wave(x + time(.05))) }\n"],
+      ]) {
+        const r = await fetch(`${SC}/api/patterns`, {
+          method: "POST",
+          body: await lxpBody(name, src, 4096),
+        });
+        pid[name] = (await r.json()).id;
+      }
+      const made = await (
+        await fetch(`${SC}/api/scenes`, {
+          method: "POST",
+          body: [
+            "S - Clock overlay",
+            "L pat 0 0 0 0 normal 100 none fill 1",
+            `I ${pid["Aurora 2D"]}`,
+            "L text 0 0 0 0 normal 100 none fill 1",
+            "T clock HH:MM",
+            "F regular ffffff c none 0",
+          ].join("\n"),
+        })
+      ).json();
+      check(
+        "scenes: POST /api/scenes answers with an assigned id",
+        made.ok === true && /^[0-9a-f]{8}$/.test(made.id ?? ""),
+        JSON.stringify(made),
+      );
+
+      // a playlist with a PATTERN item and a SCENE item — the wire's
+      // `I S<id> <sec>` (the serializer's half is unit-tested in
+      // web/tests/playlist.test.mjs)
+      await fetch(`${SC}/api/playlist`, {
+        method: "POST",
+        body: `D 900\nX 0\nI ${pid["Aurora 2D"]} -1\nI S${made.id} -1`,
+      });
+      await fetch(`${SC}/api/playlist/play`, { method: "POST", body: "1" });
+      await plPage.setViewport({ width: 1400, height: 900 });
+      await gotoConsole(plPage, SC, "#/playlist");
+      await plPage.waitForSelector('[data-role="pl-edit-scene"]', { timeout: 15000 });
+      await sleep(2500); // the composite needs a few frames
+
+      const row = await plPage.evaluate(() => {
+        const link = document.querySelector('[data-role="pl-edit-scene"]');
+        const li = link?.closest('[data-role="playlist-item"]');
+        return {
+          type: li?.querySelector(".who .t")?.innerText.replace(/\s+/g, " ").trim() ?? "",
+          href: link?.getAttribute("href") ?? "",
+          label: link?.innerText.replace(/\s+/g, " ").trim() ?? "",
+          hasValues: li?.querySelector('[data-role="pl-values-toggle"]') !== null,
+          hasDuration: li?.querySelector('[data-role="pl-duration"]') !== null,
+          hasThumb: li?.querySelector('[data-role="scene-thumb"] canvas') !== null,
+        };
+      });
+      check("scenes: a scene row says what it is (S4c)", row.type === "Scene ▤ · 2 layers", row.type);
+      check("scenes: a scene row has NO values chip — its layers own their values", !row.hasValues);
+      check("scenes: a scene row keeps the duration chip", row.hasDuration);
+      check("scenes: a scene row carries a composite thumbnail (#482)", row.hasThumb);
+      check(
+        "scenes: `Edit scene ›` points at the scene editor's route",
+        row.href === `#/scenes/${made.id}` && row.label === "Edit scene ›",
+        `${row.href} / ${row.label}`,
+      );
+
+      // the composite is REAL: the thumbnail's canvas has lit pixels, which
+      // it can only have from `luxel_core::compose` running in the wasm
+      const lit = await plPage.evaluate(() => {
+        const c = document.querySelector('[data-role="scene-thumb"] canvas');
+        if (!c) return -1;
+        const px = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+        let n = 0;
+        for (let i = 0; i < px.length; i += 4) if (px[i] + px[i + 1] + px[i + 2] > 12) n++;
+        return n;
+      });
+      check("scenes: the composite thumbnail actually paints", lit > 0, `${lit} lit pixels`);
+      await plPage.screenshot({ path: `${shotDir}/scenes-playlist-row.png` });
+
+      // …and the link OPENS the scene editor (App's `openScene`), rather than
+      // only pointing at it: a fragment the shell never applies is a dead link.
+      await plPage.click('[data-role="pl-edit-scene"]');
+      await plPage.waitForSelector('[data-role="scene-editor-view"]:not([hidden])', {
+        timeout: 8000,
+      });
+      check(
+        "scenes: Edit scene › opens the scene editor on that scene",
+        (await plPage.evaluate(() => location.hash)) === `#/scenes/${made.id}`,
+        await plPage.evaluate(() => location.hash),
+      );
+      // Back from a scene editor lands on the SCENES page (that is the screen
+      // the editor belongs to, and its back button says so) — the playlist is
+      // one tab away.
+      await plPage.click('[data-role="scene-editor-back"]');
+      await plPage.waitForSelector('[data-role="tab-playlist"]', { timeout: 8000 });
+      await plPage.click('[data-role="tab-playlist"]');
+      await plPage.waitForSelector('[data-role="playlist-panel"]:not([hidden])', { timeout: 8000 });
+
+      // ---- the ONE picker gains a Scenes section (S4c) ----
+      await plPage.click('[data-role="pl-add"]');
+      await plPage.waitForSelector('[data-role="pattern-picker"]', { timeout: 4000 });
+      await plPage.waitForSelector('[data-role="picker-section-scene"]', { timeout: 8000 });
+      const sections = await plPage.$$eval("[data-role^='picker-section-']", (els) =>
+        els.map((e) => e.getAttribute("data-role")),
+      );
+      check(
+        "scenes: the picker offers Patterns and Scenes sections",
+        sections.includes("picker-section-pattern") && sections.includes("picker-section-scene"),
+        sections.join(","),
+      );
+      const facts = await plPage.$$eval('[data-role="picker-item"][data-kind="scene"]', (els) =>
+        els.map((e) => `${e.querySelector(".pknm").textContent.trim()}|${e.querySelector(".mdim").textContent.trim()}`),
+      );
+      check(
+        "scenes: a picker scene row carries the layer count as its one fact",
+        facts.includes("Clock overlay|2 layers") && facts.includes("Wall clock|2 layers"),
+        facts.join(" · "),
+      );
+      const sweepPicker = await disabledSweep(plPage);
+      check(
+        "scenes: nothing in the open picker is disabled without a reason (§5.7)",
+        sweepPicker.length === 0,
+        JSON.stringify(sweepPicker),
+      );
+      await plPage.screenshot({ path: `${shotDir}/scenes-picker.png` });
+
+      const before = (await (await fetch(`${SC}/api/playlist`)).json()).items.length;
+      await plPage.click('[data-role="picker-item"][data-kind="scene"]');
+      await sleep(900);
+      const pl = await (await fetch(`${SC}/api/playlist`)).json();
+      const last = pl.items[pl.items.length - 1];
+      check(
+        "scenes: picking a scene queues it as a scene item (`I S<id>` on the wire)",
+        pl.items.length === before + 1 && last.kind === "scene" && /^[0-9a-f]{8}$/.test(last.id),
+        JSON.stringify(last),
+      );
+
+      // ---- `Add to scene ▸` in the editor's ⋯ (S2e) ----
+      await gotoConsole(plPage, SC, "#/");
+      await plPage.waitForSelector(`${DTILE}`, { timeout: 15000 });
+      await tileAction(plPage, `${DGRID} [data-role="tile"][data-name="Blue Comet"]`, "tile-edit");
+      await plPage.waitForSelector('[data-role="editor-view"]:not([hidden]) .cm-content', {
+        timeout: 15000,
+      });
+      await sleep(1500);
+      await plPage.click('[data-role="overflow"]');
+      await plPage.waitForSelector('[data-role="add-to-scene"]', { timeout: 4000 });
+      const label = await plPage.$eval('[data-role="add-to-scene"]', (el) =>
+        el.childNodes[0].textContent.trim(),
+      );
+      check("scenes: the editor ⋯ carries `Add to scene`", label === "Add to scene", label);
+      await (await plPage.$('[data-role="add-to-scene"]')).hover();
+      await sleep(300);
+      const subNames = await plPage.$$eval('[data-role="add-to-scene-item"]', (els) =>
+        els.map((e) => e.textContent.trim()),
+      );
+      check(
+        "scenes: the submenu lists every scene on the device",
+        subNames.includes("Clock overlay") && subNames.includes("Wall clock"),
+        subNames.join(","),
+      );
+      check(
+        "scenes: the submenu ends with `New scene…`",
+        (await plPage.$eval('[data-role="add-to-scene-new"]', (e) => e.textContent.trim())) ===
+          "New scene…",
+      );
+      await plPage.screenshot({ path: `${shotDir}/scenes-editor-menu.png` });
+
+      const layersBefore = (await (await fetch(`${SC}/api/scenes/${made.id}`)).json()).layers.length;
+      await plPage.click(`[data-role="add-to-scene-item"][data-id="${made.id}"]`);
+      await sleep(1200);
+      const after = await (await fetch(`${SC}/api/scenes/${made.id}`)).json();
+      const top = after.layers[after.layers.length - 1];
+      check(
+        "scenes: Add to scene puts the pattern on TOP of the scene",
+        after.layers.length === layersBefore + 1 &&
+          top.type === "pat" &&
+          top.pat.id === pid["Blue Comet"],
+        JSON.stringify({ n: after.layers.length, top: top.type, id: top.pat?.id }),
+      );
+
+      // ---- `New scene…` creates one and opens the scene editor ----
+      const nBefore = (await (await fetch(`${SC}/api/scenes`)).json()).scenes.length;
+      await plPage.click('[data-role="overflow"]');
+      await plPage.waitForSelector('[data-role="add-to-scene"]', { timeout: 4000 });
+      await (await plPage.$('[data-role="add-to-scene"]')).hover();
+      await sleep(300);
+      await plPage.click('[data-role="add-to-scene-new"]');
+      await sleep(1200);
+      const list = await (await fetch(`${SC}/api/scenes`)).json();
+      const fresh = list.scenes[list.scenes.length - 1];
+      const hash = await plPage.evaluate(() => location.hash);
+      const inEditor =
+        (await plPage.$('[data-role="scene-editor-view"]:not([hidden])')) !== null;
+      check(
+        "scenes: `New scene…` names the scene after the pattern and opens it",
+        list.scenes.length === nBefore + 1 &&
+          fresh.name === "Blue Comet" &&
+          fresh.layers.length === 1 &&
+          hash === `#/scenes/${fresh.id}` &&
+          inEditor,
+        `${list.scenes.length} scenes, ${fresh?.name}, ${hash}, editor ${inEditor}`,
+      );
+    } finally {
+      await plPage.close();
+      plDev.kill();
+    }
+  }
+
+  // ---- …and on a STRIP console the item is ABSENT, not disabled (S2e) ----
+  //
+  // The main mirror is a 120 px strip, so this is the same menu on hardware
+  // that cannot hold a scene: one item shorter, nothing greyed.
+  {
+    await leaveEditor(page);
+    await reloadInto(page, EDIT);
+    await page.waitForSelector('[data-role="editor-view"]:not([hidden]) .cm-content', {
+      timeout: 15000,
+    });
+    await page.click('[data-role="overflow"]');
+    await sleep(300);
+    check(
+      "scenes: a strip console's ⋯ has no `Add to scene` at all (absent, not disabled)",
+      (await page.$('[data-role="add-to-scene"]')) === null,
+    );
+    const stripSweep = await disabledSweep(page);
+    check(
+      "scenes: and nothing in that menu is disabled without a reason",
+      stripSweep.length === 0,
+      JSON.stringify(stripSweep),
+    );
+    await page.keyboard.press("Escape");
+    await leaveEditor(page);
   }
 
   // ---- §5.7 sweep: absent, never disabled (Gitea #529) ------------------

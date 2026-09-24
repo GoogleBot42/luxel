@@ -21,12 +21,16 @@
   // drawn in their own shape and with no Play verb. The heading is the whole
   // explanation; Jeremy asked for no prose about the rule.
   import { createEventDispatcher } from "svelte";
+  import AddToSceneMenu from "../components/AddToSceneMenu.svelte";
   import Gallery, { type GalleryItem } from "../components/Gallery.svelte";
   import Popover from "../components/Popover.svelte";
+  import { withPatternOnTop } from "../lib/scene";
+  import { newScene, saveScene, scenes, refreshScenes } from "../stores/scenes";
   import {
     addToPlaylist as addPatternToPlaylist,
     device,
     deviceError,
+    deviceLayoutWire,
     devicePatterns,
     deviceRunningId,
     isPlayground,
@@ -49,6 +53,10 @@
   /** The scraped-corpus source exists only when tools/gen-corpus-gallery.mjs
    *  found a populated corpus/ (dev-only, as today — see App.svelte's probe). */
   export let hasPixelblazeLibrary = false;
+  /** Whether scenes can exist here at all — the shell's own predicate (a
+   *  regular 2D console, or the playground). `Add to scene ▸` is ABSENT
+   *  without it, never disabled (§5.7, mock S2e). */
+  export let scenesReady = false;
 
   const dispatch = createEventDispatcher<{
     /** open a library/corpus pattern in the editor */
@@ -57,6 +65,8 @@
     openSaved: string;
     /** open a device pattern in the editor (by id) */
     openDevice: string;
+    /** open a scene in the scene editor (by id) — `New scene…` */
+    openscene: string;
     /** activate a device pattern WITHOUT opening the editor (by id) */
     playDevice: string;
     new: void;
@@ -166,6 +176,35 @@
 
   function openMenu(e: MouseEvent, item: GalleryItem): void {
     menu = { item, anchor: e.currentTarget as HTMLElement };
+    if (canAddToScene) void refreshScenes();
+  }
+
+  // ---- Add to scene ▸ (proposal §5.4b, mock S2e) ----
+  //
+  // Present only where scenes can exist — a regular 2D console (§5.4c, D10).
+  // On a strip, a lattice or a custom map the menu is simply one item shorter:
+  // ABSENT, never a greyed row with a reason (§5.7).
+  $: canAddToScene = sourceId === "device" && scenesReady;
+
+  /** Add the tile's pattern to an existing scene as its TOP layer, with the
+   *  pattern's own defaults (a tile has no sliders to capture — the editor's
+   *  ⋯ is where tuned values come from). */
+  async function addToScene(item: GalleryItem, sceneId: string, sceneName: string): Promise<void> {
+    closeMenu();
+    const scene = $scenes.find((s) => s.id === sceneId);
+    if (!scene) return;
+    const r = await saveScene(withPatternOnTop(scene, item.key));
+    // A refusal is already in the ONE error strip (`stores/scenes.ts` reports
+    // it with scope `scene`); this is the confirmation half.
+    if (r.ok) note("save", `added to “${sceneName}”`, 2500);
+  }
+
+  /** `New scene…` — one scene named after the pattern, then straight into the
+   *  scene editor (Gitea #480 owns that screen). */
+  async function newSceneFrom(item: GalleryItem): Promise<void> {
+    closeMenu();
+    const r = await saveScene(withPatternOnTop(newScene(item.name), item.key));
+    if (r.ok && r.id) dispatch("openscene", r.id);
   }
 
   function closeMenu(): void {
@@ -612,9 +651,9 @@
 </div>
 
 {#if menu}
-  <!-- Add to scene ▸ belongs here too (regular 2D only, §5.4b) — Scenes do
-       not exist until Phase B, so it is absent rather than disabled: Gitea
-       #480 adds the entry. -->
+  <!-- `Add to scene ▸` sits here, between the two playlist/scene verbs and
+       the document group (§5.4b, mock S2e) — and only on a regular 2D
+       console: absent, never disabled (Gitea #478). -->
   {@const item = menu.item}
   <Popover open anchor={menu.anchor} dataRole="tile-menu-popup" on:close={closeMenu}>
     <!-- the mock's three groups, separated the way it separates them: what
@@ -624,6 +663,13 @@
       <button class="mi" data-role="tile-menu-playlist" on:click={() => addToPlaylist(item)}>
         Add to playlist
       </button>
+      {#if canAddToScene}
+        <AddToSceneMenu
+          scenes={$scenes}
+          on:pick={(e) => void addToScene(item, e.detail.id, e.detail.name)}
+          on:create={() => void newSceneFrom(item)}
+        />
+      {/if}
       <div class="sepr"></div>
     {/if}
     <button class="mi" data-role="tile-menu-duplicate" on:click={() => void duplicate(item)}>

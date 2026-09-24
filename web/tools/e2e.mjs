@@ -484,6 +484,15 @@ try {
     menuOrder.join(",") === "duplicate,epe-export,epe-import,share,—,delete",
     menuOrder.join(","),
   );
+  // `Add to scene ▸` is a CONSOLE verb on a regular 2D fixture (§5.4b/§5.4c):
+  // the playground has no `/api/scenes` to put a pattern into, so the row is
+  // absent rather than disabled — the same rule as `Add to playlist` above it
+  // (Gitea #478). device-e2e covers the console halves, both of them.
+  check(
+    "E5: no `Add to scene` in the playground — there is no device to hold one",
+    !menuOrder.includes("add-to-scene"),
+    menuOrder.join(","),
+  );
   await page.keyboard.press("Escape");
   await sleep(150);
 

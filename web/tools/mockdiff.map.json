@@ -145,6 +145,41 @@
       ],
       "activateScene": "Clock overlay",
       "why": "mockups S6/S6d: three scene tiles, the first PLAYING. S7's stack, bottom to top: a 1D base under a projection override (the quiet Projection row, S7g), a colour wash, a 2D pattern at 60 % (S7b/S7g's inspector), a 9x8 sprite and a clock text layer — two pattern layers, which is exactly `caps.layers` on this board, so the Add-layer menu is at the cap (S7d). `Aurora + ticker` is NOT the active scene: the inspector frames edit it, and an edit to the active scene would live-push and change what a later frame sees."
+    },
+    "plscenes": {
+      "brightness": 3,
+      "tzMinutes": -360,
+      "patterns": [
+        {
+          "name": "Aurora 2D",
+          "source": "// Aurora 2D — slow green curtains with a violet shimmer\nexport var band = 0\nexport var shimmerAmp = 0\nvar cellSize = 1, speed = .4, ph = .33, sparkle = 1, t1 = 0\nexport function sliderCellSize(v) { cellSize = v }  //# min=.2 max=4 default=1\nexport function sliderSpeed(v) { speed = v }  //# min=0 max=1 default=.4\nexport function hsvPickerPalette(h, s, v) { ph = h }  //# default=.33\nexport function toggleSparkle(v) { sparkle = v }  //# default=1\nexport function beforeRender(delta) {\n  t1 = time(.1 * speed)\n  band = wave(t1) * .35 + .5\n  shimmerAmp = .12 + band * .08\n}\nexport function render2D(index, x, y) {\n  var curtain = clamp(1 - abs(y - band) * 3.2 * cellSize, 0, 1)\n  var v = clamp(curtain * (.55 + shimmerAmp * sparkle), 0, 1)\n  hsv(ph - v * .06, 1 - v * .35, v * v)\n}\n"
+        },
+        {
+          "name": "Blue Comet",
+          "source": "export function render2D(index, x, y) {\n  var f = (x + y) / 2\n  hsv(.6, 1, wave(f + time(.05)))\n}\n"
+        },
+        {
+          "name": "Sunset Fade",
+          "source": "// Sunset Fade — a warm 1D ramp with three values\nvar hue = .1, speed = .08, sparkle = 1\nexport function sliderHue(v) { hue = v }  //# min=0 max=1 default=.1\nexport function sliderSpeed(v) { speed = v }  //# min=0 max=1 default=.08\nexport function toggleSparkle(v) { sparkle = v }  //# default=1\nexport function render(index) {\n  var f = index / pixelCount\n  var v = 1 - f * .3\n  if (sparkle && random(1) < .02) v = 1\n  hsv(hue - f * .06 + time(speed), 1, v)\n}\n"
+        },
+        {
+          "name": "Blinky Eyes 2D",
+          "source": "export function render2D(index, x, y) { hsv(.12, 1, abs(x - .5) < .1 && abs(y - .5) < .1) }\n"
+        }
+      ],
+      "scenes": [
+        "S - Clock overlay\nL pat 0 0 0 0 normal 100 none fill 1\nI {{Aurora 2D}}\nL text 0 28 64 8 normal 100 none fill 1\nT clock HH:MM\nF regular ffffff c none 0\n",
+        "S - Aurora + ticker\nL pat 0 0 0 0 normal 100 none fill 1\nI {{Aurora 2D}}\nL text 0 44 64 8 normal 100 none fill 1\nT lit LUXEL\nF regular ffcc44 l left 18\nL color 0 0 64 8 add 30 none fill 1\nK 221144\n",
+        "S - Party wall\nL pat 0 0 0 0 normal 100 none fill 1\nI {{Aurora 2D}}\nL pat 0 0 0 0 lighten 60 black fill 1\nI {{Blue Comet}}\nL text 0 2 64 8 normal 100 none fill 1\nT lit PARTY\nF regular ffffff c none 0\nL color 0 56 64 8 add 40 none fill 1\nK 331122\n"
+      ],
+      "defaultSec": 8,
+      "crossfadeMs": 500,
+      "playlist": [
+        "@Clock overlay"
+      ],
+      "playIndex": 0,
+      "play": true,
+      "why": "mockups S4c/S4d/S2e: the PLAYING row is a scene item (`I S<id>` on the wire), and the three scenes are named and sized exactly as the mock draws them — `Clock overlay` 2 layers on the row, `Aurora + ticker` 3 and `Party wall` 4 in the picker, all three in S2e's submenu. The queue holds ONE item on purpose: a playlist of one re-enters itself, so the green row is the same row for a whole run AND its duration chip can read the mock's `8 s` (S4 buys the same stability with a 900 s default, which no chip it maps draws)."
     }
   },
   "frames": {
@@ -986,15 +1021,6 @@
       },
       "allow": [
         {
-          "element": "mi-scene",
-          "why": "`Add to scene ▸` is the menu half of Phase B (#478, WEB-B) — not built"
-        },
-        {
-          "element": "menu",
-          "property": "box height",
-          "why": "`Add to scene ▸` is the menu half of Phase B (#478, WEB-B): one fewer row is 33px less menu"
-        },
-        {
           "element": "menu",
           "property": "position",
           "why": "a popover is positioned off its anchor (`fixed`) so a menu opened from a scrolling grid cannot be clipped — Jeremy's dropdown complaint, 2026-09-19"
@@ -1014,6 +1040,15 @@
           "hover": true,
           "text": true,
           "noBox": true
+        },
+        {
+          "id": "mi-scene",
+          "mock": ".menu .mi.parent",
+          "app": "[data-role=\"add-to-scene\"]",
+          "hoverOnly": true,
+          "hoverApp": "[data-role=\"add-to-scene\"]",
+          "noBox": true,
+          "note": "`Add to scene ▸` (Gitea #478) — present on this matrix console, absent on a strip (S2e)"
         },
         {
           "id": "mi-sep",
@@ -3252,6 +3287,11 @@
           "element": "plfoot",
           "property": "text",
           "why": "the loop total counts the playing item's duration, which the seed has to keep long so the playing row is the same one for a whole run; the FORM (`N items · loop ≈ <duration>`) is compared"
+        },
+        {
+          "element": "pl-add",
+          "property": "margin-top",
+          "why": "the 4px gap above `+ Add` sits on the `.addwrap` the picker drops out of (S4c draws the button inside it and puts the margin there); S4 has no wrapper and draws the margin on the button. Identical 4px gap either way — S4c compares the wrapper"
         }
       ],
       "replay": true
@@ -3407,8 +3447,8 @@
       ]
     },
     "S4picker": {
-      "title": "Playlist — the + Add picker (mock frame S5's .pop is the nearest primitive)",
-      "mock": "S5",
+      "title": "Playlist — the + Add picker on a console with NO scenes (mock frame S4c)",
+      "mock": "S4c",
       "width": 1200,
       "height": 940,
       "app": {
@@ -3436,97 +3476,67 @@
       "allow": [
         {
           "element": "panel",
-          "property": "width",
-          "why": "the picker is a 520px modal over a 300-pattern list; the mock's .pop is a 296px popover — only the chrome (radius/border/shadow/background) is comparable"
-        },
-        {
-          "element": "panel",
-          "property": "box width",
-          "why": "same"
-        },
-        {
-          "element": "panel",
           "property": "box height",
-          "why": "same"
+          "why": "the app's picker carries a third section the mock does not draw — `Library`, the clean-room collection a pick SAVES to the device (Gitea #538 §F) — and scrolls past 60vh. Its width, chrome and rows are compared"
         },
         {
           "element": "panel",
-          "property": "position",
-          "why": "same"
+          "property": "overflow-x",
+          "why": "same: the Library section makes the panel taller than the viewport, so it scrolls inside itself"
         },
         {
           "element": "panel",
-          "property": "padding-top",
-          "why": "same"
-        },
-        {
-          "element": "panel",
-          "property": "padding-right",
-          "why": "same"
-        },
-        {
-          "element": "panel",
-          "property": "padding-bottom",
-          "why": "same"
-        },
-        {
-          "element": "panel",
-          "property": "padding-left",
-          "why": "same"
-        },
-        {
-          "element": "row",
-          "property": "box width",
-          "why": "a row of the 520px modal, not of the 296px popover"
-        },
-        {
-          "element": "row",
-          "property": "box height",
-          "why": "the picker's rows carry the device-shaped live thumbnail the playlist rows and tiles use; the compared primitive is a text-only radio row"
+          "property": "overflow-y",
+          "why": "same: the Library section makes the panel taller than the viewport, so it scrolls inside itself"
         },
         {
           "element": "search",
-          "property": "box width",
-          "why": "the borrowed primitive is a field in a 1200px scene inspector; the picker's search fills the modal"
+          "property": "color",
+          "why": "the mock cannot draw a placeholder: `.inp.ph` dims the whole field. The app's field is a real input whose ::placeholder is dim and whose typed text is --text"
         },
         {
           "element": "section-label",
           "property": "text",
-          "why": "no mock frame has a picker section; the compared `.slabel` is Settings' `Device`"
-        },
-        {
-          "element": "reading order",
-          "why": "the picker has no mock frame: its four elements are borrowed from three different mock screens, whose page order is not the picker's"
+          "why": "this mirror holds no scenes, so the app's first section is still `Patterns` — the label compared is the mock's first one. Kept as a deliberate note that a console with no scenes shows no Scenes section at all"
         }
       ],
       "elements": [
         {
           "id": "panel",
-          "mock": ".pop",
+          "mock": ".menu.pick",
           "app": "[data-role=\"pattern-picker\"]",
-          "note": "compare chrome only: border, radius, background, shadow",
-          "noBoxH": true
-        },
-        {
-          "id": "row",
-          "mock": ".pop .pr:not(.on)",
-          "app": "[data-role=\"picker-item\"]",
-          "hover": true,
-          "note": "mock `.pop .pr`: padding 8px 9px, radius 6, 13px, gap 9, no border, transparent until hover"
+          "note": "mock `.menu.full.pick`: the ⋯ menu's chrome at the width of the `+ Add` wrapper"
         },
         {
           "id": "search",
-          "mock": "#S7 .irow .inp",
+          "mock": ".menu.pick .inp",
           "app": "[data-role=\"picker-search\"]",
           "focus": true,
-          "note": "no mock analogue; the nearest primitive is a plain 32px `.inp` text field (the mock's own `.pop .inp.xs` is a 52px mono NUMBER field)"
+          "note": "mock `.inp.xs`: 26px, 12px, padding 0 7px, full width"
         },
         {
           "id": "section-label",
-          "mock": "#S3 .secthead .slabel",
-          "app": "[data-role=\"picker-section-library\"]",
-          "note": "the app's section name IS the mock's `.slabel`; the mock has no picker to draw one in",
-          "noBox": true
+          "mock": ".menu.pick .slabel",
+          "mockNth": 0,
+          "app": "[data-role=\"picker-section-pattern\"]",
+          "text": true,
+          "note": "the first section label carries the mock's 9px 10px 5px"
+        },
+        {
+          "id": "row",
+          "mock": ".menu.pick .mi.pk:not(.hi)",
+          "mockNth": 0,
+          "app": "[data-role=\"picker-item\"][data-kind=\"pattern\"]",
+          "nth": 1,
+          "note": "mock `.mi.pk`: flex, gap 9, the `.menu .mi` padding"
+        },
+        {
+          "id": "row-canvas",
+          "mock": ".menu.pick .mi.pk:not(.hi) canvas",
+          "mockNth": 0,
+          "app": "[data-role=\"picker-item\"][data-kind=\"pattern\"] .thumb canvas",
+          "nth": 1,
+          "note": "mock: 26x26, radius 4"
         }
       ]
     },
@@ -3750,6 +3760,15 @@
           "noBox": true
         },
         {
+          "id": "mi-scene",
+          "mock": ".menu .mi.parent",
+          "app": "[data-role=\"add-to-scene\"]",
+          "hoverOnly": true,
+          "hoverApp": "[data-role=\"add-to-scene\"]",
+          "noBox": true,
+          "note": "the tile ⋯ carries the identical menu (S2e's note)"
+        },
+        {
           "id": "mi-del",
           "mock": ".menu > div.mi.del",
           "app": "[data-role=\"tile-menu-delete\"]",
@@ -3762,11 +3781,6 @@
           "element": "menu",
           "property": "position",
           "why": "the popover is placed `fixed` off the anchor's viewport rect so a menu opened inside the scrolling tile grid is not clipped by it and can dodge the viewport edges (Jeremy, 2026-09-19: dropdowns must not dodge sides of screen); the mock is a static `absolute` box inside `.menuwrap`"
-        },
-        {
-          "element": "menu",
-          "property": "box height",
-          "why": "ONE of the mock's six items is absent: `Add to scene ▸`, which is Phase B (Gitea #478). `Import .epe…` landed with #572"
         }
       ]
     },
@@ -6135,6 +6149,522 @@
           "mock": ".boxrow",
           "app": "[data-role=\"scene-box\"]",
           "noBoxH": true
+        }
+      ]
+    },
+    "S4c": {
+      "title": "Playlist — a scene row and the + Add picker (patterns and scenes)",
+      "width": 1200,
+      "height": 940,
+      "app": {
+        "target": "plscenes",
+        "route": "#/playlist",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"playlist-panel\"]"
+          },
+          {
+            "sleep": 2500
+          },
+          {
+            "click": "[data-role=\"pl-add\"]"
+          },
+          {
+            "waitFor": "[data-role=\"pattern-picker\"]"
+          },
+          {
+            "sleep": 1800
+          }
+        ]
+      },
+      "elements": [
+        {
+          "id": "plrow-scene",
+          "mock": ".plrow.playing",
+          "app": "[data-role=\"playlist-item\"].playing",
+          "note": "a scene row is a playlist row like any other: same handle, same card, same green edge",
+          "noBoxH": true
+        },
+        {
+          "id": "plrow-scene-hnd",
+          "mock": ".plrow.playing .hnd",
+          "app": "[data-role=\"playlist-item\"].playing [data-role=\"pl-grip\"]",
+          "note": "mock: the playing row's handle is a green `▶`, 11px"
+        },
+        {
+          "id": "plrow-scene-canvas",
+          "mock": ".plrow.playing canvas",
+          "app": "[data-role=\"playlist-item\"].playing [data-role=\"scene-thumb\"] canvas",
+          "note": "mock: 44x44, radius 4 — the scene's COMPOSITE, device-shaped (#482)"
+        },
+        {
+          "id": "plrow-scene-n",
+          "mock": ".plrow.playing .who .n",
+          "app": "[data-role=\"playlist-item\"].playing [data-role=\"pl-name\"]",
+          "text": true
+        },
+        {
+          "id": "plrow-scene-t",
+          "mock": ".plrow.playing .who .t",
+          "app": "[data-role=\"playlist-item\"].playing .who .t",
+          "text": true,
+          "note": "mock copy: `Scene ▤ · 2 layers` — the scene badge and the layer count, in place of `Pattern`"
+        },
+        {
+          "id": "plrow-scene-chip",
+          "mock": ".plrow.playing .chip",
+          "app": "[data-role=\"playlist-item\"].playing [data-role=\"pl-duration\"]",
+          "note": "a scene item's duration chip is a pattern item's"
+        },
+        {
+          "id": "edit-scene",
+          "mock": ".plrow.playing .lnk",
+          "app": "[data-role=\"pl-edit-scene\"]",
+          "text": true,
+          "note": "mock `.lnk`: 12.5px dim, nowrap — it REPLACES the values chip (a scene's layers own their values)"
+        },
+        {
+          "id": "plrow-scene-rm",
+          "mock": ".plrow.playing .btn.icon.quiet",
+          "app": "[data-role=\"playlist-item\"].playing [data-role=\"pl-remove\"]",
+          "hover": true
+        },
+        {
+          "id": "addwrap",
+          "mock": ".pllist > .addwrap",
+          "app": "[data-role=\"playlist-panel\"] .addwrap",
+          "note": "mock: position relative, width 360, margin-top 4 — the box the picker drops out of",
+          "noBoxH": true
+        },
+        {
+          "id": "pl-add",
+          "mock": ".addwrap > .btn.quiet",
+          "app": "[data-role=\"pl-add\"]",
+          "hover": true,
+          "text": true
+        },
+        {
+          "id": "picker",
+          "mock": ".menu.pick",
+          "app": "[data-role=\"pattern-picker\"]",
+          "note": "mock `.menu.full.pick`: the ⋯ menu's chrome, left:0/right:0 of the 360px wrapper, top calc(100% + 7px)"
+        },
+        {
+          "id": "picker-search",
+          "mock": ".menu.pick .inp",
+          "app": "[data-role=\"picker-search\"]",
+          "note": "mock `.inp.xs`: 26px, 12px, padding 0 7px, full width, 2px under it"
+        },
+        {
+          "id": "picker-sect-pat",
+          "mock": ".menu.pick .slabel",
+          "mockNth": 0,
+          "app": "[data-role=\"picker-section-pattern\"]",
+          "text": true,
+          "note": "mock: padding 9px 10px 5px on the FIRST section label"
+        },
+        {
+          "id": "picker-sect-scene",
+          "mock": ".menu.pick .slabel",
+          "mockNth": 1,
+          "app": "[data-role=\"picker-section-scene\"]",
+          "text": true,
+          "note": "mock: padding 11px 10px 5px on every label after the first"
+        },
+        {
+          "id": "picker-row",
+          "mock": ".menu.pick .mi.pk:not(.hi)",
+          "mockNth": 0,
+          "app": "[data-role=\"picker-item\"][data-kind=\"pattern\"]",
+          "nth": 1,
+          "note": "mock `.mi.pk`: flex, gap 9, the `.menu .mi` padding — both sections use the SAME row"
+        },
+        {
+          "id": "picker-row-canvas",
+          "mock": ".menu.pick .mi.pk:not(.hi) canvas",
+          "mockNth": 0,
+          "app": "[data-role=\"picker-item\"][data-kind=\"pattern\"] .thumb canvas",
+          "nth": 1,
+          "note": "mock: 26x26, radius 4, device-shaped"
+        },
+        {
+          "id": "picker-name",
+          "mock": ".menu.pick .mi.pk:not(.hi) .pknm",
+          "mockNth": 0,
+          "app": "[data-role=\"picker-item\"][data-kind=\"pattern\"] .pknm",
+          "nth": 1,
+          "text": true
+        },
+        {
+          "id": "picker-fact",
+          "mock": ".menu.pick .mi.pk:not(.hi) .mdim",
+          "mockNth": 0,
+          "app": "[data-role=\"picker-item\"][data-kind=\"pattern\"] .mdim",
+          "nth": 1,
+          "text": true,
+          "note": "mock: 10px mono dim, pushed right — ONE fact per row (a pattern's dimensionality)"
+        },
+        {
+          "id": "picker-scene-row",
+          "mock": ".menu.pick .mi.pk:not(.hi)",
+          "mockNth": 3,
+          "app": "[data-role=\"picker-item\"][data-kind=\"scene\"]",
+          "nth": 1,
+          "note": "the Scenes section's row is the Patterns section's row"
+        },
+        {
+          "id": "picker-scene-canvas",
+          "mock": ".menu.pick .mi.pk:not(.hi) canvas",
+          "mockNth": 3,
+          "app": "[data-role=\"picker-item\"][data-kind=\"scene\"] [data-role=\"scene-thumb\"] canvas",
+          "nth": 1,
+          "note": "a scene's row thumbnail is its composite (#482)"
+        },
+        {
+          "id": "picker-scene-fact",
+          "mock": ".menu.pick .mi.pk:not(.hi) .mdim",
+          "mockNth": 3,
+          "app": "[data-role=\"picker-item\"][data-kind=\"scene\"] .mdim",
+          "nth": 1,
+          "text": true,
+          "note": "mock copy: `3 layers` — a scene's one fact is its layer count"
+        }
+      ],
+      "allow": [
+        {
+          "element": "picker",
+          "property": "box height",
+          "why": "the app's picker carries a third section the mock does not draw — `Library`, the clean-room collection a pick SAVES to the device (Gitea #538 §F) — and scrolls past 60vh. Its width, chrome and rows are compared"
+        },
+        {
+          "element": "picker",
+          "property": "overflow-x",
+          "why": "same: the Library section makes the panel taller than the viewport, so it scrolls inside itself"
+        },
+        {
+          "element": "picker",
+          "property": "overflow-y",
+          "why": "same: the Library section makes the panel taller than the viewport, so it scrolls inside itself"
+        },
+        {
+          "element": "picker-search",
+          "property": "color",
+          "why": "the mock cannot draw a placeholder: `.inp.ph` dims the whole field. The app's field is a real input whose ::placeholder is dim and whose typed text is --text"
+        }
+      ]
+    },
+    "S4d": {
+      "title": "Playlist — the + Add picker at 390 px (full-width sheet, search first)",
+      "width": 390,
+      "height": 900,
+      "app": {
+        "target": "plscenes",
+        "route": "#/playlist",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"playlist-panel\"]"
+          },
+          {
+            "sleep": 2500
+          },
+          {
+            "click": "[data-role=\"pl-add\"]"
+          },
+          {
+            "waitFor": "[data-role=\"pattern-picker\"]"
+          },
+          {
+            "sleep": 1800
+          }
+        ]
+      },
+      "elements": [
+        {
+          "id": "plrow-scene",
+          "mock": ".plrow.playing",
+          "app": "[data-role=\"playlist-item\"].playing",
+          "noBoxH": true
+        },
+        {
+          "id": "plrow-scene-canvas",
+          "mock": ".plrow.playing canvas",
+          "app": "[data-role=\"playlist-item\"].playing [data-role=\"scene-thumb\"] canvas",
+          "note": "mock: 40x40 on a phone"
+        },
+        {
+          "id": "plrow-scene-t",
+          "mock": ".plrow.playing .who .t",
+          "app": "[data-role=\"playlist-item\"].playing .who .t",
+          "text": true,
+          "note": "mock copy: `Scene ▤ · 2 layers · 8 s` — the duration folds into the type line, exactly as a pattern row's does (S4b)"
+        },
+        {
+          "id": "edit-scene",
+          "mock": ".plrow.playing .lnk",
+          "app": "[data-role=\"pl-edit-scene\"]",
+          "text": true,
+          "note": "mock copy at 390px: `Edit ›`"
+        },
+        {
+          "id": "addwrap",
+          "mock": ".pllist > .addwrap",
+          "app": "[data-role=\"playlist-panel\"] .addwrap",
+          "note": "mock: no width of its own on a phone — the picker is the full width of the list",
+          "noBoxH": true
+        },
+        {
+          "id": "picker",
+          "mock": ".menu.pick",
+          "app": "[data-role=\"pattern-picker\"]",
+          "note": "mock: a full-width sheet in the list, not a 360px popover"
+        },
+        {
+          "id": "picker-search",
+          "mock": ".menu.pick .inp",
+          "app": "[data-role=\"picker-search\"]",
+          "note": "FIRST in the panel so a long library is reachable with the thumb"
+        },
+        {
+          "id": "picker-sect-pat",
+          "mock": ".menu.pick .slabel",
+          "mockNth": 0,
+          "app": "[data-role=\"picker-section-pattern\"]",
+          "text": true
+        },
+        {
+          "id": "picker-sect-scene",
+          "mock": ".menu.pick .slabel",
+          "mockNth": 1,
+          "app": "[data-role=\"picker-section-scene\"]",
+          "text": true
+        },
+        {
+          "id": "picker-row",
+          "mock": ".menu.pick .mi.pk:not(.hi)",
+          "mockNth": 0,
+          "app": "[data-role=\"picker-item\"][data-kind=\"pattern\"]",
+          "nth": 1,
+          "noBoxW": true
+        }
+      ],
+      "allow": [
+        {
+          "element": "picker",
+          "property": "box height",
+          "why": "the app's picker carries a third section the mock does not draw — `Library`, the clean-room collection a pick SAVES to the device (Gitea #538 §F) — and scrolls past 60vh. Its width, chrome and rows are compared"
+        },
+        {
+          "element": "picker",
+          "property": "overflow-x",
+          "why": "same: the Library section makes the panel taller than the viewport, so it scrolls inside itself"
+        },
+        {
+          "element": "picker",
+          "property": "overflow-y",
+          "why": "same: the Library section makes the panel taller than the viewport, so it scrolls inside itself"
+        },
+        {
+          "element": "picker-search",
+          "property": "color",
+          "why": "the mock's `.inp.ph` dims the whole field because it cannot draw a placeholder"
+        }
+      ]
+    },
+    "S2e": {
+      "title": "Editor ⋯ — Add to scene ▸ and its submenu, matrix console",
+      "width": 1200,
+      "height": 940,
+      "app": {
+        "target": "plscenes",
+        "route": "#/",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"][data-name=\"Aurora 2D\"] [data-role=\"tile-edit\"]"
+          },
+          {
+            "sleep": 800
+          },
+          {
+            "click": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"][data-name=\"Aurora 2D\"] [data-role=\"tile-edit\"]"
+          },
+          {
+            "waitFor": "[data-role=\"editor-view\"]:not([hidden]) .cm-content"
+          },
+          {
+            "waitGone": "[data-role=\"pattern-loading\"]",
+            "required": false
+          },
+          {
+            "sleep": 2200
+          },
+          {
+            "click": "[data-role=\"overflow\"]"
+          },
+          {
+            "sleep": 500
+          }
+        ]
+      },
+      "elements": [
+        {
+          "id": "menu",
+          "mock": ".menu",
+          "mockNth": 0,
+          "app": "[data-role=\"editor-menu\"]",
+          "note": "mock: 214px, padding 4, radius 8 — and one row TALLER than S2's menu was, because `Add to scene ▸` is in it"
+        },
+        {
+          "id": "mi-playlist",
+          "mock": ".menu > div:nth-child(1)",
+          "app": "[data-role=\"add-to-playlist\"]",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "mi-scene",
+          "mock": ".menu .mi.parent",
+          "app": "[data-role=\"add-to-scene\"]",
+          "hoverOnly": true,
+          "hoverApp": "[data-role=\"add-to-scene\"]",
+          "note": "mock `.mi.parent`: flex, position relative, the `.hi` hover background. Copy is asserted in web/tools/device-e2e.mjs: the mock NESTS the submenu inside this row, so its innerText is the row plus every scene name"
+        },
+        {
+          "id": "mi-scene-caret",
+          "mock": ".menu .mi.parent .caret",
+          "app": "[data-role=\"add-to-scene\"] .caret",
+          "text": true,
+          "hoverOnly": true,
+          "hoverApp": "[data-role=\"add-to-scene\"]",
+          "note": "mock: margin-left auto, 10px, --text-dim"
+        },
+        {
+          "id": "sub",
+          "mock": ".menu .sub",
+          "app": "[data-role=\"add-to-scene-menu\"]",
+          "hoverOnly": true,
+          "hoverApp": "[data-role=\"add-to-scene\"]",
+          "note": "mock `.sub`: 184px, padding 4, radius 8, the menu's shadow — three scenes, a rule, `New scene…`"
+        },
+        {
+          "id": "sub-item",
+          "mock": ".menu .sub .mi",
+          "mockNth": 0,
+          "app": "[data-role=\"add-to-scene-item\"]",
+          "nth": 0,
+          "text": true,
+          "hoverOnly": true,
+          "hoverApp": "[data-role=\"add-to-scene\"]",
+          "note": "the submenu lists every scene on the device, newest last"
+        },
+        {
+          "id": "sub-sepr",
+          "mock": ".menu .sub .sepr",
+          "app": "[data-role=\"add-to-scene-menu\"] .sepr",
+          "hoverOnly": true,
+          "hoverApp": "[data-role=\"add-to-scene\"]"
+        },
+        {
+          "id": "sub-new",
+          "mock": ".menu .sub .mi",
+          "mockNth": 3,
+          "app": "[data-role=\"add-to-scene-new\"]",
+          "text": true,
+          "hoverOnly": true,
+          "hoverApp": "[data-role=\"add-to-scene\"]",
+          "note": "mock copy: `New scene…` — it creates a scene with this pattern as its base layer and opens the scene editor"
+        }
+      ],
+      "allow": [
+        {
+          "element": "menu",
+          "property": "position",
+          "why": "a popover is positioned off its anchor (`fixed`) so a menu opened from a scrolling grid cannot be clipped — Jeremy's dropdown complaint, 2026-09-19; the mock is a static `absolute` box inside `.menuwrap`"
+        }
+      ]
+    },
+    "S2estrip": {
+      "mock": "S2e",
+      "title": "Editor ⋯ on a STRIP console — the same menu, one item shorter (no Add to scene)",
+      "width": 1200,
+      "height": 940,
+      "app": {
+        "target": "strip",
+        "route": "#/",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"][data-name=\"Sunset Fade\"] [data-role=\"tile-edit\"]"
+          },
+          {
+            "sleep": 800
+          },
+          {
+            "click": "[data-role=\"patterns-grid\"][data-source=\"device\"] [data-role=\"tile\"][data-name=\"Sunset Fade\"] [data-role=\"tile-edit\"]"
+          },
+          {
+            "waitFor": "[data-role=\"editor-view\"]:not([hidden]) .cm-content"
+          },
+          {
+            "waitGone": "[data-role=\"pattern-loading\"]",
+            "required": false
+          },
+          {
+            "sleep": 2200
+          },
+          {
+            "click": "[data-role=\"overflow\"]"
+          },
+          {
+            "sleep": 500
+          }
+        ]
+      },
+      "elements": [
+        {
+          "id": "menu",
+          "mock": "#S2e header:nth-of-type(2) .menu",
+          "app": "[data-role=\"editor-menu\"]",
+          "note": "the strip menu's HEIGHT is the assertion: no `Add to scene ▸` row, and nothing else moved (S2e's second header)"
+        },
+        {
+          "id": "mi-playlist",
+          "mock": "#S2e header:nth-of-type(2) .menu > div:nth-child(1)",
+          "app": "[data-role=\"add-to-playlist\"]",
+          "text": true,
+          "noBox": true,
+          "hoverOnly": true,
+          "hoverApp": "[data-role=\"add-to-playlist\"]",
+          "note": "the mock paints this row hovered (.mi.hi), so it is compared hovered"
+        },
+        {
+          "id": "mi-dup",
+          "mock": "#S2e header:nth-of-type(2) .menu > div:nth-child(3)",
+          "app": "[data-role=\"duplicate\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock order on a strip: Add to playlist · — · Duplicate · Export .epe · Import .epe… · — · Delete"
+        }
+      ],
+      "allow": [
+        {
+          "element": "menu",
+          "property": "position",
+          "why": "the app's popover is `fixed` off its anchor so it cannot be clipped by a scrolling parent (Jeremy, 2026-09-19); the mock is an `absolute` box in `.menuwrap`"
         }
       ]
     }

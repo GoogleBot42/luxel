@@ -1,5 +1,75 @@
 # Update log
 
+## 2026-09-24 — web: playlist scene items, one picker with a Scenes section, composite thumbnails, `Add to scene ▸` (#478 #482)
+
+The web half of Phase B's scene plumbing: a playlist can hold a scene, the ONE
+picker offers scenes beside patterns, every scene shows its real picture, and a
+pattern can be dropped into a scene from the place you just tuned it. Mock
+frames S4c, S4d and S2e are the spec — `mockdiff --frames S4c,S4d,S2e,S2estrip`
+reads **0 deltas**, as do S4/S4b/S4menu/S4picker/S2menu/S1menu beside them.
+
+**Scene items end to end.** `lib/playlist.ts` owns both halves of the wire now:
+`playlistWire()` serializes `I S<id> <sec>` for a scene item (and never a `C` or
+`P` line under one — its layers own their values), `normalizePlaylist()` fills
+in the `kind` a pre-#478 device omits and the `controls` a scene item does not
+have. `PlaylistItem` gained `layers`, and `DeviceSession.playlist()` normalizes on
+the way in. Unit tests in `web/tests/playlist.test.mjs`.
+
+**The row (S4c).** A scene row is a playlist row like any other — same handle,
+same card, same duration chip — except that its type line reads
+`Scene ▤ · 2 layers`, it has **no values chip**, and `Edit scene ›` stands where
+the chip would have been, pointing at `#/scenes/<id>`. At 390 px the duration
+folds into the type line and the link shortens to `Edit ›`.
+
+**One picker, three sections (S4c/S4d).** `PatternPicker` is now the mock's
+`.addwrap > .menu.full.pick`: a dropdown under `+ Add`, in the list it adds to,
+search first, 360 px on a console and the full width of the list on a phone —
+not the 520 px modal it was, which had no mock frame and five `allow`s excusing
+it. Every row is the same row: a device-shaped 26 px thumbnail, the name and ONE
+dim fact — a pattern's dimensionality and projection, a scene's layer count, and
+for a `Library` row what picking it costs. The Library section (#538 §F) is the
+one thing the mock does not draw and is `allow`ed by height alone.
+
+**Composite thumbnails (#482).** `components/SceneThumb.svelte` runs #480's
+`SceneRenderer` — `Luxel.compositor` over a tile-sized copy of the device's
+grid, one engine per pattern layer, one never-stepped engine per sprite layer,
+text resolved by the host — and paints it device-shaped through the existing
+`lib/draw.ts` painter, in the same `.thumb > canvas.sq` markup `PatternThumb`
+wears, so a row cannot tell the two apart. Because a composite is N engines
+rather than one 400-cell thumbnail, every scene thumbnail on the page shares ONE
+ticker with a step budget (2 composites per animation frame, ~8 fps each) and an
+admission cap (8 resident) — the discipline `Gallery.svelte` and the Scenes
+page's own tile grid use.
+
+**`Add to scene ▸` (S2e).** One component in both ⋯ menus (the editor's and a
+Patterns tile's): a submenu of the scene library plus `New scene…`. Picking a
+scene is read-modify-write through #480's store — `withPatternOnTop` (new in
+`lib/scene.ts`, pure and tested) then `saveScene`, so a refusal lands in the ONE
+error strip like every other scene write. The pattern becomes the scene's TOP
+layer with the values it is being shown at; `New scene…` saves a one-layer scene
+named after the pattern and asks the shell to open it. It exists only where a
+scene can — the shell's own `scenesReady`, plus a pattern the device holds. On a
+strip the menu is simply one item shorter: absent, never disabled, which the
+S2e strip frame and a device-e2e check both pin.
+
+Bundle: no new dependency, and the packed `.luxa` goes 893,600 → 897,433 B
+(+3,833 B; 8.7 % headroom under the 983,040 B assets partition).
+
+Built on #480, which landed first: the scene codec (`lib/scene.ts`), the store
+(`stores/scenes.ts`), the renderer (`lib/sceneRender.ts`) and `/api/scenes` in
+`lib/device.ts` are all theirs — this PR consumes them and adds exactly one
+codec verb, `withPatternOnTop`.
+
+Harnesses: a second scene-seeded mirror in `mockdiff.mjs` — one whose PLAYLIST
+holds a scene item (`plscenes`, `E2E_PORT + 52`), since the scene-editor frames
+need a different console state — and a 21-check section in `device-e2e.mjs`
+(`+ 53`) driving `--scenes` preloading, the row, the composite actually
+painting, `Edit scene ›` opening the editor, the picker, both menu verbs and the
+strip's absence. `mockdiff.mjs` itself gained two seed keys (a `@Scene` playlist
+entry and `playIndex`) and stopped counting a `hoverOnly` element's resting
+position in the reading-order check — it has none. Found on the way: a mirror
+started with `--scenes` never assigns an id to an `S -` block, so the scene it
+loads cannot be referenced at all — Gitea #701.
 ## 2026-09-24 — device text slots: `GET`/`POST /api/text`, eight Home Assistant `text` entities, and one writer for the core table (#485-fw)
 
 The firmware half of Phase C's text slots. Eight device-level strings that a

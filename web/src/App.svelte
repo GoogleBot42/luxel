@@ -504,6 +504,14 @@
     on:open={() => (editing = true)}
     on:back={() => (editing = false)}
     on:openmap={() => openMapEditor("Editor")}
+    on:openscene={(ev) => {
+      // `New scene…` LEAVES the pattern editor: the scene editor is a peer
+      // screen, and the shell shows whichever one is open (App gives the
+      // pattern editor precedence, so it has to be closed first).
+      editing = false;
+      openScene(ev.detail);
+    }}
+    {scenesReady}
   />
 
   <!-- The map program's screen (A10, #471): geometry, not a pattern, so it is
@@ -518,6 +526,8 @@
   <Patterns
     active={!editing && !mapEditing && !sceneEditing && tab === "patterns"}
     {hasPixelblazeLibrary}
+    {scenesReady}
+    on:openscene={(e) => openScene(e.detail)}
     on:new={() => {
       openEditor();
       editor.newPattern();
@@ -561,7 +571,10 @@
   />
 
   {#if !$isPlayground}
-    <Playlist active={!editing && !mapEditing && tab === "playlist" && !sceneEditing} />
+    <Playlist
+      active={!editing && !mapEditing && tab === "playlist" && !sceneEditing}
+      on:openscene={(e) => openScene(e.detail)}
+    />
   {/if}
 
   <!-- "stored, but not running yet" — pinned to the bottom of the VIEWPORT on
