@@ -48,6 +48,15 @@ pub enum Msg {
     /// source Vec, no envelope Vec) or, without a slot, from a transient
     /// chunk-store read. Identity/read-back come from patterns::source_stat.
     Library { id: String, ms: u32 },
+    /// Install a host-set text slot (Gitea #485).
+    ///
+    /// `luxel_core::text`'s slot table is a lock-free single-writer
+    /// structure — an `UnsafeCell` behind a documented contract, like the
+    /// arena's hook — and on a dual-core board the web and MQTT tasks run on
+    /// the OTHER core from the render loop. So nothing but the render task
+    /// ever calls `text::set_slot`; the control plane queues the write here
+    /// and keeps its own read-back copy ([`set_text_slot`]).
+    TextSlot { n: u8, text: String },
     /// Show a stored SCENE (Gitea #478), crossfading over `ms` (0 = cut).
     /// Like [Msg::Library] nothing but the id travels: the render task reads
     /// the record from `scenes::get` and decodes each pattern/sprite layer
@@ -911,6 +920,76 @@ pub fn wall_now_local() -> Option<i64> {
     use core::sync::atomic::Ordering;
     let (base, at) = share_get(&WALL_CLOCK)?;
     Some(base + at.elapsed().as_secs() as i64 + TZ_MINUTES.load(Ordering::Relaxed) as i64 * 60)
+}
+
+/// High-water `budget::load_base` (free heap + every resident engine) since
+/// boot, in bytes — the board's steady-state DRAM budget, which is what
+/// `caps.layers` is derived from (Gitea #479).
+///
+/// Written by the render task from [`note_engine_heap`]'s `free_before`,
+/// which is sampled with NO engine resident — so it is `load_base` measured
+/// rather than reconstructed, and it is never taken mid-swap.
+///
+/// Two measurements on the Seengreat panel (2026-09-24) forced this shape:
+///
+/// * A LIVE reading is not usable for an advertised capability. Four
+///   *identical* pattern activations reported `heap_free` 18,904 / 23,000 /
+///   33,332 / 37,508 — ±18 KB of WiFi and HTTP transient against a ~16 KB
+///   per-layer cost, so the number flapped 1 ↔ 2 with nothing but poll
+///   traffic. A maximum converges on the idle figure in a few samples and
+///   cannot over-promise on a board that never reaches it.
+/// * Reconstructing it in the HTTP handler as `heap_free + engine_heap`
+///   double-counts during a swap: a `/api/status` landing between the
+///   teardown and the build sees the freed heap AND the outgoing engine's
+///   `engine_heap`, and reads ~15 KB too high — which the maximum then
+///   keeps forever. Hence the render task publishes it instead.
+pub static HEAP_BASE_MAX: AtomicU32 = AtomicU32::new(0);
+
+/// Fold a fresh `load_base` reading into [`HEAP_BASE_MAX`] and return the
+/// mark. load+store rather than `fetch_max`: rv32imc (the C3) has no atomic
+/// RMW, and a lost update only delays convergence by one sample.
+pub fn note_heap_base(v: u32) -> u32 {
+    let m = HEAP_BASE_MAX.load(Ordering::Relaxed);
+    if v > m {
+        HEAP_BASE_MAX.store(v, Ordering::Relaxed);
+        v
+    } else {
+        m
+    }
+}
+
+/// The control plane's copy of the eight text slots (Gitea #485).
+///
+/// `luxel_core::text`'s table is written ONLY by the render task, because it
+/// is lock-free single-writer and on a dual-core board the web and MQTT
+/// tasks are on the other core. This copy is what `GET /api/text` and the
+/// HA text entities' state publishes read, written under a critical section
+/// by whoever accepted the value. The two can't disagree: both are the same
+/// already-truncated string, and [`Msg::TextSlot`] carries it.
+///
+/// Empty until the first write — 8 × 64 B of `.bss` is not free on a board
+/// where `.stack` is the DRAM left over (docs/boards.md).
+static TEXT_SLOTS: Shared<Vec<String>> = BlockingMutex::new(RefCell::new(Vec::new()));
+
+/// Record slot `n`'s (already truncated) text for read-back. Out-of-range
+/// slots are ignored, like `text::set_slot`.
+pub fn set_text_slot(n: u8, s: &str) {
+    if n as usize >= luxel_core::text::SLOTS {
+        return;
+    }
+    TEXT_SLOTS.lock(|c| {
+        let mut v = c.borrow_mut();
+        if v.len() < luxel_core::text::SLOTS {
+            v.resize(luxel_core::text::SLOTS, String::new());
+        }
+        v[n as usize].clear();
+        v[n as usize].push_str(s);
+    });
+}
+
+/// Slot `n`'s text, or the empty string.
+pub fn text_slot(n: u8) -> String {
+    TEXT_SLOTS.lock(|c| c.borrow().get(n as usize).cloned().unwrap_or_default())
 }
 
 /// Latest sensor frame (PB sensor-board serial or POST /api/sensors) + a

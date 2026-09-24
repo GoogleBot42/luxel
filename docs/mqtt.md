@@ -36,6 +36,7 @@ with zero YAML. One device card containing:
 | sensor × 2 (diagnostic) | FPS and free heap, published every ~15 s |
 | switch | playlist play/stop |
 | button × 2 | playlist next / prev |
+| text × 8 | the host-settable text slots (Gitea #485) — `max` 64 bytes |
 
 Availability rides `luxel/<id>/status` (`online`, retained; LWT flips
 it to `offline` if the device drops).
@@ -52,6 +53,8 @@ it to `offline` if the device drops).
 | `luxel/<id>/playlist/cmd` | in | `play` / `stop` / `next` / `prev` |
 | `luxel/<id>/playlist/state` | out | `ON` / `OFF` |
 | `luxel/<id>/diag` | out | `{"fps":120,"heap":45000}` every ~15 s |
+| `luxel/<id>/text/<n>/set` | in | slot `n`'s text (0..7), truncated to 64 bytes on a char boundary |
+| `luxel/<id>/text/<n>` | out | slot `n`'s current text |
 | `luxel/<id>/event` | in | pattern events — see below |
 
 Brightness scales: HA speaks 0–255, the device stores 0–31 (the SK9822

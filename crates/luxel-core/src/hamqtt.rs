@@ -111,6 +111,36 @@ pub fn playlist_button_config_topic(id: &str, which: &str) -> String {
     alloc::format!("homeassistant/button/{id}/pl_{which}/config")
 }
 
+// ---- text slots (Gitea #485) ----
+
+pub fn text_set_topic(id: &str, slot: u8) -> String {
+    alloc::format!("luxel/{id}/text/{slot}/set")
+}
+pub fn text_state_topic(id: &str, slot: u8) -> String {
+    alloc::format!("luxel/{id}/text/{slot}")
+}
+pub fn text_config_topic(id: &str, slot: u8) -> String {
+    alloc::format!("homeassistant/text/{id}/text{slot}/config")
+}
+
+/// One HA `text` entity per host-settable slot: an automation writes a
+/// string to the command topic and a pattern's `drawText(textSlot(n), …)`
+/// or a scene's `slot` text layer draws it.
+///
+/// `max` is stated explicitly rather than left to HA's 100-character
+/// default, because the device truncates at [`crate::text::SLOT_MAX`] bytes
+/// and a silently-cut value is worse than a rejected one.
+pub fn text_discovery_json(id: &str, name: &str, version: &str, slot: u8) -> String {
+    alloc::format!(
+        "{{\"name\":\"Text {slot}\",\"unique_id\":\"{id}_text{slot}\",\"command_topic\":\"{}\",\"state_topic\":\"{}\",\"max\":{},\"availability_topic\":\"{}\",{}}}",
+        text_set_topic(id, slot),
+        text_state_topic(id, slot),
+        crate::text::SLOT_MAX,
+        availability_topic(id),
+        device_block(id, name, version)
+    )
+}
+
 /// Diagnostic sensors: fps + free heap, one JSON state topic, extracted
 /// with value_template. Marked as diagnostic entities so HA files them
 /// under the device's diagnostics section.
@@ -255,12 +285,17 @@ fn scan_number_field(payload: &str, field: &str) -> Option<i32> {
 
 /// Topics an MQTT session must subscribe to.
 pub fn command_topics(id: &str) -> Vec<String> {
-    alloc::vec![
+    let mut v = alloc::vec![
         light_set_topic(id),
         pattern_set_topic(id),
         playlist_cmd_topic(id),
         event_topic(id),
-    ]
+    ];
+    // one per text slot (Gitea #485) — the list is no longer a fixed array
+    for slot in 0..crate::text::SLOTS as u8 {
+        v.push(text_set_topic(id, slot));
+    }
+    v
 }
 
 /// Parse a `luxel/<id>/event` payload into `[type, x, y, value]` quads
@@ -330,9 +365,33 @@ mod tests {
         let b = playlist_button_discovery_json("luxel-abc", "Luxel abc", "1.0", "next");
         assert!(b.contains("\"payload_press\":\"next\""));
         assert_eq!(diag_state_json(120, 45000), "{\"fps\":120,\"heap\":45000}");
-        assert_eq!(command_topics("x").len(), 4);
+        // four fixed command topics plus one per text slot (Gitea #485)
+        assert_eq!(command_topics("x").len(), 4 + crate::text::SLOTS);
         assert_eq!(event_topic("luxel-abc"), "luxel/luxel-abc/event");
         assert!(command_topics("luxel-abc").contains(&event_topic("luxel-abc")));
+        for slot in 0..crate::text::SLOTS as u8 {
+            assert!(command_topics("luxel-abc").contains(&text_set_topic("luxel-abc", slot)));
+        }
+    }
+
+    #[test]
+    fn text_entities() {
+        assert_eq!(text_set_topic("luxel-abc", 3), "luxel/luxel-abc/text/3/set");
+        assert_eq!(text_state_topic("luxel-abc", 3), "luxel/luxel-abc/text/3");
+        assert_eq!(
+            text_config_topic("luxel-abc", 3),
+            "homeassistant/text/luxel-abc/text3/config"
+        );
+        let t = text_discovery_json("luxel-abc", "Luxel abc", "1.0", 3);
+        assert!(t.contains("\"unique_id\":\"luxel-abc_text3\""), "{t}");
+        assert!(t.contains("\"command_topic\":\"luxel/luxel-abc/text/3/set\""), "{t}");
+        assert!(t.contains("\"state_topic\":\"luxel/luxel-abc/text/3\""), "{t}");
+        // stated explicitly — HA's own default is 100 and the device cuts
+        // at SLOT_MAX bytes
+        assert!(t.contains("\"max\":64"), "{t}");
+        assert!(t.contains("\"availability_topic\":\"luxel/luxel-abc/status\""), "{t}");
+        // every discovery payload must fit the firmware's 4096 B out buffer
+        assert!(t.len() < 1024, "{} B", t.len());
     }
 
     #[test]

@@ -162,6 +162,12 @@ pub fn set_from_wire(body: &str, id: Option<&str>) -> Result<String, String> {
 pub fn delete(id: &str) -> Result<(), String> {
     let list = SCENES.lock(|c| c.borrow().clone());
     commit(scenestore::remove(&list, id)?)?;
+    // `active` names a STORED scene, so it clears with the record — the
+    // pixels stay until something else is pushed, which is all a deleted
+    // scene can honestly claim. Same as the mirror.
+    if active_id() == id {
+        set_active("");
+    }
     crate::playlist::drop_scene(id);
     Ok(())
 }
@@ -394,6 +400,22 @@ pub fn build_runtime(
     rt.comp.set_scene(sc);
     let mut base: Option<Engine> = None;
     let mut err: Option<String> = None;
+    // The compositor allocates ONE grid-sized scratch, inside the render
+    // loop and with an infallible `Vec::resize`, the first time a text layer
+    // draws or a layer ramp is applied. It has to come out of the budget
+    // HERE, before any engine is built, or the allocation panics the render
+    // task instead of being refused — which is exactly what took the
+    // Seengreat panel down on 2026-09-24 (`memory allocation of 2688 bytes
+    // failed`, one frame after the base engine and its JIT compile had both
+    // been accepted). See `budget::compositor_scratch`.
+    let scratch = if sc.layers.iter().any(|l| {
+        l.kind() == luxel_core::scene::LayerKind::Text
+            || matches!(&l.body, luxel_core::scene::LayerBody::Pattern(p) if p.ramp.is_some())
+    }) {
+        luxel_core::budget::compositor_scratch(pixels)
+    } else {
+        0
+    };
     let fail = |err: &mut Option<String>, n: usize, what: &str| {
         if err.is_none() {
             let mut m = String::from("scene: layer ");
@@ -414,7 +436,7 @@ pub fn build_runtime(
         // `try_budgeted_engine` is the real gate, but reaching it costs the
         // whole decode + build peak, and on a device already holding two
         // engines that peak is what panics rather than rejects (#479).
-        if !luxel_core::budget::layer_fits(esp_alloc::HEAP.free() as usize, count) {
+        if !luxel_core::budget::layer_fits_with(esp_alloc::HEAP.free() as usize, count, scratch) {
             fail(&mut err, i, "does not fit");
             rt.slots.push(Slot::Native);
             continue;

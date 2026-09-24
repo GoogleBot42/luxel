@@ -269,7 +269,16 @@ pub const fn layers_for(pixel_count: u32) -> u8 {
 /// falls to **1** rather than promising a layer it cannot build.
 pub const fn layers_for_headroom(pixel_count: u32, headroom: usize, ceiling: u8) -> u8 {
     let per = crate::budget::layer_cost(pixel_count);
-    let afford = (headroom / per) as u32;
+    // Floored, and the host must pass a STEADY-STATE headroom (the
+    // firmware's `shared::HEAP_BASE_MAX`) rather than an instantaneous one:
+    // measuring costs heap, and rounding up over-promises. Both were tried
+    // on the Seengreat panel 2026-09-24 — 26 KB of steady headroom against a
+    // real ~15.3 KB per-layer cost at 4096 px, where one layer fits and two
+    // do not, and rounding to nearest said two.
+    // The `>` guard before the cast: a host with a huge heap would otherwise
+    // TRUNCATE to a small u32 and read as starved.
+    let n = headroom / per;
+    let afford = if n > MAX_LAYERS as usize { MAX_LAYERS as u32 } else { n as u32 };
     let tier = layers_for(pixel_count) as u32;
     let cap = if ceiling < MAX_LAYERS { ceiling } else { MAX_LAYERS } as u32;
     let n = if afford < tier { afford } else { tier };
@@ -529,6 +538,13 @@ mod layer_tests {
     fn the_measured_boards_land_where_the_design_says() {
         // Seengreat S3 @4096 px, rainbow resident (docs/boards.md:611)
         assert_eq!(layers(4096, 51_704, 17_000, MAX_LAYERS), 2);
+        // …and the SAME board's STEADY-STATE numbers measured on metal
+        // 2026-09-24, which are lower (the JIT image's statics plus Phase
+        // B/C's): 26 KB of headroom affords one 4096-px layer, not two.
+        // The firmware feeds this fn the boot-time high-water instead, so it
+        // advertises 2 there and lets `budget::layer_fits` refuse the second
+        // layer at activation — see docs/boards.md "Scene layers".
+        assert_eq!(layers(4096, 31_200, 15_348, MAX_LAYERS), 1);
         // Athom / classic ESP32 @300 px idle (104,832 B)
         assert_eq!(layers(300, 104_832, 18_000, MAX_LAYERS), 3);
         // classic ESP32 @1024 px — the tier caps it at 2

@@ -1772,11 +1772,21 @@ not per-board configuration, by `luxel_core::caps::layers_for_headroom`:
 ```
 layers = clamp(1, min(tier, headroom / layer_cost), ceiling)
   tier       = caps::layers_for(pixel_count)    — 3 at ≤512 px, else 2
-  headroom   = budget::load_headroom(budget::load_base(heap_free, engine_heap))
-             = heap_free + engine_heap − RUNTIME_FLOOR (20 KiB)
-  layer_cost = budget::LAYER_BASE (6 KiB) + pixel_count × 3
+  headroom   = budget::load_headroom(shared::HEAP_BASE_MAX)
+             = (max since boot of the render task's measured load_base)
+               − RUNTIME_FLOOR (20 KiB)
+  layer_cost = budget::LAYER_BASE (4 KiB) + pixel_count × 3
   ceiling    = 2 on a `small-chip` board, else caps::MAX_LAYERS (4)
 ```
+
+**The headroom is a high-water mark, not a live reading.** Measured on the
+Seengreat panel 2026-09-24, four *identical* pattern activations reported
+`heap_free` 18,904 / 23,000 / 33,332 / 37,508 — ±18 KB of WiFi and HTTP
+transient against a ~16 KB per-layer cost. An advertised capability derived
+from the instantaneous number flapped 1 ↔ 2 with nothing but poll traffic.
+`shared::HEAP_BASE_MAX` folds each reading into a maximum, which converges on
+the idle figure in a few samples and cannot over-promise on a board that
+never reaches it.
 
 `layer_cost` is a frame buffer plus a flat base rather than a per-pattern
 model, because it sizes an *advertised* number and a *pre-flight* refusal.
@@ -1785,22 +1795,47 @@ The real gate stays the post-build `RUNTIME_FLOOR` check in
 layer that fails it is reported as `scene: layer N does not fit` on activate
 and renders nothing, leaving the rest of the scene up.
 
-`LAYER_BASE` = 6 KiB comes from the measured fleet
-(`docs/design/webui-v2/research/engine-constraints.md` §2): a second
-rainbow-class engine on the S3 panel costs ~17 KB of which 12.3 KB is its own
-frame; an arena-backed Aurora 2D costs 14 KB of which 12.3 KB is its frame.
+`LAYER_BASE` = 4 KiB comes from the measured fleet
+(`docs/design/webui-v2/research/engine-constraints.md` §2): a rainbow-class
+engine on the S3 panel costs ~17 KB of which 12.3 KB is its own frame; an
+arena-backed Aurora 2D costs 14 KB of which 12.3 KB is its frame.
 
 Taking `headroom` against `heap_free + engine_heap` rather than bare
 `heap_free` is deliberate: the advertised number would otherwise drop every
 time a scene loaded, which is exactly when a UI is reading it.
 
-| board / layout | heap_free + engine_heap | layer_cost | layers |
+| board / layout | load_base | layer_cost | layers |
 |---|---:|---:|---:|
-| Seengreat S3 @4096 px, one engine resident | 68.7 KB | 18.4 KB | **2** (tier) |
-| Seengreat S3 @4096 px, device blur+glow on | 26.9 KB | 18.4 KB | **1** |
-| Athom / classic ESP32 @300 px | 122.8 KB | 6.9 KB | **3** (tier) |
-| classic ESP32 @1024 px | 108 KB | 9.1 KB | **2** (tier) |
+| Seengreat S3 @4096 px (design's 2026-09 figure) | 68.7 KB | 16.4 KB | **2** (tier) |
+| **Seengreat S3 @4096 px, MEASURED 2026-09-24** | **46.5 KB** | 16.4 KB | **1** |
+| Seengreat S3 @4096 px, device blur+glow on | 26.9 KB | 16.4 KB | **1** |
+| Athom / classic ESP32 @300 px | 122.8 KB | 4.9 KB | **3** (tier) |
+| classic ESP32 @1024 px | 108 KB | 7.2 KB | **2** (tier) |
 | c3-devkit / c6-devkit (`small-chip`) | — | — | **2** (ceiling) |
+
+**The panel advertises 2 and delivers 1 — and that is the design working.**
+Measured on metal 2026-09-24: the board's boot-time `load_base` high-water
+puts `caps.layers` at **2**, matching the tier and the mirror, but a real
+4096-px engine costs 15.3 KB (`_Fairies`) to 19.7 KB (`Aurora 2D`) against a
+steady-state pool of ~46.5 KB, so the *second* one lands under the 20 KiB
+`RUNTIME_FLOOR` and `budget::layer_fits` refuses it at activation:
+
+```
+"vmerr":"scene: layer 2 does not fit"   "engines":1
+```
+
+The scene still runs — the refused layer becomes a no-op slot and every
+other layer draws — which is exactly the split the advertised number is for.
+`caps.layers` is a board-shaped estimate a UI budgets against; the
+authoritative gate is the per-layer heap check at activation, because only
+it knows what the pattern actually costs. Being one too optimistic costs a
+clear message; being one too pessimistic would make scenes unusable on the
+flagship board, so the estimate leans optimistic on purpose.
+
+Text, sprite and colour layers are free — they need no engine — so the
+flagship "clock over a pattern" scene fits comfortably. Reclaiming the ~22 KB
+the panel has lost since the design's measurement (JIT off on the panel, the
+spare-plane swap of #610) would buy the second pattern layer back.
 
 Two further things bound a stack in practice, both documented in
 docs/firmware.md "Scenes: the layer compositor in the render loop": the JIT

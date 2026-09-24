@@ -153,13 +153,16 @@ pub const fn load_base(heap_free: usize, engine_heap: usize) -> usize {
 /// gate stays the post-build `RUNTIME_FLOOR` check in `try_budgeted_engine`,
 /// which measures the engine that was actually built.
 ///
-/// 6 KiB from the measured fleet numbers in
-/// `docs/design/webui-v2/research/engine-constraints.md` §2: a second
-/// rainbow-class engine on the S3 panel costs ~17 KB of which 12.3 KB is its
-/// frame, and an arena-backed Aurora 2D costs 14 KB of which 12.3 KB is its
-/// frame. See docs/boards.md "Scene layers" for the resulting per-board
-/// layer counts.
-pub const LAYER_BASE: usize = 6 * 1024;
+/// 4 KiB, calibrated against the measured fleet
+/// (`docs/design/webui-v2/research/engine-constraints.md` §2) and then
+/// against the Seengreat panel on metal (2026-09-24): a rainbow-class engine
+/// there costs ~17 KB of which 12.3 KB is its frame, an arena-backed
+/// Aurora 2D costs 14 KB of which 12.3 KB is its frame, and the panel
+/// measured `heap_free` 41,152 + `engine_heap` 13,412 — 34 KB of spendable
+/// headroom, which is two 12.3 KB frames plus two ~4.7 KB programs and is
+/// exactly the design's "2 on the S3 panel". 6 KiB, the first guess, put
+/// that board at 1. See docs/boards.md "Scene layers".
+pub const LAYER_BASE: usize = 4 * 1024;
 
 /// Resident bytes one more pattern layer costs at this pixel count: the
 /// engine's own 3 B/px RGB888 frame (internal DRAM on every board — the
@@ -172,7 +175,27 @@ pub const fn layer_cost(pixel_count: u32) -> usize {
 /// given free heap NOW (nothing is dropped first when a layer is added to a
 /// live scene).
 pub const fn layer_fits(heap_free: usize, pixel_count: u32) -> bool {
-    heap_free >= RUNTIME_FLOOR + layer_cost(pixel_count)
+    layer_fits_with(heap_free, pixel_count, 0)
+}
+
+/// Bytes the compositor's shared per-frame scratch costs at this pixel
+/// count: one RGB888 frame.
+///
+/// `luxel_core::compose::Compositor` allocates it with an **infallible**
+/// `Vec::resize`, inside the render loop, the first time a text layer draws
+/// or a layer ramp is applied. A host therefore has to budget it BEFORE it
+/// builds any of the scene's engines. Not doing so panicked the Seengreat
+/// panel's render task on 2026-09-24 — `memory allocation of 2688 bytes
+/// failed`, one frame after the scene's base engine and its JIT compile had
+/// both been accepted with heap to spare.
+pub const fn compositor_scratch(pixel_count: u32) -> usize {
+    pixel_count as usize * 3
+}
+
+/// [`layer_fits`] with `reserve` further bytes held back above the floor —
+/// [`compositor_scratch`] when the scene has a text or ramp layer.
+pub const fn layer_fits_with(heap_free: usize, pixel_count: u32, reserve: usize) -> bool {
+    heap_free >= RUNTIME_FLOOR + reserve + layer_cost(pixel_count)
 }
 
 /// How many bytes of RESIDENT engine a pattern may leave behind before the
@@ -394,5 +417,26 @@ mod layer_tests {
         assert_eq!(load_base(20_000, 51_000), 71_000);
         // a host that does not report it falls back to free heap
         assert_eq!(load_base(30_000, 0), 30_000);
+    }
+}
+
+#[cfg(test)]
+mod scratch_tests {
+    use super::*;
+
+    /// The Seengreat panel's 2026-09-24 panic, turned into arithmetic: with
+    /// ~45 KB free and nothing resident, a 4096-px pattern layer looks like
+    /// it fits — until the scene's text layer takes another 12.3 KB inside
+    /// the render loop and the next routine allocation panics.
+    #[test]
+    fn a_text_layer_reserves_the_compositors_scratch() {
+        assert_eq!(compositor_scratch(4096), 12_288);
+        assert!(layer_fits(45_000, 4096), "the engine alone fits");
+        assert!(
+            !layer_fits_with(45_000, 4096, compositor_scratch(4096)),
+            "…but not beside the scratch the scene will also need"
+        );
+        // a scene with no text and no ramp is unchanged
+        assert!(layer_fits_with(45_000, 4096, 0));
     }
 }

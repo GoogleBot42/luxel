@@ -419,9 +419,15 @@ pub fn scene_layer_cap() -> u8 {
     } else {
         luxel_core::caps::MAX_LAYERS
     };
+    // The render task's HIGH-WATER `load_base`, not a reading taken here:
+    // see `shared::HEAP_BASE_MAX` for the two measurements that made that
+    // necessary. Before the first load there is no mark yet, so fall back to
+    // the local reconstruction (which is exact while nothing is resident).
+    let mark = crate::shared::HEAP_BASE_MAX.load(Ordering::Relaxed) as usize;
+    let base = if mark > 0 { mark } else { load_base(heap, resident) };
     luxel_core::caps::layers_for_headroom(
         PIXEL_COUNT.load(Ordering::Relaxed),
-        load_headroom(load_base(heap, resident)),
+        load_headroom(base),
         ceiling,
     )
 }
@@ -1664,6 +1670,69 @@ async fn api_scenes_id(tail: &str, raw: &[u8]) -> String {
     }
 }
 
+/// `text::set_slot`'s truncation rule, applied at the door so the copy
+/// `GET /api/text` reports, the copy HA is told about and the copy the VM
+/// reads can never disagree: [`luxel_core::text::SLOT_MAX`] bytes, cut on a
+/// char boundary.
+pub fn truncate_slot(s: &str) -> &str {
+    let mut end = s.len().min(luxel_core::text::SLOT_MAX);
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+/// `GET /api/text` — `{"slots":["","", … 8]}`.
+pub fn api_text_json() -> String {
+    let mut out = String::from("{\"slots\":[");
+    for n in 0..luxel_core::text::SLOTS {
+        if n > 0 {
+            push_piece(&mut out, ",");
+        }
+        push_piece(&mut out, "\"");
+        push_piece(&mut out, &json_escape(&crate::shared::text_slot(n as u8)));
+        push_piece(&mut out, "\"");
+    }
+    push_piece(&mut out, "]}");
+    out
+}
+
+/// `POST /api/text`, body `<slot> <utf8…>`. The text is the rest of the
+/// line, truncated to `SLOT_MAX` bytes on a char boundary; empty clears.
+/// Not persisted across a reboot (v1).
+pub async fn api_text_post(body: &str) -> String {
+    let line = body.lines().next().unwrap_or("");
+    let (head, rest) = match line.split_once(' ') {
+        Some((a, b)) => (a, b),
+        None => (line.trim(), ""),
+    };
+    let Ok(n) = head.trim().parse::<u32>() else {
+        return api_error("text: slot number required");
+    };
+    if n as usize >= luxel_core::text::SLOTS {
+        let mut out = String::from("{\"ok\":false,\"error\":\"text: slot ");
+        push_u32(&mut out, n);
+        push_piece(&mut out, " out of range (0..");
+        push_u32(&mut out, luxel_core::text::SLOTS as u32 - 1);
+        push_piece(&mut out, ")\"}");
+        return out;
+    }
+    let text = truncate_slot(rest);
+    crate::shared::set_text_slot(n as u8, text);
+    // …and into `luxel_core::text`'s table, which is what `textSlot(n)`
+    // inside a pattern and a scene's `slot` text layer read — through the
+    // render task, because that table has a single-writer rule and this is
+    // a web task, on the other core on a dual-core board.
+    MSG_QUEUE
+        .send(Msg::TextSlot {
+            n: n as u8,
+            text: String::from(text),
+        })
+        .await;
+    crate::mqtt::mark_text_dirty();
+    String::from("{\"ok\":true}")
+}
+
 /// Body: `name raw0 [raw1 raw2]` — whitespace-separated, values raw 16.16.
 async fn api_control(body: String) -> ApiResponse {
     let mut it = body.split_whitespace();
@@ -2342,6 +2411,8 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 // POST /api/scenes — one scene block, `S - <name>`; the
                 // store assigns the id and hands it back.
                 "/api/scenes" => Some(json_response(api_scenes_save(&text(&raw), None).await)),
+                // POST /api/text — `<slot> <utf8…>`, one line (Gitea #485)
+                "/api/text" => Some(json_response(api_text_post(&text(&raw)).await)),
                 // POST /api/scenes/<id>            — replace that scene
                 // POST /api/scenes/<id>/activate   — show it (body: ms)
                 r if r.starts_with("/api/scenes/") => Some(json_response(
@@ -2682,6 +2753,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 "/api/layout" => Some(json_response(crate::layout::to_json())),
                 "/api/playlist" => Some(json_response(crate::playlist::to_json())),
                 "/api/scenes" => Some(json_response(crate::scenes::to_json())),
+                "/api/text" => Some(json_response(api_text_json())),
                 // GET /api/scenes/<id> → the scene object; missing id
                 // returns 200 + {"ok":false,…} like /api/patterns/<id>.
                 r if r.starts_with("/api/scenes/") => Some(json_response(

@@ -1,5 +1,81 @@
 # Update log
 
+## 2026-09-24 — device text slots: `GET`/`POST /api/text`, eight Home Assistant `text` entities, and one writer for the core table (#485-fw)
+
+The firmware half of Phase C's text slots. Eight device-level strings that a
+pattern reads with `drawText(textSlot(n), x, y)` and a scene's `text` layer
+draws with `T slot <n>` — settable from the API, from MQTT and from Home
+Assistant, which is how text reaches a device whose language has no string
+type.
+
+**`GET /api/text`** → `{"slots":["", … 8]}`. **`POST /api/text`** takes one
+line, `<slot> <utf8…>`: the text is the rest of the line, capped at
+`text::SLOT_MAX` = 64 bytes and cut on a char boundary, and an empty rest
+clears the slot. `text: slot number required` and
+`text: slot N out of range (0..7)` byte-for-byte as the mirror says them.
+Not persisted across a reboot (v1).
+
+**One writer, because the table has a single-writer rule.**
+`luxel_core::text`'s slot table is an `UnsafeCell` behind a documented
+contract — no lock, because `luxel-core` is `no_std` and does not depend on
+`critical-section` — and on a dual-core board the web and MQTT tasks run on
+core 0 while the render loop runs on core 1. So nothing but the render task
+ever calls `text::set_slot`: the control plane truncates at the door, records
+its own copy (`shared::set_text_slot`, behind a critical section, which is
+what `GET` and the HA state publishes read) and queues `Msg::TextSlot` for
+the render task. Every resident engine and the compositor's `slot` text
+source read the core table directly, so one write reaches the whole layer
+stack with no per-engine copy.
+
+**Home Assistant**: one `text` entity per slot, `{id}_text{n}`, command
+`luxel/<id>/text/<n>/set`, state `luxel/<id>/text/<n>`, `max` stated as 64
+rather than left to HA's 100-character default — a value HA lets through and
+the device then cuts is worse than one HA refuses. Discovery goes out beside
+the playlist buttons at ~430 B each (the 4096 B out buffer's worst case is
+still the pattern select's options array); the subscribe list stops being a
+fixed four-element array and becomes a `Vec`; and state republishes on a
+generation counter rather than eight cached `String`s, because the value can
+change from another task and 512 B of cache is real DRAM on the boards where
+`.stack` is what is left over.
+
+Docs: docs/api.md `## Text slots`, docs/mqtt.md (the entity table and the two
+new topics).
+
+**On metal (Seengreat panel, 2026-09-24).** Three things the mirror and QEMU
+cannot find, all now fixed or ticketed:
+
+- **The compositor's frame scratch is an infallible allocation inside the
+  render loop.** `Compositor::native_layer`'s text arm grows a 12,288 B
+  RGB888 scratch at 4096 px with `Vec::resize`. Activating
+  `pat(Aurora 2D) + color + text` panicked the panel one frame after the
+  base engine and its JIT compile had both been accepted with heap to spare
+  — `memory allocation of 2688 bytes failed`, reboot. `budget::compositor_scratch`
+  + `layer_fits_with` now hold it back before any engine is built, so the
+  ENGINE is refused (`scene: layer N does not fit`) and the rest of the
+  scene draws. The core-side fix (fallible reserve in `compose.rs`) is
+  Gitea #702.
+- **`caps.layers` cannot come from a live heap reading.** Four *identical*
+  pattern activations reported `heap_free` 18,904 / 23,000 / 33,332 /
+  37,508 — ±18 KB of transient against a ~16 KB layer, so the advertised
+  number flapped 1 ↔ 2 on poll traffic alone; and reconstructing
+  `load_base` in the HTTP handler double-counts mid-swap. The render task
+  now publishes the number it already measures with no engine resident
+  (`shared::HEAP_BASE_MAX`, a high-water mark).
+- **`LAYER_BASE` 6 → 4 KiB**, calibrated on the same board: a 4096-px engine
+  costs 15.3 KB (`_Fairies`) to 19.7 KB (`Aurora 2D`), of which 12.3 KB is
+  the frame.
+
+Also found and ticketed, not fixed here: the pipelined stage buffers become
+permanently resident once a scene renders, costing the panel ~18 KB of the
+very headroom the layer budget reads (#704); and compositing one
+full-layout pattern layer costs ~54 ms at 4096 px, doubling the frame,
+where the native layers together cost 0.5 ms (#705).
+
+What ran on the panel: `POST`/`GET`/`DELETE /api/scenes`, `activate` with
+and without a crossfade, `POST /api/text` and its read-back, a playlist
+`I S<sceneId>` item auto-advancing, and a 70-second soak of a live scene at
+60 fps with a flat heap and `vmerr` null.
+
 ## 2026-09-24 — web: the Scenes page and the scene editor (#480)
 
 The web half of Phase B: a `Scenes` tab, a grid of live COMPOSITE thumbnails,
