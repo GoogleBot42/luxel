@@ -6,10 +6,12 @@
 //   node tools/serve-e2e.mjs
 
 import { execSync, spawn } from "node:child_process";
+import { rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { PORT as E2E } from "../web/tools/e2e-common.mjs";
 import { lxpBody } from "../web/tools/lxp.mjs"; // needs web/public/luxel.wasm (npm run wasm)
 
-// `E2E_PORT + 70` (and +71 for the panel impersonation), so a concurrent
+// `E2E_PORT + 70` (and +71..+74 for the extra mirrors it spawns), so a concurrent
 // session's run of this harness does not fight this one for the port —
 // same plan every browser harness uses (web/tools/e2e-common.mjs).
 const PORT = E2E.serve;
@@ -62,7 +64,7 @@ check(
     status.caps.power_cap === true &&
     status.caps.blur_glow === true &&
     status.caps.layers === 3 &&
-    status.caps.text_slots === 0 &&
+    status.caps.text_slots === 8 &&
     status.caps.reboot === false &&
     status.caps.ota === false &&
     status.caps.psram === false &&
@@ -335,6 +337,254 @@ check(
 await fetch(`${base}/api/playlist`, { method: "POST", body: "D 0" });
 for (const id of [plA, plB]) await fetch(`${base}/api/patterns/${id}`, { method: "DELETE" });
 
+
+// ---- scenes: /api/scenes + playlist scene items (Gitea #478) ----
+// The mirror is the reference implementation the web app develops against,
+// so every route the firmware grows is driven here first: create, list, get,
+// replace, activate, the playlist `I S<id>` item, delete, and both refusals
+// (a bad block, and a store that would not fit in the device's 3840 B).
+const scRed = await savePat("SC red", "export function render(index) { hsv(0, 1, 1) }");
+const scGreen = await savePat("SC green", "export function render(index) { hsv(1/3, 1, 1) }");
+
+const emptyScenes = await (await fetch(`${base}/api/scenes`)).json();
+check(
+  "scenes: an empty store reports the budget and the layer cap",
+  emptyScenes.active === null &&
+    emptyScenes.layers_max === 3 &&
+    emptyScenes.used === 0 &&
+    emptyScenes.max === 3840 &&
+    Array.isArray(emptyScenes.scenes) &&
+    emptyScenes.scenes.length === 0,
+  JSON.stringify(emptyScenes),
+);
+
+const postScene = async (body, id = "") =>
+  await (
+    await fetch(`${base}/api/scenes${id ? `/${id}` : ""}`, { method: "POST", body })
+  ).json();
+
+// (1) create — `S -` means "assign me an id"
+const made = await postScene(
+  `S - wash\nL color 0 0 0 0 normal 100 none fill 1\nK ff8800\n`,
+);
+check(
+  "scenes: POST /api/scenes assigns an 8-hex id",
+  made.ok === true && /^[0-9a-f]{8}$/.test(made.id ?? ""),
+  JSON.stringify(made),
+);
+const washId = made.id;
+
+// (2) list + (3) get one — the same JSON object either way
+const listed = await (await fetch(`${base}/api/scenes`)).json();
+const one = await (await fetch(`${base}/api/scenes/${washId}`)).json();
+check(
+  "scenes: GET lists the record and GET /<id> returns the same object",
+  listed.scenes.length === 1 &&
+    listed.used > 0 &&
+    JSON.stringify(listed.scenes[0]) === JSON.stringify(one) &&
+    one.name === "wash" &&
+    one.layers.length === 1 &&
+    one.layers[0].type === "color" &&
+    one.layers[0].color === "ff8800",
+  JSON.stringify(one),
+);
+check(
+  "scenes: GET /<id> of a scene that isn't there",
+  (await (await fetch(`${base}/api/scenes/deadbeef`)).json()).error === "no such scene",
+);
+
+// (4) replace in place — the route's id wins over the block's `S -`
+const replaced = await postScene(
+  `S - wash 2\nL color 0 0 0 0 normal 100 none fill 1\nK 0000ff\n`,
+  washId,
+);
+const afterReplace = await (await fetch(`${base}/api/scenes`)).json();
+check(
+  "scenes: POST /<id> replaces in place, keeping the id",
+  replaced.ok === true &&
+    replaced.id === washId &&
+    afterReplace.scenes.length === 1 &&
+    afterReplace.scenes[0].name === "wash 2" &&
+    afterReplace.scenes[0].layers[0].color === "0000ff",
+  JSON.stringify(afterReplace.scenes),
+);
+check(
+  "scenes: POST /<id> of a scene that isn't there",
+  (await postScene(`S - nope\nL color 0 0 0 0 normal 100 none fill 1\n`, "deadbeef")).error ===
+    "no such scene",
+);
+
+// (5) activate — the scene goes on screen and `active` names it
+await fetch(`${base}/api/scenes/${washId}/activate`, { method: "POST", body: "" });
+await sleep(400);
+const washPx = new Uint8Array(await (await fetch(`${base}/api/pixels`)).arrayBuffer());
+const activeAfter = await (await fetch(`${base}/api/scenes`)).json();
+check(
+  "scenes: activate puts the colour layer on screen",
+  activeAfter.active === washId && washPx[0] === 0 && washPx[1] === 0 && washPx[2] === 255,
+  `active=${activeAfter.active} px=${[...washPx.slice(0, 3)]}`,
+);
+
+// (6) a TWO-pattern scene composites through the Compositor: red under
+// green at `add` 50% is ff7f00, and the render loop keeps its frame rate
+const two = await postScene(
+  `S - stack\nL pat 0 0 0 0 normal 100 none fill 1\nI ${scRed}\n` +
+    `L pat 0 0 0 0 add 50 none fill 1\nI ${scGreen}\n`,
+);
+await fetch(`${base}/api/scenes/${two.id}/activate`, { method: "POST", body: "" });
+await sleep(1200);
+const stackPx = new Uint8Array(await (await fetch(`${base}/api/pixels`)).arrayBuffer());
+const stackStatus = await (await fetch(`${base}/api/status`)).json();
+check(
+  "scenes: two pattern layers composite (red + green at add 50%)",
+  stackPx[0] === 0xff && stackPx[1] === 0x7f && stackPx[2] === 0x00,
+  [...stackPx.slice(0, 3)].join(","),
+);
+check(
+  "scenes: a two-layer scene still renders at a frame rate",
+  stackStatus.fps > 0 && stackStatus.vmerr === null,
+  `fps=${stackStatus.fps} vmerr=${stackStatus.vmerr}`,
+);
+
+// (7) playlist scene item — `I S<id> <sec>`; `C`/`P` under it are ignored
+await fetch(`${base}/api/playlist`, {
+  method: "POST",
+  body: `D 0\nX 0\nI S${two.id} 0\nC nope 1\nP x\nI ${scRed} 0\n`,
+});
+const plScenes = await (await fetch(`${base}/api/playlist`)).json();
+check(
+  "playlist: `I S<id>` is a scene item, and pattern items say so too",
+  plScenes.items.length === 2 &&
+    plScenes.items[0].kind === "scene" &&
+    plScenes.items[0].id === two.id &&
+    plScenes.items[0].name === "stack" &&
+    plScenes.items[0].layers === 2 &&
+    plScenes.items[0].controls === undefined &&
+    plScenes.items[0].proj === undefined &&
+    plScenes.items[1].kind === "pattern" &&
+    plScenes.items[1].id === scRed,
+  JSON.stringify(plScenes.items),
+);
+// an id that is not 8 hex after the S is a PATTERN id, so no playlist a
+// pre-#478 device wrote changes meaning
+await fetch(`${base}/api/playlist`, { method: "POST", body: `D 0\nI Sabc 0\n` });
+const plNotScene = await (await fetch(`${base}/api/playlist`)).json();
+check(
+  "playlist: a bare `S` prefix that isn't an id stays a pattern item",
+  plNotScene.items[0].kind === "pattern" && plNotScene.items[0].id === "Sabc",
+  JSON.stringify(plNotScene.items),
+);
+
+// entering a scene item activates the scene
+await fetch(`${base}/api/playlist`, {
+  method: "POST",
+  body: `D 0\nX 0\nI ${scRed} 0\nI S${two.id} 0\n`,
+});
+await fetch(`${base}/api/playlist/play`, { method: "POST", body: "1" });
+await sleep(500);
+const plPx = new Uint8Array(await (await fetch(`${base}/api/pixels`)).arrayBuffer());
+check(
+  "playlist: entering a scene item activates the scene",
+  plPx[0] === 0xff && plPx[1] === 0x7f && plPx[2] === 0x00,
+  [...plPx.slice(0, 3)].join(","),
+);
+
+// (8) delete drops the record AND every playlist item that named it
+const del = await (await fetch(`${base}/api/scenes/${two.id}`, { method: "DELETE" })).json();
+await sleep(200);
+const plAfterDel = await (await fetch(`${base}/api/playlist`)).json();
+const scAfterDel = await (await fetch(`${base}/api/scenes`)).json();
+check(
+  "scenes: DELETE removes the record and its playlist items",
+  del.ok === true &&
+    scAfterDel.scenes.every((s) => s.id !== two.id) &&
+    plAfterDel.items.length === 1 &&
+    plAfterDel.items[0].id === scRed,
+  JSON.stringify({ del, items: plAfterDel.items }),
+);
+check(
+  "scenes: DELETE of a scene that isn't there",
+  (await (await fetch(`${base}/api/scenes/${two.id}`, { method: "DELETE" })).json()).error ===
+    "no such scene",
+);
+
+// (9) a bad block is refused with the core parser's own message
+const badBlend = await postScene(`S - bad\nL pat 0 0 0 0 nosuch 100 none fill 1\n`);
+check(
+  "scenes: a parse error names the line and the token",
+  badBlend.ok === false && badBlend.error === 'scene: line 2: unknown blend "nosuch"',
+  JSON.stringify(badBlend),
+);
+check(
+  "scenes: more pat layers than caps.layers is refused",
+  (
+    await postScene(
+      `S - toomany\n` + `L pat 0 0 0 0 normal 100 none fill 1\n`.repeat(4),
+    )
+  ).error === "scene: layer 4 does not fit",
+);
+
+// (10) the store is one 3840 B blob on a device, and the mirror enforces it
+// against the same serializer — a write that would not fit is REFUSED, with
+// the size it would have taken
+let storeFull = null;
+for (let i = 0; i < 80 && !storeFull; i++) {
+  const r = await postScene(
+    `S - filler ${i}\n` + `L color 0 0 0 0 normal 100 none fill 1\nK 112233\n`.repeat(6),
+  );
+  if (r.ok === false) storeFull = r;
+}
+check(
+  "scenes: a write past the 3840 B blob is refused, not truncated",
+  storeFull !== null && /^scenes: store full \(\d+ of 3840 B\)$/.test(storeFull?.error ?? ""),
+  JSON.stringify(storeFull),
+);
+const full = await (await fetch(`${base}/api/scenes`)).json();
+check("scenes: `used` stays inside the budget", full.used <= 3840, `used=${full.used}`);
+
+// clean up: the routing checks below want a quiet mirror
+for (const s of full.scenes) await fetch(`${base}/api/scenes/${s.id}`, { method: "DELETE" });
+await fetch(`${base}/api/playlist`, { method: "POST", body: "D 0" });
+for (const id of [scRed, scGreen]) await fetch(`${base}/api/patterns/${id}`, { method: "DELETE" });
+
+// ---- text slots: GET/POST /api/text (Gitea #485) ----
+const text0 = await (await fetch(`${base}/api/text`)).json();
+check(
+  "text: eight empty slots, matching caps.text_slots",
+  Array.isArray(text0.slots) && text0.slots.length === 8 && text0.slots.every((s) => s === ""),
+  JSON.stringify(text0),
+);
+await fetch(`${base}/api/text`, { method: "POST", body: "3 hello there" });
+const text1 = await (await fetch(`${base}/api/text`)).json();
+check(
+  "text: POST `<slot> <text>` round-trips, rest-of-line and all",
+  text1.slots[3] === "hello there" && text1.slots[0] === "",
+  JSON.stringify(text1.slots),
+);
+await fetch(`${base}/api/text`, { method: "POST", body: "3 " });
+check(
+  "text: an empty body clears the slot",
+  (await (await fetch(`${base}/api/text`)).json()).slots[3] === "",
+);
+// 64 B, truncated on a char boundary: 63 ASCII + a 2-byte é would be 65, so
+// the é is dropped whole rather than split
+await fetch(`${base}/api/text`, { method: "POST", body: `0 ${"x".repeat(70)}` });
+const longSlot = (await (await fetch(`${base}/api/text`)).json()).slots[0];
+await fetch(`${base}/api/text`, { method: "POST", body: `1 ${"y".repeat(63)}é` });
+const utf8Slot = (await (await fetch(`${base}/api/text`)).json()).slots[1];
+check(
+  "text: a slot holds 64 bytes, truncated on a char boundary",
+  longSlot === "x".repeat(64) &&
+    utf8Slot === "y".repeat(63) &&
+    new TextEncoder().encode(utf8Slot).length === 63,
+  `${longSlot.length} ${utf8Slot.length}`,
+);
+check(
+  "text: a slot number past the table is refused",
+  (await (await fetch(`${base}/api/text`, { method: "POST", body: "8 nope" })).json()).error ===
+    "text: slot 8 out of range (0..7)",
+);
+for (const n of [0, 1]) await fetch(`${base}/api/text`, { method: "POST", body: `${n} ` });
 // ---- browser-level checks ----
 // ---- page routing (the mirror stands in for a device serving its assets) ----
 const rootRes = await fetch(base);
@@ -789,6 +1039,119 @@ check(
   overCode !== 0 && /--max-pixels/.test(overErr),
   `code=${overCode} ${overErr.trim()}`,
 );
+
+// ---- a panel mirror's scene budget + `--scenes` seeding (Gitea #478) ----
+// `caps.layers` steps down past 512 px, so the S3 panel affords TWO pattern
+// layers, not three — and the mirror must refuse a third at the door rather
+// than let a scene into the store that the board could not show. `--scenes
+// <file>` brings the store up pre-filled, which is how a harness (and the
+// mockdiff seed) gets scenes onto a mirror without a POST per record.
+const seedPath = `${tmpdir()}/luxel-serve-e2e-scenes-${process.pid}.txt`;
+writeFileSync(
+  seedPath,
+  `S 5ceed001 seeded\nL color 0 0 0 0 normal 100 none fill 1\nK 00ff00\n`,
+);
+const panelSc = spawn(
+  "target/debug/luxel",
+  ["serve", "--port", String(PORT + 4), "--board", "panel", "--scenes", seedPath],
+  { stdio: ["ignore", "pipe", "inherit"] },
+);
+process.on("exit", () => {
+  panelSc.kill();
+  try {
+    rmSync(seedPath, { force: true });
+  } catch {}
+});
+await new Promise((resolve, reject) => {
+  panelSc.stdout.on("data", (d) => { if (String(d).includes("luxel serve:")) resolve(); });
+  panelSc.on("exit", () => reject(new Error("panel scene mirror died")));
+  setTimeout(() => reject(new Error("panel scene mirror start timeout")), 30000);
+});
+const pscBase = `http://127.0.0.1:${PORT + 4}`;
+await sleep(600);
+const pscList = await (await fetch(`${pscBase}/api/scenes`)).json();
+check(
+  "--scenes <file>: the store comes up seeded, at the panel's layer cap",
+  pscList.layers_max === 2 &&
+    pscList.scenes.length === 1 &&
+    pscList.scenes[0].id === "5ceed001" &&
+    pscList.scenes[0].name === "seeded",
+  JSON.stringify(pscList),
+);
+check(
+  "scenes: a panel refuses a THIRD pattern layer (caps.layers = 2)",
+  (
+    await (
+      await fetch(`${pscBase}/api/scenes`, {
+        method: "POST",
+        body: `S - three\n` + `L pat 0 0 0 0 normal 100 none fill 1\n`.repeat(3),
+      })
+    ).json()
+  ).error === "scene: layer 3 does not fit",
+);
+const pscRed = (await (await fetch(`${pscBase}/api/patterns`, {
+  method: "POST",
+  body: await lxpBody("PSC red", "export function render2D(index, x, y) { hsv(0, 1, 1) }"),
+})).json()).id;
+const pscGreen = (await (await fetch(`${pscBase}/api/patterns`, {
+  method: "POST",
+  body: await lxpBody("PSC green", "export function render2D(index, x, y) { hsv(1/3, 1, 1) }"),
+})).json()).id;
+const pscTwo = await (await fetch(`${pscBase}/api/scenes`, {
+  method: "POST",
+  body:
+    `S - stack\nL pat 0 0 0 0 normal 100 none fill 1\nI ${pscRed}\n` +
+    `L pat 0 0 0 0 add 50 none fill 1\nI ${pscGreen}\n`,
+})).json();
+await fetch(`${pscBase}/api/scenes/${pscTwo.id}/activate`, { method: "POST", body: "" });
+await sleep(1500);
+const pscPx = new Uint8Array(await (await fetch(`${pscBase}/api/pixels`)).arrayBuffer());
+const pscStatus = await (await fetch(`${pscBase}/api/status`)).json();
+check(
+  "scenes: a 64x64 panel composites two pattern layers and keeps rendering",
+  pscPx.length === 4096 * 3 &&
+    pscPx[0] === 0xff &&
+    pscPx[1] === 0x7f &&
+    pscPx[2] === 0x00 &&
+    pscStatus.fps > 0 &&
+    pscStatus.vmerr === null,
+  `px=${[...pscPx.slice(0, 3)]} fps=${pscStatus.fps} vmerr=${pscStatus.vmerr}`,
+);
+// A `text` layer draws NATIVELY — no engine, no layer slot — and its `slot`
+// source is resolved by the host every frame, so `POST /api/text` changes
+// what is on the panel with no other call (Gitea #484/#485).
+const litScene = await (await fetch(`${pscBase}/api/scenes`, {
+  method: "POST",
+  body: `S - words\nL text 0 0 0 0 normal 100 none fill 1\nT lit HI\nF regular ffffff l none 0\n`,
+})).json();
+await fetch(`${pscBase}/api/scenes/${litScene.id}/activate`, { method: "POST", body: "" });
+await sleep(600);
+const textLitPx = new Uint8Array(await (await fetch(`${pscBase}/api/pixels`)).arrayBuffer());
+check(
+  "scenes: a `lit` text layer draws glyphs with no engine",
+  textLitPx.some((b) => b > 0),
+  `lit px on: ${textLitPx.filter((b) => b > 0).length}`,
+);
+
+const slotScene = await (await fetch(`${pscBase}/api/scenes`, {
+  method: "POST",
+  body: `S - slotted\nL text 0 0 0 0 normal 100 none fill 1\nT slot 0\nF regular ffffff l none 0\n`,
+})).json();
+await fetch(`${pscBase}/api/text`, { method: "POST", body: "0 " });
+await fetch(`${pscBase}/api/scenes/${slotScene.id}/activate`, { method: "POST", body: "" });
+await sleep(600);
+const slotEmpty = new Uint8Array(await (await fetch(`${pscBase}/api/pixels`)).arrayBuffer());
+await fetch(`${pscBase}/api/text`, { method: "POST", body: "0 LUXEL" });
+await sleep(600);
+const slotFilled = new Uint8Array(await (await fetch(`${pscBase}/api/pixels`)).arrayBuffer());
+check(
+  "scenes: a `slot` text layer follows POST /api/text with no other call",
+  slotEmpty.every((b) => b === 0) && slotFilled.some((b) => b > 0),
+  `empty=${slotEmpty.filter((b) => b > 0).length} filled=${slotFilled.filter((b) => b > 0).length}`,
+);
+
+panelSc.kill();
+rmSync(seedPath, { force: true });
 
 server.kill();
 console.log(failures === 0 ? "\nall checks passed" : `\n${failures} FAILURES`);

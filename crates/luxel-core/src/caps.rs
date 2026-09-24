@@ -203,10 +203,12 @@ pub struct Caps {
     pub assets: bool,
 }
 
-/// Text slots for host-supplied text (proposal §6). Phase C — no firmware
-/// implements them yet, so every host advertises 0 and the UI hides the
-/// Scene text layer's "Text slot" source.
-pub const TEXT_SLOTS: u8 = 0;
+/// Text slots for host-supplied text (proposal §6, Gitea #485): how many
+/// slots `GET/POST /api/text` addresses and `textSlot(n)` reads. It is
+/// [`crate::text::SLOTS`] itself — the table lives in one place, so a
+/// firmware and the mirror cannot advertise different sizes. A UI hides the
+/// Scene text layer's "Text slot" source when this is 0.
+pub const TEXT_SLOTS: u8 = crate::text::SLOTS as u8;
 
 /// User-uploadable assets (fonts, images) as a scene-layer source. Not
 /// planned (proposal §5.7): the whole-bundle assets partition is not a
@@ -422,7 +424,7 @@ mod tests {
         assert!(c.power_cap, "strips have a per-pixel current model");
         assert!(c.blur_glow, "index-space neighbours exist on a strip");
         assert_eq!(c.layers, 3);
-        assert_eq!(c.text_slots, 0);
+        assert_eq!(c.text_slots, 8);
         assert!(!c.assets);
     }
 
@@ -462,7 +464,7 @@ mod tests {
         assert_eq!(
             s,
             "{\"strip_driver\":true,\"panel\":false,\"outputs\":2,\"power_cap\":true,\
-             \"blur_glow\":true,\"layers\":3,\"text_slots\":0,\"reboot\":true,\"ota\":true,\
+             \"blur_glow\":true,\"layers\":3,\"text_slots\":8,\"reboot\":true,\"ota\":true,\
              \"psram\":false,\"assets\":false}"
         );
     }

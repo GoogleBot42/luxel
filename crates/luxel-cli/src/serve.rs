@@ -77,12 +77,28 @@ enum Msg {
     /// The playlist definition changed while playing — re-enter the current
     /// item so edits (params/source) take effect.
     PlaylistReload,
+    /// `POST /api/scenes/<id>/activate` — show this scene, crossfading over
+    /// `ms` (0 = hard cut). Parks the playlist like a direct pattern play.
+    SceneActivate { id: String, ms: u32 },
+    /// A scene record was rewritten — rebuild it in place if it is the one
+    /// on screen (the scene editor's live push).
+    SceneReload(String),
+    /// `POST /api/text` — install a text slot in `luxel_core::text`'s table.
+    /// It travels through the queue because that table has a **single-writer
+    /// rule** (`text.rs`) and the mirror is NOT single-threaded: a connection
+    /// gets its own thread, so a handler writing while the render thread runs
+    /// `textSlot(n)` would be a data race. The render loop is the one writer.
+    TextSlot { n: u8, text: String },
 }
 
 /// One playlist entry: a stored pattern + a snapshot of its control values, so
 /// the same pattern can appear multiple times with different params.
 #[derive(Clone, Default)]
 struct PlaylistItem {
+    /// `I S<id>` — this item names a SCENE, and `pattern_id` holds the scene
+    /// id (the two id spaces are separate, so the `S` prefix is what tells
+    /// them apart on the wire). A scene item ignores `C`/`P` lines.
+    scene: bool,
     pattern_id: String,
     /// name → raw 16.16 control values (matches /api/control on the wire).
     controls: Vec<(String, Vec<i32>)>,
@@ -106,6 +122,12 @@ struct Playlist {
 }
 
 /// Blend two RGB pixels by `t` in 0..=65536 (0 = a, 65536 = b).
+///
+/// The crossfade the render loop used before scenes. It is now
+/// `compose::blend_px_mode(Normal, t)` — kept here as the REFERENCE the
+/// equivalence test measures that against, so the generalization can never
+/// silently move a pixel.
+#[cfg(test)]
 fn blend_px(a: [u8; 3], b: [u8; 3], t: i32) -> [u8; 3] {
     let mix = |x: u8, y: u8| (((x as i32) * (65536 - t) + (y as i32) * t) >> 16) as u8;
     [mix(a[0], b[0]), mix(a[1], b[1]), mix(a[2], b[2])]
@@ -234,6 +256,24 @@ struct State {
     playlist: Mutex<Playlist>,
     pl_playing: AtomicBool,
     pl_index: AtomicUsize,
+    /// Scene records (Gitea #478). A device keeps the same blocks as ONE
+    /// blob in flash under `SCENES_KEY`, capped at [`SCENES_MAX`]; the
+    /// mirror keeps them parsed in memory and enforces the same cap against
+    /// the re-serialized blob, so a scene that fits here fits there.
+    scenes: Mutex<Vec<luxel_core::scene::Scene>>,
+    /// Id of the scene on screen, empty for none — `/api/scenes`'s `active`.
+    active_scene: Mutex<String>,
+    next_scene_id: AtomicU32,
+    /// The eight host-settable text slots (`/api/text`, Gitea #485).
+    ///
+    /// The mirror keeps its own copy because `luxel_core::text`'s table is
+    /// lock-free behind a single-writer rule and a mirror handles each
+    /// connection on its own thread: this is what `GET /api/text` and a
+    /// scene's `slot` text layer read, and every write is ALSO queued to the
+    /// render loop as [`Msg::TextSlot`], which is the one thread allowed to
+    /// call `text::set_slot` — that table is what a pattern's `textSlot(n)`
+    /// reads. Not persisted, on either host.
+    text_slots: Mutex<Vec<String>>,
     wifi_ssid: Mutex<Option<String>>,
     /// What this device calls itself (Gitea #538) — `--name`, and
     /// `GET/POST /api/name`. The firmware's default is `luxel-<mac6>`; a
@@ -1319,17 +1359,239 @@ fn engine_now(state: &State, prog: luxel_core::vm::Program, pixel_count: u32) ->
     e
 }
 
-/// Load playlist item `i`: build its stored bytecode into an engine (the
-/// device execution path), apply its saved control values, and publish the
-/// source/controls snapshots. Returns the engine + source + bytecode on
-/// success. Also records the active index.
-fn enter_item(state: &State, i: usize) -> Option<(Engine, String, Vec<u8>)> {
+/// What the render loop is showing: one pattern, or one scene's layer stack
+/// driven through [`luxel_core::compose::Compositor`].
+///
+/// A single pattern is the degenerate scene — one full-layout `pat` layer,
+/// `normal` / opacity 100 / key none — but it keeps its own path so the
+/// classic route costs no composite pass and its pixels stay byte-identical
+/// to what the mirror emitted before scenes existed.
+struct Stage {
+    /// `Some(id)` when this stage is a scene.
+    scene_id: Option<String>,
+    /// LXBC of the single pattern; empty for a scene. What the rebuild
+    /// paths (pixel-count change, map cleared) reload from.
+    bc: Vec<u8>,
+    comp: Option<luxel_core::compose::Compositor>,
+    /// Layer kind per layer, bottom → top (empty for a single pattern).
+    kinds: Vec<luxel_core::scene::LayerKind>,
+    /// One engine per `pat` layer, tagged with its layer index. A
+    /// single-pattern stage holds exactly one, index 0.
+    engines: Vec<(usize, Engine)>,
+    /// Sprite layers: layer index, the engine whose const pool holds the
+    /// three `spr*` arrays (never stepped), and the source its `// @sprite`
+    /// tag is read from.
+    sprites: Vec<(usize, Engine, String)>,
+    /// Composite output (scene stages only).
+    out: Vec<[u8; 3]>,
+}
+
+impl Stage {
+    /// The classic one-pattern stage.
+    fn pattern(bc: Vec<u8>, engine: Engine) -> Stage {
+        Stage {
+            scene_id: None,
+            bc,
+            comp: None,
+            kinds: Vec::new(),
+            engines: vec![(0, engine)],
+            sprites: Vec::new(),
+            out: Vec::new(),
+        }
+    }
+
+    /// Nothing to render (no engine built, no scene set).
+    fn is_empty(&self) -> bool {
+        self.comp.is_none() && self.engines.is_empty()
+    }
+
+    /// Resident pattern engines this stage costs — what the transition rule
+    /// adds up against `caps.layers`.
+    fn pattern_layers(&self) -> usize {
+        if self.comp.is_some() {
+            self.kinds
+                .iter()
+                .filter(|k| **k == luxel_core::scene::LayerKind::Pattern)
+                .count()
+        } else {
+            self.engines.len()
+        }
+    }
+
+    /// The engine every single-engine surface still speaks to: `/api/control`,
+    /// `/api/var`, the sensor/event/pin queues, `vars`/`readouts`, `geom`.
+    /// For a scene that is the bottom-most pattern layer.
+    fn primary(&self) -> Option<&Engine> {
+        self.engines.first().map(|(_, e)| e)
+    }
+
+    fn primary_mut(&mut self) -> Option<&mut Engine> {
+        self.engines.first_mut().map(|(_, e)| e)
+    }
+
+    fn engines_mut(&mut self) -> impl Iterator<Item = &mut Engine> {
+        self.engines.iter_mut().map(|(_, e)| e)
+    }
+
+    /// Point a scene stage at a new canvas (the device map changed).
+    fn set_grid(&mut self, grid: luxel_core::outpipe::GridMap) {
+        if let Some(c) = self.comp.as_mut() {
+            c.set_grid(grid);
+            self.out.clear();
+        }
+    }
+
+    /// Step every layer and return this frame's pixels.
+    fn render(&mut self, state: &State, delta: Fx, dt_ms: u32) -> &[[u8; 3]] {
+        let Stage { comp, kinds, engines, sprites, out, .. } = self;
+        let Some(comp) = comp.as_mut() else {
+            return match engines.first_mut() {
+                Some((_, e)) => e.frame(delta),
+                None => &[],
+            };
+        };
+        comp.advance(dt_ms);
+        let n = comp.grid().len();
+        if out.len() != n {
+            out.clear();
+            out.resize(n, [0, 0, 0]);
+        }
+        comp.begin(out);
+        for (i, kind) in kinds.iter().enumerate() {
+            match kind {
+                luxel_core::scene::LayerKind::Pattern => {
+                    // a layer whose pattern is missing or undecodable has no
+                    // engine and simply does not draw, like a dangling
+                    // playlist item
+                    if let Some((_, e)) = engines.iter_mut().find(|(li, _)| *li == i) {
+                        let px = e.frame(delta);
+                        comp.pattern_layer(out, i, px);
+                    }
+                }
+                luxel_core::scene::LayerKind::Sprite => {
+                    if let Some((_, e, src)) = sprites.iter().find(|(li, _, _)| *li == i) {
+                        if let Some(sv) = luxel_core::compose::sprite_view(e, src) {
+                            comp.native_layer(out, i, Some(&sv));
+                        }
+                    }
+                }
+                luxel_core::scene::LayerKind::Text => {
+                    // clock and slot text are the HOST's to resolve; `lit`
+                    // was resolved once by `set_scene`
+                    match comp.text_source(i).cloned() {
+                        Some(luxel_core::scene::TextSource::Clock(fmt)) => {
+                            let s = clock_text(state, fmt);
+                            comp.set_text(i, &s);
+                        }
+                        Some(luxel_core::scene::TextSource::Slot(k)) => {
+                            let s = state
+                                .text_slots
+                                .lock()
+                                .unwrap()
+                                .get(k as usize)
+                                .cloned()
+                                .unwrap_or_default();
+                            comp.set_text(i, &s);
+                        }
+                        _ => {}
+                    }
+                    comp.native_layer(out, i, None);
+                }
+                luxel_core::scene::LayerKind::Color => comp.native_layer(out, i, None),
+            }
+        }
+        &out[..]
+    }
+}
+
+/// Build a scene's stage: one engine per `pat` layer (bottom → top), one
+/// never-stepped engine per `sprite` layer, and the compositor that draws
+/// them. Refuses a scene with more `pat` layers than `caps.layers`.
+fn build_stage(state: &State, sc: &luxel_core::scene::Scene) -> Result<Stage, String> {
+    scene_fits_layers(state, sc)?;
+    let n = state.pixel_count.load(Ordering::Relaxed);
+    let mut comp = luxel_core::compose::Compositor::new(scene_grid(state));
+    comp.set_scene(sc);
+    let mut engines: Vec<(usize, Engine)> = Vec::new();
+    let mut sprites: Vec<(usize, Engine, String)> = Vec::new();
+    for (i, l) in sc.layers.iter().enumerate() {
+        match &l.body {
+            luxel_core::scene::LayerBody::Pattern(p) => {
+                let Some(sp) = pattern_by_id(state, &p.id) else { continue };
+                let Ok(prog) = luxel_core::bytecode::deserialize(&sp.bc) else { continue };
+                let mut e = engine_now(state, prog, n);
+                for (name, raw) in &p.controls {
+                    let vals: Vec<Fx> = raw.iter().map(|&r| Fx::from_raw(r)).collect();
+                    e.set_control(name, &vals);
+                }
+                apply_map(state, &mut e);
+                // …then the layer's own projection, which outranks the
+                // device default — same order as a playlist item's `P`.
+                if let Some(mode) = p.proj.and_then(ProjectionMode::from_u8) {
+                    let mut pr = e.projection();
+                    pr.set(e.preferred_dims(), mode);
+                    e.set_projection(pr);
+                }
+                engines.push((i, e));
+            }
+            luxel_core::scene::LayerBody::Sprite { id } => {
+                // The engine is built and never stepped: construction runs
+                // top-level init, which is what turns `var sprH = […]` into
+                // the const array `sprite_view` reads (docs/spec/scenes.md §4).
+                let Some(sp) = pattern_by_id(state, id) else { continue };
+                let Ok(prog) = luxel_core::bytecode::deserialize(&sp.bc) else { continue };
+                sprites.push((i, engine_now(state, prog, n), sp.source));
+            }
+            _ => {}
+        }
+    }
+    Ok(Stage {
+        scene_id: Some(sc.id.clone()),
+        bc: Vec::new(),
+        comp: Some(comp),
+        kinds: sc.layers.iter().map(|l| l.kind()).collect(),
+        engines,
+        sprites,
+        out: Vec::new(),
+    })
+}
+
+/// Activate a scene by id: build its stage and publish the snapshots
+/// `/api/status` and the console read.
+fn enter_scene(state: &State, id: &str) -> Option<Stage> {
+    let sc = scene_by_id(state, id)?;
+    match build_stage(state, &sc) {
+        Ok(st) => {
+            *state.active_scene.lock().unwrap() = sc.id.clone();
+            *state.current_pattern_id.lock().unwrap() = String::new();
+            *state.pattern_src.lock().unwrap() = String::new();
+            state.pattern_bc.lock().unwrap().clear();
+            *state.controls_json.lock().unwrap() = String::new();
+            *state.vmerr.lock().unwrap() = None;
+            Some(st)
+        }
+        Err(e) => {
+            *state.vmerr.lock().unwrap() = Some(e);
+            None
+        }
+    }
+}
+
+/// Load playlist item `i`: for a pattern item, build its stored bytecode
+/// into an engine (the device execution path) and apply its saved control
+/// values; for an `I S<id>` item, activate that scene. Publishes the
+/// source/controls snapshots. Also records the active index.
+fn enter_item(state: &State, i: usize) -> Option<Stage> {
     let item = state.playlist.lock().unwrap().items.get(i).cloned()?;
     // advance the active index even if the pattern is missing (deleted), so a
     // dangling entry just holds for its duration and the loop moves past it
     state.pl_index.store(i, Ordering::Relaxed);
+    if item.scene {
+        return enter_scene(state, &item.pattern_id);
+    }
     let sp = pattern_by_id(state, &item.pattern_id)?;
     *state.current_pattern_id.lock().unwrap() = item.pattern_id.clone();
+    *state.active_scene.lock().unwrap() = String::new();
     let prog = luxel_core::bytecode::deserialize(&sp.bc).ok()?;
     let mut eng = engine_now(state, prog, state.pixel_count.load(Ordering::Relaxed));
     for (name, raw) in &item.controls {
@@ -1348,39 +1610,86 @@ fn enter_item(state: &State, i: usize) -> Option<(Engine, String, Vec<u8>)> {
     *state.pattern_bc.lock().unwrap() = sp.bc.clone();
     *state.controls_json.lock().unwrap() = jsonview::controls_json(&eng);
     *state.vmerr.lock().unwrap() = None;
-    Some((eng, sp.source, sp.bc))
+    Some(Stage::pattern(sp.bc, eng))
 }
 
 fn render_loop(state: Arc<State>) {
     let count = || state.pixel_count.load(Ordering::Relaxed);
     // Boot default: compile once, then run through the serialize→deserialize
     // path so the mirror executes exactly what a device would.
-    let mut current_bc: Vec<u8> = Engine::new(DEFAULT_PATTERN, count(), 1)
+    let boot_bc: Vec<u8> = Engine::new(DEFAULT_PATTERN, count(), 1)
         .ok()
         .and_then(|e| luxel_core::bytecode::serialize(e.program()).ok())
         .unwrap_or_default();
-    let mut engine = luxel_core::bytecode::deserialize(&current_bc)
-        .ok()
-        .map(|p| engine_now(&state, p, count()));
+    let mut stage = match luxel_core::bytecode::deserialize(&boot_bc) {
+        Ok(p) => Stage::pattern(boot_bc.clone(), engine_now(&state, p, count())),
+        Err(_) => Stage {
+            scene_id: None,
+            bc: boot_bc.clone(),
+            comp: None,
+            kinds: Vec::new(),
+            engines: Vec::new(),
+            sprites: Vec::new(),
+            out: Vec::new(),
+        },
+    };
     *state.pattern_src.lock().unwrap() = DEFAULT_PATTERN.to_string();
-    *state.pattern_bc.lock().unwrap() = current_bc.clone();
-    if let Some(eng) = engine.as_ref() {
+    *state.pattern_bc.lock().unwrap() = boot_bc;
+    if let Some(eng) = stage.primary() {
         *state.controls_json.lock().unwrap() = jsonview::controls_json(eng);
     }
     let mut last = Instant::now();
     let mut pl_start = Instant::now(); // when the current playlist item started
-    // crossfade: the outgoing engine + when/how long to blend
-    let mut prev: Option<Engine> = None;
+    // transition: the outgoing STAGE (a pattern, or a whole scene stack) plus
+    // when and how long to blend it out
+    let mut prev: Option<Stage> = None;
     let mut blend_start = Instant::now();
     let mut blend_ms: i32 = 0;
-    // start a crossfade from the current engine (call before swapping engine in)
-    macro_rules! begin_crossfade {
-        () => {{
-            let cf = state.playlist.lock().unwrap().crossfade_ms;
-            if cf > 0 && engine.is_some() {
-                prev = engine.take();
+    // Swap `$next` in, crossfading over `$ms` ms when it is affordable.
+    //
+    // Transition rule (docs/api.md "Scenes"): both stacks are resident while
+    // the fade runs, so a fade whose combined pattern layers would exceed
+    // `caps.layers` is a hard cut instead. Pattern→pattern is 1 + 1, which
+    // every board affords, so the classic crossfade is unchanged.
+    macro_rules! begin_transition {
+        ($next:expr, $ms:expr) => {{
+            let next = $next;
+            let ms = $ms;
+            let fits = stage.pattern_layers() + next.pattern_layers() <= layers_max(&state);
+            if ms > 0 && fits && !stage.is_empty() {
+                prev = Some(std::mem::replace(&mut stage, next));
                 blend_start = Instant::now();
-                blend_ms = cf;
+                blend_ms = ms as i32;
+            } else {
+                stage = next;
+                prev = None;
+                blend_ms = 0;
+            }
+        }};
+    }
+    // The playlist's own crossfade, for an item change.
+    macro_rules! begin_playlist_transition {
+        ($next:expr) => {{
+            let cf = state.playlist.lock().unwrap().crossfade_ms.max(0) as u32;
+            begin_transition!($next, cf);
+        }};
+    }
+    // Rebuild what is on screen at the current pixel count / map — a scene
+    // from its record, a pattern from its bytecode.
+    macro_rules! rebuild_stage {
+        () => {{
+            match stage.scene_id.clone() {
+                Some(id) => {
+                    if let Some(st) = enter_scene(&state, &id) {
+                        stage = st;
+                    }
+                }
+                None => {
+                    if let Ok(p) = luxel_core::bytecode::deserialize(&stage.bc) {
+                        let bc = stage.bc.clone();
+                        stage = Stage::pattern(bc, engine_now(&state, p, count()));
+                    }
+                }
             }
         }};
     }
@@ -1402,43 +1711,45 @@ fn render_loop(state: Arc<State>) {
                     if let Ok(p) = luxel_core::bytecode::deserialize(&bc) {
                         let e = engine_now(&state, p, count());
                         *state.controls_json.lock().unwrap() = jsonview::controls_json(&e);
-                        engine = Some(e);
+                        *state.active_scene.lock().unwrap() = String::new();
+                        stage = Stage::pattern(bc.clone(), e);
+                        prev = None;
+                        blend_ms = 0;
                         *state.pattern_src.lock().unwrap() = src;
-                        *state.pattern_bc.lock().unwrap() = bc.clone();
-                        current_bc = bc;
+                        *state.pattern_bc.lock().unwrap() = bc;
                         *state.vmerr.lock().unwrap() = None;
                         last = Instant::now();
                         state.map_dirty.store(true, Ordering::Relaxed);
                     }
                 }
                 Msg::Control(name, values) => {
-                    if let Some(eng) = engine.as_mut() {
+                    if let Some(eng) = stage.primary_mut() {
                         eng.set_control(&name, &values);
                     }
                 }
                 Msg::Var(name, value) => {
-                    if let Some(eng) = engine.as_mut() {
+                    if let Some(eng) = stage.primary_mut() {
                         eng.set_var(&name, value);
                     }
                 }
-                // live pixel-count change: rebuild the engine at the new count
+                // live pixel-count change: rebuild at the new count
                 Msg::Config(n) => {
                     let n = n.clamp(1, state.max_pixels);
                     state.pixel_count.store(n, Ordering::Relaxed);
-                    if let Ok(p) = luxel_core::bytecode::deserialize(&current_bc) {
-                        let e = engine_now(&state, p, n);
-                        *state.controls_json.lock().unwrap() = jsonview::controls_json(&e);
-                        engine = Some(e);
-                        *state.vmerr.lock().unwrap() = None;
-                        last = Instant::now();
-                        state.map_dirty.store(true, Ordering::Relaxed);
+                    rebuild_stage!();
+                    if let Some(eng) = stage.primary() {
+                        *state.controls_json.lock().unwrap() = jsonview::controls_json(eng);
                     }
+                    *state.vmerr.lock().unwrap() = None;
+                    last = Instant::now();
+                    state.map_dirty.store(true, Ordering::Relaxed);
                 }
                 Msg::PlaylistPlay(i) => {
                     state.pl_playing.store(true, Ordering::Relaxed);
-                    if let Some((e, _src, bc)) = enter_item(&state, i) {
-                        engine = Some(e);
-                        current_bc = bc;
+                    if let Some(st) = enter_item(&state, i) {
+                        stage = st;
+                        prev = None;
+                        blend_ms = 0;
                         last = Instant::now();
                         pl_start = Instant::now();
                     }
@@ -1449,10 +1760,8 @@ fn render_loop(state: Arc<State>) {
                     if state.pl_playing.load(Ordering::Relaxed) && len > 0 {
                         let cur = state.pl_index.load(Ordering::Relaxed) as i64;
                         let ni = (cur + d as i64).rem_euclid(len as i64) as usize;
-                        if let Some((e, _src, bc)) = enter_item(&state, ni) {
-                            begin_crossfade!();
-                            engine = Some(e);
-                            current_bc = bc;
+                        if let Some(st) = enter_item(&state, ni) {
+                            begin_playlist_transition!(st);
                             last = Instant::now();
                             pl_start = Instant::now();
                         }
@@ -1460,12 +1769,36 @@ fn render_loop(state: Arc<State>) {
                 }
                 Msg::PlaylistReload => {
                     if state.pl_playing.load(Ordering::Relaxed) {
-                        let i = state.pl_index.load(Ordering::Relaxed);
-                        if let Some((e, _src, bc)) = enter_item(&state, i) {
-                            engine = Some(e);
-                            current_bc = bc;
+                        let len = state.playlist.lock().unwrap().items.len();
+                        let i = state.pl_index.load(Ordering::Relaxed).min(len.saturating_sub(1));
+                        if let Some(st) = enter_item(&state, i) {
+                            stage = st;
+                            prev = None;
+                            blend_ms = 0;
                             last = Instant::now();
                             pl_start = Instant::now();
+                        }
+                    }
+                }
+                // `POST /api/scenes/<id>/activate` — parks the playlist,
+                // exactly like a direct pattern play
+                Msg::SceneActivate { id, ms } => {
+                    state.pl_playing.store(false, Ordering::Relaxed);
+                    if let Some(st) = enter_scene(&state, &id) {
+                        begin_transition!(st, ms);
+                        last = Instant::now();
+                    }
+                }
+                // the one writer of `luxel_core::text`'s slot table
+                Msg::TextSlot { n, text } => luxel_core::text::set_slot(n, &text),
+                // the scene editor rewrote the record that is on screen
+                Msg::SceneReload(id) => {
+                    if stage.scene_id.as_deref() == Some(id.as_str()) {
+                        if let Some(st) = enter_scene(&state, &id) {
+                            stage = st;
+                            prev = None;
+                            blend_ms = 0;
+                            last = Instant::now();
                         }
                     }
                 }
@@ -1483,10 +1816,8 @@ fn render_loop(state: Arc<State>) {
                 state.pl_playing.store(false, Ordering::Relaxed);
             } else if sec > 0 && pl_start.elapsed() >= Duration::from_secs(sec as u64) {
                 let ni = (state.pl_index.load(Ordering::Relaxed) + 1) % len;
-                if let Some((e, _src, bc)) = enter_item(&state, ni) {
-                    begin_crossfade!();
-                    engine = Some(e);
-                    current_bc = bc;
+                if let Some(st) = enter_item(&state, ni) {
+                    begin_playlist_transition!(st);
                     last = Instant::now();
                     geom_dirty = true;
                 }
@@ -1498,12 +1829,13 @@ fn render_loop(state: Arc<State>) {
         if state.map_dirty.swap(false, Ordering::Relaxed) {
             geom_dirty = true;
             if state.device_map.lock().unwrap().is_some() {
-                if let Some(eng) = engine.as_mut() {
+                for eng in stage.engines_mut() {
                     apply_map(&state, eng);
                 }
-            } else if let Ok(p) = luxel_core::bytecode::deserialize(&current_bc) {
+                stage.set_grid(scene_grid(&state));
+            } else {
                 // cleared → rebuild without a map
-                engine = Some(engine_now(&state, p, count()));
+                rebuild_stage!();
             }
         }
 
@@ -1514,14 +1846,16 @@ fn render_loop(state: Arc<State>) {
         let want_proj = state.proj_pending.swap(PROJ_NONE, Ordering::Relaxed);
         if want_proj != PROJ_NONE {
             geom_dirty = true;
-            if let Some(eng) = engine.as_mut() {
-                match ProjectionMode::from_u8(want_proj) {
+            let mode = ProjectionMode::from_u8(want_proj);
+            let fallback = cur_projection(&state);
+            for eng in stage.engines_mut() {
+                match mode {
                     Some(mode) => {
                         let mut p = eng.projection();
                         p.set(eng.preferred_dims(), mode);
                         eng.set_projection(p);
                     }
-                    None => eng.set_projection(cur_projection(&state)),
+                    None => eng.set_projection(fallback),
                 }
             }
         }
@@ -1530,18 +1864,26 @@ fn render_loop(state: Arc<State>) {
         // `/api/status` reports (#464)
         if geom_dirty {
             geom_dirty = false;
-            publish_geom(&state, engine.as_ref());
+            publish_geom(&state, stage.primary());
         }
 
         if vars_mark.elapsed() >= Duration::from_millis(250) {
             vars_mark = Instant::now();
-            if let Some(eng) = engine.as_mut() {
+            let wall = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .map(|d| {
+                    d.as_secs() as i64 + state.tz_minutes.load(Ordering::Relaxed) as i64 * 60
+                });
+            if let Some(eng) = stage.primary_mut() {
                 *state.vars_json.lock().unwrap() = jsonview::vars_json(eng);
                 *state.readouts_json.lock().unwrap() = jsonview::readouts_json(eng);
-                // host wall clock + tz for the clock builtins
-                if let Ok(d) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-                    let tz = state.tz_minutes.load(Ordering::Relaxed) as i64;
-                    eng.set_wall_clock(d.as_secs() as i64 + tz * 60);
+            }
+            // host wall clock + tz for the clock builtins, on every resident
+            // layer (a scene's upper layers read the same clock)
+            if let Some(w) = wall {
+                for eng in stage.engines_mut() {
+                    eng.set_wall_clock(w);
                 }
             }
         }
@@ -1550,9 +1892,8 @@ fn render_loop(state: Arc<State>) {
         let seq = state.sensor_seq.load(Ordering::Relaxed);
         if seq != sensor_seen {
             sensor_seen = seq;
-            if let (Some(sf), Some(eng)) =
-                (state.sensor_frame.lock().unwrap().clone(), engine.as_mut())
-            {
+            let sf = state.sensor_frame.lock().unwrap().clone();
+            if let (Some(sf), Some(eng)) = (sf, stage.primary_mut()) {
                 eng.set_sensors(&sf);
             }
         }
@@ -1560,7 +1901,7 @@ fn render_loop(state: Arc<State>) {
         // injected events (POST /api/events) land between frames too
         {
             let evs = std::mem::take(&mut *state.events.lock().unwrap());
-            if let Some(eng) = engine.as_mut() {
+            if let Some(eng) = stage.primary_mut() {
                 for ev in evs {
                     eng.push_event(ev);
                 }
@@ -1571,7 +1912,7 @@ fn render_loop(state: Arc<State>) {
         // and analog values share the route and the queue
         {
             let pins = std::mem::take(&mut *state.pins.lock().unwrap());
-            if let Some(eng) = engine.as_mut() {
+            if let Some(eng) = stage.primary_mut() {
                 for w in pins {
                     match w {
                         luxel_core::netin::PinWrite::Digital(pin, level) => {
@@ -1593,7 +1934,7 @@ fn render_loop(state: Arc<State>) {
             snap.extend_from_slice(&live);
             snap.resize(count() as usize * 3, 0);
             last = Instant::now(); // keep the pattern clock fresh for resume
-        } else if engine.is_some() {
+        } else if !stage.is_empty() {
             let now = Instant::now();
             let delta_us = now.duration_since(last).as_micros() as u64;
             last = now;
@@ -1603,43 +1944,59 @@ fn render_loop(state: Arc<State>) {
             // small ones slew by stretching this frame's delta ≤ ±25%
             if state.sync_mode.load(Ordering::Relaxed) == 2 {
                 if let Some((_, lt, at)) = *state.sync_leader.lock().unwrap() {
-                    let eng = engine.as_mut().unwrap();
-                    let target = lt + at.elapsed().as_millis() as u64;
-                    let err = target as i64 - eng.time_ms() as i64;
-                    if err.unsigned_abs() > 1000 {
-                        eng.set_time_ms(target);
-                    } else {
-                        let cap = (delta.raw() as i64 / 4).max(1);
-                        let adj = (err << 16).clamp(-cap, cap); // err ms → raw 16.16
-                        delta = Fx::from_raw((delta.raw() as i64 + adj).clamp(0, i32::MAX as i64) as i32);
+                    if let Some(eng) = stage.primary_mut() {
+                        let target = lt + at.elapsed().as_millis() as u64;
+                        let err = target as i64 - eng.time_ms() as i64;
+                        if err.unsigned_abs() > 1000 {
+                            eng.set_time_ms(target);
+                        } else {
+                            let cap = (delta.raw() as i64 / 4).max(1);
+                            let adj = (err << 16).clamp(-cap, cap); // err ms → raw 16.16
+                            delta = Fx::from_raw(
+                                (delta.raw() as i64 + adj).clamp(0, i32::MAX as i64) as i32,
+                            );
+                        }
                     }
                 }
             }
+            let dt_ms = (delta.raw() >> 16).max(0) as u32;
 
-            // crossfade progress (0..=65536); 65536 = done
+            // transition progress (0..=65536); 65536 = done
             let t = if blend_ms > 0 {
-                (blend_start.elapsed().as_millis() as i64 * 65536 / blend_ms as i64).min(65536) as i32
+                (blend_start.elapsed().as_millis() as i64 * 65536 / blend_ms as i64).min(65536)
+                    as i32
             } else {
                 65536
             };
-            let px_new: Vec<[u8; 3]> = engine.as_mut().unwrap().frame(delta).to_vec();
+            // The outgoing stack first, then the incoming one composited over
+            // it at α = t: `blend_px_mode(Normal, t)` IS the old `blend_px`
+            // (docs/spec/scenes.md §2), so a pattern→pattern crossfade is
+            // pixel-identical to what this loop emitted before scenes.
             let out: Vec<[u8; 3]> = match prev.as_mut() {
                 Some(p) if t < 65536 => {
-                    let px_old = p.frame(delta);
-                    px_new
-                        .iter()
-                        .zip(px_old.iter())
-                        .map(|(n, o)| blend_px(*o, *n, t))
-                        .collect()
+                    let px_old: Vec<[u8; 3]> = p.render(&state, delta, dt_ms).to_vec();
+                    let mut v: Vec<[u8; 3]> = stage.render(&state, delta, dt_ms).to_vec();
+                    for (d, o) in v.iter_mut().zip(px_old.iter()) {
+                        let mut px = *o;
+                        luxel_core::compose::blend_px_mode(
+                            &mut px,
+                            *d,
+                            luxel_core::scene::Blend::Normal,
+                            t,
+                        );
+                        *d = px;
+                    }
+                    v
                 }
-                _ => px_new,
+                _ => stage.render(&state, delta, dt_ms).to_vec(),
             };
             if t >= 65536 {
                 prev = None; // fade finished
+                blend_ms = 0;
             }
-            state
-                .engine_time_ms
-                .store(engine.as_ref().unwrap().time_ms(), Ordering::Relaxed);
+            if let Some(eng) = stage.primary() {
+                state.engine_time_ms.store(eng.time_ms(), Ordering::Relaxed);
+            }
             {
                 let mut snap = state.pixels.lock().unwrap();
                 snap.clear();
@@ -1647,7 +2004,7 @@ fn render_loop(state: Arc<State>) {
                     snap.extend_from_slice(p);
                 }
             }
-            if let Some(e) = engine.as_mut().unwrap().take_error() {
+            if let Some(e) = stage.primary_mut().and_then(|eng| eng.take_error()) {
                 *state.vmerr.lock().unwrap() =
                     Some(format!("line {}:{}: {}", e.line, e.col, e.message));
             }
@@ -1803,13 +2160,27 @@ fn playlist_json(state: &State) -> String {
     let pl = state.playlist.lock().unwrap();
     let lib = state.library.lock().unwrap();
     let pixel_count = state.pixel_count.load(Ordering::Relaxed);
+    let scenes = state.scenes.lock().unwrap();
     let items: Vec<String> = pl
         .items
         .iter()
         .map(|it| {
+            let sec = it.override_sec.map(|s| s.to_string()).unwrap_or_else(|| "null".into());
+            // A scene item carries no controls and no pre-flight: what it
+            // names is a record, not a blob, and the layers inside it are
+            // checked when it activates (docs/api.md "Scenes").
+            if it.scene {
+                let sc = scenes.iter().find(|s| s.id == it.pattern_id);
+                return format!(
+                    "{{\"kind\":\"scene\",\"id\":\"{}\",\"name\":\"{}\",\"layers\":{},\"sec\":{}}}",
+                    it.pattern_id,
+                    json_escape(sc.map(|s| s.name.as_str()).unwrap_or("")),
+                    sc.map(|s| s.layers.len()).unwrap_or(0),
+                    sec
+                );
+            }
             let stored = lib.iter().find(|p| p.id == it.pattern_id);
             let name = stored.map(|p| p.name.clone()).unwrap_or_default();
-            let sec = it.override_sec.map(|s| s.to_string()).unwrap_or_else(|| "null".into());
             let controls: Vec<String> = it
                 .controls
                 .iter()
@@ -1839,7 +2210,7 @@ fn playlist_json(state: &State) -> String {
             // projection override (§5.4d) — absent = the device default
             let proj = it.proj.map(|m| format!(",\"proj\":\"{m}\"")).unwrap_or_default();
             format!(
-                "{{\"id\":\"{}\",\"name\":\"{}\",\"sec\":{},\"controls\":{{{}}}{}{}}}",
+                "{{\"kind\":\"pattern\",\"id\":\"{}\",\"name\":\"{}\",\"sec\":{},\"controls\":{{{}}}{}{}}}",
                 it.pattern_id,
                 json_escape(&name),
                 sec,
@@ -1861,7 +2232,8 @@ fn playlist_json(state: &State) -> String {
 
 /// Parse the line-based playlist body (no JSON parser needed, mirrors the
 /// firmware). Lines: `D <sec>` default; `X <ms>` crossfade;
-/// `I <patternId> <sec|-1>` item (-1 = inherit default);
+/// `I <patternId> <sec|-1>` item (-1 = inherit default), or
+/// `I S<sceneId> <sec|-1>` for a scene item (Gitea #478);
 /// `C <name> <raw...>` a control for the last item; `P <mode>` its
 /// projection override. Every line but `I` is optional, so a playlist
 /// written before `P` existed parses unchanged (Gitea #470).
@@ -1873,13 +2245,21 @@ fn parse_playlist(body: &str) -> Playlist {
             Some("D") => pl.default_sec = it.next().and_then(|v| v.parse().ok()).unwrap_or(0),
             Some("X") => pl.crossfade_ms = it.next().and_then(|v| v.parse().ok()).unwrap_or(0),
             Some("I") => {
-                let id = it.next().unwrap_or("").to_string();
+                let tok = it.next().unwrap_or("");
+                // `S<8hex>` is a SCENE item (#478). Anything else is a
+                // pattern id, so a playlist written before scenes existed
+                // parses byte-for-byte as it always did.
+                let (scene, id) = match tok.strip_prefix('S') {
+                    Some(rest) if luxel_core::scene::valid_id(rest) => (true, rest.to_string()),
+                    _ => (false, tok.to_string()),
+                };
                 let sec = it.next().and_then(|v| v.parse::<i32>().ok());
                 let override_sec = match sec {
                     Some(n) if n < 0 => None,
                     other => other,
                 };
                 pl.items.push(PlaylistItem {
+                    scene,
                     pattern_id: id,
                     controls: Vec::new(),
                     override_sec,
@@ -1887,15 +2267,21 @@ fn parse_playlist(body: &str) -> Playlist {
                 });
             }
             Some("C") => {
+                // ignored under a scene item: a scene carries its layers'
+                // control overrides in its own record
                 if let (Some(item), Some(name)) = (pl.items.last_mut(), it.next()) {
-                    let raw: Vec<i32> = it.filter_map(|v| v.parse().ok()).collect();
-                    item.controls.push((name.to_string(), raw));
+                    if !item.scene {
+                        let raw: Vec<i32> = it.filter_map(|v| v.parse().ok()).collect();
+                        item.controls.push((name.to_string(), raw));
+                    }
                 }
             }
             Some("P") => {
                 if let Some(item) = pl.items.last_mut() {
-                    // an unknown token leaves the item on the device default
-                    item.proj = it.next().and_then(|t| t.parse::<ProjectionMode>().ok());
+                    if !item.scene {
+                        // an unknown token leaves the item on the device default
+                        item.proj = it.next().and_then(|t| t.parse::<ProjectionMode>().ok());
+                    }
                 }
             }
             _ => {}
@@ -1905,6 +2291,280 @@ fn parse_playlist(body: &str) -> Playlist {
 }
 
 
+
+// ---- scenes (Gitea #478; docs/api.md "Scenes", docs/spec/scenes.md) ----
+
+/// The whole scene store's blob budget, in bytes — the firmware's
+/// `BLOB_MAX` for the one flash record under `SCENES_KEY`. The mirror has no
+/// flash, but it enforces the identical cap against the re-serialized blob
+/// so a scene the mirror accepts is a scene the device accepts.
+const SCENES_MAX: usize = 3840;
+
+/// Pattern layers this mirror advertises (`caps.layers`) — the same
+/// derivation `/api/status` publishes, from the same core rule.
+fn layers_max(state: &State) -> usize {
+    luxel_core::caps::layers_for(state.pixel_count.load(Ordering::Relaxed)) as usize
+}
+
+/// The canvas a scene composites on: the device's regular grid when it has
+/// one, otherwise the strip as a single row. Derived from the installed map,
+/// not from the running engine, so it survives every pattern swap — and a
+/// bare strip mirror can still show a scene, which is what makes the
+/// harness's scene cases cheap.
+fn scene_grid(state: &State) -> luxel_core::outpipe::GridMap {
+    let n = state.pixel_count.load(Ordering::Relaxed) as usize;
+    let strip = luxel_core::outpipe::GridMap {
+        w: n.min(u16::MAX as usize) as u16,
+        h: 1,
+        serpentine: false,
+    };
+    if let Some((w, h)) = *state.device_grid.lock().unwrap() {
+        if (w as usize) * (h as usize) == n && w <= u16::MAX as u32 && h <= u16::MAX as u32 {
+            return luxel_core::outpipe::GridMap { w: w as u16, h: h as u16, serpentine: false };
+        }
+    }
+    if let Some((dims, coords)) = state.device_map.lock().unwrap().as_ref() {
+        if let Some(g) = luxel_core::outpipe::detect_grid(*dims, coords) {
+            if g.len() == n {
+                return g;
+            }
+        }
+    }
+    strip
+}
+
+fn scene_by_id(state: &State, id: &str) -> Option<luxel_core::scene::Scene> {
+    state.scenes.lock().unwrap().iter().find(|s| s.id == id).cloned()
+}
+
+/// Every stored scene as the one blob a device persists, and its length.
+fn scenes_blob(scenes: &[luxel_core::scene::Scene]) -> String {
+    let mut out = String::new();
+    for s in scenes {
+        luxel_core::scene::serialize(s, &mut out);
+    }
+    out
+}
+
+/// `GET /api/scenes`.
+fn scenes_json(state: &State) -> String {
+    let scenes = state.scenes.lock().unwrap();
+    let used = scenes_blob(&scenes).len();
+    let active = match state.active_scene.lock().unwrap().as_str() {
+        "" => String::from("null"),
+        id => format!("\"{}\"", json_escape(id)),
+    };
+    let mut items = String::new();
+    for (i, s) in scenes.iter().enumerate() {
+        if i > 0 {
+            items.push(',');
+        }
+        luxel_core::scene::push_json(s, &mut items);
+    }
+    format!(
+        "{{\"active\":{},\"layers_max\":{},\"used\":{},\"max\":{},\"scenes\":[{}]}}",
+        active,
+        layers_max(state),
+        used,
+        SCENES_MAX,
+        items
+    )
+}
+
+/// `GET /api/scenes/<id>`.
+fn scene_get_json(state: &State, id: &str) -> String {
+    match scene_by_id(state, id) {
+        Some(s) => {
+            let mut out = String::new();
+            luxel_core::scene::push_json(&s, &mut out);
+            out
+        }
+        None => String::from("{\"ok\":false,\"error\":\"no such scene\"}"),
+    }
+}
+
+/// A scene whose `pat` layers cannot all be resident is refused at the door,
+/// so the store never holds one the device could not show.
+fn scene_fits_layers(state: &State, s: &luxel_core::scene::Scene) -> Result<(), String> {
+    let max = layers_max(state);
+    let mut pat = 0usize;
+    for (i, l) in s.layers.iter().enumerate() {
+        if l.kind() == luxel_core::scene::LayerKind::Pattern {
+            pat += 1;
+            if pat > max {
+                return Err(format!("scene: layer {} does not fit", i + 1));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `POST /api/scenes` (`want` = None) and `POST /api/scenes/<id>` (replace).
+/// One scene block in, `{"ok":true,"id":"…"}` out.
+fn scenes_save(state: &State, body: &str, want: Option<&str>) -> String {
+    let mut sc = match luxel_core::scene::parse(body) {
+        Ok(s) => s,
+        Err(e) => return format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e)),
+    };
+    if let Err(e) = scene_fits_layers(state, &sc) {
+        return format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e));
+    }
+    // The route's id outranks the block's, so `S -` replaces in place.
+    if let Some(id) = want {
+        sc.id = id.to_string();
+    }
+    let mut scenes = state.scenes.lock().unwrap();
+    let at = scenes.iter().position(|s| s.id == sc.id).filter(|_| !sc.id.is_empty());
+    if at.is_none() && want.is_some() {
+        return String::from("{\"ok\":false,\"error\":\"no such scene\"}");
+    }
+    if sc.id.is_empty() {
+        sc.id = format!(
+            "{:08x}",
+            state.next_scene_id.fetch_add(1, Ordering::Relaxed) ^ 0x5ce4_e5ff
+        );
+    }
+    // The store's cap is on the BLOB, so measure the whole thing as it would
+    // be persisted — the firmware checks `store_blob`'s bool for exactly this
+    // (the playlist famously does not).
+    let mut candidate: Vec<luxel_core::scene::Scene> = scenes.clone();
+    match at {
+        Some(i) => candidate[i] = sc.clone(),
+        None => candidate.push(sc.clone()),
+    }
+    let used = scenes_blob(&candidate).len();
+    if used > SCENES_MAX {
+        return format!(
+            "{{\"ok\":false,\"error\":\"scenes: store full ({} of {} B)\"}}",
+            used, SCENES_MAX
+        );
+    }
+    *scenes = candidate;
+    let id = sc.id.clone();
+    drop(scenes);
+    // Live-apply: the scene editor's push lands here, and a device shows the
+    // edit without a second call.
+    if *state.active_scene.lock().unwrap() == id {
+        push(state, Msg::SceneReload(id.clone()));
+    }
+    format!("{{\"ok\":true,\"id\":\"{}\"}}", json_escape(&id))
+}
+
+/// `DELETE /api/scenes/<id>` — drops the record and every playlist item that
+/// named it. A scene that is on screen STAYS on screen until something else
+/// is pushed; there is nothing to fall back to.
+fn scenes_delete(state: &State, id: &str) -> String {
+    let mut scenes = state.scenes.lock().unwrap();
+    let before = scenes.len();
+    scenes.retain(|s| s.id != id);
+    let gone = scenes.len() < before;
+    drop(scenes);
+    if !gone {
+        return String::from("{\"ok\":false,\"error\":\"no such scene\"}");
+    }
+    // `active` names a STORED scene, so it clears with the record — the
+    // pixels stay until something else is pushed, which is all a deleted
+    // scene can honestly claim.
+    {
+        let mut active = state.active_scene.lock().unwrap();
+        if *active == id {
+            active.clear();
+        }
+    }
+    let dropped = {
+        let mut pl = state.playlist.lock().unwrap();
+        let n = pl.items.len();
+        pl.items.retain(|it| !(it.scene && it.pattern_id == id));
+        n != pl.items.len()
+    };
+    if dropped {
+        // the playing index may now point past the end / at another item
+        push(state, Msg::PlaylistReload);
+    }
+    String::from("{\"ok\":true}")
+}
+
+// ---- text slots (Gitea #485; docs/api.md "Text slots") ----
+
+/// `GET /api/text`.
+fn text_json(state: &State) -> String {
+    let slots = state.text_slots.lock().unwrap();
+    let items: Vec<String> = slots.iter().map(|s| format!("\"{}\"", json_escape(s))).collect();
+    format!("{{\"slots\":[{}]}}", items.join(","))
+}
+
+/// `POST /api/text`, body `<slot> <utf8…>`. The text is the rest of the
+/// line, truncated to `SLOT_MAX` bytes on a char boundary; empty clears.
+fn text_post(state: &State, body: &str) -> String {
+    let line = body.lines().next().unwrap_or("");
+    let (head, rest) = match line.split_once(' ') {
+        Some((a, b)) => (a, b),
+        None => (line.trim(), ""),
+    };
+    let Ok(n) = head.trim().parse::<usize>() else {
+        return String::from("{\"ok\":false,\"error\":\"text: slot number required\"}");
+    };
+    if n >= luxel_core::text::SLOTS {
+        return format!(
+            "{{\"ok\":false,\"error\":\"text: slot {} out of range (0..{})\"}}",
+            n,
+            luxel_core::text::SLOTS - 1
+        );
+    }
+    // Same truncation rule as `text::set_slot`, applied here so the copy
+    // `GET` reports and the copy the VM reads can never disagree.
+    let mut end = rest.len().min(luxel_core::text::SLOT_MAX);
+    while end > 0 && !rest.is_char_boundary(end) {
+        end -= 1;
+    }
+    let text = &rest[..end];
+    state.text_slots.lock().unwrap()[n] = text.to_string();
+    // …and into `luxel_core::text`'s table, which is what `textSlot(n)`
+    // inside a pattern reads — through the render loop, because that table
+    // has a single-writer rule and this is a connection thread.
+    push(state, Msg::TextSlot { n: n as u8, text: text.to_string() });
+    String::from("{\"ok\":true}")
+}
+
+/// Unix seconds (timezone already applied) → `(y, mo, d, h, m, s)`.
+/// Howard Hinnant's civil-from-days, the same algorithm `vm.rs`'s private
+/// `civil_from_unix` runs for the clock builtins; it is six lines and host
+/// side only, which is cheaper than widening core's API for one caller.
+fn civil_local(secs: i64) -> (u16, u8, u8, u8, u8, u8) {
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u8;
+    let month = (if mp < 10 { mp + 3 } else { mp - 9 }) as u8;
+    let year = (if month <= 2 { y + 1 } else { y }) as u16;
+    (
+        year,
+        month,
+        day,
+        (rem / 3600) as u8,
+        (rem % 3600 / 60) as u8,
+        (rem % 60) as u8,
+    )
+}
+
+/// A `clock` text layer's string for this frame, in the mirror's configured
+/// local time (`POST /api/clock`, the same offset the clock builtins
+/// see). The compositor never reads a clock itself — the host resolves.
+fn clock_text(state: &State, fmt: luxel_core::text::ClockFmt) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+        + state.tz_minutes.load(Ordering::Relaxed) as i64 * 60;
+    let (y, mo, d, h, m, s) = civil_local(now);
+    luxel_core::text::format_clock(fmt, h, m, s, y, mo, d)
+}
 // ---- minimal HTTP plumbing ----
 
 struct Request {
@@ -2530,6 +3190,52 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
             push(&state, Msg::PlaylistStep(-1));
             respond(&mut stream, 200, "application/json", b"{\"ok\":true}");
         }
+        // ---- scenes (Gitea #478; docs/api.md "Scenes") ----
+        ("GET", "/api/scenes") => {
+            respond(&mut stream, 200, "application/json", scenes_json(&state).as_bytes());
+        }
+        ("POST", "/api/scenes") => {
+            let body = String::from_utf8_lossy(&req.body);
+            let r = scenes_save(&state, &body, None);
+            respond(&mut stream, 200, "application/json", r.as_bytes());
+        }
+        (m, p) if p.starts_with("/api/scenes/") => {
+            let rest = &p["/api/scenes/".len()..];
+            let (id, action) = match rest.split_once('/') {
+                Some((id, act)) => (id, Some(act)),
+                None => (rest, None),
+            };
+            let r = match (m, action) {
+                ("GET", None) => scene_get_json(&state, id),
+                ("POST", None) => {
+                    let body = String::from_utf8_lossy(&req.body);
+                    scenes_save(&state, &body, Some(id))
+                }
+                ("DELETE", None) => scenes_delete(&state, id),
+                ("POST", Some("activate")) => {
+                    if scene_by_id(&state, id).is_some() {
+                        // optional `<ms>` body; absent/unparseable = hard cut
+                        let body = String::from_utf8_lossy(&req.body);
+                        let ms = body.trim().parse::<u32>().unwrap_or(0);
+                        push(&state, Msg::SceneActivate { id: id.to_string(), ms });
+                        String::from("{\"ok\":true}")
+                    } else {
+                        String::from("{\"ok\":false,\"error\":\"no such scene\"}")
+                    }
+                }
+                _ => String::from("{\"ok\":false,\"error\":\"bad scenes route\"}"),
+            };
+            respond(&mut stream, 200, "application/json", r.as_bytes());
+        }
+        // ---- text slots (Gitea #485) ----
+        ("GET", "/api/text") => {
+            respond(&mut stream, 200, "application/json", text_json(&state).as_bytes());
+        }
+        ("POST", "/api/text") => {
+            let body = String::from_utf8_lossy(&req.body);
+            let r = text_post(&state, &body);
+            respond(&mut stream, 200, "application/json", r.as_bytes());
+        }
         ("POST", "/api/code") => {
             let r = api_code(&state, &req.body);
             respond(&mut stream, 200, "application/json", r.as_bytes());
@@ -2648,6 +3354,11 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
     let mut bc_format = luxel_core::bytecode::FORMAT_VERSION as u32;
     let mut stale_store = false;
     let mut accept_ota = false;
+    // `--scenes <file>`: preload the scene store from a file of scene blocks
+    // (the same text `GET /api/scenes` round-trips through `serialize`), so a
+    // harness can bring a mirror up with scenes already in it instead of
+    // POSTing them one at a time.
+    let mut scenes_file: Option<String> = None;
     let mut it = rest.iter();
     while let Some(flag) = it.next() {
         // Value-LESS flags first: the pair match below calls `it.next()`
@@ -2666,6 +3377,7 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         }
         match (flag.as_str(), it.next()) {
             ("--web-dir", Some(v)) => web_dir_arg = Some(v.clone()),
+            ("--scenes", Some(v)) => scenes_file = Some(v.clone()),
             ("--board-name", Some(v)) => board_name = v.clone(),
             // impersonate a device with (or without) a working JIT (#658):
             //   --jit native            the quiet marker by the frame rate
@@ -2764,6 +3476,25 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         );
         return ExitCode::FAILURE;
     }
+    // `--scenes <file>`: one file of scene blocks, parsed by the same core
+    // parser the POST route uses. A bad file is a startup error, not a
+    // silently empty store.
+    let seed_scenes: Vec<luxel_core::scene::Scene> = match scenes_file.as_deref() {
+        None => Vec::new(),
+        Some(path) => match std::fs::read_to_string(path) {
+            Ok(text) => match luxel_core::scene::parse_all(&text) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("luxel serve: --scenes {path}: {e}");
+                    return ExitCode::FAILURE;
+                }
+            },
+            Err(e) => {
+                eprintln!("luxel serve: --scenes {path}: {e}");
+                return ExitCode::FAILURE;
+            }
+        },
+    };
     let state = Arc::new(State {
         pixel_count: AtomicU32::new(pixels),
         max_pixels,
@@ -2819,6 +3550,10 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         playlist: Mutex::new(Playlist::default()),
         pl_playing: AtomicBool::new(false),
         pl_index: AtomicUsize::new(0),
+        scenes: Mutex::new(seed_scenes),
+        active_scene: Mutex::new(String::new()),
+        next_scene_id: AtomicU32::new(0),
+        text_slots: Mutex::new(vec![String::new(); luxel_core::text::SLOTS]),
         wifi_ssid: Mutex::new(None),
         name: Mutex::new(name),
         device_map: Mutex::new(None),
@@ -2902,4 +3637,68 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         std::thread::spawn(move || handle_connection(stream, state));
     }
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The one property the Compositor rewrite had to preserve: a
+    /// pattern→pattern crossfade emits exactly the pixels the old
+    /// `prev + blend_px` loop did. `blend_px_mode(Normal, t)` is
+    /// `b + ((l − b)·t >> 16)`, the same value `(b·(65536−t) + l·t) >> 16`
+    /// floors to, at every t — docs/spec/scenes.md §2.
+    #[test]
+    fn crossfade_is_the_old_blend_px_exactly() {
+        let colors = [
+            [0u8, 0, 0],
+            [255, 255, 255],
+            [1, 2, 3],
+            [200, 7, 90],
+            [17, 240, 128],
+            [254, 1, 255],
+        ];
+        for t in [0, 1, 16_384, 32_768, 49_152, 65_535, 65_536] {
+            for a in colors {
+                for b in colors {
+                    let want = blend_px(a, b, t);
+                    let mut got = a;
+                    luxel_core::compose::blend_px_mode(
+                        &mut got,
+                        b,
+                        luxel_core::scene::Blend::Normal,
+                        t,
+                    );
+                    assert_eq!(want, got, "t={t} a={a:?} b={b:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn playlist_parses_scene_items() {
+        let pl = parse_playlist("D 30\nX 500\nI 1a5e0001 -1\nC speed 32768\nI S5ce4e5ff 12\nC nope 1\nP x\n");
+        assert_eq!(pl.items.len(), 2);
+        assert!(!pl.items[0].scene);
+        assert_eq!(pl.items[0].pattern_id, "1a5e0001");
+        assert_eq!(pl.items[0].controls.len(), 1);
+        assert!(pl.items[1].scene, "`I S<id>` is a scene item");
+        assert_eq!(pl.items[1].pattern_id, "5ce4e5ff");
+        assert_eq!(pl.items[1].override_sec, Some(12));
+        // C and P are ignored under a scene item
+        assert!(pl.items[1].controls.is_empty());
+        assert!(pl.items[1].proj.is_none());
+    }
+
+    /// Only `S` + a real 8-hex id is a scene item; anything else is a
+    /// pattern id that happens to start with S, so no existing playlist
+    /// changes meaning.
+    #[test]
+    fn a_leading_s_alone_is_not_a_scene_item() {
+        let pl = parse_playlist("I Sabc 5\nI S5ce4e5fg 5\n");
+        assert_eq!(pl.items.len(), 2);
+        assert!(!pl.items[0].scene);
+        assert_eq!(pl.items[0].pattern_id, "Sabc");
+        assert!(!pl.items[1].scene, "g is not hex");
+    }
 }
