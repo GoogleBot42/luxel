@@ -172,10 +172,12 @@ paths:
   1,310,720 B, not the 3,145,728 B the gate uses — the gate stays on the
   nominal slot because the image is a release artifact and the tier is a
   property of the device, and `/api/ota` sizes every push against the table
-  on flash. While `MIGRATING_RELEASE=1` is set every
-  image is weighed against the OLD 1,048,576 B slot at a 0 % floor instead,
-  because a device that has not repartitioned is what installs that one
-  release (docs/releases.md). The canonical size measure is the CREDLESS flake build
+  on flash. `MIGRATING_RELEASE=1` weighs every image against the OLD
+  1,048,576 B slot at a 0 % floor instead, because a device that has not
+  repartitioned is what installs a migrating release; it is OPT-IN since
+  #635 — `tools/ci.sh` defaults it to 0, and only
+  `.github/workflows/release.yml` still pins it (docs/releases.md).
+  The canonical size measure is the CREDLESS flake build
   (`nix build .#luxel-fw-<board>` — what release CI gates); a creds-baked
   devshell build reads ~1.5 KB larger, not hugely different (AP-mode
   provisioning keeps the WiFi stack linked either way — the old warning

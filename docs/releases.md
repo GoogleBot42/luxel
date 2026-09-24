@@ -221,7 +221,10 @@ release, and that release has a different size gate from every other:
   the tightest is 2,992 B (0.28 %) on `board-c6-devkit`.
 - **`.github/workflows/release.yml` carries it workflow-wide**
   (`env: MIGRATING_RELEASE: "1"`), and `tools/ci.sh` exports it through to
-  image-check when it is set in the environment.
+  image-check when it is set in the environment. Since Gitea #635 `tools/ci.sh`
+  no longer **defaults** it to 1: the PR gate is back to the 3 % floor against
+  each board's own slot, and `MIGRATING_RELEASE=1` is now an opt-in you set by
+  hand (or that release.yml sets) when you actually cut a migrating release.
 - **It must be REMOVED in the release after this one.** Leaving it in
   silently keeps gating the whole fleet at 1 MiB and throws away the
   headroom the repartition bought; the floor then goes back to 3 % of the

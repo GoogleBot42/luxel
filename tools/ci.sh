@@ -18,7 +18,7 @@
 #   4a. devshell firmware build (CI_BOARD, default board-pixelblaze-v3) —
 #       covers build-esp32.sh itself + the linked-feature markers
 #   4b. tools/image-check.sh over the THREE release images the flake builds
-#       (markers + the 1 MiB OTA-slot margin), byte-identical to release.yml
+#       (markers + the per-board OTA-slot margin), byte-identical to release.yml
 #   5. OPT-IN (CI_QEMU=1): tools/qemu/run-all.py, the emulator suite
 #
 # Step 5 is off by default on purpose (Gitea #273): it wants a from-source
@@ -38,9 +38,9 @@
 #   CI_SKIP      space-separated step names to skip: web cargo library firmware
 #   CI_QEMU      set to 1 to add the (opt-in) QEMU suite as a final step
 #   MIGRATING_RELEASE
-#                passed through to tools/image-check.sh. **DEFAULTS TO 1**
-#                while the #501 repartition is in flight (see below); set it
-#                to 0 to see what the gate will look like afterwards.
+#                passed through to tools/image-check.sh. Defaults to 0 since
+#                #635: set it to 1 to weigh images against the pre-#501 1 MiB
+#                slot, which is only right for a migrating release.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
@@ -80,23 +80,11 @@ BOARD="${CI_BOARD:-board-pixelblaze-v3}"
 VARIANTS="${CI_VARIANTS-pixelblaze-v3 c6-devkit-hosted c3-devkit}"
 SKIP=" ${CI_SKIP:-} "
 
-# ===========================================================================
-# REMOVE THIS DEFAULT IN THE RELEASE AFTER THE #501 REPARTITION SHIPS (#635).
-#
-# This release is the MIGRATING one: it carries devices from the pre-#501
-# 1 MiB-slot partition table to the board's new one, which means a device
-# that has not migrated yet is what installs it — into a 1 MiB slot. So the
-# gate has to weigh every image against 1,048,576 B, NOT against the board's
-# new 1.25/3 MiB slot, or CI would cheerfully pass an image no field device
-# can take. Defaulting to 1 (rather than relying on the CI runner to set it)
-# is deliberate: a developer running tools/ci.sh locally must see the same
-# gate the release does.
-#
-# Afterwards: delete these lines, delete `MIGRATING_RELEASE` from
-# .github/workflows/release.yml, and the 3 % floor returns against the
-# per-board slot — where there is finally room under it. docs/releases.md.
-# ===========================================================================
-MIGRATING_RELEASE="${MIGRATING_RELEASE:-1}"
+# Opt-in since #635: set MIGRATING_RELEASE=1 to weigh images against the
+# pre-#501 1 MiB slot (floor 0 %) instead of the board's own — only for a
+# migrating release, which is installed by a device still on the old
+# partition table. See docs/releases.md.
+MIGRATING_RELEASE="${MIGRATING_RELEASE:-0}"
 export MIGRATING_RELEASE
 if [ "$MIGRATING_RELEASE" = 1 ]; then
   echo "MIGRATING_RELEASE=1 — image-check gates every image against the OLD"

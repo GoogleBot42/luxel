@@ -191,12 +191,12 @@ echo "image-check: ok — all load-bearing features linked ($IMG)"
 #      conservative answer for a bare `image-check.sh <elf>` on some
 #      unidentified build.
 #
-# MIGRATING_RELEASE=1 is the transition switch, and it is a FLOOR, not a
-# ceiling: during the release that carries devices from the old table to the
-# new one, the image has to be installed by a device that has NOT
+# MIGRATING_RELEASE=1 is the opt-in transition switch, and it is a FLOOR,
+# not a ceiling: during a release that carries devices from the old table to
+# the new one, the image has to be installed by a device that has NOT
 # repartitioned yet — it is written into a 1 MiB slot by the running old
 # firmware. So the gate weighs it against 1,048,576 whatever the board's new
-# slot says. The margin floor drops to **0 %** for that one release — "it
+# slot says. The margin floor drops to **0 %** for such a release — "it
 # fits" is the whole requirement — because the repartition is precisely what
 # ends the squeeze, and holding any floor against the OLD slot would block
 # the release that makes the slot bigger. That is not a comfortable number
@@ -205,10 +205,9 @@ echo "image-check: ok — all load-bearing features linked ($IMG)"
 # board-athom-music, and three of the nine were ALREADY under the 3 % floor
 # on master before #501 added a byte. The same images land at 20-25 % of
 # their new slots the moment the device reboots into the new table, which is
-# the entire point. REMOVE the switch in the next release — the floor goes
-# back to 3 % of the per-board slot and there is finally room under it.
-# Tracked as Gitea #635; see docs/releases.md and
-# .github/workflows/release.yml.
+# the entire point. It is OFF by default (Gitea #635): the normal gate is
+# 3 % of the per-board slot, and only someone cutting a migrating release
+# should turn it on. See docs/releases.md and .github/workflows/release.yml.
 #
 # Only applies to app images (ESP image magic 0xE9). An ELF is not the
 # thing that has to fit, so build-esp32.sh's ELF call skips this half.
