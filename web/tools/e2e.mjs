@@ -1527,11 +1527,14 @@ try {
       await page.click(`[data-role="${role}"]`);
       await sleep(500);
     }
-    const order = await page.$$eval(
-      '[data-role="scene-editor-view"] [data-role="scene-layer"]',
-      (els) => els.map((e) => e.dataset.layer).join(","),
-    );
-    check("scenes: the layer list is top = front", order === "1,0", order);
+    // The TYPE badges, not `data-layer`: the badge says which layer a row IS,
+    // while `data-layer` is its wire index — and with two layers the indices
+    // read `1,0` whichever way round the stack is.
+    const kinds = () =>
+      page.$$eval('[data-role="scene-editor-view"] [data-role="scene-layer"] .ty', (els) =>
+        els.map((e) => e.textContent.trim()).join(","),
+      );
+    check("scenes: the layer list is top = front", (await kinds()) === "▭,T", await kinds());
 
     // the eye hides a layer; the row keeps its place and its metadata says so
     await page.click('[data-role="scene-layer"][data-layer="0"] [data-role="scene-layer-eye"]');
@@ -1587,11 +1590,8 @@ try {
       );
     });
     await sleep(400);
-    const reordered = await page.$$eval(
-      '[data-role="scene-editor-view"] [data-role="scene-layer"]',
-      (els) => els.map((e) => e.dataset.layer).join(","),
-    );
-    check("scenes: the drag reordered the stack", reordered === "0,1", reordered);
+    const reordered = await kinds();
+    check("scenes: the drag reordered the stack", reordered === "T,▭", reordered);
 
     // Save, reload, and see the record come back — through the same wire
     // block a device would have stored
