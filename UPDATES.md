@@ -1,5 +1,42 @@
 # Update log
 
+## 2026-09-24 — the CI gate weighs images against their own board's OTA slot again (#635, partial)
+
+`tools/ci.sh` defaulted `MIGRATING_RELEASE` to **1** while the #501
+repartition was in flight, so every PR run measured every image against the
+pre-#501 1,048,576 B slot at a **0 %** floor — "it fits" was the whole gate.
+The bench devices are on the new table, so the default is now **0**:
+`tools/image-check.sh` resolves each variant's slot through `board_ota_max`
+(1,310,720 B on the 4 MB boards, 3,145,728 B on `board-seengreat-hub75`) and
+the **3 % floor is back**. The switch itself is unchanged and stays as a
+documented opt-in for whoever cuts the migrating release; `tools/ci.sh` still
+exports it and still prints the banner when it is set to 1.
+
+`.github/workflows/release.yml` still pins `MIGRATING_RELEASE: "1"`
+workflow-wide — that is the public release policy and deliberately untouched
+here. So a release cut from master **after** this change still gets the
+old-slot gate, and the tight boards will fail it under that env unless the
+migrating release is tagged first or the pin comes out. #635 stays open for
+that half.
+
+Measured on this branch (credless flake builds, `nix build .#luxel-fw-<v>` →
+`luxel-fw-ota.bin`), each against its own board's slot at the 3 % floor:
+
+| variant | size | slot | free | % free |
+|---|---:|---:|---:|---:|
+| `pixelblaze-v3` | 1,024,928 | 1,310,720 | 285,792 | 21.80 |
+| `c6-devkit-hosted` | 1,030,384 | 1,310,720 | 280,336 | 21.38 |
+| `c3-devkit` | 987,264 | 1,310,720 | 323,456 | 24.67 |
+| `athom-music` | 1,042,336 | 1,310,720 | 268,384 | 20.47 |
+| `c6-devkit` | 1,046,944 | 1,310,720 | 263,776 | 20.12 |
+| `seengreat-hub75` | 1,069,120 | 3,145,728 | 2,076,608 | 66.01 |
+
+All six PASS, none even near the 6 % warn line — the headroom the repartition
+bought is finally what the gate measures. The Seengreat image is 20,544 B
+**over** the old 1 MiB slot (Gitea #669) and is fine here precisely because
+the gate no longer weighs it against a slot that board does not have; #669's
+other half, the QEMU `migrate-s3` fixtures, is untouched.
+
 ## 2026-09-24 — JIT phases 4 and 5: a real chip runs compiled patterns, out of PSRAM (#665, #666)
 
 Phase 3 built the machinery and left it switched off, because no S3 had

@@ -147,7 +147,10 @@ repartition ends, not something it introduced.
 
 `MIGRATING_RELEASE` must come back out in the release after this one
 (Gitea #635) — see
-docs/releases.md.
+docs/releases.md. Half of that is done: since #635 `tools/ci.sh` no longer
+defaults it to 1, so the PR gate again weighs each image against its own
+board's slot at the 3 % floor; only `.github/workflows/release.yml` still
+pins `MIGRATING_RELEASE: "1"`.
 
 Re-measured 2026-09-23 for the `/api/ota` invariant work (Gitea #655,
 `origin/master` `4adee91` as the baseline column): `pixelblaze-v3`

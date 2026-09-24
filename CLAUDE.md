@@ -160,9 +160,10 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
 - Firmware app must fit the board's OTA slot — 1.25 MiB, or 3 MiB on the 16 MB
   Seengreat, since the #501 repartition; docs/boards.md tracks per-board margin and
   `tools/ci.sh` measures it every run (`build-esp32.sh` alone only checks the ELF).
-  20–25 % free after a device migrates, but the **migrating release itself** is gated
-  against the OLD 1 MiB slot at a 0 % floor (`MIGRATING_RELEASE=1`), so probe the image
-  cost EARLY until that switch comes out — docs/releases.md.
+  20–25 % free after a device migrates. `MIGRATING_RELEASE=1` (the OLD 1 MiB slot at a
+  0 % floor) is opt-in since #635 — `ci.sh` no longer defaults to it; only
+  `.github/workflows/release.yml` still pins it, so a migrating release is still gated
+  that way — docs/releases.md.
 - Never hard-code a partition offset in `firmware/src/**` or a flashing script — read
   it from the table (`tools/offset-check.py` in `tools/ci.sh` fails the gate).
 - Boot-time multi-KB loads wait for `wait_config_up()` — WiFi mallocs don't null-check.
