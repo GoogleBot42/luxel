@@ -6257,6 +6257,48 @@
             "sleep": 2500
           }
         ]
+      },
+      {
+        "name": "Scenes",
+        "route": "#/scenes",
+        "steps": [
+          {
+            "waitFor": "[data-role=\"scenes-panel\"]"
+          },
+          {
+            "sleep": 1500
+          }
+        ]
+      },
+      {
+        "name": "Scenes · editor",
+        "route": "#/scenes",
+        "steps": [
+          {
+            "waitFor": "[data-role=\"new-scene\"]"
+          },
+          {
+            "click": "[data-role=\"new-scene\"]"
+          },
+          {
+            "waitFor": "[data-role=\"scene-editor-view\"]:not([hidden])"
+          },
+          {
+            "sleep": 1500
+          },
+          {
+            "click": "[data-role=\"scene-add-layer\"]"
+          },
+          {
+            "sleep": 400
+          },
+          {
+            "click": "[data-role=\"scene-add-text\"]"
+          },
+          {
+            "sleep": 1500
+          }
+        ]
       }
     ]
   }
