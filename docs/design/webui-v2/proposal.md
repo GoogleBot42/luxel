@@ -504,6 +504,41 @@ MQTT and network input are unconditional in every build; the variable axes are t
 | Playground | Playlist · Settings tabs | never | — |
 | Playground | wiring options in the "Preview as" chip (serpentine, start corner, outputs) | never — wiring describes hardware | **S5 showed a serpentine box** → removed |
 
+## 5.8 Phase B/C frames (mockups.html "Batch 6")
+
+Every Phase B and Phase C screen state now has a frame before it is built; implementers are held
+to a computed-style diff (`web/tools/mockdiff.mjs`) against these, and they reuse the batch 1–5
+token sheet unchanged. New frames:
+
+| Frame | What it specifies |
+|---|---|
+| **S4c** | Playlist with the `+ Add` picker open — one picker, a Patterns section and a Scenes section, device-shaped thumbs; and the scene row in place (type line `Scene ▤ · 2 layers`, duration chip, `Edit scene ›`, no values chip). |
+| **S4d** | The same picker at 390 px — full-width sheet, search first, duration folded into the type line. |
+| **S2e** | Editor ⋯ menu with `Add to scene ▸` open (scenes + `New scene…`) on a matrix console, and the same menu on a strip console where the item is **absent**, not disabled. |
+| **S6c** | Scenes page, console empty state — the populated page's one-line definition plus `+ New scene`, no page bar, no empty grid. |
+| **S6d** | Scenes page at 390 px — two-up device-shaped tiles, tap to play, `Edit` as a link, primary shrunk to an icon. |
+| **S7d** | `Add layer ▾` at the cap: `Pattern` greyed with its count *and* the full D4 reason ("this device fits 2 pattern layers; text and sprite and color layers are free"), plus the cost line `2 of 2 pattern layers · 24 fps`. |
+| **S7e** | Color layer selected (name · colour · box · blend · opacity; no Transparent row) with the layer list showing a hidden layer (eye struck, row dimmed) and a drag in progress (lifted row + accent drop rule). |
+| **S7f** | Scene editor at 390 px — the three panes stacked preview/layers/inspector with the preview `position:sticky` (D9 responsive only). |
+| **S7g** | Pattern layer with Blend = Multiply: the Transparent (key) row is **gone**, opacity 60 %, the color ramp with the Settings › Output › Palette stop editor, and the quiet `Projection  device default · along x  change` row (§5.4d). |
+| **S7h** | Text-layer sources side by side — clock (format select + "not synced" state line), text slot (slot picker 0–7, "set from the API or Home Assistant", echoed current value), and scroll (Speed row absent at `none`, present in px/s otherwise). |
+| **S7i** | Font picker open — the three built-ins with a 1:1 glyph sample each; no upload affordance anywhere (§5.6). |
+| **S2f** | Editor completions and hover docs for the text builtins (`drawText`, `drawNumber`, `textWidth`, `font`, `textSlot`) on a matrix console; absent on a strip console. |
+
+The sprite-layer inspector needs no new frame — **S7c** already draws it in full (name, size, frames,
+≤16-colour palette, fixed black-key line, box mirroring the sprite, fit, blend, opacity).
+
+**Ticket → frames**
+
+| Ticket | Frames |
+|---|---|
+| #478 B2 (playlist scene items, UI half) | S4c · S4d |
+| #480 B4 Scenes page + scene editor | S5 · S6 · S6b · S6c · S6d · S7 · S7b · S7d · S7e · S7f · S7g · S9 |
+| #481 B5 sprite layer | S7c · (inspector: S7c) |
+| #482 B6 composite thumbnails | S4c · S6 |
+| #486 C4 text-layer UI + gated completions | S7h · S7i · S2f |
+| menus ("Add to…", §5.4b) | S2e |
+
 ## 6. Text in patterns (D5)
 
 The pattern language has no string type. The cheapest honest path (engine survey §8 ii b):
