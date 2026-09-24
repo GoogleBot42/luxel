@@ -6,7 +6,26 @@
 export interface BuiltinDoc {
   name: string;
   sig: string;
+  /** Paragraphs, separated by a blank line — the docs card renders one `<p>`
+   *  each (mockup S2f `.acdoc`). */
   doc: string;
+  /** A call worth copying, under a rule at the bottom of the card (S2f
+   *  `.acdoc .ex`). */
+  example?: string;
+  /**
+   * The Layout this builtin needs to do anything (Gitea #486). `"matrix"` =
+   * a regular 2D grid: on a strip, 3D or custom-map console the entry is
+   * ABSENT from completions and from the docs index, because "the editor
+   * never offers a builtin that would silently do nothing on the device you
+   * are connected to" (S2f's note) — the same Layout gate that hides the
+   * Scenes tab and `Add to scene`.
+   */
+  requires?: "matrix";
+}
+
+/** The builtins an editor on this Layout may offer (#486). */
+export function visibleBuiltins(matrix: boolean): BuiltinDoc[] {
+  return matrix ? BUILTINS : BUILTINS.filter((b) => b.requires !== "matrix");
 }
 
 export const BUILTINS: BuiltinDoc[] = [
@@ -218,11 +237,11 @@ export const BUILTINS: BuiltinDoc[] = [
   // text: grid space, top-left origin, the brush colour, a no-op without a
   // grid — exactly like blit. A "text handle" is a plain number: a quoted
   // literal (the only place the language accepts one) or textSlot(n).
-  { name: "drawText", sig: 'drawText("TEXT", x, y, align = 0)', doc: 'renderFrame: draw text at grid cell (x, y) — top-left origin, y down — in the brush colour and the font() face; returns its advance width in pixels. align 0 left / 1 centre / 2 right anchors the run at x. The first argument is a quoted literal or textSlot(n). A no-op without a grid; check gridWidth(). (Luxel)' },
-  { name: "textWidth", sig: 'textWidth("TEXT")', doc: 'Advance width of a text handle in the current font, in pixels — chars × (cell + 1). Answers with no grid installed, so a pattern can measure before it decides where to draw. (Luxel)' },
-  { name: "drawNumber", sig: "drawNumber(value, x, y, digits, decimals)", doc: "renderFrame: draw a number the way drawText draws a string. digits is the MINIMUM integer digits (zero-padded), decimals the fraction digits (max 4, rounded half-up); negatives get a leading -. Fixed-point aware, so drawNumber(0.5, 0, 0, 1, 2) is 0.50. Returns the advance width. (Luxel)" },
-  { name: "font", sig: 'font("tiny" | "regular" | "large")', doc: 'Pick the face later text draws in — tiny = Tom Thumb 3×6 (4 px pitch), regular = X11 misc-fixed 5×7, large = Spleen 5×8. Modal and persistent across frames, unlike the brush. An unknown name changes nothing, so font("") just returns the active face\'s index (0/1/2). (Luxel)' },
-  { name: "textSlot", sig: "textSlot(n)", doc: "The text handle of device slot n (0..7) — what POST /api/text, MQTT or a Home Assistant text entity wrote. Usable wherever a literal is: drawText(textSlot(0), x, y), textWidth(textSlot(0)). An empty or missing slot draws nothing and measures 0. (Luxel)" },
+  { name: "drawText", sig: "drawText(text, x, y[, align])", doc: "Draws text with the current font and brush colour, top-left corner at x, y in grid space. align is left · center · right, default left.\n\nNeeds a real 2D grid — a no-op without one, like blit.", example: "drawText(textSlot(0), x, 28)", requires: "matrix" },
+  { name: "drawNumber", sig: "drawNumber(v, x, y, digits, dec)", doc: "Draws a number the way drawText draws a string. digits is the MINIMUM integer digits (zero-padded), dec the fraction digits (max 4, rounded half-up); negatives get a leading -.\n\nFixed-point aware, so drawNumber(0.5, 0, 0, 1, 2) is 0.50. Returns the advance width. (Luxel)", example: "drawNumber(bpm, 0, 0, 3, 0)", requires: "matrix" },
+  { name: "textWidth", sig: "textWidth(text)", doc: "Advance width of a text handle in the current font, in pixels — chars × (cell + 1).\n\nAnswers with no grid installed, so a pattern can measure before it decides where to draw. (Luxel)", example: "x = (gridWidth() - textWidth(\"HI\")) / 2", requires: "matrix" },
+  { name: "font", sig: "font(name)", doc: "Picks the face later text draws in: \"tiny\" = Tom Thumb 3×6 (4 px pitch), \"regular\" = X11 misc-fixed 5×7, \"large\" = Spleen 5×8.\n\nModal and persistent across frames, unlike the brush. An unknown name changes nothing, so font(\"\") just returns the active face's index (0/1/2). (Luxel)", example: "font(\"regular\")", requires: "matrix" },
+  { name: "textSlot", sig: "textSlot(n)", doc: "The text handle of device slot n (0..7) — what POST /api/text, MQTT or a Home Assistant text entity wrote.\n\nUsable wherever a literal is. An empty or missing slot draws nothing and measures 0. (Luxel)", example: "drawText(textSlot(0), 0, 28)", requires: "matrix" },
 ];
 
 /** Special globals available to patterns. */

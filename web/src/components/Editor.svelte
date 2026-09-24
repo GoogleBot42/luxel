@@ -5,9 +5,11 @@
     type Completion,
     type CompletionContext,
     type CompletionResult,
+    type CompletionSource,
   } from "@codemirror/autocomplete";
   import { javascript } from "@codemirror/lang-javascript";
-  import { BUILTINS, GLOBALS } from "../lib/builtins";
+  import { GLOBALS, visibleBuiltins, type BuiltinDoc } from "../lib/builtins";
+  import { matrixLayout } from "../stores/geometry";
   import { setDiagnostics, type Diagnostic } from "@codemirror/lint";
   import { RangeSet, StateEffect, StateField } from "@codemirror/state";
   import { oneDark } from "@codemirror/theme-one-dark";
@@ -149,23 +151,17 @@
       if (!word) return null;
       const name = v.state.doc.sliceString(word.from, word.to);
       if (!/^[A-Za-z_$][\w$]*$/.test(name)) return null;
-      // builtin/global? show its signature + doc (the autocomplete data)
-      const builtin = BUILTINS.find((b) => b.name === name) ?? GLOBALS.find((g) => g.name === name);
+      // builtin/global? show its signature + doc (the autocomplete data).
+      // The Layout gate applies here too: a builtin the editor does not
+      // OFFER must not document itself either (#486, S2f's note).
+      const builtin =
+        visibleBuiltins(gateMatrix).find((b) => b.name === name) ??
+        GLOBALS.find((g) => g.name === name);
       if (builtin) {
         return {
           pos: word.from,
           end: word.to,
-          create: () => {
-            const dom = document.createElement("div");
-            dom.className = "cm-hover-value cm-hover-doc";
-            const sig = document.createElement("div");
-            sig.className = "cm-hover-sig";
-            sig.textContent = builtin.sig;
-            const doc = document.createElement("div");
-            doc.textContent = builtin.doc;
-            dom.append(sig, doc);
-            return { dom };
-          },
+          create: () => ({ dom: docsCard(builtin, "cm-hover-value cm-hover-doc") }),
         };
       }
       const val = hoverValue?.(name);
@@ -187,18 +183,64 @@
   // ---- autocomplete ----
 
   const KEYWORDS = ["var", "let", "const", "function", "export", "return", "if", "else", "for", "while", "switch", "case", "default", "true", "false", "break", "continue"];
-  const staticCompletions: Completion[] = [
-    ...BUILTINS.map((b) => ({
-      label: b.name,
-      type: "function",
-      detail: b.sig.replace(b.name, ""),
-      info: b.doc,
-      boost: 1,
-    })),
-    ...GLOBALS.map((g) => ({ label: g.name, type: "constant", info: g.doc })),
-    ...KEYWORDS.map((k) => ({ label: k, type: "keyword", boost: -1 })),
-  ];
-  const builtinSource = completeFromList(staticCompletions);
+
+  /**
+   * The docs card, one shape for the completion popup and the hover tooltip
+   * (mockup S2f `.acdoc`): the signature, a paragraph per blank-line-separated
+   * chunk of the doc, and — under a rule — the call worth copying.
+   */
+  function docsCard(b: BuiltinDoc, cls = ""): HTMLElement {
+    const dom = document.createElement("div");
+    if (cls) dom.className = cls;
+    const sig = document.createElement("div");
+    sig.className = "sigl";
+    sig.textContent = b.sig;
+    dom.append(sig);
+    for (const para of b.doc.split("\n\n")) {
+      const p = document.createElement("p");
+      p.textContent = para;
+      dom.append(p);
+    }
+    if (b.example) {
+      const ex = document.createElement("div");
+      ex.className = "ex";
+      ex.textContent = b.example;
+      dom.append(ex);
+    }
+    return dom;
+  }
+
+  /** The Layout gate, read once per completion request (#486). Held in a
+   *  plain variable because CodeMirror's sources are not reactive. */
+  let gateMatrix = true;
+  $: gateMatrix = $matrixLayout;
+
+  function completionsFor(matrix: boolean): Completion[] {
+    return [
+      ...visibleBuiltins(matrix).map((b) => ({
+        label: b.name,
+        type: "function",
+        detail: b.sig.replace(b.name, ""),
+        info: () => docsCard(b),
+        boost: 1,
+      })),
+      ...GLOBALS.map((g) => ({ label: g.name, type: "constant", info: g.doc })),
+      ...KEYWORDS.map((k) => ({ label: k, type: "keyword", boost: -1 })),
+    ];
+  }
+
+  /** One list per gate state, built on first use — the gate flips only when
+   *  the device (or `Preview as`) changes. */
+  const listCache = new Map<boolean, CompletionSource>();
+
+  function builtinSource(ctx: CompletionContext): ReturnType<CompletionSource> {
+    let src = listCache.get(gateMatrix);
+    if (!src) {
+      src = completeFromList(completionsFor(gateMatrix));
+      listCache.set(gateMatrix, src);
+    }
+    return src(ctx);
+  }
 
   /** Identifiers already present in the pattern (user globals/locals). */
   function docWordSource(ctx: CompletionContext): CompletionResult | null {
@@ -272,6 +314,97 @@
           },
           ".cm-hover-doc": { maxWidth: "360px" },
           ".cm-hover-sig": { color: "#e8a33d", marginBottom: "2px" },
+          // ---- the completion popup and its docs card (mockup S2f) ----
+          // Quoted from the mock's `.acpop` / `.acrow` / `.acdoc`
+          // (mockups.html :2627-2635). CodeMirror owns the DOM, so this is
+          // the app's half of the frame.
+          // Every selector here is spelt at the SAME specificity CodeMirror's
+          // own defaults and oneDark use (`.cm-tooltip.cm-tooltip-autocomplete
+          // > ul > li`), or they lose the cascade to them.
+          ".cm-tooltip.cm-tooltip-autocomplete": {
+            width: "266px",
+            padding: "4px",
+            backgroundColor: "var(--bg-panel)",
+            border: "1px solid var(--border)",
+            borderRadius: "8px",
+            boxShadow: "0 16px 40px rgba(0, 0, 0, 0.7)",
+            color: "var(--text)",
+            fontFamily: "var(--mono)",
+            fontSize: "12.5px",
+            lineHeight: "20px",
+            zIndex: "20",
+          },
+          ".cm-tooltip.cm-tooltip-autocomplete > ul": {
+            fontFamily: "var(--mono)",
+            maxHeight: "16em",
+          },
+          ".cm-tooltip.cm-tooltip-autocomplete > ul > li": {
+            display: "flex",
+            alignItems: "baseline",
+            gap: "7px",
+            padding: "5px 8px",
+            borderRadius: "5px",
+            font: "12.5px/1.2 var(--mono)",
+            color: "var(--text)",
+            whiteSpace: "normal",
+            overflow: "visible",
+            textOverflow: "clip",
+          },
+          ".cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]": {
+            backgroundColor: "rgba(255, 255, 255, 0.06)",
+            color: "var(--text)",
+          },
+          // the mock's row is name + signature and nothing else
+          ".cm-completionIcon": { display: "none" },
+          ".cm-completionLabel": { color: "#89ddd0", whiteSpace: "normal" },
+          ".cm-completionMatchedText": { color: "#89ddd0", textDecoration: "none" },
+          ".cm-completionDetail": {
+            marginLeft: "0",
+            color: "var(--text-dim)",
+            fontSize: "11.5px",
+            fontStyle: "normal",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          },
+          ".cm-tooltip.cm-completionInfo": {
+            width: "300px",
+            // CM writes an inline `max-width` on the info tooltip; the card is
+            // a fixed 300px in the mock
+            maxWidth: "none !important",
+            padding: "10px 12px",
+            backgroundColor: "var(--bg-panel)",
+            border: "1px solid var(--border)",
+            borderRadius: "8px",
+            boxShadow: "0 16px 40px rgba(0, 0, 0, 0.7)",
+            color: "var(--text)",
+            fontFamily: "var(--mono)",
+            fontSize: "12.5px",
+            lineHeight: "20px",
+            // the mock pins the card to the POPUP's top edge (`.acdoc{top:-1px}`
+            // against `.acpop`'s 4px padding and 1px border), not to the row
+            transform: "translateY(-5px)",
+            whiteSpace: "normal",
+          },
+          ".cm-completionInfo .sigl, .cm-hover-doc .sigl": {
+            font: "12.5px/1.3 var(--mono)",
+            color: "#89ddd0",
+            whiteSpace: "normal",
+          },
+          ".cm-completionInfo p, .cm-hover-doc p": {
+            margin: "7px 0 0",
+            font: "12px/1.45 var(--mono)",
+            color: "var(--text-dim)",
+            whiteSpace: "normal",
+          },
+          ".cm-completionInfo .ex, .cm-hover-doc .ex": {
+            marginTop: "9px",
+            paddingTop: "8px",
+            borderTop: "1px solid var(--border)",
+            font: "11.5px/1.4 var(--mono)",
+            color: "#8fc98f",
+            whiteSpace: "normal",
+          },
           ".cm-lintRange-error": {
             backgroundImage: "none",
             textDecoration: "underline wavy #e05555 1px",

@@ -4134,6 +4134,58 @@ try {
       (await page.$('[data-role="tab-scenes"]')) === null,
     );
 
+    // The same Layout gate on the EDITOR (Gitea #486, mockup S2f): a strip
+    // console must not offer a builtin that would silently do nothing on it.
+    // The docs hover is gated with the list, so a name typed by hand
+    // documents nothing either.
+    {
+      // the previous section left the page on Settings
+      await page.click('[data-role="tab-patterns"]').catch(() => {});
+      await page.waitForSelector('[data-role="new-pattern"]', { timeout: 10000 });
+      await sleep(600);
+      await page.$eval('[data-role="new-pattern"]', (el) => el.click());
+      await page.waitForSelector('[data-role="editor-view"]:not([hidden]) .cm-content', {
+        timeout: 10000,
+      });
+      await sleep(1200);
+      const labels = [];
+      for (const prefix of ["text", "draw", "fon"]) {
+        // A FRESH line each time, not a cleared document: `completeFromList`
+        // gives CodeMirror a result with a `validFor`, and a second prefix at
+        // the same offset is filtered against the first one's options and
+        // comes back empty — which reads exactly like "the builtin is gated"
+        // (see web/tools/e2e.mjs).
+        await page.$eval('[data-role="editor-view"]:not([hidden]) .cm-content', (el) => el.focus());
+        await page.keyboard.down("Control");
+        await page.keyboard.press("End");
+        await page.keyboard.up("Control");
+        await page.keyboard.press("Enter");
+        for (const ch of prefix) await page.keyboard.press(ch);
+        await sleep(900);
+        labels.push(
+          ...(await page.evaluate(() =>
+            [...document.querySelectorAll(".cm-tooltip-autocomplete li .cm-completionLabel")].map(
+              (e) => (e.textContent ?? "").trim(),
+            ),
+          )),
+        );
+        await page.keyboard.press("Escape");
+        await sleep(150);
+      }
+      check(
+        "completions: a strip console offers none of the five text builtins (S2f)",
+        // `labels.length > 0` is the anti-vacuity half: an empty list would
+        // pass the negative assertion while proving nothing
+        labels.length > 0 &&
+          ["drawText", "drawNumber", "textWidth", "font", "textSlot"].every(
+            (b) => !labels.includes(b),
+          ),
+        JSON.stringify([...new Set(labels)]),
+      );
+      await page.click('[data-role="editor-back"]').catch(() => {});
+      await sleep(600);
+    }
+
     const SC_PORT = E2E.mirror.devScenes; // E2E_PORT + 51
     const SC = `http://127.0.0.1:${SC_PORT}`;
     const scDev = spawn(
@@ -4226,6 +4278,122 @@ try {
         live.layers[0].name,
       );
       await scPage.screenshot({ path: `${shotDir}/device-e2e-scenes-editor.png` });
+      // ---- the sprite layer and the text slot, on a real console ---------
+      // (Gitea #481 / #486; mockups S7c · S7h). What the playground harness
+      // cannot show: that painting a pixel rewrites the sprite's PATTERN in
+      // the DEVICE's store, and that the slot row echoes what `POST
+      // /api/text` put there.
+      {
+        // a sprite in the device's store for the layer to bind
+        const spr =
+          "// @sprite w=4 h=4 frames=1 fps=0\n" +
+          "var sprH = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]\n" +
+          "var sprS = [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]\n" +
+          "var sprV = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]\n" +
+          "\nvar sprW = 4\nvar sprHt = 4\n" +
+          "\nexport function renderFrame() {\n  blit(sprH, sprS, sprV, sprW, sprHt, 0, 0, 3)\n}\n";
+        const put = await fetch(`${SC}/api/patterns`, {
+          method: "POST",
+          body: await lxpBody("Dot", spr, 4096),
+        }).then((r) => r.json());
+        check("sprite: a sprite-tagged pattern stores like any other", put.ok === true, JSON.stringify(put));
+        const sprId = put.id;
+        await sleep(1200); // the console's pattern poll has to see it
+
+        await scPage.click('[data-role="scene-add-layer"]');
+        await sleep(300);
+        await scPage.click('[data-role="scene-add-sprite"]');
+        // the picker only opens once the console KNOWS what is a sprite, and
+        // a device row s source streams in after its name
+        await scPage.waitForSelector(
+          '[data-role="pattern-picker"] [data-role="picker-item"][data-kind="pattern"]',
+          { timeout: 15000 },
+        );
+        await sleep(400);
+        // the store has one now, so the picker opens rather than a blank
+        // being made — and it offers SPRITES only (#700)
+        const offered = await scPage
+          .$$eval('[data-role="pattern-picker"] [data-role="picker-item"][data-kind="pattern"]', (els) =>
+            els.map((e) => (e.querySelector(".pknm")?.textContent ?? "").trim()),
+          )
+          .catch(() => []);
+        if (offered.length > 0)
+          check(
+            "sprite: the picker offers sprite-tagged patterns only (#700)",
+            offered.every((n) => n === "Dot"),
+            JSON.stringify(offered),
+          );
+        await scPage
+          .$eval('[data-role="pattern-picker"] [data-role="picker-item"][data-kind="pattern"]', (el) => el.click())
+          .catch(() => {});
+        await sleep(1200);
+        check(
+          "sprite: a bound sprite layer puts the tool row above the preview (S7c)",
+          (await scPage.$('[data-role="sprite-tools"]')) !== null,
+        );
+
+        // paint one cell inside the layer's box
+        await scPage.$eval('[data-role="scene-stage"]', (c) => {
+          const r = c.getBoundingClientRect();
+          c.dispatchEvent(
+            new PointerEvent("pointerdown", {
+              clientX: r.left + (1.5 / c.width) * r.width,
+              clientY: r.top + (1.5 / c.height) * r.height,
+              bubbles: true,
+            }),
+          );
+        });
+        // The store write is debounced 600 ms behind the stroke and then has
+        // to compile and POST, so POLL for it rather than guess a sleep — a
+        // loaded machine took longer than a fixed wait once.
+        let back = {};
+        let lit = 0;
+        for (let i = 0; i < 16 && lit === 0; i++) {
+          await sleep(500);
+          // by NAME, not by the id captured above: a same-name save
+          // overwrites, and the device is free to hand the row a new id
+          const rows = await fetch(`${SC}/api/patterns`).then((r) => r.json());
+          const dotId = (rows.patterns ?? []).find((p) => p.name === "Dot")?.id ?? sprId;
+          back = await fetch(`${SC}/api/patterns/${dotId}`).then((r) => r.json());
+          lit = (JSON.parse(/var sprV = (\[[^\]]*\])/.exec(back.source ?? "")?.[1] ?? "[]") ?? [])
+            .filter((v) => v > 0).length;
+        }
+        check(
+          "sprite: painting rewrites the sprite's PATTERN on the device",
+          lit === 1 && (back.source ?? "").startsWith("// @sprite w=4 h=4"),
+          `${lit} lit · ${(back.source ?? "").slice(0, 32)}`,
+        );
+        await scPage.screenshot({ path: `${shotDir}/device-e2e-sprite.png` });
+
+        // ---- the text slot's echo (S7h) ----
+        await fetch(`${SC}/api/text`, { method: "POST", body: "0 PARTY 21:00" });
+        await scPage.click('[data-role="scene-add-layer"]');
+        await sleep(300);
+        await scPage.click('[data-role="scene-add-text"]');
+        await sleep(700);
+        await scPage.click('[data-role="scene-text-slot"]');
+        await sleep(2600); // the slot table is polled
+        const now = await scPage
+          .$eval('[data-role="scene-text-slot-value"]', (el) => (el.textContent ?? "").trim())
+          .catch(() => "");
+        check(
+          "text: the slot row echoes what POST /api/text wrote (S7h `Now`)",
+          now === "PARTY 21:00",
+          now,
+        );
+        // and it is a READOUT on a console — only the playground lets you type
+        const editable = await scPage.$eval(
+          '[data-role="scene-text-slot-value"]',
+          (el) => el.tagName.toLowerCase(),
+        );
+        check("text: `Now` is a readout on a console, not an input", editable === "div", editable);
+        await scPage.screenshot({ path: `${shotDir}/device-e2e-text-slot.png` });
+
+        // put the record back to what the blob-budget check below expects
+        await scPage.click('[data-role="scene-save"]');
+        await sleep(900);
+      }
+
 
       // the shared 3840 B blob is a budget the user has to be told about:
       // fill it from outside and let the next save be refused

@@ -1132,6 +1132,94 @@ unscoped harness selector would silently resolve to the pattern editor's.
   *Transparent* is a key on which pixels count and is shown only under
   `Blend = Normal`; under any other blend the row is GONE, not greyed (S7g).
 
+### Sprites: drawing on the preview (`components/scene/SpriteTools.svelte`, #481)
+
+A sprite is a sprite-tagged PATTERN in the ordinary store (`docs/spec/scenes.md`
+§4), so the editor's drawing half is a source codec, not a new record type.
+`lib/sprite.ts` owns it: `parseSprite(source)` reads the three `spr*` literal
+arrays back out, `emitSprite(sprite)` writes the canonical pattern out again —
+tag line, arrays, and a `renderFrame` body that plays it alone — and
+`paintSprite` / `fillSprite` / `resizeSprite` are the edits. What the emitter
+writes is what `luxel_core::compose::sprite_view` reads: `web/tests/sprite.test.mjs`
+compiles the emitted source in the real wasm, binds it as a sprite layer and
+checks the composite texels, so the two cannot drift.
+
+Selecting a sprite layer mounts the tool row (pencil · eraser · fill · colour ·
+recent swatches) between the preview header and the canvas — "the tool row sits
+directly above the canvas it acts on" (S7c) — and puts the stage in **paint
+mode**: the marquee and its handles become a guide (`pointer-events: none`), so
+a click inside the sprite paints the pixel under it instead of dragging the
+layer. Geometry moves with the inspector's Box numbers there.
+
+An edit paints into a DRAFT source that `lookup()` answers with, so the
+composite redraws on the same frame as the click; the store write is debounced
+600 ms behind it, because a device taking one `POST /api/patterns` per painted
+pixel would spend a drag rewriting flash. A same-name save overwrites, which is
+exactly the semantics a sprite edit wants.
+
+The ≤ 16-colour palette is an EDITOR rule, not a format rule. At the cap the
+colour control is the second legal disabled control on this screen and carries
+its `data-reason`; the recents and the palette readout stay live. **Undo is out
+of scope** (#481 does not ask for one and nothing else in the app has one).
+
+Neither S1 nor S7 draws a `New sprite…` entry anywhere, so `Add layer › Sprite`
+IS the creation path: with no sprite-tagged pattern in the store it makes a
+blank 16×16 (`Sprite N`) and binds it; with one or more it opens the picker,
+filtered to sprites (#700). The inspector's `Sprite` row — `New…` · `Change…` —
+exists only in the EMPTY state, because S7c draws a bound layer and has no row
+for re-pointing one.
+
+### Text layers (`components/scene/TextInspector.svelte` + `FontPicker.svelte`, #486)
+
+One inspector, three sources, and the rows that come WITH them (S7h):
+
+* **fixed** — the literal, in the row's own field.
+* **clock** — a format select over the wire's six (`CLOCK_FMTS`), plus, when
+  `/api/clock` says the device has no time yet, one dim state line saying
+  exactly what will be drawn instead and a link to Settings › Clock. The row
+  above stays usable. The playground draws from the browser's clock, which is
+  never unsynced, so the line is a console thing.
+* **text slot** — the 0–7 picker, one line saying who writes it, and the slot's
+  current value echoed under `Now` "so the layer is not a black box when the
+  panel is in another room". The source is ABSENT on a host advertising
+  `caps.text_slots = 0` (firmware older than the endpoint). The playground has
+  no API to be written from, so there `Now` is an INPUT — the same trade the
+  `Preview as` chip makes for a fixture; on a console it is the readout S7h
+  draws.
+
+`stores/textSlots.ts` is the browser's copy of the table: polled from
+`GET /api/text` while the scene editor is up (on the one scheduler), written
+with `POST /api/text`, and mirrored into the wasm through `Luxel.setTextSlot`
+so a pattern drawing `textSlot(n)` previews what the device has.
+
+`Speed` does not EXIST at `Scroll = none` and appears directly under Scroll the
+moment a direction is chosen, in px/s — the unit the firmware takes.
+
+The **font picker** is the only font UI in the app (§5.6: there is no
+Settings › Fonts group), so its list has to answer "which one" by itself: each
+of the three built-ins shows the same sample (`12:48`) rendered in that face at
+1:1 device pixels, drawn by running `luxel_core::text::draw` through the wasm
+compositor on a grid the size of the sample. They are not bitmaps in the
+repo — a hand-drawn sample would go stale the first time a font blob changed.
+There is no `Upload…` row and no empty "custom fonts" section: user fonts are
+filed and not planned (#487).
+
+### Layout-gated text completions (`lib/builtins.ts`, `components/Editor.svelte`, #486)
+
+`BuiltinDoc.requires: "matrix"` marks a builtin that needs a regular 2D grid;
+`visibleBuiltins(matrix)` is the filter, and `matrixLayout` (a `stores/geometry`
+derived store over `isMatrixLayout`) is the gate — the SAME rule that hides the
+Scenes tab and `Add to scene`, so a console reads its device Layout through it
+and the playground its `Preview as` choice. The five text builtins carry the
+flag, so on a strip, 3D or custom-map Layout they are absent from the completion
+list AND from the docs hover: "the editor never offers a builtin that would
+silently do nothing on the device you are connected to" (S2f).
+
+The completion popup and its docs card are CodeMirror's own DOM themed to the
+mock's `.acpop` / `.acrow` / `.acdoc` (S2f). The card is built from the
+builtin's `sig`, one `<p>` per blank-line-separated chunk of `doc`, and the
+optional `example` under a rule.
+
 ### Two Svelte traps this screen found
 
 * **`bind:this` into an `{#each}` item is a flush loop.** Writing back through
@@ -1170,11 +1258,20 @@ Editor: `scene-editor-view`, `scene-editor-header`, `scene-editor-back`,
 `scene-delete-layer`,
 `scene-text-fixed`/`-clock`/`-slot`/`-lit`/`-fmt`/`-font`/`-color`/`-align`/`-scroll`/`-speed`,
 `scene-align-l`/`-c`/`-r`, `scene-wash-color`, `scene-sprite-size`,
-`scene-sprite-frames`, `scene-sprite-change`, `scene-sprite-fit`.
+`scene-sprite-w`/`-h`, `scene-sprite-frames`, `scene-sprite-frames-hint`,
+`scene-sprite-palette` (`data-used`), `scene-sprite-palette-hint`,
+`scene-sprite-key`, `scene-sprite-state`, `scene-sprite-new`,
+`scene-sprite-change`, `scene-sprite-fit`, `scene-sprite-saving`;
+`sprite-tools`, `sprite-tool-pencil`/`-eraser`/`-fill`, `sprite-color`,
+`sprite-recents`, `sprite-recent`, `sprite-tools-hint`, `scene-cellmark`;
+`scene-text-slot-n`, `scene-text-slot-hint`, `scene-text-slot-how`,
+`scene-text-slot-value`, `scene-text-speed-value`, `scene-clock-state`,
+`scene-clock-settings`, `scene-scroll-window`, `scene-font-menu`,
+`scene-font-tiny`/`-regular`/`-large`.
 
-The ONE legal disabled control on this screen is `scene-add-pat` at
-`caps.layers`, and it carries `data-reason` with the same words the reason
-line under it shows (D4).
+The legal disabled controls on this screen are `scene-add-pat` at
+`caps.layers` and `sprite-color` at the 16-colour palette cap, and both carry
+`data-reason` with the same words shown beside them (D4).
 
 ## The Settings page (`pages/Settings.svelte`, Gitea #469)
 

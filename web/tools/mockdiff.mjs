@@ -663,6 +663,10 @@ async function seedMirror(base, seed, pixels) {
     await fetch(`${base}/api/protocol`, { method: "POST", body: String(seed.protocol) }).catch(
       () => {},
     );
+  // Text slots (#485/#486): `{ "0": "PARTY 21:00" }`. S7h's slot column
+  // echoes the slot's CURRENT value under `Now`, so it has to have one.
+  for (const [n, s] of Object.entries(seed.text ?? {}))
+    await fetch(`${base}/api/text`, { method: "POST", body: `${n} ${s}` }).catch(() => {});
   // A Layout line or two — the projection DEFAULTS a frame states (S7g's
   // quiet `device default · along x` row is the device's own `proj1d`).
   if (seed.layout)

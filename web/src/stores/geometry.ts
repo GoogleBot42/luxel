@@ -29,6 +29,7 @@ import {
   DEFAULT_PROJECTION,
   effectiveFor,
   guessPatternDims,
+  isMatrixLayout,
   layoutKey,
   layoutLabel,
   pixelCount as layoutPixels,
@@ -62,6 +63,7 @@ export {
   DEFAULT_STRIP_PIXELS,
   effectiveFor,
   guessPatternDims,
+  isMatrixLayout,
   layoutKey,
   layoutLabel,
   projectionCaption,
@@ -178,6 +180,12 @@ export const pixelTotal: Readable<number> = derived(layout, (l) => layoutPixels(
 
 /** The shape every preview/tile/thumbnail draws (bar · grid · cloud · scatter). */
 export const shape: Readable<TileShape> = derived(layout, (l) => tileShape(l));
+
+/** Is the effective Layout a regular 2D matrix? The ONE gate for the
+ *  scene compositor and for the text builtins in the editor (#486): a
+ *  console reads its device Layout through it, the playground its
+ *  `Preview as` choice, and neither surface needs a second rule. */
+export const matrixLayout: Readable<boolean> = derived(layout, (l) => isMatrixLayout(l));
 
 /** "64×64 matrix" / "300 px strip" — the console header chip and the
  *  "Preview as" button label. */

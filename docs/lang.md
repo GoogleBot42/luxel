@@ -1026,6 +1026,13 @@ take is a *text handle*, which is an ordinary number — a literal's handle, or
 
 Only printable ASCII (`0x20..0x7E`) has glyphs; anything else draws `?`.
 
+The editor offers these five in completions and hover docs **only on a
+regular 2D Layout** — a strip, a 3D lattice and a custom coordinate map have
+no grid for them to draw on, so it does not suggest a call that would do
+nothing on the device you are connected to (Gitea #486,
+`docs/web-architecture.md`). They still compile and still no-op, exactly as
+they do on a device whose map is removed later.
+
 ```js
 export function renderFrame() {
   if (gridWidth() == 0) return       // not a matrix — nothing to draw on

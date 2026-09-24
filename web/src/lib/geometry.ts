@@ -225,6 +225,17 @@ export interface Layout {
   projection: Projection;
 }
 
+/**
+ * A regular 2D matrix — the Layout the scene compositor draws on and the one
+ * the text builtins need (Gitea #480/#486). A strip, a 3D lattice and an
+ * irregular coordinate map are all false, which is exactly the gate S2f's
+ * note describes: "the same Layout gate that hides the Scenes tab and
+ * `Add to scene`".
+ */
+export function isMatrixLayout(l: Layout): boolean {
+  return l.dims === 2 && l.regular;
+}
+
 /** The shape a preview, tile or thumbnail draws (proposal §2 visibility
  *  table): a bar on a strip, a grid on a matrix, a rotating cloud in 3D, a
  *  scatter for an irregular 2D map. */
