@@ -229,6 +229,31 @@ paths:
   own paste handler drops in verbatim; `mockdiff.mjs`'s `code` step does the
   same. Typing cost a whole run in #538's mockdiff work — the editor frames
   measured a compile-error state instead of the Controls rail they exist for.
+- **CodeMirror keeps a completion RESULT, not just a list — so a harness that
+  probes two prefixes in one editor measures the first one twice.**
+  `completeFromList` returns a result with a `validFor`, and CM goes on
+  FILTERING that result while the word at the same offset still matches it.
+  Clearing the document and typing the next prefix at offset 0 is the worst
+  case: prefix 2 is filtered against prefix 1's options and comes back empty,
+  which reads exactly like "that builtin is gated" and sent #486's completion
+  section through three full runs. Escape does not reset it and `Ctrl-Space`
+  does not either. Probe each prefix in a FRESH editor (`editor-back` +
+  `new-pattern`), which is what `e2e.mjs`'s `offered()` does.
+- **`devicePatterns` is refreshed ON DEMAND, never polled.** `stores/device.ts`
+  fills it from the Patterns page and after a save, so any OTHER screen that
+  decides something from the library is reading whatever was there last — the
+  scene editor's `Add layer › Sprite` decided "there are no sprites, make a
+  blank one" over a store that had one, both because the row was missing and
+  because a row's `source` streams in AFTER its name (an unclassified row is
+  not a "no"). Call `refreshDevicePatterns()` first and treat
+  `source === undefined` as unknown (#481).
+- **`mockdiff --crops` only writes crops for frames that HAVE deltas.** A frame
+  at 0 produces no picture at all, so "render the side-by-side and LOOK at it"
+  needs your own screenshot pass (drive the map's own `app.steps` against the
+  seeded mirror, and screenshot `#<frameId>` on the mockups page). And run ONE
+  browser harness at a time: mockdiff's sweep next to device-e2e pushed the
+  load average past 6 and both started failing on `waitForSelector` timeouts in
+  sections neither change had touched.
 - **A harness that walks SEVERAL named app states in one chromium must clear
   `localStorage`/`sessionStorage` between them**
   (`page.evaluateOnNewDocument(() => localStorage.clear())`, which `mockdiff.mjs`
