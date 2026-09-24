@@ -118,7 +118,11 @@ FIVE = [
 
 PANIC_HALT = "panic: rebooting in 3s"
 BOOT_LINE = "luxel-fw: boot"
-JIT_NATIVE = re.compile(r"jit: native, (\d+) fns, (\d+) B code \((\d+) B pool\), (\d+) us")
+# Since #665 the narration names the placement first (`rwtext` on the
+# classic ESP32 this gate runs, `psram`/`internal` on the S3) and the cap
+# the image was compiled against.
+JIT_NATIVE = re.compile(
+    r"jit: native \((\w+)\), (\d+) fns, (\d+) B code \((\d+) B pool\) of \d+ cap, (\d+) us")
 JIT_INTERP = re.compile(r"jit: interpreter \(([^)]*)\)")
 
 # `board-esp32-generic`'s compile-time default pixel count. `shared::PIXELS`
@@ -393,7 +397,8 @@ def check_one(qemu: str, efuse: str, workdir: str, pattern: str | None,
         if "over the" in why.group(1) and " B cap" in why.group(1):
             return [f"--  {name}: refused, {why.group(1)} (interpreted, nothing to diff)"]
         raise Fail(f"{name}: the JIT refused it — jit.reason = {why.group(1)}")
-    fns, code_b, pool_b, us = (int(g) for g in m.groups())
+    place = m.group(1)
+    fns, code_b, pool_b, us = (int(g) for g in m.groups()[1:])
 
     interp, log_i = one_boot(qemu, flash, elf, efuse, workdir, tag + "-off", False, timeout)
     off = JIT_INTERP.search(log_i)

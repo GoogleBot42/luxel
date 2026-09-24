@@ -80,7 +80,7 @@ fn golden_images_are_unchanged() {
             bytes: img.len_bytes(),
             pool: img.pool_len,
             fns: img.entries.len(),
-            digest: digest(&img.words),
+            digest: digest(&img.words()),
         };
         fresh.push_str(&format!(
             "    Golden {{ name: {:?}, bytes: {}, pool: {}, fns: {}, digest: {:#018x} }},\n",

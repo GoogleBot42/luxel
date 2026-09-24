@@ -212,6 +212,43 @@ pub fn alloc_bulk_zeroed(layout: Layout) -> *mut u8 {
     }
 }
 
+/// Executable-code allocation for the JIT (Gitea #665, docs/jit-design.md
+/// §5). Arena ONLY — never the main heap: the caller executes this memory
+/// through the IBUS mirror of the PSRAM window, and a main-heap block
+/// would need a different alias entirely (`jit.rs` handles that case
+/// itself). Null when there is no arena or it is full, and the JIT then
+/// reports `no-buffer` and interprets.
+///
+/// The address returned is the DBUS (data) address, byte-writable through
+/// the data cache. Cache-line aligned (the S3's data cache line is 32 B;
+/// 64 keeps it true for either configuration) so the write-back after
+/// filling it never touches a neighbouring allocation's line, and so the
+/// invalidate on the instruction side covers whole lines.
+pub fn alloc_exec(len: usize) -> *mut u8 {
+    let Ok(layout) = Layout::from_size_align(len.max(4), EXEC_ALIGN) else {
+        return core::ptr::null_mut();
+    };
+    if END.load(Ordering::Acquire) == 0 {
+        return core::ptr::null_mut();
+    }
+    unsafe { GlobalAlloc::alloc(&ARENA, layout) }
+}
+
+/// Free an [`alloc_exec`] block. `len` must be what was asked for.
+///
+/// # Safety
+/// `ptr` must have come from [`alloc_exec`] with this `len`, and nothing
+/// may be executing from it any more (the `NativeProgram` that owned it
+/// is dropped with its engine, which is what guarantees that).
+pub unsafe fn free_exec(ptr: *mut u8, len: usize) {
+    if let Ok(layout) = Layout::from_size_align(len.max(4), EXEC_ALIGN) {
+        unsafe { GlobalAlloc::dealloc(&ARENA, ptr, layout) }
+    }
+}
+
+/// Alignment of [`alloc_exec`] blocks — see there.
+pub const EXEC_ALIGN: usize = 64;
+
 /// `(free, total)` bytes of the arena — `None` when there is no arena.
 /// Reported by `/api/status` as `psram_free` / `psram_total`.
 pub fn stats() -> Option<(usize, usize)> {

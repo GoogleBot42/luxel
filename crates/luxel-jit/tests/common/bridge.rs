@@ -65,7 +65,7 @@ pub struct Bridge<'p> {
 
 impl<'p> Bridge<'p> {
     pub fn new(prog: &'p Program, img: &NativeImage, vm: Vm) -> Bridge<'p> {
-        let bytes: Vec<u8> = img.words.iter().flat_map(|w| w.to_le_bytes()).collect();
+        let bytes: Vec<u8> = img.bytes.clone();
         let mut cpu = Cpu::boot(&bytes, 0);
         // The model's register file is four windows deep by construction;
         // a pattern that nests deeper than that is reported rather than
