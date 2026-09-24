@@ -44,7 +44,12 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
   work in a fresh git worktree (.claude/skills/worktree-setup), never in the main
   checkout directly. Treat uncommitted changes in the main checkout as another live
   session's work-in-progress: don't commit, revert, build on, or "finish" them, and
-  don't assume the tree state you see is yours alone.
+  don't assume the tree state you see is yours alone. **Read your guidance from the
+  worktree too** — the main checkout sits wherever its last session left it (597
+  commits behind master on 2026-09-24), so CLAUDE.md, `.claude/rules` and
+  `.claude/skills` are stale there and a skill you need can be missing outright:
+  listing `.claude/skills/` in the main checkout is how the Phase B/C closure
+  concluded `phase-orchestration` "does not exist" and ran without it.
 - NEVER `git stash` in this repo. The stash stack lives in the shared `.git` and is
   one stack for EVERY worktree, so a concurrent session's `stash pop` takes YOUR
   entry (three agents clobbered each other this way on 2026-09-07). For a baseline
