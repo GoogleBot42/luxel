@@ -60,6 +60,7 @@ use luxel_core::engine::Engine;
 use luxel_core::fixed::Fx;
 use luxel_core::projection::ProjectionMode;
 
+mod appimg;
 #[cfg(multi_core)]
 mod appwdt;
 mod assets;

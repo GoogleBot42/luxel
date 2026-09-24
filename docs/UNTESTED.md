@@ -150,8 +150,21 @@ value while collapsed. Everything below is on the new page.
   that hop gets its first metal run. The residual risk on any such device is
   unchanged: a cut inside the single 4 KiB table write, milliseconds,
   serial-recovery-only.
-  **The panel is currently off the LAN** and needs a power cycle (the #294
-  wedge ate the diagnostic OTA mid-upload) — #634 has the timeline.
+  **The panel is currently being recovered over serial**: the diagnostic
+  OTA of 2026-09-21 was written over the slot it was running from and the
+  board boot-loops on the torn image (Gitea #655 — root cause, fix and the
+  on-metal follow-up are there; #634 has the timeline). Note the fix could
+  not have saved the panel's `ota_0` in place — there was no second image
+  on the board once staging began — but it means the update would have been
+  refused-or-safe rather than fatal.
+- [ ] **`/api/ota` on metal after #655** (Gitea #668): the slot selection,
+  head-last write and verify-before-activate have host tests and the boot
+  line is asserted under QEMU, but no emulated guest can take an OTA. On
+  the Athom: one OTA each way (`slot` alternates, `ota: updates go to …`
+  on the boot log names the other slot), then a deliberately truncated
+  upload (`head -c 500000 luxel-fw-ota.bin | curl --data-binary @-` with
+  the real `Content-Length`) must answer an error, leave `slot` unchanged
+  across a reboot, and the next full OTA must land.
 - [ ] **AP-mode provisioning** (v0.1.22): Settings → "reboot into setup
   AP", then join `luxel-4ae0d4` from your phone — a captive portal should
   pop with the settings page; save WiFi and it reboots back onto your

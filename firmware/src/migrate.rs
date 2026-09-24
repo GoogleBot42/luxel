@@ -145,6 +145,21 @@ static BLOCKED: BlockingMutex<CriticalSectionRawMutex, core::cell::RefCell<&'sta
 /// needs no numbers.
 static BLOCK_NEED: AtomicU32 = AtomicU32::new(0);
 static BLOCK_HAVE: AtomicU32 = AtomicU32::new(0);
+/// Set once a run reaches the new-store write on a layout whose new store
+/// region overlaps the old log (the 4 MB one: `0x290000..` inside
+/// `0x259000..0x310000`) and then gives up without installing the table.
+/// From that erase on, the old log is partly gone and the staging area —
+/// the live table's ota_1, which is exactly where `/api/ota` writes — is
+/// the only complete copy of the pattern library. `ota::begin` refuses
+/// while this is set; a reboot resumes from the staging header and finishes
+/// the job. Never set on the 16 MB layout, where the old store is untouched
+/// until the table is installed and an OTA over staging merely re-stages.
+static OTA_HOLD: AtomicBool = AtomicBool::new(false);
+
+/// Would an OTA right now overwrite the only copy of the pattern library?
+pub fn ota_hold() -> bool {
+    OTA_HOLD.load(Ordering::Relaxed)
+}
 
 fn block(why: &'static str, need: u32, have: u32) {
     BLOCKED.lock(|c| *c.borrow_mut() = why);
@@ -438,7 +453,14 @@ pub fn maybe_migrate() {
         return;
     }
 
-    // 4 — build the new store region.
+    // 4 — build the new store region. Where that region overlaps the old
+    // log, the erase inside write_new_store is the moment staging becomes
+    // the library's only complete copy — and staging is the slot an OTA
+    // writes. Refuse updates from here until the table is installed
+    // (which reboots) or the run resumes and finishes.
+    if new_store.offset < old_store.end() && old_store.offset < new_store.end() {
+        OTA_HOLD.store(true, Ordering::Relaxed);
+    }
     if stage < S_STORED {
         if !write_new_store(old_store, new_store, staging, log_bytes) {
             // write_new_store has already recorded WHICH step failed.
@@ -532,10 +554,16 @@ fn settle_into_ota0(live: &[u8], new_ota0: Part) -> bool {
     // device settings, and a device that came back without them would be
     // unreachable (nothing on the bench has serial).
     //
-    // It also disarms one failure mode of the boot-loop guard for the rest
-    // of the migration: from the next stage on, the old ota_1 is staging
-    // scratch rather than a bootable image, and the guard must not flip to
-    // it.
+    // Two things this erase is NOT. It does not disarm the boot-loop guard
+    // for the stages that follow: the ESP-IDF bootloader writes the choice
+    // back (seq=1 → ota_0) on the very next boot, before `preboot_guard`
+    // runs, so the guard sees a valid otadata again. And it is exactly the
+    // state that made `/api/ota` pick the RUNNING slot on the Seengreat
+    // (Gitea #655): a run that gets past this line and then blocks leaves
+    // otadata erased until the next reboot, and esp-bootloader-esp-idf's
+    // slot arithmetic answers ota_0 for an erased otadata. ota.rs no longer
+    // consults otadata for that choice, which is what makes this erase
+    // safe to keep.
     let Some(otadata) = parttab::entries(live)
         .into_iter()
         .find(|p| p.labelled("otadata"))

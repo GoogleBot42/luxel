@@ -221,6 +221,26 @@ paths:
   **Never trade code for tables on the assumption that the tables are
   free** — measure the image, not the section. Same lesson as #473's
   `match` → `const` table, which cost +496 B.
+- **`/api/ota`'s target slot is where the running image is NOT MMU-mapped
+  (`parttab::ota_target`, fed by `booted_partition()`); `otadata` is never
+  an input.** Do not reintroduce esp-bootloader-esp-idf's
+  `next_partition()` / `activate_next_partition()`: with `otadata` erased —
+  the state every migrating boot sits in between `settle_into_ota0` and
+  its next reboot — they answer the RUNNING slot (a `u8` underflow in the
+  booted-slot guard), and that erased the Seengreat's live image under it
+  (#655, 2026-09-21). Activation names the written slot explicitly and
+  reads it back; the image's first sector is landed only after
+  `appimg::verify` passes on the rest. `ota: updates go to …` on every boot
+  log must never equal `/api/status.slot` — the QEMU migrate/takeover
+  tests assert exactly that pair.
+- **A new `mod` line in `main.rs`: look at the line ABOVE it.** The module
+  list carries per-board `#[cfg(...)]` attributes (`multi_core`, `hub75`,
+  `wled-takeover`) that apply to the NEXT `mod`; inserting above one of
+  them silently moves the gate onto your module. Xtensa builds fine and
+  the RISC-V flake variants fail with "cannot find `x` in `crate`"
+  (2026-09-23, `appimg` landed under `#[cfg(multi_core)]`). Build
+  `board-c3-devkit` or `nix build .#luxel-fw-c6-devkit-hosted` before
+  trusting a new module, same as for a new atomic.
 - **`riscv32imc` (board-c3-devkit) has no atomic read-modify-write.**
   `AtomicU32::swap` / `fetch_add` / `compare_exchange` are a HARD COMPILE
   ERROR there and nowhere else, so a static that compiles on every other

@@ -149,6 +149,18 @@ repartition ends, not something it introduced.
 (Gitea #635) — see
 docs/releases.md.
 
+Re-measured 2026-09-23 for the `/api/ota` invariant work (Gitea #655,
+`origin/master` `4adee91` as the baseline column): `pixelblaze-v3`
+1,022,336 → 1,024,928 (+2,592, 23,648 B of the old slot left);
+`athom-music` 1,039,792 → 1,042,336 (+2,544, 6,240 left); `c6-devkit`
+1,045,008 → 1,046,928 (+1,920, **1,648 left**); `c6-devkit-hosted`
+1,028,736 → 1,030,384 (+1,648); `c3-devkit` 985,328 → 987,248 (+1,920);
+`seengreat-hub75` 1,078,464 → 1,080,704 (+2,240). That last one was
+**already 29,888 B over the old 1 MiB slot on master** (the JIT phase-3
+image) — Gitea #669 — so a Seengreat still on the pre-#501 table cannot
+take the migrating release at all, and every `migrate-s3-*` QEMU case fails
+at its fixture check until the image fits again.
+
 ### After the migration: the payoff
 
 The same images, against the slot they land in the moment the device
@@ -209,7 +221,7 @@ its own release and a format bump.
 | device | board | migrated | live slot | `ota_slot_bytes` | `storage_bytes` | margin now |
 |---|---|---|---|---:|---:|---|
 | Athom rig `192.168.0.183` | `board-athom-music` | **yes, 2026-09-20** | `ota_0` | 1,310,720 | 524,288 | 270,160 B (20.6 %) |
-| Seengreat panel `192.168.0.238` | `board-seengreat-hub75` | **not yet — expected to land on the 4 MB FALLBACK table** (Gitea #634); off the LAN since 2026-09-21 awaiting a power cycle | `ota_0` | 1,048,576 | 1,048,576 | old table, unchanged |
+| Seengreat panel `192.168.0.238` | `board-seengreat-hub75` | **being serially re-flashed** (2026-09-23) after the 2026-09-21 OTA was written over its running slot and left it boot-looping (Gitea #655 — root cause and fix there); it will come back on its own 16 MB table, so the self-applied 16 MB path stays emulator-only | `ota_0` | 3,145,728 (after the flash) | 4,194,304 | — |
 | dev unit `192.168.0.205` | `board-pixelblaze-v3` | not yet (offline) | — | — | — | — |
 
 The Athom is the first device on the new table (Gitea #634). It went across

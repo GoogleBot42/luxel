@@ -15,6 +15,8 @@ pub const TYPE_APP: u8 = 0x00;
 pub const TYPE_DATA: u8 = 0x01;
 pub const SUBTYPE_OTA0: u8 = 0x10;
 pub const SUBTYPE_OTA1: u8 = 0x11;
+/// `data, ota` — the otadata partition's subtype.
+pub const SUBTYPE_OTADATA: u8 = 0x00;
 
 /// One partition-table entry.
 #[derive(Clone, Copy)]
@@ -96,4 +98,40 @@ pub fn is_luxel(table: &[u8]) -> bool {
 /// actually have. Writing a table that points past the die is a brick.
 pub fn flash_needed(table: &[u8]) -> u32 {
     entries(table).iter().map(|p| p.end()).max().unwrap_or(0)
+}
+
+/// The slot `/api/ota` writes into: the OTA app partition of `table` that
+/// is NOT the one executing. `booted` is where the running image was
+/// MMU-mapped from (`u32::MAX` when that could not be established) and
+/// `running_len` is that image's byte length.
+///
+/// Deliberately not "whatever `otadata` does not point at". With `otadata`
+/// erased — which the layout migration leaves behind on every boot in
+/// which it runs and then fails after `settle_into_ota0`, and which the
+/// bootloader only repairs on the NEXT boot — the esp-bootloader-esp-idf
+/// arithmetic answers `ota_0` for a device executing from `ota_0`, and the
+/// update erases the code it is running. That is the Seengreat brick of
+/// 2026-09-21 (Gitea #655). The running slot is a fact about the MMU, so
+/// that is the only input this trusts; a device that cannot say where it
+/// is running from does not update.
+pub fn ota_target(table: &[u8], booted: u32, running_len: u32) -> Result<Part, &'static str> {
+    if booted == u32::MAX {
+        return Err("cannot tell which slot is running — not updating");
+    }
+    if !entries(table)
+        .iter()
+        .any(|p| p.ptype == TYPE_DATA && p.subtype == SUBTYPE_OTADATA)
+    {
+        return Err("no otadata partition (old partition table? reflash serially)");
+    }
+    let Some(t) = app_entries(table)
+        .into_iter()
+        .find(|p| (p.subtype == SUBTYPE_OTA0 || p.subtype == SUBTYPE_OTA1) && p.offset != booted)
+    else {
+        return Err("no second OTA slot to update into");
+    };
+    if t.offset < booted.saturating_add(running_len) && booted < t.end() {
+        return Err("the free OTA slot overlaps the running image");
+    }
+    Ok(t)
 }
