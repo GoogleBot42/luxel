@@ -90,6 +90,17 @@ paths:
   2026-09-24 — `memory allocation of 2688 bytes failed`, one frame after the
   engine AND its JIT compile had both been accepted with heap to spare
   (Gitea #702). The post-build `RUNTIME_FLOOR` check cannot see it.
+  **But "budget it" is not "allocate it early".** Taking a frame-sized
+  buffer before the engine build makes it compete with the build — and on a
+  JIT board with the build, which then falls back to the interpreter: a
+  12 KB staging reserve moved in front of `build_runtime` turned a scene on
+  the Seengreat panel from 51.8 ms/frame into 105.7, measured both ways
+  (Gitea #704). The shape that works is a **fallible allocation at the site
+  that makes it** (`try_reserve_exact`, then `resize`; a frame not drawn is
+  not a reboot), with `budget::` accounting up front only where a preflight
+  has to refuse something. Charge such a buffer to
+  `caps::layers_for_headroom` rather than to the per-layer preflight, or a
+  scene that fits is refused by a few hundred bytes.
 - **A response body sized by the pixel count is a big allocation on a small
   heap.** At 4096 px a frame is 12 KB, and a heavy pattern can leave under
   30 KB free — so `GET /api/pixels` must be ONE *fallible* allocation, and it
