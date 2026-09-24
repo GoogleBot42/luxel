@@ -128,10 +128,12 @@ build_assets() {
     return 1
   fi
   echo "packing web assets…"
-  # env -u: this script exports the XTENSA rustc; the web build's wasm step
-  # needs the normal host toolchain
+  # env -u: this script exports the XTENSA rustc AND the per-arch RUSTFLAGS
+  # (linker args + remap, Gitea #441); the web build's wasm step needs the
+  # normal host toolchain and its own flags — a leaked `-nostartfiles` makes
+  # rust-lld refuse to link luxel-wasm (found 2026-09-23, Gitea #634)
   (cd ../web \
-    && env -u RUSTC -u RUSTDOC npm run build >/dev/null \
+    && env -u RUSTC -u RUSTDOC -u RUSTFLAGS npm run build >/dev/null \
     && node tools/pack-assets.mjs "../firmware/$ASSETS_BIN") \
     || { echo "web asset build failed — flashing without assets" >&2; return 1; }
 }
