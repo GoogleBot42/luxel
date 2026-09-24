@@ -135,6 +135,13 @@ interface Exports {
   lx_outpipe_set(h: number, ptr: number, len: number): number;
   lx_outpipe(h: number): number;
   lx_outpipe_bytes(h: number): number;
+  lx_comp_new(w: number, h: number): number;
+  lx_comp_free(ch: number): void;
+  lx_comp_set(ch: number, ptr: number, len: number): number;
+  lx_comp_bind(ch: number, layer: number, engineHandle: number): void;
+  lx_comp_text(ch: number, layer: number, ptr: number, len: number): void;
+  lx_comp_frame(ch: number, deltaRaw: number): number;
+  lx_comp_layer_count(ch: number): number;
   lx_debug_enable(h: number, on: number): void;
   lx_debug_set_breakpoints(h: number, ptr: number, len: number): void;
   lx_debug_pause(h: number): void;
@@ -306,6 +313,19 @@ export class Luxel {
     return new Engine(this.e, this, h, pixelCount);
   }
 
+  /** Open a scene compositor over a `w`x`h` row-major grid — the same
+   *  `luxel_core::compose` the firmware and the mirror composite with, so a
+   *  scene preview and the device agree by construction (Gitea #477).
+   *
+   *  Returns null on a wasm that predates the compositor, so a console
+   *  bound to an old bundle degrades to no preview rather than throwing. */
+  compositor(w: number, h: number): Compositor | null {
+    if (typeof this.e.lx_comp_new !== "function") return null;
+    const ch = this.e.lx_comp_new(w, h);
+    if (ch < 0) return null;
+    return new Compositor(this.e, this, ch, w, h);
+  }
+
   /** Compile a *map program*: a Luxel program whose `render(index)` calls
    *  `plot(x, y[, z])` once per pixel. Runs on the VM (so it's debuggable like
    *  a pattern); `Engine.runMap()` collects the coordinates. */
@@ -420,6 +440,11 @@ export class Luxel {
 
 export class Engine {
   private freed = false;
+
+  /** The wasm-side engine handle — what `Compositor.bind` binds. */
+  get handle(): number {
+    return this.h;
+  }
 
   constructor(
     private e: Exports,
@@ -832,6 +857,77 @@ export class Engine {
   free(): void {
     if (!this.freed) {
       this.e.lx_free(this.h);
+      this.freed = true;
+    }
+  }
+}
+
+/** A scene compositor: a layer stack plus the clocks that drive it, running
+ *  `luxel_core::compose` inside the wasm.
+ *
+ *  ONE implementation of the blend, shared with the firmware and the mirror —
+ *  the persistent generalization of the device crossfade (Gitea #477). Layers
+ *  are listed bottom → top, matching the wire record.
+ *
+ *  Usage: `setScene(wire)`, `bind(i, engine)` for every pattern and sprite
+ *  layer, `setText(i, s)` each frame for a clock or slot text layer, then
+ *  `frame(dt)` — which steps every bound pattern engine itself. Feed the
+ *  result to the same painters an `Engine.frame()` goes to.
+ */
+export class Compositor {
+  private freed = false;
+
+  constructor(
+    private e: Exports,
+    private lx: Luxel,
+    private ch: number,
+    readonly width: number,
+    readonly height: number,
+  ) {}
+
+  get pixelCount(): number {
+    return this.width * this.height;
+  }
+
+  /** Install a scene from its wire block. Returns null on success, or the
+   *  parse error (`scene: line N: …`) — the same string the device's
+   *  `POST /api/scenes` returns. Clears every binding. */
+  setScene(wire: string): string | null {
+    const s = this.lx.putStr(wire);
+    const rc = this.e.lx_comp_set(this.ch, s.ptr, s.len);
+    s.free();
+    return rc === 0 ? null : this.lx.response();
+  }
+
+  /** Bind the engine that renders a pattern layer, or the one holding a
+   *  sprite layer's pixels (a sprite's engine is READ, never stepped).
+   *  `null` unbinds. */
+  bind(layer: number, engine: Engine | null): void {
+    this.e.lx_comp_bind(this.ch, layer, engine ? engine.handle : -1);
+  }
+
+  /** The string a text layer draws this frame. Clock and slot sources are
+   *  the caller's to resolve — the compositor reads no wall clock. */
+  setText(layer: number, text: string): void {
+    const s = this.lx.putStr(text);
+    this.e.lx_comp_text(this.ch, layer, s.ptr, s.len);
+    s.free();
+  }
+
+  layerCount(): number {
+    return this.e.lx_comp_layer_count(this.ch);
+  }
+
+  /** Step the bound pattern engines and composite the stack; returns a copy
+   *  of the RGB bytes (w·h·3). */
+  frame(deltaMs: number): Uint8Array {
+    const ptr = this.e.lx_comp_frame(this.ch, Math.round(deltaMs * RAW));
+    return new Uint8Array(this.e.memory.buffer.slice(ptr, ptr + this.pixelCount * 3));
+  }
+
+  free(): void {
+    if (!this.freed) {
+      this.e.lx_comp_free(this.ch);
       this.freed = true;
     }
   }
