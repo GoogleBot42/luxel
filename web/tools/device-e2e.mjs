@@ -4236,10 +4236,12 @@ try {
         const r = await fetch(`${SC}/api/scenes`, { method: "POST", body }).then((x) => x.json());
         if (!r.ok) break;
       }
-      await scPage.$eval('[data-role="scene-layer-name"]', (el) => {
-        el.value = "Over the top of the scene store budget";
-        el.dispatchEvent(new Event("change", { bubbles: true }));
-      });
+      // GROW the record — replacing a scene with one the same size fits the
+      // blob that already holds it, so the refusal needs another layer.
+      await scPage.click('[data-role="scene-add-layer"]');
+      await sleep(300);
+      await scPage.click('[data-role="scene-add-color"]');
+      await sleep(400);
       await scPage.click('[data-role="scene-save"]');
       await sleep(1000);
       const bar = await scPage

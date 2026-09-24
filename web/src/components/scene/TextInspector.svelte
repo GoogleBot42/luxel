@@ -19,7 +19,9 @@
     CLOCK_FMTS,
     FONTS,
     SCROLLS,
+    MAX_LAYER_NAME,
     TEXT_SLOTS,
+    truncateUtf8,
     type Align,
     type ClockFmt,
     type Layer,
@@ -50,6 +52,16 @@
 
   function patchLayer(next: Partial<Layer>): void {
     dispatch("change", { ...layer, ...next });
+  }
+
+  /** The device refuses a layer name over 32 BYTES, and a refusal the console
+   *  could have prevented is the console's bug — clamp on the way in and put
+   *  the clamped value back in the field so what you see is what is stored
+   *  (`MAX_LAYER_NAME`, docs/spec/scenes.md §1). */
+  function setName(el: HTMLInputElement): void {
+    const name = truncateUtf8(el.value, MAX_LAYER_NAME);
+    if (name !== el.value) el.value = name;
+    patchLayer({ name });
   }
 
   function setSource(kind: "lit" | "clock" | "slot"): void {
@@ -94,7 +106,7 @@
       style="width:100%"
       data-role="scene-layer-name"
       value={layer.name}
-      on:change={(e) => patchLayer({ name: e.currentTarget.value })}
+      on:change={(e) => setName(e.currentTarget)}
     />
   </div>
 

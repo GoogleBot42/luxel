@@ -26,10 +26,12 @@
   import Popover from "../components/Popover.svelte";
   import { SceneRenderer, playgroundPatternId } from "../lib/sceneRender";
   import {
+    MAX_SCENE_NAME,
     newLayer,
     parseSpriteTag,
     patternLayerCount,
     serializeScene,
+    truncateUtf8,
     type Layer,
     type LayerKind,
     type Rect,
@@ -417,9 +419,12 @@
     if (await deleteScene(doc.id)) dispatch("back");
   }
 
+  /** A scene name is ≤ 64 BYTES on the wire, and a refusal the console could
+   *  have prevented is the console's bug — clamp rather than let the device
+   *  say no (`MAX_SCENE_NAME`, docs/spec/scenes.md §1). */
   function commitName(): void {
     renaming = false;
-    const name = nameDraft.trim();
+    const name = truncateUtf8(nameDraft.trim(), MAX_SCENE_NAME);
     if (name !== "") commit({ ...doc, name });
   }
 
