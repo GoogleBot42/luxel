@@ -31,6 +31,7 @@ pub mod diag;
 pub mod engine;
 pub mod fixed;
 pub mod color;
+pub mod compose;
 pub mod fmath;
 pub mod hamqtt;
 #[cfg(any(feature = "jit", feature = "dispatch-table"))]
@@ -50,4 +51,6 @@ pub mod parse;
 #[cfg(feature = "frontend")]
 pub mod prelude;
 pub mod projection;
+pub mod scene;
+pub mod text;
 pub mod vm;

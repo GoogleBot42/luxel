@@ -1615,6 +1615,21 @@ impl Engine {
         }
     }
 
+    /// Read an array-valued global by name, exported or NOT — the sprite
+    /// reader ([`crate::compose::sprite_view`]). A sprite's `sprH`/`sprS`/
+    /// `sprV` are plain top-level `var`s, so [`Engine::var_array`]'s export
+    /// gate would hide them; nothing else about the read differs. The
+    /// arrays exist as soon as the engine is BUILT — top-level
+    /// initialization is what turns `var a = […]` into a const-pool entry
+    /// — so a sprite is never stepped.
+    pub fn global_array(&self, name: &str) -> Option<ArrView<'_>> {
+        let i = self.prog.global_index(name)?;
+        match self.vm.globals.get(i as usize)? {
+            Value::Arr(id) => self.vm.array(&self.prog, *id),
+            _ => None,
+        }
+    }
+
     /// The engine clock in whole ms (what `time()`/`beat` run on) — the
     /// Luxel-to-Luxel sync surface, together with [Engine::set_time_ms].
     pub fn time_ms(&self) -> u64 {

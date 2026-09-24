@@ -1382,3 +1382,193 @@ pub extern "C" fn lx_kinds(h: i32) -> i32 {
     })
     .unwrap_or(0)
 }
+
+// ---- scene compositor (Gitea #477/#478/#481/#482) ----
+//
+// The playground has never had a crossfade, let alone a layer stack: one
+// engine per handle, one frame, straight to the canvas. A scene preview that
+// blended in JS would diverge from the device by the whole compositor, so the
+// blend lives in `luxel_core::compose` and this is the plumbing — the same
+// move `lx_outpipe_set`/`lx_outpipe` made for the output chain.
+//
+// A compositor owns its layer stack and its clocks; the ENGINES it draws are
+// ordinary handles, bound per layer. Pattern layers are stepped through
+// `Engine::frame`, exactly as `lx_frame` does (frame-rate cap and time
+// scaling included). A SPRITE layer is bound to an engine too, but only its
+// program's data arrays are read — it is never stepped.
+
+use luxel_core::compose::{sprite_view, Compositor};
+use luxel_core::outpipe::GridMap;
+use luxel_core::scene::{LayerKind, Scene};
+
+struct CompSlot {
+    comp: Compositor,
+    scene: Scene,
+    /// Engine handle per layer; -1 = unbound.
+    bind: Vec<i32>,
+    px: Vec<[u8; 3]>,
+    out: Vec<u8>,
+    /// Sub-millisecond remainder of the frame deltas, so a 60 fps caller's
+    /// 16.67 ms steps do not round the scroll and sprite clocks down.
+    dt_acc: i32,
+}
+
+static COMPOSITORS: Mutex<Vec<Option<CompSlot>>> = Mutex::new(Vec::new());
+
+fn with_comp<R>(ch: i32, f: impl FnOnce(&mut CompSlot) -> R) -> Option<R> {
+    if ch < 0 {
+        return None;
+    }
+    COMPOSITORS.lock().unwrap().get_mut(ch as usize)?.as_mut().map(f)
+}
+
+/// Create a compositor over a `w`x`h` ROW-MAJOR grid — the same geometry
+/// `lx_set_map_grid` gives an engine, so a layer's frame and the composite
+/// share a pixel order. Returns a handle ≥ 0.
+#[no_mangle]
+pub extern "C" fn lx_comp_new(w: u32, h: u32) -> i32 {
+    let grid = GridMap {
+        w: w.min(u16::MAX as u32) as u16,
+        h: h.min(u16::MAX as u32) as u16,
+        serpentine: false,
+    };
+    let slot = CompSlot {
+        comp: Compositor::new(grid),
+        scene: Scene::default(),
+        bind: Vec::new(),
+        px: Vec::new(),
+        out: Vec::new(),
+        dt_acc: 0,
+    };
+    let mut comps = COMPOSITORS.lock().unwrap();
+    match comps.iter().position(|c| c.is_none()) {
+        Some(i) => {
+            comps[i] = Some(slot);
+            i as i32
+        }
+        None => {
+            comps.push(Some(slot));
+            (comps.len() - 1) as i32
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn lx_comp_free(ch: i32) {
+    if ch < 0 {
+        return;
+    }
+    if let Some(slot) = COMPOSITORS.lock().unwrap().get_mut(ch as usize) {
+        *slot = None;
+    }
+}
+
+/// Install a scene from its wire block (`docs/spec/scenes.md`). Returns 0,
+/// or -1 with the parse error — `scene: line N: …`, the same string the
+/// device's API returns — in the response buffer. Bindings are cleared.
+///
+/// # Safety
+/// `ptr`/`len` per `str_arg`.
+#[no_mangle]
+pub unsafe extern "C" fn lx_comp_set(ch: i32, ptr: *const u8, len: usize) -> i32 {
+    let wire = str_arg(ptr, len);
+    match luxel_core::scene::parse(wire) {
+        Ok(scene) => with_comp(ch, |c| {
+            c.comp.set_scene(&scene);
+            c.bind = vec![-1; scene.layers.len()];
+            c.scene = scene;
+            0
+        })
+        .unwrap_or(-1),
+        Err(msg) => {
+            set_response(msg);
+            -1
+        }
+    }
+}
+
+/// Bind an engine handle to a layer — a pattern layer's renderer, or the
+/// pattern a sprite layer's pixels live in. `-1` unbinds.
+#[no_mangle]
+pub extern "C" fn lx_comp_bind(ch: i32, layer: u32, engine_handle: i32) {
+    with_comp(ch, |c| {
+        if let Some(b) = c.bind.get_mut(layer as usize) {
+            *b = engine_handle;
+        }
+    });
+}
+
+/// Set a text layer's resolved string. Clock and slot sources are the
+/// HOST's to resolve — the compositor never reads a wall clock.
+///
+/// # Safety
+/// `ptr`/`len` per `str_arg`.
+#[no_mangle]
+pub unsafe extern "C" fn lx_comp_text(ch: i32, layer: u32, ptr: *const u8, len: usize) {
+    let s = str_arg(ptr, len);
+    with_comp(ch, |c| c.comp.set_text(layer as usize, s));
+}
+
+#[no_mangle]
+pub extern "C" fn lx_comp_layer_count(ch: i32) -> u32 {
+    with_comp(ch, |c| c.comp.layer_count() as u32).unwrap_or(0) as u32
+}
+
+/// Step every bound pattern engine, composite the whole stack bottom → top
+/// and return a pointer to the result (w·h·3 RGB bytes). Copy it out before
+/// the next call. Feed it through `lx_outpipe` on an engine configured with
+/// the device's chain to see what the wire would carry.
+#[no_mangle]
+pub extern "C" fn lx_comp_frame(ch: i32, delta_raw: i32) -> *const u8 {
+    let mut comps = COMPOSITORS.lock().unwrap();
+    let Some(Some(c)) = comps.get_mut(ch as usize) else {
+        return std::ptr::null();
+    };
+    let n = c.comp.grid().len();
+    if c.px.len() != n {
+        c.px.clear();
+        c.px.resize(n, [0, 0, 0]);
+    }
+    // whole milliseconds for the clocks, remainder carried
+    c.dt_acc = c.dt_acc.saturating_add(delta_raw.max(0));
+    let ms = (c.dt_acc >> 16).max(0);
+    c.dt_acc -= ms << 16;
+    c.comp.advance(ms as u32);
+    c.comp.begin(&mut c.px);
+
+    let kinds: Vec<LayerKind> = c.comp.layer_kinds().collect();
+    let mut engines = ENGINES.lock().unwrap();
+    for (i, kind) in kinds.iter().enumerate() {
+        let h = c.bind.get(i).copied().unwrap_or(-1);
+        match kind {
+            LayerKind::Pattern => {
+                if h < 0 {
+                    continue;
+                }
+                let Some(Some(slot)) = engines.get_mut(h as usize) else {
+                    continue;
+                };
+                // the same call lx_frame makes — frame-rate cap, time
+                // scaling and all
+                let frame = slot.engine.frame(Fx::from_raw(delta_raw));
+                c.comp.pattern_layer(&mut c.px, i, frame);
+            }
+            LayerKind::Sprite => {
+                let view = engines
+                    .get(h.max(0) as usize)
+                    .filter(|_| h >= 0)
+                    .and_then(|s| s.as_ref())
+                    .and_then(|s| sprite_view(&s.engine, &s.src));
+                c.comp.native_layer(&mut c.px, i, view.as_ref());
+            }
+            LayerKind::Text | LayerKind::Color => c.comp.native_layer(&mut c.px, i, None),
+        }
+    }
+    drop(engines);
+
+    c.out.clear();
+    for px in &c.px {
+        c.out.extend_from_slice(px);
+    }
+    c.out.as_ptr()
+}

@@ -1,5 +1,66 @@
 # Update log
 
+## 2026-09-24 — scenes: one compositor for every host — layer record, five blend kernels, sprite-tagged patterns, wasm exports (#477 #478 #481 #482)
+
+The crossfade was the only blend Luxel had: `blend_px` in `firmware/src/main.rs`,
+a timed lerp between an outgoing and an incoming engine, duplicated in the
+mirror and **absent from the playground entirely** — so a scene preview built
+in JS would have diverged from the device by the whole compositor. Phase B's
+core half lands the general case in `luxel-core`, where the firmware, the
+mirror and the wasm all reach it.
+
+**`crates/luxel-core/src/scene.rs`** — the wire record. One block of lines,
+layers bottom → top, playlist grammar: `S`/`L` plus the binding lines
+`N I C P R T F K`. `parse`, `parse_all` (a whole `SCENES_KEY` blob, with
+blob-global line numbers), `serialize` (defaults omitted, so a round trip is a
+fixed point), `push_json` (the `/api/scenes` shape), `pattern_layers`. Every
+rejection names its line — `scene: line 4: unknown blend "foo"` — because that
+string is what the API hands the console. Unknown line tags, and binding lines
+that do not apply to the layer they follow, are ignored: an older host survives
+a newer console's push.
+
+**`crates/luxel-core/src/compose.rs`** — the kernels. Five blend modes
+(`normal add lighten multiply mask`) × three keys (`none black luma`), integer
+math, `α` carried in 1/65536ths. **The crossfade is the degenerate case** —
+two layers, `normal`, no key, `opacity = t` — and `composite_frame` reproduces
+`blend_px` bit for bit, pinned at t ∈ {0, 0.25, 0.5, 1}. A keyed-out pixel
+leaves the base untouched in every mode, which is what makes `black` usable
+under `add` and `lighten` too. Compositing is ROW-MAJOR CANVAS SPACE through
+`GridMap::index`, the way `bulk.rs`'s `paste` already addresses a frame, so
+serpentine wiring and the output chain stay the existing pipeline's business.
+`Compositor` owns the per-layer runtime state — scroll phase, sprite frame
+clock, resolved text, the ramp LUT cache behind a scene epoch — and ONE shared
+3 B/px scratch, so the single-owner rule the HUB75 pipeline depends on holds.
+
+**Per-layer colour ramp:** `outpipe::palette_remap_frame` over a scratch copy
+of the pattern's frame (the engine's own buffer is never written), LUT cooked
+by `fill_palette_lut` and cached behind the epoch — the Settings page's
+device-wide output-palette stage, per layer.
+
+**Sprites are sprite-tagged PATTERNS** (`// @sprite w= h= frames= fps=` on line
+1, then `var sprH/sprS/sprV`). No new store record: a sprite compiles, stores,
+previews and plays like any pattern. The load-bearing compiler fact, verified
+and pinned rather than assumed: a top-level all-numeric array literal interns
+into the const pool (`ArrView::Const`) and top-level init runs when the engine
+is BUILT — so `sprite_view` reads a sprite's pixels out of the program's word
+region (flash on the device) **without ever stepping it**, and no `compile.rs`
+change was needed.
+
+**wasm** (`lx_comp_new/_free/_set/_bind/_text/_frame/_layer_count`) +
+`Luxel.compositor(w, h)` → a typed `Compositor` in `web/src/lib/luxel.ts`.
+`lx_comp_frame` steps every bound pattern engine through `Engine::frame` — the
+same call `lx_frame` makes, frame-rate cap and time scaling included — then
+composites; a sprite layer binds an engine too but only its data arrays are
+read. The playground finally has the device's blend instead of none.
+
+Text layers compile against a `text.rs` STUB (draws nothing, measures 0) that
+#484 replaces wholesale; a text layer therefore composites as empty rather
+than failing, which is what a firmware predating the fonts should do.
+
+Grammar, formulas, the sprite tag and the JSON: `docs/spec/scenes.md`.
+36 new `luxel-core` unit tests, 4 new `web/tests/compositor.test.mjs` against
+the real wasm.
+
 ## 2026-09-24 — the CI gate weighs images against their own board's OTA slot again (#635, partial)
 
 `tools/ci.sh` defaulted `MIGRATING_RELEASE` to **1** while the #501
