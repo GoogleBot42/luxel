@@ -99,6 +99,17 @@ user-facing error text, not debug info — lean decodes keep them, so a
 compiler-less device reports `pattern requires: <message> (pixelCount = N)`
 verbatim.
 
+Since #483 this table is also **the strings section**. A string literal in a
+text builtin's argument list (`drawText("HI", …)`, `textWidth`, `font` — the
+only positions the parser accepts one) interns here through the same
+`intern_msg`, with the same ≤255 B truncation on a char boundary, the same
+dedup and the same lean-decode survival, and compiles to an ordinary
+`Const(Num)` holding its index. A *text handle* is therefore a plain number
+(`k ≥ 0` = message `k`, `k < 0` = text slot `−(k+1)`; see `text.md`), which
+is why text cost no header field, no new opcode, no `Value` variant and
+**no format bump** — every blob written before the text builtins existed
+still decodes (Gitea #643 is what that rule is protecting against).
+
 **fns** — `n_fns ×`:
 
 ```

@@ -215,6 +215,14 @@ export const BUILTINS: BuiltinDoc[] = [
   { name: "fillNoise3D", sig: "fillNoise3D(dst, w, h, sx, sy, ox, oy, z, seed)", doc: "As fillNoise2D with simplex3 at a fixed z — the animated-noise field of a 2D pattern as one call; returns dst. (Luxel)" },
   { name: "stencil2D", sig: "stencil2D(dst, src, w, h, kSelf, kEdge, kDiag)", doc: "dst[i] += kSelf·src[i] + kEdge·(W+E+N+S) + kDiag·(the four diagonals) over a row-major w×h canvas, borders mirrored (clamped index); src is never written, returns dst. kDiag 0 is the 5-point Laplacian, kDiag = kEdge the 9-point one. The two-buffer water recurrence in one call. dst and src must differ. (Luxel)" },
   { name: "arrayMaxAbs", sig: "arrayMaxAbs(a)", doc: "Largest |a[i]|, 0 for an empty array — the peak-amplitude reduction a simulation needs to decide it has gone flat, without a second interpreted pass. (Luxel)" },
+  // text: grid space, top-left origin, the brush colour, a no-op without a
+  // grid — exactly like blit. A "text handle" is a plain number: a quoted
+  // literal (the only place the language accepts one) or textSlot(n).
+  { name: "drawText", sig: 'drawText("TEXT", x, y, align = 0)', doc: 'renderFrame: draw text at grid cell (x, y) — top-left origin, y down — in the brush colour and the font() face; returns its advance width in pixels. align 0 left / 1 centre / 2 right anchors the run at x. The first argument is a quoted literal or textSlot(n). A no-op without a grid; check gridWidth(). (Luxel)' },
+  { name: "textWidth", sig: 'textWidth("TEXT")', doc: 'Advance width of a text handle in the current font, in pixels — chars × (cell + 1). Answers with no grid installed, so a pattern can measure before it decides where to draw. (Luxel)' },
+  { name: "drawNumber", sig: "drawNumber(value, x, y, digits, decimals)", doc: "renderFrame: draw a number the way drawText draws a string. digits is the MINIMUM integer digits (zero-padded), decimals the fraction digits (max 4, rounded half-up); negatives get a leading -. Fixed-point aware, so drawNumber(0.5, 0, 0, 1, 2) is 0.50. Returns the advance width. (Luxel)" },
+  { name: "font", sig: 'font("tiny" | "regular" | "large")', doc: 'Pick the face later text draws in — tiny = Tom Thumb 3×6 (4 px pitch), regular = X11 misc-fixed 5×7, large = Spleen 5×8. Modal and persistent across frames, unlike the brush. An unknown name changes nothing, so font("") just returns the active face\'s index (0/1/2). (Luxel)' },
+  { name: "textSlot", sig: "textSlot(n)", doc: "The text handle of device slot n (0..7) — what POST /api/text, MQTT or a Home Assistant text entity wrote. Usable wherever a literal is: drawText(textSlot(0), x, y), textWidth(textSlot(0)). An empty or missing slot draws nothing and measures 0. (Luxel)" },
 ];
 
 /** Special globals available to patterns. */

@@ -225,7 +225,7 @@ fn walk_stmt(s: &Stmt, f: &mut impl FnMut(&Expr)) {
 fn walk_expr(e: &Expr, f: &mut impl FnMut(&Expr)) {
     f(e);
     match &e.kind {
-        ExprKind::Num(_) | ExprKind::Ident(_) => {}
+        ExprKind::Num(_) | ExprKind::Str(_) | ExprKind::Ident(_) => {}
         ExprKind::ArrayLit(es) => {
             for x in es {
                 walk_expr(x, f);
