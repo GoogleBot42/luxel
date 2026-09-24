@@ -103,7 +103,13 @@
     if (!box || !rect) return;
     e.preventDefault();
     e.stopPropagation();
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    // best-effort: a synthetic pointerdown (a harness staging the state) has
+    // no active pointer to capture, and the throw would kill the drag
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
     const c = cellAt(e);
     grab = { mode, ox: c.col - box.x, oy: c.row - box.y, start: { ...rect } };
   }

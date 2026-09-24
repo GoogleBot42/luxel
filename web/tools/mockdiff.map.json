@@ -115,6 +115,32 @@
         }
       ],
       "activate": "Rainbow Sweep"
+    },
+    "scenes": {
+      "brightness": 3,
+      "tzMinutes": -360,
+      "layout": "proj1d x",
+      "patterns": [
+        {
+          "name": "Aurora 2D",
+          "source": "// Aurora 2D — slow green curtains with a violet shimmer\nexport var band = 0\nexport var shimmerAmp = 0\nvar cellSize = 1, speed = .4, ph = .33, sparkle = 1, t1 = 0\nexport function sliderCellSize(v) { cellSize = v }  //# min=.2 max=4 default=1\nexport function sliderSpeed(v) { speed = v }  //# min=0 max=1 default=.4\nexport function hsvPickerPalette(h, s, v) { ph = h }  //# default=.33\nexport function toggleSparkle(v) { sparkle = v }  //# default=1\nexport function beforeRender(delta) {\n  t1 = time(.1 * speed)\n  band = wave(t1) * .35 + .5\n  shimmerAmp = .12 + band * .08\n}\nexport function render2D(index, x, y) {\n  var curtain = clamp(1 - abs(y - band) * 3.2 * cellSize, 0, 1)\n  var v = clamp(curtain * (.55 + shimmerAmp * sparkle), 0, 1)\n  hsv(ph - v * .06, 1 - v * .35, v * v)\n}\n"
+        },
+        {
+          "name": "Sunset Fade",
+          "source": "// Sunset Fade — a warm 1D ramp with three values\nvar hue = .1, speed = .08, sparkle = 1\nexport function sliderHue(v) { hue = v }  //# min=0 max=1 default=.1\nexport function sliderSpeed(v) { speed = v }  //# min=0 max=1 default=.08\nexport function toggleSparkle(v) { sparkle = v }  //# default=1\nexport function render(index) {\n  var f = index / pixelCount\n  var v = 1 - f * .3\n  if (sparkle && random(1) < .02) v = 1\n  hsv(hue - f * .06 + time(speed), 1, v)\n}\n"
+        },
+        {
+          "name": "Heart",
+          "source": "// @sprite w=9 h=8 frames=1 fps=0\nvar sprH = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]\nvar sprS = [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]\nvar sprV = [0,1,1,0,0,0,1,1,0,1,1,1,1,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,1,1,1,1,1,1,1,0,0,0,1,1,1,1,1,0,0,0,0,0,1,1,1,0,0,0,0,0,0,0,1,0,0,0,0]\nexport function renderFrame() {\n  blit(sprH, sprS, sprV, 9, 8, 0, 0, 3)\n}\n"
+        }
+      ],
+      "scenes": [
+        "S - Clock overlay\nL pat 0 0 0 0 normal 100 none fill 1\nN Rainbow\nI {{Sunset Fade}}\nL color 0 58 64 6 normal 45 none fill 1\nN Bottom bar\nK e8a33d\nL text 0 28 64 8 normal 100 none fill 1\nN Time\nT clock HH:MM\nF regular ffffff c none 0\n",
+        "S - Aurora + ticker\nL pat 0 0 0 0 multiply 60 none fill 1\nN Rainbow\nI {{Sunset Fade}}\nC hue 6553\nC speed 5242\nR 100 0:000000 86:2a1060 173:c23a6b 255:f7e08a\nL color 0 58 64 6 normal 45 none fill 0\nN Bottom bar\nK e8a33d\nL pat 0 0 0 0 normal 60 black fill 1\nN Aurora 2D\nI {{Aurora 2D}}\nC cellSize 5242\nC speed 26214\nL sprite 27 20 9 8 normal 100 black fill 1\nN Heart\nI {{Heart}}\nL text 0 28 64 8 normal 100 none fill 1\nN Time\nT clock HH:MM\nF regular ffffff c none 0\n",
+        "S - Party wall\nL pat 0 0 0 0 normal 100 none fill 1\nN Base\nI {{Aurora 2D}}\nL color 0 0 0 0 add 30 none fill 1\nN Wash\nK 2a1060\nL sprite 27 20 9 8 normal 100 black fill 1\nN Heart\nI {{Heart}}\nL text 0 4 64 8 normal 100 none fill 1\nN Ticker\nT lit PARTY\n"
+      ],
+      "activateScene": "Clock overlay",
+      "why": "mockups S6/S6d: three scene tiles, the first PLAYING. S7's stack, bottom to top: a 1D base under a projection override (the quiet Projection row, S7g), a colour wash, a 2D pattern at 60 % (S7b/S7g's inspector), a 9x8 sprite and a clock text layer — two pattern layers, which is exactly `caps.layers` on this board, so the Add-layer menu is at the cap (S7d). `Aurora + ticker` is NOT the active scene: the inspector frames edit it, and an edit to the active scene would live-push and change what a later frame sees."
     }
   },
   "frames": {
@@ -157,10 +183,6 @@
         {
           "element": "hdr-brightness",
           "why": "Jeremy: brightness is a slider in the header — beyond the mocks"
-        },
-        {
-          "element": "tab-scenes",
-          "why": "Scenes is Phase B (#480); the mock's 4th tab is not built"
         },
         {
           "element": "search",
@@ -238,7 +260,7 @@
           "app": "[data-role=\"tabs\"] .tab:not(.active)",
           "hover": true,
           "noBox": true,
-          "nth": 1
+          "nth": 2
         },
         {
           "id": "fps",
@@ -961,12 +983,12 @@
       "allow": [
         {
           "element": "mi-scene",
-          "why": "`Add to scene ▸` is Phase B (#480) — not built"
+          "why": "`Add to scene ▸` is the menu half of Phase B (#478, WEB-B) — not built"
         },
         {
           "element": "menu",
           "property": "box height",
-          "why": "`Add to scene ▸` is Phase B (#480): one fewer row is 33px less menu"
+          "why": "`Add to scene ▸` is the menu half of Phase B (#478, WEB-B): one fewer row is 33px less menu"
         },
         {
           "element": "menu",
@@ -3546,10 +3568,6 @@
       },
       "allow": [
         {
-          "element": "tab-scenes",
-          "why": "Scenes is Phase B (#480)"
-        },
-        {
           "element": "pop",
           "property": "position",
           "why": "the popover is placed `fixed` off the anchor's viewport rect so it can dodge the viewport edges (Jeremy, 2026-09-19); the mock is a static `absolute` box inside `.menuwrap`"
@@ -3744,7 +3762,7 @@
         {
           "element": "menu",
           "property": "box height",
-          "why": "ONE of the mock's six items is absent: `Add to scene ▸`, which is Phase B (Gitea #480). `Import .epe…` landed with #572"
+          "why": "ONE of the mock's six items is absent: `Add to scene ▸`, which is Phase B (Gitea #478). `Import .epe…` landed with #572"
         }
       ]
     },
@@ -3975,6 +3993,2144 @@
         {
           "element": "reading order",
           "why": "the mockups draw no dialog: `.menu`/`.btn` are borrowed as the primitives this panel must WEAR, so only the chrome is comparable — not a menu's width, a menu's height, or the editor buttons' copy — the three targets are borrowed from two different places in the mock frame"
+        }
+      ]
+    },
+    "S9": {
+      "title": "Playground — the Scenes tab (D10: always present, five up)",
+      "width": 1200,
+      "height": 900,
+      "app": {
+        "target": "playground",
+        "route": "#/",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"tabs\"]"
+          },
+          {
+            "sleep": 1500
+          },
+          {
+            "js": "localStorage.setItem('luxel.scenes', \"S 5eed1c92 Clock overlay\\nL color 0 58 64 6 normal 45 none fill 1\\nN Bottom bar\\nK e8a33d\\nL text 0 28 64 8 normal 100 none fill 1\\nN Time\\nT clock HH:MM\\nF regular ffffff c none 0\\nL text 0 4 64 8 normal 100 none fill 1\\nN Date\\nT clock MM-DD\\nS 5eed1c9d Party wall\\nL color 0 0 0 0 normal 100 none fill 1\\nN Wash\\nK 2a1060\\nL text 0 28 64 8 normal 100 none fill 1\\nN Ticker\\nT lit PARTY\\nF regular ffffff c none 0\\nL color 0 58 64 6 add 40 none fill 1\\nN Glow\\nK c23a6b\\n\")"
+          },
+          {
+            "click": "[data-role=\"preview-as\"]"
+          },
+          {
+            "sleep": 400
+          },
+          {
+            "type": "[data-role=\"preview-as-w\"]",
+            "value": "64"
+          },
+          {
+            "type": "[data-role=\"preview-as-h\"]",
+            "value": "64"
+          },
+          {
+            "click": "[data-role=\"preview-as-matrix\"]"
+          },
+          {
+            "keys": [
+              "Escape"
+            ]
+          },
+          {
+            "sleep": 800
+          },
+          {
+            "waitFor": "[data-role=\"tab-scenes\"]"
+          },
+          {
+            "click": "[data-role=\"tab-scenes\"]"
+          },
+          {
+            "sleep": 2000
+          }
+        ]
+      },
+      "allow": [
+        {
+          "element": "pagebar",
+          "property": "background-color",
+          "why": "Jeremy 2026-09-20: a page bar follows the tab's own scheme rather than the mock's darker --bg; pages/Patterns.svelte carries the same deviation"
+        }
+      ],
+      "elements": [
+        {
+          "id": "header",
+          "mock": ".hdr",
+          "app": "header.hdr",
+          "noBoxH": true
+        },
+        {
+          "id": "wordmark",
+          "mock": ".wordmark",
+          "app": ".hdr .wordmark",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "tabs",
+          "mock": ".tabs",
+          "app": "[data-role=\"tabs\"]",
+          "noBox": true
+        },
+        {
+          "id": "tab-active",
+          "mock": ".tabs a.on",
+          "app": "[data-role=\"tabs\"] .tab.active",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Scenes`"
+        },
+        {
+          "id": "tab-idle",
+          "mock": ".tabs a:not(.on)",
+          "app": "[data-role=\"tabs\"] .tab:not(.active)",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "fps",
+          "mock": ".fps",
+          "app": "[data-role=\"fps\"]",
+          "noBox": true
+        },
+        {
+          "id": "pagebar",
+          "mock": ".pagebar",
+          "app": "[data-role=\"scenes-panel\"] .pagebar",
+          "noBoxH": true
+        },
+        {
+          "id": "lede",
+          "mock": ".pagebar .hint",
+          "app": "[data-role=\"scenes-lede\"]",
+          "noBox": true,
+          "note": "mock copy: `Scenes need a 2D fixture. This page is previewing a 64x64 matrix.` — the app states what a scene IS (S6's sentence), which is the same sentence on every width"
+        },
+        {
+          "id": "new-scene",
+          "mock": ".pagebar .btn.primary",
+          "app": "[data-role=\"new-scene\"]",
+          "text": true,
+          "note": "mock copy: `+ New scene`"
+        },
+        {
+          "id": "tiles",
+          "mock": ".tiles.c5",
+          "app": "[data-role=\"scenes-grid\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "tile",
+          "mock": ".tiles .tile",
+          "app": "[data-role=\"scene-tile\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "thumb",
+          "mock": ".tiles .tile .thumb",
+          "app": "[data-role=\"scene-tile\"] .thumb",
+          "noBoxH": true
+        },
+        {
+          "id": "tile-canvas",
+          "mock": ".tiles .tile canvas",
+          "app": "[data-role=\"scene-tile\"] canvas",
+          "noBoxH": true
+        },
+        {
+          "id": "tile-meta",
+          "mock": ".tiles .tile .meta",
+          "app": "[data-role=\"scene-tile\"] .meta",
+          "noBoxH": true
+        },
+        {
+          "id": "tile-name",
+          "mock": ".tiles .tile .nm",
+          "app": "[data-role=\"scene-tile-name\"]",
+          "noBox": true
+        },
+        {
+          "id": "tile-sub",
+          "mock": ".tiles .tile .sub",
+          "app": "[data-role=\"scene-tile-layers\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `3 layers`"
+        }
+      ]
+    },
+    "S6b": {
+      "title": "Scenes — playground, no 2D fixture (the empty state that sets one)",
+      "width": 1200,
+      "height": 700,
+      "app": {
+        "target": "playground",
+        "route": "#/",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"tabs\"]"
+          },
+          {
+            "sleep": 1500
+          },
+          {
+            "js": "localStorage.setItem('luxel.scenes', \"S 5eed1c92 Clock overlay\\nL color 0 58 64 6 normal 45 none fill 1\\nN Bottom bar\\nK e8a33d\\nL text 0 28 64 8 normal 100 none fill 1\\nN Time\\nT clock HH:MM\\nF regular ffffff c none 0\\nL text 0 4 64 8 normal 100 none fill 1\\nN Date\\nT clock MM-DD\\nS 5eed1c9d Party wall\\nL color 0 0 0 0 normal 100 none fill 1\\nN Wash\\nK 2a1060\\nL text 0 28 64 8 normal 100 none fill 1\\nN Ticker\\nT lit PARTY\\nF regular ffffff c none 0\\nL color 0 58 64 6 add 40 none fill 1\\nN Glow\\nK c23a6b\\n\")"
+          },
+          {
+            "waitFor": "[data-role=\"tab-scenes\"]"
+          },
+          {
+            "click": "[data-role=\"tab-scenes\"]"
+          },
+          {
+            "sleep": 2000
+          }
+        ]
+      },
+      "elements": [
+        {
+          "id": "header",
+          "mock": ".hdr",
+          "app": "header.hdr",
+          "noBoxH": true
+        },
+        {
+          "id": "tabs",
+          "mock": ".tabs",
+          "app": "[data-role=\"tabs\"]",
+          "noBox": true
+        },
+        {
+          "id": "tab-active",
+          "mock": ".tabs a.on",
+          "app": "[data-role=\"tabs\"] .tab.active",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "empty",
+          "mock": ".empty",
+          "app": "[data-role=\"scenes-empty-fixture\"]",
+          "noBoxW": true
+        },
+        {
+          "id": "empty-lede",
+          "mock": ".empty .dim",
+          "app": "[data-role=\"scenes-empty-fixture\"] .dim",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Scenes layer patterns, text and images on a matrix.`"
+        },
+        {
+          "id": "empty-primary",
+          "mock": ".empty .btn.primary",
+          "app": "[data-role=\"scenes-preview-as-matrix\"]",
+          "text": true,
+          "note": "mock copy: `Preview as a 64x64 matrix`"
+        },
+        {
+          "id": "empty-hint",
+          "mock": ".empty .hint",
+          "app": "[data-role=\"scenes-empty-fixture\"] .hint",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Then + New scene.`"
+        }
+      ]
+    },
+    "S6c": {
+      "title": "Scenes — console, empty state (a matrix console always has the tab)",
+      "width": 1200,
+      "height": 700,
+      "app": {
+        "target": "panel",
+        "route": "#/scenes",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"scenes-panel\"]:not([hidden])"
+          },
+          {
+            "sleep": 1200
+          }
+        ]
+      },
+      "allow": [
+        {
+          "element": "fps",
+          "property": "text",
+          "why": "the number is the mirror's live rate; the mock's `27 fps` is sample data (the wording matches exactly)"
+        }
+      ],
+      "elements": [
+        {
+          "id": "header",
+          "mock": ".hdr",
+          "app": "header.hdr",
+          "noBoxH": true
+        },
+        {
+          "id": "devchip",
+          "mock": ".devchip",
+          "app": ".hdr [data-role=\"layout-chip\"]",
+          "noBox": true
+        },
+        {
+          "id": "tabs",
+          "mock": ".tabs",
+          "app": "[data-role=\"tabs\"]",
+          "noBox": true
+        },
+        {
+          "id": "tab-active",
+          "mock": ".tabs a.on",
+          "app": "[data-role=\"tabs\"] .tab.active",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "fps",
+          "mock": ".fps",
+          "app": "[data-role=\"fps\"]",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "empty",
+          "mock": ".empty",
+          "app": "[data-role=\"scenes-empty\"]",
+          "noBoxW": true
+        },
+        {
+          "id": "empty-lede",
+          "mock": ".empty .dim",
+          "app": "[data-role=\"scenes-empty\"] .dim",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Layer patterns, text and images on top of each other. Scenes play like patterns.` — identical to the populated page's, so the sentence does not change meaning when the first scene appears"
+        },
+        {
+          "id": "empty-primary",
+          "mock": ".empty .btn.primary",
+          "app": "[data-role=\"new-scene\"]",
+          "text": true,
+          "note": "mock copy: `+ New scene`"
+        }
+      ]
+    },
+    "S6": {
+      "title": "Scenes — console, 64x64 matrix (tiles, the playing ring)",
+      "width": 1200,
+      "height": 700,
+      "app": {
+        "target": "scenes",
+        "route": "#/scenes",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"scenes-grid\"]"
+          },
+          {
+            "sleep": 2000
+          }
+        ]
+      },
+      "allow": [
+        {
+          "element": "pagebar",
+          "property": "background-color",
+          "why": "Jeremy 2026-09-20: a page bar follows the tab's own scheme rather than the mock's darker --bg; pages/Patterns.svelte carries the same deviation"
+        },
+        {
+          "element": "fps",
+          "property": "text",
+          "why": "the number is the mirror's live rate; the mock's `24 fps` is sample data"
+        }
+      ],
+      "elements": [
+        {
+          "id": "header",
+          "mock": ".hdr",
+          "app": "header.hdr",
+          "noBoxH": true
+        },
+        {
+          "id": "devchip",
+          "mock": ".devchip",
+          "app": ".hdr [data-role=\"layout-chip\"]",
+          "noBox": true
+        },
+        {
+          "id": "tabs",
+          "mock": ".tabs",
+          "app": "[data-role=\"tabs\"]",
+          "noBox": true
+        },
+        {
+          "id": "tab-active",
+          "mock": ".tabs a.on",
+          "app": "[data-role=\"tabs\"] .tab.active",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Scenes`, the SECOND tab — Patterns · Scenes · Playlist · Settings"
+        },
+        {
+          "id": "fps",
+          "mock": ".fps",
+          "app": "[data-role=\"fps\"]",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "pagebar",
+          "mock": ".pagebar",
+          "app": "[data-role=\"scenes-panel\"] .pagebar",
+          "noBoxH": true
+        },
+        {
+          "id": "lede",
+          "mock": ".pagebar .hint",
+          "app": "[data-role=\"scenes-lede\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Layer patterns, text and images on top of each other. Scenes play like patterns.`"
+        },
+        {
+          "id": "new-scene",
+          "mock": ".pagebar .btn.primary",
+          "app": "[data-role=\"new-scene\"]",
+          "text": true,
+          "note": "mock copy: `+ New scene`"
+        },
+        {
+          "id": "tiles",
+          "mock": ".tiles.c4",
+          "app": "[data-role=\"scenes-grid\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "tile-playing",
+          "mock": ".tile.playing",
+          "app": "[data-role=\"scene-tile\"].playing",
+          "noBoxH": true
+        },
+        {
+          "id": "thumb",
+          "mock": ".tile.playing .thumb",
+          "app": "[data-role=\"scene-tile\"].playing .thumb",
+          "noBoxH": true
+        },
+        {
+          "id": "tile-canvas",
+          "mock": ".tile.playing canvas",
+          "app": "[data-role=\"scene-tile\"].playing canvas",
+          "noBoxH": true
+        },
+        {
+          "id": "pill",
+          "mock": ".tile.playing .pill",
+          "app": "[data-role=\"scene-playing\"]",
+          "text": true,
+          "note": "mock copy: `> playing`, the same pill a playing PATTERN tile wears"
+        },
+        {
+          "id": "tile-meta",
+          "mock": ".tile.playing .meta",
+          "app": "[data-role=\"scene-tile\"].playing .meta",
+          "noBoxH": true
+        },
+        {
+          "id": "tile-name",
+          "mock": ".tile.playing .nm",
+          "app": "[data-role=\"scene-tile\"].playing [data-role=\"scene-tile-name\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Clock overlay`"
+        },
+        {
+          "id": "tile-sub",
+          "mock": ".tile.playing .sub",
+          "app": "[data-role=\"scene-tile\"].playing [data-role=\"scene-tile-layers\"]",
+          "noBox": true,
+          "note": "mock copy: `3 layers`; the seeded stack has five, which is the count the page must print"
+        }
+      ]
+    },
+    "S6d": {
+      "title": "Scenes — mobile 390 px (two up, Edit as a link, the primary an icon)",
+      "width": 390,
+      "height": 860,
+      "app": {
+        "target": "scenes",
+        "route": "#/scenes",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"scenes-grid\"]"
+          },
+          {
+            "sleep": 2000
+          }
+        ]
+      },
+      "allow": [
+        {
+          "element": "pagebar",
+          "property": "background-color",
+          "why": "Jeremy 2026-09-20: a page bar follows the tab's own scheme rather than the mock's darker --bg"
+        }
+      ],
+      "elements": [
+        {
+          "id": "tabs",
+          "mock": ".tabs",
+          "app": "[data-role=\"tabs\"]",
+          "noBox": true
+        },
+        {
+          "id": "tiles",
+          "mock": ".tiles.c2",
+          "app": "[data-role=\"scenes-grid\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "tile",
+          "mock": ".tile.playing",
+          "app": "[data-role=\"scene-tile\"].playing",
+          "noBoxH": true
+        },
+        {
+          "id": "tile-canvas",
+          "mock": ".tile.playing canvas",
+          "app": "[data-role=\"scene-tile\"].playing canvas",
+          "noBoxH": true
+        },
+        {
+          "id": "tile-meta",
+          "mock": ".tile.playing .meta",
+          "app": "[data-role=\"scene-tile\"].playing .meta",
+          "noBoxH": true
+        },
+        {
+          "id": "tile-name",
+          "mock": ".tile.playing .nm",
+          "app": "[data-role=\"scene-tile\"].playing [data-role=\"scene-tile-name\"]",
+          "noBox": true
+        },
+        {
+          "id": "tile-sub",
+          "mock": ".tile.playing .sub",
+          "app": "[data-role=\"scene-tile\"].playing [data-role=\"scene-tile-layers\"]",
+          "noBox": true
+        },
+        {
+          "id": "tile-edit-link",
+          "mock": ".tile.playing .elink",
+          "app": "[data-role=\"scene-tile\"].playing [data-role=\"scene-tile-edit-link\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Edit`, an accent link under the name — the phone has no hover strip"
+        },
+        {
+          "id": "new-scene",
+          "mock": ".btn.primary.icon",
+          "app": "[data-role=\"new-scene\"]",
+          "note": "the primary shrinks to a 32px icon beside the one-line explanation"
+        }
+      ]
+    },
+    "S7": {
+      "title": "Scene editor — a text layer selected, 64x64 matrix",
+      "width": 1200,
+      "height": 1000,
+      "app": {
+        "target": "scenes",
+        "route": "#/scenes",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"scenes-grid\"]"
+          },
+          {
+            "sleep": 1500
+          },
+          {
+            "js": "document.querySelectorAll('[data-role=\"scene-tile-edit\"]')[1].click()"
+          },
+          {
+            "waitFor": "[data-role=\"scene-editor-view\"]:not([hidden])"
+          },
+          {
+            "sleep": 1600
+          },
+          {
+            "click": "[data-role=\"scene-layer\"][data-layer=\"4\"] [data-role=\"scene-layer-pick\"]"
+          },
+          {
+            "sleep": 900
+          }
+        ]
+      },
+      "allow": [
+        {
+          "element": "pat-thumb",
+          "property": "line-height",
+          "why": "a <canvas> is a replaced element: its line-height is inherited and paints nothing. The mock's canvas inherits the frame's 1.45; the app's inherits the thumbnail wrapper's"
+        },
+        {
+          "element": "lrow-sel",
+          "why": "the MOCK's own cascade collision: `.lrow.sel` also matches the `.sel` dropdown primitive (mockups.html :68), which lands `justify-content:space-between`, `white-space:nowrap`, a 1px border on three sides and `line-height:1` on a layer row. The rule the mock INTENDED is `.lrow.sel{background:var(--accent-soft);border-left-color:var(--accent)}` (:1075), which is what is built; `lrow` measures an ordinary row against the mock's own"
+        },
+        {
+          "element": "lcol",
+          "property": "overflow-y",
+          "why": "the mock frame is a fixed-height crop, so its columns cannot scroll; the real three columns each scroll on their own or a long layer list would push Add layer off the screen"
+        },
+        {
+          "element": "ccol",
+          "property": "overflow-y",
+          "why": "same: a fixed-height crop cannot scroll"
+        },
+        {
+          "element": "rcol",
+          "property": "overflow-y",
+          "why": "same: a fixed-height crop cannot scroll"
+        },
+        {
+          "element": "lcol",
+          "property": "overflow-x",
+          "why": "the paired value of overflow-y: `overflow-y:auto` computes `overflow-x:auto` unless it is set, and a column that scrolls sideways is prevented by its own min-width:0 children"
+        },
+        {
+          "element": "ccol",
+          "property": "overflow-x",
+          "why": "see lcol.overflow-x"
+        },
+        {
+          "element": "rcol",
+          "property": "overflow-x",
+          "why": "see lcol.overflow-x"
+        },
+        {
+          "element": "lrow-meta",
+          "property": "text",
+          "why": "the metadata line is the layer's live state — a clock text layer reads the CLOCK, so the mock's `12:48` is sample data; the per-type format is asserted in web/tools/e2e.mjs"
+        },
+        {
+          "element": "savestate",
+          "property": "text",
+          "why": "the mock states a document state (`saved · on device` / `unsaved changes`); which one is live and is asserted by web/tools/device-e2e.mjs instead"
+        },
+        {
+          "element": "preview-dims",
+          "property": "text",
+          "why": "the mock's `64x64 · 24 fps on device` carries the mirror's live frame rate; the wording and the separator match exactly"
+        },
+        {
+          "element": "add-pat-dim",
+          "property": "text",
+          "why": "the mock's own drift: S7 (batch 2) writes the count `2 of 2 used on this device`, S7d (batch 6) `2 of 2 used` with the D4 reason spelled out underneath — and proposal §5.8 names S7d as the frame that specifies this row, so S7d is what is built and S7d asserts the text"
+        },
+        {
+          "element": "cost",
+          "property": "text",
+          "why": "same drift: S7's cost line predates the cap wording; S7d/S7e/S7f all draw `Frame cost: 2 of 2 pattern layers · 24 fps`, which is what is built and what S7d asserts"
+        },
+        {
+          "element": "budget-fill",
+          "property": "box width",
+          "why": "S7 draws the meter at 70 % with the pre-cap cost line; the built meter is `pattern layers / caps.layers`, which at the cap is 100 % — S7d/S7e draw it there"
+        },
+        {
+          "element": "menu",
+          "property": "position",
+          "why": "a popover is placed `fixed` off its anchor so it can dodge the viewport edges (Jeremy, 2026-09-19); the mock is a static `absolute` box inside `.addwrap`"
+        }
+      ],
+      "elements": [
+        {
+          "id": "edhdr",
+          "mock": ".edhdr",
+          "app": "[data-role=\"scene-editor-header\"]",
+          "noBoxW": true
+        },
+        {
+          "id": "back",
+          "mock": ".edhdr .btn.quiet",
+          "app": "[data-role=\"scene-editor-back\"]",
+          "text": true,
+          "note": "mock copy: `<- Scenes`"
+        },
+        {
+          "id": "nameedit",
+          "mock": ".nameedit",
+          "app": "[data-role=\"scene-name\"]",
+          "noBoxW": true
+        },
+        {
+          "id": "savestate",
+          "mock": ".savestate",
+          "app": "[data-role=\"scene-save-state\"]",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "save",
+          "mock": ".edhdr .btn.primary",
+          "app": "[data-role=\"scene-save\"]",
+          "text": true,
+          "note": "mock copy: `Save`"
+        },
+        {
+          "id": "overflow",
+          "mock": ".menuwrap .btn.icon",
+          "app": "[data-role=\"scene-overflow\"]"
+        },
+        {
+          "id": "scene3",
+          "mock": ".scene3",
+          "app": "[data-role=\"scene-editor-view\"] .scene3",
+          "noBoxH": true
+        },
+        {
+          "id": "lcol",
+          "mock": ".lcol",
+          "app": "[data-role=\"scene-layers\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "lcol-label",
+          "mock": ".lcol .slabel",
+          "app": "[data-role=\"scene-layers\"] .slabel",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "lcol-dim",
+          "mock": ".lcol .rdim",
+          "app": "[data-role=\"scene-layers\"] .rdim",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `top = front`"
+        },
+        {
+          "id": "lrow-sel",
+          "mock": ".lrow.sel",
+          "app": "[data-role=\"scene-layer\"].sel",
+          "noBox": true
+        },
+        {
+          "id": "lrow",
+          "mock": ".lrow:not(.sel)",
+          "app": "[data-role=\"scene-layer\"]:not(.sel)",
+          "noBoxH": true
+        },
+        {
+          "id": "lrow-grip",
+          "mock": ".lrow:not(.sel) .hnd",
+          "app": "[data-role=\"scene-layer\"]:not(.sel) .hnd",
+          "noBox": true
+        },
+        {
+          "id": "lrow-eye",
+          "mock": ".lrow:not(.sel) .eye",
+          "app": "[data-role=\"scene-layer\"]:not(.sel) [data-role=\"scene-layer-eye\"]"
+        },
+        {
+          "id": "lrow-ty",
+          "mock": ".lrow:not(.sel) .ty",
+          "app": "[data-role=\"scene-layer\"]:not(.sel) .ty",
+          "noBox": true,
+          "note": "the single-glyph type badge: T text · ▦ sprite · ▤ pattern · ▭ color"
+        },
+        {
+          "id": "lrow-nm",
+          "mock": ".lrow:not(.sel) .nm2",
+          "app": "[data-role=\"scene-layer\"]:not(.sel) .nm2",
+          "noBox": true
+        },
+        {
+          "id": "lrow-meta",
+          "mock": ".lrow:not(.sel) .meta2",
+          "app": "[data-role=\"scene-layer\"]:not(.sel) .meta2",
+          "noBox": true
+        },
+        {
+          "id": "lrow-off",
+          "mock": ".lrow.off",
+          "app": "[data-role=\"scene-layer\"].off",
+          "noBoxH": true
+        },
+        {
+          "id": "addwrap",
+          "mock": ".addwrap",
+          "app": "[data-role=\"scene-layers\"] .addwrap",
+          "noBoxH": true
+        },
+        {
+          "id": "add-layer",
+          "mock": ".addwrap .btn.primary",
+          "app": "[data-role=\"scene-add-layer\"]",
+          "text": true,
+          "note": "mock copy: `+ Add layer ▾`"
+        },
+        {
+          "id": "ccol",
+          "mock": ".ccol",
+          "app": "[data-role=\"scene-preview\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "ccol-label",
+          "mock": ".ccol .slabel",
+          "app": "[data-role=\"scene-preview\"] .slabel",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "preview-dims",
+          "mock": ".ccol .rdim",
+          "app": "[data-role=\"scene-preview-dims\"]",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "pause",
+          "mock": ".ccol .btn.sm.icon",
+          "app": "[data-role=\"scene-pause\"]"
+        },
+        {
+          "id": "stage",
+          "mock": ".stage",
+          "app": "[data-role=\"scene-editor-view\"] .stage"
+        },
+        {
+          "id": "stage-canvas",
+          "mock": ".stage canvas",
+          "app": "[data-role=\"scene-stage\"]"
+        },
+        {
+          "id": "marq",
+          "mock": ".marq",
+          "app": "[data-role=\"scene-marquee\"]",
+          "noBox": true
+        },
+        {
+          "id": "hdl",
+          "mock": ".hdl",
+          "app": "[data-role=\"scene-handle-nw\"]",
+          "noBox": true
+        },
+        {
+          "id": "cost",
+          "mock": ".ccol .hint",
+          "app": "[data-role=\"scene-cost\"]",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "budget",
+          "mock": ".budget",
+          "app": "[data-role=\"scene-editor-view\"] .budget"
+        },
+        {
+          "id": "budget-fill",
+          "mock": ".budget i",
+          "app": "[data-role=\"scene-editor-view\"] .budget i",
+          "noBoxH": true
+        },
+        {
+          "id": "rcol",
+          "mock": ".rcol",
+          "app": "[data-role=\"scene-inspector\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "rcol-label",
+          "mock": ".rcol .slabel",
+          "app": "[data-role=\"scene-inspector\"] .slabel",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Text layer`"
+        },
+        {
+          "id": "irow",
+          "mock": ".rcol .irow",
+          "app": "[data-role=\"scene-inspector\"] .irow",
+          "noBoxH": true
+        },
+        {
+          "id": "ilab",
+          "mock": ".rcol .ilab",
+          "app": "[data-role=\"scene-inspector\"] .ilab",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Name`"
+        },
+        {
+          "id": "name-input",
+          "mock": ".rcol .irow input.inp",
+          "app": "[data-role=\"scene-layer-name\"]"
+        },
+        {
+          "id": "rrow",
+          "mock": ".rrow",
+          "app": "[data-role=\"scene-inspector\"] .rrow",
+          "noBoxH": true
+        },
+        {
+          "id": "rrow-on",
+          "mock": ".rrow.on",
+          "app": "[data-role=\"scene-inspector\"] .rrow.on",
+          "noBoxH": true
+        },
+        {
+          "id": "radio",
+          "mock": ".rrow .radio",
+          "app": "[data-role=\"scene-inspector\"] .rrow .radio"
+        },
+        {
+          "id": "radio-on",
+          "mock": ".rrow.on .radio",
+          "app": "[data-role=\"scene-inspector\"] .rrow.on .radio"
+        },
+        {
+          "id": "lit-input",
+          "mock": ".rrow .inp.xs",
+          "app": "[data-role=\"scene-text-lit\"]"
+        },
+        {
+          "id": "fmt-sel",
+          "mock": ".rrow .sel.xs",
+          "app": "[data-role=\"scene-text-fmt\"]"
+        },
+        {
+          "id": "slot-hint",
+          "mock": ".irow.start .hint",
+          "app": "[data-role=\"scene-inspector\"] .irow.start .hint",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `set from the API or Home Assistant`"
+        },
+        {
+          "id": "font-sel",
+          "mock": ".rcol .sel",
+          "mockNth": 1,
+          "app": "[data-role=\"scene-text-font\"]"
+        },
+        {
+          "id": "swatchbtn",
+          "mock": ".swatchbtn",
+          "app": "[data-role=\"scene-text-color\"]"
+        },
+        {
+          "id": "swatch-chip",
+          "mock": ".swatchbtn i",
+          "app": "[data-role=\"scene-text-color\"] button.swatch"
+        },
+        {
+          "id": "seg",
+          "mock": ".seg.sm",
+          "app": "[data-role=\"scene-text-align\"]"
+        },
+        {
+          "id": "seg-on",
+          "mock": ".seg.sm > div.on",
+          "app": "[data-role=\"scene-align-c\"]",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "seg-off",
+          "mock": ".seg.sm > div",
+          "app": "[data-role=\"scene-align-l\"]",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "scroll-sel",
+          "mock": ".rcol .sel",
+          "mockNth": 2,
+          "app": "[data-role=\"scene-text-scroll\"]"
+        },
+        {
+          "id": "boxrow",
+          "mock": ".boxrow",
+          "app": "[data-role=\"scene-box\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "box-label",
+          "mock": ".boxrow label",
+          "app": "[data-role=\"scene-box\"] label",
+          "noBox": true
+        },
+        {
+          "id": "box-input",
+          "mock": ".boxrow .inp",
+          "app": "[data-role=\"scene-box-x\"]"
+        },
+        {
+          "id": "irule",
+          "mock": ".irule",
+          "app": "[data-role=\"scene-inspector\"] .irule",
+          "noBoxW": true
+        },
+        {
+          "id": "blend-sel",
+          "mock": ".rcol .sel",
+          "mockNth": 3,
+          "app": "[data-role=\"scene-blend\"]"
+        },
+        {
+          "id": "opacity",
+          "mock": ".slider",
+          "app": "[data-role=\"scene-opacity\"]"
+        },
+        {
+          "id": "opacity-value",
+          "mock": ".mono.tiny.dim",
+          "app": "[data-role=\"scene-opacity-value\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `100 %`"
+        },
+        {
+          "id": "delete",
+          "mock": ".btn.del",
+          "app": "[data-role=\"scene-delete-layer\"]",
+          "text": true,
+          "note": "mock copy: `Delete layer` — alone at the bottom, error-tinted, far from Save"
+        }
+      ]
+    },
+    "S7b": {
+      "title": "Scene editor — the inspector with a pattern layer selected (Blend = Normal)",
+      "width": 1200,
+      "height": 1000,
+      "app": {
+        "target": "scenes",
+        "route": "#/scenes",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"scenes-grid\"]"
+          },
+          {
+            "sleep": 1500
+          },
+          {
+            "js": "document.querySelectorAll('[data-role=\"scene-tile-edit\"]')[1].click()"
+          },
+          {
+            "waitFor": "[data-role=\"scene-editor-view\"]:not([hidden])"
+          },
+          {
+            "sleep": 1600
+          },
+          {
+            "click": "[data-role=\"scene-layer\"][data-layer=\"2\"] [data-role=\"scene-layer-pick\"]"
+          },
+          {
+            "sleep": 900
+          }
+        ]
+      },
+      "allow": [
+        {
+          "element": "pat-thumb",
+          "property": "line-height",
+          "why": "a <canvas> is a replaced element: its line-height is inherited and paints nothing. The mock's canvas inherits the frame's 1.45; the app's inherits the thumbnail wrapper's"
+        },
+        {
+          "element": "lrow-sel",
+          "why": "the MOCK's own cascade collision: `.lrow.sel` also matches the `.sel` dropdown primitive (mockups.html :68), which lands `justify-content:space-between`, `white-space:nowrap`, a 1px border on three sides and `line-height:1` on a layer row. The rule the mock INTENDED is `.lrow.sel{background:var(--accent-soft);border-left-color:var(--accent)}` (:1075), which is what is built; `lrow` measures an ordinary row against the mock's own"
+        },
+        {
+          "element": "lcol",
+          "property": "overflow-y",
+          "why": "the mock frame is a fixed-height crop, so its columns cannot scroll; the real three columns each scroll on their own or a long layer list would push Add layer off the screen"
+        },
+        {
+          "element": "ccol",
+          "property": "overflow-y",
+          "why": "same: a fixed-height crop cannot scroll"
+        },
+        {
+          "element": "rcol",
+          "property": "overflow-y",
+          "why": "same: a fixed-height crop cannot scroll"
+        },
+        {
+          "element": "lcol",
+          "property": "overflow-x",
+          "why": "the paired value of overflow-y: `overflow-y:auto` computes `overflow-x:auto` unless it is set, and a column that scrolls sideways is prevented by its own min-width:0 children"
+        },
+        {
+          "element": "ccol",
+          "property": "overflow-x",
+          "why": "see lcol.overflow-x"
+        },
+        {
+          "element": "rcol",
+          "property": "overflow-x",
+          "why": "see lcol.overflow-x"
+        },
+        {
+          "element": "lrow-meta",
+          "property": "text",
+          "why": "the metadata line is the layer's live state — a clock text layer reads the CLOCK, so the mock's `12:48` is sample data; the per-type format is asserted in web/tools/e2e.mjs"
+        },
+        {
+          "element": "savestate",
+          "property": "text",
+          "why": "the mock states a document state (`saved · on device` / `unsaved changes`); which one is live and is asserted by web/tools/device-e2e.mjs instead"
+        },
+        {
+          "element": "preview-dims",
+          "property": "text",
+          "why": "the mock's `64x64 · 24 fps on device` carries the mirror's live frame rate; the wording and the separator match exactly"
+        },
+        {
+          "element": "controls",
+          "property": "text",
+          "why": "the mock's `Cell size` / `Speed` are the seeded pattern's exported control labels; the same two controls are read off the compiled program"
+        },
+        {
+          "element": "controls",
+          "property": "grid-template-columns",
+          "why": "the mock draws a control row as two cells with the slider and its number inside the second; the app mounts `components/Controls.svelte` — the editor rail's own component, THREE cells so every row's slider starts and ends on the same two lines — on the inspector's 86px/10px rhythm. The geometry is identical; only the track is a grid cell rather than a flex child"
+        },
+        {
+          "element": "pat-name",
+          "property": "overflow-x",
+          "why": "a stored pattern's name is arbitrary and the column is 320px, so the name ellipsizes; the mock's sample name fits"
+        },
+        {
+          "element": "pat-name",
+          "property": "overflow-y",
+          "why": "see pat-name.overflow-x"
+        },
+        {
+          "element": "pat-name",
+          "property": "text-overflow",
+          "why": "see pat-name.overflow-x"
+        }
+      ],
+      "elements": [
+        {
+          "id": "rcol-label",
+          "mock": ".rcol .slabel",
+          "app": "[data-role=\"scene-inspector\"] .slabel",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Pattern layer`"
+        },
+        {
+          "id": "patrow",
+          "mock": ".irow.wide > div:last-child",
+          "app": "[data-role=\"scene-pattern\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "pat-thumb",
+          "mock": ".irow.wide canvas",
+          "app": "[data-role=\"scene-pattern\"] canvas"
+        },
+        {
+          "id": "pat-name",
+          "mock": ".irow.wide > div:last-child > div > div",
+          "app": "[data-role=\"scene-pattern-name\"]",
+          "noBox": true
+        },
+        {
+          "id": "pat-shape",
+          "mock": ".irow.wide .hint",
+          "app": "[data-role=\"scene-pattern-shape\"]",
+          "noBox": true
+        },
+        {
+          "id": "pat-change",
+          "mock": ".irow.wide .btn.sm",
+          "app": "[data-role=\"scene-pattern-change\"]",
+          "text": true,
+          "note": "mock copy: `Change…`"
+        },
+        {
+          "id": "controls-label",
+          "mock": ".rhead .slabel",
+          "mockNth": 1,
+          "app": "[data-role=\"scene-controls-label\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Controls`"
+        },
+        {
+          "id": "controls",
+          "mock": ".rcol .irow",
+          "mockNth": 1,
+          "app": "[data-role=\"scene-controls\"] .control",
+          "noBoxH": true
+        },
+        {
+          "id": "ramp",
+          "mock": ".ramp",
+          "app": "[data-role=\"scene-ramp\"]",
+          "noBoxW": true
+        },
+        {
+          "id": "ramp-edit",
+          "mock": ".lnk",
+          "app": "[data-role=\"scene-ramp-edit\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Edit…`"
+        },
+        {
+          "id": "boxrow",
+          "mock": ".boxrow",
+          "app": "[data-role=\"scene-box\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "fit-sel",
+          "mock": ".rcol .sel",
+          "app": "[data-role=\"scene-fit\"]"
+        },
+        {
+          "id": "blend-sel",
+          "mock": ".rcol .sel",
+          "mockNth": 1,
+          "app": "[data-role=\"scene-blend\"]"
+        },
+        {
+          "id": "key-sel",
+          "mock": ".rcol .sel",
+          "mockNth": 2,
+          "app": "[data-role=\"scene-key\"]"
+        },
+        {
+          "id": "key-hint",
+          "mock": ".irow.start .hint",
+          "app": "[data-role=\"scene-inspector\"] .irow.start .hint",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `nothing · black pixels · by brightness`"
+        },
+        {
+          "id": "opacity",
+          "mock": ".slider",
+          "mockNth": 2,
+          "app": "[data-role=\"scene-opacity\"]"
+        },
+        {
+          "id": "opacity-value",
+          "mock": ".mono.tiny.dim",
+          "app": "[data-role=\"scene-opacity-value\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `60 %`"
+        }
+      ]
+    },
+    "S7g": {
+      "title": "Pattern layer — a non-Normal blend, ramp stops, the projection row",
+      "width": 1200,
+      "height": 1000,
+      "app": {
+        "target": "scenes",
+        "route": "#/scenes",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"scenes-grid\"]"
+          },
+          {
+            "sleep": 1500
+          },
+          {
+            "js": "document.querySelectorAll('[data-role=\"scene-tile-edit\"]')[1].click()"
+          },
+          {
+            "waitFor": "[data-role=\"scene-editor-view\"]:not([hidden])"
+          },
+          {
+            "sleep": 1600
+          },
+          {
+            "click": "[data-role=\"scene-layer\"][data-layer=\"0\"] [data-role=\"scene-layer-pick\"]"
+          },
+          {
+            "sleep": 900
+          }
+        ]
+      },
+      "allow": [
+        {
+          "element": "pat-thumb",
+          "property": "line-height",
+          "why": "a <canvas> is a replaced element: its line-height is inherited and paints nothing. The mock's canvas inherits the frame's 1.45; the app's inherits the thumbnail wrapper's"
+        },
+        {
+          "element": "lrow-sel",
+          "why": "the MOCK's own cascade collision: `.lrow.sel` also matches the `.sel` dropdown primitive (mockups.html :68), which lands `justify-content:space-between`, `white-space:nowrap`, a 1px border on three sides and `line-height:1` on a layer row. The rule the mock INTENDED is `.lrow.sel{background:var(--accent-soft);border-left-color:var(--accent)}` (:1075), which is what is built; `lrow` measures an ordinary row against the mock's own"
+        },
+        {
+          "element": "lcol",
+          "property": "overflow-y",
+          "why": "the mock frame is a fixed-height crop, so its columns cannot scroll; the real three columns each scroll on their own or a long layer list would push Add layer off the screen"
+        },
+        {
+          "element": "ccol",
+          "property": "overflow-y",
+          "why": "same: a fixed-height crop cannot scroll"
+        },
+        {
+          "element": "rcol",
+          "property": "overflow-y",
+          "why": "same: a fixed-height crop cannot scroll"
+        },
+        {
+          "element": "lcol",
+          "property": "overflow-x",
+          "why": "the paired value of overflow-y: `overflow-y:auto` computes `overflow-x:auto` unless it is set, and a column that scrolls sideways is prevented by its own min-width:0 children"
+        },
+        {
+          "element": "ccol",
+          "property": "overflow-x",
+          "why": "see lcol.overflow-x"
+        },
+        {
+          "element": "rcol",
+          "property": "overflow-x",
+          "why": "see lcol.overflow-x"
+        },
+        {
+          "element": "lrow-meta",
+          "property": "text",
+          "why": "the metadata line is the layer's live state — a clock text layer reads the CLOCK, so the mock's `12:48` is sample data; the per-type format is asserted in web/tools/e2e.mjs"
+        },
+        {
+          "element": "savestate",
+          "property": "text",
+          "why": "the mock states a document state (`saved · on device` / `unsaved changes`); which one is live and is asserted by web/tools/device-e2e.mjs instead"
+        },
+        {
+          "element": "preview-dims",
+          "property": "text",
+          "why": "the mock's `64x64 · 24 fps on device` carries the mirror's live frame rate; the wording and the separator match exactly"
+        }
+      ],
+      "elements": [
+        {
+          "id": "rcol-label",
+          "mock": ".rcol .slabel",
+          "app": "[data-role=\"scene-inspector\"] .slabel",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "pat-thumb",
+          "mock": ".irow.wide canvas",
+          "app": "[data-role=\"scene-pattern\"] canvas"
+        },
+        {
+          "id": "pat-shape",
+          "mock": ".irow.wide .hint",
+          "app": "[data-role=\"scene-pattern-shape\"]",
+          "noBox": true
+        },
+        {
+          "id": "hairline",
+          "mock": ".hairline",
+          "app": "[data-role=\"scene-inspector\"] .hairline",
+          "noBoxW": true
+        },
+        {
+          "id": "projrow",
+          "mock": ".projrow",
+          "app": "[data-role=\"scene-inspector\"] [data-role=\"projection-row\"]",
+          "noBoxW": true
+        },
+        {
+          "id": "proj-label",
+          "mock": ".projrow .pl",
+          "app": "[data-role=\"scene-inspector\"] [data-role=\"projection-row\"] .pl",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Projection`"
+        },
+        {
+          "id": "proj-value",
+          "mock": ".projrow .pv",
+          "app": "[data-role=\"scene-inspector\"] [data-role=\"projection-value\"]",
+          "noBox": true
+        },
+        {
+          "id": "proj-change",
+          "mock": ".projrow .pa",
+          "app": "[data-role=\"scene-inspector\"] [data-role=\"projection-change\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `change`"
+        },
+        {
+          "id": "gradbar",
+          "mock": ".gradbar",
+          "app": "[data-role=\"scene-ramp\"]",
+          "noBoxW": true
+        },
+        {
+          "id": "stoprow",
+          "mock": ".stoprow",
+          "app": "[data-role=\"scene-ramp-stops\"]",
+          "noBoxW": true
+        },
+        {
+          "id": "stopmk",
+          "mock": ".stopmk",
+          "app": "[data-role=\"scene-ramp-stop\"]",
+          "noBox": true
+        },
+        {
+          "id": "stopmk-on",
+          "mock": ".stopmk.on",
+          "app": "[data-role=\"scene-ramp-stop\"].on",
+          "noBox": true
+        },
+        {
+          "id": "ramp-edit",
+          "mock": ".irow.wide .btn.sm",
+          "mockNth": 1,
+          "app": "[data-role=\"scene-ramp-edit\"]",
+          "text": true,
+          "note": "mock copy: `Edit stops…`"
+        },
+        {
+          "id": "ramp-count",
+          "mock": ".irow.wide .hint",
+          "mockNth": 1,
+          "app": "[data-role=\"scene-inspector\"] .editrow .hint",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `4 stops · the same editor as Settings › Output › Palette`"
+        },
+        {
+          "id": "boxrow",
+          "mock": ".boxrow",
+          "app": "[data-role=\"scene-box\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "fit-sel",
+          "mock": ".rcol .sel",
+          "app": "[data-role=\"scene-fit\"]"
+        },
+        {
+          "id": "blend-sel",
+          "mock": ".rcol .sel",
+          "mockNth": 1,
+          "app": "[data-role=\"scene-blend\"]"
+        },
+        {
+          "id": "opacity",
+          "mock": ".slider",
+          "mockNth": 2,
+          "app": "[data-role=\"scene-opacity\"]"
+        },
+        {
+          "id": "opacity-value",
+          "mock": ".mono.tiny.dim",
+          "app": "[data-role=\"scene-opacity-value\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `60 %` — opacity stays when the key row goes"
+        },
+        {
+          "id": "delete",
+          "mock": ".btn.del",
+          "app": "[data-role=\"scene-delete-layer\"]",
+          "text": true
+        }
+      ]
+    },
+    "S7d": {
+      "title": "Scene editor — Add layer at the pattern-layer cap (D4's one disabled control)",
+      "width": 1200,
+      "height": 1000,
+      "app": {
+        "target": "scenes",
+        "route": "#/scenes",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"scenes-grid\"]"
+          },
+          {
+            "sleep": 1500
+          },
+          {
+            "js": "document.querySelectorAll('[data-role=\"scene-tile-edit\"]')[1].click()"
+          },
+          {
+            "waitFor": "[data-role=\"scene-editor-view\"]:not([hidden])"
+          },
+          {
+            "sleep": 1600
+          },
+          {
+            "click": "[data-role=\"scene-add-layer\"]"
+          },
+          {
+            "sleep": 500
+          }
+        ]
+      },
+      "allow": [
+        {
+          "element": "pat-thumb",
+          "property": "line-height",
+          "why": "a <canvas> is a replaced element: its line-height is inherited and paints nothing. The mock's canvas inherits the frame's 1.45; the app's inherits the thumbnail wrapper's"
+        },
+        {
+          "element": "lrow-sel",
+          "why": "the MOCK's own cascade collision: `.lrow.sel` also matches the `.sel` dropdown primitive (mockups.html :68), which lands `justify-content:space-between`, `white-space:nowrap`, a 1px border on three sides and `line-height:1` on a layer row. The rule the mock INTENDED is `.lrow.sel{background:var(--accent-soft);border-left-color:var(--accent)}` (:1075), which is what is built; `lrow` measures an ordinary row against the mock's own"
+        },
+        {
+          "element": "lcol",
+          "property": "overflow-y",
+          "why": "the mock frame is a fixed-height crop, so its columns cannot scroll; the real three columns each scroll on their own or a long layer list would push Add layer off the screen"
+        },
+        {
+          "element": "ccol",
+          "property": "overflow-y",
+          "why": "same: a fixed-height crop cannot scroll"
+        },
+        {
+          "element": "rcol",
+          "property": "overflow-y",
+          "why": "same: a fixed-height crop cannot scroll"
+        },
+        {
+          "element": "lcol",
+          "property": "overflow-x",
+          "why": "the paired value of overflow-y: `overflow-y:auto` computes `overflow-x:auto` unless it is set, and a column that scrolls sideways is prevented by its own min-width:0 children"
+        },
+        {
+          "element": "ccol",
+          "property": "overflow-x",
+          "why": "see lcol.overflow-x"
+        },
+        {
+          "element": "rcol",
+          "property": "overflow-x",
+          "why": "see lcol.overflow-x"
+        },
+        {
+          "element": "lrow-meta",
+          "property": "text",
+          "why": "the metadata line is the layer's live state — a clock text layer reads the CLOCK, so the mock's `12:48` is sample data; the per-type format is asserted in web/tools/e2e.mjs"
+        },
+        {
+          "element": "savestate",
+          "property": "text",
+          "why": "the mock states a document state (`saved · on device` / `unsaved changes`); which one is live and is asserted by web/tools/device-e2e.mjs instead"
+        },
+        {
+          "element": "preview-dims",
+          "property": "text",
+          "why": "the mock's `64x64 · 24 fps on device` carries the mirror's live frame rate; the wording and the separator match exactly"
+        },
+        {
+          "element": "menu",
+          "property": "position",
+          "why": "a popover is placed `fixed` off its anchor so it can dodge the viewport edges (Jeremy, 2026-09-19); the mock is a static `absolute` box inside `.addwrap`"
+        },
+        {
+          "element": "cost",
+          "property": "text",
+          "why": "the measured frame rate is the mirror's; the mock's `24 fps` is sample data and the rest of the sentence matches exactly"
+        },
+        {
+          "element": "menu",
+          "property": "box width",
+          "why": "S7d is a 320px CROP of the layers column, so its menu spans 296px; the real column is the mock's own 260px (S7 `.lcol`) and the menu spans 236px inside it"
+        },
+        {
+          "element": "add-layer",
+          "property": "box width",
+          "why": "see menu.box width — the crop's column is 320px wide, the real one 260px"
+        },
+        {
+          "element": "cost",
+          "property": "margin-top",
+          "why": "the crop stacks the cost line straight under a spacer; under the real preview it carries the mock's own `margin-top:12px` (S7)"
+        },
+        {
+          "element": "reason",
+          "property": "box height",
+          "why": "the reason wraps to one more line in the real 236px column than in S7d's 320px crop — see menu.box width"
+        },
+        {
+          "element": "budget",
+          "property": "max-width",
+          "why": "the crop sets `max-width:none` because it has no 460px stage to line up with; the real meter is the stage's width (S7 `.budget{max-width:460px}`)"
+        }
+      ],
+      "elements": [
+        {
+          "id": "lcol-label",
+          "mock": ".lcol .slabel",
+          "app": "[data-role=\"scene-layers\"] .slabel",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "lcol-dim",
+          "mock": ".lcol .rdim",
+          "app": "[data-role=\"scene-layers\"] .rdim",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "add-layer",
+          "mock": ".addwrap .btn.primary",
+          "app": "[data-role=\"scene-add-layer\"]",
+          "text": true
+        },
+        {
+          "id": "menu",
+          "mock": ".menu.full",
+          "app": "[data-role=\"scene-add-menu\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "add-pat",
+          "mock": ".mi.dis",
+          "app": "[data-role=\"scene-add-pat\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `▤ Pattern` — greyed, and the ONE control in the app that is disabled rather than absent"
+        },
+        {
+          "id": "add-pat-dim",
+          "mock": ".mi.dis .mdim",
+          "app": "[data-role=\"scene-add-pat\"] .mdim",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `2 of 2 used`"
+        },
+        {
+          "id": "reason",
+          "mock": ".menu .reason",
+          "app": "[data-role=\"scene-add-menu\"] .reason",
+          "text": true,
+          "noBoxW": true,
+          "note": "mock copy: `this device fits 2 pattern layers; text and sprite and color layers are free` — the sentence, not just the number, and the same words go on `data-reason`"
+        },
+        {
+          "id": "add-text",
+          "mock": ".menu .mi.hi",
+          "app": "[data-role=\"scene-add-text\"]",
+          "text": true,
+          "hoverOnly": true,
+          "noBox": true,
+          "note": "mock copy: `T Text`"
+        },
+        {
+          "id": "add-sprite",
+          "mock": ".menu .mi",
+          "mockNth": 2,
+          "app": "[data-role=\"scene-add-sprite\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `▦ Sprite`"
+        },
+        {
+          "id": "add-color",
+          "mock": ".menu .mi",
+          "mockNth": 3,
+          "app": "[data-role=\"scene-add-color\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `▭ Color`"
+        },
+        {
+          "id": "cost",
+          "mock": ".lcol .hint",
+          "app": "[data-role=\"scene-cost\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Frame cost: 2 of 2 pattern layers · 24 fps`"
+        },
+        {
+          "id": "budget",
+          "mock": ".lcol .budget",
+          "app": "[data-role=\"scene-editor-view\"] .budget",
+          "noBoxW": true
+        },
+        {
+          "id": "budget-fill",
+          "mock": ".lcol .budget i",
+          "app": "[data-role=\"scene-editor-view\"] .budget i",
+          "noBoxW": true
+        }
+      ]
+    },
+    "S7e": {
+      "title": "Scene editor — a color layer, a hidden layer and a drag in progress",
+      "width": 1200,
+      "height": 1000,
+      "app": {
+        "target": "scenes",
+        "route": "#/scenes",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"scenes-grid\"]"
+          },
+          {
+            "sleep": 1500
+          },
+          {
+            "js": "document.querySelectorAll('[data-role=\"scene-tile-edit\"]')[1].click()"
+          },
+          {
+            "waitFor": "[data-role=\"scene-editor-view\"]:not([hidden])"
+          },
+          {
+            "sleep": 1600
+          },
+          {
+            "click": "[data-role=\"scene-layer\"][data-layer=\"1\"] [data-role=\"scene-layer-pick\"]"
+          },
+          {
+            "sleep": 900
+          },
+          {
+            "click": "[data-role=\"scene-layer\"][data-layer=\"1\"] [data-role=\"scene-layer-eye\"]"
+          },
+          {
+            "sleep": 300
+          },
+          {
+            "click": "[data-role=\"scene-layer\"][data-layer=\"3\"] [data-role=\"scene-layer-eye\"]"
+          },
+          {
+            "sleep": 400
+          },
+          {
+            "js": "(() => {const v=document.querySelector('[data-role=\"scene-editor-view\"]');const rows=[...v.querySelectorAll('[data-role=\"scene-layer\"]')];const g=rows[2].querySelector('[data-role=\"scene-layer-grip\"]');const r=rows[1].getBoundingClientRect();const o={bubbles:true,pointerId:1,pointerType:'mouse',isPrimary:true,buttons:1};g.dispatchEvent(new PointerEvent('pointerdown',{...o,clientX:r.left+6,clientY:r.top+r.height/2}));g.dispatchEvent(new PointerEvent('pointermove',{...o,clientX:r.left+6,clientY:r.top+2}));})()"
+          },
+          {
+            "sleep": 300
+          }
+        ]
+      },
+      "elements": [
+        {
+          "id": "rcol-label",
+          "mock": ".rcol .slabel",
+          "app": "[data-role=\"scene-inspector\"] .slabel",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Color layer`"
+        },
+        {
+          "id": "lrow-off",
+          "mock": ".lrow.off",
+          "app": "[data-role=\"scene-layer\"].off",
+          "noBoxH": true
+        },
+        {
+          "id": "lrow-off-meta",
+          "mock": ".lrow.off .meta2",
+          "app": "[data-role=\"scene-layer\"].off .meta2",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `hidden` — a hidden layer keeps its place and says so"
+        },
+        {
+          "id": "lrow-off-eye",
+          "mock": ".lrow.off .eye",
+          "app": "[data-role=\"scene-layer\"].off [data-role=\"scene-layer-eye\"]"
+        },
+        {
+          "id": "lrow-sel",
+          "mock": ".lrow.sel",
+          "app": "[data-role=\"scene-layer\"].sel",
+          "noBox": true
+        },
+        {
+          "id": "name-input",
+          "mock": ".rcol input.inp",
+          "app": "[data-role=\"scene-layer-name\"]"
+        },
+        {
+          "id": "swatchbtn",
+          "mock": ".swatchbtn",
+          "app": "[data-role=\"scene-wash-color\"]"
+        },
+        {
+          "id": "swatch-chip",
+          "mock": ".swatchbtn i",
+          "app": "[data-role=\"scene-wash-color\"] button.swatch"
+        },
+        {
+          "id": "boxrow",
+          "mock": ".boxrow",
+          "app": "[data-role=\"scene-box\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "irule",
+          "mock": ".irule",
+          "app": "[data-role=\"scene-inspector\"] .irule",
+          "noBoxW": true
+        },
+        {
+          "id": "blend-sel",
+          "mock": ".rcol .sel",
+          "app": "[data-role=\"scene-blend\"]"
+        },
+        {
+          "id": "opacity",
+          "mock": ".slider",
+          "app": "[data-role=\"scene-opacity\"]"
+        },
+        {
+          "id": "delete",
+          "mock": ".btn.del",
+          "app": "[data-role=\"scene-delete-layer\"]",
+          "text": true
+        },
+        {
+          "id": "cost",
+          "mock": ".ccol .hint",
+          "app": "[data-role=\"scene-cost\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Frame cost: 2 of 2 pattern layers · 24 fps`"
+        },
+        {
+          "id": "budget-fill",
+          "mock": ".budget i",
+          "app": "[data-role=\"scene-editor-view\"] .budget i",
+          "noBoxH": true
+        },
+        {
+          "id": "lrow-drag",
+          "mock": ".lrow.drag",
+          "app": "[data-role=\"scene-layer\"].drag",
+          "noBoxH": true
+        },
+        {
+          "id": "dropline",
+          "mock": ".dropline",
+          "app": "[data-role=\"scene-drop\"]",
+          "noBoxW": true,
+          "note": "the destination is a 2px accent rule BETWEEN rows — the list never reflows under the cursor"
+        }
+      ],
+      "allow": [
+        {
+          "element": "pat-thumb",
+          "property": "line-height",
+          "why": "a <canvas> is a replaced element: its line-height is inherited and paints nothing. The mock's canvas inherits the frame's 1.45; the app's inherits the thumbnail wrapper's"
+        },
+        {
+          "element": "lrow-sel",
+          "why": "the MOCK's own cascade collision: `.lrow.sel` also matches the `.sel` dropdown primitive (mockups.html :68), which lands `justify-content:space-between`, `white-space:nowrap`, a 1px border on three sides and `line-height:1` on a layer row. The rule the mock INTENDED is `.lrow.sel{background:var(--accent-soft);border-left-color:var(--accent)}` (:1075), which is what is built; `lrow` measures an ordinary row against the mock's own"
+        },
+        {
+          "element": "lcol",
+          "property": "overflow-y",
+          "why": "the mock frame is a fixed-height crop, so its columns cannot scroll; the real three columns each scroll on their own or a long layer list would push Add layer off the screen"
+        },
+        {
+          "element": "ccol",
+          "property": "overflow-y",
+          "why": "same: a fixed-height crop cannot scroll"
+        },
+        {
+          "element": "rcol",
+          "property": "overflow-y",
+          "why": "same: a fixed-height crop cannot scroll"
+        },
+        {
+          "element": "lcol",
+          "property": "overflow-x",
+          "why": "the paired value of overflow-y: `overflow-y:auto` computes `overflow-x:auto` unless it is set, and a column that scrolls sideways is prevented by its own min-width:0 children"
+        },
+        {
+          "element": "ccol",
+          "property": "overflow-x",
+          "why": "see lcol.overflow-x"
+        },
+        {
+          "element": "rcol",
+          "property": "overflow-x",
+          "why": "see lcol.overflow-x"
+        },
+        {
+          "element": "lrow-meta",
+          "property": "text",
+          "why": "the metadata line is the layer's live state — a clock text layer reads the CLOCK, so the mock's `12:48` is sample data; the per-type format is asserted in web/tools/e2e.mjs"
+        },
+        {
+          "element": "savestate",
+          "property": "text",
+          "why": "the mock states a document state (`saved · on device` / `unsaved changes`); which one is live and is asserted by web/tools/device-e2e.mjs instead"
+        },
+        {
+          "element": "preview-dims",
+          "property": "text",
+          "why": "the mock's `64x64 · 24 fps on device` carries the mirror's live frame rate; the wording and the separator match exactly"
+        },
+        {
+          "element": "cost",
+          "property": "text",
+          "why": "the measured frame rate is the mirror's; the rest of the sentence matches exactly"
+        }
+      ]
+    },
+    "S7f": {
+      "title": "Scene editor — mobile 390 px, panes stacked, the preview sticky",
+      "width": 390,
+      "height": 1100,
+      "app": {
+        "target": "scenes",
+        "route": "#/scenes",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"scenes-grid\"]"
+          },
+          {
+            "sleep": 1500
+          },
+          {
+            "js": "document.querySelectorAll('[data-role=\"scene-tile-edit\"]')[1].click()"
+          },
+          {
+            "waitFor": "[data-role=\"scene-editor-view\"]:not([hidden])"
+          },
+          {
+            "sleep": 1600
+          },
+          {
+            "click": "[data-role=\"scene-layer\"][data-layer=\"4\"] [data-role=\"scene-layer-pick\"]"
+          },
+          {
+            "sleep": 900
+          }
+        ]
+      },
+      "allow": [
+        {
+          "element": "pat-thumb",
+          "property": "line-height",
+          "why": "a <canvas> is a replaced element: its line-height is inherited and paints nothing. The mock's canvas inherits the frame's 1.45; the app's inherits the thumbnail wrapper's"
+        },
+        {
+          "element": "lrow-sel",
+          "why": "the MOCK's own cascade collision: `.lrow.sel` also matches the `.sel` dropdown primitive (mockups.html :68), which lands `justify-content:space-between`, `white-space:nowrap`, a 1px border on three sides and `line-height:1` on a layer row. The rule the mock INTENDED is `.lrow.sel{background:var(--accent-soft);border-left-color:var(--accent)}` (:1075), which is what is built; `lrow` measures an ordinary row against the mock's own"
+        },
+        {
+          "element": "lcol",
+          "property": "overflow-y",
+          "why": "the mock frame is a fixed-height crop, so its columns cannot scroll; the real three columns each scroll on their own or a long layer list would push Add layer off the screen"
+        },
+        {
+          "element": "ccol",
+          "property": "overflow-y",
+          "why": "same: a fixed-height crop cannot scroll"
+        },
+        {
+          "element": "rcol",
+          "property": "overflow-y",
+          "why": "same: a fixed-height crop cannot scroll"
+        },
+        {
+          "element": "lcol",
+          "property": "overflow-x",
+          "why": "the paired value of overflow-y: `overflow-y:auto` computes `overflow-x:auto` unless it is set, and a column that scrolls sideways is prevented by its own min-width:0 children"
+        },
+        {
+          "element": "ccol",
+          "property": "overflow-x",
+          "why": "see lcol.overflow-x"
+        },
+        {
+          "element": "rcol",
+          "property": "overflow-x",
+          "why": "see lcol.overflow-x"
+        },
+        {
+          "element": "lrow-meta",
+          "property": "text",
+          "why": "the metadata line is the layer's live state — a clock text layer reads the CLOCK, so the mock's `12:48` is sample data; the per-type format is asserted in web/tools/e2e.mjs"
+        },
+        {
+          "element": "savestate",
+          "property": "text",
+          "why": "the mock states a document state (`saved · on device` / `unsaved changes`); which one is live and is asserted by web/tools/device-e2e.mjs instead"
+        },
+        {
+          "element": "preview-dims",
+          "property": "text",
+          "why": "the mock's `64x64 · 24 fps on device` carries the mirror's live frame rate; the wording and the separator match exactly"
+        }
+      ],
+      "elements": [
+        {
+          "id": "edhdr",
+          "mock": ".edhdr",
+          "app": "[data-role=\"scene-editor-header\"]",
+          "noBoxW": true
+        },
+        {
+          "id": "back",
+          "mock": ".edhdr .btn.quiet.icon",
+          "app": "[data-role=\"scene-editor-back\"]"
+        },
+        {
+          "id": "nameedit",
+          "mock": ".nameedit",
+          "app": "[data-role=\"scene-name\"]",
+          "noBoxW": true
+        },
+        {
+          "id": "save",
+          "mock": ".edhdr .btn.primary",
+          "app": "[data-role=\"scene-save\"]",
+          "text": true
+        },
+        {
+          "id": "overflow",
+          "mock": ".edhdr .btn.icon:last-child",
+          "app": "[data-role=\"scene-overflow\"]"
+        },
+        {
+          "id": "sticky",
+          "mock": ".rsec.sticky",
+          "app": "[data-role=\"scene-preview\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "preview-label",
+          "mock": ".rsec.sticky .slabel",
+          "app": "[data-role=\"scene-preview\"] .slabel",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "preview-dims",
+          "mock": ".rsec.sticky .rdim",
+          "app": "[data-role=\"scene-preview-dims\"]",
+          "noBox": true
+        },
+        {
+          "id": "stage",
+          "mock": ".stage",
+          "app": "[data-role=\"scene-editor-view\"] .stage"
+        },
+        {
+          "id": "stage-canvas",
+          "mock": ".stage canvas",
+          "app": "[data-role=\"scene-stage\"]"
+        },
+        {
+          "id": "budget",
+          "mock": ".budget",
+          "app": "[data-role=\"scene-editor-view\"] .budget"
+        },
+        {
+          "id": "lcol",
+          "mock": ".rsec",
+          "mockNth": 1,
+          "app": "[data-role=\"scene-layers\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "lcol-label",
+          "mock": ".rsec .slabel",
+          "mockNth": 1,
+          "app": "[data-role=\"scene-layers\"] .slabel",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "lrow",
+          "mock": ".lrow:not(.sel)",
+          "app": "[data-role=\"scene-layer\"]:not(.sel)",
+          "noBoxH": true
+        },
+        {
+          "id": "add-layer",
+          "mock": ".addwrap .btn.primary",
+          "app": "[data-role=\"scene-add-layer\"]",
+          "text": true
+        },
+        {
+          "id": "rcol",
+          "mock": ".rsec",
+          "mockNth": 2,
+          "app": "[data-role=\"scene-inspector\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "rcol-label",
+          "mock": ".rsec .slabel",
+          "mockNth": 2,
+          "app": "[data-role=\"scene-inspector\"] .slabel",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "boxrow",
+          "mock": ".boxrow",
+          "app": "[data-role=\"scene-box\"]",
+          "noBoxH": true
         }
       ]
     }

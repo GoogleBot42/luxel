@@ -135,10 +135,14 @@
 .scenes .lrow .eye {
   flex: none;
   display: block;
+  width: 14px;
+  height: 14px;
   padding: 0;
   border: none;
+  border-radius: 0;
   background: transparent;
   color: var(--text-dim);
+  overflow: hidden;
 }
 
 .scenes .lrow .eye:hover {
@@ -181,17 +185,25 @@
   justify-content: center;
 }
 
-/* the menu spans the column rather than the global 214px */
-.menu.full {
-  left: 0;
-  right: 0;
-  width: auto;
+/* The add-layer menu spans the LAYERS column rather than the global 214px
+   (mock `.menu.full{left:0;right:0;width:auto}`). `components/Popover.svelte`
+   places it `fixed` off the button, so the span is a width: the column is
+   260px with 12px of padding either side. */
+.scenes .addwrap .menu {
+  width: 236px;
+}
+
+@media (max-width: 600px) {
+  /* stacked, the column is the viewport less its 16px padding */
+  .scenes .addwrap .menu {
+    width: calc(100vw - 32px);
+  }
 }
 
 /* D4's ONE deliberate disabled control: the layer budget, greyed WITH its
    count and its reason (S7d). `data-reason` carries the same words. */
-.menu .mi.dis,
-.menu .mi.dis:hover {
+.scenes .menu .mi.dis,
+.scenes .menu .mi.dis:hover {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -201,14 +213,14 @@
   cursor: default;
 }
 
-.menu .mdim {
+.scenes .menu .mdim {
   margin-left: auto;
   font: 10px/1 var(--mono);
   color: var(--text-dim);
   white-space: nowrap;
 }
 
-.menu .reason {
+.scenes .menu .reason {
   padding: 1px 10px 7px;
   font-size: 11.5px;
   line-height: 1.4;
@@ -221,7 +233,6 @@
 .scenes .stage {
   position: relative;
   width: 460px;
-  max-width: 100%;
   line-height: 0;
 }
 
@@ -328,6 +339,10 @@
 }
 
 .scenes .lnk {
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
   font-size: 12.5px;
   color: var(--text-dim);
   white-space: nowrap;
@@ -354,6 +369,7 @@
 
 .scenes .rrow .radio {
   position: relative;
+  white-space: normal;
   flex: none;
   width: 13px;
   height: 13px;
@@ -594,7 +610,6 @@
 }
 
 .scenes .tile {
-  position: relative;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg-panel);
@@ -654,6 +669,7 @@
 
 /* S6d: `Edit` as a small accent link under the name on a phone */
 .scenes .elink {
+  border-radius: 0;
   display: none;
   margin-top: 5px;
   padding: 0;
@@ -765,7 +781,7 @@
   .scenes .ccol,
   .scenes .rcol {
     width: 100%;
-    flex: none;
+    flex: 0 1 auto;
     padding: 14px 16px;
     border: 0;
     border-bottom: 1px solid var(--border);
@@ -792,5 +808,15 @@
 
   .scenes .budget {
     max-width: none;
+  }
+
+  /* S7f's header is one 44px row: [icon back] [name] [Save] [⋯] */
+  .scenes .editor-header .back {
+    width: 32px;
+    padding: 0;
+  }
+
+  .scenes .editor-header .back .backlabel {
+    display: none;
   }
 }

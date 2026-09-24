@@ -128,8 +128,11 @@
     <div class="pagebar">
       <div class="hint" data-role="scenes-lede">{LEDE}<span class="second">{LEDE_2}</span></div>
       <div class="spacer"></div>
+      <!-- ONE flex item, not two: `.btn`'s 6px gap would otherwise land
+           between the `+` and the label and widen the button past the mock's
+           (S6 `.pagebar .btn.primary`). The phone drops the label (S6d). -->
       <button class="btn primary" data-role="new-scene" on:click={() => void create()}
-        ><span class="plus">+</span><span class="newlabel"> New scene</span></button
+        ><span>+ <span class="newlabel">New scene</span></span></button
       >
     </div>
     <SceneGrid

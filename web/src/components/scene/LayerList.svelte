@@ -39,7 +39,6 @@
 
   let addOpen = false;
   let addBtn: HTMLElement | null = null;
-  let addW = 214;
 
   /** The cap's reason, in D4's words — the SAME string goes on `data-reason`
    *  and under the row, because "2 of 2 used" alone does not tell you that
@@ -91,9 +90,20 @@
   function onGrip(e: PointerEvent, row: number): void {
     e.preventDefault();
     e.stopPropagation();
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    capture(e);
     dragRow = row;
     dropAt = row;
+  }
+
+  /** Pointer capture is best-effort: a SYNTHETIC `pointerdown` (a harness
+   *  staging the drag state, `web/tools/mockdiff.map.json` S7e) has no active
+   *  pointer, and the throw would take the whole drag down with it. */
+  function capture(e: PointerEvent): void {
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {
+      /* synthetic pointer — the window listeners still drive the drag */
+    }
   }
 
   function onGripMove(e: PointerEvent): void {
@@ -210,12 +220,11 @@
     {/if}
   </div>
 
-  <div class="addwrap" style={`--menu-w:${addW}px`}>
+  <div class="addwrap">
     <button
       class="btn primary"
       data-role="scene-add-layer"
       bind:this={addBtn}
-      bind:clientWidth={addW}
       aria-haspopup="menu"
       aria-expanded={addOpen}
       on:click|stopPropagation={() => (addOpen = !addOpen)}>+ Add layer ▾</button
@@ -280,9 +289,6 @@
   /* `.menu.full` spans the column rather than the global 214px (mock
      `.menu.full{left:0;right:0;width:auto}`); the popover is placed `fixed`,
      so the width comes from the button it hangs off. */
-  :global(.scenes .addwrap .menu) {
-    width: var(--menu-w, 214px);
-  }
 
   .full-inner {
     display: contents;

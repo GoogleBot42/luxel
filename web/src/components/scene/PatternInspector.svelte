@@ -37,9 +37,22 @@
   $: controls = (engine?.controls() ?? []) as Control[];
   $: hints = parseControlHints(source ?? "");
   $: dims = (engine?.patternDims() ?? 0) as PatternDims;
-  $: pixels = rig.pixels;
-  /** The mock's second line under the pattern name: `2D · 4096 px`. */
-  $: shapeLine = `${dims === 0 ? "any" : `${dims}D`} · ${pixels} px`;
+  /**
+   * The line under the pattern's name. Its numbers are what the pattern
+   * actually renders, not the fixture's: a 2D pattern on a 64×64 panel reads
+   * `2D · 4096 px` (S7b), and a 1D one projected along an axis reads
+   * `1D · 64 px stretched` (S7g) — the strip the engine gives it, and the
+   * word for what the projection then does with it.
+   */
+  $: shapeLine = shapeOf(engine, dims, rig.pixels);
+
+  function shapeOf(e: Engine | null, d: PatternDims, layoutPixels: number): string {
+    const head = d === 0 ? "any" : `${d}D`;
+    const eff = e?.effectiveGeometry();
+    const px = eff?.pixelCount ?? layoutPixels;
+    const stretched = eff !== undefined && px !== layoutPixels;
+    return `${head} · ${px} px${stretched ? " stretched" : ""}`;
+  }
 
   const readouts = new Map<string, number>();
 
@@ -82,7 +95,9 @@
     </div>
   </div>
 
-  <div class="rhead" style="margin:16px 0 6px"><div class="slabel">Controls</div></div>
+  <div class="rhead" style="margin:16px 0 6px">
+    <div class="slabel" data-role="scene-controls-label">Controls</div>
+  </div>
   <div class="controls" data-role="scene-controls">
     <Controls
       {controls}
