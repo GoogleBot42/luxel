@@ -1267,7 +1267,31 @@ already composited: on a pipelined board that buffer IS the one handed to the
 output task, so a scene costs the pipeline no extra copy and the
 single-owner invariant (`pipeline.rs`) is untouched. The compositor's own
 per-layer scratch is one grid-sized buffer inside `Compositor`, allocated on
-first use by a text or ramp layer and released with the scene.
+first use by a text layer — or by a ramp whose layer is not a straight frame
+copy — and released with the scene.
+
+**The staging buffer's lifecycle** (Gitea #704). It is 3 B/px, and a plain
+pattern never touches it: `emit!` hands the engine's own frame to the sink,
+`emit_staged!` publishes the stage. So it is claimed and released like the
+outpipe's scratch (`DeviceChain::release`, #446/#476):
+
+- `sink.reserve_stage(pixels)` on `Msg::Scene`, **before any layer engine is
+  built**. Fallible, because `Runtime::render` then fills it with an
+  infallible `Vec::resize` inside the render loop (the #702 lesson, one
+  buffer over), and up front because the per-layer `budget::layer_fits_with`
+  checks have to measure the heap it leaves.
+- `sink.release_stage()` from the render loop whenever neither a scene nor a
+  crossfade nor live input is using it. A no-op once nothing is held.
+- On the pipelined path releasing is safe because the hand-off **moves**
+  buffers rather than sharing them: `emit_staged` swaps `stage` with the
+  travelling buffer, so what `stage` holds afterwards is the one the output
+  task already gave back; the frame in flight lives in `SLOT` and is never
+  named by either call.
+
+Without the release the panel held two full frames for ever after its first
+scene — `load_base` 49,120 B fresh, 35,344 B afterwards — and 13 KB is
+enough to make the JIT refuse the next pattern (`jit: interp/no-memory`),
+which on Aurora 2D at 4096 px is 50 ms/frame becoming 105.
 
 The compositor addresses a `GridMap`, and every kernel is a **silent no-op
 without one** — the same contract `bulk.rs` has. A scene on an irregular

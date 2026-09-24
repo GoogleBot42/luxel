@@ -269,6 +269,14 @@ pub const fn layers_for(pixel_count: u32) -> u8 {
 /// falls to **1** rather than promising a layer it cannot build.
 pub const fn layers_for_headroom(pixel_count: u32, headroom: usize, ceiling: u8) -> u8 {
     let per = crate::budget::layer_cost(pixel_count);
+    // The compositor's own frame comes off the top FIRST (Gitea #704): a
+    // scene composites into the host's staging buffer, 3 B/px, and that is
+    // spent before a single layer engine is built. Leaving it out is what
+    // made the Seengreat panel advertise 2 layers at 4096 px and then refuse
+    // the second one at activation — 12.3 KB of the 32.8 KB two layers need
+    // was already gone. An advertised capability has to be one the device
+    // can actually deliver.
+    let headroom = headroom.saturating_sub(crate::budget::compositor_scratch(pixel_count));
     // Floored, and the host must pass a STEADY-STATE headroom (the
     // firmware's `shared::HEAP_BASE_MAX`) rather than an instantaneous one:
     // measuring costs heap, and rounding up over-promises. Both were tried
@@ -541,10 +549,18 @@ mod layer_tests {
         // …and the SAME board's STEADY-STATE numbers measured on metal
         // 2026-09-24, which are lower (the JIT image's statics plus Phase
         // B/C's): 26 KB of headroom affords one 4096-px layer, not two.
-        // The firmware feeds this fn the boot-time high-water instead, so it
-        // advertises 2 there and lets `budget::layer_fits` refuse the second
-        // layer at activation — see docs/boards.md "Scene layers".
         assert_eq!(layers(4096, 31_200, 15_348, MAX_LAYERS), 1);
+        // The panel's own boot-time high-water, which is what the firmware
+        // actually feeds this (`shared::HEAP_BASE_MAX`): before #704 it read
+        // 2 from the layer arithmetic alone and then refused layer 2 at
+        // activation, because the 12.3 KB staging frame every scene needs
+        // had not been charged to anything. Measured `load_base` 49,120 on
+        // metal 2026-09-24, and even a 56 KB high-water is one layer.
+        assert_eq!(layers(4096, 49_120, 0, MAX_LAYERS), 1);
+        assert_eq!(layers(4096, 56_000, 0, MAX_LAYERS), 1);
+        // two layers at 4096 px need the floor, two engines AND the stage:
+        // 20,480 + 2x16,384 + 12,288
+        assert_eq!(layers(4096, 65_536, 0, MAX_LAYERS), 2);
         // Athom / classic ESP32 @300 px idle (104,832 B)
         assert_eq!(layers(300, 104_832, 18_000, MAX_LAYERS), 3);
         // classic ESP32 @1024 px — the tier caps it at 2

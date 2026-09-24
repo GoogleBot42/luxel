@@ -127,6 +127,25 @@ impl PipeState {
     }
 }
 
+/// Grow a frame-sized buffer to `pixels`, fallibly (Gitea #704). Shared by
+/// both sinks: the staging buffer's lifecycle is the same on either path.
+fn reserve(buf: &mut Vec<[u8; 3]>, pixels: usize) -> bool {
+    if buf.capacity() >= pixels {
+        return true;
+    }
+    buf.clear();
+    buf.try_reserve_exact(pixels).is_ok()
+}
+
+/// Hand a frame-sized buffer back. `Vec::clear` keeps capacity, which is
+/// exactly the residency `DeviceChain::release` exists to avoid; a no-op
+/// once nothing is held, so the render loop can call it every frame.
+fn release(buf: &mut Vec<[u8; 3]>) {
+    if buf.capacity() > 0 {
+        *buf = Vec::new();
+    }
+}
+
 // ---------------------------------------------------------------- direct
 
 /// The whole frame sink in the render task: it owns the driver and runs
@@ -163,6 +182,18 @@ impl DirectSink {
     /// [`emit_staged`](Self::emit_staged).
     pub fn stage(&mut self) -> &mut Vec<[u8; 3]> {
         &mut self.stage
+    }
+
+    /// Take the staging buffer back from the allocator, fallibly, before
+    /// anything that will fill it is built — see [`RenderSide::reserve_stage`]
+    /// for why this is not left to the render loop's infallible `resize`.
+    pub fn reserve_stage(&mut self, pixels: usize) -> bool {
+        reserve(&mut self.stage, pixels)
+    }
+
+    /// Hand the staging buffer back — see [`RenderSide::release_stage`].
+    pub fn release_stage(&mut self) {
+        release(&mut self.stage);
     }
 
     /// Emit a frame the caller owns (the engine's own pixel buffer). The
@@ -365,6 +396,33 @@ mod pipe {
 
         pub fn stage(&mut self) -> &mut Vec<[u8; 3]> {
             &mut self.stage
+        }
+
+        /// Grow the staging buffer to `pixels`, fallibly, returning whether
+        /// it fits (Gitea #704).
+        ///
+        /// The render loop fills the stage with an INFALLIBLE `Vec::resize`
+        /// (`scenes::Runtime::render`), so the allocation has to be made —
+        /// and refusable — before the scene's engines are built, exactly
+        /// like `budget::compositor_scratch` (#702). It also has to happen
+        /// before the per-layer `layer_fits_with` checks, or they measure a
+        /// heap that still holds these 12 KB.
+        pub fn reserve_stage(&mut self, pixels: usize) -> bool {
+            super::reserve(&mut self.stage, pixels)
+        }
+
+        /// Hand the staging buffer back to the allocator when nothing is
+        /// using it (Gitea #704) — the `DeviceChain::release` idiom.
+        ///
+        /// Safe on this path precisely because the hand-off moves buffers
+        /// rather than sharing them: `emit_staged` SWAPS `stage` with the
+        /// travelling buffer, so what `stage` holds afterwards is the buffer
+        /// the output task has already given back. The one in flight lives
+        /// in `SLOT`, is never named here, and is unaffected — releasing
+        /// leaves exactly the one travelling buffer a plain pattern needs,
+        /// which is the pre-scene steady state.
+        pub fn release_stage(&mut self) {
+            super::release(&mut self.stage);
         }
 
         /// Copy `frame` into the travelling buffer and hand it over. One
