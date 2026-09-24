@@ -237,8 +237,8 @@ its own release and a format bump.
 
 | device | board | migrated | live slot | `ota_slot_bytes` | `storage_bytes` | margin now |
 |---|---|---|---|---:|---:|---|
-| Athom rig `192.168.0.183` | `board-athom-music` | **yes, 2026-09-20** | `ota_0` | 1,310,720 | 524,288 | 270,160 B (20.6 %) |
-| Seengreat panel `192.168.0.238` | `board-seengreat-hub75` | **being serially re-flashed** (2026-09-23) after the 2026-09-21 OTA was written over its running slot and left it boot-looping (Gitea #655 — root cause and fix there); it will come back on its own 16 MB table, so the self-applied 16 MB path stays emulator-only | `ota_0` | 3,145,728 (after the flash) | 4,194,304 | — |
+| Athom rig `192.168.0.183` | `board-athom-music` | **yes, 2026-09-20** | `ota_0` | 1,310,720 | 524,288 | 103,488 B (7.9 %) |
+| Seengreat panel `192.168.0.238` | `board-seengreat-hub75` | **yes** — serially re-flashed 2026-09-23 onto its own 16 MB table, so the self-applied 16 MB path stays emulator-only (Gitea #655) | `ota_0` | 3,145,728 | 4,194,304 | 2,007,856 B (63.8 %) |
 | dev unit `192.168.0.205` | `board-pixelblaze-v3` | not yet (offline) | — | — | — | — |
 
 The Athom is the first device on the new table (Gitea #634). It went across
@@ -1598,19 +1598,26 @@ which is both the A/B lever and the image a stale device migrates on.
 
 | board | JIT | exec memory | per image | of `library/` | app image | free of 1.25 MiB | `.stack` |
 |---|---|---|---:|---:|---:|---:|---:|
-| `board-seengreat-hub75` | ships, **on** | PSRAM arena | 128 KB | all 307 | 1,066,576 | 66.1 % † | 26,268 |
+| `board-seengreat-hub75` | ships, **on** | PSRAM arena | 128 KB | all 307 | 1,137,872 | 63.8 % † | 26,268 |
 | `board-s3-devkit` | ships, **on** | PSRAM arena, or heap alias | 128 KB / 8 KB | all 307 / — | not rebuilt | — | not measured |
-| `board-athom-music` | ships, **on** | 24 KB `.rwtext` | 12 KB | 96 % | 1,140,000 | 13.0 % | 24,380 |
+| `board-athom-music` | ships, **on** | 24 KB `.rwtext` | 12 KB | 96 % | 1,207,232 | 7.9 % | 24,380 |
 | `board-esp32-generic` | ships, **on** | 24 KB `.rwtext` | 12 KB | 96 % | 1,136,256 | 13.3 % | 23,476 |
 | `board-pixelblaze-v3` | ships, **on** | 24 KB `.rwtext` | 12 KB | 96 % | 1,122,768 | 14.3 % | 23,524 |
 | `board-c3-devkit` | no backend | — | — | — | not rebuilt | — | unchanged |
 | `board-c6-devkit` | no backend | — | — | — | not rebuilt | — | unchanged |
 
-Measured 2026-09-24 on this branch; `.stack` from `tools/stack-check.sh`,
-image bytes from `tools/image-check.sh`. † the Seengreat's slot is
+The **two bench-board rows were re-measured on master `6855bf5`** and
+deployed to metal (2026-09-24, the Phase B+C deploy); the other rows are
+still the 2026-09-24 pre-Phase-B/C branch measurement and were not rebuilt.
+`.stack` from `tools/stack-check.sh`, image bytes from
+`tools/image-check.sh`. Phase B+C cost the Athom ~67 KB of slot margin
+(13.0 % -> 7.9 % free) and the panel ~71 KB, which the 3 MiB slot does not
+notice. The three classic rows share a feature list, so read the
+`esp32-generic` and `pixelblaze-v3` rows as ~67 KB optimistic until they
+are rebuilt. † the Seengreat's slot is
 3,145,728 B, not 1,310,720 B, so its column is free-of-3-MiB. Read the
 classic rows twice: they clear the **post**-migration 1.25 MiB slot with
-13–15 % to spare, and they miss the old 1,048,576 B slot by ~72 KB. Since
+8–14 % to spare, and they miss the old 1,048,576 B slot by ~72 KB. Since
 #676 that second number gates no release — but it is still the whole of what
 a device on the pre-#501 table can accept, which is why such a device takes
 a `JIT_OFF=1` build before it can take one of these.
