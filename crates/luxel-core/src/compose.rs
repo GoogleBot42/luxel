@@ -62,7 +62,13 @@ fn opacity_alpha(opacity: u8) -> i32 {
 }
 
 /// The key factor for one source pixel, 0..=65536.
-#[inline]
+///
+/// `Luma`'s `luma × 65536 / 255` is spelled as a multiply-add: `65536/255`
+/// is `257 + 1/255`, so for `y < 255` the remainder never reaches 1 and the
+/// exact quotient is `257·y`; `y == 255` is the single case that carries
+/// (`257·255 + 1 == 65536`). Bit-for-bit the division it replaces, with no
+/// divide left on a per-pixel path (Gitea #705).
+#[inline(always)]
 fn key_alpha(key: Key, src: [u8; 3]) -> i32 {
     match key {
         Key::None => ONE,
@@ -73,17 +79,42 @@ fn key_alpha(key: Key, src: [u8; 3]) -> i32 {
                 ONE
             }
         }
-        Key::Luma => luma(src) as i32 * ONE / 255,
+        Key::Luma => {
+            let y = luma(src) as i32;
+            y * 257 + ((y + 1) >> 8)
+        }
     }
 }
 
-/// Blend one source pixel into one destination pixel.
+/// The layer's opacity combined with one source pixel's key factor.
 ///
-/// Out of line for the same reason `bulk::put` is: five modes inlined at
-/// every call site is five modes' worth of image, several times over, on a
-/// board with kilobytes of OTA slot left.
-#[inline(never)]
-pub fn blend_px_mode(dst: &mut [u8; 3], src: [u8; 3], mode: Blend, alpha: i32) {
+/// Was `(base as i64 * key_alpha(…) as i64) >> 16`, i.e. a 64-bit multiply
+/// per pixel — a libcall on Xtensa. Both operands are ≤ `ONE`, so the only
+/// product that does not fit 32 bits is `ONE × ONE`, and every case where
+/// either side is `ONE` is just the other side (Gitea #705).
+#[inline(always)]
+fn layer_alpha(key: Key, src: [u8; 3], base: i32) -> i32 {
+    match key {
+        Key::None => base,
+        _ => {
+            let k = key_alpha(key, src);
+            if k >= ONE {
+                base
+            } else if base >= ONE {
+                k
+            } else {
+                ((base as u32 * k as u32) >> 16) as i32
+            }
+        }
+    }
+}
+
+/// The blend kernel itself. `#[inline(always)]` so the per-row kernel
+/// ([`blend_run`]) carries ONE copy of the five modes with the mode test
+/// hoisted where the optimizer can see it is loop-invariant, instead of a
+/// flash-resident call per pixel.
+#[inline(always)]
+fn blend_px_into(dst: &mut [u8; 3], src: [u8; 3], mode: Blend, alpha: i32) {
     if alpha <= 0 {
         return;
     }
@@ -126,6 +157,110 @@ pub fn blend_px_mode(dst: &mut [u8; 3], src: [u8; 3], mode: Blend, alpha: i32) {
             }
         }
     }
+}
+
+/// Blend one source pixel into one destination pixel.
+///
+/// Out of line for the same reason `bulk::put` is: five modes inlined at
+/// every call site is five modes' worth of image, several times over, on a
+/// board with kilobytes of OTA slot left. Since Gitea #705 the hot paths go
+/// through [`blend_run`] instead, which inlines the kernel ONCE; this
+/// wrapper is what the cold callers (sprites, the firmware's crossfade)
+/// link, so the five modes still exist in exactly two places.
+#[inline(never)]
+pub fn blend_px_mode(dst: &mut [u8; 3], src: [u8; 3], mode: Blend, alpha: i32) {
+    blend_px_into(dst, src, mode, alpha)
+}
+
+/// One row of the layer's box blended into one row of the canvas.
+///
+/// A grid row is a CONTIGUOUS run of the frame — a serpentine row is the
+/// same run walked backwards — so the caller resolves the wiring once per
+/// row and the loop is two running offsets. No `GridMap::index`, no
+/// division, no 64-bit multiply and no call per pixel: at 4096 px that is
+/// 64 calls a frame where there were 4096 (Gitea #705).
+///
+/// `sstep` 0 with a one-element `srow` is the colour-wash case.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn blend_run(
+    drow: &mut [[u8; 3]],
+    doff: usize,
+    dstep: isize,
+    srow: &[[u8; 3]],
+    soff: usize,
+    sstep: isize,
+    n: usize,
+    mode: Blend,
+    key: Key,
+    base: i32,
+) {
+    let mut di = doff;
+    let mut si = soff;
+    for _ in 0..n {
+        if let Some(&s) = srow.get(si) {
+            let a = layer_alpha(key, s, base);
+            if a > 0 {
+                if let Some(d) = drow.get_mut(di) {
+                    blend_px_into(d, s, mode, a);
+                }
+            }
+        }
+        di = di.wrapping_add(dstep as usize);
+        si = si.wrapping_add(sstep as usize);
+    }
+}
+
+/// Where one grid row lives in the frame: the row's start index, the offset
+/// of column `c0` inside it, and the step per column. `forward` is false
+/// when the caller walks the box's columns in reverse (a mirrored source).
+#[inline]
+fn row_walk(grid: &GridMap, row: i32, c0: i32, forward: bool) -> (usize, usize, isize) {
+    let w = grid.w as usize;
+    let rev = grid.serpentine && row & 1 == 1;
+    let off = if rev { w - 1 - c0 as usize } else { c0 as usize };
+    let step = (if rev { -1isize } else { 1 }) * (if forward { 1 } else { -1 });
+    (row as usize * w, off, step)
+}
+
+/// The box-local index range on one axis for which BOTH the destination
+/// cell (`b + k`) and the source cell (mirrored or not) are inside the
+/// layout. Both constraints are intervals, so their intersection is the
+/// one range the old per-cell `continue`s walked.
+#[inline]
+fn clip_axis(b: i32, span: i32, limit: i32, mirrored: bool) -> (i32, i32) {
+    let mut lo = (-b).max(0);
+    let mut hi = span.min(limit - b);
+    if mirrored {
+        lo = lo.max(b + span - limit);
+        hi = hi.min(b + span);
+    }
+    (lo.max(0), hi.min(span))
+}
+
+/// Is this layer's composite a straight frame copy? Full layout, opaque,
+/// unkeyed, unmirrored, `normal` — the base layer of almost every scene,
+/// and exactly the `emit!` case scenes replaced (Gitea #705).
+///
+/// `GridMap::index` is a bijection on `0..len`, so "every cell takes the
+/// source's value at the same cell" is `copy_from_slice`, whatever the
+/// wiring.
+#[inline]
+fn is_frame_copy(style: &LayerStyle, grid: &GridMap, src_len: usize, dst_len: usize) -> bool {
+    let n = grid.len();
+    let (bx, by, bw, bh) = resolved_rect(style, grid);
+    let (mx, my) = mirrors(style);
+    style.opacity >= 100
+        && matches!(style.blend, Blend::Normal)
+        && matches!(style.key, Key::None)
+        && !mx
+        && !my
+        && bx == 0
+        && by == 0
+        && bw == grid.w as i32
+        && bh == grid.h as i32
+        && src_len >= n
+        && dst_len >= n
 }
 
 /// The layer's box resolved against a grid: `(x0, y0, w, h)` in cells,
@@ -171,36 +306,13 @@ pub fn composite_frame(dst: Canvas, src: &[[u8; 3]], style: &LayerStyle) {
     if skip(style, &grid) {
         return;
     }
-    let (bx, by, bw, bh) = resolved_rect(style, &grid);
-    let (mx, my) = mirrors(style);
-    let base = opacity_alpha(style.opacity);
-    for j in 0..bh {
-        let dr = by + j;
-        if dr < 0 || dr >= grid.h as i32 {
-            continue;
-        }
-        let sj = by + if my { bh - 1 - j } else { j };
-        if sj < 0 || sj >= grid.h as i32 {
-            continue;
-        }
-        for i in 0..bw {
-            let dc = bx + i;
-            if dc < 0 || dc >= grid.w as i32 {
-                continue;
-            }
-            let si = bx + if mx { bw - 1 - i } else { i };
-            if si < 0 || si >= grid.w as i32 {
-                continue;
-            }
-            let Some(&s) = src.get(grid.index(sj as usize, si as usize)) else {
-                continue;
-            };
-            let a = (base as i64 * key_alpha(style.key, s) as i64 >> 16) as i32;
-            if let Some(d) = dst.px.get_mut(grid.index(dr as usize, dc as usize)) {
-                blend_px_mode(d, s, style.blend, a);
-            }
-        }
+    // The fast path: a whole-layout opaque `normal` layer IS its source.
+    if is_frame_copy(style, &grid, src.len(), dst.px.len()) {
+        let n = grid.len();
+        dst.px[..n].copy_from_slice(&src[..n]);
+        return;
     }
+    blend_box(dst.px, &grid, src, style, false);
 }
 
 /// Wash the layer's box with one colour. Colour layers carry no key — the
@@ -210,22 +322,57 @@ pub fn fill_color(dst: Canvas, rgb: [u8; 3], style: &LayerStyle) {
     if skip(style, &grid) {
         return;
     }
-    let (bx, by, bw, bh) = resolved_rect(style, &grid);
-    let a = opacity_alpha(style.opacity);
-    for j in 0..bh {
-        let dr = by + j;
-        if dr < 0 || dr >= grid.h as i32 {
+    blend_box(dst.px, &grid, &[rgb], style, true);
+}
+
+/// The general path both kernels share: clip the box once per axis, then
+/// hand each row to [`blend_run`] as the contiguous run it is.
+///
+/// `wash` means `src` is ONE colour rather than a frame — the source offset
+/// and step are then 0, and neither the mirrors nor the key apply (a colour
+/// layer carries no key; the wash IS the layer). One function rather than
+/// two because the row walk is the whole body and the firmware pays for
+/// every copy of it.
+fn blend_box(
+    dst: &mut [[u8; 3]],
+    grid: &GridMap,
+    src: &[[u8; 3]],
+    style: &LayerStyle,
+    wash: bool,
+) {
+    let (bx, by, bw, bh) = resolved_rect(style, grid);
+    let (mx, my) = if wash { (false, false) } else { mirrors(style) };
+    let key = if wash { Key::None } else { style.key };
+    let base = opacity_alpha(style.opacity);
+    let (j0, j1) = clip_axis(by, bh, grid.h as i32, my);
+    let (i0, i1) = clip_axis(bx, bw, grid.w as i32, mx);
+    if j1 <= j0 || i1 <= i0 {
+        return;
+    }
+    let cols = (i1 - i0) as usize;
+    let dc0 = bx + i0;
+    let sc0 = bx + if mx { bw - 1 - i0 } else { i0 };
+    let w = grid.w as usize;
+    for j in j0..j1 {
+        let (ds, doff, dstep) = row_walk(grid, by + j, dc0, true);
+        // The source row: a frame's own row, or the single wash colour.
+        // A frame shorter than the grid loses whole rows rather than the
+        // tail of one — nothing on any host renders into a ragged buffer,
+        // and it keeps the run below free of per-pixel range math.
+        let (srow, soff, sstep) = if wash {
+            (src, 0usize, 0isize)
+        } else {
+            let sj = by + if my { bh - 1 - j } else { j };
+            let (ss, so, st) = row_walk(grid, sj, sc0, !mx);
+            match src.get(ss..ss + w) {
+                Some(r) => (r, so, st),
+                None => continue,
+            }
+        };
+        let Some(drow) = dst.get_mut(ds..ds + w) else {
             continue;
-        }
-        for i in 0..bw {
-            let dc = bx + i;
-            if dc < 0 || dc >= grid.w as i32 {
-                continue;
-            }
-            if let Some(d) = dst.px.get_mut(grid.index(dr as usize, dc as usize)) {
-                blend_px_mode(d, rgb, style.blend, a);
-            }
-        }
+        };
+        blend_run(drow, doff, dstep, srow, soff, sstep, cols, style.blend, key, base);
     }
 }
 
@@ -606,15 +753,25 @@ impl Compositor {
                 ensure_lut(r, lut, epoch);
             }
         }
-        let canvas = Canvas { px: dst, grid: &grid };
         match l.lut.as_ref().filter(|_| amount > 0) {
             Some((_, lut)) => {
-                scratch.clear();
-                scratch.extend_from_slice(src);
-                palette_remap_frame(scratch, lut, amount);
-                composite_frame(canvas, scratch, &style);
+                // When the composite is a straight copy the ramp can run in
+                // place on the destination: no scratch frame at all, which
+                // is 3 B/px this scene then never has to hold (Gitea #705).
+                // `palette_remap_frame` is per-pixel and independent, so the
+                // result is identical either way.
+                let n = grid.len();
+                if is_frame_copy(&style, &grid, src.len(), dst.len()) {
+                    dst[..n].copy_from_slice(&src[..n]);
+                    palette_remap_frame(&mut dst[..n], lut, amount);
+                } else {
+                    scratch.clear();
+                    scratch.extend_from_slice(src);
+                    palette_remap_frame(scratch, lut, amount);
+                    composite_frame(Canvas { px: dst, grid: &grid }, scratch, &style);
+                }
             }
-            None => composite_frame(canvas, src, &style),
+            None => composite_frame(Canvas { px: dst, grid: &grid }, src, &style),
         }
     }
 
@@ -1257,5 +1414,272 @@ mod tests {
     #[test]
     fn align_is_carried_by_the_record() {
         assert_eq!(Align::Center.as_str(), "c");
+    }
+
+    // ---- the #705 fast paths ----
+
+    /// `composite_frame` exactly as it was before Gitea #705: two
+    /// `GridMap::index` calls, a per-pixel `key_alpha` with its division and
+    /// a 64-bit alpha multiply, per cell. The ONLY oracle that matters for
+    /// the rewrite — the kernels above are pinned bit-for-bit by the
+    /// truth-table tests, and this pins the geometry and the alpha algebra.
+    fn composite_frame_naive(dst: Canvas, src: &[[u8; 3]], style: &LayerStyle) {
+        let grid = *dst.grid;
+        if skip(style, &grid) {
+            return;
+        }
+        let (bx, by, bw, bh) = resolved_rect(style, &grid);
+        let (mx, my) = mirrors(style);
+        let base = opacity_alpha(style.opacity);
+        let key_alpha_div = |key: Key, s: [u8; 3]| -> i32 {
+            match key {
+                Key::None => ONE,
+                Key::Black => {
+                    if s == [0, 0, 0] {
+                        0
+                    } else {
+                        ONE
+                    }
+                }
+                Key::Luma => luma(s) as i32 * ONE / 255,
+            }
+        };
+        for j in 0..bh {
+            let dr = by + j;
+            if dr < 0 || dr >= grid.h as i32 {
+                continue;
+            }
+            let sj = by + if my { bh - 1 - j } else { j };
+            if sj < 0 || sj >= grid.h as i32 {
+                continue;
+            }
+            for i in 0..bw {
+                let dc = bx + i;
+                if dc < 0 || dc >= grid.w as i32 {
+                    continue;
+                }
+                let si = bx + if mx { bw - 1 - i } else { i };
+                if si < 0 || si >= grid.w as i32 {
+                    continue;
+                }
+                let Some(&s) = src.get(grid.index(sj as usize, si as usize)) else {
+                    continue;
+                };
+                let a = (base as i64 * key_alpha_div(style.key, s) as i64 >> 16) as i32;
+                if let Some(d) = dst.px.get_mut(grid.index(dr as usize, dc as usize)) {
+                    blend_px_mode(d, s, style.blend, a);
+                }
+            }
+        }
+    }
+
+    /// The same for `fill_color`.
+    fn fill_color_naive(dst: Canvas, rgb: [u8; 3], style: &LayerStyle) {
+        let grid = *dst.grid;
+        if skip(style, &grid) {
+            return;
+        }
+        let (bx, by, bw, bh) = resolved_rect(style, &grid);
+        let a = opacity_alpha(style.opacity);
+        for j in 0..bh {
+            let dr = by + j;
+            if dr < 0 || dr >= grid.h as i32 {
+                continue;
+            }
+            for i in 0..bw {
+                let dc = bx + i;
+                if dc < 0 || dc >= grid.w as i32 {
+                    continue;
+                }
+                if let Some(d) = dst.px.get_mut(grid.index(dr as usize, dc as usize)) {
+                    blend_px_mode(d, rgb, style.blend, a);
+                }
+            }
+        }
+    }
+
+    /// Deterministic filler — every channel value appears, including the
+    /// 0 and 255 the key and the luma rounding turn on.
+    fn frame(n: usize, seed: u32) -> Vec<[u8; 3]> {
+        let mut s = seed | 1;
+        (0..n)
+            .map(|_| {
+                let mut c = [0u8; 3];
+                for ch in c.iter_mut() {
+                    s = s.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    *ch = match (s >> 24) & 7 {
+                        0 => 0,
+                        1 => 255,
+                        _ => (s >> 16) as u8,
+                    };
+                }
+                c
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_fast_paths_are_bit_identical_to_the_naive_kernel() {
+        let rects: &[Rect] = &[
+            Rect { x: 0, y: 0, w: 0, h: 0 },   // the whole layout
+            Rect { x: 1, y: 2, w: 4, h: 3 },   // a clipped box
+            Rect { x: -3, y: -2, w: 6, h: 5 }, // straddling the origin
+            Rect { x: 4, y: 3, w: 9, h: 9 },   // straddling the far corner
+            Rect { x: 40, y: 40, w: 4, h: 4 }, // wholly outside
+            Rect { x: 0, y: 0, w: 1, h: 1 },   // one cell
+        ];
+        let modes = [Blend::Normal, Blend::Add, Blend::Lighten, Blend::Multiply, Blend::Mask];
+        let keys = [Key::None, Key::Black, Key::Luma];
+        let mut cases = 0usize;
+        for (w, h) in [(8u16, 6u16), (7, 7), (1, 9)] {
+            for serpentine in [false, true] {
+                let g = grid(w, h, serpentine);
+                let n = g.len();
+                let src = frame(n, 0x5eed_0001 ^ (w as u32) << 8);
+                let under = frame(n, 0xc0ff_ee01 ^ (h as u32) << 8);
+                for rect in rects {
+                    for &blend in &modes {
+                        for &key in &keys {
+                            for &opacity in &[0u8, 1, 37, 99, 100] {
+                                for flags in 0u8..8 {
+                                    let st = LayerStyle {
+                                        rect: *rect,
+                                        blend,
+                                        opacity,
+                                        key,
+                                        flipx: flags & 1 != 0,
+                                        flipy: flags & 2 != 0,
+                                        rot180: flags & 4 != 0,
+                                        ..LayerStyle::default()
+                                    };
+                                    let mut fast = under.clone();
+                                    let mut naive = under.clone();
+                                    composite_frame(
+                                        Canvas { px: &mut fast, grid: &g },
+                                        &src,
+                                        &st,
+                                    );
+                                    composite_frame_naive(
+                                        Canvas { px: &mut naive, grid: &g },
+                                        &src,
+                                        &st,
+                                    );
+                                    assert_eq!(
+                                        fast, naive,
+                                        "composite {w}x{h} serp={serpentine} {rect:?} \
+                                         {blend:?} {key:?} op={opacity} flags={flags}"
+                                    );
+                                    let mut fast = under.clone();
+                                    let mut naive = under.clone();
+                                    fill_color(
+                                        Canvas { px: &mut fast, grid: &g },
+                                        [9, 200, 71],
+                                        &st,
+                                    );
+                                    fill_color_naive(
+                                        Canvas { px: &mut naive, grid: &g },
+                                        [9, 200, 71],
+                                        &st,
+                                    );
+                                    assert_eq!(
+                                        fast, naive,
+                                        "fill {w}x{h} serp={serpentine} {rect:?} \
+                                         {blend:?} op={opacity} flags={flags}"
+                                    );
+                                    cases += 2;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(cases > 10_000, "the matrix shrank: {cases}");
+    }
+
+    /// The luma key's divide-free factor must equal the division it
+    /// replaced at every one of the 256 luma values — the rounding IS the
+    /// wire format here.
+    #[test]
+    fn the_luma_key_factor_has_no_division_and_no_rounding_drift() {
+        for y in 0u32..=255 {
+            let src = [y as u8, y as u8, y as u8];
+            // luma of a grey is the grey itself (54+183+19 == 256)
+            assert_eq!(luma(src) as u32, y, "luma({y})");
+            assert_eq!(key_alpha(Key::Luma, src), (y as i32) * ONE / 255, "y={y}");
+        }
+        assert_eq!(key_alpha(Key::Luma, [255, 255, 255]), ONE);
+        assert_eq!(key_alpha(Key::Luma, [0, 0, 0]), 0);
+    }
+
+    /// The combined alpha must match the 64-bit expression it replaced at
+    /// every opacity and every key factor.
+    #[test]
+    fn the_combined_alpha_never_needs_64_bits() {
+        for opacity in 0u8..=100 {
+            let base = opacity_alpha(opacity);
+            for y in 0u32..=255 {
+                let src = [y as u8, y as u8, y as u8];
+                for key in [Key::None, Key::Black, Key::Luma] {
+                    let want = (base as i64 * key_alpha(key, src) as i64 >> 16) as i32;
+                    assert_eq!(layer_alpha(key, src, base), want, "op={opacity} y={y} {key:?}");
+                }
+            }
+        }
+    }
+
+    /// A ramped full-layout layer takes the in-place path and must agree
+    /// with the scratch one it replaced.
+    #[test]
+    fn an_in_place_ramp_matches_the_scratch_ramp() {
+        let full = crate::scene::parse(concat!(
+            "S 0000000a s\n",
+            "L pat 0 0 0 0 normal 100 none fill 1\n",
+            "I 0123abcd\n",
+            "R 60 0:000000 128:00ff40 255:ff00ff\n",
+        ))
+        .unwrap();
+        // the same ramp on a CLIPPED box, which cannot take the fast path
+        let boxed = crate::scene::parse(concat!(
+            "S 0000000b s\n",
+            "L pat 1 1 3 2 normal 100 none fill 1\n",
+            "I 0123abcd\n",
+            "R 60 0:000000 128:00ff40 255:ff00ff\n",
+        ))
+        .unwrap();
+        let g = grid(5, 4, true);
+        let src = frame(g.len(), 0x1234_5678);
+        for scene in [&full, &boxed] {
+            let mut c = Compositor::new(g);
+            c.set_scene(scene);
+            let mut px = vec![[0u8; 3]; g.len()];
+            c.pattern_layer(&mut px, 0, &src);
+            // the oracle: remap a copy, then composite it the naive way
+            let mut want = vec![[0u8; 3]; g.len()];
+            let mut cooked = src.clone();
+            let mut lut: Option<(u32, Box<[[u8; 3]; 256]>)> = None;
+            let ramp = match &scene.layers[0].body {
+                LayerBody::Pattern(p) => p.ramp.clone().unwrap(),
+                _ => unreachable!(),
+            };
+            ensure_lut(&ramp, &mut lut, 7);
+            palette_remap_frame(&mut cooked, &lut.unwrap().1, 60 * 256 / 100);
+            composite_frame_naive(
+                Canvas { px: &mut want, grid: &g },
+                &cooked,
+                &scene.layers[0].style,
+            );
+            assert_eq!(px, want, "scene {}", scene.id);
+        }
+        // and the full-layout case really did avoid the scratch
+        let mut c = Compositor::new(g);
+        c.set_scene(&full);
+        let mut px = vec![[0u8; 3]; g.len()];
+        c.pattern_layer(&mut px, 0, &src);
+        assert_eq!(
+            c.resident_bytes(),
+            768 + core::mem::size_of::<LayerRt>(),
+            "an in-place ramp holds the LUT and no frame scratch"
+        );
     }
 }
