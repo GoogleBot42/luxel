@@ -254,6 +254,19 @@ body{background:#0e1013;color:var(--text);font:14px/1.45 var(--sans);-webkit-fon
   <h3 style="margin-top:20px">Batch 5 · Outputs</h3>
   <a href="#S3j"><b>S3j</b>Strip · 2 outputs</a>
   <a href="#S3k"><b>S3k</b>Panels · 2 outputs</a>
+  <h3 style="margin-top:20px">Batch 6 · Phase B &amp; C states</h3>
+  <a href="#S4c"><b>S4c</b>Playlist · + Add picker</a>
+  <a href="#S4d"><b>S4d</b>Playlist picker · mobile</a>
+  <a href="#S2e"><b>S2e</b>Add to scene · menu</a>
+  <a href="#S6c"><b>S6c</b>Scenes · empty</a>
+  <a href="#S6d"><b>S6d</b>Scenes · mobile</a>
+  <a href="#S7d"><b>S7d</b>Add layer · at the cap</a>
+  <a href="#S7e"><b>S7e</b>Color layer · list states</a>
+  <a href="#S7f"><b>S7f</b>Scene editor · mobile</a>
+  <a href="#S7g"><b>S7g</b>Pattern layer · blend/ramp</a>
+  <a href="#S7h"><b>S7h</b>Text layer · sources</a>
+  <a href="#S7i"><b>S7i</b>Font picker</a>
+  <a href="#S2f"><b>S2f</b>Text builtins · completions</a>
 </nav>
 <main>
 <div class="masthead">
@@ -2590,6 +2603,879 @@ once, above; outputs only say where the one chain is cut. The picture carries th
 that drives them, each run is its own polyline with its own <b>IN</b> marker at the panel its wire plugs into, and the
 numbers stay the chain order so the table's <i>panels 1–2</i> / <i>panels 3–4</i> is something you can point at. Cutting
 anywhere but along the chain is not offered, which is why there is no per-panel output picker.</p>
+
+<style>
+/* ---------- batch 6 · Phase B/C states ---------- */
+.w962{width:962px}
+.varcols{display:flex;align-items:stretch}
+.varcols .rcol:first-child{border-left:0}
+.menu.pick{width:auto}
+.mi.pk{display:flex;align-items:center;gap:9px}
+.mi.pk canvas{width:26px;height:26px;flex:none;border-radius:4px;background:#000;image-rendering:pixelated;display:block}
+.pknm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.menu .reason{padding:1px 10px 7px;font-size:11.5px;line-height:1.4;color:var(--text-dim);white-space:normal}
+.lrow.drag{background:#242833;box-shadow:0 10px 22px rgba(0,0,0,.6)}
+.dropline{height:2px;margin:2px 0 2px 8px;border-radius:1px;background:var(--accent)}
+.rsec.sticky{position:sticky;top:0;z-index:5;background:var(--bg);box-shadow:0 8px 16px rgba(0,0,0,.45)}
+.stoprow{position:relative;height:12px;margin-top:4px}
+.stopmk{position:absolute;top:0;width:9px;height:9px;margin-left:-5px;border-radius:2px;transform:rotate(45deg);border:1px solid rgba(255,255,255,.45)}
+.stopmk.on{border-color:var(--accent);box-shadow:0 0 0 2px rgba(232,163,61,.25)}
+.glyph{display:block;flex:none}
+.fontrow{display:flex;align-items:center;gap:10px}
+.fontrow .fmeta{flex:1;min-width:0}
+.fontrow .fnm{font-size:13px;white-space:nowrap}
+.acpop{position:absolute;width:266px;padding:4px;background:var(--bg-panel);border:1px solid var(--border);border-radius:8px;box-shadow:0 16px 40px rgba(0,0,0,.7);z-index:20}
+.acrow{display:flex;align-items:baseline;gap:7px;padding:5px 8px;border-radius:5px;font:12.5px/1.2 var(--mono);color:var(--text)}
+.acrow.on{background:rgba(255,255,255,.06)}
+.acrow .ak{color:#89ddd0}
+.acrow .asig{color:var(--text-dim);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.acdoc{position:absolute;left:calc(100% + 8px);top:-1px;width:300px;padding:10px 12px;background:var(--bg-panel);border:1px solid var(--border);border-radius:8px;box-shadow:0 16px 40px rgba(0,0,0,.7)}
+.acdoc .sigl{font:12.5px/1.3 var(--mono);color:#89ddd0}
+.acdoc p{margin:7px 0 0;font-size:12px;line-height:1.45;color:var(--text-dim)}
+.acdoc .ex{margin-top:9px;padding-top:8px;border-top:1px solid var(--border);font:11.5px/1.4 var(--mono);color:#8fc98f}
+</style>
+
+<div class="masthead" style="margin:56px 0 0">
+  <h1 style="font-size:18px">Batch 6 · Phase B &amp; C states</h1>
+  <p style="margin-bottom:28px">The screen states Phase B (compositor, scenes, sprites) and Phase C (text) need before
+  they are built: menus open, empty states, mobile stacks, and the inspector variants that only exist in one setting.</p>
+</div>
+
+<!-- ===================== S4c ===================== -->
+<p class="cap"><b>S4c</b> · Playlist — <i>+ Add</i> picker open (patterns and scenes)</p>
+<div class="frame w1200" id="S4c">
+  <header class="hdr">
+    <div class="wordmark">luxel</div>
+    <div class="devchip"><i class="dot"></i>luxel-f6b0a8 · 64×64 matrix</div>
+    <nav class="tabs"><a>Patterns</a><a>Scenes</a><a class="on">Playlist</a><a>Settings</a></nav>
+    <div class="spacer"></div>
+    <div class="fps">24 fps</div>
+  </header>
+  <div class="transport">
+    <div class="group">
+      <div class="btn primary">‖ Pause</div>
+      <div class="btn icon" title="stop"><svg width="10" height="10" viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8" rx="1" fill="currentColor"/></svg></div>
+      <div class="btn icon" title="previous"><svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><rect x="2" y="2" width="1.6" height="8"/><path d="M10 2v8L4.6 6z"/></svg></div>
+      <div class="btn icon" title="next"><svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><rect x="8.4" y="2" width="1.6" height="8"/><path d="M2 2v8l5.4-4z"/></svg></div>
+    </div>
+    <div class="nowplaying" style="margin-left:8px">
+      <div class="np1"><b>Clock overlay</b><span class="t">0:03 / 0:08</span></div>
+      <div class="prog"><i style="width:38%"></i></div>
+    </div>
+    <div class="spacer"></div>
+    <div class="group" style="gap:8px">
+      <span class="tiny dim">Default duration</span><input class="inp num xs" value="8"><span class="tiny dim">s</span>
+    </div>
+    <div class="group" style="gap:8px;margin-left:8px">
+      <span class="tiny dim">Crossfade</span><input class="inp num xs" value="0.5"><span class="tiny dim">s</span>
+    </div>
+    <div class="btn icon" style="margin-left:4px">⋯</div>
+  </div>
+  <div class="pllist">
+    <div class="plrow">
+      <div class="hnd">⠿</div>
+      <canvas data-viz="sunsetrow" data-w="64" data-h="64"></canvas>
+      <div class="who">
+        <div class="n">Sunset Fade</div>
+        <div class="t">Pattern</div>
+      </div>
+      <div class="chip">8 s</div>
+      <div class="chip">3 values ▾</div>
+      <div class="btn icon quiet">✕</div>
+    </div>
+    <div class="plrow playing">
+      <div class="hnd ok">▶</div>
+      <canvas data-viz="clock" data-w="64" data-h="64"></canvas>
+      <div class="who">
+        <div class="n">Clock overlay</div>
+        <div class="t">Scene ▤ · 2 layers</div>
+      </div>
+      <div class="chip">8 s</div>
+      <div class="lnk">Edit scene ›</div>
+      <div class="btn icon quiet">✕</div>
+    </div>
+    <div class="plrow">
+      <div class="hnd">⠿</div>
+      <canvas data-viz="sparklerow" data-w="64" data-h="64"></canvas>
+      <div class="who">
+        <div class="n">Warm Sparkle</div>
+        <div class="t">Pattern</div>
+      </div>
+      <div class="chip">8 s</div>
+      <div class="chip">1 value ▾</div>
+      <div class="btn icon quiet">✕</div>
+    </div>
+    <div class="addwrap" style="width:360px;margin-top:4px">
+      <div class="btn quiet">+ Add</div>
+      <div class="menu full pick">
+        <input class="inp ph xs" style="width:100%;margin-bottom:2px" value="search patterns and scenes…">
+        <div class="slabel" style="padding:9px 10px 5px">Patterns</div>
+        <div class="mi pk hi"><canvas data-viz="aurora" data-w="64" data-h="64"></canvas><span class="pknm">Aurora 2D</span><span class="mdim">2D</span></div>
+        <div class="mi pk"><canvas data-viz="cometsq" data-w="64" data-h="64"></canvas><span class="pknm">Blue Comet</span><span class="mdim">2D</span></div>
+        <div class="mi pk"><canvas data-viz="sunsetrow" data-w="64" data-h="64"></canvas><span class="pknm">Sunset Fade</span><span class="mdim">1D · along x</span></div>
+        <div class="mi pk"><canvas data-viz="eyes" data-w="64" data-h="64"></canvas><span class="pknm">Blinky Eyes 2D</span><span class="mdim">2D</span></div>
+        <div class="slabel" style="padding:11px 10px 5px">Scenes</div>
+        <div class="mi pk"><canvas data-viz="ticker" data-w="64" data-h="64"></canvas><span class="pknm">Aurora + ticker</span><span class="mdim">3 layers</span></div>
+        <div class="mi pk"><canvas data-viz="party" data-w="64" data-h="64"></canvas><span class="pknm">Party wall</span><span class="mdim">4 layers</span></div>
+      </div>
+    </div>
+  </div>
+  <div style="height:352px"></div>
+  <div class="plfoot">3 items · loop ≈ 24 s</div>
+</div>
+<p class="note"><b>What this specifies.</b> One picker, two sections — <i>+ Add</i> never branches into "add a pattern" and
+"add a scene". Both sections use the same row: device-shaped thumbnail, name, one dim fact (a pattern's dimensionality
+and its projection, a scene's layer count). A scene item in the list is a playlist row like any other: same handle, same
+device-shaped thumbnail, same duration chip, <b>no values chip</b> — its layers own their values — and
+<i>Edit scene ›</i> in the place the chip would have been (S4 already draws this row at rest; here it is the row the
+picker just added, with the scene playing).</p>
+
+<!-- ===================== S4d ===================== -->
+<p class="cap"><b>S4d</b> · Playlist — <i>+ Add</i> picker, mobile 390 px</p>
+<div class="frame w390" id="S4d">
+  <header class="hdr" style="height:auto;flex-direction:column;align-items:stretch;gap:0;padding:0">
+    <div style="display:flex;align-items:center;gap:10px;padding:0 12px;height:40px">
+      <div class="wordmark">luxel</div>
+      <div class="devchip"><i class="dot"></i>luxel-f6b0a8 · 64×64</div>
+      <div class="spacer"></div>
+      <div class="fps">24 fps</div>
+    </div>
+    <nav class="tabs" style="height:38px;overflow-x:auto;margin-left:0;padding:0 8px">
+      <a>Patterns</a><a>Scenes</a><a class="on">Playlist</a><a>Settings</a>
+    </nav>
+  </header>
+  <div class="transport" style="padding:12px;gap:10px">
+    <div class="group">
+      <div class="btn primary">‖ Pause</div>
+      <div class="btn icon"><svg width="10" height="10" viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8" rx="1" fill="currentColor"/></svg></div>
+      <div class="btn icon"><svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><rect x="2" y="2" width="1.6" height="8"/><path d="M10 2v8L4.6 6z"/></svg></div>
+      <div class="btn icon"><svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><rect x="8.4" y="2" width="1.6" height="8"/><path d="M2 2v8l5.4-4z"/></svg></div>
+      <div class="spacer"></div>
+      <div class="btn icon">⋯</div>
+    </div>
+    <div class="nowplaying" style="width:100%;min-width:0">
+      <div class="np1"><b>Clock overlay</b><span class="t">0:03 / 0:08</span></div>
+      <div class="prog"><i style="width:38%"></i></div>
+    </div>
+  </div>
+  <div class="pllist" style="padding:12px">
+    <div class="plrow playing" style="gap:10px">
+      <div class="hnd ok">▶</div>
+      <canvas data-viz="clock" data-w="64" data-h="64" style="width:40px;height:40px"></canvas>
+      <div class="who">
+        <div class="n">Clock overlay</div>
+        <div class="t">Scene ▤ · 2 layers · 8 s</div>
+      </div>
+      <div class="lnk">Edit ›</div>
+      <div class="btn icon quiet">✕</div>
+    </div>
+    <div class="plrow" style="gap:10px">
+      <div class="hnd">⠿</div>
+      <canvas data-viz="sparklerow" data-w="64" data-h="64" style="width:40px;height:40px"></canvas>
+      <div class="who">
+        <div class="n">Warm Sparkle</div>
+        <div class="t">Pattern · 8 s</div>
+      </div>
+      <div class="chip">1 ▾</div>
+      <div class="btn icon quiet">✕</div>
+    </div>
+    <div class="addwrap" style="margin-top:4px">
+      <div class="btn quiet">+ Add</div>
+      <div class="menu full pick">
+        <input class="inp ph xs" style="width:100%;margin-bottom:2px" value="search patterns and scenes…">
+        <div class="slabel" style="padding:9px 10px 5px">Patterns</div>
+        <div class="mi pk hi"><canvas data-viz="aurora" data-w="64" data-h="64"></canvas><span class="pknm">Aurora 2D</span><span class="mdim">2D</span></div>
+        <div class="mi pk"><canvas data-viz="cometsq" data-w="64" data-h="64"></canvas><span class="pknm">Blue Comet</span><span class="mdim">2D</span></div>
+        <div class="mi pk"><canvas data-viz="sunsetrow" data-w="64" data-h="64"></canvas><span class="pknm">Sunset Fade</span><span class="mdim">1D · along x</span></div>
+        <div class="slabel" style="padding:11px 10px 5px">Scenes</div>
+        <div class="mi pk"><canvas data-viz="ticker" data-w="64" data-h="64"></canvas><span class="pknm">Aurora + ticker</span><span class="mdim">3 layers</span></div>
+        <div class="mi pk"><canvas data-viz="party" data-w="64" data-h="64"></canvas><span class="pknm">Party wall</span><span class="mdim">4 layers</span></div>
+      </div>
+    </div>
+  </div>
+  <div style="height:306px"></div>
+</div>
+<p class="note"><b>What this specifies.</b> The same picker, full width of the list instead of a 360 px popover — D9
+responsive stacking, not a second flow. The search field stays first so a long library is reachable with the thumb, and
+the scene row folds its duration into the type line exactly like a pattern row does (S4b).</p>
+
+<!-- ===================== S2e ===================== -->
+<p class="cap"><b>S2e</b> · Editor ⋯ menu — <i>Add to scene</i> on a matrix console, and the same menu on a strip</p>
+<div class="frame w1200" id="S2e">
+  <header class="edhdr">
+    <div class="btn quiet">← Patterns</div>
+    <div class="nameedit">Aurora 2D</div>
+    <div class="savestate">saved · on device</div>
+    <div class="spacer"></div>
+    <div class="btn primary">Save</div>
+    <div class="menuwrap">
+      <div class="btn icon">⋯</div>
+      <div class="menu">
+        <div class="mi">Add to playlist</div>
+        <div class="mi parent hi">Add to scene<span class="caret">▸</span>
+          <div class="sub">
+            <div class="mi">Clock overlay</div>
+            <div class="mi">Aurora + ticker</div>
+            <div class="mi">Party wall</div>
+            <div class="sepr"></div>
+            <div class="mi">New scene…</div>
+          </div>
+        </div>
+        <div class="sepr"></div>
+        <div class="mi">Duplicate</div>
+        <div class="mi">Export .epe</div>
+        <div class="mi">Import .epe…</div>
+        <div class="sepr"></div>
+        <div class="mi del">Delete</div>
+      </div>
+    </div>
+    <div class="edhdr-rail"><div class="devchip"><i class="dot"></i>luxel-f6b0a8 · 64×64 matrix</div></div>
+  </header>
+  <div style="height:262px;padding:16px 20px">
+    <div class="hint" style="max-width:420px">The submenu lists every scene on the device, newest last, and ends with
+    <i>New scene…</i> — which creates a scene with this pattern as its base layer and opens the scene editor.</div>
+  </div>
+  <div class="statecap" style="margin:0 20px 6px">the same menu on a strip console:<span class="rule"></span></div>
+  <header class="edhdr">
+    <div class="btn quiet">← Patterns</div>
+    <div class="nameedit">Aurora 2D</div>
+    <div class="savestate">saved · on device</div>
+    <div class="spacer"></div>
+    <div class="btn primary">Save</div>
+    <div class="menuwrap">
+      <div class="btn icon">⋯</div>
+      <div class="menu">
+        <div class="mi hi">Add to playlist</div>
+        <div class="sepr"></div>
+        <div class="mi">Duplicate</div>
+        <div class="mi">Export .epe</div>
+        <div class="mi">Import .epe…</div>
+        <div class="sepr"></div>
+        <div class="mi del">Delete</div>
+      </div>
+    </div>
+    <div class="edhdr-rail"><div class="devchip"><i class="dot"></i>luxel-4ae0d4 · 300 px strip</div></div>
+  </header>
+  <div style="height:236px;padding:16px 20px">
+    <div class="hint" style="max-width:420px">No greyed row, no "not available on this device": the menu is simply one
+    item shorter, and nothing else moves.</div>
+  </div>
+</div>
+<p class="note"><b>What this specifies.</b> <i>Add to scene</i> is the shortcut from the place you just tuned the look
+(§5.4b); the primary path stays the scene editor's own <i>Add layer → Pattern</i>. Scenes need a regular 2D grid, so on
+a strip, 3D or custom-map console the item is <b>absent</b>, not disabled — the same rule as the Scenes tab (S1b) and
+the capability-gated Settings rows (S3i). The tile ⋯ on the Patterns page carries the identical menu.</p>
+
+<!-- ===================== S6c ===================== -->
+<p class="cap"><b>S6c</b> · Scenes — console, empty state</p>
+<div class="frame w1200" id="S6c" style="height:260px">
+  <header class="hdr">
+    <div class="wordmark">luxel</div>
+    <div class="devchip"><i class="dot"></i>luxel-f6b0a8 · 64×64 matrix</div>
+    <nav class="tabs"><a>Patterns</a><a class="on">Scenes</a><a>Playlist</a><a>Settings</a></nav>
+    <div class="spacer"></div>
+    <div class="fps">27 fps</div>
+  </header>
+  <div class="empty">
+    <div class="dim" style="font-size:13px">Layer patterns, text and images on top of each other. Scenes play like patterns.</div>
+    <div class="btn primary">+ New scene</div>
+  </div>
+</div>
+<p class="note"><b>What this specifies.</b> A matrix console always has the Scenes tab (D10), so the tab has to say
+something useful with nothing in it: the same one-line definition the populated page carries in its page bar, and the
+page's one primary action, centred. No page bar, no empty tile grid, no illustration — and the copy is identical to
+S6's so the sentence does not change meaning when the first scene appears.</p>
+
+<!-- ===================== S6d ===================== -->
+<p class="cap"><b>S6d</b> · Scenes — mobile 390 px</p>
+<div class="frame w390" id="S6d">
+  <header class="hdr" style="height:auto;flex-direction:column;align-items:stretch;gap:0;padding:0">
+    <div style="display:flex;align-items:center;gap:10px;padding:0 12px;height:40px">
+      <div class="wordmark">luxel</div>
+      <div class="devchip"><i class="dot"></i>luxel-f6b0a8 · 64×64</div>
+      <div class="spacer"></div>
+      <div class="fps">24 fps</div>
+    </div>
+    <nav class="tabs" style="height:38px;overflow-x:auto;margin-left:0;padding:0 8px">
+      <a>Patterns</a><a class="on">Scenes</a><a>Playlist</a><a>Settings</a>
+    </nav>
+  </header>
+  <div style="padding:12px 12px 0;display:flex;align-items:center;gap:8px">
+    <div class="hint" style="flex:1">Layer patterns, text and images on top of each other.</div>
+    <div class="btn primary icon">+</div>
+  </div>
+  <div class="tiles c2" style="padding:12px">
+    <div class="tile playing">
+      <div class="thumb">
+        <canvas data-viz="clock" data-w="64" data-h="64"></canvas>
+        <div class="pill">▶ playing</div>
+      </div>
+      <div class="meta"><div class="nm">Clock overlay</div><div class="sub">3 layers</div><div class="elink">Edit</div></div>
+    </div>
+    <div class="tile">
+      <div class="thumb"><canvas data-viz="ticker" data-w="64" data-h="64"></canvas></div>
+      <div class="meta"><div class="nm">Aurora + ticker</div><div class="sub">3 layers</div><div class="elink">Edit</div></div>
+    </div>
+    <div class="tile">
+      <div class="thumb"><canvas data-viz="party" data-w="64" data-h="64"></canvas></div>
+      <div class="meta"><div class="nm">Party wall</div><div class="sub">4 layers</div><div class="elink">Edit</div></div>
+    </div>
+  </div>
+</div>
+<p class="note"><b>What this specifies.</b> Scenes are patterns on the phone too: the same two-up device-shaped grid as
+S1c, tap-to-play, <i>Edit</i> as a small link under the name, and the primary shrunk to an icon beside the one-line
+explanation. The <i>3 layers</i> line keeps its place between name and link.</p>
+
+<!-- ===================== S7d ===================== -->
+<p class="cap"><b>S7d</b> · Scene editor — <i>Add layer</i> at the pattern-layer cap</p>
+<div class="frame w320" id="S7d">
+  <div class="lcol" style="border-right:0;width:100%">
+    <div class="rhead" style="margin-bottom:8px">
+      <div class="slabel">Layers</div>
+      <div class="rdim" style="margin-left:auto">top = front</div>
+    </div>
+    <div class="lrow">
+      <span class="hnd">⠿</span>
+      <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+      <span class="ty">T</span>
+      <span class="nm2">Time</span>
+      <span class="meta2">12:48</span>
+    </div>
+    <div class="lrow">
+      <span class="hnd">⠿</span>
+      <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+      <span class="ty">▦</span>
+      <span class="nm2">Heart</span>
+      <span class="meta2">sprite · 9×8</span>
+    </div>
+    <div class="lrow">
+      <span class="hnd">⠿</span>
+      <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+      <span class="ty">▤</span>
+      <span class="nm2">Aurora 2D</span>
+      <span class="meta2">60 % · lighten</span>
+    </div>
+    <div class="lrow">
+      <span class="hnd">⠿</span>
+      <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+      <span class="ty">▤</span>
+      <span class="nm2">Rainbow</span>
+      <span class="meta2">base</span>
+    </div>
+    <div class="addwrap">
+      <div class="btn primary" style="width:100%;justify-content:center">+ Add layer ▾</div>
+      <div class="menu full">
+        <div class="mi dis" style="display:flex;align-items:center;gap:8px">▤ Pattern <span class="mdim">2 of 2 used</span></div>
+        <div class="reason">this device fits 2 pattern layers; text and sprite and color layers are free</div>
+        <div class="mi hi">T Text</div>
+        <div class="mi">▦ Sprite</div>
+        <div class="mi">▭ Color</div>
+      </div>
+    </div>
+    <div style="height:214px"></div>
+    <div class="statecap" style="margin-top:0">the preview column's cost line, at the cap:<span class="rule"></span></div>
+    <div class="hint">Frame cost: 2 of 2 pattern layers · 24 fps</div>
+    <div class="budget" style="max-width:none"><i style="width:100%"></i></div>
+    <div style="height:8px"></div>
+  </div>
+</div>
+<p class="note"><b>What this specifies.</b> D4's one deliberate exception to "absent, never disabled": the layer budget
+is something the user has to learn, so <i>Pattern</i> stays in the menu, greyed, with its count on the row and its
+reason spelled out underneath in full — the sentence, not just the number, because "2 of 2 used" alone does not tell
+you that text, sprite and color layers are free. The count comes from <span class="mono tiny">caps.layers</span>, so a
+300 px strip board reads <i>3 of 3</i> and the same row is live until it is reached. The cost line under the preview
+counts the same two things and adds the measured frame rate, so the price of the cap is visible where the picture is.</p>
+
+<!-- ===================== S7e ===================== -->
+<p class="cap"><b>S7e</b> · Scene editor — color layer selected, a hidden layer, and a drag in progress</p>
+<div class="frame w1200" id="S7e">
+  <header class="edhdr">
+    <div class="btn quiet">← Scenes</div>
+    <div class="nameedit">Clock overlay</div>
+    <div class="savestate">unsaved changes</div>
+    <div class="spacer"></div>
+    <div class="btn primary">Save</div>
+    <div class="menuwrap"><div class="btn icon">⋯</div></div>
+  </header>
+  <div class="scene3" style="height:712px">
+    <div class="lcol">
+      <div class="rhead" style="margin-bottom:8px">
+        <div class="slabel">Layers</div>
+        <div class="rdim" style="margin-left:auto">top = front</div>
+      </div>
+      <div class="lrow">
+        <span class="hnd">⠿</span>
+        <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+        <span class="ty">T</span>
+        <span class="nm2">Time</span>
+        <span class="meta2">12:48</span>
+      </div>
+      <div class="dropline"></div>
+      <div class="lrow off">
+        <span class="hnd">⠿</span>
+        <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4l16 16"/><path d="M6.7 6.9C4 8.6 2 12 2 12s3.8 6 10 6c1.9 0 3.5-.5 4.9-1.3"/><path d="M9.9 5.2A9.6 9.6 0 0 1 12 6c6.2 0 10 6 10 6a18 18 0 0 1-2.4 3"/></svg>
+        <span class="ty">▦</span>
+        <span class="nm2">Heart</span>
+        <span class="meta2">hidden</span>
+      </div>
+      <div class="lrow drag">
+        <span class="hnd">⠿</span>
+        <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+        <span class="ty">▤</span>
+        <span class="nm2">Aurora 2D</span>
+        <span class="meta2">60 % · lighten</span>
+      </div>
+      <div class="lrow sel">
+        <span class="hnd">⠿</span>
+        <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+        <span class="ty">▭</span>
+        <span class="nm2">Bottom bar</span>
+        <span class="meta2">color</span>
+      </div>
+      <div class="lrow">
+        <span class="hnd">⠿</span>
+        <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+        <span class="ty">▤</span>
+        <span class="nm2">Rainbow</span>
+        <span class="meta2">base</span>
+      </div>
+      <div class="addwrap">
+        <div class="btn primary" style="width:100%;justify-content:center">+ Add layer ▾</div>
+      </div>
+    </div>
+
+    <div class="ccol">
+      <div class="rhead">
+        <div class="slabel">Preview</div>
+        <div class="rdim">64×64 · 24 fps on device</div>
+        <div class="grp">
+          <div class="btn sm icon">‖</div>
+        </div>
+      </div>
+      <div class="stage">
+        <canvas data-viz="stagecomp" data-w="64" data-h="64"></canvas>
+        <div class="marq" style="left:0;top:417px;width:460px;height:43px"></div>
+        <div class="hdl" style="left:-3px;top:414px"></div>
+        <div class="hdl" style="left:456px;top:414px"></div>
+        <div class="hdl" style="left:-3px;top:456px"></div>
+        <div class="hdl" style="left:456px;top:456px"></div>
+      </div>
+      <div class="hint" style="margin-top:12px">Frame cost: 2 of 2 pattern layers · 24 fps</div>
+      <div class="budget"><i style="width:100%"></i></div>
+    </div>
+
+    <div class="rcol">
+      <div class="rhead" style="margin-bottom:12px"><div class="slabel">Color layer</div></div>
+      <div class="irow"><div class="ilab">Name</div><input class="inp" style="width:100%" value="Bottom bar"></div>
+      <div class="irow"><div class="ilab">Color</div><div><div class="swatchbtn"><i style="background:#e8a33d"></i>amber</div></div></div>
+      <div class="irow wide"><div class="ilab">Box</div>
+        <div class="boxrow">
+          <label>x <input class="inp" value="0"></label>
+          <label>y <input class="inp" value="58"></label>
+          <label>w <input class="inp" value="64"></label>
+          <label>h <input class="inp" value="6"></label>
+        </div>
+      </div>
+      <div class="irule"></div>
+      <div class="irow"><div class="ilab">Blend</div><div class="sel" style="width:100%">Normal <i>▾</i></div></div>
+      <div class="irow"><div class="ilab">Opacity</div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <div class="slider"><div class="trk"></div><div class="fil" style="width:45%"></div><div class="thb" style="left:45%"></div></div>
+          <span class="mono tiny dim">45 %</span>
+        </div>
+      </div>
+      <div style="margin-top:26px"><div class="btn del">Delete layer</div></div>
+    </div>
+  </div>
+</div>
+<p class="note"><b>What this specifies.</b> Three list states at once. <b>Hidden</b> is the eye struck through plus the
+whole row at 45 % — the layer keeps its place and its metadata line reads <i>hidden</i>, because a hidden layer is
+still a layer you are going to bring back. <b>Dragging</b> lifts the row (a lighter fill and a drop shadow, no rotation,
+no placeholder gap) and the destination is a 2 px accent rule between rows — the list never reflows under the cursor.
+<b>Selected</b> is unchanged from S7: accent wash, accent left edge, and the layer's box as the marquee — a color layer
+is a rectangle of one colour, so its box IS the layer and dragging the marquee is the whole geometry UI. The color
+inspector is the shortest one in the app — name, colour, box, blend, opacity — and the <i>Transparent</i> row is
+absent rather than set to <i>nothing</i>: a flat colour has no pixels to key.</p>
+
+<!-- ===================== S7f ===================== -->
+<p class="cap"><b>S7f</b> · Scene editor — mobile 390 px, panes stacked with the preview sticky</p>
+<div class="frame w390" id="S7f">
+  <header class="edhdr" style="height:44px;padding:0 10px;gap:8px">
+    <div class="btn quiet icon">←</div>
+    <div class="nameedit" style="font-size:13px;flex:1;min-width:0">Clock overlay</div>
+    <div class="btn primary">Save</div>
+    <div class="btn icon">⋯</div>
+  </header>
+  <div style="height:1002px;overflow:hidden">
+    <div class="rsec sticky">
+      <div class="rhead">
+        <div class="slabel">Preview</div>
+        <div class="rdim">64×64 · 24 fps</div>
+        <div class="grp"><div class="btn sm icon">‖</div></div>
+      </div>
+      <div class="stage" style="width:300px;margin:0 auto">
+        <canvas data-viz="stagecomp" data-w="64" data-h="64" style="width:300px;height:300px"></canvas>
+        <div class="marq" style="left:0;top:131px;width:300px;height:38px"></div>
+        <div class="hdl" style="left:-3px;top:128px"></div>
+        <div class="hdl" style="left:296px;top:128px"></div>
+        <div class="hdl" style="left:-3px;top:166px"></div>
+        <div class="hdl" style="left:296px;top:166px"></div>
+      </div>
+      <div class="hint" style="margin-top:10px">Frame cost: 2 of 2 pattern layers · 24 fps</div>
+      <div class="budget" style="max-width:none"><i style="width:100%"></i></div>
+    </div>
+    <div class="rsec">
+      <div class="rhead" style="margin-bottom:8px">
+        <div class="slabel">Layers</div>
+        <div class="rdim" style="margin-left:auto">top = front</div>
+      </div>
+      <div class="lrow sel">
+        <span class="hnd">⠿</span>
+        <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+        <span class="ty">T</span>
+        <span class="nm2">Time</span>
+        <span class="meta2">12:48</span>
+      </div>
+      <div class="lrow">
+        <span class="hnd">⠿</span>
+        <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+        <span class="ty">▤</span>
+        <span class="nm2">Aurora 2D</span>
+        <span class="meta2">60 % · lighten</span>
+      </div>
+      <div class="lrow">
+        <span class="hnd">⠿</span>
+        <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+        <span class="ty">▤</span>
+        <span class="nm2">Rainbow</span>
+        <span class="meta2">base</span>
+      </div>
+      <div class="addwrap" style="margin-top:10px">
+        <div class="btn primary" style="width:100%;justify-content:center">+ Add layer ▾</div>
+      </div>
+    </div>
+    <div class="rsec" style="border-bottom:0">
+      <div class="rhead" style="margin-bottom:12px"><div class="slabel">Text layer</div></div>
+      <div class="irow"><div class="ilab">Name</div><input class="inp" style="width:100%" value="Time"></div>
+      <div class="irow start">
+        <div class="ilab">Text</div>
+        <div>
+          <div class="rrow"><span class="radio"></span>Fixed <input class="inp xs" style="flex:1;min-width:0" value="Hello"></div>
+          <div class="rrow on"><span class="radio"></span>Clock <div class="sel xs" style="flex:1">HH:MM <i>▾</i></div></div>
+          <div class="rrow"><span class="radio"></span>Text slot 1</div>
+        </div>
+      </div>
+      <div class="irow"><div class="ilab">Font</div><div class="sel" style="width:100%">5×7 regular <i>▾</i></div></div>
+      <div class="irow"><div class="ilab">Color</div><div><div class="swatchbtn"><i style="background:#ffffff"></i>white</div></div></div>
+      <div class="irow"><div class="ilab">Align</div>
+        <div class="seg sm"><div>left</div><div class="on">center</div><div>right</div></div>
+      </div>
+      <div class="irow wide"><div class="ilab">Box</div>
+        <div class="boxrow">
+          <label>x <input class="inp" value="0"></label>
+          <label>y <input class="inp" value="28"></label>
+          <label>w <input class="inp" value="64"></label>
+          <label>h <input class="inp" value="8"></label>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="note"><b>What this specifies.</b> D9 to the letter: the three columns become three sections in reading order —
+preview, layers, inspector — with no new controls and nothing dropped. The preview pane is <span class="mono tiny">position:sticky</span>
+at the top so the composite stays visible while you scroll into the inspector, which is the only reason editing a scene
+on a phone works at all; dragging the marquee still sets the box. The layer list keeps full-size drag handles and eyes
+(touch targets), and <i>+ Add layer</i> stays the section's only primary.</p>
+
+<!-- ===================== S7g ===================== -->
+<p class="cap"><b>S7g</b> · Pattern layer — non-Normal blend, ramp stops, projection row</p>
+<div class="frame w320" id="S7g">
+  <div class="rcol" style="border-left:0;width:100%">
+    <div class="rhead" style="margin-bottom:12px"><div class="slabel">Pattern layer</div></div>
+
+    <div class="irow wide">
+      <div class="ilab">Pattern</div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <canvas data-viz="sunsetacross" data-w="64" data-h="64" style="width:44px;height:44px;border-radius:4px;image-rendering:pixelated;background:#000;display:block"></canvas>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;white-space:nowrap">Sunset Fade</div>
+          <div class="hint" style="white-space:nowrap">1D · 64 px stretched</div>
+        </div>
+        <div class="btn sm">Change…</div>
+      </div>
+    </div>
+
+    <div class="rhead" style="margin:16px 0 6px"><div class="slabel">Controls</div></div>
+    <div class="irow"><div class="ilab">Hue</div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <div class="slider"><div class="trk"></div><div class="fil" style="width:10%"></div><div class="thb" style="left:10%"></div></div>
+        <input class="inp num xs" style="width:58px" value="0.10">
+      </div>
+    </div>
+    <div class="irow"><div class="ilab">Speed</div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <div class="slider"><div class="trk"></div><div class="fil" style="width:8%"></div><div class="thb" style="left:8%"></div></div>
+        <input class="inp num xs" style="width:58px" value="0.08">
+      </div>
+    </div>
+
+    <div class="hairline"></div>
+    <div class="projrow">
+      <span class="pl">Projection</span>
+      <span class="pv">device default · along x</span>
+      <a class="pa">change</a>
+    </div>
+
+    <div class="irule"></div>
+
+    <div class="irow wide">
+      <div class="ilab">Color ramp</div>
+      <div>
+        <div class="gradbar" style="background:linear-gradient(90deg,#000 0%,#2a1060 34%,#c23a6b 68%,#f7e08a 100%)"></div>
+        <div class="stoprow">
+          <span class="stopmk on" style="left:0;background:#000"></span>
+          <span class="stopmk" style="left:34%;background:#2a1060"></span>
+          <span class="stopmk" style="left:68%;background:#c23a6b"></span>
+          <span class="stopmk" style="left:100%;background:#f7e08a"></span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:8px">
+          <div class="btn sm">Edit stops…</div>
+          <span class="hint">4 stops · the same editor as Settings › Output › Palette</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="irule"></div>
+
+    <div class="irow wide"><div class="ilab">Box</div>
+      <div class="boxrow">
+        <label>x <input class="inp" value="0"></label>
+        <label>y <input class="inp" value="0"></label>
+        <label>w <input class="inp" value="64"></label>
+        <label>h <input class="inp" value="64"></label>
+      </div>
+    </div>
+    <div class="irow"><div class="ilab">Fit</div><div class="sel" style="width:100%">fill <i>▾</i></div></div>
+
+    <div class="irule"></div>
+
+    <div class="irow"><div class="ilab">Blend</div><div class="sel" style="width:100%">Multiply <i>▾</i></div></div>
+    <div class="irow" style="margin-bottom:0"><div class="ilab">Opacity</div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <div class="slider"><div class="trk"></div><div class="fil" style="width:60%"></div><div class="thb" style="left:60%"></div></div>
+        <span class="mono tiny dim">60 %</span>
+      </div>
+    </div>
+    <div style="margin-top:22px"><div class="btn del">Delete layer</div></div>
+  </div>
+</div>
+<p class="note"><b>What this specifies.</b> The counterpart to S7b's Normal state: with <i>Blend = Multiply</i> the
+<b>Transparent row is gone</b> — not greyed, not replaced by explanatory copy — because Add, Lighten, Multiply and Mask
+carry their own key. Opacity stays and still reads 60 %. The ramp is the output-palette stage applied per layer, so it
+gets the same control Settings › Output › Palette has: gradient bar, draggable stops under it, <i>Edit stops…</i>, and
+a count — one editor, two places. And because this is a 1D pattern on a matrix, the quiet <i>Projection</i> row from
+S2c appears under a hairline after the pattern's own controls, inherited (plain text + <i>change</i>); an override would
+read in accent with <i>reset</i>. Same row, same wording, third home (editor · playlist row · layer inspector).</p>
+
+<!-- ===================== S7h ===================== -->
+<p class="cap"><b>S7h</b> · Text layer — the three source states side by side</p>
+<div class="frame w962" id="S7h">
+  <div class="varcols">
+    <div class="rcol" style="width:320px">
+      <div class="rhead" style="margin-bottom:12px"><div class="slabel">Text layer</div><div class="rdim" style="margin-left:auto">source = clock</div></div>
+      <div class="irow"><div class="ilab">Name</div><input class="inp" style="width:100%" value="Time"></div>
+      <div class="irow start">
+        <div class="ilab">Text</div>
+        <div>
+          <div class="rrow"><span class="radio"></span>Fixed <input class="inp xs" style="flex:1;min-width:0" value="Hello"></div>
+          <div class="rrow on"><span class="radio"></span>Clock <div class="sel xs" style="flex:1">HH:MM <i>▾</i></div></div>
+          <div class="hint" style="padding-left:21px">HH:MM · H:MM · HH:MM:SS · DD MMM</div>
+          <div class="rrow"><span class="radio"></span>Text slot 0</div>
+        </div>
+      </div>
+      <div class="irow start"><div class="ilab" style="padding-top:1px">Clock</div>
+        <div>
+          <div class="hint">not synced — the layer draws <span class="mono" style="white-space:nowrap">--:--</span> until the device gets the time</div>
+          <div class="hint" style="margin-top:5px"><a class="lnk" style="text-decoration:underline">Settings › Clock &amp; time zone</a></div>
+        </div>
+      </div>
+      <div class="irow"><div class="ilab">Font</div><div class="sel" style="width:100%">5×7 regular <i>▾</i></div></div>
+      <div class="irow"><div class="ilab">Scroll</div><div class="sel" style="width:100%">none <i>▾</i></div></div>
+    </div>
+
+    <div class="rcol" style="width:320px">
+      <div class="rhead" style="margin-bottom:12px"><div class="slabel">Text layer</div><div class="rdim" style="margin-left:auto">source = text slot</div></div>
+      <div class="irow"><div class="ilab">Name</div><input class="inp" style="width:100%" value="Message"></div>
+      <div class="irow start">
+        <div class="ilab">Text</div>
+        <div>
+          <div class="rrow"><span class="radio"></span>Fixed <input class="inp xs" style="flex:1;min-width:0" value="Hello"></div>
+          <div class="rrow"><span class="radio"></span>Clock <div class="sel xs" style="flex:1">HH:MM <i>▾</i></div></div>
+          <div class="rrow on"><span class="radio"></span>Text slot <div class="sel xs" style="flex:1">0 <i>▾</i></div></div>
+          <div class="hint" style="padding-left:21px">set from the API or Home Assistant</div>
+          <div class="hint" style="padding-left:21px;margin-top:4px">slots 0–7 · <span class="mono" style="white-space:nowrap">POST /api/text</span> · one HA text entity each</div>
+        </div>
+      </div>
+      <div class="irow start"><div class="ilab" style="padding-top:1px">Now</div>
+        <div><div class="mono tiny" style="color:var(--text)">PARTY 21:00</div></div>
+      </div>
+      <div class="irow"><div class="ilab">Font</div><div class="sel" style="width:100%">5×7 regular <i>▾</i></div></div>
+      <div class="irow"><div class="ilab">Scroll</div><div class="sel" style="width:100%">none <i>▾</i></div></div>
+    </div>
+
+    <div class="rcol" style="width:320px">
+      <div class="rhead" style="margin-bottom:12px"><div class="slabel">Text layer</div><div class="rdim" style="margin-left:auto">scroll</div></div>
+      <div class="irow"><div class="ilab">Scroll</div><div class="sel" style="width:100%">none <i>▾</i></div></div>
+      <div class="irow wide"><div class="ilab">Box</div>
+        <div class="boxrow">
+          <label>x <input class="inp" value="0"></label>
+          <label>y <input class="inp" value="28"></label>
+          <label>w <input class="inp" value="64"></label>
+          <label>h <input class="inp" value="8"></label>
+        </div>
+      </div>
+      <div class="statecap">with Scroll = left:<span class="rule"></span></div>
+      <div class="irow"><div class="ilab">Scroll</div><div class="sel" style="width:100%">left <i>▾</i></div></div>
+      <div class="irow"><div class="ilab">Speed</div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <div class="slider"><div class="trk"></div><div class="fil" style="width:34%"></div><div class="thb" style="left:34%"></div></div>
+          <span class="mono tiny dim">20 px/s</span>
+        </div>
+      </div>
+      <div class="irow wide"><div class="ilab">Box</div>
+        <div class="boxrow">
+          <label>x <input class="inp" value="0"></label>
+          <label>y <input class="inp" value="28"></label>
+          <label>w <input class="inp" value="64"></label>
+          <label>h <input class="inp" value="8"></label>
+        </div>
+      </div>
+      <div class="hint" style="margin-top:12px">The box is the scroll window: text longer than <i>w</i> is what scrolling
+      is for, and it is clipped to the box in every direction.</div>
+    </div>
+  </div>
+</div>
+<p class="note"><b>What this specifies.</b> One inspector, three source states, and the rows that appear with them.
+<b>Clock</b> adds a format select and, when the device has no time yet, one dim state line saying exactly what will be
+drawn instead — no toast, no banner, and the row stays usable. <b>Text slot</b> adds the slot number and says in one
+line who writes it; the current value is echoed under <i>Now</i> so the layer is not a black box when the panel is in
+another room. <b>Scroll</b> is the conditional-visibility rule again: <i>Speed</i> does not exist while Scroll = none,
+and appears directly under it — in px/s, the unit the firmware takes — the moment a direction is chosen.</p>
+
+<!-- ===================== S7i ===================== -->
+<p class="cap"><b>S7i</b> · Text layer — font picker open (the three built-ins)</p>
+<div class="frame w320" id="S7i">
+  <div class="rcol" style="border-left:0;width:100%">
+    <div class="rhead" style="margin-bottom:12px"><div class="slabel">Text layer</div></div>
+    <div class="irow"><div class="ilab">Name</div><input class="inp" style="width:100%" value="Time"></div>
+    <div class="addwrap" style="margin-top:0">
+      <div class="irow" style="margin-bottom:0"><div class="ilab">Font</div>
+        <div class="sel" style="width:100%;border-color:var(--accent);background:var(--accent-soft)">5×7 regular <i>▾</i></div>
+      </div>
+      <div class="menu full">
+        <div class="mi fontrow">
+          <div class="fmeta"><div class="fnm">4×6 tiny</div><div class="hint">Tom Thumb · ~16 chars wide</div></div>
+          <svg class="glyph" width="38" height="12" viewBox="0 0 38 12" shape-rendering="crispEdges"><rect x="2" y="0" width="2" height="2" fill="#d7dae0"/><rect x="0" y="2" width="4" height="2" fill="#d7dae0"/><rect x="2" y="4" width="2" height="2" fill="#d7dae0"/><rect x="2" y="6" width="2" height="2" fill="#d7dae0"/><rect x="0" y="8" width="6" height="2" fill="#d7dae0"/><rect x="8" y="0" width="6" height="2" fill="#d7dae0"/><rect x="12" y="2" width="2" height="2" fill="#d7dae0"/><rect x="8" y="4" width="6" height="2" fill="#d7dae0"/><rect x="8" y="6" width="2" height="2" fill="#d7dae0"/><rect x="8" y="8" width="6" height="2" fill="#d7dae0"/><rect x="18" y="2" width="2" height="2" fill="#d7dae0"/><rect x="18" y="6" width="2" height="2" fill="#d7dae0"/><rect x="24" y="0" width="2" height="2" fill="#d7dae0"/><rect x="28" y="0" width="2" height="2" fill="#d7dae0"/><rect x="24" y="2" width="2" height="2" fill="#d7dae0"/><rect x="28" y="2" width="2" height="2" fill="#d7dae0"/><rect x="24" y="4" width="6" height="2" fill="#d7dae0"/><rect x="28" y="6" width="2" height="2" fill="#d7dae0"/><rect x="28" y="8" width="2" height="2" fill="#d7dae0"/><rect x="32" y="0" width="6" height="2" fill="#d7dae0"/><rect x="32" y="2" width="2" height="2" fill="#d7dae0"/><rect x="36" y="2" width="2" height="2" fill="#d7dae0"/><rect x="32" y="4" width="6" height="2" fill="#d7dae0"/><rect x="32" y="6" width="2" height="2" fill="#d7dae0"/><rect x="36" y="6" width="2" height="2" fill="#d7dae0"/><rect x="32" y="8" width="6" height="2" fill="#d7dae0"/></svg>
+        </div>
+        <div class="mi fontrow hi">
+          <div class="fmeta"><div class="fnm">5×7 regular</div><div class="hint">misc-fixed · current</div></div>
+          <svg class="glyph" width="58" height="16" viewBox="0 0 58 16" shape-rendering="crispEdges"><rect x="4" y="0" width="2" height="2" fill="#d7dae0"/><rect x="2" y="2" width="4" height="2" fill="#d7dae0"/><rect x="4" y="4" width="2" height="2" fill="#d7dae0"/><rect x="4" y="6" width="2" height="2" fill="#d7dae0"/><rect x="4" y="8" width="2" height="2" fill="#d7dae0"/><rect x="4" y="10" width="2" height="2" fill="#d7dae0"/><rect x="2" y="12" width="6" height="2" fill="#d7dae0"/><rect x="14" y="0" width="6" height="2" fill="#d7dae0"/><rect x="12" y="2" width="2" height="2" fill="#d7dae0"/><rect x="20" y="2" width="2" height="2" fill="#d7dae0"/><rect x="20" y="4" width="2" height="2" fill="#d7dae0"/><rect x="18" y="6" width="2" height="2" fill="#d7dae0"/><rect x="16" y="8" width="2" height="2" fill="#d7dae0"/><rect x="14" y="10" width="2" height="2" fill="#d7dae0"/><rect x="12" y="12" width="10" height="2" fill="#d7dae0"/><rect x="28" y="2" width="2" height="2" fill="#d7dae0"/><rect x="28" y="4" width="2" height="2" fill="#d7dae0"/><rect x="28" y="8" width="2" height="2" fill="#d7dae0"/><rect x="28" y="10" width="2" height="2" fill="#d7dae0"/><rect x="42" y="0" width="2" height="2" fill="#d7dae0"/><rect x="40" y="2" width="4" height="2" fill="#d7dae0"/><rect x="38" y="4" width="2" height="2" fill="#d7dae0"/><rect x="42" y="4" width="2" height="2" fill="#d7dae0"/><rect x="36" y="6" width="2" height="2" fill="#d7dae0"/><rect x="42" y="6" width="2" height="2" fill="#d7dae0"/><rect x="36" y="8" width="10" height="2" fill="#d7dae0"/><rect x="42" y="10" width="2" height="2" fill="#d7dae0"/><rect x="42" y="12" width="2" height="2" fill="#d7dae0"/><rect x="50" y="0" width="6" height="2" fill="#d7dae0"/><rect x="48" y="2" width="2" height="2" fill="#d7dae0"/><rect x="56" y="2" width="2" height="2" fill="#d7dae0"/><rect x="48" y="4" width="2" height="2" fill="#d7dae0"/><rect x="56" y="4" width="2" height="2" fill="#d7dae0"/><rect x="50" y="6" width="6" height="2" fill="#d7dae0"/><rect x="48" y="8" width="2" height="2" fill="#d7dae0"/><rect x="56" y="8" width="2" height="2" fill="#d7dae0"/><rect x="48" y="10" width="2" height="2" fill="#d7dae0"/><rect x="56" y="10" width="2" height="2" fill="#d7dae0"/><rect x="50" y="12" width="6" height="2" fill="#d7dae0"/></svg>
+        </div>
+        <div class="mi fontrow">
+          <div class="fmeta"><div class="fnm">5×8 large</div><div class="hint">Spleen · ~10 chars wide</div></div>
+          <svg class="glyph" width="58" height="18" viewBox="0 0 58 18" shape-rendering="crispEdges"><rect x="4" y="0" width="2" height="2" fill="#d7dae0"/><rect x="2" y="2" width="4" height="2" fill="#d7dae0"/><rect x="0" y="4" width="2" height="2" fill="#d7dae0"/><rect x="4" y="4" width="2" height="2" fill="#d7dae0"/><rect x="4" y="6" width="2" height="2" fill="#d7dae0"/><rect x="4" y="8" width="2" height="2" fill="#d7dae0"/><rect x="4" y="10" width="2" height="2" fill="#d7dae0"/><rect x="4" y="12" width="2" height="2" fill="#d7dae0"/><rect x="0" y="14" width="10" height="2" fill="#d7dae0"/><rect x="14" y="0" width="6" height="2" fill="#d7dae0"/><rect x="12" y="2" width="2" height="2" fill="#d7dae0"/><rect x="20" y="2" width="2" height="2" fill="#d7dae0"/><rect x="20" y="4" width="2" height="2" fill="#d7dae0"/><rect x="18" y="6" width="2" height="2" fill="#d7dae0"/><rect x="16" y="8" width="2" height="2" fill="#d7dae0"/><rect x="14" y="10" width="2" height="2" fill="#d7dae0"/><rect x="12" y="12" width="2" height="2" fill="#d7dae0"/><rect x="12" y="14" width="10" height="2" fill="#d7dae0"/><rect x="28" y="4" width="2" height="2" fill="#d7dae0"/><rect x="28" y="10" width="2" height="2" fill="#d7dae0"/><rect x="42" y="0" width="2" height="2" fill="#d7dae0"/><rect x="40" y="2" width="4" height="2" fill="#d7dae0"/><rect x="38" y="4" width="2" height="2" fill="#d7dae0"/><rect x="42" y="4" width="2" height="2" fill="#d7dae0"/><rect x="36" y="6" width="2" height="2" fill="#d7dae0"/><rect x="42" y="6" width="2" height="2" fill="#d7dae0"/><rect x="36" y="8" width="2" height="2" fill="#d7dae0"/><rect x="42" y="8" width="2" height="2" fill="#d7dae0"/><rect x="36" y="10" width="10" height="2" fill="#d7dae0"/><rect x="42" y="12" width="2" height="2" fill="#d7dae0"/><rect x="42" y="14" width="2" height="2" fill="#d7dae0"/><rect x="50" y="0" width="6" height="2" fill="#d7dae0"/><rect x="48" y="2" width="2" height="2" fill="#d7dae0"/><rect x="56" y="2" width="2" height="2" fill="#d7dae0"/><rect x="48" y="4" width="2" height="2" fill="#d7dae0"/><rect x="56" y="4" width="2" height="2" fill="#d7dae0"/><rect x="50" y="6" width="6" height="2" fill="#d7dae0"/><rect x="48" y="8" width="2" height="2" fill="#d7dae0"/><rect x="56" y="8" width="2" height="2" fill="#d7dae0"/><rect x="48" y="10" width="2" height="2" fill="#d7dae0"/><rect x="56" y="10" width="2" height="2" fill="#d7dae0"/><rect x="48" y="12" width="2" height="2" fill="#d7dae0"/><rect x="56" y="12" width="2" height="2" fill="#d7dae0"/><rect x="50" y="14" width="6" height="2" fill="#d7dae0"/></svg>
+        </div>
+      </div>
+    </div>
+    <div style="height:196px"></div>
+  </div>
+</div>
+<p class="note"><b>What this specifies.</b> The font picker is the <i>only</i> font UI in the app — there is no
+Settings › Fonts group (§5.6) — so the list has to answer "which one" by itself: every entry shows the same sample
+rendered in that face at 1:1 device pixels, so the size difference is the thing you compare, not the names. Three
+entries, all built into <span class="mono tiny">luxel-core</span>, identical on device and in the playground. There is
+no <i>Upload…</i> row, no empty "custom fonts" section and no hint that one is coming: user fonts are filed and not
+planned (#487), and an affordance for them would be a promise the device cannot keep.</p>
+
+<!-- ===================== S2f ===================== -->
+<p class="cap"><b>S2f</b> · Editor — text builtins in completions and docs (matrix console)</p>
+<div class="frame w1200" id="S2f">
+  <header class="edhdr">
+    <div class="btn quiet">← Patterns</div>
+    <div class="nameedit">Ticker</div>
+    <div class="savestate">unsaved changes</div>
+    <div class="spacer"></div>
+    <div class="btn primary">Save</div>
+    <div class="menuwrap"><div class="btn icon">⋯</div></div>
+    <div class="edhdr-rail"><div class="devchip"><i class="dot"></i>luxel-f6b0a8 · 64×64 matrix</div></div>
+  </header>
+  <div class="edbody" style="height:570px">
+    <div class="code">
+      <div class="codebody" style="position:relative">
+<div class="ln"><span class="gut">1</span><span class="src"><span class="co">// Ticker — scrolls text slot 0 across the panel</span></span></div>
+<div class="ln"><span class="gut">2</span><span class="src"> </span></div>
+<div class="ln"><span class="gut">3</span><span class="src"><span class="kw">export var</span> speed = <span class="nu">24</span></span></div>
+<div class="ln"><span class="gut">4</span><span class="src"><span class="kw">var</span> x = <span class="nu">64</span></span></div>
+<div class="ln"><span class="gut">5</span><span class="src"> </span></div>
+<div class="ln"><span class="gut">6</span><span class="src"><span class="kw">export function</span> <span class="fn">beforeRender</span>(delta) {</span></div>
+<div class="ln"><span class="gut">7</span><span class="src">  x = x - speed * delta / <span class="nu">1000</span></span></div>
+<div class="ln"><span class="gut">8</span><span class="src">  <span class="kw">if</span> (x &lt; -<span class="bi">textWidth</span>(<span class="bi">textSlot</span>(<span class="nu">0</span>))) x = <span class="nu">64</span></span></div>
+<div class="ln"><span class="gut">9</span><span class="src">}</span></div>
+<div class="ln"><span class="gut">10</span><span class="src"> </span></div>
+<div class="ln"><span class="gut">11</span><span class="src"><span class="kw">export function</span> <span class="fn">renderFrame</span>() {</span></div>
+<div class="ln"><span class="gut">12</span><span class="src">  <span class="bi">font</span>(<span class="st">"regular"</span>)</span></div>
+<div class="ln"><span class="gut">13</span><span class="src">  <span class="bi">rgb</span>(<span class="nu">1</span>, <span class="nu">.64</span>, <span class="nu">.24</span>)</span></div>
+<div class="ln cur"><span class="gut">14</span><span class="src">  drawT<span style="display:inline-block;width:1px;height:13px;background:var(--accent);vertical-align:-2px"></span></span></div>
+<div class="ln"><span class="gut">15</span><span class="src">}</span></div>
+        <div class="acpop" style="left:100px;top:292px">
+          <div class="acrow on"><span class="ak">drawText</span><span class="asig">(text, x, y[, align])</span></div>
+          <div class="acrow"><span class="ak">drawNumber</span><span class="asig">(v, x, y, digits, dec)</span></div>
+          <div class="acrow"><span class="ak">textWidth</span><span class="asig">(text)</span></div>
+          <div class="acrow"><span class="ak">font</span><span class="asig">(name)</span></div>
+          <div class="acrow"><span class="ak">textSlot</span><span class="asig">(n)</span></div>
+          <div class="acdoc">
+            <div class="sigl">drawText(text, x, y[, align])</div>
+            <p>Draws <i>text</i> with the current font and brush colour, top-left corner at <i>x</i>, <i>y</i> in grid
+            space. <i>align</i> is left · center · right, default left.</p>
+            <p>Needs a real 2D grid — a no-op without one, like <span class="mono">blit</span>.</p>
+            <div class="ex">drawText(textSlot(0), x, 28)</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="rail">
+      <div class="rsec">
+        <div class="rhead">
+          <div class="slabel">Preview</div>
+          <div class="rdim">64×64 · 27 fps</div>
+          <div class="grp">
+            <div class="btn sm icon" title="pause">‖</div>
+            <div class="sel" style="height:26px;font-size:12px;padding:0 7px 0 8px">60 fps <i>▾</i></div>
+          </div>
+        </div>
+        <canvas class="prev" data-viz="ticker" data-w="64" data-h="64"></canvas>
+      </div>
+      <div class="rsec">
+        <div class="rhead"><div class="slabel">Controls</div></div>
+        <div class="ctlrow">
+          <div class="tiny dim">Speed</div>
+          <div class="slider"><div class="trk"></div><div class="fil" style="width:24%"></div><div class="thb" style="left:24%"></div></div>
+          <input class="inp num xs" value="24">
+        </div>
+      </div>
+      <div class="rsec">
+        <div class="hint">Text slot 0 · <span class="mono">PARTY 21:00</span> — set from the API or Home Assistant.</div>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="note"><b>What this specifies.</b> The text builtins are completions and hover docs like every other builtin —
+same popup, same one-line signature, same docs card — because a pattern that draws text is just a pattern. The docs card
+states the one rule that bites (<i>needs a grid, no-op without one</i>) and shows the call in the form people actually
+want it, reading a text slot rather than a literal. <b>On a strip, 3D or custom-map console these five entries are
+absent</b> from both the completion list and the docs index — the same Layout gate that hides the Scenes tab and
+<i>Add to scene</i> — so the editor never offers a builtin that would silently do nothing on the device you are
+connected to.</p>
 
 </main>
 </div>
