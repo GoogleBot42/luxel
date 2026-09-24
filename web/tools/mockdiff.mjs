@@ -620,15 +620,20 @@ const MIRROR_ARGS = {
   // own mirror because seeding a scene and PLAYING it parks the playlist —
   // which the S1/S4 frames on the shared panel mirror need left running.
   scenes: ["--board", "panel", "--pixels", "4096", "--name", "luxel-f6b0a8"],
+  // …and one more for the PLAYLIST half (#478): its queue holds a scene item
+  // and is playing it, which parks nothing the scene-editor frames above need
+  // but would replace the `scenes` console’s active scene.
+  plscenes: ["--board", "panel", "--pixels", "4096", "--name", "luxel-f6b0a8"],
 };
 /** The pixel count each mirror runs, so a seed pattern compiles for it. */
-const MIRROR_PIXELS = { panel: 4096, strip: 300, outputs: 600, lattice: 512, scenes: 4096 };
+const MIRROR_PIXELS = { panel: 4096, strip: 300, outputs: 600, lattice: 512, scenes: 4096, plscenes: 4096 };
 const MIRROR_PORT = {
   panel: E2E.mirror.mdPanel,
   strip: E2E.mirror.mdStrip,
   outputs: E2E.mirror.mdOutputs,
   lattice: E2E.mirror.mdLattice,
   scenes: E2E.mirror.mdScenes,
+  plscenes: E2E.mirror.mdPlScenes,
 };
 
 /**
@@ -676,25 +681,6 @@ async function seedMirror(base, seed, pixels) {
       console.warn(`    seed: ${p.name}: ${err.message}`);
     }
   }
-  if (seed.playlist?.length) {
-    const lines = [`D ${seed.defaultSec ?? 8}`, `X ${seed.crossfadeMs ?? 500}`];
-    for (const it of seed.playlist) {
-      const [name, sec] = String(it).split("|");
-      if (ids.has(name)) lines.push(`I ${ids.get(name)} ${sec ?? -1}`);
-    }
-    await fetch(`${base}/api/playlist`, { method: "POST", body: lines.join("\n") }).catch(() => {});
-    // Long per-item durations on purpose: the playing tile and the playing row
-    // have to stay the SAME one for the length of a run, or two frames measured
-    // a minute apart disagree about which row is green.
-    if (seed.play !== false)
-      await fetch(`${base}/api/playlist/play`, { method: "POST" }).catch(() => {});
-    await sleep(600);
-  } else if (seed.activate && ids.has(seed.activate)) {
-    await fetch(`${base}/api/patterns/${ids.get(seed.activate)}/activate`, {
-      method: "POST",
-    }).catch(() => {});
-    await sleep(400);
-  }
   // Scenes (#480). Each entry is a WIRE BLOCK — the same text the console
   // posts — with `{{Pattern Name}}` standing in for the store id the device
   // just assigned, because a seed cannot know one. `activateScene` names the
@@ -710,6 +696,36 @@ async function seedMirror(base, seed, pixels) {
     } catch (err) {
       console.warn(`    seed scene: ${err.message}`);
     }
+  }
+  // A playlist entry may name one of them (`@Name`), so the scenes are
+  // created FIRST — `activateScene` still runs last, because activating parks
+  // the playlist.
+  if (seed.playlist?.length) {
+    const lines = [`D ${seed.defaultSec ?? 8}`, `X ${seed.crossfadeMs ?? 500}`];
+    for (const it of seed.playlist) {
+      const [name, sec] = String(it).split("|");
+      // `@Name` is a SCENE item — the wire spells it `I S<id> <sec>` (#478)
+      if (name.startsWith("@") && sceneIds.has(name.slice(1)))
+        lines.push(`I S${sceneIds.get(name.slice(1))} ${sec ?? -1}`);
+      else if (ids.has(name)) lines.push(`I ${ids.get(name)} ${sec ?? -1}`);
+    }
+    await fetch(`${base}/api/playlist`, { method: "POST", body: lines.join("\n") }).catch(() => {});
+    // Long per-item durations on purpose: the playing tile and the playing row
+    // have to stay the SAME one for the length of a run, or two frames measured
+    // a minute apart disagree about which row is green.
+    if (seed.play !== false)
+      await fetch(`${base}/api/playlist/play`, {
+        method: "POST",
+        // `playIndex` names WHICH row is the green one — a frame that draws a
+        // scene playing needs the scene item entered, not item 0.
+        body: seed.playIndex === undefined ? "" : String(seed.playIndex),
+      }).catch(() => {});
+    await sleep(600);
+  } else if (seed.activate && ids.has(seed.activate)) {
+    await fetch(`${base}/api/patterns/${ids.get(seed.activate)}/activate`, {
+      method: "POST",
+    }).catch(() => {});
+    await sleep(400);
   }
   if (seed.activateScene && sceneIds.has(seed.activateScene)) {
     await fetch(`${base}/api/scenes/${sceneIds.get(seed.activateScene)}/activate`, {
@@ -1308,8 +1324,14 @@ for (const frameId of runIds) {
     // to sit. Identical layouts then reported different orders in the mock and
     // in the app. Comparing the gap makes the check independent of the offset
     // (Gitea #538).
+    // A `hoverOnly` element has no RESTING position to compare: the mock
+    // paints that state permanently while the app only enters it under the
+    // pointer (a submenu, a tile’s action strip), so its resting box is
+    // either absent or collapsed at the origin and would reorder the whole
+    // sequence. It is compared in the hover pass like every other property.
     const seq = (src) =>
       entries
+        .filter((e) => !e.hoverOnly)
         .filter((e) => src[e.id]?.found && mockBase[e.id]?.found && appBase[e.id]?.found)
         .map((e) => ({ id: e.id, b: src[e.id].box }))
         .sort((x, y) =>

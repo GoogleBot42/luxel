@@ -16,6 +16,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   TRANSPORT_SETTLE_MS,
+  normalizePlaylist,
+  playlistWire,
   reconcileTransport,
   transportIntent,
 } from "../src/lib/playlist.ts";
@@ -76,4 +78,75 @@ test("a request the device never applies expires — the device wins", () => {
 
 test("the settle window is long enough for a slow loop, short enough to notice", () => {
   assert.ok(TRANSPORT_SETTLE_MS >= 1000 && TRANSPORT_SETTLE_MS <= 5000, TRANSPORT_SETTLE_MS);
+});
+
+// ---- the wire (Gitea #478: scene items) ----
+//
+// `I S<id>` is how a playlist names a SCENE. A scene carries no values of its
+// own — its layers do — so the serializer must never put a `C` or a `P` line
+// under one, and the read-back must normalize the `controls` a scene item
+// does not have.
+
+test("a pattern item serializes to I/C/P, a scene item to I S<id> alone", () => {
+  const wire = playlistWire({
+    defaultSec: 8,
+    crossfadeMs: 500,
+    playing: true,
+    index: 0,
+    items: [
+      { id: "5eed1c92", name: "Aurora 2D", kind: "pattern", sec: null, controls: { speed: [0.5] }, proj: "x" },
+      { id: "5ce4e5ff", name: "Clock overlay", kind: "scene", sec: 8, controls: {}, layers: 2 },
+    ],
+  });
+  assert.equal(
+    wire,
+    [
+      "D 8",
+      "X 500",
+      "I 5eed1c92 -1",
+      "C speed 32768",
+      "P x",
+      "I S5ce4e5ff 8",
+    ].join("\n"),
+  );
+});
+
+test("a scene item never emits C or P, even carrying them", () => {
+  const wire = playlistWire({
+    defaultSec: 0,
+    crossfadeMs: 0,
+    playing: false,
+    index: 0,
+    items: [
+      { id: "5ce4e5ff", name: "S", kind: "scene", sec: null, controls: { speed: [1] }, proj: "y" },
+    ],
+  });
+  assert.equal(wire, ["D 0", "X 0", "I S5ce4e5ff -1"].join("\n"));
+});
+
+test("an item with no kind is a pattern (a pre-#478 device)", () => {
+  const pl = normalizePlaylist({
+    defaultSec: 5,
+    crossfadeMs: 0,
+    playing: false,
+    index: 0,
+    items: [{ id: "a", name: "a", sec: null, controls: { speed: [1] } }],
+  });
+  assert.equal(pl.items[0].kind, "pattern");
+  assert.deepEqual(pl.items[0].controls, { speed: [1] });
+});
+
+test("a scene item comes back without controls and reads as an empty set", () => {
+  const pl = normalizePlaylist({
+    defaultSec: 5,
+    crossfadeMs: 0,
+    playing: false,
+    index: 0,
+    items: [{ kind: "scene", id: "5ce4e5ff", name: "Clock overlay", layers: 2, sec: 8 }],
+  });
+  assert.equal(pl.items[0].kind, "scene");
+  assert.deepEqual(pl.items[0].controls, {});
+  assert.equal(pl.items[0].layers, 2);
+  // and it round-trips back to the wire it came from
+  assert.match(playlistWire(pl), /^I S5ce4e5ff 8$/m);
 });

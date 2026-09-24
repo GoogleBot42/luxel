@@ -22,6 +22,7 @@ import {
   serializeScenes,
   truncateUtf8,
   validSceneId,
+  withPatternOnTop,
 } from "../src/lib/scene.ts";
 
 /** The fixture `scene::tests::json_carries_the_api_shape` parses. */
@@ -223,4 +224,41 @@ test("ids and utf-8 truncation", () => {
   assert.equal(validSceneId("5EED1C92"), false);
   assert.equal(validSceneId("5eed1c9"), false);
   assert.equal(truncateUtf8("ab€cd", 4), "ab"); // € is 3 bytes
+});
+
+// ---- `Add to scene ▸` (Gitea #478, proposal §5.4b) ----
+//
+// The shortcut is read-modify-write: the scene the store holds, plus this
+// pattern as its TOP layer, handed back to `saveScene`. What the device sees
+// is `serializeScene` of the result, so the layers
+
+// ---- `Add to scene ▸` (Gitea #478, proposal §5.4b) ----
+//
+// The shortcut is read-modify-write: the scene the store holds, plus this
+// pattern as its TOP layer, handed back to `saveScene`. What the device sees
+// is `serializeScene` of the result, so the layer's defaults are pinned here —
+// a full-layout box, normal, 100 %, unkeyed, visible.
+
+test("withPatternOnTop appends a full-layout pattern layer, last", () => {
+  const base = parseScene(
+    "S 0000000a Clock overlay\nL color 0 0 0 0 normal 100 none fill 1\nK 112233\n",
+  );
+  assert.equal(base.ok, true);
+  const next = withPatternOnTop(base.scene, "5eed1c92");
+  assert.equal(base.scene.layers.length, 1, "the input scene is not mutated");
+  assert.equal(next.layers.length, 2);
+  assert.equal(next.layers[1].body.kind, "pat");
+  assert.equal(next.layers[1].body.pat.id, "5eed1c92");
+  assert.equal(patternLayerCount(next), 1);
+  const wire = serializeScene(next).split("\n");
+  assert.ok(wire.includes("L pat 0 0 0 0 normal 100 none fill 1"), wire.join(" | "));
+  assert.ok(wire.includes("I 5eed1c92"), wire.join(" | "));
+});
+
+test("withPatternOnTop carries the values and the projection it was shown at", () => {
+  const next = withPatternOnTop(emptyScene("S"), "5eed1c92", { speed: [0.5], hue: [0.25, 1] }, "x");
+  const wire = serializeScene(next);
+  assert.match(wire, /^C speed 32768$/m);
+  assert.match(wire, /^C hue 16384 65536$/m);
+  assert.match(wire, /^P x$/m);
 });

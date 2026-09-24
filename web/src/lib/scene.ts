@@ -170,6 +170,27 @@ export function newLayer(kind: LayerKind): Layer {
   return { name: "Color", style, body: { kind: "color", color: "ffffff" } };
 }
 
+/**
+ * `scene` with `patternId` added as its TOP layer — the `Add to scene ▸`
+ * shortcut (proposal §5.4b, mock S2e). Layers are listed bottom → top, so the
+ * new one goes last: a full-layout box, normal blend, 100 %, unkeyed, carrying
+ * the values the pattern is being shown at.
+ *
+ * Pure, and it never mutates its input — the caller hands the result to
+ * `saveScene` (`stores/scenes.ts`), which is the only thing that writes.
+ */
+export function withPatternOnTop(
+  scene: Scene,
+  patternId: string,
+  controls: Record<string, number[]> = {},
+  proj: ProjectionMode | null = null,
+): Scene {
+  const layer = newLayer("pat");
+  const body = layer.body as { kind: "pat"; pat: PatternLayer };
+  body.pat = { ...body.pat, id: patternId, controls: { ...controls }, proj };
+  return { ...scene, layers: [...scene.layers, layer] };
+}
+
 export function newPatternBody(): PatternLayer {
   return { id: "", controls: {}, proj: null, ramp: null };
 }

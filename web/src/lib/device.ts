@@ -5,6 +5,7 @@
 
 import { gatedFetch, type GateOptions } from "./fetchgate";
 import type { ProjectionMode } from "./geometry";
+import { normalizePlaylist, playlistWire } from "./playlist";
 
 export interface DeviceStatus {
   /** The device's own mDNS-style name (`luxel-f6b0a8`) — what the console
@@ -759,31 +760,23 @@ export class DeviceSession {
     return (await res.json()) as RunResult;
   }
 
-  // ---- playlist ----
+  // ---- PLAYLIST (the block Gitea #478 extends with scene items) ----
 
-  /** The stored playlist + current playback state. */
+  /** The stored playlist + current playback state. Normalized so a scene item
+   *  (which carries no `controls`) and a pre-#478 device (which sends no
+   *  `kind`) read the same as everything else — `lib/playlist.ts`. */
   async playlist(): Promise<Playlist> {
-    return (await (await this.fetch("/api/playlist")).json()) as Playlist;
+    return normalizePlaylist((await (await this.fetch("/api/playlist")).json()) as Playlist);
   }
 
   /** Replace the stored playlist. `defaultSec` 0 = manual; per-item `sec` null
-   *  inherits the default. Serialized to the firmware's line format — each
-   *  item's `C` (values) and `P` (projection override) lines follow its `I`,
-   *  and both are omitted when there is nothing to say, so what a
-   *  pre-#470 device stored round-trips byte-identically. */
+   *  inherits the default. Serialized by `playlistWire` (`lib/playlist.ts`) to
+   *  the firmware's line format — a pattern item's `C` (values) and `P`
+   *  (projection override) lines follow its `I`, both omitted when there is
+   *  nothing to say so a pre-#470 device's playlist round-trips
+   *  byte-identically, and a scene item is `I S<id> <sec>` with neither. */
   async setPlaylist(pl: Playlist): Promise<void> {
-    const lines: string[] = [
-      `D ${Math.max(0, Math.round(pl.defaultSec))}`,
-      `X ${Math.max(0, Math.round(pl.crossfadeMs))}`,
-    ];
-    for (const it of pl.items) {
-      lines.push(`I ${it.id} ${it.sec === null ? -1 : Math.max(0, Math.round(it.sec))}`);
-      for (const [name, vals] of Object.entries(it.controls)) {
-        lines.push(`C ${name} ${vals.map((v) => Math.round(v * RAW)).join(" ")}`);
-      }
-      if (it.proj !== undefined) lines.push(`P ${it.proj}`);
-    }
-    await this.fetch("/api/playlist", { method: "POST", body: lines.join("\n") });
+    await this.fetch("/api/playlist", { method: "POST", body: playlistWire(pl) });
   }
 
   async playlistPlay(index = 0): Promise<void> {
@@ -863,10 +856,14 @@ export type SceneSaveResult = { ok: true; id: string } | { ok: false; error: str
 export interface PlaylistItem {
   id: string;
   name: string;
-  /** What the row plays. `pattern` is the only kind the wire carries today;
-   *  scene items are Phase B (#478/#481), so an absent `kind` reads as
-   *  `pattern` and the row model is already shaped for the second one. */
+  /** What the row plays — a stored pattern, or a SCENE (a stack of layers,
+   *  Gitea #478). The wire spells a scene item `I S<id> <sec>`; a pre-#478
+   *  device sends no `kind` at all, and `playlist()` normalizes that to
+   *  `pattern` so nothing downstream has to guard. */
   kind?: "pattern" | "scene";
+  /** Layers in the scene this item names — the row's `Scene ▤ · 2 layers`
+   *  type line (mock S4c). Scene items only. */
+  layers?: number;
   /** Per-item duration override in seconds; null = inherit the default. */
   sec: number | null;
   /** name → control values (floats). */

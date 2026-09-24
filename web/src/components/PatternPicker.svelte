@@ -1,34 +1,36 @@
 <script lang="ts">
-  // THE picker (proposal §5.4: "`+ Add` … opens ONE picker used everywhere").
-  // A searchable list of what the device can play, each row carrying the same
-  // device-shaped live thumbnail the Patterns page and the playlist rows use,
-  // so what you pick looks like what you will get.
+  // THE picker (proposal §5.4, mockups S4c/S4d: "`+ Add` … opens ONE picker
+  // used everywhere"). A dropdown under the button that opened it — the mock's
+  // `.addwrap > .menu.full.pick` — not a modal: adding to a playlist is a list
+  // operation, and the list must stay visible behind it.
   //
-  // TWO SECTIONS today (Gitea #538 §F): `On device` — patterns the device
-  // already holds, which a pick queues directly — and `Library`, the same
-  // clean-room `library/` collection the Patterns page browses. A library
-  // pattern is source the device has never seen, so picking one is a SAVE
-  // followed by an append; the owner does that work (`pages/Playlist.svelte`)
-  // and reports it back through `busy`/`error`, because a picker should not
-  // know how a device stores things.
+  // THREE SECTIONS, in this order: `Patterns` — what the device already holds,
+  // which a pick queues directly — `Scenes` (Gitea #478), the layer stacks the
+  // same device holds, and `Library`, the clean-room `library/` collection the
+  // Patterns page browses (#538 §F). The mock draws the first two; the third
+  // is the same row with the one fact a library pick needs, that it SAVES to
+  // the device first. That save is the owner's work (`pages/Playlist.svelte`),
+  // reported back through `busy`/`error`, because a picker should not know how
+  // a device stores things.
   //
-  // BOTH sections are filtered by the Layout the same way the Patterns page's
-  // grids are (§B, Gitea #562): a fixture is never offered a pattern it cannot
-  // show. See `fits` below.
+  // Every row is the same row (S4c): device-shaped 26 px thumbnail, name, and
+  // ONE dim fact — a pattern's dimensionality and its projection, a scene's
+  // layer count. A scene's thumbnail is its COMPOSITE (#482), so what you pick
+  // looks like what you will get.
   //
-  // Scenes are Phase B (#478/#481) and slot in as a third section, not a
-  // second component: `sections` below is the seam — give it a
-  // `{ kind: "scene", … }` group and the markup, the search, the keyboard
-  // handling and the `pick` event all work unchanged.
-  //
-  // Exported for reuse: the editor's and the Patterns tile's ⋯ menus
-  // ("Add to playlist", "Add to scene ▸") are the same choice made from a
-  // different place (§5.4b).
+  // Pattern sections are filtered by the Layout the same way the Patterns
+  // page's grids are (§B, Gitea #562): a fixture is never offered a pattern it
+  // cannot show. See `fits` below. Scenes need a regular 2D grid to exist at
+  // all, so the section is simply empty off one.
   import { createEventDispatcher, tick } from "svelte";
   import PatternThumb from "./PatternThumb.svelte";
+  import SceneThumb from "./SceneThumb.svelte";
   import { gatedFetch } from "../lib/fetchgate";
   import type { Luxel } from "../lib/luxel";
+  import type { SourceLookup } from "../lib/sceneRender";
+  import type { Scene } from "../lib/scene";
   import {
+    captionFor,
     guessPatternDims,
     layout,
     projectionCompatible,
@@ -39,13 +41,22 @@
   export let luxel: Luxel | null = null;
   /** Mounted-but-closed is the normal state: the list keeps its engines. */
   export let open = false;
-  /** What the picker is picking FOR — the panel's heading. */
+  /** What the picker is picking FOR — the panel's accessible name. */
   export let title = "Add to the playlist";
+  /** The button the panel hangs under: exempt from the outside-click that
+   *  closes it, or the click that opened it would close it again. */
+  export let anchor: HTMLElement | null = null;
   /** The device's stored patterns (`stores/device.ts` `devicePatterns`), as
    *  they arrive: `source` fills in lazily and a row simply spins until it
    *  does. Passed in rather than read here so the playground can offer the
    *  local library through the same component later. */
   export let patterns: { id: string; name: string; source?: string }[] = [];
+  /** The scene library (`stores/scenes.ts`), newest last — the mock's second
+   *  section. Empty off a regular 2D Layout, where scenes cannot exist. */
+  export let scenes: Scene[] = [];
+  /** Resolves a scene layer's stored pattern to its source, for the composite
+   *  thumbnails — the same lookup the Scenes page hands its tiles. */
+  export let sceneLookup: SourceLookup = () => null;
   /** Name of the library pattern currently being saved to the device — the
    *  owner sets it while its `pick` handler is in flight. */
   export let busy = "";
@@ -53,12 +64,21 @@
   export let error = "";
 
   const dispatch = createEventDispatcher<{
-    pick: { id: string; kind: "pattern" | "scene" | "library"; name: string; source?: string };
+    pick: {
+      id: string;
+      kind: "pattern" | "scene" | "library";
+      name: string;
+      source?: string;
+      /** Layers, on a scene pick — the row's type line has it before the
+       *  device's next read comes back. */
+      layers?: number;
+    };
     close: void;
   }>();
 
   let query = "";
   let searchEl: HTMLInputElement | undefined;
+  let panelEl: HTMLElement | undefined;
 
   /** The generated clean-room library (`tools/gen-gallery.mjs` → gallery.json,
    *  the same file the Patterns page's Library source reads). Fetched once,
@@ -100,7 +120,8 @@
   }
 
   /** Focus the search as the panel appears — a phone keyboard opening on a
-   *  list this long is the difference between typing and scrolling. */
+   *  list this long is the difference between typing and scrolling. It is
+   *  FIRST in the panel for the same reason (S4d). */
   $: if (open) {
     void tick().then(() => searchEl?.focus());
     void loadLibrary();
@@ -117,6 +138,11 @@
     id: string;
     name: string;
     source?: string;
+    /** The one dim fact the mock's row carries (`2D`, `1D · along x`, `3 layers`). */
+    fact: string;
+    /** Scene rows composite their record instead of compiling a source. */
+    scene?: Scene;
+    layers?: number;
   }
 
   $: needle = query.trim().toLowerCase();
@@ -143,13 +169,36 @@
   const fits = (dims: PatternDims, ld: number, fix: boolean): boolean =>
     !fix || projectionCompatible(dims, ld);
 
+  /** S4c's dim column: the projection caption when the pattern is not native
+   *  to this Layout (`1D · along x`), else its plain dimensionality (`2D`). */
+  const patternFact = (dims: PatternDims): string =>
+    captionFor(dims, $layout) ?? (dims > 0 ? `${dims}D` : "");
+
   $: deviceMatches = patterns
     .filter(
       (p) =>
         match(p.name || p.id, needle) &&
         fits(p.source === undefined ? 0 : guessPatternDims(p.source), $layout.dims, fixture),
     )
-    .map((p): PickItem => ({ id: p.id, name: p.name, source: p.source }));
+    .map((p): PickItem => ({
+      id: p.id,
+      name: p.name,
+      source: p.source,
+      fact: patternFact(p.source === undefined ? 0 : guessPatternDims(p.source)),
+    }));
+  $: sceneMatches = scenes
+    // A scene with no id cannot be queued (`I S<id>`) or opened, so it is not
+    // something to offer — a mirror started with `--scenes` currently reports
+    // exactly that for an `S -` block (Gitea #701).
+    .filter((s) => /^[0-9a-f]{8}$/.test(s.id))
+    .filter((s) => match(s.name || s.id, needle))
+    .map((s): PickItem => ({
+      id: s.id,
+      name: s.name,
+      fact: `${s.layers.length} layer${s.layers.length === 1 ? "" : "s"}`,
+      scene: s,
+      layers: s.layers.length,
+    }));
   /** A library pattern already on the device would be a duplicate row in the
    *  picker AND an overwrite on pick, so the device's copy wins. */
   $: onDevice = new Set(patterns.map((p) => (p.name || p.id).toLowerCase()));
@@ -160,15 +209,26 @@
         match(p.name, needle) &&
         fits(p.dims, $layout.dims, fixture),
     )
-    .map((p): PickItem => ({ id: p.key, name: p.name, source: p.source }));
+    .map((p): PickItem => ({
+      id: p.key,
+      name: p.name,
+      source: p.source,
+      fact: patternFact(p.dims),
+    }));
 
-  /** One group per source. Phase B appends `{ kind: "scene", … }` here. */
+  /** One group per source, in the mock's order. */
   $: sections = [
     {
       kind: "pattern" as const,
-      label: "On device",
+      label: "Patterns",
       items: deviceMatches.slice(0, SECTION_CAP),
       more: Math.max(0, deviceMatches.length - SECTION_CAP),
+    },
+    {
+      kind: "scene" as const,
+      label: "Scenes",
+      items: sceneMatches.slice(0, SECTION_CAP),
+      more: Math.max(0, sceneMatches.length - SECTION_CAP),
     },
     {
       kind: "library" as const,
@@ -177,16 +237,23 @@
       more: Math.max(0, libraryMatches.length - SECTION_CAP),
     },
   ];
-  $: total = deviceMatches.length + libraryMatches.length;
+  /** Only the groups with something in them get a label — the mock spaces
+   *  the FIRST one differently from the rest. */
+  $: visible = sections.filter((s) => s.items.length > 0);
+  $: total = deviceMatches.length + sceneMatches.length + libraryMatches.length;
 
-  function choose(
-    id: string,
-    kind: "pattern" | "scene" | "library",
-    name: string,
-    source?: string,
-  ): void {
+  function choose(p: PickItem, kind: "pattern" | "scene" | "library"): void {
     if (busy) return; // one save at a time — the device serves ~2 connections
-    dispatch("pick", { id, kind, name, source });
+    const detail: {
+      id: string;
+      kind: "pattern" | "scene" | "library";
+      name: string;
+      source?: string;
+      layers?: number;
+    } = { id: p.id, kind, name: p.name || p.id };
+    if (p.source !== undefined) detail.source = p.source;
+    if (p.layers !== undefined) detail.layers = p.layers;
+    dispatch("pick", detail);
   }
 
   function onKey(e: KeyboardEvent): void {
@@ -195,36 +262,36 @@
       dispatch("close");
     }
   }
+
+  /** Dismissal: the panel is a dropdown, so anything outside it (except the
+   *  button that opened it) closes it — `components/Popover.svelte`'s rule,
+   *  hand-rolled because this panel is anchored IN the list rather than
+   *  positioned off the viewport. */
+  function onWindowClick(e: MouseEvent): void {
+    if (!open) return;
+    const t = e.target as Node;
+    if (panelEl?.contains(t) || anchor?.contains(t)) return;
+    dispatch("close");
+  }
 </script>
 
-<svelte:window on:keydown={open ? onKey : undefined} />
+<svelte:window on:keydown={open ? onKey : undefined} on:click={onWindowClick} />
 
 {#if open}
-  <!-- the backdrop is a click target, not a control: the panel below owns
-       every keyboard affordance (search field, rows, close button) -->
+  <!-- S4c `.menu.full.pick`: the ⋯ menu's chrome, the width of the button's
+       wrapper, with the search field first and one `.slabel` per section. -->
   <div
-    class="backdrop"
-    data-role="picker-backdrop"
-    on:click={() => dispatch("close")}
-    on:keydown={onKey}
-    role="presentation"
-  ></div>
-  <div class="panel" data-role="pattern-picker" role="dialog" aria-label={title}>
-    <div class="head">
-      <span class="title">{title}</span>
-      <span class="spacer"></span>
-      <button
-        class="btn icon quiet"
-        data-role="picker-close"
-        aria-label="close"
-        on:click={() => dispatch("close")}>✕</button
-      >
-    </div>
+    class="menu full pick"
+    bind:this={panelEl}
+    data-role="pattern-picker"
+    role="dialog"
+    aria-label={title}
+  >
     <input
-      class="inp search"
+      class="inp xs search"
       data-role="picker-search"
       type="search"
-      placeholder="Search patterns…"
+      placeholder="search patterns and scenes…"
       bind:this={searchEl}
       bind:value={query}
     />
@@ -233,153 +300,112 @@
     {:else if error}
       <p class="line err" data-role="picker-error">{error}</p>
     {/if}
-    <div class="body">
-      {#each sections as section (section.kind)}
-        {#if section.items.length > 0}
-          <div class="section">
-            <div class="slabel" data-role={`picker-section-${section.kind}`}>
-              {section.label}
-            </div>
-            <ul class="list">
-              {#each section.items as p (p.id)}
-                <li>
-                  <button
-                    class="item"
-                    data-role="picker-item"
-                    data-kind={section.kind}
-                    data-id={p.id}
-                    disabled={busy !== ""}
-                    data-reason={busy === "" ? undefined : "a pattern is being saved to the device"}
-                    on:click={() => choose(p.id, section.kind, p.name || p.id, p.source)}
-                  >
-                    {#if luxel}<PatternThumb {luxel} source={p.source} />{/if}
-                    <span class="name">{p.name || p.id}</span>
-                    {#if section.kind === "library"}<span class="tag">saves to device</span>{/if}
-                  </button>
-                </li>
-              {/each}
-            </ul>
-            {#if section.more > 0}
-              <p class="line dim" data-role={`picker-more-${section.kind}`}>
-                + {section.more} more — narrow the search to see them
-              </p>
+    {#each visible as section, i (section.kind)}
+      {#if section.items.length > 0}
+        <div
+          class="slabel sect"
+          class:first={i === 0}
+          data-role={`picker-section-${section.kind}`}
+        >
+          {section.label}
+        </div>
+        {#each section.items as p (p.id)}
+          <button
+            class="mi pk"
+            data-role="picker-item"
+            data-kind={section.kind}
+            data-id={p.id}
+            disabled={busy !== ""}
+            data-reason={busy === "" ? undefined : "a pattern is being saved to the device"}
+            on:click={() => choose(p, section.kind)}
+          >
+            {#if luxel && p.scene}
+              <SceneThumb {luxel} scene={p.scene} lookup={sceneLookup} />
+            {:else if luxel}
+              <PatternThumb {luxel} source={p.source} />
             {/if}
-          </div>
+            <span class="pknm">{p.name || p.id}</span>
+            <span class="mdim"
+              >{section.kind === "library" ? "saves to device" : p.fact}</span
+            >
+          </button>
+        {/each}
+        {#if section.more > 0}
+          <p class="line dim" data-role={`picker-more-${section.kind}`}>
+            + {section.more} more — narrow the search to see them
+          </p>
         {/if}
-      {/each}
-      {#if libraryLoading && library.length === 0}
-        <p class="line dim" data-role="picker-loading">loading the library…</p>
       {/if}
-      {#if total === 0 && !libraryLoading}
-        <p class="line dim" data-role="picker-empty">
-          {patterns.length === 0 && library.length === 0
-            ? "Nothing to add — save a pattern from the editor first."
-            : needle === ""
-              ? "Nothing here can play on this layout."
-              : `Nothing matches “${query}”.`}
-        </p>
-      {/if}
-    </div>
+    {/each}
+    {#if libraryLoading && library.length === 0}
+      <p class="line dim" data-role="picker-loading">loading the library…</p>
+    {/if}
+    {#if total === 0 && !libraryLoading}
+      <p class="line dim" data-role="picker-empty">
+        {patterns.length === 0 && library.length === 0 && scenes.length === 0
+          ? "Nothing to add — save a pattern from the editor first."
+          : needle === ""
+            ? "Nothing here can play on this layout."
+            : `Nothing matches “${query}”.`}
+      </p>
+    {/if}
   </div>
 {/if}
 
 <style>
-  .backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.5);
-    z-index: 40;
-  }
-
-  /* the picker has no mock frame of its own; it wears the `.pop` family's
-     chrome (mockups `.pop`: --bg-panel on a 1px --border, radius 8, the
-     0 16px 40px/.7 shadow) at the width a 300-pattern list needs. A BLOCK,
-     like every `.pop`: the scrolling is the list's, not the panel's. */
-  .panel {
-    position: fixed;
-    z-index: 41;
-    top: 10vh;
-    left: 50%;
-    transform: translateX(-50%);
-    width: min(520px, calc(100vw - 24px));
-    padding: 14px;
-    background: var(--bg-panel);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.7);
-  }
-
-  .head {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 10px;
-  }
-
-  .title {
-    font-weight: 600;
-  }
-
-  .spacer {
-    flex: 1;
-  }
-
-  .search {
-    display: block;
-    width: 100%;
-  }
-
-  .body {
-    margin-top: 10px;
-    max-height: 56vh;
+  /* S4c: `.menu.full{left:0;right:0;width:auto}` inside the `+ Add` button's
+     relative wrapper — the app's global `.menu` is `position:fixed` because
+     `Popover` places it off the viewport; this one is placed by the list. */
+  .menu.full {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: calc(100% + 7px);
+    width: auto;
+    /* a 300-pattern library still has to be reachable with a thumb */
+    max-height: 60vh;
     overflow-y: auto;
   }
 
-  /* the label itself is a bare `.slabel` (the mock's primitive, no margins
-     of its own) — the SECTION spaces itself from the one above */
-  .section {
-    margin-top: 8px;
+  .search {
+    width: 100%;
+    margin-bottom: 2px;
   }
 
-  .section:first-child {
-    margin-top: 0;
+  /* the mock's section labels: `9px 10px 5px` for the first, `11px 10px 5px`
+     for every one after it (the extra 2px is the gap between groups) */
+  .sect {
+    padding: 11px 10px 5px;
   }
 
-  .list {
-    list-style: none;
-    margin: 6px 0 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
+  .sect.first {
+    padding: 9px 10px 5px;
   }
 
-  /* mockups `.pop .pr`: 8px 9px in a 6px radius, 13px, no border at all,
-     transparent until it is hovered. The row is taller than a `.pr` because
-     it carries the device-shaped live thumbnail — that is the point of it. */
-  .item {
+  /* S4c `.mi.pk` — the menu item that carries a picture */
+  .mi.pk {
     display: flex;
     align-items: center;
     gap: 9px;
-    width: 100%;
-    padding: 8px 9px;
-    border: none;
-    border-radius: 6px;
-    font-size: 13px;
     text-align: left;
-    background: transparent;
   }
 
-  .item:hover {
-    background: rgba(255, 255, 255, 0.04);
+  /* S4c `.mi.pk canvas{flex:none}` — the picture never shrinks */
+  .mi.pk :global(.thumb canvas) {
+    flex: none;
   }
 
-  .item[disabled] {
-    opacity: 0.5;
-    cursor: default;
+  .mi.pk :global(.thumb canvas.sq) {
+    width: 26px;
+    height: 26px;
   }
 
-  .name {
+  .mi.pk :global(.thumb canvas.bar) {
+    width: 26px;
+    height: 12px;
+  }
+
+  .pknm {
     flex: 1;
     min-width: 0;
     overflow: hidden;
@@ -387,16 +413,23 @@
     white-space: nowrap;
   }
 
-  /* says what picking a LIBRARY row costs before you pick it */
-  .tag {
-    flex: none;
-    font: 11px/1 var(--mono);
+  /* S4c `.mdim` — the one dim fact per row */
+  .mdim {
+    margin-left: auto;
+    font: 10px/1 var(--mono);
     color: var(--text-dim);
+    white-space: nowrap;
+  }
+
+  .mi.pk[disabled] {
+    opacity: 0.5;
+    cursor: default;
   }
 
   .line {
     font-size: 12px;
     margin: 10px 0 0;
+    padding: 0 10px;
   }
 
   .dim {
@@ -405,22 +438,5 @@
 
   .err {
     color: var(--error);
-  }
-
-  /* the phone is the primary playlist surface (D9): the sheet fills the
-     bottom of the screen rather than floating in the middle of it */
-  @media (max-width: 600px) {
-    .panel {
-      top: auto;
-      bottom: 0;
-      left: 0;
-      transform: none;
-      width: 100vw;
-      border-radius: 12px 12px 0 0;
-    }
-
-    .body {
-      max-height: 62vh;
-    }
   }
 </style>
