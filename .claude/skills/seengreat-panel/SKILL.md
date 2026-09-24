@@ -167,6 +167,14 @@ ESP32 ELF — pass the S3 one).
   `POST /api/jit {"on":false}` is the kill switch for a session,
   `{"place":"internal"}` forces the SRAM1 heap alias (the microbench
   lever). Neither persists; a reboot comes back ON.
+- **A doubled `frame_us` on this board is a JIT fallback until `jit.state`
+  says otherwise.** Read that field BEFORE attributing a frame to any
+  pipeline stage. Aurora 2D is ~51 ms native and ~105 ms interpreted at
+  4096 px, so anything that quietly costs the board ~12 KB of internal heap
+  reads as a doubled frame — which is how Gitea #705 came to be filed as
+  "compositing one layer costs 54 ms" when compositing costs 654 µs and the
+  real bug was a resident buffer (#704). Same for a HALVED number: the JIT
+  coming back looks like a speedup in whatever you last changed.
 - **`reason:"no-memory"` is the normal answer for the big 2D programs at
   4096 px** (snake-2d, snake-2d-v2, sunrise-2d, stargen-polar-2d…): the
   emitter's bookkeeping needs `words*24 + fns*240 + 1 KB` of INTERNAL heap

@@ -283,7 +283,13 @@ pre-authorized per CLAUDE.md — no need to ask before pushing.
   `GET /api/status` immediately before it succeeded** — the device is fine,
   the SYN was refused. Seen repeatedly on the Seengreat panel 2026-09-24:
   1–3 failures in a row, then a clean push. Retry with ~45 s between
-  attempts; do not start diagnosing the image or the network. Same family:
+  attempts; do not start diagnosing the image or the network. **A plain
+  `curl --data-binary @img http://<ip>/api/ota` of the image
+  `ota-push.sh` builds is the reliable escape**: on 2026-09-24 it landed
+  first try, twice, after `ota-push.sh` had failed on two spaced attempts —
+  save the image yourself (`espflash save-image --chip esp32s3 <ELF>
+  app.bin`, then check it for the SSID and the `board::NAME` string the way
+  the script does) and push that. Same family:
   two `curl`s issued back to back with no gap make the second return an
   EMPTY body and exit 0 — space device requests a second or two apart, and
   never read one empty response as "the POST did nothing".
