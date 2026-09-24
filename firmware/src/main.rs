@@ -100,6 +100,8 @@ mod provision;
 #[cfg(feature = "psram-arena")]
 mod psram;
 mod resume;
+mod scenes;
+mod scenestore;
 mod sensors;
 mod server;
 mod sntp;
@@ -293,7 +295,19 @@ async fn main(spawner: Spawner) -> ! {
     // name and SNTP-poke statics took another 120 B; 512 B here puts it at
     // 24,852 B and `board-athom-music` at 25,676 B. `tools/ci.sh` does not
     // run stack-check, which is how master drifted under it — Gitea #515.
-    const STATICS_RESERVE: usize = 512;
+    //
+    // 2026-09-24, 512 → 4096: Phase C's text-slot table (#484/#485) and
+    // Phase B's scene routes (#478) between them took another 3.3 KB of
+    // DRAM statics, most of it the web task's FUTURE — picoserve's whole
+    // response path, replicated `server::WEB_TASK_POOL_SIZE` times, which
+    // four new route arms grow by ~400 B per slot. Measured with
+    // `tools/stack-check.sh` on THIS tree: `board-pixelblaze-v3` 21,252 B
+    // and `board-athom-music` 22,100 B before the bump (master itself was
+    // already under the floor at 23,484 / 24,340 — #484's statics), 24,836
+    // and 25,684 after it. The classic ESP32 gives up 3.5 KB of heap for
+    // it, the same trade `SECOND_OUTPUT_RAM` makes and for the same reason:
+    // here `.stack` is the DRAM left over, so a static eats the floor.
+    const STATICS_RESERVE: usize = 4096;
     #[cfg(all(feature = "esp32", feature = "small-chip"))]
     esp_alloc::heap_allocator!(size: 88 * 1024 - SECOND_OUTPUT_RAM - STATICS_RESERVE);
     #[cfg(all(feature = "esp32", not(feature = "small-chip")))]
@@ -311,8 +325,13 @@ async fn main(spawner: Spawner) -> ! {
     // through the 24 KB floor). 154 KB puts it back at 29,340 B, above
     // where it was. The heap gives up 6 KB and gets an 8 MB array arena —
     // and a big pattern's arrays no longer come out of this region at all.
+    // 2026-09-24, 154 → 152 KB: the same ~2 KB of Phase B/C statics that
+    // pushed the classic ESP32 under its floor (see `STATICS_RESERVE`
+    // above) took this board from 26,228 B to 24,004 B, through it.
+    // Measured back at 26,052 B; on a board with an 8 MB array arena, 2 KB
+    // of DRAM heap is the cheapest place to find it.
     #[cfg(all(not(feature = "esp32"), feature = "psram-arena"))]
-    esp_alloc::heap_allocator!(size: 154 * 1024);
+    esp_alloc::heap_allocator!(size: 152 * 1024);
 
     // External PSRAM as the pattern-array arena (Gitea #253, psram.rs). A
     // SEPARATE esp-alloc heap, so nothing above this line changes meaning.
@@ -409,6 +428,7 @@ async fn main(spawner: Spawner) -> ! {
     devicemap::init();
     layout::init();
     outpal::init(); // device output palette (also a reserved-key blob)
+    scenes::init(); // scene records (one reserved-key blob, like the playlist)
     } else {
         println!("LUXEL_NO_OTA: ota disabled");
     }
@@ -893,11 +913,20 @@ fn publish_geom(engine: Option<&luxel_core::engine::Engine>) {
     ));
 }
 
-/// Blend two RGB pixels by `t` in 0..=65536 (0 = a, 65536 = b).
+/// Blend the INCOMING pixel `src` over the OUTGOING pixel `dst` by `t` in
+/// 0..=65536 (0 = all outgoing, 65536 = all incoming).
+///
+/// This was a local `blend_px(a, b, t) = (a*(65536-t) + b*t) >> 16`; the
+/// kernel now lives in `luxel_core::compose` so the device, the mirror and
+/// the playground share one blend. `Blend::Normal` is
+/// `dst + ((src-dst)*t >> 16)` — the same expression rearranged, and the
+/// shift is arithmetic in both, so they floor identically and a
+/// single-pattern crossfade is bit-for-bit what shipped before scenes
+/// (pinned by
+/// `compose::tests::a_two_layer_stack_reproduces_the_crossfade_exactly`).
 #[inline]
-fn blend_px(a: [u8; 3], b: [u8; 3], t: i32) -> [u8; 3] {
-    let mix = |x: u8, y: u8| (((x as i32) * (65536 - t) + (y as i32) * t) >> 16) as u8;
-    [mix(a[0], b[0]), mix(a[1], b[1]), mix(a[2], b[2])]
+fn blend_over(dst: &mut [u8; 3], src: [u8; 3], t: i32) {
+    luxel_core::compose::blend_px_mode(dst, src, luxel_core::scene::Blend::Normal, t);
 }
 
 /// The DEVICE output chain's per-board power model — the power cap models
@@ -1004,7 +1033,10 @@ fn budgeted_engine(prog: luxel_core::vm::Program, count: u32) -> Engine {
 /// `Err(free_bytes_at_rejection)` — measured BEFORE the engine is dropped,
 /// so error messages report the pressure that caused the rejection, not
 /// the comfortable number after freeing.
-fn try_budgeted_engine(prog: luxel_core::vm::Program, count: u32) -> Result<Engine, usize> {
+pub(crate) fn try_budgeted_engine(
+    prog: luxel_core::vm::Program,
+    count: u32,
+) -> Result<Engine, usize> {
     #[allow(unused_mut)]
     let mut e = budgeted_engine(prog, count);
     let free = esp_alloc::HEAP.free() as usize;
@@ -1049,9 +1081,154 @@ fn note_engine_heap(free_before: usize) {
 /// its extent from being moved or freed while it was still executing from it
 /// (patterns.rs' pin set, Gitea #260). Order matters — the engine goes
 /// first, the pin second; never `prev = None` on its own.
-fn drop_prev(prev: &mut Option<Engine>) {
+fn drop_prev(prev: &mut Option<Engine>, prev_scene: &mut Option<scenes::Runtime>) {
     *prev = None;
+    *prev_scene = None;
     patterns::unpin_prev();
+}
+
+/// Pattern layers the CURRENT stack holds resident: a scene's, or 1 for a
+/// plain pattern. The left-hand side of the transition rule.
+fn cur_pattern_layers(scene: &Option<scenes::Runtime>, engine: &Option<Engine>) -> usize {
+    match scene {
+        Some(rt) => rt.pattern_layers(),
+        None => usize::from(engine.is_some()),
+    }
+}
+
+/// Contract §3: a transition whose OUTGOING and INCOMING stacks together
+/// need more pattern layers than `caps.layers` is a HARD CUT. There is
+/// neither the heap for both nor — on a JIT board — a second exec half
+/// (`jit.rs HALVES = 2`), and a fade that cannot build its incoming engines
+/// is worse than no fade.
+fn transition_ms(ms: u32, out_layers: usize, in_layers: usize) -> u32 {
+    if out_layers + in_layers > crate::server::scene_layer_cap() as usize {
+        0
+    } else {
+        ms
+    }
+}
+
+/// Republish the scene-layer arena pins for everything resident — the live
+/// scene AND the outgoing one a crossfade is still rendering from.
+fn republish_layer_pins(scene: &Option<scenes::Runtime>, prev: &Option<scenes::Runtime>) {
+    let mut ids: alloc::vec::Vec<alloc::string::String> = alloc::vec::Vec::new();
+    for rt in [scene, prev].into_iter().flatten() {
+        for id in &rt.pinned {
+            if !ids.contains(id) {
+                ids.push(id.clone());
+            }
+        }
+    }
+    patterns::set_layer_pins(&ids);
+}
+
+/// `/api/status` `engines` — what [`shared::ENGINE_HEAP`]'s sum is over.
+fn note_engines(scene: &Option<scenes::Runtime>, engine: &Option<Engine>) {
+    let n = u32::from(engine.is_some()) + scene.as_ref().map_or(0, scenes::Runtime::engines);
+    shared::ENGINES.store(n, Ordering::Relaxed);
+}
+
+/// Install a stored scene as the live stack. Returns true when a crossfade
+/// started, so the caller can stamp its clock.
+///
+/// Same discipline as `Msg::Library` — only the id travelled, and every layer
+/// decodes in place from its mapped extent — except that the stack is N
+/// engines deep, so a hard cut has to free ALL of them before the build
+/// starts, where the most heap is free.
+///
+/// Deliberately NOT inlined into the render task's async body: its locals (a
+/// `Scene`, the pin list, the built `Runtime`) would otherwise land in the
+/// task's future, which is a `.bss` static that comes out of the main-task
+/// stack floor. Measured at 2,232 B of `.stack` when it was an arm.
+#[inline(never)]
+fn install_scene(
+    id: &str,
+    ms: u32,
+    engine: &mut Option<Engine>,
+    scene: &mut Option<scenes::Runtime>,
+    prev: &mut Option<Engine>,
+    prev_scene: &mut Option<scenes::Runtime>,
+) -> bool {
+    let Some(sc) = scenes::get(id) else {
+        println!("scene: {} is gone — activation dropped", id);
+        set_vmerr(Some(alloc::string::String::from("no such scene")));
+        return false;
+    };
+    let ms = transition_ms(
+        ms,
+        cur_pattern_layers(scene, engine),
+        luxel_core::scene::pattern_layers(&sc),
+    );
+    drop_prev(prev, prev_scene); // never THREE stacks
+    if ms == 0 {
+        *engine = None;
+        *scene = None;
+    } else {
+        patterns::pin_prev_from_running();
+        *prev = engine.take();
+        *prev_scene = scene.take();
+    }
+    // Measurable only on a hard cut; a fade deliberately keeps the outgoing
+    // stack alive, so it leaves the last clean measurement alone (#287).
+    let free_before = (ms == 0).then(|| esp_alloc::HEAP.free() as usize);
+    let keep: alloc::vec::Vec<alloc::string::String> =
+        prev_scene.as_ref().map(|r| r.pinned.clone()).unwrap_or_default();
+    let grid = scene_grid(engine);
+    let (rt, base, err) = scenes::build_runtime(
+        &sc,
+        PIXEL_COUNT.load(Ordering::Relaxed),
+        Some(grid),
+        &keep,
+    );
+    *engine = base;
+    *scene = Some(rt);
+    republish_layer_pins(scene, prev_scene);
+    scenes::set_active(id);
+    if let Some(e) = engine.as_ref() {
+        publish(&CONTROLS_JSON, jsonview::controls_json(e));
+    }
+    if let Some(free_before) = free_before {
+        note_engine_heap(free_before);
+    }
+    // Identity and read-back follow the BASE layer's pattern, so
+    // `/api/pattern` and the console still show something real.
+    let base_id = sc
+        .layers
+        .iter()
+        .find(|l| l.kind() == luxel_core::scene::LayerKind::Pattern)
+        .and_then(|l| l.pattern_id())
+        .unwrap_or("");
+    if !base_id.is_empty() {
+        let (src_len, hash) = patterns::source_stat(base_id).unwrap_or((0, 0));
+        shared::set_pattern_hash_raw(hash);
+        shared::set_current_pattern_id(base_id);
+        shared::set_current_library(src_len, 0);
+        patterns::pin_running(base_id);
+    }
+    set_vmerr(err);
+    devicemap::mark_dirty();
+    if prev.is_none() && prev_scene.is_none() {
+        patterns::unpin_prev();
+    }
+    ms > 0
+}
+
+/// The grid the compositor addresses: the engine's effective one (it knows
+/// the fabricated square grid a Matrix layout implies), else the installed
+/// map's. An empty grid makes every compositor kernel a silent no-op, the
+/// same contract `bulk.rs` has — a scene on an irregular strip draws
+/// nothing rather than erroring.
+fn scene_grid(engine: &Option<Engine>) -> luxel_core::outpipe::GridMap {
+    engine
+        .as_ref()
+        .and_then(|e| e.grid())
+        .or_else(|| devicemap::shape().1)
+        .unwrap_or(luxel_core::outpipe::GridMap {
+            w: 0,
+            h: 0,
+            serpentine: false,
+        })
 }
 
 /// [try_budgeted_engine] plus the user-facing "too large" vmerr on failure.
@@ -1263,6 +1440,19 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
     let mut prev: Option<Engine> = None;
     let mut blend_start = Instant::now();
     let mut blend_ms: u32 = 0;
+    // The live scene, when one is active (Gitea #478). `engine` above is
+    // still the render task's PRIMARY engine — for a scene it renders the
+    // first pattern layer (`scenes::Slot::Base`), so controls, vars,
+    // sensors, events, the projection override and the published geometry
+    // all keep working unchanged. A single pattern is a one-layer scene with
+    // no record.
+    let mut scene: Option<scenes::Runtime> = None;
+    let mut prev_scene: Option<scenes::Runtime> = None;
+    // Composite buffer for an OUTGOING scene during a crossfade. A bare
+    // outgoing pattern needs none — its engine's own frame is the blend
+    // source, exactly as before scenes existed — so this stays empty on
+    // every board that never crossfades between scenes.
+    let mut fade_buf: alloc::vec::Vec<[u8; 3]> = alloc::vec::Vec::new();
     // Real GPIO behind the pattern's pin builtins (Gitea #177 item 4):
     // synced with the running engine between frames, see gpio.rs.
     let mut pins = gpio::PinHost::new();
@@ -1306,7 +1496,8 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                     // engine BEFORE decoding the new program — peak heap
                     // lands here, where the most is free.
                     engine = None;
-                    drop_prev(&mut prev);
+                    scene = None; // a bare pattern replaces the whole stack
+                    drop_prev(&mut prev, &mut prev_scene);
                     // Free heap with no engine resident — the upload envelope
                     // is the only thing alive here and it is transient, so add
                     // it back. This is the base the NEXT load will start from,
@@ -1363,7 +1554,8 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                     // phase, or a pattern upload that couldn't allocate);
                     // the next Code/Crossfade revives rendering
                     engine = None;
-                    drop_prev(&mut prev);
+                    scene = None;
+                    drop_prev(&mut prev, &mut prev_scene);
                     println!("engine frozen (heap released)");
                 }
                 Msg::Control(name, values) => {
@@ -1383,7 +1575,12 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                     let count = count.clamp(1, MAX_PIXELS);
                     PIXEL_COUNT.store(count, Ordering::Relaxed);
                     engine = None; // free before re-decoding (peak heap)
-                    drop_prev(&mut prev);
+                    // Every layer engine is built at the OLD pixel count and
+                    // the compositor's scratch is grid-sized: a live resize
+                    // tears the scene down and revives the single-pattern
+                    // resume path, which is what `rebuild()` below restores.
+                    scene = None;
+                    drop_prev(&mut prev, &mut prev_scene);
                     // resize AFTER freeing the engines — at 2048 px the new
                     // buffer is a multi-KB alloc that wants the peak heap too
                     if !sink.resize(count as usize) {
@@ -1428,7 +1625,8 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                             // last frame) and retry; the next Code/Crossfade
                             // revives rendering
                             engine = None;
-                            drop_prev(&mut prev);
+                            scene = None;
+                            drop_prev(&mut prev, &mut prev_scene);
                             if !sink.resize(count as usize) {
                                 println!(
                                     "encode buffer alloc failed ({} px) — output paused",
@@ -1450,10 +1648,16 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                     // (docs/research/flash-mmap.md "The VM consumer").
                     // The store never writes on this path: the extent was
                     // written once, at save (the wear rule).
+                    //
+                    // A bare pattern is a one-layer stack, so the transition
+                    // rule applies here too: fading a three-layer scene out
+                    // into it would need four resident engines.
+                    let ms = transition_ms(ms, cur_pattern_layers(&scene, &engine), 1);
                     if ms == 0 {
                         engine = None;
+                        scene = None;
                     }
-                    drop_prev(&mut prev);
+                    drop_prev(&mut prev, &mut prev_scene);
                     // Only a non-crossfading swap has nothing resident to
                     // subtract; a fade keeps the outgoing engine alive on
                     // purpose, so it leaves the last clean measurement alone.
@@ -1500,12 +1704,16 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                         Ok(p) => {
                             if let Some(e) = engine_or_vmerr(p) {
                                 publish(&CONTROLS_JSON, jsonview::controls_json(&e));
-                                if ms > 0 && engine.is_some() {
+                                if ms > 0 && (engine.is_some() || scene.is_some()) {
                                     prev = engine.take();
+                                    prev_scene = scene.take();
                                     blend_start = Instant::now();
                                     blend_ms = ms;
                                 }
                                 engine = Some(e);
+                                scene = None;
+                                scenes::set_active("");
+                                republish_layer_pins(&scene, &prev_scene);
                                 if let Some(free_before) = free_before {
                                     note_engine_heap(free_before);
                                 }
@@ -1539,7 +1747,11 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                     // the outgoing engine stays alive on purpose (it's the
                     // blend source) — this is the one path where two
                     // programs coexist, bounded by the crossfade duration
-                    drop_prev(&mut prev); // but never THREE (a fade in flight)
+                    drop_prev(&mut prev, &mut prev_scene); // but never THREE (a fade in flight)
+                    let ms = transition_ms(ms, cur_pattern_layers(&scene, &engine), 1);
+                    if ms == 0 {
+                        scene = None;
+                    }
                     // The outgoing engine may be a LIBRARY pattern executing
                     // in place from its arena extent, and persist_current_pattern
                     // below moves the current-pattern id off it — pin the
@@ -1569,12 +1781,16 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                         Ok(p) => {
                             if let Some(e) = engine_or_vmerr(p) {
                                 publish(&CONTROLS_JSON, jsonview::controls_json(&e));
-                                if ms > 0 && engine.is_some() {
+                                if ms > 0 && (engine.is_some() || scene.is_some()) {
                                     prev = engine.take();
+                                    prev_scene = scene.take();
                                     blend_start = Instant::now();
                                     blend_ms = ms;
                                 }
                                 engine = Some(e);
+                                scene = None;
+                                scenes::set_active("");
+                                republish_layer_pins(&scene, &prev_scene);
                                 patterns::pin_running(&id);
                                 set_vmerr(None);
                                 vmerr_seen = None;
@@ -1594,6 +1810,27 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                         patterns::unpin_prev();
                     }
                 }
+                // Show a stored SCENE (Gitea #478). The whole handler is a
+                // separate, synchronous fn: an arm this size inside the
+                // async body puts every one of its locals — a `Scene`, the
+                // pin list, the built `Runtime` — into the render task's
+                // FUTURE, which is a `.bss` static and comes straight out of
+                // the main-task stack floor (tools/stack-check.sh).
+                Msg::Scene { id, ms } => {
+                    if install_scene(
+                        &id,
+                        ms,
+                        &mut engine,
+                        &mut scene,
+                        &mut prev,
+                        &mut prev_scene,
+                    ) {
+                        blend_start = Instant::now();
+                        blend_ms = ms;
+                    }
+                    vmerr_seen = None;
+                    last = Instant::now();
+                }
             }
         }
 
@@ -1603,6 +1840,19 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
             if devicemap::has_map() {
                 if let Some(eng) = engine.as_mut() {
                     devicemap::apply(eng);
+                }
+                // the map is the DEVICE's, so it reaches every layer engine,
+                // not just the base
+                if let Some(rt) = scene.as_mut() {
+                    rt.for_each_engine(devicemap::apply);
+                }
+            } else if scene.is_some() {
+                // a scene's layers are not rebuildable from `rebuild()`
+                // (that path knows one pattern); re-point the compositor and
+                // leave the engines alone
+                if let Some(rt) = scene.as_mut() {
+                    let g = scene_grid(&engine);
+                    rt.set_grid(g);
                 }
             } else {
                 // cleared → rebuild without a map (do not re-mark dirty)
@@ -1623,15 +1873,19 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
         // way the effective geometry moves.
         if let Some(code) = layout::take_projection() {
             geom_dirty = true;
-            if let Some(eng) = engine.as_mut() {
-                match ProjectionMode::from_u8(code) {
-                    Some(mode) => {
-                        let mut p = eng.projection();
-                        p.set(eng.preferred_dims(), mode);
-                        eng.set_projection(p);
-                    }
-                    None => eng.set_projection(layout::projection()),
+            let apply = |eng: &mut Engine| match ProjectionMode::from_u8(code) {
+                Some(mode) => {
+                    let mut p = eng.projection();
+                    p.set(eng.preferred_dims(), mode);
+                    eng.set_projection(p);
                 }
+                None => eng.set_projection(layout::projection()),
+            };
+            if let Some(eng) = engine.as_mut() {
+                apply(eng);
+            }
+            if let Some(rt) = scene.as_mut() {
+                rt.for_each_engine(apply);
             }
         }
 
@@ -1640,6 +1894,7 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
         if geom_dirty {
             geom_dirty = false;
             publish_geom(engine.as_ref());
+            note_engines(&scene, &engine);
         }
 
         // sensor data (sensor board / POST /api/sensors) lands between frames
@@ -1680,7 +1935,7 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
             // pipelined too where the board pipelines
             emit_staged!(sink, grid);
             last = Instant::now(); // keep the pattern clock fresh for resume
-        } else if engine.is_some() {
+        } else if engine.is_some() || scene.is_some() {
             let now = Instant::now();
             let delta_us = (now - last).as_micros();
             last = now;
@@ -1690,8 +1945,7 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
             // sync follower: converge on the leader clock — big offsets
             // jump, small ones slew by stretching this delta ≤ ±25%
             if shared::SYNC_MODE.load(Ordering::Relaxed) == 2 {
-                if let Some((_, lt, at)) = shared::sync_leader() {
-                    let eng = engine.as_mut().unwrap();
+                if let (Some((_, lt, at)), Some(eng)) = (shared::sync_leader(), engine.as_mut()) {
                     let target = lt + at.elapsed().as_millis();
                     let err = target as i64 - eng.time_ms() as i64;
                     if err.unsigned_abs() > 1000 {
@@ -1715,34 +1969,86 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
             // pads ↔ pattern pin state, before the frame reads them (the
             // outgoing crossfade engine keeps its last view — it is on its
             // way out and must not fight the incoming one for a pad)
-            pins.sync(engine.as_mut().unwrap());
+            if let Some(eng) = engine.as_mut() {
+                pins.sync(eng);
+            }
             // read before the frame borrow: `grid` is a Copy descriptor
             let grid = engine.as_ref().and_then(|e| e.grid());
+            let count = PIXEL_COUNT.load(Ordering::Relaxed) as usize;
+            let dt_ms = (delta.raw() >> 16).max(0) as u32;
+            if scene.is_some() || prev_scene.is_some() {
+                let g = scene_grid(&engine);
+                if let Some(rt) = scene.as_mut() {
+                    rt.set_grid(g);
+                }
+                if let Some(rt) = prev_scene.as_mut() {
+                    rt.set_grid(g);
+                }
+            }
             let vm_t0 = Instant::now();
             // The blend lives in the sink's staging buffer: on a pipelined
             // board that buffer IS the one handed to the output task, so a
             // crossfade costs the pipeline no extra copy.
-            let (vm_t1, pipe_us, out_us, handoff_us) = if prev.is_some() && t < 65536 {
-                // copy the incoming frame, then blend the outgoing on top
-                {
-                    let stage = sink.stage();
-                    stage.clear();
-                    stage.extend_from_slice(engine.as_mut().unwrap().frame(delta));
+            let fading = (prev.is_some() || prev_scene.is_some()) && t < 65536;
+            let (vm_t1, pipe_us, out_us, handoff_us) = if fading {
+                // The INCOMING stack lands in the stage…
+                match scene.as_mut() {
+                    Some(rt) => rt.render(sink.stage(), engine.as_mut(), delta, dt_ms, count),
+                    None => {
+                        let stage = sink.stage();
+                        stage.clear();
+                        stage.extend_from_slice(engine.as_mut().unwrap().frame(delta));
+                    }
                 }
-                let px_old = prev.as_mut().unwrap().frame(delta);
-                let stage = sink.stage();
-                for i in 0..stage.len().min(px_old.len()) {
-                    stage[i] = blend_px(px_old[i], stage[i], t);
+                // …and the OUTGOING one is blended over it with `dst` = the
+                // outgoing pixel, which is what makes this bit-identical to
+                // the `blend_px` this replaces: `compose::blend_px_mode`'s
+                // Normal arm is `b + ((l-b)*a >> 16)`, the same expression
+                // rearranged (proved by `compose::tests`).
+                //
+                // A bare outgoing pattern already owns a full frame buffer —
+                // its engine's — so only an outgoing SCENE needs `fade_buf`.
+                if let Some(prt) = prev_scene.as_mut() {
+                    prt.render(&mut fade_buf, prev.as_mut(), delta, dt_ms, count);
+                    let stage = sink.stage();
+                    for i in 0..stage.len().min(fade_buf.len()) {
+                        let mut px = fade_buf[i];
+                        blend_over(&mut px, stage[i], t);
+                        stage[i] = px;
+                    }
+                } else if let Some(pe) = prev.as_mut() {
+                    let px_old = pe.frame(delta);
+                    let stage = sink.stage();
+                    for i in 0..stage.len().min(px_old.len()) {
+                        let mut px = px_old[i];
+                        blend_over(&mut px, stage[i], t);
+                        stage[i] = px;
+                    }
                 }
                 let vm_t1 = Instant::now();
                 let (p, o, w) = emit_staged!(sink, grid);
                 (vm_t1, p, o, w)
             } else {
-                drop_prev(&mut prev); // fade finished
-                let frame = engine.as_mut().unwrap().frame(delta);
-                let vm_t1 = Instant::now();
-                let (p, o, w) = emit!(sink, frame, grid);
-                (vm_t1, p, o, w)
+                let had_scene = prev_scene.is_some();
+                drop_prev(&mut prev, &mut prev_scene); // fade finished
+                if had_scene {
+                    fade_buf = alloc::vec::Vec::new(); // grid-sized; not held between fades
+                    republish_layer_pins(&scene, &prev_scene);
+                }
+                match scene.as_mut() {
+                    Some(rt) => {
+                        rt.render(sink.stage(), engine.as_mut(), delta, dt_ms, count);
+                        let vm_t1 = Instant::now();
+                        let (p, o, w) = emit_staged!(sink, grid);
+                        (vm_t1, p, o, w)
+                    }
+                    None => {
+                        let frame = engine.as_mut().unwrap().frame(delta);
+                        let vm_t1 = Instant::now();
+                        let (p, o, w) = emit!(sink, frame, grid);
+                        (vm_t1, p, o, w)
+                    }
+                }
             };
             // stage timing — a few Instant reads and integer adds; no
             // formatting, allocation or float work on the hot path
@@ -1756,7 +2062,7 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
             // not the frame's cost, so it comes back out.
             frame_sum += (frame_t1 - now).as_micros().saturating_sub(u64::from(handoff_us));
             timed_frames += 1;
-            if let Some(e) = engine.as_mut().unwrap().take_error() {
+            if let Some(e) = engine.as_mut().and_then(Engine::take_error) {
                 // report each distinct error site once, not per frame — an
                 // erroring pattern at 120 fps floods serial and churns the
                 // (possibly already tight) heap with format! strings
@@ -1781,7 +2087,9 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                 }
             }
             // publish the engine clock (leader beacons + /api/sync)
-            shared::set_engine_time_ms(engine.as_ref().unwrap().time_ms());
+            if let Some(eng) = engine.as_ref() {
+                shared::set_engine_time_ms(eng.time_ms());
+            }
         }
 
         frames += 1;

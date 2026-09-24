@@ -8,6 +8,8 @@
 //! the compiler: packing the whole real `library/` and counting how many
 //! patterns fit, page-granular (Gitea #330) versus exact (Gitea #340).
 
+extern crate alloc;
+
 #[path = "../../../firmware/src/patlog.rs"]
 pub mod patlog;
 pub mod store;
@@ -198,3 +200,10 @@ mod library_fill {
         println!("filled and enumerated {} real library patterns in {} B", wrote, at);
     }
 }
+
+/// Host build of `firmware/src/scenestore.rs` — the scene list's pure
+/// algebra (ids, the flash blob, upsert/delete, the store-full refusal, the
+/// playlist's `S<sceneId>` items). Device-free by construction, so its
+/// `#[cfg(test)]` suite is the firmware's scene-store coverage (Gitea #478).
+#[path = "../../../firmware/src/scenestore.rs"]
+pub mod scenestore;

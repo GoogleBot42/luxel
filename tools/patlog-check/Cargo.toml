@@ -1,9 +1,10 @@
 # Host test rig for firmware/src/patlog.rs — the pattern store's packed,
 # append-only file format (record layout, the boot scan, append planning,
-# compaction placement). It compiles the exact on-device source file for
-# the host so its unit tests run under `cargo test --workspace`; it is a
-# workspace member for exactly that reason (unlike wledfs-check, which
-# needs real filesystem dumps and stays standalone).
+# compaction placement) — and for firmware/src/scenestore.rs, the scene
+# list's pure algebra (Gitea #478). It compiles the exact on-device source
+# files for the host so their unit tests run under `cargo test --workspace`;
+# it is a workspace member for exactly that reason (unlike wledfs-check,
+# which needs real filesystem dumps and stays standalone).
 #
 #   cargo test -p patlog-check
 [package]
@@ -16,10 +17,8 @@ publish = false
 [lib]
 path = "src/lib.rs"
 
+# scenestore speaks the shared scene record format, and the library-fill
+# test compiles every library/*.js with the real compiler, so the "how many
+# patterns fit" number is measured against real bytes rather than assumed.
 [dependencies]
-
-# The library-fill test compiles every library/*.js with the real compiler
-# and packs the results, so the "how many patterns fit" number is measured
-# against real bytes rather than assumed.
-[dev-dependencies]
 luxel-core = { path = "../../crates/luxel-core" }

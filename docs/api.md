@@ -66,7 +66,7 @@ response as "no snapshot right now", not as an all-black frame.
  "caps":{"strip_driver":true,"panel":false,"outputs":1,"power_cap":true,"blur_glow":true,
          "layers":3,"text_slots":8,"reboot":true,"ota":true,"psram":false,"assets":false},
  "slot":"ota_0","version":"0.1.39",
- "heap_free":104832,"heap_largest":73728,"engine_heap":21504,"live":null,
+ "heap_free":104832,"heap_largest":73728,"engine_heap":21504,"engines":1,"live":null,
  "assets_mapped":true,"code_mapped":true,
  "store":{"used":18452,"total":225280,"dead":0,"patterns":3},
  "src":true,"bc":true,"web":[0,1,0],"vmerr":null,
@@ -141,7 +141,7 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
 | `outputs` | Physical LED outputs the **board** has, whatever the firmware drives today (the Athom has 2; Gitea #474 makes the second one real). `> 1` is what turns the Settings page's Outputs table on. |
 | `power_cap` | A per-pixel current model exists. True on strips; false on a panel, which is a fixed load on a supply sized for it. |
 | `blur_glow` | The device output chain's blur and glow stages are offered. Two independent gates, ANDed: they need neighbours — index order on a strip, rows/columns on a regular grid — so it follows `geom.regular`; and they need to fit the board's per-frame budget, so `board::BLUR_GLOW` is **false on every HUB75 panel board**, whose compose window is one ~8.66 ms rescan that the two spatial stages over a 64×64 grid overrun (Gitea #476/#446, proposal D12). The pattern-side `setBlur`/`setGlow` are a different chain and are unaffected either way. |
-| `layers` | Pattern layers this board affords for a scene (Phase B): 3 at ≤512 px, 2 above — the per-layer 3 B/px frame in internal DRAM is the binding constraint, which is the "2 on the S3 panel" in the design. It sizes the scene editor's "2 of 2 used" note; the real gate is the editor's own budget check against live heap. |
+| `layers` | Pattern layers this board affords for a scene: the pixel-count tier (3 at ≤512 px, 2 above — the per-layer 3 B/px frame in internal DRAM is the binding constraint), narrowed by live heap headroom and by a per-board ceiling (2 on a `small-chip` board). Never 0. `luxel_core::caps::layers_for_headroom`; the model and its measured numbers are in docs/boards.md "Scene layers". It sizes the scene editor's "N of N used" note and the playlist's hard-cut transition rule; the real gate is still the post-build heap check, which reports `scene: layer N does not fit`. |
 | `text_slots` | Host-settable text slots — how many `GET`/`POST /api/text` addresses and `textSlot(n)` reads (proposal §6, Gitea #485). `8` on a host that implements them; `0` on firmware predating Phase C, which is what hides the Scene text layer's "Text slot" source. |
 | `reboot` | Can reboot itself (setup AP, data-pin change, WiFi change). |
 | `ota` | Accepts a firmware image over the network. |
@@ -295,15 +295,18 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   all sums, on both the LLFF and the TLSF backend), so the firmware probes it
   — a short binary search of allocations that are freed again immediately.
   Device only; the mirror does not report it.
-- `engine_heap` — bytes that engine occupies, measured across its load
-  (`shared::ENGINE_HEAP`). **Not decoration: `heap_free` alone is not the
-  budget an incoming pattern has.** The render task drops the outgoing engine
-  before it decodes the incoming program, so a swap starts from
+- `engine_heap` — bytes the RESIDENT engines occupy, summed, measured across
+  their load (`shared::ENGINE_HEAP`). **Not decoration: `heap_free` alone is
+  not the budget an incoming pattern has.** The render task drops the resident
+  engines before it decodes the incoming program, so a swap starts from
   `heap_free + engine_heap` — `luxel_core::budget::load_base`. 0 means "not
   measured" (nothing loaded, or a crossfade, which keeps the outgoing engine
   alive on purpose); treat 0 as `heap_free` alone, which is conservative.
   Added for Gitea #287, where predicting against `heap_free` made the
   playground warn about patterns that load fine.
+- `engines` — how many resident engines that sum is over (Gitea #479): 1 for
+  a plain pattern, one per pattern and sprite layer while a scene is up, 0
+  with nothing loaded. Device only.
 - `psram_free` / `psram_total` — the external pattern-array arena (Gitea
   #253), in bytes. A SECOND heap: it is not part of `heap_free`, and a
   pattern's arrays come out of here instead of out of that number. **Both are

@@ -1210,6 +1210,113 @@ each carries (docs/api.md). Only `board-athom-music` has two today.
   pad is whatever `out 1` names and is excluded from pattern GPIO at runtime
   by `gpio::pin_is_free`, exactly as output 0's is.
 
+## Scenes: the layer compositor in the render loop
+
+A **scene** is an ordered stack of layers — pattern, text, sprite, colour —
+that the render task composites into one frame (Gitea #477/#478). A plain
+single pattern is the same thing with one layer and no record, which is why
+the code below has no "scene mode" branch to speak of.
+
+Record and storage: `luxel_core::scene` owns the wire grammar and the JSON
+(`docs/spec/scenes.md`), `firmware/src/scenestore.rs` owns the list algebra
+(ids, the blob, upsert/delete) and is compiled for the host by
+`tools/patlog-check` so `cargo test --workspace` covers it, and
+`firmware/src/scenes.rs` is the executor — flash, critical sections, the id
+counter and the render task's resident `Runtime`. Every scene lives in ONE
+reserved-key blob under `patterns::SCENES_KEY` (`0x7FFF_FFF7`), all blocks
+back to back, capped by `patterns::BLOB_MAX` = 3840 B. **A write that would
+exceed the cap is refused** with `scenes: store full (N of 3840 B)` and
+nothing changes — `store_blob`'s bool is checked here, unlike the playlist's,
+whose oversized definition is applied live and silently lost at the next
+reboot.
+
+### What is resident
+
+The render task keeps `engine: Option<Engine>` exactly as it always did. For
+a scene that engine renders the **first pattern layer** (`scenes::Slot::Base`);
+every further pattern layer, and every sprite layer, owns its own engine in
+`Runtime::slots`. Keeping the base where it was is what lets `/api/controls`,
+`/api/vars`, the sensor and event inboxes, the projection override, the pin
+host and the published `geom` keep working unchanged — they all address the
+base layer, and for a single pattern that IS the pattern.
+
+- A **sprite** layer's engine is built at ONE pixel. Its `renderFrame` is
+  never called: `compose::sprite_view` only reads the const arrays that its
+  top-level initialization produced, so a full-size frame buffer (12 KB on the
+  panel) would be bought for nothing.
+- Every layer engine borrows its bytecode in place from the mapped arena
+  extent, so each one needs an arena pin for as long as it lives.
+  `patterns::set_layer_pins` publishes the whole set into slots
+  `3..3+PIN_LAYERS` of `PINS`, incoming and outgoing scene together, and is
+  re-published on every install and teardown. A stale pin here is harmless; a
+  missing one is a use-after-free during a compaction (Gitea #260).
+- `/api/status` reports `engine_heap` as the **sum** over the resident
+  engines and `engines` as how many there are.
+
+### The frame
+
+Per frame, `Runtime::render` resolves each text layer's source — `lit` was
+seeded when the scene was set, `clock` comes from the SNTP wall clock through
+`scenes::civil_local` + `text::format_clock` (and renders `--:--` when the
+clock has never synced), `slot` from `text::with_slot` — then clears the
+destination and walks the layers bottom → top, handing each pattern layer its
+engine's frame and each native layer to `Compositor::native_layer`.
+
+The destination is the sink's staging buffer, which is where the crossfade
+already composited: on a pipelined board that buffer IS the one handed to the
+output task, so a scene costs the pipeline no extra copy and the
+single-owner invariant (`pipeline.rs`) is untouched. The compositor's own
+per-layer scratch is one grid-sized buffer inside `Compositor`, allocated on
+first use by a text or ramp layer and released with the scene.
+
+The compositor addresses a `GridMap`, and every kernel is a **silent no-op
+without one** — the same contract `bulk.rs` has. A scene on an irregular
+strip therefore draws black rather than erroring; the Scenes UI is offered
+only on a regular 2D layout for that reason.
+
+### Crossfades between stacks
+
+The incoming stack composites into the stage, then the outgoing one is
+blended over it at the fade's progress `t` with
+`compose::blend_px_mode(dst, src, Blend::Normal, t)`, `dst` being the
+outgoing pixel. That expression is `b + ((l-b)*t >> 16)`, which is the old
+local `blend_px`'s `(a*(65536-t) + b*t) >> 16` rearranged — both shifts are
+arithmetic, so they floor identically and **a single-pattern crossfade is
+bit-for-bit what shipped before scenes**
+(`compose::tests::a_two_layer_stack_reproduces_the_crossfade_exactly`).
+
+An outgoing *bare pattern* already owns a full frame buffer — its engine's —
+so it needs nothing extra. An outgoing *scene* needs somewhere to composite,
+which is the render task's `fade_buf`: allocated when such a fade starts,
+freed the moment it ends, and never held between fades.
+
+**The transition rule.** If the outgoing and incoming stacks together need
+more pattern layers than `caps.layers`, the transition is a **hard cut** — no
+crossfade. There is neither the heap for both stacks nor, on a JIT board, a
+second exec half. `main.rs transition_ms` applies it to every path that can
+fade (`Msg::Library`, `Msg::Crossfade`, `Msg::Scene`), and the mirror behaves
+the same.
+
+### JIT interaction
+
+`firmware/src/jit.rs` has exactly `HALVES = 2` exec halves, sized so a
+*transient* crossfade can hold two native images. Two permanently resident
+pattern layers occupy both, and a third engine — a third layer, or the
+incoming half of a fade — finds none. That is a **soft** failure: `claim`
+returns `Err("no-buffer")`, `try_compile` logs
+`jit: interpreter (no-buffer: no exec memory)` and the engine runs
+interpreted. Nothing is refused and nothing panics; the layer is simply
+slower. The transition rule above keeps the common cases inside the two
+halves, and `caps.layers` is what a UI should budget against.
+
+### What a scene does NOT survive
+
+A live pixel-count change (`Msg::Config`) tears the scene down and revives the
+single-pattern resume path: every layer engine was built at the old count and
+the compositor's scratch is grid-sized. `Msg::Code`, `Msg::Library` and
+`Msg::Crossfade` all replace the whole stack with one pattern, by
+construction — a bare pattern is a one-layer scene.
+
 ## Render-loop timing counters
 
 `render_task` publishes `FPS` — frames rendered in the last full second —

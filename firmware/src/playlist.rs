@@ -10,6 +10,9 @@
 //!   `D <sec>`                    default seconds (0 = manual)
 //!   `X <ms>`                     crossfade between items (0 = hard cut)
 //!   `I <patternId> <sec|-1>`     item; -1 = inherit default
+//!   `I S<sceneId> <sec|-1>`      SCENE item (Gitea #478) — the `S` prefix is
+//!                                what tells the two apart, and the two id
+//!                                namespaces are disjoint anyway
 //!   `C <name> <raw...>`          a control for the last item (raw 16.16)
 //!   `P <mode>`                   projection override for the last item
 //!
@@ -47,6 +50,10 @@ struct Item {
     /// enum so the item carries one byte and the token match lives in one
     /// place (parse).
     proj: Option<u8>,
+    /// This item names a SCENE, not a pattern: `pattern_id` then holds the
+    /// scene id and `controls`/`proj` are ignored (a scene carries its own,
+    /// per layer). Gitea #478.
+    scene: bool,
 }
 
 #[derive(Clone)]
@@ -115,7 +122,7 @@ pub fn preflight_mark_dirty() {
     let ids = PLAYLIST.lock(|c| {
         let pl = c.borrow();
         let mut ids: Vec<String> = Vec::new();
-        for it in &pl.items {
+        for it in pl.items.iter().filter(|i| !i.scene) {
             if !ids.contains(&it.pattern_id) {
                 ids.push(it.pattern_id.clone());
             }
@@ -165,27 +172,37 @@ fn parse(body: &str) -> Playlist {
             Some("D") => pl.default_sec = it.next().and_then(|v| v.parse().ok()).unwrap_or(0),
             Some("X") => pl.crossfade_ms = it.next().and_then(|v| v.parse().ok()).unwrap_or(0),
             Some("I") => {
-                let id = it.next().unwrap_or("").into();
+                let tok = it.next().unwrap_or("");
+                // `S<sceneId>` = a scene item. The prefix is stripped here
+                // and nowhere else, so every consumer downstream sees a bare
+                // id plus the `scene` flag.
+                let (scene, id) = crate::scenestore::item_token(tok);
                 let sec = it.next().and_then(|v| v.parse::<i32>().ok());
                 let override_sec = match sec {
                     Some(n) if n < 0 => None,
                     other => other,
                 };
                 pl.items.push(Item {
-                    pattern_id: id,
+                    pattern_id: id.into(),
                     controls: Vec::new(),
                     override_sec,
                     proj: None,
+                    scene,
                 });
             }
+            // `C` and `P` bind to the last item and are IGNORED under a
+            // scene item: a scene carries its own controls and projection
+            // per pattern layer (contract §3).
             Some("C") => {
                 if let (Some(item), Some(name)) = (pl.items.last_mut(), it.next()) {
-                    let raw: Vec<i32> = it.filter_map(|v| v.parse().ok()).collect();
-                    item.controls.push((name.into(), raw));
+                    if !item.scene {
+                        let raw: Vec<i32> = it.filter_map(|v| v.parse().ok()).collect();
+                        item.controls.push((name.into(), raw));
+                    }
                 }
             }
             Some("P") => {
-                if let Some(item) = pl.items.last_mut() {
+                if let Some(item) = pl.items.last_mut().filter(|i| !i.scene) {
                     // an unknown token leaves the item on the device default
                     item.proj = it
                         .next()
@@ -217,8 +234,33 @@ pub fn to_json() -> String {
             if i > 0 {
                 push_piece(&mut out, ",");
             }
+            // `kind` disambiguates the two id namespaces for the client. A
+            // SCENE item carries no controls and no pre-flight — what it
+            // names is a record, not a blob, and its layers are checked when
+            // it activates — but it does carry its layer count, which is
+            // what the playlist row's composite thumbnail budgets against
+            // (#482). Byte-for-byte the mirror's shape (crates/luxel-cli).
+            if it.scene {
+                let name = crate::scenes::name_of(&it.pattern_id).unwrap_or_default();
+                push_piece(&mut out, "{\"kind\":\"scene\",\"id\":\"");
+                push_piece(&mut out, &it.pattern_id);
+                push_piece(&mut out, "\",\"name\":\"");
+                push_piece(&mut out, &json_escape(&name));
+                push_piece(&mut out, "\",\"layers\":");
+                push_u32(
+                    &mut out,
+                    crate::scenes::layer_count(&it.pattern_id).unwrap_or(0) as u32,
+                );
+                push_piece(&mut out, ",\"sec\":");
+                match it.override_sec {
+                    Some(s) => push_i32(&mut out, s),
+                    None => push_piece(&mut out, "null"),
+                }
+                push_piece(&mut out, "}");
+                continue;
+            }
             let name = patterns::name_of(&it.pattern_id).unwrap_or_default();
-            push_piece(&mut out, "{\"id\":\"");
+            push_piece(&mut out, "{\"kind\":\"pattern\",\"id\":\"");
             push_piece(&mut out, &it.pattern_id);
             push_piece(&mut out, "\",\"name\":\"");
             push_piece(&mut out, &json_escape(&name));
@@ -275,6 +317,25 @@ pub fn set_from_wire(body: &str) {
     patterns::store_blob(patterns::PLAYLIST_KEY, body.as_bytes());
     preflight_mark_dirty();
     wake(); // apply edits if playing
+}
+
+/// Remove every item naming scene `id` (its `I S<id>` line and the binding
+/// lines under it) — called when a scene is deleted, so the playlist can
+/// never schedule a record that is gone.
+///
+/// Works on the PERSISTED TEXT rather than the parsed list because the
+/// playlist has no serializer: flash holds the client's POST body verbatim
+/// and that text is canonical (see [`set_from_wire`]).
+pub fn drop_scene(id: &str) {
+    let Some(bytes) = patterns::read_blob(patterns::PLAYLIST_KEY) else {
+        return;
+    };
+    let Ok(text) = String::from_utf8(bytes) else {
+        return;
+    };
+    if let Some(out) = crate::scenestore::drop_scene_lines(&text, id) {
+        set_from_wire(&out);
+    }
 }
 
 /// Whether the playlist is auto-advancing (the HA switch state).
@@ -344,6 +405,22 @@ async fn enter_item(i: usize) {
     let Some(item) = item else {
         return;
     };
+    // A scene item hands the whole layer stack to the render task and stops
+    // there: controls and projection belong to the scene's own layers.
+    if item.scene {
+        if crate::scenes::name_of(&item.pattern_id).is_none() {
+            println!("playlist: item {} missing scene {}", i, item.pattern_id);
+            return;
+        }
+        MSG_QUEUE
+            .send(Msg::Scene {
+                id: item.pattern_id.clone(),
+                ms: crossfade as u32,
+            })
+            .await;
+        crate::shared::set_current_controls(Vec::new());
+        return;
+    }
     if patterns::name_of(&item.pattern_id).is_none() {
         println!("playlist: item {} missing pattern {}", i, item.pattern_id);
         return;
