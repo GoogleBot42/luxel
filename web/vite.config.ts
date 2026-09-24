@@ -135,6 +135,13 @@ export default defineConfig({
   plugins: [svelte(), inlineBoot()],
   build: {
     target: "es2022",
+    // esbuild (the default) is fast; terser is ~4 % smaller gzipped on this
+    // bundle, and the bundle is gated at the 983,040 B assets partition
+    // (Gitea #683), so the seconds are worth it. NOT `drop_console`: the e2e
+    // harness fails a run on any page-level `console.error` (web/tools/e2e.mjs),
+    // so dropping them would disable that assertion rather than shrink much.
+    minify: "terser",
+    terserOptions: { compress: { passes: 2 }, format: { comments: false } },
     // The device serves this UI from a 3-socket connection pool (RAM
     // budget — see firmware/src/server.rs), and browser-native loads
     // can't go through the app's fetchgate. Splitting CSS per-entry and

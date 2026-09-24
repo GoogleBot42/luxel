@@ -9,3 +9,21 @@ license = "Apache-2.0"
 [profile.release]
 opt-level = 3
 lto = "thin"
+
+# The browser playground's engine (crates/luxel-wasm → web/public/luxel.wasm).
+# `[profile.release]` above is tuned for the native CLI, where the artifact's
+# size is nobody's problem; this one ships in the device's `.luxa` bundle,
+# which is gated at the 983,040 B assets partition (Gitea #683). Size wins
+# over throughput here up to a point — the measured cost of `opt-level = "s"`
+# + fat LTO + `wasm-opt -Oz` is in web/tools/wasm-bench.mjs's table, and the
+# rule is "the smallest option within ~20 % of `release`". `panic = "abort"`
+# is safe because nothing on the JS side catches a Rust unwind: the wasm ABI
+# has no unwinding and lx_* already reports errors through the response
+# buffer. Used by `npm run wasm` (web/package.json).
+[profile.wasm-release]
+inherits = "release"
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

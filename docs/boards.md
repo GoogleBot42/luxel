@@ -1846,12 +1846,37 @@ rather than by this board.
 
 What did **not** change is the assets margin, which is still the number
 worth watching on every board: the 4 MB `assets` partition
-(0xF0000 = 983,040 B) holds an 870 KB bundle as of 2026-09-20 — **11.5 %
-headroom, down from ~35 %** (most of it `gallery.json`; +11 KB is #592
-inlining the stylesheet into both entry HTMLs). One bundle ships to every
-board, so the *small* partition is the bound even though this board's is
-four times the size, and a bundle over 983,040 B fails the
-`POST /api/assets` install outright.
+(0xF0000 = 983,040 B) holds an **843 KB bundle as of 2026-09-24 — 12.2 %
+headroom** (863,167 B packed; `tools/ci.sh` fails the build over 983,040 B,
+and `POST /api/assets` refuses an oversized install outright). One bundle
+ships to every board, so the *small* partition is the bound even though this
+board's is four times the size.
+
+That figure is the result of the Gitea #683 diet and it is not a standing
+surplus — it had fallen to **0.73 %** by 2026-09-24 (the 11.5 % recorded
+here on 2026-09-20 was already stale) with three Phase B surfaces and the
+Phase C font blobs still to land. What bought it back, all measured on
+that day's master:
+
+| lever | gzipped saving |
+|---|---:|
+| `[profile.wasm-release]` (opt-level "s", fat LTO, panic=abort, strip) + `wasm-opt -Oz` + zopfli, on `luxel.wasm` | 70.4 kB |
+| `build.minify: "terser"` (2 passes) instead of esbuild, + zopfli | 23.2 kB |
+| zopfli instead of zlib level 9, on `gallery.json` | 17.0 kB |
+| zopfli + terser on the two entry HTMLs and the small chunks | 2.1 kB |
+
+None of it is repeatable — the three levers are spent. The next 100 kB has
+to come from what is *in* the bundle: `gallery.json` is 354 kB of the 843
+(307 pattern sources, which ship verbatim on purpose) and the CodeMirror
+editor is most of the 288 kB JS chunk. After that the only lever left is
+growing `assets` past 0xF0000, which is another migration — Gitea #691 has
+the options and what each costs.
+
+Brotli and zstd are **not** available however much they would help: a
+browser only advertises `Accept-Encoding: br`/`zstd` on a secure origin,
+and the device is plain http on a LAN IP. gzip is the ceiling, which is why
+zopfli — a harder-searching encoder for the *same* format — is what there
+was to take.
 
 ## First light: the Seengreat board on metal (2026-09-05)
 

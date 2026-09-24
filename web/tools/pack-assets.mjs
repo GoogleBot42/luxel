@@ -10,9 +10,22 @@
 // SHA-256 over the *raw* (pre-gzip) file — the device serves it as a strong
 // ETag so browsers can revalidate with If-None-Match and get 304s.
 // The firmware still reads legacy "LUXA" archives (no etag field).
+//
+// The gzip streams come from ZOPFLI when it is on PATH (the devshell has
+// it): a plain DEFLATE encoder that searches harder than zlib, so it is the
+// same format, the same `Content-Encoding: gzip` and no firmware change, for
+// ~4.5 % fewer bytes in a bundle gated at the 983,040 B assets partition
+// (Gitea #683). Without it we fall back to zlib level 9 with a warning — a
+// bare checkout still packs a valid archive, and the fallback is the LOOSE
+// direction, so a bundle that fits when packed here fits when CI packs it.
+// Brotli and zstd are NOT options however much they would help: a browser
+// only advertises `Accept-Encoding: br`/`zstd` on a secure origin, and the
+// device is plain http on a LAN IP.
 
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { gzipSync } from "node:zlib";
+import os from "node:os";
+import { gunzipSync, gzipSync } from "node:zlib";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -23,11 +36,50 @@ const TYPES = {
   ".html": "text/html; charset=utf-8",
   ".js": "application/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
   ".wasm": "application/wasm",
   ".svg": "image/svg+xml",
   ".png": "image/png",
   ".ico": "image/x-icon",
 };
+
+// zopfli has no stdin mode, so each blob goes through a temp file.
+const haveZopfli = (() => {
+  try {
+    execFileSync("zopfli", ["-h"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+if (!haveZopfli) {
+  console.warn(
+    "pack-assets: zopfli not on PATH — falling back to zlib level 9 " +
+      "(~4.5 % larger). Run inside `nix develop` for the shipping bytes.",
+  );
+}
+
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "luxa-"));
+process.on("exit", () => fs.rmSync(tmpDir, { recursive: true, force: true }));
+function deflate(raw, name) {
+  if (!haveZopfli) return gzipSync(raw, { level: 9 });
+  // --i15 is the default iteration count; --i50 was measured worth 2 bytes
+  // on the 1.2 MB gallery for 3x the wall clock.
+  const src = path.join(tmpDir, name.replaceAll("/", "_"));
+  fs.writeFileSync(src, raw);
+  try {
+    const gz = execFileSync("zopfli", ["-c", src], { maxBuffer: 1 << 28 });
+    // An external compressor is a new way for this archive to be silently
+    // wrong, and the device is where that would be discovered. Round-trip
+    // every blob here instead: ~0.1 s for the whole bundle.
+    if (!gunzipSync(gz).equals(raw)) {
+      throw new Error(`zopfli round-trip mismatch for ${name}`);
+    }
+    return gz;
+  } finally {
+    fs.rmSync(src, { force: true });
+  }
+}
 
 function* walk(dir) {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -43,7 +95,7 @@ for (const f of walk(DIST)) {
   const ext = path.extname(f);
   const ctype = TYPES[ext] ?? "application/octet-stream";
   const raw = fs.readFileSync(f);
-  const gz = gzipSync(raw, { level: 9 });
+  const gz = deflate(raw, rel);
   const useGz = gz.length < raw.length;
   const etag = createHash("sha256").update(raw).digest().subarray(0, 8); // 8-byte content id
   files.push({ path: rel, ctype, gzip: useGz, etag, data: useGz ? gz : raw });
