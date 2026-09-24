@@ -33,7 +33,7 @@
     scenes,
     startScenePoll,
   } from "../stores/scenes";
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy } from "svelte";
 
   export let active = false;
 
@@ -49,15 +49,27 @@
    *  playground it is the `Preview as` choice. */
   $: ready = $layout.dims === 2 && $layout.regular && $layout.w > 0 && $layout.h > 0;
 
-  // The 5th cadence on the ONE poll scheduler, registered once. NOT in a `$:`
-  // block: a reactive statement that both reads and assigns the same variable
-  // makes itself its own dependency and re-runs forever (.claude/rules/web.md
-  // — it froze this page the first time round).
+  // The 5th cadence on the ONE poll scheduler — and ONLY while this page is
+  // the one on screen. Every page stays mounted when it is hidden, so a poll
+  // registered in `onMount` would keep asking a device for its scenes from
+  // behind the Playlist forever, through the same two sockets the transport
+  // needs (docs/web-architecture.md, the poll scheduler).
+  //
+  // The assignment lives in a FUNCTION: a `$:` that both reads and assigns
+  // the same variable is its own dependency and re-runs forever
+  // (.claude/rules/web.md — it froze this page the first time round).
   let stopPoll: (() => void) | undefined;
-  onMount(() => {
-    stopPoll = startScenePoll();
-  });
-  onDestroy(() => stopPoll?.());
+
+  function syncPoll(on: boolean): void {
+    if (on && !stopPoll) stopPoll = startScenePoll();
+    else if (!on && stopPoll) {
+      stopPoll();
+      stopPoll = undefined;
+    }
+  }
+
+  $: syncPoll(active);
+  onDestroy(() => syncPoll(false));
 
   /** Re-read whenever the page comes forward. */
   $: if (active) void refreshScenes();
