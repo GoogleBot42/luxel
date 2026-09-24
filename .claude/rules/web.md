@@ -24,6 +24,24 @@ paths:
   that ran its program on open showed "not run yet" every single time, while
   clicking Run — an event handler, i.e. its own flush — worked). Applies to a
   plain `let`, not just to stores (next bullet).
+- **The packed bundle is gated at 983,040 B and the margin is thin.** Every
+  new page, component and dependency lands in the one `.luxa` archive that
+  ships to every board (the `assets` partition, docs/boards.md), and
+  `tools/ci.sh` FAILS a build over that line — the only place it is measured
+  before a device refuses the install. It had fallen to 0.73 % headroom by
+  2026-09-24 with three Phase B surfaces still queued; the #683 diet bought
+  back 12.2 % and **spent every build-side lever there was** (a wasm-specific
+  cargo profile + `wasm-opt -Oz`, zopfli in `pack-assets.mjs`, terser instead
+  of esbuild). There is no third round of flags: what is left is content
+  (`gallery.json` 354 kB, CodeMirror most of the JS) — Gitea #691. So MEASURE
+  a new surface rather than assuming it fits:
+  `cd web && npm run build && node tools/pack-assets.mjs /tmp/x.luxa && stat -c%s /tmp/x.luxa`,
+  and quote the number in the PR. Two traps when you do: `npm run wasm` is
+  `web/tools/build-wasm.sh` now, so measure inside `nix develop` (without
+  binaryen/zopfli on PATH it warns and ships a LARGER bundle than CI would),
+  and the engine wasm is size-tuned — if you touch `crates/luxel-*`, re-run
+  `web/tools/wasm-bench.mjs` too, because `opt-level = "s"` already costs
+  +7.7 % render time and `"z"` was 2.6x slower.
 - The device serves the UI from a tiny connection pool (3 sockets default,
   2 small-chip) and browser-NATIVE requests (script/stylesheet/preload
   tags) can't go through fetchgate — vite is deliberately configured with
