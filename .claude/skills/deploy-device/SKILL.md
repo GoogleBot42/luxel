@@ -197,6 +197,31 @@ pre-authorized per CLAUDE.md — no need to ask before pushing.
   flash writes) — check `version` in `/api/status` first; on v0.1.36+
   pushes are safe with a playlist churning (verified 2026-08-15: 6/6 asset
   pushes, OTA accepted, no truncation, 5/5 cold loads).
+- **A device with a SCENE RESIDENT cannot take an OTA — and stopping the
+  playlist does not fix it.** On the Seengreat panel running a two-scene
+  playlist (`engines: 2`, `heap_largest` ~5.5 KB), `ota-push.sh` failed three
+  times in a row with `curl: (56) Recv failure: Connection reset by peer` and
+  `device said: <nothing>`. Serial showed the real cause: `ota: writing` →
+  `PANIC` → `memory allocation of … failed` → reboot. The OTA receive path
+  allocates infallibly (Gitea **#761**), so a fragmented heap reboots the board
+  mid-upload instead of refusing cleanly.
+  **`POST /api/playlist/stop` is NOT enough** — it parks the playlist but leaves
+  the scene's engines resident (`engines` stays 2, heap unchanged, `active` can
+  even read `null` while they are still held). There is currently no API that
+  frees them. What worked: stop the playlist, let the board reboot once, and
+  `heap_largest` went 5,552 → 44,108 B; the identical push then succeeded first
+  try. Activating a plain pattern is the other way to drop them.
+  So: **read `heap_largest` before pushing.** A few KB means the push will fail
+  in a way that looks like a network problem. And distinguish this from the
+  benign case in the bullet above — that one's exit code lies and the device
+  comes back on the NEW slot; this one genuinely fails and the device stays on
+  the old one.
+- **When both slots hold the same `version`, diff a STATUS FIELD the new build
+  added.** After an OTA that reports the same version string, `slot` alone can
+  be ambiguous (and the boot-loop guard flips it silently). A field only the new
+  firmware emits is an unambiguous discriminator — on 2026-09-25, `jit.layers`
+  (new in #718) proved a "successful" push had not actually landed while
+  `version` still read `0.1.40` on both sides.
 - **After any crashy test run, re-check `slot`, not just `version`.** The
   boot-loop guard flips slots silently after 3 failed boots, and when both
   slots hold the same version the rollback is invisible in `version` —
