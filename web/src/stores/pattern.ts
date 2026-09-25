@@ -21,8 +21,8 @@ import {
   saveWorkingCopy,
   type SavedPattern,
 } from "../lib/store";
-import { deviceEngineHeap, deviceHeapFree, devicePsramFree } from "./device";
-import { pixelCount, type Dims } from "./geometry";
+import { device, deviceEngineHeap, deviceHeapFree, devicePsramFree } from "./device";
+import { pixelCount, pixelTotal, playgroundArrayElements, type Dims } from "./geometry";
 
 // ---- the wasm engine host ----
 
@@ -39,7 +39,8 @@ export async function loadLuxel(): Promise<Luxel> {
 
 /**
  * The array ELEMENT ledger the local preview engines enforce — the connected
- * device's own, 0 (= the PB-compat 10,236) in the playground.
+ * device's own on a console, the RIG's in the playground
+ * ([`playgroundArrayElements`], floored at the PB-compat 10,236).
  *
  * The ledger is a COUNT, and `array(pixelCount)` costs what the RIG says, so
  * it is the one capacity number a preview cannot take from the browser. Since
@@ -50,6 +51,11 @@ export async function loadLuxel(): Promise<Luxel> {
  * running on the LEDs in front of the user (the #420 wall, from the preview
  * side).
  *
+ * The playground has no such figures to read, and PB's fixed count was NOT
+ * the neutral answer there: it is a device's number, and the playground's
+ * "Preview as" rig is the user's. At 64×64 it blanked a quarter of `library/`
+ * — see [`playgroundArrayElements`] for the whole argument (Gitea #742).
+ *
  * Derived rather than set imperatively so it follows the 1 Hz status poll;
  * the subscription below is what actually installs it, and every compile from
  * then on gets it. An engine keeps the ledger it was built with, so a surface
@@ -57,9 +63,15 @@ export async function loadLuxel(): Promise<Luxel> {
  * its rebuild guard).
  */
 export const previewArrayElements: Readable<number> = derived(
-  [luxel, deviceHeapFree, deviceEngineHeap, devicePsramFree],
-  ([lx, heapFree, engineHeap, psramFree]) =>
-    lx ? lx.arrayElementsFor(heapFree, engineHeap, psramFree) : 0,
+  [luxel, device, deviceHeapFree, deviceEngineHeap, devicePsramFree, pixelTotal],
+  ([lx, d, heapFree, engineHeap, psramFree, pixels]) => {
+    if (!lx) return 0;
+    const ledger = lx.arrayElementsFor(heapFree, engineHeap, psramFree);
+    // Gated on the DEVICE, not on the figures: a console that has connected
+    // but not yet polled reads 0 everywhere, and raising a real device's
+    // ledger is exactly the #420 warning going quiet.
+    return d ? ledger : playgroundArrayElements(pixels, ledger);
+  },
 );
 
 // Install it into the wasm module. A module-scope subscription (never torn

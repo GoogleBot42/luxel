@@ -338,6 +338,59 @@ const litPixels = (handle, n) => {
   s.free();
 }
 
+// ---- the scene compositor's shared driver (Gitea #732) ----
+//
+// `lx_comp_frame` is a few lines over `luxel_core::compose::SceneDriver`,
+// the same walk the firmware's render task runs. What this asserts through
+// the ABI is the half of the driver a host most easily loses: the frame
+// deltas' SUB-MILLISECOND remainder. A caption scrolling for one second
+// must land in the same place whether the host stepped it once at 1000 ms
+// or sixty times at 16.666… ms. Truncating each step — what the firmware
+// did before #732 — leaves the 60 fps run 40 ms (3.6 px here) behind, and
+// that is exactly why the browser preview and the panel disagreed.
+{
+  const WIRE =
+    "S 0123abcd Drift\n" +
+    "L text 0 0 0 0 normal 100 none fill 1\n" +
+    "T lit LUXEL SCROLLS\n" +
+    "F regular ffffff l left 90\n";
+  const compPixels = (ch) => {
+    const ptr = e.lx_comp_frame(ch, Math.round((1000 / 60) * 65536));
+    assert.ok(ptr !== 0, "lx_comp_frame returned null");
+    return [...mem().slice(ptr, ptr + 16 * 8 * 3)];
+  };
+
+  const fast = e.lx_comp_new(16, 8);
+  const slow = e.lx_comp_new(16, 8);
+  for (const ch of [fast, slow]) {
+    const w = putStr(WIRE);
+    assert.strictEqual(e.lx_comp_set(ch, w.ptr, w.len), 0, response());
+    w.free();
+    assert.strictEqual(e.lx_comp_layer_count(ch), 1);
+  }
+
+  // 60 frames of 16.666… ms — no engine is bound, so the only thing moving
+  // is the compositor's scroll clock
+  let framed;
+  for (let i = 0; i < 60; i++) framed = compPixels(fast);
+  assert.ok(
+    framed.some((b) => b !== 0),
+    "the caption drew nothing — this assertion would pass vacuously",
+  );
+  // …and one frame of exactly 1000 ms
+  const once = e.lx_comp_frame(slow, 1000 * 65536);
+  const oneShot = [...mem().slice(once, once + 16 * 8 * 3)];
+
+  assert.deepStrictEqual(
+    framed,
+    oneShot,
+    "60 x 16.666 ms of scroll must equal 1000 ms of scroll — the driver " +
+      "dropped the sub-millisecond remainder (Gitea #732)",
+  );
+  e.lx_comp_free(fast);
+  e.lx_comp_free(slow);
+}
+
 e.lx_free(h);
 e.lx_free(h2);
 e.lx_free(h3);

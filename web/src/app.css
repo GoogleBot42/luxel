@@ -246,6 +246,54 @@ input[type="checkbox"]:indeterminate::before {
   cursor: default;
 }
 
+/* ---------- the spinner ----------
+   ONE ring, everywhere something is in flight (Gitea #738). It was copy-pasted
+   into six components with four different `@keyframes` names before this — the
+   same class of drift that gave `.primary` four bodies (#538), so it lives here
+   with the rest of the shared chrome (see .claude/rules/web.md).
+
+   Two shapes, one rule: inline by default (a word's worth of ink beside text),
+   `.overlay` to centre it over a positioned box (a tile or thumbnail that has
+   not drawn a frame yet). `--spin` sizes both, and the overlay's offset is
+   derived from it so a size change cannot leave the centring behind. */
+
+.spinner {
+  --spin: 12px;
+  display: inline-block;
+  width: var(--spin);
+  height: var(--spin);
+  border: 2px solid color-mix(in srgb, var(--text-dim) 40%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: lx-spin 0.7s linear infinite;
+}
+
+.spinner.lg {
+  --spin: 14px;
+}
+
+/* centred in the nearest positioned ancestor. `transform` belongs to the
+   animation, so the half-size offset is margin, not `translate(-50%, -50%)`. */
+.spinner.overlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  margin: calc(var(--spin) / -2) 0 0 calc(var(--spin) / -2);
+}
+
+/* Inside a button the ring rides the button's OWN ink: on `.btn.primary` the
+   fill IS `--accent`, so an accent-topped ring is invisible there. */
+.btn .spinner {
+  border-color: color-mix(in srgb, currentColor 30%, transparent);
+  border-top-color: currentColor;
+}
+
+@keyframes lx-spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
 /* ---------- fields ---------- */
 
 .inp {

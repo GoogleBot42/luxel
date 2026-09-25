@@ -709,6 +709,44 @@ docs/web-architecture.md ("Lints: boxed variables and interpreter mode").
 Later phases add their reasons (`TooLarge`, …) to `JitRefusal` and every
 surface follows.
 
+**A refusal belongs to an ENGINE, not to the device** (Gitea #718). The
+reason vocabulary above is per-compile, and a scene compiles one engine per
+`pat` and `sprite` layer, bottom → top. Until #718 all ten `set_state` call
+sites in `firmware/src/jit.rs` wrote ONE global set, so the last compile of
+an activation won and `/api/status` described it alone: a two-layer scene
+reported its top layer, and a base layer that fell back to the interpreter
+was silently overwritten by the layer above it succeeding.
+
+The recorder is now keyed by **scene layer index** — the identity that
+survives a rebuild (the scene's layer list is the identity, not the build
+order) and that a bare pattern also has, as layer 0 of a one-layer stack.
+The shape:
+
+- `firmware/src/jit.rs` keeps one packed byte plus a `u16` per layer, for
+  eight layers — 26 B of `.bss`, which on the classic ESP32 boards comes
+  straight out of a ~100 B `.stack` margin, hence packed rather than a
+  table of structs. Plain load/store only: `riscv32imc` has no atomic RMW.
+- `jit::arm(layer, primary, sprite)` names the slot the next compile
+  attempt belongs to. `scenes::build_runtime` calls it per layer;
+  `try_budgeted_engine` arms layer 0 as primary for every non-scene
+  activation, so a new single-pattern call site cannot forget.
+- `set_state` writes the armed slot always, and the SCALAR block
+  (`jit.state`/`reason`/`code_bytes`/`compile_us`/`place`) only when that
+  slot is the primary engine. The scalar block therefore still means what
+  it always meant — the one running program — and older clients are
+  unaffected.
+- `jit.state` gained a fourth value, `"none"`: the backend is present and
+  nothing is resident. #744 made that a reachable steady state, and
+  `"interp"` was a lie there.
+- The wire is `jit.native` / `jit.interp` / `jit.layers[]` — docs/api.md
+  has the field-by-field description and a worked two-engine example.
+
+A **sprite** layer is reported with `"kind":"sprite"`. Its engine is built
+and read but never stepped (docs/spec/scenes.md §4), so it spends a compile
+and never enters the code. That is a reason to report it, not to hide it:
+an invisible compile is the failure mode this whole section is about.
+Gitea #740 removes the engine and the entry with it.
+
 **The `callbacks` reason no longer exists** (#626): v1 compiles
 `CallValue`, and no builtin reaches pattern code, so no construct in
 `library/` forces interpreter mode. The refusal list is empty and the

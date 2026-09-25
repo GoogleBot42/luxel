@@ -933,9 +933,20 @@ export class Compositor {
   }
 
   /** Step the bound pattern engines and composite the stack; returns a copy
-   *  of the RGB bytes (w·h·3). */
+   *  of the RGB bytes (w·h·3), or an EMPTY array for a frame that was not
+   *  drawn.
+   *
+   *  A null pointer used to mean only "bad handle". Since the shared scene
+   *  driver landed (Gitea #732) it is also what the driver answers when it
+   *  cannot size the destination buffer — the fallible `try_reserve_exact`
+   *  the firmware has always used, now on this path too. Slicing from 0
+   *  would hand back `pixelCount * 3` bytes of whatever sits at the bottom
+   *  of the wasm heap, so the caller has to be told instead. `lib/draw.ts`
+   *  painters no-op on a short buffer, which is the behaviour we want: the
+   *  canvas keeps the last good frame rather than flashing garbage. */
   frame(deltaMs: number): Uint8Array {
     const ptr = this.e.lx_comp_frame(this.ch, Math.round(deltaMs * RAW));
+    if (ptr === 0) return new Uint8Array(0);
     return new Uint8Array(this.e.memory.buffer.slice(ptr, ptr + this.pixelCount * 3));
   }
 

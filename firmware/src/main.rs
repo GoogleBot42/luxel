@@ -106,6 +106,7 @@ mod sensors;
 mod server;
 mod sntp;
 mod shared;
+mod textslots;
 #[cfg(feature = "wled-takeover")]
 mod takeover;
 #[cfg(feature = "wled-takeover")]
@@ -169,12 +170,21 @@ const APA_BRIGHTNESS: u8 = 4;
 const SSID: Option<&str> = option_env!("LUXEL_SSID");
 const PASSWORD: Option<&str> = option_env!("LUXEL_PASS");
 
-/// Built-in default pattern: source for `GET /api/pattern`, bytecode (built
-/// by build.rs — the firmware links no compiler) for execution.
+/// Optional built-in default pattern: source for `GET /api/pattern`,
+/// bytecode (built by build.rs — the firmware links no compiler) for
+/// execution.
 ///
-/// Both halves come out of `OUT_DIR`, so the source served and the
-/// bytecode executed are provably the same file — `library/rainbow.js`
-/// unless `LUXEL_DEFAULT_PATTERN` named another (build.rs).
+/// **A shipped image has none.** A device that has never been given a
+/// pattern plays nothing and the strip is dark (Gitea #744); what runs at
+/// boot comes from flash — `playlist::init` or `resume::resume_task` — or
+/// from the first `POST /api/code` / activate. These constants exist only
+/// for a build that passed `LUXEL_DEFAULT_PATTERN`, which is how the QEMU
+/// JIT gate selects a pattern in an environment where nothing else can
+/// (build.rs `bake_default_pattern`, Gitea #658).
+///
+/// Both halves come out of `OUT_DIR`, so the source served and the bytecode
+/// executed are provably the same file.
+#[cfg(default_pattern)]
 const PATTERN: &str = include_str!(concat!(env!("OUT_DIR"), "/default.js"));
 
 /// `include_bytes!` gives alignment 1, and `deserialize_lean_static` only
@@ -182,15 +192,18 @@ const PATTERN: &str = include_str!(concat!(env!("OUT_DIR"), "/default.js"));
 /// copies otherwise). The zero-sized `[u32; 0]` raises the struct's
 /// alignment to 4 without adding a byte, so the boot default executes from
 /// rodata like every other mapped pattern (Gitea #260).
+#[cfg(default_pattern)]
 #[repr(C)]
 struct Aligned4<T: ?Sized> {
     _align: [u32; 0],
     bytes: T,
 }
+#[cfg(default_pattern)]
 static PATTERN_BC_ALIGNED: &Aligned4<[u8]> = &Aligned4 {
     _align: [],
     bytes: *include_bytes!(concat!(env!("OUT_DIR"), "/default.lxbc")),
 };
+#[cfg(default_pattern)]
 const PATTERN_BC: &[u8] = &PATTERN_BC_ALIGNED.bytes;
 
 macro_rules! mk_static {
@@ -429,6 +442,13 @@ async fn main(spawner: Spawner) -> ! {
     layout::init();
     outpal::init(); // device output palette (also a reserved-key blob)
     scenes::init(); // scene records (one reserved-key blob, like the playlist)
+    // Host-set text slots (Gitea #745). HERE, before any task spawns: it is
+    // the only point where writing `luxel_core::text`'s lock-free
+    // single-writer table is unconditionally sound, and it puts the text in
+    // place before the first frame a resuming playlist of scenes renders.
+    // ~1.3 KB worst case, in the same class as the palette/Layout blobs
+    // above — not the multi-KB burst `resume::resume_task` defers past DHCP.
+    textslots::init();
     } else {
         println!("LUXEL_NO_OTA: ota disabled");
     }
@@ -1037,6 +1057,29 @@ pub(crate) fn try_budgeted_engine(
     prog: luxel_core::vm::Program,
     count: u32,
 ) -> Result<Engine, usize> {
+    // A bare pattern replaces the WHOLE stack with one engine, and that
+    // engine is the program `/api/status`'s scalar `jit` block describes
+    // (Gitea #718). Resetting here rather than at the call sites is what
+    // makes the per-slot table self-maintaining: every non-scene
+    // activation — boot default, /api/code, store activate, library swap,
+    // crossfade, pixel-count rebuild — funnels through this function, so a
+    // new one cannot forget. A SCENE layer goes through
+    // [`try_budgeted_layer`], which is armed for its own slot inside a
+    // stack `scenes::build_runtime` has already reset.
+    #[cfg(feature = "jit")]
+    jit::single();
+    try_budgeted_layer(prog, count)
+}
+
+/// [`try_budgeted_engine`] for ONE layer of the scene
+/// `scenes::build_runtime` is assembling: the same floor check and the same
+/// single compile hook, but the per-slot JIT recorder is already armed for
+/// this layer (`jit::arm`) and the stack must NOT be reset out from under
+/// the layers below it.
+pub(crate) fn try_budgeted_layer(
+    prog: luxel_core::vm::Program,
+    count: u32,
+) -> Result<Engine, usize> {
     #[allow(unused_mut)]
     let mut e = budgeted_engine(prog, count);
     let free = esp_alloc::HEAP.free() as usize;
@@ -1134,6 +1177,14 @@ fn republish_layer_pins(scene: &Option<scenes::Runtime>, prev: &Option<scenes::R
 fn note_engines(scene: &Option<scenes::Runtime>, engine: &Option<Engine>) {
     let n = u32::from(engine.is_some()) + scene.as_ref().map_or(0, scenes::Runtime::engines);
     shared::ENGINES.store(n, Ordering::Relaxed);
+    // `/api/status`'s `jit` block describes the RESIDENT stack, so it has
+    // to fall back to `state:"none"` the moment that stack empties — a
+    // freeze, a rejected load, or a board nobody has given a pattern
+    // (Gitea #718/#744). This is the one place that knows, and it is
+    // called every loop iteration rather than only when the geometry
+    // changed; `note_resident` is a single atomic load unless `n` is 0.
+    #[cfg(feature = "jit")]
+    jit::note_resident(n);
 }
 
 /// Install a stored scene as the live stack. Returns true when a crossfade
@@ -1342,37 +1393,63 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
     // no longer sits in RAM either — it lives in the flash read-back slot
     // (shared::current_bc), read into a TRANSIENT Vec only for the rebuild.
     // deserialize_lean: no debug info on-device — halves a Program's RAM.
-    // _static: PATTERN_BC is rodata the bootloader already maps, so the
-    // built-in default's code and constant pool cost NO heap at all — the
-    // Program is its header tables (Gitea #260).
-    // Bracket the first build too, so `/api/status` reports `engine_heap`
-    // from boot rather than only after the first swap (Gitea #287).
-    let boot_free = esp_alloc::HEAP.free() as usize;
-    let mut engine = match luxel_core::bytecode::deserialize_lean_static(PATTERN_BC) {
-        Ok(p) => {
-            // The boot default is the ONE activation that does not go
-            // through `try_budgeted_engine`: there is no heap floor to
-            // fail against, because the blob is rodata and there is
-            // nothing to fall back TO. So the JIT hook is repeated here —
-            // without it the built-in pattern would be the only one on the
-            // device that never compiled (Gitea #658).
-            #[allow(unused_mut)]
-            let mut e = budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed));
-            #[cfg(feature = "jit")]
-            jit::try_compile(&mut e);
-            Some(e)
+    //
+    // NOTHING IS RESIDENT AT BOOT (Gitea #744). A shipped image carries no
+    // default pattern, so the render task starts with `engine: None`: the
+    // frame branch below is skipped, one black frame is clocked out (see
+    // `blanked`), and the loop idles at 20 Hz until `playlist::init` /
+    // `resume::resume_task` / an HTTP swap sends the first `Msg`. That state
+    // costs ZERO heap — which is the property the rodata default used to buy
+    // and the reason it survived this long: its code and constant pool were
+    // mapped rodata (Gitea #260), so first boot never allocated for them.
+    // Having no engine at all is strictly cheaper still.
+    //
+    // A build that passed `LUXEL_DEFAULT_PATTERN` (build.rs, the QEMU JIT
+    // gate) keeps the old behaviour exactly.
+    #[cfg(not(default_pattern))]
+    let mut engine: Option<Engine> = None;
+    #[cfg(default_pattern)]
+    let mut engine = {
+        // _static: PATTERN_BC is rodata the bootloader already maps, so the
+        // built-in default's code and constant pool cost NO heap at all —
+        // the Program is its header tables (Gitea #260).
+        // Bracket the first build too, so `/api/status` reports
+        // `engine_heap` from boot rather than only after the first swap
+        // (Gitea #287).
+        let boot_free = esp_alloc::HEAP.free() as usize;
+        let engine = match luxel_core::bytecode::deserialize_lean_static(PATTERN_BC) {
+            Ok(p) => {
+                // The boot default is the ONE activation that does not go
+                // through `try_budgeted_engine`: there is no heap floor to
+                // fail against, because the blob is rodata and there is
+                // nothing to fall back TO. So the JIT hook is repeated here —
+                // without it the built-in pattern would be the only one on the
+                // device that never compiled (Gitea #658).
+                #[allow(unused_mut)]
+                let mut e = budgeted_engine(p, PIXEL_COUNT.load(Ordering::Relaxed));
+                // …and so is the per-slot recorder's arming, for the same
+                // reason: the built-in default is a bare pattern, so it is
+                // layer 0 of a one-layer stack (Gitea #718).
+                #[cfg(feature = "jit")]
+                jit::single();
+                #[cfg(feature = "jit")]
+                jit::try_compile(&mut e);
+                Some(e)
+            }
+            Err(e) => {
+                println!("embedded pattern bytecode error (build bug?): {}", e);
+                None
+            }
+        };
+        if engine.is_some() {
+            note_engine_heap(boot_free);
         }
-        Err(e) => {
-            println!("embedded pattern bytecode error (build bug?): {}", e);
-            None
-        }
+        // The boot default is `&'static` rodata: read-back serves it
+        // directly, no heap and no flash write. Every later swap repoints
+        // this at flash.
+        shared::set_current_default(PATTERN, PATTERN_BC);
+        engine
     };
-    if engine.is_some() {
-        note_engine_heap(boot_free);
-    }
-    // The boot default is `&'static` rodata: read-back serves it directly,
-    // no heap and no flash write. Every later swap repoints this at flash.
-    shared::set_current_default(PATTERN, PATTERN_BC);
     // Rebuild the engine from the running blob at the current pixel count.
     // The blob comes from wherever read-back currently points: the rodata
     // default (borrowed, no alloc), the flash slot, or the pattern store for
@@ -1485,6 +1562,22 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
     // and every map change — never per frame (see publish_geom). Starts true
     // so the boot engine's shape is published on the first pass.
     let mut geom_dirty = true;
+    // "Nothing playing" is DARK, not "whatever was on the wire last"
+    // (Gitea #744). Nothing is emitted while no engine and no scene are
+    // resident, and an LED holds its last latched frame for as long as it
+    // has power — so a reboot with nothing to resume used to need the
+    // built-in default just to overwrite the previous session's pixels.
+    // This is the black frame that replaces it: `Some(n)` = a black frame
+    // for `n` pixels has been clocked out and nothing has been drawn since,
+    // so the wire is already dark. Edge-triggered, so the idle path stays a
+    // 20 Hz sleep rather than a 20 Hz strip write.
+    let mut blanked: Option<usize> = None;
+    // …except for an OTA/upload `Msg::Freeze`, whose whole contract is that
+    // the strip HOLDS its last frame while its heap is handed over
+    // (server.rs). Blanking there would turn every firmware update into a
+    // visible blackout. Cleared by the next message that replaces the
+    // stack, so a freeze followed by a swap that fails still goes dark.
+    let mut frozen = false;
 
     loop {
         // Liveness for the RTC watchdog, which is fed from the OTHER core
@@ -1515,6 +1608,9 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                     | Msg::Freeze
             ) {
                 sink.release_stage();
+                // …and the same set decides whether the strip is being held
+                // deliberately (a freeze) or is simply unlit (Gitea #744).
+                frozen = matches!(msg, Msg::Freeze);
             }
             match msg {
                 Msg::Code { env, id } => {
@@ -1923,11 +2019,16 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
         }
 
         // the engine and the map have settled for this iteration — publish
-        // the shape `/api/status` reports (Gitea #464)
+        // the shape `/api/status` reports (Gitea #464), and what it is
+        // holding (Gitea #479/#718). The COUNT is published every
+        // iteration, not only when the geometry moved: a `Msg::Freeze` and
+        // a rejected load both empty the stack without changing its shape,
+        // and the `jit` block has to stop describing a program that is no
+        // longer there.
+        note_engines(&scene, &engine);
         if geom_dirty {
             geom_dirty = false;
             publish_geom(engine.as_ref());
-            note_engines(&scene, &engine);
         }
 
         // sensor data (sensor board / POST /api/sensors) lands between frames
@@ -1950,6 +2051,7 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
         // network input (DDP/E1.31) overrides the engine while packets flow;
         // LIVE_TIMEOUT_MS after the stream stops, the pattern takes back over
         if shared::live_proto(Instant::now().as_millis() as u32).is_some() {
+            blanked = None; // something is about to be drawn
             let count = PIXEL_COUNT.load(Ordering::Relaxed) as usize;
             // the staging buffer is released while a plain pattern runs
             // (Gitea #704), so claim it here — fallibly, because the fill
@@ -1974,6 +2076,7 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
             }
             last = Instant::now(); // keep the pattern clock fresh for resume
         } else if engine.is_some() || scene.is_some() {
+            blanked = None; // something is about to be drawn
             let now = Instant::now();
             let delta_us = (now - last).as_micros();
             last = now;
@@ -2143,9 +2246,27 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
             if let Some(eng) = engine.as_ref() {
                 shared::set_engine_time_ms(eng.time_ms());
             }
+        } else if frozen {
+            // deliberately holding the last frame (OTA / an upload that
+            // needed the heap) — the staging buffer is nobody's here
+            // either (Gitea #704)
+            sink.release_stage();
         } else {
-            // nothing is rendering at all — the staging buffer is nobody's
-            // here either (Gitea #704)
+            // Nothing is playing. Clock out ONE black frame so the wire is
+            // dark rather than holding the previous session's last pixels,
+            // then go back to idling (Gitea #744). Re-armed by a pixel-count
+            // change, because the tail beyond the old count was never
+            // written. Fallible and released immediately: this is the boot
+            // path of a device with nothing stored, and the heap it runs on
+            // is the one the first real pattern is about to want.
+            let count = PIXEL_COUNT.load(Ordering::Relaxed) as usize;
+            if blanked != Some(count) && sink.reserve_stage(count) {
+                let stage = sink.stage();
+                stage.clear();
+                stage.resize(count, [0, 0, 0]);
+                emit_staged!(sink, None);
+                blanked = Some(count);
+            }
             sink.release_stage();
         }
 

@@ -19,11 +19,34 @@
 
   export let luxel: Luxel | null = null;
   export let items: Scene[] = [];
-  /** The scene the device is playing — that tile gets the ring and the pill. */
+  /** The scene the device is playing — that tile gets the ring and the pill.
+   *  Ignored when `canPlay` is false: nothing is playing where nothing can. */
   export let playingId = "";
   /** The rig every tile renders on (the device's Layout, shrunk). */
   export let rig: Layout;
   export let lookup: SourceLookup = () => null;
+  /**
+   * Whether this surface can PLAY a scene — i.e. whether there is a device
+   * whose fixture the scene would take over. A console can; the playground
+   * cannot, and never could: its `Play` rang the tile, wrote a localStorage
+   * key and changed nothing on screen (Gitea #742 item 40).
+   *
+   * The playground still gets the scene running in front of the user — it
+   * just gets there the way a PATTERN does there. §5.7's visibility audit
+   * already settles the pattern case (`Play` tile action = console; the
+   * playground reads `Mine` · `Open`), because the playground's one live
+   * fixture IS the editor's preview: you play a pattern by opening it. So a
+   * scene tile here wears `Open` too, and the gesture opens the scene editor,
+   * whose stage composites the scene live and has its own Pause/Resume. Mock
+   * S9 — the playground Scenes tab — draws its tiles with no ring and no
+   * `▶ playing` pill for the same reason, and `SceneEditor`'s `▶ Play on
+   * device` is already ABSENT rather than disabled there.
+   */
+  export let canPlay = true;
+
+  /** `Edit` on a console, `Open` in the playground — the pattern tile's
+   *  `openVerb` (pages/Patterns.svelte), so the two grids read alike. */
+  $: openVerb = canPlay ? "Edit" : "Open";
 
   const dispatch = createEventDispatcher<{
     play: string;
@@ -180,22 +203,27 @@
 
 <div class="tiles" data-role="scenes-grid">
   {#each tiles as t (t.scene.id)}
-    <div class="tile" class:playing={t.scene.id === playingId} data-role="scene-tile" data-scene={t.scene.id}>
+    <div
+      class="tile"
+      class:playing={canPlay && t.scene.id === playingId}
+      data-role="scene-tile"
+      data-scene={t.scene.id}
+    >
       <div class="thumb" use:observe={t.scene.id}>
         <button
           class="face"
-          data-role="scene-tile-play"
-          title="play this scene"
-          on:click={() => dispatch("play", t.scene.id)}
+          data-role={canPlay ? "scene-tile-play" : "scene-tile-open"}
+          title={canPlay ? "play this scene" : "open this scene"}
+          on:click={() => dispatch(canPlay ? "play" : "edit", t.scene.id)}
         >
           <canvas use:tileCanvas={t.scene.id} width={thumbRig.w} height={thumbRig.h}></canvas>
         </button>
-        {#if t.scene.id === playingId}
+        {#if canPlay && t.scene.id === playingId}
           <span class="pill" data-role="scene-playing">▶ playing</span>
         {/if}
         <div class="actions">
           <button class="btn sm" data-role="scene-tile-edit" on:click={() => dispatch("edit", t.scene.id)}
-            >Edit</button
+            >{openVerb}</button
           >
           <span class="spacer"></span>
           <button
@@ -215,7 +243,7 @@
           {t.scene.layers.length} layer{t.scene.layers.length === 1 ? "" : "s"}
         </div>
         <button class="elink" data-role="scene-tile-edit-link" on:click={() => dispatch("edit", t.scene.id)}
-          >Edit</button
+          >{openVerb}</button
         >
       </div>
     </div>
@@ -228,21 +256,26 @@
   dataRole="scene-tile-menu-popup"
   on:close={() => (menuFor = "")}
 >
-  <button
-    class="mi"
-    data-role="scene-menu-play"
-    on:click={() => {
-      dispatch("play", menuFor);
-      menuFor = "";
-    }}>Play</button
-  >
+  <!-- Play is ABSENT in the playground, not disabled (§5.7) — there is no
+       device whose fixture a scene could take over, and `Open` below is the
+       whole of what playing means there. -->
+  {#if canPlay}
+    <button
+      class="mi"
+      data-role="scene-menu-play"
+      on:click={() => {
+        dispatch("play", menuFor);
+        menuFor = "";
+      }}>Play</button
+    >
+  {/if}
   <button
     class="mi"
     data-role="scene-menu-edit"
     on:click={() => {
       dispatch("edit", menuFor);
       menuFor = "";
-    }}>Edit</button
+    }}>{openVerb}</button
   >
   <div class="sepr"></div>
   <button

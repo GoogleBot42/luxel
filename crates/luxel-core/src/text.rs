@@ -681,6 +681,99 @@ pub fn clear_slots() {
     }
 }
 
+// ---------------------------------------------------- slot persistence
+
+/// The v1 slot-blob version byte.
+///
+/// The slot table as bytes, so an embedder can keep it across a restart
+/// (Gitea #745: a scene's `T slot n` layer drew an empty string for as long
+/// as it took a host to re-POST the value after every reboot).
+///
+/// Format v1 — a version byte then one record per NON-EMPTY slot:
+///
+/// ```text
+/// u8 version = 1
+/// repeated:  u8 slot  u8 len  len bytes of UTF-8
+/// ```
+///
+/// Empty slots are omitted, so a table with nothing in it is the single
+/// byte `[1]` — which is also what a cleared table writes, and what
+/// [`decode_slots`] reads back as "no slots".
+pub const SLOTS_BLOB_VERSION: u8 = 1;
+
+/// The most [`encode_slots`] can ever write: the version byte plus every
+/// slot at its full [`SLOT_MAX`]. A compile-time constant, never a length
+/// read out of flash — the caller reserves exactly this and no more.
+pub const SLOTS_BLOB_MAX: usize = 1 + SLOTS * (2 + SLOT_MAX);
+
+/// Append the v1 encoding of `slots` to `out`, in slot order.
+///
+/// `slots` is the embedder's own copy of the table (the firmware's
+/// read-back mirror, `luxel serve`'s `Mutex`'d one) rather than the slot
+/// table itself: the table is single-writer, and a control task must not
+/// read it while the render task may be writing.
+///
+/// **Allocation-free** when `out` already has [`SLOTS_BLOB_MAX`] bytes of
+/// spare capacity, which is how the firmware calls it — it builds the blob
+/// inside a critical section, from one fallible reservation made outside.
+/// Entries past [`SLOTS`] are dropped and strings longer than [`SLOT_MAX`]
+/// are truncated on a char boundary, exactly the way [`set_slot`] does it.
+pub fn encode_slots<'a>(slots: impl IntoIterator<Item = &'a str>, out: &mut Vec<u8>) {
+    out.push(SLOTS_BLOB_VERSION);
+    for (n, s) in slots.into_iter().enumerate().take(SLOTS) {
+        let mut cut = s.len().min(SLOT_MAX);
+        while cut > 0 && !s.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        if cut == 0 {
+            continue;
+        }
+        out.push(n as u8);
+        out.push(cut as u8);
+        out.extend_from_slice(&s.as_bytes()[..cut]);
+    }
+}
+
+/// Decode a v1 blob, calling `f(slot, text)` for each record in it.
+///
+/// Returns false — having called `f` for nothing at all — when the blob is
+/// from a newer format, truncated, over-long, out of range, repeated past
+/// [`SLOTS`] records or not UTF-8. Validation happens in full BEFORE
+/// anything is applied, so a corrupt record can never leave half a table
+/// installed; and because the records are borrowed out of `b` rather than
+/// collected, decoding allocates nothing (`.claude/rules/firmware.md`:
+/// never size an allocation from a length field read out of flash).
+pub fn decode_slots(b: &[u8], mut f: impl FnMut(u8, &str)) -> bool {
+    if b.first() != Some(&SLOTS_BLOB_VERSION) {
+        return false;
+    }
+    let mut found: [Option<(u8, &str)>; SLOTS] = [None; SLOTS];
+    let mut count = 0usize;
+    let mut i = 1usize;
+    while i < b.len() {
+        if i + 2 > b.len() || count >= SLOTS {
+            return false;
+        }
+        let n = b[i];
+        let len = b[i + 1] as usize;
+        i += 2;
+        if n as usize >= SLOTS || len > SLOT_MAX || i + len > b.len() {
+            return false;
+        }
+        let Ok(text) = core::str::from_utf8(&b[i..i + len]) else {
+            return false;
+        };
+        i += len;
+        found[count] = Some((n, text));
+        count += 1;
+    }
+    for entry in found.iter().take(count) {
+        let (n, text) = entry.expect("filled below count");
+        f(n, text);
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -988,5 +1081,102 @@ mod tests {
             assert_eq!(v.chars().count(), 21);
         });
         clear_slots();
+    }
+
+    /// The whole mirror -> blob -> mirror round trip the device does across
+    /// a reboot (Gitea #745).
+    fn decode_to_vec(b: &[u8]) -> Option<Vec<(u8, String)>> {
+        let mut got: Vec<(u8, String)> = Vec::new();
+        if decode_slots(b, |n, s| got.push((n, String::from(s)))) {
+            Some(got)
+        } else {
+            None
+        }
+    }
+
+    #[test]
+    fn slot_blob_round_trips_the_non_empty_slots() {
+        let mirror = ["one", "", "three", "", "", "", "", "eight"];
+        let mut blob = Vec::new();
+        encode_slots(mirror.iter().copied(), &mut blob);
+        assert_eq!(blob[0], SLOTS_BLOB_VERSION);
+        let got = decode_to_vec(&blob).expect("our own blob decodes");
+        assert_eq!(
+            got,
+            vec![
+                (0, String::from("one")),
+                (2, String::from("three")),
+                (7, String::from("eight")),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_empty_table_is_one_byte_and_decodes_to_nothing() {
+        let mut blob = Vec::new();
+        encode_slots(core::iter::repeat_n("", SLOTS), &mut blob);
+        assert_eq!(blob, vec![SLOTS_BLOB_VERSION]);
+        assert_eq!(decode_to_vec(&blob), Some(Vec::new()));
+    }
+
+    #[test]
+    fn slot_blob_truncates_exactly_like_set_slot() {
+        // a 3-byte character straddling SLOT_MAX is dropped whole, and an
+        // over-long mirror entry is cut rather than refused
+        let mut long = String::new();
+        for _ in 0..22 {
+            long.push('\u{2603}'); // 66 bytes
+        }
+        let mut blob = Vec::new();
+        encode_slots([long.as_str()], &mut blob);
+        let got = decode_to_vec(&blob).expect("decodes");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].1.len(), 63);
+        assert_eq!(got[0].1.chars().count(), 21);
+    }
+
+    #[test]
+    fn encode_slots_never_outgrows_its_bound_and_does_not_allocate() {
+        let full: String = core::iter::repeat_n('x', SLOT_MAX).collect();
+        let mirror: Vec<&str> = core::iter::repeat_n(full.as_str(), SLOTS).collect();
+        let mut blob: Vec<u8> = Vec::new();
+        blob.try_reserve_exact(SLOTS_BLOB_MAX).unwrap();
+        let cap = blob.capacity();
+        encode_slots(mirror.iter().copied(), &mut blob);
+        assert_eq!(blob.len(), SLOTS_BLOB_MAX);
+        assert_eq!(blob.capacity(), cap, "one reservation is enough");
+        // entries past SLOTS are dropped rather than encoded out of range
+        let over: Vec<&str> = core::iter::repeat_n("z", SLOTS + 4).collect();
+        let mut blob2 = Vec::new();
+        encode_slots(over.iter().copied(), &mut blob2);
+        let got = decode_to_vec(&blob2).expect("decodes");
+        assert_eq!(got.len(), SLOTS);
+        assert!(got.iter().all(|(n, _)| (*n as usize) < SLOTS));
+    }
+
+    #[test]
+    fn a_corrupt_slot_blob_applies_nothing() {
+        let bad: &[&[u8]] = &[
+            &[],                       // no version byte
+            &[2, 0, 1, b'x'],          // a newer format
+            &[1, 0],                   // header cut in half
+            &[1, 0, 3, b'x'],          // payload short
+            &[1, SLOTS as u8, 1, b'x'],// slot out of range
+            &[1, 0, (SLOT_MAX + 1) as u8], // length past the cap
+            &[1, 0, 2, 0xff, 0xfe],    // not UTF-8
+        ];
+        for b in bad {
+            let mut calls = 0;
+            assert!(!decode_slots(b, |_, _| calls += 1), "accepted {:?}", b);
+            assert_eq!(calls, 0, "applied part of {:?}", b);
+        }
+        // more records than there are slots
+        let mut many = vec![SLOTS_BLOB_VERSION];
+        for _ in 0..SLOTS + 1 {
+            many.extend_from_slice(&[0, 1, b'x']);
+        }
+        let mut calls = 0;
+        assert!(!decode_slots(&many, |_, _| calls += 1));
+        assert_eq!(calls, 0);
     }
 }

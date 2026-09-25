@@ -10,7 +10,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use luxel_core::jsonview::{push_hex, push_piece, push_u32};
+use luxel_core::jsonview::{self, push_hex, push_piece, push_u32};
 use luxel_core::scene::{self, Scene};
 
 /// Scene ids are `seq ^ ID_MASK`. A different constant from the pattern
@@ -93,6 +93,91 @@ pub fn no_memory(free: usize) -> String {
     push_u32(&mut m, free as u32);
     push_piece(&mut m, " B free)");
     m
+}
+
+// ---- the READ path (Gitea #728, #753) ----
+
+/// Every FIXED byte of the `GET /api/scenes` envelope: `active`,
+/// `layers_max`, `used`, `max`, the empty `scenes` array and all the
+/// punctuation. The active id's own length is added on top.
+pub const ENVELOPE_BOUND: usize = 112;
+
+/// Bytes the full `GET /api/scenes` body can take — the envelope plus every
+/// scene's own [`scene::json_bound`] and the comma before it.
+///
+/// Nothing is RESERVED from it any more (the body is segmented, so there is
+/// no contiguous reservation to size); it sizes the segment index, one
+/// small allocation of a few pointers. Its correctness is still worth
+/// keeping — `scene::json_bound` is the exact measuring twin of
+/// `push_json`, held by `push_json_never_outgrows_its_bound`.
+pub fn list_hint(list: &[Scene], active: &str) -> usize {
+    let mut n = ENVELOPE_BOUND + active.len();
+    for s in list {
+        n += scene::json_bound(s) + 1;
+    }
+    n
+}
+
+/// Write the `GET /api/scenes` body into `out`.
+pub fn push_list_json(
+    out: &mut dyn jsonview::Sink,
+    list: &[Scene],
+    active: &str,
+    layers_max: u32,
+    used: usize,
+    max: usize,
+) {
+    push_piece(out, "{\"active\":");
+    if active.is_empty() {
+        push_piece(out, "null");
+    } else {
+        push_piece(out, "\"");
+        push_piece(out, active);
+        push_piece(out, "\"");
+    }
+    push_piece(out, ",\"layers_max\":");
+    push_u32(out, layers_max);
+    push_piece(out, ",\"used\":");
+    push_u32(out, used as u32);
+    push_piece(out, ",\"max\":");
+    push_u32(out, max as u32);
+    push_piece(out, ",\"scenes\":[");
+    for (i, s) in list.iter().enumerate() {
+        if i > 0 {
+            push_piece(out, ",");
+        }
+        scene::push_json(s, out);
+    }
+    push_piece(out, "]}");
+}
+
+/// `GET /api/scenes` as a SEGMENTED body (Gitea #753).
+///
+/// The console polls this route, and on a board holding a scene at its
+/// pattern-layer cap (`heap_largest` ~6.6 KB on the Seengreat panel) the
+/// `String` this used to build doubled its way to a few KB and needed a
+/// contiguous block the heap did not have — an allocator panic, i.e. a
+/// READ-ONLY GET rebooting the device (Gitea #728).
+///
+/// Now the body lands in 256-byte segments, so the largest block it asks
+/// for is 256 bytes whatever the list costs, and there is exactly ONE
+/// failure mode left: a heap with nothing at all in it, which comes back as
+/// `Chunks::ok()` false and is answered with a 503. #728's SHORT body — the
+/// envelope with `"scenes":[]` and `"degraded":true` — is gone with the
+/// condition that produced it: a documented response shape that existed
+/// only because the device could not allocate is worse than an honest
+/// failure, and the console no longer has to tell "no scenes" from "the
+/// scenes did not fit".
+pub fn list_json(
+    list: &[Scene],
+    active: &str,
+    layers_max: u32,
+    used: usize,
+    max: usize,
+) -> jsonview::Chunks {
+    let mut out = jsonview::Chunks::with_hint(list_hint(list, active));
+    push_list_json(&mut out, list, active, layers_max, used, max);
+    out
 }
 
 /// What a scene write needs to know about the device beyond the list and
@@ -507,6 +592,124 @@ mod tests {
     #[test]
     fn the_out_of_memory_message_carries_the_free_heap() {
         assert_eq!(no_memory(6616), "scenes: not enough memory to save (6616 B free)");
+    }
+
+    // ---- the READ path (Gitea #728, #753) ----
+
+    /// Balanced braces and brackets outside string literals — enough to
+    /// catch a TRUNCATED body — the failure a segmented build must never
+    /// produce, since the Content-Length is counted from the same segments.
+    fn well_formed(s: &str) -> bool {
+        let mut depth = 0i32;
+        let mut in_str = false;
+        let mut esc = false;
+        for c in s.chars() {
+            if in_str {
+                match c {
+                    _ if esc => esc = false,
+                    '\\' => esc = true,
+                    '"' => in_str = false,
+                    _ => {}
+                }
+                continue;
+            }
+            match c {
+                '"' => in_str = true,
+                '{' | '[' => depth += 1,
+                '}' | ']' => depth -= 1,
+                _ => {}
+            }
+            if depth < 0 {
+                return false;
+            }
+        }
+        depth == 0 && !in_str
+    }
+
+    fn a_list() -> Vec<Scene> {
+        let (list, _, _) = upsert(Vec::new(), &one("first", 2), None, 1, &lim(&[], LAYERS)).unwrap();
+        let l = lim(&list, LAYERS);
+        let (list, _, _) = upsert(list, &one("second", 1), None, 2, &l).unwrap();
+        list
+    }
+
+    #[test]
+    fn the_full_body_carries_every_scene_and_fits_its_hint() {
+        let list = a_list();
+        let chunks = list_json(&list, "5cef0a16", 2, 512, MAX);
+        assert!(chunks.ok());
+        let body = chunks.to_string_lossy();
+        assert_eq!(body.len(), chunks.len(), "Content-Length must be the body");
+        assert!(well_formed(&body), "{body}");
+        assert!(body.starts_with("{\"active\":\"5cef0a16\",\"layers_max\":2,\"used\":512,\"max\":3840,\"scenes\":["));
+        assert!(body.ends_with("]}"));
+        // #728's degraded contract is GONE — there is no short body to flag
+        assert!(!body.contains("\"degraded\""), "{body}");
+        for s in &list {
+            assert!(body.contains(&s.id), "{} missing from the body", s.id);
+        }
+        assert!(
+            body.len() <= list_hint(&list, "5cef0a16"),
+            "{} B body over a {} B hint",
+            body.len(),
+            list_hint(&list, "5cef0a16")
+        );
+        // no active scene reads as JSON null, not an empty string
+        let body = list_json(&list, "", 2, 512, MAX).to_string_lossy();
+        assert!(body.starts_with("{\"active\":null,"), "{body}");
+    }
+
+    /// The envelope around the scene objects has to stay inside
+    /// [`ENVELOPE_BOUND`], because that constant is what makes
+    /// [`list_hint`] — and so the segment index — an upper bound. Raise it
+    /// if this fails; never relax the test.
+    #[test]
+    fn the_envelope_fits_its_bound() {
+        for active in ["", "5cef0a16"] {
+            let mut out = String::new();
+            push_list_json(&mut out, &[], active, 255, u32::MAX as usize, u32::MAX as usize);
+            assert!(
+                out.len() <= ENVELOPE_BOUND + active.len(),
+                "{} B envelope over a {} B bound: {out}",
+                out.len(),
+                ENVELOPE_BOUND + active.len()
+            );
+        }
+    }
+
+    /// The list hint must bound the real body, or the segment index is
+    /// merely a hint that reallocates (harmless) rather than the one
+    /// allocation it is meant to be.
+    #[test]
+    fn the_hint_bounds_the_body() {
+        for active in ["", "5cef0a16"] {
+            let list = a_list();
+            let c = list_json(&list, active, 2, 512, MAX);
+            assert!(c.len() <= list_hint(&list, active), "{} B body", c.len());
+        }
+    }
+
+    /// A body big enough to need many segments still comes back byte-exact
+    /// and correctly lengthed — the property `tools/wire-check.sh` checks on
+    /// the wire (Content-Length == body bytes).
+    #[test]
+    fn a_many_segment_body_is_exact() {
+        let mut list = Vec::new();
+        let mut l = lim(&[], LAYERS);
+        for i in 1..=8u32 {
+            let (next, _, _) = upsert(list, &one("scene with a long-ish name", 2), None, i, &l).unwrap();
+            list = next;
+            l = lim(&list, LAYERS);
+        }
+        let c = list_json(&list, "5cef0a16", 2, 512, MAX);
+        assert!(c.ok());
+        let body = c.to_string_lossy();
+        assert!(c.parts().len() > 4, "{} segments — widen the fixture", c.parts().len());
+        assert_eq!(c.len(), body.len());
+        assert!(well_formed(&body), "{body}");
+        for s in &list {
+            assert!(body.contains(&s.id), "{} missing", s.id);
+        }
     }
 
     // ---- the playlist's scene items ----

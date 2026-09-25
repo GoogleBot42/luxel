@@ -57,19 +57,47 @@ export interface DeviceStatus {
   vmerr: string | null;
   /** What the LIVE pattern is running as, and why (Gitea #658,
    *  docs/jit-design.md §4a). `state` is `"native"` when the device
-   *  compiled it, `"interp"` when it has a JIT and refused, `"off"` when
-   *  the board carries no backend. `reason` is the shared refusal
-   *  vocabulary — the same spellings `jitlint` uses for the compile-time
-   *  half, plus the three only a device can know (`debug`, `init-error`,
-   *  `no-buffer`) and `disabled` for the `POST /api/jit` switch. Absent
-   *  only from firmware older than #658. */
+   *  compiled it, `"interp"` when it has a JIT and refused, `"none"` when
+   *  it has a backend but nothing is resident (a board nobody has given a
+   *  pattern — the state #744 made reachable by removing the built-in
+   *  default), `"off"` when the board carries no backend. `reason` is the
+   *  shared refusal vocabulary — the same spellings `jitlint` uses for the
+   *  compile-time half, plus the three only a device can know (`debug`,
+   *  `init-error`, `no-buffer`) and `disabled` for the `POST /api/jit`
+   *  switch. Absent only from firmware older than #658.
+   *
+   *  The five scalar fields describe the ONE running program. They used to
+   *  be the whole story and were wrong for a scene: every layer's compile
+   *  overwrote them, so a board rendering natively could report `interp`
+   *  because the last layer to compile happened to refuse (Gitea #718).
+   *  They now describe the primary engine only, and `layers` describes the
+   *  stack. */
   jit?: {
-    state: "native" | "interp" | "off";
+    state: "native" | "interp" | "none" | "off";
     reason: string | null;
     /** Bytes of native code, literal pool included. 0 when not native. */
     code_bytes: number;
     /** What compiling it cost. 0 when not native. */
     compile_us: number;
+    /** Resident engines compiled / interpreting, counted over `layers`.
+     *  Their sum is `engines` unless the stack is deeper than eight layers.
+     *  Absent from firmware older than #718 and from the native mirror. */
+    native?: number;
+    interp?: number;
+    /** One entry per RESIDENT ENGINE, bottom → top. Sparse in `layer`: a
+     *  text or colour layer, and a pattern layer that did not fit, have no
+     *  entry. `[]` when `state` is `"none"` or `"off"`. */
+    layers?: {
+      /** 0-based index into the scene's own `layers` array; a bare pattern
+       *  is layer 0. (`scene: layer N does not fit` is 1-based.) */
+      layer: number;
+      /** `"sprite"` is an engine built and read but never stepped — its
+       *  compile is real, its native code never runs (Gitea #740). */
+      kind: "pattern" | "sprite";
+      state: "native" | "interp" | "off";
+      reason: string | null;
+      code_bytes: number;
+    }[];
   };
   /** Network input currently driving the strip (DDP/E1.31), if any. */
   live?: "ddp" | "e131" | null;
@@ -332,6 +360,18 @@ export class DeviceSession {
    */
   async status(): Promise<DeviceStatus> {
     const res = await this.fetch("/api/status", undefined, { fastFail: true, force: true });
+    // An ERROR STATUS IS NOT A STATUS. `fetchgate` throws only on transport
+    // failures, so without this a 503 `{"ok":false,"error":"out of memory"}`
+    // deserializes into a `DeviceStatus` whose every field is `undefined` —
+    // and the poll would then write `caps: null` and `geom: null` into the
+    // stores, tearing a healthy console down to a playground (no Settings
+    // tab, every tile reshaped) for a board that is merely under memory
+    // pressure. That is the same invariant leak as #539 and #573, arriving
+    // through a third door. Throwing puts it on the poll's own catch path,
+    // where "we did not learn anything this second" already means "keep the
+    // last reading". `/api/status` can answer 503 whenever the heap cannot
+    // spare a 256 B body segment (Gitea #753).
+    if (!res.ok) throw new Error(`status: HTTP ${res.status}`);
     return (await res.json()) as DeviceStatus;
   }
 
@@ -821,7 +861,12 @@ export class DeviceSession {
 
   /** Every stored scene plus the blob budget and which one is running. */
   async scenes(): Promise<ScenesWire> {
-    return (await (await this.fetch("/api/scenes")).json()) as ScenesWire;
+    // Same rule as `status()`: a 503 body is not an empty scene library, and
+    // letting it parse as one would empty the Scenes tab on screen for a
+    // board that is only briefly out of heap (Gitea #753).
+    const res = await this.fetch("/api/scenes");
+    if (!res.ok) throw new Error(`scenes: HTTP ${res.status}`);
+    return (await res.json()) as ScenesWire;
   }
 
   /** One scene. */

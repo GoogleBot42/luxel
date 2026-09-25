@@ -9,8 +9,17 @@
   // black or multiplying by white changes nothing). So under any other blend
   // the row is GONE, not greyed (S7g). A colour layer has no pixels to key
   // and never shows it; a sprite's key is fixed and is a LINE, not a select.
+  //
+  // Both choosers are `RichSelect`, not `<select>` (Gitea #735): "Most users
+  // won't know what those mean. So there should be descriptions and probably
+  // even little svg graphics for each option" (Jeremy, 2026-09-24). The words
+  // and the drawings live in `lib/blendMeta.ts`; the hint line that used to
+  // recite the three key names under the select is gone with them, because
+  // the menu now says all three in full.
   import { createEventDispatcher } from "svelte";
-  import { BLENDS, KEYS, type Blend, type LayerKey, type LayerStyle } from "../../lib/scene";
+  import RichSelect from "../RichSelect.svelte";
+  import { BLEND_OPTIONS, KEY_OPTIONS } from "../../lib/blendMeta";
+  import type { Blend, LayerKey, LayerStyle } from "../../lib/scene";
 
   export let style: LayerStyle;
   /** Pattern and text layers key their pixels; colour and sprite do not. */
@@ -19,22 +28,6 @@
   export let keyFixed = "";
 
   const dispatch = createEventDispatcher<{ change: LayerStyle; delete: void }>();
-
-  /** The mocks capitalise a blend in the pattern and colour inspectors. */
-  const BLEND_LABEL: Record<Blend, string> = {
-    normal: "Normal",
-    add: "Add",
-    lighten: "Lighten",
-    multiply: "Multiply",
-    mask: "Mask",
-  };
-
-  /** §5.5's words, which are also the hint under the select. */
-  const KEY_LABEL: Record<LayerKey, string> = {
-    none: "nothing",
-    black: "black pixels",
-    luma: "by brightness",
-  };
 
   // The narrowing lives in the script, not in the markup: a TS assertion
   // inside a template expression is not something svelte-check parses.
@@ -49,30 +42,27 @@
 
 <div class="irow">
   <div class="ilab">Blend</div>
-  <select
-    class="sel wide"
-    data-role="scene-blend"
+  <RichSelect
     value={style.blend}
-    on:change={(e) => setBlend(e.currentTarget.value)}
-  >
-    {#each BLENDS as b (b)}<option value={b}>{BLEND_LABEL[b]}</option>{/each}
-  </select>
+    options={BLEND_OPTIONS}
+    dataRole="scene-blend"
+    menuRole="scene-blend-menu"
+    ariaLabel="blend mode"
+    on:input={(e) => setBlend(e.detail)}
+  />
 </div>
 
 {#if keyable && style.blend === "normal"}
-  <div class="irow start">
-    <div class="ilab" style="padding-top:7px">Transparent</div>
-    <div>
-      <select
-        class="sel wide"
-        data-role="scene-key"
-        value={style.key}
-        on:change={(e) => setKey(e.currentTarget.value)}
-      >
-        {#each KEYS as k (k)}<option value={k}>{KEY_LABEL[k]}</option>{/each}
-      </select>
-      <div class="hint" style="margin-top:6px">nothing · black pixels · by brightness</div>
-    </div>
+  <div class="irow">
+    <div class="ilab">Transparent</div>
+    <RichSelect
+      value={style.key}
+      options={KEY_OPTIONS}
+      dataRole="scene-key"
+      menuRole="scene-key-menu"
+      ariaLabel="which pixels count"
+      on:input={(e) => setKey(e.detail)}
+    />
   </div>
 {:else if keyFixed}
   <div class="irow">

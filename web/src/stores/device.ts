@@ -545,6 +545,10 @@ export async function refreshStatus(): Promise<void> {
     deviceEngineHeap.set(st.engine_heap ?? 0);
     devicePsramFree.set(st.psram_free ?? 0); // the second heap, where there is one
     devicePsramTotal.set(st.psram_total ?? 0);
+    // Reaching here means a 2xx status body (Gitea #753 deleted the degraded
+    // short body, and `DeviceSession.status()` now throws on an error status
+    // rather than letting a 503 parse as a status with every field absent).
+    // So these two are a real reading and may be written.
     deviceGeomStatus.set(st.geom ?? null); // the device's Layout (#464)
     deviceCaps.set(st.caps ?? null); // what it can do (#464)
     if (st.pixels) devicePixels.set(st.pixels);

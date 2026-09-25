@@ -34,6 +34,11 @@ export type SlotLookup = (n: number) => string;
 export class SceneRenderer {
   private comp: Compositor | null = null;
   private engines: (Engine | null)[] = [];
+  /** Why layer `i` has no engine, when the reason was a COMPILE failure
+   *  rather than "no source yet" (Gitea #731/#732). `setScene` used to throw
+   *  this away, so the scene editor had to re-compile every broken layer a
+   *  second time just to recover the message it had already been handed. */
+  private errors: (string | null)[] = [];
   /** What each layer wants drawn, recomputed per frame for clock/slot. */
   private textOf: ((slots: SlotLookup) => string)[] = [];
   private wire = "";
@@ -73,16 +78,26 @@ export class SceneRenderer {
     if (!force && wire === this.wire && this.comp) return null;
     this.wire = wire;
     this.dropEngines();
-    this.comp?.free();
-    this.comp = this.lx.compositor(this.rig.w, this.rig.h);
+    // REUSE the compositor rather than freeing it (Gitea #733). `set_scene`
+    // carries a layer's scroll phase and sprite clock over when that layer's
+    // identity is unchanged, and the editor rebuilds this on every keystroke —
+    // so a fresh handle per edit is what made scrolling text snap back to the
+    // start and read as "jittery". Safe because `lx_comp_set` resets the
+    // binding table itself (`c.bind = vec![-1; layers]`) and we rebind every
+    // layer immediately below, and because `rig` is fixed for the life of a
+    // SceneRenderer — the editor frees and rebuilds the whole renderer when
+    // the rig changes (SceneEditor.svelte, `rigKey`).
+    if (!this.comp) this.comp = this.lx.compositor(this.rig.w, this.rig.h);
     if (!this.comp) return "this build has no compositor";
     const err = this.comp.setScene(wire);
     if (err) return err;
 
     this.engines = [];
+    this.errors = [];
     this.textOf = [];
     for (const l of scene.layers) {
       let engine: Engine | null = null;
+      let error: string | null = null;
       if (l.body.kind === "pat" || l.body.kind === "sprite") {
         const id = l.body.kind === "pat" ? l.body.pat.id : l.body.id;
         const src = id === "" ? null : lookup(id);
@@ -100,10 +115,16 @@ export class SceneRenderer {
                 e.setControl(name, vals);
               }
             }
+          } else {
+            // A layer that will not compile draws nothing. Silently was the
+            // old behaviour, and "sometimes when a pattern is selected, the
+            // preview still shows nothing" was the bug report (#729 item 3).
+            error = built.line > 0 ? `line ${built.line}: ${built.message}` : built.message;
           }
         }
       }
       this.engines.push(engine);
+      this.errors.push(error);
       this.textOf.push(textResolver(l.body.kind === "text" ? l.body.text.source : null));
     }
     this.engines.forEach((e, i) => this.comp?.bind(i, e));
@@ -123,9 +144,16 @@ export class SceneRenderer {
     return this.engines[i] ?? null;
   }
 
+  /** Layer `i`'s compile error, or null when it has none — either because it
+   *  compiled, or because there is no source to compile yet. */
+  errorAt(i: number): string | null {
+    return this.errors[i] ?? null;
+  }
+
   private dropEngines(): void {
     for (const e of this.engines) e?.free();
     this.engines = [];
+    this.errors = [];
   }
 
   free(): void {

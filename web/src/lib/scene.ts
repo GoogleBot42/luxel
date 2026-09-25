@@ -140,6 +140,17 @@ export const DEFAULT_TEXT: TextLayer = {
   speed: 0,
 };
 
+/** The speed a text layer gets the first time a scroll mode is CHOSEN for it.
+ *
+ *  `DEFAULT_TEXT.speed` is the WIRE default and has to stay 0, because it is
+ *  what `serializeScene` omits and what `TextLayer::default()` in luxel-core
+ *  parses an absent `F` line as — the two must agree byte for byte. But 0
+ *  px/s means a layer that says "scroll left" and then sits perfectly still,
+ *  so every freshly chosen scroll mode did nothing at all until the user
+ *  happened to drag the Speed slider (Gitea #733). A picker that switches a
+ *  layer off `none` must bump a zero speed to this. */
+export const DEFAULT_SCROLL_SPEED = 16;
+
 /** The display name a layer carries when no `N` line names it. A pattern
  *  layer's is EMPTY — only the host knows a pattern's name. */
 export function defaultLayerName(kind: LayerKind): string {

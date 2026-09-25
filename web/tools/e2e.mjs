@@ -433,7 +433,9 @@ try {
   check("Import .epe… is in the ⋯ menu", await menuHas(page, "epe-import"));
 
   // ── the editor header, against mockup S2 (audit E1–E5, #538) ──
-  check("the primary action reads Save, everywhere", (await page.$eval('[data-role="save"]', (el) => el.textContent.trim())) === "Save");
+  // …and it is `Saved` once there is nothing to save (#738) — the check is
+  // still that it is ONE word, never "Save to device".
+  check("the primary action reads Save, everywhere", /^Saved?$/.test(await page.$eval('[data-role="save"]', (el) => el.textContent.trim())));
   const nameBox = await page.$eval('[data-role="pattern-name"]', (el) => {
     const cs = getComputedStyle(el);
     return {
@@ -496,22 +498,29 @@ try {
   await page.keyboard.press("Escape");
   await sleep(150);
 
-  // ── the preview header's transport (audit E7/E8) ──
-  const pauseBox = await page.$eval('[data-role="pause"]', (el) => {
-    const r = el.getBoundingClientRect();
-    return { w: Math.round(r.width), h: Math.round(r.height), fs: getComputedStyle(el).fontSize };
-  });
+  // ── the header's transport (audit E7/E8; moved there by Gitea #739) ──
+  // It used to be a 26×26 icon-only button carrying the text glyph `‖`, 300px
+  // down a 360px rail — a control Jeremy reported he never found, and a glyph
+  // that renders as tofu in headless chromium. It is now a labelled SVG button
+  // in the editor header. Assert the things that made it discoverable rather
+  // than a box size: where it lives, that its mark is real SVG, and that it
+  // says what it does.
+  const pause = await page.$eval('[data-role="pause"]', (el) => ({
+    inHeader: el.closest("header.editor-header") !== null,
+    svgs: el.querySelectorAll("svg").length,
+    label: (el.textContent ?? "").trim(),
+  }));
   check(
-    "E7: pause is the 26×26 .btn.sm.icon with a 12px glyph",
-    pauseBox.w === 26 && pauseBox.h === 26 && pauseBox.fs === "12px",
-    JSON.stringify(pauseBox),
+    "E7: pause is a labelled SVG button in the editor header",
+    pause.inHeader && pause.svgs === 1 && /^(Pause|Resume)$/.test(pause.label),
+    JSON.stringify(pause),
   );
   const transport = await page.$$eval('[data-role="editor-view"] .grp > *', (els) =>
     els.map((e) => e.dataset.role ?? e.tagName.toLowerCase()),
   );
   check(
-    "E8: Debug sits immediately after pause, with the rate last",
-    transport[0] === "pause" && transport[1] === "debug" && transport[transport.length - 1] === "target-fps",
+    "E8: the rail keeps debug, with the rate last",
+    transport[0] === "debug" && transport[transport.length - 1] === "target-fps",
     transport.join(","),
   );
   check(
@@ -532,8 +541,9 @@ try {
   check("no layout select in the playground editor", (await page.$('[data-role="layout-kind"]')) === null);
   check("no sub-tabs above the code", (await page.$('[data-role="editor-subtabs"]')) === null);
   check(
-    "the transport is the preview panel's own header",
-    (await page.$('.rsec .rhead [data-role="pause"]')) !== null,
+    "the transport is in the editor header, not the preview rail (#739)",
+    (await page.$('header.editor-header [data-role="pause"]')) !== null &&
+      (await page.$('.rsec .rhead [data-role="pause"]')) === null,
   );
 
   // ── 3. a clean rainbow, then typing + compile error. Single-line bodies
@@ -1539,11 +1549,16 @@ try {
     // The TYPE badges, not `data-layer`: the badge says which layer a row IS,
     // while `data-layer` is its wire index — and with two layers the indices
     // read `1,0` whichever way round the stack is.
+    //
+    // Read `data-kind`, not the badge's TEXT: since #736 the marks are inline
+    // SVG (`components/scene/LayerIcon.svelte`) rather than the `▤ ▦ ▭`
+    // glyphs, which had no text to read and rendered as tofu in a headless
+    // chromium anyway. Only Text is still a letter.
     const kinds = () =>
-      page.$$eval('[data-role="scene-editor-view"] [data-role="scene-layer"] .ty', (els) =>
-        els.map((e) => e.textContent.trim()).join(","),
+      page.$$eval('[data-role="scene-editor-view"] [data-role="scene-layer"] .ty .lico', (els) =>
+        els.map((e) => e.getAttribute("data-kind") ?? "?").join(","),
       );
-    check("scenes: the layer list is top = front", (await kinds()) === "▭,T", await kinds());
+    check("scenes: the layer list is top = front", (await kinds()) === "color,text", await kinds());
 
     // the eye hides a layer; the row keeps its place and its metadata says so
     await page.click('[data-role="scene-layer"][data-layer="0"] [data-role="scene-layer-eye"]');
@@ -1600,16 +1615,23 @@ try {
     });
     await sleep(400);
     const reordered = await kinds();
-    check("scenes: the drag reordered the stack", reordered === "T,▭", reordered);
+    check("scenes: the drag reordered the stack", reordered === "text,color", reordered);
 
     // Save, reload, and see the record come back — through the same wire
     // block a device would have stored
     await page.click('[data-role="scene-save"]');
     await sleep(700);
-    const state = await page.$eval('[data-role="scene-save-state"]', (el) =>
-      (el.textContent ?? "").trim(),
+    // The contract string lives on the ATTRIBUTE since #738 — the header
+    // prints only the part the Save button cannot carry.
+    const state = await page.$eval(
+      '[data-role="scene-save-state"]',
+      (el) => el.dataset.saveState ?? "",
     );
-    check("scenes: saving settles the save state", state === "saved", state);
+    check(
+      "scenes: saving settles the save state",
+      state === "saved \u00b7 in browser",
+      state,
+    );
     const wire = await page.evaluate(() => localStorage.getItem("luxel.scenes") ?? "");
     check(
       "scenes: the playground stores the WIRE block, not JSON",

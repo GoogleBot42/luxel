@@ -19,6 +19,7 @@
   import {
     ALIGNS,
     CLOCK_FMTS,
+    DEFAULT_SCROLL_SPEED,
     SCROLLS,
     MAX_LAYER_NAME,
     truncateUtf8,
@@ -41,6 +42,38 @@
   $: text = layer.body.kind === "text" ? layer.body.text : null;
 
   const ALIGN_LABEL: Record<Align, string> = { l: "left", c: "center", r: "right" };
+
+  /**
+   * Does the align anchor still mean anything at this scroll setting?
+   *
+   * §5.7's absent-not-disabled rule, answered from the compositor rather than
+   * from taste (`crates/luxel-core/src/compose.rs`). `draw_text_layer` puts
+   * the string at `bx + align_off(align, bw, tw)` and then adds
+   * `scroll_offset` — on the X axis for the horizontal modes, on the Y axis
+   * for the vertical ones. Every HORIZONTAL running arm subtracts
+   * `align_off` straight back out (`Left`: `bw - a - px…`; `Right`:
+   * `px… - tw - a`; `Bounce`: `… - a`), which is deliberate — phase 0 has to
+   * be the edge the text enters from, identically for all three alignments
+   * (Gitea #733). So under left / right / bounce the anchor cancels and the
+   * three buttons are three names for the same picture.
+   *
+   * `Up` and `Down` carry no `a` term and move the text vertically, so the
+   * horizontal anchor is live and the row stays.
+   *
+   * The one seam: `scroll_offset` returns 0 at `speed == 0`, so a direction
+   * parked at zero is static text, and static text IS aligned. The row comes
+   * back there rather than lying about it — which also makes the slider's
+   * left stop legible as "stopped".
+   */
+  function alignApplies(scroll: Scroll, speed: number): boolean {
+    if (scroll === "none" || speed === 0) return true;
+    return scroll === "up" || scroll === "down";
+  }
+
+  // Every dependency NAMED in the reactive statement's own syntax, and passed
+  // as an ARGUMENT — a value the helper only reaches through a closure is not
+  // a dependency as far as Svelte is concerned (.claude/rules/web.md).
+  $: showAlign = text ? alignApplies(text.scroll, text.speed) : true;
 
   /** The device has a clock only once SNTP has answered; the playground never
    *  does — the browser's own clock is the one the layer draws from, and it
@@ -102,7 +135,18 @@
   }
 
   function setScroll(v: string): void {
-    patch({ scroll: v as Scroll });
+    const scroll = v as Scroll;
+    // Choosing a direction must MOVE the text. The wire default speed is 0
+    // (it has to be — `serializeScene` omits the `F` line against it and
+    // `TextLayer::default()` parses an absent one back as 0), so a layer that
+    // had never been given a speed would say "scroll left" and sit perfectly
+    // still. That, not the bounce kernel alone, is what "bounce mode does
+    // nothing" was (Gitea #733). Bump only a ZERO speed, so switching
+    // direction never overwrites a speed the user chose — and do it here
+    // rather than in `newLayer`, so a scene loaded off a device with speed 0
+    // is cured the moment its scroll is touched.
+    if (!text) return;
+    patch(scroll === "none" ? { scroll } : { scroll, speed: text.speed || DEFAULT_SCROLL_SPEED });
   }
 </script>
 
@@ -198,8 +242,7 @@
       <div class="ilab" style="padding-top:1px">Clock</div>
       <div>
         <div class="hint" data-role="scene-clock-state">
-          not synced — the layer draws <span class="mono" style="white-space:nowrap">--:--</span> until
-          the device gets the time
+          not synced — the layer stays blank until the device gets the time
         </div>
         <div class="hint" style="margin-top:5px">
           <a class="lnk" href="#/settings" data-role="scene-clock-settings"
@@ -255,18 +298,24 @@
     </div>
   </div>
 
-  <div class="irow">
-    <div class="ilab">Align</div>
-    <div class="seg sm" data-role="scene-text-align">
-      {#each ALIGNS as a (a)}
-        <button
-          class:on={text.align === a}
-          data-role={`scene-align-${a}`}
-          on:click={() => patch({ align: a })}>{ALIGN_LABEL[a]}</button
-        >
-      {/each}
+  <!-- ABSENT under a horizontal scroll, never greyed: the compositor cancels
+       the align anchor there, so the three buttons would be three names for
+       the same picture (`alignApplies`, §5.7). -->
+  {#if showAlign}
+    <div class="irow">
+      <div class="ilab">Align</div>
+      <div class="seg sm" data-role="scene-text-align">
+        {#each ALIGNS as a (a)}
+          <button
+            class:on={text.align === a}
+            data-role={`scene-align-${a}`}
+            aria-pressed={text.align === a}
+            on:click={() => patch({ align: a })}>{ALIGN_LABEL[a]}</button
+          >
+        {/each}
+      </div>
     </div>
-  </div>
+  {/if}
 
   <div class="irow">
     <div class="ilab">Scroll</div>

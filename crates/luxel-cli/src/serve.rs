@@ -1384,6 +1384,55 @@ struct Stage {
     sprites: Vec<(usize, Engine, String)>,
     /// Composite output (scene stages only).
     out: Vec<[u8; 3]>,
+    /// The SHARED full-frame driver (Gitea #732) — the same walk the device
+    /// and the playground run, sub-millisecond remainder included.
+    driver: luxel_core::compose::SceneDriver,
+    /// Reusable buffer for resolved clock / slot text.
+    text: String,
+}
+
+/// The mirror's side of [`luxel_core::compose::SceneHost`].
+struct MirrorHost<'a> {
+    state: &'a State,
+    engines: &'a mut Vec<(usize, Engine)>,
+    sprites: &'a [(usize, Engine, String)],
+    text: &'a mut String,
+}
+
+impl luxel_core::compose::SceneHost for MirrorHost<'_> {
+    fn pattern_frame(&mut self, layer: usize, delta: Fx) -> Option<&[[u8; 3]]> {
+        // a layer whose pattern is missing or undecodable has no engine and
+        // simply does not draw, like a dangling playlist item
+        let (_, e) = self.engines.iter_mut().find(|(li, _)| *li == layer)?;
+        Some(e.frame(delta))
+    }
+
+    fn sprite(&mut self, layer: usize) -> Option<luxel_core::compose::SpriteView<'_>> {
+        let (_, e, src) = self.sprites.iter().find(|(li, _, _)| *li == layer)?;
+        luxel_core::compose::sprite_view(e, src)
+    }
+
+    fn text(&mut self, _layer: usize, source: &luxel_core::scene::TextSource) -> Option<&str> {
+        // clock and slot text are the HOST's to resolve; `lit` was resolved
+        // once by `set_scene`
+        match source {
+            luxel_core::scene::TextSource::Clock(fmt) => {
+                *self.text = clock_text(self.state, *fmt);
+            }
+            luxel_core::scene::TextSource::Slot(k) => {
+                *self.text = self
+                    .state
+                    .text_slots
+                    .lock()
+                    .unwrap()
+                    .get(*k as usize)
+                    .cloned()
+                    .unwrap_or_default();
+            }
+            luxel_core::scene::TextSource::Lit(_) => return None,
+        }
+        Some(self.text)
+    }
 }
 
 impl Stage {
@@ -1397,6 +1446,8 @@ impl Stage {
             engines: vec![(0, engine)],
             sprites: Vec::new(),
             out: Vec::new(),
+            driver: luxel_core::compose::SceneDriver::new(),
+            text: String::new(),
         }
     }
 
@@ -1442,64 +1493,22 @@ impl Stage {
     }
 
     /// Step every layer and return this frame's pixels.
-    fn render(&mut self, state: &State, delta: Fx, dt_ms: u32) -> &[[u8; 3]] {
-        let Stage { comp, kinds, engines, sprites, out, .. } = self;
+    ///
+    /// The walk is `luxel_core::compose::SceneDriver` — the same code the
+    /// firmware and the wasm playground run (Gitea #732), so the mirror
+    /// cannot drift from either. `dt_ms` is no longer read: the driver
+    /// derives whole milliseconds from `delta` and carries the remainder.
+    fn render(&mut self, state: &State, delta: Fx, _dt_ms: u32) -> &[[u8; 3]] {
+        let Stage { comp, engines, sprites, out, driver, text, .. } = self;
         let Some(comp) = comp.as_mut() else {
             return match engines.first_mut() {
                 Some((_, e)) => e.frame(delta),
                 None => &[],
             };
         };
-        comp.advance(dt_ms);
         let n = comp.grid().len();
-        if out.len() != n {
-            out.clear();
-            out.resize(n, [0, 0, 0]);
-        }
-        comp.begin(out);
-        for (i, kind) in kinds.iter().enumerate() {
-            match kind {
-                luxel_core::scene::LayerKind::Pattern => {
-                    // a layer whose pattern is missing or undecodable has no
-                    // engine and simply does not draw, like a dangling
-                    // playlist item
-                    if let Some((_, e)) = engines.iter_mut().find(|(li, _)| *li == i) {
-                        let px = e.frame(delta);
-                        comp.pattern_layer(out, i, px);
-                    }
-                }
-                luxel_core::scene::LayerKind::Sprite => {
-                    if let Some((_, e, src)) = sprites.iter().find(|(li, _, _)| *li == i) {
-                        if let Some(sv) = luxel_core::compose::sprite_view(e, src) {
-                            comp.native_layer(out, i, Some(&sv));
-                        }
-                    }
-                }
-                luxel_core::scene::LayerKind::Text => {
-                    // clock and slot text are the HOST's to resolve; `lit`
-                    // was resolved once by `set_scene`
-                    match comp.text_source(i).cloned() {
-                        Some(luxel_core::scene::TextSource::Clock(fmt)) => {
-                            let s = clock_text(state, fmt);
-                            comp.set_text(i, &s);
-                        }
-                        Some(luxel_core::scene::TextSource::Slot(k)) => {
-                            let s = state
-                                .text_slots
-                                .lock()
-                                .unwrap()
-                                .get(k as usize)
-                                .cloned()
-                                .unwrap_or_default();
-                            comp.set_text(i, &s);
-                        }
-                        _ => {}
-                    }
-                    comp.native_layer(out, i, None);
-                }
-                luxel_core::scene::LayerKind::Color => comp.native_layer(out, i, None),
-            }
-        }
+        let mut host = MirrorHost { state, engines, sprites, text };
+        driver.frame(comp, out, n, delta, &mut host);
         &out[..]
     }
 }
@@ -1553,6 +1562,8 @@ fn build_stage(state: &State, sc: &luxel_core::scene::Scene) -> Result<Stage, St
         engines,
         sprites,
         out: Vec::new(),
+        driver: luxel_core::compose::SceneDriver::new(),
+        text: String::new(),
     })
 }
 
@@ -1631,6 +1642,8 @@ fn render_loop(state: Arc<State>) {
             engines: Vec::new(),
             sprites: Vec::new(),
             out: Vec::new(),
+            driver: luxel_core::compose::SceneDriver::new(),
+            text: String::new(),
         },
     };
     *state.pattern_src.lock().unwrap() = DEFAULT_PATTERN.to_string();

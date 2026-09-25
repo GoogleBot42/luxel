@@ -54,7 +54,25 @@ through `lx_outpipe` (Gitea #466) rather than reading it back.
 first render) and, on firmware, when the heap cannot hold the response — at
 4096 px that is a 12 KB body on a heap a heavy pattern can leave under 30 KB
 free, so it degrades rather than failing the request. Treat a zero-length
-response as "no snapshot right now", not as an all-black frame.
+response as "no snapshot right now", not as an all-black frame. The same is
+true when the heap cannot hold the *snapshot*: on a board without the output
+pipeline the render task keeps the frame copy fallibly too, so a frame it
+could not afford to copy is simply not previewable (Gitea #728).
+
+`GET /api/status` on **firmware** is built in 256-byte segments and written to
+the socket out of those segments (Gitea #753), so the body is never assembled
+as one contiguous allocation and a fragmented heap cannot make a read-only poll
+fail. That is what used to reboot the device: the console polls this route
+continuously and its body is the largest read-only one a device builds, so it
+was the first to hit a heap with plenty free and no contiguous block left
+(Gitea #728).
+
+There is no partial or "degraded" status body. A device that genuinely has no
+heap at all — it cannot spare even one segment — answers **503** with
+`{"ok":false,"error":"out of memory"}`, the body-level twin of the connection
+layer's `http[N]: 503 — no heap for a connection buffer`. Treat that 503 as
+"ask again", not as a device fault, and never as a status whose fields are
+absent.
 
 `GET /api/status` on **firmware**:
 
@@ -70,7 +88,8 @@ response as "no snapshot right now", not as an all-black frame.
  "assets_mapped":true,"code_mapped":true,
  "store":{"used":18452,"total":225280,"dead":0,"patterns":3},
  "src":true,"bc":true,"web":[0,1,0],"vmerr":null,
- "jit":{"state":"off","reason":null,"code_bytes":0,"compile_us":0,"place":null},
+ "jit":{"state":"off","reason":null,"code_bytes":0,"compile_us":0,"place":null,
+        "native":0,"interp":0,"layers":[]},
  "partitions":{"layout":"partitions.csv","migrated":true,"ota_slot_bytes":1310720,
                "storage_bytes":524288,"assets_bytes":983040,"ceiling_bytes":4194304}}
 ```
@@ -119,7 +138,7 @@ The combinations, in full:
 | `POST /api/map` 2D coords that `detect_grid` recognises | 2 | true | the detected grid | `user` | true unless the pattern is 3D |
 | `POST /api/map` 2D coords that it does not | 2 | false | 0 / 0 | `user` | true unless the pattern is 3D |
 | `POST /api/map` 3D coords (never a grid) | 3 | false | 0 / 0 | `user` | true |
-| no engine resident (frozen for an OTA) | the device map's | — | — | `board`/`user` | true (`pattern_dims` is 0) |
+| no engine resident (nothing playing — `engines` 0 — or frozen for an OTA) | the device map's | — | — | `board`/`user` | true (`pattern_dims` is 0) |
 
 A map whose pixel count does not match the device's is truncated to the device's
 by the engine, so a `grid 16 8` on a 60 px strip is 60 coordinates and no longer
@@ -309,7 +328,13 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   engine reports 0–5 KB there rather than the 13–20 KB it did before #709.
 - `engines` — how many resident engines that sum is over (Gitea #479): 1 for
   a plain pattern, one per pattern and sprite layer while a scene is up, 0
-  with nothing loaded. Device only.
+  with nothing loaded. Device only. **This is the "nothing is playing"
+  flag**: since Gitea #744 a device carries no built-in default, so a device
+  nobody has given a pattern boots to `engines: 0`, a dark strip and an empty
+  `GET /api/pattern` — an empty state, not a fault. See `src`/`bc` below and
+  "Nothing playing" in the gotchas. `jit.state` reads `"none"` in exactly
+  that case, and `jit.layers` says what each of those engines is running
+  (Gitea #718).
 - `psram_free` / `psram_total` — the external pattern-array arena (Gitea
   #253), in bytes. A SECOND heap: it is not part of `heap_free`, and a
   pattern's arrays come out of here instead of out of that number. **Both are
@@ -325,11 +350,12 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   failed its self-check, the image was built with `flashmap-off`, or it is a
   hosted-ui build — assets (if any) then stream via flash-controller reads.
 - `code_mapped` — `true` when the running pattern's bytecode is mapped
-  memory the engine builds from without a blob copy (the built-in default's
-  rodata, the ad-hoc read-back slot, or the library pattern's bytecode in
-  the file log); `false` means the store's mapping is off (a `flashmap-off`
-  build, or a refused boot self-check) — the pattern still runs, its
-  bytecode is just read into a transient Vec first.
+  memory the engine builds from without a blob copy (the ad-hoc read-back
+  slot, or the library pattern's bytecode in the file log); `false` means the
+  store's mapping is off (a `flashmap-off` build, or a refused boot
+  self-check) — the pattern still runs, its bytecode is just read into a
+  transient Vec first. Also `false` when nothing is running at all
+  (`engines: 0`).
 - `store` — the pattern store's file log, in **BYTES** (they were 4 KiB
   pages before Gitea #340): `used` by live files, `total` in the log,
   `dead` held by superseded and deleted files that the next compaction
@@ -341,8 +367,13 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   225,280 (55 × 4 KiB) on the 4 MB table, ~3.7 MiB on the 16 MB one, and
   749,568 (183 × 4 KiB) on a device that has not migrated yet. `total` 0
   means the store never came up — no `storage` partition, or one too small.
-- `src` / `bc` — whether the running pattern's source / bytecode are still
-  readable back (`GET /api/pattern`); `false` means a flash write shed the copy.
+- `src` / `bc` — whether the running pattern's source / bytecode are
+  readable back (`GET /api/pattern`). **`false` has two causes, and
+  `engines` separates them** (Gitea #744): with `engines: 0` nothing is
+  playing at all — the ordinary state of a device nobody has given a pattern
+  — while with `engines` 1 or more a pattern IS running and a flash write
+  shed its read-back copy, which is the soak-log signal these flags have
+  always carried.
 - `web` — per-HTTP-slot lifecycle stage, one entry per connection slot
   (`WEB_TASK_POOL_SIZE`, 2 or 3). `0` accepting · `1` serving · `2` shutdown
   entered · `3` FIN sent · `4` discard done · `5` flush done · `9` abort. A slot
@@ -353,22 +384,48 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   render pass records nothing further, so that refusal stands until the next
   load rather than being overwritten a frame later by the missing-buffer
   errors it causes (Gitea #420).
-- `jit` — what the LIVE pattern is running as, and why (Gitea #658/#665/#666,
-  docs/jit-design.md §4a/§5). Always present, on every board:
-  `{"state":…,"reason":…,"code_bytes":…,"compile_us":…,"place":…}`.
+- `jit` — what the device is actually RUNNING, and why (Gitea
+  #658/#665/#666/#718, docs/jit-design.md §4a/§5). Always present, on every
+  board, with every key present on every board:
+  `{"state":…,"reason":…,"code_bytes":…,"compile_us":…,"place":…,`
+  `"native":n,"interp":m,"layers":[…]}`.
+
+  The first five fields describe **one** program: a bare pattern, or a
+  scene's BASE layer — the engine `/api/controls`, `/api/vars`,
+  `/api/pattern` and the sensor inboxes already point at. `native`,
+  `interp` and `layers` describe the whole **resident stack**, which is
+  more than one program as soon as a scene is up. Before Gitea #718 there
+  was only the scalar block and *every* compile attempt overwrote it, so a
+  two-layer scene reported whichever layer compiled last (often a sprite)
+  and a base layer that fell back to the interpreter was invisible.
+
   - `state` — `"native"` (the device compiled this pattern to machine
     code), `"interp"` (the image has a JIT and did not compile this
-    pattern) or `"off"` (this image carries no backend at all). Since #676
-    every **Xtensa** board ships the backend — the two S3 boards and the
-    three classic-ESP32 ones (docs/boards.md) — while the two RISC-V
-    boards have no code generator at all, so `off` there is the permanent
-    answer and not "not yet". The key is never omitted, so a client cannot
-    mistake "no backend" for "firmware older than #658", which are
-    different answers. In an image that HAS the backend it is on by default
-    and the expected answer is `native`; `POST /api/jit {"on":false}` is
-    the kill switch that turns the next activation back into `interp` /
-    `disabled`. See docs/firmware.md "JIT".
-  - `reason` — `null` when `native`, else one word from the vocabulary the
+    pattern), `"none"` (the backend is there and **nothing is resident** —
+    no pattern, no scene, nothing to describe) or `"off"` (this image
+    carries no backend at all). Since #676 every **Xtensa** board ships the
+    backend — the two S3 boards and the three classic-ESP32 ones
+    (docs/boards.md) — while the two RISC-V boards have no code generator
+    at all, so `off` there is the permanent answer and not "not yet". The
+    key is never omitted, so a client cannot mistake "no backend" for
+    "firmware older than #658", which are different answers. In an image
+    that HAS the backend it is on by default and the expected answer is
+    `native`; `POST /api/jit {"on":false}` is the kill switch that turns
+    the next activation back into `interp` / `disabled`. See
+    docs/firmware.md "JIT".
+
+    `"none"` (Gitea #718) is what a device nobody has given a pattern
+    reports from boot — since #744 a shipped image carries no built-in
+    default — and what an OTA's engine freeze, a scene with no `pat` layer,
+    or a load that emptied the stack and then failed leaves behind. It
+    pairs with `engines: 0`, and `vmerr` (not `jit`) is where the reason a
+    load was rejected lives.
+
+    One case the block can lag: a load rejected **during a crossfade**. The
+    outgoing engine deliberately keeps rendering there, and `jit` describes
+    the attempt that failed rather than what is on the strip — the same gap
+    `engine_heap` documents for fades. It clears at the next activation.
+  - `reason` — `null` when `native` or `none`, else one word from the vocabulary the
     emitter, the browser's compile-time lint (`luxel_core::jitlint`) and
     the firmware share: `unsupported`, `too-large`, `l32r-reach`,
     `frame-size`, `kinds`, `param-overflow`, `offset-reach`, `scratch`,
@@ -380,7 +437,13 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
     with no internal fallback left), `no-memory` (the heap cannot hold the
     EMITTER's own bookkeeping beside the engine that was just built — the
     compile is refused before it starts rather than half way through;
-    docs/firmware.md "The compile's own heap") and `disabled`
+    docs/firmware.md "The compile's own heap". Since Gitea #752 the guard
+    tests **two** things: the bookkeeping's total against `heap_free`, and
+    its largest single allocation against `heap_largest`. A total is not an
+    allocation — the panel reported 9,680 B free and a 5,584 B largest
+    block on 2026-09-24 — so a guard that read only the total could approve
+    a compile that then faulted part way, which on the render task is a
+    reboot rather than a refusal) and `disabled`
     (`POST /api/jit`). **A refusal is never a failed pattern** — it runs
     interpreted, at the interpreter's speed, with the same pixels.
   - `code_bytes` — the compiled image, literal pool included; 0 unless
@@ -395,6 +458,55 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
     measurement surface, not a knob: the same native function fetched from
     PSRAM and from internal SRAM is within ~1 % (docs/boards.md "JIT on
     metal"), which is the number that made the arena the default.
+  - `native` / `interp` — how many of the resident engines are compiled and
+    how many are interpreting, counted over `layers`. `native + interp`
+    equals `engines` (above) except on a stack deeper than **eight** layers,
+    where `layers` describes the first eight and the difference is what the
+    table could not hold. Both 0 while `state` is `"none"` or `"off"`.
+  - `layers` — one entry per RESIDENT ENGINE, bottom → top:
+    `{"layer":1,"kind":"pattern","state":"interp","reason":"no-memory","code_bytes":0}`.
+    - `layer` — the **0-based** index into the scene's own `layers` array,
+      so an entry lines up with `GET /api/scenes/<id>` without counting.
+      (The `scene: layer N does not fit` message is 1-based: N = `layer` +
+      1.) A bare pattern is layer 0 of a one-layer stack.
+    - `kind` — `"pattern"` (an engine the compositor steps every frame) or
+      `"sprite"` (an engine that is built and READ but never stepped —
+      docs/spec/scenes.md §4). A sprite's compile is real: it spends heap,
+      exec memory and compile time exactly like a pattern's, and its native
+      code is then never entered. It is reported **because** of that, not
+      in spite of it — an invisible compile is the bug this field exists to
+      fix. Gitea #740 makes sprites a first-class record and removes that
+      engine; the entry goes with it.
+    - `state` / `reason` / `code_bytes` — as above, per layer.
+    - A layer that holds **no engine** has no entry at all: a `text` or
+      `colour` layer, or a `pat` layer that did not fit and draws nothing
+      (`vmerr` carries `scene: layer N does not fit`). So `layers` is
+      sparse in `layer`, and is `[]` while `state` is `"none"` or `"off"`.
+    - **A crossfade's OUTGOING stack is not described** — the same rule
+      `engine_heap` follows. During a fade `layers` is the incoming stack
+      while `engines` counts both.
+
+  A two-pattern scene on the Seengreat panel whose base layer compiled and
+  whose second layer was refused a contiguous block (the case Gitea #718
+  was filed from — the whole `jit` block used to read
+  `{"state":"interp","reason":"no-memory",…}`, describing only the loser):
+
+  ```json
+  "engines":2,
+  "jit":{"state":"native","reason":null,"code_bytes":9312,"compile_us":18211,
+         "place":"psram","native":1,"interp":1,
+         "layers":[{"layer":0,"kind":"pattern","state":"native","reason":null,
+                    "code_bytes":9312},
+                   {"layer":1,"kind":"pattern","state":"interp",
+                    "reason":"no-memory","code_bytes":0}]}
+  ```
+
+  Read it as: two engines resident, the base layer compiled (and the scalar
+  block describes it, because the base layer IS the running program in the
+  sense every other endpoint means), the layer above it is interpreting,
+  and the reason is device memory rather than anything about the pattern.
+  `frame_us` being roughly one native layer plus one interpreted one is now
+  a prediction, not an inference.
 
 - `core1` — dual-core boards only (`esp32`, `esp32s3`); `null` elsewhere.
   The second core and the cross-core flash fence (docs/firmware.md
@@ -764,10 +876,39 @@ would not fit is REFUSED, not truncated:
 {"ok":false,"error":"no such scene"}
 ```
 
+**Low heap on the READ path** (firmware only, Gitea #753). Both GETs build
+their body in 256-byte segments and write it out of them, so neither needs a
+contiguous block however many scenes are stored. A read-only poll on a device
+holding a scene at its pattern-layer cap used to reboot it (Gitea #728); it
+cannot now.
+
+There is no short form and no `degraded` flag: **an empty `scenes` array means
+the device has no scenes.** A device that cannot spare even one segment answers
+**503** with `{"ok":false,"error":"out of memory"}` — transient, and the next
+poll is a full body. A response is never truncated: a response that parses is a
+response that is complete.
+
+`/api/patterns` and `/api/playlist` are produced the same way. Their JSON shape
+is unchanged — this is only how the bytes are built. `/api/layout` and
+`/api/output` are still assembled as one string, because their bodies are
+bounded by the board's output count rather than by user data.
+
 `scene: layer N does not fit` is the `caps.layers` refusal: a scene may hold
-no more `pat` layers than the board affords resident engines (text, sprite and
-colour layers are free — they need no engine). It is checked on POST, so the
-store never holds a scene the board could not show.
+no more `pat` layers than the board affords resident engines. `text`, `sprite`
+and `colour` layers are free **of the layer cap** — they do not count against
+`caps.layers`. It is checked on POST, so the store never holds a scene the
+board could not show.
+
+Free of the cap is not free of an engine. A `sprite` layer still holds a
+resident `Engine` today: the compiled pattern is built (at one pixel), its
+const arrays are read as the sprite's bitmap, and the compositor never steps
+it — so it costs heap, it costs a JIT compile, and it is counted by `engines`
+above and reported in `jit.layers` with `"kind":"sprite"`. That is exactly
+the stray engine that lets a scene hold more patterns resident than
+`caps.layers` admits. **Gitea #740** makes a sprite a first-class record and
+removes the engine; until it lands, count sprites when you reason about a
+board's resident-engine budget. `text` and `colour` layers really are free —
+the compositor draws them natively, with nothing resident.
 
 **Transition rule.** Both stacks are resident while a crossfade runs, so a
 transition where `pattern_layers(outgoing) + pattern_layers(incoming)` exceeds
@@ -1386,6 +1527,18 @@ At most `PIN_MAX_BATCH` writes per request.
   mid-response — so a well-formed but newline-tailed body can mean a busy
   flash, not an empty pattern. `GET /api/status`'s `src`/`bc` flags say whether
   read-back is available at all.
+- **"Nothing playing" is an EMPTY STATE, not an error** (Gitea #744). A
+  device carries no built-in default pattern, so one that has never been
+  given a pattern — or whose stored pattern was deleted, or whose resume was
+  skipped — plays nothing: a dark strip, `engines: 0`, `fps: 0`,
+  `geom.pattern_dims: 0`, `src`/`bc` false, `/api/controls` `[]`,
+  `/api/vars` `{}`, and an empty `/api/pixels`. `GET /api/pattern` answers
+  **HTTP 200 with `Content-Length: 0`** — not a 404 and not `ok:false` —
+  because a client that reads the body as the running source must get an
+  empty document rather than an error page. A `/api/pattern.lxp` fetched in
+  that state is a structurally valid envelope with a zero-length source and
+  bytecode; don't adopt one. A sync **leader stays silent** while nothing is
+  loaded rather than beaconing a zero clock.
 - **Uploads are capped at 80 KB** on a device, and can still be refused for
   free heap below that.
 - **No route takes a query string**, and the two targets disagree about them:

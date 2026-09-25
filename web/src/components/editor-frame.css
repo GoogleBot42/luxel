@@ -92,6 +92,33 @@
   font: 11.5px/1 var(--mono);
 }
 
+/* ---- the preview transport, in the header (Gitea #739) ----
+   It used to be a 26px icon in the Preview section's own `.rhead`, three
+   hundred pixels down a 360px rail, and Jeremy never found it. Here it is a
+   full-height `.btn` with a word beside the mark, at a fixed spot in the bar
+   — the same treatment the Debug button got for the same reason (audit E8).
+   The global `.btn` owns the box; this only sizes the mark and says what
+   "paused" looks like. */
+
+.editor-frame .transport {
+  flex: none;
+}
+
+/* the mark is 14px inside the 32px box — a shade larger than the rail's 13px
+   icons, because this one carries the state at a glance */
+.editor-frame .transport svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* A paused preview is a STATE, and a state you cannot see is the bug that got
+   filed. Same accent outline the rail's toggles use for "on"
+   (`.grp .btn.active` below) — one "this is engaged" across the frame. */
+.editor-frame .transport.paused {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .editor-frame .spacer {
   flex: 1;
 }
@@ -268,9 +295,10 @@
   gap: 4px;
 }
 
-/* Transport controls are the global `.btn.sm` box (26px). The pause glyph
-   used to be inherited-size text in a padding-only button, which is the
-   oversized icon Jeremy saw (audit E7). */
+/* A section header's controls are the global `.btn.sm` box (26px) — Debug,
+   the mic and the rate here, the map's Run on the other screen. The preview
+   TRANSPORT is not one of them any more: it is `.transport` in the header
+   bar (Gitea #739). */
 .editor-frame .grp .btn svg {
   width: 13px;
   height: 13px;
@@ -281,7 +309,10 @@
   color: var(--accent);
 }
 
-/* a glyph transport button: the mark is 12px inside the 26px box */
+/* a glyph button in a section header: the mark is 12px inside the 26px box.
+   Still used by the map editor's Run (pages/MapEditor.svelte) — everything
+   else in these groups draws an SVG, because a symbol-font glyph is tofu in a
+   headless chromium. */
 .editor-frame .grp .glyph {
   font-size: 12px;
   line-height: 1;
@@ -403,6 +434,19 @@
 
   .editor-frame .editor-header .savestate,
   .editor-frame .editor-header .note {
+    display: none;
+  }
+
+  /* S2b's header is one 44px row of [back] [name] [Save] [⋯], so the
+     transport gives up its WORD rather than its place: the preview is the
+     whole point of the phone layout (the rail stacks first), and the mark
+     alone is unambiguous once it is the only icon button in the bar. */
+  .editor-frame .transport {
+    width: 32px;
+    padding: 0;
+  }
+
+  .editor-frame .transport .tlabel {
     display: none;
   }
 

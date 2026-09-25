@@ -1397,9 +1397,9 @@ pub extern "C" fn lx_kinds(h: i32) -> i32 {
 // scaling included). A SPRITE layer is bound to an engine too, but only its
 // program's data arrays are read — it is never stepped.
 
-use luxel_core::compose::{sprite_view, Compositor};
+use luxel_core::compose::{sprite_view, Compositor, SceneDriver, SceneHost, SpriteView};
 use luxel_core::outpipe::GridMap;
-use luxel_core::scene::{LayerKind, Scene};
+use luxel_core::scene::Scene;
 
 struct CompSlot {
     comp: Compositor,
@@ -1408,9 +1408,53 @@ struct CompSlot {
     bind: Vec<i32>,
     px: Vec<[u8; 3]>,
     out: Vec<u8>,
-    /// Sub-millisecond remainder of the frame deltas, so a 60 fps caller's
-    /// 16.67 ms steps do not round the scroll and sprite clocks down.
-    dt_acc: i32,
+    /// The SHARED full-frame driver (Gitea #732) — the same walk the device
+    /// runs, and the owner of the sub-millisecond remainder of the frame
+    /// deltas, so a 60 fps caller's 16.67 ms steps do not round the scroll
+    /// and sprite clocks down.
+    driver: SceneDriver,
+}
+
+/// The playground's side of [`SceneHost`]: a layer's engine is an ordinary
+/// engine handle, bound per layer.
+///
+/// [`SceneHost::text`] is left at its default `None` — the JS host resolves
+/// clock and slot text and pushes it in through `lx_comp_text`, which is
+/// the contract (docs/spec/scenes.md §2: the compositor reads no wall
+/// clock).
+struct WasmHost<'a> {
+    bind: &'a [i32],
+    engines: std::sync::MutexGuard<'a, Vec<Option<EngineSlot>>>,
+}
+
+impl WasmHost<'_> {
+    fn slot(&self, layer: usize) -> Option<&EngineSlot> {
+        let h = *self.bind.get(layer)?;
+        if h < 0 {
+            return None;
+        }
+        self.engines.get(h as usize)?.as_ref()
+    }
+
+    fn slot_mut(&mut self, layer: usize) -> Option<&mut EngineSlot> {
+        let h = *self.bind.get(layer)?;
+        if h < 0 {
+            return None;
+        }
+        self.engines.get_mut(h as usize)?.as_mut()
+    }
+}
+
+impl SceneHost for WasmHost<'_> {
+    fn pattern_frame(&mut self, layer: usize, delta: Fx) -> Option<&[[u8; 3]]> {
+        // the same call `lx_frame` makes — frame-rate cap, time scaling and all
+        Some(self.slot_mut(layer)?.engine.frame(delta))
+    }
+
+    fn sprite(&mut self, layer: usize) -> Option<SpriteView<'_>> {
+        let s = self.slot(layer)?;
+        sprite_view(&s.engine, &s.src)
+    }
 }
 
 static COMPOSITORS: Mutex<Vec<Option<CompSlot>>> = Mutex::new(Vec::new());
@@ -1438,7 +1482,7 @@ pub extern "C" fn lx_comp_new(w: u32, h: u32) -> i32 {
         bind: Vec::new(),
         px: Vec::new(),
         out: Vec::new(),
-        dt_acc: 0,
+        driver: SceneDriver::new(),
     };
     let mut comps = COMPOSITORS.lock().unwrap();
     match comps.iter().position(|c| c.is_none()) {
@@ -1515,9 +1559,14 @@ pub extern "C" fn lx_comp_layer_count(ch: i32) -> u32 {
 }
 
 /// Step every bound pattern engine, composite the whole stack bottom → top
-/// and return a pointer to the result (w·h·3 RGB bytes). Copy it out before
-/// the next call. Feed it through `lx_outpipe` on an engine configured with
-/// the device's chain to see what the wire would carry.
+/// and return a pointer to the result (w·h·3 RGB bytes), or null. Copy it
+/// out before the next call. Feed it through `lx_outpipe` on an engine
+/// configured with the device's chain to see what the wire would carry.
+///
+/// The walk is `luxel_core::compose::SceneDriver`, the SAME code the
+/// device's render task runs (Gitea #732) — this function is the binding,
+/// not a second driver. Clock and slot text stay the host's: resolve them
+/// in JS and push them in with `lx_comp_text`.
 #[no_mangle]
 pub extern "C" fn lx_comp_frame(ch: i32, delta_raw: i32) -> *const u8 {
     let mut comps = COMPOSITORS.lock().unwrap();
@@ -1525,52 +1574,27 @@ pub extern "C" fn lx_comp_frame(ch: i32, delta_raw: i32) -> *const u8 {
         return std::ptr::null();
     };
     let n = c.comp.grid().len();
-    if c.px.len() != n {
-        c.px.clear();
-        c.px.resize(n, [0, 0, 0]);
+    let CompSlot { comp, bind, px, out, driver, .. } = c;
+    let mut host = WasmHost {
+        bind: bind.as_slice(),
+        engines: ENGINES.lock().unwrap(),
+    };
+    // The whole walk — buffer sizing, the remainder-carrying millisecond
+    // clock, `advance` and the kind dispatch — is `luxel-core`'s, and is
+    // the same code the device runs (Gitea #732).
+    let drawn = driver.frame(comp, px, n, Fx::from_raw(delta_raw), &mut host);
+    drop(host);
+    if !drawn {
+        // the driver could not size the frame — null, like a bad handle,
+        // rather than a pointer to a buffer that is not w·h·3 bytes long
+        return std::ptr::null();
     }
-    // whole milliseconds for the clocks, remainder carried
-    c.dt_acc = c.dt_acc.saturating_add(delta_raw.max(0));
-    let ms = (c.dt_acc >> 16).max(0);
-    c.dt_acc -= ms << 16;
-    c.comp.advance(ms as u32);
-    c.comp.begin(&mut c.px);
 
-    let kinds: Vec<LayerKind> = c.comp.layer_kinds().collect();
-    let mut engines = ENGINES.lock().unwrap();
-    for (i, kind) in kinds.iter().enumerate() {
-        let h = c.bind.get(i).copied().unwrap_or(-1);
-        match kind {
-            LayerKind::Pattern => {
-                if h < 0 {
-                    continue;
-                }
-                let Some(Some(slot)) = engines.get_mut(h as usize) else {
-                    continue;
-                };
-                // the same call lx_frame makes — frame-rate cap, time
-                // scaling and all
-                let frame = slot.engine.frame(Fx::from_raw(delta_raw));
-                c.comp.pattern_layer(&mut c.px, i, frame);
-            }
-            LayerKind::Sprite => {
-                let view = engines
-                    .get(h.max(0) as usize)
-                    .filter(|_| h >= 0)
-                    .and_then(|s| s.as_ref())
-                    .and_then(|s| sprite_view(&s.engine, &s.src));
-                c.comp.native_layer(&mut c.px, i, view.as_ref());
-            }
-            LayerKind::Text | LayerKind::Color => c.comp.native_layer(&mut c.px, i, None),
-        }
+    out.clear();
+    for p in px.iter() {
+        out.extend_from_slice(p);
     }
-    drop(engines);
-
-    c.out.clear();
-    for px in &c.px {
-        c.out.extend_from_slice(px);
-    }
-    c.out.as_ptr()
+    out.as_ptr()
 }
 
 /// `text::set_slot(n, s)` — the playground's stand-in for `POST /api/text`

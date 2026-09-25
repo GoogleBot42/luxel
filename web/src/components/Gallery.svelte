@@ -472,7 +472,7 @@
           ></canvas>
           {#if t.visible && !t.ready && !t.dead}
             <span
-              class="spinner"
+              class="spinner overlay lg"
               data-role="tile-spinner"
               aria-label="loading"
               title="computing preview…"
@@ -651,24 +651,8 @@
     pointer-events: auto;
   }
 
-  .spinner {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    width: 14px;
-    height: 14px;
-    margin: -7px 0 0 -7px;
-    border: 2px solid color-mix(in srgb, var(--text-dim) 40%, transparent);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: tile-spin 0.7s linear infinite;
-  }
-
-  @keyframes tile-spin {
-    to {
-      transform: rotate(1turn);
-    }
-  }
+  /* `.spinner` is shared chrome (app.css, Gitea #738) — the tile wears
+     `overlay lg`, which is what the local copy of it used to say. */
 
   /* mockups.html `.tile .sub` */
   .sub {

@@ -22,6 +22,7 @@
   // Drag-editing the points and the Fill/Contain framing belong here too
   // (Gitea #355); the scatter below is where they will attach.
   import { createEventDispatcher, onDestroy } from "svelte";
+  import AsyncButton from "../components/AsyncButton.svelte";
   import Debugger from "../components/Debugger.svelte";
   import DeviceChip from "../components/DeviceChip.svelte";
   import CodeEditor from "../components/Editor.svelte";
@@ -265,19 +266,20 @@
   /** Console: upload the points so the DEVICE renders 2D/3D through them.
    *  The console's Layout follows the device, so nothing else has to be set —
    *  `installDeviceMapCoords` updates the wire state the reconciler reads. */
-  function installOnDevice(): void {
+  async function installOnDevice(): Promise<boolean> {
     if (!coords) {
       run();
-      if (!coords) return;
+      if (!coords) return false;
     }
     const pts = coords;
-    void (async () => {
-      if (await installDeviceMapCoords(dims, pts)) {
-        note("save", `installed ${pts.length} points on the device`, 3000);
-      } else {
-        note("map", "the device rejected the map");
-      }
-    })();
+    // Awaited rather than fired and forgotten (#738): the button is the thing
+    // that has to know whether this landed, and a big map is seconds of POST.
+    if (!(await installDeviceMapCoords(dims, pts))) {
+      note("map", "the device rejected the map");
+      return false;
+    }
+    note("save", `installed ${pts.length} points on the device`, 3000);
+    return true;
   }
 
   async function onClearDeviceMap(): Promise<void> {
@@ -519,14 +521,16 @@
          installs the points on the hardware, the playground adopts them as
          what the page previews on. -->
     {#if $device}
-      <button
-        class="btn primary"
-        data-role="map-install"
+      <!-- A big map is a big POST, and the old button gave nothing back until
+           the note appeared (#738). -->
+      <AsyncButton
+        cls="btn primary"
+        dataRole="map-install"
+        label="Install on device"
+        doneLabel="Installed"
         title="upload these points so the device renders 2D/3D through them"
-        on:click={installOnDevice}
-      >
-        Install on device
-      </button>
+        action={installOnDevice}
+      />
     {:else}
       <button
         class="btn primary"
@@ -663,14 +667,23 @@
               {#if plotted}{plotted.pixels} points · {plotted.dims}D{:else}not run yet{/if}
             </span>
             <span class="grp">
+              <!-- Gitea #739 on the third editor screen: this was a bare `▶`
+                   text glyph, which a headless chromium with no symbol font
+                   draws as tofu — and an unlabelled mark in a rail of labelled
+                   buttons reads as an afterthought. Same inline SVG and same
+                   mark-then-word shape as the pattern editor's transport;
+                   `.editor-frame .grp .btn svg` already sizes it to the 13px
+                   its neighbour's bug icon uses. -->
               <button
-                class="btn sm icon glyph"
+                class="btn sm"
                 data-role="map-run"
                 title="run the map program (⌘/Ctrl+Enter)"
-                aria-label="run"
                 on:click={run}
               >
-                ▶
+                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <path d="M8 5.2 19.2 12 8 18.8Z" />
+                </svg>
+                Run
               </button>
               <!-- labelled like the pattern editor's, and for the same reason
                    (audit E8): the bug glyph alone does not say "debugger" -->

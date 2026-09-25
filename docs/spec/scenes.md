@@ -191,21 +191,76 @@ impl Compositor {
     pub fn pattern_layer(&mut self, dst: &mut [[u8; 3]], layer: usize, src: &[[u8; 3]]);
     pub fn native_layer(&mut self, dst: &mut [[u8; 3]], layer: usize, sprite: Option<&SpriteView>);
     pub fn layer_count(&self) -> usize;
+    pub fn layer_kind(&self, layer: usize) -> Option<LayerKind>;
     pub fn layer_kinds(&self) -> impl Iterator<Item = LayerKind> + '_;
     pub fn resident_bytes(&self) -> usize;
 }
 ```
 
-The host drives layers in order, bottom → top: `pattern_layer` with that
-layer's engine frame, or `native_layer` for text / sprite / colour. It owns
-the scroll phase, the sprite frame clock, the resolved text buffers (≤ 64 B)
-and the per-layer ramp LUT cache; there is **one** shared 3 B/px scratch,
-allocated lazily, so the single-owner rule the HUB75 pipeline depends on is
-not broken.
+Layers are drawn in order, bottom → top: `pattern_layer` with that layer's
+engine frame, or `native_layer` for text / sprite / colour. The compositor
+owns the scroll phase, the sprite frame clock, the resolved text buffers
+(≤ 64 B) and the per-layer ramp LUT cache; there is **one** shared 3 B/px
+scratch, allocated lazily, so the single-owner rule the HUB75 pipeline
+depends on is not broken.
 
 **Clock and slot text are the HOST's to resolve.** The compositor reads no
 wall clock and no slot table: `text_source(i)` says what a layer wants and
 `set_text(i, s)` supplies it, truncated to 64 B on a char boundary.
+
+### `SceneDriver` — the one full-frame walk (Gitea #732)
+
+No host writes that walk itself. `SceneDriver::frame` is a whole frame —
+the buffer sizing, the millisecond accounting, the clock advance and the
+layer-kind dispatch — and the firmware's render task, the `luxel serve`
+mirror and the wasm playground each call it with a `SceneHost` supplying
+the only two things that genuinely differ per host: where layer *i*'s
+engine frame (or sprite) comes from, and what string a text layer draws.
+
+```rust
+pub trait SceneHost {
+    fn pattern_frame(&mut self, layer: usize, delta: Fx) -> Option<&[[u8; 3]]>;
+    fn sprite(&mut self, layer: usize) -> Option<SpriteView<'_>>;
+    fn text(&mut self, layer: usize, source: &TextSource) -> Option<&str> { None }
+}
+
+pub struct SceneDriver { /* the sub-ms remainder */ }
+impl SceneDriver {
+    pub const fn new() -> Self;
+    pub fn step_ms(&mut self, delta: Fx) -> u32;
+    pub fn frame<H: SceneHost + ?Sized>(&mut self, comp: &mut Compositor,
+        dst: &mut Vec<[u8; 3]>, n: usize, delta: Fx, host: &mut H) -> bool;
+}
+```
+
+`None` from `pattern_frame` or `sprite` means the layer has nothing to draw
+from — unbound in the console, over budget or undecodable on the device —
+and that layer simply does not draw. `None` from `text` leaves the layer's
+text as it stands, which is what a `lit` layer wants (`set_scene` seeds it)
+and what a host that pushes resolved text in out of band wants (the wasm
+binding's `lx_comp_text`).
+
+Two properties the driver is required to keep, one from each host it
+replaced:
+
+* **The destination is sized fallibly.** `frame` returns `false` when `dst`
+  cannot be grown to `n` and draws nothing; the clocks still advance. On a
+  board whose largest free block is a few kilobytes the host's staging
+  buffer is exactly the allocation that fails, and a frame the device
+  cannot afford is a frame not drawn, not a reboot (#702, #728). The
+  capacity survives, so this is one `try_reserve_exact` per activation and
+  a compare per frame after it — and the `resize` that follows leaves `dst`
+  black, which is what `begin` would do (`begin` stays for hosts that clear
+  a buffer they size themselves).
+* **The frame delta's sub-millisecond remainder is carried.** `step_ms`
+  accumulates raw 16.16 ms and hands `advance` whole milliseconds, so sixty
+  16.666… ms steps are one second of scroll and not 960 ms of it. The
+  firmware truncated per frame until #732, which is why a caption crawled
+  ~4 % slower on the panel than in the preview showing that same panel.
+
+`crates/luxel-core/tests/scene_driver.rs` pins the driver frame by frame
+over a deliberately non-integral delta sequence, and `tools/wasm-smoke.mjs`
+asserts the carry across the C ABI.
 
 ### Per-layer colour ramp
 

@@ -226,32 +226,12 @@
   min-width: 0;
 }
 
-/* the mockup's `.gradbar` — the ramp itself, nothing written on it */
-.settings .palette-preview {
-  height: 22px;
-  border-radius: 4px;
-  border: 1px solid var(--border);
-}
-
-.settings .palette-stop {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.settings .palette-stop input[type="color"] {
-  width: 36px;
-  height: 24px;
-  padding: 0;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: transparent;
-  cursor: pointer;
-}
-
-.settings .palette-stop .inp.num {
-  width: 64px;
-}
+/* The `.palette-preview` / `.palette-stop` rules that lived here went with
+ * the Output card's hand-rolled stop editor (Gitea #734): the palette is now
+ * the shared `components/GradientEditor.svelte`, which paints the ramp on a
+ * canvas from the engine's own LUT and carries its own scoped styles. The
+ * `input[type="color"]` rule in particular was styling a control the app is
+ * not allowed to use (ColorPicker.svelte:2-4). */
 
 /* ---- the ranked page (proposal §5.3, mockup S3; Gitea #469) ----
  *
@@ -395,9 +375,15 @@
   color: var(--text-dim);
 }
 
+/* An expanded row is LIFTED, never recessed: the body used to be
+   rgba(0,0,0,.18), i.e. darker than the `--bg-panel` list it sits inside, and
+   read as a hole rather than as something opened (Gitea #739). It now carries
+   the same 2% white wash as its own open head above it, so head and body are
+   one continuous lifted block against the closed rows — the head's
+   `border-bottom` hairline is what separates them. */
 .settings .dbody {
   padding: 4px 14px 16px;
-  background: rgba(0, 0, 0, 0.18);
+  background: rgba(255, 255, 255, 0.02);
 }
 
 /* Mobile (390 px): the label column stops reserving width it hasn't got and

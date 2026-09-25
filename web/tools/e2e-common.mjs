@@ -187,14 +187,40 @@ export async function renameTo(page, name) {
 }
 
 /**
- * The editor header's save-state line. Playground / live push:
+ * The editor's save state. Playground / live push:
  * `unsaved` · `saved · on device` · `saved · in browser` · `not saved yet`.
  * A console in LOCAL PREVIEW (the editor is not driving the device, #563):
  * `unsaved · preview only` · `saved · on device · preview only` ·
  * `preview only · not on device`.
+ *
+ * Since #738 the header no longer PRINTS the whole of that: the Save button
+ * carries the save half (`Save` / `Saved`), and the span beside it says only
+ * `preview only`, the half a button cannot. The string is unchanged as a
+ * CONTRACT, though — it moved to `data-save-state` on the same element, which
+ * is what this reads, so every assertion written against it still holds.
+ * Read the visible words with `saveButtonLabel()` / the span's textContent.
  */
 export function saveState(page) {
-  return page.$eval('[data-role="save-state"]', (el) => (el.textContent ?? "").trim());
+  return page.$eval('[data-role="save-state"]', (el) => (el.dataset.saveState ?? "").trim());
+}
+
+/**
+ * What the editor's primary action READS right now (#738): `Save` while there
+ * is something to store, `Saved` once there is not, and `""` for as long as
+ * the round trip is in flight — the label is replaced by `.spinner` then, and
+ * the button is `disabled`, so a second save cannot be started inside the
+ * first. `asyncButtonBusy()` is the direct way to ask about that state.
+ */
+export function saveButtonLabel(page) {
+  return page.$eval('[data-role="save"]', (el) => (el.textContent ?? "").trim());
+}
+
+/** Is the `AsyncButton` with this `data-role` mid-flight? (components/AsyncButton.svelte) */
+export function asyncButtonBusy(page, role) {
+  return page.$eval(
+    `[data-role="${role}"]`,
+    (el) => el.getAttribute("aria-busy") === "true" && el.querySelector(".spinner") !== null,
+  );
 }
 
 /**

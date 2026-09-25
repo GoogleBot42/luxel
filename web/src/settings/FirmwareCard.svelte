@@ -14,6 +14,7 @@
   // existing release artifact and every local `nix build` is one; the
   // difference is that the console then says out loud that the console
   // itself was NOT updated, which is the state the Athom went dark in.
+  import AsyncButton from "../components/AsyncButton.svelte";
   import {
     device,
     deviceBoard,
@@ -32,20 +33,21 @@
   let progressText = "";
   let progressPct = 0;
 
-  async function startApMode(): Promise<void> {
+  async function startApMode(): Promise<boolean> {
     const ok = await confirm({
       title: "Reboot into the setup access point?",
       body: "The device leaves this network for one boot and comes back as an open AP (luxel-…, http://192.168.4.1/). Rejoin this network by saving WiFi from the AP, or just reboot it again.",
       confirmLabel: "Reboot into AP",
       reboot: true,
     });
-    if (!ok) return;
+    if (!ok) return false;
     const r = await $device?.startApMode();
     note(
       "ap",
       r?.ok ? 'rebooting into AP "luxel-…" — connect to it at 192.168.4.1' : "failed",
       8000,
     );
+    return r?.ok === true;
   }
 
   /** The confirm dialog's body, which is where the honest difference between
@@ -192,7 +194,17 @@
   <div class="field">
     <span class="flabel"></span>
     <div class="fctl row g10">
-      <button data-role="apmode" on:click={() => void startApMode()}>Reboot into setup AP</button>
+      <!-- The confirm dialog is INSIDE the action, so the spinner covers the
+           dialog too — which is the point: no second reboot can be started
+           from behind it, and the wait between "Reboot into AP" and the
+           device going away had no indicator at all before (#738). -->
+      <AsyncButton
+        cls=""
+        dataRole="apmode"
+        label="Reboot into setup AP"
+        doneLabel="Rebooting…"
+        action={startApMode}
+      />
       <span class="dim hint">
         one boot only — good for re-provisioning; it comes back as a station afterwards
       </span>

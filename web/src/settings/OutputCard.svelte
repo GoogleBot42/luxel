@@ -17,6 +17,7 @@
     type OutputStatus,
   } from "../stores/device";
   import { note, notes, reportApiError } from "../stores/notify";
+  import GradientEditor, { type GradientStop } from "../components/GradientEditor.svelte";
 
   /** Which fields this device advertises (`lib/settingsCaps.ts`). */
   export let showPowerCap = true;
@@ -24,39 +25,40 @@
   /** How to word blur/glow: along the strip, or across the grid. */
   export let scope: "strip" | "grid" = "strip";
 
-  /** One editable stop: byte position along the luma ramp + an #rrggbb color. */
-  type PaletteStop = { pos: number; hex: string };
-  const MAX_PALETTE_STOPS = 32;
-
   /** A local, editable mirror of the device's output settings — the fields are
    *  two-way bound, and every change pushes and then re-reads. */
   let out: OutputStatus | null = null;
   $: out = $outputStatus;
 
-  let stops: PaletteStop[] = [];
+  /** The stops the editor is showing. Re-derived from the device's own
+   *  reading, so a refresh is the source of truth; the editor holds its own
+   *  draft while a drag is in flight, so a poll landing mid-gesture cannot
+   *  snap a handle back (see `GradientEditor.svelte`). */
+  let stops: GradientStop[] = [];
   $: stops = stopsFromFlat($paletteFlat);
 
   const byteToHexPair = (n: number): string =>
     Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, "0");
 
   /** Flat [pos,r,g,b,…] (the wire form) → editable stops. */
-  function stopsFromFlat(flat: readonly number[]): PaletteStop[] {
-    const list: PaletteStop[] = [];
+  function stopsFromFlat(flat: readonly number[]): GradientStop[] {
+    const list: GradientStop[] = [];
     for (let i = 0; i + 3 < flat.length; i += 4) {
       list.push({
         pos: flat[i] ?? 0,
-        hex: `#${byteToHexPair(flat[i + 1] ?? 0)}${byteToHexPair(flat[i + 2] ?? 0)}${byteToHexPair(flat[i + 3] ?? 0)}`,
+        hex: `${byteToHexPair(flat[i + 1] ?? 0)}${byteToHexPair(flat[i + 2] ?? 0)}${byteToHexPair(flat[i + 3] ?? 0)}`,
       });
     }
     return list;
   }
 
   /** Editable stops → the flat wire form, sorted (the device requires it). */
-  function flatFromStops(list: readonly PaletteStop[]): number[] {
+  function flatFromStops(list: readonly GradientStop[]): number[] {
     return [...list]
       .sort((a, b) => a.pos - b.pos)
       .flatMap((s) => {
-        const v = Number.parseInt(s.hex.slice(1), 16);
+        const parsed = Number.parseInt(s.hex.replace(/^#/, ""), 16);
+        const v = Number.isFinite(parsed) ? parsed : 0;
         return [
           Math.max(0, Math.min(255, Math.round(s.pos))),
           (v >> 16) & 0xff,
@@ -64,23 +66,6 @@
           v & 0xff,
         ];
       });
-  }
-
-  /**
-   * CSS preview of the ramp the device will build from these stops —
-   * including the asymmetric ends the engine's `sample_palette` has:
-   * below the first stop clamps to its color, past the last stop is BLACK.
-   */
-  function paletteCss(list: readonly PaletteStop[]): string {
-    if (list.length === 0) return "transparent";
-    const sorted = [...list].sort((a, b) => a.pos - b.pos);
-    const first = sorted[0];
-    const last = sorted[sorted.length - 1];
-    if (!first || !last) return "transparent";
-    const pct = (s: PaletteStop): string => `${((s.pos / 255) * 100).toFixed(1)}%`;
-    const parts = [`${first.hex} 0%`, ...sorted.map((s) => `${s.hex} ${pct(s)}`)];
-    if (last.pos < 255) parts.push(`#000000 ${pct(last)}`, "#000000 100%");
-    return `linear-gradient(90deg, ${parts.join(", ")})`;
   }
 
   function onOutputChange(): void {
@@ -93,39 +78,32 @@
     })();
   }
 
-  /** Push the edited palette (or clear it when there are no stops left). */
-  function onPaletteChange(): void {
+  /** Push the edited palette (or clear it when there are no stops left).
+   *  Every value is passed IN: the editor commits and the store round-trip
+   *  lands later, so reading `stops` here would push the pre-edit list. */
+  function pushPalette(list: readonly GradientStop[], amountPct: number): void {
     void (async () => {
       const d = $device;
       if (!d) return;
-      const flat = flatFromStops(stops);
-      const res =
-        flat.length === 0 ? await d.clearPalette() : await d.setPalette(flat, $paletteAmount);
+      const flat = flatFromStops(list);
+      const res = flat.length === 0 ? await d.clearPalette() : await d.setPalette(flat, amountPct);
       note("palette", "");
       if (!res.ok) reportApiError(res.error ?? "rejected", { scope: "output" });
       void refreshOutput();
     })();
   }
 
-  function addPaletteStop(): void {
-    if (stops.length >= MAX_PALETTE_STOPS) return;
-    // seed a new stop past the last one so the list stays ascending
-    const last = stops[stops.length - 1];
-    stops = [
-      ...stops,
-      { pos: last ? Math.min(255, last.pos + 64) : 0, hex: last ? "#ffffff" : "#000000" },
-    ];
-    onPaletteChange();
-  }
-
-  function removePaletteStop(i: number): void {
-    stops = stops.filter((_, n) => n !== i);
-    onPaletteChange();
+  /** A committed edit: show it at once, then push it. */
+  function onPaletteChange(list: GradientStop[], amountPct: number): void {
+    stops = list;
+    paletteAmount.set(amountPct);
+    pushPalette(list, amountPct);
   }
 
   function clearPalette(): void {
     stops = [];
-    onPaletteChange();
+    paletteAmount.set(0);
+    pushPalette([], 0);
   }
 </script>
 
@@ -228,84 +206,30 @@
     <div class="field top">
       <span class="flabel">Palette</span>
       <div class="palette-edit">
-        <!-- the mockup's `.gradbar`: the ramp itself, with nothing written on
-             it — what it holds is said in the line under the controls -->
-        <div
-          class="palette-preview"
-          data-role="out-palette-preview"
-          style="background: {paletteCss(stops)}"
-        ></div>
-        {#each stops as stop, i (i)}
-          <div class="palette-stop">
-            <input
-              type="color"
-              data-role="out-palette-color"
-              bind:value={stop.hex}
-              on:change={onPaletteChange}
-            />
-            <input
-              class="inp num"
-              type="number"
-              data-role="out-palette-pos"
-              min="0"
-              max="255"
-              bind:value={stop.pos}
-              on:change={onPaletteChange}
-            />
-            <button
-              data-role="out-palette-remove"
-              title="remove this stop"
-              on:click={() => removePaletteStop(i)}>remove</button
-            >
-          </div>
-        {/each}
-        <div class="palette-stop">
-          <!-- The ONE deliberate §5.7 exception: a budget the user has to
-               learn. It stays disabled AT the cap and carries `data-reason`,
-               with the same words on screen under the row (Gitea #529). -->
-          {#if stops.length >= MAX_PALETTE_STOPS}
-            <button
-              data-role="out-palette-add"
-              disabled
-              data-reason="all {MAX_PALETTE_STOPS} palette stops are used"
-              >add stop</button
-            >
-          {:else}
-            <button data-role="out-palette-add" on:click={addPaletteStop}>add stop</button>
-          {/if}
-          <!-- nothing to clear with no stops → absent, never disabled -->
-          {#if stops.length > 0}
-            <button data-role="out-palette-clear" on:click={clearPalette}>clear</button>
-          {/if}
-          <label class="dim">
-            amount
-            <input
-              class="inp num"
-              type="number"
-              data-role="out-palette-amount"
-              min="0"
-              max="100"
-              step="5"
-              bind:value={$paletteAmount}
-              on:change={onPaletteChange}
-            />
-            %
-          </label>
-        </div>
-        {#if stops.length >= MAX_PALETTE_STOPS}
-          <span class="dim" data-role="out-palette-cap">
-            all {MAX_PALETTE_STOPS} stops are used — remove one to add another
-          </span>
-        {/if}
+        <!-- ONE gradient editor, shared with the scene layer's colour ramp
+             (Gitea #734). The bar is the engine's own 256-entry table, the
+             stops drag, and the colour opens the app's `ColorPicker` — this
+             card's hand-rolled copy, its CSS gradient and its native
+             `<input type="color">` are all gone. -->
+        <GradientEditor
+          {stops}
+          amount={$paletteAmount}
+          role="out-palette"
+          previewRole="out-palette-preview"
+          minStops={0}
+          label="device output palette"
+          summary="applied on top of the pattern's own palette"
+          emptyLabel="no device palette"
+          on:input={(e) => {
+            stops = e.detail.stops;
+            paletteAmount.set(e.detail.amount);
+          }}
+          on:change={(e) => onPaletteChange(e.detail.stops, e.detail.amount)}
+          on:clear={clearPalette}
+        />
         {#if $notes.palette}
           <span class="dim hint" data-role="out-palette-note">{$notes.palette}</span>
         {/if}
-        <span class="dim hint" data-role="out-palette-summary">
-          {stops.length === 0
-            ? "no device palette"
-            : `${stops.length} stop${stops.length === 1 ? "" : "s"}`} · applied on top of the
-          pattern's own palette
-        </span>
       </div>
     </div>
   {/if}

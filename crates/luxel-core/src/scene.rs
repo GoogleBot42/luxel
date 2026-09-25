@@ -27,7 +27,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::jsonview::{json_escape, push_i32, push_u32};
+use crate::jsonview::{push_escaped, push_i32, push_piece, push_u32, Sink};
 use crate::projection::ProjectionMode;
 use crate::text::{ClockFmt, Font};
 
@@ -469,12 +469,15 @@ fn parse_rgb(s: &str) -> Option<[u8; 3]> {
     Some([h(0)?, h(2)?, h(4)?])
 }
 
-fn push_rgb(out: &mut String, c: [u8; 3]) {
-    for v in c {
-        const HEX: &[u8; 16] = b"0123456789abcdef";
-        out.push(HEX[(v >> 4) as usize] as char);
-        out.push(HEX[(v & 15) as usize] as char);
+fn push_rgb(out: &mut dyn Sink, c: [u8; 3]) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut buf = [0u8; 6];
+    for (i, v) in c.iter().enumerate() {
+        buf[i * 2] = HEX[(v >> 4) as usize];
+        buf[i * 2 + 1] = HEX[(v & 15) as usize];
     }
+    // ASCII hex by construction; the fallback keeps this `unsafe`-free
+    push_piece(out, core::str::from_utf8(&buf).unwrap_or(""));
 }
 
 /// Parse one scene block. Line numbers in error messages are 1-based
@@ -911,149 +914,210 @@ pub fn serialize(s: &Scene, out: &mut String) {
 // ---- JSON (the `/api/scenes` shape) ----
 
 /// `"key":"escaped value"`.
-fn push_str_field(out: &mut String, key: &str, v: &str) {
-    out.push('"');
-    out.push_str(key);
-    out.push_str("\":\"");
-    out.push_str(&json_escape(v));
-    out.push('"');
+fn push_str_field(out: &mut dyn Sink, key: &str, v: &str) {
+    push_piece(out, "\"");
+    push_piece(out, key);
+    push_piece(out, "\":\"");
+    push_escaped(out, v);
+    push_piece(out, "\"");
+}
+
+/// Widest `Fx::dec_str` output: sign, five integer digits, the point and
+/// sixteen fraction digits (`-0.0000152587890625`).
+const FX_DEC_MAX: usize = 23;
+
+/// Every FIXED byte [`push_json`] writes for one layer object: the keys, the
+/// widest spelling of each enum, the widest decimal each number can take,
+/// and the comma that separates the layer from the one before it. The layer
+/// name and the body are the variable parts and are added on top.
+const LAYER_FIXED: usize = 240;
+
+/// The scene object around its layers — `{"id":"…","name":"…","layers":[]}`
+/// with both strings empty.
+const SCENE_FIXED: usize = 40;
+
+/// An UPPER bound on the bytes [`push_json`] appends for `s`, computed
+/// without building anything.
+///
+/// This is what lets `GET /api/scenes` be ONE fallible reservation instead
+/// of a `String` that doubles its way to a few KB — which, on a board
+/// holding a scene at its pattern-layer cap, is an allocator panic on a
+/// read-only poll (Gitea #728). The host test `push_json_never_outgrows_its_bound`
+/// is what holds it: raise the constants if it ever fails, never relax the
+/// test.
+pub fn json_bound(s: &Scene) -> usize {
+    let esc = crate::jsonview::json_escape_len;
+    let mut n = SCENE_FIXED + esc(&s.id) + esc(&s.name);
+    for l in &s.layers {
+        n += LAYER_FIXED + esc(&l.name);
+        n += match &l.body {
+            LayerBody::Pattern(p) => {
+                // `,"pat":{"id":"…","controls":{…}}` plus the optional
+                // projection and ramp
+                let mut b = 40 + esc(&p.id);
+                for (name, raw) in &p.controls {
+                    b += esc(name) + 6 + raw.len() * (FX_DEC_MAX + 1);
+                }
+                if p.proj.is_some() {
+                    b += 20;
+                }
+                if let Some(r) = &p.ramp {
+                    b += 32 + r.stops.len() * 16;
+                }
+                b
+            }
+            // the widest `source` arm is `clock`; a `lit` one adds its text
+            LayerBody::Text(t) => {
+                132 + match &t.source {
+                    TextSource::Lit(v) => esc(v),
+                    _ => 0,
+                }
+            }
+            LayerBody::Sprite { id } => 24 + esc(id),
+            LayerBody::Color(_) => 20,
+        };
+    }
+    n
 }
 
 /// One scene as the JSON object `GET /api/scenes` carries. Control values
 /// are decimal, like the playlist's.
-pub fn push_json(s: &Scene, out: &mut String) {
-    out.push_str("{\"id\":\"");
-    out.push_str(&json_escape(&s.id));
-    out.push_str("\",");
+///
+/// Never writes more than [`json_bound`] says, so a caller that reserved
+/// that much cannot make this reallocate.
+pub fn push_json(s: &Scene, out: &mut dyn Sink) {
+    push_piece(out, "{\"id\":\"");
+    push_escaped(out, &s.id);
+    push_piece(out, "\",");
     push_str_field(out, "name", &s.name);
-    out.push_str(",\"layers\":[");
+    push_piece(out, ",\"layers\":[");
     for (i, l) in s.layers.iter().enumerate() {
         if i > 0 {
-            out.push(',');
+            push_piece(out, ",");
         }
         let st = &l.style;
-        out.push_str("{\"type\":\"");
-        out.push_str(l.kind().as_str());
-        out.push_str("\",");
+        push_piece(out, "{\"type\":\"");
+        push_piece(out, l.kind().as_str());
+        push_piece(out, "\",");
         push_str_field(out, "name", &l.name);
-        out.push_str(",\"x\":");
+        push_piece(out, ",\"x\":");
         push_i32(out, st.rect.x as i32);
-        out.push_str(",\"y\":");
+        push_piece(out, ",\"y\":");
         push_i32(out, st.rect.y as i32);
-        out.push_str(",\"w\":");
+        push_piece(out, ",\"w\":");
         push_u32(out, st.rect.w as u32);
-        out.push_str(",\"h\":");
+        push_piece(out, ",\"h\":");
         push_u32(out, st.rect.h as u32);
-        out.push_str(",\"blend\":\"");
-        out.push_str(st.blend.as_str());
-        out.push_str("\",\"opacity\":");
+        push_piece(out, ",\"blend\":\"");
+        push_piece(out, st.blend.as_str());
+        push_piece(out, "\",\"opacity\":");
         push_u32(out, st.opacity as u32);
-        out.push_str(",\"key\":\"");
-        out.push_str(st.key.as_str());
-        out.push_str("\",\"fit\":\"");
-        out.push_str(st.fit.as_str());
-        out.push_str("\",\"visible\":");
+        push_piece(out, ",\"key\":\"");
+        push_piece(out, st.key.as_str());
+        push_piece(out, "\",\"fit\":\"");
+        push_piece(out, st.fit.as_str());
+        push_piece(out, "\",\"visible\":");
         push_bool(out, st.visible);
-        out.push_str(",\"flipx\":");
+        push_piece(out, ",\"flipx\":");
         push_bool(out, st.flipx);
-        out.push_str(",\"flipy\":");
+        push_piece(out, ",\"flipy\":");
         push_bool(out, st.flipy);
-        out.push_str(",\"rot180\":");
+        push_piece(out, ",\"rot180\":");
         push_bool(out, st.rot180);
         match &l.body {
             LayerBody::Pattern(p) => {
-                out.push_str(",\"pat\":{");
+                push_piece(out, ",\"pat\":{");
                 push_str_field(out, "id", &p.id);
-                out.push_str(",\"controls\":{");
+                push_piece(out, ",\"controls\":{");
                 for (ci, (name, raw)) in p.controls.iter().enumerate() {
                     if ci > 0 {
-                        out.push(',');
+                        push_piece(out, ",");
                     }
-                    out.push('"');
-                    out.push_str(&json_escape(name));
-                    out.push_str("\":[");
+                    push_piece(out, "\"");
+                    push_escaped(out, name);
+                    push_piece(out, "\":[");
                     for (vi, &r) in raw.iter().enumerate() {
                         if vi > 0 {
-                            out.push(',');
+                            push_piece(out, ",");
                         }
                         // Fx's Display, not f64's — core's float formatter
                         // is ~8 KB of image the firmware must not link.
                         let mut b = [0u8; 24];
-                        out.push_str(crate::fixed::Fx::from_raw(r).dec_str(&mut b));
+                        push_piece(out, crate::fixed::Fx::from_raw(r).dec_str(&mut b));
                     }
-                    out.push(']');
+                    push_piece(out, "]");
                 }
-                out.push('}');
+                push_piece(out, "}");
                 if let Some(mode) = p.proj.and_then(ProjectionMode::from_u8) {
-                    out.push_str(",\"proj\":\"");
-                    out.push_str(mode.as_str());
-                    out.push('"');
+                    push_piece(out, ",\"proj\":\"");
+                    push_piece(out, mode.as_str());
+                    push_piece(out, "\"");
                 }
                 if let Some(r) = &p.ramp {
-                    out.push_str(",\"ramp\":{\"pct\":");
+                    push_piece(out, ",\"ramp\":{\"pct\":");
                     push_u32(out, r.pct as u32);
-                    out.push_str(",\"stops\":[");
+                    push_piece(out, ",\"stops\":[");
                     for (si, (pos, rgb)) in r.stops.iter().enumerate() {
                         if si > 0 {
-                            out.push(',');
+                            push_piece(out, ",");
                         }
-                        out.push('[');
+                        push_piece(out, "[");
                         push_u32(out, *pos as u32);
-                        out.push_str(",\"");
+                        push_piece(out, ",\"");
                         push_rgb(out, *rgb);
-                        out.push_str("\"]");
+                        push_piece(out, "\"]");
                     }
-                    out.push(']');
-                    out.push('}');
+                    push_piece(out, "]");
+                    push_piece(out, "}");
                 }
-                out.push('}');
+                push_piece(out, "}");
             }
             LayerBody::Text(t) => {
-                out.push_str(",\"text\":{\"source\":\"");
+                push_piece(out, ",\"text\":{\"source\":\"");
                 match &t.source {
                     TextSource::Lit(v) => {
-                        out.push_str("lit\",");
+                        push_piece(out, "lit\",");
                         push_str_field(out, "text", v);
                     }
                     TextSource::Clock(f) => {
-                        out.push_str("clock\",");
+                        push_piece(out, "clock\",");
                         push_str_field(out, "fmt", f.as_str());
                     }
                     TextSource::Slot(k) => {
-                        out.push_str("slot\",\"slot\":");
+                        push_piece(out, "slot\",\"slot\":");
                         push_u32(out, *k as u32);
                     }
                 }
-                out.push_str(",\"font\":\"");
-                out.push_str(t.font.as_str());
-                out.push_str("\",\"color\":\"");
+                push_piece(out, ",\"font\":\"");
+                push_piece(out, t.font.as_str());
+                push_piece(out, "\",\"color\":\"");
                 push_rgb(out, t.color);
-                out.push_str("\",\"align\":\"");
-                out.push_str(t.align.as_str());
-                out.push_str("\",\"scroll\":\"");
-                out.push_str(t.scroll.as_str());
-                out.push_str("\",\"speed\":");
+                push_piece(out, "\",\"align\":\"");
+                push_piece(out, t.align.as_str());
+                push_piece(out, "\",\"scroll\":\"");
+                push_piece(out, t.scroll.as_str());
+                push_piece(out, "\",\"speed\":");
                 push_u32(out, t.speed as u32);
-                out.push('}');
+                push_piece(out, "}");
             }
             LayerBody::Sprite { id } => {
-                out.push_str(",\"sprite\":{");
+                push_piece(out, ",\"sprite\":{");
                 push_str_field(out, "id", id);
-                out.push('}');
+                push_piece(out, "}");
             }
             LayerBody::Color(c) => {
-                out.push_str(",\"color\":\"");
+                push_piece(out, ",\"color\":\"");
                 push_rgb(out, *c);
-                out.push('"');
+                push_piece(out, "\"");
             }
         }
-        out.push('}');
+        push_piece(out, "}");
     }
-    out.push_str("]}");
+    push_piece(out, "]}");
 }
 
-fn push_bool(out: &mut String, v: bool) {
-    out.push_str(if v { "true" } else { "false" });
+fn push_bool(out: &mut dyn Sink, v: bool) {
+    push_piece(out, if v { "true" } else { "false" });
 }
 
 #[cfg(test)]
@@ -1325,6 +1389,101 @@ mod tests {
                 "\"flipy\":false,\"rot180\":false,\"color\":\"ff8800\"}]}"
             )
         );
+    }
+
+    // ---- the fallible response reservation (Gitea #728) ----
+
+    /// Wire bodies that between them exercise every layer kind, every
+    /// optional block and every widest-case value `push_json` can meet.
+    fn bound_fixtures() -> alloc::vec::Vec<String> {
+        alloc::vec![
+            // the smallest legal record
+            String::from("S 0000000a\n"),
+            // names at their ceilings, in bytes that ESCAPE
+            String::from(concat!(
+                "S 0000000a \"\\\t0123456789012345678901234567890123456789012345\n",
+                "L color 0 0 0 0 normal 100 none fill 1\n",
+                "N \"\\\t0123456789012345678901234\n",
+                "K ff8800\n",
+            )),
+            // every layer kind at once, with the widest enum spellings
+            String::from(concat!(
+                "S 0000000a every kind\n",
+                "L pat -32768 -32768 65535 65535 multiply 100 black contain 15\n",
+                "N Base\n",
+                "I 0123abcd\n",
+                "C sliderSpeedOfTheThing 1 -1 65536 2147483647 -2147483648\n",
+                "C hue -1\n",
+                "P xy\n",
+                "R 100 0:000000 128:ff0000 255:ffffff\n",
+                "L text 0 0 0 0 lighten 100 luma tile 15\n",
+                "N Ticker\n",
+                "T clock YYYY-MM-DD\n",
+                "F regular ffffff c bounce 65535\n",
+                "L text 0 0 0 0 normal 100 none fill 1\n",
+                "T lit HELLO \"WORLD\" \u{1f680}\n",
+                "L sprite 0 0 0 0 add 50 black fill 1\n",
+                "I 0123abce\n",
+                "L color 0 0 0 0 mask 0 luma tile 0\n",
+                "K ff8800\n",
+            )),
+            // a ramp at the stop cap, which is the widest optional block
+            {
+                let mut b = String::from("S 0000000a ramped\nL pat 0 0 0 0 normal 100 none fill 1\nI 0123abcd\nR 100");
+                for i in 0..MAX_RAMP_STOPS {
+                    b.push(' ');
+                    push_u32(&mut b, (i * 255 / (MAX_RAMP_STOPS - 1)) as u32);
+                    b.push_str(":ff8800");
+                }
+                b.push('\n');
+                b
+            },
+        ]
+    }
+
+    /// [`json_bound`] must never be smaller than what [`push_json`] writes.
+    /// If this fails, `GET /api/scenes` is one `String` doubling away from
+    /// an allocator panic on a device again — raise the constants at the top
+    /// of the JSON section, do NOT relax the test.
+    #[test]
+    fn push_json_never_outgrows_its_bound() {
+        for wire in bound_fixtures() {
+            let s = parse(&wire).expect(&wire);
+            let mut out = String::new();
+            push_json(&s, &mut out);
+            let bound = json_bound(&s);
+            assert!(
+                out.len() <= bound,
+                "{} B written, bound {}: {wire}",
+                out.len(),
+                bound
+            );
+            // and it must stay a USEFUL bound: a reservation far larger than
+            // the body is a refusal the device did not have to make
+            assert!(
+                bound <= out.len() * 2 + 256,
+                "bound {} is loose for a {} B body: {wire}",
+                bound,
+                out.len()
+            );
+        }
+    }
+
+    /// The property the bound exists for: a body reserved from it is ONE
+    /// allocation, start to finish.
+    #[test]
+    fn a_bound_reservation_never_reallocates() {
+        for wire in bound_fixtures() {
+            let s = parse(&wire).expect(&wire);
+            let mut out = crate::jsonview::try_body(json_bound(&s)).expect("host heap");
+            let cap = out.capacity();
+            push_json(&s, &mut out);
+            assert_eq!(out.capacity(), cap, "push_json grew its reservation: {wire}");
+            // and the bytes are the same ones an unreserved build produces
+            let mut plain = String::new();
+            push_json(&s, &mut plain);
+            assert_eq!(out, plain);
+        }
     }
 
     #[test]

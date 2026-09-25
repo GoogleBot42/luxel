@@ -22,6 +22,7 @@
   // explanation; Jeremy asked for no prose about the rule.
   import { createEventDispatcher } from "svelte";
   import AddToSceneMenu from "../components/AddToSceneMenu.svelte";
+  import AsyncButton from "../components/AsyncButton.svelte";
   import Gallery, { type GalleryItem } from "../components/Gallery.svelte";
   import Popover from "../components/Popover.svelte";
   import { withPatternOnTop } from "../lib/scene";
@@ -57,6 +58,15 @@
    *  regular 2D console, or the playground). `Add to scene ▸` is ABSENT
    *  without it, never disabled (§5.7, mock S2e). */
   export let scenesReady = false;
+  /**
+   * Put a stored pattern on the LEDs, and tell us WHEN — a prop rather than
+   * the `playDevice` event the tile face still dispatches, because a fired
+   * event has no completion to wait on and the tile's `▶ Play` is a 2–4 s
+   * round trip (fetch the source, recompile, activate) that showed nothing at
+   * all in the meantime (Gitea #738). The editor's own `pattern-loading`
+   * cover is no help here: this page is on screen, so that view is `hidden`.
+   */
+  export let playDevice: (id: string) => Promise<boolean> = async () => false;
 
   const dispatch = createEventDispatcher<{
     /** open a library/corpus pattern in the editor */
@@ -426,11 +436,18 @@
                    (Jeremy) — but its Edit and ⋯ stay, or the running pattern
                    would be the one thing on the page you cannot open (#555). -->
               {#if !dead && !playing}
-                <button
-                  class="btn sm"
-                  data-role="tile-play"
-                  on:click|stopPropagation={() => dispatch("playDevice", item.key)}>▶ Play</button
-                >
+                <!-- `stopPropagation`, not a wrapper element: `.actions` is a
+                     flex row whose `pointer-events` are re-enabled per `.btn`
+                     (Gallery), and a wrapper span would become the flex item
+                     and eat both. -->
+                <AsyncButton
+                  cls="btn sm"
+                  dataRole="tile-play"
+                  label="▶ Play"
+                  doneLabel="▶ Playing"
+                  stopPropagation
+                  action={() => playDevice(item.key)}
+                />
               {/if}
               <button
                 class="btn sm"
@@ -877,21 +894,7 @@
     cursor: pointer;
   }
 
-  .spinner {
-    display: inline-block;
-    width: 12px;
-    height: 12px;
-    border: 2px solid color-mix(in srgb, var(--text-dim) 40%, transparent);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: pat-spin 0.7s linear infinite;
-  }
-
-  @keyframes pat-spin {
-    to {
-      transform: rotate(1turn);
-    }
-  }
+  /* `.spinner` is shared chrome (app.css, Gitea #738). */
 
   /* S1c: the page bar becomes TWO rows — the segment full width, then the
      search and the `+` icon sharing the line below it. */

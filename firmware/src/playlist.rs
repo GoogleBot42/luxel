@@ -32,7 +32,7 @@ use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Timer};
 use esp_println::println;
 use luxel_core::fixed::Fx;
-use luxel_core::jsonview::{json_escape, push_i32, push_piece, push_u32};
+use luxel_core::jsonview::{push_escaped, push_i32, push_piece, push_u32, Chunks};
 use luxel_core::projection::ProjectionMode;
 
 use crate::patterns;
@@ -217,10 +217,13 @@ fn parse(body: &str) -> Playlist {
 }
 
 /// `GET /api/playlist` body — names resolved from the pattern library.
-pub fn to_json() -> String {
+pub fn to_json() -> Chunks {
     PLAYLIST.lock(|c| {
         let pl = c.borrow();
-        let mut out = String::new();
+        // Segmented (Gitea #753): an item carries a name, its controls and
+        // a preflight message, so a long playlist is a multi-KB body — and
+        // this route is polled. ~160 B per item sizes the segment index.
+        let mut out = Chunks::with_hint(96 + pl.items.len() * 160);
         push_piece(&mut out, "{\"defaultSec\":");
         push_i32(&mut out, pl.default_sec);
         push_piece(&mut out, ",\"crossfadeMs\":");
@@ -245,7 +248,7 @@ pub fn to_json() -> String {
                 push_piece(&mut out, "{\"kind\":\"scene\",\"id\":\"");
                 push_piece(&mut out, &it.pattern_id);
                 push_piece(&mut out, "\",\"name\":\"");
-                push_piece(&mut out, &json_escape(&name));
+                push_escaped(&mut out, &name);
                 push_piece(&mut out, "\",\"layers\":");
                 push_u32(
                     &mut out,
@@ -263,7 +266,7 @@ pub fn to_json() -> String {
             push_piece(&mut out, "{\"kind\":\"pattern\",\"id\":\"");
             push_piece(&mut out, &it.pattern_id);
             push_piece(&mut out, "\",\"name\":\"");
-            push_piece(&mut out, &json_escape(&name));
+            push_escaped(&mut out, &name);
             push_piece(&mut out, "\",\"sec\":");
             match it.override_sec {
                 Some(s) => push_i32(&mut out, s),
@@ -275,7 +278,7 @@ pub fn to_json() -> String {
                     push_piece(&mut out, ",");
                 }
                 push_piece(&mut out, "\"");
-                push_piece(&mut out, &json_escape(n));
+                push_escaped(&mut out, n);
                 push_piece(&mut out, "\":[");
                 // Fx's Display, not f64's: `r as f64 / 65536.0` was the
                 // last user of core's ~8 KB flt2dec printing machinery
@@ -299,7 +302,7 @@ pub fn to_json() -> String {
             // CURRENT config (absent = fine / still checking)
             if let Some(m) = preflight_violation(&it.pattern_id) {
                 push_piece(&mut out, ",\"invalid\":\"");
-                push_piece(&mut out, &json_escape(&m));
+                push_escaped(&mut out, &m);
                 push_piece(&mut out, "\"");
             }
             push_piece(&mut out, "}");

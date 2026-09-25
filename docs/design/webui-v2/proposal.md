@@ -5,10 +5,44 @@ shipped 2026-09-19**; Phases B and C are not started. Decision points are
 numbered **D1…D12** and collected at the end. The shipped web structure is documented in
 `docs/web-architecture.md`, the wire in `docs/api.md`.
 
+> **Read the amendments first.** Several decisions in the body below were reversed or
+> superseded on **2026-09-24/25**, after Jeremy reviewed the shipped Phase A/B/C work and
+> filed a 45-item batch (Gitea epic **#729**). They are listed in §0a and each is marked
+> where it occurs.
+
 Inputs: 42 screenshots of the current UI, a code audit of `web/src` (4052-line App.svelte),
 a survey of the engine/firmware constraints, and a comparative study of PatternFlow, OBS,
 WLED 2D, Pixel Blaze and LED-matrix fonts. All four live in the session scratchpad and are
 summarized where they matter.
+
+---
+
+## 0a. Amendments (2026-09-24/25) — what this document no longer says
+
+The proposal was **approved 2026-09-18** and Phases A, B and C shipped. On **2026-09-24**
+Jeremy reviewed the shipped UI and filed a 45-item batch — Gitea epic **#729**, children
+**#730–#747** and **#751–#755**. Some of it reverses decisions made here. In this project the
+mockups are the visual spec, so where the app deliberately departs from a frame, **the frame is
+what was corrected** (`docs/design/webui-v2/mockups.html`, amended in place with the reason);
+this section is the index so a reader of the approved proposal is not misled by the body.
+
+| # | What changed | Was | Now | Ticket |
+|---|---|---|---|---|
+| **A1** | The **frame-cost line and its budget meter are deleted** from the scene editor. | §5.5's header diagram and mocks S7/S7c/S7d/S7e drew `Frame cost: 2 pattern layers · …` over a meter, on every scene at all times. | Nothing under the preview. The sentence survives once, reworded, as the at-the-cap explanation in the `+ Add layer` menu: *"luxel devices only support N pattern layers; text and sprite and color layers are free"* (was *"this device fits 2 pattern layers; …"*). | #736 items 24, 18 |
+| **A2** | **"top = front" and "base" are drawn, not written.** | The Layers column header carried the words `top = front`; the bottom row's metadata column carried the word `base`. | An SVG stack-order mark in the header (the stack seen edge-on, front plate lit) and a hatched ground rule under the bottom row. The words survive as tooltips and accessible names. Jeremy: *"this is a sign that visual UI indicators are needed. Not text descriptions which are easily confused."* | #736 item 17 |
+| **A3** | The **preview transport moved to the editor header bar**, on *both* editors, as a labelled SVG button. | A 26 px `.btn.sm.icon` in the preview section's header carrying the text glyph `‖`. | `.btn.transport` beside the save state: an SVG mark plus `Pause`/`Resume`, accent-outlined while paused; at 390 px it keeps its place and drops the word. The preview header keeps the frame-rate chooser. Jeremy: *"the pause button doesn't look like a pause button at all… They are also very poorly placed and colored. I didn't even know that was an option… Maybe the header bar."* | #739, #736 item 26 |
+| **A4** | **The `+ Add layer` chevron is gone and the layer-type marks are drawings.** | `+ Add layer ▾`, and `▤ ▦ ▭ T` as single glyphs. | `+ Add layer` (`aria-haspopup`/`aria-expanded` already said it); a travelling wave, a 2×2 pixel block and a filled swatch as inline SVG, drawn by one component the menu and the rows share. **`T` stays a letter** — Jeremy likes that one. | #736 items 21–23 |
+| **A5** | **The Save button carries its own state**, and the header's save-state span carries only what the button cannot. | A persistent `saved · on device` line beside a stateless `Save`. | `Save` → spinner → `Saved` for a second → a dirty-aware label; the span renders `preview only` (pattern editor) or `in browser` (playground scene) and the **full contract string moved to the `data-save-state` attribute** (`docs/web-architecture.md`). | #738, #742 item 42 |
+| **A6** | **A pattern layer has no Fit control**; Fit belongs to the sprite inspector. | §5.5 listed `box/fit` in the pattern inspector and S7b/S7g drew a Fit `<select>`. | `style.fit` is read in exactly ONE place in the codebase — `crates/luxel-core/src/compose.rs:532`, inside `blit_sprite` — so on a pattern layer the box merely CLIPS a full-layout render and `fit` does nothing (`docs/spec/scenes.md` already said "`fit` is otherwise ignored"). The row is a line saying what the box really is. The chooser moved to the sprite inspector with the two behaviours that exist, **Once** (`fill`) and **Tile** (`tile`); `contain` is a synonym for `fill` on every code path. Blend and Transparent became icon+description pickers. | #735 |
+| **A7** | **§5.5b's storage decision is REVERSED: a sprite is a first-class record, not a sprite-tagged pattern.** | "Storage = a sprite-tagged pattern in the existing pattern store… No new record type." | Its own store, id namespace and `/api/sprites` routes; its own **Sprites tab**, which the scene editor invokes; no `Engine` per sprite layer. Jeremy, 2026-09-24: *"It seems that Sprites are actually patterns? Interesting idea but I don't like it. It is confusing and may allow cheating and running more patterns than are allowed. Sprites should be a first class type. Make a new Sprite tab. That's where the sprite editor will be based out of (which the scene edit page can directly invoke)."* | #740 |
+| **A8** | The playground's **"Preview as" footer copy**. | "Every preview and tile on this page uses this layout. On a device it is the device's own." | "Every preview and tile on this playground will use this layout. When controlling a luxel device it is the device's layout." | #742 item 43 |
+| **A9** | **§5.5b's sprite *editor* is superseded, not amended.** | The tool row, recents, frames strip and 16-colour palette described in §5.5b. | #741 is a full redesign and has not happened; §5.5b's description is the shipped state, not the target. See §5.5b for the confirmed defects. | #741 |
+
+Not amendments, but filed against the same review and worth knowing while reading §5.5: the
+full-frame scene *driver* is written twice (`firmware/src/scenes.rs` and
+`web/src/lib/sceneRender.ts`) and that is the real impurity behind "the engine is cheating"
+(#732); the colour-ramp editor needs a redesign (#734); and scene export/import is a follow-up
+(#746).
 
 ---
 
@@ -85,12 +119,15 @@ Scene                ← matrix only. Ordered stack, bottom → top.
 └── Layer[]
     type: pattern | text | sprite | color        (image-from-file = future ticket)
     common: name, visible, opacity 0–100, blend (normal|add|lighten|multiply|mask),
-            box {x, y, w, h} in pixels, fit (fill|contain|tile), flip, rotate 90°
+            box {x, y, w, h} in pixels, fit (fill|tile — SPRITE LAYERS ONLY, A6),
+            flip, rotate 90°
     pattern: pattern id + control values, key: none | black-transparent | luma-alpha
     text:    text (literal | clock | text slot n), font, color, align, scroll, speed
-    sprite:  a sprite-tagged PATTERN in the pattern store (palette ≤16 colours, w×h ≤ 64×64,
-             frames ≥1); drawn with the cursor on the scene preview; blitted natively by the
-             compositor (no engine, no pattern-layer slot); always black-keyed
+    sprite:  a FIRST-CLASS sprite record — own store, own ids, /api/sprites (REVERSED
+             2026-09-24, A7: it was "a sprite-tagged PATTERN in the pattern store").
+             Palette ≤16 colours, w×h ≤ 64×64, frames ≥1; drawn with the cursor on the
+             scene preview; blitted natively by the compositor (no pattern-layer slot,
+             and after #740 no engine either); always black-keyed
     color:   solid color (a wash / a bar)
 
 Playlist             ← items are Pattern (+values) OR Scene; duration; crossfade
@@ -106,8 +143,11 @@ Two engine facts shape the product (engine survey §1–3, §8):
   free, and there can be several.
 
 So the product rule is honest and simple: **a scene has up to 2 pattern layers and any number
-of text / image / color layers** (per-board; strips never see scenes). The UI states the
-per-layer frame cost live (fps readout) instead of pretending layers are free.
+of text / image / color layers** (per-board; strips never see scenes). The UI states the cost
+where it bites — the `+ Add layer` menu at the cap — rather than on every scene at all times
+(amended 2026-09-24, A1 below; the always-on cost line and its meter are deleted). A sprite
+layer is "free" only of the *layer cap*: today it still holds a resident `Engine`, which is
+half of why #740 makes a sprite a first-class record.
 
 ### Feature visibility by Layout kind
 
@@ -155,6 +195,9 @@ Header:  luxel  ● luxel-f6b0a8 · 64×64 matrix      Patterns  Scenes  Playlis
   (Playground: `Library` | `Mine`.)
 - **Scenes** (matrix only) — list of saved scenes with composite thumbnails; "+ New scene".
   Opens the Scene editor.
+- **Sprites** (matrix only) — *added 2026-09-24 by #740 (A7), not in the approved IA.* Sprites
+  are a first-class record, so they get their own tab and their own editor, which the scene
+  editor invokes for a sprite layer. They no longer appear in the pattern library.
 - **Playlist** — as today, items are patterns or scenes, thumbnails in device shape, values
   collapsed behind a chip.
 - **Settings** — basics first, Advanced disclosure below (§5.3).
@@ -196,14 +239,19 @@ screen's single primary action.
 - Mobile: 2 columns, tap = play, `Edit` link under the name.
 
 ### 5.2 Editor (S2, S2b)
-- Header: `← Patterns` · inline-editable name · `saved · on device` · **Save** (primary) · ⋯
-  (Add to playlist, Duplicate, Export .epe, Import .epe…, Delete; Share in playground).
+- Header: `← Patterns` · inline-editable name · save state · **transport** · **Save** (primary)
+  · ⋯ (Add to playlist, Duplicate, Export .epe, Import .epe…, Delete; Share in playground).
+  *Amended 2026-09-24:* the save-state slot no longer reads `saved · on device` — the Save
+  button carries that itself and the slot prints only `preview only` (A5, #738); and the
+  transport moved here from the preview panel (A3, #739).
 - Code pane owns its errors: gutter dot + wavy underline + a one-line status strip pinned to the
   bottom of the code pane (`✗ line 14 · unknown identifier "nosie"`). No banners in the rail
   for compile errors.
-- Right rail: **Preview** (header = label + `64×64 · 27 fps on device` + icon transport:
-  play/pause · fps ▾ · mic · debug) → capacity line (existing idiom) → **Controls** → **Vars**
+- Right rail: **Preview** (header = label + `64×64 · 27 fps on device` + fps ▾ · mic · debug)
+  → capacity line (existing idiom) → **Controls** → **Vars**
   (collapsed). No layout dropdown, no pixel field, no sub-tabs, no install buttons.
+  *Amended 2026-09-24:* the play/pause transport is NOT in this header any more — it is a
+  labelled SVG button in the header bar, on both editors (A3, #739).
 - Matrix consoles: the editor's autocomplete/docs include the text builtins; strips don't.
 - Mobile: rail stacks above code; code is read-mostly.
 
@@ -361,31 +409,42 @@ configurable. So:
 
 ### 5.5 Scene editor (S6 — batch 2)
 ```
-← Scenes   [Clock overlay]   saved · on device            Play on device ▶   Save   ⋯
+← Scenes  [Clock overlay]  [‖ Pause]                             Saved   ⋯
 ┌───────────────────────────┬──────────────────────────────────┬──────────────────────┐
-│ LAYERS (top = front)      │  PREVIEW  64×64 · 24 fps         │ INSPECTOR             │
+│ LAYERS                 ◹  │  PREVIEW  64×64 · 24 fps  [60 ▾] │ INSPECTOR             │
 │ ⠿ 👁 T  Time   "12:48"    │  ┌────────────────────────────┐  │ Text layer            │
-│ ⠿ 👁 ▤  Aurora 2D  60 %   │  │                            │  │ Text  [12:48      ]   │
-│ ⠿ 👁 ▤  Rainbow  (base)   │  │   (composite, live)        │  │ Source ○ fixed        │
-│                           │  │   selected layer's box     │  │        ● clock HH:MM  │
-│ + Add layer ▾             │  │   outlined & draggable     │  │        ○ from API/HA  │
-│   Pattern · Text · Image  │  └────────────────────────────┘  │ Font  [5×7 ▾]         │
-│   · Color                 │  fps cost: 2 pattern layers      │ Color [■]  Align [⋮]  │
+│ ⠿ 👁 ∿  Aurora 2D  60 %   │  │                            │  │ Text  [12:48      ]   │
+│ ⠿ 👁 ∿  Rainbow           │  │   (composite, live)        │  │ Source ○ fixed        │
+│ ▨▨▨▨▨▨▨▨▨▨▨▨▨▨▨▨▨▨▨▨▨▨▨▨▨ │  │   selected layer's box     │  │        ● clock HH:MM  │
+│ + Add layer               │  │   outlined & draggable     │  │        ○ from API/HA  │
+│   Pattern · Text          │  └────────────────────────────┘  │ Font  [5×7 ▾]         │
+│   · Sprite · Color        │                                  │ Color [■]  Align [⋮]  │
 │                           │                                  │ Box  x 0 y 28 w 64 h 8│
 │                           │                                  │ Scroll [none ▾]       │
 │                           │                                  │ Blend [normal ▾] 100 %│
 └───────────────────────────┴──────────────────────────────────┴──────────────────────┘
 ```
+> **Amended 2026-09-24/25** (A1–A5): the header diagram above has been corrected to the
+> shipped chrome. Gone: the `fps cost: 2 pattern layers` line and the meter under it (A1), the
+> words `top = front` and `(base)` — now the `◹` stack mark and the `▨` ground rule (A2), the
+> `▾` on *Add layer* and the `▤` type glyphs (A4), and the standing `saved · on device` line,
+> which the Save button's own `Save`/`Saved` label replaced (A5). Added: the transport, which
+> now lives in the header (A3), and the preview's frame-rate chooser. `Play on device ▶` was
+> already in the ⋯ menu rather than the bar.
 - The layer list is the OBS/Photoshop idiom: drag to reorder, eye to hide, click to select.
-  "Add layer" is the only primary in the left column; adding a second pattern layer when the
-  board can't afford it shows why ("this device fits 2 pattern layers; text and image layers
-  are free").
+  Its two facts about *order* are drawn, not written (A2): the stack seen edge-on at the end of
+  the column header, and a hatched ground rule under the bottom row where the word `base` used
+  to sit in the metadata column. "Add layer" is the only primary in the left column; adding a
+  pattern layer the board can't afford shows why — **"luxel devices only support 2 pattern
+  layers; text and sprite and color layers are free"** (Jeremy's wording, #736 item 18; it was
+  "this device fits 2 pattern layers; …"). Since A1 deleted the standing cost line, this menu,
+  at the cap, is the only place that sentence is said.
 - The preview is the composite, always the device shape; the selected layer's box is outlined
   and draggable/resizable on the canvas (pixel-snapped). That is the one direct-manipulation
   affordance in the whole app, and it earns its place.
 - Inspector is per layer type. Pattern layer: pattern picker (device patterns, thumbnails) +
-  its controls + color ramp + box/fit + blend/transparency/opacity (S7b); Text layer as
-  drawn; Image layer: asset picker (future, not planned); Color.
+  its controls + color ramp + box + blend/transparency/opacity (S7b); Text layer as
+  drawn; Sprite layer (§5.5b); Color. *Image from file* is asset-gated (future, not planned).
 - **Compositing model (no alpha channel — frames are RGB888, 3 B/px):**
   - *Blend* = how a layer's counted pixels combine with what is beneath. Per pixel, B = what
     is beneath, L = the layer, α = opacity (scaled per pixel by luma under the "by
@@ -409,25 +468,111 @@ configurable. So:
     applied per layer after its own post-chain and before compositing. A white-on-black or
     single-hue pattern becomes any gradient without touching its code (PatternFlow's per-layer
     ramp). Cost: a 768 B LUT per layer + one lookup per pixel. Same stop editor as Settings →
-    Output → Palette.
+    Output → Palette. (The ramp *editor* is being redesigned — #734.)
+  - *Fit* — **amended 2026-09-24, A6.** `style.fit` is read in exactly ONE place in the whole
+    codebase: `crates/luxel-core/src/compose.rs:532`, `let tile = style.fit == Fit::Tile`,
+    inside `blit_sprite`. So:
+    **pattern layer** — `composite_frame` never looks at it; the box CLIPS a full-layout render
+    and the pattern still sees the whole grid (`docs/spec/scenes.md` §"Geometry" already says
+    "`fit` is otherwise ignored"). **Text layer** — ignored. **Sprite layer** — `fill` and
+    `contain` both place the sprite 1:1 at the box origin (`span_w = sw.min(bw)`); only `tile`
+    differs (`i.rem_euclid(sw)`, repeating across the box). `contain` is therefore a synonym
+    for `fill` on every code path that exists.
+    Jeremy asked "the box 'fit' type dropdown makes no sense. What does it do?" — and the
+    honest answer on a pattern layer was *nothing*, so giving a dead control nicer graphics
+    would have been lying with better art. The pattern inspector's Fit select is **removed**
+    and replaced by a line stating what the box actually is: the pattern always renders across
+    the whole layout and the box is the window onto the part you keep; nothing is scaled or
+    repeated. A pattern layer's `fit` is no longer written, so the wire round-trips unchanged.
+    The chooser **moved to the sprite inspector**, the one place it means something, offering
+    only **Once** (`fill`) and **Tile** (`tile`), with a stored `contain` folded onto Once.
+    The sprite inspector's old static line "1:1 · sprites are never scaled" is gone with it: it
+    was true about scaling and silent about tiling, which is the half that works. (That also
+    disposes of #729 item 29, "should 1:1 be an option?" — scaling does not exist, tiling does,
+    and the control now says so.)
+  - *How Blend and Transparent are PRESENTED* — **amended 2026-09-24, A6.** Both were bare
+    `<select>`s of jargon. Jeremy: "the Blend dropdown should be made user friendly. Most users
+    won't know what those mean: descriptions, and probably little SVG graphics for each
+    option." They are a shared rich picker now (`components/RichSelect.svelte` over `Popover`,
+    metadata in `web/src/lib/blendMeta.ts`): icon + name + one line of plain English per row,
+    the copy condensed from the two bullets above. All five blend icons are ONE `<svg>`
+    differing only by `mix-blend-mode`, so the icon is drawn with the same arithmetic the
+    firmware composites with (`plus-lighter` = Add, `lighten` = Lighten, `multiply` =
+    Multiply) and five modes cost one drawing. The hint line that used to sit under
+    Transparent — "nothing · black pixels · by brightness" — is deleted: it measured 221 px in
+    a 192 px cell and wrapped, which was the overflow Jeremy reported, and the menu spells all
+    three out anyway.
 - Mobile: three panes stack (preview sticky on top). Editing scenes on a phone is acceptable but
   not a design driver.
 
 ### 5.5b Sprite layer + pixel drawing (S7c; Jeremy, 2026-09-18)
+
+> ### ⚠ REVERSED 2026-09-24 — a sprite is a FIRST-CLASS record (Gitea #740)
+>
+> The storage decision below ("Storage = a sprite-tagged pattern … No new record type") was
+> **reversed by Jeremy on 2026-09-24**, in the #729 review:
+>
+> > "It seems that Sprites are actually patterns? Interesting idea but I don't like it. It is
+> > confusing and may allow cheating and running more patterns than are allowed. Sprites
+> > should be a first class type. Make a new Sprite tab. That's where the sprite editor will
+> > be based out of (which the scene edit page can directly invoke)."
+>
+> **The "cheating" worry is confirmed by the code**, differently from how it was worried
+> about. A sprite layer does not consume a `caps.layers` pattern slot
+> (`Runtime::pattern_layers`) — but it DOES hold a resident `Engine`:
+> `Slot::Sprite(Engine, String)`, `firmware/src/scenes.rs:265`, counted by
+> `Runtime::engines()`. It is built at `count = 1` pixel and carries only the tag line rather
+> than the whole source, so it is cheap — but it is an engine, and the "sprite layers are
+> free" claim (`docs/api.md`) is true only of the **layer cap**, never of heap or engines.
+> Sprites also appear in the Patterns library as if they were playable patterns.
+>
+> **The new direction (#740), in order:**
+> 1. A first-class sprite record — its own store, its own id namespace, its own
+>    `/api/sprites` routes, following the fallible blob idiom `scenestore.rs` gained in #727.
+> 2. The compositor reads texels straight from the sprite record — **no `Engine` per sprite
+>    layer at all**, which is what makes the budget honest.
+> 3. Migration: existing `// @sprite` patterns are converted on read and then removed from the
+>    pattern store. The store has a no-migration rule, so the plan is stated explicitly in the
+>    PR and the old tag stays readable for one release.
+> 4. Web: a **Sprites tab** beside Patterns and Scenes, a `stores/sprites.ts`, sprites out of
+>    the pattern library, and the scene editor's sprite layer picking from the sprite store.
+>
+> It is the largest single item in #729 — firmware, core, web and three docs — and lands on
+> its own, after the smaller scene fixes.
+
+> ### ⚠ SUPERSEDED 2026-09-24 — the sprite EDITOR is being redesigned (Gitea #741)
+>
+> The drawing and inspector bullets below describe what shipped, not what is wanted. Jeremy:
+> "the sprite draw tools are sad, have tiny confusing buttons, and are incredibly unintuitive.
+> The colour palette doesn't make sense. Needs a full redesign." Each complaint is confirmed
+> in the code: **a sprite layer cannot be MOVED** like every other layer, because selecting it
+> puts the stage in paint mode and takes over its pointer events — "just that alone is asking
+> for trouble"; the six "recents" record **every intermediate colour** the picker emits while
+> a slider is dragged; the **frames control does nothing** (frames clamp to 1..64, but no
+> frame strip exists anywhere and painting hard-codes frame 0); and the **16-colour cap** is
+> enforced only by disabling the swatch button, while `paletteWouldOverflow()` is never
+> called, so fill and the recent swatches can exceed it. The redesign has **not happened** —
+> this section is marked superseded rather than rewritten, and #741 owns the target. It
+> depends on #740 (the editor is based in the Sprites tab).
+
 - **Storage = a sprite-tagged pattern** in the existing pattern store: palette-indexed pixel
   array (≤16 colours) + `blit`, exactly what `library/bulk-sprite-scroll-2d.js` hand-writes.
   No new record type (the store's no-migration rule), no upload path, identical in the
   playground, playable on its own, up to 64×64 (source ≈ 8 KB, const pool 16 KB, under
   `MAX_SOURCE`/`MAX_BC`). A `frames` dimension is in the format from day one; the editor's
-  frame strip appears at 2+ frames (later).
+  frame strip appears at 2+ frames (later). — **REVERSED, see #740 above.**
 - **Runtime:** the compositor recognises the sprite tag and blits the const array natively
   (`blit` mode 3, ~1 µs/texel) — no engine, so a sprite does NOT consume one of the two
-  pattern-layer slots. Always black-keyed; an erased pixel is transparent.
+  pattern-layer slots. Always black-keyed; an erased pixel is transparent. — **half true:
+  it consumes no layer slot but it DOES hold an `Engine` today; #740 removes it.**
 - **Drawing:** on the scene preview, at the layer's box, pixel-snapped. Selecting a sprite
   layer adds a tool row above the canvas (pencil · eraser · fill · colour + recent swatches);
-  click/drag paints. Reuses the preview-click path that already feeds `readEvent`.
+  click/drag paints. Reuses the preview-click path that already feeds `readEvent`. —
+  **superseded by #741.**
 - Inspector: name · size · frames · palette · box (w/h mirror the sprite) · blend · opacity.
-  Transparency is fixed (black key), shown as a line, not a select.
+  Transparency is fixed (black key), shown as a line, not a select. — **superseded by #741**;
+  and since #735 the inspector also owns the **Fit** chooser (Once · Tile), which replaced the
+  dead line "1:1 · sprites are never scaled" (A6).
 
 ### 5.6 Fonts (built-in only — no Settings section; the text layer's font picker is the UI)
 **Decision 2026-09-18:** user font upload is a possible future feature, filed and not planned.
@@ -500,6 +645,12 @@ MQTT and network input are unconditional in every build; the variable axes are t
 | Scenes | text source → Text slot | `caps.text_slots` (Phase C) | — |
 | Scenes | Transparent (key) row on a pattern layer | Blend = Normal | **S7b showed it under Screen** → moved under Blend, Normal only |
 | Scenes | Scroll speed row | scroll ≠ none | **S7 showed a disabled slider** → removed |
+| Scenes | **Fit row on a pattern layer** | **never** — `fit` is read only by `blit_sprite`, so on a pattern layer it does nothing | **S7b/S7g drew a `<select>`** → removed 2026-09-24, replaced by a line saying what the box is (A6, #735) |
+| Scenes | **Fit chooser on a sprite layer** | always — the one layer kind where `fit` means something, and only `Once` / `Tile` exist | **S7c drew the dead line "1:1 · sprites are never scaled"** → a real chooser (A6, #735) |
+| Scenes | **frame-cost line + budget meter under the preview** | **never** — deleted 2026-09-24 | **S7/S7c/S7d/S7e drew both** → removed; the sentence lives in the Add layer menu at the cap (A1, #736 item 24) |
+| Scenes | **`top = front` / `base` as words** | **never** — drawn instead | **S7/S7c/S7d/S7e/S7f drew the words** → an SVG stack mark and a ground rule (A2, #736 item 17) |
+| Editors | **preview transport** | always — but in the **header bar**, not the preview panel | **S2/S2b/S2e/S2f/S7/S7c/S7e/S7f drew a 26 px `‖` glyph in the preview header** → a labelled SVG button in the header (A3, #739) |
+| Editors | header save-state span | only for what the Save button cannot say: `preview only` · `in browser` | **every editor mock drew `saved · on device` / `unsaved changes`** → the button carries that; the contract string moved to `data-save-state` (A5, #738) |
 | Fonts | Upload font… · uploaded rows | `caps.assets` (future, not planned) | **S8 showed upload** → removed |
 | Playground | Playlist · Settings tabs | never | — |
 | Playground | wiring options in the "Preview as" chip (serpentine, start corner, outputs) | never — wiring describes hardware | **S5 showed a serpentine box** → removed |
@@ -517,7 +668,7 @@ token sheet unchanged. New frames:
 | **S2e** | Editor ⋯ menu with `Add to scene ▸` open (scenes + `New scene…`) on a matrix console, and the same menu on a strip console where the item is **absent**, not disabled. |
 | **S6c** | Scenes page, console empty state — the populated page's one-line definition plus `+ New scene`, no page bar, no empty grid. |
 | **S6d** | Scenes page at 390 px — two-up device-shaped tiles, tap to play, `Edit` as a link, primary shrunk to an icon. |
-| **S7d** | `Add layer ▾` at the cap: `Pattern` greyed with its count *and* the full D4 reason ("this device fits 2 pattern layers; text and sprite and color layers are free"), plus the cost line `2 of 2 pattern layers · 24 fps`. |
+| **S7d** | `+ Add layer` at the cap: `Pattern` greyed with its count *and* the full D4 reason — **"luxel devices only support 2 pattern layers; text and sprite and color layers are free"** (amended 2026-09-24, A1/A4: the chevron is gone, the wording is Jeremy's, and the frame's cost-line state caption — `2 of 2 pattern layers · 24 fps` over a full meter — is deleted with the cost line itself). This menu is now the only place the sentence is said. |
 | **S7e** | Color layer selected (name · colour · box · blend · opacity; no Transparent row) with the layer list showing a hidden layer (eye struck, row dimmed) and a drag in progress (lifted row + accent drop rule). |
 | **S7f** | Scene editor at 390 px — the three panes stacked preview/layers/inspector with the preview `position:sticky` (D9 responsive only). |
 | **S7g** | Pattern layer with Blend = Multiply: the Transparent (key) row is **gone**, opacity 60 %, the color ramp with the Settings › Output › Palette stop editor, and the quiet `Projection  device default · along x  change` row (§5.4d). |
@@ -526,7 +677,9 @@ token sheet unchanged. New frames:
 | **S2f** | Editor completions and hover docs for the text builtins (`drawText`, `drawNumber`, `textWidth`, `font`, `textSlot`) on a matrix console; absent on a strip console. |
 
 The sprite-layer inspector needs no new frame — **S7c** already draws it in full (name, size, frames,
-≤16-colour palette, fixed black-key line, box mirroring the sprite, fit, blend, opacity).
+≤16-colour palette, fixed black-key line, box mirroring the sprite, fit, blend, opacity). *Amended
+2026-09-24: S7c draws the SHIPPED sprite editor, which #741 redesigns and #740 relocates to a
+Sprites tab — the frames it will need do not exist yet (A7, A9).*
 
 **Ticket → frames**
 
@@ -576,6 +729,7 @@ The pattern language has no string type. The cheapest honest path (engine survey
 | `POST /api/text <slot> <text>` · `GET /api/text` | Text slots for HA/MQTT/API-driven text. MQTT/HA: a `text` entity per slot. |
 | `POST /api/assets/<name>` (per-file, streaming) | Enables user fonts and images without repacking the web bundle. Later phase. |
 | `GET /api/fonts` | Names of built-in + uploaded fonts for pickers. |
+| **`GET/POST /api/sprites`, `/api/sprites/<id>`** — *added 2026-09-24 (A7, #740)* | A sprite is a first-class record now, not a sprite-tagged pattern riding `/api/patterns*`. Follows the fallible blob idiom `scenestore.rs` gained in #727 (`try_reserve_exact`, cached `BLOB_LEN`) — no infallible builder. Existing `// @sprite` patterns convert on read and leave the pattern store; the old tag stays readable for one release. |
 | Playground: `lx_outpipe(...)` in luxel-wasm | The playground does not run the device output chain today; previews already diverge by the whole Settings chain. Required before layers, independent of everything else. |
 
 Mirror (`luxel serve`) must gain every one of these so device-e2e can drive them.
@@ -622,9 +776,16 @@ image layers, animated images. Nothing in Phases A–C depends on it; the design
 - **D1** Geometry object = **Layout**; kinds by dims Strip · Matrix · 3D; "custom map" is a
   coordinate source, not a kind.
 - **D2** **Scene + Layer**; layer kinds Pattern · Text · Sprite · Color (image-from-file: future).
+  *Amended 2026-09-24 (A7):* a **sprite is its own record type** with its own store, routes and
+  tab — not a sprite-tagged pattern, which is what §5.5b decided and #740 reversed.
 - **D3** **One Patterns page** with a segmented source control (On device | Library; Library | Mine).
 - **D4** **Two pattern layers per board budget** (`caps.layers`); text/sprite/color unlimited;
   Add layer → Pattern disabled with its reason at the cap (the one deliberate exception).
+  *Amended 2026-09-24 (A1):* the rule stands; what changed is where it is SAID. The reason is
+  now "luxel devices only support N pattern layers; text and sprite and color layers are free",
+  said only in that menu — the standing frame-cost line and its meter are deleted. *And (A7):*
+  "sprite unlimited" is a statement about the **layer cap** only; a sprite layer costs a
+  resident `Engine` today, which #740 removes.
 - **D5** **Dynamic text via device text slots** (`POST /api/text`, HA text entity per slot,
   `textSlot(n)` handle); no string type.
 - **D6** **Inline values, no named presets** — a playlist item / scene layer owns its values and
