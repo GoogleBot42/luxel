@@ -45,6 +45,19 @@ paths:
   one the script names — take the bytes out of that board's
   `heap_allocator!` (see `SECOND_OUTPUT_RAM` in main.rs for the per-board
   idiom), not off the floor. Gitea #515.
+- **There is a ~±0.7 KB IMAGE-size noise floor, and a per-board delta is not a
+  measurement.** The flake source hash feeds rustc's `.Lanon.<hash>` local symbol
+  names; renaming those reshuffles `.L_MergedGlobals` packing and occasionally
+  re-codegens a function — **editing only markdown moves the C6 image ~600 B**,
+  observed twice in both directions (docs/size-report.md:95-105). So never quote a
+  sub-1 KB delta as signal, and never compare two BOARDS' deltas for the same change:
+  they link different feature sets, so fat LTO inlines differently. `wled-takeover`
+  alone inlines 6,726 B into the main task (size-report.md:185), which is why
+  `board-athom-music` and `board-pixelblaze-v3` — the same chip — answered +320 B
+  and −144 B for one change on 2026-09-25. The only number worth reporting is a
+  same-tree A/B with everything else held constant: revert your hunks in place,
+  rebuild, compare. Jeremy caught a four-board table being passed off as meaningful;
+  say "inside the noise floor" rather than printing four rows.
 - `cargo clippy` DOES work on the Xtensa (`-Zbuild-std`) boards — but only
   with the esp toolchain's `bin/` PREPENDED to `PATH`. Exporting only
   `RUSTC`/`RUSTDOC` (the `tools/stack-check.sh` recipe — sufficient for

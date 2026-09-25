@@ -933,8 +933,17 @@ The text is the **rest of the line** after the slot number, capped at **64
 bytes** and truncated on a char boundary; an empty rest clears the slot. A
 slot number outside `0..7` is refused
 (`{"ok":false,"error":"text: slot 8 out of range (0..7)"}`); a body with no
-number at all is `text: slot number required`. Slots are **not persisted**
-across a reboot in v1.
+number at all is `text: slot number required`.
+
+**Slots PERSIST across a reboot** (Gitea #745). They are one reserved-key blob in
+the storage partition beside the playlist, the Layout and the scenes; the record
+holds only the non-empty slots, so a device that has never set one stores a single
+byte. They are restored during boot before any task spawns, which is what makes a
+scene's `T slot n` text layer correct on its FIRST frame — previously a reboot left
+such a layer drawing an empty string until something re-POSTed it, which is what
+"the text overlay takes a while to show up at first" was. A write that cannot be
+stored logs `text: not enough memory to save slots` and leaves the live slots
+intact; it never fails the POST.
 
 On a device each slot is also a Home Assistant `text` entity —
 `luxel/<id>/text/<n>/set` in, `luxel/<id>/text/<n>` out, `max` 64 —
