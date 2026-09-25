@@ -19,6 +19,17 @@
 //!   or slider drag) arms a timer and the record is written once things have
 //!   settled for [DEBOUNCE_SECS], not on every event. Identical records are
 //!   not rewritten (re-activating the running pattern costs nothing).
+//!
+//! ## Passenger: the text slots (Gitea #745)
+//!
+//! `textslots::persist` rides this loop's debounce rather than carrying a
+//! task of its own. It is the other small reserved-key record whose writes
+//! arrive in bursts (a console text field, an HA automation), it wants the
+//! same "settle, then write once, skip if unchanged" discipline, and a
+//! second embassy task's storage is not free on a board with under 100
+//! bytes of `.stack` margin. Its write does NOT observe the playlist
+//! precedence above — a slot's text belongs to the device, not to whatever
+//! is playing.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -40,7 +51,8 @@ const DEBOUNCE_SECS: u64 = 3;
 /// Armed by activation / control changes; the persist task debounces it.
 static DIRTY: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
-/// Note that the single-pattern state (pattern or controls) changed. Cheap;
+/// Note that persisted state changed — the single-pattern record (pattern
+/// or controls) or a text slot (`textslots::mark_dirty`). Cheap;
 /// call freely — the persist task coalesces bursts into one flash write.
 pub fn mark_dirty() {
     DIRTY.signal(());
@@ -97,6 +109,13 @@ fn snapshot_record() -> Option<String> {
 
 /// Write the current state to flash (skipping identical rewrites).
 fn persist_now() {
+    // The text slots ride this same debounce (Gitea #745) — a separate
+    // embassy task for a ≤529 B record is not worth its storage on a board
+    // with under 100 bytes of `.stack` margin, and they have exactly the
+    // burst-of-writes problem this loop already exists to absorb. Their
+    // write is independent of the playlist precedence below, so it runs
+    // first.
+    crate::textslots::persist();
     let Some(rec) = snapshot_record() else {
         return;
     };
@@ -129,18 +148,27 @@ fn resume_headroom(stored: usize) -> usize {
 }
 
 /// Load and apply the stored record at boot. The caller has already checked
-/// playlist precedence. Missing/deleted patterns and stale-format bytecode
-/// (an OTA bumped the LXBC version) skip the resume gracefully — the
-/// built-in default keeps rendering.
+/// playlist precedence.
+///
+/// Every bail-out below leaves the device playing NOTHING — a dark strip,
+/// `/api/status` `engines: 0`, `src`/`bc` false (Gitea #744). It used to
+/// leave the built-in rainbow rendering, which is why these paths only ever
+/// logged to serial; now the absence of light IS the user-visible signal, so
+/// each one says on the console why. Missing/deleted patterns and
+/// stale-format bytecode (an OTA bumped the LXBC version) still skip the
+/// resume gracefully rather than failing the boot.
 async fn apply_stored() {
     let Some(bytes) = patterns::read_blob(patterns::RESUME_KEY) else {
+        // genuine first boot (or a device whose record was cleared)
+        println!("resume: nothing stored — playing nothing");
         return;
     };
     let Some((id, controls)) = String::from_utf8(bytes).ok().as_deref().and_then(parse) else {
+        println!("resume: stored record unreadable — playing nothing");
         return;
     };
     let Some(stored) = patterns::stored_size_hint(&id) else {
-        println!("resume: stored pattern {} is gone — skipping", id);
+        println!("resume: stored pattern {} is gone — playing nothing", id);
         return;
     };
     // Boot-time heap is at its trough while WiFi (whose mallocs don't
@@ -149,13 +177,14 @@ async fn apply_stored() {
     // straight away at a heavy config (big LED buffer, large pattern)
     // OOM-panicked into the boot-loop guard — three strikes flipped the OTA
     // slot back to the previous firmware. Wait for comfortable headroom;
-    // if it never shows up, skip resume and leave the default rendering.
+    // if it never shows up, skip resume — the device then plays nothing
+    // (Gitea #744), which is a dark strip and a serial line, not a crash.
     let need = resume_headroom(stored);
     let mut waited = 0u32;
     while esp_alloc::HEAP.free() < need {
         if waited >= 20 {
             println!(
-                "resume: heap too tight for {} ({} free, need {}) — skipping",
+                "resume: heap too tight for {} ({} free, need {}) — playing nothing",
                 id,
                 esp_alloc::HEAP.free(),
                 need
@@ -167,11 +196,11 @@ async fn apply_stored() {
     }
     match patterns::validate_stored(&id) {
         None => {
-            println!("resume: stored pattern {} is gone — skipping", id);
+            println!("resume: stored pattern {} is gone — playing nothing", id);
             return;
         }
         Some(Err(e)) => {
-            println!("resume: stored bytecode for {} unusable ({}) — skipping", id, e);
+            println!("resume: stored bytecode for {} unusable ({}) — playing nothing", id, e);
             return;
         }
         Some(Ok(())) => {}

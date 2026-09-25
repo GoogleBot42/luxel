@@ -1,7 +1,18 @@
 <script lang="ts">
   // The scene editor's CENTRE column (mockup S7 `.ccol`): the live composite
-  // in the device's shape, the selected layer's box as a dashed marquee you
-  // can drag and resize, and the frame-cost line with its meter.
+  // in the device's shape, and the selected layer's box as a dashed marquee
+  // you can drag and resize.
+  //
+  // It no longer draws the frame-cost line or the budget meter under the
+  // canvas (Gitea #736 item 24). Jeremy: "that loading bar below the pattern
+  // preview needs to completely go away. That and this text 'Frame cost: 1
+  // pattern layer · text, sprite and color layers are free'". They were a
+  // budget nobody was near, stated on every scene, under the one thing on
+  // the screen you are actually looking at — and the meter read as progress.
+  // The sentence they were carrying has one honest home, which is the Add
+  // layer menu AT the cap, where it explains a row that will not click
+  // (`LayerList.svelte`, item 18). Mockups S7/S7c/S7d/S7e still draw both:
+  // the mockups are wrong now, not the app.
   //
   // "The one direct-manipulation affordance in the whole app, and it earns its
   // place" (§5.5): geometry is set by dragging, with the inspector's four
@@ -23,13 +34,13 @@
   export let h = 64;
   /** The selected layer's box, or null when nothing is selected. */
   export let rect: Rect | null = null;
-  /** `Frame cost: …` and the meter under it. */
-  export let patternLayers = 0;
-  export let layerCap = 2;
-  export let fps = 0;
-  /** `64×64 · 24 fps on device` — the column header's dim line. */
+  /** `64×64 · 24 fps on device` — the header's dim line, which travels WITH
+   *  the canvas rather than with the column (#736 item 25). */
   export let dimsLine = "";
-  export let paused = false;
+  /** The preview's frame budget, in the pattern editor's own terms: 0 = as
+   *  fast as the browser will go (#736 item 26). The page owns the number —
+   *  it is the page's render loop — and this column owns the chooser. */
+  export let targetFps = 60;
   /** A sprite layer is selected and a drawing tool is live (#481): the box is
    *  a GUIDE, not a grab — every pointer on the canvas paints, and geometry
    *  moves with the inspector's Box numbers. Without this the marquee sits on
@@ -40,7 +51,8 @@
 
   const dispatch = createEventDispatcher<{
     rect: Rect;
-    pause: boolean;
+    /** A new preview frame budget (#736 item 26). */
+    targetfps: number;
     /** A pointer landed on a cell — the sprite tools' hook (#481). */
     cell: { col: number; row: number; down: boolean };
     /** Which cell the pointer is over, or null once it leaves (#481). */
@@ -82,15 +94,6 @@
         height: `${(box.h / h) * 100}%`,
       }
     : null;
-
-  /** The cost line. At the cap it counts both numbers and adds the measured
-   *  frame rate (S7d/S7e); under it, it says what is free (S7). */
-  $: costLine =
-    patternLayers >= layerCap
-      ? `Frame cost: ${patternLayers} of ${layerCap} pattern layers · ${Math.round(fps)} fps`
-      : `Frame cost: ${patternLayers} pattern layer${patternLayers === 1 ? "" : "s"} · text, sprite and color layers are free`;
-
-  $: fill = Math.max(0, Math.min(100, layerCap > 0 ? (patternLayers / layerCap) * 100 : 0));
 
   // ---- dragging the marquee ----
 
@@ -174,72 +177,90 @@
   onMount(() => clear());
 </script>
 
+<!-- The column is a centring frame and nothing else (#736 item 25). Jeremy:
+     "the generated scene preview should be centered vertically and
+     horizontally in the space available. Keep the 'Preview 64×64 · 60 fps'
+     text in same place right next to the generated scene preview." So the
+     header, the tool row and the canvas are ONE stack of the stage's width,
+     centred in the column as a unit — the dim line stays directly above the
+     canvas's left edge instead of drifting off to the column's. -->
 <div class="ccol" data-role="scene-preview">
-  <div class="rhead">
-    <div class="slabel">Preview</div>
-    <div class="rdim" data-role="scene-preview-dims">{dimsLine}</div>
-    <div class="grp">
-      <button
-        class="btn sm icon"
-        data-role="scene-pause"
-        aria-pressed={paused}
-        title={paused ? "resume the preview" : "pause the preview"}
-        on:click={() => dispatch("pause", !paused)}>{paused ? "▶" : "‖"}</button
-      >
+  <div class="cstack">
+    <div class="rhead">
+      <div class="slabel">Preview</div>
+      <div class="rdim" data-role="scene-preview-dims">{dimsLine}</div>
+      <div class="grp">
+        <!-- The preview's frame budget, the pattern editor's control and the
+             pattern editor's option set exactly (#736 item 26, `target-fps`
+             in pages/Editor.svelte). It lives in the PREVIEW section's own
+             header there too — the transport is the one that moved to the top
+             bar, and this one stayed with the picture it throttles. -->
+        <select
+          class="sel"
+          data-role="scene-target-fps"
+          value={targetFps}
+          title="preview frame rate"
+          aria-label="preview frame rate"
+          on:change={(e) => dispatch("targetfps", Number(e.currentTarget.value))}
+        >
+          <option value={0}>max fps</option>
+          <option value={60}>60 fps</option>
+          <option value={30}>30 fps</option>
+          <option value={15}>15 fps</option>
+          <option value={5}>5 fps</option>
+        </select>
+      </div>
     </div>
-  </div>
 
-  <!-- the sprite tool row, when there is one: "directly above the canvas it
-       acts on" (S7c) -->
-  <slot name="tools" />
+    <!-- the sprite tool row, when there is one: "directly above the canvas it
+         acts on" (S7c) -->
+    <slot name="tools" />
 
-  <div class="stage" bind:this={stage}>
-    <canvas
-      bind:this={canvas}
-      width={w}
-      height={h}
-      data-role="scene-stage"
-      on:pointerdown={onCanvasDown}
-      on:pointermove={onCanvasMove}
-      on:pointerleave={() => dispatch("hover", null)}
-    ></canvas>
-    {#if marq}
-      <div
-        class="marq"
-        class:guide={paintMode}
-        data-role="scene-marquee"
-        style={`left:${marq.left};top:${marq.top};width:${marq.width};height:${marq.height}`}
-        on:pointerdown={(e) => start(e, "move")}
-        on:pointermove={move}
-        on:pointerup={end}
-        on:pointercancel={end}
-        role="presentation"
-      ></div>
-      {#each CORNERS as corner (corner)}
-        <button
-          class="hdl"
+    <div class="stage" bind:this={stage}>
+      <canvas
+        bind:this={canvas}
+        width={w}
+        height={h}
+        data-role="scene-stage"
+        on:pointerdown={onCanvasDown}
+        on:pointermove={onCanvasMove}
+        on:pointerleave={() => dispatch("hover", null)}
+      ></canvas>
+      {#if marq}
+        <div
+          class="marq"
           class:guide={paintMode}
-          data-role={`scene-handle-${corner}`}
-          aria-label={`resize ${corner}`}
-          style={handleStyle(corner, marq)}
-          on:pointerdown={(e) => start(e, corner)}
+          data-role="scene-marquee"
+          style={`left:${marq.left};top:${marq.top};width:${marq.width};height:${marq.height}`}
+          on:pointerdown={(e) => start(e, "move")}
           on:pointermove={move}
           on:pointerup={end}
           on:pointercancel={end}
-        ></button>
-      {/each}
-    {/if}
-    {#if markCell}
-      <div
-        class="cellmark"
-        data-role="scene-cellmark"
-        style={`left:${(markCell.col / w) * 100}%;top:${(markCell.row / h) * 100}%`}
-      ></div>
-    {/if}
+          role="presentation"
+        ></div>
+        {#each CORNERS as corner (corner)}
+          <button
+            class="hdl"
+            class:guide={paintMode}
+            data-role={`scene-handle-${corner}`}
+            aria-label={`resize ${corner}`}
+            style={handleStyle(corner, marq)}
+            on:pointerdown={(e) => start(e, corner)}
+            on:pointermove={move}
+            on:pointerup={end}
+            on:pointercancel={end}
+          ></button>
+        {/each}
+      {/if}
+      {#if markCell}
+        <div
+          class="cellmark"
+          data-role="scene-cellmark"
+          style={`left:${(markCell.col / w) * 100}%;top:${(markCell.row / h) * 100}%`}
+        ></div>
+      {/if}
+    </div>
   </div>
-
-  <div class="hint" style="margin-top:12px" data-role="scene-cost">{costLine}</div>
-  <div class="budget"><i style={`width:${fill}%`}></i></div>
 </div>
 
 <style>

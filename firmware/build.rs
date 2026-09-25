@@ -1,36 +1,11 @@
-//! Compile the built-in default pattern (library/rainbow.js) to LXBC at
-//! build time. The firmware links no compiler — it boots straight into the
-//! precompiled blob (main.rs includes OUT_DIR/default.lxbc).
+//! Build-time inputs the firmware links: the partition tables, the embedded
+//! fallback page, the per-chip cfgs — and, only when a build asks for one,
+//! a boot-time default pattern compiled to LXBC (the firmware links no
+//! compiler). See [`bake_default_pattern`].
 
 fn main() {
-    // Which pattern boots. `LUXEL_DEFAULT_PATTERN` is a path relative to
-    // firmware/ (or absolute); unset means `library/rainbow.js`, which is
-    // what every shipped image carries.
-    //
-    // It exists because the pattern a device boots into is the ONLY one
-    // some environments can select: tools/qemu/jit-test.py drives the
-    // emulator, where the network never comes up and the playlist task
-    // never runs, so the boot default is the whole reachable corpus
-    // (Gitea #658). A general knob, not an emulator one — nothing in the
-    // firmware ever asks whether it was set.
-    println!("cargo:rerun-if-env-changed=LUXEL_DEFAULT_PATTERN");
-    let src_path =
-        std::env::var("LUXEL_DEFAULT_PATTERN").unwrap_or_else(|_| "../library/rainbow.js".into());
-    println!("cargo:rerun-if-changed={src_path}");
-    let src = std::fs::read_to_string(&src_path)
-        .unwrap_or_else(|e| panic!("read default pattern {src_path}: {e}"));
-    let prog = match luxel_core::compile::compile(&src) {
-        Ok(p) => p,
-        Err(d) => panic!("default pattern {src_path} does not compile: {}", d.message),
-    };
-    let blob = luxel_core::bytecode::serialize(&prog).expect("serialize default pattern");
     let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
-    std::fs::write(out_dir.join("default.lxbc"), blob).expect("write default.lxbc");
-    // The SOURCE too, so main.rs includes the file this bytecode was
-    // compiled from rather than naming `library/rainbow.js` a second time
-    // — two independent paths to the same fact is a drift waiting to
-    // happen, and with the override above it would be a live one.
-    std::fs::write(out_dir.join("default.js"), &src).expect("write default.js");
+    bake_default_pattern(&out_dir);
 
     // Partition table binary for src/parttab.rs — the WLED takeover
     // (src/takeover.rs) and the layout migrator (src/migrate.rs) both write
@@ -122,6 +97,44 @@ fn main() {
     if std::env::var_os("CARGO_FEATURE_BOARD_ATHOM_MUSIC").is_some() {
         println!("cargo:rustc-cfg=multi_output");
     }
+}
+
+/// Bake a boot-time default pattern into the image — ONLY when
+/// `LUXEL_DEFAULT_PATTERN` names one.
+///
+/// A SHIPPED image has no default: a device that has never been given a
+/// pattern plays nothing, and the strip is dark rather than showing a
+/// rainbow nobody asked for (Gitea #744). Before that, `library/rainbow.js`
+/// was compiled in unconditionally.
+///
+/// The knob survives because the pattern a device boots into is the only one
+/// some environments can select: `tools/qemu/jit-test.py` drives the
+/// emulator, where the network never comes up and neither the playlist nor
+/// the resume task ever runs, so the boot default is the whole reachable
+/// corpus (Gitea #658). It is a general build knob, not an emulator one.
+///
+/// The path is relative to `firmware/` (or absolute). Both halves are
+/// written to `OUT_DIR`, so the source `GET /api/pattern` serves and the
+/// bytecode the engine executes are provably the same file. The
+/// `default_pattern` cfg tells main.rs whether those two files exist at all
+/// — `include_bytes!` of a missing file is a build error, not an empty blob.
+fn bake_default_pattern(out_dir: &std::path::Path) {
+    println!("cargo::rustc-check-cfg=cfg(default_pattern)");
+    println!("cargo:rerun-if-env-changed=LUXEL_DEFAULT_PATTERN");
+    let Ok(src_path) = std::env::var("LUXEL_DEFAULT_PATTERN") else {
+        return;
+    };
+    println!("cargo:rerun-if-changed={src_path}");
+    let src = std::fs::read_to_string(&src_path)
+        .unwrap_or_else(|e| panic!("read default pattern {src_path}: {e}"));
+    let prog = match luxel_core::compile::compile(&src) {
+        Ok(p) => p,
+        Err(d) => panic!("default pattern {src_path} does not compile: {}", d.message),
+    };
+    let blob = luxel_core::bytecode::serialize(&prog).expect("serialize default pattern");
+    std::fs::write(out_dir.join("default.lxbc"), blob).expect("write default.lxbc");
+    std::fs::write(out_dir.join("default.js"), &src).expect("write default.js");
+    println!("cargo:rustc-cfg=default_pattern");
 }
 
 /// Serialize one `firmware/partitions*.csv` into `OUT_DIR/<name>` as the exact

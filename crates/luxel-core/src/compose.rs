@@ -36,6 +36,7 @@ use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use crate::fixed::Fx;
 use crate::outpipe::{luma, palette_remap_frame, GridMap};
 use crate::scene::{
     Blend, Fit, Key, Layer, LayerBody, LayerKind, LayerStyle, Ramp, Scroll, TextLayer, TextSource,
@@ -579,11 +580,7 @@ pub fn draw_text_layer(
     }
     let (bx, by, bw, _bh) = resolved_rect(style, &grid);
     let tw = text::width(text, layer.font) as i32;
-    let anchor = match layer.align {
-        crate::scene::Align::Left => bx,
-        crate::scene::Align::Center => bx + (bw - tw) / 2,
-        crate::scene::Align::Right => bx + bw - tw,
-    };
+    let anchor = bx + align_off(layer.align, bw, tw);
     let (ox, oy) = if layer.scroll.vertical() {
         (0, scroll_px)
     } else {
@@ -637,6 +634,34 @@ struct LayerRt {
     scroll_mpx: i64,
     /// Sprite frame clock, in ms since the scene was set.
     sprite_ms: u32,
+    /// What this slot is showing, for phase carry-over across a
+    /// [`Compositor::set_scene`] — see [`layer_ident`].
+    ident: u64,
+}
+
+/// Identity of one layer for phase carry-over: the scene it belongs to,
+/// the layer's kind and its name, FNV-1a'd into a word.
+///
+/// Hashed rather than stored, because `LayerRt` is per-layer resident RAM
+/// on a device that counts bytes and a second owned `String` per layer
+/// would not earn its keep. A collision costs a scrolling caption the wrong
+/// starting phase and nothing else.
+fn layer_ident(scene_id: &str, l: &Layer) -> u64 {
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut mix = |b: u8| {
+        h ^= b as u64;
+        h = h.wrapping_mul(PRIME);
+    };
+    for b in scene_id.as_bytes() {
+        mix(*b);
+    }
+    mix(0xff);
+    mix(l.kind() as u8);
+    for b in l.name.as_bytes() {
+        mix(*b);
+    }
+    h
 }
 
 /// Owns everything a host must keep between frames to draw a scene: the
@@ -679,12 +704,31 @@ impl Compositor {
 
     /// Rebuild the layer runtime state from a scene record. Invalidates
     /// every cached ramp LUT.
+    ///
+    /// A layer whose [`layer_ident`] is unchanged at its index KEEPS its
+    /// scroll phase and sprite clock. Hosts re-install a scene for reasons
+    /// that have nothing to do with the clocks — the scene editor rebuilds
+    /// the wire on every keystroke — and restarting a scroll on each edit
+    /// reads as a stutter in an otherwise steady crawl (Gitea #733).
+    /// Everything else about the layer is rebuilt, so an edit to the text,
+    /// the speed or the direction still takes effect immediately.
     pub fn set_scene(&mut self, scene: &crate::scene::Scene) {
         self.epoch = self.epoch.wrapping_add(1);
-        self.layers.clear();
-        for l in &scene.layers {
-            self.layers.push(LayerRt::from(l));
+        let had = self.layers.len();
+        for (i, l) in scene.layers.iter().enumerate() {
+            let mut rt = LayerRt::from(l);
+            rt.ident = layer_ident(&scene.id, l);
+            if i < had {
+                if self.layers[i].ident == rt.ident {
+                    rt.scroll_mpx = self.layers[i].scroll_mpx;
+                    rt.sprite_ms = self.layers[i].sprite_ms;
+                }
+                self.layers[i] = rt;
+            } else {
+                self.layers.push(rt);
+            }
         }
+        self.layers.truncate(scene.layers.len());
     }
 
     pub fn layer_count(&self) -> usize {
@@ -693,6 +737,14 @@ impl Compositor {
 
     pub fn layer_kinds(&self) -> impl Iterator<Item = LayerKind> + '_ {
         self.layers.iter().map(|l| l.kind)
+    }
+
+    /// One layer's kind, without borrowing the compositor for the length of
+    /// a walk — what [`SceneDriver::frame`] dispatches on. (Collecting
+    /// `layer_kinds` into a `Vec` first, as the wasm binding used to, is a
+    /// per-frame allocation in the render loop.)
+    pub fn layer_kind(&self, layer: usize) -> Option<LayerKind> {
+        self.layers.get(layer).map(|l| l.kind)
     }
 
     /// The text a layer will draw this frame. The host resolves
@@ -831,6 +883,131 @@ impl Compositor {
     }
 }
 
+// ---- the shared full-frame driver (Gitea #732) ----
+
+/// The per-layer facts only the HOST knows, for [`SceneDriver::frame`].
+///
+/// Everything else about a frame — sizing the destination, turning a frame
+/// delta into whole milliseconds, advancing the clocks and walking the
+/// stack bottom → top — belongs to the driver, so it is the same code on
+/// the device, in the `luxel serve` mirror and in the browser.
+///
+/// Before #732 each host wrote that walk itself and the copies had already
+/// drifted: the wasm binding carried a sub-millisecond accumulator and the
+/// firmware truncated `delta` to whole milliseconds every frame, so a
+/// caption scrolled measurably slower on the panel than in the preview that
+/// was supposed to be showing the panel.
+pub trait SceneHost {
+    /// Layer `i`'s engine frame for this step, or `None` when the layer has
+    /// no engine to draw from — unbound in the console, over budget or
+    /// undecodable on the device. Such a layer simply does not draw.
+    ///
+    /// `delta` is the ENGINE step, not the compositor's whole milliseconds:
+    /// hand it to `Engine::frame` unchanged, frame-rate cap and time
+    /// scaling included.
+    fn pattern_frame(&mut self, layer: usize, delta: Fx) -> Option<&[[u8; 3]]>;
+
+    /// Layer `i`'s sprite pixels — [`sprite_view`] over the pattern the
+    /// layer names. `None` draws nothing.
+    fn sprite(&mut self, layer: usize) -> Option<SpriteView<'_>>;
+
+    /// The string text layer `i` draws this frame.
+    ///
+    /// **Clock and slot text are the HOST's to resolve** — the compositor
+    /// reads no wall clock and no slot table (docs/spec/scenes.md §2).
+    /// `None` leaves the layer's text as it stands, which is what a `lit`
+    /// layer (seeded by [`Compositor::set_scene`]) wants, and also what a
+    /// host that pushes resolved text in out of band wants (the wasm
+    /// binding's `lx_comp_text`).
+    fn text(&mut self, layer: usize, source: &TextSource) -> Option<&str> {
+        let _ = (layer, source);
+        None
+    }
+}
+
+/// The one full-frame scene driver: every host's render loop is this call.
+///
+/// It owns the sub-millisecond remainder of the frame deltas, so the
+/// compositor's scroll and sprite clocks advance at the true frame rate
+/// rather than the truncated one — at 60 fps, 16.67 ms steps used to reach
+/// the device's clocks as 16 ms, a 4 % slow crawl that no host could see
+/// without comparing against another host.
+#[derive(Default)]
+pub struct SceneDriver {
+    /// Raw 16.16 milliseconds not yet handed to [`Compositor::advance`].
+    dt_acc: i32,
+}
+
+impl SceneDriver {
+    pub const fn new() -> Self {
+        SceneDriver { dt_acc: 0 }
+    }
+
+    /// Whole milliseconds for a `delta`-long step, carrying the remainder
+    /// into the next one.
+    pub fn step_ms(&mut self, delta: Fx) -> u32 {
+        self.dt_acc = self.dt_acc.saturating_add(delta.raw().max(0));
+        let ms = (self.dt_acc >> 16).max(0);
+        self.dt_acc -= ms << 16;
+        ms as u32
+    }
+
+    /// Composite the whole stack into `dst` (`n` pixels, left black where
+    /// nothing draws) and return whether the frame was drawn.
+    ///
+    /// `false` means `dst` could not be sized: on a board whose largest
+    /// free block is a few kilobytes the host's staging buffer is exactly
+    /// the allocation that fails, and a frame this device cannot afford is
+    /// a frame not drawn, not a reboot (Gitea #702, #728). The capacity
+    /// survives, so this is one `try_reserve_exact` per activation and a
+    /// compare per frame after that — and the `resize` that follows it
+    /// leaves `dst` black, which is what [`Compositor::begin`] would do.
+    pub fn frame<H: SceneHost + ?Sized>(
+        &mut self,
+        comp: &mut Compositor,
+        dst: &mut Vec<[u8; 3]>,
+        n: usize,
+        delta: Fx,
+        host: &mut H,
+    ) -> bool {
+        let ms = self.step_ms(delta);
+        comp.advance(ms);
+        for i in 0..comp.layer_count() {
+            // `text_source` is `None` for every non-text layer, so this is
+            // the text-layer filter as well.
+            let Some(source) = comp.text_source(i) else {
+                continue;
+            };
+            if let Some(s) = host.text(i, source) {
+                comp.set_text(i, s);
+            }
+        }
+        dst.clear();
+        if dst.try_reserve_exact(n).is_err() {
+            return false;
+        }
+        dst.resize(n, [0, 0, 0]);
+        for i in 0..comp.layer_count() {
+            match comp.layer_kind(i) {
+                Some(LayerKind::Pattern) => {
+                    if let Some(frame) = host.pattern_frame(i, delta) {
+                        comp.pattern_layer(dst, i, frame);
+                    }
+                }
+                Some(LayerKind::Sprite) => {
+                    let view = host.sprite(i);
+                    comp.native_layer(dst, i, view.as_ref());
+                }
+                Some(LayerKind::Text) | Some(LayerKind::Color) => {
+                    comp.native_layer(dst, i, None)
+                }
+                None => {}
+            }
+        }
+        true
+    }
+}
+
 /// Size the shared scratch to `n` pixels without ever panicking.
 ///
 /// Every caller is inside the host's RENDER LOOP, where `luxel-core`'s
@@ -899,30 +1076,59 @@ fn push_truncated(out: &mut String, s: &str, max: usize) {
     out.push_str(&s[..end]);
 }
 
+/// Where an unscrolled string sits inside its box, relative to the box's
+/// left edge. Shared with [`scroll_offset`] so the two agree on "home":
+/// the running arms subtract it straight back out, and [`Scroll::Bounce`]
+/// keeps it, because bouncing is motion *about* home.
+#[inline]
+fn align_off(align: crate::scene::Align, bw: i32, tw: i32) -> i32 {
+    match align {
+        crate::scene::Align::Left => 0,
+        crate::scene::Align::Center => (bw - tw) / 2,
+        crate::scene::Align::Right => bw - tw,
+    }
+}
+
 /// The scroll offset in whole pixels for the current phase.
+///
+/// Phase 0 puts the string at the edge it ENTERS from, fully outside the
+/// box, for all four running directions. Starting it at the alignment
+/// anchor instead is what made left- and centre-aligned text "suddenly
+/// fully appear on screen" rather than scroll in (Gitea #733).
+///
+/// The caller adds this to the alignment anchor, so each running arm
+/// subtracts [`align_off`] back off: a `left` scroll is one sweep from the
+/// right edge to off the left edge, identical for all three alignments.
 fn scroll_offset(t: &TextLayer, text: &str, bw: i32, bh: i32, phase_mpx: i64) -> i32 {
     if t.scroll == Scroll::None || t.speed == 0 {
         return 0;
     }
     let px = (phase_mpx / 1000) as i32;
     let tw = text::width(text, t.font) as i32;
+    let a = align_off(t.align, bw, tw);
+    let lh = line_h(t.font);
     match t.scroll {
         Scroll::None => 0,
         // wrap over the text plus the box so the string leaves the box
         // entirely before it comes back
-        Scroll::Left => -px.rem_euclid((tw + bw).max(1)),
-        Scroll::Right => px.rem_euclid((tw + bw).max(1)) - tw,
-        Scroll::Up => -px.rem_euclid((bh + line_h(t.font)).max(1)),
-        Scroll::Down => px.rem_euclid((bh + line_h(t.font)).max(1)) - line_h(t.font),
-        // ping-pong over the overflow; a string that fits does not move
+        Scroll::Left => bw - a - px.rem_euclid((tw + bw).max(1)),
+        Scroll::Right => px.rem_euclid((tw + bw).max(1)) - tw - a,
+        Scroll::Up => bh - px.rem_euclid((bh + lh).max(1)),
+        Scroll::Down => px.rem_euclid((bh + lh).max(1)) - lh,
+        // Ping-pong between the two extreme positions at which the string
+        // and the box still overlap completely. A string that OVERFLOWS
+        // sweeps its overflow, as it always did; one that FITS sweeps the
+        // slack *inside* the box instead of standing still, which is the
+        // "bounce mode does nothing" report (Gitea #733).
         Scroll::Bounce => {
-            let over = (tw - bw).max(0);
-            if over == 0 {
-                0
-            } else {
-                let p = px.rem_euclid(over * 2);
-                -(if p <= over { p } else { over * 2 - p })
+            let slack = bw - tw;
+            let travel = slack.abs();
+            if travel == 0 {
+                return -a;
             }
+            let p = px.rem_euclid(travel * 2);
+            let tri = if p <= travel { p } else { travel * 2 - p };
+            (if slack >= 0 { tri } else { -tri }) - a
         }
     }
 }
@@ -949,6 +1155,9 @@ impl From<&Layer> for LayerRt {
             lut: None,
             scroll_mpx: 0,
             sprite_ms: 0,
+            // `set_scene` is the only thing that can know the scene id, so
+            // it fills this in; a bare `From` is "no identity yet".
+            ident: 0,
         };
         match &l.body {
             LayerBody::Pattern(p) => rt.ramp = p.ramp.clone(),
@@ -1469,12 +1678,204 @@ mod tests {
         };
         // "HI" is 12 px in the default face, so the wrap is 12 + the box
         assert_eq!(text::width("HI", t.font), 12);
-        assert_eq!(scroll_offset(&t, "HI", 8, 8, 0), 0);
-        assert_eq!(scroll_offset(&t, "HI", 8, 8, 3_000), -3);
-        assert_eq!(scroll_offset(&t, "HI", 8, 8, 19_000), -19);
-        assert_eq!(scroll_offset(&t, "HI", 8, 8, 20_000), 0); // wrapped
+        // phase 0 is the string just off the RIGHT edge of an 8 px box
+        assert_eq!(scroll_offset(&t, "HI", 8, 8, 0), 8);
+        assert_eq!(scroll_offset(&t, "HI", 8, 8, 3_000), 5);
+        assert_eq!(scroll_offset(&t, "HI", 8, 8, 19_000), -11);
+        assert_eq!(scroll_offset(&t, "HI", 8, 8, 20_000), 8); // wrapped
         let still = TextLayer::default();
         assert_eq!(scroll_offset(&still, "HI", 8, 8, 9_999), 0);
+    }
+
+    /// Gitea #733 (1): a string that FITS its box used to make `bounce`
+    /// return a constant 0 — "bounce mode does nothing".
+    #[test]
+    fn bounce_oscillates_whether_or_not_the_text_fits() {
+        let bounce = |align, bw, phase_mpx| {
+            let t = TextLayer {
+                scroll: Scroll::Bounce,
+                speed: 10,
+                align,
+                ..TextLayer::default()
+            };
+            scroll_offset(&t, "HI", bw, 8, phase_mpx)
+        };
+        // "HI" is 12 px. In a 20 px box it has 8 px of slack and sweeps it.
+        let fits: Vec<i32> = (0..=16).map(|p| bounce(Align::Left, 20, p * 1000)).collect();
+        assert_eq!(
+            fits,
+            vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 7, 6, 5, 4, 3, 2, 1, 0],
+            "a fitting string must ping-pong across the slack, not sit still"
+        );
+        assert!(fits.iter().all(|o| (0..=8).contains(o)), "and stay in the box");
+
+        // Centred, the same sweep is measured from the centred anchor, so
+        // the string still covers exactly the same 8 px of travel.
+        let mid: Vec<i32> = (0..=16).map(|p| bounce(Align::Center, 20, p * 1000)).collect();
+        assert_eq!(mid, fits.iter().map(|o| o - 4).collect::<Vec<_>>());
+
+        // An OVERFLOWING string keeps the old behaviour: it sweeps its
+        // overflow, and never uncovers an edge of the box.
+        let over: Vec<i32> = (0..=8).map(|p| bounce(Align::Left, 8, p * 1000)).collect();
+        assert_eq!(over, vec![0, -1, -2, -3, -4, -3, -2, -1, 0]);
+
+        // A string that exactly fills its box has nowhere to go.
+        assert_eq!(bounce(Align::Left, 12, 5_000), 0);
+    }
+
+    /// Gitea #733 (2): "the text just suddenly fully appears on screen".
+    /// Every running direction must start the string OUTSIDE the box.
+    #[test]
+    fn a_running_scroll_starts_fully_off_the_box() {
+        let bw = 16;
+        let bh = 8;
+        for align in [Align::Left, Align::Center, Align::Right] {
+            for (dir, entering) in [
+                (Scroll::Left, bw),   // in from the right edge
+                (Scroll::Right, -12), // in from the left edge, text is 12 px
+            ] {
+                let t = TextLayer {
+                    scroll: dir,
+                    speed: 10,
+                    align,
+                    ..TextLayer::default()
+                };
+                // the offset is added to the ALIGNMENT ANCHOR, so that is
+                // what "off the box" has to be measured from
+                let x = align_off(align, bw, 12) + scroll_offset(&t, "HI", bw, bh, 0);
+                assert_eq!(x, entering, "{dir:?} at {align:?}");
+                // fully outside: either right of the last column, or left
+                // of the first by the whole string
+                assert!(x >= bw || x + 12 <= 0, "{dir:?} at {align:?}: x={x}");
+            }
+            // and the sweep is the same path whatever the alignment
+            let t = TextLayer {
+                scroll: Scroll::Left,
+                speed: 10,
+                align,
+                ..TextLayer::default()
+            };
+            let path: Vec<i32> = (0..28)
+                .map(|p| align_off(align, bw, 12) + scroll_offset(&t, "HI", bw, bh, p * 1000))
+                .collect();
+            assert_eq!(path[0], bw);
+            assert_eq!(*path.last().unwrap(), bw - 27);
+        }
+        // vertical: `by + scroll` is the text's top, with no align term
+        let up = TextLayer {
+            scroll: Scroll::Up,
+            speed: 10,
+            ..TextLayer::default()
+        };
+        assert_eq!(scroll_offset(&up, "HI", bw, bh, 0), bh, "up starts below");
+        let down = TextLayer {
+            scroll: Scroll::Down,
+            speed: 10,
+            ..TextLayer::default()
+        };
+        assert_eq!(
+            scroll_offset(&down, "HI", bw, bh, 0),
+            -line_h(Font::Regular),
+            "down starts above"
+        );
+    }
+
+    /// Gitea #733 (3): the editor rebuilds the wire on every keystroke, so
+    /// a `set_scene` that does not change a layer's identity must not snap
+    /// its scroll back to the start.
+    #[test]
+    fn scroll_phase_survives_a_set_scene_that_keeps_the_layer() {
+        let wire = |text: &str| {
+            crate::scene::parse(&alloc::format!(
+                concat!(
+                    "S 0000000a s\n",
+                    "L text 0 0 0 0 normal 100 none fill 1\n",
+                    "N Caption\n",
+                    "T lit {}\n",
+                    "F regular ffffff l left 10\n",
+                ),
+                text
+            ))
+            .unwrap()
+        };
+        let mut c = Compositor::new(grid(16, 8, false));
+        c.set_scene(&wire("HI"));
+        c.advance(500); // 10 px/s for 500 ms = 5 px
+        assert_eq!(c.layers[0].scroll_mpx, 5_000);
+
+        // the user types another character: same scene, same layer, new text
+        c.set_scene(&wire("HIT"));
+        assert_eq!(
+            c.layers[0].scroll_mpx, 5_000,
+            "an edit that leaves the layer in place must not restart the scroll"
+        );
+        // ... and the edit still took effect
+        assert_eq!(c.layers[0].resolved, "HIT");
+
+        // renaming the layer IS a new layer, and starts over
+        let renamed = crate::scene::parse(concat!(
+            "S 0000000a s\n",
+            "L text 0 0 0 0 normal 100 none fill 1\n",
+            "N Other\n",
+            "T lit HIT\n",
+            "F regular ffffff l left 10\n",
+        ))
+        .unwrap();
+        c.set_scene(&renamed);
+        assert_eq!(c.layers[0].scroll_mpx, 0);
+
+        // so is the same-shaped layer in a DIFFERENT scene
+        c.advance(500);
+        let other_scene = crate::scene::parse(concat!(
+            "S 0000000b s\n",
+            "L text 0 0 0 0 normal 100 none fill 1\n",
+            "N Other\n",
+            "T lit HIT\n",
+            "F regular ffffff l left 10\n",
+        ))
+        .unwrap();
+        c.set_scene(&other_scene);
+        assert_eq!(c.layers[0].scroll_mpx, 0);
+
+        // and a layer that changes KIND under the same name starts over too
+        let colour = crate::scene::parse(concat!(
+            "S 0000000b s\n",
+            "L color 0 0 0 0 normal 100 none fill 1\n",
+            "N Other\n",
+        ))
+        .unwrap();
+        c.set_scene(&colour);
+        assert_eq!(c.layer_count(), 1);
+        assert_eq!(c.layers[0].sprite_ms, 0);
+    }
+
+    /// The phase is milli-pixels advanced by ELAPSED TIME, so the position
+    /// at a given wall-clock time does not depend on how the frames were
+    /// chopped up. Pinning that is what lets #733's jitter report be
+    /// blamed on the phase RESET rather than on the clock.
+    #[test]
+    fn the_scroll_phase_is_frame_rate_independent() {
+        let scene = crate::scene::parse(concat!(
+            "S 0000000a s\n",
+            "L text 0 0 0 0 normal 100 none fill 1\n",
+            "T lit HI\n",
+            "F regular ffffff l left 37\n",
+        ))
+        .unwrap();
+        let run = |steps: &[u32]| {
+            let mut c = Compositor::new(grid(16, 8, false));
+            c.set_scene(&scene);
+            for dt in steps {
+                c.advance(*dt);
+            }
+            c.layers[0].scroll_mpx
+        };
+        let smooth: Vec<u32> = vec![10; 120];
+        let lumpy = [1u32, 200, 3, 47, 99, 150, 2, 98, 200, 1, 199];
+        assert_eq!(smooth.iter().sum::<u32>(), 1200);
+        assert_eq!(lumpy.iter().sum::<u32>(), 1000);
+        assert_eq!(run(&smooth), 37 * 1200);
+        assert_eq!(run(&lumpy), 37 * 1000);
     }
 
     #[test]

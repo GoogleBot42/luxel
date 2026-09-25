@@ -717,6 +717,40 @@ export function pixelCount(l: Layout): number {
   return l.pixels;
 }
 
+/**
+ * Whole-pixel array buffers a playground rig allows a pattern — the per-pixel
+ * half of `playgroundArrayElements`. Six is the most any pattern in
+ * `library/` asks for (`heatshivers`, `pew-pew-pew`, `audio-volume-meter`);
+ * sixteen leaves room and is still a bound.
+ */
+export const PLAYGROUND_ARRAYS_PER_PIXEL = 16;
+
+/**
+ * The array ELEMENT ledger the PLAYGROUND enforces on a rig of `pixels`.
+ *
+ * `floor` is the count a board with no array arena grants — PB's fixed 10,236
+ * (`luxel_core::vm::DEFAULT_ARRAY_BUDGET`, read out of the engine by
+ * `Luxel.arrayElementsFor(0, 0, 0)` rather than restated here).
+ *
+ * A console installs the connected device's own ledger and this function is
+ * not in it. The playground has no device, so there is nothing to model — and
+ * keeping PB's fixed count there was not the neutral answer it looked like:
+ * `array(pixelCount)` costs what the RIG says, so the moment "Preview as"
+ * moved to a 64×64 matrix, 25 of the 307 patterns in `library/` failed an
+ * `array()` during their top-level init and drew a BLACK canvas, citing a
+ * device that was not there (Gitea #742; `library/fairies.js` is the one that
+ * was reported, and it is also the #420 case `tools/wasm-smoke.mjs` locks
+ * from the device side). No PB-class board drives 4096 px in the first place
+ * — the hardware that does is arena-backed (#253) and grants ~1 M.
+ *
+ * So the ceiling is the rig's own, floored at `floor`: a 60 px strip or a
+ * 16×16 preview keeps exactly the PB-compatible behaviour it had, and a rig
+ * the user has explicitly sized past PB gets a ledger sized with it.
+ */
+export function playgroundArrayElements(pixels: number, floor: number): number {
+  return Math.max(floor, Math.max(0, Math.round(pixels)) * PLAYGROUND_ARRAYS_PER_PIXEL);
+}
+
 /** "64×64 matrix" · "300 px strip" · "5×5×5 lattice" · "125 px custom map" —
  *  the header chip and the "Preview as" button label. */
 export function layoutLabel(l: Layout): string {

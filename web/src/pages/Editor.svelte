@@ -35,10 +35,12 @@
   // program the device is already running — see `bootDevice` / `lib/resume.ts`.
   import { createEventDispatcher, onDestroy, tick } from "svelte";
   import AddToSceneMenu from "../components/AddToSceneMenu.svelte";
+  import AsyncButton from "../components/AsyncButton.svelte";
   import Controls from "../components/Controls.svelte";
   import Debugger from "../components/Debugger.svelte";
   import DeviceChip from "../components/DeviceChip.svelte";
   import CodeEditor from "../components/Editor.svelte";
+  import NameField from "../components/NameField.svelte";
   import PinPanel from "../components/PinPanel.svelte";
   import Popover from "../components/Popover.svelte";
   import PreviewAsChip from "../components/PreviewAsChip.svelte";
@@ -151,7 +153,8 @@
   let editor: CodeEditor;
   let preview: Preview;
   let fileInput: HTMLInputElement;
-  let nameInput: HTMLInputElement;
+  /** The header's Save, so ⌘/Ctrl+S runs the verb THROUGH it (#738). */
+  let saveBtn: AsyncButton | undefined;
 
   let engine: Engine | undefined;
   let compileError: Diagnostic | null = null;
@@ -273,6 +276,19 @@
    *
    * The `preview only` half is the whole of the #563 disclosure: the editor is
    * NOT driving the device, so nothing typed here is on the LEDs.
+   *
+   * Since #738 this string is no longer what the header READS OUT. The Save
+   * button carries the save half of it itself (`Save` while there is something
+   * to store, `Saved` once there is not), so printing "saved · on device" an
+   * inch to its left was the same fact twice — which is what Jeremy asked us
+   * to delete. What the button cannot say is the OTHER half, `preview only`,
+   * because that is not a property of the document at all: it says the editor
+   * is not driving the LEDs. So the span now renders only that, and keeps the
+   * full contract string on `data-save-state` for the harnesses, which read it
+   * through `saveState()` in `web/tools/e2e-common.mjs`. Nothing is lost; the
+   * only wording that stopped being on screen is `on device` vs `in browser`,
+   * and that is fixed by the MODE — a console can only store on the device, a
+   * playground only in this browser — and stated by the button's own tooltip.
    */
   function saveStateOf(
     drt: boolean,
@@ -292,6 +308,26 @@
     return "not saved yet";
   }
 
+  /** The visible remainder of the line above: the #563 disclosure alone. Empty
+   *  whenever the editor IS driving the device (or there is no device), which
+   *  is the ordinary case — the span stays mounted and simply has nothing to
+   *  say, because an element that comes and goes is one the mockdiff map and a
+   *  screen reader both lose track of. */
+  function previewOnlyOf(dev: unknown, live: boolean): string {
+    return dev && !live ? "preview only" : "";
+  }
+
+  /** Is this document stored ANYWHERE — the device's library on a console,
+   *  this browser's in the playground? It is deliberately not `!$dirty`: a
+   *  freshly opened Library example is clean and stored nowhere, and a Save
+   *  button reading `Saved` over it would be a lie (`not saved yet` was the
+   *  old line's word for it). */
+  function storedNow(dev: unknown, dpid: string, name: string, lib: { name: string }[]): boolean {
+    return dev ? dpid !== "" : name !== "" && lib.some((s) => s.name === name);
+  }
+
+  $: nothingToSave = !$dirty && storedNow($device, $devicePatternId, $patternName, $saved);
+
   /** Delete targets a stored pattern: the device's copy on a console, this
    *  browser's library entry in the playground. Absent when there is neither. */
   function canDeleteNow(
@@ -305,55 +341,27 @@
     return example === "" && lib.some((s) => s.name === name);
   }
 
-  let editingName = false;
-  let nameDraft = "";
-  let nameError = "";
+  /** The header's click-to-rename control. The INTERACTION — focus, select,
+   *  the empty-name refusal, Escape — is `components/NameField.svelte` now,
+   *  one copy for both full-screen editor headers (Gitea #736/#737). The
+   *  scene editor had re-implemented this and lost the focus/select and the
+   *  inline refusal in the copy, which is exactly the duplication Jeremy
+   *  asked us to audit for. What a rename MEANS is still this page's. */
+  let nameField: NameField | undefined;
 
   /** Click-to-edit. `reason` seeds the inline rejection when the rename is
    *  forced by something else (Save on an unnamed pattern). */
   function startRename(reason = ""): void {
-    nameDraft = $patternName || $exampleName;
-    nameError = reason;
-    editingName = true;
-    void tick().then(() => {
-      nameInput?.focus();
-      nameInput?.select();
-    });
+    nameField?.start(reason);
   }
 
-  /** Enter or blur commits; an empty name is refused IN PLACE (nothing is
-   *  disabled — proposal §5.7), so the field stays open with the reason. */
-  function commitName(): void {
-    if (!editingName) return;
-    const next = nameDraft.trim();
-    if (next === "") {
-      nameError = "a name is required";
-      void tick().then(() => nameInput?.focus());
-      return;
-    }
-    editingName = false;
-    nameError = "";
+  function commitName(next: string): void {
     if (next === ($patternName || $exampleName)) return;
     patternName.set(next);
     exampleName.set("");
     // The stored copy still carries the old name, so the document no longer
     // matches it: Save (re-)stores it under the new one.
     dirty.set(true);
-  }
-
-  function cancelRename(): void {
-    editingName = false;
-    nameError = "";
-  }
-
-  function onNameKey(e: KeyboardEvent): void {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      commitName();
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      cancelRename();
-    }
   }
 
   // ---- capacity warning (Gitea #15) ----
@@ -852,8 +860,7 @@
     importError = "";
     controlValues.set({});
     projectionOverride.set(null);
-    editingName = false;
-    nameError = "";
+    nameField?.reset();
     livePush.set(false);
   }
 
@@ -919,14 +926,19 @@
    * `▶ Play on device` / a tile's `Play`: hand a stored pattern to the LEDs
    * and adopt it as the editor's document, so the running marker, the editor
    * and the device agree — and live push resumes from here.
+   *
+   *  Returns whether the LEDs are now running it, because the caller is
+   *  usually a TILE on another tab (#738): `patternLoading` covers this
+   *  editor, and this editor is `hidden` while the Patterns page is the one on
+   *  screen — so the only honest indicator is on the button that was clicked.
    */
-  export async function playDevicePattern(id: string): Promise<void> {
+  export async function playDevicePattern(id: string): Promise<boolean> {
     preview?.clear();
     patternLoading = true;
     try {
       await loadDevicePattern(id);
       recompile(); // local preview of the pattern we are about to run
-      await activateStored(id); // a refusal leaves the editor in local preview
+      return await activateStored(id); // a refusal leaves us in local preview
     } finally {
       patternLoading = false;
     }
@@ -984,13 +996,15 @@
    * first, because the device can only run what it holds — which is also what
    * gives it a row in `On device` to come back to.
    */
-  async function playOnDevice(): Promise<void> {
-    if (!$device) return;
+  async function playOnDevice(): Promise<boolean> {
+    if (!$device) return false;
     if ($dirty || !$devicePatternId) {
       await saveCurrent();
-      if ($dirty || !$devicePatternId) return; // save refused (no name, no compile)
+      if ($dirty || !$devicePatternId) return false; // save refused (no name, no compile)
     }
-    if (await activateStored($devicePatternId)) note("save", "playing on the device", 2500);
+    if (!(await activateStored($devicePatternId))) return false;
+    note("save", "playing on the device", 2500);
+    return true;
   }
 
   // The device streams only source, not which library entry it came from — so
@@ -1074,17 +1088,17 @@
    *  header's (A7, #468) — there is no naming prompt any more; an unnamed
    *  pattern opens the inline editor with the reason, which is the same
    *  "refuse in place, disable nothing" rule the dialog used. */
-  async function saveCurrent(): Promise<void> {
+  async function saveCurrent(): Promise<boolean> {
     const name = ($patternName || $exampleName).trim();
     if (name === "") {
       startRename("name this pattern before saving");
-      return;
+      return false;
     }
     if ($device) {
       const bc = compileToBytecode($source);
       if (!bc) {
         note("save", "save failed: pattern does not compile", 3000);
-        return;
+        return false;
       }
       // A save under an existing name OVERWRITES that row, so its cached
       // source is stale and must be re-read; every other row keeps its
@@ -1095,7 +1109,13 @@
         patternName.set(name);
         exampleName.set("");
         dirty.set(false); // now stored on the device
-        note("save", "saved to device", 3000);
+        // No success toast: the Save button itself goes spinner → "Saved" →
+        // dirty-aware idle (#738), so a "saved to device" note beside it said
+        // the same thing twice — which is the duplication Jeremy asked us to
+        // remove ("Then you won't need the 'saved' text added on the left
+        // side of the header"). FAILURES still note, because the button
+        // deliberately shows no "done" flash on a refusal and something has
+        // to say why.
         await refreshDevicePatterns(overwritten ? [overwritten] : []);
         // The id is what makes this an ON-DEVICE document — it is what "Add
         // to playlist" and "Delete" in the menu act on, and what the save
@@ -1114,14 +1134,16 @@
         if ($livePush && id) deviceRunningId.set(id);
       } else {
         note("save", r && "error" in r ? `save failed: ${r.error}` : "save failed", 3000);
+        return false;
       }
-      return;
+      return true;
     }
     saveToLocalLibrary(name, $source);
     patternName.set(name);
     exampleName.set("");
     dirty.set(false); // now stored in the library
-    note("save", "saved", 2000);
+    // As above (#738): the button carries the success; only failures note.
+    return true;
   }
 
   async function deleteSaved(): Promise<void> {
@@ -1284,10 +1306,19 @@
 
   function onBreakpoints(e: CustomEvent<number[]>): void {
     breakpoints = e.detail;
-    // The device has no stepping debugger — breakpoints must not arm debug
-    // mode while connected (it would show a UI that can't actually break).
-    if ($device) return;
-    if (breakpoints.length > 0 && !debugMode) {
+    // Breakpoints only ever reach the LOCAL preview engine — `applyBreakpoints`
+    // talks to `engine`, and nothing on the push path (`/api/code`,
+    // `/api/control`) carries them. So a bound device is not what gates this:
+    // the preview is local in both modes, which is why the Debug button below
+    // is ungated. Gating on `$device` made a gutter click paint a dot that
+    // reached nothing whenever any device was connected (Gitea #743).
+    //
+    // What IS gated is the AUTO-ARM, and only while this document is the
+    // program on the LEDs: silently arming a stepping debugger that can pause
+    // the browser but not the strip would split the two without the user
+    // asking for it. The Debug button stays the explicit way in there, and
+    // once it is on, gutter clicks apply as everywhere else.
+    if (breakpoints.length > 0 && !debugMode && !$livePush) {
       toggleDebug(); // placing a breakpoint arms the debugger
     } else if (debugMode) {
       applyBreakpoints();
@@ -1556,7 +1587,9 @@
     const mod = e.metaKey || e.ctrlKey;
     if (mod && e.key.toLowerCase() === "s") {
       e.preventDefault();
-      void saveCurrent();
+      // through the BUTTON, not past it (#738): the shortcut gets the same
+      // spinner and the same re-entry guard as the click does.
+      void saveBtn?.trigger();
     } else if (mod && e.key === "Enter") {
       e.preventDefault();
       applyEdit(); // recompile the preview + push to the device
@@ -1589,8 +1622,14 @@
   {/if}
 
   <!-- ── the header owns the DOCUMENT (proposal §5.2, mockup S2) ──
-       back · inline-editable name · save state · one primary action · the ⋯
-       menu of document verbs. No geometry, no transport, no sub-tabs. -->
+       back · inline-editable name · preview transport · save state · one
+       primary action · the ⋯ menu of document verbs. No geometry, no
+       sub-tabs.
+       The transport is the ONE deliberate departure from §5.2's "no
+       transport here" (Gitea #739): in the Preview section's own header it
+       was a 26px glyph in a 360px rail and Jeremy did not know it existed
+       ("I didn't even know that was an option… maybe the header bar"). A
+       control nobody finds is absent, so it moved to the top bar. -->
   <header class="editor-header" data-role="editor-header">
     <button
       data-role="editor-back"
@@ -1602,34 +1641,59 @@
       <span class="backlabel">{backLabel}</span>
     </button>
 
-    {#if editingName}
-      <input
-        class="nameedit"
-        data-role="name-input"
-        bind:this={nameInput}
-        bind:value={nameDraft}
-        aria-label="pattern name"
-        on:keydown={onNameKey}
-        on:blur={commitName}
-        on:click|stopPropagation
-      />
-    {:else}
-      <button
-        class="nameedit"
-        data-role="pattern-name"
-        title="click to rename"
-        on:click|stopPropagation={() => startRename()}
-      >
-        <!-- the clamp is on an INNER span: mockup `.nameedit` neither wraps
-             nor clips, and this element is measured against it -->
-        <span class="nametext">{nameOf($patternName, $exampleName)}</span>
-      </button>
-    {/if}
-    {#if nameError}<span class="name-error" data-role="name-error">{nameError}</span>{/if}
+    <NameField
+      bind:this={nameField}
+      value={nameOf($patternName, $exampleName)}
+      seed={$patternName || $exampleName}
+      label="pattern name"
+      dataRole="pattern-name"
+      inputRole="name-input"
+      errorRole="name-error"
+      on:commit={(e) => commitName(e.detail)}
+    />
 
-    <span class="savestate" data-role="save-state">
-      {saveStateOf($dirty, $device, $devicePatternId, $patternName, $saved, $livePush)}
+    <!-- What is LEFT of the old save-state line (#738): the Save button says
+         whether there is anything to store, so this says only the thing it
+         cannot — that the editor is not driving the LEDs (#563). The full
+         contract string lives on `data-save-state`, where `saveState()` in
+         web/tools/e2e-common.mjs reads it. -->
+    <span
+      class="savestate"
+      data-role="save-state"
+      data-save-state={saveStateOf($dirty, $device, $devicePatternId, $patternName, $saved, $livePush)}
+    >
+      {previewOnlyOf($device, $livePush)}
     </span>
+
+    <!-- The preview transport. Labelled `Pause`/`Resume`, never `Play`: the
+         header's other triangle is `▶ Play on device`, a DEVICE verb, and two
+         play marks in one bar is how this ends up meaning nothing. Inline SVG
+         rather than a glyph — a headless chromium without a symbol font draws
+         ‖ and ▶ as tofu, which is why the Debug and mic buttons below already
+         use SVG. Paused wears the accent so a frozen preview is legible from
+         across the bar (the `.grp .btn.active` idiom). -->
+    <button
+      class="btn transport"
+      class:paused={!running}
+      data-role="pause"
+      title={running
+        ? "pause the local preview (the device, if any, keeps playing)"
+        : "resume the local preview"}
+      aria-label={running ? "pause the preview" : "resume the preview"}
+      on:click={togglePause}
+    >
+      {#if running}
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <rect x="6" y="5" width="4" height="14" rx="1" />
+          <rect x="14" y="5" width="4" height="14" rx="1" />
+        </svg>
+      {:else}
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M8 5.2 19.2 12 8 18.8Z" />
+        </svg>
+      {/if}
+      <span class="tlabel">{running ? "Pause" : "Resume"}</span>
+    </button>
 
     <span class="spacer"></span>
 
@@ -1642,26 +1706,39 @@
          then nothing to play, exactly as on the playing tile (#555) — and
          absent in the playground, which has no device. -->
     {#if $device && !$livePush}
-      <button
-        class="btn"
-        data-role="editor-play-device"
+      <!-- a save AND an activate, so it is the longest wait in this bar —
+           the one Jeremy named when he asked for the spinner (#738) -->
+      <AsyncButton
+        dataRole="editor-play-device"
+        label="Play on device"
+        doneLabel="Playing"
         title="save this pattern to the device and run it on the LEDs"
-        on:click={() => void playOnDevice()}
+        action={playOnDevice}
       >
-        ▶ Play on device
-      </button>
+        <!-- SVG, not `▶`: a headless chromium with no symbol font draws the
+             glyph as tofu, which is the whole of Gitea #739 — the transport
+             two elements to the left was just converted for it. -->
+        <svg slot="icon" class="playglyph" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M8 5.2 19.2 12 8 18.8Z" />
+        </svg>
+      </AsyncButton>
     {/if}
 
-    <!-- one word, in both modes: WHERE it lands is the save state's job,
-         not the button's (audit E2 — "Save to device" was the wrong text) -->
-    <button
-      class="btn primary"
-      data-role="save"
+    <!-- one word, in both modes: WHERE it lands is the mode's business, not
+         the button's (audit E2 — "Save to device" was the wrong text). Since
+         #738 the word also carries the STATE: `Saved` whenever there is
+         nothing to store, a spinner for as long as the round trip lasts, and
+         no second save can start inside the first. -->
+    <AsyncButton
+      bind:this={saveBtn}
+      cls="btn primary"
+      dataRole="save"
+      label="Save"
+      doneLabel="Saved"
+      settled={nothingToSave}
       title={$device ? "store this pattern on the device" : "store this pattern in this browser"}
-      on:click={() => void saveCurrent()}
-    >
-      Save
-    </button>
+      action={saveCurrent}
+    />
 
     <span class="overflow">
       <button
@@ -1837,21 +1914,10 @@
             <span class="rdim" data-role="preview-dims" title={previewRate.title}>
               {previewRate.text} · {$layoutName}
             </span>
-            <!-- transport order (audit E7/E8): pause, then Debug beside it — the
-                 two things you reach for while writing a frame — then the rate.
-                 The pause box is the global 26 px `.btn.sm.icon`; it used to be a
-                 padding-only button around inherited-size text, which is the
-                 oversized glyph Jeremy flagged. -->
+            <!-- Debug first, then the rate (audit E8). Pause used to lead this
+                 group; it is in the header bar now — a 26px glyph in a 360px
+                 rail was not a control anyone found (Gitea #739). -->
             <span class="grp">
-              <button
-                class="btn sm icon glyph"
-                data-role="pause"
-                title={running ? "pause the preview" : "resume the preview"}
-                aria-label={running ? "pause" : "play"}
-                on:click={togglePause}
-              >
-                {running ? "‖" : "▶"}
-              </button>
               <!-- the preview runs on the local engine (even on a device), so the
                    step-debugger works everywhere. Labelled, not icon-only: the bug
                    glyph alone did not read as "debugger" (Jeremy, 2026-09-19). -->
@@ -2041,10 +2107,9 @@
   /* The name field (`.nameedit`), the header split and the transport boxes
      are components/editor-frame.css — the map screen wears the same chrome. */
 
-  .name-error {
-    color: var(--error);
-    font-size: 12px;
-  }
+  /* The inline rename error moved into components/NameField.svelte with the
+   * rest of the rename interaction (Gitea #736/#737) — Svelte scopes styles
+   * to the component that owns the markup, so a copy here would be dead. */
 
   /* the capacity idiom, kept: certainty-graded and never blocking */
   .capstrip {
@@ -2100,20 +2165,16 @@
     position: relative;
   }
 
-  .spinner {
-    display: inline-block;
+  /* `.spinner` is the shared chrome's now (app.css, #738) — four copies of it
+     in this tree had four different `@keyframes` names. */
+
+  /* The play mark inside `▶ Play on device`. It is SLOTTED into AsyncButton,
+     and Svelte compiles slotted markup in the PARENT's scope, which is why
+     this rule is here and not in the component (.claude/rules/web.md). */
+  .playglyph {
+    display: block;
     width: 12px;
     height: 12px;
-    border: 2px solid color-mix(in srgb, var(--text-dim) 40%, transparent);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: conn-spin 0.7s linear infinite;
-  }
-
-  @keyframes conn-spin {
-    to {
-      transform: rotate(1turn);
-    }
   }
 
   /* ---- phone (D9) ---- the frame does the stacking and the header row

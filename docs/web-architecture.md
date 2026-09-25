@@ -720,7 +720,17 @@ nothing crosses between them.
 |---|---|---|
 | the **header** (`editor-header`) | the DOCUMENT: back · the name field · save state · [**▶ Play on device**] · **Save** (the one primary action) · the ⋯ menu of document verbs | `editor-back`, `pattern-name`, `name-input`, `name-error`, `save-state`, `editor-play-device`, `save`, `overflow`, `add-to-playlist`, `duplicate`, `epe-export`, `epe-import`, `share`, `delete` |
 | the **code pane** | its own errors AND its advisory lints: gutter dot + wavy underline on the line + one status strip pinned to the bottom of the pane | `compile-error`, `runtime-error`, `boxed-lint`, `map-compile-error`, `.cm-err-dot`, `.cm-lintRange-error`, `.cm-lintRange-warning` |
-| the **preview header** | the TRANSPORT, next to the thing it controls | `preview-dims`, `pause`, `debug`, `mic-toggle`, `target-fps` |
+| the **preview header** | the preview's own knobs, next to the thing they control | `preview-dims`, `debug`, `mic-toggle`, `target-fps` |
+
+Since #739 (2026-09-24) the **transport is in the header bar**, not the preview
+header — `pause` is a `.btn.transport` beside the save state, on *both* editors.
+Jeremy: "the pause button doesn't look like a pause button at all (same on the
+script page)… They are also very poorly placed and coloured. I didn't even know
+that was an option… Maybe the header bar." It was the text glyph `‖`, which a
+headless chromium without a symbol font draws as tofu — the reason the Debug and
+mic buttons beside it were already inline SVG. It is now an SVG mark plus the
+word `Pause`/`Resume`, accent-outlined while paused; at 390 px it keeps its
+place and drops the word.
 
 **The frame is the mock's, element for element** (mockup S2/S2b, Gitea #538):
 `.editor-frame` is a two-row grid (header, then `.edbody`), `.edbody` a flex
@@ -875,11 +885,26 @@ In **local preview** the rail preview runs the local engine exactly as always
 is sent. The header says so in the save state, and grows the one verb that
 changes it:
 
-* `save-state` (`data-role="save-state"`) text is a contract the harnesses
-  assert. Playground or live push: `unsaved` · `saved · on device` ·
+* `save-state` (`data-role="save-state"`) carries a contract the harnesses
+  assert — but since #738 (2026-09-24) it lives on the element's
+  **`data-save-state` attribute**, not in its text. The strings are unchanged.
+  Playground or live push: `unsaved` · `saved · on device` ·
   `saved · in browser` · `not saved yet`. Console in local preview:
   `unsaved · preview only` · `saved · on device · preview only` ·
-  `preview only · not on device`.
+  `preview only · not on device`. Read it with `el.dataset.saveState`
+  (`saveState()` in `web/tools/e2e-common.mjs` does).
+
+  What the span **renders** is only the part the Save button cannot say. The
+  button now carries the save half itself — `Save` while there is something to
+  store, a spinner in flight, `Saved` for a second after, then a dirty-aware
+  label — so printing `saved · on device` an inch to its left was the same
+  fact twice, which is what Jeremy asked to delete. The other half is not a
+  property of the document at all: it says the editor is not driving the LEDs.
+  So the pattern editor's span renders `preview only` or nothing, and the
+  scene editor's renders `in browser` (a playground scene, saved and clean) or
+  nothing. The only wording that left the screen is `on device` vs
+  `in browser` on the pattern editor, and the MODE already fixes that — a
+  console can only store on the device, a playground only in this browser.
 * `Save` stores the pattern and does **not** activate it — on a console that
   is `POST /api/patterns`, which gives a Library pattern its row in
   `On device` without touching the LEDs.
@@ -1127,17 +1152,43 @@ unscoped harness selector would silently resolve to the pattern editor's.
   is the reverse of the wire and translates indices at its own edge. Drag to
   reorder (the destination is a 2px accent rule between rows; the list never
   reflows under the pointer), the eye to hide, click to select. Visibility
-  lives HERE and never as a checkbox in the inspector.
+  lives HERE and never as a checkbox in the inspector. **That ordering rule is
+  DRAWN, not written** (#736 item 17, 2026-09-24): `scene-stack-order` is the
+  stack seen edge-on at the end of the column header and `scene-stack-base` a
+  hatched ground rule under the bottom row, in place of the words `top = front`
+  and `base` — "this is a sign that visual UI indicators are needed. Not text
+  descriptions which are easily confused." The words survive as the tooltips
+  and the accessible names.
 * **PREVIEW** (`components/scene/SceneStage.svelte`) — the composite in the
-  device's shape, the selected layer's box as a dashed marquee you can drag
-  and resize pixel-snapped, and the frame-cost line with its meter. The cost
-  line reads `caps.layers`, never a constant. It does NOT mount
-  `components/Preview.svelte`: that one is the pattern editor's and already
-  appears twice in the DOM.
+  device's shape and the selected layer's box as a dashed marquee you can drag
+  and resize pixel-snapped. Its header carries the dims line and the
+  preview-rate chooser (`scene-target-fps`, the pattern editor's own option
+  set). It does NOT mount `components/Preview.svelte`: that one is the pattern
+  editor's and already appears twice in the DOM. **There is no frame-cost line
+  and no budget meter** — both were deleted 2026-09-24 (#736 item 24): "that
+  loading bar below the pattern preview needs to completely go away. That and
+  this text 'Frame cost: 1 pattern layer · text, sprite and color layers are
+  free'". The meter read as progress, and the budget it stated was one nobody
+  was near. The sentence has one home now, in the `+ Add layer` menu at the
+  cap, where it explains a row that will not click.
+* **TRANSPORT** — in the **header bar** (`scene-pause`), not the preview
+  column, and the same `.transport` element and words the pattern editor's
+  uses (#739). A labelled SVG button, `Pause`/`Resume` and never `Play`: a
+  scene's play verb is `▶ Play on device` in the ⋯ menu, and two play marks in
+  one bar is how a bar stops meaning anything.
 * **INSPECTOR** — one component per type (`PatternInspector`, `TextInspector`,
   `SpriteInspector`, `ColorInspector`, all ending in the shared `StyleTail`).
   *Transparent* is a key on which pixels count and is shown only under
   `Blend = Normal`; under any other blend the row is GONE, not greyed (S7g).
+  *Blend* and *Transparent* are `RichSelect` pickers — icon, name and one line
+  of plain English per option, from `lib/blendMeta.ts` — not bare `<select>`s
+  of jargon (#735). **A pattern layer has no Fit control**: `style.fit` is read
+  in exactly one place in the codebase, `compose::blit_sprite`, so on a pattern
+  layer the box merely clips a full-layout render and `fit` does nothing
+  (`docs/spec/scenes.md` already said so). `scene-fit` is a static line saying
+  what the box really is; the chooser is `scene-sprite-fit` on the sprite
+  inspector — **Once** (`fill`) and **Tile** (`tile`), the only two behaviours
+  that exist, with a stored `contain` folded onto Once.
 
 ### Sprites: drawing on the preview (`components/scene/SpriteTools.svelte`, #481)
 
@@ -1251,10 +1302,12 @@ Editor: `scene-editor-view`, `scene-editor-header`, `scene-editor-back`,
 `scene-overflow`, `scene-menu`, `scene-play-device`, `scene-duplicate`,
 `scene-delete`; `scene-layers`, `scene-layer` (`data-layer`),
 `scene-layer-grip`, `scene-layer-eye`, `scene-layer-pick`, `scene-drop`,
+`scene-stack-order`, `scene-stack-base`, `scene-layer-badge`,
 `scene-add-layer`, `scene-add-menu`,
 `scene-add-pat`/`-text`/`-sprite`/`-color`; `scene-preview`,
-`scene-preview-dims`, `scene-pause`, `scene-stage`, `scene-marquee`,
-`scene-handle-nw`/`-ne`/`-sw`/`-se`, `scene-cost`; `scene-inspector`,
+`scene-preview-dims`, `scene-target-fps`, `scene-pause` (in the HEADER since
+#739), `scene-stage`, `scene-marquee`,
+`scene-handle-nw`/`-ne`/`-sw`/`-se`; `scene-inspector`,
 `scene-layer-name`, `scene-pattern`, `scene-pattern-name`,
 `scene-pattern-shape`, `scene-pattern-change`, `scene-controls`,
 `scene-controls-label`, `scene-ramp`, `scene-ramp-stops`, `scene-ramp-stop`,

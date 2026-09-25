@@ -14,9 +14,8 @@
 //! `push_json` writers, which append to a caller-owned `String` through
 //! `jsonview`'s push helpers (no `format!` — see `.claude/rules/firmware.md`).
 
-use alloc::string::String;
 
-use crate::jsonview::{push_piece, push_u32};
+use crate::jsonview::{push_piece, push_u32, Sink};
 use crate::outpipe::GridMap;
 
 /// Where the device's *own* map (not the engine's fallback) came from.
@@ -144,7 +143,7 @@ impl Geom {
 
     /// `{"dims":D,"regular":B,"w":W,"h":H,"source":"…","pattern_dims":P,
     /// "compatible":B}`.
-    pub fn push_json(&self, out: &mut String) {
+    pub fn push_json(&self, out: &mut dyn Sink) {
         push_piece(out, "{\"dims\":");
         push_u32(out, self.dims as u32);
         push_piece(out, ",\"regular\":");
@@ -333,7 +332,7 @@ impl Caps {
         }
     }
 
-    pub fn push_json(&self, out: &mut String) {
+    pub fn push_json(&self, out: &mut dyn Sink) {
         push_piece(out, "{\"strip_driver\":");
         push_piece(out, bool_str(self.strip_driver));
         push_piece(out, ",\"panel\":");

@@ -18,6 +18,32 @@
 
   const dispatch = createEventDispatcher<{ input: string }>();
 
+  /** The pill, so a click anywhere in it can reach the swatch inside it
+   *  (Gitea #736 item 7). Jeremy: "the entire color button (which includes
+   *  the name) isn't clickable to change the color, just the color preview
+   *  square itself" — the name read as part of the control because it IS
+   *  drawn as part of it, and only the 14px chip did anything. */
+  let pill: HTMLElement | undefined;
+
+  /**
+   * Forward a click on the pill to the picker's own opener.
+   *
+   * Two things make this the shape it is. The opener must stay ONE button —
+   * a second `<button>` nested inside the pill is not legal HTML and the
+   * picker's swatch is already the keyboard path — so the pill dispatches a
+   * real click on it instead of duplicating the popover's state. And the
+   * pill's own handler is `|stopPropagation`: `Popover` closes on any window
+   * click that is not inside itself or inside its `anchor`, so without it the
+   * label's click would open the popover and the SAME event would go on to
+   * dismiss it (.claude/rules/web.md — this exact trap, in this exact file's
+   * neighbour).
+   */
+  function openPicker(e: MouseEvent): void {
+    // the swatch handles its own click; re-dispatching would toggle twice
+    if ((e.target as HTMLElement | null)?.closest("button.swatch")) return;
+    pill?.querySelector<HTMLButtonElement>("button.swatch")?.click();
+  }
+
   $: rgb = hexToRgb(`#${value}`) ?? [1, 1, 1];
 
   function onInput(e: CustomEvent<number[]>): void {
@@ -62,12 +88,42 @@
   }
 </script>
 
-<span class="swatchbtn" data-role={dataRole} data-value={value}>
+<!-- The whole pill is the control. `role="presentation"` and no key handler
+     of its own on purpose: this is a larger hit area for a pointer, and the
+     thing it forwards to — the picker's swatch button — is what carries the
+     role, the label, `aria-expanded` and the keyboard. -->
+<span
+  class="swatchbtn"
+  bind:this={pill}
+  data-role={dataRole}
+  data-value={value}
+  title={`${label} — #${value}`}
+  role="presentation"
+  on:click|stopPropagation={openPicker}
+>
   <ColorPicker kind="rgb" value={rgb} {label} on:input={onInput} />
-  {colorName(value)}
+  <span class="cname">{colorName(value)}</span>
 </span>
 
 <style>
+  /* The pill is a button now in everything but the tag name, so it says so:
+     a pointer cursor over the whole of it, and the same hover lift the other
+     bordered controls have. */
+  .swatchbtn {
+    cursor: pointer;
+  }
+
+  /* the app's one "this is pressable" hover, `button:hover` in app.css */
+  .swatchbtn:hover {
+    border-color: var(--accent);
+  }
+
+  /* the name, no longer a bare text node — it needs to be addressable so the
+     click forwarder can tell it from the swatch */
+  .cname {
+    pointer-events: none;
+  }
+
   /* the mock's `.swatchbtn i` — the picker's own 26x22 swatch, resized */
   .swatchbtn :global(button.swatch) {
     width: 14px;

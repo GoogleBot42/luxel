@@ -17,7 +17,7 @@
   import { parseControlHints } from "../../lib/hints";
   import type { Control, Engine } from "../../lib/luxel";
   import type { Layout, PatternDims, ProjectionMode } from "../../lib/geometry";
-  import { FITS, type Fit, type Layer } from "../../lib/scene";
+  import type { Layer } from "../../lib/scene";
   import { luxel } from "../../stores/pattern";
 
   export let layer: Layer;
@@ -25,8 +25,15 @@
    *  and `patternDims()` are read from here rather than from a throwaway
    *  compile (`PlaylistRow.svelte` does the latter; a scene already has one). */
   export let engine: Engine | null = null;
-  /** The layer's pattern source and name, resolved by the page. */
-  export let source: string | undefined = undefined;
+  /** The layer's pattern source and name, resolved by the page.
+   *
+   *  Three states, not two (Gitea #731): a STRING is the source; `null` means
+   *  the page looked and there is nothing to show (no pattern chosen, or an id
+   *  that resolves to nothing), and `undefined` means it does not know yet.
+   *  `PatternThumb` draws black for `null` immediately and only spins for
+   *  `undefined` — collapsing the two here is what made an unresolved layer
+   *  spin forever. */
+  export let source: string | null | undefined = undefined;
   export let patternName = "";
   /** The rig the scene renders on — what the projection row is relative to. */
   export let rig: Layout;
@@ -69,10 +76,6 @@
   // inside a template expression is not something svelte-check parses.
   function setProj(mode: ProjectionMode | null): void {
     patchPat({ proj: mode });
-  }
-
-  function setFit(v: string): void {
-    patchLayer({ style: { ...layer.style, fit: v as Fit } });
   }
 </script>
 
@@ -128,16 +131,19 @@
     on:input={(e) => patchLayer({ style: { ...layer.style, rect: e.detail } })}
   />
 
-  <div class="irow">
-    <div class="ilab">Fit</div>
-    <select
-      class="sel wide"
-      data-role="scene-fit"
-      value={layer.style.fit}
-      on:change={(e) => setFit(e.currentTarget.value)}
-    >
-      {#each FITS as f (f)}<option value={f}>{f}</option>{/each}
-    </select>
+  <!-- Fit was a three-word `<select>` here and it did NOTHING: `style.fit` is
+       read in exactly one place in the firmware, `compose::blit_sprite`, so on
+       a PATTERN layer the box just clips a full-layout render (the pattern
+       still sees the whole grid — docs/spec/scenes.md "Geometry"). Jeremy,
+       2026-09-24 (#735): "The box 'fit' type dropdown makes no sense. What
+       does it do?" — it did nothing, so it is a line that says what the box
+       actually is, the way the sprite inspector states its own (S7c). -->
+  <div class="irow start">
+    <div class="ilab" style="padding-top:1px">Fit</div>
+    <div class="hint" data-role="scene-fit">
+      The box is a window: the pattern always renders across the whole layout and the box shows the
+      part of it you keep. Nothing is scaled or repeated.
+    </div>
   </div>
 
   <div class="irule"></div>

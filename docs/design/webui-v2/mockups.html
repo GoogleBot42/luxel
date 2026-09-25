@@ -114,6 +114,17 @@ body{background:#0e1013;color:var(--text);font:14px/1.45 var(--sans);-webkit-fon
 .edhdr{height:48px;display:flex;align-items:center;gap:12px;padding:0 16px;background:var(--bg-panel);border-bottom:1px solid var(--border);position:relative}
 .nameedit{display:inline-flex;align-items:center;height:30px;padding:0 9px;border:1px solid var(--border);border-radius:6px;background:rgba(255,255,255,.02);font-size:14px;font-weight:600;color:var(--text)}
 .savestate{font:11.5px/1 var(--mono);color:var(--text-dim)}
+/* The preview TRANSPORT lives in the editor header bar, on both editors
+   (Gitea #739, 2026-09-24). It used to be a 26px `.btn.sm.icon` carrying the
+   text glyph `‖` in the Preview section's `.grp` — Jeremy: "the pause button
+   doesn't look like a pause button at all … They are also very poorly placed
+   and colored. I didn't even know that was an option … Maybe the header bar."
+   So: a real SVG mark, a word beside it, and the header. `.mini` is the 390px
+   form, where the word is what is given up, not the place. */
+.btn.transport{flex:none;gap:7px}
+.btn.transport svg{width:14px;height:14px}
+.btn.transport.mini{width:32px;padding:0}
+.btn.transport.mini .tlabel{display:none}
 .menuwrap{position:relative}
 .edhdr-rail{flex:none;width:344px;height:100%;display:flex;align-items:center;justify-content:flex-end;padding-left:16px;margin-left:16px;border-left:1px solid var(--border)}
 .menu{position:absolute;right:0;top:calc(100% + 7px);width:214px;padding:4px;background:var(--bg-panel);border:1px solid var(--border);border-radius:8px;box-shadow:0 14px 34px rgba(0,0,0,.65);z-index:20}
@@ -440,9 +451,10 @@ primary action shrunk to an icon.</p>
   <header class="edhdr">
     <div class="btn quiet">← Patterns</div>
     <div class="nameedit">Aurora 2D</div>
-    <div class="savestate">saved · on device</div>
+    <div class="savestate">preview only</div>
+    <div class="btn transport" title="pause the preview"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg><span class="tlabel">Pause</span></div>
     <div class="spacer"></div>
-    <div class="btn primary">Save</div>
+    <div class="btn primary">Saved</div>
     <div class="menuwrap">
       <div class="btn icon">⋯</div>
       <div class="menu">
@@ -505,7 +517,6 @@ primary action shrunk to an icon.</p>
           <div class="slabel">Preview</div>
           <div class="rdim">64×64 · 27 fps</div>
           <div class="grp">
-            <div class="btn sm icon" title="pause">‖</div>
             <div class="sel" style="height:26px;font-size:12px;padding:0 7px 0 8px">60 fps <i>▾</i></div>
             <div class="btn sm icon" title="debug"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="8" y="7" width="8" height="12" rx="4"/><path d="M4 10h4M16 10h4M4 16h4M16 16h4M9.5 5l1 2M14.5 5l-1 2"/></svg></div>
           </div>
@@ -550,6 +561,19 @@ holds only code; compile errors report in a status strip pinned to it — gutter
 instead of a toast somewhere else on the page. The preview header carries only what this pattern can use: Aurora 2D
 reads no audio, so there is no mic button — it appears when a pattern binds a sensor — and <i>VARS</i> is absent
 entirely for a pattern that exports none.</p>
+<p class="note"><b>Amended 2026-09-24 (#739, #738).</b> Two things in the header bar changed after Jeremy reviewed the
+shipped screen. <b>The transport is here, not in the preview panel's header.</b> "The pause button doesn't look like a
+pause button at all (same on the script page)… They are also very poorly placed and colored. I didn't even know that
+was an option… Maybe the header bar." It was a 26 px <span class="mono tiny">‖</span> — a text glyph, which a headless
+chromium without a symbol font draws as tofu, next to two buttons that were already inline SVG for exactly that
+reason. It is now a labelled SVG button (<i>Pause</i> / <i>Resume</i>, never <i>Play</i>: the header's other triangle
+is <i>▶ Play on device</i>, a device verb), and the preview panel's header keeps the frame-rate chooser it always had.
+At 390 px (S2b) the button gives up its <i>word</i>, not its place. <b>And the save-state line says less</b>: the Save
+button carries the document's state itself — <i>Save</i> → spinner → <i>Saved</i> for a second → dirty-aware label —
+so printing <i>saved · on device</i> an inch to its left was the same fact twice. What the button cannot say is the
+other half, which is not a property of the document at all: <i>preview only</i>, the #563 disclosure that the editor is
+not driving the LEDs. The full contract string (<i>saved · on device · preview only</i> and its siblings) moved to the
+<span class="mono tiny">data-save-state</span> attribute, where the harnesses read it.</p>
 
 <!-- ===================== S2b ===================== -->
 <p class="cap"><b>S2b</b> · Editor — mobile 390 px</p>
@@ -557,7 +581,8 @@ entirely for a pattern that exports none.</p>
   <header class="edhdr" style="height:44px;padding:0 10px;gap:8px">
     <div class="btn quiet icon">←</div>
     <div class="nameedit" style="font-size:13px;flex:1;min-width:0">Aurora 2D</div>
-    <div class="btn primary">Save</div>
+    <div class="btn transport mini" title="pause the preview"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg><span class="tlabel">Pause</span></div>
+    <div class="btn primary">Saved</div>
     <div class="btn icon">⋯</div>
   </header>
   <div style="height:872px;overflow:hidden">
@@ -566,7 +591,6 @@ entirely for a pattern that exports none.</p>
         <div class="slabel">Preview</div>
         <div class="rdim">64×64</div>
         <div class="grp">
-          <div class="btn sm icon">‖</div>
           <div class="btn sm icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="8" y="7" width="8" height="12" rx="4"/><path d="M4 10h4M16 10h4M4 16h4M16 16h4M9.5 5l1 2M14.5 5l-1 2"/></svg></div>
         </div>
       </div>
@@ -1043,7 +1067,7 @@ type line (overrides still in accent) and the values chip keeps working as a tap
         <div class="pr on"><span class="radio"></span><div style="display:flex;align-items:center;gap:6px">Matrix <input class="inp xs num" value="64"><span class="dim tiny">×</span><input class="inp xs num" value="64"></div></div>
         <div class="pr"><span class="radio"></span><div style="display:flex;align-items:center;gap:8px">3D lattice <input class="inp xs num" value="5"><span class="dim tiny">³</span></div></div>
         <div class="pr"><span class="radio"></span><div>Custom map program →</div></div>
-        <div class="popfoot">Every preview and tile on this page uses this layout. On a device it is the device's own.</div>
+        <div class="popfoot">Every preview and tile on this playground will use this layout. When controlling a luxel device it is the device's layout.</div>
       </div>
     </div>
     <div class="fps" style="margin-left:14px">60 fps</div>
@@ -1075,6 +1099,10 @@ every preview on the page at once, which is why the tiles behind are square; the
 playground twin of S3's LED layout, and the only place a "pixel count" field survives. The chip sets shape only.
 Wiring (serpentine, start corner, outputs) is a console setting in LED layout; the console preview runs the local
 engine with the device's real wiring so a 1D pattern under "By index" looks like the panel.</p>
+<p class="note"><b>Amended 2026-09-24 (#742 item 43).</b> The popover's footer used to read "Every preview and tile on
+this page uses this layout. On a device it is the device's own." Jeremy's wording, and the copy drawn above:
+<i>Every preview and tile on this playground will use this layout. When controlling a luxel device it is the device's
+layout.</i> — "this page" was ambiguous with the page the chip is on, and "the device's own" named nothing.</p>
 <style>
 /* ---------- batch 2 · scenes ---------- */
 .c4{grid-template-columns:repeat(4,1fr)}
@@ -1092,16 +1120,42 @@ engine with the device's real wiring so a 1D pattern under "By index" looks like
 .lrow .ty{flex:none;width:14px;text-align:center;font:11px/1 var(--mono);color:var(--text-dim)}
 .lrow .nm2{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lrow .meta2{font:11px/1 var(--mono);color:var(--text-dim);white-space:nowrap}
+/* The per-layer-type marks (#736 item 23). They were the single glyphs
+   `▤ ▦ ▭` — "terrible and should be reconsidered (except for the text icon,
+   that's good)" — so three became real drawings and `T` stayed a letter:
+   a travelling wave for a running program, a 2x2 block of pixels for drawn
+   pixels, a filled swatch for one flat colour. The SAME mark is drawn in the
+   layer row and in the `+ Add layer` menu entry that makes it. */
+.lico{display:block;flex:none;color:var(--text-dim)}
+.tglyph{display:flex;align-items:center;justify-content:center;width:14px;height:14px;font:600 12px/1 var(--mono)}
+/* Stacking order, DRAWN (#736 item 17) — the words `top = front` were "text
+   descriptions which are easily confused". The stack seen edge-on, front
+   plate lit, arrow off the front, at the end of the Layers header. */
+.zaxis{display:flex;align-items:center;color:var(--text-dim)}
+.zaxis svg{display:block;width:22px;height:18px}
+.zaxis .zfront,.zaxis .zarrow{stroke:var(--accent)}
+/* …and the other half of item 17: the base was the WORD `base` in the bottom
+   row's metadata column, where it competed with `60 % · lighten` and lost. It
+   is a hatched ground rule under the last row now — the section mark every
+   engineering drawing uses for "this is the floor". */
+.ground{height:7px;margin:5px 0 0 22px;border-top:1px solid var(--border);background:repeating-linear-gradient(-45deg,var(--border) 0 1px,transparent 1px 5px);opacity:.85}
 .addwrap{position:relative;margin-top:14px}
 .menu.full{left:0;right:0;width:auto}
+/* one fixed icon column, so `Pattern` and `Text` start their words at the
+   same x (#736 item 22) */
+.menu.full .mi{display:flex;align-items:center;gap:8px}
 .mi.dis{color:#5b6070;white-space:nowrap}
 .mdim{margin-left:auto;font:10px/1 var(--mono);color:var(--text-dim);white-space:nowrap}
 .stage{position:relative;width:460px;line-height:0}
 .stage canvas{display:block;width:460px;height:460px;image-rendering:pixelated;border:1px solid var(--border);border-radius:6px;background:#000}
 .marq{position:absolute;border:1px dashed var(--accent);box-shadow:0 0 0 1px rgba(0,0,0,.45)}
 .hdl{position:absolute;width:7px;height:7px;background:var(--accent);border-radius:1px}
-.budget{max-width:460px;height:4px;margin-top:7px;border-radius:2px;background:#272c35;overflow:hidden}
-.budget i{display:block;height:100%;background:var(--warn)}
+/* `.budget` (the frame-cost meter) and its fill were HERE. Both are deleted
+   (#736 item 24, 2026-09-24). Jeremy: "That loading bar below the pattern
+   preview needs to completely go away. That and this text 'Frame cost: 1
+   pattern layer · text, sprite and color layers are free'". The sentence
+   survives once, reworded, as the at-the-cap reason in the Add layer menu
+   (S7d). */
 .irow{display:grid;grid-template-columns:86px 1fr;gap:10px;align-items:center;margin-bottom:11px}
 .irow>*{min-width:0}
 .irow.wide{grid-template-columns:1fr;gap:6px}
@@ -1179,59 +1233,61 @@ exactly where a pattern plays. One quiet sentence explains what a scene is; the 
   <header class="edhdr">
     <div class="btn quiet">← Scenes</div>
     <div class="nameedit">Clock overlay</div>
-    <div class="savestate">saved · on device</div>
+    <div class="savestate"></div>
+    <div class="btn transport" title="pause the preview"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg><span class="tlabel">Pause</span></div>
     <div class="spacer"></div>
-    <div class="btn primary">Save</div>
+    <div class="btn primary">Saved</div>
     <div class="menuwrap"><div class="btn icon">⋯</div></div>
   </header>
   <div class="scene3" style="height:712px">
     <div class="lcol">
       <div class="rhead" style="margin-bottom:8px">
         <div class="slabel">Layers</div>
-        <div class="rdim" style="margin-left:auto">top = front</div>
+        <span class="zaxis" style="margin-left:auto" title="top = front: the top row draws over the ones below it"><svg viewBox="0 0 30 24" fill="none" stroke="currentColor" stroke-width="1.6" role="img" aria-label="top of the list is the front of the stack"><path class="zfront" d="M11 4.6 20 8l-9 3.4L2 8Z"/><path d="M11 11.4 20 14.8l-9 3.4L2 14.8" opacity=".55"/><path d="M11 16.6 20 20l-9 3.4L2 20" opacity=".3"/><path class="zarrow" d="M25.5 10.5V3.2m0 0-2.6 2.8m2.6-2.8 2.6 2.8" stroke-width="1.8" stroke-linecap="round"/></svg></span>
       </div>
       <div class="lrow sel">
         <span class="hnd">⠿</span>
         <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
-        <span class="ty">T</span>
+        <span class="ty"><span class="lico tglyph">T</span></span>
         <span class="nm2">Time</span>
         <span class="meta2">12:48</span>
       </div>
       <div class="lrow">
         <span class="hnd">⠿</span>
         <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
-        <span class="ty">▦</span>
+        <span class="ty"><svg class="lico" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" role="img" aria-label="sprite layer"><path d="M3.5 3.5h7v7h-7zM13.5 3.5h7v7h-7zM3.5 13.5h7v7h-7zM13.5 13.5h7v7h-7z"/></svg></span>
         <span class="nm2">Heart</span>
         <span class="meta2">sprite · 9×8</span>
       </div>
       <div class="lrow">
         <span class="hnd">⠿</span>
         <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
-        <span class="ty">▤</span>
+        <span class="ty"><svg class="lico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" role="img" aria-label="pattern layer"><path d="M3 12c3-7 6-7 9 0s6 7 9 0"/></svg></span>
         <span class="nm2">Aurora 2D</span>
         <span class="meta2">60 % · lighten</span>
       </div>
       <div class="lrow off">
         <span class="hnd">⠿</span>
         <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4l16 16"/><path d="M6.7 6.9C4 8.6 2 12 2 12s3.8 6 10 6c1.9 0 3.5-.5 4.9-1.3"/><path d="M9.9 5.2A9.6 9.6 0 0 1 12 6c6.2 0 10 6 10 6a18 18 0 0 1-2.4 3"/></svg>
-        <span class="ty">▭</span>
+        <span class="ty"><svg class="lico" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" role="img" aria-label="color layer"><path d="M4 4h16v16H4z"/></svg></span>
         <span class="nm2">Bottom bar</span>
         <span class="meta2">color</span>
       </div>
       <div class="lrow">
         <span class="hnd">⠿</span>
         <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
-        <span class="ty">▤</span>
+        <span class="ty"><svg class="lico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" role="img" aria-label="pattern layer"><path d="M3 12c3-7 6-7 9 0s6 7 9 0"/></svg></span>
         <span class="nm2">Rainbow</span>
-        <span class="meta2">base</span>
+        <span class="meta2"></span>
       </div>
+      <div class="ground" title="the bottom row is the base: every other layer draws on top of it"></div>
       <div class="addwrap">
-        <div class="btn primary" style="width:100%;justify-content:center">+ Add layer ▾</div>
+        <div class="btn primary" style="width:100%;justify-content:center">+ Add layer</div>
         <div class="menu full">
-          <div class="mi dis" style="display:flex;align-items:center;gap:8px">▤ Pattern <span class="mdim">2 of 2 used on this device</span></div>
-          <div class="mi hi">T Text</div>
-          <div class="mi">▦ Sprite</div>
-          <div class="mi">▭ Color</div>
+          <div class="mi dis"><svg class="lico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" role="img" aria-label="pattern layer"><path d="M3 12c3-7 6-7 9 0s6 7 9 0"/></svg><span class="ml">Pattern</span><span class="mdim">2 of 2 used on this device</span></div>
+          <div class="mi hi"><span class="lico tglyph">T</span><span class="ml">Text</span></div>
+          <div class="mi"><svg class="lico" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" role="img" aria-label="sprite layer"><path d="M3.5 3.5h7v7h-7zM13.5 3.5h7v7h-7zM3.5 13.5h7v7h-7zM13.5 13.5h7v7h-7z"/></svg><span class="ml">Sprite</span></div>
+          <div class="mi"><svg class="lico" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" role="img" aria-label="color layer"><path d="M4 4h16v16H4z"/></svg><span class="ml">Color</span></div>
         </div>
       </div>
     </div>
@@ -1241,7 +1297,7 @@ exactly where a pattern plays. One quiet sentence explains what a scene is; the 
         <div class="slabel">Preview</div>
         <div class="rdim">64×64 · 24 fps on device</div>
         <div class="grp">
-          <div class="btn sm icon">‖</div>
+          <div class="sel" style="height:26px;font-size:12px;padding:0 7px 0 8px">60 fps <i>▾</i></div>
         </div>
       </div>
       <div class="stage">
@@ -1252,8 +1308,6 @@ exactly where a pattern plays. One quiet sentence explains what a scene is; the 
         <div class="hdl" style="left:-3px;top:257px"></div>
         <div class="hdl" style="left:456px;top:257px"></div>
       </div>
-      <div class="hint" style="margin-top:12px">Frame cost: 2 pattern layers · text, sprite and color layers are free</div>
-      <div class="budget"><i style="width:70%"></i></div>
     </div>
 
     <div class="rcol">
@@ -1299,11 +1353,27 @@ what the selected layer does (right) — so nothing about a layer is edited in t
 between them: the text layer is highlighted in the list and its box is the dashed marquee on the preview, which is how
 you set geometry — by dragging, with the four numbers as the exact fallback. Visibility lives on the eye in the list,
 never as a checkbox in the inspector; <i>Delete layer</i> sits alone at the bottom, error-tinted and quiet, far from
-Save. The cost line states the real constraint (pattern layers cost frame time, text and color do not). Controls that
+Save. Controls that
 cannot do anything are not drawn: <i>Speed</i> appears only once Scroll is something other than none, and <i>Image</i>
 is absent from Add layer until the device advertises per-file uploads (Phase D). The greyed <i>Pattern · 2 of 2 used on
 this device</i> row is the deliberate exception — disabled <i>with</i> its reason, because the layer budget is
 something the user has to learn.</p>
+<p class="note"><b>Amended 2026-09-24/25</b> (Jeremy's feedback batch, Gitea epic #729). Four things this frame used to
+draw are gone, and the app is right where it departs from the earlier drawing:
+<b>(1) the frame-cost line and the budget meter under the preview</b> — "that loading bar below the pattern preview
+needs to completely go away. That and this text 'Frame cost: 1 pattern layer · text, sprite and color layers are
+free'" (#736 item 24). The sentence has one home now, reworded, in the Add layer menu <i>at the cap</i> (S7d).
+<b>(2) the words <i>top = front</i> and <i>base</i></b> — "this is a sign that visual UI indicators are needed. Not
+text descriptions which are easily confused" (#736 item 17): the stack is drawn edge-on at the end of the Layers
+header, and the base is a hatched ground rule under the bottom row.
+<b>(3) the transport</b> — a 26 px <span class="mono tiny">‖</span> glyph in the preview column's header, which Jeremy
+did not know was there at all; it is a labelled SVG button in the header bar now, identical on both editors (#739), and
+the preview section keeps only the frame-rate chooser it gained from #736 item 26.
+<b>(4) the save-state line and the <i>Add layer</i> chevron</b> — the Save button carries its own state
+(Save → spinner → <i>Saved</i>), so the header span prints only what the button cannot: <i>preview only</i> on a
+console editing locally, <i>in browser</i> for a playground scene, and the full contract string moved to
+<span class="mono tiny">data-save-state</span> (#738). The layer-type marks are real drawings rather than
+<span class="mono tiny">▤ ▦ ▭</span> — except <span class="mono tiny">T</span>, which Jeremy kept (#736 items 21–23).</p>
 
 <style>
 .ramp{flex:1;height:22px;border-radius:4px;border:1px solid var(--border);background:linear-gradient(90deg,#000 0%,#0f6f6a 52%,#ffffff 100%)}
@@ -1364,17 +1434,12 @@ something the user has to learn.</p>
         <label>h <input class="inp" value="64"></label>
       </div>
     </div>
-    <div class="irow"><div class="ilab">Fit</div><div class="sel" style="width:100%">fill <i>▾</i></div></div>
+    <div class="irow start"><div class="ilab" style="padding-top:1px">Fit</div><div class="hint">The box is a window: the pattern always renders across the whole layout and the box shows the part of it you keep. Nothing is scaled or repeated.</div></div>
 
     <div class="irule"></div>
 
     <div class="irow"><div class="ilab">Blend</div><div class="sel" style="width:100%">Normal <i>▾</i></div></div>
-    <div class="irow start"><div class="ilab" style="padding-top:7px">Transparent</div>
-      <div>
-        <div class="sel" style="width:100%">black pixels <i>▾</i></div>
-        <div class="hint" style="margin-top:6px">nothing · black pixels · by brightness</div>
-      </div>
-    </div>
+    <div class="irow"><div class="ilab">Transparent</div><div class="sel" style="width:100%">black pixels <i>▾</i></div></div>
     <div class="irow"><div class="ilab">Opacity</div>
       <div style="display:flex;align-items:center;gap:10px">
         <div class="slider"><div class="trk"></div><div class="fil" style="width:60%"></div><div class="thb" style="left:60%"></div></div>
@@ -1396,6 +1461,20 @@ something the user has to learn.</p>
 <p class="note"><b>What changed.</b> Transparency is a key on which pixels count and only applies to Normal blending;
 Add, Lighten and Multiply carry their own (adding black or multiplying by white changes nothing) and Mask uses the
 layer's brightness as a stencil. The color ramp is the engine's existing output-palette stage applied per layer.</p>
+<p class="note"><b>Amended 2026-09-24 (#735).</b> <b>Fit is no longer a control here.</b> Jeremy: "the box 'fit' type
+dropdown makes no sense. What does it do?" — on a pattern layer it did <i>nothing</i>:
+<span class="mono tiny">style.fit</span> is read in exactly one place in the whole codebase,
+<span class="mono tiny">compose.rs</span>'s <span class="mono tiny">blit_sprite</span>, so the box only ever CLIPS a
+full-layout render (<span class="mono tiny">docs/spec/scenes.md</span> already said "<i>fit</i> is otherwise ignored").
+The row is a line stating what the box actually is; the chooser moved to the sprite inspector (S7c), the one place it
+means something, where it offers only the two behaviours that exist — <i>Once</i>
+(<span class="mono tiny">fill</span>) and <i>Tile</i> (<span class="mono tiny">tile</span>);
+<span class="mono tiny">contain</span> is a synonym for <span class="mono tiny">fill</span> on every code path.
+<b>Blend and Transparent are rich pickers now</b>, not bare <span class="mono tiny">&lt;select&gt;</span>s — icon +
+name + one line of plain English per option, the copy condensed from proposal §5.5, because "most users won't know
+what those mean". The closed trigger keeps the shape drawn here; what changed is the menu behind it, and the hint line
+that used to read <i>nothing · black pixels · by brightness</i> under Transparent is gone — it overflowed its cell
+(221 px of text in a 192 px box), and the menu spells all three out.</p>
 
 <style>
 /* ---------- sprite layer ---------- */
@@ -1417,7 +1496,8 @@ layer's brightness as a stencil. The color ramp is the engine's existing output-
   <header class="edhdr">
     <div class="btn quiet">← Scenes</div>
     <div class="nameedit">Clock overlay</div>
-    <div class="savestate">unsaved changes</div>
+    <div class="savestate"></div>
+    <div class="btn transport" title="pause the preview"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg><span class="tlabel">Pause</span></div>
     <div class="spacer"></div>
     <div class="btn primary">Save</div>
     <div class="menuwrap"><div class="btn icon">⋯</div></div>
@@ -1426,45 +1506,46 @@ layer's brightness as a stencil. The color ramp is the engine's existing output-
     <div class="lcol">
       <div class="rhead" style="margin-bottom:8px">
         <div class="slabel">Layers</div>
-        <div class="rdim" style="margin-left:auto">top = front</div>
+        <span class="zaxis" style="margin-left:auto" title="top = front: the top row draws over the ones below it"><svg viewBox="0 0 30 24" fill="none" stroke="currentColor" stroke-width="1.6" role="img" aria-label="top of the list is the front of the stack"><path class="zfront" d="M11 4.6 20 8l-9 3.4L2 8Z"/><path d="M11 11.4 20 14.8l-9 3.4L2 14.8" opacity=".55"/><path d="M11 16.6 20 20l-9 3.4L2 20" opacity=".3"/><path class="zarrow" d="M25.5 10.5V3.2m0 0-2.6 2.8m2.6-2.8 2.6 2.8" stroke-width="1.8" stroke-linecap="round"/></svg></span>
       </div>
       <div class="lrow">
         <span class="hnd">⠿</span>
         <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
-        <span class="ty">T</span>
+        <span class="ty"><span class="lico tglyph">T</span></span>
         <span class="nm2">Time</span>
         <span class="meta2">12:48</span>
       </div>
       <div class="lrow sel">
         <span class="hnd">⠿</span>
         <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
-        <span class="ty">▦</span>
+        <span class="ty"><svg class="lico" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" role="img" aria-label="sprite layer"><path d="M3.5 3.5h7v7h-7zM13.5 3.5h7v7h-7zM3.5 13.5h7v7h-7zM13.5 13.5h7v7h-7z"/></svg></span>
         <span class="nm2">Heart</span>
         <span class="meta2">sprite · 9×8</span>
       </div>
       <div class="lrow">
         <span class="hnd">⠿</span>
         <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
-        <span class="ty">▤</span>
+        <span class="ty"><svg class="lico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" role="img" aria-label="pattern layer"><path d="M3 12c3-7 6-7 9 0s6 7 9 0"/></svg></span>
         <span class="nm2">Aurora 2D</span>
         <span class="meta2">60 % · lighten</span>
       </div>
       <div class="lrow off">
         <span class="hnd">⠿</span>
         <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4l16 16"/><path d="M6.7 6.9C4 8.6 2 12 2 12s3.8 6 10 6c1.9 0 3.5-.5 4.9-1.3"/><path d="M9.9 5.2A9.6 9.6 0 0 1 12 6c6.2 0 10 6 10 6a18 18 0 0 1-2.4 3"/></svg>
-        <span class="ty">▭</span>
+        <span class="ty"><svg class="lico" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" role="img" aria-label="color layer"><path d="M4 4h16v16H4z"/></svg></span>
         <span class="nm2">Bottom bar</span>
         <span class="meta2">color</span>
       </div>
       <div class="lrow">
         <span class="hnd">⠿</span>
         <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
-        <span class="ty">▤</span>
+        <span class="ty"><svg class="lico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" role="img" aria-label="pattern layer"><path d="M3 12c3-7 6-7 9 0s6 7 9 0"/></svg></span>
         <span class="nm2">Rainbow</span>
-        <span class="meta2">base</span>
+        <span class="meta2"></span>
       </div>
+      <div class="ground" title="the bottom row is the base: every other layer draws on top of it"></div>
       <div class="addwrap">
-        <div class="btn primary" style="width:100%;justify-content:center">+ Add layer ▾</div>
+        <div class="btn primary" style="width:100%;justify-content:center">+ Add layer</div>
       </div>
     </div>
 
@@ -1473,7 +1554,7 @@ layer's brightness as a stencil. The color ramp is the engine's existing output-
         <div class="slabel">Preview</div>
         <div class="rdim">64×64 · 24 fps on device</div>
         <div class="grp">
-          <div class="btn sm icon">‖</div>
+          <div class="sel" style="height:26px;font-size:12px;padding:0 7px 0 8px">60 fps <i>▾</i></div>
         </div>
       </div>
       <div class="toolrow">
@@ -1501,8 +1582,6 @@ layer's brightness as a stencil. The color ramp is the engine's existing output-
           <circle cx="10" cy="10" r="1.3" fill="#ffffff"/>
         </svg>
       </div>
-      <div class="hint" style="margin-top:12px">Frame cost: 2 pattern layers · text, sprite and color layers are free</div>
-      <div class="budget"><i style="width:70%"></i></div>
     </div>
 
     <div class="rcol">
@@ -1544,7 +1623,7 @@ layer's brightness as a stencil. The color ramp is the engine's existing output-
           <label style="color:#5f6675">h <input class="inp" style="color:#7b8292" value="8"></label>
         </div>
       </div>
-      <div class="irow"><div class="ilab">Fit</div><div class="hint">1:1 · sprites are never scaled</div></div>
+      <div class="irow"><div class="ilab">Fit</div><div class="sel" style="width:100%">Once <i>▾</i></div></div>
 
       <div class="irule"></div>
 
@@ -1564,6 +1643,23 @@ layer's brightness as a stencil. The color ramp is the engine's existing output-
 natively — it does not use one of the two pattern-layer slots. Drawing happens on the preview at the layer's box: the
 tool row sits directly above the canvas it acts on, the selection marquee is the sprite's bounds, and the cursor paints
 one pixel cell at a time.</p>
+<p class="note"><b>Amended 2026-09-24/25.</b> <b>The storage decision drawn here is REVERSED (#740).</b> Jeremy: "it
+seems that Sprites are actually patterns? Interesting idea but I don't like it. It is confusing and may allow cheating
+and running more patterns than are allowed. Sprites should be a first class type. Make a new Sprite tab. That's where
+the sprite editor will be based out of (which the scene edit page can directly invoke)." The "cheating" is real and
+confirmed in the code: a sprite layer does not consume a <span class="mono tiny">caps.layers</span> slot, but it DOES
+hold a resident <span class="mono tiny">Engine</span> — so "free" was only ever true of the layer cap, never of heap
+or engines. A sprite becomes its own record with its own store, id namespace and
+<span class="mono tiny">/api/sprites</span> routes, the compositor reads its texels directly with no engine per sprite
+layer, and the editor is based in a Sprites tab the scene editor invokes. See proposal §5.5b.
+<b>The whole sprite editor drawn here is superseded by #741</b> — the frames control does nothing, the recents strip
+records every intermediate colour of a picker drag, the 16-colour cap is enforced in one place and bypassed in two, and
+a sprite layer cannot be MOVED because painting takes over the stage's pointer events. That redesign has not happened;
+this frame is the shipped state, not the target. Also amended, as everywhere in the S7 family: the frame-cost line and
+budget meter are deleted (#736 item 24), <i>top = front</i> and <i>base</i> are drawn rather than written (#736 item
+17), the transport is a labelled button in the header bar (#739), and <i>Fit</i> is a real two-option chooser here —
+<i>Once</i> and <i>Tile</i> — instead of the dead line "1:1 · sprites are never scaled", which was true about scaling
+and silent about tiling, the part that works (#735).</p>
 
 
 <!-- ===================== S9 ===================== -->
@@ -2805,9 +2901,10 @@ the scene row folds its duration into the type line exactly like a pattern row d
   <header class="edhdr">
     <div class="btn quiet">← Patterns</div>
     <div class="nameedit">Aurora 2D</div>
-    <div class="savestate">saved · on device</div>
+    <div class="savestate">preview only</div>
+    <div class="btn transport" title="pause the preview"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg><span class="tlabel">Pause</span></div>
     <div class="spacer"></div>
-    <div class="btn primary">Save</div>
+    <div class="btn primary">Saved</div>
     <div class="menuwrap">
       <div class="btn icon">⋯</div>
       <div class="menu">
@@ -2839,9 +2936,10 @@ the scene row folds its duration into the type line exactly like a pattern row d
   <header class="edhdr">
     <div class="btn quiet">← Patterns</div>
     <div class="nameedit">Aurora 2D</div>
-    <div class="savestate">saved · on device</div>
+    <div class="savestate">preview only</div>
+    <div class="btn transport" title="pause the preview"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg><span class="tlabel">Pause</span></div>
     <div class="spacer"></div>
-    <div class="btn primary">Save</div>
+    <div class="btn primary">Saved</div>
     <div class="menuwrap">
       <div class="btn icon">⋯</div>
       <div class="menu">
@@ -2932,59 +3030,60 @@ explanation. The <i>3 layers</i> line keeps its place between name and link.</p>
   <div class="lcol" style="border-right:0;width:100%">
     <div class="rhead" style="margin-bottom:8px">
       <div class="slabel">Layers</div>
-      <div class="rdim" style="margin-left:auto">top = front</div>
+      <span class="zaxis" style="margin-left:auto" title="top = front: the top row draws over the ones below it"><svg viewBox="0 0 30 24" fill="none" stroke="currentColor" stroke-width="1.6" role="img" aria-label="top of the list is the front of the stack"><path class="zfront" d="M11 4.6 20 8l-9 3.4L2 8Z"/><path d="M11 11.4 20 14.8l-9 3.4L2 14.8" opacity=".55"/><path d="M11 16.6 20 20l-9 3.4L2 20" opacity=".3"/><path class="zarrow" d="M25.5 10.5V3.2m0 0-2.6 2.8m2.6-2.8 2.6 2.8" stroke-width="1.8" stroke-linecap="round"/></svg></span>
     </div>
     <div class="lrow">
       <span class="hnd">⠿</span>
       <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
-      <span class="ty">T</span>
+      <span class="ty"><span class="lico tglyph">T</span></span>
       <span class="nm2">Time</span>
       <span class="meta2">12:48</span>
     </div>
     <div class="lrow">
       <span class="hnd">⠿</span>
       <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
-      <span class="ty">▦</span>
+      <span class="ty"><svg class="lico" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" role="img" aria-label="sprite layer"><path d="M3.5 3.5h7v7h-7zM13.5 3.5h7v7h-7zM3.5 13.5h7v7h-7zM13.5 13.5h7v7h-7z"/></svg></span>
       <span class="nm2">Heart</span>
       <span class="meta2">sprite · 9×8</span>
     </div>
     <div class="lrow">
       <span class="hnd">⠿</span>
       <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
-      <span class="ty">▤</span>
+      <span class="ty"><svg class="lico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" role="img" aria-label="pattern layer"><path d="M3 12c3-7 6-7 9 0s6 7 9 0"/></svg></span>
       <span class="nm2">Aurora 2D</span>
       <span class="meta2">60 % · lighten</span>
     </div>
     <div class="lrow">
       <span class="hnd">⠿</span>
       <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
-      <span class="ty">▤</span>
+      <span class="ty"><svg class="lico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" role="img" aria-label="pattern layer"><path d="M3 12c3-7 6-7 9 0s6 7 9 0"/></svg></span>
       <span class="nm2">Rainbow</span>
-      <span class="meta2">base</span>
+      <span class="meta2"></span>
     </div>
+    <div class="ground" title="the bottom row is the base: every other layer draws on top of it"></div>
     <div class="addwrap">
-      <div class="btn primary" style="width:100%;justify-content:center">+ Add layer ▾</div>
+      <div class="btn primary" style="width:100%;justify-content:center">+ Add layer</div>
       <div class="menu full">
-        <div class="mi dis" style="display:flex;align-items:center;gap:8px">▤ Pattern <span class="mdim">2 of 2 used</span></div>
-        <div class="reason">this device fits 2 pattern layers; text and sprite and color layers are free</div>
-        <div class="mi hi">T Text</div>
-        <div class="mi">▦ Sprite</div>
-        <div class="mi">▭ Color</div>
+        <div class="mi dis"><svg class="lico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" role="img" aria-label="pattern layer"><path d="M3 12c3-7 6-7 9 0s6 7 9 0"/></svg><span class="ml">Pattern</span><span class="mdim">2 of 2 used</span></div>
+        <div class="reason">luxel devices only support 2 pattern layers; text and sprite and color layers are free</div>
+        <div class="mi hi"><span class="lico tglyph">T</span><span class="ml">Text</span></div>
+        <div class="mi"><svg class="lico" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" role="img" aria-label="sprite layer"><path d="M3.5 3.5h7v7h-7zM13.5 3.5h7v7h-7zM3.5 13.5h7v7h-7zM13.5 13.5h7v7h-7z"/></svg><span class="ml">Sprite</span></div>
+        <div class="mi"><svg class="lico" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" role="img" aria-label="color layer"><path d="M4 4h16v16H4z"/></svg><span class="ml">Color</span></div>
       </div>
     </div>
     <div style="height:214px"></div>
-    <div class="statecap" style="margin-top:0">the preview column's cost line, at the cap:<span class="rule"></span></div>
-    <div class="hint">Frame cost: 2 of 2 pattern layers · 24 fps</div>
-    <div class="budget" style="max-width:none"><i style="width:100%"></i></div>
-    <div style="height:8px"></div>
   </div>
 </div>
 <p class="note"><b>What this specifies.</b> D4's one deliberate exception to "absent, never disabled": the layer budget
 is something the user has to learn, so <i>Pattern</i> stays in the menu, greyed, with its count on the row and its
 reason spelled out underneath in full — the sentence, not just the number, because "2 of 2 used" alone does not tell
 you that text, sprite and color layers are free. The count comes from <span class="mono tiny">caps.layers</span>, so a
-300 px strip board reads <i>3 of 3</i> and the same row is live until it is reached. The cost line under the preview
-counts the same two things and adds the measured frame rate, so the price of the cap is visible where the picture is.</p>
+300 px strip board reads <i>3 of 3</i> and the same row is live until it is reached.
+<b>Amended 2026-09-24 (#736 item 24):</b> this frame used to close with a state caption showing "the preview column's
+cost line, at the cap" — <i>Frame cost: 2 of 2 pattern layers · 24 fps</i> over a full meter. The cost line and the
+meter are deleted everywhere; this menu row, at the cap, is now the only place the sentence is said, and it is said in
+Jeremy's words (#736 item 18) — <i>luxel devices only support 2 pattern layers</i>, a fact about luxel, not a claim
+about the board you happen to be looking at.</p>
 
 <!-- ===================== S7e ===================== -->
 <p class="cap"><b>S7e</b> · Scene editor — color layer selected, a hidden layer, and a drag in progress</p>
@@ -2992,7 +3091,8 @@ counts the same two things and adds the measured frame rate, so the price of the
   <header class="edhdr">
     <div class="btn quiet">← Scenes</div>
     <div class="nameedit">Clock overlay</div>
-    <div class="savestate">unsaved changes</div>
+    <div class="savestate"></div>
+    <div class="btn transport" title="pause the preview"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg><span class="tlabel">Pause</span></div>
     <div class="spacer"></div>
     <div class="btn primary">Save</div>
     <div class="menuwrap"><div class="btn icon">⋯</div></div>
@@ -3001,12 +3101,12 @@ counts the same two things and adds the measured frame rate, so the price of the
     <div class="lcol">
       <div class="rhead" style="margin-bottom:8px">
         <div class="slabel">Layers</div>
-        <div class="rdim" style="margin-left:auto">top = front</div>
+        <span class="zaxis" style="margin-left:auto" title="top = front: the top row draws over the ones below it"><svg viewBox="0 0 30 24" fill="none" stroke="currentColor" stroke-width="1.6" role="img" aria-label="top of the list is the front of the stack"><path class="zfront" d="M11 4.6 20 8l-9 3.4L2 8Z"/><path d="M11 11.4 20 14.8l-9 3.4L2 14.8" opacity=".55"/><path d="M11 16.6 20 20l-9 3.4L2 20" opacity=".3"/><path class="zarrow" d="M25.5 10.5V3.2m0 0-2.6 2.8m2.6-2.8 2.6 2.8" stroke-width="1.8" stroke-linecap="round"/></svg></span>
       </div>
       <div class="lrow">
         <span class="hnd">⠿</span>
         <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
-        <span class="ty">T</span>
+        <span class="ty"><span class="lico tglyph">T</span></span>
         <span class="nm2">Time</span>
         <span class="meta2">12:48</span>
       </div>
@@ -3014,33 +3114,34 @@ counts the same two things and adds the measured frame rate, so the price of the
       <div class="lrow off">
         <span class="hnd">⠿</span>
         <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4l16 16"/><path d="M6.7 6.9C4 8.6 2 12 2 12s3.8 6 10 6c1.9 0 3.5-.5 4.9-1.3"/><path d="M9.9 5.2A9.6 9.6 0 0 1 12 6c6.2 0 10 6 10 6a18 18 0 0 1-2.4 3"/></svg>
-        <span class="ty">▦</span>
+        <span class="ty"><svg class="lico" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" role="img" aria-label="sprite layer"><path d="M3.5 3.5h7v7h-7zM13.5 3.5h7v7h-7zM3.5 13.5h7v7h-7zM13.5 13.5h7v7h-7z"/></svg></span>
         <span class="nm2">Heart</span>
         <span class="meta2">hidden</span>
       </div>
       <div class="lrow drag">
         <span class="hnd">⠿</span>
         <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
-        <span class="ty">▤</span>
+        <span class="ty"><svg class="lico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" role="img" aria-label="pattern layer"><path d="M3 12c3-7 6-7 9 0s6 7 9 0"/></svg></span>
         <span class="nm2">Aurora 2D</span>
         <span class="meta2">60 % · lighten</span>
       </div>
       <div class="lrow sel">
         <span class="hnd">⠿</span>
         <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
-        <span class="ty">▭</span>
+        <span class="ty"><svg class="lico" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" role="img" aria-label="color layer"><path d="M4 4h16v16H4z"/></svg></span>
         <span class="nm2">Bottom bar</span>
         <span class="meta2">color</span>
       </div>
       <div class="lrow">
         <span class="hnd">⠿</span>
         <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
-        <span class="ty">▤</span>
+        <span class="ty"><svg class="lico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" role="img" aria-label="pattern layer"><path d="M3 12c3-7 6-7 9 0s6 7 9 0"/></svg></span>
         <span class="nm2">Rainbow</span>
-        <span class="meta2">base</span>
+        <span class="meta2"></span>
       </div>
+      <div class="ground" title="the bottom row is the base: every other layer draws on top of it"></div>
       <div class="addwrap">
-        <div class="btn primary" style="width:100%;justify-content:center">+ Add layer ▾</div>
+        <div class="btn primary" style="width:100%;justify-content:center">+ Add layer</div>
       </div>
     </div>
 
@@ -3049,7 +3150,7 @@ counts the same two things and adds the measured frame rate, so the price of the
         <div class="slabel">Preview</div>
         <div class="rdim">64×64 · 24 fps on device</div>
         <div class="grp">
-          <div class="btn sm icon">‖</div>
+          <div class="sel" style="height:26px;font-size:12px;padding:0 7px 0 8px">60 fps <i>▾</i></div>
         </div>
       </div>
       <div class="stage">
@@ -3060,8 +3161,6 @@ counts the same two things and adds the measured frame rate, so the price of the
         <div class="hdl" style="left:-3px;top:456px"></div>
         <div class="hdl" style="left:456px;top:456px"></div>
       </div>
-      <div class="hint" style="margin-top:12px">Frame cost: 2 of 2 pattern layers · 24 fps</div>
-      <div class="budget"><i style="width:100%"></i></div>
     </div>
 
     <div class="rcol">
@@ -3095,7 +3194,14 @@ no placeholder gap) and the destination is a 2 px accent rule between rows — t
 <b>Selected</b> is unchanged from S7: accent wash, accent left edge, and the layer's box as the marquee — a color layer
 is a rectangle of one colour, so its box IS the layer and dragging the marquee is the whole geometry UI. The color
 inspector is the shortest one in the app — name, colour, box, blend, opacity — and the <i>Transparent</i> row is
-absent rather than set to <i>nothing</i>: a flat colour has no pixels to key.</p>
+absent rather than set to <i>nothing</i>: a flat colour has no pixels to key.
+<b>Amended 2026-09-24/25:</b> as in S7 — the frame-cost line and budget meter under the preview are deleted (#736 item
+24), <i>top = front</i> and <i>base</i> are drawn (the stack mark in the header, the ground rule under the bottom row,
+#736 item 17), the transport is a labelled SVG button in the header bar and the preview header keeps the frame-rate
+chooser (#739, #736 item 26), <i>+ Add layer</i> has lost its chevron and the type marks are drawings (#736 items
+21–23), and the header's save-state span prints only <i>preview only</i> / <i>in browser</i> with the contract string
+on <span class="mono tiny">data-save-state</span> (#738). The Save button reads <i>Save</i> here because this frame is
+the dirty state.</p>
 
 <!-- ===================== S7f ===================== -->
 <p class="cap"><b>S7f</b> · Scene editor — mobile 390 px, panes stacked with the preview sticky</p>
@@ -3103,7 +3209,8 @@ absent rather than set to <i>nothing</i>: a flat colour has no pixels to key.</p
   <header class="edhdr" style="height:44px;padding:0 10px;gap:8px">
     <div class="btn quiet icon">←</div>
     <div class="nameedit" style="font-size:13px;flex:1;min-width:0">Clock overlay</div>
-    <div class="btn primary">Save</div>
+    <div class="btn transport mini" title="pause the preview"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg><span class="tlabel">Pause</span></div>
+    <div class="btn primary">Saved</div>
     <div class="btn icon">⋯</div>
   </header>
   <div style="height:1002px;overflow:hidden">
@@ -3111,7 +3218,7 @@ absent rather than set to <i>nothing</i>: a flat colour has no pixels to key.</p
       <div class="rhead">
         <div class="slabel">Preview</div>
         <div class="rdim">64×64 · 24 fps</div>
-        <div class="grp"><div class="btn sm icon">‖</div></div>
+        <div class="grp"><div class="sel" style="height:26px;font-size:12px;padding:0 7px 0 8px">60 fps <i>▾</i></div></div>
       </div>
       <div class="stage" style="width:300px;margin:0 auto">
         <canvas data-viz="stagecomp" data-w="64" data-h="64" style="width:300px;height:300px"></canvas>
@@ -3121,37 +3228,36 @@ absent rather than set to <i>nothing</i>: a flat colour has no pixels to key.</p
         <div class="hdl" style="left:-3px;top:166px"></div>
         <div class="hdl" style="left:296px;top:166px"></div>
       </div>
-      <div class="hint" style="margin-top:10px">Frame cost: 2 of 2 pattern layers · 24 fps</div>
-      <div class="budget" style="max-width:none"><i style="width:100%"></i></div>
     </div>
     <div class="rsec">
       <div class="rhead" style="margin-bottom:8px">
         <div class="slabel">Layers</div>
-        <div class="rdim" style="margin-left:auto">top = front</div>
+        <span class="zaxis" style="margin-left:auto" title="top = front: the top row draws over the ones below it"><svg viewBox="0 0 30 24" fill="none" stroke="currentColor" stroke-width="1.6" role="img" aria-label="top of the list is the front of the stack"><path class="zfront" d="M11 4.6 20 8l-9 3.4L2 8Z"/><path d="M11 11.4 20 14.8l-9 3.4L2 14.8" opacity=".55"/><path d="M11 16.6 20 20l-9 3.4L2 20" opacity=".3"/><path class="zarrow" d="M25.5 10.5V3.2m0 0-2.6 2.8m2.6-2.8 2.6 2.8" stroke-width="1.8" stroke-linecap="round"/></svg></span>
       </div>
       <div class="lrow sel">
         <span class="hnd">⠿</span>
         <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
-        <span class="ty">T</span>
+        <span class="ty"><span class="lico tglyph">T</span></span>
         <span class="nm2">Time</span>
         <span class="meta2">12:48</span>
       </div>
       <div class="lrow">
         <span class="hnd">⠿</span>
         <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
-        <span class="ty">▤</span>
+        <span class="ty"><svg class="lico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" role="img" aria-label="pattern layer"><path d="M3 12c3-7 6-7 9 0s6 7 9 0"/></svg></span>
         <span class="nm2">Aurora 2D</span>
         <span class="meta2">60 % · lighten</span>
       </div>
       <div class="lrow">
         <span class="hnd">⠿</span>
         <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
-        <span class="ty">▤</span>
+        <span class="ty"><svg class="lico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" role="img" aria-label="pattern layer"><path d="M3 12c3-7 6-7 9 0s6 7 9 0"/></svg></span>
         <span class="nm2">Rainbow</span>
-        <span class="meta2">base</span>
+        <span class="meta2"></span>
       </div>
+      <div class="ground" title="the bottom row is the base: every other layer draws on top of it"></div>
       <div class="addwrap" style="margin-top:10px">
-        <div class="btn primary" style="width:100%;justify-content:center">+ Add layer ▾</div>
+        <div class="btn primary" style="width:100%;justify-content:center">+ Add layer</div>
       </div>
     </div>
     <div class="rsec" style="border-bottom:0">
@@ -3185,7 +3291,12 @@ absent rather than set to <i>nothing</i>: a flat colour has no pixels to key.</p
 preview, layers, inspector — with no new controls and nothing dropped. The preview pane is <span class="mono tiny">position:sticky</span>
 at the top so the composite stays visible while you scroll into the inspector, which is the only reason editing a scene
 on a phone works at all; dragging the marquee still sets the box. The layer list keeps full-size drag handles and eyes
-(touch targets), and <i>+ Add layer</i> stays the section's only primary.</p>
+(touch targets), and <i>+ Add layer</i> stays the section's only primary.
+<b>Amended 2026-09-24/25:</b> the frame-cost line and budget meter are deleted (#736 item 24), the stacking order and
+the base are drawn rather than written (#736 item 17), the chevron is off <i>+ Add layer</i> and the type marks are
+drawings (#736 items 21–23), and the transport is in the header bar — at 390 px it keeps the place and gives up the
+word, which is what leaves the one-row header at four controls (#739). The preview section's header carries the
+frame-rate chooser (#736 item 26). The save-state span is hidden at this width, as it always was.</p>
 
 <!-- ===================== S7g ===================== -->
 <p class="cap"><b>S7g</b> · Pattern layer — non-Normal blend, ramp stops, projection row</p>
@@ -3255,7 +3366,7 @@ on a phone works at all; dragging the marquee still sets the box. The layer list
         <label>h <input class="inp" value="64"></label>
       </div>
     </div>
-    <div class="irow"><div class="ilab">Fit</div><div class="sel" style="width:100%">fill <i>▾</i></div></div>
+    <div class="irow start"><div class="ilab" style="padding-top:1px">Fit</div><div class="hint">The box is a window: the pattern always renders across the whole layout and the box shows the part of it you keep. Nothing is scaled or repeated.</div></div>
 
     <div class="irule"></div>
 
@@ -3275,7 +3386,12 @@ carry their own key. Opacity stays and still reads 60 %. The ramp is the output-
 gets the same control Settings › Output › Palette has: gradient bar, draggable stops under it, <i>Edit stops…</i>, and
 a count — one editor, two places. And because this is a 1D pattern on a matrix, the quiet <i>Projection</i> row from
 S2c appears under a hairline after the pattern's own controls, inherited (plain text + <i>change</i>); an override would
-read in accent with <i>reset</i>. Same row, same wording, third home (editor · playlist row · layer inspector).</p>
+read in accent with <i>reset</i>. Same row, same wording, third home (editor · playlist row · layer inspector).
+<b>Amended 2026-09-24 (#735):</b> <i>Fit</i> is no longer a control on a pattern layer — it did nothing
+(<span class="mono tiny">style.fit</span> is read only by <span class="mono tiny">blit_sprite</span>), so it is a line
+saying what the box really is, and the chooser lives on the sprite inspector. Blend is a rich picker — icon, name and
+one line of plain English per option — rather than a bare <span class="mono tiny">&lt;select&gt;</span> of jargon; the
+closed trigger keeps the shape drawn here.</p>
 
 <!-- ===================== S7h ===================== -->
 <p class="cap"><b>S7h</b> · Text layer — the three source states side by side</p>
@@ -3295,7 +3411,7 @@ read in accent with <i>reset</i>. Same row, same wording, third home (editor · 
       </div>
       <div class="irow start"><div class="ilab" style="padding-top:1px">Clock</div>
         <div>
-          <div class="hint">not synced — the layer draws <span class="mono" style="white-space:nowrap">--:--</span> until the device gets the time</div>
+          <div class="hint">not synced — the layer stays blank until the device gets the time</div>
           <div class="hint" style="margin-top:5px"><a class="lnk" style="text-decoration:underline">Settings › Clock &amp; time zone</a></div>
         </div>
       </div>
@@ -3356,11 +3472,18 @@ read in accent with <i>reset</i>. Same row, same wording, third home (editor · 
   </div>
 </div>
 <p class="note"><b>What this specifies.</b> One inspector, three source states, and the rows that appear with them.
-<b>Clock</b> adds a format select and, when the device has no time yet, one dim state line saying exactly what will be
-drawn instead — no toast, no banner, and the row stays usable. <b>Text slot</b> adds the slot number and says in one
+<b>Clock</b> adds a format select and, when the device has no time yet, one dim state line saying exactly what the layer will
+do — no toast, no banner, and the row stays usable. <b>Text slot</b> adds the slot number and says in one
 line who writes it; the current value is echoed under <i>Now</i> so the layer is not a black box when the panel is in
 another room. <b>Scroll</b> is the conditional-visibility rule again: <i>Speed</i> does not exist while Scroll = none,
 and appears directly under it — in px/s, the unit the firmware takes — the moment a direction is chosen.</p>
+<p class="note"><b>Amended 2026-09-25 (#745).</b> The unsynced state line used to promise <span class="mono tiny">--:--</span>.
+A <i>clock</i> layer now draws <b>nothing</b> before the first SNTP sync, and the line says so: <i>not synced — the layer
+stays blank until the device gets the time</i>. <span class="mono tiny">--:--</span> was a time-shaped artifact that
+flashed on every boot for the seconds before <span class="mono tiny">sntp_task</span> landed; it is the wrong SHAPE for a
+<i>date</i> layer, which formats <span class="mono tiny">YYYY-MM-DD</span>, so a five-character time placeholder is simply
+wrong and changes width the moment the sync arrives; and a layer that appears as dashes and then morphs into digits reads
+as a glitch, which is how Jeremy described the symptom. Blank composites as "the clock has not appeared yet".</p>
 
 <!-- ===================== S7i ===================== -->
 <p class="cap"><b>S7i</b> · Text layer — font picker open (the three built-ins)</p>
@@ -3403,7 +3526,8 @@ planned (#487), and an affordance for them would be a promise the device cannot 
   <header class="edhdr">
     <div class="btn quiet">← Patterns</div>
     <div class="nameedit">Ticker</div>
-    <div class="savestate">unsaved changes</div>
+    <div class="savestate">preview only</div>
+    <div class="btn transport" title="pause the preview"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg><span class="tlabel">Pause</span></div>
     <div class="spacer"></div>
     <div class="btn primary">Save</div>
     <div class="menuwrap"><div class="btn icon">⋯</div></div>
@@ -3449,7 +3573,6 @@ planned (#487), and an affordance for them would be a promise the device cannot 
           <div class="slabel">Preview</div>
           <div class="rdim">64×64 · 27 fps</div>
           <div class="grp">
-            <div class="btn sm icon" title="pause">‖</div>
             <div class="sel" style="height:26px;font-size:12px;padding:0 7px 0 8px">60 fps <i>▾</i></div>
           </div>
         </div>

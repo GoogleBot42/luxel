@@ -24,10 +24,10 @@ use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use esp_println::println;
-use luxel_core::compose::{self, Compositor};
+use luxel_core::compose::{self, Compositor, SceneDriver, SceneHost, SpriteView};
 use luxel_core::engine::Engine;
 use luxel_core::fixed::Fx;
-use luxel_core::jsonview::{push_piece, push_u32};
+use luxel_core::jsonview::{self, push_piece, push_u32};
 use luxel_core::outpipe::GridMap;
 use luxel_core::projection::ProjectionMode;
 use luxel_core::scene::{self, Scene, TextSource};
@@ -115,46 +115,47 @@ pub fn set_active(id: &str) {
     });
 }
 
-/// `GET /api/scenes`.
-pub fn to_json() -> String {
+/// What a scene READ answers with — the route turns each arm into a
+/// response (`server::scenes_reply`).
+pub enum Body {
+    /// The JSON body, in segments (`jsonview::Chunks`) so it never needed a
+    /// contiguous block. `Chunks::ok()` false means the builder ran out of
+    /// heap partway and the route must answer 503, not ship a short body.
+    Json(jsonview::Chunks),
+    /// No scene by that id: 200 + `{"ok":false,"error":"no such scene"}`,
+    /// the same shape `/api/patterns/<id>` uses.
+    NoSuchScene,
+}
+
+/// `GET /api/scenes` — the body itself is [`scenestore::list_json`], which
+/// is where the segmented build lives (Gitea #753); this supplies the list,
+/// the lock and the device numbers.
+pub fn to_json() -> Body {
     let layers_max = crate::server::scene_layer_cap();
     SCENES.lock(|c| {
         let list = c.borrow();
-        let mut out = String::from("{\"active\":");
         let active = ACTIVE.lock(|a| a.borrow().clone());
-        if active.is_empty() {
-            push_piece(&mut out, "null");
-        } else {
-            push_piece(&mut out, "\"");
-            push_piece(&mut out, &active);
-            push_piece(&mut out, "\"");
-        }
-        push_piece(&mut out, ",\"layers_max\":");
-        push_u32(&mut out, layers_max as u32);
-        push_piece(&mut out, ",\"used\":");
-        push_u32(&mut out, BLOB_LEN.load(Ordering::Relaxed) as u32);
-        push_piece(&mut out, ",\"max\":");
-        push_u32(&mut out, patterns::BLOB_MAX as u32);
-        push_piece(&mut out, ",\"scenes\":[");
-        for (i, s) in list.iter().enumerate() {
-            if i > 0 {
-                push_piece(&mut out, ",");
-            }
-            scene::push_json(s, &mut out);
-        }
-        push_piece(&mut out, "]}");
-        out
+        Body::Json(scenestore::list_json(
+            &list,
+            &active,
+            layers_max as u32,
+            BLOB_LEN.load(Ordering::Relaxed),
+            patterns::BLOB_MAX,
+        ))
     })
 }
 
-/// `GET /api/scenes/<id>`.
-pub fn get_json(id: &str) -> Option<String> {
-    SCENES.lock(|c| {
-        c.borrow().iter().find(|s| s.id == id).map(|s| {
-            let mut out = String::new();
+/// `GET /api/scenes/<id>` — one scene, segmented the same way [`to_json`]
+/// is. `scene::json_bound` sizes the segment index (a handful of pointers),
+/// not a body reservation: there is no longer a reservation to fail.
+pub fn get_json(id: &str) -> Body {
+    SCENES.lock(|c| match c.borrow().iter().find(|s| s.id == id) {
+        None => Body::NoSuchScene,
+        Some(s) => {
+            let mut out = jsonview::Chunks::with_hint(scene::json_bound(s));
             scene::push_json(s, &mut out);
-            out
-        })
+            Body::Json(out)
+        }
     })
 }
 
@@ -274,6 +275,95 @@ pub struct Runtime {
     /// Every pattern id a slot's engine executes from, for
     /// [`patterns::set_layer_pins`].
     pub pinned: Vec<String>,
+    /// The SHARED full-frame driver (Gitea #732) — the same walk the wasm
+    /// playground runs, remainder-carrying millisecond clock included.
+    /// Four bytes; a resident scene's `.bss` footprint is measured
+    /// (`tools/stack-check.sh`) and the classic-ESP32 boards have ~68 B of
+    /// `.stack` over the floor, so nothing bigger belongs here — the
+    /// resolved-text buffer is a per-frame [`SlotHost`] local for exactly
+    /// that reason.
+    driver: SceneDriver,
+}
+
+/// The device's side of [`SceneHost`]: the slot table, the render task's
+/// primary engine (which draws the [`Slot::Base`] layer) and this frame's
+/// civil time, read at most once and only if a clock layer asks.
+struct SlotHost<'a> {
+    slots: &'a mut [Slot],
+    base: Option<&'a mut Engine>,
+    /// `None` = not read yet; `Some(None)` = read, no SNTP sync.
+    civil: Option<Option<(u16, u8, u8, u8, u8, u8)>>,
+    /// Resolved clock / slot text, reused across the layers of ONE frame.
+    /// Owned by the host, not by the [`Runtime`], so a resident scene
+    /// carries no buffer between frames — see the note on `Runtime::driver`.
+    /// (The pre-#732 walk allocated a fresh `String` per text layer per
+    /// frame; this is at most one for the whole frame.)
+    text: String,
+}
+
+/// Fill `buf` with `s` without ever panicking — a render-loop allocation
+/// (Gitea #702). A refusal draws no text, which beats a reboot; the
+/// capacity survives, so this allocates once per scene.
+fn set_scratch(buf: &mut String, s: &str) {
+    buf.clear();
+    if s.len() > buf.capacity() && buf.try_reserve_exact(s.len()).is_err() {
+        return;
+    }
+    buf.push_str(s);
+}
+
+impl SceneHost for SlotHost<'_> {
+    fn pattern_frame(&mut self, layer: usize, delta: Fx) -> Option<&[[u8; 3]]> {
+        // The base layer renders from the render task's primary engine,
+        // which lives outside the slot table — read it first so the two
+        // borrows never overlap.
+        if matches!(self.slots.get(layer)?, Slot::Base) {
+            return self.base.as_deref_mut().map(|e| e.frame(delta));
+        }
+        match self.slots.get_mut(layer)? {
+            Slot::Pattern(e) => Some(e.frame(delta)),
+            // A layer that failed to build is a `Slot::Native` no-op even
+            // where the scene says `pat`: it draws nothing, the rest of the
+            // stack still shows.
+            _ => None,
+        }
+    }
+
+    fn sprite(&mut self, layer: usize) -> Option<SpriteView<'_>> {
+        match self.slots.get(layer)? {
+            Slot::Sprite(e, src) => compose::sprite_view(e, src),
+            _ => None,
+        }
+    }
+
+    fn text(&mut self, _layer: usize, source: &TextSource) -> Option<&str> {
+        match source {
+            // Contract §1: with no SNTP sync yet, say so rather than
+            // showing a plausible wrong time.
+            TextSource::Clock(f) => {
+                let civil = *self.civil.get_or_insert_with(civil_local);
+                match civil {
+                    Some((y, mo, d, h, m, s)) => {
+                        set_scratch(&mut self.text, &text::format_clock(*f, h, m, s, y, mo, d))
+                    }
+                    // Before the first SNTP sync there is no honest time to
+                    // show, so draw NOTHING. `--:--` was a time-shaped
+                    // artifact that flashed on every boot for the seconds
+                    // before `sntp_task` landed (Gitea #745, #729 item 35),
+                    // and it is the wrong shape for a `date` layer anyway.
+                    // An empty run composites as "the clock hasn't appeared
+                    // yet" rather than as a glitch. `Some(&self.text)` is
+                    // still the return: `None` means "already resolved by
+                    // set_scene", which would draw the stored string.
+                    None => set_scratch(&mut self.text, ""),
+                }
+            }
+            TextSource::Slot(k) => text::with_slot(*k, |v: &str| set_scratch(&mut self.text, v)),
+            // `lit` was resolved once by `Compositor::set_scene`.
+            TextSource::Lit(_) => return None,
+        }
+        Some(&self.text)
+    }
 }
 
 impl Runtime {
@@ -314,65 +404,37 @@ impl Runtime {
 
     /// Composite the whole stack into `dst` (`n` pixels). `base` is the
     /// render task's primary engine, which draws the [`Slot::Base`] layer.
+    ///
+    /// The walk itself is `luxel_core::compose::SceneDriver` — the SAME
+    /// code the wasm playground runs (Gitea #732). This device used to
+    /// carry its own copy of it, and the two had drifted: the playground
+    /// accumulated the sub-millisecond remainder of each frame delta and
+    /// this side truncated it away every frame, so a caption crawled
+    /// slower here than in the preview that was supposed to be showing it.
+    /// The driver owns that accumulator now, so `dt_ms` is no longer read —
+    /// whole milliseconds come from `delta`, remainder carried.
     pub fn render(
         &mut self,
         dst: &mut Vec<[u8; 3]>,
-        mut base: Option<&mut Engine>,
+        base: Option<&mut Engine>,
         delta: Fx,
-        dt_ms: u32,
+        _dt_ms: u32,
         n: usize,
     ) {
-        self.comp.advance(dt_ms);
-        // Clock and slot sources are the HOST's to resolve; `lit` is seeded
-        // by `Compositor::set_scene` and needs no call.
-        let civil = civil_local();
-        for i in 0..self.slots.len() {
-            let resolved = match self.comp.text_source(i) {
-                Some(TextSource::Clock(f)) => Some(match civil {
-                    Some((y, mo, d, h, m, s)) => text::format_clock(*f, h, m, s, y, mo, d),
-                    // no SNTP sync yet: say so rather than showing a
-                    // plausible wrong time (contract §1)
-                    None => String::from("--:--"),
-                }),
-                Some(TextSource::Slot(k)) => Some(text::with_slot(*k, |v: &str| String::from(v))),
-                _ => None,
-            };
-            if let Some(s) = resolved {
-                self.comp.set_text(i, &s);
-            }
-        }
-        // The host's staging buffer is released while a plain pattern runs
-        // (Gitea #704), so a scene's first frame after an activation grows
-        // it — 3 B/px, INSIDE the render loop, which is exactly the shape
-        // that panicked the Seengreat panel in #702. Fallibly, then: a frame
-        // this board cannot afford is a frame not drawn, not a reboot. The
-        // capacity survives, so this is one `try_reserve` per activation and
-        // a compare per frame after that.
-        dst.clear();
-        if dst.try_reserve_exact(n).is_err() {
-            return;
-        }
-        dst.resize(n, [0, 0, 0]);
-        let Runtime { comp, slots, .. } = self;
-        for (i, slot) in slots.iter_mut().enumerate() {
-            match slot {
-                Slot::Native => comp.native_layer(dst, i, None),
-                Slot::Base => {
-                    if let Some(e) = base.as_deref_mut() {
-                        let f = e.frame(delta);
-                        comp.pattern_layer(dst, i, f);
-                    }
-                }
-                Slot::Pattern(e) => {
-                    let f = e.frame(delta);
-                    comp.pattern_layer(dst, i, f);
-                }
-                Slot::Sprite(e, src) => {
-                    let view = compose::sprite_view(&*e, &*src);
-                    comp.native_layer(dst, i, view.as_ref());
-                }
-            }
-        }
+        let Runtime { comp, slots, driver, .. } = self;
+        let mut host = SlotHost {
+            slots: slots.as_mut_slice(),
+            base,
+            civil: None,
+            text: String::new(),
+        };
+        // `false` = the staging buffer could not be sized this frame. The
+        // host releases it while a plain pattern runs (Gitea #704), so a
+        // scene's first frame after an activation grows it by 3 B/px INSIDE
+        // the render loop — the exact shape that panicked the Seengreat
+        // panel in #702. A frame this board cannot afford is a frame not
+        // drawn, not a reboot.
+        driver.frame(comp, dst, n, delta, &mut host);
     }
 }
 
@@ -436,8 +498,18 @@ pub fn build_runtime(
         })),
         slots: Vec::new(),
         pinned: Vec::new(),
+        driver: SceneDriver::new(),
     };
     rt.comp.set_scene(sc);
+    // A scene replaces the whole resident stack, so the per-slot JIT table
+    // starts empty and is filled one layer at a time below (Gitea #718).
+    // Until a layer compiles, `/api/status` reports `jit.state:"none"` —
+    // which is the truth while the stack is being built.
+    #[cfg(feature = "jit")]
+    {
+        crate::jit::reset_stack();
+        crate::jit::commit_stack(sc.layers.len());
+    }
     let mut base: Option<Engine> = None;
     let mut err: Option<String> = None;
     // The compositor allocates ONE grid-sized scratch, inside the render
@@ -457,6 +529,12 @@ pub fn build_runtime(
         0
     };
     let fail = |err: &mut Option<String>, n: usize, what: &str| {
+        // Every failure arm below becomes a `Slot::Native` no-op, so the
+        // layer holds no engine and must not be reported as one — even
+        // where `try_budgeted_layer` already recorded a refusal into it
+        // (Gitea #718). The choke point, so a new arm cannot forget.
+        #[cfg(feature = "jit")]
+        crate::jit::clear_slot(n);
         if err.is_none() {
             let mut m = String::from("scene: layer ");
             push_u32(&mut m, n as u32 + 1);
@@ -472,8 +550,17 @@ pub fn build_runtime(
         };
         let sprite = layer.kind() == luxel_core::scene::LayerKind::Sprite;
         let count = if sprite { 1 } else { pixels };
+        // Name the slot this layer's compile belongs to BEFORE anything is
+        // built (Gitea #718). `i` is the scene layer index — the identity —
+        // and the first non-sprite layer to build is the one that becomes
+        // `Slot::Base`, so it is the engine the scalar `jit` block
+        // describes. A sprite layer is armed too: its engine is really
+        // built and really compiled (never stepped — docs/spec/scenes.md
+        // §4), and hiding that compile is the bug this ticket is about.
+        #[cfg(feature = "jit")]
+        crate::jit::arm(i, base.is_none() && !sprite, sprite);
         // Pre-flight the heap BEFORE decoding: the post-build floor check in
-        // `try_budgeted_engine` is the real gate, but reaching it costs the
+        // `try_budgeted_layer` is the real gate, but reaching it costs the
         // whole decode + build peak, and on a device already holding two
         // engines that peak is what panics rather than rejects (#479).
         if !luxel_core::budget::layer_fits_with(
@@ -494,7 +581,7 @@ pub fn build_runtime(
             rt.slots.push(Slot::Native);
             continue;
         };
-        let Ok(mut e) = crate::try_budgeted_engine(prog, count) else {
+        let Ok(mut e) = crate::try_budgeted_layer(prog, count) else {
             fail(&mut err, i, "does not fit");
             rt.slots.push(Slot::Native);
             continue;
@@ -535,7 +622,7 @@ pub fn build_runtime(
 // ---- clock text sources ----
 
 /// Local wall clock as `(y, mo, d, h, m, s)`, or `None` before the first
-/// SNTP sync — a `clock` text layer then renders `--:--`.
+/// SNTP sync — a `clock` text layer then draws nothing (Gitea #745).
 pub fn civil_local() -> Option<(u16, u8, u8, u8, u8, u8)> {
     Some(scenestore::civil_from_unix(crate::shared::wall_now_local()?))
 }

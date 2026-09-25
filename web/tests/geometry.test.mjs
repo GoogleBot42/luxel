@@ -35,6 +35,8 @@ import {
   layoutKey,
   layoutLabel,
   parsePreviewAs,
+  playgroundArrayElements,
+  PLAYGROUND_ARRAYS_PER_PIXEL,
   projectionCaption,
   projectionLabel,
   projectionOptions,
@@ -682,4 +684,21 @@ test("a 3D layout offers the 1D and 2D rows, a 1D layout offers none (#538)", ()
   assert.deepEqual(projectionOptions(2, 1), []);
   assert.deepEqual(projectionOptions(3, 1), []);
   assert.deepEqual(projectionOptions(3, 2), []);
+});
+
+test("the playground's array ledger is the RIG's, floored at PB's count (#742)", () => {
+  const PB = 10_236; // luxel_core::vm::DEFAULT_ARRAY_BUDGET, what the engine hands back
+  // Small rigs are unchanged: the PB-compat wall a pattern will hit on a
+  // PB-class board is still the wall it hits in the playground.
+  assert.equal(playgroundArrayElements(DEFAULT_STRIP_PIXELS, PB), PB, "the 60 px starter strip");
+  assert.equal(playgroundArrayElements(AUTO_MATRIX * AUTO_MATRIX, PB), PB, "Auto's 16×16");
+  assert.equal(playgroundArrayElements(0, PB), PB);
+  // …and a rig the user sized past PB gets a ledger sized with it. At 64×64
+  // `library/fairies.js` needs 15,104 elements: black under PB's count, fine
+  // under the rig's.
+  assert.equal(playgroundArrayElements(64 * 64, PB), 64 * 64 * PLAYGROUND_ARRAYS_PER_PIXEL);
+  assert.ok(playgroundArrayElements(64 * 64, PB) > 15_104, "fairies fits at 4096 px");
+  // monotonic in the rig, and never below the floor whatever is passed
+  assert.ok(playgroundArrayElements(8192, PB) > playgroundArrayElements(4096, PB));
+  assert.equal(playgroundArrayElements(-5, PB), PB);
 });

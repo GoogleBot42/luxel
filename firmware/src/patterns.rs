@@ -68,6 +68,7 @@
 //! | [RESUME_KEY] | ~16 | per swap (deduped: skipped when unchanged) |
 //! | [PALETTE_KEY] | ≤ 64 | per palette edit |
 //! | [LAYOUT_KEY] | ~40–110 | per Layout edit |
+//! | [TEXT_KEY] | ≤ 529 | per text-slot write (debounced + deduped) |
 //!
 //! Patterns are NOT in here any more — not even their directory.
 //!
@@ -98,7 +99,7 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use esp_println::println;
 use esp_storage::FlashStorage;
-use luxel_core::jsonview::{json_escape, push_hex, push_piece, push_u32};
+use luxel_core::jsonview::{push_escaped, push_hex, push_piece, push_u32, Chunks};
 use sequential_storage::cache::PageStateCache;
 use sequential_storage::map;
 
@@ -371,6 +372,10 @@ pub const NAME_KEY: u32 = 0x7FFF_FFF8;
 /// Scene records (see scenes.rs) — ONE blob holding every scene block back
 /// to back, in the same line format the wire uses, capped by [BLOB_MAX].
 pub const SCENES_KEY: u32 = 0x7FFF_FFF7;
+/// Host-set text slots (see textslots.rs) — one blob holding every
+/// non-empty slot, so a scene's `T slot n` layer has its text on the first
+/// frame after a reboot rather than when a host next re-sends it (#745).
+pub const TEXT_KEY: u32 = 0x7FFF_FFF6;
 
 /// The reserved keys live in this range, top-down. The migrator
 /// (migrate.rs) sweeps the WHOLE range rather than a hand-written list, so
@@ -378,7 +383,7 @@ pub const SCENES_KEY: u32 = 0x7FFF_FFF7;
 /// carrying a key from a NEWER firmware than the one migrating it keeps it.
 pub const RESERVED_LO: u32 = 0x7FFF_FFF0;
 pub const RESERVED_HI: u32 = 0x7FFF_FFFF;
-const _: () = assert!(SCENES_KEY >= RESERVED_LO && FORMAT_KEY <= RESERVED_HI);
+const _: () = assert!(TEXT_KEY >= RESERVED_LO && FORMAT_KEY <= RESERVED_HI);
 
 /// Store a small blob under a reserved key. False if storage is unavailable or
 /// the blob is too large for one page.
@@ -1038,9 +1043,13 @@ fn payload_vec(off: u32, len: u32) -> Option<Vec<u8>> {
 /// (from the RAM index; names come out of the mapping). `stale` marks a
 /// pattern whose compiled blob this firmware can no longer read — a console
 /// with a current compiler recompiles those from source (#643).
-pub fn list_json() -> String {
+pub fn list_json() -> Chunks {
     let recs: Vec<Rec> = INDEX.lock(|c| c.borrow().clone());
-    let mut out = String::new();
+    // Segmented (Gitea #753): a full library is a multi-KB body, and the
+    // `String` this used to build doubled its way there — a contiguous
+    // block a fragmented heap need not have. ~48 B per record sizes the
+    // segment INDEX; the segments themselves are taken as they fill.
+    let mut out = Chunks::with_hint(32 + recs.len() * 48);
     push_piece(&mut out, "{\"patterns\":[");
     let mut first = true;
     for r in &recs {
@@ -1052,7 +1061,7 @@ pub fn list_json() -> String {
         push_piece(&mut out, "{\"id\":\"");
         push_piece(&mut out, &id_hex(r.seq));
         push_piece(&mut out, "\",\"name\":\"");
-        push_piece(&mut out, &json_escape(&name));
+        push_escaped(&mut out, &name);
         push_piece(&mut out, "\"");
         // `stale` (Gitea #643): the blob's own LXBC format word — two bytes
         // off the mapping, right after the magic — against the one this

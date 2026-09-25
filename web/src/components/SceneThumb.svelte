@@ -175,7 +175,7 @@
 <span class="thumb" class:dead data-shape="grid" data-role="scene-thumb">
   <canvas class="sq" bind:this={canvas} width="48" height="48"></canvas>
   {#if !ready && !dead}
-    <span class="spinner" data-role="thumb-spinner" aria-label="loading preview"></span>
+    <span class="spinner overlay" data-role="thumb-spinner" aria-label="loading preview"></span>
   {/if}
 </span>
 
@@ -205,22 +205,6 @@
     opacity: 0.3;
   }
 
-  .spinner {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    width: 12px;
-    height: 12px;
-    margin: -6px 0 0 -6px;
-    border: 2px solid color-mix(in srgb, var(--text-dim) 40%, transparent);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: scene-thumb-spin 0.7s linear infinite;
-  }
-
-  @keyframes scene-thumb-spin {
-    to {
-      transform: rotate(1turn);
-    }
-  }
+  /* `.spinner` is shared chrome (app.css, Gitea #738) — `overlay` is the
+     centring the local copy used to carry. */
 </style>

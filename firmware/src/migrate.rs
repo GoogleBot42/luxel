@@ -280,7 +280,7 @@ fn snapshot(table: &[u8]) {
 /// `,"partitions":{…}` for `/api/status` — what layout this device is
 /// actually running, so a fleet tool can tell migrated from un-migrated
 /// without a serial console.
-pub fn push_status(out: &mut alloc::string::String) {
+pub fn push_status(out: &mut dyn luxel_core::jsonview::Sink) {
     let (slot, store, assets) = (
         LIVE_SLOT.load(Ordering::Relaxed),
         LIVE_STORE.load(Ordering::Relaxed),

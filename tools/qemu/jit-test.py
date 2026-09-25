@@ -69,8 +69,9 @@ frame of real execution.
 
 **One pattern per boot.** The ProCpu executor never runs, so the playlist
 and resume tasks never swap anything — the device renders the pattern
-build.rs baked in. `--patterns` therefore rebuilds the image per pattern
-through `LUXEL_DEFAULT_PATTERN`, which is minutes rather than seconds;
+build.rs baked in, and since Gitea #744 a shipped image bakes in none, so
+EVERY run here (the default included) rebuilds the image through
+`LUXEL_DEFAULT_PATTERN`. That is minutes rather than seconds per pattern;
 the default single-pattern run is what `run-all.py` carries.
 
 USAGE
@@ -479,7 +480,8 @@ def main() -> int:
     ap.add_argument("--patterns", default=None,
                     help="comma-separated library/ names, or @five for the §7.1 set. "
                          "Each needs its own firmware build — minutes, not seconds. "
-                         "Omitted = the built-in default pattern only.")
+                         "Omitted = rainbow.js only (Gitea #744: a shipped image "
+                         "bakes in no default, so even this one has to be built).")
     ap.add_argument("--timeout", type=float, default=180.0)
     ap.add_argument("--stock", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     ap.add_argument("--fs", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
@@ -490,7 +492,17 @@ def main() -> int:
     elif args.patterns:
         patterns = [p.strip() for p in args.patterns.split(",") if p.strip()]
     else:
-        patterns = [None]
+        # Gitea #744: a shipped image no longer bakes in `library/rainbow.js`,
+        # so the cached flake output (`.#luxel-fw-esp32-generic-jit`) boots
+        # with NOTHING resident — under emulation the playlist and resume
+        # tasks never run, so nothing would ever be compiled or rendered and
+        # the gate would fail with "nothing ran natively". The default run
+        # therefore names rainbow explicitly and takes the `build-esp32.sh`
+        # + `LUXEL_DEFAULT_PATTERN` path like every other pattern: the same
+        # image content as before, at the cost of a firmware build instead of
+        # a nix cache hit. (`build_image(None, …)` keeps the cached path for
+        # anyone who wants a stock image; it is no longer the default.)
+        patterns = ["rainbow.js"]
 
     qemu = tko.resolve_qemu(args.qemu)
     workdir = tempfile.mkdtemp(prefix="luxel-jit-qemu-")

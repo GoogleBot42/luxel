@@ -593,20 +593,64 @@ pub fn get_vmerr() -> Option<String> {
 #[cfg(not(pipelined))]
 pub static PIXELS: Shared<Vec<u8>> = BlockingMutex::new(RefCell::new(Vec::new()));
 
+/// Take the last rendered frame, for `GET /api/pixels`.
+///
+/// The snapshot only ever GROWS through a fallible reservation made OUTSIDE
+/// the critical section — the discipline `pipeline::preview` already keeps
+/// on the pipelined path (Gitea #306), brought to this one in #728. It runs
+/// on every rendered frame, on a heap the running pattern has already eaten:
+/// at 2048 px the buffer is 6 KB, and an infallible `extend_from_slice`
+/// growing it is an allocator panic in the RENDER task. A frame this board
+/// cannot afford to copy is a frame with no preview — `/api/pixels` answers
+/// an empty body, which docs/api.md already documents as "no snapshot right
+/// now" — not a reboot.
+///
+/// The reservation is one `try_reserve_exact` per pixel-count change and a
+/// compare per frame after that; the copy itself is one memcpy of the whole
+/// frame, not one bounds-checked 3-byte extend per pixel.
 #[cfg(not(pipelined))]
 pub fn set_pixels(rgb: &[[u8; 3]]) {
+    let need = rgb.len() * 3;
+    if PIXELS.lock(|c| c.borrow().capacity()) < need {
+        let mut grown: Vec<u8> = Vec::new();
+        if grown.try_reserve_exact(need).is_err() {
+            // Drop the stale snapshot rather than serve a frame from a
+            // different pixel count: empty is the documented "no snapshot".
+            drop(PIXELS.lock(|c| c.replace(Vec::new())));
+            return;
+        }
+        drop(PIXELS.lock(|c| c.replace(grown)));
+    }
     PIXELS.lock(|c| {
         let mut v = c.borrow_mut();
         v.clear();
-        // one memcpy of the whole frame, not one bounds-checked 3-byte
-        // extend per pixel — this runs on every rendered frame
-        v.extend_from_slice(rgb.as_flattened());
+        // never grow inside the critical section — the reservation above is
+        // what makes this an infallible memcpy
+        if v.capacity() >= need {
+            v.extend_from_slice(rgb.as_flattened());
+        }
     });
 }
 
+/// The snapshot as an owned body — ONE fallible allocation, made OUTSIDE the
+/// critical section, exactly like `pipeline::preview`. An empty answer means
+/// "no frame yet, or the heap could not hold the response" (docs/api.md).
 #[cfg(not(pipelined))]
 pub fn get_pixels() -> Vec<u8> {
-    share_get(&PIXELS)
+    let need = PIXELS.lock(|c| c.borrow().len());
+    let mut v: Vec<u8> = Vec::new();
+    if need == 0 || v.try_reserve_exact(need).is_err() {
+        return v;
+    }
+    PIXELS.lock(|c| {
+        let s = c.borrow();
+        // the render task may have swapped in a bigger frame since the
+        // length was read; never grow in here
+        if s.len() <= v.capacity() {
+            v.extend_from_slice(&s);
+        }
+    });
+    v
 }
 
 // --- running pattern read-back (flash-resident; see patterns::store_current) ---
@@ -625,6 +669,12 @@ pub fn get_pixels() -> Vec<u8> {
 #[derive(Clone, Copy)]
 pub enum SrcLoc {
     /// Compile-time default (rodata) — no heap, no flash write.
+    ///
+    /// Constructed only by [`set_current_default`], which exists only in a
+    /// `LUXEL_DEFAULT_PATTERN` build (Gitea #744) — hence the `allow`: a
+    /// shipped image genuinely never reaches this arm, and the read-back
+    /// paths that handle it are shared with that build.
+    #[allow(dead_code)]
     Default(&'static str),
     /// In the flash read-back slot; the usize is its exact byte length (for
     /// the streamer and Content-Length).
@@ -638,7 +688,10 @@ pub enum SrcLoc {
     /// sectors are no longer erased on every item advance (~17k cycles/day
     /// at 5 s items against a ~100k NOR spec before this existed).
     Library(usize),
-    /// The swap's flash write failed — nothing to serve until the next swap.
+    /// Nothing to serve. The state at boot (no pattern has been loaded yet
+    /// — Gitea #744), and the state a swap's failed flash write leaves
+    /// behind until the next swap. `/api/status` `engines` tells the two
+    /// apart; see [`current_src_available`].
     Gone,
 }
 
@@ -646,6 +699,8 @@ pub enum SrcLoc {
 /// [SrcLoc] for the sync envelope and engine rebuilds.
 #[derive(Clone, Copy)]
 pub enum BcLoc {
+    /// See [SrcLoc::Default] — `LUXEL_DEFAULT_PATTERN` builds only.
+    #[allow(dead_code)]
     Default(&'static [u8]),
     Flash(usize),
     /// See [SrcLoc::Library]; loads via patterns::bytecode_of.
@@ -680,11 +735,16 @@ pub fn set_pattern_hash_raw(h: u32) {
     PATTERN_HASH.store(h, Ordering::Relaxed);
 }
 
-/// Boot / built-in default: source + blob are compile-time `&'static` rodata,
-/// so read-back serves them directly with zero heap and zero flash writes.
-/// Also the standing fallback whenever no pattern has been swapped in this
-/// session — the flash read-back slot is only authoritative once a swap
-/// rewrites it (at boot it may still hold the previous session's pattern).
+/// Built-in default: source + blob are compile-time `&'static` rodata, so
+/// read-back serves them directly with zero heap and zero flash writes.
+///
+/// ONLY a build that passed `LUXEL_DEFAULT_PATTERN` has one (build.rs,
+/// Gitea #744). A shipped image boots with `CURRENT` left at its
+/// [`SrcLoc::Gone`] initializer, which is what makes "nothing is playing"
+/// serve an empty `GET /api/pattern` rather than the previous session's
+/// pattern — the flash read-back slot is only authoritative once a swap
+/// rewrites it, and at boot it may still hold whatever ran last time.
+#[cfg(default_pattern)]
 pub fn set_current_default(src: &'static str, bc: &'static [u8]) {
     set_pattern_hash(src);
     CURRENT.lock(|c| {
@@ -728,13 +788,31 @@ pub fn current_bc() -> BcLoc {
 }
 
 /// /api/status observability: is each read-back copy currently serveable?
-/// True for the rodata default or a good flash write; false only after a
-/// flash write shed the copy (fragmentation / flash busy) — the soak-log
-/// signal that shedding happened.
+/// True for a good flash write (or the rodata default, in a build that has
+/// one); false when there is nothing to serve.
+///
+/// **False has TWO causes since Gitea #744**, and `/api/status` `engines`
+/// separates them — this pair on its own no longer implies a fault:
+/// * `engines: 0` with these false — nothing is playing. The normal state
+///   of a device that has never been given a pattern.
+/// * `engines: 1+` with these false — a pattern IS running but its
+///   read-back copy was shed by a failed flash write (fragmentation, flash
+///   busy). That is the soak-log signal, and it is still exactly this.
 pub fn current_src_available() -> bool {
     !matches!(current_src(), SrcLoc::Gone)
 }
 pub fn current_bc_available() -> bool {
+    !matches!(current_bc(), BcLoc::Gone)
+}
+
+/// Has anything ever been loaded to run this session?
+///
+/// False from boot until the first swap on a device with nothing stored —
+/// the "nothing is playing" state of Gitea #744. Distinct from "no engine
+/// is resident right now", which is the render task's own business (an OTA
+/// freeze, a rejected pattern) and which this does NOT report: those leave
+/// the read-back location pointing at the pattern that was running.
+pub fn has_program() -> bool {
     !matches!(current_bc(), BcLoc::Gone)
 }
 
@@ -971,25 +1049,66 @@ pub fn note_heap_base(v: u32) -> u32 {
 /// where `.stack` is the DRAM left over (docs/boards.md).
 static TEXT_SLOTS: Shared<Vec<String>> = BlockingMutex::new(RefCell::new(Vec::new()));
 
-/// Record slot `n`'s (already truncated) text for read-back. Out-of-range
-/// slots are ignored, like `text::set_slot`.
+/// Record slot `n`'s (already truncated) text for read-back, and arm the
+/// debounced write that keeps it across a reboot (Gitea #745).
+///
+/// This is the ONE funnel every write path goes through — `POST /api/text`,
+/// an HA text entity, the boot-time restore — so persistence hangs off it
+/// rather than off each caller, and a slot set by any route survives.
+/// Out-of-range slots are ignored, like `text::set_slot`.
+///
+/// Every allocation here is fallible (Gitea #727/#728): the table is eight
+/// `String`s, reserved in one shot, and a device too tight to grow it keeps
+/// rendering with the slot unrecorded instead of taking an allocator panic.
 pub fn set_text_slot(n: u8, s: &str) {
     if n as usize >= luxel_core::text::SLOTS {
         return;
     }
-    TEXT_SLOTS.lock(|c| {
+    let recorded = TEXT_SLOTS.lock(|c| {
         let mut v = c.borrow_mut();
         if v.len() < luxel_core::text::SLOTS {
+            // empty `String`s own no heap, so the reservation IS the growth
+            if v.try_reserve_exact(luxel_core::text::SLOTS).is_err() {
+                return false;
+            }
             v.resize(luxel_core::text::SLOTS, String::new());
         }
-        v[n as usize].clear();
-        v[n as usize].push_str(s);
+        let slot = &mut v[n as usize];
+        slot.clear();
+        if s.len() > slot.capacity() && slot.try_reserve_exact(s.len()).is_err() {
+            return false;
+        }
+        slot.push_str(s);
+        true
     });
+    if recorded {
+        crate::textslots::mark_dirty();
+    }
 }
 
 /// Slot `n`'s text, or the empty string.
 pub fn text_slot(n: u8) -> String {
     TEXT_SLOTS.lock(|c| c.borrow().get(n as usize).cloned().unwrap_or_default())
+}
+
+/// The whole slot table as a persistence blob (`text::encode_slots`), or
+/// `None` when the one reservation it needs cannot be made.
+///
+/// The reservation is a compile-time [`luxel_core::text::SLOTS_BLOB_MAX`]
+/// (529 B) taken OUTSIDE the critical section, so the encode itself neither
+/// allocates nor reallocates while the lock is held.
+pub fn text_slots_blob() -> Option<Vec<u8>> {
+    let mut out: Vec<u8> = Vec::new();
+    if out
+        .try_reserve_exact(luxel_core::text::SLOTS_BLOB_MAX)
+        .is_err()
+    {
+        return None;
+    }
+    TEXT_SLOTS.lock(|c| {
+        luxel_core::text::encode_slots(c.borrow().iter().map(|s| s.as_str()), &mut out)
+    });
+    Some(out)
 }
 
 /// Latest sensor frame (PB sensor-board serial or POST /api/sensors) + a

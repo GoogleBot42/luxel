@@ -1,5 +1,75 @@
 # Update log
 
+## 2026-09-25 — Jeremy's scenes + UI feedback batch (#729: #728, #730–#745, #753)
+
+A 45-item review of the shipped Web UI v2 work, filed as epic **#729** with 18
+children. 40 items are in; the sprite work (#740 first-class sprite record,
+#741 editor redesign) is deliberately not, and is the whole of what remains.
+
+**The reboot, and then the real fix.** `/api/status` and `/api/scenes` panicked
+the web task on a device holding a scene at its layer cap — the builders grew a
+`String` by doubling and the board had no contiguous KBs left. Reproduced in the
+field mid-session (counters went backwards, `heap_free` 9,680 / `heap_largest`
+5,584). #728 landed a documented `degraded` short body; Jeremy's verdict was
+"I don't like this kludge, it is tech debt. We should fix the root cause now and
+stream as you say." So **#753 replaced it**: `jsonview::Sink`/`Chunks` build every
+generated body in 256-byte `try_reserve_exact`'d segments and `ApiBody::Chunked`
+drops each segment as it goes on the wire. Peak contiguous demand for any
+response is now one segment, on every board, with no PSRAM in the mechanism (the
+PB v3 has none and stays a target, #752). `degraded` is gone from the wire, the
+docs and the console. Cost: +4.4 KB image; `.stack` improved, because the
+high-water static went with it.
+
+**A 4 % slow crawl nobody could see.** #732 lifted the full-frame scene driver
+into `luxel-core` — it was written three times (wasm, firmware, and the CLI
+mirror nobody had noticed). The firmware's copy computed `dt_ms = delta >> 16`
+and discarded the remainder: **960 ms of scroll per second of wall clock**, while
+the browser preview ran true. One `SceneDriver`/`SceneHost` now; the millisecond
+accumulator came from the wasm side, the fallible `dst` sizing from the firmware
+side, and a core test pins the frame-by-frame output so they cannot drift again.
+
+**A quarter of the library rendered black.** #742: the playground installed the
+Pixelblaze-compat array-element ledger (10,236) unconditionally, but
+`array(pixelCount)` costs what the rig says — so at 64×64, **25 of 307** library
+patterns failed `array()` during init and drew nothing, with the runtime banner
+pinned to the bottom of the window. `fairies` was the reported one. The ceiling
+is now the rig's own, floored at PB's count; a 60 px strip and Auto's 16×16 are
+bit-for-bit unchanged, so the PB-compat wall is still where it was.
+
+**Also in.** Bounce, off-screen scroll entry and scroll-phase survival across an
+edit (#733) — the phase reset on every keystroke was the reported "jitter", and
+the web side was freeing the whole compositor per edit, which hid the fix. The
+pattern picker (#730) — options were device-only, never refreshed, and the panel
+rendered ~7 px *below the viewport*, which is what "Change… does nothing" was.
+An unresolved layer no longer spins forever (#731). Blend/Transparent became rich
+pickers; the pattern layer's **Fit control was removed rather than prettified** —
+`style.fit` is read in exactly one place in the codebase (`blit_sprite`), so it
+did nothing for a pattern layer, and `contain` is a synonym for `fill` (#735).
+The scene chrome batch (#736, fourteen items). One shared `AsyncButton` and one
+`.spinner`, replacing six copies (#738). Real SVG transports in both editor
+headers, the Scenes tab background, the Settings accordion (#739). Breakpoints
+work while browsing a pattern (#743). One shared `GradientEditor` painting the
+engine's real LUT, native colour inputs gone from both homes (#734). The embedded
+rainbow is gone and nothing plays at first boot (#744) — which needed a black
+frame on entry, or a strip would have held the previous session's last frame
+forever. Text slots persist across reboot and a clock layer draws nothing rather
+than `--:--` before SNTP (#745). `/api/status`'s `jit` block describes every
+resident engine instead of whichever compiled last (#718).
+
+**Verification.** `e2e: all checks pass`, `all device-mode checks passed`,
+`cargo test --workspace` 20/20 binaries clean, 210/210 web unit tests,
+svelte-check 0. Bundle 920,081 B of the 983,040 B gate. Images: athom 1,217,184
+(7.13 % free), pbv3 1,200,144 (8.43 %). All five boards build.
+
+**Two things to know.** `board-pixelblaze-v3` is at **44 bytes of `.stack`
+margin** (#759) — it was already 76 B on master and this batch spent 32 B net;
+nobody has ever audited the statics as a budget. And the "wifi freeze" turned out
+to be two different things: not boot ordering (#744 proved rendering starts
+before the WiFi controller exists), but on the panel a blocked ProCpu freezing
+the HUB75 image (#755), and in the first second of boot something in the
+radio-bring-up window that is still unmeasured — the next panel boot with serial
+attached settles it.
+
 ## 2026-09-24 — saving a scene while one is playing no longer reboots the panel (#724, #702)
 
 On the Seengreat panel, `POST /api/scenes` **reset the board** whenever a

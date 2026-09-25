@@ -13,6 +13,13 @@
   //   * playground — the tab is always there (hiding it would make the
   //     feature undiscoverable), and when the `Preview as` chip is not a
   //     matrix the page is the S6b empty state whose one action sets it.
+  //
+  // PLAYING, in the playground (#742 item 40): there is no device, so the
+  // tiles wear `Open` and the gesture opens the scene editor — whose stage
+  // composites the scene live — exactly as a pattern tile there wears `Open`
+  // and opens the pattern editor (§5.7, `pages/Patterns.svelte`'s
+  // `openVerb`). `canPlay` below is the whole of that rule; it also takes the
+  // `▶ playing` ring and pill with it, which mock S9 does not draw either.
   import { createEventDispatcher } from "svelte";
   import "../components/scene/scene.css";
   import SceneGrid from "../components/scene/SceneGrid.svelte";
@@ -151,6 +158,7 @@
       luxel={$luxel}
       items={$scenes}
       playingId={$activeSceneId}
+      canPlay={!$isPlayground}
       rig={$layout}
       {lookup}
       on:play={(e) => void activateScene(e.detail)}
@@ -165,8 +173,16 @@
   .panel {
     display: flex;
     flex-direction: column;
+    /* `flex: 1` and the panel colour are the pair that make this a tab SURFACE
+       like `.patterns-tab` / `.playlist-tab` / `.settings-tab`, which both set
+       (Gitea #739). Without the background it fell through to the body's `--bg`
+       and read visibly darker than the tab beside it; without the grow, the
+       background it now paints would stop at the empty state's 212px and the
+       shell's darker ground would show under it. */
+    flex: 1;
     min-height: 0;
     overflow-y: auto;
+    background: var(--bg-panel);
   }
 
   .panel[hidden] {

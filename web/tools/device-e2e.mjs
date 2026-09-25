@@ -552,9 +552,10 @@ try {
   check("device: no Share in the ⋯ menu", (await menuHas(page, "share")) === false);
   // audit E2: one word in both modes — WHERE it lands is the save state's
   // job, not the button's ("Save to device" was the wrong text, #538)
+  // …or `Saved`, once there is nothing to save (#738). Still ONE word.
   check(
     "device: the primary action still reads Save",
-    (await page.$eval('[data-role="save"]', (el) => el.textContent.trim())) === "Save",
+    /^Saved?$/.test(await page.$eval('[data-role="save"]', (el) => el.textContent.trim())),
   );
   check("device: no reconnect button", (await page.$('[data-role="reconnect"]')) === null);
   const hasDisconnect = await page.$$eval("header button", (btns) =>
@@ -2669,13 +2670,29 @@ try {
       p1.palette.length === 8 && p1.palette[0] === 0 && p1.palette[4] === 64,
       JSON.stringify(p1.palette),
     );
-    await page.$$eval('[data-role="out-palette-color"]', (els) => {
-      const el = els[0];
+    // Recolour stop 0. Since Gitea #734 the palette is the shared
+    // `GradientEditor`, and a stop's colour is the app's own `ColorPicker`,
+    // not an `<input type="color">` — so this drives the real controls:
+    // open the stop editor (stop 0 is `picked` by default), open the
+    // picker's popover from its swatch, and type a hex. The editor commits
+    // on a 250 ms trailing timer (a ColorPicker drag is a pointermove storm
+    // and Settings must not POST the palette per move), hence the wait.
+    // Select stop 0 EXPLICITLY, and note that CLICKING A STOP OPENS THE
+    // EDITOR (`GradientEditor.svelte:461`) while `out-palette-edit` is a
+    // TOGGLE (:488) — so doing both closes it again. Two traps in one line:
+    // adding a stop selects the one just added, so the editor opens on stop 1
+    // and a test that assumes 0 silently recolours the wrong one (it did —
+    // the red landed at palette[5..7], not [1..3]).
+    await page.$$eval('[data-role="out-palette-stop"]', (els) => els[0].click());
+    await sleep(250);
+    await page.click('[data-role="out-palette-color"] [data-role="color-swatch"]');
+    await sleep(200);
+    await page.$eval('[data-role="color-hex"]', (el) => {
+      el.focus();
       el.value = "#ff0000";
       el.dispatchEvent(new Event("input", { bubbles: true }));
-      el.dispatchEvent(new Event("change", { bubbles: true }));
     });
-    await sleep(400);
+    await sleep(700);
     const p2 = await (await fetch(`${DEV}/api/output`)).json();
     check(
       "palette: color picker writes the stop",
@@ -4248,8 +4265,9 @@ try {
         quiet.layers[0].name !== "Quiet edit",
         quiet.layers[0].name,
       );
-      const st = await scPage.$eval('[data-role="scene-save-state"]', (el) =>
-        (el.textContent ?? "").trim(),
+      const st = await scPage.$eval(
+        '[data-role="scene-save-state"]',
+        (el) => el.dataset.saveState ?? "",
       );
       check("scenes: an unsaved edit says so", st === "unsaved changes", st);
       await scPage.click('[data-role="scene-save"]');

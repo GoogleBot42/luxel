@@ -42,7 +42,7 @@
 //!           render_pixels → XtensaCall::enter → entry / retw.n
 //! ```
 
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU8, Ordering};
 
 use embassy_time::Instant;
 use esp_println::println;
@@ -193,6 +193,35 @@ pub const EMIT_FIXED: usize = 1024;
 
 fn emit_heap_need(prog: &luxel_core::vm::Program) -> usize {
     prog.words.len() * EMIT_PER_WORD + prog.fns.len() * EMIT_PER_FN + EMIT_FIXED
+}
+
+/// The emitter's LARGEST SINGLE allocation, in bytes — what the heap must
+/// hand out as ONE CONTIGUOUS block, as opposed to [`emit_heap_need`]'s
+/// total across many (Gitea #752).
+///
+/// `HEAP.free()` sums every free run. The biggest contiguous thing the
+/// emitter asks for is per-FUNCTION and scales with that function's word
+/// count: the planner's stack map is a `Vec<Vec<Kind>>` with one entry per
+/// word, cloned into the plan (`luxel-jit/src/plan.rs`), and the emitter's
+/// `word_off` is a `vec![NO_OFF; n + 1]` (`emit.rs`). A `Vec` header is
+/// 12 B on the device and a `u32` offset 4, so 16 B per word bounds both.
+///
+/// `Program` carries no per-function word count, so this charges the
+/// largest function the WHOLE program's words — deliberately an
+/// over-estimate. Over-estimating costs an interpreted pattern;
+/// under-estimating costs a mid-compile allocation failure, which on the
+/// render task is a reboot rather than a refusal.
+///
+/// It never binds on an unfragmented heap: [`COMPILE_FLOOR`] plus
+/// `24 B`/word already exceeds `16 B`/word by more than
+/// `shared::largest_free_block`'s probe reserve. It binds exactly where
+/// #752 was filed — a heap whose total is comfortable and whose runs are
+/// not (the panel, 2026-09-24: 9,680 B free, 5,584 B largest).
+const EMIT_CONTIG_PER_WORD: usize = 16;
+const EMIT_CONTIG_FIXED: usize = 512;
+
+fn emit_contig_need(prog: &luxel_core::vm::Program) -> usize {
+    prog.words.len() * EMIT_CONTIG_PER_WORD + EMIT_CONTIG_FIXED
 }
 
 /// Heap that must stay free UNDER the emitter's bookkeeping while it
@@ -521,14 +550,112 @@ pub const STATE_OFF: u8 = 0;
 pub const STATE_INTERP: u8 = 1;
 /// The live pattern is compiled.
 pub const STATE_NATIVE: u8 = 2;
+/// NOTHING is resident: no pattern, no scene, nothing to describe.
+///
+/// A fourth answer, not a flavour of `interp` (Gitea #718). Since Gitea
+/// #744 a shipped image carries no default pattern, so this is what a
+/// device nobody has given a pattern reports from boot, and it is also
+/// what a `Msg::Freeze` (an OTA upload) and a rejected load leave behind.
+/// `off` means the image has no backend; `interp` means a program IS
+/// loaded and running in the interpreter; this means there is no program.
+pub const STATE_NONE: u8 = 3;
 
-static STATE: AtomicU8 = AtomicU8::new(STATE_INTERP);
+// ---- the SCALAR block: the one running program ----
+//
+// A bare pattern, or a scene's BASE layer — the engine the render task
+// holds as its primary one, which is what `/api/controls`, `/api/vars`,
+// `/api/pattern` and the sensor inboxes already point at. Before Gitea
+// #718 every compile attempt wrote these, so with a scene up they
+// described whichever layer compiled LAST (often a sprite) and a base
+// layer that fell back to the interpreter was silently overwritten. They
+// are now written only by the engine that IS the running program; the
+// rest of the stack lives in the per-slot table below.
+
+static STATE: AtomicU8 = AtomicU8::new(STATE_NONE);
 /// Where the live image is ([`PLACE_PSRAM`] …); 0 = no image.
 static PLACE_LIVE: AtomicU8 = AtomicU8::new(0);
 static CODE_BYTES: AtomicU32 = AtomicU32::new(0);
 static COMPILE_US: AtomicU32 = AtomicU32::new(0);
 /// Index into [`REASONS`]; `u8::MAX` = none.
 static REASON: AtomicU8 = AtomicU8::new(u8::MAX);
+
+// ---- the per-slot table: the whole resident stack (Gitea #718) ----
+
+/// Stack slots `/api/status` can describe, indexed by SCENE LAYER index
+/// (bottom → top; a bare pattern is layer 0 of a one-layer stack).
+///
+/// Eight: `luxel_core::caps::MAX_LAYERS` is four PATTERN layers, a scene
+/// may interleave `text`/`colour` layers between them, and every `sprite`
+/// layer holds an engine of its own today (Gitea #740 removes that one).
+/// A stack deeper than this describes its first eight layers; `engines`
+/// still counts them all, so the shortfall is visible rather than silent.
+pub const MAX_SLOTS: usize = 8;
+
+/// A packed slot's "no reason" value. Five bits, so not `u8::MAX` — the
+/// scalar [`REASON`] keeps its own sentinel.
+const NO_REASON: u8 = 31;
+
+/// One packed byte per layer:
+///
+/// | bits | meaning |
+/// |---|---|
+/// | 0..2 | state, [`STATE_OFF`]…[`STATE_NONE`] — `NONE` = this layer holds no engine |
+/// | 2..7 | index into [`REASONS`], or [`NO_REASON`] |
+/// | 7 | 1 = a SPRITE layer's engine |
+///
+/// Packed into one byte because every static here comes straight out of
+/// `.stack`, and the classic-ESP32 boards have ~100 B of it over the floor
+/// (tools/stack-check.sh). Plain load/store, never a read-modify-write:
+/// `riscv32imc` (board-c3-devkit) has no atomic RMW at all — the rule
+/// `devicemap::take_dirty` follows, and the one #728 broke the C3 with.
+/// Torn reads are not a hazard either: only the render task writes, and a
+/// status reader that catches a slot mid-activation sees the old byte or
+/// the new one, never a blend.
+static SLOT: [AtomicU8; MAX_SLOTS] = [
+    AtomicU8::new(EMPTY_SLOT),
+    AtomicU8::new(EMPTY_SLOT),
+    AtomicU8::new(EMPTY_SLOT),
+    AtomicU8::new(EMPTY_SLOT),
+    AtomicU8::new(EMPTY_SLOT),
+    AtomicU8::new(EMPTY_SLOT),
+    AtomicU8::new(EMPTY_SLOT),
+    AtomicU8::new(EMPTY_SLOT),
+];
+
+/// Each layer's compiled image, literal pool included; 0 when it is not
+/// native. `u16` because [`JIT_MAX_CODE`] is far under 64 KB.
+static SLOT_BYTES: [AtomicU16; MAX_SLOTS] = [
+    AtomicU16::new(0),
+    AtomicU16::new(0),
+    AtomicU16::new(0),
+    AtomicU16::new(0),
+    AtomicU16::new(0),
+    AtomicU16::new(0),
+    AtomicU16::new(0),
+    AtomicU16::new(0),
+];
+
+/// Layers in the RESIDENT stack — 1 for a bare pattern, the scene's layer
+/// count for a scene, 0 with nothing loaded. May exceed [`MAX_SLOTS`]; the
+/// status walk clamps.
+static STACK_LAYERS: AtomicU8 = AtomicU8::new(0);
+
+/// Which slot the next compile attempt belongs to, as [`arm`] left it:
+/// bits 0..6 the layer index, bit 6 sprite, bit 7 primary. The default is
+/// "layer 0, primary", which is what a bare pattern is, so a compile that
+/// reached here without an `arm` still records somewhere sane.
+static ARMED: AtomicU8 = AtomicU8::new(ARM_PRIMARY);
+const ARM_SPRITE: u8 = 1 << 6;
+const ARM_PRIMARY: u8 = 1 << 7;
+/// Largest layer index [`ARMED`] can carry (six bits).
+const ARM_LAYER_MAX: usize = 0x3F;
+
+const fn pack_slot(state: u8, reason: u8, sprite: bool) -> u8 {
+    (state & 3) | ((reason & 31) << 2) | if sprite { 0x80 } else { 0 }
+}
+
+/// A layer that holds no engine.
+const EMPTY_SLOT: u8 = pack_slot(STATE_NONE, NO_REASON, false);
 
 /// The `jit.reason` vocabulary. `Refusal::id()` is the emitter's half of
 /// it (docs/jit-design.md §4a) and the browser's compile-time lint uses the
@@ -561,12 +688,114 @@ fn reason_index(id: &str) -> u8 {
     REASONS.iter().position(|r| *r == id).unwrap_or(0) as u8
 }
 
+/// Record the outcome of ONE compile attempt: always into the armed slot,
+/// and into the scalar block only when that slot is the primary engine
+/// (Gitea #718). The ten call sites below are unchanged — the identity
+/// comes from [`arm`], not from the caller.
 fn set_state(state: u8, reason: Option<&str>, bytes: usize, us: u32, place: u8) {
-    REASON.store(reason.map_or(u8::MAX, reason_index), Ordering::Relaxed);
-    CODE_BYTES.store(bytes as u32, Ordering::Relaxed);
-    COMPILE_US.store(us, Ordering::Relaxed);
-    PLACE_LIVE.store(place, Ordering::Relaxed);
-    STATE.store(state, Ordering::Release);
+    let a = ARMED.load(Ordering::Relaxed);
+    let layer = (a & ARM_LAYER_MAX as u8) as usize;
+    if let (Some(s), Some(b)) = (SLOT.get(layer), SLOT_BYTES.get(layer)) {
+        b.store(bytes.min(u16::MAX as usize) as u16, Ordering::Relaxed);
+        s.store(
+            pack_slot(state, reason.map_or(NO_REASON, reason_index), a & ARM_SPRITE != 0),
+            Ordering::Release,
+        );
+    }
+    if a & ARM_PRIMARY != 0 {
+        REASON.store(reason.map_or(u8::MAX, reason_index), Ordering::Relaxed);
+        CODE_BYTES.store(bytes as u32, Ordering::Relaxed);
+        COMPILE_US.store(us, Ordering::Relaxed);
+        PLACE_LIVE.store(place, Ordering::Relaxed);
+        STATE.store(state, Ordering::Release);
+    }
+}
+
+/// Forget the resident stack. Either a new one is being built, or nothing
+/// is playing; `/api/status` reports `state:"none"` and an empty
+/// `jit.layers` until something compiles.
+pub fn reset_stack() {
+    for (s, b) in SLOT.iter().zip(SLOT_BYTES.iter()) {
+        b.store(0, Ordering::Relaxed);
+        s.store(EMPTY_SLOT, Ordering::Relaxed);
+    }
+    STACK_LAYERS.store(0, Ordering::Relaxed);
+    ARMED.store(ARM_PRIMARY, Ordering::Relaxed);
+    REASON.store(u8::MAX, Ordering::Relaxed);
+    CODE_BYTES.store(0, Ordering::Relaxed);
+    COMPILE_US.store(0, Ordering::Relaxed);
+    PLACE_LIVE.store(0, Ordering::Relaxed);
+    STATE.store(STATE_NONE, Ordering::Release);
+}
+
+/// Name the slot the NEXT compile attempt belongs to.
+///
+/// `layer` is the engine's 0-based SCENE LAYER index — the identity, and
+/// the one thing `jit.rs` cannot work out for itself. It survives a scene
+/// rebuild (the scene's layer list is the identity, not the build order)
+/// and a bare pattern, which is layer 0 of a one-layer stack.
+///
+/// `primary` marks the one engine the scalar block describes: a bare
+/// pattern, or a scene's base layer. `sprite` marks a layer whose engine
+/// is built and read but never stepped.
+pub fn arm(layer: usize, primary: bool, sprite: bool) {
+    let mut a = layer.min(ARM_LAYER_MAX) as u8;
+    if sprite {
+        a |= ARM_SPRITE;
+    }
+    if primary {
+        a |= ARM_PRIMARY;
+    }
+    ARMED.store(a, Ordering::Relaxed);
+}
+
+/// This layer holds no engine after all: it was refused before, or instead
+/// of, a compile, and the compositor draws it as a no-op. Called by
+/// `scenes::build_runtime` on each of its fallback paths, so a slot never
+/// describes a compile whose engine was then dropped.
+pub fn clear_slot(layer: usize) {
+    if let (Some(s), Some(b)) = (SLOT.get(layer), SLOT_BYTES.get(layer)) {
+        b.store(0, Ordering::Relaxed);
+        s.store(EMPTY_SLOT, Ordering::Relaxed);
+    }
+    // A refused BASE layer takes the scalar block with it — the next
+    // pattern layer becomes the base and overwrites it, and if none does,
+    // the scene runs no program of its own.
+    let a = ARMED.load(Ordering::Relaxed);
+    if a & ARM_PRIMARY != 0 && (a & ARM_LAYER_MAX as u8) as usize == layer {
+        REASON.store(u8::MAX, Ordering::Relaxed);
+        CODE_BYTES.store(0, Ordering::Relaxed);
+        COMPILE_US.store(0, Ordering::Relaxed);
+        PLACE_LIVE.store(0, Ordering::Relaxed);
+        STATE.store(STATE_NONE, Ordering::Release);
+    }
+}
+
+/// How many layers the stack being built has — 1 for a bare pattern,
+/// `scene.layers.len()` for a scene. How far [`slot_status`] is walked.
+pub fn commit_stack(layers: usize) {
+    STACK_LAYERS.store(layers.min(u8::MAX as usize) as u8, Ordering::Relaxed);
+}
+
+/// Arm for a BARE PATTERN: a one-layer stack whose only engine is the
+/// primary one. The shape of every activation that is not a scene — boot
+/// default, `/api/code`, store activate, library swap, crossfade,
+/// pixel-count rebuild.
+pub fn single() {
+    reset_stack();
+    commit_stack(1);
+    arm(0, true, false);
+}
+
+/// The render task's resident-engine count, once per frame loop. Zero
+/// means the stack emptied — a freeze, a rejected load, or a board nobody
+/// has given a pattern (Gitea #744) — and `/api/status` must stop
+/// describing whatever was last compiled. Idempotent, and one atomic load
+/// in the common case.
+pub fn note_resident(n: u32) {
+    if n == 0 && STATE.load(Ordering::Relaxed) != STATE_NONE {
+        reset_stack();
+    }
 }
 
 /// Wire spelling of a placement (`jit.place`, and what `POST /api/jit`'s
@@ -595,6 +824,7 @@ pub fn jit_status() -> (
     let state = match STATE.load(Ordering::Acquire) {
         STATE_NATIVE => "native",
         STATE_OFF => "off",
+        STATE_NONE => "none",
         _ => "interp",
     };
     let place = match PLACE_LIVE.load(Ordering::Relaxed) {
@@ -608,6 +838,41 @@ pub fn jit_status() -> (
         COMPILE_US.load(Ordering::Relaxed),
         place,
     )
+}
+
+/// One resident engine's report for `/api/status`'s `jit.layers`
+/// (Gitea #718), by SCENE LAYER index: `(state, reason, code_bytes,
+/// sprite)`, with the same wire spellings [`jit_status`] uses.
+///
+/// `None` where that layer holds no engine — a `text` or `colour` layer,
+/// a `pat` layer that did not fit and draws nothing, or a layer past the
+/// end of the resident stack.
+pub fn slot_status(layer: usize) -> Option<(&'static str, Option<&'static str>, u32, bool)> {
+    let v = SLOT.get(layer)?.load(Ordering::Acquire);
+    let state = match v & 3 {
+        STATE_NATIVE => "native",
+        STATE_OFF => "off",
+        STATE_NONE => return None,
+        _ => "interp",
+    };
+    let r = (v >> 2) & 31;
+    Some((
+        state,
+        if r == NO_REASON {
+            None
+        } else {
+            REASONS.get(r as usize).copied()
+        },
+        SLOT_BYTES[layer].load(Ordering::Relaxed) as u32,
+        v & 0x80 != 0,
+    ))
+}
+
+/// Layers in the resident stack — how far `/api/status` walks
+/// [`slot_status`]. 1 for a bare pattern, 0 with nothing loaded; clamped
+/// to [`MAX_SLOTS`] by the caller, which is where the truncation shows.
+pub fn stack_layers() -> usize {
+    STACK_LAYERS.load(Ordering::Relaxed) as usize
 }
 
 /// Runtime switch: the next activation compiles only if this is set.
@@ -743,9 +1008,14 @@ fn helpers() -> Helpers {
 /// | `no-memory` | the heap cannot hold the emitter's bookkeeping beside this engine (`emit_heap_need`) |
 /// | `too-large` and the rest | [`Refusal`], whole-program, from the emitter |
 ///
-/// Called from `try_budgeted_engine` — the choke point every activation
-/// funnels through (boot default, `/api/code`, store activate, library
-/// swap, crossfade).
+/// Called from `try_budgeted_engine` / `try_budgeted_layer` — the choke
+/// point every activation funnels through (boot default, `/api/code`,
+/// store activate, library swap, crossfade, and every layer of a scene).
+///
+/// The outcome is recorded against the slot [`arm`] last named, which is
+/// how a scene's layers stop overwriting one another (Gitea #718): each
+/// `set_state` below writes its own layer, and the scalar `/api/status`
+/// block only when that layer IS the running program.
 #[inline(never)]
 pub fn try_compile(e: &mut Engine) {
     if !enabled() {
@@ -768,6 +1038,19 @@ pub fn try_compile(e: &mut Engine) {
         let free = esp_alloc::HEAP.free() as usize;
         if free < COMPILE_FLOOR + need {
             println!("jit: interpreter (no-memory: {need} B to compile, {free} B free)");
+            set_state(STATE_INTERP, Some("no-memory"), 0, 0, 0);
+            return;
+        }
+        // …and it has to be ALLOCATABLE, not merely affordable (Gitea
+        // #752). The check above reads a TOTAL; the emitter's biggest
+        // `Vec` wants one contiguous run, and on a fragmented heap the two
+        // numbers diverge badly. Until this, the guard could pass and the
+        // allocation still fault — a panic on the render task, which on
+        // the panel is a core with no serial port.
+        let contig = emit_contig_need(e.program());
+        let largest = crate::shared::largest_free_block();
+        if largest < contig {
+            println!("jit: interpreter (no-memory: {contig} B in one block, {largest} B largest of {free} B free)");
             set_state(STATE_INTERP, Some("no-memory"), 0, 0, 0);
             return;
         }

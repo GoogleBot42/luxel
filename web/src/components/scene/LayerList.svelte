@@ -12,6 +12,7 @@
   // inspector (mockups.html :1287-88).
   import { createEventDispatcher } from "svelte";
   import Popover from "../Popover.svelte";
+  import LayerIcon from "./LayerIcon.svelte";
   import { formatClock } from "../../lib/sceneRender";
   import type { Layer, LayerKind, Scene } from "../../lib/scene";
 
@@ -26,6 +27,11 @@
   export let spriteDims: Record<number, string> = {};
   /** The pattern's display name by layer index (only the host knows it). */
   export let patternNames: Record<number, string> = {};
+  /** Layers whose pattern will not compile, by index (#731). The inspector
+   *  says WHY, but only for the selected layer — so the row carries the fact
+   *  that there is something to read, which is what makes a broken layer
+   *  findable in a stack of five. */
+  export let layerErrors: Record<number, string> = {};
 
   const dispatch = createEventDispatcher<{
     select: number;
@@ -40,20 +46,25 @@
   let addOpen = false;
   let addBtn: HTMLElement | null = null;
 
-  /** The cap's reason, in D4's words — the SAME string goes on `data-reason`
-   *  and under the row, because "2 of 2 used" alone does not tell you that
-   *  text, sprite and color layers are free (S7d). */
-  $: capReason = `this device fits ${layerCap} pattern layer${layerCap === 1 ? "" : "s"}; text and sprite and color layers are free`;
+  /** The cap's reason, in Jeremy's words (#736 item 18) — the SAME string
+   *  goes on `data-reason` and under the row, because "2 of 2 used" alone
+   *  does not tell you that text, sprite and color layers are free (S7d).
+   *  This is the AT-THE-CAP explanation and it is the only home the sentence
+   *  has now: the centre column's "Frame cost:" line, which said something
+   *  similar unprompted on every scene, is gone (item 24). The number stays
+   *  interpolated — the cap is `caps.layers`, per board, never a constant. */
+  $: capReason = `luxel devices only support ${layerCap} pattern layer${layerCap === 1 ? "" : "s"}; text and sprite and color layers are free`;
   $: atCap = patternLayers >= layerCap;
 
-  const TYPE_GLYPH: Record<LayerKind, string> = {
-    text: "T",
-    sprite: "▦",
-    pat: "▤",
-    color: "▭",
-  };
-
-  /** The dim mono line after the name (S7 `.meta2`, per type). */
+  /** The dim mono line after the name (S7 `.meta2`, per type).
+   *
+   *  No `base` here any more (#736 item 17). Jeremy: "this is a sign that
+   *  visual UI indicators are needed. Not text descriptions which are easily
+   *  confused" — a bottom row whose metadata column said the word `base`
+   *  while the row above it said `60 % · lighten` read as another property of
+   *  the layer rather than as its position in the stack. The stack's shape is
+   *  drawn now: the header's front-of-stack mark and the ground rule under
+   *  the last row. */
   function metaOf(l: Layer, at: number, sprites: Record<number, string>): string {
     if (!l.style.visible) return "hidden";
     if (l.body.kind === "text") {
@@ -67,7 +78,6 @@
     const bits: string[] = [];
     if (l.style.opacity !== 100) bits.push(`${l.style.opacity} %`);
     if (l.style.blend !== "normal") bits.push(l.style.blend);
-    if (bits.length === 0) return at === 0 ? "base" : "";
     return bits.join(" · ");
   }
 
@@ -143,7 +153,26 @@
 <div class="lcol" data-role="scene-layers">
   <div class="rhead" style="margin-bottom:8px">
     <div class="slabel">Layers</div>
-    <div class="rdim" style="margin-left:auto">top = front</div>
+    <!-- The stacking order, DRAWN (#736 item 17). It was the words
+         `top = front`, which Jeremy read as a caption rather than as a fact
+         about the list under it. This is the same stack seen edge-on — three
+         plates with the top one lit and an arrow off the front of it — at the
+         end of the header, immediately above the row it describes. The words
+         survive as the tooltip and as the accessible name, so nothing is lost
+         for a reader who wants them. -->
+    <span
+      class="zaxis"
+      data-role="scene-stack-order"
+      style="margin-left:auto"
+      title="top = front: the top row draws over the ones below it"
+    >
+      <svg viewBox="0 0 30 24" fill="none" stroke="currentColor" stroke-width="1.6" role="img" aria-label="top of the list is the front of the stack">
+        <path class="zfront" d="M11 4.6 20 8l-9 3.4L2 8Z" />
+        <path d="M11 11.4 20 14.8l-9 3.4L2 14.8" opacity=".55" />
+        <path d="M11 16.6 20 20l-9 3.4L2 20" opacity=".3" />
+        <path class="zarrow" d="M25.5 10.5V3.2m0 0-2.6 2.8m2.6-2.8 2.6 2.8" stroke-width="1.8" stroke-linecap="round" />
+      </svg>
+    </span>
   </div>
 
   <div bind:this={listEl}>
@@ -209,25 +238,64 @@
           data-role="scene-layer-pick"
           on:click={() => dispatch("select", r.at)}
         >
-          <span class="ty">{TYPE_GLYPH[r.layer.body.kind]}</span>
+          <span class="ty"><LayerIcon kind={r.layer.body.kind} /></span>
           <span class="nm2">{nameOf(r.layer, r.at, patternNames)}</span>
-          <span class="meta2">{metaOf(r.layer, r.at, spriteDims)}</span>
+          <!-- A layer that will draw NOTHING says so on its own row, not only
+               in the inspector and only while it is selected (#731's
+               hand-off). One mark, the error colour, and the compiler's line
+               on the tooltip — enough to find it in a stack of five and know
+               which one to click. -->
+          {#if layerErrors[r.at] !== undefined}
+            <span
+              class="lbadge"
+              data-role="scene-layer-badge"
+              data-error={layerErrors[r.at]}
+              title={`this layer’s pattern does not compile — ${layerErrors[r.at]}`}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" role="img" aria-label="this layer’s pattern does not compile">
+                <path d="M12 3.6 22 21H2Z" stroke-linejoin="round" />
+                <path d="M12 10v4.4M12 17.6v.1" />
+              </svg>
+            </span>
+          {:else}
+            <span class="meta2">{metaOf(r.layer, r.at, spriteDims)}</span>
+          {/if}
         </button>
       </div>
     {/each}
     {#if dragRow >= 0 && dropAt === rows.length}
       <div class="dropline" data-role="scene-drop"></div>
     {/if}
+
+    <!-- The other half of item 17: the BASE used to be the word `base` in the
+         bottom row's metadata column, where it competed with `60 % · lighten`
+         and lost. It is a ground line now — the hatched section rule every
+         engineering drawing uses for "this is the floor" — under the last
+         row, which is where the base actually is. Present only when there IS
+         a stack to have a floor. -->
+    {#if rows.length > 0}
+      <div
+        class="ground"
+        data-role="scene-stack-base"
+        title="the bottom row is the base: every other layer draws on top of it"
+        aria-hidden="true"
+      ></div>
+    {/if}
   </div>
 
   <div class="addwrap">
+    <!-- No `▾` (#736 item 21). Jeremy: "the 'Add layer' drop down needs to
+         loose the 'V' icon." It was a text glyph in a filled primary button,
+         where it read as a stray mark rather than as a disclosure — and
+         `aria-haspopup`/`aria-expanded` already say the thing it was there
+         to say, to the readers that need it said. -->
     <button
       class="btn primary"
       data-role="scene-add-layer"
       bind:this={addBtn}
       aria-haspopup="menu"
       aria-expanded={addOpen}
-      on:click|stopPropagation={() => (addOpen = !addOpen)}>+ Add layer ▾</button
+      on:click|stopPropagation={() => (addOpen = !addOpen)}>+ Add layer</button
     >
     <Popover
       open={addOpen}
@@ -236,6 +304,13 @@
       dataRole="scene-add-menu"
       on:close={() => (addOpen = false)}
     >
+      <!-- Each row is [icon slot] [label] [trailing dim] (#736 item 22). The
+           marks used to be glyphs inside the label's text run, so `▤ Pattern`
+           and `T Text` started their words at different x — and the disabled
+           Pattern row, which was already a flex line, did not line up with
+           the three that were not. One fixed icon column now, and it is the
+           SAME `LayerIcon` the rows in the list draw, so the menu entry and
+           the layer it makes look like each other. -->
       <div class="full-inner">
         {#if atCap}
           <!-- D4's ONE deliberate exception to "absent, never disabled": the
@@ -243,21 +318,24 @@
                stays in the menu, greyed, with its count on the row and the
                reason spelled out underneath (S7d). -->
           <button class="mi dis" data-role="scene-add-pat" disabled data-reason={capReason}>
-            ▤ Pattern <span class="mdim">{patternLayers} of {layerCap} used</span>
+            <LayerIcon kind="pat" /><span class="ml">Pattern</span>
+            <span class="mdim">{patternLayers} of {layerCap} used</span>
           </button>
           <div class="reason">{capReason}</div>
         {:else}
-          <button class="mi" data-role="scene-add-pat" on:click={() => add("pat")}
-            >▤ Pattern</button
-          >
+          <button class="mi" data-role="scene-add-pat" on:click={() => add("pat")}>
+            <LayerIcon kind="pat" /><span class="ml">Pattern</span>
+          </button>
         {/if}
-        <button class="mi" data-role="scene-add-text" on:click={() => add("text")}>T Text</button>
-        <button class="mi" data-role="scene-add-sprite" on:click={() => add("sprite")}
-          >▦ Sprite</button
-        >
-        <button class="mi" data-role="scene-add-color" on:click={() => add("color")}
-          >▭ Color</button
-        >
+        <button class="mi" data-role="scene-add-text" on:click={() => add("text")}>
+          <LayerIcon kind="text" /><span class="ml">Text</span>
+        </button>
+        <button class="mi" data-role="scene-add-sprite" on:click={() => add("sprite")}>
+          <LayerIcon kind="sprite" /><span class="ml">Sprite</span>
+        </button>
+        <button class="mi" data-role="scene-add-color" on:click={() => add("color")}>
+          <LayerIcon kind="color" /><span class="ml">Color</span>
+        </button>
       </div>
     </Popover>
   </div>

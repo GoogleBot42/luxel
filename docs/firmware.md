@@ -535,10 +535,18 @@ without a serial console (docs/api.md).
 **Nothing a request or a frame can reach may allocate infallibly.** The
 store's 4 KiB page buffer (`patterns::with_store!`), the compositor's
 grid-sized scratch (`compose::scratch_for`) and the scene blob
-(`scenestore::blob_try`) are all `try_reserve_exact` + a degraded answer,
-because a scene at a board's layer cap leaves `heap_largest` around 7 KB and
-an allocator panic there is a reset (Gitea #724, #702). A new buffer on
-either path follows them.
+(`scenestore::blob_try`) are all `try_reserve_exact` + a refusal, because a
+scene at a board's layer cap leaves `heap_largest` around 7 KB and an allocator
+panic there is a reset (Gitea #724, #702). A new buffer on either path follows
+them.
+
+The READ path is different, and stronger: a generated JSON body does not
+reserve at all. `jsonview::Chunks` builds it in 256-byte segments and
+`ApiBody::Chunked` writes it out of them, dropping each segment as it goes on
+the wire, so peak contiguous demand for `/api/status`, `/api/scenes`,
+`/api/patterns` and `/api/playlist` is one segment however long the response is
+(Gitea #753). There is no degraded body — the only failure is a 503, meaning
+the heap could not spare 256 bytes.
 
 
 Three real incidents — the v0.1.4 OTA-crash root cause (2026-07-06), the
@@ -1177,7 +1185,8 @@ and `render_task` drops the outgoing engine (`drop_prev`) before
 `persist_current_pattern` runs, so no engine ever borrows the side being
 erased.
 
-The **rodata default** is borrowed too, which is why `PATTERN_BC` goes
+A **rodata default**, in the one build that has one (`LUXEL_DEFAULT_PATTERN`
+— see "Boot" below), is borrowed too, which is why `PATTERN_BC` goes
 through a `#[repr(C)]` wrapper with a zero-sized `[u32; 0]` field:
 `include_bytes!` has alignment 1 and `deserialize_lean_static` silently
 copies a blob whose word region is not 4-aligned in memory.
@@ -1280,8 +1289,10 @@ base layer, and for a single pattern that IS the pattern.
 
 Per frame, `Runtime::render` resolves each text layer's source — `lit` was
 seeded when the scene was set, `clock` comes from the SNTP wall clock through
-`scenes::civil_local` + `text::format_clock` (and renders `--:--` when the
-clock has never synced), `slot` from `text::with_slot` — then clears the
+`scenes::civil_local` + `text::format_clock` (and draws NOTHING when the clock
+has never synced — Gitea #745; `--:--` was a time-shaped artifact that flashed
+on every boot, and the wrong shape for a `date` layer), `slot` from
+`text::with_slot` — then clears the
 destination and walks the layers bottom → top, handing each pattern layer its
 engine's frame and each native layer to `Compositor::native_layer`.
 
@@ -1847,6 +1858,89 @@ gate reports those rather than asserting on them.
 2026-09-24 and the S3 images now ship with the JIT on; the panel's own first
 native run found a second bug, in the compiler's heap rather than its
 codegen, which is "The compile's own heap" above.
+
+## Boot: nothing plays until something is loaded
+
+A shipped image carries **no pattern**. Until 2026-09-24 it carried
+`library/rainbow.js`, compiled to LXBC by `build.rs` and linked as rodata,
+and the render task activated it as its very first act — so a brand-new
+device, a device whose stored pattern had been deleted, and a device whose
+resume was skipped all showed a rainbow nobody had asked for. Gitea #744
+removed it: a device that has never been given a pattern plays nothing.
+
+### What "nothing playing" is
+
+| | |
+|---|---|
+| the wire | **dark.** The render task emits nothing while no engine and no scene are resident, and an LED holds its last latched frame for as long as it has power — so the render loop clocks out ONE black frame on entering the state (`blanked` in `render_task`) and then idles at 20 Hz. Edge-triggered, and re-armed by a pixel-count change; it is not a 20 Hz strip write. |
+| the heap | **zero.** No Program, no engine, no frame buffer. The rodata default cost no heap for its code or constant pool either (mapped rodata, Gitea #260) — which is exactly why it survived this long — but it still paid for the Program's header tables and the engine's pixel state. Having nothing resident is strictly cheaper. The black frame's staging buffer is claimed *fallibly* and released immediately. |
+| `/api/status` | `engines: 0`, `fps: 0`, `frame_us`/`vm_us`/`pipe_us`/`out_us` all 0, `engine_heap: 0`, `geom.pattern_dims: 0`, `src: false`, `bc: false`. |
+| `GET /api/pattern` | **HTTP 200, `Content-Length: 0`, empty body** — not a 404 and not `ok:false`. The console reads this as an empty editor document, which is the intended empty state; a 404 or an error JSON would be loaded *as pattern source*. |
+| `/api/controls`, `/api/vars`, `/api/readouts` | `[]`, `{}`, `{}` — already what they answered with nothing resident. |
+| `/api/pixels` | empty body (no frame has been published). |
+| sync | a **leader beacons nothing** while nothing is loaded (`netin.rs`). Its clock and pattern hash are both still 0, and a beacon carrying those drags every follower's pattern clock to zero. |
+
+**`src: false` / `bc: false` no longer imply a fault**, and `engines` is what
+separates the two causes:
+
+* `engines: 0` with both false — nothing is playing. The ordinary state of a
+  device nobody has given a pattern.
+* `engines: 1+` with both false — a pattern *is* running but its read-back
+  copy was shed by a failed flash write. That is still the soak-log signal it
+  has always been.
+
+An OTA/upload `Msg::Freeze` is deliberately NOT blanked: its whole contract
+is that the strip holds its last frame while the engine's heap is handed
+over. The render task tracks that separately (`frozen`), and clears it on the
+next message that replaces the stack, so a freeze followed by a swap that
+fails still goes dark.
+
+### What still puts a pattern up at boot
+
+`playlist::init()` (before any task spawns) and `resume::resume_task` — and
+nothing else. Every resume bail-out now says on the console that the device
+is playing nothing, because the absence of light *is* the user-visible
+signal; it used to leave the rainbow rendering and only log to serial.
+
+### `LUXEL_DEFAULT_PATTERN`
+
+Kept. `build.rs` bakes in a default **only** when that env var names one, and
+sets `cfg(default_pattern)` so `main.rs` links the constants and the boot
+activation at all. It survives because the pattern a device boots into is the
+only one some environments can select: `tools/qemu/jit-test.py` drives the
+emulator, where the network never comes up and neither the playlist nor the
+resume task ever runs (Gitea #658). Since #744 *every* run of that gate has to
+build its own image — the cached flake output would boot with nothing
+resident and compile nothing.
+
+### The "WiFi freezes the pattern" report, and why it is not the boot order
+
+Reordering startup is the wrong fix, and the stated cause is wrong.
+`render_task` and `playlist_task` spawn **before** the WiFi controller is
+created, before `connection_task`, and before `stack.wait_config_up().await`.
+On dual-core boards — which is every board on the bench — the render task is
+on the AppCpu under its own executor, so a frame never holds the ProCpu that
+WiFi, the network stack and the web pool live on. On single-core boards they
+share an executor, but embassy is cooperative and `wait_config_up` awaits.
+
+What *is* deliberately serialized behind IP is `resume::resume_task`: WiFi
+bring-up mallocs don't null-check and resume's load is a multi-KB burst, so
+spawning it earlier OOM-panicked boot and tripped the slot-flip guard. That
+is the real mechanism behind "the rainbow plays, then the real pattern swaps
+in late" — and with the rainbow gone the symptom goes with it: the strip is
+simply dark until the stored pattern lands.
+
+The one mechanism that genuinely stalls the AppCpu render loop is the
+**flash fence** (`core1::fenced`), not WiFi: every esp-storage op on the
+ProCpu parks the other core, and `appwdt.rs` documents multi-second bursts
+(a 728 KB asset install ≈ 15 s; a garbage-collecting pattern save measured at
+25 s). On a **pipelined** board the render loop additionally waits on
+`pipeline::output_task`, which lives on the ProCpu executor, so anything that
+blocks that core throttles rendering to one dropped frame per `VSYNC_HOLD`
+(50 ms) — and because the HUB75 DMA keeps rescanning the last framebuffer,
+that reads as a *frozen image*, which is what "completely freeze" looks like
+on a panel. Neither is a starvation path introduced by the boot order, and
+neither is fixed by moving a `spawn`.
 
 ## Cores & tasks: the render task runs on the second core
 

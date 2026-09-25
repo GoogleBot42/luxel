@@ -10,7 +10,9 @@
   import { createEventDispatcher } from "svelte";
   import BoxRow from "./BoxRow.svelte";
   import StyleTail from "./StyleTail.svelte";
-  import { MAX_LAYER_NAME, truncateUtf8, type SpriteTag } from "../../lib/scene";
+  import RichSelect from "../RichSelect.svelte";
+  import { FIT_OPTIONS, KEY_OPTIONS, fitValue, labelOf } from "../../lib/blendMeta";
+  import { MAX_LAYER_NAME, truncateUtf8, type Fit, type SpriteTag } from "../../lib/scene";
   import type { Layer } from "../../lib/scene";
   import {
     paletteCss,
@@ -41,6 +43,14 @@
 
   function patchLayer(next: Partial<Layer>): void {
     dispatch("change", { ...layer, ...next });
+  }
+
+  /** Fit is the ONE place `style.fit` means anything — `compose::blit_sprite`
+   *  reads it and nothing else does (see `lib/blendMeta.ts`). The narrowing
+   *  lives here rather than in the markup: svelte-check does not parse a TS
+   *  assertion inside a template expression. */
+  function setFit(v: string): void {
+    patchLayer({ style: { ...layer.style, fit: v as Fit } });
   }
 
   /** The device refuses a layer name over 32 BYTES, and a refusal the console
@@ -172,7 +182,9 @@
 
 <div class="irow">
   <div class="ilab">Transparent</div>
-  <div class="hint" data-role="scene-sprite-key">black pixels · sprites are always keyed</div>
+  <div class="hint" data-role="scene-sprite-key">
+    {labelOf(KEY_OPTIONS, "black")} · sprites are always keyed
+  </div>
 </div>
 
 <div class="irule"></div>
@@ -184,9 +196,22 @@
   on:input={(e) => patchLayer({ style: { ...layer.style, rect: e.detail } })}
 />
 
+<!-- The sprite layer is the ONLY place `fit` does anything (`blit_sprite`:
+     `let tile = style.fit == Fit::Tile`), so this is where the chooser lives
+     — and it offers the two behaviours that exist rather than the three wire
+     words, because `contain` is a synonym of `fill` on every code path
+     (lib/blendMeta.ts). It used to be a dead line saying "1:1 · sprites are
+     never scaled", which was true of the size and silent about tiling. -->
 <div class="irow">
   <div class="ilab">Fit</div>
-  <div class="hint" data-role="scene-sprite-fit">1:1 · sprites are never scaled</div>
+  <RichSelect
+    value={fitValue(layer.style.fit)}
+    options={FIT_OPTIONS}
+    dataRole="scene-sprite-fit"
+    menuRole="scene-fit-menu"
+    ariaLabel="how the sprite fills its box"
+    on:input={(e) => setFit(e.detail)}
+  />
 </div>
 
 <div class="irule"></div>

@@ -27,7 +27,7 @@ use core::sync::atomic::Ordering;
 
 use embassy_net::Stack;
 use luxel_core::fixed::Fx;
-use luxel_core::jsonview::{json_escape, push_i32, push_i64, push_piece, push_u32, push_u64};
+use luxel_core::jsonview::{json_escape, push_escaped, push_i32, push_i64, push_piece, push_u32, push_u64};
 use picoserve::response::{Content, StatusCode};
 use picoserve::routing::RequestHandlerService as _;
 
@@ -78,8 +78,21 @@ impl core::fmt::Display for HVal {
 /// body delegate to it verbatim — the flash-readback discipline (chunk, pad,
 /// yield) lives in those types, not here.
 enum ApiBody {
-    /// `application/json` — ~40 routes.
+    /// `application/json` — ~40 routes whose body is small and fixed in
+    /// shape (an ack, a settings object, an error).
     Json(String),
+    /// `application/json` built in [`luxel_core::jsonview::CHUNK`]-sized
+    /// segments and written straight out of them: the GENERATED bodies —
+    /// `/api/status`, `/api/scenes`, `/api/patterns`, `/api/playlist` —
+    /// whose length grows with what the device is holding.
+    ///
+    /// These are the ones that rebooted a board (Gitea #728): a `String`
+    /// doubling its way to a couple of KB needs a contiguous block a
+    /// fragmented heap does not have, and the allocator's answer to that is
+    /// a panic. A segmented body never asks for one. `Content-Length` is
+    /// [`luxel_core::jsonview::Chunks::len`], counted as the bytes went in,
+    /// so it is exactly what `write_content` puts on the wire (Gitea #753).
+    Chunked(luxel_core::jsonview::Chunks),
     /// A `&'static str` body with an explicit content type (the embedded
     /// index page is `text/html`, the 404 / redirect notes are `text/plain`).
     Text {
@@ -107,7 +120,7 @@ enum ApiBody {
 impl Content for ApiBody {
     fn content_type(&self) -> &'static str {
         match self {
-            ApiBody::Json(_) => "application/json",
+            ApiBody::Json(_) | ApiBody::Chunked(_) => "application/json",
             ApiBody::Text { ct, .. } => ct,
             ApiBody::Bytes(_) => "application/octet-stream",
             #[cfg(not(feature = "hosted-ui"))]
@@ -121,6 +134,8 @@ impl Content for ApiBody {
     fn content_length(&self) -> usize {
         match self {
             ApiBody::Json(s) => s.len(),
+            // exact by construction: counted as the bytes were pushed
+            ApiBody::Chunked(c) => c.len(),
             ApiBody::Text { s, .. } => s.len(),
             ApiBody::Bytes(v) => v.len(),
             // exact-from-snapshot: these three compute their length from the
@@ -137,6 +152,7 @@ impl Content for ApiBody {
     async fn write_content<W: picoserve::io::Write>(self, writer: W) -> Result<(), W::Error> {
         match self {
             ApiBody::Json(s) => s.write_content(writer).await,
+            ApiBody::Chunked(c) => write_chunks(c, writer).await,
             ApiBody::Text { s, .. } => s.write_content(writer).await,
             ApiBody::Bytes(v) => v.write_content(writer).await,
             #[cfg(not(feature = "hosted-ui"))]
@@ -146,6 +162,30 @@ impl Content for ApiBody {
             ApiBody::Empty { .. } => Ok(()),
         }
     }
+}
+
+/// Write a segmented JSON body out of its segments, in order.
+///
+/// No flattening anywhere: the body goes to the socket exactly as it was
+/// built, which is the point of [`ApiBody::Chunked`]. Each segment is at
+/// most `jsonview::CHUNK` bytes, well inside one TCP write, and a segment is
+/// DROPPED as soon as it is on the wire — a 3 KB `/api/status` body gives its
+/// heap back a quarter of a KB at a time while the response is still going
+/// out. A yield every few segments keeps the pool slot cooperative, the same
+/// discipline as [`stream_mapped`]; yielding on every one would cost a
+/// wake-up per 256 B for no benefit.
+async fn write_chunks<W: picoserve::io::Write>(
+    c: luxel_core::jsonview::Chunks,
+    mut writer: W,
+) -> Result<(), W::Error> {
+    for (i, part) in c.into_parts().into_iter().enumerate() {
+        writer.write_all(part.as_bytes()).await?;
+        drop(part);
+        if i % 8 == 7 {
+            embassy_futures::yield_now().await;
+        }
+    }
+    Ok(())
 }
 
 /// Widest arm: the CORS preflight's four headers. A silent push failure would
@@ -182,6 +222,13 @@ impl Reply {
     /// `ContentHeaders`; do NOT add one here or it goes out twice.
     fn json(body: String) -> Self {
         Reply::ok(ApiBody::Json(body)).cors()
+    }
+
+    /// `200 application/json` + CORS for a SEGMENTED body — the generated
+    /// responses (`/api/status`, `/api/scenes`, `/api/patterns`,
+    /// `/api/playlist`). See [`ApiBody::Chunked`].
+    fn chunks(body: luxel_core::jsonview::Chunks) -> Self {
+        Reply::ok(ApiBody::Chunked(body)).cors()
     }
 
     fn hdr(mut self, name: &'static str, value: HVal) -> Self {
@@ -229,6 +276,57 @@ type ApiResponse = Reply;
 
 fn json_response(body: String) -> ApiResponse {
     Reply::json(body)
+}
+
+/// A generated JSON body as a response, or [`oom_reply`] when the builder
+/// ran out of heap partway (Gitea #753).
+///
+/// An incomplete body NEVER goes on the wire: `Chunks` records the failed
+/// segment rather than panicking, and a truncated body under a full
+/// `Content-Length` would wedge the connection. 503 is the honest answer,
+/// and it costs no heap at all.
+fn chunked_response(body: luxel_core::jsonview::Chunks) -> ApiResponse {
+    if body.ok() {
+        Reply::chunks(body)
+    } else {
+        oom_reply()
+    }
+}
+
+/// The ONLY failure the read path has left: a 503 whose body is a
+/// `&'static str`, so answering costs no heap at all (Gitea #728, #753).
+///
+/// The connection layer already turns a board away this way when it cannot
+/// afford a connection buffer (`http[N]: 503 — no heap for a connection
+/// buffer`); this is the same answer for a response body the heap cannot
+/// hold, in place of the allocator panic that used to reboot the device on a
+/// read-only GET. docs/api.md.
+///
+/// #753 made it genuinely rare: a generated body is built in 256-byte
+/// segments, so reaching this means the heap could not spare 256 bytes — a
+/// board that is out of memory outright, not one that is merely fragmented.
+/// There is deliberately no "degraded" middle ground any more: a response
+/// shape that exists only because the device could not allocate is a
+/// contract nobody wants to own, and a plain failure is honest.
+const OOM_BODY: &str = "{\"ok\":false,\"error\":\"out of memory\"}";
+
+fn oom_reply() -> ApiResponse {
+    Reply::new(
+        StatusCode::SERVICE_UNAVAILABLE,
+        ApiBody::Text {
+            ct: "application/json",
+            s: OOM_BODY,
+        },
+    )
+    .cors()
+}
+
+/// One scene read's two outcomes (`scenes::Body`) as a response.
+fn scenes_reply(b: crate::scenes::Body) -> ApiResponse {
+    match b {
+        crate::scenes::Body::Json(c) => chunked_response(c),
+        crate::scenes::Body::NoSuchScene => json_response(api_error("no such scene")),
+    }
 }
 
 /// `{"ok":false,"error":…}` for a static message. Static because every
@@ -283,7 +381,7 @@ fn num(s: &str) -> Option<u32> {
 /// `json_escape`: `devname::valid` rejects `"`, `\` and control bytes, so
 /// the stored bytes ARE the JSON string, which is what keeps this free on
 /// `/api/status`'s continuously-polled path.
-fn push_name(out: &mut String) {
+fn push_name(out: &mut dyn luxel_core::jsonview::Sink) {
     push_piece(out, "\"name\":\"");
     crate::shared::with_device_name(|n| push_piece(out, n));
     push_piece(out, "\"");
@@ -437,7 +535,27 @@ pub fn scene_layer_cap() -> u8 {
     )
 }
 
-fn status_json() -> String {
+
+/// Segment-index hint for the `/api/status` body: enough slots for a 4 KB
+/// response, which is wider than the fullest body any board renders (the
+/// Seengreat panel's, with every pipelined diagnostic present).
+///
+/// It sizes the segment INDEX only — a dozen pointers, one small allocation
+/// — never the body, which takes its segments as it needs them. An
+/// under-estimate costs one index reallocation; it cannot refuse a response.
+/// This replaces #728's `STATUS_LEN` high-water: a previous-body size was
+/// only ever interesting because a contiguous reservation had to be sized
+/// from something, and there is no contiguous reservation any more. (It also
+/// took `fetch_max`, which `riscv32imc` — board-c3-devkit — has no
+/// instruction for.)
+/// 5 KB since Gitea #718: the `jit` block grew a per-layer array, at most
+/// `jit::MAX_SLOTS` entries of ~70 B.
+const STATUS_HINT: usize = 5120;
+
+/// `GET /api/status`, built in segments so it never needs a contiguous
+/// block (Gitea #753). A body whose builder ran out of heap comes back with
+/// `Chunks::ok()` false and the route answers 503 — see [`chunked_response`].
+fn status_json() -> luxel_core::jsonview::Chunks {
     let fps = FPS.load(Ordering::Relaxed);
     let pixels = PIXEL_COUNT.load(Ordering::Relaxed);
     let slot = crate::ota::booted_slot();
@@ -471,7 +589,15 @@ fn status_json() -> String {
     // device even if the one-shot /api/config probe at connect failed.
     // name: what the console's title bar calls this device (Gitea #538) —
     // one borrow of a ≤32-byte shared String, no flash read, no escaping.
-    let mut out = String::from("{");
+    // The body is SEGMENTED (Gitea #753): every push below lands in a
+    // 256-byte segment and a full one is simply followed by another, so the
+    // largest block this route ever asks the allocator for is 256 B no
+    // matter how long the response gets. That is what stops a console's
+    // continuous poll from being the thing that reboots a fragmented board
+    // — the allocator panic of #728 — without a degraded body, a size
+    // high-water, or any dependence on PSRAM.
+    let mut out = luxel_core::jsonview::Chunks::with_hint(STATUS_HINT);
+    push_piece(&mut out, "{");
     push_name(&mut out);
     push_piece(&mut out, ",\"fps\":");
     push_u32(&mut out, fps);
@@ -807,17 +933,26 @@ fn status_json() -> String {
     match get_vmerr() {
         Some(e) => {
             push_piece(&mut out, "\"");
-            push_piece(&mut out, &json_escape(&e));
+            push_escaped(&mut out, &e);
             push_piece(&mut out, "\"");
         }
         None => push_piece(&mut out, "null"),
     }
-    // What the LIVE pattern is running as, and why (Gitea #658,
+    // What the device is actually RUNNING, and why (Gitea #658/#718,
     // docs/jit-design.md §4a/§5). Always present, on every board: a client
     // that has to handle a missing key cannot tell "this board has no
     // backend" from "this firmware predates the JIT", and the first is the
     // common case. `off` = the feature is not built in; `interp` = built
-    // in and refused, with the reason; `native` = compiled.
+    // in and refused, with the reason; `native` = compiled; `none` =
+    // nothing is resident to describe.
+    //
+    // The scalar fields describe ONE program — a bare pattern, or a
+    // scene's base layer. `native`/`interp`/`layers` describe the whole
+    // resident stack, which is more than one program as soon as a scene is
+    // up; before #718 there was only the scalar block and each layer's
+    // compile overwrote the last, so a two-layer scene reported its TOP
+    // layer and a base layer that fell back to the interpreter was
+    // invisible.
     push_piece(&mut out, ",\"jit\":{\"state\":\"");
     #[cfg(feature = "jit")]
     {
@@ -848,11 +983,61 @@ fn status_json() -> String {
             }
             None => push_piece(&mut out, "null"),
         }
+        // The whole resident stack, one entry per ENGINE, keyed by its
+        // 0-based scene layer index (Gitea #718). Two walks of the same
+        // eight atomics — the counts have to print before the array and
+        // eight `load`s are cheaper than buffering the array to count it.
+        let walk = crate::jit::stack_layers().min(crate::jit::MAX_SLOTS);
+        let (mut native, mut interp) = (0u32, 0u32);
+        for i in 0..walk {
+            if let Some((st, ..)) = crate::jit::slot_status(i) {
+                if st == "native" {
+                    native += 1;
+                } else {
+                    interp += 1;
+                }
+            }
+        }
+        push_piece(&mut out, ",\"native\":");
+        push_u32(&mut out, native);
+        push_piece(&mut out, ",\"interp\":");
+        push_u32(&mut out, interp);
+        push_piece(&mut out, ",\"layers\":[");
+        let mut sep = false;
+        for i in 0..walk {
+            let Some((st, reason, bytes, sprite)) = crate::jit::slot_status(i) else {
+                continue;
+            };
+            if sep {
+                push_piece(&mut out, ",");
+            }
+            sep = true;
+            push_piece(&mut out, "{\"layer\":");
+            push_u32(&mut out, i as u32);
+            push_piece(&mut out, ",\"kind\":\"");
+            push_piece(&mut out, if sprite { "sprite" } else { "pattern" });
+            push_piece(&mut out, "\",\"state\":\"");
+            push_piece(&mut out, st);
+            push_piece(&mut out, "\",\"reason\":");
+            match reason {
+                Some(r) => {
+                    push_piece(&mut out, "\"");
+                    push_piece(&mut out, r);
+                    push_piece(&mut out, "\"");
+                }
+                None => push_piece(&mut out, "null"),
+            }
+            push_piece(&mut out, ",\"code_bytes\":");
+            push_u32(&mut out, bytes);
+            push_piece(&mut out, "}");
+        }
+        push_piece(&mut out, "]");
     }
     #[cfg(not(feature = "jit"))]
     push_piece(
         &mut out,
-        "off\",\"reason\":null,\"code_bytes\":0,\"compile_us\":0,\"place\":null",
+        "off\",\"reason\":null,\"code_bytes\":0,\"compile_us\":0,\"place\":null,\
+         \"native\":0,\"interp\":0,\"layers\":[]",
     );
     push_piece(&mut out, "}");
     // Which partition layout this device is actually running (Gitea #501):
@@ -865,7 +1050,7 @@ fn status_json() -> String {
 }
 
 async fn api_status() -> ApiResponse {
-    json_response(status_json())
+    chunked_response(status_json())
 }
 
 /// A flash-resident asset (playground bundle) streamed in 2 KiB chunks —
@@ -2761,14 +2946,13 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                     Some(json_response(out))
                 }
                 "/api/layout" => Some(json_response(crate::layout::to_json())),
-                "/api/playlist" => Some(json_response(crate::playlist::to_json())),
-                "/api/scenes" => Some(json_response(crate::scenes::to_json())),
+                "/api/playlist" => Some(chunked_response(crate::playlist::to_json())),
+                "/api/scenes" => Some(scenes_reply(crate::scenes::to_json())),
                 "/api/text" => Some(json_response(api_text_json())),
                 // GET /api/scenes/<id> → the scene object; missing id
                 // returns 200 + {"ok":false,…} like /api/patterns/<id>.
-                r if r.starts_with("/api/scenes/") => Some(json_response(
-                    crate::scenes::get_json(&r["/api/scenes/".len()..])
-                        .unwrap_or_else(|| api_error("no such scene")),
+                r if r.starts_with("/api/scenes/") => Some(scenes_reply(
+                    crate::scenes::get_json(&r["/api/scenes/".len()..]),
                 )),
                 "/api/map" => Some(json_response(crate::devicemap::to_json())),
                 "/api/protocol" => {
@@ -2794,7 +2978,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 "/api/controls" => Some(api_controls().await),
                 "/api/vars" => Some(api_vars().await),
                 "/api/readouts" => Some(api_readouts().await),
-                "/api/patterns" => Some(json_response(crate::patterns::list_json())),
+                "/api/patterns" => Some(chunked_response(crate::patterns::list_json())),
                 // GET /api/patterns/<id> → {"id","name","source"}; missing id
                 // returns 200 + {"ok":false,…} to match the mirror (serve.rs).
                 r if r.starts_with("/api/patterns/") => {

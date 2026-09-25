@@ -745,7 +745,7 @@
         {
           "element": "ed-savestate",
           "property": "text",
-          "why": "the #563 push rule: a pattern that is not the one the LEDs are running opens for BROWSING, which puts `▶ Play on device` in the header and `· preview only` on the save state — neither exists in the mock, and both take header width from the spacer (docs/web-architecture.md)"
+          "why": "the #563 push rule: a pattern that is not the one the LEDs are running opens for BROWSING, which puts `▶ Play on device` in the header — that button does not exist in the mock and takes header width from the spacer (docs/web-architecture.md). The span's TEXT itself is now drawn: since #738 (2026-09-24) it prints only `preview only`, the half the Save button cannot carry, and the full contract string moved to the `data-save-state` attribute"
         },
         {
           "element": "ed-spacer",
@@ -820,7 +820,7 @@
           "app": "[data-role=\"save\"]",
           "hover": true,
           "text": true,
-          "note": "mock copy is `Save`, not `Save to device`"
+          "note": "mock copy is `Saved`, not `Save` and not `Save to device`: since #738 (2026-09-24) the button carries the save state itself — `Save` → spinner → `Saved` for a second → a dirty-aware label — and this recipe opens a STORED device pattern, which is clean, so it reads `Saved`"
         },
         {
           "id": "ed-overflow",
@@ -889,11 +889,11 @@
           "app": "[data-role=\"editor-view\"] .rsec:has([data-role=\"pause\"]) .grp"
         },
         {
-          "id": "prev-pause",
-          "mock": ".rail > div:nth-child(1) .grp .btn.sm.icon:first-child",
+          "id": "ed-pause",
+          "mock": ".edhdr .btn.transport",
           "app": "[data-role=\"pause\"]",
           "hover": true,
-          "note": "mock: 26x26, 12px glyph `‖` — Jeremy: the app icon is too big for the button"
+          "note": "the transport lives in the HEADER bar now, not in the preview section's `.grp` (Gitea #739, 2026-09-24): a 32px `.btn` with an SVG mark and the word `Pause`, because the 26px `‖` glyph was a text glyph (tofu in headless chromium), badly placed and never found"
         },
         {
           "id": "prev-fps-sel",
@@ -1221,9 +1221,10 @@
           "noBox": true
         },
         {
-          "id": "prev-pause",
-          "mock": ".rsec:nth-child(1) .grp .btn.sm.icon:first-child",
-          "app": "[data-role=\"pause\"]"
+          "id": "ed-pause",
+          "mock": ".edhdr .btn.transport.mini",
+          "app": "[data-role=\"pause\"]",
+          "note": "at 390px the transport keeps its place in the header and gives up its WORD — 32px, mark only (#739)"
         },
         {
           "id": "preview",
@@ -3686,7 +3687,7 @@
           "mock": ".popfoot",
           "app": "[data-role=\"preview-as-menu\"] .popfoot",
           "text": true,
-          "note": "mock copy: `Every preview and tile on this page uses this layout. On a device it is the device's own.`",
+          "note": "mock copy: `Every preview and tile on this playground will use this layout. When controlling a luxel device it is the device's layout.` — Jeremy's rewording, #742 item 43 (2026-09-24): 'this page' was ambiguous with the page the chip sits on, and 'the device's own' named nothing",
           "noBox": true
         },
         {
@@ -4664,7 +4665,7 @@
         {
           "element": "savestate",
           "property": "text",
-          "why": "the mock states a document state (`saved · on device` / `unsaved changes`); which one is live and is asserted by web/tools/device-e2e.mjs instead"
+          "why": "since #738 (2026-09-24) this span no longer states the document state at all — the Save button does. It renders only the part the button cannot say: nothing on a console scene, `in browser` on a playground one. The full contract string lives on the `data-save-state` ATTRIBUTE (docs/web-architecture.md), which is what web/tools/e2e-common.mjs `saveState()` reads and what device-e2e.mjs asserts"
         },
         {
           "element": "preview-dims",
@@ -4675,16 +4676,6 @@
           "element": "add-pat-dim",
           "property": "text",
           "why": "the mock's own drift: S7 (batch 2) writes the count `2 of 2 used on this device`, S7d (batch 6) `2 of 2 used` with the D4 reason spelled out underneath — and proposal §5.8 names S7d as the frame that specifies this row, so S7d is what is built and S7d asserts the text"
-        },
-        {
-          "element": "cost",
-          "property": "text",
-          "why": "same drift: S7's cost line predates the cap wording; S7d/S7e/S7f all draw `Frame cost: 2 of 2 pattern layers · 24 fps`, which is what is built and what S7d asserts"
-        },
-        {
-          "element": "budget-fill",
-          "property": "box width",
-          "why": "S7 draws the meter at 70 % with the pre-cap cost line; the built meter is `pattern layers / caps.layers`, which at the cap is 100 % — S7d/S7e draw it there"
         },
         {
           "element": "menu",
@@ -4724,7 +4715,7 @@
           "mock": ".edhdr .btn.primary",
           "app": "[data-role=\"scene-save\"]",
           "text": true,
-          "note": "mock copy: `Save`"
+          "note": "mock copy: `Saved` — the recipe opens a stored scene and only selects a layer, so nothing is dirty and the button reads its settled label (#738, 2026-09-24)"
         },
         {
           "id": "overflow",
@@ -4748,15 +4739,8 @@
           "mock": ".lcol .slabel",
           "app": "[data-role=\"scene-layers\"] .slabel",
           "text": true,
-          "noBox": true
-        },
-        {
-          "id": "lcol-dim",
-          "mock": ".lcol .rdim",
-          "app": "[data-role=\"scene-layers\"] .rdim",
-          "text": true,
           "noBox": true,
-          "note": "mock copy: `top = front`"
+          "note": "`lcol-dim` — the `.rdim` reading `top = front` at the end of this header — was REMOVED from this map on 2026-09-24 (#736 item 17). Jeremy: \"this is a sign that visual UI indicators are needed. Not text descriptions which are easily confused.\" The element no longer exists: the header carries an SVG stack-order mark (`[data-role=\"scene-stack-order\"]`, the stack seen edge-on with the front plate lit) and the base is a hatched ground rule under the bottom row (`[data-role=\"scene-stack-base\"]`) instead of the word `base` in that row's metadata column"
         },
         {
           "id": "lrow-sel",
@@ -4786,7 +4770,7 @@
           "mock": ".lrow:not(.sel) .ty",
           "app": "[data-role=\"scene-layer\"]:not(.sel) .ty",
           "noBox": true,
-          "note": "the single-glyph type badge: T text · ▦ sprite · ▤ pattern · ▭ color"
+          "note": "the type badge. Since #736 item 23 (2026-09-24) only TEXT is a glyph — `T`, the one Jeremy liked. Pattern, sprite and color are inline SVG (a travelling wave, a 2x2 pixel block, a filled swatch), drawn by ONE `LayerIcon` component that the `+ Add layer` menu reuses, so the menu entry and the row it makes look alike. The old `▤ ▦ ▭` were a grey smudge apiece at 11px and tofu in a headless chromium with no symbol font"
         },
         {
           "id": "lrow-nm",
@@ -4817,7 +4801,7 @@
           "mock": ".addwrap .btn.primary",
           "app": "[data-role=\"scene-add-layer\"]",
           "text": true,
-          "note": "mock copy: `+ Add layer ▾`"
+          "note": "mock copy: `+ Add layer` — no chevron since #736 item 21 (2026-09-24). Jeremy: \"the Add layer dropdown needs to lose the V icon.\" It was a text glyph inside a filled primary, where it read as a stray mark, and `aria-haspopup`/`aria-expanded` already say it to the readers who need it said"
         },
         {
           "id": "ccol",
@@ -4841,8 +4825,9 @@
         },
         {
           "id": "pause",
-          "mock": ".ccol .btn.sm.icon",
-          "app": "[data-role=\"scene-pause\"]"
+          "mock": ".edhdr .btn.transport",
+          "app": "[data-role=\"scene-pause\"]",
+          "note": "the transport moved to the editor HEADER (Gitea #739, 2026-09-24) and is a labelled SVG button (`Pause`/`Resume` + an SVG mark), not a 26px `‖` glyph in the preview column — Jeremy: poorly placed, poorly coloured, and he did not know it was there. The preview column's `.grp` keeps only the frame-rate chooser (#736 item 26)"
         },
         {
           "id": "stage",
@@ -4865,24 +4850,6 @@
           "mock": ".hdl",
           "app": "[data-role=\"scene-handle-nw\"]",
           "noBox": true
-        },
-        {
-          "id": "cost",
-          "mock": ".ccol .hint",
-          "app": "[data-role=\"scene-cost\"]",
-          "text": true,
-          "noBox": true
-        },
-        {
-          "id": "budget",
-          "mock": ".budget",
-          "app": "[data-role=\"scene-editor-view\"] .budget"
-        },
-        {
-          "id": "budget-fill",
-          "mock": ".budget i",
-          "app": "[data-role=\"scene-editor-view\"] .budget i",
-          "noBoxH": true
         },
         {
           "id": "rcol",
@@ -5132,7 +5099,7 @@
         {
           "element": "savestate",
           "property": "text",
-          "why": "the mock states a document state (`saved · on device` / `unsaved changes`); which one is live and is asserted by web/tools/device-e2e.mjs instead"
+          "why": "since #738 (2026-09-24) this span no longer states the document state at all — the Save button does. It renders only the part the button cannot say: nothing on a console scene, `in browser` on a playground one. The full contract string lives on the `data-save-state` ATTRIBUTE (docs/web-architecture.md), which is what web/tools/e2e-common.mjs `saveState()` reads and what device-e2e.mjs asserts"
         },
         {
           "element": "preview-dims",
@@ -5241,29 +5208,16 @@
           "noBoxH": true
         },
         {
-          "id": "fit-sel",
-          "mock": ".rcol .sel",
-          "app": "[data-role=\"scene-fit\"]"
-        },
-        {
           "id": "blend-sel",
           "mock": ".rcol .sel",
-          "mockNth": 1,
           "app": "[data-role=\"scene-blend\"]"
         },
         {
           "id": "key-sel",
           "mock": ".rcol .sel",
-          "mockNth": 2,
-          "app": "[data-role=\"scene-key\"]"
-        },
-        {
-          "id": "key-hint",
-          "mock": ".irow.start .hint",
-          "app": "[data-role=\"scene-inspector\"] .irow.start .hint",
-          "text": true,
-          "noBox": true,
-          "note": "mock copy: `nothing · black pixels · by brightness`"
+          "mockNth": 1,
+          "app": "[data-role=\"scene-key\"]",
+          "note": "`key-hint` — the line reading `nothing · black pixels · by brightness` under this control — was deleted with it (#735, 2026-09-24): it measured 221px in a 192px cell and wrapped, which is the overflow Jeremy reported, and the rich menu now spells all three out. The trigger is a `RichSelect` (icon + name + one line of plain English per row), not a bare <select>; its closed shape is the mock's `.sel`"
         },
         {
           "id": "opacity",
@@ -5364,7 +5318,7 @@
         {
           "element": "savestate",
           "property": "text",
-          "why": "the mock states a document state (`saved · on device` / `unsaved changes`); which one is live and is asserted by web/tools/device-e2e.mjs instead"
+          "why": "since #738 (2026-09-24) this span no longer states the document state at all — the Save button does. It renders only the part the button cannot say: nothing on a console scene, `in browser` on a playground one. The full contract string lives on the `data-save-state` ATTRIBUTE (docs/web-architecture.md), which is what web/tools/e2e-common.mjs `saveState()` reads and what device-e2e.mjs asserts"
         },
         {
           "element": "preview-dims",
@@ -5473,15 +5427,10 @@
           "noBoxH": true
         },
         {
-          "id": "fit-sel",
-          "mock": ".rcol .sel",
-          "app": "[data-role=\"scene-fit\"]"
-        },
-        {
           "id": "blend-sel",
           "mock": ".rcol .sel",
-          "mockNth": 1,
-          "app": "[data-role=\"scene-blend\"]"
+          "app": "[data-role=\"scene-blend\"]",
+          "note": "index 0 now that the pattern layer's Fit `<select>` is gone (#735): `style.fit` is read only by `compose::blit_sprite`, so on a pattern layer the control did nothing and is a line stating what the box really is"
         },
         {
           "id": "opacity",
@@ -5588,7 +5537,7 @@
         {
           "element": "savestate",
           "property": "text",
-          "why": "the mock states a document state (`saved · on device` / `unsaved changes`); which one is live and is asserted by web/tools/device-e2e.mjs instead"
+          "why": "since #738 (2026-09-24) this span no longer states the document state at all — the Save button does. It renders only the part the button cannot say: nothing on a console scene, `in browser` on a playground one. The full contract string lives on the `data-save-state` ATTRIBUTE (docs/web-architecture.md), which is what web/tools/e2e-common.mjs `saveState()` reads and what device-e2e.mjs asserts"
         },
         {
           "element": "preview-dims",
@@ -5601,11 +5550,6 @@
           "why": "a popover is placed `fixed` off its anchor so it can dodge the viewport edges (Jeremy, 2026-09-19); the mock is a static `absolute` box inside `.addwrap`"
         },
         {
-          "element": "cost",
-          "property": "text",
-          "why": "the measured frame rate is the mirror's; the mock's `24 fps` is sample data and the rest of the sentence matches exactly"
-        },
-        {
           "element": "menu",
           "property": "box width",
           "why": "S7d is a 320px CROP of the layers column, so its menu spans 296px; the real column is the mock's own 260px (S7 `.lcol`) and the menu spans 236px inside it"
@@ -5616,19 +5560,9 @@
           "why": "see menu.box width — the crop's column is 320px wide, the real one 260px"
         },
         {
-          "element": "cost",
-          "property": "margin-top",
-          "why": "the crop stacks the cost line straight under a spacer; under the real preview it carries the mock's own `margin-top:12px` (S7)"
-        },
-        {
           "element": "reason",
           "property": "box height",
           "why": "the reason wraps to one more line in the real 236px column than in S7d's 320px crop — see menu.box width"
-        },
-        {
-          "element": "budget",
-          "property": "max-width",
-          "why": "the crop sets `max-width:none` because it has no 460px stage to line up with; the real meter is the stage's width (S7 `.budget{max-width:460px}`)"
         }
       ],
       "elements": [
@@ -5637,14 +5571,8 @@
           "mock": ".lcol .slabel",
           "app": "[data-role=\"scene-layers\"] .slabel",
           "text": true,
-          "noBox": true
-        },
-        {
-          "id": "lcol-dim",
-          "mock": ".lcol .rdim",
-          "app": "[data-role=\"scene-layers\"] .rdim",
-          "text": true,
-          "noBox": true
+          "noBox": true,
+          "note": "`lcol-dim` — the `.rdim` reading `top = front` at the end of this header — was REMOVED from this map on 2026-09-24 (#736 item 17). Jeremy: \"this is a sign that visual UI indicators are needed. Not text descriptions which are easily confused.\" The element no longer exists: the header carries an SVG stack-order mark (`[data-role=\"scene-stack-order\"]`, the stack seen edge-on with the front plate lit) and the base is a hatched ground rule under the bottom row (`[data-role=\"scene-stack-base\"]`) instead of the word `base` in that row's metadata column"
         },
         {
           "id": "add-layer",
@@ -5664,7 +5592,7 @@
           "app": "[data-role=\"scene-add-pat\"]",
           "text": true,
           "noBox": true,
-          "note": "mock copy: `▤ Pattern` — greyed, and the ONE control in the app that is disabled rather than absent"
+          "note": "mock copy: `Pattern` behind an SVG pattern mark — greyed, and the ONE control in the app that is disabled rather than absent. The row is `[icon][label][trailing dim]` since #736 item 22, so `Pattern` and `Text` start their words at the same x"
         },
         {
           "id": "add-pat-dim",
@@ -5680,7 +5608,7 @@
           "app": "[data-role=\"scene-add-menu\"] .reason",
           "text": true,
           "noBoxW": true,
-          "note": "mock copy: `this device fits 2 pattern layers; text and sprite and color layers are free` — the sentence, not just the number, and the same words go on `data-reason`"
+          "note": "mock copy: `luxel devices only support 2 pattern layers; text and sprite and color layers are free` — Jeremy's rewording, #736 item 18 (2026-09-24), replacing `this device fits 2 pattern layers; …`. The sentence, not just the number, and the same words go on `data-reason`. This menu, AT the cap, is now the ONLY place it is said: the frame-cost line under the preview that used to carry it is deleted (#736 item 24)"
         },
         {
           "id": "add-text",
@@ -5689,7 +5617,7 @@
           "text": true,
           "hoverOnly": true,
           "noBox": true,
-          "note": "mock copy: `T Text`"
+          "note": "mock copy: `T Text` — the letter, boxed to the same 14px square as the three SVG marks (#736 items 22-23)"
         },
         {
           "id": "add-sprite",
@@ -5698,7 +5626,7 @@
           "app": "[data-role=\"scene-add-sprite\"]",
           "text": true,
           "noBox": true,
-          "note": "mock copy: `▦ Sprite`"
+          "note": "mock copy: `Sprite`, behind the SVG sprite mark (a 2x2 pixel block) — no longer the `▦` glyph (#736 item 23)"
         },
         {
           "id": "add-color",
@@ -5707,27 +5635,7 @@
           "app": "[data-role=\"scene-add-color\"]",
           "text": true,
           "noBox": true,
-          "note": "mock copy: `▭ Color`"
-        },
-        {
-          "id": "cost",
-          "mock": ".lcol .hint",
-          "app": "[data-role=\"scene-cost\"]",
-          "text": true,
-          "noBox": true,
-          "note": "mock copy: `Frame cost: 2 of 2 pattern layers · 24 fps`"
-        },
-        {
-          "id": "budget",
-          "mock": ".lcol .budget",
-          "app": "[data-role=\"scene-editor-view\"] .budget",
-          "noBoxW": true
-        },
-        {
-          "id": "budget-fill",
-          "mock": ".lcol .budget i",
-          "app": "[data-role=\"scene-editor-view\"] .budget i",
-          "noBoxW": true
+          "note": "mock copy: `Color`, behind the SVG color mark (a filled swatch) — no longer the `▭` glyph (#736 item 23)"
         }
       ]
     },
@@ -5862,20 +5770,6 @@
           "text": true
         },
         {
-          "id": "cost",
-          "mock": ".ccol .hint",
-          "app": "[data-role=\"scene-cost\"]",
-          "text": true,
-          "noBox": true,
-          "note": "mock copy: `Frame cost: 2 of 2 pattern layers · 24 fps`"
-        },
-        {
-          "id": "budget-fill",
-          "mock": ".budget i",
-          "app": "[data-role=\"scene-editor-view\"] .budget i",
-          "noBoxH": true
-        },
-        {
           "id": "lrow-drag",
           "mock": ".lrow.drag",
           "app": "[data-role=\"scene-layer\"].drag",
@@ -5937,17 +5831,12 @@
         {
           "element": "savestate",
           "property": "text",
-          "why": "the mock states a document state (`saved · on device` / `unsaved changes`); which one is live and is asserted by web/tools/device-e2e.mjs instead"
+          "why": "since #738 (2026-09-24) this span no longer states the document state at all — the Save button does. It renders only the part the button cannot say: nothing on a console scene, `in browser` on a playground one. The full contract string lives on the `data-save-state` ATTRIBUTE (docs/web-architecture.md), which is what web/tools/e2e-common.mjs `saveState()` reads and what device-e2e.mjs asserts"
         },
         {
           "element": "preview-dims",
           "property": "text",
           "why": "the mock's `64x64 · 24 fps on device` carries the mirror's live frame rate; the wording and the separator match exactly"
-        },
-        {
-          "element": "cost",
-          "property": "text",
-          "why": "the measured frame rate is the mirror's; the rest of the sentence matches exactly"
         }
       ]
     },
@@ -6034,7 +5923,7 @@
         {
           "element": "savestate",
           "property": "text",
-          "why": "the mock states a document state (`saved · on device` / `unsaved changes`); which one is live and is asserted by web/tools/device-e2e.mjs instead"
+          "why": "since #738 (2026-09-24) this span no longer states the document state at all — the Save button does. It renders only the part the button cannot say: nothing on a console scene, `in browser` on a playground one. The full contract string lives on the `data-save-state` ATTRIBUTE (docs/web-architecture.md), which is what web/tools/e2e-common.mjs `saveState()` reads and what device-e2e.mjs asserts"
         },
         {
           "element": "preview-dims",
@@ -6099,11 +5988,6 @@
           "id": "stage-canvas",
           "mock": ".stage canvas",
           "app": "[data-role=\"scene-stage\"]"
-        },
-        {
-          "id": "budget",
-          "mock": ".budget",
-          "app": "[data-role=\"scene-editor-view\"] .budget"
         },
         {
           "id": "lcol",
@@ -6746,22 +6630,12 @@
         {
           "element": "savestate",
           "property": "text",
-          "why": "the mock states a document state (`saved · on device` / `unsaved changes`); which one is live and is asserted by web/tools/device-e2e.mjs instead"
+          "why": "since #738 (2026-09-24) this span no longer states the document state at all — the Save button does. It renders only the part the button cannot say: nothing on a console scene, `in browser` on a playground one. The full contract string lives on the `data-save-state` ATTRIBUTE (docs/web-architecture.md), which is what web/tools/e2e-common.mjs `saveState()` reads and what device-e2e.mjs asserts"
         },
         {
           "element": "preview-dims",
           "property": "text",
           "why": "the mock's `64x64 · 24 fps on device` carries the mirror's live frame rate; the wording and the separator match exactly"
-        },
-        {
-          "element": "cost",
-          "property": "text",
-          "why": "the mock's cost line predates the cap wording (Gitea #698); S7d/S7e/S7f all draw `Frame cost: 2 of 2 pattern layers · 24 fps`, which is what is built and what S7d asserts"
-        },
-        {
-          "element": "budget-fill",
-          "property": "box width",
-          "why": "the mock draws the meter at 70 % with the pre-cap cost line; the built meter is `pattern layers / caps.layers`, which at the cap is 100 % — S7d/S7e draw it there"
         },
         {
           "element": "swatchbtn",
@@ -6817,8 +6691,9 @@
         },
         {
           "id": "pause",
-          "mock": ".ccol .btn.sm.icon",
-          "app": "[data-role=\"scene-pause\"]"
+          "mock": ".edhdr .btn.transport",
+          "app": "[data-role=\"scene-pause\"]",
+          "note": "the transport moved to the editor HEADER (Gitea #739, 2026-09-24) and is a labelled SVG button (`Pause`/`Resume` + an SVG mark), not a 26px `‖` glyph in the preview column — Jeremy: poorly placed, poorly coloured, and he did not know it was there. The preview column's `.grp` keeps only the frame-rate chooser (#736 item 26)"
         },
         {
           "id": "stage",
@@ -6841,24 +6716,6 @@
           "mock": ".hdl",
           "app": "[data-role=\"scene-handle-nw\"]",
           "noBox": true
-        },
-        {
-          "id": "cost",
-          "mock": ".ccol > .hint",
-          "app": "[data-role=\"scene-cost\"]",
-          "text": true,
-          "noBox": true
-        },
-        {
-          "id": "budget",
-          "mock": ".budget",
-          "app": "[data-role=\"scene-editor-view\"] .budget"
-        },
-        {
-          "id": "budget-fill",
-          "mock": ".budget i",
-          "app": "[data-role=\"scene-editor-view\"] .budget i",
-          "noBoxH": true
         },
         {
           "id": "rcol",
@@ -7036,17 +6893,15 @@
           "app": "[data-role=\"scene-box-x\"]"
         },
         {
-          "id": "fit-line",
-          "mock": ".rcol .irow:not(.start):not(.wide) > .hint",
-          "mockNth": 1,
+          "id": "fit-sel",
+          "mock": ".rcol .sel",
           "app": "[data-role=\"scene-sprite-fit\"]",
-          "text": true,
-          "noBox": true,
-          "note": "mock copy: `1:1 · sprites are never scaled`"
+          "note": "a real chooser since #735 (2026-09-24), where it used to be the dead line `1:1 · sprites are never scaled`. The sprite layer is the ONE place `style.fit` means anything (`compose::blit_sprite`: `let tile = style.fit == Fit::Tile`), so the chooser moved here from the pattern inspector and offers only the two behaviours that exist — `Once` (fill) and `Tile`; a stored `contain` folds onto Once. The old line was true about scaling and silent about tiling, the half that works"
         },
         {
           "id": "blend-sel",
           "mock": ".rcol .sel",
+          "mockNth": 1,
           "app": "[data-role=\"scene-blend\"]"
         },
         {
@@ -7175,7 +7030,7 @@
           "app": "[data-role=\"scene-clock-state\"]",
           "text": true,
           "noBox": true,
-          "note": "mock copy: `not synced — the layer draws --:-- until the device gets the time`"
+          "note": "mock copy: `not synced — the layer stays blank until the device gets the time`. Amended 2026-09-25 (Gitea #745): it read `the layer draws --:-- until the device gets the time`, and a `clock` layer now draws NOTHING before the first SNTP sync — `--:--` was a time-shaped artifact that flashed on every boot, the wrong SHAPE for a `date` layer (`YYYY-MM-DD`, so a 5-char placeholder changes width when the sync lands), and dashes morphing into digits read as a glitch. Blank composites as the clock not having appeared yet"
         },
         {
           "id": "clock-link",

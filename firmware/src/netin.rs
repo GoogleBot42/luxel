@@ -105,6 +105,19 @@ pub async fn sync_task(stack: Stack<'static>, boot_id: u32) -> ! {
     loop {
         match shared::SYNC_MODE.load(Ordering::Relaxed) {
             1 => {
+                // A leader with NOTHING LOADED has no clock and no pattern
+                // identity to broadcast: `engine_time_ms` and `PATTERN_HASH`
+                // are both still 0, and a beacon carrying those drags every
+                // follower's pattern clock back to zero (main.rs's
+                // SYNC_MODE 2 arm jumps on an offset over 1 s). Since
+                // Gitea #744 that is the ordinary state of a device nobody
+                // has given a pattern yet, so stay quiet until there is
+                // something to lead with. A follower treats the silence
+                // exactly as it treats a leader that is not up.
+                if !shared::has_program() {
+                    Timer::after(Duration::from_millis(250)).await;
+                    continue;
+                }
                 // leader: piggyback the sensor frame only when it moved
                 let seq = shared::SENSOR_SEQ.load(Ordering::Relaxed);
                 let sb = if seq != sensor_sent {

@@ -16,6 +16,9 @@
   import { createEventDispatcher, onDestroy, onMount } from "svelte";
   import "../components/scene/scene.css";
   import "../components/editor-frame.css";
+  import DeviceChip from "../components/DeviceChip.svelte";
+  import AsyncButton from "../components/AsyncButton.svelte";
+  import NameField from "../components/NameField.svelte";
   import LayerList from "../components/scene/LayerList.svelte";
   import SceneStage from "../components/scene/SceneStage.svelte";
   import PatternInspector from "../components/scene/PatternInspector.svelte";
@@ -32,7 +35,6 @@
     parseSpriteTag,
     patternLayerCount,
     serializeScene,
-    truncateUtf8,
     type Layer,
     type LayerKind,
     type Rect,
@@ -63,8 +65,8 @@
     refreshClock,
     refreshDevicePatterns,
   } from "../stores/device";
-  import { layout, layoutKey } from "../stores/geometry";
-  import { compileToBytecode, luxel, previewFps } from "../stores/pattern";
+  import { compileForLayout, layout, layoutKey } from "../stores/geometry";
+  import { compileToBytecode, luxel } from "../stores/pattern";
   import {
     activateScene,
     activeSceneId,
@@ -125,9 +127,15 @@
   let pickingFor = -1;
   let pickerBusy = "";
   let pickerError = "";
+  /** The inspector column: where the picker hangs, and the one region whose
+   *  clicks must not dismiss it — the `Change…` button that opens it lives in
+   *  there (`PatternPicker`'s `anchor`, #730). */
+  let rcolEl: HTMLElement | null = null;
   let stage: SceneStage | undefined;
-  let renaming = false;
-  let nameDraft = "";
+  /** The preview's frame budget — the pattern editor's `targetFps`, the same
+   *  option set, the same meaning: 0 is "as fast as the browser will go"
+   *  (#736 item 26). */
+  let targetFps = 60;
 
   // ---- loading ----
   // `$scenes` is the reader; `sceneId` is the route. Re-reading whenever the
@@ -137,8 +145,15 @@
 
   // A deep link (`#/scenes/<id>` in a fresh tab) lands HERE, not on the
   // Scenes page, so this screen asks for the library itself rather than
-  // waiting for a page it never opened to do it.
-  $: if (active) void refreshScenes();
+  // waiting for a page it never opened to do it. The PATTERN library for the
+  // same reason (#730): every layer's picture, its name and every picker row
+  // comes out of `devicePatterns`, which is refreshed ON DEMAND and never
+  // polled (.claude/rules/web.md) — so a screen that never asks shows
+  // whatever the Patterns page happened to leave there, often nothing.
+  $: if (active) {
+    void refreshScenes();
+    void refreshDevicePatterns();
+  }
 
   /** Adopt `id` once the store actually holds it — a deep link lands here
    *  before the first `/api/scenes` answers, and adopting too early would
@@ -159,19 +174,35 @@
     doc = found ? structuredClone(found) : { id: "", name: "New scene", layers: [] };
     savedWire = serializeScene(doc);
     selected = doc.layers.length > 0 ? doc.layers.length - 1 : -1;
+    // Opening a scene is not an edit: there is nothing to settle and nothing
+    // on screen to be jarred, so it installs now and the edit debounce starts
+    // from this wire (#736 item 28).
+    clearTimeout(rebuildTimer);
+    rebuildTimer = 0;
+    scheduledWire = savedWire;
     rebuild(true);
   }
 
   $: dirty = serializeScene(doc) !== savedWire;
 
-  /** The mock's `saved · on device` / `unsaved changes` (S7 / S7e). */
+  /** The full save-state contract (S7 / S7e). Since #738 this is not what the
+   *  header PRINTS — the Save button carries "Save"/"Saved" itself — it is
+   *  what `data-save-state` carries for harnesses, exactly as the pattern
+   *  editor does it. */
   $: saveState = dirty
     ? "unsaved changes"
     : doc.id === ""
       ? "not saved yet"
       : $device
         ? "saved · on device"
-        : "saved";
+        : "saved · in browser";
+
+  /** What is LEFT to print once the button says "Saved": WHERE it was saved,
+   *  and only when that is not obvious. On a console a scene can only live on
+   *  the device; in the playground it lives in this browser and nowhere else,
+   *  which is the thing Jeremy asked to be visible (#742: "in browser should
+   *  be displayed for scenes being edited"). */
+  $: saveWhere = $isPlayground && !dirty && doc.id !== "" ? "in browser" : "";
 
   // ---- the composite ----
 
@@ -179,6 +210,11 @@
   let rafId = 0;
 
   let fpsAvg = 0;
+
+  /** The compositor's complaint about the whole record, if any. */
+  let sceneError = "";
+  /** Per-layer compile failures, by layer index (#731). */
+  let layerErrors: Record<number, string> = {};
 
   /** The scene renders on the ONE Layout — the device's on a console, the
    *  `Preview as` choice in the playground. `deviceGeometry()` owns the
@@ -213,6 +249,9 @@
   $: rigKey = layoutKey(rig);
   let builtFor = "";
   let boundSources = "";
+  /** The wire `renderer` was last actually REBUILT from — a scene whose wire
+   *  has not changed does not re-report its errors (see `rebuild`). */
+  let renderedWire: string | null = null;
 
   /** Which layers' sources the browser HAS. A device pattern's source streams
    *  in after the list does, so the wire block can be unchanged while the
@@ -246,19 +285,115 @@
       boundSources = sk;
       force = true;
     }
-    renderer.setScene(doc, lookup, force);
+    // The compositor's own parse error and each layer's compile error are
+    // assigned HERE, with the render they belong to — a `$:` derived from a
+    // value a reactive block's function assigns never re-runs
+    // (.claude/rules/web.md). They are only re-read when `setScene` actually
+    // rebuilt: its no-op path answers `null` for an unchanged wire, which
+    // would otherwise clear the error of the scene still installed.
+    const wire = serializeScene(doc);
+    const err = renderer.setScene(doc, lookup, force);
+    if (force || wire !== renderedWire) {
+      sceneError = err ?? "";
+      layerErrors = layerErrorsOf(doc, renderer);
+    }
+    renderedWire = wire;
   }
 
-  // A re-render whenever anything the composite is built FROM changes.
-  // `setScene` compares the WIRE, so a no-op edit (re-selecting a layer)
-  // costs nothing. The dependencies are ARGUMENTS: a `void x` inside a
-  // reactive EXPRESSION is not one as far as Svelte is concerned, and a
-  // sprite draft that did not re-bind was invisible until a painted pixel
-  // failed to appear (.claude/rules/web.md).
+  /**
+   * Which layers name a pattern that does NOT compile. `SceneRenderer` binds
+   * no engine for one and the compositor then draws nothing at all, with
+   * nothing on screen saying why — "sometimes when a pattern is selected, the
+   * preview still shows nothing" (#731). Only a BROKEN layer costs a compile
+   * here: a layer the renderer built an engine for is skipped, and so is one
+   * whose source has not arrived yet (unknown is not an error).
+   */
+  function layerErrorsOf(s: Scene, r: SceneRenderer): Record<number, string> {
+    const out: Record<number, string> = {};
+    const lx = $luxel;
+    if (!lx) return out;
+    s.layers.forEach((l, i) => {
+      if (l.body.kind !== "pat" && l.body.kind !== "sprite") return;
+      if (r.engineAt(i)) return;
+      const id = l.body.kind === "pat" ? l.body.pat.id : l.body.id;
+      if (id === "") return; // nothing chosen yet — not a failure
+      const src = lookup(id);
+      if (src === null) return; // still streaming in
+      const built = compileForLayout(lx, src, 0, l.body.kind === "pat" ? l.body.pat.proj : null, rig);
+      if ("engine" in built) built.engine.free();
+      else out[i] = built.line > 0 ? `line ${built.line}: ${built.message}` : built.message;
+    });
+    return out;
+  }
+
+  // ---- when the composite is rebuilt (#736 item 28) ----------------------
+  //
+  // Jeremy: "there should be a one second delay before starting the pattern
+  // again after a change has been made which causes the preview to be
+  // regenerated/restart. This is to make it less jarring."
+  //
+  // It is a performance fix wearing a UX fix's clothes. `SceneRenderer`'s
+  // `setScene` drops and recompiles ONE wasm engine PER PATTERN AND SPRITE
+  // LAYER on any change to the wire (`web/src/lib/sceneRender.ts`), and the
+  // reactive block below fires on every keystroke in the text field, every
+  // tick of the opacity slider and every `pointermove` of a marquee drag. So
+  // a two-pattern scene was recompiling two engines a frame while you dragged
+  // a box — and every one of those recompiles put both patterns back to
+  // t = 0, which is the strobing Jeremy is describing.
+  //
+  // The rule: coalesce, and let the EXISTING composite keep running while the
+  // edit settles. Nothing is torn down in the meantime, so the delay reads as
+  // "it caught up", not as "it stopped".
+  //
+  // Two exemptions, both about latency you can feel:
+  //   · a scene with no pattern and no sprite layer has no engine to restart
+  //     and nothing expensive to rebuild, so its edits land at once — text,
+  //     colour and geometry tweaking stays live;
+  //   · a SPRITE DRAFT is the brush. #481's whole contract is that the
+  //     composite shows the pixel on the frame it is painted, and a painted
+  //     pixel changes `drafts` without changing the wire — so that is the
+  //     signal, and it is never delayed.
+  const REBUILD_DELAY_MS = 1000;
+  let rebuildTimer = 0;
+  /** The wire the last scheduling decision was made against. */
+  let scheduledWire = "";
+
+  // The dependencies are ARGUMENTS: a `void x` inside a reactive EXPRESSION
+  // is not a dependency as far as Svelte is concerned, and a sprite draft
+  // that did not re-bind was invisible until a painted pixel failed to appear
+  // (.claude/rules/web.md).
   $: if (active && $luxel) rebuildOn(doc, rigKey, $devicePatterns, drafts);
 
   function rebuildOn(_doc: unknown, _rig: unknown, _dev: unknown, _drafts: unknown): void {
-    rebuild();
+    const wire = serializeScene(doc);
+    // A change that did NOT touch the wire is a draft (or a store row landing)
+    // — paint, and the pixel is due now.
+    const wireChanged = wire !== scheduledWire;
+    scheduledWire = wire;
+    scheduleRebuild(wireChanged && hasEngines(doc) ? REBUILD_DELAY_MS : 0);
+  }
+
+  /** Is there anything in this scene that a rebuild would RESTART? Text
+   *  carries its scroll phase across `set_scene` (#733) and a colour layer
+   *  has no clock, so a scene of those two is free to rebuild immediately. */
+  function hasEngines(s: Scene): boolean {
+    return s.layers.some((l) => l.body.kind === "pat" || l.body.kind === "sprite");
+  }
+
+  /** The assignment lives in a FUNCTION, never in the `$:` block: a reactive
+   *  statement that both reads and assigns the same variable is its own
+   *  dependency and re-runs for ever (.claude/rules/web.md). */
+  function scheduleRebuild(delay: number): void {
+    clearTimeout(rebuildTimer);
+    if (delay === 0) {
+      rebuildTimer = 0;
+      rebuild();
+      return;
+    }
+    rebuildTimer = window.setTimeout(() => {
+      rebuildTimer = 0;
+      rebuild();
+    }, delay);
   }
 
   /** Per-frame bookkeeping, deliberately in an OBJECT: mutating a field is
@@ -269,7 +404,21 @@
 
   function tick(now: number): void {
     rafId = requestAnimationFrame(tick);
-    if (!active || paused || !renderer) return;
+    if (!active || paused || !renderer) {
+      // Keep the clock CURRENT while nothing is drawn (#736 item 28). It used
+      // to be left at the moment of the pause, so the first frame after
+      // Resume — or after coming back from another screen — carried the whole
+      // gap, clamped to 200 ms, and every layer jumped an eighth of a second
+      // forward before settling. The clamp hid how bad it was; it did not
+      // stop it being visible.
+      clock.last = now;
+      return;
+    }
+    // The preview's own frame budget, the pattern editor's arithmetic exactly
+    // (`minInterval` in pages/Editor.svelte): 0 means "every rAF". The -1 is
+    // its slack for a frame that arrives a hair early.
+    const minInterval = targetFps > 0 ? 1000 / targetFps - 1 : 0;
+    if (minInterval > 0 && clock.last !== 0 && now - clock.last < minInterval) return;
     const dt = clock.last === 0 ? 16 : Math.min(200, now - clock.last);
     clock.last = now;
     clock.fps = clock.fps === 0 ? 1000 / dt : clock.fps * 0.9 + (1000 / dt) * 0.1;
@@ -292,6 +441,7 @@
 
   onDestroy(() => {
     cancelAnimationFrame(rafId);
+    clearTimeout(rebuildTimer);
     renderer?.free();
     cancelLivePush();
     // A sprite painted a moment before leaving the screen still has to land
@@ -300,8 +450,12 @@
     void flushSprite();
   });
 
-  /** What the preview column's dim line says (S7 / S7f). */
-  $: shownFps = $device ? ($deviceOutFps > 0 ? $deviceOutFps : $deviceFps) : Math.round($previewFps);
+  /** What the preview column's dim line says (S7 / S7f). On a console it is
+   *  the DEVICE's output rate; off one it is this screen's OWN measured loop,
+   *  not `previewFps` — that store is the pattern editor's render loop and
+   *  reporting it here was quoting another screen's number (#736 item 25 is
+   *  what put the line next to the picture it describes). */
+  $: shownFps = $device ? ($deviceOutFps > 0 ? $deviceOutFps : $deviceFps) : Math.round(fpsAvg);
   $: dimsLine = `${gridW}×${gridH} · ${shownFps} fps${$device ? " on device" : ""}`;
 
   $: patternLayers = patternLayerCount(doc);
@@ -455,6 +609,7 @@
     const d = $device;
     if (!d) {
       savePatternLocally(name, source);
+      localRev++; // the local library is not a store — publish the change
       return playgroundPatternId(name);
     }
     const bc = compileToBytecode(source);
@@ -503,6 +658,7 @@
     const d = $device;
     if (!d) {
       savePatternLocally(name, source);
+      localRev++; // the local library is not a store — publish the change
       id = playgroundPatternId(name);
     } else {
       const bc = compileToBytecode(source);
@@ -573,7 +729,11 @@
    */
   async function pickFor(at: number, kind: "pat" | "sprite"): Promise<void> {
     if ($device) await refreshDevicePatterns();
-    if (kind === "sprite" && spriteRows().length === 0 && !sourcesPending()) {
+    else localRev++; // the playground's library is localStorage: re-read it
+    // Read the store through the function rather than the `$:` value: a flush
+    // may not have run between the refresh above and here.
+    const rows = patternRows($devicePatterns, $device !== null, localRev);
+    if (kind === "sprite" && spriteRowsOf(rows).length === 0 && !sourcesPending(rows)) {
       await freshSprite(at);
       return;
     }
@@ -581,18 +741,56 @@
     pickerOpen = true;
   }
 
+  /** Bumped whenever the playground's local library changes — `lib/store.ts`
+   *  is localStorage, not a store, so nothing invalidates on a save. */
+  let localRev = 0;
+
+  /**
+   * EVERY pattern a layer could bind (#730). A console binds ids the DEVICE
+   * holds, so its rows are `devicePatterns`; the playground's ids are hashes
+   * of local names (`playgroundPatternId`) and its rows are `lib/store.ts`'s
+   * — which `lookup()` has always resolved, while the picker was only ever
+   * offered the device list. `devicePatterns` is EMPTY without a device (it
+   * is only ever written by `refreshDevicePatterns`, which returns early with
+   * no session), so the playground's picker opened on an empty list every
+   * time, which is why `Change…` looked dead there.
+   */
+  function patternRows(
+    dev: typeof $devicePatterns,
+    connected: boolean,
+    _rev: number,
+  ): typeof $devicePatterns {
+    if (connected) return dev;
+    return listPatterns().map((p) => ({
+      id: playgroundPatternId(p.name),
+      name: p.name,
+      source: p.source,
+    }));
+  }
+
   /** The stored patterns that are SPRITES — what the picker offers a sprite
-   *  layer (#700). A device row whose source has not streamed in yet cannot
-   *  be classified, so it is left out rather than offered as a maybe. */
-  function spriteRows(): typeof $devicePatterns {
-    return $devicePatterns.filter((p) => parseSpriteTag(p.source ?? "") !== null);
+   *  layer (#700). A row whose source has not streamed in yet cannot be
+   *  classified, so it is not offered YET rather than denied for ever: the
+   *  list is DERIVED from the store, so the row appears the moment its source
+   *  lands, and `pickFor` refuses to conclude "there are no sprites" while
+   *  any source is still pending. Offering an unclassified row as a sprite
+   *  would be worse than waiting — a sprite layer bound to a pattern that is
+   *  not one draws nothing. */
+  function spriteRowsOf(rows: typeof $devicePatterns): typeof $devicePatterns {
+    return rows.filter((p) => parseSpriteTag(p.source ?? "") !== null);
   }
 
   /** Is any stored pattern still un-classifiable — its source not streamed in
    *  yet? Then "there are no sprites" is not something we know. */
-  function sourcesPending(): boolean {
-    return $devicePatterns.some((p) => p.source === undefined);
+  function sourcesPending(rows: typeof $devicePatterns): boolean {
+    return rows.some((p) => p.source === undefined);
   }
+
+  // The picker's list. Assigned reactively, with every dependency NAMED, so
+  // rows appear as their sources stream in (.claude/rules/web.md).
+  $: allRows = patternRows($devicePatterns, $device !== null, localRev);
+  $: pickingSprite = doc.layers[pickingFor]?.body.kind === "sprite";
+  $: pickerPatterns = pickingSprite ? spriteRowsOf(allRows) : allRows;
 
   function onReorder(from: number, to: number): void {
     const list = [...doc.layers];
@@ -669,6 +867,7 @@
     const d = $device;
     if (!d) {
       savePatternLocally(name, source);
+      localRev++; // the local library is not a store — publish the change
       return playgroundPatternId(name);
     }
     const bc = compileToBytecode(source);
@@ -685,15 +884,16 @@
 
   // ---- the document's verbs ----
 
-  async function save(): Promise<void> {
+  async function save(): Promise<boolean> {
     const r = await saveScene(doc);
-    if (!r.ok) return;
+    if (!r.ok) return false;
     if (r.id && doc.id === "") {
       doc = { ...doc, id: r.id };
       loadedId = r.id;
       dispatch("open", r.id);
     }
     savedWire = serializeScene(doc);
+    return true;
   }
 
   async function playOnDevice(): Promise<void> {
@@ -722,18 +922,13 @@
     if (await deleteScene(doc.id)) dispatch("back");
   }
 
-  /** A scene name is ≤ 64 BYTES on the wire, and a refusal the console could
-   *  have prevented is the console's bug — clamp rather than let the device
-   *  say no (`MAX_SCENE_NAME`, docs/spec/scenes.md §1). */
-  function commitName(): void {
-    renaming = false;
-    const name = truncateUtf8(nameDraft.trim(), MAX_SCENE_NAME);
-    if (name !== "") commit({ ...doc, name });
-  }
-
-  function onNameKey(e: KeyboardEvent): void {
-    if (e.key === "Enter") commitName();
-    if (e.key === "Escape") renaming = false;
+  /** What `NameField` hands back: already trimmed, already non-empty, and
+   *  already clamped to `MAX_SCENE_NAME` — a scene name is ≤ 64 BYTES on the
+   *  wire and a refusal the console could have prevented is the console's
+   *  bug (docs/spec/scenes.md §1). All that is left here is what a rename
+   *  MEANS, which is a commit like any other edit. */
+  function commitName(name: string): void {
+    if (name !== doc.name) commit({ ...doc, name });
   }
 </script>
 
@@ -749,34 +944,78 @@
       <span class="backlabel">Scenes</span>
     </button>
 
-    {#if renaming}
-      <input
-        class="nameedit"
-        data-role="scene-name-input"
-        bind:value={nameDraft}
-        aria-label="scene name"
-        on:keydown={onNameKey}
-        on:blur={commitName}
-      />
-    {:else}
-      <button
-        class="nameedit"
-        data-role="scene-name"
-        title="click to rename"
-        on:click|stopPropagation={() => {
-          nameDraft = doc.name;
-          renaming = true;
-        }}
-      >
-        <span class="nametext">{doc.name}</span>
-      </button>
-    {/if}
+    <!-- THE rename control, shared with the pattern editor's header
+         (components/NameField.svelte, #736 item 30). This screen used to
+         carry a hand-copy of that markup which had lost the focus, the
+         select-all and the empty-name refusal — "clicking on the name of the
+         scene on the title bar doesn't have the user's cursor go into that
+         new textbox… the user has to click again". One component now. -->
+    <NameField
+      value={doc.name}
+      label="scene name"
+      dataRole="scene-name"
+      inputRole="scene-name-input"
+      errorRole="scene-name-error"
+      maxBytes={MAX_SCENE_NAME}
+      on:commit={(e) => commitName(e.detail)}
+    />
 
-    <span class="savestate" data-role="scene-save-state">{saveState}</span>
+    <!-- The full contract lives on the ATTRIBUTE, not in the text (#738): the
+         Save button says "Save"/"Saved" now, so printing "saved · on device"
+         beside it said the same thing twice. Harnesses read
+         `dataset.saveState`; the reader sees only the part the button cannot
+         carry. -->
+    <span class="savestate" data-role="scene-save-state" data-save-state={saveState}
+      >{saveWhere}</span
+    >
+
+    <!-- The preview transport, in the SCENE's top bar rather than in the
+         centre column's header (#736, the transport hand-off). The pattern
+         editor's moved here for #739 because nobody found it where it was,
+         and a control that lives in two different places on two screens that
+         are otherwise the same chrome is the same problem one layer up. It is
+         the same element, the same class, the same words: `.transport` in
+         components/editor-frame.css, `Pause`/`Resume` and never `Play` —
+         a scene's Play verb is `▶ Play on device`, in the ⋯ menu, and two
+         play marks in one bar is how a bar stops meaning anything. -->
+    <button
+      class="btn transport"
+      class:paused
+      data-role="scene-pause"
+      aria-pressed={paused}
+      aria-label={paused ? "resume the preview" : "pause the preview"}
+      title={paused ? "resume the composite preview" : "pause the composite preview"}
+      on:click={() => (paused = !paused)}
+    >
+      {#if paused}
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M8 5.2 19.2 12 8 18.8Z" />
+        </svg>
+      {:else}
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <rect x="6" y="5" width="4" height="14" rx="1" />
+          <rect x="14" y="5" width="4" height="14" rx="1" />
+        </svg>
+      {/if}
+      <span class="tlabel">{paused ? "Resume" : "Pause"}</span>
+    </button>
 
     <span class="spacer"></span>
 
-    <button class="btn primary" data-role="scene-save" on:click={() => void save()}>Save</button>
+    <!-- Save gives the same feedback as the pattern editor's (#738): the
+         label becomes a spinner while the write is in flight, then "Saved"
+         for a second, and it simply READS "Saved" whenever there is nothing
+         dirty to write. `settled` is not `!dirty` alone — a scene that has
+         never been saved is clean and stored nowhere, and a button claiming
+         "Saved" there would be lying. -->
+    <AsyncButton
+      cls="btn primary"
+      dataRole="scene-save"
+      label="Save"
+      doneLabel="Saved"
+      settled={!dirty && doc.id !== ""}
+      action={save}
+    />
 
     <span class="overflow">
       <button
@@ -813,6 +1052,24 @@
         {/if}
       </Popover>
     </span>
+
+    <!-- The header's rail segment (#736 item 20). Its `border-left` is the
+         INSPECTOR column's own left border, continued up through the bar —
+         which is both what makes the header read as three columns like the
+         body and what stops Save at the same place the pattern editor stops
+         it. `statusonly` always: what it holds is a status readout, and the
+         phone rules drop it rather than wrap the header onto a second row.
+         The chip is the same one the pattern editor's rail carries, and for
+         the same reason — the shell header does not exist over a full-screen
+         screen, so without it nothing on this screen says which device the
+         scene is being edited against (#538). The playground's rail is empty
+         on purpose: its chip, `Preview as`, is a CONTROL, and the layout it
+         sets belongs to the map screen this component cannot reach. -->
+    <span class="edhdr-rail statusonly">
+      {#if !$isPlayground}
+        <DeviceChip />
+      {/if}
+    </span>
   </header>
 
   <div class="scene3">
@@ -823,6 +1080,7 @@
       {patternLayers}
       {spriteDims}
       {patternNames}
+      {layerErrors}
       on:select={(e) => (selected = e.detail)}
       on:toggle={(e) => onToggle(e.detail)}
       on:reorder={(e) => onReorder(e.detail.from, e.detail.to)}
@@ -834,15 +1092,12 @@
       w={gridW}
       h={gridH}
       rect={sel?.style.rect ?? null}
-      {patternLayers}
-      layerCap={$layerCap}
-      fps={$device ? shownFps : fpsAvg}
       {dimsLine}
-      {paused}
+      {targetFps}
       paintMode={painting}
       markCell={painting ? hoverCell : null}
       on:rect={(e) => onRect(e.detail)}
-      on:pause={(e) => (paused = e.detail)}
+      on:targetfps={(e) => (targetFps = e.detail)}
       on:cell={onCell}
       on:hover={(e) => (hoverCell = e.detail)}
     >
@@ -860,12 +1115,52 @@
       </svelte:fragment>
     </SceneStage>
 
-    <div class="rcol" data-role="scene-inspector">
+    <div class="rcol" data-role="scene-inspector" bind:this={rcolEl}>
+      <!-- THE picker hangs HERE, under the inspector column, because
+           `.menu.full` is `position:absolute` against its nearest positioned
+           ancestor: as a child of `<main class="editor-frame">` (which IS
+           `position:relative`) it opened one full screen height below the
+           fold — invisible, which is what "pressing Change… does nothing"
+           looked like (#730). The wrapper is zero-height so the list starts
+           at the top of the column, beside the button that opened it.
+
+           No `scenes` are passed on purpose: a layer names a stored PATTERN
+           and there are no nested scenes (docs/spec/scenes.md), so the
+           picker's Scenes section is empty here by design. -->
+      <div class="pickwrap">
+        <PatternPicker
+          luxel={$luxel}
+          open={pickerOpen}
+          anchor={rcolEl}
+          title={pickingSprite ? "Choose a sprite" : "Choose a pattern"}
+          patterns={pickerPatterns}
+          busy={pickerBusy}
+          error={pickerError}
+          on:pick={(e) => void onPick(e)}
+          on:close={() => {
+            pickerOpen = false;
+            pickerError = "";
+          }}
+        />
+      </div>
+
+      <!-- A layer that draws nothing SAYS why (#731): the compositor binds no
+           engine for a pattern that will not compile and then renders an
+           empty layer, which reads as "the preview is broken". -->
+      {#if sceneError !== ""}
+        <p class="lerr" data-role="scene-error">{sceneError}</p>
+      {/if}
+      {#if selected >= 0 && layerErrors[selected] !== undefined}
+        <p class="lerr" data-role="scene-layer-error">
+          This layer’s pattern does not compile — {layerErrors[selected]}
+        </p>
+      {/if}
+
       {#if sel && sel.body.kind === "pat"}
         <PatternInspector
           layer={sel}
           engine={renderer?.engineAt(selected) ?? null}
-          source={lookup(sel.body.pat.id) ?? undefined}
+          source={lookup(sel.body.pat.id)}
           patternName={patternNameOf(sel.body.pat.id)}
           {rig}
           on:change={(e) => replaceLayer(selected, e.detail)}
@@ -906,19 +1201,6 @@
     </div>
   </div>
 
-  <PatternPicker
-    luxel={$luxel}
-    open={pickerOpen}
-    title={doc.layers[pickingFor]?.body.kind === "sprite" ? "Choose a sprite" : "Choose a pattern"}
-    patterns={doc.layers[pickingFor]?.body.kind === "sprite" ? spriteRows() : $devicePatterns}
-    busy={pickerBusy}
-    error={pickerError}
-    on:pick={(e) => void onPick(e)}
-    on:close={() => {
-      pickerOpen = false;
-      pickerError = "";
-    }}
-  />
 </main>
 
 <style>
@@ -926,5 +1208,22 @@
      `.editor-frame` gives it the header row and the full-height grid. */
   .scene-editor :global(.scene3) {
     min-height: 0;
+  }
+
+  /* The picker's own `.menu.full` is `left:0;right:0;top:calc(100% + 7px)`,
+     so its anchor must be a zero-height box at the top of the inspector
+     column — the list then spans the column and drops just under its head,
+     next to the `Change…` button that opened it (#730). */
+  .pickwrap {
+    position: relative;
+    height: 0;
+  }
+
+  /* a failure the user can act on, in the column that owns the layer */
+  .lerr {
+    margin: 0 0 12px;
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--error);
   }
 </style>

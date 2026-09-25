@@ -527,6 +527,7 @@
     active={!editing && !mapEditing && !sceneEditing && tab === "patterns"}
     {hasPixelblazeLibrary}
     {scenesReady}
+    playDevice={(id) => editor.playDevicePattern(id)}
     on:openscene={(e) => openScene(e.detail)}
     on:new={() => {
       openEditor();
@@ -789,19 +790,5 @@
     padding-left: 20px;
   }
 
-  .spinner {
-    display: inline-block;
-    width: 12px;
-    height: 12px;
-    border: 2px solid color-mix(in srgb, var(--text-dim) 40%, transparent);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: conn-spin 0.7s linear infinite;
-  }
-
-  @keyframes conn-spin {
-    to {
-      transform: rotate(1turn);
-    }
-  }
+  /* `.spinner` is shared chrome (app.css, Gitea #738). */
 </style>

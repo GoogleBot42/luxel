@@ -162,12 +162,18 @@
    *
    * Dimensionality is the same advisory each grid starts from: gen-gallery's
    * `kind` for a library row, a regex guess at the source for a device one.
-   * A device pattern whose source has not streamed in yet counts as 1D (it is
-   * shown), exactly as a Gallery tile does.
    */
   $: fixture = $layout.source === "device" || $layout.source === "user";
   const fits = (dims: PatternDims, ld: number, fix: boolean): boolean =>
     !fix || projectionCompatible(dims, ld);
+
+  /** A row whose `source` has not streamed in yet is UNKNOWN, and unknown is
+   *  never a "no" (.claude/rules/web.md, Gitea #730): it counts as
+   *  dimensionless — 0 is "any", which every Layout accepts — so a list that
+   *  is still filling offers everything rather than nothing, and each row's
+   *  dim fact sharpens the moment its source lands. */
+  const dimsOf = (src: string | undefined): PatternDims =>
+    src === undefined ? 0 : guessPatternDims(src);
 
   /** S4c's dim column: the projection caption when the pattern is not native
    *  to this Layout (`1D · along x`), else its plain dimensionality (`2D`). */
@@ -175,16 +181,12 @@
     captionFor(dims, $layout) ?? (dims > 0 ? `${dims}D` : "");
 
   $: deviceMatches = patterns
-    .filter(
-      (p) =>
-        match(p.name || p.id, needle) &&
-        fits(p.source === undefined ? 0 : guessPatternDims(p.source), $layout.dims, fixture),
-    )
+    .filter((p) => match(p.name || p.id, needle) && fits(dimsOf(p.source), $layout.dims, fixture))
     .map((p): PickItem => ({
       id: p.id,
       name: p.name,
       source: p.source,
-      fact: patternFact(p.source === undefined ? 0 : guessPatternDims(p.source)),
+      fact: patternFact(dimsOf(p.source)),
     }));
   $: sceneMatches = scenes
     // A scene with no id cannot be queued (`I S<id>`) or opened, so it is not

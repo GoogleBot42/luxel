@@ -199,7 +199,9 @@
     </button>
 
   <p class="popfoot">
-    Every preview and tile on this page uses this layout. On a device it is the device's own.
+    <!-- one line on purpose: this string is compared by `textContent` (mockdiff's
+         `popfoot` entry), and wrapping it would fold the indentation in (#742) -->
+    Every preview and tile on this playground will use this layout. When controlling a luxel device it is the device's layout.
   </p>
   </Popover>
 </span>
