@@ -1,5 +1,27 @@
 # Update log
 
+## 2026-09-26 — #671 verified on the panel: the snake layer goes native (#792)
+
+Master `5f3de06c` (#791 + #797 + #802 + #808) OTA'd to the Seengreat's
+`ota_1` and assets pushed after (943,269 B). Jeremy's "Test 2" (Aurora 2D +
+Infinite Snake v2 keyed black + text) now compiles **both** layers native —
+`jit.layers[1]` `native`, 12,932 B of code, `compile_us` 9–13 ms from the
+arena — with `heap_free` 35,764 / `heap_largest` 31,668 B resident, 380 B
+MORE than the same scene had with the snake interpreted on `6c691f0`
+(35,384 / 31,288). "Test" (Aurora + Breakout) both native too. Three-minute
+playlist soak: 88/90 status polls answered (the two are the 3-socket pool),
+native on every sample, no `no-memory`, no reboot. Restored as found
+(playlist stopped at 0, brightness 14, "Test 2" resident).
+
+The finding that came with it: native or not, "Test 2" runs 18 fps (17
+interpreted) — the snake layer's ~38 ms per frame at 4096 px is not in the
+arithmetic the JIT compiles. Filed as #812. Two small traps went to memory:
+`ota-push.sh`'s POST can hit the socket pool right after its own status GET
+(`curl: (7)` twice; a plain `curl --data-binary` after a pause went through
+first try), and entering the devshell from the MAIN checkout's cwd writes
+the `esp-hub75` vendor symlink there instead of in the new worktree.
+
+
 ## 2026-09-26 — mirror parity: stage timers, a per-layer `--jit`, a data pin, and scene ids on preload (#262 #757 #579 #701)
 
 Four long-standing "the native mirror cannot drive this" gaps, all in

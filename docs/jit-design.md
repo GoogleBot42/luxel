@@ -995,12 +995,18 @@ second rule budgets is what a `BTreeMap` cannot route (its nodes, one per
 branch target), the per-depth scratch above and the `Placed` result the
 caller keeps: **4,122 B** at its worst over the whole library, 29 % of what
 the rule allows. `tests/alloc_peak.rs` fits and gates both rules, the second
-with a counting arena hook installed. **The no-arena branch is covered, the
-arena branch is not** (2026-09-26): no device was touched in the #671
-session, but the QEMU JIT gate (`tools/qemu/jit-test.py`, classic ESP32, no
-arena) passed `rainbow.js` and `snake-2d.js` — both native and bit-identical
-to the interpreter, `snake-2d` 19 fns / 11,256 B in 17,244 µs. §7.3's rows
-and the `snake-2d` refusal below are still the pre-#671 measurement.
+with a counting arena hook installed. **Both branches are verified on metal**
+(Gitea #792, 2026-09-26). No arena: the QEMU JIT gate
+(`tools/qemu/jit-test.py`, classic ESP32) passed `rainbow.js` and
+`snake-2d.js` — both native and bit-identical to the interpreter, `snake-2d`
+19 fns / 11,256 B in 17,244 µs. Arena: on the panel at 4096 px, master
+`5f3de06c` on `ota_1`, the two-engine "Test 2" scene compiled **both** layers
+native — `aurora-2d` 5,612 B and `snake-2d-v2` 12,932 B, where the pre-#671
+build on the other slot refused the second one `no-memory` — and it did so
+with internal `heap_free` 380 B *higher* than the interpreted reading (35,764
+against 35,384 B), the ~88 KB of working set and exec blocks coming out of the
+arena instead (`psram_free` 8,155,072 → 8,024,000). §7.3 and docs/boards.md
+"JIT on metal" carry the rows.
 
 **`iram-vm` came back on the S3.** Phase 3's trade is off: arena code costs
 no internal SRAM, so `board-target.sh` and flake.nix put the interpreter's
@@ -1163,10 +1169,15 @@ on metal"; the headlines:
 `snake-2d` at 4096 px is the one refusal on the panel, and not for a
 codegen reason: the emitter's bookkeeping does not fit beside the engine
 (`no-memory`, §5 as-built above). It compiles and runs natively on the
-Athom. *(Since #671, 2026-09-26, that bookkeeping's per-word and per-function
-tables are arena memory on this board — 31,624 B of arena and 8,446 B of
-internal heap rather than 31.6 KB internal — so this refusal is expected to be
-gone. Not re-measured on metal; the row stands as the 2026-09-24 reading.)*
+Athom. *(#671 moved that bookkeeping's per-word and per-function tables into
+the arena — 31,624 B of arena and 8,446 B of internal heap rather than
+31.6 KB internal — and the refusal is **gone on metal as of 2026-09-26**
+(Gitea #792): `snake-2d-v2`, the heavier sibling, compiles at 4096 px as the
+second layer of a two-engine scene, 12,932 B of native code, with internal
+`heap_free` 380 B higher than the interpreted run. The row above stands as the
+2026-09-24 reading. What it did not buy is frames — that scene went 17 → 18
+fps, because the snake layer's ~38 ms a frame at 4096 px is not in the
+arithmetic the JIT compiles; a follow-up ticket profiles it.)*
 
 ## 8. Size, features, boards
 
@@ -1301,7 +1312,7 @@ those slots boxed.
 | inference proves too little (`Dyn` on hot paths) | §9 census before the emitter is written; per-site array provenance is the refinement |
 | `Value` `repr` change moves interpreter numbers | **retired** (#642): it was indeed the layout rustc already picks — `luxel-core` text 117,514 B before and after on the S3, every symbol the same size, `Vm::run` byte-identical, so there is no number to move |
 | compile at activation blocks the render task | **retired** (#665/#666): `compile_us` on metal is 3,968–14,335 µs on the panel and 3,465–29,086 µs on the Athom (`snake-2d`'s 11 KB image is the 29 ms outlier) — 4 to 30 ms, once, at an activation that is already blocked for decode and engine construction. Nobody watching a panel can see it. Persisted blobs remain the lever if it ever matters |
-| planner heap beside a 4096-px engine | **retired** (#665), the hard way: it was not a risk, it was a crash — `StackMap`'s `Vec`-per-word took the panel down on the first native run of `snake-2d`. Retired by the flat `StackMap`, the `tests/alloc_peak.rs` rule and the `no-memory` refusal that applies it before claiming exec memory. Its remainder — the bookkeeping being internal heap on a board with 8 MB of PSRAM idle beside it, which is why `snake-2d` stayed interpreted at 4096 px — is **retired in code by #671** (2026-09-26): the per-word and per-function tables are `luxel_core::arena` vectors checked against the arena, with a `words × 6 + fns × 48 + 1,024` residue rule against the internal heap for the per-depth scratch and `BTreeMap` nodes that stay there on purpose (flash — `kinds::walk_fn`). The QEMU gate covers the no-arena branch; the arena branch is unverified on metal, so the on-metal rows in §7.3 still show the old refusal |
+| planner heap beside a 4096-px engine | **retired** (#665), the hard way: it was not a risk, it was a crash — `StackMap`'s `Vec`-per-word took the panel down on the first native run of `snake-2d`. Retired by the flat `StackMap`, the `tests/alloc_peak.rs` rule and the `no-memory` refusal that applies it before claiming exec memory. Its remainder — the bookkeeping being internal heap on a board with 8 MB of PSRAM idle beside it, which is why `snake-2d` stayed interpreted at 4096 px — is **retired in code by #671** (2026-09-26): the per-word and per-function tables are `luxel_core::arena` vectors checked against the arena, with a `words × 6 + fns × 48 + 1,024` residue rule against the internal heap for the per-depth scratch and `BTreeMap` nodes that stay there on purpose (flash — `kinds::walk_fn`). The QEMU gate covers the no-arena branch and the panel covers the arena one — **verified on metal 2026-09-26** (Gitea #792): the `snake-2d-v2` scene layer that used to be refused compiles to 12,932 B beside a native `aurora-2d`, with internal `heap_free` 380 B *higher* than the interpreted reading (§7.3). §7.3's 2026-09-24 rows are kept as the pre-#671 measurement |
 | runaway native loop | fuel at back-edges, depth check in prologues, watchdog unchanged |
 
 ## 11. Open questions for Jeremy
