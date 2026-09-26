@@ -200,6 +200,10 @@ pub struct Caps {
     pub ota: bool,
     pub psram: bool,
     pub assets: bool,
+    /// The device has a first-class SPRITE store (`/api/sprites`, Gitea
+    /// #740). A console without it hides the Sprites tab and the scene
+    /// editor's sprite layer.
+    pub sprites: bool,
 }
 
 /// Text slots for host-supplied text (proposal §6, Gitea #485): how many
@@ -213,6 +217,12 @@ pub const TEXT_SLOTS: u8 = crate::text::SLOTS as u8;
 /// planned (proposal §5.7): the whole-bundle assets partition is not a
 /// per-file upload path, so every host advertises `false`.
 pub const ASSETS: bool = false;
+
+/// A first-class sprite store and its routes (Gitea #740). Every host that
+/// carries this module has one — the record reader is `crate::sprite` and
+/// the store is a few hundred bytes of route — so it is a constant, not an
+/// `Hw` fact.
+pub const SPRITES: bool = true;
 
 /// Hard ceiling on advertised layers, whatever the arithmetic says — the
 /// scene editor's own budget check (against live heap) is the real gate.
@@ -329,6 +339,7 @@ impl Caps {
             ota: hw.ota,
             psram: hw.psram,
             assets: ASSETS,
+            sprites: SPRITES,
         }
     }
 
@@ -355,6 +366,8 @@ impl Caps {
         push_piece(out, bool_str(self.psram));
         push_piece(out, ",\"assets\":");
         push_piece(out, bool_str(self.assets));
+        push_piece(out, ",\"sprites\":");
+        push_piece(out, bool_str(self.sprites));
         push_piece(out, "}");
     }
 }
@@ -492,6 +505,7 @@ mod tests {
         assert_eq!(c.layers, 3);
         assert_eq!(c.text_slots, 8);
         assert!(!c.assets);
+        assert!(c.sprites, "every host with luxel-core has a sprite store");
     }
 
     #[test]
@@ -531,7 +545,7 @@ mod tests {
             s,
             "{\"strip_driver\":true,\"panel\":false,\"outputs\":2,\"power_cap\":true,\
              \"blur_glow\":true,\"layers\":3,\"text_slots\":8,\"reboot\":true,\"ota\":true,\
-             \"psram\":false,\"assets\":false}"
+             \"psram\":false,\"assets\":false,\"sprites\":true}"
         );
     }
 }

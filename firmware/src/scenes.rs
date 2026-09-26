@@ -24,7 +24,7 @@ use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use esp_println::println;
-use luxel_core::compose::{self, Compositor, SceneDriver, SceneHost, SpriteView};
+use luxel_core::compose::{Compositor, SceneDriver, SceneHost, SpriteView};
 use luxel_core::engine::Engine;
 use luxel_core::fixed::Fx;
 use luxel_core::jsonview::{self, push_piece, push_u32};
@@ -260,10 +260,15 @@ pub enum Slot {
     Base,
     /// A further pattern layer's own engine.
     Pattern(Engine),
-    /// A sprite layer: the compiled pattern (never stepped — [`sprite_view`]
-    /// only reads its const arrays) plus the `// @sprite …` tag line, which
-    /// lives in the SOURCE and so has to be carried beside the engine.
-    Sprite(Engine, String),
+    /// A sprite layer: the sprite-store id, and — only on a board whose
+    /// extent region could not be MAPPED — one copy of its `LXSP` record.
+    ///
+    /// No engine, no bytecode, no budget (Gitea #740). On a mapped board
+    /// the compositor reads texels straight out of flash, so a sprite layer
+    /// costs this `String` and nothing else; with the mapping off there is
+    /// no in-place read, so the record is copied ONCE at build time rather
+    /// than per frame.
+    Sprite(String, Option<Vec<u8>>),
 }
 
 /// A scene resident in the render task: the compositor plus one slot per
@@ -331,7 +336,14 @@ impl SceneHost for SlotHost<'_> {
 
     fn sprite(&mut self, layer: usize) -> Option<SpriteView<'_>> {
         match self.slots.get(layer)? {
-            Slot::Sprite(e, src) => compose::sprite_view(e, src),
+            // Mapped: the record IS the texels, parsed in place every frame
+            // (a header read and three slice bounds — no allocation, no
+            // copy). A record the store no longer holds draws nothing, the
+            // same as a deleted pattern on a `pat` layer.
+            // `parse_trusted`: the store validated the record on the way in, and
+            // this runs every frame — the O(n) index scan stays off the render task.
+            Slot::Sprite(id, None) => SpriteView::parse_trusted(patterns::sprite_slice(id)?),
+            Slot::Sprite(_, Some(rec)) => SpriteView::parse_trusted(rec),
             _ => None,
         }
     }
@@ -370,9 +382,11 @@ impl Runtime {
     /// Resident engines (the number `/api/status` reports as `engines`),
     /// EXCLUDING the base — the caller adds its own.
     pub fn engines(&self) -> u32 {
+        // A sprite layer holds no engine since Gitea #740, so it is not
+        // counted here and `shared::ENGINE_HEAP`'s sum is not over it.
         self.slots
             .iter()
-            .filter(|s| matches!(s, Slot::Pattern(_) | Slot::Sprite(..)))
+            .filter(|s| matches!(s, Slot::Pattern(_)))
             .count() as u32
     }
 
@@ -392,12 +406,12 @@ impl Runtime {
     }
 
     /// Hand every resident engine to `f` — the map install and projection
-    /// override have to reach the whole stack, not just the base.
+    /// override have to reach the whole stack, not just the base. Sprite
+    /// layers hold no engine (Gitea #740) and are skipped.
     pub fn for_each_engine(&mut self, mut f: impl FnMut(&mut Engine)) {
         for s in self.slots.iter_mut() {
-            match s {
-                Slot::Pattern(e) | Slot::Sprite(e, _) => f(e),
-                _ => {}
+            if let Slot::Pattern(e) = s {
+                f(e);
             }
         }
     }
@@ -455,19 +469,6 @@ fn decode(id: &str) -> Option<luxel_core::vm::Program> {
     }
 }
 
-/// The `// @sprite …` tag line of a stored pattern, read out of the mapped
-/// source extent. Only the first line is kept — that is all `sprite_view`
-/// reads, and a whole source would be tens of KB of heap per sprite layer.
-fn tag_line(id: &str) -> String {
-    let Some(src) = patterns::source_slice(id) else {
-        return String::new();
-    };
-    let end = src.iter().position(|&b| b == b'\n').unwrap_or(src.len());
-    core::str::from_utf8(&src[..end.min(128)])
-        .map(String::from)
-        .unwrap_or_default()
-}
-
 /// Build the resident runtime for `sc`.
 ///
 /// Returns the runtime, the engine the [`Slot::Base`] layer renders from
@@ -475,9 +476,10 @@ fn tag_line(id: &str) -> String {
 /// first per-layer failure, if any — an over-budget or missing layer becomes
 /// a [`Slot::Native`] no-op so the rest of the scene still shows.
 ///
-/// `pixels` is the device pixel count; a SPRITE layer's engine is built at
-/// ONE pixel, because its `renderFrame` is never called and its frame buffer
-/// would otherwise cost 3 B/px for nothing (12 KB each on the panel).
+/// `pixels` is the device pixel count. A SPRITE layer costs no engine at
+/// all since Gitea #740 — it names a record in the sprite store and the
+/// compositor reads its texels in place — so there is nothing to decode,
+/// nothing to pre-flight and nothing to compile for one.
 ///
 /// `keep` is the OUTGOING scene's pinned ids: the arena pin set is
 /// republished after every engine, so a save on the other core can never
@@ -543,29 +545,67 @@ pub fn build_runtime(
             *err = Some(m);
         }
     };
+    // A sprite layer's record: pinned like a pattern layer's file, because
+    // the compositor reads its texels out of the mapping in place and a
+    // save on the other core would otherwise compact those bytes away
+    // underneath the render task (Gitea #260's rule, #740's new client).
+    let pin_all = |rt: &Runtime| {
+        let mut all: Vec<String> = keep.to_vec();
+        all.extend(rt.pinned.iter().cloned());
+        patterns::set_layer_pins(&all);
+    };
     for (i, layer) in sc.layers.iter().enumerate() {
+        // ---- sprite layers: no engine, no decode, no budget (#740) ----
+        if layer.kind() == luxel_core::scene::LayerKind::Sprite {
+            // Never armed, so the slot reads `state:"none"` like a text
+            // layer's rather than inheriting whatever stood there.
+            #[cfg(feature = "jit")]
+            crate::jit::clear_slot(i);
+            let sid = layer.sprite_id().unwrap_or("");
+            if patterns::sprite_stat(sid).is_none() {
+                fail(&mut err, i, "has no such sprite");
+                rt.slots.push(Slot::Native);
+                continue;
+            }
+            // Mapped boards read the record where it lies. With the mapping
+            // off there is no in-place read, so copy it ONCE here —
+            // fallibly (`patterns::sprite_vec` reserves exactly): a record
+            // the heap cannot hold is a layer that does not fit, never a
+            // reboot.
+            let copy = match patterns::sprite_slice(sid) {
+                Some(_) => None,
+                None => match patterns::sprite_vec(sid) {
+                    Some(v) => Some(v),
+                    None => {
+                        fail(&mut err, i, "does not fit");
+                        rt.slots.push(Slot::Native);
+                        continue;
+                    }
+                },
+            };
+            rt.pinned.push(String::from(sid));
+            pin_all(&rt);
+            rt.slots.push(Slot::Sprite(String::from(sid), copy));
+            continue;
+        }
         let Some(pid) = layer.pattern_id() else {
             rt.slots.push(Slot::Native);
             continue;
         };
-        let sprite = layer.kind() == luxel_core::scene::LayerKind::Sprite;
-        let count = if sprite { 1 } else { pixels };
         // Name the slot this layer's compile belongs to BEFORE anything is
         // built (Gitea #718). `i` is the scene layer index — the identity —
-        // and the first non-sprite layer to build is the one that becomes
+        // and the first pattern layer to build is the one that becomes
         // `Slot::Base`, so it is the engine the scalar `jit` block
-        // describes. A sprite layer is armed too: its engine is really
-        // built and really compiled (never stepped — docs/spec/scenes.md
-        // §4), and hiding that compile is the bug this ticket is about.
+        // describes.
         #[cfg(feature = "jit")]
-        crate::jit::arm(i, base.is_none() && !sprite, sprite);
+        crate::jit::arm(i, base.is_none());
         // Pre-flight the heap BEFORE decoding: the post-build floor check in
         // `try_budgeted_layer` is the real gate, but reaching it costs the
         // whole decode + build peak, and on a device already holding two
         // engines that peak is what panics rather than rejects (#479).
         if !luxel_core::budget::layer_fits_with(
             esp_alloc::HEAP.free() as usize,
-            count,
+            pixels,
             scratch,
             luxel_core::arena::frames_external(),
         ) {
@@ -581,21 +621,13 @@ pub fn build_runtime(
             rt.slots.push(Slot::Native);
             continue;
         };
-        let Ok(mut e) = crate::try_budgeted_layer(prog, count) else {
+        let Ok(mut e) = crate::try_budgeted_layer(prog, pixels) else {
             fail(&mut err, i, "does not fit");
             rt.slots.push(Slot::Native);
             continue;
         };
         rt.pinned.push(String::from(pid));
-        {
-            let mut all: Vec<String> = keep.to_vec();
-            all.extend(rt.pinned.iter().cloned());
-            patterns::set_layer_pins(&all);
-        }
-        if sprite {
-            rt.slots.push(Slot::Sprite(e, tag_line(pid)));
-            continue;
-        }
+        pin_all(&rt);
         // per-layer control and projection overrides (the playlist's `C`/`P`
         // grammar, applied to this layer's own engine)
         if let luxel_core::scene::LayerBody::Pattern(p) = &layer.body {

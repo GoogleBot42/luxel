@@ -362,6 +362,7 @@ impl Store {
             src_hash: patlog::fnv1a(&p.src),
             bc_hash: patlog::fnv1a(&p.bc),
             name_len: p.name.len() as u8,
+            kind: patlog::KIND_PATTERN,
             dead: false,
         };
         for step in patlog::append_plan(&rec) {

@@ -59,7 +59,7 @@ pub enum Msg {
     TextSlot { n: u8, text: String },
     /// Show a stored SCENE (Gitea #478), crossfading over `ms` (0 = cut).
     /// Like [Msg::Library] nothing but the id travels: the render task reads
-    /// the record from `scenes::get` and decodes each pattern/sprite layer
+    /// the record from `scenes::get` and decodes each pattern layer
     /// straight from its mapped arena slot. An empty id tears the scene down
     /// and leaves the single-pattern engine on screen.
     Scene { id: String, ms: u32 },
@@ -375,7 +375,8 @@ pub static RESCANS: AtomicU32 = AtomicU32::new(0);
 pub static ENGINE_HEAP: AtomicU32 = AtomicU32::new(0);
 
 /// Resident engines the render task is holding (Gitea #479): 1 for a plain
-/// pattern, one per pattern/sprite layer for a scene, 0 with nothing loaded.
+/// pattern, one per PATTERN layer for a scene, 0 with nothing loaded (a
+/// sprite layer holds no engine since Gitea #740).
 /// [`ENGINE_HEAP`] is the SUM across them, so this is the divisor a client
 /// needs to reason about per-layer cost — `/api/status` reports it as
 /// `engines` beside `engine_heap`.

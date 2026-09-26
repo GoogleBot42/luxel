@@ -104,6 +104,7 @@ mod scenes;
 mod scenestore;
 mod sensors;
 mod server;
+mod sprites;
 mod sntp;
 mod shared;
 mod textslots;

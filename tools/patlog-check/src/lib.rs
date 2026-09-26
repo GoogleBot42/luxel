@@ -169,6 +169,7 @@ mod library_fill {
                 src_hash: fnv1a(&src),
                 bc_hash: fnv1a(&bc),
                 name_len: name.len() as u8,
+                kind: KIND_PATTERN,
                 dead: false,
             };
             if rec.end() > ARENA_BYTES {

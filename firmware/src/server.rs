@@ -105,6 +105,9 @@ enum ApiBody {
     Asset(FlashAsset),
     Source(CurrentSource),
     Envelope(CurrentEnvelope),
+    /// `application/octet-stream` — one sprite's `LXSP` record, streamed
+    /// out of the mapped store (Gitea #740).
+    Sprite(SpriteRecord),
     /// A body-less response (204 preflight, 304 asset revalidation).
     /// `Response::new` always emits Content-Type + Content-Length and there is
     /// no way to suppress them, so both are carried explicitly: `len` is 0 for
@@ -127,6 +130,7 @@ impl Content for ApiBody {
             ApiBody::Asset(a) => a.content_type(),
             ApiBody::Source(s) => s.content_type(),
             ApiBody::Envelope(e) => e.content_type(),
+            ApiBody::Sprite(s) => s.content_type(),
             ApiBody::Empty { ct, .. } => ct,
         }
     }
@@ -145,6 +149,7 @@ impl Content for ApiBody {
             ApiBody::Asset(a) => a.content_length(),
             ApiBody::Source(s) => s.content_length(),
             ApiBody::Envelope(e) => e.content_length(),
+            ApiBody::Sprite(s) => s.content_length(),
             ApiBody::Empty { len, .. } => *len,
         }
     }
@@ -159,6 +164,7 @@ impl Content for ApiBody {
             ApiBody::Asset(a) => a.write_content(writer).await,
             ApiBody::Source(s) => s.write_content(writer).await,
             ApiBody::Envelope(e) => e.write_content(writer).await,
+            ApiBody::Sprite(s) => s.write_content(writer).await,
             ApiBody::Empty { .. } => Ok(()),
         }
     }
@@ -833,7 +839,7 @@ fn status_json() -> luxel_core::jsonview::Chunks {
     push_piece(&mut out, ",\"engine_heap\":");
     push_u32(&mut out, crate::shared::ENGINE_HEAP.load(Ordering::Relaxed));
     // Resident engines behind that sum (Gitea #479): 1 for a plain pattern,
-    // one per pattern/sprite layer for a scene, 0 with nothing loaded.
+    // one per PATTERN layer for a scene, 0 with nothing loaded.
     push_piece(&mut out, ",\"engines\":");
     push_u32(&mut out, crate::shared::ENGINES.load(Ordering::Relaxed));
     // External pattern-array arena (Gitea #253) — present only on a board
@@ -1005,7 +1011,7 @@ fn status_json() -> luxel_core::jsonview::Chunks {
         push_piece(&mut out, ",\"layers\":[");
         let mut sep = false;
         for i in 0..walk {
-            let Some((st, reason, bytes, sprite)) = crate::jit::slot_status(i) else {
+            let Some((st, reason, bytes)) = crate::jit::slot_status(i) else {
                 continue;
             };
             if sep {
@@ -1014,9 +1020,10 @@ fn status_json() -> luxel_core::jsonview::Chunks {
             sep = true;
             push_piece(&mut out, "{\"layer\":");
             push_u32(&mut out, i as u32);
-            push_piece(&mut out, ",\"kind\":\"");
-            push_piece(&mut out, if sprite { "sprite" } else { "pattern" });
-            push_piece(&mut out, "\",\"state\":\"");
+            // Always "pattern" since Gitea #740: a sprite layer holds no
+            // engine, so it never appears in this array at all. The field
+            // stays so a console reading it keeps working.
+            push_piece(&mut out, ",\"kind\":\"pattern\",\"state\":\"");
             push_piece(&mut out, st);
             push_piece(&mut out, "\",\"reason\":");
             match reason {
@@ -1236,7 +1243,7 @@ async fn stream_store_readback<W: picoserve::io::Write>(
         }
         None => {
             esp_println::println!(
-                "readback: {} — library pattern unavailable (deleted / store busy), padding {} B",
+                "readback: {} — stored record unavailable (deleted / store busy), padding {} B",
                 label,
                 len
             );
@@ -1386,6 +1393,46 @@ impl picoserve::response::Content for CurrentEnvelope {
             crate::shared::BcLoc::Gone => {}
         }
         Ok(())
+    }
+}
+
+/// `GET /api/sprites/<id>`: one sprite's `LXSP` record, streamed straight
+/// out of the mapped store — the same discipline as [`CurrentSource`]'s
+/// library arm, and for the same reason: the record IS the response body,
+/// so there is no Vec on the mapped path (Gitea #740).
+///
+/// `len` is snapshotted at construction, so Content-Length is what goes on
+/// the wire even if the sprite is re-saved mid-response; a record that is
+/// gone or unreadable by then is padded out, because a short body under a
+/// full Content-Length wedges the connection.
+///
+/// Unlike the running pattern's extents this record is NOT necessarily
+/// pinned — a resident scene layer pins the ones it draws, a sprite the
+/// console is merely downloading is not — so a save landing in the middle
+/// of this stream can corrupt that one download. The alternative was a
+/// 16 KiB contiguous allocation per GET, which is the class of allocation
+/// that reboots a board (Gitea #728); a retryable bad download is the
+/// better failure.
+struct SpriteRecord {
+    id: String,
+    len: usize,
+}
+
+impl picoserve::response::Content for SpriteRecord {
+    fn content_type(&self) -> &'static str {
+        "application/octet-stream"
+    }
+    fn content_length(&self) -> usize {
+        self.len
+    }
+    async fn write_content<W: picoserve::io::Write>(self, mut writer: W) -> Result<(), W::Error> {
+        match crate::sprites::get(&self.id) {
+            Some(rec) => stream_mapped_exact(&mut writer, rec, self.len, 0).await,
+            None => {
+                let rec = crate::sprites::get_vec(&self.id);
+                stream_store_readback(&mut writer, rec, self.len, "sprite").await
+            }
+        }
     }
 }
 
@@ -2606,6 +2653,18 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 "/api/scenes" => Some(json_response(
                     api_scenes_save(&String::from_utf8_lossy(&raw), None).await,
                 )),
+                // POST /api/sprites       — the record; upserts by the name
+                //                           inside it (the store's rule)
+                // POST /api/sprites/<id>  — replace THAT record, rename and
+                //                           all
+                //
+                // ONE arm for both (a second awaiting arm is a whole future
+                // type, ~1.4 KB of image — see .claude/rules/firmware.md),
+                // and the body stays `&[u8]`: an LXSP record is binary and
+                // `from_utf8` would mangle it.
+                r if r == "/api/sprites" || r.starts_with("/api/sprites/") => Some(json_response(
+                    crate::sprites::save(&raw, r.strip_prefix("/api/sprites/")).await,
+                )),
                 // POST /api/text — `<slot> <utf8…>`, one line (Gitea #485)
                 "/api/text" => Some(json_response(api_text_post(&text(&raw)).await)),
                 // POST /api/scenes/<id>            — replace that scene
@@ -2665,6 +2724,10 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
             } else if let Some(id) = route.strip_prefix("/api/patterns/") {
                 crate::playlist::preflight_mark_dirty();
                 Some(json_response(crate::patterns::delete(id).await))
+            } else if let Some(id) = route.strip_prefix("/api/sprites/") {
+                // A scene layer still naming it just draws nothing from the
+                // next frame on — same as a deleted pattern (Gitea #740).
+                Some(json_response(crate::sprites::delete(id).await))
             } else {
                 None
             };
@@ -2948,6 +3011,22 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 "/api/layout" => Some(json_response(crate::layout::to_json())),
                 "/api/playlist" => Some(chunked_response(crate::playlist::to_json())),
                 "/api/scenes" => Some(scenes_reply(crate::scenes::to_json())),
+                // GET /api/sprites → the store's listing + `max_bytes`
+                "/api/sprites" => Some(chunked_response(crate::sprites::list_json())),
+                // GET /api/sprites/<id> → the raw LXSP record as
+                // octet-stream; a missing id answers 200 +
+                // {"ok":false,…} like /api/scenes/<id>.
+                r if r.starts_with("/api/sprites/") => {
+                    let id = &r["/api/sprites/".len()..];
+                    Some(match crate::sprites::record_len(id) {
+                        Some(len) => Reply::ok(ApiBody::Sprite(SpriteRecord {
+                            id: String::from(id),
+                            len,
+                        }))
+                        .cors(),
+                        None => json_response(crate::sprites::no_such()),
+                    })
+                }
                 "/api/text" => Some(json_response(api_text_json())),
                 // GET /api/scenes/<id> → the scene object; missing id
                 // returns 200 + {"ok":false,…} like /api/patterns/<id>.

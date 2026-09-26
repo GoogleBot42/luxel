@@ -1394,18 +1394,37 @@ pub extern "C" fn lx_kinds(h: i32) -> i32 {
 // A compositor owns its layer stack and its clocks; the ENGINES it draws are
 // ordinary handles, bound per layer. Pattern layers are stepped through
 // `Engine::frame`, exactly as `lx_frame` does (frame-rate cap and time
-// scaling included). A SPRITE layer is bound to an engine too, but only its
-// program's data arrays are read — it is never stepped.
+// scaling included). A SPRITE layer holds no engine at all since Gitea
+// #740: it holds an `LXSP` RECORD, pushed in per layer with
+// `lx_comp_sprite`, and the compositor reads its texels straight out of
+// those bytes.
+//
+// The C ABI this section adds:
+//
+// ```text
+// lx_comp_new(w: u32, h: u32) -> i32                        // handle, or -1
+// lx_comp_free(ch: i32)
+// lx_comp_set(ch, ptr, len) -> i32                          // scene wire; -1 + reason
+// lx_comp_bind(ch, layer: u32, engine_handle: i32)           // PATTERN layers only
+// lx_comp_sprite(ch, layer: u32, ptr, len) -> i32            // LXSP record; len 0 clears
+// lx_comp_text(ch, layer: u32, ptr, len)
+// lx_comp_layer_count(ch) -> u32
+// lx_comp_frame(ch, delta_raw: i32) -> *const u8             // w·h·3, or null
+// ```
 
-use luxel_core::compose::{sprite_view, Compositor, SceneDriver, SceneHost, SpriteView};
+use luxel_core::compose::{Compositor, SceneDriver, SceneHost, SpriteView};
 use luxel_core::outpipe::GridMap;
 use luxel_core::scene::Scene;
 
 struct CompSlot {
     comp: Compositor,
     scene: Scene,
-    /// Engine handle per layer; -1 = unbound.
+    /// Engine handle per layer; -1 = unbound. PATTERN layers only.
     bind: Vec<i32>,
+    /// The `LXSP` record a SPRITE layer draws, per layer (`None` = nothing
+    /// bound). Sized by `lx_comp_set` alongside `bind`; pushed in by
+    /// `lx_comp_sprite`, which is the only writer.
+    sprites: Vec<Option<Vec<u8>>>,
     px: Vec<[u8; 3]>,
     out: Vec<u8>,
     /// The SHARED full-frame driver (Gitea #732) — the same walk the device
@@ -1424,18 +1443,11 @@ struct CompSlot {
 /// clock).
 struct WasmHost<'a> {
     bind: &'a [i32],
+    sprites: &'a [Option<Vec<u8>>],
     engines: std::sync::MutexGuard<'a, Vec<Option<EngineSlot>>>,
 }
 
 impl WasmHost<'_> {
-    fn slot(&self, layer: usize) -> Option<&EngineSlot> {
-        let h = *self.bind.get(layer)?;
-        if h < 0 {
-            return None;
-        }
-        self.engines.get(h as usize)?.as_ref()
-    }
-
     fn slot_mut(&mut self, layer: usize) -> Option<&mut EngineSlot> {
         let h = *self.bind.get(layer)?;
         if h < 0 {
@@ -1452,8 +1464,8 @@ impl SceneHost for WasmHost<'_> {
     }
 
     fn sprite(&mut self, layer: usize) -> Option<SpriteView<'_>> {
-        let s = self.slot(layer)?;
-        sprite_view(&s.engine, &s.src)
+        // validated once by `lx_comp_sprite`; per frame only the shape
+        SpriteView::parse_trusted(self.sprites.get(layer)?.as_deref()?)
     }
 }
 
@@ -1480,6 +1492,7 @@ pub extern "C" fn lx_comp_new(w: u32, h: u32) -> i32 {
         comp: Compositor::new(grid),
         scene: Scene::default(),
         bind: Vec::new(),
+        sprites: Vec::new(),
         px: Vec::new(),
         out: Vec::new(),
         driver: SceneDriver::new(),
@@ -1509,7 +1522,9 @@ pub extern "C" fn lx_comp_free(ch: i32) {
 
 /// Install a scene from its wire block (`docs/spec/scenes.md`). Returns 0,
 /// or -1 with the parse error — `scene: line N: …`, the same string the
-/// device's API returns — in the response buffer. Bindings are cleared.
+/// device's API returns — in the response buffer. Engine bindings AND
+/// sprite records are cleared, and both tables are sized to the new
+/// layer count.
 ///
 /// # Safety
 /// `ptr`/`len` per `str_arg`.
@@ -1520,6 +1535,7 @@ pub unsafe extern "C" fn lx_comp_set(ch: i32, ptr: *const u8, len: usize) -> i32
         Ok(scene) => with_comp(ch, |c| {
             c.comp.set_scene(&scene);
             c.bind = vec![-1; scene.layers.len()];
+            c.sprites = vec![None; scene.layers.len()];
             c.scene = scene;
             0
         })
@@ -1531,8 +1547,10 @@ pub unsafe extern "C" fn lx_comp_set(ch: i32, ptr: *const u8, len: usize) -> i32
     }
 }
 
-/// Bind an engine handle to a layer — a pattern layer's renderer, or the
-/// pattern a sprite layer's pixels live in. `-1` unbinds.
+/// Bind an engine handle to a PATTERN layer's renderer. `-1` unbinds.
+///
+/// Sprite layers have no engine since Gitea #740 — they take a record
+/// through [`lx_comp_sprite`], and binding an engine to one does nothing.
 #[no_mangle]
 pub extern "C" fn lx_comp_bind(ch: i32, layer: u32, engine_handle: i32) {
     with_comp(ch, |c| {
@@ -1540,6 +1558,48 @@ pub extern "C" fn lx_comp_bind(ch: i32, layer: u32, engine_handle: i32) {
             *b = engine_handle;
         }
     });
+}
+
+/// Give a SPRITE layer its `LXSP` record (Gitea #740). The bytes are COPIED
+/// into the compositor slot, so the caller may free its buffer immediately.
+///
+/// `len == 0` clears the layer (it then draws nothing). Returns 0 on
+/// success and -1 with the reason from `luxel_core::sprite::check` — the
+/// same `sprite: …` sentence `POST /api/sprites` answers with — in the
+/// response buffer. A bad record leaves whatever the layer already had.
+///
+/// # Safety
+/// `ptr` must be valid for `len` bytes (or `len` must be 0).
+#[no_mangle]
+pub unsafe extern "C" fn lx_comp_sprite(ch: i32, layer: u32, ptr: *const u8, len: usize) -> i32 {
+    if len == 0 {
+        return with_comp(ch, |c| {
+            if let Some(s) = c.sprites.get_mut(layer as usize) {
+                *s = None;
+            }
+            0
+        })
+        .unwrap_or(-1);
+    }
+    if ptr.is_null() {
+        set_response(String::from("sprite: record is too short"));
+        return -1;
+    }
+    let bytes = std::slice::from_raw_parts(ptr, len);
+    if let Err(why) = luxel_core::sprite::check(bytes) {
+        set_response(String::from(why));
+        return -1;
+    }
+    with_comp(ch, |c| match c.sprites.get_mut(layer as usize) {
+        Some(s) => {
+            *s = Some(bytes.to_vec());
+            0
+        }
+        // A layer index past the stack is not a record error, so it gets no
+        // `sprite: …` sentence — just the -1 a bad handle gets.
+        None => -1,
+    })
+    .unwrap_or(-1)
 }
 
 /// Set a text layer's resolved string. Clock and slot sources are the
@@ -1574,9 +1634,10 @@ pub extern "C" fn lx_comp_frame(ch: i32, delta_raw: i32) -> *const u8 {
         return std::ptr::null();
     };
     let n = c.comp.grid().len();
-    let CompSlot { comp, bind, px, out, driver, .. } = c;
+    let CompSlot { comp, bind, sprites, px, out, driver, .. } = c;
     let mut host = WasmHost {
         bind: bind.as_slice(),
+        sprites: sprites.as_slice(),
         engines: ENGINES.lock().unwrap(),
     };
     // The whole walk — buffer sizing, the remainder-carrying millisecond

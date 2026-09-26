@@ -62,6 +62,42 @@ pub const fn record_len(name_len: usize, colors: usize, w: usize, h: usize, fram
     SPRITE_HDR + name_len + 3 * colors + w * h * frames
 }
 
+/// The geometry a record's FIXED HEADER carries: everything
+/// `GET /api/sprites` lists about a sprite except its name and its byte
+/// length, and readable from the first [`SPRITE_HDR`] bytes alone — so a
+/// store can answer the list route without touching a single payload
+/// (Gitea #740).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct SpriteHead {
+    pub w: u8,
+    pub h: u8,
+    pub frames: u8,
+    pub fps: u8,
+    pub colors: u8,
+}
+
+impl SpriteHead {
+    /// Read the fixed header out of a record's first [`SPRITE_HDR`] bytes.
+    /// The magic and the version are verified; the length and index checks
+    /// [`check`] makes need the WHOLE record and are not made here, so this
+    /// is a reader for records the store already accepted.
+    pub fn parse(bytes: &[u8]) -> Option<SpriteHead> {
+        if bytes.len() < SPRITE_HDR
+            || bytes[..4] != SPRITE_MAGIC
+            || bytes[O_VER] != SPRITE_VERSION
+        {
+            return None;
+        }
+        Some(SpriteHead {
+            w: bytes[O_W],
+            h: bytes[O_H],
+            frames: bytes[O_FRAMES],
+            fps: bytes[O_FPS],
+            colors: bytes[O_COLORS],
+        })
+    }
+}
+
 /// A validated view over a sprite record's bytes — everything
 /// `compose::blit_sprite` needs, borrowed in place (on the device: the
 /// memory-mapped store).
@@ -81,6 +117,20 @@ impl<'a> SpriteView<'a> {
     /// [`check`] says what.
     pub fn parse(bytes: &'a [u8]) -> Option<SpriteView<'a>> {
         check(bytes).ok()?;
+        Self::view(bytes)
+    }
+
+    /// [`parse`](Self::parse) minus the O(n) index scan — for a record the
+    /// STORE already validated, read again on every frame (the device's
+    /// render task, the wasm compositor). Memory-safe either way: the
+    /// shape check keeps every slice in bounds and `texel` refuses an index
+    /// past the palette. Never use it on a wire body.
+    pub fn parse_trusted(bytes: &'a [u8]) -> Option<SpriteView<'a>> {
+        check_shape(bytes).ok()?;
+        Self::view(bytes)
+    }
+
+    fn view(bytes: &'a [u8]) -> Option<SpriteView<'a>> {
         let name_len = bytes[O_NAME_LEN] as usize;
         let colors = bytes[O_COLORS] as usize;
         let name = core::str::from_utf8(&bytes[SPRITE_HDR..SPRITE_HDR + name_len]).ok()?;
@@ -160,8 +210,26 @@ impl<'a> SpriteView<'a> {
 
 /// Why a record is bad, as the user-facing reason the routes answer with —
 /// every message starts `sprite: `. [`SpriteView::parse`] is the fast
-/// yes/no; this is the diagnosis.
+/// yes/no; this is the diagnosis. Two halves: [`check_shape`] (the header,
+/// the length and the name — O(1)) and the index scan (every texel byte
+/// against the palette — O(n)). A store runs both once on the way in; a
+/// renderer reading a record the store already accepted runs neither
+/// ([`SpriteView::parse_trusted`]).
 pub fn check(bytes: &[u8]) -> Result<(), &'static str> {
+    check_shape(bytes)?;
+    let colors = bytes[O_COLORS] as usize;
+    let idx_at = SPRITE_HDR + bytes[O_NAME_LEN] as usize + 3 * colors;
+    if bytes[idx_at..].iter().any(|&k| k as usize > colors) {
+        return Err("sprite: index out of palette");
+    }
+    Ok(())
+}
+
+/// The O(1) half of [`check`]: magic, version, cap, geometry, the exact
+/// length and the name. Enough to make every slice [`SpriteView`] takes
+/// in-bounds; NOT enough to promise every index names a palette entry
+/// (`texel` answers `None` for one that does not).
+pub fn check_shape(bytes: &[u8]) -> Result<(), &'static str> {
     if bytes.len() < SPRITE_HDR + 1 {
         return Err("sprite: record is too short");
     }
@@ -194,10 +262,6 @@ pub fn check(bytes: &[u8]) -> Result<(), &'static str> {
     }
     if core::str::from_utf8(&bytes[SPRITE_HDR..SPRITE_HDR + name_len]).is_err() {
         return Err("sprite: name is not utf-8");
-    }
-    let idx_at = SPRITE_HDR + name_len + 3 * colors;
-    if bytes[idx_at..].iter().any(|&k| k as usize > colors) {
-        return Err("sprite: index out of palette");
     }
     Ok(())
 }
@@ -332,6 +396,40 @@ mod tests {
         let ok = build("big", 64, 64, 3, 0, &[], &alloc::vec![0u8; 64 * 64 * 3]);
         assert!(ok.len() <= SPRITE_MAX_BYTES);
         assert_eq!(check(&ok), Ok(()));
+    }
+
+    #[test]
+    fn the_fixed_header_reads_without_the_payload() {
+        let rec = heart();
+        let h = SpriteHead::parse(&rec[..SPRITE_HDR]).expect("12 bytes is enough");
+        assert_eq!(h, SpriteHead { w: 3, h: 2, frames: 2, fps: 10, colors: 2 });
+        // …and agrees with the full view
+        let sp = SpriteView::parse(&rec).unwrap();
+        assert_eq!((h.w, h.h, h.frames, h.fps), (sp.w, sp.h, sp.frames, sp.fps));
+        assert_eq!(h.colors as usize, sp.colors());
+        // short, wrong magic and wrong version are all None
+        assert_eq!(SpriteHead::parse(&rec[..SPRITE_HDR - 1]), None);
+        let mut b = rec.clone();
+        b[0] = b'X';
+        assert_eq!(SpriteHead::parse(&b), None);
+        b[0] = b'L';
+        b[O_VER] = 2;
+        assert_eq!(SpriteHead::parse(&b), None);
+    }
+
+    #[test]
+    fn parse_trusted_skips_only_the_index_scan() {
+        let mut b = heart();
+        let last = b.len() - 1;
+        b[last] = 9; // out of the palette: `parse` refuses, `parse_trusted` draws nothing there
+        assert!(SpriteView::parse(&b).is_none());
+        let sp = SpriteView::parse_trusted(&b).expect("shape is fine");
+        assert_eq!(sp.texel(last - (SPRITE_HDR + 5 + 6)), None);
+        assert_eq!(sp.texel(0), Some([255, 0, 0]));
+        // a shape error is still refused
+        b.pop();
+        assert!(SpriteView::parse_trusted(&b).is_none());
+        assert_eq!(check_shape(&b), Err("sprite: length does not match its header"));
     }
 
     #[test]
