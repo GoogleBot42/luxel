@@ -148,6 +148,22 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
   CALLER: patlog's format tests passed throughout #379, which lived in
   `patterns.rs`. Replicate the caller in the host rig
   (`tools/patlog-check/src/store.rs` is the worked example).
+- **A shared harness is red or noisy on master more often than you'd think —
+  baseline it before attributing anything to your branch.** On 2026-09-26
+  `mockdiff` (all frames) read 61 deltas, `device-e2e` aborted at check 545 and
+  `serve-e2e` had 2 failures, all three on plain `origin/master` and none of
+  them the branch's. The cheap check is in the SAME worktree: `git stash push
+  -u`, rebuild, re-run the affected frames/checks, `git stash pop` — or
+  `git checkout origin/master` for a full second reading. Report the branch
+  number AND the baseline number; "61 deltas, identical to a stashed tree" is
+  evidence, "61 deltas" is an alarm. File master's reds as their own tickets
+  (#809, #810 — the precedent is #547) rather than fixing them in an unrelated
+  PR.
+- `cargo clippy -p <crate>` on a host crate currently dies in `luxel-core`
+  (#769, a denied `approx_constant`) before it ever lints your crate.
+  `RUSTFLAGS="-Aclippy::approx_constant" cargo clippy -p luxel-cli` gets past
+  it, so "workspace clippy is broken" is not a reason to skip linting your own
+  hunks (2026-09-26).
 - "Works on device" claims → `tools/hw-bench.mjs` soak (docs/tools.md). It runs
   ~2 h on the Athom; launch it detached (`setsid nohup … > log 2>&1 < /dev/null &`)
   — the Bash tool's background mode is killed at its 10-minute timeout cap

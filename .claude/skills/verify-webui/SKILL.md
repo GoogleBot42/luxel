@@ -30,7 +30,10 @@ and `node_modules`, and the harnesses below assume a real `npm run build` succee
    - `node tools/e2e.mjs [screenshot-dir]` — playground-only, no device. Starts its own
      `vite preview` on `E2E_PORT + 0` (default 4179). Covers the pattern library, editor,
      compile-error surfacing, tile spinners. Screenshots land in `screenshot-dir`
-     (default `/tmp`) as `e2e-N-*.png`.
+     (default `/tmp`) as `e2e-N-*.png`. **`mkdir -p` it first** — a
+     screenshot-dir that does not exist is not created, and the ENOENT kills the
+     run mid-way (device-e2e died ~200 checks in on 2026-09-26, reading like a
+     harness bug).
    - `node tools/device-e2e.mjs` — device-mode. Builds `luxel-cli`, starts `luxel serve`
      (the native mirror of the firmware API, on `E2E_PORT + 20`) as a stand-in device,
      then drives the playground on `E2E_PORT + 2` pointed at it via `?device=`.
