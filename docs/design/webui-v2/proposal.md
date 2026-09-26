@@ -34,9 +34,9 @@ this section is the index so a reader of the approved proposal is not misled by 
 | **A4** | **The `+ Add layer` chevron is gone and the layer-type marks are drawings.** | `+ Add layer ▾`, and `▤ ▦ ▭ T` as single glyphs. | `+ Add layer` (`aria-haspopup`/`aria-expanded` already said it); a travelling wave, a 2×2 pixel block and a filled swatch as inline SVG, drawn by one component the menu and the rows share. **`T` stays a letter** — Jeremy likes that one. | #736 items 21–23 |
 | **A5** | **The Save button carries its own state**, and the header's save-state span carries only what the button cannot. | A persistent `saved · on device` line beside a stateless `Save`. | `Save` → spinner → `Saved` for a second → a dirty-aware label; the span renders `preview only` (pattern editor) or `in browser` (playground scene) and the **full contract string moved to the `data-save-state` attribute** (`docs/web-architecture.md`). | #738, #742 item 42 |
 | **A6** | **A pattern layer has no Fit control**; Fit belongs to the sprite inspector. | §5.5 listed `box/fit` in the pattern inspector and S7b/S7g drew a Fit `<select>`. | `style.fit` is read in exactly ONE place in the codebase — `crates/luxel-core/src/compose.rs:532`, inside `blit_sprite` — so on a pattern layer the box merely CLIPS a full-layout render and `fit` does nothing (`docs/spec/scenes.md` already said "`fit` is otherwise ignored"). The row is a line saying what the box really is. The chooser moved to the sprite inspector with the two behaviours that exist, **Once** (`fill`) and **Tile** (`tile`); `contain` is a synonym for `fill` on every code path. Blend and Transparent became icon+description pickers. | #735 |
-| **A7** | **§5.5b's storage decision is REVERSED: a sprite is a first-class record, not a sprite-tagged pattern.** | "Storage = a sprite-tagged pattern in the existing pattern store… No new record type." | Its own store, id namespace and `/api/sprites` routes; its own **Sprites tab**, which the scene editor invokes; no `Engine` per sprite layer. Jeremy, 2026-09-24: *"It seems that Sprites are actually patterns? Interesting idea but I don't like it. It is confusing and may allow cheating and running more patterns than are allowed. Sprites should be a first class type. Make a new Sprite tab. That's where the sprite editor will be based out of (which the scene edit page can directly invoke)."* | #740 |
+| **A7** | **§5.5b's storage decision is REVERSED: a sprite is a first-class record, not a sprite-tagged pattern.** | "Storage = a sprite-tagged pattern in the existing pattern store… No new record type." | Its own store, id namespace and `/api/sprites` routes; its own **Sprites tab**, which the scene editor invokes; no `Engine` per sprite layer. **SHIPPED 2026-09-25** (`LXSP` record, docs/spec/scenes.md §4; the console migrates old sprite-tagged patterns once). Jeremy, 2026-09-24: *"It seems that Sprites are actually patterns? Interesting idea but I don't like it. It is confusing and may allow cheating and running more patterns than are allowed. Sprites should be a first class type. Make a new Sprite tab. That's where the sprite editor will be based out of (which the scene edit page can directly invoke)."* | #740 |
 | **A8** | The playground's **"Preview as" footer copy**. | "Every preview and tile on this page uses this layout. On a device it is the device's own." | "Every preview and tile on this playground will use this layout. When controlling a luxel device it is the device's layout." | #742 item 43 |
-| **A9** | **§5.5b's sprite *editor* is superseded, not amended.** | The tool row, recents, frames strip and 16-colour palette described in §5.5b. | #741 is a full redesign and has not happened; §5.5b's description is the shipped state, not the target. See §5.5b for the confirmed defects. | #741 |
+| **A9** | **§5.5b's sprite *editor* is superseded, not amended.** | The tool row, recents, frames strip and 16-colour palette described in §5.5b. | #741 is a full redesign, **shipped 2026-09-25** with #740: the editor lives in the Sprites tab (`pages/SpriteEditor.svelte`) — large labelled tools, one picker plus the colours in use (no recents), a real frame strip, undo, a 255-colour format cap enforced in one place, and sprite layers that MOVE like every other layer. §5.5b's description is history. | #741 |
 
 Not amendments, but filed against the same review and worth knowing while reading §5.5: the
 full-frame scene *driver* is written twice (`firmware/src/scenes.rs` and
@@ -125,9 +125,10 @@ Scene                ← matrix only. Ordered stack, bottom → top.
     text:    text (literal | clock | text slot n), font, color, align, scroll, speed
     sprite:  a FIRST-CLASS sprite record — own store, own ids, /api/sprites (REVERSED
              2026-09-24, A7: it was "a sprite-tagged PATTERN in the pattern store").
-             Palette ≤16 colours, w×h ≤ 64×64, frames ≥1; drawn with the cursor on the
-             scene preview; blitted natively by the compositor (no pattern-layer slot,
-             and after #740 no engine either); always black-keyed
+             `LXSP` record: palette ≤255 colours, w×h ≤ 64×64, frames 1..255, ≤16 KiB;
+             drawn in the Sprites tab's editor (which the scene inspector opens);
+             blitted natively by the compositor straight from the record (no
+             pattern-layer slot, no engine); transparency = palette index 0
     color:   solid color (a wash / a bar)
 
 Playlist             ← items are Pattern (+values) OR Scene; duration; crossfade
@@ -146,8 +147,8 @@ So the product rule is honest and simple: **a scene has up to 2 pattern layers a
 of text / image / color layers** (per-board; strips never see scenes). The UI states the cost
 where it bites — the `+ Add layer` menu at the cap — rather than on every scene at all times
 (amended 2026-09-24, A1 below; the always-on cost line and its meter are deleted). A sprite
-layer is "free" only of the *layer cap*: today it still holds a resident `Engine`, which is
-half of why #740 makes a sprite a first-class record.
+layer is free of the layer cap AND of an engine since #740 (2026-09-25): the compositor reads
+its record in place.
 
 ### Feature visibility by Layout kind
 
@@ -526,7 +527,7 @@ configurable. So:
 > free" claim (`docs/api.md`) is true only of the **layer cap**, never of heap or engines.
 > Sprites also appear in the Patterns library as if they were playable patterns.
 >
-> **The new direction (#740), in order:**
+> **The new direction (#740), in order — ALL SHIPPED 2026-09-25:**
 > 1. A first-class sprite record — its own store, its own id namespace, its own
 >    `/api/sprites` routes, following the fallible blob idiom `scenestore.rs` gained in #727.
 > 2. The compositor reads texels straight from the sprite record — **no `Engine` per sprite
@@ -537,8 +538,11 @@ configurable. So:
 > 4. Web: a **Sprites tab** beside Patterns and Scenes, a `stores/sprites.ts`, sprites out of
 >    the pattern library, and the scene editor's sprite layer picking from the sprite store.
 >
-> It is the largest single item in #729 — firmware, core, web and three docs — and lands on
-> its own, after the smaller scene fixes.
+> It is the largest single item in #729 — firmware, core, web and three docs — and landed on
+> its own, after the smaller scene fixes. The record is `LXSP` v1 (docs/spec/scenes.md §4),
+> stored as a kind-1 file in the pattern store's log; the migration is done by the console
+> (the device keeps its no-migration rule); the old tag stays readable in the console for one
+> release.
 
 > ### ⚠ SUPERSEDED 2026-09-24 — the sprite EDITOR is being redesigned (Gitea #741)
 >
@@ -551,9 +555,20 @@ configurable. So:
 > a slider is dragged; the **frames control does nothing** (frames clamp to 1..64, but no
 > frame strip exists anywhere and painting hard-codes frame 0); and the **16-colour cap** is
 > enforced only by disabling the swatch button, while `paletteWouldOverflow()` is never
-> called, so fill and the recent swatches can exceed it. The redesign has **not happened** —
-> this section is marked superseded rather than rewritten, and #741 owns the target. It
-> depends on #740 (the editor is based in the Sprites tab).
+> called, so fill and the recent swatches can exceed it.
+>
+> **The redesign SHIPPED 2026-09-25** (#741, with #740). The editor is a page of its own in
+> the Sprites tab (`pages/SpriteEditor.svelte`), opened from a tile, from a scene's sprite
+> inspector (`Edit ↗`, returning to the scene) or by `New…` there: four large labelled tools
+> (Pencil · Eraser · Fill · Pick, keys 1–4), ONE colour picker beside the colours **in use**
+> (a colour joins that strip only when it is painted — no recents), a big integer-zoomed
+> canvas on a checker ground, a frame strip (add / duplicate / delete / reorder, onion skin,
+> play at fps), size and fps fields, a byte budget against the 16 KiB record, undo/redo, and
+> "used in" the scenes that reference it. Sprite layers in the scene editor are moved with
+> the marquee like every other layer; the inspector picks a sprite from the store and owns
+> the box + fit. The colour cap is the FORMAT's 255, enforced in one place (item 14), and
+> "1:1 · never scaled" became a real option (item 29): natural size, or a box with
+> Stretch / Fit / Tile.
 
 - **Storage = a sprite-tagged pattern** in the existing pattern store: palette-indexed pixel
   array (≤16 colours) + `blit`, exactly what `library/bulk-sprite-scroll-2d.js` hand-writes.
@@ -571,8 +586,9 @@ configurable. So:
   **superseded by #741.**
 - Inspector: name · size · frames · palette · box (w/h mirror the sprite) · blend · opacity.
   Transparency is fixed (black key), shown as a line, not a select. — **superseded by #741**;
-  and since #735 the inspector also owns the **Fit** chooser (Once · Tile), which replaced the
-  dead line "1:1 · sprites are never scaled" (A6).
+  since #735 the inspector owned the **Fit** chooser (Once · Tile), which replaced the dead
+  line "1:1 · sprites are never scaled" (A6), and since #741 the box is editable and Fit is
+  Stretch · Fit · Tile over it (natural size when the box is unset).
 
 ### 5.6 Fonts (built-in only — no Settings section; the text layer's font picker is the UI)
 **Decision 2026-09-18:** user font upload is a possible future feature, filed and not planned.
@@ -777,15 +793,16 @@ image layers, animated images. Nothing in Phases A–C depends on it; the design
   coordinate source, not a kind.
 - **D2** **Scene + Layer**; layer kinds Pattern · Text · Sprite · Color (image-from-file: future).
   *Amended 2026-09-24 (A7):* a **sprite is its own record type** with its own store, routes and
-  tab — not a sprite-tagged pattern, which is what §5.5b decided and #740 reversed.
+  tab — not a sprite-tagged pattern, which is what §5.5b decided and #740 reversed (shipped
+  2026-09-25).
 - **D3** **One Patterns page** with a segmented source control (On device | Library; Library | Mine).
 - **D4** **Two pattern layers per board budget** (`caps.layers`); text/sprite/color unlimited;
   Add layer → Pattern disabled with its reason at the cap (the one deliberate exception).
   *Amended 2026-09-24 (A1):* the rule stands; what changed is where it is SAID. The reason is
   now "luxel devices only support N pattern layers; text and sprite and color layers are free",
   said only in that menu — the standing frame-cost line and its meter are deleted. *And (A7):*
-  "sprite unlimited" is a statement about the **layer cap** only; a sprite layer costs a
-  resident `Engine` today, which #740 removes.
+  "sprite unlimited" was a statement about the **layer cap** only until #740 removed the
+  resident `Engine` a sprite layer used to cost (2026-09-25); now it is true of heap too.
 - **D5** **Dynamic text via device text slots** (`POST /api/text`, HA text entity per slot,
   `textSlot(n)` handle); no string type.
 - **D6** **Inline values, no named presets** — a playlist item / scene layer owns its values and
