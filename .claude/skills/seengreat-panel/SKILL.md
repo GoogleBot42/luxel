@@ -136,8 +136,12 @@ Consequences:
   playlist resumes by itself). But a reader attached across it captured only
   ~2 KB of interleaved fragments, twice (2026-09-26) — so for "what did the
   panel boot with" read `GET /api/layout`'s `driver.live` block plus
-  `/api/status` `rescan_hz`/`pass`, not the boot log. Space reboots ≥ 60 s
-  apart (boot-guard arithmetic below).
+  `/api/status` `rescan_hz`/`pass`, not the boot log. Since PR #776 an API
+  reboot clears the boot-loop counter first, so back-to-back settings reboots
+  are safe; BEFORE it, two reboots inside the 60 s healthy window rolled the
+  Seengreat back to the other slot (Jeremy, 2026-09-26: 20 MHz → 40 MHz →
+  power cycle, and the previous firmware came back with the console's Panel
+  driver card silently read-only). Power cycles and panics still count.
 - **Never touch serial in the 60 s after an OTA reboot.** The new slot is in
   the bootloader's pending-verify window until the firmware's boot_ok; a reset
   inside it rolls the slot straight back (lost a good OTA that way on

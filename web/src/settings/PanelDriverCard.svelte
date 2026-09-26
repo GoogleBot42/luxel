@@ -10,21 +10,24 @@
   // `reboot_required` reply goes to the sticky reboot bar rather than to a
   // line of dim text (`noteRebootPending`, #538).
   //
-  // Firmware older than that reports no `driver` block, and the card is what
-  // it was: the build's constants, stated rather than offered, because a
-  // control that cannot move is worse than a sentence (§5.7). The decision
-  // between the two — and between live / reboot-to-apply / did-not-fit /
-  // output-off — is `lib/panelDriver.ts`, unit tested.
-  import { PANEL_DRIVER_DEFAULT } from "../lib/settingsCaps";
+  // Firmware older than that reports no `driver` block. The card used to draw
+  // this build's constants as a read-only plaque there; it does NOT any more
+  // (Gitea #771). The row is only mounted on a panel board (`caps.panel`), so
+  // a missing block means the console is newer than the firmware — and on
+  // 2026-09-26 that state was reached by an unwanted OTA ROLLBACK, where a
+  // plaque of plausible numbers made the settings look fixed instead of gone.
+  // It states the mismatch and points at Firmware & recovery.
+  //
+  // The decision between live / reboot-to-apply / did-not-fit / output-off is
+  // `lib/panelDriver.ts`, unit tested.
   import {
     BLANK_MAX,
     BLANK_MIN,
     chipLabel,
-    CLOCK_MAX_MHZ,
-    CLOCK_MIN_MHZ,
-    CLOCK_WARN_MHZ,
+    CLOCK_CEILING_MHZ,
     clampBlank,
-    clampClock,
+    clockChoices,
+    clockSupported,
     configuredDriver,
     driverWire,
     panelDriverState,
@@ -33,6 +36,7 @@
     panelRefreshHz,
     phrase,
     PLANE_CHOICES,
+    snapClock,
     type PanelDriverConfig,
   } from "../lib/panelDriver";
   import {
@@ -61,10 +65,20 @@
   $: estHz = geom
     ? panelRefreshHz(wire, { pw: geom.pw, ph: geom.ph, panels: geom.chain, scan: geom.scan })
     : 0;
-  $: clockWarn = cfg.clock_mhz > CLOCK_WARN_MHZ;
   /** The chips this firmware can init, in its own order — never a list here. */
   $: chips = driver?.chips ?? [];
+  /** Same for the pixel clock: a fixed dropdown over the device's own list
+   *  (#771), plus whatever it currently holds so a value an older firmware
+   *  accepted is visible rather than silently re-read. */
+  $: clocks = clockChoices(driver);
   $: fbKb = driver?.live ? (driver.live.fb_bytes / 1024).toFixed(1) : "";
+
+  /** The device's refusal, in the card, beside the control it is about.
+   *  The banner (`ErrorBar`) is still the prominent surface — Jeremy's rule
+   *  for an `/api/layout` reply — but a rejected `panel` line is about ONE
+   *  field, so its words belong here too (#771). Cleared by the next
+   *  successful write. */
+  let err = "";
 
   /** One POST per user action, the reply IS the new state — the LED layout
    *  form's rule (docs/api.md), and the same reboot-bar handling. */
@@ -72,9 +86,14 @@
     const next = { ...cfg, ...patch };
     const r = await applyLayout(panelLine(next));
     if (!r.ok) {
-      reportApiError(r.error, { scope: "layout", line: r.line });
+      // the banner's sentence AND the device's own words, here, next to the
+      // field — never the generic "report this bug" copy, which is what a
+      // rolled-back firmware's `unknown line` used to produce (#771)
+      const ex = reportApiError(r.error, { scope: "layout", line: r.line });
+      err = `${ex.text} The device said: ${ex.details}`;
       return;
     }
+    err = "";
     clearApiError();
     note("layout", "saved", 2500);
     if (r.reboot_required) noteRebootPending("the panel driver");
@@ -106,27 +125,25 @@
     <span class="flabel">Pixel clock</span>
     <div class="fctl">
       <div class="row g10">
-        <input
-          class="inp num"
+        <select
+          class="clocksel"
           data-role="panel-clock"
-          type="number"
-          min={CLOCK_MIN_MHZ}
-          max={CLOCK_MAX_MHZ}
-          value={cfg.clock_mhz}
-          on:change={(e) => void set({ clock_mhz: clampClock(Number(e.currentTarget.value)) })}
-        />
-        <span class="dim hint">MHz — the LCD_CAM clock the panel is shifted at</span>
+          value={String(cfg.clock_mhz)}
+          on:change={(e) =>
+            void set({ clock_mhz: snapClock(Number(e.currentTarget.value), driver) })}
+        >
+          {#each clocks as c}
+            <option value={String(c)}
+              >{c} MHz{clockSupported(driver, c) ? "" : " (not supported)"}</option
+            >
+          {/each}
+        </select>
+        <span class="dim hint">the LCD_CAM clock the panel is shifted at</span>
       </div>
-      {#if clockWarn}
-        <p class="warn hint under" data-role="panel-clock-warn">
-          {cfg.clock_mhz} MHz is above the FM6124 datasheet limit — 40 MHz produced a split panel on
-          the bench. Check the panel before leaving it here.
-        </p>
-      {:else}
-        <p class="dim hint under">
-          {CLOCK_WARN_MHZ} MHz is the FM6124 datasheet ceiling; the refresh scales with it.
-        </p>
-      {/if}
+      <p class="dim hint under">
+        {CLOCK_CEILING_MHZ} MHz is the FM6124 datasheet ceiling — lower is safer on other driver
+        chips, and the refresh scales with it.
+      </p>
     </div>
   </div>
 
@@ -193,42 +210,18 @@
       actually displayed: {$deviceOutFps} fps.
     {/if}
   </p>
+
+  {#if err}
+    <p class="warn hint" data-role="panel-error">{err}</p>
+  {/if}
 {:else}
-  <!-- firmware before the `panel` line: the build's constants, stated -->
-  <div class="field">
-    <span class="flabel">Pixel clock</span>
-    <div class="fctl row g10">
-      <span class="mono" data-role="panel-clock">{PANEL_DRIVER_DEFAULT.clockHz / 1e6} MHz</span>
-      <span class="dim hint">
-        the FM6124 datasheet ceiling with no margin; 40 MHz mis-samples the panel's two halves
-      </span>
-    </div>
-  </div>
-  <div class="field">
-    <span class="flabel">Bit planes</span>
-    <div class="fctl row g10">
-      <span class="mono" data-role="panel-planes">{PANEL_DRIVER_DEFAULT.planes}</span>
-      <span class="dim hint">
-        BCM bit depth — the refresh halves per extra plane and each one costs a framebuffer
-      </span>
-    </div>
-  </div>
-  <div class="field">
-    <span class="flabel">Rescan</span>
-    <div class="fctl row g10">
-      <span class="mono" data-role="panel-rescan">
-        {$deviceRescanHz > 0 ? `${$deviceRescanHz} Hz` : "—"}
-      </span>
-      <span class="dim hint">
-        measured on the device: how often the panel redraws itself. Frames the panel actually
-        displayed: {$deviceOutFps} fps.
-      </span>
-    </div>
-  </div>
-  <p class="dim hint" data-role="panel-state" data-state="unknown">
-    Both values are this firmware build's constants, not settings — the LED layout section's
-    estimated refresh is computed from them. A build that carries the panel settings (Gitea #525)
-    offers them here instead.
+  <!-- The row is mounted on `caps.panel` boards only, so no `driver` block
+       means the firmware is older than this console — say that, and offer
+       nothing. A read-only plaque of plausible numbers is how a silent OTA
+       rollback read as "the settings are fine" (Gitea #771). -->
+  <p class="warn hint" data-role="panel-state" data-state="unknown">
+    <strong>This console is newer than the firmware on the device</strong> (it reports no panel
+    driver). Push matching firmware — Settings › Firmware &amp; recovery.
   </p>
 {/if}
 
@@ -272,6 +265,16 @@
      chevron (`background-position: right 9px`) by hand, or the longest label
      runs under it. */
   .chipsel {
+    max-width: 100%;
+    padding-right: 26px;
+  }
+
+  /* the clock list is `30 MHz`-short unless the device holds a value it no
+     longer offers (`40 MHz (not supported)`), so it sizes to its widest option
+     off a w96 floor rather than sitting on the w-ladder — same chevron
+     clearance as `.chipsel` */
+  .clocksel {
+    min-width: 96px;
     max-width: 100%;
     padding-right: 26px;
   }

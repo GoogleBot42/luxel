@@ -4151,6 +4151,43 @@ try {
           ",",
         ) === "shiftreg,fm6126a,icn2038s,dp3246",
       );
+      // The pixel clock is a FIXED DROPDOWN over `driver.clocks` (Gitea #771),
+      // never a number field: 40 MHz is out of spec for every chip we know and
+      // the values in between are not all an even LCD_CAM divide. Same rule as
+      // the chips — the list is the device's, so this compares the two.
+      {
+        const offered = await hubPage.$$eval('[data-role="panel-clock"] option', (o) =>
+          o.map((e) => e.value),
+        );
+        const wire = (await (await fetch(`${HUB}/api/layout`)).json()).driver;
+        check(
+          "panel driver: the pixel clock is a select over the device's `clocks`",
+          (await hubPage.$eval('[data-role="panel-clock"]', (e) => e.tagName)) === "SELECT" &&
+            offered.join(",") === wire.clocks.join(","),
+          `${offered.join(",")} vs ${JSON.stringify(wire.clocks)}`,
+        );
+        check(
+          "panel driver: nothing above the FM6124 ceiling is offered at all",
+          offered.every((v) => Number(v) <= 30) && offered.includes("30"),
+          offered.join(","),
+        );
+        await hubPage.select('[data-role="panel-clock"]', "20");
+        await sleep(900);
+        const after = (await (await fetch(`${HUB}/api/layout`)).json()).driver;
+        check(
+          "panel driver: choosing 20 MHz posts `panel 7 20 shiftreg 1`",
+          after.clock_mhz === 20 &&
+            after.planes === 7 &&
+            after.chip === "shiftreg" &&
+            after.blank === 1,
+          JSON.stringify(after),
+        );
+        check(
+          "panel driver: a listed clock is never refused, so no error bar",
+          (await hubPage.$('[data-role="api-error-bar"]')) === null &&
+            (await hubPage.$('[data-role="panel-error"]')) === null,
+        );
+      }
       // What the card says is the host's `driver.live` reading, never a
       // guess: `null` is "panel output is off", `fallback` is "it did not
       // fit", a mismatch is "reboot to apply", and only an exact match is
@@ -4187,12 +4224,12 @@ try {
       const drv = (await (await fetch(`${HUB}/api/layout`)).json()).driver;
       check(
         "panel driver: one field writes the whole `panel` line",
-        drv.planes === 6 && drv.clock_mhz === 30 && drv.chip === "shiftreg" && drv.blank === 1,
+        drv.planes === 6 && drv.clock_mhz === 20 && drv.chip === "shiftreg" && drv.blank === 1,
         JSON.stringify(drv),
       );
       check(
         "panel driver: the collapsed row states the configured values",
-        /^30 MHz · 6 planes/.test(
+        /^20 MHz · 6 planes/.test(
           await hubPage.$eval('[data-role="adv-panel-status"]', (e) => e.textContent.trim()),
         ),
         await hubPage.$eval('[data-role="adv-panel-status"]', (e) => e.textContent.trim()),

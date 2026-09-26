@@ -197,6 +197,50 @@ const TABLE: Entry[] = [
       "The console sent two shape lines at once. This is a bug in the app, not something " +
       "you did — please report it.",
   },
+  // ---- the `panel` line (Gitea #401/#525, the list #771) ----
+  //
+  // The card's clock is a `<select>` over the device's own `driver.clocks`, so
+  // a refusal here means the two disagree about the list — a version skew, not
+  // a typo. Say what the device takes (its message names the whole list) and
+  // point at the field.
+  {
+    match: /^panel: clock_mhz must be/,
+    field: "panel-clock",
+    text: (c) => {
+      const list = /one of (\S+)/.exec(c.raw ?? "")?.[1]?.split("|").join(", ");
+      return list
+        ? `This device only takes these pixel clocks: ${list} MHz. Pick one of those — ` +
+          "the list the console offered is from a different firmware."
+        : "The device refused that pixel clock. Pick one of the values it offers.";
+    },
+  },
+  { match: /^panel: planes must be/, field: "panel-planes", text: () =>
+      "The device takes 4 to 8 bit planes. Pick one of the values it offers." },
+  { match: /^panel: blank must be/, field: "panel-blank", text: () =>
+      "Latch blanking is 0 to 8 clocks on this device." },
+  { match: /^panel: chip must be/, field: "panel-chip", text: () =>
+      "This firmware does not know that driver chip. The list in the card is the " +
+      "device's own (`driver.chips`), so this means the two disagree — push matching firmware." },
+  {
+    // The rolled-back-firmware case, and the one that must NEVER read as an
+    // app bug (#771): a device whose grammar has no `panel` verb answers
+    // `unknown line (want strip|matrix|map|out|proj…)`, and the want-list is
+    // the device telling us exactly which verbs it has.
+    match: /^unknown line \(want /,
+    text: (c) => {
+      const want = (/\(want ([^)]*)\)/.exec(c.raw ?? "")?.[1] ?? "").split("|");
+      const missing = ["panel", "proj", "out"].filter((v) => !want.includes(v));
+      if (missing.length > 0)
+        return (
+          "This device's firmware is older than this console — its LED layout grammar has no " +
+          `\`${missing[0]}\` line. Push matching firmware: Settings › Firmware & recovery.`
+        );
+      return (
+        "The device did not understand what the console sent. This is a bug in the app, " +
+        "not something you did — please report it."
+      );
+    },
+  },
   {
     match: /^(unknown line|expected|expected one of)/,
     text: () =>

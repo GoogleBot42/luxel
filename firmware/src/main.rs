@@ -2363,11 +2363,28 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
 
 /// Waits for the OTA handler's signal, gives the TCP stack a moment to
 /// flush the response, then resets into the freshly activated slot.
+///
+/// **A deliberate reboot is not a failed boot** (Gitea #771). Every
+/// API-triggered reboot goes through this one signal — `/api/ota`,
+/// `/api/apmode`, `/api/reboot`, `/api/wifi` and `/api/datapin` all write
+/// their response and then `REBOOT.signal(())` — so [`ota::boot_ok`] belongs
+/// here: reaching this point means an HTTP handler asked for the reboot, i.e.
+/// this image booted, brought up WiFi and served a request. Without it
+/// [`ota::preboot_guard`]'s counter only cleared at the 60 s mark, and two
+/// quick config reboots inside that minute looked exactly like a crash loop:
+/// on 2026-09-26 Jeremy changed the pixel clock twice in under a minute and
+/// the third boot ROLLED THE DEVICE BACK to the previous firmware, silently.
+/// It cannot whitewash a genuinely bad image — an image that cannot serve
+/// never gets here — and it is idempotent (the 60 s call may have run
+/// already; both just write 0 and re-assert `OtaImageState::Valid`).
 #[embassy_executor::task]
 async fn reboot_task() -> ! {
     REBOOT.wait().await;
     println!("rebooting into new firmware…");
+    // the response first: the flash write below takes the cross-core fence,
+    // and the handler is already waiting on nothing but the wire
     Timer::after(Duration::from_millis(400)).await;
+    ota::boot_ok(); // this reboot was ASKED for — don't count it against the guard
     esp_hal::system::software_reset()
 }
 

@@ -236,9 +236,13 @@ pub struct PanelDriver {
     /// BCM bitplanes, 4..=8. Fewer is a faster rescan and a coarser ramp:
     /// one rescan shifts the whole chain `2^planes - 1` times.
     pub planes: u8,
-    /// LCD_CAM pixel clock in MHz, 2..=40. 40 does not survive an FM6124
-    /// panel (the bench table in `firmware/src/hub75.rs`); the firmware
-    /// takes the number anyway and lets the UI warn.
+    /// LCD_CAM pixel clock in MHz — one of [`PanelDriver::CLOCKS`], not a
+    /// free number (Gitea #771). Two reasons, both found the hard way: 40 MHz
+    /// is out of spec for every driver chip we know and mis-samples an FM6124
+    /// panel (the bench table in `firmware/src/hub75.rs`), and a rate that is
+    /// not an exact integer divide of an LCD_CAM clock source is synthesised
+    /// by esp-hal's FRACTIONAL divider, which dithers the period rather than
+    /// producing an even clock.
     pub clock_mhz: u8,
     pub chip: Chip,
     /// Clocks at the START of every row block, and again just before the
@@ -255,8 +259,37 @@ impl Default for PanelDriver {
 }
 
 impl PanelDriver {
+    /// The pixel clocks a panel board offers, ascending — what
+    /// `GET /api/layout` reports as `driver.clocks` so a UI never hard-codes
+    /// the list, and the only values [`parse`] accepts on a `panel` line
+    /// (Gitea #771).
+    ///
+    /// Derived from the hardware, not chosen for roundness. esp-hal's i8080
+    /// driver doubles the requested rate (the S3 errata puts the LCD_PCLK
+    /// divider at ≥ 2) and then divides an LCD_CAM source down, so the real
+    /// pixel clock is `source / (2 · N)`; the sources on an S3 are XTAL
+    /// (40 MHz) and PLL_D2 (PLL 480 / 2 = 240 MHz, and the S3's PLL is 480 at
+    /// every `CpuClock`). The rates with an exact INTEGER `N` are therefore
+    /// 120/N and 20/N MHz: 30, 24, 20, 15, 12, 10, 8, 6, 5, 4, 3, 2. Anything
+    /// else — 16 and 25 MHz included — comes out of esp-hal's fractional
+    /// divider, which dithers the clock period instead of dividing evenly.
+    ///
+    /// The list is that set capped at 30 (the FM6124 datasheet ceiling; 40 MHz
+    /// visibly split the bench panel) and floored at 8, below which a 7-plane
+    /// 64×64 rescan falls under ~31 Hz and flickers.
+    pub const CLOCKS: [u8; 7] = [8, 10, 12, 15, 20, 24, 30];
+
+    /// The `clock_mhz` error message, spelled out so a UI that has not read
+    /// `driver.clocks` still tells the user the whole list.
+    const CLOCKS_MSG: &'static str = "panel: clock_mhz must be one of 8|10|12|15|20|24|30";
+
     pub const fn clock_hz(&self) -> u32 {
         self.clock_mhz as u32 * 1_000_000
+    }
+
+    /// Whether `mhz` is one of [`PanelDriver::CLOCKS`].
+    pub fn clock_supported(mhz: u8) -> bool {
+        PanelDriver::CLOCKS.contains(&mhz)
     }
 
     /// Clocks the latch is held HIGH at the end of a row block — 1 for a
@@ -846,8 +879,12 @@ fn parse_driver<'a>(it: &mut impl Iterator<Item = &'a str>) -> Result<PanelDrive
         return Err("panel: planes must be 4..8");
     }
     let clock_mhz = it.next().and_then(num).ok_or(USAGE)?;
-    if !(2..=40).contains(&clock_mhz) {
-        return Err("panel: clock_mhz must be 2..40");
+    // A FIXED LIST, not a range (Gitea #771): Jeremy set 40 MHz "to see what
+    // happens" on 2026-09-26 and got a mis-sampling panel, and the values in
+    // between are not all reachable with an even clock anyway — see
+    // [`PanelDriver::CLOCKS`].
+    if u8::try_from(clock_mhz).map(PanelDriver::clock_supported) != Ok(true) {
+        return Err(PanelDriver::CLOCKS_MSG);
     }
     let chip = Chip::parse(it.next().ok_or(USAGE)?)
         .ok_or("panel: chip must be shiftreg|fm6126a|icn2038s|dp3246")?;
@@ -1117,11 +1154,11 @@ impl Layout {
     }
 }
 
-/// The `driver` block (#525): the CONFIGURED driver, the chip list so a UI
-/// never hard-codes it, and what the firmware actually booted — `null` there
-/// when the panel output is off entirely. Only a host with a panel driver
-/// emits it, so a strip board's body is byte-identical to one built before
-/// this existed.
+/// The `driver` block (#525): the CONFIGURED driver, the chip and pixel-clock
+/// lists so a UI never hard-codes either, and what the firmware actually
+/// booted — `null` there when the panel output is off entirely. Only a host
+/// with a panel driver emits it, so a strip board's body is byte-identical to
+/// one built before this existed.
 #[cfg(feature = "panel")]
 fn push_driver_json(out: &mut String, d: &PanelDriver, p: &PanelView) {
     push_piece(out, ",\"driver\":{");
@@ -1131,6 +1168,15 @@ fn push_driver_json(out: &mut String, d: &PanelDriver, p: &PanelView) {
         push_piece(out, if i > 0 { ",\"" } else { "\"" });
         push_piece(out, c.as_str());
         push_piece(out, "\"");
+    }
+    // The clock is a fixed dropdown, not a number field (#771) — the list
+    // rides beside `chips` for the same reason: the device decides it.
+    push_piece(out, "],\"clocks\":[");
+    for (i, c) in PanelDriver::CLOCKS.iter().enumerate() {
+        if i > 0 {
+            push_piece(out, ",");
+        }
+        push_u32(out, *c as u32);
     }
     push_piece(out, "],\"live\":");
     match &p.driver_live {
@@ -1693,9 +1739,9 @@ mod tests {
         let load = Limits { strict: false, ..panel_limits() };
         assert_eq!(parse(&wire, &panel_cur(), 4096, &load).unwrap().layout, e.layout);
         // only the DP3246 holds the latch longer than one clock
-        let e = parse("panel 8 40 dp3246 8", &cur, 4096, &panel_limits()).unwrap();
+        let e = parse("panel 8 30 dp3246 8", &cur, 4096, &panel_limits()).unwrap();
         assert_eq!(e.layout.driver.latch_clocks(), 3);
-        assert_eq!(e.layout.driver.clock_hz(), 40_000_000);
+        assert_eq!(e.layout.driver.clock_hz(), 30_000_000);
         // a strip Layout has no panel, so its stored form carries no line
         assert!(!strip_layout().to_wire(60, &proto_name).contains("panel"));
     }
@@ -1720,11 +1766,18 @@ mod tests {
     #[test]
     fn a_bad_panel_line_names_the_field_it_rejected() {
         let cur = panel_cur();
-        let cases: [(&str, &str); 9] = [
+        let cases: [(&str, &str); 12] = [
             ("panel 3 30 shiftreg 1", "planes"),
             ("panel 9 30 shiftreg 1", "planes"),
             ("panel 7 1 shiftreg 1", "clock_mhz"),
             ("panel 7 41 shiftreg 1", "clock_mhz"),
+            // the clock is a LIST, so a value inside the old 2..40 range but
+            // not on it is refused too — 40 was Jeremy's, 16 and 25 are the
+            // ones esp-hal can only reach through its fractional divider
+            // (Gitea #771)
+            ("panel 7 40 shiftreg 1", "clock_mhz"),
+            ("panel 7 16 shiftreg 1", "clock_mhz"),
+            ("panel 7 25 shiftreg 1", "clock_mhz"),
             ("panel 7 30 fm6124 1", "chip"),
             ("panel 7 30 shiftreg 9", "blank"),
             ("panel 7 30 shiftreg", "expected"),
@@ -1739,9 +1792,41 @@ mod tests {
         // at most one per body, like the kind line
         let two = "panel 7 30 shiftreg 1\npanel 6 30 shiftreg 1";
         assert_eq!(parse(two, &cur, 4096, &panel_limits()).unwrap_err().line, 2);
-        // and both ends of every range ARE legal
-        for body in ["panel 4 2 shiftreg 0", "panel 8 40 dp3246 8"] {
+        // the refusal names the whole list, so a client that never read
+        // `driver.clocks` still shows the user their options
+        let e = parse("panel 7 40 shiftreg 1", &cur, 4096, &panel_limits()).unwrap_err();
+        assert_eq!(e.msg, "panel: clock_mhz must be one of 8|10|12|15|20|24|30");
+        // both ends of every other range ARE legal, and so is every listed clock
+        for body in ["panel 4 8 shiftreg 0", "panel 8 30 dp3246 8"] {
             assert!(parse(body, &cur, 4096, &panel_limits()).is_ok(), "body {body:?}");
+        }
+        for mhz in PanelDriver::CLOCKS {
+            let body = alloc::format!("panel 7 {mhz} shiftreg 1");
+            assert!(parse(&body, &cur, 4096, &panel_limits()).is_ok(), "body {body:?}");
+        }
+    }
+
+    /// The offered clocks are the ones esp-hal can reach with an INTEGER
+    /// divider off an S3 LCD_CAM source — `source / (2 * N)` for XTAL (40 MHz)
+    /// or PLL_D2 (240 MHz), since the i8080 driver doubles the request (Gitea
+    /// #771). Ascending, 30 at the top, 8 at the bottom.
+    #[test]
+    fn every_offered_clock_is_an_exact_integer_divide() {
+        let list = PanelDriver::CLOCKS;
+        assert!(list.windows(2).all(|w| w[0] < w[1]), "ascending: {list:?}");
+        assert_eq!(*list.last().unwrap(), 30, "the FM6124 datasheet ceiling");
+        assert_eq!(list[0], 8, "below this a 7-plane 64x64 rescan flickers");
+        assert_eq!(PanelDriver::default().clock_mhz, 30);
+        assert!(PanelDriver::clock_supported(PanelDriver::default().clock_mhz));
+        for mhz in list {
+            // source MHz == clock MHz * 2 (esp-hal doubles the request) * N
+            let hit = [40u32, 240]
+                .iter()
+                .any(|src| (2..=256).any(|n: u32| *src == u32::from(mhz) * 2 * n));
+            assert!(hit, "{mhz} MHz is not an exact integer divide of 40 or 240 MHz");
+        }
+        for bad in [16u8, 25, 40, 0, 1, 2, 3, 4, 5, 6] {
+            assert!(!PanelDriver::clock_supported(bad), "{bad} MHz must not be offered");
         }
     }
 
@@ -1763,7 +1848,7 @@ mod tests {
             .unwrap()
             .reboot_required);
         // and a driver written down on a STRIP Layout rebuilds nothing either
-        let e = parse("panel 4 2 dp3246 8", &strip_layout(), 60, &strip_limits()).unwrap();
+        let e = parse("panel 4 8 dp3246 8", &strip_layout(), 60, &strip_limits()).unwrap();
         assert!(!e.reboot_required, "a strip has no panel to rebuild");
     }
 
@@ -1852,7 +1937,8 @@ mod tests {
         assert!(
             s.contains(
                 "\"driver\":{\"planes\":6,\"clock_mhz\":20,\"chip\":\"fm6126a\",\"blank\":2,\
-                 \"chips\":[\"shiftreg\",\"fm6126a\",\"icn2038s\",\"dp3246\"],\"live\":null}"
+                 \"chips\":[\"shiftreg\",\"fm6126a\",\"icn2038s\",\"dp3246\"],\
+                 \"clocks\":[8,10,12,15,20,24,30],\"live\":null}"
             ),
             "{s}"
         );

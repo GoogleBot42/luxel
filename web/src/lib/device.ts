@@ -241,6 +241,11 @@ export interface PanelDriverWire {
    *  THIS, never from a hard-coded list, so a build that grows a chip needs
    *  no browser change. */
   chips: string[];
+  /** The pixel clocks this firmware ACCEPTS, MHz, ascending — the only values
+   *  a `panel` line may carry (Gitea #771). Same rule as `chips`: the device
+   *  owns the list. Absent on a firmware built before #771, where
+   *  `CLOCK_CHOICES_DEFAULT` stands in. */
+  clocks?: number[];
   live: LiveDriverWire | null;
 }
 

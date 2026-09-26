@@ -66,12 +66,61 @@ test("a strip over the ceiling gets the same ceiling sentence from `pixels`", ()
 });
 
 test("the line number rides in details, never in the sentence", () => {
-  const ex = explainApiError("unknown line (want strip|matrix|map|out|proj1d|proj2d|proj3d)", {
-    scope: "layout",
-    line: 3,
-  });
+  const ex = explainApiError("expected: strip [pixels]", { scope: "layout", line: 3 });
   assert.match(ex.text, /bug in the app/);
   assert.match(ex.details, /\(line 3\)$/);
+});
+
+// ---- the `panel` line, and the firmware skew it exposes (Gitea #771) ------
+//
+// The card's clock is a `<select>` over the DEVICE's `driver.clocks`, so a
+// refusal is a version disagreement. None of these may read as an app bug:
+// that copy is what Jeremy got after an unwanted OTA rollback, on a layout POST
+// the old firmware could not parse at all.
+
+test("a refused pixel clock names the list the device takes", () => {
+  const ex = explainApiError("panel: clock_mhz must be one of 8|10|12|15|20|24|30", {
+    scope: "layout",
+    line: 1,
+  });
+  assert.equal(ex.field, "panel-clock");
+  assert.match(ex.text, /8, 10, 12, 15, 20, 24, 30 MHz/);
+  assert.doesNotMatch(ex.text, /bug in the app/);
+  assert.match(ex.details, /^panel: clock_mhz must be one of/);
+});
+
+test("the other three `panel` fields each point at their own control", () => {
+  const at = (raw) => explainApiError(raw, { scope: "layout" });
+  assert.equal(at("panel: planes must be 4..8").field, "panel-planes");
+  assert.equal(at("panel: blank must be 0..8").field, "panel-blank");
+  assert.equal(
+    at("panel: chip must be shiftreg|fm6126a|icn2038s|dp3246").field,
+    "panel-chip",
+  );
+  for (const raw of [
+    "panel: planes must be 4..8",
+    "panel: blank must be 0..8",
+    "panel: chip must be shiftreg|fm6126a|icn2038s|dp3246",
+  ])
+    assert.doesNotMatch(at(raw).text, /bug in the app/, raw);
+});
+
+test("a device whose grammar has no `panel` verb is OLD FIRMWARE, not an app bug", () => {
+  // what a pre-#525 firmware answers when the card POSTs a `panel` line
+  const ex = explainApiError("unknown line (want strip|matrix|map|out|proj1d|proj2d|proj3d)", {
+    scope: "layout",
+    line: 1,
+  });
+  assert.doesNotMatch(ex.text, /bug in the app/);
+  assert.match(ex.text, /older than this console/);
+  assert.match(ex.text, /Firmware & recovery/);
+  assert.match(ex.text, /`panel`/, "it names the line the device is missing");
+  // …while a device that HAS every verb and still says this is our bug
+  const ours = explainApiError(
+    "unknown line (want strip|matrix|map|panel|out|proj|proj1d|proj2d|proj3d)",
+    { scope: "layout" },
+  );
+  assert.match(ours.text, /bug in the app/);
 });
 
 test("every layout grammar error the engine can raise has a sentence", () => {
@@ -91,7 +140,12 @@ test("every layout grammar error the engine can raise has a sentence", () => {
     "this board has no configurable strip output",
     "this board is a matrix: strip is not a Layout it can take",
     "two outputs cannot share a data pin",
-    "unknown line (want strip|matrix|map|out|proj1d|proj2d|proj3d)",
+    "unknown line (want strip|matrix|map|panel|out|proj|proj1d|proj2d|proj3d)",
+    "panel: planes must be 4..8",
+    "panel: clock_mhz must be one of 8|10|12|15|20|24|30",
+    "panel: chip must be shiftreg|fm6126a|icn2038s|dp3246",
+    "panel: blank must be 0..8",
+    "expected: panel <planes> <clock_mhz> <shiftreg|fm6126a|icn2038s|dp3246> <blank>",
   ];
   for (const raw of raws) {
     const ex = explainApiError(raw, { scope: "layout", maxPixels: 4096 });

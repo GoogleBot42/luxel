@@ -17,11 +17,11 @@ import {
   BLANK_MAX,
   chipLabel,
   chipShort,
-  CLOCK_MAX_MHZ,
-  CLOCK_MIN_MHZ,
-  CLOCK_WARN_MHZ,
+  CLOCK_CEILING_MHZ,
+  CLOCK_CHOICES_DEFAULT,
   clampBlank,
-  clampClock,
+  clockChoices,
+  clockSupported,
   configuredDriver,
   driverWire,
   effectiveScan,
@@ -35,6 +35,7 @@ import {
   phrase,
   PLANE_CHOICES,
   refreshDriver,
+  snapClock,
 } from "../src/lib/panelDriver.ts";
 
 /** One 64×64 panel at 1/32 scan — the Seengreat bench panel. */
@@ -73,21 +74,29 @@ const wire = (driver, matrix = MATRIX) => ({
 });
 
 /** The block as the firmware reports it, configured values overridden. */
+const CLOCKS = [8, 10, 12, 15, 20, 24, 30];
+
 const block = (over = {}, live = LIVE) => ({
   planes: 7,
   clock_mhz: 30,
   chip: "shiftreg",
   blank: 1,
   chips: CHIPS,
+  clocks: CLOCKS,
   live,
   ...over,
 });
 
-// ---- the legacy path: firmware with no `panel` line at all ----------------
+// ---- the mismatch path: firmware with no `panel` line at all --------------
+//
+// The card no longer draws a read-only plaque here (Gitea #771) — the row is
+// caps-gated to panel boards, so no `driver` block means the console is newer
+// than the firmware and the card says exactly that. What still needs a default
+// is the refresh ESTIMATE, which is all `PANEL_DRIVER_DEFAULT` is for now.
 
-test("no driver block: the card falls back to this build's constants", () => {
+test("no driver block: the ESTIMATE falls back to this build's constants", () => {
   const w = wire(undefined);
-  assert.equal(driverWire(w), null, "the card stays read-only on this reading");
+  assert.equal(driverWire(w), null, "the card states a firmware mismatch on this reading");
   assert.deepEqual(configuredDriver(w), PANEL_DRIVER_LINE_DEFAULT);
   assert.deepEqual(configuredDriver(null), PANEL_DRIVER_LINE_DEFAULT);
   // and the fallback IS the firmware's constants, not a second copy of them
@@ -119,15 +128,62 @@ test("every edit is one `panel` line, in wire order", () => {
 });
 
 test("the form cannot post a clock or a blanking the firmware would refuse", () => {
-  assert.equal(clampClock(0), CLOCK_MIN_MHZ);
-  assert.equal(clampClock(99), CLOCK_MAX_MHZ);
-  assert.equal(clampClock(20.4), 20);
-  assert.equal(clampClock(Number.NaN), CLOCK_MIN_MHZ);
   assert.equal(clampBlank(-3), 0);
   assert.equal(clampBlank(12), BLANK_MAX);
   assert.equal(clampBlank(2), 2);
   assert.deepEqual([...PLANE_CHOICES], [4, 5, 6, 7, 8]);
-  assert.ok(CLOCK_WARN_MHZ < CLOCK_MAX_MHZ, "there has to be a range to warn about");
+});
+
+// ---- the pixel clock is a LIST, not a number field (Gitea #771) -----------
+//
+// Jeremy set 40 MHz "to see what happens" and got a mis-sampling panel; the
+// values in between are not all reachable with an even LCD_CAM divide anyway.
+// So the control is a `<select>` over the device's own `driver.clocks`, and
+// nothing in the browser decides the list.
+
+test("the offered clocks are the DEVICE's, and this build's only as a fallback", () => {
+  assert.deepEqual([...CLOCK_CHOICES_DEFAULT], [8, 10, 12, 15, 20, 24, 30]);
+  assert.equal(CLOCK_CEILING_MHZ, 30, "the FM6124 datasheet ceiling tops the list");
+  assert.equal(CLOCK_CHOICES_DEFAULT[CLOCK_CHOICES_DEFAULT.length - 1], CLOCK_CEILING_MHZ);
+  // a firmware that names its own list — even a different one — wins outright
+  const newer = block({ clocks: [10, 20, 40], clock_mhz: 20 });
+  assert.deepEqual(clockChoices(newer), [10, 20, 40]);
+  assert.ok(clockSupported(newer, 40), "the device says it takes it");
+  // #525-era firmware reports a driver block with no `clocks` at all
+  const older = { ...block(), clocks: undefined };
+  assert.deepEqual(clockChoices(older), [8, 10, 12, 15, 20, 24, 30]);
+  // no device at all: the built-in list, so the select is never empty
+  assert.deepEqual(clockChoices(null), [8, 10, 12, 15, 20, 24, 30]);
+});
+
+test("a stored clock the device no longer offers is still SHOWN, ascending", () => {
+  // exactly Jeremy's device after the rollback: 40 MHz stored, 40 not offered
+  const stuck = block({ clock_mhz: 40 });
+  assert.deepEqual(clockChoices(stuck), [8, 10, 12, 15, 20, 24, 30, 40]);
+  assert.equal(clockSupported(stuck, 40), false, "the card marks it unsupported");
+  assert.equal(clockSupported(stuck, 30), true);
+  // and a value that IS on the list is not duplicated
+  assert.deepEqual(clockChoices(block({ clock_mhz: 20 })), [8, 10, 12, 15, 20, 24, 30]);
+});
+
+test("a typed or stale clock snaps to the nearest OFFERED value", () => {
+  const d = block();
+  assert.equal(snapClock(40, d), 30, "over the ceiling comes back to it");
+  assert.equal(snapClock(2, d), 8, "under the floor comes up to it");
+  assert.equal(snapClock(16, d), 15, "ties go to the lower, safer clock");
+  assert.equal(snapClock(25, d), 24);
+  assert.equal(snapClock(20, d), 20);
+  assert.equal(snapClock(Number.NaN, d), 30, "nothing typed leaves the default");
+  // it snaps into the DEVICE's list, not the browser's — 12 and 15 are on
+  // this build's list and not on that device's
+  const newer = block({ clocks: [10, 20, 40] });
+  assert.equal(snapClock(12, newer), 10);
+  assert.equal(snapClock(15, newer), 10, "a tie takes the lower, safer clock");
+  assert.equal(snapClock(35, newer), 40);
+  assert.equal(snapClock(9, null), 8);
+  // whatever it returns is a value the device accepts
+  for (const want of [0, 1, 7, 9, 11, 13, 17, 26, 31, 99])
+    assert.ok(clockSupported(d, snapClock(want, d)), `${want} snapped off the list`);
 });
 
 // ---- live vs configured --------------------------------------------------
@@ -237,8 +293,10 @@ test("the collapsed row says when the two readings cannot agree", () => {
     panelStatusLine(off, 0, panelDriverState(driverWire(off), panelGeometryOf(off))),
     /output off$/,
   );
-  // legacy firmware: the old line exactly, no verdict appended
-  assert.equal(panelStatusLine(wire(undefined), 115), "30 MHz · 7 planes · 115 Hz");
+  // no driver block: the row states the MISMATCH, never this build's constants
+  // dressed up as the device's (#771)
+  assert.equal(panelStatusLine(wire(undefined), 115), "115 Hz · firmware too old");
+  assert.equal(panelStatusLine(wire(undefined), 0), "firmware too old");
 });
 
 // ---- the estimate the card shows beside the measurement ------------------

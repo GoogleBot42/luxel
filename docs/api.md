@@ -1080,7 +1080,7 @@ panel <planes> <clock_mhz> <chip> <blank>
 | field | range | default | meaning |
 |---|---|---|---|
 | `planes` | 4..8 | 7 | BCM bitplanes. Fewer is a faster rescan and a coarser ramp — one rescan shifts the whole chain `2^planes − 1` times. |
-| `clock_mhz` | 2..40 | 30 | The LCD_CAM pixel clock. **40 does not survive an FM6124 panel** (the bench table in `firmware/src/hub75.rs`); the device stores what you send and the UI warns above 30. |
+| `clock_mhz` | one of **8 · 10 · 12 · 15 · 20 · 24 · 30** | 30 | The LCD_CAM pixel clock — a fixed list, not a range (Gitea #771). Anything else is refused with `panel: clock_mhz must be one of 8\|10\|12\|15\|20\|24\|30`. Offer it as a dropdown over `driver.clocks`, never a number field. |
 | `chip` | `shiftreg` · `fm6126a` · `icn2038s` · `dp3246` | `shiftreg` | The driver chip's init, bit-banged before the DMA starts. `shiftreg` covers FM6124, SM16208, ICN2037 and every other plain shift register — no init at all. `fm6126a` and `icn2038s` share a two-register init; `dp3246` has its own, and holds the latch for the last **3** clocks of every row instead of 1. |
 | `blank` | 0..8 | 1 | Clocks at the start of every row block, and again just before the latch word, where OE is off. `1` is the stock template; raising it trades a little brightness for less ghosting between address rows. |
 
@@ -1090,16 +1090,18 @@ panel driver**, like `est_hz` and `drive`:
 ```json
 "driver":{"planes":7,"clock_mhz":30,"chip":"shiftreg","blank":1,
           "chips":["shiftreg","fm6126a","icn2038s","dp3246"],
+          "clocks":[8,10,12,15,20,24,30],
           "live":{"planes":7,"clock_mhz":30,"chip":"shiftreg","blank":1,
                   "w":64,"h":64,"scan":32,"fb_bytes":28672,"fallback":false}}
 ```
 
-The four top-level values are the **configured** (stored) driver; `chips` is
-the set a client should offer, so nobody hard-codes the list; `live` is what
-the running firmware actually booted the DMA with:
+The four top-level values are the **configured** (stored) driver; `chips` and
+`clocks` are the sets a client should offer, so nobody hard-codes either;
+`live` is what the running firmware actually booted the DMA with:
 
 | field | meaning |
 |---|---|
+| `clocks` | the pixel clocks this firmware ACCEPTS, MHz, ascending (#771). A client renders a dropdown over exactly this; a `clock_mhz` outside it is refused. Absent on a #525-era build, where 8/10/12/15/20/24/30 is the list to assume |
 | `live.planes` `clock_mhz` `chip` `blank` | the RUNNING driver's own four, read back from the DMA setup rather than from the store |
 | `live.w` / `live.h` | the framebuffer's chain extent in pixels — `w` = `pw` × chain length, `h` = `ph` |
 | `live.scan` | address rows the driver scans |
@@ -1111,6 +1113,19 @@ the running firmware actually booted the DMA with:
 `clock_mhz` `chip` `blank` differing from its `live` twin, or `matrix`
 `pw`/`ph`/chain/`scan` differing from `live.w`/`live.h`/`live.scan`, means a
 reboot is pending — the same answer the POST already gave.
+
+**Why the clock is a list.** esp-hal's i8080 driver doubles the requested rate
+(the S3 errata puts the LCD_PCLK divider at ≥ 2) and then divides an LCD_CAM
+source down, so the real pixel clock is `source / (2 · N)` off XTAL (40 MHz) or
+PLL_D2 (240 MHz). The rates with an exact integer `N` are 120/N and 20/N MHz;
+everything else — 16 and 25 MHz included — is synthesised by esp-hal's
+fractional divider, which dithers the clock period rather than dividing evenly,
+and 13/17/39 MHz silently come out at **10 MHz** (`calculate_clkm` scores its
+candidate sources with a numerator/denominator swap and takes the XTAL
+"too fast" fallback). The list is that integer set capped at 30 — the FM6124
+datasheet ceiling, above which the bench panel's two halves mis-sampled — and
+floored at 8, below which a 7-plane 64×64 rescan drops under ~31 Hz and
+flickers.
 
 **`panel` MERGES.** It is the one line a body may leave out without resetting
 anything: no `panel` line keeps the stored driver, exactly so a Settings page
@@ -1127,7 +1142,7 @@ Blank lines and `#` comments are ignored; line order is free; **at most one**
 strip <pixels>
 matrix <pw> <ph> <cols> <rows> <tl|tr|bl|br> <row|col> <snake 0|1> <rot180 0|1> [<scan>]
 map [grid <w> <h> | <dims> <raw16.16…>]
-panel <planes> <clock_mhz> <shiftreg|fm6126a|icn2038s|dp3246> <blank>
+panel <planes> <8|10|12|15|20|24|30> <shiftreg|fm6126a|icn2038s|dp3246> <blank>
 out <n> <pin> <sk9822|ws2812> <rgb|rbg|grb|gbr|brg|bgr> <count> [rev]
 out none
 proj1d|proj2d|proj3d <index|x|y|z|xy|xz|yz>

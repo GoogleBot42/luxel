@@ -187,6 +187,40 @@ to write into — requires ONE serial flash of the merged image:
 A device on an *older Luxel* table needs no serial at all: it rewrites its
 own table on the first boot of the migrating release ("Layout migration").
 
+### The boot-loop guard, and what counts as a failed boot
+
+`ota::preboot_guard` runs before the heap allocators (so a pre-heap panic can
+still be caught) and keeps one counter in the `LXBG` guard record: it is
+incremented on every boot and cleared by `ota::boot_ok`. **Two consecutive
+boots that never reach `boot_ok` roll the device back to the other OTA slot**
+and reset. That is the only automatic recovery a device with no serial has,
+and `tools/qemu/heap-regions-test.py --mode rollback` is its regression test.
+
+What clears the counter:
+
+| where | when |
+|---|---|
+| `main.rs`'s 60-second heartbeat | the first `Timer::after(60 s)` tick of the main loop — the image booted, joined WiFi and has been serving for a minute |
+| `reboot_task` (`main.rs`) | **a reboot somebody asked for.** Every API-triggered reboot writes its response and then signals `crate::REBOOT` — `/api/ota`, `/api/apmode`, `/api/reboot`, `/api/wifi`, `/api/datapin` — so arriving here proves the firmware served a request; the guard must not count it (Gitea #771) |
+| `ota::clear_boot_attempts` | around the layout migration's own reboots (see "Layout migration") |
+
+The `reboot_task` entry is the fix for a real incident: on 2026-09-26 Jeremy
+changed the HUB75 pixel clock twice inside one minute — two `POST /api/layout`
+edits, each followed by a reboot to apply — then power-cycled the board. None
+of the three boots lived 60 seconds, so the counter reached its threshold and
+the device **rolled back to the previous firmware**, which reported no `driver`
+block at all; the console's Panel driver card silently became a read-only
+plaque and the settings merely looked "fixed". Two safeguards, not one: the
+counter is cleared for a requested reboot (here), and the console now states a
+firmware/console mismatch instead of degrading quietly (docs/web-architecture.md).
+
+`boot_ok` is idempotent and cheap enough to call twice — it writes 0 into the
+guard record and re-asserts `OtaImageState::Valid` — and it cannot whitewash a
+bad image, because an image that cannot serve an HTTP request never reaches
+either call site. In `reboot_task` it runs *after* the 400 ms response-flush
+delay: the write takes the cross-core flash fence, and nothing should sit in
+front of the reply.
+
 ### The firmware and the console it serves are ONE release
 
 An app image and the web bundle in the assets partition are built from the
