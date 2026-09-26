@@ -37,6 +37,7 @@
   } from "../stores/device";
   import { layout as geomLayout, layoutLabel } from "../stores/geometry";
   import { luxel } from "../stores/pattern";
+  import { previewStyle, previewStyleLabel } from "../stores/prefs";
   import ClockCard from "../settings/ClockCard.svelte";
   import DeviceCard from "../settings/DeviceCard.svelte";
   import Disclosure from "../settings/Disclosure.svelte";
@@ -45,6 +46,7 @@
   import MqttCard from "../settings/MqttCard.svelte";
   import NetworkInputCard from "../settings/NetworkInputCard.svelte";
   import OutputCard from "../settings/OutputCard.svelte";
+  import PreviewAppearanceCard from "../settings/PreviewAppearanceCard.svelte";
   import ProjectionBlock from "../settings/ProjectionBlock.svelte";
   import Section from "../settings/Section.svelte";
   import StorageCard from "../settings/StorageCard.svelte";
@@ -178,6 +180,10 @@
     return `${n} pattern${n === 1 ? "" : "s"}${bytes}${arena ? ` · PSRAM ${arena}` : ""}`;
   })();
 
+  /** A browser preference, so its status line is simply what this browser
+   *  draws with (Gitea #786). */
+  $: previewLine = previewStyleLabel($previewStyle);
+
   $: firmwareLine = [
     $deviceVersion ? `v${$deviceVersion}` : "version unknown",
     vis.ota ? "Update…" : null,
@@ -274,6 +280,12 @@
 
       <Disclosure title="Firmware &amp; recovery" status={firmwareLine} role="adv-firmware">
         <FirmwareCard />
+      </Disclosure>
+
+      <!-- LAST on purpose: a new row inserted higher up moves every row below
+           it, and the approved S3 frames measure those boxes. -->
+      <Disclosure title="Preview appearance" status={previewLine} role="adv-preview">
+        <PreviewAppearanceCard />
       </Disclosure>
     </div>
   </div>

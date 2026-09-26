@@ -3,6 +3,7 @@
 // Layout choice — all in localStorage. This UI is the prototype for the
 // device's pattern CRUD — keep the shapes simple and serializable.
 
+import { parsePreviewStyle, type PreviewStyle } from "./draw";
 import { parsePreviewAs, type PreviewAs } from "./geometry";
 import { isTaggedSpriteSource } from "./sprite";
 
@@ -16,6 +17,7 @@ const LIB_KEY = "luxel.patterns";
 const CUR_KEY = "luxel.current";
 const PREVIEW_AS_KEY = "luxel.previewAs";
 const MAP_SRC_KEY = "luxel.mapSrc";
+const PREVIEW_STYLE_KEY = "luxel.previewStyle";
 
 function read<T>(key: string): T | null {
   try {
@@ -124,6 +126,17 @@ export function loadPreviewAs(): PreviewAs | null {
 
 export function savePreviewAs(choice: PreviewAs): void {
   write(PREVIEW_AS_KEY, choice);
+}
+
+/** How the 2D preview is drawn — squares or the LED-panel look (Gitea #786).
+ *  A display preference, so it lives per BROWSER like the clock's zone name
+ *  and never touches the device. */
+export function loadPreviewStyle(): PreviewStyle | null {
+  return parsePreviewStyle(read<unknown>(PREVIEW_STYLE_KEY));
+}
+
+export function savePreviewStyle(style: PreviewStyle): void {
+  write(PREVIEW_STYLE_KEY, style);
 }
 
 /** The map program's source (A10, #471). It is geometry, not a pattern, so it
