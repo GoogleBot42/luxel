@@ -1,5 +1,85 @@
 # Update log
 
+## 2026-09-26 — the pixel clock is a list, a requested reboot is not a crash, and a rollback says so (#771)
+
+Three fixes from one bench session on the Seengreat panel, an hour after the
+runtime panel settings below merged. Jeremy set the pixel clock to 40 MHz "to
+see what happens", changed it again within the minute, then power-cycled — and
+came back to a device running the *previous* firmware with a Panel driver card
+that looked fine and was not.
+
+**1. The clock is a fixed dropdown, not a number.** It shipped as the range
+2..40 with an amber warning above 30. 40 MHz is out of spec for every driver
+chip we know — the FM6124 datasheet's FCLK max is 30, and 40 visibly split the
+bench panel's two halves — and a warning is not a guard. `PanelDriver::CLOCKS`
+is now **8, 10, 12, 15, 20, 24, 30 MHz**, `/api/layout` reports it as
+`driver.clocks` beside `chips`, the parser refuses anything else
+(`panel: clock_mhz must be one of 8|10|12|15|20|24|30`) and the card renders a
+`<select>` over the device's own list.
+
+Those seven values are the hardware's, not a taste: esp-hal's i8080 driver
+doubles the requested rate (the S3 errata puts the LCD_PCLK divider at ≥ 2) and
+then divides an LCD_CAM source, so the pixel clock is `source / (2 · N)` off
+XTAL (40 MHz) or PLL_D2 (PLL 480 / 2 = 240 MHz — the S3's PLL is 480 at every
+`CpuClock` preset). Integer `N` gives 120/N and 20/N MHz: 30, 24, 20, 15, 12,
+10, 8, 6, 5, 4, 3, 2. **16 and 25 MHz are not in that set** — they come out of
+esp-hal's *fractional* divider, which dithers the clock period instead of
+dividing evenly — and 13, 17 and 39 MHz are worse than approximate: they
+silently clock at **10 MHz**, because `calculate_clkm` scores its candidate
+sources through a `calculate_output_frequency` that binds the fraction's
+numerator and denominator the wrong way round and so prefers the XTAL "source
+too fast" fallback (`div_num = 1`) to a correct PLL_D2 divider. The list is that
+integer set capped at 30 and floored at 8, below which a 7-plane 64×64 rescan
+falls under ~31 Hz and flickers. A device still holding a value the list does
+not carry (his 40) shows it marked `(not supported)` rather than being re-read
+as something else.
+
+**2. A reboot somebody asked for is not a failed boot.** `ota::preboot_guard`
+rolls back to the other OTA slot after two consecutive boots that never reach
+`ota::boot_ok`, and `boot_ok` only ran at the 60-second mark of the main loop.
+Two panel edits inside a minute — each a `POST /api/layout` followed by a
+reboot to apply — plus a power cycle therefore read as a crash loop, and the
+guard did exactly what it is for on an image that was perfectly healthy.
+`reboot_task` now calls `boot_ok()` right before `software_reset()`. Every
+API-triggered reboot goes through that one `REBOOT` signal (`/api/ota`,
+`/api/apmode`, `/api/reboot`, `/api/wifi`, `/api/datapin`, each after its
+response is on the wire), so arriving there proves the image booted, joined
+WiFi and served a request; it cannot whitewash a bad image, and it is
+idempotent with the 60 s call. It runs *after* the 400 ms response-flush delay,
+because the write takes the cross-core flash fence.
+
+**3. A console newer than the firmware says so.** On the rolled-back firmware
+the card's `panel` POST came back `unknown line (want strip|matrix|map|out|…)`,
+which `lib/apiErrors.ts` translated to *"this is a bug in the app — please
+report it"*; and because that firmware reports no `driver` block at all, the
+card fell back to a read-only plaque of `PANEL_DRIVER_DEFAULT` — plausible
+numbers, no controls, no explanation, so the settings merely looked fixed. Both
+are gone. The plaque is replaced by *"This console is newer than the firmware on
+the device (it reports no panel driver). Push matching firmware — Settings ›
+Firmware & recovery."*, `apiErrors` reads the device's own want-list and says
+the firmware is older when a verb it needs is missing, every `panel:` field
+error gets its own sentence and `data-role`, and a refused `panel` line is shown
+inline in the card (`[data-role="panel-error"]`) as well as in the banner.
+
+`PANEL_DRIVER_DEFAULT` survives only as the refresh estimate's fallback.
+
+**Where.** `crates/luxel-core/src/layout.rs` (`PanelDriver::CLOCKS`,
+`clock_supported`, the parser, the `clocks` JSON), `firmware/src/main.rs`
+(`reboot_task`), `firmware/src/hub75.rs` (the `clock_rate` doc table now names
+the list and why 40 is absent), `web/src/lib/panelDriver.ts`
+(`CLOCK_CHOICES_DEFAULT`, `clockChoices`, `clockSupported`, `snapClock`),
+`web/src/lib/apiErrors.ts`, `web/src/lib/device.ts`,
+`web/src/settings/PanelDriverCard.svelte`, plus docs/api.md, docs/boards.md,
+docs/firmware.md ("The boot-loop guard, and what counts as a failed boot"),
+docs/web-architecture.md and docs/UNTESTED.md. Tests: `luxel-core` 316,
+`web` 235, `node tools/e2e.mjs` and `node tools/device-e2e.mjs` green; the
+`panel` driver e2e section now asserts the clock is a select over
+`driver.clocks` and that choosing 20 posts `panel 7 20 shiftreg 1`.
+
+**Not verified on metal.** Nothing here has been near the panel — the on-metal
+list is still Gitea #765, and the rollback the guard fix prevents cannot be
+reproduced off-device.
+
 ## 2026-09-26 — HUB75 settings become runtime: one image drives any panel (#401, #525)
 
 Every HUB75 parameter that was a `const` in `firmware/src/hub75.rs` is now a

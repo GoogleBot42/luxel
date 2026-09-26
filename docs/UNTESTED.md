@@ -80,14 +80,16 @@ value while collapsed. Everything below is on the new page.
   CONFIGURED (Advanced › Panel driver), so it follows that form; a
   disagreement with the measurement means the firmware and the panel
   disagree, not the browser.
-- [ ] **Advanced › Panel driver on the Seengreat** (Gitea #401/#525) — the
-  row is a FORM now: bit planes, pixel clock, driver chip, latch blanking.
-  Set the clock to **20 MHz** and reboot (the row says "reboot to apply"
-  until you do, and the card names what is still running): `rescan_hz`
-  should come back at **~77 Hz**, and the estimate beside it should already
-  have said so. Then, if the SM16208 panel ghosts, set **latch blanking 2**
-  and reboot — the ghosting should go. Above 30 MHz the clock field warns;
-  40 MHz split the panel on the bench, so do not leave it there.
+- [ ] **Advanced › Panel driver on the Seengreat** (Gitea #401/#525/#771) —
+  the row is a FORM now: bit planes, pixel clock, driver chip, latch blanking.
+  The pixel clock is a **dropdown of 8/10/12/15/20/24/30 MHz**, not a number
+  field (#771 — 40 MHz is no longer reachable at all, and nothing above 30 is
+  offered). Pick **20 MHz** and reboot (the row says "reboot to apply" until
+  you do, and the card names what is still running): `rescan_hz` should come
+  back at **~77 Hz**, and the estimate beside it should already have said so.
+  Then, if the SM16208 panel ghosts, set **latch blanking 2** and reboot — the
+  ghosting should go. Two reboots inside a minute should now be harmless:
+  before #771 that tripped the boot-loop guard and rolled the firmware back.
 - [ ] **Firmware & recovery → Update…** — pick a `luxel.bin` for that board
   and let it flash itself over the network. **Never run against hardware**
   (the mirror advertises no OTA, so no harness can reach this path) —

@@ -1427,6 +1427,7 @@ to say which one is on the panel:
 ```json
 "driver": { "planes": 7, "clock_mhz": 30, "chip": "shiftreg", "blank": 1,
             "chips": ["shiftreg","fm6126a","icn2038s","dp3246"],
+            "clocks": [8,10,12,15,20,24,30],
             "live": { …, "w": 64, "h": 64, "scan": 32, "fb_bytes": 28672, "fallback": false } }
 ```
 
@@ -1440,13 +1441,37 @@ states are exactly the ones a healthy bench panel never shows:
 | `pending` | any of the four, or pw/ph/chain/scan, differ | **Reboot to apply**, naming what is still running and what waits |
 | `fallback` | `live.fallback` | the configured driver did not fit in internal RAM; the board default is running — lower the bit planes or the panel size, a reboot alone will not fix it |
 | `disabled` | `live` is `null` | panel output is off: no framebuffer came up at all |
-| `unknown` | no `driver` block | firmware before the `panel` line — the card states `PANEL_DRIVER_DEFAULT` read-only, which is the ONLY thing that constant is for now |
+| `unknown` | no `driver` block | the row is caps-gated to panel boards, so this is a **console newer than the firmware**: the card says exactly that and offers nothing (#771). `PANEL_DRIVER_DEFAULT` survives only as the refresh ESTIMATE's fallback |
 
 The collapsed Advanced row carries the same verdict (`30 MHz · 7 planes ·
-114 Hz · reboot to apply`), because a row nobody opens is the only place that
-fact would otherwise not appear. The chip `<select>` is built from
-`driver.chips`, never from a list in the browser, so a firmware that learns a
-new chip needs no web change.
+114 Hz · reboot to apply`, and `115 Hz · firmware too old` in the `unknown`
+state — never this build's constants dressed up as the device's), because a row
+nobody opens is the only place that fact would otherwise not appear. The chip `<select>` is built from
+`driver.chips` and the pixel-clock `<select>` from `driver.clocks`, never from
+a list in the browser, so a firmware that learns a new chip or offers a new
+clock needs no web change.
+
+**The pixel clock is a dropdown, and `unknown` is a stated mismatch** — both
+Gitea #771, and both the same incident. 40 MHz was reachable as a typed number
+with an amber warning beside it; Jeremy typed it and the panel mis-sampled, so
+the clock is now a fixed list (`clockChoices()` / `snapClock()` in
+`lib/panelDriver.ts`, the device's `driver.clocks` with this build's
+8/10/12/15/20/24/30 only as a fallback). A stored value the device no longer
+offers is still shown, marked `(not supported)`, so a rollback cannot read as a
+different setting. And the `unknown` branch used to draw a read-only plaque of
+`PANEL_DRIVER_DEFAULT` — which is how that rollback looked "fixed": plausible
+numbers, no controls, no explanation. It now reads *"This console is newer than
+the firmware on the device (it reports no panel driver). Push matching firmware
+— Settings › Firmware & recovery."*
+
+A refused `panel` line surfaces twice: in `ErrorBar` as always (Jeremy's rule —
+an `/api/layout` reply is a banner, never a line at the foot of a form) and, in
+this card only, inline beside the fields as `[data-role="panel-error"]`, because
+the whole line is about one control. What it must NEVER be is the table's
+"this is a bug in the app — please report it" copy: a firmware with no `panel`
+verb answers `unknown line (want strip|matrix|map|out|…)`, and
+`lib/apiErrors.ts` now reads that want-list and says the firmware is older than
+the console instead.
 
 ### A 3D lattice, and why it takes two POSTs
 

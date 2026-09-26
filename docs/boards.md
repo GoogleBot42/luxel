@@ -2841,8 +2841,9 @@ was right, and the rate is exactly linear in the clock:
 
 Measured on the bench 64x64 FM6124EJ panel at 7 bitplanes, two
 `/api/status` samples 20 s apart. Since #525 the clock is the `panel` line's
-`clock_mhz` **setting** (2..40, default 30) rather than a const, so read this
-table as what one FM6124EJ panel does, not as what every panel does — see
+`clock_mhz` **setting** rather than a const — one of 8/10/12/15/20/24/30 MHz
+since #771, which is why the 40 MHz row is no longer reachable at all — so read
+this table as what one FM6124EJ panel does, not as what every panel does; see
 "Panel driver settings" below.
 
 **Why 30 MHz.** The FM6124 datasheet (v1.1) puts FCLK at max 30 MHz, and its
@@ -3011,7 +3012,7 @@ Jeremy's new 64×64 tiles are not the FM6124EJ the firmware was tuned for.
 |---|---|---|---|---|
 | `pw` `ph` `cols` `rows` `scan` | `matrix` line | — | 64 64 1 1 (scan `ph/2`) | the arrangement, which now **sizes the framebuffer** |
 | `planes` | `panel` line | 4..8 | **7** | BCM bit depth; one rescan shifts the chain `2^planes − 1` times |
-| `clock_mhz` | `panel` line | 2..40 | **30** | the LCD_CAM pixel clock |
+| `clock_mhz` | `panel` line | one of 8 · 10 · 12 · 15 · 20 · 24 · 30 | **30** | the LCD_CAM pixel clock — a fixed list, not a range (#771) |
 | `chip` | `panel` line | `shiftreg` · `fm6126a` · `icn2038s` · `dp3246` | **`shiftreg`** | the driver chip's register init, bit-banged on the pins before the DMA starts |
 | `blank` | `panel` line | 0..8 | **1** | clocks with OE off at the start of each row block and again before the latch word |
 
@@ -3020,13 +3021,47 @@ booted) and the reboot rules are in docs/api.md, "How the panel is driven".
 **Every one of these is reboot-required on a HUB75 board** — including `pw`
 and `ph`, which stay live on a strip-built matrix.
 
+**And a reboot the API asked for no longer counts as a failed boot** (#771).
+`ota::preboot_guard` rolls back to the other OTA slot after two boots that
+never reach `ota::boot_ok`, which only ran at the 60-second mark — so two panel
+edits inside a minute, each with its reboot, looked exactly like a crash loop
+and rolled Jeremy's device back to firmware that had no `panel` line at all.
+`reboot_task` now calls `boot_ok()` before the reset: every API-triggered
+reboot goes through that one signal, so reaching it proves the image served a
+request. docs/firmware.md, "The boot-loop guard".
+
 **The bench clock table above is now this setting's meaning, not the
 firmware's choice.** "The LCD_CAM pixel clock on the panel" measured 20 MHz
-and 30 MHz clean and 40 MHz broken *on one FM6124EJ panel*; the wire accepts
-2..40 because which panel is plugged in is not something the firmware can
-know, and the UI warns above 30. A clock failure is invisible to every
-counter the device has (no swap error, no DMA error, a byte-identical
-composed frame) — it needs an eyeball.
+and 30 MHz clean and 40 MHz broken *on one FM6124EJ panel*. A clock failure is
+invisible to every counter the device has (no swap error, no DMA error, a
+byte-identical composed frame) — it needs an eyeball, which is why the setting
+is not a free number.
+
+**The clock is a FIXED LIST: 8, 10, 12, 15, 20, 24, 30 MHz** (Gitea #771,
+`PanelDriver::CLOCKS`, reported as `driver.clocks` and rendered as a dropdown).
+It first shipped as the range 2..40 with a UI warning above 30, and on
+2026-09-26 Jeremy set 40 "to see what happens" and got the broken row of the
+table. Two reasons for exactly these seven values:
+
+- **They are the rates the hardware can divide to evenly.** esp-hal's i8080
+  driver doubles the requested frequency (the S3 errata puts the LCD_PCLK
+  divider at ≥ 2) and then divides an LCD_CAM source, so the pixel clock is
+  `source / (2 · N)`; the sources on an S3 are XTAL (40 MHz) and PLL_D2
+  (PLL 480 / 2 = 240 MHz — the S3's PLL is 480 at every `CpuClock` preset).
+  Integer `N` gives 120/N and 20/N MHz: 30, 24, 20, 15, 12, 10, 8, 6, 5, 4, 3,
+  2. **16 and 25 MHz are not on that set** — they come out of esp-hal's
+  *fractional* divider, which dithers the clock period instead of dividing
+  evenly. Worse, 13, 17 and 39 MHz silently clock at **10 MHz**:
+  `calculate_clkm` scores its candidate sources through
+  `calculate_output_frequency`, which binds the fraction's numerator and
+  denominator the wrong way round, and so prefers the XTAL "source too fast"
+  fallback (`div_num = 1`, i.e. /2) over a correct PLL_D2 divider.
+- **Capped at 30, floored at 8.** 30 is the FM6124 datasheet's FCLK max with no
+  margin; below 8 a 7-plane 64×64 rescan falls under ~31 Hz and flickers.
+
+A device that stored a clock this list does not carry (Jeremy's 40) still shows
+it in the dropdown, marked `(not supported)`, rather than being silently
+re-read as something else.
 
 **`shiftreg` is the common case.** It sends nothing at all, which is correct
 for FM6124, SM16208, ICN2037 and any other plain shift-register column

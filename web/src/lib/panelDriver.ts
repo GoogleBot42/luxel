@@ -15,9 +15,12 @@
 // interesting states (a configured driver that did not fit, panel output that
 // never came up) are exactly the ones a healthy bench panel never shows.
 //
-// Firmware without the `panel` line reports no `driver` at all. Everything
-// here then falls back to `PANEL_DRIVER_DEFAULT` and the card stays read-only
-// with the wording it had — that path is a supported device, not a bug.
+// Firmware without the `panel` line reports no `driver` at all. That is NOT a
+// supported reading of the card any more (Gitea #771): a panel board whose
+// firmware carries no `driver` block is a console/firmware mismatch and the
+// card says so, because the read-only plaque it used to draw made a rollback
+// look like a fixed setting. `PANEL_DRIVER_DEFAULT` survives here only as the
+// refresh ESTIMATE's fallback, which the LED layout card still needs.
 
 import type { LayoutWire, LiveDriverWire, PanelDriverWire } from "./device";
 import {
@@ -39,14 +42,22 @@ export interface PanelDriverConfig {
 /** Bit depth: 4..8, and the refresh halves per extra plane. */
 export const PLANE_CHOICES: readonly number[] = [4, 5, 6, 7, 8];
 
-/** The clock the firmware accepts, MHz (`crates/luxel-core` rejects the rest). */
-export const CLOCK_MIN_MHZ = 2;
-export const CLOCK_MAX_MHZ = 40;
+/**
+ * The pixel clocks to offer when the device does not say (firmware between
+ * #525 and #771 reports a `driver` block with no `clocks`).
+ *
+ * A FIXED LIST, not a range — Gitea #771. It is `PanelDriver::CLOCKS` in
+ * `crates/luxel-core/src/layout.rs`: every rate esp-hal can reach with an
+ * integer LCD_CAM divider (`source / (2·N)` off XTAL 40 MHz or PLL_D2
+ * 240 MHz), capped at the FM6124 datasheet's 30 MHz and floored at 8, below
+ * which a 7-plane 64×64 rescan flickers. The device's own list always wins.
+ */
+export const CLOCK_CHOICES_DEFAULT: readonly number[] = [8, 10, 12, 15, 20, 24, 30];
 
-/** Above this the UI warns — the firmware does not refuse. 30 MHz is the
- *  FM6124 datasheet ceiling and 40 MHz split the bench panel's two halves
- *  (the table in `firmware/src/hub75.rs`). */
-export const CLOCK_WARN_MHZ = 30;
+/** The top of the list: the FM6124 datasheet ceiling, with no margin. Above it
+ *  the bench panel's two halves mis-sampled at 40 MHz — which is why nothing
+ *  above 30 is offered at all (`firmware/src/hub75.rs`). */
+export const CLOCK_CEILING_MHZ = 30;
 
 /** Latch blanking clocks: OE off for N clocks at the start of a row block and
  *  again before the latch word. 1 is the stock template. */
@@ -132,11 +143,38 @@ export function panelLine(d: PanelDriverConfig): string {
   return `panel ${d.planes} ${d.clock_mhz} ${d.chip} ${d.blank}`;
 }
 
-/** Clamp a typed clock into what the firmware takes, so the form cannot post
- *  a line the device is going to refuse. */
-export function clampClock(mhz: number): number {
-  const n = Math.round(Number(mhz) || 0);
-  return Math.min(CLOCK_MAX_MHZ, Math.max(CLOCK_MIN_MHZ, n));
+/**
+ * The clocks the device takes, ascending — its own `clocks` when it reports
+ * one, this build's list otherwise.
+ *
+ * The CONFIGURED value is always included even when it is not on the list, so
+ * a device that stored 40 MHz under older firmware shows 40 rather than
+ * silently reading as something it is not. `clockSupported()` is how the card
+ * marks that option.
+ */
+export function clockChoices(driver: PanelDriverWire | null): number[] {
+  const offered = driver?.clocks?.length ? driver.clocks : CLOCK_CHOICES_DEFAULT;
+  const list = new Set<number>(offered);
+  if (driver) list.add(driver.clock_mhz);
+  return [...list].sort((a, b) => a - b);
+}
+
+/** Whether the device says it accepts `mhz` (as opposed to merely holding it). */
+export function clockSupported(driver: PanelDriverWire | null, mhz: number): boolean {
+  const offered = driver?.clocks?.length ? driver.clocks : CLOCK_CHOICES_DEFAULT;
+  return offered.includes(mhz);
+}
+
+/** Snap a clock to the nearest OFFERED value, so the form cannot post a line
+ *  the device is going to refuse. Ties go to the lower (safer) clock. */
+export function snapClock(mhz: number, driver: PanelDriverWire | null): number {
+  const offered = driver?.clocks?.length ? [...driver.clocks] : [...CLOCK_CHOICES_DEFAULT];
+  const list = offered.sort((a, b) => a - b);
+  const want = Number(mhz);
+  if (!Number.isFinite(want)) return list[list.length - 1] ?? CLOCK_CEILING_MHZ;
+  let best = list[0] ?? CLOCK_CEILING_MHZ;
+  for (const c of list) if (Math.abs(c - want) < Math.abs(best - want)) best = c;
+  return best;
 }
 
 /** Same for the blanking clocks. */
@@ -173,7 +211,9 @@ export function effectiveScan(g: PanelGeometry): number {
  * What the panel is doing relative to what is stored.
  *
  * - `unknown` — the device reports no `driver` block (firmware before #525).
- *   The card states this build's constants and edits nothing.
+ *   On a panel board that is a console/firmware MISMATCH: the card says so and
+ *   offers nothing, rather than drawing a plaque of this build's constants
+ *   (Gitea #771).
  * - `disabled` — `live` is null: panel output is off. Nothing is being
  *   shifted out, whatever is stored.
  * - `fallback` — the configured geometry/driver did not fit, so the board
@@ -251,6 +291,15 @@ export function panelStatusLine(
   rescanHz: number,
   state: PanelDriverState = panelDriverState(driverWire(wire), null),
 ): string {
+  // No `driver` block: the card states a firmware mismatch, so the collapsed
+  // row must not state this build's constants as though they were the
+  // device's — plausible numbers in a row nobody opens is exactly how the
+  // rollback read as "the settings are fine" (Gitea #771).
+  if (state.status === "unknown") {
+    const bits = rescanHz > 0 ? [`${Math.round(rescanHz)} Hz`] : [];
+    bits.push("firmware too old");
+    return bits.join(" · ");
+  }
   const d = configuredDriver(wire);
   const bits = [`${d.clock_mhz} MHz`, `${d.planes} planes`];
   if (rescanHz > 0) bits.push(`${Math.round(rescanHz)} Hz`);

@@ -159,9 +159,20 @@ static LIVE_SCAN: AtomicU16 = AtomicU16::new(0);
 /// happens — no swap error, no DMA error, `vmerr` null, and the composed
 /// frame is still byte-identical to a host render. Only the panel's own
 /// sampling fails, so this class of regression needs an eyeball, not a test.
-/// That is why the setting's range is the generous 2..=40 the wire accepts
-/// and the WARNING above 30 lives in the UI: which panel is plugged in is
-/// not something the firmware can know.
+///
+/// **Which is why the setting is a FIXED LIST, not a range** — Gitea #771.
+/// Jeremy set 40 MHz "to see what happens" on 2026-09-26 and got exactly the
+/// row above; a UI warning is not a guard. The offered values are
+/// [`PanelDriver::CLOCKS`] = 8, 10, 12, 15, 20, 24, 30, which is every rate
+/// esp-hal can reach with an **integer** LCD_CAM divider (`source / (2·N)`
+/// from XTAL 40 MHz or PLL_D2 240 MHz — the i8080 driver doubles the request
+/// for the S3's PCLK-divider errata) capped at the FM6124 datasheet's 30 and
+/// floored at 8. Everything in between — 16 and 25 MHz among them — is
+/// synthesised by esp-hal's fractional divider, which dithers the period
+/// rather than dividing evenly; and 13/17/39 MHz are worse than that, because
+/// `calculate_clkm` scores its candidate sources with a numerator/denominator
+/// swap and picks the XTAL "too fast" fallback, silently clocking at 10 MHz.
+/// The 40 MHz row above stays here as the reason 40 is not on the list.
 ///
 /// A faster clock buys no frame throughput (every pattern here is
 /// render-bound, not rescan-bound; fps was identical at all three rates).
