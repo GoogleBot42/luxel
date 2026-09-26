@@ -321,7 +321,12 @@ async fn main(spawner: Spawner) -> ! {
     // and 25,684 after it. The classic ESP32 gives up 3.5 KB of heap for
     // it, the same trade `SECOND_OUTPUT_RAM` makes and for the same reason:
     // here `.stack` is the DRAM left over, so a static eats the floor.
-    const STATICS_RESERVE: usize = 4096;
+    //
+    // 2026-09-26, 4096 → 4160: the `panel` line's fifth field (`lsb`,
+    // Gitea #460/#789) widens `PanelDriver` by a `u16`, and every static that
+    // holds a Layout grew with it — `board-pixelblaze-v3` measured 24,572 B,
+    // four bytes under the floor, from 44 above it on master.
+    const STATICS_RESERVE: usize = 4160;
     #[cfg(all(feature = "esp32", feature = "small-chip"))]
     esp_alloc::heap_allocator!(size: 88 * 1024 - SECOND_OUTPUT_RAM - STATICS_RESERVE);
     #[cfg(all(feature = "esp32", not(feature = "small-chip")))]

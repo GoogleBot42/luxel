@@ -16,6 +16,15 @@ import { estimatedRefreshHz, PANEL_DRIVER_DEFAULT } from "../src/lib/settingsCap
 import {
   BLANK_MAX,
   chipLabel,
+  emissions,
+  latchClocks,
+  litWidth,
+  lsbEffective,
+  lsbTrade,
+  LSB_FULL,
+  lsbWire,
+  peakBrightnessFraction,
+  truncatedPlanes,
   chipShort,
   CLOCK_CEILING_MHZ,
   CLOCK_CHOICES_DEFAULT,
@@ -50,6 +59,10 @@ const LIVE = {
   clock_mhz: 30,
   chip: "shiftreg",
   blank: 1,
+  // the EFFECTIVE on-time the firmware clamped to: 64 words of row block less
+  // one latch clock and two blanking clocks is W = 61, and a configured 0 means
+  // full, so a healthy default panel reports 61 (Gitea #789)
+  lsb: 61,
   w: 64,
   h: 64,
   scan: 32,
@@ -84,6 +97,7 @@ const block = (over = {}, live = LIVE) => ({
   clock_mhz: 30,
   chip: "shiftreg",
   blank: 1,
+  lsb: LSB_FULL,
   chips: CHIPS,
   clocks: CLOCKS,
   live,
@@ -107,6 +121,7 @@ test("no driver block: the ESTIMATE falls back to this build's constants", () =>
   assert.equal(PANEL_DRIVER_LINE_DEFAULT.clock_mhz, PANEL_DRIVER_DEFAULT.clockHz / 1e6);
   assert.equal(PANEL_DRIVER_LINE_DEFAULT.chip, "shiftreg");
   assert.equal(PANEL_DRIVER_LINE_DEFAULT.blank, 1);
+  assert.equal(PANEL_DRIVER_LINE_DEFAULT.lsb, LSB_FULL, "full on-time = the stock schedule");
 });
 
 test("no driver block: there is no live reading to disagree with", () => {
@@ -119,15 +134,22 @@ test("no driver block: there is no live reading to disagree with", () => {
 // ---- the wire line the form writes ---------------------------------------
 
 test("every edit is one `panel` line, in wire order", () => {
-  assert.equal(panelLine(PANEL_DRIVER_LINE_DEFAULT), "panel 7 30 shiftreg 1");
+  assert.equal(panelLine(PANEL_DRIVER_LINE_DEFAULT), "panel 7 30 shiftreg 1 0");
   assert.equal(
-    panelLine({ planes: 6, clock_mhz: 20, chip: "fm6126a", blank: 2 }),
-    "panel 6 20 fm6126a 2",
+    panelLine({ planes: 6, clock_mhz: 20, chip: "fm6126a", blank: 2, lsb: LSB_FULL }),
+    "panel 6 20 fm6126a 2 0",
+  );
+  // the fifth field is OPTIONAL on the wire but always written (#789): a
+  // four-field line reads as `lsb 0`, which would silently reset the trade
+  // whenever any other field on the card is edited
+  assert.equal(
+    panelLine({ planes: 7, clock_mhz: 30, chip: "shiftreg", blank: 1, lsb: 30 }),
+    "panel 7 30 shiftreg 1 30",
   );
   // the card patches the CONFIGURED record, so an untouched field is resent
   // as-is rather than as a default
   const cfg = configuredDriver(wire(block({ planes: 8, clock_mhz: 24, chip: "dp3246", blank: 3 })));
-  assert.equal(panelLine({ ...cfg, planes: 6 }), "panel 6 24 dp3246 3");
+  assert.equal(panelLine({ ...cfg, planes: 6 }), "panel 6 24 dp3246 3 0");
 });
 
 test("the form cannot post a clock or a blanking the firmware would refuse", () => {
@@ -309,8 +331,11 @@ test("the collapsed row states the whole module, in the order it is read", () =>
   const stock = wire(block(), { ...MATRIX, scan: 0 });
   assert.match(panelModuleLine(stock), /^1\/32 scan · /);
   // a 1/16-scan 64-row module, and a different chip and blanking
+  // a 1/16 scan stripes the row block two ways (128 words) and a DP3246 holds
+  // the latch three clocks, so that template's W — and its effective on-time at
+  // full — is 128 − 3 − 6 = 119
   const other = wire(
-    block({ chip: "dp3246", blank: 3 }, { ...LIVE, chip: "dp3246", blank: 3, scan: 16 }),
+    block({ chip: "dp3246", blank: 3 }, { ...LIVE, chip: "dp3246", blank: 3, scan: 16, lsb: 119 }),
     { ...MATRIX, scan: 16 },
   );
   assert.equal(panelModuleLine(other), "1/16 scan · DP3246 · 30 MHz · 7 planes · blanking 3");
@@ -410,7 +435,7 @@ test("picking the usual ratio sends 0, so it follows a height change", () => {
 test("the estimate follows the CONFIGURED driver, not the build's constants", () => {
   const w = wire(block({ clock_mhz: 20, planes: 7 }));
   const d = refreshDriver(w);
-  assert.deepEqual(d, { clockHz: 20e6, planes: 7 });
+  assert.deepEqual(d, { clockHz: 20e6, planes: 7, lsb: LSB_FULL, blank: 1, latch: 1 });
   const at = (layout) =>
     Math.round(estimatedRefreshHz({ pw: 64, ph: 64, panels: 1, scan: 32 }, refreshDriver(layout)));
   // the bench numbers from firmware/src/hub75.rs, now reachable as settings
@@ -450,6 +475,198 @@ test("every chip the contract names has a human label and a short form", () => {
   // select is built from `driver.chips`, which is the device's own list
   assert.equal(chipLabel("fm6353"), "fm6353");
   assert.equal(chipShort("fm6353"), "fm6353");
+});
+
+// ---- the brighter ↔ faster trade (Gitea #460 / #789) ---------------------
+//
+// One slider, `lsb` — the LSB's on-time in pixel clocks, 0 = full. The bench
+// case throughout is the Seengreat panel: one 64×64 module at 1/32 scan, 7
+// planes, 30 MHz, one blanking clock on a plain shift register. That is 64
+// words of row block less one latch clock and two blanking clocks, so W = 61.
+
+const BENCH = { pw: 64, ph: 64, chain: 1, scan: 32 };
+const benchCfg = (over = {}) => ({
+  planes: 7,
+  clock_mhz: 30,
+  chip: "shiftreg",
+  blank: 1,
+  lsb: LSB_FULL,
+  ...over,
+});
+
+test("the lit width of a row block is the words less the latch and the blanking", () => {
+  assert.equal(litWidth(64, 1, 1), 61, "the bench panel");
+  assert.equal(litWidth(64, 0, 1), 63);
+  assert.equal(litWidth(64, 8, 1), 47);
+  // a DP3246 holds the latch three clocks
+  assert.equal(litWidth(64, 1, 3), 59);
+  assert.equal(latchClocks("dp3246"), 3);
+  for (const c of ["shiftreg", "fm6126a", "icn2038s", "fm6353"]) assert.equal(latchClocks(c), 1);
+  // a template with no lit clock at all cannot light the panel; the floor of 1
+  // is what keeps every readout finite rather than dividing by zero
+  assert.equal(litWidth(16, 8, 3), 1);
+  assert.equal(litWidth(0, 0, 1), 1);
+});
+
+test("a configured 0 means FULL, and anything over the width clamps to it", () => {
+  assert.equal(lsbEffective(0, 61), 61, "0 = full, never zero on-time");
+  assert.equal(lsbEffective(30, 61), 30);
+  assert.equal(lsbEffective(61, 61), 61);
+  assert.equal(lsbEffective(4000, 61), 61, "a stored value a smaller panel cannot honour");
+  assert.equal(lsbEffective(1, 61), 1);
+});
+
+test("the truncated planes step as the on-time crosses W / 2^t", () => {
+  // t is the largest t <= planes-1 with lsb << t <= W
+  assert.equal(truncatedPlanes(61, 61, 7), 0, "full on-time IS the stock schedule");
+  assert.equal(truncatedPlanes(31, 61, 7), 0, "just over half: nothing fits twice");
+  assert.equal(truncatedPlanes(30, 61, 7), 1);
+  assert.equal(truncatedPlanes(16, 61, 7), 1);
+  assert.equal(truncatedPlanes(15, 61, 7), 2);
+  assert.equal(truncatedPlanes(8, 61, 7), 2);
+  assert.equal(truncatedPlanes(1, 61, 7), 5, "61 < 64, so the LSB cannot shift six times");
+  // the MSB is always a repeated plane, so t never reaches `planes`
+  for (const planes of [4, 5, 6, 7, 8])
+    assert.ok(truncatedPlanes(1, 61, planes) <= planes - 1, `${planes} planes`);
+});
+
+test("the emissions per rescan are t + 2^(planes − t) − 1, stock at t = 0", () => {
+  assert.equal(emissions(7, 0), 127, "2^7 − 1, the stock BCM schedule");
+  assert.equal(emissions(7, 1), 64);
+  assert.equal(emissions(7, 2), 33);
+  assert.equal(emissions(8, 0), 255);
+  assert.equal(emissions(4, 0), 15);
+  // truncating never costs MORE shifts than the stock schedule
+  for (const planes of [4, 5, 6, 7, 8])
+    for (let t = 0; t < planes; t++)
+      assert.ok(emissions(planes, t) <= emissions(planes, 0), `${planes}/${t}`);
+});
+
+test("peak brightness is lsb / W, continuous and independent of the bit depth", () => {
+  assert.equal(peakBrightnessFraction(61, 61), 1);
+  assert.equal(Math.round(peakBrightnessFraction(30, 61) * 100), 49);
+  assert.equal(Math.round(peakBrightnessFraction(8, 61) * 100), 13);
+  assert.ok(peakBrightnessFraction(4000, 61) <= 1, "never over full");
+});
+
+test("the trade at the bench numbers: 115 Hz full, 229 at lsb 30, 444 at lsb 8", () => {
+  const at = (lsb) => lsbTrade(benchCfg(), BENCH, lsb);
+  const full = at(LSB_FULL);
+  assert.equal(full.width, 61);
+  assert.equal(full.lsb, 61);
+  assert.equal(full.trunc, 0);
+  assert.equal(full.emissions, 127);
+  assert.equal(full.fullEmissions, 127);
+  assert.equal(Math.round(full.hz), 115, "the measured bench number (Gitea #255)");
+  assert.equal(Math.round(full.brightness * 100), 100);
+  assert.ok(full.full, "the slider is at its brighter end");
+
+  const half = at(30);
+  assert.equal(half.trunc, 1);
+  assert.equal(half.emissions, 64);
+  assert.equal(Math.round(half.hz), 229);
+  assert.equal(Math.round(half.brightness * 100), 49);
+  assert.equal(half.full, false);
+
+  const fast = at(8);
+  assert.equal(fast.trunc, 2);
+  assert.equal(fast.emissions, 33);
+  assert.equal(Math.round(fast.hz), 444);
+  assert.equal(Math.round(fast.brightness * 100), 13);
+
+  // the stored value is the default, so the card's readouts need no argument
+  assert.deepEqual(lsbTrade(benchCfg({ lsb: 30 }), BENCH), half);
+  // brightness is CONTINUOUS in the thumb and the Hz STEP: 31 is still the
+  // stock schedule at half the brightness
+  const edge = at(31);
+  assert.equal(edge.trunc, 0);
+  assert.equal(Math.round(edge.hz), 115);
+  assert.equal(Math.round(edge.brightness * 100), 51);
+  // and the trade never claims a rescan the stock schedule beats
+  for (let lsb = 1; lsb <= 61; lsb++) assert.ok(at(lsb).hz >= full.hz - 1e-9, `lsb ${lsb}`);
+});
+
+test("the estimate at lsb 0 is byte-for-byte the one every caller had", () => {
+  const input = { pw: 64, ph: 64, panels: 1, scan: 32 };
+  // the whole point of `0 = full`: the emissions formula collapses to
+  // `2^planes − 1`, so no existing reading moves (Gitea #789)
+  for (const planes of [4, 5, 6, 7, 8]) {
+    const was = 30e6 / (64 * 1 * 1 * 32 * (2 ** planes - 1));
+    assert.equal(estimatedRefreshHz(input, { clockHz: 30e6, planes }), was, `${planes} planes`);
+    assert.equal(
+      estimatedRefreshHz(input, { clockHz: 30e6, planes, lsb: 0, blank: 1, latch: 1 }),
+      was,
+      `${planes} planes, lsb 0`,
+    );
+  }
+  // …and the blanking and the latch only matter once the on-time truncates
+  assert.equal(
+    estimatedRefreshHz(input, { clockHz: 30e6, planes: 7, blank: 8, latch: 3 }),
+    estimatedRefreshHz(input, { clockHz: 30e6, planes: 7 }),
+  );
+});
+
+test("blanking and the chip's latch move the trade, because they set W", () => {
+  // 8 blanking clocks on a DP3246 leave 64 − 3 − 16 = 45 lit clocks, so `full`
+  // is 45 and an lsb of 30 no longer fits twice
+  const t = lsbTrade(benchCfg({ chip: "dp3246", blank: 8 }), BENCH);
+  assert.equal(t.width, 45);
+  assert.equal(t.lsb, 45, "full follows the lit width rather than pinning to 61");
+  assert.equal(t.trunc, 0);
+  assert.equal(lsbTrade(benchCfg({ chip: "dp3246", blank: 8 }), BENCH, 30).trunc, 0);
+  assert.equal(lsbTrade(benchCfg({ chip: "dp3246", blank: 8 }), BENCH, 22).trunc, 1);
+  // a 1/16 scan stripes the row block two ways, so it shifts 128 words and the
+  // latch and blanking are still paid once: 128 − 1 − 2
+  assert.equal(lsbTrade(benchCfg(), { ...BENCH, scan: 16 }).width, 125);
+  // a longer chain does the same — a 3-tile chain is 192 words
+  assert.equal(lsbTrade(benchCfg(), { ...BENCH, chain: 3 }).width, 189);
+});
+
+test("the slider's top posts 0, so the setting follows a later width change", () => {
+  assert.equal(lsbWire(61, 61), LSB_FULL, "full is 0 on the wire, not 61");
+  assert.equal(lsbWire(62, 61), LSB_FULL, "…and so is anything past it");
+  assert.equal(lsbWire(60, 61), 60);
+  assert.equal(lsbWire(1, 61), 1);
+  assert.equal(lsbWire(0, 61), LSB_FULL);
+  assert.equal(lsbWire(Number.NaN, 61), LSB_FULL);
+  // every slider position round-trips: position → wire → effective position
+  for (let pos = 1; pos <= 61; pos++)
+    assert.equal(lsbEffective(lsbWire(pos, 61), 61), pos, `position ${pos}`);
+});
+
+test("the on-time is a BOOT field, compared as EFFECTIVE values", () => {
+  // a stored 30 against a panel still running the full 61
+  const pend = wire(block({ lsb: 30 }));
+  const s = panelDriverState(driverWire(pend), panelGeometryOf(pend));
+  assert.equal(s.status, "pending");
+  assert.deepEqual(s.changed, ["the LSB on-time"]);
+  assert.match(s.live, /64×64 1\/32$/, "full on-time says nothing extra");
+  // the running schedule, once it has rebooted into it
+  const applied = wire(block({ lsb: 30 }, { ...LIVE, lsb: 30 }));
+  const s2 = panelDriverState(driverWire(applied), panelGeometryOf(applied));
+  assert.equal(s2.status, "live");
+  assert.deepEqual(s2.changed, []);
+  assert.match(s2.live, /· LSB 30 of 61 clocks$/, "a truncating schedule names itself");
+  // a configured 0 and a live 61 are the SAME schedule — the device reports the
+  // effective value, so comparing the raw numbers would say "reboot" forever
+  const full = wire(block({ lsb: LSB_FULL }, { ...LIVE, lsb: 61 }));
+  assert.equal(panelDriverState(driverWire(full), panelGeometryOf(full)).status, "live");
+  // …and so are a configured value OVER the lit width and the width itself
+  const over = wire(block({ lsb: 4000 }, { ...LIVE, lsb: 61 }));
+  assert.equal(panelDriverState(driverWire(over), panelGeometryOf(over)).status, "live");
+  // it does not mask the other boot fields, and reads in the card's order
+  const both = wire(block({ lsb: 30, planes: 6 }));
+  assert.deepEqual(panelDriverState(driverWire(both), panelGeometryOf(both)).changed, [
+    "bit planes",
+    "the LSB on-time",
+  ]);
+  // firmware between #525 and #789 reports neither half: nothing to compare,
+  // and no phantom reboot on a device that simply cannot truncate
+  const { lsb: _cfg, ...older } = block();
+  const { lsb: _live, ...olderLive } = LIVE;
+  const legacy = wire({ ...older, live: olderLive });
+  assert.equal(panelDriverState(driverWire(legacy), panelGeometryOf(legacy)).status, "live");
+  assert.equal(configuredDriver(legacy).lsb, LSB_FULL, "no field reads as full");
 });
 
 test("panelGeometryOf reads the chain, and only for a matrix", () => {

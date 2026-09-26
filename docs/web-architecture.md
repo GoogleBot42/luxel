@@ -1512,15 +1512,20 @@ board the `matrix` line's pw/ph/chain/scan are reboot-required too, and the UI
 takes that from the REPLY rather than assuming. That is what makes one live
 field cost no special case here.
 
-The block carries two readings of the same four values, and the card's job is
+The block carries two readings of the same five values, and the card's job is
 to say which one is on the panel:
 
 ```json
-"driver": { "planes": 7, "clock_mhz": 30, "chip": "shiftreg", "blank": 1,
+"driver": { "planes": 7, "clock_mhz": 30, "chip": "shiftreg", "blank": 1, "lsb": 0,
             "chips": ["shiftreg","fm6126a","icn2038s","dp3246"],
             "clocks": [8,10,12,15,20,24,30],
-            "live": { …, "w": 64, "h": 64, "scan": 32, "fb_bytes": 28672, "fallback": false } }
+            "live": { …, "lsb": 61, "w": 64, "h": 64, "scan": 32, "fb_bytes": 28672, "fallback": false } }
 ```
+
+`lsb` is the odd one out in that comparison (#789): the configured `0` means
+FULL and the device reports the EFFECTIVE value it clamped to its own lit
+width, so the card compares the configured value passed through the same clamp
+against `live.lsb`, never the raw numbers.
 
 `lib/panelDriver.ts` is the pure module that decides, and
 `web/tests/panelDriver.test.mjs` tests it over fixtures — the interesting
@@ -1529,7 +1534,7 @@ states are exactly the ones a healthy bench panel never shows:
 | `panelDriverState()` | when | what the card says |
 |---|---|---|
 | `live` | configured == `live`, geometry included | running exactly what is set here |
-| `pending` | `planes` / `clock_mhz` / `chip`, or pw/ph/chain/scan, differ — **never `blank`** (#778) | **Reboot to apply**, naming what is still running and what waits |
+| `pending` | `planes` / `clock_mhz` / `chip` / `lsb` (as effective values), or pw/ph/chain/scan, differ — **never `blank`** (#778) | **Reboot to apply**, naming what is still running and what waits |
 | `fallback` | `live.fallback` | the configured driver did not fit in internal RAM; the board default is running — lower the bit planes or the panel size, a reboot alone will not fix it |
 | `disabled` | `live` is `null` | panel output is off: no framebuffer came up at all |
 | `unknown` | no `driver` block | the row is caps-gated to panel boards, so this is a **console newer than the firmware**: the card says exactly that and offers nothing (#771). `PANEL_DRIVER_DEFAULT` survives only as the refresh ESTIMATE's fallback |

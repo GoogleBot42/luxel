@@ -1,5 +1,52 @@
 # Update log
 
+## 2026-09-26 — HUB75 brighter ↔ faster: OE-truncated low planes as the `lsb` panel setting (#460, #789)
+
+Jeremy asked for "a hub75 setting which trades brightness for refresh hz".
+That knob is #460's mechanism: a BCM plane's on-time is the OE bits in its
+framebuffer words, its cost is the `cols` clocks of the row shift, and stock
+BCM gets the binary weights by re-shifting plane `k` `2^k` times with every
+plane lit the whole window — so the LSB is lit for a whole shift when its
+weight only needs a fraction of one. The `panel` line's optional fifth field
+`lsb` (LSB on-time in pixel clocks, `0` = full) lights plane `k` for exactly
+`lsb · 2^k` clocks and emits every plane that fits inside one shift ONCE.
+
+**What shipped.** `luxel_hub75::Schedule` (per-plane repeats + lit widths,
+`plan`/`refit`/`est_hz`, 8 host tests pinning exact weights, monotonic grey
+ramp, the #460 numbers and the descriptor arithmetic) and
+`format_scheduled` (per-plane OE window; `format` = the stock schedule,
+byte-identical). A fourth esp-hub75 patch, `plane-repeats`, adds
+`set_plane_repeats` / `dma_descriptor_count_scheduled` / `max_dma_chunk_size`
+so the circular chain builder emits the schedule's repeats for both rings.
+`hub75.rs` plans at boot, installs the repeats before `Hub75::new`, sizes
+the descriptor rings and the spare-plane MSB window from the schedule,
+prints it, reports `live.lsb`, and re-clamps `lsb` on a live `blank` change
+so a fixed truncation count keeps the weights exact. `PanelDriver.lsb` /
+`LiveDriver.lsb` on the wire (`"lsb"` in both `driver` halves; persisted as
+`panel 7 30 shiftreg 1 0`; four-field lines still parse; `boot_differs` so
+`reboot_required`); `est_hz_driver` for the estimate; the mirror emits it.
+Settings → Panel module gained one *brighter ↔ faster* slider with the
+predicted Hz, the measured `rescan_hz` and the peak-brightness %, driven in
+chromium against the mirror (115 Hz/100 % → 229 Hz/49 % at `lsb 30` →
+444 Hz/13 % at `lsb 8`). docs/api.md, boards.md, web-architecture.md,
+UNTESTED.md updated; #400 closed as superseded by the runtime clock setting.
+
+**Why boot-applied, not live.** Jeremy wanted dynamic "ideally"; a live
+change means rebuilding both descriptor rings under a running DMA (the ring
+stride, `desc_count` and the frame-count ISR's pass arithmetic all assume
+the counts the rings were built with). The OE half is already live-capable
+(`refmt`), but changing it alone breaks the weights. Filed as a follow-up
+rather than done blind without a panel.
+
+**Numbers.** `cargo test --workspace` green (luxel-hub75 55, luxel-core 328);
+273 web tests, svelte-check 0. Seengreat image 1,166,912 → 1,168,416 B
+(+1,504), bundle +1,706 B; `.stack` 31,572 (spare-plane 31,388); the 2-byte
+`PanelDriver` growth took `board-pixelblaze-v3` from 44 B above its stack
+floor to 4 B under, so `STATICS_RESERVE` 4096 → 4160 (24,636 / athom-music
+25,492 after). **Nothing has run on the panel** — the on-metal checklist
+(boot line, `rescan_hz` vs prediction at `lsb 30`/`8`, photographed ramp,
+ghosting at small `lsb`) is a ticket.
+
 ## 2026-09-26 — the JIT compiles out of PSRAM (#671)
 
 After #777 the panel's "Test 2" scene built both engines with 35–39 KB of

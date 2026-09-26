@@ -1173,13 +1173,19 @@ against 76.9–77.0 / 153.5–154.0.
 ### How the panel is driven — the `panel` line (Gitea #401 + #525)
 
 The `matrix` block says how the panels are ARRANGED; this says how they are
-DRIVEN. All four of these were compile-time constants until #525, which is why
+DRIVEN. The first four were compile-time constants until #525, which is why
 one image could not drive both a plain shift-register panel and an FM6126A
-one:
+one; the fifth is the brighter ↔ faster trade added by #789:
 
 ```text
-panel <planes> <clock_mhz> <chip> <blank>
+panel <planes> <clock_mhz> <chip> <blank> [<lsb>]
 ```
+
+The fifth field is **optional**: a four-field line — every `panel` line written
+before #789, and every stored Layout from before it — means `lsb 0`, the full
+on-time, which is what those panels have always run. A client that writes the
+line should nevertheless always spell it, or editing any other field on the
+card silently resets the trade.
 
 | field | range | default | meaning |
 |---|---|---|---|
@@ -1187,6 +1193,7 @@ panel <planes> <clock_mhz> <chip> <blank>
 | `clock_mhz` | one of **8 · 10 · 12 · 15 · 20 · 24 · 30** | 30 | The LCD_CAM pixel clock — a fixed list, not a range (Gitea #771). Anything else is refused with `panel: clock_mhz must be one of 8\|10\|12\|15\|20\|24\|30`. Offer it as a dropdown over `driver.clocks`, never a number field. |
 | `chip` | `shiftreg` · `fm6126a` · `icn2038s` · `dp3246` | `shiftreg` | The driver chip's init, bit-banged before the DMA starts. `shiftreg` covers FM6124, SM16208, ICN2037 and every other plain shift register — no init at all. `fm6126a` and `icn2038s` share a two-register init; `dp3246` has its own, and holds the latch for the last **3** clocks of every row instead of 1. |
 | `blank` | 0..8 | 1 | Clocks at the start of every row block, and again just before the latch word, where OE is off. `1` is the stock template; raising it trades a little brightness for less ghosting between address rows. **The one field here that applies LIVE** — see below. |
+| `lsb` | 0..65535 | 0 | On-time of the LEAST significant bitplane, in pixel clocks — the brighter ↔ faster trade (Gitea #460 / #789). **`0` = full**, the stock BCM schedule. A smaller value truncates the low planes' OE and drops their descriptor repeats: the rescan steps up and the panel dims, in proportion. Clamped to the lit width `W` at boot. Optional, and boot-built like `planes` — see below. |
 
 **`blank` applies live; the other three wait for a boot** (Gitea #778). It is
 nothing but control bits in the framebuffer words — the OE window and the latch
@@ -1196,6 +1203,41 @@ their next turn. A `panel` line that changes only `blank` therefore answers
 `"reboot_required":false` and is on the panel within a frame. That is the
 point: ghosting between address rows is what the knob is for, and it is tuned
 by *looking* at the panel — which a reboot per attempt makes unusable.
+
+**The brighter ↔ faster trade** (Gitea #460 / #789). Stock BCM lights every
+plane for the whole row block and gets the binary weights by re-shifting plane
+`k` (0 = LSB) `2^k` times, so one rescan costs `2^planes − 1` row shifts and the
+LSB is lit for a whole shift even though its weight needs a fraction of one.
+Setting `lsb` gives plane `k` exactly `lsb · 2^k` clocks instead: the planes
+whose on-time fits inside one shift are emitted ONCE with OE cut off early, and
+only the planes above them keep descriptor repeats. Binary weights stay exact
+either way, so a grey ramp keeps its shape — only the peak moves. With
+
+```text
+cols_words = pw · panels · stripes          stripes = (ph/2) / scan
+latch      = 3 for chip dp3246, else 1
+W          = cols_words − latch − 2·blank            (≥ 1, else the panel is dark)
+lsb_eff    = (lsb == 0 || lsb > W) ? W : lsb
+t          = largest t in 0..planes−1 with (lsb_eff << t) ≤ W
+emissions  = t + 2^(planes − t) − 1                  (stock BCM is 2^planes − 1, i.e. t = 0)
+est_hz     = clock_hz / (scan · cols_words · emissions)
+peak       = lsb_eff / W    of full brightness
+```
+
+Brightness is CONTINUOUS in `lsb` and the refresh STEPS, each time `lsb` crosses
+`W / 2^t`. At `lsb 0` the `est_hz` formula is identical to the old
+`clock / (pw · panels · stripes · scan · (2^planes − 1))`, so nothing a client
+already read moves. On the bench panel — one 64×64 module, 1/32 scan, 7 planes,
+30 MHz, `blank 1`, `shiftreg`, so `W` = 61 — `lsb 0` is 115 Hz at 100 %,
+`lsb 30` is `t` 1, 64 emissions, ~229 Hz at 49 %, and `lsb 8` is `t` 2, 33
+emissions, ~444 Hz at 13 %. It compounds with the ordinary `brightness` (a
+channel LUT) rather than replacing it.
+
+**`lsb` is BOOT-built**, like `planes` / `clock_mhz` / `chip` and unlike
+`blank`: `t` sizes the DMA descriptor chain, so a `panel` line that changes it
+answers `"reboot_required":true`. A live `blank` change re-clamps the running
+`lsb` without moving `t` (every plane's on-time scales by the same factor, so
+the weights stay exact and only the peak moves).
 
 Two consequences for a client:
 
@@ -1216,21 +1258,22 @@ Two consequences for a client:
 panel driver**, like `est_hz` and `drive`:
 
 ```json
-"driver":{"planes":7,"clock_mhz":30,"chip":"shiftreg","blank":1,
+"driver":{"planes":7,"clock_mhz":30,"chip":"shiftreg","blank":1,"lsb":0,
           "chips":["shiftreg","fm6126a","icn2038s","dp3246"],
           "clocks":[8,10,12,15,20,24,30],
-          "live":{"planes":7,"clock_mhz":30,"chip":"shiftreg","blank":1,
+          "live":{"planes":7,"clock_mhz":30,"chip":"shiftreg","blank":1,"lsb":61,
                   "w":64,"h":64,"scan":32,"fb_bytes":28672,"fallback":false}}
 ```
 
-The four top-level values are the **configured** (stored) driver; `chips` and
+The five top-level values are the **configured** (stored) driver; `chips` and
 `clocks` are the sets a client should offer, so nobody hard-codes either;
 `live` is what the running firmware actually booted the DMA with:
 
 | field | meaning |
 |---|---|
 | `clocks` | the pixel clocks this firmware ACCEPTS, MHz, ascending (#771). A client renders a dropdown over exactly this; a `clock_mhz` outside it is refused. Absent on a #525-era build, where 8/10/12/15/20/24/30 is the list to assume |
-| `live.planes` `clock_mhz` `chip` `blank` | the RUNNING driver's own four, read back from the DMA setup rather than from the store |
+| `live.planes` `clock_mhz` `chip` `blank` | the RUNNING driver's own, read back from the DMA setup rather than from the store |
+| `live.lsb` | the **effective** on-time, never 0: the configured `lsb` clamped to the running template's lit width `W`, or `W` itself when the configured value is 0 (full). Compare it against the configured value passed through the same clamp, never against the raw number. Absent on a build older than #789 |
 | `live.w` / `live.h` | the framebuffer's chain extent in pixels — `w` = `pw` × chain length, `h` = `ph` |
 | `live.scan` | address rows the driver scans |
 | `live.fb_bytes` | bytes of ONE framebuffer (there are two, double-buffered) |
@@ -1238,7 +1281,8 @@ The four top-level values are the **configured** (stored) driver; `chips` and
 | `"live":null` | there is no panel output at all — the framebuffer allocation or the LCD_CAM init failed even at the board default |
 
 **Configured against live is the reboot indicator.** Any of `planes`
-`clock_mhz` `chip` differing from its `live` twin, or `matrix`
+`clock_mhz` `chip` differing from its `live` twin, the configured `lsb`
+(clamped as above) differing from `live.lsb`, or `matrix`
 `pw`/`ph`/chain/`scan` differing from `live.w`/`live.h`/`live.scan`, means a
 reboot is pending — the same answer the POST already gave. **`blank` is not in
 that list** (Gitea #778): it applies live, so `live.blank` lags a POST by one
@@ -1259,8 +1303,8 @@ flickers.
 
 **`panel` MERGES.** It is the one line a body may leave out without resetting
 anything: no `panel` line keeps the stored driver, exactly so a Settings page
-can POST `matrix …` on its own. At most one per body, and every field is
-required when there is one. The line is accepted whatever the kind — a
+can POST `matrix …` on its own. At most one per body, and every field but
+`lsb` is required when there is one. The line is accepted whatever the kind — a
 persisted matrix Layout always carries one — but it is only written into the
 stored record when the kind is `matrix`, and only a panel board reports it.
 
@@ -1272,7 +1316,7 @@ Blank lines and `#` comments are ignored; line order is free; **at most one**
 strip <pixels>
 matrix <pw> <ph> <cols> <rows> <tl|tr|bl|br> <row|col> <snake 0|1> <rot180 0|1> [<scan>]
 map [grid <w> <h> | <dims> <raw16.16…>]
-panel <planes> <8|10|12|15|20|24|30> <shiftreg|fm6126a|icn2038s|dp3246> <blank>
+panel <planes> <8|10|12|15|20|24|30> <shiftreg|fm6126a|icn2038s|dp3246> <blank> [<lsb>]
 out <n> <pin> <sk9822|ws2812> <rgb|rbg|grb|gbr|brg|bgr> <count> [rev]
 out none
 proj1d|proj2d|proj3d <index|x|y|z|xy|xz|yz>

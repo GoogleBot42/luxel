@@ -231,6 +231,16 @@ const TABLE: Entry[] = [
       "That much blanking would leave no lit clock at all in this panel's row block — the " +
       "whole picture would go black. Lower it, or use a wider panel.",
   },
+  {
+    // The slider spans 1..W and the top posts `0`, so a refusal here is a
+    // console/firmware skew rather than something the user typed (Gitea
+    // #460/#789).
+    match: /^panel: lsb must be/,
+    field: "panel-lsb",
+    text: () =>
+      "The device takes an LSB on-time of 0 to 65,535 pixel clocks, 0 meaning the full " +
+      "on-time. Move the brighter ↔ faster slider back to full and try again.",
+  },
   { match: /^panel: chip must be/, field: "panel-chip", text: () =>
       "This firmware does not know that driver chip. The list in the card is the " +
       "device's own (`driver.chips`), so this means the two disagree — push matching firmware." },

@@ -84,6 +84,9 @@ use alloc::vec::Vec;
 
 pub mod arrange;
 pub mod chip;
+pub mod schedule;
+
+pub use schedule::Schedule;
 
 /// The six colour bits of an entry word: R1 G1 B1 R2 G2 B2 at bits 9..=14.
 /// Everything else in the word (row address, latch, output-enable) is written
@@ -213,9 +216,24 @@ impl Default for Control {
 /// Call this once, at boot, before the first [`pack`]. Packing preserves
 /// every bit this writes.
 ///
+/// This is the STOCK schedule — every plane lit for the whole window between
+/// the blankings. [`format_scheduled`] is the general form.
+///
 /// # Panics
 /// If `words` is not exactly `g.words()` entries.
 pub fn format(words: &mut [u16], g: Geometry, c: Control) {
+    format_scheduled(words, g, c, &Schedule::plan(g, c, 0));
+}
+
+/// [`format`] with a per-plane OE window (Gitea #460 / #789): plane `p`'s row
+/// blocks assert OE for `s.lit(p)` clocks from the head blanking on, instead
+/// of all the way to the trailing blanking. Address and latch bits are the
+/// same in every plane. A [`Schedule`] planned with `lsb = 0` (full) writes
+/// exactly what [`format`] does.
+///
+/// # Panics
+/// If `words` is not exactly `g.words()` entries.
+pub fn format_scheduled(words: &mut [u16], g: Geometry, c: Control, s: &Schedule) {
     assert_eq!(words.len(), g.words(), "framebuffer length");
     let (rows, cols) = (g.rows, g.cols);
     if rows == 0 || cols == 0 {
@@ -223,16 +241,18 @@ pub fn format(words: &mut [u16], g: Geometry, c: Control) {
     }
     let blank = usize::from(c.blank);
     let latch = usize::from(c.latch_clocks);
-    // OE is on between the head blanking and the trailing blanking, and the
-    // latch words are the block's tail. The two never overlap.
+    // OE is on between the head blanking and the trailing blanking — or for
+    // the plane's scheduled on-time, whichever ends first — and the latch
+    // words are the block's tail. The two never overlap.
     let oe_from = blank;
-    let oe_to = cols.saturating_sub(latch + blank);
+    let oe_end = cols.saturating_sub(latch + blank);
     let latch_from = cols.saturating_sub(latch);
     let plane_stride = g.plane_words();
 
     for r in 0..rows {
         let addr = (((r + rows - 1) % rows) as u16) & ADDR_MASK;
         for p in 0..g.planes {
+            let oe_to = oe_end.min(oe_from.saturating_add(s.lit(p)));
             let base = p * plane_stride + r * cols;
             for (i, w) in words[base..base + cols].iter_mut().enumerate() {
                 let mut v = addr;

@@ -241,6 +241,17 @@ export interface PanelDriver {
   clockHz: number;
   /** BCM bit depth: the refresh halves per extra plane. */
   planes: number;
+  /** LSB on-time in pixel clocks — the brighter ↔ faster trade (Gitea #460 /
+   *  #789). `0` or absent = FULL, the stock BCM schedule, which is what every
+   *  caller meant before the field existed. */
+  lsb?: number;
+  /** Latch-blanking clocks (the `panel` line's fourth field); absent = 0. Only
+   *  read when `lsb` is set: it shrinks the lit width the on-time is measured
+   *  against. */
+  blank?: number;
+  /** Clocks the latch is held high — 3 on a DP3246, 1 otherwise; absent = 1.
+   *  Same story as `blank`. */
+  latch?: number;
 }
 
 /** Every board's boot default (`firmware/src/hub75.rs`: `CLOCK = 30 MHz`,
@@ -263,26 +274,132 @@ export interface RefreshInput {
   scan: number;
 }
 
+/** The address rows a `RefreshInput` scans (`scan` 0 = `ph / 2`). */
+export function scanRows(a: RefreshInput): number {
+  const ph = Math.max(0, Math.round(a.ph));
+  return a.scan > 0 ? Math.round(a.scan) : Math.floor(ph / 2);
+}
+
 /**
- * Estimated panel refresh in Hz.
- *
- * One BCM frame shifts `pw × panels` columns for each of `scan` row
- * addresses, and the MSB plane is rescanned `2^(planes-1)` times, so a whole
- * frame is `2^planes − 1` scans of the chain:
- *
- * ```text
- * Hz = clock / (pw · panels · stripes · scan · (2^planes − 1))
- * ```
+ * The words ONE row block shifts out: `pw · panels · stripes`.
  *
  * `stripes = (ph / 2) / scan` — a 1/N-scan panel has fewer address rows but
  * each one clocks out `stripes` copies of the chain, so the product is the
- * panel's pixel count whatever the scan (Gitea #764; `arrange::est_hz` on
- * the device says the same).
+ * panel's pixel count whatever the scan (Gitea #764). A scan that does not
+ * divide `ph / 2` has no framebuffer (the device rejects it); it is read as
+ * one stripe rather than a fraction.
  *
- * That is the model the bench measurements fit exactly (Gitea #255, the
- * table in `firmware/src/hub75.rs`): one 64×64 panel at 1/32 scan and 7
+ * This is the `cols` the firmware's schedule arithmetic takes
+ * (`luxel_hub75::Schedule`), which is why the lit width below is measured
+ * against it and not against the panel's pixel width.
+ */
+export function rowBlockWords(a: RefreshInput): number {
+  const pw = Math.max(0, Math.round(a.pw));
+  const ph = Math.max(0, Math.round(a.ph));
+  const panels = Math.max(0, Math.round(a.panels));
+  const scan = scanRows(a);
+  const half = Math.floor(ph / 2);
+  const stripes = scan > 0 && half >= scan && half % scan === 0 ? half / scan : 1;
+  return pw * panels * stripes;
+}
+
+// ---- the brighter ↔ faster trade (Gitea #460 / #789) ----------------------
+//
+// Stock BCM lights every plane for the whole row block and gets the binary
+// weights by re-shifting plane `k` `2^k` times, so a rescan costs `2^planes − 1`
+// row shifts and the LSB is lit for a whole shift even though its weight only
+// needs a fraction of one. Set the LSB's on-time to `lsb` clocks instead and
+// the planes whose on-time fits inside one shift are emitted ONCE with OE cut
+// off early — `t` of them — so a rescan costs `t + 2^(planes − t) − 1` shifts
+// and the panel's peak brightness is `lsb / W` of full.
+//
+// The trade is therefore CONTINUOUS in brightness and STEPPED in refresh: the
+// Hz only move when `lsb` crosses `W / 2^t`. Binary weights stay exact either
+// way (plane `k` is lit `lsb · 2^k` clocks however it is emitted), which is
+// what keeps a grey ramp monotonic. The same arithmetic runs on the device in
+// `crates/luxel-hub75/src/schedule.rs` — this is the browser's copy of it, so
+// the readouts cannot lag the field the user just moved.
+
+/**
+ * Lit clocks of ONE row block, `W`: the words it shifts less the chip's latch
+ * tail and the two blanking windows.
+ *
+ * Floored at 1. A template whose arithmetic comes out at or below zero cannot
+ * light the panel at all, and 1 keeps every readout finite instead of
+ * producing `Infinity` in a hint.
+ */
+export function litWidth(colsWords: number, blank = 0, latch = 1): number {
+  const words = Math.max(0, Math.round(colsWords));
+  const w = words - Math.max(0, Math.round(latch)) - 2 * Math.max(0, Math.round(blank));
+  return Math.max(1, w);
+}
+
+/**
+ * The on-time the panel actually runs, never 0: the configured `lsb` clamped
+ * to the lit width, or that width itself when the configured value is `0`
+ * (full). The same clamp the device reports as `driver.live.lsb`.
+ */
+export function lsbEffective(lsb: number, width: number): number {
+  const w = Math.max(1, Math.round(width));
+  const v = Math.round(Math.max(0, Number(lsb) || 0));
+  return v <= 0 || v > w ? w : v;
+}
+
+/**
+ * Truncated planes `t`: the largest `t ≤ planes − 1` with `lsb << t ≤ W`.
+ *
+ * Those planes are emitted once with OE cut off early; every plane above them
+ * keeps its descriptor repeats, so the MSB is always a repeated plane. `t` is
+ * 0 at full on-time, which IS the stock schedule.
+ */
+export function truncatedPlanes(lsbEff: number, width: number, planes: number): number {
+  const p = Math.max(1, Math.round(planes));
+  const w = Math.max(1, Math.round(width));
+  const eff = Math.max(1, Math.round(lsbEff));
+  let t = 0;
+  while (t + 1 <= p - 1 && eff * 2 ** (t + 1) <= w) t += 1;
+  return t;
+}
+
+/** Row shifts per rescan: `t + 2^(planes − t) − 1`. `t = 0` is stock BCM's
+ *  `2^planes − 1`, the yardstick the refresh gain is against. */
+export function emissions(planes: number, trunc = 0): number {
+  const p = Math.max(1, Math.round(planes));
+  const t = Math.min(p - 1, Math.max(0, Math.round(trunc)));
+  return t + 2 ** (p - t) - 1;
+}
+
+/** Peak brightness as a fraction of the stock schedule's, 0..1: `lsb / W`.
+ *  Independent of the bit depth — every plane's on-time scales by the same
+ *  factor, so the ramp keeps its shape and only the peak moves. It compounds
+ *  with the ordinary `brightness` channel LUT rather than replacing it. */
+export function peakBrightnessFraction(lsbEff: number, width: number): number {
+  const w = Math.max(1, Math.round(width));
+  return Math.min(1, Math.max(0, Math.round(Math.max(0, lsbEff)) / w));
+}
+
+/**
+ * Estimated panel refresh in Hz.
+ *
+ * One rescan shifts `rowBlockWords` words for each of `scan` row addresses,
+ * once per emission:
+ *
+ * ```text
+ * Hz = clock / (pw · panels · stripes · scan · emissions)
+ * ```
+ *
+ * `emissions` is `2^planes − 1` for the stock BCM schedule — and that is what
+ * a `driver` with no `lsb` (or `lsb: 0`) means, so every caller from before
+ * Gitea #789 gets exactly the number it used to. A truncating `lsb` lowers it
+ * to `t + 2^(planes − t) − 1`; `blank` and `latch` only matter there, because
+ * they set the lit width the on-time is clamped against.
+ *
+ * The stock model is the one the bench measurements fit exactly (Gitea #255,
+ * the table in `firmware/src/hub75.rs`): one 64×64 panel at 1/32 scan and 7
  * planes reads 77 Hz at 20 MHz, 115 Hz at 30 MHz, 154 Hz at 40 MHz, and 58 Hz
- * at 8 planes — the numbers measured on the Seengreat panel.
+ * at 8 planes — the numbers measured on the Seengreat panel. At 30 MHz with
+ * `blank` 1 on a shift register (`W` = 61) an `lsb` of 30 reads ~229 Hz and an
+ * `lsb` of 8 reads ~444 Hz.
  *
  * Returns 0 when the inputs cannot describe a panel.
  */
@@ -290,16 +407,12 @@ export function estimatedRefreshHz(
   a: RefreshInput,
   driver: PanelDriver = PANEL_DRIVER_DEFAULT,
 ): number {
-  const pw = Math.max(0, Math.round(a.pw));
-  const ph = Math.max(0, Math.round(a.ph));
-  const panels = Math.max(0, Math.round(a.panels));
-  const scan = a.scan > 0 ? Math.round(a.scan) : Math.floor(ph / 2);
-  // A scan that does not divide ph/2 has no framebuffer (the device rejects
-  // it); read it as one stripe rather than a fraction.
-  const half = Math.floor(ph / 2);
-  const stripes = scan > 0 && half >= scan && half % scan === 0 ? half / scan : 1;
+  const colsWords = rowBlockWords(a);
   const planes = Math.max(1, Math.round(driver.planes));
-  const clocks = pw * panels * stripes * scan * (2 ** planes - 1);
+  const width = litWidth(colsWords, driver.blank ?? 0, driver.latch ?? 1);
+  const eff = lsbEffective(driver.lsb ?? 0, width);
+  const shifts = emissions(planes, truncatedPlanes(eff, width, planes));
+  const clocks = colsWords * scanRows(a) * shifts;
   if (clocks <= 0 || driver.clockHz <= 0) return 0;
   return driver.clockHz / clocks;
 }

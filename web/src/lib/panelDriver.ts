@@ -32,19 +32,43 @@
 
 import type { LayoutWire, LiveDriverWire, PanelDriverWire } from "./device";
 import {
+  emissions,
   estimatedRefreshHz,
+  litWidth,
+  lsbEffective,
   PANEL_DRIVER_DEFAULT,
+  peakBrightnessFraction,
+  rowBlockWords,
+  truncatedPlanes,
   type PanelDriver,
   type RefreshInput,
 } from "./settingsCaps.ts";
 
-/** The `panel` line's own four values (the wire's spelling, so a line is
+// The BCM schedule arithmetic itself lives in `settingsCaps.ts`, beside
+// `estimatedRefreshHz`, which needs it — importing it the other way round
+// would make the two modules circular. It is re-exported here because the
+// Panel module card and its tests read everything about the `panel` line from
+// this module.
+export {
+  emissions,
+  litWidth,
+  lsbEffective,
+  peakBrightnessFraction,
+  rowBlockWords,
+  truncatedPlanes,
+} from "./settingsCaps.ts";
+
+/** The `panel` line's own five values (the wire's spelling, so a line is
  *  built by writing them out in order and nothing has to be mapped). */
 export interface PanelDriverConfig {
   planes: number;
   clock_mhz: number;
   chip: string;
   blank: number;
+  /** LSB on-time in pixel clocks, `0` = full — the brighter ↔ faster trade
+   *  (Gitea #460 / #789). The wire's OPTIONAL fifth field; this form always
+   *  writes it. */
+  lsb: number;
 }
 
 /** Bit depth: 4..8, and the refresh halves per extra plane. */
@@ -79,13 +103,27 @@ export const CLOCK_CEILING_MHZ = 30;
 export const BLANK_MIN = 0;
 export const BLANK_MAX = 8;
 
+/** `lsb 0` — the FULL on-time, the stock BCM schedule, and the slider's
+ *  right-hand "brighter" end. Every `panel` line written before Gitea #789
+ *  means this. */
+export const LSB_FULL = 0;
+
 /** The driver every board boots with, as the `panel` line spells it. */
 export const PANEL_DRIVER_LINE_DEFAULT: PanelDriverConfig = {
   planes: PANEL_DRIVER_DEFAULT.planes,
   clock_mhz: Math.round(PANEL_DRIVER_DEFAULT.clockHz / 1e6),
   chip: "shiftreg",
   blank: 1,
+  lsb: LSB_FULL,
 };
+
+/** Clocks the latch is held high: 3 on a DP3246, 1 on everything else. The
+ *  same table as `Chip::latch_clocks` in `crates/luxel-core/src/layout.rs` —
+ *  it shortens the lit width of a row block, so the trade's arithmetic needs
+ *  it. An unknown chip name reads as the ordinary 1. */
+export function latchClocks(chip: string): number {
+  return chip === "dp3246" ? 3 : 1;
+}
 
 /** What each chip value means, for the select. A chip the firmware names and
  *  this table does not is shown verbatim rather than hidden — the device's
@@ -123,15 +161,30 @@ export function driverWire(wire: LayoutWire | null): PanelDriverWire | null {
 export function configuredDriver(wire: LayoutWire | null): PanelDriverConfig {
   const d = driverWire(wire);
   if (!d) return { ...PANEL_DRIVER_LINE_DEFAULT };
-  return { planes: d.planes, clock_mhz: d.clock_mhz, chip: d.chip, blank: d.blank };
+  return {
+    planes: d.planes,
+    clock_mhz: d.clock_mhz,
+    chip: d.chip,
+    blank: d.blank,
+    // Firmware between #525 and #789 reports no `lsb` at all, and what it is
+    // running is the full schedule — which is exactly what 0 means.
+    lsb: d.lsb ?? LSB_FULL,
+  };
 }
 
-/** The clock/planes pair `estimatedRefreshHz` takes, for the CONFIGURED
- *  driver — so the estimate beside the measured rescan describes what the
- *  form says, which is the whole point of showing both. */
+/** The driver `estimatedRefreshHz` takes, for the CONFIGURED driver — so the
+ *  estimate beside the measured rescan describes what the form says, which is
+ *  the whole point of showing both. `lsb`, `blank` and the chip's latch ride
+ *  along because the BCM schedule is built from all four (#789). */
 export function refreshDriver(wire: LayoutWire | null): PanelDriver {
   const d = configuredDriver(wire);
-  return { clockHz: d.clock_mhz * 1e6, planes: d.planes };
+  return {
+    clockHz: d.clock_mhz * 1e6,
+    planes: d.planes,
+    lsb: d.lsb,
+    blank: d.blank,
+    latch: latchClocks(d.chip),
+  };
 }
 
 /**
@@ -150,12 +203,16 @@ export function panelRefreshHz(wire: LayoutWire | null, a: RefreshInput): number
   return estimatedRefreshHz(a, refreshDriver(wire));
 }
 
-/** The one write: `panel <planes> <clock_mhz> <chip> <blank>`. A POST carries
- *  this line alone — the firmware merges it into the stored Layout, so the
- *  matrix line does not have to be resent (and must not be, or a concurrent
- *  edit elsewhere in the form would be clobbered by a stale copy). */
+/** The one write: `panel <planes> <clock_mhz> <chip> <blank> <lsb>`. A POST
+ *  carries this line alone — the firmware merges it into the stored Layout, so
+ *  the matrix line does not have to be resent (and must not be, or a
+ *  concurrent edit elsewhere in the form would be clobbered by a stale copy).
+ *
+ *  The fifth field is optional on the wire (#789) but always written here: a
+ *  four-field line would read as `lsb 0` and silently reset the trade whenever
+ *  any other field on the card is edited. */
 export function panelLine(d: PanelDriverConfig): string {
-  return `panel ${d.planes} ${d.clock_mhz} ${d.chip} ${d.blank}`;
+  return `panel ${d.planes} ${d.clock_mhz} ${d.chip} ${d.blank} ${d.lsb}`;
 }
 
 /**
@@ -220,6 +277,107 @@ export function panelGeometryOf(wire: LayoutWire | null): PanelGeometry | null {
 /** The address rows a `PanelGeometry` boots with (`scan` 0 = `ph / 2`). */
 export function effectiveScan(g: PanelGeometry): number {
   return g.scan > 0 ? Math.round(g.scan) : Math.floor(g.ph / 2);
+}
+
+/** A `PanelGeometry` as the refresh arithmetic takes it. */
+export function refreshInput(g: PanelGeometry): RefreshInput {
+  return { pw: g.pw, ph: g.ph, panels: g.chain, scan: g.scan };
+}
+
+// ---- the brighter ↔ faster trade (Gitea #460 / #789) ----------------------
+//
+// One slider, `lsb` — the on-time of the least significant bitplane in pixel
+// clocks, `0` = full. It buys refresh with brightness: the planes whose
+// on-time fits inside one row shift are emitted ONCE with OE cut off early
+// instead of being re-shifted, so a rescan costs `t + 2^(planes − t) − 1` row
+// shifts rather than `2^planes − 1`. Brightness is CONTINUOUS in `lsb` and the
+// Hz STEP, each time `lsb` crosses `W / 2^t` — which is why the card shows both
+// numbers under the slider rather than one label per end.
+//
+// The arithmetic is `settingsCaps.ts`'s (and the device's, in
+// `crates/luxel-hub75/src/schedule.rs`); what is here is the reading of it for
+// a configured `panel` line plus an arrangement.
+
+/** The words one row block of the RUNNING framebuffer shifts.
+ *
+ *  `live.w` is the chain extent in pixels and `live.h` / `live.scan` give the
+ *  stripes, so the device's `Geometry::cols` is `w · (h/2) / scan` — the
+ *  number its own schedule was planned against, and therefore the one
+ *  `live.lsb` was clamped to. */
+export function liveRowBlockWords(live: LiveDriverWire): number {
+  return rowBlockWords({ pw: live.w, ph: live.h, panels: 1, scan: live.scan });
+}
+
+/** The lit clocks of a row block on the RUNNING driver, `W`. */
+export function liveLitWidth(live: LiveDriverWire): number {
+  return litWidth(liveRowBlockWords(live), live.blank, latchClocks(live.chip));
+}
+
+/** What one `lsb` setting costs and buys, for the readouts under the slider. */
+export interface LsbTrade {
+  /** `W`, the lit clocks of a row block — the slider's top, i.e. "full". */
+  width: number;
+  /** The EFFECTIVE on-time, never 0: `lsb`, or `W` when `lsb` is 0 or over it. */
+  lsb: number;
+  /** Truncated planes, `t`. 0 = the stock BCM schedule. */
+  trunc: number;
+  /** Row shifts per rescan at this setting. */
+  emissions: number;
+  /** Row shifts per rescan of the stock schedule, `2^planes − 1`. */
+  fullEmissions: number;
+  /** Predicted rescan rate, Hz. */
+  hz: number;
+  /** Peak brightness as a fraction of full, 0..1. */
+  brightness: number;
+  /** Is this the full on-time — the schedule every board shipped with? */
+  full: boolean;
+}
+
+/**
+ * The trade at `lsb` for a configured driver on a configured arrangement.
+ *
+ * `lsb` defaults to the stored value, and is passed explicitly while the
+ * slider is being dragged so the readouts track the thumb rather than the last
+ * POST. Everything is computed from the CONFIGURED values for the same reason
+ * the refresh estimate is (`panelRefreshHz`): the number must not lag the
+ * control the user is holding.
+ */
+export function lsbTrade(
+  cfg: PanelDriverConfig,
+  geom: PanelGeometry,
+  lsb: number = cfg.lsb,
+): LsbTrade {
+  const a = refreshInput(geom);
+  const planes = Math.max(1, Math.round(cfg.planes));
+  const width = litWidth(rowBlockWords(a), cfg.blank, latchClocks(cfg.chip));
+  const eff = lsbEffective(lsb, width);
+  const trunc = truncatedPlanes(eff, width, planes);
+  return {
+    width,
+    lsb: eff,
+    trunc,
+    emissions: emissions(planes, trunc),
+    fullEmissions: emissions(planes, 0),
+    hz: estimatedRefreshHz(a, {
+      clockHz: cfg.clock_mhz * 1e6,
+      planes,
+      lsb: eff,
+      blank: cfg.blank,
+      latch: latchClocks(cfg.chip),
+    }),
+    brightness: peakBrightnessFraction(eff, width),
+    full: eff >= width,
+  };
+}
+
+/** The number to PUT ON THE WIRE for a slider position: the top of the range
+ *  is `0` (full), which is what makes the setting FOLLOW a later change to the
+ *  panel size, the chain length or the blanking instead of pinning the panel
+ *  to today's `W`. Anything else is the clocks themselves. */
+export function lsbWire(picked: number, width: number): number {
+  const w = Math.max(1, Math.round(width));
+  const v = Math.round(Math.max(0, Number(picked) || 0));
+  return v <= 0 || v >= w ? LSB_FULL : v;
 }
 
 // ---- the scan rate (Gitea #778) ------------------------------------------
@@ -318,16 +476,24 @@ export interface PanelDriverState {
   live: string;
 }
 
-/** `7 planes · 30 MHz · plain shift register · blanking 1 · 64×64 1/32`. */
+/** `7 planes · 30 MHz · plain shift register · blanking 1 · 64×64 1/32`, plus
+ *  `· LSB 30 of 61 clocks` when the running schedule TRUNCATES (#789). At the
+ *  full on-time there is nothing to say — that is what every board has always
+ *  done — so the phrase only appears where it explains something. */
 export function liveSummary(live: LiveDriverWire | null): string {
   if (!live) return "";
-  return [
+  const bits = [
     `${live.planes} planes`,
     `${live.clock_mhz} MHz`,
     chipShort(live.chip),
     `blanking ${live.blank}`,
     `${live.w}×${live.h} 1/${live.scan}`,
-  ].join(" · ");
+  ];
+  const w = liveLitWidth(live);
+  if (typeof live.lsb === "number" && live.lsb > 0 && live.lsb < w) {
+    bits.push(`LSB ${live.lsb} of ${w} clocks`);
+  }
+  return bits.join(" · ");
 }
 
 /**
@@ -347,6 +513,23 @@ export function panelDriverState(
   if (driver.planes !== live.planes) changed.push("bit planes");
   if (driver.clock_mhz !== live.clock_mhz) changed.push("the pixel clock");
   if (driver.chip !== live.chip) changed.push("the driver chip");
+  // `lsb` IS a boot field — the DMA descriptor chain is built from the plane
+  // repeats it chooses — so it is compared, unlike `blank`. Two asymmetries to
+  // respect: the configured 0 means FULL, not zero on-time, and the device
+  // reports the EFFECTIVE value it clamped to its own lit width. So the
+  // comparison is between effective values, and the width they are clamped
+  // against is the RUNNING template's (`live`'s own blanking, chip and
+  // framebuffer), not the configured one — otherwise editing the panel size or
+  // the blanking would add "the LSB on-time" to a reboot list that already
+  // names the field the user actually touched.
+  // Firmware between #525 and #789 reports neither half of it; there is
+  // nothing to compare and nothing the user can have changed.
+  if (
+    typeof live.lsb === "number" &&
+    lsbEffective(driver.lsb ?? LSB_FULL, liveLitWidth(live)) !== live.lsb
+  ) {
+    changed.push("the LSB on-time");
+  }
   // `blank` is deliberately NOT compared (Gitea #778): the firmware applies it
   // on its next frame, so `live.blank` legitimately lags the reply to the POST
   // that changed it by one frame. Comparing it here would put "reboot to

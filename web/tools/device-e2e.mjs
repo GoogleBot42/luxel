@@ -4228,8 +4228,14 @@ try {
         await sleep(900);
         const d = (await (await fetch(`${HUB}/api/layout`)).json()).driver;
         check(
-          "panel module: blanking posts the whole `panel` line — `panel 7 30 shiftreg 2`",
-          d.blank === 2 && d.planes === 7 && d.clock_mhz === 30 && d.chip === "shiftreg",
+          "panel module: blanking posts the whole `panel` line — `panel 7 30 shiftreg 2 0`",
+          d.blank === 2 &&
+            d.planes === 7 &&
+            d.clock_mhz === 30 &&
+            d.chip === "shiftreg" &&
+            // the fifth field is optional on the wire but always written, so a
+            // blanking edit cannot silently reset the trade (Gitea #789)
+            d.lsb === 0,
           JSON.stringify(d),
         );
         const after = await barText();
@@ -4277,11 +4283,12 @@ try {
         await sleep(900);
         const after = (await (await fetch(`${HUB}/api/layout`)).json()).driver;
         check(
-          "panel driver: choosing 20 MHz posts `panel 7 20 shiftreg 2`",
+          "panel driver: choosing 20 MHz posts `panel 7 20 shiftreg 2 0`",
           after.clock_mhz === 20 &&
             after.planes === 7 &&
             after.chip === "shiftreg" &&
-            after.blank === 2,
+            after.blank === 2 &&
+            after.lsb === 0,
           JSON.stringify(after),
         );
         check(
@@ -4306,12 +4313,23 @@ try {
         if (l.fallback) return "fallback";
         const chain = Math.max(1, m.cols * m.rows);
         const scan = m.scan > 0 ? m.scan : Math.floor(m.ph / 2);
+        // `lsb` IS boot-built (#789), and the host reports the EFFECTIVE value:
+        // the configured 0 means the full lit width of a row block, so the
+        // comparison is between effective values, measured against the template
+        // the host is RUNNING.
+        const stripes = Math.max(1, Math.floor(l.h / 2) / Math.max(1, l.scan));
+        const width = Math.max(
+          1,
+          l.w * stripes - (l.chip === "dp3246" ? 3 : 1) - 2 * l.blank,
+        );
+        const wantLsb = !cfg.lsb || cfg.lsb > width ? width : cfg.lsb;
         const same =
           l.planes === cfg.planes &&
           l.clock_mhz === cfg.clock_mhz &&
           l.chip === cfg.chip &&
           // `blank` deliberately absent: it applies live (#778), so the app
           // leaves it out of this comparison and so does the model here
+          (l.lsb === undefined || l.lsb === wantLsb) &&
           l.w === m.pw * chain &&
           l.h === m.ph &&
           l.scan === scan;
@@ -4345,6 +4363,64 @@ try {
         ),
         await hubPage.$eval('[data-role="panel-module-status"]', (e) => e.textContent.trim()),
       );
+
+      // ---- the brighter ↔ faster slider (Gitea #460 / #789) -------------
+      //
+      // One control for the LSB's on-time in pixel clocks, spanning 1..W of a
+      // row block with the top posting `0` (= full, so the setting follows a
+      // later width change). It is BOOT-built, and it is the reason the `panel`
+      // line grew a fifth field — so what this proves is that moving it posts
+      // FIVE fields and that the two readouts under it follow the thumb.
+      {
+        const max = await hubPage.$eval('[data-role="panel-lsb"]', (e) => Number(e.max));
+        check(
+          "panel module: the trade slider spans 1..W of a row block",
+          max > 1 &&
+            (await hubPage.$eval('[data-role="panel-lsb"]', (e) => Number(e.min))) === 1,
+          `max ${max}`,
+        );
+        const before = await hubPage
+          .$eval('[data-role="panel-lsb-hz"]', (e) => e.textContent.trim())
+          .catch(() => "");
+        await hubPage.$eval('[data-role="panel-lsb"]', (el) => {
+          el.value = "8";
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+        });
+        await sleep(900);
+        const t = (await (await fetch(`${HUB}/api/layout`)).json()).driver;
+        check(
+          "panel module: the slider posts a FIVE-field line — `panel 6 20 shiftreg 2 8`",
+          t.lsb === 8 &&
+            t.planes === 6 &&
+            t.clock_mhz === 20 &&
+            t.chip === "shiftreg" &&
+            t.blank === 2,
+          JSON.stringify(t),
+        );
+        const hz = await hubPage.$eval('[data-role="panel-lsb-hz"]', (e) => e.textContent.trim());
+        const pct = await hubPage.$eval('[data-role="panel-lsb-peak"]', (e) =>
+          e.textContent.trim(),
+        );
+        check(
+          "panel module: the readouts are a rescan rate and a peak brightness",
+          /Hz rescan$/.test(hz) && /%\s*peak brightness$/.test(pct) && hz !== before,
+          `${before} -> ${hz} / ${pct}`,
+        );
+        // …and back to full, which is `0` on the wire and not the width
+        await hubPage.$eval('[data-role="panel-lsb"]', (el) => {
+          el.value = String(el.max);
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+        });
+        await sleep(900);
+        const back = (await (await fetch(`${HUB}/api/layout`)).json()).driver;
+        check(
+          "panel module: the full end posts 0, not today's lit width",
+          back.lsb === 0,
+          JSON.stringify(back),
+        );
+      }
       await shotSettings(hubPage, `${shotDir}/settings-panel.png`, 200);
     } finally {
       await hubPage.close();

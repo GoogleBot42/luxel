@@ -14,8 +14,10 @@
 //! The panel used to be compile-time: one const geometry, one bit depth, one
 //! clock, one control template. All of it is read from the stored Layout at
 //! boot instead — the `matrix` line for the arrangement and the `panel` line
-//! for how it is DRIVEN (`planes`, `clock_mhz`, `chip`, `blank`) — so one
-//! image drives any panel the RAM fits. Consequences:
+//! for how it is DRIVEN (`planes`, `clock_mhz`, `chip`, `blank`, and since
+//! Gitea #460/#789 `lsb`, the brighter ↔ faster trade — see
+//! [`luxel_hub75::Schedule`]) — so one image drives any panel the RAM fits.
+//! Consequences:
 //!
 //! * the framebuffer is [`DynFb`], a heap-leaked `[u16]` with a runtime
 //!   [`Geometry`], not a const-generic `DmaFrameBuffer`. The control template
@@ -103,7 +105,7 @@ use esp_println::println;
 
 use luxel_core::layout::{Chip, LiveDriver, Matrix, PanelDriver, PanelView};
 use luxel_hub75::chip::ChipInit;
-use luxel_hub75::{arrange, Control, Geometry, Scratch, Tables};
+use luxel_hub75::{arrange, Control, Geometry, Schedule, Scratch, Tables};
 
 use crate::leds::{scale5, Protocol};
 use crate::output::OutputDriver;
@@ -214,6 +216,14 @@ fn control_of(d: &PanelDriver) -> Control {
     Control { blank: d.blank, latch_clocks: d.latch_clocks() }
 }
 
+/// The BCM emission schedule the stored driver implies at geometry `g` —
+/// the brighter ↔ faster trade (Gitea #460 / #789): its `lsb` clamped to the
+/// row block's lit width, and from that how many low planes are emitted once
+/// with OE cut early instead of `2^k` times. `lsb 0` is the stock schedule.
+fn schedule_of(g: Geometry, d: &PanelDriver) -> Schedule {
+    Schedule::plan(g, control_of(d), d.lsb)
+}
+
 /// A raw internal-SRAM block owned until it is [`Block::leak`]ed.
 ///
 /// A boot attempt allocates several of these (framebuffers, descriptors,
@@ -305,9 +315,9 @@ impl DynFb {
     /// [`Block`] so a boot attempt that fails further along hands the heap
     /// back for the fallback attempt. Call [`Block::leak`] on it once the
     /// driver is running.
-    fn alloc(g: Geometry, c: Control) -> Option<(Block, &'static mut DynFb)> {
+    fn alloc(g: Geometry, c: Control, s: &Schedule) -> Option<(Block, &'static mut DynFb)> {
         let block = Block::zeroed(Self::buffer_layout(g)?)?;
-        let words = Self::format_words(block.ptr, g, c);
+        let words = Self::format_words(block.ptr, g, c, s);
         Some((
             block,
             alloc::boxed::Box::leak(alloc::boxed::Box::new(DynFb { g, words, fmt_gen: 0 })),
@@ -322,10 +332,11 @@ impl DynFb {
     fn alloc_words_leaked(
         g: Geometry,
         c: Control,
+        s: &Schedule,
         alloc_zeroed: impl FnOnce(AllocLayout) -> Option<*mut u8>,
     ) -> Option<*mut u16> {
         let p = alloc_zeroed(Self::buffer_layout(g)?)?;
-        Some(Self::format_words(p, g, c))
+        Some(Self::format_words(p, g, c, s))
     }
 
     /// The layout one framebuffer's buffer needs. Align 4: the LCD_CAM's GDMA
@@ -335,13 +346,14 @@ impl DynFb {
         AllocLayout::from_size_align(g.bytes(), 4).ok()
     }
 
-    /// Write the control template into a freshly zeroed buffer.
-    fn format_words(p: *mut u8, g: Geometry, c: Control) -> *mut u16 {
+    /// Write the control template into a freshly zeroed buffer — per-plane OE
+    /// windows per the schedule (Gitea #460).
+    fn format_words(p: *mut u8, g: Geometry, c: Control, s: &Schedule) -> *mut u16 {
         let words = p.cast::<u16>();
         // SAFETY: the caller allocated `g.bytes()` zeroed, 4-byte-aligned
         // bytes at `p` and holds the only reference to them.
         let flat = unsafe { core::slice::from_raw_parts_mut(words, g.words()) };
-        luxel_hub75::format(flat, g, c);
+        luxel_hub75::format_scheduled(flat, g, c, s);
         words
     }
 
@@ -359,12 +371,12 @@ impl DynFb {
     /// control bit (`compose_into`'s contract, asserted in `luxel-hub75`). So
     /// format-then-pack, in that order, leaves the frame exact — which is why
     /// this runs here rather than after composing.
-    fn refmt(&mut self, c: Control, gen: u32) {
+    fn refmt(&mut self, c: Control, s: &Schedule, gen: u32) {
         if self.fmt_gen == gen {
             return;
         }
         let g = self.g;
-        luxel_hub75::format(self.fb_words(), g, c);
+        luxel_hub75::format_scheduled(self.fb_words(), g, c, s);
         self.fmt_gen = gen;
     }
 }
@@ -419,9 +431,13 @@ fn alloc_tables() -> Option<(Block, &'static mut Tables)> {
     Some((block, unsafe { &mut *p }))
 }
 
-/// One ring's worth of DMA descriptors for `g`, as esp-hub75 counts them.
-fn descs_per_ring(g: Geometry) -> usize {
-    esp_hub75::dma_descriptor_count(g.planes, g.plane_bytes())
+/// One ring's worth of DMA descriptors for `g` under schedule `s` — the same
+/// chunking esp-hub75 uses, with the schedule's per-plane repeats in place of
+/// the stock `2^k` (Gitea #460). Equal to `esp_hub75::dma_descriptor_count`
+/// at `lsb 0`, and to what the patched `CircularBcmBuf::new` builds once
+/// `set_plane_repeats` has been given the same schedule.
+fn descs_per_ring(g: Geometry, s: &Schedule) -> usize {
+    s.descriptors(g.plane_bytes(), esp_hub75::max_dma_chunk_size())
 }
 
 /// Heap-allocate the descriptor rings. `hub75_dma_descriptors!` is a
@@ -431,8 +447,8 @@ fn descs_per_ring(g: Geometry) -> usize {
 /// `CircularBcmBuf::ring_count` derives that from the slice length.
 /// Descriptors must be in internal RAM (the peripheral walks them) and
 /// 4-byte aligned, both of which `Layout::array` over the type gives.
-fn alloc_descriptors(g: Geometry) -> Option<(Block, &'static mut [DmaDescriptor])> {
-    let n = esp_hub75::DESCRIPTOR_RINGS * descs_per_ring(g);
+fn alloc_descriptors(g: Geometry, s: &Schedule) -> Option<(Block, &'static mut [DmaDescriptor])> {
+    let n = esp_hub75::DESCRIPTOR_RINGS * descs_per_ring(g, s);
     let layout = AllocLayout::array::<DmaDescriptor>(n).ok()?;
     let block = Block::zeroed(layout)?;
     let p = block.ptr.cast::<DmaDescriptor>();
@@ -467,15 +483,21 @@ mod spare {
         /// Descriptors in one ring.
         pub descs: usize,
         /// Descriptors from the ring head to the end of the MSB run: plane 0
-        /// emitted `2^(planes-1)` times.
+        /// emitted `2^(planes-1)` times — or the schedule's fewer repeats
+        /// when the low planes are truncated (Gitea #460), which shrinks the
+        /// window along with the pass.
         pub msb_descs: usize,
         pub planes: usize,
     }
 
     impl Window {
-        pub fn new(g: Geometry, descs: usize) -> Self {
-            let per_plane = descs / ((1 << g.planes) - 1);
-            Self { descs, msb_descs: per_plane << (g.planes - 1), planes: g.planes }
+        pub fn new(g: Geometry, s: &luxel_hub75::Schedule) -> Self {
+            let chunk = esp_hub75::max_dma_chunk_size();
+            Self {
+                descs: s.descriptors(g.plane_bytes(), chunk),
+                msb_descs: s.msb_descriptors(g.plane_bytes(), chunk),
+                planes: g.planes,
+            }
         }
 
         /// Is there room in this pass for the copy? The arithmetic lives in
@@ -647,7 +669,7 @@ pub fn panel_view(m: &Matrix) -> PanelView {
     // with no panel output nothing is driven at all.
     let (fb_w, fb_h) = live.map_or((0, 0), |l| (l.w as usize, l.h as usize));
     PanelView {
-        est_hz: arrange::est_hz(m, u32::from(d.planes), d.clock_hz()),
+        est_hz: arrange::est_hz_driver(m, &d),
         drive: arrange::driven_panels(m, fb_w, fb_h) as u32,
         driver_live: live,
     }
@@ -737,6 +759,12 @@ pub struct Hub75Output {
     /// tail. Its `latch_clocks` is the booted chip's and never moves; its
     /// `blank` follows [`WANT_BLANK`] (Gitea #778).
     control: Control,
+    /// The BCM emission schedule the descriptor rings were built with and the
+    /// buffers' per-plane OE windows follow (Gitea #460 / #789). Its `trunc`
+    /// is fixed for the life of the driver — the rings encode it — and its
+    /// `lsb` is re-clamped whenever `control.blank` moves
+    /// ([`Schedule::refit`]).
+    sched: Schedule,
     /// Bumped whenever `control` changes. A buffer whose [`DynFb::fmt_gen`] is
     /// behind this is re-formatted before the packer writes into it, so both
     /// swap buffers catch up on their own next turn.
@@ -828,6 +856,7 @@ impl Hub75Output {
             hub75: None,
             g: Geometry::new(0, 0, 0),
             control: Control { blank: 0, latch_clocks: 0 },
+            sched: Schedule::plan(Geometry::new(0, 0, 0), Control { blank: 0, latch_clocks: 0 }, 0),
             fmt_gen: 0,
             back: None,
             pending: None,
@@ -850,6 +879,24 @@ impl Hub75Output {
             #[cfg(feature = "hub75-spare-plane")]
             window: spare::Window { descs: 0, msb_descs: 0, planes: 0 },
         }
+    }
+
+    /// Print the brighter ↔ faster schedule once, at boot — the numbers the
+    /// bench compares `rescan_hz` against (Gitea #460 / #789).
+    fn print_schedule(s: &Schedule, g: Geometry, d: &PanelDriver) {
+        println!(
+            "hub75: lsb {} of {} lit clocks ({}.{}% on-time), {} low plane{} truncated, \
+             {} row shifts/pass (stock {}), est {} Hz",
+            s.lsb,
+            s.width,
+            s.on_time_permille() / 10,
+            s.on_time_permille() % 10,
+            s.trunc,
+            if s.trunc == 1 { "" } else { "s" },
+            s.emissions(),
+            s.full_emissions(),
+            s.est_hz(g, d.clock_hz()),
+        );
     }
 
     /// One boot attempt at `(m, d)`.
@@ -883,29 +930,40 @@ impl Hub75Output {
             return Err("the panel is larger than this board's pixel cap");
         }
         let c = control_of(&d);
+        let s = schedule_of(g, &d);
         let stripes = arrange::stripes(&m);
         let (w, h) = (g.cols / stripes, 2 * g.rows * stripes);
+        // The descriptor chain follows the schedule (Gitea #460): install the
+        // per-plane repeats before anything sizes or builds a ring. Every boot
+        // attempt sets it, so a fallback to the board default (stock
+        // schedule) is not left running the configured one's counts.
+        esp_hub75::set_plane_repeats(&s.reps_u8());
 
         // ---- buffers. Nothing is leaked until every allocation landed. ----
-        let per_ring = descs_per_ring(g);
+        let per_ring = descs_per_ring(g, &s);
+        debug_assert_eq!(
+            per_ring,
+            esp_hub75::dma_descriptor_count_scheduled(g.planes, g.plane_bytes()),
+            "descriptor arithmetic drifted from the patched driver's"
+        );
         let (desc_block, descriptors) =
-            alloc_descriptors(g).ok_or("DMA descriptor alloc failed")?;
+            alloc_descriptors(g, &s).ok_or("DMA descriptor alloc failed")?;
         let (tables_block, tables) = alloc_tables().ok_or("packer table alloc failed")?;
 
         #[cfg(not(feature = "hub75-spare-plane"))]
         let (fb_blocks, front, back, live_bytes) = {
-            let (fb0, front) = DynFb::alloc(g, c).ok_or("framebuffer alloc failed")?;
+            let (fb0, front) = DynFb::alloc(g, c, &s).ok_or("framebuffer alloc failed")?;
             if !template_lights(front.fb_words(), g, c) {
                 return Err("this blank/latch template cannot light the panel");
             }
-            let (fb1, back) = DynFb::alloc(g, c).ok_or("second framebuffer alloc failed")?;
+            let (fb1, back) = DynFb::alloc(g, c, &s).ok_or("second framebuffer alloc failed")?;
             ([fb0, fb1], front, back, g.bytes())
         };
         // Spare-plane mode (#610): one framebuffer plus a spare MSB block,
         // both internal, and a staging framebuffer only the compose writes.
         #[cfg(feature = "hub75-spare-plane")]
         let (fb_blocks, front, back, mut staging, live_bytes) = {
-            let (fb_block, fb) = DynFb::alloc(g, c).ok_or("framebuffer alloc failed")?;
+            let (fb_block, fb) = DynFb::alloc(g, c, &s).ok_or("framebuffer alloc failed")?;
             if !template_lights(fb.fb_words(), g, c) {
                 return Err("this blank/latch template cannot light the panel");
             }
@@ -929,7 +987,7 @@ impl Hub75Output {
             // give back (and it is the last one, so nothing after it can fail).
             #[cfg(feature = "psram-arena")]
             let (words, place) = (
-                DynFb::alloc_words_leaked(g, c, |l| {
+                DynFb::alloc_words_leaked(g, c, &s, |l| {
                     let p = crate::psram::alloc_bulk_zeroed(l);
                     (!p.is_null()).then_some(p)
                 }),
@@ -937,7 +995,7 @@ impl Hub75Output {
             );
             #[cfg(not(feature = "psram-arena"))]
             let (words, place) =
-                (DynFb::alloc_words_leaked(g, c, |l| Block::zeroed(l).map(Block::leak)), "heap");
+                (DynFb::alloc_words_leaked(g, c, &s, |l| Block::zeroed(l).map(Block::leak)), "heap");
             let words = words.ok_or("staging framebuffer alloc failed")?;
             let staging =
                 alloc::boxed::Box::leak(alloc::boxed::Box::new(DynFb { g, words, fmt_gen: 0 }));
@@ -986,8 +1044,9 @@ impl Hub75Output {
             h,
             g.rows,
             if remap.is_some() { "on" } else { "off (row-major)" },
-            arrange::est_hz(&m, u32::from(d.planes), d.clock_hz()),
+            arrange::est_hz_driver(&m, &d),
         );
+        Self::print_schedule(&s, g, &d);
 
         // ---- the chip's register init, on the real pins, before the DMA ----
         if d.chip.needs_init() {
@@ -1020,6 +1079,7 @@ impl Hub75Output {
                     clock_mhz: d.clock_mhz,
                     chip: d.chip,
                     blank: d.blank,
+                    lsb: s.lsb,
                     w: w as u16,
                     h: h as u16,
                     scan: g.rows as u16,
@@ -1045,6 +1105,7 @@ impl Hub75Output {
                     hub75: Some(hub75),
                     g,
                     control: c,
+                    sched: s,
                     fmt_gen: 0,
                     back: Some(back),
                     pending: None,
@@ -1065,7 +1126,7 @@ impl Hub75Output {
                     #[cfg(feature = "hub75-spare-plane")]
                     plane_us: spare::plane_us_guess(g),
                     #[cfg(feature = "hub75-spare-plane")]
-                    window: spare::Window::new(g, per_ring),
+                    window: spare::Window::new(g, &s),
                 })
             }
             Err(e) => {
@@ -1124,13 +1185,19 @@ impl Hub75Output {
             return;
         }
         self.control.blank = want;
+        // The lit width moved; the schedule's `trunc` cannot (the rings
+        // encode it), so re-clamp `lsb` to keep every plane's weight exact
+        // (Gitea #460). The `live.lsb` reading follows below.
+        self.sched = self.sched.refit(self.g, self.control);
         self.fmt_gen = self.fmt_gen.wrapping_add(1);
         // `driver.live.blank` is the console's "what is on the panel" reading,
         // so it moves when the TEMPLATE does — a frame at most after the POST
         // was answered, never eagerly at the POST.
+        let lsb = self.sched.lsb;
         LIVE.lock(|c| {
             if let Some(mut l) = c.get() {
                 l.blank = want;
+                l.lsb = lsb;
                 c.set(Some(l));
             }
         });
@@ -1296,6 +1363,7 @@ impl OutputDriver for Hub75Output {
                 &mut self.scratch,
                 self.g,
                 self.control,
+                &self.sched,
                 self.fmt_gen,
                 self.remap,
                 staging,
@@ -1334,6 +1402,7 @@ impl OutputDriver for Hub75Output {
                 &mut self.scratch,
                 self.g,
                 self.control,
+                &self.sched,
                 self.fmt_gen,
                 self.remap,
                 back,
@@ -1512,6 +1581,7 @@ fn compose_into(
     scratch: &mut Scratch,
     g: Geometry,
     control: Control,
+    sched: &Schedule,
     fmt_gen: u32,
     remap: Option<&'static [u16]>,
     target: &mut DynFb,
@@ -1526,7 +1596,7 @@ fn compose_into(
     // A control template this buffer has not been written with yet (a latch
     // blanking change, #778). Re-format FIRST: it clears every colour bit,
     // and the pack below writes every one of them back.
-    target.refmt(control, fmt_gen);
+    target.refmt(control, sched, fmt_gen);
     let dst = target.fb_words();
     match remap {
         None => luxel_hub75::pack(dst, g, rgb, t, scratch),

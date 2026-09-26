@@ -1,0 +1,119 @@
+Luxel local patch (Gitea #460 / #789): a per-plane REPEAT SCHEDULE for the
+BCM descriptor chain, so the caller can emit low bitplanes once (with OE
+cut off early in the framebuffer words) instead of `2^k` times.
+
+Applies on top of the dma-position patch. Mechanism: a crate-level static
+`PLANE_REPEATS` (one `AtomicU8` per plane, 0 = the stock `2^(planes-1-idx)`),
+set by `set_plane_repeats(&[u8])` BEFORE `Hub75::new`; `fill_full_chain`
+reads it for every ring it builds (the initial ring and the lazily built
+second ring alike), and `CircularBcmBuf::new` sizes the ring with the new
+`dma_descriptor_count_scheduled`. `max_dma_chunk_size()` exposes the chunk
+size so a caller can size its own descriptor slice for the schedule.
+Nothing in the ISR changes: both rings are built with the same counts, so
+the ring stride, `desc_count` and the pass arithmetic stay consistent —
+which is also why the counts must not change while a driver is running.
+The linear (non-`circular-dma`) builder keeps the stock arithmetic.
+
+diff -ruN work0/src/bcm/circular.rs new/src/bcm/circular.rs
+--- a/src/bcm/circular.rs	2026-09-26 14:44:53.550572294 -0600
++++ b/src/bcm/circular.rs	2026-09-26 14:47:26.164728417 -0600
+@@ -45,7 +45,9 @@
+         let planes = super::planes_from_fb(fb);
+         let plane_count = fb.plane_count();
+ 
+-        let total_descs = crate::dma_descriptor_count(plane_count, planes[0].1);
++        // Luxel local patch (Gitea #460): sized from the installed plane
++        // schedule, which is the stock BCM count unless the caller changed it.
++        let total_descs = crate::dma_descriptor_count_scheduled(plane_count, planes[0].1);
+         debug_assert!(
+             descriptors.len() >= total_descs,
+             "not enough DMA descriptors: have {}, need {}",
+diff -ruN work0/src/bcm/mod.rs new/src/bcm/mod.rs
+--- a/src/bcm/mod.rs	2026-09-26 14:44:53.549051727 -0600
++++ b/src/bcm/mod.rs	2026-09-26 14:47:23.011766782 -0600
+@@ -77,7 +77,9 @@
+     let mut desc_idx = 0;
+ 
+     for (plane_idx, &(plane_ptr, plane_bytes)) in planes.iter().enumerate().take(plane_count) {
+-        let reps = 1usize << (plane_count - 1 - plane_idx);
++        // Luxel local patch (Gitea #460): the stock `2^(plane_count - 1 -
++        // plane_idx)` unless the caller installed a schedule.
++        let reps = crate::plane_repeats(plane_count, plane_idx);
+ 
+         for _ in 0..reps {
+             let mut remaining = plane_bytes;
+diff -ruN work0/src/lib.rs new/src/lib.rs
+--- a/src/lib.rs	2026-09-26 14:44:53.550234800 -0600
++++ b/src/lib.rs	2026-09-26 14:47:19.812805738 -0600
+@@ -165,6 +165,71 @@
+     descs_per_chunk * total_reps
+ }
+ 
++/// The largest byte count one DMA descriptor covers — the chunking
++/// [`dma_descriptor_count`] and the chain builder use.
++///
++/// Luxel local patch (Gitea #460): public so a caller sizing its own
++/// descriptor slice for a non-default plane schedule can do the same
++/// arithmetic.
++#[must_use]
++pub const fn max_dma_chunk_size() -> usize {
++    MAX_DMA_CHUNK_SIZE
++}
++
++/// Luxel local patch (Gitea #460 / #789): per-plane repeat counts for the BCM
++/// descriptor chain. `0` = the stock count for that plane, `2^(planes − 1 −
++/// plane_idx)`; anything else is how many times that plane's row blocks are
++/// emitted per pass. Read by the chain builder ([`bcm`]) every time a ring is
++/// filled — at [`Hub75::new`] and at the first swap to a framebuffer — so set
++/// it BEFORE constructing the driver, and never change it while a driver is
++/// running: the descriptor slice's size, the ring stride and the frame-count
++/// ISR's pass arithmetic are all derived from the counts in force when the
++/// rings were built.
++///
++/// Why a static rather than a `FrameBuffer` method: the trait lives in
++/// `hub75-framebuffer` and the driver is a process singleton anyway (its ISR
++/// state is module statics).
++static PLANE_REPEATS: [core::sync::atomic::AtomicU8; bcm::MAX_PLANES] =
++    [const { core::sync::atomic::AtomicU8::new(0) }; bcm::MAX_PLANES];
++
++/// Luxel local patch (Gitea #460): install per-plane repeat counts for every
++/// ring built from now on. Entries past `reps.len()`, and `0` entries, keep
++/// the stock `2^(planes − 1 − plane_idx)`. See [`PLANE_REPEATS`].
++pub fn set_plane_repeats(reps: &[u8]) {
++    for (i, slot) in PLANE_REPEATS.iter().enumerate() {
++        slot.store(
++            reps.get(i).copied().unwrap_or(0),
++            core::sync::atomic::Ordering::Relaxed,
++        );
++    }
++}
++
++/// Luxel local patch (Gitea #460): the repeat count in force for
++/// `plane_idx` of a `plane_count`-plane framebuffer.
++#[must_use]
++pub fn plane_repeats(plane_count: usize, plane_idx: usize) -> usize {
++    let set = PLANE_REPEATS[plane_idx].load(core::sync::atomic::Ordering::Relaxed);
++    if set == 0 {
++        1usize << (plane_count - 1 - plane_idx)
++    } else {
++        usize::from(set)
++    }
++}
++
++/// Luxel local patch (Gitea #460): [`dma_descriptor_count`] under the repeat
++/// counts currently installed by [`set_plane_repeats`] — what
++/// `CircularBcmBuf::new` actually builds.
++#[must_use]
++pub fn dma_descriptor_count_scheduled(plane_count: usize, bcm_chunk_bytes: usize) -> usize {
++    assert!(
++        plane_count <= bcm::MAX_PLANES,
++        "plane_count exceeds MAX_PLANES"
++    );
++    let descs_per_chunk = bcm_chunk_bytes.div_ceil(MAX_DMA_CHUNK_SIZE);
++    let total_reps: usize = (0..plane_count).map(|p| plane_repeats(plane_count, p)).sum();
++    descs_per_chunk * total_reps
++}
++
+ /// Allocates static DMA descriptors sized for the given framebuffer type.
+ ///
+ /// This macro computes the required number of DMA descriptors at compile time

@@ -40,8 +40,8 @@
 //! `rot180` marks the tiles on odd lines as mounted rotated 180°, which is
 //! how a serpentine wall is physically built (proposal §5.3, mockup S3c).
 
-use crate::Geometry;
-use luxel_core::layout::{Corner, Matrix, RunDir};
+use crate::{Control, Geometry, Schedule};
+use luxel_core::layout::{Corner, Matrix, PanelDriver, RunDir};
 
 /// A driver pixel with no engine pixel behind it: outside the arrangement,
 /// or past the end of the chain the framebuffer covers. Composed black.
@@ -266,6 +266,18 @@ pub fn est_hz(m: &Matrix, planes: u32, clock_hz: u32) -> u32 {
         return 0;
     }
     (clock_hz as u64 / clocks) as u32
+}
+
+/// [`est_hz`] for the whole `panel` line, `lsb` included (Gitea #460/#789):
+/// the rescan costs `Schedule::emissions()` row shifts instead of `2^planes −
+/// 1` once the low planes are truncated. Identical to [`est_hz`] at `lsb 0`.
+/// 0 when the arrangement has no framebuffer.
+#[must_use]
+pub fn est_hz_driver(m: &Matrix, d: &PanelDriver) -> u32 {
+    let Some(g) = fb_geometry(m, usize::from(d.planes)) else {
+        return 0;
+    };
+    Schedule::plan(g, Control::new(d.blank, d.latch_clocks()), d.lsb).est_hz(g, d.clock_hz())
 }
 
 #[cfg(test)]
