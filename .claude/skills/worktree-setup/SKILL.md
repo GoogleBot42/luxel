@@ -179,7 +179,11 @@ these before trusting any build/test failure as a real regression.
 - `nix build .#<output>` failing with "No such file or directory" on a file that
   plainly exists — flake builds copy only **git-tracked** files into the store, so a
   brand-new untracked file (a patch, a new source file) is invisible until `git add`.
-  The error message names the `git add` fix; believe it.
+  The error message names the `git add` fix; believe it. **`nix develop` is the
+  same build**: a new `firmware/patches/*.patch` that `flake.nix` already lists
+  breaks EVERY devshell entry in that worktree ("not tracked by Git") — including
+  a concurrent subagent's — until it is staged, so `git add` a new patch file the
+  moment you reference it (2026-09-26).
   **The quieter version of the same thing costs more:** when the untracked file is only
   *referenced* from a tracked one you also edited, the build can succeed and be a
   **silent no-op** — exit 0, and `./result*` still pointing at the OLD store path. Seen
