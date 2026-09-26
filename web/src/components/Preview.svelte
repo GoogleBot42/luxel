@@ -4,9 +4,19 @@
   // point cloud in 3D, a flat scatter for an irregular 2D map. Nothing here
   // decides geometry — `stores/geometry.ts` does, and this component is
   // handed the result. The painters are shared with the tiles (`lib/draw.ts`).
-  import { createEventDispatcher } from "svelte";
-  import { normalizePoints, paintBar, paintGrid, paintPoints } from "../lib/draw";
+  import { createEventDispatcher, tick } from "svelte";
+  import {
+    makePanelSurfaces,
+    normalizePoints,
+    paintBar,
+    paintGrid,
+    paintGridPanel,
+    paintPoints,
+    type PanelSurfaces,
+    type PreviewStyle,
+  } from "../lib/draw";
   import { tileShape, type Layout, type TileShape } from "../lib/geometry";
+  import { previewStyle } from "../stores/prefs";
 
   export let layout: Layout;
 
@@ -55,8 +65,39 @@
   let grid: HTMLCanvasElement;
   let map: HTMLCanvasElement;
 
+  /** The LED-panel look (Gitea #786), when the user asked for it and the grid
+   *  is small enough to draw as dots — `null` means plain squares, which is
+   *  the default and is what every tile and thumbnail always draws. Built once
+   *  per geometry: the per-frame work is the same `paintGrid` either way plus
+   *  five canvas ops. */
+  let panel: PanelSurfaces | null = null;
+  let panelKey = "";
+  /** The last frame handed to `draw`, so switching the look repaints what is
+   *  on screen instead of waiting for the next frame (the editor may be
+   *  paused, or the pattern may be static). */
+  let lastFrame: Uint8Array | null = null;
+
+  // every input is named in the block itself, so every one is tracked — a
+  // bare `$: syncPanel()` would silently stop re-running (.claude/rules/web.md)
+  $: syncPanel($previewStyle, shape, layout.w, layout.h);
+
+  function syncPanel(style: PreviewStyle, sh: TileShape, w: number, h: number): void {
+    const key = style === "panel" && sh === "grid" ? `${w}x${h}` : "";
+    if (key === panelKey) return;
+    panelKey = key;
+    panel = key ? makePanelSurfaces(w, h) : null;
+    // AFTER the DOM update: switching the look changes the canvas's intrinsic
+    // size, and writing `width` blanks it — repainting first would be undone.
+    // Matters when the preview is paused or the pattern is static; a running
+    // one would have covered it in 16 ms.
+    void tick().then(() => {
+      if (lastFrame && grid) draw(lastFrame);
+    });
+  }
+
   /** Blank everything (pattern reset / recompile). */
   export function clear(): void {
+    lastFrame = null;
     for (const c of [strip, waterfall, grid, map]) {
       const ctx = c?.getContext("2d");
       if (c && ctx) {
@@ -68,10 +109,14 @@
 
   /** Draw one frame of RGB bytes. */
   export function draw(px: Uint8Array): void {
+    lastFrame = px;
     if (shape === "bar") {
       drawStrip(px);
     } else if (shape === "grid") {
-      if (grid) paintGrid(grid, px, layout.w, layout.h);
+      if (grid) {
+        if (panel) paintGridPanel(grid, px, panel);
+        else paintGrid(grid, px, layout.w, layout.h);
+      }
     } else if (map) {
       if (is3D) angle += 0.012;
       paintPoints(map, px, points, angle);
@@ -115,9 +160,11 @@
   {:else if shape === "grid"}
     <canvas
       class="grid"
+      class:panel
+      data-style={panel ? "panel" : "squares"}
       bind:this={grid}
-      width={layout.w}
-      height={layout.h}
+      width={panel ? panel.rig.width : layout.w}
+      height={panel ? panel.rig.height : layout.h}
       on:pointerdown={onDown}
       on:pointermove={onMove}
       on:pointerup={onUp}
@@ -171,6 +218,13 @@
   .grid {
     aspect-ratio: 1;
     object-fit: contain;
+  }
+
+  /* The panel look draws its own dots into a surface several device pixels per
+     cell, so the browser must be allowed to SMOOTH it down to the rail's
+     ~328px — `pixelated` would alias the discs into lumps (Gitea #786). */
+  .grid.panel {
+    image-rendering: auto;
   }
 
   .map {

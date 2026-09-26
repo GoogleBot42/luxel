@@ -1887,6 +1887,14 @@ is an advisory hint that saves a second compile and is allowed to be wrong.
 Painting lives in `lib/draw.ts` (`paintBar` / `paintGrid` / `paintPoints`), so
 the editor preview, the gallery tiles and the row thumbnails cannot drift.
 
+`lib/draw.ts` also owns the 2D preview's **style** (Gitea #786): `squares`, the
+default every tile and thumbnail always draws, or `panel` — dots on a black
+substrate with a bloom, composited from the SAME `paintGrid` frame through a
+dot mask `makePanelSurfaces()` builds once per geometry (`panelRig()` decides
+the pitch and is unit-tested). The choice is `stores/prefs.ts`'
+`previewStyle`, persisted per browser under `luxel.previewStyle`, and only
+`components/Preview.svelte`'s grid shape reads it.
+
 A scatter (a custom map or a 3D lattice) paints **every unlit point first**,
 then the lit ones, each group still back-to-front (`paintOrder`, unit-tested in
 `web/tests/draw.test.mjs`). Depth alone is the right rule for opaque dots of a

@@ -82,3 +82,66 @@ test("the caller's array is not reordered in place", () => {
     "paintPoints indexes rig.pts by q.i, so the input order must survive",
   );
 });
+
+// ── The LED-panel rig (Gitea #786) ──────────────────────────────────────────
+// `panelRig` is the whole geometry decision behind the look: how many device
+// pixels a cell gets, how big the dot in it is, and when a grid is simply too
+// dense to draw as discrete dots at all. Pure, so it is pinned here rather
+// than by eye in a screenshot.
+import { panelRig, parsePreviewStyle } from "../src/lib/draw.ts";
+
+test("parsePreviewStyle accepts the two styles and nothing else", () => {
+  assert.equal(parsePreviewStyle("squares"), "squares");
+  assert.equal(parsePreviewStyle("panel"), "panel");
+  for (const junk of ["", "Panel", 1, null, undefined, {}]) {
+    assert.equal(parsePreviewStyle(junk), null, `${JSON.stringify(junk)} is not a style`);
+  }
+});
+
+test("the composite surface is a whole number of cells, so dots stay aligned", () => {
+  for (const [w, h] of [
+    [8, 8],
+    [16, 16],
+    [32, 8],
+    [64, 64],
+    [128, 128],
+    [64, 32],
+    [17, 5],
+  ]) {
+    const r = panelRig(w, h);
+    assert.ok(r, `${w}x${h} should draw as a panel`);
+    assert.equal(r.width, w * r.scale);
+    assert.equal(r.height, h * r.scale);
+  }
+});
+
+test("the surface never exceeds the 640px cap, and a cell is never thinner than 2px", () => {
+  for (let n = 1; n <= 320; n++) {
+    const r = panelRig(n, n);
+    assert.ok(r, `${n}x${n} should still draw as a panel`);
+    assert.ok(r.scale >= 2, `${n}: scale ${r.scale}`);
+    assert.ok(Math.max(r.width, r.height) <= 640, `${n}: ${r.width}x${r.height}`);
+  }
+});
+
+test("a grid too dense for two device pixels per cell falls back (null)", () => {
+  assert.equal(panelRig(321, 321), null);
+  assert.equal(panelRig(4096, 1), null);
+});
+
+test("a non-grid or empty layout has no rig", () => {
+  assert.equal(panelRig(0, 0), null, "an irregular Layout reports w=h=0");
+  assert.equal(panelRig(-1, 8), null);
+  assert.equal(panelRig(NaN, 8), null);
+});
+
+test("the dot leaves substrate around it and never vanishes", () => {
+  for (const n of [8, 32, 64, 128, 200, 320]) {
+    const r = panelRig(n, n);
+    assert.ok(r.radius * 2 <= r.scale, `${n}: a dot may not overflow its cell`);
+    assert.ok(r.radius >= 0.9, `${n}: radius ${r.radius} would disappear`);
+  }
+  // a roomy cell keeps the ~66% fill ratio the look is specified at
+  const roomy = panelRig(64, 64);
+  assert.ok(Math.abs((roomy.radius * 2) / roomy.scale - 0.66) < 0.01);
+});

@@ -1,5 +1,50 @@
 # Update log
 
+## 2026-09-26 — the 2D preview can wear the panel (#786)
+
+Jeremy: "setting toggle for the webui which makes the rendering 2D preview
+look like a hub75 display (rather than just nearest neighbor squares)". The
+preview drew one hard texel per pixel; a real HUB75 is discrete emitters on a
+black substrate, and a dim texel there reads as a dim dot, not a dark grey
+tile.
+
+**Preview style: Squares (default) | LED panel.** In the playground it is in
+the "Preview as" popover, below the rule — it is not a layout, so it is not one
+of the radio rows; in the console it is Settings › Advanced › **Preview
+appearance**, whose collapsed row states the current style. Each mode has
+exactly one copy, because a console has no "Preview as" chip and the playground
+has no Settings tab. A browser preference (`luxel.previewStyle`), like the
+clock card's zone name — it never reaches a device. Scope is the main 2D
+preview: tiles, thumbnails, the 1D strip + waterfall and the 3D scatter are
+untouched.
+
+The per-frame draw is UNCHANGED — the same `paintGrid` into the same small
+`w`×`h` canvas. The look is a composite of it built once per geometry: a dot
+mask (one cell drawn and tiled with `createPattern`, so a 128×128 panel is not
+16,384 arcs), a nearest-neighbour upscale punched through it with
+`destination-in`, and the same small canvas upscaled a second time with
+smoothing at low alpha underneath — a bilinear upscale already spreads a texel
+over about one pitch, so that IS the bloom; no blur filter, no third pass.
+`panelRig()` picks the pitch (384 device px on the long side, capped at 640,
+and a grid too dense for two px per cell keeps the squares look) and is
+unit-tested in `web/tests/draw.test.mjs`.
+
+It does not cost frame rate. Headless chromium, software raster, median of
+three 3 s windows: 64×64 squares 0.030 ms/frame → panel 0.600; 128×128 squares
+0.015 → panel 0.567 — flat, because the surface is a fixed 384² either way, so
+the cost does not grow with the pixel count (run to run, squares 0.013–0.030
+and panel 0.42–0.80). Six canvas ops per frame instead of one, 0.6 ms of a
+16.7 ms budget, and the loop held ~60 fps in all four combinations — #781 is a
+different animal and this must not be read as touching it.
+
+Verified in real chromium: both styles screenshotted at 64×64 and 128×128, the
+choice surviving a reload, a strip layout keeping its own painters with the
+panel look on, the console's Advanced row and its status line. `npm test` (269,
+6 new), `e2e.mjs`, `device-e2e.mjs` (its Advanced-row count went 7 → 8) and
+mockdiff over S2/S2b/S2c/S2cpop/S3/S3b/S5 all clean — the report is
+byte-identical to master's and `--sweep` still finds only the two standing
+findings.
+
 ## 2026-09-26 — a directly-activated scene survives a reboot/OTA (#790)
 
 Jeremy's finding from the sprite deploy: "Test 2" was ACTIVE (activated
@@ -126,7 +171,6 @@ arithmetic the JIT compiles. Filed as #812. Two small traps went to memory:
 (`curl: (7)` twice; a plain `curl --data-binary` after a pause went through
 first try), and entering the devshell from the MAIN checkout's cwd writes
 the `esp-hub75` vendor symlink there instead of in the new worktree.
-
 
 ## 2026-09-26 — mirror parity: stage timers, a per-layer `--jit`, a data pin, and scene ids on preload (#262 #757 #579 #701)
 
@@ -413,7 +457,6 @@ floor to 4 B under, so `STATICS_RESERVE` 4096 → 4160 (24,636 / athom-music
 25,492 after). **Nothing has run on the panel** — the on-metal checklist
 (boot line, `rescan_hz` vs prediction at `lsb 30`/`8`, photographed ramp,
 ghosting at small `lsb`) is a ticket.
-
 
 ## 2026-09-26 — the JIT compiles out of PSRAM (#671)
 

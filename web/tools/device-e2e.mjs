@@ -3866,10 +3866,11 @@ try {
         status: e.querySelector(".st2")?.textContent?.trim() ?? "",
       })),
     );
-    // Seven rows on EVERY board since Gitea #778: the panel form moved out of
-    // Advanced and into the LED layout card as `Panel module`, so there is no
-    // longer a caps-gated eighth row here.
-    check("settings: the Advanced list carries every unconditional row", rows.length === 7, `${rows.length} rows`);
+    // The same rows on EVERY board since Gitea #778: the panel form moved out
+    // of Advanced and into the LED layout card as `Panel module`, so there is
+    // no caps-gated row here. Eight since #786 added `Preview appearance`,
+    // which is a browser preference and so is unconditional too.
+    check("settings: the Advanced list carries every unconditional row", rows.length === 8, `${rows.length} rows`);
     check(
       "settings: every Advanced row starts collapsed",
       rows.every((r) => !r.open),

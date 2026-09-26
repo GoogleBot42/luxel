@@ -8,6 +8,7 @@
   // thumbnails, the editor's preview) renders through what this picks,
   // because they all read `stores/geometry.ts`.
   import { createEventDispatcher } from "svelte";
+  import { parsePreviewStyle } from "../lib/draw";
   import Popover from "./Popover.svelte";
   import {
     AUTO_LATTICE,
@@ -17,6 +18,7 @@
     previewAs,
     setPreviewAs,
   } from "../stores/geometry";
+  import { previewStyle } from "../stores/prefs";
 
   /** "Custom map program" is not a shape you type a number into — it is a
    *  program, and it has a screen (A10, Gitea #471). The chip picks the
@@ -57,6 +59,14 @@
   function chooseLattice(): void {
     n = clamp(n, 2, 32);
     setPreviewAs({ mode: "lattice", n });
+  }
+
+  /** The 2D preview's LOOK (Gitea #786) — not a layout, which is why it sits
+   *  below the rule rather than in the radio group. Squares is the default and
+   *  the only thing tiles and thumbnails ever draw. */
+  function chooseStyle(e: Event): void {
+    const want = parsePreviewStyle((e.target as HTMLSelectElement).value);
+    if (want) previewStyle.set(want);
   }
 </script>
 
@@ -198,6 +208,25 @@
       Custom map program →
     </button>
 
+    <div class="sepr"></div>
+
+    <!-- Deliberately NOT a `.pr` radio row: the rows above choose WHAT is
+         previewed, this chooses how the 2D grid is drawn. Mirrored in the
+         console's Settings › Advanced › Preview appearance. -->
+    <div class="styrow">
+      <span class="stylab">Preview style</span>
+      <select
+        class="stysel"
+        data-role="preview-style"
+        title="how the 2D preview is drawn — squares, or dots on a black substrate like a HUB75 panel"
+        value={$previewStyle}
+        on:change={chooseStyle}
+      >
+        <option value="squares">Squares</option>
+        <option value="panel">LED panel</option>
+      </select>
+    </div>
+
   <p class="popfoot">
     <!-- one line on purpose: this string is compared by `textContent` (mockdiff's
          `popfoot` entry), and wrapping it would fold the indentation in (#742) -->
@@ -242,6 +271,40 @@
 
   .dim {
     color: var(--text-dim);
+  }
+
+  /* The preview-style row (#786). Its own class so no mockdiff selector for
+     the approved S5 popover (`.pr`, `.pr.on`, `.radio`, `.inp.xs`) can match
+     it — this row is new UI the mocks do not draw. */
+  .styrow {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 6px 9px 2px;
+  }
+
+  .stylab {
+    font-size: 13px;
+  }
+
+  /* the same box and chevron as the editor's fps chooser and the Settings
+     selects — one dropdown look across the app */
+  .stysel {
+    appearance: none;
+    display: inline-flex;
+    align-items: center;
+    height: 28px;
+    width: 116px;
+    padding: 0 9px 0 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background-color: var(--bg-inset);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='7' viewBox='0 0 10 7'%3E%3Cpath d='M1 1.5L5 5.5L9 1.5' fill='none' stroke='%238a90a0' stroke-width='1.4'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 9px center;
+    color: var(--text);
+    font: 13px/1 var(--sans);
   }
 
   /* mockup S5 sets the Layout's own name in `.mono.tiny` — 12px mono beside

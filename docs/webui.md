@@ -249,6 +249,53 @@ the way the firmware's `devicemap::to_json` does, so this is testable without a
 panel: device-e2e stands up a 4096-pixel mirror with a `grid 64 64` map running
 a `render2D` pattern and asserts the console opens on a 64×64 grid.
 
+## Preview style: squares or LED panel ✅ (2026-09-26, Gitea #786)
+
+The 2D preview drew one hard texel per pixel, butted against its neighbours —
+which is honest about the values and nothing like the fixture. **Preview style**
+adds a second look:
+
+| style | what the 2D grid preview draws |
+|---|---|
+| `Squares` (default) | unchanged — the `w`×`h` canvas, CSS-scaled with `image-rendering: pixelated` |
+| `LED panel` | one round emitter per pixel on a black substrate, ~66 % of the pitch, with a soft bloom over the gaps |
+
+Where it is: the playground's **Preview as** popover (below the rule, since it
+is not a layout) and the console's **Settings › Advanced › Preview appearance**
+— a console has no "Preview as" chip, and the playground has no Settings tab,
+so each mode gets exactly one copy. It is a browser preference like the clock
+card's zone name (`luxel.previewStyle` in `localStorage`, `lib/store.ts`,
+`stores/prefs.ts`) and never reaches a device.
+
+Scope is the **main 2D preview only**. Tiles, row thumbnails, scene and sprite
+thumbs, the 1D strip + waterfall and the 3D scatter are untouched — a diffused
+look for the strip would be its own ticket.
+
+How it is drawn, and why it is cheap (`lib/draw.ts`): the per-frame work is the
+same `paintGrid` into the same small `w`×`h` canvas. The look is a composite of
+that canvas built once per geometry — a dot mask (ONE cell drawn and tiled with
+`createPattern`, so a 128×128 panel is not 16,384 arcs), a nearest-neighbour
+upscale punched through it with `destination-in`, and the frame upscaled a
+second time with smoothing at low alpha underneath, which is the bloom (a
+bilinear upscale already spreads a texel over about one pitch — no blur filter,
+no third pass). `panelRig()` picks the pitch: the surface aims for 384 device
+px on its long side, caps at 640, and a grid too dense for two device px per
+cell keeps the squares look. Measured in headless chromium (software raster,
+`--disable-gpu`), median of three 3 s windows at 60 fps:
+
+| layout | style | surface | canvas ms/frame | canvas ops/frame | fps |
+|---|---|---|---|---|---|
+| 64×64 | squares | 64×64 | 0.030 | 1 | 60.2 |
+| 64×64 | LED panel | 384×384 | 0.600 | 6 | 59.9 |
+| 128×128 | squares | 128×128 | 0.015 | 1 | 60.2 |
+| 128×128 | LED panel | 384×384 | 0.567 | 6 | 59.9 |
+
+Run to run the squares figure lands anywhere in 0.013–0.030 ms and the panel
+one in 0.42–0.80, which is the machine, not the grid: the panel surface is a
+fixed 384² whatever the pixel count, so the cost does not grow with the
+layout. 0.6 ms of a 16.7 ms budget, and the loop held ~60 fps in every
+combination — the look is not what #781 is about.
+
 ## Status-bar frame rate ✅ (Gitea #381)
 
 The counter at the right of the header (`data-role="fps"`) shows **the device's
