@@ -5133,10 +5133,11 @@ try {
     fs.writeFileSync(
       preload,
       [
-        // an EXPLICIT id: a mirror started with `--scenes` does not assign one
-        // to an `S -` block, so such a scene cannot be referenced at all (Gitea
-        // #701) — the preload names its own.
-        "S 5eed0001 Wall clock",
+        // `S -` — the id-less form the docs describe and a POST body carries.
+        // The mirror mints an id on load with the same counter-hash
+        // `POST /api/scenes` uses (Gitea #701), so a preloaded scene is
+        // referenceable: the check below asserts it got one.
+        "S - Wall clock",
         "L color 0 0 0 0 normal 100 none fill 1",
         "K 101030",
         "L text 0 0 0 0 normal 100 none fill 1",
@@ -5173,11 +5174,20 @@ try {
     try {
       const preloaded = await (await fetch(`${SC}/api/scenes`)).json();
       check(
-        "scenes: `--scenes FILE` preloads the store",
+        "scenes: `--scenes FILE` preloads the store and mints an id for `S -` (#701)",
         preloaded.scenes.length === 1 &&
           preloaded.scenes[0].name === "Wall clock" &&
-          preloaded.scenes[0].id === "5eed0001",
+          /^[0-9a-f]{8}$/.test(preloaded.scenes[0].id ?? ""),
         JSON.stringify(preloaded.scenes.map((s) => `${s.id}:${s.name}`)),
+      );
+      // and it is referenceable: the id round-trips through the single-scene
+      // route, which is the whole point of assigning one
+      const preId = preloaded.scenes[0].id;
+      const one = await (await fetch(`${SC}/api/scenes/${preId}`)).json();
+      check(
+        "scenes: a preloaded scene's minted id addresses `GET /api/scenes/<id>`",
+        one.ok !== false && one.name === "Wall clock",
+        JSON.stringify(one).slice(0, 120),
       );
 
       // two patterns, then a TWO-layer scene over the API (the shape a row

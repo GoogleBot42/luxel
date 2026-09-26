@@ -220,6 +220,152 @@ const PANEL_PIXELS: u32 = PANEL_W as u32 * PANEL_H as u32;
 /// carries (Gitea #253) — what `/api/status` reports as `psram_total`.
 const PANEL_PSRAM_BYTES: u32 = 8 * 1024 * 1024;
 
+/// The virtual strip board's DATA pad and the pads its picker offers
+/// (`data_pin_default` / `data_pins` on `GET /api/config`, Gitea #579).
+///
+/// The mirror impersonates no particular board, so this is a JUDGEMENT CALL:
+/// the list is a **classic-ESP32-shaped** one, which is the board family the
+/// bench actually has (the Athom is an esp32). It is
+/// `firmware/src/board.rs::data_pin_ok` evaluated for that chip with nothing
+/// reserved — every GPIO that exists (0–5, 12–19, 21–23, 25–27, 32–33) minus
+/// the SPI-flash pads (6–11) and the UART0 console (1, 3), minus the
+/// input-only 34–39 which cannot drive an output. A panel mirror publishes
+/// none of this, exactly as `#[cfg(not(feature = "hub75"))]` omits it on a
+/// HUB75 board. The default is GPIO18, the Athom's, which is also the pad the
+/// Settings mockups draw.
+const DEFAULT_DATA_PIN: u8 = 18;
+const DATA_PINS: &[u8] =
+    &[0, 2, 4, 5, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33];
+
+/// One impersonated engine in the mirror's `jit.layers` (Gitea #718/#757).
+#[derive(Clone, Debug)]
+struct JitLayer {
+    /// `"native"` or `"interp"` — the two states a RESIDENT engine can be in
+    /// (`off`/`none` describe the host, not a layer).
+    state: String,
+    reason: Option<String>,
+}
+
+/// `--jit`'s parsed value: what `/api/status`'s `jit` block reports.
+///
+/// The scalar half (`state`/`reason`/`code_bytes`/`compile_us`) describes the
+/// BASE layer, which is what every other endpoint means by "the running
+/// program" (docs/api.md); `layers` is the per-engine table #718 added, and
+/// `native`/`interp` are its two counts.
+#[derive(Clone, Debug)]
+struct JitSpec {
+    /// `"off"` (no backend), `"none"` (a backend with nothing resident) or
+    /// the base layer's own state.
+    state: String,
+    reason: Option<String>,
+    /// One entry per resident engine, bottom → top. Empty for `off`/`none`.
+    layers: Vec<JitLayer>,
+}
+
+impl Default for JitSpec {
+    /// `off` — no JIT backend, the honest answer for a host, and what most
+    /// of the fleet reports.
+    fn default() -> Self {
+        JitSpec { state: String::from("off"), reason: None, layers: Vec::new() }
+    }
+}
+
+/// What the mirror claims a compiled layer cost. Pure impersonation, like
+/// every other number in the block; one plausible reading off the Seengreat
+/// panel, repeated per native layer.
+const JIT_CODE_BYTES: u32 = 4312;
+const JIT_COMPILE_US: u32 = 1800;
+
+/// Parse `--jit`.
+///
+/// Three forms, and the first two are the pre-#757 ones unchanged:
+///   * `off` / `none` — whole-host states, no resident engine to describe.
+///   * `<state>[:<reason>]` — one layer, e.g. `native` or `interp:too-large`.
+///   * a comma-separated per-layer list, bottom → top:
+///     `native,interp:no-memory` is a two-engine stack whose base compiled.
+fn parse_jit(arg: &str) -> Result<JitSpec, String> {
+    let parts: Vec<&str> = arg.split(',').map(str::trim).collect();
+    let mut layers: Vec<JitLayer> = Vec::new();
+    for (i, part) in parts.iter().enumerate() {
+        let (st, reason) = match part.split_once(':') {
+            Some((s, why)) => (s.trim(), Some(why.trim().to_string())),
+            None => (*part, None),
+        };
+        match st {
+            // A host-level answer describes no layer, so it cannot be one
+            // member of a list — saying so is more use than emitting a
+            // `layers` array with an "off" engine in it.
+            "off" | "none" => {
+                if parts.len() > 1 {
+                    return Err(format!(
+                        "--jit: \"{st}\" is the whole host's state, not layer {i}'s — \
+                         it cannot appear in a per-layer list"
+                    ));
+                }
+                return Ok(JitSpec { state: st.to_string(), reason, layers: Vec::new() });
+            }
+            "native" | "interp" => layers.push(JitLayer { state: st.to_string(), reason }),
+            "" => return Err(String::from("--jit: empty state in the layer list")),
+            other => {
+                return Err(format!(
+                    "--jit: unknown state \"{other}\" — expected native, interp, none or off, \
+                     each optionally :<reason>"
+                ))
+            }
+        }
+    }
+    match layers.first() {
+        Some(base) => Ok(JitSpec {
+            state: base.state.clone(),
+            reason: base.reason.clone(),
+            layers,
+        }),
+        None => Err(String::from("--jit: expected at least one state")),
+    }
+}
+
+impl JitSpec {
+    /// `/api/status`'s `jit` object, `,"jit":{…}` included.
+    fn push_json(&self, out: &mut String) {
+        let opt = |r: &Option<String>| match r {
+            Some(r) => format!("\"{}\"", json_escape(r)),
+            None => String::from("null"),
+        };
+        let native = self.layers.iter().filter(|l| l.state == "native").count();
+        let interp = self.layers.len() - native;
+        // The scalar block is the BASE layer's, which is what `code_bytes`
+        // and `compile_us` mean everywhere else (docs/api.md).
+        let base_native = self.state == "native";
+        let mut rows = String::new();
+        for (i, l) in self.layers.iter().enumerate() {
+            if i > 0 {
+                rows.push(',');
+            }
+            // `kind` is always `"pattern"`: since Gitea #740 a sprite layer
+            // holds no engine, so no other kind can appear.
+            rows.push_str(&format!(
+                "{{\"layer\":{},\"kind\":\"pattern\",\"state\":\"{}\",\"reason\":{},\
+                 \"code_bytes\":{}}}",
+                i,
+                json_escape(&l.state),
+                opt(&l.reason),
+                if l.state == "native" { JIT_CODE_BYTES } else { 0 },
+            ));
+        }
+        out.push_str(&format!(
+            ",\"jit\":{{\"state\":\"{}\",\"reason\":{},\"code_bytes\":{},\"compile_us\":{},\
+             \"native\":{},\"interp\":{},\"layers\":[{}]}}",
+            json_escape(&self.state),
+            opt(&self.reason),
+            if base_native { JIT_CODE_BYTES } else { 0 },
+            if base_native { JIT_COMPILE_US } else { 0 },
+            native,
+            interp,
+            rows,
+        ));
+    }
+}
+
 struct State {
     pixel_count: AtomicU32,
     /// This run's pixel ceiling — `/api/status`'s `max_pixels` and what
@@ -272,6 +418,28 @@ struct State {
     /// strip board reports, and a client must fall back to `fps` there.
     out_fps: AtomicU32,
     rescan_hz: AtomicU32,
+    /// Per-stage frame timing, average microseconds per rendered frame over
+    /// the last second — `/api/status`'s `frame_us` / `vm_us` / `pipe_us`
+    /// (Gitea #262). Unlike `out_fps` these are MEASURED: the mirror really
+    /// renders, so a client that draws the firmware's timing surface gets
+    /// real numbers of the same shape here. Published by the render loop on
+    /// the same one-second boundary as `fps`, and 0 through a second with no
+    /// pattern frame in it (live input drove the strip, or nothing was
+    /// loaded) — the firmware's contract, docs/api.md.
+    ///
+    /// `out_us` has no atomic: it is the LED/HUB75 driver's `write_frame`
+    /// and this host drives no fixture, so it is a literal 0 in the JSON.
+    frame_us: AtomicU32,
+    vm_us: AtomicU32,
+    pipe_us: AtomicU32,
+    /// The strip DATA pad (Gitea #154/#579). `data_pin` on `/api/config` is
+    /// the pin the output is BOUND to — on a device the SPI binds MOSI once,
+    /// at boot, so a `POST /api/datapin` stores `want` and reboots; the
+    /// mirror stores it and never reboots, which is what makes the console's
+    /// "stored GPIOx, driving GPIOy until the next reboot" state drivable
+    /// without hardware. `None` = the board default, exactly as
+    /// `firmware/src/shared.rs::want_data_pin`.
+    want_data_pin: Mutex<Option<u8>>,
     vmerr: Mutex<Option<String>>,
     pattern_src: Mutex<String>,
     /// LXBC blob of the running pattern (GET /api/pattern.lxp — sync adopt).
@@ -411,19 +579,19 @@ struct State {
     /// default is this build's real `bytecode::FORMAT_VERSION`, so a mirror
     /// and the bundle it serves agree unless a test says otherwise.
     bc_format: u32,
-    /// `--jit <state>[:<reason>]`: what `/api/status` reports for the
-    /// on-device JIT (Gitea #658). Pure impersonation, like `--board-name`
-    /// and `--out-fps` — the mirror has no JIT and never will; the emitter
-    /// is a device backend and this process IS the native code. The point
-    /// is that the console's two surfaces — the quiet `native` marker
-    /// beside the frame rate and the amber refusal strip under the preview
-    /// — are drivable without an S3 on the bench.
+    /// `--jit`: what `/api/status` reports for the on-device JIT (Gitea
+    /// #658, per-layer since #718/#757). Pure impersonation, like
+    /// `--board-name` and `--out-fps` — the mirror has no JIT and never
+    /// will; the emitter is a device backend and this process IS the native
+    /// code. The point is that the console's surfaces — the quiet `native`
+    /// marker beside the frame rate, the amber refusal strip under the
+    /// preview, and anything built on the per-layer table — are drivable
+    /// without an S3 on the bench.
     ///
     /// Default `off`, which is the honest answer for a host and is also
     /// what most of the fleet reports, so nothing appears unless a test
     /// asks for it.
-    jit_state: String,
-    jit_reason: Option<String>,
+    jit: JitSpec,
     /// `--stale-store`: a store filled by an OLDER console. A pattern
     /// entering the library for the first time has its blob's format word
     /// decremented, so it genuinely fails to decode — `GET /api/patterns`
@@ -974,6 +1142,11 @@ fn status_json(state: &State) -> String {
     // always emits them and reports 0 where they mean nothing, so the mirror
     // does the same rather than omitting them (a client must tell "0, this is
     // a strip" from "absent, this firmware is old" the same way on both).
+    // frame_us/vm_us/pipe_us are the same argument and are MEASURED, not
+    // impersonated (#262) — the mirror does render. `out_us` and `dropped`
+    // are literal 0 for the reason a strip board reports 0: there is no
+    // output driver to time and nothing between the VM and a fixture to lose
+    // a frame in.
     // geom/caps (#464): same derivation as the firmware, over this mirror's
     // own `Hw` — the rules live in luxel_core::caps so the two cannot drift.
     let pixels = state.pixel_count.load(Ordering::Relaxed);
@@ -1004,20 +1177,12 @@ fn status_json(state: &State) -> String {
     // flash part and no bootloader, so there is no ceiling. `upgrade_available`
     // is absent, which is what "no" looks like on a device too. See docs/api.md.
     let partitions = ",\"partitions\":{\"layout\":\"native\",\"migrated\":true,\"ota_slot_bytes\":0,\"storage_bytes\":0,\"assets_bytes\":0,\"ceiling_bytes\":0}";
-    // `jit` (Gitea #658): always present, same argument as `partitions`
-    // above — a client must be able to tell "this host has no JIT" from
-    // "this firmware predates the field", and only one of those is a
-    // reason to say nothing in the UI.
-    let jit = format!(
-        ",\"jit\":{{\"state\":\"{}\",\"reason\":{},\"code_bytes\":{},\"compile_us\":{}}}",
-        json_escape(&state.jit_state),
-        match &state.jit_reason {
-            Some(r) => format!("\"{}\"", json_escape(r)),
-            None => String::from("null"),
-        },
-        if state.jit_state == "native" { 4312 } else { 0 },
-        if state.jit_state == "native" { 1800 } else { 0 },
-    );
+    // `jit` (Gitea #658, per-layer since #718/#757): always present, same
+    // argument as `partitions` above — a client must be able to tell "this
+    // host has no JIT" from "this firmware predates the field", and only one
+    // of those is a reason to say nothing in the UI.
+    let mut jit = String::new();
+    state.jit.push_json(&mut jit);
     // `board` + `bc_format` (Gitea #643): the board a release package must
     // name, and the LXBC format this host reads. Both mirror firmware fields
     // and are always present, so a client tells "this device says 6" from
@@ -1044,9 +1209,12 @@ fn status_json(state: &State) -> String {
         String::new()
     };
     format!(
-        "{{\"name\":\"{}\",\"fps\":{},\"out_fps\":{},\"rescan_hz\":{},\"pixels\":{},\"max_pixels\":{},\"geom\":{},\"caps\":{},\"slot\":\"native\",\"version\":\"{}\",\"board\":\"{}\",\"bc_format\":{},\"heap_free\":{},\"engine_heap\":{}{},\"live\":{},\"vmerr\":{}{}{}{}}}",
+        "{{\"name\":\"{}\",\"fps\":{},\"frame_us\":{},\"vm_us\":{},\"pipe_us\":{},\"out_us\":0,\"out_fps\":{},\"rescan_hz\":{},\"dropped\":0,\"pixels\":{},\"max_pixels\":{},\"geom\":{},\"caps\":{},\"slot\":\"native\",\"version\":\"{}\",\"board\":\"{}\",\"bc_format\":{},\"heap_free\":{},\"engine_heap\":{}{},\"live\":{},\"vmerr\":{}{}{}{}}}",
         json_escape(&state.name.lock().unwrap()),
         fps,
+        state.frame_us.load(Ordering::Relaxed),
+        state.vm_us.load(Ordering::Relaxed),
+        state.pipe_us.load(Ordering::Relaxed),
         state.out_fps.load(Ordering::Relaxed),
         state.rescan_hz.load(Ordering::Relaxed),
         pixels,
@@ -1321,10 +1489,17 @@ fn with_layout_view<R>(
         map_grid,
         map_json: &map_json,
         proto_name: &protocol_name,
-        // the mirror has no data pin (`POST /api/datapin` 404s), so the
-        // implicit output reports 0 — the same "absent" signal `/api/config`
-        // already gives by omitting `data_pins`
-        default_pin: 0,
+        // The implicit output's pad (Gitea #579). It follows the STORED pin,
+        // not the bound one, exactly as `firmware/src/layout.rs` builds it
+        // from `shared::want_data_pin()` — so a pending `/api/datapin` change
+        // shows in the Outputs table while `/api/config`'s `data_pin` still
+        // reports what the driver is on. A panel mirror has no strip pad at
+        // all and reports 0, which is what the firmware's `hub75` build does.
+        default_pin: if state.hw.panel {
+            0
+        } else {
+            state.want_data_pin.lock().unwrap().unwrap_or(DEFAULT_DATA_PIN)
+        },
         default_proto: state.protocol.load(Ordering::Relaxed),
         default_order: state.color_order.load(Ordering::Relaxed),
         // A `--board panel` mirror answers the refresh estimate from the
@@ -1336,6 +1511,40 @@ fn with_layout_view<R>(
             driver_live: synthetic_live(&matrix, &driver),
         }),
     })
+}
+
+/// `GET /api/config`'s strip DATA-pin members (Gitea #154/#579), `""` on a
+/// panel mirror — which is how `#[cfg(not(feature = "hub75"))]` omits them on
+/// a HUB75 board, and the §5.7 "absent, never disabled" signal the Settings
+/// page's Data pin row is gated on.
+///
+/// `data_pin` is the pin the output is BOUND to. A device binds MOSI once at
+/// boot, so that is the pin the last boot saw: the mirror never reboots, so it
+/// is always the board default, and a stored change shows up as
+/// `data_pin_next` instead — the pending state a device is in between a
+/// `POST /api/datapin` and its reboot.
+fn data_pin_fields(state: &State) -> String {
+    if !state.hw.strip_driver {
+        return String::new();
+    }
+    let want = *state.want_data_pin.lock().unwrap();
+    let mut pins = String::new();
+    for (i, p) in DATA_PINS.iter().enumerate() {
+        if i > 0 {
+            pins.push(',');
+        }
+        pins.push_str(&p.to_string());
+    }
+    format!(
+        ",\"data_pin\":{},\"data_pin_default\":{},\"data_pin_next\":{},\"data_pins\":[{}]",
+        DEFAULT_DATA_PIN,
+        DEFAULT_DATA_PIN,
+        match want {
+            Some(p) if p != DEFAULT_DATA_PIN => p.to_string(),
+            _ => String::from("null"),
+        },
+        pins
+    )
 }
 
 /// `GET /api/layout` (`pixels` = `None` reports the applied count; a POST
@@ -1781,6 +1990,13 @@ fn render_loop(state: Arc<State>) {
     }
     let mut frames: u32 = 0;
     let mut fps_mark = Instant::now();
+    // Per-stage timing accumulators for this second (#262): microseconds
+    // summed over `timed` PATTERN frames, published and cleared on the same
+    // boundary as `fps`.
+    let mut timed: u32 = 0;
+    let mut t_frame: u64 = 0;
+    let mut t_vm: u64 = 0;
+    let mut t_pipe: u64 = 0;
     let mut vars_mark = Instant::now();
     let mut sensor_seen: u32 = 0;
     // `/api/status` geom (#464) — republished after any iteration that could
@@ -2022,6 +2238,10 @@ fn render_loop(state: Arc<State>) {
             last = Instant::now(); // keep the pattern clock fresh for resume
         } else if !stage.is_empty() {
             let now = Instant::now();
+            // #262: the whole pattern-frame branch, the same span the
+            // firmware's `frame_us` covers. Only pattern frames are timed, so
+            // the live-input branch above contributes nothing.
+            let frame_t0 = now;
             let delta_us = now.duration_since(last).as_micros() as u64;
             last = now;
             let mut delta = Fx::from_raw(((delta_us << 16) / 1000) as i32);
@@ -2058,10 +2278,19 @@ fn render_loop(state: Arc<State>) {
             // it at α = t: `blend_px_mode(Normal, t)` IS the old `blend_px`
             // (docs/spec/scenes.md §2), so a pattern→pattern crossfade is
             // pixel-identical to what this loop emitted before scenes.
+            // #262: `vm_us` is every engine step this frame — both stacks
+            // during a crossfade, since both are really evaluated — and
+            // `pipe_us` is the pixel work after them: the fade blend and the
+            // copy into the snapshot every client reads, which is this host's
+            // whole output pipeline (it applies no gamma/palette/blur, and the
+            // snapshot IS its preview copy).
             let out: Vec<[u8; 3]> = match prev.as_mut() {
                 Some(p) if t < 65536 => {
+                    let vm0 = Instant::now();
                     let px_old: Vec<[u8; 3]> = p.render(&state, delta, dt_ms).to_vec();
                     let mut v: Vec<[u8; 3]> = stage.render(&state, delta, dt_ms).to_vec();
+                    t_vm += vm0.elapsed().as_micros() as u64;
+                    let pipe0 = Instant::now();
                     for (d, o) in v.iter_mut().zip(px_old.iter()) {
                         let mut px = *o;
                         luxel_core::compose::blend_px_mode(
@@ -2072,9 +2301,15 @@ fn render_loop(state: Arc<State>) {
                         );
                         *d = px;
                     }
+                    t_pipe += pipe0.elapsed().as_micros() as u64;
                     v
                 }
-                _ => stage.render(&state, delta, dt_ms).to_vec(),
+                _ => {
+                    let vm0 = Instant::now();
+                    let v = stage.render(&state, delta, dt_ms).to_vec();
+                    t_vm += vm0.elapsed().as_micros() as u64;
+                    v
+                }
             };
             if t >= 65536 {
                 prev = None; // fade finished
@@ -2083,6 +2318,7 @@ fn render_loop(state: Arc<State>) {
             if let Some(eng) = stage.primary() {
                 state.engine_time_ms.store(eng.time_ms(), Ordering::Relaxed);
             }
+            let pipe0 = Instant::now();
             {
                 let mut snap = state.pixels.lock().unwrap();
                 snap.clear();
@@ -2090,16 +2326,31 @@ fn render_loop(state: Arc<State>) {
                     snap.extend_from_slice(p);
                 }
             }
+            t_pipe += pipe0.elapsed().as_micros() as u64;
             if let Some(e) = stage.primary_mut().and_then(|eng| eng.take_error()) {
                 *state.vmerr.lock().unwrap() =
                     Some(format!("line {}:{}: {}", e.line, e.col, e.message));
             }
+            t_frame += frame_t0.elapsed().as_micros() as u64;
+            timed += 1;
         }
 
         frames += 1;
         if fps_mark.elapsed() >= Duration::from_secs(1) {
             state.fps.store(frames, Ordering::Relaxed);
+            // #262: the per-stage averages, over the PATTERN frames in the
+            // second rather than every iteration — a second in which live
+            // input drove the strip reports 0, as it does on a device.
+            let n = timed as u64;
+            let avg = |sum: u64| sum.checked_div(n).unwrap_or(0) as u32;
+            state.frame_us.store(avg(t_frame), Ordering::Relaxed);
+            state.vm_us.store(avg(t_vm), Ordering::Relaxed);
+            state.pipe_us.store(avg(t_pipe), Ordering::Relaxed);
             frames = 0;
+            timed = 0;
+            t_frame = 0;
+            t_vm = 0;
+            t_pipe = 0;
             fps_mark = Instant::now();
         }
 
@@ -2501,6 +2752,61 @@ fn parse_playlist(body: &str) -> Playlist {
 /// so a scene the mirror accepts is a scene the device accepts.
 const SCENES_MAX: usize = 3840;
 
+/// The scene-id hash: a counter xored with a per-kind mask and printed as 8
+/// hex digits, the shape `luxel_core::scene::valid_id` accepts and the same
+/// construction the pattern and sprite stores use.
+const SCENE_ID_MASK: u32 = 0x5ce4_e5ff;
+
+fn scene_id_hex(seq: u32) -> String {
+    format!("{:08x}", seq ^ SCENE_ID_MASK)
+}
+
+/// Give every `S -` block a real id, and refuse a file that names one id
+/// twice (Gitea #701).
+///
+/// `--scenes FILE` used to install `parse_all`'s records verbatim, so a
+/// preload written the way the docs describe it (`S -`, the same text a POST
+/// body carries) came back with `"id":""` — and an id-less scene cannot be
+/// fetched, activated or put in a playlist. Minting here uses the SAME
+/// counter-hash `POST /api/scenes` hands out, and the returned value is what
+/// the store's counter must continue from so a later POST cannot re-mint an
+/// id the file already holds.
+fn assign_scene_ids(scenes: &mut [luxel_core::scene::Scene]) -> Result<u32, String> {
+    let mut taken: Vec<&str> = Vec::new();
+    for s in scenes.iter() {
+        if !s.id.is_empty() {
+            if taken.contains(&s.id.as_str()) {
+                return Err(format!(
+                    "scene id \"{}\" appears twice — an id names one record, and two \
+                     scenes sharing one are indistinguishable to every route that \
+                     takes an id",
+                    s.id
+                ));
+            }
+            taken.push(&s.id);
+        }
+    }
+    // `taken` borrows `scenes`; the ids it holds are what the mint must avoid,
+    // so copy them out before handing out mutable access.
+    let taken: Vec<String> = taken.into_iter().map(String::from).collect();
+    let mut seq = 0u32;
+    for s in scenes.iter_mut() {
+        if s.id.is_empty() {
+            // Step past any value the file already spells out explicitly, so
+            // minting cannot collide with an `S <id>` block in the same file.
+            loop {
+                let id = scene_id_hex(seq);
+                seq += 1;
+                if !taken.contains(&id) {
+                    s.id = id;
+                    break;
+                }
+            }
+        }
+    }
+    Ok(seq)
+}
+
 /// Pattern layers this mirror advertises (`caps.layers`) — the same
 /// derivation `/api/status` publishes, from the same core rule.
 fn layers_max(state: &State) -> usize {
@@ -2620,10 +2926,7 @@ fn scenes_save(state: &State, body: &str, want: Option<&str>) -> String {
         return String::from("{\"ok\":false,\"error\":\"no such scene\"}");
     }
     if sc.id.is_empty() {
-        sc.id = format!(
-            "{:08x}",
-            state.next_scene_id.fetch_add(1, Ordering::Relaxed) ^ 0x5ce4_e5ff
-        );
+        sc.id = scene_id_hex(state.next_scene_id.fetch_add(1, Ordering::Relaxed));
     }
     // The store's cap is on the BLOB, so measure the whole thing as it would
     // be persisted — the firmware checks `store_blob`'s bool for exactly this
@@ -2947,12 +3250,53 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
         }
         ("GET", "/api/config") => {
             let body = format!(
-                "{{\"pixels\":{},\"max\":{},\"protocol\":\"{}\"}}",
+                "{{\"pixels\":{},\"max\":{},\"protocol\":\"{}\"{}}}",
                 state.pixel_count.load(Ordering::Relaxed),
                 state.max_pixels,
-                protocol_name(state.protocol.load(Ordering::Relaxed))
+                protocol_name(state.protocol.load(Ordering::Relaxed)),
+                data_pin_fields(&state)
             );
             respond(&mut stream, 200, "application/json", body.as_bytes());
+        }
+        // POST /api/datapin — a GPIO number from `data_pins`, or `default`
+        // (Gitea #154/#579). Same wire contract as the firmware, including
+        // the `rebooting to apply` note: the stored pin is what the next boot
+        // would bind, and a mirror's "next boot" never comes, which is what
+        // leaves `data_pin_next` non-null for the console to draw. A rejected
+        // pin changes nothing. A panel mirror has no strip SPI, so — like the
+        // `hub75` firmware build — it has no route and 404s.
+        ("POST", "/api/datapin") if state.hw.strip_driver => {
+            let body = String::from_utf8_lossy(&req.body);
+            let body = body.trim();
+            let want = if body.eq_ignore_ascii_case("default") {
+                Ok(None)
+            } else {
+                match body.parse::<u8>() {
+                    Ok(p) if DATA_PINS.contains(&p) => Ok(Some(p)),
+                    _ => Err(()),
+                }
+            };
+            let r = match want {
+                Ok(want) => {
+                    *state.want_data_pin.lock().unwrap() = want;
+                    // Output 0 IS this strip, so the stored table follows the
+                    // pin the same way it follows protocol and colour order.
+                    if let Some(o) =
+                        state.layout.lock().unwrap().outputs.iter_mut().find(|o| o.n == 0)
+                    {
+                        o.pin = want.unwrap_or(DEFAULT_DATA_PIN);
+                    }
+                    format!(
+                        "{{\"ok\":true,\"data_pin\":{},\"note\":\"rebooting to apply\"}}",
+                        want.unwrap_or(DEFAULT_DATA_PIN)
+                    )
+                }
+                Err(()) => String::from(
+                    "{\"ok\":false,\"error\":\"pin must be one of data_pins \
+                     (GET /api/config) or default\"}",
+                ),
+            };
+            respond(&mut stream, 200, "application/json", r.as_bytes());
         }
         ("POST", "/api/config") => {
             let body = String::from_utf8_lossy(&req.body);
@@ -3341,6 +3685,14 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
                     if let Some(o) = edit.layout.outputs.iter().find(|o| o.n == 0) {
                         state.protocol.store(o.proto, Ordering::Relaxed);
                         state.color_order.store(o.order, Ordering::Relaxed);
+                        // …and its pad is the strip DATA pin, which is why
+                        // `out 0 pin` is a reboot edit (docs/api.md). Stored,
+                        // not bound: `/api/config`'s `data_pin_next` follows a
+                        // table edit exactly as it follows `/api/datapin`,
+                        // mirroring `firmware/src/layout.rs`.
+                        if state.hw.strip_driver {
+                            *state.want_data_pin.lock().unwrap() = Some(o.pin);
+                        }
                     }
                     let reboot = edit.reboot_required;
                     let pixels_requested = edit.pixels;
@@ -3591,9 +3943,8 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
     let mut name = String::from(DEFAULT_NAME);
     // Release-package impersonation (Gitea #643) — see the State fields.
     let mut board_name = String::from(DEFAULT_BOARD_NAME);
-    // "off" = no JIT backend, the honest answer for a host; see State::jit_state
-    let mut jit_state = String::from("off");
-    let mut jit_reason: Option<String> = None;
+    // `off` = no JIT backend, the honest answer for a host; see State::jit
+    let mut jit = JitSpec::default();
     let mut bc_format = luxel_core::bytecode::FORMAT_VERSION as u32;
     let mut stale_store = false;
     let mut accept_ota = false;
@@ -3622,16 +3973,19 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
             ("--web-dir", Some(v)) => web_dir_arg = Some(v.clone()),
             ("--scenes", Some(v)) => scenes_file = Some(v.clone()),
             ("--board-name", Some(v)) => board_name = v.clone(),
-            // impersonate a device with (or without) a working JIT (#658):
-            //   --jit native            the quiet marker by the frame rate
-            //   --jit interp:too-large  the amber strip under the preview
-            //   --jit off               (default) no backend, no UI at all
-            ("--jit", Some(v)) => match v.split_once(':') {
-                Some((st, why)) => {
-                    jit_state = st.to_string();
-                    jit_reason = Some(why.to_string());
+            // impersonate a device with (or without) a working JIT (#658),
+            // one engine or a whole stack (#718/#757):
+            //   --jit native                 the quiet marker by the frame rate
+            //   --jit interp:too-large       the amber strip under the preview
+            //   --jit native,interp:no-memory  a two-layer stack, base compiled
+            //   --jit none                   a backend with nothing resident
+            //   --jit off                    (default) no backend, no UI at all
+            ("--jit", Some(v)) => match parse_jit(v) {
+                Ok(spec) => jit = spec,
+                Err(e) => {
+                    eprintln!("luxel serve: {e}");
+                    return ExitCode::FAILURE;
                 }
-                None => jit_state = v.clone(),
             },
             ("--bc-format", Some(v)) => match v.parse::<u32>() {
                 Ok(n) if n >= 1 => bc_format = n,
@@ -3722,22 +4076,36 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
     // `--scenes <file>`: one file of scene blocks, parsed by the same core
     // parser the POST route uses. A bad file is a startup error, not a
     // silently empty store.
-    let seed_scenes: Vec<luxel_core::scene::Scene> = match scenes_file.as_deref() {
-        None => Vec::new(),
-        Some(path) => match std::fs::read_to_string(path) {
-            Ok(text) => match luxel_core::scene::parse_all(&text) {
-                Ok(v) => v,
-                Err(e) => {
-                    eprintln!("luxel serve: --scenes {path}: {e}");
-                    return ExitCode::FAILURE;
+    // An `S -` block gets an id minted here, so a preloaded scene can be
+    // fetched, activated and queued exactly like a POSTed one; `next_seq` is
+    // where the store's own counter then continues from (Gitea #701).
+    let (seed_scenes, next_scene_seq): (Vec<luxel_core::scene::Scene>, u32) =
+        match scenes_file.as_deref() {
+            None => (Vec::new(), 0),
+            Some(path) => {
+                let text = match std::fs::read_to_string(path) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        eprintln!("luxel serve: --scenes {path}: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                };
+                let mut v = match luxel_core::scene::parse_all(&text) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        eprintln!("luxel serve: --scenes {path}: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                };
+                match assign_scene_ids(&mut v) {
+                    Ok(next) => (v, next),
+                    Err(e) => {
+                        eprintln!("luxel serve: --scenes {path}: {e}");
+                        return ExitCode::FAILURE;
+                    }
                 }
-            },
-            Err(e) => {
-                eprintln!("luxel serve: --scenes {path}: {e}");
-                return ExitCode::FAILURE;
             }
-        },
-    };
+        };
     let state = Arc::new(State {
         pixel_count: AtomicU32::new(pixels),
         max_pixels,
@@ -3780,6 +4148,13 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         frame_ms: AtomicU32::new(frame_ms),
         out_fps: AtomicU32::new(out_fps),
         rescan_hz: AtomicU32::new(rescan_hz),
+        // measured, not impersonated — the render loop fills these in (#262)
+        frame_us: AtomicU32::new(0),
+        vm_us: AtomicU32::new(0),
+        pipe_us: AtomicU32::new(0),
+        // no stored pin: the board default is what the output is bound to
+        // (Gitea #579)
+        want_data_pin: Mutex::new(None),
         vmerr: Mutex::new(None),
         pattern_src: Mutex::new(String::new()),
         pattern_bc: Mutex::new(Vec::new()),
@@ -3796,7 +4171,7 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         pl_index: AtomicUsize::new(0),
         scenes: Mutex::new(seed_scenes),
         active_scene: Mutex::new(String::new()),
-        next_scene_id: AtomicU32::new(0),
+        next_scene_id: AtomicU32::new(next_scene_seq),
         text_slots: Mutex::new(vec![String::new(); luxel_core::text::SLOTS]),
         wifi_ssid: Mutex::new(None),
         name: Mutex::new(name),
@@ -3833,8 +4208,7 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         sync_leader: Mutex::new(None),
         web_dir: locate_web_dir(web_dir_arg),
         board_name,
-        jit_state,
-        jit_reason,
+        jit,
         bc_format,
         stale_store,
         accept_ota,
@@ -3944,5 +4318,137 @@ mod tests {
         assert!(!pl.items[0].scene);
         assert_eq!(pl.items[0].pattern_id, "Sabc");
         assert!(!pl.items[1].scene, "g is not hex");
+    }
+
+    // ---- `--scenes FILE` id assignment (Gitea #701) ----
+
+    const ONE_LAYER: &str = "L color 0 0 0 0 normal 100 none fill 1\nK 101030\n";
+
+    fn parse_preload(text: &str) -> Vec<luxel_core::scene::Scene> {
+        luxel_core::scene::parse_all(text).expect("the preload parses")
+    }
+
+    /// Every `S -` block leaves the loader with a referenceable id, minted by
+    /// the same counter-hash `POST /api/scenes` uses — the ids a fresh mirror
+    /// then hands out continue from where the file stopped.
+    #[test]
+    fn preload_mints_an_id_for_every_dash_block() {
+        let mut v =
+            parse_preload(&format!("S - Wall clock\n{ONE_LAYER}S - Aurora\n{ONE_LAYER}"));
+        let next = assign_scene_ids(&mut v).expect("two fresh blocks are fine");
+        assert_eq!(v[0].id, scene_id_hex(0));
+        assert_eq!(v[1].id, scene_id_hex(1));
+        assert!(v.iter().all(|s| luxel_core::scene::valid_id(&s.id)));
+        assert_eq!(next, 2, "the store's counter continues past the file");
+    }
+
+    /// An explicit id is honoured as written, and never re-minted.
+    #[test]
+    fn preload_keeps_an_explicit_id() {
+        let mut v = parse_preload(&format!("S 5eed0001 Wall clock\n{ONE_LAYER}"));
+        assert_eq!(assign_scene_ids(&mut v), Ok(0));
+        assert_eq!(v[0].id, "5eed0001");
+    }
+
+    /// A file that spells out the id the counter is about to hand out does not
+    /// get two scenes with the same id — the mint steps past it.
+    #[test]
+    fn preload_mint_steps_past_an_explicit_collision() {
+        let mut v = parse_preload(&format!(
+            "S {} Taken\n{ONE_LAYER}S - Fresh\n{ONE_LAYER}",
+            scene_id_hex(0)
+        ));
+        let next = assign_scene_ids(&mut v).expect("a collision is skipped, not an error");
+        assert_eq!(v[0].id, scene_id_hex(0));
+        assert_eq!(v[1].id, scene_id_hex(1));
+        assert_eq!(next, 2);
+    }
+
+    /// Two blocks naming ONE id is a startup error: nothing downstream can
+    /// tell the records apart.
+    #[test]
+    fn preload_refuses_a_duplicate_id() {
+        let mut v = parse_preload(&format!(
+            "S 5eed0001 One\n{ONE_LAYER}S 5eed0001 Two\n{ONE_LAYER}"
+        ));
+        let e = assign_scene_ids(&mut v).expect_err("a duplicate id is refused");
+        assert!(e.contains("5eed0001"), "{e}");
+        assert!(e.contains("twice"), "{e}");
+    }
+
+    // ---- `--jit` parsing (Gitea #658/#757) ----
+
+    fn jit_json(arg: &str) -> String {
+        let mut s = String::new();
+        parse_jit(arg).expect("parses").push_json(&mut s);
+        s
+    }
+
+    /// The pre-#757 single-state forms still mean exactly what they did.
+    #[test]
+    fn jit_keeps_the_single_state_forms() {
+        let off = parse_jit("off").unwrap();
+        assert_eq!(off.state, "off");
+        assert!(off.reason.is_none() && off.layers.is_empty());
+
+        let native = parse_jit("native").unwrap();
+        assert_eq!(native.state, "native");
+        assert_eq!(native.layers.len(), 1, "one state is a one-engine stack");
+
+        let interp = parse_jit("interp:too-large").unwrap();
+        assert_eq!(interp.state, "interp");
+        assert_eq!(interp.reason.as_deref(), Some("too-large"));
+        assert_eq!(interp.layers.len(), 1);
+
+        // `none` is the #744 steady state: a backend, nothing resident.
+        let none = parse_jit("none").unwrap();
+        assert_eq!(none.state, "none");
+        assert!(none.layers.is_empty());
+    }
+
+    /// A comma-separated list is a per-layer stack, bottom → top, and the
+    /// scalar block describes its BASE layer (docs/api.md).
+    #[test]
+    fn jit_parses_a_per_layer_list() {
+        let spec = parse_jit("native,interp:no-memory").unwrap();
+        assert_eq!(spec.state, "native");
+        assert!(spec.reason.is_none(), "the base layer compiled");
+        assert_eq!(spec.layers.len(), 2);
+        assert_eq!(spec.layers[1].state, "interp");
+        assert_eq!(spec.layers[1].reason.as_deref(), Some("no-memory"));
+    }
+
+    /// `off` / `none` describe the host, so they are refused inside a list
+    /// rather than emitted as an engine that is not there.
+    #[test]
+    fn jit_refuses_a_host_state_inside_a_list() {
+        assert!(parse_jit("native,off").is_err());
+        assert!(parse_jit("none,native").is_err());
+        assert!(parse_jit("native,sideways").unwrap_err().contains("unknown state"));
+        assert!(parse_jit("").is_err(), "an empty state names nothing");
+    }
+
+    /// The JSON is the shape #718 gave the firmware: counts over `layers`, a
+    /// 0-based `layer` index, and `kind` always `"pattern"`.
+    #[test]
+    fn jit_json_carries_the_per_layer_table() {
+        let js = jit_json("native,interp:no-memory");
+        assert!(js.contains("\"native\":1"), "{js}");
+        assert!(js.contains("\"interp\":1"), "{js}");
+        assert!(js.contains("\"state\":\"native\",\"reason\":null,\"code_bytes\":4312"), "{js}");
+        assert!(
+            js.contains(
+                "{\"layer\":1,\"kind\":\"pattern\",\"state\":\"interp\",\
+                 \"reason\":\"no-memory\",\"code_bytes\":0}"
+            ),
+            "{js}"
+        );
+
+        // `off` and `none` describe no engine at all.
+        for arg in ["off", "none"] {
+            let js = jit_json(arg);
+            assert!(js.contains("\"native\":0,\"interp\":0,\"layers\":[]"), "{arg}: {js}");
+            assert!(js.contains("\"code_bytes\":0,\"compile_us\":0"), "{arg}: {js}");
+        }
     }
 }

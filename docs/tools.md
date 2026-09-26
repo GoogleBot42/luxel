@@ -140,7 +140,25 @@ route when you want the panel's capabilities too.
 
 `--scenes FILE` seeds the mirror's scene store from a file of wire blocks
 (Gitea #478) — the flag a harness reaches for to bring a mirror up with
-scenes already in it; the store, like the text slots, is in-memory only.
+scenes already in it; the store, like the text slots, is in-memory only. An
+`S -` block gets an id minted on load, with the same counter-hash
+`POST /api/scenes` uses, so a preloaded scene is addressable and queueable like
+any other (Gitea #701); two blocks naming one id is a startup error.
+
+`--jit STATE[:REASON][,…]` impersonates the on-device JIT (Gitea #658). A
+comma-separated list is a **per-layer stack**, bottom → top:
+`--jit native,interp:no-memory` makes `/api/status`'s `jit` block report
+`native:1`, `interp:1` and the two-entry `layers[]` table #718 added, which is
+how any console surface built on it is driven without an S3 on the bench
+(Gitea #757). `off` (the default) and `none` are whole-host answers and are
+refused inside a list.
+
+A `--board strip` mirror publishes `data_pin` / `data_pin_default` /
+`data_pin_next` / `data_pins` on `GET /api/config` and serves
+`POST /api/datapin` (Gitea #579) — a classic-ESP32-shaped pad list, default
+GPIO18. It never reboots, so a stored pin stays in `data_pin_next`: that is
+the pending state the Settings Data pin row and the Outputs pad picker are
+measured in (mockdiff frames S3b and S3j).
 
 `--ddp-port` / `--e131-port` move the network-input listeners off the standard
 DDP 4048 / sACN 5568 (Gitea #496). Those ports are global, so a mirror left

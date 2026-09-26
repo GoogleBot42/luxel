@@ -67,8 +67,9 @@ async function api(path, body) {
 }
 
 /** Per-stage frame timing from /api/status, as a compact console field.
- *  Empty string on firmware that predates the counters (Gitea #260) or on
- *  the native mirror, which does not report them. */
+ *  Empty string on firmware that predates the counters (Gitea #260). The
+ *  native mirror reports them too since Gitea #262 — measured, with out_us
+ *  always 0 (no output driver to time). */
 const stages = (st) =>
   st.frame_us === undefined
     ? ""
@@ -167,7 +168,8 @@ for (const p of gallery) {
     heap: st.heap_free,
     vmerr: st.vmerr,
     // per-stage frame timing (µs/frame), firmware ≥ the /api/status
-    // frame_us field — undefined on older firmware and on the mirror
+    // frame_us field — undefined only on firmware that predates it (#262 gave
+    // the mirror the same four)
     frame_us: st.frame_us,
     vm_us: st.vm_us,
     pipe_us: st.pipe_us,

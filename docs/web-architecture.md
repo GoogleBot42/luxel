@@ -800,8 +800,9 @@ before, and a pattern with nothing to say renders no extra element at all.
   The happy path is not a strip at all: a device that COMPILED the pattern
   gets a quiet `native` marker beside the frame rate in the shell header
   (`jit-native`), because it explains the number rather than being news.
-  `luxel serve --jit native|interp:REASON|off` drives all three without an
-  S3 on the bench (docs/api.md).
+  `luxel serve --jit native|interp:REASON|none|off` drives all three without an
+  S3 on the bench, and a comma-separated list (`--jit native,interp:no-memory`)
+  drives the per-layer `jit.layers` table too (docs/api.md, Gitea #757).
 
 `lx_kinds`'s JSON is `{jit:{eligible,reason?},dyn:[…],stats:{typed_slots,
 total_slots}}`; `web/src/lib/lints.ts` is the whole mapping from it to what

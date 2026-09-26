@@ -81,7 +81,8 @@ export interface DeviceStatus {
     compile_us: number;
     /** Resident engines compiled / interpreting, counted over `layers`.
      *  Their sum is `engines` unless the stack is deeper than eight layers.
-     *  Absent from firmware older than #718 and from the native mirror. */
+     *  Absent from firmware older than #718; the native mirror impersonates
+     *  them from `--jit` (Gitea #757). */
     native?: number;
     interp?: number;
     /** One entry per RESIDENT ENGINE, bottom → top. Sparse in `layer`: a
@@ -136,7 +137,8 @@ export interface DeviceStatus {
    *  over the last second. `frame_us` is the whole engine branch, `vm_us` the
    *  pattern evaluation, `pipe_us` the preview copy + output pipeline (gamma /
    *  palette / blur), `out_us` the LED/HUB75 driver write. Absent on firmware
-   *  older than the fields and on the native mirror; the window averages only
+   *  older than the fields; the native mirror measures them too (Gitea #262,
+   *  `out_us` always 0 there — it drives no fixture). The window averages only
    *  pattern frames, so all four read 0 while live input drives the strip. */
   frame_us?: number;
   vm_us?: number;
