@@ -597,13 +597,20 @@ fn layer_ident(scene_id: &str, l: &Layer) -> u64 {
 /// ONE shared 3 B/px scratch buffer (allocated on first use, released with
 /// the scene).
 ///
+/// The scratch is a [`crate::arena::FrameVec`]: on a board with an external
+/// arena it comes out of PSRAM beside the engine frames it is composited
+/// with, so a text layer costs the internal heap nothing there (Gitea #702's
+/// residue — the 12,288 B a 64x64 text layer took out of a heap that had
+/// ~12 KB left, which is why the text drew nothing). Everywhere else the
+/// arena IS the global allocator and nothing changes.
+///
 /// The host drives layers bottom → top, calling [`Compositor::pattern_layer`]
 /// with that layer's engine frame or [`Compositor::native_layer`] for the
 /// text / sprite / colour layers.
 pub struct Compositor {
     grid: GridMap,
     layers: Vec<LayerRt>,
-    scratch: Vec<[u8; 3]>,
+    scratch: crate::arena::FrameVec,
     epoch: u32,
 }
 
@@ -612,7 +619,7 @@ impl Compositor {
         Compositor {
             grid,
             layers: Vec::new(),
-            scratch: Vec::new(),
+            scratch: crate::arena::empty(),
             epoch: 0,
         }
     }
@@ -622,7 +629,7 @@ impl Compositor {
     pub fn set_grid(&mut self, grid: GridMap) {
         if self.grid != grid {
             self.grid = grid;
-            self.scratch = Vec::new();
+            self.scratch = crate::arena::empty();
         }
     }
 
@@ -799,11 +806,13 @@ impl Compositor {
         }
     }
 
-    /// Bytes this compositor is holding — the shared frame scratch plus
-    /// the cooked ramp LUTs. The number a device loses from `heap_free`
-    /// for a scene.
+    /// Bytes of the MAIN heap this compositor is holding — the shared frame
+    /// scratch (unless an external arena holds it, see
+    /// [`crate::arena::frames_external`]) plus the cooked ramp LUTs. The
+    /// number a device loses from `heap_free` for a scene.
     pub fn resident_bytes(&self) -> usize {
-        self.scratch.capacity() * 3
+        let scratch = if crate::arena::frames_external() { 0 } else { self.scratch.capacity() * 3 };
+        scratch
             + self.layers.iter().filter(|l| l.lut.is_some()).count() * 768
             + self.layers.len() * core::mem::size_of::<LayerRt>()
     }
@@ -893,7 +902,7 @@ impl SceneDriver {
     pub fn frame<H: SceneHost + ?Sized>(
         &mut self,
         comp: &mut Compositor,
-        dst: &mut Vec<[u8; 3]>,
+        dst: &mut crate::arena::FrameVec,
         n: usize,
         delta: Fx,
         host: &mut H,
@@ -945,7 +954,7 @@ impl SceneDriver {
 ///
 /// The capacity survives, so this is one reservation per scene and a
 /// compare per frame after it.
-fn scratch_for(scratch: &mut Vec<[u8; 3]>, n: usize) -> bool {
+fn scratch_for(scratch: &mut crate::arena::FrameVec, n: usize) -> bool {
     if scratch.len() == n {
         return true;
     }
@@ -1109,7 +1118,7 @@ mod tests {
     /// never a fresh allocation just because the grid shrank.
     #[test]
     fn the_render_scratch_is_reserved_once_and_then_only_compared() {
-        let mut sc: Vec<[u8; 3]> = Vec::new();
+        let mut sc: crate::arena::FrameVec = crate::arena::empty();
         assert!(scratch_for(&mut sc, 4096));
         assert_eq!(sc.len(), 4096);
         let cap = sc.capacity();
@@ -1574,7 +1583,7 @@ mod tests {
         comp.set_scene(&scene);
         let mut driver = SceneDriver::new();
         let mut host = SpriteHost(record);
-        let mut px: Vec<[u8; 3]> = Vec::new();
+        let mut px: crate::arena::FrameVec = crate::arena::empty();
         // 60 fps steps, so the driver's remainder carry is exercised too
         let step = Fx::from_raw((1000 << 16) / 60);
         let mut seen: Vec<usize> = Vec::new();

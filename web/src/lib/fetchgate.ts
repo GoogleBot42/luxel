@@ -13,7 +13,7 @@
 // a cold load the browser's own html/css/js connections pin the device's
 // two sockets for seconds at a time, and 3 retries (~1 s) burned out
 // before a slot freed (observed on the Athom, 2-slot build).
-import { lnaHint, type LnaInit } from "./lna";
+import { lnaHint, type LnaInit } from "./lna.ts";
 
 const MAX_INFLIGHT = 2;
 const RETRIES = 6;

@@ -13,8 +13,9 @@
   // that work?":
   //
   //   * the device is not answering at all (`deviceDown`, driven by the
-  //     status poll through `lib/fetchgate.ts`). A condition: it clears
-  //     itself, counts up from the last answer, and has no ✕.
+  //     status poll through `lib/fetchgate.ts`, or `deviceConnectFailed` when
+  //     there is no session to poll WITH). A condition: it clears itself,
+  //     counts up from the last answer, and has no ✕.
   //   * a request was REFUSED (`apiError`, translated by `lib/apiErrors.ts`).
   //     An event: it is dismissable, and it names the field it is about.
   //
@@ -22,7 +23,20 @@
   // dead board is one fact, not two.
   import { onDestroy } from "svelte";
   import { apiError, clearApiError } from "../stores/notify";
-  import { deviceDown, deviceLastSeen, pollSubscribe } from "../stores/device";
+  import {
+    deviceConnectFailed,
+    deviceDown,
+    deviceLastSeen,
+    pollSubscribe,
+  } from "../stores/device";
+
+  /** The same fact from two angles: the gate watched requests fail
+   *  (`deviceDown`), or there is no session to make any (`deviceConnectFailed`
+   *  — the handshake was refused and `retryConnect` is on it). The second was
+   *  SILENT before the 2026-09-26 panel: a console with no session makes no
+   *  requests, so the gate has nothing to count and the user got a page with
+   *  no tabs and no explanation. */
+  $: unreachable = $deviceDown || $deviceConnectFailed;
 
   /** Ticks the "last seen 12 s ago" clock while the device is down. */
   let now = Date.now();
@@ -30,7 +44,7 @@
   $: {
     stopTick?.();
     stopTick = undefined;
-    if ($deviceDown)
+    if (unreachable)
       stopTick = pollSubscribe("liveness-clock", 1000, () => {
         now = Date.now();
       });
@@ -72,7 +86,7 @@
   onDestroy(() => mark(undefined));
 </script>
 
-{#if $deviceDown}
+{#if unreachable}
   <div class="errbar down" data-role="device-down-bar" role="alert">
     <span class="msg">
       <b>Device unreachable</b> — retrying…{lastSeen ? ` last seen ${lastSeen} ago` : ""}

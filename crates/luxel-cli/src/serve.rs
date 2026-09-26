@@ -1444,7 +1444,7 @@ struct Stage {
     /// while the store is behind a mutex).
     sprites: Vec<(usize, Vec<u8>)>,
     /// Composite output (scene stages only).
-    out: Vec<[u8; 3]>,
+    out: luxel_core::arena::FrameVec,
     /// The SHARED full-frame driver (Gitea #732) — the same walk the device
     /// and the playground run, sub-millisecond remainder included.
     driver: luxel_core::compose::SceneDriver,
@@ -1506,7 +1506,7 @@ impl Stage {
             kinds: Vec::new(),
             engines: vec![(0, engine)],
             sprites: Vec::new(),
-            out: Vec::new(),
+            out: luxel_core::arena::empty(),
             driver: luxel_core::compose::SceneDriver::new(),
             text: String::new(),
         }
@@ -1622,7 +1622,7 @@ fn build_stage(state: &State, sc: &luxel_core::scene::Scene) -> Result<Stage, St
         kinds: sc.layers.iter().map(|l| l.kind()).collect(),
         engines,
         sprites,
-        out: Vec::new(),
+        out: luxel_core::arena::empty(),
         driver: luxel_core::compose::SceneDriver::new(),
         text: String::new(),
     })
@@ -1702,7 +1702,7 @@ fn render_loop(state: Arc<State>) {
             kinds: Vec::new(),
             engines: Vec::new(),
             sprites: Vec::new(),
-            out: Vec::new(),
+            out: luxel_core::arena::empty(),
             driver: luxel_core::compose::SceneDriver::new(),
             text: String::new(),
         },

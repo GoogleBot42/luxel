@@ -3,9 +3,9 @@
 // local wasm engine. Raw 16.16 values cross the wire; this wrapper converts
 // at the boundary, mirroring the wasm wrapper's conventions.
 
-import { gatedFetch, type GateOptions } from "./fetchgate";
+import { gatedFetch, type GateOptions } from "./fetchgate.ts";
 import type { ProjectionMode } from "./geometry";
-import { normalizePlaylist, playlistWire } from "./playlist";
+import { normalizePlaylist, playlistWire } from "./playlist.ts";
 
 export interface DeviceStatus {
   /** The device's own mDNS-style name (`luxel-f6b0a8`) — what the console
@@ -387,9 +387,45 @@ export interface MqttStatus {
 
 const RAW = 65536;
 
+/**
+ * `GET /api/patterns/<id>` did not hand back a source.
+ *
+ * `missing` is the whole reason this has a type: a row whose source is merely
+ * unavailable RIGHT NOW must be asked for again (a low-memory board refuses
+ * it and then serves it fine seconds later), while one the device does not
+ * hold must not be — retrying that forever is a request per poll into a board
+ * with two sockets. Everything that is not recognisably "no such pattern" is
+ * transient; see `patternSource`.
+ */
+export class PatternSourceError extends Error {
+  readonly missing: boolean;
+
+  constructor(message: string, missing: boolean) {
+    super(message);
+    this.name = "PatternSourceError";
+    this.missing = missing;
+  }
+}
+
+/** Does this refusal mean the pattern is GONE (as opposed to unavailable for
+ *  the moment)? A 404 says so, and so does the firmware's / the mirror's own
+ *  wording. `busy`/`out of memory`/`503` deliberately do not. */
+function isMissingPattern(status: number, why: string): boolean {
+  if (status === 404) return true;
+  return /\b(no such|not found|unknown pattern|missing)\b/i.test(why);
+}
+
 export class DeviceSession {
-  /** `base` is "" when served from the device itself, else "http://host[:port]". */
-  constructor(readonly base: string) {}
+  /** `base` is "" when served from the device itself, else "http://host[:port]".
+   *  Spelled out rather than as a constructor PARAMETER PROPERTY on purpose:
+   *  `npm test` loads this module through node's type stripping, which is
+   *  strip-only and refuses `constructor(readonly base: string)` outright
+   *  ("TypeScript parameter property is not supported"). */
+  readonly base: string;
+
+  constructor(base: string) {
+    this.base = base;
+  }
 
   private url(path: string): string {
     return this.base + path;
@@ -413,9 +449,18 @@ export class DeviceSession {
    * path's ~30 s of patience in silence. `force` because this is the ONE
    * request that has to keep going out while the gate says the device is
    * down: it is the probe that clears the latch.
+   *
+   * `patient` opts OUT of the fast path, for the ONE caller that is not a
+   * heartbeat: the connect handshake. Zero retries there meant a single
+   * refused connection — routine on a 2-socket board around a scene switch
+   * (the 2026-09-26 panel) — threw the whole handshake away and left a
+   * half-dead console with no session and nothing retrying it.
    */
-  async status(): Promise<DeviceStatus> {
-    const res = await this.fetch("/api/status", undefined, { fastFail: true, force: true });
+  async status(opts?: { patient?: boolean }): Promise<DeviceStatus> {
+    const res = await this.fetch("/api/status", undefined, {
+      fastFail: !opts?.patient,
+      force: true,
+    });
     // An ERROR STATUS IS NOT A STATUS. `fetchgate` throws only on transport
     // failures, so without this a 503 `{"ok":false,"error":"out of memory"}`
     // deserializes into a `DeviceStatus` whose every field is `undefined` —
@@ -535,9 +580,17 @@ export class DeviceSession {
    *  Absent on firmware older than the field, which means "not known to be
    *  stale", never "known to be fine". */
   async patterns(): Promise<DevicePatternRow[]> {
-    const r = (await (await this.fetch("/api/patterns")).json()) as {
-      patterns?: DevicePatternRow[];
-    };
+    const res = await this.fetch("/api/patterns");
+    // AN ERROR STATUS IS NOT A LIBRARY — the same invariant `status()` above
+    // spells out, arriving through the door #753 did not close. Without this,
+    // a 503 `{"ok":false,"error":"out of memory"}` deserialized into
+    // `{ patterns: undefined }` and READ AS AN EMPTY LIBRARY: the store was
+    // wiped, every cached source with it, and the scene editor then had no
+    // source for any layer — "the scene editor doesn't render any patterns,
+    // just text" (Jeremy, 2026-09-26). Throwing puts it on the caller's
+    // keep-the-last-reading path instead.
+    if (!res.ok) throw new Error(`patterns: HTTP ${res.status}`);
+    const r = (await res.json()) as { patterns?: DevicePatternRow[] };
     return r.patterns ?? [];
   }
 
@@ -550,12 +603,32 @@ export class DeviceSession {
     return (await res.json()) as { ok: boolean; bytes?: number; error?: string };
   }
 
+  /**
+   * One stored pattern's SOURCE.
+   *
+   * Two failure shapes, and the caller has to tell them apart (the
+   * 2026-09-26 panel): a device short of heap answers this route with a 503
+   * `{"code":"busy"}` — or, on firmware that predates that, a 200
+   * `{"ok":false,"error":"…"}` — and that is TRANSIENT, worth asking again
+   * for. A pattern that is genuinely gone is permanent. Guessing wrong the
+   * transient way blanks a scene layer for the rest of the session
+   * (`loadDevicePreviewSources` used to give up on a row forever), so
+   * anything that is not recognisably "no such pattern" is reported as
+   * transient.
+   */
   async patternSource(id: string): Promise<{ id: string; name: string; source: string }> {
-    return (await (await this.fetch(`/api/patterns/${id}`)).json()) as {
-      id: string;
-      name: string;
-      source: string;
-    };
+    const res = await this.fetch(`/api/patterns/${id}`);
+    let body: { id?: string; name?: string; source?: unknown; error?: unknown; code?: unknown } = {};
+    try {
+      body = (await res.json()) as typeof body;
+    } catch {
+      /* empty / truncated body — the transient case, reported below */
+    }
+    if (res.ok && typeof body.source === "string") {
+      return { id: body.id ?? id, name: body.name ?? "", source: body.source };
+    }
+    const why = typeof body.error === "string" ? body.error : `HTTP ${res.status}`;
+    throw new PatternSourceError(`pattern ${id}: ${why}`, isMissingPattern(res.status, why));
   }
 
   /** Save (same name overwrites). Body is an LXP1 envelope — the device

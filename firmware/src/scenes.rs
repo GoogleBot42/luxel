@@ -429,12 +429,12 @@ impl Runtime {
     /// whole milliseconds come from `delta`, remainder carried.
     pub fn render(
         &mut self,
-        dst: &mut Vec<[u8; 3]>,
+        dst: &mut luxel_core::arena::FrameVec,
         base: Option<&mut Engine>,
         delta: Fx,
         _dt_ms: u32,
         n: usize,
-    ) {
+    ) -> bool {
         let Runtime { comp, slots, driver, .. } = self;
         let mut host = SlotHost {
             slots: slots.as_mut_slice(),
@@ -447,8 +447,24 @@ impl Runtime {
         // scene's first frame after an activation grows it by 3 B/px INSIDE
         // the render loop — the exact shape that panicked the Seengreat
         // panel in #702. A frame this board cannot afford is a frame not
-        // drawn, not a reboot.
-        driver.frame(comp, dst, n, delta, &mut host);
+        // drawn, not a reboot — and the caller must not PUBLISH it either:
+        // `dst` is empty then, and an empty stage on the wire is a fully
+        // black panel (2026-09-26, Gitea #777).
+        driver.frame(comp, dst, n, delta, &mut host)
+    }
+
+    /// The first pending VM error among the NON-base pattern layers. The
+    /// base layer runs on the render task's own engine, which the task
+    /// polls itself; the others live in the slot table, and until this
+    /// existed a second layer could error every frame and draw black for
+    /// the life of the scene with no `vmerr`, no serial line, nothing —
+    /// under `key: black` a black frame is fully transparent, so it read
+    /// as a layer that had never been built (2026-09-26, Gitea #777).
+    pub fn take_error(&mut self) -> Option<luxel_core::vm::VmError> {
+        self.slots.iter_mut().find_map(|s| match s {
+            Slot::Pattern(e) => e.take_error(),
+            _ => None,
+        })
     }
 }
 
@@ -526,7 +542,7 @@ pub fn build_runtime(
         l.kind() == luxel_core::scene::LayerKind::Text
             || matches!(&l.body, luxel_core::scene::LayerBody::Pattern(p) if p.ramp.is_some())
     }) {
-        luxel_core::budget::compositor_scratch(pixels)
+        luxel_core::budget::compositor_scratch(pixels, luxel_core::arena::frames_external())
     } else {
         0
     };

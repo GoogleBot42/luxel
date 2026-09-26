@@ -197,24 +197,35 @@ pub const fn layer_fits(heap_free: usize, pixel_count: u32, frame_external: bool
     layer_fits_with(heap_free, pixel_count, 0, frame_external)
 }
 
-/// Bytes the compositor's shared per-frame scratch costs at this pixel
-/// count: one RGB888 frame.
+/// Bytes of INTERNAL heap the compositor's shared per-frame scratch costs
+/// at this pixel count: one RGB888 frame — or nothing when an external
+/// arena holds it.
 ///
-/// Always internal DRAM, even where [`layer_cost`]'s frames are not: this
-/// one is the compositor's own working buffer, read and written per pixel
-/// *within* a frame while the layer frames are also being read, and it is
-/// one buffer rather than one per layer. Moving it bought nothing worth the
-/// risk (Gitea #709).
+/// `frame_external` is the same [`crate::arena::frames_external`] answer
+/// [`layer_cost`] takes: the scratch is a [`crate::arena::FrameVec`] like
+/// the engine frames, so on a `psram-arena` board it lives beside them in
+/// PSRAM and the internal heap never sees it. It was kept internal through
+/// #709 on the argument that it is read and written per pixel *within* a
+/// frame beside the layer frames — but by then the layer frames were
+/// already in PSRAM, and on the Seengreat panel the 12,288 B it took out of
+/// a heap with ~12 KB left is exactly why a 3-layer scene's text drew
+/// nothing (the reservation failed inside the render loop, #702's fallible
+/// path) while its second pattern layer got no engine.
 ///
-/// `luxel_core::compose::Compositor` allocates it with an **infallible**
-/// `Vec::resize`, inside the render loop, the first time a text layer draws
-/// or a layer ramp is applied. A host therefore has to budget it BEFORE it
-/// builds any of the scene's engines. Not doing so panicked the Seengreat
-/// panel's render task on 2026-09-24 — `memory allocation of 2688 bytes
-/// failed`, one frame after the scene's base engine and its JIT compile had
-/// both been accepted with heap to spare.
-pub const fn compositor_scratch(pixel_count: u32) -> usize {
-    pixel_count as usize * 3
+/// `luxel_core::compose::Compositor` reserves it fallibly, inside the render
+/// loop, the first time a text layer draws or a layer ramp is applied; a
+/// host budgets it BEFORE it builds any of the scene's engines so the
+/// engine is refused rather than the text silently dropped. Not budgeting
+/// it at all panicked the Seengreat panel's render task on 2026-09-24 —
+/// `memory allocation of 2688 bytes failed`, one frame after the scene's
+/// base engine and its JIT compile had both been accepted with heap to
+/// spare.
+pub const fn compositor_scratch(pixel_count: u32, frame_external: bool) -> usize {
+    if frame_external {
+        0
+    } else {
+        pixel_count as usize * 3
+    }
 }
 
 /// [`layer_fits`] with `reserve` further bytes held back above the floor —
@@ -439,15 +450,17 @@ mod layer_tests {
         // the panel's measured steady `load_base` (47.1–49.1 KB, #709) with
         // the staging frame charged: two layers fit where one did.
         let free = 47_121;
-        assert!(!layer_fits_with(free, 4096, compositor_scratch(4096), false));
-        assert!(layer_fits_with(free, 4096, compositor_scratch(4096), true));
-        // 20,480 + 2*4,096 + 12,288 = 41,152 — and it is 65,536 internal
+        assert!(!layer_fits_with(free, 4096, compositor_scratch(4096, false), false));
+        assert!(layer_fits_with(free, 4096, compositor_scratch(4096, true), true));
+        // 20,480 + 2*4,096 + 0 = 28,672 with the scratch in the arena too
+        // (it was 40,960 while the scratch stayed internal) — and it is
+        // 65,536 with everything internal
         assert_eq!(
-            RUNTIME_FLOOR + 2 * layer_cost(4096, true) + compositor_scratch(4096),
-            40_960
+            RUNTIME_FLOOR + 2 * layer_cost(4096, true) + compositor_scratch(4096, true),
+            28_672
         );
         assert_eq!(
-            RUNTIME_FLOOR + 2 * layer_cost(4096, false) + compositor_scratch(4096),
+            RUNTIME_FLOOR + 2 * layer_cost(4096, false) + compositor_scratch(4096, false),
             65_536
         );
     }
@@ -484,13 +497,34 @@ mod scratch_tests {
     /// the render loop and the next routine allocation panics.
     #[test]
     fn a_text_layer_reserves_the_compositors_scratch() {
-        assert_eq!(compositor_scratch(4096), 12_288);
+        assert_eq!(compositor_scratch(4096, false), 12_288);
         assert!(layer_fits(45_000, 4096, false), "the engine alone fits");
         assert!(
-            !layer_fits_with(45_000, 4096, compositor_scratch(4096), false),
+            !layer_fits_with(45_000, 4096, compositor_scratch(4096, false), false),
             "…but not beside the scratch the scene will also need"
         );
         // a scene with no text and no ramp is unchanged
         assert!(layer_fits_with(45_000, 4096, 0, false));
+    }
+
+    /// The Seengreat panel's 2026-09-26 symptom, turned into arithmetic:
+    /// with the scratch in the arena a text layer costs the internal heap
+    /// nothing, so the 35.8 KB the panel idles at affords two 4096-px
+    /// pattern layers AND the text on top (35,808 ≥ 20,480 + 2 × 4,096).
+    #[test]
+    fn an_external_scratch_costs_the_internal_heap_nothing() {
+        assert_eq!(compositor_scratch(4096, true), 0);
+        let free = 35_808;
+        assert!(layer_fits_with(free, 4096, compositor_scratch(4096, true), true));
+        assert!(layer_fits_with(
+            free - layer_cost(4096, true),
+            4096,
+            compositor_scratch(4096, true),
+            true
+        ));
+        // …where an internal scratch left room for none at all — which is
+        // the state the panel was found in: the text or the second engine,
+        // whichever asked second, went without
+        assert!(!layer_fits_with(free, 4096, compositor_scratch(4096, false), true));
     }
 }

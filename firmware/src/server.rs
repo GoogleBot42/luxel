@@ -327,6 +327,24 @@ fn oom_reply() -> ApiResponse {
     .cors()
 }
 
+/// A read the device cannot serve RIGHT NOW — the store mid-write, or a
+/// pattern-sized body the heap cannot hold this instant — as a 503 with
+/// `"code":"busy"`, so a client can tell "retry in a moment" from "that
+/// record does not exist" (Gitea #777). Static body: costs no heap, like
+/// [`oom_reply`].
+const BUSY_BODY: &str = "{\"ok\":false,\"code\":\"busy\",\"error\":\"device busy — retry\"}";
+
+fn busy_reply() -> ApiResponse {
+    Reply::new(
+        StatusCode::SERVICE_UNAVAILABLE,
+        ApiBody::Text {
+            ct: "application/json",
+            s: BUSY_BODY,
+        },
+    )
+    .cors()
+}
+
 /// One scene read's two outcomes (`scenes::Body`) as a response.
 fn scenes_reply(b: crate::scenes::Body) -> ApiResponse {
     match b {
@@ -3061,10 +3079,17 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 // GET /api/patterns/<id> → {"id","name","source"}; missing id
                 // returns 200 + {"ok":false,…} to match the mirror (serve.rs).
                 r if r.starts_with("/api/patterns/") => {
-                    let j = crate::patterns::get_json(&r["/api/patterns/".len()..])
-                        .await
-                        .unwrap_or_else(|| String::from("{\"ok\":false,\"error\":\"no such pattern\"}"));
-                    Some(json_response(j))
+                    use crate::patterns::GetErr;
+                    Some(match crate::patterns::get_json(&r["/api/patterns/".len()..]).await {
+                        Ok(j) => json_response(j),
+                        Err(GetErr::Missing) => {
+                            json_response(String::from("{\"ok\":false,\"error\":\"no such pattern\"}"))
+                        }
+                        // A body the heap cannot hold this instant is NOT a
+                        // missing pattern: the console must keep the layer
+                        // and retry, not blank it (2026-09-26, Gitea #777).
+                        Err(GetErr::Busy) => busy_reply(),
+                    })
                 }
                 other => {
                     #[cfg(not(feature = "hosted-ui"))]

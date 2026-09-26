@@ -18,7 +18,7 @@ import {
   type ApiErrorContext,
   type ApiErrorExplained,
   type ApiErrorScope,
-} from "../lib/apiErrors";
+} from "../lib/apiErrors.ts";
 
 /** The surfaces a transient note can be attached to. */
 export type NoteChannel =

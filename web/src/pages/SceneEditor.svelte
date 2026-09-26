@@ -224,18 +224,31 @@
   $: gridW = rig.w;
   $: gridH = rig.h;
 
-  /** PATTERN source by store id. A device pattern's source streams in with the
-   *  list; a playground one is keyed by a hash of its name. */
-  function lookup(id: string): string | null {
-    const dev = $devicePatterns.find((p) => p.id === id);
-    if (dev?.source !== undefined) return dev.source;
+  /**
+   * PATTERN source by store id. A device pattern's source streams in with the
+   * list; a playground one is keyed by a hash of its name.
+   *
+   * THREE answers, because two of them are not the same thing (#731, and the
+   * 2026-09-26 panel): a string is the source, `undefined` is "the library has
+   * this row but its source has not arrived" — the state the device leaves
+   * every row in while it is short of heap — and `null` is "no such pattern".
+   * Collapsing them made a loading layer indistinguishable from a broken one,
+   * and both drew nothing with nothing on screen to explain it.
+   *
+   * The library is an ARGUMENT so callers in the markup track it: a function
+   * that reads `$devicePatterns` through its closure is invisible to Svelte
+   * and the inspector froze at whatever it computed first (.claude/rules/web.md).
+   */
+  function lookup(id: string, dev: typeof $devicePatterns = $devicePatterns): string | null | undefined {
+    const row = dev.find((p) => p.id === id);
+    if (row) return row.source; // string, or undefined = still streaming in
     for (const p of listPatterns()) if (playgroundPatternId(p.name) === id) return p.source;
     return null;
   }
 
-  function patternNameOf(id: string): string {
-    const dev = $devicePatterns.find((p) => p.id === id);
-    if (dev) return dev.name;
+  function patternNameOf(id: string, dev: typeof $devicePatterns = $devicePatterns): string {
+    const row = dev.find((p) => p.id === id);
+    if (row) return row.name;
     for (const p of listPatterns()) if (playgroundPatternId(p.name) === id) return p.name;
     return "";
   }
@@ -258,12 +271,31 @@
       .map((l) => {
         if (l.body.kind === "sprite") return spriteBytesOf(l.body.id) === null ? "0" : "1";
         if (l.body.kind !== "pat") return "-";
-        return lookup(l.body.pat.id) === null ? "0" : "1";
+        return typeof lookup(l.body.pat.id) === "string" ? "1" : "0";
       })
       .join("/");
   }
 
+  /**
+   * Rebuild the composite — and never throw out of it.
+   *
+   * Every caller is a place a throw disappears into or takes something down
+   * with it: a bare `setTimeout` (the edit debounce), a reactive block, and
+   * `adopt()`. An exception from a wasm call used to leave the stage blank for
+   * good, with an empty right column and no error anywhere — half of
+   * "sometimes the scene editor doesn't render any patterns, just text"
+   * (Jeremy, 2026-09-26). It is reported in the column that owns the scene and
+   * the next edit tries again.
+   */
   function rebuild(force = false): void {
+    try {
+      rebuildNow(force);
+    } catch (e) {
+      sceneError = `the preview could not be built: ${String(e)}`;
+    }
+  }
+
+  function rebuildNow(force: boolean): void {
     if (!$luxel || !active) return;
     if (!renderer || builtFor !== rigKey) {
       renderer?.free();
@@ -272,10 +304,7 @@
       force = true;
     }
     const sk = sourceKey(doc);
-    if (sk !== boundSources) {
-      boundSources = sk;
-      force = true;
-    }
+    if (sk !== boundSources) force = true;
     // The compositor's own parse error and each layer's compile error are
     // assigned HERE, with the render they belong to — a `$:` derived from a
     // value a reactive block's function assigns never re-runs
@@ -283,7 +312,14 @@
     // rebuilt: its no-op path answers `null` for an unchanged wire, which
     // would otherwise clear the error of the scene still installed.
     const wire = serializeScene(doc);
+    // A THROW out of here commits nothing: `boundSources` and `renderedWire`
+    // are stamped BELOW, never before the build (the 2026-09-26 panel). They
+    // used to be stamped first, so one exception out of a wasm call left the
+    // editor believing the blank stage WAS this scene — every later rebuild
+    // took the no-op path and only a reload recovered. `rebuild()` catches it;
+    // leaving these two alone is what makes the next attempt a real one.
     const err = renderer.setScene(doc, lookup, force, spriteBytesOf);
+    boundSources = sk;
     if (force || wire !== renderedWire) {
       sceneError = err ?? "";
       layerErrors = layerErrorsOf(doc, renderer);
@@ -317,7 +353,11 @@
       const id = l.body.pat.id;
       if (id === "") return; // nothing chosen yet — not a failure
       const src = lookup(id);
-      if (src === null) return; // still streaming in
+      // No source is not a compile failure: `undefined` is still streaming in
+      // and `null` is a pattern the library does not have. Both are reported
+      // as a layer STATE instead (`layerStatesOf`) — a compile error is the
+      // user's to fix, those two are not.
+      if (typeof src !== "string") return;
       const built = compileForLayout(lx, src, 0, l.body.pat.proj, rig);
       if ("engine" in built) built.engine.free();
       else out[i] = built.line > 0 ? `line ${built.line}: ${built.message}` : built.message;
@@ -658,6 +698,37 @@
   // inspector row, and `lib/store.ts` / `stores/device.ts` keep sprite-tagged
   // patterns out of these lists entirely (#740).
   $: pickerPatterns = patternRows($devicePatterns, $device !== null, localRev);
+
+  /**
+   * Why a pattern layer is drawing nothing, when it is not a compile error.
+   *
+   * The renderer binds no engine without a source, and the composite then
+   * shows text and colour layers over a hole where the pattern should be —
+   * which reads as "the scene editor doesn't render any patterns, just text"
+   * (Jeremy, 2026-09-26). The two causes need different words: a source still
+   * streaming in resolves itself (the device refuses these while it is short
+   * of heap, and `stores/device.ts` keeps asking), while a pattern the library
+   * does not hold needs a new pick. Dependencies NAMED, so the line appears
+   * the moment the row lands (.claude/rules/web.md).
+   */
+  $: layerStates = layerStatesOf(doc, $devicePatterns, localRev);
+
+  function layerStatesOf(
+    s: Scene,
+    dev: typeof $devicePatterns,
+    _rev: number,
+  ): Record<number, string> {
+    const out: Record<number, string> = {};
+    s.layers.forEach((l, i) => {
+      if (l.body.kind !== "pat") return;
+      const id = l.body.pat.id;
+      if (id === "") return; // nothing chosen yet — the inspector says so
+      const src = lookup(id, dev);
+      if (src === undefined) out[i] = "Waiting for this pattern’s code from the device…";
+      else if (src === null) out[i] = "This pattern is not in the library — pick another.";
+    });
+    return out;
+  }
 
   function onReorder(from: number, to: number): void {
     const list = [...doc.layers];
@@ -1003,14 +1074,20 @@
         <p class="lerr" data-role="scene-layer-error">
           This layer’s pattern does not compile — {layerErrors[selected]}
         </p>
+      {:else if selected >= 0 && layerStates[selected] !== undefined}
+        <!-- …and a layer that draws nothing for a reason that is NOT its
+             pattern's fault says that instead: the source has not arrived from
+             the device, or the library no longer has it. Silence here is what
+             made a busy device look like a broken editor (2026-09-26). -->
+        <p class="lwait" data-role="scene-layer-state">{layerStates[selected]}</p>
       {/if}
 
       {#if sel && sel.body.kind === "pat"}
         <PatternInspector
           layer={sel}
           engine={renderer?.engineAt(selected) ?? null}
-          source={lookup(sel.body.pat.id)}
-          patternName={patternNameOf(sel.body.pat.id)}
+          source={lookup(sel.body.pat.id, $devicePatterns)}
+          patternName={patternNameOf(sel.body.pat.id, $devicePatterns)}
           {rig}
           on:change={(e) => replaceLayer(selected, e.detail)}
           on:pick={() => void pickFor(selected)}
@@ -1072,5 +1149,14 @@
     font-size: 12px;
     line-height: 1.4;
     color: var(--error);
+  }
+
+  /* the same slot, for a state that is nobody's fault (waiting on the device,
+     or a pattern the library no longer holds) — quiet, not alarming */
+  .lwait {
+    margin: 0 0 12px;
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--text-dim);
   }
 </style>

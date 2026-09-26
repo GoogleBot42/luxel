@@ -294,7 +294,8 @@ pub const fn layers_for_headroom(
     // the second one at activation — 12.3 KB of the 32.8 KB two layers need
     // was already gone. An advertised capability has to be one the device
     // can actually deliver.
-    let headroom = headroom.saturating_sub(crate::budget::compositor_scratch(pixel_count));
+    let headroom =
+        headroom.saturating_sub(crate::budget::compositor_scratch(pixel_count, frame_external));
     // Floored, and the host must pass a STEADY-STATE headroom (the
     // firmware's `shared::HEAP_BASE_MAX`) rather than an instantaneous one:
     // measuring costs heap, and rounding up over-promises. Both were tried
@@ -604,19 +605,22 @@ mod layer_tests {
 
     /// Gitea #709: the panel's frames move to the PSRAM arena and its
     /// MEASURED steady-state numbers — the ones that said 1 above — deliver
-    /// the 2 the tier promises. 20,480 floor + 12,288 stage leaves 14.3 KB
-    /// of the 47.1 KB low reading, which is three 4,096 B layers, clamped by
-    /// the tier to 2.
+    /// the 2 the tier promises. With the compositor's scratch in the arena
+    /// as well, the 20,480 floor leaves 26.6 KB of the 47.1 KB low reading,
+    /// which is six 4,096 B layers, clamped by the tier to 2.
     #[test]
     fn psram_frames_make_the_panels_second_layer_real() {
         assert_eq!(layers_psram(4096, 47_121, 0, MAX_LAYERS), 2);
         assert_eq!(layers_psram(4096, 31_200, 15_348, MAX_LAYERS), 2);
+        // the panel's 2026-09-26 idle reading (35.8 KB after #770's rings
+        // and tables moved onto the heap) still affords the pair
+        assert_eq!(layers_psram(4096, 33_248, 2_552, MAX_LAYERS), 2);
         // it is not a blank cheque: a genuinely starved board still says 1
-        assert_eq!(layers_psram(4096, 26_928, 0, MAX_LAYERS), 1);
+        assert_eq!(layers_psram(4096, 24_576, 0, MAX_LAYERS), 1);
         assert_eq!(layers_psram(4096, 0, 0, MAX_LAYERS), 1);
-        // the exact two-layer edge: 20,480 floor + 12,288 stage + 2x4,096
-        assert_eq!(layers_psram(4096, 40_960, 0, MAX_LAYERS), 2);
-        assert_eq!(layers_psram(4096, 40_959, 0, MAX_LAYERS), 1);
+        // the exact two-layer edge: 20,480 floor + 2x4,096
+        assert_eq!(layers_psram(4096, 28_672, 0, MAX_LAYERS), 2);
+        assert_eq!(layers_psram(4096, 28_671, 0, MAX_LAYERS), 1);
     }
 
     #[test]

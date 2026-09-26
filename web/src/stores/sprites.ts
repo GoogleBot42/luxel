@@ -33,7 +33,7 @@ import {
 } from "../lib/sprite";
 import { playgroundPatternId } from "../lib/sceneRender";
 import { deletePattern, listAllPatterns } from "../lib/store";
-import { device, pollSubscribe, refreshDevicePatterns } from "./device";
+import { device, devicePatterns, pollSubscribe, refreshDevicePatterns } from "./device";
 import { note, reportApiError } from "./notify";
 import { nextCopyName, refreshScenes, saveScene, scenes } from "./scenes";
 import type { Scene } from "../lib/scene";
@@ -432,13 +432,24 @@ async function migrateDevice(failed: string[]): Promise<number> {
   } catch {
     return 0;
   }
+  // Reuse what the library ALREADY holds (the 2026-09-26 panel). This
+  // migration used to re-download every pattern's source, one request each,
+  // on top of the sweep `refreshDevicePatterns` runs for the same rows — so
+  // opening the scene editor fired two full library downloads at a board with
+  // two sockets, which is how the reads start refusing each other in the first
+  // place. A row whose source is cached here is by definition NOT a tagged
+  // sprite (the sweep drops those from the library), so skipping it is exactly
+  // right.
+  const held = new Map(get(devicePatterns).map((p) => [p.id, p.source]));
   let n = 0;
   for (const row of rows) {
-    let source = "";
-    try {
-      source = (await d.patternSource(row.id)).source;
-    } catch {
-      continue;
+    let source = held.get(row.id);
+    if (source === undefined) {
+      try {
+        source = (await d.patternSource(row.id)).source;
+      } catch {
+        continue;
+      }
     }
     if (!isTaggedSpriteSource(source)) continue;
     const made = await convert(source, row.name, row.id, failed);

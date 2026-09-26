@@ -15,11 +15,12 @@ import {
   type LayoutResult,
   type LayoutWire,
   type MqttStatus,
+  PatternSourceError,
   type Playlist,
   type PlaylistItem,
   type RunResult,
   type SyncStatus,
-} from "../lib/device";
+} from "../lib/device.ts";
 import {
   DEFAULT_PROJECTION,
   deviceGeometry,
@@ -30,12 +31,13 @@ import {
   type DeviceGeom,
   type Projection,
   type ProjectionMode,
-} from "../lib/geometry";
-import { gatedFetch, subscribeGate } from "../lib/fetchgate";
-import { browserBlocked } from "../lib/lna";
-import { reconcileTransport, transportIntent, type TransportIntent } from "../lib/playlist";
-import { isTaggedSpriteSource } from "../lib/sprite";
-import { note, reportApiError } from "./notify";
+} from "../lib/geometry.ts";
+import { gatedFetch, subscribeGate } from "../lib/fetchgate.ts";
+import { browserBlocked } from "../lib/lna.ts";
+import { reconcileTransport, transportIntent, type TransportIntent } from "../lib/playlist.ts";
+import { probeDeviceOrigin } from "../lib/probe.ts";
+import { isTaggedSpriteSource } from "../lib/sprite.ts";
+import { note, reportApiError } from "./notify.ts";
 
 // ---- session ----
 
@@ -66,6 +68,17 @@ export const deviceError = writable("");
  *  app can retry its way out of, so it gets its own message and the manual
  *  routes around it rather than a generic "cannot reach device" (#162). */
 export const deviceBlocked = writable(false);
+/** This console is BOUND to a device (`deviceBase !== null`) and has no live
+ *  session: the handshake failed and `retryConnect()` is working on it.
+ *
+ *  It exists because the liveness banner could not see this state. `deviceDown`
+ *  counts failures the fetch GATE saw, and a console with no session makes no
+ *  requests at all (`refreshStatus` returns early) — so a handshake refused
+ *  once left a half-dead page (no Playlist/Settings tab, no status, no
+ *  pattern) with nothing on screen saying anything was wrong (the 2026-09-26
+ *  panel). `components/ErrorBar.svelte` renders it in the same strip as
+ *  `deviceDown`; to the user it is the same fact. */
+export const deviceConnectFailed = writable(false);
 
 // ---- hardware facts ----
 
@@ -464,8 +477,15 @@ function tick(): void {
   }
 }
 
+// The ticker runs for a bound CONSOLE, not only for a live session: the one
+// state that most needs a scheduler is "device mode, no session" — nothing
+// else re-runs the handshake (`retryConnect`), and that is the state a single
+// refused connection used to strand the page in for ever (the 2026-09-26
+// panel). A playground has `deviceBase === null` and still schedules nothing.
+// Every subscriber already returns early without a session, so the extra ticks
+// cost nothing and make no requests.
 function reconcileTicker(): void {
-  const want = subscribers.size > 0 && get(device) !== null;
+  const want = subscribers.size > 0 && (get(device) !== null || get(deviceBase) !== null);
   if (want && ticker === undefined) ticker = setInterval(tick, TICK_MS);
   if (!want && ticker !== undefined) {
     clearInterval(ticker);
@@ -474,6 +494,7 @@ function reconcileTicker(): void {
 }
 
 device.subscribe(() => reconcileTicker());
+deviceBase.subscribe(() => reconcileTicker());
 
 /**
  * Register a polled refresh. Returns the unsubscribe function; calling
@@ -830,18 +851,51 @@ export async function refreshDeviceMap(): Promise<void> {
  * something the wire can tell us (no hash, no mtime), so the writer says so:
  * `invalidate` drops those ids' cached sources and nothing else's.
  */
-export async function refreshDevicePatterns(invalidate: readonly string[] = []): Promise<void> {
+export function refreshDevicePatterns(invalidate: readonly string[] = []): Promise<void> {
+  // COALESCED (the 2026-09-26 panel): opening the scene editor asks for the
+  // library three times within a frame — the screen itself, `pickFor`, and the
+  // sprite migration — and every one of those used to mean a fresh
+  // `/api/patterns` plus a source sweep behind it, into a board with two
+  // sockets. A caller that only wants the list to be current joins the read
+  // already in flight. An `invalidate` caller must NOT: its whole point is to
+  // drop cached sources, which a read that started before it would not do.
+  if (invalidate.length === 0 && patternsRefresh) return patternsRefresh;
+  const p = doRefreshDevicePatterns(invalidate).finally(() => {
+    if (patternsRefresh === p) patternsRefresh = null;
+  });
+  patternsRefresh = p;
+  return p;
+}
+
+let patternsRefresh: Promise<void> | null = null;
+
+async function doRefreshDevicePatterns(invalidate: readonly string[]): Promise<void> {
   const d = get(device);
   if (!d) return;
   let rows: DevicePatternRow[];
   try {
     rows = await d.patterns();
   } catch {
-    devicePatterns.set([]); // older firmware — no /api/patterns yet
+    // KEEP the last-known library — the same rule `refreshStatus` follows: a
+    // read that failed taught us nothing, so nothing may be written. Wiping it
+    // here was the second half of "the scene editor doesn't render any
+    // patterns, just text" (Jeremy, 2026-09-26): one 503 dropped every row's
+    // cached SOURCE, every pattern layer's `lookup()` then answered null, the
+    // renderer bound no engine, and — because this store is refreshed on
+    // demand and never polled — it stayed that way until a reload. Only a
+    // SUCCESSFUL read of an empty list empties the library, which is also what
+    // firmware without `/api/patterns` amounts to: it 404s, the list stays
+    // empty because nothing ever filled it.
     return;
   }
   const held = new Map(get(devicePatterns).map((p) => [p.id, p.source]));
   const dropped = new Set(invalidate);
+  // An id that is being invalidated, or that this read no longer lists, is no
+  // longer known-missing: the next sweep may ask for it again.
+  const live = new Set(rows.map((r) => r.id));
+  for (const id of [...missingSources]) {
+    if (dropped.has(id) || !live.has(id)) missingSources.delete(id);
+  }
   devicePatterns.set(
     rows.map((r) => {
       const source = dropped.has(r.id) ? undefined : held.get(r.id);
@@ -859,32 +913,103 @@ export async function refreshDevicePatterns(invalidate: readonly string[] = []):
   void loadDevicePreviewSources();
 }
 
-/** Fetch each stored pattern's source one at a time (the device serves only
- *  ~2 connections, so never in parallel) to feed the row thumbnails. */
+/** Ids the DEVICE says it does not hold (a 404, or "no such pattern"). The
+ *  one reason to stop asking; everything else is transient. Cleared for an id
+ *  the caller invalidates, and dropped with the row itself. */
+const missingSources = new Set<string>();
+
+/** Passes over the rows that still have no source, and the wait before each
+ *  retry pass. A source refused because the board is short of heap is served
+ *  fine seconds later (the 2026-09-26 panel), so the sweep comes back for it
+ *  — it used to give up on that row for the whole session, which is one
+ *  permanently blank scene layer per bad body. */
+const SOURCE_RETRY_WAIT_MS = [400, 1500, 4000];
+
+/** One sweep at a time. The scene editor, the picker and the Patterns page all
+ *  ask for the library at once; without this each one started its own walk of
+ *  the SAME rows, they raced each other for the device's two sockets, and the
+ *  loser wrote its result into a row object the other had already replaced. */
+let sweeping = false;
+/** A refresh landed while a sweep was running: its new rows need a pass, so
+ *  the running sweep goes round again instead of a second one starting. */
+let sweepAgain = false;
+
+/**
+ * Fill in every row's `source`, one request at a time (the device serves ~2
+ * connections, so never in parallel) — the thumbnails, the scene editor's
+ * layers and the pattern picker all read it.
+ *
+ * Write-back is BY ID (`putSource`), never by mutating the row object the loop
+ * is holding: `refreshDevicePatterns` rebuilds the list as new objects, so a
+ * sweep that started before it was writing into orphans — the store then
+ * published a list that visibly did not contain the source that had just
+ * arrived, and the layer stayed blank with nothing to retry it.
+ */
 async function loadDevicePreviewSources(): Promise<void> {
+  if (sweeping) {
+    sweepAgain = true;
+    return;
+  }
+  sweeping = true;
+  try {
+    do {
+      sweepAgain = false;
+      await sweepSources();
+    } while (sweepAgain);
+  } finally {
+    sweeping = false;
+  }
+}
+
+async function sweepSources(): Promise<void> {
   const session = get(device);
   if (!session) return;
-  for (const p of get(devicePatterns)) {
-    if (get(device) !== session) return; // disconnected/reconnected mid-fetch
-    if (p.source !== undefined) continue;
-    try {
-      const full = await session.patternSource(p.id);
-      // A pattern that still carries `// @sprite` on line 1 is a SPRITE
-      // waiting for `migrateTaggedSprites()` (Gitea #740), not a playable
-      // pattern — sprites have their own store and their own tab now, so it
-      // leaves the library here, which is the one place device rows are
-      // built. `stores/sprites.ts` reads `/api/patterns` itself to convert
-      // them, so dropping the row does not hide them from the migration.
-      if (isTaggedSpriteSource(full.source)) {
-        devicePatterns.update((list) => list.filter((x) => x.id !== p.id));
-        continue;
-      }
-      p.source = full.source;
-      devicePatterns.update((list) => [...list]); // reflect the filled-in thumbnail
-    } catch {
-      /* skip a pattern that won't load; its row just stays a spinner */
+  for (let pass = 0; pass <= SOURCE_RETRY_WAIT_MS.length; pass++) {
+    if (pass > 0) {
+      const wait = SOURCE_RETRY_WAIT_MS[pass - 1] ?? 0;
+      await new Promise((r) => setTimeout(r, wait));
     }
+    if (get(device) !== session) return; // disconnected/reconnected mid-sweep
+    const todo = get(devicePatterns)
+      .filter((p) => p.source === undefined && !missingSources.has(p.id))
+      .map((p) => p.id);
+    if (todo.length === 0) return;
+    let transient = 0;
+    for (const id of todo) {
+      if (get(device) !== session) return;
+      // Re-read the row: a refresh may have dropped it, and another pass or a
+      // save may already have filled it in.
+      const row = get(devicePatterns).find((p) => p.id === id);
+      if (!row || row.source !== undefined) continue;
+      try {
+        const full = await session.patternSource(id);
+        if (get(device) !== session) return;
+        // A pattern that still carries `// @sprite` on line 1 is a SPRITE
+        // waiting for `migrateTaggedSprites()` (Gitea #740), not a playable
+        // pattern — sprites have their own store and their own tab now, so it
+        // leaves the library here, which is the one place device rows are
+        // built. `stores/sprites.ts` reads `/api/patterns` itself to convert
+        // them, so dropping the row does not hide them from the migration.
+        if (isTaggedSpriteSource(full.source)) {
+          devicePatterns.update((list) => list.filter((x) => x.id !== id));
+          continue;
+        }
+        putSource(id, full.source);
+      } catch (e) {
+        if (e instanceof PatternSourceError && e.missing) {
+          missingSources.add(id); // gone for good — asking again is a wasted socket
+          continue;
+        }
+        transient++; // busy / empty body / reset: the next pass comes back
+      }
+    }
+    if (transient === 0) return;
   }
+}
+
+/** Publish a fetched source into whichever row currently carries that id. */
+function putSource(id: string, source: string): void {
+  devicePatterns.update((list) => list.map((r) => (r.id === id ? { ...r, source } : r)));
 }
 
 export async function refreshPlaylist(): Promise<void> {
@@ -1202,10 +1327,18 @@ export async function connectDevice(base: string): Promise<ConnectResult> {
   deviceBlocked.set(false);
   base = base.trim().replace(/\/+$/, "");
   const session = new DeviceSession(base);
+  handshaking = true;
   try {
-    const st = await session.status();
+    // PATIENT (the 2026-09-26 panel): the handshake is not a heartbeat, so it
+    // takes the gate's full retry ladder rather than `status()`'s one-shot
+    // fast path. One refused connection here used to leave `device` null with
+    // `deviceBase` set — a console with no Playlist/Settings tab, no status,
+    // and nothing anywhere retrying it (`refreshStatus` returns early without
+    // a session). `retryConnect()` below is the other half of that fix.
+    const st = await session.status({ patient: true });
     device.set(session);
     deviceBase.set(base);
+    deviceConnectFailed.set(false);
     devicePixels.set(st.pixels); // hardware pixel count (fixed; layout only rearranges)
     deviceGeomStatus.set(st.geom ?? null); // the device's Layout (#464)
     deviceCaps.set(st.caps ?? null); // what it can do (#464)
@@ -1304,39 +1437,87 @@ export async function connectDevice(base: string): Promise<ConnectResult> {
         ? "the browser blocked this page from reaching the device"
         : `cannot reach device: ${String(e)}`,
     );
+    // A failed handshake is a CONDITION the user must see, and — unless the
+    // browser itself refused, which no amount of retrying fixes — one the
+    // scheduler keeps working on (`retryConnect`). `deviceBase` stays set:
+    // this is still a console, bound to a device that is not answering.
+    deviceBase.set(base);
+    deviceConnectFailed.set(!blocked);
     return { ok: false, source: null };
+  } finally {
+    handshaking = false;
   }
 }
+
+/** A handshake is in flight — the boot one or a retry. Both go through
+ *  `connectDevice`, and two at once would race the whole store. */
+let handshaking = false;
+
+/**
+ * Re-run the handshake while this console has a device it is not talking to.
+ *
+ * On the ONE scheduler (`startSessionPoll`), because a bound-but-dead console
+ * is exactly the state nothing used to be watching: `refreshStatus` returns
+ * early with no session, so the gate saw no traffic, the liveness banner
+ * stayed quiet, and the page sat there with no tabs until someone reloaded it.
+ * Cheap when it fails (one fast-failing `/api/status` every few seconds) and
+ * it restores the full console when it lands.
+ */
+async function retryConnect(): Promise<void> {
+  if (handshaking || get(device) !== null) return;
+  const base = get(deviceBase);
+  if (base === null) return;
+  if (get(deviceBlocked)) return; // the BROWSER refused; retrying cannot help
+  // BACKED OFF, because a handshake is not one request: it is a dozen, and a
+  // board that is refusing connections is exactly the board not to send a
+  // dozen requests to every four seconds (that pile-on is the latch #540
+  // describes). Doubling to half a minute keeps a recovering device found
+  // within seconds and a dead one cheap.
+  const now = Date.now();
+  if (now < reconnectAfter) return;
+  const ok = (await connectDevice(base)).ok;
+  reconnectFails = ok ? 0 : Math.min(reconnectFails + 1, 3);
+  reconnectAfter = ok ? 0 : Date.now() + 4000 * 2 ** reconnectFails;
+}
+
+let reconnectFails = 0;
+let reconnectAfter = 0;
 
 /** How we bind to a device (a plain playground binds to none):
  *   1. `?device=<base>` — a dev/e2e override pointing the built UI at a
  *      device or the native mirror (known synchronously).
  *   2. served-from-device — the UI loaded from the device's own flash, so the
  *      device is this same origin (probe `/api/status`; a dev server's SPA
- *      fallback returns 200 HTML, so require a genuine device JSON shape). */
-export async function detectDeviceBase(): Promise<string | null> {
+ *      fallback returns 200 HTML, so require a genuine device JSON shape).
+ *
+ * The probe RETRIES (`lib/probe.ts`) — one reading is not a verdict on a board
+ * that answers an empty 200 / a 503 / a reset for ~20 s around a scene switch
+ * (the 2026-09-26 panel). And when the retries run out inconclusively the
+ * answer is still the DEVICE, not the playground: this bundle was served by
+ * this origin, so an origin that will not answer its own API is a device
+ * having a bad minute. The console then boots in device mode with the
+ * "Device unreachable — retrying…" bar up and `retryConnect()` on the
+ * scheduler, which is recoverable; falling back to the playground is not
+ * ("sometimes the webpage reverts to being a playground; the device is still
+ * working", Jeremy, 2026-09-26). `absent` — a 4xx, or HTML where the API
+ * should be — is the only playground answer, and it is the one every real
+ * playground gives on the FIRST attempt (hosted copy: 404; dev server: HTML),
+ * so nothing is delayed by this. */
+export async function detectDeviceBase(onBusy?: () => void): Promise<string | null> {
   const override = new URLSearchParams(location.search).get("device");
   if (override !== null) return override.trim().replace(/\/+$/, "");
-  try {
-    // Generous abort: on a 2-socket device the boot burst can leave this
-    // probe connection-refused for seconds (the gate retries with backoff),
-    // and a premature abort strands a real device in playground mode.
-    // Genuine playgrounds aren't delayed by it: their origins ANSWER (dev
-    // server 200-HTML, static host 404) rather than refuse, so the fetch
-    // resolves on the first try either way.
-    const ctl = new AbortController();
-    const t = setTimeout(() => ctl.abort(), 8000);
-    const r = await gatedFetch("/api/status", { signal: ctl.signal });
-    clearTimeout(t);
-    const isJson = r.headers.get("content-type")?.includes("application/json");
-    if (r.ok && isJson) {
-      const st = (await r.json()) as { pixels?: unknown };
-      if (typeof st.pixels === "number") return "";
-    }
-  } catch {
-    /* not a device — stays a playground */
-  }
-  return null;
+  let said = false;
+  const { verdict } = await probeDeviceOrigin({
+    fetch: (url, init) => gatedFetch(url, init),
+    onRetry: () => {
+      // Once, on the first retry: the boot cover has to say why it is still
+      // up, or a busy board looks like a hung page for the whole budget.
+      if (said) return;
+      said = true;
+      onBusy?.();
+    },
+  });
+  return verdict === "absent" ? null : "";
 }
 
 /** The 1 Hz session poll (Gitea #381): the status-bar counter shows the
@@ -1347,6 +1528,11 @@ export async function detectDeviceBase(): Promise<string | null> {
  *  patterns (#259). */
 export function startSessionPoll(): void {
   pollSubscribe("status", 1000, refreshStatus);
+  // …and, only while this console is bound to a device it cannot talk to, the
+  // handshake retry. It is the same scheduler on purpose (no bare timers —
+  // docs/web-architecture.md), and it costs nothing in the healthy case: with
+  // a session live `retryConnect` returns on its first line.
+  pollSubscribe("reconnect", 4000, retryConnect);
   stopLiveness?.();
   stopLiveness = watchLiveness();
 }

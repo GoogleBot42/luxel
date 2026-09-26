@@ -13,6 +13,7 @@
 //! that grows a walk of its own, or an "optimization" that drops the
 //! accumulator, shows up here rather than on a bench board.
 
+use luxel_core::arena::FrameVec;
 use luxel_core::compose::{Compositor, SceneDriver, SceneHost, SpriteView};
 use luxel_core::fixed::Fx;
 use luxel_core::outpipe::GridMap;
@@ -170,12 +171,12 @@ const GOLDEN: [(u32, u32); 12] = [
     (0x094df08e, 128),
 ];
 
-fn run(frames: usize) -> (Vec<(u32, u32)>, FakeHost, Compositor, Vec<[u8; 3]>) {
+fn run(frames: usize) -> (Vec<(u32, u32)>, FakeHost, Compositor, FrameVec) {
     let mut comp = Compositor::new(grid());
     comp.set_scene(&scene());
     let mut driver = SceneDriver::new();
     let mut host = FakeHost { caption: String::from("HI"), ..FakeHost::default() };
-    let mut dst: Vec<[u8; 3]> = Vec::new();
+    let mut dst: FrameVec = luxel_core::arena::empty();
     let mut out = Vec::new();
     for _ in 0..frames {
         assert!(driver.frame(&mut comp, &mut dst, N, Fx::from_raw(DT60), &mut host));
@@ -213,7 +214,7 @@ fn the_scroll_clock_runs_on_the_carried_milliseconds() {
     let mut comp = Compositor::new(grid());
     comp.set_scene(&scene());
     let mut host = FakeHost { caption: String::from("HI"), ..FakeHost::default() };
-    let mut dst: Vec<[u8; 3]> = Vec::new();
+    let mut dst: FrameVec = luxel_core::arena::empty();
     let mut truncated = Vec::new();
     // the pre-#732 firmware walk, by hand
     for _ in 0..60 {
@@ -254,7 +255,7 @@ fn a_destination_it_cannot_size_is_a_frame_not_drawn() {
     comp.set_scene(&scene());
     let mut driver = SceneDriver::new();
     let mut host = FakeHost { caption: String::from("HI"), ..FakeHost::default() };
-    let mut dst: Vec<[u8; 3]> = Vec::new();
+    let mut dst: FrameVec = luxel_core::arena::empty();
     // No allocator on earth satisfies this. The driver must REFUSE rather
     // than panic: on a board whose largest free block is a few kilobytes
     // the host's staging buffer is exactly the allocation that fails, and
@@ -288,7 +289,7 @@ fn re_setting_the_same_scene_keeps_the_scroll_phase() {
     comp.set_scene(&scene());
     let mut driver = SceneDriver::new();
     let mut host = FakeHost { caption: String::from("HI"), ..FakeHost::default() };
-    let mut dst: Vec<[u8; 3]> = Vec::new();
+    let mut dst: FrameVec = luxel_core::arena::empty();
     let mut sigs = Vec::new();
     for i in 0..GOLDEN.len() {
         // the scene editor rebuilds the wire on every keystroke; the crawl

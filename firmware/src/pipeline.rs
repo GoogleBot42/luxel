@@ -71,6 +71,7 @@
 use alloc::vec::Vec;
 
 use embassy_time::{Duration, Instant, Timer};
+use luxel_core::arena::FrameVec;
 use luxel_core::outpipe::{DeviceChain, GridMap};
 
 use crate::output::{BoardOutput, OutputDriver};
@@ -129,7 +130,7 @@ impl PipeState {
 
 /// Grow a frame-sized buffer to `pixels`, fallibly (Gitea #704). Shared by
 /// both sinks: the staging buffer's lifecycle is the same on either path.
-fn reserve(buf: &mut Vec<[u8; 3]>, pixels: usize) -> bool {
+fn reserve(buf: &mut FrameVec, pixels: usize) -> bool {
     if buf.capacity() >= pixels {
         return true;
     }
@@ -140,9 +141,9 @@ fn reserve(buf: &mut Vec<[u8; 3]>, pixels: usize) -> bool {
 /// Hand a frame-sized buffer back. `Vec::clear` keeps capacity, which is
 /// exactly the residency `DeviceChain::release` exists to avoid; a no-op
 /// once nothing is held, so the render loop can call it every frame.
-fn release(buf: &mut Vec<[u8; 3]>) {
+fn release(buf: &mut FrameVec) {
     if buf.capacity() > 0 {
-        *buf = Vec::new();
+        *buf = luxel_core::arena::empty();
     }
 }
 
@@ -155,13 +156,13 @@ pub struct DirectSink {
     out: BoardOutput,
     pipe: PipeState,
     /// Crossfade blend / live-input assembly buffer — see [`stage`].
-    stage: Vec<[u8; 3]>,
+    stage: FrameVec,
 }
 
 #[cfg(not(pipelined))]
 impl DirectSink {
     pub fn new(out: BoardOutput) -> Self {
-        Self { out, pipe: PipeState::new(), stage: Vec::new() }
+        Self { out, pipe: PipeState::new(), stage: luxel_core::arena::empty() }
     }
 
     /// Reconfigure the wire for `p`. Errors are the driver's (a fixed
@@ -180,7 +181,7 @@ impl DirectSink {
     /// The render task's frame-assembly buffer: the crossfade blend target
     /// and the live-input (DDP/E1.31) assembly area. Emitted with
     /// [`emit_staged`](Self::emit_staged).
-    pub fn stage(&mut self) -> &mut Vec<[u8; 3]> {
+    pub fn stage(&mut self) -> &mut FrameVec {
         &mut self.stage
     }
 
@@ -248,7 +249,7 @@ mod pipe {
     /// ground truth behind `/api/status` `dropped` — it needs no enumeration
     /// of the ways a frame can be lost, so it cannot miss one.
     struct Frame {
-        buf: Vec<[u8; 3]>,
+        buf: FrameVec,
         grid: Option<GridMap>,
         seq: u32,
     }
@@ -258,7 +259,7 @@ mod pipe {
     /// the output task), or moved out into the task that is using it.
     #[derive(Default)]
     struct Slot {
-        free: Option<Vec<[u8; 3]>>,
+        free: Option<FrameVec>,
         ready: Option<Frame>,
     }
 
@@ -368,15 +369,15 @@ mod pipe {
     /// preview copy — just the hand-off, plus the crossfade/live-input
     /// assembly buffer the render task needs anyway.
     pub struct RenderSide {
-        stage: Vec<[u8; 3]>,
+        stage: FrameVec,
     }
 
     impl RenderSide {
         /// Seeds the travelling buffer (empty; it grows to the frame size
         /// on the first hand-off and is never shrunk).
         pub fn new() -> Self {
-            SLOT.lock(|c| c.borrow_mut().free = Some(Vec::new()));
-            Self { stage: Vec::new() }
+            SLOT.lock(|c| c.borrow_mut().free = Some(luxel_core::arena::empty()));
+            Self { stage: luxel_core::arena::empty() }
         }
 
         /// Fixed wire format: the pipelined path is HUB75-only, whose
@@ -394,7 +395,7 @@ mod pipe {
             true
         }
 
-        pub fn stage(&mut self) -> &mut Vec<[u8; 3]> {
+        pub fn stage(&mut self) -> &mut FrameVec {
             &mut self.stage
         }
 
@@ -493,7 +494,7 @@ mod pipe {
     /// it is what holds the render loop at the panel's rate. Returns the
     /// microseconds spent waiting so the caller can keep `frame_us` a
     /// measure of WORK rather than of the pacing.
-    async fn claim_paced() -> (Option<Vec<[u8; 3]>>, u32) {
+    async fn claim_paced() -> (Option<FrameVec>, u32) {
         if !VSYNC.load(Ordering::Relaxed) {
             return (claim(), 0);
         }
@@ -526,14 +527,14 @@ mod pipe {
     /// output task is composing and this frame is dropped. Stealing an
     /// untaken `ready` loses that frame; nothing counts it here, because
     /// the sequence gap the output task sees already does.
-    fn claim() -> Option<Vec<[u8; 3]>> {
+    fn claim() -> Option<FrameVec> {
         SLOT.lock(|c| {
             let s = &mut *c.borrow_mut();
             s.free.take().or_else(|| s.ready.take().map(|f| f.buf))
         })
     }
 
-    fn publish(buf: Vec<[u8; 3]>, grid: Option<GridMap>, seq: u32) {
+    fn publish(buf: FrameVec, grid: Option<GridMap>, seq: u32) {
         let lost = SLOT.lock(|c| {
             c.borrow_mut()
                 .ready

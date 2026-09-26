@@ -574,6 +574,17 @@ scene at a board's layer cap leaves `heap_largest` around 7 KB and an allocator
 panic there is a reset (Gitea #724, #702). A new buffer on either path follows
 them.
 
+**A refusal still has to be visible.** Fallible is half the job; Gitea #777
+(2026-09-26) found three refusals on this path that told nobody. The
+compositor's failed scratch drew no text, a refused scene layer was a no-op
+slot, and a frame the driver could not size was published as an EMPTY stage —
+a fully black panel. So a fallible allocation here owes its caller an answer
+as well as a `false`: the render loop now **holds** its last frame rather than
+emitting a short stage, `scenes::Runtime::take_error` surfaces a non-base
+layer's VM error into `vmerr`, and `GET /api/patterns/<id>` answers **503
+`busy`** rather than "no such pattern" when it is the heap and not the record
+that is missing (docs/api.md).
+
 The READ path is different, and stronger: a generated JSON body does not
 reserve at all. `jsonview::Chunks` builds it in 256-byte segments and
 `ApiBody::Chunked` writes it out of them, dropping each segment as it goes on
@@ -741,16 +752,24 @@ itself as `esp_alloc::HEAP.free() - (RUNTIME_FLOOR + 4 KiB)`, clamped to a
 16 KB minimum — byte-accurate per array element, so one big array isn't
 taxed for overhead that only swarms of tiny arrays pay.
 
-**An external arena changes where arrays and engine frames come from, not
+**An external arena changes where whole frames and arrays come from, not
 the rules.** On a board with `psram-arena` (today only the Seengreat S3 —
 `firmware/src/psram.rs`, docs/boards.md) `ArrRepr::Owned` element storage
 and each engine's per-frame RGB888 pixel buffer
 (`luxel_core::arena::FrameVec`, Gitea #709) are allocated from a SECOND
 `esp_alloc::EspHeap` backed by PSRAM, through the hook in
-`luxel_core::arena`. Nothing else moves: DMA framebuffers, the pipeline's
-travelling frame, the crossfade stage, the compositor's scratch, the VM's
-stack, locals, globals and the arena's own slot vector all stay in internal
-DRAM, and the global `HEAP` is untouched — so `HEAP.free()`,
+`luxel_core::arena`. Since Gitea #777 (2026-09-26) every OTHER whole-frame
+RGB888 buffer is a `FrameVec` too and goes the same way: the pipeline's
+staging buffer, its travelling hand-off buffer (`pipeline.rs`), the
+compositor's text/ramp scratch (`luxel_core::compose::Compositor::scratch`)
+and the render task's outgoing-scene `fade_buf`. #709's argument extends to
+them unchanged — each is one sequential pass per frame, which the S3's data
+cache carries — and at 4096 px they are 36,864 B of internal DRAM that a
+three-layer scene could not find beside two engines and the runtime floor in
+a heap that idles at ~36 KB (docs/boards.md, "Scene layers"). What still
+stays internal: the HUB75 DMA framebuffers, the strip output buffer and the
+outpipe chain's scratch, the VM's stack, locals, globals and the arena's own
+slot vector. The global `HEAP` is untouched either way — so `HEAP.free()`,
 `RUNTIME_FLOOR` and the post-load floor check mean exactly what they meant
 before. What changes is `budgeted_engine`'s byte budget (the arena's free
 space, via `budget::external_array_budget`), the PB element ledger (raised
@@ -760,8 +779,11 @@ what a resident layer costs internal DRAM: `budget::layer_cost`,
 `layer_fits[_with]` and `caps::layers_for_headroom` all take a
 `frame_external` flag, which every host passes as
 `arena::frames_external()`. At 4096 px that is 4 KB a layer instead of
-16.4 KB, which is what makes two pattern layers fit the panel. With no hook
-installed — every other board, the CLI, the wasm playground —
+16.4 KB, which is what makes two pattern layers fit the panel.
+`budget::compositor_scratch` takes the same flag since #777 and answers 0
+when it is set, and `Compositor::resident_bytes` counts the scratch only
+while it is internal. With no hook installed — every other board, the CLI,
+the wasm playground —
 `arena::ArenaAlloc` *is* the global allocator, `frames_external()` is
 `false`, and none of this exists.
 
@@ -1363,6 +1385,12 @@ base layer, and for a single pattern that IS the pattern.
   missing one is a use-after-free during a compaction (Gitea #260).
 - `/api/status` reports `engine_heap` as the **sum** over the resident
   engines and `engines` as how many there are.
+- **Every pattern layer's VM errors are polled**, not just the base engine's:
+  `scenes::Runtime::take_error` walks the slot table and the render task
+  reports the first pending error beside `Engine::take_error`'s. Until #777 a
+  non-base layer could error every frame and draw nothing for the life of the
+  scene with no `vmerr` and no serial line — and under `key: black` a black
+  frame is fully transparent, so it read as a layer that had never been built.
 
 ### The frame
 
@@ -1381,18 +1409,25 @@ output task, so a scene costs the pipeline no extra copy and the
 single-owner invariant (`pipeline.rs`) is untouched. The compositor's own
 per-layer scratch is one grid-sized buffer inside `Compositor`, allocated on
 first use by a text layer — or by a ramp whose layer is not a straight frame
-copy — and released with the scene.
+copy — and released with the scene. Both are `luxel_core::arena::FrameVec`
+since #777, so on a `psram-arena` board they come out of the arena and a
+scene's whole-frame buffers cost the internal heap nothing (see "An external
+arena changes where whole frames and arrays come from" above).
 
-**The staging buffer's lifecycle** (Gitea #704). It is 3 B/px, and a plain
+**The staging buffer's lifecycle** (Gitea #704). It is 3 B/px — internal
+DRAM, or the PSRAM arena on a `psram-arena` board since #777 — and a plain
 pattern never touches it: `emit!` hands the engine's own frame to the sink,
 `emit_staged!` publishes the stage. So it is claimed and released like the
 outpipe's scratch (`DeviceChain::release`, #446/#476):
 
 - `sink.reserve_stage(pixels)` on `Msg::Scene`, **before any layer engine is
-  built**. Fallible, because `Runtime::render` then fills it with an
-  infallible `Vec::resize` inside the render loop (the #702 lesson, one
-  buffer over), and up front because the per-layer `budget::layer_fits_with`
-  checks have to measure the heap it leaves.
+  built**. Fallible, and up front because the per-layer
+  `budget::layer_fits_with` checks have to measure the heap it leaves.
+  `SceneDriver::frame` re-sizes it fallibly on every frame as well (the #702
+  lesson, one buffer over) and returns whether it managed; since #777
+  `scenes::Runtime::render` passes that bool up and the render loop holds the
+  last frame rather than emitting a stage shorter than `count`, which on the
+  wire is a fully black panel.
 - `sink.release_stage()` from the render loop whenever neither a scene nor a
   crossfade nor live input is using it. A no-op once nothing is held.
 - On the pipelined path releasing is safe because the hand-off **moves**
@@ -2131,7 +2166,10 @@ fps, rgb-only 60 → 87, empty render 99 → 125, 1D snake 19 → 21, 2D snake
   build the travelling buffer IS that snapshot — `pipeline::preview` reads it
   out of the slot whenever it is parked there — and `set_pixels` is never
   called. Measured `heap_free` is identical to the pre-pipeline build row for
-  row, and `pipe_us` fell from ~44 to ~11 µs with the memcpy gone.
+  row, and `pipe_us` fell from ~44 to ~11 µs with the memcpy gone. Since
+  #777 the travelling buffer is a `FrameVec`, so on a `psram-arena` board it
+  costs no internal DRAM at all: the panel's idle `heap_free` went 33,248 →
+  49,632 B, 12,288 of which is this buffer.
 - **`preview` is ONE fallible allocation, reserved outside the critical
   section.** This is a response built on a heap that a 4096 px pattern can
   leave under 30 KB free, so a second 12 KB temporary is the difference
