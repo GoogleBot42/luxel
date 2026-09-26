@@ -245,7 +245,12 @@ paths:
   scene editor's `Add layer › Sprite` decided "there are no sprites, make a
   blank one" over a store that had one, both because the row was missing and
   because a row's `source` streams in AFTER its name (an unclassified row is
-  not a "no"). Call `refreshDevicePatterns()` first and treat
+  not a "no"). And a refresh that FAILS keeps the last-known list and its
+  sources (#777) — never `set([])` on a bad body: the panel answers empty /
+  503 / reset for ~20 s around a scene switch, and wiping the library on one
+  of those is what blanked every scene-editor layer. Same for the boot
+  probe (`lib/probe.ts`): only a 4xx or an HTML body means "playground";
+  everything else is "busy, ask again". Call `refreshDevicePatterns()` first and treat
   `source === undefined` as unknown (#481).
 - **`mockdiff --crops` only writes crops for frames that HAVE deltas.** A frame
   at 0 produces no picture at all, so "render the side-by-side and LOOK at it"
