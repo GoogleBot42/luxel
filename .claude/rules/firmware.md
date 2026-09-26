@@ -41,7 +41,8 @@ paths:
   (grep it — there is no call; an earlier version of this rule said it
   checked pixelblaze-v3, and that was wrong). So a red stack-check after your
   change is very possibly not your
-  change: `git stash`, re-measure, compare. When it IS yours, the fix is the
+  change: build the baseline from git objects (`nix build "git+file:///<worktree>?rev=<master sha>#…"`,
+  never `git stash` in a shared checkout — worktree-setup), re-measure, compare. When it IS yours, the fix is the
   one the script names — take the bytes out of that board's
   `heap_allocator!` (see `SECOND_OUTPUT_RAM` in main.rs for the per-board
   idiom), not off the floor. Gitea #515.
@@ -58,6 +59,19 @@ paths:
   same-tree A/B with everything else held constant: revert your hunks in place,
   rebuild, compare. Jeremy caught a four-board table being passed off as meaningful;
   say "inside the noise floor" rather than printing four rows.
+- **Changing a vector's TYPE in luxel-core/luxel-jit is a flash-size change on
+  every board, and `allocator_api2` is the expensive one.** An `arena::ArrVec`
+  (`Vec<T, ArenaAlloc>`) inlines its grow path at every `push` site — a
+  per-depth scratch `Vec` with ~40 pushes in one function cost +6,128 B there
+  and +7,536 B on the Athom release image (6.51 % → 5.93 % free) for vectors
+  of a few bytes (#671, 2026-09-26). Reserve `ArrVec` for the per-word/
+  per-function tables that actually need the arena; keep operand-depth
+  scratch on `alloc::vec::Vec`. Before the PR, measure the release image
+  (`nix build .#luxel-fw-athom-music` + `tools/image-check.sh` with
+  `EXPECT_FEATURES=board-athom-music`) against the git-objects baseline above,
+  and attribute with `llvm-nm --size-sort --demangle -S` on both ELFs — but
+  ignore the `…::HEAP` rows: two same-named heap statics pair unpredictably by
+  demangled name and read as a 21 KB phantom delta.
 - `cargo clippy` DOES work on the Xtensa (`-Zbuild-std`) boards — but only
   with the esp toolchain's `bin/` PREPENDED to `PATH`. Exporting only
   `RUSTC`/`RUSTDOC` (the `tools/stack-check.sh` recipe — sufficient for
