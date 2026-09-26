@@ -135,10 +135,14 @@ value while collapsed. Everything below is on the new page.
   - And the top of the slider must write `lsb 0`, not 61: change the panel
     size or the blanking afterwards and the full on-time should FOLLOW the new
     lit width rather than staying pinned at 61.
-- [ ] **Firmware & recovery → Update…** — pick a `luxel.bin` for that board
-  and let it flash itself over the network. **Never run against hardware**
-  (the mirror advertises no OTA, so no harness can reach this path) —
-  Gitea #526 has the full procedure and what to read before and after.
+- [x] **Firmware & recovery → Update…** — DONE 2026-09-26 on the Athom
+  (Gitea #526): the wrong-board package refused by name before a byte moved,
+  then a `.luxr` installed firmware + web app in one action from the device's
+  own console — 24 s to stream 1,198 KB, slot flip at +31 s, assets at +49 s,
+  page reloaded onto the console it had just installed; and a bare `.bin`
+  said out loud that the web app was NOT updated. It took a fix to get there:
+  the console hashes a package with `crypto.subtle`, which does not exist on
+  a plain-http origin, so this had never worked on a real device (Gitea #794).
 - [ ] **WiFi form** — now collapsed behind `Change network…`; shows the saved
   network, and changing creds reboots onto the new one (careful: typos strand
   it → AP mode should catch it now).
@@ -275,21 +279,25 @@ value while collapsed. Everything below is on the new page.
   path remains, tracked as Gitea #162 (hardware-confirmed blocked in
   headless chromium; needs a headful browser).
 
-- [ ] **One-file release install and the store self-heal** (Gitea #643) — the
-  whole flow has never run on metal. On a real board: Settings → Advanced →
-  Firmware & recovery → **Update…**, pick that board's
-  `luxel-<board>-<ver>.luxr`, and watch it write the firmware, wait out the
-  reboot, install the web app and reload itself. Things to confirm that a
-  mirror cannot: that the 60 s boot window is actually enough over WiFi, that
-  the browser survives the device going away mid-flow, and that an image for
-  ANOTHER board is refused by name before anything is written. Then the
-  repair half, which is only reproducible across a real LXBC format bump:
-  after such an OTA the console should say "N stored patterns were compiled
-  for an older engine — recompiling…", come back with the playlist playing,
-  and leave every pattern id (and therefore every playlist entry) untouched.
-  Machine-verified end to end against `luxel serve --accept-ota` /
-  `--stale-store` / `--bc-format` (`web/tools/device-e2e.mjs`, 24 checks) and
-  in unit tests; the hardware run is tracked as Gitea #526.
+- [x] **One-file release install** (Gitea #643) — DONE 2026-09-26 on the
+  Athom, both halves in one action, twice (Gitea #526). All four things a
+  mirror cannot show held: the 60 s boot window was ample (the device was
+  back 6 s after the OTA reply, and the flow saw it at +31 s), the browser
+  sat through the device going away and picked it up again, an ESP32-C3
+  package was refused **by name** before a sector was written, and the reload
+  landed on the console the package had just installed (`index-0Yhps5Zx.js` →
+  `index-iUOBfWo1.js` on the device, not a cached copy). It needed a fix
+  first: `crypto.subtle` is absent on a plain-http origin, so every package
+  install from a device's own console died on a TypeError until the codec
+  grew its own SHA-256 (Gitea #794).
+- [ ] **The store self-heal across a real bytecode bump** (Gitea #643) — the
+  other half of that ticket, and the only one a bump can summon: after an OTA
+  across an LXBC format change the console should say "N stored patterns were
+  compiled for an older engine — recompiling…", come back with the playlist
+  playing, and leave every pattern id (and therefore every playlist entry)
+  untouched. Machine-verified against `luxel serve --stale-store` /
+  `--bc-format` (`web/tools/device-e2e.mjs`) and in unit tests; on metal it
+  waits for the next format bump to ride along with.
 
 ## Verified hard by machines, low review value (FYI only)
 

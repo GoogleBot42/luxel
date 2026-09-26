@@ -1,5 +1,65 @@
 # Update log
 
+## 2026-09-26 — OTA and the one-file install, on metal (#668, #526, #794)
+
+Both halves of the update path had only ever run against a host: the #655 OTA
+rework because no emulated guest can take an OTA (QEMU's ESP32 has no radio),
+and the console's `Update…` because `luxel serve` advertises `ota:false`. Both
+ran on the Athom rig today, and the second one found a bug that made it
+impossible on any real device.
+
+**#668 — `/api/ota` on metal.** Five pushes of the same 1,226,304 B
+`board-athom-music` image, alternating `ota_0 ↔ ota_1` every time. Upload +
+reply took 24–25 s; the device went away 1.4 s after the reply and answered
+again 4.9 s later — **6.3 s from reply to back up**, against the ~12 s the
+ticket guessed and the 60 s the console's boot window allows. Then the wedge
+without the crash: `head -c 500000` of that image sent under the *real*
+`Content-Length` answered `{"ok":false,"error":"body read failed"}` at
+**45.05 s** — picoserve's whole-body budget, to the centisecond — and the
+half-written slot changed nothing: `slot` `ota_0`, `partitions` byte-identical
+before, after, and after the reboot that followed, and the next full OTA
+landed into that same slot normally. The engine freeze the handler takes for
+the flash phase lifts on its own afterwards (fps 20 → 123), including when the
+client vanishes mid-stream rather than stalling. Step 5 of the ticket — reading
+`ota: updates go to ota_X` off the boot log — is not reachable: `/dev/ttyUSB0`
+has been absent from the rig since 2026-09-06, so that line stays QEMU-only.
+
+One thing did not behave: the **first** `POST /api/reboot` after the failed
+upload returned no HTTP response at all and did not reboot (proven by
+`core1.fences` and `last.bb[3]`, both unchanged across it); an identical call
+78 s later was normal. Not reproduced — Gitea #798.
+
+**#794 — the one-file install could never have worked.** `web/src/lib/luxr.ts`
+verifies a package's two payload hashes with `crypto.subtle`, which exists only
+in a **secure context**. A device's own console is `http://<lan-ip>/`, so there
+is no `crypto.subtle` there and every `.luxr` install died in `readUpload` with
+`TypeError: Cannot read properties of undefined (reading 'digest')` — before
+the board check, so even the wrong-board refusal reported the TypeError instead
+of naming the board. Nothing caught it because every harness talks to
+`127.0.0.1`, which *is* a secure context. The codec now carries its own
+SHA-256 and uses WebCrypto only where it exists; `tests/luxr.test.mjs` pins the
+two against each other over nine inputs (including both sides of a padding
+block boundary) and round-trips a package with `crypto.subtle` taken away.
+~1 KB of bundle.
+
+**#526 — the hardware run, after the fix.** Driven in real chromium against the
+Athom's own console, twice: once with the playground served from a plain-http
+LAN origin (to prove the fix in the same no-WebCrypto condition while the
+device still had the old console), then from the device itself. 17/17 checks.
+The ESP32-C3 package was refused **by name**, before a dialog and before a
+sector — `bb[3]` unchanged. The right one: 1,198 KB of firmware streamed,
+"the device is rebooting into the new image…", slot flip at +31 s, 918 KB of
+assets at +49 s (`{"ok":true,"bytes":940343,"files":7}`), then the page reloaded
+itself onto what it had just installed — the device's bundle went
+`index-0Yhps5Zx.js` → `index-iUOBfWo1.js`, so the asset half is *seen*, not
+inferred. A bare `.bin` still installs and says out loud that the web app was
+not updated. The store self-heal half of #643 is the only piece left, and it
+needs a real LXBC format bump to ride along with.
+
+The rig was read and restored throughout: brightness 6 (never written),
+`/api/config` byte-identical, playlist playing with all four items intact, and
+it ends on `ota_0` with master's build and matching assets.
+
 ## 2026-09-26 — HUB75 brighter ↔ faster: OE-truncated low planes as the `lsb` panel setting (#460, #789)
 
 Jeremy asked for "a hub75 setting which trades brightness for refresh hz".
