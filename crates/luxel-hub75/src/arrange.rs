@@ -23,6 +23,16 @@
 //! that with [`is_identity`], drops the table, and composes exactly the code
 //! it composed before this module existed.
 //!
+//! **Scan depth.** A HUB75 panel drives two rows at once, so an upright
+//! `ph`-tall panel normally has `ph / 2` address rows. A 1/N-scan panel has
+//! FEWER: its rows are interleaved so that one address row drives several
+//! rows of the panel, and the driver has to clock out a correspondingly
+//! LONGER row — `stripes = (ph / 2) / scan` copies of the chain's width per
+//! address row. [`fb_geometry`] turns a `Matrix` into the framebuffer shape
+//! that implies, and [`build_lut`] folds the stripe mapping into the same
+//! table as the tile arrangement, so a 1/16-scan panel costs the compose path
+//! nothing beyond the gather it already does for a chain.
+//!
 //! **Chain order.** Panels are visited line by line. A *line* is a row of
 //! tiles when `dir` is [`RunDir::Row`] and a column when it is
 //! [`RunDir::Col`]; `start` says which corner line 0 begins at (and hence
@@ -30,6 +40,7 @@
 //! `rot180` marks the tiles on odd lines as mounted rotated 180°, which is
 //! how a serpentine wall is physically built (proposal §5.3, mockup S3c).
 
+use crate::Geometry;
 use luxel_core::layout::{Corner, Matrix, RunDir};
 
 /// A driver pixel with no engine pixel behind it: outside the arrangement,
@@ -60,6 +71,57 @@ pub fn driven_panels(m: &Matrix, fb_w: usize, fb_h: usize) -> usize {
         return 0;
     }
     chain_len(m).min(fb_w / m.pw as usize)
+}
+
+/// `(scan, stripes)` for a panel: the address depth the driver walks and how
+/// many copies of the chain's width one address row clocks out.
+///
+/// `None` when the two cannot be reconciled — an odd or zero panel height, or
+/// a `scan` that does not divide `ph / 2`. The layout parser rejects those
+/// ("scan must divide ph/2") so the firmware never sees one, but a stored
+/// wire from an older build might.
+fn scan_stripes(m: &Matrix) -> Option<(usize, usize)> {
+    let ph = m.ph as usize;
+    if !ph.is_multiple_of(2) {
+        return None;
+    }
+    let half = ph / 2;
+    if half == 0 {
+        return None;
+    }
+    let scan = if m.scan != 0 { m.scan as usize } else { half };
+    if scan == 0 || !half.is_multiple_of(scan) {
+        return None;
+    }
+    Some((scan, half / scan))
+}
+
+/// How many copies of the chain's width one address row clocks out: 1 for an
+/// ordinary `ph / 2` panel, `(ph / 2) / scan` for a 1/N-scan one.
+///
+/// An inconsistent scan (see [`fb_geometry`]) reads as 1, which is exactly
+/// the pre-scan behaviour — a bad stored layout draws wrongly, never out of
+/// bounds.
+#[must_use]
+pub fn stripes(m: &Matrix) -> usize {
+    scan_stripes(m).map_or(1, |(_, s)| s)
+}
+
+/// The framebuffer shape a panel arrangement needs, at `planes` bitplanes.
+///
+/// `rows` is the scan depth, `cols` is `pw * panels * stripes`, and
+/// `pixels() == pw * panels * ph` however the scan divides — striping trades
+/// address rows for row length, it does not change how much is shifted per
+/// rescan.
+///
+/// `None` when `ph` is odd, `ph / 2` is zero, or `scan` does not divide
+/// `ph / 2`: there is no framebuffer that can drive such a panel, and the
+/// caller must report the layout as unbuildable rather than guess.
+#[must_use]
+pub fn fb_geometry(m: &Matrix, planes: usize) -> Option<Geometry> {
+    let (scan, stripes) = scan_stripes(m)?;
+    let chain_w = m.pw as usize * chain_len(m);
+    Some(Geometry::new(scan, chain_w * stripes, planes))
 }
 
 /// Which tile of the grid chain position `p` is, and whether it is mounted
@@ -95,13 +157,36 @@ pub fn panel_cell(m: &Matrix, p: usize) -> Option<(u32, u32, bool)> {
     Some((cx as u32, cy as u32, m.rot180 && line % 2 == 1))
 }
 
-/// Fill `lut` with the driver→engine remap for a `fb_w` × `fb_h`
-/// framebuffer, row-major over driver pixels. Returns the number of leading
-/// chain tiles the framebuffer drives (see [`driven_panels`]).
+/// Fill `lut` with the driver→engine remap, indexed by DRIVER pixel index.
+/// Returns the number of leading chain tiles the framebuffer drives (see
+/// [`driven_panels`]).
+///
+/// `fb_w` and `fb_h` are the framebuffer's extent **in panel pixels**: `fb_w`
+/// is how wide a ribbon it can clock out (`pw * panels`, i.e.
+/// `Geometry::cols / stripes`) and `fb_h` how tall a panel it covers (`ph`,
+/// i.e. `2 * Geometry::rows * stripes`). They are NOT the driver's own
+/// `rows`/`cols`: for a 1/N-scan panel the driver array is shorter and wider,
+/// and this function does that fold itself. `lut.len()` is `fb_w * fb_h`
+/// either way, which is also `Geometry::pixels()`.
+///
+/// The driver index is row-major over `2 * scan` rows of `fb_w * stripes`
+/// words, and for `stripes > 1` the "straight" quad mapping applies: driver
+/// `(drow, dcol)` shows panel pixel
+///
+/// ```text
+/// half = drow >= scan;  r = drow % scan;  s = dcol / fb_w;  x = dcol % fb_w
+/// y = half * (ph / 2) + s * scan + r
+/// ```
+///
+/// which for `stripes == 1` reduces to `y == drow`, `x == dcol` — the plain
+/// row-major framebuffer, byte for byte what this built before scan existed.
+/// Other multiplex mappings are a follow-up ticket.
 ///
 /// Every entry is written: driver pixels past the driven chain, past the
 /// tile height, or belonging to a tile the arrangement does not have become
-/// [`UNMAPPED`].
+/// [`UNMAPPED`]. When `stripes > 1`, `fb_h` must be exactly `ph` — the stripe
+/// mapping is defined by the panel's own halves, so there is no meaningful
+/// "spare rows at the bottom" case.
 ///
 /// # Panics
 /// If `lut` is not exactly `fb_w * fb_h` entries.
@@ -113,6 +198,10 @@ pub fn build_lut(lut: &mut [u16], m: &Matrix, fb_w: usize, fb_h: usize) -> usize
         return drive;
     }
     let (pw, ph, w) = (m.pw as usize, m.ph as usize, m.width() as usize);
+    // 1 unless the panel is 1/N-scan; then the driver row is `stripes` copies
+    // of the chain wide and only `scan` rows deep.
+    let (scan, stripes) = scan_stripes(m).unwrap_or((ph / 2, 1));
+    let (half_h, fb_cols) = (ph / 2, fb_w * stripes);
     for p in 0..drive {
         let Some((cx, cy, rot)) = panel_cell(m, p) else { continue };
         let (ox, oy) = (cx as usize * pw, cy as usize * ph);
@@ -121,7 +210,16 @@ pub fn build_lut(lut: &mut [u16], m: &Matrix, fb_w: usize, fb_h: usize) -> usize
                 // A tile mounted upside-down shows its far corner first.
                 let (sx, sy) = if rot { (pw - 1 - lx, ph - 1 - ly) } else { (lx, ly) };
                 let engine = (oy + sy) * w + ox + sx;
-                lut[ly * fb_w + p * pw + lx] = engine as u16;
+                let x = p * pw + lx;
+                let i = if stripes == 1 {
+                    ly * fb_w + x
+                } else {
+                    // Invert the quad mapping above: panel row `ly` is stripe
+                    // `s` of address row `r`, in the half `ly` falls in.
+                    let (hi, yy) = if ly >= half_h { (scan, ly - half_h) } else { (0, ly) };
+                    (hi + yy % scan) * fb_cols + (yy / scan) * fb_w + x
+                };
+                lut[i] = engine as u16;
             }
         }
     }
@@ -158,7 +256,11 @@ pub fn is_identity(lut: &[u16]) -> bool {
 #[must_use]
 pub fn est_hz(m: &Matrix, planes: u32, clock_hz: u32) -> u32 {
     let scan = if m.scan != 0 { m.scan as u32 } else { m.ph as u32 / 2 };
-    let chain_w = m.pw as u32 * chain_len(m) as u32;
+    // A 1/N-scan panel has fewer address rows but each one clocks out
+    // `stripes` copies of the chain, so the product is the same: a panel's
+    // rescan cost is its pixel count, however the rows are multiplexed
+    // (Gitea #764).
+    let chain_w = m.pw as u32 * chain_len(m) as u32 * stripes(m) as u32;
     let clocks = scan as u64 * ((1u64 << planes) - 1) * chain_w as u64;
     if clocks == 0 {
         return 0;
@@ -233,7 +335,7 @@ mod tests {
         assert_eq!(lut[0], 32);
         assert_eq!(lut[32], 0);
         assert_eq!(lut[63], 31);
-        assert_eq!(lut[63 * 64 + 0], 63 * 64 + 32);
+        assert_eq!(lut[63 * 64], 63 * 64 + 32);
     }
 
     /// Whatever the wiring, a chain the framebuffer covers must show every
@@ -390,14 +492,127 @@ mod tests {
         assert_eq!(est_hz(&line, 7, 30_000_000), 28);
     }
 
+    // --- scan depth → framebuffer geometry (Gitea #401) -------------------
+
+    /// The framebuffer shape the bench panel needs, and the striped shapes a
+    /// 1/N-scan panel needs.
+    #[test]
+    fn fb_geometry_follows_the_scan_depth() {
+        let m = Matrix::single(64, 64);
+        assert_eq!(fb_geometry(&m, 7), Some(Geometry::new(32, 64, 7)));
+        assert_eq!(stripes(&m), 1);
+
+        let mut m = Matrix::single(64, 64);
+        m.scan = 32; // stating the default explicitly changes nothing
+        assert_eq!(fb_geometry(&m, 7), Some(Geometry::new(32, 64, 7)));
+        m.scan = 16;
+        assert_eq!(fb_geometry(&m, 7), Some(Geometry::new(16, 128, 7)));
+        assert_eq!(stripes(&m), 2);
+        m.scan = 8;
+        assert_eq!(fb_geometry(&m, 4), Some(Geometry::new(8, 256, 4)));
+        assert_eq!(stripes(&m), 4);
+        // striping never changes how much is shifted per rescan
+        for scan in [0u8, 8, 16, 32] {
+            m.scan = scan;
+            assert_eq!(fb_geometry(&m, 7).unwrap().pixels(), 64 * 64, "scan {scan}");
+        }
+        // a chain multiplies the row length; the scan multiplies it again
+        let mut m = tiles(64, 64, 4, 1, (Corner::Tl, RunDir::Row, false, false));
+        m.scan = 16;
+        assert_eq!(fb_geometry(&m, 7), Some(Geometry::new(16, 512, 7)));
+    }
+
+    #[test]
+    fn fb_geometry_rejects_a_scan_that_cannot_address_the_panel() {
+        let mut m = Matrix::single(64, 64);
+        m.scan = 20; // 20 does not divide 32
+        assert_eq!(fb_geometry(&m, 7), None);
+        assert_eq!(stripes(&m), 1); // …and never divides by zero
+        m.scan = 64; // deeper than the panel has halves
+        assert_eq!(fb_geometry(&m, 7), None);
+        assert_eq!(fb_geometry(&Matrix::single(64, 63), 7), None); // odd height
+        assert_eq!(fb_geometry(&Matrix::single(64, 0), 7), None); // no height
+    }
+
+    /// A 1/16-scan 64x64 panel: 16 address rows of 128 words. Driver column
+    /// 64 is the second stripe, i.e. 16 panel rows further down.
+    #[test]
+    fn a_1_16_scan_panel_stripes_into_a_double_width_framebuffer() {
+        let mut m = Matrix::single(64, 64);
+        m.scan = 16;
+        let g = fb_geometry(&m, 7).unwrap();
+        assert_eq!((g.rows, g.cols), (16, 128));
+        let mut lut = vec![0u16; 64 * 64];
+        assert_eq!(build_lut(&mut lut, &m, 64, 64), 1);
+        assert_eq!(lut.len(), g.pixels());
+        let at = |drow: usize, dcol: usize| lut[drow * g.cols + dcol] as usize;
+        // stripe 0 of address row 0 is engine row 0, stripe 1 is engine row 16
+        assert_eq!(at(0, 0), 0);
+        assert_eq!(at(0, 63), 63);
+        assert_eq!(at(0, 64), 16 * 64);
+        assert_eq!(at(0, 64 + 5), 16 * 64 + 5);
+        // the bottom half of the panel starts at address row `scan`
+        assert_eq!(at(16, 0), 32 * 64);
+        assert_eq!(at(16, 64), 48 * 64);
+        // the last address row is the last row of each stripe
+        assert_eq!(at(15, 0), 15 * 64);
+        assert_eq!(at(15, 64), 31 * 64);
+        assert_eq!(at(31, 64), 63 * 64);
+        assert!(!is_identity(&lut));
+        // and it is still a permutation of the whole grid
+        let mut seen = vec![false; 64 * 64];
+        for &e in &lut {
+            assert_ne!(e, UNMAPPED);
+            assert!(!seen[e as usize], "engine pixel {e} twice");
+            seen[e as usize] = true;
+        }
+        assert!(seen.iter().all(|s| *s));
+    }
+
+    /// The ordinary scan — stated or left to the board default — must still be
+    /// the identity on a single upright tile: scan support costs nothing when
+    /// it is not used.
+    #[test]
+    fn an_ordinary_scan_is_still_the_identity() {
+        for scan in [0u8, 32] {
+            let mut m = Matrix::single(64, 64);
+            m.scan = scan;
+            let mut lut = vec![0u16; 64 * 64];
+            assert_eq!(build_lut(&mut lut, &m, 64, 64), 1);
+            assert!(is_identity(&lut), "scan {scan}");
+        }
+    }
+
+    /// Striping composes with every tile wiring: still a permutation.
+    #[test]
+    fn a_striped_framebuffer_is_a_permutation_for_every_wiring() {
+        for w in all_wirings() {
+            let mut m = tiles(4, 8, 2, 1, w);
+            m.scan = 2;
+            assert_eq!(stripes(&m), 2);
+            let (fw, fh) = chain_fb(&m);
+            let mut lut = vec![0u16; fw * fh];
+            assert_eq!(build_lut(&mut lut, &m, fw, fh), 2, "{w:?}");
+            let mut seen = vec![false; m.pixels() as usize];
+            for &e in &lut {
+                assert_ne!(e, UNMAPPED, "{w:?}");
+                assert!(!seen[e as usize], "{w:?}: engine pixel {e} twice");
+                seen[e as usize] = true;
+            }
+            assert!(seen.iter().all(|s| *s), "{w:?}");
+        }
+    }
+
     /// `scan` states the address depth when it is not simply `ph / 2`.
     #[test]
     fn the_scan_field_overrides_half_the_panel_height() {
         let mut m = Matrix::single(64, 32);
         assert_eq!(m.scan, 0);
         assert_eq!(est_hz(&m, 7, 30_000_000), 230); // 16 address rows
-        m.scan = 8; // a 1/8-scan 64x32 panel: half the rows, twice the rate
-        assert_eq!(est_hz(&m, 7, 30_000_000), 461);
+        // a 1/8-scan 64x32 panel: half the address rows, but each one
+        // clocks out two stripes of the chain — the rate does not move (#764)
+        m.scan = 8;
+        assert_eq!(est_hz(&m, 7, 30_000_000), 230);
         m.scan = 32;
         assert_eq!(est_hz(&m, 7, 30_000_000), 115);
     }

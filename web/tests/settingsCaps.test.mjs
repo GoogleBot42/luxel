@@ -208,6 +208,26 @@ test("estimated refresh divides by the chain length, and scan defaults to ph/2",
   assert.equal(PANEL_DRIVER_DEFAULT.planes, 7);
 });
 
+test("PANEL_DRIVER_DEFAULT is the FALLBACK, not the model (Gitea #401/#525)", () => {
+  // The clock and bit depth are device SETTINGS now: `/api/layout`'s `driver`
+  // block carries what this board has stored, and the console computes the
+  // estimate from THAT (`lib/panelDriver.ts`, `tests/panelDriver.test.mjs`).
+  // This constant stays as the reading for firmware that reports no block,
+  // which is also `estimatedRefreshHz`'s default parameter — so the two must
+  // not drift apart.
+  const panel = { pw: 64, ph: 64, panels: 1, scan: 32 };
+  assert.deepEqual(PANEL_DRIVER_DEFAULT, { clockHz: 30_000_000, planes: 7 });
+  assert.equal(estimatedRefreshHz(panel), estimatedRefreshHz(panel, PANEL_DRIVER_DEFAULT));
+});
+
+test("the Panel driver ROW is caps-gated, whatever the driver block says", () => {
+  // The disclosure exists because the board has a panel (`caps.panel`); what
+  // is inside it — an editable form or this build's constants — is the
+  // `driver` block's business, not the visibility rule's (§5.7).
+  assert.equal(vis(PANEL).panelDriver, true);
+  assert.equal(vis(MATRIX_FROM_STRIPS).panelDriver, false, "a matrix of strips has no HUB75 driver");
+});
+
 // ---- the chain order the arrangement SVG draws ----
 
 test("the chain threads a 2×2 top-left, row-major, snaked", () => {

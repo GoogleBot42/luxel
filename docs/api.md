@@ -985,6 +985,7 @@ embedded so a client needs one fetch:
 | `dims` / `regular` / `w` / `h` | The **Layout's own** shape: 1×`pixels` for a strip, `pw·cols`×`ph·rows` for a matrix, the installed map's detected grid (or `0`/`0`, `regular:false`) for a map. |
 | `pixels` / `max` | The pixel count and this board's ceiling — the same numbers `/api/config` reports. |
 | `matrix` | **Present only when `kind` is `matrix`.** `pw`×`ph` is one panel (or, with `cols`=`rows`=1, the whole grid); `cols`×`rows` tile them; `start` (`tl\|tr\|bl\|br`), `dir` (`row\|col`), `snake`, `rot180` describe how the chain threads the tiles — and, in the one-tile case, how the pixel run threads the grid (a strip-built matrix's wiring, proposal §5.3). `scan` is the HUB75 scan divisor, `0` = the board's own. On a board with a panel driver it also carries `est_hz` and `drive` — see "Panel arrangement" below. |
+| `driver` | **Present only on a board with a HUB75 panel.** How the panel is DRIVEN — bit depth, pixel clock, chip init, latch blanking — plus the chip list a client should offer and what the firmware actually booted. See "How the panel is driven" below. |
 | `outputs` | One entry per configured output — `n` (0-based, `< caps.outputs`), `pin`, `proto`, `order`, `count` (pixels on a strip Layout, **panels** on a matrix one), `rev`. Each drives a consecutive run of the one pixel space, in `n` order (see "Driving" below). A host with no table configured reports ONE implicit output built from its live data pin, protocol and colour order. |
 | `proj` | The §5.4d projection defaults (`docs/spec/projection.md`), tokens `index\|x\|y\|z\|xy\|xz\|yz`. |
 | `map` | The `GET /api/map` body verbatim. |
@@ -1018,19 +1019,23 @@ line; a *line* is a row of tiles when `dir` is `row` and a column when it is
 | field | meaning |
 |---|---|
 | `est_hz` | Estimated panel rescan rate for the whole configured chain (below). Absent on hosts with no panel driver — the mirror, and every strip board. |
-| `drive` | Leading tiles of the chain this board's framebuffer can actually shift out. `drive < cols·rows` means the rest of the arrangement is **dark**: the DMA framebuffer is compile-time sized (Gitea #401) and a 64×64 board drives 64 columns of chain, i.e. one 64-wide tile or two 32-wide ones. |
+| `drive` | Leading tiles of the chain **the running framebuffer** can actually shift out. `drive < cols·rows` means the rest of the arrangement is **dark**. Since #401 the framebuffer is allocated from the stored `matrix` line at boot, so this is about the panel that booted, not a compile-time constant — it is `driver.live.w / pw` (0 when there is no panel output at all), and what bounds it is the board's pixel cap and the internal SRAM two bitplane buffers need. |
 
 **Estimated refresh.** Plain BCM shifts the whole chain once per bitplane per
 address row, and plane *k* is repeated 2^*k* times, so one rescan costs
 
 ```text
-est_hz = clock_hz / ( scan · (2^planes − 1) · pw · panels )
+est_hz = clock_hz / ( scan · stripes · (2^planes − 1) · pw · panels )
 ```
 
-with `panels = cols · rows`, `planes` the BCM bit depth (7 today) and `scan`
-the address depth — the `scan` field when the Layout states one, else `ph / 2`
-(a HUB75 panel drives two half-height rows at once through R1G1B1/R2G2B2).
-`clock_hz` is the LCD_CAM pixel clock, 30 MHz on the Seengreat board. A UI
+with `panels = cols · rows`, `planes` the BCM bit depth (the `panel` line's,
+7 by default), `stripes = (ph / 2) / scan` (1 for an ordinary panel; a
+1/N-scan panel has fewer address rows but each one clocks out `stripes`
+copies of the chain, so its refresh does not move with `scan` — Gitea #764)
+and `scan` the address depth — the `scan` field when the Layout
+states one, else `ph / 2` (a HUB75 panel drives two half-height rows at once
+through R1G1B1/R2G2B2). `clock_hz` is the LCD_CAM pixel clock, the `panel`
+line's `clock_mhz` and 30 MHz by default on the Seengreat board. A UI
 computing this in the browser must use the same numbers and can check itself
 against `est_hz`; **below ~100 Hz the panel visibly flickers** (show it amber
 and name the fix: fewer panels per chain, fewer bitplanes, or a faster clock).
@@ -1044,21 +1049,85 @@ against 76.9–77.0 / 153.5–154.0.
 - **One chain per output** on this board — its two HUB75 headers are the same
   14 GPIOs wired twice, not two chains (schematic, Gitea #255).
 - **Every tile in a chain has the same size and scan.** There is one `pw`,
-  one `ph` and one `scan`.
+  one `ph` and one `scan`. A panel's `ph` must be **even** — it shifts two
+  half-height rows at once — and a stated `scan` must **divide `ph / 2`**
+  exactly: anything shallower stripes the framebuffer `(ph / 2) / scan` ways
+  and a partial stripe has nowhere to go. A body that breaks either is
+  refused with `"scan must divide ph/2"` (or `"a panel's ph must be even"`),
+  on the `matrix` line. `scan 0` means "the board's own", i.e. `ph / 2`.
 - **Reboot to apply.** `cols rows start dir snake rot180 scan` are
-  `reboot_required`; `pw`/`ph` only resize the grid and apply live.
+  `reboot_required` everywhere; on a **HUB75 board** so are `pw`/`ph`, whose
+  DMA framebuffer is allocated from the arrangement at boot. On a strip-built
+  matrix those two only resize the grid and apply live.
 - An arrangement whose chain is wider than `drive` tiles is accepted, stored
   and reported — the board just drives the prefix. That is the honest state,
-  not a rejection, because raising the framebuffer is #401.
+  not a rejection. Since #401 the framebuffer follows the arrangement, so this
+  is now the case where it could not: the panel is over the board's pixel cap
+  or over the internal SRAM two bitplane buffers need, and the boot fell back
+  (`driver.live.fallback`).
+
+### How the panel is driven — the `panel` line (Gitea #401 + #525)
+
+The `matrix` block says how the panels are ARRANGED; this says how they are
+DRIVEN. All four of these were compile-time constants until #525, which is why
+one image could not drive both a plain shift-register panel and an FM6126A
+one:
+
+```text
+panel <planes> <clock_mhz> <chip> <blank>
+```
+
+| field | range | default | meaning |
+|---|---|---|---|
+| `planes` | 4..8 | 7 | BCM bitplanes. Fewer is a faster rescan and a coarser ramp — one rescan shifts the whole chain `2^planes − 1` times. |
+| `clock_mhz` | 2..40 | 30 | The LCD_CAM pixel clock. **40 does not survive an FM6124 panel** (the bench table in `firmware/src/hub75.rs`); the device stores what you send and the UI warns above 30. |
+| `chip` | `shiftreg` · `fm6126a` · `icn2038s` · `dp3246` | `shiftreg` | The driver chip's init, bit-banged before the DMA starts. `shiftreg` covers FM6124, SM16208, ICN2037 and every other plain shift register — no init at all. `fm6126a` and `icn2038s` share a two-register init; `dp3246` has its own, and holds the latch for the last **3** clocks of every row instead of 1. |
+| `blank` | 0..8 | 1 | Clocks at the start of every row block, and again just before the latch word, where OE is off. `1` is the stock template; raising it trades a little brightness for less ghosting between address rows. |
+
+`GET /api/layout` answers with a `driver` block — **only on a board with a
+panel driver**, like `est_hz` and `drive`:
+
+```json
+"driver":{"planes":7,"clock_mhz":30,"chip":"shiftreg","blank":1,
+          "chips":["shiftreg","fm6126a","icn2038s","dp3246"],
+          "live":{"planes":7,"clock_mhz":30,"chip":"shiftreg","blank":1,
+                  "w":64,"h":64,"scan":32,"fb_bytes":28672,"fallback":false}}
+```
+
+The four top-level values are the **configured** (stored) driver; `chips` is
+the set a client should offer, so nobody hard-codes the list; `live` is what
+the running firmware actually booted the DMA with:
+
+| field | meaning |
+|---|---|
+| `live.planes` `clock_mhz` `chip` `blank` | the RUNNING driver's own four, read back from the DMA setup rather than from the store |
+| `live.w` / `live.h` | the framebuffer's chain extent in pixels — `w` = `pw` × chain length, `h` = `ph` |
+| `live.scan` | address rows the driver scans |
+| `live.fb_bytes` | bytes of ONE framebuffer (there are two, double-buffered) |
+| `live.fallback` | `true` = the configured geometry/driver did not fit in internal RAM and the firmware booted the **board default** instead (64×64, 7 planes, 30 MHz, `shiftreg`, `blank 1`). Say so, and point at `planes` and the panel size. |
+| `"live":null` | there is no panel output at all — the framebuffer allocation or the LCD_CAM init failed even at the board default |
+
+**Configured against live is the reboot indicator.** Any of `planes`
+`clock_mhz` `chip` `blank` differing from its `live` twin, or `matrix`
+`pw`/`ph`/chain/`scan` differing from `live.w`/`live.h`/`live.scan`, means a
+reboot is pending — the same answer the POST already gave.
+
+**`panel` MERGES.** It is the one line a body may leave out without resetting
+anything: no `panel` line keeps the stored driver, exactly so a Settings page
+can POST `matrix …` on its own. At most one per body, and every field is
+required when there is one. The line is accepted whatever the kind — a
+persisted matrix Layout always carries one — but it is only written into the
+stored record when the kind is `matrix`, and only a panel board reports it.
 
 **`POST /api/layout`** takes a line-oriented body, ≤ 4 KiB, like the playlist.
 Blank lines and `#` comments are ignored; line order is free; **at most one**
-`strip`/`matrix`/`map` line per body:
+`strip`/`matrix`/`map` line per body, and at most one `panel`:
 
 ```text
 strip <pixels>
 matrix <pw> <ph> <cols> <rows> <tl|tr|bl|br> <row|col> <snake 0|1> <rot180 0|1> [<scan>]
 map [grid <w> <h> | <dims> <raw16.16…>]
+panel <planes> <clock_mhz> <shiftreg|fm6126a|icn2038s|dp3246> <blank>
 out <n> <pin> <sk9822|ws2812> <rgb|rbg|grb|gbr|brg|bgr> <count> [rev]
 out none
 proj1d|proj2d|proj3d <index|x|y|z|xy|xz|yz>
@@ -1106,8 +1175,11 @@ a client never has to re-fetch. A bad line answers
 (`0` = the body as a whole, e.g. the output-count sum).
 
 **Validation.** Pixel counts against the board's `max`; `pw·ph·cols·rows`
-against it too; output indices against `caps.outputs` (a board with one
-output refuses `out 1` outright); pins against the board's reserved set (the
+against it too; `scan` against `ph / 2`, which it must divide (and `ph` itself
+even, on a panel board); every `panel` field against its range above, each
+with its own message (`panel: planes must be 4..8`); output indices against
+`caps.outputs` (a board with one output refuses `out 1` outright); pins
+against the board's reserved set (the
 same check `/api/datapin` runs) and against each other — two outputs cannot
 share a data pad; protocol names from
 `GET /api/protocol`'s `options` (aliases accepted); colour orders from the
@@ -1155,8 +1227,9 @@ protocol latch tail, not a second frame. docs/boards.md has the full table.
 | `pixels` — `strip N`, `matrix …`, `map grid W H` | **live** (`/api/status`'s `geom` follows within a frame) |
 | the map, and the `proj*` defaults | **live** |
 | `proj` (the running pattern's override) | **live**, and never stored |
-| `matrix` `pw` `ph` | **live** — they only resize the grid |
+| `matrix` `pw` `ph` | **live** on a strip-built matrix — they only resize the grid — and **reboot** on a HUB75 board, whose DMA framebuffer is allocated from them at boot (#525) |
 | `matrix` `cols` `rows` `start` `dir` `snake` `rot180` `scan` | **reboot** — the chain remap is built once (#475) |
+| `panel` `planes` `clock_mhz` `chip` `blank` | **reboot** — the DMA descriptors, the LCD_CAM clock and the chip's init sequence are all set up once, at boot (#525). The field a client notes as pending is `panel`. |
 | `out` `count` (the split) | **live** on every output — the run boundaries are re-read from the Layout each frame, so an output whose run shrank drives fewer pixels at once and one the table no longer covers goes dark |
 | `out` `rev` | **live** on every output — it rides in the same run |
 | `out 0` `proto`, `out 0` `order` | **live** — output 0 IS the strip the aliases describe, so they write through to `/api/protocol` and `/api/output` |
@@ -1170,7 +1243,8 @@ and answers `"reboot_required":false`, so a Settings page may POST the whole
 table on every edit without inventing a reboot prompt.
 
 **Persistence.** Firmware stores the Layout as a ~20-byte record (plus 9 B per
-output) under the pattern store's reserved `LAYOUT_KEY`. It deliberately does
+output, and ~22 B more for the `panel` line, which a matrix Layout always
+carries) under the pattern store's reserved `LAYOUT_KEY`. It deliberately does
 **not** carry the pixel count or the map payload — those keep their existing
 homes (the nvs `LXDV` device record and the map blob), which is exactly what
 keeps the aliases below honest instead of a second, drifting copy. A device
@@ -1216,7 +1290,7 @@ table.
 | `/api/map` | GET | — | `{"installed":bool,"dims":2\|3\|0,"count":N,"kind":"grid"\|"coords"[,"w":W,"h":H]}` | both |
 | `/api/map` | POST | `<dims> <raw…>` or `grid <w> <h>` | `{"ok":true,"installed":bool,"count":N}` | both |
 | `/api/layout` | GET | — | the whole Layout — see "`/api/layout` — the one geometry object" above | both |
-| `/api/layout` | POST | `strip`/`matrix`/`map`/`out`/`proj*`/`proj` lines | the GET body + `"ok"`/`"reboot_required"`, or `{"ok":false,"error":…,"line":N}` | both |
+| `/api/layout` | POST | `strip`/`matrix`/`map`/`panel`/`out`/`proj*`/`proj` lines | the GET body + `"ok"`/`"reboot_required"`, or `{"ok":false,"error":…,"line":N}` | both |
 | `/api/clock` | GET | — | `{"synced":bool,"local":<unix secs, local>,"tzMinutes":N}` | both |
 | `/api/clock` | POST | tz offset from UTC in minutes | `{"ok":true,"tzMinutes":N}` | both |
 | `/api/clock/sync` | POST | (body ignored) | `{"ok":true,"synced":bool,"local":<unix secs, local>}` | both |
@@ -1272,8 +1346,10 @@ table.
   per-pixel body, and zero heap on the device (a 64x64 panel's map is 48 KB
   as coordinates, 5 bytes as a grid; Gitea #258). An empty or unparseable
   body **clears** the map and answers `"installed":false` — except on a
-  HUB75 panel board, which falls back to its own `PANEL_COLS`×`PANEL_ROWS`
-  grid (installed at boot when nothing is stored) and stays `installed:true`.
+  HUB75 panel board, which falls back to **its configured panel's own grid**
+  (`matrix` `pw·cols` × `ph·rows`, installed at boot when nothing is stored,
+  and re-derived whenever that setting changes since #401) and stays
+  `installed:true`.
   Firmware request bodies are read into 4 KB buffers: a large coordinate
   map that does not arrive intact is treated as "clear", so prefer the grid
   form for matrices.

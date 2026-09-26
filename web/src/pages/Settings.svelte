@@ -13,6 +13,12 @@
   import { createEventDispatcher, onDestroy } from "svelte";
   import { offsetLabel, psramLine, settingsVisibility, uiLayoutKind } from "../lib/settingsCaps";
   import {
+    driverWire,
+    panelDriverState,
+    panelGeometryOf,
+    panelStatusLine,
+  } from "../lib/panelDriver";
+  import {
     applyLayout,
     clockStatus,
     device,
@@ -188,7 +194,17 @@
     .filter(Boolean)
     .join(" · ");
 
-  $: panelLine = `30 MHz · 7 planes${$deviceRescanHz > 0 ? ` · ${$deviceRescanHz} Hz` : ""}`;
+  // The collapsed Panel driver row states the CONFIGURED clock and bit depth
+  // beside the measured rescan — the device's own stored values since Gitea
+  // #401/#525, this build's constants only as the fallback for firmware that
+  // does not carry them. It also says when the two readings cannot agree
+  // (`reboot to apply`, `not applied`, `output off`), because a row nobody
+  // opens is the only place that fact would otherwise not appear.
+  $: panelLine = panelStatusLine(
+    $deviceLayoutWire,
+    $deviceRescanHz,
+    panelDriverState(driverWire($deviceLayoutWire), panelGeometryOf($deviceLayoutWire)),
+  );
 </script>
 
 <div class="settings-tab" data-role="settings-panel" hidden={!active}>

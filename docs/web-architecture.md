@@ -1397,11 +1397,56 @@ The section's own pieces:
 | the kind picker | Strip / Matrix / **3D** / Custom map — **only where the board offers a choice**; a HUB75 board has none and the summary line carries the kind. `3D` is the one kind `/api/layout` does not name (see below) |
 | the lattice fields | `w × h × d` with a live cloud thumbnail of what is about to be installed, and an `Install` button — picking `3D` changes nothing until it is pressed |
 | `ArrangementSvg` | the panel chain: tiles, the path numbered from the `IN` connector, per-tile scan direction, the 180° markers, the total size, and output tinting. The same widget one level down (`mode="pixels"`) draws the pixel run through a strip-built matrix |
-| the refresh readout | the device's own `matrix.est_hz` (#475) when it reports one, else `estimatedRefreshHz()` — the same formula over the same inputs, for a host that does not. Amber under 100 Hz with the fix named, and the panel's live `rescan_hz` beside it. The browser model's clock and plane count are the firmware's build-time constants until Gitea #525 puts them on the wire |
+| the refresh readout | `panelRefreshHz()` (`lib/panelDriver.ts`): computed here from the CONFIGURED clock and bit depth wherever `/api/layout` reports a `driver` block (#401/#525) — the same formula the firmware runs, over inputs the form can change, so the number cannot lag the field just edited — and the device's own `matrix.est_hz` (#475) on firmware that reports no driver. Amber under 100 Hz with the fix named, the panel's live `rescan_hz` beside it, and the line under it names the driver it was spent on (`2 panels × 6 planes at 40 MHz`) |
 | the dark-tile note | `matrix.drive` is how many leading tiles this board's framebuffer can shift out; past it the picture dashes them and the page says how many stay dark (#475/#401) |
 | the reboot bar | see "Stored, but not running yet" below — the per-field note this row used to carry is gone |
 | `OutputsTable` | one row per output when `caps.outputs > 1`, each computing the run it owns (`pixels 300–599`), plus the strip split graphic. `out` lines are all-or-nothing, so a row edit POSTs the whole table |
 | `ProjectionBlock` | mounted by the PAGE now, in its own `Projection` section (below) |
+
+### Advanced › Panel driver is a form, not a plaque (#401/#525)
+
+The HUB75 driver's bit depth, pixel clock, chip-init sequence and latch
+blanking used to be this firmware build's constants, and the card said so.
+They are settings now: `/api/layout` reports a `driver` block and takes one
+wire line back,
+
+```
+panel <planes> <clock_mhz> <chip> <blank>
+```
+
+which the firmware merges into the stored Layout and applies at the next boot.
+Every field POSTs that one line through the same `applyLayout()` path the LED
+layout form uses, adopts the reply, and sends a `reboot_required` reply to the
+sticky reboot bar — the panel's framebuffer and its LCD_CAM clock are built at
+boot, so on a panel board the `matrix` line's pw/ph/chain/scan are
+reboot-required too, and the UI takes that from the REPLY rather than assuming.
+
+The block carries two readings of the same four values, and the card's job is
+to say which one is on the panel:
+
+```json
+"driver": { "planes": 7, "clock_mhz": 30, "chip": "shiftreg", "blank": 1,
+            "chips": ["shiftreg","fm6126a","icn2038s","dp3246"],
+            "live": { …, "w": 64, "h": 64, "scan": 32, "fb_bytes": 28672, "fallback": false } }
+```
+
+`lib/panelDriver.ts` is the pure module that decides, and
+`web/tests/panelDriver.test.mjs` tests it over fixtures — the interesting
+states are exactly the ones a healthy bench panel never shows:
+
+| `panelDriverState()` | when | what the card says |
+|---|---|---|
+| `live` | configured == `live`, geometry included | running exactly what is set here |
+| `pending` | any of the four, or pw/ph/chain/scan, differ | **Reboot to apply**, naming what is still running and what waits |
+| `fallback` | `live.fallback` | the configured driver did not fit in internal RAM; the board default is running — lower the bit planes or the panel size, a reboot alone will not fix it |
+| `disabled` | `live` is `null` | panel output is off: no framebuffer came up at all |
+| `unknown` | no `driver` block | firmware before the `panel` line — the card states `PANEL_DRIVER_DEFAULT` read-only, which is the ONLY thing that constant is for now |
+
+The collapsed Advanced row carries the same verdict (`30 MHz · 7 planes ·
+114 Hz · reboot to apply`), because a row nobody opens is the only place that
+fact would otherwise not appear. The chip `<select>` is built from
+`driver.chips`, never from a list in the browser, so a firmware that learns a
+new chip needs no web change.
 
 ### A 3D lattice, and why it takes two POSTs
 
@@ -1524,7 +1569,8 @@ dark,map-link}` · `reboot-bar`, `reboot-bar-text`, `reboot-now` ·
 `refresh-measured` · `outputs`, `output-{row,pin,proto,order,count,rev,range,
 add,remove}` · `projection-block`, `projection-kind` (with `data-dims`),
 `projection-card` (with `data-mode`) · `wifi-change` ·
-`panel-{clock,planes,rescan}` · `storage-{patterns,bytes,heap,psram}` ·
+`panel-{clock,clock-warn,planes,chip,blank,rescan,est,state,state-row}` ·
+`storage-{patterns,bytes,heap,psram}` ·
 `fw-{version,update,file,note}` · `api-error-{bar,text,details,dismiss}` ·
 `device-down-bar`.
 
@@ -1569,8 +1615,13 @@ markup reads with `{#if}` — `kindPicker`, `stripFields`, `panelScan`,
 older than #464) falls back to `FALLBACK_CAPS` — what every build has always
 had — rather than to a guess.
 
+`lib/panelDriver.ts` is its sibling for the HUB75 driver block — the
+`panel` wire line, the chip labels, the live-vs-configured verdict and
+`panelRefreshHz()` (above).
+
 The module also owns the pure arithmetic the section draws with:
-`estimatedRefreshHz()`, `chainOrder()` (the tile order the SVG numbers —
+`estimatedRefreshHz()` (whose `PANEL_DRIVER_DEFAULT` parameter is now only the
+fallback for firmware that reports no driver), `chainOrder()` (the tile order the SVG numbers —
 tiles line by line, a line being a tile row under `dir: "row"` and a column
 under `"col"`, `snake` reversing the odd lines and `rot180` marking their
 tiles as mounted upside-down; the same walk #475's boot-time remap does),

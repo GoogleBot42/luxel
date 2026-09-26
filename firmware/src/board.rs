@@ -81,11 +81,15 @@ mod def {
     #[cfg(feature = "hub75")]
     pub const DEFAULT_PIXEL_COUNT: u32 = super::PANEL_PIXELS;
     pub const DEFAULT_DATA_PIN: u8 = 11;
+    /// The 14 HUB75 signals, in `hub75_pins!`'s own order (see
+    /// [`super::HUB75_PINS`]).
+    #[cfg(feature = "hub75")]
+    pub const HUB75_PINS: [u8; 14] = [38, 42, 48, 47, 2, 21, 14, 46, 13, 9, 3, 11, 12, 10];
     /// SPI CLK (12); with `hub75`, the 14 panel pins from `hub75_pins!`.
     #[cfg(not(feature = "hub75"))]
     pub const RESERVED_PINS: &[u8] = &[12];
     #[cfg(feature = "hub75")]
-    pub const RESERVED_PINS: &[u8] = &[38, 42, 48, 47, 2, 21, 14, 46, 13, 9, 3, 11, 12, 10];
+    pub const RESERVED_PINS: &[u8] = &HUB75_PINS;
 }
 
 // On metal since 2026-09-05 (Gitea #75; docs/boards.md "First light").
@@ -109,8 +113,11 @@ mod def {
     pub const DEFAULT_PIXEL_COUNT: u32 = super::PANEL_PIXELS;
     /// Vestigial too: the strip SPI is not wired on a panel board.
     pub const DEFAULT_DATA_PIN: u8 = 11;
+    /// The 14 HUB75 signals, in `hub75_pins!`'s own order (see
+    /// [`super::HUB75_PINS`]).
+    pub const HUB75_PINS: [u8; 14] = [5, 4, 6, 15, 7, 17, 8, 18, 10, 9, 16, 12, 11, 13];
     /// The 14 HUB75 panel pins (see `hub75_pins!`).
-    pub const RESERVED_PINS: &[u8] = &[5, 4, 6, 15, 7, 17, 8, 18, 10, 9, 16, 12, 11, 13];
+    pub const RESERVED_PINS: &[u8] = &HUB75_PINS;
 }
 
 // UNTESTED ON METAL: no C6 on the bench. Wiring is reviewed against the
@@ -193,13 +200,18 @@ pub const BLUR_GLOW: bool = false;
 #[cfg(not(feature = "hub75"))]
 pub const BLUR_GLOW: bool = true;
 
-/// Panel area = the default (and maximum useful) pixel count on a matrix
-/// board. Geometry is compile-time (see hub75.rs) so this is a const.
+/// Area of the DEFAULT panel = the default pixel count on a matrix board.
+/// Panel geometry itself is a runtime setting since #401 (`hub75.rs`, the
+/// `matrix` line); this is only the board's own default, which is what the
+/// device record comes up with when nothing is stored.
 #[cfg(feature = "hub75")]
-pub const PANEL_PIXELS: u32 = (crate::hub75::PANEL_COLS * crate::hub75::PANEL_ROWS) as u32;
+pub const PANEL_PIXELS: u32 =
+    crate::hub75::DEFAULT_PANEL_W as u32 * crate::hub75::DEFAULT_PANEL_H as u32;
 
-// The whole panel must be addressable, or the bottom rows render black —
-// exactly the cap-clamped half panel that shipped before #74.
+// The whole DEFAULT panel must be addressable, or the bottom rows render
+// black — exactly the cap-clamped half panel that shipped before #74. A
+// CONFIGURED panel larger than the cap is refused at boot (`hub75::try_boot`)
+// and by the layout parser's own `max_pixels` check.
 #[cfg(feature = "hub75")]
 const _: () = assert!(PANEL_PIXELS <= MAX_PIXELS);
 
@@ -262,6 +274,41 @@ macro_rules! hub75_pins {
 }
 #[cfg(feature = "hub75")]
 pub(crate) use hub75_pins;
+
+/// The same 14 pins as [`hub75_pins!`], built from their NUMBERS instead of
+/// the typed peripherals — `HUB75_PINS` per board, in the macro's own field
+/// order (red1 grn1 blu1 red2 grn2 blu2 addr0..4 blank clock latch).
+///
+/// Needed because `Hub75::new` CONSUMES the pins: when it fails at the
+/// configured settings the fallback attempt (`hub75::Hub75Output::new`, #401)
+/// has no `Hub75Pins16` left to hand a second driver, and the typed
+/// peripherals are long gone from `main`.
+///
+/// # Safety
+/// Only one `Hub75Pins16` may exist at a time. Every pad here is in
+/// `RESERVED_PINS` — which IS `HUB75_PINS` — so `data_pin_ok` and
+/// `gpio::pin_is_free` exclude all of them and nothing else in the firmware
+/// can name one; the caller must only ensure the previous set is gone.
+#[cfg(feature = "hub75")]
+pub(crate) unsafe fn hub75_pins_stolen() -> esp_hub75::Hub75Pins16<'static> {
+    let p = |i: usize| unsafe { esp_hal::gpio::AnyPin::steal(HUB75_PINS[i]) };
+    esp_hub75::Hub75Pins16 {
+        red1: p(0),
+        grn1: p(1),
+        blu1: p(2),
+        red2: p(3),
+        grn2: p(4),
+        blu2: p(5),
+        addr0: p(6),
+        addr1: p(7),
+        addr2: p(8),
+        addr3: p(9),
+        addr4: p(10),
+        blank: p(11),
+        clock: p(12),
+        latch: p(13),
+    }
+}
 
 // The HUB75 driver is LCD_CAM code — only the S3 has the peripheral
 // (C3/S2 have no parallel output at all; classic-ESP32/C6 would need the

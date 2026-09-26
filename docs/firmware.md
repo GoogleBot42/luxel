@@ -594,16 +594,57 @@ into the destination, zero stack cost. `read_chunk` in
 word-aligned heap buffer, then copy out the unaligned slice actually
 wanted.
 
-**The HUB75 panel's allocations are leaked at boot, by design** (#475,
-#329, #376). `firmware/src/hub75.rs` heap-allocates and never frees two
-bitplane framebuffers (~28 KB each at 64×64/7 planes — DMA targets, so
-internal SRAM is not optional), the 2 KiB packer tables, and — only when
-the configured arrangement is not already row-major — an 8 KiB
-panel→pixel remap table. All of it is allocated in `main()` wiring, before
-the WiFi blob's boot mallocs, when two contiguous 28 KB blocks are still a
-certainty; every one of them is fallible and disables the thing it serves
-rather than panicking. The remap is the one that varies with a device
-setting: it is 2 B per driver pixel, one seventh of the framebuffers it
+**The HUB75 panel's allocations are sized by a setting and leaked at boot,
+by design** (#401, #525, #475, #329, #376). Nothing about the panel is a
+compile-time constant since #401: `firmware/src/hub75.rs` reads the stored
+Layout's `matrix` line for the arrangement and its `panel` line for the bit
+depth, pixel clock, driver chip and latch blanking, and allocates from them.
+Per boot, all out of the GLOBAL heap — internal SRAM on every board here,
+which for the DMA targets is a requirement and not a preference:
+
+- **two bitplane framebuffers**, `rows · cols · planes · 2 B` each — 28,672 B
+  at 64×64/7 planes (`rows` is the address depth, so 32 · 64 · 7 · 2), i.e.
+  7 B per driver pixel each and 14 B for the pair — or in spare-plane mode one
+  framebuffer plus one spare MSB plane plus a staging framebuffer;
+- **two DMA descriptor rings** at the runtime descriptor count (6,096 B at
+  64×64/7 planes). These were a `.bss` static until #401 —
+  `esp_hub75::hub75_dma_descriptors!` sizes itself from a const framebuffer
+  TYPE — so this is the same memory moved from the leftover `.stack` region
+  into the heap, not new memory;
+- the **2 KiB packer tables**, which are no longer optional: the bulk packer
+  is the only compose path (there is no `set_pixel` on a runtime framebuffer),
+  so failing to find them is a boot failure;
+- the packer's **per-row scratch**, 14 B per column, allocated once — what
+  keeps composition allocation-free now that `cols` is not a constant. The
+  global allocator aborts rather than returning on OOM, so the heap is
+  checked for it explicitly before the `Vec` is built;
+- and — only when the configured arrangement is not already row-major — the
+  **panel→pixel remap table**, 2 B per driver pixel (8 KiB at 64×64).
+
+All of it is allocated in `main()` wiring, before the WiFi blob's boot
+mallocs, when contiguous blocks that size are still a certainty.
+
+**A failed attempt hands the heap back, then falls back once.** Each
+allocation is owned (`Block`, a `Drop` wrapper) until the driver actually
+starts, precisely so a boot that fails late does not leave the fallback
+attempt trying to fit a smaller panel into a heap the bigger one is still
+holding. When anything refuses — the panel is over `board::MAX_PIXELS`, an
+allocation fails, the configured `blank` plus the chip's latch width leave no
+OE-active clock in a row block (`template_lights`), or `Hub75::new` rejects
+the clock — the firmware retries **once at the board default** (64×64, 7
+planes, 30 MHz, `shiftreg`, `blank 1`) and reports `driver.live.fallback` on
+`/api/layout`; only if that fails too is panel output disabled with the render
+loop still ticking. Two allocations cannot be given back and are documented
+where they happen: spare-plane mode's **staging buffer**, which comes from the
+PSRAM arena on a `psram-arena` board and the arena has no `free` (it is the
+last allocation, so nothing after it can fail), and the framebuffers plus
+descriptor ring on the one path where `Hub75::new` itself fails — a
+half-started GDMA may already hold pointers into both, and returning that
+memory to the allocator would be a use-after-free the moment the peripheral
+twitched. On success everything is leaked and never freed.
+
+The remap is the one that varies with a device setting without being sized by
+the panel: it is 2 B per driver pixel, one seventh of the framebuffers it
 accompanies, and it is read once per pixel inside the 8.66 ms compose
 window — which is why it stays in internal DRAM and not in the PSRAM
 arena (`psram.rs` keeps every buffer the output path reads within a frame
@@ -617,7 +658,7 @@ bitplane buffer of internal SRAM — 28 KB at 64x64, 115 KB for a 256-column
 chain, which is what stood between this board and a 128x128 wall (#611). The
 spare-plane mode keeps the guarantee (nothing is ever written where the DMA
 can read it) for one framebuffer plus **one plane**. The circular ring is
-plane-major with plane 0 the MSB, repeated `2^(PLANES-1)` times, so the first
+plane-major with plane 0 the MSB, repeated `2^(planes-1)` times, so the first
 half of every pass reads nothing but plane 0 and planes `1..` are idle. The
 driver is handed two *views* over the same buffer that differ only in which
 block plane 0 names — the buffer's own or a spare — and the existing
@@ -635,6 +676,10 @@ copy that overruns anyway is counted (`torn_p1`/`torn_wrap`, must stay 0).
 Cost: one plane of internal SRAM instead of a buffer, one full framebuffer
 of PSRAM, and one extra copy per frame (staging → live). RAM ledger and the
 option comparison (PSRAM-resident DMA rings, chased copies) on Gitea #610/#611.
+Since #401 every size here — the plane, the buffer, the descriptor ring's
+window arithmetic — comes from the runtime geometry rather than the
+framebuffer type, and the staging buffer is the one allocation a failed boot
+attempt cannot give back (above).
 
 
 **Measure `.stack`, don't estimate it.** `readelf -S` (or

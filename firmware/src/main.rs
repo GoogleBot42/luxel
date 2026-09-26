@@ -952,12 +952,19 @@ fn blend_over(dst: &mut [u8; 3], src: [u8; 3], t: i32) {
 /// The DEVICE output chain's per-board power model — the power cap models
 /// the output stage, and strips conduct every pixel at once where a HUB75
 /// panel time-multiplexes rows (see `outpipe::PowerModel`).
+///
+/// A function rather than a const since #401: the panel's scan depth is a
+/// stored setting applied at boot, so it comes from what the DMA actually
+/// booted with (`hub75::live_scan`, a relaxed atomic load — this is on the
+/// per-frame path).
 #[cfg(not(feature = "hub75"))]
-pub(crate) const POWER_MODEL: luxel_core::outpipe::PowerModel =
-    luxel_core::outpipe::PowerModel::Strip;
+pub(crate) fn power_model() -> luxel_core::outpipe::PowerModel {
+    luxel_core::outpipe::PowerModel::Strip
+}
 #[cfg(feature = "hub75")]
-pub(crate) const POWER_MODEL: luxel_core::outpipe::PowerModel =
-    luxel_core::outpipe::PowerModel::Hub75 { scan: (crate::hub75::PANEL_ROWS / 2) as u16 };
+pub(crate) fn power_model() -> luxel_core::outpipe::PowerModel {
+    luxel_core::outpipe::PowerModel::Hub75 { scan: crate::hub75::live_scan() }
+}
 
 /// This frame's device output-chain settings, read out of the `/api/output`
 /// globals (Gitea #466).

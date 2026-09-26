@@ -25,16 +25,15 @@
   import PatternThumb from "../components/PatternThumb.svelte";
   import type { LayoutWire } from "../lib/device";
   import {
-    estimatedRefreshHz,
     REFRESH_AMBER_HZ,
     settingsVisibility,
     squarish,
     uiLayoutKind,
-    PANEL_DRIVER_DEFAULT,
     type Corner,
     type LayoutKind,
     type RunDir,
   } from "../lib/settingsCaps";
+  import { configuredDriver, panelRefreshHz } from "../lib/panelDriver";
   import {
     cloudLayout,
     latticeCoords,
@@ -132,11 +131,15 @@
    *  choice anybody makes (mockup S3 has no picture). */
   $: arrangementMode = panels > 1 ? ("chain" as const) : ("pixels" as const);
   $: showArrangement = vis.arrangement && (panels > 1 || !($deviceCaps?.panel ?? false));
-  /** The estimated rescan rate. The DEVICE's `est_hz` wins when it reports
-   *  one (#475) — it knows its own clock and bit depth; the browser model is
-   *  the same formula over the same inputs and stands in for a host that does
-   *  not (docs/api.md "Panel arrangement"). */
-  $: refreshHz = m.est_hz ?? estimatedRefreshHz({ pw: m.pw, ph: m.ph, panels, scan: m.scan });
+  /** The panel driver the estimate is spent on: the device's STORED clock and
+   *  bit depth since #401/#525, this build's constants on firmware that does
+   *  not report them (`lib/panelDriver.ts`). */
+  $: pdriver = configuredDriver(wire);
+  /** The estimated rescan rate. Computed from the CONFIGURED driver wherever
+   *  the device reports one, and from the device's own `est_hz` (#475) where
+   *  it does not — same formula either way, `lib/panelDriver.ts` picks
+   *  (docs/api.md "Panel arrangement"). */
+  $: refreshHz = panelRefreshHz(wire, { pw: m.pw, ph: m.ph, panels, scan: m.scan });
   $: refreshLow = refreshHz > 0 && refreshHz < REFRESH_AMBER_HZ;
   /** Tiles past what the board's framebuffer can shift out are DARK (#475). */
   $: driven = m.drive ?? 0;
@@ -689,8 +692,8 @@
       {/if}
     </div>
     <p class="dim hint">
-      {panels} panel{panels === 1 ? "" : "s"} × {PANEL_DRIVER_DEFAULT.planes} planes at
-      {PANEL_DRIVER_DEFAULT.clockHz / 1e6} MHz.
+      {panels} panel{panels === 1 ? "" : "s"} × {pdriver.planes} planes at
+      {pdriver.clock_mhz} MHz.
       {#if refreshLow}
         Below {REFRESH_AMBER_HZ} Hz cameras and fast motion show flicker — use fewer panels per
         chain, or fewer bitplanes (Advanced › Panel driver).
