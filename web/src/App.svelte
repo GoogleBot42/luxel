@@ -296,7 +296,12 @@
   onMount(async () => {
     // Probe for a device in parallel with the wasm load, so we can go straight
     // into device mode without ever flashing the playground first.
-    const deviceProbe = detectDeviceBase();
+    // …and it RETRIES a device that is too busy to answer its own API
+    // (lib/probe.ts), which can take a few seconds — so it says so on the boot
+    // cover rather than leaving "loading…" up as if nothing were happening.
+    const deviceProbe = detectDeviceBase(() => {
+      bootLabel = "the device is busy — retrying…";
+    });
     startSessionPoll(); // 1 Hz while a session is live; the scheduler idles otherwise
     let lx: Luxel;
     try {

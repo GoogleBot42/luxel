@@ -21,10 +21,18 @@ import { serializeScene, type ClockFmt, type Scene } from "./scene";
 import { compileForLayout, type Layout } from "../stores/geometry";
 import { Compositor } from "./luxel";
 
-/** Hands back the SOURCE of a stored PATTERN by id, or null when the browser
- *  does not have it (yet). Console: `stores/device.ts` `devicePatterns`.
- *  Playground: the local library, keyed by `playgroundPatternId`. */
-export type SourceLookup = (id: string) => string | null;
+/** Hands back the SOURCE of a stored PATTERN by id. Console: `stores/device.ts`
+ *  `devicePatterns`. Playground: the local library, keyed by
+ *  `playgroundPatternId`.
+ *
+ *  THREE states, matching `components/scene/PatternInspector.svelte`'s contract
+ *  (Gitea #731): a string is the source, `null` is "there is no such pattern",
+ *  and `undefined` is "not loaded yet" — a device row whose source is still
+ *  streaming in. Nothing here treats the last two differently (both bind no
+ *  engine), but a caller that collapses them cannot tell a layer that is
+ *  loading from one that is broken, which is what left the scene editor showing
+ *  a silently empty layer (the 2026-09-26 panel). */
+export type SourceLookup = (id: string) => string | null | undefined;
 
 /**
  * Hands back a stored SPRITE's `LXSP` record by id, or null when the browser
@@ -95,7 +103,12 @@ export class SceneRenderer {
   ): string | null {
     const wire = serializeScene(scene);
     if (!force && wire === this.wire && this.comp) return null;
-    this.wire = wire;
+    // `this.wire` is committed only once the build has SUCCEEDED (bottom of
+    // this method). Stamping it here meant a refused wire — or a throw out of
+    // the compositor — latched: the next call with the same scene took the
+    // no-op path above and returned null, so a blank stage was never rebuilt
+    // and nothing said why (the 2026-09-26 panel).
+    this.wire = "";
     this.dropEngines();
     // REUSE the compositor rather than freeing it (Gitea #733). `set_scene`
     // carries a layer's scroll phase and sprite clock over when that layer's
@@ -109,7 +122,17 @@ export class SceneRenderer {
     if (!this.comp) this.comp = this.lx.compositor(this.rig.w, this.rig.h);
     if (!this.comp) return "this build has no compositor";
     const err = this.comp.setScene(wire);
-    if (err) return err;
+    if (err) {
+      // A REFUSED wire leaves the compositor holding the PREVIOUS scene
+      // (`lx_comp_set` touches nothing on a parse error — luxel-wasm), and
+      // `dropEngines()` above has already freed the engines that scene's
+      // bindings name. Unbind every layer it still has, or the next `frame()`
+      // steps handles that are gone — which draws a stale or empty layer
+      // depending on what reused the handle slot.
+      for (let at = 0; at < this.comp.layerCount(); at++) this.comp.bind(at, null);
+      this.textOf = [];
+      return err;
+    }
 
     this.engines = [];
     this.errors = [];
@@ -128,7 +151,9 @@ export class SceneRenderer {
       } else if (l.body.kind === "pat") {
         const id = l.body.pat.id;
         const src = id === "" ? null : lookup(id);
-        if (src !== null) {
+        // A string, and only a string: `null` (no such pattern) and `undefined`
+        // (source still streaming in) both mean there is nothing to compile.
+        if (typeof src === "string") {
           const built = compileForLayout(this.lx, src, 0, l.body.pat.proj, this.rig);
           if ("engine" in built) {
             const e = built.engine;
@@ -150,6 +175,7 @@ export class SceneRenderer {
       i++;
     }
     this.engines.forEach((e, at) => this.comp?.bind(at, e));
+    this.wire = wire; // built and bound: THIS is the scene that is installed
     return null;
   }
 
