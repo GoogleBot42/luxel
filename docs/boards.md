@@ -1791,7 +1791,8 @@ layers = clamp(1, min(tier, (headroom − stage) / layer_cost), ceiling)
   headroom   = budget::load_headroom(shared::HEAP_BASE_MAX)
              = (max since boot of the render task's measured load_base)
                − RUNTIME_FLOOR (20 KiB)
-  stage      = budget::compositor_scratch(pixel_count) = pixel_count × 3
+  stage      = budget::compositor_scratch(pixel_count, frame_external)
+             = pixel_count × 3, and 0 on a `psram-arena` board (#777)
   layer_cost = budget::LAYER_BASE (4 KiB) + pixel_count × 3
              = budget::LAYER_BASE alone on a `psram-arena` board
   ceiling    = 2 on a `small-chip` board, else caps::MAX_LAYERS (4)
@@ -1804,14 +1805,20 @@ nothing more — 4 KB instead of 16.4 KB at 4096 px. `budget::layer_cost`,
 `layer_fits[_with]` and `caps::layers_for_headroom` all take that as a
 `frame_external` argument, which every host passes as
 `luxel_core::arena::frames_external()`; on every board without an arena it
-is `false` and the arithmetic is byte-for-byte what it was. The staging
-frame is NOT moved — see "Engine frames in PSRAM" below for why.
+is `false` and the arithmetic is byte-for-byte what it was. Since Gitea #777
+the compositor's scratch, the staging buffer and the travelling hand-off
+buffer are arena buffers as well — see "Whole frames in PSRAM" below.
 
-**The staging frame comes off the top** (Gitea #704). Every scene
-composites into the sink's staging buffer — 12.3 KB at 4096 px — and that
-is spent before a single layer engine is built, so it is not headroom a
-layer can have. Leaving it out is what let the panel advertise 2 and refuse
-the second layer at activation.
+**The staging frame comes off the top** (Gitea #704) — where it is internal.
+Every scene composites into the sink's staging buffer, 12.3 KB at 4096 px,
+and that is spent before a single layer engine is built, so it is not
+headroom a layer can have. Leaving it out is what let the panel advertise 2
+and refuse the second layer at activation. **On a `psram-arena` board it is
+not internal any more** (Gitea #777, 2026-09-26): the staging buffer and the
+compositor's scratch — the two whole frames this one term ever stood for —
+both come out of the arena, so `compositor_scratch` answers 0 and the
+subtraction disappears. On every other board it is `pixel_count × 3` exactly
+as before.
 
 **The headroom is a high-water mark, not a live reading.** Measured on the
 Seengreat panel 2026-09-24, four *identical* pattern activations reported
@@ -1849,6 +1856,22 @@ outright — the advertised 2 no longer depends on the high-water mark being
 generous. Measured on metal 2026-09-24: a two-pattern scene activates,
 `engines: 2`, both layers JIT-native.
 
+**A THIRD layer did not, and the 40,960 above is why** (Gitea #777,
+2026-09-26). That arithmetic charges one 12,288 B whole frame; a scene on
+this board needs **three** in internal DRAM — the pipeline's staging buffer,
+the travelling hand-off buffer and the compositor's text/ramp scratch — so
+two patterns plus a text layer really wanted 65,536 B. And the heap had
+shrunk since #709 measured it: `load_base` idled at **35.8 KB** (`heap_free`
+33,248 / `heap_largest` 29,152), because #770 moved the HUB75 descriptor
+rings and packer tables onto the heap and #729 added the text slots. So
+Jeremy's two-pattern-plus-text scene came up with the second engine refused
+(`scene: layer 2 does not fit`) or with the text missing — whichever of the
+two asked second went without — and 15 s later the web server could not get
+its 4 KB connection buffer. With all three frames in the arena the stack is
+20,480 + 2×4,096 = **28,672 B**, and the panel serves the same scene at
+`engines: 2` with the text drawn (measurements in "Whole frames in PSRAM"
+below).
+
 ### What compositing a scene actually costs
 
 Measured on the panel 2026-09-24 at 4096 px, `/api/status` `frame_us`
@@ -1875,6 +1898,8 @@ A full-layout, opaque, unkeyed, unmirrored `normal` layer is a
 | Seengreat S3 @4096 px (design's 2026-09 figure) | 68.7 KB | 16.4 KB | **2** (tier) |
 | Seengreat S3 @4096 px, MEASURED 2026-09-24, frames in DRAM | 46.5 KB | 16.4 KB | **1** |
 | **Seengreat S3 @4096 px, MEASURED 2026-09-24, frames in PSRAM (#709)** | **47.0 KB** | **4.1 KB** | **2** |
+| Seengreat S3 @4096 px, MEASURED 2026-09-26, engine frames only in PSRAM (#770 shrank the heap) | 35.8 KB | 4.1 KB | **2** (and a text layer no longer fitted) |
+| **Seengreat S3 @4096 px, MEASURED 2026-09-26, ALL frames in PSRAM (#777)** | **50.6 KB** | **4.1 KB** | **2** (tier) |
 | Seengreat S3 @4096 px, device blur+glow on | 26.9 KB | 16.4 KB | **1** |
 | Athom / classic ESP32 @300 px | 122.8 KB | 4.9 KB | **3** (tier) |
 | classic ESP32 @1024 px | 108 KB | 7.2 KB | **2** (tier) |
@@ -2133,12 +2158,18 @@ and the panel's second layer became real.
 The old doctrine said the frame was too hot for PSRAM. Measured, it is not:
 the VM writes it once per pixel per frame and the compositor or the outpipe
 reads it straight through, which the S3's data cache carries. Arrays were
-the same story (+0.16 % above). What stays internal is anything read and
-written *within* a frame beside those layer frames — the compositor's
-scratch, the pipeline's travelling buffer, the crossfade stage, the strip
-output buffer — and the HUB75 DMA framebuffers, which the panel refresh
-reads continuously and no cache can help. (The S3's GDMA *can* reach PSRAM
-— see #521 below — so that one is a bandwidth call, not a reachability one.)
+the same story (+0.16 % above). What stays internal is the HUB75 DMA
+framebuffers, which the panel refresh reads continuously and no cache can
+help (the S3's GDMA *can* reach PSRAM — see #521 below — so that one is a
+bandwidth call, not a reachability one), and the strip output buffer and
+outpipe scratch on the boards that have no arena anyway.
+
+This section originally drew the line one buffer short: the compositor's
+scratch, the pipeline's staging buffer and its travelling frame were kept
+internal as "read and written *within* a frame beside those layer frames". By
+then the layer frames were already in PSRAM and each of those three is one
+sequential pass per frame as well, so the distinction did not survive
+contact — they followed on 2026-09-26, below.
 
 Measured on the panel 2026-09-24, `/api/status` `frame_us` averaged over
 four one-second samples, both images built from the same tree:
@@ -2176,6 +2207,51 @@ Two ordering rules the code depends on, both documented in
   value out of the image header at flash offset 0 rather than trusting
   esp-hal's 80 MHz default, and falls back to the slowest setting when it
   cannot: slowing flash down is safe, speeding it up is not.
+
+### Whole frames in PSRAM (Gitea #777, 2026-09-26)
+
+The other three whole-frame RGB888 buffers followed the engine frames into
+the arena: the pipeline's staging buffer, the travelling hand-off buffer
+(`pipeline::SLOT`) and the compositor's text/ramp scratch — plus the
+crossfade's outgoing-scene `fade_buf`. All four are
+`luxel_core::arena::FrameVec` now, so on a board with no arena they are
+byte-for-byte what they were.
+
+What forced it: a scene at 4096 px needs three of them live at once, 36,864 B
+of internal DRAM, and the panel's idle `load_base` had fallen to **35.8 KB**
+(#770 moved the descriptor rings and packer tables onto the heap, #729 added
+the text slots). Jeremy's two-pattern-plus-text scene therefore could not
+have both its second engine and its text, and the failures were silent — the
+details are in "Scene layers" above and in UPDATES.md under this date.
+
+Measured on the panel, this branch on `ota_0`, v0.1.40, app image 1,165,904 B
+(`tools/stack-check.sh` green, no frame over 12,288 B):
+
+| state | before | after |
+|---|---:|---:|
+| idle, one JIT'd pattern resident: `heap_free` / `heap_largest` | 33,248 / 29,152 | **49,632 / 45,536** |
+| `engine_heap` idle | — | 2,204 |
+| "Test 2" (Aurora 2D + Infinite Snake + `lit` text) | `engines: 1`, `scene: layer 2 does not fit`; or `engines: 2` at 9 fps with NO text | **`engines: 2`, 17–18 fps, text drawn** |
+| …its `heap_free` / `heap_largest` | 12,016 → 7,920 / 3,824 | **35,456–39,552 / 31,360–35,456** |
+| …its `engine_heap` | — | 11,928 |
+| "Test" (Aurora 2D + Breakout, both native) | — | `heap_free` 41,924 / `heap_largest` 37,828, 15 fps |
+
+`psram_free` 8,112,128 with the scene up, `vmerr` null, and `/api/pixels`
+answers again (its 12,288 B reserve had been failing): 39 pure-white pixels
+in the text layer's rows, which is how the text was proved on the wire rather
+than by eye.
+
+Two things the numbers say plainly. The **travelling buffer alone gave back
+12 KB at idle**, on every frame this board has ever drawn — it was never a
+scene-only cost. And `/api/status` stops answering *before* the heap reads
+empty: 16 of 30 polls failed at `heap_largest` 3,824 because the web server
+could not get its 4 KB connection buffer, so a panel that has gone quiet is
+worth reading as an OOM symptom.
+
+The remaining internal cost of a second layer is the **JIT planner's
+bookkeeping**, which is why the snake layer runs `interp`/`no-memory` while
+Aurora 2D is native — Gitea #671, not a regression (compare the
+`engines: 2` both-native reading for the cheaper "Test" scene above).
 
 
 ## Second light: master on the panel (2026-09-06)

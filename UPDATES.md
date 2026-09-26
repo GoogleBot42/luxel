@@ -1,5 +1,95 @@
 # Update log
 
+## 2026-09-26 — a scene needs three whole frames, and every refusal was silent (#777)
+
+Jeremy's two-scene playlist on the Seengreat 64x64 panel — "Test" = Aurora 2D
+under a black-keyed Breakout, "Test 2" = Aurora 2D + Infinite Snake, keyed
+black, plus a `lit` text layer reading "ABC" — mostly did not work. The text
+often did not draw. The snake layer never rendered. Sometimes nothing BUT the
+text rendered. The console sometimes fell back to playground mode, and the
+scene editor sometimes drew only the text layer. Five symptoms, one cause and
+four silences.
+
+**What the device was doing.** Idle with one JIT'd pattern resident, the panel
+read `heap_free` 33,248 / `heap_largest` 29,152 — a `load_base` of 35.8 KB,
+down from the 46–49 KB #709 measured on 2026-09-24, because #770 moved the
+HUB75 descriptor rings and packer tables onto the heap and #729 added the text
+slots. Activating "Test 2" by hand gave `engines: 1` (the snake refused with
+`scene: layer 2 does not fit`), `heap_free` 12,016 → 7,920 and `heap_largest`
+3,824; within 15 s `/api/status` stopped answering — 16 of 30 GETs came back
+connection-reset, 503, or 200 with an empty body, the web server unable to get
+its 4 KB connection buffer. `/api/pixels` answered empty too (its 12,288 B
+`try_reserve_exact` failing). In the playlist the same scene sometimes came up
+`engines: 2` with `jit.layers[1]` `interp`/`no-memory` at 9 fps and no text at
+all: whichever of {second engine, text scratch} asked second went without.
+
+**Root cause: three 12,288 B frames, one of them charged.** At 4096 px a scene
+needs three whole RGB888 buffers in internal DRAM — the pipeline's staging
+buffer (`pipeline.rs` `stage`), the travelling hand-off buffer
+(`pipeline::SLOT`) and the compositor's text/ramp scratch
+(`luxel_core::compose::Compositor::scratch`) — plus ~4.7 KB per engine, against
+that 35.8 KB heap and the 20 KB `RUNTIME_FLOOR`. `budget::compositor_scratch`
+and `caps::layers_for_headroom` charged **one** of the three. And every failure
+path was quiet about it: #702's fallible scratch draws nothing, a refused layer
+is a `Slot::Native` no-op, a frame the driver could not size was published as
+an EMPTY stage (which on a panel is black), and only the base engine's VM
+errors were ever polled.
+
+**1. Every whole frame is an arena buffer now.** `Compositor::scratch`, the
+pipeline's `stage` and travelling buffer, and the crossfade's outgoing-scene
+`fade_buf` are `luxel_core::arena::FrameVec`. On a `psram-arena` board (only
+the Seengreat S3 today) they come from the PSRAM arena beside the engine frames
+— #709's argument extended, since each is one sequential pass per frame and the
+S3's data cache carries that; on every other board the arena IS the global
+allocator and the bytes are unchanged. `budget::compositor_scratch(pixel_count,
+frame_external)` takes the same flag `layer_cost` does and answers 0 when
+external, `Compositor::resident_bytes` counts the scratch only while it is
+internal, and `SceneDriver::frame` takes a `&mut FrameVec`.
+
+**2. A frame that could not be sized is held, not published.**
+`scenes::Runtime::render` returns the driver's bool and the render loop guards
+the emit — plain-scene path and crossfade path both — so a short stage keeps
+the last frame on the panel instead of blanking it.
+
+**3. Every pattern layer's VM errors are polled.** `scenes::Runtime::take_error`
+walks the slot table; the render task reports the first pending error beside the
+base engine's. A non-base layer that errored used to draw nothing for the life
+of the scene with no `vmerr` and no serial line — and under `key: black` a black
+frame is fully transparent, so it read as a layer that had never been built.
+
+**4. `GET /api/patterns/<id>` can say "busy".** A store mid-write, or a
+pattern-sized body the heap cannot hold this instant, is now **503** with
+`{"ok":false,"code":"busy","error":"device busy — retry"}` (a static body, so it
+costs no heap); the 200 `{"ok":false,"error":"no such pattern"}` is reserved for
+a record that genuinely is not there. Reporting an allocation failure as a
+missing pattern is what made the console blank scene layers.
+
+**5. The console stops believing one bad answer.** The boot probe retries a
+bad or empty `/api/status` body instead of demoting the tab to playground, and
+the handshake retries; `/api/patterns` reads check `res.ok` and a failed refresh
+keeps the last-known library; the source loader has an in-flight guard, writes
+back by id and retries; and the scene inspector distinguishes "not loaded yet"
+from "no pattern".
+
+**On metal** (this branch on `ota_0`, v0.1.40, app image 1,165,904 B;
+`tools/stack-check.sh` green, no frame over 12,288 B):
+
+| state | before | after |
+|---|---:|---:|
+| idle, one JIT'd pattern: `heap_free` / `heap_largest` | 33,248 / 29,152 | **49,632 / 45,536** (`engine_heap` 2,204) |
+| "Test 2" resident | `engines: 1`, or `engines: 2` at 9 fps with no text | **`engines: 2`, 17–18 fps, text drawn** |
+| …`heap_free` / `heap_largest` / `engine_heap` | 12,016 → 7,920 / 3,824 / — | **35,456–39,552 / 31,360–35,456 / 11,928** |
+| "Test" resident (both layers native) | — | `heap_free` 41,924 / `heap_largest` 37,828, 15 fps |
+
+`psram_free` 8,112,128, `vmerr` null, and `/api/pixels` serves again — 39 pure
+white pixels in the text layer's rows, which is how the text was proved on the
+wire rather than by eye. The travelling buffer alone gave back 12 KB **at
+idle**, on every frame this board has ever drawn; it was never a scene-only
+cost. Still internal: the JIT planner's bookkeeping, which is why the snake
+layer runs `interp`/`no-memory` while Aurora 2D is native — Gitea #671,
+not a regression. docs/boards.md "Whole frames in PSRAM" has the full table,
+docs/firmware.md the allocation rules, docs/api.md the `busy` contract.
+
 ## 2026-09-26 — the panel form moves into LED layout, and latch blanking goes live (#778)
 
 Jeremy's reply to the runtime panel settings, an hour after they merged. Three

@@ -687,7 +687,7 @@ a stored one.
 |---|---|---|---|---|
 | `/api/patterns` | GET | — | `{"patterns":[{"id","name"[,"stale":true]},…]}` | both |
 | `/api/patterns` | POST | LXP1 envelope with a name | `{"ok":true,"id":"<hex>"}` | both |
-| `/api/patterns/<id>` | GET | — | `{"id","name","source"}` | both |
+| `/api/patterns/<id>` | GET | — | `{"id","name","source"}`, or **503** `busy` (firmware, below) | both |
 | `/api/patterns/<id>` | DELETE | — | `{"ok":true}` | both |
 | `/api/patterns/<id>/activate` | POST | — | `{"ok":true}` | both |
 
@@ -703,6 +703,18 @@ a stored one.
   `vmerr` / playlist `invalid` text.
 - A missing `<id>` returns **200** with `{"ok":false,"error":"no such
   pattern"}`, not a 404 — on both sides, deliberately.
+- **"Busy" is not "missing"** (firmware only, Gitea #777, 2026-09-26). The GET
+  is the one read whose body is sized by user data rather than by a 256-byte
+  segment — a 6 KB source, on a board whose largest free block has read under
+  10 KB with a scene resident — and the store may also be mid-write. Either
+  answers **503** with
+  `{"ok":false,"code":"busy","error":"device busy — retry"}`: a static body, so
+  it costs no heap, the same trick as the `out of memory` 503 that a segmented
+  read gives when it cannot spare one segment (see `/api/status` above and
+  "Low heap on the READ path" below). **Retry it**, with a little backoff, and
+  keep whatever you already hold — a `busy` answer says nothing about the
+  pattern. Until #777 both outcomes came back as the 200 `no such pattern`,
+  and the web console blanked every layer of the scene it was loading.
 - **Activation does NOT stop a playing playlist** (unlike `POST /api/code`,
   which is a manual takeover). The playlist keeps auto-advancing, so a pattern
   activated over this route is replaced at the next advance. The web console
