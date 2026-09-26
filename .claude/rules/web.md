@@ -49,6 +49,19 @@ paths:
   arm). Render it and hide it (`display:none` toggled by a class) instead of
   `{#if open}`; a screen reader and a harness both find it that way too.
   (#478's `Add to scene ▸` submenu, 2026-09-24.)
+- **New UI on a screen the mockups already cover must not disturb the map.**
+  The mocks are the visual spec, but some features have no frame at all
+  (#786's preview-style chooser). Two rules keep "no mock" from becoming "a
+  page of deltas": give the new element its OWN classes so none of that
+  frame's mapped selectors can match it (`mockdiff.map.json` reaches for
+  `.pop .pr`, `.pr.on`, `.radio`, `.inp.xs` by querySelector — a new row
+  wearing `.pr` silently becomes the measured one), and APPEND it rather than
+  inserting, because a row added above a mapped one moves its bounding box
+  and every row below it. Then prove it: run `mockdiff --frames <the affected
+  ones>` on the branch and again on a stashed tree, and diff the two
+  `mockdiff-report.md`s — for a screen the mocks cover, identical except the
+  `Generated <timestamp>` line is the only acceptable result. (The `--sweep`
+  half needs the same branch-vs-stash treatment; docs/tools.md says why.)
 - **`mockdiff.map.json`'s `nth` / `mockNth` are 0-based INDEXES**, not
   ordinals (`mockdiff.mjs`: `all[e.nth ?? 0]`). An out-of-range one reports
   `NOT FOUND: <selector>` rather than a delta, which reads like a bad
@@ -218,6 +231,19 @@ paths:
   harness still reaches for (#545 → #547 did exactly this: two stale
   projection assertions threw and took the playlist, settings and capacity
   phases with them, on master, for everyone).
+  **Attribute an abort before you debug it — on a busy day it is usually not
+  yours.** 2026-09-26 hit two in one session, both on plain master: the
+  product had changed under a harness nobody updated (#768 raised the panel
+  cap 4096 → 16384, so `device-e2e`'s "2x1 panels of 64x64 on a 4096-px
+  board" fixture now FITS and raises no banner, and the `$eval` on that
+  banner threw; #804 shipped a sprite onion-skin toggle labelled `Onion`
+  against an `e2e.mjs` asserting `Ghost prev`). The cheap check is a re-run
+  on a detached master **in the worktree you already have** —
+  `git checkout --detach origin/master && (cd web && npm run build) && node
+  tools/<harness>.mjs`, then `git checkout -` — since `node_modules` and
+  `dist` are already there it costs one build. Same line, same crash ⇒ not
+  yours: file it (#816, #819) and say so in the PR body rather than fixing a
+  second team's harness inside an unrelated change.
   The other way a *later* section aborts is UI STATE an earlier one left
   behind. The Patterns page's search box and source chip belong to the PAGE,
   not to a grid, so a section that switched to `Library` and typed a needle
