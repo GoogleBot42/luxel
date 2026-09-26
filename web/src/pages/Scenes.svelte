@@ -29,6 +29,8 @@
   import { device, devicePatterns, isPlayground } from "../stores/device";
   import { layout, setPreviewAs } from "../stores/geometry";
   import { luxel } from "../stores/pattern";
+  import { cachedSprite, loadSprite, refreshSprites, sprites } from "../stores/sprites";
+  import { encodeSprite } from "../lib/sprite";
   import {
     activateScene,
     activeSceneId,
@@ -78,14 +80,53 @@
   $: syncPoll(active);
   onDestroy(() => syncPoll(false));
 
-  /** Re-read whenever the page comes forward. */
-  $: if (active) void refreshScenes();
+  /** Re-read whenever the page comes forward — the scene library, and the
+   *  sprite library the tiles need to draw a sprite layer at all (#740). */
+  $: if (active) {
+    void refreshScenes();
+    void warmSprites();
+  }
 
   function lookup(id: string): string | null {
     const dev = $devicePatterns.find((p) => p.id === id);
     if (dev?.source !== undefined) return dev.source;
     for (const p of listPatterns()) if (playgroundPatternId(p.name) === id) return p.source;
     return null;
+  }
+
+  // ---- sprite layers (#740) ----
+  //
+  // A sprite layer's pixels are a RECORD now, not a pattern source, and the
+  // compositor takes it by value — so the page pre-loads the library and the
+  // grid reads the encoded bytes out of a cache. The encode is memoised per id
+  // because `SceneRenderer.setScene` copies the bytes into wasm on every
+  // rebuild and a 64×64 record is 4 KB.
+
+  const encoded = new Map<string, Uint8Array>();
+  /** Bumped when a record lands — the grid's re-bind signal. */
+  let spriteRev = 0;
+
+  async function warmSprites(): Promise<void> {
+    await refreshSprites();
+    let landed = 0;
+    for (const s of $sprites) {
+      if (encoded.has(s.id)) continue;
+      const sp = await loadSprite(s.id);
+      if (!sp) continue;
+      encoded.set(s.id, encodeSprite(sp));
+      landed++;
+    }
+    if (landed > 0) spriteRev += landed;
+  }
+
+  function spriteBytesOf(id: string): Uint8Array | null {
+    const held = encoded.get(id);
+    if (held) return held;
+    const sp = cachedSprite(id);
+    if (!sp) return null;
+    const bytes = encodeSprite(sp);
+    encoded.set(id, bytes);
+    return bytes;
   }
 
   async function create(): Promise<void> {
@@ -161,6 +202,8 @@
       canPlay={!$isPlayground}
       rig={$layout}
       {lookup}
+      sprites={spriteBytesOf}
+      {spriteRev}
       on:play={(e) => void activateScene(e.detail)}
       on:edit={(e) => dispatch("open", e.detail)}
       on:duplicate={(e) => void duplicate(e.detail)}

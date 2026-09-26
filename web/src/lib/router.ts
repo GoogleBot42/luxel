@@ -14,17 +14,19 @@
 // The share link uses the fragment too (`#p=…`, `stores/pattern.ts`), so the
 // two are kept apart by the leading slash: a route ALWAYS starts `#/`.
 
-export type Page = "patterns" | "scenes" | "playlist" | "settings" | "editor" | "map";
+export type Page = "patterns" | "scenes" | "sprites" | "playlist" | "settings" | "editor" | "map";
 
 export interface Route {
   page: Page;
   /**
-   * The scene the SCENE editor holds — `#/scenes/5eed1c92` (Gitea #480).
+   * The scene the SCENE editor holds — `#/scenes/5eed1c92` (Gitea #480) — or
+   * the sprite the SPRITE editor holds, `#/sprites/5b17e5ef` (#740).
    *
    * The pattern editor deliberately has no such argument (see below), and the
    * reason does not apply here: opening a scene does not run it. Nothing on
-   * the fixture changes when this route is restored, so the id can live in
-   * the URL, which is what lets a playlist row link straight at a scene.
+   * the fixture changes when either route is restored, so the id can live in
+   * the URL, which is what lets a playlist row link straight at a scene and a
+   * scene's sprite layer link straight at the sprite editor.
    */
   id?: string;
 }
@@ -36,7 +38,11 @@ export interface Route {
 // hardware, overwriting whatever the device was actually running. A page
 // refresh must never change what the LEDs are doing.
 
-const PAGES: Page[] = ["patterns", "scenes", "playlist", "settings", "editor", "map"];
+const PAGES: Page[] = ["patterns", "scenes", "sprites", "playlist", "settings", "editor", "map"];
+
+/** The pages that take an 8-hex id argument: the two document editors that
+ *  can be deep-linked (`#/scenes/<id>`, `#/sprites/<id>`). */
+const WITH_ID: Page[] = ["scenes", "sprites"];
 
 /** Parse a `location.hash`. Returns null when it is not a route — an empty
  *  hash, or a share fragment, which must not be mistaken for one. */
@@ -50,9 +56,11 @@ export function parseRoute(hash: string): Route | null {
   const [head, arg] = seg.split("/");
   const page = PAGES.find((p) => p === head);
   if (!page) return null;
-  // `#/scenes/<id>` is the only route with an argument, and only an 8-hex id
-  // is one — anything else is a link to the Scenes page, not a 404.
-  if (page === "scenes" && arg !== undefined && /^[0-9a-f]{8}$/.test(arg)) {
+  // Only an 8-hex id is an argument — anything else (`#/sprites/new`, a typo)
+  // is a link to the page itself, not a 404. The two editors are opened by
+  // CREATING and then routing, exactly as scenes have always done, so there
+  // is no `new` route to honour.
+  if (WITH_ID.includes(page) && arg !== undefined && /^[0-9a-f]{8}$/.test(arg)) {
     return { page, id: arg };
   }
   return { page };
@@ -61,7 +69,7 @@ export function parseRoute(hash: string): Route | null {
 /** The fragment for a route, `#` included. Patterns is the root (`#/`). */
 export function routeHash(r: Route): string {
   if (r.page === "patterns") return "#/";
-  if (r.page === "scenes" && r.id) return `#/scenes/${r.id}`;
+  if (r.id && WITH_ID.includes(r.page)) return `#/${r.page}/${r.id}`;
   return `#/${r.page}`;
 }
 

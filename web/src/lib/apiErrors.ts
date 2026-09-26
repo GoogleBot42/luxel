@@ -30,6 +30,8 @@ export type ApiErrorScope =
   | "pattern"
   /** The Scenes page and the scene editor (Gitea #480). */
   | "scene"
+  /** The Sprites page and the sprite editor (Gitea #740). */
+  | "sprite"
   /** Installing a firmware image or a release package (Gitea #643). */
   | "ota"
   | "device";
@@ -331,6 +333,7 @@ const FALLBACK: Record<ApiErrorScope, string> = {
   playlist: "The device refused this playlist change and kept the one it had.",
   pattern: "The device refused this pattern.",
   scene: "The device refused this scene and kept the one it had.",
+  sprite: "The device refused this sprite and kept the one it had.",
   ota: "The release was not installed; the device is running what it was.",
   device: "The device refused the request.",
 };

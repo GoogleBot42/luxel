@@ -12,7 +12,7 @@
   import { createEventDispatcher, onDestroy, onMount } from "svelte";
   import Popover from "../Popover.svelte";
   import { paintGrid } from "../../lib/draw";
-  import { SceneRenderer, type SourceLookup } from "../../lib/sceneRender";
+  import { SceneRenderer, type SourceLookup, type SpriteLookup } from "../../lib/sceneRender";
   import { thumbLayout, type Layout } from "../../stores/geometry";
   import type { Luxel } from "../../lib/luxel";
   import type { Scene } from "../../lib/scene";
@@ -25,6 +25,13 @@
   /** The rig every tile renders on (the device's Layout, shrunk). */
   export let rig: Layout;
   export let lookup: SourceLookup = () => null;
+  /** A sprite layer's `LXSP` record by id — a CACHE reader, never a fetch
+   *  (Gitea #740, `lib/sceneRender.ts`'s `SpriteLookup`). The page pre-loads
+   *  the library's records; a tile whose sprite has not landed draws that
+   *  layer empty until it has, and `spriteRev` is what re-binds it. */
+  export let sprites: SpriteLookup = () => null;
+  /** Bumped by the page when a sprite record lands, so every tile re-binds. */
+  export let spriteRev = 0;
   /**
    * Whether this surface can PLAY a scene — i.e. whether there is a device
    * whose fixture the scene would take over. A console can; the playground
@@ -158,11 +165,23 @@
     const live = tiles.filter((x) => x.renderer).length;
     if (live >= RENDER_CAP) reclaim();
     const r = new SceneRenderer(luxel, thumbRig);
-    if (r.setScene(t.scene, lookup)) {
+    if (r.setScene(t.scene, lookup, false, sprites)) {
       r.free();
       return;
     }
     t.renderer = r;
+  }
+
+  /** A sprite record landing is not a change to any scene's WIRE, so nothing
+   *  above would rebuild — the page bumps `spriteRev` and every built tile
+   *  re-binds. In a FUNCTION with its dependency NAMED, because the assignment
+   *  it makes (`t.renderer`) is read by the ticker (.claude/rules/web.md). */
+  $: rebind(spriteRev);
+
+  function rebind(_rev: number): void {
+    for (const t of tiles) {
+      if (t.renderer) t.renderer.setScene(t.scene, lookup, true, sprites);
+    }
   }
 
   /** Drop the renderer nobody has looked at for longest. */

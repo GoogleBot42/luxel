@@ -100,42 +100,55 @@ void _blendsCovered;
 void _keysCovered;
 
 /**
- * FIT, honestly.
+ * FIT.
  *
- * `style.fit` is read in exactly ONE place in the firmware —
- * `compose::blit_sprite` (`let tile = style.fit == Fit::Tile`) — so it means
- * something on a SPRITE layer and nothing anywhere else:
+ * `style.fit` is read in exactly ONE place — `compose::blit_sprite` — so it
+ * means something on a SPRITE layer and nothing anywhere else:
  *   * pattern — the box CLIPS a full-layout render; the pattern still sees
  *     the whole grid. `fit` is ignored (docs/spec/scenes.md "Geometry").
  *   * text — ignored.
- *   * sprite — `fill` and `contain` both place the sprite 1:1 at the box
- *     origin; only `tile` differs, repeating it across the box.
+ *   * sprite — all three words differ now.
  *
- * So the chooser offers the two behaviours that exist, not the three wire
- * words. `contain` is a synonym of `fill` on every code path there is, and
- * [`fitValue`] folds it onto the row it behaves like rather than showing the
- * user a third option that does nothing. If scaling ever lands, `contain`
- * becomes its own row here and nothing else has to move.
+ * SCALING IS REAL SINCE Gitea #740/#741 (item 29: "'1:1 · sprites are never
+ * scaled' should that be an option?" — yes). The old note here said `contain`
+ * was "a synonym of `fill` on every code path there is", which was true of
+ * the firmware that existed then and is not true any more: with a box set,
+ * `fill` STRETCHES the frame to it, `contain` scales uniformly and centres,
+ * `tile` repeats at 1:1. An UNSET box (w or h = 0) means the sprite's natural
+ * size at (x, y), which is why the chooser only appears once the box has one.
  */
 export const FIT_OPTIONS: readonly RichOption<Fit>[] = [
   {
     value: "fill",
-    label: "Once",
-    desc: "One copy at the box's top-left corner, at its own size. Sprites are never scaled.",
+    label: "Stretch",
+    desc: "Stretches the sprite to fill the box exactly, squashing it if the shapes differ.",
     icon: "fit-once",
+  },
+  {
+    value: "contain",
+    label: "Fit",
+    desc: "Scales the sprite up or down to fit inside the box, keeping its proportions, centred.",
+    icon: "fit-contain",
   },
   {
     value: "tile",
     label: "Tile",
-    desc: "Repeats across the box in both directions — a small sprite becomes wallpaper.",
+    desc: "Repeats across the box at its own size in both directions — a small sprite becomes wallpaper.",
     icon: "fit-tile",
   },
 ];
 
-/** The row a stored `fit` selects: `contain` behaves as `fill`, so it reads
- *  back as `Once` rather than as a missing selection. */
+/* Exhaustiveness at compile time, the twin of the two checks above: the day
+   `FITS` grows in lib/scene.ts, `svelte-check` fails HERE rather than the
+   console showing a raw wire word. */
+const _fitsCovered: Fit extends (typeof FIT_OPTIONS)[number]["value"] ? true : never = true;
+void _fitsCovered;
+
+/** The row a stored `fit` selects. Every wire word has its own row now, so
+ *  this is the identity — kept as the ONE place a future fold would live, and
+ *  because four call sites already read `fit` through it. */
 export function fitValue(fit: Fit): Fit {
-  return fit === "tile" ? "tile" : "fill";
+  return fit;
 }
 
 /** `label` of the option carrying `value`, or the raw value if the list has

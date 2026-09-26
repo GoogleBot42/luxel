@@ -34,6 +34,7 @@ import {
 import { gatedFetch, subscribeGate } from "../lib/fetchgate";
 import { browserBlocked } from "../lib/lna";
 import { reconcileTransport, transportIntent, type TransportIntent } from "../lib/playlist";
+import { isTaggedSpriteSource } from "../lib/sprite";
 import { note, reportApiError } from "./notify";
 
 // ---- session ----
@@ -868,6 +869,16 @@ async function loadDevicePreviewSources(): Promise<void> {
     if (p.source !== undefined) continue;
     try {
       const full = await session.patternSource(p.id);
+      // A pattern that still carries `// @sprite` on line 1 is a SPRITE
+      // waiting for `migrateTaggedSprites()` (Gitea #740), not a playable
+      // pattern — sprites have their own store and their own tab now, so it
+      // leaves the library here, which is the one place device rows are
+      // built. `stores/sprites.ts` reads `/api/patterns` itself to convert
+      // them, so dropping the row does not hide them from the migration.
+      if (isTaggedSpriteSource(full.source)) {
+        devicePatterns.update((list) => list.filter((x) => x.id !== p.id));
+        continue;
+      }
       p.source = full.source;
       devicePatterns.update((list) => [...list]); // reflect the filled-in thumbnail
     } catch {

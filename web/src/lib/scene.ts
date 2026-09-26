@@ -110,6 +110,11 @@ export interface PatternLayer {
 export type LayerBody =
   | { kind: "pat"; pat: PatternLayer }
   | { kind: "text"; text: TextLayer }
+  /** A sprite layer names a stored SPRITE record by id. Since Gitea #740 that
+   *  is a first-class record with its own store and its own id namespace, no
+   *  longer a sprite-tagged pattern — the WIRE is untouched (`L sprite` /
+   *  `I <id>`), only what the id resolves to moved. Codec: `lib/sprite.ts`;
+   *  store: `stores/sprites.ts`. */
   | { kind: "sprite"; id: string }
   | { kind: "color"; color: string };
 
@@ -231,46 +236,6 @@ export function patternLayerCount(s: Scene): number {
 /** 8 lowercase hex — the id shape both stores use. */
 export function validSceneId(s: string): boolean {
   return /^[0-9a-f]{8}$/.test(s);
-}
-
-// ---- the sprite tag ----
-//
-// A sprite is an ordinary PATTERN whose first source line is the tag
-// (docs/spec/scenes.md §4). Reading it is how the web tells a sprite from a
-// pattern — in the picker, in the layer list's metadata line and in the
-// inspector. The EMIT half (drawing pixels back out as `sprH/sprS/sprV`) is
-// `lib/sprite.ts`, WEB-C's (#481); this is the read half everything needs.
-
-export interface SpriteTag {
-  w: number;
-  h: number;
-  frames: number;
-  fps: number;
-}
-
-export const SPRITE_MAX_EDGE = 64;
-export const SPRITE_MAX_FPS = 30;
-
-/** `// @sprite w=9 h=8 frames=1 fps=0` on source line 1, or null. Keys in any
- *  order, unknown keys ignored — `luxel_core::compose::parse_sprite_tag`. */
-export function parseSpriteTag(source: string): SpriteTag | null {
-  const first = source.split("\n", 1)[0] ?? "";
-  const m = /^\s*\/\/\s*@sprite\b(.*)$/.exec(first);
-  if (!m) return null;
-  const kv = new Map<string, number>();
-  for (const part of (m[1] ?? "").split(/\s+/)) {
-    const at = part.indexOf("=");
-    if (at <= 0) continue;
-    const v = Number.parseInt(part.slice(at + 1), 10);
-    if (Number.isFinite(v)) kv.set(part.slice(0, at), v);
-  }
-  const w = kv.get("w") ?? 0;
-  const h = kv.get("h") ?? 0;
-  const frames = kv.get("frames") ?? 1;
-  const fps = kv.get("fps") ?? 0;
-  if (w < 1 || h < 1 || w > SPRITE_MAX_EDGE || h > SPRITE_MAX_EDGE) return null;
-  if (frames < 1 || fps < 0 || fps > SPRITE_MAX_FPS) return null;
-  return { w, h, frames, fps };
 }
 
 // ---- flags ----

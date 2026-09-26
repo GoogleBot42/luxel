@@ -18,6 +18,14 @@
   // place" (§5.5): geometry is set by dragging, with the inspector's four
   // numbers as the exact fallback. Both write the same `style.rect`.
   //
+  // It NO LONGER paints (Gitea #741). A selected sprite layer used to mount
+  // `SpriteTools` into a slot here and take the canvas's pointer events over
+  // for drawing, which made the marquee unreachable — Jeremy: "I expect to be
+  // able to move around the sprite via moving like the other layers but that
+  // doesn't work. Just that alone is asking for trouble." Drawing moved to its
+  // own screen (`pages/SpriteEditor.svelte`), so EVERY layer kind moves and
+  // resizes here the same way and the canvas has no pointer handlers at all.
+  //
   // It does NOT mount `components/Preview.svelte`: that component is the
   // pattern editor's and already appears twice in the DOM (editor + map
   // editor), a third `[data-role="preview"]` would break every unscoped
@@ -34,6 +42,18 @@
   export let h = 64;
   /** The selected layer's box, or null when nothing is selected. */
   export let rect: Rect | null = null;
+  /**
+   * What an UNSET axis of the box really covers, when the layer knows.
+   *
+   * `w`/`h` = 0 means "the whole layout on that axis" for a pattern or a text
+   * layer — but for a SPRITE it means the sprite's own size at (x, y)
+   * (Gitea #740's fit rule). Drawing the marquee across the whole grid for a
+   * 12×12 sprite makes the one direct-manipulation affordance in the app read
+   * as "you are dragging the canvas", which is the opposite of what #741 asked
+   * for. The page passes the sprite's dimensions here and the marquee wraps
+   * what is actually drawn.
+   */
+  export let natural: { w: number; h: number } | null = null;
   /** `64×64 · 24 fps on device` — the header's dim line, which travels WITH
    *  the canvas rather than with the column (#736 item 25). */
   export let dimsLine = "";
@@ -41,22 +61,11 @@
    *  fast as the browser will go (#736 item 26). The page owns the number —
    *  it is the page's render loop — and this column owns the chooser. */
   export let targetFps = 60;
-  /** A sprite layer is selected and a drawing tool is live (#481): the box is
-   *  a GUIDE, not a grab — every pointer on the canvas paints, and geometry
-   *  moves with the inspector's Box numbers. Without this the marquee sits on
-   *  top of exactly the pixels you are trying to paint. */
-  export let paintMode = false;
-  /** The cell the pointer is over while painting — the mock's `.cellmark`. */
-  export let markCell: { col: number; row: number } | null = null;
 
   const dispatch = createEventDispatcher<{
     rect: Rect;
     /** A new preview frame budget (#736 item 26). */
     targetfps: number;
-    /** A pointer landed on a cell — the sprite tools' hook (#481). */
-    cell: { col: number; row: number; down: boolean };
-    /** Which cell the pointer is over, or null once it leaves (#481). */
-    hover: { col: number; row: number } | null;
   }>();
 
   let canvas: HTMLCanvasElement | undefined;
@@ -81,8 +90,8 @@
     ? {
         x: rect.x,
         y: rect.y,
-        w: rect.w === 0 ? w : rect.w,
-        h: rect.h === 0 ? h : rect.h,
+        w: rect.w === 0 ? (natural?.w ?? w) : rect.w,
+        h: rect.h === 0 ? (natural?.h ?? h) : rect.h,
       }
     : null;
 
@@ -130,8 +139,10 @@
     if (!grab || !box) return;
     const c = cellAt(e);
     const s = grab.start;
-    const bw = s.w === 0 ? w : s.w;
-    const bh = s.h === 0 ? h : s.h;
+    // The same "what does 0 cover" rule the marquee is drawn with, so a
+    // corner drag off a natural-size sprite starts from the size you can see.
+    const bw = s.w === 0 ? (natural?.w ?? w) : s.w;
+    const bh = s.h === 0 ? (natural?.h ?? h) : s.h;
     if (grab.mode === "move") {
       dispatch("rect", { ...s, x: c.col - grab.ox, y: c.row - grab.oy });
       return;
@@ -158,20 +169,17 @@
 
   function end(e: PointerEvent): void {
     if (!grab) return;
-    (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+    // best-effort, and the mirror of the `setPointerCapture` in `start`: a
+    // synthetic drag (a harness moving a layer) never captured a real pointer,
+    // and `releasePointerCapture` THROWS `NotFoundError` for an id it does not
+    // hold — the optional-call `?.` never guarded that, because the method
+    // exists; it is the pointer that does not.
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
     grab = null;
-  }
-
-  function onCanvasDown(e: PointerEvent): void {
-    const c = cellAt(e);
-    dispatch("cell", { ...c, down: true });
-  }
-
-  function onCanvasMove(e: PointerEvent): void {
-    const c = cellAt(e);
-    dispatch("hover", c);
-    if (e.buttons === 0) return;
-    dispatch("cell", { ...c, down: false });
   }
 
   onMount(() => clear());
@@ -212,24 +220,11 @@
       </div>
     </div>
 
-    <!-- the sprite tool row, when there is one: "directly above the canvas it
-         acts on" (S7c) -->
-    <slot name="tools" />
-
     <div class="stage" bind:this={stage}>
-      <canvas
-        bind:this={canvas}
-        width={w}
-        height={h}
-        data-role="scene-stage"
-        on:pointerdown={onCanvasDown}
-        on:pointermove={onCanvasMove}
-        on:pointerleave={() => dispatch("hover", null)}
-      ></canvas>
+      <canvas bind:this={canvas} width={w} height={h} data-role="scene-stage"></canvas>
       {#if marq}
         <div
           class="marq"
-          class:guide={paintMode}
           data-role="scene-marquee"
           style={`left:${marq.left};top:${marq.top};width:${marq.width};height:${marq.height}`}
           on:pointerdown={(e) => start(e, "move")}
@@ -241,7 +236,6 @@
         {#each CORNERS as corner (corner)}
           <button
             class="hdl"
-            class:guide={paintMode}
             data-role={`scene-handle-${corner}`}
             aria-label={`resize ${corner}`}
             style={handleStyle(corner, marq)}
@@ -252,27 +246,9 @@
           ></button>
         {/each}
       {/if}
-      {#if markCell}
-        <div
-          class="cellmark"
-          data-role="scene-cellmark"
-          style={`left:${(markCell.col / w) * 100}%;top:${(markCell.row / h) * 100}%`}
-        ></div>
-      {/if}
     </div>
   </div>
 </div>
-
-<style>
-  /* Paint mode: the box is a GUIDE. Letting the marquee keep the pointer
-     would mean every click inside the sprite dragged the layer instead of
-     painting the pixel under the cursor (S7c draws the paint cursor INSIDE
-     the marquee). Geometry moves with the inspector's Box numbers there. */
-  :global(.scenes .marq.guide),
-  :global(.scenes .hdl.guide) {
-    pointer-events: none;
-  }
-</style>
 
 <script context="module" lang="ts">
   /** The four 7px corner grabs, centred on the marquee's corners (mock
