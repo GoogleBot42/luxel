@@ -29,6 +29,8 @@
 use alloc::vec::Vec;
 
 #[cfg(feature = "kinds")]
+use crate::arena::{self, ArrVec};
+#[cfg(feature = "kinds")]
 use alloc::collections::{BTreeMap, BTreeSet};
 #[cfg(feature = "kinds")]
 use alloc::format;
@@ -318,14 +320,27 @@ pub fn plan_boxes(prog: &Program, kinds: &Kinds) -> Result<Vec<BoxFix>, KindErro
 /// engine had left it 33 KB (Gitea #665). Now one pool of kinds plus a
 /// `(start, len)` per word: ~9 B/word. `crates/luxel-jit/tests/alloc_peak.rs`
 /// gates the total.
+///
+/// **And in the arena, not the internal heap** (Gitea #671): the three
+/// vectors are [`ArrVec`]s, so on a board with external PSRAM the maps —
+/// the largest thing a compile allocates — land beside the pattern's
+/// arrays instead of in the 30-odd KB a 4096-px engine leaves internally.
+/// Everywhere else `ArenaAlloc` is the global allocator and nothing moves.
 #[cfg(feature = "kinds")]
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StackMap {
     /// Per word: index into `pool`, or [`StackMap::NONE`].
-    start: Vec<u32>,
+    start: ArrVec<u32>,
     /// Per word: entries at `start`.
-    len: Vec<u16>,
-    pool: Vec<Kind>,
+    len: ArrVec<u16>,
+    pool: ArrVec<Kind>,
+}
+
+#[cfg(feature = "kinds")]
+impl Default for StackMap {
+    fn default() -> StackMap {
+        StackMap::new(0)
+    }
 }
 
 #[cfg(feature = "kinds")]
@@ -335,9 +350,9 @@ impl StackMap {
     /// `words` entries, all unreached.
     pub fn new(words: usize) -> StackMap {
         StackMap {
-            start: alloc::vec![Self::NONE; words],
-            len: alloc::vec![0; words],
-            pool: Vec::new(),
+            start: arena::filled(words, Self::NONE),
+            len: arena::filled(words, 0),
+            pool: arena::empty(),
         }
     }
 
@@ -384,7 +399,7 @@ impl StackMap {
 ///
 /// Verifies as it goes, so a `Ok` result is also a successful [`verify`].
 #[cfg(feature = "kinds")]
-pub fn stack_maps(prog: &Program, kinds: &Kinds) -> Result<Vec<StackMap>, KindError> {
+pub fn stack_maps(prog: &Program, kinds: &Kinds) -> Result<ArrVec<StackMap>, KindError> {
     let views: Vec<FnView> = prog
         .fns
         .iter()
@@ -404,7 +419,7 @@ pub fn stack_maps(prog: &Program, kinds: &Kinds) -> Result<Vec<StackMap>, KindEr
             what: "kinds section does not match the program's shape".to_string(),
         });
     }
-    let mut out = Vec::with_capacity(views.len());
+    let mut out = arena::with_capacity(views.len());
     for (fi, f) in views.iter().enumerate() {
         if kinds.fns[fi].slots.len() != f.locals as usize {
             return Err(KindError {
@@ -541,6 +556,16 @@ fn walk_fn(
 
     // States recorded by an edge at a (not yet walked, or already walked)
     // word. A first visit records; a later visit compares (§2.4).
+    //
+    // Deliberately NOT arena vectors, unlike the `StackMap` this walk
+    // fills (Gitea #671): an abstract stack is a few bytes — the operand
+    // depth, ~2 at the median — and there is one per branch target, so
+    // the whole set is a couple of KB at most and is what
+    // `firmware/src/jit.rs`'s `emit_int_need` residue rule budgets. Routing
+    // them through the hook instead cost 6 KB of flash on every board
+    // (allocator_api2 inlines its grow path at each of the ~40 push sites
+    // below) for nothing the panel needed; the per-WORD tables are what
+    // had to move, and they did.
     let mut states: BTreeMap<u32, (Vec<Ab>, Origin)> = BTreeMap::new();
     let mut cur: Option<Vec<Ab>> = Some(Vec::new());
     let mut at = 0usize;

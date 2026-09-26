@@ -10,6 +10,22 @@
 //! allocator, because those are touched per *instruction* and PSRAM is
 //! several times slower per access.
 //!
+//! Since Gitea #671 the JIT's compile-time tables ride the same hook: the
+//! verifier's per-word stack maps (`kinds::stack_maps`), the planner's
+//! per-function tables (`luxel-jit/src/plan.rs`) and the emitter's fixup
+//! lists, word-offset table and literal-pool index (`emit.rs`). Those are
+//! plain vectors that live for the ~10 ms of one compile on the render task
+//! and are touched by nothing else, so neither reason the per-instruction
+//! state stays internal applies; on the panel they were the last internal
+//! allocation standing between a 4096-px scene and a native second layer.
+//! The per-operand-DEPTH scratch of the same compile (the verifier's
+//! abstract stacks, the emitter's running stack copy) stays on the
+//! ordinary allocator on purpose — a few bytes each, and routing them here
+//! cost 6 KB of flash on every board; `kinds::walk_fn` has the numbers. The
+//! helpers below ([`filled`], [`from_slice`], [`with_capacity`],
+//! [`collect`]) are the `vec!` / `collect()` idioms for an [`ArrVec`],
+//! which has no `FromIterator`.
+//!
 //! With no hook installed (every host build, the wasm playground, and every
 //! board without PSRAM) [`ArenaAlloc`] is exactly the global allocator, so
 //! this module changes nothing about how those builds behave.
@@ -107,6 +123,33 @@ pub const fn empty<T>() -> ArrVec<T> {
     ArrVec::new_in(ArenaAlloc)
 }
 
+/// `vec![x; n]` for an [`ArrVec`].
+pub fn filled<T: Clone>(n: usize, x: T) -> ArrVec<T> {
+    let mut v: ArrVec<T> = empty();
+    v.resize(n, x);
+    v
+}
+
+/// `Vec::with_capacity(n)` for an [`ArrVec`].
+pub fn with_capacity<T>(n: usize) -> ArrVec<T> {
+    ArrVec::with_capacity_in(n, ArenaAlloc)
+}
+
+/// `s.to_vec()` for an [`ArrVec`].
+pub fn from_slice<T: Clone>(s: &[T]) -> ArrVec<T> {
+    let mut v: ArrVec<T> = with_capacity(s.len());
+    v.extend_from_slice(s);
+    v
+}
+
+/// `it.collect::<Vec<_>>()` for an [`ArrVec`] — `allocator_api2`'s `Vec`
+/// implements `FromIterator` for the global allocator only.
+pub fn collect<T, I: IntoIterator<Item = T>>(it: I) -> ArrVec<T> {
+    let mut v: ArrVec<T> = empty();
+    v.extend(it);
+    v
+}
+
 /// One engine's per-frame RGB888 pixel buffer (Gitea #709).
 ///
 /// Same hook as the arrays, for the same reason it exists: at 4096 px a
@@ -161,6 +204,20 @@ mod tests {
         assert_eq!(f.len(), 300);
         assert!(f.iter().all(|p| *p == [0, 0, 0]));
         assert_eq!(crate::budget::layer_cost(300, frames_external()), 4 * 1024 + 900);
+    }
+
+    /// The `vec!`/`collect` stand-ins build what their std counterparts
+    /// would (Gitea #671).
+    #[test]
+    fn helpers_match_std() {
+        let f = filled(3, 7u8);
+        assert_eq!(&f[..], &[7, 7, 7]);
+        let s = from_slice(&[1u32, 2, 3]);
+        assert_eq!(&s[..], &[1, 2, 3]);
+        let c = collect((0..4).map(|i| i * 2));
+        assert_eq!(&c[..], &[0, 2, 4, 6]);
+        let w: ArrVec<u64> = with_capacity(16);
+        assert!(w.capacity() >= 16 && w.is_empty());
     }
 
     /// Without a hook the arena is the global allocator, which is what

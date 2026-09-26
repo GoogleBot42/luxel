@@ -437,16 +437,28 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
     `init-error` (the pattern's init did not complete, so its kind
     annotations cannot be trusted), `no-buffer` (no exec memory: both
     `.rwtext` halves in flight on a classic ESP32, or a full PSRAM arena
-    with no internal fallback left), `no-memory` (the heap cannot hold the
-    EMITTER's own bookkeeping beside the engine that was just built — the
-    compile is refused before it starts rather than half way through;
-    docs/firmware.md "The compile's own heap". Since Gitea #752 the guard
-    tests **two** things: the bookkeeping's total against `heap_free`, and
-    its largest single allocation against `heap_largest`. A total is not an
-    allocation — the panel reported 9,680 B free and a 5,584 B largest
-    block on 2026-09-24 — so a guard that read only the total could approve
-    a compile that then faulted part way, which on the render task is a
-    reboot rather than a refusal) and `disabled`
+    with no internal fallback left), `no-memory` (the memory the EMITTER's
+    own bookkeeping comes from cannot hold it beside the engine that was
+    just built — the compile is refused before it starts rather than half
+    way through; docs/firmware.md "The compile's own heap". Which memory
+    depends on the board, and since Gitea #671 (2026-09-26) there are
+    **three** cases. On a board with a PSRAM arena (today the Seengreat S3)
+    the bookkeeping's per-word and per-function tables are arena memory, so
+    the guard tests the working set plus the exec block against the ARENA's
+    free space, and against `heap_free` only the few KB that stay internal
+    on purpose (the verifier's per-branch-target map nodes and its
+    operand-depth scratch stacks). On every other board — the classic ESP32s,
+    `board-s3-devkit`, an S3 whose PSRAM did not come up — the bookkeeping
+    is internal heap and the guard is the pre-#671 pair from Gitea #752:
+    the bookkeeping's total against `heap_free`, and its largest single
+    allocation against `heap_largest`. A total is not an allocation — the
+    panel reported 9,680 B free and a 5,584 B largest block on 2026-09-24 —
+    so a guard that read only the total could approve a compile that then
+    faulted part way, which on the render task is a reboot rather than a
+    refusal; that contiguity test is not applied on an arena board, where
+    the per-word tables are arena blocks. The reason id is the same in all
+    three cases — only the serial narration says which memory ran out) and
+    `disabled`
     (`POST /api/jit`). **A refusal is never a failed pattern** — it runs
     interpreted, at the interpreter's speed, with the same pixels.
   - `code_bytes` — the compiled image, literal pool included; 0 unless
@@ -491,7 +503,10 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   A two-pattern scene on the Seengreat panel whose base layer compiled and
   whose second layer was refused a contiguous block (the case Gitea #718
   was filed from — the whole `jit` block used to read
-  `{"state":"interp","reason":"no-memory",…}`, describing only the loser):
+  `{"state":"interp","reason":"no-memory",…}`, describing only the loser).
+  The shape of the response is what this example is for; the refusal itself
+  is a pre-#671 reading, since on that board the compile's per-word tables
+  now come from the arena:
 
   ```json
   "engines":2,

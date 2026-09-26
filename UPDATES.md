@@ -1,5 +1,64 @@
 # Update log
 
+## 2026-09-26 — the JIT compiles out of PSRAM (#671)
+
+After #777 the panel's "Test 2" scene built both engines with 35–39 KB of
+internal heap free, and the snake layer still came up `interp`/`no-memory`:
+the emitter's bookkeeping rule wanted 31.6 KB (+12 KB floor) for 1,085 words
+of Infinite Snake, and that bookkeeping — the verifier's stack maps, the
+planner's per-function tables, the emitter's fixup lists and word-offset table
+— was the last big internal allocation on the activation path. Jeremy's
+direction was to compile out of PSRAM rather than squeeze the rule.
+
+**What moved.** Every per-word and per-function table the compile builds is a
+`luxel_core::arena::ArrVec` now: `kinds::StackMap`'s three vectors and
+`stack_maps`' outer one, every `FnPlan` table and the plans vector,
+`emit.rs`'s `word_off`/`fix`/`bail_fix`/`l32r_fix`/`entries`/`abi`, and the
+literal-pool index (a sorted vector with binary search instead of a
+`BTreeMap`, which has no allocator parameter). `arena.rs` grew `filled`,
+`with_capacity`, `from_slice`, `collect` — the `vec!`/`collect()` idioms an
+`ArrVec` lacks. Two free wins on the way: the planner MOVES the stack maps
+into the plans instead of cloning them (at its peak every map used to exist
+twice), and the library's worst working set fell 67,460 → 58,984 B host-side.
+On the panel these land in the 8 MB arena; on every other board `ArenaAlloc`
+is the global allocator and nothing changes.
+
+**What deliberately stayed internal.** The per-operand-depth scratch — the
+verifier walk's abstract stacks and the emitter's running stack copy, a few
+bytes each — went to the arena in the first cut and cost **7.5 KB of flash on
+the Athom** (margin 6.51 % → 5.93 %): allocator_api2 inlines its grow path at
+each of `walk_fn`'s ~40 push sites (+6,128 B in that one function). Back on
+the ordinary allocator the whole change is +1,040 B (6.43 % free), and those
+vectors are what the new residue rule budgets. `kinds::walk_fn`'s comment
+carries the reason.
+
+**The pre-flight rule now names its memory.** `alloc_peak.rs` is one test
+with two passes: no hook (the working set, the unchanged `words×24 + fns×240 +
+1,024` rule) and a counting arena hook (the arena side must fit the same rule;
+the INTERNAL residue must fit `words×6 + fns×48 + 1,024`, fitted today: peak
+4,122 B on `2d-fireworks-fade`, `snake-2d` 1,698 B against 23,832 B in the
+arena). `jit.rs` `try_compile`: on a board whose arena is up
+(`psram::stats()` is `Some`) the internal heap is checked against
+`COMPILE_FLOOR + emit_int_need` and the arena against `emit_heap_need +
+JIT_MAX_CODE` (the exec block comes from the same arena next, and the hook
+falls back to internal SILENTLY when the arena is full — the one thing the
+guard exists to prevent); without an arena (s3-devkit, the classic boards, an
+S3 whose PSRAM did not come up) the check is byte-for-byte what it was,
+including #752's contiguity probe. For the panel's snake: 8,446 B internal
+under the 12 KB floor instead of 31,624 B, i.e. ~20 KB free suffices where
+~44 KB was needed.
+
+**Verified:** `cargo test --workspace` (luxel-jit's library differential and
+golden images unchanged — the pool order is the same, so the emitted bytes
+are), `tools/qemu/jit-test.py` on `rainbow.js` and `snake-2d.js` (both native,
+bit-identical to the interpreter, snake 19 fns / 11,256 B in 17,244 µs — the
+no-arena path on a real core), firmware builds for `board-seengreat-hub75`,
+`board-s3-devkit`, `board-pixelblaze-v3`, `board-athom-music` (release image),
+`tools/stack-check.sh` on the Seengreat (`.stack` 31,628 B). **Not verified on
+metal** — no device this session; the arena path's on-panel result ("Test 2"
+with `jit.layers[1].state: native`, `heap_free` no lower than 35–39 KB,
+`compile_us` for the snake, scene fps) is a follow-up ticket.
+
 ## 2026-09-26 — a scene needs three whole frames, and every refusal was silent (#777)
 
 Jeremy's two-scene playlist on the Seengreat 64x64 panel — "Test" = Aurora 2D

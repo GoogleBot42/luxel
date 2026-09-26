@@ -175,18 +175,26 @@ fn code_cap(place: u8, need: usize) -> usize {
     limit & !3
 }
 
-/// Heap the EMITTER needs for its bookkeeping — plans, stack maps, the
+/// Memory the EMITTER needs for its bookkeeping — plans, stack maps, the
 /// literal-pool index, fixup lists — for a given program, in bytes.
 ///
 /// `words * EMIT_PER_WORD + fns * EMIT_PER_FN + EMIT_FIXED`, the rule
 /// `crates/luxel-jit/tests/alloc_peak.rs` fits over every `library/`
 /// pattern under a counting allocator and gates in CI (host bytes, so a
 /// third or so over what the device actually spends — safe, not tight).
-/// `try_compile` checks it against the heap BEFORE compiling and refuses
-/// `no-memory` rather than running out half way: the first on-metal run
-/// (2026-09-23) took the panel down exactly that way, a `Vec<Kind>` clone
-/// inside `plan_all` with 48 bytes left, on a core with no serial port.
-/// The three constants move together with the test's.
+/// `try_compile` checks it BEFORE compiling and refuses `no-memory`
+/// rather than running out half way: the first on-metal run (2026-09-23)
+/// took the panel down exactly that way, a `Vec<Kind>` clone inside
+/// `plan_all` with 48 bytes left, on a core with no serial port.
+///
+/// **Which memory** (Gitea #671): the bookkeeping is `luxel_core::arena`
+/// vectors, so on a board whose arena is up (`psram::stats()` is `Some`)
+/// this rule is checked against the ARENA's free space and only
+/// [`emit_int_need`]'s residue against the internal heap; on a board
+/// without one (`board-s3-devkit`, the classic boards, or an S3 whose
+/// PSRAM did not come up) `ArenaAlloc` is the global allocator and the
+/// whole rule is checked against `HEAP.free()` exactly as before. The
+/// three constants move together with the test's.
 pub const EMIT_PER_WORD: usize = 24;
 pub const EMIT_PER_FN: usize = 240;
 pub const EMIT_FIXED: usize = 1024;
@@ -195,16 +203,39 @@ fn emit_heap_need(prog: &luxel_core::vm::Program) -> usize {
     prog.words.len() * EMIT_PER_WORD + prog.fns.len() * EMIT_PER_FN + EMIT_FIXED
 }
 
+/// What a compile still puts on the INTERNAL heap when the arena carries
+/// the bookkeeping (Gitea #671), in bytes: the verifier's per-branch-target
+/// `BTreeMap` nodes and operand-depth abstract stacks, the emitter's
+/// running stack copy (all a few bytes each and deliberately kept off the
+/// arena — `luxel_core::kinds::walk_fn` says why), the `Placed` result and
+/// its export names.
+///
+/// `words * EMIT_INT_PER_WORD + fns * EMIT_INT_PER_FN + EMIT_INT_FIXED`,
+/// fitted by the same test with a counting arena hook installed
+/// (2026-09-26: the residue peaks at 4,122 B host-side over the whole
+/// library, `2d-fireworks-fade`; `snake-2d` is 1,698 B against a working
+/// set of 23,832 B, and this rule charges it 8,446 B). Host bytes again,
+/// so an over-estimate on the device. Only an arena board applies it; the
+/// constants move with the test's.
+pub const EMIT_INT_PER_WORD: usize = 6;
+pub const EMIT_INT_PER_FN: usize = 48;
+pub const EMIT_INT_FIXED: usize = 1024;
+
+#[cfg(feature = "psram-arena")]
+fn emit_int_need(prog: &luxel_core::vm::Program) -> usize {
+    prog.words.len() * EMIT_INT_PER_WORD + prog.fns.len() * EMIT_INT_PER_FN + EMIT_INT_FIXED
+}
+
 /// The emitter's LARGEST SINGLE allocation, in bytes — what the heap must
 /// hand out as ONE CONTIGUOUS block, as opposed to [`emit_heap_need`]'s
 /// total across many (Gitea #752).
 ///
 /// `HEAP.free()` sums every free run. The biggest contiguous thing the
 /// emitter asks for is per-FUNCTION and scales with that function's word
-/// count: the planner's stack map is a `Vec<Vec<Kind>>` with one entry per
-/// word, cloned into the plan (`luxel-jit/src/plan.rs`), and the emitter's
-/// `word_off` is a `vec![NO_OFF; n + 1]` (`emit.rs`). A `Vec` header is
-/// 12 B on the device and a `u32` offset 4, so 16 B per word bounds both.
+/// count: the planner's flat stack map carries a `(start, len)` per word
+/// (`luxel_core::kinds::StackMap`), and the emitter's `word_off` is a
+/// `filled(n + 1, NO_OFF)` (`emit.rs`). Both are 4- or 6-byte entries, so
+/// 16 B per word bounds either with room.
 ///
 /// `Program` carries no per-function word count, so this charges the
 /// largest function the WHOLE program's words — deliberately an
@@ -217,6 +248,10 @@ fn emit_heap_need(prog: &luxel_core::vm::Program) -> usize {
 /// `shared::largest_free_block`'s probe reserve. It binds exactly where
 /// #752 was filed — a heap whose total is comfortable and whose runs are
 /// not (the panel, 2026-09-24: 9,680 B free, 5,584 B largest).
+///
+/// Only applied where the bookkeeping is internal: on an arena board those
+/// per-word tables are arena blocks (#671), and what stays internal there
+/// is a few hundred bytes at most in any one piece.
 const EMIT_CONTIG_PER_WORD: usize = 16;
 const EMIT_CONTIG_FIXED: usize = 512;
 
@@ -235,7 +270,8 @@ fn emit_contig_need(prog: &luxel_core::vm::Program) -> usize {
 /// bytes). 12 KB covers a `/api/status` body and change for that window.
 /// Measured 2026-09-24 on the panel: `aurora-2d` at 4096 px leaves
 /// 31,148 B free and needs 14,848 B by the rule — over the runtime floor
-/// it refuses, over this one it compiles and runs 2.1x.
+/// it refuses, over this one it compiles and runs 2.1x. On an arena board
+/// the same floor sits under [`emit_int_need`]'s residue instead (#671).
 const COMPILE_FLOOR: usize = 12 * 1024;
 
 /// Take executable memory for an image of at most `cap` bytes.
@@ -1008,7 +1044,7 @@ fn helpers() -> Helpers {
 /// | `init-error` | init did not run to completion, so §2.3's kind exemption does not hold |
 /// | `untyped` | the blob carries no `kinds` section |
 /// | `no-buffer` | no exec memory: the arena is full / the heap alias cannot be placed (S3), or both `.rwtext` halves are in flight (classic) |
-/// | `no-memory` | the heap cannot hold the emitter's bookkeeping beside this engine (`emit_heap_need`) |
+/// | `no-memory` | the memory the emitter's bookkeeping comes from cannot hold it beside this engine (`emit_heap_need`; the arena on an arena board, the internal heap otherwise — #671) |
 /// | `too-large` and the rest | [`Refusal`], whole-program, from the emitter |
 ///
 /// Called from `try_budgeted_engine` / `try_budgeted_layer` — the choke
@@ -1033,29 +1069,62 @@ pub fn try_compile(e: &mut Engine) {
         set_state(STATE_INTERP, Some(r), 0, 0, 0);
         return;
     }
-    // The emitter's bookkeeping has to fit the heap NOW, beside the
-    // engine that was just built — see `emit_heap_need`. Checked before
-    // any exec memory is claimed so a refusal leaves nothing to undo.
+    // The emitter's bookkeeping has to fit NOW, beside the engine that
+    // was just built — see `emit_heap_need`. Checked before any exec
+    // memory is claimed so a refusal leaves nothing to undo.
     let need = emit_heap_need(e.program());
+    // Where the bookkeeping will come from: the arena when it is up, the
+    // internal heap otherwise (#671). `stats()` is `None` on an S3 whose
+    // PSRAM did not initialise, and then the arena hook falls back to the
+    // main heap for everything — so that case takes the internal path.
+    #[cfg(feature = "psram-arena")]
+    let arena = crate::psram::stats();
+    #[cfg(not(feature = "psram-arena"))]
+    let arena: Option<(usize, usize)> = None;
     {
         let free = esp_alloc::HEAP.free() as usize;
-        if free < COMPILE_FLOOR + need {
-            println!("jit: interpreter (no-memory: {need} B to compile, {free} B free)");
-            set_state(STATE_INTERP, Some("no-memory"), 0, 0, 0);
-            return;
+        #[cfg(feature = "psram-arena")]
+        if let Some((psram_free, _)) = arena {
+            // Arena board: the working set goes external; what the
+            // internal heap must still hold is the residue, under the
+            // same floor.
+            let int_need = emit_int_need(e.program());
+            if free < COMPILE_FLOOR + int_need {
+                println!("jit: interpreter (no-memory: {int_need} B internal to compile, {free} B free)");
+                set_state(STATE_INTERP, Some("no-memory"), 0, 0, 0);
+                return;
+            }
+            // The exec block is claimed from the same arena next, so the
+            // bookkeeping has to fit BESIDE it: the hook falls back to the
+            // internal heap when the arena is full, silently, and that is
+            // exactly the allocation this guard exists to keep off it.
+            // 8 MB never binds here; the check is what makes that a fact
+            // rather than an assumption.
+            if psram_free < need + JIT_MAX_CODE {
+                println!("jit: interpreter (no-memory: {need} B of arena to compile, {psram_free} B free)");
+                set_state(STATE_INTERP, Some("no-memory"), 0, 0, 0);
+                return;
+            }
         }
-        // …and it has to be ALLOCATABLE, not merely affordable (Gitea
-        // #752). The check above reads a TOTAL; the emitter's biggest
-        // `Vec` wants one contiguous run, and on a fragmented heap the two
-        // numbers diverge badly. Until this, the guard could pass and the
-        // allocation still fault — a panic on the render task, which on
-        // the panel is a core with no serial port.
-        let contig = emit_contig_need(e.program());
-        let largest = crate::shared::largest_free_block();
-        if largest < contig {
-            println!("jit: interpreter (no-memory: {contig} B in one block, {largest} B largest of {free} B free)");
-            set_state(STATE_INTERP, Some("no-memory"), 0, 0, 0);
-            return;
+        if arena.is_none() {
+            if free < COMPILE_FLOOR + need {
+                println!("jit: interpreter (no-memory: {need} B to compile, {free} B free)");
+                set_state(STATE_INTERP, Some("no-memory"), 0, 0, 0);
+                return;
+            }
+            // …and it has to be ALLOCATABLE, not merely affordable (Gitea
+            // #752). The check above reads a TOTAL; the emitter's biggest
+            // `Vec` wants one contiguous run, and on a fragmented heap the
+            // two numbers diverge badly. Until this, the guard could pass
+            // and the allocation still fault — a panic on the render task,
+            // which on the panel is a core with no serial port.
+            let contig = emit_contig_need(e.program());
+            let largest = crate::shared::largest_free_block();
+            if largest < contig {
+                println!("jit: interpreter (no-memory: {contig} B in one block, {largest} B largest of {free} B free)");
+                set_state(STATE_INTERP, Some("no-memory"), 0, 0, 0);
+                return;
+            }
         }
     }
     #[allow(unused_mut)]

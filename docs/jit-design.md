@@ -960,6 +960,48 @@ floor left under it is `COMPILE_FLOOR`, 12 KB, deliberately smaller than
 render task, not for the pattern's life. docs/firmware.md "The compile's
 own heap" is the full argument.
 
+**And §5 put it in the wrong memory** (Gitea #671, 2026-09-26). The rule
+above was checked against the *internal* heap on every board, including the
+one with 8 MB of PSRAM idle beside it — which is what kept `snake-2d`
+interpreted at 4096 px while `aurora-2d` ran native. What moved is every
+**per-WORD and per-FUNCTION** table — the verifier's stack maps
+(`kinds::stack_maps`, its three vectors and the outer one), every `FnPlan`
+table and the plans vector (`plan.rs`), and the emitter's `word_off`, `fix`,
+`bail_fix`, `l32r_fix`, `entries`, `abi` and the literal-pool index, which
+became a sorted vector with a binary search instead of a `BTreeMap` — so the
+same hook that already routes pattern arrays and frame buffers routes them.
+The planner also MOVES the stack maps into the plans rather than cloning
+them; at the old peak every map existed twice.
+
+**The per-DEPTH scratch did NOT move, and that is a size decision, not an
+oversight.** The verifier walk's abstract stacks (`states` values, `cur`,
+`edges`, `merge_edges`' result) and the emitter's running stack copy
+(`Frame::stack`) are a few bytes each, one per branch target; routing them
+through the hook too cost 6,128 B of flash in `kinds::walk_fn` alone —
+`allocator_api2` inlines its grow path at each of the ~40 push sites — plus
+~1.2 KB in the emitter, +7,536 B on the Athom and its margin 6.51 % → 5.93 %,
+under the 6 % warn line. Left on the ordinary `Vec` the change is +1,040 B.
+`kinds::walk_fn`'s comment states the rule at the call site so the next
+reader does not "finish the job".
+
+So the gate is now two rules: on a board whose arena is up
+(`psram::stats()` is `Some`) `emit_heap_need + JIT_MAX_CODE` is checked
+against the ARENA — the hook falls back to the internal heap silently when
+the arena is full, which is exactly what must not happen here — and
+`jit::emit_int_need`, `words × 6 + fns × 48 + 1,024`, against the internal
+heap under the same `COMPILE_FLOOR`; on a board without one the check is
+byte-for-byte what it was, #752's contiguity check included. The residue that
+second rule budgets is what a `BTreeMap` cannot route (its nodes, one per
+branch target), the per-depth scratch above and the `Placed` result the
+caller keeps: **4,122 B** at its worst over the whole library, 29 % of what
+the rule allows. `tests/alloc_peak.rs` fits and gates both rules, the second
+with a counting arena hook installed. **The no-arena branch is covered, the
+arena branch is not** (2026-09-26): no device was touched in the #671
+session, but the QEMU JIT gate (`tools/qemu/jit-test.py`, classic ESP32, no
+arena) passed `rainbow.js` and `snake-2d.js` — both native and bit-identical
+to the interpreter, `snake-2d` 19 fns / 11,256 B in 17,244 µs. §7.3's rows
+and the `snake-2d` refusal below are still the pre-#671 measurement.
+
 **`iram-vm` came back on the S3.** Phase 3's trade is off: arena code costs
 no internal SRAM, so `board-target.sh` and flake.nix put the interpreter's
 per-pixel loop back on the JIT boards. `.stack` 26,268 B, against 25,484 B
@@ -1121,7 +1163,10 @@ on metal"; the headlines:
 `snake-2d` at 4096 px is the one refusal on the panel, and not for a
 codegen reason: the emitter's bookkeeping does not fit beside the engine
 (`no-memory`, §5 as-built above). It compiles and runs natively on the
-Athom.
+Athom. *(Since #671, 2026-09-26, that bookkeeping's per-word and per-function
+tables are arena memory on this board — 31,624 B of arena and 8,446 B of
+internal heap rather than 31.6 KB internal — so this refusal is expected to be
+gone. Not re-measured on metal; the row stands as the 2026-09-24 reading.)*
 
 ## 8. Size, features, boards
 
@@ -1256,7 +1301,7 @@ those slots boxed.
 | inference proves too little (`Dyn` on hot paths) | §9 census before the emitter is written; per-site array provenance is the refinement |
 | `Value` `repr` change moves interpreter numbers | **retired** (#642): it was indeed the layout rustc already picks — `luxel-core` text 117,514 B before and after on the S3, every symbol the same size, `Vm::run` byte-identical, so there is no number to move |
 | compile at activation blocks the render task | **retired** (#665/#666): `compile_us` on metal is 3,968–14,335 µs on the panel and 3,465–29,086 µs on the Athom (`snake-2d`'s 11 KB image is the 29 ms outlier) — 4 to 30 ms, once, at an activation that is already blocked for decode and engine construction. Nobody watching a panel can see it. Persisted blobs remain the lever if it ever matters |
-| planner heap beside a 4096-px engine | **retired** (#665), the hard way: it was not a risk, it was a crash — `StackMap`'s `Vec`-per-word took the panel down on the first native run of `snake-2d`. Retired by the flat `StackMap`, the `tests/alloc_peak.rs` rule and the `no-memory` refusal that applies it before claiming exec memory. **Still open:** the bookkeeping is internal heap on a board with 8 MB of PSRAM idle beside it, which is why `snake-2d` stays interpreted at 4096 px — moving the planner's allocations into the arena is the follow-up |
+| planner heap beside a 4096-px engine | **retired** (#665), the hard way: it was not a risk, it was a crash — `StackMap`'s `Vec`-per-word took the panel down on the first native run of `snake-2d`. Retired by the flat `StackMap`, the `tests/alloc_peak.rs` rule and the `no-memory` refusal that applies it before claiming exec memory. Its remainder — the bookkeeping being internal heap on a board with 8 MB of PSRAM idle beside it, which is why `snake-2d` stayed interpreted at 4096 px — is **retired in code by #671** (2026-09-26): the per-word and per-function tables are `luxel_core::arena` vectors checked against the arena, with a `words × 6 + fns × 48 + 1,024` residue rule against the internal heap for the per-depth scratch and `BTreeMap` nodes that stay there on purpose (flash — `kinds::walk_fn`). The QEMU gate covers the no-arena branch; the arena branch is unverified on metal, so the on-metal rows in §7.3 still show the old refusal |
 | runaway native loop | fuel at back-edges, depth check in prologues, watchdog unchanged |
 
 ## 11. Open questions for Jeremy

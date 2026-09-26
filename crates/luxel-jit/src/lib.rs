@@ -37,7 +37,10 @@ pub use emit::{compile, compile_into};
 /// `plan_all` on its own, for `tests/alloc_peak.rs` to attribute the
 /// emitter's heap between planning and emission. Not API.
 #[doc(hidden)]
-pub fn __plan_all(prog: &luxel_core::vm::Program, kinds: &luxel_core::kinds::Kinds) -> Result<Vec<FnPlan>, Refusal> {
+pub fn __plan_all(
+    prog: &luxel_core::vm::Program,
+    kinds: &luxel_core::kinds::Kinds,
+) -> Result<luxel_core::arena::ArrVec<FnPlan>, Refusal> {
     plan::plan_all(prog, kinds)
 }
 pub use plan::{FnPlan, ParamConv, SlotHome};
