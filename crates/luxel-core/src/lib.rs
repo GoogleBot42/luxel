@@ -52,5 +52,6 @@ pub mod parse;
 pub mod prelude;
 pub mod projection;
 pub mod scene;
+pub mod sprite;
 pub mod text;
 pub mod vm;

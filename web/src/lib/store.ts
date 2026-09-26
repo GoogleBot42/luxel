@@ -4,6 +4,7 @@
 // device's pattern CRUD — keep the shapes simple and serializable.
 
 import { parsePreviewAs, type PreviewAs } from "./geometry";
+import { isTaggedSpriteSource } from "./sprite";
 
 export interface SavedPattern {
   name: string;
@@ -33,24 +34,47 @@ function write(key: string, value: unknown): void {
   }
 }
 
+/**
+ * The playground's pattern library — SPRITES EXCLUDED.
+ *
+ * Before Gitea #740 a sprite WAS a pattern (`// @sprite …` on line 1), so
+ * every list and picker in the app offered sprites as if they were playable
+ * patterns. Sprites are their own records now with their own tab, and the one
+ * place local lists are built is here, so this is where they leave: a stored
+ * pattern that still carries the old tag is a sprite waiting for
+ * `migrateTaggedSprites()` and is not offered as a pattern in the meantime.
+ * [`listAllPatterns`] is the unfiltered read the migration itself needs.
+ */
 export function listPatterns(): SavedPattern[] {
+  return listAllPatterns().filter((p) => !isTaggedSpriteSource(p.source ?? ""));
+}
+
+/** Every row, tagged sprites included — the migration's reader, and nothing
+ *  else's. */
+export function listAllPatterns(): SavedPattern[] {
   const list = read<SavedPattern[]>(LIB_KEY) ?? [];
   return Array.isArray(list) ? list.filter((p) => p && typeof p.name === "string") : [];
 }
 
-/** Save (or overwrite, by name) a pattern in the library. */
+/** Save (or overwrite, by name) a pattern in the library.
+ *
+ *  The WRITERS read `listAllPatterns`, never the filtered view: writing back
+ *  what `listPatterns` returned would silently delete every not-yet-migrated
+ *  sprite from the library the first time anything saved a pattern. */
 export function savePattern(name: string, source: string): SavedPattern[] {
-  const list = listPatterns().filter((p) => p.name !== name);
+  const list = listAllPatterns().filter((p) => p.name !== name);
   list.push({ name, source, savedAt: Date.now() });
   list.sort((a, b) => a.name.localeCompare(b.name));
   write(LIB_KEY, list);
-  return list;
+  return listPatterns();
 }
 
 export function deletePattern(name: string): SavedPattern[] {
-  const list = listPatterns().filter((p) => p.name !== name);
-  write(LIB_KEY, list);
-  return list;
+  write(
+    LIB_KEY,
+    listAllPatterns().filter((p) => p.name !== name),
+  );
+  return listPatterns();
 }
 
 export interface WorkingCopy {

@@ -24,7 +24,6 @@
   import PatternInspector from "../components/scene/PatternInspector.svelte";
   import TextInspector from "../components/scene/TextInspector.svelte";
   import SpriteInspector from "../components/scene/SpriteInspector.svelte";
-  import SpriteTools from "../components/scene/SpriteTools.svelte";
   import ColorInspector from "../components/scene/ColorInspector.svelte";
   import PatternPicker from "../components/PatternPicker.svelte";
   import Popover from "../components/Popover.svelte";
@@ -32,7 +31,6 @@
   import {
     MAX_SCENE_NAME,
     newLayer,
-    parseSpriteTag,
     patternLayerCount,
     serializeScene,
     type Layer,
@@ -40,19 +38,16 @@
     type Rect,
     type Scene,
   } from "../lib/scene";
+  import { encodeSprite, spriteMetaLine } from "../lib/sprite";
   import {
-    emitSprite,
-    fillSprite,
-    hsvKey,
-    newSprite,
-    paintSprite,
-    parseSprite,
-    resizeSprite,
-    spritePalette,
-    type Sprite,
-    type SpriteTool,
-  } from "../lib/sprite";
-  import type { Hsv } from "../lib/color";
+    cachedSprite,
+    freshSprite,
+    loadSprite,
+    refreshSprites,
+    saveSprite,
+    spriteSaving,
+    sprites,
+  } from "../stores/sprites";
   import { listPatterns, savePattern as savePatternLocally } from "../lib/store";
   import { confirm } from "../stores/dialog";
   import {
@@ -88,7 +83,13 @@
   /** Which scene — `#/scenes/<id>`. Empty = a new, unsaved one. */
   export let sceneId = "";
 
-  const dispatch = createEventDispatcher<{ back: void; open: string }>();
+  const dispatch = createEventDispatcher<{
+    back: void;
+    open: string;
+    /** Open the sprite editor on this sprite, returning to THIS scene
+     *  (Gitea #740: "the scene edit page can directly invoke" it). */
+    sprite: string;
+  }>();
 
   // A text layer reads two pieces of device state this screen is the only
   // caller for: the slot table and whether the clock is synced (Settings ›
@@ -153,6 +154,10 @@
   $: if (active) {
     void refreshScenes();
     void refreshDevicePatterns();
+    // …and the SPRITE library, for exactly the same reason: every sprite
+    // layer's picture, its picker row and its `9×8 · 2 frames` line comes out
+    // of `stores/sprites.ts` now (Gitea #740).
+    void warmSprites();
   }
 
   /** Adopt `id` once the store actually holds it — a deep link lands here
@@ -166,10 +171,6 @@
 
   function adopt(id: string): void {
     loadedId = id;
-    // A different document: forget any sprite draft, the store is the truth
-    // again (and a pending write was already flushed by its own timer).
-    drafts = {};
-    hoverCell = null;
     const found = id === "" ? null : sceneById(id);
     doc = found ? structuredClone(found) : { id: "", name: "New scene", layers: [] };
     savedWire = serializeScene(doc);
@@ -223,13 +224,9 @@
   $: gridW = rig.w;
   $: gridH = rig.h;
 
-  /** Source by store id. A device pattern's source streams in with the list;
-   *  a playground one is keyed by a hash of its name. */
+  /** PATTERN source by store id. A device pattern's source streams in with the
+   *  list; a playground one is keyed by a hash of its name. */
   function lookup(id: string): string | null {
-    // A sprite being painted answers from the DRAFT until the store catches
-    // up, so the composite shows the pixel the moment it is drawn (#481).
-    const draft = drafts[id];
-    if (draft !== undefined) return draft;
     const dev = $devicePatterns.find((p) => p.id === id);
     if (dev?.source !== undefined) return dev.source;
     for (const p of listPatterns()) if (playgroundPatternId(p.name) === id) return p.source;
@@ -259,15 +256,9 @@
   function sourceKey(s: Scene): string {
     return s.layers
       .map((l) => {
-        if (l.body.kind !== "pat" && l.body.kind !== "sprite") return "-";
-        const id = l.body.kind === "pat" ? l.body.pat.id : l.body.id;
-        const src = lookup(id);
-        if (src === null) return "0";
-        // A sprite being painted changes its SOURCE without changing the
-        // scene's wire, so its content is part of the key (#481) — otherwise
-        // `setScene` would see no change and the drawn pixel never appears.
-        const draft = drafts[id];
-        return draft === undefined ? "1" : playgroundPatternId(draft);
+        if (l.body.kind === "sprite") return spriteBytesOf(l.body.id) === null ? "0" : "1";
+        if (l.body.kind !== "pat") return "-";
+        return lookup(l.body.pat.id) === null ? "0" : "1";
       })
       .join("/");
   }
@@ -292,7 +283,7 @@
     // rebuilt: its no-op path answers `null` for an unchanged wire, which
     // would otherwise clear the error of the scene still installed.
     const wire = serializeScene(doc);
-    const err = renderer.setScene(doc, lookup, force);
+    const err = renderer.setScene(doc, lookup, force, spriteBytesOf);
     if (force || wire !== renderedWire) {
       sceneError = err ?? "";
       layerErrors = layerErrorsOf(doc, renderer);
@@ -313,13 +304,21 @@
     const lx = $luxel;
     if (!lx) return out;
     s.layers.forEach((l, i) => {
-      if (l.body.kind !== "pat" && l.body.kind !== "sprite") return;
+      // A SPRITE layer cannot fail to compile — it has no engine and no
+      // compile (#740). `SceneRenderer` already carries the compositor's own
+      // refusal of a bad record, so that is read rather than re-derived.
+      if (l.body.kind === "sprite") {
+        const why = r.errorAt(i);
+        if (why) out[i] = why;
+        return;
+      }
+      if (l.body.kind !== "pat") return;
       if (r.engineAt(i)) return;
-      const id = l.body.kind === "pat" ? l.body.pat.id : l.body.id;
+      const id = l.body.pat.id;
       if (id === "") return; // nothing chosen yet — not a failure
       const src = lookup(id);
       if (src === null) return; // still streaming in
-      const built = compileForLayout(lx, src, 0, l.body.kind === "pat" ? l.body.pat.proj : null, rig);
+      const built = compileForLayout(lx, src, 0, l.body.pat.proj, rig);
       if ("engine" in built) built.engine.free();
       else out[i] = built.line > 0 ? `line ${built.line}: ${built.message}` : built.message;
     });
@@ -333,51 +332,48 @@
   // regenerated/restart. This is to make it less jarring."
   //
   // It is a performance fix wearing a UX fix's clothes. `SceneRenderer`'s
-  // `setScene` drops and recompiles ONE wasm engine PER PATTERN AND SPRITE
-  // LAYER on any change to the wire (`web/src/lib/sceneRender.ts`), and the
-  // reactive block below fires on every keystroke in the text field, every
-  // tick of the opacity slider and every `pointermove` of a marquee drag. So
-  // a two-pattern scene was recompiling two engines a frame while you dragged
-  // a box — and every one of those recompiles put both patterns back to
-  // t = 0, which is the strobing Jeremy is describing.
+  // `setScene` drops and recompiles ONE wasm engine PER PATTERN LAYER on any
+  // change to the wire (`web/src/lib/sceneRender.ts`), and the reactive block
+  // below fires on every keystroke in the text field, every tick of the
+  // opacity slider and every `pointermove` of a marquee drag. So a two-pattern
+  // scene was recompiling two engines a frame while you dragged a box — and
+  // every one of those recompiles put both patterns back to t = 0, which is
+  // the strobing Jeremy is describing.
   //
   // The rule: coalesce, and let the EXISTING composite keep running while the
   // edit settles. Nothing is torn down in the meantime, so the delay reads as
   // "it caught up", not as "it stopped".
   //
-  // Two exemptions, both about latency you can feel:
-  //   · a scene with no pattern and no sprite layer has no engine to restart
-  //     and nothing expensive to rebuild, so its edits land at once — text,
-  //     colour and geometry tweaking stays live;
-  //   · a SPRITE DRAFT is the brush. #481's whole contract is that the
-  //     composite shows the pixel on the frame it is painted, and a painted
-  //     pixel changes `drafts` without changing the wire — so that is the
-  //     signal, and it is never delayed.
+  // The exemption is about latency you can feel: a scene with no pattern layer
+  // has no engine to restart and nothing expensive to rebuild, so its edits
+  // land at once — text, colour, SPRITE and geometry tweaking stays live. A
+  // sprite layer costs a `memcpy` of its record now, not a compile (#740), so
+  // it is on the cheap side of that line.
   const REBUILD_DELAY_MS = 1000;
   let rebuildTimer = 0;
   /** The wire the last scheduling decision was made against. */
   let scheduledWire = "";
 
-  // The dependencies are ARGUMENTS: a `void x` inside a reactive EXPRESSION
-  // is not a dependency as far as Svelte is concerned, and a sprite draft
-  // that did not re-bind was invisible until a painted pixel failed to appear
-  // (.claude/rules/web.md).
-  $: if (active && $luxel) rebuildOn(doc, rigKey, $devicePatterns, drafts);
+  // The dependencies are ARGUMENTS: a `void x` inside a reactive EXPRESSION is
+  // not a dependency as far as Svelte is concerned, and a sprite record that
+  // landed without re-binding was invisible (.claude/rules/web.md).
+  $: if (active && $luxel) rebuildOn(doc, rigKey, $devicePatterns, spriteRev);
 
-  function rebuildOn(_doc: unknown, _rig: unknown, _dev: unknown, _drafts: unknown): void {
+  function rebuildOn(_doc: unknown, _rig: unknown, _dev: unknown, _sprites: unknown): void {
     const wire = serializeScene(doc);
-    // A change that did NOT touch the wire is a draft (or a store row landing)
-    // — paint, and the pixel is due now.
+    // A change that did NOT touch the wire is a store row landing — it is due
+    // now, because nothing about it restarts a clock.
     const wireChanged = wire !== scheduledWire;
     scheduledWire = wire;
     scheduleRebuild(wireChanged && hasEngines(doc) ? REBUILD_DELAY_MS : 0);
   }
 
   /** Is there anything in this scene that a rebuild would RESTART? Text
-   *  carries its scroll phase across `set_scene` (#733) and a colour layer
-   *  has no clock, so a scene of those two is free to rebuild immediately. */
+   *  carries its scroll phase across `set_scene` (#733), a colour layer has no
+   *  clock, and a sprite layer's clock lives in the compositor and survives
+   *  `set_scene` too — so only a pattern layer is worth waiting for. */
   function hasEngines(s: Scene): boolean {
-    return s.layers.some((l) => l.body.kind === "pat" || l.body.kind === "sprite");
+    return s.layers.some((l) => l.body.kind === "pat");
   }
 
   /** The assignment lives in a FUNCTION, never in the `$:` block: a reactive
@@ -444,10 +440,6 @@
     clearTimeout(rebuildTimer);
     renderer?.free();
     cancelLivePush();
-    // A sprite painted a moment before leaving the screen still has to land
-    // in the store — the idle timer would be cancelled with the component.
-    clearTimeout(saveTimer);
-    void flushSprite();
   });
 
   /** What the preview column's dim line says (S7 / S7f). On a console it is
@@ -460,16 +452,26 @@
 
   $: patternLayers = patternLayerCount(doc);
 
-  /** Sprite metadata for the layer list (`sprite · 9×8`). */
-  $: spriteDims = spriteDimsOf(doc, $devicePatterns);
+  /** Sprite metadata for the layer list (`sprite · 9×8 · 2 frames`). Read out
+   *  of the SPRITE store now — `$sprites` and `spriteRev` are named arguments
+   *  so the row fills in the moment the library lands. */
+  $: spriteDims = spriteDimsOf(doc, $sprites, spriteRev);
   $: patternNames = patternNamesOf(doc, $devicePatterns);
 
-  function spriteDimsOf(s: Scene, _dev: unknown): Record<number, string> {
+  function spriteDimsOf(s: Scene, _lib: unknown, _rev: unknown): Record<number, string> {
     const out: Record<number, string> = {};
     s.layers.forEach((l, i) => {
       if (l.body.kind !== "sprite") return;
-      const tag = parseSpriteTag(lookup(l.body.id) ?? "");
-      if (tag) out[i] = `sprite · ${tag.w}×${tag.h}`;
+      const id = l.body.id;
+      if (id === "") {
+        out[i] = "sprite · none chosen";
+        return;
+      }
+      const meta = $sprites.find((x) => x.id === id);
+      const held = meta ? null : cachedSprite(id);
+      if (meta) out[i] = `sprite · ${spriteMetaLine(meta.w, meta.h, meta.frames)}`;
+      else if (held) out[i] = `sprite · ${spriteMetaLine(held.w, held.h, held.frames)}`;
+      else out[i] = "sprite · missing";
     });
     return out;
   }
@@ -483,214 +485,100 @@
   }
 
   $: sel = selected >= 0 ? (doc.layers[selected] ?? null) : null;
-  // `drafts` and `$devicePatterns` are read INSIDE `lookup`, so they have to
-  // be named here or this never re-runs. They are ARGUMENTS and not a `void
-  // drafts` in the expression, because Svelte does NOT count a `void x` there
-  // as a dependency: with one, the selected sprite froze at whatever the
-  // source was when the layer was picked and every painted pixel was applied
-  // to that same stale copy — three strokes left one pixel
-  // (.claude/rules/web.md).
-  $: selSpriteSrc = spriteSourceOf(sel, drafts, $devicePatterns);
 
-  function spriteSourceOf(l: Layer | null, _drafts: unknown, _dev: unknown): string {
-    return l?.body.kind === "sprite" ? (lookup(l.body.id) ?? "") : "";
-  }
-  $: selSpriteTag = sel?.body.kind === "sprite" ? parseSpriteTag(selSpriteSrc) : null;
-  /** The texels, when the source is one the tool row can paint on. */
-  $: selSprite = sel?.body.kind === "sprite" ? parseSprite(selSpriteSrc) : null;
-
-  // ---- drawing on a sprite (#481, mockup S7c) ----------------------------
+  // ---- sprite layers (#740) ----------------------------------------------
   //
-  // The tool row paints into a DRAFT source, which `lookup` answers with, so
-  // the composite redraws on the same frame as the click; the store is
-  // written behind it on an idle timer, because a device that took one POST
-  // per painted pixel would spend a drag rewriting flash.
+  // There is NO drawing on this screen any more. Jeremy: "I expect to be able
+  // to move around the sprite via moving like the other layers but that
+  // doesn't work. Just that alone is asking for trouble." A sprite layer used
+  // to mount a tool row into the stage and take the canvas's pointer events
+  // over, which made the marquee unreachable. Drawing lives on its own screen
+  // now (`pages/SpriteEditor.svelte`), so this screen's whole relationship
+  // with a sprite is: which record does the layer name, and what are its
+  // bytes.
+  //
+  // The bytes are pre-loaded and the ENCODE is memoised per id, because
+  // `SceneRenderer.setScene` copies them into wasm on every rebuild and a
+  // 64×64 record is 4 KB.
 
-  let tool: SpriteTool = "pencil";
-  let brush: Hsv = [0, 1, 1];
-  let recents: Hsv[] = [];
-  let hoverCell: { col: number; row: number } | null = null;
-  /** Unsaved sprite sources, by pattern id. */
-  let drafts: Record<string, string> = {};
-  let saveTimer = 0;
-  let savingSprite = false;
-  let pendingId = "";
+  const encoded = new Map<string, Uint8Array>();
+  /** Bumped when a record lands — the rebuild's and the layer list's signal. */
+  let spriteRev = 0;
 
-  /** A sprite layer whose pixels are readable is what puts the tool row on
-   *  the screen and turns the marquee into a guide. */
-  $: painting = sel?.body.kind === "sprite" && selSprite !== null;
-  $: palette = selSprite ? spritePalette(selSprite) : [];
-
-  /** Selecting a sprite loads the brush with the sprite's own first colour —
-   *  you are far more often touching up a drawing than starting a new one,
-   *  and a brush that came from somewhere else is a colour you did not ask
-   *  for. Once you pick, your pick stays (`brushFor` is the guard). */
-  let brushFor = "";
-  $: if (sel?.body.kind === "sprite" && sel.body.id !== brushFor && palette.length > 0) {
-    brushFor = sel.body.id;
-    brush = palette[0] ?? brush;
-  }
-
-  /** The recent swatches (S7c). Until anything has been picked they are the
-   *  sprite's other colours — the ones the drawing is already made of. */
-  $: toolRecents =
-    recents.length > 0
-      ? recents
-      : palette.filter((c) => hsvKey(c) !== hsvKey(brush)).slice(0, 6);
-
-  /** Stage cell → sprite texel, or null when the pointer is outside the
-   *  layer's box. A sprite is never scaled, so this is a translation. */
-  function texelAt(col: number, row: number): { col: number; row: number } | null {
-    if (!sel || !selSprite) return null;
-    const c = col - sel.style.rect.x;
-    const r = row - sel.style.rect.y;
-    if (c < 0 || r < 0 || c >= selSprite.tag.w || r >= selSprite.tag.h) return null;
-    return { col: c, row: r };
-  }
-
-  function onCell(e: CustomEvent<{ col: number; row: number; down: boolean }>): void {
-    if (!painting || !sel || !selSprite || sel.body.kind !== "sprite") return;
-    const at = texelAt(e.detail.col, e.detail.row);
-    if (!at) return;
-    // Frame 0 is what is edited: S7c's sprite has one, and a frame strip is
-    // what picks another (the hint under Frames says it appears at 2+).
-    let next: Sprite;
-    if (tool === "eraser") {
-      next = paintSprite(selSprite, 0, at.col, at.row, null);
-    } else if (tool === "fill") {
-      if (!e.detail.down) return; // a fill is a click, not a drag
-      next = fillSprite(selSprite, 0, at.col, at.row, brush);
-    } else {
-      next = paintSprite(selSprite, 0, at.col, at.row, brush);
+  async function warmSprites(): Promise<void> {
+    await refreshSprites();
+    let landed = 0;
+    for (const s of $sprites) {
+      if (encoded.has(s.id)) continue;
+      const sp = await loadSprite(s.id);
+      if (!sp) continue;
+      encoded.set(s.id, encodeSprite(sp));
+      landed++;
     }
-    if (next === selSprite) return;
-    putDraft(sel.body.id, next);
+    if (landed > 0) spriteRev += landed;
   }
 
-  /** Install a painted sprite: the draft the preview compiles, then the store
-   *  write on an idle timer. */
-  function putDraft(id: string, sprite: Sprite): void {
-    drafts = { ...drafts, [id]: emitSprite(sprite) };
-    pendingId = id;
-    clearTimeout(saveTimer);
-    saveTimer = window.setTimeout(() => void flushSprite(), 600);
+  /** The `SpriteLookup` the compositor takes: a cache read, never a fetch. */
+  function spriteBytesOf(id: string): Uint8Array | null {
+    if (id === "") return null;
+    const held = encoded.get(id);
+    if (held) return held;
+    const sp = cachedSprite(id);
+    if (!sp) return null;
+    const bytes = encodeSprite(sp);
+    encoded.set(id, bytes);
+    return bytes;
   }
 
-  async function flushSprite(): Promise<void> {
-    const id = pendingId;
-    const src = drafts[id];
-    if (id === "" || src === undefined) return;
-    pendingId = "";
-    savingSprite = true;
-    try {
-      const next = await storeSprite(id, src);
-      if (next !== "" && next !== id) {
-        // The device answered with a different id for the overwritten row —
-        // re-point every layer that named the old one.
-        commit({
-          ...doc,
-          layers: doc.layers.map((l) =>
-            l.body.kind === "sprite" && l.body.id === id ? { ...l, body: { kind: "sprite", id: next } } : l,
-          ),
-        });
-        drafts = { ...drafts, [next]: src };
-      }
-    } finally {
-      savingSprite = false;
-    }
+  /** What an unset box covers for the SELECTED layer — the sprite's own size
+   *  on a sprite layer, and "the whole layout" (null) on anything else. It is
+   *  what makes the marquee wrap a natural-size sprite instead of the whole
+   *  grid (`SceneStage`'s `natural`). Dependencies NAMED. */
+  $: selNatural = naturalOf(sel, $sprites, spriteRev);
+
+  function naturalOf(
+    l: Layer | null,
+    _lib: unknown,
+    _rev: unknown,
+  ): { w: number; h: number } | null {
+    if (l?.body.kind !== "sprite") return null;
+    // Narrowed into a local: the closure below re-widens `l.body` to the
+    // whole union as far as svelte-check is concerned.
+    const id = l.body.id;
+    if (id === "") return null;
+    const meta = $sprites.find((s) => s.id === id);
+    if (meta) return { w: meta.w, h: meta.h };
+    const held = cachedSprite(id);
+    return held ? { w: held.w, h: held.h } : null;
   }
 
-  /** Write a sprite's pattern back to the store it came from. Returns the id
-   *  it now has. A same-name save OVERWRITES (pages/Editor.svelte), which is
-   *  exactly the semantics a sprite edit wants. */
-  async function storeSprite(id: string, source: string): Promise<string> {
-    const name = patternNameOf(id);
-    if (name === "") return id;
-    const d = $device;
-    if (!d) {
-      savePatternLocally(name, source);
-      localRev++; // the local library is not a store — publish the change
-      return playgroundPatternId(name);
-    }
-    const bc = compileToBytecode(source);
-    if (!bc) return id;
-    try {
-      const r = await d.savePattern(name, source, bc);
-      if (!r.ok) return id;
-      await refreshDevicePatterns([id]);
-      if (r.id && r.id !== "") return r.id;
-      return $devicePatterns.find((p) => p.name === name)?.id ?? id;
-    } catch {
-      return id;
-    }
+  /** `Edit ↗` on the sprite inspector — the sprite editor, with this scene as
+   *  the return route (#740: the scene editor "can directly invoke" it). */
+  function editSprite(): void {
+    if (sel?.body.kind !== "sprite" || sel.body.id === "") return;
+    dispatch("sprite", sel.body.id);
   }
 
-  /** The tool row's colour. Recents are most-recent-first, deduplicated, six
-   *  deep (S7c draws six). */
-  function setBrush(c: Hsv): void {
-    brush = c;
-    const key = (x: Hsv): string => `${x[0]},${x[1]},${x[2]}`;
-    recents = [c, ...recents.filter((r) => key(r) !== key(c))].slice(0, 6);
-  }
-
-  /** Size / Frames on the inspector rewrite the sprite itself. */
-  function onSpriteResize(e: CustomEvent<{ w: number; h: number; frames: number; fps: number }>): void {
-    if (!sel || !selSprite || sel.body.kind !== "sprite") return;
-    const next = resizeSprite(selSprite, e.detail);
-    putDraft(sel.body.id, next);
-    // the box mirrors the sprite — a sprite is never scaled (S7c)
-    replaceLayer(selected, {
-      ...sel,
-      style: { ...sel.style, rect: { ...sel.style.rect, w: next.tag.w, h: next.tag.h } },
-    });
-  }
-
-  /** `New…` on the sprite row, and what `Add layer › Sprite` falls back to
-   *  when the store holds no sprite yet: a blank 16×16 the tool row can draw
-   *  on immediately. Neither S1 nor S7 draws a `New sprite…` entry, so this
-   *  is the affordance's only home (see docs/web-architecture.md). */
-  async function freshSprite(at: number): Promise<void> {
+  /**
+   * `New…` on the sprite inspector: make a blank 8×8 sprite, bind it to this
+   * layer, and open it — one gesture, because a layer bound to nothing draws
+   * nothing and the only useful next step is to draw.
+   *
+   * The layer's box is left at its natural size (w/h = 0), which is what a
+   * fresh sprite wants: 8×8 at (x, y), unscaled.
+   */
+  async function newSpriteFor(at: number): Promise<void> {
     const l = doc.layers[at];
     if (!l || l.body.kind !== "sprite") return;
-    const name = freshSpriteName();
-    const source = emitSprite(newSprite(16, 16), name);
-    let id = "";
-    const d = $device;
-    if (!d) {
-      savePatternLocally(name, source);
-      localRev++; // the local library is not a store — publish the change
-      id = playgroundPatternId(name);
-    } else {
-      const bc = compileToBytecode(source);
-      if (!bc) return;
-      const r = await d.savePattern(name, source, bc);
-      if (!r.ok) return;
-      await refreshDevicePatterns();
-      id = r.id && r.id !== "" ? r.id : ($devicePatterns.find((p) => p.name === name)?.id ?? "");
-    }
-    if (id === "") return;
-    drafts = { ...drafts, [id]: source };
-    commit({
-      ...doc,
-      layers: doc.layers.map((x, i) =>
-        i === at
-          ? { ...x, body: { kind: "sprite", id }, style: { ...x.style, rect: { ...x.style.rect, w: 16, h: 16 } } }
-          : x,
-      ),
-    });
+    const r = await saveSprite(freshSprite(8, 8));
+    if (!r.ok || !r.id) return;
+    await warmSprites();
+    replaceLayer(at, { ...l, body: { kind: "sprite", id: r.id } });
     selected = at;
-  }
-
-  function freshSpriteName(): string {
-    const taken = new Set<string>([
-      ...$devicePatterns.map((p) => p.name),
-      ...listPatterns().map((p) => p.name),
-    ]);
-    for (let n = 1; n < 1000; n++) {
-      const name = `Sprite ${n}`;
-      if (!taken.has(name)) return name;
-    }
-    return `Sprite ${Date.now()}`;
+    // Save the scene first when it has an id, so returning from the sprite
+    // editor does not land on a scene that never heard about the binding.
+    if (doc.id !== "") await save();
+    dispatch("sprite", r.id);
   }
 
   // ---- editing ----
@@ -710,33 +598,29 @@
     const l = newLayer(kind);
     if (kind === "color") l.style.rect = { x: 0, y: Math.max(0, gridH - 6), w: 0, h: 6 };
     if (kind === "text") l.style.rect = { x: 0, y: Math.floor(gridH / 2) - 4, w: 0, h: 8 };
+    // A fresh SPRITE layer is placed a little in from the corner and left at
+    // its natural size (w/h = 0): it draws the sprite 1:1 at (x, y) and can be
+    // dragged from there like every other layer.
+    if (kind === "sprite") l.style.rect = { x: 2, y: 2, w: 0, h: 0 };
     commit({ ...doc, layers: [...doc.layers, l] });
     selected = doc.layers.length - 1;
-    if (kind === "pat" || kind === "sprite") void pickFor(selected, kind);
+    // A PATTERN layer opens the picker (there is nothing useful to bind by
+    // default). A SPRITE layer does not: its picker is a row in the inspector
+    // that is always there now, with `New…` beside it when the library is
+    // empty — so `Add layer › Sprite` never silently invents a drawing.
+    if (kind === "pat") void pickFor(selected);
   }
 
   /**
-   * Open the picker for a layer — and, for a sprite with nothing to pick,
-   * make one instead (neither S1 nor S7 draws a `New sprite…` entry anywhere,
-   * so Add layer › Sprite on an empty store IS the creation path).
+   * Open the pattern picker for a layer.
    *
    * It re-reads the library first. `devicePatterns` is refreshed on demand,
    * not polled, so a pattern saved from another tab — or by a harness — is
-   * invisible here until something asks; and "there are no sprites" decided
-   * on a stale list silently makes a blank one over a store that has some.
-   * The same reason a row whose SOURCE has not streamed in yet counts as
-   * unknown rather than as "not a sprite".
+   * invisible here until something asks.
    */
-  async function pickFor(at: number, kind: "pat" | "sprite"): Promise<void> {
+  async function pickFor(at: number): Promise<void> {
     if ($device) await refreshDevicePatterns();
     else localRev++; // the playground's library is localStorage: re-read it
-    // Read the store through the function rather than the `$:` value: a flush
-    // may not have run between the refresh above and here.
-    const rows = patternRows($devicePatterns, $device !== null, localRev);
-    if (kind === "sprite" && spriteRowsOf(rows).length === 0 && !sourcesPending(rows)) {
-      await freshSprite(at);
-      return;
-    }
     pickingFor = at;
     pickerOpen = true;
   }
@@ -768,29 +652,12 @@
     }));
   }
 
-  /** The stored patterns that are SPRITES — what the picker offers a sprite
-   *  layer (#700). A row whose source has not streamed in yet cannot be
-   *  classified, so it is not offered YET rather than denied for ever: the
-   *  list is DERIVED from the store, so the row appears the moment its source
-   *  lands, and `pickFor` refuses to conclude "there are no sprites" while
-   *  any source is still pending. Offering an unclassified row as a sprite
-   *  would be worse than waiting — a sprite layer bound to a pattern that is
-   *  not one draws nothing. */
-  function spriteRowsOf(rows: typeof $devicePatterns): typeof $devicePatterns {
-    return rows.filter((p) => parseSpriteTag(p.source ?? "") !== null);
-  }
-
-  /** Is any stored pattern still un-classifiable — its source not streamed in
-   *  yet? Then "there are no sprites" is not something we know. */
-  function sourcesPending(rows: typeof $devicePatterns): boolean {
-    return rows.some((p) => p.source === undefined);
-  }
-
   // The picker's list. Assigned reactively, with every dependency NAMED, so
-  // rows appear as their sources stream in (.claude/rules/web.md).
-  $: allRows = patternRows($devicePatterns, $device !== null, localRev);
-  $: pickingSprite = doc.layers[pickingFor]?.body.kind === "sprite";
-  $: pickerPatterns = pickingSprite ? spriteRowsOf(allRows) : allRows;
+  // rows appear as their sources stream in (.claude/rules/web.md). It is
+  // PATTERNS only now: a sprite layer binds a sprite RECORD through its own
+  // inspector row, and `lib/store.ts` / `stores/device.ts` keep sprite-tagged
+  // patterns out of these lists entirely (#740).
+  $: pickerPatterns = patternRows($devicePatterns, $device !== null, localRev);
 
   function onReorder(from: number, to: number): void {
     const list = [...doc.layers];
@@ -855,8 +722,6 @@
     pickerError = "";
     if (l.body.kind === "pat") {
       replaceLayer(at, { ...l, body: { kind: "pat", pat: { ...l.body.pat, id, controls: {} } } });
-    } else if (l.body.kind === "sprite") {
-      replaceLayer(at, { ...l, body: { kind: "sprite", id } });
     }
   }
 
@@ -1092,28 +957,12 @@
       w={gridW}
       h={gridH}
       rect={sel?.style.rect ?? null}
+      natural={selNatural}
       {dimsLine}
       {targetFps}
-      paintMode={painting}
-      markCell={painting ? hoverCell : null}
       on:rect={(e) => onRect(e.detail)}
       on:targetfps={(e) => (targetFps = e.detail)}
-      on:cell={onCell}
-      on:hover={(e) => (hoverCell = e.detail)}
-    >
-      <svelte:fragment slot="tools">
-        {#if painting}
-          <SpriteTools
-            {tool}
-            color={brush}
-            recents={toolRecents}
-            paletteSize={palette.length}
-            on:tool={(e) => (tool = e.detail)}
-            on:color={(e) => setBrush(e.detail)}
-          />
-        {/if}
-      </svelte:fragment>
-    </SceneStage>
+    />
 
     <div class="rcol" data-role="scene-inspector" bind:this={rcolEl}>
       <!-- THE picker hangs HERE, under the inspector column, because
@@ -1132,7 +981,7 @@
           luxel={$luxel}
           open={pickerOpen}
           anchor={rcolEl}
-          title={pickingSprite ? "Choose a sprite" : "Choose a pattern"}
+          title="Choose a pattern"
           patterns={pickerPatterns}
           busy={pickerBusy}
           error={pickerError}
@@ -1164,7 +1013,7 @@
           patternName={patternNameOf(sel.body.pat.id)}
           {rig}
           on:change={(e) => replaceLayer(selected, e.detail)}
-          on:pick={() => void pickFor(selected, "pat")}
+          on:pick={() => void pickFor(selected)}
           on:delete={() => void onDeleteLayer()}
         />
       {:else if sel && sel.body.kind === "text"}
@@ -1177,13 +1026,11 @@
       {:else if sel && sel.body.kind === "sprite"}
         <SpriteInspector
           layer={sel}
-          tag={selSpriteTag}
-          sprite={selSprite}
-          saving={savingSprite}
+          library={$sprites}
+          saving={$spriteSaving}
           on:change={(e) => replaceLayer(selected, e.detail)}
-          on:resize={onSpriteResize}
-          on:fresh={() => void freshSprite(selected)}
-          on:pick={() => void pickFor(selected, "sprite")}
+          on:edit={editSprite}
+          on:fresh={() => void newSpriteFor(selected)}
           on:delete={() => void onDeleteLayer()}
         />
       {:else if sel && sel.body.kind === "color"}

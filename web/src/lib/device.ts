@@ -91,8 +91,9 @@ export interface DeviceStatus {
       /** 0-based index into the scene's own `layers` array; a bare pattern
        *  is layer 0. (`scene: layer N does not fit` is 1-based.) */
       layer: number;
-      /** `"sprite"` is an engine built and read but never stepped — its
-       *  compile is real, its native code never runs (Gitea #740). */
+      /** `"pattern"` on any firmware that has #740: a sprite layer holds no
+       *  engine at all now, so it has no row here. `"sprite"` is kept in the
+       *  type only to stay tolerant of an older device still reporting one. */
       kind: "pattern" | "sprite";
       state: "native" | "interp" | "off";
       reason: string | null;
@@ -184,6 +185,10 @@ export interface DeviceCaps {
   ota: boolean;
   psram: boolean;
   assets: boolean;
+  /** `/api/sprites*` exists — sprites are first-class records on this
+   *  firmware (Gitea #740). Absent on anything older, which is why the
+   *  console reads it as "false" rather than assuming the routes are there. */
+  sprites?: boolean;
 }
 
 /** One row of `GET /api/patterns`. */
@@ -949,7 +954,75 @@ export class DeviceSession {
     return (await res.json()) as { ok: boolean; error?: string };
   }
   // ---- end scenes ---------------------------------------------------
+
+  // ---- sprites (Gitea #740; routes in the sprite contract §4, record in
+  //      crates/luxel-core/src/sprite.rs) --------------------------------
+  // Everything crosses as the RAW `LXSP` RECORD (octet-stream), never JSON:
+  // one byte layout is the flash bytes, the wire bytes, the playground's
+  // stored bytes and the compositor's input, so there is nothing to encode.
+  // Refusals come back as `{"ok":false,"error":"sprite: …"}` with the
+  // sentences `luxel_core::sprite::check` produces.
+
+  /** Every stored sprite's METADATA (never its pixels) plus the byte cap. */
+  async sprites(): Promise<SpritesWire> {
+    // Same rule as `scenes()`: a 503 body is not an empty sprite library, and
+    // letting it parse as one would empty the Sprites tab on screen for a
+    // board that is only briefly out of heap (#753).
+    const res = await this.fetch("/api/sprites");
+    if (!res.ok) throw new Error(`sprites: HTTP ${res.status}`);
+    return (await res.json()) as SpritesWire;
+  }
+
+  /** One sprite's record, or null when the device has no such sprite. */
+  async spriteRecord(id: string): Promise<Uint8Array | null> {
+    const res = await this.fetch(`/api/sprites/${id}`);
+    if (!res.ok) return null;
+    return new Uint8Array(await res.arrayBuffer());
+  }
+
+  /** Create (`id` empty) or replace a sprite. A bare POST whose record
+   *  carries an existing sprite's NAME replaces that one — the pattern
+   *  store's upsert rule, so saving from the editor is idempotent. */
+  async saveSprite(id: string, record: Uint8Array): Promise<SpriteSaveResult> {
+    const res = await this.fetch(id === "" ? "/api/sprites" : `/api/sprites/${id}`, {
+      method: "POST",
+      // An ArrayBuffer, not the view: `BodyInit` takes a buffer (as
+      // `assetsUpload` does), and copying it also guarantees the body is
+      // exactly the record even if the caller handed us a view into something
+      // larger.
+      body: new Uint8Array(record).buffer as ArrayBuffer,
+    });
+    return (await res.json()) as SpriteSaveResult;
+  }
+
+  async deleteSprite(id: string): Promise<{ ok: boolean; error?: string }> {
+    const res = await this.fetch(`/api/sprites/${id}`, { method: "DELETE" });
+    return (await res.json()) as { ok: boolean; error?: string };
+  }
+  // ---- end sprites --------------------------------------------------
 }
+
+/** One row of `GET /api/sprites` — metadata only; the pixels are a separate
+ *  GET, because a library of 64×64 sprites is megabytes and a tab only needs
+ *  the names and the sizes. */
+export interface SpriteRow {
+  id: string;
+  name: string;
+  w: number;
+  h: number;
+  frames: number;
+  fps: number;
+  colors: number;
+  bytes: number;
+}
+
+/** `GET /api/sprites`. `max_bytes` is the per-record ceiling (16 KiB). */
+export interface SpritesWire {
+  sprites: SpriteRow[];
+  max_bytes?: number;
+}
+
+export type SpriteSaveResult = { ok: true; id: string } | { ok: false; error: string };
 
 /** `GET /api/scenes/<id>` — the JSON shape of `scene::push_json`. Typed in
  *  `lib/scene.ts` (`SceneJson`); re-declared loosely here so `lib/device.ts`

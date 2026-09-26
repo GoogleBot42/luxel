@@ -4403,93 +4403,15 @@ try {
         live.layers[0].name,
       );
       await scPage.screenshot({ path: `${shotDir}/device-e2e-scenes-editor.png` });
-      // ---- the sprite layer and the text slot, on a real console ---------
-      // (Gitea #481 / #486; mockups S7c · S7h). What the playground harness
-      // cannot show: that painting a pixel rewrites the sprite's PATTERN in
-      // the DEVICE's store, and that the slot row echoes what `POST
-      // /api/text` put there.
+      // ---- the text slot, on a real console -------------------------------
+      // (Gitea #486; mockup S7h). What the playground harness cannot show:
+      // that the slot row echoes what `POST /api/text` put there.
+      //
+      // The SPRITE half of this block moved to its own section (search
+      // "Sprites on a console") when a sprite became a first-class RECORD
+      // (#740/#741): there is no sprite-tagged pattern to seed and no
+      // paint-on-the-stage tool row to find any more.
       {
-        // a sprite in the device's store for the layer to bind
-        const spr =
-          "// @sprite w=4 h=4 frames=1 fps=0\n" +
-          "var sprH = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]\n" +
-          "var sprS = [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]\n" +
-          "var sprV = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]\n" +
-          "\nvar sprW = 4\nvar sprHt = 4\n" +
-          "\nexport function renderFrame() {\n  blit(sprH, sprS, sprV, sprW, sprHt, 0, 0, 3)\n}\n";
-        const put = await fetch(`${SC}/api/patterns`, {
-          method: "POST",
-          body: await lxpBody("Dot", spr, 4096),
-        }).then((r) => r.json());
-        check("sprite: a sprite-tagged pattern stores like any other", put.ok === true, JSON.stringify(put));
-        const sprId = put.id;
-        await sleep(1200); // the console's pattern poll has to see it
-
-        await scPage.click('[data-role="scene-add-layer"]');
-        await sleep(300);
-        await scPage.click('[data-role="scene-add-sprite"]');
-        // the picker only opens once the console KNOWS what is a sprite, and
-        // a device row s source streams in after its name
-        await scPage.waitForSelector(
-          '[data-role="pattern-picker"] [data-role="picker-item"][data-kind="pattern"]',
-          { timeout: 15000 },
-        );
-        await sleep(400);
-        // the store has one now, so the picker opens rather than a blank
-        // being made — and it offers SPRITES only (#700)
-        const offered = await scPage
-          .$$eval('[data-role="pattern-picker"] [data-role="picker-item"][data-kind="pattern"]', (els) =>
-            els.map((e) => (e.querySelector(".pknm")?.textContent ?? "").trim()),
-          )
-          .catch(() => []);
-        if (offered.length > 0)
-          check(
-            "sprite: the picker offers sprite-tagged patterns only (#700)",
-            offered.every((n) => n === "Dot"),
-            JSON.stringify(offered),
-          );
-        await scPage
-          .$eval('[data-role="pattern-picker"] [data-role="picker-item"][data-kind="pattern"]', (el) => el.click())
-          .catch(() => {});
-        await sleep(1200);
-        check(
-          "sprite: a bound sprite layer puts the tool row above the preview (S7c)",
-          (await scPage.$('[data-role="sprite-tools"]')) !== null,
-        );
-
-        // paint one cell inside the layer's box
-        await scPage.$eval('[data-role="scene-stage"]', (c) => {
-          const r = c.getBoundingClientRect();
-          c.dispatchEvent(
-            new PointerEvent("pointerdown", {
-              clientX: r.left + (1.5 / c.width) * r.width,
-              clientY: r.top + (1.5 / c.height) * r.height,
-              bubbles: true,
-            }),
-          );
-        });
-        // The store write is debounced 600 ms behind the stroke and then has
-        // to compile and POST, so POLL for it rather than guess a sleep — a
-        // loaded machine took longer than a fixed wait once.
-        let back = {};
-        let lit = 0;
-        for (let i = 0; i < 16 && lit === 0; i++) {
-          await sleep(500);
-          // by NAME, not by the id captured above: a same-name save
-          // overwrites, and the device is free to hand the row a new id
-          const rows = await fetch(`${SC}/api/patterns`).then((r) => r.json());
-          const dotId = (rows.patterns ?? []).find((p) => p.name === "Dot")?.id ?? sprId;
-          back = await fetch(`${SC}/api/patterns/${dotId}`).then((r) => r.json());
-          lit = (JSON.parse(/var sprV = (\[[^\]]*\])/.exec(back.source ?? "")?.[1] ?? "[]") ?? [])
-            .filter((v) => v > 0).length;
-        }
-        check(
-          "sprite: painting rewrites the sprite's PATTERN on the device",
-          lit === 1 && (back.source ?? "").startsWith("// @sprite w=4 h=4"),
-          `${lit} lit · ${(back.source ?? "").slice(0, 32)}`,
-        );
-        await scPage.screenshot({ path: `${shotDir}/device-e2e-sprite.png` });
-
         // ---- the text slot's echo (S7h) ----
         await fetch(`${SC}/api/text`, { method: "POST", body: "0 PARTY 21:00" });
         await scPage.click('[data-role="scene-add-layer"]');
@@ -4531,15 +4453,25 @@ try {
       }
       // GROW the record — replacing a scene with one the same size fits the
       // blob that already holds it, so the refusal needs another layer.
-      await scPage.click('[data-role="scene-add-layer"]');
-      await sleep(300);
-      await scPage.click('[data-role="scene-add-color"]');
-      await sleep(400);
-      await scPage.click('[data-role="scene-save"]');
-      await sleep(1000);
-      const bar = await scPage
-        .$eval('[data-role="api-error-bar"]', (el) => (el.textContent ?? "").trim())
-        .catch(() => "");
+      //
+      // A LAYER AT A TIME, until the store says no: the fill loop above stops
+      // at the first filler that does not fit, so it can leave a hole of up to
+      // one filler (~95 B) behind, and a single ~60 B colour layer sometimes
+      // fits in it. Betting on one layer made this check depend on how big the
+      // scene the rest of the section happened to build was (it flipped when
+      // the sprite layer moved out to its own section, #740).
+      let bar = "";
+      for (let i = 0; i < 4 && bar === ""; i++) {
+        await scPage.click('[data-role="scene-add-layer"]');
+        await sleep(300);
+        await scPage.click('[data-role="scene-add-color"]');
+        await sleep(400);
+        await scPage.click('[data-role="scene-save"]');
+        await sleep(1000);
+        bar = await scPage
+          .$eval('[data-role="api-error-bar"]', (el) => (el.textContent ?? "").trim())
+          .catch(() => "");
+      }
       check(
         "scenes: a full store is refused in the ONE error strip, with the numbers",
         /shares 3,840 bytes of storage/.test(bar),
@@ -4549,6 +4481,451 @@ try {
     } finally {
       await scPage.close();
       scDev.kill();
+    }
+  }
+
+  // ── Sprites on a console (Gitea #740 · #741) ─────────────────────────────
+  //
+  // A sprite is a FIRST-CLASS RECORD now — its own tab, its own store, its own
+  // `LXSP` bytes on `/api/sprites` — not a `// @sprite` pattern with a
+  // paint-on-the-stage tool row. `web/tools/e2e.mjs` drives the same flows
+  // against the playground's localStorage backing; what only a console can
+  // show is the half this section is about: the bytes reach the DEVICE, the
+  // device's own list/record/delete routes are what the tab is reading and
+  // writing, and the one-release migration moves a tagged pattern out of the
+  // device's Patterns library at boot.
+  //
+  // Its own mirror, because the migration runs ONCE per page boot: the legacy
+  // pattern has to be in the store before the console ever opens.
+  {
+    const SP_PORT = E2E.mirror.devSprites; // E2E_PORT + 54
+    const SP = `http://127.0.0.1:${SP_PORT}`;
+    const spDev = spawn(
+      "../target/debug/luxel",
+      ["serve", ...NO_NETIN, "--port", String(SP_PORT), "--board", "panel", "--pixels", "4096"],
+      { stdio: ["ignore", "pipe", "inherit"] },
+    );
+    await new Promise((resolve, reject) => {
+      spDev.stdout.on("data", (d) => String(d).includes("luxel serve:") && resolve());
+      spDev.on("exit", () => reject(new Error("sprites mirror died")));
+      setTimeout(() => reject(new Error("sprites mirror start timeout")), 30000);
+    });
+    process.on("exit", () => spDev.kill());
+
+    // Both seeds go in BEFORE the console boots: the base pattern so the
+    // scene's `Add layer › Pattern` has something to bind, and the legacy
+    // `// @sprite` pattern because `refreshSprites()` runs the migration from
+    // `onMount` and only once per page (stores/sprites.ts).
+    //
+    // The legacy source is the OLD emitter's shape, `blit()` body and all, so
+    // it compiles to real bytecode the way a pattern saved by the previous
+    // release did: tag line, name line, the three parallel HSV arrays, and
+    // `v == 0` as the transparency key (two lit texels → two colours).
+    const LEGACY = [
+      "// @sprite w=2 h=2 frames=1 fps=0",
+      "// Old heart",
+      "",
+      "var sprH = [0, 0, 0.3333, 0]",
+      "var sprS = [1, 0, 1, 0]",
+      "var sprV = [1, 0, 1, 0]",
+      "",
+      "var sprW = 2",
+      "var sprHt = 2",
+      "",
+      "export function renderFrame() {",
+      "  blit(sprH, sprS, sprV, sprW, sprHt, 0, 0, 3)",
+      "}",
+      "",
+    ].join("\n");
+    const basePut = await fetch(`${SP}/api/patterns`, {
+      method: "POST",
+      body: await lxpBody("Sprite base", "export function render2D(index, x, y) { hsv(x, 1, 0.25) }", 4096),
+    }).then((r) => r.json());
+    const legacyPut = await fetch(`${SP}/api/patterns`, {
+      method: "POST",
+      body: await lxpBody("Old heart", LEGACY, 4096),
+    }).then((r) => r.json());
+    check(
+      "sprites: the fixtures store like any other pattern (base + a legacy `// @sprite`)",
+      basePut.ok === true && legacyPut.ok === true,
+      `${JSON.stringify(basePut)} ${JSON.stringify(legacyPut)}`,
+    );
+
+    const spPage = await browser.newPage();
+    try {
+      await spPage.setViewport({ width: 1400, height: 950 });
+      await gotoConsole(spPage, SP);
+      await spPage.waitForSelector('[data-role="tab-sprites"]', { timeout: 15000 });
+      check("sprites: a matrix console has the Sprites tab (#740)", true);
+
+      // ---- the ONE-RELEASE migration, on a DEVICE store (#740 step 3) ----
+      // `migrateTaggedSprites` saves the sprite FIRST and deletes the pattern
+      // LAST, each a round trip, so poll for the end state rather than guess
+      // a sleep.
+      let pats = [];
+      let migList = { sprites: [] };
+      for (let i = 0; i < 40; i++) {
+        await sleep(400);
+        pats = (await fetch(`${SP}/api/patterns`).then((r) => r.json())).patterns ?? [];
+        migList = await fetch(`${SP}/api/sprites`).then((r) => r.json());
+        if (!pats.some((p) => p.name === "Old heart") && (migList.sprites ?? []).length === 1) break;
+      }
+      const migrated = (migList.sprites ?? [])[0] ?? {};
+      check(
+        "migration: the `// @sprite` pattern LEFT the device's Patterns library",
+        pats.some((p) => p.name === "Sprite base") && !pats.some((p) => p.name === "Old heart"),
+        JSON.stringify(pats.map((p) => p.name)),
+      );
+      check(
+        "migration: it is a sprite RECORD on the device now, geometry and colours intact",
+        (migList.sprites ?? []).length === 1 &&
+          migrated.name === "Old heart" &&
+          migrated.w === 2 &&
+          migrated.h === 2 &&
+          migrated.frames === 1 &&
+          // `v == 0` was the transparency key, so only the two lit texels are
+          // colours — an opaque black one would have been a third
+          migrated.colors === 2,
+        JSON.stringify(migList.sprites),
+      );
+      // It has done its job, and every count below is about the sprite the UI
+      // makes — so clear it through the route that owns it.
+      const delMig = await fetch(`${SP}/api/sprites/${migrated.id}`, { method: "DELETE" }).then(
+        (r) => r.json(),
+      );
+      check("sprites: DELETE /api/sprites/<id> removes a record", delMig.ok === true, JSON.stringify(delMig));
+
+      // ---- the Sprites tab ----
+      await spPage.click('[data-role="tab-sprites"]');
+      await spPage.waitForSelector('[data-role="sprites-panel"]', { timeout: 10000 });
+      await sleep(900);
+      check(
+        "sprites: a matrix console's tab is the library itself, not the fixture gate",
+        (await spPage.$('[data-role="sprites-empty-fixture"]')) === null &&
+          (await spPage.$('[data-role="sprites-empty"]')) !== null,
+      );
+      await spPage.screenshot({ path: `${shotDir}/device-e2e-sprites-empty.png` });
+
+      // ---- `+ New sprite` → the editor, on the DEVICE's record ----
+      await spPage.$eval('[data-role="new-sprite"]', (el) => el.click());
+      await spPage.waitForSelector('[data-role="sprite-editor-view"]:not([hidden])', {
+        timeout: 10000,
+      });
+      await sleep(800);
+      check(
+        "sprites: + New sprite opens the editor on #/sprites/<id>",
+        /#\/sprites\/[0-9a-f]{8}$/.test(spPage.url()),
+        spPage.url(),
+      );
+      const blank = await fetch(`${SP}/api/sprites`).then((r) => r.json());
+      check(
+        "sprites: + New sprite is a record on the DEVICE, not a browser draft",
+        (blank.sprites ?? []).length === 1 &&
+          blank.sprites[0].w === 8 &&
+          blank.sprites[0].frames === 1 &&
+          blank.sprites[0].colors === 0,
+        JSON.stringify(blank.sprites),
+      );
+      const sprId = blank.sprites[0].id;
+
+      // ---- paint two texels with two colours ----
+      // The brush is the app's ONE colour control (SceneSwatch → ColorPicker),
+      // scoped to this screen: every screen is mounted at once, so an unscoped
+      // `color-hex` can resolve to another editor's picker (.claude/rules/web.md).
+      const SPV = '[data-role="sprite-editor-view"]';
+      const setBrush = async (hex) => {
+        await spPage.click(`${SPV} [data-role="sprite-color"] button.swatch`);
+        await spPage.waitForSelector(`${SPV} [data-role="color-hex"]`, { timeout: 3000 });
+        await spPage.$eval(
+          `${SPV} [data-role="color-hex"]`,
+          (el, v) => {
+            el.value = v;
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+          },
+          hex,
+        );
+        await sleep(300);
+        await spPage.keyboard.press("Escape"); // Popover closes on Escape
+        await sleep(250);
+      };
+      // the canvas is drawn at an INTEGER zoom and says which (`data-zoom`),
+      // so a texel's centre is exact arithmetic in CSS pixels
+      const paint = async (col, row) => {
+        await spPage.$eval(
+          `${SPV} [data-role="sprite-canvas"]`,
+          (c, cx, cy) => {
+            const r = c.getBoundingClientRect();
+            const z = Number(c.dataset.zoom);
+            const o = {
+              bubbles: true,
+              pointerId: 9,
+              pointerType: "mouse",
+              isPrimary: true,
+              buttons: 1,
+            };
+            const x = r.left + (cx + 0.5) * z;
+            const y = r.top + (cy + 0.5) * z;
+            c.dispatchEvent(new PointerEvent("pointerdown", { ...o, clientX: x, clientY: y }));
+            c.dispatchEvent(
+              new PointerEvent("pointerup", { ...o, buttons: 0, clientX: x, clientY: y }),
+            );
+          },
+          col,
+          row,
+        );
+        await sleep(250);
+      };
+
+      await setBrush("#e05555");
+      await paint(0, 0);
+      await setBrush("#5fbf7a");
+      await paint(2, 2);
+      const inUse = await spPage.$$eval(`${SPV} [data-role="sprite-inuse-swatch"]`, (els) =>
+        els.map((e) => e.dataset.value ?? "").join(","),
+      );
+      check(
+        "sprite editor: two painted texels put two colours in In use (#741)",
+        inUse === "e05555,5fbf7a",
+        inUse,
+      );
+
+      // ---- a second frame, and an fps ----
+      await spPage.click(`${SPV} [data-role="sprite-frame-add"]`);
+      await sleep(500);
+      const frames = await spPage.$$eval(`${SPV} [data-role="sprite-frame"]`, (els) => els.length);
+      check("sprite editor: + adds a frame and the strip shows both", frames === 2, String(frames));
+      await spPage.$eval(`${SPV} [data-role="sprite-fps"]`, (el) => {
+        el.value = "12";
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      await sleep(400);
+      await spPage.screenshot({ path: `${shotDir}/device-e2e-sprite-editor.png` });
+
+      // ---- Save: the bytes go to the device ----
+      await spPage.click(`${SPV} [data-role="sprite-save"]`);
+      await sleep(1200);
+      // NOT `saveState()` from e2e-common — that reads the PATTERN editor's
+      // header; the sprite editor carries its own contract string (#738).
+      const sprState = await spPage.$eval(
+        `${SPV} [data-role="sprite-save-state"]`,
+        (el) => el.dataset.saveState ?? "",
+      );
+      check(
+        "sprite editor: a console's Save settles `saved · on device`",
+        sprState === "saved · on device",
+        sprState,
+      );
+
+      const list = await fetch(`${SP}/api/sprites`).then((r) => r.json());
+      const row = (list.sprites ?? [])[0] ?? {};
+      check(
+        "sprites: the device holds ONE record, with the editor's frames, fps and colours",
+        (list.sprites ?? []).length === 1 &&
+          row.id === sprId &&
+          row.w === 8 &&
+          row.h === 8 &&
+          row.frames === 2 &&
+          row.fps === 12 &&
+          row.colors === 2,
+        JSON.stringify(list.sprites),
+      );
+      const recRes = await fetch(`${SP}/api/sprites/${row.id}`);
+      const rec = new Uint8Array(await recRes.arrayBuffer());
+      check(
+        "sprites: GET /api/sprites/<id> is the raw `LXSP` record the list sized",
+        (recRes.headers.get("content-type") ?? "").startsWith("application/octet-stream") &&
+          rec.length === row.bytes &&
+          String.fromCharCode(...rec.slice(0, 4)) === "LXSP",
+        `${recRes.headers.get("content-type")} · ${rec.length} B vs ${row.bytes} · ${String.fromCharCode(...rec.slice(0, 4))}`,
+      );
+
+      // ---- back to the tab: one tile, carrying the record's own metadata ----
+      await spPage.click(`${SPV} [data-role="sprite-editor-back"]`);
+      await sleep(1000);
+      const tiles = await spPage.$$eval('[data-role="sprite-tile"]', (els) => els.length);
+      const tmeta = await spPage
+        .$eval('[data-role="sprite-tile-meta"]', (el) => (el.textContent ?? "").trim())
+        .catch(() => "");
+      check(
+        "sprites: the tab shows one tile, reading `8×8 · 2 frames` off the device row",
+        tiles === 1 && tmeta === "8×8 · 2 frames",
+        `${tiles} tiles · ${tmeta}`,
+      );
+      await spPage.screenshot({ path: `${shotDir}/device-e2e-sprites-tab.png` });
+
+      // ---- a scene: a pattern base, then `Add layer › Sprite` ----
+      await spPage.click('[data-role="tab-scenes"]');
+      await spPage.waitForSelector('[data-role="scenes-panel"]', { timeout: 10000 });
+      await sleep(700);
+      await spPage.$eval('[data-role="new-scene"]', (el) => el.click());
+      await spPage.waitForSelector('[data-role="scene-editor-view"]:not([hidden])', {
+        timeout: 10000,
+      });
+      await sleep(800);
+      // the base layer: `Add layer › Pattern` opens the picker on the DEVICE's
+      // library, so bind the pattern seeded above
+      await spPage.click('[data-role="scene-add-layer"]');
+      await sleep(300);
+      await spPage.click('[data-role="scene-add-pat"]');
+      await spPage.waitForSelector(
+        '[data-role="pattern-picker"] [data-role="picker-item"][data-kind="pattern"]',
+        { timeout: 15000 },
+      );
+      await sleep(400);
+      await spPage.$eval(
+        '[data-role="pattern-picker"] [data-role="picker-item"][data-kind="pattern"]',
+        (el) => el.click(),
+      );
+      await sleep(900);
+
+      // the sprite layer. It binds NOTHING on its own — the inspector's Sprite
+      // row is the picker, so `Add layer › Sprite` never invents a drawing —
+      // and the stage keeps its MARQUEE: there is no paint mode here any more
+      // (#741 item 1; `components/scene/SpriteTools.svelte` is gone).
+      await spPage.click('[data-role="scene-add-layer"]');
+      await sleep(300);
+      await spPage.click('[data-role="scene-add-sprite"]');
+      await sleep(800);
+      check(
+        "sprite layer: the inspector carries the sprite PICKER, not a tool row",
+        (await spPage.$('[data-role="scene-sprite-pick"]')) !== null &&
+          (await spPage.$('[data-role="scene-editor-view"] [data-role="sprite-tools"]')) === null,
+      );
+      check(
+        "sprite layer: the stage keeps its marquee (no paint mode)",
+        (await spPage.$('[data-role="scene-marquee"]')) !== null,
+      );
+
+      // pick the device's sprite, by name
+      await spPage.click('[data-role="scene-sprite-pick"]');
+      await sleep(500);
+      const chose = await spPage.$$eval('[data-role="scene-sprite-menu"] .orow', (els) => {
+        const r = els.find((e) => (e.textContent ?? "").includes("Sprite 1"));
+        if (!r) return null;
+        r.click();
+        return true;
+      });
+      check("sprite layer: the picker offers the DEVICE's sprite by name", chose === true);
+      await sleep(900);
+      const natural = await spPage
+        .$eval('[data-role="scene-sprite-natural"]', (el) => (el.textContent ?? "").trim())
+        .catch(() => "");
+      check(
+        "sprite layer: an unset box is the RECORD's own size, read off the device row",
+        natural === "8×8 · natural size",
+        natural,
+      );
+
+      // THE assertion (#741 item 12): a sprite layer moves with the marquee
+      // exactly like a colour or text one. Grab near the box's top-left (the
+      // fresh layer sits at 2, 2 of 64) and drop it further in.
+      const boxBefore = await spPage.$$eval(
+        '[data-role="scene-box-x"], [data-role="scene-box-y"]',
+        (els) => els.map((e) => e.value).join(","),
+      );
+      await spPage.evaluate(() => {
+        const v = document.querySelector('[data-role="scene-editor-view"]');
+        const m = v.querySelector('[data-role="scene-marquee"]');
+        const s = v.querySelector('[data-role="scene-stage"]').getBoundingClientRect();
+        const o = { bubbles: true, pointerId: 5, pointerType: "mouse", isPrimary: true, buttons: 1 };
+        m.dispatchEvent(
+          new PointerEvent("pointerdown", {
+            ...o,
+            clientX: s.left + (3 / 64) * s.width,
+            clientY: s.top + (3 / 64) * s.height,
+          }),
+        );
+        m.dispatchEvent(
+          new PointerEvent("pointermove", {
+            ...o,
+            clientX: s.left + (21 / 64) * s.width,
+            clientY: s.top + (25 / 64) * s.height,
+          }),
+        );
+        m.dispatchEvent(new PointerEvent("pointerup", { ...o, buttons: 0 }));
+      });
+      await sleep(600);
+      const boxAfter = await spPage.$$eval(
+        '[data-role="scene-box-x"], [data-role="scene-box-y"]',
+        (els) => els.map((e) => e.value).join(","),
+      );
+      check(
+        "sprite layer: dragging the marquee MOVES it (#741 item 12)",
+        boxBefore === "2,2" && /^[0-9]+,[0-9]+$/.test(boxAfter) && boxAfter !== "2,2",
+        `${boxBefore} → ${boxAfter}`,
+      );
+      await spPage.screenshot({ path: `${shotDir}/device-e2e-sprite-layer.png` });
+
+      // …and the DEVICE's record is what moved, once it is saved
+      await spPage.click('[data-role="scene-save"]');
+      await sleep(1200);
+      const scList = await fetch(`${SP}/api/scenes`).then((r) => r.json());
+      const scId = (scList.scenes ?? [])[0]?.id ?? "";
+      const stored = await fetch(`${SP}/api/scenes/${scId}`).then((r) => r.json());
+      const sprLayer = (stored.layers ?? []).find((l) => l.type === "sprite") ?? {};
+      check(
+        "sprite layer: the device's scene record holds the moved box and the sprite id",
+        `${sprLayer.x},${sprLayer.y}` === boxAfter &&
+          (stored.layers ?? []).some((l) => l.type === "pat"),
+        `${JSON.stringify(sprLayer)} of ${(stored.layers ?? []).map((l) => l.type).join(",")}`,
+      );
+
+      // ---- `Edit ↗` and the way back ----
+      await spPage.click('[data-role="scene-sprite-edit"]');
+      await spPage.waitForSelector('[data-role="sprite-editor-view"]:not([hidden])', {
+        timeout: 10000,
+      });
+      await sleep(700);
+      const backLabel = await spPage.$eval(
+        `${SPV} [data-role="sprite-editor-back"] .backlabel`,
+        (el) => (el.textContent ?? "").trim(),
+      );
+      check(
+        "sprite layer: `Edit ↗` opens the sprite editor, with the SCENE as its way back",
+        backLabel === "Scene" && /#\/sprites\/[0-9a-f]{8}$/.test(spPage.url()),
+        `${backLabel} · ${spPage.url()}`,
+      );
+      await spPage.click(`${SPV} [data-role="sprite-editor-back"]`);
+      await spPage.waitForSelector('[data-role="scene-editor-view"]:not([hidden])', {
+        timeout: 10000,
+      });
+      await sleep(700);
+      check(
+        "sprite layer: `← Scene` returns to the scene, not to the Sprites tab",
+        (await spPage.$('[data-role="sprite-editor-view"]:not([hidden])')) === null &&
+          spPage.url().includes(`#/scenes/${scId}`),
+        spPage.url(),
+      );
+
+      // ---- delete it from the tab: the DEVICE's record goes ----
+      // Out of the scene editor FIRST: a full-screen editor replaces the
+      // shell, tab strip and all, so no `tab-*` is in the DOM while one is up.
+      await spPage.click('[data-role="scene-editor-back"]');
+      await spPage.waitForSelector('[data-role="tab-sprites"]', { timeout: 10000 });
+      await sleep(500);
+      await spPage.click('[data-role="tab-sprites"]');
+      await spPage.waitForSelector('[data-role="sprite-tile"]', { timeout: 10000 });
+      await sleep(700);
+      await spPage.hover('[data-role="sprite-tile"]');
+      await sleep(200);
+      await spPage.click('[data-role="sprite-tile"] [data-role="sprite-tile-menu"]');
+      await sleep(300);
+      await spPage.click('[data-role="sprite-menu-delete"]');
+      await acceptDialog(spPage); // the app's ONE dialog primitive, danger confirm
+      await sleep(1200);
+      const gone = await fetch(`${SP}/api/sprites`).then((r) => r.json());
+      check(
+        "sprites: deleting the tile deletes the DEVICE's record",
+        (gone.sprites ?? []).length === 0,
+        JSON.stringify(gone.sprites),
+      );
+      check(
+        "sprites: and the tab is back to its empty state",
+        (await spPage.$('[data-role="sprites-empty"]')) !== null,
+      );
+    } finally {
+      await spPage.close();
+      spDev.kill();
     }
   }
 

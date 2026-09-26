@@ -16,10 +16,13 @@
   import Patterns from "./pages/Patterns.svelte";
   import Playlist from "./pages/Playlist.svelte";
   import Scenes from "./pages/Scenes.svelte";
+  import Sprites from "./pages/Sprites.svelte";
+  import SpriteEditor from "./pages/SpriteEditor.svelte";
   import SceneEditor from "./pages/SceneEditor.svelte";
   import Settings from "./pages/Settings.svelte";
   import { uiLayoutKind } from "./lib/settingsCaps";
   import { refreshScenes } from "./stores/scenes";
+  import { refreshSprites } from "./stores/sprites";
   import BcBanner from "./components/BcBanner.svelte";
   import ErrorBar from "./components/ErrorBar.svelte";
   import RebootBar from "./settings/RebootBar.svelte";
@@ -61,7 +64,7 @@
   // §5.4c — see `tabs` below), `Playlist` + `Settings` on a console. The
   // editors are NOT tabs: each opens full-screen over the home tab, with a
   // back button. `tab` is the home you return to.
-  type Tab = "patterns" | "scenes" | "playlist" | "settings";
+  type Tab = "patterns" | "scenes" | "sprites" | "playlist" | "settings";
   let tab: Tab = "patterns";
   /** Full-screen editor open (over the home tab). */
   let editing = false;
@@ -76,6 +79,15 @@
   let sceneEditing = false;
   /** Which scene it holds; the route carries it (`#/scenes/<id>`). */
   let sceneId = "";
+  /** The sprite editor's screen (#740/#741) — the FOURTH full-screen one, and
+   *  the second reached from a tab, so `tab` stays `sprites` while it is up
+   *  (or `scenes`, when a scene's sprite layer opened it). */
+  let spriteEditing = false;
+  /** Which sprite it holds; `#/sprites/<id>`. */
+  let spriteId = "";
+  /** The scene to return to when the sprite editor was opened FROM one. Not a
+   *  route segment: it is "where I came from", not "what is open". */
+  let spriteReturnScene = "";
   /** First-load cover: hides the app until we've decided playground vs device
    *  (and, on a device, loaded its running pattern) so nothing flashes first. */
   let booting = true;
@@ -109,6 +121,10 @@
   $: tabs = [
     { id: "patterns" as const, label: "Patterns", show: true },
     { id: "scenes" as const, label: "Scenes", show: scenesReady },
+    // SPRITES (#740) is gated identically to Scenes and for the same reason: a
+    // sprite is drawn for a scene layer, and a scene needs a regular 2D grid.
+    // Same test, deliberately not a second one.
+    { id: "sprites" as const, label: "Sprites", show: scenesReady },
     { id: "playlist" as const, label: "Playlist", show: $device !== null },
     { id: "settings" as const, label: "Settings", show: $device !== null },
   ].filter((t) => t.show);
@@ -130,9 +146,11 @@
       ? { page: "map" }
       : editing
         ? { page: "editor" }
-        : sceneEditing
-          ? { page: "scenes", id: sceneId }
-          : { page: tab }
+        : spriteEditing
+          ? { page: "sprites", id: spriteId }
+          : sceneEditing
+            ? { page: "scenes", id: sceneId }
+            : { page: tab }
   ) as Route;
 
   /** The route the URL last named, so nothing is pushed twice. */
@@ -163,21 +181,35 @@
       return;
     }
     editing = false;
-    if (r.page === "scenes") {
-      // …but only where the tab exists: a `#/scenes` link opened against a
-      // strip console lands on Patterns, the way `#/settings` does in the
-      // playground, rather than on a screen that has no fixture to draw on.
+    if (r.page === "scenes" || r.page === "sprites") {
+      // …but only where the tab exists: a `#/scenes` or `#/sprites` link opened
+      // against a strip console lands on Patterns, the way `#/settings` does in
+      // the playground, rather than on a screen with no fixture to draw on.
+      // Both tabs share the ONE gate (see `tabs` above).
       if (!scenesReady) {
         sceneEditing = false;
+        spriteEditing = false;
         tab = "patterns";
         return;
       }
+      if (r.page === "sprites") {
+        sceneEditing = false;
+        tab = "sprites";
+        spriteId = r.id ?? "";
+        spriteEditing = spriteId !== "";
+        // A URL-restored sprite editor has no scene to return to, whatever the
+        // previous navigation was: the fragment is the whole of what is open.
+        if (!spriteEditing) spriteReturnScene = "";
+        return;
+      }
+      spriteEditing = false;
       tab = "scenes";
       sceneId = r.id ?? "";
       sceneEditing = sceneId !== "";
       return;
     }
     sceneEditing = false;
+    spriteEditing = false;
     tab = r.page === "patterns" || $device !== null ? r.page : "patterns";
     if (tab === "playlist") void refreshPlaylist();
   }
@@ -187,8 +219,20 @@
    *  `Add to scene ▸` (#478) reach it from somewhere else entirely. */
   export function openScene(id: string): void {
     tab = "scenes";
+    spriteEditing = false;
     sceneId = id;
     sceneEditing = true;
+  }
+
+  /** Open a sprite in the full-screen sprite editor. `fromScene` is the scene
+   *  to return to — the scene editor's `Edit ↗` passes one, the Sprites tab
+   *  does not (#740). */
+  export function openSprite(id: string, fromScene = ""): void {
+    tab = fromScene === "" ? "sprites" : "scenes";
+    sceneEditing = false;
+    spriteReturnScene = fromScene;
+    spriteId = id;
+    spriteEditing = true;
   }
 
   function onPopState(): void {
@@ -341,6 +385,13 @@
     // deep link opens the scene EDITOR without the Scenes page ever mounting
     // active, so the library cannot be the page's to fetch (#480).
     void refreshScenes();
+    // The sprite library, once, at boot, and for one reason beyond the same
+    // deep-link argument: `refreshSprites` is what runs the ONE-RELEASE
+    // migration of `// @sprite` patterns (#740). Those records have to leave
+    // the Patterns library whether or not anyone opens the Sprites tab —
+    // otherwise a user who never does keeps seeing sprites offered as
+    // patterns, which is the confusion the ticket is about.
+    void refreshSprites();
     routing = true;
     booting = false;
   });
@@ -427,9 +478,11 @@
             class:active={tab === t.id}
             on:click={() => {
               tab = t.id;
-              // clicking the Scenes tab leaves the scene editor, exactly as
-              // clicking Patterns leaves the pattern editor
+              // clicking the Scenes or Sprites tab leaves its editor, exactly
+              // as clicking Patterns leaves the pattern editor
               sceneEditing = false;
+              spriteEditing = false;
+              spriteReturnScene = "";
               if (t.id === "playlist") void refreshPlaylist();
             }}
           >
@@ -558,22 +611,44 @@
        pattern and map editors. It is reached from the Scenes tab, so the tab
        stays `scenes` underneath it. -->
   <SceneEditor
-    active={sceneEditing && !editing && !mapEditing}
+    active={sceneEditing && !editing && !mapEditing && !spriteEditing}
     {sceneId}
     on:back={() => (sceneEditing = false)}
     on:open={(e) => openScene(e.detail)}
+    on:sprite={(e) => openSprite(e.detail, sceneId)}
+  />
+
+  <!-- The sprite editor (#740/#741): the FOURTH full-screen screen. Reached
+       from the Sprites tab, and directly from a scene's sprite layer — which
+       is what `on:scene` returns to. -->
+  <SpriteEditor
+    active={spriteEditing && !editing && !mapEditing}
+    {spriteId}
+    returnScene={spriteReturnScene}
+    on:back={() => {
+      spriteEditing = false;
+      spriteReturnScene = "";
+    }}
+    on:open={(e) => openSprite(e.detail, spriteReturnScene)}
+    on:scene={(e) => openScene(e.detail)}
   />
 
   <!-- Scenes is NOT wrapped in `{#if !$isPlayground}`: the playground has the
        tab too (D10), with the empty state that sets the fixture. -->
   <Scenes
-    active={!editing && !mapEditing && !sceneEditing && tab === "scenes"}
+    active={!editing && !mapEditing && !sceneEditing && !spriteEditing && tab === "scenes"}
     on:open={(e) => openScene(e.detail)}
+  />
+
+  <!-- Sprites, the same way and on the same gate. -->
+  <Sprites
+    active={!editing && !mapEditing && !sceneEditing && !spriteEditing && tab === "sprites"}
+    on:open={(e) => openSprite(e.detail)}
   />
 
   {#if !$isPlayground}
     <Playlist
-      active={!editing && !mapEditing && tab === "playlist" && !sceneEditing}
+      active={!editing && !mapEditing && tab === "playlist" && !sceneEditing && !spriteEditing}
       on:openscene={(e) => openScene(e.detail)}
     />
   {/if}

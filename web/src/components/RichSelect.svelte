@@ -184,9 +184,18 @@
                 stroke="#e8a33d"
                 stroke-opacity="0.5"
               />
-            {:else if o.icon === "fit-once" || o.icon === "fit-tile"}
-              <!-- the dashed frame is the layer's BOX; the solid squares are
-                   the sprite, at its own size either way -->
+            {:else if o.icon === "sprite"}
+              <!-- a sprite ROW in the scene inspector's picker (Gitea #740):
+                   a few texels, which is what a sprite is. The row's `desc`
+                   carries its real size and frame count. -->
+              {#each [[6, 8], [10, 8], [14, 8], [6, 12], [14, 12], [10, 16]] as p (`${p[0]}:${p[1]}`)}
+                <rect x={p[0]} y={p[1]} width="4" height="4" rx="0.8" fill="#e8a33d" />
+              {/each}
+            {:else if o.icon === "fit-once" || o.icon === "fit-contain" || o.icon === "fit-tile"}
+              <!-- the dashed frame is the layer's BOX; the accent shape is
+                   what the sprite does inside it. Scaling is real since
+                   #740/#741, so `Stretch` fills the frame, `Fit` is the
+                   uniformly-scaled square centred in it, and `Tile` repeats. -->
               <rect
                 x="3.5"
                 y="3.5"
@@ -198,7 +207,9 @@
                 stroke-dasharray="2 2"
               />
               {#if o.icon === "fit-once"}
-                <rect x="5.5" y="5.5" width="6" height="6" rx="1" fill="#e8a33d" />
+                <rect x="5.5" y="5.5" width="13" height="13" rx="1" fill="#e8a33d" />
+              {:else if o.icon === "fit-contain"}
+                <rect x="7.5" y="7.5" width="9" height="9" rx="1" fill="#e8a33d" />
               {:else}
                 {#each [5.5, 11, 16.5] as cy (cy)}
                   {#each [5.5, 11, 16.5] as cx (cx)}

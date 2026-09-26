@@ -1,81 +1,93 @@
 <script lang="ts">
-  // The SPRITE layer's inspector — mockup S7c, row for row: Name · Size ·
-  // Frames · Palette · Transparent · Box · Fit · Blend · Opacity · Delete.
+  // The SPRITE layer's inspector, after the #740/#741 redesign:
+  // Name · Sprite · Box · Fit · the blend tail. And nothing else.
   //
-  // Half of it is the SCENE's (the box, the blend tail) and half is the
-  // SPRITE's (size, frames, the palette read off its texels). The second half
-  // writes the sprite's PATTERN back to the store it came from, which is why
-  // those rows dispatch `resize` rather than `change`: the editor owns the
-  // save, this file only says what the user asked for (#481/#700).
+  // What LEFT, and why:
+  //   * Size / Frames / Palette — those describe the SPRITE, not the layer, and
+  //     a sprite is its own record with its own editor now. The Frames field in
+  //     particular was the one Jeremy caught doing nothing ("I set frames to 2
+  //     and 3 and saw nothing change"); it lives in the sprite editor's frame
+  //     strip, which is a real control.
+  //   * "Black pixels · sprites are always keyed" — a dead line stating a fact
+  //     about the format. Transparency is index 0 in the record now; there is
+  //     nothing to choose.
+  //
+  // What ARRIVED: a real sprite PICKER over the sprite store (the old empty
+  // state offered `Change…` only while the layer was unbound, so a layer bound
+  // to the wrong sprite had no way back), `Edit ↗` into the sprite editor with
+  // a return route, and an editable Box with a `natural` escape — because
+  // scaling is real now (#741 item 29: "'1:1 · sprites are never scaled'
+  // should that be an option?" — yes, it is `Fit`).
   import { createEventDispatcher } from "svelte";
   import BoxRow from "./BoxRow.svelte";
   import StyleTail from "./StyleTail.svelte";
   import RichSelect from "../RichSelect.svelte";
-  import { FIT_OPTIONS, KEY_OPTIONS, fitValue, labelOf } from "../../lib/blendMeta";
-  import { MAX_LAYER_NAME, truncateUtf8, type Fit, type SpriteTag } from "../../lib/scene";
-  import type { Layer } from "../../lib/scene";
-  import {
-    paletteCss,
-    SPRITE_MAX_COLORS,
-    SPRITE_MAX_EDGE,
-    spritePalette,
-    type Sprite,
-  } from "../../lib/sprite";
+  import { FIT_OPTIONS, fitValue, type RichOption } from "../../lib/blendMeta";
+  import { MAX_LAYER_NAME, truncateUtf8, type Fit, type Layer } from "../../lib/scene";
+  import { spriteMetaLine } from "../../lib/sprite";
+  import type { SpriteMeta } from "../../stores/sprites";
 
   export let layer: Layer;
-  /** The sprite tag parsed off its pattern source, when the browser has it. */
-  export let tag: SpriteTag | null = null;
-  /** Its texels, when the source is one this editor can draw on (#481). */
-  export let sprite: Sprite | null = null;
-  /** True while the rewritten pattern is on its way to the store. */
+  /** The sprite library — the picker's rows. */
+  export let library: SpriteMeta[] = [];
+  /** True while the sprite store has a write in flight. */
   export let saving = false;
 
   const dispatch = createEventDispatcher<{
     change: Layer;
-    pick: void;
+    /** Open the sprite editor on this layer's sprite, returning here. */
+    edit: void;
+    /** Make a blank sprite, bind it, and open it. */
     fresh: void;
-    resize: SpriteTag;
   }>();
 
-  /** The 16 cells S7c draws: the colours in use, then empties to the cap. */
-  $: palette = sprite ? spritePalette(sprite) : [];
-  $: cells = Array.from({ length: SPRITE_MAX_COLORS }, (_, i) => palette[i] ?? null);
+  $: id = layer.body.kind === "sprite" ? layer.body.id : "";
+  $: current = library.find((s) => s.id === id) ?? null;
+  /** The box, in the two states it has: unset on either axis = the sprite's
+   *  NATURAL size at (x, y) — the contract's rule, and the reason Fit only
+   *  appears once the box has a size to fit into. */
+  $: natural = layer.style.rect.w === 0 || layer.style.rect.h === 0;
+
+  /** One row per stored sprite, with its size and frame count as the row's
+   *  sentence — the picker explains itself like every other `RichSelect`. */
+  $: options = library.map(
+    (s): RichOption => ({
+      value: s.id,
+      label: s.name,
+      desc: spriteMetaLine(s.w, s.h, s.frames),
+      icon: "sprite",
+    }),
+  );
 
   function patchLayer(next: Partial<Layer>): void {
     dispatch("change", { ...layer, ...next });
   }
 
-  /** Fit is the ONE place `style.fit` means anything — `compose::blit_sprite`
-   *  reads it and nothing else does (see `lib/blendMeta.ts`). The narrowing
-   *  lives here rather than in the markup: svelte-check does not parse a TS
-   *  assertion inside a template expression. */
+  function setSprite(nextId: string): void {
+    if (layer.body.kind !== "sprite" || nextId === layer.body.id) return;
+    dispatch("change", { ...layer, body: { kind: "sprite", id: nextId } });
+  }
+
+  /** Fit is the ONE place `style.fit` means anything (`compose::blit_sprite`).
+   *  The narrowing lives here rather than in the markup: svelte-check does not
+   *  parse a TS assertion inside a template expression. */
   function setFit(v: string): void {
     patchLayer({ style: { ...layer.style, fit: v as Fit } });
   }
 
   /** The device refuses a layer name over 32 BYTES, and a refusal the console
    *  could have prevented is the console's bug — clamp on the way in and put
-   *  the clamped value back in the field so what you see is what is stored
-   *  (`MAX_LAYER_NAME`, docs/spec/scenes.md §1). */
+   *  the clamped value back in the field (`MAX_LAYER_NAME`). */
   function setName(el: HTMLInputElement): void {
     const name = truncateUtf8(el.value, MAX_LAYER_NAME);
     if (name !== el.value) el.value = name;
     patchLayer({ name });
   }
 
-  /** Size and Frames rewrite the SPRITE. Out-of-range is clamped in the field
-   *  rather than refused, for the same reason the name is. */
-  function resize(field: "w" | "h" | "frames", el: HTMLInputElement): void {
-    if (!tag) return;
-    const hi = field === "frames" ? 64 : SPRITE_MAX_EDGE;
-    const v = Math.max(1, Math.min(hi, Math.round(Number(el.value))));
-    if (!Number.isFinite(v)) {
-      el.value = String(tag[field]);
-      return;
-    }
-    if (String(v) !== el.value) el.value = String(v);
-    if (v === tag[field]) return;
-    dispatch("resize", { ...tag, [field]: v });
+  /** Back to the sprite's own size: zero the box on both axes. The inverse is
+   *  typing a size into w/h, or dragging a corner on the stage. */
+  function goNatural(): void {
+    patchLayer({ style: { ...layer.style, rect: { ...layer.style.rect, w: 0, h: 0 } } });
   }
 </script>
 
@@ -95,151 +107,98 @@
   />
 </div>
 
-<!-- The EMPTY state only. S7c draws a layer that already has a sprite and
-     has no row for picking one — and there is no `New sprite…` entry
-     anywhere in S1 or S7 either — so this is where a layer bound to nothing
-     gets one, and it disappears the moment it has. #700 asks for the picker
-     to offer sprites only, which the editor does by filtering the list. -->
-{#if !tag}
-  <div class="irow">
-    <div class="ilab">Sprite</div>
-    <div class="patrow">
-      <span class="hint" data-role="scene-sprite-state">none chosen</span>
+<!-- The picker is ALWAYS here, not only while the layer is unbound: changing
+     which sprite a layer draws is an ordinary edit, and the old inspector had
+     no row for it once one was chosen. -->
+<div class="irow start">
+  <div class="ilab" style="padding-top:7px">Sprite</div>
+  <div class="spritepick">
+    {#if library.length === 0}
+      <div class="hint" data-role="scene-sprite-state">no sprites yet</div>
+    {:else}
+      <RichSelect
+        value={id}
+        {options}
+        dataRole="scene-sprite-pick"
+        menuRole="scene-sprite-menu"
+        ariaLabel="which sprite this layer draws"
+        on:input={(e) => setSprite(e.detail)}
+      />
+    {/if}
+    <div class="pickrow">
+      <button
+        class="btn sm"
+        data-role="scene-sprite-edit"
+        disabled={id === ""}
+        data-reason={id === "" ? "choose a sprite first, or make a new one" : null}
+        title="open this sprite in the sprite editor"
+        on:click={() => dispatch("edit")}>Edit ↗</button
+      >
       <button class="btn sm" data-role="scene-sprite-new" on:click={() => dispatch("fresh")}
         >New…</button
       >
-      <button class="btn sm" data-role="scene-sprite-change" on:click={() => dispatch("pick")}
-        >Change…</button
-      >
     </div>
-  </div>
-{/if}
-
-<div class="irow">
-  <div class="ilab">Size</div>
-  <div class="boxrow" data-role="scene-sprite-size">
-    <label
-      >w <input
-        class="inp"
-        type="number"
-        min="1"
-        max={SPRITE_MAX_EDGE}
-        data-role="scene-sprite-w"
-        value={tag?.w ?? 0}
-        on:change={(e) => resize("w", e.currentTarget)}
-      /></label
-    >
-    <label
-      >h <input
-        class="inp"
-        type="number"
-        min="1"
-        max={SPRITE_MAX_EDGE}
-        data-role="scene-sprite-h"
-        value={tag?.h ?? 0}
-        on:change={(e) => resize("h", e.currentTarget)}
-      /></label
-    >
-    <span class="un">px</span>
-  </div>
-</div>
-
-<div class="irow start">
-  <div class="ilab" style="padding-top:5px">Frames</div>
-  <div>
-    <input
-      class="inp num xs"
-      style="width:58px"
-      type="number"
-      min="1"
-      data-role="scene-sprite-frames"
-      value={tag?.frames ?? 1}
-      on:change={(e) => resize("frames", e.currentTarget)}
-    />
-    <div class="hint" style="margin-top:6px" data-role="scene-sprite-frames-hint">
-      animation frames — a frame strip appears at 2+
-    </div>
-  </div>
-</div>
-
-<div class="irow start">
-  <div class="ilab" style="padding-top:2px">Palette</div>
-  <div>
-    <div class="pal" data-role="scene-sprite-palette" data-used={palette.length}>
-      {#each cells as c, i (i)}
-        {#if c}
-          <i style={`background:${paletteCss(c)}`}></i>
-        {:else}
-          <i class="empty"></i>
-        {/if}
-      {/each}
-    </div>
-    <div class="hint" style="margin-top:6px" data-role="scene-sprite-palette-hint">
-      {SPRITE_MAX_COLORS} colours
-    </div>
-  </div>
-</div>
-
-<div class="irow">
-  <div class="ilab">Transparent</div>
-  <div class="hint" data-role="scene-sprite-key">
-    {labelOf(KEY_OPTIONS, "black")} · sprites are always keyed
   </div>
 </div>
 
 <div class="irule"></div>
 
-<!-- w/h mirror the sprite: greyed, because a sprite is never scaled (S7c) -->
+<!-- w/h are EDITABLE now: with a box set, `Fit` decides how the sprite fills
+     it (stretch / fit / tile). `natural` puts the box back to "the sprite's
+     own size at (x, y)", which is what w/h = 0 means on the wire. -->
 <BoxRow
   rect={layer.style.rect}
-  sizeReadonly
   on:input={(e) => patchLayer({ style: { ...layer.style, rect: e.detail } })}
 />
 
-<!-- The sprite layer is the ONLY place `fit` does anything (`blit_sprite`:
-     `let tile = style.fit == Fit::Tile`), so this is where the chooser lives
-     — and it offers the two behaviours that exist rather than the three wire
-     words, because `contain` is a synonym of `fill` on every code path
-     (lib/blendMeta.ts). It used to be a dead line saying "1:1 · sprites are
-     never scaled", which was true of the size and silent about tiling. -->
 <div class="irow">
-  <div class="ilab">Fit</div>
-  <RichSelect
-    value={fitValue(layer.style.fit)}
-    options={FIT_OPTIONS}
-    dataRole="scene-sprite-fit"
-    menuRole="scene-fit-menu"
-    ariaLabel="how the sprite fills its box"
-    on:input={(e) => setFit(e.detail)}
-  />
+  <div class="ilab">Size</div>
+  <div class="pickrow">
+    {#if natural}
+      <span class="hint" data-role="scene-sprite-natural"
+        >{current ? `${current.w}×${current.h} · ` : ""}natural size</span
+      >
+    {:else}
+      <button
+        class="btn sm"
+        data-role="scene-sprite-natural-btn"
+        title="put the box back to the sprite's own size"
+        on:click={goNatural}>natural</button
+      >
+    {/if}
+  </div>
 </div>
+
+{#if !natural}
+  <div class="irow">
+    <div class="ilab">Fit</div>
+    <RichSelect
+      value={fitValue(layer.style.fit)}
+      options={FIT_OPTIONS}
+      dataRole="scene-sprite-fit"
+      menuRole="scene-fit-menu"
+      ariaLabel="how the sprite fills its box"
+      on:input={(e) => setFit(e.detail)}
+    />
+  </div>
+{/if}
 
 <div class="irule"></div>
 
 <StyleTail style={layer.style} on:change={(e) => patchLayer({ style: e.detail })} on:delete />
 
 <style>
-  .patrow {
+  .spritepick {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    min-width: 0;
+  }
+
+  .pickrow {
     display: flex;
     align-items: center;
-    gap: 10px;
-  }
-
-  /* the mock's inline `.un` on the Size row */
-  .un {
-    font: 11px/1 var(--mono);
-    color: var(--text-dim);
-  }
-
-  /* the spinners would not fit a 46px field (BoxRow keeps the same rule) */
-  input[type="number"] {
-    appearance: textfield;
-    -moz-appearance: textfield;
-  }
-
-  input[type="number"]::-webkit-outer-spin-button,
-  input[type="number"]::-webkit-inner-spin-button {
-    appearance: none;
-    margin: 0;
+    gap: 8px;
+    flex-wrap: wrap;
   }
 </style>

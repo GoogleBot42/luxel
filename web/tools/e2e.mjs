@@ -163,13 +163,13 @@ try {
   check("the examples dropdown is gone", (await page.$('[data-role="pattern-picker"]')) === null);
   // One Patterns tab (#467): the library / corpus / saved split is a source
   // control on the page, not a tab set. Scenes joined it in the playground
-  // (D10, #480) — it needs a 2D fixture, not a device, and hiding it here
-  // would make the feature undiscoverable. Playlist and Settings still need
-  // hardware and are still absent.
+  // (D10, #480) and Sprites joined Scenes (#740) — both need a 2D fixture, not
+  // a device, and hiding either here would make the feature undiscoverable.
+  // Playlist and Settings still need hardware and are still absent.
   const tabs = await page.$$eval('[data-role="tabs"] .tab', (e) => e.map((x) => x.textContent.trim()));
   check(
-    "the playground's tabs are Patterns and Scenes",
-    tabs.join(",") === "Patterns,Scenes",
+    "the playground's tabs are Patterns, Scenes and Sprites",
+    tabs.join(",") === "Patterns,Scenes,Sprites",
     tabs.join(","),
   );
   const segs = await page.$$eval('[data-role="patterns-sources"] button', (e) =>
@@ -1493,6 +1493,261 @@ try {
   await page.screenshot({ path: `${shotDir}/e2e-tiles-lattice.png` });
   await previewAs(page, "auto");
 
+  // ── Sprites, the playground half (Gitea #740 · #741) ───────────────────────
+  //
+  // A sprite is a FIRST-CLASS RECORD now, not a sprite-tagged pattern: its own
+  // tab, its own store, its own `LXSP` bytes. Jeremy: "Sprites should be a
+  // first class type. Make a new Sprite tab. That's where the sprite editor
+  // will be based out of."
+  //
+  // This block is the whole round trip: the tab's gate, `+ New sprite`, the
+  // redesigned editor (four LARGE labelled tools, the in-use colour grid
+  // instead of the drag-polluted recents, a real frame strip, the byte line),
+  // Save, and the tile the tab then shows. The sprite it makes is what the
+  // SCENE block below binds to a layer.
+  {
+    await page.click('[data-role="editor-back"]').catch(() => {});
+    await sleep(400);
+    check(
+      "sprites: the tab is present in the playground",
+      (await page.$('[data-role="tab-sprites"]')) !== null,
+    );
+
+    // Same Layout gate as Scenes, and the same empty state — a sprite is for a
+    // scene layer and a scene needs a matrix.
+    await previewAs(page, "strip", { px: 60 });
+    await page.click('[data-role="tab-sprites"]');
+    await sleep(700);
+    check(
+      "sprites: no 2D fixture → the empty state that sets one",
+      (await page.$('[data-role="sprites-empty-fixture"]')) !== null,
+    );
+    await page.click('[data-role="sprites-preview-as-matrix"]');
+    await sleep(900);
+    check(
+      "sprites: the empty state's one action makes the fixture a matrix",
+      (await page.$('[data-role="sprites-empty"]')) !== null,
+    );
+
+    // `+ New sprite` creates one and opens the editor ON it
+    await page.$eval('[data-role="new-sprite"]', (el) => el.click());
+    await sleep(1200);
+    check(
+      "sprites: + New sprite opens the editor on #/sprites/<id>",
+      /#\/sprites\/[0-9a-f]{8}$/.test(page.url()),
+      page.url(),
+    );
+
+    // FOUR big labelled tools, with words on them (#741: "tiny confusing
+    // buttons"). The words are the assertion — an icon-only row is what was
+    // wrong before.
+    const tools = await page.$$eval(
+      '[data-role="sprite-tools"] .tool .tnm',
+      (els) => els.map((e) => (e.textContent ?? "").trim()).join(","),
+    );
+    check(
+      "sprite editor: four LARGE labelled tools (#741)",
+      tools === "Pencil,Eraser,Fill,Pick",
+      tools,
+    );
+    const tall = await page.$$eval('[data-role="sprite-tools"] .tool', (els) =>
+      els.every((e) => e.getBoundingClientRect().height >= 36),
+    );
+    check("sprite editor: every tool button is at least 36px tall", tall);
+
+    // There is NO recents strip at all: the in-use grid is read off the record,
+    // so it is EMPTY on a blank sprite (#741: "just drag the color slider and
+    // it becomes filled with intermediate colors you didn't want").
+    check(
+      "sprite editor: no recents strip, and In use is empty on a blank sprite",
+      (await page.$('[data-role="sprite-recents"]')) === null &&
+        (await page.$('[data-role="sprite-inuse-empty"]')) !== null,
+    );
+
+    // 6×6, so the layer's natural box is small enough to see move later
+    for (const [role, v] of [
+      ["sprite-w", "6"],
+      ["sprite-h", "6"],
+    ]) {
+      await page.$eval(
+        `[data-role="${role}"]`,
+        (el, val) => {
+          el.value = val;
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+        },
+        v,
+      );
+      await sleep(300);
+    }
+
+    // paint two texels with the pencil, through the canvas's own pointer path
+    // the canvas is drawn at an INTEGER zoom and says which (`data-zoom`), so
+    // a texel's centre is exact arithmetic in CSS pixels
+    const paint = async (col, row) => {
+      await page.$eval(
+        '[data-role="sprite-canvas"]',
+        (c, cx, cy) => {
+          const r = c.getBoundingClientRect();
+          const z = Number(c.dataset.zoom);
+          const o = {
+            bubbles: true,
+            pointerId: 7,
+            pointerType: "mouse",
+            isPrimary: true,
+            buttons: 1,
+          };
+          const x = r.left + (cx + 0.5) * z;
+          const y = r.top + (cy + 0.5) * z;
+          c.dispatchEvent(new PointerEvent("pointerdown", { ...o, clientX: x, clientY: y }));
+          c.dispatchEvent(
+            new PointerEvent("pointerup", { ...o, buttons: 0, clientX: x, clientY: y }),
+          );
+        },
+        col,
+        row,
+      );
+      await sleep(200);
+    };
+
+    await paint(0, 0);
+    await paint(1, 1);
+
+    // ONE colour so far — and it is in the grid because it was PAINTED
+    const inUse = await page.$$eval('[data-role="sprite-inuse-swatch"]', (els) =>
+      els.map((e) => e.dataset.value ?? "").join(","),
+    );
+    check(
+      "sprite editor: a colour enters In use by being painted (#741)",
+      inUse === "e8a33d",
+      inUse,
+    );
+
+    // a second colour, picked from the In-use grid's own swatch then painted
+    // elsewhere, must not add a second entry
+    await page.click('[data-role="sprite-inuse-swatch"]');
+    await sleep(200);
+    await paint(4, 4);
+    const stillOne = await page.$$eval('[data-role="sprite-inuse-swatch"]', (els) => els.length);
+    check("sprite editor: repainting the same colour takes no new slot", stillOne === 1);
+
+    // the frame strip: `+` adds a copy of the frame you are on
+    check(
+      "sprite editor: the frame strip exists (#741 — it never did before)",
+      (await page.$('[data-role="sprite-frames"]')) !== null,
+    );
+    await page.click('[data-role="sprite-frame-add"]');
+    await sleep(500);
+    const frames = await page.$$eval('[data-role="sprite-frame"]', (els) => els.length);
+    check("sprite editor: + adds a frame, and the strip shows both", frames === 2, String(frames));
+    const fcount = await page.$eval('[data-role="sprite-frame-count"]', (el) =>
+      (el.textContent ?? "").trim(),
+    );
+    check("sprite editor: the strip says which frame is open", fcount === "2 of 2", fcount);
+
+    // Play is the ONE disabled control while fps is 0, and it says why
+    const playWhy = await page.$eval('[data-role="sprite-play"]', (el) => ({
+      disabled: el.disabled,
+      reason: el.dataset.reason ?? "",
+    }));
+    check(
+      "sprite editor: Play is disabled at fps 0 and carries its reason",
+      playWhy.disabled && playWhy.reason.length > 0,
+      JSON.stringify(playWhy),
+    );
+
+    // fps, and the byte line
+    await page.$eval('[data-role="sprite-fps"]', (el) => {
+      el.value = "8";
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await sleep(400);
+    const bytes = await page.$eval('[data-role="sprite-bytes"]', (el) =>
+      (el.textContent ?? "").trim(),
+    );
+    // 12 header + 8 name (`Sprite 1`, it has not been renamed yet) + 3 palette
+    // + 6·6·2 index = 95
+    check(
+      "sprite editor: the byte line is the record's real length",
+      bytes === "95 of 16,384 B",
+      bytes,
+    );
+
+    // rename through the shared NameField, then Save
+    await page.click('[data-role="sprite-name"]');
+    await page.waitForSelector('[data-role="sprite-name-input"]', { timeout: 2000 });
+    await page.$eval(
+      '[data-role="sprite-name-input"]',
+      (el) => {
+        el.value = "E2E sprite";
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+      },
+    );
+    await page.focus('[data-role="sprite-name-input"]');
+    await page.keyboard.press("Enter");
+    await sleep(400);
+    await page.screenshot({ path: `${shotDir}/e2e-sprite-editor.png` });
+
+    await page.click('[data-role="sprite-save"]');
+    await sleep(900);
+    const state = await page.$eval(
+      '[data-role="sprite-save-state"]',
+      (el) => el.dataset.saveState ?? "",
+    );
+    check(
+      "sprite editor: saving settles the save state",
+      state === "saved · in browser",
+      state,
+    );
+
+    // the record in localStorage is the WIRE: base64 `LXSP` bytes
+    const stored = await page.evaluate(() => {
+      const rows = JSON.parse(localStorage.getItem("luxel.sprites") ?? "[]");
+      if (rows.length !== 1) return { rows: rows.length };
+      const b = atob(rows[0].b64);
+      return {
+        rows: rows.length,
+        magic: b.slice(0, 4),
+        version: b.charCodeAt(4),
+        w: b.charCodeAt(5),
+        h: b.charCodeAt(6),
+        frames: b.charCodeAt(7),
+        fps: b.charCodeAt(8),
+        colors: b.charCodeAt(9),
+        len: b.length,
+      };
+    });
+    check(
+      "sprites: the playground stores the LXSP RECORD, not JSON pixels",
+      stored.rows === 1 &&
+        stored.magic === "LXSP" &&
+        stored.version === 1 &&
+        stored.w === 6 &&
+        stored.h === 6 &&
+        stored.frames === 2 &&
+        stored.fps === 8 &&
+        stored.colors === 1 &&
+        // 12 + 10 (`E2E sprite`) + 3 + 72
+        stored.len === 97,
+      JSON.stringify(stored),
+    );
+
+    // back to the tab: one tile, with the record's own metadata under it
+    await page.click('[data-role="sprite-editor-back"]');
+    await sleep(900);
+    const tiles = await page.$$eval('[data-role="sprite-tile"]', (els) => els.length);
+    check("sprites: the tab shows one tile", tiles === 1, String(tiles));
+    const tmeta = await page.$eval('[data-role="sprite-tile-meta"]', (el) =>
+      (el.textContent ?? "").trim(),
+    );
+    check("sprites: the tile's meta line is `6×6 · 2 frames`", tmeta === "6×6 · 2 frames", tmeta);
+    const tname = await page.$eval('[data-role="sprite-tile-name"]', (el) =>
+      (el.textContent ?? "").trim(),
+    );
+    check("sprites: the tile carries the name", tname === "E2E sprite", tname);
+    await page.screenshot({ path: `${shotDir}/e2e-sprites-tab.png` });
+
+  }
+
   // ── Scenes, the playground half (Gitea #480; mockups S6b · S6c · S7 · S9) ──
   //
   // D10: the tab is ALWAYS here, because hiding it in the playground would
@@ -1648,114 +1903,120 @@ try {
     check("scenes: a reload reopens the scene the route named", back === 2, String(back));
     await page.screenshot({ path: `${shotDir}/e2e-scenes-editor.png` });
 
-    // ── Sprite drawing + the text inspector (Gitea #481 / #486) ───────────
+    // ── A SPRITE LAYER moves like every other layer (Gitea #741) + the text
+    //    inspector (#486) ──────────────────────────────────────────────────
     //
-    // Still inside the scene the block above opened. Three things that have
-    // no other home: that drawing on the preview rewrites the sprite's
-    // PATTERN (and the composite shows it on the same frame), that the text
-    // inspector's three source states carry the rows S7h draws, and that the
-    // font picker lists the three built-ins with samples drawn through the
-    // real font blobs.
+    // Still inside the scene the block above opened. The sprite half is the
+    // whole of Jeremy's first complaint: "I expect to be able to move around
+    // the sprite via moving like the other layers but that doesn't work. Just
+    // that alone is asking for trouble." It used to be unreachable — a
+    // selected sprite layer mounted a tool row into the stage and every
+    // pointer on the canvas painted. Drawing lives on its own screen now
+    // (the Sprites block above), so the assertion here is that the MARQUEE
+    // moves a sprite layer's box exactly as it moves a text or colour one.
     {
-      // Add layer › Sprite with nothing sprite-shaped in the store MAKES one
-      // (S1 and S7 draw no `New sprite…` anywhere, so this is the path).
+      // Add layer › Sprite. It binds NOTHING: the inspector's Sprite row is
+      // the picker, and `New…` is beside it — so this never silently invents
+      // a drawing (which is what the old `Add layer › Sprite` did).
       await page.click('[data-role="scene-add-layer"]');
       await sleep(300);
       await page.click('[data-role="scene-add-sprite"]');
-      await sleep(1200);
+      await sleep(700);
+      // The tool row must be absent from THIS screen. Scoped to the scene
+      // editor's own `<main>`: every screen is mounted at once, so a bare
+      // `[data-role="sprite-tools"]` resolves to the sprite EDITOR's tool
+      // column behind it (.claude/rules/web.md).
       check(
-        "sprite: Add layer › Sprite on an empty store creates a blank one",
-        (await page.$('[data-role="sprite-tools"]')) !== null,
+        "sprite layer: the inspector carries the sprite PICKER, not a tool row",
+        (await page.$('[data-role="scene-sprite-pick"]')) !== null &&
+          (await page.$('[data-role="scene-editor-view"] [data-role="sprite-tools"]')) === null,
       );
-      const made = await page.evaluate(() =>
-        JSON.parse(localStorage.getItem("luxel.patterns") ?? "[]").some(
-          (p) => p.name === "Sprite 1" && p.source.startsWith("// @sprite w=16 h=16"),
-        ),
+      check(
+        "sprite layer: the stage keeps its marquee (no paint mode)",
+        (await page.$('[data-role="scene-marquee"]')) !== null,
       );
-      check("sprite: the new sprite is a sprite-tagged PATTERN in the store", made);
 
-      // paint three cells, pixel-snapped, through the stage's own pointer path
-      const paint = async (col, row) => {
-        await page.$eval(
-          '[data-role="scene-stage"]',
-          (c, cx, cy, w, h) => {
-            const r = c.getBoundingClientRect();
-            c.dispatchEvent(
-              new PointerEvent("pointerdown", {
-                clientX: r.left + ((cx + 0.5) / w) * r.width,
-                clientY: r.top + ((cy + 0.5) / h) * r.height,
-                bubbles: true,
-              }),
-            );
-          },
-          col,
-          row,
-          await page.$eval('[data-role="scene-stage"]', (c) => c.width),
-          await page.$eval('[data-role="scene-stage"]', (c) => c.height),
-        );
-        await sleep(120);
-      };
-      await paint(2, 3);
-      await paint(3, 3);
-      await paint(4, 3);
-      await sleep(1200); // the store write is debounced
-
-      // the SOURCE is what round-trips: the three texels are opaque, the rest
-      // transparent, and the arrays still match the tag
-      const shape = await page.evaluate(() => {
-        const p = JSON.parse(localStorage.getItem("luxel.patterns") ?? "[]").find(
-          (x) => x.name === "Sprite 1",
-        );
-        if (!p) return null;
-        const arr = (n) =>
-          JSON.parse(
-            (new RegExp(`var ${n} = (\\[[^\\]]*\\])`).exec(p.source) ?? [])[1] ?? "null",
-          );
-        const v = arr("sprV");
-        const h = arr("sprH");
-        return v && h
-          ? {
-              len: v.length,
-              lit: v.filter((x) => x > 0).length,
-              row3: [v[3 * 16 + 2], v[3 * 16 + 3], v[3 * 16 + 4]],
-              hue: h[3 * 16 + 2],
-              tag: p.source.split("\n")[0],
-            }
-          : null;
+      // pick the sprite the Sprites tab made, by name
+      await page.click('[data-role="scene-sprite-pick"]');
+      await sleep(400);
+      const chose = await page.$$eval('[data-role="scene-sprite-menu"] .orow', (els) => {
+        const row = els.find((e) => (e.textContent ?? "").includes("E2E sprite"));
+        if (!row) return null;
+        row.click();
+        return true;
       });
+      check("sprite layer: the picker offers the stored sprite by name", chose === true);
+      await sleep(800);
+      const meta = await page.$eval(
+        '[data-role="scene-layer"][data-layer="2"] .meta2',
+        (el) => (el.textContent ?? "").trim(),
+      );
       check(
-        "sprite: three painted cells round-trip through the pattern source",
-        shape !== null &&
-          shape.len === 256 &&
-          shape.lit === 3 &&
-          shape.row3.every((x) => x === 1) &&
-          shape.tag === "// @sprite w=16 h=16 frames=1 fps=0",
-        JSON.stringify(shape),
+        "sprite layer: the row's metadata is the RECORD's size and frames",
+        meta === "sprite · 6×6 · 2 frames",
+        meta,
       );
 
-      // …and the composite shows it. The brush starts at pure red on a blank
-      // sprite, so the cell is (255, 0, 0) once the engine is rebound.
+      // …and the composite draws it. Texel (0, 0) was painted in the Sprites
+      // block with the editor's default brush (the app's accent, e8a33d) and
+      // the layer's box is at (2, 2) at natural size, so THAT is the pixel.
       const px = await page.$eval('[data-role="scene-stage"]', (c) => {
-        const d = c.getContext("2d").getImageData(3, 3, 1, 1).data;
+        const d = c.getContext("2d").getImageData(2, 2, 1, 1).data;
         return [d[0], d[1], d[2]];
       });
       check(
-        "sprite: the painted pixel is in the composite",
-        px[0] > 200 && px[1] < 60 && px[2] < 60,
+        "sprite layer: the record's texels are in the composite",
+        px[0] > 200 && px[1] > 120 && px[2] < 120,
         JSON.stringify(px),
       );
 
-      // the palette counts what is used, and the cap is 16 cells
-      const pal = await page.$eval('[data-role="scene-sprite-palette"]', (el) => ({
-        used: el.getAttribute("data-used"),
-        cells: el.children.length,
-      }));
-      check(
-        "sprite: the palette is 16 cells and says how many are used",
-        pal.used === "1" && pal.cells === 16,
-        JSON.stringify(pal),
+      // THE assertion: drag the marquee and the box MOVES (#741's first item)
+      const boxBefore = await page.$eval('[data-role="scene-box-x"]', (el) => el.value);
+      await page.evaluate(() => {
+        const v = document.querySelector('[data-role="scene-editor-view"]');
+        const m = v.querySelector('[data-role="scene-marquee"]');
+        const s = v.querySelector('[data-role="scene-stage"]').getBoundingClientRect();
+        const o = { bubbles: true, pointerId: 3, pointerType: "mouse", isPrimary: true, buttons: 1 };
+        // grab near the box's top-left (2, 2 of 64) and drop it at (20, 24)
+        m.dispatchEvent(
+          new PointerEvent("pointerdown", {
+            ...o,
+            clientX: s.left + (3 / 64) * s.width,
+            clientY: s.top + (3 / 64) * s.height,
+          }),
+        );
+        m.dispatchEvent(
+          new PointerEvent("pointermove", {
+            ...o,
+            clientX: s.left + (21 / 64) * s.width,
+            clientY: s.top + (25 / 64) * s.height,
+          }),
+        );
+        m.dispatchEvent(new PointerEvent("pointerup", { ...o, buttons: 0 }));
+      });
+      await sleep(500);
+      const moved = await page.$$eval(
+        '[data-role="scene-box-x"], [data-role="scene-box-y"]',
+        (els) => els.map((e) => e.value).join(","),
       );
-      await page.screenshot({ path: `${shotDir}/e2e-sprite-tools.png` });
+      check(
+        "sprite layer: dragging the marquee MOVES it (#741 item 12)",
+        moved !== `${boxBefore},2` && /^[0-9]+,[0-9]+$/.test(moved) && moved !== "2,2",
+        `${boxBefore},2 → ${moved}`,
+      );
+      await page.screenshot({ path: `${shotDir}/e2e-sprite-layer.png` });
+
+      // Save, reload, and the binding plus the moved box come back
+      await page.click('[data-role="scene-save"]');
+      await sleep(800);
+      await page.reload({ waitUntil: "networkidle2" });
+      await sleep(2000);
+      const wire = await page.evaluate(() => localStorage.getItem("luxel.scenes") ?? "");
+      check(
+        "sprite layer: the wire stores `L sprite x y …` + `I <sprite id>`",
+        /\nL sprite (?!2 2 )\d+ \d+ /.test(wire) && /\nI [0-9a-f]{8}\n/.test(wire),
+        (wire.match(/\nL sprite [^\n]*/) ?? [""])[0],
+      );
 
       // ---- the text inspector's three source states (S7h) ----
       // the text layer is the one the block above added first; select it by
@@ -1893,7 +2154,7 @@ try {
     const sub = await page.$eval('[data-role="scene-tile-layers"]', (el) =>
       (el.textContent ?? "").trim(),
     );
-    check("scenes: the tile says how many layers", sub === "2 layers", sub);
+    check("scenes: the tile says how many layers", sub === "3 layers", sub);
     await page.screenshot({ path: `${shotDir}/e2e-scenes-grid.png` });
 
     // leave the playground the way the later sections expect it
@@ -1901,6 +2162,88 @@ try {
     await sleep(500);
     await previewAs(page, "auto");
   }
+  // ── The ONE-RELEASE migration of `// @sprite` patterns (Gitea #740 step 3) ─
+  //
+  // Before #740 a sprite WAS a pattern. Those records have to leave the
+  // Patterns library, become sprite records, and take the scenes that named
+  // them with them — and it has to happen whether or not anyone opens the
+  // Sprites tab, which is why `refreshSprites()` runs at boot.
+  {
+    await page.evaluate(() => {
+      // FNV-1a over the name — `playgroundPatternId` in lib/sceneRender.ts,
+      // which is how a playground scene names a local pattern.
+      const idOf = (name) => {
+        let h = 0x811c9dc5;
+        for (let i = 0; i < name.length; i++) {
+          h ^= name.charCodeAt(i);
+          h = Math.imul(h, 0x01000193) >>> 0;
+        }
+        return h.toString(16).padStart(8, "0");
+      };
+      const source = [
+        "// @sprite w=2 h=2 frames=1 fps=0",
+        "// Old heart",
+        "",
+        "var sprH = [0, 0, 0.3333, 0]",
+        "var sprS = [1, 0, 1, 0]",
+        "var sprV = [1, 0, 1, 0]",
+        "",
+        "export function renderFrame() {}",
+      ].join("\n");
+      const lib = JSON.parse(localStorage.getItem("luxel.patterns") ?? "[]");
+      lib.push({ name: "Old heart", source, savedAt: Date.now() });
+      localStorage.setItem("luxel.patterns", JSON.stringify(lib));
+      localStorage.setItem(
+        "luxel.scenes",
+        `S ababab01 Legacy\nL sprite 5 5 0 0 normal 100 black fill 1\nN Heart\nI ${idOf("Old heart")}\n`,
+      );
+      localStorage.removeItem("luxel.sprites");
+    });
+    await page.reload({ waitUntil: "networkidle2" });
+    await sleep(2500);
+
+    const after = await page.evaluate(() => {
+      const rows = JSON.parse(localStorage.getItem("luxel.sprites") ?? "[]");
+      const b = rows.length === 1 ? atob(rows[0].b64) : "";
+      return {
+        stillAPattern: JSON.parse(localStorage.getItem("luxel.patterns") ?? "[]").some(
+          (p) => p.name === "Old heart",
+        ),
+        sprites: rows.length,
+        id: rows[0]?.id ?? "",
+        magic: b.slice(0, 4),
+        name: b.slice(12, 12 + b.charCodeAt(10)),
+        colors: b.charCodeAt(9),
+        scene: localStorage.getItem("luxel.scenes") ?? "",
+      };
+    });
+    check(
+      "migration: the `// @sprite` pattern became a SPRITE record and left Patterns",
+      after.stillAPattern === false &&
+        after.sprites === 1 &&
+        after.magic === "LXSP" &&
+        after.name === "Old heart" &&
+        // v == 0 was the old transparency key, so only the two lit texels are
+        // colours — an opaque black one would have been a third
+        after.colors === 2,
+      JSON.stringify({ ...after, scene: undefined }),
+    );
+    check(
+      "migration: the scene that named the pattern now names the SPRITE",
+      after.scene.includes(`\nI ${after.id}\n`),
+      after.scene.replace(/\n/g, " | "),
+    );
+
+    // put the library back the way the later sections expect it
+    await page.evaluate(() => {
+      localStorage.removeItem("luxel.scenes");
+      localStorage.removeItem("luxel.sprites");
+    });
+    await page.reload({ waitUntil: "networkidle2" });
+    await sleep(1500);
+    await previewAs(page, "auto");
+  }
+
   // ── Layout-gated text completions and docs (Gitea #486, mockup S2f) ──────
   //
   // "The editor never offers a builtin that would silently do nothing on the

@@ -1186,46 +1186,68 @@ unscoped harness selector would silently resolve to the pattern editor's.
   in exactly one place in the codebase, `compose::blit_sprite`, so on a pattern
   layer the box merely clips a full-layout render and `fit` does nothing
   (`docs/spec/scenes.md` already said so). `scene-fit` is a static line saying
-  what the box really is; the chooser is `scene-sprite-fit` on the sprite
-  inspector — **Once** (`fill`) and **Tile** (`tile`), the only two behaviours
-  that exist, with a stored `contain` folded onto Once.
+  what the box really is; the chooser is `scene-fit` on the sprite
+  inspector — **Stretch** (`fill`), **Fit** (`contain`) and **Tile**
+  (`tile`), shown only once the box has a size; with `w`/`h` at 0 the sprite
+  draws at its natural size and the row reads `12×12 · natural size` with a
+  `natural` button to get back there (#741, docs/spec/scenes.md §4).
 
-### Sprites: drawing on the preview (`components/scene/SpriteTools.svelte`, #481)
+### Sprites: a record, a tab and an editor of their own (`pages/Sprites.svelte`, `pages/SpriteEditor.svelte`, #740 #741)
 
-A sprite is a sprite-tagged PATTERN in the ordinary store (`docs/spec/scenes.md`
-§4), so the editor's drawing half is a source codec, not a new record type.
-`lib/sprite.ts` owns it: `parseSprite(source)` reads the three `spr*` literal
-arrays back out, `emitSprite(sprite)` writes the canonical pattern out again —
-tag line, arrays, and a `renderFrame` body that plays it alone — and
-`paintSprite` / `fillSprite` / `resizeSprite` are the edits. What the emitter
-writes is what `luxel_core::compose::sprite_view` reads: `web/tests/sprite.test.mjs`
-compiles the emitted source in the real wasm, binds it as a sprite layer and
-checks the composite texels, so the two cannot drift.
+A sprite is a FIRST-CLASS record — the `LXSP` byte layout of
+`docs/spec/scenes.md` §4 — not a pattern (Jeremy reversed the sprite-tagged
+pattern design of #481 on 2026-09-24: "confusing and may allow cheating").
+`lib/sprite.ts` is the codec: `encodeSprite`/`decodeSprite` mirror
+`luxel_core::sprite::check` sentence for sentence, and `web/tests/sprite.test.mjs`
+builds the same 35-byte "Heart" record by hand that the Rust test builds, so
+the two codecs are pinned to the same bytes. `stores/sprites.ts` backs it
+with `/api/sprites` on a console and `localStorage` (`luxel.sprites`, base64
+records) in the playground, caches decoded records by id, and runs
+`migrateTaggedSprites()` once per session: a stored pattern whose source
+starts `// @sprite` is decoded by `spriteFromTaggedPattern` (the ONE
+remaining reader of the old tag, kept for one release), saved as a sprite,
+every scene that named the pattern id is re-pointed, and the pattern is
+deleted — so sprites leave the Patterns library. `lib/store.ts`'s
+`listPatterns()` hides a tagged pattern in the meantime.
 
-Selecting a sprite layer mounts the tool row (pencil · eraser · fill · colour ·
-recent swatches) between the preview header and the canvas — "the tool row sits
-directly above the canvas it acts on" (S7c) — and puts the stage in **paint
-mode**: the marquee and its handles become a guide (`pointer-events: none`), so
-a click inside the sprite paints the pixel under it instead of dragging the
-layer. Geometry moves with the inspector's Box numbers there.
+**The Sprites tab** sits after Scenes and is gated exactly like it (matrix
+Layout on a console; always present in the playground with the same
+"Preview as a 64×64 matrix" empty state). Same skeleton as Scenes: one lede
+sentence, `+ New sprite`, a tile grid (`SpriteGrid`/`SpriteThumb`: the sprite
+centred at an integer zoom on a texel-sized checker, animated at its fps,
+`12×12 · 2 frames`, Edit / Duplicate / Delete behind the tile menu).
 
-An edit paints into a DRAFT source that `lookup()` answers with, so the
-composite redraws on the same frame as the click; the store write is debounced
-600 ms behind it, because a device taking one `POST /api/patterns` per painted
-pixel would spend a drag rewriting flash. A same-name save overwrites, which is
-exactly the semantics a sprite edit wants.
+**The editor** (`#/sprites/<id>`) is the #741 redesign, and it is where
+drawing happens — never on the scene stage. Header: `← Sprites` (or `← Scene`
+when a scene's inspector opened it, and it returns there), the name, save
+state, `Save`, `⋯` (Duplicate · Delete). Left: four LARGE labelled tools
+(Pencil · Eraser · Fill · Pick, keys 1–4) and Colour — ONE picker plus the
+colours **in use**, read off the record (`usedColors`), so a colour enters
+the strip only when it is painted; there is no recents row, because the old
+one filled with every intermediate value a slider drag emitted. Centre: the
+canvas (`SpriteCanvas`) at an integer zoom that fits, checker ground, grid
+lines from 8 px/texel, pointer paint with capture (one undo step per stroke),
+Shift = temporary Pick, right button = erase; under it the frame strip
+(`FrameStrip`: thumbnails, `[`/`]`, `+` copies the current frame, `← Move` ·
+`Duplicate` · `Delete` · `Move →` as a word row, `Play` at fps, `Onion` ghosts
+the previous frame at 35 %). Right: name echo, Size (resize keeps what fits),
+Frames (a count — the strip manages them), FPS (`0 = still`), the byte line
+against the 16 KiB record (`Save` is the one disabled control when over, with
+its reason), a 1:1 preview at the fixture's scale, and `Used in` (scene
+names from `usedBy`). Undo/redo: ctrl-z / ctrl-shift-z / ctrl-y, 100 steps.
+The colour cap is the FORMAT's 255, enforced in exactly one function
+(`colorIndex`, `sprite: 255 colours max`); unused palette entries are
+compacted on save.
 
-The ≤ 16-colour palette is an EDITOR rule, not a format rule. At the cap the
-colour control is the second legal disabled control on this screen and carries
-its `data-reason`; the recents and the palette readout stay live. **Undo is out
-of scope** (#481 does not ask for one and nothing else in the app has one).
-
-Neither S1 nor S7 draws a `New sprite…` entry anywhere, so `Add layer › Sprite`
-IS the creation path: with no sprite-tagged pattern in the store it makes a
-blank 16×16 (`Sprite N`) and binds it; with one or more it opens the picker,
-filtered to sprites (#700). The inspector's `Sprite` row — `New…` · `Change…` —
-exists only in the EMPTY state, because S7c draws a bound layer and has no row
-for re-pointing one.
+**In the scene editor** a sprite layer is moved with the marquee like every
+other layer — the stage has no paint mode and no pointer handlers of its own
+any more, and the marquee wraps the sprite's natural size rather than the
+grid so it is a visible grab handle. `SpriteInspector` is Name · Sprite (a
+`RichSelect` over the store, `Edit ↗`, `New…` — which makes a blank `Sprite N`,
+binds it and opens the editor) · Box (w/h editable) · Size (`natural`) · Fit
+(above) · the blend tail. The stage and every thumbnail composite sprite
+layers through `Compositor.setSprite(layer, bytes)` (`lx_comp_sprite`); no
+engine is compiled for them (`lib/sceneRender.ts`'s `SpriteLookup`).
 
 ### Text layers (`components/scene/TextInspector.svelte` + `FontPicker.svelte`, #486)
 
@@ -1317,21 +1339,37 @@ Editor: `scene-editor-view`, `scene-editor-header`, `scene-editor-back`,
 `scene-key-fixed`, `scene-opacity`, `scene-opacity-value`,
 `scene-delete-layer`,
 `scene-text-fixed`/`-clock`/`-slot`/`-lit`/`-fmt`/`-font`/`-color`/`-align`/`-scroll`/`-speed`,
-`scene-align-l`/`-c`/`-r`, `scene-wash-color`, `scene-sprite-size`,
-`scene-sprite-w`/`-h`, `scene-sprite-frames`, `scene-sprite-frames-hint`,
-`scene-sprite-palette` (`data-used`), `scene-sprite-palette-hint`,
-`scene-sprite-key`, `scene-sprite-state`, `scene-sprite-new`,
-`scene-sprite-change`, `scene-sprite-fit`, `scene-sprite-saving`;
-`sprite-tools`, `sprite-tool-pencil`/`-eraser`/`-fill`, `sprite-color`,
-`sprite-recents`, `sprite-recent`, `sprite-tools-hint`, `scene-cellmark`;
+`scene-align-l`/`-c`/`-r`, `scene-wash-color`, `scene-sprite-pick`,
+`scene-sprite-menu`, `scene-sprite-edit`, `scene-sprite-new`,
+`scene-sprite-state`, `scene-sprite-natural`, `scene-sprite-natural-btn`;
 `scene-text-slot-n`, `scene-text-slot-hint`, `scene-text-slot-how`,
 `scene-text-slot-value`, `scene-text-speed-value`, `scene-clock-state`,
 `scene-clock-settings`, `scene-scroll-window`, `scene-font-menu`,
 `scene-font-tiny`/`-regular`/`-large`.
 
-The legal disabled controls on this screen are `scene-add-pat` at
-`caps.layers` and `sprite-color` at the 16-colour palette cap, and both carry
-`data-reason` with the same words shown beside them (D4).
+The legal disabled control on this screen is `scene-add-pat` at
+`caps.layers`, carrying `data-reason` with the same words shown beside it
+(D4).
+
+Sprites tab: `sprites-panel`, `sprites-empty-fixture`,
+`sprites-preview-as-matrix`, `sprites-empty`, `sprites-lede`, `new-sprite`,
+`sprites-grid`, `sprite-tile` (+`-open`/`-thumb`/`-edit`/`-edit-link`/`-menu`/
+`-menu-popup`/`-name`/`-meta`), `sprite-menu-edit`/`-duplicate`/`-delete`,
+`sprite-thumb`. Sprite editor: `sprite-editor-view`, `sprite-editor-header`,
+`sprite-editor-back`, `sprite-name`, `sprite-name-input`, `sprite-name-error`,
+`sprite-save-state`, `sprite-save`, `sprite-overflow`, `sprite-menu`,
+`sprite-duplicate`, `sprite-delete`; `sprite-tools`,
+`sprite-tool-pencil`/`-eraser`/`-fill`/`-pick`, `sprite-color`,
+`sprite-inuse`, `sprite-inuse-swatch`, `sprite-inuse-count`,
+`sprite-inuse-empty`; `sprite-stage`, `sprite-stage-dims`,
+`sprite-canvas-wrap`, `sprite-canvas` (`data-zoom`); `sprite-frames`,
+`sprite-frame-count`, `sprite-play`, `sprite-onion`, `sprite-frame`,
+`sprite-frame-pick`, `sprite-frame-thumb`, `sprite-frame-add`,
+`sprite-frame-ops`, `sprite-frame-left`/`-duplicate`/`-delete`/`-right`;
+`sprite-inspector`, `sprite-name-echo`, `sprite-size`, `sprite-w`, `sprite-h`,
+`sprite-frames-count`, `sprite-fps`, `sprite-bytes`, `sprite-preview-scale`,
+`sprite-preview`, `sprite-usedby`, `sprite-saving`. The legal disabled control
+there is `sprite-save` over the 16 KiB record cap, with its `data-reason`.
 
 ## The Settings page (`pages/Settings.svelte`, Gitea #469)
 

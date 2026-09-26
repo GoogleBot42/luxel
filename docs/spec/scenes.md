@@ -35,7 +35,7 @@ Lines that bind to the most recent `L`:
 | line | applies to | meaning |
 |---|---|---|
 | `N <name…>` | all | layer display name, ≤ 32 B |
-| `I <patternId>` | pat, sprite | store pattern id (8 hex) |
+| `I <id>` | pat, sprite | store id (8 hex): a pattern id on `pat`, a SPRITE id on `sprite` (own namespace, §4) |
 | `C <name> <raw…>` | pat | control override, raw 16.16 ints — playlist grammar |
 | `P <mode>` | pat | projection override (`index\|x\|y\|z\|xy\|xz\|yz`) |
 | `R <pct> <pos>:<rrggbb> …` | pat | colour ramp; `pct` 0..100, ≥ 2 stops, `pos` 0..255 ascending, ≤ 32 stops |
@@ -297,53 +297,89 @@ The last member is one of:
 Routes, storage (`SCENES_KEY`, `BLOB_MAX` 3840 B) and the playlist `I S<id>`
 item are in `docs/api.md`.
 
-## 4. Sprites — a sprite-tagged PATTERN
+## 4. Sprites — the `LXSP` record (Gitea #740)
 
-A sprite is not a new store record: it is an ordinary pattern whose **first
-source line** is the tag
+A sprite is a FIRST-CLASS record — its own store, its own ids, its own
+`/api/sprites` routes (docs/api.md "Sprites") — and not a pattern. Jeremy
+reversed the sprite-tagged-pattern design of #481 on 2026-09-24 ("confusing
+and may allow cheating and running more patterns than are allowed"); the
+tag is documented at the end of this section only so the console's one-
+release migration reader can be understood.
 
+ONE byte layout is the flash bytes, the wire bytes, the playground's stored
+bytes and the wasm compositor's input. Little-endian, byte-addressable:
+
+```text
+off  size        field
+0    4           magic  "LXSP"
+4    1           version = 1
+5    1           w        1..=64
+6    1           h        1..=64
+7    1           frames   1..=255
+8    1           fps      0..=30   (0 = static)
+9    1           colors   0..=255  (palette entries)
+10   1           name_len 1..=64   (UTF-8 bytes)
+11   1           flags    0        (reserved; readers ignore, writers write 0)
+12   name_len    name
++    3*colors    palette  [r,g,b] × colors, RGB888
++    w*h*frames  index    one byte per texel, frame-major then row-major
+                          (i = frame*w*h + row*w + col); 0 = TRANSPARENT,
+                          k in 1..=colors = palette[k-1]
 ```
-// @sprite w=<w> h=<h> frames=<n> fps=<f>
-```
 
-with `w,h ≤ 64`, `frames ≥ 1`, `fps` 0..30 (`0` = static). Keys may appear in
-any order and unknown keys are ignored. Immediately after it, three top-level
-array literals in this order and with these names, each `w*h*frames` elements
-in row-major, frame-major order:
+Total length = `12 + name_len + 3·colors + w·h·frames`, and a record whose
+length is anything else is invalid, as is an index byte above `colors`. The
+cap is `SPRITE_MAX_BYTES` = 16 KiB (the device's request buffer): a 64×64
+sprite holds 3 frames, 32×32 holds 15, 16×16 holds 63.
 
-```js
-var sprH = [...]   // hue        0..1
-var sprS = [...]   // saturation 0..1
-var sprV = [...]   // value      0..1 — v = 0 is TRANSPARENT
-```
+**Transparency is index 0, not black.** An opaque black texel is a palette
+colour like any other. (The tagged-pattern format keyed on `v == 0`; the
+console's migration maps that to index 0.) The layer's `key` word is still
+ignored for a sprite layer.
 
-Then an ordinary `renderFrame` body that plays the sprite alone with
-`blit(sprH, sprS, sprV, w, h, col, row, 3)` (mode 3 = black-keyed), cycling
-frames at `fps`. So a sprite compiles, stores, previews, plays and shares
-exactly like a pattern; the tag is the only thing that marks it, and it is
-how the compositor, the store browser and the editor all tell the two apart.
-The ≤ 16-colour palette is an EDITOR rule, not a format rule.
-
-**Why top-level literals.** An all-numeric array literal interns into the
-program's const pool (`ArrView::Const`), whose words are the program's own —
-memory-mapped flash on the device. Top-level initialization runs when the
-engine is BUILT, so the compositor reads a sprite's pixels **without ever
-stepping it**, and the pixels cost no RAM. Pinned by
-`compose::tests::sprite_arrays_are_const_pool_entries_before_any_frame`.
+**The palette cap is the format's**: up to 255 colours per sprite, enforced
+in exactly one place — `sprite::check` on the device and `colorIndex` in the
+console's codec, which refuses the 256th with `sprite: 255 colours max`. The
+16-cell editor rule of #481 is gone (Gitea #741, "why are sprites limited to
+16 colors?").
 
 ```rust
-pub struct SpriteTag { pub w: u16, pub h: u16, pub frames: u16, pub fps: u8 }
-pub fn parse_sprite_tag(source: &str) -> Option<SpriteTag>;
-
-pub struct SpriteView<'a> { pub w: u16, pub h: u16, pub frames: u16, pub fps: u8,
-                            pub h_: ArrView<'a>, pub s: ArrView<'a>, pub v: ArrView<'a> }
-pub fn sprite_view<'a>(engine: &'a Engine, source: &str) -> Option<SpriteView<'a>>;
+pub struct SpriteView<'a> { pub w: u8, pub h: u8, pub frames: u8, pub fps: u8,
+                            pub name: &'a str, /* palette, index */ }
+impl SpriteView<'_> {
+    pub fn parse(bytes: &[u8]) -> Option<SpriteView<'_>>;   // validated view, in place
+    pub fn texel(&self, i: usize) -> Option<[u8; 3]>;         // None = transparent
+    pub fn frame_at(&self, elapsed_ms: u32) -> u8;            // (elapsed·fps/1000) mod frames
+}
+pub fn check(bytes: &[u8]) -> Result<(), &'static str>;      // the `sprite: …` reasons
+pub const fn record_len(name_len, colors, w, h, frames) -> usize;
 ```
 
-Sprites are **always black-keyed** whatever the record's `key` says — `v = 0`
-quantizes to `[0,0,0]`, which is the format's transparency and the rule the
-library sprites already rely on. The frame shown is
-`(elapsed_ms · fps / 1000) mod frames`.
+`luxel_core::sprite` is `no_std` and allocation-free: on the device the view
+borrows the record where it lies in the memory-mapped store, so a sprite
+layer costs no RAM and holds **no engine** — `SceneHost::sprite` hands the
+driver a `SpriteView` over the store's bytes (firmware), over a per-layer
+copy (`lx_comp_sprite`, wasm) or over the mirror's in-memory record. A
+resident scene PINS the sprite records it draws exactly as it pins its
+pattern layers, so a compaction never moves them out from under a frame.
+
+**Placement (`fit`, decided in #741).** A sprite layer whose box has `w` or
+`h` of 0 draws at its NATURAL size at `(x, y)`, 1:1. With a box size set:
+`fill` stretches the frame to the box (nearest neighbour), `contain` scales
+it uniformly to fit inside the box and centres it, `tile` repeats it 1:1
+across the box. `fit` still means nothing on any other layer kind. The frame
+shown is `frame_at(ms since the scene was set)`, per layer.
+
+**The tag this replaced (readable by the console for ONE release).** Before
+#740 a sprite was a pattern whose first line was
+`// @sprite w=<w> h=<h> frames=<n> fps=<f>` followed by three top-level
+literals `var sprH = […]`, `var sprS = […]`, `var sprV = […]` (HSV 0..1,
+`w·h·frames` each, `v = 0` transparent), which the compositor read out of
+the compiled program's const pool. The device no longer parses it. The
+console converts such a pattern the first time it sees one — decode, `POST
+/api/sprites`, re-point every scene layer that named the pattern id at the
+new sprite id, delete the pattern — via `spriteFromTaggedPattern` in
+`web/src/lib/sprite.ts`, which is the only remaining reader.
 
 ## 5. wasm (`crates/luxel-wasm`, C ABI)
 
@@ -351,7 +387,9 @@ library sprites already rely on. The frame shown is
 lx_comp_new(w: u32, h: u32) -> i32      // handle; row-major grid
 lx_comp_free(ch: i32)
 lx_comp_set(ch, ptr, len) -> i32        // 0 ok; -1 + the parse error in the response buffer
-lx_comp_bind(ch, layer: u32, engine_handle: i32)   // pat AND sprite layers; -1 unbinds
+lx_comp_bind(ch, layer: u32, engine_handle: i32)   // pat layers; -1 unbinds
+lx_comp_sprite(ch, layer: u32, ptr, len) -> i32   // sprite layers: the LXSP record; len 0 clears;
+                                                  // -1 + `sprite: …` in the response buffer
 lx_comp_text(ch, layer: u32, ptr, len)
 lx_comp_frame(ch, delta_raw: i32) -> *const u8     // w·h·3 RGB, valid until the next call
 lx_comp_layer_count(ch) -> u32
@@ -359,13 +397,15 @@ lx_comp_layer_count(ch) -> u32
 
 `lx_comp_frame` steps every bound **pattern** engine through `Engine::frame`,
 exactly as `lx_frame` does (frame-rate cap and time scaling included), then
-composites the stack. A **sprite** layer is bound to an engine too, but only
-its program's data arrays are read — it is never stepped. Feed the composite
+composites the stack. A **sprite** layer holds no engine: `lx_comp_sprite`
+copies its record into the compositor slot and the driver reads texels from
+that copy (§4). Feed the composite
 through `lx_outpipe` the way a pattern frame is fed, to see what the wire
 would carry.
 
 TypeScript wrapper: `Luxel.compositor(w, h)` → `Compositor` with
 `setScene(wire) → string | null`, `bind(layer, engine | null)`,
-`setText(layer, s)`, `layerCount()`, `frame(dtMs) → Uint8Array`, `free()`
+`setSprite(layer, bytes | null) → string | null`, `setText(layer, s)`,
+`layerCount()`, `frame(dtMs) → Uint8Array`, `free()`
 (`web/src/lib/luxel.ts`). `Engine.handle` exposes the wasm handle `bind`
 takes.

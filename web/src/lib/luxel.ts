@@ -139,6 +139,12 @@ interface Exports {
   lx_comp_free(ch: number): void;
   lx_comp_set(ch: number, ptr: number, len: number): number;
   lx_comp_bind(ch: number, layer: number, engineHandle: number): void;
+  /** A sprite layer's RECORD, copied into the compositor's slot for that
+   *  layer (`len === 0` clears it); `-1` plus a response sentence for a bad
+   *  record. Absent from a wasm built before Gitea #740 — `setSprite` guards,
+   *  and an old build then draws nothing for a sprite layer rather than
+   *  throwing. */
+  lx_comp_sprite(ch: number, layer: number, ptr: number, len: number): number;
   lx_comp_text(ch: number, layer: number, ptr: number, len: number): void;
   lx_comp_frame(ch: number, deltaRaw: number): number;
   lx_comp_layer_count(ch: number): number;
@@ -439,7 +445,14 @@ export class Luxel {
   }
 
   putStr(str: string): { ptr: number; len: number; free: () => void } {
-    const bytes = new TextEncoder().encode(str);
+    return this.putBytes(new TextEncoder().encode(str));
+  }
+
+  /** The same, for a binary body — a sprite record (`Compositor.setSprite`).
+   *  `lx_alloc(0)` is not a thing the wasm allocator promises, so an empty
+   *  buffer reads as the null pointer the callee treats as "nothing". */
+  putBytes(bytes: Uint8Array): { ptr: number; len: number; free: () => void } {
+    if (bytes.length === 0) return { ptr: 0, len: 0, free: () => {} };
     const ptr = this.e.lx_alloc(bytes.length);
     new Uint8Array(this.e.memory.buffer).set(bytes, ptr);
     return { ptr, len: bytes.length, free: () => this.e.lx_dealloc(ptr, bytes.length) };
@@ -883,8 +896,9 @@ export class Engine {
  *  the persistent generalization of the device crossfade (Gitea #477). Layers
  *  are listed bottom → top, matching the wire record.
  *
- *  Usage: `setScene(wire)`, `bind(i, engine)` for every pattern and sprite
- *  layer, `setText(i, s)` each frame for a clock or slot text layer, then
+ *  Usage: `setScene(wire)`, `bind(i, engine)` for every PATTERN layer,
+ *  `setSprite(i, record)` for every SPRITE layer (#740 — a sprite has no
+ *  engine), `setText(i, s)` each frame for a clock or slot text layer, then
  *  `frame(dt)` — which steps every bound pattern engine itself. Feed the
  *  result to the same painters an `Engine.frame()` goes to.
  */
@@ -913,11 +927,40 @@ export class Compositor {
     return rc === 0 ? null : this.lx.response();
   }
 
-  /** Bind the engine that renders a pattern layer, or the one holding a
-   *  sprite layer's pixels (a sprite's engine is READ, never stepped).
-   *  `null` unbinds. */
+  /** Bind the engine that renders a PATTERN layer; `null` unbinds. Sprite
+   *  layers do not come through here any more — they have no engine at all
+   *  since Gitea #740, which is what makes the layer budget honest (a sprite
+   *  used to cost a resident engine while claiming to be free). */
   bind(layer: number, engine: Engine | null): void {
     this.e.lx_comp_bind(this.ch, layer, engine ? engine.handle : -1);
+  }
+
+  /**
+   * Install a sprite layer's RECORD (`lib/sprite.ts`'s `encodeSprite` bytes);
+   * `null` clears the slot. Returns null on success, or the record's refusal
+   * — the same `sprite: …` sentence `POST /api/sprites` would answer with,
+   * so the editor catches a bad record before any device does.
+   *
+   * A wasm built before #740 has no such export: the guard makes a sprite
+   * layer simply draw nothing there, rather than throwing on the first frame
+   * and taking the whole preview down with it.
+   */
+  setSprite(layer: number, bytes: Uint8Array | null): string | null {
+    if (typeof this.e.lx_comp_sprite !== "function") return null;
+    if (!bytes || bytes.length === 0) {
+      this.e.lx_comp_sprite(this.ch, layer, 0, 0);
+      return null;
+    }
+    const b = this.lx.putBytes(bytes);
+    const rc = this.e.lx_comp_sprite(this.ch, layer, b.ptr, b.len);
+    b.free();
+    return rc === 0 ? null : this.lx.response();
+  }
+
+  /** Whether this wasm can draw sprite layers at all (the export landed with
+   *  #740). A page can then say so instead of showing an empty layer. */
+  get hasSprites(): boolean {
+    return typeof this.e.lx_comp_sprite === "function";
   }
 
   /** The string a text layer draws this frame. Clock and slot sources are

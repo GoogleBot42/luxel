@@ -200,13 +200,21 @@ fn ext_len() -> u32 {
 static REGION: AtomicU32 = AtomicU32::new(0);
 /// …and its length, from the same table entry. 0 whenever REGION is 0.
 static REGION_LEN: AtomicU32 = AtomicU32::new(0);
-/// Next pattern seq (monotonic). API id = `seq ^ ID_MASK` (mirrors serve.rs).
+/// Next record seq (monotonic), shared by every record KIND. API id =
+/// `seq ^ ID_MASK` for a pattern, `seq ^ SPRITE_ID_MASK` for a sprite
+/// (mirrors serve.rs).
 static NEXT_SEQ: AtomicU32 = AtomicU32::new(0);
 /// Next write stamp (monotonic). The highest stamp for a seq is its current
 /// record — the tiebreak a power cut between "commit the new file" and
 /// "mark the old one dead" leaves behind.
 static NEXT_STAMP: AtomicU32 = AtomicU32::new(1);
 const ID_MASK: u32 = 0x5eed_1e55;
+/// Sprite ids (Gitea #740). A DIFFERENT mask from the pattern store's, so a
+/// small seq reads `5b17e5e…` where a pattern reads `5eed1…` and a scene
+/// reads `5cef0…` — three stores no client can confuse by eye. Every id →
+/// record lookup takes the kind and refuses a mismatch, so a colliding xor
+/// is a "no such pattern", never someone else's record.
+pub const SPRITE_ID_MASK: u32 = 0x5b17_e5ee;
 
 const MAX_NAME: usize = patlog::MAX_NAME;
 /// Largest source text the store accepts. A file is exact-sized now, so
@@ -242,13 +250,28 @@ const BUF: usize = 4096;
 const FORMAT_VERSION: u32 = 6;
 const FORMAT_KEY: u32 = 0x7FFF_FFFF;
 
-fn id_hex(seq: u32) -> String {
+/// The id mask a record KIND is addressed through.
+const fn mask_of(kind: u8) -> u32 {
+    if kind == patlog::KIND_SPRITE {
+        SPRITE_ID_MASK
+    } else {
+        ID_MASK
+    }
+}
+
+fn id_hex_of(kind: u8, seq: u32) -> String {
     let mut out = String::new();
-    push_hex(&mut out, seq ^ ID_MASK, 8);
+    push_hex(&mut out, seq ^ mask_of(kind), 8);
     out
 }
+fn id_hex(seq: u32) -> String {
+    id_hex_of(patlog::KIND_PATTERN, seq)
+}
+fn seq_of_kind(kind: u8, id: &str) -> Option<u32> {
+    u32::from_str_radix(id, 16).ok().map(|v| v ^ mask_of(kind))
+}
 fn seq_of(id: &str) -> Option<u32> {
-    u32::from_str_radix(id, 16).ok().map(|v| v ^ ID_MASK)
+    seq_of_kind(patlog::KIND_PATTERN, id)
 }
 
 /// Pages sequential-storage manages — the const the cache below is sized
@@ -976,10 +999,20 @@ pub fn init() {
 
 // --- reads ---
 
-/// The live record for an API id.
+/// The live record of KIND `kind` for an API id.
+///
+/// The kind is part of the lookup, not a filter applied afterwards: a
+/// sprite id handed to `/api/patterns/<id>` decodes (through the wrong
+/// mask) to some seq, and if that seq happens to exist the answer must
+/// still be "no such pattern" (Gitea #740).
+fn rec_of_kind(kind: u8, id: &str) -> Option<Rec> {
+    let seq = seq_of_kind(kind, id)?;
+    INDEX.lock(|c| c.borrow().iter().find(|r| r.seq == seq && r.kind == kind).copied())
+}
+
+/// The live PATTERN record for an API id.
 fn rec_of(id: &str) -> Option<Rec> {
-    let seq = seq_of(id)?;
-    INDEX.lock(|c| c.borrow().iter().find(|r| r.seq == seq).copied())
+    rec_of_kind(patlog::KIND_PATTERN, id)
 }
 
 /// A file's name, read back out of the log (never held in RAM).
@@ -999,9 +1032,13 @@ fn rec_name(r: &Rec) -> Option<String> {
     String::from_utf8(buf).ok()
 }
 
-fn rec_by_name(name: &str) -> Option<Rec> {
+/// The live record of KIND `kind` with this exact name. Per kind since
+/// #740: a sprite and a pattern may share a name, and each store upserts
+/// only within its own.
+fn rec_by_name(kind: u8, name: &str) -> Option<Rec> {
     let recs: Vec<Rec> = INDEX.lock(|c| c.borrow().clone());
-    recs.into_iter().find(|r| rec_name(r).as_deref() == Some(name))
+    recs.into_iter()
+        .find(|r| r.kind == kind && rec_name(r).as_deref() == Some(name))
 }
 
 /// A file's payload as MAPPED memory — the zero-copy path.
@@ -1039,12 +1076,19 @@ fn payload_vec(off: u32, len: u32) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Every live record of one KIND, in log order — the ONE index, filtered.
+/// `GET /api/patterns` and `GET /api/sprites` each see only their own
+/// (Gitea #740); `store_stats` still counts everything.
+fn kind_recs(kind: u8) -> Vec<Rec> {
+    INDEX.lock(|c| c.borrow().iter().filter(|r| r.kind == kind).copied().collect())
+}
+
 /// `GET /api/patterns` → `{"patterns":[{"id","name"[,"stale":true]},…]}`
 /// (from the RAM index; names come out of the mapping). `stale` marks a
 /// pattern whose compiled blob this firmware can no longer read — a console
 /// with a current compiler recompiles those from source (#643).
 pub fn list_json() -> Chunks {
-    let recs: Vec<Rec> = INDEX.lock(|c| c.borrow().clone());
+    let recs: Vec<Rec> = kind_recs(patlog::KIND_PATTERN);
     // Segmented (Gitea #753): a full library is a multi-KB body, and the
     // `String` this used to build doubled its way there — a contiguous
     // block a fragmented heap need not have. ~48 B per record sizes the
@@ -1088,15 +1132,15 @@ pub fn list_json() -> Chunks {
 
 /// (id, name) of every stored pattern (for the MQTT pattern select).
 pub fn list() -> Vec<(String, String)> {
-    let recs: Vec<Rec> = INDEX.lock(|c| c.borrow().clone());
-    recs.iter()
+    kind_recs(patlog::KIND_PATTERN)
+        .iter()
         .filter_map(|r| rec_name(r).map(|n| (id_hex(r.seq), n)))
         .collect()
 }
 
 /// Find a stored pattern's id by exact name (first match).
 pub fn id_by_name(name: &str) -> Option<String> {
-    rec_by_name(name).map(|r| id_hex(r.seq))
+    rec_by_name(patlog::KIND_PATTERN, name).map(|r| id_hex(r.seq))
 }
 
 /// Escape a string as JSON *into* an existing buffer — no intermediate
@@ -1163,6 +1207,84 @@ pub fn source_slice(id: &str) -> Option<&'static [u8]> {
 pub fn source_vec(id: &str) -> Option<Vec<u8>> {
     let r = rec_of(id)?;
     payload_vec(r.src_off(), r.src_len)
+}
+
+// --- sprites (Gitea #740) ---
+//
+// A sprite's `LXSP` record IS its source extent: one payload, no bytecode.
+// The compositor reads texels out of [sprite_slice] in place, so a resident
+// sprite layer costs no RAM — and, exactly like a pattern layer's bytecode,
+// those bytes are flash the store may move, so the caller must hold the
+// record's pin (`set_layer_pins`) or a [MapRead] guard.
+
+/// A stored sprite's record as MAPPED memory — the zero-copy path the
+/// compositor and `GET /api/sprites/<id>` both read.
+pub fn sprite_slice(id: &str) -> Option<&'static [u8]> {
+    let r = rec_of_kind(patlog::KIND_SPRITE, id)?;
+    payload_slice(r.src_off(), r.src_len)
+}
+
+/// A stored sprite's record in a transient Vec — the `flashmap-off`
+/// fallback for [sprite_slice].
+pub fn sprite_vec(id: &str) -> Option<Vec<u8>> {
+    let r = rec_of_kind(patlog::KIND_SPRITE, id)?;
+    payload_vec(r.src_off(), r.src_len)
+}
+
+/// (name, record bytes) of a stored sprite — both header fields, so no
+/// flash read for the length and one small one for the name.
+pub fn sprite_stat(id: &str) -> Option<(String, usize)> {
+    let r = rec_of_kind(patlog::KIND_SPRITE, id)?;
+    rec_name(&r).map(|n| (n, r.src_len as usize))
+}
+
+/// Stored sprites — what sizes `GET /api/sprites`'s segment index.
+pub fn sprite_count() -> usize {
+    INDEX.lock(|c| c.borrow().iter().filter(|r| r.kind == patlog::KIND_SPRITE).count())
+}
+
+/// Walk every stored sprite in log order, handing each one its API id, its
+/// name, its record length and up to `head` bytes of the record — which is
+/// everything `GET /api/sprites` prints. Deliberately a callback: the list
+/// route streams into a segmented body, so there is no reason to build a
+/// `Vec` of owned tuples first, and the head read never touches a payload.
+pub fn for_each_sprite(head: usize, mut f: impl FnMut(&str, &str, u32, &[u8])) {
+    for r in kind_recs(patlog::KIND_SPRITE) {
+        let Some(name) = rec_name(&r) else { continue };
+        let id = id_hex_of(patlog::KIND_SPRITE, r.seq);
+        let want = (head.min(r.src_len as usize)) as u32;
+        match payload_slice(r.src_off(), want) {
+            Some(b) => f(&id, &name, r.src_len, b),
+            None => match payload_vec(r.src_off(), want) {
+                Some(v) => f(&id, &name, r.src_len, &v),
+                None => f(&id, &name, r.src_len, &[]),
+            },
+        }
+    }
+}
+
+/// `POST /api/sprites` / `POST /api/sprites/<id>`: append a sprite record.
+/// `id` names the record to REPLACE (a rename is allowed); `None` upserts
+/// by the record's own name, the pattern store's rule.
+pub async fn save_sprite(name: &str, record: &[u8], id: Option<&str>) -> String {
+    let replace = match id {
+        Some(i) => match seq_of_kind(patlog::KIND_SPRITE, i) {
+            Some(seq) => Some(seq),
+            None => return err_json("no such sprite"),
+        },
+        None => None,
+    };
+    save_rec(patlog::KIND_SPRITE, replace, name, record, &[]).await
+}
+
+/// `DELETE /api/sprites/<id>`.
+pub async fn delete_sprite(id: &str) -> String {
+    delete_kind(patlog::KIND_SPRITE, id).await
+}
+
+/// Does the store hold this sprite id?
+pub fn sprite_exists(id: &str) -> bool {
+    rec_of_kind(patlog::KIND_SPRITE, id).is_some()
 }
 
 /// Read a stored pattern's LXBC bytecode into a transient Vec — the
@@ -1476,6 +1598,46 @@ pub async fn save(name: &str, source: &str, bc: &[u8]) -> String {
         push_piece(&mut out, " KB)\"}");
         return out;
     }
+    save_rec(patlog::KIND_PATTERN, None, name, source.as_bytes(), bc).await
+}
+
+/// The store's one append, for any record KIND (Gitea #740).
+///
+/// `src` is the payload the record's source extent carries — a pattern's
+/// text, a sprite's whole `LXSP` record — and `bc` is the bytecode, empty
+/// for every kind but [`patlog::KIND_PATTERN`].
+///
+/// `replace`: `Some(seq)` replaces THAT record (the name may change with
+/// it — `POST /api/sprites/<id>`); `None` upserts by name WITHIN the kind,
+/// which is what a bare POST to either store does. The name match happens
+/// under the write guard, where the index cannot move underneath it — so
+/// the caller passes the intent, not the result.
+///
+/// Callers validate their own format first (`sprite::check`, the LXP1
+/// decode) and own the user-facing message for it; the generic refusal
+/// below is the store's own floor, not a diagnosis.
+async fn save_rec(
+    kind: u8,
+    replace: Option<u32>,
+    name: &str,
+    src: &[u8],
+    bc: &[u8],
+) -> String {
+    // Mirrors `patlog::Rec::plausible`: a pattern carries bytecode, every
+    // other kind carries none.
+    let bc_ok = if kind == patlog::KIND_PATTERN {
+        !bc.is_empty() && bc.len() <= MAX_BC
+    } else {
+        bc.is_empty()
+    };
+    if name.is_empty()
+        || name.len() > MAX_NAME
+        || src.is_empty()
+        || src.len() > MAX_SOURCE
+        || !bc_ok
+    {
+        return err_json("the store refused the record");
+    }
     let region = REGION.load(Ordering::Relaxed);
     if region == 0 {
         return err_json("pattern storage unavailable (device needs reflash)");
@@ -1487,16 +1649,27 @@ pub async fn save(name: &str, source: &str, bc: &[u8]) -> String {
         return err_json("the store is busy — try again in a moment");
     };
 
-    // Identity: a re-save keeps the pattern's seq, a new name takes the
+    // Identity: a re-save keeps the record's seq, a new name takes the
     // next one. [MAX_RECS] caps how many files RAM will track — not a
     // storage limit (the log runs out of bytes long before, with real
     // patterns), but the index must be COMPLETE before anything mutates:
     // a compaction rewrites the log from it, and would drop what it cannot
     // see.
-    let mut old = rec_by_name(name);
-    let seq = match &old {
-        Some(r) => r.seq,
-        None => {
+    //
+    // A `replace` seq is the caller's: the record it names may have been
+    // deleted between the route's check and this guard, in which case the
+    // append simply re-uses the seq and the seq counter stays put — the
+    // same outcome a re-save has.
+    let mut old = match replace {
+        Some(seq) => INDEX.lock(|c| {
+            c.borrow().iter().find(|r| r.seq == seq && r.kind == kind).copied()
+        }),
+        None => rec_by_name(kind, name),
+    };
+    let seq = match (replace, &old) {
+        (Some(seq), _) => seq,
+        (None, Some(r)) => r.seq,
+        (None, None) => {
             if OVERFULL.load(Ordering::Relaxed) || INDEX.lock(|c| c.borrow().len()) >= MAX_RECS {
                 let mut out = String::new();
                 push_piece(&mut out, "{\"ok\":false,\"error\":\"the device library is full (");
@@ -1510,12 +1683,12 @@ pub async fn save(name: &str, source: &str, bc: &[u8]) -> String {
     if OVERFULL.load(Ordering::Relaxed) {
         return err_json("the device library is full — delete some patterns and reboot");
     }
-    // Whether this name was already stored, which is NOT the same question
+    // Whether this seq was already stored, which is NOT the same question
     // as whether `old` still holds a record further down: a compaction can
     // leave `old` empty, and the seq counter must not move for that.
-    let existed = old.is_some();
+    let existed = old.is_some() || replace.is_some();
 
-    let size = Rec::bytes(name.len() as u8, source.len() as u32, bc.len() as u32);
+    let size = Rec::bytes(name.len() as u8, src.len() as u32, bc.len() as u32);
     let mut off = with_log(|a| patlog::place(a, CURSOR.load(Ordering::Relaxed), size)).flatten();
     if off.is_none() {
         // No room at the TAIL — but the cursor is a high-water mark and a
@@ -1546,7 +1719,9 @@ pub async fn save(name: &str, source: &str, bc: &[u8]) -> String {
         // innocent file (Gitea #379). `reload` rebuilt the index; take the
         // record's new home from it.
         if old.is_some() {
-            old = INDEX.lock(|c| c.borrow().iter().find(|r| r.seq == seq).copied());
+            old = INDEX.lock(|c| {
+                c.borrow().iter().find(|r| r.seq == seq && r.kind == kind).copied()
+            });
         }
     }
     let Some(off) = off else {
@@ -1562,11 +1737,12 @@ pub async fn save(name: &str, source: &str, bc: &[u8]) -> String {
         off,
         stamp: NEXT_STAMP.load(Ordering::Relaxed),
         seq,
-        src_len: source.len() as u32,
+        src_len: src.len() as u32,
         bc_len: bc.len() as u32,
-        src_hash: patlog::fnv1a(source.as_bytes()),
+        src_hash: patlog::fnv1a(src),
         bc_hash: patlog::fnv1a(bc),
         name_len: name.len() as u8,
+        kind,
         dead: false,
     };
 
@@ -1581,7 +1757,7 @@ pub async fn save(name: &str, source: &str, bc: &[u8]) -> String {
                 write_at(region, at, &hdr).await
             }
             patlog::Step::Name(at) => write_at(region, at, name.as_bytes()).await,
-            patlog::Step::Src(at) => write_at(region, at, source.as_bytes()).await,
+            patlog::Step::Src(at) => write_at(region, at, src).await,
             patlog::Step::Bc(at) => write_at(region, at, bc).await,
             patlog::Step::Commit(at) => {
                 // Prove the payload landed BEFORE publishing it: re-hash
@@ -1636,7 +1812,7 @@ pub async fn save(name: &str, source: &str, bc: &[u8]) -> String {
     }
     let mut out = String::new();
     push_piece(&mut out, "{\"ok\":true,\"id\":\"");
-    push_piece(&mut out, &id_hex(seq));
+    push_piece(&mut out, &id_hex_of(kind, seq));
     push_piece(&mut out, "\"}");
     out
 }
@@ -1646,8 +1822,19 @@ pub async fn save(name: &str, source: &str, bc: &[u8]) -> String {
 /// The bytes stay where they are — a pattern an engine is still executing
 /// keeps running — and a compaction reclaims them later.
 pub async fn delete(id: &str) -> String {
-    let Some(r) = rec_of(id) else {
-        return err_json("no such pattern");
+    delete_kind(patlog::KIND_PATTERN, id).await
+}
+
+/// [delete] for any record KIND (Gitea #740). A resident sprite layer whose
+/// record goes this way simply draws nothing from the next frame on, exactly
+/// like a layer whose pattern was deleted.
+async fn delete_kind(kind: u8, id: &str) -> String {
+    let Some(r) = rec_of_kind(kind, id) else {
+        return err_json(if kind == patlog::KIND_SPRITE {
+            "no such sprite"
+        } else {
+            "no such pattern"
+        });
     };
     let region = REGION.load(Ordering::Relaxed);
     if region == 0 {
@@ -1695,12 +1882,15 @@ pub async fn delete(id: &str) -> String {
 // An UNPINNED pattern's mapped bytes are covered by the [MapRead] guard
 // instead — see [BUSY].
 /// Scene-layer pin slots (Gitea #478): slots `3..3+PIN_LAYERS` name the
-/// patterns a resident SCENE's extra layer engines execute from — the
-/// compositor keeps one engine per pattern layer and one per sprite layer,
-/// and a sprite's const arrays are read in place out of mapped flash, so
-/// every one of them is as pinnable as the running pattern. The render task
-/// republishes the whole set with [set_layer_pins] whenever the resident
-/// set changes; ids past the end fall back to the [MapRead] guard.
+/// records a resident SCENE's layers read in place — the pattern each extra
+/// layer engine executes from, and, since #740, the `LXSP` record each
+/// SPRITE layer's texels are read out of. Both are mapped flash under the
+/// render task, so both are as pinnable as the running pattern. The render
+/// task republishes the whole set with [set_layer_pins] whenever the
+/// resident set changes; ids past the end fall back to the [MapRead] guard.
+///
+/// A pin is by SEQ, so [set_layer_pins] does not care which kind an id
+/// names — it tries both masks.
 pub const PIN_LAYERS: usize = 8;
 const PIN_SLOTS: usize = 3 + PIN_LAYERS;
 static PINS: BlockingMutex<CriticalSectionRawMutex, Cell<[Option<u32>; PIN_SLOTS]>> =
@@ -1765,13 +1955,44 @@ pub fn unpin_prev() {
 /// the next call) but a MISSING one is a use-after-free, so republish the
 /// whole set rather than patching slots.
 pub fn set_layer_pins(ids: &[String]) {
+    // Resolved BEFORE the pin critical section, because the resolution
+    // reads the index, which has its own.
+    let mut seqs: [Option<u32>; PIN_LAYERS] = [None; PIN_LAYERS];
+    for (i, s) in seqs.iter_mut().enumerate() {
+        *s = ids.get(i).and_then(|id| any_seq_of(id));
+    }
     PINS.lock(|c| {
         let mut p = c.get();
-        for (i, slot) in p[3..].iter_mut().enumerate() {
-            *slot = ids.get(i).and_then(|id| seq_of(id));
+        for (slot, s) in p[3..].iter_mut().zip(seqs.iter()) {
+            *slot = *s;
         }
         c.set(p);
     });
+}
+
+/// The seq an id names, whatever KIND it came from (Gitea #740).
+///
+/// A pin is by seq and the id string does not say its kind, so a mixed
+/// list — a scene's `pat` layers and its `sprite` layers together — has to
+/// be resolved against the index: try each mask and keep the one that
+/// names a live record of the matching kind. An id the index does not know
+/// is pinned as a PATTERN seq, which is what every id was before #740; an
+/// over-broad pin only costs log bytes until the next republish, where a
+/// MISSING one would be a use-after-free.
+fn any_seq_of(id: &str) -> Option<u32> {
+    let raw = u32::from_str_radix(id, 16).ok()?;
+    let pat = raw ^ ID_MASK;
+    let spr = raw ^ SPRITE_ID_MASK;
+    let found = INDEX.lock(|c| {
+        c.borrow()
+            .iter()
+            .find(|r| {
+                (r.kind == patlog::KIND_PATTERN && r.seq == pat)
+                    || (r.kind == patlog::KIND_SPRITE && r.seq == spr)
+            })
+            .map(|r| r.seq)
+    });
+    found.or(Some(pat))
 }
 
 /// Every seq an engine may be executing from, as a slice-able buffer.

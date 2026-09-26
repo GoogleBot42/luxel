@@ -42,7 +42,6 @@ use crate::scene::{
     Blend, Fit, Key, Layer, LayerBody, LayerKind, LayerStyle, Ramp, Scroll, TextLayer, TextSource,
 };
 use crate::text::{self, Font};
-use crate::vm::ArrView;
 
 /// Alpha resolution: `α` is carried in 1/65536ths so the `opacity`
 /// percentages the crossfade uses (0, 25, 50, 100 →  0, 16384, 32768,
@@ -379,179 +378,108 @@ fn blend_box(
 
 // ---- sprites ----
 
-/// The `// @sprite …` header of a sprite-tagged pattern.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct SpriteTag {
-    pub w: u16,
-    pub h: u16,
-    pub frames: u16,
-    /// Frames per second; 0 = static.
-    pub fps: u8,
-}
-
-impl SpriteTag {
-    /// Texels per frame.
-    pub fn texels(&self) -> usize {
-        self.w as usize * self.h as usize
-    }
-    /// Texels across every frame — the length each of the three channel
-    /// arrays must have.
-    pub fn len(&self) -> usize {
-        self.texels() * self.frames as usize
-    }
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
-/// Largest sprite edge the tag may declare.
-pub const SPRITE_MAX_EDGE: u16 = 64;
-/// Highest frame rate the tag may declare.
-pub const SPRITE_MAX_FPS: u8 = 30;
-
-/// Parse the first line of a pattern source as a sprite tag:
-/// `// @sprite w=<w> h=<h> frames=<n> fps=<f>`, in any key order. Returns
-/// `None` for an ordinary pattern — this is how the compositor, the store
-/// and the editor all tell a sprite from a pattern.
-pub fn parse_sprite_tag(source: &str) -> Option<SpriteTag> {
-    let line = source.lines().next()?.trim();
-    let body = line.strip_prefix("//")?.trim_start();
-    let body = body.strip_prefix("@sprite")?;
-    let (mut w, mut h, mut frames, mut fps) = (0u32, 0u32, 1u32, 0u32);
-    let mut seen_w = false;
-    let mut seen_h = false;
-    for tok in body.split_whitespace() {
-        let (k, v) = tok.split_once('=')?;
-        let v: u32 = v.parse().ok()?;
-        match k {
-            "w" => {
-                w = v;
-                seen_w = true;
-            }
-            "h" => {
-                h = v;
-                seen_h = true;
-            }
-            "frames" => frames = v,
-            "fps" => fps = v,
-            // an unknown key is a newer editor's: ignored, like every
-            // other unknown field in these formats
-            _ => {}
-        }
-    }
-    if !seen_w || !seen_h {
-        return None;
-    }
-    let max = SPRITE_MAX_EDGE as u32;
-    if w == 0 || h == 0 || w > max || h > max || frames == 0 || fps > SPRITE_MAX_FPS as u32 {
-        return None;
-    }
-    if (w * h * frames) as usize > u16::MAX as usize * 4 {
-        return None;
-    }
-    Some(SpriteTag {
-        w: w as u16,
-        h: h as u16,
-        frames: frames as u16,
-        fps: fps as u8,
-    })
-}
-
-/// A sprite's three HSV channel arrays plus its geometry — everything
-/// [`blit_sprite`] needs, borrowed straight out of the compiled program's
-/// const pool (on the device: memory-mapped flash, so a sprite costs no
-/// RAM beyond its engine's tables).
-pub struct SpriteView<'a> {
-    pub w: u16,
-    pub h: u16,
-    pub frames: u16,
-    pub fps: u8,
-    /// Hue 0..1. Named `h_` because `h` is the height.
-    pub h_: ArrView<'a>,
-    pub s: ArrView<'a>,
-    pub v: ArrView<'a>,
-}
-
-/// Build a [`SpriteView`] from an engine whose program is a sprite-tagged
-/// pattern.
+/// The sprite record's reader lives in [`crate::sprite`]; it is re-exported
+/// here because a sprite layer is a COMPOSITOR concept and every host
+/// reaches it through this module.
 ///
-/// **Deviation from the Phase-B contract's `sprite_view(prog: &Program)`**
-/// (reported): the three arrays are arena entries, not program sections,
-/// so they are reachable only through the Vm — and the tag lives in the
-/// SOURCE, which a `Program` does not carry. The engine has both. It is
-/// never stepped: `Engine::new`/`from_program` runs top-level
-/// initialization, which is what turns `var sprH = […]` into a const-pool
-/// (`ArrView::Const`) array, and that is all this reads.
-pub fn sprite_view<'a>(engine: &'a crate::engine::Engine, source: &str) -> Option<SpriteView<'a>> {
-    let tag = parse_sprite_tag(source)?;
-    let h_ = engine.global_array("sprH")?;
-    let s = engine.global_array("sprS")?;
-    let v = engine.global_array("sprV")?;
-    let n = tag.len();
-    if h_.len() < n || s.len() < n || v.len() < n {
-        return None;
-    }
-    Some(SpriteView {
-        w: tag.w,
-        h: tag.h,
-        frames: tag.frames,
-        fps: tag.fps,
-        h_,
-        s,
-        v,
-    })
-}
+/// A sprite is no longer a pattern: there is no engine, no const pool and
+/// no `// @sprite` tag line anywhere on this path (Gitea #740). The record
+/// is palette-indexed bytes — flash on the device, the wire body in the
+/// console, `localStorage` in the playground — and index 0 is the
+/// transparency key, so an opaque BLACK texel draws.
+pub use crate::sprite::{
+    record_len, SpriteView, SPRITE_HDR, SPRITE_MAGIC, SPRITE_MAX_BYTES, SPRITE_MAX_COLORS,
+    SPRITE_MAX_EDGE, SPRITE_MAX_FPS, SPRITE_MAX_FRAMES, SPRITE_MAX_NAME, SPRITE_VERSION,
+};
 
-/// One sprite texel as output bytes — the same HSV → RGB888 path
-/// `bulk::blit` quantizes a texel through, so a sprite drawn natively and
-/// the same sprite drawn by its own `blit` call agree byte for byte.
-#[inline(never)]
-fn sprite_texel(sp: &SpriteView, i: usize) -> [u8; 3] {
-    let num = |a: &ArrView, i: usize| a.get(i).map_or(crate::fixed::Fx::ZERO, |v| v.num());
-    let rgb = crate::vm::hsv_to_rgb(num(&sp.h_, i), num(&sp.s, i), num(&sp.v, i));
-    [
-        crate::engine::quantize(rgb[0]),
-        crate::engine::quantize(rgb[1]),
-        crate::engine::quantize(rgb[2]),
-    ]
-}
-
-/// Blit one frame of a sprite into the layer's box. Sprites are ALWAYS
-/// black-keyed (`v == 0` quantizes to `[0,0,0]`), whatever the record's
-/// `key` says — that is the format's transparency and the `blit` mode-3
-/// rule the library sprites already rely on.
+/// Blit one frame of a sprite into the layer's box.
 ///
-/// `fit`: `fill` and `contain` place the sprite 1:1 at the box origin;
-/// `tile` repeats it across the box.
-pub fn blit_sprite(dst: Canvas, sprite: &SpriteView, frame: u16, style: &LayerStyle) {
+/// Transparency is the record's, not the canvas': [`SpriteView::texel`]
+/// answers `None` for index 0 and only for index 0, so a texel that
+/// happens to be black is painted like any other colour. Whatever the
+/// layer's `key` says is therefore irrelevant here — the format already
+/// decided which texels exist.
+///
+/// Fit (contract §2, Gitea #741 item 29):
+///
+/// * **no box** (`rect.w == 0 || rect.h == 0`) — the sprite's NATURAL size
+///   at `(x, y)`, one texel per cell, clipped by the layout.
+/// * **`fill`** — nearest-neighbour stretch of the frame to the whole box.
+/// * **`contain`** — nearest-neighbour uniform scale, the largest that fits
+///   inside the box, centred in it.
+/// * **`tile`** — the frame repeated 1:1 across the box.
+///
+/// `flipx`/`flipy`/`rot180` mirror within the DRAWN extent (the sprite
+/// itself when it is placed naturally or contained, the box when it fills
+/// or tiles), so a mirrored sprite never moves.
+pub fn blit_sprite(dst: Canvas, sprite: &SpriteView, frame: u8, style: &LayerStyle) {
     let grid = *dst.grid;
-    if skip(style, &grid) || sprite.w == 0 || sprite.h == 0 || sprite.frames == 0 {
+    if skip(style, &grid) || sprite.is_empty() {
+        return;
+    }
+    let (sw, sh) = (sprite.w as i32, sprite.h as i32);
+    if sw <= 0 || sh <= 0 {
         return;
     }
     let (bx, by, bw, bh) = resolved_rect(style, &grid);
-    let (sw, sh) = (sprite.w as i32, sprite.h as i32);
-    let tile = style.fit == Fit::Tile;
+    // An unset box is not "the whole layout" for a sprite (that is what
+    // `resolved_rect` means for a pattern layer): it is the sprite's own
+    // size at the layer's origin.
+    let natural = style.rect.w == 0 || style.rect.h == 0;
+    let tile = !natural && style.fit == Fit::Tile;
+    // The extent actually drawn, as an offset inside the box plus a size.
+    let (ox, oy, dw, dh) = if natural {
+        (0, 0, sw, sh)
+    } else {
+        match style.fit {
+            Fit::Fill | Fit::Tile => (0, 0, bw, bh),
+            Fit::Contain => {
+                // the larger uniform scale that still fits: compare the
+                // aspect ratios as a cross product, no division
+                let (dw, dh) = if bw * sh <= bh * sw {
+                    (bw, (sh * bw / sw).max(1))
+                } else {
+                    ((sw * bh / sh).max(1), bh)
+                };
+                ((bw - dw) / 2, (bh - dh) / 2, dw, dh)
+            }
+        }
+    };
+    if dw <= 0 || dh <= 0 {
+        return;
+    }
     let (mx, my) = mirrors(style);
     let a0 = opacity_alpha(style.opacity);
-    let base = (frame % sprite.frames) as usize * sprite.w as usize * sprite.h as usize;
-    let span_w = if tile { bw } else { sw.min(bw) };
-    let span_h = if tile { bh } else { sh.min(bh) };
-    for j in 0..span_h {
-        let dr = by + if my { bh - 1 - j } else { j };
+    let base = (frame as usize % sprite.frames as usize) * sprite.texels();
+    for j in 0..dh {
+        let dr = by + oy + j;
         if dr < 0 || dr >= grid.h as i32 {
             continue;
         }
-        let sy = j.rem_euclid(sh);
-        for i in 0..span_w {
-            let dc = bx + if mx { bw - 1 - i } else { i };
+        let jj = if my { dh - 1 - j } else { j };
+        let sy = if tile {
+            jj.rem_euclid(sh)
+        } else if dh == sh {
+            jj
+        } else {
+            (jj * sh / dh).min(sh - 1)
+        };
+        for i in 0..dw {
+            let dc = bx + ox + i;
             if dc < 0 || dc >= grid.w as i32 {
                 continue;
             }
-            let sx = i.rem_euclid(sw);
-            let px = sprite_texel(sprite, base + (sy * sw + sx) as usize);
-            if px == [0, 0, 0] {
-                continue; // the format's transparency
-            }
+            let ii = if mx { dw - 1 - i } else { i };
+            let sx = if tile {
+                ii.rem_euclid(sw)
+            } else if dw == sw {
+                ii
+            } else {
+                (ii * sw / dw).min(sw - 1)
+            };
+            let Some(px) = sprite.texel(base + (sy * sw + sx) as usize) else {
+                continue; // index 0: the record's transparency
+            };
             if let Some(d) = dst.px.get_mut(grid.index(dr as usize, dc as usize)) {
                 blend_px_mode(d, px, style.blend, a0);
             }
@@ -850,12 +778,10 @@ impl Compositor {
             LayerKind::Color => fill_color(canvas, l.color, &l.style),
             LayerKind::Sprite => {
                 let Some(sp) = sprite else { return };
-                let frame = if sp.fps == 0 || sp.frames <= 1 {
-                    0
-                } else {
-                    ((l.sprite_ms as u64 * sp.fps as u64 / 1000) % sp.frames as u64) as u16
-                };
-                blit_sprite(canvas, sp, frame, &l.style);
+                // The fps clock rule lives with the record
+                // ([`SpriteView::frame_at`]) so the device, the mirror and
+                // the playground cannot each round it differently.
+                blit_sprite(canvas, sp, sp.frame_at(l.sprite_ms), &l.style);
             }
             LayerKind::Text => {
                 let (_, _, bw, bh) = resolved_rect(&l.style, &grid);
@@ -907,8 +833,10 @@ pub trait SceneHost {
     /// scaling included.
     fn pattern_frame(&mut self, layer: usize, delta: Fx) -> Option<&[[u8; 3]]>;
 
-    /// Layer `i`'s sprite pixels — [`sprite_view`] over the pattern the
-    /// layer names. `None` draws nothing.
+    /// Layer `i`'s sprite record, parsed in place ([`SpriteView::parse`])
+    /// out of wherever the host keeps it: mapped flash on the device, an
+    /// in-memory record in the mirror and the playground. `None` draws
+    /// nothing — an unbound layer, or an id the store no longer holds.
     fn sprite(&mut self, layer: usize) -> Option<SpriteView<'_>>;
 
     /// The string text layer `i` draws this frame.
@@ -1485,107 +1413,185 @@ mod tests {
 
     // ---- sprites ----
 
-    const SPRITE_SRC: &str = concat!(
-        "// @sprite w=2 h=1 frames=2 fps=10\n",
-        "var sprH = [0, 0, 0, 0]\n",
-        "var sprS = [0, 0, 0, 0]\n",
-        "var sprV = [1, 0, 0, 1]\n",
-        "export function render(index) { hsv(0, 0, 0) }\n",
-    );
-
-    #[test]
-    fn the_sprite_tag_parses_and_bounds_itself() {
-        let t = parse_sprite_tag(SPRITE_SRC).unwrap();
-        assert_eq!((t.w, t.h, t.frames, t.fps), (2, 1, 2, 10));
-        assert_eq!(t.len(), 4);
-        // key order is free and unknown keys are ignored
-        assert!(parse_sprite_tag("// @sprite frames=1 h=8 w=8 fps=0 pal=16").is_some());
-        // an ordinary pattern is not a sprite
-        assert!(parse_sprite_tag("export function render(i) {}").is_none());
-        assert!(parse_sprite_tag("// just a comment").is_none());
-        // out-of-range tags are refused
-        assert!(parse_sprite_tag("// @sprite w=65 h=8 frames=1 fps=0").is_none());
-        assert!(parse_sprite_tag("// @sprite w=8 h=8 frames=0 fps=0").is_none());
-        assert!(parse_sprite_tag("// @sprite w=8 h=8 frames=1 fps=31").is_none());
-        assert!(parse_sprite_tag("// @sprite w=8 frames=1 fps=0").is_none());
-    }
-
-    /// The format's load-bearing compiler fact: a top-level numeric array
-    /// literal interns into the const pool, so a sprite's pixels are read
-    /// from the program's word region (flash, on the device) and the
-    /// engine never has to run.
-    #[cfg(feature = "frontend")]
-    #[test]
-    fn sprite_arrays_are_const_pool_entries_before_any_frame() {
-        let e = crate::engine::Engine::new(SPRITE_SRC, 4, 1).unwrap();
-        for name in ["sprH", "sprS", "sprV"] {
-            let a = e.global_array(name).unwrap_or_else(|| panic!("{name} missing"));
-            assert_eq!(a.len(), 4, "{name}");
-            assert!(
-                matches!(a, ArrView::Const(_)),
-                "{name} must be a const-pool array, not an owned copy"
-            );
+    /// Assemble an `LXSP` record by hand — the same shape
+    /// `crate::sprite`'s own suite and the web codec build, written out
+    /// here so a bug in one cannot hide in the other.
+    fn rec(name: &str, w: u8, h: u8, frames: u8, fps: u8, pal: &[[u8; 3]], index: &[u8]) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(&SPRITE_MAGIC);
+        v.push(SPRITE_VERSION);
+        v.extend_from_slice(&[w, h, frames, fps, pal.len() as u8, name.len() as u8, 0]);
+        v.extend_from_slice(name.as_bytes());
+        for c in pal {
+            v.extend_from_slice(c);
         }
-        let sp = sprite_view(&e, SPRITE_SRC).expect("sprite view");
-        assert_eq!((sp.w, sp.h, sp.frames, sp.fps), (2, 1, 2, 10));
-        // a pattern without the tag is not a sprite
-        assert!(sprite_view(&e, "export function render(i) {}").is_none());
+        v.extend_from_slice(index);
+        v
     }
 
-    #[cfg(feature = "frontend")]
+    const RED: [u8; 3] = [255, 0, 0];
+    const BLK: [u8; 3] = [0, 0, 0];
+    const BG: [u8; 3] = [9, 9, 9];
+
+    /// A 2x2 checker: red / transparent / transparent / opaque BLACK.
+    fn checker() -> Vec<u8> {
+        rec("check", 2, 2, 1, 0, &[RED, BLK], &[1, 0, 0, 2])
+    }
+
+    fn draw(record: &[u8], w: u16, h: u16, style: &LayerStyle) -> Vec<[u8; 3]> {
+        let g = grid(w, h, false);
+        let sp = SpriteView::parse(record).expect("record parses");
+        let mut px = vec![BG; w as usize * h as usize];
+        blit_sprite(
+            Canvas {
+                px: &mut px,
+                grid: &g,
+            },
+            &sp,
+            0,
+            style,
+        );
+        px
+    }
+
+    fn boxed(x: i16, y: i16, w: u16, h: u16, fit: Fit) -> LayerStyle {
+        LayerStyle {
+            rect: Rect { x, y, w, h },
+            fit,
+            ..LayerStyle::default()
+        }
+    }
+
     #[test]
-    fn a_sprite_blits_its_frames_black_keyed() {
-        let e = crate::engine::Engine::new(SPRITE_SRC, 4, 1).unwrap();
-        let sp = sprite_view(&e, SPRITE_SRC).unwrap();
-        let g = grid(2, 1, false);
-        let draw = |frame: u16| {
-            let mut px = [[9u8, 9, 9]; 2];
-            blit_sprite(
-                Canvas {
-                    px: &mut px,
-                    grid: &g,
-                },
-                &sp,
-                frame,
-                &LayerStyle::default(),
-            );
-            px
+    fn an_unset_box_places_the_sprite_at_its_natural_size() {
+        // 2x2 sprite at (1,1) on a 4x4 grid, one texel per cell
+        let px = draw(&checker(), 4, 4, &boxed(1, 1, 0, 0, Fit::Fill));
+        let at = |x: usize, y: usize| px[y * 4 + x];
+        assert_eq!(at(1, 1), RED);
+        assert_eq!(at(2, 1), BG, "index 0 is transparent");
+        assert_eq!(at(1, 2), BG);
+        // the load-bearing change from the sprite-tagged pattern format:
+        // an opaque black texel DRAWS
+        assert_eq!(at(2, 2), BLK, "opaque black is a colour, not the key");
+        // nothing outside the sprite's own 2x2 was touched
+        assert_eq!(at(0, 0), BG);
+        assert_eq!(at(3, 3), BG);
+    }
+
+    #[test]
+    fn fill_stretches_the_frame_to_the_box() {
+        // a 2x2 checker into a 4x4 box gives 2x2 blocks
+        let px = draw(&checker(), 4, 4, &boxed(0, 0, 4, 4, Fit::Fill));
+        let at = |x: usize, y: usize| px[y * 4 + x];
+        for (x, y) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+            assert_eq!(at(x, y), RED, "({x},{y})");
+        }
+        for (x, y) in [(2, 2), (3, 2), (2, 3), (3, 3)] {
+            assert_eq!(at(x, y), BLK, "({x},{y})");
+        }
+        for (x, y) in [(2, 0), (3, 1), (0, 2), (1, 3)] {
+            assert_eq!(at(x, y), BG, "({x},{y}) is the transparent quadrant");
+        }
+    }
+
+    #[test]
+    fn contain_scales_uniformly_and_centres() {
+        // a 2x2 sprite in a 6x4 box: the uniform fit is 4x4, centred, so
+        // one blank column each side and 2x2 blocks inside
+        let px = draw(&checker(), 6, 4, &boxed(0, 0, 6, 4, Fit::Contain));
+        let at = |x: usize, y: usize| px[y * 6 + x];
+        for y in 0..4 {
+            assert_eq!(at(0, y), BG, "left margin row {y}");
+            assert_eq!(at(5, y), BG, "right margin row {y}");
+        }
+        assert_eq!(at(1, 0), RED);
+        assert_eq!(at(2, 1), RED);
+        assert_eq!(at(3, 2), BLK);
+        assert_eq!(at(4, 3), BLK);
+        assert_eq!(at(3, 0), BG, "the transparent quadrant stays transparent");
+        // a box the sprite's own aspect ratio is a plain stretch
+        let px = draw(&checker(), 4, 4, &boxed(0, 0, 4, 4, Fit::Contain));
+        assert_eq!(px, draw(&checker(), 4, 4, &boxed(0, 0, 4, 4, Fit::Fill)));
+    }
+
+    #[test]
+    fn tile_repeats_the_frame_across_the_box() {
+        let px = draw(&checker(), 4, 4, &boxed(0, 0, 4, 4, Fit::Tile));
+        let at = |x: usize, y: usize| px[y * 4 + x];
+        for y in 0..4 {
+            for x in 0..4 {
+                let want = match (x % 2, y % 2) {
+                    (0, 0) => RED,
+                    (1, 1) => BLK,
+                    _ => BG,
+                };
+                assert_eq!(at(x, y), want, "({x},{y})");
+            }
+        }
+    }
+
+    #[test]
+    fn flips_mirror_the_drawn_extent_not_its_position() {
+        let flipped = LayerStyle {
+            flipx: true,
+            ..boxed(1, 1, 0, 0, Fit::Fill)
         };
-        // frame 0 is [lit, dark]; the dark texel (v = 0) is transparent, so
-        // the base shows through
-        assert_eq!(draw(0), [[255, 255, 255], [9, 9, 9]]);
-        // frame 1 is [dark, lit]
-        assert_eq!(draw(1), [[9, 9, 9], [255, 255, 255]]);
-        // the frame index wraps
-        assert_eq!(draw(2), draw(0));
-        assert_eq!(draw(5), draw(1));
+        let px = draw(&checker(), 4, 4, &flipped);
+        let at = |x: usize, y: usize| px[y * 4 + x];
+        // row 0 of the sprite is [red, transparent] → mirrored to
+        // [transparent, red] inside the SAME 2x2 at (1,1)
+        assert_eq!(at(1, 1), BG);
+        assert_eq!(at(2, 1), RED);
+        assert_eq!(at(1, 2), BLK);
+        assert_eq!(at(2, 2), BG);
+        assert_eq!(at(0, 0), BG, "the sprite did not move");
     }
 
-    #[cfg(feature = "frontend")]
+    /// A host for [`SceneDriver`] holding one sprite record — the frame
+    /// clock has to come out of the driver, not out of a second copy of
+    /// the fps rule.
+    struct SpriteHost(Vec<u8>);
+
+    impl SceneHost for SpriteHost {
+        fn pattern_frame(&mut self, _layer: usize, _delta: Fx) -> Option<&[[u8; 3]]> {
+            None
+        }
+        fn sprite(&mut self, _layer: usize) -> Option<SpriteView<'_>> {
+            SpriteView::parse(&self.0)
+        }
+    }
+
     #[test]
-    fn the_sprite_clock_picks_the_frame() {
-        let e = crate::engine::Engine::new(SPRITE_SRC, 4, 1).unwrap();
-        let sp = sprite_view(&e, SPRITE_SRC).unwrap();
+    fn the_frame_clock_runs_through_the_driver() {
+        // 1x2 sprite, two frames at 10 fps: frame 0 lights texel 0, frame 1
+        // lights texel 1
+        let record = rec("blink", 2, 1, 2, 10, &[RED], &[1, 0, 0, 1]);
         let scene = crate::scene::parse(
-            "S 0000000a s\nL sprite 0 0 0 0 normal 100 black fill 1\nI 0123abcd\n",
+            "S 0000000a s\nL sprite 0 0 0 0 normal 100 none fill 1\nI 5b17e5ef\n",
         )
         .unwrap();
-        let mut c = Compositor::new(grid(2, 1, false));
-        c.set_scene(&scene);
-        let mut px = vec![[0u8; 3]; 2];
-        // 10 fps ⇒ frame 0 for the first 100 ms, frame 1 for the next
-        c.begin(&mut px);
-        c.native_layer(&mut px, 0, Some(&sp));
-        assert_eq!(px[0], [255, 255, 255]);
-        c.advance(100);
-        c.begin(&mut px);
-        c.native_layer(&mut px, 0, Some(&sp));
-        assert_eq!(px[0], [0, 0, 0]);
-        assert_eq!(px[1], [255, 255, 255]);
-        c.advance(100); // back to frame 0
-        c.begin(&mut px);
-        c.native_layer(&mut px, 0, Some(&sp));
-        assert_eq!(px[0], [255, 255, 255]);
+        let mut comp = Compositor::new(grid(2, 1, false));
+        comp.set_scene(&scene);
+        let mut driver = SceneDriver::new();
+        let mut host = SpriteHost(record);
+        let mut px: Vec<[u8; 3]> = Vec::new();
+        // 60 fps steps, so the driver's remainder carry is exercised too
+        let step = Fx::from_raw((1000 << 16) / 60);
+        let mut seen: Vec<usize> = Vec::new();
+        for _ in 0..13 {
+            assert!(driver.frame(&mut comp, &mut px, 2, step, &mut host));
+            seen.push(if px[0] == RED { 0 } else { 1 });
+        }
+        // 16.67 ms a frame: texel 0 for the first 6 frames (0..100 ms),
+        // texel 1 for the next 6, then back
+        assert_eq!(seen, vec![0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0]);
+    }
+
+    #[test]
+    fn a_sprite_layer_with_no_record_draws_nothing() {
+        let all_clear = rec("blank", 2, 2, 1, 0, &[], &[0, 0, 0, 0]);
+        let px = draw(&all_clear, 2, 2, &LayerStyle::default());
+        assert!(px.iter().all(|p| *p == BG));
     }
 
     // ---- the compositor ----

@@ -42,7 +42,10 @@ export type NoteChannel =
   | "device"
   | "palette"
   /** the Scenes page and the scene editor's save state (Gitea #480) */
-  | "scene";
+  | "scene"
+  /** the Sprites page and the sprite editor (Gitea #740) — what the
+   *  one-release migration of `// @sprite` patterns could not convert */
+  | "sprite";
 
 export type Notes = Partial<Record<NoteChannel, string>>;
 

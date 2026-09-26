@@ -237,7 +237,7 @@ its own release and a format bump.
 
 | device | board | migrated | live slot | `ota_slot_bytes` | `storage_bytes` | margin now |
 |---|---|---|---|---:|---:|---|
-| Athom rig `192.168.0.183` | `board-athom-music` | **yes, 2026-09-20** | `ota_0` | 1,310,720 | 524,288 | 103,488 B (7.9 %) |
+| Athom rig `192.168.0.183` | `board-athom-music` | **yes, 2026-09-20** | `ota_1` (2026-09-26, the #740 sprite build) | 1,310,720 | 524,288 | 89,040 B (6.8 %) |
 | Seengreat panel `192.168.0.238` | `board-seengreat-hub75` | **yes** — serially re-flashed 2026-09-23 onto its own 16 MB table, so the self-applied 16 MB path stays emulator-only (Gitea #655) | `ota_0` | 3,145,728 | 4,194,304 | 2,007,856 B (63.8 %) |
 | dev unit `192.168.0.205` | `board-pixelblaze-v3` | not yet (offline) | — | — | — | — |
 
@@ -1598,17 +1598,21 @@ which is both the A/B lever and the image a stale device migrates on.
 
 | board | JIT | exec memory | per image | of `library/` | app image | free of 1.25 MiB | `.stack` |
 |---|---|---|---:|---:|---:|---:|---:|
-| `board-seengreat-hub75` | ships, **on** | PSRAM arena | 128 KB | all 307 | 1,137,872 | 63.8 % † | 26,268 |
+| `board-seengreat-hub75` | ships, **on** | PSRAM arena | 128 KB | all 307 | 1,151,360 | 63.4 % † | 25,860 |
 | `board-s3-devkit` | ships, **on** | PSRAM arena, or heap alias | 128 KB / 8 KB | all 307 / — | not rebuilt | — | not measured |
-| `board-athom-music` | ships, **on** | 24 KB `.rwtext` | 12 KB | 96 % | 1,207,232 | 7.9 % | 24,380 |
+| `board-athom-music` | ships, **on** | 24 KB `.rwtext` | 12 KB | 96 % | 1,221,680 | 6.8 % | 25,484 |
 | `board-esp32-generic` | ships, **on** | 24 KB `.rwtext` | 12 KB | 96 % | 1,136,256 | 13.3 % | 23,476 |
 | `board-pixelblaze-v3` | ships, **on** | 24 KB `.rwtext` | 12 KB | 96 % | 1,122,768 | 14.3 % | 23,524 |
 | `board-c3-devkit` | no backend | — | — | — | not rebuilt | — | unchanged |
 | `board-c6-devkit` | no backend | — | — | — | not rebuilt | — | unchanged |
 
-The **two bench-board rows were re-measured on master `6855bf5`** and
-deployed to metal (2026-09-24, the Phase B+C deploy); the other rows are
-still the 2026-09-24 pre-Phase-B/C branch measurement and were not rebuilt.
+The **two bench-board rows were re-measured on the #740 sprite branch**
+(2026-09-26; the Athom row is the image on its `ota_1`, the panel row a
+build not yet deployed — the panel was off the bench). Against the same
+tree without #740 the sprite record cost the Athom +4,320 B and the panel
++4,144 B; the rest of the drift since the 2026-09-24 `6855bf5` numbers
+(1,207,232 / 1,137,872) is the #729 batch. The other rows are still the
+2026-09-24 pre-Phase-B/C branch measurement and were not rebuilt.
 `.stack` from `tools/stack-check.sh`, image bytes from
 `tools/image-check.sh`. Phase B+C cost the Athom ~67 KB of slot margin
 (13.0 % -> 7.9 % free) and the panel ~71 KB, which the 3 MiB slot does not

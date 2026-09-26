@@ -1014,66 +1014,6 @@
   }
 }
 
-/* ---------- the sprite tool row + palette (mockups.html :1402-1411) -------
-   Quoted from the mock's own sprite block, class for class. The tool row sits
-   between the preview header and the stage, because it acts on the canvas
-   directly under it (S7c's note). */
-
-.scenes .toolrow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 10px 0 10px;
-}
-
-.scenes .btn.sm.icon.on {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #16110a;
-}
-
-.scenes .recents {
-  display: flex;
-  gap: 4px;
-  flex: none;
-}
-
-.scenes .toolrow .hint {
-  flex: 1;
-  min-width: 0;
-  font-size: 11.5px;
-}
-
-/* the cell under the pointer while a sprite layer is selected */
-.scenes .cellmark {
-  position: absolute;
-  width: 7px;
-  height: 7px;
-  border: 1px solid rgba(255, 255, 255, 0.9);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.65);
-  pointer-events: none;
-}
-
-/* the inspector's ≤16-colour palette (S7c) */
-.scenes .pal {
-  display: grid;
-  grid-template-columns: repeat(8, 14px);
-  gap: 4px;
-}
-
-.scenes .pal i {
-  display: block;
-  width: 14px;
-  height: 14px;
-  border-radius: 3px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-}
-
-.scenes .pal i.empty {
-  background: transparent;
-  border: 1px dashed #3d4450;
-}
-
 /* ---------- the font picker's trigger (mockup S7i) ------------------------
    S7i draws the font control as a `.sel` that turns accent-bordered while
    its menu is open, so it is a BUTTON (a popover with glyph samples in it is

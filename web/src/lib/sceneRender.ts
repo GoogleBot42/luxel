@@ -1,5 +1,6 @@
 // Rendering a scene in the browser: the wasm `Compositor` plus one engine per
-// pattern or sprite layer, plus the host's half of a text layer (Gitea #480).
+// PATTERN layer, one `LXSP` record per SPRITE layer, plus the host's half of a
+// text layer (Gitea #480, #740).
 //
 // WHY A CLASS and not a painter: a scene is stateful in a way a pattern frame
 // is not. It owns N engines that must be freed together, a compositor handle,
@@ -20,11 +21,24 @@ import { serializeScene, type ClockFmt, type Scene } from "./scene";
 import { compileForLayout, type Layout } from "../stores/geometry";
 import { Compositor } from "./luxel";
 
-/** Hands back the SOURCE of a stored pattern or sprite by id, or null when
- *  the browser does not have it (yet). Console: `stores/device.ts`
- *  `devicePatterns`. Playground: the local library, keyed by
- *  `playgroundPatternId`. */
+/** Hands back the SOURCE of a stored PATTERN by id, or null when the browser
+ *  does not have it (yet). Console: `stores/device.ts` `devicePatterns`.
+ *  Playground: the local library, keyed by `playgroundPatternId`. */
 export type SourceLookup = (id: string) => string | null;
+
+/**
+ * Hands back a stored SPRITE's `LXSP` record by id, or null when the browser
+ * does not have it yet (Gitea #740).
+ *
+ * Synchronous on purpose, and therefore a CACHE reader rather than a fetch:
+ * `setScene` is called on every keystroke of a scene edit, and a promise here
+ * would mean a rebuild that finishes after the next one started. The caller
+ * pre-loads records (`stores/sprites.ts` `loadSprite`, which caches) and hands
+ * this a reader over what it has; a sprite whose record has not landed draws
+ * nothing for one rebuild and appears on the next, exactly as a pattern whose
+ * source is still streaming in does.
+ */
+export type SpriteLookup = (id: string) => Uint8Array | null;
 
 /** The text a `slot` source shows. Until `/api/text` lands (#485) there are
  *  no slots, so every slot reads empty and the layer draws nothing — which is
@@ -73,7 +87,12 @@ export class SceneRenderer {
    * layer), so an unchanged wire block is a no-op: the editor calls this on
    * every keystroke.
    */
-  setScene(scene: Scene, lookup: SourceLookup, force = false): string | null {
+  setScene(
+    scene: Scene,
+    lookup: SourceLookup,
+    force = false,
+    sprites: SpriteLookup = () => null,
+  ): string | null {
     const wire = serializeScene(scene);
     if (!force && wire === this.wire && this.comp) return null;
     this.wire = wire;
@@ -95,25 +114,27 @@ export class SceneRenderer {
     this.engines = [];
     this.errors = [];
     this.textOf = [];
+    let i = 0;
     for (const l of scene.layers) {
       let engine: Engine | null = null;
       let error: string | null = null;
-      if (l.body.kind === "pat" || l.body.kind === "sprite") {
-        const id = l.body.kind === "pat" ? l.body.pat.id : l.body.id;
+      // A SPRITE layer holds no engine at all since Gitea #740 — its record
+      // goes straight into the compositor's slot, which is what makes the
+      // layer budget honest (a sprite used to be compiled at one pixel just to
+      // carry its texels in a const pool).
+      if (l.body.kind === "sprite") {
+        const rec = l.body.id === "" ? null : sprites(l.body.id);
+        error = this.comp.setSprite(i, rec);
+      } else if (l.body.kind === "pat") {
+        const id = l.body.pat.id;
         const src = id === "" ? null : lookup(id);
         if (src !== null) {
-          // A sprite's engine is BUILT and then only read — the compositor
-          // never steps it (docs/spec/scenes.md §4) — so both kinds go
-          // through the one compile path.
-          const proj = l.body.kind === "pat" ? l.body.pat.proj : null;
-          const built = compileForLayout(this.lx, src, 0, proj, this.rig);
+          const built = compileForLayout(this.lx, src, 0, l.body.pat.proj, this.rig);
           if ("engine" in built) {
             const e = built.engine;
             engine = e;
-            if (l.body.kind === "pat") {
-              for (const [name, vals] of Object.entries(l.body.pat.controls)) {
-                e.setControl(name, vals);
-              }
+            for (const [name, vals] of Object.entries(l.body.pat.controls)) {
+              e.setControl(name, vals);
             }
           } else {
             // A layer that will not compile draws nothing. Silently was the
@@ -126,8 +147,9 @@ export class SceneRenderer {
       this.engines.push(engine);
       this.errors.push(error);
       this.textOf.push(textResolver(l.body.kind === "text" ? l.body.text.source : null));
+      i++;
     }
-    this.engines.forEach((e, i) => this.comp?.bind(i, e));
+    this.engines.forEach((e, at) => this.comp?.bind(at, e));
     return null;
   }
 
@@ -138,8 +160,8 @@ export class SceneRenderer {
     return this.comp.frame(deltaMs);
   }
 
-  /** The engine behind layer `i`, for the sprite tools (#481) and for
-   *  reading a pattern's `controls()` in the inspector. */
+  /** The engine behind layer `i` — for reading a pattern's `controls()` in the
+   *  inspector. Always null for a sprite layer: there is no engine (#740). */
   engineAt(i: number): Engine | null {
     return this.engines[i] ?? null;
   }

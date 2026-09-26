@@ -82,7 +82,7 @@ absent.
  "geom":{"dims":1,"regular":true,"w":300,"h":1,"source":"board","pattern_dims":1,
         "compatible":true},
  "caps":{"strip_driver":true,"panel":false,"outputs":1,"power_cap":true,"blur_glow":true,
-         "layers":3,"text_slots":8,"reboot":true,"ota":true,"psram":false,"assets":false},
+         "layers":3,"text_slots":8,"sprites":true,"reboot":true,"ota":true,"psram":false,"assets":false},
  "slot":"ota_0","version":"0.1.39",
  "heap_free":104832,"heap_largest":73728,"engine_heap":21504,"engines":1,"live":null,
  "assets_mapped":true,"code_mapped":true,
@@ -162,6 +162,7 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
 | `blur_glow` | The device output chain's blur and glow stages are offered. Two independent gates, ANDed: they need neighbours — index order on a strip, rows/columns on a regular grid — so it follows `geom.regular`; and they need to fit the board's per-frame budget, so `board::BLUR_GLOW` is **false on every HUB75 panel board**, whose compose window is one ~8.66 ms rescan that the two spatial stages over a 64×64 grid overrun (Gitea #476/#446, proposal D12). The pattern-side `setBlur`/`setGlow` are a different chain and are unaffected either way. |
 | `layers` | Pattern layers this board affords for a scene: the pixel-count tier (3 at ≤512 px, 2 above — the per-layer 3 B/px frame in internal DRAM is the binding constraint, except on a `psram-arena` board where that frame is external and a layer costs only the flat 4 KiB base — Gitea #709), narrowed by heap headroom LESS the compositor's own staging frame (3 B/px, which every scene spends before a layer engine exists) and by a per-board ceiling (2 on a `small-chip` board). Never 0. `luxel_core::caps::layers_for_headroom`; the model and its measured numbers are in docs/boards.md "Scene layers". It sizes the scene editor's "N of N used" note and the playlist's hard-cut transition rule; the real gate is still the post-build heap check, which reports `scene: layer N does not fit`. |
 | `text_slots` | Host-settable text slots — how many `GET`/`POST /api/text` addresses and `textSlot(n)` reads (proposal §6, Gitea #485). `8` on a host that implements them; `0` on firmware predating Phase C, which is what hides the Scene text layer's "Text slot" source. |
+| `sprites` | The sprite store and its routes exist (`/api/sprites`, Gitea #740). Absent on firmware predating it — the console then offers no Sprites tab and a scene's sprite layer draws nothing. |
 | `reboot` | Can reboot itself (setup AP, data-pin change, WiFi change). |
 | `ota` | Accepts a firmware image over the network. |
 | `psram` | Has the external pattern-array arena (Gitea #253). |
@@ -327,8 +328,9 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   pixel buffer come from PSRAM (`psram_free`, Gitea #253/#709), so a 4096-px
   engine reports 0–5 KB there rather than the 13–20 KB it did before #709.
 - `engines` — how many resident engines that sum is over (Gitea #479): 1 for
-  a plain pattern, one per pattern and sprite layer while a scene is up, 0
-  with nothing loaded. Device only. **This is the "nothing is playing"
+  a plain pattern, one per PATTERN layer while a scene is up (a sprite layer
+  holds none since Gitea #740 — its texels are read out of its own record),
+  0 with nothing loaded. Device only. **This is the "nothing is playing"
   flag**: since Gitea #744 a device carries no built-in default, so a device
   nobody has given a pattern boots to `engines: 0`, a dark strip and an empty
   `GET /api/pattern` — an empty state, not a fault. See `src`/`bc` below and
@@ -396,8 +398,9 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   `interp` and `layers` describe the whole **resident stack**, which is
   more than one program as soon as a scene is up. Before Gitea #718 there
   was only the scalar block and *every* compile attempt overwrote it, so a
-  two-layer scene reported whichever layer compiled last (often a sprite)
-  and a base layer that fell back to the interpreter was invisible.
+  two-layer scene reported whichever layer compiled last (often a sprite
+  layer, which held an engine of its own until Gitea #740) and a base layer
+  that fell back to the interpreter was invisible.
 
   - `state` — `"native"` (the device compiled this pattern to machine
     code), `"interp"` (the image has a JIT and did not compile this
@@ -469,14 +472,13 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
       so an entry lines up with `GET /api/scenes/<id>` without counting.
       (The `scene: layer N does not fit` message is 1-based: N = `layer` +
       1.) A bare pattern is layer 0 of a one-layer stack.
-    - `kind` — `"pattern"` (an engine the compositor steps every frame) or
-      `"sprite"` (an engine that is built and READ but never stepped —
-      docs/spec/scenes.md §4). A sprite's compile is real: it spends heap,
-      exec memory and compile time exactly like a pattern's, and its native
-      code is then never entered. It is reported **because** of that, not
-      in spite of it — an invisible compile is the bug this field exists to
-      fix. Gitea #740 makes sprites a first-class record and removes that
-      engine; the entry goes with it.
+    - `kind` — always `"pattern"` (an engine the compositor steps every
+      frame). Firmware between Gitea #718 and #740 also reported
+      `"sprite"` entries: a sprite layer then held an engine that was built
+      and compiled but never stepped, and hiding that compile was the bug
+      #718 fixed. #740 made a sprite a first-class record the compositor
+      reads in place, so no sprite layer holds an engine and no such entry
+      exists any more.
     - `state` / `reason` / `code_bytes` — as above, per layer.
     - A layer that holds **no engine** has no entry at all: a `text` or
       `colour` layer, or a `pat` layer that did not fit and draws nothing
@@ -899,22 +901,91 @@ and `colour` layers are free **of the layer cap** — they do not count against
 `caps.layers`. It is checked on POST, so the store never holds a scene the
 board could not show.
 
-Free of the cap is not free of an engine. A `sprite` layer still holds a
-resident `Engine` today: the compiled pattern is built (at one pixel), its
-const arrays are read as the sprite's bitmap, and the compositor never steps
-it — so it costs heap, it costs a JIT compile, and it is counted by `engines`
-above and reported in `jit.layers` with `"kind":"sprite"`. That is exactly
-the stray engine that lets a scene hold more patterns resident than
-`caps.layers` admits. **Gitea #740** makes a sprite a first-class record and
-removes the engine; until it lands, count sprites when you reason about a
-board's resident-engine budget. `text` and `colour` layers really are free —
-the compositor draws them natively, with nothing resident.
+Free of the cap is also free of an engine, since Gitea #740: a `sprite`
+layer names a record in the **sprite store** (below) and the compositor
+reads its texels straight out of that record — memory-mapped flash on the
+device — so it holds no engine, spends no heap on a frame buffer, takes no
+JIT compile and is not counted by `engines`. (Between #481 and #740 a sprite
+was a sprite-tagged PATTERN whose compiled program was built at one pixel
+and read for its const arrays; that stray engine was the "cheating" Jeremy
+objected to.) `text` and `colour` layers are free the same way — the
+compositor draws all three natively, with nothing resident. A sprite layer's
+box (`L sprite x y w h …`) is its NATURAL size when `w`/`h` are 0; with a
+size set, `fit` is `fill` (stretch, nearest neighbour), `contain` (scale to
+fit, centred) or `tile` (repeat 1:1) — docs/spec/scenes.md §4.
 
 **Transition rule.** Both stacks are resident while a crossfade runs, so a
 transition where `pattern_layers(outgoing) + pattern_layers(incoming)` exceeds
 `caps.layers` is a **hard cut**, whatever `<ms>` or the playlist's `X` line
 says. Pattern→pattern is 1 + 1, which every board affords, so the classic
 crossfade is unchanged; two two-layer scenes on a 3-layer board cut.
+
+## Sprites
+
+A **sprite** is a small palette-indexed pixel image with frames — the thing a
+scene's `sprite` layer draws (proposal §5.5b as amended by A7, Gitea #740).
+It is a first-class record with its own store, its own id namespace and its
+own routes; it is NOT a pattern, never appears in `/api/patterns`, cannot be
+activated or put in a playlist, and holds no engine when a scene shows it.
+The byte format (`LXSP` v1) is specified in **docs/spec/scenes.md §4** and
+read by `luxel_core::sprite`; this section is the HTTP surface.
+
+| route | method | body | response | where |
+|---|---|---|---|---|
+| `/api/sprites` | GET | — | see below | both |
+| `/api/sprites` | POST | one `LXSP` record (`application/octet-stream`) | `{"ok":true,"id":"<8hex>"}` | both |
+| `/api/sprites/<id>` | GET | — | the record, `application/octet-stream` | both |
+| `/api/sprites/<id>` | POST | one `LXSP` record | `{"ok":true,"id":"<id>"}` | both |
+| `/api/sprites/<id>` | DELETE | — | `{"ok":true}` | both |
+
+`GET /api/sprites`:
+
+```json
+{"sprites":[{"id":"5b17e5ef","name":"Heart","w":9,"h":8,"frames":2,"fps":8,"colors":4,"bytes":175}],
+ "max_bytes":16384}
+```
+
+The list carries the header fields only — a record's texels are fetched one
+at a time with `GET /api/sprites/<id>`, whose body IS the stored bytes (on a
+device, streamed out of the mapped store; no copy). `max_bytes` is the record
+cap: 16 KiB, which is also the device's request buffer, so a 64×64 sprite
+fits 3 frames, 32×32 fits 15, 16×16 fits 63.
+
+`POST /api/sprites` takes the record and reads the **name out of it**; a
+record whose name matches a stored sprite REPLACES it under the same id — the
+pattern store's rule — and a new name takes a fresh id. `POST /api/sprites/<id>`
+replaces THAT record whatever its name says (so a rename keeps the id and
+every scene that references it). Ids are 8 lowercase hex in **their own
+namespace** (`5b17e5e…` for the first few on a fresh device; patterns are
+`5eed1e…`, scenes `5cef0a…`), and a sprite id handed to `/api/patterns/<id>`
+is "no such pattern" whatever it decodes to.
+
+`DELETE` drops the record. A scene that names it keeps its layer and draws
+nothing there from then on — the same thing a deleted pattern does to a `pat`
+layer. The console warns with the names of the scenes that use it first.
+
+**Storage.** Sprites live in the pattern store's file log as records of their
+own kind (`patlog` header byte 34, `kind = 1`, no bytecode extent), so they
+share its capacity, its compaction, its power-cut safety and its pin
+discipline — a resident scene pins the sprite records it draws exactly as it
+pins its pattern layers. `/api/status`'s store numbers count them.
+
+**Errors** are `luxel_core::sprite::check`'s own sentence, verbatim:
+
+```json
+{"ok":false,"error":"sprite: length does not match its header"}
+{"ok":false,"error":"sprite: over the 16 KiB cap"}
+{"ok":false,"error":"sprite: index out of palette"}
+{"ok":false,"error":"no such sprite"}
+```
+
+**Migration** (the pattern store's no-migration rule). Before #740 a sprite
+was a pattern whose first line was `// @sprite w= h= frames= fps=`. The
+firmware does not convert those: the **console** does, once per record, the
+first time it loads a library that still holds one — it decodes the three
+HSV arrays, posts the record here, rewrites every scene whose sprite layer
+named the old pattern id, and deletes the pattern. The tag stays readable in
+the console for one release (`spriteFromTaggedPattern`) and nowhere else.
 
 ## Text slots
 

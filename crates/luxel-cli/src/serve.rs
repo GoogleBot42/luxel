@@ -179,6 +179,30 @@ struct StoredPattern {
     bc: Vec<u8>,
 }
 
+/// A stored SPRITE (Gitea #740): the `LXSP` record and nothing else. The
+/// name lives INSIDE the record (`luxel_core::sprite`), so nothing here
+/// holds a second copy of it — the device store follows the same rule, and
+/// that is what makes a rename just another save. API contract — keep in
+/// lockstep with firmware/src/sprites.rs:
+///   GET    /api/sprites        {"sprites":[{"id","name","w","h","frames",
+///                                          "fps","colors","bytes"},…],
+///                               "max_bytes":16384}
+///   GET    /api/sprites/<id>   the raw record (application/octet-stream)
+///   POST   /api/sprites        body = the record; a record whose name
+///                              matches an existing sprite REPLACES it
+///   POST   /api/sprites/<id>   replaces THAT record (rename allowed)
+///   DELETE /api/sprites/<id>   {"ok":true}
+#[derive(Clone)]
+struct StoredSprite {
+    id: String,
+    record: Vec<u8>,
+}
+
+/// Sprite ids: `seq ^ SPRITE_ID_MASK` off the SAME `next_id` counter the
+/// pattern store uses, so the two can never collide (firmware/src/patterns.rs
+/// `SPRITE_ID_MASK`).
+const SPRITE_ID_MASK: u32 = 0x5b17_e5ee;
+
 /// Default pixel ceiling: the mirror impersonates a strip board unless
 /// `--board panel` says otherwise (see `Hw` below), which is the firmware's
 /// own per-board split (Gitea #74).
@@ -250,6 +274,10 @@ struct State {
     vars_json: Mutex<String>,
     readouts_json: Mutex<String>,
     library: Mutex<Vec<StoredPattern>>,
+    /// The sprite store (Gitea #740). In memory like `library`, and like it
+    /// NOT persisted between runs — the mirror has no flash, and a sprite
+    /// is no more durable here than a pattern is.
+    sprites: Mutex<Vec<StoredSprite>>,
     next_id: AtomicU32,
     brightness: AtomicU8,
     protocol: AtomicU8,
@@ -1409,10 +1437,12 @@ struct Stage {
     /// One engine per `pat` layer, tagged with its layer index. A
     /// single-pattern stage holds exactly one, index 0.
     engines: Vec<(usize, Engine)>,
-    /// Sprite layers: layer index, the engine whose const pool holds the
-    /// three `spr*` arrays (never stepped), and the source its `// @sprite`
-    /// tag is read from.
-    sprites: Vec<(usize, Engine, String)>,
+    /// Sprite layers: layer index and a COPY of the `LXSP` record. No
+    /// engine since Gitea #740 — the compositor reads texels straight out
+    /// of the bytes, exactly as the firmware does out of mapped flash (the
+    /// device needs no copy at all; this one keeps the stage self-contained
+    /// while the store is behind a mutex).
+    sprites: Vec<(usize, Vec<u8>)>,
     /// Composite output (scene stages only).
     out: Vec<[u8; 3]>,
     /// The SHARED full-frame driver (Gitea #732) — the same walk the device
@@ -1426,7 +1456,7 @@ struct Stage {
 struct MirrorHost<'a> {
     state: &'a State,
     engines: &'a mut Vec<(usize, Engine)>,
-    sprites: &'a [(usize, Engine, String)],
+    sprites: &'a [(usize, Vec<u8>)],
     text: &'a mut String,
 }
 
@@ -1439,8 +1469,8 @@ impl luxel_core::compose::SceneHost for MirrorHost<'_> {
     }
 
     fn sprite(&mut self, layer: usize) -> Option<luxel_core::compose::SpriteView<'_>> {
-        let (_, e, src) = self.sprites.iter().find(|(li, _, _)| *li == layer)?;
-        luxel_core::compose::sprite_view(e, src)
+        let (_, record) = self.sprites.iter().find(|(li, _)| *li == layer)?;
+        luxel_core::compose::SpriteView::parse_trusted(record)
     }
 
     fn text(&mut self, _layer: usize, source: &luxel_core::scene::TextSource) -> Option<&str> {
@@ -1545,15 +1575,15 @@ impl Stage {
 }
 
 /// Build a scene's stage: one engine per `pat` layer (bottom → top), one
-/// never-stepped engine per `sprite` layer, and the compositor that draws
-/// them. Refuses a scene with more `pat` layers than `caps.layers`.
+/// record per `sprite` layer, and the compositor that draws them. Refuses a
+/// scene with more `pat` layers than `caps.layers`.
 fn build_stage(state: &State, sc: &luxel_core::scene::Scene) -> Result<Stage, String> {
     scene_fits_layers(state, sc)?;
     let n = state.pixel_count.load(Ordering::Relaxed);
     let mut comp = luxel_core::compose::Compositor::new(scene_grid(state));
     comp.set_scene(sc);
     let mut engines: Vec<(usize, Engine)> = Vec::new();
-    let mut sprites: Vec<(usize, Engine, String)> = Vec::new();
+    let mut sprites: Vec<(usize, Vec<u8>)> = Vec::new();
     for (i, l) in sc.layers.iter().enumerate() {
         match &l.body {
             luxel_core::scene::LayerBody::Pattern(p) => {
@@ -1575,12 +1605,12 @@ fn build_stage(state: &State, sc: &luxel_core::scene::Scene) -> Result<Stage, St
                 engines.push((i, e));
             }
             luxel_core::scene::LayerBody::Sprite { id } => {
-                // The engine is built and never stepped: construction runs
-                // top-level init, which is what turns `var sprH = […]` into
-                // the const array `sprite_view` reads (docs/spec/scenes.md §4).
-                let Some(sp) = pattern_by_id(state, id) else { continue };
-                let Ok(prog) = luxel_core::bytecode::deserialize(&sp.bc) else { continue };
-                sprites.push((i, engine_now(state, prog, n), sp.source));
+                // No engine, no bytecode, no budget: the record IS the
+                // texels (Gitea #740). An id the sprite store does not hold
+                // simply draws nothing, like a `pat` layer whose pattern is
+                // missing.
+                let Some(sp) = sprite_by_id(state, id) else { continue };
+                sprites.push((i, sp.record));
             }
             _ => {}
         }
@@ -2195,6 +2225,121 @@ fn patterns_delete(state: &State, id: &str) -> String {
         String::from("{\"ok\":true}")
     } else {
         String::from("{\"ok\":false,\"error\":\"no such pattern\"}")
+    }
+}
+
+// ---- sprites (Gitea #740; see firmware/src/sprites.rs for the same
+//      contract, and `luxel_core::sprite` for the record itself) ----
+
+/// The name a record carries, or `""` for a record that will not parse
+/// (which cannot get into the store — every write goes through
+/// `sprite::check` first).
+fn sprite_name(record: &[u8]) -> String {
+    luxel_core::sprite::SpriteView::parse(record)
+        .map(|s| s.name.to_string())
+        .unwrap_or_default()
+}
+
+fn sprite_by_id(state: &State, id: &str) -> Option<StoredSprite> {
+    state.sprites.lock().unwrap().iter().find(|s| s.id == id).cloned()
+}
+
+/// `GET /api/sprites`. Geometry comes out of each record's fixed header —
+/// the firmware reads exactly those 12 bytes per sprite, and this is the
+/// same numbers in the same order.
+fn sprites_list_json(state: &State) -> String {
+    let sprites = state.sprites.lock().unwrap();
+    let items: Vec<String> = sprites
+        .iter()
+        .map(|s| {
+            let h = luxel_core::sprite::SpriteHead::parse(&s.record).unwrap_or_default();
+            format!(
+                "{{\"id\":\"{}\",\"name\":\"{}\",\"w\":{},\"h\":{},\"frames\":{},\"fps\":{},\"colors\":{},\"bytes\":{}}}",
+                s.id,
+                json_escape(&sprite_name(&s.record)),
+                h.w,
+                h.h,
+                h.frames,
+                h.fps,
+                h.colors,
+                s.record.len()
+            )
+        })
+        .collect();
+    format!(
+        "{{\"sprites\":[{}],\"max_bytes\":{}}}",
+        items.join(","),
+        luxel_core::sprite::SPRITE_MAX_BYTES
+    )
+}
+
+/// `POST /api/sprites` (`want` = None) and `POST /api/sprites/<id>`.
+///
+/// The body is the raw record — never decoded as text. The NAME comes out
+/// of the record, so a bare POST upserts by it and `POST /<id>` replaces
+/// that record whatever its name says (which is how a rename works).
+fn sprites_save(state: &State, body: &[u8], want: Option<&str>) -> String {
+    if let Err(why) = luxel_core::sprite::check(body) {
+        return format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(why));
+    }
+    let name = sprite_name(body);
+    let mut sprites = state.sprites.lock().unwrap();
+    let at = match want {
+        Some(id) => match sprites.iter().position(|s| s.id == id) {
+            Some(i) => Some(i),
+            None => return String::from("{\"ok\":false,\"error\":\"no such sprite\"}"),
+        },
+        None => sprites.iter().position(|s| sprite_name(&s.record) == name),
+    };
+    let id = match at {
+        Some(i) => {
+            sprites[i].record = body.to_vec();
+            sprites[i].id.clone()
+        }
+        None => {
+            let id = format!(
+                "{:08x}",
+                state.next_id.fetch_add(1, Ordering::Relaxed) ^ SPRITE_ID_MASK
+            );
+            sprites.push(StoredSprite { id: id.clone(), record: body.to_vec() });
+            id
+        }
+    };
+    drop(sprites);
+    // A resident scene's stage holds a COPY of each sprite layer's record
+    // (the device reads the mapped store in place and so sees a re-save
+    // immediately), so re-enter the scene to keep the two the same.
+    reload_scene_using_sprite(state, &id);
+    format!("{{\"ok\":true,\"id\":\"{}\"}}", id)
+}
+
+/// `DELETE /api/sprites/<id>`. A scene layer still naming it draws nothing
+/// from then on — the same as a deleted pattern on a `pat` layer, and the
+/// reason nothing else has to be cleaned up here.
+fn sprites_delete(state: &State, id: &str) -> String {
+    let mut sprites = state.sprites.lock().unwrap();
+    let before = sprites.len();
+    sprites.retain(|s| s.id != id);
+    let gone = sprites.len() < before;
+    drop(sprites);
+    if !gone {
+        return String::from("{\"ok\":false,\"error\":\"no such sprite\"}");
+    }
+    reload_scene_using_sprite(state, id);
+    String::from("{\"ok\":true}")
+}
+
+/// Re-enter the ACTIVE scene when it has a `sprite` layer naming `id`.
+fn reload_scene_using_sprite(state: &State, id: &str) {
+    let active = state.active_scene.lock().unwrap().clone();
+    if active.is_empty() {
+        return;
+    }
+    let uses = scene_by_id(state, &active).is_some_and(|sc| {
+        sc.layers.iter().any(|l| l.sprite_id() == Some(id))
+    });
+    if uses {
+        push(state, Msg::SceneReload(active));
     }
 }
 
@@ -3271,6 +3416,46 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
             };
             respond(&mut stream, 200, "application/json", r.as_bytes());
         }
+        // ---- sprites (Gitea #740; docs/api.md "Sprites") ----
+        ("GET", "/api/sprites") => {
+            respond(&mut stream, 200, "application/json", sprites_list_json(&state).as_bytes());
+        }
+        ("POST", "/api/sprites") => {
+            // the body is a binary LXSP record — never decoded as text
+            let r = sprites_save(&state, &req.body, None);
+            respond(&mut stream, 200, "application/json", r.as_bytes());
+        }
+        (m, p) if p.starts_with("/api/sprites/") => {
+            let id = &p["/api/sprites/".len()..];
+            match m {
+                // the record itself, as the device serves it
+                "GET" => match sprite_by_id(&state, id) {
+                    Some(s) => {
+                        respond(&mut stream, 200, "application/octet-stream", &s.record);
+                    }
+                    None => respond(
+                        &mut stream,
+                        200,
+                        "application/json",
+                        b"{\"ok\":false,\"error\":\"no such sprite\"}",
+                    ),
+                },
+                "POST" => {
+                    let r = sprites_save(&state, &req.body, Some(id));
+                    respond(&mut stream, 200, "application/json", r.as_bytes());
+                }
+                "DELETE" => {
+                    let r = sprites_delete(&state, id);
+                    respond(&mut stream, 200, "application/json", r.as_bytes());
+                }
+                _ => respond(
+                    &mut stream,
+                    200,
+                    "application/json",
+                    b"{\"ok\":false,\"error\":\"bad sprites route\"}",
+                ),
+            }
+        }
         // ---- text slots (Gitea #485) ----
         ("GET", "/api/text") => {
             respond(&mut stream, 200, "application/json", text_json(&state).as_bytes());
@@ -3588,6 +3773,7 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         vars_json: Mutex::new(String::from("{}")),
         readouts_json: Mutex::new(String::from("{}")),
         library: Mutex::new(Vec::new()),
+        sprites: Mutex::new(Vec::new()),
         next_id: AtomicU32::new(0x1a5e_0001),
         brightness: AtomicU8::new(4), // matches the firmware's default
         protocol: AtomicU8::new(0), // sk9822

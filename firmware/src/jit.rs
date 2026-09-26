@@ -584,11 +584,13 @@ static REASON: AtomicU8 = AtomicU8::new(u8::MAX);
 /// Stack slots `/api/status` can describe, indexed by SCENE LAYER index
 /// (bottom → top; a bare pattern is layer 0 of a one-layer stack).
 ///
-/// Eight: `luxel_core::caps::MAX_LAYERS` is four PATTERN layers, a scene
-/// may interleave `text`/`colour` layers between them, and every `sprite`
-/// layer holds an engine of its own today (Gitea #740 removes that one).
-/// A stack deeper than this describes its first eight layers; `engines`
-/// still counts them all, so the shortfall is visible rather than silent.
+/// Eight: `luxel_core::caps::MAX_LAYERS` is four PATTERN layers and a scene
+/// may interleave `text`/`colour`/`sprite` layers between them — none of
+/// which holds an engine, so none of which is ever armed (Gitea #740 took
+/// the sprite's engine away; its slot reads `state:"none"` like a text
+/// layer's). A stack deeper than this describes its first eight layers;
+/// `engines` still counts them all, so the shortfall is visible rather
+/// than silent.
 pub const MAX_SLOTS: usize = 8;
 
 /// A packed slot's "no reason" value. Five bits, so not `u8::MAX` — the
@@ -601,7 +603,7 @@ const NO_REASON: u8 = 31;
 /// |---|---|
 /// | 0..2 | state, [`STATE_OFF`]…[`STATE_NONE`] — `NONE` = this layer holds no engine |
 /// | 2..7 | index into [`REASONS`], or [`NO_REASON`] |
-/// | 7 | 1 = a SPRITE layer's engine |
+/// | 7 | unused (was "a SPRITE layer's engine", until #740 removed it) |
 ///
 /// Packed into one byte because every static here comes straight out of
 /// `.stack`, and the classic-ESP32 boards have ~100 B of it over the floor
@@ -641,21 +643,21 @@ static SLOT_BYTES: [AtomicU16; MAX_SLOTS] = [
 static STACK_LAYERS: AtomicU8 = AtomicU8::new(0);
 
 /// Which slot the next compile attempt belongs to, as [`arm`] left it:
-/// bits 0..6 the layer index, bit 6 sprite, bit 7 primary. The default is
-/// "layer 0, primary", which is what a bare pattern is, so a compile that
-/// reached here without an `arm` still records somewhere sane.
+/// bits 0..7 the layer index, bit 7 primary. The default is "layer 0,
+/// primary", which is what a bare pattern is, so a compile that reached
+/// here without an `arm` still records somewhere sane.
 static ARMED: AtomicU8 = AtomicU8::new(ARM_PRIMARY);
-const ARM_SPRITE: u8 = 1 << 6;
 const ARM_PRIMARY: u8 = 1 << 7;
-/// Largest layer index [`ARMED`] can carry (six bits).
-const ARM_LAYER_MAX: usize = 0x3F;
+/// Largest layer index [`ARMED`] can carry (seven bits). Was six while
+/// bit 6 flagged a sprite layer's engine (Gitea #740 retired that).
+const ARM_LAYER_MAX: usize = 0x7F;
 
-const fn pack_slot(state: u8, reason: u8, sprite: bool) -> u8 {
-    (state & 3) | ((reason & 31) << 2) | if sprite { 0x80 } else { 0 }
+const fn pack_slot(state: u8, reason: u8) -> u8 {
+    (state & 3) | ((reason & 31) << 2)
 }
 
 /// A layer that holds no engine.
-const EMPTY_SLOT: u8 = pack_slot(STATE_NONE, NO_REASON, false);
+const EMPTY_SLOT: u8 = pack_slot(STATE_NONE, NO_REASON);
 
 /// The `jit.reason` vocabulary. `Refusal::id()` is the emitter's half of
 /// it (docs/jit-design.md §4a) and the browser's compile-time lint uses the
@@ -698,7 +700,7 @@ fn set_state(state: u8, reason: Option<&str>, bytes: usize, us: u32, place: u8) 
     if let (Some(s), Some(b)) = (SLOT.get(layer), SLOT_BYTES.get(layer)) {
         b.store(bytes.min(u16::MAX as usize) as u16, Ordering::Relaxed);
         s.store(
-            pack_slot(state, reason.map_or(NO_REASON, reason_index), a & ARM_SPRITE != 0),
+            pack_slot(state, reason.map_or(NO_REASON, reason_index)),
             Ordering::Release,
         );
     }
@@ -736,13 +738,13 @@ pub fn reset_stack() {
 /// and a bare pattern, which is layer 0 of a one-layer stack.
 ///
 /// `primary` marks the one engine the scalar block describes: a bare
-/// pattern, or a scene's base layer. `sprite` marks a layer whose engine
-/// is built and read but never stepped.
-pub fn arm(layer: usize, primary: bool, sprite: bool) {
+/// pattern, or a scene's base layer.
+///
+/// Only a PATTERN layer is ever armed. The `sprite` flag this used to take
+/// is gone with the sprite's engine (Gitea #740): a sprite layer is
+/// `clear_slot`ed like a text or colour layer.
+pub fn arm(layer: usize, primary: bool) {
     let mut a = layer.min(ARM_LAYER_MAX) as u8;
-    if sprite {
-        a |= ARM_SPRITE;
-    }
     if primary {
         a |= ARM_PRIMARY;
     }
@@ -784,7 +786,7 @@ pub fn commit_stack(layers: usize) {
 pub fn single() {
     reset_stack();
     commit_stack(1);
-    arm(0, true, false);
+    arm(0, true);
 }
 
 /// The render task's resident-engine count, once per frame loop. Zero
@@ -841,13 +843,15 @@ pub fn jit_status() -> (
 }
 
 /// One resident engine's report for `/api/status`'s `jit.layers`
-/// (Gitea #718), by SCENE LAYER index: `(state, reason, code_bytes,
-/// sprite)`, with the same wire spellings [`jit_status`] uses.
+/// (Gitea #718), by SCENE LAYER index: `(state, reason, code_bytes)`, with
+/// the same wire spellings [`jit_status`] uses.
 ///
-/// `None` where that layer holds no engine — a `text` or `colour` layer,
-/// a `pat` layer that did not fit and draws nothing, or a layer past the
-/// end of the resident stack.
-pub fn slot_status(layer: usize) -> Option<(&'static str, Option<&'static str>, u32, bool)> {
+/// `None` where that layer holds no engine — a `text`, `colour` or
+/// `sprite` layer, a `pat` layer that did not fit and draws nothing, or a
+/// layer past the end of the resident stack. Every layer this DOES answer
+/// for is a pattern layer, which is why the `sprite` flag it used to
+/// return is gone (Gitea #740).
+pub fn slot_status(layer: usize) -> Option<(&'static str, Option<&'static str>, u32)> {
     let v = SLOT.get(layer)?.load(Ordering::Acquire);
     let state = match v & 3 {
         STATE_NATIVE => "native",
@@ -864,7 +868,6 @@ pub fn slot_status(layer: usize) -> Option<(&'static str, Option<&'static str>, 
             REASONS.get(r as usize).copied()
         },
         SLOT_BYTES[layer].load(Ordering::Relaxed) as u32,
-        v & 0x80 != 0,
     ))
 }
 

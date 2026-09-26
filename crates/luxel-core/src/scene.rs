@@ -12,7 +12,7 @@
 //! S <id> <name…>
 //! L <type> <x> <y> <w> <h> <blend> <opacity> <key> <fit> <flags>
 //!   N <name…>                     layer display name
-//!   I <patternId>                 pat, sprite
+//!   I <id>                        pat: pattern id, sprite: sprite id
 //!   C <name> <raw…>               pat: control override, raw 16.16 ints
 //!   P <mode>                      pat: projection override
 //!   R <pct> <pos>:<rrggbb> …      pat: colour ramp
@@ -390,10 +390,22 @@ impl Layer {
     pub fn kind(&self) -> LayerKind {
         self.body.kind()
     }
-    /// The store pattern id a `pat` or `sprite` layer names, if any.
+    /// The store PATTERN id a `pat` layer names, if any.
+    ///
+    /// A `sprite` layer's `I` line carries a SPRITE id (a different store
+    /// and a different id mask since Gitea #740) — [`Layer::sprite_id`].
+    /// The two used to share this accessor, which is exactly how a sprite
+    /// id could reach a pattern lookup.
     pub fn pattern_id(&self) -> Option<&str> {
         match &self.body {
             LayerBody::Pattern(p) if !p.id.is_empty() => Some(&p.id),
+            _ => None,
+        }
+    }
+
+    /// The sprite-store id a `sprite` layer names, if any.
+    pub fn sprite_id(&self) -> Option<&str> {
+        match &self.body {
             LayerBody::Sprite { id } if !id.is_empty() => Some(id),
             _ => None,
         }
@@ -1191,6 +1203,24 @@ mod tests {
         let s = parse(wire).unwrap();
         assert_eq!(s.layers[0].name, "");
         assert_eq!(s.layers[0].pattern_id(), Some("0123abcd"));
+        assert_eq!(s.layers[0].sprite_id(), None);
+    }
+
+    /// A `sprite` layer's `I` line is a SPRITE-store id, and the two
+    /// accessors must not answer for each other's layer kind — that is how
+    /// a sprite id could otherwise reach a pattern lookup (Gitea #740).
+    #[test]
+    fn a_sprite_layers_id_is_not_a_pattern_id() {
+        let wire = "S 0000000a n\nL sprite 0 0 0 0 normal 100 none fill 1\nI 5b17e5ef\n";
+        assert_eq!(round(wire), wire, "the binding line round-trips unchanged");
+        let s = parse(wire).unwrap();
+        assert_eq!(s.layers[0].kind(), LayerKind::Sprite);
+        assert_eq!(s.layers[0].sprite_id(), Some("5b17e5ef"));
+        assert_eq!(s.layers[0].pattern_id(), None);
+        // an empty binding answers neither
+        let bare = parse("S 0000000a n\nL sprite 0 0 0 0 normal 100 none fill 1\n").unwrap();
+        assert_eq!(bare.layers[0].sprite_id(), None);
+        assert_eq!(bare.layers[0].pattern_id(), None);
     }
 
     #[test]

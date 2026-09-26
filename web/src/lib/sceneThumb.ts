@@ -8,12 +8,12 @@
 // `SceneRenderer` per tile instead — building and freeing N engines per frame
 // is not a thing to do sixty times a second.
 
-import { SceneRenderer, type SourceLookup } from "./sceneRender";
+import { SceneRenderer, type SourceLookup, type SpriteLookup } from "./sceneRender";
 import type { Luxel } from "./luxel";
 import type { Scene } from "./scene";
 import { layoutFor, thumbLayout, type Layout } from "../stores/geometry";
 
-export type { SourceLookup };
+export type { SourceLookup, SpriteLookup };
 export { SceneRenderer };
 
 /**
@@ -36,8 +36,9 @@ export function sceneThumb(
   lookup: SourceLookup,
   w: number,
   h: number,
+  sprites: SpriteLookup = () => null,
 ): { px: Uint8Array; layout: Layout } | null {
-  return sceneThumbOn(lx, scene, lookup, gridRig(w, h));
+  return sceneThumbOn(lx, scene, lookup, gridRig(w, h), 0, sprites);
 }
 
 /** The same, on a Layout you already have (the device's, shrunk to a tile). */
@@ -47,11 +48,12 @@ export function sceneThumbOn(
   lookup: SourceLookup,
   rig: Layout,
   maxCells = 0,
+  sprites: SpriteLookup = () => null,
 ): { px: Uint8Array; layout: Layout } | null {
   const small = maxCells > 0 ? thumbLayout(rig, maxCells) : rig;
   const r = new SceneRenderer(lx, small);
   try {
-    if (r.setScene(scene, lookup)) return null;
+    if (r.setScene(scene, lookup, false, sprites)) return null;
     // Two frames: the first runs each pattern's top-level init (and the
     // compositor's first `advance`), the second is the one with motion in it.
     r.frame(0);

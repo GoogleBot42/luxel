@@ -160,6 +160,30 @@ reported them — those three write through to the LIVE strip settings, and a
 changed `pin` arms `WANT_DATA_PIN` for the next boot, so carrying a guessed
 number in changes Jeremy's device.
 
+## 5c. Exercising matrix-only features on the strip (proven 2026-09-26)
+
+Scenes' native layers (sprite, text, colour) draw only on a grid — on the
+Athom's 144×1 strip the compositor's grid is empty and they draw NOTHING,
+so a scene check there proves only the engine budget, never the pixels
+(#740 first tried `/api/pixels` and read zeros). 144 = 12×12, so make it a
+matrix for the test, reversibly, with no reboot:
+
+```sh
+curl -s http://192.168.0.183/api/layout > layout-before.json     # keep it
+curl -s -X POST --data-binary $'matrix 12 12 1 1 tl row 0 0\n' http://192.168.0.183/api/layout
+# … activate the scene, read /api/pixels (row-major: pixel 12 is row 1) …
+curl -s -X POST --data-binary $'strip 144\nout 0 18 ws2812 rgb 144\nproj1d x\n' http://192.168.0.183/api/layout
+curl -s http://192.168.0.183/api/layout | cmp - layout-before.json && echo restored
+```
+
+The matrix reply says `"reboot_required":true` but the compositor grid
+switches live (`geom.w/h` read 12×12 at once); the strip reply says
+`false` and the GET body is byte-identical to the one saved. Re-read
+`/api/config`, `/api/brightness` and `/api/playlist` before AND after, and
+`POST /api/playlist/play <index>` afterwards — activating a scene parks
+the playlist. Delete the test scene and any test sprite (`DELETE
+/api/sprites/<id>`) so the store is as found.
+
 ## 6. The pre-guard heap-regions panic (root-caused + fixed 2026-08-16, PR #50)
 
 The intermittent first-boot panic `esp-alloc: Exceeded the maximum of 3

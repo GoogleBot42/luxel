@@ -23,7 +23,8 @@
   export let layerCap = 2;
   /** How many pattern layers the scene already has. */
   export let patternLayers = 0;
-  /** Sprite geometry by layer index, for the `sprite · 9×8` metadata line. */
+  /** Sprite metadata by layer index — `sprite · 9×8 · 2 frames`, read out of
+   *  the sprite store by the page (#740). */
   export let spriteDims: Record<number, string> = {};
   /** The pattern's display name by layer index (only the host knows it). */
   export let patternNames: Record<number, string> = {};

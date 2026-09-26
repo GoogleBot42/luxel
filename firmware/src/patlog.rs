@@ -37,7 +37,7 @@
 //! 20  u32 bc_len      LXBC, exact bytes
 //! 24  u32 src_hash    FNV-1a of the source
 //! 28  u32 bc_hash     FNV-1a of the bytecode
-//! 32  u8  name_len | u8 ver | u16 0
+//! 32  u8  name_len | u8 ver | u8 kind | u8 0
 //! 36  u32 hdr_hash    FNV-1a of bytes 0..36 ++ the name
 //! --- written LAST, and what makes the record real -------------------
 //! 40  u32 commit      COMMIT, or 0xFFFFFFFF while the record is torn
@@ -95,6 +95,18 @@ pub const MAX_NAME: usize = 64;
 /// record, so a format change costs no boot-time erase of the arena: the
 /// scan finds nothing and the first append erases the pages it lands on.
 pub const VER: u8 = 1;
+
+/// A stored PATTERN: source text + LXBC, both non-empty.
+pub const KIND_PATTERN: u8 = 0;
+/// A stored SPRITE (Gitea #740): the `LXSP` record occupies the SOURCE
+/// extent and there is no bytecode, so `bc_len` is 0.
+///
+/// `kind` lives at header byte 34 — one of the two zero-fill bytes beside
+/// `name_len`/`ver`, and inside the hashed prefix, so a flipped kind bit
+/// breaks `hdr_hash` like any other field. [`VER`] deliberately does NOT
+/// move for it: every record written before #740 has 0 there and reads
+/// back as [`KIND_PATTERN`], which is exactly what it is.
+pub const KIND_SPRITE: u8 = 1;
 /// Largest source text the store accepts. Unchanged from #330.
 pub const MAX_SOURCE: u32 = 32 * 1024;
 /// Largest LXBC the store accepts. LXBC can run larger than its source.
@@ -119,6 +131,8 @@ const O_SRC_HASH: usize = 24;
 const O_BC_HASH: usize = 28;
 const O_NAME_LEN: usize = 32;
 const O_VER: usize = 33;
+/// Record kind ([`KIND_PATTERN`] / [`KIND_SPRITE`]) — zero fill before #740.
+const O_KIND: usize = 34;
 const O_HDR_HASH: usize = 36;
 /// Offset of the commit word inside a header.
 pub const O_COMMIT: u32 = 40;
@@ -169,6 +183,9 @@ pub struct Rec {
     pub src_hash: u32,
     pub bc_hash: u32,
     pub name_len: u8,
+    /// [`KIND_PATTERN`] or [`KIND_SPRITE`]. Defaults to 0, which is what
+    /// every pre-#740 record on flash reads back as.
+    pub kind: u8,
     /// The `dead` word has been written: superseded or deleted.
     pub dead: bool,
 }
@@ -200,13 +217,22 @@ impl Rec {
         HDR + align4(name_len as u32) + align4(src_len) + align4(bc_len)
     }
     /// Rejects a header whose fields could not have come from this store.
+    ///
+    /// A SPRITE record has no bytecode, so `bc_len == 0` is legal for
+    /// [`KIND_SPRITE`] and only for it — a zero-bc PATTERN header is still
+    /// junk, and an unknown `kind` is junk whatever its lengths say
+    /// (Gitea #740).
     pub fn plausible(&self) -> bool {
+        let bc_ok = match self.kind {
+            KIND_PATTERN => self.bc_len >= 1 && self.bc_len <= MAX_BC,
+            KIND_SPRITE => self.bc_len == 0,
+            _ => return false,
+        };
         self.name_len as usize >= 1
             && self.name_len as usize <= MAX_NAME
             && self.src_len >= 1
             && self.src_len <= MAX_SOURCE
-            && self.bc_len >= 1
-            && self.bc_len <= MAX_BC
+            && bc_ok
     }
 }
 
@@ -224,6 +250,7 @@ pub fn encode_header(rec: &Rec, name: &[u8], out: &mut [u8; HDR_PREFIX]) {
     out[O_BC_HASH..O_BC_HASH + 4].copy_from_slice(&rec.bc_hash.to_le_bytes());
     out[O_NAME_LEN] = rec.name_len;
     out[O_VER] = VER;
+    out[O_KIND] = rec.kind;
     let h = fnv1a_update(fnv1a(&out[..O_HDR_HASH]), &name[..rec.name_len as usize]);
     out[O_HDR_HASH..O_HDR_HASH + 4].copy_from_slice(&h.to_le_bytes());
 }
@@ -265,6 +292,7 @@ pub fn parse_header(off: u32, b: &[u8]) -> Option<(Rec, &[u8])> {
         src_hash: rd(b, O_SRC_HASH),
         bc_hash: rd(b, O_BC_HASH),
         name_len,
+        kind: b[O_KIND],
         dead: rd(b, O_DEAD as usize) != ERASED,
     };
     if !rec.plausible() {
@@ -846,19 +874,26 @@ mod tests {
         }
     }
 
-    /// A pattern to store.
+    /// A file to store — a pattern (`kind` 0) or a sprite (`kind` 1, whose
+    /// payload is all in the SOURCE extent and whose `bc` is empty).
     #[derive(Clone)]
     struct Pat {
         seq: u32,
         name: String,
         src: Vec<u8>,
         bc: Vec<u8>,
+        kind: u8,
     }
 
     fn pat(seq: u32, name: &str, src_len: usize, bc_len: usize) -> Pat {
         let src: Vec<u8> = (0..src_len).map(|i| b'a' + ((i * 7 + seq as usize) % 26) as u8).collect();
         let bc: Vec<u8> = (0..bc_len).map(|i| (i * 31 + seq as usize * 13) as u8).collect();
-        Pat { seq, name: name.to_string(), src, bc }
+        Pat { seq, name: name.to_string(), src, bc, kind: KIND_PATTERN }
+    }
+
+    /// A sprite record: one `src` extent, NO bytecode (Gitea #740).
+    fn spr(seq: u32, name: &str, src_len: usize) -> Pat {
+        Pat { kind: KIND_SPRITE, bc: Vec::new(), ..pat(seq, name, src_len, 0) }
     }
 
     fn rec_of(p: &Pat, off: u32, stamp: u32) -> Rec {
@@ -871,6 +906,7 @@ mod tests {
             src_hash: fnv1a(&p.src),
             bc_hash: fnv1a(&p.bc),
             name_len: p.name.len() as u8,
+            kind: p.kind,
             dead: false,
         }
     }
@@ -1098,6 +1134,155 @@ mod tests {
         assert_eq!(idx.len(), 1);
         assert_eq!(idx[0].0, b);
         assert_eq!(read(&sim, b.src_off(), b.src_len), v2.src);
+    }
+
+    // --- sprite records (Gitea #740) -----------------------------------
+
+    #[test]
+    fn a_sprite_record_has_no_bytecode_and_a_pattern_still_must() {
+        // the shapes `plausible` accepts
+        let ok = Rec { name_len: 4, src_len: 40, bc_len: 0, kind: KIND_SPRITE, ..Default::default() };
+        assert!(ok.plausible());
+        assert_eq!(ok.size(), HDR + 4 + 40, "a sprite's file is header + name + record");
+        assert_eq!(ok.bc_off(), ok.end(), "the bytecode extent is empty");
+        // a PATTERN with no bytecode is still junk
+        assert!(!Rec { kind: KIND_PATTERN, ..ok }.plausible());
+        // …and a sprite carrying bytecode is junk too: the store would be
+        // describing bytes nothing writes
+        assert!(!Rec { bc_len: 8, ..ok }.plausible());
+        // every kind outside {0, 1} is junk whatever its lengths say
+        for k in 2u8..=255 {
+            assert!(!Rec { kind: k, ..ok }.plausible(), "kind {k}");
+            assert!(
+                !Rec { kind: k, bc_len: 8, ..ok }.plausible(),
+                "kind {k} with bytecode"
+            );
+        }
+        // an empty payload hashes to FNV's seed, which is what the commit
+        // step re-reads through the mapping and compares
+        assert_eq!(fnv1a(&[]), hash_range(&mut Sim::new(PAGE), 0, 0).unwrap());
+    }
+
+    #[test]
+    fn a_sprite_kind_survives_the_header_round_trip() {
+        let p = spr(7, "Heart", 96);
+        let rec = rec_of(&p, 2 * PAGE, 4);
+        let mut hdr = [0u8; HDR_PREFIX];
+        encode_header(&rec, p.name.as_bytes(), &mut hdr);
+        let mut buf = vec![0xFFu8; HDR as usize + MAX_NAME];
+        buf[..HDR_PREFIX].copy_from_slice(&hdr);
+        buf[O_COMMIT as usize..O_COMMIT as usize + 4].copy_from_slice(&COMMIT.to_le_bytes());
+        buf[HDR as usize..HDR as usize + p.name.len()].copy_from_slice(p.name.as_bytes());
+        let (got, name) = parse_header(rec.off, &buf).expect("a sprite header parses");
+        assert_eq!(got, rec);
+        assert_eq!(got.kind, KIND_SPRITE);
+        assert_eq!(name, p.name.as_bytes());
+        // kind is inside the hashed prefix, so flipping it breaks hdr_hash
+        // rather than turning a sprite into a pattern
+        let mut bad = buf.clone();
+        bad[O_KIND] = KIND_PATTERN;
+        assert!(parse_header(rec.off, &bad).is_none());
+        // a pre-#740 record (zero fill at byte 34) reads back as a pattern
+        let q = pat(7, "Heart", 96, 20);
+        let prec = rec_of(&q, 2 * PAGE, 4);
+        assert_eq!(prec.kind, KIND_PATTERN);
+        let mut hdr = [0u8; HDR_PREFIX];
+        encode_header(&prec, q.name.as_bytes(), &mut hdr);
+        assert_eq!(hdr[O_KIND], 0, "byte 34 is what it always was for a pattern");
+    }
+
+    #[test]
+    fn sprites_and_patterns_share_one_log() {
+        let mut sim = Sim::new(32 * PAGE);
+        let files = [
+            pat(0, "a", 500, 700),
+            spr(1, "Heart", 96),
+            pat(2, "b", 300, 400),
+            spr(3, "Ghost", 1200),
+        ];
+        let mut cursor = 0;
+        let mut recs = Vec::new();
+        for (i, f) in files.iter().enumerate() {
+            let r = append(&mut sim, f, cursor, i as u32 + 1).expect("append fits");
+            assert_eq!(r.off, cursor, "a sprite packs like any other file");
+            cursor = r.end();
+            recs.push(r);
+        }
+        let (found, s) = all(&mut sim);
+        assert_eq!(found.len(), 4);
+        assert_eq!(s.resync, 0);
+        assert_eq!(s.torn, 0, "a zero-length bytecode extent is not a torn payload");
+        assert_eq!(s.cursor, cursor);
+        for (i, (r, n)) in found.iter().enumerate() {
+            assert_eq!(*r, recs[i]);
+            assert_eq!(r.kind, files[i].kind, "{n} came back with its kind");
+            assert_eq!(read(&sim, r.src_off(), r.src_len), files[i].src);
+        }
+
+        // …and a compaction keeps every kind where it belongs. Retire the
+        // first pattern, repack, and the two sprites must still read back.
+        assert!(mark_dead(&mut sim, &recs[0]));
+        let keep: Vec<Rec> = index(&mut sim).into_iter().map(|(r, _)| r).collect();
+        let (_, packed) = compact(&mut sim, &keep, &[]);
+        assert!(packed < cursor, "the dead pattern's bytes came back");
+        let snap = snapshot(&mut sim);
+        assert_eq!(snap.len(), 3);
+        for (r, _) in index(&mut sim) {
+            let want = files.iter().find(|f| f.seq == r.seq).unwrap();
+            assert_eq!(r.kind, want.kind, "seq {} kept its kind", r.seq);
+            assert_eq!(read(&sim, r.src_off(), r.src_len), want.src);
+            assert_eq!(r.bc_len, want.bc.len() as u32);
+        }
+    }
+
+    #[test]
+    fn a_cut_at_every_write_boundary_of_a_sprite_save_is_survivable() {
+        let v1 = spr(0, "Heart", 96);
+        let mut v2 = v1.clone();
+        v2.src = vec![0x5A; 240];
+        let other = pat(1, "other", 300, 300);
+
+        let mut probe = Sim::new(16 * PAGE);
+        let a = append(&mut probe, &v1, 0, 1).unwrap();
+        let o = append(&mut probe, &other, a.end(), 2).unwrap();
+        let before = probe.ops;
+        let _b = append(&mut probe, &v2, o.end(), 3).unwrap();
+        assert!(mark_dead(&mut probe, &a));
+        let total = probe.ops - before;
+
+        for cut in 0..=total {
+            let mut sim = Sim::new(16 * PAGE);
+            let a = append(&mut sim, &v1, 0, 1).unwrap();
+            let o = append(&mut sim, &other, a.end(), 2).unwrap();
+            sim.budget = sim.ops + cut;
+            if append(&mut sim, &v2, o.end(), 3).is_some() {
+                mark_dead(&mut sim, &a);
+            }
+            sim.dead = false;
+            sim.budget = usize::MAX;
+            let snap = snapshot(&mut sim);
+            // the bystander pattern is always whole
+            let others: Vec<_> = snap.iter().filter(|s| s.0 == 1).collect();
+            assert_eq!(others.len(), 1, "cut {cut}: the bystander must survive");
+            assert_eq!(others[0].2, other.src);
+            assert_eq!(others[0].3, other.bc);
+            // the sprite is exactly one of its two versions, never a mix
+            let mine: Vec<_> = snap.iter().filter(|s| s.0 == 0).collect();
+            assert_eq!(mine.len(), 1, "cut {cut}: exactly one live version");
+            assert!(
+                mine[0].2 == v1.src || mine[0].2 == v2.src,
+                "cut {cut}: a version that was never written"
+            );
+            assert!(mine[0].3.is_empty(), "cut {cut}: a sprite never grows bytecode");
+            assert_eq!(mine[0].1, "Heart");
+            // and the store still works afterwards
+            let (_, s) = all(&mut sim);
+            assert!(
+                append(&mut sim, &pat(2, "after", 250, 250), s.cursor, 4).is_some(),
+                "cut {cut}: the store must still accept a save"
+            );
+            assert_eq!(snapshot(&mut sim).len(), 3, "cut {cut}");
+        }
     }
 
     #[test]
