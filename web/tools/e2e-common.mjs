@@ -66,6 +66,9 @@ export const PORT = {
     devScenes: p(51), // device-e2e: panel mirror for the scenes section (#480)
     mdPlScenes: p(52), // mockdiff: 64x64 console with a SCENE ITEM playing (S4c/S4d/S2e, #478)
     plScenes: p(53), //  device-e2e: panel mirror for the playlist/menu scene sections (#478)
+    devSprites: p(54), // device-e2e: panel mirror for the SPRITES section (#740/#741) — its
+    //                    own mirror because the `// @sprite` migration runs once, at boot,
+    //                    so the legacy pattern has to be in the store before the console opens
   },
   /** sync-e2e's UDP beacon group port. */
   sync: p(42),
