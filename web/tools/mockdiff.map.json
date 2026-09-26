@@ -2079,14 +2079,6 @@
           "why": "the mockup's excerpt frames set `margin-bottom` inline on `.sect` so the excerpt sits flush in the mockup page; the real rhythm is stated in S3, which the app matches"
         },
         {
-          "element": "datapin-sel",
-          "why": "§5.7 absence: the native mirror publishes no `data_pins` (docs/api.md), so a host with no pads shows no Data pin row — Gitea #579 gives the mirror one; on a real strip board the row is there"
-        },
-        {
-          "element": "datapin-hint",
-          "why": "same — Gitea #579"
-        },
-        {
           "element": "layout-sel",
           "property": "box width",
           "why": "the mockups draw the Layout picker 190px here and 150px in S3j and S3k; the app uses the width the two later frames agree on (Gitea #580)"
@@ -2876,10 +2868,6 @@
           "element": "orow-count",
           "property": "box width",
           "why": "Jeremy: `the pixel count input box in the output is too small` — the shared `.inp.num` is 72px, the mockup's 56px is the width he complained about"
-        },
-        {
-          "element": "orow-pin",
-          "why": "§5.7 absence: the native mirror publishes no `data_pins`, so the pad is a number field rather than the mockup's picker (Gitea #579). On a board that publishes pads it IS the `.sel` drawn here"
         },
         {
           "element": "secthead-note",

@@ -1,5 +1,83 @@
 # Update log
 
+## 2026-09-26 — mirror parity: stage timers, a per-layer `--jit`, a data pin, and scene ids on preload (#262 #757 #579 #701)
+
+Four long-standing "the native mirror cannot drive this" gaps, all in
+`crates/luxel-cli/src/serve.rs`. Each one was costing a real surface its only
+host-side test.
+
+**#262 — the stage timers are real numbers now.** `/api/status` gains
+`frame_us` / `vm_us` / `pipe_us` / `out_us` plus `dropped`, so the body has the
+firmware's shape on both hosts and `tools/hw-bench.mjs`'s `frame_us !== undefined`
+branch lights up against a mirror. Three of the five are **measured, not
+impersonated** — the mirror really renders — and averaged over the pattern
+frames in the last second on the same boundary as `fps`, which is the
+firmware's contract: `vm_us` is every engine step in the frame (both stacks
+during a crossfade), `pipe_us` is the fade blend plus the copy into the
+snapshot `GET /api/pixels` serves, which is this host's whole output pipeline
+and its preview copy in one. `out_us` and `dropped` are literal 0 for the
+reason a strip board reports 0: no output driver to time, nothing between the
+VM and a fixture to lose a frame in. A 300 px mirror at 120 fps reads
+`frame_us 182, vm_us 166, pipe_us 12`.
+
+**#757 — `--jit` learned the per-layer form.** `--jit native,interp:no-memory`
+is a two-engine stack, bottom → top, and the `jit` block now carries `native`,
+`interp` and the `layers[]` table #718 gave the firmware, with the scalar
+`state`/`reason`/`code_bytes`/`compile_us` describing the BASE layer exactly as
+a device does. `none` joined `off` as a host-level state (#744's reachable
+steady state). `off`/`none` inside a list is a startup error rather than an
+engine that is not there, and every pre-#757 form — `native`, `interp:REASON`,
+`off` — means precisely what it did. So the per-layer surface is drivable
+without an S3 on the bench, which was the whole cost of leaving this.
+
+**#579 — the virtual strip board has a data pin.** A `--board strip` mirror
+publishes `data_pin` / `data_pin_default` / `data_pin_next` / `data_pins` on
+`GET /api/config` and serves `POST /api/datapin`; a panel mirror publishes
+none and 404s the route, like the `hub75` firmware build. The pad list is a
+judgement call stated in a code comment — `board.rs::data_pin_ok` evaluated for
+a classic ESP32 with nothing reserved, `[0,2,4,5,12..19,21,22,23,25,26,27,32,33]`,
+default GPIO18 (the Athom's, and the pad the mockups draw). It follows the
+firmware's split faithfully: the POST stores the pin and answers
+`{"ok":true,"data_pin":N,"note":"rebooting to apply"}`, the Layout's implicit
+output reports the STORED pin (`firmware/src/layout.rs` builds it from
+`want_data_pin()`), and `/api/config`'s `data_pin` reports the bound one — so a
+mirror, which never reboots, sits in the pending state forever and the "stored
+GPIOx, driving GPIOy until the next reboot" note is finally measurable.
+`out 0 <pin>` on `POST /api/layout` writes the same stored pin, as on a device.
+With that, the three `mockdiff.map.json` allow-list entries #579 was filed for
+— `datapin-sel`, `datapin-hint` (S3b) and `orow-pin` (S3j) — are **gone**, and
+both frames read 0 deltas with them removed.
+
+**#701 — `--scenes FILE` mints ids.** `parse_all` installed records verbatim,
+so an `S -` block — the id-less form the docs describe and a POST body carries
+— came back as `"id":""` and could not be fetched, activated or queued.
+`assign_scene_ids` now mints one per `S -` with the same counter-hash
+`POST /api/scenes` uses, steps past any id the file spells out explicitly, and
+hands the store the counter to continue from; two blocks naming one id is a
+startup error with a sentence saying why. Both workarounds came out:
+`device-e2e.mjs`'s preload is back to `S -` (and now asserts the minted id
+addresses `GET /api/scenes/<id>`), and `PatternPicker.svelte`'s id-less-scene
+filter is gone — every scene in `stores/scenes.ts` carries an id on both
+backings, so it guarded nothing else.
+
+**Verification** (host only, no device touched): `cargo test -p luxel-cli` 11+5
+green including six new unit tests (id minting, the explicit-id collision skip,
+duplicate rejection, and four over `--jit` parsing and its JSON);
+`cargo clippy -p luxel-cli` adds no warning (it needs
+`RUSTFLAGS=-Aclippy::approx_constant` to get past the #769 breakage in
+`luxel-core`, and leaves only that crate's two standing ones);
+`web/tools/device-e2e.mjs` **581 checks green, twice** on the pre-rebase base;
+after the rebase onto #802 it stops at check 545 on `r2-4`, which reproduces
+identically on plain master (#768 raised the panel cap to 16,384, so the
+harness's 8,192 px chain no longer over-caps) — filed as **#810**. Every check
+before it passes, including this branch's two new #701 ones;
+`node tools/mockdiff.mjs --frames S3b,S3j` **0 deltas** with the three allow
+entries deleted, and a full run is 61 deltas over 47 frames — **byte-for-byte
+the count a stashed tree reports on the same commit**, so none of them is
+ours. `tools/serve-e2e.mjs` has two failures (`layout: matrix derives the
+grid`, `scan must divide ph/2`) that reproduce identically on master with this
+branch stashed — filed as **#809**, not touched here.
+
 ## 2026-09-26 — the panel pixel cap goes 4096 → 16384 (#768)
 
 `board::MAX_PIXELS` on HUB75 boards was one 64x64 tile. It is now 16384 — a
@@ -207,6 +285,7 @@ floor to 4 B under, so `STATICS_RESERVE` 4096 → 4160 (24,636 / athom-music
 25,492 after). **Nothing has run on the panel** — the on-metal checklist
 (boot line, `rescan_hz` vs prediction at `lsb 30`/`8`, photographed ramp,
 ghosting at small `lsb`) is a ticket.
+
 
 ## 2026-09-26 — the JIT compiles out of PSRAM (#671)
 

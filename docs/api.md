@@ -606,12 +606,28 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
                 "ceiling_bytes":4194304,"upgrade_available":true}
   ```
 
-`GET /api/status` on the **mirror** carries `fps`, `pixels`, `max_pixels`,
+`GET /api/status` on the **mirror** carries `fps`, the four stage timers,
+`out_fps`/`rescan_hz`/`dropped`, `pixels`, `max_pixels`,
 `geom`, `caps`, `slot` (always `"native"`), `version`, `board`, `bc_format`,
 `heap_free` (0 unless
 `--heap-free N` was passed), `engine_heap` (0 unless `--engine-heap N` was
 passed), `live`, `vmerr`, `jit` (`state:"off"` unless `--jit` was passed)
-and `partitions` — **no `src`, `bc`, `web`, or the `*_us` stage timers.** Its `partitions` is the honest answer for a host with
+and `partitions` — **no `src`, `bc` or `web`.**
+
+`frame_us` / `vm_us` / `pipe_us` are **measured**, not impersonated (Gitea
+#262): the mirror really renders, and it averages them over the pattern frames
+in the last second exactly as the firmware does, so `tools/hw-bench.mjs` and
+the console's timing surface read the same shape on either host. The stages
+mean what they mean on a device, mapped onto what this one has — `vm_us` is
+every engine step in the frame (both stacks during a crossfade), `pipe_us` is
+the fade blend plus the copy into the snapshot `GET /api/pixels` serves, which
+is this host's whole output pipeline and its preview copy in one. `out_us` and
+`dropped` are always **0**, for the reason a strip board reports 0: there is no
+output driver to time, and nothing between the VM and a fixture to lose a frame
+in. A second with no pattern frame in it (live input drove the strip) reports 0
+for all four, as on a device.
+
+Its `partitions` is the honest answer for a host with
 no flash rather than an omission, so no client has to handle two shapes:
 `{"layout":"native","migrated":true,"ota_slot_bytes":0,"storage_bytes":0,
 "assets_bytes":0,"ceiling_bytes":0}`.
@@ -638,7 +654,13 @@ driven without the hardware; see docs/tools.md.
 `--scenes FILE` preloads the scene store from a file of scene blocks — the
 same text the store persists (Gitea #478) — so a harness can bring a mirror up
 with scenes already in it instead of POSTing them one at a time. A file that
-does not parse is a startup error, not a silently empty store.
+does not parse is a startup error, not a silently empty store. An `S -` block
+is given an id on load, minted with the same counter-hash `POST /api/scenes`
+uses, so a preloaded scene is addressable by `GET /api/scenes/<id>`,
+`/activate` and an `I S<id>` playlist item like any other (Gitea #701); the
+store's counter then continues past whatever the file used. Two blocks naming
+**one** id is a startup error too — nothing downstream could tell the records
+apart.
 
 Four more flags impersonate the release/upgrade machinery (Gitea #643), all
 absent by default:
@@ -648,7 +670,7 @@ absent by default:
 | `--board-name NAME` | what `/api/status` reports as `board` (default `"native mirror"`), so both a matching and a mismatched `.luxr` package can be driven. |
 | `--bc-format N` | what `/api/status` reports as `bc_format`, and which stored blobs count as `stale`. It changes what the mirror REPORTS, not what it can execute — the point is a client's reaction to skew in either direction. |
 | `--stale-store` | a store filled by an OLDER console: a pattern entering the library for the FIRST time has its blob's format word decremented, so it genuinely fails to decode. An overwrite (a save under the same name — what a recompile does) is stored as given, so a repair converges instead of re-staling what it just fixed. |
-| `--jit STATE[:REASON]` | what `/api/status` reports as `jit` (Gitea #658): `native` (the quiet marker beside the console's frame rate), `interp:too-large` (the amber refusal strip under the editor preview) or `off`, the default and the honest answer for a host. Pure impersonation — the emitter is a device backend and the mirror IS native code — and the only way to drive either surface without an S3 on the bench. |
+| `--jit STATE[:REASON][,STATE[:REASON]…]` | what `/api/status` reports as `jit` (Gitea #658, per-layer since #718/#757). One state is one resident engine: `native` (the quiet marker beside the console's frame rate), `interp:too-large` (the amber refusal strip under the editor preview), `none` (a backend with nothing resident) or `off`, the default and the honest answer for a host. A **comma-separated list is a per-layer stack, bottom → top** — `--jit native,interp:no-memory` is the two-engine scene #718 was filed from, and the mirror emits the matching `native`/`interp` counts and `layers[]` table; the scalar `state`/`reason`/`code_bytes`/`compile_us` describe the BASE layer, as on a device. `off` and `none` describe the host, so they are refused inside a list rather than reported as an engine that is not there. Pure impersonation — the emitter is a device backend and the mirror IS native code — and the only way to drive any of these surfaces without an S3 on the bench. |
 | `--accept-ota` | `POST /api/ota` and `POST /api/assets` become recording no-ops and `caps.ota` turns true. The mirror writes no flash and reboots into nothing, so it reports a `version` of `<ver>+otaN` instead — the "it came back as something else" a client's post-OTA wait looks for — and adds `"ota":{"installs":N,"app":BYTES,"assets":BYTES}` to `/api/status` so a test can assert BOTH halves of a package landed. |
 
 The mirror's Layout is **not persisted** — it has no flash, so a restart comes
@@ -1485,9 +1507,9 @@ table.
 |---|---|---|---|---|
 | `/api/brightness` | GET | — | `{"brightness":0..31,"max":31}` | both |
 | `/api/brightness` | POST | `0`..`31` | `{"ok":true,"brightness":N}` | both |
-| `/api/config` | GET | — | `{"pixels":N,"max":N,"protocol":"sk9822"}` + on strip-board firmware `"data_pin":N,"data_pin_default":N,"data_pin_next":N\|null,"data_pins":[…]` | both (pin fields firmware only) |
+| `/api/config` | GET | — | `{"pixels":N,"max":N,"protocol":"sk9822"}` + on any strip host `"data_pin":N,"data_pin_default":N,"data_pin_next":N\|null,"data_pins":[…]` | both (pin fields on strip hosts only — absent on a HUB75 board and on `--board panel`) |
 | `/api/config` | POST | pixel count `1..=max` | `{"ok":true,"pixels":N}` | both |
-| `/api/datapin` | POST | GPIO number from `data_pins`, or `default` | `{"ok":true,"data_pin":N,"note":"rebooting to apply"}` — **firmware reboots**; a rejected pin answers `{"ok":false,…}` and does not | firmware only (strip boards) |
+| `/api/datapin` | POST | GPIO number from `data_pins`, or `default` | `{"ok":true,"data_pin":N,"note":"rebooting to apply"}` — **firmware reboots**; a rejected pin answers `{"ok":false,…}` and does not | both on a strip host (Gitea #579); no route on a HUB75 board or `--board panel` |
 | `/api/jit` | POST | `{"on":true}` / `{"on":false}` (or bare `on`/`off`), and/or `{"place":"psram"\|"internal"\|"auto"}` | `{"ok":true,"on":B[,"place":"…"],"applies":"next activation"}` | firmware only, and only on a board with the `jit` feature |
 | `/api/protocol` | GET | — | `{"protocol":"sk9822","options":["sk9822","ws2812"]}` | both |
 | `/api/protocol` | POST | protocol name | `{"ok":true,"protocol":"…"}` | both |
@@ -1509,7 +1531,14 @@ table.
   strip driver binds its DATA pin at boot, so the value is persisted and the
   device reboots. `data_pin_next` in `GET /api/config` is non-null only
   between a POST and that reboot. See docs/boards.md "Runtime pins" for
-  which pins a board allows and why.
+  which pins a board allows and why. The **mirror** serves the route on a
+  strip board too (Gitea #579) and stores the pin the same way, but it never
+  reboots — so `data_pin` stays the board default and `data_pin_next` stays
+  set, which is exactly the pending state the Settings page's "stored GPIOx,
+  driving GPIOy until the next reboot" note is for. Its pad list is a
+  classic-ESP32-shaped judgement call (it impersonates no particular board):
+  `[0,2,4,5,12..19,21,22,23,25,26,27,32,33]`, default GPIO18. `out 0 <pin>`
+  on `POST /api/layout` writes the same stored pin, on either host.
 - `/api/jit` (Gitea #658, #665) is the on-device JIT's A/B lever, and it is
   neither live nor persisted — the two ways this table's other routes
   differ from everything else, both deliberately. Not live: the pattern

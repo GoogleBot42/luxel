@@ -746,8 +746,9 @@
   <!-- Data pin, inline on a SINGLE-output board (mockup S3b). A board with
        more than one output states its pads in the Outputs table instead, and
        this row is absent there rather than saying the same thing twice.
-       Absent too where the host publishes no pad list (§5.7 — the native
-       mirror is one; Gitea #579). -->
+       Absent too where the host publishes no pad list at all (§5.7) — a HUB75
+       board, or a `--board panel` mirror. A `--board strip` mirror DOES
+       publish one (Gitea #579), which is how this row is measured. -->
   {#if $dataPins.length}
     <div class="field">
       <span class="flabel">Data pin</span>

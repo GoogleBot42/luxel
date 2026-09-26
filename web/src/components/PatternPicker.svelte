@@ -188,11 +188,11 @@
       source: p.source,
       fact: patternFact(dimsOf(p.source)),
     }));
+  // Every scene in `stores/scenes.ts` carries an id: a console's come from
+  // `/api/scenes` (both hosts mint one on save, and since Gitea #701 a mirror
+  // started with `--scenes` does too), the playground's from
+  // `randomSceneId()`. So there is no id-less row left to filter out here.
   $: sceneMatches = scenes
-    // A scene with no id cannot be queued (`I S<id>`) or opened, so it is not
-    // something to offer — a mirror started with `--scenes` currently reports
-    // exactly that for an `S -` block (Gitea #701).
-    .filter((s) => /^[0-9a-f]{8}$/.test(s.id))
     .filter((s) => match(s.name || s.id, needle))
     .map((s): PickItem => ({
       id: s.id,
