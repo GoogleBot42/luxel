@@ -220,6 +220,17 @@ const TABLE: Entry[] = [
       "The device takes 4 to 8 bit planes. Pick one of the values it offers." },
   { match: /^panel: blank must be/, field: "panel-blank", text: () =>
       "Latch blanking is 0 to 8 clocks on this device." },
+  {
+    // Latch blanking applies LIVE (Gitea #778), so the device judges it against
+    // the row block it is RUNNING and refuses one that would swallow the whole
+    // OE window: `panel: blank 8 + 3 latch clocks leave no lit clock in a
+    // 16-word row block`. The numbers are in `details`, so this is the "why".
+    match: /^panel: blank \d+ \+ /,
+    field: "panel-blank",
+    text: () =>
+      "That much blanking would leave no lit clock at all in this panel's row block — the " +
+      "whole picture would go black. Lower it, or use a wider panel.",
+  },
   { match: /^panel: chip must be/, field: "panel-chip", text: () =>
       "This firmware does not know that driver chip. The list in the card is the " +
       "device's own (`driver.chips`), so this means the two disagree — push matching firmware." },

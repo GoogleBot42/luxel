@@ -33,8 +33,8 @@ web/src/
     Section, Disclosure               the page's two chrome primitives
     DeviceCard, LayoutCard, WifiCard  the three sections above the fold
     ArrangementSvg, OutputsTable,     LED layout's pictures and sub-forms
-      ProjectionBlock, ProjectionCard
-    OutputCard, PanelDriverCard, ClockCard, SyncCard, MqttCard,
+      PanelModuleCard, ProjectionBlock, ProjectionCard
+    OutputCard, ClockCard, SyncCard, MqttCard,
       NetworkInputCard, StorageCard, FirmwareCard   the Advanced bodies
     cards.css
   components/       reusable widgets (CodeMirror wrapper, Preview, Controls,
@@ -1381,11 +1381,12 @@ sections at the top, and everything else collapses into one `Advanced` list.
 Settings    <device name> · vX.Y.Z        (never the base URL)
 Device      Name (a text field) · Brightness — the page's FIRST control
 LED layout  the summary + thumbnail, the kind picker, the fields, the
-            arrangement, the Outputs table, the map link
+            arrangement, a collapsed `Panel module` row (HUB75 only), the
+            Outputs table, the map link
 Projection  its own section — present only where the Layout offers a choice
 WiFi        the connected network + a collapsed `Change network…`
 — Advanced —
-  Output processing · Panel driver · Clock & time zone · Multi-device sync ·
+  Output processing · Clock & time zone · Multi-device sync ·
   MQTT · Home Assistant · Network input · Storage · Firmware & recovery
 ```
 
@@ -1398,10 +1399,13 @@ about (`64×64 matrix`).
 
 Chrome is two primitives. `Section.svelte` is a small uppercase label, a
 hairline rule and a `.form` panel — only FORMS get a background, which is what
-kills the card-in-card look. `Disclosure.svelte` is one Advanced row: chevron,
-title, and a **one-line status** so a collapsed page still answers "is X on?"
-without being opened. A collapsed body is not mounted at all, so the eight
-forms behind those rows cost nothing until someone looks.
+kills the card-in-card look. `Disclosure.svelte` is one collapsible row:
+chevron, title, and a **one-line status** so a collapsed page still answers
+"is X on?" without being opened. A collapsed body is not mounted at all, so the
+forms behind those rows cost nothing until someone looks. Seven of them are the
+Advanced list; the eighth is `Panel module`, which sits inside the LED layout
+form (below) wrapped in `.disclist.inline` — so it wears the same chrome
+without pretending to be an Advanced setting.
 
 ### LED layout owns geometry, and speaks one endpoint
 
@@ -1436,12 +1440,55 @@ The section's own pieces:
 | the lattice fields | `w × h × d` with a live cloud thumbnail of what is about to be installed, and an `Install` button — picking `3D` changes nothing until it is pressed |
 | `ArrangementSvg` | the panel chain: tiles, the path numbered from the `IN` connector, per-tile scan direction, the 180° markers, the total size, and output tinting. The same widget one level down (`mode="pixels"`) draws the pixel run through a strip-built matrix |
 | the refresh readout | `panelRefreshHz()` (`lib/panelDriver.ts`): computed here from the CONFIGURED clock and bit depth wherever `/api/layout` reports a `driver` block (#401/#525) — the same formula the firmware runs, over inputs the form can change, so the number cannot lag the field just edited — and the device's own `matrix.est_hz` (#475) on firmware that reports no driver. Amber under 100 Hz with the fix named, the panel's live `rescan_hz` beside it, and the line under it names the driver it was spent on (`2 panels × 6 planes at 40 MHz`) |
+| `Panel module` | a collapsed `Disclosure` under the arrangement, on a HUB75 board only (`vis.panelModule`): the scan rate and the four `panel` fields, i.e. everything printed on the back of a module. See its own section below (#778) |
 | the dark-tile note | `matrix.drive` is how many leading tiles this board's framebuffer can shift out; past it the picture dashes them and the page says how many stay dark (#475/#401) |
 | the reboot bar | see "Stored, but not running yet" below — the per-field note this row used to carry is gone |
 | `OutputsTable` | one row per output when `caps.outputs > 1`, each computing the run it owns (`pixels 300–599`), plus the strip split graphic. `out` lines are all-or-nothing, so a row edit POSTs the whole table |
 | `ProjectionBlock` | mounted by the PAGE now, in its own `Projection` section (below) |
 
-### Advanced › Panel driver is a form, not a plaque (#401/#525)
+### LED layout › Panel module is a form, not a plaque (#401/#525/#778)
+
+**Where it is.** Inside the LED layout card, as one collapsed `Panel module`
+row under the arrangement — not in Advanced. Jeremy, 2026-09-26: *"The panel
+driver section doesn't belong in Advanced. That dropdown belongs closer or in
+the LED layout section. It's not something people can optionally configure, but
+once it is configured they probably won't touch it again, so being collapsed
+still makes sense."* So it holds everything printed on the back of a module: the
+**scan rate** (which rides the `matrix` line, so `LayoutCard` still owns the
+write and `PanelModuleCard` dispatches a `scan` event to it) and the four
+`panel` fields. `settingsVisibility().panelModule` gates the row AND decides
+whether the size row reads `Panel` or `Size`. Roles: `panel-module-row`,
+`-toggle`, `-status`, `-body`, then `layout-scan`, `panel-chip`, `panel-clock`,
+`panel-planes`, `panel-blank`, `panel-state`, `panel-error`. The card's own
+`Rescan … measured · … estimated` strip (`panel-state-row` / `panel-rescan` /
+`panel-est`) is GONE with the move: the LED layout card's `Estimated refresh`
+row sits four lines below the disclosure and is the same two numbers over the
+same inputs, and printing them twice on one screen is what the move made
+obvious. The verdict paragraph stays, because nothing else says it.
+
+**The scan field names the ratios, never "board default"** (#778). It used to
+offer `board default` for `scan 0`; Jeremy: *"Is that even possible for luxel to
+know?"* — it is not. HUB75 is a write-only bus, and `0` does not mean "ask the
+board", it means the usual ratio for this height, `ph / 2`. So the options are
+the ratios a module prints on its back — `1/32 (usual for 64 rows)`, `1/16`,
+`1/8`, `1/4`, those that divide `ph / 2` — the usual one is marked inline (a
+tried-and-rejected alternative was `Standard (1/32 for a 64-tall panel)`, which
+he called confusing), and picking it sends `0` so the stored value still follows
+a later height change. A 32-row module is not offered `1/32` at all: 32 does not
+divide 16. `scanOptions()` / `scanWire()` / `scanShown()` in
+`lib/panelDriver.ts`, unit-tested.
+
+**Latch blanking applies live** (#778): *"Let's make latch blanking dynamic. I
+see value in that one."* It is control bits in the framebuffer words, so the
+firmware re-formats its buffers between frames and the device answers
+`reboot_required:false`. Two web consequences, both in `lib/panelDriver.ts`:
+nothing calls `noteRebootPending` for it (the DEVICE's reply decides, as
+always), and `panelDriverState()` leaves `blank` OUT of the configured-vs-live
+comparison — `live.blank` legitimately lags the POST reply by one frame, and
+comparing it would print "reboot to apply" under the one control that does not
+need one. A blanking wide enough to swallow the OE window is refused by the
+device with the numbers, and `apiErrors.ts` gives that its own sentence on
+`panel-blank`.
 
 The HUB75 driver's bit depth, pixel clock, chip-init sequence and latch
 blanking used to be this firmware build's constants, and the card said so.
@@ -1452,12 +1499,14 @@ wire line back,
 panel <planes> <clock_mhz> <chip> <blank>
 ```
 
-which the firmware merges into the stored Layout and applies at the next boot.
-Every field POSTs that one line through the same `applyLayout()` path the LED
-layout form uses, adopts the reply, and sends a `reboot_required` reply to the
-sticky reboot bar — the panel's framebuffer and its LCD_CAM clock are built at
-boot, so on a panel board the `matrix` line's pw/ph/chain/scan are
-reboot-required too, and the UI takes that from the REPLY rather than assuming.
+which the firmware merges into the stored Layout and applies at the next boot —
+except `blank`, which it applies on its next frame (above). Every field POSTs
+that one line through the same `applyLayout()` path the LED layout form uses,
+adopts the reply, and sends a `reboot_required` reply to the sticky reboot bar —
+the panel's framebuffer and its LCD_CAM clock are built at boot, so on a panel
+board the `matrix` line's pw/ph/chain/scan are reboot-required too, and the UI
+takes that from the REPLY rather than assuming. That is what makes one live
+field cost no special case here.
 
 The block carries two readings of the same four values, and the card's job is
 to say which one is on the panel:
@@ -1476,15 +1525,20 @@ states are exactly the ones a healthy bench panel never shows:
 | `panelDriverState()` | when | what the card says |
 |---|---|---|
 | `live` | configured == `live`, geometry included | running exactly what is set here |
-| `pending` | any of the four, or pw/ph/chain/scan, differ | **Reboot to apply**, naming what is still running and what waits |
+| `pending` | `planes` / `clock_mhz` / `chip`, or pw/ph/chain/scan, differ — **never `blank`** (#778) | **Reboot to apply**, naming what is still running and what waits |
 | `fallback` | `live.fallback` | the configured driver did not fit in internal RAM; the board default is running — lower the bit planes or the panel size, a reboot alone will not fix it |
 | `disabled` | `live` is `null` | panel output is off: no framebuffer came up at all |
 | `unknown` | no `driver` block | the row is caps-gated to panel boards, so this is a **console newer than the firmware**: the card says exactly that and offers nothing (#771). `PANEL_DRIVER_DEFAULT` survives only as the refresh ESTIMATE's fallback |
 
-The collapsed Advanced row carries the same verdict (`30 MHz · 7 planes ·
-114 Hz · reboot to apply`, and `115 Hz · firmware too old` in the `unknown`
-state — never this build's constants dressed up as the device's), because a row
-nobody opens is the only place that fact would otherwise not appear. The chip `<select>` is built from
+The collapsed row states the whole module and carries the same verdict —
+`1/32 scan · plain shift register · 20 MHz · 7 planes · blanking 1`, plus
+` · reboot to apply` / ` · not applied` / ` · output off`, and
+`1/32 scan · firmware too old` in the `unknown` state (never this build's
+constants dressed up as the device's) — because a row nobody opens is the only
+place that fact would otherwise not appear. It carries no refresh rate: the
+estimated/measured readout sits immediately beneath the row since #778, and
+printing the same number twice on one screen is worse than not printing it.
+`panelModuleLine()` builds it. The chip `<select>` is built from
 `driver.chips` and the pixel-clock `<select>` from `driver.clocks`, never from
 a list in the browser, so a firmware that learns a new chip or offers a new
 clock needs no web change.

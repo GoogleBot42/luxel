@@ -68,7 +68,8 @@ value while collapsed. Everything below is on the new page.
   second strip on GPIO 19 the back half of the fixture should light after that.
 - [ ] **LED layout on the HUB75 panel** — there should be NO layout picker at
   all (the board has no choice) and no LED type / colour order / data pin;
-  the panel size, scan and `Panels [c] across × [r] down` instead. Setting
+  the panel size, `Panels [c] across × [r] down` and a collapsed
+  `Panel module` row instead (the scan rate moved inside it, #778). Setting
   2×2 should draw the chain picture and drop the estimated refresh to ~28 Hz
   in amber, and — because a 64×64 board only shifts 64 columns of chain — say
   that three of the four panels would stay dark. **Do not apply it** unless you
@@ -77,19 +78,37 @@ value while collapsed. Everything below is on the new page.
 - [ ] **The estimated refresh number** — one 64×64 panel should read 115 Hz,
   which is what the panel measures (`rescan_hz`, shown beside it as
   "measured now"). It is computed from the driver the device reports as
-  CONFIGURED (Advanced › Panel driver), so it follows that form; a
+  CONFIGURED (LED layout › Panel module), so it follows that form; a
   disagreement with the measurement means the firmware and the panel
   disagree, not the browser.
-- [ ] **Advanced › Panel driver on the Seengreat** (Gitea #401/#525/#771) —
-  the row is a FORM now: bit planes, pixel clock, driver chip, latch blanking.
-  The pixel clock is a **dropdown of 8/10/12/15/20/24/30 MHz**, not a number
-  field (#771 — 40 MHz is no longer reachable at all, and nothing above 30 is
-  offered). Pick **20 MHz** and reboot (the row says "reboot to apply" until
-  you do, and the card names what is still running): `rescan_hz` should come
-  back at **~77 Hz**, and the estimate beside it should already have said so.
-  Then, if the SM16208 panel ghosts, set **latch blanking 2** and reboot — the
-  ghosting should go. Two reboots inside a minute should now be harmless:
-  before #771 that tripped the boot-loop guard and rolled the firmware back.
+- [ ] **LED layout › Panel module on the Seengreat** (Gitea #401/#525/#771/#778)
+  — a collapsed row inside the LED layout section now, not in Advanced (#778).
+  Its one line should read the whole module
+  (`1/32 scan · plain shift register · 30 MHz · 7 planes · blanking 1`), and
+  opening it should give: **Scan rate** (`1/32 (usual for 64 rows)`, `1/16`,
+  `1/8`, `1/4` — never "board default"), driver chip, pixel clock, bit planes,
+  latch blanking. The pixel clock is a **dropdown of 8/10/12/15/20/24/30 MHz**,
+  not a number field (#771 — 40 MHz is no longer reachable at all, and nothing
+  above 30 is offered). Pick **20 MHz** and reboot (the row says "reboot to
+  apply" until you do, and the card names what is still running): `rescan_hz`
+  should come back at **~77 Hz**, and the estimate beside it should already have
+  said so. Two reboots inside a minute should be harmless: before #771 that
+  tripped the boot-loop guard and rolled the firmware back.
+- [ ] **Latch blanking is LIVE — the one to watch the panel for** (Gitea #778).
+  With the SM16208SF tiles running, raise **latch blanking** from 1 to 2, then
+  3, then 4, **without rebooting**, and watch the panel as each one lands: the
+  ghosting between address rows should visibly change within a frame, and the
+  picture should get slightly dimmer as the OE window narrows. Nothing should
+  raise the reboot bar, `reboot_required` should be `false` in the reply, and
+  `driver.live.blank` should follow within a frame (`GET /api/layout`). This is
+  the check the whole change exists for — "let's make latch blanking dynamic, I
+  see value in that one" — and it is the one thing no harness can see: a control
+  bit change is invisible to every counter the device has and byte-identical in
+  the composed frame. Also worth trying at the far end: **blanking 8** on the
+  64-column panel is legal and should simply be very dim, while the device
+  should REFUSE a blanking that leaves no lit clock at all, naming the numbers
+  (`panel: blank N + 1 latch clocks leave no lit clock in a 64-word row block` —
+  reachable only on a much narrower row block than this panel's).
 - [ ] **Firmware & recovery → Update…** — pick a `luxel.bin` for that board
   and let it flash itself over the network. **Never run against hardware**
   (the mirror advertises no OTA, so no harness can reach this path) —

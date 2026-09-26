@@ -31,10 +31,13 @@ import {
   panelLine,
   panelRefreshHz,
   PANEL_DRIVER_LINE_DEFAULT,
-  panelStatusLine,
+  panelModuleLine,
   phrase,
   PLANE_CHOICES,
   refreshDriver,
+  scanOptions,
+  scanShown,
+  scanWire,
   snapClock,
 } from "../src/lib/panelDriver.ts";
 
@@ -196,12 +199,11 @@ test("configured == live: the panel is running what the form shows", () => {
   assert.equal(s.live, "7 planes · 30 MHz · plain shift register · blanking 1 · 64×64 1/32");
 });
 
-test("each of the four values on its own raises reboot-to-apply", () => {
+test("each BOOT-BUILT value on its own raises reboot-to-apply", () => {
   const cases = [
     [{ planes: 6 }, "bit planes"],
     [{ clock_mhz: 20 }, "the pixel clock"],
     [{ chip: "fm6126a" }, "the driver chip"],
-    [{ blank: 2 }, "latch blanking"],
   ];
   for (const [over, want] of cases) {
     const w = wire(block(over));
@@ -209,6 +211,25 @@ test("each of the four values on its own raises reboot-to-apply", () => {
     assert.equal(s.status, "pending", `${want} is stored, not running`);
     assert.deepEqual(s.changed, [want]);
   }
+});
+
+// Latch blanking is the exception (Gitea #778): the firmware re-formats its
+// framebuffers between frames, so `live.blank` legitimately lags the reply to
+// the POST that changed it by ONE FRAME. Comparing it would put "reboot to
+// apply" under the one control that does not need one — and the whole point of
+// making it live is that it is tuned by watching the panel for ghosting.
+test("latch blanking is never pending: it applies on the next frame", () => {
+  for (const blank of [0, 2, 4, 8]) {
+    const w = wire(block({ blank }));
+    const s = panelDriverState(driverWire(w), panelGeometryOf(w));
+    assert.equal(s.status, "live", `blank ${blank} does not wait for a boot`);
+    assert.deepEqual(s.changed, []);
+  }
+  // …and it does not MASK one of the three that do
+  const both = wire(block({ blank: 4, planes: 6 }));
+  const s = panelDriverState(driverWire(both), panelGeometryOf(both));
+  assert.equal(s.status, "pending");
+  assert.deepEqual(s.changed, ["bit planes"], "only the boot-built field waits");
 });
 
 test("the GEOMETRY is part of it: a panel board sizes its framebuffer at boot", () => {
@@ -236,12 +257,17 @@ test("with no matrix line the driver values are still compared", () => {
 });
 
 test("several changes read as a sentence, in the card's own order", () => {
-  const w = wire(block({ planes: 8, clock_mhz: 20, blank: 4 }), { ...MATRIX, scan: 16 });
+  const w = wire(block({ planes: 8, clock_mhz: 20, chip: "dp3246" }), { ...MATRIX, scan: 16 });
   const s = panelDriverState(driverWire(w), panelGeometryOf(w));
-  assert.deepEqual(s.changed, ["bit planes", "the pixel clock", "latch blanking", "the panel scan"]);
+  assert.deepEqual(s.changed, [
+    "bit planes",
+    "the pixel clock",
+    "the driver chip",
+    "the panel scan",
+  ]);
   assert.equal(
     phrase(s.changed),
-    "bit planes, the pixel clock, latch blanking and the panel scan",
+    "bit planes, the pixel clock, the driver chip and the panel scan",
   );
   assert.equal(phrase([]), "");
   assert.equal(phrase(["bit planes"]), "bit planes");
@@ -267,36 +293,116 @@ test("live null: panel output is off, whatever is stored", () => {
   assert.equal(liveSummary(null), "");
 });
 
-// ---- the collapsed Advanced row -----------------------------------------
+// ---- the collapsed Panel module row (Gitea #778) --------------------------
+//
+// The row is inside the LED layout card now, and its one line is the whole
+// module: the scan ratio, the chip, the clock, the bit depth and the blanking,
+// in that order. No refresh rate — the estimated/measured readout sits
+// immediately beneath the row, so repeating it would print the same number
+// twice on one screen.
 
-test("the Advanced row states the CONFIGURED values and the measured rescan", () => {
+test("the collapsed row states the whole module, in the order it is read", () => {
   const w = wire(block({ clock_mhz: 20, planes: 6 }, { ...LIVE, clock_mhz: 20, planes: 6 }));
   const s = panelDriverState(driverWire(w), panelGeometryOf(w));
-  assert.equal(panelStatusLine(w, 232, s), "20 MHz · 6 planes · 232 Hz");
-  // no measurement yet (a console that has only just connected)
-  assert.equal(panelStatusLine(w, 0, s), "20 MHz · 6 planes");
+  assert.equal(panelModuleLine(w, s), "1/32 scan · plain shift register · 20 MHz · 6 planes · blanking 1");
+  // the scan is the EFFECTIVE one, so `scan 0` reads as the ratio it means
+  const stock = wire(block(), { ...MATRIX, scan: 0 });
+  assert.match(panelModuleLine(stock), /^1\/32 scan · /);
+  // a 1/16-scan 64-row module, and a different chip and blanking
+  const other = wire(
+    block({ chip: "dp3246", blank: 3 }, { ...LIVE, chip: "dp3246", blank: 3, scan: 16 }),
+    { ...MATRIX, scan: 16 },
+  );
+  assert.equal(panelModuleLine(other), "1/16 scan · DP3246 · 30 MHz · 7 planes · blanking 3");
 });
 
 test("the collapsed row says when the two readings cannot agree", () => {
   const pending = wire(block({ planes: 6 }));
   assert.match(
-    panelStatusLine(pending, 115, panelDriverState(driverWire(pending), panelGeometryOf(pending))),
+    panelModuleLine(pending, panelDriverState(driverWire(pending), panelGeometryOf(pending))),
     /reboot to apply$/,
   );
   const fell = wire(block({ planes: 8 }, { ...LIVE, fallback: true }));
   assert.match(
-    panelStatusLine(fell, 115, panelDriverState(driverWire(fell), panelGeometryOf(fell))),
+    panelModuleLine(fell, panelDriverState(driverWire(fell), panelGeometryOf(fell))),
     /not applied$/,
   );
   const off = wire(block({}, null));
   assert.match(
-    panelStatusLine(off, 0, panelDriverState(driverWire(off), panelGeometryOf(off))),
+    panelModuleLine(off, panelDriverState(driverWire(off), panelGeometryOf(off))),
     /output off$/,
+  );
+  // a blanking that is stored but not yet on the panel is NOT a disagreement:
+  // the firmware applies it on its next frame (#778)
+  const blanked = wire(block({ blank: 4 }));
+  assert.equal(
+    panelModuleLine(blanked, panelDriverState(driverWire(blanked), panelGeometryOf(blanked))),
+    "1/32 scan · plain shift register · 30 MHz · 7 planes · blanking 4",
   );
   // no driver block: the row states the MISMATCH, never this build's constants
   // dressed up as the device's (#771)
-  assert.equal(panelStatusLine(wire(undefined), 115), "115 Hz · firmware too old");
-  assert.equal(panelStatusLine(wire(undefined), 0), "firmware too old");
+  assert.equal(panelModuleLine(wire(undefined)), "1/32 scan · firmware too old");
+  assert.equal(panelModuleLine(null), "firmware too old");
+});
+
+// ---- the Scan rate field (Gitea #778) ------------------------------------
+//
+// It used to say `board default` for `scan 0`. Jeremy: "Is that even possible
+// for luxel to know?" — it is not. HUB75 is write-only, and `0` means the
+// usual ratio for the height, `ph / 2`. So the options are the ratios as they
+// are printed on the module (`1/32S`), with the usual one named as such.
+
+test("the scan options are the ratios that divide ph/2, largest first", () => {
+  assert.deepEqual(
+    scanOptions(64).map((o) => o.label),
+    ["1/32 (usual for 64 rows)", "1/16", "1/8", "1/4"],
+  );
+  assert.deepEqual(
+    scanOptions(64).map((o) => o.scan),
+    [32, 16, 8, 4],
+  );
+  assert.deepEqual(scanOptions(64).map((o) => o.usual), [true, false, false, false]);
+  // a 32-row module is 16 address rows, and 32 does not divide 16
+  assert.deepEqual(
+    scanOptions(32).map((o) => o.label),
+    ["1/16 (usual for 32 rows)", "1/8", "1/4"],
+  );
+  // …nor does anything the height cannot tile: a 1/8 module offers 1/8 and 1/4
+  assert.deepEqual(
+    scanOptions(16).map((o) => o.label),
+    ["1/8 (usual for 16 rows)", "1/4"],
+  );
+  // the usual ratio is always present even when the candidate set has no such
+  // entry — a 128-row wall is 1/64
+  assert.deepEqual(
+    scanOptions(128).map((o) => o.scan),
+    [64, 32, 16, 8, 4],
+  );
+  assert.equal(scanOptions(128)[0].label, "1/64 (usual for 128 rows)");
+  // a stored ratio this list does not carry is still shown rather than being
+  // silently re-read as something else
+  assert.deepEqual(
+    scanOptions(64, 2).map((o) => o.scan),
+    [32, 16, 8, 4, 2],
+  );
+  // never the words "board default", on any height
+  for (const ph of [8, 16, 32, 64, 128])
+    for (const o of scanOptions(ph)) assert.doesNotMatch(o.label, /default/i);
+});
+
+test("picking the usual ratio sends 0, so it follows a height change", () => {
+  assert.equal(scanWire(64, 32), 0, "the usual one is `0` on the wire");
+  assert.equal(scanWire(64, 16), 16);
+  assert.equal(scanWire(64, 4), 4);
+  assert.equal(scanWire(32, 16), 0, "…and `0` is per height, not per number");
+  assert.equal(scanWire(32, 8), 8);
+  // and what the select SHOWS is the effective ratio either way
+  assert.equal(scanShown(64, 0), 32);
+  assert.equal(scanShown(64, 16), 16);
+  assert.equal(scanShown(32, 0), 16);
+  // every option round-trips: shown → wire → shown
+  for (const ph of [16, 32, 64, 128])
+    for (const o of scanOptions(ph)) assert.equal(scanShown(ph, scanWire(ph, o.scan)), o.scan);
 });
 
 // ---- the estimate the card shows beside the measurement ------------------

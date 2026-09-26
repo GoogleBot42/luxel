@@ -1055,7 +1055,7 @@ embedded so a client needs one fetch:
 | `source` | `regular` (the shape comes from the strip/matrix fields) · `map` (from a map program's coordinates). "Custom" is a coordinate SOURCE, not a dimensionality. |
 | `dims` / `regular` / `w` / `h` | The **Layout's own** shape: 1×`pixels` for a strip, `pw·cols`×`ph·rows` for a matrix, the installed map's detected grid (or `0`/`0`, `regular:false`) for a map. |
 | `pixels` / `max` | The pixel count and this board's ceiling — the same numbers `/api/config` reports. |
-| `matrix` | **Present only when `kind` is `matrix`.** `pw`×`ph` is one panel (or, with `cols`=`rows`=1, the whole grid); `cols`×`rows` tile them; `start` (`tl\|tr\|bl\|br`), `dir` (`row\|col`), `snake`, `rot180` describe how the chain threads the tiles — and, in the one-tile case, how the pixel run threads the grid (a strip-built matrix's wiring, proposal §5.3). `scan` is the HUB75 scan divisor, `0` = the board's own. On a board with a panel driver it also carries `est_hz` and `drive` — see "Panel arrangement" below. |
+| `matrix` | **Present only when `kind` is `matrix`.** `pw`×`ph` is one panel (or, with `cols`=`rows`=1, the whole grid); `cols`×`rows` tile them; `start` (`tl\|tr\|bl\|br`), `dir` (`row\|col`), `snake`, `rot180` describe how the chain threads the tiles — and, in the one-tile case, how the pixel run threads the grid (a strip-built matrix's wiring, proposal §5.3). `scan` is the HUB75 scan divisor — `1/N` on a module's label; `0` means the usual ratio for this height, `ph / 2` (nothing reads it off the module: HUB75 is write-only). On a board with a panel driver it also carries `est_hz` and `drive` — see "Panel arrangement" below. |
 | `driver` | **Present only on a board with a HUB75 panel.** How the panel is DRIVEN — bit depth, pixel clock, chip init, latch blanking — plus the chip list a client should offer and what the firmware actually booted. See "How the panel is driven" below. |
 | `outputs` | One entry per configured output — `n` (0-based, `< caps.outputs`), `pin`, `proto`, `order`, `count` (pixels on a strip Layout, **panels** on a matrix one), `rev`. Each drives a consecutive run of the one pixel space, in `n` order (see "Driving" below). A host with no table configured reports ONE implicit output built from its live data pin, protocol and colour order. |
 | `proj` | The §5.4d projection defaults (`docs/spec/projection.md`), tokens `index\|x\|y\|z\|xy\|xz\|yz`. |
@@ -1125,7 +1125,13 @@ against 76.9–77.0 / 153.5–154.0.
   exactly: anything shallower stripes the framebuffer `(ph / 2) / scan` ways
   and a partial stripe has nowhere to go. A body that breaks either is
   refused with `"scan must divide ph/2"` (or `"a panel's ph must be even"`),
-  on the `matrix` line. `scan 0` means "the board's own", i.e. `ph / 2`.
+  on the `matrix` line. `scan 0` means the **usual ratio for this height**,
+  `ph / 2` — not "ask the board": HUB75 is a write-only bus and the firmware
+  cannot read anything off a module (Jeremy, 2026-09-26: "Is that even possible
+  for luxel to know?"). It exists so the stored value follows a later height
+  change. A UI offers the ratios the way a module prints them — `1/32`, `1/16`,
+  `1/8`, `1/4`, those that divide `ph / 2` — marks the `ph / 2` one as the usual
+  one, and sends `0` for it; never the words "board default".
 - **Reboot to apply.** `cols rows start dir snake rot180 scan` are
   `reboot_required` everywhere; on a **HUB75 board** so are `pw`/`ph`, whose
   DMA framebuffer is allocated from the arrangement at boot. On a strip-built
@@ -1153,7 +1159,31 @@ panel <planes> <clock_mhz> <chip> <blank>
 | `planes` | 4..8 | 7 | BCM bitplanes. Fewer is a faster rescan and a coarser ramp — one rescan shifts the whole chain `2^planes − 1` times. |
 | `clock_mhz` | one of **8 · 10 · 12 · 15 · 20 · 24 · 30** | 30 | The LCD_CAM pixel clock — a fixed list, not a range (Gitea #771). Anything else is refused with `panel: clock_mhz must be one of 8\|10\|12\|15\|20\|24\|30`. Offer it as a dropdown over `driver.clocks`, never a number field. |
 | `chip` | `shiftreg` · `fm6126a` · `icn2038s` · `dp3246` | `shiftreg` | The driver chip's init, bit-banged before the DMA starts. `shiftreg` covers FM6124, SM16208, ICN2037 and every other plain shift register — no init at all. `fm6126a` and `icn2038s` share a two-register init; `dp3246` has its own, and holds the latch for the last **3** clocks of every row instead of 1. |
-| `blank` | 0..8 | 1 | Clocks at the start of every row block, and again just before the latch word, where OE is off. `1` is the stock template; raising it trades a little brightness for less ghosting between address rows. |
+| `blank` | 0..8 | 1 | Clocks at the start of every row block, and again just before the latch word, where OE is off. `1` is the stock template; raising it trades a little brightness for less ghosting between address rows. **The one field here that applies LIVE** — see below. |
+
+**`blank` applies live; the other three wait for a boot** (Gitea #778). It is
+nothing but control bits in the framebuffer words — the OE window and the latch
+tail — and the packer rewrites only colour bits, so the output task re-formats
+each framebuffer in place between frames and both swap buffers catch up on
+their next turn. A `panel` line that changes only `blank` therefore answers
+`"reboot_required":false` and is on the panel within a frame. That is the
+point: ghosting between address rows is what the knob is for, and it is tuned
+by *looking* at the panel — which a reboot per attempt makes unusable.
+
+Two consequences for a client:
+
+- `driver.live.blank` is updated when the output task adopts the value, **one
+  frame at most after the POST is answered** — so the reply to the POST that
+  changed it still carries the old `live.blank`. Do not read that as pending:
+  compare `planes` / `clock_mhz` / `chip` and the `matrix` geometry against
+  `live`, and leave `blank` out of the comparison (`lib/panelDriver.ts` does).
+- A blanking wide enough to swallow the whole OE window is refused at POST
+  time, against the geometry that is RUNNING, with the numbers in the message:
+  `panel: blank 8 + 3 latch clocks leave no lit clock in a 16-word row block`.
+  The window is `blank .. cols − latch_clocks − blank`, so it is empty exactly
+  when `2·blank + latch_clocks >= cols` (`cols` being the live framebuffer's
+  row block, `pw · panels · stripes`). The boot-time check still guards a boot;
+  this one guards a device that never reboots.
 
 `GET /api/layout` answers with a `driver` block — **only on a board with a
 panel driver**, like `est_hz` and `drive`:
@@ -1181,9 +1211,11 @@ The four top-level values are the **configured** (stored) driver; `chips` and
 | `"live":null` | there is no panel output at all — the framebuffer allocation or the LCD_CAM init failed even at the board default |
 
 **Configured against live is the reboot indicator.** Any of `planes`
-`clock_mhz` `chip` `blank` differing from its `live` twin, or `matrix`
+`clock_mhz` `chip` differing from its `live` twin, or `matrix`
 `pw`/`ph`/chain/`scan` differing from `live.w`/`live.h`/`live.scan`, means a
-reboot is pending — the same answer the POST already gave.
+reboot is pending — the same answer the POST already gave. **`blank` is not in
+that list** (Gitea #778): it applies live, so `live.blank` lags a POST by one
+frame rather than by a reboot.
 
 **Why the clock is a list.** esp-hal's i8080 driver doubles the requested rate
 (the S3 errata puts the LCD_PCLK divider at ≥ 2) and then divides an LCD_CAM
@@ -1315,7 +1347,8 @@ protocol latch tail, not a second frame. docs/boards.md has the full table.
 | `proj` (the running pattern's override) | **live**, and never stored |
 | `matrix` `pw` `ph` | **live** on a strip-built matrix — they only resize the grid — and **reboot** on a HUB75 board, whose DMA framebuffer is allocated from them at boot (#525) |
 | `matrix` `cols` `rows` `start` `dir` `snake` `rot180` `scan` | **reboot** — the chain remap is built once (#475) |
-| `panel` `planes` `clock_mhz` `chip` `blank` | **reboot** — the DMA descriptors, the LCD_CAM clock and the chip's init sequence are all set up once, at boot (#525). The field a client notes as pending is `panel`. |
+| `panel` `planes` `clock_mhz` `chip` | **reboot** — the DMA descriptors, the LCD_CAM clock and the chip's init sequence are all set up once, at boot (#525). The field a client notes as pending is `panel`. |
+| `panel` `blank` | **live** — control bits in the framebuffer words, which the packer never writes, so the output task re-formats each buffer in place and the new blanking is on the panel within a frame (#778). `live.blank` follows one frame later; a blanking that would leave no OE-active clock in the running row block is refused at POST time |
 | `out` `count` (the split) | **live** on every output — the run boundaries are re-read from the Layout each frame, so an output whose run shrank drives fewer pixels at once and one the table no longer covers goes dark |
 | `out` `rev` | **live** on every output — it rides in the same run |
 | `out 0` `proto`, `out 0` `order` | **live** — output 0 IS the strip the aliases describe, so they write through to `/api/protocol` and `/api/output` |

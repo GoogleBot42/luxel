@@ -80,8 +80,13 @@ export interface SettingsVisibility {
   stripFields: boolean;
   /** The `pw`×`ph` size fields (one panel, or the whole grid at 1×1). */
   panelSize: boolean;
-  /** HUB75 scan divisor. */
-  panelScan: boolean;
+  /** The **Panel module** disclosure inside LED layout (Gitea #778): the scan
+   *  rate plus the `panel` line's four — the module's own properties, as
+   *  opposed to how the modules are arranged. It was Advanced › Panel driver
+   *  until Jeremy moved it here, 2026-09-26. Also what makes the size row read
+   *  `Panel` rather than `Size`: on a HUB75 board those fields are ONE
+   *  module's, not the whole grid's. */
+  panelModule: boolean;
   /** `Panels [c] across × [r] down`. */
   panelCounts: boolean;
   /** Start corner · run direction · snake. ONE row: it describes the chain
@@ -119,8 +124,6 @@ export interface SettingsVisibility {
   blurGlow: boolean;
   /** How to word blur/glow: along the strip, or across the grid. */
   blurGlowScope: "strip" | "grid";
-  /** The Panel driver disclosure (clock, planes, live rescan). */
-  panelDriver: boolean;
   /** The PSRAM line under Storage. */
   psram: boolean;
   /** `Update…` — the device takes a firmware image over the network. */
@@ -147,7 +150,7 @@ export function settingsVisibility(
     kindOptions: c.strip_driver ? ["strip", "matrix", "lattice", "map"] : ["matrix"],
     stripFields: c.strip_driver,
     panelSize: matrix,
-    panelScan: matrix && c.panel,
+    panelModule: matrix && c.panel,
     panelCounts: matrix,
     wiringRow: matrix,
     wiringIsPixels: matrix && tiles === 1,
@@ -161,7 +164,6 @@ export function settingsVisibility(
     powerCap: c.power_cap,
     blurGlow: c.blur_glow,
     blurGlowScope: layout.dims === 1 ? "strip" : "grid",
-    panelDriver: c.panel,
     psram: c.psram,
     ota: c.ota,
     reboot: c.reboot,

@@ -1825,8 +1825,9 @@
         {
           "id": "layout-sel",
           "mock": ".sect:nth-of-type(2) .sel",
-          "app": "[data-role=\"layout-scan\"]",
-          "note": "mock .sel: 32px, radius 6, padding 0 9px 0 10px, bg-inset"
+          "app": "[data-role=\"layout-start\"]",
+          "noBoxW": true,
+          "note": "mock .sel: 32px, radius 6, padding 0 9px 0 10px, bg-inset. This checks the SHARED select metrics inside the LED layout form; it used to read them off `layout-scan`, which since Gitea #778 lives inside the collapsed `Panel module` disclosure (Jeremy moved the panel form out of Advanced and into LED layout) and is therefore not mounted in this frame. Width is waived because the mockups set a per-picker inline width (170 here, `w126` on the chain's start corner)"
         },
         {
           "id": "linkrow",

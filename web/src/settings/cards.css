@@ -337,6 +337,18 @@
   border-bottom: 1px solid var(--border);
 }
 
+/* A disclosure standing INSIDE a form rather than in the Advanced list
+   (LED layout › Panel module, Gitea #778): one row, so it needs its own
+   breathing space above and below, and the head's bottom hairline would
+   otherwise float under a closed row with nothing beneath it. */
+.settings .disclist.inline {
+  margin: 14px 0 4px;
+}
+
+.settings .disclist.inline .drow:not(.open) .dhead {
+  border-bottom: none;
+}
+
 .settings .dhead {
   display: flex;
   align-items: center;

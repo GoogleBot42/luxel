@@ -224,13 +224,25 @@ impl Chip {
             _ => None,
         }
     }
+
+    /// Clocks the latch is held HIGH at the end of a row block — 1 for a
+    /// shift register, 3 for a DP3246. On the chip rather than on
+    /// [`PanelDriver`] so a host holding only a `live` reading (whose chip is
+    /// all it kept) can work out the same OE window.
+    pub const fn latch_clocks(self) -> u8 {
+        match self {
+            Chip::Dp3246 => 3,
+            _ => 1,
+        }
+    }
 }
 
 /// How a HUB75 panel is DRIVEN, as opposed to how it is arranged: the BCM
 /// bit depth, the LCD_CAM pixel clock, the driver chip's init and how long
 /// OE is held off around the latch (Gitea #401 + #525, the `panel` wire
-/// line). Every field was a compile-time constant before this; all four are
-/// read at boot, so changing any of them is `reboot_required`.
+/// line). Every field was a compile-time constant before this. Three of the
+/// four are read at boot, so changing them is `reboot_required`; `blank` is
+/// applied live — see [`PanelDriver::boot_differs`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct PanelDriver {
     /// BCM bitplanes, 4..=8. Fewer is a faster rescan and a coarser ramp:
@@ -247,6 +259,11 @@ pub struct PanelDriver {
     pub chip: Chip,
     /// Clocks at the START of every row block, and again just before the
     /// latch word, where OE is OFF — 0..=8. 1 is the stock template.
+    ///
+    /// The one panel setting that applies LIVE (Gitea #778): it is control
+    /// bits the packer never writes, so a host re-formats its framebuffers
+    /// in place. Raising it trades a little brightness for less ghosting
+    /// between address rows — a knob you tune while watching the panel.
     pub blank: u8,
 }
 
@@ -293,12 +310,27 @@ impl PanelDriver {
     }
 
     /// Clocks the latch is held HIGH at the end of a row block — 1 for a
-    /// shift register, 3 for a DP3246.
+    /// shift register, 3 for a DP3246. See [`Chip::latch_clocks`].
     pub const fn latch_clocks(&self) -> u8 {
-        match self.chip {
-            Chip::Dp3246 => 3,
-            _ => 1,
-        }
+        self.chip.latch_clocks()
+    }
+
+    /// Whether two drivers differ in a field a BOOT builds.
+    ///
+    /// `planes` sizes the DMA framebuffer, `clock_mhz` is the LCD_CAM's and
+    /// `chip` is a register init bit-banged on the pins before the DMA
+    /// starts — all three are set up once and are `reboot_required`.
+    ///
+    /// **`blank` is not** (Gitea #778). It is nothing but control bits in the
+    /// framebuffer words — the OE window and the latch tail
+    /// [`crate::layout`]'s consumers write with `luxel_hub75::format` — and
+    /// the packer never touches those, so a host can re-`format` each buffer
+    /// in place between frames and the new blanking is on the panel within a
+    /// frame. It is the one panel knob a user tunes by LOOKING at the panel
+    /// (ghosting between address rows), which is exactly the knob a reboot
+    /// per attempt makes unusable.
+    pub fn boot_differs(&self, other: &PanelDriver) -> bool {
+        (self.planes, self.clock_mhz, self.chip) != (other.planes, other.clock_mhz, other.chip)
     }
 }
 
@@ -382,8 +414,10 @@ impl Layout {
         if next.kind == LayoutKind::Matrix
             && (self.kind != LayoutKind::Matrix
                 || self.matrix.wiring() != next.matrix.wiring()
-                // the `panel` line: all four fields are read once, at boot
-                || self.driver != next.driver)
+                // the `panel` line: three of its four fields are read once,
+                // at boot. `blank` applies live — see
+                // [`PanelDriver::boot_differs`] (Gitea #778).
+                || self.driver.boot_differs(&next.driver))
         {
             return true;
         }
@@ -1833,13 +1867,8 @@ mod tests {
     #[test]
     fn changing_the_driver_needs_a_reboot() {
         let cur = panel_cur();
-        // all four fields are read once, when the DMA is set up
-        for body in [
-            "panel 6 30 shiftreg 1",
-            "panel 7 20 shiftreg 1",
-            "panel 7 30 fm6126a 1",
-            "panel 7 30 shiftreg 0",
-        ] {
+        // three of the four are read once, when the DMA is set up
+        for body in ["panel 6 30 shiftreg 1", "panel 7 20 shiftreg 1", "panel 7 30 fm6126a 1"] {
             assert!(parse(body, &cur, 4096, &panel_limits()).unwrap().reboot_required, "{body}");
         }
         // restating the stored driver rebuilds nothing, so a Settings page may
@@ -1850,6 +1879,35 @@ mod tests {
         // and a driver written down on a STRIP Layout rebuilds nothing either
         let e = parse("panel 4 8 dp3246 8", &strip_layout(), 60, &strip_limits()).unwrap();
         assert!(!e.reboot_required, "a strip has no panel to rebuild");
+    }
+
+    /// Latch blanking is the one panel field a frame can apply (Gitea #778):
+    /// it is control bits in the framebuffer words, which the packer never
+    /// writes, so a host re-formats its buffers in place.
+    #[test]
+    fn latch_blanking_alone_applies_live() {
+        let cur = panel_cur();
+        for body in ["panel 7 30 shiftreg 0", "panel 7 30 shiftreg 4", "panel 7 30 shiftreg 8"] {
+            let e = parse(body, &cur, 4096, &panel_limits()).unwrap();
+            assert!(!e.reboot_required, "{body} is control bits, not a rebuild");
+            assert!(e.driver_set);
+        }
+        // …but it does not EXCUSE the other three: the same body changing one
+        // of them still waits for a boot
+        for body in ["panel 6 30 shiftreg 4", "panel 7 20 shiftreg 4", "panel 7 30 dp3246 4"] {
+            assert!(parse(body, &cur, 4096, &panel_limits()).unwrap().reboot_required, "{body}");
+        }
+        // the predicate itself, which is what a firmware asks outside a POST
+        let d = PanelDriver::default();
+        assert!(!d.boot_differs(&PanelDriver { blank: 7, ..d }));
+        assert!(d.boot_differs(&PanelDriver { planes: 6, ..d }));
+        assert!(d.boot_differs(&PanelDriver { clock_mhz: 20, ..d }));
+        assert!(d.boot_differs(&PanelDriver { chip: Chip::Dp3246, ..d }));
+        // and the latch width a host derives from a `live` reading's chip
+        assert_eq!(Chip::ShiftReg.latch_clocks(), 1);
+        assert_eq!(Chip::Fm6126a.latch_clocks(), 1);
+        assert_eq!(Chip::Icn2038s.latch_clocks(), 1);
+        assert_eq!(Chip::Dp3246.latch_clocks(), 3);
     }
 
     #[test]

@@ -105,6 +105,22 @@ test("the other three `panel` fields each point at their own control", () => {
     assert.doesNotMatch(at(raw).text, /bug in the app/, raw);
 });
 
+// Latch blanking applies LIVE since Gitea #778, so the firmware judges it
+// against the row block it is RUNNING — a legal 0..8 value can still swallow
+// the whole OE window and black the panel out, and that refusal names the
+// numbers.
+test("a blanking that would black the panel out says why, on the blanking field", () => {
+  const ex = explainApiError(
+    "panel: blank 8 + 3 latch clocks leave no lit clock in a 16-word row block",
+    { scope: "layout", line: 1 },
+  );
+  assert.equal(ex.field, "panel-blank");
+  assert.match(ex.text, /no lit clock/);
+  assert.doesNotMatch(ex.text, /bug in the app/);
+  assert.doesNotMatch(ex.text, /0 to 8/, "this is not the range refusal");
+  assert.match(ex.details, /^panel: blank 8 \+ 3 latch clocks/, "the numbers reach the user");
+});
+
 test("a device whose grammar has no `panel` verb is OLD FIRMWARE, not an app bug", () => {
   // what a pre-#525 firmware answers when the card POSTs a `panel` line
   const ex = explainApiError("unknown line (want strip|matrix|map|out|proj1d|proj2d|proj3d)", {
