@@ -13,6 +13,7 @@
 //! L <type> <x> <y> <w> <h> <blend> <opacity> <key> <fit> <flags>
 //!   N <name…>                     layer display name
 //!   I <id>                        pat: pattern id, sprite: sprite id
+//!   A <fps>                       sprite: frame-rate override, 0..30
 //!   C <name> <raw…>               pat: control override, raw 16.16 ints
 //!   P <mode>                      pat: projection override
 //!   R <pct> <pos>:<rrggbb> …      pat: colour ramp
@@ -364,7 +365,14 @@ pub struct PatternLayer {
 pub enum LayerBody {
     Pattern(PatternLayer),
     Text(TextLayer),
-    Sprite { id: String },
+    Sprite {
+        /// Sprite-store id (8 hex), empty when the record carried no `I`.
+        id: String,
+        /// Per-LAYER frame-rate override, 0..=[`crate::sprite::SPRITE_MAX_FPS`]
+        /// — the `A` line. `None` plays the record's own
+        /// [`crate::sprite::SpriteView::fps`]; `Some(0)` holds frame 0.
+        fps: Option<u8>,
+    },
     Color([u8; 3]),
 }
 
@@ -406,7 +414,7 @@ impl Layer {
     /// The sprite-store id a `sprite` layer names, if any.
     pub fn sprite_id(&self) -> Option<&str> {
         match &self.body {
-            LayerBody::Sprite { id } if !id.is_empty() => Some(id),
+            LayerBody::Sprite { id, .. } if !id.is_empty() => Some(id),
             _ => None,
         }
     }
@@ -640,7 +648,10 @@ fn parse_layer(line: &str, n: usize) -> Result<Layer, String> {
     let body = match kind {
         LayerKind::Pattern => LayerBody::Pattern(PatternLayer::default()),
         LayerKind::Text => LayerBody::Text(TextLayer::default()),
-        LayerKind::Sprite => LayerBody::Sprite { id: String::new() },
+        LayerKind::Sprite => LayerBody::Sprite {
+            id: String::new(),
+            fps: None,
+        },
         LayerKind::Color => LayerBody::Color([0, 0, 0]),
     };
     Ok(Layer {
@@ -668,8 +679,24 @@ fn parse_binding(layer: &mut Layer, tag: &str, line: &str, n: usize) -> Result<(
             }
             match &mut layer.body {
                 LayerBody::Pattern(p) => p.id = id.into(),
-                LayerBody::Sprite { id: s } => *s = id.into(),
+                LayerBody::Sprite { id: s, .. } => *s = id.into(),
                 _ => {}
+            }
+        }
+        // The sprite layer's frame-rate override. Unlike the other bindings
+        // this one REFUSES a layer it does not apply to rather than ignoring
+        // it: `A` on a `pat`/`text`/`color` layer can only be a console bug
+        // or a hand-written record, and silently dropping a rate the user
+        // typed is worse than naming it (Gitea #740 follow-up).
+        "A" => {
+            let tok = it.next().unwrap_or("");
+            let fps = parse_int(tok, n, "sprite fps is not an integer")?;
+            if !(0..=crate::sprite::SPRITE_MAX_FPS as i32).contains(&fps) {
+                return Err(err_tok(n, "sprite fps must be 0..30", tok));
+            }
+            match &mut layer.body {
+                LayerBody::Sprite { fps: f, .. } => *f = Some(fps as u8),
+                _ => return Err(err(n, "A on a non-sprite layer")),
             }
         }
         "C" => {
@@ -905,10 +932,15 @@ pub fn serialize(s: &Scene, out: &mut String) {
                     out.push('\n');
                 }
             }
-            LayerBody::Sprite { id } => {
+            LayerBody::Sprite { id, fps } => {
                 if !id.is_empty() {
                     out.push_str("I ");
                     out.push_str(id);
+                    out.push('\n');
+                }
+                if let Some(f) = fps {
+                    out.push_str("A ");
+                    push_u32(out, *f as u32);
                     out.push('\n');
                 }
             }
@@ -985,7 +1017,8 @@ pub fn json_bound(s: &Scene) -> usize {
                     _ => 0,
                 }
             }
-            LayerBody::Sprite { id } => 24 + esc(id),
+            // `,"sprite":{"id":"…"}` plus the optional `,"fps":30`
+            LayerBody::Sprite { id, .. } => 40 + esc(id),
             LayerBody::Color(_) => 20,
         };
     }
@@ -1112,9 +1145,14 @@ pub fn push_json(s: &Scene, out: &mut dyn Sink) {
                 push_u32(out, t.speed as u32);
                 push_piece(out, "}");
             }
-            LayerBody::Sprite { id } => {
+            LayerBody::Sprite { id, fps } => {
                 push_piece(out, ",\"sprite\":{");
                 push_str_field(out, "id", id);
+                // present only when the layer overrides the record's rate
+                if let Some(f) = fps {
+                    push_piece(out, ",\"fps\":");
+                    push_u32(out, *f as u32);
+                }
                 push_piece(out, "}");
             }
             LayerBody::Color(c) => {
@@ -1165,6 +1203,7 @@ mod tests {
             "R 80 0:000000 128:ff0000 255:ffffff\n",
             "L sprite 2 2 8 8 add 45 black fill 15\n",
             "I 0123abcd\n",
+            "A 6\n",
             "L text 1 1 32 7 lighten 100 none contain 3\n",
             "N Ticker\n",
             "T clock HH:MM:SS\n",
@@ -1221,6 +1260,75 @@ mod tests {
         let bare = parse("S 0000000a n\nL sprite 0 0 0 0 normal 100 none fill 1\n").unwrap();
         assert_eq!(bare.layers[0].sprite_id(), None);
         assert_eq!(bare.layers[0].pattern_id(), None);
+    }
+
+    /// `A <fps>` — the sprite LAYER's frame-rate override. Absent means the
+    /// record's own rate, so it must not be invented on serialize.
+    #[test]
+    fn a_sprite_layer_can_override_the_records_fps() {
+        let head = "S 0000000a n\nL sprite 0 0 0 0 normal 100 none fill 1\nI 5b17e5ef\n";
+        // absent: the record's own rate, and nothing emitted
+        let bare = parse(head).unwrap();
+        assert_eq!(
+            bare.layers[0].body,
+            LayerBody::Sprite {
+                id: "5b17e5ef".to_string(),
+                fps: None
+            }
+        );
+        assert_eq!(round(head), head);
+
+        // set: round trips right after the `I` line
+        for f in [0u8, 1, 12, crate::sprite::SPRITE_MAX_FPS] {
+            let mut wire = String::from(head);
+            wire.push_str("A ");
+            push_u32(&mut wire, f as u32);
+            wire.push('\n');
+            let s = parse(&wire).expect(&wire);
+            assert_eq!(
+                s.layers[0].body,
+                LayerBody::Sprite {
+                    id: "5b17e5ef".to_string(),
+                    fps: Some(f)
+                }
+            );
+            assert_eq!(round(&wire), wire);
+        }
+
+        // an `A` with no `I` is still a legal override
+        let idless = "S 0000000a n\nL sprite 0 0 0 0 normal 100 none fill 1\nA 3\n";
+        assert_eq!(round(idless), idless);
+
+        // out of range, non-numeric, and on a layer it cannot apply to
+        assert_eq!(
+            parse(&alloc::format!("{head}A 31\n")).unwrap_err(),
+            "scene: line 4: sprite fps must be 0..30 \"31\""
+        );
+        assert!(parse(&alloc::format!("{head}A -1\n")).is_err());
+        assert_eq!(
+            parse(&alloc::format!("{head}A x\n")).unwrap_err(),
+            "scene: line 4: sprite fps is not an integer \"x\""
+        );
+        assert_eq!(
+            parse("S 0000000a n\nL pat 0 0 0 0 normal 100 none fill 1\nA 4\n").unwrap_err(),
+            "scene: line 3: A on a non-sprite layer"
+        );
+    }
+
+    /// The JSON member is present only when the override is set.
+    #[test]
+    fn json_carries_the_sprite_fps_override_only_when_set() {
+        let head = "S 0000000a n\nL sprite 0 0 0 0 normal 100 none fill 1\nI 5b17e5ef\n";
+        let json = |wire: &str| {
+            let mut out = String::new();
+            push_json(&parse(wire).expect(wire), &mut out);
+            out
+        };
+        assert!(json(head).ends_with("\"sprite\":{\"id\":\"5b17e5ef\"}}]}"));
+        assert!(json(&alloc::format!("{head}A 0\n"))
+            .ends_with("\"sprite\":{\"id\":\"5b17e5ef\",\"fps\":0}}]}"));
+        assert!(json(&alloc::format!("{head}A 30\n"))
+            .ends_with("\"sprite\":{\"id\":\"5b17e5ef\",\"fps\":30}}]}"));
     }
 
     #[test]
@@ -1454,6 +1562,7 @@ mod tests {
                 "T lit HELLO \"WORLD\" \u{1f680}\n",
                 "L sprite 0 0 0 0 add 50 black fill 1\n",
                 "I 0123abce\n",
+                "A 30\n",
                 "L color 0 0 0 0 mask 0 luma tile 0\n",
                 "K ff8800\n",
             )),

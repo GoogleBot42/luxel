@@ -65,9 +65,115 @@ export const spriteMaxBytes = writable(SPRITE_MAX_BYTES);
 /** True while a save is in flight — the editor header's `saving…`. */
 export const spriteSaving = writable(false);
 
+/**
+ * Bumped whenever the BYTES behind some sprite id change — a record landing,
+ * a save, a delete, or a refresh that finds the host holding a different
+ * record under an id the browser already had.
+ *
+ * It is the re-bind signal for every surface that COMPOSITES a sprite layer:
+ * a record arriving is not a change to any scene's wire, so nothing in
+ * `lib/sceneRender.ts` would rebuild on its own (`SceneRenderer.setScene`
+ * no-ops an unchanged wire). The scene editor's stage, the Scenes grid and
+ * `lib/sceneThumb.ts` all watch this.
+ *
+ * It used to be a `let spriteRev = 0` in each of THREE pages, each with its
+ * own `encoded` Map beside it — which is how the 2026-09-26 panel ended up
+ * never drawing a sprite layer on a console. Two holes, both per-page: a
+ * record that failed to READ was never asked for again (the counter only
+ * moved when something landed, and nothing retried), and a record that was
+ * re-drawn in the sprite editor was never re-encoded (the page's
+ * `encoded.has(id)` said it already had it). One owner, one signal.
+ */
+export const spriteRev: Writable<number> = writable(0);
+
 /** Decoded records by id, so opening the editor on a sprite the tab already
  *  drew costs nothing. Invalidated on every save, delete and refresh. */
 const cache = new Map<string, Sprite>();
+
+/** `encodeSprite` memoised per id: `SceneRenderer.setScene` copies these
+ *  bytes into wasm on every rebuild and a 64×64 record is 4 KB. Dropped
+ *  exactly when `cache` is. */
+const encoded = new Map<string, Uint8Array>();
+
+/** What the record behind an id LOOKED like when it was cached — the library
+ *  row's own numbers, so a refresh can tell "still the same drawing" from
+ *  "somebody re-drew it" without downloading anything. */
+const sig = new Map<string, string>();
+
+/** Loads in flight, so five surfaces asking for the same record at once is
+ *  ONE request on a two-socket board. */
+const inflight = new Map<string, Promise<Sprite | null>>();
+
+/** Records that would not READ, and how many times. Not a negative cache: it
+ *  is the retry BUDGET. A host that answers "no such sprite" is exhausted at
+ *  once; a bad read — a refused connection, or the truncated body the firmware
+ *  documents as the expected failure of an unpinned record streamed while a
+ *  save lands (`firmware/src/server.rs` `SpriteRecord`: "a retryable bad
+ *  download is the better failure") — is worth asking again. Nothing used to
+ *  ask again. */
+const misses = new Map<string, number>();
+
+/** Attempts inside ONE `loadSprite`, and how long between them. */
+const LOAD_TRIES = 3;
+const LOAD_BACKOFF_MS = 250;
+/** How many `ensureSprites`/`warmSprites` passes an id that never reads gets
+ *  before it is left alone until something invalidates it (a save, a delete,
+ *  or a library row whose numbers changed). */
+const MISS_BUDGET = 4;
+
+/** The six numbers `GET /api/sprites` prints for a row — and the same six a
+ *  decoded record yields, because the host computes them FROM the record
+ *  (`firmware/src/sprites.rs` `list_json`). Equal signatures mean the bytes in
+ *  hand are still the bytes the host holds. */
+function rowSig(m: SpriteMeta): string {
+  return `${m.w}x${m.h}x${m.frames}x${m.fps}x${m.colors}x${m.bytes}`;
+}
+
+function recordSig(sp: Sprite): string {
+  return `${sp.w}x${sp.h}x${sp.frames}x${sp.fps}x${sp.palette.length}x${spriteBytes(sp)}`;
+}
+
+/** Take `sp` as the record behind `id`. Bumps nothing: the caller decides
+ *  whether this is news, because a refresh adopting twenty unchanged rows must
+ *  not repaint every scene tile twenty times. */
+function hold(id: string, sp: Sprite): void {
+  cache.set(id, sp);
+  encoded.delete(id);
+  sig.set(id, recordSig(sp));
+  misses.delete(id);
+}
+
+/** Forget everything about `id` — the record, its bytes, its retry budget. */
+function drop(id: string): void {
+  cache.delete(id);
+  encoded.delete(id);
+  sig.delete(id);
+  misses.delete(id);
+}
+
+function bumpRev(): void {
+  spriteRev.update((n) => n + 1);
+}
+
+/**
+ * The `SpriteLookup` the wasm compositor takes (`lib/sceneRender.ts`): the
+ * `LXSP` bytes behind an id, or null when the browser does not hold that
+ * record yet.
+ *
+ * Synchronous on purpose — a render loop calls it — so it is a CACHE reader
+ * and never a fetch. `warmSprites`/`ensureSprites` fill the cache, and
+ * `spriteRev` is what tells a surface to ask again.
+ */
+export function spriteBytesOf(id: string): Uint8Array | null {
+  if (id === "") return null;
+  const held = encoded.get(id);
+  if (held) return held;
+  const sp = cache.get(id);
+  if (!sp) return null;
+  const bytes = encodeSprite(sp);
+  encoded.set(id, bytes);
+  return bytes;
+}
 
 // ---- reading ----
 
@@ -81,14 +187,42 @@ export async function refreshSprites(): Promise<void> {
   }
   try {
     const r = await d.sprites();
-    sprites.set((r.sprites ?? []).map(rowMeta));
+    const list = (r.sprites ?? []).map(rowMeta);
+    sprites.set(list);
     spriteMaxBytes.set(r.max_bytes ?? SPRITE_MAX_BYTES);
+    reconcile(list);
   } catch {
     // Firmware without /api/sprites — the tab shows an empty library rather
     // than an error, exactly as `refreshScenes` does for /api/scenes.
     sprites.set([]);
   }
   void migrateTaggedSprites();
+}
+
+/**
+ * Line the cached records up against the library that just landed: a row
+ * whose numbers no longer match what we hold was re-drawn somewhere else (the
+ * sprite editor in another tab, or on another console), and an id the host no
+ * longer lists is gone. Both drop, and ONE `spriteRev` bump re-binds every
+ * scene surface.
+ */
+function reconcile(list: readonly SpriteMeta[]): void {
+  let changed = 0;
+  const live = new Set<string>();
+  for (const row of list) {
+    live.add(row.id);
+    const was = sig.get(row.id);
+    if (was !== undefined && was !== rowSig(row)) {
+      drop(row.id);
+      changed++;
+    }
+  }
+  for (const id of [...cache.keys()]) {
+    if (live.has(id)) continue;
+    drop(id);
+    changed++;
+  }
+  if (changed > 0) bumpRev();
 }
 
 function rowMeta(r: SpriteMeta): SpriteMeta {
@@ -118,21 +252,91 @@ export async function loadSprite(id: string): Promise<Sprite | null> {
   if (id === "") return null;
   const held = cache.get(id);
   if (held) return held;
-  const d = get(device);
-  let sp: Sprite | null = null;
-  if (!d) {
-    const rec = localRecords().find((r) => r.id === id);
-    sp = rec ? decodeSprite(rec.bytes) : null;
-  } else {
-    try {
-      const bytes = await d.spriteRecord(id);
-      sp = bytes ? decodeSprite(bytes) : null;
-    } catch {
-      sp = null;
+  // Deduped: the scene editor, the Scenes grid and a thumbnail all ask for the
+  // same record within a frame of each other, and a two-socket board answers
+  // one of those three at a time.
+  const busy = inflight.get(id);
+  if (busy) return busy;
+  const job = fetchRecord(id).finally(() => inflight.delete(id));
+  inflight.set(id, job);
+  return job;
+}
+
+/**
+ * One record, with a retry ladder — and the ladder is the point.
+ *
+ * `lib/fetchgate.ts` retries a refused CONNECTION, so what reaches here is a
+ * body: a truncated record (the firmware streams an unpinned record and says
+ * so), or `{"ok":false,…}` under a 200 for an id the host does not have
+ * (`lib/device.ts` `spriteRecord` turns that one into `null`). Neither was
+ * retried before, and neither left a trace — the page's `spriteRev` only moved
+ * when a record LANDED, so one bad read meant a scene layer that drew nothing
+ * for as long as the tab stayed open.
+ */
+async function fetchRecord(id: string): Promise<Sprite | null> {
+  for (let attempt = 0; attempt < LOAD_TRIES; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, LOAD_BACKOFF_MS * attempt));
+    const d = get(device);
+    let bytes: Uint8Array | null = null;
+    if (!d) {
+      bytes = localRecords().find((r) => r.id === id)?.bytes ?? null;
+      // The playground's backing cannot fail transiently: what localStorage
+      // holds is the whole truth, so one look is the answer.
+      const sp = bytes ? decodeSprite(bytes) : null;
+      if (sp) {
+        hold(id, sp);
+        bumpRev();
+        return sp;
+      }
+      misses.set(id, MISS_BUDGET);
+      return null;
     }
+    try {
+      bytes = await d.spriteRecord(id);
+    } catch {
+      continue; // a bad read: ask again
+    }
+    if (bytes === null) {
+      // The host says it has no such sprite. That is an answer, not a failure.
+      misses.set(id, MISS_BUDGET);
+      return null;
+    }
+    const sp = decodeSprite(bytes);
+    if (sp) {
+      hold(id, sp);
+      bumpRev();
+      return sp;
+    }
+    // Bytes that are not a record: a truncated stream. Worth one more ask.
   }
-  if (sp) cache.set(id, sp);
-  return sp;
+  misses.set(id, (misses.get(id) ?? 0) + 1);
+  return null;
+}
+
+/**
+ * Make sure the browser holds the RECORD behind every `id` — the bytes the
+ * compositor blits. Safe to call as often as you like: an id already in hand
+ * costs nothing, an id being loaded joins that load, and an id that has failed
+ * `MISS_BUDGET` passes is left alone until something invalidates it.
+ *
+ * ONE AT A TIME on a console. A parallel burst across a two-socket board
+ * starves the status poll, and the gate would queue them anyway.
+ */
+export async function ensureSprites(ids: Iterable<string>): Promise<void> {
+  const want = new Set<string>();
+  for (const id of ids) {
+    if (id === "" || cache.has(id)) continue;
+    if ((misses.get(id) ?? 0) >= MISS_BUDGET) continue;
+    want.add(id);
+  }
+  for (const id of want) await loadSprite(id);
+}
+
+/** Re-read the library, then pull every row's record — what a surface that
+ *  composites sprites calls when it comes forward. */
+export async function warmSprites(): Promise<void> {
+  await refreshSprites();
+  await ensureSprites(get(sprites).map((s) => s.id));
 }
 
 /** The decoded record if it is already in hand, without a fetch — what a
@@ -194,7 +398,8 @@ export async function saveSprite(sprite: Sprite, id = ""): Promise<SpriteSave> {
       if (at >= 0) list[at] = row;
       else list.push(row);
       saveLocal(list);
-      cache.set(assigned, tidy);
+      hold(assigned, tidy);
+      bumpRev();
       return { ok: true, id: assigned };
     }
     const r = await d.saveSprite(id, record);
@@ -202,8 +407,14 @@ export async function saveSprite(sprite: Sprite, id = ""): Promise<SpriteSave> {
       reportApiError(r.error, { scope: "sprite", subject: tidy.name });
       return { ok: false, error: r.error };
     }
-    cache.delete(id);
-    if (r.id) cache.set(r.id, tidy);
+    // The drawing that was just saved IS the record now, so put it in hand
+    // rather than waiting for a download to bring it back — and BUMP, because
+    // every scene that draws this sprite is showing the old pixels until
+    // something re-binds (the half of the 2026-09-26 panel bug that survived a
+    // healthy device: a per-page `encoded` map that was never invalidated).
+    drop(id);
+    if (r.id) hold(r.id, tidy);
+    bumpRev();
     await refreshSprites();
     return { ok: true, id: r.id };
   } catch (e) {
@@ -218,7 +429,8 @@ export async function saveSprite(sprite: Sprite, id = ""): Promise<SpriteSave> {
 /** Delete a sprite. The scenes that used it keep the layer and say the sprite
  *  is missing — the same thing a deleted pattern does to a pattern layer. */
 export async function deleteSprite(id: string): Promise<boolean> {
-  cache.delete(id);
+  drop(id);
+  bumpRev();
   const d = get(device);
   if (!d) {
     saveLocal(localRecords().filter((r) => r.id !== id));
@@ -288,7 +500,10 @@ export function isSpriteId(s: string): boolean {
 // is open — and only while.
 
 export function startSpritePoll(): () => void {
-  return pollSubscribe("sprites", 2000, refreshSprites);
+  // `warmSprites`, not `refreshSprites`: the pass that pulls the RECORDS is
+  // also the retry for one that would not read, so the surface with the poll
+  // on it heals the cache every two seconds (Gitea #740 follow-up).
+  return pollSubscribe("sprites", 2000, warmSprites);
 }
 
 // ---- the playground's backing ----
@@ -345,10 +560,12 @@ function loadLocal(): void {
 /** Publish the metadata list (and re-fill the cache) from local records. */
 function setLocalList(list: readonly LocalRecord[]): void {
   const metas: SpriteMeta[] = [];
+  let changed = 0;
   for (const r of list) {
     const sp = decodeSprite(r.bytes);
     if (!sp) continue;
-    cache.set(r.id, sp);
+    if (sig.get(r.id) !== recordSig(sp)) changed++;
+    hold(r.id, sp);
     metas.push({
       id: r.id,
       name: sp.name,
@@ -360,7 +577,14 @@ function setLocalList(list: readonly LocalRecord[]): void {
       bytes: spriteBytes(sp),
     });
   }
+  const live = new Set(metas.map((m) => m.id));
+  for (const id of [...cache.keys()]) {
+    if (live.has(id)) continue;
+    drop(id);
+    changed++;
+  }
   sprites.set(metas);
+  if (changed > 0) bumpRev();
 }
 
 /** Chunked on purpose: `String.fromCharCode(...bytes)` on a 16 KiB record is

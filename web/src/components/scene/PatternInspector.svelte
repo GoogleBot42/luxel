@@ -150,6 +150,7 @@
 
   <StyleTail
     style={layer.style}
+    kind="pat"
     keyable
     on:change={(e) => patchLayer({ style: e.detail })}
     on:delete

@@ -551,6 +551,7 @@ mod tests {
              T clock HH:MM\n\
              L sprite 24 24 16 16 normal 100 none fill 1\n\
              I 5eed1e57\n\
+             A 4\n\
              L color 0 0 0 0 multiply 12 luma tile 0\n\
              K ff8800\n",
             // a name at the 64-byte ceiling

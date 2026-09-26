@@ -89,6 +89,17 @@ these before trusting any build/test failure as a real regression.
    dies. The SHELL'S CWD has to be that worktree's root:
    `cd /path/to/B && nix develop . --command bash -c 'cd /path/to/B/firmware && …'`
    (2026-09-06).
+3c-bis. **A rebase that brings a NEW `firmware/patches/*.patch` fools cargo.**
+   The devshell re-materialises `firmware/vendor/esp-hub75` at the new store
+   path under the SAME symlink path, and every file in a store path has an
+   epoch mtime — so cargo's fingerprint for the path dependency sees nothing
+   changed and reuses the stale compiled crate: `error[E0425]: cannot find
+   function `max_dma_chunk_size` in crate `esp_hub75`` on a tree whose vendor
+   source plainly has it (2026-09-26, after #797's plane-repeats patch). Fix:
+   `rm -rf firmware/target/<triple>/release/.fingerprint/esp-hub75-*
+   firmware/target/<triple>/release/deps/{lib,}esp_hub75-*` and rebuild
+   (`cargo clean -p esp-hub75` for that target does the same).
+
 3c. Device flash dumps (gitignored `*.bin` in the repo root: `athom-wled-*.bin`,
    `pb-v3-stock.bin`) — required by the QEMU suite (`tools/qemu/run-all.py`
    autodetects them in the repo ROOT of the tree it runs from;

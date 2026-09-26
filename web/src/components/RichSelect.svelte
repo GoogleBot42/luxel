@@ -23,6 +23,14 @@
   //
   // `isolation:isolate` on the composited group is load-bearing: without it a
   // `mix-blend-mode` reaches past the icon and blends with the panel.
+  //
+  // TWO SLOTS, for the one chooser whose rows are not modes but CONTENT: the
+  // scene inspector's sprite picker (Jeremy, 2026-09-26: "there's the dropdown
+  // to choose your sprite but it doesn't actually preview the sprite + its
+  // animation"). `icon` replaces the drawing — with a live `SpriteThumb`, in
+  // the menu and in the closed trigger alike — and `value` replaces the
+  // trigger's text. Both have the built-in as their fallback content, so every
+  // other `RichSelect` in the app is untouched by their existence.
   import { createEventDispatcher, onDestroy } from "svelte";
   import Popover from "./Popover.svelte";
   import type { RichOption } from "../lib/blendMeta";
@@ -36,6 +44,9 @@
   export let menuRole = "";
   /** What the control is called, for a screen reader. */
   export let ariaLabel = "";
+  /** The icon box's edge, in px. 26 is the mock's drawing plate; a picker whose
+   *  rows are pictures rather than diagrams asks for more. */
+  export let iconSize = 26;
 
   const dispatch = createEventDispatcher<{ input: string }>();
 
@@ -77,7 +88,16 @@
   aria-label={ariaLabel || null}
   on:click={() => (open = !open)}
 >
-  <span class="tval">{current ? current.label : value}</span>
+  <span class="tinner">
+    {#if $$slots.icon && current}
+      <span class="ico" style={`--lx-ico:${iconSize}px`} aria-hidden="true">
+        <slot name="icon" option={current} />
+      </span>
+    {/if}
+    <span class="tval">
+      <slot name="value" option={current}>{current ? current.label : value}</slot>
+    </span>
+  </span>
 </button>
 
 <Popover
@@ -101,7 +121,8 @@
       data-role={dataRole ? `${dataRole}-${o.value}` : null}
       on:click={() => choose(o.value)}
     >
-      <span class="ico" aria-hidden="true">
+      <span class="ico" style={`--lx-ico:${iconSize}px`} aria-hidden="true">
+        <slot name="icon" option={o}>
         {#if paint}
           <!-- the five blends: one drawing, one blend mode apart -->
           <svg viewBox="0 0 24 24">
@@ -221,6 +242,7 @@
             <rect x="0.5" y="0.5" width="23" height="23" rx="4" fill="none" stroke="#2b303a" />
           </svg>
         {/if}
+        </slot>
       </span>
       <span class="ometa">
         <span class="onm">{o.label}</span>
@@ -239,6 +261,16 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* `.sel` is `justify-content:space-between` with the chevron as background
+     art, so a trigger with an icon AND a value needs the two of them inside
+     ONE child — otherwise space-between throws them to opposite ends. */
+  .tinner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
   }
 
   /* A row of the chooser. Same metrics as `app.css`'s `.pop .pr` (the radio
@@ -271,14 +303,22 @@
   .ico {
     flex: none;
     display: block;
-    width: 26px;
-    height: 26px;
+    width: var(--lx-ico, 26px);
+    height: var(--lx-ico, 26px);
   }
 
   .ico svg {
     display: block;
-    width: 26px;
-    height: 26px;
+    width: var(--lx-ico, 26px);
+    height: var(--lx-ico, 26px);
+  }
+
+  /* slotted content (the sprite picker's live thumbnail) fills the same box */
+  .ico :global(canvas) {
+    display: block;
+    width: var(--lx-ico, 26px);
+    height: var(--lx-ico, 26px);
+    border-radius: 3px;
   }
 
   .ometa {

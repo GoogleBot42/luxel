@@ -1825,7 +1825,7 @@ fn build_stage(state: &State, sc: &luxel_core::scene::Scene) -> Result<Stage, St
                 }
                 engines.push((i, e));
             }
-            luxel_core::scene::LayerBody::Sprite { id } => {
+            luxel_core::scene::LayerBody::Sprite { id, .. } => {
                 // No engine, no bytecode, no budget: the record IS the
                 // texels (Gitea #740). An id the sprite store does not hold
                 // simply draws nothing, like a `pat` layer whose pattern is

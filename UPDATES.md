@@ -1,5 +1,60 @@
 # Update log
 
+## 2026-09-26 — sprites on the panel: Jeremy's review of #740/#741, fixed
+
+Jeremy put the sprite build on the Seengreat and reviewed it: "some bugs but
+actually work pretty nicely." Every item, and its answer:
+
+- **"The webpage preview never shows the sprite rendering in the scene."**
+  Three causes in the record-delivery path, none in the compositor:
+  `device.spriteRecord()` read the firmware's `200 + {"ok":false}` as the
+  answer for EVERY failure, so a 503 or a truncated body meant "no such
+  sprite" — the one answer you must not retry; each surface (scene editor,
+  Scenes tab, Sprites tab) kept its own cache and revision counter, so one
+  bad download was permanent for the tab's life; and a sprite redrawn in
+  its editor kept its old texels in every scene. One owner now
+  (`stores/sprites.ts`): a refusal is a 404 or a JSON body, everything else
+  throws and retries on a ladder and on the sprite poll, and a record whose
+  library row changed is dropped. Verified on the panel itself: the
+  console's stage lit 350 of the 408 texels in his tiled sprite box.
+- **"The stretch fit should force the UI to see the w + h the same always."**
+  The box is explicit, always: picking a sprite writes its size into
+  `w`/`h`, the fields show real numbers, a handle drag and a typed value
+  write the same fields, `natural` is a button, and a stored `0 0` box is
+  normalised on load without becoming an edit. (That normalisation found a
+  Svelte ordering trap: a `$:` that assigns `doc` from a called function
+  has to sit above every `$:` that reads `doc`, or the readers compute
+  from the old value and never catch up.)
+- **"The dropdown to choose your sprite doesn't actually preview the sprite
+  + its animation."** `RichSelect` grew `icon`/`value` slots; the sprite
+  picker's rows and its closed trigger carry a live thumbnail with the
+  name and `8×8 · 2 frames`.
+- **"The layer info for the sprite contains so much info the title doesn't
+  fit."** The row says `8×8`.
+- **"It should also be possible to override the FPS of the sprite in the
+  layer settings."** A new binding line `A <fps>` (0..=30, `0` = still)
+  under an `L sprite` layer; `LayerBody::Sprite { id, fps: Option<u8> }`;
+  JSON `sprite.fps` only when set; the compositor picks the frame with the
+  override through the same `frame_at_fps` arithmetic as the record's own
+  rate; refused on any other layer kind. The inspector's FPS row: empty =
+  `sprite's own (10 fps)`, `use sprite's` clears it. +624 B per image,
+  inside the noise floor. Pushed to the panel (fw + assets) and to nothing
+  else yet.
+- **"What's the Onion button?"** `Ghost prev`, with a title that says
+  what it does.
+- **Frames wrap** to new rows instead of a horizontal scroll bar.
+- **Tab order** Patterns · Sprites · Scenes · Playlist · Settings.
+- **"The 'Normal' blend mode description for both text and sprites refers
+  to a 'Transparent' setting which doesn't exist."** Blend descriptions are
+  per layer kind now; text and sprite Normal say the transparent texels
+  show what is beneath.
+
+Filed from the same review: #782 (per-layer frame time in the scene
+editor), #783 (a pattern layer's box should be the pattern's canvas, not a
+window — reverses A6), #790 (a directly-activated scene is not resumed after
+a reboot/OTA; it bit during this deploy and the scene was re-activated by
+hand).
+
 ## 2026-09-26 — #671 verified on the panel: the snake layer goes native (#792)
 
 Master `5f3de06c` (#791 + #797 + #802 + #808) OTA'd to the Seengreat's

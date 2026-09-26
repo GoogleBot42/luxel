@@ -21,16 +21,15 @@
   import { isPlayground } from "../stores/device";
   import { layout, setPreviewAs } from "../stores/geometry";
   import {
-    cachedSprite,
     deleteSprite,
     duplicateSprite,
     freshSprite,
-    loadSprite,
-    refreshSprites,
     saveSprite,
+    spriteRev,
     sprites,
     startSpritePoll,
     usedBy,
+    warmSprites,
   } from "../stores/sprites";
 
   export let active = false;
@@ -61,32 +60,12 @@
   onDestroy(() => syncPoll(false));
 
   /** Re-read whenever the page comes forward, and pull every record's pixels
-   *  so the tiles have something to draw. */
-  $: if (active) void open();
-
-  /** Bumped when a record lands in the store's cache — the tiles' repaint
-   *  signal (the cache is a plain Map, so nothing invalidates on a write). */
-  let rev = 0;
-
-  async function open(): Promise<void> {
-    await refreshSprites();
-    await warm();
-  }
-
-  /** Decode every row's record once. One at a time on a console: the device
-   *  serves ~2 connections and a parallel burst starves the status poll. Rows
-   *  already in hand cost nothing, so the 2 Hz poll re-running this is free
-   *  and `rev` only moves when a record actually arrived. */
-  async function warm(): Promise<void> {
-    let landed = 0;
-    for (const s of $sprites) {
-      if (cachedSprite(s.id)) continue;
-      if (await loadSprite(s.id)) landed++;
-    }
-    if (landed > 0) rev += landed;
-  }
-
-  $: if (active && $sprites.length > 0) void warm();
+   *  so the tiles have something to draw. `warmSprites` is the store's, and
+   *  the tiles' repaint signal is its `spriteRev` — one owner for both, so a
+   *  record this tab downloads is one the scene editor already has (#740
+   *  follow-up; the three page-local copies are what left the 2026-09-26
+   *  panel's scene stage empty). */
+  $: if (active) void warmSprites();
 
   async function create(): Promise<void> {
     const r = await saveSprite(freshSprite(8, 8));
@@ -157,7 +136,7 @@
     </div>
     <SpriteGrid
       items={$sprites}
-      {rev}
+      rev={$spriteRev}
       on:edit={(e) => dispatch("open", e.detail)}
       on:duplicate={(e) => void duplicate(e.detail)}
       on:remove={(e) => void remove(e.detail)}

@@ -36,6 +36,7 @@ Lines that bind to the most recent `L`:
 |---|---|---|
 | `N <name…>` | all | layer display name, ≤ 32 B |
 | `I <id>` | pat, sprite | store id (8 hex): a pattern id on `pat`, a SPRITE id on `sprite` (own namespace, §4) |
+| `A <fps>` | sprite | frame-rate override, 0..30 (`0` = still); outranks the record's own `fps` |
 | `C <name> <raw…>` | pat | control override, raw 16.16 ints — playlist grammar |
 | `P <mode>` | pat | projection override (`index\|x\|y\|z\|xy\|xz\|yz`) |
 | `R <pct> <pos>:<rrggbb> …` | pat | colour ramp; `pct` 0..100, ≥ 2 stops, `pos` 0..255 ascending, ≤ 32 stops |
@@ -48,7 +49,8 @@ Lines that bind to the most recent `L`:
 **Defaults** when a binding line is absent: `N` = `Text` / `Sprite` / `Color`,
 and the EMPTY string for a `pat` layer (only the host knows a pattern's name);
 `F regular ffffff l none 0`; `T lit ` (empty); `K 000000`; no controls, no
-projection override, no ramp.
+projection override, no ramp, and no `A` — a sprite layer without one plays
+the record's own `fps` (§4).
 
 **Errors.** Any parse error rejects the whole block with a message naming the
 line: `scene: line 4: unknown blend "foo"`. That string is what the API hands
@@ -57,7 +59,9 @@ the console verbatim.
 **Forward compatibility.** An unknown line tag is ignored, and so is a binding
 line that does not apply to the layer it follows — an older host survives a
 newer console's push. A binding line before the first `L`, or any line before
-the `S`, is an error.
+the `S`, is an error. `A` is the one exception to the ignore rule: on a
+`pat`/`text`/`color` layer it is `scene: line N: A on a non-sprite layer`,
+because a frame rate the user typed is worth naming rather than dropping.
 
 **Round trip.** `serialize` emits only the lines that differ from the
 defaults, so `parse`∘`serialize` is the identity on a record and
@@ -84,7 +88,9 @@ pub struct TextLayer { pub source: TextSource, pub font: Font, pub color: [u8; 3
 pub struct Ramp { pub pct: u8, pub stops: Vec<(u8, [u8; 3])> }
 pub struct PatternLayer { pub id: String, pub controls: Vec<(String, Vec<i32>)>,
                           pub proj: Option<u8>, pub ramp: Option<Ramp> }
-pub enum LayerBody { Pattern(PatternLayer), Text(TextLayer), Sprite { id: String }, Color([u8; 3]) }
+pub enum LayerBody { Pattern(PatternLayer), Text(TextLayer),
+                     Sprite { id: String, fps: Option<u8> },   // fps = the `A` override
+                     Color([u8; 3]) }
 pub struct Layer { pub name: String, pub style: LayerStyle, pub body: LayerBody }
 pub struct Scene { pub id: String, pub name: String, pub layers: Vec<Layer> }
 
@@ -289,7 +295,9 @@ The last member is one of:
   values decimal, like the playlist's GET.
 * `"text": {"source":"lit","text":"HI" | "source":"clock","fmt":"HH:MM" | "source":"slot","slot":0,
   "font":"regular","color":"ffffff","align":"l","scroll":"none","speed":0}`
-* `"sprite": {"id":"…"}`
+* `"sprite": {"id":"…","fps":12}` — `fps` present ONLY when the layer
+  overrides the record's rate (the `A` line); absent means "play the
+  record's own"
 * `"color": "ff8800"`
 
 `GET /api/scenes` wraps them:
@@ -350,6 +358,7 @@ impl SpriteView<'_> {
     pub fn parse(bytes: &[u8]) -> Option<SpriteView<'_>>;   // validated view, in place
     pub fn texel(&self, i: usize) -> Option<[u8; 3]>;         // None = transparent
     pub fn frame_at(&self, elapsed_ms: u32) -> u8;            // (elapsed·fps/1000) mod frames
+    pub fn frame_at_fps(&self, elapsed_ms: u32, fps: u8) -> u8; // …at a layer's `A` rate
 }
 pub fn check(bytes: &[u8]) -> Result<(), &'static str>;      // the `sprite: …` reasons
 pub const fn record_len(name_len, colors, w, h, frames) -> usize;
@@ -368,7 +377,13 @@ pattern layers, so a compaction never moves them out from under a frame.
 `fill` stretches the frame to the box (nearest neighbour), `contain` scales
 it uniformly to fit inside the box and centres it, `tile` repeats it 1:1
 across the box. `fit` still means nothing on any other layer kind. The frame
-shown is `frame_at(ms since the scene was set)`, per layer.
+shown is `frame_at_fps(ms since the scene was set, rate)`, per layer, where
+`rate` is the LAYER's `A <fps>` override when it has one and the record's own
+`fps` otherwise (Jeremy, 2026-09-26). `A 0` holds frame 0 however many frames
+the record carries, and an `A` above the record's rate speeds it up; both go
+through the record's one piece of arithmetic so the device, the mirror and the
+playground cannot round differently. Changing the override does NOT restart
+the layer's clock — it carries over a `set_scene` like the scroll phase.
 
 **The tag this replaced (readable by the console for ONE release).** Before
 #740 a sprite was a pattern whose first line was
