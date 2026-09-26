@@ -1,5 +1,67 @@
 # Update log
 
+## 2026-09-26 — sprites are a first-class record; the sprite editor redesigned (#740 · #741)
+
+The last two items of Jeremy's #729 review, and the biggest. On 2026-09-24 he
+reversed the Phase-B decision that a sprite is a sprite-tagged *pattern*:
+"confusing and may allow cheating and running more patterns than are allowed.
+Sprites should be a first class type. Make a new Sprite tab." The cheating was
+real — a sprite layer held a resident `Engine` (built at one pixel, compiled by
+the JIT, never stepped) that `caps.layers` did not count.
+
+**The record.** `LXSP` v1 (docs/spec/scenes.md §4; `luxel_core::sprite`): a
+12-byte header, the name, an RGB888 palette of up to 255 colours and one index
+byte per texel, frame-major; index 0 is transparent, so an opaque black texel
+is finally a colour. One byte layout is the flash bytes, the wire bytes, the
+playground's stored bytes and the wasm compositor's input. Capped at 16 KiB
+(the device's request buffer): 64×64 holds 3 frames, 16×16 holds 63.
+
+**The store.** Sprites are records of their own *kind* in the pattern store's
+file log — `patlog` header byte 34 (`kind`, hashed, `VER` unchanged), no
+bytecode extent — so they share its capacity, compaction, power-cut safety and
+pin discipline, and the log format needed no bump: every existing record reads
+back as kind 0. Ids are `seq ^ 0x5b17_e5ee` (`5b17e5e…`), a namespace of their
+own, and every lookup takes the kind, so a sprite id on `/api/patterns/<id>`
+is "no such pattern" whatever it decodes to. Routes: `GET/POST/DELETE
+/api/sprites[/<id>]` (docs/api.md "Sprites"), the record streamed out of the
+mapping like the running pattern's source, list bodies segmented; `caps.sprites`.
+
+**The runtime.** `Slot::Sprite` holds an id and nothing else on a mapped board;
+the compositor reads texels through `SpriteView::parse_trusted` over the store
+bytes every frame. No engine, no decode, no budget pre-flight, no JIT arm;
+`engines` counts pattern layers only and `jit.layers[].kind` is always
+`"pattern"`. Fit finally means something (#741 item 29): an unset box is the
+sprite's natural size, a set one is Stretch / Fit / Tile.
+
+**The web.** A **Sprites** tab after Scenes, gated like it; `lib/sprite.ts` is
+the codec (pinned to the same 35-byte record the Rust test hand-builds);
+`stores/sprites.ts` backs it with the device or localStorage and runs the
+migration — a stored `// @sprite` pattern is converted once, every scene that
+named it re-pointed, the pattern deleted; the old tag stays readable in the
+console for one release and nowhere else. The **editor** is the #741 redesign:
+four large labelled tools (keys 1–4), one picker beside the colours *in use*
+(no recents — the old strip filled with every intermediate value of a slider
+drag), an integer-zoomed canvas on a checker, a real frame strip (add /
+duplicate / delete / move, onion skin, play at fps — the old Frames field
+clamped a number nothing read), undo/redo, the byte budget, "used in". In the
+scene editor a sprite layer **moves with the marquee** like every other layer;
+the inspector picks from the store, opens the editor (`Edit ↗`, returning), and
+owns box + fit. The 16-colour rule is gone: the cap is the format's 255,
+enforced in one function.
+
+**On metal (Athom, `ota_1`).** `/api/sprites` CRUD round-trips byte-identical;
+upsert-by-name keeps the id; a bad record answers its `sprite: …` sentence;
+`/api/patterns` is unchanged and rejects a sprite id. A scene with a pattern
+base and a sprite layer runs at `engines: 1` (was 2). With the 144 px strip
+briefly a 12×12 matrix, pixel 0 and 2 read pure red, pixel 1 showed the base
+pattern through the transparent texel, row 1 showed the opaque black texel and
+the 10 fps frame flip; the layout was restored byte-identical. The record
+survived a reboot's boot scan. `tools/wire-check.sh` all pass. Image +4,320 B
+(6.8 % of the slot free); `tools/stack-check.sh` green on three boards.
+
+Retired: `compose::sprite_view`, `parse_sprite_tag`, `Engine::global_array`,
+`Slot::Sprite(Engine, String)`, `SpriteTools.svelte`, mockdiff frame S7c.
+
 ## 2026-09-26 — the pixel clock is a list, a requested reboot is not a crash, and a rollback says so (#771)
 
 Three fixes from one bench session on the Seengreat panel, an hour after the
