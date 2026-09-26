@@ -139,14 +139,26 @@ mod def {
 /// `/api/status` reports as `max_pixels`, and what the playground's pixel
 /// control clamps to. Gitea #74.
 ///
-/// A 64x64 HUB75 panel is 4096 pixels, so panel boards must allow that;
-/// strip boards stay at 2048. The split is deliberate rather than a global
-/// raise: on the classic ESP32 a 4096-px WS2812 encode buffer alone is
-/// ~36 KB, which the 80 KB heap can't carry alongside the WiFi blob. The
-/// panel path never builds that buffer (the HUB75 driver owns two
-/// bitplane framebuffers instead, allocated once at boot).
+/// Strip boards stay at 2048: on the classic ESP32 a 4096-px WS2812 encode
+/// buffer alone is ~36 KB, which the 80 KB heap can't carry alongside the
+/// WiFi blob. The panel path never builds that buffer (the HUB75 driver owns
+/// its bitplane framebuffers instead, allocated once at boot from the stored
+/// `matrix` layout).
+///
+/// Panel boards allow 16384 since Gitea #768 — a 2x2 chain of 64x64 tiles,
+/// which is 128x128. It used to be 4096 (one tile), and raising it is a
+/// *permission*, not a promise: this constant only says the pixel space is
+/// addressable. Whether a given chain actually FITS is decided at boot by
+/// `hub75::try_boot`, which sizes the DMA framebuffers, descriptors and the
+/// panel→pixel remap from the stored layout and falls back to the board
+/// default (64x64) when any of them will not allocate. Everything that
+/// scales per pixel and is *not* DMA-visible lives in the PSRAM arena on
+/// these boards — engine frames, pipeline stages, the compositor scratch,
+/// the output chain's scratch frame, `pixelState`, the remap LUT — so the
+/// internal-SRAM cost of a bigger chain is the framebuffers plus the
+/// descriptor rings and nothing else. docs/boards.md has the table.
 #[cfg(feature = "hub75")]
-pub const MAX_PIXELS: u32 = 4096;
+pub const MAX_PIXELS: u32 = 16384;
 #[cfg(not(feature = "hub75"))]
 pub const MAX_PIXELS: u32 = 2048;
 

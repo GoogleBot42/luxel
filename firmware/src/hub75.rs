@@ -592,24 +592,34 @@ type DmaFb = DynFb;
 /// 1/N-scan panel is not the driver's own `cols`/`rows`: the driver array is
 /// `stripes` times wider and `stripes` times shallower, and `build_lut` folds
 /// that back itself.
+///
+/// The table is 2 B/px and the DMA never reads it — only the compose, from
+/// task context — so it comes from the array arena
+/// (`luxel_core::arena::ArrVec`), which on a `psram-arena` board is the 8 MB
+/// external region and everywhere else is exactly the main heap it always was
+/// (Gitea #768). That matters at the new cap: a 2x2 chain is non-identity by
+/// construction, so a 128x128 wall pays 32 KB here — a third of the internal
+/// DRAM heap on the S3 panel board, and free in the arena. Unlike the
+/// spare-plane staging buffer this goes through the allocator rather than
+/// `psram::alloc_bulk_zeroed`, because an identity table has to be handed
+/// BACK, and `ArrVec`'s `Drop` does that through the same hook.
 fn build_remap(m: &Matrix, g: Geometry) -> Option<&'static [u16]> {
     let stripes = arrange::stripes(m);
     let (fb_w, fb_h) = (g.cols / stripes, 2 * g.rows * stripes);
-    let layout = AllocLayout::array::<u16>(g.pixels()).ok()?;
-    // zeroed: `build_lut` overwrites every entry, but a `&mut [u16]` may not
-    // be made from uninitialised memory.
-    let block = Block::zeroed(layout)?;
-    let p = block.ptr.cast::<u16>();
-    // SAFETY: `g.pixels()` zeroed, aligned `u16`s; the block is leaked below
-    // if the table is kept, and freed by `Block::drop` if it is not.
-    let lut: &mut [u16] = unsafe { core::slice::from_raw_parts_mut(p, g.pixels()) };
-    arrange::build_lut(lut, m, fb_w, fb_h);
-    if arrange::is_identity(lut) {
-        return None;
+    // Fallible, then infallibly filled: a reserve that fails is a `None`, and
+    // `try_boot` then formats the frame exactly as it did before remaps
+    // existed. `build_lut` overwrites every entry; the zeros are only so the
+    // slice is initialised.
+    let mut lut: luxel_core::arena::ArrVec<u16> = luxel_core::arena::empty();
+    lut.try_reserve_exact(g.pixels()).ok()?;
+    lut.resize(g.pixels(), 0);
+    arrange::build_lut(&mut lut, m, fb_w, fb_h);
+    if arrange::is_identity(&lut) {
+        return None; // dropped here — back to whichever heap it came from
     }
-    let p = block.leak().cast::<u16>();
-    // SAFETY: as above, now `'static`.
-    Some(unsafe { core::slice::from_raw_parts(p, g.pixels()) })
+    // Leaked, like the framebuffers: the compose reads it for the life of the
+    // driver. The `Box` is the 24-byte handle, not the table.
+    Some(alloc::boxed::Box::leak(alloc::boxed::Box::new(lut)).as_mut_slice())
 }
 
 /// What the running driver was built with — the `live` block of

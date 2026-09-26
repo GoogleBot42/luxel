@@ -27,15 +27,30 @@ test("the HUB75 ceiling states both numbers, the reason and a chain that fits", 
   });
   // the two numbers, computed from the fields and max_pixels
   assert.match(ex.text, /8,192 px — this board tops out at 4,096\./);
-  // the VERIFIED reason (#600): internal SRAM, not a setting anyone can raise
-  assert.match(ex.text, /two bitplane DMA frame buffers \(28 KB each\)/);
-  assert.match(ex.text, /60 MB\/s/);
-  assert.match(ex.text, /#599/);
+  // the reason (#600, reworded generically in #768): internal SRAM, and a
+  // firmware limit rather than a setting — no board-specific byte counts, so
+  // the sentence stays true when the cap moves
+  assert.match(ex.text, /The ceiling is RAM/);
+  assert.match(ex.text, /internal SRAM/);
+  assert.match(ex.text, /not a setting/);
   // and the arrangement that does fit, in the wire's own grammar
   assert.match(ex.text, /two 32×64 tiles \(`matrix 32 64 2 1 tr row 0 0`\)/);
   // the device's own words are kept
   assert.equal(ex.details, "pw*ph*cols*rows out of range for this board");
   assert.equal(ex.field, "layout-cols");
+});
+
+test("the ceiling sentence follows max_pixels, not a hard-coded 4096 (#768)", () => {
+  const ex = explainApiError("pw*ph*cols*rows out of range for this board", {
+    scope: "layout",
+    maxPixels: 16384,
+    chain: { pw: 64, ph: 64, cols: 3, rows: 3 },
+  });
+  assert.match(ex.text, /36,864 px — this board tops out at 16,384\./);
+  // and the suggestion is computed against the SAME cap
+  assert.match(ex.text, /nine 32×32 tiles \(`matrix 32 32 3 3 tr row 0 0`\)/);
+  // nothing in the reason names a board or a byte count any more
+  assert.ok(!/4,096|28 KB|#599/.test(ex.text), "no board-specific numbers in the reason");
 });
 
 test("a chain that cannot be halved into the budget offers no arrangement", () => {

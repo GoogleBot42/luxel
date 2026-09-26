@@ -75,6 +75,13 @@ value while collapsed. Everything below is on the new page.
   that three of the four panels would stay dark. **Do not apply it** unless you
   actually have four panels: the `Reboot to apply` button beside the note is
   what builds it, and it reboots.
+  *(Since Gitea #768 a 2×2 of 64×64 is 16,384 px and no longer over the board's
+  cap, so the form accepts it and draws the picture instead of raising the
+  ceiling banner — which is what this item always described, and could not
+  actually do while the cap was 4096. The **boot** is now the thing that
+  decides whether the chain fits, and that has never been seen: framebuffers,
+  descriptor rings, the remap LUT and the internal-heap floor at 8192/16384 px
+  are all unmeasured — the on-metal half of #768.)*
 - [ ] **The estimated refresh number** — one 64×64 panel should read 115 Hz,
   which is what the panel measures (`rescan_hz`, shown beside it as
   "measured now"). It is computed from the driver the device reports as

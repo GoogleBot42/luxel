@@ -1897,11 +1897,14 @@ present on a resting page.
 each `luxel_core::layout` grammar error — the vocabulary the firmware AND the
 mirror share — onto a sentence built from what the FORM knows: the board's
 ceiling, the chain the user typed, the field. `pw*ph*cols*rows out of range
-for this board` becomes *"8,192 px — this board tops out at 4,096. The panel's
-two bitplane DMA frame buffers (28 KB each) must live in internal SRAM, and
-the DMA cannot read them from PSRAM fast enough (it needs 60 MB/s); a wider
-chain needs new firmware (#599), not a setting. At this size you can arrange
-two 32×64 tiles (`matrix 32 64 2 1 tr row 0 0`)."* The raw text is never
+for this board` becomes *"36,864 px — this board tops out at 16,384. The
+ceiling is RAM: the buffers a bigger pixel space needs have to live in internal
+SRAM — the panel's bitplane DMA frame buffers and descriptor rings, a strip's
+encode buffer — and the DMA cannot read them from PSRAM fast enough. It is a
+firmware limit, not a setting. At this size you can arrange nine 32×32 tiles
+(`matrix 32 32 3 3 tr row 0 0`)."* The reason is deliberately free of board
+numbers since Gitea #768 — the cap moves, and a sentence that named 4,096 and
+a 28 KB framebuffer went stale with it. The raw text is never
 dropped — it is the `details` line. `LayoutCard` pre-checks the chain against
 `max_pixels` before POSTing (#600), the way `latOverMax` already does for the
 lattice, so the explanation arrives with the numbers and nothing is sent that

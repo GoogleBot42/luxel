@@ -555,21 +555,24 @@ mod pipe {
     /// only while one of the two tasks is filling or composing it — a ~50 us
     /// memcpy or a ~6 ms compose against a slot that is parked the rest of
     /// the time — so retry briefly rather than answer with nothing. An empty
-    /// answer means no frame has been rendered yet (or the heap could not
-    /// hold the response), exactly as the pre-#306 snapshot did before the
-    /// first frame.
+    /// `Ok` means no frame has been rendered yet, exactly as the pre-#306
+    /// snapshot did before the first frame; `Err(())` is "the heap cannot
+    /// hold the response", which the route turns into the 503 every other
+    /// out-of-heap read already answers with (Gitea #768 — the two used to be
+    /// the same empty body, and a 49 KB response at the panel board's 16384-px
+    /// cap makes the second case worth telling apart).
     ///
     /// ONE allocation, made OUTSIDE the critical section. This runs on a heap
     /// that a 4096 px pattern can leave under 30 KB free, so a second 12 KB
-    /// temporary is the difference between serving the preview and an OOM
-    /// panic; and allocating with interrupts masked would stall both cores on
-    /// the allocator's own lock.
-    pub async fn preview() -> Vec<u8> {
+    /// temporary (49 KB at 16384 px) is the difference between serving the
+    /// preview and an OOM panic; and allocating with interrupts masked would
+    /// stall both cores on the allocator's own lock.
+    pub async fn preview() -> Result<Vec<u8>, ()> {
         let mut v: Vec<u8> = Vec::new();
         for _ in 0..16 {
             let need = shared::PIXEL_COUNT.load(Ordering::Relaxed) as usize * 3;
             if v.capacity() < need && v.try_reserve_exact(need).is_err() {
-                return Vec::new();
+                return Err(());
             }
             if SLOT.lock(|c| {
                 let s = c.borrow();
@@ -585,11 +588,11 @@ mod pipe {
                 v.extend_from_slice(bytes);
                 true
             }) {
-                return v;
+                return Ok(v);
             }
             Timer::after(Duration::from_millis(2)).await;
         }
-        Vec::new()
+        Ok(Vec::new())
     }
 
     /// The ProCpu half: preview copy, output pipeline, panel compose.

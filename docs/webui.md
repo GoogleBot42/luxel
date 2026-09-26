@@ -295,7 +295,8 @@ below shipped with its firmware half.** Fields:
   reboot**: the render task rebuilds the engine + SPI buffer on a `Msg::Config`
   (feasible because the SPI is Blocking, no DMA, and the encode buffer is a plain
   heap Vec). Persisted in the `LXDV` nvs record; capped at the board's
-  `MAX_PIXELS` — 2048 on strip boards, 4096 on 64x64 HUB75 panel boards
+  `MAX_PIXELS` — 2048 on strip boards, 16384 on HUB75 panel boards (Gitea
+  #768; a 2x2 chain of 64x64 tiles)
   (docs/boards.md, "Pixel caps are per board"). The UI reads that cap from
   `/api/status`'s `max_pixels` on every poll, falling back to
   `/api/config`'s `max`, so the Pixels field clamps to the connected board.

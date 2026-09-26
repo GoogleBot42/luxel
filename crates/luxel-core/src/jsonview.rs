@@ -388,10 +388,28 @@ pub fn controls_json(engine: &Engine) -> String {
     out
 }
 
+/// Elements of one exported ARRAY that `vars_json` will dump (Gitea #768).
+///
+/// The dump costs ~11 bytes of `String` per element and the firmware rebuilds
+/// it every ~250 ms on the render task's heap, so an exported array sized to
+/// the pixel count is the one var that can outgrow the device: at the panel
+/// board's 16384-px cap an unbounded dump is ~180 KB, against ~150 KB of
+/// internal DRAM heap. 1024 is ~11 KB — comfortably more than any watcher
+/// reads at a glance, and bounded no matter how the board is configured.
+pub const VARS_ARRAY_MAX: usize = 1024;
+
 /// `{"name":raw,"arr":[raw,…],…}` — exported vars, raw 16.16 values.
+///
+/// An array longer than [`VARS_ARRAY_MAX`] is cut to that many elements and
+/// named under the `"@truncated"` key with its real length:
+/// `{"heat":[…1024 raws…],"@truncated":{"heat":16384}}`. `@` cannot start a
+/// pattern identifier (the lexer's `[A-Za-z_$][A-Za-z0-9_$]*`), so that key
+/// can never collide with an exported var's own name.
 pub fn vars_json(engine: &Engine) -> String {
     let names: Vec<String> = engine.exported_vars().map(String::from).collect();
     let mut out = String::from("{");
+    // (name, real length) per array the dump cut short.
+    let mut cut: Vec<(&str, usize)> = Vec::new();
     for (i, name) in names.iter().enumerate() {
         if i > 0 {
             push_piece(&mut out, ",");
@@ -402,17 +420,42 @@ pub fn vars_json(engine: &Engine) -> String {
         match engine.var(name) {
             Some(Value::Num(v)) => push_i32(&mut out, v.raw()),
             Some(Value::Arr(_)) => {
+                let real = engine.var_array(name).map_or(0, |a| a.len());
                 push_piece(&mut out, "[");
-                for (j, v) in engine.var_array(name).into_iter().flat_map(|a| a.iter()).enumerate() {
+                for (j, v) in engine
+                    .var_array(name)
+                    .into_iter()
+                    .flat_map(|a| a.iter())
+                    .take(VARS_ARRAY_MAX)
+                    .enumerate()
+                {
                     if j > 0 {
                         push_piece(&mut out, ",");
                     }
                     push_i32(&mut out, v.num().raw());
                 }
                 push_piece(&mut out, "]");
+                if real > VARS_ARRAY_MAX {
+                    cut.push((name.as_str(), real));
+                }
             }
             _ => push_piece(&mut out, "null"),
         }
+    }
+    // `cut` is non-empty only if a var was emitted, so the comma always has
+    // something to follow.
+    if !cut.is_empty() {
+        push_piece(&mut out, ",\"@truncated\":{");
+        for (i, (name, real)) in cut.iter().enumerate() {
+            if i > 0 {
+                push_piece(&mut out, ",");
+            }
+            push_piece(&mut out, "\"");
+            push_escaped(&mut out, name);
+            push_piece(&mut out, "\":");
+            push_u32(&mut out, *real as u32);
+        }
+        push_piece(&mut out, "}");
     }
     push_piece(&mut out, "}");
     out
@@ -506,6 +549,55 @@ mod tests {
         ] {
             assert_eq!(json_escape_len(s), json_escape(s).len(), "{s:?}");
         }
+    }
+
+    /// An exported array sized to the pixel count is the one var that can
+    /// outgrow the device, so the dump is capped and says so (Gitea #768).
+    #[test]
+    fn vars_json_caps_a_long_array_and_names_it_under_at_truncated() {
+        let src = alloc::format!(
+            "export var small = array(4)\n\
+             export var big = array({})\n\
+             export var scalar = 3\n\
+             export function render(i) {{ hsv(0, 0, 0) }}",
+            VARS_ARRAY_MAX + 7
+        );
+        let prog = crate::compile::compile(&src).expect("compiles");
+        let e = crate::engine::Engine::from_program_budgeted_at_ext(
+            prog,
+            16,
+            1,
+            4 << 20,
+            1 << 20,
+            None,
+        );
+        let j = vars_json(&e);
+        // the short array and the scalar are untouched
+        assert!(j.contains("\"small\":[0,0,0,0]"), "{j}");
+        assert!(j.contains("\"scalar\":196608"), "{j}");
+        // the long one is cut to exactly the cap…
+        let big = j.split("\"big\":[").nth(1).expect("big is there");
+        let big = big.split(']').next().unwrap();
+        assert_eq!(big.split(',').count(), VARS_ARRAY_MAX, "{}", big.len());
+        // …and only it is named, with its REAL length
+        assert!(
+            j.contains(&alloc::format!("\"@truncated\":{{\"big\":{}}}", VARS_ARRAY_MAX + 7)),
+            "{j}"
+        );
+    }
+
+    /// Nothing over the cap → no marker at all, so the common body is byte
+    /// identical to what it was before the cap existed.
+    #[test]
+    fn vars_json_adds_no_marker_when_nothing_was_cut() {
+        let prog = crate::compile::compile(
+            "export var a = array(8)\n\
+             export function render(i) { hsv(0, 0, 0) }",
+        )
+        .expect("compiles");
+        let e = crate::engine::Engine::from_program(prog, 16, 1);
+        let j = vars_json(&e);
+        assert_eq!(j, "{\"a\":[0,0,0,0,0,0,0,0]}");
     }
 
     #[test]

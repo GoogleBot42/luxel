@@ -2,8 +2,9 @@
 // must clamp to the CONNECTED BOARD's cap — `/api/status`'s `max_pixels` —
 // not to a hardcoded 2048. Checks both halves: the real mirror (a strip
 // device, 2048) and an intercepted status body impersonating a 64x64 HUB75
-// panel board (4096). The impersonation is the only way to exercise the
-// panel cap until the Seengreat board is on the bench (#75).
+// panel-board cap (16384 since Gitea #768 — a 2x2 chain of 64x64 tiles). The
+// impersonation is the only way to exercise the
+// panel cap without reconfiguring the physical panel (#75, #768).
 //
 // Usage (from web/, after `npm run build`):
 //   node tools/maxpixels-e2e.mjs [screenshot-dir]
@@ -66,7 +67,7 @@ async function run(fakeCap, tag) {
   if (fakeCap) {
     // Impersonate a board-seengreat-hub75 device: same mirror, but its
     // status reports the panel cap. This is the only way to drive the
-    // 4096 path without the physical panel (Gitea #75).
+    // panel path without the physical panel (Gitea #75).
     await page.setRequestInterception(true);
     page.on("request", async (req) => {
       if (!req.url().includes("/api/status")) return req.continue();
@@ -114,11 +115,12 @@ console.log(" strip board →", JSON.stringify(strip));
 if (strip.max !== "2048") throw new Error(`expected max 2048, got ${strip.max}`);
 console.log(" ok  strip device: pixel control clamps to 2048");
 
-const panel = await run(4096, "panel-4096");
+const panel = await run(16384, "panel-16384");
 console.log(" panel board →", JSON.stringify(panel));
-if (panel.max !== "4096") throw new Error(`expected max 4096, got ${panel.max}`);
-if (!panel.note?.includes("4096")) throw new Error(`hint text stale: ${panel.note}`);
-console.log(" ok  panel device: pixel control clamps to 4096 (per-board cap honored)");
+if (panel.max !== "16384") throw new Error(`expected max 16384, got ${panel.max}`);
+if (!panel.note?.includes("16384") && !panel.note?.includes("16,384"))
+  throw new Error(`hint text stale: ${panel.note}`);
+console.log(" ok  panel device: pixel control clamps to 16384 (per-board cap honored)");
 
 await browser.close();
 console.log("all max-pixels checks passed");

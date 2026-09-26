@@ -104,10 +104,17 @@ interface Entry {
 }
 
 /**
- * The HUB75 ceiling, in full (#600). Verified on the bench: the panel driver
- * keeps TWO bitplane DMA frame buffers in internal SRAM, and the DMA cannot
- * read them out of PSRAM at the ~60 MB/s the rescan needs — so the ceiling is
- * a firmware constraint (#599), not a setting anyone can turn up.
+ * The pixel ceiling, in full (#600) — for a panel and for a strip.
+ *
+ * The number is the board's own `max_pixels`, and the reason above it is
+ * always RAM: a bigger pixel space needs buffers that have to be internal SRAM
+ * (the panel's bitplane DMA frame buffers and descriptor rings; a strip's
+ * protocol encode buffer), and those are sized from the layout. Since #768 the
+ * cap is NOT the same thing as "the biggest chain that will actually boot":
+ * the firmware sizes its framebuffers from the stored layout and falls back to
+ * the default panel when they will not fit, so a chain can be under the cap
+ * and still be refused at boot. This message explains the cap; the device's
+ * own words (kept as `details`) explain a boot-time refusal.
  */
 function pixelCeiling(c: ApiErrorContext): string {
   const cap = c.maxPixels ?? 0;
@@ -121,9 +128,10 @@ function pixelCeiling(c: ApiErrorContext): string {
         ? `This board tops out at ${group(cap)} px.`
         : "That is more pixels than this board can drive.";
   const why =
-    "The panel's two bitplane DMA frame buffers (28 KB each) must live in internal SRAM, " +
-    "and the DMA cannot read them from PSRAM fast enough (it needs 60 MB/s); a wider chain " +
-    "needs new firmware (#599), not a setting.";
+    "The ceiling is RAM: the buffers a bigger pixel space needs have to live in internal " +
+    "SRAM — the panel's bitplane DMA frame buffers and descriptor rings, a strip's encode " +
+    "buffer — and the DMA cannot read them from PSRAM fast enough. It is a firmware limit, " +
+    "not a setting.";
   const fit = c.chain && cap > 0 ? fitTiles(c.chain, cap) : null;
   const tiles = c.chain ? c.chain.cols * c.chain.rows : 0;
   const how =
@@ -134,8 +142,30 @@ function pixelCeiling(c: ApiErrorContext): string {
   return `${head} ${why}${how}`;
 }
 
+/** Spelled out to sixteen — the most tiles the 16384-px cap can hold at the
+ *  32×32 the suggestion halves down to (#768). Digits past that. */
 function countWord(n: number): string {
-  return ["no", "one", "two", "three", "four", "five", "six", "seven", "eight"][n] ?? String(n);
+  return (
+    [
+      "no",
+      "one",
+      "two",
+      "three",
+      "four",
+      "five",
+      "six",
+      "seven",
+      "eight",
+      "nine",
+      "ten",
+      "eleven",
+      "twelve",
+      "thirteen",
+      "fourteen",
+      "fifteen",
+      "sixteen",
+    ][n] ?? String(n)
+  );
 }
 
 /** The table. Order matters only where two patterns could both match. */

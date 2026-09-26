@@ -1,5 +1,106 @@
 # Update log
 
+## 2026-09-26 — the panel pixel cap goes 4096 → 16384 (#768)
+
+`board::MAX_PIXELS` on HUB75 boards was one 64x64 tile. It is now 16384 — a
+2x1 (128x64) or 2x2 (128x128) chain — so a real multi-panel wall can be
+configured at all. Strip boards are untouched at 2048.
+
+Raising the constant is the small half. The real work was making every
+remaining INTERNAL-SRAM allocation that scales with the pixel count either
+external or fallible, because at 16384 px each 3 B/px buffer is 49 KB against
+a board that idles with ~36 KB of internal heap.
+
+**Moved to the PSRAM arena** (`luxel_core::arena`, the same hook as #709/#777;
+on a board with no hook it is exactly the global allocator it was):
+
+- `vm::PixelState`'s `front`/`back` (`setPixelState`). This one was also
+  *wrong*, not merely large: it is charged to the ARENA byte budget by
+  `charge_array_bytes` while the bytes came from internal DRAM, so the budget
+  would have waved 131 KB (one channel at 16384 px, 4 B per `Fx`, doubled)
+  straight through.
+- `outpipe::DeviceChain::buf`, the device output chain's scratch frame — a
+  whole RGB888 frame, one sequential pass per frame. `release` still hands it
+  back, through the same hook.
+- `shared::LIVE_PIXELS`, the DDP/E1.31 assembled frame, which was `resize`d
+  infallibly by the netin task on the first packet of a stream and never
+  released. Now reserved fallibly, for the whole frame at once, and a refusal
+  drops the packet silently (a stream is hundreds a second) rather than
+  showing a half-filled frame.
+- `hub75::build_remap`'s panel→pixel LUT, 2 B/px. A 2x2 chain is non-identity
+  by construction, so a 128x128 wall newly pays 32 KB here. It goes through
+  the allocator rather than `psram::alloc_bulk_zeroed` because the identity
+  case has to be handed back.
+
+**Made fallible** (`try_reserve`, with the refusal logged and the byte count
+named):
+
+- `devicemap::MapData::Coords`, 12 B/px, built with infallible
+  `Vec::with_capacity` on two paths. The POST path is bounded by the 4 KiB
+  body cap; the BOOT path reads a flash blob, so its length is whatever was
+  stored. A boot refusal falls back to the board grid (a panel renders as a
+  panel); a POST refusal is now a **503** `{"ok":false,"error":"out of memory
+  for this pixel map (N bytes)"}` instead of a silent revert to the board
+  grid.
+- `GET /api/pixels` was already fallible but answered the same EMPTY BODY for
+  "no frame yet" and "the heap could not hold the response" — at 16384 px a
+  49 KB body. `pipeline::preview` / `shared::get_pixels` now return
+  `Result<Vec<u8>, ()>` and the route answers the existing `oom_reply()` 503
+  for the second case. Empty still means "no snapshot right now".
+
+**Capped**: `jsonview::vars_json` dumped every exported array in full, ~11 B
+of `String` per element, every ~250 ms. An array sized to a panel's pixel
+count would be ~180 KB on a ~150 KB heap. Arrays are now cut at
+`VARS_ARRAY_MAX` (1024) and named under a new `"@truncated"` key with their
+real length; `@` cannot begin a pattern identifier, so it can never collide,
+and a response with nothing over the cap is byte-identical to before.
+
+**Also**: the E1.31 multicast join loop asks for `(px*3)/512` universes — 96
+at the new cap — against embassy-net's small group table, and printed one line
+per failure. It now logs the first refusal with the universe it gave up on and
+stops. The group table itself is still #257.
+
+**Host mirror and UI**: `luxel serve --board panel`'s ceiling follows to
+16384, while its DEFAULT panel stays 64x64 (the two stopped being the same
+number — a new `PANEL_PIXELS`). `web/src/lib/apiErrors.ts`'s `pixelCeiling()`
+explanation was hardcoded to the 64x64 case ("two bitplane DMA frame buffers
+(28 KB each)", "#599"); it now explains the cap generically from `max_pixels`,
+so it stays true when the cap moves again. `countWord` spells to sixteen (the
+most 32x32 tiles the new cap holds).
+
+**Measured** (devshell, `origin/master` `a42f732` baseline, same machine):
+
+| | master | #768 | Δ |
+|---|---:|---:|---:|
+| `seengreat-hub75` app `.bin` | 1,169,712 B | **1,173,264 B** | +3,552 |
+| `.stack` seengreat / +spare-plane / s3-devkit+hub75 / pb-v3 | — | 31,628 / 31,444 / 29,028 / 24,588 | all unchanged |
+
+1,173,264 B is 89.51 % of the 1,310,720 B fallback slot (10.49 % free); on the
+Seengreat's own 3 MiB slot, 37.30 %. `tools/stack-check.sh` prints `ok` on all
+four configurations, largest frame 10,512 B against the 12,288 B budget.
+`cargo test --workspace` green (no failures across every binary);
+`web/` 257 tests pass, `svelte-check` 0 errors. New host tests:
+`crates/luxel-core/tests/arena_perpixel.rs` (the output scratch and
+`pixelState` both come from an installed arena hook, and `release` frees
+through it) and two `jsonview` unit tests for the array cap.
+
+Verified in real chromium: `web/tools/maxpixels-e2e.mjs` (fixture raised to
+16384) shows the Pixels control clamping to 16,384, and a panel mirror
+accepted a `64 64 3 1` chain — 12,288 px, refused under the old cap — while a
+`3 x 2` chain raised the reworded banner: *"24,576 px — this board tops out at
+16,384. The ceiling is RAM: … It is a firmware limit, not a setting. At this
+size you can arrange six 32x64 tiles (`matrix 32 64 3 2 tr row 0 0`)."*
+
+**What remains for metal** (the on-metal half of #768): nothing above 4096 px
+has been on a panel. The internal-heap floor at 8192 and 16384 px, whether the
+framebuffers + descriptor rings + remap actually allocate at those sizes, the
+fallback path being taken for real, and what the remap LUT's per-pixel PSRAM
+read costs inside the compose window — all unmeasured. docs/boards.md "Pixel
+caps are per board" says so in place. Separately, `board-pixelblaze-v3` is
+**12 B** above the 24,576 B `.stack` floor on master itself (not caused by this
+change) — filed as Gitea #800.
+
+
 ## 2026-09-26 — OTA and the one-file install, on metal (#668, #526, #794)
 
 Both halves of the update path had only ever run against a host: the #655 OTA

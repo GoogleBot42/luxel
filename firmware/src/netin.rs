@@ -25,13 +25,30 @@ fn live_write(offset: usize, data: &[u8], proto: u8) {
         return;
     }
     let n = data.len().min(max - offset);
-    LIVE_PIXELS.lock(|c| {
+    let grown = LIVE_PIXELS.lock(|c| {
         let mut buf = c.borrow_mut();
         if buf.len() < offset + n {
+            // Fallible since Gitea #768: 3 B/px is 49 KB at 16384 px, and a
+            // packet from the network must not be able to abort the device.
+            // Reserve the WHOLE frame at once — a stream that arrives in
+            // ascending offsets would otherwise regrow once per packet.
+            let want = (PIXEL_COUNT.load(Ordering::Relaxed) as usize * 3).max(offset + n);
+            let extra = want.saturating_sub(buf.len());
+            if buf.capacity() < want && buf.try_reserve_exact(extra).is_err() {
+                return false;
+            }
             buf.resize(offset + n, 0);
         }
         buf[offset..offset + n].copy_from_slice(&data[..n]);
+        true
     });
+    if !grown {
+        // Silently — a stream is hundreds of packets a second and a log line
+        // per packet would be worse than the drop. The freshness mark below is
+        // not stamped, so `live_proto` stays None and the pattern keeps
+        // rendering instead of the device showing a half-filled frame.
+        return;
+    }
     // now() ms of 0 means "never" — skip that one tick in the epoch
     let now = (Instant::now().as_millis() as u32).max(1);
     LIVE_MARK_MS.store(now, Ordering::Relaxed);
@@ -266,11 +283,23 @@ pub async fn e131_task(stack: Stack<'static>) -> ! {
     // enough universes for the current strip. Unicast always works too.
     let px = PIXEL_COUNT.load(Ordering::Relaxed) as usize;
     let universes = (px * 3).div_ceil(E131_CHANNELS).max(1);
+    // The group table embassy-net keeps is small and fixed, so a wide panel
+    // asks for more universes than it has room for (96 at 16384 px — Gitea
+    // #257 is the real fix). Log the FIRST refusal with the universe it gave
+    // up on and stop trying: the loop used to print one line per universe,
+    // which at that size is ~90 lines of identical boot spam, and unicast
+    // works for every universe regardless (Gitea #768).
     for u in 1..=universes as u16 {
         let [hi, lo] = u.to_be_bytes();
-        let _ = stack
-            .join_multicast_group(embassy_net::Ipv4Address::new(239, 255, hi, lo))
-            .inspect_err(|_| esp_println::println!("e131: multicast join {} failed", u));
+        if stack.join_multicast_group(embassy_net::Ipv4Address::new(239, 255, hi, lo)).is_err() {
+            esp_println::println!(
+                "e131: multicast join failed at universe {} of {} — the rest are unicast only \
+                 (see Gitea #257)",
+                u,
+                universes,
+            );
+            break;
+        }
     }
     let (rx_meta, rx_buf, tx_meta, tx_buf) = bufs!();
     let mut sock = UdpSocket::new(stack, rx_meta, rx_buf, tx_meta, tx_buf);
