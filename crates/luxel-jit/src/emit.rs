@@ -32,10 +32,10 @@
 //! `tests/library_diff.rs` run its output through an ISA model on x86 and
 //! compare against the interpreter, bit for bit.
 
-use alloc::collections::BTreeMap;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 
+use luxel_core::arena::{self, ArrVec};
 use luxel_core::bytecode::{enc, is_binop_sub, op};
 use luxel_core::jit::{dev32, DirectSig, BUILTIN_ENTRIES, RET_NUM, STATUS_ERR};
 use luxel_core::kinds::{builtin_sig, elem_kind, ilen, Kind, Kinds, SigRet};
@@ -83,7 +83,13 @@ pub fn compile(prog: &Program, kinds: &Kinds, env: &Env) -> Result<NativeImage, 
 /// also the cap: an image that does not fit it is [`Refusal::TooLarge`].
 /// The firmware passes the executable block's data-side alias, so the
 /// only heap the compile touches is its own bookkeeping (plans, the
-/// literal pool index, fixup lists), never a copy of the image.
+/// literal pool index, fixup lists), never a copy of the image — and since
+/// Gitea #671 every per-word and per-function table of that bookkeeping is
+/// a `luxel_core::arena` vector, which on a board with external PSRAM
+/// means the arena, not the internal heap. What is left on the ordinary
+/// allocator is the per-operand-depth scratch (the verifier's abstract
+/// stacks, `Frame::stack`), the verifier's per-branch-target map nodes and
+/// the [`Placed`] result; `tests/alloc_peak.rs` measures both halves.
 pub fn compile_into(
     prog: &Program,
     kinds: &Kinds,
@@ -129,10 +135,10 @@ pub fn compile_into(
         kinds,
         env,
         code,
-        pool: Pool::default(),
-        l32r_fix: Vec::new(),
-        entries: Vec::with_capacity(prog.fns.len()),
-        abi: Vec::with_capacity(prog.fns.len()),
+        pool: Pool::empty(),
+        l32r_fix: arena::empty(),
+        entries: arena::with_capacity(prog.fns.len()),
+        abi: arena::with_capacity(prog.fns.len()),
         plans: &plans,
         f: Frame::empty(),
     };
@@ -160,21 +166,35 @@ enum Lit {
     FnAddr(u16),
 }
 
-#[derive(Default)]
+/// The literal pool: `keys` in interning order (which is pool order), and
+/// `idx` the same pairs sorted by literal for the lookup. A sorted vector
+/// rather than a `BTreeMap` so the index is an arena vector like the rest
+/// of the bookkeeping (#671) — a `BTreeMap` has no allocator parameter —
+/// and a pool is a few hundred entries at most, so the insert's memmove
+/// is nothing next to the binary search it buys.
 struct Pool {
-    idx: BTreeMap<Lit, usize>,
-    keys: Vec<Lit>,
+    idx: ArrVec<(Lit, u32)>,
+    keys: ArrVec<Lit>,
 }
 
 impl Pool {
-    fn intern(&mut self, l: Lit) -> usize {
-        if let Some(&i) = self.idx.get(&l) {
-            return i;
+    fn empty() -> Pool {
+        Pool {
+            idx: arena::empty(),
+            keys: arena::empty(),
         }
-        let i = self.keys.len();
-        self.keys.push(l);
-        self.idx.insert(l, i);
-        i
+    }
+
+    fn intern(&mut self, l: Lit) -> usize {
+        match self.idx.binary_search_by_key(&l, |e| e.0) {
+            Ok(p) => self.idx[p].1 as usize,
+            Err(p) => {
+                let i = self.keys.len();
+                self.keys.push(l);
+                self.idx.insert(p, (l, i as u32));
+                i
+            }
+        }
     }
 }
 
@@ -198,16 +218,19 @@ struct Frame {
     /// `NO_OFF` = not laid out yet. `u32`, not `Option<usize>`: this is
     /// one entry per bytecode word and the device compiles beside a
     /// resident engine (#665; `tests/alloc_peak.rs` gates the total).
-    word_off: Vec<u32>,
+    word_off: ArrVec<u32>,
     /// Forward `j` sites waiting for a word target. Every forward
     /// conditional is `b<inverted> +6; j target` (§3.7), so a `j` is the
     /// only thing ever patched against a word index.
-    fix: Vec<(u32, u32)>,
+    fix: ArrVec<(u32, u32)>,
     /// `j` sites aimed at this function's bail epilogue.
-    bail_fix: Vec<u32>,
+    bail_fix: ArrVec<u32>,
     /// The emitter's running copy of the abstract stack. Re-seeded from the
     /// verifier's map at every word so it cannot drift; the copy exists so
-    /// a fused superinstruction can push and pop its parts.
+    /// a fused superinstruction can push and pop its parts. An ordinary
+    /// `Vec`, not an arena one, on purpose: it is operand-depth long (a
+    /// few bytes) and pushed at dozens of sites, and the arena `Vec`
+    /// inlines its grow path at each — see `kinds::walk_fn` (#671).
     stack: Vec<Kind>,
     /// Which register-homed depths hold a live value right now.
     in_reg: [bool; REG_DEPTHS],
@@ -221,9 +244,9 @@ impl Frame {
     fn empty() -> Frame {
         Frame {
             fn_idx: 0,
-            word_off: Vec::new(),
-            fix: Vec::new(),
-            bail_fix: Vec::new(),
+            word_off: arena::empty(),
+            fix: arena::empty(),
+            bail_fix: arena::empty(),
             stack: Vec::new(),
             in_reg: [false; REG_DEPTHS],
             sc: 0,
@@ -239,9 +262,9 @@ struct Emitter<'a> {
     code: Asm<'a>,
     pool: Pool,
     /// `(code-local site, literal index)`.
-    l32r_fix: Vec<(u32, u32)>,
-    entries: Vec<u32>,
-    abi: Vec<FnAbi>,
+    l32r_fix: ArrVec<(u32, u32)>,
+    entries: ArrVec<u32>,
+    abi: ArrVec<FnAbi>,
     /// Every function's plan: a `CallFn` has to know the CALLEE's
     /// convention and return shape, not just its own.
     plans: &'a [FnPlan],
@@ -828,9 +851,9 @@ impl<'a> Emitter<'a> {
         let n = f.code_len as usize;
         self.f = Frame {
             fn_idx: fi as u16,
-            word_off: alloc::vec![NO_OFF; n + 1],
-            fix: Vec::new(),
-            bail_fix: Vec::new(),
+            word_off: arena::filled(n + 1, NO_OFF),
+            fix: arena::empty(),
+            bail_fix: arena::empty(),
             stack: Vec::new(),
             in_reg: [false; REG_DEPTHS],
             sc: 0,
@@ -960,7 +983,7 @@ impl<'a> Emitter<'a> {
             return Ok(());
         }
         let here = self.code.here();
-        let fixes = core::mem::take(&mut self.f.bail_fix);
+        let fixes = core::mem::replace(&mut self.f.bail_fix, arena::empty());
         for site in fixes {
             self.code.patch_j(site as usize, here).map_err(|e| self.reach(e))?;
         }
@@ -972,7 +995,7 @@ impl<'a> Emitter<'a> {
     }
 
     fn patch_function(&mut self) -> Result<(), Refusal> {
-        let fixes = core::mem::take(&mut self.f.fix);
+        let fixes = core::mem::replace(&mut self.f.fix, arena::empty());
         for (site, target) in fixes {
             let Some(off) = word_off_at(&self.f.word_off, target) else {
                 return Err(Refusal::JumpReach {
@@ -1589,7 +1612,7 @@ impl<'a> Emitter<'a> {
     ) -> Result<(), Refusal> {
         let ci = callee as usize;
         let cp = self.prog.fns[ci].params as usize;
-        let ck: Vec<Kind> = self.kinds.fns[ci].slots.iter().take(cp).copied().collect();
+        let ck: Vec<Kind> = self.kinds.fns[ci].slots[..cp].to_vec();
         let cret = self.kinds.ret(ci);
         // The CALLEE's conventions, read from its plan rather than
         // re-derived — one place decides them (`plan.rs`).
@@ -2156,12 +2179,16 @@ impl<'a> Emitter<'a> {
             .iter()
             .map(|(n, i)| (n.clone(), self.entries[*i as usize]))
             .collect();
+        // The result outlives the compile and is what the caller keeps
+        // (the device folds it into its `NativeProgram` at once), so it
+        // goes back to the ordinary allocator: a word per function, not
+        // one per bytecode word.
         Ok(Placed {
             len_bytes,
             pool_len,
-            entries: self.entries,
+            entries: self.entries.iter().copied().collect(),
             exports,
-            abi: self.abi,
+            abi: self.abi.iter().copied().collect(),
         })
     }
 }

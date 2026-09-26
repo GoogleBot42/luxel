@@ -8,9 +8,14 @@
 //! Everything here is a pure function of the bytecode and its `kinds`
 //! section, so the emitter never has to reconsider a decision mid-stream —
 //! which is what lets it be a single pass with no allocator.
+//!
+//! Every table a plan owns is an [`ArrVec`] (Gitea #671): on a board with
+//! an external arena the compile's working set lands there instead of in
+//! the internal heap the resident engine has already eaten, and everywhere
+//! else `ArenaAlloc` IS the global allocator. `tests/alloc_peak.rs` is the
+//! gate on both halves.
 
-use alloc::vec::Vec;
-
+use luxel_core::arena::{self, ArrVec};
 use luxel_core::bytecode::{enc, op};
 use luxel_core::jit::dev32;
 use luxel_core::kinds::{ilen, Kind, Kinds, StackMap};
@@ -149,31 +154,33 @@ pub struct FnPlan {
     pub params: usize,
     pub locals: usize,
     /// Annotated kind per local slot (parameters first).
-    pub slot_kind: Vec<Kind>,
+    pub slot_kind: ArrVec<Kind>,
     /// This function's return kind.
     pub ret: Kind,
     pub conv: ParamConv,
     /// Frame home of each local, or `None` for a register-convention
     /// parameter (which lives in `a3 + i` for the whole function).
-    pub local_home: Vec<Option<u32>>,
+    pub local_home: ArrVec<Option<u32>>,
     /// `JitCtx::args` BYTE offset of each parameter under
     /// [`ParamConv::CtxArgs`].
-    pub arg_off: Vec<u32>,
+    pub arg_off: ArrVec<u32>,
     /// Frame home of operand-stack depth `d`.
-    pub stack_home: Vec<u32>,
+    pub stack_home: ArrVec<u32>,
     /// Frame offset of the boxed-argument scratch, `[Value; scratch_n]`.
     pub scratch_off: u32,
     pub scratch_n: usize,
     /// `entry`'s frame size.
     pub frame: u32,
-    /// The abstract stack on arrival at every word (`kinds::stack_maps`).
+    /// The abstract stack on arrival at every word (`kinds::stack_maps`) —
+    /// moved in, not cloned: at the planner's peak the maps used to exist
+    /// twice (#671).
     pub map: StackMap,
     /// Words that some branch targets — the basic-block starts at which
     /// every register-homed depth is considered spilled.
-    pub block_start: Vec<bool>,
+    pub block_start: ArrVec<bool>,
     /// Words that a BACKWARD branch targets: the fuel check goes there
     /// (§3.6).
-    pub back_target: Vec<bool>,
+    pub back_target: ArrVec<bool>,
     /// This function is named by a `ConstFun` somewhere, so it can be
     /// reached through `CallValue` with a callee the call site cannot
     /// name. It therefore returns its value BOXED — `(tag, payload)` in
@@ -226,7 +233,7 @@ impl FnPlan {
 }
 
 /// Plan every function, or say why one cannot be compiled.
-pub fn plan_all(prog: &Program, kinds: &Kinds) -> Result<Vec<FnPlan>, Refusal> {
+pub fn plan_all(prog: &Program, kinds: &Kinds) -> Result<ArrVec<FnPlan>, Refusal> {
     let maps = luxel_core::kinds::stack_maps(prog, kinds).map_err(|e| Refusal::Verifier {
         detail: alloc::format!("{e}"),
     })?;
@@ -235,7 +242,7 @@ pub fn plan_all(prog: &Program, kinds: &Kinds) -> Result<Vec<FnPlan>, Refusal> {
     // parameters `Dyn` and it must take them through `ctx.args`. If the
     // inference ever says otherwise the two sides would disagree about
     // where the arguments are, so check rather than assume.
-    let mut as_value = alloc::vec![false; prog.fns.len()];
+    let mut as_value = arena::filled(prog.fns.len(), false);
     for f in &prog.fns {
         let s = f.code_start as usize;
         let n = f.code_len as usize;
@@ -253,10 +260,9 @@ pub fn plan_all(prog: &Program, kinds: &Kinds) -> Result<Vec<FnPlan>, Refusal> {
         }
     }
 
-    let mut out = Vec::with_capacity(prog.fns.len());
-    for (fi, f) in prog.fns.iter().enumerate() {
-        out.push(plan_fn(prog, kinds, fi, &maps[fi], as_value[fi])?);
-        let _ = f;
+    let mut out = arena::with_capacity(prog.fns.len());
+    for (fi, map) in maps.into_iter().enumerate() {
+        out.push(plan_fn(prog, kinds, fi, map, as_value[fi])?);
     }
     Ok(out)
 }
@@ -265,14 +271,14 @@ fn plan_fn(
     prog: &Program,
     kinds: &Kinds,
     fi: usize,
-    map: &StackMap,
+    map: StackMap,
     as_value: bool,
 ) -> Result<FnPlan, Refusal> {
     let f = &prog.fns[fi];
     let fk = &kinds.fns[fi];
     let params = f.params as usize;
     let locals = f.locals as usize;
-    let slot_kind: Vec<Kind> = fk.slots.clone();
+    let slot_kind: ArrVec<Kind> = arena::from_slice(&fk.slots);
 
     let all_simple = slot_kind.iter().take(params).all(|k| *k != Kind::Dyn);
     let mut conv = if params <= MAX_REG_PARAMS && all_simple {
@@ -295,7 +301,7 @@ fn plan_fn(
 
     // `ctx.args` offsets, one word per non-`Dyn` parameter and two per
     // `Dyn` one, in order.
-    let mut arg_off = Vec::with_capacity(params);
+    let mut arg_off = arena::with_capacity(params);
     let mut aw = 0u32;
     for k in slot_kind.iter().take(params) {
         arg_off.push(dev32::ARGS + aw * 4);
@@ -312,7 +318,7 @@ fn plan_fn(
     // depth, then the boxed-argument scratch — and the window save areas
     // reserved at the TOP, above all of it (see `WINDOW_SAVE`).
     let mut off = 0u32;
-    let mut local_home = Vec::with_capacity(locals);
+    let mut local_home = arena::with_capacity(locals);
     for i in 0..locals {
         if conv == ParamConv::Regs && i < params {
             local_home.push(None);
@@ -326,7 +332,7 @@ fn plan_fn(
     // the deepest an instruction can leave it is two above that (`Dup2`),
     // so two homes of slack cover every opcode without a second walk.
     let peak = map.max_depth() + 2;
-    let mut stack_home = Vec::with_capacity(peak);
+    let mut stack_home = arena::with_capacity(peak);
     for _ in 0..peak {
         stack_home.push(off);
         off += HOME;
@@ -354,8 +360,8 @@ fn plan_fn(
     // Branch targets: basic-block starts, and which of them a BACKWARD
     // branch reaches (that is where the fuel check goes, §3.6).
     let n = f.code_len as usize;
-    let mut block_start = alloc::vec![false; n + 1];
-    let mut back_target = alloc::vec![false; n + 1];
+    let mut block_start = arena::filled(n + 1, false);
+    let mut back_target = arena::filled(n + 1, false);
     let s = f.code_start as usize;
     let mut at = 0usize;
     while at < n {
@@ -399,7 +405,7 @@ fn plan_fn(
         scratch_off,
         scratch_n,
         frame,
-        map: map.clone(),
+        map,
         block_start,
         back_target,
         ret_boxed: as_value,

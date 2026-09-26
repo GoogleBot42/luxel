@@ -2252,6 +2252,13 @@ The remaining internal cost of a second layer is the **JIT planner's
 bookkeeping**, which is why the snake layer runs `interp`/`no-memory` while
 Aurora 2D is native — Gitea #671, not a regression (compare the
 `engines: 2` both-native reading for the cheaper "Test" scene above).
+**#671 is fixed in code as of 2026-09-26** — the compile's per-word and
+per-function tables are `luxel_core::arena` vectors now, so on this board they
+come out of the PSRAM arena and only a few KB of per-depth scratch and
+`BTreeMap` nodes stay internal (docs/firmware.md "The compile's own heap").
+The rows above are the pre-#671 measurement and are kept as such; re-reading
+this scene on metal to confirm `jit.layers[1].state: native` is a follow-up
+ticket, not something this session did.
 
 
 ## Second light: master on the panel (2026-09-06)
@@ -2561,6 +2568,12 @@ compile's own heap"): 31,148 B free against 14,848 B needed clears 12 KB and
 not 20 KB, and with the shipped gate it compiles and runs 2.08× — verified,
 not inferred.
 
+*(Superseded in code 2026-09-26, Gitea #671: the per-word and per-function
+tables are arena memory on this board now, so `snake-2d`'s 31.6 KB is asked of
+the 8 MB arena and only 8,446 B of the internal heap. The refusal row above is
+the pre-#671 state and stays as the measurement it was; whether `snake-2d`
+compiles at 4096 px after #671 has NOT been re-measured on metal.)*
+
 The arena side has one cost worth stating plainly: **an image is allocated at
 the full `JIT_MAX_CODE` cap, so `psram_free` drops by ~128 KB per native
 image regardless of how big the code actually is** (160 B for `rainbow`).
@@ -2655,10 +2668,42 @@ Measured bookkeeping peaks, for scale: `rainbow` 1,054 B · `perlin-fire-wind-tu
 7,470 B · `aurora-2d` 10,486 B (516 words) · `snake-2d` 24,412 B (1,085 words,
 19 fns) · `music-sequencer-for-v3-only` 67,460 B (3,126 words).
 
-The remaining cost is that the bookkeeping is still *internal* heap on a
-board with eight megabytes of PSRAM sitting idle beside it, which is what
-keeps `snake-2d` interpreted at 4096 px. Moving it into the arena is the open
-follow-up (docs/jit-design.md §10).
+**A third fix, 2026-09-26: the bookkeeping moved to the arena** (Gitea #671).
+The paragraph that stood here said the remaining cost was that the
+bookkeeping was still *internal* heap on a board with eight megabytes of
+PSRAM sitting idle beside it, which is what kept `snake-2d` interpreted at
+4096 px. It is no longer, and the line drawn is **what a table is indexed
+by**: the per-WORD and per-FUNCTION tables — `StackMap`'s three vectors and
+`stack_maps`' outer vector, the planner's `FnPlan` tables and plans vector,
+and the emitter's `word_off`, fixup lists, `entries`, `abi` and literal-pool
+index — are `luxel_core::arena` vectors now, so on a `psram-arena` board they
+come from the same second `EspHeap` as pattern arrays and frame buffers. The
+per-DEPTH scratch stayed internal **on purpose, because of flash**: routing
+the verifier's abstract stacks and the emitter's running stack copy through
+the hook as well cost 6,128 B in `kinds::walk_fn` alone (`allocator_api2`
+inlines its grow path at each of ~40 push sites) plus ~1.2 KB in the emitter
+— +7,536 B on the Athom, margin 6.51 % → 5.93 %, under the 6 % warn line —
+for vectors a few bytes each. Left on the ordinary `Vec` the whole change is
+**+1,040 B** on the Athom (1,225,392 → 1,226,432 B, margin 6.51 % → 6.43 %).
+Those, plus the verifier's per-branch-target `BTreeMap` nodes (no allocator
+parameter) and the `Placed` result the caller keeps, are what a second, much
+smaller rule budgets: `words × 6 + fns × 48 + 1,024`, measured at a
+**4,122 B** peak over the whole library (`2d-fireworks-fade`, 29 % of the
+rule; the tightest pattern, `rainbow-smiley`, uses 72 %). The working-set
+peaks above also fell, because the planner now moves the stack maps into the
+plans instead of cloning them: `snake-2d` 24,412 → 23,834 B, `aurora-2d`
+10,486 → 9,387 B, `music-sequencer-for-v3-only` 67,460 → 58,984 B. For
+`snake-2d` on this panel that is 31,624 B asked of the 8 MB arena and 8,446 B
+of the internal heap, where 31.6 KB internal was needed before. Boards without
+an arena (`board-s3-devkit`, the classic boards, an S3 whose PSRAM did not
+init) take the unchanged path, #752's contiguity check included, and the QEMU
+JIT gate covers it: `tools/qemu/jit-test.py` on the classic ESP32 passed
+`rainbow.js` and `snake-2d.js`, both native and bit-identical to the
+interpreter, `snake-2d` 19 fns / 11,256 B of code in 17,244 µs.
+docs/firmware.md "The compile's own heap" is the full argument. **The arena
+path is not re-measured on metal** — no device was touched in the #671
+session, so every on-metal row above is still the pre-#671 state and the
+re-read is a follow-up ticket.
 
 **Library differential on metal** (`tools/jit-diff.mjs`, 2026-09-24). Athom, 144 px, all 307 patterns: **295 ran natively** (54 pixel-identical, 241 differing only through a wall-clock input), **0 mismatches, 0 vmerr, 0 crashes**; 11 refused — 7 `too-large` over the classic board's 12 KB half (dbzbattlefinal, fireworks-finale, flash-posterize-music-sequencer-framework, multisegment-demo, snake-2d-v2, stargen-polar-2d, utility-palettes) and 4 `no-memory` (2d-fireworks-fade, frogger-2d, the two music sequencers); 1 `unstable` (beat-bounce, sound-reactive, the interpreter does not repeat itself either). Seengreat, 4096 px, 141 patterns (every third plus every 2D one — the full sweep is ~90 s a pattern at this pixel count): **131 ran natively** (10 identical, 121 clock), **0 mismatches, 0 vmerr**, 7 refused `no-memory` (bouncy-boxes, lightning-strike, snake-2d, snake-2d-v2, sound-spectrokalidamandala, sunrise-2d, stargen-polar-2d), 1 upload refused for heap fragmentation, and 2 rows (frogger-2d, music-sequencer-for-v2) whose 30–35 KB blobs the board rejects at 4096 px with the JIT off as well — that rejection leaves ~3.6 KB of heap and the next HTTP request panics, which is Gitea #678, not the JIT.
 **Soak with the JIT on** (2026-09-24): Athom, Jeremy's own 4-item playlist swapping every 5 s, 55 min native — 0 resets, `fence_timeouts` 0, 118 watcher samples all `native`; Seengreat, a 2-item playlist (_Fairies, Aurora 2D) swapping every 30 s, 33 min — 0 resets, `fence_timeouts` 0, 66 samples all `native`, heap 30.6–37.6 KB, 41 native activations narrated on serial and no panic. Not `tools/hw-bench.mjs`: that pushes every gallery pattern, which on the panel is Gitea #678 waiting to happen, and the library differential had already activated every pattern natively once.

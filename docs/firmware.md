@@ -1439,7 +1439,10 @@ outpipe's scratch (`DeviceChain::release`, #446/#476):
 Without the release the panel held two full frames for ever after its first
 scene — `load_base` 49,120 B fresh, 35,344 B afterwards — and 13 KB is
 enough to make the JIT refuse the next pattern (`jit: interp/no-memory`),
-which on Aurora 2D at 4096 px is 50 ms/frame becoming 105.
+which on Aurora 2D at 4096 px is 50 ms/frame becoming 105. *(That refusal
+was measured before #671 moved the compile's working set into the PSRAM
+arena; on an arena board 13 KB of internal heap no longer decides a compile.
+The 13 KB is still 13 KB.)*
 
 The compositor addresses a `GridMap`, and every kernel is a **silent no-op
 without one** — the same contract `bulk.rs` has. A scene on an irregular
@@ -1745,7 +1748,7 @@ reason appears in `/api/status`'s `jit.reason` (docs/api.md) and on serial:
 | `init-error` | init did not complete — see above |
 | `untyped` | the blob carries no `kinds` section (an older compiler) |
 | `no-buffer` | no exec memory: both `.rwtext` halves in flight (a crossfade still finishing) on a classic ESP32, or a full PSRAM arena with nothing left in the internal fallback |
-| `no-memory` | the heap cannot hold the EMITTER's own bookkeeping beside the engine that was just built — see "The compile's own heap" |
+| `no-memory` | the memory the EMITTER's bookkeeping comes from cannot hold it beside the engine that was just built — since #671 the PSRAM arena on a `psram-arena` board, the internal heap on every other board; see "The compile's own heap" |
 | `too-large` and the emitter's rest | `luxel_jit::Refusal`, whole-program |
 
 A crossfade holds **two** images. On the classic ESP32 that is why the
@@ -1847,10 +1850,12 @@ from it is a **rule and a gate**:
   headers and `usize` are twice the device's and the rule overstates it by
   roughly a third — safe, not tight.
 - `jit::emit_heap_need` applies that same rule on the device, and
-  `try_compile` checks it against `HEAP.free()` **before claiming any exec
-  memory**, refusing `no-memory` rather than running out half way. A refusal
-  costs a pattern its speedup; an allocation failure on the render core of a
-  board with no serial port costs the board. The three constants live in both
+  `try_compile` checks it against the memory the bookkeeping will actually
+  come from — since #671 the arena on a `psram-arena` board, `HEAP.free()`
+  everywhere else — **before claiming any exec memory**, refusing `no-memory`
+  rather than running out half way. A refusal costs a pattern its speedup; an
+  allocation failure on the render core of a board with no serial port costs
+  the board. These three constants (and #671's three, below) live in both
   files and must move together.
 - The image itself no longer touches this heap at all: `compile_into` emits
   straight into the exec block (`xtensa::Asm` is slice-backed), so there is
@@ -1868,10 +1873,92 @@ and needs 14,848 B by the rule, which clears the compile floor and not the
 runtime one — over 12 KB it compiles and runs 2.1×, over 20 KB it would have
 been refused.
 
-What is left is that the bookkeeping is still *internal* heap on a board with
-8 MB of PSRAM idle beside it, which is why `snake-2d` (31.6 KB by the rule,
-~26 KB free) stays interpreted at 4096 px. Moving the planner's allocations
-into the arena is the open follow-up.
+**Since Gitea #671 (2026-09-26) most of the bookkeeping rides the PSRAM
+arena.** What stood here until then: the bookkeeping was still *internal* heap on a
+board with 8 MB of PSRAM idle beside it, which is why `snake-2d` (31.6 KB by
+the rule, ~26 KB free) stayed interpreted at 4096 px. The split is now **by
+what a table is indexed by**. Per-WORD and per-FUNCTION tables are
+`luxel_core::arena` vectors — `StackMap`'s three vectors and `stack_maps`'
+outer vector (`luxel_core::kinds`), every `FnPlan` table and the plans vector
+(`luxel-jit/src/plan.rs`), and `word_off`, `fix`, `bail_fix`, `l32r_fix`,
+`entries`, `abi` and the literal-pool index (`emit.rs`) — so on a
+`psram-arena` board they come out of the same second `EspHeap` that already
+holds pattern arrays and frame buffers (`firmware/src/psram.rs`). Two smaller
+wins came with the move: the planner now MOVES the stack maps into the plans
+instead of cloning them — at the old peak every map existed twice — and the
+literal-pool index is a sorted vector with a binary search rather than a
+`BTreeMap`.
+
+**Per-DEPTH scratch deliberately stayed internal, and the reason is flash.**
+The verifier walk's abstract stacks (the `states` map's values, `cur`,
+`edges`, `merge_edges`' result) and the emitter's running stack copy
+(`Frame::stack`) are a few bytes each — operand depth, ~2 at the median — one
+per branch target. Routing them through the hook as well cost **6,128 B of
+flash in `kinds::walk_fn` alone**, because `allocator_api2` inlines its grow
+path at each of the ~40 push sites, plus ~1.2 KB in the emitter: +7,536 B on
+the Athom, margin 6.51 % → 5.93 %, under the 6 % warn line. With them on the
+ordinary `Vec` the whole change is **+1,040 B** (1,225,392 → 1,226,432 B,
+margin 6.51 % → 6.43 %). `kinds::walk_fn`'s comment carries the argument at
+the call site. Those vectors and the `BTreeMap` nodes are exactly what the
+residue rule budgets.
+
+So there are **two rules** now, and which check applies depends on whether
+the board's arena is up:
+
+- **Arena board** (`psram::stats()` is `Some` — today only the Seengreat S3).
+  `emit_heap_need`'s working-set rule is checked against the ARENA's free
+  space — as `emit_heap_need + JIT_MAX_CODE`, because the exec block is
+  claimed out of the same arena immediately afterwards. Against 8 MB that
+  never binds; it is there because the arena hook falls back to the internal
+  heap **silently** when the arena is full, and that fallback is exactly the
+  allocation this gate exists to keep off the internal heap. What the
+  internal heap must still hold is the residue: `jit::emit_int_need`,
+  **`words × 6 + fns × 48 + 1,024` bytes**, under the same `COMPILE_FLOOR`.
+  The residue is the verifier's per-branch-target `BTreeMap` nodes — a
+  `BTreeMap` has no allocator parameter, so its nodes cannot be routed — plus
+  the per-depth scratch that stayed internal on purpose (above) and the
+  `Placed` result and its export names, which the caller keeps.
+- **No arena** (`board-s3-devkit`, the classic boards, or an S3 whose PSRAM
+  did not initialise, where `stats()` is `None` and `ArenaAlloc` is the
+  global allocator for everything). The check is EXACTLY as it was:
+  `HEAP.free()` against `COMPILE_FLOOR + emit_heap_need`, plus the Gitea
+  #752 contiguity check of `emit_contig_need` against
+  `shared::largest_free_block()`, because a total is not an allocation. That
+  contiguity check is deliberately NOT applied on an arena board: there the
+  per-word tables are arena blocks and the largest internal piece is a
+  `BTreeMap` node.
+
+The `no-memory` reason id is unchanged, so `/api/status` and the browser's
+lint read the same as before; only the serial narration distinguishes the
+cases ("B internal to compile" · "B of arena to compile" · the old wording).
+
+Measured host-side by `cargo test -p luxel-jit --test alloc_peak` with
+`ALLOC_PEAK_CSV=1` (2026-09-26, debug build). The working-set peak itself
+fell where the clone removal bites: `music-sequencer-for-v3-only` (3,126
+words, 41 fns) 67,460 → 58,984 B, `snake-2d-v2` 25,877 → 24,694 B,
+`snake-2d` 24,412 → 23,834 B, `frogger-2d` 47,927 → 46,536 B, `aurora-2d`
+10,486 → 9,387 B; `2d-fireworks-fade` 43,685 → 43,888 B is the one row that
+moved up, still inside the rule. With the arena hook installed the internal
+residue peaks at **4,122 B** over the whole library (`2d-fireworks-fade`, 29 %
+of what the rule allows it): `snake-2d` is 1,698 B internal against 23,832 B
+of arena, `aurora-2d` 624 B against 9,387 B, `frogger-2d` 3,068 B against
+46,533 B, `music-sequencer-for-v3-only` 2,378 B against 58,976 B. The
+residue rule's tightest pattern is `rainbow-smiley` at 72 % of it. For the
+panel's `snake-2d` the two numbers the firmware checks are 31,624 B asked of
+an 8 MB arena and 8,446 B asked of the internal heap — under the 12 KB
+`COMPILE_FLOOR`, so ~20.4 KB of free internal heap suffices where ~43.6 KB
+was needed before.
+
+**The no-arena path is covered; the arena path is not verified on metal**
+(2026-09-26): no device was touched in the #671 session. The QEMU JIT gate
+(`tools/qemu/jit-test.py`, classic ESP32, no arena) passed on `rainbow.js`
+and `snake-2d.js` — both ran natively and bit-identical to the interpreter,
+`snake-2d` 19 fns / 11,256 B of code compiled in 17,244 µs — which exercises
+exactly the unchanged branch. The arena branch's on-metal expectation — the
+"Test 2" scene (`5cef0a3a`, Aurora 2D + Infinite Snake v2 + text) reporting
+`jit.layers[1].state: native` with `heap_free` no lower than today's
+35–39 KB (docs/boards.md "Whole frames in PSRAM") — is left to a follow-up
+ticket.
 
 ### The call, and the stack floor
 
