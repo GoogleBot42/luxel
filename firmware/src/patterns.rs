@@ -1169,29 +1169,48 @@ fn escape_into(out: &mut String, s: &str) {
 /// read guard is held across that synchronous copy only, so a concurrent
 /// save waits microseconds; if a save or compaction is already running we
 /// wait for it (up to ~200 ms) rather than reporting the pattern missing.
-pub async fn get_json(id: &str) -> Option<String> {
-    let r = rec_of(id)?;
-    let name = rec_name(&r)?;
-    let guard = MapRead::acquire().await?;
+pub async fn get_json(id: &str) -> Result<String, GetErr> {
+    let r = rec_of(id).ok_or(GetErr::Missing)?;
+    let name = rec_name(&r).ok_or(GetErr::Busy)?;
+    let guard = MapRead::acquire().await.ok_or(GetErr::Busy)?;
     let len = r.src_len as usize;
     let mut out = String::new();
-    out.try_reserve_exact(len + len / 8 + name.len() + 48).ok()?;
+    // The one allocation on this path that is sized by the PATTERN rather
+    // than by a segment: a 6 KB source on a panel whose largest free block
+    // has read 0–9 KB with a scene resident. That is `Busy`, never
+    // `Missing` — the console blanked every scene layer for an hour of
+    // "no such pattern" answers that were really "no heap right now"
+    // (2026-09-26, Gitea #777).
+    out.try_reserve_exact(len + len / 8 + name.len() + 48).map_err(|_| GetErr::Busy)?;
     push_piece(&mut out, "{\"id\":\"");
     push_piece(&mut out, id);
     push_piece(&mut out, "\",\"name\":\"");
     escape_into(&mut out, &name);
     push_piece(&mut out, "\",\"source\":\"");
     match payload_slice(r.src_off(), r.src_len) {
-        Some(b) => escape_into(&mut out, core::str::from_utf8(b).ok()?),
+        Some(b) => escape_into(&mut out, core::str::from_utf8(b).map_err(|_| GetErr::Missing)?),
         None => {
             // flashmap-off: the one path that still copies
-            let v = payload_vec(r.src_off(), r.src_len)?;
-            escape_into(&mut out, core::str::from_utf8(&v).ok()?);
+            let v = payload_vec(r.src_off(), r.src_len).ok_or(GetErr::Busy)?;
+            escape_into(&mut out, core::str::from_utf8(&v).map_err(|_| GetErr::Missing)?);
         }
     }
     drop(guard);
     push_piece(&mut out, "\"}");
-    Some(out)
+    Ok(out)
+}
+
+/// Why [get_json] could not answer. The two are different HTTP answers:
+/// a missing record is a 200 `{"ok":false,"error":"no such pattern"}` (the
+/// mirror's shape), a read the device cannot afford RIGHT NOW is a 503 the
+/// client retries (`server::busy_reply`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GetErr {
+    /// No live record with this id, or one whose source is not UTF-8.
+    Missing,
+    /// The store is mid-write, or the heap cannot hold the body this
+    /// instant. Nothing about the pattern is wrong.
+    Busy,
 }
 
 /// A stored pattern's SOURCE as mapped memory — served in place. The

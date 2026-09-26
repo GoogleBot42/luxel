@@ -1425,7 +1425,7 @@ struct CompSlot {
     /// bound). Sized by `lx_comp_set` alongside `bind`; pushed in by
     /// `lx_comp_sprite`, which is the only writer.
     sprites: Vec<Option<Vec<u8>>>,
-    px: Vec<[u8; 3]>,
+    px: luxel_core::arena::FrameVec,
     out: Vec<u8>,
     /// The SHARED full-frame driver (Gitea #732) — the same walk the device
     /// runs, and the owner of the sub-millisecond remainder of the frame
@@ -1493,7 +1493,7 @@ pub extern "C" fn lx_comp_new(w: u32, h: u32) -> i32 {
         scene: Scene::default(),
         bind: Vec::new(),
         sprites: Vec::new(),
-        px: Vec::new(),
+        px: luxel_core::arena::empty(),
         out: Vec::new(),
         driver: SceneDriver::new(),
     };

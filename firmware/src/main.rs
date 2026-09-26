@@ -1544,7 +1544,7 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
     // outgoing pattern needs none — its engine's own frame is the blend
     // source, exactly as before scenes existed — so this stays empty on
     // every board that never crossfades between scenes.
-    let mut fade_buf: alloc::vec::Vec<[u8; 3]> = alloc::vec::Vec::new();
+    let mut fade_buf: luxel_core::arena::FrameVec = luxel_core::arena::empty();
     // Real GPIO behind the pattern's pin builtins (Gitea #177 item 4):
     // synced with the running engine between frames, see gpio.rs.
     let mut pins = gpio::PinHost::new();
@@ -2150,7 +2150,11 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
             let (vm_t1, pipe_us, out_us, handoff_us) = if fading {
                 // The INCOMING stack lands in the stage…
                 match scene.as_mut() {
-                    Some(rt) => rt.render(sink.stage(), engine.as_mut(), delta, dt_ms, count),
+                    // A stage the driver could not size is caught below,
+                    // before the emit, by its length (Gitea #777).
+                    Some(rt) => {
+                        rt.render(sink.stage(), engine.as_mut(), delta, dt_ms, count);
+                    }
                     None => {
                         let stage = sink.stage();
                         stage.clear();
@@ -2183,21 +2187,37 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                     }
                 }
                 let vm_t1 = Instant::now();
-                let (p, o, w) = emit_staged!(sink, grid);
+                // A short stage is a frame the driver could not size; on
+                // the wire it is a black panel, so hold instead (#777).
+                let (p, o, w) = if sink.stage().len() == count {
+                    emit_staged!(sink, grid)
+                } else {
+                    (0, 0, 0)
+                };
                 (vm_t1, p, o, w)
             } else {
                 let had_scene = prev_scene.is_some();
                 drop_prev(&mut prev, &mut prev_scene); // fade finished
                 if had_scene {
-                    fade_buf = alloc::vec::Vec::new(); // grid-sized; not held between fades
+                    fade_buf = luxel_core::arena::empty(); // grid-sized; not held between fades
                     republish_layer_pins(&scene, &prev_scene);
                 }
                 match scene.as_mut() {
                     Some(rt) => {
-                        rt.render(sink.stage(), engine.as_mut(), delta, dt_ms, count);
+                        let drawn = rt.render(sink.stage(), engine.as_mut(), delta, dt_ms, count);
                         let vm_t1 = Instant::now();
-                        let (p, o, w) = emit_staged!(sink, grid);
-                        (vm_t1, p, o, w)
+                        if drawn {
+                            let (p, o, w) = emit_staged!(sink, grid);
+                            (vm_t1, p, o, w)
+                        } else {
+                            // The driver could not size the stage this
+                            // frame (its fallible reserve, #702's shape).
+                            // `emit_staged` publishes whatever the stage
+                            // holds — here nothing, which the panel shows
+                            // as fully black. Hold the last frame instead
+                            // (2026-09-26, Gitea #777).
+                            (vm_t1, 0, 0, 0)
+                        }
                     }
                     None => {
                         // Neither a scene nor a crossfade is live, so the
@@ -2226,7 +2246,11 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
             // not the frame's cost, so it comes back out.
             frame_sum += (frame_t1 - now).as_micros().saturating_sub(u64::from(handoff_us));
             timed_frames += 1;
-            if let Some(e) = engine.as_mut().and_then(Engine::take_error) {
+            // The base engine's error first, then any further pattern
+            // layer's (`Runtime::take_error`) — a layer that failed at
+            // runtime used to be invisible (Gitea #777).
+            let layer_err = scene.as_mut().and_then(scenes::Runtime::take_error);
+            if let Some(e) = engine.as_mut().and_then(Engine::take_error).or(layer_err) {
                 // report each distinct error site once, not per frame — an
                 // erroring pattern at 120 fps floods serial and churns the
                 // (possibly already tight) heap with format! strings

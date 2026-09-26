@@ -8,18 +8,23 @@
 //!
 //! ## What lives here and what must not
 //!
-//! `ArrRepr::Owned` element storage and each engine's per-frame pixel
-//! buffer (`luxel_core::arena::FrameVec`, Gitea #709) — both routed through
-//! `luxel_core::arena`'s hook, which this module installs. The frame joined
-//! the arrays because it is the largest thing a resident engine owns
-//! (12,288 B at 4096 px) and, unlike everything below, is touched once per
+//! `ArrRepr::Owned` element storage, each engine's per-frame pixel buffer
+//! (`luxel_core::arena::FrameVec`, Gitea #709), and — since #777 — every
+//! other whole-frame RGB888 buffer a frame passes through: the pipeline's
+//! staging buffer and travelling hand-off buffer (`pipeline.rs`) and the
+//! compositor's text/ramp scratch (`luxel_core::compose`). All routed
+//! through `luxel_core::arena`'s hook, which this module installs. The
+//! engine frame joined the arrays because it is the largest thing a
+//! resident engine owns (12,288 B at 4096 px) and is touched once per
 //! pixel per frame rather than once per instruction: the VM writes it
 //! sequentially-ish and the compositor reads it straight through, which the
 //! S3's data cache carries. Measured on the panel before it was believed —
-//! docs/boards.md "Engine frames in PSRAM". Two 4096-px pattern layers do
-//! not fit internal DRAM otherwise (65,536 B needed against a steady
-//! `load_base` of 47–49 KB) and the panel advertised a layer it could not
-//! build.
+//! docs/boards.md "Engine frames in PSRAM". The other three followed for
+//! the same reason with the same access shape (one sequential pass per
+//! frame each): at 4096 px they are 36,864 B of internal DRAM that a
+//! three-layer scene had to find beside two engines and the 20 KB runtime
+//! floor in a heap that idles at ~36 KB — it could not, and the text layer
+//! or the second engine silently went without (Gitea #777).
 //!
 //! Deliberately NOT here, because PSRAM is cache-backed over an octal SPI
 //! bus and several times slower per access than DRAM:
@@ -28,9 +33,9 @@
 //!   because DMA cannot reach PSRAM — the S3's GDMA can (docs/boards.md
 //!   #521) — but because the panel's refresh reads every plane of every row
 //!   continuously, which is the one access pattern the cache cannot help;
-//! * the pipeline's travelling frame, the crossfade stage buffer, the
-//!   compositor's per-frame scratch, the strip output buffer — all shared,
-//!   all read and written *within* one frame beside the layer frames;
+//! * the strip output buffer and the outpipe chain's scratch — read and
+//!   written *within* one frame beside the buffers above, and the boards
+//!   that drive strips have no arena anyway;
 //! * the VM's operand stack, locals, globals and the arena's own slot
 //!   vector (`Vm::arrays`) — all touched per instruction;
 //! * everything the WiFi blob mallocs. esp-radio's `malloc` shim asks
