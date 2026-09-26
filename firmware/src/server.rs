@@ -1766,7 +1766,13 @@ async fn api_pixels() -> ApiResponse {
     let px = crate::pipeline::preview().await;
     #[cfg(not(pipelined))]
     let px = crate::shared::get_pixels();
-    Reply::ok(ApiBody::Bytes(px)).cors()
+    // An empty body still means "no frame yet" (docs/api.md); a body the heap
+    // cannot hold is the same 503 every other out-of-heap read answers with,
+    // not a silently empty frame (Gitea #768).
+    match px {
+        Ok(px) => Reply::ok(ApiBody::Bytes(px)).cors(),
+        Err(()) => oom_reply(),
+    }
 }
 
 async fn api_controls() -> ApiResponse {
@@ -2598,7 +2604,11 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                             // so the aliases and this endpoint can never
                             // report different things.
                             if let Some(m) = applied.map.as_deref() {
-                                crate::devicemap::set_from_wire(m);
+                                // An out-of-heap coordinate map leaves the
+                                // installed map alone (Gitea #768); the rest
+                                // of the Layout still applies, and devicemap
+                                // has already logged the byte count.
+                                let _ = crate::devicemap::set_from_wire(m);
                             }
                             if let Some(n) = applied.pixels {
                                 crate::shared::WANT_PIXEL_COUNT.store(n, Ordering::Relaxed);
@@ -2648,14 +2658,33 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 // same state, and tells the Layout so its `kind` follows.
                 "/api/map" => {
                     let body = text(&raw);
-                    let (installed, count) = crate::devicemap::set_from_wire(&body);
-                    crate::layout::note_map_changed(installed && !body.trim().is_empty());
-                    let mut out = String::from("{\"ok\":true,\"installed\":");
-                    push_piece(&mut out, if installed { "true" } else { "false" });
-                    push_piece(&mut out, ",\"count\":");
-                    push_u32(&mut out, count as u32);
-                    push_piece(&mut out, "}");
-                    Some(json_response(out))
+                    // A valid map the heap cannot hold is a 503 that NAMES the
+                    // byte count, not a silent revert to the board grid
+                    // (Gitea #768) — the body was fine, the device is full.
+                    match crate::devicemap::set_from_wire(&body) {
+                        Err(bytes) => {
+                            let mut e = String::from(
+                                "{\"ok\":false,\"error\":\"out of memory for this pixel map (",
+                            );
+                            push_u32(&mut e, bytes as u32);
+                            push_piece(&mut e, " bytes)\"}");
+                            Some(
+                                Reply::new(StatusCode::SERVICE_UNAVAILABLE, ApiBody::Json(e))
+                                    .cors(),
+                            )
+                        }
+                        Ok((installed, count)) => {
+                            crate::layout::note_map_changed(
+                                installed && !body.trim().is_empty(),
+                            );
+                            let mut out = String::from("{\"ok\":true,\"installed\":");
+                            push_piece(&mut out, if installed { "true" } else { "false" });
+                            push_piece(&mut out, ",\"count\":");
+                            push_u32(&mut out, count as u32);
+                            push_piece(&mut out, "}");
+                            Some(json_response(out))
+                        }
+                    }
                 }
                 // POST /api/playlist — line-format definition (D/I/C lines).
                 // Persisted to flash; applied live if already playing.

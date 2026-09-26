@@ -587,11 +587,17 @@ impl Default for ColorOrder {
 ///
 /// This struct owns the two things the chain has to keep between frames:
 ///
-/// - the **scratch frame** (3 B/px — 12.3 KB at 4096 px). Grown lazily by the
-///   first frame after any stage comes on, and **released** by the first frame
-///   after the last one goes off (Gitea #446/#476): `Vec::clear` keeps
-///   capacity, so without the release one touch of one slider cost that heap
-///   until the next reboot.
+/// - the **scratch frame** (3 B/px — 12.3 KB at 4096 px, 49 KB at 16384).
+///   Grown lazily by the first frame after any stage comes on, and
+///   **released** by the first frame after the last one goes off (Gitea
+///   #446/#476): `Vec::clear` keeps capacity, so without the release one
+///   touch of one slider cost that heap until the next reboot. It is a whole
+///   RGB888 frame, so since Gitea #768 it comes from [`crate::arena`] — the
+///   same hook the engine's own [`crate::arena::FrameVec`] rides, for the
+///   same reason: one sequential read and one sequential write per pixel per
+///   frame, nothing per instruction. On a board with no hook (every host
+///   build, the wasm playground, every board without PSRAM) that is exactly
+///   the global allocator, and `release` still hands the block back.
 /// - the **cooked LUTs** — the gamma table and the palette's 256-entry
 ///   luma→colour table — each rebuilt only when its setting changes, so a
 ///   steady chain costs two integer compares per frame.
@@ -601,7 +607,7 @@ impl Default for ColorOrder {
 /// the frame to an output task on the other core, and only that task touches
 /// the chain).
 pub struct DeviceChain {
-    buf: alloc::vec::Vec<[u8; 3]>,
+    buf: crate::arena::FrameVec,
     /// (gamma the table was cooked for, the table). `(0, None)` = none held;
     /// 0 is "off", which no enabled gamma can equal, so a stale match is
     /// impossible.
@@ -620,7 +626,7 @@ impl Default for DeviceChain {
 impl DeviceChain {
     pub const fn new() -> Self {
         Self {
-            buf: alloc::vec::Vec::new(),
+            buf: crate::arena::empty(),
             gamma: (0, None),
             palette: (u32::MAX, None),
         }
@@ -728,7 +734,7 @@ impl DeviceChain {
     /// the last stage goes off rather than a free/alloc pair per frame.
     pub fn release(&mut self) {
         if self.buf.capacity() > 0 {
-            self.buf = alloc::vec::Vec::new();
+            self.buf = crate::arena::empty();
             self.gamma = (0, None);
             self.palette = (u32::MAX, None);
         }

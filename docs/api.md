@@ -51,11 +51,15 @@ chain not at all (docs/firmware.md). The playground runs that chain itself
 through `lx_outpipe` (Gitea #466) rather than reading it back.
 
 `/api/pixels` answers an **empty body** when there is no frame yet (before the
-first render) and, on firmware, when the heap cannot hold the response — at
-4096 px that is a 12 KB body on a heap a heavy pattern can leave under 30 KB
-free, so it degrades rather than failing the request. Treat a zero-length
-response as "no snapshot right now", not as an all-black frame. The same is
-true when the heap cannot hold the *snapshot*: on a board without the output
+first render). Treat a zero-length response as "no snapshot right now", not as
+an all-black frame. When the heap cannot hold the response it answers
+**503 `{"ok":false,"error":"out of memory"}`** instead (Gitea #768; before that
+it was the same empty body, which a client could not tell from "no frame yet").
+The body is 3 B/px: 12 KB at 4096 px, **49 KB at a panel board's 16384-px
+cap** — on a heap a heavy pattern can leave under 30 KB free, which is why the
+allocation is fallible and why the two answers are now distinct. An empty body
+also still means "not previewable" when the heap cannot hold the *snapshot*:
+on a board without the output
 pipeline the render task keeps the frame copy fallibly too, so a frame it
 could not afford to copy is simply not previewable (Gitea #728).
 
@@ -281,7 +285,11 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   and halves per extra bitplane (docs/boards.md, "The LCD_CAM pixel clock on
   the panel"). Sampled where the frames are, so it reads 0 whenever nothing
   is rendering — exactly when `out_fps` does.
-- `max_pixels` — this board's cap: 4096 on HUB75-panel boards, 2048 otherwise.
+- `max_pixels` — this board's cap: **16384** on HUB75-panel boards (Gitea
+  #768; a 2x2 chain of 64x64 tiles), 2048 otherwise. It says the pixel space
+  is addressable, not that a chain that size will boot — the panel driver
+  sizes its framebuffers from the stored layout and falls back to 64x64 when
+  they do not fit (`driver.live.fallback`).
 - `board` — this image's `board::NAME` (`"Pixelblaze v3 Standard"`), the
   string `firmware/board-target.sh`'s `board_name` prints and
   `tools/ota-push.sh` greps an image for (Gitea #389). A `.luxr` release
@@ -614,8 +622,9 @@ outgoing pattern.
 
 The mirror's `caps` advertise what **it** implements, which documents its drift
 from the firmware: `reboot:false`, `ota:false`, and `psram:false` on a strip.
-`--board panel` makes it impersonate a 64×64 HUB75 board — `max_pixels` 4096,
-its own `64×64` grid installed at startup (and reinstalled when a map is
+`--board panel` makes it impersonate a HUB75 panel board — `max_pixels` 16384
+(the firmware's cap since Gitea #768) with its own `64×64` default panel and
+that grid installed at startup (and reinstalled when a map is
 cleared, as `devicemap::board_default` does on the firmware), `panel:true`,
 `strip_driver:false`, `power_cap:false`, `layers:2`, `psram:true` with
 `psram_free`/`psram_total` both **8 MiB** (the S3 panel board's arena; the
@@ -657,12 +666,21 @@ construction: the grammar, the validation and the JSON all live in
 | `/api/pattern.lxp` | GET | — | `application/octet-stream`: the running pattern as an LXP1 envelope (empty name) | both |
 | `/api/controls` | GET | — | `[{"kind","label","name"},…]` (`[]` when none) | both |
 | `/api/control` | POST | `name raw0 [raw1 raw2]` | `{"ok":true}` | both |
-| `/api/vars` | GET | — | `{"name":raw \| [raw,…] \| null,…}` | both |
+| `/api/vars` | GET | — | `{"name":raw \| [raw,…] \| null,…}` (+ `"@truncated"`) | both |
 | `/api/var` | POST | `name raw` | `{"ok":true}` | both |
 | `/api/readouts` | GET | — | `{"showName":raw \| null,…}` — `showNumber`/`gauge` controls only | both |
 
 `kind` is one of `slider`, `hsvPicker`, `rgbPicker`, `toggle`, `trigger`,
 `inputNumber`, `showNumber`, `gauge`.
+
+**`/api/vars` caps an exported ARRAY at 1024 elements** (Gitea #768). The dump
+costs ~11 bytes of body per element and the firmware rebuilds it every ~250 ms,
+so an array sized to a panel's 16384 pixels would be a ~180 KB string on a
+~150 KB heap. A cut array carries only its first 1024 raws, and the response
+gains a `"@truncated"` object naming each one with its REAL length:
+`{"heat":[…1024 raws…],"@truncated":{"heat":16384}}`. `@` cannot begin a
+pattern identifier, so that key can never collide with an exported var. Nothing
+over the cap → no `"@truncated"` key at all, so the common body is unchanged.
 
 **The LXP1 envelope** (`luxel_core::bytecode::encode_envelope`) is the upload
 format for both `/api/code` and `/api/patterns`. Devices do not compile — the
@@ -1478,14 +1496,14 @@ table.
 | `/api/output/palette` | POST | `<amount_pct> <pos> <r> <g> <b> …` | firmware `{"ok":true}`; mirror `{"ok":true,"palette":[…],"paletteAmount":N}` | both |
 | `/api/output/palette` | DELETE | — | `{"ok":true}` | both |
 | `/api/map` | GET | — | `{"installed":bool,"dims":2\|3\|0,"count":N,"kind":"grid"\|"coords"[,"w":W,"h":H]}` | both |
-| `/api/map` | POST | `<dims> <raw…>` or `grid <w> <h>` | `{"ok":true,"installed":bool,"count":N}` | both |
+| `/api/map` | POST | `<dims> <raw…>` or `grid <w> <h>` | `{"ok":true,"installed":bool,"count":N}`, or **503** `{"ok":false,"error":"out of memory for this pixel map (N bytes)"}` | both |
 | `/api/layout` | GET | — | the whole Layout — see "`/api/layout` — the one geometry object" above | both |
 | `/api/layout` | POST | `strip`/`matrix`/`map`/`panel`/`out`/`proj*`/`proj` lines | the GET body + `"ok"`/`"reboot_required"`, or `{"ok":false,"error":…,"line":N}` | both |
 | `/api/clock` | GET | — | `{"synced":bool,"local":<unix secs, local>,"tzMinutes":N}` | both |
 | `/api/clock` | POST | tz offset from UTC in minutes | `{"ok":true,"tzMinutes":N}` | both |
 | `/api/clock/sync` | POST | (body ignored) | `{"ok":true,"synced":bool,"local":<unix secs, local>}` | both |
 
-- `POST /api/config` `max` is the board cap (2048, or 4096 on HUB75 boards);
+- `POST /api/config` `max` is the board cap (2048, or 16384 on HUB75 boards);
   the mirror is always 2048.
 - `/api/datapin` is the one setting here that is NOT live (Gitea #154): the
   strip driver binds its DATA pin at boot, so the value is persisted and the

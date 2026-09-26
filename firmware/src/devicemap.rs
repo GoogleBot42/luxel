@@ -189,27 +189,60 @@ pub fn apply(engine: &mut Engine) {
     });
 }
 
-fn parse(body: &str) -> Option<MapData> {
+/// Why a body did not become a map.
+enum MapErr {
+    /// Not a map at all — empty, or unparseable. The caller CLEARS the
+    /// installed map (a panel board falls back to its own grid).
+    Invalid,
+    /// A well-formed coordinate map the heap cannot hold: `(pixels, bytes)`
+    /// (Gitea #768). Distinct from [`MapErr::Invalid`] because clearing the
+    /// map is the wrong answer here — the body was valid and the device is
+    /// out of memory, which the client has to be told rather than shown as a
+    /// silent revert to the board grid.
+    NoHeap(usize, usize),
+}
+
+/// Bytes a coordinate map of `n` pixels holds — always three `Fx` per pixel
+/// (a 2D map leaves z at zero), which is what `MapData::Coords` stores.
+fn coords_bytes(n: usize) -> usize {
+    n * core::mem::size_of::<[Fx; 3]>()
+}
+
+/// `Vec<[Fx; 3]>` of `n` pixels, or the byte count it wanted (Gitea #768).
+/// `Vec::with_capacity` here was an infallible multi-KB allocation on the
+/// one path that takes its length from a flash blob rather than a
+/// length-capped HTTP body.
+fn coords_vec(n: usize) -> Result<Vec<[Fx; 3]>, MapErr> {
+    let mut v: Vec<[Fx; 3]> = Vec::new();
+    match v.try_reserve_exact(n) {
+        Ok(()) => Ok(v),
+        Err(_) => Err(MapErr::NoHeap(n, coords_bytes(n))),
+    }
+}
+
+fn parse(body: &str) -> Result<MapData, MapErr> {
     let mut it = body.split_whitespace();
-    let first = it.next()?;
+    let first = it.next().ok_or(MapErr::Invalid)?;
     if first == "grid" {
-        let w: u16 = it.next()?.parse().ok()?;
-        let h: u16 = it.next()?.parse().ok()?;
+        let w: u16 = it.next().ok_or(MapErr::Invalid)?.parse().map_err(|_| MapErr::Invalid)?;
+        let h: u16 = it.next().ok_or(MapErr::Invalid)?.parse().map_err(|_| MapErr::Invalid)?;
         if w == 0 || h == 0 {
-            return None;
+            return Err(MapErr::Invalid);
         }
-        return Some(MapData::Grid { w, h });
+        return Ok(MapData::Grid { w, h });
     }
-    let dims: u8 = first.parse().ok()?;
+    let dims: u8 = first.parse().map_err(|_| MapErr::Invalid)?;
     if dims < 2 || dims > 3 {
-        return None;
+        return Err(MapErr::Invalid);
     }
+    // Bounded by the HTTP body cap, not by the pixel count — the server
+    // never hands this path a body larger than its POST limit.
     let vals: Vec<i32> = it.filter_map(|v| v.parse().ok()).collect();
     let n = vals.len() / dims as usize;
     if n == 0 {
-        return None;
+        return Err(MapErr::Invalid);
     }
-    let mut coords = Vec::with_capacity(n);
+    let mut coords = coords_vec(n)?;
     for i in 0..n {
         let mut c = [Fx::ZERO; 3];
         for d in 0..dims as usize {
@@ -217,7 +250,7 @@ fn parse(body: &str) -> Option<MapData> {
         }
         coords.push(c);
     }
-    Some(MapData::Coords { dims, coords })
+    Ok(MapData::Coords { dims, coords })
 }
 
 fn serialize(m: &MapData) -> Vec<u8> {
@@ -261,7 +294,18 @@ fn deserialize(b: &[u8]) -> Option<MapData> {
     if !(2..=3).contains(&dims) || b.len() < 3 + count * dims as usize * 4 {
         return None;
     }
-    let mut coords = Vec::with_capacity(count);
+    // Fallible: `count` comes straight off a flash blob, so this is the one
+    // path whose allocation is not bounded by an HTTP body (Gitea #768). A
+    // refusal here logs and returns None, and `init` then installs the
+    // board's own grid — a panel renders as a panel instead of aborting.
+    let mut coords = match coords_vec(count) {
+        Ok(v) => v,
+        Err(MapErr::NoHeap(n, bytes)) => {
+            println!("map: stored {} px map needs {} B — no heap, ignoring it", n, bytes);
+            return None;
+        }
+        Err(MapErr::Invalid) => return None,
+    };
     let mut o = 3;
     for _ in 0..count {
         let mut c = [Fx::ZERO; 3];
@@ -274,12 +318,20 @@ fn deserialize(b: &[u8]) -> Option<MapData> {
     Some(MapData::Coords { dims, coords })
 }
 
-/// `POST /api/map`. Returns (installed, count). Empty/invalid → clears
-/// (a panel board goes back to its own grid, which still counts as
-/// installed).
-pub fn set_from_wire(body: &str) -> (bool, usize) {
+/// `POST /api/map`. `Ok((installed, count))`; empty/invalid → clears (a panel
+/// board goes back to its own grid, which still counts as installed).
+///
+/// `Err(bytes)` = a valid coordinate map the heap could not hold, with the
+/// byte count it wanted (Gitea #768). Nothing changed: the installed map is
+/// left alone rather than reverted to the board grid, because the body was
+/// not the problem.
+pub fn set_from_wire(body: &str) -> Result<(bool, usize), usize> {
     match parse(body) {
-        Some(m) => {
+        Err(MapErr::NoHeap(n, bytes)) => {
+            println!("map: {} px map needs {} B — no heap, refused", n, bytes);
+            Err(bytes)
+        }
+        Ok(m) => {
             let count = m.count();
             let persisted = patterns::store_blob(patterns::MAP_KEY, &serialize(&m));
             if !persisted {
@@ -288,16 +340,16 @@ pub fn set_from_wire(body: &str) -> (bool, usize) {
             MAP.lock(|c| *c.borrow_mut() = Some(m));
             set_source(DeviceMap::User);
             DIRTY.store(true, Ordering::Relaxed);
-            (true, count)
+            Ok((true, count))
         }
-        None => {
+        Err(MapErr::Invalid) => {
             let fallback = board_default();
             let out = fallback.as_ref().map_or((false, 0), |m| (true, m.count()));
             set_source(if fallback.is_some() { DeviceMap::Board } else { DeviceMap::None });
             MAP.lock(|c| *c.borrow_mut() = fallback);
             let _ = patterns::store_blob(patterns::MAP_KEY, &[0u8]); // invalid → treated as none
             DIRTY.store(true, Ordering::Relaxed);
-            out
+            Ok(out)
         }
     }
 }

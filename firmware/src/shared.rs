@@ -634,14 +634,19 @@ pub fn set_pixels(rgb: &[[u8; 3]]) {
 }
 
 /// The snapshot as an owned body — ONE fallible allocation, made OUTSIDE the
-/// critical section, exactly like `pipeline::preview`. An empty answer means
-/// "no frame yet, or the heap could not hold the response" (docs/api.md).
+/// critical section, exactly like `pipeline::preview`. An empty `Ok` means "no
+/// frame yet"; `Err(())` means the heap could not hold the response, which the
+/// route answers with a 503 rather than an empty body (Gitea #768,
+/// docs/api.md).
 #[cfg(not(pipelined))]
-pub fn get_pixels() -> Vec<u8> {
+pub fn get_pixels() -> Result<Vec<u8>, ()> {
     let need = PIXELS.lock(|c| c.borrow().len());
     let mut v: Vec<u8> = Vec::new();
-    if need == 0 || v.try_reserve_exact(need).is_err() {
-        return v;
+    if need == 0 {
+        return Ok(v);
+    }
+    if v.try_reserve_exact(need).is_err() {
+        return Err(());
     }
     PIXELS.lock(|c| {
         let s = c.borrow();
@@ -651,7 +656,7 @@ pub fn get_pixels() -> Vec<u8> {
             v.extend_from_slice(&s);
         }
     });
-    v
+    Ok(v)
 }
 
 // --- running pattern read-back (flash-resident; see patterns::store_current) ---
@@ -1169,7 +1174,15 @@ pub fn take_events() -> Vec<[luxel_core::fixed::Fx; 4]> {
 
 /// Network input (DDP/E1.31): the assembled RGB frame. While packets flow
 /// (see LIVE_MARK_MS) the render task outputs this instead of the engine.
-pub static LIVE_PIXELS: Shared<Vec<u8>> = BlockingMutex::new(RefCell::new(Vec::new()));
+///
+/// 3 B/px, grown by the netin task on the first packet of a stream and never
+/// released — 49 KB at 16384 px, which is why it comes from
+/// `luxel_core::arena` since Gitea #768: a whole RGB frame, written
+/// sequentially by one task and read sequentially by the render task, exactly
+/// the shape the PSRAM arena is for. On a board with no arena hook this is
+/// the main heap, as before, and `netin::live_write` grows it fallibly.
+pub static LIVE_PIXELS: Shared<luxel_core::arena::ArrVec<u8>> =
+    BlockingMutex::new(RefCell::new(luxel_core::arena::empty()));
 
 /// embassy now() ms of the last network-input packet (0 = never), and which
 /// protocol sent it (0 = none, 1 = DDP, 2 = E1.31). Written by the netin

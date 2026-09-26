@@ -817,11 +817,20 @@ pub const MAX_STATE_CHANNELS: usize = 4;
 ///
 /// Exists only after the first `setPixelState` call — a pattern that never
 /// writes state pays nothing (reads return 0 without allocating).
+///
+/// The two buffers come from [`crate::arena`], like pattern arrays and the
+/// engine's own frame (Gitea #768). They are BILLED to the arena byte budget
+/// (`charge_array_bytes`), so before #768 the bill and the heap disagreed:
+/// the bytes were charged against the external arena and taken from internal
+/// SRAM. At 16384 px one channel is 131 KB of internal DRAM (4 B per `Fx`,
+/// double-buffered) on a board that has ~150 KB of it, and the budget would
+/// have waved it through. Same hook, so a host build and the wasm playground
+/// still get the global allocator.
 struct PixelState {
     n: usize,
     channels: usize,
-    front: Vec<Fx>,
-    back: Vec<Fx>,
+    front: crate::arena::ArrVec<Fx>,
+    back: crate::arena::ArrVec<Fx>,
 }
 
 impl PixelState {
@@ -1712,8 +1721,8 @@ impl Vm {
                 s.channels = want;
             }
             None => {
-                let mut front: Vec<Fx> = Vec::new();
-                let mut back: Vec<Fx> = Vec::new();
+                let mut front: crate::arena::ArrVec<Fx> = crate::arena::empty();
+                let mut back: crate::arena::ArrVec<Fx> = crate::arena::empty();
                 if front.try_reserve_exact(extra).is_err() || back.try_reserve_exact(extra).is_err()
                 {
                     return Err(String::from("out of memory for pixel state"));

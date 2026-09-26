@@ -207,10 +207,15 @@ const SPRITE_ID_MASK: u32 = 0x5b17_e5ee;
 /// `--board panel` says otherwise (see `Hw` below), which is the firmware's
 /// own per-board split (Gitea #74).
 const MAX_PIXELS: u32 = 2048;
-/// `--board panel`: a 64x64 HUB75 board's ceiling and its grid.
-const PANEL_MAX_PIXELS: u32 = 4096;
+/// `--board panel`: a HUB75 panel board's ceiling — 16384 since Gitea #768,
+/// which is a 2x2 chain of 64x64 tiles (128x128). Mirrors
+/// `firmware/src/board.rs`'s `MAX_PIXELS` under `hub75`.
+const PANEL_MAX_PIXELS: u32 = 16384;
+/// …and its DEFAULT panel, which is still one 64x64 tile: the ceiling says
+/// what a chain may be configured to, not what the board comes up as.
 const PANEL_W: u16 = 64;
 const PANEL_H: u16 = 64;
+const PANEL_PIXELS: u32 = PANEL_W as u32 * PANEL_H as u32;
 /// `--board panel`: the external pattern-array arena the S3 panel board
 /// carries (Gitea #253) — what `/api/status` reports as `psram_total`.
 const PANEL_PSRAM_BYTES: u32 = 8 * 1024 * 1024;
@@ -219,7 +224,8 @@ struct State {
     pixel_count: AtomicU32,
     /// This run's pixel ceiling — `/api/status`'s `max_pixels` and what
     /// `POST /api/config` validates against. 2048 (a strip board) unless
-    /// `--board panel` impersonates the 4096 px HUB75 board.
+    /// `--board panel` impersonates the HUB75 board, whose ceiling is 16384
+    /// (Gitea #768) while its default panel is still 64x64.
     max_pixels: u32,
     /// What this mirror ADVERTISES it can do (`caps` on `/api/status`,
     /// Gitea #464). The defaults are honest about the drift documented in
@@ -3544,11 +3550,13 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
 
 pub fn serve_cmd(rest: &[String]) -> ExitCode {
     // None until `--pixels` is given: `--board panel` then defaults it to the
-    // panel's own 4096, so a panel mirror comes up as a coherent 64x64
+    // DEFAULT panel's own 4096, so a panel mirror comes up as a coherent 64x64
     // Layout instead of a 300 px strip wearing a 4096-pixel map (Gitea #495).
+    // That is the panel's area, not the board's ceiling — the two stopped
+    // being the same number in Gitea #768.
     let mut pixels: Option<u32> = None;
     // `--max-pixels`: raise (or lower) this run's ceiling explicitly. The
-    // default is the impersonated board's — 2048 strip, 4096 panel — and a
+    // default is the impersonated board's — 2048 strip, 16384 panel — and a
     // `--pixels` above it is now a hard error rather than a silent clamp,
     // which is what quietly disarmed the #420 element-ledger check in
     // device-e2e.mjs (Gitea #495).
@@ -3701,7 +3709,7 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         max_pixels_arg.unwrap_or(if panel { PANEL_MAX_PIXELS } else { MAX_PIXELS });
     // A panel mirror IS its panel, so its pixel count defaults to the panel's
     // area rather than a strip's 300 (Gitea #495).
-    let pixels = pixels.unwrap_or(if panel { PANEL_MAX_PIXELS } else { 300 });
+    let pixels = pixels.unwrap_or(if panel { PANEL_PIXELS } else { 300 });
     if pixels < 1 || pixels > max_pixels {
         eprintln!(
             "luxel serve: --pixels {pixels} is outside this run's Layout ceiling of \

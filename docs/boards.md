@@ -46,8 +46,8 @@ is on only where that install path exists.
 | `board-esp32-generic` | ESP32 | CLK GPIO18, DATA GPIO23 | WS2812, 60 px | 2048 | yes | builds, untested on hardware | VSPI defaults — most WROOM/DevKitC boards break these out |
 | `board-s3-devkit` | ESP32-S3 | CLK GPIO12, DATA GPIO11 | WS2812, 60 px | 2048 | yes | **builds, UNTESTED ON METAL** | ESP32-S3-DevKitC-1; SPI2/FSPI IO_MUX pins (direct DMA route), clear of the octal-PSRAM pins GPIO33–37 |
 | `board-c6-devkit` | ESP32-C6 | CLK GPIO6, DATA GPIO7 | WS2812, 60 px | 2048 | yes | **builds, UNTESTED ON METAL** | ESP32-C6-DevKitC-1; SPI2/FSPI IO_MUX pins (same numbers as the C3 by coincidence of the IO_MUX tables), clear of the onboard RGB LED on GPIO8 |
-| `board-s3-devkit` + `hub75` | ESP32-S3 | HUB75 (14 pins, `board::hub75_pins!`) | HUB75 64x64 panel, 4096 px | **4096** | yes | **builds, UNTESTED ON METAL** | LCD_CAM + circular-DMA BCM rescan via patched esp-hub75 (firmware/patches/); pin map = the esp-hub75 S3 example's (a panel on jumper wires); strip SPI not wired at all; protocol switches rejected (fixed wire format); nix variant `luxel-fw-s3-hub75` |
-| `board-seengreat-hub75` | ESP32-S3 | HUB75 (14 pins, `board::hub75_pins!`) | HUB75 64x64 panel, 4096 px | **4096** | no | **on metal** (first light 2026-09-05; master re-verified 2026-09-06 — see "First light" & "Second light" below) | Seengreat "RGB Matrix HUB75 S3" (ESP32-S3-WROOM-1-N16R8): a purpose-built panel driver board, so the feature turns `hub75` on itself. Pin map transcribed from the [vendor wiki](https://seengreat.com/wiki/214/) — R1 IO5, G1 IO4, B1 IO6, R2 IO15, G2 IO7, B2 IO17, A IO8, B IO18, C IO10, D IO9, E IO16, CLK IO12, LAT IO11, OE IO13; both panel outputs (ribbon + plug-in header) share those pins. Codec/mics (Gitea #142), microSD, RTC and PSRAM unused (see below); nix variant `luxel-fw-seengreat-hub75` |
+| `board-s3-devkit` + `hub75` | ESP32-S3 | HUB75 (14 pins, `board::hub75_pins!`) | HUB75 64x64 panel, 4096 px | **16384** | yes | **builds, UNTESTED ON METAL** | LCD_CAM + circular-DMA BCM rescan via patched esp-hub75 (firmware/patches/); pin map = the esp-hub75 S3 example's (a panel on jumper wires); strip SPI not wired at all; protocol switches rejected (fixed wire format); nix variant `luxel-fw-s3-hub75` |
+| `board-seengreat-hub75` | ESP32-S3 | HUB75 (14 pins, `board::hub75_pins!`) | HUB75 64x64 panel, 4096 px | **16384** | no | **on metal** (first light 2026-09-05; master re-verified 2026-09-06 — see "First light" & "Second light" below) | Seengreat "RGB Matrix HUB75 S3" (ESP32-S3-WROOM-1-N16R8): a purpose-built panel driver board, so the feature turns `hub75` on itself. Pin map transcribed from the [vendor wiki](https://seengreat.com/wiki/214/) — R1 IO5, G1 IO4, B1 IO6, R2 IO15, G2 IO7, B2 IO17, A IO8, B IO18, C IO10, D IO9, E IO16, CLK IO12, LAT IO11, OE IO13; both panel outputs (ribbon + plug-in header) share those pins. Codec/mics (Gitea #142), microSD, RTC and PSRAM unused (see below); nix variant `luxel-fw-seengreat-hub75` |
 
 All eight combos build clean (verified compile + image-size check +
 `tools/image-check.sh` + `tools/stack-check.sh`). "Untested on hardware"
@@ -1748,25 +1748,76 @@ back the saving.
   which the classic ESP32's 80 KB heap cannot carry alongside the WiFi
   blob. Raising it globally would turn a clean "pixels must be 1..=N"
   rejection into a heap-exhaustion crash.
-- **HUB75 panel boards: 4096**, because a 64x64 panel *is* 4096 pixels and
-  anything less renders the bottom rows black. The panel path never builds
-  an encode buffer at all — the driver owns two bitplane framebuffers,
-  allocated once at boot — so the extra 2048 pixels cost only the
-  per-frame RGB buffers.
+- **HUB75 panel boards: 16384** since Gitea #768 — a 2x2 chain of 64x64
+  tiles, i.e. 128x128. It was 4096 (one tile) up to then. The panel path
+  never builds an encode buffer at all — the driver owns its bitplane
+  framebuffers, sized at boot from the stored `matrix` layout — and
+  everything else that scales per pixel on these boards lives in the PSRAM
+  arena, so what a bigger chain costs in internal SRAM is the framebuffers
+  plus the descriptor rings and nothing else.
+
+**What the cap does and does not promise.** 16384 on panel boards is a
+*permission*, not a promise: it only says the pixel space is
+addressable. Whether a given chain FITS is decided at BOOT — the two
+framebuffers (`rows · cols · planes · 2 B`), the DMA descriptor rings and the
+panel→pixel remap are all allocated then — and a boot that cannot build them
+falls back to the board default 64x64 and reports `driver.live.fallback:
+true` (see "Panel driver settings"). So a layout can be under the cap and
+still be refused, with the reason on serial.
+
+**The internal-heap floor at 8192 / 16384 px has NOT been measured on
+metal.** That is the on-metal half of #768: a 2x1 and a 2x2 chain, `heap_free`
+and `heap_largest` at each, a resident pattern and a two-layer scene beside
+them, and the fallback path actually taken. Everything in this section above
+that line is source arithmetic.
+
+**What #768 cost in image and stack**, devshell builds, `origin/master`
+`a42f732` as the baseline:
+
+| variant | master | #768 | Δ | of the 1.25 MiB fallback slot | `.stack` |
+|---|---:|---:|---:|---:|---:|
+| `seengreat-hub75` (app `.bin`) | 1,169,712 | **1,173,264** | +3,552 | 89.51 % (10.49 % free) | 31,628 → **31,628** |
+| `seengreat-hub75` + `hub75-spare-plane` | — | — | — | — | **31,444** |
+| `s3-devkit` + `hub75` | — | — | — | — | **29,028** |
+| `pixelblaze-v3` (strip, cap untouched) | — | — | — | — | 24,588 → **24,588** |
+
+`.stack` does not move on any of them — nothing here is a static — and
+`tools/stack-check.sh` is green on all four (largest frame 10,512 B against
+the 12,288 B budget). The +3.5 KB is the fallible `devicemap` paths, the
+`/api/vars` element cap, the `/api/pixels` 503 arm and the `allocator_api2`
+monomorphisations for `ArrVec<Fx>` / `ArrVec<u8>` / `ArrVec<u16>`.
+**`board-pixelblaze-v3` sits 12 B above the 24,576 B floor on master itself**
+— measured on `a42f732`, not caused by this change; it needs its own
+`STATICS_RESERVE` bump before something else lands, which is Gitea #800.
 
 A `const` assertion in board.rs fails the build if the **default** panel's
 area ever exceeds its board's cap, so the half-dark panel that shipped
 between #72 and #74 cannot come back silently. Since #401 the panel is a
 stored setting, so the same cap is also checked at boot and by the layout
-parser: a CONFIGURED panel over 4096 pixels is refused, and the boot falls
+parser: a CONFIGURED panel over the cap is refused, and the boot falls
 back to the board default rather than shipping a half-dark panel (see "Panel
-driver settings"). Raising the cap so a real chain fits is a follow-up ticket
-with #255.
+driver settings"). Whether the *refresh rate* holds at 128x128 is a separate
+question — #255 and #460 carry the research.
+
+**Where the per-pixel buffers live** (Gitea #768). On a `psram-arena` board
+every whole-frame RGB888 buffer is an arena buffer: the engine frames (#709),
+the pipeline stage and travelling buffers, the compositor scratch and the
+scene composite (#777), the output chain's scratch frame, the netin
+(DDP/E1.31) live frame, and `pixelState`'s double buffer — that last one used
+to be internal while being BILLED to the arena budget, which at 16384 px would
+have waved 131 KB of internal DRAM through. The panel→pixel remap LUT (2 B/px,
+32 KB for a 128x128 wall, and a 2x2 chain is non-identity by construction) is
+an arena buffer too. What stays internal and per-pixel: the two bitplane
+framebuffers, the descriptor rings, and the transient `/api/pixels` response
+(3 B/px, 49 KB at 16384 px — fallible, and a 503 rather than a panic when the
+heap cannot hold it).
 
 Heap cost at 4096 px, by inspection (each buffer is 3 B/px and grows to
 the active pixel count): the engine's frame buffer, the crossfade blend
 buffer, the outpipe wire buffer and the `/api/pixels` snapshot — ~12 KB
 each, ~48 KB together — on top of the panel's two ~28 KB framebuffers.
+(That was the pre-#709/#777/#768 picture; on the S3 panel board only the
+snapshot is internal now.)
 Against the S3's 224 KB of configured heap that leaves roughly 70 KB for
 WiFi plus pattern arrays, which the budgeted-engine machinery
 (`luxel_core::budget`) polices exactly as it does on a strip: a pattern
@@ -3038,17 +3089,27 @@ row-major, such as two 32-wide tiles wired `tl row`, which a
 So the no-op path really is a no-op: `heap_free` is byte-identical to
 master and `out_us` sits inside master's own sample spread (the compose
 takes one extra branch per ROW PAIR, 32 a frame, not one per pixel). A live
-table costs exactly **8,192 B of internal DRAM** (2 B per driver pixel) and
+table costs exactly **8,192 B** (2 B per driver pixel) — internal DRAM when
+this was measured, the PSRAM arena since #768, see below — and
 **≈ 790 µs of compose** at 4096 px — 2.6 ms → 3.4 ms against the panel's
 8.66 ms rescan window, so throughput is unchanged.
 
-**Why the table is internal DRAM and not the PSRAM arena.** It is read once
-per pixel inside that compose window, which is the exact class `psram.rs`
-keeps out of PSRAM (the arena is pattern arrays only). It also cannot ever
-be the binding allocation: at 7 planes the table is 2 B per driver pixel
-against the two bitplane framebuffers' 14 B per driver pixel, and *those*
-are DMA targets that must be internal. A remap big enough to matter always
-comes with framebuffers seven times bigger that cannot move either.
+**Why the table was internal DRAM and is now the arena (Gitea #768).** The
+original reasoning was that it is read once per pixel inside the compose
+window, which is the class `psram.rs` kept out of PSRAM, and that it can
+never be the binding allocation anyway: at 7 planes it is 2 B per driver
+pixel against the framebuffers' 14 B, and *those* are DMA targets that must
+be internal. The second half still holds, but the first stopped being a
+reason to pay internal DRAM once the cap went to 16384: a 2x2 chain is
+non-identity by construction, so a 128x128 wall pays **32 KB** here — a third
+of the S3 panel board's internal heap, and free in an 8 MB arena. The table
+is now a `luxel_core::arena::ArrVec<u16>`, which on a board with no arena
+hook is exactly the heap it was; it is read only from task context, which is
+the fence argument `psram.rs` already makes for the spare-plane staging
+buffer. Unlike that buffer it goes through the allocator rather than
+`psram::alloc_bulk_zeroed`, because the identity case has to be handed BACK.
+The per-pixel PSRAM read inside the compose window is the thing to watch on
+metal at 8192/16384 px — it is not measured yet (#768's on-metal half).
 
 **What this board can drive.** *(Rewritten 2026-09-26 — this paragraph
 described a compile-time framebuffer until #401 landed; see "Panel driver
@@ -3056,8 +3117,12 @@ settings" below.)* The DMA framebuffer is **allocated at boot from the
 stored `matrix` line**, so what the board can drive is no longer a constant:
 a chain is still one ribbon `pw · panels` wide and `ph` tall, and the
 framebuffer is sized to exactly that. What bounds it now is
-`board::MAX_PIXELS` (4096 on a panel board) and the internal SRAM the two
-bitplane buffers need — 14 B per driver pixel at 7 planes. A configured
+`board::MAX_PIXELS` (**16384** on a panel board since Gitea #768 — a 2x2
+chain of 64x64 tiles; it was 4096) and the internal SRAM the two
+bitplane buffers need — 14 B per driver pixel at 7 planes. **The cap says
+the pixel space is addressable; whether the chain FITS is decided at boot**,
+by those two framebuffers, the descriptor rings and the panel→pixel remap,
+with a fallback to 64x64 when any of them will not allocate. A configured
 panel over either bound does not brick the board: the boot attempt is
 refused ("the panel is larger than this board's pixel cap" / an allocation
 failure) and the firmware **falls back once to the board default 64×64**,
@@ -3066,10 +3131,12 @@ chain is wider than the framebuffer that was actually built is still
 accepted, stored and reported — the board drives the leading tiles that fit
 and `GET /api/layout` says so in `matrix.drive`. Verified on metal (before
 #401): `matrix 32 32 2 2 bl row 1 1` (four 32×32 tiles, snaked, alternate
-lines rotated) boots, reports `drive` 2 of 4 and keeps rendering. A **real**
-multi-panel chain still needs the pixel ceiling raised past 4096 (#255, and
-a follow-up ticket) and the framebuffers to fit, and neither can be verified
-without a second physical panel.
+lines rotated) boots, reports `drive` 2 of 4 and keeps rendering. The pixel
+ceiling a **real** multi-panel chain needed is raised as of #768 (4096 →
+16384); what is still unverified is whether the framebuffers, the descriptor
+rings and the internal-heap floor actually hold at 8192 / 16384 px, and that
+cannot be measured without a second physical panel — the on-metal half of
+#768. Refresh rate at 128x128 is #255 / #460.
 
 **Estimated refresh.** The firmware reports `matrix.est_hz`, the rate the
 whole configured chain would rescan at:

@@ -780,10 +780,16 @@ and the render task's outgoing-scene `fade_buf`. #709's argument extends to
 them unchanged — each is one sequential pass per frame, which the S3's data
 cache carries — and at 4096 px they are 36,864 B of internal DRAM that a
 three-layer scene could not find beside two engines and the runtime floor in
-a heap that idles at ~36 KB (docs/boards.md, "Scene layers"). What still
-stays internal: the HUB75 DMA framebuffers, the strip output buffer and the
-outpipe chain's scratch, the VM's stack, locals, globals and the arena's own
-slot vector. The global `HEAP` is untouched either way — so `HEAP.free()`,
+a heap that idles at ~36 KB (docs/boards.md, "Scene layers"). Since Gitea #768 the list grew again, all for the same
+reason: the outpipe chain's scratch frame, the netin (DDP/E1.31) live frame
+in `shared::LIVE_PIXELS`, the `pixelState` double buffer
+(`vm::PixelState`) and the HUB75 panel->pixel remap LUT
+(`hub75::build_remap`, 2 B/px). `pixelState` was the one that was also
+WRONG rather than merely large: it is charged to the arena byte budget by
+`charge_array_bytes`, so before #768 the bill and the heap disagreed. What
+still stays internal: the HUB75 DMA framebuffers and their descriptor rings,
+the strip output buffer, the transient `/api/pixels` response body, the VM's
+stack, locals, globals and the arena's own slot vector. The global `HEAP` is untouched either way — so `HEAP.free()`,
 `RUNTIME_FLOOR` and the post-load floor check mean exactly what they meant
 before. What changes is `budgeted_engine`'s byte budget (the arena's free
 space, via `budget::external_array_budget`), the PB element ledger (raised
@@ -851,8 +857,11 @@ all — judge an engine change by readback, an outpipe change by `pipe_us`,
 `heap_free` and by eye.
 
 **The device output chain's scratch is borrowed, not owned.** The chain
-works in a `Vec<[u8; 3]>` scratch copy of the frame —
-3 B/px, so **12.3 KB at 4096 px**, a third of the S3 panel's idle headroom. It
+works in a scratch copy of the frame — 3 B/px, so **12.3 KB at 4096 px** and
+**49 KB at a panel board's 16384-px cap**. Since Gitea #768 it is a
+`luxel_core::arena::FrameVec`, so on a `psram-arena` board it is not internal
+DRAM at all; on every other board it is the same heap `Vec` it always was,
+and `release` hands it back through the same hook either way. It
 is allocated lazily by the FIRST frame after any `/api/output` stage (gamma,
 brightness curve, power cap, blur, glow, palette, colour order) is switched
 on, and released by the first frame after the last one goes off again, along
