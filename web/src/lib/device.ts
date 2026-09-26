@@ -225,6 +225,11 @@ export interface LiveDriverWire {
   clock_mhz: number;
   chip: string;
   blank: number;
+  /** The EFFECTIVE LSB on-time in pixel clocks, never 0 — the configured value
+   *  clamped to the lit width of a row block, or that width itself when the
+   *  configured one is 0 (full). Absent on firmware built before Gitea #789,
+   *  where the schedule is always the full one. */
+  lsb?: number;
   w: number;
   h: number;
   scan: number;
@@ -232,16 +237,21 @@ export interface LiveDriverWire {
   fallback: boolean;
 }
 
-/** `/api/layout`'s `driver` block: the four CONFIGURED (stored) values, the
+/** `/api/layout`'s `driver` block: the five CONFIGURED (stored) values, the
  *  chip vocabulary this firmware understands, and `live` — the running
  *  driver, `null` when panel output is off (no framebuffer, or LCD_CAM
  *  refused even at the board default). Written back as one wire line,
- *  `panel <planes> <clock_mhz> <chip> <blank>`. */
+ *  `panel <planes> <clock_mhz> <chip> <blank> <lsb>`. */
 export interface PanelDriverWire {
   planes: number;
   clock_mhz: number;
   chip: string;
   blank: number;
+  /** CONFIGURED LSB on-time in pixel clocks, `0` = full — the brighter ↔
+   *  faster trade (Gitea #460 / #789). The `panel` line's optional fifth
+   *  field, and absent from the block on firmware built before it, where the
+   *  schedule is always the full one. */
+  lsb?: number;
   /** In the order the firmware lists them; the card's select is built from
    *  THIS, never from a hard-coded list, so a build that grows a chip needs
    *  no browser change. */

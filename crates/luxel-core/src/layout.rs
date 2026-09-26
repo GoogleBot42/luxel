@@ -265,13 +265,27 @@ pub struct PanelDriver {
     /// in place. Raising it trades a little brightness for less ghosting
     /// between address rows — a knob you tune while watching the panel.
     pub blank: u8,
+    /// On-time of the LEAST significant bitplane, in pixel clocks — the
+    /// brighter ↔ faster trade (Gitea #460 / #789). **0 = full**: every plane
+    /// is lit for the whole row block and re-shifted `2^k` times, the stock
+    /// BCM schedule. A smaller value lights plane `k` for exactly `lsb · 2^k`
+    /// clocks instead; the planes whose on-time is shorter than a row shift
+    /// are then emitted ONCE with OE cut off early, so a rescan costs
+    /// `t + 2^(planes − t) − 1` row shifts instead of `2^planes − 1` (`t` =
+    /// the number of such planes), and the panel's peak brightness is
+    /// `lsb / W` of full, `W` being the lit clocks of a row block
+    /// (`cols − latch − 2·blank`). Binary weights stay exact. Clamped to `W`
+    /// at boot; read at boot (the DMA descriptor chain is built from it), so
+    /// `reboot_required`. `live.lsb` reports the effective value.
+    pub lsb: u16,
 }
 
 impl Default for PanelDriver {
     /// The board default every HUB75 image shipped before the `panel` line
-    /// existed: 7 planes, 30 MHz, no chip init, one blanking clock.
+    /// existed: 7 planes, 30 MHz, no chip init, one blanking clock, full
+    /// on-time.
     fn default() -> PanelDriver {
-        PanelDriver { planes: 7, clock_mhz: 30, chip: Chip::ShiftReg, blank: 1 }
+        PanelDriver { planes: 7, clock_mhz: 30, chip: Chip::ShiftReg, blank: 1, lsb: 0 }
     }
 }
 
@@ -330,7 +344,8 @@ impl PanelDriver {
     /// (ghosting between address rows), which is exactly the knob a reboot
     /// per attempt makes unusable.
     pub fn boot_differs(&self, other: &PanelDriver) -> bool {
-        (self.planes, self.clock_mhz, self.chip) != (other.planes, other.clock_mhz, other.chip)
+        (self.planes, self.clock_mhz, self.chip, self.lsb)
+            != (other.planes, other.clock_mhz, other.chip, other.lsb)
     }
 }
 
@@ -504,6 +519,11 @@ impl Layout {
                 push_piece(&mut out, d.chip.as_str());
                 out.push(' ');
                 push_u32(&mut out, d.blank as u32);
+                // The fifth field is optional on the way IN (a stored body
+                // from before #789 has four) but always written on the way
+                // out, so the persisted text is unambiguous.
+                out.push(' ');
+                push_u32(&mut out, d.lsb as u32);
             }
         }
         for o in &self.outputs {
@@ -689,7 +709,7 @@ pub struct Edit {
 /// strip <pixels>
 /// matrix <pw> <ph> <cols> <rows> <start> <dir> <snake> <rot180> [<scan>]
 /// map [grid <w> <h> | <dims> <raw16.16…>]
-/// panel <planes> <clock_mhz> <chip> <blank>
+/// panel <planes> <clock_mhz> <chip> <blank> [<lsb>]
 /// out <n> <pin> <proto> <order> <count> [rev]
 /// proj1d|proj2d|proj3d <index|x|y|z|xy|xz|yz>
 /// ```
@@ -907,7 +927,7 @@ pub fn parse(
 /// "expected: panel …" tells a UI nothing about which number it got wrong.
 fn parse_driver<'a>(it: &mut impl Iterator<Item = &'a str>) -> Result<PanelDriver, &'static str> {
     const USAGE: &str =
-        "expected: panel <planes> <clock_mhz> <shiftreg|fm6126a|icn2038s|dp3246> <blank>";
+        "expected: panel <planes> <clock_mhz> <shiftreg|fm6126a|icn2038s|dp3246> <blank> [<lsb>]";
     let planes = it.next().and_then(num).ok_or(USAGE)?;
     if !(4..=8).contains(&planes) {
         return Err("panel: planes must be 4..8");
@@ -926,7 +946,26 @@ fn parse_driver<'a>(it: &mut impl Iterator<Item = &'a str>) -> Result<PanelDrive
     if blank > 8 {
         return Err("panel: blank must be 0..8");
     }
-    Ok(PanelDriver { planes: planes as u8, clock_mhz: clock_mhz as u8, chip, blank: blank as u8 })
+    // The fifth field is OPTIONAL: a line written before it existed (or by a
+    // console that does not know it) keeps the full schedule, which is what
+    // every stored Layout meant until now.
+    let lsb = match it.next() {
+        None => 0,
+        Some(s) => {
+            let v = num(s).ok_or("panel: lsb must be 0..65535 (0 = full on-time)")?;
+            if v > u16::MAX as u32 {
+                return Err("panel: lsb must be 0..65535 (0 = full on-time)");
+            }
+            v
+        }
+    };
+    Ok(PanelDriver {
+        planes: planes as u8,
+        clock_mhz: clock_mhz as u8,
+        chip,
+        blank: blank as u8,
+        lsb: lsb as u16,
+    })
 }
 
 fn parse_matrix<'a>(it: &mut impl Iterator<Item = &'a str>) -> Option<Matrix> {
@@ -1067,6 +1106,10 @@ pub struct LiveDriver {
     pub clock_mhz: u8,
     pub chip: Chip,
     pub blank: u8,
+    /// The EFFECTIVE LSB on-time in pixel clocks, never 0: the configured
+    /// [`PanelDriver::lsb`] clamped to the lit width of a row block, or that
+    /// width itself when the configured value is 0 (full).
+    pub lsb: u16,
     /// The framebuffer's chain extent in pixels: `w` = `pw` × chain length,
     /// `h` = `ph`.
     pub w: u16,
@@ -1196,7 +1239,7 @@ impl Layout {
 #[cfg(feature = "panel")]
 fn push_driver_json(out: &mut String, d: &PanelDriver, p: &PanelView) {
     push_piece(out, ",\"driver\":{");
-    push_driver_fields(out, d.planes, d.clock_mhz, d.chip, d.blank);
+    push_driver_fields(out, d.planes, d.clock_mhz, d.chip, d.blank, d.lsb);
     push_piece(out, ",\"chips\":[");
     for (i, c) in Chip::ALL.iter().enumerate() {
         push_piece(out, if i > 0 { ",\"" } else { "\"" });
@@ -1217,7 +1260,7 @@ fn push_driver_json(out: &mut String, d: &PanelDriver, p: &PanelView) {
         None => push_piece(out, "null"),
         Some(l) => {
             push_piece(out, "{");
-            push_driver_fields(out, l.planes, l.clock_mhz, l.chip, l.blank);
+            push_driver_fields(out, l.planes, l.clock_mhz, l.chip, l.blank, l.lsb);
             for (field, v) in [
                 (",\"w\":", l.w as u32),
                 (",\"h\":", l.h as u32),
@@ -1235,10 +1278,19 @@ fn push_driver_json(out: &mut String, d: &PanelDriver, p: &PanelView) {
     push_piece(out, "}");
 }
 
-/// The four fields the configured and the live halves share, in wire order
-/// and with no leading comma — written once so the two cannot drift.
+/// The five fields the configured and the live halves share, in wire order
+/// and with no leading comma — written once so the two cannot drift. `lsb`
+/// is the CONFIGURED value in the `driver` block (0 = full) and the
+/// EFFECTIVE one in `live` (never 0) — see [`LiveDriver::lsb`].
 #[cfg(feature = "panel")]
-fn push_driver_fields(out: &mut String, planes: u8, clock_mhz: u8, chip: Chip, blank: u8) {
+fn push_driver_fields(
+    out: &mut String,
+    planes: u8,
+    clock_mhz: u8,
+    chip: Chip,
+    blank: u8,
+    lsb: u16,
+) {
     push_piece(out, "\"planes\":");
     push_u32(out, planes as u32);
     push_piece(out, ",\"clock_mhz\":");
@@ -1247,6 +1299,8 @@ fn push_driver_fields(out: &mut String, planes: u8, clock_mhz: u8, chip: Chip, b
     push_piece(out, chip.as_str());
     push_piece(out, "\",\"blank\":");
     push_u32(out, blank as u32);
+    push_piece(out, ",\"lsb\":");
+    push_u32(out, lsb as u32);
 }
 
 fn push_output(out: &mut String, o: &Output, v: &View) {
@@ -1669,11 +1723,11 @@ mod tests {
         l.proj = Projection::new(ProjectionMode::X, ProjectionMode::Y, ProjectionMode::Xz);
         l.outputs.push(Output { n: 0, pin: 18, proto: 1, order: 2, count: 3, rev: false });
         l.outputs.push(Output { n: 1, pin: 19, proto: 0, order: 5, count: 3, rev: true });
-        l.driver = PanelDriver { planes: 6, clock_mhz: 20, chip: Chip::Dp3246, blank: 4 };
+        l.driver = PanelDriver { planes: 6, clock_mhz: 20, chip: Chip::Dp3246, blank: 4, lsb: 0 };
         let wire = l.to_wire(6144, &proto_name);
         assert_eq!(
             wire,
-            "matrix 64 32 3 1 br col 1 0 16 \npanel 6 20 dp3246 4\n\
+            "matrix 64 32 3 1 br col 1 0 16 \npanel 6 20 dp3246 4 0\n\
              out 0 18 ws2812 grb 3\nout 1 19 sk9822 bgr 3 rev\n\
              proj1d x\nproj2d y\nproj3d xz"
         );
@@ -1763,13 +1817,14 @@ mod tests {
         assert!(e.driver_set);
         assert_eq!(
             e.layout.driver,
-            PanelDriver { planes: 5, clock_mhz: 24, chip: Chip::Fm6126a, blank: 0 }
+            PanelDriver { planes: 5, clock_mhz: 24, chip: Chip::Fm6126a, blank: 0, lsb: 0 }
         );
         assert_eq!(e.layout.driver.clock_hz(), 24_000_000);
         assert_eq!(e.layout.driver.latch_clocks(), 1);
-        // the stored record IS the wire, so it reads back byte-for-byte
+        // the stored record IS the wire, so it reads back byte-for-byte —
+        // and the persisted line always spells the fifth field (#789)
         let wire = e.layout.to_wire(4096, &proto_name);
-        assert!(wire.contains("\npanel 5 24 fm6126a 0"), "{wire}");
+        assert!(wire.contains("\npanel 5 24 fm6126a 0 0"), "{wire}");
         let load = Limits { strict: false, ..panel_limits() };
         assert_eq!(parse(&wire, &panel_cur(), 4096, &load).unwrap().layout, e.layout);
         // only the DP3246 holds the latch longer than one clock
@@ -1786,12 +1841,12 @@ mod tests {
         // line existed
         assert_eq!(
             panel_cur().driver,
-            PanelDriver { planes: 7, clock_mhz: 30, chip: Chip::ShiftReg, blank: 1 }
+            PanelDriver { planes: 7, clock_mhz: 30, chip: Chip::ShiftReg, blank: 1, lsb: 0 }
         );
         assert_eq!(panel_cur().driver.clock_hz(), 30_000_000);
         // …and a body that says nothing about the driver KEEPS the stored one
         let mut cur = panel_cur();
-        cur.driver = PanelDriver { planes: 4, clock_mhz: 12, chip: Chip::Icn2038s, blank: 3 };
+        cur.driver = PanelDriver { planes: 4, clock_mhz: 12, chip: Chip::Icn2038s, blank: 3, lsb: 0 };
         let e = parse("matrix 64 64 1 1 tl row 0 0", &cur, 4096, &panel_limits()).unwrap();
         assert!(!e.driver_set, "the body said nothing about it");
         assert_eq!(e.layout.driver, cur.driver, "merge, not reset");
@@ -1800,7 +1855,7 @@ mod tests {
     #[test]
     fn a_bad_panel_line_names_the_field_it_rejected() {
         let cur = panel_cur();
-        let cases: [(&str, &str); 12] = [
+        let cases: [(&str, &str); 13] = [
             ("panel 3 30 shiftreg 1", "planes"),
             ("panel 9 30 shiftreg 1", "planes"),
             ("panel 7 1 shiftreg 1", "clock_mhz"),
@@ -1814,6 +1869,7 @@ mod tests {
             ("panel 7 25 shiftreg 1", "clock_mhz"),
             ("panel 7 30 fm6124 1", "chip"),
             ("panel 7 30 shiftreg 9", "blank"),
+            ("panel 7 30 shiftreg 1 70000", "lsb"),
             ("panel 7 30 shiftreg", "expected"),
             ("panel", "expected"),
             ("panel x 30 shiftreg 1", "expected"),
@@ -1910,6 +1966,52 @@ mod tests {
         assert_eq!(Chip::Dp3246.latch_clocks(), 3);
     }
 
+    /// The fifth `panel` field — the brighter ↔ faster trade (Gitea #460 /
+    /// #789). Optional on the way in so every stored Layout written before it
+    /// existed keeps the full BCM schedule, and a BOOT field because the DMA
+    /// descriptor chain is built from it.
+    #[test]
+    fn the_lsb_field_is_optional_and_boot_required() {
+        let cur = panel_cur();
+        // a FOUR-field line — every `panel` line written before #789 — is
+        // lsb 0, the full on-time, which is what those layouts always meant
+        let e = parse("panel 7 30 shiftreg 1", &cur, 4096, &panel_limits()).unwrap();
+        assert!(e.driver_set);
+        assert_eq!(e.layout.driver.lsb, 0, "absent = full on-time");
+        assert!(!e.reboot_required, "…and it restates the stored default");
+        // …and the field is read when it IS there
+        let e = parse("panel 7 30 shiftreg 1 30", &cur, 4096, &panel_limits()).unwrap();
+        assert_eq!(
+            e.layout.driver,
+            PanelDriver { planes: 7, clock_mhz: 30, chip: Chip::ShiftReg, blank: 1, lsb: 30 }
+        );
+        assert!(e.reboot_required, "the descriptor chain is built at boot");
+        // the predicate a firmware asks outside a POST agrees
+        let d = PanelDriver::default();
+        assert!(d.boot_differs(&PanelDriver { lsb: 30, ..d }));
+        assert!(d.boot_differs(&PanelDriver { lsb: 1, ..d }));
+        assert!(!d.boot_differs(&PanelDriver { lsb: 0, ..d }));
+        // both ends of the range are legal; past the u16 ceiling is not, and
+        // neither is a non-number
+        for body in ["panel 7 30 shiftreg 1 0", "panel 7 30 shiftreg 1 65535"] {
+            assert!(parse(body, &cur, 4096, &panel_limits()).is_ok(), "body {body:?}");
+        }
+        for body in ["panel 7 30 shiftreg 1 70000", "panel 7 30 shiftreg 1 x"] {
+            let e = parse(body, &cur, 4096, &panel_limits()).unwrap_err();
+            assert_eq!(
+                e.msg, "panel: lsb must be 0..65535 (0 = full on-time)",
+                "body {body:?}"
+            );
+        }
+        // and a configured lsb survives the persist/reload round trip
+        let mut l = panel_cur();
+        l.driver.lsb = 30;
+        let wire = l.to_wire(4096, &proto_name);
+        assert!(wire.contains("\npanel 7 30 shiftreg 1 30"), "{wire}");
+        let load = Limits { strict: false, ..panel_limits() };
+        assert_eq!(parse(&wire, &panel_cur(), 4096, &load).unwrap().layout, l);
+    }
+
     #[test]
     fn a_panel_boards_framebuffer_geometry_is_reboot_required() {
         let cur = panel_cur();
@@ -1987,7 +2089,7 @@ mod tests {
     #[test]
     fn the_driver_block_reports_configured_chips_and_live() {
         let mut l = panel_cur();
-        l.driver = PanelDriver { planes: 6, clock_mhz: 20, chip: Chip::Fm6126a, blank: 2 };
+        l.driver = PanelDriver { planes: 6, clock_mhz: 20, chip: Chip::Fm6126a, blank: 2, lsb: 0 };
         let mut v = view(&l, 4096, "null");
         v.panel = Some(PanelView { est_hz: 57, drive: 1, driver_live: None });
         let mut s = String::new();
@@ -1995,6 +2097,7 @@ mod tests {
         assert!(
             s.contains(
                 "\"driver\":{\"planes\":6,\"clock_mhz\":20,\"chip\":\"fm6126a\",\"blank\":2,\
+                 \"lsb\":0,\
                  \"chips\":[\"shiftreg\",\"fm6126a\",\"icn2038s\",\"dp3246\"],\
                  \"clocks\":[8,10,12,15,20,24,30],\"live\":null}"
             ),
@@ -2010,6 +2113,7 @@ mod tests {
                 clock_mhz: 30,
                 chip: Chip::ShiftReg,
                 blank: 1,
+                lsb: 61,
                 w: 64,
                 h: 64,
                 scan: 32,
@@ -2022,6 +2126,7 @@ mod tests {
         assert!(
             s.contains(
                 "\"live\":{\"planes\":7,\"clock_mhz\":30,\"chip\":\"shiftreg\",\"blank\":1,\
+                 \"lsb\":61,\
                  \"w\":64,\"h\":64,\"scan\":32,\"fb_bytes\":28672,\"fallback\":true}}"
             ),
             "{s}"

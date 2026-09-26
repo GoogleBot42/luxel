@@ -110,6 +110,9 @@
           # DMA position + last-EOF accessors for the spare-plane swap
           # (Gitea #610). Applies on top of the atomic-swap patch.
           ./firmware/patches/esp-hub75-0.14.0-dma-position.patch
+          # per-plane repeat schedule for OE-truncated low planes
+          # (Gitea #460 / #789). Applies on top of the dma-position patch.
+          ./firmware/patches/esp-hub75-0.14.0-plane-repeats.patch
         ];
         dontBuild = true;
         installPhase = "cp -r . $out";

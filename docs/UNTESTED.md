@@ -109,6 +109,32 @@ value while collapsed. Everything below is on the new page.
   should REFUSE a blanking that leaves no lit clock at all, naming the numbers
   (`panel: blank N + 1 latch clocks leave no lit clock in a 64-word row block` —
   reachable only on a much narrower row block than this panel's).
+- [ ] **Brightness vs refresh — the brighter ↔ faster slider** (Gitea
+  #460/#789). New in the Panel module: one slider whose left end is *brighter*
+  (the full on-time every board has always run) and whose right end is
+  *faster*. Under it, the predicted rescan rate, the measured `rescan_hz`, and
+  the peak brightness as a percentage. On the 64×64 at 7 planes / 30 MHz /
+  blanking 1 the lit width `W` is **61**, so it should read 115 Hz at 100 %
+  full, **~229 Hz at 49 %** at lsb 30, and **~444 Hz at 13 %** at lsb 8. What
+  only metal can say:
+  - The boot line prints the schedule it planned (`firmware/src/hub75.rs`) —
+    check the truncated-plane count and the emissions match the prediction.
+  - `rescan_hz` in `GET /api/status` should COME BACK at the predicted number
+    after the reboot, at lsb 30 and again at lsb 8. The slider is boot-built,
+    so nothing moves until the reboot.
+  - **Photograph a 0..127 grey ramp** at a small `lsb` and check it stays
+    monotonic — the binary weights are supposed to stay exact, and the C++
+    library's version of this trick got that wrong. A ramp that steps
+    backwards anywhere is the bug this check exists for.
+  - Watch for **ghosting between address rows** as `lsb` gets small: the OE
+    window is being cut short, which is the same mechanism latch blanking
+    fixes, so a small `lsb` may want a higher `blank` alongside it.
+  - It **compounds** with the ordinary `brightness` slider (a channel LUT) —
+    check the two multiply rather than fight: `lsb` at 49 % with brightness 14
+    should look like half of brightness 14, not like brightness 7 alone.
+  - And the top of the slider must write `lsb 0`, not 61: change the panel
+    size or the blanking afterwards and the full on-time should FOLLOW the new
+    lit width rather than staying pinned at 61.
 - [ ] **Firmware & recovery → Update…** — pick a `luxel.bin` for that board
   and let it flash itself over the network. **Never run against hardware**
   (the mirror advertises no OTA, so no harness can reach this path) —

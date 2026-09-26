@@ -42,6 +42,8 @@
     clockSupported,
     configuredDriver,
     driverWire,
+    lsbTrade,
+    lsbWire,
     panelDriverState,
     panelGeometryOf,
     panelLine,
@@ -57,6 +59,7 @@
     applyLayout,
     deviceLayoutWire,
     deviceOutFps,
+    deviceRescanHz,
     noteRebootPending,
   } from "../stores/device";
   import { clearApiError, note, reportApiError } from "../stores/notify";
@@ -91,6 +94,29 @@
   $: scans = scanOptions(ph, scan);
   $: scanNow = scanShown(ph, scan);
   $: fbKb = driver?.live ? (driver.live.fb_bytes / 1024).toFixed(1) : "";
+
+  /** The slider position while it is being DRAGGED — null when it is showing
+   *  the stored value. The readouts follow the thumb, so the Hz and the
+   *  brightness answer "what would this do?" before anything is written; the
+   *  POST waits for the drag to end (`on:change`), because this one costs a
+   *  reboot. */
+  let lsbDrag: number | null = null;
+  /** What the configured `lsb` buys and costs on the configured arrangement
+   *  (Gitea #460/#789). Null while the Layout is not a matrix — there is no
+   *  row block to measure an on-time against. */
+  $: trade = geom ? lsbTrade(cfg, geom, lsbDrag ?? cfg.lsb) : null;
+  /** The stored value cannot be the thumb's position directly: `0` means FULL,
+   *  which is the TOP of the range, so the effective on-time is. */
+  $: lsbPos = trade?.lsb ?? 0;
+  $: lsbPct = trade ? Math.round(trade.brightness * 100) : 100;
+
+  /** Post a slider position. The full end writes `0`, which is what makes the
+   *  setting follow a later change to the panel size or the blanking instead
+   *  of pinning the panel to today's lit width (`lsbWire`). */
+  async function setLsb(picked: number): Promise<void> {
+    await set({ lsb: lsbWire(picked, trade?.width ?? 0) });
+    lsbDrag = null;
+  }
 
   /** The device's refusal, in the card, beside the control it is about.
    *  The banner (`ErrorBar`) is still the prominent surface — Jeremy's rule
@@ -215,6 +241,58 @@
     </div>
   </div>
 
+  <!-- The brighter ↔ faster trade (Gitea #460/#789). ONE slider: the on-time
+       of the least significant bitplane, in pixel clocks, `0` = full. Shorten
+       it and the low planes no longer need a row shift each — the rescan steps
+       up as the panel dims, and the binary weights stay exact, so the grey ramp
+       keeps its shape.
+       The axis runs BRIGHTER (full, the schedule every board ships with) on the
+       left to FASTER on the right, which is why the input is `direction: rtl`:
+       the range is `1..W` in `lsb` and `W` is the full end. The two readouts
+       under it are the whole point of the control — brightness is continuous in
+       the thumb's position, the Hz step — and the measured rescan sits beside
+       the prediction so a pending reboot is visible as the two disagreeing. -->
+  {#if trade}
+    <div class="field top">
+      <span class="flabel">Brightness vs refresh</span>
+      <div class="fctl">
+        <div class="trade">
+          <span class="dim end">brighter</span>
+          <input
+            type="range"
+            class="slider"
+            data-role="panel-lsb"
+            min="1"
+            max={trade.width}
+            step="1"
+            value={lsbPos}
+            on:input={(e) => (lsbDrag = Number(e.currentTarget.value))}
+            on:change={(e) => void setLsb(Number(e.currentTarget.value))}
+          />
+          <span class="dim end">faster</span>
+        </div>
+        <p class="readout mono" data-role="panel-lsb-readout">
+          <span data-role="panel-lsb-hz">~{trade.hz.toFixed(0)} Hz rescan</span>
+          {#if $deviceRescanHz > 0}
+            <span class="dim" data-role="panel-lsb-measured">· {$deviceRescanHz} Hz measured now</span>
+          {/if}
+          <span class="dim" data-role="panel-lsb-peak">· {lsbPct}% peak brightness</span>
+        </p>
+        <p class="dim hint under">
+          {#if trade.full}
+            Full on-time — every bitplane lit for the whole row block, which is what every board
+            ships with. Drag towards <em>faster</em> to buy rescan rate with brightness.
+          {:else}
+            {trade.lsb} of {trade.width} lit clocks for the lowest plane, so a rescan costs
+            {trade.emissions} row shifts instead of {trade.fullEmissions}. Reboot to apply — the
+            DMA chain is built from it. It compounds with Brightness above, and at small values
+            watch for ghosting between rows.
+          {/if}
+        </p>
+      </div>
+    </div>
+  {/if}
+
   <div class="field top">
     <span class="flabel">Latch blanking</span>
     <div class="fctl">
@@ -281,6 +359,45 @@
 <style>
   .warn {
     color: #e5bd74;
+  }
+
+  /* the slider and its two end labels on one line, the DeviceCard brightness
+     row's shape (`.big`) at this card's smaller scale */
+  .trade {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 20px;
+    max-width: 420px;
+  }
+
+  .trade .slider {
+    /* `rtl` puts the MAXIMUM on the left, which is where "brighter" is: the
+       value is `lsb` and its top is the full on-time. Reversing the axis in CSS
+       keeps the DOM value the wire's own number — an inverted `value` would
+       make every readout and test do the arithmetic twice. */
+    direction: rtl;
+    flex: 1;
+    min-width: 120px;
+    height: 20px;
+  }
+
+  .end {
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .readout {
+    font: 13px/1.5 var(--mono);
+    margin: 6px 0 0;
+  }
+
+  @media (max-width: 560px) {
+    /* the mockup's 20px slider is a mouse target; a thumb is not */
+    .trade,
+    .trade .slider {
+      height: 24px;
+    }
   }
 
   /* The chip names are sentences, so this one select sizes to its widest

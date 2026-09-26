@@ -56,3 +56,17 @@ GDMA `OUT_DSCR` probe the atomic swap already registers — and
 start. No behaviour change; nothing in the ISR moves. The firmware uses the
 position to decide whether the MSB run of the current pass still has room
 for the plane copy, and to count a copy that overran it.
+
+## esp-hub75-0.14.0-plane-repeats.patch
+
+Applies on top of the dma-position patch. Lets the firmware install a
+per-plane REPEAT SCHEDULE for the BCM descriptor chain (Gitea #460 / #789,
+`luxel_hub75::Schedule`): `set_plane_repeats(&[u8])` before `Hub75::new`
+(0 = the stock `2^(planes-1-idx)`), read by `fill_full_chain` for every
+ring it builds, with `dma_descriptor_count_scheduled` / `max_dma_chunk_size`
+for sizing. This is what turns a truncated-OE low plane into a single
+emission instead of `2^k` of them — the refresh half of the brighter ↔
+faster trade; the OE half is in the framebuffer words
+(`luxel_hub75::format_scheduled`). The counts must not change while a
+driver is running (both rings and the ISR's pass arithmetic assume them),
+so the setting is applied at boot.

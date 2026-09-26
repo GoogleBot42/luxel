@@ -89,7 +89,7 @@ test("a refused pixel clock names the list the device takes", () => {
   assert.match(ex.details, /^panel: clock_mhz must be one of/);
 });
 
-test("the other three `panel` fields each point at their own control", () => {
+test("the other four `panel` fields each point at their own control", () => {
   const at = (raw) => explainApiError(raw, { scope: "layout" });
   assert.equal(at("panel: planes must be 4..8").field, "panel-planes");
   assert.equal(at("panel: blank must be 0..8").field, "panel-blank");
@@ -97,10 +97,16 @@ test("the other three `panel` fields each point at their own control", () => {
     at("panel: chip must be shiftreg|fm6126a|icn2038s|dp3246").field,
     "panel-chip",
   );
+  // the brighter ↔ faster slider (Gitea #460/#789)
+  assert.equal(
+    at("panel: lsb must be 0..65535 (0 = full on-time)").field,
+    "panel-lsb",
+  );
   for (const raw of [
     "panel: planes must be 4..8",
     "panel: blank must be 0..8",
     "panel: chip must be shiftreg|fm6126a|icn2038s|dp3246",
+    "panel: lsb must be 0..65535 (0 = full on-time)",
   ])
     assert.doesNotMatch(at(raw).text, /bug in the app/, raw);
 });
@@ -161,7 +167,8 @@ test("every layout grammar error the engine can raise has a sentence", () => {
     "panel: clock_mhz must be one of 8|10|12|15|20|24|30",
     "panel: chip must be shiftreg|fm6126a|icn2038s|dp3246",
     "panel: blank must be 0..8",
-    "expected: panel <planes> <clock_mhz> <shiftreg|fm6126a|icn2038s|dp3246> <blank>",
+    "panel: lsb must be 0..65535 (0 = full on-time)",
+    "expected: panel <planes> <clock_mhz> <shiftreg|fm6126a|icn2038s|dp3246> <blank> [<lsb>]",
   ];
   for (const raw of raws) {
     const ex = explainApiError(raw, { scope: "layout", maxPixels: 4096 });
