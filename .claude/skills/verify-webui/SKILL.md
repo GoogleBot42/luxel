@@ -117,6 +117,14 @@ else (all three, 2026-09-26, Gitea #526/#794):
   rebooted" — retry 3-8 times before believing it, or an unlucky null
   crashes the harness mid-upload (it did; the device survived it fine).
 
+Two more that bite on a console served by the MIRROR too (`luxel serve`,
+2026-09-26, #781): the Patterns page opens on the (empty) *device* source —
+click `[data-role="patterns-source-library"]` before looking for library
+tiles; and start the mirror `--board panel` when the pattern under test is
+2D — a strip console's library grid is `only="compatible"`
+(`pages/Patterns.svelte`) and hides every 2D pattern, which looks exactly
+like "the tile isn't there".
+
 ### Cold loads against a REAL device
 
 For changes touching startup/connection behavior (fetch gating, device
@@ -266,8 +274,13 @@ nothing in this container is public.
   panel is hidden. Typing into `[data-role="gallery-search"]` then silently
   no-ops (no error, no filtering) and every tile reports `!el.hidden` while
   `el.offsetParent === null`. Click `[data-role="editor-back"]` first if it
-  exists, and gate tile picks on `offsetParent !== null`, not on `hidden`
+  exists, and gate tile picks on visibility, not on `hidden`
   (the corpus-tab tiles live in a hidden panel and are unhidden too).
+  **The honest visibility test is `el.getClientRects().length > 0`, not
+  `offsetParent !== null`**: inside the v2 console shell every element has
+  a fixed-position ancestor, so `offsetParent` is null for ALL of them,
+  visible or not, and an `offsetParent` gate finds no tiles on a console
+  that is showing them (four aborted soak runs, 2026-09-26, #781).
   Device mode (`?device=`) boots straight into the editor too, so the tabs
   (`tab-settings` etc.) don't exist until that click — and the click no-ops
   if fired the instant the button appears (still loading the running

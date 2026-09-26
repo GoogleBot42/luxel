@@ -213,7 +213,14 @@ ANOTHER session's entry and dropped it (recovery: `git fsck --unreachable` /
 the sha in the drop message → `git stash store <sha>`, then `git checkout -- .`
 to clear the foreign files). For a "before" side use
 `git show origin/master:<path> > <scratch>` or a throwaway
-`git worktree add <tmp> origin/master` — both are worktree-local.
+`git worktree add <tmp> origin/master` — both are worktree-local. For a
+**baseline flake build** (release image, `.#luxel-fw-<board>`) point nix at
+the git objects instead of any tree:
+`nix build "git+file:///path/to/worktree?rev=$(git rev-parse origin/master)#luxel-fw-athom-music" --out-link <scratch>/fw-master`
+— works through a worktree's `.git` file, touches nothing on disk, and the
+branch side is the plain path flake `nix build /path/to/worktree#…`
+(2026-09-26; a `stash`-based A/B was killed seconds before it would have
+stashed two subagents' uncommitted docs edits).
 
 ## Merging back (concurrent sessions)
 
