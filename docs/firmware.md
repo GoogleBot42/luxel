@@ -1972,16 +1972,25 @@ an 8 MB arena and 8,446 B asked of the internal heap — under the 12 KB
 `COMPILE_FLOOR`, so ~20.4 KB of free internal heap suffices where ~43.6 KB
 was needed before.
 
-**The no-arena path is covered; the arena path is not verified on metal**
-(2026-09-26): no device was touched in the #671 session. The QEMU JIT gate
-(`tools/qemu/jit-test.py`, classic ESP32, no arena) passed on `rainbow.js`
-and `snake-2d.js` — both ran natively and bit-identical to the interpreter,
-`snake-2d` 19 fns / 11,256 B of code compiled in 17,244 µs — which exercises
-exactly the unchanged branch. The arena branch's on-metal expectation — the
-"Test 2" scene (`5cef0a3a`, Aurora 2D + Infinite Snake v2 + text) reporting
-`jit.layers[1].state: native` with `heap_free` no lower than today's
-35–39 KB (docs/boards.md "Whole frames in PSRAM") — is left to a follow-up
-ticket.
+**Both paths are verified on metal** (Gitea #792, 2026-09-26). The QEMU JIT
+gate (`tools/qemu/jit-test.py`, classic ESP32, no arena) passed on
+`rainbow.js` and `snake-2d.js` — both ran natively and bit-identical to the
+interpreter, `snake-2d` 19 fns / 11,256 B of code compiled in 17,244 µs —
+which exercises exactly the unchanged branch. The arena branch was then read
+on the Seengreat panel at 4096 px, master `5f3de06c` (#791 + #802 + #808)
+OTA-pushed to `ota_1`, against the pre-#671 `6c691f0` still on `ota_0`: the
+"Test 2" scene (`5cef0a3a`, Aurora 2D + Infinite Snake v2 keyed black +
+text, two engines) came up with **both layers native** — `jit.layers[1]`
+12,932 B of code where #671 had reported `interp`/`no-memory`, and 12,932 B
+is exactly the host's `alloc_peak` image size for `snake-2d-v2`. The internal
+heap did not pay for it: `heap_free` 35,764 B / `heap_largest` 31,668 B with
+the snake native against 35,384 / 31,288 with it interpreted — **380 B
+higher** — while `psram_free` fell 8,155,072 → 8,024,000, the second exec
+block at its `JIT_MAX_CODE` cap; the ~88 KB the block and the compile's
+working set actually want is arena now, not heap. `compile_us` 12,714
+on the first activation and 9,191 on a re-activation; no `no-memory` refusal,
+no `vmerr`, no reboot. The full rows, the second scene and the fps finding
+that came with them are in docs/boards.md "JIT on metal".
 
 ### The call, and the stack floor
 

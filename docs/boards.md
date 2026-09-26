@@ -2307,9 +2307,12 @@ Aurora 2D is native — Gitea #671, not a regression (compare the
 per-function tables are `luxel_core::arena` vectors now, so on this board they
 come out of the PSRAM arena and only a few KB of per-depth scratch and
 `BTreeMap` nodes stay internal (docs/firmware.md "The compile's own heap").
-The rows above are the pre-#671 measurement and are kept as such; re-reading
-this scene on metal to confirm `jit.layers[1].state: native` is a follow-up
-ticket, not something this session did.
+The rows above are the pre-#671 measurement and are kept as such. **Re-read on
+metal 2026-09-26 (Gitea #792)**, master `5f3de06c` on `ota_1`: the same scene
+comes up `jit.layers[1].state: native`, 12,932 B of code, with `heap_free` /
+`heap_largest` 35,764 / 31,668 B — 380 B *above* the interpreted reading, the
+whole compile and both exec blocks having come out of the arena
+(`psram_free` 8,155,072 → 8,024,000). Full rows in "JIT on metal" below.
 
 
 ## Second light: master on the panel (2026-09-06)
@@ -2597,7 +2600,7 @@ brightness 4, read and restored, never set.
 | `perlin-fire-wind-tunnel` | 187,369 (6) | 62,010 (16) | **3.02×** | 2,536 | 14,335 |
 | `aurora-2d` | 104,045 (10) | 50,082 (20) | **2.08×** | 5,612 | 9,631 |
 | `bulk-canvas-ripples-2d` | 8,191 (113) | 3,983 (114) | **2.06×** | — | — |
-| `snake-2d` | 79,350 (13) | refused `no-memory` | — | 11,256 | — |
+| `snake-2d` | 79,350 (13) | refused `no-memory` (pre-#671; see the 2026-09-26 note below) | — | 11,256 | — |
 
 
 
@@ -2619,11 +2622,15 @@ compile's own heap"): 31,148 B free against 14,848 B needed clears 12 KB and
 not 20 KB, and with the shipped gate it compiles and runs 2.08× — verified,
 not inferred.
 
-*(Superseded in code 2026-09-26, Gitea #671: the per-word and per-function
-tables are arena memory on this board now, so `snake-2d`'s 31.6 KB is asked of
-the 8 MB arena and only 8,446 B of the internal heap. The refusal row above is
-the pre-#671 state and stays as the measurement it was; whether `snake-2d`
-compiles at 4096 px after #671 has NOT been re-measured on metal.)*
+*(Superseded 2026-09-26, Gitea #671: the per-word and per-function tables are
+arena memory on this board now, so `snake-2d`'s 31.6 KB is asked of the 8 MB
+arena and only 8,446 B of the internal heap. The refusal row above is the
+pre-#671 state and stays as the measurement it was — the replacement reading
+was taken on metal the same day under Gitea #792: `snake-2d-v2`, the heavier
+sibling, compiles at 4096 px as the second layer of a two-engine scene,
+12,932 B of native code, with internal `heap_free` no lower than when it was
+interpreted. "The crash that produced the bookkeeping gate" below has the
+numbers.)*
 
 The arena side has one cost worth stating plainly: **an image is allocated at
 the full `JIT_MAX_CODE` cap, so `psram_free` drops by ~128 KB per native
@@ -2751,10 +2758,43 @@ init) take the unchanged path, #752's contiguity check included, and the QEMU
 JIT gate covers it: `tools/qemu/jit-test.py` on the classic ESP32 passed
 `rainbow.js` and `snake-2d.js`, both native and bit-identical to the
 interpreter, `snake-2d` 19 fns / 11,256 B of code in 17,244 µs.
-docs/firmware.md "The compile's own heap" is the full argument. **The arena
-path is not re-measured on metal** — no device was touched in the #671
-session, so every on-metal row above is still the pre-#671 state and the
-re-read is a follow-up ticket.
+docs/firmware.md "The compile's own heap" is the full argument.
+
+**And the arena path was read on metal, 2026-09-26** (Gitea #792). Master
+`5f3de06c` (#791 + #802 + #808) OTA-pushed to `ota_1`, v0.1.40, panel at
+4096 px, brightness 14 read and left alone; the pre-#671 `6c691f0` still on
+`ota_0` is the before column. At boot with the persisted single pattern
+resident: 55 fps, `heap_free` 45,512 / `heap_largest` 41,416, 2,316 B of
+native code in 5,948 µs.
+
+| reading, "Test 2" (`5cef0a3a`, Aurora 2D + Infinite Snake v2 keyed black + text) | before (`6c691f0`) | after (`5f3de06c`) |
+|---|---|---|
+| `jit.layers` | `[0]` native 5,612 B (`compile_us` 8,375) · `[1]` **`interp` / `no-memory`** | `[0]` native 5,612 B · `[1]` **native 12,932 B** |
+| fps · `frame_us` · `vm_us` | 17 · 58,683–61,706 · 58,330 | 18 · 55,570–56,956 · 55,214–56,579 |
+| `heap_free` / `heap_largest` | 35,384 / 31,288 | **35,764 / 31,668** |
+| `psram_free` (of 8,388,608) | 8,155,072 | 8,024,000 |
+
+That 12,932 B is exactly the `alloc_peak` csv image size for `snake-2d-v2` on
+the host, which is the layer in question. The internal heap is **380 B
+higher** with the snake native than it was with the snake interpreted: the
+compile's working set and both exec blocks — ~88 KB between them — came out
+of the arena, which is the whole of what #671 set out to do. (The 131,072 B
+`psram_free` delta is the second image's block at the `JIT_MAX_CODE` cap, as
+above; the working set is freed by the time `/api/status` is read.)
+Top-level `compile_us` 12,714 on the first activation and 9,191 on a
+re-activation beside the resident "Test" scene. "Test" (`5cef0a3b`, Aurora 2D
++ black-keyed Breakout) is both-native too — 5,612 B and 3,560 B,
+`compile_us` 16,498, 15 fps, `frame_us` 69,908–71,631, `heap_free` 37,804 /
+`heap_largest` 33,708. No `no-memory` refusal anywhere in the run, no
+`vmerr`, no reboot across the activations. The Athom was not re-checked this
+session; the no-arena path stays covered by the QEMU gate above.
+
+**A finding from the same run, and it is NOT a #671 regression:** "Test 2"
+with both layers native runs **18 fps against 17 fps** with the snake
+interpreted — one frame. The snake layer costs ~38 ms of the frame at 4096 px
+on top of aurora's ~18 ms, and that cost is evidently not in the arithmetic
+the JIT compiles, so making the layer native bought almost nothing. A
+follow-up ticket profiles where those 38 ms go.
 
 **Library differential on metal** (`tools/jit-diff.mjs`, 2026-09-24). Athom, 144 px, all 307 patterns: **295 ran natively** (54 pixel-identical, 241 differing only through a wall-clock input), **0 mismatches, 0 vmerr, 0 crashes**; 11 refused — 7 `too-large` over the classic board's 12 KB half (dbzbattlefinal, fireworks-finale, flash-posterize-music-sequencer-framework, multisegment-demo, snake-2d-v2, stargen-polar-2d, utility-palettes) and 4 `no-memory` (2d-fireworks-fade, frogger-2d, the two music sequencers); 1 `unstable` (beat-bounce, sound-reactive, the interpreter does not repeat itself either). Seengreat, 4096 px, 141 patterns (every third plus every 2D one — the full sweep is ~90 s a pattern at this pixel count): **131 ran natively** (10 identical, 121 clock), **0 mismatches, 0 vmerr**, 7 refused `no-memory` (bouncy-boxes, lightning-strike, snake-2d, snake-2d-v2, sound-spectrokalidamandala, sunrise-2d, stargen-polar-2d), 1 upload refused for heap fragmentation, and 2 rows (frogger-2d, music-sequencer-for-v2) whose 30–35 KB blobs the board rejects at 4096 px with the JIT off as well — that rejection leaves ~3.6 KB of heap and the next HTTP request panics, which is Gitea #678, not the JIT.
 **Soak with the JIT on** (2026-09-24): Athom, Jeremy's own 4-item playlist swapping every 5 s, 55 min native — 0 resets, `fence_timeouts` 0, 118 watcher samples all `native`; Seengreat, a 2-item playlist (_Fairies, Aurora 2D) swapping every 30 s, 33 min — 0 resets, `fence_timeouts` 0, 66 samples all `native`, heap 30.6–37.6 KB, 41 native activations narrated on serial and no panic. Not `tools/hw-bench.mjs`: that pushes every gallery pattern, which on the panel is Gitea #678 waiting to happen, and the library differential had already activated every pattern natively once.
