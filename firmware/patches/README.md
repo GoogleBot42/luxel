@@ -12,6 +12,27 @@ To change a patch: edit the materialized copy is NOT the way (it's a
 read-only store path) — regenerate the `.patch` against a pristine crate
 unpack, then re-enter the devshell.
 
+Adding a patch on top of the stack (the recipe used for `plane-repeats`,
+2026-09-26; no network needed — the pristine tarball is already in the
+store as `/nix/store/*-esp-hub75-0.14.0.tar.gz`):
+
+```sh
+mkdir base new && tar xzf /nix/store/*-esp-hub75-0.14.0.tar.gz -C base --strip-components=1
+cd base && for p in esp-hal-git atomic-swap dma-position; do   # the stack, in order
+  patch -p1 -s < $REPO/firmware/patches/esp-hub75-0.14.0-$p.patch; done; cd ..
+cp -r base new     # edit new/src/... ; then:
+{ echo "<header paragraph: what and why>"; echo;
+  diff -ruN base new | sed -e 's|^--- base/|--- a/|' -e 's|^+++ new/|+++ b/|'; } \
+  > $REPO/firmware/patches/esp-hub75-0.14.0-<name>.patch
+```
+
+Then list it in `flake.nix` (`mkEspHub75Src.patches`, in order), add a
+section below, `git add` the file (the devshell will not enter otherwise —
+see .claude/skills/worktree-setup), and prove it re-applies: unpack a
+fresh copy, apply all patches in order, `diff -r` against `new` — must be
+empty. `git diff --check` flags the blank context lines (` `) every
+unified diff has; ignore that, the older patches have them too.
+
 ## esp-hub75-0.14.0-esp-hal-git.patch
 
 Upstream (https://github.com/liebman/esp-hub75, MIT OR Apache-2.0)
