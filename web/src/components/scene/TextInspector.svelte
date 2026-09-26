@@ -364,7 +364,12 @@
        layer, the space around them is not — `compose::draw_text_layer`), so
        there is nothing to offer. S7 draws Blend · Opacity · Delete and
        nothing between them. -->
-  <StyleTail style={layer.style} on:change={(e) => patchLayer({ style: e.detail })} on:delete />
+  <StyleTail
+    style={layer.style}
+    kind="text"
+    on:change={(e) => patchLayer({ style: e.detail })}
+    on:delete
+  />
 {/if}
 
 <style>

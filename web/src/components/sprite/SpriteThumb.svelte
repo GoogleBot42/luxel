@@ -17,7 +17,11 @@
   export let sprite: Sprite | null = null;
   /** The intrinsic square this draws into, in canvas pixels. */
   export let size = 128;
-  /** 0 = zoom to fit at an INTEGER factor; anything else is that factor. */
+  /** 0 = zoom to FIT: an integer factor while the sprite is smaller than the
+   *  box, and the exact fractional one when it is bigger. The fractional half
+   *  matters wherever the box is small — a 64×64 sprite in a 58px frame-strip
+   *  thumbnail or a 34px picker row used to be drawn at 1:1 and CLIPPED to its
+   *  middle, which reads as a different drawing. */
   export let zoom = 0;
   /** `checker` shows transparency; `black` is what a fixture actually does. */
   export let ground: "checker" | "black" = "checker";
@@ -57,7 +61,8 @@
     if (s && f === shown) return;
     shown = f;
 
-    const z = !s ? 8 : zoom > 0 ? zoom : Math.max(1, Math.floor(Math.min(c.width / s.w, c.height / s.h)));
+    const fit = s ? Math.min(c.width / s.w, c.height / s.h) : 8;
+    const z = !s ? 8 : zoom > 0 ? zoom : fit >= 1 ? Math.floor(fit) : fit;
     ctx.clearRect(0, 0, c.width, c.height);
     // The checker's squares are TEXELS, not a fixed 8 px: a fine checker under
     // big texels reads as noise rather than as "nothing is here".

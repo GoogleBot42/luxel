@@ -118,13 +118,18 @@
   $: scenesReady =
     $device === null ||
     ($deviceLayoutWire !== null && uiLayoutKind($deviceLayoutWire.kind, $layout.dims) === "matrix");
+  // ORDER: Patterns · Sprites · Scenes · Playlist · Settings. Jeremy,
+  // 2026-09-26: "the scene tab should be after the sprites tab" — the strip
+  // reads bottom-up now, smallest thing you make first. A pattern is a
+  // program, a sprite is a drawing, and a SCENE is a stack OF those two, so a
+  // scene coming after both is the order the work happens in.
   $: tabs = [
     { id: "patterns" as const, label: "Patterns", show: true },
-    { id: "scenes" as const, label: "Scenes", show: scenesReady },
     // SPRITES (#740) is gated identically to Scenes and for the same reason: a
     // sprite is drawn for a scene layer, and a scene needs a regular 2D grid.
     // Same test, deliberately not a second one.
     { id: "sprites" as const, label: "Sprites", show: scenesReady },
+    { id: "scenes" as const, label: "Scenes", show: scenesReady },
     { id: "playlist" as const, label: "Playlist", show: $device !== null },
     { id: "settings" as const, label: "Settings", show: $device !== null },
   ].filter((t) => t.show);

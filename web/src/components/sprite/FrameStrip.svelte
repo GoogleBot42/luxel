@@ -60,18 +60,24 @@
         aria-pressed={playing}
         on:click={() => dispatch("playing", !playing)}>{playing ? "Pause" : "Play"}</button
       >
+      <!-- "What's the Onion button in the sprite editor?" (Jeremy,
+           2026-09-26). It is the animator's term and nobody else's, so the
+           button says what it DOES; the `data-role` is unchanged because it is
+           still the same control. -->
       <button
         class="btn sm"
         class:on={onion}
         data-role="sprite-onion"
         aria-pressed={onion}
-        title="ghost the previous frame under this one"
-        on:click={() => dispatch("onion", !onion)}>Onion</button
+        title="show the previous frame faintly under this one"
+        on:click={() => dispatch("onion", !onion)}>Ghost prev</button
       >
     </div>
   </div>
 
-  <div class="frames">
+  <!-- `sprite-frames` is the whole section; this is the row of thumbnails,
+       which is the thing that must WRAP rather than scroll. -->
+  <div class="frames" data-role="sprite-frame-row">
     {#each frames as f (f)}
       <div class="fr" class:cur={f === frame} data-role="sprite-frame" data-frame={f}>
         <button
@@ -159,13 +165,16 @@
     gap: 4px;
   }
 
-  /* wide content scrolls inside its OWN container, never the page
-     (.claude/rules/web.md) — thirty frames is a long strip */
+  /* Jeremy, 2026-09-26: "if the user has enough that a horizontal scroll bar
+     would be needed, it should be just starting a new row of frames." A strip
+     of thirty 58px thumbnails is a grid, not a filmstrip you scroll — and a
+     scroll container hid every frame past the eighth on a phone. It WRAPS;
+     there is no `overflow-x` here at all, so nothing can scroll sideways. */
   .frames {
     display: flex;
+    flex-wrap: wrap;
     align-items: flex-start;
     gap: 8px;
-    overflow-x: auto;
     padding-bottom: 4px;
   }
 

@@ -29,6 +29,7 @@
   import Popover from "../components/Popover.svelte";
   import { SceneRenderer, playgroundPatternId } from "../lib/sceneRender";
   import {
+    layerPatternId,
     MAX_SCENE_NAME,
     newLayer,
     patternLayerCount,
@@ -38,15 +39,16 @@
     type Rect,
     type Scene,
   } from "../lib/scene";
-  import { encodeSprite, spriteMetaLine } from "../lib/sprite";
   import {
     cachedSprite,
+    ensureSprites,
     freshSprite,
-    loadSprite,
-    refreshSprites,
     saveSprite,
+    spriteBytesOf,
+    spriteRev,
     spriteSaving,
     sprites,
+    warmSprites,
   } from "../stores/sprites";
   import { listPatterns, savePattern as savePatternLocally } from "../lib/store";
   import { confirm } from "../stores/dialog";
@@ -143,6 +145,21 @@
   // id changes (and NOT while it is the same) is what keeps an in-progress
   // edit from being stomped by the 2 Hz poll.
   $: if (active) maybeAdopt(sceneId, $scenes);
+
+  // THESE TWO BELONG HERE, above every `$:` that derives from `doc`.
+  //
+  // `normaliseSpriteBoxes` ASSIGNS `doc`, and Svelte cannot see that — the
+  // assignment is inside a called function, so the compiler orders this
+  // statement by source position alone and every reader of `doc` written
+  // above it computes from the PREVIOUS value. Worse, an invalidation raised
+  // during `$$.update()` schedules no second flush, so those readers never
+  // catch up: with the statement down in the sprite section, a stored scene
+  // with `w`/`h` 0 was normalised in `doc` and the inspector went on showing
+  // `0` forever, in a tab that had no error and no way back
+  // (.claude/rules/web.md, and it cost a debug cycle here on 2026-09-26).
+  // `needSprites` rides along because the two read the same thing.
+  $: if (active) void needSprites(doc, $sprites);
+  $: if (active) normaliseSpriteBoxes(doc, $sprites, $spriteRev);
 
   // A deep link (`#/scenes/<id>` in a fresh tab) lands HERE, not on the
   // Scenes page, so this screen asks for the library itself rather than
@@ -397,7 +414,7 @@
   // The dependencies are ARGUMENTS: a `void x` inside a reactive EXPRESSION is
   // not a dependency as far as Svelte is concerned, and a sprite record that
   // landed without re-binding was invisible (.claude/rules/web.md).
-  $: if (active && $luxel) rebuildOn(doc, rigKey, $devicePatterns, spriteRev);
+  $: if (active && $luxel) rebuildOn(doc, rigKey, $devicePatterns, $spriteRev);
 
   function rebuildOn(_doc: unknown, _rig: unknown, _dev: unknown, _sprites: unknown): void {
     const wire = serializeScene(doc);
@@ -492,10 +509,22 @@
 
   $: patternLayers = patternLayerCount(doc);
 
-  /** Sprite metadata for the layer list (`sprite · 9×8 · 2 frames`). Read out
-   *  of the SPRITE store now — `$sprites` and `spriteRev` are named arguments
-   *  so the row fills in the moment the library lands. */
-  $: spriteDims = spriteDimsOf(doc, $sprites, spriteRev);
+  /**
+   * The sprite layer's meta line for the layer list — just `8×8`.
+   *
+   * Jeremy, 2026-09-26: "the layer info for the sprite contains so much info
+   * the title of the layer doesn't fit. The other info isn't needed. I suppose
+   * keeping 8x8 (the size) is ok." It used to read `sprite · 9×8 · 2 frames`
+   * in a column beside the name, on a row that also carries the kind icon —
+   * so the word `sprite` was said twice and the frame count pushed the name
+   * out. The two STATES stay (a layer with nothing bound, and one naming a
+   * sprite the library does not have): those are not extra information, they
+   * are the only thing the row can say.
+   *
+   * `$sprites` and `$spriteRev` are named arguments so the row fills in the
+   * moment the library lands.
+   */
+  $: spriteDims = spriteDimsOf(doc, $sprites, $spriteRev);
   $: patternNames = patternNamesOf(doc, $devicePatterns);
 
   function spriteDimsOf(s: Scene, _lib: unknown, _rev: unknown): Record<number, string> {
@@ -504,14 +533,11 @@
       if (l.body.kind !== "sprite") return;
       const id = l.body.id;
       if (id === "") {
-        out[i] = "sprite · none chosen";
+        out[i] = "none chosen";
         return;
       }
-      const meta = $sprites.find((x) => x.id === id);
-      const held = meta ? null : cachedSprite(id);
-      if (meta) out[i] = `sprite · ${spriteMetaLine(meta.w, meta.h, meta.frames)}`;
-      else if (held) out[i] = `sprite · ${spriteMetaLine(held.w, held.h, held.frames)}`;
-      else out[i] = "sprite · missing";
+      const size = sizeOf(id);
+      out[i] = size ? `${size.w}×${size.h}` : "missing";
     });
     return out;
   }
@@ -537,44 +563,64 @@
   // with a sprite is: which record does the layer name, and what are its
   // bytes.
   //
-  // The bytes are pre-loaded and the ENCODE is memoised per id, because
-  // `SceneRenderer.setScene` copies them into wasm on every rebuild and a
-  // 64×64 record is 4 KB.
+  // The BYTES and the "a record landed" signal both live in
+  // `stores/sprites.ts` now (`spriteBytesOf` / `spriteRev`). They used to live
+  // here, in a page-local `encoded` Map beside a page-local counter — one copy
+  // on this page, one on the Scenes page, one on the Sprites tab — and that is
+  // what made the 2026-09-26 panel never draw a sprite layer on a console:
+  // a record that failed to download was never asked for again (the counter
+  // only moved when one LANDED), and a record re-drawn in the sprite editor
+  // was never re-encoded (`encoded.has(id)` said we already had it). The store
+  // retries and invalidates; this page only says which ids it needs.
 
-  const encoded = new Map<string, Uint8Array>();
-  /** Bumped when a record lands — the rebuild's and the layer list's signal. */
-  let spriteRev = 0;
-
-  async function warmSprites(): Promise<void> {
-    await refreshSprites();
-    let landed = 0;
-    for (const s of $sprites) {
-      if (encoded.has(s.id)) continue;
-      const sp = await loadSprite(s.id);
-      if (!sp) continue;
-      encoded.set(s.id, encodeSprite(sp));
-      landed++;
-    }
-    if (landed > 0) spriteRev += landed;
+  function needSprites(s: Scene, _lib: unknown): Promise<void> {
+    return ensureSprites(s.layers.filter((l) => l.body.kind === "sprite").map(layerPatternId));
   }
 
-  /** The `SpriteLookup` the compositor takes: a cache read, never a fetch. */
-  function spriteBytesOf(id: string): Uint8Array | null {
+  /** A sprite's own size, from the library row or the decoded record. */
+  function sizeOf(id: string): { w: number; h: number } | null {
     if (id === "") return null;
-    const held = encoded.get(id);
-    if (held) return held;
-    const sp = cachedSprite(id);
-    if (!sp) return null;
-    const bytes = encodeSprite(sp);
-    encoded.set(id, bytes);
-    return bytes;
+    const meta = $sprites.find((s) => s.id === id);
+    if (meta) return { w: meta.w, h: meta.h };
+    const held = cachedSprite(id);
+    return held ? { w: held.w, h: held.h } : null;
+  }
+
+  /**
+   * NORMALISE a sprite layer's box to explicit w/h.
+   *
+   * The wire still allows `w`/`h` = 0 on a sprite layer and the firmware reads
+   * it as "the sprite's own size at (x, y)" — but the UI must not have two
+   * modes (Jeremy, 2026-09-26: "the stretch fit should force the UI to see the
+   * w + h the same always"). So a scene loaded from the store is normalised
+   * here, once its sprite's size is known, and `savedWire` is re-stamped with
+   * it: filling in a size that renders identically is not an edit the user
+   * made, and opening a scene must never arrive dirty.
+   *
+   * Its reactive statement is UP with `maybeAdopt`, not here — see there.
+   */
+  function normaliseSpriteBoxes(s: Scene, _lib: unknown, _rev: unknown): void {
+    let hit = false;
+    const layers = s.layers.map((l) => {
+      if (l.body.kind !== "sprite") return l;
+      if (l.style.rect.w !== 0 && l.style.rect.h !== 0) return l;
+      const size = sizeOf(l.body.id);
+      if (!size) return l;
+      hit = true;
+      return { ...l, style: { ...l.style, rect: { ...l.style.rect, w: size.w, h: size.h } } };
+    });
+    if (!hit) return;
+    const wasSaved = savedWire === serializeScene(s);
+    doc = { ...s, layers };
+    if (wasSaved) savedWire = serializeScene(doc);
   }
 
   /** What an unset box covers for the SELECTED layer — the sprite's own size
    *  on a sprite layer, and "the whole layout" (null) on anything else. It is
-   *  what makes the marquee wrap a natural-size sprite instead of the whole
-   *  grid (`SceneStage`'s `natural`). Dependencies NAMED. */
-  $: selNatural = naturalOf(sel, $sprites, spriteRev);
+   *  what makes the marquee wrap a sprite whose box has not been normalised
+   *  yet (its record has not landed) instead of the whole grid
+   *  (`SceneStage`'s `natural`). Dependencies NAMED. */
+  $: selNatural = naturalOf(sel, $sprites, $spriteRev);
 
   function naturalOf(
     l: Layer | null,
@@ -584,12 +630,7 @@
     if (l?.body.kind !== "sprite") return null;
     // Narrowed into a local: the closure below re-widens `l.body` to the
     // whole union as far as svelte-check is concerned.
-    const id = l.body.id;
-    if (id === "") return null;
-    const meta = $sprites.find((s) => s.id === id);
-    if (meta) return { w: meta.w, h: meta.h };
-    const held = cachedSprite(id);
-    return held ? { w: held.w, h: held.h } : null;
+    return sizeOf(l.body.id);
   }
 
   /** `Edit ↗` on the sprite inspector — the sprite editor, with this scene as
@@ -604,8 +645,8 @@
    * layer, and open it — one gesture, because a layer bound to nothing draws
    * nothing and the only useful next step is to draw.
    *
-   * The layer's box is left at its natural size (w/h = 0), which is what a
-   * fresh sprite wants: 8×8 at (x, y), unscaled.
+   * The layer's box is set to the fresh sprite's OWN size (8×8) rather than
+   * left at 0: there is one box model on this screen and it is explicit.
    */
   async function newSpriteFor(at: number): Promise<void> {
     const l = doc.layers[at];
@@ -613,7 +654,11 @@
     const r = await saveSprite(freshSprite(8, 8));
     if (!r.ok || !r.id) return;
     await warmSprites();
-    replaceLayer(at, { ...l, body: { kind: "sprite", id: r.id } });
+    replaceLayer(at, {
+      ...l,
+      style: { ...l.style, rect: { ...l.style.rect, w: 8, h: 8 } },
+      body: { kind: "sprite", id: r.id },
+    });
     selected = at;
     // Save the scene first when it has an id, so returning from the sprite
     // editor does not land on a scene that never heard about the binding.
@@ -638,9 +683,11 @@
     const l = newLayer(kind);
     if (kind === "color") l.style.rect = { x: 0, y: Math.max(0, gridH - 6), w: 0, h: 6 };
     if (kind === "text") l.style.rect = { x: 0, y: Math.floor(gridH / 2) - 4, w: 0, h: 8 };
-    // A fresh SPRITE layer is placed a little in from the corner and left at
-    // its natural size (w/h = 0): it draws the sprite 1:1 at (x, y) and can be
-    // dragged from there like every other layer.
+    // A fresh SPRITE layer is placed a little in from the corner. Its w/h stay
+    // 0 for exactly as long as the layer names no sprite — there is no size to
+    // be explicit ABOUT yet — and `setSprite`/`New…` fill them in the moment
+    // one is bound (`normaliseSpriteBoxes` catches a stored scene the same
+    // way).
     if (kind === "sprite") l.style.rect = { x: 2, y: 2, w: 0, h: 0 };
     commit({ ...doc, layers: [...doc.layers, l] });
     selected = doc.layers.length - 1;

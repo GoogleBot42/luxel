@@ -262,3 +262,104 @@ test("withPatternOnTop carries the values and the projection it was shown at", (
   assert.match(wire, /^C hue 16384 65536$/m);
   assert.match(wire, /^P x$/m);
 });
+
+// ---- the sprite layer's FPS override: the `A` line (Gitea #740 follow-up) ----
+//
+// Jeremy, 2026-09-26: "it should also be possible to override the FPS of the
+// sprite in the layer settings." The fixtures below are the ones
+// `scene::tests::a_sprite_layer_can_override_the_records_fps` and
+// `json_carries_the_sprite_fps_override_only_when_set` use, so the two codecs
+// cannot drift: ABSENT is the record's own rate and must never be invented,
+// `0` holds frame 0, and the line sits directly after `I`.
+
+const SPR_HEAD =
+  "S 0000000a n\nL sprite 0 0 0 0 normal 100 none fill 1\nI 5b17e5ef\n";
+
+test("a sprite layer with no `A` line carries no fps, and none is emitted", () => {
+  const r = parseScene(SPR_HEAD);
+  assert.equal(r.ok, true);
+  assert.equal(r.scene.layers[0].body.kind, "sprite");
+  assert.equal(r.scene.layers[0].body.fps, undefined);
+  assert.equal(serializeScene(r.scene), SPR_HEAD);
+});
+
+test("`A <fps>` round trips right after the `I` line, 0 included", () => {
+  for (const f of [0, 1, 12, 30]) {
+    const wire = `${SPR_HEAD}A ${f}\n`;
+    const r = parseScene(wire);
+    assert.equal(r.ok, true, wire);
+    assert.equal(r.scene.layers[0].body.fps, f);
+    assert.equal(serializeScene(r.scene), wire);
+  }
+});
+
+test("an `A` line with no `I` is still a legal override", () => {
+  const wire = "S 0000000a n\nL sprite 0 0 0 0 normal 100 none fill 1\nA 3\n";
+  const r = parseScene(wire);
+  assert.equal(r.ok, true);
+  assert.equal(r.scene.layers[0].body.id, "");
+  assert.equal(r.scene.layers[0].body.fps, 3);
+  assert.equal(serializeScene(r.scene), wire);
+});
+
+test("`A` is refused out of range, non-numeric, and on a non-sprite layer", () => {
+  assert.equal(
+    parseScene(`${SPR_HEAD}A 31\n`).error,
+    'scene: line 4: sprite fps must be 0..30 "31"',
+  );
+  assert.equal(parseScene(`${SPR_HEAD}A -1\n`).ok, false);
+  assert.equal(
+    parseScene(`${SPR_HEAD}A x\n`).error,
+    'scene: line 4: sprite fps is not an integer "x"',
+  );
+  assert.equal(
+    parseScene("S 0000000a n\nL pat 0 0 0 0 normal 100 none fill 1\nA 4\n").error,
+    "scene: line 3: A on a non-sprite layer",
+  );
+});
+
+test("the JSON carries `fps` only when the layer overrides the record", () => {
+  const json = (wire) => {
+    const r = parseScene(wire);
+    assert.equal(r.ok, true, wire);
+    return sceneJson(r.scene);
+  };
+  assert.ok(json(SPR_HEAD).endsWith('"sprite":{"id":"5b17e5ef"}}]}'), json(SPR_HEAD));
+  assert.ok(json(`${SPR_HEAD}A 0\n`).endsWith('"sprite":{"id":"5b17e5ef","fps":0}}]}'));
+  assert.ok(json(`${SPR_HEAD}A 30\n`).endsWith('"sprite":{"id":"5b17e5ef","fps":30}}]}'));
+});
+
+test("`sceneFromJson` reads the override back, clamps a silly one, and keeps absent absent", () => {
+  const layer = (sprite) => ({
+    type: "sprite",
+    name: "Sprite",
+    x: 0,
+    y: 0,
+    w: 0,
+    h: 0,
+    blend: "normal",
+    opacity: 100,
+    key: "none",
+    fit: "fill",
+    visible: true,
+    flipx: false,
+    flipy: false,
+    rot180: false,
+    sprite,
+  });
+  const of = (sprite) =>
+    sceneFromJson({ id: "0000000a", name: "n", layers: [layer(sprite)] }).layers[0].body;
+  assert.equal(of({ id: "5b17e5ef" }).fps, undefined);
+  assert.equal(of({ id: "5b17e5ef", fps: 0 }).fps, 0);
+  assert.equal(of({ id: "5b17e5ef", fps: 12 }).fps, 12);
+  assert.equal(of({ id: "5b17e5ef", fps: 99 }).fps, 30);
+  assert.equal(of({ id: "5b17e5ef", fps: -4 }).fps, 0);
+  // …and a round trip through the wire keeps the same three states
+  assert.equal(serializeScene(sceneFromJson({ id: "0000000a", name: "n", layers: [layer({ id: "5b17e5ef" })] })), SPR_HEAD);
+});
+
+test("a fresh sprite layer has no fps override", () => {
+  const l = newLayer("sprite");
+  assert.equal(l.body.kind, "sprite");
+  assert.equal(l.body.fps, undefined);
+});

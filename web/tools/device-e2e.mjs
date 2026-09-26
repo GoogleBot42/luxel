@@ -391,8 +391,21 @@ try {
       const tabs = await pg.$$eval('[data-role="tabs"] button', (els) =>
         els.map((e) => {
           const cs = getComputedStyle(e);
-          return { on: e.classList.contains("active"), color: cs.color, rule: cs.borderBottomColor };
+          return {
+            label: (e.textContent ?? "").trim(),
+            on: e.classList.contains("active"),
+            color: cs.color,
+            rule: cs.borderBottomColor,
+          };
         }),
+      );
+      // Jeremy, 2026-09-26: "the scene tab should be after the sprites tab."
+      // This mirror is a 120px STRIP, so the two matrix-gated tabs are absent
+      // here — the panel console below is where their order is read.
+      check(
+        "shell: a strip console's tabs are Patterns · Playlist · Settings",
+        tabs.map((t) => t.label).join(",") === "Patterns,Playlist,Settings",
+        tabs.map((t) => t.label).join(","),
       );
       const on = tabs.find((t) => t.on);
       const off = tabs.find((t) => !t.on);
@@ -4744,6 +4757,14 @@ try {
       await gotoConsole(spPage, SP);
       await spPage.waitForSelector('[data-role="tab-sprites"]', { timeout: 15000 });
       check("sprites: a matrix console has the Sprites tab (#740)", true);
+      const spTabs = await spPage.$$eval('[data-role="tabs"] button', (els) =>
+        els.map((e) => (e.textContent ?? "").trim()).join(","),
+      );
+      check(
+        "sprites: the tab strip reads Patterns · Sprites · Scenes · Playlist · Settings",
+        spTabs === "Patterns,Sprites,Scenes,Playlist,Settings",
+        spTabs,
+      );
 
       // ---- the ONE-RELEASE migration, on a DEVICE store (#740 step 3) ----
       // `migrateTaggedSprites` saves the sprite FIRST and deletes the pattern
@@ -4994,13 +5015,41 @@ try {
       });
       check("sprite layer: the picker offers the DEVICE's sprite by name", chose === true);
       await sleep(900);
-      const natural = await spPage
-        .$eval('[data-role="scene-sprite-natural"]', (el) => (el.textContent ?? "").trim())
-        .catch(() => "");
+      // ONE BOX MODEL (2026-09-26 item 2): picking a sprite writes the record's
+      // own size into w/h — explicitly, read off the DEVICE's row — and the
+      // fields, the Fit chooser and the `natural` button are all there at once.
+      // There is no "natural mode" for a handle drag to flip the layer out of.
+      const boxModel = await spPage.evaluate(() => ({
+        w: document.querySelector('[data-role="scene-box-w"]').value,
+        h: document.querySelector('[data-role="scene-box-h"]').value,
+        readonly: document.querySelector('[data-role="scene-box-w"]').readOnly,
+        fit: !!document.querySelector('[data-role="scene-sprite-fit"]'),
+        natural: (
+          document.querySelector('[data-role="scene-sprite-natural"]')?.textContent ?? ""
+        ).trim(),
+        fps: (
+          document.querySelector('[data-role="scene-sprite-fps-state"]')?.textContent ?? ""
+        ).trim(),
+      }));
       check(
-        "sprite layer: an unset box is the RECORD's own size, read off the device row",
-        natural === "8×8 · natural size",
-        natural,
+        "sprite layer: the box is EXPLICIT 8×8 off the device row, editable, with Fit and FPS rows",
+        boxModel.w === "8" &&
+          boxModel.h === "8" &&
+          !boxModel.readonly &&
+          boxModel.fit &&
+          boxModel.natural === "8×8 · the sprite's own size" &&
+          boxModel.fps === "sprite's own (12 fps)",
+        JSON.stringify(boxModel),
+      );
+      const sprMeta = await spPage
+        .$$eval('[data-role="scene-editor-view"] [data-role="scene-layer"] .meta2', (els) =>
+          els.map((e) => (e.textContent ?? "").trim()),
+        )
+        .catch(() => []);
+      check(
+        "sprite layer: the layer row's meta line is just the size (2026-09-26 item 4)",
+        sprMeta.includes("8×8"),
+        JSON.stringify(sprMeta),
       );
 
       // THE assertion (#741 item 12): a sprite layer moves with the marquee
@@ -5084,10 +5133,127 @@ try {
         spPage.url(),
       );
 
+      // ---- THE composite: a sprite layer is DRAWN, on a CONSOLE ----
+      //
+      // Jeremy, 2026-09-26: "the webpage preview never shows the sprite
+      // rendering in the scene." The playground half of this has been asserted
+      // since #740 (tools/e2e.mjs reads the stage pixel a texel lands on); the
+      // device half was deliberately SKIPPED, which is exactly why nobody
+      // noticed that on a console the record came out of `/api/sprites/<id>`
+      // and went nowhere. The store's per-page caches, its missing retry and
+      // `spriteRecord`'s "any failure means there is no such sprite" all lived
+      // behind that gap (see `stores/sprites.ts`).
+      //
+      // The fixture is seeded through the API and is deliberately STATIC —
+      // `fps 0`, one frame, every texel the same colour — so the pixel under
+      // test cannot depend on which frame the clock is on.
+      {
+        const rec = (() => {
+          const nm = new TextEncoder().encode("Static");
+          const out = new Uint8Array(12 + nm.length + 3 + 64);
+          out.set([0x4c, 0x58, 0x53, 0x50], 0); // "LXSP"
+          out[4] = 1; // version
+          out[5] = 8; // w
+          out[6] = 8; // h
+          out[7] = 1; // frames
+          out[8] = 0; // fps — STILL
+          out[9] = 1; // colours
+          out[10] = nm.length;
+          out[11] = 0; // flags
+          out.set(nm, 12);
+          out.set([0xff, 0x22, 0x22], 12 + nm.length); // the one palette entry
+          out.fill(1, 12 + nm.length + 3); // every texel = palette[0]
+          return out;
+        })();
+        const made = await fetch(`${SP}/api/sprites`, { method: "POST", body: rec }).then((r) =>
+          r.json(),
+        );
+        check("composite: the static fixture record stores", made.ok === true, JSON.stringify(made));
+        const wire = [
+          "S - Sprite composite",
+          "L color 0 0 0 0 normal 100 none fill 1",
+          "K 000020",
+          "L sprite 10 10 8 8 normal 100 none fill 1",
+          `I ${made.id}`,
+          "",
+        ].join("\n");
+        const scene = await fetch(`${SP}/api/scenes`, { method: "POST", body: wire }).then((r) =>
+          r.json(),
+        );
+        check("composite: the fixture scene stores", scene.ok === true, JSON.stringify(scene));
+
+        // Into the editor by FRAGMENT — the route is in the hash since #538,
+        // and one page per run keeps the device's socket pool out of it.
+        await reloadInto(spPage, `#/scenes/${scene.id}`);
+        await spPage.waitForSelector('[data-role="scene-editor-view"]:not([hidden])', {
+          timeout: 20000,
+        });
+        // the record has to travel: /api/sprites, then /api/sprites/<id>
+        await spPage.waitForFunction(
+          () => {
+            const c = document.querySelector('[data-role="scene-stage"]');
+            if (!c) return false;
+            const d = c.getContext("2d").getImageData(14, 14, 1, 1).data;
+            return d[0] > 120;
+          },
+          { timeout: 20000, polling: 250 },
+        ).catch(() => {});
+        const px = await spPage.$eval('[data-role="scene-stage"]', (c) => {
+          const g = c.getContext("2d");
+          const at = (x, y) => Array.from(g.getImageData(x, y, 1, 1).data).slice(0, 3);
+          return { size: [c.width, c.height], base: at(2, 2), inside: at(14, 14), corner: at(10, 10) };
+        });
+        check(
+          "composite: a CONSOLE's scene stage draws the sprite layer's texels (2026-09-26 item 1)",
+          px.inside[0] > 120 &&
+            px.inside[1] < 120 &&
+            px.corner[0] > 120 &&
+            px.base[0] < 60 &&
+            px.base[2] > 20,
+          JSON.stringify(px),
+        );
+        await spPage.screenshot({ path: `${shotDir}/device-e2e-sprite-composite.png` });
+
+        // …and the Scenes TAB's thumbnail draws it too — same lookup, same
+        // signal, different surface.
+        await spPage.click('[data-role="scene-editor-back"]');
+        await spPage.waitForSelector('[data-role="scenes-grid"]', { timeout: 10000 });
+        const tileLit = await spPage
+          .waitForFunction(
+            (id) => {
+              const t = document.querySelector(`[data-role="scene-tile"][data-scene="${id}"] canvas`);
+              if (!t) return false;
+              const d = t.getContext("2d").getImageData(0, 0, t.width, t.height).data;
+              for (let i = 0; i < d.length; i += 4) {
+                if (d[i] > 120 && d[i + 1] < 120 && d[i + 2] < 120) return true;
+              }
+              return false;
+            },
+            { timeout: 20000, polling: 250 },
+            scene.id,
+          )
+          .then(() => true)
+          .catch(() => false);
+        check("composite: the Scenes tab's thumbnail draws the sprite layer too", tileLit);
+
+        // Tidy up so the delete section below still sees exactly one sprite and
+        // the scene it wrote: a fixture that outlives its check is a fixture
+        // the next section debugs.
+        await fetch(`${SP}/api/scenes/${scene.id}`, { method: "DELETE" });
+        await fetch(`${SP}/api/sprites/${made.id}`, { method: "DELETE" });
+        await sleep(2500);
+      }
+
       // ---- delete it from the tab: the DEVICE's record goes ----
       // Out of the scene editor FIRST: a full-screen editor replaces the
       // shell, tab strip and all, so no `tab-*` is in the DOM while one is up.
-      await spPage.click('[data-role="scene-editor-back"]');
+      // GUARDED, because the composite block above already left it for the
+      // Scenes tab — a bare click on a `scene-editor-back` that is not there
+      // aborts the whole run rather than failing one check
+      // (.claude/rules/web.md).
+      if (await spPage.$('[data-role="scene-editor-view"]:not([hidden])')) {
+        await spPage.click('[data-role="scene-editor-back"]');
+      }
       await spPage.waitForSelector('[data-role="tab-sprites"]', { timeout: 10000 });
       await sleep(500);
       await spPage.click('[data-role="tab-sprites"]');

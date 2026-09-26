@@ -53,6 +53,10 @@ export const CLOCK_FMTS: readonly ClockFmt[] = [
 ];
 /** `luxel_core::text::SLOTS`. */
 export const TEXT_SLOTS = 8;
+/** `luxel_core::sprite::SPRITE_MAX_FPS` — the ceiling on a sprite's own rate
+ *  and on a sprite LAYER's `A` override alike. Spelled here as well as in
+ *  `lib/sprite.ts` so the codec does not import the other codec. */
+export const MAX_SPRITE_FPS = 30;
 
 /** A layer's box in layout pixels. `w` or `h` = 0 means "the whole layout". */
 export interface Rect {
@@ -114,8 +118,13 @@ export type LayerBody =
    *  is a first-class record with its own store and its own id namespace, no
    *  longer a sprite-tagged pattern — the WIRE is untouched (`L sprite` /
    *  `I <id>`), only what the id resolves to moved. Codec: `lib/sprite.ts`;
-   *  store: `stores/sprites.ts`. */
-  | { kind: "sprite"; id: string }
+   *  store: `stores/sprites.ts`.
+   *
+   *  `fps` is the LAYER's frame-rate override (the `A` line, 0..30, 0 = hold
+   *  frame 0). `undefined` — the default, and the only state `serializeScene`
+   *  omits — means the record's own rate, so it must never be invented:
+   *  `luxel_core::scene`'s round-trip test pins that. */
+  | { kind: "sprite"; id: string; fps?: number }
   | { kind: "color"; color: string };
 
 export interface Layer {
@@ -480,6 +489,23 @@ function parseBinding(layer: Layer, tag: string, line: string, n: number): void 
       else if (layer.body.kind === "sprite") layer.body.id = id;
       break;
     }
+    case "A": {
+      // The sprite layer's frame-rate override. Unlike every other binding
+      // this one REFUSES a layer it cannot apply to rather than ignoring it,
+      // because `luxel_core::scene` does: `A` on a pat/text/color layer can
+      // only be a console bug or a hand-written record, and silently dropping
+      // a rate the user typed is worse than naming it.
+      const tok = t[1] ?? "";
+      const fps = parseIntTok(tok, n, "sprite fps is not an integer");
+      if (fps < 0 || fps > MAX_SPRITE_FPS) {
+        throw new ParseError(errTok(n, "sprite fps must be 0..30", tok));
+      }
+      if (layer.body.kind !== "sprite") {
+        throw new ParseError(err(n, "A on a non-sprite layer"));
+      }
+      layer.body.fps = fps;
+      break;
+    }
     case "C": {
       const name = t[1];
       if (layer.body.kind === "pat" && name !== undefined) {
@@ -626,6 +652,9 @@ export function serializeScene(s: Scene): string {
       }
     } else if (l.body.kind === "sprite") {
       if (l.body.id !== "") out += `I ${l.body.id}\n`;
+      // Right after `I`, and only when the layer overrides the record — the
+      // absent line IS the default (`LayerBody::Sprite { fps: None }`).
+      if (l.body.fps !== undefined) out += `A ${l.body.fps}\n`;
     } else if (l.body.color !== "000000") {
       out += `K ${l.body.color}\n`;
     }
@@ -673,7 +702,8 @@ export interface SceneLayerJson {
     scroll: Scroll;
     speed: number;
   };
-  sprite?: { id: string };
+  /** `fps` is present only when the LAYER overrides the record's own rate. */
+  sprite?: { id: string; fps?: number };
   color?: string;
 }
 
@@ -747,7 +777,15 @@ function layerFromJson(j: SceneLayerJson): Layer {
       },
     };
   } else if (kind === "sprite") {
-    body = { kind: "sprite", id: String(j.sprite?.id ?? "") };
+    // An out-of-range rate from a newer host is CLAMPED rather than dropped,
+    // the way every other enum here falls back instead of throwing. Absent
+    // stays absent: that is what "the record's own rate" means.
+    const raw = j.sprite?.fps;
+    const fps =
+      typeof raw === "number" && Number.isFinite(raw)
+        ? Math.max(0, Math.min(MAX_SPRITE_FPS, raw | 0))
+        : undefined;
+    body = { kind: "sprite", id: String(j.sprite?.id ?? ""), fps };
   } else {
     body = { kind: "color", color: parseRgb(String(j.color ?? "")) ?? "000000" };
   }
@@ -793,7 +831,8 @@ function layerJson(l: Layer): string {
       `,"text":{"source":${src},"font":"${t.font}","color":"${t.color}",` +
       `"align":"${t.align}","scroll":"${t.scroll}","speed":${t.speed}}`;
   } else if (l.body.kind === "sprite") {
-    o += `,"sprite":{"id":"${jsonEscape(l.body.id)}"}`;
+    const fps = l.body.fps === undefined ? "" : `,"fps":${l.body.fps}`;
+    o += `,"sprite":{"id":"${jsonEscape(l.body.id)}"${fps}}`;
   } else {
     o += `,"color":"${l.body.color}"`;
   }

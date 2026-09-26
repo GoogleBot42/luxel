@@ -1058,11 +1058,30 @@ export class DeviceSession {
     return (await res.json()) as SpritesWire;
   }
 
-  /** One sprite's record, or null when the device has no such sprite. */
+  /**
+   * One sprite's record.
+   *
+   *   * `Uint8Array` — the raw `LXSP` bytes.
+   *   * `null` — the device ANSWERED that it has no such sprite.
+   *   * throws — the read failed and is worth trying again.
+   *
+   * The three used to be one. `if (!res.ok) return null` made every failure
+   * look like "there is no such sprite", which is the one answer the caller
+   * must not retry — and the firmware does not even use a status code for it:
+   * a missing id comes back 200 with `{"ok":false,"error":…}`, exactly as
+   * `/api/scenes/<id>` does (`firmware/src/server.rs`). So the STATUS decides
+   * whether the read worked and the BODY's first byte decides whether it is a
+   * record or that refusal; `{` cannot begin an `LXSP` record. Nothing here
+   * parses the record — the codec is `lib/sprite.ts`'s and this module stays
+   * clear of it.
+   */
   async spriteRecord(id: string): Promise<Uint8Array | null> {
     const res = await this.fetch(`/api/sprites/${id}`);
-    if (!res.ok) return null;
-    return new Uint8Array(await res.arrayBuffer());
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`sprite ${id}: HTTP ${res.status}`);
+    const body = new Uint8Array(await res.arrayBuffer());
+    if (body.length > 0 && body[0] === 0x7b) return null; // `{` — the refusal
+    return body;
   }
 
   /** Create (`id` empty) or replace a sprite. A bare POST whose record

@@ -63,4 +63,9 @@
 
 <div class="irule"></div>
 
-<StyleTail style={layer.style} on:change={(e) => patchLayer({ style: e.detail })} on:delete />
+<StyleTail
+  style={layer.style}
+  kind="color"
+  on:change={(e) => patchLayer({ style: e.detail })}
+  on:delete
+/>

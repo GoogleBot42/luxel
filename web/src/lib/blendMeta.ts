@@ -11,7 +11,7 @@
 // Keep this file pure data: no stores, no Svelte, no fetch — it is imported
 // by four inspectors and by the tests.
 
-import type { Blend, Fit, LayerKey } from "./scene";
+import type { Blend, Fit, LayerKey, LayerKind } from "./scene";
 
 /** One row of a `RichSelect`: what it writes, what it is called, what it
  *  does, and which drawing goes beside it. */
@@ -24,17 +24,41 @@ export interface RichOption<T extends string = string> {
 }
 
 /**
+ * Normal's sentence, per LAYER KIND — because the row it points at is not on
+ * every inspector.
+ *
+ * Jeremy, 2026-09-26: "The 'Normal' blend mode description for both text and
+ * sprites refers to a 'Transparent' setting which doesn't exist (because it
+ * isn't applicable)." He is right twice over: a TEXT layer is always
+ * black-keyed and a SPRITE's transparency is index 0 of its record, so
+ * `StyleTail` shows those two no Transparent chooser at all — and a
+ * description naming a control the screen does not have is worse than no
+ * description. A pattern or colour layer does have the row, so it keeps the
+ * wording that sends you to it.
+ */
+const NORMAL_DESC: Record<LayerKind, string> = {
+  pat: "Paints over what is beneath — the everyday mode, and the only one where Transparent matters.",
+  color:
+    "Paints over what is beneath — the everyday mode, and the only one where Transparent matters.",
+  text: "Draws over what is beneath; the letters' transparent pixels show it through.",
+  sprite: "Draws over what is beneath; the sprite's transparent texels show it through.",
+};
+
+/**
  * The five blends, in `BLENDS` order. The formulae behind the sentences
  * (B = what is beneath, L = the layer, α = opacity) are §5.5's:
  *   normal `B + α(L−B)` · add `min(255, B + αL)` · lighten `max(B, αL)` per
  *   channel · multiply `B·L/255` faded to B by α · mask `B·luma(L)/255`.
  * `blend_px_mode` in crates/luxel-core/src/compose.rs is the implementation.
+ *
+ * `BLEND_OPTIONS` is the PATTERN-layer list and the shape the exhaustiveness
+ * check below bites on; `blendOptions(kind)` is what an inspector asks for.
  */
 export const BLEND_OPTIONS = [
   {
     value: "normal",
     label: "Normal",
-    desc: "Paints over what is beneath — the everyday mode, and the only one where Transparent matters.",
+    desc: NORMAL_DESC.pat,
     icon: "normal",
   },
   {
@@ -63,9 +87,20 @@ export const BLEND_OPTIONS = [
   },
 ] as const satisfies readonly RichOption<Blend>[];
 
+/** The Blend chooser's rows for a layer of `kind` — only Normal's sentence
+ *  differs, so the other four are shared rather than copied four times. */
+export function blendOptions(kind: LayerKind): readonly RichOption<Blend>[] {
+  return BLEND_OPTIONS.map((o) =>
+    o.value === "normal" ? { ...o, desc: NORMAL_DESC[kind] } : o,
+  );
+}
+
 /**
  * The transparency KEY — which of the layer's pixels count at all. Offered
- * only under Normal blending (§5.5: the other modes carry their own).
+ * only under Normal blending (§5.5: the other modes carry their own), and only
+ * to the layer kinds that HAVE a choice: a text layer is always black-keyed
+ * and a sprite's transparency is index 0 of its record, so neither sees this
+ * row (`StyleTail`'s `keyable`). The examples name what can actually wear it.
  */
 export const KEY_OPTIONS = [
   {
@@ -77,7 +112,7 @@ export const KEY_OPTIONS = [
   {
     value: "black",
     label: "Black pixels",
-    desc: "Exactly-black pixels are skipped. Hard-edged and cheap — sprites, text, comets on black.",
+    desc: "Exactly-black pixels are skipped. Hard-edged and cheap — a comet or a logo on black.",
     icon: "key-black",
   },
   {

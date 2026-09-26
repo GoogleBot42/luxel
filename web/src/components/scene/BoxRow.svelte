@@ -6,13 +6,17 @@
   // `style.rect` and neither is authoritative.
   //
   // `w`/`h` = 0 means "the whole layout" on that axis (docs/spec/scenes.md
-  // §2). A sprite layer's w/h mirror the sprite and are read-only (S7c).
+  // §2) — for a pattern, a text or a colour layer. A SPRITE layer never shows
+  // a 0 here any more: the editor normalises its box to the sprite's own size
+  // the moment a sprite is bound, so the four fields, the marquee and the Fit
+  // chooser are all talking about the same explicit rectangle (Jeremy,
+  // 2026-09-26: "the stretch fit should force the UI to see the w + h the same
+  // always"). The `sizeReadonly` prop that used to grey w/h for a sprite went
+  // with it — scaling is real since #740/#741 and nothing here is read-only.
   import { createEventDispatcher } from "svelte";
   import type { Rect } from "../../lib/scene";
 
   export let rect: Rect;
-  /** A sprite is never scaled, so its size is the sprite's (S7c). */
-  export let sizeReadonly = false;
   export let dataRole = "scene-box";
 
   const dispatch = createEventDispatcher<{ input: Rect }>();
@@ -50,7 +54,6 @@
         class="inp"
         type="number"
         data-role={`${dataRole}-w`}
-        readonly={sizeReadonly}
         value={rect.w}
         on:change={(e) => set("w", e.currentTarget.value)}
       /></label
@@ -60,7 +63,6 @@
         class="inp"
         type="number"
         data-role={`${dataRole}-h`}
-        readonly={sizeReadonly}
         value={rect.h}
         on:change={(e) => set("h", e.currentTarget.value)}
       /></label
@@ -80,10 +82,5 @@
   input[type="number"]::-webkit-inner-spin-button {
     appearance: none;
     margin: 0;
-  }
-
-  /* a sprite's w/h mirror the sprite: greyed, not disabled (S7c) */
-  input[readonly] {
-    color: #5b6070;
   }
 </style>

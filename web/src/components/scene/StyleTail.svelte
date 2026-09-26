@@ -18,10 +18,14 @@
   // the menu now says all three in full.
   import { createEventDispatcher } from "svelte";
   import RichSelect from "../RichSelect.svelte";
-  import { BLEND_OPTIONS, KEY_OPTIONS } from "../../lib/blendMeta";
-  import type { Blend, LayerKey, LayerStyle } from "../../lib/scene";
+  import { blendOptions, KEY_OPTIONS } from "../../lib/blendMeta";
+  import type { Blend, LayerKey, LayerKind, LayerStyle } from "../../lib/scene";
 
   export let style: LayerStyle;
+  /** Which inspector this tail is on. Only Normal's DESCRIPTION depends on it
+   *  (`lib/blendMeta.ts`): it used to send every layer to a Transparent row
+   *  that text and sprite layers have never had (Jeremy, 2026-09-26). */
+  export let kind: LayerKind = "pat";
   /** Pattern and text layers key their pixels; colour and sprite do not. */
   export let keyable = false;
   /** A sprite's fixed key, stated rather than offered (S7c). */
@@ -38,13 +42,15 @@
   function setKey(v: string): void {
     dispatch("change", { ...style, key: v as LayerKey });
   }
+
+  $: blends = blendOptions(kind);
 </script>
 
 <div class="irow">
   <div class="ilab">Blend</div>
   <RichSelect
     value={style.blend}
-    options={BLEND_OPTIONS}
+    options={blends}
     dataRole="scene-blend"
     menuRole="scene-blend-menu"
     ariaLabel="blend mode"

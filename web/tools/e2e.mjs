@@ -168,8 +168,8 @@ try {
   // Playlist and Settings still need hardware and are still absent.
   const tabs = await page.$$eval('[data-role="tabs"] .tab', (e) => e.map((x) => x.textContent.trim()));
   check(
-    "the playground's tabs are Patterns, Scenes and Sprites",
-    tabs.join(",") === "Patterns,Scenes,Sprites",
+    "the playground's tabs are Patterns, Sprites and Scenes — in that order",
+    tabs.join(",") === "Patterns,Sprites,Scenes",
     tabs.join(","),
   );
   const segs = await page.$$eval('[data-role="patterns-sources"] button', (e) =>
@@ -1644,6 +1644,38 @@ try {
     );
     check("sprite editor: the strip says which frame is open", fcount === "2 of 2", fcount);
 
+    // Frame 2 gets a texel frame 1 does not have, so the two frames DIFFER —
+    // which is what makes the layer's fps override observable further down
+    // (the scene block samples this texel over time). `+` copies the frame you
+    // were on, so without this every frame of every e2e sprite is identical.
+    await paint(5, 5);
+
+    // "What's the Onion button in the sprite editor?" (Jeremy, 2026-09-26) —
+    // it says what it does now, and carries the sentence in its title.
+    const ghost = await page.$eval('[data-role="sprite-onion"]', (el) => ({
+      label: (el.textContent ?? "").trim(),
+      title: el.title,
+    }));
+    check(
+      "sprite editor: the onion-skin toggle is `Ghost prev` and explains itself",
+      ghost.label === "Ghost prev" && /previous frame/.test(ghost.title),
+      JSON.stringify(ghost),
+    );
+
+    // …and the strip WRAPS rather than scrolling sideways (#741 follow-up):
+    // "if the user has enough that a horizontal scroll bar would be needed, it
+    // should be just starting a new row of frames."
+    const strip = await page.$eval('[data-role="sprite-frame-row"]', (el) => ({
+      wrap: getComputedStyle(el).flexWrap,
+      overflow: getComputedStyle(el).overflowX,
+      scrollable: el.scrollWidth > el.clientWidth + 1,
+    }));
+    check(
+      "sprite editor: the frame strip wraps and never scrolls horizontally",
+      strip.wrap === "wrap" && strip.overflow === "visible" && !strip.scrollable,
+      JSON.stringify(strip),
+    );
+
     // Play is the ONE disabled control while fps is 0, and it says why
     const playWhy = await page.$eval('[data-role="sprite-play"]', (el) => ({
       disabled: el.disabled,
@@ -1936,9 +1968,41 @@ try {
         (await page.$('[data-role="scene-marquee"]')) !== null,
       );
 
-      // pick the sprite the Sprites tab made, by name
+      // The picker PREVIEWS each sprite (Jeremy, 2026-09-26: "it doesn't
+      // actually preview the sprite + its animation") — a live `SpriteThumb`
+      // per row, with the name and `6×6 · 2 frames` beside it.
       await page.click('[data-role="scene-sprite-pick"]');
       await sleep(400);
+      const menuRow = await page.$$eval('[data-role="scene-sprite-menu"] .orow', (els) =>
+        els
+          .filter((e) => (e.textContent ?? "").includes("E2E sprite"))
+          .map((e) => {
+            const c = e.querySelector('canvas[data-role="scene-sprite-thumb"]');
+            return {
+              thumb: !!c,
+              frames: Number(c?.dataset.frames ?? 0),
+              // the sprite's own accent texels, somewhere on the plate — the
+              // checker ground alone is opaque, so alpha proves nothing
+              painted: c
+                ? (() => {
+                    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+                    for (let i = 0; i < d.length; i += 4) {
+                      if (d[i] > 200 && d[i + 1] > 120 && d[i + 1] < 200 && d[i + 2] < 120) {
+                        return true;
+                      }
+                    }
+                    return false;
+                  })()
+                : false,
+              desc: (e.querySelector(".odesc")?.textContent ?? "").trim(),
+            };
+          })[0],
+      );
+      check(
+        "sprite layer: every picker row DRAWS its sprite, animated, beside `6×6 · 2 frames`",
+        menuRow?.thumb === true && menuRow.frames === 2 && menuRow.painted && menuRow.desc === "6×6 · 2 frames",
+        JSON.stringify(menuRow),
+      );
       const chose = await page.$$eval('[data-role="scene-sprite-menu"] .orow', (els) => {
         const row = els.find((e) => (e.textContent ?? "").includes("E2E sprite"));
         if (!row) return null;
@@ -1947,14 +2011,76 @@ try {
       });
       check("sprite layer: the picker offers the stored sprite by name", chose === true);
       await sleep(800);
+      // …and the CLOSED control carries the same picture, name and size line
+      const trigger = await page.$eval('[data-role="scene-sprite-pick"]', (el) => ({
+        thumb: !!el.querySelector('canvas[data-role="scene-sprite-thumb"]'),
+        name: (el.querySelector(".tnm")?.textContent ?? "").trim(),
+        meta: (el.querySelector('[data-role="scene-sprite-pick-meta"]')?.textContent ?? "").trim(),
+      }));
+      check(
+        "sprite layer: the closed picker shows the chosen sprite's thumbnail, name and size",
+        trigger.thumb && trigger.name === "E2E sprite" && trigger.meta === "6×6 · 2 frames",
+        JSON.stringify(trigger),
+      );
+
+      // Item 4: "the layer info for the sprite contains so much info the title
+      // of the layer doesn't fit. The other info isn't needed. I suppose
+      // keeping 8x8 (the size) is ok."
       const meta = await page.$eval(
         '[data-role="scene-layer"][data-layer="2"] .meta2',
         (el) => (el.textContent ?? "").trim(),
       );
       check(
-        "sprite layer: the row's metadata is the RECORD's size and frames",
-        meta === "sprite · 6×6 · 2 frames",
+        "sprite layer: the row's metadata is the SIZE and nothing else",
+        meta === "6×6",
         meta,
+      );
+
+      // ONE BOX MODEL (item 2): picking a sprite writes its own size into w/h,
+      // the four fields show the real numbers, and `Fit` is offered — where the
+      // old inspector showed `0` in w/h, a `12×12 · natural size` line and no
+      // Fit chooser at all until something flipped it out of that mode.
+      const boxModel = await page.evaluate(() => ({
+        w: document.querySelector('[data-role="scene-box-w"]').value,
+        h: document.querySelector('[data-role="scene-box-h"]').value,
+        readonly: document.querySelector('[data-role="scene-box-w"]').readOnly,
+        fit: !!document.querySelector('[data-role="scene-sprite-fit"]'),
+        natural: (
+          document.querySelector('[data-role="scene-sprite-natural"]')?.textContent ?? ""
+        ).trim(),
+        naturalBtn: !!document.querySelector('[data-role="scene-sprite-natural-btn"]'),
+      }));
+      check(
+        "sprite layer: picking a sprite sets an EXPLICIT box, editable, with Fit always offered",
+        boxModel.w === "6" &&
+          boxModel.h === "6" &&
+          !boxModel.readonly &&
+          boxModel.fit &&
+          boxModel.naturalBtn &&
+          boxModel.natural === "6×6 · the sprite's own size",
+        JSON.stringify(boxModel),
+      );
+
+      // typing a size is the same edit a handle drag is — and `natural` undoes it
+      await page.$eval('[data-role="scene-box-w"]', (el) => {
+        el.value = "20";
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      await sleep(400);
+      const stretched = await page.evaluate(() => ({
+        w: document.querySelector('[data-role="scene-box-w"]').value,
+        line: (
+          document.querySelector('[data-role="scene-sprite-natural"]')?.textContent ?? ""
+        ).trim(),
+        can: !document.querySelector('[data-role="scene-sprite-natural-btn"]').disabled,
+      }));
+      await page.click('[data-role="scene-sprite-natural-btn"]');
+      await sleep(400);
+      const restored = await page.$eval('[data-role="scene-box-w"]', (el) => el.value);
+      check(
+        "sprite layer: a typed w is an ordinary edit, and `natural` puts the box back",
+        stretched.w === "20" && stretched.line === "the sprite is 6×6" && stretched.can && restored === "6",
+        `${JSON.stringify(stretched)} → ${restored}`,
       );
 
       // …and the composite draws it. Texel (0, 0) was painted in the Sprites
@@ -1968,6 +2094,99 @@ try {
         "sprite layer: the record's texels are in the composite",
         px[0] > 200 && px[1] > 120 && px[2] < 120,
         JSON.stringify(px),
+      );
+
+      // ---- item 5: the layer's own FPS, over the record's (the `A` line) ----
+      //
+      // The sprite is 2 frames at 8 fps and the frames DIFFER — texel (5, 5)
+      // is only in the second — so the composite says which frame is up. The
+      // layer's box is at (2, 2), so that texel is stage pixel (7, 7).
+      const litStates = async (x, y, n = 16, gap = 60) => {
+        const seen = new Set();
+        for (let i = 0; i < n; i++) {
+          seen.add(
+            await page.$eval(
+              '[data-role="scene-stage"]',
+              (c, px, py) => {
+                const d = c.getContext("2d").getImageData(px, py, 1, 1).data;
+                return d[0] > 60 ? "lit" : "dark";
+              },
+              x,
+              y,
+            ),
+          );
+          await sleep(gap);
+        }
+        return [...seen].sort().join("+");
+      };
+
+      const fpsRow = await page.evaluate(() => ({
+        field: document.querySelector('[data-role="scene-sprite-fps"]')?.value,
+        placeholder: document.querySelector('[data-role="scene-sprite-fps"]')?.placeholder,
+        state: (
+          document.querySelector('[data-role="scene-sprite-fps-state"]')?.textContent ?? ""
+        ).trim(),
+        back: !!document.querySelector('[data-role="scene-sprite-fps-own"]'),
+      }));
+      check(
+        "sprite layer: FPS reads `sprite's own (8 fps)` with an empty field and no way-back button",
+        fpsRow.field === "" &&
+          fpsRow.placeholder === "8" &&
+          fpsRow.state === "sprite's own (8 fps)" &&
+          !fpsRow.back,
+        JSON.stringify(fpsRow),
+      );
+
+      // at the record's own 8 fps the two frames alternate, so the texel blinks
+      const ownStates = await litStates(7, 7);
+      check(
+        "sprite layer: at the record's own fps the animation advances in the composite",
+        ownStates === "dark+lit",
+        ownStates,
+      );
+
+      // `A 0` = still: frame 0 is held, so that texel never lights
+      await page.$eval('[data-role="scene-sprite-fps"]', (el) => {
+        el.value = "0";
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      await sleep(900);
+      const stillRow = await page.evaluate(() => ({
+        state: (
+          document.querySelector('[data-role="scene-sprite-fps-state"]')?.textContent ?? ""
+        ).trim(),
+        back: !!document.querySelector('[data-role="scene-sprite-fps-own"]'),
+        wire: localStorage.getItem("luxel.scenes") ?? "",
+      }));
+      const stillStates = await litStates(7, 7);
+      check(
+        "sprite layer: an override of 0 says `0 = still` and HOLDS frame 0 in the composite",
+        stillRow.state === "0 = still" && stillRow.back && stillStates === "dark",
+        `${JSON.stringify({ state: stillRow.state, back: stillRow.back })} · ${stillStates}`,
+      );
+      // frame 0's own texel (0, 0) is still drawn — "still" is not "blank"
+      const base00 = await litStates(2, 2, 3, 40);
+      check("sprite layer: a held frame still draws its own texels", base00 === "lit", base00);
+      await page.screenshot({ path: `${shotDir}/e2e-sprite-fps.png` });
+
+      // and `use sprite's` drops the override — back to the record's rate
+      await page.click('[data-role="scene-sprite-fps-own"]');
+      await sleep(900);
+      const backRow = await page.evaluate(() => ({
+        field: document.querySelector('[data-role="scene-sprite-fps"]')?.value,
+        state: (
+          document.querySelector('[data-role="scene-sprite-fps-state"]')?.textContent ?? ""
+        ).trim(),
+        back: !!document.querySelector('[data-role="scene-sprite-fps-own"]'),
+      }));
+      const backStates = await litStates(7, 7);
+      check(
+        "sprite layer: `use sprite's` drops the override and the animation resumes",
+        backRow.field === "" &&
+          backRow.state === "sprite's own (8 fps)" &&
+          !backRow.back &&
+          backStates === "dark+lit",
+        `${JSON.stringify(backRow)} · ${backStates}`,
       );
 
       // THE assertion: drag the marquee and the box MOVES (#741's first item)
@@ -2013,9 +2232,42 @@ try {
       await sleep(2000);
       const wire = await page.evaluate(() => localStorage.getItem("luxel.scenes") ?? "");
       check(
-        "sprite layer: the wire stores `L sprite x y …` + `I <sprite id>`",
-        /\nL sprite (?!2 2 )\d+ \d+ /.test(wire) && /\nI [0-9a-f]{8}\n/.test(wire),
+        "sprite layer: the wire stores `L sprite x y w h …` with an EXPLICIT 6×6 + `I <id>`",
+        /\nL sprite (?!2 2 )\d+ \d+ 6 6 /.test(wire) && /\nI [0-9a-f]{8}\n/.test(wire),
         (wire.match(/\nL sprite [^\n]*/) ?? [""])[0],
+      );
+      check(
+        "sprite layer: no `A` line survives `use sprite's` — absent IS the record's rate",
+        !/\nA \d+\n/.test(wire),
+        (wire.match(/\nA [^\n]*/) ?? ["(none)"])[0],
+      );
+
+      // A STORED SCENE with `w`/`h` 0 is normalised on load (item 2). The wire
+      // still allows it and the firmware reads it as "the sprite's own size",
+      // so a scene written by an older console — or by hand — must arrive in
+      // the one box model the UI has, and must NOT arrive looking edited:
+      // filling in a size that renders identically is not a change the user
+      // made. This rewrites the blob behind the app's back on purpose; it is
+      // the only way to produce the legacy shape now that nothing writes it.
+      await page.evaluate(() => {
+        const blob = localStorage.getItem("luxel.scenes") ?? "";
+        localStorage.setItem(
+          "luxel.scenes",
+          blob.replace(/^L sprite (\d+) (\d+) \d+ \d+ /m, "L sprite $1 $2 0 0 "),
+        );
+      });
+      await page.reload({ waitUntil: "networkidle2" });
+      await sleep(2500);
+      const legacy = await page.evaluate(() => ({
+        w: document.querySelector('[data-role="scene-box-w"]')?.value,
+        h: document.querySelector('[data-role="scene-box-h"]')?.value,
+        state: document.querySelector('[data-role="scene-save-state"]')?.dataset.saveState,
+        stored: (localStorage.getItem("luxel.scenes") ?? "").match(/L sprite [^\n]*/)?.[0],
+      }));
+      check(
+        "sprite layer: a stored `w`/`h` of 0 is normalised to the sprite's size, and reads SAVED",
+        legacy.w === "6" && legacy.h === "6" && !/unsaved/i.test(legacy.state ?? ""),
+        JSON.stringify(legacy),
       );
 
       // ---- the text inspector's three source states (S7h) ----
