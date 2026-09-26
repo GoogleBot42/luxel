@@ -144,7 +144,21 @@ real `espflash save-image` output (`LUXEL_OTA_IMAGE=result/luxel-fw-ota.bin
 cargo test -p parttab-check`), including the panel's literal garbage
 segment header. The handler path itself has no emulator coverage — QEMU's
 ESP32 models no radio, so nothing reaches `/api/ota` — which is why the
-boot line exists and why the on-metal check is a ticket (Gitea #655).
+boot line exists and why it had to be checked by hand.
+
+**On metal, 2026-09-26** (Gitea #668, the Athom): five clean OTAs alternated
+`ota_0 → ota_1` every time, each answering `{"ok":true,"bytes":1226304}`
+after ~24 s of upload with the device back **~6 s** after the reply (down for
+4.9 s of that). Then the wedge, minus the crash: 500,000 bytes of a
+1,226,304-byte image sent under the real `Content-Length` answered
+`{"ok":false,"error":"body read failed"}` at 45.05 s — the body budget above,
+to the centisecond — and left `slot`, `partitions` and the playlist exactly
+as they were, through the reboot that followed and through the full OTA
+after it, which landed normally into that same half-written slot. An OTA
+aborted from the client side mid-stream (the browser going away) behaves the
+same and the render engine un-freezes on its own. What is still unwitnessed
+is the boot line itself: `/dev/ttyUSB0` has been absent from the rig since
+2026-09-06, so `ota: updates go to ota_X at 0x…` remains QEMU-only.
 
 The wedge that took the panel off the LAN for 13 minutes was this, not a
 new flash hang: the ProCpu ran into its own rewritten flash. `picoserve`'s

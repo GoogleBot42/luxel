@@ -95,6 +95,28 @@ and `node_modules`, and the harnesses below assume a real `npm run build` succee
    `wasm`/`gen-gallery`/`svelte-check`/`vite build` step behind `tail`'s own success exit
    code. Either don't pipe, or check `${PIPESTATUS[0]}` explicitly.
 
+### Driving a device's OWN console ad hoc
+
+Anything gated on the device's `caps` (`/api/ota`, `/api/assets`, reboot
+routes) can only be driven on the real page at `http://<device-ip>/`, because
+the mirror advertises those caps off. Three things bite there and nowhere
+else (all three, 2026-09-26, Gitea #526/#794):
+
+- **That origin is not a secure context** — no `crypto.subtle`, no Clipboard,
+  no `navigator.mediaDevices`. See `.claude/rules/web.md`; the way to test a
+  fix without pushing assets to the device first is `vite preview --host
+  0.0.0.0` and loading it by the container's LAN IP, which is insecure the
+  same way while serving the code you just built.
+- **The first `page.goto` can die on `net::ERR_CONNECTION_REFUSED`** with the
+  device perfectly healthy: chromium preconnects and the 2-3 socket pool
+  refuses the extra. Launch with
+  `--disable-features=NetworkPrediction,PreconnectToOrigin,LoadingPredictorPrefetch`
+  (coldload.mjs's `NO_PRECONNECT` flag) AND retry the navigation a few times.
+- **Your own `fetch("/api/status")` probes compete with the page under test**
+  for those same sockets. A single failed probe is not "the device
+  rebooted" — retry 3-8 times before believing it, or an unlucky null
+  crashes the harness mid-upload (it did; the device survived it fine).
+
 ### Cold loads against a REAL device
 
 For changes touching startup/connection behavior (fetch gating, device

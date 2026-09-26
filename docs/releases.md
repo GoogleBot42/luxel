@@ -293,6 +293,16 @@ One codec, three callers: `web/src/lib/luxr.ts` is shared by the browser, by
 <out.luxr>` both run) and by `web/tests/luxr.test.mjs`. The bench and CI
 therefore cannot produce different containers.
 
+That codec carries its **own** SHA-256 rather than always calling
+`crypto.subtle`, because a device's own console is served from
+`http://<lan-ip>/` — a plain-http origin is not a secure context, so there is
+no WebCrypto there at all. Every harness runs on `127.0.0.1`, which is one,
+so the WebCrypto call passed everywhere and still made every package install
+from a real device fail on `Cannot read properties of undefined (reading
+'digest')` (Gitea #794, found by the #526 hardware run). Anything else the
+console grows that wants a browser crypto/secure-context API has the same
+problem waiting for it.
+
 **Why the package exists.** Firmware and the on-device console are versioned
 together and were shipped separately, and nothing made anyone install the
 second. A device that took a firmware OTA across an LXBC format bump kept

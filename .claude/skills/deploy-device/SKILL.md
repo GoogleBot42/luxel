@@ -234,6 +234,20 @@ pre-authorized per CLAUDE.md — no need to ask before pushing.
   firmware emits is an unambiguous discriminator — on 2026-09-25, `jit.layers`
   (new in #718) proved a "successful" push had not actually landed while
   `version` still read `0.1.40` on both sides.
+- **A status poll issued right after the OTA reply answers the OLD build.**
+  The device replies, then reboots ~400 ms later, and it is back in ~5 s — so
+  a loop that starts polling immediately gets a 200 from the pre-reboot
+  firmware and reports the slot UNCHANGED, which reads exactly like "the OTA
+  silently didn't take" (2026-09-26; `ota-push.sh`'s `sleep 4` exists for
+  this). Wait for the device to go DOWN before you believe an "up".
+- **Without serial, `core1` tells you whether a reboot happened.**
+  `/api/status`'s `core1.fences` is a live counter that resets every boot, and
+  `core1.last.bb[3]` is the PREVIOUS run's final value — so a pair that is
+  identical across a suspected reboot proves the device never rebooted, and a
+  `bb[3]` that equals the last-seen `fences` proves it did. That is how the
+  `POST /api/reboot` that answered nothing and did nothing was caught
+  (Gitea #798); `version` and `slot` cannot see a reboot that lands back on
+  the same build.
 - **After any crashy test run, re-check `slot`, not just `version`.** The
   boot-loop guard flips slots silently after 3 failed boots, and when both
   slots hold the same version the rollback is invisible in `version` —

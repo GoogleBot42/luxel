@@ -16,6 +16,7 @@ import {
   LUXR_MAGIC,
   packLuxr,
   parseLuxr,
+  sha256Js,
 } from "../src/lib/luxr.ts";
 
 const BOARD = "Athom music-reactive WLED controller";
@@ -108,4 +109,55 @@ test("packing refuses a board name that would not fit its length byte", async ()
   await assert.rejects(() => pkg({ board: "x".repeat(256) }), LuxrError);
   await assert.rejects(() => pkg({ board: "" }), LuxrError);
   await assert.rejects(() => pkg({ app: new Uint8Array(0) }), LuxrError);
+});
+
+// ── the insecure-origin path (Gitea #794) ────────────────────────────────
+// `crypto.subtle` exists only in a SECURE CONTEXT, and a device's own
+// console is served from plain `http://<lan-ip>/`. Every harness here runs
+// on 127.0.0.1, which IS one, so the codec's WebCrypto call passed
+// everywhere and still died the first time a real Athom met it. These pin
+// the fallback: same digest, and a full round trip with `crypto.subtle`
+// taken away.
+
+test("the in-house digest agrees with WebCrypto byte for byte", async () => {
+  const cases = [
+    new Uint8Array(0),
+    Uint8Array.from([0x61]),
+    new TextEncoder().encode("abc"),
+    // the two lengths either side of a padding block boundary
+    new Uint8Array(55).fill(0x5a),
+    new Uint8Array(56).fill(0x5a),
+    new Uint8Array(64).fill(0x5a),
+    APP,
+    ASSETS,
+    Uint8Array.from({ length: 200_000 }, (_, i) => (i * 31 + 7) & 0xff),
+  ];
+  for (const c of cases) {
+    const want = new Uint8Array(await crypto.subtle.digest("SHA-256", c.slice().buffer));
+    assert.deepEqual(Array.from(sha256Js(c)), Array.from(want), `length ${c.length}`);
+  }
+});
+
+test("a package round-trips on an origin with no crypto.subtle", async () => {
+  const real = globalThis.crypto;
+  // what a plain-http browser origin looks like: crypto is there, subtle is not
+  Object.defineProperty(globalThis, "crypto", {
+    value: { getRandomValues: real.getRandomValues.bind(real) },
+    configurable: true,
+  });
+  try {
+    const p = await parseLuxr(await pkg());
+    assert.equal(p.board, BOARD);
+    assert.deepEqual(Array.from(p.app), Array.from(APP));
+    assert.deepEqual(Array.from(p.assets), Array.from(ASSETS));
+    // and it still catches damage, which is the whole point of the hashes
+    const bad = await pkg();
+    bad[80 + BOARD.length + 6 + 10] ^= 0xff;
+    await assert.rejects(
+      () => parseLuxr(bad),
+      (e) => e instanceof LuxrError && /failed its checksum/.test(e.message),
+    );
+  } finally {
+    Object.defineProperty(globalThis, "crypto", { value: real, configurable: true });
+  }
 });
