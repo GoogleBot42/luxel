@@ -33,7 +33,14 @@
     type LayoutKind,
     type RunDir,
   } from "../lib/settingsCaps";
-  import { configuredDriver, panelRefreshHz } from "../lib/panelDriver";
+  import {
+    configuredDriver,
+    driverWire,
+    panelDriverState,
+    panelGeometryOf,
+    panelModuleLine,
+    panelRefreshHz,
+  } from "../lib/panelDriver";
   import {
     cloudLayout,
     latticeCoords,
@@ -68,7 +75,9 @@
   import type { ApiErrorContext } from "../lib/apiErrors";
   import { luxel } from "../stores/pattern";
   import ArrangementSvg from "./ArrangementSvg.svelte";
+  import Disclosure from "./Disclosure.svelte";
   import OutputsTable from "./OutputsTable.svelte";
+  import PanelModuleCard from "./PanelModuleCard.svelte";
 
   const dispatch = createEventDispatcher<{ pixelchange: void; openmap: void }>();
 
@@ -77,7 +86,6 @@
    *  store (bar / grid / cloud / scatter) with no shape logic of its own. */
   const SAMPLE = "export function render(index) { hsv(index / pixelCount, 1, 1) }";
 
-  const SCANS = [0, 4, 8, 16, 32];
   const CORNERS: { v: Corner; label: string }[] = [
     { v: "tl", label: "top-left" },
     { v: "tr", label: "top-right" },
@@ -135,6 +143,12 @@
    *  bit depth since #401/#525, this build's constants on firmware that does
    *  not report them (`lib/panelDriver.ts`). */
   $: pdriver = configuredDriver(wire);
+  /** The collapsed Panel module row's one line. Both arguments are named in
+   *  this block's own syntax, so it re-runs when the Layout does. */
+  $: panelModuleStatus = panelModuleLine(
+    wire,
+    panelDriverState(driverWire(wire), panelGeometryOf(wire)),
+  );
   /** The estimated rescan rate. Computed from the CONFIGURED driver wherever
    *  the device reports one, and from the device's own `est_hz` (#475) where
    *  it does not — same formula either way, `lib/panelDriver.ts` picks
@@ -563,7 +577,7 @@
 
 {#if kind === "matrix"}
   <div class="field">
-    <span class="flabel">{vis.panelScan ? "Panel" : "Size"}</span>
+    <span class="flabel">{vis.panelModule ? "Panel" : "Size"}</span>
     <div class="fctl row">
       <input
         class="inp num"
@@ -587,26 +601,6 @@
       <span class="dim hint">px</span>
     </div>
   </div>
-
-  <!-- mockup S3: the scan divisor is its OWN row, and its cell holds nothing
-       but the picker — it is a different question from the panel's size -->
-  {#if vis.panelScan}
-    <div class="field">
-      <span class="flabel">Panel scan</span>
-      <div class="fctl">
-        <select
-          class="w170"
-          data-role="layout-scan"
-          value={String(m.scan)}
-          on:change={(e) => setMatrix({ scan: Number(e.currentTarget.value) })}
-        >
-          {#each SCANS as s}
-            <option value={String(s)}>{s === 0 ? "board default" : `1/${s}`}</option>
-          {/each}
-        </select>
-      </div>
-    </div>
-  {/if}
 
   {#if vis.panelCounts}
     <div class="field">
@@ -680,6 +674,23 @@
     </div>
   {/if}
 
+  <!-- Panel module (Gitea #778): the scan rate and the four `panel` fields, in
+       ONE collapsed row under the arrangement. Jeremy, 2026-09-26: "The panel
+       driver section doesn't belong in Advanced. That dropdown belongs closer
+       or in the LED layout section. It's not something people can optionally
+       configure, but once it is configured they probably won't touch it again,
+       so being collapsed still makes sense." The collapsed line states the
+       whole module (`1/32 scan · plain shift register · 20 MHz · 7 planes ·
+       blanking 1`) plus the verdict tail, so a user who never opens it still
+       reads what the panel is. -->
+  {#if vis.panelModule}
+    <div class="disclist inline">
+      <Disclosure title="Panel module" status={panelModuleStatus} role="panel-module">
+        <PanelModuleCard ph={m.ph} scan={m.scan} on:scan={(e) => setMatrix({ scan: e.detail })} />
+      </Disclosure>
+    </div>
+  {/if}
+
   {#if vis.estimatedRefresh}
     <div class="refresh" class:amber={refreshLow} data-role="refresh">
       <span class="dot"></span>
@@ -696,7 +707,7 @@
       {pdriver.clock_mhz} MHz.
       {#if refreshLow}
         Below {REFRESH_AMBER_HZ} Hz cameras and fast motion show flicker — use fewer panels per
-        chain, or fewer bitplanes (Advanced › Panel driver).
+        chain, or fewer bitplanes (Panel module, above).
       {/if}
     </p>
     {#if darkTiles > 0}
@@ -829,10 +840,18 @@
       <div>One chain per output on this board — its two headers are the same GPIOs wired twice.</div>
       <div>Every panel in a chain must have the same size and scan.</div>
     {/if}
-    <div>
-      Panel size applies live; the chain — panels across/down, start, direction, snake, rotation,
-      scan — is built once at boot.
-    </div>
+    {#if $deviceCaps?.panel}
+      <div>
+        Panel size, scan, the chain (panels across/down, start, direction, snake, rotation) and the
+        module's chip, clock and bit planes are built once at boot — a reboot applies them. Latch
+        blanking applies live.
+      </div>
+    {:else}
+      <div>
+        Panel size applies live; the chain — panels across/down, start, direction, snake, rotation
+        — is built once at boot.
+      </div>
+    {/if}
   </div>
 {/if}
 

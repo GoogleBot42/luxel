@@ -1,5 +1,126 @@
 # Update log
 
+## 2026-09-26 — the panel form moves into LED layout, and latch blanking goes live (#778)
+
+Jeremy's reply to the runtime panel settings, an hour after they merged. Three
+things, all his words:
+
+**1. It is not an Advanced setting.** *"The panel driver section doesn't belong
+in Advanced. That dropdown belongs closer or in the LED layout section. It's not
+something people can optionally configure, but once it is configured they
+probably won't touch it again, so being collapsed still makes sense."* So
+Advanced has seven rows on every board now, and the whole form is ONE collapsed
+`Panel module` disclosure inside the LED layout card, under the arrangement and
+above the refresh readout, holding everything printed on the back of a module:
+the **scan rate** — which moved out of the layout card's own rows — then the
+driver chip, the pixel clock, the bit planes and the latch blanking. Its
+collapsed line is the module in one breath,
+`1/32 scan · plain shift register · 20 MHz · 7 planes · blanking 1`, plus the
+` · reboot to apply` / ` · not applied` / ` · output off` tail the Advanced row
+had; no refresh rate, because the estimated/measured readout is now the next
+thing on the page. The firmware-skew sentence and the inline `panel-error` came
+with it. The card's own `Rescan … measured · … estimated` strip did not: it was
+the same two numbers, over the same inputs, four lines from the LED layout
+card's own — which only became obvious once they were adjacent. `PanelDriverCard.svelte` → `PanelModuleCard.svelte`;
+`settingsVisibility()`'s `panelScan` and `panelDriver` became one `panelModule`,
+which also decides whether the size row reads `Panel` or `Size`. The scan field
+still rides the `matrix` line, so `LayoutCard` owns that write and the card
+dispatches a `scan` event to it — one component owns the matrix line.
+
+**2. "Board default" was a lie.** The scan select offered `board default` for
+`scan 0`. Jeremy: *"Is that even possible for luxel to know?"* It is not: HUB75
+is a write-only bus and the firmware cannot read anything off a module. `0` only
+ever meant the usual ratio for the configured height, `ph / 2`. The field is
+**Scan rate** now and the options are the ratios as a module prints them —
+`1/32 (usual for 64 rows)`, `1/16`, `1/8`, `1/4`, those that divide `ph / 2` —
+with the help text *"Printed on the module's back as 1/32S, 1/16S…; wrong =
+bands of the image in the wrong rows."* A 32-row module is not offered `1/32` at
+all, because 32 does not divide 16. The wire is unchanged: picking the usual one
+sends `0`, so the stored value still follows a later height change.
+(`Standard (1/32 for a 64-tall panel)` was tried first and rejected as
+confusing — short and concrete instead.)
+
+**3. Latch blanking applies LIVE.** *"Let's make latch blanking dynamic. I see
+value in that one."* It is the one panel knob you tune by looking at the panel,
+and it is also the only one that is not a boot parameter: `blank` is nothing but
+control bits in the framebuffer words — the OE window and the latch tail
+`luxel_hub75::format` writes — and the packer rewrites only colour bits.
+
+So: `PanelDriver::boot_differs` is what `Layout::reboot_required` now asks, over
+`planes`/`clock_mhz`/`chip` only. On the firmware, `POST /api/layout` hands the
+value to the output task through `hub75::want_blank` (a `WANT_BLANK` atomic
+beside `LIVE_SCAN`, armed at boot so a pre-boot POST is a no-op), and
+`write_frame`'s first act is `adopt_blank`: if the wanted value differs it takes
+it, bumps a `fmt_gen`, and updates `LIVE`'s `blank` — so `driver.live.blank`
+moves when the TEMPLATE does, a frame at most after the POST was answered, not
+eagerly at the POST. Each `DynFb` carries its own `fmt_gen`, and `compose_into`
+re-`format`s a buffer that is behind **before** packing into it: format clears
+every colour bit and rewrites every control bit, pack writes every colour bit
+back, so that order leaves the frame exact. Both swap buffers therefore catch up
+on their own next turns, each while it is the compose target and never while the
+DMA is reading it. Spare-plane mode needs nothing extra: the buffer re-formatted
+is the STAGING one, `flush` copies whole planes out of it (control bits are part
+of a plane's entry words), and the flip is armed for the view whose plane 0 that
+same copy rewrites — so the view the next pass reads is wholly on the new
+template. The pass still running reads its old plane 0 against new planes 1..,
+which is one rescan of mixed OE width and exactly the transient the mode already
+accepts for colour bits.
+
+Validation moved with it. A blanking wide enough to swallow the whole OE window
+is a legal `panel` line that would black the panel out, and boot-time
+`template_lights` cannot save a device that never reboots — so `set_from_wire`
+refuses it against the RUNNING row block, with the numbers:
+`panel: blank 8 + 3 latch clocks leave no lit clock in a 16-word row block`
+(`hub75::blank_would_darken` over a new `LIVE_COLS`; the window is
+`blank .. cols − latch − blank`, empty exactly when `2·blank + latch >= cols`).
+`adopt_blank` re-checks it for the one case a POST cannot see — a blanking
+stored against a geometry the boot then fell back from. The boot log is
+unchanged.
+
+On the web side nothing special-cases it, which is the point: the reboot bar has
+always been fed by the DEVICE's `reboot_required`, and that now says `false`. The
+one change is that `panelDriverState()` leaves `blank` out of the
+configured-vs-live comparison — `live.blank` legitimately lags the POST reply by
+a frame, and comparing it would print "reboot to apply" under the only control
+that does not need one.
+
+**Where.** `crates/luxel-core/src/layout.rs` (`Chip::latch_clocks`,
+`PanelDriver::boot_differs`, `reboot_required`),
+`firmware/src/hub75.rs` (`WANT_BLANK`, `LIVE_COLS`, `want_blank`,
+`blank_would_darken`, `Hub75Output::{control,fmt_gen,adopt_blank}`,
+`DynFb::{fmt_gen,refmt}`, `compose_into`), `firmware/src/layout.rs`
+(the POST-time refusal + `panel_line_no`), `web/src/lib/panelDriver.ts`
+(`scanOptions`/`scanWire`/`scanShown`, `panelModuleLine` replacing
+`panelStatusLine`, the `blank`-free comparison),
+`web/src/lib/settingsCaps.ts`, `web/src/lib/apiErrors.ts`,
+`web/src/settings/PanelModuleCard.svelte` (was `PanelDriverCard`),
+`LayoutCard.svelte`, `pages/Settings.svelte`, `settings/cards.css`
+(`.disclist.inline`), plus docs/api.md, docs/boards.md,
+docs/web-architecture.md, docs/UNTESTED.md, docs/tools.md and
+`web/tools/mockdiff.map.json` (the S3 frame's `layout-sel` reads the shared
+select metrics off `layout-start` now — `layout-scan` is inside a collapsed
+disclosure and not mounted).
+
+**Tests and sizes.** `luxel-core` 326 (`layout` 78), `luxel-hub75` 47, `luxel-cli` green;
+web 245 (`npm test`), svelte-check 0, `node tools/e2e.mjs` and
+`node tools/device-e2e.mjs` green — the panel section now asserts the scan
+options verbatim, that the card carries no bare `layout-scan` row, that the
+disclosure is inside `sect-layout` and not in `advanced`, and that a blanking
+change posts the whole `panel` line while leaving "the panel module" OFF the
+reboot bar where a bit-plane change puts it on. `board-seengreat-hub75`
+1,162,816 → **1,163,728 B** (+912; 37.00 % of its 3 MiB slot),
+`+hub75-spare-plane` 1,166,912 → **1,167,744 B** (+832); `.stack` 31,636 →
+**31,612 B** (spare-plane 31,468 → **31,428**), largest frame unchanged at
+picoserve's 10,512 B, `tools/stack-check.sh` green on both. Both baselines are
+master `f57f4d2` built in a throwaway worktree with the same creds and
+toolchain, not the numbers quoted in the entry below (which predate the sprite
+merge).
+
+**Not on a panel.** The live blanking is the one thing no harness can see — a
+control-bit change is invisible to every counter the device has and leaves the
+composed frame byte-identical — so it is an eyeball check on the SM16208SF
+tiles: docs/UNTESTED.md, and Gitea #765's list.
+
 ## 2026-09-26 — sprites are a first-class record; the sprite editor redesigned (#740 · #741)
 
 The last two items of Jeremy's #729 review, and the biggest. On 2026-09-24 he

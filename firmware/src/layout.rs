@@ -27,6 +27,16 @@
 //! whether it exists at all, its DATA pad, and the SPI clock a further
 //! output's peripheral was configured for. A POST that changes one of those
 //! answers `"reboot_required":true` (Gitea #550).
+//!
+//! The `panel` line is three-quarters boot-built too — `planes` sizes the DMA
+//! framebuffer, `clock_mhz` is the LCD_CAM's and `chip` is a register init on
+//! the raw pins — but **`blank` applies live** (Gitea #778): it is control bits
+//! in the framebuffer words, which the packer never writes, so this module
+//! hands the value to the output task (`hub75::want_blank`) and the next frame
+//! re-formats the buffer it composes into. That is also why the value is
+//! validated HERE against the running row block: a blanking wide enough to
+//! swallow the OE window is a legal line that would black the panel out, and
+//! nothing reboots to catch it.
 
 use alloc::string::String;
 use core::cell::RefCell;
@@ -330,6 +340,27 @@ pub fn set_from_wire(body: &str) -> Result<Applied, String> {
             data_pin = Some(o.pin);
         }
     }
+    // Latch blanking applies LIVE on a panel board (#778), so it is judged
+    // against the RUNNING row block here rather than trusted until a boot
+    // re-checks it: a blanking that swallows the whole OE window is a legal
+    // `panel` line that would simply black the panel out, and the boot-time
+    // `template_lights` check cannot save a device that never reboots.
+    #[cfg(feature = "hub75")]
+    if edit.driver_set {
+        if let Some((latch, cols)) = crate::hub75::blank_would_darken(edit.layout.driver.blank) {
+            // the same `{"ok":false,"error":…,"line":N}` shape the core writes,
+            // with numbers in the message the core's `&'static str` cannot hold
+            return Err(alloc::format!(
+                "{{\"ok\":false,\"error\":\"panel: blank {} + {} latch clocks leave no lit clock \
+                 in a {}-word row block\",\"line\":{}}}",
+                edit.layout.driver.blank,
+                latch,
+                cols,
+                panel_line_no(body),
+            ));
+        }
+        crate::hub75::want_blank(edit.layout.driver.blank);
+    }
     // A `proj` line is the RUNNING pattern's override and outranks the
     // defaults in the same body; without one, a changed default is itself
     // what the next frame installs (#598).
@@ -349,6 +380,17 @@ pub fn set_from_wire(body: &str) -> Result<Applied, String> {
         proto,
         persisted,
     })
+}
+
+/// The 1-based line the `panel` verb is on, numbered exactly as
+/// `luxel_core::layout::parse` numbers its own errors (raw lines, blanks
+/// included). 1 when there is none — the refusal above only runs on a body
+/// that carried one.
+#[cfg(feature = "hub75")]
+fn panel_line_no(body: &str) -> u32 {
+    body.lines()
+        .position(|l| l.trim().split_whitespace().next() == Some("panel"))
+        .map_or(1, |i| i as u32 + 1)
 }
 
 /// `{"ok":true,"reboot_required":B,…}` — the POST answer IS the GET body,

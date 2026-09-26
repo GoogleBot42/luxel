@@ -13,19 +13,12 @@
   import { createEventDispatcher, onDestroy } from "svelte";
   import { offsetLabel, psramLine, settingsVisibility, uiLayoutKind } from "../lib/settingsCaps";
   import {
-    driverWire,
-    panelDriverState,
-    panelGeometryOf,
-    panelStatusLine,
-  } from "../lib/panelDriver";
-  import {
     applyLayout,
     clockStatus,
     device,
     deviceCaps,
     deviceLabel,
     deviceLayoutWire,
-    deviceRescanHz,
     devicePsramFree,
     devicePsramTotal,
     deviceStore,
@@ -52,7 +45,6 @@
   import MqttCard from "../settings/MqttCard.svelte";
   import NetworkInputCard from "../settings/NetworkInputCard.svelte";
   import OutputCard from "../settings/OutputCard.svelte";
-  import PanelDriverCard from "../settings/PanelDriverCard.svelte";
   import ProjectionBlock from "../settings/ProjectionBlock.svelte";
   import Section from "../settings/Section.svelte";
   import StorageCard from "../settings/StorageCard.svelte";
@@ -194,17 +186,6 @@
     .filter(Boolean)
     .join(" · ");
 
-  // The collapsed Panel driver row states the CONFIGURED clock and bit depth
-  // beside the measured rescan — the device's own stored values since Gitea
-  // #401/#525, this build's constants only as the fallback for firmware that
-  // does not carry them. It also says when the two readings cannot agree
-  // (`reboot to apply`, `not applied`, `output off`), because a row nobody
-  // opens is the only place that fact would otherwise not appear.
-  $: panelLine = panelStatusLine(
-    $deviceLayoutWire,
-    $deviceRescanHz,
-    panelDriverState(driverWire($deviceLayoutWire), panelGeometryOf($deviceLayoutWire)),
-  );
 </script>
 
 <div class="settings-tab" data-role="settings-panel" hidden={!active}>
@@ -261,11 +242,10 @@
         />
       </Disclosure>
 
-      {#if vis.panelDriver}
-        <Disclosure title="Panel driver" status={panelLine} role="adv-panel">
-          <PanelDriverCard />
-        </Disclosure>
-      {/if}
+      <!-- Panel driver was HERE until 2026-09-26 (Gitea #778). It is the
+           `Panel module` disclosure inside the LED layout section now —
+           Jeremy: "The panel driver section doesn't belong in Advanced. That
+           dropdown belongs closer or in the LED layout section." -->
 
       <Disclosure title="Clock &amp; time zone" status={clockLine} role="adv-clock">
         <ClockCard />

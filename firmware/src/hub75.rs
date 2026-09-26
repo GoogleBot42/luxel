@@ -89,7 +89,7 @@
 
 use core::alloc::Layout as AllocLayout;
 use core::cell::Cell;
-use core::sync::atomic::{AtomicU16, Ordering};
+use core::sync::atomic::{AtomicU16, AtomicU8, Ordering};
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
@@ -137,6 +137,33 @@ static LIVE: BlockingMutex<CriticalSectionRawMutex, Cell<Option<LiveDriver>>> =
 /// critical section there would be paid 100+ times a second for a value that
 /// never changes after boot. 0 = no panel output.
 static LIVE_SCAN: AtomicU16 = AtomicU16::new(0);
+
+/// The live framebuffer's row block in bus words — [`Geometry::cols`] of the
+/// running DMA, i.e. `pw · panels · stripes`. 0 = no panel output.
+///
+/// Kept beside [`LIVE_SCAN`] rather than derived from [`LIVE`]'s `w`/`h`/`scan`
+/// because it is what bounds the latch-blanking window, and re-deriving the
+/// stripe count in a second place is exactly how the two would drift.
+static LIVE_COLS: AtomicU16 = AtomicU16::new(0);
+
+/// The latch blanking the stored Layout wants — the ONE panel field that
+/// applies without a reboot (Gitea #778).
+///
+/// Written by `POST /api/layout` (`crate::layout::set_from_wire`) and read by
+/// [`Hub75Output::write_frame`]. It is not a boot parameter: `blank` is
+/// nothing but control bits in the framebuffer words — the OE window and the
+/// latch tail [`luxel_hub75::format`] writes — and the packer rewrites only
+/// colour bits, so the output task can re-`format` a buffer in place between
+/// frames. The panel it is tuned against (ghosting between address rows) is
+/// the reason: a reboot per attempt makes that knob unusable.
+///
+/// [`BLANK_NONE`] until the driver boots, so a strip board and a pre-boot
+/// POST cost nothing.
+static WANT_BLANK: AtomicU8 = AtomicU8::new(BLANK_NONE);
+
+/// [`WANT_BLANK`]: nothing has asked for a blanking yet. Outside the 0..=8
+/// the parser accepts, so it can never be mistaken for one.
+const BLANK_NONE: u8 = u8::MAX;
 
 /// LCD_CAM pixel-clock rate — the `clock_mhz` setting of the `panel` line.
 ///
@@ -241,6 +268,12 @@ impl Drop for Block {
 pub struct DynFb {
     g: Geometry,
     words: *mut u16,
+    /// Which control template these words carry — [`Hub75Output::fmt_gen`] at
+    /// the last [`luxel_hub75::format`] of this buffer (Gitea #778). A buffer
+    /// whose generation is behind the driver's is re-formatted before the
+    /// packer writes into it, which is how a latch-blanking change reaches
+    /// both swap buffers without a reboot.
+    fmt_gen: u32,
 }
 
 // SAFETY: the pointer addresses leaked 'static DMA memory that only the
@@ -275,7 +308,10 @@ impl DynFb {
     fn alloc(g: Geometry, c: Control) -> Option<(Block, &'static mut DynFb)> {
         let block = Block::zeroed(Self::buffer_layout(g)?)?;
         let words = Self::format_words(block.ptr, g, c);
-        Some((block, alloc::boxed::Box::leak(alloc::boxed::Box::new(DynFb { g, words }))))
+        Some((
+            block,
+            alloc::boxed::Box::leak(alloc::boxed::Box::new(DynFb { g, words, fmt_gen: 0 })),
+        ))
     }
 
     /// Allocate a framebuffer through someone else's allocator and leak it —
@@ -314,6 +350,22 @@ impl DynFb {
         // SAFETY: the allocation is `g.words()` contiguous `u16`s and `self`
         // is its only owner.
         unsafe { core::slice::from_raw_parts_mut(self.words, self.g.words()) }
+    }
+
+    /// Bring this buffer's control template up to `gen` (Gitea #778).
+    ///
+    /// Re-`format` CLEARS every colour bit and rewrites every control bit; the
+    /// packer then writes every colour bit of every entry and touches no
+    /// control bit (`compose_into`'s contract, asserted in `luxel-hub75`). So
+    /// format-then-pack, in that order, leaves the frame exact — which is why
+    /// this runs here rather than after composing.
+    fn refmt(&mut self, c: Control, gen: u32) {
+        if self.fmt_gen == gen {
+            return;
+        }
+        let g = self.g;
+        luxel_hub75::format(self.fb_words(), g, c);
+        self.fmt_gen = gen;
     }
 }
 
@@ -544,6 +596,37 @@ pub fn live_driver() -> Option<LiveDriver> {
     LIVE.lock(Cell::get)
 }
 
+/// Ask the output task to apply a latch blanking on its next frame
+/// (Gitea #778) — the `panel` line's one live field. Idempotent: the task
+/// compares it with the control template it is running and does nothing when
+/// they agree, so `POST /api/layout` may call this on every body.
+///
+/// A no-op before the driver has booted (nothing to re-format yet): the boot
+/// builds its template from the stored Layout anyway.
+pub fn want_blank(blank: u8) {
+    if WANT_BLANK.load(Ordering::Relaxed) != BLANK_NONE {
+        WANT_BLANK.store(blank, Ordering::Relaxed);
+    }
+}
+
+/// Would `blank` leave the LIVE framebuffer's row block with no OE-active
+/// clock at all — i.e. a legal `panel` line that cannot light the panel?
+///
+/// [`luxel_hub75::format`] puts OE on over `blank .. cols - latch - blank`,
+/// so the window is empty exactly when `2·blank + latch >= cols`. That is the
+/// same question [`template_lights`] asks at boot; this is the POST-time form,
+/// against the geometry that is RUNNING, so a live blanking change is refused
+/// with numbers instead of blacking the panel out.
+///
+/// `Some((latch_clocks, cols))` = it would go dark, and those are the numbers
+/// to name. `None` = it fits, or there is no panel output to fit it into.
+pub fn blank_would_darken(blank: u8) -> Option<(u8, u16)> {
+    let live = live_driver()?;
+    let cols = LIVE_COLS.load(Ordering::Relaxed);
+    let latch = live.chip.latch_clocks();
+    (2 * u32::from(blank) + u32::from(latch) >= u32::from(cols)).then_some((latch, cols))
+}
+
 /// The live scan depth for the power model (`PowerModel::Hub75`), or the
 /// board default's while there is no panel output — a HUB75 board's power
 /// model must describe a time-multiplexed panel either way.
@@ -650,6 +733,14 @@ pub struct Hub75Output {
     hub75: Option<Hub75<Blocking, DmaFb>>,
     /// The framebuffer shape that booted — what the packer is called with.
     g: Geometry,
+    /// The control template the buffers carry: the OE window and the latch
+    /// tail. Its `latch_clocks` is the booted chip's and never moves; its
+    /// `blank` follows [`WANT_BLANK`] (Gitea #778).
+    control: Control,
+    /// Bumped whenever `control` changes. A buffer whose [`DynFb::fmt_gen`] is
+    /// behind this is re-formatted before the packer writes into it, so both
+    /// swap buffers catch up on their own next turn.
+    fmt_gen: u32,
     /// The compose target while no swap is in flight (spare-plane mode: the
     /// view whose MSB block is idle).
     back: Option<&'static mut DmaFb>,
@@ -736,6 +827,8 @@ impl Hub75Output {
         Self {
             hub75: None,
             g: Geometry::new(0, 0, 0),
+            control: Control { blank: 0, latch_clocks: 0 },
+            fmt_gen: 0,
             back: None,
             pending: None,
             last_shown_rescan: 0,
@@ -846,7 +939,8 @@ impl Hub75Output {
             let (words, place) =
                 (DynFb::alloc_words_leaked(g, c, |l| Block::zeroed(l).map(Block::leak)), "heap");
             let words = words.ok_or("staging framebuffer alloc failed")?;
-            let staging = alloc::boxed::Box::leak(alloc::boxed::Box::new(DynFb { g, words }));
+            let staging =
+                alloc::boxed::Box::leak(alloc::boxed::Box::new(DynFb { g, words, fmt_gen: 0 }));
             println!(
                 "hub75: spare-plane swap — framebuffer {} B + spare MSB plane {} B internal, \
                  staging {} B in the {}",
@@ -934,6 +1028,12 @@ impl Hub75Output {
                 };
                 LIVE.lock(|c| c.set(Some(live)));
                 LIVE_SCAN.store(g.rows as u16, Ordering::Relaxed);
+                LIVE_COLS.store(g.cols as u16, Ordering::Relaxed);
+                // The blanking the output task is now running. Arming this
+                // also turns `want_blank` from a no-op into a request, so a
+                // POST before the panel exists cannot ask for a template the
+                // boot has not built yet (Gitea #778).
+                WANT_BLANK.store(d.blank, Ordering::Relaxed);
                 // Past the point of no return: the driver owns the
                 // descriptors and the DMA is running out of `front`.
                 let _ = desc_block.leak();
@@ -944,6 +1044,8 @@ impl Hub75Output {
                 Ok(Self {
                     hub75: Some(hub75),
                     g,
+                    control: c,
+                    fmt_gen: 0,
                     back: Some(back),
                     pending: None,
                     last_shown_rescan: 0,
@@ -988,6 +1090,52 @@ impl Hub75Output {
 }
 
 impl Hub75Output {
+    /// Pick up a latch-blanking change (Gitea #778) — the one `panel` field
+    /// that does not wait for a boot.
+    ///
+    /// `blank` is control bits only, so applying it is: bump the generation
+    /// and let each buffer re-`format` itself on its next compose
+    /// ([`DynFb::refmt`]). The two swap buffers therefore catch up on their
+    /// own next turns, one frame apart, and each is re-formatted while it is
+    /// the compose target — never while the DMA is reading it.
+    ///
+    /// **Spare-plane mode** needs nothing more either: the buffer re-formatted
+    /// is the STAGING one, and `flush` copies whole planes out of it —
+    /// control bits included, since a plane's bytes are its entry words. The
+    /// flip is armed for the view whose plane 0 that copy also rewrites, so
+    /// the view the next pass reads is wholly on the new template. The pass
+    /// still running reads its old plane 0 against new planes 1.., which is
+    /// one rescan of mixed OE width and exactly the transient the mode
+    /// already accepts for colour bits.
+    ///
+    /// Refuses a value that would leave the running row block with no
+    /// OE-active clock — the panel would go black — and puts the atomic back
+    /// so it is not re-judged every frame. `POST /api/layout` already refuses
+    /// that with the numbers ([`blank_would_darken`]); this is the guard for
+    /// the one case the POST cannot see, a blanking stored against a geometry
+    /// the boot then fell back from.
+    fn adopt_blank(&mut self) {
+        let want = WANT_BLANK.load(Ordering::Relaxed);
+        if want == BLANK_NONE || want == self.control.blank {
+            return;
+        }
+        if 2 * u32::from(want) + u32::from(self.control.latch_clocks) >= self.g.cols as u32 {
+            WANT_BLANK.store(self.control.blank, Ordering::Relaxed);
+            return;
+        }
+        self.control.blank = want;
+        self.fmt_gen = self.fmt_gen.wrapping_add(1);
+        // `driver.live.blank` is the console's "what is on the panel" reading,
+        // so it moves when the TEMPLATE does — a frame at most after the POST
+        // was answered, never eagerly at the POST.
+        LIVE.lock(|c| {
+            if let Some(mut l) = c.get() {
+                l.blank = want;
+                c.set(Some(l));
+            }
+        });
+    }
+
     /// Replay the driver's log of framebuffers the panel actually scanned out,
     /// translate it back into frame sequence numbers, and count skips and
     /// repeats (Gitea #395).
@@ -1079,6 +1227,9 @@ impl OutputDriver for Hub75Output {
     }
 
     fn write_frame(&mut self, rgb: &[[u8; 3]], brightness5: u8) -> bool {
+        // A latch-blanking change the API stored since the last frame: control
+        // bits only, so it lands here rather than at the next boot (#778).
+        self.adopt_blank();
         // Audit which frames the panel actually scanned out since last time.
         // Copy the log out first so the driver borrow ends before the &mut
         // self call (Gitea #395).
@@ -1144,6 +1295,8 @@ impl OutputDriver for Hub75Output {
                 &mut self.tables_b5,
                 &mut self.scratch,
                 self.g,
+                self.control,
+                self.fmt_gen,
                 self.remap,
                 staging,
                 rgb,
@@ -1180,6 +1333,8 @@ impl OutputDriver for Hub75Output {
                 &mut self.tables_b5,
                 &mut self.scratch,
                 self.g,
+                self.control,
+                self.fmt_gen,
                 self.remap,
                 back,
                 rgb,
@@ -1356,6 +1511,8 @@ fn compose_into(
     tables_b5: &mut u8,
     scratch: &mut Scratch,
     g: Geometry,
+    control: Control,
+    fmt_gen: u32,
     remap: Option<&'static [u16]>,
     target: &mut DynFb,
     rgb: &[[u8; 3]],
@@ -1366,6 +1523,10 @@ fn compose_into(
         t.build(&brightness_lut(brightness5));
         *tables_b5 = brightness5;
     }
+    // A control template this buffer has not been written with yet (a latch
+    // blanking change, #778). Re-format FIRST: it clears every colour bit,
+    // and the pack below writes every one of them back.
+    target.refmt(control, fmt_gen);
     let dst = target.fb_words();
     match remap {
         None => luxel_hub75::pack(dst, g, rgb, t, scratch),

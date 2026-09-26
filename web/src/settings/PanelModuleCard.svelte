@@ -1,25 +1,37 @@
 <script lang="ts">
-  // Advanced › Panel driver (`caps.panel`) — what the HUB75 refresh rate is
-  // spent on, and what it actually measures out at.
+  // LED layout › Panel module — the collapsed disclosure's body
+  // (`caps.panel`): everything printed on the back of a HUB75 module, plus
+  // what the refresh rate is spent on.
   //
   // Since Gitea #401/#525 these are SETTINGS: `/api/layout` reports a
   // `driver` block and takes one `panel <planes> <clock_mhz> <chip> <blank>`
-  // line back, which the firmware stores and applies at the next boot. So
-  // every field here writes through the same `applyLayout` path the LED
-  // layout form uses, adopts the reply as the new state, and a
-  // `reboot_required` reply goes to the sticky reboot bar rather than to a
-  // line of dim text (`noteRebootPending`, #538).
+  // line back, which the firmware stores and applies — at the next boot for
+  // three of the four, and on its NEXT FRAME for latch blanking (#778). So
+  // every field here writes through the same `applyLayout` path the LED layout
+  // form uses, adopts the reply as the new state, and lets the DEVICE's
+  // `reboot_required` decide whether the sticky reboot bar is raised
+  // (`noteRebootPending`, #538) — nothing here assumes.
   //
-  // Firmware older than that reports no `driver` block. The card used to draw
+  // It lives in the LED layout card rather than in Advanced (Jeremy,
+  // 2026-09-26): "It's not something people can optionally configure, but once
+  // it is configured they probably won't touch it again, so being collapsed
+  // still makes sense." The SCAN RATE is part of it for the same reason — it
+  // is a property of the module, printed on its back next to everything else
+  // here — even though it rides the `matrix` line, which is the LED layout
+  // card's to write. Hence the `scan` prop and the `scan` event: one component
+  // owns the matrix line, and it is not this one.
+  //
+  // Firmware older than #525 reports no `driver` block. The card used to draw
   // this build's constants as a read-only plaque there; it does NOT any more
-  // (Gitea #771). The row is only mounted on a panel board (`caps.panel`), so
-  // a missing block means the console is newer than the firmware — and on
-  // 2026-09-26 that state was reached by an unwanted OTA ROLLBACK, where a
-  // plaque of plausible numbers made the settings look fixed instead of gone.
-  // It states the mismatch and points at Firmware & recovery.
+  // (Gitea #771). The disclosure is only mounted on a panel board
+  // (`caps.panel`), so a missing block means the console is newer than the
+  // firmware — and on 2026-09-26 that state was reached by an unwanted OTA
+  // ROLLBACK, where a plaque of plausible numbers made the settings look fixed
+  // instead of gone. It states the mismatch and points at Firmware & recovery.
   //
   // The decision between live / reboot-to-apply / did-not-fit / output-off is
   // `lib/panelDriver.ts`, unit tested.
+  import { createEventDispatcher } from "svelte";
   import {
     BLANK_MAX,
     BLANK_MIN,
@@ -33,9 +45,11 @@
     panelDriverState,
     panelGeometryOf,
     panelLine,
-    panelRefreshHz,
     phrase,
     PLANE_CHOICES,
+    scanOptions,
+    scanShown,
+    scanWire,
     snapClock,
     type PanelDriverConfig,
   } from "../lib/panelDriver";
@@ -43,10 +57,16 @@
     applyLayout,
     deviceLayoutWire,
     deviceOutFps,
-    deviceRescanHz,
     noteRebootPending,
   } from "../stores/device";
   import { clearApiError, note, reportApiError } from "../stores/notify";
+
+  /** The configured panel height — what the scan ratios are filtered by. */
+  export let ph = 0;
+  /** The stored scan divisor; `0` = the usual ratio for `ph`. */
+  export let scan = 0;
+
+  const dispatch = createEventDispatcher<{ scan: number }>();
 
   $: wire = $deviceLayoutWire;
   $: driver = driverWire(wire);
@@ -59,18 +79,17 @@
    *  yet (nothing to compare, the driver values still are). */
   $: geom = panelGeometryOf(wire);
   $: state = panelDriverState(driver, geom);
-  /** The estimate for the CONFIGURED values — computed here whenever the
-   *  device reports its driver, so it tracks the fields above rather than the
-   *  last reply's number (`lib/panelDriver.ts`). */
-  $: estHz = geom
-    ? panelRefreshHz(wire, { pw: geom.pw, ph: geom.ph, panels: geom.chain, scan: geom.scan })
-    : 0;
   /** The chips this firmware can init, in its own order — never a list here. */
   $: chips = driver?.chips ?? [];
   /** Same for the pixel clock: a fixed dropdown over the device's own list
    *  (#771), plus whatever it currently holds so a value an older firmware
    *  accepted is visible rather than silently re-read. */
   $: clocks = clockChoices(driver);
+  /** The scan ratios a `ph`-tall module can run at, and which of them is on.
+   *  Never "board default": HUB75 is write-only, so the firmware cannot ask a
+   *  module anything — `0` means the usual ratio, `ph / 2` (#778). */
+  $: scans = scanOptions(ph, scan);
+  $: scanNow = scanShown(ph, scan);
   $: fbKb = driver?.live ? (driver.live.fb_bytes / 1024).toFixed(1) : "";
 
   /** The device's refusal, in the card, beside the control it is about.
@@ -81,7 +100,12 @@
   let err = "";
 
   /** One POST per user action, the reply IS the new state — the LED layout
-   *  form's rule (docs/api.md), and the same reboot-bar handling. */
+   *  form's rule (docs/api.md), and the same reboot-bar handling.
+   *
+   *  Whether a reboot is pending is the DEVICE's answer, never this form's:
+   *  latch blanking now applies live (#778) and the other three do not, and
+   *  `reboot_required` in the reply is the one place that distinction is
+   *  authoritative. */
   async function set(patch: Partial<PanelDriverConfig>): Promise<void> {
     const next = { ...cfg, ...patch };
     const r = await applyLayout(panelLine(next));
@@ -96,28 +120,49 @@
     err = "";
     clearApiError();
     note("layout", "saved", 2500);
-    if (r.reboot_required) noteRebootPending("the panel driver");
+    if (r.reboot_required) noteRebootPending("the panel module");
   }
 </script>
 
 {#if driver}
   <!-- the editable form: the device carries the `panel` line -->
-  <div class="field">
-    <span class="flabel">Bit planes</span>
-    <div class="fctl row g10">
+
+  <!-- The scan rate is the module's, so it leads: it is the number printed on
+       the back (`1/32S`), and getting it wrong is the most visible failure of
+       the lot. It rides the `matrix` line, so the LED layout card writes it. -->
+  <div class="field top">
+    <span class="flabel">Scan rate</span>
+    <div class="fctl">
       <select
-        class="w96"
-        data-role="panel-planes"
-        value={String(cfg.planes)}
-        on:change={(e) => void set({ planes: Number(e.currentTarget.value) })}
+        class="scansel"
+        data-role="layout-scan"
+        value={String(scanNow)}
+        on:change={(e) => dispatch("scan", scanWire(ph, Number(e.currentTarget.value)))}
       >
-        {#each PLANE_CHOICES as p}
-          <option value={String(p)}>{p}</option>
+        {#each scans as s}
+          <option value={String(s.scan)}>{s.label}</option>
         {/each}
       </select>
-      <span class="dim hint">
-        BCM bit depth — the refresh halves per extra plane and each one costs a framebuffer
-      </span>
+      <p class="dim hint under">
+        Printed on the module's back as 1/32S, 1/16S…; wrong = bands of the image in the wrong rows.
+      </p>
+    </div>
+  </div>
+
+  <div class="field">
+    <span class="flabel">Driver chip</span>
+    <div class="fctl row g10">
+      <select
+        class="chipsel"
+        data-role="panel-chip"
+        value={cfg.chip}
+        on:change={(e) => void set({ chip: e.currentTarget.value })}
+      >
+        {#each chips as c}
+          <option value={c}>{chipLabel(c)}</option>
+        {/each}
+      </select>
+      <span class="dim hint">a register-init chip stays dark until its sequence is sent</span>
     </div>
   </div>
 
@@ -147,48 +192,56 @@
     </div>
   </div>
 
-  <div class="field">
-    <span class="flabel">Driver chip</span>
-    <div class="fctl row g10">
-      <select
-        class="chipsel"
-        data-role="panel-chip"
-        value={cfg.chip}
-        on:change={(e) => void set({ chip: e.currentTarget.value })}
-      >
-        {#each chips as c}
-          <option value={c}>{chipLabel(c)}</option>
-        {/each}
-      </select>
-      <span class="dim hint">a register-init chip stays dark until its sequence is sent</span>
+  <div class="field top">
+    <span class="flabel">Bit planes</span>
+    <div class="fctl">
+      <div class="row g10">
+        <select
+          class="w96"
+          data-role="panel-planes"
+          value={String(cfg.planes)}
+          on:change={(e) => void set({ planes: Number(e.currentTarget.value) })}
+        >
+          {#each PLANE_CHOICES as p}
+            <option value={String(p)}>{p}</option>
+          {/each}
+        </select>
+        <span class="dim hint">BCM bit depth — colour steps per channel</span>
+      </div>
+      <p class="dim hint under">
+        The refresh halves per extra plane, and every plane is in each framebuffer — so fewer is
+        both faster and less internal RAM.
+      </p>
     </div>
   </div>
 
-  <div class="field">
+  <div class="field top">
     <span class="flabel">Latch blanking</span>
-    <div class="fctl row g10">
-      <input
-        class="inp num"
-        data-role="panel-blank"
-        type="number"
-        min={BLANK_MIN}
-        max={BLANK_MAX}
-        value={cfg.blank}
-        on:change={(e) => void set({ blank: clampBlank(Number(e.currentTarget.value)) })}
-      />
-      <span class="dim hint">latch blanking clocks — raise it if you see ghosting</span>
+    <div class="fctl">
+      <div class="row g10">
+        <input
+          class="inp num"
+          data-role="panel-blank"
+          type="number"
+          min={BLANK_MIN}
+          max={BLANK_MAX}
+          value={cfg.blank}
+          on:change={(e) => void set({ blank: clampBlank(Number(e.currentTarget.value)) })}
+        />
+        <span class="dim hint">clocks with the LEDs off around the latch</span>
+      </div>
+      <p class="dim hint under">
+        Applies straight away, no reboot — raise it while watching the panel until the ghosting
+        between rows goes.
+      </p>
     </div>
   </div>
 
-  <div class="refresh" class:amber={state.status !== "live"} data-role="panel-state-row">
-    <span class="dot"></span>
-    <span>Rescan</span>
-    <span class="hz mono" data-role="panel-rescan">
-      {$deviceRescanHz > 0 ? `${$deviceRescanHz} Hz measured` : "not measured yet"}
-    </span>
-    <span class="dim mono" data-role="panel-est">· {estHz.toFixed(0)} Hz estimated</span>
-  </div>
-
+  <!-- No rescan readout here: the LED layout card's `Estimated refresh … Hz
+       measured now` row sits four lines below this disclosure and is the SAME
+       two numbers over the same inputs (`panelRefreshHz` either way). Printing
+       them twice on one screen was the first thing the move made obvious
+       (Gitea #778). What stays is the verdict, which nothing else says. -->
   <p class="hint" class:dim={state.status === "live"} class:warn={state.status !== "live"}
     data-role="panel-state" data-state={state.status}>
     {#if state.status === "disabled"}
@@ -215,8 +268,8 @@
     <p class="warn hint" data-role="panel-error">{err}</p>
   {/if}
 {:else}
-  <!-- The row is mounted on `caps.panel` boards only, so no `driver` block
-       means the firmware is older than this console — say that, and offer
+  <!-- The disclosure is mounted on `caps.panel` boards only, so no `driver`
+       block means the firmware is older than this console — say that, and offer
        nothing. A read-only plaque of plausible numbers is how a silent OTA
        rollback read as "the settings are fine" (Gitea #771). -->
   <p class="warn hint" data-role="panel-state" data-state="unknown">
@@ -226,36 +279,6 @@
 {/if}
 
 <style>
-  /* the LED layout card's refresh strip, to the same numbers — this row
-     answers the same question (mockup S3 `.refresh`) */
-  .refresh {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-    margin-top: 8px;
-  }
-
-  .refresh .dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--ok);
-    flex: none;
-  }
-
-  .refresh.amber .dot {
-    background: var(--warn);
-  }
-
-  .refresh .hz {
-    font-size: 15px;
-  }
-
-  .refresh.amber .hz {
-    color: var(--warn);
-  }
-
   .warn {
     color: #e5bd74;
   }
@@ -275,6 +298,16 @@
      clearance as `.chipsel` */
   .clocksel {
     min-width: 96px;
+    max-width: 100%;
+    padding-right: 26px;
+  }
+
+  /* `1/32 (usual for 64 rows)` is the widest option and the only one that long,
+     so this sizes to it off a w170 floor — same chevron clearance again. A
+     bare `appearance:none` select still sizes to its WIDEST option, never to
+     the current value (.claude/rules/web.md). */
+  .scansel {
+    min-width: 170px;
     max-width: 100%;
     padding-right: 26px;
   }

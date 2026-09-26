@@ -93,10 +93,9 @@ test("strip board: the kind picker offers all three, strip fields are real", () 
   assert.equal(v.stripFields, true);
   // a strip has no panel anything
   assert.equal(v.panelSize, false);
-  assert.equal(v.panelScan, false);
+  assert.equal(v.panelModule, false);
   assert.equal(v.arrangement, false);
   assert.equal(v.estimatedRefresh, false);
-  assert.equal(v.panelDriver, false);
   assert.equal(v.outputsTable, false);
 });
 
@@ -106,16 +105,15 @@ test("HUB75 panel: NO kind picker — the board offers no choice (§5.7)", () =>
   assert.deepEqual(v.kindOptions, ["matrix"]);
   assert.equal(v.stripFields, false, "no LED type / colour order / data pin on a panel");
   assert.equal(v.panelSize, true);
-  assert.equal(v.panelScan, true);
+  assert.equal(v.panelModule, true, "the Panel module disclosure and the `Panel` size label");
   assert.equal(v.estimatedRefresh, true);
-  assert.equal(v.panelDriver, true);
 });
 
 test("matrix built from strips: panel size, pixel wiring, no scan divisor", () => {
   const v = vis(MATRIX_FROM_STRIPS);
   assert.equal(v.stripFields, true);
   assert.equal(v.panelSize, true);
-  assert.equal(v.panelScan, false, "scan is a HUB75 field");
+  assert.equal(v.panelModule, false, "the scan rate and the panel driver are HUB75 fields");
   assert.equal(v.estimatedRefresh, false, "no panel driver to estimate");
   assert.equal(v.wiringRow, true);
   assert.equal(v.wiringIsPixels, false, "4 tiles — the row describes the CHAIN");
@@ -175,7 +173,6 @@ test("firmware older than caps falls back conservatively, never to a board name"
   assert.equal(v.powerCap, true);
   assert.equal(v.blurGlow, true);
   assert.equal(v.panel ?? false, false);
-  assert.equal(v.panelDriver, false);
   assert.equal(v.psram, false);
   assert.equal(v.ota, false, "a field that needs newer firmware reads false");
   assert.equal(v.outputsTable, false);
@@ -220,12 +217,15 @@ test("PANEL_DRIVER_DEFAULT is the FALLBACK, not the model (Gitea #401/#525)", ()
   assert.equal(estimatedRefreshHz(panel), estimatedRefreshHz(panel, PANEL_DRIVER_DEFAULT));
 });
 
-test("the Panel driver ROW is caps-gated, whatever the driver block says", () => {
+test("the Panel module ROW is caps-gated, whatever the driver block says", () => {
   // The disclosure exists because the board has a panel (`caps.panel`); what
-  // is inside it — an editable form or this build's constants — is the
-  // `driver` block's business, not the visibility rule's (§5.7).
-  assert.equal(vis(PANEL).panelDriver, true);
-  assert.equal(vis(MATRIX_FROM_STRIPS).panelDriver, false, "a matrix of strips has no HUB75 driver");
+  // is inside it — an editable form or a firmware-skew sentence — is the
+  // `driver` block's business, not the visibility rule's (§5.7). Since Gitea
+  // #778 it is a row of the LED layout card rather than of Advanced, and the
+  // same flag decides whether the size row reads `Panel` or `Size`.
+  assert.equal(vis(PANEL).panelModule, true);
+  assert.equal(vis(MATRIX_FROM_STRIPS).panelModule, false, "a matrix of strips has no HUB75 driver");
+  assert.equal(vis(STRIP).panelModule, false);
 });
 
 // ---- the chain order the arrangement SVG draws ----

@@ -1,4 +1,12 @@
-// Advanced › Panel driver — the pure half (Gitea #401/#525).
+// LED layout › Panel module — the pure half (Gitea #401/#525/#778).
+//
+// The disclosure is INSIDE the LED layout card, not in Advanced (Jeremy,
+// 2026-09-26): "The panel driver section doesn't belong in Advanced. That
+// dropdown belongs closer or in the LED layout section. It's not something
+// people can optionally configure, but once it is configured they probably
+// won't touch it again, so being collapsed still makes sense." So it is one
+// collapsed row under the arrangement, carrying the scan rate as well as the
+// four `panel` fields — everything printed on the back of a module.
 //
 // The HUB75 driver's bit depth, pixel clock, chip init sequence and latch
 // blanking are DEVICE SETTINGS now, not this build's constants: `/api/layout`
@@ -60,7 +68,14 @@ export const CLOCK_CHOICES_DEFAULT: readonly number[] = [8, 10, 12, 15, 20, 24, 
 export const CLOCK_CEILING_MHZ = 30;
 
 /** Latch blanking clocks: OE off for N clocks at the start of a row block and
- *  again before the latch word. 1 is the stock template. */
+ *  again before the latch word. 1 is the stock template.
+ *
+ *  The one panel field that applies LIVE (Gitea #778) — it is control bits in
+ *  the framebuffer words, so the firmware re-formats its buffers between
+ *  frames. It is therefore the only one the user tunes by LOOKING at the
+ *  panel, which is why it must not cost a reboot per attempt. Nothing here
+ *  calls `noteRebootPending` for it; the device's `reboot_required` reply says
+ *  `false` and `panelDriverState` leaves it out of the live comparison. */
 export const BLANK_MIN = 0;
 export const BLANK_MAX = 8;
 
@@ -207,6 +222,76 @@ export function effectiveScan(g: PanelGeometry): number {
   return g.scan > 0 ? Math.round(g.scan) : Math.floor(g.ph / 2);
 }
 
+// ---- the scan rate (Gitea #778) ------------------------------------------
+//
+// The field used to offer `board default` for `scan 0`. Jeremy, 2026-09-26:
+// "Is that even possible for luxel to know?" — it is NOT. HUB75 is a
+// write-only bus: the firmware cannot ask a module anything, and `0` does not
+// mean "ask the board", it means "the usual ratio for this height", `ph / 2`.
+// So the options are the RATIOS THEMSELVES, the way they are printed on the
+// back of a module (`1/32S`), with the usual one for the configured height
+// marked as such. `Standard (1/32 for a 64-tall panel)` was tried and
+// rejected as confusing: short and concrete instead.
+
+/** The scan ratios this form offers, largest first — a fixed candidate set the
+ *  panel height then filters. */
+const SCAN_CANDIDATES: readonly number[] = [32, 16, 8, 4];
+
+/** One entry of the Scan rate select. */
+export interface ScanOption {
+  /** Address rows, i.e. the `N` of `1/N`. */
+  scan: number;
+  /** `1/32`, or `1/32 (usual for 64 rows)` for the `ph / 2` one. */
+  label: string;
+  /** Is this the ratio a `ph`-tall module normally has? */
+  usual: boolean;
+}
+
+/**
+ * The scan ratios a `ph`-tall panel can be told to run at, largest first.
+ *
+ * A HUB75 panel shifts two half-height rows at once, so its full address depth
+ * is `ph / 2`; a shallower `scan` stripes the framebuffer `(ph/2)/scan` ways
+ * and therefore has to DIVIDE it exactly (the firmware refuses anything else —
+ * docs/api.md). So a 64-row module offers 1/32, 1/16, 1/8 and 1/4, and a
+ * 32-row one does not offer 1/32 at all: 32 does not divide 16.
+ *
+ * `cur` is the stored value (`0` = the usual one) and is always included, so a
+ * device holding a ratio this list does not carry still shows it rather than
+ * silently reading as something else.
+ */
+export function scanOptions(ph: number, cur = 0): ScanOption[] {
+  const half = Math.max(1, Math.floor(Math.max(0, Math.round(ph)) / 2));
+  const want = new Set<number>([...SCAN_CANDIDATES, half]);
+  if (cur > 0) want.add(Math.round(cur));
+  return [...want]
+    .filter((s) => s > 0 && s <= half && half % s === 0)
+    .sort((a, b) => b - a)
+    .map((s) => ({
+      scan: s,
+      usual: s === half,
+      label: s === half ? `1/${s} (usual for ${half * 2} rows)` : `1/${s}`,
+    }));
+}
+
+/**
+ * The number to PUT ON THE WIRE for a picked ratio.
+ *
+ * Picking the usual one sends `0`, which is what makes it follow a later
+ * height change instead of pinning the panel to today's number — the same
+ * reason `scan 0` exists on the wire at all. Anything else sends the ratio.
+ */
+export function scanWire(ph: number, picked: number): number {
+  const half = Math.max(1, Math.floor(Math.max(0, Math.round(ph)) / 2));
+  return Math.round(picked) === half ? 0 : Math.round(picked);
+}
+
+/** The scan ratio the select is SHOWING: the stored one, or the usual one for
+ *  this height when nothing is pinned. */
+export function scanShown(ph: number, scan: number): number {
+  return effectiveScan({ pw: 0, ph, chain: 1, scan });
+}
+
 /**
  * What the panel is doing relative to what is stored.
  *
@@ -262,7 +347,11 @@ export function panelDriverState(
   if (driver.planes !== live.planes) changed.push("bit planes");
   if (driver.clock_mhz !== live.clock_mhz) changed.push("the pixel clock");
   if (driver.chip !== live.chip) changed.push("the driver chip");
-  if (driver.blank !== live.blank) changed.push("latch blanking");
+  // `blank` is deliberately NOT compared (Gitea #778): the firmware applies it
+  // on its next frame, so `live.blank` legitimately lags the reply to the POST
+  // that changed it by one frame. Comparing it here would put "reboot to
+  // apply" under the one control that does not need one — and the whole point
+  // of making blanking live is that it is tuned by watching the panel.
   if (geom) {
     const w = Math.max(0, Math.round(geom.pw)) * Math.max(1, Math.round(geom.chain));
     if (live.w !== w || live.h !== Math.round(geom.ph)) changed.push("the panel size");
@@ -280,29 +369,37 @@ export function phrase(list: readonly string[]): string {
 }
 
 /**
- * The Advanced row's collapsed status: `30 MHz · 7 planes · 114 Hz`.
+ * The collapsed Panel module row: `1/32 scan · plain shift register · 20 MHz ·
+ * 7 planes · blanking 1`.
  *
- * The CONFIGURED clock and planes (what the form says), then the measured
- * rescan (what the panel is doing) — and a word when those two cannot agree,
- * because a collapsed row is the only thing a user who never opens it reads.
+ * Everything printed on the back of a module, in that order, from the
+ * CONFIGURED values — and then a word when the configured reading and the
+ * running one cannot agree, because a collapsed row is the only thing a user
+ * who never opens it reads. The refresh rate is NOT in here: the estimated /
+ * measured readout sits immediately under this row in the LED layout card
+ * (Gitea #778 moved it there), so repeating it would say the same number twice.
  */
-export function panelStatusLine(
+export function panelModuleLine(
   wire: LayoutWire | null,
-  rescanHz: number,
-  state: PanelDriverState = panelDriverState(driverWire(wire), null),
+  state: PanelDriverState = panelDriverState(driverWire(wire), panelGeometryOf(wire)),
 ): string {
-  // No `driver` block: the card states a firmware mismatch, so the collapsed
-  // row must not state this build's constants as though they were the
-  // device's — plausible numbers in a row nobody opens is exactly how the
-  // rollback read as "the settings are fine" (Gitea #771).
+  const g = panelGeometryOf(wire);
+  const scan = g ? `1/${effectiveScan(g)} scan` : "";
+  // No `driver` block: the row states a firmware mismatch, and must not state
+  // this build's constants as though they were the device's — plausible
+  // numbers in a row nobody opens is exactly how the #771 rollback read as
+  // "the settings are fine".
   if (state.status === "unknown") {
-    const bits = rescanHz > 0 ? [`${Math.round(rescanHz)} Hz`] : [];
-    bits.push("firmware too old");
-    return bits.join(" · ");
+    return [scan, "firmware too old"].filter(Boolean).join(" · ");
   }
   const d = configuredDriver(wire);
-  const bits = [`${d.clock_mhz} MHz`, `${d.planes} planes`];
-  if (rescanHz > 0) bits.push(`${Math.round(rescanHz)} Hz`);
+  const bits = [
+    scan,
+    chipShort(d.chip),
+    `${d.clock_mhz} MHz`,
+    `${d.planes} planes`,
+    `blanking ${d.blank}`,
+  ].filter(Boolean);
   if (state.status === "disabled") bits.push("output off");
   else if (state.status === "fallback") bits.push("not applied");
   else if (state.status === "pending") bits.push("reboot to apply");

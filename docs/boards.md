@@ -3018,12 +3018,30 @@ Jeremy's new 64×64 tiles are not the FM6124EJ the firmware was tuned for.
 | `planes` | `panel` line | 4..8 | **7** | BCM bit depth; one rescan shifts the chain `2^planes − 1` times |
 | `clock_mhz` | `panel` line | one of 8 · 10 · 12 · 15 · 20 · 24 · 30 | **30** | the LCD_CAM pixel clock — a fixed list, not a range (#771) |
 | `chip` | `panel` line | `shiftreg` · `fm6126a` · `icn2038s` · `dp3246` | **`shiftreg`** | the driver chip's register init, bit-banged on the pins before the DMA starts |
-| `blank` | `panel` line | 0..8 | **1** | clocks with OE off at the start of each row block and again before the latch word |
+| `blank` | `panel` line | 0..8 | **1** | clocks with OE off at the start of each row block and again before the latch word — **applied live** (#778) |
 
 Wire format, JSON (`/api/layout`'s `driver` block, with `live` = what actually
 booted) and the reboot rules are in docs/api.md, "How the panel is driven".
-**Every one of these is reboot-required on a HUB75 board** — including `pw`
-and `ph`, which stay live on a strip-built matrix.
+
+**Which of them are live.** Exactly one: `blank`. Everything else in the table
+is reboot-required on a HUB75 board — including `pw` and `ph`, which stay live
+on a strip-built matrix — because a boot is what allocates the DMA framebuffer
+(`planes`, the arrangement), sets the LCD_CAM clock (`clock_mhz`) and bit-bangs
+the chip's register init (`chip`). `blank` is different in kind: it is control
+bits in the framebuffer words — the OE window and the latch tail
+`luxel_hub75::format` writes — and the packer rewrites only colour bits, so the
+output task re-`format`s each buffer in place between frames and both swap
+buffers catch up on their next turn (`hub75.rs` `adopt_blank` / `DynFb::refmt`,
+Gitea #778). In spare-plane mode the buffer re-formatted is the STAGING one and
+`flush` carries the control bits over with the planes it copies.
+
+That matters because `blank` is the one panel knob you tune by *looking* at the
+panel: it is what the SM16208SF tiles wanted raised, and "one reboot per
+attempt" is not a way to chase ghosting. Validation moves with it — a blanking
+that would leave no OE-active clock in the RUNNING row block
+(`2·blank + latch_clocks >= cols`) is refused at POST time with the numbers,
+since the boot-time `template_lights` check cannot save a device that never
+reboots.
 
 **And a reboot the API asked for no longer counts as a failed boot** (#771).
 `ota::preboot_guard` rolls back to the other OTA slot after two boots that

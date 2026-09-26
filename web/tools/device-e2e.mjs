@@ -3853,8 +3853,9 @@ try {
         status: e.querySelector(".st2")?.textContent?.trim() ?? "",
       })),
     );
-    // seven unconditional rows here; Panel driver is the caps-gated eighth
-    // and belongs to the HUB75 fixture below
+    // Seven rows on EVERY board since Gitea #778: the panel form moved out of
+    // Advanced and into the LED layout card as `Panel module`, so there is no
+    // longer a caps-gated eighth row here.
     check("settings: the Advanced list carries every unconditional row", rows.length === 7, `${rows.length} rows`);
     check(
       "settings: every Advanced row starts collapsed",
@@ -4079,8 +4080,36 @@ try {
       );
       const head = await hubPage.$eval('[data-role="layout-headline"]', (e) => e.textContent.trim());
       check("panel: the summary line carries the kind", head === "64 × 64 matrix", head);
-      const scan = await hubPage.$('[data-role="layout-scan"]');
-      check("panel: the HUB75 scan divisor is a real field here", scan !== null);
+      // The scan rate lives inside the collapsed Panel module disclosure now
+      // (Gitea #778), so the card itself must NOT carry it — a collapsed
+      // disclosure body is not mounted at all.
+      check(
+        "panel: the scan rate is not a bare row of the layout card (#778)",
+        (await hubPage.$('[data-role="layout-scan"]')) === null,
+      );
+      check(
+        "panel: the LED layout card carries the collapsed Panel module row",
+        (await hubPage.$('[data-role="panel-module-row"]')) !== null &&
+          (await hubPage.$eval('[data-role="panel-module-row"]', (e) =>
+            e.classList.contains("open"),
+          )) === false,
+      );
+      check(
+        "panel: …and it is INSIDE the LED layout section, not in Advanced",
+        (await hubPage.$('[data-role="sect-layout"] [data-role="panel-module-row"]')) !== null &&
+          (await hubPage.$('[data-role="advanced"] [data-role="panel-module-row"]')) === null,
+      );
+      {
+        // `1/32 scan · plain shift register · 30 MHz · 7 planes · blanking 1`
+        const line = await hubPage.$eval('[data-role="panel-module-status"]', (e) =>
+          e.textContent.trim(),
+        );
+        check(
+          "panel: the collapsed row states the whole module",
+          /^1\/32 scan · plain shift register · 30 MHz · 7 planes · blanking 1$/.test(line),
+          line,
+        );
+      }
       // one panel: the refresh estimate, no chain picture yet
       const hz = await hubPage.$eval('[data-role="refresh-hz"]', (e) => e.textContent.trim());
       check("panel: the estimated refresh is computed from the arrangement", hz === "115 Hz", hz);
@@ -4127,24 +4156,97 @@ try {
         "panel: no Reboot-now button without caps.reboot (§5.7)",
         (await hubPage.$('[data-role="reboot-now"]')) === null,
       );
-      check(
-        "panel: Advanced gains the Panel driver row",
-        (await hubPage.$('[data-role="adv-panel-row"]')) !== null,
-      );
 
-      // ---- Advanced › Panel driver is a FORM (Gitea #401/#525) ----------
-      // The four driver values are settings the host stores and applies at
-      // boot, so each field POSTs one `panel <planes> <clock> <chip> <blank>`
-      // line and the reply is adopted. The mirror has no HUB75 hardware, so
-      // it synthesises a `driver.live` equal to what is stored (the "in sync"
-      // reading); the pending / fallback / off states are unit-tested.
-      await openAdv(hubPage, "adv-panel");
+      // ---- LED layout › Panel module is a FORM (Gitea #401/#525/#778) ----
+      // The four driver values are settings the host stores and applies — at
+      // boot for three of them, on the next FRAME for latch blanking (#778) —
+      // so each field POSTs one `panel <planes> <clock> <chip> <blank>` line
+      // and the reply is adopted. The scan rate rides the `matrix` line and is
+      // in the same disclosure, because it is a property of the MODULE. The
+      // mirror has no HUB75 hardware, so it synthesises a `driver.live` equal
+      // to what is stored (the "in sync" reading); the pending / fallback /
+      // off states are unit-tested.
+      await openAdv(hubPage, "panel-module");
       check(
-        "panel driver: the card is editable where the host reports a driver",
+        "panel module: the card is editable where the host reports a driver",
         (await hubPage.$eval('[data-role="panel-planes"]', (e) => e.tagName)) === "SELECT" &&
           (await hubPage.$('[data-role="panel-chip"]')) !== null &&
-          (await hubPage.$('[data-role="panel-blank"]')) !== null,
+          (await hubPage.$('[data-role="panel-blank"]')) !== null &&
+          (await hubPage.$('[data-role="layout-scan"]')) !== null,
       );
+      // The scan field names the RATIOS, the way a module prints them, and
+      // never "board default" — HUB75 is write-only, so the firmware cannot
+      // ask a module anything, and `0` just means the usual ratio for the
+      // height (Jeremy, 2026-09-26: "Is that even possible for luxel to
+      // know?"). A 64-row panel is 32 address rows, so 1/32 down to 1/4.
+      {
+        const opts = await hubPage.$$eval('[data-role="layout-scan"] option', (o) =>
+          o.map((e) => [e.value, e.textContent.trim()]),
+        );
+        check(
+          "panel module: the scan field offers the ratios, the usual one named",
+          JSON.stringify(opts) ===
+            JSON.stringify([
+              ["32", "1/32 (usual for 64 rows)"],
+              ["16", "1/16"],
+              ["8", "1/8"],
+              ["4", "1/4"],
+            ]),
+          JSON.stringify(opts),
+        );
+        check(
+          "panel module: nothing anywhere in it says `board default`",
+          !opts.some(([, t]) => /default/i.test(t)),
+        );
+      }
+
+      // ---- latch blanking applies LIVE (Gitea #778) ---------------------
+      //
+      // It is control bits in the framebuffer words, which the packer never
+      // writes, so the firmware re-formats its buffers between frames. The
+      // observable difference is the REBOOT BAR: it names every field it is
+      // waiting on, and a blanking change must not add the panel module to it.
+      //
+      // This runs BEFORE the clock and bit-plane edits below, deliberately:
+      // those two DO raise it, the bar is sticky across tabs, and
+      // `noteRebootPending` dedupes — so once they have run, "does the bar
+      // mention the panel module?" can no longer tell a live field from a
+      // boot-built one. The arrangement change above has already raised the
+      // bar for `the panel arrangement`, which is why this compares the whole
+      // text before and after rather than asserting the bar is absent.
+      const barText = async () =>
+        (await hubPage
+          .$eval('[data-role="reboot-bar-text"]', (e) => e.textContent.trim())
+          .catch(() => "(no bar)")) ?? "(no bar)";
+      {
+        const before = await barText();
+        await hubPage.$eval('[data-role="panel-blank"]', (el) => {
+          el.value = "2";
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+        });
+        await sleep(900);
+        const d = (await (await fetch(`${HUB}/api/layout`)).json()).driver;
+        check(
+          "panel module: blanking posts the whole `panel` line — `panel 7 30 shiftreg 2`",
+          d.blank === 2 && d.planes === 7 && d.clock_mhz === 30 && d.chip === "shiftreg",
+          JSON.stringify(d),
+        );
+        const after = await barText();
+        check(
+          "panel module: …and raises NO reboot for it — blanking is live (#778)",
+          after === before && !/panel module/i.test(after),
+          `${before} -> ${after}`,
+        );
+        check(
+          "panel module: a live blanking leaves the card saying `live`",
+          (await hubPage.$eval('[data-role="panel-state"]', (e) => e.dataset.state)) === "live",
+        );
+        const line = await hubPage.$eval('[data-role="panel-module-status"]', (e) =>
+          e.textContent.trim(),
+        );
+        check("panel module: the collapsed row follows it", /blanking 2$/.test(line), line);
+      }
       check(
         "panel driver: the chip list is the DEVICE's, not the browser's",
         (await hubPage.$$eval('[data-role="panel-chip"] option', (o) => o.map((e) => e.value))).join(
@@ -4175,17 +4277,23 @@ try {
         await sleep(900);
         const after = (await (await fetch(`${HUB}/api/layout`)).json()).driver;
         check(
-          "panel driver: choosing 20 MHz posts `panel 7 20 shiftreg 1`",
+          "panel driver: choosing 20 MHz posts `panel 7 20 shiftreg 2`",
           after.clock_mhz === 20 &&
             after.planes === 7 &&
             after.chip === "shiftreg" &&
-            after.blank === 1,
+            after.blank === 2,
           JSON.stringify(after),
         );
         check(
           "panel driver: a listed clock is never refused, so no error bar",
           (await hubPage.$('[data-role="api-error-bar"]')) === null &&
             (await hubPage.$('[data-role="panel-error"]')) === null,
+        );
+        // …and the clock, unlike the blanking above, IS boot-built
+        check(
+          "panel driver: a clock change names the panel module on the reboot bar",
+          /panel module/i.test(await barText()),
+          await barText(),
         );
       }
       // What the card says is the host's `driver.live` reading, never a
@@ -4202,7 +4310,8 @@ try {
           l.planes === cfg.planes &&
           l.clock_mhz === cfg.clock_mhz &&
           l.chip === cfg.chip &&
-          l.blank === cfg.blank &&
+          // `blank` deliberately absent: it applies live (#778), so the app
+          // leaves it out of this comparison and so does the model here
           l.w === m.pw * chain &&
           l.h === m.ph &&
           l.scan === scan;
@@ -4215,6 +4324,8 @@ try {
           liveState(asFound.driver.live, asFound.driver, asFound.matrix),
         `${await hubPage.$eval('[data-role="panel-state"]', (e) => e.dataset.state)} vs ${JSON.stringify(asFound.driver.live)}`,
       );
+      // A BIT PLANE change is boot-built like the clock, and the collapsed row
+      // follows every one of the five values it states.
       await hubPage.$eval('[data-role="panel-planes"]', (el) => {
         el.value = "6";
         el.dispatchEvent(new Event("input", { bubbles: true }));
@@ -4223,16 +4334,16 @@ try {
       await sleep(900);
       const drv = (await (await fetch(`${HUB}/api/layout`)).json()).driver;
       check(
-        "panel driver: one field writes the whole `panel` line",
-        drv.planes === 6 && drv.clock_mhz === 20 && drv.chip === "shiftreg" && drv.blank === 1,
+        "panel module: one field writes the whole `panel` line",
+        drv.planes === 6 && drv.clock_mhz === 20 && drv.chip === "shiftreg" && drv.blank === 2,
         JSON.stringify(drv),
       );
       check(
-        "panel driver: the collapsed row states the configured values",
-        /^20 MHz · 6 planes/.test(
-          await hubPage.$eval('[data-role="adv-panel-status"]', (e) => e.textContent.trim()),
+        "panel module: the collapsed row states the configured module",
+        /^1\/32 scan · plain shift register · 20 MHz · 6 planes · blanking 2/.test(
+          await hubPage.$eval('[data-role="panel-module-status"]', (e) => e.textContent.trim()),
         ),
-        await hubPage.$eval('[data-role="adv-panel-status"]', (e) => e.textContent.trim()),
+        await hubPage.$eval('[data-role="panel-module-status"]', (e) => e.textContent.trim()),
       );
       await shotSettings(hubPage, `${shotDir}/settings-panel.png`, 200);
     } finally {
@@ -5239,7 +5350,9 @@ try {
   // time: with every Advanced body mounted, the playlist in both states and
   // the editor open, no `[disabled]` element may lack a `data-reason`.
   {
-    // `adv-panel` is a HUB75 row and is absent here by design.
+    // Every Advanced row exists on every board since #778 — the panel form is
+    // `Panel module` inside the LED layout card now, swept with the HUB75
+    // fixture above rather than here.
     const ADV = [
       "adv-output",
       "adv-clock",
