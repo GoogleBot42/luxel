@@ -290,14 +290,14 @@ value while collapsed. Everything below is on the new page.
   first: `crypto.subtle` is absent on a plain-http origin, so every package
   install from a device's own console died on a TypeError until the codec
   grew its own SHA-256 (Gitea #794).
-- [ ] **The store self-heal across a real bytecode bump** (Gitea #643) — the
-  other half of that ticket, and the only one a bump can summon: after an OTA
+- [ ] **The store self-heal across a real bytecode bump** (Gitea #805, the
+  residue of #643) — the only half of that ticket a bump can summon: after an OTA
   across an LXBC format change the console should say "N stored patterns were
   compiled for an older engine — recompiling…", come back with the playlist
   playing, and leave every pattern id (and therefore every playlist entry)
   untouched. Machine-verified against `luxel serve --stale-store` /
   `--bc-format` (`web/tools/device-e2e.mjs`) and in unit tests; on metal it
-  waits for the next format bump to ride along with.
+  waits for the next format bump to ride along with, which is what #805 is.
 
 ## Verified hard by machines, low review value (FYI only)
 
