@@ -1193,9 +1193,14 @@ unscoped harness selector would silently resolve to the pattern editor's.
   (`docs/spec/scenes.md` already said so). `scene-fit` is a static line saying
   what the box really is; the chooser is `scene-fit` on the sprite
   inspector — **Stretch** (`fill`), **Fit** (`contain`) and **Tile**
-  (`tile`), shown only once the box has a size; with `w`/`h` at 0 the sprite
-  draws at its natural size and the row reads `12×12 · natural size` with a
-  `natural` button to get back there (#741, docs/spec/scenes.md §4).
+  (`tile`), always shown. A sprite layer's box is ALWAYS explicit in the
+  editor: picking or creating a sprite writes the record's own size into
+  `w`/`h`, the fields are the real numbers, a handle drag and a typed value
+  write the same fields, and a `natural` button puts the sprite's own size
+  back (Jeremy, 2026-09-26: the two paths used to disagree). A stored scene
+  with `w`/`h` 0 — which the wire still allows and the firmware draws at
+  natural size — is normalised on load without becoming an edit
+  (docs/spec/scenes.md §4).
 
 ### Sprites: a record, a tab and an editor of their own (`pages/Sprites.svelte`, `pages/SpriteEditor.svelte`, #740 #741)
 
@@ -1215,7 +1220,9 @@ every scene that named the pattern id is re-pointed, and the pattern is
 deleted — so sprites leave the Patterns library. `lib/store.ts`'s
 `listPatterns()` hides a tagged pattern in the meantime.
 
-**The Sprites tab** sits after Scenes and is gated exactly like it (matrix
+**The Sprites tab** sits between Patterns and Scenes (Patterns · Sprites ·
+Scenes · Playlist · Settings, Jeremy 2026-09-26) and is gated exactly like
+Scenes (matrix
 Layout on a console; always present in the playground with the same
 "Preview as a 64×64 matrix" empty state). Same skeleton as Scenes: one lede
 sentence, `+ New sprite`, a tile grid (`SpriteGrid`/`SpriteThumb`: the sprite
@@ -1234,8 +1241,9 @@ canvas (`SpriteCanvas`) at an integer zoom that fits, checker ground, grid
 lines from 8 px/texel, pointer paint with capture (one undo step per stroke),
 Shift = temporary Pick, right button = erase; under it the frame strip
 (`FrameStrip`: thumbnails, `[`/`]`, `+` copies the current frame, `← Move` ·
-`Duplicate` · `Delete` · `Move →` as a word row, `Play` at fps, `Onion` ghosts
-the previous frame at 35 %). Right: name echo, Size (resize keeps what fits),
+`Duplicate` · `Delete` · `Move →` as a word row, `Play` at fps, `Ghost prev`
+draws the previous frame faintly under this one; the thumbnails WRAP to
+new rows rather than scroll). Right: name echo, Size (resize keeps what fits),
 Frames (a count — the strip manages them), FPS (`0 = still`), the byte line
 against the 16 KiB record (`Save` is the one disabled control when over, with
 its reason), a 1:1 preview at the fixture's scale, and `Used in` (scene
@@ -1246,13 +1254,28 @@ compacted on save.
 
 **In the scene editor** a sprite layer is moved with the marquee like every
 other layer — the stage has no paint mode and no pointer handlers of its own
-any more, and the marquee wraps the sprite's natural size rather than the
-grid so it is a visible grab handle. `SpriteInspector` is Name · Sprite (a
-`RichSelect` over the store, `Edit ↗`, `New…` — which makes a blank `Sprite N`,
-binds it and opens the editor) · Box (w/h editable) · Size (`natural`) · Fit
-(above) · the blend tail. The stage and every thumbnail composite sprite
-layers through `Compositor.setSprite(layer, bytes)` (`lx_comp_sprite`); no
-engine is compiled for them (`lib/sceneRender.ts`'s `SpriteLookup`).
+any more, and the marquee wraps the box so it is a visible grab handle. The
+layer row says just `8×8`. `SpriteInspector` is Name · Sprite (a `RichSelect`
+over the store whose rows AND closed trigger carry a live `SpriteThumb` with
+the name and `8×8 · 2 frames` — `RichSelect` grew `icon`/`value` slots for
+it; `Edit ↗`, `New…` — which makes a blank `Sprite N`, binds it and opens the
+editor) · Box (always explicit, above) · Fit · **FPS** (empty = `sprite's own
+(10 fps)`, a value 0..30 writes the `A <fps>` line, `0 = still`, `use
+sprite's` clears it) · the blend tail. Blend descriptions are per layer kind
+(`blendOptions(kind)`): text and sprite Normal no longer cite a Transparent
+row those layers do not have.
+
+**Sprite records on a console** come through ONE owner, `stores/sprites.ts`
+(`spriteBytesOf`, `spriteRev`, `warmSprites`/`ensureSprites`, `reconcile`):
+`device.spriteRecord()` treats only a real refusal (404, or a `{"ok":false…}`
+body — the firmware answers a missing id with 200) as "no such sprite" and
+throws on anything else, loads retry on a ladder and on the sprite poll, and
+a record whose library row changed is dropped from the cache. Before this
+(2026-09-26) every surface kept its own cache, one failed download was
+permanent, and the console never drew a sprite layer. The stage and every
+thumbnail composite sprite layers through `Compositor.setSprite(layer, bytes)`
+(`lx_comp_sprite`); no engine is compiled for them (`lib/sceneRender.ts`'s
+`SpriteLookup`).
 
 ### Text layers (`components/scene/TextInspector.svelte` + `FontPicker.svelte`, #486)
 
@@ -1346,7 +1369,9 @@ Editor: `scene-editor-view`, `scene-editor-header`, `scene-editor-back`,
 `scene-text-fixed`/`-clock`/`-slot`/`-lit`/`-fmt`/`-font`/`-color`/`-align`/`-scroll`/`-speed`,
 `scene-align-l`/`-c`/`-r`, `scene-wash-color`, `scene-sprite-pick`,
 `scene-sprite-menu`, `scene-sprite-edit`, `scene-sprite-new`,
-`scene-sprite-state`, `scene-sprite-natural`, `scene-sprite-natural-btn`;
+`scene-sprite-state`, `scene-sprite-thumb`, `scene-sprite-pick-meta`,
+`scene-sprite-natural`, `scene-sprite-natural-btn`, `scene-sprite-fps`,
+`scene-sprite-fps-state`, `scene-sprite-fps-own`;
 `scene-text-slot-n`, `scene-text-slot-hint`, `scene-text-slot-how`,
 `scene-text-slot-value`, `scene-text-speed-value`, `scene-clock-state`,
 `scene-clock-settings`, `scene-scroll-window`, `scene-font-menu`,
@@ -1368,7 +1393,8 @@ Sprites tab: `sprites-panel`, `sprites-empty-fixture`,
 `sprite-inuse`, `sprite-inuse-swatch`, `sprite-inuse-count`,
 `sprite-inuse-empty`; `sprite-stage`, `sprite-stage-dims`,
 `sprite-canvas-wrap`, `sprite-canvas` (`data-zoom`); `sprite-frames`,
-`sprite-frame-count`, `sprite-play`, `sprite-onion`, `sprite-frame`,
+`sprite-frame-count`, `sprite-play`, `sprite-onion` (the `Ghost prev`
+toggle), `sprite-frame-row`, `sprite-frame`,
 `sprite-frame-pick`, `sprite-frame-thumb`, `sprite-frame-add`,
 `sprite-frame-ops`, `sprite-frame-left`/`-duplicate`/`-delete`/`-right`;
 `sprite-inspector`, `sprite-name-echo`, `sprite-size`, `sprite-w`, `sprite-h`,
