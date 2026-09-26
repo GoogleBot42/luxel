@@ -1,17 +1,25 @@
-//! Single-pattern reboot persistence: the actively-running *saved* pattern
+//! Direct-play reboot persistence: the actively-running *saved* pattern
 //! (set via `POST /api/patterns/<id>/activate`) + its explicitly-set control
-//! values survive a reboot, mirroring the playlist's flash conventions.
+//! values — or the stored *scene* shown via `POST /api/scenes/<id>/activate`
+//! (Gitea #790) — survive a reboot, mirroring the playlist's flash
+//! conventions.
 //!
 //! The record lives under [patterns::RESUME_KEY] in the same
 //! sequential-storage partition as the playlist. Line-based wire format
 //! (matching playlist.rs — no JSON parser needed):
 //!   `P <patternId>`             the saved pattern to resume
+//!   `S <sceneId>`               the stored scene to resume (instead of `P`)
 //!   `C <name> <raw...>`         a control value (raw 16.16), one per line
 //!
 //! Rules:
 //! - Only *library* patterns persist. An ad-hoc `POST /api/code` push has no
 //!   id (persisting it is impossible — the source was never saved), so the
 //!   record is left alone and a reboot resumes the last saved state.
+//! - **A scene on screen outranks the pattern id.** `install_scene` stamps
+//!   the base layer's pattern as the "current pattern" so `/api/pattern`
+//!   shows something real, and a record written from that id would resume
+//!   the base pattern ALONE (the #790 bug). The record is `S <sceneId>`
+//!   with no `C` lines: a scene's layers carry their own control values.
 //! - **Playlist precedence**: a resuming playlist always wins. The record is
 //!   neither written while a playlist is playing nor applied at boot when the
 //!   playlist's "was playing" flag resumes.
@@ -61,14 +69,25 @@ pub fn mark_dirty() {
 /// name → raw 16.16 control values (matches playlist.rs's Item::controls).
 type Controls = Vec<(String, Vec<i32>)>;
 
-/// Parse a resume record. `None` if there's no pattern line.
-fn parse(body: &str) -> Option<(String, Controls)> {
+/// What a stored record asks the boot to show.
+enum Record {
+    Pattern(String, Controls),
+    Scene(String),
+}
+
+/// Parse a resume record. `None` if there's neither a pattern nor a scene
+/// line. The writer never emits both; a record that somehow carries both
+/// resumes the scene (its base pattern IS the current pattern, so `P` is
+/// the lesser claim).
+fn parse(body: &str) -> Option<Record> {
     let mut id: Option<String> = None;
+    let mut scene: Option<String> = None;
     let mut controls: Controls = Vec::new();
     for line in body.lines() {
         let mut it = line.split_whitespace();
         match it.next() {
             Some("P") => id = it.next().map(String::from),
+            Some("S") => scene = it.next().map(String::from),
             Some("C") => {
                 if let Some(name) = it.next() {
                     let raw: Vec<i32> = it.filter_map(|v| v.parse().ok()).collect();
@@ -78,7 +97,10 @@ fn parse(body: &str) -> Option<(String, Controls)> {
             _ => {}
         }
     }
-    id.map(|id| (id, controls))
+    if let Some(scene) = scene {
+        return Some(Record::Scene(scene));
+    }
+    id.map(|id| Record::Pattern(id, controls))
 }
 
 /// The record for the CURRENT state, or `None` when there's nothing to
@@ -86,6 +108,17 @@ fn parse(body: &str) -> Option<(String, Controls)> {
 fn snapshot_record() -> Option<String> {
     if crate::playlist::is_playing() {
         return None;
+    }
+    // A scene on screen wins over the (base-layer) pattern id — see the
+    // module doc. `set_active("")` runs on every single-pattern install, so
+    // a non-empty id here is exactly "a scene is what is showing".
+    let scene = crate::scenes::active_id();
+    if !scene.is_empty() {
+        let mut out = String::new();
+        push_piece(&mut out, "S ");
+        push_piece(&mut out, &scene);
+        push_piece(&mut out, "\n");
+        return Some(out);
     }
     let id = crate::shared::get_current_pattern_id();
     if id.is_empty() {
@@ -163,12 +196,21 @@ async fn apply_stored() {
         println!("resume: nothing stored — playing nothing");
         return;
     };
-    let Some((id, controls)) = String::from_utf8(bytes).ok().as_deref().and_then(parse) else {
+    let Some(rec) = String::from_utf8(bytes).ok().as_deref().and_then(parse) else {
         println!("resume: stored record unreadable — playing nothing");
         return;
     };
-    let Some(stored) = patterns::stored_size_hint(&id) else {
-        println!("resume: stored pattern {} is gone — playing nothing", id);
+    // One linear path for both kinds: every local below lives in this
+    // task's FUTURE, which is a `.bss` static that comes straight out of
+    // the main-task stack floor (tools/stack-check.sh), so a second arm's
+    // worth of Strings and Vecs is not free.
+    let (id, controls, is_scene) = match rec {
+        Record::Pattern(id, controls) => (id, controls, false),
+        Record::Scene(id) => (id, Vec::new(), true),
+    };
+    let what = if is_scene { "scene" } else { "pattern" };
+    let Some(stored) = stored_bytes(&id, is_scene) else {
+        println!("resume: stored {} {} is gone — playing nothing", what, id);
         return;
     };
     // Boot-time heap is at its trough while WiFi (whose mallocs don't
@@ -184,7 +226,8 @@ async fn apply_stored() {
     while esp_alloc::HEAP.free() < need {
         if waited >= 20 {
             println!(
-                "resume: heap too tight for {} ({} free, need {}) — playing nothing",
+                "resume: heap too tight for {} {} ({} free, need {}) — playing nothing",
+                what,
                 id,
                 esp_alloc::HEAP.free(),
                 need
@@ -194,24 +237,75 @@ async fn apply_stored() {
         Timer::after(Duration::from_secs(2)).await;
         waited += 2;
     }
-    match patterns::validate_stored(&id) {
-        None => {
-            println!("resume: stored pattern {} is gone — playing nothing", id);
-            return;
-        }
-        Some(Err(e)) => {
-            println!("resume: stored bytecode for {} unusable ({}) — playing nothing", id, e);
-            return;
-        }
-        Some(Ok(())) => {}
+    if let Err(e) = validate(&id, is_scene) {
+        println!("resume: {} — playing nothing", e);
+        return;
     }
-    MSG_QUEUE.send(Msg::Library { id: id.clone(), ms: 0 }).await;
-    crate::shared::set_current_controls(controls.clone());
-    for (name, raw) in controls {
-        let vals: Vec<Fx> = raw.iter().map(|&r| Fx::from_raw(r)).collect();
-        MSG_QUEUE.send(Msg::Control(name, vals)).await;
+    if is_scene {
+        // Same hand-off as `POST /api/scenes/<id>/activate` (scenes.rs):
+        // the render task builds every layer engine from the stored scene;
+        // controls and projection belong to the scene's own layers.
+        MSG_QUEUE.send(Msg::Scene { id: id.clone(), ms: 0 }).await;
+        crate::shared::set_current_controls(Vec::new());
+    } else {
+        MSG_QUEUE.send(Msg::Library { id: id.clone(), ms: 0 }).await;
+        crate::shared::set_current_controls(controls.clone());
+        for (name, raw) in controls {
+            let vals: Vec<Fx> = raw.iter().map(|&r| Fx::from_raw(r)).collect();
+            MSG_QUEUE.send(Msg::Control(name, vals)).await;
+        }
     }
-    println!("resume: pattern {} restored", id);
+    println!("resume: {} {} restored", what, id);
+}
+
+/// Bytes of stored pattern a resume will load: the pattern's own, or the
+/// sum over a scene's pattern layers (every layer engine is resident at
+/// once, so the boot-time heap check has to cover all of them). `None` when
+/// the record's target is gone from its store.
+///
+/// Synchronous and never inlined, like [resume_headroom]: the scene copy
+/// and the walk stay on the stack for the call, not in the task future.
+#[inline(never)]
+fn stored_bytes(id: &str, is_scene: bool) -> Option<usize> {
+    if !is_scene {
+        return patterns::stored_size_hint(id);
+    }
+    let sc = crate::scenes::get(id)?;
+    let mut total = 0usize;
+    for l in &sc.layers {
+        if let Some(pid) = l.pattern_id() {
+            // a gone layer pattern costs nothing here; `validate` names it
+            total += patterns::stored_size_hint(pid).unwrap_or(0);
+        }
+    }
+    Some(total)
+}
+
+/// The single-pattern rule, applied to every pattern layer of a scene: a
+/// pattern that is gone, or whose stored bytecode is unusable (an OTA
+/// bumped the LXBC format), skips the resume with a sentence naming it —
+/// the same graceful skip a lone pattern gets, never a failed boot.
+#[inline(never)]
+fn validate(id: &str, is_scene: bool) -> Result<(), String> {
+    let check = |pid: &str| -> Result<(), String> {
+        match patterns::validate_stored(pid) {
+            None => Err(alloc::format!("stored pattern {} is gone", pid)),
+            Some(Err(e)) => Err(alloc::format!("stored bytecode for {} unusable ({})", pid, e)),
+            Some(Ok(())) => Ok(()),
+        }
+    };
+    if !is_scene {
+        return check(id);
+    }
+    let Some(sc) = crate::scenes::get(id) else {
+        return Err(alloc::format!("stored scene {} is gone", id));
+    };
+    for l in &sc.layers {
+        if let Some(pid) = l.pattern_id() {
+            check(pid).map_err(|e| alloc::format!("scene {} layer: {}", id, e))?;
+        }
+    }
+    Ok(())
 }
 
 /// Boot resume (when no playlist is resuming) + the debounced persist loop.

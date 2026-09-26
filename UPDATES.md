@@ -1,5 +1,56 @@
 # Update log
 
+## 2026-09-26 — a directly-activated scene survives a reboot/OTA (#790)
+
+Jeremy's finding from the sprite deploy: "Test 2" was ACTIVE (activated
+directly, playlist parked) when the OTA rebooted the panel, and it came back
+showing the last single pattern instead. The cause was one level below the
+obvious "resume.rs knows only `P` records": `install_scene` stamps the base
+layer's pattern id as the current pattern so `/api/pattern` shows something
+real, so the resume record was not *missing* after a scene activation — the
+next debounced write (a slider, a text slot) persisted `P <base pattern>`,
+and the boot faithfully resumed the base pattern alone.
+
+The record grew a second kind, `S <sceneId>`, mutually exclusive with `P`:
+
+- `snapshot_record` checks `scenes::active_id()` before the pattern id
+  (`set_active("")` runs on every single-pattern install, so a non-empty id
+  is exactly "a scene is what is showing"). No `C` lines ride with it — a
+  scene's layers carry their own control values, so a `POST /api/control`
+  on top of a scene is not recorded (docs/api.md says so now).
+- `POST /api/scenes/<id>/activate` marks the record dirty, with the same
+  debounce and the same playlist precedence as a pattern activate; the
+  playlist's own scene items never write it (a playing playlist resumes by
+  itself, scene items included, as before).
+- `apply_stored` is ONE linear path for both kinds (the task future is a
+  `.bss` static that comes out of the main-task stack floor, so a second
+  arm's Strings and Vecs are not free): the heap wait uses the SUM of the
+  scene's pattern-layer sizes (every layer engine is resident at once), and
+  the single-pattern rule applies to every pattern layer — a gone pattern or
+  bytecode an OTA made stale skips the resume with a console sentence
+  naming the layer, never a failed boot. The two helpers that walk the scene
+  are synchronous `#[inline(never)]` fns so the copy lives on the stack for
+  the call, like `resume_headroom`.
+
+**On metal (Athom, 192.168.0.183, `board-athom-music`, this branch on
+`ota_0`).** The OTA itself resumed the playing playlist (precedence intact).
+Then: a two-`pat`-layer scene POSTed, `playlist/stop`, `scenes/<id>/activate`
+→ `active` the id, `engines` 2, both layers `native`. 75 s later (past the
+boot-loop guard) `POST /api/reboot`; `core1.fences` reset 1308 → 1615 (a real
+reboot), and 8 s after the POST the device answered with **`active` the same
+id, `engines` 2, both layers native, `vmerr` null, playlist stopped** —
+stable 5 s later. Restored as found: scene deleted, `playlist/play 2`;
+`/api/config`, `/api/brightness`, `/api/layout`, `/api/patterns`,
+`/api/scenes` byte-identical to the found copies, playlist playing.
+
+`.stack` after the change (devshell `tools/stack-check.sh`): pixelblaze-v3
+**24,612 B** (24,636 before, −24; 36 B above the 24,576 floor),
+athom-music 25,468 B (25,492 before). Both pass; #800's CI-gate residue
+stands. Not on the Seengreat yet — its 3-layer scenes exercise the summed
+heap wait, which the strip's 54 KB of free heap never reaches (Gitea
+#818). The mirror has no flash and resumes nothing; `device-e2e.mjs` says
+so at the scene-play check.
+
 ## 2026-09-26 — sprites on the panel: Jeremy's review of #740/#741, fixed
 
 Jeremy put the sprite build on the Seengreat and reviewed it: "some bugs but

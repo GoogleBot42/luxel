@@ -733,8 +733,9 @@ Error shapes from an upload:
 A successful `/api/code` **stops the playlist** — a manual push takes over.
 
 `POST /api/control` on the firmware also records the tweak for single-pattern
-reboot resume, but only while no playlist is playing and the running pattern is
-a stored one.
+reboot resume, but only while no playlist is playing, the running pattern is
+a stored one, and no scene is on screen (a scene's layers carry their own
+control values, so a tweak on top of a scene is not recorded).
 
 ## Pattern library
 
@@ -928,6 +929,17 @@ goes `null` with the record.
 `POST /api/scenes/<id>/activate` shows the scene, crossfading over the
 optional `<ms>` body (absent or `0` = hard cut). It **parks the playlist**,
 exactly like activating a pattern directly.
+
+A scene shown this way **survives a reboot** (an OTA's included) the way a
+directly-activated pattern does (Gitea #790): while no playlist is playing,
+the firmware's resume record carries `S <sceneId>` in place of
+`P <patternId>`, and the boot re-activates the scene once the heap has room
+for every layer engine — `GET /api/scenes` reads the same `active` and
+`/api/status` the same `engines` as before the reboot. A scene whose record
+or whose layer pattern is gone, or whose layer bytecode an OTA has made
+stale, is skipped with a console line and the device plays nothing (the
+single-pattern rule). Firmware only: the mirror has no flash and resumes
+nothing.
 
 **Storage.** Every scene block concatenated is ONE blob — on a device, one
 flash record beside the palette — capped at **3840 B** (`max`). A write that

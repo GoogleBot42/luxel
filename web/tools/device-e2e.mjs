@@ -4585,6 +4585,9 @@ try {
       await sleep(300);
       await scPage.click('[data-role="scene-play-device"]');
       await sleep(1200);
+      // (The firmware also writes the reboot-resume record here — `S <sceneId>`,
+      // Gitea #790 — which this harness cannot cover: the mirror has no flash
+      // and never reboots. That leg is verified on metal; see docs/api.md.)
       const active = await fetch(`${SC}/api/scenes`).then((r) => r.json());
       check(
         "scenes: Play on device activates the scene",
