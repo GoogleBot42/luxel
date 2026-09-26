@@ -103,6 +103,19 @@ paths:
   (body `background-color` and the `--bg` token) as well as booted, because
   "booted but unstyled" was a state every other assertion passed;
   `web/tools/bootretry-check.mjs` exercises the retry on the mirror.
+- **A device console is an INSECURE CONTEXT.** It is served from
+  `http://<lan-ip>/`, which is not https and not `localhost`, so every
+  secure-context-gated browser API is simply absent there: `crypto.subtle`
+  (undefined, not throwing), and by the same rule Clipboard, Geolocation,
+  Service Workers, `navigator.mediaDevices`. Every harness in this repo —
+  the mirror, `device-e2e.mjs`, `vite preview`, the unit tests — runs on
+  `127.0.0.1`, which IS a secure context, so nothing here can catch it: the
+  `.luxr` codec's `crypto.subtle.digest` passed 24 e2e checks and a whole
+  unit-test file while being impossible on every real device (Gitea #794).
+  Before using any such API in `web/src`, either carry a fallback or gate it
+  on `window.isSecureContext`; to test one, serve the page from the
+  container's own LAN IP (`vite preview --host 0.0.0.0`, then load
+  `http://<container-ip>:<port>/?device=…`) rather than from localhost.
 - Set `E2E_PORT` when running e2e concurrently with another session, and set
   it to a **multiple of 100** (4200, 4300, …). Since #496 it is the base of a
   100-port block that the whole run owns: every web-preview port, every
