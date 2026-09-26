@@ -1918,8 +1918,11 @@ async fn api_scenes_id(tail: &str, raw: &[u8]) -> String {
                 // console parks it client-side first (Gitea #538), and doing
                 // it server-side would diverge from
                 // /api/patterns/<id>/activate and from the mirror.
+                // The scene rides the same reboot-resume record a direct
+                // pattern play does (`S <sceneId>`, Gitea #790).
                 Ok(()) => {
                     crate::shared::set_current_controls(Vec::new());
+                    crate::resume::mark_dirty(); // debounced direct-play persist
                     String::from("{\"ok\":true}")
                 }
                 Err(e) => api_error_esc(&e),
