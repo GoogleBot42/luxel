@@ -62,7 +62,11 @@ installs it. Keep it that way: `geometry.ts` reads wire state out of
 
 ## The shell
 
-`App.svelte` owns exactly five things: `mode` (playground vs device),
+`App.svelte` owns exactly five things: `mode` (playground vs device — decided
+once at boot by `lib/probe.ts`, a classified, retrying probe of this origin's
+`/api/status`: a 4xx or an HTML answer is a playground, anything else is a
+device that may be busy, and an inconclusive same-origin probe still boots
+device mode with the unreachable bar and a scheduled handshake retry, #777),
 `tab` (which home surface is open), `editing` (the full-screen editor sits over
 the home tab — it is not a tab), `mapEditing` (the map program's screen, over
 everything, A10/#471), and the boot cover. It also renders the header,

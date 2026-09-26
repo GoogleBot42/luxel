@@ -50,7 +50,10 @@ memory (athom-flash-rig.md), `~/.config/mqtt/broker.env` (user-level
   that (13/13 clean in one session, 2026-09-06), so a failed push there is
   now a real failure, not the known flake.
   Its USB is the S3's native USB-Serial/JTAG at `/dev/ttyACM0`, and a plain
-  open is **not** a reliable reset (it is often passive): the recipe that
+  open is **not** a reliable reset (it is often passive — but not always:
+  one bare `socat` open DID reboot the board on 2026-09-26, boot-ROM lines
+  and all, so treat every open as a possible reboot and never open it
+  while a scene you are measuring is resident): the recipe that
   works is one long-lived `socat -u /dev/ttyACM0,raw,echo=0,b115200 STDOUT`
   reader plus a SECOND short socat open, which resets the chip while the
   first reader captures the whole boot log. `doas chmod 666 /dev/ttyACM0`
@@ -97,6 +100,15 @@ pre-authorized per CLAUDE.md — no need to ask before pushing.
   reports `fps`, `pixels`, `heap_free`, `live`, `src`, `bc`, `vmerr`).
   `ota-push.sh` already runs this polling loop itself and prints the
   post-reboot status line — read that line rather than just its exit code.
+  Two OTHER shapes on the 2-socket panel (2026-09-26): `curl: (7) Failed
+  to connect … after 5 ms` on the POST right after the script's own
+  status probe is the device's close grace holding both slots — nothing
+  was pushed; wait ~6 s and rerun, it lands. And an explicit image
+  argument is sent AS-IS: pass a copied-aside ELF and the script streams
+  the raw ELF (1.8 MB, refused) — convert it first with `espflash
+  save-image --chip esp32s3 <elf> <bin>`. When you script retries, break
+  on the pushed slot flipping, not on a status grep that can itself fail
+  — one loop that missed its own break pushed the same image four times.
 - **`caps.assets` is NOT about the web-asset partition.** It is the scene
   layer source cap (user-uploadable fonts/images), `false` on every board
   and not planned (docs/api.md). The field that says `--assets-only` will
