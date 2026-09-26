@@ -35,7 +35,7 @@ use core::sync::atomic::{AtomicU8, Ordering};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use esp_println::println;
-use luxel_core::layout::{Layout, LayoutKind, Limits, Matrix, Output, Run, View};
+use luxel_core::layout::{Layout, LayoutKind, Limits, Matrix, Output, PanelDriver, Run, View};
 use luxel_core::projection::Projection;
 
 use crate::leds::Protocol;
@@ -64,10 +64,7 @@ const PROJ_NONE: u8 = 0xFF;
 /// `POST /api/map` reads correctly on first contact with this endpoint.
 fn board_default() -> Layout {
     #[cfg(feature = "hub75")]
-    let l = Layout::board_default(
-        LayoutKind::Matrix,
-        Matrix::single(crate::hub75::PANEL_COLS as u16, crate::hub75::PANEL_ROWS as u16),
-    );
+    let l = Layout::board_default(LayoutKind::Matrix, crate::hub75::board_default_matrix());
     #[cfg(not(feature = "hub75"))]
     let l = Layout::board_default(LayoutKind::Strip, Matrix::single(1, 1));
     l
@@ -108,6 +105,16 @@ pub fn configured_output(n: u8) -> Option<Output> {
 /// describes. Copied out rather than cloning the whole Layout.
 pub fn matrix() -> Matrix {
     LAYOUT.lock(|c| c.borrow().as_ref().map_or_else(|| board_default().matrix, |l| l.matrix))
+}
+
+/// The configured panel driver — the `panel` wire line (#525): bit depth,
+/// pixel clock, driver chip and latch blanking. What the HUB75 boot builds
+/// its framebuffer and its control template from, and what
+/// `GET /api/layout`'s `driver` block reports as CONFIGURED against the
+/// `live` values the running DMA actually has. Meaningless on a strip board,
+/// which never asks.
+pub fn driver() -> PanelDriver {
+    LAYOUT.lock(|c| c.borrow().as_ref().map_or_else(|| board_default().driver, |l| l.driver))
 }
 
 /// The projection defaults to install on every engine (boot and rebuild).
@@ -374,6 +381,14 @@ pub fn init() {
         }
     }
     println!("layout: {}", l.kind.as_str());
+    // A panel board's BOARD device map is its panel's grid, and the panel is
+    // a stored setting now (#401) — so the grid `devicemap::init()` installed
+    // from the board DEFAULT has to follow the configured arrangement. Only
+    // acts when no user map is installed, and only when it differs.
+    #[cfg(feature = "hub75")]
+    if l.kind == LayoutKind::Matrix {
+        crate::devicemap::refresh_board_grid(l.matrix.width() as u16, l.matrix.height() as u16);
+    }
     LAYOUT.lock(|c| *c.borrow_mut() = Some(l));
     want_projection(PROJ_DEFAULTS);
 }

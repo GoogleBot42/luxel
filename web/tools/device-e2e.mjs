@@ -4103,9 +4103,13 @@ try {
         e.classList.contains("amber"),
       );
       const hz4 = await hubPage.$eval('[data-role="refresh-hz"]', (e) => e.textContent.trim());
-      // the DEVICE reports `est_hz` since #475 and the browser prefers it,
-      // so this is the firmware's own number, not the browser model's round
-      check("panel: four chained panels go amber under 100 Hz", amber && hz4 === "28 Hz", hz4);
+      // Since #401/#525 the host reports its CONFIGURED driver (`/api/layout`
+      // `driver`), so the browser computes this from the clock and bit depth
+      // it was told — the same formula, rounded here rather than truncated in
+      // the host's integer `est_hz` (115.2/4 = 28.8 → 29, where `est_hz` says
+      // 28). A host that reports no driver block still hands over `est_hz`
+      // and that number wins (#475); `lib/panelDriver.ts` picks.
+      check("panel: four chained panels go amber under 100 Hz", amber && hz4 === "29 Hz", hz4);
       const dark = await hubPage.$('[data-role="layout-dark"]');
       check("panel: the mirror drives the whole chain, so nothing is dark", dark === null);
       const note = await hubPage
@@ -4126,6 +4130,72 @@ try {
       check(
         "panel: Advanced gains the Panel driver row",
         (await hubPage.$('[data-role="adv-panel-row"]')) !== null,
+      );
+
+      // ---- Advanced › Panel driver is a FORM (Gitea #401/#525) ----------
+      // The four driver values are settings the host stores and applies at
+      // boot, so each field POSTs one `panel <planes> <clock> <chip> <blank>`
+      // line and the reply is adopted. The mirror has no HUB75 hardware, so
+      // it synthesises a `driver.live` equal to what is stored (the "in sync"
+      // reading); the pending / fallback / off states are unit-tested.
+      await openAdv(hubPage, "adv-panel");
+      check(
+        "panel driver: the card is editable where the host reports a driver",
+        (await hubPage.$eval('[data-role="panel-planes"]', (e) => e.tagName)) === "SELECT" &&
+          (await hubPage.$('[data-role="panel-chip"]')) !== null &&
+          (await hubPage.$('[data-role="panel-blank"]')) !== null,
+      );
+      check(
+        "panel driver: the chip list is the DEVICE's, not the browser's",
+        (await hubPage.$$eval('[data-role="panel-chip"] option', (o) => o.map((e) => e.value))).join(
+          ",",
+        ) === "shiftreg,fm6126a,icn2038s,dp3246",
+      );
+      // What the card says is the host's `driver.live` reading, never a
+      // guess: `null` is "panel output is off", `fallback` is "it did not
+      // fit", a mismatch is "reboot to apply", and only an exact match is
+      // "running this". The mirror applies a `panel` line to its own live
+      // reading immediately, so the state here follows from what it reports.
+      const liveState = (l, cfg, m) => {
+        if (!l) return "disabled";
+        if (l.fallback) return "fallback";
+        const chain = Math.max(1, m.cols * m.rows);
+        const scan = m.scan > 0 ? m.scan : Math.floor(m.ph / 2);
+        const same =
+          l.planes === cfg.planes &&
+          l.clock_mhz === cfg.clock_mhz &&
+          l.chip === cfg.chip &&
+          l.blank === cfg.blank &&
+          l.w === m.pw * chain &&
+          l.h === m.ph &&
+          l.scan === scan;
+        return same ? "live" : "pending";
+      };
+      const asFound = await (await fetch(`${HUB}/api/layout`)).json();
+      check(
+        "panel driver: the card states the host's own live reading",
+        (await hubPage.$eval('[data-role="panel-state"]', (e) => e.dataset.state)) ===
+          liveState(asFound.driver.live, asFound.driver, asFound.matrix),
+        `${await hubPage.$eval('[data-role="panel-state"]', (e) => e.dataset.state)} vs ${JSON.stringify(asFound.driver.live)}`,
+      );
+      await hubPage.$eval('[data-role="panel-planes"]', (el) => {
+        el.value = "6";
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      await sleep(900);
+      const drv = (await (await fetch(`${HUB}/api/layout`)).json()).driver;
+      check(
+        "panel driver: one field writes the whole `panel` line",
+        drv.planes === 6 && drv.clock_mhz === 30 && drv.chip === "shiftreg" && drv.blank === 1,
+        JSON.stringify(drv),
+      );
+      check(
+        "panel driver: the collapsed row states the configured values",
+        /^30 MHz · 6 planes/.test(
+          await hubPage.$eval('[data-role="adv-panel-status"]', (e) => e.textContent.trim()),
+        ),
+        await hubPage.$eval('[data-role="adv-panel-status"]', (e) => e.textContent.trim()),
       );
       await shotSettings(hubPage, `${shotDir}/settings-panel.png`, 200);
     } finally {

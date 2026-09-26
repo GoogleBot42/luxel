@@ -87,6 +87,14 @@ rebased cleanly on that alone.
 - `E2E_PORT` must be 100 apart per concurrent session (`e2e-common.mjs`
   offset table); `tools/serve-e2e.mjs`/`mqtt-e2e.mjs` still collide (#502).
 - Two full-screen editors are mounted at once; scope harness selectors.
+- **Parallel agents in ONE worktree see each other's half-edits.** Agents
+  editing different crates of the same workspace hit transient cross-crate
+  compile failures (`pub mod chip;` with no file yet, a struct literal missing
+  a field another agent just added). Tell every brief up front: a compile
+  error in a file you do not own is transient — retry in a minute, never
+  "fix" it; and name exactly which files each agent owns (2026-09-26, the
+  hub75 runtime work: one agent still made a one-line fix in an unowned
+  file to unblock the workspace, which is the acceptable exception).
 
 ## 4b. UI fidelity is measured, not eyeballed (learned the hard way, 2026-09-19/20)
 

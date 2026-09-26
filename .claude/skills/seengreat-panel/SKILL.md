@@ -132,6 +132,12 @@ Consequences:
 - **The board sometimes will not reset over USB at all** — two full
   attempts, zero bytes captured (2026-09-07). Don't spend a session on it:
   fall back to `/api/status` polling and static ELF checks.
+- **`POST /api/reboot` is the reliable reboot** (no serial involved; the
+  playlist resumes by itself). But a reader attached across it captured only
+  ~2 KB of interleaved fragments, twice (2026-09-26) — so for "what did the
+  panel boot with" read `GET /api/layout`'s `driver.live` block plus
+  `/api/status` `rescan_hz`/`pass`, not the boot log. Space reboots ≥ 60 s
+  apart (boot-guard arithmetic below).
 - **Never touch serial in the 60 s after an OTA reboot.** The new slot is in
   the bootloader's pending-verify window until the firmware's boot_ok; a reset
   inside it rolls the slot straight back (lost a good OTA that way on

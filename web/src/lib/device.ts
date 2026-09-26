@@ -208,6 +208,42 @@ export interface DeviceMapStatus {
   proj3d?: string;
 }
 
+/** What the running firmware booted the HUB75 DMA with — never what is
+ *  stored (Gitea #401/#525). The four driver values plus the framebuffer it
+ *  built: `w`/`h` are the chain's extent in pixels (`w = pw × chain`),
+ *  `scan` the address rows, `fb_bytes` ONE framebuffer.
+ *
+ *  `fallback: true` = the configured arrangement/driver did not fit in
+ *  internal RAM and the board default is running instead. */
+export interface LiveDriverWire {
+  planes: number;
+  clock_mhz: number;
+  chip: string;
+  blank: number;
+  w: number;
+  h: number;
+  scan: number;
+  fb_bytes: number;
+  fallback: boolean;
+}
+
+/** `/api/layout`'s `driver` block: the four CONFIGURED (stored) values, the
+ *  chip vocabulary this firmware understands, and `live` — the running
+ *  driver, `null` when panel output is off (no framebuffer, or LCD_CAM
+ *  refused even at the board default). Written back as one wire line,
+ *  `panel <planes> <clock_mhz> <chip> <blank>`. */
+export interface PanelDriverWire {
+  planes: number;
+  clock_mhz: number;
+  chip: string;
+  blank: number;
+  /** In the order the firmware lists them; the card's select is built from
+   *  THIS, never from a hard-coded list, so a build that grows a chip needs
+   *  no browser change. */
+  chips: string[];
+  live: LiveDriverWire | null;
+}
+
 /** `GET /api/layout` (Gitea #465) — the ONE geometry object, with the old
  *  `/api/map` payload embedded so a client needs one fetch. See docs/api.md,
  *  "`/api/layout` — the one geometry object". */
@@ -243,9 +279,19 @@ export interface LayoutWire {
     est_hz?: number;
     /** Leading tiles of the chain this board's framebuffer can shift out.
      *  `drive < cols·rows` means the rest of the arrangement is DARK — the
-     *  DMA framebuffer is compile-time sized (Gitea #401). */
+     *  DMA framebuffer was compile-time sized before Gitea #401; a host that
+     *  sizes it from the Layout at boot reports the whole chain. */
     drive?: number;
   };
+  /** The HUB75 driver as a SETTING (Gitea #401/#525): what is stored, the
+   *  chips this build knows how to init, and what the running firmware
+   *  actually booted the DMA with.
+   *
+   *  Present only on a panel board whose firmware carries the `panel` layout
+   *  line — older firmware omits it, and the console then states its
+   *  build-time constants instead of offering controls that cannot move
+   *  (`lib/panelDriver.ts`). */
+  driver?: PanelDriverWire;
   /** One entry per configured output. A host with nothing stored reports ONE
    *  implicit output built from its live data pin, protocol and colour order.
    *  `count` is pixels on a strip Layout and PANELS on a matrix one. */

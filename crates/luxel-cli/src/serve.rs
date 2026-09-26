@@ -1230,6 +1230,34 @@ fn layout_limits(state: &State, strict: bool) -> luxel_core::layout::Limits<'sta
     }
 }
 
+/// The `driver.live` block a `--board panel` mirror reports (#525).
+///
+/// There is no DMA here to have booted anything, so the mirror synthesises a
+/// live block that is the CONFIGURED driver: the UI's "configured != live →
+/// reboot to apply" rule then reads "in sync" against a mirror, which is what
+/// makes the banner testable in the browser without a panel on the bench.
+/// `None` only when the arrangement has no framebuffer at all (an odd `ph`,
+/// or a `scan` that does not divide `ph / 2`) — the same answer the firmware
+/// gives when it cannot build one.
+fn synthetic_live(
+    matrix: &luxel_core::layout::Matrix,
+    driver: &luxel_core::layout::PanelDriver,
+) -> Option<luxel_core::layout::LiveDriver> {
+    let g = luxel_hub75::arrange::fb_geometry(matrix, driver.planes as usize)?;
+    let stripes = luxel_hub75::arrange::stripes(matrix);
+    Some(luxel_core::layout::LiveDriver {
+        planes: driver.planes,
+        clock_mhz: driver.clock_mhz,
+        chip: driver.chip,
+        blank: driver.blank,
+        w: (g.cols / stripes) as u16,
+        h: (2 * g.rows * stripes) as u16,
+        scan: g.rows as u16,
+        fb_bytes: g.bytes() as u32,
+        fallback: false,
+    })
+}
+
 /// Build the `View` the core JSON writer needs and run `f` with it.
 fn with_layout_view<R>(
     state: &State,
@@ -1242,7 +1270,10 @@ fn with_layout_view<R>(
         None => (0, None),
     };
     // copied out and the guard dropped here: `f` locks `state.layout` itself
-    let matrix = state.layout.lock().unwrap().matrix;
+    let (matrix, driver) = {
+        let l = state.layout.lock().unwrap();
+        (l.matrix, l.driver)
+    };
     f(&luxel_core::layout::View {
         pixels: pixels.unwrap_or_else(|| state.pixel_count.load(Ordering::Relaxed)),
         max_pixels: state.max_pixels,
@@ -1257,12 +1288,12 @@ fn with_layout_view<R>(
         default_proto: state.protocol.load(Ordering::Relaxed),
         default_order: state.color_order.load(Ordering::Relaxed),
         // A `--board panel` mirror answers the refresh estimate from the
-        // Seengreat board's own numbers (7 bitplanes, 30 MHz LCD_CAM) so a
-        // Settings page can be built against it; `drive` is the whole chain
-        // because a mirror has no DMA framebuffer to run out of.
+        // CONFIGURED driver, exactly as the firmware does; `drive` is the
+        // whole chain because a mirror has no DMA framebuffer to run out of.
         panel: state.hw.panel.then(|| luxel_core::layout::PanelView {
-            est_hz: luxel_hub75::arrange::est_hz(&matrix, 7, 30_000_000),
+            est_hz: luxel_hub75::arrange::est_hz(&matrix, driver.planes as u32, driver.clock_hz()),
             drive: matrix.panels(),
+            driver_live: synthetic_live(&matrix, &driver),
         }),
     })
 }

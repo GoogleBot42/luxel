@@ -51,7 +51,10 @@ geometry: `blur_frame_grid`/`glow_frame_grid` (`outpipe.rs:387`/`402`) when `sel
 top of** the engine's: palette remap → blur → glow → color-order permute → gamma LUT →
 power cap, into a scratch `Vec` (`main.rs:823-855`, `outpipe::apply` at `outpipe.rs:466`).
 It returns the input frame untouched when every knob is off (`main.rs:794-796`).
-`PowerModel::Hub75 { scan: PANEL_ROWS/2 }` on panel boards (`main.rs:783-785`).
+`PowerModel::Hub75 { scan }` on panel boards (`main.rs:783-785`). *(Since
+2026-09-26, #401: `scan` is read from the panel that actually booted —
+`crate::power_model()` loads `hub75::live_scan()`, a relaxed atomic — because
+the panel's geometry is a stored setting, not `PANEL_ROWS/2`.)*
 
 ### Where the frame goes
 
@@ -70,10 +73,19 @@ It returns the input frame untouched when every knob is off (`main.rs:794-796`).
 Output drivers: `firmware/src/output.rs:51` `OutputDriver` trait (`set_protocol`,
 `resize`, `write_frame(&[[u8;3]], brightness5) -> bool`, `ready_for_frame`,
 `paces_frames`); `SpiStripOutput` (`output.rs:145`) for SK9822/WS281x;
-`firmware/src/hub75.rs:88` `Hub75Output` with `DmaFrameBuffer<NROWS, PANEL_COLS, PLANES>`,
-`PANEL_COLS = PANEL_ROWS = 64` (`hub75.rs:49-50`), `PLANES = 7` (`hub75.rs:58`),
-LCD_CAM clock 30 MHz (`hub75.rs:86`). Compose is `luxel_hub75::pack::<NROWS, COLS,
-PLANES>` (`hub75.rs:478`) with a per-pixel `set_pixel` fallback (`hub75.rs:481-496`).
+`firmware/src/hub75.rs` `Hub75Output`. **None of the panel's dimensions is a
+constant since 2026-09-26 (#401 + #525)** — the values below were the defaults
+this survey found, and are now *stored settings* read from the Layout at boot
+(`matrix` for 64×64/chain/scan, `panel <planes> <clock_mhz> <chip> <blank>`
+for the rest), each `reboot_required` on a HUB75 board: panel 64×64 by
+default, 7 bitplanes (4..8), LCD_CAM clock 30 MHz (2..40), plus a driver-chip
+init and latch blanking that did not exist. The framebuffer is `DynFb`, a
+heap-allocated `[u16]` with a runtime `Geometry`, not
+`DmaFrameBuffer<NROWS, PANEL_COLS, PLANES>`; compose is
+`luxel_hub75::pack(dst, g, …)` with runtime dimensions and **no per-pixel
+`set_pixel` fallback** (it was there to cover a third-party framebuffer, and
+there is none left). See docs/api.md "How the panel is driven" and
+docs/boards.md "Panel driver settings".
 
 ### Where a compositor slots in
 
@@ -342,10 +354,10 @@ Per-rescan budget is 8.67 ms; core 0 needs 2.2 ms for compose and ~50 µs for th
 
 | layer | what it knows | file:line |
 |---|---|---|
-| board | `PANEL_COLS`/`PANEL_ROWS` = 64/64, compile-time const-generic | `hub75.rs:49-50` |
-| board | `MAX_PIXELS` per board (2048 strip / 4096 panel) | `docs/boards.md:988-1000` |
+| board | the panel's shape — a **stored setting** since #401 (`DEFAULT_PANEL_W`/`_H` = 64/64 is only the default and the fallback; `Layout.matrix` + `Layout.driver` are the truth, applied at boot) | `hub75.rs`, `layout.rs::{matrix,driver}` |
+| board | `MAX_PIXELS` per board (2048 strip / 4096 panel) — the bound a configured panel is refused against | `docs/boards.md:988-1000` |
 | firmware | `devicemap::MapData::{Coords{dims,coords}, Grid{w,h}}` — the persisted device map | `devicemap.rs:36-39` |
-| firmware | `board_default()` — a `hub75` board IS a `PANEL_COLS × PANEL_ROWS` grid | `devicemap.rs:65-77` |
+| firmware | `board_default()` — a `hub75` board IS its panel's grid; since #401 that is the **configured** panel, and `devicemap::refresh_board_grid` widens the board map to it once the Layout is loaded | `devicemap.rs` |
 | firmware | `devicemap::init()` — flash blob, else board default, else nothing | `devicemap.rs:254` |
 | engine | `Engine::set_map(dims, coords)` / `set_map_vec` — normalizes per axis, runs grid detection | `engine.rs:662`, `engine.rs:676` |
 | engine | `Engine::set_grid_map(w, h)` — **procedural**, zero heap, `MapData::grid` | `engine.rs:432` |

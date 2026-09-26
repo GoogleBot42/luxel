@@ -87,18 +87,52 @@ pub fn source() -> DeviceMap {
 }
 
 /// The geometry a board knows it has, used when nothing is stored: a HUB75
-/// panel board IS a `PANEL_COLS`×`PANEL_ROWS` grid. Strips have none.
+/// panel board IS its panel's grid. Strips have none.
+///
+/// This is the board's DEFAULT panel — a configured one can be any shape
+/// since #401, and [`refresh_board_grid`] widens this to it as soon as the
+/// Layout is loaded (which is one call later in `main`; see its docs).
 fn board_default() -> Option<MapData> {
     #[cfg(feature = "hub75")]
     {
-        Some(MapData::Grid {
-            w: crate::hub75::PANEL_COLS as u16,
-            h: crate::hub75::PANEL_ROWS as u16,
-        })
+        Some(MapData::Grid { w: crate::hub75::DEFAULT_PANEL_W, h: crate::hub75::DEFAULT_PANEL_H })
     }
     #[cfg(not(feature = "hub75"))]
     {
         None
+    }
+}
+
+/// Re-derive the BOARD grid from the CONFIGURED panel (#401).
+///
+/// Panel geometry is a stored setting now, so the grid a panel board installs
+/// when the user has installed no map of their own has to follow it —
+/// otherwise a `matrix 128 64 …` Layout renders patterns into a 64x64 grid
+/// while 8192 pixels exist.
+///
+/// Called from `layout::init()`, which runs immediately after [`init`] here.
+/// The two cannot simply be reordered: this module's [`source`] is what tells
+/// the Layout whether a user map has made its kind `map`. No-op unless the
+/// installed map IS the board's own, and silent unless it actually changes —
+/// so a default-shaped panel prints exactly the one map line it always did.
+#[cfg(feature = "hub75")]
+pub fn refresh_board_grid(w: u16, h: u16) {
+    if !matches!(source(), DeviceMap::Board) || w == 0 || h == 0 {
+        return;
+    }
+    let changed = MAP.lock(|c| {
+        let mut m = c.borrow_mut();
+        if let Some(MapData::Grid { w: gw, h: gh }) = m.as_ref() {
+            if (*gw, *gh) == (w, h) {
+                return false;
+            }
+        }
+        *m = Some(MapData::Grid { w, h });
+        true
+    });
+    if changed {
+        println!("map: {}x{} grid (configured panel)", w, h);
+        DIRTY.store(true, Ordering::Relaxed);
     }
 }
 

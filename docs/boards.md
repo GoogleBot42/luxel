@@ -1750,9 +1750,14 @@ back the saving.
   allocated once at boot — so the extra 2048 pixels cost only the
   per-frame RGB buffers.
 
-A `const` assertion in board.rs fails the build if a panel's area ever
-exceeds its board's cap, so the half-dark panel that shipped between #72
-and #74 cannot come back silently.
+A `const` assertion in board.rs fails the build if the **default** panel's
+area ever exceeds its board's cap, so the half-dark panel that shipped
+between #72 and #74 cannot come back silently. Since #401 the panel is a
+stored setting, so the same cap is also checked at boot and by the layout
+parser: a CONFIGURED panel over 4096 pixels is refused, and the boot falls
+back to the board default rather than shipping a half-dark panel (see "Panel
+driver settings"). Raising the cap so a real chain fits is a follow-up ticket
+with #255.
 
 Heap cost at 4096 px, by inspection (each buffer is 3 B/px and grows to
 the active pixel count): the engine's frame buffer, the crossfade blend
@@ -2835,7 +2840,10 @@ was right, and the rate is exactly linear in the clock:
 | 40 MHz | **154.0** | 2.00× | **fails**: mid-panel split, distorted colours |
 
 Measured on the bench 64x64 FM6124EJ panel at 7 bitplanes, two
-`/api/status` samples 20 s apart.
+`/api/status` samples 20 s apart. Since #525 the clock is the `panel` line's
+`clock_mhz` **setting** (2..40, default 30) rather than a const, so read this
+table as what one FM6124EJ panel does, not as what every panel does — see
+"Panel driver settings" below.
 
 **Why 30 MHz.** The FM6124 datasheet (v1.1) puts FCLK at max 30 MHz, and its
 20 ns minimum clock high/low implies 25 MHz on pulse width alone — so 30 MHz
@@ -2916,31 +2924,57 @@ against the two bitplane framebuffers' 14 B per driver pixel, and *those*
 are DMA targets that must be internal. A remap big enough to matter always
 comes with framebuffers seven times bigger that cannot move either.
 
-**What this board can drive.** The DMA framebuffer is compile-time sized
-(`PANEL_COLS` × `PANEL_ROWS` = 64×64, Gitea #401) and a chain is one ribbon,
-so it shifts out 64 columns: one 64-wide tile, or two 32-wide ones. An
-arrangement whose chain is wider is accepted, stored and reported — the
-board drives the leading tiles that fit and `GET /api/layout` says so in
-`matrix.drive`. Verified on metal: `matrix 32 32 2 2 bl row 1 1` (four
-32×32 tiles, snaked, alternate lines rotated) boots, reports `drive` 2 of 4
-and keeps rendering. A **real** multi-panel chain also needs the pixel
-ceiling raised past 4096 and the framebuffers to fit — both are #401/#255,
-and neither can be verified without a second physical panel.
+**What this board can drive.** *(Rewritten 2026-09-26 — this paragraph
+described a compile-time framebuffer until #401 landed; see "Panel driver
+settings" below.)* The DMA framebuffer is **allocated at boot from the
+stored `matrix` line**, so what the board can drive is no longer a constant:
+a chain is still one ribbon `pw · panels` wide and `ph` tall, and the
+framebuffer is sized to exactly that. What bounds it now is
+`board::MAX_PIXELS` (4096 on a panel board) and the internal SRAM the two
+bitplane buffers need — 14 B per driver pixel at 7 planes. A configured
+panel over either bound does not brick the board: the boot attempt is
+refused ("the panel is larger than this board's pixel cap" / an allocation
+failure) and the firmware **falls back once to the board default 64×64**,
+reporting `driver.live.fallback` on `/api/layout`. An arrangement whose
+chain is wider than the framebuffer that was actually built is still
+accepted, stored and reported — the board drives the leading tiles that fit
+and `GET /api/layout` says so in `matrix.drive`. Verified on metal (before
+#401): `matrix 32 32 2 2 bl row 1 1` (four 32×32 tiles, snaked, alternate
+lines rotated) boots, reports `drive` 2 of 4 and keeps rendering. A **real**
+multi-panel chain still needs the pixel ceiling raised past 4096 (#255, and
+a follow-up ticket) and the framebuffers to fit, and neither can be verified
+without a second physical panel.
 
 **Estimated refresh.** The firmware reports `matrix.est_hz`, the rate the
 whole configured chain would rescan at:
 
 ```text
-est_hz = clock_hz / ( scan · (2^planes − 1) · pw · panels )
+est_hz = clock_hz / ( scan · (2^planes − 1) · pw · panels · stripes )
 ```
 
-`scan` is the `scan` field when set, else `ph / 2`. It reproduces every
-number in "The LCD_CAM pixel clock on the panel" above — 115/76/153 Hz
-against 115.3/76.9/153.5 measured — and the #255 research's 28.8 Hz for
-four chained 64×64 tiles. The device's own `est_hz` read **115** against a
-measured `rescan_hz` of **115** throughout the session. A UI computing the
-same number in the browser (Settings, #469) has the formula in docs/api.md
-and `est_hz` to check itself against; under ~100 Hz the panel flickers.
+`stripes = (ph / 2) / scan`, so it is 1 on every ordinary panel and the
+formula reads as it always did (it was added 2026-09-26, #764 — see below).
+`scan` is the `scan` field when set, else `ph / 2`; `planes` and `clock_hz`
+are the `panel` line's settings (7 and 30 MHz by default) rather than
+constants since #525. It reproduces every number in "The LCD_CAM pixel clock
+on the panel" above — 115/76/153 Hz against 115.3/76.9/153.5 measured — and
+the #255 research's 28.8 Hz for four chained 64×64 tiles. The device's own
+`est_hz` read **115** against a measured `rescan_hz` of **115** throughout the
+session. A UI computing the same number in the browser (Settings, #469) has
+the formula in docs/api.md and `est_hz` to check itself against; under
+~100 Hz the panel flickers.
+
+**A 1/N-scan panel does not rescan faster, and `est_hz` used to say it did.**
+Fewer address rows means a proportionally LONGER row: one address row clocks
+out `stripes = (ph / 2) / scan` copies of the chain's width, so the product
+`scan · pw · panels · stripes` is the panel's pixel count however the rows
+are multiplexed. `est_hz` multiplies `pw · panels` by `stripes` since
+2026-09-26 (#764, fixed in the #401/#525 branch); before that a `scan 8`
+panel read four times its real refresh. The same `stripes` factor sizes the
+framebuffer (`arrange::fb_geometry`) and is folded into the remap table, so
+1/N scan costs the compose path nothing beyond the gather a chain already
+does. Only the **"straight"** quad mapping is implemented; other multiplex
+mappings are a follow-up ticket, and no 1/N-scan panel has been on the bench.
 
 **Image cost**, flake builds against master `9ea68f9`:
 
@@ -2965,6 +2999,116 @@ output table as much as this ticket's chain wiring). It shares one match arm
 `/api/apmode`: given its own arm it cost 624–704 B instead, a whole extra
 copy of picoserve's response path, which is the same trap `Reply` exists to
 avoid (docs/size-report.md, .claude/rules/firmware.md).
+
+## Panel driver settings: the panel became runtime (2026-09-26, Gitea #401 + #525)
+
+Every HUB75 parameter that used to be a `const` in `firmware/src/hub75.rs` is
+now a **stored device setting applied at boot**. One image drives any panel
+the RAM fits, which is what a second physical panel on the bench needed:
+Jeremy's new 64×64 tiles are not the FM6124EJ the firmware was tuned for.
+
+| knob | where | range | default | what it is |
+|---|---|---|---|---|
+| `pw` `ph` `cols` `rows` `scan` | `matrix` line | — | 64 64 1 1 (scan `ph/2`) | the arrangement, which now **sizes the framebuffer** |
+| `planes` | `panel` line | 4..8 | **7** | BCM bit depth; one rescan shifts the chain `2^planes − 1` times |
+| `clock_mhz` | `panel` line | 2..40 | **30** | the LCD_CAM pixel clock |
+| `chip` | `panel` line | `shiftreg` · `fm6126a` · `icn2038s` · `dp3246` | **`shiftreg`** | the driver chip's register init, bit-banged on the pins before the DMA starts |
+| `blank` | `panel` line | 0..8 | **1** | clocks with OE off at the start of each row block and again before the latch word |
+
+Wire format, JSON (`/api/layout`'s `driver` block, with `live` = what actually
+booted) and the reboot rules are in docs/api.md, "How the panel is driven".
+**Every one of these is reboot-required on a HUB75 board** — including `pw`
+and `ph`, which stay live on a strip-built matrix.
+
+**The bench clock table above is now this setting's meaning, not the
+firmware's choice.** "The LCD_CAM pixel clock on the panel" measured 20 MHz
+and 30 MHz clean and 40 MHz broken *on one FM6124EJ panel*; the wire accepts
+2..40 because which panel is plugged in is not something the firmware can
+know, and the UI warns above 30. A clock failure is invisible to every
+counter the device has (no swap error, no DMA error, a byte-identical
+composed frame) — it needs an eyeball.
+
+**`shiftreg` is the common case.** It sends nothing at all, which is correct
+for FM6124, SM16208, ICN2037 and any other plain shift-register column
+driver. `fm6126a` and `icn2038s` share the two-register init of the C++
+`ESP32-HUB75-MatrixPanel-I2S-DMA`'s `fm6124init`; `dp3246` has its own, and
+also holds the latch for the **last 3 clocks** of every row instead of 1.
+`dp3246` is **incomplete** — it additionally needs the inverted pixel-clock
+phase, which is an esp-hub75 cargo feature (`invert-clock`), so the chip
+setting alone will not drive one (Gitea #763). Shift-register ROW drivers
+(SM5266P / SM5368 address latching) are a separate follow-up ticket.
+
+**Nothing dark, ever, from a bad setting.** A boot attempt that cannot build
+— the panel is over `MAX_PIXELS`, a framebuffer or descriptor allocation
+fails, the `blank`/latch combination leaves no OE-active clock in a row
+block, or `Hub75::new` refuses the clock — is retried **once at the board
+default** (64×64, 7 planes, 30 MHz, `shiftreg`, `blank 1`) and reports
+`driver.live.fallback: true`. Only if that fails too does panel output stay
+disabled with the render loop still ticking, which is the pre-#401
+behaviour. Every allocation the failed attempt made is handed back before the
+retry (owned `Block`s, not `leak()` at the allocation site); the two
+exceptions are spare-plane mode's staging buffer, which comes from the PSRAM
+arena and cannot be freed, and everything the GDMA may already point at when
+`Hub75::new` itself fails — see docs/firmware.md.
+
+**What to look for on serial.** One boot prints, in this order:
+
+```text
+map: 128x64 grid (configured panel)          # only when the panel is not 64x64
+hub75: 1x1 tiles of 64x64 from tl row, framebuffer 64x64 scan 1/32, remap off (row-major), est 115 Hz
+hub75: fm6126a init sequence sent (194 clocks)   # only when chip != shiftreg
+hub75: 64x64 panel, scan 1/32, 7 bitplanes, LCD_CAM @ 30 MHz, chip shiftreg, blank 1, \
+       circular DMA, 254 descriptors x 2 rings = 6096 B, framebuffer 28672 B
+```
+
+(`framebuffer 28672 B` is ONE of the two — `rows · cols · planes · 2 B` at
+`32 · 64 · 7` — which is the number `driver.live.fb_bytes` reports.)
+
+A fallback adds `— FALLBACK, the configured panel would not build` to the end
+of that last line, preceded by `hub75: <why> — falling back to the board
+default panel`. Two dead ends: `hub75: <why> at the board default — panel
+output disabled`, and `hub75: blank N + M latch clocks leave no lit clocks in
+a C-word row block` (the template check, which trips the fallback rather than
+shipping a black panel). The old `hub75: bulk bitplane packer active` line is
+gone — the packer is the only compose path now, so a running panel IS a
+running packer.
+
+**Jeremy's new panels use the SM16208SF**, which the SM16208 datasheet brief
+and the DMD_STM32 driver table both describe as a plain shift register with
+built-in ghost elimination and a 35 ns OE minimum (the related SM16206 is
+rated 25 MHz max). So `chip shiftreg` — no init — and the first try on the
+old firmware ("kind of worked, some parts wrong, unexpected parts lit") most
+likely wants the two knobs that did not exist then: **`clock_mhz 20` and
+`blank 2`–`4`**. In wire terms, `panel 7 20 shiftreg 2`.
+
+**Cost**, credless flake builds, master `e6e59cb` as the baseline:
+
+| variant | master | this change | Δ | of its slot | `.stack` |
+|---|---:|---:|---:|---:|---:|
+| `seengreat-hub75` | 1,147,216 | **1,158,048** | +10,832 | 36.81 % of 3 MiB | 25,852 → **31,620** |
+| `seengreat-hub75` + `hub75-spare-plane` | 1,150,928 | **1,161,888** | +10,960 | — | **31,452** |
+| `s3-devkit` + `hub75` | 1,145,888 | **1,156,592** | +10,704 | **88.24 %** of 1.25 MiB | **29,020** |
+
+`.stack` goes UP by 5,768 B on the Seengreat because the descriptor rings
+left `.bss` for the heap — a runtime geometry cannot use
+`hub75_dma_descriptors!`, which is a compile-time static — so that is not
+free RAM, it moved. Largest frame is unchanged (picoserve's 10,512 B against
+the 12,288 B budget) and `tools/stack-check.sh` is green on all three. The
+~10.7 KB of image is the runtime framebuffer, the template writer, the
+runtime-dimensioned packer, the four chip sequences and the fallback path;
+strip boards are untouched (it all lives behind the `hub75` feature).
+
+**Host tests**: `luxel-hub75` 47 (the control template byte-identical to
+`hub75-framebuffer`'s own at `blank 1` / 1 latch clock for six geometries;
+the runtime packer byte-identical to `set_pixel`; the chip sequences
+step-exact against the C++ reference), `luxel-core` 314, 677 in the
+workspace. The runtime packer is **0.91–0.93×** the const-generic one on
+x86 — the cost of `cols` no longer being a constant.
+
+**Nothing here has been on a panel yet.** The on-metal list is **Gitea #765**:
+the chip inits, a 1/N-scan panel, chains at the new sizes, non-default
+`planes`/`clock_mhz`/`blank`, the fallback path and the board-map refresh.
+docs/UNTESTED.md carries the status.
 
 ## The framebuffer swap is frame-atomic (2026-09-07, Gitea #376)
 
@@ -3021,7 +3165,10 @@ against the 115 Hz rescan, because every swap cost two panel frames.
 2 rings = **6,096 B**, up from 3,048 (`__DESC_CELL` 0xbec → 0x17d4 in the
 linked image). It comes out of the leftover `.stack` region — 33,372 →
 30,268 B, and `tools/stack-check.sh` still passes with the largest frame at
-9,648 B. Flash cost is +664 B (`.text` +512, `.rodata` +112, `.data` +40);
+9,648 B. *(Since #401, 2026-09-26, both rings are **heap**, not `.bss`:
+`hub75_dma_descriptors!` is a compile-time static and the geometry is a
+runtime setting. Same 6,096 B at 64×64/7 planes, and it is why `.stack` on
+this board went UP by 5,768 B — see "Panel driver settings" above.)* Flash cost is +664 B (`.text` +512, `.rodata` +112, `.data` +40);
 the app image goes 950,480 → 951,264 B (+784 with headers and padding),
 leaving 97,312 B (9.28 %) of the OTA slot still free. Heap is untouched — the framebuffers themselves did not change.
 
@@ -3082,6 +3229,12 @@ metal:**
 | descriptor rings (`.bss`) | 6,096 B | 6,096 B |
 | app image | 970,128 B | 973,744 B |
 | `.stack` | 27,188 B | 27,124 B |
+
+*(Every row of this table is a 64×64/7-plane figure, and since #401 every one
+of them is derived from the stored `panel`/`matrix` settings at boot rather
+than from a type — the descriptor rings included, which are **heap** now, not
+`.bss`. Current image and `.stack` numbers for both variants are in "Panel
+driver settings" above.)*
 
 At the 256-column chain the same shape is 114,688 + 16,384 B internal against
 229,376 B — the #611 ledger. **Off by default** until Jeremy has looked at it
@@ -3306,6 +3459,17 @@ boot-time probe writes three pixels through the crate's own `set_pixel` and
 checks they land where `pack` would have put them. A failed probe, or a failed
 2 KiB table allocation, keeps the per-pixel path and says so on serial; a
 healthy board prints `hub75: bulk bitplane packer active (2048 B of tables)`.
+
+*(Both halves of that paragraph are history as of #401, 2026-09-26. There is
+no third-party framebuffer left to disagree with: the firmware owns the
+buffer (`DynFb`) and `luxel_hub75::format` writes the control template, and
+the two are asserted byte-identical to `hub75-framebuffer`'s on the host. The
+`size_of` assert and the boot probe are gone, replaced by `template_lights` —
+which asks the one question the host cannot, whether the configured
+`blank`/latch widths leave any OE-active clock in a row block, and trips the
+fallback if not. The per-pixel compose path is gone too: the packer is the
+only one, so failing to find its 2 KiB is a boot failure, and the "packer
+active" serial line no longer exists. See "Panel driver settings" above.)*
 
 Costs: app image 960,208 → 962,288 B on `board-seengreat-hub75` (+2,080;
 8.22 % of the OTA slot still free), `.stack` 28,788 → 28,780 B, the output

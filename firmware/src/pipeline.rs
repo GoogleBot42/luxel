@@ -117,7 +117,7 @@ impl PipeState {
             &crate::outpipe_settings(),
             b5,
             grid,
-            crate::POWER_MODEL,
+            crate::power_model(),
             shared::post_palette_stops,
         );
         let t1 = Instant::now();

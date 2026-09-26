@@ -1,5 +1,98 @@
 # Update log
 
+## 2026-09-26 — HUB75 settings become runtime: one image drives any panel (#401, #525)
+
+Every HUB75 parameter that was a `const` in `firmware/src/hub75.rs` is now a
+**stored device setting applied at boot**: panel width/height, chain and scan
+(the existing `matrix` line, which now SIZES the DMA framebuffer) plus a new
+`panel <planes> <clock_mhz> <chip> <blank>` line for bit depth (4..8, default
+7), LCD_CAM pixel clock (2..40 MHz, default 30), driver-chip init (`shiftreg`
+· `fm6126a` · `icn2038s` · `dp3246`, default `shiftreg`) and latch blanking
+(0..8 clocks, default 1).
+
+**Why now.** Jeremy's new 64×64 tiles use the **SM16208SF** column driver, not
+the FM6124EJ the firmware was tuned around. The SM16208 is a plain shift
+register (no init, built-in ghost elimination, 35 ns OE minimum; the related
+SM16206 is rated 25 MHz max), and his first try on the old firmware "kind of
+worked, some parts wrong, unexpected parts lit" — the two knobs most likely to
+fix that, a **slower clock (20 MHz)** and a **wider latch blanking (2–4)**,
+did not exist as settings. `panel 7 20 shiftreg 2` is now a POST.
+
+**The firmware.** The const-generic `DmaFrameBuffer<NROWS, PANEL_COLS,
+PLANES>` is gone. `DynFb` is a heap `[u16]` with a runtime `Geometry`
+implementing esp-hub75's `FrameBuffer`; `luxel_hub75::format` writes the
+control template (previous-row address, OE blanking, latch width — 3 clocks
+for a DP3246) and is asserted byte-identical to `hub75-framebuffer`'s own at
+`blank 1` / 1 latch clock. The descriptor rings are heap-allocated at the
+runtime count (`hub75_dma_descriptors!` is a compile-time static), the packer
+is runtime-dimensioned with one boot-allocated `Scratch` (14 B per column),
+and a chip's register init is bit-banged on the real pins (100 ns clock holds)
+before the LCD_CAM takes them over. `probe_layout` is replaced by
+`template_lights`, which asks the one question a host test cannot — whether
+the configured `blank` plus the chip's latch width leave any OE-active clock
+in a row block — and the per-pixel compose fallback is gone, because there is
+no third-party framebuffer left to disagree with.
+
+**Nothing goes dark from a bad setting.** A boot attempt that cannot build —
+over the board's pixel cap, an allocation failure, an unlightable template, a
+clock `Hub75::new` refuses — is retried **once at the board default** (64×64,
+7 planes, 30 MHz, `shiftreg`, `blank 1`) and reports `driver.live.fallback`;
+only if that fails too is output disabled with the render loop still ticking.
+Every allocation is owned until the driver starts, so the fallback gets the
+heap the first attempt started with. Two exceptions, both documented in code:
+spare-plane mode's staging buffer (PSRAM arena, no `free`) and the buffers a
+half-started GDMA may already point at.
+
+**1/N-scan panels** now size the framebuffer: rows = `scan`, cols =
+`chain_w × stripes` where `stripes = (ph/2)/scan`, with the "straight" quad
+mapping folded into the same remap table as the tile arrangement (other
+multiplex mappings are a follow-up). `est_hz` gained the `stripes` factor
+(**#764, fixed here**) — a 1/N-scan panel's refresh does not improve with
+scan, the rows just get longer, and the old formula overstated a `scan 8`
+panel fourfold. The board device map follows the configured panel too
+(`devicemap::refresh_board_grid`), so a `matrix 128 64 …` no longer renders
+patterns into a 64×64 grid.
+
+**On the wire and in the UI.** `GET /api/layout` gains a `driver` block:
+the four configured values, the `chips` list a client should offer, and
+`live` — what the running DMA actually booted (`w`/`h`/`scan`/`fb_bytes`/
+`fallback`, `null` when there is no panel output). Configured ≠ live is the
+reboot indicator, which on a panel board now includes `matrix` pw/ph/chain/
+scan. A `panel`-less POST keeps the stored driver (merge, not reset). Settings
+› Advanced › Panel driver became a form over that block
+(`lib/panelDriver.ts` + its own test fixtures, states live/pending/fallback/
+disabled/unknown), the chip `<select>` is built from `driver.chips`, and the
+refresh readout is computed from the values being edited. The `luxel-cli`
+mirror synthesises a `live` block equal to its configured one, so the banner
+is testable in a browser with no panel on the bench.
+
+**Sizes** (credless flake builds, master `e6e59cb` baseline):
+`seengreat-hub75` 1,147,216 → **1,158,048 B** (+10,832; 36.81 % of its 3 MiB
+slot), `+hub75-spare-plane` 1,150,928 → 1,161,888, `s3-devkit`+`hub75`
+1,145,888 → **1,156,592 B** (88.24 % of 1.25 MiB). `.stack` on the Seengreat
+25,852 → **31,620 B** — it went UP by 5,768 B because the descriptor rings
+left `.bss` for the heap, i.e. that RAM moved rather than appeared; spare-plane
+31,452, `s3-devkit` 29,020, largest frame unchanged (picoserve 10,512 B),
+`tools/stack-check.sh` green on all three. Strip boards are untouched.
+
+**Tests.** `luxel-hub75` 47 (template byte-identical to `hub75-framebuffer`'s
+at the stock control settings over six geometries; runtime packer
+byte-identical to `set_pixel`; chip sequences step-exact against the C++
+`ESP32-HUB75-MatrixPanel-I2S-DMA` reference), `luxel-core` 314, **677 in the
+workspace**. The runtime packer is 0.91–0.93× the const-generic one on x86 —
+the price of `cols` not being a constant.
+
+**None of this has been on a panel.** Jeremy's list, tracked as **#765**: the
+chip init sequences, a 1/N-scan panel, chains at the new sizes, non-default
+`planes`/`clock_mhz`/`blank`, the fallback path and the board-map refresh. The
+first thing worth trying on the new tiles is `panel 7 20 shiftreg 2`. Also
+open: **#763** — `dp3246` is incomplete, because it additionally needs the
+inverted pixel-clock phase, which is an esp-hub75 cargo feature
+(`invert-clock`) rather than anything the chip setting can reach. Follow-up
+tickets filed for shift-register ROW drivers (SM5266P / SM5368 addressing),
+the other quad-scan multiplex mappings, and raising `MAX_PIXELS` past 4096 so
+a real chain fits.
+
 ## 2026-09-25 — Jeremy's scenes + UI feedback batch (#729: #728, #730–#745, #753)
 
 A 45-item review of the shipped Web UI v2 work, filed as epic **#729** with 18

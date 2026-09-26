@@ -76,9 +76,18 @@ value while collapsed. Everything below is on the new page.
   what builds it, and it reboots.
 - [ ] **The estimated refresh number** — one 64×64 panel should read 115 Hz,
   which is what the panel measures (`rescan_hz`, shown beside it as
-  "measured now"). The figure is the DEVICE's `est_hz` when it reports one, so
-  a disagreement there means the firmware and the panel disagree, not the
-  browser.
+  "measured now"). It is computed from the driver the device reports as
+  CONFIGURED (Advanced › Panel driver), so it follows that form; a
+  disagreement with the measurement means the firmware and the panel
+  disagree, not the browser.
+- [ ] **Advanced › Panel driver on the Seengreat** (Gitea #401/#525) — the
+  row is a FORM now: bit planes, pixel clock, driver chip, latch blanking.
+  Set the clock to **20 MHz** and reboot (the row says "reboot to apply"
+  until you do, and the card names what is still running): `rescan_hz`
+  should come back at **~77 Hz**, and the estimate beside it should already
+  have said so. Then, if the SM16208 panel ghosts, set **latch blanking 2**
+  and reboot — the ghosting should go. Above 30 MHz the clock field warns;
+  40 MHz split the panel on the bench, so do not leave it there.
 - [ ] **Firmware & recovery → Update…** — pick a `luxel.bin` for that board
   and let it flash itself over the network. **Never run against hardware**
   (the mirror advertises no OTA, so no harness can reach this path) —

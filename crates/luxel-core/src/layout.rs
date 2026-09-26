@@ -184,6 +184,91 @@ impl Matrix {
     }
 }
 
+/// The driver chip a HUB75 panel's shift registers actually are (Gitea
+/// #525). Most panels are a plain shift register and need no init at all;
+/// the rest want a register write clocked in before the first frame, which
+/// is why this is a stored SETTING and not a board constant — one firmware
+/// image drives all of them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Chip {
+    /// No init sequence: FM6124, SM16208, ICN2037 and every other plain
+    /// shift-register driver.
+    ShiftReg,
+    Fm6126a,
+    /// Same two-register init as [`Chip::Fm6126a`].
+    Icn2038s,
+    /// Its own init, and the latch is held for the last 3 clocks of every
+    /// row rather than 1 — see [`PanelDriver::latch_clocks`].
+    Dp3246,
+}
+
+impl Chip {
+    /// Every chip, in wire order — what `GET /api/layout` offers as
+    /// `driver.chips` so a UI never hard-codes the list.
+    pub const ALL: [Chip; 4] = [Chip::ShiftReg, Chip::Fm6126a, Chip::Icn2038s, Chip::Dp3246];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Chip::ShiftReg => "shiftreg",
+            Chip::Fm6126a => "fm6126a",
+            Chip::Icn2038s => "icn2038s",
+            Chip::Dp3246 => "dp3246",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Chip> {
+        match s {
+            "shiftreg" => Some(Chip::ShiftReg),
+            "fm6126a" => Some(Chip::Fm6126a),
+            "icn2038s" => Some(Chip::Icn2038s),
+            "dp3246" => Some(Chip::Dp3246),
+            _ => None,
+        }
+    }
+}
+
+/// How a HUB75 panel is DRIVEN, as opposed to how it is arranged: the BCM
+/// bit depth, the LCD_CAM pixel clock, the driver chip's init and how long
+/// OE is held off around the latch (Gitea #401 + #525, the `panel` wire
+/// line). Every field was a compile-time constant before this; all four are
+/// read at boot, so changing any of them is `reboot_required`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct PanelDriver {
+    /// BCM bitplanes, 4..=8. Fewer is a faster rescan and a coarser ramp:
+    /// one rescan shifts the whole chain `2^planes - 1` times.
+    pub planes: u8,
+    /// LCD_CAM pixel clock in MHz, 2..=40. 40 does not survive an FM6124
+    /// panel (the bench table in `firmware/src/hub75.rs`); the firmware
+    /// takes the number anyway and lets the UI warn.
+    pub clock_mhz: u8,
+    pub chip: Chip,
+    /// Clocks at the START of every row block, and again just before the
+    /// latch word, where OE is OFF — 0..=8. 1 is the stock template.
+    pub blank: u8,
+}
+
+impl Default for PanelDriver {
+    /// The board default every HUB75 image shipped before the `panel` line
+    /// existed: 7 planes, 30 MHz, no chip init, one blanking clock.
+    fn default() -> PanelDriver {
+        PanelDriver { planes: 7, clock_mhz: 30, chip: Chip::ShiftReg, blank: 1 }
+    }
+}
+
+impl PanelDriver {
+    pub const fn clock_hz(&self) -> u32 {
+        self.clock_mhz as u32 * 1_000_000
+    }
+
+    /// Clocks the latch is held HIGH at the end of a row block — 1 for a
+    /// shift register, 3 for a DP3246.
+    pub const fn latch_clocks(&self) -> u8 {
+        match self.chip {
+            Chip::Dp3246 => 3,
+            _ => 1,
+        }
+    }
+}
+
 /// One physical LED output — a consecutive run of the ONE pixel space
 /// (proposal §5.3b / D11). `count` is pixels on a strip Layout and tiles on
 /// a matrix Layout; `rev` marks a run wired backwards.
@@ -214,13 +299,23 @@ pub struct Layout {
     /// Empty = "one output, the host's defaults" (see [`View`]).
     pub outputs: Vec<Output>,
     pub proj: Projection,
+    /// Meaningful when the host has a HUB75 panel; carried like `matrix`,
+    /// defaulted when the wire says nothing (the `panel` line is optional,
+    /// so a body without one KEEPS the stored driver — [`Edit::driver_set`]).
+    pub driver: PanelDriver,
 }
 
 impl Layout {
     /// The Layout a host with nothing stored comes up in: `kind` from the
     /// board, one implicit output, projection defaults (all no-ops).
     pub fn board_default(kind: LayoutKind, matrix: Matrix) -> Layout {
-        Layout { kind, matrix, outputs: Vec::new(), proj: Projection::DEFAULT }
+        Layout {
+            kind,
+            matrix,
+            outputs: Vec::new(),
+            proj: Projection::DEFAULT,
+            driver: PanelDriver::default(),
+        }
     }
 
     /// Whether moving from `self` to `next` needs a reboot to take effect:
@@ -242,11 +337,24 @@ impl Layout {
     /// ([`Limits::default_pin`]), so a body that merely writes that same
     /// output down explicitly rebuilds nothing — which is what lets a
     /// Settings page POST the whole table on every edit.
-    pub fn reboot_required(&self, next: &Layout, default_pin: u8) -> bool {
+    ///
+    /// `panel_board` is the host saying "my framebuffer IS this Layout"
+    /// ([`Limits::panel`]): on a HUB75 board the DMA framebuffer is
+    /// allocated from the arrangement at boot, so `pw`/`ph` are
+    /// reboot-required there as well ([`Layout::fb_geometry_changed`]).
+    /// False — every strip host — gives byte-identical answers to the
+    /// pre-#525 two-argument form, `pw`/`ph` included: on a strip-built
+    /// matrix they only resize the grid, which is live.
+    pub fn reboot_required(&self, next: &Layout, default_pin: u8, panel_board: bool) -> bool {
         if next.kind == LayoutKind::Matrix
             && (self.kind != LayoutKind::Matrix
-                || self.matrix.wiring() != next.matrix.wiring())
+                || self.matrix.wiring() != next.matrix.wiring()
+                // the `panel` line: all four fields are read once, at boot
+                || self.driver != next.driver)
         {
+            return true;
+        }
+        if panel_board && self.fb_geometry_changed(next) {
             return true;
         }
         let implicit = [Output { n: 0, pin: default_pin, proto: 0, order: 0, count: 0, rev: false }];
@@ -264,6 +372,22 @@ impl Layout {
             }
         }
         false
+    }
+
+    /// Whether the DMA framebuffer a HUB75 boot allocates would differ:
+    /// the panel size, the chain and the scan depth (`fb_cols` × `fb_rows`
+    /// in the driver, docs/api.md). [`Layout::reboot_required`] already ORs
+    /// this in when a host tells it `panel_board`; it is public so a firmware
+    /// can ask the same question on its own, outside a POST.
+    pub fn fb_geometry_changed(&self, next: &Layout) -> bool {
+        if next.kind != LayoutKind::Matrix {
+            return false;
+        }
+        if self.kind != LayoutKind::Matrix {
+            return true;
+        }
+        let g = |m: &Matrix| (m.pw, m.ph, m.cols, m.rows, m.scan);
+        g(&self.matrix) != g(&next.matrix)
     }
 
     /// The Layout as its own `POST` wire — what a host persists, the way the
@@ -301,6 +425,18 @@ impl Layout {
                     push_u32(&mut out, v);
                     out.push(' ');
                 }
+                // The driver is only meaningful for a matrix, and the stored
+                // record IS the wire, so it goes out whenever the kind does
+                // — a reader without a `panel` line keeps its own default.
+                let d = &self.driver;
+                push_piece(&mut out, "\npanel ");
+                for v in [d.planes as u32, d.clock_mhz as u32] {
+                    push_u32(&mut out, v);
+                    out.push(' ');
+                }
+                push_piece(&mut out, d.chip.as_str());
+                out.push(' ');
+                push_u32(&mut out, d.blank as u32);
             }
         }
         for o in &self.outputs {
@@ -455,6 +591,13 @@ pub struct Edit {
     /// exist, the pad each is bound to, and the wire format a further
     /// output's peripheral was built for. See [`Layout::reboot_required`].
     pub reboot_required: bool,
+    /// Whether the body carried a `panel` line. The MERGE rule needs no work
+    /// from a host — [`parse`] starts from the Layout it was given, so a body
+    /// without one leaves `layout.driver` exactly as it was stored rather
+    /// than resetting it to the board default — and this is the flag for a
+    /// host that wants to know anyway: to log the change, or to skip
+    /// re-persisting a driver nobody touched.
+    pub driver_set: bool,
     /// A `proj` line: the projection the RUNNING pattern is to be shown
     /// under, right now (Gitea #598). `Some(Some(mode))` installs an
     /// override in the slot for the running pattern's OWN dimensionality,
@@ -479,12 +622,15 @@ pub struct Edit {
 /// strip <pixels>
 /// matrix <pw> <ph> <cols> <rows> <start> <dir> <snake> <rot180> [<scan>]
 /// map [grid <w> <h> | <dims> <raw16.16…>]
+/// panel <planes> <clock_mhz> <chip> <blank>
 /// out <n> <pin> <proto> <order> <count> [rev]
 /// proj1d|proj2d|proj3d <index|x|y|z|xy|xz|yz>
 /// ```
 ///
 /// `out` lines are all-or-nothing: one of them replaces the whole table, so
-/// a body with none keeps the outputs untouched.
+/// a body with none keeps the outputs untouched. `panel` is a merge for the
+/// same reason in reverse: a body without one keeps the stored driver
+/// ([`Edit::driver_set`]).
 pub fn parse(
     body: &str,
     cur: &Layout,
@@ -496,6 +642,7 @@ pub fn parse(
     let mut map = None;
     let mut outs: Option<Vec<Output>> = None;
     let mut kind_seen = false;
+    let mut driver_set = false;
     let mut proj_now = None;
 
     for (i, raw) in body.lines().enumerate() {
@@ -540,6 +687,18 @@ pub fn parse(
                 if m.width() > u16::MAX as u32 || m.height() > u16::MAX as u32 {
                     return Err(err("grid is wider or taller than 65535"));
                 }
+                // A HUB75 panel shifts two half-height rows at once through
+                // R1G1B1/R2G2B2, so its address depth is `ph / 2` — a panel
+                // with an odd `ph` is not a shape the driver can express.
+                if lim.panel && m.ph % 2 != 0 {
+                    return Err(err("a panel's ph must be even"));
+                }
+                // …and a stated `scan` shallower than that stripes the
+                // framebuffer, `(ph / 2) / scan` stripes of it, which only
+                // works if it tiles exactly (docs/api.md, Gitea #401).
+                if m.scan != 0 && (m.ph % 2 != 0 || (m.ph / 2) % m.scan as u16 != 0) {
+                    return Err(err("scan must divide ph/2"));
+                }
                 next.kind = LayoutKind::Matrix;
                 next.matrix = m;
                 pixels = Some(m.pixels());
@@ -561,6 +720,17 @@ pub fn parse(
                     }
                     pixels = Some(n);
                 }
+            }
+            // How the panel is DRIVEN (#525). Accepted whatever the kind,
+            // like the `proj*` lines and for the same reason: every
+            // persisted matrix Layout carries it (`to_wire`) and a body this
+            // grammar rejects would drop the host to its board default.
+            "panel" => {
+                if driver_set {
+                    return Err(err("only one panel line per body"));
+                }
+                driver_set = true;
+                next.driver = parse_driver(&mut it).map_err(err)?;
             }
             "out" => {
                 if lim.panel {
@@ -639,7 +809,7 @@ pub fn parse(
             }
             _ => {
                 return Err(err(
-                    "unknown line (want strip|matrix|map|out|proj|proj1d|proj2d|proj3d)",
+                    "unknown line (want strip|matrix|map|panel|out|proj|proj1d|proj2d|proj3d)",
                 ))
             }
         }
@@ -662,10 +832,32 @@ pub fn parse(
         next.outputs = list;
     }
 
-    let reboot_required = cur.reboot_required(&next, lim.default_pin);
-    Ok(Edit { layout: next, pixels, map, reboot_required, proj_now })
-
+    let reboot_required = cur.reboot_required(&next, lim.default_pin, lim.panel);
+    Ok(Edit { layout: next, pixels, map, reboot_required, driver_set, proj_now })
 }
+
+/// The `panel` line's four fields. Each range gets its own message, because
+/// "expected: panel …" tells a UI nothing about which number it got wrong.
+fn parse_driver<'a>(it: &mut impl Iterator<Item = &'a str>) -> Result<PanelDriver, &'static str> {
+    const USAGE: &str =
+        "expected: panel <planes> <clock_mhz> <shiftreg|fm6126a|icn2038s|dp3246> <blank>";
+    let planes = it.next().and_then(num).ok_or(USAGE)?;
+    if !(4..=8).contains(&planes) {
+        return Err("panel: planes must be 4..8");
+    }
+    let clock_mhz = it.next().and_then(num).ok_or(USAGE)?;
+    if !(2..=40).contains(&clock_mhz) {
+        return Err("panel: clock_mhz must be 2..40");
+    }
+    let chip = Chip::parse(it.next().ok_or(USAGE)?)
+        .ok_or("panel: chip must be shiftreg|fm6126a|icn2038s|dp3246")?;
+    let blank = it.next().and_then(num).ok_or(USAGE)?;
+    if blank > 8 {
+        return Err("panel: blank must be 0..8");
+    }
+    Ok(PanelDriver { planes: planes as u8, clock_mhz: clock_mhz as u8, chip, blank: blank as u8 })
+}
+
 fn parse_matrix<'a>(it: &mut impl Iterator<Item = &'a str>) -> Option<Matrix> {
     let pw = u16::try_from(num(it.next()?)?).ok()?;
     let ph = u16::try_from(num(it.next()?)?).ok()?;
@@ -785,6 +977,36 @@ pub struct PanelView {
     /// Leading tiles of the chain this board's framebuffer actually drives.
     /// Less than `panels` means the rest of the arrangement is dark (#401).
     pub drive: u32,
+    /// What the RUNNING driver was actually built with (#525), against which
+    /// a UI compares the configured [`Layout::driver`] to know a reboot is
+    /// pending. `None` = there is no panel output at all: the framebuffer
+    /// allocation or the LCD_CAM init failed even at the board default.
+    pub driver_live: Option<LiveDriver>,
+}
+
+/// The driver the firmware actually booted — the live half of the `driver`
+/// block (#525). Every field is read back from the running DMA setup, never
+/// from the stored Layout, which is the whole point: `configured != live`
+/// is how a UI knows a reboot is pending, and `fallback` is how it knows the
+/// configured shape did not fit.
+#[cfg(feature = "panel")]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct LiveDriver {
+    pub planes: u8,
+    pub clock_mhz: u8,
+    pub chip: Chip,
+    pub blank: u8,
+    /// The framebuffer's chain extent in pixels: `w` = `pw` × chain length,
+    /// `h` = `ph`.
+    pub w: u16,
+    pub h: u16,
+    /// Address rows the driver scans.
+    pub scan: u16,
+    /// Bytes of ONE framebuffer (there are two, double-buffered).
+    pub fb_bytes: u32,
+    /// The configured geometry/driver did not fit in internal RAM and the
+    /// firmware booted the board default instead.
+    pub fallback: bool,
 }
 
 impl Layout {
@@ -851,6 +1073,12 @@ impl Layout {
             }
             push_piece(out, "}");
         }
+        // The driver belongs to the BOARD, not to the kind: a HUB75 board
+        // with a coordinate map installed is still driving a panel.
+        #[cfg(feature = "panel")]
+        if let Some(p) = v.panel {
+            push_driver_json(out, &self.driver, &p);
+        }
         push_piece(out, ",\"outputs\":[");
         if self.outputs.is_empty() {
             let count = match self.kind {
@@ -887,6 +1115,58 @@ impl Layout {
         push_piece(out, v.map_json);
         push_piece(out, "}");
     }
+}
+
+/// The `driver` block (#525): the CONFIGURED driver, the chip list so a UI
+/// never hard-codes it, and what the firmware actually booted — `null` there
+/// when the panel output is off entirely. Only a host with a panel driver
+/// emits it, so a strip board's body is byte-identical to one built before
+/// this existed.
+#[cfg(feature = "panel")]
+fn push_driver_json(out: &mut String, d: &PanelDriver, p: &PanelView) {
+    push_piece(out, ",\"driver\":{");
+    push_driver_fields(out, d.planes, d.clock_mhz, d.chip, d.blank);
+    push_piece(out, ",\"chips\":[");
+    for (i, c) in Chip::ALL.iter().enumerate() {
+        push_piece(out, if i > 0 { ",\"" } else { "\"" });
+        push_piece(out, c.as_str());
+        push_piece(out, "\"");
+    }
+    push_piece(out, "],\"live\":");
+    match &p.driver_live {
+        None => push_piece(out, "null"),
+        Some(l) => {
+            push_piece(out, "{");
+            push_driver_fields(out, l.planes, l.clock_mhz, l.chip, l.blank);
+            for (field, v) in [
+                (",\"w\":", l.w as u32),
+                (",\"h\":", l.h as u32),
+                (",\"scan\":", l.scan as u32),
+                (",\"fb_bytes\":", l.fb_bytes),
+            ] {
+                push_piece(out, field);
+                push_u32(out, v);
+            }
+            push_piece(out, ",\"fallback\":");
+            push_piece(out, if l.fallback { "true" } else { "false" });
+            push_piece(out, "}");
+        }
+    }
+    push_piece(out, "}");
+}
+
+/// The four fields the configured and the live halves share, in wire order
+/// and with no leading comma — written once so the two cannot drift.
+#[cfg(feature = "panel")]
+fn push_driver_fields(out: &mut String, planes: u8, clock_mhz: u8, chip: Chip, blank: u8) {
+    push_piece(out, "\"planes\":");
+    push_u32(out, planes as u32);
+    push_piece(out, ",\"clock_mhz\":");
+    push_u32(out, clock_mhz as u32);
+    push_piece(out, ",\"chip\":\"");
+    push_piece(out, chip.as_str());
+    push_piece(out, "\",\"blank\":");
+    push_u32(out, blank as u32);
 }
 
 fn push_output(out: &mut String, o: &Output, v: &View) {
@@ -1011,11 +1291,13 @@ mod tests {
         let mut cur = strip_layout();
         cur.kind = LayoutKind::Matrix;
         cur.matrix = Matrix::single(32, 32);
-        // same wiring, bigger tile → live
-        let e = parse("matrix 64 64 1 1 tl row 0 0", &cur, 1024, &panel_limits()).unwrap();
+        // same wiring, bigger tile → live on a STRIP-built matrix, where the
+        // grid is only a pixel count and a map (a HUB75 board sizes its DMA
+        // framebuffer from it at boot instead — see the #525 test below)
+        let e = parse("matrix 64 64 1 1 tl row 0 0", &cur, 1024, &big_limits()).unwrap();
         assert!(!e.reboot_required);
         // same tile, snaked → reboot
-        let e = parse("matrix 32 32 1 1 tl row 1 0", &cur, 1024, &panel_limits()).unwrap();
+        let e = parse("matrix 32 32 1 1 tl row 1 0", &cur, 1024, &big_limits()).unwrap();
         assert!(e.reboot_required);
     }
 
@@ -1307,10 +1589,11 @@ mod tests {
         l.proj = Projection::new(ProjectionMode::X, ProjectionMode::Y, ProjectionMode::Xz);
         l.outputs.push(Output { n: 0, pin: 18, proto: 1, order: 2, count: 3, rev: false });
         l.outputs.push(Output { n: 1, pin: 19, proto: 0, order: 5, count: 3, rev: true });
+        l.driver = PanelDriver { planes: 6, clock_mhz: 20, chip: Chip::Dp3246, blank: 4 };
         let wire = l.to_wire(6144, &proto_name);
         assert_eq!(
             wire,
-            "matrix 64 32 3 1 br col 1 0 16 \n\
+            "matrix 64 32 3 1 br col 1 0 16 \npanel 6 20 dp3246 4\n\
              out 0 18 ws2812 grb 3\nout 1 19 sk9822 bgr 3 rev\n\
              proj1d x\nproj2d y\nproj3d xz"
         );
@@ -1378,12 +1661,227 @@ mod tests {
         let mut l = Layout::board_default(LayoutKind::Matrix, Matrix::single(64, 64));
         l.matrix.cols = 2;
         let mut v = view(&l, 8192, "null");
-        v.panel = Some(PanelView { est_hz: 57, drive: 1 });
+        v.panel = Some(PanelView { est_hz: 57, drive: 1, driver_live: None });
         let mut s = String::new();
         l.push_json(&mut s, &v);
         assert!(s.contains("\"rot180\":0,\"scan\":0,\"est_hz\":57,\"drive\":1}"), "{s}");
         assert!(s.contains("\"w\":128,\"h\":64"));
         assert!(s.contains("\"count\":2"), "one implicit output covers both panels");
+    }
+
+    // --- how the panel is DRIVEN: the `panel` line (#525) --------------------
+
+    /// A HUB75 board with a 64×64 panel stored, driver at the board default.
+    fn panel_cur() -> Layout {
+        Layout::board_default(LayoutKind::Matrix, Matrix::single(64, 64))
+    }
+
+    #[test]
+    fn the_panel_line_round_trips() {
+        let cur = panel_cur();
+        let e = parse("panel 5 24 fm6126a 0", &cur, 4096, &panel_limits()).unwrap();
+        assert!(e.driver_set);
+        assert_eq!(
+            e.layout.driver,
+            PanelDriver { planes: 5, clock_mhz: 24, chip: Chip::Fm6126a, blank: 0 }
+        );
+        assert_eq!(e.layout.driver.clock_hz(), 24_000_000);
+        assert_eq!(e.layout.driver.latch_clocks(), 1);
+        // the stored record IS the wire, so it reads back byte-for-byte
+        let wire = e.layout.to_wire(4096, &proto_name);
+        assert!(wire.contains("\npanel 5 24 fm6126a 0"), "{wire}");
+        let load = Limits { strict: false, ..panel_limits() };
+        assert_eq!(parse(&wire, &panel_cur(), 4096, &load).unwrap().layout, e.layout);
+        // only the DP3246 holds the latch longer than one clock
+        let e = parse("panel 8 40 dp3246 8", &cur, 4096, &panel_limits()).unwrap();
+        assert_eq!(e.layout.driver.latch_clocks(), 3);
+        assert_eq!(e.layout.driver.clock_hz(), 40_000_000);
+        // a strip Layout has no panel, so its stored form carries no line
+        assert!(!strip_layout().to_wire(60, &proto_name).contains("panel"));
+    }
+
+    #[test]
+    fn the_driver_defaults_when_absent_and_a_post_without_it_merges() {
+        // a fresh Layout is exactly what every HUB75 image shipped before the
+        // line existed
+        assert_eq!(
+            panel_cur().driver,
+            PanelDriver { planes: 7, clock_mhz: 30, chip: Chip::ShiftReg, blank: 1 }
+        );
+        assert_eq!(panel_cur().driver.clock_hz(), 30_000_000);
+        // …and a body that says nothing about the driver KEEPS the stored one
+        let mut cur = panel_cur();
+        cur.driver = PanelDriver { planes: 4, clock_mhz: 12, chip: Chip::Icn2038s, blank: 3 };
+        let e = parse("matrix 64 64 1 1 tl row 0 0", &cur, 4096, &panel_limits()).unwrap();
+        assert!(!e.driver_set, "the body said nothing about it");
+        assert_eq!(e.layout.driver, cur.driver, "merge, not reset");
+    }
+
+    #[test]
+    fn a_bad_panel_line_names_the_field_it_rejected() {
+        let cur = panel_cur();
+        let cases: [(&str, &str); 9] = [
+            ("panel 3 30 shiftreg 1", "planes"),
+            ("panel 9 30 shiftreg 1", "planes"),
+            ("panel 7 1 shiftreg 1", "clock_mhz"),
+            ("panel 7 41 shiftreg 1", "clock_mhz"),
+            ("panel 7 30 fm6124 1", "chip"),
+            ("panel 7 30 shiftreg 9", "blank"),
+            ("panel 7 30 shiftreg", "expected"),
+            ("panel", "expected"),
+            ("panel x 30 shiftreg 1", "expected"),
+        ];
+        for (body, want) in cases {
+            let e = parse(body, &cur, 4096, &panel_limits()).unwrap_err();
+            assert_eq!(e.line, 1, "body {body:?}");
+            assert!(e.msg.contains(want), "body {body:?} said {:?}", e.msg);
+        }
+        // at most one per body, like the kind line
+        let two = "panel 7 30 shiftreg 1\npanel 6 30 shiftreg 1";
+        assert_eq!(parse(two, &cur, 4096, &panel_limits()).unwrap_err().line, 2);
+        // and both ends of every range ARE legal
+        for body in ["panel 4 2 shiftreg 0", "panel 8 40 dp3246 8"] {
+            assert!(parse(body, &cur, 4096, &panel_limits()).is_ok(), "body {body:?}");
+        }
+    }
+
+    #[test]
+    fn changing_the_driver_needs_a_reboot() {
+        let cur = panel_cur();
+        // all four fields are read once, when the DMA is set up
+        for body in [
+            "panel 6 30 shiftreg 1",
+            "panel 7 20 shiftreg 1",
+            "panel 7 30 fm6126a 1",
+            "panel 7 30 shiftreg 0",
+        ] {
+            assert!(parse(body, &cur, 4096, &panel_limits()).unwrap().reboot_required, "{body}");
+        }
+        // restating the stored driver rebuilds nothing, so a Settings page may
+        // POST the whole block on every edit
+        assert!(!parse("panel 7 30 shiftreg 1", &cur, 4096, &panel_limits())
+            .unwrap()
+            .reboot_required);
+        // and a driver written down on a STRIP Layout rebuilds nothing either
+        let e = parse("panel 4 2 dp3246 8", &strip_layout(), 60, &strip_limits()).unwrap();
+        assert!(!e.reboot_required, "a strip has no panel to rebuild");
+    }
+
+    #[test]
+    fn a_panel_boards_framebuffer_geometry_is_reboot_required() {
+        let cur = panel_cur();
+        // the DMA framebuffer is allocated from the arrangement at boot…
+        let smaller = "matrix 32 64 1 1 tl row 0 0";
+        let e = parse(smaller, &cur, 4096, &panel_limits()).unwrap();
+        assert!(e.reboot_required);
+        assert!(cur.fb_geometry_changed(&e.layout));
+        // …while the same edit on a strip-built matrix only resizes the grid
+        assert!(!parse(smaller, &cur, 4096, &big_limits()).unwrap().reboot_required);
+        // an unchanged arrangement rebuilds nothing on either
+        let same = "matrix 64 64 1 1 tl row 0 0";
+        assert!(!parse(same, &cur, 4096, &panel_limits()).unwrap().reboot_required);
+        assert!(!cur.fb_geometry_changed(&cur));
+        // scan stripes the framebuffer, so it is in both answers already
+        assert!(parse("matrix 64 64 1 1 tl row 0 0 16", &cur, 4096, &panel_limits())
+            .unwrap()
+            .reboot_required);
+    }
+
+    #[test]
+    fn scan_must_divide_half_the_panel_height() {
+        let cur = panel_cur();
+        // a 64-row panel is 32 address rows: 32 is the whole depth, anything
+        // that tiles it stripes the framebuffer, 0 means "the board's own"
+        for body in [
+            "matrix 64 64 1 1 tl row 0 0",
+            "matrix 64 64 1 1 tl row 0 0 1",
+            "matrix 64 64 1 1 tl row 0 0 2",
+            "matrix 64 64 1 1 tl row 0 0 8",
+            "matrix 64 64 1 1 tl row 0 0 16",
+            "matrix 64 64 1 1 tl row 0 0 32",
+        ] {
+            assert!(parse(body, &cur, 4096, &panel_limits()).is_ok(), "body {body:?}");
+        }
+        for body in [
+            "matrix 64 64 1 1 tl row 0 0 3",
+            "matrix 64 64 1 1 tl row 0 0 24",
+            "matrix 64 64 1 1 tl row 0 0 48",
+            "matrix 64 64 1 1 tl row 0 0 64",
+        ] {
+            let e = parse(body, &cur, 4096, &panel_limits()).unwrap_err();
+            assert_eq!((e.line, e.msg), (1, "scan must divide ph/2"), "body {body:?}");
+        }
+        // an odd `ph` is not a shape a HUB75 driver can express at all…
+        let e = parse("matrix 64 31 1 1 tl row 0 0", &cur, 4096, &panel_limits()).unwrap_err();
+        assert!(e.msg.contains("ph must be even"), "{}", e.msg);
+        // …but a strip-built matrix may be 64x31, as long as it claims no scan
+        let strip = strip_layout();
+        assert!(parse("matrix 64 31 1 1 tl row 0 0", &strip, 60, &big_limits()).is_ok());
+        let e = parse("matrix 64 31 1 1 tl row 0 0 8", &strip, 60, &big_limits()).unwrap_err();
+        assert_eq!(e.msg, "scan must divide ph/2");
+    }
+
+    #[test]
+    fn chip_names_round_trip() {
+        for c in Chip::ALL {
+            assert_eq!(Chip::parse(c.as_str()), Some(c));
+        }
+        assert_eq!(Chip::ALL.len(), 4, "the `chips` list a UI offers");
+        assert_eq!(Chip::parse("SHIFTREG"), None, "the wire is lower case");
+        assert_eq!(Chip::parse(""), None);
+    }
+
+    #[test]
+    fn a_host_with_no_panel_emits_no_driver_block() {
+        let l = panel_cur();
+        let mut s = String::new();
+        l.push_json(&mut s, &view(&l, 4096, "{}"));
+        assert!(!s.contains("\"driver\""), "{s}");
+    }
+
+    /// The `driver` block, configured + `chips` + live (#525).
+    #[cfg(feature = "panel")]
+    #[test]
+    fn the_driver_block_reports_configured_chips_and_live() {
+        let mut l = panel_cur();
+        l.driver = PanelDriver { planes: 6, clock_mhz: 20, chip: Chip::Fm6126a, blank: 2 };
+        let mut v = view(&l, 4096, "null");
+        v.panel = Some(PanelView { est_hz: 57, drive: 1, driver_live: None });
+        let mut s = String::new();
+        l.push_json(&mut s, &v);
+        assert!(
+            s.contains(
+                "\"driver\":{\"planes\":6,\"clock_mhz\":20,\"chip\":\"fm6126a\",\"blank\":2,\
+                 \"chips\":[\"shiftreg\",\"fm6126a\",\"icn2038s\",\"dp3246\"],\"live\":null}"
+            ),
+            "{s}"
+        );
+
+        // the live half is what a UI diffs the configured one against
+        v.panel = Some(PanelView {
+            est_hz: 57,
+            drive: 1,
+            driver_live: Some(LiveDriver {
+                planes: 7,
+                clock_mhz: 30,
+                chip: Chip::ShiftReg,
+                blank: 1,
+                w: 64,
+                h: 64,
+                scan: 32,
+                fb_bytes: 28672,
+                fallback: true,
+            }),
+        });
+        let mut s = String::new();
+        l.push_json(&mut s, &v);
+        assert!(
+            s.contains(
+                "\"live\":{\"planes\":7,\"clock_mhz\":30,\"chip\":\"shiftreg\",\"blank\":1,\
+                 \"w\":64,\"h\":64,\"scan\":32,\"fb_bytes\":28672,\"fallback\":true}}"
+            ),
+            "{s}"
+        );
     }
 
     #[test]

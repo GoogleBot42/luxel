@@ -228,10 +228,12 @@ export function offsetLabel(tzMinutes: number): string {
 
 // ---- estimated refresh (proposal §5.3, S3c; firmware side is Gitea #475) ----
 
-/** What the HUB75 driver's refresh rate is spent on. Compile-time constants
- *  in `firmware/src/hub75.rs` today, so the UI carries the same numbers and
- *  says so; when the firmware advertises them the defaults become the
- *  fallback (Gitea #525). */
+/** What the HUB75 driver's refresh rate is spent on.
+ *
+ *  These are SETTINGS since Gitea #401/#525: `/api/layout`'s `driver` block
+ *  reports what the device has stored, and `lib/panelDriver.ts` turns it into
+ *  this pair. [`PANEL_DRIVER_DEFAULT`] is the FALLBACK for firmware that does
+ *  not carry the `panel` line — never the model. */
 export interface PanelDriver {
   /** LCD_CAM pixel clock in Hz. */
   clockHz: number;
@@ -239,7 +241,9 @@ export interface PanelDriver {
   planes: number;
 }
 
-/** `firmware/src/hub75.rs`: `CLOCK = 30 MHz`, `PLANES = 7`. */
+/** Every board's boot default (`firmware/src/hub75.rs`: `CLOCK = 30 MHz`,
+ *  `PLANES = 7`), and what the console assumes when a device reports no
+ *  `driver` block at all. */
 export const PANEL_DRIVER_DEFAULT: PanelDriver = { clockHz: 30_000_000, planes: 7 };
 
 /** Below this the panel visibly flickers on camera and in fast motion. */
@@ -265,8 +269,13 @@ export interface RefreshInput {
  * frame is `2^planes − 1` scans of the chain:
  *
  * ```text
- * Hz = clock / (pw · panels · scan · (2^planes − 1))
+ * Hz = clock / (pw · panels · stripes · scan · (2^planes − 1))
  * ```
+ *
+ * `stripes = (ph / 2) / scan` — a 1/N-scan panel has fewer address rows but
+ * each one clocks out `stripes` copies of the chain, so the product is the
+ * panel's pixel count whatever the scan (Gitea #764; `arrange::est_hz` on
+ * the device says the same).
  *
  * That is the model the bench measurements fit exactly (Gitea #255, the
  * table in `firmware/src/hub75.rs`): one 64×64 panel at 1/32 scan and 7
@@ -283,8 +292,12 @@ export function estimatedRefreshHz(
   const ph = Math.max(0, Math.round(a.ph));
   const panels = Math.max(0, Math.round(a.panels));
   const scan = a.scan > 0 ? Math.round(a.scan) : Math.floor(ph / 2);
+  // A scan that does not divide ph/2 has no framebuffer (the device rejects
+  // it); read it as one stripe rather than a fraction.
+  const half = Math.floor(ph / 2);
+  const stripes = scan > 0 && half >= scan && half % scan === 0 ? half / scan : 1;
   const planes = Math.max(1, Math.round(driver.planes));
-  const clocks = pw * panels * scan * (2 ** planes - 1);
+  const clocks = pw * panels * stripes * scan * (2 ** planes - 1);
   if (clocks <= 0 || driver.clockHz <= 0) return 0;
   return driver.clockHz / clocks;
 }
