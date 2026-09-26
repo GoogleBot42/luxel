@@ -979,7 +979,9 @@ objected to.) `text` and `colour` layers are free the same way — the
 compositor draws all three natively, with nothing resident. A sprite layer's
 box (`L sprite x y w h …`) is its NATURAL size when `w`/`h` are 0; with a
 size set, `fit` is `fill` (stretch, nearest neighbour), `contain` (scale to
-fit, centred) or `tile` (repeat 1:1) — docs/spec/scenes.md §4.
+fit, centred) or `tile` (repeat 1:1) — docs/spec/scenes.md §4. The layer may
+also override the record's frame rate (`A <fps>`, 0..30, `0` = still), which
+appears in the JSON as `"sprite":{"id":"…","fps":N}` only when it is set.
 
 **Transition rule.** Both stacks are resident while a crossfade runs, so a
 transition where `pattern_layers(outgoing) + pattern_layers(incoming)` exceeds

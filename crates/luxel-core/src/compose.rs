@@ -562,6 +562,9 @@ struct LayerRt {
     scroll_mpx: i64,
     /// Sprite frame clock, in ms since the scene was set.
     sprite_ms: u32,
+    /// The layer's frame-rate override (the scene's `A` line), `None` to
+    /// play the record's own [`SpriteView::fps`].
+    sprite_fps: Option<u8>,
     /// What this slot is showing, for phase carry-over across a
     /// [`Compositor::set_scene`] — see [`layer_ident`].
     ident: u64,
@@ -786,9 +789,12 @@ impl Compositor {
             LayerKind::Sprite => {
                 let Some(sp) = sprite else { return };
                 // The fps clock rule lives with the record
-                // ([`SpriteView::frame_at`]) so the device, the mirror and
-                // the playground cannot each round it differently.
-                blit_sprite(canvas, sp, sp.frame_at(l.sprite_ms), &l.style);
+                // ([`SpriteView::frame_at_fps`]) so the device, the mirror
+                // and the playground cannot each round it differently. The
+                // LAYER's `A` rate outranks the record's own, and `A 0`
+                // holds frame 0 even for an animated record.
+                let fps = l.sprite_fps.unwrap_or(sp.fps);
+                blit_sprite(canvas, sp, sp.frame_at_fps(l.sprite_ms, fps), &l.style);
             }
             LayerKind::Text => {
                 let (_, _, bw, bh) = resolved_rect(&l.style, &grid);
@@ -1092,6 +1098,7 @@ impl From<&Layer> for LayerRt {
             lut: None,
             scroll_mpx: 0,
             sprite_ms: 0,
+            sprite_fps: None,
             // `set_scene` is the only thing that can know the scene id, so
             // it fills this in; a bare `From` is "no identity yet".
             ident: 0,
@@ -1105,7 +1112,7 @@ impl From<&Layer> for LayerRt {
                 }
             }
             LayerBody::Color(c) => rt.color = *c,
-            LayerBody::Sprite { .. } => {}
+            LayerBody::Sprite { fps, .. } => rt.sprite_fps = *fps,
         }
         rt
     }
@@ -1594,6 +1601,48 @@ mod tests {
         // 16.67 ms a frame: texel 0 for the first 6 frames (0..100 ms),
         // texel 1 for the next 6, then back
         assert_eq!(seen, vec![0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0]);
+    }
+
+    /// The scene's `A <fps>` outranks the record's own rate, through the
+    /// same driver clock.
+    #[test]
+    fn the_layers_fps_override_outranks_the_record() {
+        // the same 2-frame, 10 fps record as above
+        let record = rec("blink", 2, 1, 2, 10, &[RED], &[1, 0, 0, 1]);
+        // frames drawn over `ms` of playback at 60 fps steps
+        let run = |binding: &str, frames: usize| -> Vec<usize> {
+            let mut wire =
+                String::from("S 0000000a s\nL sprite 0 0 0 0 normal 100 none fill 1\nI 5b17e5ef\n");
+            wire.push_str(binding);
+            let scene = crate::scene::parse(&wire).expect("parses");
+            let mut comp = Compositor::new(grid(2, 1, false));
+            comp.set_scene(&scene);
+            let mut driver = SceneDriver::new();
+            let mut host = SpriteHost(record.clone());
+            let mut px: crate::arena::FrameVec = crate::arena::empty();
+            let step = Fx::from_raw((1000 << 16) / 60);
+            let mut seen = Vec::new();
+            for _ in 0..frames {
+                assert!(driver.frame(&mut comp, &mut px, 2, step, &mut host));
+                seen.push(if px[0] == RED { 0 } else { 1 });
+            }
+            seen
+        };
+        // `A 2` over a 10 fps record: 500 ms a frame, i.e. 30 steps of 16.67 ms
+        let seen = run("A 2\n", 62);
+        assert_eq!(seen[..30], [0; 30], "frame 0 holds for the first 500 ms");
+        assert_eq!(seen[30..60], [1; 30], "then frame 1 for 500 ms");
+        assert_eq!(seen[60..], [0, 0], "and it wraps");
+        // `A 0` is a still: frame 0 forever, whatever the record says
+        assert_eq!(run("A 0\n", 90), vec![0; 90]);
+        // absent: the record's own 10 fps, unchanged from the test above
+        assert_eq!(
+            run("", 13),
+            vec![0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0],
+            "no A line leaves the record in charge"
+        );
+        // …and an override ABOVE the record's rate speeds it up
+        assert_eq!(run("A 30\n", 5), vec![0, 0, 1, 1, 0], "30 fps: ~33 ms a frame");
     }
 
     #[test]

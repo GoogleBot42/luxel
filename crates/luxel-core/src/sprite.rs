@@ -197,14 +197,24 @@ impl<'a> SpriteView<'a> {
         self.index.get(i).copied().unwrap_or(0)
     }
 
-    /// The frame shown `elapsed_ms` into playback: `(elapsed·fps/1000) mod
-    /// frames`, and always 0 for a static (`fps == 0`) or single-frame
-    /// sprite. The clock rule the device and the playground share.
+    /// The frame shown `elapsed_ms` into playback at the record's OWN rate —
+    /// [`frame_at_fps`](Self::frame_at_fps) with [`Self::fps`].
     pub fn frame_at(&self, elapsed_ms: u32) -> u8 {
-        if self.frames <= 1 || self.fps == 0 {
+        self.frame_at_fps(elapsed_ms, self.fps)
+    }
+
+    /// The frame shown `elapsed_ms` into playback at `fps`:
+    /// `(elapsed·fps/1000) mod frames`, and always 0 for a still
+    /// (`fps == 0`) or single-frame sprite. The clock rule the device, the
+    /// mirror and the playground share — and a scene's sprite LAYER may
+    /// override the record's rate (`A <fps>`, docs/spec/scenes.md §1), so
+    /// both rates go through this ONE piece of arithmetic and cannot round
+    /// differently from each other.
+    pub fn frame_at_fps(&self, elapsed_ms: u32, fps: u8) -> u8 {
+        if self.frames <= 1 || fps == 0 {
             return 0;
         }
-        ((elapsed_ms as u64 * self.fps as u64 / 1000) % self.frames as u64) as u8
+        ((elapsed_ms as u64 * fps as u64 / 1000) % self.frames as u64) as u8
     }
 }
 
@@ -335,6 +345,29 @@ mod tests {
         assert_eq!(SpriteView::parse(&one).unwrap().frame_at(5000), 0);
         // no overflow at large elapsed values
         assert!(sp.frame_at(u32::MAX) < 2);
+    }
+
+    #[test]
+    fn an_overridden_fps_uses_the_same_arithmetic() {
+        let rec = heart();
+        let sp = SpriteView::parse(&rec).unwrap();
+        // the record's own rate is just `frame_at`
+        assert_eq!(sp.frame_at_fps(100, sp.fps), sp.frame_at(100));
+        // 2 fps, 2 frames: 0..500 ms → 0, 500..1000 → 1
+        assert_eq!(sp.frame_at_fps(499, 2), 0);
+        assert_eq!(sp.frame_at_fps(500, 2), 1);
+        assert_eq!(sp.frame_at_fps(1000, 2), 0);
+        // 0 = still, whatever the record says
+        assert_eq!(sp.frame_at_fps(5000, 0), 0);
+        // …and a still record can be animated by the override
+        let still = build("s", 1, 1, 2, 0, &[[1, 2, 3]], &[1, 1]);
+        let still = SpriteView::parse(&still).unwrap();
+        assert_eq!(still.frame_at(500), 0);
+        assert_eq!(still.frame_at_fps(500, 2), 1);
+        // a single-frame record still never advances
+        let one = build("s", 1, 1, 1, 0, &[[1, 2, 3]], &[1]);
+        assert_eq!(SpriteView::parse(&one).unwrap().frame_at_fps(5000, 30), 0);
+        assert!(sp.frame_at_fps(u32::MAX, SPRITE_MAX_FPS) < 2);
     }
 
     #[test]
