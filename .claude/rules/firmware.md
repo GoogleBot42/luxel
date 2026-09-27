@@ -152,7 +152,13 @@ paths:
   gather: RGB888 → planar costs an op per pixel per channel or a scalar
   prologue (`pie.rs` module docs have the argument). The TRM's PIE
   chapter is the only reference (`pdftotext` on the PDF; §1.8 per
-  instruction, §1.7 hazards).
+  instruction, §1.7 hazards). **And for a hot SCALAR loop on the Xtensa,
+  read the disassembly before the second rewrite**: the LLVM backend made
+  ~110 instructions of a 77-instruction word-deinterleave loop and four
+  Rust phrasings (`extui`-shaped shifts, `to_le_bytes`, no byte array)
+  all measured the same 15 cycles/px; hand-scheduled `asm!` of the 77 ran
+  at 9.7 (#855, five panel rounds). Also: a `Vec<[u8; 3]>` has alignment
+  1, so a word-load path over pixel rows must check its base pointer.
 - Dual-core boards (esp32, esp32s3 — cfg `multi_core` from build.rs) run
   the render task on the AppCpu (`firmware/src/core1.rs`), and every flash
   op must run inside the cross-core flash fence: the other core is parked
