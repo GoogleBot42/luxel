@@ -58,8 +58,8 @@ pub use helpers::{
     CALL_TARGET_NATIVE,
 };
 pub use table::{
-    BuiltinEntry, Direct, DirectSig, RetDyn, BUILTIN_ENTRIES, RET_ARG_BASE, RET_DYN,
-    RET_NEW_ARRNUM, RET_NUM,
+    direct_default, BuiltinEntry, Direct, DirectSig, RetDyn, BUILTIN_ENTRIES, RET_ARG_BASE,
+    RET_DYN, RET_NEW_ARRNUM, RET_NUM,
 };
 
 /// The two-word fallible return of docs/jit-design.md §3.2: a value plus a

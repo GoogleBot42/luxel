@@ -16,8 +16,9 @@ use luxel_core::vm::Value;
 const STEP_LIMIT: u64 = 2_000_000;
 
 /// Run `render(i)` for a few `i`, natively and interpreted, and compare
-/// every global afterwards.
-fn check_with(prelude: &str, body: &str) {
+/// every global afterwards. Returns how many `generic` builtin wrappers
+/// the native side entered, for the tier-1 pin below.
+fn check_with(prelude: &str, body: &str) -> u64 {
     let src = format!("var out = 0\nvar out2 = 0\n{prelude}\nexport function render(i, x) {{ {body} }}\n");
     let (prog, kinds) = program_of(&src).unwrap_or_else(|e| panic!("{src}\n{e}"));
     let env = env_with_fake_addresses();
@@ -59,6 +60,7 @@ fn check_with(prelude: &str, body: &str) {
         );
         cmp_globals(&src, &format!("i={i}"), &vi, &b);
     }
+    b.generic_calls
 }
 
 fn cmp_globals(src: &str, at: &str, vi: &luxel_core::vm::Vm, b: &Bridge) {
@@ -72,8 +74,8 @@ fn cmp_globals(src: &str, at: &str, vi: &luxel_core::vm::Vm, b: &Bridge) {
     }
 }
 
-fn check(body: &str) {
-    check_with("", body);
+fn check(body: &str) -> u64 {
+    check_with("", body)
 }
 
 #[test]
@@ -179,6 +181,32 @@ fn builtins() {
     check("hsv(x, 1, 1); out = 1");
     check("rgb(x, 0.5, 0.25); out = 1");
     check("out = time(0.1) > -1");
+}
+
+/// Gitea #841: the paint-per-cell loop's builtins — and `square` at BOTH
+/// arities — go direct. Observed on the emitted code (the bridge counts
+/// entries into a `generic` wrapper), not on the table, so a regression in
+/// the emitter's arity rule shows up here rather than only as a slower
+/// frame on the panel.
+#[test]
+fn tier_one_calls_never_enter_the_generic_wrapper() {
+    for body in [
+        "out = saturate(x * 3 - 1)",
+        "out = square(x)",
+        "out = square(x, 0.25)",
+        "paint(x); out = 1",
+        "paint(x, 0.5); out = 1",
+        "setPixel(i); out = 1",
+        "hsv(x, 1, 1); setPixel(i); out = 1",
+        "out = saturate(1 - abs(x - 0.5) * 2); paint(out, out * out); setPixel(i)",
+    ] {
+        let n = check(body);
+        assert_eq!(n, 0, "`{body}` entered a generic wrapper {n} times");
+    }
+    // …and the counter is live: a builtin with no direct form is counted,
+    // as is a direct-form builtin called at an arity no default covers.
+    assert!(check("out = hypot(i, 3)") > 0);
+    assert!(check("out = clamp(x, 0)") > 0);
 }
 
 #[test]

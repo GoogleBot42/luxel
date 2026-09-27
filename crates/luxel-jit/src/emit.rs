@@ -37,7 +37,7 @@ use alloc::vec::Vec;
 
 use luxel_core::arena::{self, ArrVec};
 use luxel_core::bytecode::{enc, is_binop_sub, op};
-use luxel_core::jit::{dev32, DirectSig, BUILTIN_ENTRIES, RET_NUM, STATUS_ERR};
+use luxel_core::jit::{dev32, direct_default, DirectSig, BUILTIN_ENTRIES, RET_NUM, STATUS_ERR};
 use luxel_core::kinds::{builtin_sig, elem_kind, ilen, Kind, Kinds, SigRet};
 use luxel_core::vm::{Program, TAG_ARR, TAG_BUILTIN, TAG_FUN, TAG_NUM};
 
@@ -1724,13 +1724,15 @@ impl<'a> Emitter<'a> {
 
         self.spill_all(plan)?;
 
-        // The direct tier-1 path (§3.5/§4), used only when the call's
-        // arity matches the signature EXACTLY. **Deviation from §4**, which
-        // has the emitter materialise a builtin's default arguments (the
-        // 0.5 duty of a one-argument `square`); the emitter carries no
-        // table of defaults, so a mismatched arity falls back to `generic`,
-        // which is the interpreter's own marshalling and cannot be wrong.
+        // The direct tier-1 path (§3.5/§4), used when the call's arity
+        // matches the signature EXACTLY, or is one short and the builtin
+        // has a default for its last argument (`direct_default`: the 0.5
+        // duty of a one-argument `square`, the brightness 1 of a
+        // one-argument `paint` — Gitea #841). Anything else falls back to
+        // `generic`, which is the interpreter's own marshalling and cannot
+        // be wrong.
 
+        let fill = direct_default(b);
         let direct_arity = match entry.sig() {
             DirectSig::N1 => Some((1usize, false)),
             DirectSig::N2 => Some((2, false)),
@@ -1743,19 +1745,24 @@ impl<'a> Emitter<'a> {
             DirectSig::None => None,
         };
         if let Some((n, takes_ctx)) = direct_arity {
-            if n == argc && entry.ret_kind == RET_NUM {
+            let arity_ok = n == argc || (n == argc + 1 && fill.is_some());
+            if arity_ok && entry.ret_kind == RET_NUM {
                 let first = if takes_ctx {
                     self.code.mov_n(A10, A2);
                     11u8
                 } else {
                     10
                 };
-                for j in 0..argc {
+                for j in 0..n {
                     let dst = first + j as u8;
                     if j < from_stack {
                         self.arg_num(plan, dst, bottom + j)?;
-                    } else {
+                    } else if j < argc {
                         self.imm(dst, consts[j - from_stack]);
+                    } else {
+                        // The missing last argument: the builtin's default,
+                        // as the interpreter's `argc >= n` test would read it.
+                        self.imm(dst, fill.expect("arity_ok implies a default"));
                     }
                 }
 

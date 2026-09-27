@@ -1,5 +1,42 @@
 # Update log
 
+## 2026-09-27 — jit: `saturate`, `paint`, `setPixel` go direct; short-arity defaults (#841)
+
+The paint-per-cell `renderFrame` loop — Aurora 2D's inner body and every
+#405 conversion's — is `saturate`, `saturate`, `paint`, `setPixel` per
+pixel, and every one of those was a `generic` builtin call: box the
+arguments into the frame scratch, enter the wrapper, zero a
+`[Value; MAX_ARGS]` buffer, walk `builtin_ladder`, box the result. That is
+the non-noise half of Aurora's ~50 ms frame on the S3 (#840 is the noise
+half). This PR is the four-generic-calls item of the #812 follow-up:
+
+- **Three new direct entries** in `crates/luxel-core/src/jit/table.rs`:
+  `saturate` (N1, `clamp(x, 0, 1)` restated like the other pure arms),
+  `setPixel` (C1, calls `bulk::set_pixel` — what the `SetPixel` arm calls)
+  and `paint` (C2, calls the new `Vm::paint`, which is the `Paint` arm of
+  `builtin_hot` minus its brightness default; the arm now calls it too, so
+  there is still one implementation). Byte-identical by construction.
+- **A default-argument table**, `table::direct_default(id)`: `square` → 0.5,
+  `paint` → 1. The emitter takes the direct path when a call is ONE
+  argument short of the signature and the builtin has a default, filling
+  the last register with it — the §4 contract phase 2 deferred. Any other
+  arity mismatch still goes `generic`.
+- **Tests.** The core direct-vs-generic sweep now runs with a lent frame
+  and an installed three-stop palette (or `setPixel`/`paint` would have
+  been compared as no-ops) and compares the frame; a new sweep pins each
+  `direct_default` against the generic wrapper at the short arity; the
+  ISA bridge counts entries into `generic` wrappers and `ops.rs` pins the
+  tier-1 set (both `square`/`paint` arities included) to zero of them.
+  `library_diff`, the whole-library `engine_diff`, golden and objdump are
+  unchanged and green (no golden pattern uses one of the four shapes).
+- **Not done here:** the fourth item of #841, inlining the `ArrNum`
+  `LoadIdx` fast path, needs a `repr(C)` side table for the arena that
+  generated code can index, a `JitCtx` field the allocating helpers
+  refresh, and the ISA-model bridge mirroring every array into model
+  memory — Gitea #863, with the design sketch and the cost estimate.
+- **On-metal numbers are owed**: `tools/patbench.mjs` on aurora-2d before
+  and after, on the Seengreat, when the panel is free.
+
 ## 2026-09-27 — import an image as a sprite, in the console and in `luxel` (#784)
 
 Jeremy, 2026-09-26: *"the ability to import/convert images to sprites."* A
