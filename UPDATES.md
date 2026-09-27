@@ -1,5 +1,52 @@
 # Update log
 
+## 2026-09-27 — the colour-ramp editor's four data-loss defects (#787 step 1)
+
+The #787 bug inventory found 21 defects in `GradientEditor.svelte`, four of
+them tagged data-loss. The redesign waits on Jeremy's mock; these four do
+not, and this is only them — no restyle, no restructure.
+
+1. **Settings never re-read the device's palette**, so the editor held
+   whatever the device had when the tab opened and the next edit — one
+   arrow-key nudge is enough, because a commit POSTs the WHOLE record —
+   pushed that stale list and its stale amount over anything the device had
+   been given meanwhile. The tab's 2 s poll now runs `refreshPalette()`, a
+   palette-only read: `outputStatus` is deliberately left alone, since
+   gamma/cap/blur/glow are `bind:value` fields and re-reading those under the
+   user's fingers is why `/api/output` was read once in the first place. It
+   rides the same sequential chain, so the tab still costs at most one
+   connection beyond the status poll (#540).
+2. **A colour edit's 250 ms trailing commit re-committed the list it had
+   captured**, so a drag or a Delete inside that window was undone 250 ms
+   later (the drag lost, the deleted stop back). The latch is
+   `lib/gradient.ts`'s `trailingCommit` now: it commits what the editor holds
+   when it FIRES, and every other edit cancels it.
+3. **Removing one stop from a two-stop scene ramp destroyed the whole ramp**
+   (`removeStop` fell through to `clearAll()` below `minStops`, and `Edit…`
+   then reseeds black→white, so the ramp was unrecoverable). A removal at the
+   floor is refused; the `remove` button is disabled with a `data-reason`.
+   The device palette's `minStops={0}` mount keeps its behaviour — its last
+   stop is still removable and an empty palette is still legal.
+4. **An emptied number field meant zero** (`Number("") === 0`): clearing
+   `position` slammed the stop to 0, clearing `amount` set the blend to 0 and
+   silently turned the palette off. An empty or unparseable field is now "no
+   change", and the box is put back to the value in effect.
+
+The three rules live in a new `web/src/lib/gradient.ts` so `web/tests/` can
+hold them without a DOM (10 cases), and the redesign inherits the rules
+rather than the widget. Verified in real chromium against two `luxel serve`
+mirrors, one screenshot per repro: every walk FAILS on a stashed master tree
+(the §3 one crashes, because the ramp is gone) and passes on the branch.
+`device-e2e` gained four checks for §1 (change the mirror's palette out of
+band, wait a poll, assert the re-read, then nudge and assert no clobber).
+598 device-mode checks, e2e, `npm test` (306) and `svelte-check` green;
+mockdiff S3/S3b/S3i/S3j/S3k/S7b/S7g byte-identical to a master baseline in
+the same worktree (11 deltas either side).
+
+The other 17 inventory items — `add stop` stacking at 255, the black first
+stop, the stale selection, the two unlabelled bars — are untouched: they are
+the redesign's, and #787 stays open for it.
+
 ## 2026-09-27 — the color ramp editor, redrawn: nine mock frames and the two questions for Jeremy (#787 step 2)
 
 Step 2 of #787. The step-1 inventory found 21 defects in

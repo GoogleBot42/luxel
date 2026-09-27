@@ -32,6 +32,7 @@
     refreshLayout,
     refreshMqtt,
     refreshOutput,
+    refreshPalette,
     refreshSync,
     syncStatus,
   } from "../stores/device";
@@ -64,9 +65,11 @@
   }>();
 
   /** The polled half: the read-only status lines the disclosure rows carry.
-   *  `/api/output` and `/api/layout` are read once on arrival instead — they
-   *  are forms, and re-reading one under the user's fingers would fight their
-   *  edits (and a layout POST's reply already IS the new state). DDP/E1.31
+   *  `/api/output`'s FORM half and `/api/layout` are read once on arrival
+   *  instead — they are forms, and re-reading one under the user's fingers
+   *  would fight their edits (and a layout POST's reply already IS the new
+   *  state). The palette is the exception, and `refreshPalette()` below is
+   *  why. DDP/E1.31
    *  liveness is NOT here: it is a field of `/api/status`, which the session
    *  poll already reads every second (#540).
    *
@@ -84,6 +87,20 @@
     await refreshClock();
   }
 
+  /** What the 2 s poll runs. The palette rides along — one more read in the
+   *  SAME sequential chain, so the tab still costs at most one connection
+   *  beyond the status poll (#540).
+   *
+   *  It is polled because the palette editor is the one form on this page
+   *  whose commit rewrites the WHOLE record: a single arrow-key nudge POSTs
+   *  every stop and the amount, so an editor showing a stale reading silently
+   *  overwrote a palette the device had been given meanwhile (Gitea #787 §1).
+   *  Only the palette stores are refreshed — see `refreshPalette()`. */
+  async function refreshPolled(): Promise<void> {
+    await refreshPalette();
+    await refreshLive();
+  }
+
   let unsubscribe: (() => void) | undefined;
   $: {
     unsubscribe?.();
@@ -94,7 +111,7 @@
         await refreshOutput();
         await refreshLive();
       })();
-      unsubscribe = pollSubscribe("settings", 2000, refreshLive);
+      unsubscribe = pollSubscribe("settings", 2000, refreshPolled);
     }
   }
   onDestroy(() => unsubscribe?.());
