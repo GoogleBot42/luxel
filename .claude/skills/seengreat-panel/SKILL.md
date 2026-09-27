@@ -279,6 +279,15 @@ ESP32 ELF — pass the S3 one).
   "compositing one layer costs 54 ms" when compositing costs 654 µs and the
   real bug was a resident buffer (#704). Same for a HALVED number: the JIT
   coming back looks like a speedup in whatever you last changed.
+- **The `fps` a board boots with belongs to the PERSISTED single pattern, not
+  to whatever scene you are about to measure — identify it by `jit.code_bytes`
+  first.** Aurora 2D is 5,612 B of native code and ~50 ms bare; a 2,316 B
+  pattern at 55 fps was read as "Aurora alone" on 2026-09-26 and the whole
+  38 ms gap was pinned on the scene's second layer (Gitea #812, corrected
+  2026-09-27). **A scene's frame is the SUM of its layer frames plus ~2.6 ms**
+  (Aurora 51.7 + `_Fairies` 17.7 + 2.6 = 72.0 ms measured, docs/boards.md
+  "Engine frames in PSRAM") — subtract each layer's bare `vm_us` before
+  blaming the compositor or PSRAM.
 - **`jit` is ONE global block and reports the LAST compile — in a scene it
   does not tell you the base layer's state.** A scene compiles bottom → top,
   so what `/api/status` shows is the TOP layer, and a base layer that fell
