@@ -209,6 +209,20 @@ const check = (name, cond, detail = "") => {
   if (!cond) fails.push(name);
 };
 
+/**
+ * `page.$eval` that yields `fallback` instead of throwing when the selector
+ * matches nothing.
+ *
+ * Puppeteer's own `$eval` throws on a missing element, which in a harness this
+ * long means one wrong expectation ABORTS the run and every later check goes
+ * unreported — what #810/#816 actually cost: a stale over-cap fixture took
+ * the suite down at check 553 of ~700. Read a role through this whenever the
+ * element's presence is itself in question, so the missing role fails its own
+ * `check` and the suite carries on.
+ */
+const evalOr = async (pg, sel, fn, fallback = null) =>
+  (await pg.$(sel)) === null ? fallback : pg.$eval(sel, fn);
+
 // Capacity fixtures (Gitea #15), sized against a mirror claiming 30 KB free:
 // 10 KB of load headroom, array arena clamped at its 16 KB minimum. Arrays are
 // 8 B/element, so the element count is the dial. One line each — CodeMirror
@@ -6753,58 +6767,95 @@ try {
         await pg.click('[data-role="tab-settings"]');
         await pg.waitForSelector('[data-role="layout-cols"]', { timeout: 10000 });
         await sleep(800);
-        // 2 x 1 panels of 64x64 = 8192 on a 4096-px board (#600). The card
-        // pre-checks it, so nothing is sent — and the banner still explains.
+        // A chain this board cannot drive (#600). The ceiling is read off the
+        // DEVICE (`/api/layout`'s `max`, the same number `/api/status` reports
+        // as `max_pixels`) and the fixture derived from it, because a pinned one
+        // goes stale the moment the cap moves: #768/#802 raised it 4,096 →
+        // 16,384, the old `2 x 1` chain of 64x64 panels stopped being over-cap,
+        // and the missing banner aborted the whole suite (#810).
+        const dLayout = await (await fetch(`${R2}/api/layout`)).json();
+        const cap = dLayout.max;
+        const pw = dLayout.matrix.pw;
+        const ph = dLayout.matrix.ph;
+        const rows = dLayout.matrix.rows;
+        // the narrowest chain that is genuinely over the cap, one row deep
+        const cols = Math.floor(cap / (pw * ph * rows)) + 1;
+        const want = pw * ph * cols * rows;
+        const group = (n) => n.toLocaleString("en-US");
+        check(
+          "r2-4 setup: the fixture is over the board's OWN ceiling, whatever it is",
+          cap > 0 && want > cap && cols <= 16, // 16 is `layout-cols`'s own max
+          `${pw}x${ph} × ${cols}x${rows} = ${group(want)} px vs cap ${group(cap)}`,
+        );
+        // The card pre-checks it, so nothing is sent — and the banner still explains.
         const layoutPosts = [];
         const countLayout = (r) => {
           if (r.method() === "POST" && r.url() === `${R2}/api/layout`) layoutPosts.push(1);
         };
         pg.on("request", countLayout);
-        await pg.$eval('[data-role="layout-cols"]', (el) => {
-          el.value = "2";
-          el.dispatchEvent(new Event("change", { bubbles: true }));
-        });
+        await pg.$eval(
+          '[data-role="layout-cols"]',
+          (el, n) => {
+            el.value = String(n);
+            el.dispatchEvent(new Event("change", { bubbles: true }));
+          },
+          cols,
+        );
         await sleep(1200);
         pg.off("request", countLayout);
         const bar = await pg.$('[data-role="api-error-bar"]');
         check("r2-4: an over-cap chain raises the error banner", bar !== null);
-        const text = await pg.$eval('[data-role="api-error-text"]', (el) =>
-          el.textContent.replace(/\s+/g, " ").trim(),
-        );
+        const text =
+          (await evalOr(pg, '[data-role="api-error-text"]', (el) =>
+            el.textContent.replace(/\s+/g, " ").trim(),
+          )) ?? "";
         check(
           "r2-4: …stating both numbers",
-          text.startsWith("8,192 px — this board tops out at 4,096."),
+          text.startsWith(`${group(want)} px — this board tops out at ${group(cap)}.`),
           text.slice(0, 80),
         );
         check("r2-4: …and the reason", /bitplane DMA frame buffers/.test(text), text.slice(0, 200));
+        // the banner renders the table's backticked wire line as real <code>, so
+        // the delimiters are gone from textContent. Read the arrangement back
+        // out and check it against the cap rather than re-pinning the numbers:
+        // it must be the SAME chain, out of smaller tiles, and it must fit.
+        const fit =
+          /\b(?:no|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|\d+) (\d+)×(\d+) tiles \(matrix (\d+) (\d+) (\d+) (\d+) tr row 0 0\)/.exec(
+            text,
+          );
         check(
           "r2-4: …and an arrangement that fits",
-          // the banner renders the table's backticked wire line as real <code>,
-          // so the delimiters are gone from textContent
-          /two 32×64 tiles \(matrix 32 64 2 1 tr row 0 0\)/.test(text),
-          text.slice(-120),
+          fit !== null &&
+            fit[1] === fit[3] && // the suggested tile IS the one in the wire line
+            fit[2] === fit[4] &&
+            Number(fit[5]) === cols && // same chain
+            Number(fit[6]) === rows &&
+            Number(fit[1]) <= pw && // out of smaller tiles
+            Number(fit[2]) <= ph &&
+            Number(fit[1]) * Number(fit[2]) * cols * rows <= cap, // and under the cap
+          fit ? fit[0] : text.slice(-120),
         );
         check(
           "r2-4: …with the device's own words kept in a details line",
           /pw\*ph\*cols\*rows out of range/.test(
-            await pg.$eval('[data-role="api-error-details"]', (el) => el.textContent),
+            (await evalOr(pg, '[data-role="api-error-details"]', (el) => el.textContent)) ?? "",
           ),
         );
         check("r2-4: …and nothing was POSTed (#600 pre-check)", layoutPosts.length === 0);
-        const marked = await pg.$eval(
-          '[data-role="layout-cols"]',
-          (el) => el.hasAttribute("data-field-error"),
+        const marked = await evalOr(pg, '[data-role="layout-cols"]', (el) =>
+          el.hasAttribute("data-field-error"),
         );
-        check("r2-4: …with the field it belongs to highlighted", marked);
+        check("r2-4: …with the field it belongs to highlighted", marked === true);
         // it is at the TOP: above the settings panel, not inside the form
         const above = await pg.evaluate(() => {
-          const b = document.querySelector('[data-role="api-error-bar"]').getBoundingClientRect();
-          const p = document.querySelector('[data-role="settings-panel"]').getBoundingClientRect();
-          return b.bottom <= p.top + 1;
+          const bar = document.querySelector('[data-role="api-error-bar"]');
+          const panel = document.querySelector('[data-role="settings-panel"]');
+          if (!bar || !panel) return null;
+          return bar.getBoundingClientRect().bottom <= panel.getBoundingClientRect().top + 1;
         });
-        check("r2-4: …at the TOP of the page, above the settings panel", above);
+        check("r2-4: …at the TOP of the page, above the settings panel", above === true);
         await pg.screenshot({ path: `${shotDir}/device-e2e-r2-errorbar.png` });
-        await pg.click('[data-role="api-error-dismiss"]');
+        if (bar !== null) await pg.click('[data-role="api-error-dismiss"]');
         await sleep(400);
         check(
           "r2-4: …and it is dismissable",
@@ -6812,9 +6863,9 @@ try {
         );
         check(
           "r2-4: …which also clears the field highlight",
-          !(await pg.$eval('[data-role="layout-cols"]', (el) =>
+          (await evalOr(pg, '[data-role="layout-cols"]', (el) =>
             el.hasAttribute("data-field-error"),
-          )),
+          )) === false,
         );
       }
 

@@ -32,6 +32,57 @@ a power cycle. #838 got the bandwidth law that bounds every streaming
 design: refill = (streamed planes ÷ emissions per pass) × 40 MB/s,
 independent of panel size — 2 MB/s at stock, 35 MB/s at the 2x1's `lsb 2`.
 
+## 2026-09-27 — the three red web/CLI harnesses on master, fixed (#810 #819 #809)
+
+Every web PR is asked to run `device-e2e`, `e2e.mjs` and `serve-e2e`, and all
+three were red on plain `origin/master` — two of them ABORTING, so a run
+reported nothing past the failure.
+
+**#810 — `device-e2e` r2-4.** #768/#802 raised the panel cap 4,096 → 16,384
+and the pinned `2 x 1` chain of 64x64 panels (8,192 px) stopped being over-cap,
+so no banner appeared, so an unguarded `$eval` on `api-error-text` threw and
+killed the run at check 553. The fixture is no longer pinned: the block reads
+the device's own ceiling off `/api/layout` (`max`, the same number
+`/api/status` calls `max_pixels`) plus the panel's `pw`/`ph`/`rows`, and
+derives the narrowest chain that exceeds it — 5 x 1 at 20,480 px today. The
+"both numbers" and "an arrangement that fits" assertions are derived the same
+way: the suggested tiles are parsed back out of the banner and checked against
+the cap (same chain, smaller tiles, product under the ceiling) rather than
+re-spelling `two 32×64`.
+
+**#809 — `serve-e2e` layout.** Two causes, not one. The `matrix` fixture
+(`matrix 32 16 2 1 tl row 1 0 16`) dates from #465 and asks for `scan 16` on a
+16-high panel; #401 later added the `scan` must divide `ph / 2` rule that
+docs/api.md states, so `luxel_core::layout` has refused it ever since — the
+harness was the stale side, and it now sends `scan 4` (a real 1/4-scan depth
+for `ph 16`, and still not the usual ratio, so the stated-scan round-trip is
+what is under test). The run also carried a THIRD failure #809 does not
+mention, the one #810 asked to go looking for: `--board panel: 4096 px
+ceiling` had the old cap written down too. It now reads `PANEL_MAX_PIXELS`
+out of `crates/luxel-cli/src/serve.rs` — the one place the number lives — so
+what the check proves is that a panel mirror reports the PANEL cap and not the
+strip's, with a floor keeping that honest.
+
+**#819 — `e2e.mjs` sprite editor.** The label half was a false alarm: #804's
+own commit renamed the toggle to `Ghost prev` AND wrote the matching
+assertion, so the reported `{"label":"Onion"}` came from a `web/dist` built
+before it — the stale-dist failure mode verify-webui already warns about. The
+crash half was real, and is what mattered: an unguarded `$eval` on
+`sprite-frame-row` took the whole sprite block and the §5.7 disabled sweep
+after it down.
+
+**Both suites now degrade instead of aborting.** `e2e.mjs` and
+`device-e2e.mjs` each grew an `evalOr(page, sel, fn, fallback)` helper —
+puppeteer's `$eval` throws on a missing element, and in a 600-check harness
+that turns one wrong expectation into an unreported run. Every read where the
+element's own presence is the question now goes through it, so a missing role
+fails its own `check` and the suite carries on.
+
+Green host-only, nothing device-touching: `serve-e2e` 141 PASS / 0 FAIL (was
+137/3), `e2e.mjs` 255 ok (was 255 but only because a fresh `dist` hid #819's
+crash), `device-e2e` **594 ok / 0 FAIL, running to completion** (was 553 then
+an abort), `npm test` 296/296, `svelte-check` 0 errors 0 warnings.
+
 ## 2026-09-27 — scene performance: the "38 ms second layer" was Aurora 2D's own frame (#812 → #840–#843)
 
 Jeremy doubted that Aurora 2D runs at 55 fps on the panel. It does not: the
