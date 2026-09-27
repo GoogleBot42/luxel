@@ -74,6 +74,12 @@ const PROJ_NONE: u8 = 0xFF;
 /// status poll costs no fenced read (Gitea #822). `0` in [`REVERT_FROM`] = no
 /// revert; that doubles as the "revert at most once per stored shape" marker,
 /// because the pixel count IS what identifies the shape that was thrown away.
+/// The largest free block a boot must still have once it is up, or the
+/// stored layout is judged to have starved it (Gitea #822). The web server
+/// needs a 4 KB connection buffer per slot and ~8 KB for a status body; a
+/// healthy 64x64 Seengreat reads 35–48 KB here, the starved one a few KB.
+const HEAL_LARGEST_FLOOR: usize = 12 * 1024;
+
 static REVERT_FROM: AtomicU32 = AtomicU32::new(0);
 /// Free heap at the end of the boot that reverted — see [`REVERT_FROM`].
 static REVERT_HEAP: AtomicU32 = AtomicU32::new(0);
@@ -150,6 +156,14 @@ fn shape_pixels(l: &Layout, pixels_now: u32) -> u32 {
 /// authoritative guard is this one: it measures the heap a whole real boot
 /// ended with, and if the stored shape is what starved it, that shape goes.
 ///
+/// Two yardsticks, because total free heap alone missed the real case: on
+/// 2026-09-27 the same 2x1 stored on the two-buffer build left the board
+/// answering 503 on EVERY route — `POST /api/reboot` and `/api/ota`
+/// included, and the boot-loop guard counted the boots as healthy — while
+/// `HEAP.free()` sat above the 20 KB floor. The heap was fragmented past the
+/// web server's 4 KB connection buffer. So the largest free block is checked
+/// too, against [`HEAL_LARGEST_FLOOR`].
+///
 /// On 2026-09-26 a stored `matrix 64 64 2 1` (8192 px) on the Seengreat left
 /// the board answering 503 or hanging on every route — `POST /api/layout`
 /// could not complete a store, `POST /api/reboot` never landed, and an OTA of
@@ -167,16 +181,18 @@ fn shape_pixels(l: &Layout, pixels_now: u32) -> u32 {
 /// papered over: on a strip board the expensive stored number is the pixel
 /// count in the nvs device record, which `board::MAX_PIXELS` and the protocol
 /// encode buffer's own allocation already bound.
-pub fn heal_if_starved(free: usize) -> bool {
+pub fn heal_if_starved(free: usize, largest: usize) -> bool {
     let cur = current();
     let def = board_default();
     let pixels_now = crate::shared::PIXEL_COUNT.load(Ordering::Relaxed);
     let stored_px = shape_pixels(&cur, pixels_now);
     let default_px = shape_pixels(&def, pixels_now);
     let at_default = cur.kind == def.kind && cur.matrix == def.matrix;
-    let decision = luxel_core::layout::heal_decision(
+    let decision = luxel_core::layout::heal_decision_fragmented(
         free,
         luxel_core::budget::RUNTIME_FLOOR,
+        largest,
+        HEAL_LARGEST_FLOOR,
         stored_px,
         default_px,
         at_default,
@@ -189,11 +205,13 @@ pub fn heal_if_starved(free: usize) -> bool {
         Heal::AlreadyReverted => "already reverted once from this shape",
         Heal::Revert => {
             println!(
-                "layout: {} px left the heap at {} B after boot (floor {}) — reverting to the \
-                 board default",
+                "layout: {} px left the heap at {} B free / {} B largest after boot (floors {} / \
+                 {}) — reverting to the board default",
                 stored_px,
                 free,
-                luxel_core::budget::RUNTIME_FLOOR
+                largest,
+                luxel_core::budget::RUNTIME_FLOOR,
+                HEAL_LARGEST_FLOOR
             );
             // The board default's SHAPE, everything else the user configured
             // kept: the `panel` driver line (planes/clock/chip/blank/lsb), the

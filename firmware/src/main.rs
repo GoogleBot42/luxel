@@ -876,7 +876,10 @@ async fn main(spawner: Spawner) -> ! {
             // rollback above, one level up — measure the heap a whole real
             // boot ended with and, if the stored shape is what starved it,
             // put the board default back and reboot once (Gitea #822).
-            if layout::heal_if_starved(esp_alloc::HEAP.free() as usize) {
+            if layout::heal_if_starved(
+                esp_alloc::HEAP.free() as usize,
+                shared::largest_free_block(),
+            ) {
                 REBOOT.signal(());
             }
         }
