@@ -6,10 +6,11 @@
   "type": "module",
   "scripts": {
     "wasm": "bash tools/build-wasm.sh",
-    "dev": "npm run wasm && node tools/gen-gallery.mjs && vite",
-    "build": "npm run wasm && node tools/gen-gallery.mjs && svelte-check --tsconfig ./tsconfig.json && vite build",
+    "dev": "npm run wasm && node tools/gen-gallery.mjs && node --experimental-strip-types --disable-warning=ExperimentalWarning tools/gen-sprite-scene-gallery.mjs && vite",
+    "build": "npm run wasm && node tools/gen-gallery.mjs && node --experimental-strip-types --disable-warning=ExperimentalWarning tools/gen-sprite-scene-gallery.mjs && svelte-check --tsconfig ./tsconfig.json && vite build",
     "preview": "vite preview",
-    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test \"tests/*.test.mjs\""
+    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test \"tests/*.test.mjs\"",
+    "check-library": "node --experimental-strip-types --disable-warning=ExperimentalWarning tools/check-sprite-scene-library.mjs"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^3.1.2",

@@ -11,10 +11,25 @@
   import { createEventDispatcher } from "svelte";
   import Popover from "../Popover.svelte";
   import SpriteThumb from "./SpriteThumb.svelte";
-  import { spriteMetaLine } from "../../lib/sprite";
+  import { spriteMetaLine, type Sprite } from "../../lib/sprite";
   import { cachedSprite, type SpriteMeta } from "../../stores/sprites";
 
   export let items: SpriteMeta[] = [];
+  /**
+   * Which backing these rows came from (Gitea #785). `store` is the live
+   * library — edit, duplicate, delete. `library` is the SHIPPED one, which is
+   * read-only, so the tile carries the one verb that makes sense there: copy it
+   * into the live library. Not a disabled Edit with a reason (§5.7) — a shipped
+   * sprite is not a sprite of yours that you cannot edit, it is a different
+   * kind of thing.
+   */
+  export let mode: "store" | "library" = "store";
+  /**
+   * Records by row id, for rows whose pixels are NOT in the sprite store's
+   * cache — i.e. the shipped library, which has no store ids at all and keys on
+   * its slugs. Null means "read the store's cache", which is the live case.
+   */
+  export let records: ReadonlyMap<string, Sprite> | null = null;
   /** Bumped by the page whenever the record cache may have changed, so a tile
    *  whose pixels arrived after its row did repaints. The store's cache is a
    *  plain Map — nothing invalidates on a write — so the page publishes this
@@ -25,6 +40,8 @@
     edit: string;
     duplicate: string;
     remove: string;
+    /** `library` mode: copy this row into the live library. */
+    add: string;
   }>();
 
   let menuFor = "";
@@ -33,39 +50,48 @@
   /** Each row paired with its decoded record, when the store has one. Read
    *  through a function with `rev` NAMED as an argument: `cachedSprite` is not
    *  a store, so nothing here would re-run when a record lands. */
-  $: tiles = items.map((m) => ({ meta: m, sprite: withRev(m.id, rev) }));
+  $: tiles = items.map((m) => ({ meta: m, sprite: withRev(m.id, rev, records) }));
 
-  function withRev(id: string, _rev: number) {
-    return cachedSprite(id);
+  function withRev(id: string, _rev: number, from: ReadonlyMap<string, Sprite> | null) {
+    return from ? (from.get(id) ?? null) : cachedSprite(id);
   }
 </script>
 
-<div class="tiles" data-role="sprites-grid">
+<div class="tiles" data-role="sprites-grid" data-source={mode}>
   {#each tiles as t (t.meta.id)}
     <div class="tile" data-role="sprite-tile" data-sprite={t.meta.id}>
       <div class="thumb">
         <button
           class="face"
           data-role="sprite-tile-open"
-          title="edit this sprite"
-          on:click={() => dispatch("edit", t.meta.id)}
+          title={mode === "library" ? "copy this sprite into your sprites" : "edit this sprite"}
+          on:click={() => dispatch(mode === "library" ? "add" : "edit", t.meta.id)}
         >
           <SpriteThumb sprite={t.sprite} dataRole="sprite-tile-thumb" />
         </button>
         <div class="actions">
-          <button class="btn sm" data-role="sprite-tile-edit" on:click={() => dispatch("edit", t.meta.id)}
-            >Edit</button
-          >
-          <span class="spacer"></span>
-          <button
-            class="btn sm icon"
-            data-role="sprite-tile-menu"
-            aria-label="more actions"
-            on:click|stopPropagation={(e) => {
-              menuBtn = e.currentTarget;
-              menuFor = menuFor === t.meta.id ? "" : t.meta.id;
-            }}>⋯</button
-          >
+          {#if mode === "library"}
+            <button
+              class="btn sm"
+              data-role="sprite-tile-add"
+              title="copy this sprite into your sprites"
+              on:click|stopPropagation={() => dispatch("add", t.meta.id)}>+ Add</button
+            >
+          {:else}
+            <button class="btn sm" data-role="sprite-tile-edit" on:click={() => dispatch("edit", t.meta.id)}
+              >Edit</button
+            >
+            <span class="spacer"></span>
+            <button
+              class="btn sm icon"
+              data-role="sprite-tile-menu"
+              aria-label="more actions"
+              on:click|stopPropagation={(e) => {
+                menuBtn = e.currentTarget;
+                menuFor = menuFor === t.meta.id ? "" : t.meta.id;
+              }}>⋯</button
+            >
+          {/if}
         </div>
       </div>
       <div class="meta">
@@ -73,9 +99,15 @@
         <div class="sub" data-role="sprite-tile-meta">
           {spriteMetaLine(t.meta.w, t.meta.h, t.meta.frames)}
         </div>
-        <button class="elink" data-role="sprite-tile-edit-link" on:click={() => dispatch("edit", t.meta.id)}
-          >Edit</button
-        >
+        {#if mode === "library"}
+          <button class="elink" data-role="sprite-tile-add-link" on:click={() => dispatch("add", t.meta.id)}
+            >Add</button
+          >
+        {:else}
+          <button class="elink" data-role="sprite-tile-edit-link" on:click={() => dispatch("edit", t.meta.id)}
+            >Edit</button
+          >
+        {/if}
       </div>
     </div>
   {/each}

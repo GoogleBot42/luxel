@@ -2950,6 +2950,258 @@ try {
   }
 
 
+  // ── The SHIPPED sprite and scene libraries (Gitea #785) ─────────────────
+  //
+  // A third backing beside the device and localStorage, and the only read-only
+  // one: `public/sprites.json` and `public/scenes.json`, built from
+  // `library/sprites/` and `library/scenes/`. What is worth driving here is not
+  // that the tiles appear — it is `+ Add` on a shipped SCENE, which has to
+  // create the pattern and sprite records its layers name and rewrite the ids
+  // (`lib/sceneRefs.ts`), because a shipped scene cannot carry a store id.
+  //
+  // Last of the playground blocks on purpose: cloning writes to the local
+  // library, and every earlier section counts what is in it.
+  {
+    await page.click('[data-role="editor-back"]').catch(() => {});
+    await sleep(400);
+    await previewAs(page, "matrix", { w: 64, h: 64 });
+
+    // ---- the sprite library ----
+    await page.click('[data-role="tab-sprites"]');
+    await sleep(900);
+    const sprSeg = await page.$$eval('[data-role="sprites-sources"] button', (e) =>
+      e.map((x) => x.textContent.replace(/\s+/g, " ").trim()),
+    );
+    check(
+      "library: the Sprites page's source control is Mine | Library",
+      /^Mine /.test(sprSeg[0] ?? "") && /^Library /.test(sprSeg[1] ?? ""),
+      sprSeg.join(" | "),
+    );
+    check(
+      "library: the Library chip counts the shipped set",
+      Number((sprSeg[1] ?? "").replace(/\D+/g, "")) >= 8,
+      sprSeg[1] ?? "",
+    );
+    await page.click('[data-role="sprites-source-library"]');
+    await sleep(800);
+    const LIBSPR = '[data-role="sprites-grid"][data-source="library"]';
+    const shipped = await page.$$eval(LIBSPR + ' [data-role="sprite-tile"]', (els) =>
+      els.map((e) => e.dataset.sprite),
+    );
+    check(
+      "library: the shipped sprites are tiles, keyed by their library slug",
+      shipped.length >= 8 && shipped.includes("heart") && shipped.includes("spinner"),
+      shipped.length + ": " + shipped.join(","),
+    );
+    // §5.7: a read-only shelf gets ONE verb, not a disabled Edit with a reason
+    check(
+      "library: a shipped tile carries + Add and no ⋯ menu",
+      (await page.$(
+        LIBSPR + ' [data-role="sprite-tile"][data-sprite="heart"] [data-role="sprite-tile-add"]',
+      )) !== null &&
+        (await page.$(LIBSPR + ' [data-role="sprite-tile-menu"]')) === null,
+    );
+    // the animated ones actually draw: the spinner's thumbnail has ink in it
+    const spinnerInk = await page.$eval(
+      LIBSPR + ' [data-role="sprite-tile"][data-sprite="spinner"] canvas',
+      (c) => {
+        const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+        let lit = 0;
+        for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 90) lit++;
+        return lit;
+      },
+    );
+    check("library: a shipped sprite's thumbnail draws its texels", spinnerInk > 4, String(spinnerInk));
+    await page.screenshot({ path: `${shotDir}/e2e-sprites-library.png` });
+
+    const spritesBefore = await page.evaluate(
+      () => JSON.parse(localStorage.getItem("luxel.sprites") ?? "[]").length,
+    );
+    await page.$eval(
+      LIBSPR + ' [data-role="sprite-tile"][data-sprite="heart"] [data-role="sprite-tile-add"]',
+      (el) => el.click(),
+    );
+    await sleep(1400);
+    check(
+      "library: + Add on a shipped sprite opens the editor on the COPY",
+      /#\/sprites\/[0-9a-f]{8}$/.test(page.url()),
+      page.url(),
+    );
+    await page.click('[data-role="sprite-editor-back"]');
+    await sleep(900);
+    await page.click('[data-role="sprites-source-live"]');
+    await sleep(700);
+    const mine = await page.$$eval(
+      '[data-role="sprites-grid"][data-source="store"] [data-role="sprite-tile-name"]',
+      (els) => els.map((e) => (e.textContent ?? "").trim()),
+    );
+    check(
+      "library: the copy is a sprite of YOURS, under the shipped record's name",
+      mine.includes("Heart") && mine.length === spritesBefore + 1,
+      mine.join(",") + " (was " + spritesBefore + ")",
+    );
+
+    // ---- the scene library, and the reference reconciliation ----
+    await page.click('[data-role="tab-scenes"]');
+    await sleep(900);
+    await page.click('[data-role="scenes-source-library"]');
+    await sleep(1500);
+    const LIBSCN = '[data-role="scenes-grid"][data-source="library"]';
+    const scnNames = await page.$$eval(LIBSCN + ' [data-role="scene-tile-name"]', (els) =>
+      els.map((e) => (e.textContent ?? "").trim()),
+    );
+    check(
+      "library: the shipped scenes are tiles",
+      scnNames.length >= 4 &&
+        scnNames.includes("Clock over Aurora") &&
+        scnNames.includes("Heartbeat"),
+      scnNames.join(","),
+    );
+    check(
+      "library: a shipped scene tile carries + Add and no ⋯ menu",
+      (await page.$(LIBSCN + ' [data-role="scene-tile-add"]')) !== null &&
+        (await page.$(LIBSCN + ' [data-role="scene-tile-menu"]')) === null,
+    );
+    // The tile is the COMPOSITE of the real thing: a shipped scene's `pat`
+    // layer is resolved out of gallery.json and its sprite layers out of
+    // sprites.json, so a tile with ink on it proves both lookups work BEFORE
+    // anything is cloned. `Heartbeat` is the pure-sprite one (a colour wash,
+    // two sprites and a caption — no pattern at all), so its ink is the
+    // records'.
+    const heartbeatIx = scnNames.indexOf("Heartbeat");
+    const tileInk = await page.$$eval(
+      LIBSCN + ' [data-role="scene-tile"] canvas',
+      (els, ix) => {
+        const c = els[ix];
+        const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+        let lit = 0;
+        for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 120) lit++;
+        return lit;
+      },
+      heartbeatIx,
+    );
+    check("library: a shipped scene's tile composites its real layers", tileInk > 8, String(tileInk));
+    await page.screenshot({ path: `${shotDir}/e2e-scenes-library.png` });
+
+    // `+ Add` on `Clock over Aurora`: one `pat` layer naming a LIBRARY pattern
+    // by reference. Cloning has to create that pattern locally and rewrite the
+    // layer's id to the local one, or the scene lands with a dead layer.
+    const clockIx = scnNames.indexOf("Clock over Aurora");
+    await page.$$eval(
+      LIBSCN + ' [data-role="scene-tile-add"]',
+      (els, ix) => els[ix].click(),
+      clockIx,
+    );
+    await sleep(2000);
+    check(
+      "library: + Add on a shipped scene opens the editor on the stored copy",
+      /#\/scenes\/[0-9a-f]{8}$/.test(page.url()),
+      page.url(),
+    );
+    const resolved = await page.evaluate(() => {
+      const idOf = (name) => {
+        let h = 0x811c9dc5;
+        for (let i = 0; i < name.length; i++) {
+          h ^= name.charCodeAt(i);
+          h = Math.imul(h, 0x01000193) >>> 0;
+        }
+        return h.toString(16).padStart(8, "0");
+      };
+      const pats = JSON.parse(localStorage.getItem("luxel.patterns") ?? "[]");
+      const blob = localStorage.getItem("luxel.scenes") ?? "";
+      const block = blob.split(/(?=^S )/m).find((b) => b.includes("Clock over Aurora")) ?? "";
+      return {
+        made: pats.some((p) => p.name === "Aurora 2D"),
+        bound: block.includes("\nI " + idOf("Aurora 2D") + "\n"),
+        ids: [...block.matchAll(/^I (\S+)$/gm)].map((m) => m[1]),
+        block,
+      };
+    });
+    check(
+      "library: cloning a scene CREATED the pattern it references",
+      resolved.made,
+      resolved.block.replace(/\n/g, " | "),
+    );
+    check(
+      "library: …and rewrote the layer's id to the local one",
+      resolved.bound && resolved.ids.every((id) => /^[0-9a-f]{8}$/.test(id)),
+      JSON.stringify(resolved.ids),
+    );
+    // and the stage composites it — a resolved pattern layer has ink
+    const stageInk = await page.$eval('[data-role="scene-stage"]', (c) => {
+      const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+      let lit = 0;
+      for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 90) lit++;
+      return lit;
+    });
+    check("library: the cloned scene renders on the stage", stageInk > 40, String(stageInk));
+    await page.screenshot({ path: `${shotDir}/e2e-scene-cloned.png` });
+
+    // ---- the sprite picker's Library group (#785) ----
+    //
+    // A shipped record has no store id, so it cannot be bound: the row clones
+    // it first and the layer binds the COPY.
+    await page.click('[data-role="scene-add-layer"]');
+    await sleep(350);
+    await page.click('[data-role="scene-add-sprite"]');
+    await sleep(800);
+    await page.click('[data-role="scene-sprite-pick"]');
+    await sleep(600);
+    const rows = await page.$$eval('[data-role="scene-sprite-menu"] .orow', (els) =>
+      els.map((e) => ({
+        text: (e.textContent ?? "").replace(/\s+/g, " ").trim(),
+        lib: (e.textContent ?? "").includes("· Library"),
+      })),
+    );
+    check(
+      "library: the sprite picker offers your own sprites AND the shipped ones",
+      rows.some((r) => !r.lib) && rows.some((r) => r.lib && /Spinner/.test(r.text)),
+      JSON.stringify(rows.map((r) => r.text)).slice(0, 300),
+    );
+    await page.screenshot({ path: `${shotDir}/e2e-sprite-picker-library.png` });
+    const sprCountBefore = await page.evaluate(
+      () => JSON.parse(localStorage.getItem("luxel.sprites") ?? "[]").length,
+    );
+    await page.$$eval('[data-role="scene-sprite-menu"] .orow', (els) => {
+      const row = els.find((e) => (e.textContent ?? "").includes("Spinner"));
+      if (row) row.click();
+    });
+    await sleep(1600);
+    const bound = await page.evaluate((was) => {
+      const rows = JSON.parse(localStorage.getItem("luxel.sprites") ?? "[]");
+      return {
+        added: rows.length === was + 1,
+        trigger: (document.querySelector('[data-role="scene-sprite-pick"]')?.textContent ?? "")
+          .replace(/\s+/g, " ")
+          .trim(),
+        meta: (
+          document.querySelector('[data-role="scene-sprite-pick-meta"]')?.textContent ?? ""
+        ).trim(),
+      };
+    }, sprCountBefore);
+    check(
+      "library: picking a shipped sprite clones it and binds the copy",
+      bound.added && /Spinner/.test(bound.trigger) && bound.meta === "7×7 · 8 frames",
+      JSON.stringify(bound),
+    );
+
+    // put the playground back where the next block expects it
+    await page.click('[data-role="scene-editor-back"]').catch(() => {});
+    await sleep(500);
+    await page.evaluate(() => {
+      localStorage.removeItem("luxel.scenes");
+      localStorage.removeItem("luxel.sprites");
+      const pats = JSON.parse(localStorage.getItem("luxel.patterns") ?? "[]");
+      localStorage.setItem(
+        "luxel.patterns",
+        JSON.stringify(pats.filter((p) => p.name !== "Aurora 2D")),
+      );
+    });
+    await page.click('[data-role="tab-patterns"]');
+    await sleep(400);
+    await previewAs(page, "auto");
+  }
+
   // ── §5.7 sweep on the playground's surfaces (Gitea #529) ──
   // Same invariant device-e2e asserts on the console: a control is ABSENT
   // unless the thing it acts on exists, and the only element allowed to be

@@ -9,6 +9,18 @@
   // wears the `scenes` class so it inherits that page's design system
   // (`components/scene/scene.css`) rather than growing a second one.
   //
+  // SINCE #785 IT HAS SOURCES, the way the Patterns page does (§5.1, D3):
+  //
+  //   console:     On device (N) | Library (N)
+  //   playground:  Mine (N)      | Library (N)
+  //
+  // `Library` is the shipped set — `library/sprites/` through
+  // `web/tools/gen-sprite-scene-gallery.mjs`, read by `stores/library.ts` — and
+  // it is read-only, so its tiles carry one verb: `+ Add`, which copies the
+  // record into whichever live library is on offer here (the device's store on
+  // a console, `localStorage` in the playground). A fresh playground used to
+  // open on "you have no sprites"; it now opens on eleven of them.
+  //
   // WHEN THE PAGE HAS CONTENT — identical to Scenes, because a sprite is for
   // a scene layer and a scene needs a matrix:
   //   * console — strictly by Layout kind; the shell's tab list enforces it.
@@ -16,11 +28,18 @@
   //     `Preview as` the page is the S6b-shaped empty state that sets one.
   import { createEventDispatcher, onDestroy } from "svelte";
   import "../components/scene/scene.css";
+  import SourceSeg, { type Source } from "../components/SourceSeg.svelte";
   import SpriteGrid from "../components/sprite/SpriteGrid.svelte";
   import SpriteImport from "../components/sprite/SpriteImport.svelte";
   import { confirm } from "../stores/dialog";
   import { isPlayground } from "../stores/device";
   import { layout, setPreviewAs } from "../stores/geometry";
+  import {
+    cloneLibrarySprite,
+    librarySprites,
+    librarySpritesLoading,
+    loadLibrarySprites,
+  } from "../stores/library";
   import { notes } from "../stores/notify";
   import {
     deleteSprite,
@@ -34,6 +53,7 @@
     startSpritePoll,
     usedBy,
     warmSprites,
+    type SpriteMeta,
   } from "../stores/sprites";
   import type { Sprite } from "../lib/sprite";
 
@@ -47,6 +67,45 @@
   /** A matrix is what a sprite is FOR. Same test as Scenes (`deviceGeometry()`
    *  on a console, `Preview as` in the playground). */
   $: ready = $layout.dims === 2 && $layout.regular && $layout.w > 0 && $layout.h > 0;
+
+  // ---- the source control (#785) ----
+  //
+  // `live` is whichever writable backing this shell has — the device's store on
+  // a console, this browser's in the playground. `library` is the shipped set.
+
+  type SourceId = "live" | "library";
+  /**
+   * The page opens on the LIVE source, on a console and in the playground
+   * alike — which is where this control differs from the Patterns page's, and
+   * deliberately.
+   *
+   * Patterns opens a playground on `Library` because there the shipped
+   * collection IS the content and `Mine` is a scratch pad. Sprites and Scenes
+   * are the other way round: they are WORKSPACES — you draw a sprite, you build
+   * a scene — so the page opens on your own work and the shipped set is one chip
+   * away, with its count on the chip (`Library 11`) and the empty state naming
+   * it in words. It also keeps the mocked empty state (S6c's peer) the state a
+   * console with nothing stored actually shows.
+   */
+  let sourceId: SourceId = "live";
+  $: liveSource = {
+    id: "live" as const,
+    label: $isPlayground ? "Mine" : "On device",
+    count: $sprites.length,
+  };
+  $: librarySource = {
+    id: "library" as const,
+    label: "Library",
+    count: $librarySprites.length,
+  };
+  $: sources = [liveSource, librarySource] as Source[];
+
+  /** The narrowing lives in a FUNCTION: svelte-check does not parse a TS
+   *  assertion inside a template expression (the same reason
+   *  `SpriteInspector`'s `setFit` exists). */
+  function selectSource(id: string): void {
+    sourceId = id as SourceId;
+  }
 
   // The 6th cadence on the ONE poll scheduler, and ONLY while this page is on
   // screen. The assignment lives in a FUNCTION: a `$:` that both reads and
@@ -69,8 +128,28 @@
    *  the tiles' repaint signal is its `spriteRev` — one owner for both, so a
    *  record this tab downloads is one the scene editor already has (#740
    *  follow-up; the three page-local copies are what left the 2026-09-26
-   *  panel's scene stage empty). */
-  $: if (active) void warmSprites();
+   *  panel's scene stage empty). The shipped library is one fetch, once. */
+  $: if (active) {
+    void warmSprites();
+    void loadLibrarySprites();
+  }
+
+  /** The shipped rows as the grid's own shape. The library has no store ids, so
+   *  the SLUG is the row id — which is also what `data-sprite` carries, so an
+   *  e2e walk names a library tile by `heart` rather than by a hash. */
+  $: libItems = $librarySprites.map(
+    (s): SpriteMeta => ({
+      id: s.slug,
+      name: s.name,
+      w: s.w,
+      h: s.h,
+      frames: s.frames,
+      fps: s.fps,
+      colors: s.colors,
+      bytes: s.bytes,
+    }),
+  );
+  $: libRecords = new Map($librarySprites.map((s) => [s.slug, s.sprite]));
 
   async function create(): Promise<void> {
     const r = await saveSprite(freshSprite(8, 8));
@@ -97,12 +176,30 @@
     if (made) dispatch("open", made);
   }
 
+  /**
+   * `+ Add` on a shipped tile: copy the record into the live library and open
+   * the editor on the copy — the same "and now you are looking at it" a
+   * `+ New sprite` gives. The source stays on `Library`, so coming back lands
+   * where you left off.
+   *
+   * It is a STORE write and nothing else: no activation, no playlist, nothing
+   * on the LEDs changes (#563). On a console the device's own refusal — the
+   * 16 KiB cap, a full store — arrives in the ONE error strip with the
+   * device's words (`stores/sprites.ts`).
+   */
+  async function add(slug: string): Promise<void> {
+    const id = await cloneLibrarySprite(slug);
+    if (id) dispatch("open", id);
+  }
+
   // ---- Import image… (Gitea #784) ----
   //
   // The drop target is the WHOLE panel: dragging a PNG anywhere onto the
-  // Sprites tab is the gesture, not hitting a 120px well. `importer` is the
-  // live `SpriteImport` — only one of the two branches below is ever mounted,
-  // so the binding always names the one on screen.
+  // Sprites tab is the gesture, not hitting a 120px well. There is exactly ONE
+  // `SpriteImport` on the page (the page bar's), so the binding always names
+  // the one on screen — and it stays mounted on the `Library` source too,
+  // because importing an image is how a sprite of your OWN starts whichever
+  // shelf you happen to be looking at.
 
   let importer: SpriteImport | undefined;
   let dropping = false;
@@ -165,25 +262,15 @@
       >
       <div class="hint">Then + New sprite.</div>
     </div>
-  {:else if $sprites.length === 0}
-    <div class="empty" data-role="sprites-empty">
-      <div class="dim" style="font-size:13px">{LEDE}</div>
-      <div class="erow">
-        <button class="btn primary" data-role="new-sprite" on:click={() => void create()}
-          >+ New sprite</button
-        >
-        <SpriteImport
-          bind:this={importer}
-          panel={{ w: $layout.w, h: $layout.h }}
-          maxBytes={$spriteMaxBytes}
-          on:import={(e) => imported(e.detail)}
-        />
-      </div>
-      <div class="hint">…or drop an image anywhere on this page.</div>
-    </div>
   {:else}
     <div class="pagebar">
-      <div class="hint" data-role="sprites-lede">{LEDE}</div>
+      <SourceSeg
+        {sources}
+        value={sourceId}
+        dataRole="sprites-sources"
+        on:select={(e) => selectSource(e.detail)}
+      />
+      <div class="hint lede" data-role="sprites-lede">{LEDE}</div>
       <div class="spacer"></div>
       <SpriteImport
         bind:this={importer}
@@ -198,13 +285,39 @@
         ><span>+ <span class="newlabel">New sprite</span></span></button
       >
     </div>
-    <SpriteGrid
-      items={$sprites}
-      rev={$spriteRev}
-      on:edit={(e) => dispatch("open", e.detail)}
-      on:duplicate={(e) => void duplicate(e.detail)}
-      on:remove={(e) => void remove(e.detail)}
-    />
+    {#if sourceId === "library"}
+      {#if $librarySpritesLoading}
+        <p class="hint pad" data-role="sprites-library-loading">loading the sprite library…</p>
+      {:else if libItems.length === 0}
+        <p class="hint pad" data-role="sprites-library-note">
+          no shipped sprites in this build (sprites.json is missing)
+        </p>
+      {:else}
+        <SpriteGrid
+          mode="library"
+          items={libItems}
+          records={libRecords}
+          rev={$spriteRev}
+          on:add={(e) => void add(e.detail)}
+        />
+      {/if}
+    {:else if $sprites.length === 0}
+      <div class="empty" data-role="sprites-empty">
+        <div class="dim" style="font-size:13px">{LEDE}</div>
+        <button class="btn primary" data-role="new-sprite-empty" on:click={() => void create()}
+          >+ New sprite</button
+        >
+        <div class="hint">…or drop an image anywhere on this page, or start from the Library.</div>
+      </div>
+    {:else}
+      <SpriteGrid
+        items={$sprites}
+        rev={$spriteRev}
+        on:edit={(e) => dispatch("open", e.detail)}
+        on:duplicate={(e) => void duplicate(e.detail)}
+        on:remove={(e) => void remove(e.detail)}
+      />
+    {/if}
   {/if}
 </section>
 
@@ -231,14 +344,6 @@
     box-shadow: inset 0 0 0 2px var(--accent);
   }
 
-  /* the empty state's two actions on one row */
-  .erow {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    justify-content: center;
-  }
-
   .snote {
     margin: 10px 12px 0;
     color: var(--text-dim);
@@ -251,7 +356,21 @@
     color: var(--error);
   }
 
-  /* the primary shrinks to an icon beside the one-line explanation (S6d) */
+  /* the library source's own "loading" / "nothing here" line, indented to the
+     page bar's gutter like the Patterns page's */
+  .pad {
+    margin: 12px 20px 0;
+  }
+
+  /* The source chips took the left of the bar, so the sentence yields first:
+     it is the one thing on the strip that is pure explanation. */
+  @media (max-width: 900px) {
+    .lede {
+      display: none;
+    }
+  }
+
+  /* the primary shrinks to an icon beside the source chips (S6d) */
   @media (max-width: 600px) {
     .newlabel {
       display: none;

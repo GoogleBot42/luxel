@@ -1,0 +1,15 @@
+# Luxel library sprite — original art, Apache-2.0. Grammar: library/README.md.
+name: Spark
+fps: 0
+palette:
+  y ffe066
+  w ffffff
+
+frame
+...y...
+...y...
+..ywy..
+yywwwyy
+..ywy..
+...y...
+...y...

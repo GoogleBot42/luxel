@@ -1,0 +1,12 @@
+# A Luxel library scene (Gitea #785) — Apache-2.0. Grammar: library/README.md.
+# The two-layer scene: something moving underneath, the time on top, and a
+# colour ramp so the pattern reads as one palette with the clock.
+S - Clock over Aurora
+L pat 0 0 0 0 normal 100 none fill 1
+N Aurora
+I @pat/aurora-2d
+R 70 0:001028 90:1e6f8c 200:7fe3c8 255:ffffff
+L text 0 2 0 0 normal 100 black fill 1
+N Time
+T clock HH:MM
+F large ffffff c none 0

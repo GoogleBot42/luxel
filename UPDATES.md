@@ -1,5 +1,67 @@
 # Update log
 
+## 2026-09-27 — a builtin sprite and scene library, browsable like the patterns (#785)
+
+Jeremy, 2026-09-26: *"a builtin scene and sprite library (just like the pattern
+lib)."* A fresh playground opened on "you have no sprites" and "you have no
+scenes", and the only way to get either was to draw one. Now eleven sprites and
+five scenes ship in the bundle, on a `Library` source beside `Mine` /
+`On device`, and one `+ Add` copies any of them into whichever library is in
+front of you.
+
+**The source form is TEXT, not PNG.** `library/` is a reviewable tree — every
+entry in it is source a person can read in a diff, which is the property the
+clean-room firewall is built on — so `library/sprites/*.sprite` is one character
+per texel with the palette spelled out above it, and `library/scenes/*.scene` is
+the `/api/scenes` wire record with `#` comments allowed. All the art is
+original. A *user's* image still becomes a sprite the #784 way; a PNG source
+form for the library itself is Gitea #873.
+
+**A scene cannot carry a store id**, which is the whole design problem: eight
+hex digits minted by somebody else's flash mean nothing here. So a library scene
+writes `I @pat/aurora-2d` / `I @spr/heart` and the generator rewrites each to a
+derived id (FNV-1a over `<kind>/<slug>`) before serializing — what ships is an
+ordinary scene record that `luxel_core::scene::parse` validates and the real
+compositor previews, and no parser anywhere grows a special case. Swapping the
+placeholders for the ids a store actually assigns is `lib/sceneRefs.ts`, once:
+pure, with the two sides injected, so the console writes `/api/patterns` and the
+playground writes `localStorage` through one algorithm. Matching is by
+**content** — a pattern whose source is already there binds that id however it
+was renamed, and a name collision RENAMES rather than overwrites, because both
+hosts read a save under an existing name as "replace that one". #746 (scene
+export/import) should import it rather than grow its own.
+
+**The gate runs the Rust codecs, not the TypeScript that wrote the bytes.**
+`web/tools/check-sprite-scene-library.mjs` (a `tools/ci.sh` step beside
+`check-library.sh`) reaches `luxel_core::sprite::check` and
+`luxel_core::scene::parse` over `luxel.wasm`, plus the 16 KiB record cap, plus
+that every `@pat/<slug>` names a pattern `library/` still has under the display
+name a clone looks it up by *and that compiles*. A reference that stops
+resolving is the one way this feature breaks silently — the tile just draws
+fewer layers — so it fails the build instead of a panel.
+
+**Both pages open on the LIVE source**, unlike Patterns: a workspace opens on
+your own work and the shipped set is one chip away, counted on the chip.
+
+Two things learned writing the content, both now in library/README.md: a sprite
+layer with a zero-sized box draws once at its natural size and `fit` means
+nothing, so `tile` needs an explicit box; and `add` over an already-saturated
+pattern is invisible, so `Spark Field` runs its pattern at 60 %.
+
+Verification: `npm test` **374 pass** (38 new), `cargo test --workspace` green,
+`e2e.mjs` **297 checks** (16 new, baseline 281), `device-e2e.mjs` **607 checks**
+(9 new) including the cloned scene rendering on the mirror (9,379 of 12,288
+`/api/pixels` bytes lit), `svelte-check` 0/0, and mockdiff over the twenty
+Patterns + Scenes frames at **40 deltas on the branch and 40 on a same-day
+master baseline** — the one new delta was mockdiff measuring the page bar's
+`new-scene` instead of the empty state's, and the map now names the latter.
+
+Bundle cost: **+6,375 B packed**, leaving **14,551 B (1.48 %)** of the 983,040 B
+assets partition — and only 1,768 B of that is the two new JSON files. The rest
+is again the entry chunk, which is the same finding master recorded in
+docs/boards.md this morning: content is not what is eating this partition, the
+console's own code is (Gitea #691).
+
 ## 2026-09-27 — the panel: scene resume and sprites on metal (#818, #774)
 
 Master `eb984808` deployed to the Seengreat 64x64 — firmware to **both** OTA

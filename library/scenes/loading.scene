@@ -1,0 +1,15 @@
+# A Luxel library scene (Gitea #785) — Apache-2.0. Grammar: library/README.md.
+# The layer FPS override (the wire's `A` line): the spinner record plays at 12,
+# this layer runs it at 8 so it matches the bouncing caption.
+S - Loading
+L color 0 0 0 0 normal 100 none fill 1
+N Backdrop
+K 07090f
+L sprite 12 4 7 7 normal 100 none fill 1
+N Spinner
+I @spr/spinner
+A 8
+L text 0 16 0 0 normal 100 black fill 1
+N Message
+T lit LOADING
+F regular 9db8ff c bounce 10

@@ -1,0 +1,16 @@
+# Luxel library sprite — original art, Apache-2.0. Grammar: library/README.md.
+name: Heart
+fps: 0
+palette:
+  r ff3355
+  h ff8fa3
+
+frame
+.rr...rr.
+rhrrrrrrr
+rhrrrrrrr
+rrrrrrrrr
+.rrrrrrr.
+..rrrrr..
+...rrr...
+....r....

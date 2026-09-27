@@ -23,6 +23,9 @@ web/device-served.png
 web/dist.luxa
 web/public/gallery.json
 web/public/pixelblaze-library.json
+# …and their peers from library/sprites/ and library/scenes/ (Gitea #785)
+web/public/sprites.json
+web/public/scenes.json
 
 # transient agent worktrees + per-machine agent settings
 .claude/worktrees/

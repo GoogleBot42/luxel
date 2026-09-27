@@ -1,0 +1,14 @@
+# A Luxel library scene (Gitea #785) — Apache-2.0. Grammar: library/README.md.
+# `fit tile`: one 7x7 sprite repeated across the layout and ADDED over a
+# pattern. Two things worth knowing are in these four lines. The box is an
+# EXPLICIT 64x64, not 0x0: a sprite layer with a zero box draws once at its
+# natural size and `fit` means nothing (docs/spec/scenes.md §4), so `tile`
+# needs somewhere to tile into. And the pattern runs at 60 % so the sparks have
+# somewhere to add INTO — added over a saturated frame they are invisible.
+S - Spark Field
+L pat 0 0 0 0 normal 60 none fill 1
+N Twirls
+I @pat/2d-spiral-twirls
+L sprite 0 0 64 64 add 100 none tile 1
+N Sparks
+I @spr/spark
