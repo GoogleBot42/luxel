@@ -1847,7 +1847,10 @@ fn compose_into(
 ) {
     let Some(t) = tables.as_deref_mut() else { return };
     if *tables_b5 != brightness5 {
-        t.build(&brightness_lut(brightness5));
+        // `build_scale5`, not `build(&brightness_lut(..))`: same tables and
+        // LUT, plus the mode that lets the vector packer apply the scale
+        // as an exact multiply instead of a table lookup per byte (#855).
+        t.build_scale5(brightness5);
         *tables_b5 = brightness5;
     }
     // A control template this buffer has not been written with yet (a latch

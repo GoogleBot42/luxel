@@ -321,13 +321,81 @@ pub struct Tables {
     lo: [u32; 256],
     hi: [u32; 256],
     lut: [u8; 256],
+    mode: LutMode,
+}
+
+/// What the byte LUT IS, for a packer that can do better than a table
+/// lookup per byte (the vector packer, [`pie`]): the identity, a linear
+/// `scale5` brightness as an exact fixed-point multiplier, or an arbitrary
+/// table it has to look up.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LutMode {
+    /// `lut[c] == c`.
+    Identity,
+    /// `lut[c] == (c * mul) >> SCALE_SHIFT` — exact for `scale5` (see
+    /// [`Tables::build_scale5`]).
+    Scale(u16),
+    /// Anything else: look it up.
+    Table,
+}
+
+/// Fixed-point shift of [`LutMode::Scale`]: `2^13 > 31 · 255`, the smallest
+/// power of two for which `(c · ceil(2^s · b / 31)) >> s` equals
+/// `(c · b) / 31` for every `c` and `b` in range (the error `c · e` with
+/// `e < 2^-s` never reaches the next integer boundary, `1/31` away at
+/// worst). A `u16 × u16 → u32` product, which `ee.vmul.u16` computes.
+pub const SCALE_SHIFT: u32 = 13;
+
+/// The 5-bit brightness scale the firmware drives the panel with:
+/// `(c · b5) / 31`, and the identity at 31 (`firmware/src/leds.rs::scale5`).
+#[must_use]
+pub const fn scale5(channel: u8, brightness5: u8) -> u8 {
+    let b = (brightness5 & 0x1f) as u16;
+    if b >= 31 {
+        channel
+    } else {
+        ((channel as u16 * b) / 31) as u8
+    }
+}
+
+/// The multiplier [`LutMode::Scale`] uses for `brightness5`
+/// (`ceil(2^SCALE_SHIFT · b / 31)`), or `None` at full brightness.
+#[must_use]
+pub const fn scale5_mul(brightness5: u8) -> Option<u16> {
+    let b = (brightness5 & 0x1f) as u32;
+    if b >= 31 {
+        None
+    } else {
+        Some(((b << SCALE_SHIFT).div_ceil(31)) as u16)
+    }
 }
 
 impl Tables {
     /// A zeroed table set — packs every frame black until [`Tables::build`].
     #[must_use]
     pub const fn zeroed() -> Self {
-        Self { lo: [0; 256], hi: [0; 256], lut: [0; 256] }
+        Self { lo: [0; 256], hi: [0; 256], lut: [0; 256], mode: LutMode::Table }
+    }
+
+    /// How the byte LUT can be applied without a lookup, if it can.
+    #[must_use]
+    pub fn mode(&self) -> LutMode {
+        self.mode
+    }
+
+    /// Build for the panel's 5-bit brightness: the same tables and LUT
+    /// [`Tables::build`] makes from a `scale5` table, plus the [`LutMode`]
+    /// that lets the vector packer apply it as a multiply.
+    pub fn build_scale5(&mut self, brightness5: u8) {
+        let mut lut = [0u8; 256];
+        for (c, v) in lut.iter_mut().enumerate() {
+            *v = scale5(c as u8, brightness5);
+        }
+        self.build(&lut);
+        self.mode = match scale5_mul(brightness5) {
+            None => LutMode::Identity,
+            Some(m) => LutMode::Scale(m),
+        };
     }
 
     /// The byte LUT the tables were last built from (all zero before the
@@ -342,6 +410,11 @@ impl Tables {
     /// gamma, or identity).
     pub fn build(&mut self, lut: &[u8; 256]) {
         self.lut = *lut;
+        self.mode = if lut.iter().enumerate().all(|(c, &v)| v == c as u8) {
+            LutMode::Identity
+        } else {
+            LutMode::Table
+        };
         for (c, out) in lut.iter().enumerate() {
             let v = u32::from(*out);
             // plane p takes bit 7-p; park it at 8p (planes 0..4) or

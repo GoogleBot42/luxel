@@ -3114,6 +3114,65 @@ dispatch tables), which put the C6 at 5.55 % OTA-slot margin — under the
 
 [esp-hal]: https://github.com/esp-rs/esp-hal
 
+## The PIE packer: the bitplane pack on the S3's vector unit (2026-09-27, Gitea #855)
+
+The ring driver (docs/hub75-ring-design.md) re-packs the whole frame every
+pass, so the packer's speed is its refresh ceiling. `luxel_hub75::pie` is
+the ESP32-S3 vector form of `pack` — same contract, byte-identical output,
+firmware feature `hub75-pie`, off by default until the ring driver ships.
+Measured on the Seengreat with the `packbench` image (docs/tools.md): one
+256-column row pair (512 px, the ring's unit of work), 7 planes, brightness
+14, median of 32 calls with interrupts masked, cycles per pixel at 240 MHz.
+
+| | core 0, source cache-hot | core 0, source cache-cold (PSRAM, 128 row pairs cycling) | core 1 hot / cold |
+|---|---:|---:|---:|
+| scalar `pack` (today) | **115.3** | **140.5** | 124.0 / 149.2 |
+| `pack_pie` | **22.4** | **39.9** | 22.9 / 40.4 |
+| — of which the gather (RGB888 → pair pads, hand-scheduled Xtensa) | 9.7 | 27.2 | 9.7 |
+| — of which the brightness scale (PIE, exact multiply) | 2.1 | 2.1 | 2.2 |
+| — of which the seven planes (PIE) | 10.1 | 10.1 | 10.4 |
+| speed-up | **5.1×** | **3.5×** | 5.4× / 3.7× |
+
+Output was word-identical to `pack` on both cores at brightness 31, 14, 3
+and 0 (7,168 words compared per core), and the disassembly matches the
+kernel. Both cores' vector units run it within 3 % of each other, so the
+core-1 steal (design §6) costs nothing in packer speed.
+
+What the number is made of, and what moved it:
+
+- **The plane loop is what the paper said**: 17 PIE instructions per 8
+  columns per plane, ~21 cycles with the multiply and load latencies —
+  10 cycles/px for seven planes, unchanged across every iteration.
+- **The deinterleave is the cost, and the compiler is why.** PIE has no
+  stride-3 gather (design §5), so RGB888 → planar is scalar. The first
+  form — the brightness LUT applied in the gather, six dependent byte
+  loads per pixel — cost **48 cycles/px**, four times its estimate, and
+  put the whole packer at 59 (2×, under the floor). Moving brightness
+  onto the vector unit as an exact fixed-point multiply
+  (`Tables::build_scale5`, `LutMode::Scale`: `(c · ceil(2¹³·b/31)) >> 13`
+  reproduces `scale5` for every `c` and `b`, proven on the host) took the
+  gather to 18. Then four rewrites of the Rust gather — word loads, no
+  byte array, bitfield-extract phrasing, `to_le_bytes` — changed NOTHING
+  (15–16 cycles/px): the Xtensa backend turns the four-column word loop
+  into ~110 instructions where the machine needs 77 (six loads, 24
+  `extui`, 36 shift/OR, six stores). Hand-scheduled inline asm of exactly
+  those 77 runs at **9.7 cycles/px**. Lesson for anything hot on this
+  core: read the disassembly before the second rewrite.
+- **The cache-cold column is the PSRAM stall**, not the packer: +25
+  cycles/px for the scalar packer and +17.5 for the vector one, i.e. the
+  6 bytes/px the gather reads at ~82 MB/s. A row pair through mem2mem DMA
+  into internal SRAM ahead of the pack (the ring driver's option, #857)
+  would give the hot column on a wall; at 64×64 the frame is cache-resident
+  anyway.
+
+Against the design's cost model (§5): stock (E = 127) packing takes 5 %
+of a core with this packer instead of 19 %; ×4 (E = 33) 17 % instead of
+71 %; ×12 (E = 11) 51 % hot / 91 % cold instead of 215 % — so ×12 on a
+128×128 wall is one core's worth of packing, which is the case for the
+core-1 steal. Every number here is a row-pair microbench, not a pass on
+a running panel: the ring driver's `pass.ring` counters are where the
+ceiling gets confirmed.
+
 ## The LCD_CAM pixel clock on the panel (2026-09-07)
 
 The panel's rescan rate had only ever been an estimate — a comment in

@@ -48,6 +48,23 @@ The panel was left exactly as found: `ota_0`, 11 patterns (`store.used` 86,524
 B byte-identical), 8 scenes, 2 sprites, playlist stopped at index 0, brightness
 31 untouched, layout untouched, Aurora 2D active and `native`.
 
+## 2026-09-27 — the PIE packer measured: 22 cycles/px, 5.1× (#855 closed)
+
+On the Seengreat, one 256-column row pair: today's `pack` 115 cycles/px
+cache-hot / 140 cold; `pack_pie` **22.4 / 39.9** — 5.1× / 3.5×,
+word-identical on both cores. Getting there took nine bench images: the
+first form (brightness LUT in the scalar gather) was 59 cycles/px, 2×; the
+brightness moved onto the vector unit as an exact fixed-point multiply
+(`Tables::build_scale5` / `LutMode::Scale`, host-proven equal to `scale5`
+for every value) → 29; four rewrites of the Rust gather changed nothing
+(the Xtensa backend emits ~110 instructions per four columns for 77 of
+work) → hand-scheduled asm gather at 9.7 → 22.4. The plane loop was 10
+cycles/px from the first run. Table + what it means for the ring's cost
+model in docs/boards.md "The PIE packer"; design doc §5 updated. The
+bench now also reports a cache-cold PSRAM column and the prologue's parts.
+Panel left as found: master on both slots, config/brightness/playlist/
+layout byte-identical.
+
 ## 2026-09-27 — HUB75 ring driver step 2: the ring maths on the host (#856)
 
 `crates/luxel-hub75/src/ring.rs`: the row-major emission order of a ring
