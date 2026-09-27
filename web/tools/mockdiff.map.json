@@ -21,6 +21,34 @@
     "editor has no mock to diff against (it is the one screen Jeremy asked to be redesigned",
     "from the complaint list rather than from a drawing).",
     "",
+    "FRAMES S8c AND S8d ARE NOT MAPPED, AND MUST NOT BE (#787, 2026-09-27). They are not",
+    "screens: they are a DECISION DRAWING. The two of them draw option A and option B of one",
+    "semantic — what the ramp does outside the stops — side by side so Jeremy could pick one,",
+    "and their card header reads `A · clamp both ends` / `B · black above the last stop` where",
+    "every other frame's reads `Color ramp`. Nothing in the app is or should ever be in that",
+    "state. Jeremy picked A on 2026-09-27, so the app clamps at BOTH ends, and the semantic is",
+    "pinned where a semantic belongs rather than in a CSS diff: the engine's own test",
+    "`palette_lut_clamps_above_the_last_stop_and_below_the_first`",
+    "(crates/luxel-core/src/outpipe.rs), `web/tests/paletteLut.test.mjs` (the wasm table against",
+    "the browser's synchronous fallback, so the two cannot drift) and `web/tests/gradient.test.mjs`",
+    "\"the ramp CLAMPS at both ends\". The batch-7 block's hatched `.rezone` rule is option B's",
+    "and is dead with it — it is drawn in S8d and nowhere else.",
+    "",
+    "THE S8 BATCH, and where each drawn card is measured (#787, 2026-09-27): S8a/S8b/S8g are the",
+    "Settings mount at 760 / 760 / 390, S8e/S8f the scene layer's row collapsed and expanded.",
+    "S8h and S8i each draw SEVERAL states of one control stacked under `.statecap` captions, so",
+    "they are split the way S2 is: `S8h-empty` / `S8h-min` / `S8h-cap` and `S8i-live` /",
+    "`S8i-save` / `S8i-clear`, each naming the drawn frame with a frame-level `mock` and picking",
+    "its card with `mockNth`. Those two frames draw the card BARE in the frame's 20px padding,",
+    "where the Settings mount nests it in `.disclist > .dbody` — 30px narrower — so their",
+    "full-width children carry a `box width` allow; S8a draws the nesting and measures 0 on it.",
+    "The three S8h states each POST their own palette to the mirror (the `strip` seed's ramp is",
+    "the four-stop Sunset every other S8 frame quotes) and they are LAST in this file on purpose:",
+    "all frames of a target share one `luxel serve`, so a frame that rewrites the device's ramp",
+    "must not run before one that reads it. Every other ramp frame re-POSTs the seeded ramp in",
+    "its own first step, which makes each of them a named state rather than a position in a",
+    "queue — the same reason `freshProfile` exists.",
+    "",
     "`allow` lists the deviations Jeremy asked for that the mocks do not show. Each is",
     "`<element>` (the whole element), or `<element>.<property>`. They are printed in the",
     "report as ALLOWED and never counted as deltas.",
@@ -115,7 +143,9 @@
           "source": "export function render(index) {\n  var f = index / pixelCount\n  hsv(.04, 1, 1 - f)\n}\n"
         }
       ],
-      "activate": "Sunset Fade"
+      "activate": "Sunset Fade",
+      "palette": "100 0 0 0 0 87 42 16 96 173 194 58 107 255 247 224 138",
+      "why": "the ramp the S8 frames draw (#787): the mock's own `Sunset` — `000000` at 0, `2a1060` at 87, `c23a6b` at 173, `f7e08a` at 255, amount 100. Every S8 frame on this target quotes it: S8a's header says `4 stops`, its bubble and position field say `173`, its swatch says `#c23a6b`, the handles sit at 0 / 34.1 / 67.8 / 100 %, and S8i's Clear confirm counts `The 4 stops` and `The amount stays at 100 %`. A bare mirror has no palette at all, so without this the S8 frames would measure the empty-ramp card against a mock drawing a ramp, and S3/S3i's collapsed `gradbar` would have nothing to paint"
     },
     "outputs": {
       "protocol": "ws2812",
@@ -156,11 +186,11 @@
       ],
       "scenes": [
         "S - Clock overlay\nL pat 0 0 0 0 normal 100 none fill 1\nN Rainbow\nI {{Sunset Fade}}\nL color 0 58 64 6 normal 45 none fill 1\nN Bottom bar\nK e8a33d\nL text 0 28 64 8 normal 100 none fill 1\nN Time\nT clock HH:MM\nF regular ffffff c none 0\n",
-        "S - Aurora + ticker\nL pat 0 0 0 0 multiply 60 none fill 1\nN Rainbow\nI {{Sunset Fade}}\nC hue 6553\nC speed 5242\nR 100 0:000000 86:2a1060 173:c23a6b 255:f7e08a\nL color 0 58 64 6 normal 45 none fill 0\nN Bottom bar\nK e8a33d\nL pat 0 0 0 0 normal 60 black fill 1\nN Aurora 2D\nI {{Aurora 2D}}\nC cellSize 5242\nC speed 26214\nL sprite 4 4 9 8 normal 100 black fill 1\nN Heart\nI {{Heart}}\nL text 0 28 64 8 normal 100 none fill 1\nN Time\nT clock HH:MM\nF regular ffffff c none 0\n",
+        "S - Aurora + ticker\nL pat 0 0 0 0 multiply 60 none fill 1\nN Rainbow\nI {{Sunset Fade}}\nC hue 6553\nC speed 5242\nR 60 0:000000 87:2a1060 173:c23a6b 255:f7e08a\nL color 0 58 64 6 normal 45 none fill 0\nN Bottom bar\nK e8a33d\nL pat 0 0 0 0 normal 60 black fill 1\nN Aurora 2D\nI {{Aurora 2D}}\nC cellSize 5242\nC speed 26214\nL sprite 4 4 9 8 normal 100 black fill 1\nN Heart\nI {{Heart}}\nL text 0 28 64 8 normal 100 none fill 1\nN Time\nT clock HH:MM\nF regular ffffff c none 0\n",
         "S - Party wall\nL pat 0 0 0 0 normal 100 none fill 1\nN Base\nI {{Aurora 2D}}\nL color 0 0 0 0 add 30 none fill 1\nN Wash\nK 2a1060\nL sprite 27 20 9 8 normal 100 black fill 1\nN Heart\nI {{Heart}}\nL text 0 4 64 8 normal 100 none fill 1\nN Ticker\nT lit PARTY\n"
       ],
       "activateScene": "Clock overlay",
-      "why": "mockups S6/S6d: three scene tiles, the first PLAYING. S7's stack, bottom to top: a 1D base under a projection override (the quiet Projection row, S7g), a colour wash, a 2D pattern at 60 % (S7b/S7g's inspector), a 9x8 sprite and a clock text layer — two pattern layers, which is exactly `caps.layers` on this board, so the Add-layer menu is at the cap (S7d). `Aurora + ticker` is NOT the active scene: the inspector frames edit it, and an edit to the active scene would live-push and change what a later frame sees.",
+      "why": "mockups S6/S6d: three scene tiles, the first PLAYING. S7's stack, bottom to top: a 1D base under a projection override (the quiet Projection row, S7g), a colour wash, a 2D pattern at 60 % (S7b/S7g's inspector), a 9x8 sprite and a clock text layer — two pattern layers, which is exactly `caps.layers` on this board, so the Add-layer menu is at the cap (S7d). `Aurora + ticker` is NOT the active scene: the inspector frames edit it, and an edit to the active scene would live-push and change what a later frame sees. That bottom pattern layer also carries the ramp the S8 scene frames draw — `R 60 0:000000 87:2a1060 173:c23a6b 255:f7e08a`, four stops at the mock's own 0 / 34.1 / 67.8 / 100 %. The AMOUNT is the seed's, not the mock's, decision: S8e's summary reads `4 stops · 60 %` and S8f's slider and value read `60 %`, so the seed states 60 rather than buying an `allow` for a number the frames are entitled to quote (it was 100 before #787's frames existed). The 87 was 86 for the same reason: S8f's bubble and position field say `87`, and 86 vs 87 is 0.4 % of the bar — inside S7g's 1px tolerance either way, so nothing that already passed moves.",
       "text": {
         "0": "PARTY 21:00"
       }
@@ -1679,7 +1709,27 @@
         },
         {
           "element": "gradbar-edit",
-          "why": "the palette stop editor behind `Edit stops…` is Gitea #537; until it lands the stops are edited inline under the ramp"
+          "why": "RETIRED WITH THE ELEMENT (#787, 2026-09-27): #537 is what this work closed, and the `Edit stops…` button it waited for does not exist any more — the affordance is an accent `Edit…` link and the editor opens in place. Kept as a reason rather than deleted so the closure is readable from here; the entry it excused is gone, and S8a/S8e are the frames that specify what replaced it"
+        },
+        {
+          "element": "gradbar",
+          "property": "box width",
+          "why": "S3 still draws the ramp as a labelled `Palette` row inside the group's `132px 1fr` grid, so its bar is 544px wide. #787 makes the ramp a FULL-WIDTH card after the numeric rows — it carries its own `Color ramp` header, and a second label in a field column would say it twice (web/src/settings/OutputCard.svelte; S8a draws the card in exactly that position) — so the collapsed bar spans the body minus the `Edit…` link beside it. The 22px height, the radius and the border are what this entry pins"
+        },
+        {
+          "element": "gradbar",
+          "property": "overflow-x",
+          "why": "the mock draws the bar as a `<div>` with a CSS `linear-gradient`; since #748 the app's is a `<canvas>` painted from the engine's own 256-entry LUT, because a gradient cannot express the clamp, the truncating 16.16 interpolation or a hard cut to black. A replaced element's UA `overflow` is `clip`, and neither box has anything that could overflow it"
+        },
+        {
+          "element": "gradbar",
+          "property": "overflow-y",
+          "why": "see gradbar.overflow-x"
+        },
+        {
+          "element": "gradbar",
+          "property": "background-color",
+          "why": "the same div-vs-canvas: the mock's gradient IS its background, so its background-COLOR is transparent; the app's canvas paints `#000` under the LUT so an unpainted pixel is black rather than the page showing through"
         }
       ],
       "elements": [
@@ -1949,13 +1999,7 @@
           "id": "gradbar",
           "mock": ".gradbar",
           "app": "[data-role=\"out-palette-preview\"]",
-          "note": "mock: 22px tall, radius 4, 1px border — and ONE `Edit stops…` button, not 32 inline rows"
-        },
-        {
-          "id": "gradbar-edit",
-          "mock": ".dbody .btn.sm",
-          "app": "[data-role=\"out-palette-edit\"]",
-          "note": "mock: a `.btn.sm` reading `Edit stops…`"
+          "note": "mock: 22px tall, radius 4, 1px border. Since #787 the app's is the collapsed row's CANVAS (`.colbar`, painted from the engine's own LUT) rather than a div with a CSS gradient — same box, and the picture is now the one the device will actually show. `gradbar-edit` was retired with this pass: the `.dbody .btn.sm` reading `Edit stops…` is an accent `Edit…` link now, which S8e specifies and S8a measures"
         }
       ]
     },
@@ -2655,18 +2699,14 @@
         {
           "id": "gradbar",
           "mock": ".disclist .gradbar",
-          "app": "[data-role=\"out-palette-preview\"]"
-        },
-        {
-          "id": "gradbar-edit",
-          "mock": ".disclist .btn.sm",
-          "app": "[data-role=\"out-palette-edit\"]"
+          "app": "[data-role=\"out-palette-preview\"]",
+          "note": "the collapsed row's canvas since #787 — see S3's `gradbar`. Its `gradbar-edit` sibling was retired in the same pass"
         }
       ],
       "allow": [
         {
           "element": "gradbar-edit",
-          "why": "the palette stop editor behind `Edit stops…` is Gitea #537"
+          "why": "RETIRED WITH THE ELEMENT (#787, 2026-09-27): this entry excused `Edit stops…` while the stop editor was still #537, and #537 is what this work closed. The button is gone — an accent `Edit…` link expands the editor in place (S8e), and S8a/S8g measure the editor itself"
         },
         {
           "element": "dbody",
@@ -2691,6 +2731,26 @@
         {
           "element": "drow-st2",
           "why": "S3i's status line describes the FIXTURE (`300 px SK9822 strip`, `custom map · 3D · 400 px`) to illustrate capability trimming; the status format the spec states is S3's `gamma 2.2 · blur 0 · glow 0`, which the app follows with the mirror's own numbers"
+        },
+        {
+          "element": "gradbar",
+          "property": "box width",
+          "why": "S3i still draws the ramp as a labelled `Palette` row inside the group's `132px 1fr` grid, so its bar is 544px wide. #787 makes the ramp a FULL-WIDTH card after the numeric rows — it carries its own `Color ramp` header, and a second label in a field column would say it twice (web/src/settings/OutputCard.svelte; S8a draws the card in exactly that position) — so the collapsed bar spans the body minus the `Edit…` link beside it. The 22px height, the radius and the border are what this entry pins"
+        },
+        {
+          "element": "gradbar",
+          "property": "overflow-x",
+          "why": "the mock draws the bar as a `<div>` with a CSS `linear-gradient`; since #748 the app's is a `<canvas>` painted from the engine's own 256-entry LUT, because a gradient cannot express the clamp, the truncating 16.16 interpolation or a hard cut to black. A replaced element's UA `overflow` is `clip`, and neither box has anything that could overflow it"
+        },
+        {
+          "element": "gradbar",
+          "property": "overflow-y",
+          "why": "see gradbar.overflow-x"
+        },
+        {
+          "element": "gradbar",
+          "property": "background-color",
+          "why": "the same div-vs-canvas: the mock's gradient IS its background, so its background-COLOR is transparent; the app's canvas paints `#000` under the LUT so an unpainted pixel is black rather than the page showing through"
         }
       ]
     },
@@ -5135,6 +5195,21 @@
           "element": "pat-name",
           "property": "text-overflow",
           "why": "see pat-name.overflow-x"
+        },
+        {
+          "element": "ramp",
+          "property": "overflow-x",
+          "why": "the mock draws the `no ramp yet` teaser's bar as a `<div>` with a CSS `linear-gradient`; since #748 the app's is a `<canvas>` painted from the engine's own LUT (here the black→white ramp adding one would start from), because a gradient cannot express the clamp or the truncating interpolation. A replaced element's UA `overflow` is `clip`, and neither box has anything that could overflow it"
+        },
+        {
+          "element": "ramp",
+          "property": "overflow-y",
+          "why": "see ramp.overflow-x"
+        },
+        {
+          "element": "ramp-edit",
+          "property": "color",
+          "why": "Jeremy's own amendment, drawn: S7b greys this link with the rest of the row, and S8e — the frame that supersedes this row (docs/design/webui-v2/ramp-editor.md) — draws `Edit…` in ACCENT, `<a class=\"lnk\" style=\"color:var(--accent)\">`. The implementation follows S8e where the two disagree"
         }
       ],
       "elements": [
@@ -5329,6 +5404,21 @@
           "element": "preview-dims",
           "property": "text",
           "why": "the mock's `64x64 · 24 fps on device` carries the mirror's live frame rate; the wording and the separator match exactly"
+        },
+        {
+          "element": "gradbar",
+          "property": "overflow-x",
+          "why": "the mock draws the bar as a `<div>` with a CSS `linear-gradient`; since #748 the app's is a `<canvas>` painted from the engine's own 256-entry LUT, because a gradient cannot express the clamp, the truncating 16.16 interpolation or a hard cut to black — which is why the old preview disagreed with the device. A replaced element's UA `overflow` is `clip`, and neither box has anything that could overflow it"
+        },
+        {
+          "element": "gradbar",
+          "property": "overflow-y",
+          "why": "see gradbar.overflow-x"
+        },
+        {
+          "element": "gradbar",
+          "property": "background-color",
+          "why": "the same div-vs-canvas: the mock's gradient IS its background, so its background-COLOR is transparent; the app's canvas paints `#000` under the LUT so an unpainted pixel is black rather than the page showing through. The 22px height, the radius and the 1px border — what this entry pins — match"
         }
       ],
       "elements": [
@@ -5388,42 +5478,23 @@
           "id": "gradbar",
           "mock": ".gradbar",
           "app": "[data-role=\"scene-ramp\"]",
-          "noBoxW": true
+          "noBoxW": true,
+          "note": "the collapsed row's CANVAS since #787 (`.colbar`, painted from the engine's LUT) where the mock draws a div with a CSS gradient — same 22px box, radius and border, and the picture is now the one the device will show. THREE entries that stood beside it are retired rather than retargeted, because the redesign replaced what they measured: `stopmk-on` (nothing on this row is selected any more — it is a read-only summary, and the selection lives in the editor S8f draws), `ramp-edit` (a `.btn.sm` reading `Edit stops…` is an accent `Edit…` link) and `ramp-count` (`4 stops · the same editor as Settings › Output › Palette` was deleted on purpose — true about the intent, false about the behaviour; S8e's summary line states the stop count and the amount instead). S8e is the amended row and the implementation follows it where the two frames disagree (docs/design/webui-v2/ramp-editor.md)"
         },
         {
           "id": "stoprow",
           "mock": ".stoprow",
-          "app": "[data-role=\"scene-ramp-stops\"]",
-          "noBoxW": true
+          "app": "[data-role=\"scene-ramp-ticks\"]",
+          "noBoxW": true,
+          "note": "retargeted (#787): `scene-ramp-stops` is now the EXPANDED editor's 24px handle row; the collapsed row's read-only 9px ticks — which is what this mock element is — are `scene-ramp-ticks`"
         },
         {
           "id": "stopmk",
-          "mock": ".stopmk",
-          "app": "[data-role=\"scene-ramp-stop\"]",
-          "noBox": true
-        },
-        {
-          "id": "stopmk-on",
-          "mock": ".stopmk.on",
-          "app": "[data-role=\"scene-ramp-stop\"].on",
-          "noBox": true
-        },
-        {
-          "id": "ramp-edit",
-          "mock": ".irow.wide .btn.sm",
-          "mockNth": 1,
-          "app": "[data-role=\"scene-ramp-edit\"]",
-          "text": true,
-          "note": "mock copy: `Edit stops…`"
-        },
-        {
-          "id": "ramp-count",
-          "mock": ".irow.wide .hint",
-          "mockNth": 1,
-          "app": "[data-role=\"scene-inspector\"] .editrow .hint",
-          "text": true,
+          "mock": ".stopmk:not(.on)",
+          "app": "[data-role=\"scene-ramp-ticks\"] .stopmk",
+          "nth": 1,
           "noBox": true,
-          "note": "mock copy: `4 stops · the same editor as Settings › Output › Palette`"
+          "note": "retargeted with `stoprow`: the same read-only tick, still the existing 9px `.stopmk` the mock specifies. It has to name `:not(.on)` on the mock side and the SECOND tick on the app side because the mock draws its first tick selected and the app's row has no selection at all any more — which is what retired `stopmk-on`. Both are the stop at ~34 %"
         },
         {
           "id": "boxrow",
@@ -7161,13 +7232,1965 @@
           "note": "mock copy: `drawText(textSlot(0), x, 28)`"
         }
       ]
+    },
+    "S8a": {
+      "title": "Color ramp — Settings › Advanced › Output processing, open with the stop at 173 selected",
+      "width": 760,
+      "height": 1100,
+      "app": {
+        "target": "strip",
+        "route": "#/settings",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"adv-output-toggle\"]"
+          },
+          {
+            "js": "fetch(new URLSearchParams(location.search).get('device') + '/api/output/palette', {method:'POST', body:'100 0 0 0 0 87 42 16 96 173 194 58 107 255 247 224 138'})"
+          },
+          {
+            "sleep": 2500
+          },
+          {
+            "click": "[data-role=\"adv-output-toggle\"]"
+          },
+          {
+            "sleep": 900
+          },
+          {
+            "click": "[data-role=\"out-palette-edit\"]"
+          },
+          {
+            "sleep": 700
+          },
+          {
+            "js": "(() => {const h=document.querySelectorAll('[data-role=\"out-palette-stop\"]')[2];const r=h.getBoundingClientRect();const o={bubbles:true,pointerId:1,pointerType:'mouse',isPrimary:true};const x=r.left+r.width/2,y=r.top+r.height/2;h.dispatchEvent(new PointerEvent('pointerdown',{...o,buttons:1,clientX:x,clientY:y}));h.dispatchEvent(new PointerEvent('pointerup',{...o,buttons:0,clientX:x,clientY:y}));})()"
+          },
+          {
+            "sleep": 700
+          }
+        ]
+      },
+      "allow": [
+        {
+          "element": "cell-cap",
+          "property": "text",
+          "why": "the caption NAMES the pattern the device is running, and the mirror is running `Sunset Fade` where the mock draws a sample called `Comet` — the same class of sample-data difference as S1's `tile-name`. The format is what the frame specifies and the format matches exactly: `pattern · <name>`, against `brightness 0 → 255` when there is nothing to preview (S8h's middle card)"
+        },
+        {
+          "element": "card",
+          "property": "margin-top",
+          "why": "the 14px gap between the last numeric row and the card exists and is identical — it is authored one element out, on the `.rampfield` wrapper the Settings card mounts the editor in (web/src/settings/cards.css `.settings .rampfield{…margin-top:14px}`), where the mockup puts it inline on `.recard`. It belongs to the wrapper because the same card is mounted in the scene inspector, which must not inherit a Settings-specific gap"
+        }
+      ],
+      "elements": [
+        {
+          "id": "card",
+          "mock": ".recard",
+          "app": "[data-role=\"out-palette-card\"]",
+          "note": "mock: padding 14, 1px border, radius 8, background var(--bg-inset)",
+          "noBoxH": true
+        },
+        {
+          "id": "head",
+          "mock": ".rehead",
+          "app": "[data-role=\"out-palette-card\"] .rehead",
+          "note": "mock: flex, gap 10, margin-bottom 9",
+          "noBoxH": true
+        },
+        {
+          "id": "head-label",
+          "mock": ".rehead .slabel",
+          "app": "[data-role=\"out-palette-card\"] .rehead .slabel",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Color ramp` — the card carries its own header, which is why the editor is a full-width card and not a labelled field"
+        },
+        {
+          "id": "count",
+          "mock": ".rehead .ct2",
+          "app": "[data-role=\"out-palette-count\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `4 stops` — the seeded ramp, unedited (an edited one reads `4 stops · edited`, S8i)"
+        },
+        {
+          "id": "done",
+          "mock": ".rehead .btn.sm",
+          "app": "[data-role=\"out-palette-done\"]",
+          "text": true,
+          "hover": true
+        },
+        {
+          "id": "statement",
+          "mock": ".restate",
+          "app": "[data-role=\"out-palette-statement\"]",
+          "text": true,
+          "noBoxH": true,
+          "note": "mock copy: `Brightness → color. Each pixel's brightness picks a color from this ramp: dark pixels take the left end, bright pixels the right. Below the first stop and above the last, the end color continues.` — inventory item 17, body text and never a tooltip"
+        },
+        {
+          "id": "statement-lead",
+          "mock": ".restate b",
+          "app": "[data-role=\"out-palette-statement\"] b",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "barwrap",
+          "mock": ".rebarwrap",
+          "app": "[data-role=\"out-palette-card\"] .rebarwrap",
+          "note": "mock: margin-top 24 — the clearance the position bubble lives in",
+          "noBoxH": true
+        },
+        {
+          "id": "bar",
+          "mock": ".rebar",
+          "app": "[data-role=\"out-palette-preview\"]",
+          "note": "mock: 44px tall, radius 6, 1px border, image-rendering pixelated — the engine's 256-entry LUT as a 256x1 canvas stretched (#748), never a CSS linear-gradient"
+        },
+        {
+          "id": "bubble",
+          "mock": ".rebub",
+          "app": "[data-role=\"out-palette-bubble\"]",
+          "text": true,
+          "noBoxW": true,
+          "note": "mock copy: `173` — the selected stop is named by its position, not by a `Stop N` header that renumbers mid-drag"
+        },
+        {
+          "id": "stops",
+          "mock": ".rehnds",
+          "app": "[data-role=\"out-palette-stops\"]",
+          "note": "mock: 24px tall, margin-top -12 — the handle row straddles the bar's bottom edge, so there is no gutter to miss into (item 13)"
+        },
+        {
+          "id": "handle",
+          "mock": ".rehnd:not(.on)",
+          "mockNth": 1,
+          "app": "[data-role=\"out-palette-stop\"]:not(.on)",
+          "nth": 1,
+          "note": "the stop at 87 — 24x24 hit box (§5.7's touch floor, #703)"
+        },
+        {
+          "id": "handle-i",
+          "mock": ".rehnd:not(.on) i",
+          "mockNth": 1,
+          "app": "[data-role=\"out-palette-stop\"]:not(.on) i",
+          "nth": 1,
+          "note": "mock: 12px of paint, rotated 45deg, inside that 24px box"
+        },
+        {
+          "id": "handle-on",
+          "mock": ".rehnd.on",
+          "app": "[data-role=\"out-palette-stop\"].on"
+        },
+        {
+          "id": "handle-on-i",
+          "mock": ".rehnd.on i",
+          "app": "[data-role=\"out-palette-stop\"].on i",
+          "note": "mock: 14px and an accent ring — the selected stop"
+        },
+        {
+          "id": "scale",
+          "mock": ".rescale",
+          "app": "[data-role=\"out-palette-card\"] .rescale",
+          "noBoxH": true
+        },
+        {
+          "id": "affordance",
+          "mock": ".rescale .mid",
+          "app": "[data-role=\"out-palette-affordance\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `click the bar to add a stop · drag to move · drag off to remove` — the bar's affordance, printed rather than discovered"
+        },
+        {
+          "id": "selected",
+          "mock": ".resel",
+          "app": "[data-role=\"out-palette-selected\"]",
+          "note": "mock: the ONE per-stop row, present only while a stop is selected",
+          "noBoxH": true
+        },
+        {
+          "id": "selected-k",
+          "mock": ".resel .k",
+          "app": "[data-role=\"out-palette-selected\"] .k",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Selected stop`"
+        },
+        {
+          "id": "swatch",
+          "mock": ".reswatch",
+          "app": "[data-role=\"out-palette-color\"] [data-role=\"color-swatch\"]",
+          "text": true,
+          "note": "mock copy: `#c23a6b`. `.reswatch` IS `ColorPicker.svelte`'s `variant=\"chip\"` trigger — the app's own picker, never <input type=\"color\"> (#537)"
+        },
+        {
+          "id": "swatch-i",
+          "mock": ".reswatch i",
+          "app": "[data-role=\"out-palette-color\"] [data-role=\"color-swatch\"] i"
+        },
+        {
+          "id": "pos",
+          "mock": ".repos",
+          "app": "[data-role=\"out-palette-card\"] .repos"
+        },
+        {
+          "id": "pos-input",
+          "mock": ".repos .inp.num",
+          "app": "[data-role=\"out-palette-pos\"]",
+          "note": "mock: 56px wide (the mockup sets it inline; the app's rule is `.repos .inp.num{width:56px}`)"
+        },
+        {
+          "id": "remove",
+          "mock": ".resel .btn.del",
+          "app": "[data-role=\"out-palette-remove\"]",
+          "text": true,
+          "hover": true,
+          "note": "mock copy: `Remove stop`, pushed right by `margin-left:auto`"
+        },
+        {
+          "id": "grid",
+          "mock": ".regrid",
+          "app": "[data-role=\"out-palette-card\"] .regrid",
+          "note": "mock: grid minmax(0,1fr) 250px, gap 18, margin-top 15",
+          "noBoxH": true
+        },
+        {
+          "id": "pair",
+          "mock": ".repair",
+          "app": "[data-role=\"out-palette-card\"] .repair",
+          "noBoxH": true
+        },
+        {
+          "id": "cell",
+          "mock": ".recell",
+          "app": "[data-role=\"out-palette-card\"] .recell",
+          "noBoxH": true
+        },
+        {
+          "id": "cell-cap",
+          "mock": ".recell .cap2",
+          "app": "[data-role=\"out-palette-card\"] .recell .cap2",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "cell-canvas",
+          "mock": ".recell canvas",
+          "app": "[data-role=\"out-palette-preview-src\"]",
+          "note": "mock: aspect-ratio 8/1 on a strip board"
+        },
+        {
+          "id": "arr",
+          "mock": ".rearr",
+          "app": "[data-role=\"out-palette-card\"] .rearr",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "cell-out-cap",
+          "mock": ".recell .cap2",
+          "mockNth": 1,
+          "app": "[data-role=\"out-palette-card\"] .recell .cap2",
+          "nth": 1,
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `LEDs · ramp at 100 %` — the right cell is the ramp AT THE CURRENT AMOUNT, which is what the device will show (inventory item 16)"
+        },
+        {
+          "id": "cell-out-canvas",
+          "mock": ".recell canvas",
+          "mockNth": 1,
+          "app": "[data-role=\"out-palette-preview-out\"]"
+        },
+        {
+          "id": "amount-cap",
+          "mock": ".regrid > div > .cap2",
+          "app": "[data-role=\"out-palette-card\"] .regrid > div > .cap2",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Amount`"
+        },
+        {
+          "id": "bigslider",
+          "mock": ".bigslider",
+          "app": "[data-role=\"out-palette-card\"] .bigslider",
+          "noBoxH": true
+        },
+        {
+          "id": "amount",
+          "mock": ".bigslider .slider",
+          "app": "[data-role=\"out-palette-amount\"]",
+          "note": "mock: 20px box over a 6px track — #537's `amount slider next to the preview`, replacing the number input in the button row (item 22)"
+        },
+        {
+          "id": "amount-val",
+          "mock": ".bigslider .val",
+          "app": "[data-role=\"out-palette-amount-val\"]",
+          "text": true,
+          "note": "mock copy: `100 %`, 13px mono, min-width 52, right-aligned"
+        },
+        {
+          "id": "amount-hint",
+          "mock": ".regrid .hint",
+          "app": "[data-role=\"out-palette-amount-hint\"]",
+          "text": true,
+          "noBoxH": true
+        },
+        {
+          "id": "presets",
+          "mock": ".represets",
+          "app": "[data-role=\"out-palette-presets\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "presets-lab",
+          "mock": ".represets .rlab",
+          "app": "[data-role=\"out-palette-presets\"] .rlab",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Presets` (it reads `Start from` on an empty ramp — S8h)"
+        },
+        {
+          "id": "chip",
+          "mock": ".rechip:not(.on)",
+          "app": "[data-role=\"out-palette-preset\"]:not(.on)",
+          "note": "mock: 84px, column, gap 4, padding 5 — `Mono`"
+        },
+        {
+          "id": "chip-i",
+          "mock": ".rechip:not(.on) i",
+          "app": "[data-role=\"out-palette-preset\"]:not(.on) i"
+        },
+        {
+          "id": "chip-span",
+          "mock": ".rechip:not(.on) span",
+          "app": "[data-role=\"out-palette-preset\"]:not(.on) span",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "chip-on",
+          "mock": ".rechip.on",
+          "app": "[data-role=\"out-palette-preset\"].on",
+          "note": "the seeded ramp IS the `Sunset` preset, stop for stop, so the chip the mock draws lit is lit"
+        },
+        {
+          "id": "chip-on-span",
+          "mock": ".rechip.on span",
+          "app": "[data-role=\"out-palette-preset\"].on span",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "acts",
+          "mock": ".reacts",
+          "app": "[data-role=\"out-palette-card\"] .reacts",
+          "note": "mock: gap 8, margin-top 14, padding-top 13, 1px top border",
+          "noBoxH": true
+        },
+        {
+          "id": "add",
+          "mock": ".reacts .btn.sm",
+          "app": "[data-role=\"out-palette-add\"]",
+          "text": true,
+          "hover": true,
+          "note": "mock copy: `+ Add stop` — it lands in the widest gap, never past the last stop (item 5)"
+        },
+        {
+          "id": "cap",
+          "mock": ".reacts .hint",
+          "app": "[data-role=\"out-palette-cap\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `adds into the widest gap · Ctrl-Z undoes`"
+        },
+        {
+          "id": "clear",
+          "mock": ".reacts .btn.del",
+          "app": "[data-role=\"out-palette-clear\"]",
+          "text": true,
+          "hover": true,
+          "note": "mock copy: `Clear ramp` — the one destructive action, separated on the right"
+        },
+        {
+          "id": "moderow",
+          "mock": ".recard > div:last-of-type",
+          "app": "[data-role=\"out-palette-card\"] > .moderow",
+          "noBoxH": true,
+          "note": "mock: the mode line's row, `margin-top:11px` (inline in the mockup, `.moderow` in the app)"
+        },
+        {
+          "id": "mode",
+          "mock": ".remode",
+          "app": "[data-role=\"out-palette-mode\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Changes go to the LEDs as you make them.` — #563's live half, stated (item 20)"
+        },
+        {
+          "id": "mode-dot",
+          "mock": ".remode i",
+          "app": "[data-role=\"out-palette-mode\"] i",
+          "note": "mock: 6px round, var(--ok) — green because this mount IS live"
+        }
+      ]
+    },
+    "S8b": {
+      "title": "Color ramp — the selected stop's swatch open into the app's own ColorPicker",
+      "width": 760,
+      "height": 1500,
+      "note": "The card is scrolled to the top of a deliberately tall viewport before the swatch is clicked: a Popover FLIPS above its anchor when the space below it runs out (components/Popover.svelte), and a swatch ~1000px down the Settings page opened the picker upwards — which reported a reading order the design never asked for. Where a popover goes when it does not fit is viewport behaviour, not a drawn decision, so the frame puts it where the drawing has it and measures what the drawing is about.",
+      "app": {
+        "target": "strip",
+        "route": "#/settings",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"adv-output-toggle\"]"
+          },
+          {
+            "js": "fetch(new URLSearchParams(location.search).get('device') + '/api/output/palette', {method:'POST', body:'100 0 0 0 0 87 42 16 96 173 194 58 107 255 247 224 138'})"
+          },
+          {
+            "sleep": 2500
+          },
+          {
+            "click": "[data-role=\"adv-output-toggle\"]"
+          },
+          {
+            "sleep": 900
+          },
+          {
+            "click": "[data-role=\"out-palette-edit\"]"
+          },
+          {
+            "sleep": 700
+          },
+          {
+            "js": "(() => {const h=document.querySelectorAll('[data-role=\"out-palette-stop\"]')[2];const r=h.getBoundingClientRect();const o={bubbles:true,pointerId:1,pointerType:'mouse',isPrimary:true};const x=r.left+r.width/2,y=r.top+r.height/2;h.dispatchEvent(new PointerEvent('pointerdown',{...o,buttons:1,clientX:x,clientY:y}));h.dispatchEvent(new PointerEvent('pointerup',{...o,buttons:0,clientX:x,clientY:y}));})()"
+          },
+          {
+            "sleep": 600
+          },
+          {
+            "js": "document.querySelector('[data-role=\"out-palette-card\"]').scrollIntoView({block:'start'})"
+          },
+          {
+            "sleep": 400
+          },
+          {
+            "click": "[data-role=\"out-palette-color\"] [data-role=\"color-swatch\"]"
+          },
+          {
+            "sleep": 700
+          }
+        ]
+      },
+      "allow": [
+        {
+          "element": "pop",
+          "property": "position",
+          "why": "the mockup draws the popover as an absolutely-positioned child of the selected-stop row so it can be seen in a static picture; a real popover is `position:fixed` off its anchor so it cannot be clipped by a scrolling column (Jeremy, 2026-09-19 — the same allowance S2cpop carries)"
+        },
+        {
+          "element": "pop",
+          "property": "box-shadow",
+          "why": "same: the mockup's inline copy of the `.pop` shell drops the shadow the shared rule paints (app.css `.pop`, 0 16px 40px) because the drawing has no depth to cast it into"
+        },
+        {
+          "element": "field",
+          "property": "background-color",
+          "why": "the mock's saturation/value field is drawn at a hand-picked `#ff0055`; the app's is the SELECTED STOP's real hue — `#c23a6b` is hue 0.930, which is `rgb(255,0,92)` — 7/255 off the drawing. The app painting the actual hue is the whole point of the control"
+        },
+        {
+          "element": "field-dot",
+          "property": "flex-shrink",
+          "why": "the MOCK's own cascade collision: `.dot` is also the mockups' status-dot primitive (`.dot{…flex:none}`, mockups.html), so the drawn picker's crosshair reports `flex-shrink:0` for a reason that has nothing to do with the picker. It is absolutely positioned in both, so the value paints nothing either way"
+        },
+        {
+          "element": "hue",
+          "property": "position",
+          "why": "the mock hangs its hue thumb on an absolutely positioned `<i>`, so its strip has to be a containing block; the app's thumb is the native range input's own `::-webkit-slider-thumb` and needs none. The 14px strip, its radius and its six-stop gradient — everything the frame actually specifies — match"
+        },
+        {
+          "element": "row-k",
+          "property": "white-space",
+          "why": "the same class of mock-side collision as field-dot: `.k` is the mockups' key-label primitive and lands `white-space:nowrap` on the drawn `HSV`. `HSV` is one word with nothing to wrap at"
+        }
+      ],
+      "elements": [
+        {
+          "id": "swatch",
+          "mock": ".reswatch",
+          "app": "[data-role=\"out-palette-color\"] [data-role=\"color-swatch\"]",
+          "text": true,
+          "note": "mock copy: `#c23a6b` — the anchor the popover hangs from"
+        },
+        {
+          "id": "pop",
+          "mock": ".pop",
+          "app": "[data-role=\"color-pop\"]",
+          "note": "mock: 296px, the shared `.pop` shell — S8b draws it at the app's real numbers",
+          "noBoxH": true
+        },
+        {
+          "id": "field",
+          "mock": ".cpfield",
+          "app": "[data-role=\"color-field\"]",
+          "note": "mock: 132px saturation/value field, margin 2px 2px 8px"
+        },
+        {
+          "id": "field-dot",
+          "mock": ".cpfield .dot",
+          "app": "[data-role=\"color-field\"] .dot",
+          "note": "mock: 12px, 2px white ring"
+        },
+        {
+          "id": "hue",
+          "mock": ".cphue",
+          "app": "[data-role=\"color-pop\"] .huewrap",
+          "note": "mock: 14px hue strip, radius 7 — the app paints the gradient on the WRAPPER because a range input's own background is painted over by its native track"
+        },
+        {
+          "id": "rows",
+          "mock": ".cprows",
+          "app": "[data-role=\"color-pop\"] .rows",
+          "noBoxH": true
+        },
+        {
+          "id": "row",
+          "mock": ".cprow",
+          "app": "[data-role=\"color-hsv\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "row-k",
+          "mock": ".cprow .k",
+          "app": "[data-role=\"color-hsv\"] .k",
+          "text": true,
+          "note": "mock copy: `HSV`, 30px wide, 11px mono dim"
+        },
+        {
+          "id": "row-inp",
+          "mock": ".cprow .inp",
+          "app": "[data-role=\"color-hsv-0\"]"
+        },
+        {
+          "id": "hex-row",
+          "mock": ".cprow:last-child",
+          "app": "[data-role=\"color-pop\"] .rows .row:last-child",
+          "noBoxH": true
+        },
+        {
+          "id": "hex-input",
+          "mock": ".cprow:last-child .inp",
+          "app": "[data-role=\"color-hex\"]"
+        },
+        {
+          "id": "live",
+          "mock": ".cprow .live",
+          "app": "[data-role=\"color-pop\"] .live",
+          "note": "mock: 26x22 — what you are about to get, beside what you typed"
+        }
+      ]
+    },
+    "S8e": {
+      "title": "Color ramp — the scene layer's collapsed summary row (the amended S7b/S7g row)",
+      "width": 1200,
+      "height": 1000,
+      "app": {
+        "target": "scenes",
+        "route": "#/scenes",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"scenes-grid\"]"
+          },
+          {
+            "sleep": 1500
+          },
+          {
+            "js": "document.querySelectorAll('[data-role=\"scene-tile-edit\"]')[1].click()"
+          },
+          {
+            "waitFor": "[data-role=\"scene-editor-view\"]:not([hidden])"
+          },
+          {
+            "sleep": 1600
+          },
+          {
+            "click": "[data-role=\"scene-layer\"][data-layer=\"0\"] [data-role=\"scene-layer-pick\"]"
+          },
+          {
+            "sleep": 900
+          }
+        ]
+      },
+      "elements": [
+        {
+          "id": "irow-lab",
+          "mock": ".irow.wide .ilab",
+          "mockNth": 1,
+          "app": "[data-role=\"scene-inspector\"] .irow.wide .ilab",
+          "nth": 1,
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Color ramp` — the row's own label, above the summary (the collapsed row has no card header)"
+        },
+        {
+          "id": "collapsed",
+          "mock": ".recol",
+          "app": "[data-role=\"scene-ramp-collapsed\"] .recol",
+          "note": "mock: flex, align-items flex-start, gap 10 — the bar and `Edit…` share the row, and the summary line spans both UNDER them, which is why `.recol` is the row and `*-collapsed` is the block around it",
+          "noBoxH": true
+        },
+        {
+          "id": "colbar",
+          "mock": ".recol canvas",
+          "app": "[data-role=\"scene-ramp\"]",
+          "note": "mock: 22px, radius 4, 1px border, image-rendering pixelated — a CANVAS painted from the LUT, not a CSS linear-gradient, so the row already shows what the device will do"
+        },
+        {
+          "id": "ticks",
+          "mock": ".recol .stoprow",
+          "app": "[data-role=\"scene-ramp-ticks\"]",
+          "note": "mock: the existing 9px read-only ticks — nothing here is draggable, so they need no touch box",
+          "noBoxH": true
+        },
+        {
+          "id": "tick",
+          "mock": ".recol .stopmk",
+          "mockNth": 2,
+          "app": "[data-role=\"scene-ramp-ticks\"] .stopmk",
+          "nth": 2,
+          "note": "the stop at 173 (67.8 %), read-only"
+        },
+        {
+          "id": "summary",
+          "mock": ".recol + .hint",
+          "app": "[data-role=\"scene-ramp-summary\"]",
+          "text": true,
+          "noBoxH": true,
+          "note": "mock copy: `4 stops · 60 % — recolors this layer by brightness`. It REPLACES `4 stops · the same editor as Settings › Output › Palette`: after #787 it is literally one component in both mounts, so that sentence had nothing left to claim, and the two facts the bar cannot draw take its place"
+        },
+        {
+          "id": "edit",
+          "mock": ".recol .lnk",
+          "app": "[data-role=\"scene-ramp-edit\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Edit…` in accent — an accent link, no longer the `Edit stops…` button that read like a list"
+        }
+      ]
+    },
+    "S8f": {
+      "title": "Color ramp — expanded inside the 288px scene inspector (the narrow one-column variant)",
+      "width": 1200,
+      "height": 1000,
+      "app": {
+        "target": "scenes",
+        "route": "#/scenes",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"scenes-grid\"]"
+          },
+          {
+            "sleep": 1500
+          },
+          {
+            "js": "document.querySelectorAll('[data-role=\"scene-tile-edit\"]')[1].click()"
+          },
+          {
+            "waitFor": "[data-role=\"scene-editor-view\"]:not([hidden])"
+          },
+          {
+            "sleep": 1600
+          },
+          {
+            "click": "[data-role=\"scene-layer\"][data-layer=\"0\"] [data-role=\"scene-layer-pick\"]"
+          },
+          {
+            "sleep": 900
+          },
+          {
+            "click": "[data-role=\"scene-ramp-edit\"]"
+          },
+          {
+            "sleep": 800
+          },
+          {
+            "js": "(() => {const h=document.querySelectorAll('[data-role=\"scene-ramp-stop\"]')[1];const r=h.getBoundingClientRect();const o={bubbles:true,pointerId:1,pointerType:'mouse',isPrimary:true};const x=r.left+r.width/2,y=r.top+r.height/2;h.dispatchEvent(new PointerEvent('pointerdown',{...o,buttons:1,clientX:x,clientY:y}));h.dispatchEvent(new PointerEvent('pointerup',{...o,buttons:0,clientX:x,clientY:y}));})()"
+          },
+          {
+            "sleep": 700
+          }
+        ]
+      },
+      "allow": [
+        {
+          "element": "pair",
+          "property": "grid-template-columns",
+          "why": "one pixel, and it is the frame's crop: S8e/S8f draw the inspector column with `border-left:0` inline (the crop has nothing to its left), so the mock's content box is 288px where the real `.rcol`'s — 320px with the 1px border that separates it from the stage — is 287. Every box in this frame is inside the 1px tolerance; only this computed track list states the half-pixel out loud (113.5 vs 114)"
+        }
+      ],
+      "elements": [
+        {
+          "id": "card",
+          "mock": ".recard.narrow",
+          "app": "[data-role=\"scene-ramp-card\"]",
+          "note": "the SAME component as S8a at a 288px container: `.narrow` is decided by the CARD's width (520px), not the window's, so this reflows inside a 1200px console",
+          "noBoxH": true
+        },
+        {
+          "id": "count",
+          "mock": ".recard.narrow .ct2",
+          "app": "[data-role=\"scene-ramp-count\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `4 stops`"
+        },
+        {
+          "id": "done",
+          "mock": ".recard.narrow .rehead .btn.sm",
+          "app": "[data-role=\"scene-ramp-done\"]",
+          "text": true
+        },
+        {
+          "id": "statement",
+          "mock": ".recard.narrow .restate",
+          "app": "[data-role=\"scene-ramp-statement\"]",
+          "text": true,
+          "noBoxH": true,
+          "note": "mock copy: `Recolors this layer by brightness: dark pixels take the left end, bright pixels the right. Below the first stop and above the last, the end color continues.` — `this layer`, not `each pixel`: one of the three places the two mounts deliberately differ. 12px in the narrow card"
+        },
+        {
+          "id": "statement-bold",
+          "mock": ".recard.narrow .restate b",
+          "app": "[data-role=\"scene-ramp-statement\"] b",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `brightness` — the bold run is mid-sentence at this mount, not a lead"
+        },
+        {
+          "id": "bar",
+          "mock": ".recard.narrow .rebar",
+          "app": "[data-role=\"scene-ramp-card\"] .rebar",
+          "note": "the bar's role at this mount is `scene-ramp` (the mount names its own preview), so the class is what identifies it here"
+        },
+        {
+          "id": "bubble",
+          "mock": ".recard.narrow .rebub",
+          "app": "[data-role=\"scene-ramp-bubble\"]",
+          "text": true,
+          "noBoxW": true,
+          "note": "mock copy: `87` — the seed's second stop"
+        },
+        {
+          "id": "handle-on",
+          "mock": ".recard.narrow .rehnd.on",
+          "app": "[data-role=\"scene-ramp-stop\"].on"
+        },
+        {
+          "id": "handle-on-i",
+          "mock": ".recard.narrow .rehnd.on i",
+          "app": "[data-role=\"scene-ramp-stop\"].on i"
+        },
+        {
+          "id": "affordance",
+          "mock": ".recard.narrow .rescale .mid",
+          "app": "[data-role=\"scene-ramp-affordance\"]",
+          "text": true,
+          "noBoxW": true,
+          "note": "mock copy: `tap to add · drag to move · drag off to remove` — the narrow wording, and `.narrow .rescale .mid` puts it on its own full-width line"
+        },
+        {
+          "id": "selected",
+          "mock": ".recard.narrow .resel",
+          "app": "[data-role=\"scene-ramp-selected\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "selected-k",
+          "mock": ".recard.narrow .resel .k",
+          "app": "[data-role=\"scene-ramp-selected\"] .k",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Selected` — shortened at this width"
+        },
+        {
+          "id": "swatch",
+          "mock": ".recard.narrow .reswatch",
+          "app": "[data-role=\"scene-ramp-color\"] [data-role=\"color-swatch\"]",
+          "text": true,
+          "note": "mock copy: `#2a1060`"
+        },
+        {
+          "id": "pos-input",
+          "mock": ".recard.narrow .repos .inp.num",
+          "app": "[data-role=\"scene-ramp-pos\"]",
+          "note": "mock: 52px at this width, and the `of 255` is carried by the scale row instead"
+        },
+        {
+          "id": "remove",
+          "mock": ".recard.narrow .resel .btn.del",
+          "app": "[data-role=\"scene-ramp-remove\"]",
+          "text": true,
+          "note": "mock copy: `Remove` — shortened"
+        },
+        {
+          "id": "grid",
+          "mock": ".recard.narrow .regrid",
+          "app": "[data-role=\"scene-ramp-card\"] .regrid",
+          "note": "mock: ONE column at this width (`.recard.narrow .regrid`), gap 14 — the previews sit above the amount",
+          "noBoxH": true
+        },
+        {
+          "id": "pair",
+          "mock": ".recard.narrow .repair",
+          "app": "[data-role=\"scene-ramp-card\"] .repair",
+          "noBoxH": true
+        },
+        {
+          "id": "cell-cap",
+          "mock": ".recard.narrow .recell .cap2",
+          "app": "[data-role=\"scene-ramp-card\"] .recell .cap2",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `layer` — at this mount the left cell is the LAYER, not a named device pattern"
+        },
+        {
+          "id": "cell-canvas",
+          "mock": ".recard.narrow .recell canvas",
+          "app": "[data-role=\"scene-ramp-preview-src\"]",
+          "note": "mock: aspect-ratio 1/1 — device-shaped, a 64x64 layer rather than a strip"
+        },
+        {
+          "id": "cell-out-cap",
+          "mock": ".recard.narrow .recell .cap2",
+          "mockNth": 1,
+          "app": "[data-role=\"scene-ramp-card\"] .recell .cap2",
+          "nth": 1,
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `through the ramp`"
+        },
+        {
+          "id": "cell-out-canvas",
+          "mock": ".recard.narrow .recell canvas",
+          "mockNth": 1,
+          "app": "[data-role=\"scene-ramp-preview-out\"]"
+        },
+        {
+          "id": "amount",
+          "mock": ".recard.narrow .bigslider .slider",
+          "app": "[data-role=\"scene-ramp-amount\"]",
+          "note": "20px box here: the 24px box is the phone's (`@media (max-width:420px)`, the mock's `.re24`), and this inspector is 288px inside a 1200px window"
+        },
+        {
+          "id": "amount-val",
+          "mock": ".recard.narrow .bigslider .val",
+          "app": "[data-role=\"scene-ramp-amount-val\"]",
+          "text": true,
+          "note": "mock copy: `60 %` — the seeded layer ramp's amount"
+        },
+        {
+          "id": "amount-hint",
+          "mock": ".recard.narrow .regrid .hint",
+          "app": "[data-role=\"scene-ramp-amount-hint\"]",
+          "text": true,
+          "noBoxH": true,
+          "note": "mock copy: `0 % = the pattern's own colors · 100 % = only the ramp's`"
+        },
+        {
+          "id": "presets",
+          "mock": ".recard.narrow .represets",
+          "app": "[data-role=\"scene-ramp-presets\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "chip",
+          "mock": ".recard.narrow .rechip:not(.on)",
+          "app": "[data-role=\"scene-ramp-preset\"]:not(.on)",
+          "note": "mock: presets in thirds at this width (`.narrow .rechip{width:calc(33.333% - 4px)}`)"
+        },
+        {
+          "id": "chip-on",
+          "mock": ".recard.narrow .rechip.on",
+          "app": "[data-role=\"scene-ramp-preset\"].on",
+          "note": "the seeded layer ramp is the `Sunset` preset, stop for stop"
+        },
+        {
+          "id": "acts",
+          "mock": ".recard.narrow .reacts",
+          "app": "[data-role=\"scene-ramp-card\"] .reacts",
+          "noBoxH": true
+        },
+        {
+          "id": "add",
+          "mock": ".recard.narrow .reacts .btn.sm",
+          "app": "[data-role=\"scene-ramp-add\"]",
+          "text": true
+        },
+        {
+          "id": "clear",
+          "mock": ".recard.narrow .reacts .btn.del",
+          "app": "[data-role=\"scene-ramp-clear\"]",
+          "text": true,
+          "note": "mock copy: `Remove ramp` — the scene mount's destructive verb: the layer keeps its own colors (S8i confirms it)"
+        },
+        {
+          "id": "mode",
+          "mock": ".recard.narrow .remode.save",
+          "app": "[data-role=\"scene-ramp-mode\"]",
+          "text": true,
+          "noBoxW": true,
+          "note": "mock copy: `Saved with the scene — the LEDs follow when you save.` — the save half of #563's split, because this scene is not the one playing"
+        },
+        {
+          "id": "mode-dot",
+          "mock": ".recard.narrow .remode.save i",
+          "app": "[data-role=\"scene-ramp-mode\"] i",
+          "note": "mock: #5b6070, a DIM dot — the visible difference from S8a's green one"
+        }
+      ]
+    },
+    "S8g": {
+      "title": "Color ramp at 390px — the phone variant, every hit target >= 24px",
+      "width": 390,
+      "height": 1200,
+      "app": {
+        "target": "strip",
+        "route": "#/settings",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"adv-output-toggle\"]"
+          },
+          {
+            "js": "fetch(new URLSearchParams(location.search).get('device') + '/api/output/palette', {method:'POST', body:'100 0 0 0 0 87 42 16 96 173 194 58 107 255 247 224 138'})"
+          },
+          {
+            "sleep": 2500
+          },
+          {
+            "click": "[data-role=\"adv-output-toggle\"]"
+          },
+          {
+            "sleep": 900
+          },
+          {
+            "click": "[data-role=\"out-palette-edit\"]"
+          },
+          {
+            "sleep": 700
+          },
+          {
+            "js": "(() => {const h=document.querySelectorAll('[data-role=\"out-palette-stop\"]')[2];const r=h.getBoundingClientRect();const o={bubbles:true,pointerId:1,pointerType:'mouse',isPrimary:true};const x=r.left+r.width/2,y=r.top+r.height/2;h.dispatchEvent(new PointerEvent('pointerdown',{...o,buttons:1,clientX:x,clientY:y}));h.dispatchEvent(new PointerEvent('pointerup',{...o,buttons:0,clientX:x,clientY:y}));})()"
+          },
+          {
+            "sleep": 700
+          }
+        ]
+      },
+      "elements": [
+        {
+          "id": "count",
+          "mock": ".ct2",
+          "app": "[data-role=\"out-palette-count\"]",
+          "text": true,
+          "noBox": true
+        },
+        {
+          "id": "done",
+          "mock": ".rehead .btn.sm",
+          "app": "[data-role=\"out-palette-done\"]",
+          "text": true,
+          "note": "26px tall like every other `.btn.sm` here — the §5.7 floor"
+        },
+        {
+          "id": "statement",
+          "mock": ".restate",
+          "app": "[data-role=\"out-palette-statement\"]",
+          "text": true,
+          "noBoxH": true,
+          "note": "mock copy: `Brightness → color. Dark pixels take the left end, bright pixels the right. Below the first stop and above the last, the end color continues.` — the narrow card drops the `Each pixel's brightness picks a color from this ramp` clause and states it in 12px"
+        },
+        {
+          "id": "bar",
+          "mock": ".rebar",
+          "app": "[data-role=\"out-palette-preview\"]",
+          "noBoxW": true,
+          "note": "44px whatever the width: a 24px handle box has to be able to hang off its bottom edge and still overlap paint"
+        },
+        {
+          "id": "bubble",
+          "mock": ".rebub",
+          "app": "[data-role=\"out-palette-bubble\"]",
+          "text": true,
+          "noBoxW": true
+        },
+        {
+          "id": "handle-on",
+          "mock": ".rehnd.on",
+          "app": "[data-role=\"out-palette-stop\"].on",
+          "note": "24x24 — the old control's 13x13 handles on a 336px bar are inventory item 14"
+        },
+        {
+          "id": "handle-on-i",
+          "mock": ".rehnd.on i",
+          "app": "[data-role=\"out-palette-stop\"].on i"
+        },
+        {
+          "id": "handle",
+          "mock": ".rehnd:not(.on)",
+          "mockNth": 1,
+          "app": "[data-role=\"out-palette-stop\"]:not(.on)",
+          "nth": 1
+        },
+        {
+          "id": "affordance",
+          "mock": ".rescale .mid",
+          "app": "[data-role=\"out-palette-affordance\"]",
+          "text": true,
+          "noBoxW": true,
+          "note": "mock copy: `tap to add · drag to move · drag off to remove` — `tap`, and on its own line"
+        },
+        {
+          "id": "selected",
+          "mock": ".resel",
+          "app": "[data-role=\"out-palette-selected\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "selected-k",
+          "mock": ".resel .k",
+          "app": "[data-role=\"out-palette-selected\"] .k",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Selected`"
+        },
+        {
+          "id": "swatch",
+          "mock": ".reswatch",
+          "app": "[data-role=\"out-palette-color\"] [data-role=\"color-swatch\"]",
+          "text": true,
+          "note": "26px tall"
+        },
+        {
+          "id": "pos-input",
+          "mock": ".repos .inp.num",
+          "app": "[data-role=\"out-palette-pos\"]",
+          "note": "mock: 52px wide, 26px tall"
+        },
+        {
+          "id": "remove",
+          "mock": ".resel .btn.del",
+          "app": "[data-role=\"out-palette-remove\"]",
+          "text": true,
+          "note": "mock copy: `Remove`"
+        },
+        {
+          "id": "grid",
+          "mock": ".regrid",
+          "app": "[data-role=\"out-palette-card\"] .regrid",
+          "note": "one column at this width",
+          "noBoxH": true
+        },
+        {
+          "id": "pair",
+          "mock": ".repair",
+          "app": "[data-role=\"out-palette-card\"] .repair",
+          "noBoxH": true
+        },
+        {
+          "id": "cell-out-cap",
+          "mock": ".recell .cap2",
+          "mockNth": 1,
+          "app": "[data-role=\"out-palette-card\"] .recell .cap2",
+          "nth": 1,
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `LEDs · 100 %` — shortened from `LEDs · ramp at 100 %` at this width"
+        },
+        {
+          "id": "amount",
+          "mock": ".bigslider .slider",
+          "app": "[data-role=\"out-palette-amount\"]",
+          "noBoxW": true,
+          "note": "the box is 24px here and the painted track stays 6px — #703's fix, grow the box and not the paint (the mock spells it `.re24 .bigslider .slider`, the app an `@media (max-width:420px)`)"
+        },
+        {
+          "id": "amount-val",
+          "mock": ".bigslider .val",
+          "app": "[data-role=\"out-palette-amount-val\"]",
+          "text": true
+        },
+        {
+          "id": "presets",
+          "mock": ".represets",
+          "app": "[data-role=\"out-palette-presets\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "chip",
+          "mock": ".rechip:not(.on)",
+          "app": "[data-role=\"out-palette-preset\"]:not(.on)",
+          "note": "thirds at this width"
+        },
+        {
+          "id": "acts",
+          "mock": ".reacts",
+          "app": "[data-role=\"out-palette-card\"] .reacts",
+          "noBoxH": true
+        },
+        {
+          "id": "add",
+          "mock": ".reacts .btn.sm",
+          "app": "[data-role=\"out-palette-add\"]",
+          "text": true,
+          "note": "26px — and the cap hint is dropped at this width, not hidden behind a disclosure"
+        },
+        {
+          "id": "clear",
+          "mock": ".reacts .btn.del",
+          "app": "[data-role=\"out-palette-clear\"]",
+          "text": true
+        },
+        {
+          "id": "mode",
+          "mock": ".remode",
+          "app": "[data-role=\"out-palette-mode\"]",
+          "text": true,
+          "noBoxW": true,
+          "note": "`.narrow .remode` wraps rather than running off the card, and its dot gets a 5px top margin to sit on the first line"
+        }
+      ]
+    },
+    "S8i-live": {
+      "title": "Color ramp — the LIVE mode line (S8i card 1), the device's own ramp on a connected console",
+      "mock": "S8i",
+      "width": 760,
+      "height": 1100,
+      "app": {
+        "target": "strip",
+        "route": "#/settings",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"adv-output-toggle\"]"
+          },
+          {
+            "js": "fetch(new URLSearchParams(location.search).get('device') + '/api/output/palette', {method:'POST', body:'100 0 0 0 0 87 42 16 96 173 194 58 107 255 247 224 138'})"
+          },
+          {
+            "sleep": 2500
+          },
+          {
+            "click": "[data-role=\"adv-output-toggle\"]"
+          },
+          {
+            "sleep": 900
+          },
+          {
+            "click": "[data-role=\"out-palette-edit\"]"
+          },
+          {
+            "sleep": 700
+          }
+        ]
+      },
+      "allow": [
+        {
+          "element": "mode-preview",
+          "why": "S8i's THIRD card is `Preview only — nothing is connected.`, and no mockdiff frame can be in that state: every frame boots the console with `?device=<mirror>` (that is what a target IS), so `$deviceBase` is never null, and the one target with no device — `playground` — mounts the ramp editor only as the scene layer's `no ramp yet` teaser, which draws no mode line at all. Reaching it would need a playground scene seeded with a ramp, which is a different frame than this one. `lib/gradient.ts::modeText` is the whole of the copy"
+        },
+        {
+          "element": "conflict",
+          "why": "S8i's FOURTH card — the device's ramp changing underneath an open editor — exists only between an uncommitted local edit and its commit (`syncIn` raises it when the incoming reading differs from both `loaded` and `mine`), i.e. mid-gesture: every finished edit commits, and the editor then simply follows the device. A frame is a named resting state, and this one is a held pointer. It is driven and asserted instead in web/tools/device-e2e.mjs — `palette: the device's ramp changing under local edits raises the conflict strip (S8i)` — including `Keep mine` / `Load theirs` and the `Nothing is sent until you choose.` hold line"
+        }
+      ],
+      "elements": [
+        {
+          "id": "mode",
+          "mock": ".remode",
+          "app": "[data-role=\"out-palette-mode\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Changes go to the LEDs as you make them.` — card 1 of S8i, the device's own ramp with a device connected"
+        },
+        {
+          "id": "mode-dot",
+          "mock": ".remode i",
+          "app": "[data-role=\"out-palette-mode\"] i",
+          "note": "mock: var(--ok) — the live dot"
+        }
+      ]
+    },
+    "S8i-save": {
+      "title": "Color ramp — the SAVE mode line (S8i card 2), a scene that is not the one playing",
+      "mock": "S8i",
+      "width": 1200,
+      "height": 1000,
+      "app": {
+        "target": "scenes",
+        "route": "#/scenes",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"scenes-grid\"]"
+          },
+          {
+            "sleep": 1500
+          },
+          {
+            "js": "document.querySelectorAll('[data-role=\"scene-tile-edit\"]')[1].click()"
+          },
+          {
+            "waitFor": "[data-role=\"scene-editor-view\"]:not([hidden])"
+          },
+          {
+            "sleep": 1600
+          },
+          {
+            "click": "[data-role=\"scene-layer\"][data-layer=\"0\"] [data-role=\"scene-layer-pick\"]"
+          },
+          {
+            "sleep": 900
+          },
+          {
+            "click": "[data-role=\"scene-ramp-edit\"]"
+          },
+          {
+            "sleep": 800
+          }
+        ]
+      },
+      "allow": [
+        {
+          "element": "mode",
+          "property": "white-space",
+          "why": "S8i draws all three mode lines in a 760px card so they can be read side by side; the app's SAVE mount is the 288px scene inspector, where the mock's OWN narrow rules (`.recard.narrow .remode{white-space:normal;align-items:flex-start}`, batch 7) let the sentence wrap instead of running off the card. S8f draws and measures that. What this frame pins is the copy and the dim dot"
+        },
+        {
+          "element": "mode",
+          "property": "align-items",
+          "why": "the paired value — see mode.white-space: a wrapping line top-aligns its dot rather than centring it against two lines"
+        },
+        {
+          "element": "mode-dot",
+          "property": "margin-top",
+          "why": "`.recard.narrow .remode i{margin-top:5px}` in the mock's own batch-7 block: the dot sits on the FIRST line of a wrapped sentence. S8i's card is wide, so its dot needs no offset"
+        },
+        {
+          "element": "mode-dot",
+          "property": "white-space",
+          "why": "inherited from the wrapping line above it — see mode.white-space. A 6px round dot has no text to wrap"
+        }
+      ],
+      "elements": [
+        {
+          "id": "mode",
+          "mock": ".remode.save",
+          "app": "[data-role=\"scene-ramp-mode\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Saved with the scene — the LEDs follow when you save.` — card 2 of S8i. `Aurora + ticker` is deliberately NOT the active scene, which is exactly why this mount is in the save mode"
+        },
+        {
+          "id": "mode-dot",
+          "mock": ".remode.save i",
+          "app": "[data-role=\"scene-ramp-mode\"] i",
+          "note": "mock: #5b6070 — the dim dot"
+        }
+      ]
+    },
+    "S8i-clear": {
+      "title": "Color ramp — the Clear ramp confirm strip (S8i's last card)",
+      "mock": "S8i",
+      "width": 760,
+      "height": 1100,
+      "app": {
+        "target": "strip",
+        "route": "#/settings",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"adv-output-toggle\"]"
+          },
+          {
+            "js": "fetch(new URLSearchParams(location.search).get('device') + '/api/output/palette', {method:'POST', body:'100 0 0 0 0 87 42 16 96 173 194 58 107 255 247 224 138'})"
+          },
+          {
+            "sleep": 2500
+          },
+          {
+            "click": "[data-role=\"adv-output-toggle\"]"
+          },
+          {
+            "sleep": 900
+          },
+          {
+            "click": "[data-role=\"out-palette-edit\"]"
+          },
+          {
+            "sleep": 700
+          },
+          {
+            "click": "[data-role=\"out-palette-clear\"]"
+          },
+          {
+            "sleep": 600
+          }
+        ]
+      },
+      "elements": [
+        {
+          "id": "acts",
+          "mock": ".recard:last-of-type .reacts",
+          "app": "[data-role=\"out-palette-card\"] .reacts",
+          "noBoxH": true,
+          "note": "S8i's last card crops the action row to show the confirm under it, so the mockup zeroes its top rule and margin inline — only the row's own metrics are comparable here, which is why `acts` carries no border/margin note and the padding is waived below"
+        },
+        {
+          "id": "confirm",
+          "mock": ".recard:last-of-type .renote",
+          "app": "[data-role=\"out-palette-confirm\"]",
+          "text": true,
+          "noBoxH": true,
+          "note": "mock copy: `Clear the ramp? The 4 stops are removed and the pattern's own colors go straight to the LEDs. The amount stays at 100 %.` — the amount is named because the old `clear` silently zeroed it (inventory item 7)"
+        },
+        {
+          "id": "confirm-group",
+          "mock": ".recard:last-of-type .renote .group",
+          "app": "[data-role=\"out-palette-confirm\"] .group",
+          "noBoxH": true
+        },
+        {
+          "id": "confirm-cancel",
+          "mock": ".recard:last-of-type .renote .btn.sm:not(.del)",
+          "app": "[data-role=\"out-palette-confirm-cancel\"]",
+          "text": true
+        },
+        {
+          "id": "confirm-ok",
+          "mock": ".recard:last-of-type .renote .btn.sm.del",
+          "app": "[data-role=\"out-palette-confirm-ok\"]",
+          "text": true,
+          "note": "mock copy: `Clear ramp` — the verb again, not `OK`"
+        }
+      ],
+      "allow": [
+        {
+          "element": "acts",
+          "property": "padding-top",
+          "why": "`#S8i`'s last card draws the action row as a crop (`style=\"margin-top:0;padding-top:0;border-top:0\"`) so the confirm strip can be seen under it; the rhythm the batch-7 block states is the 13px padding-top and 1px top rule S8a measures, which the app matches"
+        },
+        {
+          "element": "acts",
+          "property": "margin-top",
+          "why": "same inline crop — see acts.padding-top"
+        },
+        {
+          "element": "acts",
+          "property": "border-top-width",
+          "why": "same inline crop: the mockup zeroes the top rule so the cropped card has no dangling line above it"
+        },
+        {
+          "element": "acts",
+          "property": "border-top-style",
+          "why": "the paired value of border-top-width — a zeroed border reports `none`"
+        },
+        {
+          "element": "acts",
+          "property": "border-top-color",
+          "why": "the same inline crop: with `border-top:0` the mockup's rule for the colour goes too, so the drawn row reports `currentColor` (the card's text) where the app reports `--border`. There is no line to colour on the mock side"
+        },
+        {
+          "element": "acts",
+          "property": "box width",
+          "why": "S8i and S8h draw the card BARE inside the frame's 20px padding, to fit several states into one picture; the Settings mount puts it inside `.disclist > .dbody`, which is 30px narrower — the disclosure's 1px border and the body's 14px padding on each side. S8a draws that nesting and measures 0 on every box in it, so the nesting is pinned there; here every full-width child inherits exactly that 30px"
+        },
+        {
+          "element": "confirm",
+          "property": "box width",
+          "why": "the same 30px — see acts.box width"
+        },
+        {
+          "element": "confirm",
+          "property": "flex-wrap",
+          "why": "the mock draws this strip only at 760px, where the sentence and its two buttons fit on one line; the same component mounts in the 288px scene inspector, where they cannot, so the row is allowed to wrap — exactly as the mock's own `.resel` does (`flex-wrap:wrap`, batch 7) for the same reason one row up"
+        }
+      ]
+    },
+    "S8h-empty": {
+      "title": "Color ramp — NO stops (S8h card 1): the stage is off and the presets are the way in",
+      "mock": "S8h",
+      "width": 760,
+      "height": 1100,
+      "app": {
+        "target": "strip",
+        "route": "#/settings",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"adv-output-toggle\"]"
+          },
+          {
+            "js": "fetch(new URLSearchParams(location.search).get('device') + '/api/output/palette', {method:'DELETE'})"
+          },
+          {
+            "sleep": 2500
+          },
+          {
+            "click": "[data-role=\"adv-output-toggle\"]"
+          },
+          {
+            "sleep": 900
+          },
+          {
+            "click": "[data-role=\"out-palette-edit\"]"
+          },
+          {
+            "sleep": 700
+          }
+        ]
+      },
+      "allow": [
+        {
+          "element": "add-dis",
+          "property": "color",
+          "why": "the app spells `disabled` ONCE, in web/src/app.css (`.btn[disabled]{opacity:.55}`), and every disabled control in the console is that one rule; the batch-7 block hand-paints a `.btn.dis` palette (#5b6070 on #15171c inside #23272f) that exists nowhere else in the mockups and has no counterpart in the app's stylesheet. The thing the frame is really specifying — that this control is disabled WITH a `data-reason`, §5.7's one deliberate exception (#529) — is what the app does, in the same words on the same attribute"
+        },
+        {
+          "element": "add-dis",
+          "property": "opacity",
+          "why": "same — see add-dis.color: `opacity:.55` IS the app's disabled paint, which is why its colour properties stay the enabled ones"
+        },
+        {
+          "element": "add-dis",
+          "property": "background-color",
+          "why": "same — see add-dis.color"
+        },
+        {
+          "element": "add-dis",
+          "property": "border-top-color",
+          "why": "same — see add-dis.color"
+        },
+        {
+          "element": "add-dis",
+          "property": "border-right-color",
+          "why": "same — see add-dis.color"
+        },
+        {
+          "element": "add-dis",
+          "property": "border-bottom-color",
+          "why": "same — see add-dis.color"
+        },
+        {
+          "element": "add-dis",
+          "property": "border-left-color",
+          "why": "same — see add-dis.color"
+        },
+        {
+          "element": "amount-note",
+          "property": "box width",
+          "why": "S8h draws the card BARE inside the frame's 20px padding so three states fit into one picture; the Settings mount puts it inside `.disclist > .dbody`, 30px narrower (the disclosure's 1px border and the body's 14px padding each side). S8a draws that nesting and measures 0 on every box in it"
+        },
+        {
+          "element": "acts",
+          "property": "box width",
+          "why": "the same 30px — see amount-note.box width"
+        },
+        {
+          "element": "amount-note",
+          "property": "flex-wrap",
+          "why": "the mock draws this strip only at 760px, where the sentence and its button fit on one line; the same component mounts in the 288px scene inspector, where they cannot, so the row wraps — exactly as the mock's own `.resel` does (`flex-wrap:wrap`, batch 7)"
+        }
+      ],
+      "elements": [
+        {
+          "id": "count",
+          "mock": ".recard .ct2",
+          "app": "[data-role=\"out-palette-count\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `no stops`"
+        },
+        {
+          "id": "statement",
+          "mock": ".recard .restate",
+          "app": "[data-role=\"out-palette-statement\"]",
+          "text": true,
+          "noBoxH": true,
+          "note": "mock copy: `Brightness → color. Each pixel's brightness picks a color from this ramp: dark pixels take the left end, bright pixels the right.` — with no stops there is no `outside the stops` sentence to state"
+        },
+        {
+          "id": "empty",
+          "mock": ".rebarempty",
+          "app": "[data-role=\"out-palette-empty\"]",
+          "text": true,
+          "noBoxW": true,
+          "note": "mock copy: `no stops — the pattern's own colors go straight to the LEDs`. 44px tall, dashed: there is nothing honest to paint, so the bar SAYS the stage is off rather than drawing a black gradient the device will not produce (inventory items 6 and 16)"
+        },
+        {
+          "id": "presets-lab",
+          "mock": ".recard .represets .rlab",
+          "app": "[data-role=\"out-palette-presets\"] .rlab",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `Start from` — the presets are the way in, because there is no `add one stop into emptiness` path any more"
+        },
+        {
+          "id": "chip",
+          "mock": ".recard .rechip",
+          "app": "[data-role=\"out-palette-preset\"]",
+          "note": "no chip is lit: an empty ramp matches no preset"
+        },
+        {
+          "id": "amount-note",
+          "mock": ".recard .renote",
+          "app": "[data-role=\"out-palette-amount-note\"]",
+          "text": true,
+          "noBoxH": true,
+          "note": "mock copy: `Amount is 0 % — a ramp built now would have no visible effect until you raise it.` The amount is SHOWN and never silently changed; `DELETE /api/output/palette` stores 0 with the empty ramp, which is the state this card is in"
+        },
+        {
+          "id": "amount-fix",
+          "mock": ".recard .renote .btn.sm",
+          "app": "[data-role=\"out-palette-amount-fix\"]",
+          "text": true,
+          "note": "mock copy: `Set amount to 100 %`"
+        },
+        {
+          "id": "acts",
+          "mock": ".recard .reacts",
+          "app": "[data-role=\"out-palette-card\"] .reacts",
+          "noBoxH": true
+        },
+        {
+          "id": "add-dis",
+          "mock": ".recard .reacts .btn.sm.dis",
+          "app": "[data-role=\"out-palette-add\"][disabled]",
+          "text": true,
+          "note": "mock copy: `+ Add stop`, with `data-reason=\"a ramp needs at least two stops — pick a preset\"` — §5.7's one deliberate `disabled with a reason` exception (#529), and the app carries the same sentence on the same attribute"
+        },
+        {
+          "id": "cap",
+          "mock": ".recard .reacts .hint",
+          "app": "[data-role=\"out-palette-cap\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `a ramp is 0 stops (off) or at least 2 — never 1` — the ONE printed legality rule (inventory item 21)"
+        },
+        {
+          "id": "mode",
+          "mock": ".recard .remode",
+          "app": "[data-role=\"out-palette-mode\"]",
+          "text": true,
+          "noBox": true
+        }
+      ]
+    },
+    "S8h-min": {
+      "title": "Color ramp — exactly TWO stops (S8h card 2): Remove stop refused, and the wedge preview",
+      "mock": "S8h",
+      "width": 760,
+      "height": 1100,
+      "app": {
+        "target": "strip",
+        "route": "#/settings",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"adv-output-toggle\"]"
+          },
+          {
+            "js": "fetch(new URLSearchParams(location.search).get('device') + '/api/output/palette', {method:'POST', body:'100 0 0 0 0 255 247 224 138'})"
+          },
+          {
+            "sleep": 2500
+          },
+          {
+            "click": "[data-role=\"adv-output-toggle\"]"
+          },
+          {
+            "sleep": 900
+          },
+          {
+            "click": "[data-role=\"out-palette-edit\"]"
+          },
+          {
+            "sleep": 700
+          },
+          {
+            "js": "(() => {const h=document.querySelectorAll('[data-role=\"out-palette-stop\"]')[0];const r=h.getBoundingClientRect();const o={bubbles:true,pointerId:1,pointerType:'mouse',isPrimary:true};const x=r.left+r.width/2,y=r.top+r.height/2;h.dispatchEvent(new PointerEvent('pointerdown',{...o,buttons:1,clientX:x,clientY:y}));h.dispatchEvent(new PointerEvent('pointerup',{...o,buttons:0,clientX:x,clientY:y}));})()"
+          },
+          {
+            "sleep": 700
+          }
+        ]
+      },
+      "allow": [
+        {
+          "element": "remove-dis",
+          "property": "color",
+          "why": "the app spells `disabled` ONCE, in web/src/app.css (`.btn[disabled]{opacity:.55}`), over whatever the control's own paint is — here `.btn.del`'s red text on no background, which is the mock's own spelling for the destructive verb (`.btn.del`: text, not a box). The batch-7 block instead hand-paints `.btn.dis` as a grey BOX, a palette that appears nowhere else in the mockups and nowhere at all in the app. What the frame specifies — refused rather than destructive, with its reason beside it (inventory item 3) — is exactly what is built"
+        },
+        {
+          "element": "remove-dis",
+          "property": "opacity",
+          "why": "same — see remove-dis.color: `opacity:.55` IS the app's disabled paint"
+        },
+        {
+          "element": "remove-dis",
+          "property": "background-color",
+          "why": "same — see remove-dis.color (the app's destructive verb has no box to paint, per the mock's own `.btn.del`)"
+        },
+        {
+          "element": "remove-dis",
+          "property": "border-top-color",
+          "why": "same — see remove-dis.color"
+        },
+        {
+          "element": "remove-dis",
+          "property": "border-right-color",
+          "why": "same — see remove-dis.color"
+        },
+        {
+          "element": "remove-dis",
+          "property": "border-bottom-color",
+          "why": "same — see remove-dis.color"
+        },
+        {
+          "element": "remove-dis",
+          "property": "border-left-color",
+          "why": "same — see remove-dis.color"
+        },
+        {
+          "element": "selected",
+          "property": "box width",
+          "why": "S8h draws the card BARE inside the frame's 20px padding so three states fit into one picture; the Settings mount puts it inside `.disclist > .dbody`, 30px narrower (the disclosure's 1px border and the body's 14px padding each side). S8a draws that nesting and measures 0 on every box in it"
+        },
+        {
+          "element": "reason",
+          "property": "box width",
+          "why": "the same 30px — see selected.box width"
+        },
+        {
+          "element": "cell-cap",
+          "property": "text",
+          "why": "this card's caption is `the device is IDLE — no pattern to preview`, and no mirror in this map is ever idle: every seed activates a pattern, because the frames that quote a running one need one (S1's playing tile, S4's playing row, S8a's `pattern · Sunset Fade`). So the left cell here honestly names the pattern the strip mirror is running instead of standing in for it. The wedge itself is pinned in web/tests/gradient.test.mjs — `the brightness wedge stands in for a pattern that is not running` — and the caption it carries is one branch of the same expression S8a measures the other branch of"
+        },
+        {
+          "element": "amount-hint",
+          "property": "text",
+          "why": "the paired line of the same unreachable state — see cell-cap.text"
+        }
+      ],
+      "elements": [
+        {
+          "id": "count",
+          "mock": ".recard .ct2",
+          "mockNth": 1,
+          "app": "[data-role=\"out-palette-count\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `2 stops`"
+        },
+        {
+          "id": "bubble",
+          "mock": ".rebub",
+          "app": "[data-role=\"out-palette-bubble\"]",
+          "text": true,
+          "noBoxW": true,
+          "note": "mock copy: `0` — the stop at the left end is the selected one"
+        },
+        {
+          "id": "handle-on",
+          "mock": ".rehnd.on",
+          "app": "[data-role=\"out-palette-stop\"].on"
+        },
+        {
+          "id": "selected",
+          "mock": ".resel",
+          "app": "[data-role=\"out-palette-selected\"]",
+          "noBoxH": true
+        },
+        {
+          "id": "swatch",
+          "mock": ".reswatch",
+          "app": "[data-role=\"out-palette-color\"] [data-role=\"color-swatch\"]",
+          "text": true,
+          "note": "mock copy: `#000000`"
+        },
+        {
+          "id": "remove-dis",
+          "mock": ".resel .btn.del.dis",
+          "app": "[data-role=\"out-palette-remove\"][disabled]",
+          "text": true,
+          "note": "mock copy: `Remove stop`, with `data-reason=\"a ramp needs at least two stops\"` — the removal is REFUSED here rather than escalating into destroying the whole ramp, which is inventory item 3 (removing one of two scene stops deleted the Ramp record unrecoverably)"
+        },
+        {
+          "id": "reason",
+          "mock": ".rereason",
+          "app": "[data-role=\"out-palette-reason\"]",
+          "text": true,
+          "noBoxH": true,
+          "note": "mock copy: `a ramp needs at least two stops — Clear ramp is how you turn the stage off` — the refusal's reason BESIDE it, naming the action that does what the user was reaching for"
+        },
+        {
+          "id": "cell-cap",
+          "mock": ".recell .cap2",
+          "app": "[data-role=\"out-palette-card\"] .recell .cap2",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `brightness 0 → 255` — with nothing running the left cell is a brightness wedge LABELLED as one, so the pair is always honest rather than empty (inventory item 16)"
+        },
+        {
+          "id": "amount-hint",
+          "mock": ".regrid .hint",
+          "app": "[data-role=\"out-palette-amount-hint\"]",
+          "text": true,
+          "noBoxH": true,
+          "note": "mock copy: `nothing is running — the wedge stands in for a pattern`"
+        },
+        {
+          "id": "remove-hint-mode",
+          "mock": ".recard .remode",
+          "mockNth": 1,
+          "app": "[data-role=\"out-palette-mode\"]",
+          "text": true,
+          "noBox": true
+        }
+      ]
+    },
+    "S8h-cap": {
+      "title": "Color ramp — all 32 stops used, three at one position (S8h card 3)",
+      "mock": "S8h",
+      "width": 760,
+      "height": 1100,
+      "app": {
+        "target": "strip",
+        "route": "#/settings",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"adv-output-toggle\"]"
+          },
+          {
+            "js": "fetch(new URLSearchParams(location.search).get('device') + '/api/output/palette', {method:'POST', body:'100 0 255 0 0 8 255 53 0 17 255 106 0 26 255 158 0 35 255 211 0 44 246 255 0 53 193 255 0 62 141 255 0 71 88 255 0 80 35 255 0 89 0 255 18 98 0 255 70 107 0 255 123 116 0 255 176 125 0 255 229 133 0 229 255 142 0 176 255 151 0 123 255 160 0 70 255 169 0 18 255 178 35 0 255 187 88 0 255 196 141 0 255 205 193 0 255 214 246 0 255 223 255 0 211 232 255 0 158 241 255 0 106 250 255 0 53 255 255 42 90 255 255 60 110 255 255 80 130'})"
+          },
+          {
+            "sleep": 2500
+          },
+          {
+            "click": "[data-role=\"adv-output-toggle\"]"
+          },
+          {
+            "sleep": 900
+          },
+          {
+            "click": "[data-role=\"out-palette-edit\"]"
+          },
+          {
+            "sleep": 700
+          },
+          {
+            "js": "(() => {const l=document.querySelectorAll('[data-role=\"out-palette-stop\"]');const h=l[l.length-1];const r=h.getBoundingClientRect();const o={bubbles:true,pointerId:1,pointerType:'mouse',isPrimary:true};const x=r.left+r.width/2,y=r.top+r.height/2;h.dispatchEvent(new PointerEvent('pointerdown',{...o,buttons:1,clientX:x,clientY:y}));h.dispatchEvent(new PointerEvent('pointerup',{...o,buttons:0,clientX:x,clientY:y}));})()"
+          },
+          {
+            "sleep": 700
+          }
+        ]
+      },
+      "allow": [
+        {
+          "element": "add-dis",
+          "property": "color",
+          "why": "the app spells `disabled` ONCE, in web/src/app.css (`.btn[disabled]{opacity:.55}`), and every disabled control in the console is that one rule; the batch-7 block hand-paints a `.btn.dis` palette (#5b6070 on #15171c inside #23272f) that exists nowhere else in the mockups and has no counterpart in the app's stylesheet. What the frame specifies — the cap is a budget, so the control is disabled WITH its reason rather than absent (§5.7's one exception, #529) — is what the app does, in the same words on `data-reason`"
+        },
+        {
+          "element": "add-dis",
+          "property": "opacity",
+          "why": "same — see add-dis.color: `opacity:.55` IS the app's disabled paint, which is why its colour properties stay the enabled ones"
+        },
+        {
+          "element": "add-dis",
+          "property": "background-color",
+          "why": "same — see add-dis.color"
+        },
+        {
+          "element": "add-dis",
+          "property": "border-top-color",
+          "why": "same — see add-dis.color"
+        },
+        {
+          "element": "add-dis",
+          "property": "border-right-color",
+          "why": "same — see add-dis.color"
+        },
+        {
+          "element": "add-dis",
+          "property": "border-bottom-color",
+          "why": "same — see add-dis.color"
+        },
+        {
+          "element": "add-dis",
+          "property": "border-left-color",
+          "why": "same — see add-dis.color"
+        }
+      ],
+      "elements": [
+        {
+          "id": "count",
+          "mock": ".recard .ct2",
+          "mockNth": 2,
+          "app": "[data-role=\"out-palette-count\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `32 stops · the most a ramp can hold` — the count carries the limit"
+        },
+        {
+          "id": "bubble",
+          "mock": ".rebub",
+          "mockNth": 1,
+          "app": "[data-role=\"out-palette-bubble\"]",
+          "text": true,
+          "noBoxW": true,
+          "note": "mock copy: `255`"
+        },
+        {
+          "id": "handle-on",
+          "mock": ".rehnd.on",
+          "mockNth": 1,
+          "app": "[data-role=\"out-palette-stop\"].on",
+          "note": "the collapsed cluster: three stops within 3 screen px share ONE handle, which is how the one underneath became reachable (inventory item 15)"
+        },
+        {
+          "id": "handle-ct",
+          "mock": ".rehnd .ct",
+          "app": "[data-role=\"out-palette-stop\"].on .ct",
+          "text": true,
+          "note": "mock copy: `3` — the count badge, 14px accent pill at the handle's top right"
+        },
+        {
+          "id": "affordance",
+          "mock": ".rescale .mid",
+          "mockNth": 1,
+          "app": "[data-role=\"out-palette-affordance\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `the bar is full — remove a stop before adding another` — clicking the bar at the cap does not silently do nothing (item 12): the bar is a `not-allowed` zone and this line says why"
+        },
+        {
+          "id": "cluster-k",
+          "mock": ".resel .k",
+          "mockNth": 2,
+          "app": "[data-role=\"out-palette-selected\"] .k",
+          "nth": 1,
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `3 stops here`"
+        },
+        {
+          "id": "next",
+          "mock": ".resel .btn.sm:not(.del)",
+          "app": "[data-role=\"out-palette-next\"]",
+          "text": true,
+          "note": "mock copy: `next of 3` — it cycles which of the three is selected"
+        },
+        {
+          "id": "swatch",
+          "mock": ".reswatch",
+          "mockNth": 1,
+          "app": "[data-role=\"out-palette-color\"] [data-role=\"color-swatch\"]",
+          "text": true,
+          "note": "mock copy: `#ff2a5a` — the first of the three, which is the one the cluster selects"
+        },
+        {
+          "id": "remove",
+          "mock": ".resel .btn.del",
+          "mockNth": 1,
+          "app": "[data-role=\"out-palette-remove\"]",
+          "text": true,
+          "note": "mock copy: `Remove stop` — enabled at the cap; it is only refused at the two-stop floor"
+        },
+        {
+          "id": "add-dis",
+          "mock": ".recard .reacts .btn.sm.dis",
+          "mockNth": 3,
+          "app": "[data-role=\"out-palette-add\"][disabled]",
+          "text": true,
+          "note": "mock copy: `+ Add stop` with `data-reason=\"all 32 stops are used — remove one to add another\"` (mockNth 3 because card 1 draws three `.dis` buttons before this one)"
+        },
+        {
+          "id": "cap",
+          "mock": ".recard .reacts .hint",
+          "mockNth": 1,
+          "app": "[data-role=\"out-palette-cap\"]",
+          "text": true,
+          "noBox": true,
+          "note": "mock copy: `all 32 stops are used — remove one to add another`"
+        },
+        {
+          "id": "mode",
+          "mock": ".recard .remode",
+          "mockNth": 2,
+          "app": "[data-role=\"out-palette-mode\"]",
+          "text": true,
+          "noBox": true
+        }
+      ]
     }
   },
   "$sweep": [
     "`--sweep`: the non-CSS half. Each screen is walked at every width and checked for",
     "horizontal scroll, text clipped without an ellipsis, children escaping a clipping",
     "parent, sub-24px touch targets on a phone, the tab order, and the §5.7 invariant",
-    "that every disabled control carries a data-reason."
+    "that every disabled control carries a data-reason.",
+    "`Settings · Color ramp` opens the editor and SELECTS a stop, because the controls S8g",
+    "exists to guarantee — the 24px handle box, the 26px swatch, the 26px position field, the",
+    "amount slider's grown box — only exist expanded and with a stop selected; the collapsed",
+    "row that `Settings · Advanced open` reaches has nothing draggable on it at all. It POSTs",
+    "the ramp it needs to the mirror first (a bare `luxel serve` has no palette), which is safe",
+    "here and nowhere else: the sweep runs after every frame."
   ],
   "sweep": {
     "target": "panel",
@@ -7271,6 +9294,39 @@
           },
           {
             "sleep": 1200
+          }
+        ]
+      },
+      {
+        "name": "Settings · Color ramp",
+        "route": "#/settings",
+        "steps": [
+          {
+            "waitFor": "[data-role=\"adv-output-toggle\"]"
+          },
+          {
+            "js": "fetch(new URLSearchParams(location.search).get('device') + '/api/output/palette', {method:'POST', body:'100 0 0 0 0 87 42 16 96 173 194 58 107 255 247 224 138'})"
+          },
+          {
+            "sleep": 2500
+          },
+          {
+            "click": "[data-role=\"adv-output-toggle\"]"
+          },
+          {
+            "sleep": 800
+          },
+          {
+            "click": "[data-role=\"out-palette-edit\"]"
+          },
+          {
+            "sleep": 800
+          },
+          {
+            "js": "(() => {const h=document.querySelectorAll('[data-role=\"out-palette-stop\"]')[2];if(!h)return;const r=h.getBoundingClientRect();const o={bubbles:true,pointerId:1,pointerType:'mouse',isPrimary:true};const x=r.left+r.width/2,y=r.top+r.height/2;h.dispatchEvent(new PointerEvent('pointerdown',{...o,buttons:1,clientX:x,clientY:y}));h.dispatchEvent(new PointerEvent('pointerup',{...o,buttons:0,clientX:x,clientY:y}));})()"
+          },
+          {
+            "sleep": 600
           }
         ]
       },

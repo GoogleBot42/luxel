@@ -168,6 +168,7 @@ interface Exports {
   lx_set_array_elements(n: number): void;
   lx_array_elements_for(heapFree: number, engineHeap: number, arenaFree: number): number;
   lx_bc_format(): number;
+  lx_palette_lut(ptr: number, nStops: number, amountPct: number): number;
   lx_text_slot_set(n: number, ptr: number, len: number): void;
 }
 
@@ -379,6 +380,44 @@ export class Luxel {
   bcFormat(): number {
     if (typeof this.e.lx_bc_format !== "function") return 0;
     return this.e.lx_bc_format();
+  }
+
+  /**
+   * The 768-byte table the DEVICE builds from these colour-ramp stops,
+   * blended at `amountPct` (Gitea #748). Entry `i` is three bytes, `r,g,b`,
+   * and is literally "what the device turns a pixel of brightness `i` into at
+   * this amount" — `luma([i,i,i]) === i`, so the table is also exactly what
+   * the ramp editor's bar draws.
+   *
+   * Both halves are the engine's own `outpipe::fill_palette_lut` and
+   * `outpipe::palette_remap_frame`, not a second implementation in JS: the
+   * ramp's edge rule (clamp at BOTH ends since #787), the 16.16 truncating
+   * divides and the `floor(v·255)` quantization are all wire-visible, and the
+   * pre-#734 preview disagreed with the LEDs on every one of them.
+   *
+   * `stopBytes` is the wire's own form — `pos, r, g, b` per stop, the four
+   * bytes `POST /api/output/palette` takes, which `lib/gradient.ts`'s
+   * `stopBytes()` builds. Stops are sorted in the engine, and an empty list
+   * is legal (the identity table, i.e. "no ramp").
+   *
+   * The result is a **copy**. The wasm side owns one 768-byte buffer and
+   * reuses it on the next call, and any view into linear memory dies on a
+   * memory growth — so a retained view would silently rot.
+   *
+   * `null` on a wasm bundle that predates the export; the caller falls back
+   * to `gradient.ts`'s `rampLut`, which `web/tests/paletteLut.test.mjs` pins
+   * against this byte for byte.
+   */
+  paletteLut(stopBytes: Uint8Array, amountPct: number): Uint8Array | null {
+    if (typeof this.e.lx_palette_lut !== "function") return null;
+    const s = this.putBytes(stopBytes);
+    const pct = Math.max(0, Math.min(100, Math.round(amountPct)));
+    const ptr = this.e.lx_palette_lut(s.ptr, Math.floor(stopBytes.length / 4), pct);
+    // copy before freeing the input: a `slice()` of a view is the only thing
+    // safe to hand out (see above)
+    const out = ptr === 0 ? null : new Uint8Array(this.e.memory.buffer, ptr, 768).slice();
+    s.free();
+    return out;
   }
 
   /** Write text slot `n` (0..7) — the playground's `POST /api/text`

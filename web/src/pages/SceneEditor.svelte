@@ -27,7 +27,7 @@
   import ColorInspector from "../components/scene/ColorInspector.svelte";
   import PatternPicker from "../components/PatternPicker.svelte";
   import Popover from "../components/Popover.svelte";
-  import { SceneRenderer, playgroundPatternId } from "../lib/sceneRender";
+  import { SceneRenderer, playgroundPatternId, rampOnlyChange } from "../lib/sceneRender";
   import {
     layerPatternId,
     MAX_SCENE_NAME,
@@ -77,6 +77,7 @@
     duplicateScene,
     layerCap,
     livePushScene,
+    shouldLivePush,
     refreshScenes,
     saveScene,
     sceneById,
@@ -429,6 +430,21 @@
     // A change that did NOT touch the wire is a store row landing — it is due
     // now, because nothing about it restarts a clock.
     const wireChanged = wire !== scheduledWire;
+    // A COLOUR-RAMP-only change is due now too, and it must not rebuild:
+    // the ramp is a post-stage, so re-installing the scene and rebinding the
+    // engines we already hold applies it with every clock intact (Gitea #787 —
+    // dragging a stop used to throw the animation back to t = 0 a second
+    // later). `renderedWire` is what is actually installed, so this reads the
+    // built state rather than the scheduling one.
+    if (wireChanged && renderer && renderedWire && rampOnlyChange(renderedWire, wire)) {
+      scheduledWire = wire;
+      clearTimeout(rebuildTimer);
+      rebuildTimer = 0;
+      const err = renderer.setRamps(doc);
+      sceneError = err ?? "";
+      renderedWire = wire;
+      return;
+    }
     scheduledWire = wire;
     scheduleRebuild(wireChanged && hasEngines(doc) ? REBUILD_DELAY_MS : 0);
   }
@@ -516,6 +532,12 @@
   $: dimsLine = `${gridW}×${gridH} · ${shownFps} fps${$device ? " on device" : ""}`;
 
   $: patternLayers = patternLayerCount(doc);
+
+  /** Does an edit to THIS scene reach the LEDs as it happens (#563)? The ramp
+   *  editor prints which of the two modes it is in, so wiring it wrong is
+   *  visible (#787 inventory item 20 was exactly this split being discarded).
+   *  `$device` and `$activeSceneId` are named so it follows both. */
+  $: livePushing = $device !== null && $activeSceneId === doc.id && shouldLivePush(doc.id);
 
   /**
    * The sprite layer's meta line for the layer list — just `8×8`.
@@ -1170,6 +1192,7 @@
           source={lookup(sel.body.pat.id, $devicePatterns)}
           patternName={patternNameOf(sel.body.pat.id, $devicePatterns)}
           {rig}
+          live={livePushing}
           on:change={(e) => replaceLayer(selected, e.detail)}
           on:pick={() => void pickFor(selected)}
           on:delete={() => void onDeleteLayer()}

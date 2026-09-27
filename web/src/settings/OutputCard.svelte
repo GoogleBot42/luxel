@@ -9,6 +9,9 @@
   // board can afford (`caps.power_cap` / `caps.blur_glow`, docs/api.md).
   import {
     device,
+    deviceBase,
+    devicePatterns,
+    deviceRunningId,
     outputStatus,
     paletteAmount,
     paletteFlat,
@@ -17,7 +20,8 @@
     type OutputStatus,
   } from "../stores/device";
   import { note, notes, reportApiError } from "../stores/notify";
-  import GradientEditor, { type GradientStop } from "../components/GradientEditor.svelte";
+  import ColorRamp from "../components/ColorRamp.svelte";
+  import type { GradientStop, RampMode } from "../lib/gradient";
 
   /** Which fields this device advertises (`lib/settingsCaps.ts`). */
   export let showPowerCap = true;
@@ -33,7 +37,7 @@
   /** The stops the editor is showing. Re-derived from the device's own
    *  reading, so a refresh is the source of truth; the editor holds its own
    *  draft while a drag is in flight, so a poll landing mid-gesture cannot
-   *  snap a handle back (see `GradientEditor.svelte`). */
+   *  snap a handle back (see `components/ColorRamp.svelte`). */
   let stops: GradientStop[] = [];
   $: stops = stopsFromFlat($paletteFlat);
 
@@ -100,11 +104,23 @@
     pushPalette(list, amountPct);
   }
 
+  /** Clearing the ramp removes the STOPS. It does NOT touch the amount —
+   *  #787 inventory item 7: it used to zero it, so rebuilding a palette
+   *  afterwards was invisible and nothing on screen said why. */
   function clearPalette(): void {
     stops = [];
-    paletteAmount.set(0);
-    pushPalette([], 0);
+    pushPalette([], $paletteAmount);
   }
+
+  /** The pattern the DEVICE is running, for the ramp editor's preview pair —
+   *  rendered locally by the wasm engine (device patterns are just source), the
+   *  way every other preview in the app is. `null` when the device is on
+   *  something with no row in its store, which is the honest "nothing to
+   *  preview" the editor falls back to a brightness wedge for. */
+  $: running = $devicePatterns.find((p) => p.id === $deviceRunningId) ?? null;
+  /** #563's live-vs-save split, stated in the control: the device's OWN ramp is
+   *  always live when a device is connected, and preview-only when none is. */
+  $: rampMode = ($deviceBase === null ? "preview" : "live") satisfies RampMode as RampMode;
 </script>
 
 {#if out}
@@ -203,34 +219,32 @@
     </div>
   {/if}
   {#if $paletteSupported}
-    <div class="field top">
-      <span class="flabel">Palette</span>
-      <div class="palette-edit">
-        <!-- ONE gradient editor, shared with the scene layer's colour ramp
-             (Gitea #734). The bar is the engine's own 256-entry table, the
-             stops drag, and the colour opens the app's `ColorPicker` — this
-             card's hand-rolled copy, its CSS gradient and its native
-             `<input type="color">` are all gone. -->
-        <GradientEditor
-          {stops}
-          amount={$paletteAmount}
-          role="out-palette"
-          previewRole="out-palette-preview"
-          minStops={0}
-          label="device output palette"
-          summary="applied on top of the pattern's own palette"
-          emptyLabel="no device palette"
-          on:input={(e) => {
-            stops = e.detail.stops;
-            paletteAmount.set(e.detail.amount);
-          }}
-          on:change={(e) => onPaletteChange(e.detail.stops, e.detail.amount)}
-          on:clear={clearPalette}
-        />
-        {#if $notes.palette}
-          <span class="dim hint" data-role="out-palette-note">{$notes.palette}</span>
-        {/if}
-      </div>
+    <!-- The colour ramp is a full-width CARD after the numeric rows, not a
+         labelled field: the ramp editor carries its own `Color ramp` header
+         (mockups S8a). ONE component, shared with the scene layer's ramp
+         (Gitea #697/#787) — this card's hand-rolled stop list, its CSS
+         gradient and its native `<input type="color">` are all long gone, and
+         so is `GradientEditor.svelte`. -->
+    <div class="rampfield">
+      <ColorRamp
+        {stops}
+        amount={$paletteAmount}
+        role="out-palette"
+        previewRole="out-palette-preview"
+        scope="device"
+        mode={rampMode}
+        patternSource={running?.source ?? null}
+        patternName={running?.name ?? ""}
+        on:input={(e) => {
+          stops = e.detail.stops;
+          paletteAmount.set(e.detail.amount);
+        }}
+        on:change={(e) => onPaletteChange(e.detail.stops, e.detail.amount)}
+        on:clear={clearPalette}
+      />
+      {#if $notes.palette}
+        <span class="dim hint" data-role="out-palette-note">{$notes.palette}</span>
+      {/if}
     </div>
   {/if}
 {:else}

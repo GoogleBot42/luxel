@@ -1188,6 +1188,84 @@ pub extern "C" fn lx_outpipe_bytes(h: i32) -> i32 {
     with_engine(h, |s| s.chain.resident_bytes() as i32).unwrap_or(0)
 }
 
+/// The table `lx_palette_lut` hands back — module-owned like the response
+/// buffer, and valid until the next call to it.
+static PALETTE_LUT: Mutex<[u8; 768]> = Mutex::new([0; 768]);
+
+/// Cook a colour RAMP into the 768-byte table the device would apply, and
+/// hand it back (Gitea #748).
+///
+/// Both halves are the engine's OWN functions — `outpipe::fill_palette_lut`
+/// for the table and `outpipe::palette_remap_frame` for the blend — which is
+/// the entire point: the ramp editor's bar, the device output palette, a
+/// pattern's `setOutputPalette` and a scene layer's ramp are then one
+/// implementation of a wire-visible rule instead of a JS re-derivation that
+/// drifts. The #787 edge rule (clamp at BOTH ends — above the last stop its
+/// colour continues) therefore comes along for free.
+///
+/// `ptr` points at `n_stops * 4` bytes, `pos, r, g, b` per stop: the wire's
+/// own form, the same four bytes `POST /api/output/palette` takes and a scene
+/// `R` record stores. The stops are sorted ascending (STABLY, so two at one
+/// position keep the caller's order) before cooking — `vm::sample_palette`
+/// walks the list in order and would sample nonsense from an unsorted one
+/// rather than fail. `n_stops` is capped at
+/// `outpipe::MAX_OUTPUT_PALETTE_STOPS`; 0 stops is legal and yields the
+/// identity table, which is what "no ramp" looks like.
+///
+/// `amount_pct` (0..=100, clamped) is the blend, applied exactly as the
+/// device applies it: `palette_remap_frame` over a 256-entry GREYSCALE frame
+/// at `pct * 256 / 100`. `luma([i,i,i]) == i` (54+183+19 = 256), so entry `i`
+/// of the result is literally "what the device turns a pixel of brightness
+/// `i` into at this amount".
+///
+/// Returns a pointer to 768 bytes — `r, g, b` for each of 256 entries —
+/// **owned by the module and valid only until the next call to this
+/// function**. Copy them out on the JS side; a retained view is also
+/// invalidated by any memory growth.
+///
+/// # Safety
+/// `ptr` must point at `n_stops * 4` readable bytes in linear memory, or be
+/// null with `n_stops` 0. `lx_alloc` buffers are align-1, so the bytes are
+/// read unaligned, one at a time.
+#[no_mangle]
+pub unsafe extern "C" fn lx_palette_lut(
+    ptr: *const u8,
+    n_stops: u32,
+    amount_pct: u32,
+) -> *const u8 {
+    let n = (n_stops as usize).min(outpipe::MAX_OUTPUT_PALETTE_STOPS);
+    let mut stops: Vec<(u8, [u8; 3])> = Vec::with_capacity(n);
+    if !ptr.is_null() {
+        for i in 0..n {
+            let at = |k: usize| ptr.add(i * 4 + k).read_unaligned();
+            stops.push((at(0), [at(1), at(2), at(3)]));
+        }
+    }
+    stops.sort_by_key(|(p, _)| *p);
+
+    // byte domain → 16.16 over 0..1, the same i32 scaling every other mount
+    // of this stage uses (engine.rs, compose.rs::ensure_lut, DeviceChain)
+    let b = |v: u8| Fx::from_raw(((v as i32) << 16) / 255);
+    let pal: Vec<(Fx, [Fx; 3])> = stops
+        .iter()
+        .map(|(p, c)| (b(*p), [b(c[0]), b(c[1]), b(c[2])]))
+        .collect();
+    let mut lut = [[0u8; 3]; 256];
+    outpipe::fill_palette_lut(&pal, &mut lut);
+
+    let mut frame = [[0u8; 3]; 256];
+    for (i, px) in frame.iter_mut().enumerate() {
+        *px = [i as u8; 3];
+    }
+    outpipe::palette_remap_frame(&mut frame, &lut, amount_pct.min(100) * 256 / 100);
+
+    let mut out = PALETTE_LUT.lock().unwrap();
+    for (i, px) in frame.iter().enumerate() {
+        out[i * 3..i * 3 + 3].copy_from_slice(px);
+    }
+    out.as_ptr()
+}
+
 // ---- debugger ----
 
 #[no_mangle]

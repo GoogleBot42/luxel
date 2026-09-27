@@ -179,6 +179,40 @@ export class SceneRenderer {
     return null;
   }
 
+  /**
+   * Re-install the scene WITHOUT rebuilding a single engine — for a change only
+   * a post-stage reads. Today that is exactly one thing: the per-layer colour
+   * ramp (Gitea #787).
+   *
+   * Dragging a colour stop used to throw every pattern in the scene back to
+   * t = 0: the ramp is part of the wire, so the editor's coalesced rebuild
+   * recompiled the layers a second after the last change (#787's
+   * "confusing by design" item 8). The ramp is a POST stage — the compositor
+   * cooks its LUT behind the scene epoch and runs it over a scratch copy of the
+   * pattern's frame — so nothing about it needs a new engine. `lx_comp_set`
+   * resets the binding table, so the engines that already exist are simply
+   * rebound: their clocks survive, and so do a text layer's scroll phase and a
+   * sprite's frame.
+   *
+   * The caller must have established that the wire differs only in its `R`
+   * lines ([`rampOnlyChange`]); anything else has to go through `setScene`.
+   * Returns null, or the compositor's parse error.
+   */
+  setRamps(scene: Scene): string | null {
+    if (!this.comp) return "no scene installed";
+    const wire = serializeScene(scene);
+    if (wire === this.wire) return null;
+    const err = this.comp.setScene(wire);
+    if (err) {
+      // a refused wire leaves the previous scene installed; rebind what we hold
+      this.engines.forEach((e, at) => this.comp?.bind(at, e));
+      return err;
+    }
+    this.engines.forEach((e, at) => this.comp?.bind(at, e));
+    this.wire = wire;
+    return null;
+  }
+
   /** One composite frame, or null when there is no scene installed. */
   frame(deltaMs: number, slots: SlotLookup = () => ""): Uint8Array | null {
     if (!this.comp) return null;
@@ -211,6 +245,24 @@ export class SceneRenderer {
     this.comp?.free();
     this.comp = null;
   }
+}
+
+/**
+ * Do these two scene wires differ ONLY in their colour-ramp lines?
+ *
+ * A ramp is one `R <pct> <pos>:<rgb>…` line per pattern layer
+ * (`lib/scene.ts`), and it is the only wire member no engine reads — which is
+ * what makes [`SceneRenderer.setRamps`] safe and what stops a stop drag from
+ * restarting every pattern's clock (Gitea #787).
+ */
+export function rampOnlyChange(a: string, b: string): boolean {
+  if (a === b) return false;
+  const strip = (w: string): string =>
+    w
+      .split("\n")
+      .filter((l) => !l.startsWith("R "))
+      .join("\n");
+  return strip(a) === strip(b);
 }
 
 /** What a text layer draws, as a function of the clock and the slot table. */

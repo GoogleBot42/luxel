@@ -1,12 +1,13 @@
-# The color ramp editor — design (#787, step 2)
+# The color ramp editor — design (#787)
 
-Status: **mock drawn, awaiting Jeremy's approval.** Frames S8a–S8i in
-[`mockups.html`](mockups.html). Nothing here is implemented; #787 step 4 is the
-implementation, and it is held to these frames by `web/tools/mockdiff.mjs`.
+Status: **approved and IMPLEMENTED** (2026-09-27). Frames S8a–S8i in
+[`mockups.html`](mockups.html) are the visual spec; the implementation is
+`web/src/components/ColorRamp.svelte` — one component, both mounts — plus the model in
+`web/src/lib/gradient.ts`, and `web/tools/mockdiff.mjs` holds it to the frames.
 
 One control, mounted twice: Settings › Advanced › Output processing › **Color ramp**
 (the device's own output palette) and the scene editor's per-layer **Color ramp**. It
-replaces `components/GradientEditor.svelte` and its two adapters rather than polishing
+replaced `components/GradientEditor.svelte` and its two adapters rather than polishing
 them — Jeremy, 2026-09-26: *"a complete UI redesign of color ramp (it is a
 horrible/confusing interface, and very buggy)"*. The 21-defect inventory that this is
 measured against is the first comment on #787.
@@ -17,8 +18,8 @@ measured against is the first comment on #787.
 |---|---|---|
 | **S8a** | 760 | The Settings mount with the editor open and a stop selected — the whole control in one picture. |
 | **S8b** | 760 | The selected stop's swatch open into the app's own `ColorPicker`, and the mid-gesture write contract. |
-| **S8c** | 390 | *Outside the stops*, option **A**: clamp both ends. |
-| **S8d** | 390 | *Outside the stops*, option **B**: black above the last stop (what ships today). |
+| **S8c** | 390 | *Outside the stops*, option **A**: clamp both ends — the one Jeremy chose, and what ships. |
+| **S8d** | 390 | *Outside the stops*, option **B**: black above the last stop — what shipped until #787; the option not taken. |
 | **S8e** | 320 | The scene layer's collapsed ramp row — replaces the row drawn in S7b/S7g. |
 | **S8f** | 320 | The same editor expanded inside the 320 px inspector: one column, save-based mode. |
 | **S8g** | 390 | The phone variant — every hit target ≥ 24 px (§5.7, #703). |
@@ -73,28 +74,50 @@ implementation follows S8e where the two disagree.
 - **Editing the ramp must not restart the layer's pattern clock.** The ramp is a
   post-stage; re-applying it does not need a scene rebuild.
 
-## The two open questions
+## The two questions, answered
+
+Jeremy, 2026-09-27:
 
 **Q1 — outside the stops: clamp both ends (A), or keep black above the last stop (B)?**
-Frames S8c and S8d. B is what ships (`outpipe::fill_palette_lut` clamps below the first
-stop and writes black above the last); it is stated nowhere in the UI and it is the root of
-inventory item 10 — clicking the bar above the last stop added a *black* stop and moved 88
-of 256 LUT entries, against the component's own promise that adding a stop never changes
-the gradient. A is the recommendation: it is what every gradient tool does, it makes "click
-anywhere to add" harmless by construction, and B's effect stays reachable as the *To black*
-preset or any ramp ending in a black stop — said rather than discovered. A costs a one-line
-change in `fill_palette_lut` and a thought about stored ramps whose last stop is below 255
-(they get brighter rather than cut). If B wins, only the hatched zone and one sentence
-change; nothing else in the batch moves.
+**A. The ramp clamps at both ends** (frame S8c). Above the last stop the end colour
+continues; the cut to black survives only as the *To black* preset, i.e. as something you
+say rather than something you discover. B was what shipped until then
+(`outpipe::fill_palette_lut` clamped below the first stop and wrote black above the last),
+it was stated nowhere in the UI, and it was the root of inventory item 10 — clicking the
+bar above the last stop added a *black* stop and moved 88 of 256 LUT entries, against the
+component's own promise that adding a stop never changes the gradient.
 
-**Q2 — does the redesign land on option A's semantics for the SCENE layer ramp too, or
-only for the device palette?** Both mounts run the same engine stage
-(`fill_palette_lut` → `palette_remap_frame`), so answering Q1 answers both — unless Jeremy
-wants the device palette and the per-layer ramp to differ, which the mock does not draw and
-does not recommend. One editor with two semantics is how the current control ended up with
-three different minimum-stop rules.
+**Q2 — does it apply to the per-layer scene ramp as well as the device palette?**
+**Yes.** One semantic, one component. Both mounts run the same engine stage
+(`fill_palette_lut` → `palette_remap_frame`), and one editor with two semantics is how the
+old control ended up with three different minimum-stop rules (item 21).
 
-## Inventory item → how the design removes it
+### What A cost, and what it did to stored data
+
+One line, in one place: `outpipe::fill_palette_lut` clamps its *sample position* to the
+last stop and then runs `vm::sample_palette` unchanged. Every caller inherits it — the
+device palette (`engine.rs`), a pattern's `setOutputPalette` (the firmware's `OutPipe`),
+and the per-layer scene ramp (`compose.rs::ensure_lut`).
+
+**`vm::sample_palette` itself is untouched**, deliberately. Its black-above-the-last-stop
+edge is bug-for-bug Pixel Blaze for the `paint()` / `setPalette()` / `paintCanvas()`
+builtins — established against the oracle on 2026-08-22 (docs/research/04-oracle-findings.md)
+and pinned by `palette_edges_match_pixelblaze`. `setOutputPalette` is a documented *Luxel
+extension* (docs/lang.md) with no PB behaviour to match, so the ramp is free to clamp where
+`paint()` is not.
+
+**Stored data is left exactly as it is, and there is no migration.** A stored palette or
+scene ramp whose last stop is below 255 now renders the last stop's colour above it instead
+of black — brighter, not darker, and only in the region the user never asked about. The two
+alternatives were both worse: appending a black stop at 255 on first read would silently
+rewrite the user's data, spend one of the 32 stop slots, and be wrong for the common case
+(a ramp that already spans 0..255 is unaffected either way); and a wire-format bump has
+real deploy consequences (#643 — an OTA across a format bump leaves every stored blob
+unreadable and the device's own console cannot fix it). The behaviour change is written
+down in docs/api.md, docs/lang.md, docs/spec/scenes.md and UPDATES.md, and anyone who
+wanted the cut can have it back with one black stop — or the *To black* preset.
+
+## Inventory item → how it is gone
 
 The numbering is the #787 "Bug inventory (step 1)" comment.
 
@@ -109,7 +132,7 @@ The numbering is the #787 "Bug inventory (step 1)" comment.
 | 7 | `clear` zeroes the amount | *Clear ramp* confirms and says the amount stays (**S8i**) |
 | 8 | selection index outlives the stop; edits vanish | selection is the stop's identity; the row disappears with the stop |
 | 9 | fields keep showing refused values | two-way binding; the field shows the value in effect |
-| 10 | clicking above the last stop adds a black stop and changes the gradient | **Q1**: under A it cannot happen; under B the zone is drawn and the add is labelled (**S8c/S8d**) |
+| 10 | clicking above the last stop adds a black stop and changes the gradient | option A: it cannot happen — the ramp clamps, and a stop added in a clamped zone takes that end stop's own hex (**S8c**) |
 | 11 | every arrow key is a full device write, no-ops included | a key that cannot move anything does nothing and writes nothing |
 | 12 | clicking the bar at the cap does nothing, silently | the bar is a `not-allowed` zone and the affordance line states the reason (**S8h**) |
 | 13 | a click in the 12 px gutter below the bar adds a stop | the handles are on the bar; there is no gutter |
@@ -127,20 +150,42 @@ The numbering is the #787 "Bug inventory (step 1)" comment.
 
 | # | Decision | What the design does |
 |---|---|---|
-| 1 | black above the last stop | **Q1** — put to Jeremy with both frames drawn (**S8c/S8d**) |
+| 1 | black above the last stop | **answered**: option A, the ramp clamps at both ends (**S8c**); the cut to black is the *To black* preset |
 | 2 | two unlabelled bars | one bar (the ramp) + a labelled preview pair (pattern → LEDs at N %) |
 | 3 | "the same editor as Settings › Output › Palette" printed in the scene mount | line deleted; it is literally one component now, and the summary states the stop count and amount instead (**S8e**) |
 | 4 | `add stop` means "past the last one" | it means "into the widest gap"; clicking the bar means "here" |
 | 5 | the detail panel renumbers as you drag | no `Stop N` header; the stop is named by position, in the UI and in `aria-label` |
 | 6 | a permanent per-stop row list | one row, for the selected stop, present only while one is selected |
 | 7 | four levels deep (Settings › Advanced › Output processing › Palette) | **not fixed** — restructuring Settings is a different ticket. Mitigated: the collapsed row shows the real LUT, and the editor expands *in place*, not into a dialog or a fifth level |
-| 8 | editing a scene ramp restarts the layer's pattern clock | stated as a requirement of the implementation step: the ramp is a post-stage and must be re-applied without a scene rebuild |
+| 8 | editing a scene ramp restarts the layer's pattern clock | fixed: `SceneRenderer.setRamps()` re-installs the scene and rebinds the engines it already holds, so no clock restarts |
 
-## What the implementation inherits
+## What the implementation did with it
 
-- One component in both mounts (#697's intent; close #697 and #537 when this lands).
-- `lx_palette_lut` from wasm as the single source for the bar and both previews (#748 §1),
-  with a synchronous fallback for the first paint before the module is up.
-- `web/tests/` covering the stop-manipulation model (add into the widest gap, move,
-  remove, the minimum rule, the cap, stacked stops, undo) separately from the DOM.
-- `mockdiff` element maps for S8a, S8e, S8f and S8g, and `--sweep` clean at 390.
+- **One component in both mounts** — `components/ColorRamp.svelte`, with
+  `settings/OutputCard.svelte` and `components/scene/RampEditor.svelte` as thin adapters.
+  `GradientEditor.svelte` is deleted. Closes #697 and #537.
+- **`lx_palette_lut` from wasm is the single source** for the bar and both preview cells
+  (#748 §1): `outpipe::fill_palette_lut` cooks it and `outpipe::palette_remap_frame` blends
+  it, both the engine's own functions. `lib/gradient.ts`'s `rampLut` is the synchronous
+  fallback for the first paint before the module is up, and
+  `web/tests/paletteLut.test.mjs` pins the two against each other over every shape that
+  hurts — a single stop, stops inside 0..255, a zero-width span, adjacent positions,
+  falling channels, the 32-stop cap, amounts 0/1/33/50/99/100, and 50 seeded-random shapes.
+  Closes #748.
+- **The model is in `src/lib/gradient.ts`**, no DOM and no Svelte, with
+  `web/tests/gradient.test.mjs` on it: where a new stop goes, the one legality rule, the
+  clamped-zone colour, clustering and `next of N`, identity-based selection, presets,
+  undo, the trailing commit and the emptied-field rule.
+- **`mockdiff` element maps for S8a, S8b, S8e, S8f, S8g, S8h and S8i**, plus `--sweep`
+  clean at 390. **S8c/S8d are deliberately not mapped**: they are a decision drawing — the
+  two candidate semantics side by side, with a card header reading `A · clamp both ends`
+  rather than `Color ramp` — and nothing in the app is or should be in that state. The
+  semantic they decided is pinned by `outpipe.rs`'s
+  `palette_lut_clamps_above_the_last_stop_and_below_the_first`, by
+  `web/tests/paletteLut.test.mjs`, and by `web/tests/gradient.test.mjs`'s "the ramp CLAMPS
+  at both ends".
+- **A ramp edit no longer restarts the layer's clock** (confusing-by-design item 8):
+  `lib/sceneRender.ts` grew `rampOnlyChange()` and `SceneRenderer.setRamps()`, which
+  re-installs the scene and rebinds the engines it already holds instead of recompiling
+  them. `pages/SceneEditor.svelte` routes a ramp-only wire change through it, immediately,
+  instead of through the 1 s coalesced rebuild.

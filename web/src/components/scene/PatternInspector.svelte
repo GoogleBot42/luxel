@@ -37,6 +37,9 @@
   export let patternName = "";
   /** The rig the scene renders on — what the projection row is relative to. */
   export let rig: Layout;
+  /** Does an edit to this scene reach the LEDs as it happens (#563)? Passed
+   *  through to the ramp editor, which STATES which mode it is in. */
+  export let live = false;
 
   const dispatch = createEventDispatcher<{ change: Layer; pick: void }>();
 
@@ -122,7 +125,12 @@
 
   <div class="irule"></div>
 
-  <RampEditor ramp={pat.ramp} on:input={(e) => patchPat({ ramp: e.detail })} />
+  <RampEditor
+    ramp={pat.ramp}
+    patternSource={source}
+    {live}
+    on:input={(e) => patchPat({ ramp: e.detail })}
+  />
 
   <div class="irule"></div>
 

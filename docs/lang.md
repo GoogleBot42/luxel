@@ -461,6 +461,17 @@ is the one that applies.
   `setPalette`, the stops are snapshotted at the call — the engine cooks
   a 256-entry table and rebuilds it only when you install a new one.
 
+  **Both edges clamp**: below the first stop the first stop's colour holds,
+  and above the last stop the last stop's colour continues. A ramp that ends
+  at `pos` 176 therefore paints everything from 176 up in that colour — to
+  make the brightest pixels go dark you say so, with a black last stop. This
+  deliberately differs from `paint()` / `setPalette()` / `paintCanvas()`,
+  which go **black** above the last stop: that is a real Pixel Blaze's own
+  behaviour, reproduced bug-for-bug, and it is preserved. `setOutputPalette`
+  is a Luxel extension with no PB behaviour to match, so it does the useful
+  thing instead — and the device palette and a scene layer's ramp are the
+  same stage, so all three agree (Gitea #787).
+
   There is a *device-level* palette too — Settings → Output, persisted in
   flash, `POST /api/output/palette` (Gitea #139). The two compose: the
   pattern's stage recolors the frame, then the device's stage recolors the

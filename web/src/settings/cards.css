@@ -218,18 +218,22 @@
   outline-offset: 2px;
 }
 
-/* device output palette editor (Output card) */
-.settings .palette-edit {
+/* The colour ramp editor (Output card) — a full-width CARD after the numeric
+ * rows, carrying its own `Color ramp` header rather than sitting in a labelled
+ * `.field` (mockups S8a, Gitea #787; the mock leaves 14px above it). */
+.settings .rampfield {
   display: flex;
   flex-direction: column;
   gap: 8px;
   min-width: 0;
+  margin-top: 14px;
 }
 
 /* The `.palette-preview` / `.palette-stop` rules that lived here went with
- * the Output card's hand-rolled stop editor (Gitea #734): the palette is now
- * the shared `components/GradientEditor.svelte`, which paints the ramp on a
- * canvas from the engine's own LUT and carries its own scoped styles. The
+ * the Output card's hand-rolled stop editor (Gitea #734), and `.palette-edit`
+ * with the flabelled row it wrapped (#787): the ramp is now the shared
+ * `components/ColorRamp.svelte`, which paints the bar on a canvas from the
+ * engine's own LUT and carries its own scoped styles. The
  * `input[type="color"]` rule in particular was styling a control the app is
  * not allowed to use (ColorPicker.svelte:2-4). */
 

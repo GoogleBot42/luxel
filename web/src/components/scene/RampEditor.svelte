@@ -1,30 +1,41 @@
 <script lang="ts">
-  // The per-layer colour ramp (mockups S7b collapsed, S7g with stops).
+  // The per-layer colour ramp — the scene editor's mount of the ONE ramp
+  // editor (mockups S8e collapsed, S8f expanded; they replace the row S7b/S7g
+  // drew). Gitea #787.
   //
-  // It is the engine's OUTPUT-PALETTE stage applied per layer — luma → a
+  // It is the engine's output-palette stage applied per layer — brightness → a
   // gradient of stops — so a white-on-black pattern becomes any gradient
   // without touching its code (§5.5).
   //
-  // Since #734 this file is a THIN ADAPTER: the control itself is
-  // `components/GradientEditor.svelte`, the one copy that Settings › Output ›
-  // Palette also mounts. All this adds is the scene's two states and the
-  // `Ramp | null` shape the layer record stores:
-  //   * no ramp yet — the bar, `Edit…`, and the sentence that says what a
-  //     ramp DOES (S7b);
-  //   * a ramp — the editor (S7g).
+  // This file is a THIN ADAPTER and nothing more: the control is
+  // `components/ColorRamp.svelte`, the same one Settings › Advanced › Output
+  // processing › Color ramp mounts. All this adds is the `Ramp | null` shape
+  // the layer record stores and the "no ramp yet" teaser that offers to make
+  // one.
   import { createEventDispatcher } from "svelte";
-  import GradientEditor, {
-    paintRamp,
-    type GradientStop,
-  } from "../GradientEditor.svelte";
+  import ColorRamp from "../ColorRamp.svelte";
+  import { paintLut, rampLut, type GradientStop } from "../../lib/gradient";
   import { type Ramp } from "../../lib/scene";
 
   export let ramp: Ramp | null = null;
+  /** The layer's pattern source, for the editor's preview pair (S8f draws the
+   *  layer and the layer through the ramp, side by side). */
+  export let patternSource: string | null | undefined = null;
+  /** Live when this scene is the one playing, saved otherwise — #563's split,
+   *  which the pre-#787 mount threw away by wiring `on:input` and `on:change`
+   *  to one handler (inventory item 20). */
+  export let live = false;
 
   const dispatch = createEventDispatcher<{ input: Ramp | null }>();
 
+  /** Is the editor open? Bound from the component, because the inspector's own
+   *  `Color ramp` label is the COLLAPSED row's (S8e) and the expanded card
+   *  carries its own header (S8f). */
+  let editorOpen = false;
+
   /** What the default ramp is when one is first added: black → white, the
-   *  identity-ish ramp you then drag colour into. */
+   *  identity-ish ramp you then drag colour into (it is also the `Mono`
+   *  preset, so the editor opens on a chip that is already lit). */
   const SEED: Ramp = {
     pct: 100,
     stops: [
@@ -39,14 +50,14 @@
   const fromStops = (list: readonly GradientStop[]): [number, string][] =>
     list.map((s) => [s.pos, s.hex]);
 
-  /** The S7b bar is painted by the SAME table the editor's bar is — there is
-   *  no second gradient anywhere in this file. Reactive rather than
-   *  `onMount`, because the S7b branch can mount long after the component
-   *  does (clearing a ramp switches back to it), and `bind:this` invalidating
-   *  `seedBar` is what re-runs this. */
+  /** The teaser's bar is painted by the SAME table the editor's is — there is
+   *  no second gradient anywhere in this file. Reactive rather than `onMount`,
+   *  because this branch can mount long after the component does (removing a
+   *  ramp switches back to it), and `bind:this` invalidating `seedBar` is what
+   *  re-runs it. */
   const SEED_STOPS: GradientStop[] = SEED.stops.map(([pos, hex]) => ({ pos, hex }));
   let seedBar: HTMLCanvasElement | null = null;
-  $: paintRamp(seedBar, SEED_STOPS, SEED.pct);
+  $: paintLut(seedBar, rampLut(SEED_STOPS, SEED.pct));
 
   function edit(stops: readonly GradientStop[], pct: number): void {
     dispatch("input", { pct, stops: fromStops(stops) });
@@ -63,19 +74,22 @@
 </script>
 
 {#if ramp}
-  <!-- S7g: the ramp, its draggable stops, and the one editor both homes use -->
+  <!-- S8e / S8f: the one editor, collapsed to a summary row or open in place.
+       The inspector's own `Color ramp` label belongs to the COLLAPSED row only
+       (S8e draws it, S8f does not): expanded, the card's own `.rehead` says
+       `Color ramp`, and keeping both put it on screen twice. -->
   <div class="irow wide">
-    <div class="ilab">Color ramp</div>
+    {#if !editorOpen}<div class="ilab">Color ramp</div>{/if}
     <div>
-      <GradientEditor
+      <ColorRamp
         stops={toStops(ramp)}
         amount={ramp.pct}
         role="scene-ramp"
         previewRole="scene-ramp"
-        minStops={2}
-        label="layer colour ramp"
-        summary="the same editor as Settings › Output › Palette"
-        emptyLabel="no ramp"
+        scope="layer"
+        mode={live ? "live" : "save"}
+        {patternSource}
+        bind:expanded={editorOpen}
         on:input={(e) => edit(e.detail.stops, e.detail.amount)}
         on:change={(e) => edit(e.detail.stops, e.detail.amount)}
         on:clear={() => dispatch("input", null)}
@@ -83,7 +97,7 @@
     </div>
   </div>
 {:else}
-  <!-- S7b: no ramp yet — the bar, `Edit…`, and what a ramp is for -->
+  <!-- no ramp yet — the bar, `Edit…`, and what a ramp is for -->
   <div class="irow start">
     <div class="ilab" style="padding-top:4px">Color ramp</div>
     <div>
@@ -120,6 +134,7 @@
     padding: 0;
     border: none;
     background: transparent;
+    color: var(--accent);
   }
 
   .lnk:hover {

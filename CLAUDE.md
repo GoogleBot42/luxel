@@ -208,7 +208,10 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
   `tools/deploy.sh <ip> --assets-only`.
 - The web bundle must fit the assets partition (0xF0000 = 983,040 B on every board but
   the 16 MB Seengreat, and one bundle ships to all of them, so the small one binds):
-  939 KB used, **2.16 % headroom** as of 2026-09-27 (docs/boards.md; Gitea #691).
+  958 KB used, **0.22 % headroom** as of 2026-09-27 after #787 (docs/boards.md;
+  Gitea #691, which now carries the per-file breakdown — the biggest single
+  waste is `cssCodeSplit:false` inlining ONE stylesheet into BOTH entry HTMLs,
+  so `flash.html` carries every console-only component's CSS).
   `tools/ci.sh` prints and gates it — read that line, a new web surface now costs
   real margin. Past the gate it only fails at `POST /api/assets` on a device.
 - `/api/status` `fps` is frames RENDERED. Where the output stage runs on the

@@ -497,13 +497,12 @@ below shipped with its firmware half.** Fields:
   palette → blur → glow → gamma → color order → power cap. The POST body is
   positional and whitespace-separated; the last three tokens are optional so
   older clients keep working (absent = keep the stored value).
-- **Device output palette** ✅ — the Output card's **Palette** editor
-  (Gitea #139): a gradient preview plus one row per stop (color swatch +
-  0–255 position), `add stop` / `remove` / `clear`, and a blend `amount` %.
-  It recolors every finished frame by luma through the stops, exactly like
-  a pattern's `setOutputPalette`, and it *composes* with the pattern's own
-  stage rather than overriding it — the device setting is the
-  installation's look. Its own API and its own storage (variable length, so
+- **Device output palette** ✅ — the Output card's **Color ramp** editor
+  (Gitea #139, redesigned from scratch in #787). It recolors every finished
+  frame by brightness through a stop list, exactly like a pattern's
+  `setOutputPalette`, and it *composes* with the pattern's own stage rather
+  than overriding it — the device setting is the installation's look. Its
+  own API and its own storage (variable length, so
   it can't ride in the fixed-size `LXDV` record):
   `POST /api/output/palette` with the flat
   `"<amount_pct> <pos> <r> <g> <b> …"` body (0..=255 each, positions
@@ -512,6 +511,48 @@ below shipped with its firmware half.** Fields:
   Persisted as a reserved-key blob in the pattern store (the mechanism the
   device map, playlist and resume records use — the nvs partition's four
   sectors are full) and applied at boot.
+- **The colour ramp editor** ✅ — ONE component,
+  `components/ColorRamp.svelte`, mounted by the Output card above and by the
+  scene editor's per-layer ramp (Gitea #697/#787; mock frames S8a–S8i, design
+  record `docs/design/webui-v2/ramp-editor.md`). Jeremy, 2026-09-26: *"a
+  complete UI redesign of color ramp (it is a horrible/confusing interface,
+  and very buggy)"* — the 21-defect inventory behind it is the first comment
+  on #787. What the control is:
+  - **the bar IS the model** — click empty bar to add a stop there, drag to
+    move, drag off to remove, click to select. It is the engine's own
+    256-entry LUT painted as a `256×1` canvas (`lx_palette_lut` from wasm,
+    #748), never a CSS `linear-gradient`: a gradient cannot express the clamp,
+    the truncating 16.16 interpolation or the `floor(v·255)` quantization, and
+    that mismatch is why the old preview disagreed with the device;
+  - **one row for the one selected stop** — the app's own `ColorPicker`
+    (never `<input type="color">`), a numeric position, *Remove stop*. The
+    selection is the stop's IDENTITY, so a stop that disappears takes its row
+    with it instead of aliasing its neighbour. Handles are 12 px of paint in a
+    **24×24** hit box (§5.7's touch floor); stops within 3 px collapse to one
+    handle with a count badge and a *next of N* button;
+  - **the stage is stated in body text**, never a hover title — *Brightness →
+    color*, plus what happens outside the stops;
+  - **the preview is a pair** — what the pattern renders and what the LEDs do
+    with the ramp at the current amount, with the amount **slider** beside it.
+    With nothing running the left cell falls back to a brightness wedge
+    labelled as one;
+  - **presets** (Mono · Sunset · Ice · Fire · Spectrum · *To black*), **Reset**
+    to the ramp as it opened, a real **Undo** (`Ctrl-Z`), and one destructive
+    action (*Clear ramp* / *Remove ramp*) that confirms and never touches the
+    amount;
+  - **the mode is on screen** (#563): a green dot and *"Changes go to the LEDs
+    as you make them"* for the device's own ramp and the playing scene, a dim
+    dot and *"the LEDs follow when you save"* otherwise, *"Preview only"* with
+    nothing connected;
+  - **the editor re-reads while open.** If the device's ramp changes under an
+    editor with local edits, a strip offers *Keep mine* / *Load theirs* and
+    **nothing is sent until the user chooses**;
+  - **one printed legality rule**: a ramp is **0 stops (off) or at least 2 —
+    never 1**, at both mounts and on the wire.
+
+  The stop-manipulation rules live in `src/lib/gradient.ts` with no DOM, so
+  `web/tests/gradient.test.mjs` holds them — `web/tests` cannot import a
+  `.svelte` file, and a rule nothing can test is a rule that comes back.
 - **MQTT / Home Assistant** ✅ — shipped (firmware v0.1.19 + mirror):
   broker host/port/creds + HA discovery, `/api/mqtt` + Settings form.
 - **WiFi** ✅ — Settings form shipped (Phase 3); **AP-mode** provisioning
