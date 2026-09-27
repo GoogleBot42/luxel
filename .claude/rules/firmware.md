@@ -137,6 +137,22 @@ paths:
   allocation of 12288 bytes failed` and the boot guard rolled the slot back
   (#306). Degrade to an empty/short body; never let a routine GET be the thing
   that reboots the board.
+- **PIE (the S3's 128-bit vector unit) is inline `asm!` only** — no
+  intrinsics, and the esp rustc's integrated assembler knows every `ee.*`
+  mnemonic (no GNU `as` step; the crate needs
+  `#![feature(asm_experimental_arch)]`, see `luxel-hub75`'s `pie` feature).
+  Read the disassembly back with `xtensa-esp-elf-objdump` and
+  `XTENSA_GNU_CONFIG=<xtensa-esp-elf-gcc>/lib/xtensa_esp32s3.so` in the
+  environment, or every PIE instruction prints as `excw`. The `q`
+  registers and `SAR` are saved by nothing (not the scheduler, not an
+  ISR), so a kernel masks interrupts on its own core (`rsil 15` … `wsr.ps`)
+  and never relies on register contents across `asm!` blocks; PIE loads
+  and stores FORCE 16-byte alignment instead of faulting (TRM §1.5.3), so
+  check alignment before the call, never assume it. There is no stride-3
+  gather: RGB888 → planar costs an op per pixel per channel or a scalar
+  prologue (`pie.rs` module docs have the argument). The TRM's PIE
+  chapter is the only reference (`pdftotext` on the PDF; §1.8 per
+  instruction, §1.7 hazards).
 - Dual-core boards (esp32, esp32s3 — cfg `multi_core` from build.rs) run
   the render task on the AppCpu (`firmware/src/core1.rs`), and every flash
   op must run inside the cross-core flash fence: the other core is parked

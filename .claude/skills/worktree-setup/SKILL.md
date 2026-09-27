@@ -330,7 +330,14 @@ origin master && git rebase origin/master`.
   blaming your change.
 - If `tea pr merge` fails with "is it still open?" right after a
   force-push, Gitea is still re-checking mergeability — wait a few
-  seconds and retry before diagnosing anything.
+  seconds and retry before diagnosing anything. **The same message is
+  all you get when the PR is simply UNMERGEABLE** (`GET
+  …/pulls/<N>` → `"mergeable":false`): with master merging every ~15 min
+  and every PR touching UPDATES.md, a PR whose CI went green ten minutes
+  ago is often conflicted again by the time you look (three rounds on
+  2026-09-27). Rebase → resolve → push, then merge the INSTANT the status
+  API says `success` — a 20 s background loop that polls the commit
+  status and runs `tea pr merge` on green, not a manual check later.
 - **A ❌ "Has been cancelled" CI run on your PR is usually not your
   build.** Until 2026-09-19 the workflow's concurrency group was global, so
   every push by another session cancelled the in-flight PR runs (a 3-minute
