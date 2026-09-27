@@ -180,6 +180,8 @@ Consequences:
   reset does not): the reader dies, the node comes back `root:dialout 660`,
   and you need `doas chmod 666` again. So a serial capture that stops
   mid-session is itself evidence the board reset.
+- **A board in download mode (`boot:0x3`) cannot be reset over USB at all** —
+  see "Download mode is a one-way door" below. Flash it there, then ask for EN.
 - **The board sometimes will not reset over USB at all** — two full
   attempts, zero bytes captured (2026-09-07). Don't spend a session on it:
   fall back to `/api/status` polling and static ELF checks.
@@ -203,6 +205,47 @@ Consequences:
   the slot. Re-attach only after boot_ok (~75 s) (2026-09-07).
 - **Boot-guard arithmetic still applies**: a reset counts as a boot; three
   boots that don't reach the 60 s "healthy" mark flip the OTA slot.
+
+## Download mode is a one-way door: only EN or a power cycle leaves it (2026-09-27)
+
+Once the ROM prints `boot:0x3 (DOWNLOAD(USB/UART0))` / `waiting for
+download`, **no host-side action boots the app again.** Every USB-triggered
+reset — a `socat` open, the two-open recipe below, `espflash reset`,
+`espflash monitor --after hard-reset` AND `--after watchdog-reset` — comes
+back `rst:0x15 (USB_UART_CHIP_RESET),boot:0x3` again. Tested all five in
+one sitting on 2026-09-27 after the board had sat in download mode since
+01:20. Don't spend another minute on it: the board needs **Jeremy's EN press
+(or a power cycle)**, and that is the ONLY thing to ask him for.
+
+What download mode IS good for is flashing, and that part works from the
+container without anyone holding BOOT — the ROM is already listening:
+
+```sh
+# 1. free the port: anything holding /dev/ttyACM0 open (a reader loop, a
+#    stale socat/tr from an earlier session) EATS the ROM's SLIP replies and
+#    espflash "hangs for hours" — that was the entire 2026-09-27 hang, not
+#    the baud rate, not the stub, not the cable.
+for p in /proc/[0-9]*; do ls -l $p/fd 2>/dev/null | grep -q ttyACM0 && echo "$p $(tr '\0' ' ' < $p/cmdline)"; done
+# 2. prove the link (answers in ~1 s when the port is free)
+espflash board-info -p /dev/ttyACM0
+# 3. read the REAL table before trusting any offset (16 MB table: ota_0
+#    0x10000, ota_1 0x310000, 3 MiB each; the 4 MB fallback differs)
+espflash read-flash -p /dev/ttyACM0 0x8000 0xc00 pt.bin && od -A x -t x1z pt.bin | grep 'aa 50'
+# 4. app image to BOTH slots (~10 s each), so no guard rollback can land elsewhere
+espflash save-image --chip esp32s3 firmware/target/xtensa-esp32s3-none-elf/release/luxel-fw app.bin
+espflash write-bin -p /dev/ttyACM0 0x10000  app.bin
+espflash write-bin -p /dev/ttyACM0 0x310000 app.bin
+# 5. STOP. Ask Jeremy to press EN. Do not "just try" a reset.
+```
+
+How it got there: a `stty`/`socat` open resets the chip through the USB
+Serial/JTAG DTR/RTS emulation, and if BOOT happens to be held at that
+instant (Jeremy holding it for a flash that hadn't connected yet), the ROM
+enters download mode and the DTR/RTS emulation from then on only ever
+re-enters it. The stale listener (`serial-listen.sh`, a reopen loop from a
+2026-09-24 session) both caused that reset and then swallowed every reply
+for nine hours. **Before any USB work, list the port holders (step 1) and
+kill foreign reader loops** — they are never another session's live work.
 
 ## Capturing a boot log or a panic (the only way to see one)
 
@@ -236,6 +279,15 @@ ESP32 ELF — pass the S3 one).
   "compositing one layer costs 54 ms" when compositing costs 654 µs and the
   real bug was a resident buffer (#704). Same for a HALVED number: the JIT
   coming back looks like a speedup in whatever you last changed.
+- **The `fps` a board boots with belongs to the PERSISTED single pattern, not
+  to whatever scene you are about to measure — identify it by `jit.code_bytes`
+  first.** Aurora 2D is 5,612 B of native code and ~50 ms bare; a 2,316 B
+  pattern at 55 fps was read as "Aurora alone" on 2026-09-26 and the whole
+  38 ms gap was pinned on the scene's second layer (Gitea #812, corrected
+  2026-09-27). **A scene's frame is the SUM of its layer frames plus ~2.6 ms**
+  (Aurora 51.7 + `_Fairies` 17.7 + 2.6 = 72.0 ms measured, docs/boards.md
+  "Engine frames in PSRAM") — subtract each layer's bare `vm_us` before
+  blaming the compositor or PSRAM.
 - **`jit` is ONE global block and reports the LAST compile — in a scene it
   does not tell you the base layer's state.** A scene compiles bottom → top,
   so what `/api/status` shows is the TOP layer, and a base layer that fell
@@ -334,8 +386,9 @@ device answers in 10–20 s and a 4 s timeout reads as "down", #259).
   so a starved device doesn't end the run (docs/tools.md).
 - Flashing from scratch: `BOARD=board-seengreat-hub75 ./build-esp32.sh image`
   → `espflash write-bin --chip esp32s3 -p /dev/ttyACM0 0x0 firmware/target/luxel-full.bin`.
-  If it comes up `boot:0x3 (DOWNLOAD…)` after espflash's reset, BOOT is held —
-  Jeremy presses EN. Stock-restore image: `seengreat-stock.bin` (repo root, gitignored).
+  If it comes up `boot:0x3 (DOWNLOAD…)` after espflash's reset, ONLY Jeremy's EN
+  press or a power cycle gets it out — see "Download mode is a one-way door"
+  above; no reset flag or serial open will. Stock-restore image: `seengreat-stock.bin` (repo root, gitignored).
 - **OTA to this board wedges the ProCpu inside a flash op about 44 % of the
   time (#294)** — silent, no serial, and usually RTC-watchdog recovered with
   the board back on the OLD slot. Check `slot` after each attempt, and before
