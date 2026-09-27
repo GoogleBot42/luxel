@@ -268,14 +268,19 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   the spare-plane swap's own forensics. `flushes` counts staged frames copied
   into the live framebuffer; `deferred` counts polls that found the pass's
   MSB run without room for the copy (the frame goes out one pass later — a
-  rate, not a fault); `abandoned` counts staged frames no window opened for
-  within 50 ms (a dead DMA; the frame is dropped so the engine never freezes
-  behind it). **`torn_p1` and `torn_wrap` must be 0**: they count copies that
-  overran a deadline — plane 1 not in place before the DMA left the MSB run,
-  or the spare MSB not in place before the wrap — which is the one way this
-  mode can show a mixed frame. `copy_us`/`copy_us_max` are the whole copy's
-  cost, `plane_us` the slowest single plane seen, which is what sizes the
-  window check.
+  rate, not a fault); `forced` counts staged frames copied WITHOUT a window
+  because they had waited 26 ms (Gitea #620: on the bench the window never
+  re-opened once one preempted copy had been remembered, and the panel sat
+  on its last frame for minutes — a forced copy risks one pass of mixed
+  planes, which `torn_*` then counts honestly; a static image is worse);
+  `abandoned` counts staged frames dropped after 50 ms with no DMA position
+  at all (a dead DMA; the engine never freezes behind it). **`torn_p1` and
+  `torn_wrap` must be 0** on a healthy run: they count copies that overran a
+  deadline — plane 1 not in place before the DMA left the MSB run, or the
+  spare MSB not in place before the wrap — which is the one way this mode
+  can show a mixed frame. `copy_us`/`copy_us_max` are the whole copy's cost,
+  `plane_us` the TYPICAL single-plane copy (an EWMA, which is what sizes the
+  window check) and `plane_us_max` the slowest ever seen.
 - `rescan_hz` — how many times a second the HUB75 panel is really redrawn
   from the framebuffer, read from the driver's own BCM frame counter. `0` on
   every board without a panel. This is the panel's clock **and** the render

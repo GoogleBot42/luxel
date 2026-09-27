@@ -789,6 +789,10 @@ fn status_json() -> luxel_core::jsonview::Chunks {
             push_u32(&mut out, crate::shared::SPARE_COPY_US_MAX.load(Ordering::Relaxed));
             push_piece(&mut out, ",\"plane_us\":");
             push_u32(&mut out, crate::shared::SPARE_PLANE_US.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"plane_us_max\":");
+            push_u32(&mut out, crate::shared::SPARE_PLANE_US_MAX.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"forced\":");
+            push_u32(&mut out, crate::shared::SPARE_FORCED.load(Ordering::Relaxed));
             push_piece(&mut out, "}");
         }
         push_piece(&mut out, ",\"shorts\":[");

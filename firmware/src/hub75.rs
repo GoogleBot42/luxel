@@ -486,11 +486,27 @@ mod spare {
     use luxel_hub75::{Geometry, MAX_PLANES};
 
     /// Margin the window check keeps beyond the measured copy cost.
-    pub const SLACK_NS: u64 = 300_000;
-    /// A staged frame no window opened for within this long is abandoned
-    /// rather than freezing the engine behind it — the same liveness floor
-    /// as the output task's vsync hold (a dead DMA must not stop the world).
+    ///
+    /// 1 ms, not the 300 µs it started at: the typical plane copy is only
+    /// ~30 µs (the staging frame is still cache-warm from the compose), so
+    /// what actually misses the plane-1 deadline is the output task being
+    /// held off the core between the window check and the copy — 0.15 % of
+    /// flushes at the stock schedule and 0.3 % at `lsb 14` on 2026-09-27
+    /// with 300 µs. The margin has to cover a preemption, not a copy.
+    pub const SLACK_NS: u64 = 1_000_000;
+    /// A staged frame the DMA gave no position for within this long is
+    /// abandoned rather than freezing the engine behind it — the same
+    /// liveness floor as the output task's vsync hold (a dead DMA must not
+    /// stop the world).
     pub const HOLD_US: u64 = 50_000;
+    /// A staged frame no window opened for within this long is copied
+    /// ANYWAY, window or not (Gitea #620). On the bench the window check
+    /// never re-opened once one preempted copy had been remembered, and the
+    /// panel froze on its last flushed frame for minutes while the engine
+    /// ran on — a static image is worse than one pass with mixed planes,
+    /// which is all a forced copy can cost (and `torn_*` counts it
+    /// honestly). Two passes at the stock 64x64 schedule.
+    pub const FORCE_US: u64 = 26_000;
 
     /// The ring geometry the window check needs, computed once at boot.
     #[derive(Clone, Copy)]
@@ -1476,13 +1492,12 @@ impl OutputDriver for Hub75Output {
             self.staged = false;
             return true;
         };
-        // Liveness floor: no window within HOLD_US means the panel stopped
-        // passing (a dead DMA). Drop the frame; never freeze the engine.
-        if self.staged_at.elapsed().as_micros() >= spare::HOLD_US {
-            self.staged = false;
-            shared::SPARE_ABANDONED.fetch_add(1, Ordering::Relaxed);
-            return true;
-        }
+        // How long this frame has waited. Past FORCE_US it goes out on the
+        // next poll whatever the window says (#620); past HOLD_US with no DMA
+        // position at all (a dead DMA) it is dropped — never freeze the
+        // engine behind it.
+        let waited = self.staged_at.elapsed().as_micros();
+        let forced = waited >= spare::FORCE_US;
         // The previous flip must have landed: only then is the DMA on the
         // other ring and the displaced view's MSB block provably idle.
         let back = match self.pending.take() {
@@ -1510,14 +1525,27 @@ impl OutputDriver for Hub75Output {
         // Is the DMA inside the MSB run of this pass, with room?
         let Some((ring, idx, eof_pending)) = hub75.dma_position() else {
             self.back = Some(back);
+            if waited >= spare::HOLD_US {
+                self.staged = false;
+                shared::SPARE_ABANDONED.fetch_add(1, Ordering::Relaxed);
+                return true;
+            }
             shared::SPARE_DEFERRED.fetch_add(1, Ordering::Relaxed);
             return false;
         };
         let nominal_us = hub75.pass_stats().3;
-        if !self.window.fits(idx, eof_pending, nominal_us, self.plane_us) {
+        // The window check runs on the TYPICAL plane copy (an EWMA), not the
+        // worst ever seen: one copy preempted by WiFi or the web server
+        // (2,029 µs against 526 typical on the bench) must not close the
+        // window for good. A pass without room defers; a frame that has
+        // waited FORCE_US goes anyway.
+        if !forced && !self.window.fits(idx, eof_pending, nominal_us, self.plane_us) {
             self.back = Some(back);
             shared::SPARE_DEFERRED.fetch_add(1, Ordering::Relaxed);
             return false;
+        }
+        if forced {
+            shared::SPARE_FORCED.fetch_add(1, Ordering::Relaxed);
         }
         let Some(staging) = self.staging.as_deref() else {
             self.staged = false;
@@ -1571,8 +1599,11 @@ impl OutputDriver for Hub75Output {
             shared::SPARE_TORN_WRAP.fetch_add(1, Ordering::Relaxed);
         }
         let total = t0.elapsed().as_micros() as u32;
-        self.plane_us = self.plane_us.max(worst);
+        // Typical single-plane copy: a fast EWMA (1/4 weight) of the slowest
+        // plane in each flush. The worst ever is kept for the record only.
+        self.plane_us = (self.plane_us * 3 + worst) / 4;
         shared::SPARE_PLANE_US.store(self.plane_us, Ordering::Relaxed);
+        shared::SPARE_PLANE_US_MAX.fetch_max(worst, Ordering::Relaxed);
         shared::SPARE_COPY_US.store(total, Ordering::Relaxed);
         shared::SPARE_COPY_US_MAX.fetch_max(total, Ordering::Relaxed);
         shared::SPARE_FLUSHES.fetch_add(1, Ordering::Relaxed);

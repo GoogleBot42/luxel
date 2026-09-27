@@ -1,5 +1,27 @@
 # Update log
 
+## 2026-09-27 — spare-plane swap: the freeze was the window check (#620)
+
+The single-framebuffer mode froze the image twice earlier tonight. Looking
+closer at the counters: the window check kept the worst plane copy ever
+seen (one WiFi-preempted copy at 2 ms made `7 × 2 ms` never fit a 13 ms
+pass again) and, once no pass fitted, the staged frame was abandoned after
+50 ms and the panel sat on its last flushed frame while the engine ran on.
+Three changes in `hub75.rs`'s spare module: the window runs on a typical
+copy (a 1/4-weight EWMA of each flush's slowest plane; `plane_us_max`
+keeps the record), a frame that has waited 26 ms is copied without a window
+(`spare.forced` — at most one mixed pass, which `torn_*` counts honestly),
+and the margin is 1 ms because the typical copy is ~30 µs (cache-warm
+staging) and what misses the deadline is a preemption between the check
+and the copy. `/api/status` `pass.spare` gains `forced` and
+`plane_us_max`; docs/api.md and boards.md carry the on-metal table: at the
+stock schedule and `lsb 14` the mode now flushes every engine frame
+(`out_fps` 19–20), 0 abandons, 1–7 forced, 0.07–0.34 % of frames with a
+stale plane 1 for one pass, `torn_wrap` 0; at Jeremy's ×32 experiment
+(1,183 Hz) every frame is forced and tears, as a 0.8 ms pass must. Still
+off by default; Jeremy's eye on ×4 motion is the next gate, and the
+extreme steps need refusing before it can be default.
+
 ## 2026-09-27 — the `lsb` schedule mis-weighted the last row of each half: a trailing display block per plane (#795)
 
 Jeremy, after a session with the new Refresh control: "the lowest pixel in

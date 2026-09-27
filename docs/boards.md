@@ -3645,6 +3645,33 @@ seven planes, which fits the stock MSB run (6.5 ms) but not any `lsb` step's
 window uses a typical time, the feature stays off, and it is incompatible
 with the `lsb` schedule. Rework list on #620.
 
+**Same night, later: the freeze was the window check, not the copy.** Three
+changes: the window runs on a TYPICAL plane copy (an EWMA of the slowest
+plane per flush) instead of the worst ever; a frame that has waited
+`FORCE_US` (26 ms) is copied without a window (`spare.forced`), so a
+missed window costs at most one mixed pass, never a static image; and the
+window's margin is 1 ms, because the typical copy turned out to be ~30 µs
+— the staging frame is still cache-warm from the compose, so the 526 µs
+"typical" above was the max-tracking talking — and what actually misses
+the plane-1 deadline is the output task being held off the core between
+the check and the copy. On metal (same build, `plane_us` 29–37 µs typical,
+`plane_us_max` 0.8–1.8 ms):
+
+| schedule | flushes | forced | `deferred` | `torn_p1` | `torn_wrap` |
+|---|---:|---:|---:|---:|---:|
+| `lsb 14` (287 Hz), 300 µs slack | 4,685 | 7 | 11,745 | 16 (0.34 %) | 0 |
+| stock (77 Hz), 300 µs slack | 3,297 | 1 | 19,519 | 5 (0.15 %) | 0 |
+| stock, 1 ms slack | 2,704 | 3 | 19,790 | 2 (0.07 %) | 0 |
+| `lsb 1` (1,183 Hz, Jeremy's ×32) | 31 | 31 | — | 29 | 12 |
+
+`out_fps` matched the engine (19–20) throughout, `abandoned` 0, `heap_free`
+73–77 KB (+24 KB over the two-buffer build). So the mode is usable at the
+stock and ×2/×4 steps with a residual 0.1–0.3 % of frames showing one pass
+with a stale plane 1 — Jeremy's eye decides whether that is visible — and
+at the extreme steps (MSB run under 1 ms) every frame is forced and tears,
+which the boot should refuse (or cap `t`) before the feature becomes a
+default. Still off by default.
+
 ## Vsync: the panel is the clock (2026-09-07, Gitea #387, #378)
 
 With the swap made atomic (above), the panel still showed fewer frames than
