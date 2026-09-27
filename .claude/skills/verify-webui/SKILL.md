@@ -73,7 +73,14 @@ and `node_modules`, and the harnesses below assume a real `npm run build` succee
    Ad-hoc script mechanics that each cost a debug cycle on 2026-09-01: the script
    must live under `web/` (e.g. `web/tools/_scratch.mjs`, deleted before commit) —
    an ESM `import puppeteer from "puppeteer-core"` from the scratchpad fails with
-   `ERR_MODULE_NOT_FOUND` and `NODE_PATH` does not rescue ESM; resolve the browser
+   `ERR_MODULE_NOT_FOUND` — or, worse, SILENTLY resolves into **another session's
+   worktree** (2026-09-27: a scratchpad script run with `cd <my worktree>/web` loaded
+   `/home/googlebot/workspace/wt-786/web/node_modules/puppeteer-core`, and the only
+   reason it was noticed is that the stack trace named the path). Either keep the
+   script under your own `web/`, or import by ABSOLUTE path
+   (`import puppeteer from "/home/googlebot/workspace/<wt>/web/node_modules/puppeteer-core/lib/esm/puppeteer/puppeteer-core.js"`)
+   — same hazard as worktree-setup §4b, and the same rule: absolute paths
+   everywhere. `NODE_PATH` does not rescue ESM; resolve the browser
    with `execSync("command -v chromium")` like e2e.mjs (a bare `"chromium"`
    executablePath is rejected); and spawn `vite preview` with `stdio: "ignore"` plus
    a fixed sleep — waiting for a "Local:" line on its stdout hangs until timeout.

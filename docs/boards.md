@@ -1980,7 +1980,19 @@ pessimistic would make scenes unusable on the flagship board, so the
 estimate leans optimistic on purpose.
 
 Text, sprite and colour layers are free — they need no engine — so the
-flagship "clock over a pattern" scene fits comfortably.
+flagship "clock over a pattern" scene fits comfortably. Measured on the
+panel 2026-09-27 at 4096 px (Gitea #774), one `pat` layer with and without
+**five** `sprite` layers over it, alternated twice:
+
+| scene | engines | heap_free | heap_largest | frame_us |
+|---|---:|---:|---:|---:|
+| `pat` Rainbow only | 1 | 48,956 / 49,908 | 44,860 / 45,812 | 7,366 / 7,394 |
+| + 5 `sprite` layers | **1** | 45,364 / 45,364 | 41,268 / 41,268 | 8,084 / 7,977 |
+
+Five sprite layers cost **~3.6 KB of heap in total** (~720 B each, compositor
+bookkeeping — the texels are read straight out of memory-mapped flash) and
+**~650 µs of frame time** (~130 µs per layer over 4096 px), against the
+~16–20 KB and the `RUNTIME_FLOOR` claim a pattern-layer engine costs.
 
 Two further things bound a stack in practice, both documented in
 docs/firmware.md "Scenes: the layer compositor in the render loop": the JIT
@@ -2071,17 +2083,27 @@ rather than by this board.
 
 What did **not** change is the assets margin, which is still the number
 worth watching on every board: the 4 MB `assets` partition
-(0xF0000 = 983,040 B) holds an **843 KB bundle as of 2026-09-24 — 12.2 %
-headroom** (863,167 B packed; `tools/ci.sh` fails the build over 983,040 B,
+(0xF0000 = 983,040 B) holds a **939 KB bundle as of 2026-09-27 — 2.16 %
+headroom** (961,793 B packed; `tools/ci.sh` fails the build over 983,040 B,
 and `POST /api/assets` refuses an oversized install outright). One bundle
 ships to every board, so the *small* partition is the bound even though this
 board's is four times the size.
 
-That figure is the result of the Gitea #683 diet and it is not a standing
-surplus — it had fallen to **0.73 %** by 2026-09-24 (the 11.5 % recorded
-here on 2026-09-20 was already stale) with three Phase B surfaces and the
-Phase C font blobs still to land. What bought it back, all measured on
-that day's master:
+**That margin is spent again, in three days.** It was 863,167 B / 12.2 % on
+2026-09-24; the 98,626 B since is almost all one blob — `assets/index-*.js`
+went 287,734 → 374,844 B gzipped while `gallery.json` (+554), `luxel.wasm`
+(+3,388) and the entry HTMLs (+7,570) barely moved. No new npm dependency
+did it: it is the console's own recent feature code landing in the single
+entry chunk, so the lever that has not been pulled yet is **code-splitting**
+(the image importer's ~1,600 lines behind a dynamic `import()` off the
+Sprites tab, say) rather than any of the content decisions below. Gitea #691
+carries the options and the up-to-date breakdown.
+
+The 12.2 % figure was the result of the Gitea #683 diet and it was not a
+standing surplus — it had fallen to **0.73 %** by 2026-09-24 (the 11.5 %
+recorded here on 2026-09-20 was already stale) with three Phase B surfaces
+and the Phase C font blobs still to land. What bought it back, all measured
+on that day's master:
 
 | lever | gzipped saving |
 |---|---:|
@@ -2090,12 +2112,13 @@ that day's master:
 | zopfli instead of zlib level 9, on `gallery.json` | 17.0 kB |
 | zopfli + terser on the two entry HTMLs and the small chunks | 2.1 kB |
 
-None of it is repeatable — the three levers are spent. The next 100 kB has
-to come from what is *in* the bundle: `gallery.json` is 354 kB of the 843
-(307 pattern sources, which ship verbatim on purpose) and the CodeMirror
-editor is most of the 288 kB JS chunk. After that the only lever left is
-growing `assets` past 0xF0000, which is another migration — Gitea #691 has
-the options and what each costs.
+None of it is repeatable — the three levers are spent. The rest has to come
+from what is *in* the bundle: `gallery.json` is 355 kB of the 939 (307
+pattern sources, which ship verbatim on purpose) and the console's own code
+is the 375 kB JS chunk, CodeMirror plus everything the tabs have grown since.
+After code-splitting that chunk the only lever left is growing `assets` past
+0xF0000, which is another migration — Gitea #691 has the options and what
+each costs.
 
 Brotli and zstd are **not** available however much they would help: a
 browser only advertises `Accept-Encoding: br`/`zstd` on a secure origin,

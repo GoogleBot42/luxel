@@ -969,6 +969,14 @@ stale, is skipped with a console line and the device plays nothing (the
 single-pattern rule). Firmware only: the mirror has no flash and resumes
 nothing.
 
+**The "room for every layer engine" test is currently too strict on the
+Seengreat panel** — at 4096 px it asks for more heap than the board has at
+boot, so a scene of two real 2D patterns is skipped with
+`resume: heap too tight for scene <id> (… free, need …)` and the panel comes
+back dark. Verified on metal 2026-09-27 (#818); the re-derivation is
+Gitea #869. Scenes under ~17.7 KB of summed stored pattern bytes resume
+correctly there, and every other board is unaffected.
+
 **Storage.** Every scene block concatenated is ONE blob — on a device, one
 flash record beside the palette — capped at **3840 B** (`max`). A write that
 would not fit is REFUSED, not truncated:

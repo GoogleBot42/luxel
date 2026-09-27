@@ -85,6 +85,13 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
   (2026-09-08). Put everything under a subdirectory named for your ticket
   (`scratchpad/b4-405/…`), and never trust a scratch baseline you did not just
   write — re-create it with `git show origin/master:<path>` and re-measure.
+  **The agent MEMORY files are shared the same way and have no version control**
+  — a concurrent session edited `seengreat-return-queue.md` between this
+  session's read and its write on 2026-09-27, and a block replacement silently
+  dropped three of its items (reconstructed from the tracker, but only because
+  the file's own description still named them). Re-read a memory file
+  immediately before writing it, and prefer an insertion at a known anchor over
+  replacing a span you read minutes ago.
 
 ## Autonomy
 - Be decisive on routine engineering safeguards (tests, lints, guards, docs): add them
@@ -201,8 +208,9 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
   `tools/deploy.sh <ip> --assets-only`.
 - The web bundle must fit the assets partition (0xF0000 = 983,040 B on every board but
   the 16 MB Seengreat, and one bundle ships to all of them, so the small one binds):
-  870 KB used, **11.5 % headroom** as of 2026-09-20 (docs/boards.md). Nothing measures
-  this in CI — an oversized archive only fails at `POST /api/assets` on a device.
+  939 KB used, **2.16 % headroom** as of 2026-09-27 (docs/boards.md; Gitea #691).
+  `tools/ci.sh` prints and gates it — read that line, a new web surface now costs
+  real margin. Past the gate it only fails at `POST /api/assets` on a device.
 - `/api/status` `fps` is frames RENDERED. Where the output stage runs on the
   other core (HUB75 panels, `out_fps` nonzero) the render loop free-runs ahead
   of the wire, so `fps` can be double what reached the LEDs — quote `out_fps`
