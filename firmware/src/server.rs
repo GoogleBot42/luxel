@@ -795,6 +795,35 @@ fn status_json() -> luxel_core::jsonview::Chunks {
             push_u32(&mut out, crate::shared::SPARE_FORCED.load(Ordering::Relaxed));
             push_piece(&mut out, "}");
         }
+        // The ring driver's own counters (Gitea #857, `hub75-ring` only):
+        // `rows`/`slack_us` are what `ring_ms` resolved to, `late` is the
+        // honesty counter (claims skipped because the beam would have won),
+        // `packed_core0`/`packed_core1` say who packed what.
+        #[cfg(feature = "hub75-ring")]
+        {
+            use crate::hub75_ring as ring;
+            push_piece(&mut out, ",\"ring\":{\"rows\":");
+            push_u32(&mut out, ring::RING_ROWS.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"slack_us\":");
+            push_u32(&mut out, ring::RING_SLACK_US.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"late\":");
+            push_u32(&mut out, ring::RING_LATE.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"blanked\":");
+            push_u32(&mut out, ring::RING_BLANKED.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"backoffs\":");
+            push_u32(&mut out, ring::RING_BACKOFFS.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"packed_core0\":");
+            push_u32(&mut out, ring::RING_PACKED_CORE0.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"packed_core1\":");
+            push_u32(&mut out, ring::RING_PACKED_CORE1.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"idle\":");
+            push_u32(&mut out, ring::RING_IDLE.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"pack_us\":");
+            push_u32(&mut out, ring::RING_PACK_US.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"pack_us_max\":");
+            push_u32(&mut out, ring::RING_PACK_US_MAX.load(Ordering::Relaxed));
+            push_piece(&mut out, "}");
+        }
         push_piece(&mut out, ",\"shorts\":[");
         {
             let (n, log) = crate::shared::pass_shorts();

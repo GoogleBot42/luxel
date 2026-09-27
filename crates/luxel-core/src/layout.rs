@@ -280,6 +280,15 @@ pub struct PanelDriver {
     /// at boot; read at boot (the DMA descriptor chain is built from it), so
     /// `reboot_required`. `live.lsb` reports the effective value.
     pub lsb: u16,
+    /// Milliseconds of slack the RING driver (Gitea #857, firmware feature
+    /// `hub75-ring`) sizes its slot ring for: how long the beam can run
+    /// ahead of the packer before a row pair is late. The ring is sized in
+    /// time, not rows — the row count follows from the schedule and the
+    /// chain width (`luxel_hub75::ring::slots_for_slack`) and `live.ring_rows`
+    /// reports it. 1..=50; default 3 while core 0 packs alone. Read at boot
+    /// (the ring is allocated from it), so `reboot_required`; ignored by the
+    /// two-buffer driver.
+    pub ring_ms: u16,
 }
 
 impl Default for PanelDriver {
@@ -287,7 +296,7 @@ impl Default for PanelDriver {
     /// existed: 7 planes, 30 MHz, no chip init, one blanking clock, full
     /// on-time.
     fn default() -> PanelDriver {
-        PanelDriver { planes: 7, clock_mhz: 30, chip: Chip::ShiftReg, blank: 1, lsb: 0 }
+        PanelDriver { planes: 7, clock_mhz: 30, chip: Chip::ShiftReg, blank: 1, lsb: 0, ring_ms: 3 }
     }
 }
 
@@ -346,8 +355,8 @@ impl PanelDriver {
     /// (ghosting between address rows), which is exactly the knob a reboot
     /// per attempt makes unusable.
     pub fn boot_differs(&self, other: &PanelDriver) -> bool {
-        (self.planes, self.clock_mhz, self.chip, self.lsb)
-            != (other.planes, other.clock_mhz, other.chip, other.lsb)
+        (self.planes, self.clock_mhz, self.chip, self.lsb, self.ring_ms)
+            != (other.planes, other.clock_mhz, other.chip, other.lsb, other.ring_ms)
     }
 }
 
@@ -526,6 +535,9 @@ impl Layout {
                 // out, so the persisted text is unambiguous.
                 out.push(' ');
                 push_u32(&mut out, d.lsb as u32);
+                // Likewise the sixth (Gitea #857): optional in, always out.
+                out.push(' ');
+                push_u32(&mut out, d.ring_ms as u32);
             }
         }
         for o in &self.outputs {
@@ -929,7 +941,7 @@ pub fn parse(
 /// "expected: panel …" tells a UI nothing about which number it got wrong.
 fn parse_driver<'a>(it: &mut impl Iterator<Item = &'a str>) -> Result<PanelDriver, &'static str> {
     const USAGE: &str =
-        "expected: panel <planes> <clock_mhz> <shiftreg|fm6126a|icn2038s|dp3246> <blank> [<lsb>]";
+        "expected: panel <planes> <clock_mhz> <shiftreg|fm6126a|icn2038s|dp3246> <blank> [<lsb>] [<ring_ms>]";
     let planes = it.next().and_then(num).ok_or(USAGE)?;
     if !(4..=8).contains(&planes) {
         return Err("panel: planes must be 4..8");
@@ -961,12 +973,25 @@ fn parse_driver<'a>(it: &mut impl Iterator<Item = &'a str>) -> Result<PanelDrive
             v
         }
     };
+    // The sixth field is optional the same way (Gitea #857): a line without
+    // it keeps the default slack.
+    let ring_ms = match it.next() {
+        None => PanelDriver::default().ring_ms as u32,
+        Some(s) => {
+            let v = num(s).ok_or("panel: ring_ms must be 1..50")?;
+            if !(1..=50).contains(&v) {
+                return Err("panel: ring_ms must be 1..50");
+            }
+            v
+        }
+    };
     Ok(PanelDriver {
         planes: planes as u8,
         clock_mhz: clock_mhz as u8,
         chip,
         blank: blank as u8,
         lsb: lsb as u16,
+        ring_ms: ring_ms as u16,
     })
 }
 
@@ -1223,11 +1248,21 @@ pub struct LiveDriver {
     pub h: u16,
     /// Address rows the driver scans.
     pub scan: u16,
-    /// Bytes of ONE framebuffer (there are two, double-buffered).
+    /// Bytes of ONE framebuffer (there are two, double-buffered) — or, on
+    /// the ring driver, of the whole slot ring.
     pub fb_bytes: u32,
     /// The configured geometry/driver did not fit in internal RAM and the
     /// firmware booted the board default instead.
     pub fallback: bool,
+    /// The `ring_ms` the running driver booted with (the ring driver sized
+    /// its ring from it; the two-buffer driver ignores it) — the value a
+    /// client compares the configured one against.
+    pub ring_ms: u16,
+    /// Ring driver (Gitea #857): slots in the ring, 0 on the two-buffer
+    /// driver.
+    pub ring_rows: u16,
+    /// Ring driver: the slack those slots buy, microseconds; 0 otherwise.
+    pub ring_slack_us: u32,
 }
 
 impl Layout {
@@ -1355,7 +1390,7 @@ impl Layout {
 #[cfg(feature = "panel")]
 fn push_driver_json(out: &mut String, d: &PanelDriver, p: &PanelView) {
     push_piece(out, ",\"driver\":{");
-    push_driver_fields(out, d.planes, d.clock_mhz, d.chip, d.blank, d.lsb);
+    push_driver_fields(out, d.planes, d.clock_mhz, d.chip, d.blank, d.lsb, d.ring_ms);
     push_piece(out, ",\"chips\":[");
     for (i, c) in Chip::ALL.iter().enumerate() {
         push_piece(out, if i > 0 { ",\"" } else { "\"" });
@@ -1376,12 +1411,16 @@ fn push_driver_json(out: &mut String, d: &PanelDriver, p: &PanelView) {
         None => push_piece(out, "null"),
         Some(l) => {
             push_piece(out, "{");
-            push_driver_fields(out, l.planes, l.clock_mhz, l.chip, l.blank, l.lsb);
+            // `ring_ms` in `live` is what the ring was sized FOR; `ring_rows`
+            // and `ring_slack_us` are what it got (0 on the two-buffer driver).
+            push_driver_fields(out, l.planes, l.clock_mhz, l.chip, l.blank, l.lsb, l.ring_ms);
             for (field, v) in [
                 (",\"w\":", l.w as u32),
                 (",\"h\":", l.h as u32),
                 (",\"scan\":", l.scan as u32),
                 (",\"fb_bytes\":", l.fb_bytes),
+                (",\"ring_rows\":", l.ring_rows as u32),
+                (",\"ring_slack_us\":", l.ring_slack_us),
             ] {
                 push_piece(out, field);
                 push_u32(out, v);
@@ -1394,7 +1433,7 @@ fn push_driver_json(out: &mut String, d: &PanelDriver, p: &PanelView) {
     push_piece(out, "}");
 }
 
-/// The five fields the configured and the live halves share, in wire order
+/// The six fields the configured and the live halves share, in wire order
 /// and with no leading comma — written once so the two cannot drift. `lsb`
 /// is the CONFIGURED value in the `driver` block (0 = full) and the
 /// EFFECTIVE one in `live` (never 0) — see [`LiveDriver::lsb`].
@@ -1406,6 +1445,7 @@ fn push_driver_fields(
     chip: Chip,
     blank: u8,
     lsb: u16,
+    ring_ms: u16,
 ) {
     push_piece(out, "\"planes\":");
     push_u32(out, planes as u32);
@@ -1417,6 +1457,8 @@ fn push_driver_fields(
     push_u32(out, blank as u32);
     push_piece(out, ",\"lsb\":");
     push_u32(out, lsb as u32);
+    push_piece(out, ",\"ring_ms\":");
+    push_u32(out, ring_ms as u32);
 }
 
 fn push_output(out: &mut String, o: &Output, v: &View) {
@@ -1840,11 +1882,11 @@ mod tests {
         l.proj = Projection::new(ProjectionMode::X, ProjectionMode::Y, ProjectionMode::Xz);
         l.outputs.push(Output { n: 0, pin: 18, proto: 1, order: 2, count: 3, rev: false });
         l.outputs.push(Output { n: 1, pin: 19, proto: 0, order: 5, count: 3, rev: true });
-        l.driver = PanelDriver { planes: 6, clock_mhz: 20, chip: Chip::Dp3246, blank: 4, lsb: 0 };
+        l.driver = PanelDriver { planes: 6, clock_mhz: 20, chip: Chip::Dp3246, blank: 4, lsb: 0, ring_ms: 3 };
         let wire = l.to_wire(6144, &proto_name);
         assert_eq!(
             wire,
-            "matrix 64 32 3 1 br col 1 0 16 \npanel 6 20 dp3246 4 0\n\
+            "matrix 64 32 3 1 br col 1 0 16 \npanel 6 20 dp3246 4 0 3\n\
              out 0 18 ws2812 grb 3\nout 1 19 sk9822 bgr 3 rev\n\
              proj1d x\nproj2d y\nproj3d xz"
         );
@@ -1934,14 +1976,14 @@ mod tests {
         assert!(e.driver_set);
         assert_eq!(
             e.layout.driver,
-            PanelDriver { planes: 5, clock_mhz: 24, chip: Chip::Fm6126a, blank: 0, lsb: 0 }
+            PanelDriver { planes: 5, clock_mhz: 24, chip: Chip::Fm6126a, blank: 0, lsb: 0, ring_ms: 3 }
         );
         assert_eq!(e.layout.driver.clock_hz(), 24_000_000);
         assert_eq!(e.layout.driver.latch_clocks(), 1);
         // the stored record IS the wire, so it reads back byte-for-byte —
         // and the persisted line always spells the fifth field (#789)
         let wire = e.layout.to_wire(4096, &proto_name);
-        assert!(wire.contains("\npanel 5 24 fm6126a 0 0"), "{wire}");
+        assert!(wire.contains("\npanel 5 24 fm6126a 0 0 3"), "{wire}");
         let load = Limits { strict: false, ..panel_limits() };
         assert_eq!(parse(&wire, &panel_cur(), 4096, &load).unwrap().layout, e.layout);
         // only the DP3246 holds the latch longer than one clock
@@ -1958,12 +2000,12 @@ mod tests {
         // line existed
         assert_eq!(
             panel_cur().driver,
-            PanelDriver { planes: 7, clock_mhz: 30, chip: Chip::ShiftReg, blank: 1, lsb: 0 }
+            PanelDriver { planes: 7, clock_mhz: 30, chip: Chip::ShiftReg, blank: 1, lsb: 0, ring_ms: 3 }
         );
         assert_eq!(panel_cur().driver.clock_hz(), 30_000_000);
         // …and a body that says nothing about the driver KEEPS the stored one
         let mut cur = panel_cur();
-        cur.driver = PanelDriver { planes: 4, clock_mhz: 12, chip: Chip::Icn2038s, blank: 3, lsb: 0 };
+        cur.driver = PanelDriver { planes: 4, clock_mhz: 12, chip: Chip::Icn2038s, blank: 3, lsb: 0, ring_ms: 3 };
         let e = parse("matrix 64 64 1 1 tl row 0 0", &cur, 4096, &panel_limits()).unwrap();
         assert!(!e.driver_set, "the body said nothing about it");
         assert_eq!(e.layout.driver, cur.driver, "merge, not reset");
@@ -1972,7 +2014,7 @@ mod tests {
     #[test]
     fn a_bad_panel_line_names_the_field_it_rejected() {
         let cur = panel_cur();
-        let cases: [(&str, &str); 13] = [
+        let cases: [(&str, &str); 15] = [
             ("panel 3 30 shiftreg 1", "planes"),
             ("panel 9 30 shiftreg 1", "planes"),
             ("panel 7 1 shiftreg 1", "clock_mhz"),
@@ -1987,6 +2029,8 @@ mod tests {
             ("panel 7 30 fm6124 1", "chip"),
             ("panel 7 30 shiftreg 9", "blank"),
             ("panel 7 30 shiftreg 1 70000", "lsb"),
+            ("panel 7 30 shiftreg 1 0 0", "ring_ms"),
+            ("panel 7 30 shiftreg 1 0 51", "ring_ms"),
             ("panel 7 30 shiftreg", "expected"),
             ("panel", "expected"),
             ("panel x 30 shiftreg 1", "expected"),
@@ -2100,7 +2144,7 @@ mod tests {
         let e = parse("panel 7 30 shiftreg 1 30", &cur, 4096, &panel_limits()).unwrap();
         assert_eq!(
             e.layout.driver,
-            PanelDriver { planes: 7, clock_mhz: 30, chip: Chip::ShiftReg, blank: 1, lsb: 30 }
+            PanelDriver { planes: 7, clock_mhz: 30, chip: Chip::ShiftReg, blank: 1, lsb: 30, ring_ms: 3 }
         );
         assert!(e.reboot_required, "the descriptor chain is built at boot");
         // the predicate a firmware asks outside a POST agrees
@@ -2125,6 +2169,37 @@ mod tests {
         l.driver.lsb = 30;
         let wire = l.to_wire(4096, &proto_name);
         assert!(wire.contains("\npanel 7 30 shiftreg 1 30"), "{wire}");
+        let load = Limits { strict: false, ..panel_limits() };
+        assert_eq!(parse(&wire, &panel_cur(), 4096, &load).unwrap().layout, l);
+    }
+
+    #[test]
+    fn the_ring_ms_field_is_optional_and_boot_required() {
+        let cur = panel_cur();
+        // a FIVE-field line — every `panel` line written before #857 — keeps
+        // the default slack, 3 ms
+        let e = parse("panel 7 30 shiftreg 1 0", &cur, 4096, &panel_limits()).unwrap();
+        assert_eq!(e.layout.driver.ring_ms, 3, "absent = the default slack");
+        assert!(!e.reboot_required, "…and it restates the stored default");
+        // …and the field is read when it IS there
+        let e = parse("panel 7 30 shiftreg 1 0 10", &cur, 4096, &panel_limits()).unwrap();
+        assert_eq!(e.layout.driver.ring_ms, 10);
+        assert!(e.reboot_required, "the ring is allocated at boot");
+        let d = PanelDriver::default();
+        assert!(d.boot_differs(&PanelDriver { ring_ms: 1, ..d }));
+        assert!(!d.boot_differs(&PanelDriver { ring_ms: 3, ..d }));
+        for body in ["panel 7 30 shiftreg 1 0 1", "panel 7 30 shiftreg 1 0 50"] {
+            assert!(parse(body, &cur, 4096, &panel_limits()).is_ok(), "body {body:?}");
+        }
+        for body in ["panel 7 30 shiftreg 1 0 0", "panel 7 30 shiftreg 1 0 51", "panel 7 30 shiftreg 1 0 x"] {
+            let e = parse(body, &cur, 4096, &panel_limits()).unwrap_err();
+            assert_eq!(e.msg, "panel: ring_ms must be 1..50", "body {body:?}");
+        }
+        // a configured slack survives the persist/reload round trip
+        let mut l = panel_cur();
+        l.driver.ring_ms = 10;
+        let wire = l.to_wire(4096, &proto_name);
+        assert!(wire.contains("\npanel 7 30 shiftreg 1 0 10"), "{wire}");
         let load = Limits { strict: false, ..panel_limits() };
         assert_eq!(parse(&wire, &panel_cur(), 4096, &load).unwrap().layout, l);
     }
@@ -2206,7 +2281,7 @@ mod tests {
     #[test]
     fn the_driver_block_reports_configured_chips_and_live() {
         let mut l = panel_cur();
-        l.driver = PanelDriver { planes: 6, clock_mhz: 20, chip: Chip::Fm6126a, blank: 2, lsb: 0 };
+        l.driver = PanelDriver { planes: 6, clock_mhz: 20, chip: Chip::Fm6126a, blank: 2, lsb: 0, ring_ms: 3 };
         let mut v = view(&l, 4096, "null");
         v.panel = Some(PanelView { est_hz: 57, drive: 1, driver_live: None });
         let mut s = String::new();
@@ -2214,7 +2289,7 @@ mod tests {
         assert!(
             s.contains(
                 "\"driver\":{\"planes\":6,\"clock_mhz\":20,\"chip\":\"fm6126a\",\"blank\":2,\
-                 \"lsb\":0,\
+                 \"lsb\":0,\"ring_ms\":3,\
                  \"chips\":[\"shiftreg\",\"fm6126a\",\"icn2038s\",\"dp3246\"],\
                  \"clocks\":[8,10,12,15,20,24,30],\"live\":null}"
             ),
@@ -2236,6 +2311,9 @@ mod tests {
                 scan: 32,
                 fb_bytes: 28672,
                 fallback: true,
+                ring_ms: 3,
+                ring_rows: 9,
+                ring_slack_us: 2870,
             }),
         });
         let mut s = String::new();
@@ -2243,8 +2321,9 @@ mod tests {
         assert!(
             s.contains(
                 "\"live\":{\"planes\":7,\"clock_mhz\":30,\"chip\":\"shiftreg\",\"blank\":1,\
-                 \"lsb\":61,\
-                 \"w\":64,\"h\":64,\"scan\":32,\"fb_bytes\":28672,\"fallback\":true}}"
+                 \"lsb\":61,\"ring_ms\":3,\
+                 \"w\":64,\"h\":64,\"scan\":32,\"fb_bytes\":28672,\
+                 \"ring_rows\":9,\"ring_slack_us\":2870,\"fallback\":true}}"
             ),
             "{s}"
         );

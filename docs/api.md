@@ -285,6 +285,20 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   chase's cost (including the waits), `plane_us` the typical single-plane
   copy (an EWMA) and `plane_us_max` the slowest ever seen — a value far
   above `copy_us` is a pre-emption, not a copy.
+- `pass.ring` — present only on a `hub75-ring` build (Gitea #857): the ring
+  driver's own counters. `rows` and `slack_us` are what the `panel` line's
+  `ring_ms` resolved to for this schedule and chain width (the ring is sized
+  in time). **`late` is the honesty counter**: claims the packer gave up on
+  because the beam would have reached the slot before the pack finished —
+  that slot then shows the row it already held, at that row's own address,
+  never a mixed one (design §7). `packed_core0` / `packed_core1` say which
+  core packed how many row pairs (`packed_core1` is 0 until the core-1
+  steal); `idle` counts the turns on which nothing was fillable (the ring was
+  full — healthy); `pack_us` / `pack_us_max` the typical and worst row-pair
+  pack; `blanked` and `backoffs` belong to the flash-write policy (#852) and
+  read 0 until it lands. Read `late` over a minute: 0 is the claim; a
+  climbing `late` at a given `lsb` step means the packer cannot keep up and
+  the step is too aggressive for one core.
 - `rescan_hz` — how many times a second the HUB75 panel is really redrawn
   from the framebuffer, read from the driver's own BCM frame counter. `0` on
   every board without a panel. This is the panel's clock **and** the render
@@ -1270,14 +1284,15 @@ one; the fifth is the refresh-multiplier schedule added by #789, whose
 brightness model #797 corrected:
 
 ```text
-panel <planes> <clock_mhz> <chip> <blank> [<lsb>]
+panel <planes> <clock_mhz> <chip> <blank> [<lsb>] [<ring_ms>]
 ```
 
-The fifth field is **optional**: a four-field line — every `panel` line written
-before #789, and every stored Layout from before it — means `lsb 0`, the full
-on-time, which is what those panels have always run. A client that writes the
-line should nevertheless always spell it, or editing any other field on the
-card silently resets the trade.
+The fifth and sixth fields are **optional**: a four-field line — every `panel`
+line written before #789, and every stored Layout from before it — means
+`lsb 0`, the full on-time, which is what those panels have always run, and a
+line without the sixth (everything before #857) means `ring_ms 3`. A client
+that writes the line should nevertheless always spell both, or editing any
+other field on the card silently resets them.
 
 | field | range | default | meaning |
 |---|---|---|---|
@@ -1285,6 +1300,7 @@ card silently resets the trade.
 | `clock_mhz` | one of **8 · 10 · 12 · 15 · 20 · 24 · 30** | 30 | The LCD_CAM pixel clock — a fixed list, not a range (Gitea #771). Anything else is refused with `panel: clock_mhz must be one of 8\|10\|12\|15\|20\|24\|30`. Offer it as a dropdown over `driver.clocks`, never a number field. |
 | `chip` | `shiftreg` · `fm6126a` · `icn2038s` · `dp3246` | `shiftreg` | The driver chip's init, bit-banged before the DMA starts. `shiftreg` covers FM6124, SM16208, ICN2037 and every other plain shift register — no init at all. `fm6126a` and `icn2038s` share a two-register init; `dp3246` has its own, and holds the latch for the last **3** clocks of every row instead of 1. |
 | `blank` | 0..8 | 1 | Clocks at the start of every row block, and again just before the latch word, where OE is off. `1` is the stock template; raising it trades a little brightness for less ghosting between address rows. **The one field here that applies LIVE** — see below. |
+| `ring_ms` | 1..50 | 3 | Milliseconds of slack the **ring driver** (`hub75-ring`, Gitea #857) sizes its slot ring for — how far the beam may run ahead of the packer before a row pair is late. Sized in time, not rows: `live.ring_rows` reports what it resolved to for this schedule and chain width. Ignored by the two-buffer driver. Boot-built like `planes`. |
 | `lsb` | 0..65535 | 0 | On-time of the LEAST significant bitplane, in pixel clocks — the refresh multiplier (Gitea #460 / #789 / #797). **`0` = full**, the stock BCM schedule. A smaller value truncates the low planes' OE and drops their descriptor repeats: the rescan STEPS up each time `lsb` crosses `W / 2^t`, and at the top of each step the panel keeps very nearly its stock brightness. Clamped to the lit width `W` at boot. Optional, and boot-built like `planes` — see below. |
 
 **`blank` applies live; the other three wait for a boot** (Gitea #778). It is
@@ -1415,12 +1431,14 @@ The five top-level values are the **configured** (stored) driver; `chips` and
 | `live.lsb` | the **effective** on-time, never 0: the configured `lsb` clamped to the running template's lit width `W`, or `W` itself when the configured value is 0 (full). Compare it against the configured value passed through the same clamp, never against the raw number. Absent on a build older than #789 |
 | `live.w` / `live.h` | the framebuffer's chain extent in pixels — `w` = `pw` × chain length, `h` = `ph` |
 | `live.scan` | address rows the driver scans |
-| `live.fb_bytes` | bytes of ONE framebuffer (there are two, double-buffered). `blocks · cols_words · planes · 2`, so a truncating `lsb` adds the trailing block's share — 29,568 B rather than 28,672 on the bench 64×64 (#795) |
+| `live.fb_bytes` | bytes of ONE framebuffer (there are two, double-buffered). `blocks · cols_words · planes · 2`, so a truncating `lsb` adds the trailing block's share — 29,568 B rather than 28,672 on the bench 64×64 (#795). On the ring driver: the bytes of the whole slot ring |
+| `live.ring_ms` | the slack the RUNNING driver booted with (Gitea #857); compare the configured `ring_ms` against it. Absent on a build older than #857 |
+| `live.ring_rows` / `live.ring_slack_us` | the ring driver's resolved shape: slots in the ring and the slack they buy in microseconds. **0 / 0 on the two-buffer driver** — the way to tell which driver is running |
 | `live.fallback` | `true` = the configured geometry/driver did not fit in internal RAM and the firmware booted the **board default** instead (64×64, 7 planes, 30 MHz, `shiftreg`, `blank 1`). Say so, and point at `planes` and the panel size. |
 | `"live":null` | there is no panel output at all — the framebuffer allocation or the LCD_CAM init failed even at the board default |
 
 **Configured against live is the reboot indicator.** Any of `planes`
-`clock_mhz` `chip` differing from its `live` twin, the configured `lsb`
+`clock_mhz` `chip` `ring_ms` differing from its `live` twin, the configured `lsb`
 (clamped as above) differing from `live.lsb`, or `matrix`
 `pw`/`ph`/chain/`scan` differing from `live.w`/`live.h`/`live.scan`, means a
 reboot is pending — the same answer the POST already gave. **`blank` is not in
@@ -1525,8 +1543,9 @@ carry through a boot. Two guards, and they answer different questions.
 **Refused at POST time — the panel side.** On a HUB75 board,
 `POST /api/layout` predicts what the requested arrangement would take out of
 internal SRAM at boot: both bitplane framebuffers (or the single buffer plus a
-spare plane under `hub75-spare-plane`), the DMA descriptor rings, the packer
-tables and its row pads (`luxel_hub75::boot_cost`). It weighs that against the
+spare plane under `hub75-spare-plane`, or — under `hub75-ring` — the slot ring
+`ring_ms` resolves to and its one descriptor chain), the DMA descriptor rings,
+the packer tables and its row pads (`luxel_hub75::boot_cost`). It weighs that against the
 free heap **this** boot measured at the top of the panel bring-up, before a
 single panel byte was allocated — so the answer is about the board in front of
 you, not a table. If the remainder is under the firmware's boot floor the body
@@ -1537,7 +1556,8 @@ is refused and nothing is stored:
 ```
 
 The way out is fewer bit planes, a smaller panel, or fewer panels — all three
-scale the framebuffers linearly. The check only runs when the `matrix` or
+scale the framebuffers linearly. On the ring driver almost nothing scales with
+the wall; the lever there is a smaller `ring_ms`. The check only runs when the `matrix` or
 `panel` inputs actually move, so re-posting an unchanged arrangement is never
 refused by a floor the running configuration already sits under.
 

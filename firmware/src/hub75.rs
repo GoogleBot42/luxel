@@ -123,7 +123,7 @@ pub const DEFAULT_PANEL_H: u16 = 64;
 
 /// HUB75 drives two half-height rows at once through R1G1B1/R2G2B2 and has
 /// five address lines (A..E), so no arrangement can scan deeper than this.
-const MAX_SCAN: usize = 32;
+pub(crate) const MAX_SCAN: usize = 32;
 
 /// Heap that must still be free once the panel's buffers are allocated, or
 /// the boot falls back to the board default (Gitea #768).
@@ -141,7 +141,7 @@ const MAX_SCAN: usize = 32;
 /// sits between the two: WiFi's 75 KB plus `RUNTIME_FLOOR` (20 KB) with a
 /// little slack, and no engine at all — the self-heal
 /// (`crate::layout::heal_if_starved`) is what judges the engine's share.
-const BOOT_HEAP_FLOOR: usize = 100 * 1024;
+pub(crate) const BOOT_HEAP_FLOOR: usize = 100 * 1024;
 
 /// Free internal heap at the very top of the FIRST [`Hub75Output::try_boot`]
 /// attempt — before a single panel byte is allocated (Gitea #822).
@@ -159,6 +159,13 @@ static BOOT_HEAP_BEFORE: AtomicU32 = AtomicU32::new(0);
 /// [`BOOT_HEAP_BEFORE`] — free internal heap before the panel was built.
 /// 0 = unknown (the panel has not booted), in which case nothing may be
 /// predicted from it.
+/// Record the heap as it stands before the panel allocates (first call wins).
+pub(crate) fn note_heap_before_panel() {
+    if BOOT_HEAP_BEFORE.load(Ordering::Relaxed) == 0 {
+        BOOT_HEAP_BEFORE.store(esp_alloc::HEAP.free() as u32, Ordering::Relaxed);
+    }
+}
+
 pub fn heap_before_panel() -> usize {
     BOOT_HEAP_BEFORE.load(Ordering::Relaxed) as usize
 }
@@ -194,6 +201,18 @@ pub fn boot_cost(m: &Matrix, d: &PanelDriver) -> Option<usize> {
     let (buffers, spare_planes) = (1, 1);
     #[cfg(all(feature = "hub75-spare-plane", not(feature = "psram-arena")))]
     let (buffers, spare_planes) = (2, 1);
+    // The ring driver (Gitea #857): slots from `ring_ms`, one chain, the
+    // vector packer's pads; nothing else scales with the wall.
+    #[cfg(feature = "hub75-ring")]
+    let ring_slots = luxel_hub75::ring::slots_for_slack(
+        u32::from(d.ring_ms) * 1000,
+        &s,
+        g.cols,
+        d.clock_hz(),
+        g.rows,
+    ) as usize;
+    #[cfg(not(feature = "hub75-ring"))]
+    let ring_slots = 0;
     Some(
         luxel_hub75::boot_cost(
             g.with_trail(s.needs_trail()),
@@ -201,9 +220,10 @@ pub fn boot_cost(m: &Matrix, d: &PanelDriver) -> Option<usize> {
             &luxel_hub75::BootAlloc {
                 buffers,
                 spare_planes,
-                rings: esp_hub75::DESCRIPTOR_RINGS,
+                rings: if ring_slots > 0 { 1 } else { esp_hub75::DESCRIPTOR_RINGS },
                 desc_bytes: core::mem::size_of::<DmaDescriptor>(),
                 max_chunk: esp_hub75::max_dma_chunk_size(),
+                ring_slots,
             },
         )
         .total(),
@@ -219,14 +239,14 @@ pub fn board_default_matrix() -> Matrix {
 /// What the running DMA was actually built with (#525) — the `live` half of
 /// `GET /api/layout`'s `driver` block. Written once, at boot, before the HTTP
 /// server exists; `None` = no panel output at all.
-static LIVE: BlockingMutex<CriticalSectionRawMutex, Cell<Option<LiveDriver>>> =
+pub(crate) static LIVE: BlockingMutex<CriticalSectionRawMutex, Cell<Option<LiveDriver>>> =
     BlockingMutex::new(Cell::new(None));
 
 /// The live scan depth, duplicated out of [`LIVE`] as a plain atomic because
 /// the power model reads it on the per-frame path (`crate::power_model`) and a
 /// critical section there would be paid 100+ times a second for a value that
 /// never changes after boot. 0 = no panel output.
-static LIVE_SCAN: AtomicU16 = AtomicU16::new(0);
+pub(crate) static LIVE_SCAN: AtomicU16 = AtomicU16::new(0);
 
 /// The live framebuffer's row block in bus words — [`Geometry::cols`] of the
 /// running DMA, i.e. `pw · panels · stripes`. 0 = no panel output.
@@ -234,7 +254,7 @@ static LIVE_SCAN: AtomicU16 = AtomicU16::new(0);
 /// Kept beside [`LIVE_SCAN`] rather than derived from [`LIVE`]'s `w`/`h`/`scan`
 /// because it is what bounds the latch-blanking window, and re-deriving the
 /// stripe count in a second place is exactly how the two would drift.
-static LIVE_COLS: AtomicU16 = AtomicU16::new(0);
+pub(crate) static LIVE_COLS: AtomicU16 = AtomicU16::new(0);
 
 /// The latch blanking the stored Layout wants — the ONE panel field that
 /// applies without a reboot (Gitea #778).
@@ -249,11 +269,11 @@ static LIVE_COLS: AtomicU16 = AtomicU16::new(0);
 ///
 /// [`BLANK_NONE`] until the driver boots, so a strip board and a pre-boot
 /// POST cost nothing.
-static WANT_BLANK: AtomicU8 = AtomicU8::new(BLANK_NONE);
+pub(crate) static WANT_BLANK: AtomicU8 = AtomicU8::new(BLANK_NONE);
 
 /// [`WANT_BLANK`]: nothing has asked for a blanking yet. Outside the 0..=8
 /// the parser accepts, so it can never be mistaken for one.
-const BLANK_NONE: u8 = u8::MAX;
+pub(crate) const BLANK_NONE: u8 = u8::MAX;
 
 /// LCD_CAM pixel-clock rate — the `clock_mhz` setting of the `panel` line.
 ///
@@ -295,12 +315,12 @@ const BLANK_NONE: u8 = u8::MAX;
 /// render-bound, not rescan-bound; fps was identical at all three rates).
 /// What it buys is headroom: 8 bitplanes become usable (~58 Hz rather than
 /// ~38), and chained panels get the bandwidth they need (#255).
-fn clock_rate(d: &PanelDriver) -> Rate {
+pub(crate) fn clock_rate(d: &PanelDriver) -> Rate {
     Rate::from_mhz(u32::from(d.clock_mhz))
 }
 
 /// The control template the stored driver implies.
-fn control_of(d: &PanelDriver) -> Control {
+pub(crate) fn control_of(d: &PanelDriver) -> Control {
     Control { blank: d.blank, latch_clocks: d.latch_clocks() }
 }
 
@@ -308,7 +328,7 @@ fn control_of(d: &PanelDriver) -> Control {
 /// the brighter ↔ faster trade (Gitea #460 / #789): its `lsb` clamped to the
 /// row block's lit width, and from that how many low planes are emitted once
 /// with OE cut early instead of `2^k` times. `lsb 0` is the stock schedule.
-fn schedule_of(g: Geometry, d: &PanelDriver) -> Schedule {
+pub(crate) fn schedule_of(g: Geometry, d: &PanelDriver) -> Schedule {
     Schedule::plan(g, control_of(d), d.lsb)
 }
 
@@ -319,15 +339,15 @@ fn schedule_of(g: Geometry, d: &PanelDriver) -> Schedule {
 /// heap before the fallback attempt runs, or the fallback is asked to fit a
 /// smaller panel into a heap the bigger one is still holding — so ownership,
 /// not `leak()` at the allocation site.
-struct Block {
-    ptr: *mut u8,
+pub(crate) struct Block {
+    pub(crate) ptr: *mut u8,
     layout: AllocLayout,
 }
 
 impl Block {
     /// Zeroed, from the GLOBAL heap — internal SRAM on every board here, and
     /// that is a requirement, not a preference: the DMA reads it.
-    fn zeroed(layout: AllocLayout) -> Option<Self> {
+    pub(crate) fn zeroed(layout: AllocLayout) -> Option<Self> {
         if layout.size() == 0 {
             return None;
         }
@@ -341,7 +361,7 @@ impl Block {
     }
 
     /// Give the block up to `'static`. Nothing frees it after this.
-    fn leak(self) -> *mut u8 {
+    pub(crate) fn leak(self) -> *mut u8 {
         let p = self.ptr;
         core::mem::forget(self);
         p
@@ -517,7 +537,7 @@ fn template_lights(words: &[u16], g: Geometry, c: Control) -> bool {
 /// PIE packer reads, Gitea #855). `Tables::zeroed()` is
 /// all-zero bytes, so a zeroed block is a valid value without a 2 KiB stack
 /// temporary.
-fn alloc_tables() -> Option<(Block, &'static mut Tables)> {
+pub(crate) fn alloc_tables() -> Option<(Block, &'static mut Tables)> {
     let layout = AllocLayout::new::<Tables>();
     let block = Block::zeroed(layout)?;
     let p = block.ptr.cast::<Tables>();
@@ -724,7 +744,7 @@ type DmaFb = DynFb;
 /// spare-plane staging buffer this goes through the allocator rather than
 /// `psram::alloc_bulk_zeroed`, because an identity table has to be handed
 /// BACK, and `ArrVec`'s `Drop` does that through the same hook.
-fn build_remap(m: &Matrix, g: Geometry) -> Option<&'static [u16]> {
+pub(crate) fn build_remap(m: &Matrix, g: Geometry) -> Option<&'static [u16]> {
     let stripes = arrange::stripes(m);
     let (fb_w, fb_h) = (g.cols / stripes, 2 * g.rows * stripes);
     // Fallible, then infallibly filled: a reserve that fails is a `None`, and
@@ -839,7 +859,7 @@ pub(crate) fn brightness_lut(brightness5: u8) -> [u8; 256] {
 /// only ~0.1 ms for a 64-wide chain's 194 clocks, once, at boot.
 ///
 /// Returns the number of clocks emitted.
-fn chip_init(pins: &mut Hub75Pins16<'static>, chip: Chip, cols: usize) -> usize {
+pub(crate) fn chip_init(pins: &mut Hub75Pins16<'static>, chip: Chip, cols: usize) -> usize {
     use esp_hal::delay::Delay;
     use esp_hal::gpio::{Level, Output, OutputConfig};
 
@@ -1028,6 +1048,13 @@ impl Hub75Output {
     /// compares `rescan_hz` against (Gitea #460 / #789). The brightness is
     /// relative to the stock schedule, on-time per unit time.
     fn print_schedule(s: &Schedule, g: Geometry, d: &PanelDriver) {
+        print_schedule(s, g, d);
+    }
+}
+
+/// The boot line for the emission schedule — shared with the ring driver.
+pub(crate) fn print_schedule(s: &Schedule, g: Geometry, d: &PanelDriver) {
+    {
         println!(
             "hub75: lsb {} of {} lit clocks, {} low plane{} truncated, \
              {} row shifts/pass (stock {}), est {} Hz at {}.{}% of stock brightness",
@@ -1042,7 +1069,9 @@ impl Hub75Output {
             s.brightness_permille_at(g) % 10,
         );
     }
+}
 
+impl Hub75Output {
     /// One boot attempt at `(m, d)`.
     ///
     /// Nothing is running on `Err`, and — for every failure up to and
@@ -1065,9 +1094,7 @@ impl Hub75Output {
         // the panel with is what `POST /api/layout` predicts against later.
         // load-then-store, not a CAS — rv32imc has no atomic RMW and this runs
         // once, on the main task, before any other core is awake.
-        if BOOT_HEAP_BEFORE.load(Ordering::Relaxed) == 0 {
-            BOOT_HEAP_BEFORE.store(esp_alloc::HEAP.free() as u32, Ordering::Relaxed);
-        }
+        note_heap_before_panel();
         let Some(g) = arrange::fb_geometry(&m, usize::from(d.planes)) else {
             return Err("the arrangement has no framebuffer (odd ph, or scan does not divide ph/2)");
         };
@@ -1283,6 +1310,9 @@ impl Hub75Output {
                     scan: g.rows as u16,
                     fb_bytes: live_bytes as u32,
                     fallback,
+                    ring_ms: d.ring_ms,
+                    ring_rows: 0,
+                    ring_slack_us: 0,
                 };
                 LIVE.lock(|c| c.set(Some(live)));
                 LIVE_SCAN.store(g.rows as u16, Ordering::Relaxed);

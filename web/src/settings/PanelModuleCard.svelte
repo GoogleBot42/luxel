@@ -4,9 +4,10 @@
   // what the refresh rate is spent on.
   //
   // Since Gitea #401/#525 these are SETTINGS: `/api/layout` reports a
-  // `driver` block and takes one `panel <planes> <clock_mhz> <chip> <blank>`
-  // line back, which the firmware stores and applies — at the next boot for
-  // three of the four, and on its NEXT FRAME for latch blanking (#778). So
+  // `driver` block and takes one
+  // `panel <planes> <clock_mhz> <chip> <blank> <lsb> <ring_ms>` line back,
+  // which the firmware stores and applies — at the next boot for all of them
+  // but latch blanking, which applies on the NEXT FRAME (#778). So
   // every field here writes through the same `applyLayout` path the LED layout
   // form uses, adopts the reply as the new state, and lets the DEVICE's
   // `reboot_required` decide whether the sticky reboot bar is raised
@@ -38,6 +39,7 @@
     chipLabel,
     CLOCK_CEILING_MHZ,
     clampBlank,
+    clampRingMs,
     clockChoices,
     clockSupported,
     configuredDriver,
@@ -50,6 +52,8 @@
     panelLine,
     phrase,
     PLANE_CHOICES,
+    RING_MS_MAX,
+    RING_MS_MIN,
     scanOptions,
     scanShown,
     scanWire,
@@ -95,6 +99,14 @@
   $: scans = scanOptions(ph, scan);
   $: scanNow = scanShown(ph, scan);
   $: fbKb = driver?.live ? (driver.live.fb_bytes / 1024).toFixed(1) : "";
+  /** The running driver's slot ring, for the verdict line — `""` on the
+   *  two-buffer driver, which reports `ring_rows` 0 because it has no ring, and
+   *  on firmware older than Gitea #857, which reports none at all. Both are an
+   *  absence, and neither is worth a phrase. */
+  $: ringRead =
+    driver?.live && typeof driver.live.ring_rows === "number" && driver.live.ring_rows > 0
+      ? `ring ${driver.live.ring_rows} rows, ${driver.live.ring_slack_us ?? 0} µs slack`
+      : "";
 
   /** The control's POSITIONS: one per truncation step, brightest (`×1`, the
    *  stock schedule) first — `lsbSteps`. Empty while the Layout is not a
@@ -321,6 +333,35 @@
     </div>
   {/if}
 
+  <!-- Ring slack (Gitea #857). The ring driver packs into a RING of row slots
+       and lets the beam run ahead of the packer; this is how far ahead, in
+       milliseconds, and therefore how many slots get allocated. It is a boot
+       field for exactly that reason, and the two-buffer driver — which has no
+       ring — ignores it, which is why the live readout in the verdict below is
+       the only place its effect is visible. -->
+  <div class="field top">
+    <span class="flabel">Ring slack (ms)</span>
+    <div class="fctl">
+      <div class="row g10">
+        <input
+          class="inp num"
+          data-role="panel-ring-ms"
+          type="number"
+          min={RING_MS_MIN}
+          max={RING_MS_MAX}
+          step="1"
+          value={cfg.ring_ms}
+          on:change={(e) => void set({ ring_ms: clampRingMs(Number(e.currentTarget.value)) })}
+        />
+        <span class="dim hint">milliseconds of packed rows the ring holds</span>
+      </div>
+      <p class="dim hint under">
+        How far the beam may run ahead of the packer on the ring driver (the two-buffer driver
+        ignores it) — the ring is allocated at boot, so a change here needs a reboot.
+      </p>
+    </div>
+  </div>
+
   <div class="field top">
     <span class="flabel">Latch blanking</span>
     <div class="fctl">
@@ -358,15 +399,16 @@
     {:else if state.status === "fallback"}
       <strong>Not applied — the configured driver did not fit.</strong>
       The board booted its own default instead: {state.live}. One framebuffer holds every bit plane
-      and is {fbKb} KB of internal RAM here, so lower the bit planes above — or the panel size in
-      LED layout — and reboot again.
+      and is {fbKb} KB of internal RAM here{#if ringRead} ({ringRead}){/if}, so lower the bit
+      planes above — or the panel size in LED layout — and reboot again.
     {:else if state.status === "pending"}
       <strong>Reboot to apply.</strong>
       Stored, but the panel is still running {state.live} — the framebuffer and the LCD_CAM clock are
       built at boot. Waiting on {phrase(state.changed)}.
     {:else}
-      Running exactly what is set here: {state.live}. Its framebuffer is {fbKb} KB. Frames the panel
-      actually displayed: {$deviceOutFps} fps.
+      Running exactly what is set here: {state.live}. Its framebuffer is {fbKb} KB{#if ringRead},
+      <span data-role="panel-ring">{ringRead}</span>{/if}. Frames the panel actually displayed:
+      {$deviceOutFps} fps.
     {/if}
   </p>
 

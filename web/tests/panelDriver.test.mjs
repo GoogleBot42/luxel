@@ -35,6 +35,7 @@ import {
   CLOCK_CEILING_MHZ,
   CLOCK_CHOICES_DEFAULT,
   clampBlank,
+  clampRingMs,
   clockChoices,
   clockSupported,
   configuredDriver,
@@ -50,6 +51,9 @@ import {
   phrase,
   PLANE_CHOICES,
   refreshDriver,
+  RING_MS_DEFAULT,
+  RING_MS_MAX,
+  RING_MS_MIN,
   scanOptions,
   scanShown,
   scanWire,
@@ -69,6 +73,10 @@ const LIVE = {
   // one latch clock and two blanking clocks is W = 61, and a configured 0 means
   // full, so a healthy default panel reports 61 (Gitea #789)
   lsb: 61,
+  // the slack the running driver booted its slot ring for (Gitea #857); the
+  // live-only `ring_rows` / `ring_slack_us` are added per case, because a
+  // two-buffer driver reports 0 for both and older firmware reports neither
+  ring_ms: 3,
   w: 64,
   h: 64,
   scan: 32,
@@ -104,6 +112,7 @@ const block = (over = {}, live = LIVE) => ({
   chip: "shiftreg",
   blank: 1,
   lsb: LSB_FULL,
+  ring_ms: RING_MS_DEFAULT,
   chips: CHIPS,
   clocks: CLOCKS,
   live,
@@ -128,6 +137,7 @@ test("no driver block: the ESTIMATE falls back to this build's constants", () =>
   assert.equal(PANEL_DRIVER_LINE_DEFAULT.chip, "shiftreg");
   assert.equal(PANEL_DRIVER_LINE_DEFAULT.blank, 1);
   assert.equal(PANEL_DRIVER_LINE_DEFAULT.lsb, LSB_FULL, "full on-time = the stock schedule");
+  assert.equal(PANEL_DRIVER_LINE_DEFAULT.ring_ms, RING_MS_DEFAULT, "the ring driver's slack");
 });
 
 test("no driver block: there is no live reading to disagree with", () => {
@@ -140,22 +150,30 @@ test("no driver block: there is no live reading to disagree with", () => {
 // ---- the wire line the form writes ---------------------------------------
 
 test("every edit is one `panel` line, in wire order", () => {
-  assert.equal(panelLine(PANEL_DRIVER_LINE_DEFAULT), "panel 7 30 shiftreg 1 0");
+  assert.equal(panelLine(PANEL_DRIVER_LINE_DEFAULT), "panel 7 30 shiftreg 1 0 3");
   assert.equal(
-    panelLine({ planes: 6, clock_mhz: 20, chip: "fm6126a", blank: 2, lsb: LSB_FULL }),
-    "panel 6 20 fm6126a 2 0",
+    panelLine({
+      planes: 6,
+      clock_mhz: 20,
+      chip: "fm6126a",
+      blank: 2,
+      lsb: LSB_FULL,
+      ring_ms: RING_MS_DEFAULT,
+    }),
+    "panel 6 20 fm6126a 2 0 3",
   );
-  // the fifth field is OPTIONAL on the wire but always written (#789): a
-  // four-field line reads as `lsb 0`, which would silently reset the trade
-  // whenever any other field on the card is edited
+  // the fifth and sixth fields are OPTIONAL on the wire but always written
+  // (#789, #857): a short line reads as `lsb 0` and the default ring slack,
+  // which would silently reset the refresh trade or the ring whenever any
+  // other field on the card is edited
   assert.equal(
-    panelLine({ planes: 7, clock_mhz: 30, chip: "shiftreg", blank: 1, lsb: 30 }),
-    "panel 7 30 shiftreg 1 30",
+    panelLine({ planes: 7, clock_mhz: 30, chip: "shiftreg", blank: 1, lsb: 30, ring_ms: 8 }),
+    "panel 7 30 shiftreg 1 30 8",
   );
   // the card patches the CONFIGURED record, so an untouched field is resent
   // as-is rather than as a default
   const cfg = configuredDriver(wire(block({ planes: 8, clock_mhz: 24, chip: "dp3246", blank: 3 })));
-  assert.equal(panelLine({ ...cfg, planes: 6 }), "panel 6 24 dp3246 3 0");
+  assert.equal(panelLine({ ...cfg, planes: 6 }), "panel 6 24 dp3246 3 0 3");
 });
 
 test("the form cannot post a clock or a blanking the firmware would refuse", () => {
@@ -163,6 +181,13 @@ test("the form cannot post a clock or a blanking the firmware would refuse", () 
   assert.equal(clampBlank(12), BLANK_MAX);
   assert.equal(clampBlank(2), 2);
   assert.deepEqual([...PLANE_CHOICES], [4, 5, 6, 7, 8]);
+  // the ring slack's floor is 1, not 0 — a zero-slack ring is not a setting
+  assert.equal(clampRingMs(0), RING_MS_MIN);
+  assert.equal(clampRingMs(-4), RING_MS_MIN);
+  assert.equal(clampRingMs(Number.NaN), RING_MS_MIN);
+  assert.equal(clampRingMs(999), RING_MS_MAX);
+  assert.equal(clampRingMs(7), 7);
+  assert.equal(clampRingMs(3.4), 3);
 });
 
 // ---- the pixel clock is a LIST, not a number field (Gitea #771) -----------
@@ -232,6 +257,8 @@ test("each BOOT-BUILT value on its own raises reboot-to-apply", () => {
     [{ planes: 6 }, "bit planes"],
     [{ clock_mhz: 20 }, "the pixel clock"],
     [{ chip: "fm6126a" }, "the driver chip"],
+    // the slot ring is allocated once, at boot (#857)
+    [{ ring_ms: 8 }, "ring slack"],
   ];
   for (const [over, want] of cases) {
     const w = wire(block(over));
@@ -946,6 +973,68 @@ test("the on-time is a BOOT field, compared as EFFECTIVE values", () => {
   const legacy = wire({ ...older, live: olderLive });
   assert.equal(panelDriverState(driverWire(legacy), panelGeometryOf(legacy)).status, "live");
   assert.equal(configuredDriver(legacy).lsb, LSB_FULL, "no field reads as full");
+});
+
+// ---- ring slack (Gitea #857) --------------------------------------------
+//
+// The sixth `panel` field: how far the beam may run ahead of the packer, which
+// is what the ring driver sizes its slot ring for. It is boot-built like the
+// bit depth, so it is compared — but only against a `live` block that CARRIES
+// it. The two-buffer driver has no ring, older firmware reports nothing about
+// one, and this console's own default would otherwise read as a setting such a
+// device is perpetually failing to run (the #789 phantom, one field along).
+
+test("ring slack is a BOOT field, so a stored change waits for a reboot", () => {
+  const pend = wire(block({ ring_ms: 12 }));
+  const s = panelDriverState(driverWire(pend), panelGeometryOf(pend));
+  assert.equal(s.status, "pending");
+  assert.deepEqual(s.changed, ["ring slack"]);
+  // once it has rebooted into it
+  const applied = wire(block({ ring_ms: 12 }, { ...LIVE, ring_ms: 12 }));
+  const s2 = panelDriverState(driverWire(applied), panelGeometryOf(applied));
+  assert.equal(s2.status, "live");
+  assert.deepEqual(s2.changed, []);
+  // it reads after the on-time, in the card's own order, and masks nothing
+  const both = wire(block({ ring_ms: 12, lsb: 30, planes: 6 }));
+  assert.deepEqual(panelDriverState(driverWire(both), panelGeometryOf(both)).changed, [
+    "bit planes",
+    "the LSB on-time",
+    "ring slack",
+  ]);
+});
+
+test("firmware with no `ring_ms` in `live` raises no ring reboot at all", () => {
+  const { ring_ms: _live, ...olderLive } = LIVE;
+  const { ring_ms: _cfg, ...olderCfg } = block();
+  const older = wire({ ...olderCfg, live: olderLive });
+  const s = panelDriverState(driverWire(older), panelGeometryOf(older));
+  assert.equal(s.status, "live", "a two-buffer driver is not waiting on a ring");
+  assert.deepEqual(s.changed, []);
+  assert.equal(configuredDriver(older).ring_ms, RING_MS_DEFAULT, "no field reads as the default");
+  // …and not even a value STORED by a newer console raises it: there is no ring
+  // running, so there is nothing for it to disagree with
+  const stored = wire({ ...olderCfg, ring_ms: 12, live: olderLive });
+  assert.equal(panelDriverState(driverWire(stored), panelGeometryOf(stored)).status, "live");
+});
+
+test("the live phrase names the ring only when there IS one", () => {
+  // older firmware: neither field, so nothing to say
+  assert.ok(!liveSummary(LIVE).includes("ring"), liveSummary(LIVE));
+  // the two-buffer driver: 0 slots is an absence, not a reading
+  const two = { ...LIVE, ring_rows: 0, ring_slack_us: 0 };
+  assert.ok(!liveSummary(two).includes("ring"), liveSummary(two));
+  const w = wire(block({}, two));
+  assert.equal(
+    panelDriverState(driverWire(w), panelGeometryOf(w)).live,
+    "7 planes · 30 MHz · plain shift register · blanking 1 · 64×64 1/32",
+  );
+  // the ring driver: slots and the slack they bought, last in the phrase
+  assert.match(
+    liveSummary({ ...LIVE, ring_rows: 12, ring_slack_us: 3012 }),
+    /· ring 12 rows \/ 3012 µs$/,
+  );
+  // a ring whose slack the firmware does not report still reads honestly
+  assert.match(liveSummary({ ...LIVE, ring_rows: 4 }), /· ring 4 rows \/ 0 µs$/);
 });
 
 test("panelGeometryOf reads the chain, and only for a matrix", () => {

@@ -220,9 +220,10 @@ export interface DeviceMapStatus {
 }
 
 /** What the running firmware booted the HUB75 DMA with — never what is
- *  stored (Gitea #401/#525). The four driver values plus the framebuffer it
- *  built: `w`/`h` are the chain's extent in pixels (`w = pw × chain`),
- *  `scan` the address rows, `fb_bytes` ONE framebuffer.
+ *  stored (Gitea #401/#525). The driver values plus the framebuffer it built:
+ *  `w`/`h` are the chain's extent in pixels (`w = pw × chain`), `scan` the
+ *  address rows, `fb_bytes` ONE framebuffer, and — on the ring driver
+ *  (Gitea #857) — the slot ring it sized.
  *
  *  `fallback: true` = the configured arrangement/driver did not fit in
  *  internal RAM and the board default is running instead. */
@@ -236,6 +237,18 @@ export interface LiveDriverWire {
    *  configured one is 0 (full). Absent on firmware built before Gitea #789,
    *  where the schedule is always the full one. */
   lsb?: number;
+  /** The ring slack the running driver BOOTED with, ms — the configured
+   *  `ring_ms` as it stood when the slot ring was sized. Absent on firmware
+   *  built before Gitea #857. */
+  ring_ms?: number;
+  /** Slots in the running driver's slot ring; `0` on the two-buffer driver,
+   *  which has no ring at all. Live-only — there is no configured counterpart
+   *  to compare it against. Absent before Gitea #857. */
+  ring_rows?: number;
+  /** How far the beam may run ahead of the packer at that ring size, µs — the
+   *  slack `ring_ms` actually bought. `0` on the two-buffer driver; absent
+   *  before Gitea #857. */
+  ring_slack_us?: number;
   w: number;
   h: number;
   scan: number;
@@ -243,11 +256,11 @@ export interface LiveDriverWire {
   fallback: boolean;
 }
 
-/** `/api/layout`'s `driver` block: the five CONFIGURED (stored) values, the
+/** `/api/layout`'s `driver` block: the six CONFIGURED (stored) values, the
  *  chip vocabulary this firmware understands, and `live` — the running
  *  driver, `null` when panel output is off (no framebuffer, or LCD_CAM
  *  refused even at the board default). Written back as one wire line,
- *  `panel <planes> <clock_mhz> <chip> <blank> <lsb>`. */
+ *  `panel <planes> <clock_mhz> <chip> <blank> <lsb> <ring_ms>`. */
 export interface PanelDriverWire {
   planes: number;
   clock_mhz: number;
@@ -258,6 +271,11 @@ export interface PanelDriverWire {
    *  field, and absent from the block on firmware built before it, where the
    *  schedule is always the full one. */
   lsb?: number;
+  /** CONFIGURED ring slack in milliseconds, 1..50 — the slack the ring driver
+   *  sizes its slot ring for (Gitea #857). The `panel` line's optional sixth
+   *  field, absent from the block on firmware built before it, where
+   *  `RING_MS_DEFAULT` stands in. A BOOT field, like `planes`. */
+  ring_ms?: number;
   /** In the order the firmware lists them; the card's select is built from
    *  THIS, never from a hard-coded list, so a build that grows a chip needs
    *  no browser change. */

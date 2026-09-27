@@ -4238,10 +4238,11 @@ try {
       );
 
       // ---- LED layout › Panel module is a FORM (Gitea #401/#525/#778) ----
-      // The four driver values are settings the host stores and applies — at
-      // boot for three of them, on the next FRAME for latch blanking (#778) —
-      // so each field POSTs one `panel <planes> <clock> <chip> <blank>` line
-      // and the reply is adopted. The scan rate rides the `matrix` line and is
+      // The driver values are settings the host stores and applies — at boot
+      // for all of them but latch blanking, which lands on the next FRAME
+      // (#778) — so each field POSTs one
+      // `panel <planes> <clock> <chip> <blank> <lsb> <ring_ms>` line and the
+      // reply is adopted. The scan rate rides the `matrix` line and is
       // in the same disclosure, because it is a property of the MODULE. The
       // mirror has no HUB75 hardware, so it synthesises a `driver.live` equal
       // to what is stored (the "in sync" reading); the pending / fallback /
@@ -4252,6 +4253,7 @@ try {
         (await hubPage.$eval('[data-role="panel-planes"]', (e) => e.tagName)) === "SELECT" &&
           (await hubPage.$('[data-role="panel-chip"]')) !== null &&
           (await hubPage.$('[data-role="panel-blank"]')) !== null &&
+          (await hubPage.$('[data-role="panel-ring-ms"]')) !== null &&
           (await hubPage.$('[data-role="layout-scan"]')) !== null,
       );
       // The scan field names the RATIOS, the way a module prints them, and
@@ -4308,14 +4310,16 @@ try {
         await sleep(900);
         const d = (await (await fetch(`${HUB}/api/layout`)).json()).driver;
         check(
-          "panel module: blanking posts the whole `panel` line — `panel 7 30 shiftreg 2 0`",
+          "panel module: blanking posts the whole `panel` line — `panel 7 30 shiftreg 2 0 3`",
           d.blank === 2 &&
             d.planes === 7 &&
             d.clock_mhz === 30 &&
             d.chip === "shiftreg" &&
-            // the fifth field is optional on the wire but always written, so a
-            // blanking edit cannot silently reset the trade (Gitea #789)
-            d.lsb === 0,
+            // the fifth and sixth fields are optional on the wire but always
+            // written, so a blanking edit cannot silently reset the refresh
+            // trade (Gitea #789) or the ring slack (#857)
+            d.lsb === 0 &&
+            d.ring_ms === 3,
           JSON.stringify(d),
         );
         const after = await barText();
@@ -4363,12 +4367,13 @@ try {
         await sleep(900);
         const after = (await (await fetch(`${HUB}/api/layout`)).json()).driver;
         check(
-          "panel driver: choosing 20 MHz posts `panel 7 20 shiftreg 2 0`",
+          "panel driver: choosing 20 MHz posts `panel 7 20 shiftreg 2 0 3`",
           after.clock_mhz === 20 &&
             after.planes === 7 &&
             after.chip === "shiftreg" &&
             after.blank === 2 &&
-            after.lsb === 0,
+            after.lsb === 0 &&
+            after.ring_ms === 3,
           JSON.stringify(after),
         );
         check(
@@ -4410,6 +4415,11 @@ try {
           // `blank` deliberately absent: it applies live (#778), so the app
           // leaves it out of this comparison and so does the model here
           (l.lsb === undefined || l.lsb === wantLsb) &&
+          // `ring_ms` is boot-built too (#857) and is compared RAW — but only
+          // where the live block CARRIES it: a host on the two-buffer driver
+          // reports none, and `panelDriverState` skips it there rather than
+          // raising a reboot nothing can clear
+          (l.ring_ms === undefined || l.ring_ms === (cfg.ring_ms ?? 3)) &&
           l.w === m.pw * chain &&
           l.h === m.ph &&
           l.scan === scan;
@@ -4451,9 +4461,10 @@ try {
       // `0` at ×1 so the setting follows a later width change). #789 made it a
       // continuous 1..W slider, which spent most of its travel on positions
       // with the same Hz as a step top and less light (#797). It is BOOT-built,
-      // and it is the reason the `panel` line grew a fifth field — so what this
-      // proves is that moving it posts FIVE fields, that the value it posts is a
-      // step top, and that the readouts under it follow the thumb.
+      // and it is the reason the `panel` line grew a fifth field (the sixth is
+      // the ring slack, #857) — so what this proves is that moving it posts the
+      // WHOLE line, that the value it posts is a step top, and that the
+      // readouts under it follow the thumb.
       {
         // the step tops for what the device is CONFIGURED with right now. The
         // mirror is at 6 planes / 20 MHz / blank 2 by this point, so the row
@@ -4490,12 +4501,13 @@ try {
         await sleep(900);
         const t = (await (await fetch(`${HUB}/api/layout`)).json()).driver;
         check(
-          `panel module: the ×4 step posts a FIVE-field line — \`panel 6 20 shiftreg 2 ${tops[2]}\``,
+          `panel module: the ×4 step posts a SIX-field line — \`panel 6 20 shiftreg 2 ${tops[2]} 3\``,
           t.lsb === tops[2] &&
             t.planes === 6 &&
             t.clock_mhz === 20 &&
             t.chip === "shiftreg" &&
-            t.blank === 2,
+            t.blank === 2 &&
+            t.ring_ms === 3,
           JSON.stringify(t),
         );
         const mult = await hubPage.$eval('[data-role="panel-lsb-mult"]', (e) =>

@@ -640,7 +640,7 @@ mod pipe {
             // The timer half keeps the once-a-second publish running while
             // nothing renders, so the counters fall to 0 instead of
             // freezing at the last busy window's average.
-            embassy_futures::select::select(READY.wait(), Timer::after(Duration::from_millis(250)))
+            embassy_futures::select::select(READY.wait(), Timer::after(out.poll_interval()))
                 .await;
             if let Some(f) = SLOT.lock(|c| c.borrow_mut().ready.take()) {
                 // A live pixel-count change resizes the driver here, on the

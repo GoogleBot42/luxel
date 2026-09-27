@@ -84,10 +84,16 @@ compile_error!(
 );
 #[cfg(feature = "hub75")]
 mod hub75;
+#[cfg(feature = "hub75-ring")]
+mod hub75_ring;
 #[cfg(feature = "packbench")]
 mod packbench;
 #[cfg(all(feature = "hub75-spare-plane", not(feature = "hub75")))]
 compile_error!("`hub75-spare-plane` is a HUB75 driver mode and needs the `hub75` feature");
+#[cfg(all(feature = "hub75-ring", not(feature = "hub75")))]
+compile_error!("`hub75-ring` is a HUB75 driver mode and needs the `hub75` feature");
+#[cfg(all(feature = "hub75-ring", feature = "hub75-spare-plane"))]
+compile_error!("`hub75-ring` and `hub75-spare-plane` are two drivers for one panel — pick one");
 mod layout;
 #[cfg(layer_core0)]
 mod layers;
@@ -599,8 +605,10 @@ async fn main(spawner: Spawner) -> ! {
     // all — DMA_CH0 feeds the panel's circular rescan instead. The pin map
     // is per-board and lives in board.rs with the rest of the board
     // identity. UNTESTED ON METAL on either panel board (#75).
-    #[cfg(feature = "hub75")]
+    #[cfg(all(feature = "hub75", not(feature = "hub75-ring")))]
     let out = hub75::Hub75Output::new(p.LCD_CAM, board::hub75_pins!(p), p.DMA_CH0);
+    #[cfg(feature = "hub75-ring")]
+    let out = hub75_ring::Hub75Ring::new(p.LCD_CAM, board::hub75_pins!(p), p.DMA_CH0);
     // ---- end board wiring ----
 
     // Seed runtime settings from flash (else compile-time defaults) BEFORE the

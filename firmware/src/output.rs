@@ -47,8 +47,10 @@ use luxel_core::outpipe::ColorOrder;
 /// Boards with a non-strip output switch this alias per feature.
 #[cfg(not(feature = "hub75"))]
 pub type BoardOutput = SpiStripOutput;
-#[cfg(feature = "hub75")]
+#[cfg(all(feature = "hub75", not(feature = "hub75-ring")))]
 pub type BoardOutput = crate::hub75::Hub75Output;
+#[cfg(feature = "hub75-ring")]
+pub type BoardOutput = crate::hub75_ring::Hub75Ring;
 
 /// One frame sink. Contract notes for implementors:
 ///
@@ -108,6 +110,15 @@ pub trait OutputDriver {
     /// `write_frame` is the whole hand-off never have anything staged.
     fn flush(&mut self) -> bool {
         true
+    }
+
+    /// How long the pipelined output task may wait for a frame before
+    /// turning its loop (and calling `flush`) again. A driver whose
+    /// `flush` does periodic work — the HUB75 ring driver's refill — returns
+    /// a fraction of its slack; everything else is happy with a quarter
+    /// second.
+    fn poll_interval(&self) -> embassy_time::Duration {
+        embassy_time::Duration::from_millis(250)
     }
 }
 
