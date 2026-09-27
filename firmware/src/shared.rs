@@ -208,9 +208,15 @@ pub static PASS_ZERO_RESCAN: AtomicU32 = AtomicU32::new(0);
 /// left the MSB run, or the spare MSB not in place before the wrap — which
 /// is the ONE way this mode can tear, and must stay 0: [`SPARE_TORN_P1`],
 /// [`SPARE_TORN_WRAP`]. Copy cost, microseconds, last and worst:
-/// [`SPARE_COPY_US`], [`SPARE_COPY_US_MAX`]; slowest single plane seen,
-/// which sizes the window check: [`SPARE_PLANE_US`].
+/// [`SPARE_COPY_US`], [`SPARE_COPY_US_MAX`]; the TYPICAL single-plane copy
+/// (an EWMA), which sizes the window check: [`SPARE_PLANE_US`], and the
+/// slowest ever: [`SPARE_PLANE_US_MAX`]. Frames copied without a window
+/// because they had waited `FORCE_US` (Gitea #620 — the freeze): [`SPARE_FORCED`].
 pub static SPARE_FLUSHES: AtomicU32 = AtomicU32::new(0);
+/// See [`SPARE_FLUSHES`].
+pub static SPARE_FORCED: AtomicU32 = AtomicU32::new(0);
+/// See [`SPARE_FLUSHES`].
+pub static SPARE_PLANE_US_MAX: AtomicU32 = AtomicU32::new(0);
 /// See [`SPARE_FLUSHES`].
 pub static SPARE_DEFERRED: AtomicU32 = AtomicU32::new(0);
 /// See [`SPARE_FLUSHES`].
