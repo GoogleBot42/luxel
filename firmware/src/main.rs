@@ -870,6 +870,15 @@ async fn main(spawner: Spawner) -> ! {
         if first_beat {
             first_beat = false;
             ota::boot_ok(); // survived a minute of serving — not a boot loop
+            // …but "not a boot loop" is not "usable": a stored layout can
+            // leave the heap so short that every route answers 503 and no
+            // POST can fix it over the network. Same class of guard as the
+            // rollback above, one level up — measure the heap a whole real
+            // boot ended with and, if the stored shape is what starved it,
+            // put the board default back and reboot once (Gitea #822).
+            if layout::heal_if_starved(esp_alloc::HEAP.free() as usize) {
+                REBOOT.signal(());
+            }
         }
         #[cfg(not(pipelined))]
         println!(

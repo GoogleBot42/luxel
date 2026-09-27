@@ -165,6 +165,10 @@ export interface DeviceStatus {
   /** Pattern-store occupancy in bytes, and how many patterns are in it.
    *  Firmware only — the mirror keeps its store in memory and omits it. */
   store?: { used: number; total: number; dead: number; patterns: number };
+  /** A boot self-heal reverted the stored layout (Gitea #822) — the one-bit
+   *  form of `GET /api/layout`'s `reverted` block, so a status poll notices
+   *  without a second fetch. Absent on firmware older than #822. */
+  layout_reverted?: boolean;
   /** What this device can do (Gitea #464), derived by the firmware from board
    *  features × the current Layout. The UI shows a setting only when its
    *  capability is advertised — absent, never disabled (proposal §5.3/§5.7).
@@ -314,6 +318,17 @@ export interface LayoutWire {
    *  build-time constants instead of offering controls that cannot move
    *  (`lib/panelDriver.ts`). */
   driver?: PanelDriverWire;
+  /** A boot SELF-HEAL the device performed (Gitea #822): the stored shape left
+   *  its heap under the runtime floor, so it was reverted to the board default
+   *  and the device rebooted once. `from_pixels` is the shape that was thrown
+   *  away, `heap_free` the reading that condemned it.
+   *
+   *  Absent on every ordinary boot — and on firmware older than #822, which
+   *  simply never reverted anything. It survives the reboot and is cleared by
+   *  the next successful `POST /api/layout`, so the console can explain a
+   *  geometry that changed under the user rather than looking like it lost
+   *  their settings. `/api/status`'s `layout_reverted` is the one-bit form. */
+  reverted?: { from_pixels: number; heap_free: number };
   /** One entry per configured output. A host with nothing stored reports ONE
    *  implicit output built from its live data pin, protocol and colour order.
    *  `count` is pixels on a strip Layout and PANELS on a matrix one. */

@@ -235,6 +235,45 @@ either call site. In `reboot_task` it runs *after* the 400 ms response-flush
 delay: the write takes the cross-core flash fence, and nothing should sit in
 front of the reply.
 
+### The layout self-heal lives beside it (Gitea #822)
+
+"Not a boot loop" is not "usable". A stored layout can leave the heap so short
+that the image boots, joins WiFi, clears the guard above — and then answers
+every route with 503 `out of memory`, which means no POST can fix it and an OTA
+of a corrected image boots straight back into the same stored layout. On
+2026-09-26 a stored `matrix 64 64 2 1` (8192 px) did exactly that to the
+Seengreat, and three physical power cycles to trip the rollback above were the
+only way out.
+
+So the same heartbeat that calls `boot_ok` also calls
+`layout::heal_if_starved(HEAP.free())` — the same class of guard, one level up.
+If free heap is under `budget::RUNTIME_FLOOR` (20 KB) and the stored shape is
+bigger than the board default's, it re-persists the board default's **shape**
+(keeping the stored `panel` line, the outputs table and the projection
+defaults), writes the pixel count back to the nvs device record — the stored
+Layout carries none, and that record is what the next boot's engine is sized
+from — records the revert under `patterns::LAYOUT_REVERT_KEY`, and signals
+`REBOOT`. `GET /api/layout` then reports `reverted` and `/api/status`
+`layout_reverted` until the next successful `POST /api/layout`.
+
+**Why it cannot become the boot loop it prevents.** The decision is
+`luxel_core::layout::heal_decision`, host-tested, and three of its five answers
+refuse to reboot: the stored shape already IS the board default (a board too
+small for what is running on it, not a bad layout), the default is no smaller
+than what is stored, or this exact shape has already been reverted once — which
+is the case that matters, because a revert whose flash write was refused would
+otherwise repeat for ever. The marker is written *before* the new layout, so
+that ordering holds. The reboot goes through `REBOOT`, so `reboot_task` clears
+the guard counter on the way out: a self-heal is a requested reboot, not a
+failed boot.
+
+The POST-time half of the guard (`luxel_hub75::boot_cost` +
+`hub75::heap_before_panel`) refuses a HUB75 layout whose *panel* cost is
+plainly impossible, with the numbers in the message — but what the engine, the
+compositor and the JIT cost at a given pixel count is not modelled anywhere, so
+the self-heal above is the guard that is authoritative. See docs/api.md, "A
+layout the board cannot serve".
+
 ### The firmware and the console it serves are ONE release
 
 An app image and the web bundle in the assets partition are built from the

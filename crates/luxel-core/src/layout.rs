@@ -1074,6 +1074,88 @@ pub struct View<'a> {
     /// board. Absent entirely without the `panel` feature.
     #[cfg(feature = "panel")]
     pub panel: Option<PanelView>,
+    /// A boot self-heal this host performed (#822): the stored shape left the
+    /// heap under the runtime floor and was reverted to the board default.
+    /// `None` — and the field absent from the JSON — when nothing was
+    /// reverted, which is every ordinary boot. NOT feature-gated: the
+    /// self-heal is board-agnostic, so every host can report one.
+    pub reverted: Option<Reverted>,
+}
+
+/// A boot self-heal the host performed (#822) — what it threw away and the
+/// reading that made it.
+///
+/// Persisted by the host across the reboot that follows, so the console can
+/// explain a shape that silently changed under it, and cleared by the next
+/// successful `POST /api/layout`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Reverted {
+    /// Pixels of the stored shape that was reverted.
+    pub from_pixels: u32,
+    /// Free heap at the end of that boot, bytes — under
+    /// [`crate::budget::RUNTIME_FLOOR`], which is why the revert happened.
+    pub heap_free: u32,
+}
+
+/// What a finished boot should do about the heap it ended up with (#822) —
+/// the decision half of the self-heal, pure so it can be tested on the host.
+///
+/// The firmware calls this once, at the point the boot-loop guard decides the
+/// image is healthy (~60 s in: WiFi up, web up, engine built), with the free
+/// heap it measures there. Everything but [`Heal::Revert`] means "log it and
+/// carry on" — a starved board that cannot be improved must not reboot, or
+/// the self-heal becomes the boot loop it exists to prevent.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Heal {
+    /// The heap is at or above the floor. Nothing to do.
+    Healthy,
+    /// Under the floor, but the stored shape already IS the board default —
+    /// there is nothing smaller to fall back to. This is the board being too
+    /// small for what is running on it, not a bad stored layout.
+    AtDefault,
+    /// Under the floor, and the board default is no smaller than what is
+    /// stored: reverting would cost the user their configuration and buy no
+    /// memory.
+    NoSmaller,
+    /// Under the floor, and this exact shape has been reverted once already —
+    /// the revert record survived but the new layout did not land (a refused
+    /// flash write). Reverting again would reboot forever.
+    AlreadyReverted,
+    /// Revert to the board default and reboot once.
+    Revert,
+}
+
+/// [`Heal`] for one boot.
+///
+/// * `free` / `floor` — measured free heap against [`crate::budget::RUNTIME_FLOOR`].
+/// * `stored_pixels` / `default_pixels` — the pixel extent of the stored shape
+///   and of the board default's. A revert only happens when the default is
+///   strictly smaller, which is what makes this safe to run on a strip board
+///   too: there the two are equal unless a `matrix` line set the count.
+/// * `at_default` — the stored shape IS the board default (kind and matrix).
+/// * `reverted_from` — `from_pixels` of the stored revert record, `0` for none.
+#[must_use]
+pub fn heal_decision(
+    free: usize,
+    floor: usize,
+    stored_pixels: u32,
+    default_pixels: u32,
+    at_default: bool,
+    reverted_from: u32,
+) -> Heal {
+    if free >= floor {
+        return Heal::Healthy;
+    }
+    if at_default {
+        return Heal::AtDefault;
+    }
+    if default_pixels >= stored_pixels {
+        return Heal::NoSmaller;
+    }
+    if reverted_from == stored_pixels {
+        return Heal::AlreadyReverted;
+    }
+    Heal::Revert
 }
 
 /// The panel driver's own reading of the configured arrangement (#475): the
@@ -1194,6 +1276,15 @@ impl Layout {
         #[cfg(feature = "panel")]
         if let Some(p) = v.panel {
             push_driver_json(out, &self.driver, &p);
+        }
+        // Absent unless a boot actually reverted something (#822), so an
+        // ordinary body is byte-identical to one written before this existed.
+        if let Some(r) = v.reverted {
+            push_piece(out, ",\"reverted\":{\"from_pixels\":");
+            push_u32(out, r.from_pixels);
+            push_piece(out, ",\"heap_free\":");
+            push_u32(out, r.heap_free);
+            push_piece(out, "}");
         }
         push_piece(out, ",\"outputs\":[");
         if self.outputs.is_empty() {
@@ -1398,6 +1489,7 @@ mod tests {
             default_order: 2,
             #[cfg(feature = "panel")]
             panel: None,
+            reverted: None,
         }
     }
 
@@ -2165,5 +2257,69 @@ mod tests {
         let mut s = String::new();
         push_error_json(&mut s, &LayoutError { line: 2, msg: "nope" });
         assert_eq!(s, "{\"ok\":false,\"error\":\"nope\",\"line\":2}");
+    }
+
+    // ---- the boot self-heal (Gitea #822) ----
+
+    /// No `reverted` key on an ordinary body — the field is a self-heal
+    /// report, and a body without one must stay byte-identical to what
+    /// pre-#822 firmware wrote.
+    #[test]
+    fn no_revert_no_key() {
+        let l = strip_layout();
+        let mut s = String::new();
+        l.push_json(&mut s, &view(&l, 300, "{}"));
+        assert!(!s.contains("reverted"), "{s}");
+    }
+
+    #[test]
+    fn revert_json_shape() {
+        let l = strip_layout();
+        let mut v = view(&l, 300, "{}");
+        v.reverted = Some(Reverted { from_pixels: 8192, heap_free: 15_920 });
+        let mut s = String::new();
+        l.push_json(&mut s, &v);
+        assert!(s.contains("\"reverted\":{\"from_pixels\":8192,\"heap_free\":15920}"), "{s}");
+        // it sits between the driver block and the outputs, so a client
+        // reading the body in order never has to look ahead
+        let (r, o) = (s.find("\"reverted\"").unwrap(), s.find("\"outputs\"").unwrap());
+        assert!(r < o, "{s}");
+    }
+
+    #[test]
+    fn a_healthy_boot_reverts_nothing() {
+        assert_eq!(heal_decision(64 * 1024, 20 * 1024, 8192, 4096, false, 0), Heal::Healthy);
+        // exactly at the floor is healthy: the floor is what the firmware
+        // needs to KEEP running, and it has it
+        assert_eq!(heal_decision(20 * 1024, 20 * 1024, 8192, 4096, false, 0), Heal::Healthy);
+    }
+
+    #[test]
+    fn a_starved_boot_reverts_a_bigger_stored_shape() {
+        assert_eq!(heal_decision(15_920, 20 * 1024, 8192, 4096, false, 0), Heal::Revert);
+    }
+
+    /// The three ways the decision must refuse to reboot. Each of them is a
+    /// boot loop if it gets this wrong.
+    #[test]
+    fn the_self_heal_never_loops() {
+        // nothing smaller exists
+        assert_eq!(heal_decision(15_920, 20 * 1024, 4096, 4096, true, 0), Heal::AtDefault);
+        // the default is no smaller (a board whose default IS the big shape)
+        assert_eq!(heal_decision(15_920, 20 * 1024, 4096, 8192, false, 0), Heal::NoSmaller);
+        assert_eq!(heal_decision(15_920, 20 * 1024, 4096, 4096, false, 0), Heal::NoSmaller);
+        // the revert already happened once and did not take (a refused flash
+        // write); reverting again reboots forever
+        assert_eq!(heal_decision(15_920, 20 * 1024, 8192, 4096, false, 8192), Heal::AlreadyReverted);
+        // a DIFFERENT shape that has since been stored is a new case
+        assert_eq!(heal_decision(15_920, 20 * 1024, 16_384, 4096, false, 8192), Heal::Revert);
+    }
+
+    /// `at_default` outranks everything: a board sitting at its own default
+    /// with no heap left is a board too small for what is running on it, and
+    /// the guard must say so rather than churn.
+    #[test]
+    fn at_default_outranks_the_pixel_comparison() {
+        assert_eq!(heal_decision(0, 20 * 1024, 8192, 4096, true, 0), Heal::AtDefault);
     }
 }

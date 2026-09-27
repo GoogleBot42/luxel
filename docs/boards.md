@@ -3166,7 +3166,35 @@ with a fallback to 64x64 when any of them will not allocate. A configured
 panel over either bound does not brick the board: the boot attempt is
 refused ("the panel is larger than this board's pixel cap" / an allocation
 failure) and the firmware **falls back once to the board default 64×64**,
-reporting `driver.live.fallback` on `/api/layout`. An arrangement whose
+reporting `driver.live.fallback` on `/api/layout`.
+
+**A chain the RAM cannot serve is refused or reverted — not merely "falls
+back" (Gitea #822).** The fallback above saves the PANEL and nothing else: on
+2026-09-26 a stored `matrix 64 64 2 1` (8192 px, legal since #768) fell back
+to 64×64 and the board was still unusable over the network on every boot —
+every route 503 `out of memory` or hanging, `POST /api/layout` unable to
+complete a store, `POST /api/reboot` never landing, and an OTA of a corrected
+image booting straight back into the same stored layout. Three physical power
+cycles to trip the boot-loop rollback were the only way out. Two guards now
+stand beside the panel's:
+
+- **`POST /api/layout` refuses** a `matrix`/`panel` change whose predicted
+  panel-side internal cost (`luxel_hub75::boot_cost` — both framebuffers or
+  the spare-plane pair, the descriptor rings, the packer tables and its row
+  pads) would leave this boot's measured pre-panel heap under the 64 KB boot
+  floor: `this panel would leave N B of heap at boot (floor M B) — it cannot
+  be driven on this board`. Nothing is stored.
+- **The boot self-heals.** The engine/compositor side of the cost is not
+  modelled anywhere, so the authoritative guard measures instead of
+  predicting: where the boot-loop guard decides the image is healthy (~60 s),
+  if free heap is under `RUNTIME_FLOOR` (20 KB) and the stored shape is bigger
+  than the board default's, the default's shape is re-persisted — keeping the
+  stored `panel` line, the outputs table and the projection defaults — and the
+  board reboots once, reporting `reverted` on `/api/layout` and
+  `layout_reverted` on `/api/status`. It reverts at most once per stored shape
+  and never when the default is no smaller, so it cannot become a boot loop.
+
+An arrangement whose
 chain is wider than the framebuffer that was actually built is still
 accepted, stored and reported — the board drives the leading tiles that fit
 and `GET /api/layout` says so in `matrix.drive`. Verified on metal (before

@@ -91,7 +91,7 @@
 
 use core::alloc::Layout as AllocLayout;
 use core::cell::Cell;
-use core::sync::atomic::{AtomicU16, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU16, AtomicU32, AtomicU8, Ordering};
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
@@ -133,6 +133,73 @@ const MAX_SCAN: usize = 32;
 /// (57 + 8 KB internal) leaves ~81 KB. 64 KB sits between the two with the
 /// runtime floor intact.
 const BOOT_HEAP_FLOOR: usize = 64 * 1024;
+
+/// Free internal heap at the very top of the FIRST [`Hub75Output::try_boot`]
+/// attempt — before a single panel byte is allocated (Gitea #822).
+///
+/// This is the one number `POST /api/layout` needs to answer "would the panel
+/// this body asks for leave room for the rest of a boot?", and it can only be
+/// read at boot: by the time an HTTP handler runs, WiFi, embassy-net, the web
+/// slots and the engine have all taken their share. Written once (the fallback
+/// attempt does NOT overwrite it — it runs with the first attempt's
+/// allocations already given back, so the two agree, and "written once" is
+/// easier to reason about than "written twice with the same value"). 0 = never
+/// ran, which is the pre-boot / `LUXEL_NO_OTA` case and means "no prediction".
+static BOOT_HEAP_BEFORE: AtomicU32 = AtomicU32::new(0);
+
+/// [`BOOT_HEAP_BEFORE`] — free internal heap before the panel was built.
+/// 0 = unknown (the panel has not booted), in which case nothing may be
+/// predicted from it.
+pub fn heap_before_panel() -> usize {
+    BOOT_HEAP_BEFORE.load(Ordering::Relaxed) as usize
+}
+
+/// [`BOOT_HEAP_FLOOR`] — the heap a boot must still have once the panel's
+/// buffers are allocated.
+pub fn boot_heap_floor() -> usize {
+    BOOT_HEAP_FLOOR
+}
+
+/// Internal-SRAM bytes booting the arrangement `m` under driver `d` would
+/// take for the PANEL — the prediction `POST /api/layout` refuses a layout on
+/// (Gitea #822).
+///
+/// The arithmetic is [`luxel_hub75::boot_cost`], shared with the host tests;
+/// everything board-specific comes from here. `None` when the arrangement has
+/// no framebuffer at all (odd `ph`, or a `scan` that does not divide `ph/2`)
+/// — the core parser has its own error for that and this must not shadow it.
+///
+/// **Panel side only.** What the engine and the compositor then cost at the
+/// same pixel count is not modelled anywhere, so a layout that passes this
+/// check can still starve the board; the boot self-heal
+/// (`crate::layout::heal_if_starved`) is the guard that catches those.
+pub fn boot_cost(m: &Matrix, d: &PanelDriver) -> Option<usize> {
+    let g = arrange::fb_geometry(m, usize::from(d.planes))?;
+    let s = schedule_of(g, d);
+    // The spare-plane swap (#610) allocates ONE live framebuffer plus one
+    // spare MSB plane, and composes into a staging framebuffer that lives in
+    // the PSRAM arena where there is one — internal heap where there is not.
+    #[cfg(not(feature = "hub75-spare-plane"))]
+    let (buffers, spare_planes) = (2, 0);
+    #[cfg(all(feature = "hub75-spare-plane", feature = "psram-arena"))]
+    let (buffers, spare_planes) = (1, 1);
+    #[cfg(all(feature = "hub75-spare-plane", not(feature = "psram-arena")))]
+    let (buffers, spare_planes) = (2, 1);
+    Some(
+        luxel_hub75::boot_cost(
+            g.with_trail(s.needs_trail()),
+            &s,
+            &luxel_hub75::BootAlloc {
+                buffers,
+                spare_planes,
+                rings: esp_hub75::DESCRIPTOR_RINGS,
+                desc_bytes: core::mem::size_of::<DmaDescriptor>(),
+                max_chunk: esp_hub75::max_dma_chunk_size(),
+            },
+        )
+        .total(),
+    )
+}
 
 /// The arrangement a board with nothing stored is, and the one a boot falls
 /// back to.
@@ -959,6 +1026,13 @@ impl Hub75Output {
         d: PanelDriver,
         fallback: bool,
     ) -> Result<Self, &'static str> {
+        // Before anything is allocated (Gitea #822): the heap a boot starts
+        // the panel with is what `POST /api/layout` predicts against later.
+        // load-then-store, not a CAS — rv32imc has no atomic RMW and this runs
+        // once, on the main task, before any other core is awake.
+        if BOOT_HEAP_BEFORE.load(Ordering::Relaxed) == 0 {
+            BOOT_HEAP_BEFORE.store(esp_alloc::HEAP.free() as u32, Ordering::Relaxed);
+        }
         let Some(g) = arrange::fb_geometry(&m, usize::from(d.planes)) else {
             return Err("the arrangement has no framebuffer (odd ph, or scan does not divide ph/2)");
         };

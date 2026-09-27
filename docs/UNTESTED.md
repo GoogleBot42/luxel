@@ -188,6 +188,36 @@ value while collapsed. Everything below is on the new page.
 
 ## Needs you physically (I can't do these)
 
+- [ ] **The layout guard on the Seengreat** (Gitea #822, the fix for the night
+  of 2026-09-26). Two halves, and only the first is safe to run casually.
+  - **The POST refusal** — safe, no reboot, nothing stored. With the guard
+    firmware live, `curl -d 'matrix 64 64 2 1 tl row 0 0' http://192.168.0.238/api/layout`
+    must answer
+    `{"ok":false,"error":"this panel would leave N B of heap at boot (floor 65536 B) — it cannot be driven on this board","line":1}`
+    and `GET /api/layout` must still report the 1×1 chain. The numbers are the
+    interesting part: `N` is (free heap at the top of the panel bring-up) minus
+    the predicted panel cost, so the arithmetic in
+    `luxel_hub75::cost` is checkable against the boot log's `hub75:` lines.
+    The console shows the same sentence in the LED layout card's banner.
+  - **The self-heal** cannot be exercised without first storing a layout the
+    board cannot serve — which is precisely the brick this ticket removes, and
+    the POST refusal above now blocks the only way to store one. Two ways in,
+    neither casual: **(a)** build the panel with `EXTRA_FEATURES=hub75-spare-plane`
+    (#620) — the spare-plane pair costs 48 KB less internal SRAM, so a 2×1
+    chain PASSES the POST check while still being more than the engine side can
+    carry, which is exactly the shape the self-heal exists for; or **(b)** a
+    debug-only path that stores a layout without the check. (a) is preferred,
+    and it doubles as #620's own missing metal run. What to look for: the boot
+    log line `layout: 8192 px left the heap at X B after boot (floor 20480) —
+    reverting to the board default`, ONE reboot, then `GET /api/layout`
+    reporting `"reverted":{"from_pixels":8192,"heap_free":X}` with the 1×1
+    chain and the stored `panel` line intact, `/api/status`
+    `layout_reverted:true`, and the console's amber notice above the LED layout
+    form. Then any successful `POST /api/layout` must clear both.
+  - Everything above is host-tested (`luxel_core::layout::heal_decision`,
+    `luxel_hub75::cost`) and the console notice is driven in real chromium
+    against the mirror's `--reverted` flag; what no test can reach is the real
+    heap of a real boot, which is the whole point of the guard.
 - [x] **The partition repartition on metal — the 4 MB half** (Gitea #634,
   from #501): done on the **Athom** 2026-09-20. One reboot, under 8.6 s end
   to end, patterns / playlist / layout / name / brightness / asset bundle all

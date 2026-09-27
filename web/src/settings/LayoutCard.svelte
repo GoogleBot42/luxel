@@ -72,7 +72,7 @@
   import { confirm } from "../stores/dialog";
   import { layout as geomLayout, layoutLabel, type Layout } from "../stores/geometry";
   import { clearApiError, note, notes, reportApiError } from "../stores/notify";
-  import type { ApiErrorContext } from "../lib/apiErrors";
+  import { group, type ApiErrorContext } from "../lib/apiErrors";
   import { luxel } from "../stores/pattern";
   import ArrangementSvg from "./ArrangementSvg.svelte";
   import Disclosure from "./Disclosure.svelte";
@@ -463,6 +463,18 @@
   </div>
   {#if $luxel}<PatternThumb luxel={$luxel} source={SAMPLE} size="summary" />{/if}
 </div>
+
+<!-- The device reverted the stored layout at boot because it left no heap
+     (Gitea #822). This is the one state where the shape on screen is NOT what
+     the user set, so it goes above the form rather than into the notes at the
+     bottom: without it the card just silently shows the board default and
+     reads as lost settings. It clears itself on the next successful save. -->
+{#if wire?.reverted}
+  <p class="warn hint revert" data-role="layout-reverted">
+    The stored {group(wire.reverted.from_pixels)} px layout left the board without memory at boot;
+    it was reverted to the board default.
+  </p>
+{/if}
 
 {#if vis.kindPicker}
   <div class="field">
@@ -877,6 +889,15 @@
     align-items: center;
     gap: 14px;
     margin-bottom: 12px;
+  }
+
+  /* the boot self-heal notice (#822) — PanelModuleCard's `.warn` amber, above
+     the form because it contradicts what the form is showing */
+  .warn {
+    color: #e5bd74;
+  }
+  .revert {
+    margin: -4px 0 12px;
   }
 
   /* mockup S3/S3b: the headline and its sub-line sit on ONE baseline row */
