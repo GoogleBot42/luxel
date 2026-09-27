@@ -1,0 +1,214 @@
+Luxel local patch (Gitea #856): a ROW-MAJOR RING chain builder beside
+`fill_full_chain`, for the ring driver (docs/hub75-ring-design.md).
+
+Applies on top of the plane-repeats patch. `bcm::fill_ring_chain` fills a
+circular descriptor chain over N fixed SLOTS (each a block of rows of
+`row_bytes`), every slot read in one caller-supplied order of its rows —
+so a slot holding one row pair's planes emits plane p `reps(p)` times by
+listing its row `reps(p)` times, and the BCM repeats cost descriptors, not
+memory. `suc_eof` sits on the last descriptor of every `eof_every`-th slot
+and always on the ring's last. `CircularBcmBuf::new_ring` is the same
+buffer type over such a chain (one ring, no framebuffer, never flipped),
+and `Hub75::new_ring` is the constructor: the circular constructor with
+the ring chain in place of the framebuffer, `store_circular_state` told
+one ring and a null framebuffer, the same `out_eof` ISR and `OUT_DSCR`
+probe (`dma_position`). Nothing existing changes; `swap` must not be
+called on a ring driver. The emission order, the slot template and the
+refill rules live in `luxel_hub75::ring`, host-tested.
+
+diff -ruN base/src/bcm/circular.rs new/src/bcm/circular.rs
+--- a/src/bcm/circular.rs	2026-09-27 14:22:40.590271853 -0600
++++ b/src/bcm/circular.rs	2026-09-27 14:27:23.575751131 -0600
+@@ -70,6 +70,24 @@
+         }
+     }
+ 
++    /// Luxel local patch (Gitea #856): the buffer over a ROW-MAJOR RING chain
++    /// ([`super::fill_ring_chain`]) instead of a framebuffer's BCM chain. One
++    /// ring only — the ring driver never flips; it refills slots behind the
++    /// DMA — so the whole descriptor slice is that ring.
++    pub(crate) fn new_ring(
++        descriptors: &'static mut [DmaDescriptor],
++        slot_bases: &[*const u8],
++        row_bytes: usize,
++        order: &[u8],
++        eof_every: usize,
++    ) -> Self {
++        let desc_count = super::fill_ring_chain(descriptors, slot_bases, row_bytes, order, eof_every);
++        Self {
++            descriptors,
++            desc_count,
++        }
++    }
++
+     /// Raw pointer to the descriptor array (for ISR access after `send()`
+     /// consumes this buffer).
+     pub(crate) fn descriptors_ptr(&self) -> *mut DmaDescriptor {
+diff -ruN base/src/bcm/mod.rs new/src/bcm/mod.rs
+--- a/src/bcm/mod.rs	2026-09-27 14:22:40.590398652 -0600
++++ b/src/bcm/mod.rs	2026-09-27 14:27:23.575583265 -0600
+@@ -59,6 +59,85 @@
+     prep
+ }
+ 
++/// Luxel local patch (Gitea #856): descriptors [`fill_ring_chain`] writes for
++/// `slots` slots read in `emissions` emissions of `row_bytes` each — the
++/// same `MAX_DMA_CHUNK_SIZE` chunking as [`crate::dma_descriptor_count`].
++#[cfg(feature = "circular-dma")]
++#[must_use]
++pub const fn ring_descriptor_count(slots: usize, emissions: usize, row_bytes: usize) -> usize {
++    slots * emissions * row_bytes.div_ceil(MAX_DMA_CHUNK_SIZE)
++}
++
++/// Luxel local patch (Gitea #856): the ROW-MAJOR RING chain.
++///
++/// A circular descriptor chain over `slot_bases.len()` fixed slots. Each
++/// slot is a block of rows of `row_bytes` bytes; `order[e]` is the slot ROW
++/// the DMA reads on emission `e`, and every slot is read in that order — so
++/// a slot holding one row pair's planes emits `plane p` `reps(p)` times by
++/// listing its row `reps(p)` times, and the BCM repeats cost descriptors,
++/// not memory. Nothing here knows about planes: the caller decides the
++/// order (`luxel_hub75::ring::slot_emissions`) and refills slots behind the
++/// DMA (`luxel_hub75::ring::Ring`).
++///
++/// `suc_eof` is set on the last descriptor of every `eof_every`-th slot
++/// (`0` = only the last slot), so the `out_eof` ISR runs once per
++/// `eof_every` slots and always at the ring's wrap. The last descriptor's
++/// `next` points back at the first. Returns the descriptors written
++/// ([`ring_descriptor_count`]).
++///
++/// # Panics
++/// If `descriptors` is too short, or `slot_bases`/`order` is empty.
++#[cfg(feature = "circular-dma")]
++pub fn fill_ring_chain(
++    descriptors: &mut [DmaDescriptor],
++    slot_bases: &[*const u8],
++    row_bytes: usize,
++    order: &[u8],
++    eof_every: usize,
++) -> usize {
++    let total = ring_descriptor_count(slot_bases.len(), order.len(), row_bytes);
++    assert!(total > 0, "an empty ring");
++    assert!(
++        descriptors.len() >= total,
++        "not enough DMA descriptors for the ring: have {}, need {}",
++        descriptors.len(),
++        total,
++    );
++    let eof_every = if eof_every == 0 { slot_bases.len() } else { eof_every };
++    let base_ptr = descriptors.as_mut_ptr();
++    let mut idx = 0;
++    for (s, &slot) in slot_bases.iter().enumerate() {
++        let slot_eof = (s + 1) % eof_every == 0 || s + 1 == slot_bases.len();
++        for (e, &row) in order.iter().enumerate() {
++            let last_emission = e + 1 == order.len();
++            let mut remaining = row_bytes;
++            let mut offset = usize::from(row) * row_bytes;
++            while remaining > 0 {
++                let chunk = remaining.min(MAX_DMA_CHUNK_SIZE);
++                let is_last = idx + 1 == total;
++                let next = if is_last {
++                    base_ptr
++                } else {
++                    unsafe { base_ptr.add(idx + 1) }
++                };
++                let desc = &mut descriptors[idx];
++                // SAFETY: `slot` is the caller's live slot block and
++                // `offset` stays within `order.len()` rows of `row_bytes`.
++                desc.buffer = unsafe { slot.add(offset) as *mut u8 };
++                desc.set_size(chunk);
++                desc.set_length(chunk);
++                desc.set_owner(Owner::Dma);
++                desc.set_suc_eof(slot_eof && last_emission && remaining == chunk);
++                desc.next = next;
++                remaining -= chunk;
++                offset += chunk;
++                idx += 1;
++            }
++        }
++    }
++    total
++}
++
+ #[cfg(any(feature = "full-chain-dma", feature = "circular-dma"))]
+ /// Fill a full-chain BCM descriptor sequence.
+ ///
+diff -ruN base/src/lcd_cam.rs new/src/lcd_cam.rs
+--- a/src/lcd_cam.rs	2026-09-27 14:22:40.589019288 -0600
++++ b/src/lcd_cam.rs	2026-09-27 14:27:23.575840539 -0600
+@@ -170,6 +170,62 @@
+ 
+         Ok(Self::from_phantom())
+     }
++
++    /// Luxel local patch (Gitea #856): start the panel on a ROW-MAJOR RING
++    /// chain instead of a framebuffer — [`crate::fill_ring_chain`] over
++    /// `slot_bases`, each a block of `order.len()`-indexed rows of
++    /// `row_bytes`, read in `order` per slot, with `suc_eof` every
++    /// `eof_every` slots. The DMA loops over the ring forever; the caller
++    /// refills slots behind it and reads its position with
++    /// [`Hub75::dma_position`]. `swap` is meaningless on this driver (there
++    /// is no second ring and no framebuffer) and must not be called.
++    #[allow(clippy::too_many_arguments)]
++    pub fn new_ring<P: Hub75Pins<'static, Word = FB::Word>>(
++        lcd_cam: LCD_CAM<'static>,
++        hub75_pins: P,
++        channel: impl LcdDmaTxChannel<'static> + crate::GdmaChannelNum,
++        tx_descriptors: &'static mut [DmaDescriptor],
++        frequency: Rate,
++        slot_bases: &[*const u8],
++        row_bytes: usize,
++        order: &[u8],
++        eof_every: usize,
++    ) -> Result<Self, Hub75Error> {
++        let word_size = hub75_pins.word_size();
++        let ch_num = channel.channel_num();
++        let lcd_cam_dev = LcdCam::new(lcd_cam);
++        let config = {
++            let c = i8080::Config::default().with_frequency(frequency);
++            #[cfg(feature = "invert-clock")]
++            let c = c.with_clock_mode(ClockMode {
++                polarity: Polarity::IdleLow,
++                phase: Phase::ShiftHigh,
++            });
++            c
++        };
++        let i8080 = I8080::new(lcd_cam_dev.lcd, channel, config).map_err(Hub75Error::I8080)?;
++        let i8080 = hub75_pins.apply(i8080);
++
++        let buf = CircularBcmBuf::new_ring(tx_descriptors, slot_bases, row_bytes, order, eof_every);
++        let desc_ptr = buf.descriptors_ptr();
++        let desc_count = buf.desc_count();
++
++        use esp_hal::lcd_cam::lcd::i8080::Command;
++        let xfer = match word_size {
++            WordSize::Eight => i8080.send(Command::<u8>::None, 0, buf),
++            WordSize::Sixteen => i8080.send(Command::<u16>::None, 0, buf),
++        }
++        .map_err(|(err, _tx, _buf)| Hub75Error::Dma(err))?;
++
++        // One ring, no framebuffer: the pass accounting counts EOFs as
++        // before (one per `eof_every` slots here); the swap machinery is
++        // never armed.
++        crate::isr::store_circular_state(xfer, desc_ptr, desc_count, 1, core::ptr::null());
++        setup_gdma_frame_count_isr(ch_num);
++        crate::isr::store_dma_probe(gdma_probe);
++
++        Ok(Self::from_phantom())
++    }
+ }
+ 
+ // ---------------------------------------------------------------------------
+diff -ruN base/src/lib.rs new/src/lib.rs
+--- a/src/lib.rs	2026-09-27 14:22:40.590522074 -0600
++++ b/src/lib.rs	2026-09-27 14:27:23.575933514 -0600
+@@ -109,6 +109,9 @@
+ mod isr;
+ pub use hub75::Hub75;
+ pub use isr::Hub75Swap;
++// Luxel local patch (Gitea #856): the row-major ring chain builder.
++#[cfg(feature = "circular-dma")]
++pub use bcm::{fill_ring_chain, ring_descriptor_count};
+ // Luxel local patch (Gitea #395): diagnostics surface.
+ pub use isr::{pass_flag, EARLY_LANDING_ENABLED, FAST_MARGIN, SHORT_LOG_LEN, SHOWN_LOG_LEN};
+ /// The color type used by the HUB75 driver.

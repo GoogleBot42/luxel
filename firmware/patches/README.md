@@ -18,7 +18,7 @@ store as `/nix/store/*-esp-hub75-0.14.0.tar.gz`):
 
 ```sh
 mkdir base new && tar xzf /nix/store/*-esp-hub75-0.14.0.tar.gz -C base --strip-components=1
-cd base && for p in esp-hal-git atomic-swap dma-position; do   # the stack, in order
+cd base && for p in esp-hal-git atomic-swap dma-position plane-repeats ring-chain; do   # the stack, in order
   patch -p1 -s < $REPO/firmware/patches/esp-hub75-0.14.0-$p.patch; done; cd ..
 cp -r base new     # edit new/src/... ; then:
 { echo "<header paragraph: what and why>"; echo;
@@ -91,3 +91,18 @@ faster trade; the OE half is in the framebuffer words
 (`luxel_hub75::format_scheduled`). The counts must not change while a
 driver is running (both rings and the ISR's pass arithmetic assume them),
 so the setting is applied at boot.
+
+## esp-hub75-0.14.0-ring-chain.patch
+
+Applies on top of the plane-repeats patch. The ring driver's DMA side
+(Gitea #856, docs/hub75-ring-design.md §3/§9): `fill_ring_chain` builds a
+circular chain over N fixed slots, each read in one caller-supplied order
+of its rows (so a row pair's planes repeat by listing the plane's row
+`reps(p)` times — descriptors, not memory), with `suc_eof` on every
+`eof_every`-th slot's last descriptor and always on the ring's last;
+`CircularBcmBuf::new_ring` is the buffer over such a chain and
+`Hub75::new_ring` the constructor (the circular one with the ring in place
+of the framebuffer; one ring, null framebuffer, same `out_eof` ISR and
+`OUT_DSCR` probe). Nothing existing changes. The emission order, slot
+template and refill rules are `luxel_hub75::ring`, host-tested; the
+firmware driver that uses this is #857.
