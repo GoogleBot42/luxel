@@ -140,6 +140,35 @@ fn shape_pixels(l: &Layout, pixels_now: u32) -> u32 {
     }
 }
 
+/// The self-heal's decision at these heap readings, with the shapes it was
+/// made from — the side-effect-free half of [`heal_if_starved`].
+fn heal_verdict(free: usize, largest: usize) -> (Heal, u32, u32, Layout, Layout) {
+    let cur = current();
+    let def = board_default();
+    let pixels_now = crate::shared::PIXEL_COUNT.load(Ordering::Relaxed);
+    let stored_px = shape_pixels(&cur, pixels_now);
+    let default_px = shape_pixels(&def, pixels_now);
+    let at_default = cur.kind == def.kind && cur.matrix == def.matrix;
+    let decision = luxel_core::layout::heal_decision_fragmented(
+        free,
+        luxel_core::budget::RUNTIME_FLOOR,
+        largest,
+        HEAL_LARGEST_FLOOR,
+        stored_px,
+        default_px,
+        at_default,
+        REVERT_FROM.load(Ordering::Relaxed),
+    );
+    (decision, stored_px, default_px, def, cur)
+}
+
+/// Would [`heal_if_starved`] revert at these readings? No side effects — the
+/// early check in `main.rs` asks this first so it can hand the boot's heal
+/// reserve back before the revert has to persist anything.
+pub fn heal_if_starved_early(free: usize, largest: usize) -> bool {
+    matches!(heal_verdict(free, largest).0, Heal::Revert)
+}
+
 /// The boot self-heal (Gitea #822): a stored layout the heap cannot serve must
 /// not be able to make the board unreachable for ever.
 ///
@@ -182,22 +211,7 @@ fn shape_pixels(l: &Layout, pixels_now: u32) -> u32 {
 /// count in the nvs device record, which `board::MAX_PIXELS` and the protocol
 /// encode buffer's own allocation already bound.
 pub fn heal_if_starved(free: usize, largest: usize) -> bool {
-    let cur = current();
-    let def = board_default();
-    let pixels_now = crate::shared::PIXEL_COUNT.load(Ordering::Relaxed);
-    let stored_px = shape_pixels(&cur, pixels_now);
-    let default_px = shape_pixels(&def, pixels_now);
-    let at_default = cur.kind == def.kind && cur.matrix == def.matrix;
-    let decision = luxel_core::layout::heal_decision_fragmented(
-        free,
-        luxel_core::budget::RUNTIME_FLOOR,
-        largest,
-        HEAL_LARGEST_FLOOR,
-        stored_px,
-        default_px,
-        at_default,
-        REVERT_FROM.load(Ordering::Relaxed),
-    );
+    let (decision, stored_px, default_px, def, cur) = heal_verdict(free, largest);
     let why = match decision {
         Heal::Healthy => return false,
         Heal::AtDefault => "already the board default",
@@ -242,6 +256,15 @@ pub fn heal_if_starved(free: usize, largest: usize) -> bool {
             crate::shared::WANT_PIXEL_COUNT.store(default_px, Ordering::Relaxed);
             if let Err(e) = crate::config::write_device(&crate::shared::device_config_snapshot()) {
                 println!("layout: revert could not persist the pixel count ({e})");
+            }
+            // The `matrix` POST that stored this shape also installed its grid
+            // as a USER map (`set_from_wire`), and that map outlives the
+            // revert: the first healed boot on 2026-09-27 came up 64x64 with a
+            // 128x64 user map still installed (`geom.source: user`, a
+            // scrambled picture). An empty body is `POST /api/map`'s "clear":
+            // a panel board falls back to its own grid.
+            if crate::devicemap::source() == luxel_core::caps::DeviceMap::User {
+                let _ = crate::devicemap::set_from_wire("");
             }
             // The marker last, so a stored default and a boot that is still
             // starved cannot revert twice from the same shape.

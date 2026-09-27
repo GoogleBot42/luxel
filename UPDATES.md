@@ -1,5 +1,37 @@
 # Update log
 
+## 2026-09-27 — the layout self-heal runs at WiFi-up and can always persist; the 2x1 brick is recovered (#822, #838)
+
+The Seengreat spent the day bricked on a stored `matrix 64 64 2 1`. What the
+serial log showed once the port was free (a three-day-old reader loop from
+another session had been eating the ROM bootloader's replies — that was the
+whole "espflash hangs for hours"): the two-buffer 2x1 boots, takes
+120,944 B of the ~216 KB heap, passes the 64 KB panel floor with 95 KB left,
+and WiFi + embassy-net + the web pool then take ~75 KB — 19.8 KB free, every
+route 503. The self-heal (#827/#837) never ran: `ota::boot_ok` built a 3 KiB
+`vec!` infallibly one line before it and panicked, every boot, and the panic
+rebooted into the same layout. Fixing that moved the panic to the web pool's
+socket buffers at 15 s.
+
+Now (PR pending): `boot_ok` allocates fallibly; a web slot that cannot get
+its 8 KB waits and retries instead of panicking; the heal is judged right
+after `wait_config_up` — the WiFi blob's share is the one cost nothing
+predicts — with a 12 KiB reserve taken before WiFi and released so the
+revert's store page buffer exists; the revert also clears the user map the
+`matrix` POST left behind; the 60 s check stays for what the engine adds;
+the panel boot prints `panel took N B, M B left` every boot; and
+`BOOT_HEAP_FLOOR` is 100 KB from those numbers. Verified on metal: 2x1 boot →
+`19844 B free / 15748 B largest` → revert → one reboot → 1x1 → HTTP back,
+scene Test re-activated (it missed its own resume by 628 B — 64,168 free
+against 64,796 wanted — which predates this change).
+
+Two USB facts corrected in the panel skill: espflash enters download mode
+from the RUNNING app by itself (no BOOT hold), but a board already in ROM
+download mode cannot be reset out of it by any host-side action — only EN or
+a power cycle. #838 got the bandwidth law that bounds every streaming
+design: refill = (streamed planes ÷ emissions per pass) × 40 MB/s,
+independent of panel size — 2 MB/s at stock, 35 MB/s at the 2x1's `lsb 2`.
+
 ## 2026-09-27 — the three red web/CLI harnesses on master, fixed (#810 #819 #809)
 
 Every web PR is asked to run `device-e2e`, `e2e.mjs` and `serve-e2e`, and all

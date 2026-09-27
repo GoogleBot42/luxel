@@ -3342,8 +3342,26 @@ pub async fn web_task(task_id: usize, stack: Stack<'static>) -> ! {
     // no connection ever needs a body-sized buffer. If even 4 KB can't be
     // allocated, the connection is turned away with a 503 instead of an
     // alloc panic.
-    let mut tcp_rx_buffer = alloc::vec![0u8; 4096];
-    let mut tcp_tx_buffer = alloc::vec![0u8; 4096];
+    //
+    // The two socket buffers are fallible too: on a board whose stored layout
+    // has eaten the heap (a 2x1 chain on the Seengreat, Gitea #822) the
+    // third slot's 8 KB was the allocation that PANICKED the boot at 15 s on
+    // 2026-09-27 — before the layout self-heal could run, so the panic just
+    // rebooted into the same layout. A slot that cannot get its buffers waits
+    // and retries instead: the other slots serve, and the self-heal gets its
+    // turn.
+    let (mut tcp_rx_buffer, mut tcp_tx_buffer) = loop {
+        let mut rx: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+        let mut tx: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+        if rx.try_reserve_exact(4096).is_ok() && tx.try_reserve_exact(4096).is_ok() {
+            rx.resize(4096, 0);
+            tx.resize(4096, 0);
+            break (rx, tx);
+        }
+        drop((rx, tx));
+        esp_println::println!("http[{}]: no heap for the socket buffers — retrying in 5 s", task_id);
+        embassy_time::Timer::after(embassy_time::Duration::from_secs(5)).await;
+    };
 
     let app = make_app();
     loop {
