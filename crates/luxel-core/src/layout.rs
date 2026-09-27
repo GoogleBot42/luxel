@@ -1158,6 +1158,29 @@ pub fn heal_decision(
     Heal::Revert
 }
 
+/// [`heal_decision`] that also knows the LARGEST free block.
+///
+/// Total free heap is the wrong yardstick on its own: on 2026-09-27 a
+/// Seengreat with a stored 2x1 on the two-buffer build sat ABOVE the 20 KB
+/// floor while every route answered 503 — the heap was there, but so
+/// fragmented that the web server could not get its 4 KB connection buffer
+/// or an 8 KB status body. `largest` under `largest_floor` is that state,
+/// and counts as starved exactly like `free` under `floor`.
+#[must_use]
+pub fn heal_decision_fragmented(
+    free: usize,
+    floor: usize,
+    largest: usize,
+    largest_floor: usize,
+    stored_pixels: u32,
+    default_pixels: u32,
+    at_default: bool,
+    reverted_from: u32,
+) -> Heal {
+    let free = if largest < largest_floor { 0 } else { free };
+    heal_decision(free, floor, stored_pixels, default_pixels, at_default, reverted_from)
+}
+
 /// The panel driver's own reading of the configured arrangement (#475): the
 /// firmware reports it so a UI computing the same estimate in the browser
 /// has something to check itself against, and so it can say when a board is
