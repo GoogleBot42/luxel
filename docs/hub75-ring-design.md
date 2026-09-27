@@ -91,6 +91,26 @@ same way `tools/ringsim.py` proved the two-ring flip.
 is one extra dark block after the last row pair's last plane; the slot
 template for row 31 carries it. Keep that invariant from `format_scheduled`.
 
+*Step 2 correction (2026-09-27, Gitea #856, `luxel_hub75::ring`):* it is
+not one block per frame, it is one per ROW PAIR, and it goes first. A
+block shifts one row in and, while OE is on, displays whatever was latched
+by the block before it — so the first emission of a row pair still shows
+the previous row pair's last plane and must carry THAT row's address and
+the LSB's OE width, which the MSB's row (shared by its 64 emissions, which
+need the new address and the MSB width) cannot. So a slot is `planes + 1`
+rows: an ENTRY row (dark data, previous row's address, LSB width, latch)
+emitted once, then plane 0 × reps(0) … plane P−1 × reps(P−1) — `E + 1`
+emissions per row pair — and plane row `p ≥ 1`'s OE width is `lit(p − 1)`
+(its first emission displays plane `p − 1`; its later ones display `p`,
+and the two widths agree for every `Schedule`: untruncated planes share one
+width, truncated ones are emitted once). `ring::format_slot` writes that
+template with address 0, `ring::set_slot_address` stamps the row on claim,
+and the test walks the words and counts every row's every plane at exactly
+`reps(p) · lit(p)` clocks at every `lsb` step. The design tables' `E` are
+`E + 1` on the ring; the extra emission is `1/E` of the pass (0.8 % stock,
+12 % at ×16). The alternative — the ENTRY row carrying the MSB's colour
+so no emission is spent — trades 1/7 more packing for it; not taken.
+
 ## 4. Sizing: the slack knob
 
 One slot is `7 × cols × 2` bytes: 0.9 / 1.8 / 3.6 / 7.2 KB at 64 / 128 /
@@ -192,6 +212,25 @@ So the refill is designed as a claimable queue from the start:
   about to enter if it was never filled (§7). Keep it under 5 µs; bind it
   on core 0 with the existing frame-count ISR.
 
+*Step 2 detail (#856):* the claim word carries the FRAME CHOICE in its
+top bit. The packer that claims a pass's row 0 picks the newest complete
+frame and CASes that bit in with the counter; every later row of the pass
+inherits it from the word (`ring::claim_next`), so all 32 rows of a pass
+read one frame with no second atomic and no wait — the ISR's "flip at the
+wrap" becomes "publish the newest frame index", nothing more. The counter
+runs modulo `ring::Ring::period` (the largest multiple of `N` and `rows`
+under 2³¹) so slot and row arithmetic survive the wrap. And a claim is
+taken only while it is `fillable` (`1 ≤ a − abs_dma ≤ N − 2`: the slot the
+DMA is in, and the next — `OUT_DSCR` can run one descriptor ahead of the
+data — are never written) AND the slots left before the beam cover the
+packer's own worst pack time; otherwise the claim is SKIPPED and counted
+`late`: the slot keeps the row it already held, at that row's own address —
+a stale row, never a mixed-address one — which is what §7's "never
+garbage" costs when the deadline is already lost. `tools/ringsim.py` walks
+all of this with two packers, random ISR latency, a prefetching probe and
+core-0 holds: zero writes under the beam and zero mixed-frame passes in
+every safe configuration, skips (not tears) when the ring is too small.
+
 What this costs the packer: it must be reentrant across cores — per-core
 `Scratch`, per-core PIE state (each CPU has its own q-registers, so the
 vector packer needs no cross-core save, only interrupts masked on its own
@@ -255,7 +294,10 @@ core.
 - `firmware/patches/esp-hub75-0.14.0-*.patch`: a ring-mode chain builder
   (row-major, N slots, EOF every k-th slot) beside `fill_full_chain`, and
   the second ISR hook. Patch files, never vendored trees
-  (firmware/patches/README.md).
+  (firmware/patches/README.md). *Step 2 (#856) shipped the builder:*
+  `esp-hub75-0.14.0-ring-chain.patch` — `fill_ring_chain`,
+  `CircularBcmBuf::new_ring`, `Hub75::new_ring` (the circular constructor
+  with the ring in place of the framebuffer). The ISR hook is step 3.
 - `firmware/src/hub75.rs`: a `Hub75Ring` output behind a feature
   (`hub75-ring`), keeping `Hub75Output` as is until Jeremy's eye retires it;
   boot: allocate the ring from `ring_ms`, format the templates, build the

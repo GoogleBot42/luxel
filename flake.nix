@@ -113,6 +113,9 @@
           # per-plane repeat schedule for OE-truncated low planes
           # (Gitea #460 / #789). Applies on top of the dma-position patch.
           ./firmware/patches/esp-hub75-0.14.0-plane-repeats.patch
+          # row-major ring chain builder + `Hub75::new_ring` for the ring
+          # driver (Gitea #856). Applies on top of the plane-repeats patch.
+          ./firmware/patches/esp-hub75-0.14.0-ring-chain.patch
         ];
         dontBuild = true;
         installPhase = "cp -r . $out";

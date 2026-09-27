@@ -48,6 +48,28 @@ The panel was left exactly as found: `ota_0`, 11 patterns (`store.used` 86,524
 B byte-identical), 8 scenes, 2 sprites, playlist stopped at index 0, brightness
 31 untouched, layout untouched, Aurora 2D active and `native`.
 
+## 2026-09-27 — HUB75 ring driver step 2: the ring maths on the host (#856)
+
+`crates/luxel-hub75/src/ring.rs`: the row-major emission order of a ring
+slot, its control template, descriptor counts, the slack knob and the fill
+queue's claim / release / late rules as pure functions with host tests;
+`tools/ringsim.py` grows a `RingSim` that walks them with two packers,
+random ISR latency, a prefetching probe and core-0 holds; and
+`firmware/patches/esp-hub75-0.14.0-ring-chain.patch` adds the DMA side —
+`fill_ring_chain`, `CircularBcmBuf::new_ring`, `Hub75::new_ring` — beside
+`fill_full_chain` (re-applies clean; the S3 firmware builds against it).
+
+Two things the design doc had wrong, now corrected in §3/§6: (1) the
+row-major order needs an ENTRY block per ROW PAIR, not a trailing block per
+frame — a block displays what the previous block latched, so a row pair's
+first emission must still carry the previous row's address and the LSB's
+OE width — and plane row `p`'s OE width is `lit(p − 1)`; the test counts
+every row's every plane at exactly `reps(p)·lit(p)` clocks at every `lsb`.
+(2) The frame each pass reads travels in the claim word's top bit (chosen
+by whoever claims row 0), which makes the pass frame-atomic without a
+second atomic; a claim the packer cannot finish before the beam is skipped
+and counted, so a missed slot is a stale row at its own address, never a
+mixed one. No hardware touched.
 ## 2026-09-27 — HUB75 ring driver step 1: the PIE vector packer and its microbench (#855)
 
 `crates/luxel-hub75/src/pie.rs`: `pack_pie` / `pack_row_pair`, the ESP32-S3

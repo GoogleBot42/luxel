@@ -90,6 +90,7 @@ pub mod arrange;
 pub mod chip;
 pub mod cost;
 pub mod pie;
+pub mod ring;
 pub mod schedule;
 
 pub use cost::{boot_cost, BootAlloc, BootCost};
