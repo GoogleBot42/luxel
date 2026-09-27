@@ -9,7 +9,48 @@ numbers and findings live in docs/boards.md "First light"; this skill is
 the hands-on procedure. Deploying over the network is the deploy-device
 skill (`BOARD=board-seengreat-hub75 tools/ota-push.sh 192.168.0.238` —
 `BOARD` is required since #389/#416; a plain `curl --data-binary @app.bin
-http://192.168.0.238/api/ota` is the fallback when the script fails silently).
+http://192.168.0.238/api/ota` is the fallback when the script fails silently —
+the app image is `espflash save-image --chip esp32s3 <ELF> app.bin` inside the
+devshell; `ota-push.sh` writes it to a `mktemp` and deletes it).
+
+## Before anything: is another session driving it?
+
+`pgrep -fa 192.168.0.238` and `pgrep -fa recover-` first. On 2026-09-26 a
+second Claude session ran its own OTA + status-polling script against the
+panel while this one was measuring — the "reverted OTA", the black screen and
+the saturated `web:[1,1,1]` pool all came from it. Jeremy's ruling: the panel
+is one session's at a time. If you find a foreign process, STOP and ask.
+
+## The layout you store must fit the heap, or the board bricks over the air (#822)
+
+Since #802 the cap is 16384 px, and a stored `matrix 64 64 2 1` (8192 px)
+BOOTS — the framebuffers are allocated before WiFi — and then starves the
+rest: every route answers 503 `out of memory` or hangs, `POST /api/layout`
+cannot complete a store, `POST /api/reboot` never lands, and an OTA of a fixed
+image boots straight back into the stored layout. Two hours on 2026-09-26.
+Until #822 (boot self-heal + refuse at POST) exists: **never POST a chain wider
+than one panel to this board** unless you can also serial-flash it.
+
+Recovery that worked: **three power cycles inside the 60 s healthy window
+(Jeremy's hands)** trip the boot-loop guard onto the OTHER slot — keep that
+slot on a build whose cap refuses the layout, or at least one that boots the
+default — then store the 1x1 layout on the healthy build, `POST /api/map` with
+an empty body (the 2x1 also left a 128x64 user map behind: scrambled picture),
+and OTA the intended build again. The USB two-open reset is NOT a substitute:
+that night it registered once (and left the board with `0 bytes of PSRAM` →
+panic loop until a power cycle) and then never again. After the recovery push
+the SAME image to both slots, or the next guard rollback lands on whatever
+the other slot held.
+
+## The spare-plane swap freezes the image (2026-09-27, #620)
+
+`hub75-spare-plane` boots and saves the predicted 24 KB, but within seconds
+the panel shows a static image while `fps` reads 19–20: `spare.flushes` stops,
+`deferred` climbs by thousands per second, `abandoned` too. One preempted
+plane copy (`plane_us` 2,029 µs vs 526 typical) is remembered forever by the
+window check, after which no pass ever fits; and at any `lsb` step the MSB run
+is too short for seven copies anyway. Details on #620. Do not deploy it to
+show Jeremy anything until the window math is reworked.
 
 Reading the panel (2026-09-07):
 - **`/api/status`'s `web` array is the first thing to read when the board

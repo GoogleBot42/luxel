@@ -3605,6 +3605,22 @@ on the bench (`nix build .#luxel-fw-seengreat-hub75-spare`, or
 artifact through a Raindrops / Infinite Snake / comet run, pattern saves and
 an OTA (Gitea #620).
 
+**On metal 2026-09-27 (Gitea #620): the RAM half is right, the swap freezes.**
+Booted on the Seengreat at 20 MHz / blank 2 / 7 planes: `heap_free`
+78,300 B against 53,852 on the two-buffer build (+24.4 KB), `psram_free`
+−28.7 KB (the staging framebuffer), `torn_p1` / `torn_wrap` 0 throughout.
+But the panel went STATIC within seconds while the engine kept rendering at
+19–20 fps — at `lsb 14` after 199 flushes (190,579 deferred, 1,138
+abandoned), and at the stock schedule after 144 flushes (473,448 deferred,
+2,839 abandoned). Two causes: the window check keeps the worst-ever
+`plane_us` (one preempted copy read 2,029 µs against 526 typical, and
+7 × 2 ms never fits a 13 ms pass again), and the typical copy itself is 2x
+the 16 B/µs guess — 7.8 MB/s out of the PSRAM staging buffer, 3.7 ms for
+seven planes, which fits the stock MSB run (6.5 ms) but not any `lsb` step's
+(1.6 ms at `lsb 14`). Until the copy is faster or spread over passes and the
+window uses a typical time, the feature stays off, and it is incompatible
+with the `lsb` schedule. Rework list on #620.
+
 ## Vsync: the panel is the clock (2026-09-07, Gitea #387, #378)
 
 With the swap made atomic (above), the panel still showed fewer frames than

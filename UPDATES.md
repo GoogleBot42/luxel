@@ -1,5 +1,43 @@
 # Update log
 
+## 2026-09-27 — the rest of the panel night: a stored 2x1 layout bricks the board (#822), the spare-plane swap freezes (#620), and the recovery
+
+Continuation of the entry below. Three things learned the hard way, all on
+the Seengreat, all now in .claude/skills/seengreat-panel:
+
+**A stored layout the heap cannot serve is a network brick.** The 2x1
+layout stored for the #768 check (8192 px, legal since #802) boots every
+time — the framebuffers are allocated before WiFi — and then starves the
+rest: 503 `out of memory` on every route, `POST /api/layout` unable to
+persist, `POST /api/reboot` never landing, and an OTA of a fixed build
+booting straight back into the same stored layout. A USB two-open reset
+registered once (and left the board with `0 bytes of PSRAM` → panic loop
+until a power cycle) and then never again. What worked: three power cycles
+inside the 60 s healthy window (Jeremy) → boot-loop guard → the other slot,
+whose 4096 cap rejects the layout → 1x1 layout stored on the healthy build →
+the fixed build pushed again, to BOTH slots. Filed #822: boot self-heal
+(revert to the board default when `heap_free` is under the floor after
+boot) and refuse-at-POST. Also learned: a second Claude session was driving
+the panel at the same time (its own OTA + status polling) — `pgrep -fa
+192.168.0.238` before blaming the board.
+
+**The spare-plane swap (#610/#620) freezes the image.** RAM exactly as
+predicted (+24.4 KB internal, −28.7 KB PSRAM, `torn_*` 0), but the panel
+went static within seconds at both `lsb 14` and the stock schedule while
+`fps` read 19–20: the window check remembers the worst-ever `plane_us`
+(2,029 µs after one preempted copy; 7 × 2 ms never fits a 13 ms pass), and
+even the typical 526 µs/plane (7.8 MB/s from PSRAM staging, 2x the guess) is
+too slow for any `lsb` step's MSB run. Verdict and rework list on #620; the
+feature stays off, and it is mutually exclusive with `lsb` until fixed.
+
+**Left as found, plus one change.** Both slots on master `e755c22`
+(#823), `panel 7 20 shiftreg 2 14` — 296 Hz at 91 % brightness, which
+Jeremy saw and kept — scene "Test" active, playlist stopped at 0,
+brightness 14 untouched. The second panel is not worth plugging in until
+#822 and a working single-buffer mode exist; the 128x128 plan (#611) now
+reads 136 Hz at 86 % brightness on 20 MHz panels with 7 planes, RAM
+permitting.
+
 ## 2026-09-26 — the `lsb` schedule on metal (#795), and its brightness model was wrong in a good way
 
 First run of PR #797's `lsb` panel field on the Seengreat (20 MHz, blank 2,
