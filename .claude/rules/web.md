@@ -24,6 +24,15 @@ paths:
   that ran its program on open showed "not run yet" every single time, while
   clicking Run — an event handler, i.e. its own flush — worked). Applies to a
   plain `let`, not just to stores (next bullet).
+  Seen again in #784 with the other symptom: the MARKUP was right and a
+  derived `$:` was not. The sprite editor's Record line read `82 B` for an
+  8,220 B record — `$: bytes = spriteBytes(doc)` is declared above the block
+  that assigned `doc`, so the fragment patch drew the new size and the byte
+  count kept the old document's forever. When the derived values are spread
+  across the file (here `wire`, `dirty`, `bytes`, `overCap`) rather than one
+  line, the fix is `await tick()` *before* the assignment instead of moving
+  every derivation into the assigning function: after the flush an ordinary
+  invalidation schedules the next one.
 - **A `$:` that both READS and ASSIGNS the same variable is its own
   dependency, and re-runs forever.** `stopPoll = stopPoll ?? startPoll()` and
   `rafId = rafId || requestAnimationFrame(tick)` are the shapes; both froze a
@@ -344,6 +353,14 @@ paths:
   (`main.editor-frame:not([hidden]) …`, the `VISIBLE_CODE` constant in
   `web/tools/e2e.mjs`) or to the screen you mean by its `data-role`. Same rule
   when adding a third screen: give its `<main>` a `data-role` and scope.
+  The flip side (#784): a COMPONENT mounted on two screens must take its
+  `data-role` as a PROP and be given a different one per screen
+  (`sprite-import` on the Sprites tab, `sprite-editor-import` in the sprite
+  editor). A shared role is not ambiguous-looking, it is ambiguous: `page.$`
+  answers with whichever screen is earlier in the DOM, so a harness uploads
+  into the hidden one and the symptom is "the dialog never opened" on a
+  screen where it plainly does open by hand. Scoping the harness's selector
+  is not enough — the roles themselves have to differ.
 - The playground previews a `render2D` pattern on a **16x16 grid at targetFps
   60** by default (`stores/geometry.ts`, "Preview as" = Auto), while the bench
   panel is 64x64 at 100+ fps. So "wrong in the browser, fine on device" for a

@@ -343,3 +343,12 @@ nothing in this container is public.
   the §5.7 disabled sweep with it). Both browser harnesses carry an
   `evalOr(page, sel, fn, fallback)` next to `check` — use it for any read where the
   element's own presence is part of what is under test, and `check` the fallback.
+- **`uploadFile` must be handed a RESOLVED path.** Chromium keeps the string it is
+  given, so `elementHandle.uploadFile(`${import.meta.dirname}/../tests/fixtures/x.png`)`
+  is accepted, sets a file named `x.png` on the input, fires `change` — and then the
+  page's `file.arrayBuffer()` throws `NotReadableError: The requested file could not
+  be read, typically due to permission problems that have occurred after a reference
+  to a file was acquired`. It reads exactly like a decoder or a permissions bug and is
+  neither (#784, an hour). `fs.realpathSync(...)` the directory once and build paths
+  from that. The same upload from a `waitForFileChooser()` + `fc.accept([...])` with an
+  absolute path works, which is what makes the two look like different bugs.
