@@ -28,6 +28,8 @@ import {
   LSB_FULL,
   lsbWire,
   peakBrightnessFraction,
+  rowBlocksPerPlane,
+  trailingBlock,
   truncatedPlanes,
   chipShort,
   CLOCK_CEILING_MHZ,
@@ -553,36 +555,89 @@ test("the emissions per rescan are t + 2^(planes − t) − 1, stock at t = 0", 
       assert.ok(emissions(planes, t) <= emissions(planes, 0), `${planes}/${t}`);
 });
 
-test("peak brightness is lsb · (2^planes − 1) / (W · E) — on-time per unit TIME", () => {
-  // the stock schedule is the yardstick
-  assert.equal(peakBrightnessFraction(61, 61, 7), 1);
-  // the bench panel's step tops, against the panel as photographed on
-  // 2026-09-26: nearly stock, NOT the 49 % / 13 % the #789 model predicted
-  const pct = (lsb, w = 61, planes = 7) =>
-    Math.round(peakBrightnessFraction(lsb, w, planes) * 1000) / 10;
-  assert.equal(pct(30), 97.6, "t 1, E 64");
-  assert.equal(pct(15), 94.6, "t 2, E 33");
-  assert.equal(pct(7), 81, "t 3, E 18");
+test("peak brightness is lsb · (2^P − 1) · rows / (W · E · (rows + trail))", () => {
+  // the stock schedule is the yardstick — and it has no trailing block, so it
+  // is exactly 1 whatever the scan
+  assert.equal(peakBrightnessFraction(61, 61, 7, 32), 1);
+  assert.equal(peakBrightnessFraction(61, 61, 7, 16), 1);
+  // the bench panel's step tops at 1/32 scan (rows 32, so a truncating pass is
+  // 33 row blocks): nearly stock, NOT the 49 % / 13 % the #789 model predicted
+  const pct = (lsb, w = 61, planes = 7, rows = 32) =>
+    Math.round(peakBrightnessFraction(lsb, w, planes, rows) * 1000) / 10;
+  assert.equal(pct(30), 94.6, "t 1, E 64");
+  assert.equal(pct(15), 91.8, "t 2, E 33");
+  assert.equal(pct(7), 78.5, "t 3, E 18");
   // …and INSIDE a step it falls linearly, which is what makes every position
   // but the top strictly worse: lsb 8 runs the same 33 emissions as lsb 15
-  assert.equal(pct(8), 50.5, "t 2 as well, at half the light of lsb 15");
+  assert.equal(pct(8), 48.9, "t 2 as well, at half the light of lsb 15");
   assert.equal(truncatedPlanes(8, 61, 7), truncatedPlanes(15, 61, 7));
   assert.ok(pct(8) < pct(15));
   // Jeremy's panel: 20 MHz, blank 2, so W = 59
-  assert.equal(pct(29, 59), 97.5, "t 1, E 64");
-  assert.equal(pct(14, 59), 91.3, "t 2, E 33");
-  assert.equal(pct(7, 59), 83.7, "t 3, E 18");
+  assert.equal(pct(29, 59), 94.6, "t 1, E 64");
+  assert.equal(pct(14, 59), 88.6, "t 2, E 33");
+  assert.equal(pct(7, 59), 81.2, "t 3, E 18");
+  // the trailing display block (#795) is the difference from #797's model: it
+  // is pass TIME with no on-time, so it costs a flat 1/(rows+1) of the light —
+  // 3 % at 1/32 scan, 6 % at 1/16 — and NOTHING at the stock schedule
+  const bare = (lsb, w, planes, rows) => {
+    const t = truncatedPlanes(lsb, w, planes);
+    return (lsb * (2 ** planes - 1)) / (w * emissions(planes, t));
+  };
+  for (const rows of [8, 16, 32, 64]) {
+    for (const lsb of [30, 15, 8, 7, 3, 1]) {
+      const got = peakBrightnessFraction(lsb, 61, 7, rows);
+      assert.ok(
+        Math.abs(got - (bare(lsb, 61, 7) * rows) / (rows + 1)) < 1e-12,
+        `rows ${rows} lsb ${lsb}`,
+      );
+      assert.ok(got < bare(lsb, 61, 7), `rows ${rows} lsb ${lsb}: trail costs light`);
+    }
+    // t = 0: no trailing block, so the scan cannot move it
+    assert.equal(peakBrightnessFraction(61, 61, 7, rows), bare(61, 61, 7));
+    assert.equal(peakBrightnessFraction(31, 61, 7, rows), bare(31, 61, 7));
+  }
   // it is no longer independent of the bit depth: E is built from it
-  assert.notEqual(peakBrightnessFraction(30, 61, 7), peakBrightnessFraction(30, 61, 5));
+  assert.notEqual(peakBrightnessFraction(30, 61, 7, 32), peakBrightnessFraction(30, 61, 5, 32));
   // never over full, whatever is stored
   for (const planes of [4, 5, 6, 7, 8])
     for (let lsb = 1; lsb <= 61; lsb++)
-      assert.ok(peakBrightnessFraction(lsb, 61, planes) <= 1, `${planes}/${lsb}`);
-  assert.ok(peakBrightnessFraction(4000, 61, 7) <= 1, "clamped like lsbEffective");
+      assert.ok(peakBrightnessFraction(lsb, 61, planes, 32) <= 1, `${planes}/${lsb}`);
+  assert.ok(peakBrightnessFraction(4000, 61, 7, 32) <= 1, "clamped like lsbEffective");
+});
+
+test("the trailing display block is one extra row block per plane, only at t > 0", () => {
+  // Gitea #795, the row-31 bug: a row block displays the row the block BEFORE
+  // it latched, so at t > 0 — where the planes' OE windows are different
+  // widths — the last address row of a plane would be displayed under the next
+  // plane's window and come out plane-rotated. The fix darkens block 0 and adds
+  // a trailing block for that last row, so a plane costs `rows + 1` blocks.
+  assert.equal(trailingBlock(0), 0, "the stock schedule needs none");
+  for (const t of [1, 2, 3, 4, 5, 6, 7]) assert.equal(trailingBlock(t), 1, `t ${t}`);
+  assert.equal(rowBlocksPerPlane(32, 0), 32);
+  assert.equal(rowBlocksPerPlane(32, 1), 33);
+  assert.equal(rowBlocksPerPlane(16, 3), 17);
+  // and the same rule through the estimate: the stock reading is untouched and
+  // every truncating one is exactly rows/(rows+1) of what #797 predicted
+  const input = (scan) => ({ pw: 64, ph: 64, panels: 1, scan });
+  const drv = (lsb) => ({ clockHz: 30e6, planes: 7, lsb, blank: 1, latch: 1 });
+  for (const scan of [16, 32]) {
+    const rows = scan;
+    const cols = 64 * (32 / scan);
+    const pre = (lsb) => {
+      const w = litWidth(cols, 1, 1);
+      const t = truncatedPlanes(lsbEffective(lsb, w), w, 7);
+      return 30e6 / (cols * scan * emissions(7, t));
+    };
+    assert.equal(estimatedRefreshHz(input(scan), drv(0)), pre(0), `scan ${scan}: stock unmoved`);
+    for (const lsb of [30, 15, 7]) {
+      const got = estimatedRefreshHz(input(scan), drv(lsb));
+      assert.ok(Math.abs(got - (pre(lsb) * rows) / (rows + 1)) < 1e-9, `scan ${scan} lsb ${lsb}`);
+    }
+  }
 });
 
 test("lsbSteps offers one position per truncation step, at its TOP", () => {
-  const steps = lsbSteps(61, 7);
+  const steps = lsbSteps(61, 7, 32);
   // t 6 would need floor(61/64) = 0 clocks, so the bench panel has SIX
   // positions at 7 planes, not seven
   assert.deepEqual(
@@ -602,9 +657,15 @@ test("lsbSteps offers one position per truncation step, at its TOP", () => {
     steps.map((s) => s.emissions),
     [127, 64, 33, 18, 11, 8],
   );
+  // the trailing display block: none at the stock position, one everywhere
+  // else (#795)
+  assert.deepEqual(
+    steps.map((s) => s.trail),
+    [0, 1, 1, 1, 1, 1],
+  );
   assert.deepEqual(
     steps.map((s) => Math.round(s.brightness * 1000) / 10),
-    [100, 97.6, 94.6, 81, 56.8, 26],
+    [100, 94.6, 91.8, 78.5, 55.1, 25.2],
   );
   // every entry really is the TOP of its step: it truncates exactly t planes,
   // and one clock more would truncate one fewer
@@ -614,12 +675,16 @@ test("lsbSteps offers one position per truncation step, at its TOP", () => {
   }
   // Jeremy's panel, W 59
   assert.deepEqual(
-    lsbSteps(59, 7).map((s) => s.lsb),
+    lsbSteps(59, 7, 32).map((s) => s.lsb),
     [59, 29, 14, 7, 3, 1],
+  );
+  assert.deepEqual(
+    lsbSteps(59, 7, 32).map((s) => Math.round(s.brightness * 1000) / 10),
+    [100, 94.6, 88.6, 81.2, 56.9, 26.1],
   );
   // fewer planes = fewer positions, never more than `planes`
   for (const planes of [4, 5, 6, 7, 8]) {
-    const list = lsbSteps(61, planes);
+    const list = lsbSteps(61, planes, 32);
     assert.ok(list.length <= planes, `${planes} planes`);
     assert.equal(list[0].t, 0, "the stock schedule is always offered");
     // brightest and slowest first, strictly monotonic both ways
@@ -630,13 +695,13 @@ test("lsbSteps offers one position per truncation step, at its TOP", () => {
   }
   // a row block with one lit clock has exactly one position: the stock one
   assert.deepEqual(
-    lsbSteps(1, 7).map((s) => s.wire),
+    lsbSteps(1, 7, 32).map((s) => s.wire),
     [0],
   );
 });
 
 test("a stored lsb reads at the step whose refresh it is actually running", () => {
-  const steps = lsbSteps(61, 7);
+  const steps = lsbSteps(61, 7, 32);
   // the step tops round-trip
   steps.forEach((st, i) => assert.equal(lsbStepIndex(steps, st.lsb, 61, 7), i, `t ${st.t}`));
   // an OFF-STEP stored value (a Layout #789's continuous slider wrote) shows at
@@ -650,7 +715,7 @@ test("a stored lsb reads at the step whose refresh it is actually running", () =
   assert.equal(lsbStepAt(benchCfg({ lsb: 15 }), BENCH), 2);
   assert.equal(lsbStepAt(benchCfg({ lsb: 20 }), BENCH), 1);
   assert.equal(lsbStepAt(benchCfg({ lsb: 4000 }), BENCH), 0, "clamped, so still full");
-  assert.deepEqual(lsbStepsFor(benchCfg(), BENCH), lsbSteps(61, 7));
+  assert.deepEqual(lsbStepsFor(benchCfg(), BENCH), lsbSteps(61, 7, 32));
   // the positions follow W, so blanking and the chip move them
   assert.deepEqual(
     lsbStepsFor(benchCfg({ blank: 2 }), BENCH).map((s) => s.lsb),
@@ -662,13 +727,13 @@ test("inside a step the refresh is flat, so only the step tops are worth offerin
   // the whole reason the control is stepped (#797): between two tops the Hz do
   // not move and the brightness only falls
   for (const planes of [5, 6, 7, 8]) {
-    const steps = lsbSteps(61, planes);
+    const steps = lsbSteps(61, planes, 32);
     for (const st of steps) {
       for (let lsb = 1; lsb < st.lsb; lsb++) {
         if (truncatedPlanes(lsb, 61, planes) !== st.t) continue;
         assert.equal(emissions(planes, truncatedPlanes(lsb, 61, planes)), st.emissions);
         assert.ok(
-          peakBrightnessFraction(lsb, 61, planes) < st.brightness,
+          peakBrightnessFraction(lsb, 61, planes, 32) < st.brightness,
           `${planes}: lsb ${lsb} under t ${st.t}`,
         );
       }
@@ -676,7 +741,7 @@ test("inside a step the refresh is flat, so only the step tops are worth offerin
   }
 });
 
-test("the trade at the bench step tops: 115 / 229 / 444 / 814 Hz at 100 / 97.6 / 94.6 / 81 %", () => {
+test("the trade at the bench step tops: 115 / 222 / 430 / 789 Hz at 100 / 94.6 / 91.8 / 78.5 %", () => {
   const at = (lsb) => lsbTrade(benchCfg(), BENCH, lsb);
   const pct = (t) => Math.round(t.brightness * 1000) / 10;
   const full = at(LSB_FULL);
@@ -685,60 +750,74 @@ test("the trade at the bench step tops: 115 / 229 / 444 / 814 Hz at 100 / 97.6 /
   assert.equal(full.trunc, 0);
   assert.equal(full.emissions, 127);
   assert.equal(full.fullEmissions, 127);
+  assert.equal(full.blocks, 32, "the stock schedule needs no trailing block");
+  assert.equal(full.trail, 0);
   assert.equal(full.multiple, 1, "the ×1 position");
   assert.equal(Math.round(full.hz), 115, "the measured bench number (Gitea #255)");
   assert.equal(pct(full), 100);
   assert.ok(full.full, "the control is at its stock position");
 
-  // ×2 — the t 1 step top. 97.6 %, not the 49 % #789 showed
+  // ×2 — the t 1 step top. 94.6 %, not the 49 % #789 showed. The 33rd row
+  // block is the trailing display block (#795): 3 % off both the Hz #797
+  // predicted (228.9) and its 97.6 %
   const x2 = at(30);
   assert.equal(x2.trunc, 1);
   assert.equal(x2.emissions, 64);
+  assert.equal(x2.blocks, 33);
+  assert.equal(x2.trail, 1);
   assert.equal(x2.multiple, 2);
-  assert.equal(Math.round(x2.hz), 229);
-  assert.equal(pct(x2), 97.6);
+  assert.equal(Math.round(x2.hz * 10) / 10, 221.9, "30e6 / (64 · 33 · 64) = 221.95");
+  assert.equal(pct(x2), 94.6);
   assert.equal(x2.full, false);
 
   // ×4 — the t 2 step top
   const x4 = at(15);
   assert.equal(x4.trunc, 2);
   assert.equal(x4.emissions, 33);
+  assert.equal(x4.blocks, 33);
+  assert.equal(Math.round(x4.hz * 10) / 10, 430.4, "30e6 / (64 · 33 · 33)");
   assert.equal(x4.multiple, 4);
-  assert.equal(Math.round(x4.hz), 444);
-  assert.equal(pct(x4), 94.6);
+  assert.equal(pct(x4), 91.8);
 
   // ×8 — the t 3 step top
   const x8 = at(7);
   assert.equal(x8.trunc, 3);
   assert.equal(x8.emissions, 18);
+  assert.equal(x8.blocks, 33);
   assert.equal(x8.multiple, 8);
-  assert.equal(Math.round(x8.hz), 814);
-  assert.equal(pct(x8), 81);
+  assert.equal(Math.round(x8.hz * 10) / 10, 789.1, "30e6 / (64 · 33 · 18)");
+  assert.equal(pct(x8), 78.5);
 
-  // an off-step value: the SAME 444 Hz as lsb 15 at half its light — which is
+  // an off-step value: the SAME 430 Hz as lsb 15 at half its light — which is
   // exactly why the control does not offer it (#797)
   const midstep = at(8);
   assert.equal(midstep.trunc, 2);
   assert.equal(midstep.emissions, 33);
-  assert.equal(Math.round(midstep.hz), 444);
-  assert.equal(pct(midstep), 50.5);
+  assert.equal(Math.round(midstep.hz * 10) / 10, 430.4);
+  assert.equal(pct(midstep), 48.9);
 
   // the stored value is the default, so the card's readouts need no argument
   assert.deepEqual(lsbTrade(benchCfg({ lsb: 30 }), BENCH), x2);
-  // 31 no longer fits twice, so it is the stock schedule at half the light
+  // 31 no longer fits twice, so it is the stock schedule at half the light —
+  // and the stock pass, trailing block and all, is byte-identical to before
   const edge = at(31);
   assert.equal(edge.trunc, 0);
+  assert.equal(edge.blocks, 32);
+  assert.equal(edge.trail, 0);
   assert.equal(Math.round(edge.hz), 115);
   assert.equal(pct(edge), 50.8);
   // and the trade never claims a rescan the stock schedule beats
   for (let lsb = 1; lsb <= 61; lsb++) assert.ok(at(lsb).hz >= full.hz - 1e-9, `lsb ${lsb}`);
 });
 
-test("Jeremy's panel on metal: 20 MHz, blank 2 — 153 / 295 / 542 Hz measured", () => {
-  // Seengreat 64×64, 7 planes, 20 MHz, blank 2 on a shift register: W = 59. The
-  // Hz are what the device reported as `rescan_hz` on 2026-09-26; the
-  // percentages are the corrected model's — the panel looked close to stock at
-  // lsb 14, which 91 % predicts and the old model's 24 % did not.
+test("Jeremy's panel on metal: 20 MHz, blank 2 — 148 / 287 / 526 Hz predicted", () => {
+  // Seengreat 64×64, 7 planes, 20 MHz, blank 2 on a shift register: W = 59.
+  // The device reported 153 / 295 / 542 Hz as `rescan_hz` on 2026-09-26, which
+  // was BEFORE the trailing display block (#795); the numbers here are the
+  // post-fix prediction, 32/33 of those, and the on-metal re-read is in
+  // docs/UNTESTED.md. The percentages are the corrected model's — the panel
+  // looked close to stock at lsb 14, which 89 % predicts and the old
+  // `lsb / W` model's 24 % did not.
   const cfg = (over = {}) => benchCfg({ clock_mhz: 20, blank: 2, ...over });
   const at = (lsb) => lsbTrade(cfg(), BENCH, lsb);
   const pct = (t) => Math.round(t.brightness * 1000) / 10;
@@ -746,26 +825,28 @@ test("Jeremy's panel on metal: 20 MHz, blank 2 — 153 / 295 / 542 Hz measured",
   const stock = at(LSB_FULL);
   assert.equal(stock.width, 59, "64 words − 1 latch − 2·2 blanking");
   assert.equal(stock.emissions, 127);
+  assert.equal(stock.blocks, 32, "no trailing block, so this reading never moved");
   assert.equal(Math.round(stock.hz), 77, "the measured 20 MHz number (Gitea #255)");
   assert.equal(pct(stock), 100);
 
   const x2 = at(29);
   assert.equal(x2.trunc, 1);
   assert.equal(x2.emissions, 64);
-  assert.equal(Math.round(x2.hz * 10) / 10, 152.6, "measured 153");
-  assert.equal(pct(x2), 97.5);
+  assert.equal(x2.blocks, 33);
+  assert.equal(Math.round(x2.hz * 10) / 10, 148, "measured 153 pre-fix (152.6 predicted)");
+  assert.equal(pct(x2), 94.6);
 
   const x4 = at(14);
   assert.equal(x4.trunc, 2);
   assert.equal(x4.emissions, 33);
-  assert.equal(Math.round(x4.hz), 296, "measured 295");
-  assert.equal(pct(x4), 91.3);
+  assert.equal(Math.round(x4.hz * 10) / 10, 287, "measured 295 pre-fix (295.9 predicted)");
+  assert.equal(pct(x4), 88.6);
 
   const x8 = at(7);
   assert.equal(x8.trunc, 3);
   assert.equal(x8.emissions, 18);
-  assert.equal(Math.round(x8.hz * 10) / 10, 542.5, "measured 542");
-  assert.equal(pct(x8), 83.7);
+  assert.equal(Math.round(x8.hz * 10) / 10, 526.1, "measured 542 pre-fix (542.5 predicted)");
+  assert.equal(pct(x8), 81.2);
 
   // and those three ARE the control's ×2/×4/×8 positions on that panel
   assert.deepEqual(
@@ -786,7 +867,8 @@ test("Jeremy's panel on metal: 20 MHz, blank 2 — 153 / 295 / 542 Hz measured",
 test("the estimate at lsb 0 is byte-for-byte the one every caller had", () => {
   const input = { pw: 64, ph: 64, panels: 1, scan: 32 };
   // the whole point of `0 = full`: the emissions formula collapses to
-  // `2^planes − 1`, so no existing reading moves (Gitea #789)
+  // `2^planes − 1` and the pass needs no trailing block (#795), so no existing
+  // reading moves (Gitea #789)
   for (const planes of [4, 5, 6, 7, 8]) {
     const was = 30e6 / (64 * 1 * 1 * 32 * (2 ** planes - 1));
     assert.equal(estimatedRefreshHz(input, { clockHz: 30e6, planes }), was, `${planes} planes`);

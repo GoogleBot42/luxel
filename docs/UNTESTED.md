@@ -116,7 +116,7 @@ value while collapsed. Everything below is on the new page.
   should REFUSE a blanking that leaves no lit clock at all, naming the numbers
   (`panel: blank N + 1 latch clocks leave no lit clock in a 64-word row block` —
   reachable only on a much narrower row block than this panel's).
-- [ ] **Refresh multiplier — the `lsb` schedule** (Gitea #460/#789/#797).
+- [ ] **Refresh multiplier — the `lsb` schedule** (Gitea #460/#789/#797/#795).
   The Panel module's stepped **Refresh ×1 / ×2 / ×4 …** control: one position
   per truncation step, at that step's top (`lsb = floor(W / 2^t)`, written as
   `0` at ×1). Under it, the predicted rescan rate, the measured `rescan_hz` and
@@ -130,7 +130,11 @@ value while collapsed. Everything below is on the new page.
   grey-ramp READBACK is exact; a live `blank` 2 → 4 re-clamped the running
   `lsb 14` to 13 with no reboot; and the panel is visibly close to stock
   brightness at `lsb 14`, which is what forced the brightness-model fix (#797:
-  `lsb · (2^planes − 1) / (W · E)`, not `lsb / W`).
+  `lsb · (2^planes − 1) / (W · E)`, not `lsb / W`). Those Hz are **pre-fix**:
+  they were measured before the trailing display block (#795).
+
+  After the trailing-block fix: bottom row of each half correct at ×4 (Jeremy's
+  eye); `rescan_hz` ≈ 287 at lsb 14 on the 20 MHz panel.
 
   What is still only an EYEBALL question:
   - **Photograph a 0..127 grey ramp** at a fast step and check it stays

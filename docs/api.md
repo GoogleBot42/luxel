@@ -1259,14 +1259,26 @@ their next turn. A `panel` line that changes only `blank` therefore answers
 point: ghosting between address rows is what the knob is for, and it is tuned
 by *looking* at the panel — which a reboot per attempt makes unusable.
 
-**Faster refresh: the `lsb` schedule** (Gitea #460 / #789 / #797). Stock BCM lights every
+**Faster refresh: the `lsb` schedule** (Gitea #460 / #789 / #797 / #795). Stock BCM lights every
 plane for the whole row block and gets the binary weights by re-shifting plane
 `k` (0 = LSB) `2^k` times, so one rescan costs `2^planes − 1` row shifts and the
 LSB is lit for a whole shift even though its weight needs a fraction of one.
 Setting `lsb` gives plane `k` exactly `lsb · 2^k` clocks instead: the planes
 whose on-time fits inside one shift are emitted ONCE with OE cut off early, and
 only the planes above them keep descriptor repeats. Binary weights stay exact
-either way, so a grey ramp keeps its shape — only the peak moves. With
+either way, so a grey ramp keeps its shape — only the peak moves.
+
+**A truncating schedule clocks one EXTRA row block per plane** (Gitea #795, the
+row-31 bug). A row block shifts row `r` while OE displays the row the block
+before it latched, so a plane's LAST address row is displayed during block 0 of
+the NEXT plane — and once the planes are truncated that block's OE window is a
+different width, which came out as the last row of each half (rows 31 and 63 of
+a 64×64) showing the wrong colour and brightness, its bit weights rotated by one
+plane. So at `t > 0` block 0 runs with OE OFF, blocks `1..scan−1` display rows
+`0..scan−2` as before, and a TRAILING block (address `scan−1`, OE at the plane's
+own width, no latch) displays the last row: `scan + 1` row blocks per plane
+instead of `scan`. At `lsb 0` (`t = 0`) every plane's window is the same width,
+no trailing block is needed, and the layout is byte-identical to what shipped.
 
 ```text
 cols_words = pw · panels · stripes          stripes = (ph/2) / scan
@@ -1275,9 +1287,19 @@ W          = cols_words − latch − 2·blank            (≥ 1, else the panel
 lsb_eff    = (lsb == 0 || lsb > W) ? W : lsb
 t          = largest t in 0..planes−1 with (lsb_eff << t) ≤ W
 emissions  = t + 2^(planes − t) − 1                  (stock BCM is 2^planes − 1, i.e. t = 0)
-est_hz     = clock_hz / (scan · cols_words · emissions)
-peak       = lsb_eff · (2^planes − 1) / (W · emissions)    of full brightness
+trail      = t > 0 ? 1 : 0                           (the trailing display block, #795)
+blocks     = scan + trail                            (row blocks ONE plane clocks out)
+est_hz     = clock_hz / (blocks · cols_words · emissions)
+peak       = lsb_eff · (2^planes − 1) · scan
+             ─────────────────────────────           of full brightness
+                 W · emissions · blocks
 ```
+
+The trailing block is pass TIME with no extra on-time, so it takes the same
+`scan/(scan+1)` off BOTH the refresh and the peak — 3 % at 1/32 scan, 6 % at
+1/16 — and nothing at all at `lsb 0`, where the stock pass has no such block.
+It also grows `live.fb_bytes` by `(scan+1)/scan`: 28,672 → **29,568 B** on the
+bench 64×64 at 7 planes. Do not hard-code that number.
 
 **`peak` is NOT `lsb_eff / W`** — that is what #789 documented and it is wrong
 by up to a factor of 8 (#797). `lsb_eff / W` is the duty cycle of ONE PASS, but
@@ -1297,20 +1319,21 @@ At `lsb 0` the `est_hz` formula is identical to the old
 already read moves. On the bench panel — one 64×64 module, 1/32 scan, 7 planes,
 30 MHz, `blank 1`, `shiftreg`, so `W` = 61:
 
-| `lsb` | `t` | emissions | est Hz | peak |
-|---:|---:|---:|---:|---:|
-| `0` (= 61) | 0 | 127 | 115 | **100 %** |
-| 30 | 1 | 64 | 229 | **97.6 %** |
-| 15 | 2 | 33 | 444 | **94.6 %** |
-| 8 | 2 | 33 | 444 | **50.5 %** |
-| 7 | 3 | 18 | 814 | **81.0 %** |
+| `lsb` | `t` | emissions | blocks | est Hz | peak |
+|---:|---:|---:|---:|---:|---:|
+| `0` (= 61) | 0 | 127 | 32 | 115.3 | **100 %** |
+| 30 | 1 | 64 | 33 | 221.9 | **94.6 %** |
+| 15 | 2 | 33 | 33 | 430.4 | **91.8 %** |
+| 8 | 2 | 33 | 33 | 430.4 | **48.9 %** |
+| 7 | 3 | 18 | 33 | 789.1 | **78.5 %** |
 
-The `lsb 8` row is why the step tops matter: the same 444 Hz as `lsb 15`, at
-half the light. Measured on Jeremy's panel (20 MHz, `blank 2`, so `W` = 59) on
-2026-09-26: `lsb 29` → 153 Hz (152.6 predicted) at 97.5 %, `lsb 14` → 295 (296)
-at 91.3 %, `lsb 7` → 542 (542) at 83.7 %, and the panel is visibly close to
-stock at `lsb 14`. It compounds with the ordinary `brightness` (a channel LUT)
-rather than replacing it.
+The `lsb 8` row is why the step tops matter: the same 430 Hz as `lsb 15`, at
+half the light. On Jeremy's panel (20 MHz, `blank 2`, so `W` = 59) the same
+model predicts `lsb 29` → 148.0 Hz at 94.6 %, `lsb 14` → 287.0 at 88.6 %,
+`lsb 7` → 526.1 at 81.2 %, and the panel is visibly close to stock at `lsb 14`.
+Those were measured at 153 / 295 / 542 Hz on 2026-09-26, which was BEFORE the
+trailing block; the post-fix figures are 32/33 of them. It compounds with the
+ordinary `brightness` (a channel LUT) rather than replacing it.
 
 **`lsb` is BOOT-built**, like `planes` / `clock_mhz` / `chip` and unlike
 `blank`: `t` sizes the DMA descriptor chain, so a `panel` line that changes it
@@ -1355,7 +1378,7 @@ The five top-level values are the **configured** (stored) driver; `chips` and
 | `live.lsb` | the **effective** on-time, never 0: the configured `lsb` clamped to the running template's lit width `W`, or `W` itself when the configured value is 0 (full). Compare it against the configured value passed through the same clamp, never against the raw number. Absent on a build older than #789 |
 | `live.w` / `live.h` | the framebuffer's chain extent in pixels — `w` = `pw` × chain length, `h` = `ph` |
 | `live.scan` | address rows the driver scans |
-| `live.fb_bytes` | bytes of ONE framebuffer (there are two, double-buffered) |
+| `live.fb_bytes` | bytes of ONE framebuffer (there are two, double-buffered). `blocks · cols_words · planes · 2`, so a truncating `lsb` adds the trailing block's share — 29,568 B rather than 28,672 on the bench 64×64 (#795) |
 | `live.fallback` | `true` = the configured geometry/driver did not fit in internal RAM and the firmware booted the **board default** instead (64×64, 7 planes, 30 MHz, `shiftreg`, `blank 1`). Say so, and point at `planes` and the panel size. |
 | `"live":null` | there is no panel output at all — the framebuffer allocation or the LCD_CAM init failed even at the board default |
 

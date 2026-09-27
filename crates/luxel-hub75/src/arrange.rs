@@ -277,7 +277,8 @@ pub fn est_hz_driver(m: &Matrix, d: &PanelDriver) -> u32 {
     let Some(g) = fb_geometry(m, usize::from(d.planes)) else {
         return 0;
     };
-    Schedule::plan(g, Control::new(d.blank, d.latch_clocks()), d.lsb).est_hz(g, d.clock_hz())
+    let s = Schedule::plan(g, Control::new(d.blank, d.latch_clocks()), d.lsb);
+    s.est_hz(g.with_trail(s.needs_trail()), d.clock_hz())
 }
 
 #[cfg(test)]

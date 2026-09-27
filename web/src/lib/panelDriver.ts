@@ -40,7 +40,10 @@ import {
   lsbSteps,
   PANEL_DRIVER_DEFAULT,
   peakBrightnessFraction,
+  rowBlocksPerPlane,
   rowBlockWords,
+  scanRows,
+  trailingBlock,
   truncatedPlanes,
   type LsbStep,
   type PanelDriver,
@@ -59,7 +62,9 @@ export {
   lsbStepIndex,
   lsbSteps,
   peakBrightnessFraction,
+  rowBlocksPerPlane,
   rowBlockWords,
+  trailingBlock,
   truncatedPlanes,
   type LsbStep,
 } from "./settingsCaps.ts";
@@ -303,8 +308,11 @@ export function refreshInput(g: PanelGeometry): RefreshInput {
 // brightness falls linearly inside it, so only the step TOPS —
 // `lsb = floor(W / 2^t)`, written as `0` at `t = 0` — are worth offering. At a
 // step top the panel keeps very nearly its stock brightness
-// (`lsb · (2^planes − 1) / (W · E)`), which is the honest framing of the
-// control: faster refresh at a small brightness cost, not "brighter ↔ faster".
+// (`lsb · (2^planes − 1) · rows / (W · E · (rows + trail))`), which is the
+// honest framing of the control: faster refresh at a small brightness cost,
+// not "brighter ↔ faster". The `rows + trail` denominator is the trailing
+// display block a truncating schedule needs (#795): one extra row block per
+// plane, so 3 % of both the refresh and the light at 1/32 scan.
 //
 // The arithmetic is `settingsCaps.ts`'s (and the device's, in
 // `crates/luxel-hub75/src/schedule.rs`); what is here is the reading of it for
@@ -337,14 +345,20 @@ export interface LsbTrade {
   emissions: number;
   /** Row shifts per rescan of the stock schedule, `2^planes − 1`. */
   fullEmissions: number;
+  /** Row blocks ONE plane clocks out: the address rows, plus the trailing
+   *  display block a truncating schedule needs (#795). */
+  blocks: number;
+  /** The trailing display block: 1 at `t > 0`, 0 at the stock schedule. */
+  trail: number;
   /** Predicted rescan rate, Hz. */
   hz: number;
   /** Peak brightness as a fraction of full, 0..1 —
-   *  `lsb · (2^planes − 1) / (W · E)`, NOT `lsb / W` (#797). */
+   *  `lsb · (2^planes − 1) · rows / (W · E · (rows + trail))`, NOT `lsb / W`
+   *  (#797) and not that ratio without the trailing block (#795). */
   brightness: number;
   /** Nominal refresh multiplier of this step, `2^t`: the `×N` the control is
-   *  labelled with. The TRUE ratio is `fullEmissions / emissions`, a few
-   *  percent under it. */
+   *  labelled with. The TRUE ratio is
+   *  `fullEmissions · rows / (emissions · blocks)`, a few percent under it. */
   multiple: number;
   /** Is this the full on-time — the schedule every board shipped with? */
   full: boolean;
@@ -371,6 +385,7 @@ export function lsbTrade(
   const a = refreshInput(geom);
   const planes = Math.max(1, Math.round(cfg.planes));
   const width = litWidth(rowBlockWords(a), cfg.blank, latchClocks(cfg.chip));
+  const rows = scanRows(a);
   const eff = lsbEffective(lsb, width);
   const trunc = truncatedPlanes(eff, width, planes);
   return {
@@ -379,6 +394,8 @@ export function lsbTrade(
     trunc,
     emissions: emissions(planes, trunc),
     fullEmissions: emissions(planes, 0),
+    blocks: rowBlocksPerPlane(rows, trunc),
+    trail: trailingBlock(trunc),
     hz: estimatedRefreshHz(a, {
       clockHz: cfg.clock_mhz * 1e6,
       planes,
@@ -386,7 +403,7 @@ export function lsbTrade(
       blank: cfg.blank,
       latch: latchClocks(cfg.chip),
     }),
-    brightness: peakBrightnessFraction(eff, width, planes),
+    brightness: peakBrightnessFraction(eff, width, planes, rows),
     multiple: 2 ** trunc,
     full: eff >= width,
   };
@@ -405,8 +422,9 @@ export function lsbWire(picked: number, width: number): number {
 /** The control's positions for a configured driver on a configured
  *  arrangement, brightest (`×1`, the stock schedule) first. */
 export function lsbStepsFor(cfg: PanelDriverConfig, geom: PanelGeometry): LsbStep[] {
-  const width = litWidth(rowBlockWords(refreshInput(geom)), cfg.blank, latchClocks(cfg.chip));
-  return lsbSteps(width, Math.max(1, Math.round(cfg.planes)));
+  const a = refreshInput(geom);
+  const width = litWidth(rowBlockWords(a), cfg.blank, latchClocks(cfg.chip));
+  return lsbSteps(width, Math.max(1, Math.round(cfg.planes)), scanRows(a));
 }
 
 /** Which of those positions an `lsb` sits at — the step whose truncation count
@@ -417,8 +435,10 @@ export function lsbStepAt(
   lsb: number = cfg.lsb,
 ): number {
   const planes = Math.max(1, Math.round(cfg.planes));
-  const width = litWidth(rowBlockWords(refreshInput(geom)), cfg.blank, latchClocks(cfg.chip));
-  return lsbStepIndex(lsbSteps(width, planes), lsbEffective(lsb, width), width, planes);
+  const a = refreshInput(geom);
+  const width = litWidth(rowBlockWords(a), cfg.blank, latchClocks(cfg.chip));
+  const steps = lsbSteps(width, planes, scanRows(a));
+  return lsbStepIndex(steps, lsbEffective(lsb, width), width, planes);
 }
 
 // ---- the scan rate (Gitea #778) ------------------------------------------

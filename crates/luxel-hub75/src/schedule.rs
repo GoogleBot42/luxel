@@ -195,11 +195,20 @@ impl Schedule {
     /// full.
     #[must_use]
     pub fn brightness_permille(&self) -> u32 {
-        if self.width == 0 {
+        self.brightness_permille_at(Geometry::new(32, usize::from(self.width), usize::from(self.planes)))
+    }
+
+    /// [`Schedule::brightness_permille`] against the pass the geometry really
+    /// clocks out: the trailing display block ([`Geometry::trail`]) lengthens
+    /// a truncated pass by `1/rows` without adding on-time, and the stock pass
+    /// has no such block.
+    #[must_use]
+    pub fn brightness_permille_at(&self, g: Geometry) -> u32 {
+        if self.width == 0 || g.rows == 0 {
             return 0;
         }
-        let num = u64::from(self.lsb) * self.full_emissions() as u64 * 1000;
-        let den = u64::from(self.width) * self.emissions() as u64;
+        let num = u64::from(self.lsb) * self.full_emissions() as u64 * g.rows as u64 * 1000;
+        let den = u64::from(self.width) * self.emissions() as u64 * g.blocks() as u64;
         ((num + den / 2) / den) as u32
     }
 
@@ -218,10 +227,19 @@ impl Schedule {
         (v >= 1).then_some(v)
     }
 
-    /// Estimated rescan rate: `clock / (rows · cols · emissions)`.
+    /// Whether this schedule needs the trailing display block
+    /// ([`Geometry::trail`]): any truncated plane makes the OE widths differ
+    /// between planes, which is what mis-weights the last row.
+    #[must_use]
+    pub fn needs_trail(&self) -> bool {
+        self.trunc > 0
+    }
+
+    /// Estimated rescan rate: `clock / (blocks · cols · emissions)`, `blocks`
+    /// being `rows` plus the trailing display block when `g` carries one.
     #[must_use]
     pub fn est_hz(&self, g: Geometry, clock_hz: u32) -> u32 {
-        let clocks = g.rows as u64 * g.cols as u64 * self.emissions() as u64;
+        let clocks = g.blocks() as u64 * g.cols as u64 * self.emissions() as u64;
         if clocks == 0 {
             return 0;
         }

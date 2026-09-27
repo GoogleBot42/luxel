@@ -415,7 +415,10 @@ fn template_lights(words: &[u16], g: Geometry, c: Control) -> bool {
     if words.len() != g.words() || g.rows == 0 || g.cols == 0 || g.planes == 0 {
         return false;
     }
-    let block = &words[..g.cols];
+    // Plane 0's blocks: with the trailing display block (Geometry::trail)
+    // block 0 is dark by design and the trailing block latches nothing, so
+    // judge the plane as a whole, not its first block.
+    let block = &words[..g.plane_words()];
     let lit = block.iter().any(|w| w & luxel_hub75::OE_ACTIVE != 0);
     let latched = block.iter().any(|w| w & luxel_hub75::LATCH != 0);
     let clean = words.iter().all(|w| w & luxel_hub75::COLOR_MASK == 0);
@@ -917,8 +920,8 @@ impl Hub75Output {
             s.emissions(),
             s.full_emissions(),
             s.est_hz(g, d.clock_hz()),
-            s.brightness_permille() / 10,
-            s.brightness_permille() % 10,
+            s.brightness_permille_at(g) / 10,
+            s.brightness_permille_at(g) % 10,
         );
     }
 
@@ -954,6 +957,10 @@ impl Hub75Output {
         }
         let c = control_of(&d);
         let s = schedule_of(g, &d);
+        // Truncated planes need the trailing display block, or the last
+        // address row's bit weights come out rotated (Gitea #795 — the bottom
+        // row of each half wrong on the bench). One block more per plane.
+        let g = g.with_trail(s.needs_trail());
         let stripes = arrange::stripes(&m);
         let (w, h) = (g.cols / stripes, 2 * g.rows * stripes);
         // The descriptor chain follows the schedule (Gitea #460): install the
