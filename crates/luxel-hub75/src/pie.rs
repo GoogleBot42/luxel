@@ -21,12 +21,19 @@
 //! power of two; the RGB stride is 3 bytes per pixel and the output stride is
 //! 2 bytes (one bus word). No composition of such maps turns a stride of 3
 //! into a stride of 2 for more than a couple of pixels, so a SIMD gather
-//! costs an op per pixel per channel anyway. The scalar core does it instead,
-//! at ~13 cycles per pixel for both rows — and it applies the brightness LUT
-//! on the way, which keeps any LUT (`scale5`, gamma, identity) exact instead
-//! of approximating it with a vector multiply. The frame format is the lever
-//! if that ever needs to go: a planar or RGBX frame would make this step a
-//! handful of `vld`s.
+//! costs an op per pixel per channel anyway. The scalar core does it instead
+//! — hand-scheduled Xtensa ([`gather_words`]), 9.7 cycles per pixel for both
+//! rows on the Seengreat, where the compiler's best for the same loop was 15
+//! — and the brightness is applied afterwards on the vector unit as an exact
+//! fixed-point multiply ([`crate::LutMode::Scale`], 2.1 cycles/px); only an
+//! arbitrary table ([`crate::LutMode::Table`]) goes through a lookup in the
+//! gather, at ~48 cycles/px, which nothing in the firmware asks for. The
+//! frame format is the lever if the gather ever needs to go: a planar or
+//! RGBX frame would make this step a handful of `vld`s.
+//!
+//! Measured (docs/boards.md "The PIE packer", 2026-09-27): 22.4 cycles/px
+//! cache-hot, 39.9 cache-cold, against 115.3 / 140.5 for [`crate::pack`] —
+//! 5.1× / 3.5×; the seven planes are 10.1 of that.
 //!
 //! # The kernel
 //!
@@ -82,7 +89,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::{Geometry, Tables, COLOR_MASK, MAX_PLANES};
+use crate::{Geometry, LutMode, Tables, COLOR_MASK, MAX_PLANES, SCALE_SHIFT};
 
 /// Columns one loop iteration covers: eight 16-bit lanes.
 pub const LANES: usize = 8;
@@ -165,7 +172,11 @@ fn as_u16(lines: &mut [Line]) -> &mut [u16] {
 }
 
 /// The scalar prologue: gather row pair `r` of `rgb` (through `lut` when the
-/// panel is remapped) into the pair pads, applying the brightness LUT.
+/// panel is remapped) into the pair pads. With [`LutMode::Table`] the byte
+/// LUT is applied here (six dependent loads per pixel — measured at ~48
+/// cycles/px on the S3, which is why the firmware never uses this mode);
+/// with `Identity` or `Scale` the bytes are copied and the scale, if any,
+/// is applied by [`scale_pads`] on the vector unit.
 ///
 /// A short frame reads black past its end, and an unmapped driver pixel
 /// reads black — the same contract as [`crate::pack`].
@@ -175,14 +186,33 @@ fn gather_pair(
     r: usize,
     rows: usize,
     cols: usize,
-    blut: &[u8; 256],
+    tables: &Tables,
     pads: &mut PairPads,
 ) {
     let (rr, gg, bb) = pads.split();
     let (rr, gg, bb) = (&mut rr[..cols], &mut gg[..cols], &mut bb[..cols]);
     let black = [0u8; 3];
+    let table = matches!(tables.mode(), LutMode::Table);
+    let blut = tables.lut();
+    // The plain case: both rows are whole slices of the frame, no LUT.
+    if lut.is_none() && !table {
+        let top = r * cols;
+        let bot = (r + rows) * cols;
+        if let (Some(t), Some(b)) = (rgb.get(top..top + cols), rgb.get(bot..bot + cols)) {
+            if !gather_words(t, b, rr, gg, bb) {
+                gather_bytes(t, b, rr, gg, bb);
+            }
+            return;
+        }
+    }
     let pair = |t: [u8; 3], b: [u8; 3]| -> (u16, u16, u16) {
-        let ch = |i: usize| (u16::from(blut[usize::from(b[i])]) << 8) | u16::from(blut[usize::from(t[i])]);
+        let ch = |i: usize| {
+            if table {
+                (u16::from(blut[usize::from(b[i])]) << 8) | u16::from(blut[usize::from(t[i])])
+            } else {
+                (u16::from(b[i]) << 8) | u16::from(t[i])
+            }
+        };
         (ch(0), ch(1), ch(2))
     };
     match lut {
@@ -211,6 +241,265 @@ fn gather_pair(
             }
         }
     }
+}
+
+/// The plain gather a byte at a time: the fallback for rows the word form
+/// cannot take, and the yardstick the bench times it against.
+pub fn gather_bytes(top: &[[u8; 3]], bot: &[[u8; 3]], rr: &mut [u16], gg: &mut [u16], bb: &mut [u16]) {
+    for ((((r_, g_), b_), t), b) in rr.iter_mut().zip(gg.iter_mut()).zip(bb.iter_mut()).zip(top).zip(bot) {
+        *r_ = (u16::from(b[0]) << 8) | u16::from(t[0]);
+        *g_ = (u16::from(b[1]) << 8) | u16::from(t[1]);
+        *b_ = (u16::from(b[2]) << 8) | u16::from(t[2]);
+    }
+}
+
+/// The plain gather on 32-bit words: four columns per step — three words
+/// of each row in, six words of pairs out — so the Xtensa does 6 loads and
+/// 6 stores per 4 columns instead of 24 byte loads and 12 halfword stores,
+/// and the byte extraction is ALU work with no load-use stalls. Needs both
+/// rows 4-byte aligned and `cols` a multiple of 4 (the pads always are —
+/// 16-byte lines); returns `false` (nothing written) otherwise.
+#[allow(unsafe_code)]
+pub fn gather_words(top: &[[u8; 3]], bot: &[[u8; 3]], rr: &mut [u16], gg: &mut [u16], bb: &mut [u16]) -> bool {
+    let cols = rr.len();
+    let (t, b) = (top.as_flattened(), bot.as_flattened());
+    if !cols.is_multiple_of(4)
+        || !(t.as_ptr() as usize).is_multiple_of(4)
+        || !(b.as_ptr() as usize).is_multiple_of(4)
+        || !(rr.as_ptr() as usize).is_multiple_of(4)
+        || !(gg.as_ptr() as usize).is_multiple_of(4)
+        || !(bb.as_ptr() as usize).is_multiple_of(4)
+    {
+        return false;
+    }
+    // SAFETY: alignment checked above; lengths are exact multiples (3 bytes
+    // per column, 4 columns per 3 words; 2 columns per pad word); `u32` and
+    // `u16` have no invalid bit patterns; the borrows are the callers'.
+    let (tw, bw, rw, gw, bw2) = unsafe {
+        (
+            core::slice::from_raw_parts(t.as_ptr().cast::<u32>(), cols * 3 / 4),
+            core::slice::from_raw_parts(b.as_ptr().cast::<u32>(), cols * 3 / 4),
+            core::slice::from_raw_parts_mut(rr.as_mut_ptr().cast::<u32>(), cols / 2),
+            core::slice::from_raw_parts_mut(gg.as_mut_ptr().cast::<u32>(), cols / 2),
+            core::slice::from_raw_parts_mut(bb.as_mut_ptr().cast::<u32>(), cols / 2),
+        )
+    };
+    // Little-endian: column x's bytes are 3x, 3x+1, 3x+2 of the row, so
+    // the three words of four columns hold R0 G0 B0 R1 | G1 B1 R2 G2 |
+    // B2 R3 G3 B3. Each pad word (two columns: `b1 t1 b0 t0`) is four
+    // bytes pulled out with `(w >> s) & 0xff` — one `extui` on Xtensa — and
+    // shifted into place; a mask against a non-contiguous constant would be
+    // a literal load and an AND each.
+    #[cfg(all(feature = "pie", target_arch = "xtensa"))]
+    {
+        gather_words_asm(tw, bw, rw, gw, bw2);
+        return true;
+    }
+    #[cfg(not(all(feature = "pie", target_arch = "xtensa")))]
+    for ((((tw, bw), rw), gw), bw2) in
+        tw.chunks_exact(3).zip(bw.chunks_exact(3)).zip(rw.chunks_exact_mut(2)).zip(gw.chunks_exact_mut(2)).zip(bw2.chunks_exact_mut(2))
+    {
+        // bytes of the three words: [R0 G0 B0 R1] [G1 B1 R2 G2] [B2 R3 G3 B3]
+        let [tr0, tg0, tb0, tr1] = tw[0].to_le_bytes();
+        let [tg1, tb1, tr2, tg2] = tw[1].to_le_bytes();
+        let [tb2, tr3, tg3, tb3] = tw[2].to_le_bytes();
+        let [br0, bg0, bb0, br1] = bw[0].to_le_bytes();
+        let [bg1, bb1, br2, bg2] = bw[1].to_le_bytes();
+        let [bb2, br3, bg3, bb3] = bw[2].to_le_bytes();
+        // pad word = column 2i+1 in the high half, column 2i in the low: t b t b
+        rw[0] = u32::from_le_bytes([tr0, br0, tr1, br1]);
+        rw[1] = u32::from_le_bytes([tr2, br2, tr3, br3]);
+        gw[0] = u32::from_le_bytes([tg0, bg0, tg1, bg1]);
+        gw[1] = u32::from_le_bytes([tg2, bg2, tg3, bg3]);
+        bw2[0] = u32::from_le_bytes([tb0, bb0, tb1, bb1]);
+        bw2[1] = u32::from_le_bytes([tb2, bb2, tb3, bb3]);
+    }
+    true
+}
+
+/// [`gather_words`] as hand-scheduled Xtensa: the instruction count the
+/// machine needs (6 loads, 24 `extui`, 36 shift/OR, 6 stores per four
+/// columns) rather than the ~110 the compiler makes of the Rust form. Same
+/// preconditions (the caller checked them); the device bench checks the
+/// output word for word against the scalar packer.
+#[cfg(all(feature = "pie", target_arch = "xtensa"))]
+#[allow(unsafe_code)]
+fn gather_words_asm(tw: &[u32], bw: &[u32], rw: &mut [u32], gw: &mut [u32], bw2: &mut [u32]) {
+    let n = rw.len() / 2;
+    debug_assert!(tw.len() >= 3 * n && bw.len() >= 3 * n && gw.len() >= 2 * n && bw2.len() >= 2 * n);
+    // SAFETY: `n` iterations read 3 words of each source and write 2 words
+    // of each pad, all within the slices the caller sized; no memory
+    // outside them is touched and no register state survives the block.
+    unsafe {
+        core::arch::asm!(
+            "loopnez {n}, 2f",
+            "l32i {t0}, {t}, 0",
+            "l32i {t1}, {t}, 4",
+            "l32i {t2}, {t}, 8",
+            "l32i {b0}, {b}, 0",
+            "l32i {b1}, {b}, 4",
+            "l32i {b2}, {b}, 8",
+            "addi {t}, {t}, 12",
+            "addi {b}, {b}, 12",
+            "extui {x}, {t0}, 0, 8",
+            "extui {y}, {b0}, 0, 8",
+            "slli {y}, {y}, 8",
+            "or {x}, {x}, {y}",
+            "extui {y}, {t0}, 24, 8",
+            "slli {y}, {y}, 16",
+            "or {x}, {x}, {y}",
+            "extui {y}, {b0}, 24, 8",
+            "slli {y}, {y}, 24",
+            "or {x}, {x}, {y}",
+            "s32i {x}, {r}, 0",
+            "extui {x}, {t1}, 16, 8",
+            "extui {y}, {b1}, 16, 8",
+            "slli {y}, {y}, 8",
+            "or {x}, {x}, {y}",
+            "extui {y}, {t2}, 8, 8",
+            "slli {y}, {y}, 16",
+            "or {x}, {x}, {y}",
+            "extui {y}, {b2}, 8, 8",
+            "slli {y}, {y}, 24",
+            "or {x}, {x}, {y}",
+            "s32i {x}, {r}, 4",
+            "extui {x}, {t0}, 8, 8",
+            "extui {y}, {b0}, 8, 8",
+            "slli {y}, {y}, 8",
+            "or {x}, {x}, {y}",
+            "extui {y}, {t1}, 0, 8",
+            "slli {y}, {y}, 16",
+            "or {x}, {x}, {y}",
+            "extui {y}, {b1}, 0, 8",
+            "slli {y}, {y}, 24",
+            "or {x}, {x}, {y}",
+            "s32i {x}, {g}, 0",
+            "extui {x}, {t1}, 24, 8",
+            "extui {y}, {b1}, 24, 8",
+            "slli {y}, {y}, 8",
+            "or {x}, {x}, {y}",
+            "extui {y}, {t2}, 16, 8",
+            "slli {y}, {y}, 16",
+            "or {x}, {x}, {y}",
+            "extui {y}, {b2}, 16, 8",
+            "slli {y}, {y}, 24",
+            "or {x}, {x}, {y}",
+            "s32i {x}, {g}, 4",
+            "extui {x}, {t0}, 16, 8",
+            "extui {y}, {b0}, 16, 8",
+            "slli {y}, {y}, 8",
+            "or {x}, {x}, {y}",
+            "extui {y}, {t1}, 8, 8",
+            "slli {y}, {y}, 16",
+            "or {x}, {x}, {y}",
+            "extui {y}, {b1}, 8, 8",
+            "slli {y}, {y}, 24",
+            "or {x}, {x}, {y}",
+            "s32i {x}, {p}, 0",
+            "extui {x}, {t2}, 0, 8",
+            "extui {y}, {b2}, 0, 8",
+            "slli {y}, {y}, 8",
+            "or {x}, {x}, {y}",
+            "extui {y}, {t2}, 24, 8",
+            "slli {y}, {y}, 16",
+            "or {x}, {x}, {y}",
+            "extui {y}, {b2}, 24, 8",
+            "slli {y}, {y}, 24",
+            "or {x}, {x}, {y}",
+            "s32i {x}, {p}, 4",
+            "addi {r}, {r}, 8",
+            "addi {g}, {g}, 8",
+            "addi {p}, {p}, 8",
+            "2:",
+            n = in(reg) n,
+            t = inout(reg) tw.as_ptr() => _,
+            b = inout(reg) bw.as_ptr() => _,
+            r = inout(reg) rw.as_mut_ptr() => _,
+            g = inout(reg) gw.as_mut_ptr() => _,
+            p = inout(reg) bw2.as_mut_ptr() => _,
+            t0 = out(reg) _, t1 = out(reg) _, t2 = out(reg) _,
+            b0 = out(reg) _, b1 = out(reg) _, b2 = out(reg) _,
+            x = out(reg) _, y = out(reg) _,
+            options(nostack),
+        );
+    }
+}
+
+/// Apply a [`LutMode::Scale`] multiplier to every byte of the pair pads:
+/// `(c * mul) >> SCALE_SHIFT` per byte, exact `scale5`. Each 16-bit lane
+/// holds two bytes, so each half is masked out, multiplied on its own (the
+/// 32-bit product shifted by SAR = 13 — the high byte's product carries
+/// its junk below bit 8, masked away) and the halves are OR-ed back.
+#[cfg_attr(all(feature = "pie", target_arch = "xtensa"), allow(dead_code))]
+pub fn scale_pads_model(pad: &mut [u16], mul: u16) {
+    let m = u32::from(mul);
+    for w in pad.iter_mut() {
+        let lo = ((u32::from(*w & 0x00ff) * m) >> SCALE_SHIFT) as u16;
+        let hi = (((u32::from(*w & 0xff00) * m) >> SCALE_SHIFT) as u16) & 0xff00;
+        *w = lo | hi;
+    }
+}
+
+/// [`scale_pads_model`] on the PIE unit: `pad` is 16-byte aligned and a
+/// multiple of [`LANES`] long (the caller checked).
+#[cfg(all(feature = "pie", target_arch = "xtensa"))]
+#[allow(unsafe_code)]
+fn scale_pads_asm(pad: &mut [u16], mul: u16) {
+    let consts: [u16; 3] = [0x00ff, 0xff00, mul];
+    let chunks = pad.len() / LANES;
+    let shift = SCALE_SHIFT;
+    // SAFETY: as for `pack_plane_asm` — every access is inside `pad`, PS
+    // and SAR are restored, and the q registers belong to no one.
+    unsafe {
+        core::arch::asm!(
+            "rsil {ps}, 15",
+            "rsr.sar {sar}",
+            "ssr {k}",
+            "ee.vldbc.16 q0, {c}",
+            "addi {c}, {c}, 2",
+            "ee.vldbc.16 q1, {c}",
+            "addi {c}, {c}, 2",
+            "ee.vldbc.16 q2, {c}",
+            "loopnez {n}, 2f",
+            "ee.vld.128.ip q3, {p}, 0",
+            "ee.andq q4, q3, q0",
+            "ee.andq q3, q3, q1",
+            "ee.vmul.u16 q4, q4, q2",        // low byte scaled
+            "ee.vmul.u16 q3, q3, q2",        // high byte scaled, junk below bit 8
+            "ee.andq q3, q3, q1",
+            "ee.orq q3, q3, q4",
+            "ee.vst.128.ip q3, {p}, 16",
+            "2:",
+            "wsr.sar {sar}",
+            "wsr.ps {ps}",
+            "rsync",
+            ps = out(reg) _,
+            sar = out(reg) _,
+            k = in(reg) shift,
+            c = inout(reg) consts.as_ptr() => _,
+            n = in(reg) chunks,
+            p = inout(reg) pad.as_mut_ptr() => _,
+            options(nostack),
+        );
+    }
+}
+
+#[cfg(all(feature = "pie", target_arch = "xtensa"))]
+use scale_pads_asm as scale_pads;
+#[cfg(not(all(feature = "pie", target_arch = "xtensa")))]
+use scale_pads_model as scale_pads;
+
+/// The scale pass on one 16-byte-aligned pad of `LANES`-multiple length
+/// (the vector unit where there is one) — exposed for the bench.
+pub fn scale_pad(pad: &mut [u16], mul: u16) {
+    assert!(pad.len().is_multiple_of(LANES) && (pad.as_ptr() as usize).is_multiple_of(16));
+    scale_pads(pad, mul);
+}
+
+/// The three pads as mutable slices, `cols` wide — exposed for the bench.
+pub fn pads_mut(pads: &mut PairPads, cols: usize) -> (&mut [u16], &mut [u16], &mut [u16]) {
+    let (r, g, b) = pads.split();
+    (&mut r[..cols], &mut g[..cols], &mut b[..cols])
 }
 
 /// The per-plane constants the kernel broadcasts into `q0..q5`, in load
@@ -345,8 +634,13 @@ pub fn fits(dst: &[u16], g: Geometry) -> bool {
 /// words, `stride` words apart (a whole-frame layout uses
 /// [`Geometry::plane_words`]; a ring slot uses `cols`). The pads hold the
 /// gathered pair. `k(p) = 7 - p`.
-fn pack_pair_planes(dst: &mut [u16], stride: usize, cols: usize, planes: usize, pads: &mut PairPads) {
+fn pack_pair_planes(dst: &mut [u16], stride: usize, cols: usize, planes: usize, tables: &Tables, pads: &mut PairPads) {
     let (rr, gg, bb) = pads.split();
+    if let LutMode::Scale(m) = tables.mode() {
+        scale_pads(&mut rr[..cols], m);
+        scale_pads(&mut gg[..cols], m);
+        scale_pads(&mut bb[..cols], m);
+    }
     for p in 0..planes {
         let base = p * stride;
         let k = (7 - p) as u32;
@@ -384,8 +678,8 @@ pub fn pack_pie(
     let (rows, cols) = (g.rows, g.cols);
     let stride = g.plane_words();
     for r in 0..rows {
-        gather_pair(rgb, lut, r, rows, cols, tables.lut(), pads);
-        pack_pair_planes(&mut dst[r * cols..], stride, cols, g.planes, pads);
+        gather_pair(rgb, lut, r, rows, cols, tables, pads);
+        pack_pair_planes(&mut dst[r * cols..], stride, cols, g.planes, tables, pads);
     }
     true
 }
@@ -412,8 +706,8 @@ pub fn pack_row_pair(
     {
         return false;
     }
-    gather_pair(rgb, lut, r, g.rows, g.cols, tables.lut(), pads);
-    pack_pair_planes(dst_slot, g.cols, g.cols, g.planes, pads);
+    gather_pair(rgb, lut, r, g.rows, g.cols, tables, pads);
+    pack_pair_planes(dst_slot, g.cols, g.cols, g.planes, tables, pads);
     true
 }
 
@@ -469,7 +763,11 @@ mod tests {
     }
 
     fn assert_pie_matches_pack(g: Geometry, rgb: &[[u8; 3]], lut: Option<&[u16]>, blut: &[u8; 256], what: &str) {
-        let tables = Tables::from_lut(blut);
+        assert_pie_matches_pack_with(g, rgb, lut, &Tables::from_lut(blut), what);
+    }
+
+    fn assert_pie_matches_pack_with(g: Geometry, rgb: &[[u8; 3]], lut: Option<&[u16]>, tables: &Tables, what: &str) {
+        let tables = tables.clone();
         let c = Control::default();
         let mut want_v = aligned_words(g.words());
         let mut got_v = aligned_words(g.words());
@@ -505,6 +803,35 @@ mod tests {
                 assert_pie_matches_pack(G, &frame, None, &scale5_lut(b5), &format!("random frame {trial} b5={b5}"));
             }
         }
+    }
+
+    /// The firmware's path: `build_scale5`, so the LUT is the identity or
+    /// an exact multiply on the vector unit, never a table lookup.
+    #[test]
+    fn scale5_mode_is_byte_identical_and_exact() {
+        for b5 in 0..=31u8 {
+            let mut t = Tables::zeroed();
+            t.build_scale5(b5);
+            assert_eq!(t.mode(), if b5 >= 31 { crate::LutMode::Identity } else { crate::LutMode::Scale(crate::scale5_mul(b5).unwrap()) });
+            // the multiplier reproduces scale5 for every channel value
+            if let crate::LutMode::Scale(m) = t.mode() {
+                for c in 0..=255u32 {
+                    assert_eq!(((c * u32::from(m)) >> SCALE_SHIFT) as u8, crate::scale5(c as u8, b5), "b5 {b5} c {c}");
+                }
+            }
+        }
+        let mut rng = Rng(0x5ca1e);
+        let frame = rng.frame(G.pixels());
+        for b5 in [0u8, 1, 3, 14, 17, 30, 31] {
+            let mut t = Tables::zeroed();
+            t.build_scale5(b5);
+            assert_pie_matches_pack_with(G, &frame, None, &t, &format!("scale5 b5={b5}"));
+        }
+        // and through the model's scale pass directly
+        let mut pad: Vec<u16> = (0..64u16).map(|i| (i * 977) ^ 0x3c5a).collect();
+        let want: Vec<u16> = pad.iter().map(|&w| (u16::from(crate::scale5((w >> 8) as u8, 9)) << 8) | u16::from(crate::scale5(w as u8, 9))).collect();
+        scale_pads_model(&mut pad, crate::scale5_mul(9).unwrap());
+        assert_eq!(pad, want);
     }
 
     #[test]

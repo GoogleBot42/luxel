@@ -164,25 +164,29 @@ so the packer must own the unit from one context with interrupts masked
 around the kernel — fine for a packer that runs in task context on its own core (§6). **Measure this first**
 (§10 step 1): it needs no panel, and every other number depends on it.
 
-*Step 1 status (2026-09-27, Gitea #855):* the kernel exists
-(`crates/luxel-hub75/src/pie.rs`, firmware feature `hub75-pie`; bench image
-`packbench`, docs/tools.md) and the on-paper estimate above was wrong in
-one place: PIE has no stride-3 gather. `ee.vunzip.8` deinterleaves by TWO,
-and every PIE data-movement instruction (the zips, the unzips, the byte
-shifts, the lane-constant multiply) maps a lane index affinely with a
-power-of-two slope, so no sequence of them turns RGB888's 3-byte pixel
-stride into the bus word's 2-byte stride for more than a couple of pixels
-— a SIMD gather costs an op per pixel per channel regardless. So the
-deinterleave is a scalar prologue (byte loads, the brightness LUT applied
-on the way — any LUT stays exact, no vector multiply approximation) at
-~13 cycles/px, and the vector unit does the per-plane extraction on 16-bit
-lanes holding `bottom << 8 | top` of one channel: mask the plane bit,
-`ee.vmul.u16` as the (logical) shifter per channel pair, one multiply to
-fold the six bits into bits 9..14, xor/and/xor to merge into the formatted
-word — 17 instructions per 8 columns per plane, ~30 cycles/px in total on
-paper, ~5x today's packer rather than 10x. The lever if that is not
-enough is the FRAME format: a planar or RGBX frame makes the prologue a
-few `vld`s. Numbers from metal go in docs/boards.md "The PIE packer".
+*Step 1 result (2026-09-27, Gitea #855, docs/boards.md "The PIE packer"):*
+the kernel exists (`crates/luxel-hub75/src/pie.rs`, firmware feature
+`hub75-pie`; bench image `packbench`, docs/tools.md) and measures **22.4
+cycles/px cache-hot, 39.9 cache-cold** on the Seengreat against 115.3 /
+140.5 for today's packer — **5.1× / 3.5×**, word-identical, on either
+core. The on-paper estimate above was wrong in one place: PIE has no
+stride-3 gather. `ee.vunzip.8` deinterleaves by TWO, and every PIE
+data-movement instruction (the zips, the unzips, the byte shifts, the
+lane-constant multiply) maps a lane index affinely with a power-of-two
+slope, so no sequence of them turns RGB888's 3-byte pixel stride into the
+bus word's 2-byte stride for more than a couple of pixels. So the
+deinterleave is a scalar prologue — hand-scheduled Xtensa, 9.7 cycles/px
+(the compiler's best was 15) — and the vector unit does the brightness
+(an exact fixed-point multiply, 2.1) and the per-plane extraction on
+16-bit lanes holding `bottom << 8 | top` of one channel: mask the plane
+bit, `ee.vmul.u16` as the (logical) shifter per channel pair, one
+multiply to fold the six bits into bits 9..14, xor/and/xor to merge into
+the formatted word — 17 instructions per 8 columns per plane, 10.1
+cycles/px for seven planes. The cache-cold column is the PSRAM stall of
+reading 6 bytes/px (~82 MB/s), which a DMA-staged row pair (step 3's
+option) hides. So the table's "at 4×" column reads as "at 5×": ×12 on
+one core is 51 % hot / 91 % cold, which is exactly the case for the
+core-1 steal (§6).
 
 ## 6. Cores: the refill is a work queue, not a core
 

@@ -51,6 +51,11 @@ pub struct Row {
     pub psram_pie: (u32, u32),
     /// The gather alone, PSRAM source.
     pub psram_gather: (u32, u32),
+    /// The same three with the source CYCLING through 128 row pairs in the
+    /// arena (192 KB, past the data cache) — what a pass over a wall sees.
+    pub cold_scalar: (u32, u32),
+    pub cold_pie: (u32, u32),
+    pub cold_gather: (u32, u32),
     /// Every checked brightness packed word-identical to the scalar path.
     pub identical: bool,
     /// First mismatching word index (and the brightness), when not identical.
@@ -63,8 +68,10 @@ pub struct Row {
 
 /// Per-core result cells, plain atomics so `/api/status` reads them from
 /// any task without a lock: [core][field].
-const FIELDS: usize = 16;
+const FIELDS: usize = 22;
 static CELLS: [[AtomicU32; FIELDS]; 2] = [const { [const { AtomicU32::new(0) }; FIELDS] }; 2];
+/// The prologue's parts alone: [gather_words, gather_bytes, scale ×3, word path taken].
+static PARTS: [[AtomicU32; 4]; 2] = [const { [const { AtomicU32::new(0) }; 4] }; 2];
 
 fn store(r: &Row) {
     let c = &CELLS[usize::from(r.core) & 1];
@@ -75,23 +82,26 @@ fn store(r: &Row) {
         r.psram_scalar,
         r.psram_pie,
         r.psram_gather,
+        r.cold_scalar,
+        r.cold_pie,
+        r.cold_gather,
     ];
     for (i, (med, min)) in pairs.iter().enumerate() {
         c[2 * i].store(*med, Ordering::Relaxed);
         c[2 * i + 1].store(*min, Ordering::Relaxed);
     }
-    c[12].store(u32::from(r.identical), Ordering::Relaxed);
-    c[13].store(r.mismatch.0, Ordering::Relaxed);
-    c[14].store((r.compared & 0x00ff_ffff) | (u32::from(r.mismatch.1) << 24), Ordering::Relaxed);
-    c[15].store(1 | (u32::from(r.vector_unit) << 1), Ordering::Release);
+    c[18].store(u32::from(r.identical), Ordering::Relaxed);
+    c[19].store(r.mismatch.0, Ordering::Relaxed);
+    c[20].store((r.compared & 0x00ff_ffff) | (u32::from(r.mismatch.1) << 24), Ordering::Relaxed);
+    c[21].store(1 | (u32::from(r.vector_unit) << 1), Ordering::Release);
 }
 
 /// The stored result for `core`, `ran == false` until that core's bench ran.
 pub fn result(core: u8) -> Row {
     let c = &CELLS[usize::from(core) & 1];
-    let flags = c[15].load(Ordering::Acquire);
+    let flags = c[21].load(Ordering::Acquire);
     let pair = |i: usize| (c[2 * i].load(Ordering::Relaxed), c[2 * i + 1].load(Ordering::Relaxed));
-    let packed = c[14].load(Ordering::Relaxed);
+    let packed = c[20].load(Ordering::Relaxed);
     Row {
         ran: flags & 1 != 0,
         core,
@@ -101,8 +111,11 @@ pub fn result(core: u8) -> Row {
         psram_scalar: pair(3),
         psram_pie: pair(4),
         psram_gather: pair(5),
-        identical: c[12].load(Ordering::Relaxed) != 0,
-        mismatch: (c[13].load(Ordering::Relaxed), (packed >> 24) as u8),
+        cold_scalar: pair(6),
+        cold_pie: pair(7),
+        cold_gather: pair(8),
+        identical: c[18].load(Ordering::Relaxed) != 0,
+        mismatch: (c[19].load(Ordering::Relaxed), (packed >> 24) as u8),
         compared: packed & 0x00ff_ffff,
         vector_unit: flags & 2 != 0,
     }
@@ -185,8 +198,17 @@ pub fn run(core: u8) {
         println!("packbench: no heap for the second framebuffer");
         return;
     };
-    let mut sram = vec![[0u8; 3]; G.pixels()];
-    fill(&mut sram, 0x2026_0927_0855 + u64::from(core));
+    // 16-byte aligned like the arena's frames: `[u8; 3]` has alignment 1,
+    // and an odd base would send the gather down its byte-loop fallback.
+    let Some(mut sram_w) = Words::new(G.pixels() * 3 / 2) else {
+        println!("packbench: no heap for the source rows");
+        return;
+    };
+    // SAFETY: `pixels() * 3` zeroed bytes at a 16-byte-aligned block we own.
+    let sram: &mut [[u8; 3]] =
+        unsafe { core::slice::from_raw_parts_mut(sram_w.slice().as_mut_ptr().cast::<[u8; 3]>(), G.pixels()) };
+    fill(sram, 0x2026_0927_0855 + u64::from(core));
+    let sram: &[[u8; 3]] = sram;
     let mut tables = Tables::zeroed();
     let mut scratch = Scratch::for_geometry(G);
     let mut pads = PairPads::for_geometry(G);
@@ -195,12 +217,12 @@ pub fn run(core: u8) {
     // ---- correctness first: PIE vs scalar at four brightness levels ----
     row.identical = true;
     for b5 in [31u8, 14, 3, 0] {
-        tables.build(&crate::hub75::brightness_lut(b5));
+        tables.build_scale5(b5);
         let (want, got) = (dst_a.slice(), dst_b.slice());
         format(want, G, ctrl);
         format(got, G, ctrl);
-        pack(want, G, &sram, &tables, &mut scratch);
-        if !pie::pack_pie(got, G, &sram, None, &tables, &mut pads) {
+        pack(want, G, sram, &tables, &mut scratch);
+        if !pie::pack_pie(got, G, sram, None, &tables, &mut pads) {
             println!("packbench: pack_pie refused the {}-word framebuffer", G.words());
             row.identical = false;
             break;
@@ -223,30 +245,58 @@ pub fn run(core: u8) {
     }
 
     // ---- timing, SRAM source ----
-    tables.build(&crate::hub75::brightness_lut(14));
+    tables.build_scale5(14);
     {
         let dst = dst_a.slice();
         format(dst, G, ctrl);
-        row.sram_scalar = time(|| pack(dst, G, &sram, &tables, &mut scratch));
+        row.sram_scalar = time(|| pack(dst, G, sram, &tables, &mut scratch));
         row.sram_pie = time(|| {
-            pie::pack_pie(dst, G, &sram, None, &tables, &mut pads);
+            pie::pack_pie(dst, G, sram, None, &tables, &mut pads);
         });
         let g0 = Geometry::new(1, COLS, 0);
         row.sram_gather = time(|| {
-            pie::pack_pie(&mut dst[..0], g0, &sram, None, &tables, &mut pads);
+            pie::pack_pie(&mut dst[..0], g0, sram, None, &tables, &mut pads);
         });
+    }
+
+    // ---- the prologue's parts, each alone (SRAM source) ----
+    {
+        let (top, bot) = sram.split_at(COLS);
+        let (rr, gg, bb) = pie::pads_mut(&mut pads, COLS);
+        let words_ok = pie::gather_words(top, bot, rr, gg, bb);
+        let gw = time(|| {
+            pie::gather_words(top, bot, rr, gg, bb);
+        });
+        let gb = time(|| pie::gather_bytes(top, bot, rr, gg, bb));
+        let sc = time(|| {
+            pie::scale_pad(rr, 3701);
+            pie::scale_pad(gg, 3701);
+            pie::scale_pad(bb, 3701);
+        });
+        println!(
+            "packbench core {}: gather_words {} cyc ({}), gather_bytes {} cyc, scale x3 {} cyc — per row pair",
+            core,
+            gw.0,
+            if words_ok { "took the word path" } else { "REFUSED: fell back" },
+            gb.0,
+            sc.0
+        );
+        PARTS[usize::from(core) & 1][0].store(gw.0, Ordering::Relaxed);
+        PARTS[usize::from(core) & 1][1].store(gb.0, Ordering::Relaxed);
+        PARTS[usize::from(core) & 1][2].store(sc.0, Ordering::Relaxed);
+        PARTS[usize::from(core) & 1][3].store(u32::from(words_ok), Ordering::Relaxed);
     }
 
     // ---- timing, PSRAM source (the arena; skipped without one) ----
     #[cfg(feature = "psram-arena")]
     if crate::psram::stats().is_some() {
-        let layout = Layout::array::<[u8; 3]>(G.pixels()).unwrap();
+        let layout = Layout::from_size_align(G.pixels() * 3, 16).unwrap();
         let p = crate::psram::alloc_bulk_zeroed(layout).cast::<[u8; 3]>();
         if !p.is_null() {
             // SAFETY: `pixels()` zeroed elements the arena handed us and never
             // frees; nothing else references them.
             let psram = unsafe { core::slice::from_raw_parts_mut(p, G.pixels()) };
-            psram.copy_from_slice(&sram);
+            psram.copy_from_slice(sram);
             let dst = dst_a.slice();
             row.psram_scalar = time(|| pack(dst, G, psram, &tables, &mut scratch));
             row.psram_pie = time(|| {
@@ -257,6 +307,31 @@ pub fn run(core: u8) {
                 pie::pack_pie(&mut dst[..0], g0, psram, None, &tables, &mut pads);
             });
         }
+        // Cache-cold: 128 row pairs, a different one every call.
+        const PAIRS: usize = 128;
+        let layout = Layout::from_size_align(G.pixels() * 3 * PAIRS, 16).unwrap();
+        let p = crate::psram::alloc_bulk_zeroed(layout).cast::<[u8; 3]>();
+        if !p.is_null() {
+            // SAFETY: as above, `PAIRS` row pairs' worth.
+            let big = unsafe { core::slice::from_raw_parts_mut(p, G.pixels() * PAIRS) };
+            for chunk in big.chunks_exact_mut(G.pixels()) {
+                chunk.copy_from_slice(sram);
+            }
+            let dst = dst_a.slice();
+            let mut k = 0usize;
+            let mut next = || {
+                k = (k + 1) % PAIRS;
+                &big[k * G.pixels()..(k + 1) * G.pixels()]
+            };
+            row.cold_scalar = time(|| pack(dst, G, next(), &tables, &mut scratch));
+            row.cold_pie = time(|| {
+                pie::pack_pie(dst, G, next(), None, &tables, &mut pads);
+            });
+            let g0 = Geometry::new(1, COLS, 0);
+            row.cold_gather = time(|| {
+                pie::pack_pie(&mut dst[..0], g0, next(), None, &tables, &mut pads);
+            });
+        }
     }
 
     row.ran = true;
@@ -264,7 +339,7 @@ pub fn run(core: u8) {
     let per_px = |(med, _): (u32, u32)| (med * 100 / PIXELS) as f32 / 100.0;
     println!(
         "packbench core {}: {} columns x 2 rows, {} planes, {} — scalar {} cyc/px, pie {} cyc/px \
-         (gather {}), from PSRAM scalar {} / pie {} (gather {}); identical {} over {} words{}",
+         (gather {}), from PSRAM scalar {} / pie {} (gather {}), cold scalar {} / pie {} (gather {}); identical {} over {} words{}",
         core,
         COLS,
         PLANES,
@@ -275,6 +350,9 @@ pub fn run(core: u8) {
         per_px(row.psram_scalar),
         per_px(row.psram_pie),
         per_px(row.psram_gather),
+        per_px(row.cold_scalar),
+        per_px(row.cold_pie),
+        per_px(row.cold_gather),
         row.identical,
         row.compared,
         if row.identical {
@@ -315,7 +393,9 @@ pub fn status_json(out: &mut impl core::fmt::Write) -> core::fmt::Result {
             "{{\"core\":{},\"ran\":{},\"vector_unit\":{},\"pixels\":{},\"identical\":{},\"compared\":{},\
              \"mismatch_word\":{},\"mismatch_b5\":{},\
              \"sram\":{{\"scalar\":[{},{}],\"pie\":[{},{}],\"gather\":[{},{}]}},\
-             \"psram\":{{\"scalar\":[{},{}],\"pie\":[{},{}],\"gather\":[{},{}]}}}}",
+             \"psram\":{{\"scalar\":[{},{}],\"pie\":[{},{}],\"gather\":[{},{}]}},\
+             \"psram_cold\":{{\"scalar\":[{},{}],\"pie\":[{},{}],\"gather\":[{},{}]}},\
+             \"parts\":{{\"gather_words\":{},\"gather_bytes\":{},\"scale3\":{},\"words_ok\":{}}}}}",
             core,
             r.ran,
             r.vector_unit,
@@ -336,6 +416,16 @@ pub fn status_json(out: &mut impl core::fmt::Write) -> core::fmt::Result {
             r.psram_pie.1,
             r.psram_gather.0,
             r.psram_gather.1,
+            r.cold_scalar.0,
+            r.cold_scalar.1,
+            r.cold_pie.0,
+            r.cold_pie.1,
+            r.cold_gather.0,
+            r.cold_gather.1,
+            PARTS[usize::from(core)][0].load(Ordering::Relaxed),
+            PARTS[usize::from(core)][1].load(Ordering::Relaxed),
+            PARTS[usize::from(core)][2].load(Ordering::Relaxed),
+            PARTS[usize::from(core)][3].load(Ordering::Relaxed) != 0,
         )?;
     }
     write!(out, "]")
