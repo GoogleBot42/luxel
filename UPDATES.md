@@ -1,5 +1,32 @@
 # Update log
 
+## 2026-09-27 — scene performance: the "38 ms second layer" was Aurora 2D's own frame (#812 → #840–#843)
+
+Jeremy doubted that Aurora 2D runs at 55 fps on the panel. It does not: the
+55 fps in #792 was the BOOT pattern (2,316 B of native code); Aurora 2D is
+5,612 B and **~50 ms bare** at 4096 px (docs/boards.md "JIT on metal",
+2026-09-24). A scene's frame is additive — Aurora 51.7 + `_Fairies` 17.7 +
+2.6 ms of compositing = 72.0 ms was measured the same day — so "Test 2"
+(55 ms) is Aurora plus a ~1 ms snake plus text, and "Test" (70 ms) is Aurora
+plus a ~17 ms per-pixel Breakout. Nothing points at the compositor or PSRAM.
+
+Where Aurora's 50 ms goes, without the panel: ablation on the host
+(`luxel bench`, 64x64) splits the frame into the `fillNoise3D` rows and the
+JIT-compiled cell loop; solving the interp/native pair from the board docs
+puts the 4096 `simplex3` calls at roughly half to two thirds of the native
+frame (~1,900 cycles each). A fresh `board-seengreat-hub75` build says why:
+`noise::simplex3` is all-`i64` fixed point — 1,077 instructions, 96 multiply
+instructions, 76 spill stores, flash-resident (`iram-math` is off on the S3).
+The other half is the cell loop's four `generic` builtin calls per pixel
+(`saturate` ×2, `paint`, `setPixel`).
+
+Filed: #840 (32-bit noise kernel, IRAM placement, lattice-coherent fill),
+#841 (JIT direct tier for `saturate`/`paint`/`setPixel`/`ArrNum` load), #842
+(non-base layer engines on core 0 → a scene costs max, not sum), #843
+(per-layer render scale). #793 already covers the per-layer fps cap. #812
+retitled to the one on-metal confirmation still needed. The seengreat-panel
+skill gained the reading rule (PR #844).
+
 ## 2026-09-27 — spare-plane swap: chase the beam, no window (#829)
 
 Jeremy's eye on the #826 build: "×4 is very close" — rare freezes for ~10 s
