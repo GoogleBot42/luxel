@@ -85,6 +85,13 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
   (2026-09-08). Put everything under a subdirectory named for your ticket
   (`scratchpad/b4-405/…`), and never trust a scratch baseline you did not just
   write — re-create it with `git show origin/master:<path>` and re-measure.
+  **The agent MEMORY files are shared the same way and have no version control**
+  — a concurrent session edited `seengreat-return-queue.md` between this
+  session's read and its write on 2026-09-27, and a block replacement silently
+  dropped three of its items (reconstructed from the tracker, but only because
+  the file's own description still named them). Re-read a memory file
+  immediately before writing it, and prefer an insertion at a known anchor over
+  replacing a span you read minutes ago.
 
 ## Autonomy
 - Be decisive on routine engineering safeguards (tests, lints, guards, docs): add them

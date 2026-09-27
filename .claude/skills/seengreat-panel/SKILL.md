@@ -281,6 +281,12 @@ pkill -f '^socat -u /dev/ttyACM0'     # NOT "pkill -f ttyACM0": that matches you
 sed 's/\x1b\[[0-9;]*m//g' boot.log | tr '\r' '\n'
 ```
 
+Even the anchored form kills the Bash tool's own shell, because the wrapper
+`bash -c` line that runs it CONTAINS the pattern text (exit 144, no output,
+2026-09-27). Make the `pkill` the last thing in its own tool call, expect it to
+"fail", and confirm the reader is gone in the NEXT call — `pgrep -fa 'socat -u'`
+plus the `/proc/*/fd` port-holder loop.
+
 Symbolicate a backtrace with the S3 ELF:
 `xtensa-esp32s3-elf-addr2line -f -C -e firmware/target/xtensa-esp32s3-none-elf/release/luxel-fw 0x4209ffac …`
 (inside `nix develop`; tools/decode-backtrace.sh defaults to the classic
