@@ -1,5 +1,44 @@
 # Update log
 
+## 2026-09-27 — the color ramp editor, redrawn: nine mock frames and the two questions for Jeremy (#787 step 2)
+
+Step 2 of #787. The step-1 inventory found 21 defects in
+`components/GradientEditor.svelte` and eight decisions that were confusing on
+purpose; this is the mock the redesign is held to, and it is docs only.
+
+Nine frames, **S8a–S8i** ("Batch 7"), appended to
+`docs/design/webui-v2/mockups.html`: the Settings mount with the editor open
+(S8a), the selected stop's colour picker (S8b), the *outside the stops*
+question drawn both ways (S8c/S8d), the scene layer's ramp collapsed and
+expanded in the 320 px inspector (S8e/S8f), the 390 px phone variant (S8g),
+the three states the old control got wrong — no ramp, nothing running, at the
+32-stop cap (S8h) — and the three #563 modes plus the conflict strip and the
+two confirms (S8i). The design, the two open questions and an item-by-item map
+from every inventory defect to the frame that removes it are in a new
+`docs/design/webui-v2/ramp-editor.md`, with a §5.9 pointer in `proposal.md`.
+
+The shape: the gradient bar **is** the model (click empty bar to add, drag to
+move, drag off to remove, click to select), painted from the engine's
+256-entry LUT as a `256x1` canvas rather than a CSS gradient (#748) so the bar
+is what the device does; no per-stop row list, just the one selected stop with
+the app's own `ColorPicker` and a numeric position; a labelled preview pair
+(the pattern, and the LEDs through the ramp at the current amount) with the
+amount slider beside it; the stage explained in body text; handles 12 px
+painted inside a 24x24 hit box (#703); presets, Reset, Clear, real undo; and
+the live-vs-save mode printed on the control.
+
+Open for Jeremy: **Q1** — outside the stops, clamp both ends (S8c,
+recommended) or keep black above the last stop (S8d, what ships)? **Q2** —
+whichever it is, does it apply to the per-layer scene ramp as well as the
+device palette? Nothing implements until Q1 is answered: under A it is also a
+one-line engine change in `fill_palette_lut`.
+
+Verification: the nine frames rendered and screenshotted in real chromium (no
+console errors, no blank canvases, nothing under 24 px in the 390 px frame),
+and the **39 existing frames compare 0 deltas** in computed style and box size
+against `origin/master`'s copy of the file, so `mockdiff` is unaffected.
+Published for review at https://claude-luxel-787-ramp-mock.sites.neet.dev/
+
 ## 2026-09-27 — on metal: Aurora 2D is 49 ms bare, a scene is the sum of its layers + ~4 ms, and `simplex3` is 1,260 cycles a call (#812 closed)
 
 The panel came back and the #812 analysis from earlier today was checked
