@@ -95,7 +95,13 @@ paths:
   back 12.2 % and **spent every build-side lever there was** (a wasm-specific
   cargo profile + `wasm-opt -Oz`, zopfli in `pack-assets.mjs`, terser instead
   of esbuild). There is no third round of flags: what is left is content
-  (`gallery.json` 354 kB, CodeMirror most of the JS) — Gitea #691. So MEASURE
+  (`gallery.json` 355 kB, CodeMirror 165 kB of the JS chunk) — Gitea #691.
+  **Code-splitting is NOT a lever here, and #691 recommended it anyway for
+  three days.** `pack-assets.mjs` packs everything in `dist/` and gzips each
+  blob independently, so a dynamic `import()` moves bytes between blobs
+  without removing any and then pays per-chunk framing: eight chunks measured
+  **+10,209 B gzipped** (2026-09-27, #885). Split for cold-load LATENCY
+  (#883) if you like, never for the gate. So MEASURE
   a new surface rather than assuming it fits:
   `cd web && npm run build && node tools/pack-assets.mjs /tmp/x.luxa && stat -c%s /tmp/x.luxa`,
   and quote the number in the PR. Two traps when you do: `npm run wasm` is
@@ -107,15 +113,20 @@ paths:
 - The device serves the UI from a tiny connection pool (3 sockets default,
   2 small-chip) and browser-NATIVE requests (script/stylesheet/preload
   tags) can't go through fetchgate — vite is deliberately configured with
-  `cssCodeSplit: false` + `modulePreload: false`, and the `inlineBoot()`
-  plugin in `web/vite.config.ts` then (a) folds that single stylesheet INTO
-  each entry HTML as a `<style>` and deletes the asset, and (b) replaces
+  `modulePreload: false`, and the `inlineBoot()`
+  plugin in `web/vite.config.ts` then (a) folds each entry's OWN stylesheets
+  INTO its HTML as `<style>` blocks and deletes the assets, and (b) replaces
   the module `<script src>` TAG with a loader that appends the script after
   `DOMContentLoaded` and re-appends it up to 3 times (2/4/6 s) if it is
   refused (Gitea #592). **The emitted shape of `dist/*.html` is now: NO
   browser-native subresource request at all — no `<script src>`, no
   `<link rel=stylesheet>`, no `modulepreload`; one inline `<script>`
-  loader, one `<style>`, and a `data:` favicon (not a request).**
+  loader, inline `<style>` blocks, and a `data:` favicon (not a request).**
+  Since #691 `cssCodeSplit` is ON: an inline sheet costs no request whether
+  there is one of them or three, so each page inlines only the sheets it
+  links and `flash.html` no longer carries the console's 82 KB stylesheet
+  (−12,794 B on the packed archive, measured on master `fc071883`). `modulePreload` stays off —
+  a modulepreload IS a native request.
   Two things made that necessary. A refused stylesheet is never retried, so
   a busy pool gave a silently UNSTYLED console; and a tag is fetched by the
   preload scanner while the document is still arriving, so it needs a

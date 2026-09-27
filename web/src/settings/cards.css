@@ -4,7 +4,8 @@
  * scoped <style> block: every rule is confined to `.settings`, which exists
  * only as the Settings page's own wrapper, and the cards contain no child
  * components for it to leak into. Imported by pages/Settings.svelte, so it
- * lands in the single bundled stylesheet (cssCodeSplit is off — Gitea #92).
+ * lands in the console entry's bundled stylesheet, inlined into index.html
+ * (Gitea #92/#592; one sheet per entry since #691).
  *
  * Every number below is quotable from `docs/design/webui-v2/mockups.html`
  * (frames S3, S3b, S3e–S3k) — that file is the visual spec (Gitea #538), and

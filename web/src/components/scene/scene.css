@@ -8,7 +8,8 @@
    A plain .css import, like components/editor-frame.css: the scene inspector
    hands markup to child components, and Svelte compiles slotted markup in the
    PARENT's scope, so a component could not style what it was given.
-   `cssCodeSplit:false` folds this into the one inlined stylesheet (#92/#592).
+   the build folds this into the console entry's inlined stylesheet
+   (#92/#592; per entry since #691).
 
    Everything is scoped under `.scenes`, which both `pages/Scenes.svelte` and
    `pages/SceneEditor.svelte` wear, so nothing here can reach a settings card

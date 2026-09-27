@@ -355,6 +355,15 @@ nothing in this container is public.
   an `Onion` label reported against a master where the same commit had already
   renamed it `Ghost prev` and written the matching check. `npm run build` on the
   tree you are accusing, THEN run the harness — and say in the ticket that you did.
+  **The trip BACK is the same trap and catches you when you are no longer
+  suspicious.** After `git stash pop` / `git checkout -`, `dist/` still holds
+  the *other* tree's build, and everything that reads it lies quietly:
+  `npm test`'s `bundleShape` cases, `e2e`/`device-e2e`/`tabwalk` (which serve
+  `dist` through `vite preview`), `pack-assets.mjs`, `mockdiff`. On
+  2026-09-27 a baseline measured by stashing left `dist/` on master, and the
+  branch's own brand-new assertion "failed" — against a build that did not
+  contain the change it was asserting. Rebuild FIRST in every phase of an
+  A/B, not once at the start.
 - **Harness fixtures pinned to a firmware constant are a standing bug, not an
   accident.** #547, #809 and #810 are all the same failure: a number the harness
   spelled out (a pixel cap, a scan depth) moved in the firmware and the case either

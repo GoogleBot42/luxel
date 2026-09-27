@@ -36,7 +36,7 @@ const bootLoader = (src: string) => `
         else boot();
       })();`;
 
-// Fold the one bundled stylesheet INTO every entry HTML and drop it from the
+// Fold each entry HTML's OWN stylesheets INTO it and drop them from the
 // output, and turn the module tag into the loader above, so a device cold load
 // makes NO browser-native subresource request at all.
 //
@@ -51,6 +51,17 @@ const bootLoader = (src: string) => `
 // The cost is the CSS's separate cache entry (it now rides in the HTML,
 // which is `no-cache`-revalidated rather than immutable) and ~10 KB gzipped
 // on every document load.
+//
+// PER ENTRY, not one global sheet (Gitea #691): `cssCodeSplit` is on, so
+// rollup emits one sheet per entry plus one for the chunk they share, and
+// each HTML carries only the links it actually needs. Before this, ONE
+// stylesheet was inlined into BOTH pages, so the 82 KB console sheet rode in
+// `flash.html` (and the installer's in `index.html`) — 12,794 B gzipped of
+// the 983,040 B assets partition spent on CSS neither page can use. The #592
+// invariant is untouched: the sheets are still INLINE, so the emitted
+// `<script>`/`<link>` set of every `dist/*.html` is unchanged at zero
+// browser-native requests (`tests/bundleShape.test.mjs` asserts both halves,
+// and now also that `flash.html` does not carry the console's CSS).
 function inlineBoot(): Plugin {
   return {
     name: "luxel-inline-boot",
@@ -59,38 +70,45 @@ function inlineBoot(): Plugin {
     enforce: "post",
     apply: "build",
     generateBundle(_options, bundle) {
-      const css = Object.values(bundle).filter(
+      const sheets = Object.values(bundle).filter(
         (c): c is Extract<typeof c, { type: "asset" }> =>
           c.type === "asset" && c.fileName.endsWith(".css"),
       );
-      // `cssCodeSplit: false` is what guarantees there is exactly one; if a
-      // future config change splits CSS again this must be revisited rather
-      // than silently inlining the first of several.
-      if (css.length > 1) {
-        throw new Error(
-          `luxel-inline-boot: expected one stylesheet, got ${css.length} (cssCodeSplit off?)`,
-        );
+      if (sheets.length === 0) return;
+      for (const sheet of sheets) {
+        // A literal `</style` inside the CSS would end the element early. It
+        // cannot happen with the rules we author, so fail the build loudly
+        // instead of shipping a half-parsed page.
+        if (/<\/style/i.test(String(sheet.source))) {
+          throw new Error(
+            `luxel-inline-boot: ${sheet.fileName} contains \`</style\`, refusing to inline`,
+          );
+        }
       }
-      if (css.length === 0) return;
-      const sheet = css[0];
-      const text = String(sheet.source);
-      // A literal `</style` inside the CSS would end the element early. It
-      // cannot happen with the rules we author, so fail the build loudly
-      // instead of shipping a half-parsed page.
-      if (/<\/style/i.test(text)) {
-        throw new Error("luxel-inline-boot: CSS contains `</style`, refusing to inline");
-      }
-      const link = new RegExp(
-        `\\s*<link rel="stylesheet"[^>]*href="[^"]*${sheet.fileName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"[^>]*>`,
-        "g",
-      );
       const tag = /\s*<script type="module"[^>]*src="([^"]+)"[^>]*><\/script>/g;
+      /** Sheets that some entry HTML actually linked. Anything left over would
+       *  be deleted below without its rules ever reaching a page, which is the
+       *  silent-unstyled-console failure #592 is about — so it is an error. */
+      const used = new Set<string>();
       let inlined = 0;
       for (const chunk of Object.values(bundle)) {
         if (chunk.type !== "asset" || !chunk.fileName.endsWith(".html")) continue;
-        const html = String(chunk.source);
-        if (!link.test(html)) continue;
-        link.lastIndex = 0;
+        let html = String(chunk.source);
+        // Replace each link IN PLACE so the cascade keeps rollup's order
+        // (the shared chunk's sheet before the entry's own).
+        let hit = 0;
+        for (const sheet of sheets) {
+          const link = new RegExp(
+            `\\s*<link rel="stylesheet"[^>]*href="[^"]*${sheet.fileName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"[^>]*>`,
+            "g",
+          );
+          if (!link.test(html)) continue;
+          link.lastIndex = 0;
+          html = html.replace(link, `\n    <style>${String(sheet.source)}</style>`);
+          used.add(sheet.fileName);
+          hit++;
+        }
+        if (hit === 0) continue;
         const scripts = html.match(tag) ?? [];
         tag.lastIndex = 0;
         if (scripts.length !== 1) {
@@ -98,16 +116,23 @@ function inlineBoot(): Plugin {
             `luxel-inline-boot: ${chunk.fileName} has ${scripts.length} module scripts, expected 1`,
           );
         }
-        chunk.source = html
-          .replace(link, `\n    <style>${text}</style>`)
-          .replace(tag, (_m, src: string) => `\n    <script>${bootLoader(src)}\n    </script>`);
+        chunk.source = html.replace(
+          tag,
+          (_m, src: string) => `\n    <script>${bootLoader(src)}\n    </script>`,
+        );
         inlined++;
       }
       if (inlined === 0) {
-        throw new Error("luxel-inline-boot: no entry HTML referenced the stylesheet");
+        throw new Error("luxel-inline-boot: no entry HTML referenced a stylesheet");
       }
-      // drop the now-unreferenced asset so it is neither written nor packed
-      delete bundle[sheet.fileName];
+      const orphans = sheets.filter((s) => !used.has(s.fileName)).map((s) => s.fileName);
+      if (orphans.length > 0) {
+        throw new Error(
+          `luxel-inline-boot: no entry HTML linked ${orphans.join(", ")} — its rules would be dropped`,
+        );
+      }
+      // drop the now-unreferenced assets so they are neither written nor packed
+      for (const sheet of sheets) delete bundle[sheet.fileName];
     },
   };
 }
@@ -147,11 +172,15 @@ export default defineConfig({
     // can't go through the app's fetchgate. Splitting CSS per-entry and
     // modulepreloading the shared chunk put 4 native requests in flight
     // at HTML parse; the 4th got TCP-refused on every cold load (#92).
-    // One CSS file + no preload caps the native burst at 2 sockets, and
-    // `inlineBoot()` above then takes it to ZERO: the stylesheet goes
-    // inline and the module tag becomes a post-parse loader (#592) — the
-    // CSS still has to be a single non-code-split file for that to work.
-    cssCodeSplit: false,
+    // What fixed that was `inlineBoot()` below taking the native burst to
+    // ZERO — the sheets go INLINE and the module tag becomes a post-parse
+    // loader (#592) — and an inline sheet costs no request whether there
+    // is one of them or three. So per-entry CSS is back on (Gitea #691):
+    // it emits one sheet per entry plus one shared, each page inlines only
+    // the ones it links, and `flash.html` stops carrying the console's
+    // 82 KB stylesheet — 12,794 B gzipped off the assets partition.
+    // `modulePreload` stays OFF: a modulepreload IS a native request.
+    cssCodeSplit: true,
     modulePreload: false,
     rollupOptions: {
       // two pages: the playground/console app and the WLED→Luxel installer
