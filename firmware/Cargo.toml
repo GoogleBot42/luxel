@@ -122,6 +122,17 @@ psram-arena = []
 # DMA can read it), at ~1/PLANES of the second buffer's RAM. Off by default
 # until verified on metal; needs `hub75`.
 hub75-spare-plane = []
+# The ESP32-S3 PIE vector packer (Gitea #855, crates/luxel-hub75/src/pie.rs):
+# `compose_into` packs through `luxel_hub75::pie::pack_pie` when the
+# framebuffer meets its alignment/width rules and falls back to the scalar
+# packer otherwise (it says which at boot). Xtensa inline asm — S3 only in
+# practice; needs `hub75`. Off by default until the ring driver lands.
+hub75-pie = ["luxel-hub75/pie"]
+# Boot-time packer microbench (src/packbench.rs): times the scalar packer
+# against the PIE kernel over a 256-column row pair on each core and reports
+# under `/api/status` "packbench". Never in a shipped image. Build with
+# `EXTRA_FEATURES=packbench BOARD=board-seengreat-hub75 ./build-esp32.sh`.
+packbench = ["hub75-pie"]
 # RAM-constrained profile (S2/C2 tier, see docs/boards.md): web pool 3→2
 # (+8 KB heap on esp32) at the cost of an occasionally-refused FIRST
 # browser navigation — Chromium preconnect wants 3 sockets at cold nav.

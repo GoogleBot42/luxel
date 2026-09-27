@@ -73,6 +73,10 @@
 
 #![no_std]
 #![deny(unsafe_code)]
+// The PIE kernel (src/pie.rs) is inline `asm!`, which on Xtensa is still
+// behind this gate in the esp toolchain; the feature is only ever on in the
+// firmware's S3 build, so the host crate stays stable-Rust.
+#![cfg_attr(feature = "pie", feature(asm_experimental_arch))]
 
 extern crate alloc;
 
@@ -85,6 +89,7 @@ use alloc::vec::Vec;
 pub mod arrange;
 pub mod chip;
 pub mod cost;
+pub mod pie;
 pub mod schedule;
 
 pub use cost::{boot_cost, BootAlloc, BootCost};
@@ -303,28 +308,39 @@ pub fn format_scheduled(words: &mut [u16], g: Geometry, c: Control, s: &Schedule
     }
 }
 
-/// The two spread tables, rebuilt whenever brightness changes.
+/// The two spread tables, rebuilt whenever brightness changes — plus the
+/// byte LUT they were built from, which the vector packer ([`pie`]) applies
+/// directly.
 ///
-/// 2 KiB. Held by the caller (the firmware heap-allocates one alongside the
-/// framebuffers) rather than being a static, so nothing is paid on boards
+/// 2.25 KiB. Held by the caller (the firmware heap-allocates one alongside
+/// the framebuffers) rather than being a static, so nothing is paid on boards
 /// without a panel.
 #[derive(Clone)]
 pub struct Tables {
     lo: [u32; 256],
     hi: [u32; 256],
+    lut: [u8; 256],
 }
 
 impl Tables {
     /// A zeroed table set — packs every frame black until [`Tables::build`].
     #[must_use]
     pub const fn zeroed() -> Self {
-        Self { lo: [0; 256], hi: [0; 256] }
+        Self { lo: [0; 256], hi: [0; 256], lut: [0; 256] }
+    }
+
+    /// The byte LUT the tables were last built from (all zero before the
+    /// first [`Tables::build`], which packs black — same as the tables).
+    #[must_use]
+    pub fn lut(&self) -> &[u8; 256] {
+        &self.lut
     }
 
     /// Rebuild from a channel LUT: `lut[c]` is the 8-bit value actually driven
     /// onto the panel for source channel value `c` (i.e. brightness scaling,
     /// gamma, or identity).
     pub fn build(&mut self, lut: &[u8; 256]) {
+        self.lut = *lut;
         for (c, out) in lut.iter().enumerate() {
             let v = u32::from(*out);
             // plane p takes bit 7-p; park it at 8p (planes 0..4) or

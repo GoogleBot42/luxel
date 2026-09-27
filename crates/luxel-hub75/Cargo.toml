@@ -5,6 +5,12 @@ edition.workspace = true
 license.workspace = true
 description = "Row-oriented bulk bitplane packer for HUB75 BCM framebuffers"
 
+[features]
+# The ESP32-S3 PIE vector kernel in src/pie.rs (inline asm; Xtensa only —
+# elsewhere `pie::pack_pie` runs the portable model). The firmware's
+# `hub75-pie` feature turns it on; nothing else should.
+pie = []
+
 [dependencies]
 # The arrangement this crate remaps for IS `luxel_core::layout::Matrix` —
 # reused rather than restated. `default-features = false` keeps the compiler

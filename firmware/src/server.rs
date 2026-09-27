@@ -858,6 +858,15 @@ fn status_json() -> luxel_core::jsonview::Chunks {
     // to `heap_free` to predict the next swap, because the render task drops
     // the outgoing engine before decoding the incoming one — see
     // `luxel_core::budget::load_base` (Gitea #287).
+    // The boot-time packer microbench (Gitea #855) — only in a `packbench`
+    // image, where the serial console cannot be read without resetting the S3.
+    #[cfg(feature = "packbench")]
+    {
+        push_piece(&mut out, ",\"packbench\":");
+        let mut s = alloc::string::String::new();
+        let _ = crate::packbench::status_json(&mut s);
+        push_piece(&mut out, &s);
+    }
     push_piece(&mut out, ",\"engine_heap\":");
     push_u32(&mut out, crate::shared::ENGINE_HEAP.load(Ordering::Relaxed));
     // Resident engines behind that sum (Gitea #479): 1 for a plain pattern,

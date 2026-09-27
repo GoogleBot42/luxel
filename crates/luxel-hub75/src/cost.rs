@@ -123,13 +123,14 @@ mod tests {
         let c = cost_of(&Matrix::single(64, 64), &PanelDriver::default(), &seengreat());
         // 32 address rows x 64 words x 7 planes x 2 B = 28,672 B per buffer
         assert_eq!(c.framebuffers, 2 * 28_672);
-        assert_eq!(c.tables, 2048);
+        // two 1 KiB spread tables + the 256 B byte LUT the vector packer reads
+        assert_eq!(c.tables, 2304);
         assert_eq!(c.scratch, 64 * 14);
         // one plane is 4,096 B, four bytes past the 4,092 B chunk ceiling =>
         // 2 descriptors per emission, 127 emissions at 7 stock planes, two
         // rings, 12 B each
         assert_eq!(c.descriptors, 2 * 127 * 2 * 12);
-        assert_eq!(c.total(), 57_344 + 6_096 + 2_048 + 896);
+        assert_eq!(c.total(), 57_344 + 6_096 + 2_304 + 896);
     }
 
     /// The 2x1 chain that bricked the board over the network: the panel side

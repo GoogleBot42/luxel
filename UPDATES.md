@@ -48,6 +48,28 @@ The panel was left exactly as found: `ota_0`, 11 patterns (`store.used` 86,524
 B byte-identical), 8 scenes, 2 sprites, playlist stopped at index 0, brightness
 31 untouched, layout untouched, Aurora 2D active and `native`.
 
+## 2026-09-27 — HUB75 ring driver step 1: the PIE vector packer and its microbench (#855)
+
+`crates/luxel-hub75/src/pie.rs`: `pack_pie` / `pack_row_pair`, the ESP32-S3
+vector (PIE) form of the bitplane packer, behind the crate's `pie` feature
+(firmware `hub75-pie`; `packbench` adds the boot-time microbench in
+`firmware/src/packbench.rs` and a `/api/status` `packbench` block). Same
+contract as `pack`/`pack_remap`, byte-identical output — the host proves a
+portable model of the lane arithmetic against `pack` over random frames at
+every brightness, arbitrary LUTs, remaps, short frames and the trailing
+block; the bench image proves the assembly against `pack` on metal.
+
+Finding worth the design doc's §5 correction: PIE has no stride-3 gather,
+and no zip/unzip/shift network can turn RGB888's 3-byte stride into the
+bus word's 2-byte stride (every such op is affine in the lane index with a
+power-of-two slope), so the deinterleave stays a scalar prologue (~13
+cycles/px, LUT applied on the way) and the vector work is the per-plane
+bit extraction: 16-bit lanes holding `bottom<<8|top` of one channel, a
+mask + `ee.vmul.u16` shift per channel pair, one multiply folding the six
+bits into the colour field, an xor/and/xor merge into the formatted words
+— 17 instructions per 8 columns per plane. On paper ~30 cycles/px (~5x),
+not the ~14 the design assumed. The measurement waits for the Seengreat
+(this session does not hold it); `Tables` now keeps its byte LUT (+256 B).
 ## 2026-09-27 — scenes: non-base pattern layers on the ProCpu, behind `layer-core0` (#842)
 
 A scene's frame was the sum of its layers' frames — 72 ms for `Aurora 2D` +
