@@ -1,0 +1,21 @@
+{
+  "image": "blob.png",
+  "w": 41,
+  "h": 27,
+  "frames": 1,
+  "delaysMs": [
+    0
+  ],
+  "options": {
+    "name": "blob",
+    "w": 24,
+    "h": 24,
+    "fit": "crop",
+    "resample": "area",
+    "colors": 16,
+    "alphaThreshold": 128,
+    "dither": false,
+    "keepEvery": 1,
+    "fpsOverride": null
+  }
+}

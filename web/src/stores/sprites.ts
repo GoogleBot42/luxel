@@ -479,6 +479,34 @@ export function freshSprite(w = 8, h = 8): Sprite {
   return newSprite(name, w, h);
 }
 
+/**
+ * A sprite waiting for the editor to adopt it as an UNSAVED document (Gitea
+ * #784: an imported image "lands in the editor, not straight into the store,
+ * so the result can be touched up before Save").
+ *
+ * It is a store rather than a route segment or a prop because the hand-off
+ * crosses two screens — `Import image…` can be pressed on the Sprites TAB,
+ * which then routes to the editor — and a record is far too big to put in a
+ * URL. One slot: a second import replaces the first, which is what pressing
+ * the button twice means.
+ */
+export const pendingSprite: Writable<Sprite | null> = writable(null);
+
+/** Hand a sprite to the editor. The caller then routes there (`#/sprites/`,
+ *  i.e. `openSprite("")`), and the editor takes it with
+ *  [`takePendingSprite`]. */
+export function stageSprite(s: Sprite): void {
+  pendingSprite.set(s);
+}
+
+/** The staged sprite, ONCE — reading it clears the slot, so a later
+ *  re-render of the editor does not re-adopt it over your edits. */
+export function takePendingSprite(): Sprite | null {
+  const s = get(pendingSprite);
+  if (s !== null) pendingSprite.set(null);
+  return s;
+}
+
 /** The names of the scenes whose sprite layers reference `id` — the editor's
  *  "Used in" line, and the warning a delete deserves. */
 export function usedBy(id: string): string[] {

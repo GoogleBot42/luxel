@@ -1,0 +1,21 @@
+{
+  "image": "ramp.png",
+  "w": 12,
+  "h": 8,
+  "frames": 1,
+  "delaysMs": [
+    0
+  ],
+  "options": {
+    "name": "ramp",
+    "w": 8,
+    "h": 6,
+    "fit": "fit",
+    "resample": "area",
+    "colors": 24,
+    "alphaThreshold": 128,
+    "dither": false,
+    "keepEvery": 1,
+    "fpsOverride": null
+  }
+}

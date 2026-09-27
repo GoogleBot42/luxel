@@ -1800,6 +1800,315 @@ try {
     check("sprites: the tile carries the name", tname === "E2E sprite", tname);
     await page.screenshot({ path: `${shotDir}/e2e-sprites-tab.png` });
 
+    // ── Import image… (Gitea #784) ──
+    //
+    // The whole pipeline through the real UI: the hidden file input takes an
+    // upload, the fit dialog opens with a live preview and a byte readout, the
+    // knobs move, and Import lands the record in the editor UNSAVED so it can
+    // be touched up before Save. The fixtures are the same ones both
+    // pipelines' unit suites are pinned to (web/tests/fixtures/), so the
+    // numbers below are the goldens' numbers.
+    // REAL path, not `tools/../tests/…`: chromium keeps the string it is
+    // handed and a later read of an unresolved path fails with
+    // `NotReadableError: The requested file could not be read…`, which reads
+    // like a decoder bug and is a file-chooser one.
+    const FIXTURES = fs.realpathSync(`${import.meta.dirname}/../tests/fixtures`);
+
+    /** Hand `file` to ONE screen's importer and wait for the fit dialog.
+     *  The role matters: the Sprites tab and the sprite editor each mount an
+     *  importer and both are in the DOM at once, so uploading into the hidden
+     *  one reads exactly like a dialog that never opened. */
+    const offer = async (file, role = "sprite-import") => {
+      const input = await page.$(`[data-role="${role}-file"]`);
+      if (input === null) return false;
+      await input.uploadFile(`${FIXTURES}/${file}`);
+      await sleep(900);
+      return true;
+    };
+
+    check(
+      "sprite import: the Sprites tab offers `Import image…`",
+      (await evalOr(page, '[data-role="sprite-import"]', (el) => (el.textContent ?? "").trim())) ===
+        "Import image…",
+    );
+
+    // 1. a STATIC PNG. 41×27 → the default target is the long edge at 64, but
+    //    this fixture is already small, so it keeps its own size.
+    check("sprite import: the file input exists to upload into", await offer("blob.png"));
+    const dlg = await evalOr(page, '[data-role="sprite-import-dialog"]', (el) => el !== null, false);
+    check("sprite import: a PNG opens the fit dialog", dlg === true);
+    const srcLine = await evalOr(page, '[data-role="sprite-import-source"]', (el) =>
+      (el.textContent ?? "").replace(/\s+/g, " ").trim(),
+    );
+    check(
+      "sprite import: the dialog names the file and what was decoded",
+      srcLine !== null && /blob\.png · PNG · 41×27 · 1 frame$/.test(srcLine),
+      String(srcLine),
+    );
+    const size0 = await evalOr(page, '[data-role="sprite-import-size"]', (el) =>
+      [...el.querySelectorAll("input")].map((i) => i.value).join("x"),
+    );
+    check(
+      "sprite import: the default target is the source size when it already fits",
+      size0 === "41x27",
+      String(size0),
+    );
+    const bytes0 = await evalOr(page, '[data-role="sprite-import-bytes"]', (el) =>
+      (el.textContent ?? "").trim(),
+    );
+    check(
+      "sprite import: the record's size is on screen against the cap",
+      bytes0 !== null && /^\d[\d,]* of 16,384 B$/.test(bytes0),
+      String(bytes0),
+    );
+    await page.screenshot({ path: `${shotDir}/e2e-sprite-import-fit.png` });
+
+    // the fit chooser is a RichSelect with three explained rows
+    await page.click('[data-role="sprite-import-fit"]');
+    await sleep(300);
+    const fitRows = await page.$$eval('[data-role^="sprite-import-fit-"]', (els) =>
+      els.map((e) => e.dataset.role ?? ""),
+    );
+    check(
+      "sprite import: fit / stretch / crop are all offered",
+      ["fit", "fill", "crop"].every((v) => fitRows.includes(`sprite-import-fit-${v}`)),
+      JSON.stringify(fitRows),
+    );
+    await page.click('[data-role="sprite-import-fit-crop"]');
+    await sleep(400);
+    await page.screenshot({ path: `${shotDir}/e2e-sprite-import-crop.png` });
+
+    // …and the resampler, the second explained chooser. AREA is what the
+    // checked-in golden uses, and the default here is Nearest (this fixture is
+    // already texel-sized), so this click is what makes the UI's record the
+    // same one `web/tests/fixtures/blob.lxsp` pins both pipelines to.
+    await page.click('[data-role="sprite-import-resample"]');
+    await sleep(300);
+    await page.click('[data-role="sprite-import-resample-area"]');
+    await sleep(400);
+
+    // the two cap knobs, driven to the golden's shape: 24×24, 16 colours
+    for (const [role, value] of [
+      ["sprite-import-w", "24"],
+      ["sprite-import-h", "24"],
+      ["sprite-import-colors", "16"],
+    ]) {
+      await page.$eval(
+        `[data-role="${role}"]`,
+        (el, v) => {
+          el.value = v;
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+        },
+        value,
+      );
+      await sleep(250);
+    }
+    const bytesGolden = await evalOr(page, '[data-role="sprite-import-bytes"]', (el) =>
+      (el.textContent ?? "").trim(),
+    );
+    // 12 + 4 (`blob`) + 3·16 + 24·24 = 640 — the byte-for-byte golden both
+    // pipelines' unit tests assert (web/tests/fixtures/blob.lxsp)
+    check(
+      "sprite import: the readout is the record's real length",
+      bytesGolden === "640 of 16,384 B",
+      String(bytesGolden),
+    );
+    const usedLine = await evalOr(page, '[data-role="sprite-import-colors-used"]', (el) =>
+      (el.textContent ?? "").trim(),
+    );
+    check(
+      "sprite import: it says how many colours survived the quantizer",
+      usedLine === "16 colours of 576 seen",
+      String(usedLine),
+    );
+
+    await page.click('[data-role="sprite-import-ok"]');
+    await sleep(1100);
+    check(
+      "sprite import: the record lands in the sprite editor, not in the store",
+      (await page.$('[data-role="sprite-editor-view"][hidden]')) === null,
+    );
+    const landed = await evalOr(page, '[data-role="sprite-stage-dims"]', (el) =>
+      (el.textContent ?? "").trim(),
+    );
+    check("sprite import: the editor holds the imported size", landed === "24×24", String(landed));
+    const landedState = await evalOr(
+      page,
+      '[data-role="sprite-save-state"]',
+      (el) => el.dataset.saveState ?? "",
+    );
+    check(
+      "sprite import: it lands UNSAVED so it can be touched up before Save",
+      landedState === "unsaved changes",
+      String(landedState),
+    );
+    const landedName = await evalOr(page, '[data-role="sprite-name-echo"]', (el) =>
+      (el.textContent ?? "").trim(),
+    );
+    check("sprite import: the name comes from the file name", landedName === "blob", String(landedName));
+    // The editor's OWN byte line, against the golden the dialog quoted. This
+    // read 82 B for a 640 B record until the adoption was moved out of the
+    // reactive pass (#784): a `$:` that assigns `doc` from inside Svelte's
+    // update function leaves every `$:` declared above it — `bytes` here —
+    // computed from the previous document, while the markup repaints anyway.
+    const landedBytes = await evalOr(page, '[data-role="sprite-bytes"]', (el) =>
+      (el.textContent ?? "").trim(),
+    );
+    check(
+      "sprite import: the editor's record line is the IMPORTED record's length",
+      landedBytes === "640 of 16,384 B",
+      String(landedBytes),
+    );
+    await page.screenshot({ path: `${shotDir}/e2e-sprite-import-landed.png` });
+
+    // 2. an ANIMATED GIF, imported from inside the editor's `⋯` menu. The
+    //    document is dirty, so the menu item asks first.
+    await page.click('[data-role="sprite-overflow"]');
+    await sleep(300);
+    check(
+      "sprite editor: the ⋯ menu offers import and export",
+      (await page.$('[data-role="sprite-import-menu"]')) !== null &&
+        (await page.$('[data-role="sprite-export-sheet"]')) !== null,
+    );
+    await page.click('[data-role="sprite-import-menu"]');
+    await waitDialog(page);
+    check(
+      "sprite import: importing over unsaved changes asks first",
+      /Import over unsaved changes\?/.test(await dialogTitle(page)),
+    );
+    await acceptDialog(page);
+    await sleep(400);
+    check(
+      "sprite import: the editor's file input is there too",
+      await offer("spin.gif", "sprite-editor-import"),
+    );
+    const gifLine = await evalOr(page, '[data-role="sprite-import-source"]', (el) =>
+      (el.textContent ?? "").replace(/\s+/g, " ").trim(),
+    );
+    // ImageDecoder is a Chromium API and this suite runs in Chromium: all four
+    // frames, or the static fallback said so out loud.
+    check(
+      "sprite import: an animated GIF decodes to every frame",
+      gifLine !== null && /spin\.gif · GIF · 8×8 · 4 frames$/.test(gifLine),
+      String(gifLine),
+    );
+    const play = await evalOr(page, '[data-role="sprite-import-play"]', (el) =>
+      (el.textContent ?? "").trim(),
+    );
+    check(
+      "sprite import: the frame delays become the record's fps",
+      play === "4 frames · 10 fps",
+      String(play),
+    );
+    // the frame knob: one in two, at half the rate
+    await page.$eval('[data-role="sprite-import-keep"]', (el) => {
+      el.value = "2";
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await sleep(350);
+    const halved = await evalOr(page, '[data-role="sprite-import-play"]', (el) =>
+      (el.textContent ?? "").trim(),
+    );
+    check(
+      "sprite import: keeping one frame in two halves the rate",
+      halved === "2 frames · 5 fps",
+      String(halved),
+    );
+    await page.screenshot({ path: `${shotDir}/e2e-sprite-import-gif.png` });
+    await page.click('[data-role="sprite-import-cancel"]');
+    await sleep(400);
+    check(
+      "sprite import: Cancel closes the dialog and changes nothing",
+      (await page.$('[data-role="sprite-import-dialog"]')) === null &&
+        (await evalOr(page, '[data-role="sprite-stage-dims"]', (el) =>
+          (el.textContent ?? "").trim(),
+        )) === "24×24",
+    );
+
+    // 3. an OVER-CAP import: 64×64 × 4 frames is 16 KiB + header, so Import is
+    //    disabled with its reason (§5.7) and `Fit under the cap` turns the
+    //    knobs until it fits. NOTHING is ever truncated silently.
+    await page.click('[data-role="sprite-overflow"]');
+    await sleep(300);
+    await page.click('[data-role="sprite-import-menu"]');
+    await waitDialog(page).catch(() => {});
+    await acceptDialog(page).catch(() => {});
+    await sleep(400);
+    await offer("spin.gif", "sprite-editor-import");
+    for (const [role, value] of [
+      ["sprite-import-w", "64"],
+      ["sprite-import-h", "64"],
+    ]) {
+      await page.$eval(
+        `[data-role="${role}"]`,
+        (el, v) => {
+          el.value = v;
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+        },
+        value,
+      );
+      await sleep(250);
+    }
+    const over = await evalOr(page, '[data-role="sprite-import-ok"]', (el) => ({
+      disabled: el.disabled,
+      reason: el.dataset.reason ?? "",
+    }));
+    check(
+      "sprite import: over the cap, Import is disabled and carries its reason",
+      over !== null && over.disabled === true && /16,384 B/.test(over.reason),
+      JSON.stringify(over),
+    );
+    check(
+      "sprite import: and it says so in words rather than truncating",
+      (await page.$('[data-role="sprite-import-over"]')) !== null,
+    );
+    await page.screenshot({ path: `${shotDir}/e2e-sprite-import-overcap.png` });
+    await page.click('[data-role="sprite-import-fitcap"]');
+    await sleep(500);
+    const fixed = await evalOr(page, '[data-role="sprite-import-ok"]', (el) => el.disabled);
+    check("sprite import: `Fit under the cap` gets it under the cap", fixed === false);
+    const fixedBytes = await evalOr(page, '[data-role="sprite-import-bytes"]', (el) =>
+      (el.textContent ?? "").trim(),
+    );
+    check(
+      "sprite import: …and the readout proves it",
+      fixedBytes !== null &&
+        Number((fixedBytes.split(" ")[0] ?? "0").replace(/,/g, "")) <= 16384,
+      String(fixedBytes),
+    );
+    await page.screenshot({ path: `${shotDir}/e2e-sprite-import-fitcap.png` });
+    await page.click('[data-role="sprite-import-cancel"]');
+    await sleep(300);
+
+    // 4. a file that is NOT an image: refused in words, no dialog, no crash.
+    await page.click('[data-role="sprite-overflow"]');
+    await sleep(300);
+    await page.click('[data-role="sprite-import-menu"]');
+    await waitDialog(page).catch(() => {});
+    await acceptDialog(page).catch(() => {});
+    await sleep(400);
+    const notImage = `${shotDir}/e2e-not-an-image.txt`;
+    fs.writeFileSync(notImage, "this is not a PNG\n");
+    const badInput = await page.$('[data-role="sprite-editor-import-file"]');
+    if (badInput !== null) await badInput.uploadFile(notImage);
+    await sleep(900);
+    const refusal = await evalOr(page, '[data-role="sprite-note"]', (el) =>
+      (el.textContent ?? "").trim(),
+    );
+    check(
+      "sprite import: a text file is refused in words, and no dialog opens",
+      (await page.$('[data-role="sprite-import-dialog"]')) === null &&
+        refusal !== null &&
+        /not an image/.test(refusal),
+      String(refusal),
+    );
+    await page.screenshot({ path: `${shotDir}/e2e-sprite-import-refused.png` });
+
+    // leave the editor the way the next block expects to find it
+    await page.click('[data-role="sprite-editor-back"]');
+    await waitDialog(page).catch(() => {});
+    await acceptDialog(page).catch(() => {});
+    await sleep(700);
   }
 
   // ── Scenes, the playground half (Gitea #480; mockups S6b · S6c · S7 · S9) ──

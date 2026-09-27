@@ -4,6 +4,22 @@
 //!   luxel parse <file>                     dump the AST (or errors, editor-style)
 //!   luxel run   <file> [opts]              render headlessly to a PPM frame-strip
 //!   luxel bench <file> [opts]              measure VM throughput (pixels/sec)
+//!   luxel sprite import <image> [opts]     an image (PNG/GIF/JPEG/WebP/BMP)
+//!                                          as an `LXSP` sprite record
+//!
+//! sprite import options (Gitea #784; the same pipeline as the console's
+//! `Import image…`, pinned to it by web/tests/fixtures/*.lxsp):
+//!   --size WxH     target texels            (default: the long edge at 64)
+//!   --fit MODE     fit|fill|crop            (default fit — letterboxed)
+//!   --resample M   nearest|area             (default area)
+//!   --colors N     palette ceiling 1..255   (default 255)
+//!   --alpha N      alpha below N is transparent (default 128)
+//!   --fps N        0..30, overriding the frame delays
+//!   --keep-every N keep one source frame in N
+//!   --dither       Floyd-Steinberg (off by default; worse on LEDs)
+//!   --name S       the record's name        (default: the file's)
+//!   --fit-cap      turn the knobs until the record is under 16 KiB
+//!   -o PATH        write the record        (omitted: print what it would be)
 //!
 //! run/bench options:
 //!   --pixels N     virtual strip length      (default 60 / 1000)
@@ -44,6 +60,8 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 mod serve;
+mod spritecmd;
+mod spriteimport;
 
 use luxel_core::diag::line_col;
 use luxel_core::engine::Engine;
@@ -65,6 +83,7 @@ fn main() -> ExitCode {
         "check" if args.len() >= 2 => check_cmd(&args[1], &args[2..]),
         "compile" if args.len() >= 2 => compile_cmd(&args[1], &args[2..]),
         "serve" => serve::serve_cmd(&args[1..]),
+        "sprite" if args.len() >= 2 => spritecmd::sprite_cmd(&args[1..]),
         _ => usage(),
     }
 }
@@ -330,7 +349,7 @@ fn vars_cmd(path: &str, rest: &[String]) -> ExitCode {
 
 pub(crate) fn usage() -> ExitCode {
     eprintln!(
-        "usage: luxel parse <pattern.js>\n       luxel run   <pattern.js> [--pixels N] [--frames N] [--fps F] [--out PATH] [--seed S] [--control NAME=V] [--map-grid WxH] [--proj MODE]\n       luxel bench <pattern.js> [--pixels N] [--frames N] [--map-grid WxH] [--proj MODE]\n       luxel check <pattern.js|.epe> [--grid WxH | --strip N]\n       luxel compile <pattern.js|.epe> [--out PATH.lxbc] [--no-fuse] [--no-storefwd] [--no-kinds] [--kinds] [--stats]\n       luxel serve [--pixels N] [--max-pixels N] [--port P] [--fps F] [--out-fps F] [--rescan-hz HZ] [--heap-free BYTES] [--engine-heap BYTES] [--ddp-port P] [--e131-port P] [--board strip|panel] [--outputs N] [--reverted FROM_PX,HEAP] [--name NAME] [--board-name NAME] [--bc-format N] [--stale-store] [--accept-ota] [--jit STATE[:REASON][,STATE[:REASON]…]] [--scenes FILE]"
+        "usage: luxel parse <pattern.js>\n       luxel run   <pattern.js> [--pixels N] [--frames N] [--fps F] [--out PATH] [--seed S] [--control NAME=V] [--map-grid WxH] [--proj MODE]\n       luxel bench <pattern.js> [--pixels N] [--frames N] [--map-grid WxH] [--proj MODE]\n       luxel check <pattern.js|.epe> [--grid WxH | --strip N]\n       luxel compile <pattern.js|.epe> [--out PATH.lxbc] [--no-fuse] [--no-storefwd] [--no-kinds] [--kinds] [--stats]\n       luxel sprite import <image> [--size WxH] [--fit fit|fill|crop] [--resample nearest|area] [--colors N] [--alpha N] [--fps N] [--keep-every N] [--dither] [--name S] [--fit-cap] [-o OUT.lxsp]\n       luxel serve [--pixels N] [--max-pixels N] [--port P] [--fps F] [--out-fps F] [--rescan-hz HZ] [--heap-free BYTES] [--engine-heap BYTES] [--ddp-port P] [--e131-port P] [--board strip|panel] [--outputs N] [--reverted FROM_PX,HEAP] [--name NAME] [--board-name NAME] [--bc-format N] [--stale-store] [--accept-ota] [--jit STATE[:REASON][,STATE[:REASON]…]] [--scenes FILE]"
     );
     ExitCode::from(2)
 }
