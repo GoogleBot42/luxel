@@ -54,6 +54,20 @@ const check = (name, cond, detail = "") => {
   if (!cond) fails.push(name);
 };
 
+/**
+ * `page.$eval` that yields `fallback` instead of throwing when the selector
+ * matches nothing.
+ *
+ * Puppeteer's `$eval` throws on a missing element, which in a suite this long
+ * means one wrong expectation ABORTS the run and every later check goes
+ * unreported — #819: an unguarded read of `sprite-frame-row` took the whole
+ * sprite-editor block and the §5.7 disabled sweep after it down. Read a role
+ * through this whenever the element's presence is itself in question, so a
+ * missing role fails its own `check` and the suite carries on.
+ */
+const evalOr = async (pg, sel, fn, fallback = null) =>
+  (await pg.$(sel)) === null ? fallback : pg.$eval(sel, fn);
+
 /** Replace the (visible) pattern editor's contents by typing. */
 /** The code pane of whichever editor screen is on top: the pattern editor, or
  *  the map program's own screen (A10, #471). Both are mounted at all times;
@@ -1651,28 +1665,36 @@ try {
     await paint(5, 5);
 
     // "What's the Onion button in the sprite editor?" (Jeremy, 2026-09-26) —
-    // it says what it does now, and carries the sentence in its title.
-    const ghost = await page.$eval('[data-role="sprite-onion"]', (el) => ({
+    // #804 answered by renaming it: the button says what it DOES and carries
+    // the sentence in its title, and the `data-role` stayed put because it is
+    // still the same control (web/src/components/sprite/FrameStrip.svelte).
+    // Both reads go through `evalOr`: a label the UI has moved on from should
+    // fail ONE check, not abort the suite here and take the §5.7 sweep with it
+    // (#819).
+    const ghost = await evalOr(page, '[data-role="sprite-onion"]', (el) => ({
       label: (el.textContent ?? "").trim(),
       title: el.title,
     }));
     check(
       "sprite editor: the onion-skin toggle is `Ghost prev` and explains itself",
-      ghost.label === "Ghost prev" && /previous frame/.test(ghost.title),
+      ghost !== null && ghost.label === "Ghost prev" && /previous frame/.test(ghost.title),
       JSON.stringify(ghost),
     );
 
     // …and the strip WRAPS rather than scrolling sideways (#741 follow-up):
     // "if the user has enough that a horizontal scroll bar would be needed, it
     // should be just starting a new row of frames."
-    const strip = await page.$eval('[data-role="sprite-frame-row"]', (el) => ({
+    const strip = await evalOr(page, '[data-role="sprite-frame-row"]', (el) => ({
       wrap: getComputedStyle(el).flexWrap,
       overflow: getComputedStyle(el).overflowX,
       scrollable: el.scrollWidth > el.clientWidth + 1,
     }));
     check(
       "sprite editor: the frame strip wraps and never scrolls horizontally",
-      strip.wrap === "wrap" && strip.overflow === "visible" && !strip.scrollable,
+      strip !== null &&
+        strip.wrap === "wrap" &&
+        strip.overflow === "visible" &&
+        !strip.scrollable,
       JSON.stringify(strip),
     );
 
