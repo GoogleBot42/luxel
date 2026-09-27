@@ -1,5 +1,95 @@
 # Update log
 
+## 2026-09-27 — per-entry CSS buys back 12.8 kB, and code-splitting is measured as the wrong lever (#691)
+
+The `.luxa` asset bundle was at **981,613 B of 983,040 — 1,427 B, 0.14 %
+headroom** on master `fc071883`, and `tools/ci.sh` fails the build over the
+partition, so the next web PR was not "a risk", it was arithmetic. #691's own
+top recommendation, and docs/boards.md's, was to code-split the 1.24 MB console
+entry chunk. **That recommendation was wrong, and the measurement is the main
+thing this change leaves behind.**
+
+**Splitting cannot help this gate.** `pack-assets.mjs` packs everything in
+`dist/` and zopfli-encodes each blob independently, so a dynamic `import()`
+moves bytes between blobs without removing any — and then pays per-chunk
+framing and lost cross-chunk redundancy on top. Splitting the entry into eight
+chunks (CodeMirror, the pattern editor, the map editor, Sprites, Scenes,
+Playlist, Settings) measured **+10,209 B gzipped**, 440,013 → 450,222 over the
+whole `dist/`: it would have eaten seven times the headroom that existed. #683
+said this in one line — "splitting moves bytes between blobs, it does not
+remove them" — and it is now a number. Two other guesses went the same way:
+terser `toplevel`/`unsafe`/`passes: 3` and `target: "esnext"` are worth between
+−27 B and 0 (vite already passes `module: true`, so top-level mangling was on
+all along), and `wasm-opt --converge` is worth 461 B for several times the wasm
+build's wall clock. Splitting is still right for **cold-load latency** on a
+2-socket board — 1.24 MB raw before first paint — which is now Gitea #883, with
+the three #92/#592 constraints a lazy chunk has to satisfy written down. It has
+to be paid for out of margin somebody else frees first.
+
+**What did work was #691's option 3, per-entry CSS: −12,794 B, 0.14 % →
+1.44 %.** `cssCodeSplit` was off, so ONE stylesheet was inlined into BOTH entry
+HTMLs — `flash.html` carried the console's 82 KB sheet (including the ramp
+editor that landed in #879 an hour earlier), and `index.html` carried the
+installer's. Splitting it per entry is free here precisely because
+`inlineBoot()` (#592) already inlines: the sheets stay INLINE, so the emitted
+`<script>`/`<link>` set of every `dist/*.html` is unchanged at zero
+browser-native requests, which is the whole #92/#592 invariant. What changes is
+that each page now inlines only the sheets it links — its own, plus the one for
+the chunk the two entries share.
+
+| blob (gzipped, as packed) | master `fc071883` | + per-entry CSS |
+|---|---:|---:|
+| `assets/index-*.js` | 388,055 | 388,047 |
+| `gallery.json` | 354,831 | 354,831 |
+| `luxel.wasm` | 189,463 | 189,463 |
+| `index.html` | 15,873 | 15,631 |
+| `flash.html` | 15,702 | **3,156** |
+| `assets/flash-*.js` | 9,475 | 9,477 |
+| `assets/app-*.js` | 5,855 | 5,855 |
+| `sprites.json` + `scenes.json` | 1,768 | 1,768 |
+| **packed `.luxa`** | **981,613** | **968,819** |
+| headroom of 983,040 | 1,427 B (0.14 %) | **14,221 B (1.44 %)** |
+
+`inlineBoot()` used to throw on a second stylesheet; it now inlines every sheet
+a page LINKS, in rollup's order so the cascade is unchanged, and throws if a
+sheet reaches the end unreferenced — because an emitted-but-never-linked sheet
+would be deleted with its rules never reaching a page, which is the
+silently-unstyled-console failure #592 exists to prevent.
+
+**Two new guards, because this regression would be silent.** Both pages still
+work if the split is ever undone; the archive just quietly grows 12.8 kB again.
+`tests/bundleShape.test.mjs` now asserts that `dist/flash.html` does NOT
+contain `.editor-frame` (a plain `.css` import, so the assertion does not move
+with a Svelte scope hash) while `index.html` does. And **`web/tools/tabwalk.mjs`**
+walks every console tab and all three full-screen editors in real chromium
+against a `luxel serve` mirror — `--board panel` and `--board strip` — asserting
+per surface that the shell tokens resolved, that the body is actually painted
+and that the screen has a real box. A CSS-splitting bug drops the rules for ONE
+screen, which is exactly the screen nobody screenshots.
+
+**`web/tools/bundle-report.mjs`** is the instrument the rest of this was argued
+from: it re-runs the real `vite build` through Vite's JS API with one plugin
+that records `chunk.modules`, and prints every chunk and asset by gzipped size
+plus the biggest modules inside each. No new npm dependency — it drives the
+shipped `vite.config.ts`, so terser, `inlineBoot()` and `cssCodeSplit` are all
+in the numbers rather than a parallel build's. It is what shows that CodeMirror
+is 165,267 B gzipped of the 388 kB console chunk, and that `gallery.json`
+(36.6 %), that chunk (40.1 %) and `luxel.wasm` (19.6 %) are 96.3 % of the
+partition.
+
+**1.44 % is not a fix, it is a reprieve**, and the 10 % a comfortable margin
+would want (98,304 B) is not reachable from the build side at all — that is the
+honest finding. What is left is decisions: a curated on-device `gallery.json`
+(up to 355 kB, a product call), an explicit CodeMirror extension list instead of
+`basicSetup` (up to ~165 kB, but every drop is a feature — Ctrl-F, fold, lint),
+dropping the installer page from the DEVICE archive only (12,633 B, now
+Gitea #884 for Jeremy, because `lib/releases.ts`'s *github* firmware-source mode
+exists for exactly the "device-served copy"), growing `assets` past 0xF0000 (a
+third partition migration), or **#686's brotli-on-flash with an in-page decoder,
+the only remaining lever worth ~110 kB.** #686 was filed as "not planned; keep
+as the next hammer if the assets partition gets tight again." It is tight, and
+the shortfall is now measured.
+
 ## 2026-09-27 — the colour ramp editor, redesigned from scratch (#787, #537, #697, #748)
 
 Jeremy, 2026-09-26: *"a complete UI redesign of color ramp (it is a

@@ -2171,18 +2171,32 @@ See **Scenes** above.
   still arriving. Both halves bit: a refused stylesheet rendered the console
   as unstyled HTML, silently; and with the panel's pool at `"web":[1,1,1]`
   even a single remaining `<script src>` tag was refused on every cold load.
-  `cssCodeSplit: false` is what lets a page component or a plain `.css`
-  import (e.g. `settings/cards.css`) land in a single stylesheet; the
-  `inlineBoot()` plugin in `vite.config.ts` then inlines that stylesheet into
-  both entry HTMLs as a `<style>`, drops the asset, and replaces the module
-  tag with a loader that appends the script after `DOMContentLoaded` — so it
-  reuses the document's keep-alive socket — and re-appends it up to three
-  times (2/4/6 s) if it is refused. A whole cold load, bundle and wasm and
-  every `/api/*` included, then fits in one socket. Cost: the CSS ships twice
-  (once per entry) and loses its own immutable cache entry — about +10 KB
-  gzipped on the packed asset archive. `web/tests/bundleShape.test.mjs`
-  guards the shape; `tools/coldload.mjs` (styled + booted) and
-  `tools/bootretry-check.mjs` (the retry) guard the behaviour.
+  A page component or a plain `.css` import (e.g. `settings/cards.css`)
+  lands in its entry's stylesheet; the `inlineBoot()` plugin in
+  `vite.config.ts` then inlines every sheet a page LINKS into that page as
+  `<style>` blocks (in rollup's order, so the cascade is unchanged), drops
+  the assets, and replaces the module tag with a loader that appends the
+  script after `DOMContentLoaded` — so it reuses the document's keep-alive
+  socket — and re-appends it up to three times (2/4/6 s) if it is refused. A
+  whole cold load, bundle and wasm and every `/api/*` included, then fits in
+  one socket.
+
+  **CSS is split PER ENTRY (`cssCodeSplit: true`, Gitea #691).** It was one
+  global sheet until 2026-09-27, which meant the 82 KB console stylesheet
+  rode inside `flash.html` and the installer's inside `index.html` — 12,794 B
+  gzipped of the 983,040 B assets partition spent on rules neither page can
+  use. Splitting it costs nothing here because the sheets are still INLINE:
+  the emitted `<script>`/`<link>` set of every `dist/*.html` is unchanged at
+  zero browser-native requests, which is the whole #92/#592 invariant. What
+  each page gets is its own sheet plus the one for the chunk the two entries
+  share (`app.css`, `Dialog.svelte`) — two `<style>` blocks, not one. The
+  remaining cost is unchanged: an inlined sheet has no immutable cache entry
+  of its own, it rides the `no-cache`-revalidated HTML.
+  `web/tests/bundleShape.test.mjs` guards the shape — including that
+  `flash.html` does NOT contain `.editor-frame`, so a regression back to one
+  global sheet fails a test rather than quietly costing 12.8 kB;
+  `tools/coldload.mjs` (styled + booted) and `tools/bootretry-check.mjs`
+  (the retry) guard the behaviour.
 - **The bundle has a hard ceiling: 983,040 B packed**, the `assets` partition
   on every board (docs/boards.md), gated by `tools/ci.sh` — a build over it
   FAILS, and `POST /api/assets` refuses the install. So the build is tuned for

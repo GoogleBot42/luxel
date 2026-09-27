@@ -6,8 +6,10 @@
 
    A plain .css import rather than a wrapper component with slots: slotted
    markup is compiled in the PARENT's scope, so a frame component could not
-   style what it was handed anyway, and `cssCodeSplit: false` folds this into
-   the one stylesheet (docs/web-architecture.md, Gitea #92). Every rule is
+   style what it was handed anyway, and the build folds this into the console
+   entry's inlined stylesheet (docs/web-architecture.md, Gitea #92/#592/#691;
+   since #691 the CSS is per entry, so these rules no longer ride in
+   `flash.html`). Every rule is
    prefixed with `.editor-frame` so nothing here can reach a card, a tile or a
    chip that happens to use the same class name.
 

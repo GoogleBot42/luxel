@@ -5,7 +5,7 @@
 // pool refuses it — a refused stylesheet rendered the console as raw unstyled
 // HTML with nothing anywhere reporting a failure, and a refused bundle gives a
 // blank page. So the build emits NEITHER: `inlineBoot()` in vite.config.ts
-// inlines the one stylesheet and replaces the module tag with a loader that
+// inlines each page’s own stylesheets and replaces the module tag with a loader that
 // appends the script after parse (reusing the document's keep-alive socket)
 // and retries it. A cold load's whole boot fits in one socket.
 //
@@ -19,6 +19,13 @@ import { fileURLToPath } from "node:url";
 
 const dist = (f) => fileURLToPath(new URL(`../dist/${f}`, import.meta.url));
 const built = existsSync(dist("index.html"));
+
+/** Every inlined sheet on a page, concatenated. Since #691 there are TWO —
+ *  the shared chunk’s and the entry’s own — inlined in cascade order. */
+function inlinedCss(page) {
+  const html = readFileSync(dist(page), "utf8");
+  return [...html.matchAll(/<style>([\s\S]*?)<\/style>/g)].map((m) => m[1]).join("\n");
+}
 
 /** Tags whose `src`/`href` makes the BROWSER open a connection of its own. */
 function nativeRequests(html) {
@@ -43,11 +50,12 @@ for (const [page, chunk] of [
   });
 
   test(`dist/${page} carries its own CSS`, { skip: !built }, () => {
-    const html = readFileSync(dist(page), "utf8");
-    const style = html.match(/<style>([\s\S]*?)<\/style>/);
-    assert.ok(style, "no inlined <style>");
-    assert.match(style[1], /--bg:\s*#14161a/, "inlined CSS is not app.css");
-    assert.ok(style[1].length > 10000, `inlined CSS looks truncated (${style[1].length} bytes)`);
+    const css = inlinedCss(page);
+    assert.ok(css.length > 0, "no inlined <style>");
+    assert.match(css, /--bg:\s*#14161a/, "inlined CSS does not include app.css");
+    // Per entry since #691, so the floor is the INSTALLER page's sheet (~8.6 kB),
+    // not the console's ~82 kB. It is a truncation check, not a size budget.
+    assert.ok(css.length > 5000, `inlined CSS looks truncated (${css.length} bytes)`);
   });
 
   test(`dist/${page} loads its bundle after parse, with retries`, { skip: !built }, () => {
@@ -61,6 +69,20 @@ for (const [page, chunk] of [
     assert.match(html, /onerror[\s\S]{0,80}tries <= 3/, "no bounded retry — refusals are fatal");
   });
 }
+
+// Gitea #691: the per-entry split is only worth its bytes if it really keeps
+// the console’s rules out of the installer page. `.editor-frame` is a plain
+// `.css` import (components/editor-frame.css), not a Svelte-scoped class, so
+// this assertion does not move with a compile hash. A regression here is
+// SILENT — both pages still work, the asset archive just grows 12.8 kB again.
+test("dist/flash.html does not carry the console’s CSS", { skip: !built }, () => {
+  assert.match(inlinedCss("index.html"), /\.editor-frame/, "the console sheet is missing");
+  assert.doesNotMatch(
+    inlinedCss("flash.html"),
+    /\.editor-frame/,
+    "the console’s stylesheet is riding in the installer page (#691)",
+  );
+});
 
 test("no CSS asset is emitted at all", { skip: !built }, () => {
   const assets = fileURLToPath(new URL("../dist/assets", import.meta.url));

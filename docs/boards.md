@@ -2083,23 +2083,64 @@ rather than by this board.
 
 What did **not** change is the assets margin, which is still the number
 worth watching on every board: the 4 MB `assets` partition
-(0xF0000 = 983,040 B) holds a **946 KB bundle as of 2026-09-27 — 1.48 %
-headroom** (968,489 B packed; `tools/ci.sh` fails the build over 983,040 B,
-and `POST /api/assets` refuses an oversized install outright). One bundle
-ships to every board, so the *small* partition is the bound even though this
-board's is four times the size.
+(0xF0000 = 983,040 B) holds a **946 KB bundle as of 2026-09-27 evening —
+1.44 % headroom** (968,819 B packed, 14,221 B free; `tools/ci.sh` fails the
+build over 983,040 B, and `POST /api/assets` refuses an oversized install
+outright). One bundle ships to every board, so the *small* partition is the
+bound even though this board's is four times the size. **Read this line before
+adding a web surface — it has been under 2 % all day and was 1,427 B on master
+`fc071883`, which is less than one card's worth of CSS.**
 
-**That margin is spent again, in three days.** It was 863,167 B / 12.2 % on
-2026-09-24; the 98,626 B since is almost all one blob — `assets/index-*.js`
-went 287,734 → 374,844 B gzipped while `gallery.json` (+554), `luxel.wasm`
-(+3,388) and the entry HTMLs (+7,570) barely moved. No new npm dependency
-did it: it is the console's own recent feature code landing in the single
-entry chunk, so the lever that has not been pulled yet is **code-splitting**
-(the image importer's ~1,600 lines behind a dynamic `import()` off the
-Sprites tab, say) rather than any of the content decisions below. Gitea #691
-carries the options and the up-to-date breakdown.
+**That margin was spent in three days and 12.8 kB of it has been bought
+back.** It was 863,167 B / 12.2 % on 2026-09-24, 968,489 B / 1.48 % by the
+evening of 2026-09-27; the 98,626 B in between is almost all one blob —
+`assets/index-*.js` went 287,734 → 374,844 B gzipped while `gallery.json`
+(+554), `luxel.wasm` (+3,388) and the entry HTMLs (+7,570) barely moved. No
+new npm dependency did it: it is the console's own recent feature code
+landing in the single entry chunk. Gitea #691 carries the options.
 
-#785's shipped sprite and scene library is the same story in miniature, and is
+**Per-entry CSS (#691 option 3) took it from 981,613 B / 0.14 % to
+968,819 B / 1.44 %** (measured both sides on master `fc071883`, so #787's
+ramp editor is in both columns) — the one lever left that costs no feature
+and no decision. `cssCodeSplit` was off, so
+ONE stylesheet was inlined into BOTH entry HTMLs: `flash.html` carried the
+console's 82 KB sheet and `index.html` the installer's. Splitting it per
+entry is free here because `inlineBoot()` already inlines, so the emitted
+`<script>`/`<link>` set of `dist/*.html` is unchanged at zero
+browser-native requests (the #92/#592 invariant):
+
+| blob (gzipped, as packed) | master `fc071883` | + per-entry CSS | delta |
+|---|---:|---:|---:|
+| `flash.html` | 15,702 | 3,156 | **−12,546** |
+| `index.html` | 15,873 | 15,631 | −242 |
+| `assets/index-*.js` | 388,055 | 388,047 | −8 |
+| `gallery.json` | 354,831 | 354,831 | 0 |
+| `luxel.wasm` | 189,463 | 189,463 | 0 |
+| `assets/flash-*.js` | 9,475 | 9,477 | +2 |
+| `assets/app-*.js` | 5,855 | 5,855 | 0 |
+| `sprites.json` + `scenes.json` | 1,768 | 1,768 | 0 |
+| **packed `.luxa`** | **981,613** | **968,819** | **−12,794** |
+| headroom of 983,040 | 1,427 B (0.14 %) | **14,221 B (1.44 %)** | **10x** |
+
+**Code-splitting the entry chunk does NOT help this partition, measured.**
+It was the top recommendation on #691 and on this page, and it is wrong for
+the *size* gate: `pack-assets.mjs` packs everything in `dist/` and gzips each
+blob independently, so splitting only moves bytes between blobs and then pays
+per-chunk framing and lost cross-chunk redundancy on top. Splitting the entry
+into eight chunks (CodeMirror, the pattern editor, the map editor, Sprites,
+Scenes, Playlist, Settings) measured **+10,209 B gzipped**, 440,013 →
+450,222 across the whole `dist/` — i.e. seven times the headroom that
+existed, spent to create headroom. The same measurement dismissed two other guesses:
+terser `toplevel`/`unsafe`/`passes: 3` and `target: "esnext"` are worth
+between −27 B and 0 (vite already passes `module: true`, so toplevel
+mangling is on), and `wasm-opt --converge` is worth 461 B for several times
+the wasm build's wall clock. Splitting is still worth doing for **cold-load
+latency** on a 2-socket board — 1.24 MB raw before first paint — but that is
+Gitea #883, not this one, and it has to be paid for out of margin someone
+else frees first. `web/tools/bundle-report.mjs` is the per-chunk/per-module
+measurement, so the next person reads numbers instead of guessing.
+
+#785's shipped sprite and scene library was the same story in miniature, and was
 a further **+6,375 B** (962,114 → 968,489 over its own base, `d7676924`): only
 1,768 B of that is the two new JSON files — 11 `LXSP` records and 5 scene
 blocks, both tiny by construction — and the rest is again the entry chunk, for
@@ -2120,12 +2161,23 @@ on that day's master:
 | zopfli + terser on the two entry HTMLs and the small chunks | 2.1 kB |
 
 None of it is repeatable — the three levers are spent. The rest has to come
-from what is *in* the bundle: `gallery.json` is 355 kB of the 945 (308
+from what is *in* the bundle: `gallery.json` is 355 kB of the 946 (308
 pattern sources, which ship verbatim on purpose) and the console's own code
-is the 379 kB JS chunk, CodeMirror plus everything the tabs have grown since.
-After code-splitting that chunk the only lever left is growing `assets` past
-0xF0000, which is another migration — Gitea #691 has the options and what
-each costs.
+is the 388 kB JS chunk, CodeMirror plus everything the tabs have grown since.
+Against the 968,819 B bundle that is `gallery.json` 36.6 %, the console chunk
+40.1 % and `luxel.wasm` 19.6 % — 96.3 % of the partition in three blobs, and
+every remaining lever is a decision rather than a build flag:
+
+| lever | gzipped saving | what it costs |
+|---|---:|---|
+| `gallery.json` as a curated on-device subset | up to 355 kB | product decision — the 308 sources ship verbatim as readable examples (#691 option 1) |
+| an explicit CodeMirror extension list instead of `basicSetup` | up to 165 kB — the measured CodeMirror + lezer total; what any single extension is worth is NOT measured | removes editor features (Ctrl-F, fold, lint) — needs the mock/feature list, not a guess (#691 option 2) |
+| drop the installer page from the DEVICE archive only | 12,633 B (`flash.html` 3,156 + `assets/flash-*.js` 9,477) | `lib/releases.ts`'s *github* firmware-source mode exists for exactly the "device-served copy", and docs/wled-migration.md documents the page as being "on every Luxel device" — a supported mode, so Jeremy's call |
+| grow `assets` past 0xF0000 | as much as wanted | a THIRD partition migration on top of #501, and both OTA slots and `storage` are themselves tight (#691 option 4) |
+| **#686's brotli-on-flash with an in-page decoder** | **~110 kB** | a bespoke loading path for every asset and a re-verify of `coldload.mjs` — filed as "not planned; keep as the next hammer if the assets partition gets tight again". It is tight, and the shortfall is now measured. |
+
+Only the last two reach the 10 % (98,304 B) a comfortable margin would want.
+Nothing on the build side does: see the code-splitting measurement above.
 
 Brotli and zstd are **not** available however much they would help: a
 browser only advertises `Accept-Encoding: br`/`zstd` on a secure origin,
