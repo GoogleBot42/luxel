@@ -962,7 +962,7 @@ pub fn enabled() -> bool {
 /// The AppCpu stack is 20 KB (`core1::STACK_BYTES`) and the render task's
 /// own Rust frames are already on it when a pattern is entered, so this is
 /// a slice of what is left, not the whole stack.
-const STACK_BUDGET: usize = 8 * 1024;
+pub(crate) const STACK_BUDGET: usize = 8 * 1024;
 /// Never let the guard sit closer than this to the real bottom of the
 /// stack, whatever the budget says.
 ///

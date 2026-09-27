@@ -1945,3 +1945,46 @@ fn an_assert_still_comes_through_as_itself() {
     );
     assert!(e.requires_violated());
 }
+
+/// Gitea #842: `frame_begin` + `frame_step` slices are byte-identical to one
+/// `frame` call — every chunk size, a per-pixel 1D and 2D pattern, several
+/// frames so the clock and `setFrameRate` hold both cross the split.
+#[test]
+fn chunked_frames_match_whole_frames() {
+    let srcs = [
+        RAINBOW,
+        "export function render2D(index, x, y) { hsv(x + time(.2), y, 1) }",
+        // a frame-rate cap: every other frame is a hold
+        "export function beforeRender(d) { setFrameRate(60) }\n\
+         export function render(index) { hsv(index / pixelCount + time(.05), 1, 1) }",
+    ];
+    for src in srcs {
+        for chunk in [1u32, 3, 7, 64, 1000] {
+            let mut whole = Engine::new(src, 37, 1).unwrap();
+            let mut sliced = Engine::new(src, 37, 1).unwrap();
+            assert!(sliced.frame_chunkable(), "{src}");
+            for f in 0..6 {
+                let d = Fx::from_int(9);
+                let want = whole.frame(d).to_vec();
+                let mut steps = 0;
+                if sliced.frame_begin(d) {
+                    while !sliced.frame_step(chunk) {
+                        steps += 1;
+                        // nothing else is touched between steps, and the
+                        // frame is not observable as finished before it is
+                        assert!(steps <= 37, "runaway slicing");
+                    }
+                }
+                assert_eq!(sliced.pixels(), &want[..], "{src}\nchunk {chunk}, frame {f}");
+                assert_eq!(sliced.last_error.is_some(), whole.last_error.is_some());
+            }
+        }
+    }
+    // a whole-frame pattern is not chunkable, and `frame_begin` runs it whole
+    let mut e = Engine::new("export function renderFrame() { rgb(0, 1, 0); fill() }", 4, 1).unwrap();
+    assert!(!e.frame_chunkable());
+    assert!(!e.frame_begin(Fx::ZERO));
+    assert_eq!(e.pixels(), &[[0, 255, 0]; 4]);
+    // a call with nothing pending is a no-op
+    assert!(e.frame_step(1));
+}
