@@ -416,6 +416,13 @@ paths:
   fine. `tsconfig.json` carries `allowImportingTsExtensions` + `noEmit` so tsc
   accepts the explicit form; use it only in modules a test loads, and leave the
   rest of `src/` extensionless (Gitea #643).
+- It also cannot import a `.svelte` file at all — not even its `context="module"`
+  exports. So a rule that lives inside a component is NOT unit-testable where it
+  is: a brief asking for `web/tests/` cases over "the component's model" means
+  lifting that model into `src/lib/*.ts` first, with the component importing it
+  back. Keep such a module generic over the element type rather than re-declaring
+  the component's interface, so nothing has to cross the `.svelte` boundary
+  (`src/lib/gradient.ts`, #787 step 1).
 - **The web UI v2 spec is `docs/design/webui-v2/proposal.md`** (approved
   2026-09-18, epic #461). Any v2 work follows it: geometry comes from the one
   `Layout` store, and a control is *absent* unless the device's advertised
