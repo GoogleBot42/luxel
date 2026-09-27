@@ -1,5 +1,53 @@
 # Update log
 
+## 2026-09-27 — the panel: scene resume and sprites on metal (#818, #774)
+
+Master `eb984808` deployed to the Seengreat 64x64 — firmware to **both** OTA
+slots (1,182,752 B each, 21 s and 34 s, no #294 wedge, live slot back on
+`ota_0` where it started) and a fresh asset bundle (961,793 B, 7 files). The
+first OTAs since the board was serially re-flashed onto `partitions-16mb.csv`,
+so also the first live run of #668's "updates go to the other slot" line on a
+3 MiB slot.
+
+**#790's scene resume works on the panel — and Jeremy's own scenes still do
+not come back.** A four-layer scene (two `pat`, one `text`, one `sprite`)
+resumed byte-perfectly across `POST /api/reboot`: same `active`, `engines` 2,
+the same per-layer `jit` states (`native` 160 B and 2,316 B), `resume: scene
+5cef0a39 restored` on the console, and a `/api/pixels` readback with the text
+glyphs in the same cells and the sprite tiling the same box. The
+missing-layer-pattern leg printed exactly its predicted sentence
+(`resume: scene … layer: stored pattern … is gone — playing nothing`,
+`engines` 0). What fails is the heap pre-flight: `2 × Σ stored bytes + 24 KiB`
+asks 91,546 B for `Test 2` where the board has 60,072 at that point in boot, so
+it waits 20 s and plays nothing — while the *same* scene activates happily at
+runtime from a state with less free heap than the check refuses. Filed as
+**#869** with the per-pattern arithmetic; docs/firmware.md and docs/api.md now
+say so.
+
+**Sprites (#740/#804) verified on the 64x64.** The one-release `// @sprite`
+migration was re-created on the real device — a tagged pattern uploaded to the
+store, the console opened against the panel, and 9 s later the pattern had left
+`/api/patterns` and an `LXSP` record with its geometry and both colours intact
+had appeared on `/api/sprites`. All four fit modes read back correctly from
+`/api/pixels` (natural 1:1, `fill` at 2x as clean 2x2 texels, `contain`
+aspect-preserved and centred, `tile` on the 8 px grid), `A <fps>` round-trips
+and holds a layer still at `0` and animates a 2-frame record at `10`, and
+**five sprite layers leave `engines` at 1**, costing ~3.6 KB of heap in total
+and ~130 µs of frame time each — against ~16–20 KB for one pattern-layer
+engine. Numbers in docs/boards.md.
+
+**The asset bundle is at 97.8 % of the 983,040 B partition.** Packing this
+deploy measured 961,793 B — 21,247 B of headroom, down from 12.2 % three days
+ago, and the 98,626 B went almost entirely into the console's single entry
+chunk (`index-*.js` 287,734 → 374,844 B gzipped) with no new npm dependency.
+Measured on #691, which is now a code-splitting ticket rather than a
+CodeMirror one; `tools/ci.sh`, CLAUDE.md and docs/boards.md carry the new
+number.
+
+The panel was left exactly as found: `ota_0`, 11 patterns (`store.used` 86,524
+B byte-identical), 8 scenes, 2 sprites, playlist stopped at index 0, brightness
+31 untouched, layout untouched, Aurora 2D active and `native`.
+
 ## 2026-09-27 — scenes: non-base pattern layers on the ProCpu, behind `layer-core0` (#842)
 
 A scene's frame was the sum of its layers' frames — 72 ms for `Aurora 2D` +
@@ -3328,7 +3376,6 @@ unchanged on every board** — the firmware still names neither `jit` nor
 
 Deviations are listed as-built in docs/jit-design.md §3.9; the gates are in
 docs/tools.md.
-
 
 
 ## 2026-09-21 — The Seengreat declined to migrate, and could not say why (#634)

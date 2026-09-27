@@ -2222,6 +2222,31 @@ nothing else. Every resume bail-out now says on the console that the device
 is playing nothing, because the absence of light *is* the user-visible
 signal; it used to leave the rainbow rendering and only log to serial.
 
+#### The scene pre-flight is measured, and on the panel it is too big (Gitea #869)
+
+`resume::apply_stored` waits up to 20 s for
+`resume_headroom(stored) = 2 × Σ stored bytes of every pattern layer + 24 KiB`
+before it sends `Msg::Scene`. On the Seengreat at 4096 px (2026-09-27,
+Gitea #818) that number is larger than the heap the board ever has at that
+point in boot, so both of Jeremy's scenes time out and the panel plays
+nothing:
+
+```
+heap free: 79892
+resume: heap too tight for scene 5cef0a3a (60072 free, need 91546) — playing nothing
+```
+
+The free heap at the check is ~60 KB (it falls from the ~79.9 KB printed at
+WiFi-up, so the 20 s wait can never help), which caps a resumable scene at
+about **17.7 KB of summed stored pattern bytes** — `Aurora 2D` alone is
+12,300 (8,072 src + 4,228 bc) and `Infinite Snake v2` is 21,185. The same
+scene *activates* at runtime from a state with less free heap than the boot
+check refuses (51,396 → 43,580 B free, both layers `native`), so the estimate
+is wrong rather than the board: `2 × Σ` assumes every layer's source, blob
+and envelope are resident at once, where the installer builds layers one at a
+time. The graceful skip itself is right and should stay — it is what turns an
+OOM panic into a console line. #869 carries the re-derivation.
+
 ### `LUXEL_DEFAULT_PATTERN`
 
 Kept. `build.rs` bakes in a default **only** when that env var names one, and

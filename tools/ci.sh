@@ -129,9 +129,10 @@ if skipped web; then echo "== web: SKIPPED"; else
   # The packed bundle must fit the assets partition (0xF0000 in
   # firmware/partitions.csv). Nothing else measures this: an oversized
   # archive only fails at `POST /api/assets`, on a device, after a build
-  # and an upload. Headroom was 12.2 % on 2026-09-24, after the #683 diet
-  # spent the three build-side levers there were (docs/boards.md) — a new
-  # web surface now costs real margin, so read this line, do not assume it.
+  # and an upload. Headroom was 2.16 % on 2026-09-27 — the #683 diet's 12.2 %
+  # was spent in three days by the console's own entry chunk, and the three
+  # build-side levers are gone (docs/boards.md, Gitea #691) — so a new web
+  # surface now costs real margin: read this line, do not assume it.
   luxa="$(mktemp -t ci-assets-XXXX.luxa)"
   node tools/pack-assets.mjs "$luxa" >/dev/null
   bytes=$(stat -c%s "$luxa"); rm -f "$luxa"

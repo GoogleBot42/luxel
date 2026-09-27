@@ -174,6 +174,14 @@ Consequences:
   sleep 4
   timeout 2 socat -u /dev/ttyACM0,raw,echo=0,b115200 STDOUT > /dev/null   # the reset
   ```
+  **On 2026-09-27 the single long-lived open DID reset the chip, both times
+  it was used, and captured the whole boot log by itself** (`core1.last.reset`
+  `CoreUsbUart`, `pass.n` back to ~9k, HTTP answering 12 s later). So try the
+  one-open form first and check `pass.n`; fall back to the two-open recipe
+  only if the port stays silent. Same session: a reader that was ALREADY
+  attached captured every line of a `POST /api/reboot` boot too, including
+  the `resume:` and both `jit:` lines — the "only ~2 KB of interleaved
+  fragments" note from 2026-09-26 did not reproduce.
   `espflash monitor` failed with "Error while connecting to device" while the
   app ran on 2026-09-05 — but on 2026-09-27 `espflash board-info` and
   `write-bin` connected from the RUNNING app every time, no BOOT hold: the
@@ -403,6 +411,19 @@ device answers in 10–20 s and a 4 s timeout reads as "down", #259).
   If it comes up `boot:0x3 (DOWNLOAD…)` after espflash's reset, ONLY Jeremy's EN
   press or a power cycle gets it out — see "Download mode is a one-way door"
   above; no reset flag or serial open will. Stock-restore image: `seengreat-stock.bin` (repo root, gitignored).
+- **A resumed SCENE does not come back after a reboot on this board
+  (Gitea #869).** `resume::apply_stored` asks for `2 × Σ stored bytes of the
+  pattern layers + 24 KiB` and the panel has ~60 KB at that point in boot, so
+  both of Jeremy's scenes print `resume: heap too tight for scene <id>` and the
+  panel comes up **dark with `engines` 0, `src`/`bc` false** — which reads
+  exactly like a dead DMA. If you rebooted with a scene on screen, that is why;
+  re-activate it by id. Scenes under ~17.7 KB of summed stored pattern bytes do
+  resume correctly (verified 2026-09-27, #818).
+- **OTA on the 16 MB table is fast and did not wedge** (2026-09-27, first OTAs
+  since the serial re-flash): `ota-push.sh` landed first try twice, 21 s and
+  34 s, 1,182,752 B each, `{"ok":true,"bytes":…}` and the board back with the
+  new slot live. Pushing twice is how you get the same image on both slots AND
+  the live slot back where you found it.
 - **OTA to this board wedges the ProCpu inside a flash op about 44 % of the
   time (#294)** — silent, no serial, and usually RTC-watchdog recovered with
   the board back on the OLD slot. Check `slot` after each attempt, and before
