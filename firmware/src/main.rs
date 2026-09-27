@@ -164,6 +164,11 @@ pub static REBOOT: embassy_sync::signal::Signal<
 use board::{DEFAULT_PIXEL_COUNT, DEFAULT_PROTOCOL};
 /// Global brightness 0–31 (APA102 5-bit current limiter; ignored for
 /// WS2812). Keep modest on USB power.
+/// Heap the boot holds back for the layout self-heal (`layout::heal_if_starved`)
+/// until the 60 s mark: a store page buffer (4 KiB), the Layout wire string,
+/// the revert record and slack. See where it is taken, before the WiFi blob.
+const HEAL_RESERVE: usize = 12 * 1024;
+
 const APA_BRIGHTNESS: u8 = 4;
 
 /// Baked-in WiFi credentials (station mode) until NVS + provisioning land
@@ -809,6 +814,25 @@ async fn main(spawner: Spawner) -> ! {
         .with_dynamic_rx_buf_num(16)
         .with_ampdu_rx_enable(false);
 
+    // The self-heal's working set, taken NOW — before the WiFi blob,
+    // embassy-net, the web slots and the engine carve the heap up — and handed
+    // back at the 60 s mark, right before `layout::heal_if_starved` runs. The
+    // heal exists for a board whose heap is gone, and persisting its revert
+    // costs a 4 KiB store page buffer plus the Layout's wire string: on
+    // 2026-09-27 the starved Seengreat could not find the page buffer
+    // (`store: no heap for the 4096 B page buffer`) and the revert would have
+    // failed every boot with "next boot retries" (Gitea #822). Owning one
+    // contiguous block from a fresh heap is the only way to be sure it is
+    // there when the heal needs it; on a healthy board it is 12 KiB borrowed
+    // for the first minute and then returned.
+    let mut heal_reserve = {
+        let mut v: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+        if v.try_reserve_exact(HEAL_RESERVE).is_err() {
+            println!("boot: no heap for the self-heal reserve — a revert may not persist");
+        }
+        Some(v)
+    };
+
     let controller = WifiController::new(p.WIFI, wifi_cfg).expect("wifi controller");
 
     let rng = Rng::new();
@@ -839,6 +863,33 @@ async fn main(spawner: Spawner) -> ! {
         println!("ip: http://{}/", cfg.address.address());
     }
     println!("heap free: {}", esp_alloc::HEAP.free());
+
+    // The layout self-heal's EARLY check (Gitea #822): the WiFi blob has just
+    // taken its share, which is the one cost nothing predicts. A board this
+    // starved never reaches the 60 s check below — on 2026-09-27 the
+    // Seengreat with a stored 2x1 panicked in the web pool's socket buffers
+    // at 15 s, every boot — so the shape is judged here first, with the
+    // reserve still held (it is not heap the board could live on) and then
+    // released so the revert can persist. A healthy verdict costs nothing and
+    // the 60 s check still sees what the engine and the web pool add.
+    {
+        let free = esp_alloc::HEAP.free() as usize;
+        let largest = shared::largest_free_block();
+        let revert = layout::heal_if_starved_early(free, largest);
+        // Given back either way: a healthy boot wants it for the scene resume
+        // below (a two-layer scene at 4096 px needs ~65 KB and the first
+        // healed boot missed it by exactly this reserve), a starved one for
+        // the revert's store.
+        drop(heal_reserve.take());
+        if revert && layout::heal_if_starved(free, largest) {
+            REBOOT.signal(());
+            // Nothing below is worth starting; the reboot task resets in
+            // 400 ms.
+            loop {
+                Timer::after(Duration::from_secs(1)).await;
+            }
+        }
+    }
 
     // Single-pattern resume waits for the network on purpose: WiFi bring-up
     // mallocs don't null-check, and resume's pattern load is a multi-KB burst.
@@ -876,10 +927,11 @@ async fn main(spawner: Spawner) -> ! {
             // rollback above, one level up — measure the heap a whole real
             // boot ended with and, if the stored shape is what starved it,
             // put the board default back and reboot once (Gitea #822).
-            if layout::heal_if_starved(
-                esp_alloc::HEAP.free() as usize,
-                shared::largest_free_block(),
-            ) {
+            // The late check: what the engine, the scene and the web pool
+            // added since the early one (the reserve is long gone).
+            let free = esp_alloc::HEAP.free() as usize;
+            let largest = shared::largest_free_block();
+            if layout::heal_if_starved(free, largest) {
                 REBOOT.signal(());
             }
         }

@@ -429,14 +429,32 @@ pub fn preboot_guard(flash: &mut FlashStorage<'static>) {
 /// The device survived boot and has been serving for a while: clear the
 /// failed-boot counter (and mark the image valid for rollback-capable
 /// bootloaders, where the state machine expects it).
+///
+/// **Must not allocate infallibly.** This is the one call on the path a
+/// starved board takes to save itself: the 60 s heartbeat calls it right
+/// before the layout self-heal, and the reboot task calls it before every
+/// deliberate reset. On 2026-09-27 a Seengreat with a stored 2x1 layout
+/// panicked HERE every boot — `memory allocation of 3072 bytes failed` in
+/// `vec![0u8; PARTITION_TABLE_MAX_LEN]` — one line before the self-heal
+/// would have run, and the panic itself rebooted into the same stored
+/// layout: a loop no guard could break (Gitea #822). The counter reset
+/// above needs no heap; the OTA-state marker is best-effort and is simply
+/// skipped when the 3 KiB is not there.
 pub fn boot_ok() {
     write_boot_attempts(0);
+    let mut buffer: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+    if buffer.try_reserve_exact(PARTITION_TABLE_MAX_LEN).is_err() {
+        println!("boot guard: healthy — counter cleared (no heap for the OTA-state marker)");
+        return;
+    }
+    buffer.resize(PARTITION_TABLE_MAX_LEN, 0);
+    // The capacity is exact, so this is a re-typing of the same heap block.
+    let Ok(mut buffer) =
+        <alloc::boxed::Box<[u8; PARTITION_TABLE_MAX_LEN]>>::try_from(buffer.into_boxed_slice())
+    else {
+        return;
+    };
     let _ = with_flash(|flash| {
-        let mut buffer: alloc::boxed::Box<[u8; PARTITION_TABLE_MAX_LEN]> =
-            alloc::vec![0u8; PARTITION_TABLE_MAX_LEN]
-                .into_boxed_slice()
-                .try_into()
-                .unwrap();
         if let Ok(mut ota) = OtaUpdater::new(flash, &mut *buffer) {
             let _ = ota.set_current_ota_state(OtaImageState::Valid);
         }

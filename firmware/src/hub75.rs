@@ -128,14 +128,20 @@ const MAX_SCAN: usize = 32;
 /// Heap that must still be free once the panel's buffers are allocated, or
 /// the boot falls back to the board default (Gitea #768).
 ///
-/// Measured basis, Seengreat (152 KB heap): a 64x64 pair leaves ~87 KB here
-/// and the board then idles at 41–50 KB `heap_free`, so WiFi + embassy-net +
-/// the web slots + the engine take ~40–45 KB on top of `RUNTIME_FLOOR`
-/// (20 KB). A 2x1 chain double-buffered leaves ~27 KB and starves the web
-/// server (503s, 30 s hangs); the same chain under `hub75-spare-plane`
-/// (57 + 8 KB internal) leaves ~81 KB. 64 KB sits between the two with the
-/// runtime floor intact.
-const BOOT_HEAP_FLOOR: usize = 64 * 1024;
+/// Measured basis, Seengreat, from the `hub75: panel took … left …` boot line
+/// (2026-09-27, Gitea #822): the heap this runs against is ~216 KB (the
+/// 152 KB region plus the 64 KB reclaimed one). A 64x64 pair takes 61,760 B
+/// and leaves 154,652; the board then reads 79,892 B free once WiFi is up and
+/// idles at ~60 KB with a pattern — so WiFi + embassy-net + the web slots
+/// cost ~75 KB, and a two-layer scene at 4096 px asks the resume for another
+/// ~65 KB. A 2x1 chain double-buffered takes 120,944 B and leaves 95,452 —
+/// which PASSED the old 64 KB floor and then starved the board at 19.8 KB
+/// free, every route 503, until the self-heal reverted it. The same chain
+/// under `hub75-spare-plane` (~59 + 8 KB internal) leaves ~146 KB. 100 KB
+/// sits between the two: WiFi's 75 KB plus `RUNTIME_FLOOR` (20 KB) with a
+/// little slack, and no engine at all — the self-heal
+/// (`crate::layout::heal_if_starved`) is what judges the engine's share.
+const BOOT_HEAP_FLOOR: usize = 100 * 1024;
 
 /// Free internal heap at the very top of the FIRST [`Hub75Output::try_boot`]
 /// attempt — before a single panel byte is allocated (Gitea #822).
@@ -1174,6 +1180,7 @@ impl Hub75Output {
         // the question the allocator cannot: is there still room for the rest
         // of the boot?
         let left = esp_alloc::HEAP.free();
+        let took = (BOOT_HEAP_BEFORE.load(Ordering::Relaxed) as usize).saturating_sub(left);
         if left < BOOT_HEAP_FLOOR {
             println!(
                 "hub75: this panel leaves {} B of heap for WiFi, the web server and the engine \
@@ -1182,6 +1189,11 @@ impl Hub75Output {
             );
             return Err("the framebuffers leave too little heap for the rest of the boot");
         }
+        // On the record every boot, not only on refusal: this is the number
+        // the floor is calibrated against, and the 2026-09-27 2x1 boot passed
+        // it and starved anyway (Gitea #822) — the floor can only be argued
+        // from boots that printed it.
+        println!("hub75: panel took {} B of internal heap, {} B left (floor {} B)", took, left, BOOT_HEAP_FLOOR);
         let scratch = Scratch::for_geometry(g);
 
         // The configured arrangement (#475). `layout::init()` has already run
