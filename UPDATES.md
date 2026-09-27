@@ -1,5 +1,38 @@
 # Update log
 
+## 2026-09-27 — scenes: non-base pattern layers on the ProCpu, behind `layer-core0` (#842)
+
+A scene's frame was the sum of its layers' frames — 72 ms for `Aurora 2D` +
+`_Fairies` on the panel — while the ProCpu idled through the 50 ms base
+frame. New `firmware/src/layers.rs`, built under `cfg(layer_core0)` (the
+`layer-core0` cargo feature on a dual-core board, in NO board profile yet):
+
+- **`Engine::frame_begin` / `frame_step(budget)` / `frame_chunkable`**
+  (luxel-core): the per-pixel pass with a stop inserted. `frame_begin` runs
+  the clock bookkeeping, `beforeRender` and — for a `renderFrame` pattern —
+  the whole frame; `frame_step` renders up to `budget` more pixels. Slices
+  are byte-identical to one `frame` (`tests/engine.rs`
+  `chunked_frames_match_whole_frames`, every chunk size, three patterns
+  including a `setFrameRate` hold, six frames). `frame` itself is now
+  `frame_begin` + one unbudgeted `drive`.
+- **A ProCpu embassy task** renders the chunkable non-base pattern layers of
+  the resident scene in 256-pixel slices with a `yield_now` between them, so
+  the HUB75 output task's compose and the web pool wait ≤ ~1 ms. esp-rtos at
+  the pinned rev has no preemptive thread spawn and its idle hook restarts
+  on every switch, which is why it is a yielding task and not a thread.
+- **One lock-free job per frame**: `Runtime::render` posts engine addresses
+  + `delta`, bumps a sequence, signals; `pattern_frame(i)` joins and reads
+  `pixels()`; `render` joins before returning. `for_each_engine`,
+  `take_error` and the `Runtime` drop quiesce first; a stalled job's engines
+  are leaked, never freed. Joins time out at 2 s and count in
+  `/api/status` `core1.layer_core0 = [frames, stalls]`.
+- The JIT depth guard is re-pointed at the ProCpu stack per job
+  (`Engine::set_native_stack_limit`).
+- Builds: `board-seengreat-hub75` with and without the feature; stack-check
+  numbers in the PR. **Unverified on metal** — the A/B recipe is in
+  docs/firmware.md "The core-0 layer task"; the flip is one line in
+  board-target.sh once the panel has measured it.
+
 ## 2026-09-27 — workspace clippy runs again, a unitless-slider lint, the README's JIT gap
 
 Three small host-only items, no device touched.

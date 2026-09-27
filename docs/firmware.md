@@ -1546,6 +1546,54 @@ interpreted. Nothing is refused and nothing panics; the layer is simply
 slower. The transition rule above keeps the common cases inside the two
 halves, and `caps.layers` is what a UI should budget against.
 
+### The core-0 layer task (Gitea #842, `layer-core0`)
+
+A scene's frame was the SUM of its layers: `pattern_frame(i)` ran every
+engine in turn on the render task, so `Aurora 2D` + `_Fairies` measured
+51.7 + 17.7 + 2.6 ms of compositing = 72.0 ms (docs/boards.md "Engine frames
+in PSRAM") while the ProCpu idled through the 50 ms base frame. With the
+`layer-core0` cargo feature (`cfg(layer_core0)` = that feature on a dual-core
+board) the NON-base pattern layers render on the ProCpu in parallel with the
+base engine, and the frame is ~max(layer) + compose. `firmware/src/layers.rs`
+carries the design; the shape in one paragraph:
+
+- esp-rtos (pinned rev) exposes no preemptive thread spawn and its idle hook
+  restarts on every switch, so the ProCpu half is an embassy task on the
+  main executor — and it renders in **slices**: `Engine::frame_begin` once,
+  then `Engine::frame_step(256)` with a `yield_now` between chunks, so the
+  output task's compose, the network stack and the web pool wait at most one
+  chunk (~1 ms) rather than a layer frame. `frame_begin` + `frame_step` is
+  byte-identical to `frame` (`crates/luxel-core/tests/engine.rs`
+  `chunked_frames_match_whole_frames`). A `renderFrame` layer is one VM call
+  and stays on the render task (`Engine::frame_chunkable`).
+- One lock-free job at a time: `scenes::Runtime::render` posts the chunkable
+  engines' addresses and this frame's `delta`, bumps a sequence number and
+  signals the task; the walk's `pattern_frame(i)` for an offloaded slot spins
+  until the job is done and reads `pixels()`; `render` joins before it
+  returns, so an engine is never touched by two cores. `for_each_engine`,
+  `take_error` and the `Runtime` drop quiesce first, and a stack whose job
+  never completed LEAKS its engines rather than freeing memory another core
+  is executing in.
+- The flash fence needs no new rule: the render task's spin is task context
+  with interrupts on, so a fenced write on the ProCpu parks it as usual, and
+  the layer task runs VM code in task context, the one context PSRAM and
+  mapped-flash reads are allowed in.
+- The JIT's depth guard is re-pointed at the ProCpu stack before every job
+  (`Engine::set_native_stack_limit`) — `jit::stack_limit()` was computed for
+  the AppCpu's stack.
+- `/api/status` `core1.layer_core0` is `[frames, stalls]`; a join gives up
+  after 2 s and counts a stall, and the layer draws nothing that frame.
+  Stalls must stay 0.
+
+**Off in every board profile until measured.** The A/B is two builds of the
+same tree on the panel with a two-pattern scene resident and `frame_us` read
+from `/api/status`:
+`EXTRA_FEATURES=layer-core0 BOARD=board-seengreat-hub75 firmware/build-esp32.sh`
+against the plain build (expect ~72 → ~55 ms for `Test`, and watch `out_us` —
+#367: the compose slows when the other core is busy, and this makes both
+busy). The flip, when it comes, is one line in `firmware/board-target.sh`'s
+S3 arm.
+
 ### What a scene does NOT survive
 
 A live pixel-count change (`Msg::Config`) tears the scene down and revives the

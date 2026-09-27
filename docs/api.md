@@ -559,6 +559,10 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
     within 100 ms (the flash op proceeded anyway). **Must stay 0.**
   - `fence_wait_us` — longest park wait seen, the render-side cost of one
     flash op.
+  - `layer_core0` — `[frames, stalls]`, present only on a build with the
+    `layer-core0` feature (Gitea #842, docs/firmware.md "The core-0 layer
+    task"): jobs the ProCpu layer task completed, and joins the render task
+    gave up on after 2 s. **Stalls must stay 0.**
   - `fences` — `[begun, completed]` this boot. A difference of 1 in
     `last.bb` is a fence that was taken and never released; live, the delta
     around an operation is its fence cost (Gitea #292).

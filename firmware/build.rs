@@ -88,6 +88,14 @@ fn main() {
         println!("cargo:rustc-cfg=pipelined");
     }
 
+    // Non-base scene layers rendered on the ProCpu (src/layers.rs, Gitea
+    // #842): needs a second core to run on, and the `layer-core0` feature
+    // to ask for it — off in every board profile until the panel measures it.
+    println!("cargo::rustc-check-cfg=cfg(layer_core0)");
+    if multi_core && std::env::var_os("CARGO_FEATURE_LAYER_CORE0").is_some() {
+        println!("cargo:rustc-cfg=layer_core0");
+    }
+
     // Boards with a SECOND physical strip output get a second driver
     // instance (src/output.rs, Gitea #474): another SPI peripheral, another
     // encode buffer, another run of the one pixel space. Only the Athom has

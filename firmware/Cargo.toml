@@ -168,6 +168,13 @@ iram-math = ["luxel-core/iram-math"]
 # until that runs every board ships the ladder.
 #   EXTRA_FEATURES=dispatch-table BOARD=board-seengreat-hub75 ./build-esp32.sh
 dispatch-table = ["luxel-core/dispatch-table"]
+# Render a scene's NON-base pattern layers on the ProCpu, in parallel with
+# the base engine on the AppCpu, so a scene costs ~max(layer) + compose
+# instead of the sum (src/layers.rs, Gitea #842). Dual-core boards only
+# (build.rs turns it into `cfg(layer_core0)`); an A/B lever like
+# `dispatch-table`, in no board profile until the Seengreat measures it:
+#   EXTRA_FEATURES=layer-core0 BOARD=board-seengreat-hub75 ./build-esp32.sh
+layer-core0 = []
 # On-device JIT (Gitea #658, phase 3 of #607; docs/jit-design.md §5/§6,
 # docs/firmware.md "JIT"). Pulls in luxel-core's ABI surface (`JitCtx`, the
 # 188-entry builtin table, the §3.5 helpers) and the Xtensa LX7/LX6 emitter

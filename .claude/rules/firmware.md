@@ -486,3 +486,25 @@ paths:
   in. Merging a new verb into an existing `match` arm is not automatically
   cheaper either (+368 B — the arm then branches on `verb` twice). Measure
   the credless flake image per shape; docs/boards.md keeps the table.
+- **There is no "spawn a thread on the ProCpu" in esp-rtos at the pinned
+  rev** (`7c7f372`): the public surface is `start`, `start_second_core`
+  (one main thread per core), the thread-mode embassy `Executor` and an
+  `InterruptExecutor`; `CurrentThreadHandle::set_priority` is the only
+  priority knob. The idle hook's context is NOT preserved across a switch,
+  so a long computation there restarts from the top. Long work that must
+  live beside WiFi/HTTP on core 0 is therefore an embassy task on the main
+  executor that yields in slices (`Engine::frame_begin`/`frame_step`,
+  `firmware/src/layers.rs`, #842) — not an interrupt executor (a 17 ms frame
+  in interrupt context, above the WiFi threads, and outside the task-context
+  rule PSRAM/mapped-flash reads need). Anything an engine does on a stack
+  other than the render task's must re-point the JIT depth guard first
+  (`Engine::set_native_stack_limit`).
+- **Measuring an Xtensa codegen change: count instructions, not host
+  nanoseconds.** x86 has a native 64-bit multiply and showed a WASH for the
+  #840 i64→i32 noise kernel that halved `simplex3` on the S3. Disassemble
+  the release ELF in the devshell and count per function —
+  `xtensa-esp32s3-elf-objdump -d firmware/target/xtensa-esp32s3-none-elf/release/luxel-fw`,
+  then `awk` the block between `<…name…>:` and the next symbol, tallying the
+  mnemonic column (`mull`/`muluh`/`mulsh`, `l32i`/`s32i` for spills) — on the
+  before and after ELFs of the SAME tree. That number is the proxy until the
+  panel gives `frame_us`; quote both, never one for the other.

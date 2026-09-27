@@ -304,6 +304,14 @@ struct SlotHost<'a> {
     /// (The pre-#732 walk allocated a fresh `String` per text layer per
     /// frame; this is at most one for the whole frame.)
     text: String,
+    /// Slots whose engine this frame's ProCpu job renders (bit `i` =
+    /// `slots[i]`), and the job to wait on. A set bit with `job == None`
+    /// is a slot owned by a job that never completed: it draws nothing
+    /// and its engine is not touched (layers.rs).
+    #[cfg(layer_core0)]
+    offloaded: u32,
+    #[cfg(layer_core0)]
+    job: Option<u32>,
 }
 
 /// Fill `buf` with `s` without ever panicking — a render-loop allocation
@@ -326,7 +334,20 @@ impl SceneHost for SlotHost<'_> {
             return self.base.as_deref_mut().map(|e| e.frame(delta));
         }
         match self.slots.get_mut(layer)? {
-            Slot::Pattern(e) => Some(e.frame(delta)),
+            Slot::Pattern(e) => {
+                // Rendered on the ProCpu this frame (layers.rs, #842): wait
+                // for the job, then read the finished frame. The base layer
+                // above has been rendering on THIS core meanwhile, which is
+                // the whole point.
+                #[cfg(layer_core0)]
+                if layer < 32 && self.offloaded & (1 << layer) != 0 {
+                    return match self.job {
+                        Some(seq) if crate::layers::join(seq) => Some(e.pixels()),
+                        _ => None,
+                    };
+                }
+                Some(e.frame(delta))
+            }
             // A layer that failed to build is a `Slot::Native` no-op even
             // where the scene says `pat`: it draws nothing, the rest of the
             // stack still shows.
@@ -409,6 +430,11 @@ impl Runtime {
     /// override have to reach the whole stack, not just the base. Sprite
     /// layers hold no engine (Gitea #740) and are skipped.
     pub fn for_each_engine(&mut self, mut f: impl FnMut(&mut Engine)) {
+        // A ProCpu job that never completed still owns its engines (#842).
+        #[cfg(layer_core0)]
+        if !crate::layers::quiesce() {
+            return;
+        }
         for s in self.slots.iter_mut() {
             if let Slot::Pattern(e) = s {
                 f(e);
@@ -436,11 +462,23 @@ impl Runtime {
         n: usize,
     ) -> bool {
         let Runtime { comp, slots, driver, .. } = self;
+        // Hand the chunkable non-base pattern layers to the ProCpu before
+        // the walk starts, so they render while the base engine renders
+        // here (layers.rs, #842). The walk's `pattern_frame` joins per slot
+        // and the join below makes `render` returning imply the job is done
+        // — the engines are quiescent again before anything else can reach
+        // them.
+        #[cfg(layer_core0)]
+        let (offloaded, job) = crate::layers::post_slots(slots.as_mut_slice(), delta);
         let mut host = SlotHost {
             slots: slots.as_mut_slice(),
             base,
             civil: None,
             text: String::new(),
+            #[cfg(layer_core0)]
+            offloaded,
+            #[cfg(layer_core0)]
+            job,
         };
         // `false` = the staging buffer could not be sized this frame. The
         // host releases it while a plain pattern runs (Gitea #704), so a
@@ -450,7 +488,12 @@ impl Runtime {
         // drawn, not a reboot — and the caller must not PUBLISH it either:
         // `dst` is empty then, and an empty stage on the wire is a fully
         // black panel (2026-09-26, Gitea #777).
-        driver.frame(comp, dst, n, delta, &mut host)
+        let drawn = driver.frame(comp, dst, n, delta, &mut host);
+        #[cfg(layer_core0)]
+        if let Some(seq) = job {
+            crate::layers::join(seq);
+        }
+        drawn
     }
 
     /// The first pending VM error among the NON-base pattern layers. The
@@ -461,10 +504,33 @@ impl Runtime {
     /// under `key: black` a black frame is fully transparent, so it read
     /// as a layer that had never been built (2026-09-26, Gitea #777).
     pub fn take_error(&mut self) -> Option<luxel_core::vm::VmError> {
+        #[cfg(layer_core0)]
+        if !crate::layers::quiesce() {
+            return None;
+        }
         self.slots.iter_mut().find_map(|s| match s {
             Slot::Pattern(e) => e.take_error(),
             _ => None,
         })
+    }
+}
+
+/// A stack is dropped on every swap. If a ProCpu job over its engines never
+/// completed (layers.rs, a stall), freeing them would hand memory another
+/// core is executing in back to the heap: leak those engines instead. The
+/// stall is already counted and a scene that leaks is a bug report, not a
+/// heap-corruption reboot.
+#[cfg(layer_core0)]
+impl Drop for Runtime {
+    fn drop(&mut self) {
+        if crate::layers::quiesce() {
+            return;
+        }
+        for s in self.slots.iter_mut() {
+            if matches!(s, Slot::Pattern(_)) {
+                core::mem::forget(core::mem::replace(s, Slot::Native));
+            }
+        }
     }
 }
 

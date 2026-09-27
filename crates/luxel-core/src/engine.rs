@@ -604,7 +604,7 @@ impl Engine {
             return false;
         }
         self.run_stage = Some(RunStage::Pixel(0)); // maps need no beforeRender
-        self.drive(None);
+        self.drive(None, None);
         self.run_stage.is_some()
     }
 
@@ -887,7 +887,7 @@ impl Engine {
     /// at the top of render(i+1). Returns whether still paused.
     pub fn debug_step(&mut self, kind: StepKind) -> bool {
         if self.run_stage.is_some() {
-            self.drive(Some(kind));
+            self.drive(Some(kind), None);
         }
         self.run_stage.is_some()
     }
@@ -1649,9 +1649,29 @@ impl Engine {
     ///   is the requested rate rather than the caller's tick rate divided by
     ///   a whole number; individual periods still jitter by up to one tick.
     pub fn frame(&mut self, delta_ms: Fx) -> &[[u8; 3]] {
+        if self.frame_begin(delta_ms) {
+            self.drive(None, None);
+        }
+        &self.pixels
+    }
+
+    /// The first half of [`frame`] (Gitea #842): the clock and frame-rate
+    /// bookkeeping, `beforeRender`, the render-entry resolution — and, for a
+    /// `renderFrame` pattern, the whole frame — leaving a per-pixel pass
+    /// PENDING rather than running it. Returns `true` when [`frame_step`]
+    /// has pixels to render, `false` when the frame is already complete
+    /// (held under a `setFrameRate` cap, no render entry, a whole-frame
+    /// pattern, or paused at a debug stop).
+    ///
+    /// `frame_begin` + `frame_step` until it returns `true` is
+    /// byte-identical to one `frame` call — the pass is the same
+    /// `render_pixels` loop with a stop inserted — which is what lets a host
+    /// render a layer's frame in slices between other work (the firmware's
+    /// core-0 layer task). Nothing else may touch the engine between the two.
+    pub fn frame_begin(&mut self, delta_ms: Fx) -> bool {
         if self.run_stage.is_some() {
             // paused at a debug stop mid-frame: time frozen, pixels as-is
-            return &self.pixels;
+            return false;
         }
         let real = delta_ms.raw().max(0) as u64;
         // Fx::mul wraps on overflow; scale on the raw i64 product instead
@@ -1665,7 +1685,7 @@ impl Engine {
         self.vm.time_ms = self.time_acc >> 16;
         self.frame_acc = self.frame_acc.saturating_add(real);
         if self.rendered_once && self.vm.frame_min_raw > self.frame_acc {
-            return &self.pixels; // under the frame-rate cap: hold this frame
+            return false; // under the frame-rate cap: hold this frame
         }
         // Carry the remainder rather than dropping it (Gitea #384). Zeroing
         // the accumulator quantized the achievable rate to the CALLER's tick
@@ -1686,14 +1706,67 @@ impl Engine {
             Fx::from_raw((self.time_acc - self.render_time_acc).min(i32::MAX as u64) as i32);
         self.render_time_acc = self.time_acc;
         self.run_stage = Some(RunStage::Before);
-        self.drive(None);
-        &self.pixels
+        // A budget of 0 runs `beforeRender` (and a whole-frame entry) and
+        // stops at the first pixel.
+        self.drive(None, Some(0));
+        self.pixels_pending()
+    }
+
+    /// A sliceable per-pixel pass is pending: the fast path stopped at a
+    /// pixel. NOT a debug pause — that also leaves `run_stage` set, but on
+    /// a stage the debugger owns, and driving it again would restart the
+    /// paused call rather than resume it (`pause_request_stops_next_frame`).
+    fn pixels_pending(&self) -> bool {
+        matches!(self.run_stage, Some(RunStage::Pixel(_))) && !self.debug_enabled && !self.is_map
+    }
+
+    /// Render up to `budget` more pixels of the pass [`frame_begin`] left
+    /// pending. Returns `true` once the frame is complete (the post chain
+    /// has run and [`pixels`] holds the finished frame). A call with nothing
+    /// pending is a no-op that returns `true`.
+    pub fn frame_step(&mut self, budget: u32) -> bool {
+        if !self.pixels_pending() {
+            return true;
+        }
+        self.drive(None, Some(budget.max(1)));
+        !self.pixels_pending()
+    }
+
+    /// Whether [`frame_step`] would actually slice this engine's frame: a
+    /// per-pixel render entry with no debugger attached and not a map
+    /// program. A `renderFrame` pattern is one VM call and `frame_begin`
+    /// runs it whole; a host deciding WHERE to render a layer asks this
+    /// first (Gitea #842).
+    pub fn frame_chunkable(&self) -> bool {
+        !self.debug_enabled
+            && !self.is_map
+            && matches!(
+                self.render,
+                Some(RenderKind::R1(_) | RenderKind::R2(_) | RenderKind::R3(_))
+            )
+    }
+
+    /// Re-point the native depth guard (docs/jit-design.md §3.6) at the
+    /// stack this engine is about to run on. The limit is computed at
+    /// activation for the render task's stack; an engine whose frames run
+    /// on ANOTHER task (the firmware's core-0 layer task, Gitea #842) sets
+    /// it from that task before each frame, or the guard compares `a1`
+    /// against the wrong stack's floor. No-op with no native image.
+    #[cfg(feature = "jit")]
+    pub fn set_native_stack_limit(&mut self, limit: usize) {
+        if let Some(np) = self.native.as_mut() {
+            np.stack_limit = limit;
+        }
     }
 
     /// Advance the (resumable) frame pipeline until it finishes the frame or
     /// suspends at a debug stop. `resume` continues a paused VM run with the
-    /// given step plan; None starts the next stage fresh.
-    fn drive(&mut self, mut resume: Option<StepKind>) {
+    /// given step plan; None starts the next stage fresh. `budget` caps the
+    /// number of pixels the fast per-pixel pass renders before returning
+    /// with the stage still pending (`Some(0)` stops before the first) —
+    /// `None` is the whole frame. The budget binds only the non-debug,
+    /// non-map fast path, which is the only one a host slices.
+    fn drive(&mut self, mut resume: Option<StepKind>, budget: Option<u32>) {
         loop {
             let Some(stage) = self.run_stage else { return };
             let outcome = if let Some(k) = resume.take() {
@@ -1735,7 +1808,7 @@ impl Engine {
                             // run every remaining pixel in one tight loop
                             // instead of one trip through this state machine
                             // per pixel (Gitea #260)
-                            self.render_pixels(render, i);
+                            self.render_pixels(render, i, budget);
                             return;
                         }
                         self.vm.pixel = [Fx::ZERO; 3];
@@ -1851,7 +1924,12 @@ impl Engine {
     /// semantics as [`drive`]'s `Pixel` stage (first error wins, fatal errors
     /// blank the rest of the frame, non-fatal ones keep the pre-error color),
     /// minus the per-pixel outcome plumbing. Only for non-debug, non-map runs.
-    fn render_pixels(&mut self, render: RenderKind, from: u32) {
+    ///
+    /// `budget` (Gitea #842): render at most that many pixels from `from`,
+    /// then leave `run_stage` at the next pixel and return — the frame tail
+    /// (projection replicate, post chain, `finish_frame`) runs only on the
+    /// call that renders the last pixel. `None` renders to the end.
+    fn render_pixels(&mut self, render: RenderKind, from: u32, budget: Option<u32>) {
         // Everything about the call that does not change per pixel is
         // resolved once here: the entry, its argument count, whether the
         // coordinate work is needed at all, and the callee's frame shape
@@ -1920,7 +1998,11 @@ impl Engine {
             Value::Num(mid),
             Value::Num(mid),
         ];
-        for i in from..self.render_count {
+        let to = match budget {
+            Some(b) => from.saturating_add(b).min(self.render_count),
+            None => self.render_count,
+        };
+        for i in from..to {
             self.vm.pixel = [Fx::ZERO; 3];
             self.vm.pixel_written = false;
             args[0] = Value::Num(Fx::from_int(i as i32));
@@ -1989,6 +2071,11 @@ impl Engine {
             }
             let [r, g, b] = self.vm.pixel;
             self.pixels[i as usize] = [quantize(r), quantize(g), quantize(b)];
+        }
+        if to < self.render_count {
+            // budget spent: the pass resumes here on the next `frame_step`
+            self.run_stage = Some(RunStage::Pixel(to));
+            return;
         }
         self.project_replicate();
         self.post_chain();

@@ -896,6 +896,17 @@ fn status_json() -> luxel_core::jsonview::Chunks {
             push_u32(&mut out, timeouts);
             push_piece(&mut out, ",\"fence_wait_us\":");
             push_u32(&mut out, wait_us);
+            // `[frames, stalls]` of the ProCpu layer task (layers.rs, #842):
+            // present only on a build that carries it.
+            #[cfg(layer_core0)]
+            {
+                let (frames, stalls) = crate::layers::stats();
+                push_piece(&mut out, ",\"layer_core0\":[");
+                push_u32(&mut out, frames);
+                push_piece(&mut out, ",");
+                push_u32(&mut out, stalls);
+                push_piece(&mut out, "]");
+            }
             // live fence counters: [begun, completed] this run, then the
             // per-call-site breakdown (core1::tag order) — the fence RATE
             // and whose it is (Gitea #292).

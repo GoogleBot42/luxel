@@ -87,6 +87,8 @@ mod hub75;
 #[cfg(all(feature = "hub75-spare-plane", not(feature = "hub75")))]
 compile_error!("`hub75-spare-plane` is a HUB75 driver mode and needs the `hub75` feature");
 mod layout;
+#[cfg(layer_core0)]
+mod layers;
 mod leds;
 mod mqtt;
 mod netin;
@@ -685,6 +687,13 @@ async fn main(spawner: Spawner) -> ! {
         #[cfg(not(multi_core))]
         spawner.spawn(render_task(sink).unwrap());
         spawner.spawn(playlist::playlist_task().unwrap());
+        // Non-base scene layers render HERE, on the ProCpu, in yielding
+        // slices beside the output task and the web pool (layers.rs, #842).
+        #[cfg(layer_core0)]
+        {
+            spawner.spawn(layers::layer_task().unwrap());
+            println!("layer task: ProCpu (non-base scene layers, {} px chunks)", layers::CHUNK);
+        }
     } else {
         println!("LUXEL_QUIET: render task disabled");
     }
