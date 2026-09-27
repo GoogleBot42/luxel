@@ -324,9 +324,20 @@ nothing in this container is public.
 - A preview that looks non-square in a screenshot — `canvas.grid` in
   `Preview.svelte` is a fixed 396x320 box with `object-fit: contain`, so that
   is the letterbox, not the pattern (2026-09-07).
-- Forgetting `npm run wasm`/`gen-gallery.mjs` reran after a `library/` or corpus change —
-  `e2e.mjs`/`device-e2e.mjs` serve whatever `web/dist` currently holds, which is stale
-  until you rebuild.
+- Forgetting to rebuild after ANY source edit — `e2e.mjs`/`device-e2e.mjs` serve
+  whatever `web/dist` currently holds. A `library/` or corpus change needs
+  `gen-gallery.mjs`; a `web/src/` change needs `vite build`; `npm run build` is all of
+  it. 2026-09-27: one `web/src/` edit made between a build and an `e2e.mjs` run
+  produced EIGHT failures that read like real regressions in features the edit had
+  nothing to do with — the harness was driving the previous bundle. If a run fails in
+  a section you did not touch, suspect the build before the change.
+- A harness script you just patched with a node one-liner dying on
+  `e.map is not a function`, or a `$$eval` that behaves like `$eval` — **`String.replace`
+  ate it**. `$$`, `$&` and dollar-backtick are all substitution syntax in a replacement
+  STRING, so `s.replace(anchor, block + anchor)` silently rewrote every `page.$$eval` in
+  the inserted block to `page.$eval` (2026-09-27, a full e2e run), and a later attempt
+  to document that in this file pasted the whole file into itself. Splice with
+  `s.slice(0, at) + block + s.slice(at)`, or pass a FUNCTION as the replacement.
 - **"Confirmed pre-existing on master" means nothing without a rebuild.** The same
   `web/dist` staleness makes a *checkout* lie, not just a `library/` edit: checking
   out `origin/master` (detached or otherwise) in a worktree and re-running
