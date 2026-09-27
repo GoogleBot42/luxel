@@ -278,6 +278,16 @@ body{background:#0e1013;color:var(--text);font:14px/1.45 var(--sans);-webkit-fon
   <a href="#S7h"><b>S7h</b>Text layer · sources</a>
   <a href="#S7i"><b>S7i</b>Font picker</a>
   <a href="#S2f"><b>S2f</b>Text builtins · completions</a>
+  <h3 style="margin-top:20px">Batch 7 · Color ramp editor</h3>
+  <a href="#S8a"><b>S8a</b>Settings · ramp editor</a>
+  <a href="#S8b"><b>S8b</b>Stop · color picker</a>
+  <a href="#S8c"><b>S8c</b>Outside · clamp (A)</a>
+  <a href="#S8d"><b>S8d</b>Outside · black (B)</a>
+  <a href="#S8e"><b>S8e</b>Scene ramp · collapsed</a>
+  <a href="#S8f"><b>S8f</b>Scene ramp · editing</a>
+  <a href="#S8g"><b>S8g</b>Ramp editor · mobile</a>
+  <a href="#S8h"><b>S8h</b>Ramp · empty · one · cap</a>
+  <a href="#S8i"><b>S8i</b>Ramp · modes &amp; conflict</a>
 </nav>
 <main>
 <div class="masthead">
@@ -3600,6 +3610,925 @@ absent</b> from both the completion list and the docs index — the same Layout 
 <i>Add to scene</i> — so the editor never offers a builtin that would silently do nothing on the device you are
 connected to.</p>
 
+<style>
+/* ---------- batch 7 · the color ramp editor (#787) ---------- */
+/* One component, two mounts, and every number here is load-bearing.
+   The handle HIT BOX is 24x24 because §5.7's touch floor is 24 px (#529,
+   #703) — the painted diamond stays 12 px, centred in it, so the control
+   looks the same on a desktop and is actually usable on a phone. The bar is
+   44 px tall so a 24 px box can hang off its bottom edge and still overlap
+   paint: the handle is ON the gradient, not in a gutter under it (#787
+   inventory item 13 — a click in that gutter used to add a stop). */
+.recard{padding:14px;border:1px solid var(--border);border-radius:8px;background:var(--bg-inset)}
+.rehead{display:flex;align-items:center;gap:10px;margin-bottom:9px}
+.rehead .ct2{margin-left:auto;font:11.5px/1 var(--mono);color:var(--text-dim);white-space:nowrap}
+/* The one-line statement of what the stage DOES. Inventory item 17: today
+   nothing in the control says this, which is the single biggest contributor
+   to "confusing". It is body text, not a tooltip, and it is never hidden. */
+.restate{font-size:12.5px;line-height:1.5;color:var(--text-dim);margin:0;max-width:600px}
+.restate b{color:var(--text);font-weight:600}
+.restate .q{color:var(--accent)}
+/* 24 px of clearance above the bar: the selected stop's position bubble
+   lives there, and it must never sit on the statement text */
+.rebarwrap{position:relative;margin-top:24px}
+/* The bar IS the engine's 256-entry LUT (#748), drawn as a 256x1 canvas
+   stretched — a `linear-gradient` cannot express the clamp, the truncating
+   16.16 interpolation, or a hard cut to black. */
+.rebar{display:block;width:100%;height:44px;border:1px solid var(--border);border-radius:6px;background:#000;image-rendering:pixelated}
+.rehnds{position:relative;height:24px;margin-top:-12px}
+.rehnd{position:absolute;top:0;width:24px;height:24px;margin-left:-12px;display:flex;align-items:center;justify-content:center}
+.rehnd i{display:block;width:12px;height:12px;border-radius:2px;transform:rotate(45deg);border:1px solid rgba(255,255,255,.75);box-shadow:0 0 0 1px rgba(0,0,0,.55)}
+.rehnd.on i{width:14px;height:14px;border-color:var(--accent);box-shadow:0 0 0 2px rgba(232,163,61,.3),0 0 0 1px rgba(0,0,0,.55)}
+.rehnd.off i{opacity:.5;border-style:dashed}
+/* Two or more stops within 3 px collapse to ONE handle carrying a count;
+   clicking it cycles which of them is selected (inventory item 15 — today
+   they overlap invisibly and the one underneath is unreachable). */
+.rehnd .ct{position:absolute;top:-2px;right:-2px;min-width:14px;height:14px;padding:0 3px;border-radius:7px;background:var(--accent);color:#16110a;font:600 9px/14px var(--mono);text-align:center}
+.rescale{display:flex;align-items:center;gap:10px;margin-top:7px;font:11px/1 var(--mono);color:var(--text-dim)}
+.rescale .mid{flex:1;text-align:right;font-family:var(--sans);font-size:12px}
+/* The selected stop's position, over the bar, in accent — so the number in
+   the field and the thing on the bar are visibly the same stop without a
+   "Stop 4" header that renumbers mid-drag (confusing-by-design item 5). */
+.rebub{position:absolute;top:-21px;transform:translateX(-50%);height:17px;padding:0 6px;border-radius:4px;background:var(--accent-soft);box-shadow:inset 0 0 0 1px rgba(232,163,61,.55);color:var(--accent);font:11px/17px var(--mono);white-space:nowrap}
+/* Option B only: the region above the last stop, drawn rather than left to
+   be discovered (inventory item 10). */
+.rezone{position:absolute;top:1px;height:42px;border-left:1px dashed rgba(255,255,255,.4);background:repeating-linear-gradient(-45deg,rgba(255,255,255,.11) 0 1px,transparent 1px 6px)}
+.rezone span{position:absolute;left:8px;top:5px;font:10px/1 var(--mono);color:rgba(255,255,255,.66);white-space:nowrap}
+/* ONE row for the selected stop, present only while a stop is selected —
+   not a permanent per-stop list (confusing-by-design item 6). */
+.resel{display:flex;align-items:center;gap:10px;margin-top:14px;padding:9px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-panel);flex-wrap:wrap}
+.resel .k{font:11px/1 var(--mono);color:var(--text-dim);white-space:nowrap}
+.resel .btn.del{margin-left:auto}
+.resel.none{color:var(--text-dim);font-size:12.5px;background:transparent;border-style:dashed}
+.reswatch{display:inline-flex;align-items:center;gap:7px;height:26px;padding:0 9px 0 6px;border:1px solid var(--border);border-radius:6px;background:var(--bg-inset);font:12px/1 var(--mono);color:var(--text)}
+.reswatch i{display:block;width:16px;height:16px;border-radius:3px;border:1px solid rgba(255,255,255,.2)}
+.repos{display:inline-flex;align-items:center;gap:6px;font:12px/1 var(--mono);color:var(--text-dim);white-space:nowrap}
+/* preview pair + amount, side by side (#537: "amount slider next to the
+   preview"; inventory item 22: today amount is a number input in a button row) */
+.regrid{display:grid;grid-template-columns:minmax(0,1fr) 250px;gap:18px;margin-top:15px;align-items:start}
+.recard.narrow .regrid{grid-template-columns:minmax(0,1fr);gap:14px}
+.repair{display:grid;grid-template-columns:minmax(0,1fr) 14px minmax(0,1fr);gap:8px;align-items:center}
+.recell .cap2{font:11px/1 var(--mono);color:var(--text-dim);margin-bottom:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.recell canvas{display:block;width:100%;background:#000;border:1px solid var(--border);border-radius:4px;image-rendering:pixelated}
+.recell canvas.sq{aspect-ratio:1/1}
+.recell canvas.strip{aspect-ratio:8/1}
+.rearr{color:var(--text-dim);font-size:13px;text-align:center;padding-top:21px}
+/* #703's fix, applied here rather than inherited: the painted track stays the
+   mock's 4/6 px, the BOX grows to 24 so a thumb is hittable by touch. */
+.re24 .slider{height:24px}
+.re24 .bigslider .slider{height:24px}
+.represets{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:15px}
+.rechip{display:flex;flex-direction:column;gap:4px;width:84px;padding:5px;border:1px solid var(--border);border-radius:6px;background:var(--bg-panel)}
+.rechip i{display:block;height:14px;border-radius:3px;border:1px solid rgba(255,255,255,.12)}
+.rechip span{font-size:11px;color:var(--text-dim);text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rechip.on{border-color:var(--accent);background:var(--accent-soft)}
+.rechip.on span{color:var(--text)}
+.represets .rlab{font:11px/1 var(--mono);color:var(--text-dim);white-space:nowrap;align-self:center}
+.reacts{display:flex;align-items:center;gap:8px;margin-top:14px;padding-top:13px;border-top:1px solid var(--border);flex-wrap:wrap}
+.reacts .btn.del{margin-left:auto}
+/* which mode the editor is in — #563's live-vs-save split, stated (inventory
+   item 20: the scene mount silently threw the split away) */
+.remode{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--text-dim);white-space:nowrap}
+.remode i{width:6px;height:6px;border-radius:50%;background:var(--ok);flex:none}
+.remode.save i{background:#5b6070}
+.remode b{color:var(--text);font-weight:600}
+/* the capstrip palette, with room for two buttons */
+.renote{display:flex;align-items:center;gap:10px;margin-top:12px;padding:8px 10px;border-radius:6px;background:rgba(217,163,67,.12);border:1px solid rgba(217,163,67,.32);color:#e5bd74;font-size:12px;line-height:1.4}
+.renote .group{margin-left:auto;flex:none}
+.rereason{margin-top:9px;font-size:12px;color:#eda0a0}
+/* collapsed row: the bar, read-only stop ticks, `Edit…`, the meaning */
+.recol{display:flex;align-items:flex-start;gap:10px}
+.recol>div{flex:1;min-width:0}
+.recol .lnk{padding-top:4px}
+.recol canvas{width:100%;height:22px;display:block;border:1px solid var(--border);border-radius:4px;background:#000;image-rendering:pixelated}
+/* a disabled button, the `.sel.dis` colours — the ONE deliberate §5.7
+   exception is a control disabled WITH a reason, and the stop budget is it */
+.btn.dis{color:#5b6070;background:#15171c;border-color:#23272f}
+</style>
+
+<div class="masthead" style="margin:56px 0 0">
+  <h1 style="font-size:18px">Batch 7 · Color ramp editor</h1>
+  <p style="margin-bottom:28px">One control, two mounts, redrawn from scratch (#787). The bar is the whole model — click
+  it to add a stop, drag to move, drag off to remove, click to select — and the only per-stop UI is the one selected
+  stop. Everything the old control left to be discovered is printed: what the stage does, what happens outside the
+  stops, which edits reach the LEDs, and how many stops a ramp is allowed.</p>
+</div>
+<!-- ===================== S8a ===================== -->
+<p class="cap"><b>S8a</b> · Settings › Advanced › Output processing › <i>Color ramp</i> — the editor open, a stop selected</p>
+<div class="frame w760" id="S8a">
+  <div style="padding:20px">
+    <div class="disclist">
+      <div class="drow open"><i class="chev">▾</i>Output processing<span class="st2">300 px SK9822 strip</span></div>
+      <div class="dbody" style="border-bottom:0">
+        <div class="srow">
+          <div class="lab">Gamma</div>
+          <div style="display:flex;align-items:center;gap:10px"><input class="inp num" value="2.2"><span class="hint">0 = off; 2.2 gives smoother dark fades</span></div>
+        </div>
+        <div class="srow">
+          <div class="lab">Brightness curve</div>
+          <div style="display:flex;align-items:center;gap:10px"><input class="inp num" value="2.2"><span class="hint">makes the dimmer end feel linear</span></div>
+        </div>
+        <div class="srow">
+          <div class="lab">Power cap</div>
+          <div style="display:flex;align-items:center;gap:10px"><input class="inp num" value="0"><span class="hint">mA — frames estimated above this get scaled down; 0 = off</span></div>
+        </div>
+
+        <div class="recard" style="margin-top:14px">
+          <div class="rehead">
+            <div class="slabel">Color ramp</div>
+            <span class="ct2">4 stops</span>
+            <div class="btn sm">Done</div>
+          </div>
+          <p class="restate"><b>Brightness → color.</b> Each pixel's brightness picks a color from this ramp: dark
+          pixels take the left end, bright pixels the right. Below the first stop and above the last, the end color
+          continues.</p>
+
+          <div class="rebarwrap">
+            <canvas class="rebar" data-viz="rampsun" data-w="256" data-h="1"></canvas>
+            <div class="rebub" style="left:67.8%">173</div>
+            <div class="rehnds">
+              <div class="rehnd" style="left:0"><i style="background:#000"></i></div>
+              <div class="rehnd" style="left:34.1%"><i style="background:#2a1060"></i></div>
+              <div class="rehnd on" style="left:67.8%"><i style="background:#c23a6b"></i></div>
+              <div class="rehnd" style="left:100%"><i style="background:#f7e08a"></i></div>
+            </div>
+          </div>
+          <div class="rescale"><span>0</span><span class="mid">click the bar to add a stop · drag to move · drag off to remove</span><span>255</span></div>
+
+          <div class="resel">
+            <span class="k">Selected stop</span>
+            <div class="reswatch"><i style="background:#c23a6b"></i>#c23a6b</div>
+            <span class="repos">at <input class="inp num xs" style="width:56px" value="173"> of 255</span>
+            <div class="btn sm del" style="margin-left:auto">Remove stop</div>
+          </div>
+
+          <div class="regrid">
+            <div>
+              <div class="repair">
+                <div class="recell">
+                  <div class="cap2">pattern · Comet</div>
+                  <canvas class="strip" data-viz="cometbar" data-w="128" data-h="16"></canvas>
+                </div>
+                <div class="rearr">→</div>
+                <div class="recell">
+                  <div class="cap2">LEDs · ramp at 100 %</div>
+                  <canvas class="strip" data-viz="cometthru" data-w="128" data-h="16"></canvas>
+                </div>
+              </div>
+            </div>
+            <div>
+              <div class="cap2" style="font:11px/1 var(--mono);color:var(--text-dim);margin-bottom:6px">Amount</div>
+              <div class="bigslider">
+                <div class="slider"><div class="trk"></div><div class="fil" style="width:100%"></div><div class="thb" style="left:100%"></div></div>
+                <span class="val">100 %</span>
+              </div>
+              <div class="hint" style="margin-top:7px">0 % = the pattern's own colors · 100 % = only the ramp's</div>
+            </div>
+          </div>
+
+          <div class="represets">
+            <span class="rlab">Presets</span>
+            <div class="rechip"><i style="background:linear-gradient(90deg,#000,#fff)"></i><span>Mono</span></div>
+            <div class="rechip on"><i style="background:linear-gradient(90deg,#000 0%,#2a1060 34%,#c23a6b 68%,#f7e08a 100%)"></i><span>Sunset</span></div>
+            <div class="rechip"><i style="background:linear-gradient(90deg,#03121f,#1d6f8f,#9fe4f0)"></i><span>Ice</span></div>
+            <div class="rechip"><i style="background:linear-gradient(90deg,#1a0500,#c43b07,#ffd86b)"></i><span>Fire</span></div>
+            <div class="rechip"><i style="background:linear-gradient(90deg,#f00,#ff0,#0f0,#0ff,#00f,#f0f)"></i><span>Spectrum</span></div>
+            <div class="rechip"><i style="background:linear-gradient(90deg,#f7e08a,#c23a6b,#000)"></i><span>To black</span></div>
+          </div>
+
+          <div class="reacts">
+            <div class="btn sm">+ Add stop</div>
+            <div class="btn sm">Undo</div>
+            <div class="btn sm">Reset</div>
+            <span class="hint">adds into the widest gap · <span class="mono">Ctrl-Z</span> undoes</span>
+            <div class="btn sm del">Clear ramp</div>
+          </div>
+          <div style="margin-top:11px"><span class="remode"><i></i>Changes go to the LEDs as you make them.</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="note"><b>What this specifies.</b> The bar <b>is</b> the model: 44 px tall, full width of the group, painted from
+the engine's 256-entry LUT as a <span class="mono tiny">256×1</span> canvas stretched (#748 — a
+<span class="mono tiny">linear-gradient</span> cannot express the clamp, the truncating 16.16 interpolation or a hard cut
+to black, which is why the old preview disagreed with the device). Handles sit <i>on</i> the bar's bottom edge, painted
+12 px inside a <b>24×24</b> hit box (#703/§5.7); the 12 px gutter that used to add a stop when you missed a handle is
+gone. There is <b>no per-stop row list</b> — exactly one row, for the one selected stop: its swatch (the app's own
+picker, S8b — never the browser's), its position as a number, and <i>Remove stop</i>. No <i>Stop N</i> header, because a
+header that renumbers itself mid-drag is what made the old panel unreadable; the selected stop is named by its position
+bubble on the bar and, to a screen reader, as <span class="mono tiny">ramp stop at 173, #c23a6b</span>.
+<b>The stage is explained in body text</b>, not a hover title, and the preview is a pair: what the pattern renders, and
+what the LEDs do with the ramp at the current amount — one honest picture each, replacing the two unlabelled bars where
+neither said which one the device would show. The amount slider is beside that pair with its two ends spelled out.
+<i>Reset</i> returns to the ramp as it was when the editor opened; <i>Clear ramp</i> is the only destructive action, it
+is separated on the right, it asks, and it <b>never touches the amount</b>. Undo is real and bounded to the editing
+session. The last line says which of #563's two modes this mount is in.</p>
+<style>
+/* the app's OWN color picker (components/ColorPicker.svelte), drawn at its
+   real numbers: the shared `.pop` shell at 296 px, a 132 px saturation/value
+   field, a 14 px hue strip, and direct entry in HSV, RGB and hex. The stop
+   swatch opens THIS, never `<input type="color">` (#537, Jeremy 2026-09-19:
+   "do not use the browser color picker"). */
+.cpfield{position:relative;height:132px;margin:2px 2px 8px;border-radius:6px;background:linear-gradient(to top,#000,rgba(0,0,0,0)),linear-gradient(to right,#fff,rgba(255,255,255,0)),#ff0033}
+.cpfield .dot{position:absolute;width:12px;height:12px;margin:-6px 0 0 -6px;border:2px solid #fff;border-radius:50%;box-shadow:0 0 0 1px rgba(0,0,0,.5)}
+.cphue{position:relative;height:14px;margin:0 2px 8px;border-radius:7px;background:linear-gradient(to right,#f00 0%,#ff0 16.66%,#0f0 33.33%,#0ff 50%,#00f 66.66%,#f0f 83.33%,#f00 100%)}
+.cphue i{position:absolute;top:-2px;width:10px;height:18px;margin-left:-5px;border:2px solid #fff;border-radius:3px;box-shadow:0 0 0 1px rgba(0,0,0,.55)}
+.cprows{display:flex;flex-direction:column;gap:6px;padding:0 2px 2px}
+.cprow{display:flex;align-items:center;gap:6px}
+.cprow .k{width:30px;flex:none;color:var(--text-dim);font:11px/1 var(--mono)}
+.cprow .inp{flex:1;min-width:0;width:0;font-family:var(--mono)}
+.cprow .live{width:26px;height:22px;flex:none;border-radius:4px;border:1px solid rgba(255,255,255,.14);display:block}
+</style>
+
+<!-- ===================== S8b ===================== -->
+<p class="cap"><b>S8b</b> · The selected stop — the app's own color picker open over the bar</p>
+<div class="frame w760" id="S8b">
+  <div style="padding:20px">
+    <div class="recard" style="padding-bottom:78px">
+      <div class="rehead">
+        <div class="slabel">Color ramp</div>
+        <span class="ct2">4 stops</span>
+        <div class="btn sm">Done</div>
+      </div>
+      <p class="restate"><b>Brightness → color.</b> Each pixel's brightness picks a color from this ramp: dark
+      pixels take the left end, bright pixels the right. Below the first stop and above the last, the end color
+      continues.</p>
+
+      <div class="rebarwrap">
+        <canvas class="rebar" data-viz="rampsun" data-w="256" data-h="1"></canvas>
+        <div class="rebub" style="left:67.8%">173</div>
+        <div class="rehnds">
+          <div class="rehnd" style="left:0"><i style="background:#000"></i></div>
+          <div class="rehnd" style="left:34.1%"><i style="background:#2a1060"></i></div>
+          <div class="rehnd on" style="left:67.8%"><i style="background:#c23a6b"></i></div>
+          <div class="rehnd" style="left:100%"><i style="background:#f7e08a"></i></div>
+        </div>
+      </div>
+      <div class="rescale"><span>0</span><span class="mid">click the bar to add a stop · drag to move · drag off to remove</span><span>255</span></div>
+
+      <div class="resel" style="position:relative">
+        <span class="k">Selected stop</span>
+        <div class="reswatch"><i style="background:#c23a6b"></i>#c23a6b</div>
+        <span class="repos">at <input class="inp num xs" style="width:56px" value="173"> of 255</span>
+        <div class="btn sm del" style="margin-left:auto">Remove stop</div>
+
+        <div class="pop" style="left:96px;right:auto;width:296px;top:calc(100% - 2px)">
+          <div class="cpfield" style="background:linear-gradient(to top,#000,rgba(0,0,0,0)),linear-gradient(to right,#fff,rgba(255,255,255,0)),#ff0055">
+            <i class="dot" style="left:81%;top:24%;background:#c23a6b"></i>
+          </div>
+          <div class="cphue"><i style="left:93%"></i></div>
+          <div class="cprows">
+            <div class="cprow"><span class="k">HSV</span><input class="inp xs" value="0.930"><input class="inp xs" value="0.706"><input class="inp xs" value="0.761"></div>
+            <div class="cprow"><span class="k">RGB</span><input class="inp xs" value="194"><input class="inp xs" value="58"><input class="inp xs" value="107"></div>
+            <div class="cprow"><span class="k">Hex</span><input class="inp xs" value="#c23a6b"><i class="live" style="background:#c23a6b"></i></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="regrid">
+        <div>
+          <div class="repair">
+            <div class="recell">
+              <div class="cap2">pattern · Comet</div>
+              <canvas class="strip" data-viz="cometbar" data-w="128" data-h="16"></canvas>
+            </div>
+            <div class="rearr">→</div>
+            <div class="recell">
+              <div class="cap2">LEDs · ramp at 100 %</div>
+              <canvas class="strip" data-viz="cometthru" data-w="128" data-h="16"></canvas>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="cap2" style="font:11px/1 var(--mono);color:var(--text-dim);margin-bottom:6px">Amount</div>
+          <div class="bigslider">
+            <div class="slider"><div class="trk"></div><div class="fil" style="width:100%"></div><div class="thb" style="left:100%"></div></div>
+            <span class="val">100 %</span>
+          </div>
+          <div class="hint" style="margin-top:7px">0 % = the pattern's own colors · 100 % = only the ramp's</div>
+        </div>
+      </div>
+      <div class="represets">
+        <span class="rlab">Presets</span>
+        <div class="rechip"><i style="background:linear-gradient(90deg,#000,#fff)"></i><span>Mono</span></div>
+        <div class="rechip on"><i style="background:linear-gradient(90deg,#000 0%,#2a1060 34%,#c23a6b 68%,#f7e08a 100%)"></i><span>Sunset</span></div>
+        <div class="rechip"><i style="background:linear-gradient(90deg,#03121f,#1d6f8f,#9fe4f0)"></i><span>Ice</span></div>
+        <div class="rechip"><i style="background:linear-gradient(90deg,#1a0500,#c43b07,#ffd86b)"></i><span>Fire</span></div>
+        <div class="rechip"><i style="background:linear-gradient(90deg,#f00,#ff0,#0f0,#0ff,#00f,#f0f)"></i><span>Spectrum</span></div>
+        <div class="rechip"><i style="background:linear-gradient(90deg,#f7e08a,#c23a6b,#000)"></i><span>To black</span></div>
+      </div>
+      <div class="reacts">
+        <div class="btn sm">+ Add stop</div>
+        <div class="btn sm">Undo</div>
+        <div class="btn sm">Reset</div>
+        <span class="hint">the previews follow the picker live · one write when it closes</span>
+        <div class="btn sm del">Clear ramp</div>
+      </div>
+      <div style="margin-top:11px"><span class="remode"><i></i>Changes go to the LEDs as you make them.</span></div>
+    </div>
+  </div>
+</div>
+<p class="note"><b>What this specifies.</b> The stop swatch opens the app's <b>own</b> picker — the shipped
+<span class="mono tiny">components/ColorPicker.svelte</span> in the shared <span class="mono tiny">.pop</span> shell
+(296 px, a 132 px saturation/value field, a 14 px hue strip, direct entry in HSV, RGB and hex) — hung from the swatch's
+left edge, never <span class="mono tiny">&lt;input type="color"&gt;</span>. That component already exists and already
+says in its own header comment that the palette editor is the caller it was made generic for; this is that call.
+<b>The mid-gesture contract, which is where the old control lost edits:</b> while the picker moves, the bar and both
+previews repaint and (on a live mount) the device follows; <b>one</b> committed write lands when the popover closes —
+and it is computed from the stop list <i>at that moment</i>, never from a snapshot taken 250 ms earlier. Inventory items
+2 and 8 were both that bug: a trailing timer re-committing a captured list, and a selection held as an INDEX. Here the
+selection is the stop's identity, so if the stop disappears the row disappears with it instead of editing whatever
+slid into slot 4.</p>
+<!-- ===================== S8c / S8d ===================== -->
+<p class="cap"><b>S8c</b> / <b>S8d</b> · <i>Outside the stops</i> — the two candidate semantics, side by side (OPEN QUESTION 1)</p>
+<div class="pair">
+  <div class="frame w390" id="S8c">
+    <div style="padding:14px">
+      <div class="recard narrow">
+        <div class="rehead"><div class="slabel">A · clamp both ends</div><span class="ct2">3 stops</span></div>
+        <p class="restate">Below the first stop and above the last, <b>the end color
+        continues</b>.</p>
+        <div class="rebarwrap">
+          <canvas class="rebar" data-viz="rampclamp" data-w="256" data-h="1"></canvas>
+          <div class="rehnds">
+            <div class="rehnd" style="left:0"><i style="background:#1b0e3a"></i></div>
+            <div class="rehnd" style="left:37.6%"><i style="background:#c23a6b"></i></div>
+            <div class="rehnd on" style="left:69%"><i style="background:#f7e08a"></i></div>
+          </div>
+        </div>
+        <div class="rescale"><span>0</span><span class="mid">last stop at 176</span><span>255</span></div>
+        <div class="repair" style="margin-top:14px">
+          <div class="recell">
+            <div class="cap2">pattern · Aurora</div>
+            <canvas class="sq" data-viz="aurora" data-w="64" data-h="64" style="aspect-ratio:1/1"></canvas>
+          </div>
+          <div class="rearr">→</div>
+          <div class="recell">
+            <div class="cap2">LEDs · ramp at 100 %</div>
+            <canvas class="sq" data-viz="aurthruA" data-w="64" data-h="64" style="aspect-ratio:1/1"></canvas>
+          </div>
+        </div>
+        <ul class="hint" style="margin:12px 0 0;padding-left:16px;line-height:1.6">
+          <li>the brightest pixels keep the last stop's color</li>
+          <li>clicking the bar anywhere never changes the gradient</li>
+          <li>what Figma, CSS and every gradient tool do</li>
+          <li>a cut to black is the <i>To black</i> preset — an explicit last stop</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <div class="frame w390" id="S8d">
+    <div style="padding:14px">
+      <div class="recard narrow">
+        <div class="rehead"><div class="slabel">B · black above the last stop</div><span class="ct2">3 stops</span></div>
+        <p class="restate">Below the first stop its color continues. <b>Above the last stop
+        the output is black</b> — the hatched zone.</p>
+        <div class="rebarwrap">
+          <canvas class="rebar" data-viz="rampcut" data-w="256" data-h="1"></canvas>
+          <div class="rezone" style="left:69%;right:1px"><span>black</span></div>
+          <div class="rehnds">
+            <div class="rehnd" style="left:0"><i style="background:#1b0e3a"></i></div>
+            <div class="rehnd" style="left:37.6%"><i style="background:#c23a6b"></i></div>
+            <div class="rehnd on" style="left:69%"><i style="background:#f7e08a"></i></div>
+          </div>
+        </div>
+        <div class="rescale"><span>0</span><span class="mid">last stop at 176</span><span>255</span></div>
+        <div class="repair" style="margin-top:14px">
+          <div class="recell">
+            <div class="cap2">pattern · Aurora</div>
+            <canvas class="sq" data-viz="aurora" data-w="64" data-h="64" style="aspect-ratio:1/1"></canvas>
+          </div>
+          <div class="rearr">→</div>
+          <div class="recell">
+            <div class="cap2">LEDs · ramp at 100 %</div>
+            <canvas class="sq" data-viz="aurthruB" data-w="64" data-h="64" style="aspect-ratio:1/1"></canvas>
+          </div>
+        </div>
+        <ul class="hint" style="margin:12px 0 0;padding-left:16px;line-height:1.6">
+          <li>the brightest pixels go dark — the effect people find surprising</li>
+          <li>what the engine does <b>today</b>; no blob, no wire, no firmware change</li>
+          <li>clicking inside the zone adds a <i>black</i> stop and says so</li>
+          <li>a fade to the last color needs a stop at 255</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="note"><b>OPEN QUESTION 1 — which is it?</b> Every other frame in this batch draws a ramp that spans 0…255, where
+the two options are identical; only this one sentence and this one hatched zone differ. <b>B is what ships today</b>
+(<span class="mono tiny">outpipe::fill_palette_lut</span> clamps below the first stop and writes black above the last),
+it is undocumented anywhere in the UI, and it is the root of inventory item 10: clicking the bar above the last stop
+added a <b>black</b> stop and visibly changed the gradient — 88 of 256 LUT entries moved — while the component's own
+comment promised that adding a stop never changes the gradient. <b>A is the recommendation.</b> It matches every
+gradient tool anyone has used, it makes "click to add a stop" harmless everywhere on the bar by construction, and the
+behaviour B gives you stays reachable as the <i>To black</i> preset and as any ramp you end with a black stop — you say
+it instead of discovering it. The cost of A is an engine change (a one-line change in
+<span class="mono tiny">fill_palette_lut</span>) plus a migration thought for stored ramps whose last stop is below 255:
+they would get brighter rather than cut. <b>If Jeremy picks B</b>, the zone drawing and the second sentence above are
+the mock — nothing else in the batch changes, and inventory item 10 is answered by the drawing rather than by the
+semantic.</p>
+<style>
+/* the 320 px inspector and the 390 px phone are the same component at a
+   narrower container: one column, thirds for the presets. In the app this is
+   a container query on the card, not a viewport media query — the inspector
+   is 320 px wide inside a 1200 px window. */
+.recard.narrow .represets{gap:5px;margin-top:13px}
+.recard.narrow .represets .rlab{width:100%;margin-bottom:1px}
+.recard.narrow .rechip{width:calc(33.333% - 4px)}
+.recard.narrow .resel{gap:8px}
+.recard.narrow .restate{font-size:12px}
+.recard.narrow .rescale{flex-wrap:wrap;justify-content:space-between}
+.recard.narrow .rescale .mid{order:3;width:100%;flex:none;text-align:left;margin-top:4px}
+.recard.narrow .remode{white-space:normal;align-items:flex-start}
+.recard.narrow .remode i{margin-top:5px}
+</style>
+
+<!-- ===================== S8e ===================== -->
+<p class="cap"><b>S8e</b> · Scene editor · pattern layer — the <i>Color ramp</i> row, collapsed (replaces S7b/S7g's row)</p>
+<div class="frame w320" id="S8e">
+  <div class="rcol" style="border-left:0;width:100%">
+    <div class="rhead" style="margin-bottom:12px"><div class="slabel">Pattern layer</div></div>
+
+    <div class="irow wide">
+      <div class="ilab">Pattern</div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <canvas data-viz="aurora" data-w="64" data-h="64" style="width:44px;height:44px;border-radius:4px;image-rendering:pixelated;background:#000;display:block"></canvas>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;white-space:nowrap">Aurora 2D</div>
+          <div class="hint" style="white-space:nowrap">2D · 4096 px</div>
+        </div>
+        <div class="btn sm">Change…</div>
+      </div>
+    </div>
+
+    <div class="irule"></div>
+
+    <div class="irow wide">
+      <div class="ilab">Color ramp</div>
+      <div>
+        <div class="recol">
+          <div>
+            <canvas data-viz="rampsun" data-w="256" data-h="1"></canvas>
+            <div class="stoprow">
+              <span class="stopmk" style="left:0;background:#000"></span>
+              <span class="stopmk" style="left:34.1%;background:#2a1060"></span>
+              <span class="stopmk" style="left:67.8%;background:#c23a6b"></span>
+              <span class="stopmk" style="left:100%;background:#f7e08a"></span>
+            </div>
+          </div>
+          <a class="lnk" style="color:var(--accent)">Edit…</a>
+        </div>
+        <div class="hint" style="margin-top:6px">4 stops · 60 % — recolors this layer by brightness</div>
+      </div>
+    </div>
+
+    <div class="irule"></div>
+
+    <div class="irow"><div class="ilab">Blend</div><div class="sel" style="width:100%">Normal <i>▾</i></div></div>
+    <div class="irow"><div class="ilab">Transparent</div><div class="sel" style="width:100%">black pixels <i>▾</i></div></div>
+    <div class="irow" style="margin-bottom:0"><div class="ilab">Opacity</div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <div class="slider"><div class="trk"></div><div class="fil" style="width:60%"></div><div class="thb" style="left:60%"></div></div>
+        <span class="mono tiny dim">60 %</span>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="note"><b>What changed from S7b / S7g.</b> The collapsed row is a <b>canvas</b> painted from the LUT, not a CSS
+<span class="mono tiny">linear-gradient</span> — so the row already shows what the device will actually do, including a
+cut to black if there is one. The read-only stop ticks stay (the existing 9 px
+<span class="mono tiny">.stoprow</span>/<span class="mono tiny">.stopmk</span>, which need no touch box because nothing
+here is draggable: the row is a summary, and <i>Edit…</i> is the affordance). Two lines of copy changed.
+<b>Gone:</b> "the same editor as Settings › Output › Palette" — it was true about the intent and false about the
+behaviour (the two mounts disagreed on the minimum number of stops, on whether removing a stop could destroy the ramp,
+and on the live-vs-committed split), and after #787 it is one component in both places, so the sentence has nothing left
+to claim. <b>In its place</b> the summary states the two facts the row can't draw: the stop count and the amount, then
+what the stage does. <i>Edit stops…</i> (a button that read like a list) is <i>Edit…</i> in accent, matching S7b's
+existing link, and it expands the editor in place — S8f.</p>
+
+<!-- ===================== S8f ===================== -->
+<p class="cap"><b>S8f</b> · Scene editor · pattern layer — the ramp editor expanded in the 320 px inspector</p>
+<div class="frame w320" id="S8f">
+  <div class="rcol" style="border-left:0;width:100%">
+    <div class="rhead" style="margin-bottom:12px"><div class="slabel">Pattern layer</div></div>
+
+    <div class="irow wide">
+      <div class="ilab">Pattern</div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <canvas data-viz="aurora" data-w="64" data-h="64" style="width:44px;height:44px;border-radius:4px;image-rendering:pixelated;background:#000;display:block"></canvas>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;white-space:nowrap">Aurora 2D</div>
+          <div class="hint" style="white-space:nowrap">2D · 4096 px</div>
+        </div>
+        <div class="btn sm">Change…</div>
+      </div>
+    </div>
+
+    <div class="irule"></div>
+
+    <div class="recard narrow">
+      <div class="rehead">
+        <div class="slabel">Color ramp</div>
+        <span class="ct2">4 stops</span>
+        <div class="btn sm">Done</div>
+      </div>
+      <p class="restate">Recolors this layer by <b>brightness</b>: dark pixels take the left end, bright pixels the
+      right. Below the first stop and above the last, the end color continues.</p>
+
+      <div class="rebarwrap">
+        <canvas class="rebar" data-viz="rampsun" data-w="256" data-h="1"></canvas>
+        <div class="rebub" style="left:34.1%">87</div>
+        <div class="rehnds">
+          <div class="rehnd" style="left:0"><i style="background:#000"></i></div>
+          <div class="rehnd on" style="left:34.1%"><i style="background:#2a1060"></i></div>
+          <div class="rehnd" style="left:67.8%"><i style="background:#c23a6b"></i></div>
+          <div class="rehnd" style="left:100%"><i style="background:#f7e08a"></i></div>
+        </div>
+      </div>
+      <div class="rescale"><span>0</span><span class="mid">tap to add · drag to move · drag off to remove</span><span>255</span></div>
+
+      <div class="resel">
+        <span class="k">Selected</span>
+        <div class="reswatch"><i style="background:#2a1060"></i>#2a1060</div>
+        <span class="repos">at <input class="inp num xs" style="width:52px" value="87"></span>
+        <div class="btn sm del">Remove</div>
+      </div>
+
+      <div class="regrid">
+        <div class="repair">
+          <div class="recell">
+            <div class="cap2">layer</div>
+            <canvas class="sq" data-viz="aurora" data-w="64" data-h="64" style="aspect-ratio:1/1"></canvas>
+          </div>
+          <div class="rearr">→</div>
+          <div class="recell">
+            <div class="cap2">through the ramp</div>
+            <canvas class="sq" data-viz="aurorathru" data-w="64" data-h="64" style="aspect-ratio:1/1"></canvas>
+          </div>
+        </div>
+        <div>
+          <div class="cap2" style="font:11px/1 var(--mono);color:var(--text-dim);margin-bottom:6px">Amount</div>
+          <div class="bigslider">
+            <div class="slider"><div class="trk"></div><div class="fil" style="width:60%"></div><div class="thb" style="left:60%"></div></div>
+            <span class="val">60 %</span>
+          </div>
+          <div class="hint" style="margin-top:6px">0 % = the pattern's own colors · 100 % = only the ramp's</div>
+        </div>
+      </div>
+
+      <div class="represets">
+        <span class="rlab">Presets</span>
+        <div class="rechip"><i style="background:linear-gradient(90deg,#000,#fff)"></i><span>Mono</span></div>
+        <div class="rechip on"><i style="background:linear-gradient(90deg,#000 0%,#2a1060 34%,#c23a6b 68%,#f7e08a 100%)"></i><span>Sunset</span></div>
+        <div class="rechip"><i style="background:linear-gradient(90deg,#03121f,#1d6f8f,#9fe4f0)"></i><span>Ice</span></div>
+        <div class="rechip"><i style="background:linear-gradient(90deg,#1a0500,#c43b07,#ffd86b)"></i><span>Fire</span></div>
+        <div class="rechip"><i style="background:linear-gradient(90deg,#f00,#ff0,#0f0,#0ff,#00f,#f0f)"></i><span>Spectrum</span></div>
+        <div class="rechip"><i style="background:linear-gradient(90deg,#f7e08a,#c23a6b,#000)"></i><span>To black</span></div>
+      </div>
+
+      <div class="reacts">
+        <div class="btn sm">+ Add stop</div>
+        <div class="btn sm">Undo</div>
+        <div class="btn sm">Reset</div>
+        <div class="btn sm del">Remove ramp</div>
+      </div>
+      <div style="margin-top:11px"><span class="remode save"><i></i>Saved with the scene — the LEDs follow when you save.</span></div>
+    </div>
+
+    <div class="irule"></div>
+
+    <div class="irow"><div class="ilab">Blend</div><div class="sel" style="width:100%">Normal <i>▾</i></div></div>
+    <div class="irow" style="margin-bottom:0"><div class="ilab">Opacity</div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <div class="slider"><div class="trk"></div><div class="fil" style="width:60%"></div><div class="thb" style="left:60%"></div></div>
+        <span class="mono tiny dim">60 %</span>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="note"><b>What this specifies.</b> The <b>same component</b> as S8a at a 288 px container: one column instead of
+two, presets in thirds, the labels shortened (<i>Selected</i>, <i>Remove</i>, <i>at 87</i> with the
+<span class="mono tiny">of 255</span> carried by the scale row) and the previews device-shaped — a 64×64 layer, not a
+strip. It reflows on the CARD's width (a container query), not the window's: this inspector is 288 px wide inside a
+1200 px console. <b>Three differences from the Settings mount, all of them stated on screen rather than implied:</b>
+the statement line says <i>this layer</i> instead of <i>each pixel</i>; the destructive action is <i>Remove ramp</i>
+(the layer keeps its own colors) rather than <i>Clear ramp</i>; and the mode line is the save-based one — a dim dot and
+"the LEDs follow on Save", against the live green dot in S8a. Inventory item 20 was exactly this distinction being
+thrown away at this mount (<span class="mono tiny">on:input</span> and <span class="mono tiny">on:change</span> wired to
+one handler); here the mode is a visible property of the editor, so wiring it wrong is visible too.
+<b>Editing the ramp must not restart the layer's clock</b> (confusing-by-design item 8 — dragging a stop made the
+animation jump back to t=0, because any wire change schedules a rebuild 1 s later). The ramp is a post-stage: it can be
+re-applied without rebuilding the layer, and #787's implementation step owns that.</p>
+<!-- ===================== S8g ===================== -->
+<p class="cap"><b>S8g</b> · Settings › Output processing › <i>Color ramp</i> at 390 px — 24 px touch targets</p>
+<div class="frame w390" id="S8g">
+  <div style="padding:12px">
+    <div class="disclist">
+      <div class="drow open"><i class="chev">▾</i>Output processing<span class="st2">300 px strip</span></div>
+      <div class="dbody" style="border-bottom:0">
+        <div class="recard narrow re24" style="margin-top:8px">
+          <div class="rehead">
+            <div class="slabel">Color ramp</div>
+            <span class="ct2">4 stops</span>
+            <div class="btn sm">Done</div>
+          </div>
+          <p class="restate"><b>Brightness → color.</b> Dark pixels take the left end, bright pixels the right. Below
+          the first stop and above the last, the end color continues.</p>
+
+          <div class="rebarwrap">
+            <canvas class="rebar" data-viz="rampsun" data-w="256" data-h="1"></canvas>
+            <div class="rebub" style="left:67.8%">173</div>
+            <div class="rehnds">
+              <div class="rehnd" style="left:0"><i style="background:#000"></i></div>
+              <div class="rehnd" style="left:34.1%"><i style="background:#2a1060"></i></div>
+              <div class="rehnd on" style="left:67.8%"><i style="background:#c23a6b"></i></div>
+              <div class="rehnd" style="left:100%"><i style="background:#f7e08a"></i></div>
+            </div>
+          </div>
+          <div class="rescale"><span>0</span><span class="mid">tap to add · drag to move · drag off to remove</span><span>255</span></div>
+
+          <div class="resel">
+            <span class="k">Selected</span>
+            <div class="reswatch"><i style="background:#c23a6b"></i>#c23a6b</div>
+            <span class="repos">at <input class="inp num xs" style="width:52px" value="173"></span>
+            <div class="btn sm del">Remove</div>
+          </div>
+
+          <div class="regrid">
+            <div class="repair">
+              <div class="recell">
+                <div class="cap2">pattern · Comet</div>
+                <canvas class="strip" data-viz="cometbar" data-w="128" data-h="16"></canvas>
+              </div>
+              <div class="rearr">→</div>
+              <div class="recell">
+                <div class="cap2">LEDs · 100 %</div>
+                <canvas class="strip" data-viz="cometthru" data-w="128" data-h="16"></canvas>
+              </div>
+            </div>
+            <div>
+              <div class="cap2" style="font:11px/1 var(--mono);color:var(--text-dim);margin-bottom:6px">Amount</div>
+              <div class="bigslider">
+                <div class="slider"><div class="trk"></div><div class="fil" style="width:100%"></div><div class="thb" style="left:100%"></div></div>
+                <span class="val">100 %</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="represets">
+            <span class="rlab">Presets</span>
+            <div class="rechip"><i style="background:linear-gradient(90deg,#000,#fff)"></i><span>Mono</span></div>
+            <div class="rechip on"><i style="background:linear-gradient(90deg,#000 0%,#2a1060 34%,#c23a6b 68%,#f7e08a 100%)"></i><span>Sunset</span></div>
+            <div class="rechip"><i style="background:linear-gradient(90deg,#03121f,#1d6f8f,#9fe4f0)"></i><span>Ice</span></div>
+            <div class="rechip"><i style="background:linear-gradient(90deg,#1a0500,#c43b07,#ffd86b)"></i><span>Fire</span></div>
+            <div class="rechip"><i style="background:linear-gradient(90deg,#f00,#ff0,#0f0,#0ff,#00f,#f0f)"></i><span>Spectrum</span></div>
+            <div class="rechip"><i style="background:linear-gradient(90deg,#f7e08a,#c23a6b,#000)"></i><span>To black</span></div>
+          </div>
+
+          <div class="reacts">
+            <div class="btn sm">+ Add stop</div>
+            <div class="btn sm">Undo</div>
+            <div class="btn sm">Reset</div>
+            <div class="btn sm del">Clear ramp</div>
+          </div>
+          <div style="margin-top:11px"><span class="remode"><i></i>Changes go to the LEDs as you make them.</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="note"><b>What this specifies.</b> 390 px, the same component again. <b>Every hit target here is ≥ 24 px</b>, which
+is what <span class="mono tiny">mockdiff --sweep</span> enforces at ≤ 420 px (§5.7, #529) and what the old control failed
+at with 13×13 px handles on a 336 px bar — 0.76 position units per screen pixel, i.e. touch positioning was not possible
+and the number field was the only route. The boxes: handle <b>24×24</b> (a 12 px diamond centred in it), the amount
+slider's box grown to <b>24</b> with the painted track left at 6 px (#703's fix — grow the box, not the paint), the stop
+swatch 26, the position field 26, every <span class="mono tiny">.btn.sm</span> 26. <b>What gives way at this width:</b>
+the previews sit above the amount rather than beside it, the presets go to thirds, the amount's two-ends hint is dropped
+(the slider is self-evident and the statement line is the copy that matters), and the bar's affordance line says
+<i>tap</i>. Nothing is hidden behind a disclosure and no action moves into a menu.</p>
+<style>
+/* no stops at all: there is nothing honest to paint, so the bar says so
+   instead of showing a black gradient the device will not produce
+   (inventory items 6 and 16) */
+.rebarempty{display:flex;align-items:center;justify-content:center;height:44px;border:1px dashed var(--border);border-radius:6px;background:var(--bg-panel);color:var(--text-dim);font-size:12px}
+</style>
+
+<!-- ===================== S8h ===================== -->
+<p class="cap"><b>S8h</b> · The three states the old control got wrong — no ramp · no pattern running · at the 32-stop cap</p>
+<div class="frame w760" id="S8h">
+  <div style="padding:20px">
+
+    <div class="recard">
+      <div class="rehead"><div class="slabel">Color ramp</div><span class="ct2">no stops</span><div class="btn sm">Done</div></div>
+      <p class="restate"><b>Brightness → color.</b> Each pixel's brightness picks a color from this ramp: dark pixels
+      take the left end, bright pixels the right.</p>
+      <div class="rebarempty">no stops — the pattern's own colors go straight to the LEDs</div>
+      <div class="represets">
+        <span class="rlab">Start from</span>
+        <div class="rechip"><i style="background:linear-gradient(90deg,#000,#fff)"></i><span>Mono</span></div>
+        <div class="rechip"><i style="background:linear-gradient(90deg,#000 0%,#2a1060 34%,#c23a6b 68%,#f7e08a 100%)"></i><span>Sunset</span></div>
+        <div class="rechip"><i style="background:linear-gradient(90deg,#03121f,#1d6f8f,#9fe4f0)"></i><span>Ice</span></div>
+        <div class="rechip"><i style="background:linear-gradient(90deg,#1a0500,#c43b07,#ffd86b)"></i><span>Fire</span></div>
+        <div class="rechip"><i style="background:linear-gradient(90deg,#f00,#ff0,#0f0,#0ff,#00f,#f0f)"></i><span>Spectrum</span></div>
+        <div class="rechip"><i style="background:linear-gradient(90deg,#f7e08a,#c23a6b,#000)"></i><span>To black</span></div>
+      </div>
+      <div class="renote">Amount is 0 % — a ramp built now would have no visible effect until you raise it.
+        <span class="group"><span class="btn sm">Set amount to 100 %</span></span></div>
+      <div class="reacts">
+        <div class="btn sm dis" data-reason="a ramp needs at least two stops — pick a preset">+ Add stop</div>
+        <div class="btn sm dis">Undo</div>
+        <div class="btn sm dis">Reset</div>
+        <span class="hint">a ramp is 0 stops (off) or at least 2 — never 1</span>
+      </div>
+      <div style="margin-top:11px"><span class="remode"><i></i>Changes go to the LEDs as you make them.</span></div>
+    </div>
+
+    <div class="statecap">the device is idle — no pattern to preview, and the ramp is at its two-stop minimum:<span class="rule"></span></div>
+
+    <div class="recard">
+      <div class="rehead"><div class="slabel">Color ramp</div><span class="ct2">2 stops</span><div class="btn sm">Done</div></div>
+      <p class="restate"><b>Brightness → color.</b> Each pixel's brightness picks a color from this ramp: dark pixels
+      take the left end, bright pixels the right. Below the first stop and above the last, the end color continues.</p>
+      <div class="rebarwrap">
+        <canvas class="rebar" data-viz="rampsun" data-w="256" data-h="1"></canvas>
+        <div class="rebub" style="left:0">0</div>
+        <div class="rehnds">
+          <div class="rehnd on" style="left:0"><i style="background:#000"></i></div>
+          <div class="rehnd" style="left:100%"><i style="background:#f7e08a"></i></div>
+        </div>
+      </div>
+      <div class="rescale"><span>0</span><span class="mid">click the bar to add a stop · drag to move · drag off to remove</span><span>255</span></div>
+      <div class="resel">
+        <span class="k">Selected stop</span>
+        <div class="reswatch"><i style="background:#000"></i>#000000</div>
+        <span class="repos">at <input class="inp num xs" style="width:56px" value="0"> of 255</span>
+        <div class="btn sm del dis" data-reason="a ramp needs at least two stops" style="margin-left:auto">Remove stop</div>
+      </div>
+      <div class="rereason">a ramp needs at least two stops — <i>Clear ramp</i> is how you turn the stage off</div>
+      <div class="regrid">
+        <div class="repair">
+          <div class="recell">
+            <div class="cap2">brightness 0 → 255</div>
+            <canvas class="strip" data-viz="lumawedge" data-w="128" data-h="16"></canvas>
+          </div>
+          <div class="rearr">→</div>
+          <div class="recell">
+            <div class="cap2">LEDs · ramp at 100 %</div>
+            <canvas class="strip" data-viz="rampsun" data-w="128" data-h="16"></canvas>
+          </div>
+        </div>
+        <div>
+          <div class="cap2" style="font:11px/1 var(--mono);color:var(--text-dim);margin-bottom:6px">Amount</div>
+          <div class="bigslider">
+            <div class="slider"><div class="trk"></div><div class="fil" style="width:100%"></div><div class="thb" style="left:100%"></div></div>
+            <span class="val">100 %</span>
+          </div>
+          <div class="hint" style="margin-top:7px">nothing is running — the wedge stands in for a pattern</div>
+        </div>
+      </div>
+      <div class="reacts">
+        <div class="btn sm">+ Add stop</div>
+        <div class="btn sm">Undo</div>
+        <div class="btn sm">Reset</div>
+        <div class="btn sm del">Clear ramp</div>
+      </div>
+      <div style="margin-top:11px"><span class="remode"><i></i>Changes go to the LEDs as you make them.</span></div>
+    </div>
+
+    <div class="statecap">all 32 stops used, three of them at one position:<span class="rule"></span></div>
+
+    <div class="recard">
+      <div class="rehead"><div class="slabel">Color ramp</div><span class="ct2">32 stops · the most a ramp can hold</span><div class="btn sm">Done</div></div>
+      <p class="restate"><b>Brightness → color.</b> Each pixel's brightness picks a color from this ramp: dark pixels
+      take the left end, bright pixels the right. Below the first stop and above the last, the end color continues.</p>
+      <div class="rebarwrap">
+        <canvas class="rebar" data-viz="rampspec" data-w="256" data-h="1"></canvas>
+        <div class="rebub" style="left:100%">255</div>
+        <div class="rehnds">
+          <div class="rehnd" style="left:0"><i style="background:#ff0000"></i></div>
+          <div class="rehnd" style="left:9%"><i style="background:#ff7a00"></i></div>
+          <div class="rehnd" style="left:18%"><i style="background:#ffd400"></i></div>
+          <div class="rehnd" style="left:27%"><i style="background:#a6e800"></i></div>
+          <div class="rehnd" style="left:36%"><i style="background:#22d65a"></i></div>
+          <div class="rehnd" style="left:45%"><i style="background:#00cfae"></i></div>
+          <div class="rehnd" style="left:54%"><i style="background:#00a8e0"></i></div>
+          <div class="rehnd" style="left:63%"><i style="background:#2a6cf0"></i></div>
+          <div class="rehnd" style="left:72%"><i style="background:#6a3cf0"></i></div>
+          <div class="rehnd" style="left:81%"><i style="background:#b02ce0"></i></div>
+          <div class="rehnd" style="left:90%"><i style="background:#e82a9c"></i></div>
+          <div class="rehnd on" style="left:100%"><i style="background:#ff2a5a"></i><span class="ct">3</span></div>
+        </div>
+      </div>
+      <div class="rescale"><span>0</span><span class="mid">the bar is full — remove a stop before adding another</span><span>255</span></div>
+      <div class="resel">
+        <span class="k">Selected stop</span>
+        <div class="reswatch"><i style="background:#ff2a5a"></i>#ff2a5a</div>
+        <span class="repos">at <input class="inp num xs" style="width:56px" value="255"> of 255</span>
+        <span class="k">3 stops here</span>
+        <div class="btn sm">next of 3</div>
+        <div class="btn sm del" style="margin-left:auto">Remove stop</div>
+      </div>
+      <div class="reacts">
+        <div class="btn sm dis" data-reason="all 32 stops are used — remove one to add another">+ Add stop</div>
+        <div class="btn sm">Undo</div>
+        <div class="btn sm">Reset</div>
+        <span class="hint">all 32 stops are used — remove one to add another</span>
+        <div class="btn sm del">Clear ramp</div>
+      </div>
+      <div style="margin-top:11px"><span class="remode"><i></i>Changes go to the LEDs as you make them.</span></div>
+    </div>
+
+  </div>
+</div>
+<p class="note"><b>What this specifies.</b> Three states, each of which the old control handled by doing something
+invisible.
+<b>(1) No ramp.</b> There is no "add one stop into emptiness" path any more — that path produced a BLACK stop at 0 with
+the amount also 0, a solid-black bar over a grey identity strip, and nothing on screen saying which of the two the
+device would show (inventory items 6 and 16). Instead the bar states that the stage is off, the presets are the way in,
+and <i>+ Add stop</i> is disabled with that as its reason. The amount is shown and <b>never silently changed</b>: today
+<i>clear</i> sets it to 0, so rebuilding a palette afterwards is invisible (item 7). One rule is printed —
+<b>0 stops (off) or at least 2, never 1</b> — because the two mounts and the wire each had a different one (item 21:
+the scene mount said 2, the device palette said 0, <span class="mono tiny">scene.rs:741</span> refuses 1, and
+<span class="mono tiny">POST /api/output/palette</span> accepted 1).
+<b>(2) Nothing running.</b> The left preview cell falls back to a brightness wedge labelled as one, so the pair is
+always honest rather than empty, and <i>Remove stop</i> is disabled at the minimum <b>with its reason beside it</b> —
+where the old control silently fell through to destroying the whole ramp (item 3: removing one of two stops in a scene
+deleted the <span class="mono tiny">Ramp</span> record, unrecoverably).
+<b>(3) At the cap.</b> The count in the header carries the limit, and stops within 3 px of each other collapse into one
+handle with a count badge and a <i>next of 3</i> button that cycles the selection — the old bar drew them exactly on top
+of each other with no way to grab the one underneath (item 15), which is how 30 invisible stops accumulated at 255
+(item 5). <i>+ Add stop</i> now lands in the <b>widest gap</b>, never past the last stop, so that accumulation cannot
+happen in the first place. Clicking the bar while full does not silently do nothing (item 12): it is the
+<span class="mono tiny">cursor:not-allowed</span> zone and the affordance line under the bar states the reason.
+<b>The disabled-with-a-reason pattern is §5.7's one deliberate exception</b> to "absent, not disabled" — the user has to
+learn a budget — and both spellings carry <span class="mono tiny">data-reason</span>, as #529 requires.</p>
+
+<!-- ===================== S8i ===================== -->
+<p class="cap"><b>S8i</b> · The three modes (#563) and the two things that need confirming</p>
+<div class="frame w760" id="S8i">
+  <div style="padding:20px">
+
+    <div class="statecap">mode line · the device's own ramp on a connected console:<span class="rule"></span></div>
+    <div class="recard" style="padding:12px 14px"><span class="remode"><i></i>Changes go to the LEDs as you make them.</span></div>
+
+    <div class="statecap">mode line · a scene that is not the one playing:<span class="rule"></span></div>
+    <div class="recard" style="padding:12px 14px"><span class="remode save"><i></i>Saved with the scene — the LEDs follow when you save.</span></div>
+
+    <div class="statecap">mode line · the playground, or a console with nothing connected:<span class="rule"></span></div>
+    <div class="recard" style="padding:12px 14px"><span class="remode save"><i></i>Preview only — nothing is connected.</span></div>
+
+    <div class="statecap">the device's ramp changed underneath an open editor:<span class="rule"></span></div>
+    <div class="recard">
+      <div class="rehead"><div class="slabel">Color ramp</div><span class="ct2">4 stops · edited</span><div class="btn sm">Done</div></div>
+      <div class="rebarwrap">
+        <canvas class="rebar" data-viz="rampsun" data-w="256" data-h="1"></canvas>
+        <div class="rehnds">
+          <div class="rehnd" style="left:0"><i style="background:#000"></i></div>
+          <div class="rehnd" style="left:34.1%"><i style="background:#2a1060"></i></div>
+          <div class="rehnd on" style="left:67.8%"><i style="background:#c23a6b"></i></div>
+          <div class="rehnd" style="left:100%"><i style="background:#f7e08a"></i></div>
+        </div>
+      </div>
+      <div class="renote">The device's ramp changed while you were editing — 2 stops, 40 %.
+        <span class="group"><span class="btn sm">Keep mine</span><span class="btn sm">Load theirs</span></span></div>
+      <div style="margin-top:11px"><span class="remode save"><i></i>Nothing is sent until you choose.</span></div>
+    </div>
+
+    <div class="statecap"><i>Clear ramp</i> — the one destructive action, and it asks:<span class="rule"></span></div>
+    <div class="recard">
+      <div class="reacts" style="margin-top:0;padding-top:0;border-top:0">
+        <div class="btn sm">+ Add stop</div>
+        <div class="btn sm">Undo</div>
+        <div class="btn sm">Reset</div>
+        <span class="hint">Reset returns to the ramp you opened</span>
+        <div class="btn sm del">Clear ramp</div>
+      </div>
+      <div class="renote">Clear the ramp? The 4 stops are removed and the pattern's own colors go straight to the LEDs.
+        The amount stays at 100 %. <span class="group"><span class="btn sm">Cancel</span><span class="btn sm del">Clear ramp</span></span></div>
+    </div>
+
+  </div>
+</div>
+<p class="note"><b>What this specifies.</b> <b>The mode line is not decoration — it is the fix for a whole class of
+surprise.</b> #563 settled that opening a thing is not a device action; the ramp editor is the same question one level
+down, and the answer is stated in the control: a green dot and "as you make them" when the edits are live (the device's
+own ramp, or the scene that is playing), a dim dot and "on <b>Save</b>" when they are not, and "preview only" with
+nothing connected. Inventory item 20 was this distinction being discarded at the scene mount; making it a visible
+property makes wiring it wrong visible too.
+<b>The conflict strip</b> answers item 1, the worst thing in the inventory: the old editor read the device's palette
+once at mount and never again, so an edit made twenty minutes later pushed the <i>stale</i> stops and the <i>stale</i>
+amount over whatever the device actually held — silent data loss with no warning. The editor re-reads while it is open;
+if the device's ramp differs from what the editor loaded and there are local edits, this strip appears, <b>nothing is
+sent until the user chooses</b>, and the two outcomes are named. With no local edits the editor simply follows the
+device.
+<b>Both destructive actions confirm and say what survives</b> — including the amount, which the old <i>clear</i>
+silently zeroed (item 7). <i>Reset</i> needs no confirm because it is undoable; <i>Clear ramp</i> is undoable too, and
+still asks, because "the strip goes plain" is a big enough visible change to be worth one keystroke.
+<b>Not fixed here, deliberately:</b> confusing-by-design item 7, "four levels deep" (Settings › Advanced › Output
+processing › Palette). Restructuring the Settings page is a different ticket than redrawing this control, and the two
+mitigations that are in this batch — the collapsed row showing the real LUT (S8e), and the editor expanding <i>in
+place</i> rather than into a dialog or a fifth level — are what #787 can honestly do about it.</p>
 </main>
 </div>
 <script>
@@ -3857,7 +4786,41 @@ function fireball(x,y,w,h,t){
   return hsv(.13-v*.05, 1-v*.55, cl(v,.01,1));
 }
 
+/* ---------- batch 7 · the color ramp (#787) ---------- */
+/* The ramp bar is the engine's 256-entry LUT, not a CSS gradient: a
+   `linear-gradient` cannot express the clamp below the first stop, the
+   truncating 16.16 interpolation, or a hard cut to black above the last
+   (#748 — that mismatch is why the old preview disagreed with the device).
+   `lutAt` is the CLAMP-BOTH-ENDS reading (option A, S8c); `rampcut` below is
+   the black-above-the-last one that ships today (option B, S8d). */
+function lutAt(st,u){
+  if(u<=st[0][0]) return [st[0][1][0],st[0][1][1],st[0][1][2]];
+  for(var i=1;i<st.length;i++){
+    if(u<=st[i][0]){
+      var a=st[i-1],b=st[i],k=(u-a[0])/(b[0]-a[0]);
+      return [a[1][0]+(b[1][0]-a[1][0])*k,a[1][1]+(b[1][1]-a[1][1])*k,a[1][2]+(b[1][2]-a[1][2])*k];
+    }
+  }
+  var l=st[st.length-1][1]; return [l[0],l[1],l[2]];
+}
+function put(c){RGB[0]=c[0];RGB[1]=c[1];RGB[2]=c[2];return RGB}
+function grey(u){var v=u*255;RGB[0]=v;RGB[1]=v;RGB[2]=v;return RGB}
+function lum(c){return (c[0]*77+c[1]*150+c[2]*29)/256/255}
+/* the batch's example ramp: stops 0 · 87 · 173 · 255 (S7g's gradient) */
+var RSUN=[[0,[0,0,0]],[87/255,[42,16,96]],[173/255,[194,58,107]],[1,[247,224,138]]];
+/* a ramp whose last stop is BELOW 255 — the only shape where A and B differ */
+var RIN=[[0,[27,14,58]],[96/255,[194,58,107]],[176/255,[247,224,138]]];
+var RSPEC=(function(){var a=[],n=12;for(var i=0;i<n;i++){var c=hsv(i/n*.95,1,1);a.push([i/(n-1),[c[0],c[1],c[2]]])}return a})();
 var VIZ={
+  rampsun:function(x,y,w,h,t){return put(lutAt(RSUN,x/(w-1)))},
+  rampspec:function(x,y,w,h,t){return put(lutAt(RSPEC,x/(w-1)))},
+  rampclamp:function(x,y,w,h,t){return put(lutAt(RIN,x/(w-1)))},
+  rampcut:function(x,y,w,h,t){var u=x/(w-1);return u>RIN[RIN.length-1][0]?grey(0):put(lutAt(RIN,u))},
+  lumawedge:function(x,y,w,h,t){return grey(x/(w-1))},
+  aurorathru:function(x,y,w,h,t){return put(lutAt(RSUN,lum(aurora(x,y,w,h,t))))},
+  aurthruA:function(x,y,w,h,t){return put(lutAt(RIN,lum(aurora(x,y,w,h,t))))},
+  aurthruB:function(x,y,w,h,t){var l=lum(aurora(x,y,w,h,t));return l>RIN[RIN.length-1][0]?grey(0):put(lutAt(RIN,l))},
+  cometthru:function(x,y,w,h,t){return put(lutAt(RSUN,lum(comet1d(x/w,t))))},
   aurora:aurora, rain:rain, eyes:eyes, spiral:spiral, fireball:fireball,
   grid64:function(x,y,w,h,t){return grid(x,y,w,h,t,8)},
   grid16:function(x,y,w,h,t){return grid(x,y,w,h,t,4)},

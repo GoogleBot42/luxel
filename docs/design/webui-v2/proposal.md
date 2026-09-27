@@ -708,6 +708,39 @@ Sprites tab — the frames it will need do not exist yet (A7, A9).*
 | #486 C4 text-layer UI + gated completions | S7h · S7i · S2f |
 | menus ("Add to…", §5.4b) | S2e |
 
+## 5.9 Color ramp editor (mockups.html "Batch 7" — #787)
+
+Jeremy, 2026-09-26: *"a complete UI redesign of color ramp (it is a horrible/confusing
+interface, and very buggy)"*. The control §5.5 called "the same stop editor as Settings →
+Output → Palette" is being replaced, not polished: a 21-defect inventory (the first comment on
+#787) plus eight "confusing by design" decisions. **S7b and S7g keep their frames**, but where
+their `Color ramp` row disagrees with **S8e**, S8e is the spec.
+
+The design, the two open questions, and the item-by-item mapping from the inventory to the
+frames live in [`ramp-editor.md`](ramp-editor.md). In one paragraph: the gradient bar **is** the
+model (click empty bar = add, drag = move, drag off = remove, click = select), painted from the
+engine's 256-entry LUT rather than a CSS gradient (#748); there is no per-stop row list, only
+the one selected stop with the app's own `ColorPicker` and a numeric position; the preview is a
+labelled pair — the pattern, and the LEDs through the ramp at the current amount — with the
+amount slider beside it; what the stage does is body text, not a tooltip; and which of #563's
+modes the editor is in (live, or saved with the scene) is printed on it.
+
+| Frame | What it specifies |
+|---|---|
+| **S8a** | Settings › Advanced › Output processing › *Color ramp*, editor open, a stop selected — the whole control. |
+| **S8b** | The stop swatch open into `components/ColorPicker.svelte`, and the mid-gesture write contract (no trailing snapshot commit). |
+| **S8c** / **S8d** | *Outside the stops*, drawn both ways: **A** clamp both ends · **B** black above the last stop (what ships today). |
+| **S8e** / **S8f** | The scene layer's ramp row collapsed, and the same editor expanded in the 320 px inspector (one column, save-based mode line). |
+| **S8g** | 390 px — every hit target ≥ 24 px (§5.7, #703). |
+| **S8h** | No ramp · nothing running (the two-stop minimum) · at the 32-stop cap with stacked stops. |
+| **S8i** | The three #563 modes, the device-changed-underneath strip, and the two confirms. |
+
+**Open questions for Jeremy** (both in `ramp-editor.md` in full): **Q1** — outside the stops,
+clamp both ends (S8c, recommended) or keep black above the last stop (S8d, what ships)?
+**Q2** — whichever Q1 picks, does it apply to the per-layer scene ramp as well as the device
+palette? The mock assumes yes; one editor with two semantics is how the current control ended
+up with three different minimum-stop rules.
+
 ## 6. Text in patterns (D5)
 
 The pattern language has no string type. The cheapest honest path (engine survey §8 ii b):
