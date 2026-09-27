@@ -68,6 +68,16 @@ Reading the panel (2026-09-07):
 - **A rejected pattern load leaves the panel DARK** with `out_fps` 0 and
   `rescan_hz` 0 — it reads like a hang but is the documented rejection path
   (array budget / `RUNTIME_FLOOR`). Check `vmerr` before diagnosing.
+  **And so does NO pattern at all**: `live:null`, `src:false`,
+  `jit.state:"none"`, `engines:[]`, `frame_us`/`vm_us`/`out_us` 0 —
+  `pass.n` only advances while frames are handed over, so a board with
+  nothing to render reads exactly like a dead DMA, on every build, across
+  power cycles. On 2026-09-27 that cost an hour, a wrong ticket and two of
+  Jeremy's power cycles: the live pattern had been lost across a layout
+  change to a 2x1 chain (#835) and no boot brought one back.
+  **Order of reading a black panel: `live`/`src`/`engines` → `vmerr` →
+  `pass`/`rescan_hz` → hardware.** `POST /api/patterns/<id>/activate` is
+  the one-line test.
 - `tools/panel-load-bench.mjs` needs a FAST live pattern (push
   `library/frame-rate-scan.js` via `POST /api/code`, re-activate the stored
   pattern by id after); its tab phase repeats to about ±18 %, so take a
