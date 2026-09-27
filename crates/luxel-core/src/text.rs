@@ -416,14 +416,14 @@ pub const MAX_DIGITS: u8 = 10;
 pub fn format_number(v: Fx, digits: u8, decimals: u8, out: &mut TextString) {
     out.clear();
     let decimals = decimals.min(MAX_DECIMALS);
-    let digits = digits.min(MAX_DIGITS).max(1);
+    let digits = digits.clamp(1, MAX_DIGITS);
 
     let raw = v.raw();
     let neg = raw < 0;
     // i64 so i32::MIN negates cleanly
     let mag = (raw as i64).unsigned_abs();
-    let mut int = (mag >> 16) as u64;
-    let frac = (mag & 0xFFFF) as u64;
+    let mut int = mag >> 16;
+    let frac = mag & 0xFFFF;
 
     let scale: u64 = match decimals {
         0 => 1,
@@ -1002,6 +1002,8 @@ mod tests {
         assert_eq!(first_lit_col(Align::Right, 20), Some(20 - w as usize));
     }
 
+    // 3.14159 below is a formatting INPUT chosen for its digits, not a use of PI.
+    #[allow(clippy::approx_constant)]
     #[test]
     fn number_formatting_table() {
         let mut b = TextString::new();

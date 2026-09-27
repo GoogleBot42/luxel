@@ -46,6 +46,14 @@ onto it, WiFi, the clock and time zone, MQTT, firmware update).
   pattern you are editing is the one the device is running. Browsing or
   opening any other pattern previews it locally and leaves the LEDs alone;
   `Play` / `▶ Play on device` is what hands it to them.
+- **Native code on the device**: an on-board JIT (`crates/luxel-jit`)
+  compiles the activated pattern from LXBC to Xtensa machine code —
+  **on by default in every Xtensa image**, with the code in a PSRAM arena
+  on the S3 boards and in a 24 KB SRAM instruction static on the classic
+  ESP32 ones. **1.9–5.2× faster frames** on real hardware. A pattern it
+  refuses runs on the interpreter on the same board, the two RISC-V boards
+  (C3, C6) ship the interpreter alone, and `POST /api/jit {"on":false}`
+  turns it off for a session.
 - SK9822/APA102 + WS281x over SPI; runtime pixel count, protocol, color
   order, gamma, and power-cap settings — all changed live, all persisted.
 - HUB75 matrix panels on the ESP32-S3 (LCD_CAM + DMA; a 64x64 panel is
@@ -109,6 +117,8 @@ CLI extras: `luxel run pattern.js` (PPM frame strip), `bench`, `parse`,
 | where | what |
 |---|---|
 | `crates/luxel-core` | compiler + VM + engine (`no_std`), sensor/net parsers, output pipeline |
+| `crates/luxel-jit` | the on-device JIT's backend: LXBC → Xtensa machine code (`no_std`, pure function, host-tested against the vendor `objdump`) |
+| `crates/luxel-hub75` | bulk bitplane packer for HUB75 panel framebuffers (`no_std`) |
 | `crates/luxel-wasm` | C-ABI wasm bindings for the browser |
 | `crates/luxel-cli` | native CLI + the device-API mirror (`luxel serve`) |
 | `firmware/` | ESP32 firmware (esp-hal, embassy, picoserve) |
@@ -134,6 +144,8 @@ Luxel is licensed by component:
 | Component | Path | License |
 |---|---|---|
 | Engine (compiler + VM + engine) | `crates/luxel-core` | Apache-2.0 |
+| JIT backend (LXBC → Xtensa) | `crates/luxel-jit` | Apache-2.0 |
+| HUB75 bitplane packer | `crates/luxel-hub75` | Apache-2.0 |
 | Browser/WASM bindings | `crates/luxel-wasm` | Apache-2.0 |
 | CLI + device-API mirror | `crates/luxel-cli` | Apache-2.0 |
 | Playground / IDE | `web/` | Apache-2.0 |

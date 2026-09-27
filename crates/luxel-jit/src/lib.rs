@@ -9,8 +9,9 @@
 //! `objdump` (`tests/objdump.rs`) and the generated code against the
 //! interpreter through a small Xtensa ISA model (`tests/isa/`).
 //!
-//! The crate is NOT linked into the firmware or the wasm playground yet;
-//! phase 3 does that.
+//! The firmware links it behind its `jit` feature, which every Xtensa board
+//! ships ON (docs/firmware.md "JIT"). The wasm playground does not — it has
+//! no Xtensa to run the output on.
 //!
 //! ```text
 //!  Program + Kinds ──► emit::compile ──► NativeImage { words, entries, … }

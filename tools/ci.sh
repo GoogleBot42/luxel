@@ -13,7 +13,8 @@
 # Gates, in order (the order matters — see the comments):
 #   1. web build   (wasm + gallery + svelte-check + vite build) + web tests
 #   2. cargo test --workspace
-#   3. tools/check-library.sh          (the library sweep, five rigs)
+#   3. tools/check-library.sh          (three source lints, then the library sweep
+#                                       over five rigs)
 #   3b. tools/offset-check.py          (no hard-coded partition offsets, #501)
 #   4a. devshell firmware build (CI_BOARD, default board-pixelblaze-v3) —
 #       covers build-esp32.sh itself + the linked-feature markers

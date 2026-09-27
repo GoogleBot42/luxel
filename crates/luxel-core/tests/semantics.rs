@@ -1153,7 +1153,7 @@ fn pins_used_reports_what_the_pattern_touched() {
 
     // a top-level pinMode is visible before the first frame — the panel is up
     // as soon as the pattern compiles
-    let mut e = engine("pinMode(26, INPUT_PULLUP)\nexport var out = 0");
+    let e = engine("pinMode(26, INPUT_PULLUP)\nexport var out = 0");
     assert_eq!(e.pins_used(), 1 << 26);
     assert_eq!(e.pins_idle_high(), 1 << 26, "pull-up pins idle HIGH");
 
@@ -1430,6 +1430,9 @@ fn extension_builtins() {
     assert!(eval("easeOutBounce(0.55)").to_f64() < 0.85);
 }
 
+// The reference table holds 4-decimal expected OUTPUTS; 0.7071 is easeOutSine(0.5),
+// not a use of 1/sqrt(2).
+#[allow(clippy::approx_constant)]
 #[test]
 fn easing_library_thirty() {
     // The rest of the standard thirty easings (ten families × in/out/in-out
@@ -1671,6 +1674,9 @@ fn oklch_produces_reasonable_colors() {
     assert!((gray[0] - gray[1]).abs() < 0.03 && (gray[1] - gray[2]).abs() < 0.03, "gray = {gray:?}");
 }
 
+// 1.5708 is the expected angleBetween() OUTPUT in radians to 4 decimals, checked with
+// a 1e-2 tolerance — not a use of PI/2.
+#[allow(clippy::approx_constant)]
 #[test]
 fn extension_builtins_batch2() {
     // dot / dot3

@@ -8,7 +8,14 @@ paths:
 - Controls carry real-unit `//#` bounds (seconds, degrees, pixels, percent;
   integer counts with step=1; mode selectors min=0 max=n-1 step=1 so every
   mode is reachable). A bare 0..1 slider with meaningless values is the
-  single most common review complaint.
+  single most common review complaint. `tools/check-library.sh` lints this
+  since Gitea #243: `min=0 max=1` with no `step=` on a `slider*` FAILS the
+  sweep (that directive declares exactly what a stock PB slider already
+  sends — a pure no-op), and a fractional-step 0..1 dial is counted
+  (`UNITLESS01=list` to see all 297, `=fail` to gate). A dial that genuinely
+  is a unitless factor (a blend/mix ratio) opts out with the bare word
+  `unitless-ok` INSIDE its directive — both parsers read only `key=value`,
+  so a word with no `=` is inert.
 - With a `//#` directive the UI sends REAL units — the handler must not
   rescale as if it got 0..1 (this exact bug indexed arrays at 381 in
   glittering-jewels). floor()/clamp() defensively; a stock PB still sends
