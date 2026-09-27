@@ -189,6 +189,23 @@ impl Schedule {
         plane_bytes.div_ceil(max_chunk.max(1)) * self.reps(0)
     }
 
+    /// For each plane (0 = MSB), the ring descriptor index just PAST its last
+    /// descriptor — the point from which the DMA has finished reading that
+    /// plane for the current pass and a copy into it cannot tear this pass
+    /// (Gitea #829, the chase). `ends[planes − 1]` is the ring length.
+    /// Entries past `planes` are 0.
+    #[must_use]
+    pub fn plane_end_descs(&self, plane_bytes: usize, max_chunk: usize) -> [usize; MAX_PLANES] {
+        let chunks = plane_bytes.div_ceil(max_chunk.max(1));
+        let mut ends = [0usize; MAX_PLANES];
+        let mut acc = 0;
+        for (p, slot) in ends.iter_mut().enumerate().take(usize::from(self.planes)) {
+            acc += self.reps(p) * chunks;
+            *slot = acc;
+        }
+        ends
+    }
+
     /// Peak brightness as a fraction of the stock schedule's, in permille:
     /// `1000 · lsb · (2^planes − 1) / (W · emissions)` — on-time per unit
     /// TIME, since the pass shortens with the on-time (module docs). 1000 at
@@ -409,6 +426,13 @@ mod tests {
         assert_eq!(fast.msb_descriptors(g.plane_bytes(), 4092), 2 * 16);
         assert_eq!(fast.reps_u8()[..7], [16, 8, 4, 2, 1, 1, 1]);
         assert_eq!(fast.reps_u8()[7], 0);
+        // the chase's per-plane consumption points: cumulative descriptors
+        let ends = fast.plane_end_descs(g.plane_bytes(), 4092);
+        assert_eq!(ends, [32, 48, 56, 60, 62, 64, 66, 0]);
+        assert_eq!(ends[6], fast.descriptors(g.plane_bytes(), 4092));
+        assert_eq!(ends[0], fast.msb_descriptors(g.plane_bytes(), 4092));
+        let full_ends = full.plane_end_descs(g.plane_bytes(), 4092);
+        assert_eq!(full_ends[..7], [128, 192, 224, 240, 248, 252, 254]);
     }
 
     #[test]

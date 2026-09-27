@@ -75,19 +75,22 @@
 //! buffer's own, or a spare one. Per frame: `write_frame` composes into a
 //! full-size staging framebuffer (the PSRAM arena where the board has one)
 //! whenever the render task delivers; `flush`, polled by the output task,
-//! waits until the DMA is inside the MSB run with room to spare, arms the
-//! ring flip to the other view FIRST (the atomic-swap patch's single tail
-//! store, which lands at the wrap), then copies planes `1..` into the live
-//! buffer and the new MSB into the idle spare block. The next pass reads the
-//! new frame in full. Each copy has a deadline — plane 1 before the DMA
-//! leaves the MSB run, plane k before it reaches plane k, the spare before
-//! the wrap — and the copies are in that order, so plane 1's deadline is the
-//! only tight one and every later plane has exponentially more slack. The
-//! window check sizes itself from the measured per-plane copy time and the
-//! ISR's nominal pass length; a pass without room defers the frame (counted,
-//! `spare.deferred`); a copy that still overruns is counted as
-//! `spare.torn_p1`/`spare.torn_wrap` — the one way this mode can tear, and a
-//! bug if it ever moves off 0.
+//! CHASES THE BEAM (Gitea #829): at the top of a pass it arms the ring flip
+//! to the other view FIRST (the atomic-swap patch's single tail store, which
+//! lands at the wrap), writes the new MSB into the idle spare block at once
+//! (no ring the DMA can reach before the wrap names it), and then writes
+//! each shared plane `1..` the moment the DMA has finished reading it for
+//! this pass — from then on nothing reads it until the next pass, which
+//! reads the other view. The three lowest planes are written without
+//! waiting (weights 1/127..4/127; a torn pass of them is invisible), which
+//! removes the only tight deadline. A poll spins for at most one pass and
+//! resumes on the next poll otherwise. So a frame goes out within one pass
+//! at every schedule with no window and no deferral; the one way to tear is
+//! the wrap arriving before the last copies did — the output task held off
+//! the core for longer than the rest of the pass — counted as
+//! `spare.torn_wrap` (one pass with a stale low plane). An earlier design
+//! waited for a window inside the MSB run and froze the panel when none
+//! opened (#620); that is why nothing here waits for room.
 
 use core::alloc::Layout as AllocLayout;
 use core::cell::Cell;
@@ -552,67 +555,77 @@ mod spare {
     use esp_hub75::framebuffer::FrameBuffer;
     use luxel_hub75::{Geometry, MAX_PLANES};
 
-    /// Margin the window check keeps beyond the measured copy cost.
-    ///
-    /// 1 ms, not the 300 µs it started at: the typical plane copy is only
-    /// ~30 µs (the staging frame is still cache-warm from the compose), so
-    /// what actually misses the plane-1 deadline is the output task being
-    /// held off the core between the window check and the copy — 0.15 % of
-    /// flushes at the stock schedule and 0.3 % at `lsb 14` on 2026-09-27
-    /// with 300 µs. The margin has to cover a preemption, not a copy.
-    pub const SLACK_NS: u64 = 1_000_000;
     /// A staged frame the DMA gave no position for within this long is
     /// abandoned rather than freezing the engine behind it — the same
     /// liveness floor as the output task's vsync hold (a dead DMA must not
     /// stop the world).
     pub const HOLD_US: u64 = 50_000;
-    /// A staged frame no window opened for within this long is copied
-    /// ANYWAY, window or not (Gitea #620). On the bench the window check
-    /// never re-opened once one preempted copy had been remembered, and the
-    /// panel froze on its last flushed frame for minutes while the engine
-    /// ran on — a static image is worse than one pass with mixed planes,
-    /// which is all a forced copy can cost (and `torn_*` counts it
-    /// honestly). Two passes at the stock 64x64 schedule.
-    pub const FORCE_US: u64 = 26_000;
+    /// How long one `flush` poll spins waiting for the DMA to finish reading
+    /// the next plane before handing the core back and resuming on the next
+    /// poll. Long enough to ride out a plane read at the fast schedules (a
+    /// 4 KB plane is ~100 µs at 20 MHz), short enough that the output task
+    /// never disappears for a whole 13 ms pass.
+    pub const SPIN_US: u64 = 400;
+    /// The lowest planes are copied WITHOUT waiting for the DMA to pass them
+    /// (Gitea #829): their weights are 1/127, 2/127 and 4/127, a torn pass
+    /// of them is invisible, and they are read last, right before the wrap,
+    /// where waiting would be the one tight deadline this design has left.
+    /// (Two was 7 % `torn_wrap` at an 861 Hz pass on the bench.)
+    pub const LOW_FREE: usize = 3;
 
-    /// The ring geometry the window check needs, computed once at boot.
+    /// The ring geometry the chase needs, computed once at boot (#829).
     #[derive(Clone, Copy)]
-    pub struct Window {
-        /// Descriptors in one ring.
-        pub descs: usize,
-        /// Descriptors from the ring head to the end of the MSB run: plane 0
-        /// emitted `2^(planes-1)` times — or the schedule's fewer repeats
-        /// when the low planes are truncated (Gitea #460), which shrinks the
-        /// window along with the pass.
-        pub msb_descs: usize,
+    pub struct Ring {
+        /// Per plane (0 = MSB), the descriptor index just past the plane's
+        /// last descriptor: once the DMA is at or beyond it, that plane has
+        /// been read for this pass and can be rewritten without tearing.
+        pub ends: [usize; MAX_PLANES],
         pub planes: usize,
     }
 
-    impl Window {
+    impl Ring {
         pub fn new(g: Geometry, s: &luxel_hub75::Schedule) -> Self {
-            let chunk = esp_hub75::max_dma_chunk_size();
             Self {
-                descs: s.descriptors(g.plane_bytes(), chunk),
-                msb_descs: s.msb_descriptors(g.plane_bytes(), chunk),
+                ends: s.plane_end_descs(g.plane_bytes(), esp_hub75::max_dma_chunk_size()),
                 planes: g.planes,
             }
         }
 
-        /// Is there room in this pass for the copy? The arithmetic lives in
-        /// `luxel_hub75::spare_window_fits`, where the host tests it against
-        /// this board's ring geometry.
-        pub fn fits(&self, idx: usize, eof_pending: bool, nominal_us: u32, plane_us: u32) -> bool {
-            luxel_hub75::spare_window_fits(
-                idx,
-                eof_pending,
-                nominal_us,
-                plane_us,
-                self.descs,
-                self.msb_descs,
-                self.planes,
-                SLACK_NS,
-            )
+        pub const fn empty() -> Self {
+            Self { ends: [0; MAX_PLANES], planes: 0 }
         }
+
+        /// Has the DMA, at descriptor `idx` of this pass, finished reading
+        /// plane `p`?
+        pub fn consumed(&self, p: usize, idx: usize) -> bool {
+            idx >= self.ends[p]
+        }
+
+        /// Is descriptor `idx` still inside the MSB run — the first and
+        /// longest stretch of the pass, where a chase has the most room?
+        pub fn in_msb_run(&self, idx: usize) -> bool {
+            idx < self.ends[0]
+        }
+
+        /// Planes copied without waiting: the last [`LOW_FREE`], but never
+        /// plane 1 (the first read after the MSB run is the tear you would
+        /// see).
+        pub fn free_from(&self) -> usize {
+            self.planes.saturating_sub(LOW_FREE).max(2)
+        }
+    }
+
+    /// A flush in progress across polls: the flip is armed on `ring`, planes
+    /// `1..next` are already copied, `next..` are waiting for the beam.
+    /// `dst` is the plane table of the view the flip was armed with — planes
+    /// `1..` are the memory both views share.
+    #[derive(Clone, Copy)]
+    pub struct Chase {
+        pub ring: usize,
+        pub next: usize,
+        pub t0: esp_hal::time::Instant,
+        pub worst_us: u32,
+        pub dst: [(*mut u8, usize); MAX_PLANES],
     }
 
     /// Per-plane copy cost assumed until measured: 16 B/us, well under what
@@ -893,12 +906,17 @@ pub struct Hub75Output {
     /// When that frame was composed — the liveness floor's clock.
     #[cfg(feature = "hub75-spare-plane")]
     staged_at: esp_hal::time::Instant,
-    /// Slowest single-plane copy seen, microseconds; sizes the window check.
+    /// Typical single-plane copy, microseconds (an EWMA) — for the record;
+    /// nothing is sized from it since the chase (#829).
     #[cfg(feature = "hub75-spare-plane")]
     plane_us: u32,
-    /// The ring geometry the window check is against.
+    /// The ring geometry the chase follows.
     #[cfg(feature = "hub75-spare-plane")]
-    window: spare::Window,
+    ring: spare::Ring,
+    /// A flush that has armed its flip and is still copying planes behind
+    /// the beam, resumed by the next poll.
+    #[cfg(feature = "hub75-spare-plane")]
+    chase: Option<spare::Chase>,
     /// Panel rescan count when the last frame was handed to the DMA, for
     /// `pass_per_frame_max` (Gitea #395).
     last_shown_rescan: u32,
@@ -985,7 +1003,9 @@ impl Hub75Output {
             #[cfg(feature = "hub75-spare-plane")]
             plane_us: 0,
             #[cfg(feature = "hub75-spare-plane")]
-            window: spare::Window { descs: 0, msb_descs: 0, planes: 0 },
+            ring: spare::Ring::empty(),
+            #[cfg(feature = "hub75-spare-plane")]
+            chase: None,
         }
     }
 
@@ -1264,7 +1284,9 @@ impl Hub75Output {
                     #[cfg(feature = "hub75-spare-plane")]
                     plane_us: spare::plane_us_guess(g),
                     #[cfg(feature = "hub75-spare-plane")]
-                    window: spare::Window::new(g, &s),
+                    ring: spare::Ring::new(g, &s),
+                    #[cfg(feature = "hub75-spare-plane")]
+                    chase: None,
                 })
             }
             Err(e) => {
@@ -1566,122 +1588,157 @@ impl OutputDriver for Hub75Output {
             self.staged = false;
             return true;
         };
-        // How long this frame has waited. Past FORCE_US it goes out on the
-        // next poll whatever the window says (#620); past HOLD_US with no DMA
-        // position at all (a dead DMA) it is dropped — never freeze the
-        // engine behind it.
-        let waited = self.staged_at.elapsed().as_micros();
-        let forced = waited >= spare::FORCE_US;
-        // The previous flip must have landed: only then is the DMA on the
-        // other ring and the displaced view's MSB block provably idle.
-        let back = match self.pending.take() {
-            Some(swap) => {
-                if !swap.is_done() {
-                    self.pending = Some(swap);
-                    return false;
-                }
-                match swap.wait() {
-                    Ok(v) => v,
-                    Err((e, v)) => {
-                        println!("hub75: swap error: {:?}", e);
-                        v
-                    }
-                }
-            }
-            None => match self.back.take() {
-                Some(v) => v,
-                None => {
-                    self.staged = false;
-                    return true;
-                }
-            },
-        };
-        // Is the DMA inside the MSB run of this pass, with room?
-        let Some((ring, idx, eof_pending)) = hub75.dma_position() else {
-            self.back = Some(back);
-            if waited >= spare::HOLD_US {
-                self.staged = false;
-                shared::SPARE_ABANDONED.fetch_add(1, Ordering::Relaxed);
-                return true;
-            }
-            shared::SPARE_DEFERRED.fetch_add(1, Ordering::Relaxed);
-            return false;
-        };
-        let nominal_us = hub75.pass_stats().3;
-        // The window check runs on the TYPICAL plane copy (an EWMA), not the
-        // worst ever seen: one copy preempted by WiFi or the web server
-        // (2,029 µs against 526 typical on the bench) must not close the
-        // window for good. A pass without room defers; a frame that has
-        // waited FORCE_US goes anyway.
-        if !forced && !self.window.fits(idx, eof_pending, nominal_us, self.plane_us) {
-            self.back = Some(back);
-            shared::SPARE_DEFERRED.fetch_add(1, Ordering::Relaxed);
-            return false;
-        }
-        if forced {
-            shared::SPARE_FORCED.fetch_add(1, Ordering::Relaxed);
-        }
         let Some(staging) = self.staging.as_deref() else {
             self.staged = false;
             return true;
         };
-        // Destinations: planes 1.. are the live buffer's own (both views
-        // name the same memory), plane 0 is the idle spare block.
-        let planes = back.plane_count();
-        let dst = back.planes();
-        let msb_descs = self.window.msb_descs;
-        // Arm the flip FIRST. It lands at the wrap — the patch's single tail
-        // store, taken while the DMA is provably short of the tail — so the
-        // next pass reads the other view whatever happens below. Arming after
-        // the copy could only make things worse: the shared planes would
-        // already be new against the old MSB.
-        note_handoff(&mut self.last_shown_rescan, &mut self.next_seq, hub75);
-        let swap = hub75.swap(back);
-        let t0 = esp_hal::time::Instant::now();
-        let mut worst: u32 = 0;
-        for (p, &(d, len)) in dst.iter().enumerate().take(planes).skip(1) {
-            let (src, slen) = staging.plane_ptr_len(p);
-            debug_assert_eq!(len, slen);
-            let t = esp_hal::time::Instant::now();
-            // SAFETY: both spans are `len` bytes, live, and disjoint — the
-            // staging buffer is never a DMA source and the live plane is idle
-            // for the rest of this pass (window check above).
-            unsafe { core::ptr::copy_nonoverlapping(src, d, len) };
-            worst = worst.max(t.elapsed().as_micros() as u32);
-            if p == 1 {
-                // The tight deadline: plane 1 is the first thing the DMA reads
-                // after the MSB run. Still in the run on the same ring?
-                let ok = hub75.dma_position().is_some_and(|(r, i, _)| r == ring && i < msb_descs);
-                if !ok {
-                    shared::SPARE_TORN_P1.fetch_add(1, Ordering::Relaxed);
+        // ---- Start a chase, or resume the one in flight (#829). ----
+        //
+        // The chase follows the beam instead of waiting for a window: the
+        // flip is armed at once (it lands at the wrap — the atomic-swap
+        // patch's single tail store), the spare MSB block is written at once
+        // (no ring the DMA can reach before the wrap names it), and every
+        // other plane is written the moment the DMA has finished reading it
+        // for this pass — from then on nothing reads it again until the next
+        // pass, which reads the other view. A frame therefore goes out
+        // within one pass at every schedule, with no deferral, and the only
+        // way to tear is the wrap arriving before the copies did.
+        let chase = match self.chase {
+            Some(c) => c,
+            None => {
+                // The previous flip must have landed: only then is the DMA on
+                // the other ring and the displaced view's MSB block idle.
+                let back = match self.pending.take() {
+                    Some(swap) => {
+                        if !swap.is_done() {
+                            self.pending = Some(swap);
+                            return false;
+                        }
+                        match swap.wait() {
+                            Ok(v) => v,
+                            Err((e, v)) => {
+                                println!("hub75: swap error: {:?}", e);
+                                v
+                            }
+                        }
+                    }
+                    None => match self.back.take() {
+                        Some(v) => v,
+                        None => {
+                            self.staged = false;
+                            return true;
+                        }
+                    },
+                };
+                let Some((ring, idx, eof)) = hub75.dma_position() else {
+                    self.back = Some(back);
+                    if self.staged_at.elapsed().as_micros() >= spare::HOLD_US {
+                        self.staged = false;
+                        shared::SPARE_ABANDONED.fetch_add(1, Ordering::Relaxed);
+                        return true;
+                    }
+                    shared::SPARE_DEFERRED.fetch_add(1, Ordering::Relaxed);
+                    return false;
+                };
+                // Start inside the MSB run, i.e. near the top of a pass, so
+                // the whole pass is available to the chase; past it, the
+                // next poll (250 µs) finds the next pass soon enough. An
+                // unserviced EOF means the position is from the instant of a
+                // wrap — re-poll rather than guess which ring.
+                if eof || !self.ring.in_msb_run(idx) {
+                    self.back = Some(back);
+                    shared::SPARE_DEFERRED.fetch_add(1, Ordering::Relaxed);
+                    return false;
+                }
+                let dst = back.planes();
+                note_handoff(&mut self.last_shown_rescan, &mut self.next_seq, hub75);
+                let swap = hub75.swap(back);
+                // The spare MSB first: idle memory until the flip lands.
+                let t = esp_hal::time::Instant::now();
+                let (src, slen) = staging.plane_ptr_len(0);
+                let (d, len) = dst[0];
+                debug_assert_eq!(len, slen);
+                // SAFETY: both spans are `len` bytes, live, and disjoint —
+                // the staging buffer is never a DMA source and the spare
+                // block is in neither ring the DMA can reach before the flip.
+                unsafe { core::ptr::copy_nonoverlapping(src, d, len) };
+                let c = spare::Chase {
+                    ring,
+                    next: 1,
+                    t0: t,
+                    worst_us: t.elapsed().as_micros() as u32,
+                    dst,
+                };
+                self.pending = Some(swap);
+                self.chase = Some(c);
+                c
+            }
+        };
+        let dst = chase.dst;
+        let planes = self.ring.planes;
+        let free_from = self.ring.free_from();
+        let mut c = chase;
+        // Spin budget for this poll: at least SPIN_US, and up to one pass —
+        // the polls come about one pass apart, so a chase that hands the
+        // core back mid-pass at a fast schedule would find the wrap gone by
+        // when it resumes. One pass of the output task per frame is what the
+        // two-buffer swap already spends waiting for the flip to land.
+        let spin_budget = u64::from(hub75.pass_stats().3).max(spare::SPIN_US);
+        let spin_from = esp_hal::time::Instant::now();
+        let mut torn = false;
+        while c.next < planes {
+            let p = c.next;
+            if p < free_from {
+                // Wait for the beam to pass plane `p`, briefly; hand the core
+                // back if it takes longer and resume on the next poll.
+                loop {
+                    match hub75.dma_position() {
+                        Some((r, idx, _)) if r == c.ring => {
+                            if self.ring.consumed(p, idx) {
+                                break;
+                            }
+                        }
+                        // The wrap came first (or the position is gone):
+                        // the new pass is already reading whatever is in
+                        // the planes not copied yet. Finish now; it tears
+                        // for this one pass and is counted.
+                        _ => {
+                            torn = true;
+                            break;
+                        }
+                    }
+                    if spin_from.elapsed().as_micros() >= spin_budget {
+                        self.chase = Some(c);
+                        shared::SPARE_DEFERRED.fetch_add(1, Ordering::Relaxed);
+                        return false;
+                    }
                 }
             }
-        }
-        {
-            let (src, slen) = staging.plane_ptr_len(0);
-            let (d, len) = dst[0];
+            let (src, slen) = staging.plane_ptr_len(p);
+            let (d, len) = dst[p];
             debug_assert_eq!(len, slen);
             let t = esp_hal::time::Instant::now();
-            // SAFETY: as above; the spare block is in neither descriptor
-            // ring the DMA can reach before the flip lands.
+            // SAFETY: as above; the live plane has been read for this pass
+            // (or is one of the two lowest, whose torn pass is invisible).
             unsafe { core::ptr::copy_nonoverlapping(src, d, len) };
-            worst = worst.max(t.elapsed().as_micros() as u32);
+            c.worst_us = c.worst_us.max(t.elapsed().as_micros() as u32);
+            c.next += 1;
         }
-        // The last deadline: the spare MSB must be in place before the wrap
-        // the flip lands on. A ring change here means it was not.
-        if hub75.dma_position().is_none_or(|(r, _, _)| r != ring) {
+        // Everything is in place. Was it before the wrap? A ring change
+        // (or a lost position) means the new pass started on stale planes.
+        if torn || hub75.dma_position().is_none_or(|(r, _, _)| r != c.ring) {
             shared::SPARE_TORN_WRAP.fetch_add(1, Ordering::Relaxed);
         }
-        let total = t0.elapsed().as_micros() as u32;
+        let total = c.t0.elapsed().as_micros() as u32;
         // Typical single-plane copy: a fast EWMA (1/4 weight) of the slowest
         // plane in each flush. The worst ever is kept for the record only.
-        self.plane_us = (self.plane_us * 3 + worst) / 4;
+        self.plane_us = (self.plane_us * 3 + c.worst_us) / 4;
         shared::SPARE_PLANE_US.store(self.plane_us, Ordering::Relaxed);
-        shared::SPARE_PLANE_US_MAX.fetch_max(worst, Ordering::Relaxed);
+        shared::SPARE_PLANE_US_MAX.fetch_max(c.worst_us, Ordering::Relaxed);
         shared::SPARE_COPY_US.store(total, Ordering::Relaxed);
         shared::SPARE_COPY_US_MAX.fetch_max(total, Ordering::Relaxed);
         shared::SPARE_FLUSHES.fetch_add(1, Ordering::Relaxed);
-        self.pending = Some(swap);
+        self.chase = None;
         self.staged = false;
         true
     }

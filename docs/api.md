@@ -266,21 +266,25 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   call landed because the engine was provably still on the old ring.
 - `pass.spare` — present only on a `hub75-spare-plane` build (Gitea #610):
   the spare-plane swap's own forensics. `flushes` counts staged frames copied
-  into the live framebuffer; `deferred` counts polls that found the pass's
-  MSB run without room for the copy (the frame goes out one pass later — a
-  rate, not a fault); `forced` counts staged frames copied WITHOUT a window
-  because they had waited 26 ms (Gitea #620: on the bench the window never
-  re-opened once one preempted copy had been remembered, and the panel sat
-  on its last frame for minutes — a forced copy risks one pass of mixed
-  planes, which `torn_*` then counts honestly; a static image is worse);
-  `abandoned` counts staged frames dropped after 50 ms with no DMA position
-  at all (a dead DMA; the engine never freezes behind it). **`torn_p1` and
-  `torn_wrap` must be 0** on a healthy run: they count copies that overran a
-  deadline — plane 1 not in place before the DMA left the MSB run, or the
-  spare MSB not in place before the wrap — which is the one way this mode
-  can show a mixed frame. `copy_us`/`copy_us_max` are the whole copy's cost,
-  `plane_us` the TYPICAL single-plane copy (an EWMA, which is what sizes the
-  window check) and `plane_us_max` the slowest ever seen.
+  into the live framebuffer. Since Gitea #829 the flush CHASES the beam:
+  the flip is armed, the spare MSB written at once, and every other plane
+  written the moment the DMA has finished reading it for the current pass —
+  so a frame goes out within one pass at every schedule and nothing waits
+  for a window. `deferred` counts polls that were still waiting — for the
+  top of a pass to start the chase in, or for the beam to pass the next
+  plane (a rate, ~one per flush, not a fault); `forced` is kept for
+  compatibility and reads 0; `abandoned` counts staged frames dropped after
+  50 ms with no DMA position at all (a dead DMA; the engine never freezes
+  behind it). **`torn_wrap` is the honesty counter**: the wrap arrived
+  before the last copies did (the output task pre-empted for longer than
+  the rest of the pass), so the next pass showed one or more stale low
+  planes for ONE pass — 1.5 % of frames at an 861 Hz pass on the bench, 0
+  at ×4 and ×1 within the sampling. The three lowest planes are written
+  without waiting by design (weights 1/127..4/127, invisible when torn).
+  `torn_p1` is legacy and reads 0. `copy_us`/`copy_us_max` are the whole
+  chase's cost (including the waits), `plane_us` the typical single-plane
+  copy (an EWMA) and `plane_us_max` the slowest ever seen — a value far
+  above `copy_us` is a pre-emption, not a copy.
 - `rescan_hz` — how many times a second the HUB75 panel is really redrawn
   from the framebuffer, read from the driver's own BCM frame counter. `0` on
   every board without a panel. This is the panel's clock **and** the render

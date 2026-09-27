@@ -3700,6 +3700,23 @@ at the extreme steps (MSB run under 1 ms) every frame is forced and tears,
 which the boot should refuse (or cap `t`) before the feature becomes a
 default. Still off by default.
 
+**And then the window went away: the flush chases the beam (Gitea #829).**
+Jeremy's eye on the build above: "×4 is very close" but with rare freezes
+after a pattern change and a judder at 287 Hz, and at an 861 Hz step the
+frame-rate-scan pattern fell to 35 fps — every frame was waiting the 26 ms
+force timeout because a 0.4 ms MSB run never had room. The window was the
+problem, not the copy. Now the flip is armed at once, the spare MSB written
+at once, and each remaining plane written the moment the DMA has finished
+reading it for this pass (`Schedule::plane_end_descs` gives the
+per-plane consumption points; the three lowest planes are written without
+waiting, their torn pass being invisible), the chase starting at the top
+of a pass and spinning at most one pass per poll. On metal at Jeremy's
+861 Hz / blank 7 / `lsb 2`: **271 fps** (from 35), 270 flushes/s, 0 forced,
+0 abandoned, `torn_wrap` 1.5 % of frames (was 7.5 % before the top-of-pass
+start and the third free plane) — each a single pass with a stale low
+plane after a WiFi pre-emption longer than the 1.16 ms pass. `heap_free`
+78.7 KB. The feature stays off until Jeremy has judged ×4 motion on it.
+
 ## Vsync: the panel is the clock (2026-09-07, Gitea #387, #378)
 
 With the swap made atomic (above), the panel still showed fewer frames than
