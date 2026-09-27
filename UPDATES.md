@@ -1,5 +1,17 @@
 # Update log
 
+## 2026-09-27 — on metal: Aurora 2D is 49 ms bare, a scene is the sum of its layers + ~4 ms, and `simplex3` is 1,260 cycles a call (#812 closed)
+
+The panel came back and the #812 analysis from earlier today was checked
+against it on current master: scene "Test" 72.0 ms = Aurora 2D 49.2 +
+Breakout 18.9 + ~3.9 ms; Aurora interpreted 103 ms; Snake v2 1.8 ms either
+way; `_Fairies` (the 2,316 B "55 fps" pattern) 17.2 ms. Ablation of Aurora
+on the panel: 4096 `simplex3` calls = 21.5 ms (1,260 cycles each, JIT on or
+off), the JIT-compiled cell loop 27.1 ms (1,590 cycles per pixel — the
+four generic builtin calls, so #841 is worth at least as much as the noise
+kernel #840). Tables in docs/boards.md "Where a scene's frame goes,
+measured". Device restored byte-identical and released.
+
 ## 2026-09-27 — the layout self-heal runs at WiFi-up and can always persist; the 2x1 brick is recovered (#822, #838)
 
 The Seengreat spent the day bricked on a stored `matrix 64 64 2 1`. What the

@@ -1989,6 +1989,51 @@ interpreter (softly — it is logged, never refused); and a transition whose
 two stacks together exceed `caps.layers` is a hard cut rather than a
 crossfade.
 
+### Where a scene's frame goes, measured (2026-09-27, Gitea #812)
+
+The panel's two stored scenes read 55 and 70 ms, and #812 first pinned the
+difference from a "55 fps Aurora" on the second layer. That 55 fps was the
+boot pattern (`_Fairies`, 2,316 B of native code); Aurora 2D is 5,612 B and
+~50 ms bare. Measured on current master (`#847` build on both slots),
+4096 px, brightness 31, `/api/status` medians over 5–8 one-second samples;
+the pushed variants through `tools/patbench.mjs --pixels 4096`:
+
+| what is running | native `vm_us` | interp `vm_us` |
+|---|---:|---:|
+| scene "Test" (Aurora 2D + Breakout 2D, keyed black) | **71,967** | — |
+| Aurora 2D bare | **49,186** | 103,283 |
+| Breakout 2D bare | 18,899 | 64,786 |
+| Infinite Snake v2 bare (`fillCanvas` block expand) | 1,784 | 1,854 |
+| `_Fairies` bare | 17,155 | — |
+| Rainbow bare | 7,265 | — |
+
+49.2 + 18.9 = 68.1 against 72.0: **a second full-layout 2D layer costs its
+own engine frame plus ~3.9 ms** (its frame buffer in PSRAM, the keyed
+composite, the stage). The compositor is not where a scene's time goes; the
+base pattern is.
+
+Inside Aurora 2D, by ablation of `library/aurora-2d.js` on the same grid:
+
+| variant | native | interp |
+|---|---:|---:|
+| full | 49,209 | 103,283 |
+| `fillNoise3D` rows removed (the per-cell loop alone) | 27,095 | 80,409 |
+| per-cell loop removed (`fillNoise3D` rows alone) | 22,497 | 23,726 |
+| one `fillNoise3D` over a 64×64 array, nothing else | 21,535 | 21,537 |
+| empty `renderFrame` | 91 | — |
+
+So one `simplex3` call is **5.26 µs ≈ 1,260 cycles**, JIT-independent — 44 %
+of the frame — and the JIT-compiled cell loop (~12 ops, `saturate` ×2,
+`paint`, `setPixel`, two array loads) is **6.6 µs/px ≈ 1,590 cycles per
+pixel** — 55 %, and only 2.97× better than interpreted, because the four
+builtins go through the generic table wrapper. The kernel is all-`i64`
+fixed point (in this image `noise::simplex3` is 1,077 instructions, 96
+multiply instructions, 76 spill stores, flash-resident). The follow-ups:
+#840 (32-bit noise kernel, IRAM, lattice-coherent fill), #841 (direct-tier
+`saturate`/`paint`/`setPixel`/`ArrNum` load), #842 (non-base layer engines
+on core 0 → a scene costs max, not sum), #843 (per-layer render scale),
+#793 (per-layer fps cap).
+
 ## Big-flash and PSRAM modules (the Seengreat board)
 
 The Seengreat board carries an ESP32-S3-WROOM-1-**N16R8**: 16 MB of flash
