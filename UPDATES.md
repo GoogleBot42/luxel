@@ -1,5 +1,80 @@
 # Update log
 
+## 2026-09-27 — import an image as a sprite, in the console and in `luxel` (#784)
+
+Jeremy, 2026-09-26: *"the ability to import/convert images to sprites."* A
+sprite could only be drawn texel by texel. Now a PNG, GIF, JPEG, WebP or BMP
+becomes an `LXSP` record — in the browser and from the CLI, through the same
+pipeline written twice and pinned together.
+
+**Web.** `Import image…` beside `+ New sprite` on the Sprites tab and in the
+sprite editor's `⋯` menu, and **a file dragged anywhere onto either screen is
+the same gesture**. Decoding is `ImageDecoder` where it exists (Chromium: every
+frame of an animated GIF/WebP, with their delays) and `createImageBitmap`
+otherwise, and the dialog SAYS when it could only read the first frame rather
+than importing one silently. The fit step previews the record itself — the same
+`SpriteThumb` the tiles use, animating at the derived rate — beside seven
+knobs: size (long edge at 64, or the layout's panel when smaller, or the
+image's own size when it already fits), placement (fit / stretch / crop),
+resampling (nearest, or a true-overlap area average), the palette ceiling, the
+alpha cut, keep-every-Nth-frame, and dithering (off — it looks worse on LEDs).
+At or under the palette ceiling every colour survives exactly, so importing
+pixel art is lossless; over it, a median cut.
+
+**The 16 KiB cap is never enforced by truncation.** The record's real length is
+on screen against it the whole time; over it, `Import` is disabled with the
+reason on `data-reason`, and `Fit under the cap` turns the two knobs — frames
+first, then colours, size only as a last resort — and says what it changed.
+Frames past the format's 255 are reported the same way. The result lands in the
+editor UNSAVED so it can be touched up before Save; the name comes from the
+file name. The other direction is `Export PNG sheet`: the frames in one row,
+transparency kept, `<Name>-<w>x<h>x<frames>.png`.
+
+**CLI.** `luxel sprite import <image> [-o out.lxsp]` with the same knobs as
+flags plus `--fit-cap`, and no `-o` prints what it would write. Decoding is the
+`image` crate, added to `luxel-cli` only with default features off (five
+codecs) — `luxel-core` is `no_std` and nothing on a device decodes an image.
+This is what #785's library generator will call.
+
+**One result, two implementations, pinned.** `web/src/lib/imageImport.ts` is
+pure (no DOM, no stores) and `crates/luxel-cli/src/spriteimport.rs` mirrors it
+function for function: rounding is always `floor(x + 0.5)` (Rust's `round` and
+JS's disagree on negatives), every sum is written in the same order, and every
+tie breaks by index. `web/tests/fixtures/` holds four images with their pixels
+as raw RGBA, their options, and the record both must produce;
+`web/tests/imageImport.test.mjs` feeds the sidecar to the TypeScript and
+`crates/luxel-cli/tests/spriteimport.rs` feeds the image itself, decoded by the
+`image` crate, to the Rust. A golden that passes on both sides also proves the
+two decoders agree about the fixture, and drifting one implementation turns
+exactly one suite red. `web/tools/gen-sprite-fixtures.mjs` regenerates them and
+carries its own minimal PNG and GIF encoders, so `web/` gains no image
+dependency.
+
+**Two bugs found on the way, both fixed here.**
+
+*The `sprite` note channel was set and rendered nowhere.* `note("sprite", …)`
+has carried #741's palette-cap refusal (`sprite: 255 colours max`) since that
+redesign and no screen ever drew it. The Sprites tab and the sprite editor now
+do — which is also where an unreadable file's refusal appears.
+
+*A `$:` that assigns `doc` from inside Svelte's update pass leaves every `$:`
+declared above it computed from the previous value — for good.* The editor's
+Record line read **82 B for an 8,220 B sprite**: the markup repainted (the
+fragment gets the dirty flag) but `bytes` never re-ran, and nothing reschedules
+the component because it is already dirty. Both adoption paths now `await
+tick()` before assigning, which puts the write after the flush where an
+ordinary invalidation schedules the next one. `maybeAdopt` had the same latent
+bug for a brand-new sprite.
+
+Verified in real chromium: a static PNG, an animated GIF (four frames, 10 fps
+from its delays), an oversize import that needs the cap knobs, and a text file
+— plus a real file-chooser click, a real drop, and the sheet export actually
+downloading. `e2e.mjs` grew 25 checks for it. Harness note that cost an hour:
+`uploadFile` must be given a REAL path — chromium keeps the string it is handed
+and a later read of `tools/../tests/fixtures/x.png` fails with
+`NotReadableError: The requested file could not be read`, which reads exactly
+like a decoder bug.
+
 ## 2026-09-27 — the colour-ramp editor's four data-loss defects (#787 step 1)
 
 The #787 bug inventory found 21 defects in `GradientEditor.svelte`, four of

@@ -296,6 +296,62 @@ fixed 384² whatever the pixel count, so the cost does not grow with the
 layout. 0.6 ms of a 16.7 ms budget, and the loop held ~60 fps in every
 combination — the look is not what #781 is about.
 
+## Sprites: import an image ✅ (2026-09-27, Gitea #784)
+
+Jeremy, 2026-09-26: *"the ability to import/convert images to sprites."* A
+sprite could only be drawn texel by texel before this.
+
+**`Import image…`** sits beside `+ New sprite` on the Sprites tab and in the
+sprite editor's `⋯` menu, and **dragging an image file anywhere onto either
+screen is the same gesture** (the whole panel is the drop target; only a file
+drag lights it up). PNG, GIF, JPEG, WebP and BMP — whatever the browser
+decodes. Everything is client-side: the console and the playground run the
+identical pipeline and nothing is uploaded anywhere.
+
+An **animated GIF or WebP becomes the record's frames**, read through
+`ImageDecoder` (WebCodecs — Chromium has it), with a static first-frame
+fallback where it is missing, which the dialog says out loud rather than
+silently importing one frame of an animation. Frame delays become the record's
+`fps`, capped at 30; a delay of 0 or 1 hundredth is taken as 100 ms, as every
+viewer takes it.
+
+The fit dialog is a live preview of **the record itself** — the same
+`SpriteThumb` the tiles use, animating at the derived rate — beside the knobs:
+
+| knob | what it does |
+|---|---|
+| Size | target texels, defaulting to the long edge at 64 — or the current layout's panel size when that is smaller, or the image's own size when it already fits |
+| Placement | `Fit` letterboxes (transparent margins), `Stretch` fills the box exactly, `Crop` covers it and cuts the overflow |
+| Resample | `Nearest` is exact for pixel art, `Area average` averages every source pixel a texel covers (true overlap weights). The default guesses from the source: anything with a long edge over 64 is treated as a photo |
+| Colours | the palette ceiling, 1–255. At or under it every colour survives EXACTLY, which is what makes importing pixel art lossless; over it, a median cut |
+| Clear below | the alpha at which a texel becomes index 0 (default 128) |
+| Keep every | one source frame in N — the frame knob |
+| Dither | Floyd–Steinberg, **off by default**: it looks worse on LEDs |
+
+**The 16 KiB cap is never enforced by truncation** (#784 item 4). The record's
+real length is on screen against the cap the whole time; over it, the byte line
+turns red, `Import` is disabled with the reason on `data-reason` (§5.7), and
+**`Fit under the cap`** turns the two knobs — more `Keep every` first (frames
+are what a record spends its bytes on), then fewer colours, and the target size
+only as a last resort — saying what it changed. Frames past the format's 255
+are reported the same way, with the knob that fixes them named.
+
+The result **lands in the sprite editor unsaved**, never straight in the store,
+so it can be touched up before Save; the name comes from the file name. A file
+the browser cannot decode is refused in words on the `sprite` note channel —
+which both screens now render, so #741's palette-cap sentence
+(`sprite: 255 colours max`) is visible for the first time too.
+
+The other direction is the editor's **`Export PNG sheet`**: the frames in one
+row, left to right, transparency kept, named `<Name>-<w>x<h>x<frames>.png` — the
+strip layout every tile editor reads, so a sprite round-trips through one.
+
+Where the code is: `lib/imageImport.ts` is the whole conversion and is PURE
+(no DOM, no stores) — `lib/imageDecode.ts` holds the browser half, and
+`components/sprite/{SpriteImport,ImportDialog}.svelte` are thin. The same
+pipeline exists in Rust as `luxel sprite import` (docs/tools.md), and the two
+are pinned to checked-in goldens so they cannot drift.
+
 ## Status-bar frame rate ✅ (Gitea #381)
 
 The counter at the right of the header (`data-role="fps"`) shows **the device's

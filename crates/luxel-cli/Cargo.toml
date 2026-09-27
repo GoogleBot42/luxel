@@ -25,6 +25,11 @@ luxel-core = { path = "../luxel-core" }
 # the same code — the mirror must not carry a second copy of the formula.
 luxel-hub75 = { path = "../luxel-hub75" }
 rumqttc = "0.24"
+# `luxel sprite import` decodes PNG/GIF/JPEG/WebP/BMP (Gitea #784). Host-only
+# and CLI-only: luxel-core must stay `no_std`, and the firmware never decodes
+# an image. Default features are OFF so the tree is the five codecs the web
+# importer accepts and nothing else (no rayon, no TIFF/EXR/DDS/...).
+image = { version = "0.25", default-features = false, features = ["png", "gif", "jpeg", "webp", "bmp"] }
 serde_json = "1"
 
 [dev-dependencies]

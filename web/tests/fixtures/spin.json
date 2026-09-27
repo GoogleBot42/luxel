@@ -1,0 +1,24 @@
+{
+  "image": "spin.gif",
+  "w": 8,
+  "h": 8,
+  "frames": 4,
+  "delaysMs": [
+    100,
+    100,
+    100,
+    100
+  ],
+  "options": {
+    "name": "spin",
+    "w": 8,
+    "h": 8,
+    "fit": "fit",
+    "resample": "nearest",
+    "colors": 255,
+    "alphaThreshold": 128,
+    "dither": false,
+    "keepEvery": 1,
+    "fpsOverride": null
+  }
+}

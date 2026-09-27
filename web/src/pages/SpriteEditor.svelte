@@ -27,7 +27,7 @@
   // `data-role="sprite-editor-view"` on its own `<main>`, because all of them
   // are mounted at once and an unscoped selector would resolve to the wrong
   // one (.claude/rules/web.md).
-  import { createEventDispatcher, onDestroy, onMount } from "svelte";
+  import { createEventDispatcher, onDestroy, onMount, tick } from "svelte";
   import "../components/scene/scene.css";
   import "../components/editor-frame.css";
   import AsyncButton from "../components/AsyncButton.svelte";
@@ -36,6 +36,7 @@
   import SceneSwatch from "../components/scene/SceneSwatch.svelte";
   import FrameStrip from "../components/sprite/FrameStrip.svelte";
   import SpriteCanvas from "../components/sprite/SpriteCanvas.svelte";
+  import SpriteImport from "../components/sprite/SpriteImport.svelte";
   import SpriteThumb from "../components/sprite/SpriteThumb.svelte";
   import {
     addFrame,
@@ -61,19 +62,23 @@
     type Sprite,
     type SpriteTool,
   } from "../lib/sprite";
+  import { downloadSpriteSheet } from "../lib/spriteExport";
   import { confirm } from "../stores/dialog";
   import { isPlayground } from "../stores/device";
   import { layout } from "../stores/geometry";
-  import { note } from "../stores/notify";
+  import { note, notes } from "../stores/notify";
   import {
     deleteSprite,
     duplicateSprite,
     loadSprite,
+    pendingSprite,
     refreshSprites,
     saveSprite,
     spriteMaxBytes,
     spriteSaving,
     sprites,
+    stageSprite,
+    takePendingSprite,
     usedBy,
   } from "../stores/sprites";
   import { scenes } from "../stores/scenes";
@@ -133,9 +138,50 @@
     if (id !== "" && !list.some((s) => s.id === id)) return;
     loadedId = id;
     const found = id === "" ? null : await loadSprite(id);
+    // OUT of the reactive pass before `doc` is assigned. A `$:` that writes a
+    // variable other `$:` blocks DECLARED ABOVE it read leaves those computed
+    // from the old value for good: Svelte runs the update function once per
+    // flush, and an invalidation raised while it is running repaints the
+    // markup (the fragment gets the dirty flag) without re-running the block.
+    // That is how the Record line read 82 B for an 8,220 B sprite — `bytes` is
+    // declared at the top of this file and `doc` is assigned from here
+    // (Gitea #784). `await tick()` lands the assignment after the flush, where
+    // an ordinary invalidation schedules the next one.
+    await tick();
     docId = found ? id : "";
     doc = found ? clone(found) : newSprite(freshName(), 8, 8);
     savedWire = bytesKey(encodeSprite(doc));
+    frame = 0;
+    playing = false;
+    undoStack = [];
+    redoStack = [];
+    brush = usedColors(doc)[0]?.rgb ?? [232, 163, 61];
+  }
+
+  // ---- an imported image (Gitea #784) ----
+  //
+  // `Import image…` never writes to the store: it STAGES a record and routes
+  // here, and this adopts it as an unsaved document so it can be touched up
+  // before Save. Its own reactive block rather than a branch inside
+  // `maybeAdopt`, because the two are keyed differently: that one runs when
+  // the ROUTE changes, this one when a record is handed over — including when
+  // the route does not move at all (importing twice in a row).
+  //
+  // `maybeAdopt` is declared above, so in a flush where both fire it runs
+  // first and this overwrites its blank document — which is the intent.
+  $: if (active && $pendingSprite !== null) void adoptPending();
+
+  async function adoptPending(): Promise<void> {
+    // the slot is emptied SYNCHRONOUSLY, so the reactive block above cannot
+    // start a second adoption while this one waits for the flush
+    const s = takePendingSprite();
+    if (s === null) return;
+    await tick(); // see `maybeAdopt`: never assign `doc` inside the update pass
+    loadedId = spriteId; // the route is settled; don't let `maybeAdopt` stomp this
+    docId = "";
+    doc = clone(s);
+    // an import is ALWAYS unsaved — that is the whole point of staging it
+    savedWire = "";
     frame = 0;
     playing = false;
     undoStack = [];
@@ -387,6 +433,61 @@
   let menuOpen = false;
   let moreBtn: HTMLElement | null = null;
 
+  // ---- import / export (Gitea #784) ----
+
+  /** The machinery only: the `⋯` item is a real menu item that closes the menu
+   *  on the same click, so it calls `pick()` rather than being this button. */
+  let importer: SpriteImport | undefined;
+  let dropping = false;
+
+  /** Replacing the document is destructive, so the question is asked BEFORE
+   *  the file chooser rather than after the fit dialog. */
+  async function startImport(): Promise<void> {
+    menuOpen = false;
+    if (dirty && !(await confirmReplace())) return;
+    importer?.pick();
+  }
+
+  async function confirmReplace(): Promise<boolean> {
+    return await confirm({
+      title: "Import over unsaved changes?",
+      body: `“${doc.name}” has changes that have not been saved. An import opens as a new, unsaved sprite.`,
+      confirmLabel: "Discard and import",
+      cancelLabel: "Keep editing",
+      danger: true,
+    });
+  }
+
+  async function onDrop(e: DragEvent): Promise<void> {
+    dropping = false;
+    const files = e.dataTransfer?.files ?? null;
+    if (files === null || files.length === 0) return;
+    if (dirty && !(await confirmReplace())) return;
+    await importer?.offerFiles(files);
+  }
+
+  /** Only a FILE drag lights the editor up. */
+  function hasFiles(e: DragEvent): boolean {
+    return [...(e.dataTransfer?.types ?? [])].includes("Files");
+  }
+
+  /** An imported record replaces the document through the SAME staging path
+   *  the Sprites tab uses — one route, whichever screen started it. */
+  function imported(s: Sprite): void {
+    stageSprite(s);
+    dispatch("open", "");
+  }
+
+  async function exportSheet(): Promise<void> {
+    menuOpen = false;
+    try {
+      const name = await downloadSpriteSheet(doc);
+      note("sprite", `saved ${name} — ${doc.frames} frame${doc.frames === 1 ? "" : "s"} side by side`, 6000);
+    } catch (e) {
+      note("sprite", `sprite: could not write the sheet: ${e instanceof Error ? e.message : String(e)}`, 8000);
+    }
+  }
+
   async function duplicate(): Promise<void> {
     menuOpen = false;
     if (docId === "") return;
@@ -503,11 +604,18 @@
 
 <svelte:window on:keydown={onKey} />
 
+<!-- svelte-ignore a11y-no-static-element-interactions -->
 <main
   class="editor-frame scenes sprite-editor"
   class:playground={$isPlayground}
+  class:dropping
   data-role="sprite-editor-view"
   hidden={!active}
+  on:dragover|preventDefault={(e) => {
+    if (hasFiles(e)) dropping = true;
+  }}
+  on:dragleave={() => (dropping = false)}
+  on:drop|preventDefault={(e) => void onDrop(e)}
 >
   <header class="editor-header" data-role="sprite-editor-header">
     <button class="btn quiet back" data-role="sprite-editor-back" on:click={() => void goBack()}>
@@ -563,6 +671,15 @@
         <button class="mi" data-role="sprite-duplicate" on:click={() => void duplicate()}
           >Duplicate</button
         >
+        <div class="sepr"></div>
+        <!-- Import / export (#784). Both act on the DOCUMENT, so they belong
+             with Duplicate rather than in the tool column. -->
+        <button class="mi" data-role="sprite-import-menu" on:click={() => void startImport()}
+          >Import image…</button
+        >
+        <button class="mi" data-role="sprite-export-sheet" on:click={() => void exportSheet()}
+          >Export PNG sheet</button
+        >
         {#if docId !== ""}
           <div class="sepr"></div>
           <button class="mi del" data-role="sprite-delete" on:click={() => void remove()}
@@ -577,6 +694,18 @@
          other editor stops it (#736 item 20). -->
     <span class="edhdr-rail statusonly"></span>
   </header>
+
+  <!-- The `sprite` note channel, rendered at last: the palette-cap refusal
+       (#741 item 14) has been set on it since that redesign and shown
+       nowhere, and #784's unreadable-file and sheet-saved lines speak through
+       the same channel. -->
+  {#if $notes.sprite}
+    <!-- a refusal says `sprite: …` and is red; anything else (a sheet saved)
+         is an ordinary dim line. ONE channel, two voices. -->
+    <p class="snote" class:bad={$notes.sprite.startsWith("sprite: ")} data-role="sprite-note">
+      {$notes.sprite}
+    </p>
+  {/if}
 
   <div class="scene3">
     <div class="lcol" data-role="sprite-tools">
@@ -780,11 +909,43 @@
       </div>
     </div>
   </div>
+
+  <!-- the importer's machinery: the hidden file input, the fit dialog and the
+       drop path. Its trigger lives in the `⋯` menu (#784). -->
+  <!-- its OWN `data-role`: the Sprites tab mounts a second importer and both
+       screens are in the DOM at once, so one shared role would make
+       `[data-role="sprite-import-file"]` ambiguous — and a harness uploading
+       into the hidden one looks exactly like a dialog that never opened. -->
+  <SpriteImport
+    bind:this={importer}
+    trigger={false}
+    dataRole="sprite-editor-import"
+    panel={{ w: rig.w, h: rig.h }}
+    maxBytes={$spriteMaxBytes}
+    on:import={(e) => imported(e.detail)}
+  />
 </main>
 
 <style>
   .sprite-editor :global(.scene3) {
     min-height: 0;
+  }
+
+  /* a file drag anywhere over the editor is the import gesture (#784) */
+  .sprite-editor.dropping {
+    box-shadow: inset 0 0 0 2px var(--accent);
+  }
+
+  .snote {
+    margin: 8px 12px 0;
+    color: var(--text-dim);
+    font-size: 12px;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+  }
+
+  .snote.bad {
+    color: var(--error);
   }
 
   /* FOUR big buttons, two up — icon, word and the key that picks it. 36px
