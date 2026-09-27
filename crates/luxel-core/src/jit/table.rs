@@ -269,6 +269,9 @@ direct_pure! {
     d_max(a, b) = a.max(b);
     d_mod(a, b) = a.mod_floor(b);
     d_clamp(a, lo, hi) = a.clamp(lo, hi);
+    // `saturate(x)` is `clamp(x, 0, 1)` — the `Saturate` arm of
+    // `Vm::builtin_hot` (Gitea #841). Two instructions on the S3.
+    d_saturate(a) = a.clamp(Fx::ZERO, Fx::ONE);
     d_mix(a, b, t) = a + (b - a) * t;
     d_wave(a) = Fx::from_raw((fmath::sin_turns(a).raw() + Fx::ONE.raw()) >> 1);
     d_triangle(a) = {
@@ -325,9 +328,61 @@ unsafe extern "C" fn d_rgb(ctx: *mut JitCtx, r: i32, g: i32, b: i32) -> i32 {
     ctx_fast(ctx, Builtin::Rgb, [r, g, b], 3)
 }
 
+/// The two brush-to-frame arms of the paint-per-cell `renderFrame` loop
+/// (Gitea #841). Neither is in `builtin_fast`, so unlike the five above
+/// they cannot reach their arm through `ctx_fast`; each calls the SAME
+/// function its interpreter arm calls, with the marshalling removed — the
+/// `Paint` arm of `Vm::builtin_hot` is `Vm::paint` plus the brightness
+/// default, and the `SetPixel` arm of `Vm::builtin_cold` is
+/// `bulk::set_pixel` on a one-element slice. Both return `Num(0)`
+/// (`Value::default()`), which as a raw word is 0.
+///
+/// `paint` takes the EFFECTIVE brightness like every direct fn takes its
+/// effective arguments; a one-argument `paint(x)` call site materialises
+/// `Fx::ONE` from [`direct_default`].
+unsafe extern "C" fn d_set_pixel(ctx: *mut JitCtx, i: i32) -> i32 {
+    let vm = &mut *(*ctx).vm;
+    crate::bulk::set_pixel(vm, &[Value::Num(Fx::from_raw(i))]);
+    0
+}
+unsafe extern "C" fn d_paint(ctx: *mut JitCtx, x: i32, b: i32) -> i32 {
+    let c = &mut *ctx;
+    let vm = &mut *c.vm;
+    let prog = &*c.prog;
+    vm.paint(prog, Fx::from_raw(x), Fx::from_raw(b));
+    0
+}
+
+/// The raw word a call site with ONE argument fewer than the direct
+/// signature materialises for the missing LAST argument, when the builtin
+/// has such a default — docs/jit-design.md §4's "a direct fn takes the
+/// effective arguments, so a one-argument `square(t)` call site must
+/// materialise the 0.5 duty itself". Until Gitea #841 the emitter carried
+/// no such table and a short call fell back to `generic`; this is that
+/// table, and it is deliberately tiny: an entry here restates the
+/// `argc >= n` test of ONE interpreter arm, and `tests.rs` sweeps each
+/// against the generic wrapper at the short arity.
+///
+/// `None` for every builtin whose direct arity is exact (or that has no
+/// direct form).
+pub const fn direct_default(id: u16) -> Option<i32> {
+    let i = id as usize;
+    if i >= BUILTINS.len() {
+        return None;
+    }
+    match BUILTINS[i].kind {
+        // `square(t)`: duty 0.5 (`builtin_fast`'s `argc >= 2` test).
+        BKind::Impl(Builtin::Square) => Some(1 << 15),
+        // `paint(x)`: brightness 1 (`builtin_hot`'s `argc >= 2` test).
+        BKind::Impl(Builtin::Paint) => Some(1 << 16),
+        _ => None,
+    }
+}
+
 /// The tier-1 set of docs/jit-design.md §3.5, keyed on the BUILTIN rather
 /// than on the name so the aliases come along — `fract` is `Frac`, `lerp`
-/// is `Mix`, `hsv24` is `Hsv`.
+/// is `Mix`, `hsv24` is `Hsv` — plus the three Gitea #841 added for the
+/// paint-per-cell `renderFrame` loop: `saturate`, `setPixel`, `paint`.
 const fn direct_of(id: u16) -> (Direct, DirectSig) {
     let i = id as usize;
     let b = match BUILTINS[i].kind {
@@ -357,6 +412,10 @@ const fn direct_of(id: u16) -> (Direct, DirectSig) {
         Builtin::Time => (Direct { c1: d_time }, DirectSig::C1),
         Builtin::Hsv => (Direct { c3: d_hsv }, DirectSig::C3),
         Builtin::Rgb => (Direct { c3: d_rgb }, DirectSig::C3),
+        // Gitea #841: the paint-per-cell loop's remaining generic calls.
+        Builtin::Saturate => (Direct { n1: d_saturate }, DirectSig::N1),
+        Builtin::SetPixel => (Direct { c1: d_set_pixel }, DirectSig::C1),
+        Builtin::Paint => (Direct { c2: d_paint }, DirectSig::C2),
         _ => (Direct { none: 0 }, DirectSig::None),
     }
 }

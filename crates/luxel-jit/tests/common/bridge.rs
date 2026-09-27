@@ -60,6 +60,10 @@ pub struct Bridge<'p> {
     /// Native calls serviced, for a "did it actually exercise anything"
     /// sanity check.
     pub native_calls: u64,
+    /// Of those, calls into a `BUILTIN_ENTRIES[id].generic` wrapper — what
+    /// the emitter chose NOT to make direct. `ops.rs` pins the tier-1 set
+    /// to zero of these (Gitea #841).
+    pub generic_calls: u64,
     last_steps: u64,
 }
 
@@ -108,6 +112,7 @@ impl<'p> Bridge<'p> {
             fn_table,
             abi: img.abi.clone(),
             native_calls: 0,
+            generic_calls: 0,
             last_steps: 0,
         };
         b.write_ctx();
@@ -289,6 +294,10 @@ impl<'p> Bridge<'p> {
         }
         if addr == super::helper_addr(HelperId::FxPow) {
             return (luxel_core::jit::fx_pow(a[0] as i32, a[1] as i32) as u32, 0);
+        }
+
+        if addr >= GENERIC_BASE && addr < DIRECT_BASE {
+            self.generic_calls += 1;
         }
 
         // Everything else sees the VM, so the two copies of the shared

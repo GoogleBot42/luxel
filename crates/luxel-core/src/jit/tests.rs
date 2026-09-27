@@ -175,6 +175,8 @@ fn a_direct_word_exists_exactly_when_a_direct_sig_does() {
         "abs", "floor", "ceil", "round", "trunc", "frac", "clamp", "min", "max", "mod", "sqrt",
         "sin", "cos", "wave", "square", "triangle", "mix", "hsv", "rgb", "time", "random", "prng",
         "fract", "lerp", "hsv24",
+        // Gitea #841
+        "saturate", "setPixel", "paint",
     ];
     want.sort_unstable();
     assert_eq!(with_direct, want);
@@ -239,6 +241,26 @@ fn harness_vm(prog: &Program) -> Vm {
         b.push(Value::Num(Fx::from_int(i * 2)));
     }
     vm.alloc_array(b).expect("array 1");
+    // Gitea #841: `setPixel` writes the frame and `paint` reads the palette,
+    // and both went direct — so the harness has to have both, or the sweep
+    // below would compare two no-ops. A lent 8-pixel frame (what
+    // `renderFrame` does), and a three-stop palette installed through the
+    // interpreter's own `setPalette` arm as array 2: red at 0, green at
+    // 0.5, blue at 1, so a lookup inside a span exercises the divide.
+    vm.frame = crate::arena::frame(8);
+    let mut pal = crate::arena::empty();
+    for w in [
+        0, 0x1_0000, 0, 0, 0x8000, 0, 0x1_0000, 0, 0x1_0000, 0, 0, 0x1_0000,
+    ] {
+        pal.push(Value::Num(Fx::from_raw(w)));
+    }
+    vm.alloc_array(pal).expect("array 2");
+    let set_palette = BUILTINS
+        .iter()
+        .position(|d| d.name == "setPalette")
+        .expect("setPalette exists") as u16;
+    vm.call_builtin_from_stack(prog, set_palette, &[Value::Arr(2)])
+        .expect("palette installs");
     vm
 }
 
@@ -445,11 +467,68 @@ fn every_direct_entry_matches_its_generic_wrapper() {
                     "`{}` brush side effect",
                     BUILTINS[id as usize].name
                 );
+                assert_eq!(
+                    &vd.frame[..],
+                    &vg.frame[..],
+                    "`{}` frame side effect on {:?}",
+                    BUILTINS[id as usize].name,
+                    &raw[..argc]
+                );
                 checked += 1;
             }
         }
     }
     assert!(checked > 5_000, "sweep did almost nothing ({checked})");
+}
+
+/// The short-arity contract of [`direct_default`] (Gitea #841): the emitter
+/// calls the direct fn with the default in the LAST slot when a call site
+/// has one argument fewer than the signature, and that has to be what the
+/// interpreter's arm does with the missing argument — checked by running
+/// `generic` at the SHORT arity against `direct` with the default filled in.
+#[test]
+fn every_direct_default_is_what_the_arm_defaults_to() {
+    let prog = harness_program();
+    let mut with_default = Vec::new();
+    for id in 0..BUILTINS.len() as u16 {
+        let Some(fill) = direct_default(id) else {
+            continue;
+        };
+        let e = &BUILTIN_ENTRIES[id as usize];
+        let sig = e.sig();
+        assert_ne!(sig, DirectSig::None, "a default without a direct form");
+        with_default.push(BUILTINS[id as usize].name);
+        for &x in SWEEP.iter() {
+            let mut vg = harness_vm(&prog);
+            let want = through_the_table(&mut vg, &prog, id, &[Value::Num(Fx::from_raw(x))])
+                .unwrap_or_else(|e| panic!("tier-1 builtin cannot fail: {}", e.message));
+            let mut vd = harness_vm(&prog);
+            let mut err: Option<VmError> = None;
+            let mut ctx = JitCtx::for_builtin_call(&mut vd, &prog, &mut err);
+            let got = unsafe {
+                match sig {
+                    DirectSig::N2 => (e.direct.n2)(x, fill),
+                    DirectSig::C2 => (e.direct.c2)(&mut ctx, x, fill),
+                    other => panic!("no short-arity shape for {other:?}"),
+                }
+            };
+            drop(ctx);
+            assert_eq!(
+                Value::Num(Fx::from_raw(got)),
+                want,
+                "`{}` (id {id}) on {x:#x} with default {fill:#x}",
+                BUILTINS[id as usize].name
+            );
+            assert_eq!(
+                (vd.pixel, vd.pixel_written),
+                (vg.pixel, vg.pixel_written),
+                "`{}` brush side effect at the short arity",
+                BUILTINS[id as usize].name
+            );
+        }
+    }
+    with_default.sort_unstable();
+    assert_eq!(with_default, ["paint", "square"]);
 }
 
 // ---------------------------------------------------------------- Ret2 ABI

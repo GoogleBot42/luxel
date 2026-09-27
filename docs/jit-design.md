@@ -333,7 +333,7 @@ Fixed-point semantics are `crates/luxel-core/src/fixed.rs`, cited per row.
 | `LoadIdx` | Arr/Dyn,Num | `callx8 arr_load_dyn` → tag,payload | |
 | `StoreIdx` | any | `callx8 arr_store` | CoW promotion of `ArrRepr::Const`, byte budget |
 | `ArrLen`, `NewArray n`, `ConstArr i` | | helpers | budget errors |
-| `CallBuiltin b, argc` | direct signature | args → `a10…a13; callx8 tbl[b].direct` | the numeric tier-1 set: `sin cos abs floor … hsv rgb`; no `Vm` needed for pure ones, `ctx` in `a10` for `hsv`/`rgb`/`time`/`random` |
+| `CallBuiltin b, argc` | direct signature | args → `a10…a13; callx8 tbl[b].direct` | the numeric tier-1 set: `sin cos abs floor … hsv rgb`, plus `saturate paint setPixel` since #841; no `Vm` needed for pure ones, `ctx` in `a10` for `hsv`/`rgb`/`time`/`random`/`paint`/`setPixel`; a call one argument short of the signature fills the builtin's default (`table::direct_default`: `square` 0.5, `paint` 1) |
 | `CallBuiltin b, argc` | generic | box args into scratch; `a10 = ctx, a11 = &scratch, a12 = argc; callx8 tbl[b].generic` → `Ret2`/`RetDyn` | any builtin, any arity; missing args read 0 as today |
 | `CallBuiltinC/CC` | | as above with the immediates as `movi`/`l32r` | |
 | `CallFn f, argc` | | args → `a11…a15` + `ctx.args`; `a10 = ctx; callx8 lit(f)`; `l32i t, ctx, STATUS; bnez t, bail` | |
@@ -540,10 +540,15 @@ register-homed; one register cannot hold a tag and a payload.
 And two rows are narrower than designed:
 
 - **The `direct` tier-1 path is used only when the call's arity matches
-  the signature EXACTLY.** §4 wanted the emitter to materialise a
-  builtin's defaults (the 0.5 duty of a one-argument `square`); it carries
-  no table of defaults, and a mismatched arity falls back to `generic`,
-  which is the interpreter's own marshalling and cannot be wrong.
+  the signature EXACTLY** — *as shipped in phase 2*. §4 wanted the emitter
+  to materialise a builtin's defaults (the 0.5 duty of a one-argument
+  `square`); it carried no table of defaults, and a mismatched arity fell
+  back to `generic`, which is the interpreter's own marshalling and cannot
+  be wrong. **Gitea #841 added that table** — `table::direct_default(id)`,
+  two entries (`square` → 0.5, `paint` → 1), each swept against the
+  generic wrapper at the short arity — so a call ONE argument short of the
+  signature now goes direct with the default in the last register. Any
+  other arity mismatch still falls back to `generic`.
 - **`CallValue` uses a RESOLVE-ONLY helper.** §3.5 has the helper resolve
   the callee and call it, which is a Rust → native trampoline that §4 says
   this design does not have and which cannot be modelled on a host.
@@ -630,17 +635,36 @@ design at all.
 
 **The tier-1 `direct` set** (§3.5), keyed on the `Builtin` rather than the
 name so the aliases come along: `abs floor ceil round trunc frac sqrt sin
-cos wave triangle` (N1), `min max mod square` (N2), `clamp mix` (N3),
-`random prng time` (C1), `hsv rgb` (C3) — plus `fract` (= `frac`), `lerp`
-(= `mix`) and `hsv24` (= `hsv`). Everything else is `direct = 0` and goes
-through `generic`. They are raw 16.16 words in registers with no boxing:
-`d_abs` is `entry / abs a2, a2 / retw.n` and `d_clamp` is `entry / max /
-min / retw.n` on the S3. Two contracts worth naming: a direct fn takes the
-**effective** arguments, so a one-argument `square(t)` call site must
-materialise the 0.5 duty itself (the emitter knows `argc` statically); and
-the five ctx-taking ones reach the VM by CALLING `Vm::builtin_fast` with a
-constant `Builtin`, which folds to the one arm — there is no second
-implementation of any builtin anywhere in the JIT.
+cos wave triangle saturate` (N1), `min max mod square` (N2), `clamp mix`
+(N3), `random prng time setPixel` (C1), `paint` (C2), `hsv rgb` (C3) — plus
+`fract` (= `frac`), `lerp` (= `mix`) and `hsv24` (= `hsv`). Everything else
+is `direct = 0` and goes through `generic`. They are raw 16.16 words in
+registers with no boxing: `d_abs` is `entry / abs a2, a2 / retw.n` and
+`d_clamp` is `entry / max / min / retw.n` on the S3. Two contracts worth
+naming: a direct fn takes the **effective** arguments, so a one-argument
+`square(t)` call site must materialise the 0.5 duty itself (the emitter
+knows `argc` statically, and since #841 reads the default from
+`table::direct_default`); and the ctx-taking ones reach the VM by CALLING
+the interpreter's own arm — `Vm::builtin_fast` with a constant `Builtin`
+for the five that live there, which folds to the one arm; `Vm::paint` (the
+`Paint` arm of `builtin_hot` minus its argument default) and
+`bulk::set_pixel` (what the `SetPixel` arm of `builtin_cold` calls) for the
+two that do not. There is no second implementation of any builtin anywhere
+in the JIT.
+
+**Why `saturate`, `paint` and `setPixel` joined (Gitea #841, 2026-09-27).**
+The paint-per-cell `renderFrame` loop — Aurora 2D's and every #405
+conversion's inner body — is `saturate`, `saturate`, `paint`, `setPixel`
+per pixel, and each of those was a `generic` call: box the arguments into
+the frame scratch, enter the wrapper, zero a `[Value; MAX_ARGS]` buffer,
+walk `builtin_ladder`, box the result. Four of them per pixel is the
+non-noise half of Aurora's frame (#840 is the noise half). Over `library/`
+`saturate` has 186 call sites in 94 patterns, `paint` 19 in 11, `setPixel`
+16 in 8, `square` 26 in 16 (two of them one-argument). Byte-identical by
+construction — same arms, no marshalling — and gated by the same
+differential tests as every other direct entry, plus a frame comparison the
+sweep did not have before (the harness VM now lends a frame and installs a
+palette, or `setPixel` and `paint` would have been compared as no-ops).
 
 **Interpreter-through-table: BUILT, OFF, and DEFERRED to hardware.** A
 `dispatch-table` cargo feature (luxel-core, and `EXTRA_FEATURES=dispatch-table`

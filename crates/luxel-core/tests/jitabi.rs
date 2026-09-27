@@ -90,11 +90,12 @@ fn the_direct_set_is_the_tier_one_numeric_set() {
     names.sort_unstable();
     // docs/jit-design.md §3.5 names seventeen pure ops and five ctx-taking
     // ones; `fract`, `lerp` and `hsv24` come along because they ARE `frac`,
-    // `mix` and `hsv` (same `Builtin`, different spelling).
+    // `mix` and `hsv` (same `Builtin`, different spelling). Gitea #841
+    // added `saturate` (pure), `setPixel` and `paint` (ctx-taking).
     let mut want = vec![
         "abs", "ceil", "clamp", "cos", "floor", "frac", "fract", "hsv", "hsv24", "lerp", "max",
-        "min", "mix", "mod", "prng", "random", "round", "rgb", "sin", "sqrt", "square", "time",
-        "triangle", "trunc", "wave",
+        "min", "mix", "mod", "paint", "prng", "random", "round", "rgb", "saturate", "setPixel",
+        "sin", "sqrt", "square", "time", "triangle", "trunc", "wave",
     ];
     want.sort_unstable();
     assert_eq!(names, want);

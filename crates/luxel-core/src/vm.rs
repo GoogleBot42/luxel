@@ -3471,12 +3471,8 @@ impl Vm {
                 self.perlin_wrap,
             )),
             Paint => {
-                let v = paint_pos(n(0));
                 let b = if argc >= 2 { n(1) } else { Fx::ONE };
-                let rgb = self.palette_lookup(prog, v);
-                let b = b.clamp(Fx::ZERO, Fx::ONE);
-                self.pixel = [rgb[0] * b, rgb[1] * b, rgb[2] * b];
-                self.pixel_written = true;
+                self.paint(prog, n(0), b);
                 Ok(Value::default())
             }
             // hash(x) / hash2(x, y): deterministic 0..1 from the raw bits —
@@ -4847,6 +4843,20 @@ impl Vm {
     fn palette_lookup(&mut self, prog: &Program, v: Fx) -> [Fx; 3] {
         self.palette_refresh(prog);
         sample_palette(&self.palette, v)
+    }
+
+    /// `paint(x, b)` with the EFFECTIVE brightness — the `Paint` arm of
+    /// [`Vm::builtin_hot`] minus the argument defaulting, so the JIT's
+    /// direct entry (`jit::table`, Gitea #841) and the interpreter run one
+    /// body. `x` wraps per [`paint_pos`]; `b` is clamped to 0..1 here, so a
+    /// caller passes the raw argument (or `Fx::ONE` for a missing one).
+    #[inline]
+    pub(crate) fn paint(&mut self, prog: &Program, x: Fx, b: Fx) {
+        let v = paint_pos(x);
+        let rgb = self.palette_lookup(prog, v);
+        let b = b.clamp(Fx::ZERO, Fx::ONE);
+        self.pixel = [rgb[0] * b, rgb[1] * b, rgb[2] * b];
+        self.pixel_written = true;
     }
 
     /// Re-cook the installed palette if the pattern has written through the
