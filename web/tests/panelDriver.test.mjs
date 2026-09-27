@@ -20,6 +20,10 @@ import {
   latchClocks,
   litWidth,
   lsbEffective,
+  lsbStepAt,
+  lsbStepIndex,
+  lsbSteps,
+  lsbStepsFor,
   lsbTrade,
   LSB_FULL,
   lsbWire,
@@ -477,12 +481,19 @@ test("every chip the contract names has a human label and a short form", () => {
   assert.equal(chipShort("fm6353"), "fm6353");
 });
 
-// ---- the brighter ↔ faster trade (Gitea #460 / #789) ---------------------
+// ---- the refresh multiplier (Gitea #460 / #789 / #797) -------------------
 //
-// One slider, `lsb` — the LSB's on-time in pixel clocks, 0 = full. The bench
-// case throughout is the Seengreat panel: one 64×64 module at 1/32 scan, 7
-// planes, 30 MHz, one blanking clock on a plain shift register. That is 64
+// One stepped control, `lsb` — the LSB's on-time in pixel clocks, 0 = full. The
+// bench case throughout is the Seengreat panel: one 64×64 module at 1/32 scan,
+// 7 planes, 30 MHz, one blanking clock on a plain shift register. That is 64
 // words of row block less one latch clock and two blanking clocks, so W = 61.
+// Jeremy's own panel runs 20 MHz with `blank 2`, so W = 59 — both sets of
+// measured numbers are asserted below.
+//
+// #797 corrected the BRIGHTNESS model #789 shipped. `lsb / W` is the duty cycle
+// of one PASS, but truncating shortens the pass too, so the real figure is
+// `lsb · (2^planes − 1) / (W · E)`: 97.6 % rather than 49 % at lsb 30, which is
+// what the panel showed on 2026-09-26.
 
 const BENCH = { pw: 64, ph: 64, chain: 1, scan: 32 };
 const benchCfg = (over = {}) => ({
@@ -542,48 +553,234 @@ test("the emissions per rescan are t + 2^(planes − t) − 1, stock at t = 0", 
       assert.ok(emissions(planes, t) <= emissions(planes, 0), `${planes}/${t}`);
 });
 
-test("peak brightness is lsb / W, continuous and independent of the bit depth", () => {
-  assert.equal(peakBrightnessFraction(61, 61), 1);
-  assert.equal(Math.round(peakBrightnessFraction(30, 61) * 100), 49);
-  assert.equal(Math.round(peakBrightnessFraction(8, 61) * 100), 13);
-  assert.ok(peakBrightnessFraction(4000, 61) <= 1, "never over full");
+test("peak brightness is lsb · (2^planes − 1) / (W · E) — on-time per unit TIME", () => {
+  // the stock schedule is the yardstick
+  assert.equal(peakBrightnessFraction(61, 61, 7), 1);
+  // the bench panel's step tops, against the panel as photographed on
+  // 2026-09-26: nearly stock, NOT the 49 % / 13 % the #789 model predicted
+  const pct = (lsb, w = 61, planes = 7) =>
+    Math.round(peakBrightnessFraction(lsb, w, planes) * 1000) / 10;
+  assert.equal(pct(30), 97.6, "t 1, E 64");
+  assert.equal(pct(15), 94.6, "t 2, E 33");
+  assert.equal(pct(7), 81, "t 3, E 18");
+  // …and INSIDE a step it falls linearly, which is what makes every position
+  // but the top strictly worse: lsb 8 runs the same 33 emissions as lsb 15
+  assert.equal(pct(8), 50.5, "t 2 as well, at half the light of lsb 15");
+  assert.equal(truncatedPlanes(8, 61, 7), truncatedPlanes(15, 61, 7));
+  assert.ok(pct(8) < pct(15));
+  // Jeremy's panel: 20 MHz, blank 2, so W = 59
+  assert.equal(pct(29, 59), 97.5, "t 1, E 64");
+  assert.equal(pct(14, 59), 91.3, "t 2, E 33");
+  assert.equal(pct(7, 59), 83.7, "t 3, E 18");
+  // it is no longer independent of the bit depth: E is built from it
+  assert.notEqual(peakBrightnessFraction(30, 61, 7), peakBrightnessFraction(30, 61, 5));
+  // never over full, whatever is stored
+  for (const planes of [4, 5, 6, 7, 8])
+    for (let lsb = 1; lsb <= 61; lsb++)
+      assert.ok(peakBrightnessFraction(lsb, 61, planes) <= 1, `${planes}/${lsb}`);
+  assert.ok(peakBrightnessFraction(4000, 61, 7) <= 1, "clamped like lsbEffective");
 });
 
-test("the trade at the bench numbers: 115 Hz full, 229 at lsb 30, 444 at lsb 8", () => {
+test("lsbSteps offers one position per truncation step, at its TOP", () => {
+  const steps = lsbSteps(61, 7);
+  // t 6 would need floor(61/64) = 0 clocks, so the bench panel has SIX
+  // positions at 7 planes, not seven
+  assert.deepEqual(
+    steps.map((s) => s.t),
+    [0, 1, 2, 3, 4, 5],
+  );
+  assert.deepEqual(
+    steps.map((s) => s.lsb),
+    [61, 30, 15, 7, 3, 1],
+  );
+  // the wire value: 0 at the ×1 end, so the setting follows a later change to W
+  assert.deepEqual(
+    steps.map((s) => s.wire),
+    [0, 30, 15, 7, 3, 1],
+  );
+  assert.deepEqual(
+    steps.map((s) => s.emissions),
+    [127, 64, 33, 18, 11, 8],
+  );
+  assert.deepEqual(
+    steps.map((s) => Math.round(s.brightness * 1000) / 10),
+    [100, 97.6, 94.6, 81, 56.8, 26],
+  );
+  // every entry really is the TOP of its step: it truncates exactly t planes,
+  // and one clock more would truncate one fewer
+  for (const st of steps) {
+    assert.equal(truncatedPlanes(st.lsb, 61, 7), st.t, `t ${st.t}`);
+    if (st.t > 0) assert.equal(truncatedPlanes(st.lsb + 1, 61, 7), st.t - 1, `t ${st.t} + 1`);
+  }
+  // Jeremy's panel, W 59
+  assert.deepEqual(
+    lsbSteps(59, 7).map((s) => s.lsb),
+    [59, 29, 14, 7, 3, 1],
+  );
+  // fewer planes = fewer positions, never more than `planes`
+  for (const planes of [4, 5, 6, 7, 8]) {
+    const list = lsbSteps(61, planes);
+    assert.ok(list.length <= planes, `${planes} planes`);
+    assert.equal(list[0].t, 0, "the stock schedule is always offered");
+    // brightest and slowest first, strictly monotonic both ways
+    for (let i = 1; i < list.length; i++) {
+      assert.ok(list[i].lsb < list[i - 1].lsb, `${planes}: lsb ${i}`);
+      assert.ok(list[i].emissions < list[i - 1].emissions, `${planes}: E ${i}`);
+    }
+  }
+  // a row block with one lit clock has exactly one position: the stock one
+  assert.deepEqual(
+    lsbSteps(1, 7).map((s) => s.wire),
+    [0],
+  );
+});
+
+test("a stored lsb reads at the step whose refresh it is actually running", () => {
+  const steps = lsbSteps(61, 7);
+  // the step tops round-trip
+  steps.forEach((st, i) => assert.equal(lsbStepIndex(steps, st.lsb, 61, 7), i, `t ${st.t}`));
+  // an OFF-STEP stored value (a Layout #789's continuous slider wrote) shows at
+  // the step it shares its emissions with — so the Hz the card names is the Hz
+  // the panel does, and nothing is rewritten until the control moves
+  assert.equal(lsbStepIndex(steps, 20, 61, 7), 1, "lsb 20 runs t 1, like lsb 30");
+  assert.equal(lsbStepIndex(steps, 10, 61, 7), 2);
+  assert.equal(lsbStepIndex(steps, 61, 61, 7), 0);
+  // and through the card's own reading of a configured driver
+  assert.equal(lsbStepAt(benchCfg(), BENCH), 0, "a configured 0 is the ×1 step");
+  assert.equal(lsbStepAt(benchCfg({ lsb: 15 }), BENCH), 2);
+  assert.equal(lsbStepAt(benchCfg({ lsb: 20 }), BENCH), 1);
+  assert.equal(lsbStepAt(benchCfg({ lsb: 4000 }), BENCH), 0, "clamped, so still full");
+  assert.deepEqual(lsbStepsFor(benchCfg(), BENCH), lsbSteps(61, 7));
+  // the positions follow W, so blanking and the chip move them
+  assert.deepEqual(
+    lsbStepsFor(benchCfg({ blank: 2 }), BENCH).map((s) => s.lsb),
+    [59, 29, 14, 7, 3, 1],
+  );
+});
+
+test("inside a step the refresh is flat, so only the step tops are worth offering", () => {
+  // the whole reason the control is stepped (#797): between two tops the Hz do
+  // not move and the brightness only falls
+  for (const planes of [5, 6, 7, 8]) {
+    const steps = lsbSteps(61, planes);
+    for (const st of steps) {
+      for (let lsb = 1; lsb < st.lsb; lsb++) {
+        if (truncatedPlanes(lsb, 61, planes) !== st.t) continue;
+        assert.equal(emissions(planes, truncatedPlanes(lsb, 61, planes)), st.emissions);
+        assert.ok(
+          peakBrightnessFraction(lsb, 61, planes) < st.brightness,
+          `${planes}: lsb ${lsb} under t ${st.t}`,
+        );
+      }
+    }
+  }
+});
+
+test("the trade at the bench step tops: 115 / 229 / 444 / 814 Hz at 100 / 97.6 / 94.6 / 81 %", () => {
   const at = (lsb) => lsbTrade(benchCfg(), BENCH, lsb);
+  const pct = (t) => Math.round(t.brightness * 1000) / 10;
   const full = at(LSB_FULL);
   assert.equal(full.width, 61);
   assert.equal(full.lsb, 61);
   assert.equal(full.trunc, 0);
   assert.equal(full.emissions, 127);
   assert.equal(full.fullEmissions, 127);
+  assert.equal(full.multiple, 1, "the ×1 position");
   assert.equal(Math.round(full.hz), 115, "the measured bench number (Gitea #255)");
-  assert.equal(Math.round(full.brightness * 100), 100);
-  assert.ok(full.full, "the slider is at its brighter end");
+  assert.equal(pct(full), 100);
+  assert.ok(full.full, "the control is at its stock position");
 
-  const half = at(30);
-  assert.equal(half.trunc, 1);
-  assert.equal(half.emissions, 64);
-  assert.equal(Math.round(half.hz), 229);
-  assert.equal(Math.round(half.brightness * 100), 49);
-  assert.equal(half.full, false);
+  // ×2 — the t 1 step top. 97.6 %, not the 49 % #789 showed
+  const x2 = at(30);
+  assert.equal(x2.trunc, 1);
+  assert.equal(x2.emissions, 64);
+  assert.equal(x2.multiple, 2);
+  assert.equal(Math.round(x2.hz), 229);
+  assert.equal(pct(x2), 97.6);
+  assert.equal(x2.full, false);
 
-  const fast = at(8);
-  assert.equal(fast.trunc, 2);
-  assert.equal(fast.emissions, 33);
-  assert.equal(Math.round(fast.hz), 444);
-  assert.equal(Math.round(fast.brightness * 100), 13);
+  // ×4 — the t 2 step top
+  const x4 = at(15);
+  assert.equal(x4.trunc, 2);
+  assert.equal(x4.emissions, 33);
+  assert.equal(x4.multiple, 4);
+  assert.equal(Math.round(x4.hz), 444);
+  assert.equal(pct(x4), 94.6);
+
+  // ×8 — the t 3 step top
+  const x8 = at(7);
+  assert.equal(x8.trunc, 3);
+  assert.equal(x8.emissions, 18);
+  assert.equal(x8.multiple, 8);
+  assert.equal(Math.round(x8.hz), 814);
+  assert.equal(pct(x8), 81);
+
+  // an off-step value: the SAME 444 Hz as lsb 15 at half its light — which is
+  // exactly why the control does not offer it (#797)
+  const midstep = at(8);
+  assert.equal(midstep.trunc, 2);
+  assert.equal(midstep.emissions, 33);
+  assert.equal(Math.round(midstep.hz), 444);
+  assert.equal(pct(midstep), 50.5);
 
   // the stored value is the default, so the card's readouts need no argument
-  assert.deepEqual(lsbTrade(benchCfg({ lsb: 30 }), BENCH), half);
-  // brightness is CONTINUOUS in the thumb and the Hz STEP: 31 is still the
-  // stock schedule at half the brightness
+  assert.deepEqual(lsbTrade(benchCfg({ lsb: 30 }), BENCH), x2);
+  // 31 no longer fits twice, so it is the stock schedule at half the light
   const edge = at(31);
   assert.equal(edge.trunc, 0);
   assert.equal(Math.round(edge.hz), 115);
-  assert.equal(Math.round(edge.brightness * 100), 51);
+  assert.equal(pct(edge), 50.8);
   // and the trade never claims a rescan the stock schedule beats
   for (let lsb = 1; lsb <= 61; lsb++) assert.ok(at(lsb).hz >= full.hz - 1e-9, `lsb ${lsb}`);
+});
+
+test("Jeremy's panel on metal: 20 MHz, blank 2 — 153 / 295 / 542 Hz measured", () => {
+  // Seengreat 64×64, 7 planes, 20 MHz, blank 2 on a shift register: W = 59. The
+  // Hz are what the device reported as `rescan_hz` on 2026-09-26; the
+  // percentages are the corrected model's — the panel looked close to stock at
+  // lsb 14, which 91 % predicts and the old model's 24 % did not.
+  const cfg = (over = {}) => benchCfg({ clock_mhz: 20, blank: 2, ...over });
+  const at = (lsb) => lsbTrade(cfg(), BENCH, lsb);
+  const pct = (t) => Math.round(t.brightness * 1000) / 10;
+
+  const stock = at(LSB_FULL);
+  assert.equal(stock.width, 59, "64 words − 1 latch − 2·2 blanking");
+  assert.equal(stock.emissions, 127);
+  assert.equal(Math.round(stock.hz), 77, "the measured 20 MHz number (Gitea #255)");
+  assert.equal(pct(stock), 100);
+
+  const x2 = at(29);
+  assert.equal(x2.trunc, 1);
+  assert.equal(x2.emissions, 64);
+  assert.equal(Math.round(x2.hz * 10) / 10, 152.6, "measured 153");
+  assert.equal(pct(x2), 97.5);
+
+  const x4 = at(14);
+  assert.equal(x4.trunc, 2);
+  assert.equal(x4.emissions, 33);
+  assert.equal(Math.round(x4.hz), 296, "measured 295");
+  assert.equal(pct(x4), 91.3);
+
+  const x8 = at(7);
+  assert.equal(x8.trunc, 3);
+  assert.equal(x8.emissions, 18);
+  assert.equal(Math.round(x8.hz * 10) / 10, 542.5, "measured 542");
+  assert.equal(pct(x8), 83.7);
+
+  // and those three ARE the control's ×2/×4/×8 positions on that panel
+  assert.deepEqual(
+    lsbStepsFor(cfg(), BENCH)
+      .slice(1, 4)
+      .map((s) => s.wire),
+    [29, 14, 7],
+  );
+  // a live `blank` 2 → 4 re-clamped the running lsb 14 to 13 on metal, without a
+  // reboot: W drops to 64 − 1 − 8 = 55, and 14 no longer fits four times, so the
+  // firmware keeps t (`Schedule::refit`) and shortens the on-time to
+  // floor(55/4) = 13 — which is exactly where this control's ×4 step now sits
+  assert.equal(lsbTrade(cfg({ blank: 4 }), BENCH, 14).width, 55);
+  assert.equal(lsbStepsFor(cfg({ blank: 4 }), BENCH)[2].lsb, 13, "the device's own 13");
+  assert.equal(lsbTrade(cfg({ blank: 4 }), BENCH, 13).trunc, 2, "…and it is still the ×4 step");
 });
 
 test("the estimate at lsb 0 is byte-for-byte the one every caller had", () => {
@@ -622,7 +819,7 @@ test("blanking and the chip's latch move the trade, because they set W", () => {
   assert.equal(lsbTrade(benchCfg(), { ...BENCH, chain: 3 }).width, 189);
 });
 
-test("the slider's top posts 0, so the setting follows a later width change", () => {
+test("the ×1 position posts 0, so the setting follows a later width change", () => {
   assert.equal(lsbWire(61, 61), LSB_FULL, "full is 0 on the wire, not 61");
   assert.equal(lsbWire(62, 61), LSB_FULL, "…and so is anything past it");
   assert.equal(lsbWire(60, 61), 60);

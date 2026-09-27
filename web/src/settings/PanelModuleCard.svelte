@@ -42,8 +42,9 @@
     clockSupported,
     configuredDriver,
     driverWire,
+    lsbStepAt,
+    lsbStepsFor,
     lsbTrade,
-    lsbWire,
     panelDriverState,
     panelGeometryOf,
     panelLine,
@@ -95,26 +96,43 @@
   $: scanNow = scanShown(ph, scan);
   $: fbKb = driver?.live ? (driver.live.fb_bytes / 1024).toFixed(1) : "";
 
-  /** The slider position while it is being DRAGGED — null when it is showing
-   *  the stored value. The readouts follow the thumb, so the Hz and the
+  /** The control's POSITIONS: one per truncation step, brightest (`×1`, the
+   *  stock schedule) first — `lsbSteps`. Empty while the Layout is not a
+   *  matrix, since there is no row block to measure an on-time against. */
+  $: lsbList = geom ? lsbStepsFor(cfg, geom) : [];
+  /** The step index while the control is being DRAGGED — null when it is
+   *  showing the stored value. The readouts follow the thumb, so the Hz and the
    *  brightness answer "what would this do?" before anything is written; the
    *  POST waits for the drag to end (`on:change`), because this one costs a
    *  reboot. */
   let lsbDrag: number | null = null;
-  /** What the configured `lsb` buys and costs on the configured arrangement
-   *  (Gitea #460/#789). Null while the Layout is not a matrix — there is no
-   *  row block to measure an on-time against. */
-  $: trade = geom ? lsbTrade(cfg, geom, lsbDrag ?? cfg.lsb) : null;
-  /** The stored value cannot be the thumb's position directly: `0` means FULL,
-   *  which is the TOP of the range, so the effective on-time is. */
-  $: lsbPos = trade?.lsb ?? 0;
+  /** The index the control SHOWS: the dragged one, or the step the stored
+   *  `lsb` is actually running. A stored value between two step tops (a Layout
+   *  written by #789's continuous slider) reads at its own step and is not
+   *  rewritten until the user moves the control. */
+  $: lsbPos = geom ? (lsbDrag ?? lsbStepAt(cfg, geom)) : 0;
+  /** What the shown position buys and costs on the configured arrangement
+   *  (Gitea #460/#789/#797). While dragging that is the step's own on-time;
+   *  otherwise it is the STORED `lsb`, which is what the panel is running even
+   *  when it sits between steps. Null while the Layout is not a matrix. */
+  $: trade = geom
+    ? lsbTrade(cfg, geom, lsbDrag === null ? cfg.lsb : (lsbList[lsbDrag]?.wire ?? cfg.lsb))
+    : null;
   $: lsbPct = trade ? Math.round(trade.brightness * 100) : 100;
+  /** The step the shown position would WRITE — the same on-time as `trade`
+   *  unless a stored value sits between two steps. */
+  $: lsbStep = lsbList[lsbPos] ?? null;
+  $: lsbOffStep = !!(trade && lsbStep && trade.lsb !== lsbStep.lsb);
+  /** The `×N` of the FASTEST step, for the right-hand end label. */
+  $: lsbMaxMult = 2 ** (lsbList[lsbList.length - 1]?.t ?? 0);
 
-  /** Post a slider position. The full end writes `0`, which is what makes the
-   *  setting follow a later change to the panel size or the blanking instead
-   *  of pinning the panel to today's lit width (`lsbWire`). */
+  /** Post a control position — the step's own wire value, `0` at `×1`, which is
+   *  what makes the setting follow a later change to the panel size or the
+   *  blanking instead of pinning the panel to today's lit width. */
   async function setLsb(picked: number): Promise<void> {
-    await set({ lsb: lsbWire(picked, trade?.width ?? 0) });
+    const step = lsbList[picked];
+    if (!step) return;
+    await set({ lsb: step.wire });
     lsbDrag = null;
   }
 
@@ -241,52 +259,62 @@
     </div>
   </div>
 
-  <!-- The brighter ↔ faster trade (Gitea #460/#789). ONE slider: the on-time
-       of the least significant bitplane, in pixel clocks, `0` = full. Shorten
-       it and the low planes no longer need a row shift each — the rescan steps
-       up as the panel dims, and the binary weights stay exact, so the grey ramp
-       keeps its shape.
-       The axis runs BRIGHTER (full, the schedule every board ships with) on the
-       left to FASTER on the right, which is why the input is `direction: rtl`:
-       the range is `1..W` in `lsb` and `W` is the full end. The two readouts
-       under it are the whole point of the control — brightness is continuous in
-       the thumb's position, the Hz step — and the measured rescan sits beside
-       the prediction so a pending reboot is visible as the two disagreeing. -->
-  {#if trade}
+  <!-- The refresh multiplier (Gitea #460/#789/#797). ONE stepped control: the
+       on-time of the least significant bitplane, in pixel clocks, `0` = full.
+       Shorten it and the low planes no longer need a row shift each, so the
+       rescan multiplies; the binary weights stay exact, so the grey ramp keeps
+       its shape.
+       It has ONE POSITION PER TRUNCATION STEP, not one per clock (#797 fixed
+       #789 here): the Hz are constant across a step and the brightness falls
+       linearly inside it, so every position but a step's top is strictly worse
+       — same rescan, less light. At a step top the panel keeps very nearly its
+       stock brightness, so the honest framing is "faster refresh at a small
+       brightness cost", never "brighter ↔ faster".
+       The axis runs ×1 (the stock schedule every board ships with) on the left
+       to the fastest step on the right — the same direction the old slider read
+       in, which is why nothing here is reversed any more. The readouts are the
+       point of the control, and the measured rescan sits beside the prediction
+       so a pending reboot is visible as the two disagreeing. -->
+  {#if trade && lsbStep && lsbList.length > 1}
     <div class="field top">
-      <span class="flabel">Brightness vs refresh</span>
+      <span class="flabel">Refresh</span>
       <div class="fctl">
         <div class="trade">
-          <span class="dim end">brighter</span>
+          <span class="dim end">×1</span>
           <input
             type="range"
             class="slider"
             data-role="panel-lsb"
-            min="1"
-            max={trade.width}
+            min="0"
+            max={lsbList.length - 1}
             step="1"
             value={lsbPos}
             on:input={(e) => (lsbDrag = Number(e.currentTarget.value))}
             on:change={(e) => void setLsb(Number(e.currentTarget.value))}
           />
-          <span class="dim end">faster</span>
+          <span class="dim end">×{lsbMaxMult}</span>
         </div>
         <p class="readout mono" data-role="panel-lsb-readout">
-          <span data-role="panel-lsb-hz">~{trade.hz.toFixed(0)} Hz rescan</span>
+          <span data-role="panel-lsb-mult">Refresh ×{2 ** lsbStep.t}</span>
+          <span data-role="panel-lsb-hz">· ~{trade.hz.toFixed(0)} Hz rescan</span>
           {#if $deviceRescanHz > 0}
             <span class="dim" data-role="panel-lsb-measured">· {$deviceRescanHz} Hz measured now</span>
           {/if}
-          <span class="dim" data-role="panel-lsb-peak">· {lsbPct}% peak brightness</span>
+          <span class="dim" data-role="panel-lsb-peak">· {lsbPct}% brightness</span>
         </p>
         <p class="dim hint under">
           {#if trade.full}
-            Full on-time — every bitplane lit for the whole row block, which is what every board
-            ships with. Drag towards <em>faster</em> to buy rescan rate with brightness.
+            Stock schedule — every bitplane lit for the whole row block, which is what every board
+            ships with. Step to the right for a faster rescan at a small cost in brightness.
           {:else}
             {trade.lsb} of {trade.width} lit clocks for the lowest plane, so a rescan costs
-            {trade.emissions} row shifts instead of {trade.fullEmissions}. Reboot to apply — the
-            DMA chain is built from it. It compounds with Brightness above, and at small values
-            watch for ghosting between rows.
+            {trade.emissions} row shifts instead of {trade.fullEmissions} — about {lsbPct}% of stock
+            brightness. Reboot to apply — the DMA chain is built from it. It compounds with
+            Brightness above, and at the fast end watch for ghosting between rows.
+          {/if}
+          {#if lsbOffStep}
+            The stored on-time of {trade.lsb} clocks is not one of these steps (it runs the same
+            rescan as {lsbStep.lsb} and is dimmer); moving this control writes {lsbStep.lsb}.
           {/if}
         </p>
       </div>
@@ -361,7 +389,7 @@
     color: #e5bd74;
   }
 
-  /* the slider and its two end labels on one line, the DeviceCard brightness
+  /* the slider and its two × labels on one line, the DeviceCard brightness
      row's shape (`.big`) at this card's smaller scale */
   .trade {
     display: flex;
@@ -372,11 +400,10 @@
   }
 
   .trade .slider {
-    /* `rtl` puts the MAXIMUM on the left, which is where "brighter" is: the
-       value is `lsb` and its top is the full on-time. Reversing the axis in CSS
-       keeps the DOM value the wire's own number — an inverted `value` would
-       make every readout and test do the arithmetic twice. */
-    direction: rtl;
+    /* No `direction: rtl` any more (#797): the value is a STEP INDEX and index
+       0 is ×1, the stock schedule — so the natural axis already runs slow-and-
+       bright on the left to fast on the right, and the DOM value stays the
+       number the tests and the readouts use. */
     flex: 1;
     min-width: 120px;
     height: 20px;

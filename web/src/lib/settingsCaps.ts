@@ -241,9 +241,9 @@ export interface PanelDriver {
   clockHz: number;
   /** BCM bit depth: the refresh halves per extra plane. */
   planes: number;
-  /** LSB on-time in pixel clocks — the brighter ↔ faster trade (Gitea #460 /
-   *  #789). `0` or absent = FULL, the stock BCM schedule, which is what every
-   *  caller meant before the field existed. */
+  /** LSB on-time in pixel clocks — the refresh-multiplier schedule (Gitea
+   *  #460 / #789 / #797). `0` or absent = FULL, the stock BCM schedule, which
+   *  is what every caller meant before the field existed. */
   lsb?: number;
   /** Latch-blanking clocks (the `panel` line's fourth field); absent = 0. Only
    *  read when `lsb` is set: it shrinks the lit width the on-time is measured
@@ -303,20 +303,38 @@ export function rowBlockWords(a: RefreshInput): number {
   return pw * panels * stripes;
 }
 
-// ---- the brighter ↔ faster trade (Gitea #460 / #789) ----------------------
+// ---- faster refresh: the `lsb` schedule (Gitea #460 / #789 / #797) --------
 //
 // Stock BCM lights every plane for the whole row block and gets the binary
 // weights by re-shifting plane `k` `2^k` times, so a rescan costs `2^planes − 1`
 // row shifts and the LSB is lit for a whole shift even though its weight only
 // needs a fraction of one. Set the LSB's on-time to `lsb` clocks instead and
 // the planes whose on-time fits inside one shift are emitted ONCE with OE cut
-// off early — `t` of them — so a rescan costs `t + 2^(planes − t) − 1` shifts
-// and the panel's peak brightness is `lsb / W` of full.
+// off early — `t` of them — so a rescan costs `E = t + 2^(planes − t) − 1`
+// shifts instead of `2^planes − 1`.
 //
-// The trade is therefore CONTINUOUS in brightness and STEPPED in refresh: the
-// Hz only move when `lsb` crosses `W / 2^t`. Binary weights stay exact either
-// way (plane `k` is lit `lsb · 2^k` clocks however it is emitted), which is
-// what keeps a grey ramp monotonic. The same arithmetic runs on the device in
+// What that costs in BRIGHTNESS is NOT `lsb / W` — #789 shipped that and it was
+// wrong, by up to a factor of 8. `lsb / W` is the duty cycle of one PASS, and
+// truncating makes the pass SHORTER too: perceived brightness is on-time per
+// unit TIME, and the panel runs `(2^planes − 1) / E` times as many passes per
+// second. So, as a fraction of the stock schedule's peak,
+//
+//     brightness = lsb · (2^planes − 1) / (W · E)
+//
+// which is very nearly 1 at the TOP of each `t` step and falls linearly to half
+// of that at the bottom of the same step (measured on Jeremy's panel
+// 2026-09-26: `lsb 14` of `W 59` at 7 planes is visibly close to stock, not the
+// 24 % the old model predicted).
+//
+// The refresh, conversely, is CONSTANT across a step and only moves when `lsb`
+// crosses `W / 2^t`. So every position except a step's TOP —
+// `lsb = floor(W / 2^t)` — is strictly worse than that top: identical Hz, less
+// light. Which is why the card offers the step tops only (`lsbSteps`) rather
+// than a continuous 1..W slider.
+//
+// Binary weights stay exact either way (plane `k` is lit `lsb · 2^k` clocks
+// however it is emitted), which is what keeps a grey ramp monotonic. The same
+// schedule arithmetic runs on the device in
 // `crates/luxel-hub75/src/schedule.rs` — this is the browser's copy of it, so
 // the readouts cannot lag the field the user just moved.
 
@@ -369,13 +387,106 @@ export function emissions(planes: number, trunc = 0): number {
   return t + 2 ** (p - t) - 1;
 }
 
-/** Peak brightness as a fraction of the stock schedule's, 0..1: `lsb / W`.
- *  Independent of the bit depth — every plane's on-time scales by the same
- *  factor, so the ramp keeps its shape and only the peak moves. It compounds
- *  with the ordinary `brightness` channel LUT rather than replacing it. */
-export function peakBrightnessFraction(lsbEff: number, width: number): number {
+/**
+ * Peak brightness as a fraction of the STOCK schedule's, 0..1:
+ *
+ * ```text
+ * brightness = lsb_eff · (2^planes − 1) / (W · E)      E = emissions(planes, t)
+ * ```
+ *
+ * `lsb_eff / W` is the duty cycle of one pass and is NOT the answer — that is
+ * what #789 shipped, and it understated a truncating schedule by up to 8×.
+ * Truncating also shortens the pass, so the panel runs `(2^planes − 1) / E`
+ * times as many passes per second and gets that factor back.
+ *
+ * Still independent of WHICH plane — every plane's on-time scales by the same
+ * factor, so the ramp keeps its shape and only the peak moves — but no longer
+ * independent of the bit DEPTH, because `E` is built from it. It compounds with
+ * the ordinary `brightness` channel LUT rather than replacing it.
+ *
+ * At the top of each `t` step this is within a few percent of full (bench
+ * `W` 61 at 7 planes: 97.6 % at `lsb` 30, 94.6 % at 15, 81.0 % at 7) and it
+ * falls linearly with `lsb` INSIDE a step (50.5 % at `lsb` 8, which runs the
+ * same 444 Hz as 15).
+ */
+export function peakBrightnessFraction(lsbEff: number, width: number, planes: number): number {
   const w = Math.max(1, Math.round(width));
-  return Math.min(1, Math.max(0, Math.round(Math.max(0, lsbEff)) / w));
+  const p = Math.max(1, Math.round(planes));
+  const eff = Math.min(w, Math.max(0, Math.round(Math.max(0, lsbEff))));
+  const shifts = emissions(p, truncatedPlanes(Math.max(1, eff), w, p));
+  return Math.min(1, Math.max(0, (eff * (2 ** p - 1)) / (w * shifts)));
+}
+
+/** One offered position of the `lsb` control: the TOP of a truncation step,
+ *  which is the only `lsb` on that step worth having — same Hz as every
+ *  smaller value on it, more light. */
+export interface LsbStep {
+  /** Truncated planes, `t`. 0 = the stock schedule. */
+  t: number;
+  /** The EFFECTIVE on-time this step runs: `W` at `t = 0`, else
+   *  `floor(W / 2^t)`. */
+  lsb: number;
+  /** What to PUT ON THE WIRE for it: `0` at `t = 0` (full, so the setting
+   *  follows a later change to `W`), else the clocks themselves. */
+  wire: number;
+  /** Row shifts per rescan, `E`. */
+  emissions: number;
+  /** Peak brightness as a fraction of the stock schedule's. */
+  brightness: number;
+}
+
+/**
+ * The `lsb` positions worth offering for a lit width and a bit depth,
+ * brightest (and slowest) first: one per truncation step `t`, at that step's
+ * TOP.
+ *
+ * Inside a step the refresh does not move and the brightness falls linearly, so
+ * a continuous slider spends most of its travel on positions strictly worse
+ * than one of these (#797). `t` runs 0 .. `planes − 1`, but stops early once
+ * `2^t > W`: `floor(W / 2^t)` would be 0 clocks, which is no schedule at all.
+ * A 64×64 bench panel (`W` 61) at 7 planes therefore offers six positions, not
+ * seven.
+ *
+ * The NOMINAL refresh multiplier of step `t` is `2^t`; the true ratio is
+ * `(2^planes − 1) / E`, a few percent under it (127/64, 127/33, 127/18 … at 7
+ * planes), which is why the card prints the Hz beside the × label.
+ */
+export function lsbSteps(width: number, planes: number): LsbStep[] {
+  const w = Math.max(1, Math.round(width));
+  const p = Math.max(1, Math.round(planes));
+  const steps: LsbStep[] = [];
+  for (let t = 0; t <= p - 1; t++) {
+    const lsb = Math.floor(w / 2 ** t);
+    if (lsb < 1) break;
+    steps.push({
+      t,
+      lsb,
+      wire: t === 0 ? 0 : lsb,
+      emissions: emissions(p, t),
+      brightness: peakBrightnessFraction(lsb, w, p),
+    });
+  }
+  return steps;
+}
+
+/**
+ * Which of those steps a stored `lsb` reads as: the one whose truncation count
+ * it is actually running.
+ *
+ * A value BETWEEN two step tops — a Layout stored by #789's continuous slider,
+ * say — is shown at its own step rather than silently rewritten, so the refresh
+ * the readout names is the one the panel really does; the wire value only
+ * changes once the user moves the control.
+ */
+export function lsbStepIndex(
+  steps: readonly LsbStep[],
+  lsbEff: number,
+  width: number,
+  planes: number,
+): number {
+  const t = truncatedPlanes(Math.max(1, Math.round(lsbEff)), width, planes);
+  const i = steps.findIndex((s) => s.t === t);
+  return i < 0 ? 0 : i;
 }
 
 /**

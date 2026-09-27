@@ -4378,59 +4378,95 @@ try {
         await hubPage.$eval('[data-role="panel-module-status"]', (e) => e.textContent.trim()),
       );
 
-      // ---- the brighter ↔ faster slider (Gitea #460 / #789) -------------
+      // ---- the refresh multiplier (Gitea #460 / #789 / #797) -------------
       //
-      // One control for the LSB's on-time in pixel clocks, spanning 1..W of a
-      // row block with the top posting `0` (= full, so the setting follows a
-      // later width change). It is BOOT-built, and it is the reason the `panel`
-      // line grew a fifth field — so what this proves is that moving it posts
-      // FIVE fields and that the two readouts under it follow the thumb.
+      // One STEPPED control for the LSB's on-time: `planes` positions, one per
+      // truncation step, at that step's top (`lsb = floor(W / 2^t)`, written as
+      // `0` at ×1 so the setting follows a later width change). #789 made it a
+      // continuous 1..W slider, which spent most of its travel on positions
+      // with the same Hz as a step top and less light (#797). It is BOOT-built,
+      // and it is the reason the `panel` line grew a fifth field — so what this
+      // proves is that moving it posts FIVE fields, that the value it posts is a
+      // step top, and that the readouts under it follow the thumb.
       {
+        // the step tops for what the device is CONFIGURED with right now. The
+        // mirror is at 6 planes / 20 MHz / blank 2 by this point, so the row
+        // block is 64 words, W = 64 − 1 − 2·2 = 59 and the tops are
+        // 59 · 29 · 14 · 7 · 3 · 1 — the ×4 step is `panel 6 20 shiftreg 2 14`.
+        // (On the 7-plane 30 MHz / blank 1 bench reading, W = 61 and ×4 is 15.)
+        const cur = await (await fetch(`${HUB}/api/layout`)).json();
+        const curScan = cur.matrix.scan > 0 ? cur.matrix.scan : Math.floor(cur.matrix.ph / 2);
+        const stripes = Math.max(1, Math.floor(cur.matrix.ph / 2) / Math.max(1, curScan));
+        const words = cur.matrix.pw * Math.max(1, cur.matrix.cols * cur.matrix.rows) * stripes;
+        const W = Math.max(1, words - (cur.driver.chip === "dp3246" ? 3 : 1) - 2 * cur.driver.blank);
+        const tops = [];
+        for (let t = 0; t < cur.driver.planes; t++) {
+          const lsb = Math.floor(W / 2 ** t);
+          if (lsb < 1) break;
+          tops.push(t === 0 ? 0 : lsb);
+        }
         const max = await hubPage.$eval('[data-role="panel-lsb"]', (e) => Number(e.max));
+        const min = await hubPage.$eval('[data-role="panel-lsb"]', (e) => Number(e.min));
         check(
-          "panel module: the trade slider spans 1..W of a row block",
-          max > 1 &&
-            (await hubPage.$eval('[data-role="panel-lsb"]', (e) => Number(e.min))) === 1,
-          `max ${max}`,
+          "panel module: the refresh control has one position per truncation step",
+          min === 0 && max === tops.length - 1,
+          `min ${min} max ${max}, expected 0..${tops.length - 1} for W ${W} / ${cur.driver.planes} planes`,
         );
         const before = await hubPage
           .$eval('[data-role="panel-lsb-hz"]', (e) => e.textContent.trim())
           .catch(() => "");
+        // the ×4 position (t = 2)
         await hubPage.$eval('[data-role="panel-lsb"]', (el) => {
-          el.value = "8";
+          el.value = "2";
           el.dispatchEvent(new Event("input", { bubbles: true }));
           el.dispatchEvent(new Event("change", { bubbles: true }));
         });
         await sleep(900);
         const t = (await (await fetch(`${HUB}/api/layout`)).json()).driver;
         check(
-          "panel module: the slider posts a FIVE-field line — `panel 6 20 shiftreg 2 8`",
-          t.lsb === 8 &&
+          `panel module: the ×4 step posts a FIVE-field line — \`panel 6 20 shiftreg 2 ${tops[2]}\``,
+          t.lsb === tops[2] &&
             t.planes === 6 &&
             t.clock_mhz === 20 &&
             t.chip === "shiftreg" &&
             t.blank === 2,
           JSON.stringify(t),
         );
+        const mult = await hubPage.$eval('[data-role="panel-lsb-mult"]', (e) =>
+          e.textContent.trim(),
+        );
         const hz = await hubPage.$eval('[data-role="panel-lsb-hz"]', (e) => e.textContent.trim());
         const pct = await hubPage.$eval('[data-role="panel-lsb-peak"]', (e) =>
           e.textContent.trim(),
         );
         check(
-          "panel module: the readouts are a rescan rate and a peak brightness",
-          /Hz rescan$/.test(hz) && /%\s*peak brightness$/.test(pct) && hz !== before,
-          `${before} -> ${hz} / ${pct}`,
+          "panel module: the readouts are a multiplier, a rescan rate and a brightness",
+          /^Refresh ×4$/.test(mult) &&
+            /Hz rescan$/.test(hz) &&
+            /%\s*brightness$/.test(pct) &&
+            hz !== before,
+          `${before} -> ${mult} / ${hz} / ${pct}`,
         );
-        // …and back to full, which is `0` on the wire and not the width
+        // the corrected brightness model (#797): a step TOP keeps very nearly
+        // the stock schedule's light, so this must not read like the old
+        // `lsb / W`, which is 24 % at W 59 / lsb 14 against 88 % here (6
+        // planes) and 91 % on Jeremy's 7-plane panel
+        const shown = Number((pct.match(/(\d+)\s*%/) ?? [])[1]);
+        check(
+          "panel module: a step top reads as nearly stock brightness, not lsb/W",
+          shown >= 80 && shown <= 100,
+          pct,
+        );
+        // …and back to ×1, which is `0` on the wire and not the width
         await hubPage.$eval('[data-role="panel-lsb"]', (el) => {
-          el.value = String(el.max);
+          el.value = "0";
           el.dispatchEvent(new Event("input", { bubbles: true }));
           el.dispatchEvent(new Event("change", { bubbles: true }));
         });
         await sleep(900);
         const back = (await (await fetch(`${HUB}/api/layout`)).json()).driver;
         check(
-          "panel module: the full end posts 0, not today's lit width",
+          "panel module: the ×1 position posts 0, not today's lit width",
           back.lsb === 0,
           JSON.stringify(back),
         );

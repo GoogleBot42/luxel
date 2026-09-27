@@ -116,32 +116,37 @@ value while collapsed. Everything below is on the new page.
   should REFUSE a blanking that leaves no lit clock at all, naming the numbers
   (`panel: blank N + 1 latch clocks leave no lit clock in a 64-word row block` —
   reachable only on a much narrower row block than this panel's).
-- [ ] **Brightness vs refresh — the brighter ↔ faster slider** (Gitea
-  #460/#789). New in the Panel module: one slider whose left end is *brighter*
-  (the full on-time every board has always run) and whose right end is
-  *faster*. Under it, the predicted rescan rate, the measured `rescan_hz`, and
-  the peak brightness as a percentage. On the 64×64 at 7 planes / 30 MHz /
-  blanking 1 the lit width `W` is **61**, so it should read 115 Hz at 100 %
-  full, **~229 Hz at 49 %** at lsb 30, and **~444 Hz at 13 %** at lsb 8. What
-  only metal can say:
-  - The boot line prints the schedule it planned (`firmware/src/hub75.rs`) —
-    check the truncated-plane count and the emissions match the prediction.
-  - `rescan_hz` in `GET /api/status` should COME BACK at the predicted number
-    after the reboot, at lsb 30 and again at lsb 8. The slider is boot-built,
-    so nothing moves until the reboot.
-  - **Photograph a 0..127 grey ramp** at a small `lsb` and check it stays
-    monotonic — the binary weights are supposed to stay exact, and the C++
-    library's version of this trick got that wrong. A ramp that steps
-    backwards anywhere is the bug this check exists for.
-  - Watch for **ghosting between address rows** as `lsb` gets small: the OE
-    window is being cut short, which is the same mechanism latch blanking
-    fixes, so a small `lsb` may want a higher `blank` alongside it.
+- [ ] **Refresh multiplier — the `lsb` schedule** (Gitea #460/#789/#797).
+  The Panel module's stepped **Refresh ×1 / ×2 / ×4 …** control: one position
+  per truncation step, at that step's top (`lsb = floor(W / 2^t)`, written as
+  `0` at ×1). Under it, the predicted rescan rate, the measured `rescan_hz` and
+  the brightness percentage.
+
+  **The machine half is DONE** — Seengreat 64×64, 2026-09-26, 20 MHz /
+  `blank 2` / 7 planes (`W` = 59), results in docs/boards.md: `lsb 29` → 153 Hz
+  measured against 152.6 predicted, `lsb 14` → 295 (296), `lsb 7` → 542 (542);
+  `pass.short` 0 / 0 / 4 over 7.7k / 15k / 27k passes; the boot line's
+  truncated-plane count and emissions matched the prediction at every step; the
+  grey-ramp READBACK is exact; a live `blank` 2 → 4 re-clamped the running
+  `lsb 14` to 13 with no reboot; and the panel is visibly close to stock
+  brightness at `lsb 14`, which is what forced the brightness-model fix (#797:
+  `lsb · (2^planes − 1) / (W · E)`, not `lsb / W`).
+
+  What is still only an EYEBALL question:
+  - **Photograph a 0..127 grey ramp** at a fast step and check it stays
+    monotonic ON THE PANEL — the readback is exact, but the C++ library's
+    version of this trick got the emitted weights wrong, and only a camera sees
+    that. A ramp that steps backwards anywhere is the bug this check exists for.
+  - Watch for **ghosting between address rows** at ×8 and beyond: the OE window
+    is being cut short, which is the same mechanism latch blanking fixes, so a
+    fast step may want a higher `blank` alongside it.
   - It **compounds** with the ordinary `brightness` slider (a channel LUT) —
-    check the two multiply rather than fight: `lsb` at 49 % with brightness 14
-    should look like half of brightness 14, not like brightness 7 alone.
-  - And the top of the slider must write `lsb 0`, not 61: change the panel
-    size or the blanking afterwards and the full on-time should FOLLOW the new
-    lit width rather than staying pinned at 61.
+    check the two multiply rather than fight: ×4 (≈ 95 % of stock) at
+    brightness 14 should look like brightness 14, not like brightness 7.
+  - And the ×1 position must write `lsb 0`, not `W`: change the panel size or
+    the blanking afterwards and the full on-time should FOLLOW the new lit
+    width rather than staying pinned at today's number. (Verified in the
+    console against the mirror; not yet watched on the panel itself.)
 - [x] **Firmware & recovery → Update…** — DONE 2026-09-26 on the Athom
   (Gitea #526): the wrong-board package refused by name before a byte moved,
   then a `.luxr` installed firmware + web app in one action from the device's

@@ -3247,7 +3247,7 @@ Jeremy's new 64×64 tiles are not the FM6124EJ the firmware was tuned for.
 | `clock_mhz` | `panel` line | one of 8 · 10 · 12 · 15 · 20 · 24 · 30 | **30** | the LCD_CAM pixel clock — a fixed list, not a range (#771) |
 | `chip` | `panel` line | `shiftreg` · `fm6126a` · `icn2038s` · `dp3246` | **`shiftreg`** | the driver chip's register init, bit-banged on the pins before the DMA starts |
 | `blank` | `panel` line | 0..8 | **1** | clocks with OE off at the start of each row block and again before the latch word — **applied live** (#778) |
-| `lsb` | `panel` line | 0..`W` | **0** (= full) | LSB on-time in pixel clocks — the brighter ↔ faster trade (#460/#789): truncates the low planes' OE and drops their descriptor repeats; reboot to apply |
+| `lsb` | `panel` line | 0..`W` | **0** (= full) | LSB on-time in pixel clocks — the refresh multiplier (#460/#789/#797): truncates the low planes' OE and drops their descriptor repeats; reboot to apply |
 
 Wire format, JSON (`/api/layout`'s `driver` block, with `live` = what actually
 booted) and the reboot rules are in docs/api.md, "How the panel is driven".
@@ -3367,36 +3367,74 @@ old firmware ("kind of worked, some parts wrong, unexpected parts lit") most
 likely wants the two knobs that did not exist then: **`clock_mhz 20` and
 `blank 2`–`4`**. In wire terms, `panel 7 20 shiftreg 2`.
 
-### Brighter ↔ faster: the `lsb` schedule (Gitea #460 / #789)
+### Faster refresh: the `lsb` schedule (Gitea #460 / #789 / #797)
 
-The fifth `panel` field trades peak brightness for rescan rate without
-touching the bit depth. A framebuffer word carries the OE bit, so how long a
-row is LIT is how many words of its block have OE set, while how long a row
-COSTS is always `cols` clocks. Stock BCM lights every plane for the whole
-window `W = cols − latch − 2·blank` and re-shifts plane `k` `2^k` times —
-127 row shifts per rescan at 7 planes, with the LSB on for a whole shift.
-`lsb` is the LSB's on-time in clocks instead: plane `k` is lit exactly
+The fifth `panel` field multiplies the rescan rate for a small cost in peak
+brightness, without touching the bit depth. A framebuffer word carries the OE
+bit, so how long a row is LIT is how many words of its block have OE set, while
+how long a row COSTS is always `cols` clocks. Stock BCM lights every plane for
+the whole window `W = cols − latch − 2·blank` and re-shifts plane `k` `2^k`
+times — 127 row shifts per rescan at 7 planes, with the LSB on for a whole
+shift. `lsb` is the LSB's on-time in clocks instead: plane `k` is lit exactly
 `lsb · 2^k` clocks, and every plane whose on-time fits inside one shift is
 shifted ONCE with OE cut early (`luxel_hub75::format_scheduled`), only the
 planes above it keeping descriptor repeats
-(`firmware/patches/esp-hub75-0.14.0-plane-repeats.patch`). With `t` such
-planes a rescan is `t + 2^(planes − t) − 1` shifts and peak brightness is
-`lsb / W`; binary weights stay exact, so the grey ramp stays monotonic
-(host-tested, `luxel_hub75::schedule`). `0` = full = the stock schedule,
-byte-identical to what shipped before. The boot line prints it:
+(`firmware/patches/esp-hub75-0.14.0-plane-repeats.patch`). With `t` such planes
+a rescan is `E = t + 2^(planes − t) − 1` shifts; binary weights stay exact, so
+the grey ramp stays monotonic (host-tested, `luxel_hub75::schedule`). `0` =
+full = the stock schedule, byte-identical to what shipped before.
+
+**Peak brightness is `lsb · (2^planes − 1) / (W · E)`, not `lsb / W`.** #789
+shipped the latter and it understates a truncating schedule by up to 8×:
+`lsb / W` is the duty cycle of one PASS, and truncating makes the pass shorter
+too, so the panel runs `(2^planes − 1) / E` times as many passes per second.
+Perceived brightness is on-time per unit TIME. The consequence for a UI is that
+the refresh is CONSTANT across a truncation step while the brightness falls
+linearly inside it, so only the step TOPS — `lsb = floor(W / 2^t)` — are worth
+offering: each keeps nearly the stock brightness, and everything below a top
+runs that top's refresh with less light. The boot line prints the schedule:
 
 ```text
 hub75: lsb 30 of 61 lit clocks (49.2% on-time), 1 low plane truncated, 64 row shifts/pass (stock 127), est 229 Hz
 ```
 
-On the bench 64×64 (7 planes, 30 MHz, blank 1): `lsb 30` → ~229 Hz at 49 %,
-`lsb 8` → ~444 Hz at 13 %, `lsb 61` (or 0) → 115 Hz at 100 %. It is a BOOT
-field — the descriptor rings encode the repeats — so `reboot_required`; a
-live `blank` change keeps the truncation count and re-clamps `lsb` so the
-weights stay exact (`Schedule::refit`). The Settings card shows it as one
-slider between *brighter* and *faster* with the predicted Hz, the measured
-`rescan_hz` and the peak-brightness percentage. **Unverified on metal** —
-the checklist is in docs/UNTESTED.md. Cost (devshell builds, 2026-09-26):
+(the `%` there is the per-pass on-time the firmware plans against, not the
+perceived brightness — 49.2 % of a pass, but 97.6 % of stock light.)
+
+On the bench 64×64 (7 planes, 30 MHz, blank 1, so `W` = 61) the step tops are:
+
+| `lsb` | `t` | `E` | est Hz | peak |
+|---:|---:|---:|---:|---:|
+| `0` (= 61) | 0 | 127 | 115 | **100 %** |
+| 30 | 1 | 64 | 229 | **97.6 %** |
+| 15 | 2 | 33 | 444 | **94.6 %** |
+| 7 | 3 | 18 | 814 | **81.0 %** |
+
+— and `lsb 8`, which #789's continuous slider let you pick, is the same 444 Hz
+as `lsb 15` at **50.5 %**, which is exactly the case the stepped control now
+removes. It is a BOOT field — the descriptor rings encode the repeats — so
+`reboot_required`; a live `blank` change keeps the truncation count and
+re-clamps `lsb` so the weights stay exact (`Schedule::refit`). The Settings
+card shows it as a stepped **Refresh ×1 / ×2 / ×4 …** control with the
+predicted Hz, the measured `rescan_hz` and the brightness percentage.
+
+**On metal** (Seengreat 64×64, 2026-09-26, 20 MHz / `blank 2` / 7 planes, so
+`W` = 59):
+
+| `lsb` | `t` | `E` | predicted Hz | **measured `rescan_hz`** | peak | `pass.short` |
+|---:|---:|---:|---:|---:|---:|---:|
+| 29 | 1 | 64 | 152.6 | **153** | 97.5 % | 0 over 7.7k passes |
+| 14 | 2 | 33 | 296 | **295** | 91.3 % | 0 over 15k passes |
+| 7 | 3 | 18 | 542 | **542** | 83.7 % | 4 over 27k passes |
+
+The grey-ramp readback is exact at every step, and the panel is visibly close
+to stock brightness at `lsb 14` — which the corrected model predicts (91 %) and
+the `lsb / W` one did not (24 %). A LIVE `blank` 2 → 4 re-clamps the running
+`lsb 14` to **13** with no reboot, as designed (`W` drops to 55, and 14 no
+longer fits four times). The remaining on-metal items — the eyeballed ghosting
+at the fast end, and the photographed ramp — are in docs/UNTESTED.md.
+
+Cost (devshell builds, 2026-09-26):
 `seengreat-hub75` 1,166,912 → **1,168,416 B** (+1,504), console bundle
 939,262 → 940,968 B; `.stack` 31,572 plain / 31,388 spare-plane; the 2-byte
 `PanelDriver` field put `board-pixelblaze-v3` 4 B under its stack floor, so
@@ -3427,7 +3465,9 @@ step-exact against the C++ reference), `luxel-core` 314, 677 in the
 workspace. The runtime packer is **0.91–0.93×** the const-generic one on
 x86 — the cost of `cols` no longer being a constant.
 
-**Nothing here has been on a panel yet.** The on-metal list is **Gitea #765**:
+**The `lsb` schedule above has now been on a panel** (2026-09-26, the table
+there); the rest of this section still has not. The on-metal list is
+**Gitea #765**:
 the chip inits, a 1/N-scan panel, chains at the new sizes, non-default
 `planes`/`clock_mhz`/`blank`, the fallback path and the board-map refresh.
 docs/UNTESTED.md carries the status.

@@ -1527,7 +1527,7 @@ They are settings now: `/api/layout` reports a `driver` block and takes one
 wire line back,
 
 ```
-panel <planes> <clock_mhz> <chip> <blank>
+panel <planes> <clock_mhz> <chip> <blank> <lsb>
 ```
 
 which the firmware merges into the stored Layout and applies at the next boot —
@@ -1553,6 +1553,22 @@ to say which one is on the panel:
 FULL and the device reports the EFFECTIVE value it clamped to its own lit
 width, so the card compares the configured value passed through the same clamp
 against `live.lsb`, never the raw numbers.
+
+It is also the one control here that is STEPPED rather than continuous (#797).
+`lsb` is the LSB's on-time in pixel clocks, and the rescan rate only moves when
+it crosses `W / 2^t` — while peak brightness,
+`lsb · (2^planes − 1) / (W · E)`, falls linearly between those crossings. So
+every position except the top of a step, `lsb = floor(W / 2^t)`, runs that
+step's refresh with less light, and the card offers the tops only: one position
+per truncation step, labelled `×1` `×2` `×4` …, with `0` on the wire at `×1` so
+the setting follows a later change to `W`. `lsbSteps()` / `lsbStepIndex()` in
+`lib/settingsCaps.ts` are that list and the reading of a stored value against
+it — a stored `lsb` that sits BETWEEN two tops (anything #789's continuous
+slider wrote) shows at the step whose refresh it is really running and is not
+rewritten until the user moves the control. #789 had this as a continuous
+1..`W` slider labelled *brighter ↔ faster*, on a brightness model (`lsb / W`,
+the duty cycle of one PASS) that ignored the pass getting shorter and so
+understated a truncating schedule by up to 8×.
 
 `lib/panelDriver.ts` is the pure module that decides, and
 `web/tests/panelDriver.test.mjs` tests it over fixtures — the interesting
