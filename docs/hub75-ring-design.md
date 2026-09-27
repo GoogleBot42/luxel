@@ -144,6 +144,26 @@ so the packer must own the unit from one context with interrupts masked
 around the kernel — fine for a packer that runs in task context on its own core (§6). **Measure this first**
 (§10 step 1): it needs no panel, and every other number depends on it.
 
+*Step 1 status (2026-09-27, Gitea #855):* the kernel exists
+(`crates/luxel-hub75/src/pie.rs`, firmware feature `hub75-pie`; bench image
+`packbench`, docs/tools.md) and the on-paper estimate above was wrong in
+one place: PIE has no stride-3 gather. `ee.vunzip.8` deinterleaves by TWO,
+and every PIE data-movement instruction (the zips, the unzips, the byte
+shifts, the lane-constant multiply) maps a lane index affinely with a
+power-of-two slope, so no sequence of them turns RGB888's 3-byte pixel
+stride into the bus word's 2-byte stride for more than a couple of pixels
+— a SIMD gather costs an op per pixel per channel regardless. So the
+deinterleave is a scalar prologue (byte loads, the brightness LUT applied
+on the way — any LUT stays exact, no vector multiply approximation) at
+~13 cycles/px, and the vector unit does the per-plane extraction on 16-bit
+lanes holding `bottom << 8 | top` of one channel: mask the plane bit,
+`ee.vmul.u16` as the (logical) shifter per channel pair, one multiply to
+fold the six bits into bits 9..14, xor/and/xor to merge into the formatted
+word — 17 instructions per 8 columns per plane, ~30 cycles/px in total on
+paper, ~5x today's packer rather than 10x. The lever if that is not
+enough is the FRAME format: a planar or RGBX frame makes the prologue a
+few `vld`s. Numbers from metal go in docs/boards.md "The PIE packer".
+
 ## 6. Cores: the refill is a work queue, not a core
 
 Which core packs is a **lever, not a decision** (Jeremy, 2026-09-27): start

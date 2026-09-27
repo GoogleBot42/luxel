@@ -84,6 +84,8 @@ compile_error!(
 );
 #[cfg(feature = "hub75")]
 mod hub75;
+#[cfg(feature = "packbench")]
+mod packbench;
 #[cfg(all(feature = "hub75-spare-plane", not(feature = "hub75")))]
 compile_error!("`hub75-spare-plane` is a HUB75 driver mode and needs the `hub75` feature");
 mod layout;
@@ -368,6 +370,11 @@ async fn main(spawner: Spawner) -> ! {
     // image header via the driver the boot guard already borrowed.
     #[cfg(feature = "psram-arena")]
     psram::init(p.PSRAM, ota_flash.as_mut());
+    // The packer microbench (Gitea #855): core 0 now, before anything else
+    // competes for the core or the heap; core 1 below, as the first thing its
+    // executor runs.
+    #[cfg(feature = "packbench")]
+    packbench::run(0);
 
     let timg0 = TimerGroup::new(p.TIMG0);
     let sw_int = SoftwareInterruptControl::new(p.SW_INTERRUPT);
@@ -676,7 +683,11 @@ async fn main(spawner: Spawner) -> ! {
             p.CPU_CTRL,
             sw_int.software_interrupt1,
             sw_int.software_interrupt3,
-            move |s: Spawner| s.spawn(render_task(sink).unwrap()),
+            move |s: Spawner| {
+                #[cfg(feature = "packbench")]
+                packbench::run(1);
+                s.spawn(render_task(sink).unwrap())
+            },
         ) {
             Ok(()) => println!("render task: AppCpu"),
             Err(init) => {

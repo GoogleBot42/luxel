@@ -429,9 +429,12 @@ impl DynFb {
 
     /// The layout one framebuffer's buffer needs. Align 4: the LCD_CAM's GDMA
     /// wants word-aligned sources, and `u16` alignment alone would let an
-    /// odd-sized geometry land on a halfword.
+    /// odd-sized geometry land on a halfword. 16 under `hub75-pie`: the vector
+    /// packer's loads and stores FORCE 16-byte alignment rather than fault
+    /// (`luxel_hub75::pie`), and it refuses a buffer that is not.
     fn buffer_layout(g: Geometry) -> Option<AllocLayout> {
-        AllocLayout::from_size_align(g.bytes(), 4).ok()
+        let align = if cfg!(feature = "hub75-pie") { 16 } else { 4 };
+        AllocLayout::from_size_align(g.bytes(), align).ok()
     }
 
     /// Write the control template into a freshly zeroed buffer — per-plane OE
@@ -510,7 +513,8 @@ fn template_lights(words: &[u16], g: Geometry, c: Control) -> bool {
     lit && latched && clean
 }
 
-/// Heap-allocate the packer's spread tables (2 KiB). `Tables::zeroed()` is
+/// Heap-allocate the packer's spread tables (2.25 KiB with the byte LUT the
+/// PIE packer reads, Gitea #855). `Tables::zeroed()` is
 /// all-zero bytes, so a zeroed block is a valid value without a 2 KiB stack
 /// temporary.
 fn alloc_tables() -> Option<(Block, &'static mut Tables)> {
@@ -806,7 +810,7 @@ pub fn panel_view(m: &Matrix) -> PanelView {
 /// actually driven with for each source value. Exactly the arithmetic the
 /// per-pixel path did inline, so the two are byte-identical by construction
 /// (asserted in `luxel-hub75`'s tests against `hub75-framebuffer` itself).
-fn brightness_lut(brightness5: u8) -> [u8; 256] {
+pub(crate) fn brightness_lut(brightness5: u8) -> [u8; 256] {
     let mut lut = [0u8; 256];
     let full = brightness5 >= 31;
     for (c, v) in lut.iter_mut().enumerate() {
@@ -943,6 +947,9 @@ pub struct Hub75Output {
     /// The packer's per-row pads, allocated once at boot — what keeps
     /// composition allocation-free with `cols` no longer a const.
     scratch: Scratch,
+    /// The vector packer's pair pads (Gitea #855), same lifetime and reason.
+    #[cfg(feature = "hub75-pie")]
+    pads: luxel_hub75::pie::PairPads,
     /// The boot-time panel→pixel remap (Gitea #475). `None` = the configured
     /// arrangement IS the driver's own row-major order, so nothing is
     /// gathered and the compose path is byte-for-byte what it always was.
@@ -999,6 +1006,8 @@ impl Hub75Output {
             tables: None,
             tables_b5: u8::MAX,
             scratch: Scratch::new(0),
+            #[cfg(feature = "hub75-pie")]
+            pads: luxel_hub75::pie::PairPads::new(0),
             remap: None,
             #[cfg(feature = "hub75-spare-plane")]
             staging: None,
@@ -1195,6 +1204,25 @@ impl Hub75Output {
         // from boots that printed it.
         println!("hub75: panel took {} B of internal heap, {} B left (floor {} B)", took, left, BOOT_HEAP_FLOOR);
         let scratch = Scratch::for_geometry(g);
+        #[cfg(feature = "hub75-pie")]
+        let pads = {
+            let pads = luxel_hub75::pie::PairPads::for_geometry(g);
+            // Whether the boot framebuffer meets the kernel's rules: 16-byte
+            // aligned (buffer_layout) and a column count in whole lanes.
+            let fits = luxel_hub75::pie::fits(
+                // SAFETY: `front` is `g.words()` formatted `u16`s at a
+                // buffer_layout-aligned block; read-only here, for its address.
+                unsafe { core::slice::from_raw_parts(front.words, g.words()) },
+                g,
+            );
+            println!(
+                "hub75: PIE vector packer {} ({} B of pair pads{})",
+                if fits { "active" } else { "INACTIVE — scalar packer" },
+                pads.bytes(),
+                if fits { "" } else { "; cols must be a multiple of 8" }
+            );
+            pads
+        };
 
         // The configured arrangement (#475). `layout::init()` has already run
         // (main.rs wires the panel after it), so `m` is the stored Layout's.
@@ -1286,6 +1314,8 @@ impl Hub75Output {
                     tables: Some(tables),
                     tables_b5: u8::MAX,
                     scratch,
+                    #[cfg(feature = "hub75-pie")]
+                    pads,
                     remap,
                     #[cfg(feature = "hub75-spare-plane")]
                     staging: staging.take(),
@@ -1533,6 +1563,8 @@ impl OutputDriver for Hub75Output {
                 &mut self.tables,
                 &mut self.tables_b5,
                 &mut self.scratch,
+                #[cfg(feature = "hub75-pie")]
+                &mut self.pads,
                 self.g,
                 self.control,
                 &self.sched,
@@ -1572,6 +1604,8 @@ impl OutputDriver for Hub75Output {
                 &mut self.tables,
                 &mut self.tables_b5,
                 &mut self.scratch,
+                #[cfg(feature = "hub75-pie")]
+                &mut self.pads,
                 self.g,
                 self.control,
                 &self.sched,
@@ -1801,6 +1835,7 @@ fn compose_into(
     tables: &mut Option<&'static mut Tables>,
     tables_b5: &mut u8,
     scratch: &mut Scratch,
+    #[cfg(feature = "hub75-pie")] pads: &mut luxel_hub75::pie::PairPads,
     g: Geometry,
     control: Control,
     sched: &Schedule,
@@ -1820,6 +1855,13 @@ fn compose_into(
     // and the pack below writes every one of them back.
     target.refmt(control, sched, fmt_gen);
     let dst = target.fb_words();
+    // The vector packer first (Gitea #855); it writes nothing and says so
+    // when the buffer does not meet its rules, and the scalar path is then
+    // exactly what ran before.
+    #[cfg(feature = "hub75-pie")]
+    if luxel_hub75::pie::pack_pie(dst, g, rgb, remap, t, pads) {
+        return;
+    }
     match remap {
         None => luxel_hub75::pack(dst, g, rgb, t, scratch),
         Some(lut) => luxel_hub75::pack_remap(dst, g, rgb, lut, t, scratch),
