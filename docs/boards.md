@@ -2083,8 +2083,8 @@ rather than by this board.
 
 What did **not** change is the assets margin, which is still the number
 worth watching on every board: the 4 MB `assets` partition
-(0xF0000 = 983,040 B) holds a **939 KB bundle as of 2026-09-27 — 2.16 %
-headroom** (961,793 B packed; `tools/ci.sh` fails the build over 983,040 B,
+(0xF0000 = 983,040 B) holds a **946 KB bundle as of 2026-09-27 — 1.48 %
+headroom** (968,489 B packed; `tools/ci.sh` fails the build over 983,040 B,
 and `POST /api/assets` refuses an oversized install outright). One bundle
 ships to every board, so the *small* partition is the bound even though this
 board's is four times the size.
@@ -2098,6 +2098,13 @@ entry chunk, so the lever that has not been pulled yet is **code-splitting**
 (the image importer's ~1,600 lines behind a dynamic `import()` off the
 Sprites tab, say) rather than any of the content decisions below. Gitea #691
 carries the options and the up-to-date breakdown.
+
+#785's shipped sprite and scene library is the same story in miniature, and is
+a further **+6,375 B** (962,114 → 968,489 over its own base, `d7676924`): only
+1,768 B of that is the two new JSON files — 11 `LXSP` records and 5 scene
+blocks, both tiny by construction — and the rest is again the entry chunk, for
+the store, the reconciliation and the two rewritten pages. Content is not what
+is eating this partition.
 
 The 12.2 % figure was the result of the Gitea #683 diet and it was not a
 standing surplus — it had fallen to **0.73 %** by 2026-09-24 (the 11.5 %
@@ -2113,9 +2120,9 @@ on that day's master:
 | zopfli + terser on the two entry HTMLs and the small chunks | 2.1 kB |
 
 None of it is repeatable — the three levers are spent. The rest has to come
-from what is *in* the bundle: `gallery.json` is 355 kB of the 939 (307
+from what is *in* the bundle: `gallery.json` is 355 kB of the 945 (308
 pattern sources, which ship verbatim on purpose) and the console's own code
-is the 375 kB JS chunk, CodeMirror plus everything the tabs have grown since.
+is the 379 kB JS chunk, CodeMirror plus everything the tabs have grown since.
 After code-splitting that chunk the only lever left is growing `assets` past
 0xF0000, which is another migration — Gitea #691 has the options and what
 each costs.

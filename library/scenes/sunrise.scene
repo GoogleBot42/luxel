@@ -1,0 +1,15 @@
+# A Luxel library scene (Gitea #785) — Apache-2.0. Grammar: library/README.md.
+# A warm ramp over a pattern, a sprite scaled up by `fit contain` (11x11 into a
+# 22x22 box), and a greeting crawling along the bottom.
+S - Sunrise
+L pat 0 0 0 0 normal 100 none fill 1
+N Glow
+I @pat/coral-plasma
+R 100 0:1b0b2e 80:8c2d4b 170:f4772e 230:ffd166 255:fff3c4
+L sprite 4 3 22 22 normal 100 none contain 1
+N Sun
+I @spr/sun-spin
+L text 0 26 0 0 normal 100 black fill 1
+N Greeting
+T lit GOOD MORNING
+F tiny ffd166 l left 12

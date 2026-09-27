@@ -5383,6 +5383,150 @@ try {
         "sprites: and the tab is back to its empty state",
         (await spPage.$('[data-role="sprites-empty"]')) !== null,
       );
+
+      // ── The SHIPPED sprite and scene libraries, on a CONSOLE (#785) ──────
+      //
+      // Same two sources as the playground's, but the LIVE one is the device:
+      // `+ Add` on a shipped sprite is a `POST /api/sprites`, and on a shipped
+      // SCENE it is one POST per missing pattern and sprite plus one to
+      // `/api/scenes`, with the ids rewritten to the ones the device minted
+      // (`lib/sceneRefs.ts`). Adding is a STORE write and never an activation
+      // (#563) — the activation below is this harness's, and it is there to
+      // prove the reconciliation produced a scene the DEVICE can actually run.
+      const spSeg = await spPage.$$eval('[data-role="sprites-sources"] button', (els) =>
+        els.map((e) => (e.textContent ?? "").replace(/\s+/g, " ").trim()),
+      );
+      check(
+        "library: a console's Sprites sources are On device | Library",
+        /^On device /.test(spSeg[0] ?? "") && /^Library /.test(spSeg[1] ?? ""),
+        spSeg.join(" | "),
+      );
+      await spPage.click('[data-role="sprites-source-library"]');
+      await sleep(1000);
+      const LIBSPR = '[data-role="sprites-grid"][data-source="library"]';
+      const shippedSpr = await spPage.$$eval(LIBSPR + ' [data-role="sprite-tile"]', (els) =>
+        els.map((e) => e.dataset.sprite),
+      );
+      check(
+        "library: the shipped sprites reach a console from its own bundle",
+        shippedSpr.length >= 8 && shippedSpr.includes("heart"),
+        shippedSpr.length + ": " + shippedSpr.join(","),
+      );
+      await spPage.screenshot({ path: `${shotDir}/device-e2e-sprites-library.png` });
+      await spPage.$eval(
+        LIBSPR + ' [data-role="sprite-tile"][data-sprite="heart"] [data-role="sprite-tile-add"]',
+        (el) => el.click(),
+      );
+      await spPage.waitForSelector('[data-role="sprite-editor-view"]:not([hidden])', {
+        timeout: 15000,
+      });
+      await sleep(1000);
+      const addedSpr = await fetch(`${SP}/api/sprites`).then((r) => r.json());
+      const heartRow = (addedSpr.sprites ?? [])[0] ?? {};
+      check(
+        "library: + Add POSTed the shipped record to the DEVICE, byte for byte",
+        (addedSpr.sprites ?? []).length === 1 &&
+          heartRow.name === "Heart" &&
+          heartRow.w === 9 &&
+          heartRow.h === 8 &&
+          heartRow.frames === 1 &&
+          heartRow.colors === 2,
+        JSON.stringify(addedSpr.sprites),
+      );
+      await spPage.click('[data-role="sprite-editor-back"]');
+      await sleep(900);
+
+      // ---- a shipped SCENE, with its references reconciled on the device ----
+      await spPage.click('[data-role="tab-scenes"]');
+      await spPage.waitForSelector('[data-role="scenes-panel"]', { timeout: 10000 });
+      await sleep(900);
+      await spPage.click('[data-role="scenes-source-library"]');
+      await sleep(1800);
+      const LIBSCN = '[data-role="scenes-grid"][data-source="library"]';
+      const scNames = await spPage.$$eval(LIBSCN + ' [data-role="scene-tile-name"]', (els) =>
+        els.map((e) => (e.textContent ?? "").trim()),
+      );
+      check(
+        "library: the shipped scenes reach a console too",
+        scNames.length >= 4 && scNames.includes("Clock over Aurora"),
+        scNames.join(","),
+      );
+      await spPage.screenshot({ path: `${shotDir}/device-e2e-scenes-library.png` });
+
+      const clockIx = scNames.indexOf("Clock over Aurora");
+      await spPage.$$eval(
+        LIBSCN + ' [data-role="scene-tile-add"]',
+        (els, ix) => els[ix].click(),
+        clockIx,
+      );
+      await spPage.waitForSelector('[data-role="scene-editor-view"]:not([hidden])', {
+        timeout: 20000,
+      });
+      await sleep(2000);
+      const devPats = (await fetch(`${SP}/api/patterns`).then((r) => r.json())).patterns ?? [];
+      const devScenes = await fetch(`${SP}/api/scenes`).then((r) => r.json());
+      const cloned = (devScenes.scenes ?? []).find((s) => s.name === "Clock over Aurora");
+      const aurora = devPats.find((p) => p.name === "Aurora 2D");
+      check(
+        "library: cloning a shipped scene POSTed the pattern it references",
+        aurora !== undefined,
+        JSON.stringify(devPats.map((p) => p.name)),
+      );
+      check(
+        "library: …and the stored scene binds the DEVICE's id for it, not a library one",
+        cloned !== undefined &&
+          (cloned.layers ?? []).some((l) => l.type === "pat" && l.pat?.id === aurora?.id),
+        JSON.stringify((cloned?.layers ?? []).map((l) => [l.type, l.pat?.id ?? l.sprite?.id ?? ""])),
+      );
+      check(
+        "library: the shipped ramp and clock layers survived the round trip",
+        (cloned?.layers ?? []).some((l) => l.type === "pat" && l.pat?.ramp?.pct === 70) &&
+          (cloned?.layers ?? []).some((l) => l.type === "text" && l.text?.source === "clock"),
+        JSON.stringify(cloned?.layers ?? []).slice(0, 300),
+      );
+      // The proof that the reconciliation produced something the DEVICE can
+      // run: activate it and read the wire.
+      const act = await fetch(`${SP}/api/scenes/${cloned?.id ?? ""}/activate`, {
+        method: "POST",
+      }).then((r) => r.json());
+      await sleep(1500);
+      const scPx = new Uint8Array(await (await fetch(`${SP}/api/pixels`)).arrayBuffer());
+      let lit = 0;
+      for (const v of scPx) if (v > 8) lit++;
+      check(
+        "library: the cloned scene RENDERS on the device (/api/pixels is not black)",
+        act.ok === true && lit > 200,
+        `${act.ok} · ${lit} of ${scPx.length} bytes lit`,
+      );
+
+      // Cloning the SAME scene again must reuse what it just created rather
+      // than stock a second copy of everything — the content match in
+      // `lib/sceneRefs.ts` is the whole difference between a library you can
+      // browse and one that fills a 3840 B scene blob on the second click.
+      await spPage.click('[data-role="scene-editor-back"]');
+      await sleep(900);
+      await spPage.click('[data-role="scenes-source-library"]');
+      await sleep(1200);
+      await spPage.$$eval(
+        LIBSCN + ' [data-role="scene-tile-add"]',
+        (els, ix) => els[ix].click(),
+        clockIx,
+      );
+      await spPage.waitForSelector('[data-role="scene-editor-view"]:not([hidden])', {
+        timeout: 20000,
+      });
+      await sleep(2000);
+      const twice = (await fetch(`${SP}/api/patterns`).then((r) => r.json())).patterns ?? [];
+      const twiceScenes = await fetch(`${SP}/api/scenes`).then((r) => r.json());
+      check(
+        "library: a second + Add reuses the pattern and names the scene apart",
+        twice.filter((p) => p.name === "Aurora 2D").length === 1 &&
+          (twiceScenes.scenes ?? []).filter((s) => s.name.startsWith("Clock over Aurora")).length === 2,
+        JSON.stringify({
+          pats: twice.map((p) => p.name),
+          scenes: (twiceScenes.scenes ?? []).map((s) => s.name),
+        }),
+      );
     } finally {
       await spPage.close();
       spDev.kill();

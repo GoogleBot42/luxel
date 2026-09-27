@@ -50,6 +50,15 @@
    * device` is already ABSENT rather than disabled there.
    */
   export let canPlay = true;
+  /**
+   * Which backing these rows came from (Gitea #785). `store` is the live
+   * library — play, edit, duplicate, delete. `library` is the SHIPPED one:
+   * read-only, not in any store, so the only verb is copy-it-in. Cloning is a
+   * STORE write and never an activation — a tile must not change what the LEDs
+   * are doing (#563) — so it lands the scene and opens the editor on it, which
+   * is what `New scene…` on the Patterns page does too.
+   */
+  export let mode: "store" | "library" = "store";
 
   /** `Edit` on a console, `Open` in the playground — the pattern tile's
    *  `openVerb` (pages/Patterns.svelte), so the two grids read alike. */
@@ -60,6 +69,9 @@
     edit: string;
     duplicate: string;
     remove: string;
+    /** `library` mode: copy this scene (and what it references) into the
+     *  live library. */
+    add: string;
   }>();
 
   /** Live composites at once. A two-pattern-layer scene is two engines, so
@@ -220,7 +232,7 @@
   });
 </script>
 
-<div class="tiles" data-role="scenes-grid">
+<div class="tiles" data-role="scenes-grid" data-source={mode}>
   {#each tiles as t (t.scene.id)}
     <div
       class="tile"
@@ -231,9 +243,17 @@
       <div class="thumb" use:observe={t.scene.id}>
         <button
           class="face"
-          data-role={canPlay ? "scene-tile-play" : "scene-tile-open"}
-          title={canPlay ? "play this scene" : "open this scene"}
-          on:click={() => dispatch(canPlay ? "play" : "edit", t.scene.id)}
+          data-role={mode === "library"
+            ? "scene-tile-open"
+            : canPlay
+              ? "scene-tile-play"
+              : "scene-tile-open"}
+          title={mode === "library"
+            ? "copy this scene into your scenes"
+            : canPlay
+              ? "play this scene"
+              : "open this scene"}
+          on:click={() => dispatch(mode === "library" ? "add" : canPlay ? "play" : "edit", t.scene.id)}
         >
           <canvas use:tileCanvas={t.scene.id} width={thumbRig.w} height={thumbRig.h}></canvas>
         </button>
@@ -241,19 +261,28 @@
           <span class="pill" data-role="scene-playing">▶ playing</span>
         {/if}
         <div class="actions">
-          <button class="btn sm" data-role="scene-tile-edit" on:click={() => dispatch("edit", t.scene.id)}
-            >{openVerb}</button
-          >
-          <span class="spacer"></span>
-          <button
-            class="btn sm icon"
-            data-role="scene-tile-menu"
-            aria-label="more actions"
-            on:click|stopPropagation={(e) => {
-              menuBtn = e.currentTarget;
-              menuFor = menuFor === t.scene.id ? "" : t.scene.id;
-            }}>⋯</button
-          >
+          {#if mode === "library"}
+            <button
+              class="btn sm"
+              data-role="scene-tile-add"
+              title="copy this scene into your scenes"
+              on:click|stopPropagation={() => dispatch("add", t.scene.id)}>+ Add</button
+            >
+          {:else}
+            <button class="btn sm" data-role="scene-tile-edit" on:click={() => dispatch("edit", t.scene.id)}
+              >{openVerb}</button
+            >
+            <span class="spacer"></span>
+            <button
+              class="btn sm icon"
+              data-role="scene-tile-menu"
+              aria-label="more actions"
+              on:click|stopPropagation={(e) => {
+                menuBtn = e.currentTarget;
+                menuFor = menuFor === t.scene.id ? "" : t.scene.id;
+              }}>⋯</button
+            >
+          {/if}
         </div>
       </div>
       <div class="meta">
@@ -261,9 +290,15 @@
         <div class="sub" data-role="scene-tile-layers">
           {t.scene.layers.length} layer{t.scene.layers.length === 1 ? "" : "s"}
         </div>
-        <button class="elink" data-role="scene-tile-edit-link" on:click={() => dispatch("edit", t.scene.id)}
-          >{openVerb}</button
-        >
+        {#if mode === "library"}
+          <button class="elink" data-role="scene-tile-add-link" on:click={() => dispatch("add", t.scene.id)}
+            >Add</button
+          >
+        {:else}
+          <button class="elink" data-role="scene-tile-edit-link" on:click={() => dispatch("edit", t.scene.id)}
+            >{openVerb}</button
+          >
+        {/if}
       </div>
     </div>
   {/each}

@@ -1,0 +1,18 @@
+# A Luxel library scene (Gitea #785) — Apache-2.0. Grammar: library/README.md.
+# No pattern at all: a colour wash, two sprites (an animated ring STRETCHED by
+# `fit fill` to beat around a still heart) and a caption scrolling underneath.
+# A scene does not need an engine to be worth playing.
+S - Heartbeat
+L color 0 0 0 0 normal 100 none fill 1
+N Wash
+K 140208
+L sprite 2 1 20 20 add 100 none fill 1
+N Pulse
+I @spr/pulse-ring
+L sprite 7 6 9 8 normal 100 none fill 1
+N Heart
+I @spr/heart
+L text 0 24 0 0 normal 100 black fill 1
+N Caption
+T lit LOVE
+F tiny ff6688 c left 14

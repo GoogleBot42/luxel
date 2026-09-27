@@ -15,6 +15,11 @@
 #   2. cargo test --workspace
 #   3. tools/check-library.sh          (three source lints, then the library sweep
 #                                       over five rigs)
+#   3a. web/tools/check-sprite-scene-library.mjs
+#                                      (the shipped sprite + scene library:
+#                                      every record decodes in luxel_core, fits
+#                                      the 16 KiB cap, and every scene's
+#                                      references resolve — Gitea #785)
 #   3b. tools/offset-check.py          (no hard-coded partition offsets, #501)
 #   4a. devshell firmware build (CI_BOARD, default board-pixelblaze-v3) —
 #       covers build-esp32.sh itself + the linked-feature markers
@@ -37,6 +42,7 @@
 #                spelled as in release.yml's matrix (default: the three below;
 #                empty string skips the whole image-check half)
 #   CI_SKIP      space-separated step names to skip: web cargo library firmware
+#                (`library` skips both library gates)
 #   CI_QEMU      set to 1 to add the (opt-in) QEMU suite as a final step
 #   MIGRATING_RELEASE
 #                passed through to tools/image-check.sh. Defaults to 0 since
@@ -156,6 +162,16 @@ if skipped library; then echo "== library: SKIPPED"; else
   step "tools/check-library.sh (the library sweep)"
   tools/check-library.sh
   done_step library
+
+  # The SHIPPED sprite and scene library (Gitea #785). It runs the Rust codecs
+  # through web/public/luxel.wasm — `luxel_core::sprite::check` on every
+  # record and `luxel_core::scene::parse` on every scene block — so a library
+  # entry the console renders but a device would refuse fails here rather than
+  # on a panel. Needs the wasm, which the web step above built; with
+  # CI_SKIP=web on a fresh tree, run `npm run wasm` first (the gate says so).
+  step "web/tools/check-sprite-scene-library.mjs (the shipped sprite + scene library)"
+  ( cd "$ROOT/web" && npm run --silent check-library )
+  done_step sprite-scene-library
 fi
 
 # ------------------------------------------------------------- offsets

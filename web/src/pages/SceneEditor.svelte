@@ -51,6 +51,11 @@
     warmSprites,
   } from "../stores/sprites";
   import { listPatterns, savePattern as savePatternLocally } from "../lib/store";
+  import {
+    cloneLibrarySprite,
+    librarySprites,
+    loadLibrarySprites,
+  } from "../stores/library";
   import { confirm } from "../stores/dialog";
   import {
     device,
@@ -175,6 +180,9 @@
     // layer's picture, its picker row and its `9×8 · 2 frames` line comes out
     // of `stores/sprites.ts` now (Gitea #740).
     void warmSprites();
+    // …and the SHIPPED sprite library, which is the picker's second group
+    // (#785): one fetch of a few KB, once per session.
+    void loadLibrarySprites();
   }
 
   /** Adopt `id` once the store actually holds it — a deep link lands here
@@ -666,6 +674,32 @@
     dispatch("sprite", r.id);
   }
 
+  /**
+   * The sprite picker's `Library` group (#785). A shipped record is not
+   * bindable — it has no store id — so it is cloned into the live library
+   * first and the COPY is what the layer binds, box set to its own size the
+   * way `SpriteInspector.setSprite` would have. Every refusal is the host's
+   * (`stores/sprites.ts` reports it through the ONE error strip), and the
+   * layer is left alone when one happens.
+   */
+  async function addLibrarySprite(at: number, slug: string): Promise<void> {
+    const l = doc.layers[at];
+    if (!l || l.body.kind !== "sprite") return;
+    const id = await cloneLibrarySprite(slug);
+    if (id === "") return;
+    await warmSprites();
+    const meta = $sprites.find((x) => x.id === id);
+    replaceLayer(at, {
+      ...l,
+      style: {
+        ...l.style,
+        rect: { ...l.style.rect, w: meta?.w ?? l.style.rect.w, h: meta?.h ?? l.style.rect.h },
+      },
+      body: { kind: "sprite", id },
+    });
+    selected = at;
+  }
+
   // ---- editing ----
 
   /** Every mutation goes through here: it replaces the record, and pushes it
@@ -1151,10 +1185,12 @@
         <SpriteInspector
           layer={sel}
           library={$sprites}
+          libraryRows={$librarySprites}
           saving={$spriteSaving}
           on:change={(e) => replaceLayer(selected, e.detail)}
           on:edit={editSprite}
           on:fresh={() => void newSpriteFor(selected)}
+          on:addlib={(e) => void addLibrarySprite(selected, e.detail)}
           on:delete={() => void onDeleteLayer()}
         />
       {:else if sel && sel.body.kind === "color"}

@@ -4347,9 +4347,9 @@
         {
           "id": "empty-primary",
           "mock": ".empty .btn.primary",
-          "app": "[data-role=\"new-scene\"]",
+          "app": "[data-role=\"new-scene-empty\"]",
           "text": true,
-          "note": "mock copy: `+ New scene`"
+          "note": "mock copy: `+ New scene`. The EMPTY STATE's own primary, which has a data-role of its own since Gitea #785: the page bar above it carries a `new-scene` too (the source control lives there, so the bar is present whatever the page is showing), and an unqualified selector matched THAT one and reported this frame's reading order as scrambled."
         }
       ]
     },

@@ -352,6 +352,80 @@ Where the code is: `lib/imageImport.ts` is the whole conversion and is PURE
 pipeline exists in Rust as `luxel sprite import` (docs/tools.md), and the two
 are pinned to checked-in goldens so they cannot drift.
 
+## Sprites and scenes get a Library source ✅ (2026-09-27, Gitea #785)
+
+A fresh playground opened on "you have no sprites" and "you have no scenes";
+the only way to get either was to draw one. The shipped pattern library now has
+two peers — `library/sprites/` and `library/scenes/`, through
+`web/tools/gen-sprite-scene-gallery.mjs` into `sprites.json` / `scenes.json`
+(docs/tools.md; the source grammars are in library/README.md) — and both pages
+grew the **source control** the Patterns page has (§5.1, D3,
+`components/SourceSeg.svelte`, shared rather than copied a third time):
+
+| | Sprites · Scenes |
+|---|---|
+| console | `On device (N)` · `Library (N)` |
+| playground | `Mine (N)` · `Library (N)` |
+
+**Both pages open on the LIVE source**, and that is where the control differs
+from the Patterns page's, deliberately: Patterns opens a playground on `Library`
+because there the shipped collection *is* the content and `Mine` is a scratch
+pad, whereas Sprites and Scenes are **workspaces** — you draw a sprite, you
+build a scene — so the page opens on your own work and the shipped set is one
+chip away, with its count on the chip (`Library 11` on Sprites today) and the
+empty state naming it in words. It also keeps the mocked empty state the state a console with
+nothing stored actually shows.
+
+`stores/library.ts` is the third backing beside the device and this browser's
+`localStorage`, and the only read-only one: both files are fetched lazily and
+once, so a session that never opens the tab pays nothing. Library scene tiles
+composite the real thing rather than a placeholder — the row's references
+resolve to the clean-room pattern sources (out of `gallery.json`, fetched the
+first time something needs a pattern) and to the shipped `LXSP` records — so the
+thumbnail is what `+ Add` lands.
+
+A `Library` tile carries **one verb and no `⋯`**: `+ Add`
+(`data-role="sprite-tile-add"` / `"scene-tile-add"`), and the tile face does the
+same thing. For a sprite that is a copy into the live library, which then opens
+in the sprite editor — the same "and now you are looking at it" `+ New sprite`
+gives.
+
+**Adding a scene is where the work is** (`lib/sceneRefs.ts`). A scene names its
+patterns and sprites by store id, and a shipped one carries library references
+instead, so adding it creates whatever the target store is missing and rewrites
+the ids. Three rules decide what "missing" means:
+
+- **Matching is by CONTENT, not by name.** A library pattern whose source is
+  already in the store binds that store id however it is named; only a genuinely
+  new record is created. A row whose source has not streamed in yet reads as
+  *unknown*, never as a match, so the clone makes its own copy rather than
+  binding a pattern it has not read.
+- **A name collision renames** (`Heart 2`) rather than overwrites, because both
+  hosts treat a save under an existing name as "replace that one" — creating
+  `Heart` over the user's own different `Heart` would silently eat their drawing.
+- **The target store is whichever host is in front of the user**: the device's
+  `/api/patterns` / `/api/sprites` / `/api/scenes` on a console, `localStorage`
+  in the playground. Every refusal is reported in the device's own words in the
+  one error strip — `sprite: … over the 16 KiB cap`, `scenes: store full (N of
+  3840 B)`, a pattern that does not compile — and a confirmation line says what
+  was created and what was reused.
+
+**Nothing is activated.** `+ Add` is a store write and nothing else: no
+activation, no playlist, nothing on the LEDs changes (#563). It stores the scene
+and opens the editor on it.
+
+The scene editor's **sprite picker** gained a second group of rows for the
+shipped sprites, their `value` prefixed `lib:` so the two namespaces cannot be
+confused and their `desc` suffixed `· Library`. A layer can only bind a store
+id, so picking one clones it into the live library first and binds the copy —
+the same "saves to the device" a library *pattern* row already means.
+
+`lib/sceneRefs.ts` is pure (no stores, no fetch, no device; the two sides are
+injected as `RefSource` and `RefTarget`) and is deliberately reusable by **#746**
+(scene export / import): an exported scene's dependency list is the same
+`SceneRef[]` and its importer is the same `RefTarget`, so that ticket should
+import this rather than grow a second copy.
+
 ## Status-bar frame rate ✅ (Gitea #381)
 
 The counter at the right of the header (`data-role="fps"`) shows **the device's

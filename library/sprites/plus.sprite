@@ -1,0 +1,14 @@
+# Luxel library sprite — original art, Apache-2.0. Grammar: library/README.md.
+name: Plus
+fps: 0
+palette:
+  p c084fc
+
+frame
+..ppp..
+..ppp..
+ppppppp
+ppppppp
+ppppppp
+..ppp..
+..ppp..

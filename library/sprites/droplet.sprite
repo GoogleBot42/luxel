@@ -1,0 +1,17 @@
+# Luxel library sprite — original art, Apache-2.0. Grammar: library/README.md.
+name: Droplet
+fps: 0
+palette:
+  b 38bdf8
+  w e0f2fe
+
+frame
+...b...
+...b...
+..bbb..
+..bwb..
+.bbwbb.
+.bbwbb.
+bbbbbbb
+bbbbbbb
+.bbbbb.

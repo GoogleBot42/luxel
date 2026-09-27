@@ -49,8 +49,17 @@
   import { cachedSprite, spriteRev, type SpriteMeta } from "../../stores/sprites";
 
   export let layer: Layer;
-  /** The sprite library — the picker's rows. */
+  /** The LIVE sprite library — the picker's rows, and the only ids a layer can
+   *  bind. */
   export let library: SpriteMeta[] = [];
+  /**
+   * The SHIPPED library (Gitea #785), as a second group of rows. A layer cannot
+   * bind one of these — they have no store id — so picking one CLONES it first
+   * (`addlib`), which is the same "saves to device" a library pattern row in
+   * `components/PatternPicker.svelte` announces. Their values carry the
+   * `lib:` prefix so the two namespaces cannot be confused for each other.
+   */
+  export let libraryRows: { slug: string; name: string; w: number; h: number; frames: number; sprite: Sprite }[] = [];
   /** True while the sprite store has a write in flight. */
   export let saving = false;
 
@@ -60,6 +69,8 @@
     edit: void;
     /** Make a blank sprite, bind it, and open it. */
     fresh: void;
+    /** Clone this SHIPPED sprite into the live library and bind the copy. */
+    addlib: string;
   }>();
 
   $: id = layer.body.kind === "sprite" ? layer.body.id : "";
@@ -72,28 +83,47 @@
   /** The decoded records, so the picker can DRAW each sprite. A cache read
    *  with `$spriteRev` named as an argument, because `cachedSprite` is a plain
    *  Map and nothing about it invalidates a `$:` (.claude/rules/web.md). */
-  $: records = recordsOf(library, $spriteRev);
+  $: records = recordsOf(library, $spriteRev, libraryRows);
 
-  function recordsOf(lib: readonly SpriteMeta[], _rev: unknown): Map<string, Sprite> {
+  function recordsOf(
+    lib: readonly SpriteMeta[],
+    _rev: unknown,
+    shipped: readonly { slug: string; sprite: Sprite }[],
+  ): Map<string, Sprite> {
     const out = new Map<string, Sprite>();
     for (const s of lib) {
       const sp = cachedSprite(s.id);
       if (sp) out.set(s.id, sp);
     }
+    // The shipped rows come with their records in hand — nothing to look up.
+    for (const s of shipped) out.set(`lib:${s.slug}`, s.sprite);
     return out;
   }
 
   /** One row per stored sprite, with its size and frame count as the row's
    *  sentence — the picker explains itself like every other `RichSelect`, and
    *  the drawing beside it is the sprite itself rather than a diagram. */
-  $: options = library.map(
-    (s): RichOption => ({
-      value: s.id,
-      label: s.name,
-      desc: spriteMetaLine(s.w, s.h, s.frames),
-      icon: "sprite",
-    }),
-  );
+  $: options = [
+    ...library.map(
+      (s): RichOption => ({
+        value: s.id,
+        label: s.name,
+        desc: spriteMetaLine(s.w, s.h, s.frames),
+        icon: "sprite",
+      }),
+    ),
+    // `RichSelect` has no section labels, so the shipped rows say which shelf
+    // they came from in the one line they already carry — and the row's own
+    // drawing is the sprite, so there is nothing else to tell them apart by.
+    ...libraryRows.map(
+      (s): RichOption => ({
+        value: `lib:${s.slug}`,
+        label: s.name,
+        desc: `${spriteMetaLine(s.w, s.h, s.frames)} · Library`,
+        icon: "sprite",
+      }),
+    ),
+  ];
 
   // ---- the FPS override (the wire's `A` line) ----
   //
@@ -124,6 +154,12 @@
    *  what made the fields and the marquee disagree. */
   function setSprite(nextId: string): void {
     if (layer.body.kind !== "sprite" || nextId === layer.body.id) return;
+    // A shipped row is not bindable: it has to become a record of yours first.
+    // The owner clones it and calls back with the new store id (#785).
+    if (nextId.startsWith("lib:")) {
+      dispatch("addlib", nextId.slice(4));
+      return;
+    }
     const picked = library.find((s) => s.id === nextId);
     const rect = picked
       ? { ...layer.style.rect, w: picked.w, h: picked.h }
@@ -202,7 +238,7 @@
 <div class="irow start">
   <div class="ilab" style="padding-top:7px">Sprite</div>
   <div class="spritepick">
-    {#if library.length === 0}
+    {#if library.length === 0 && libraryRows.length === 0}
       <div class="hint" data-role="scene-sprite-state">no sprites yet</div>
     {:else}
       <RichSelect

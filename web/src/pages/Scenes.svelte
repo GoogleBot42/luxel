@@ -6,6 +6,20 @@
   // device-shaped thumbnail, same playing ring. One quiet sentence says what
   // a scene is; the only loud thing on the page is `+ New scene`.
   //
+  // SINCE #785 IT HAS SOURCES, the way the Patterns page does (§5.1, D3):
+  //
+  //   console:     On device (N) | Library (N)
+  //   playground:  Mine (N)      | Library (N)
+  //
+  // `Library` is the shipped set (`library/scenes/` →
+  // `web/tools/gen-sprite-scene-gallery.mjs` → `stores/library.ts`). It is
+  // read-only, and its one verb is `+ Add`, which is where the interesting work
+  // is: a shipped scene names its patterns and sprites by LIBRARY reference,
+  // not by store id, so adding it creates whatever the target store is missing
+  // and rewrites the ids (`lib/sceneRefs.ts`). Nothing is played — a tile must
+  // not change what the LEDs are doing (#563) — the scene is stored and the
+  // editor opens on it.
+  //
   // WHEN THE PAGE HAS CONTENT (D10, §5.4c):
   //   * console — strictly by Layout kind. A matrix console always has the
   //     tab, empty or not (S6c). A strip/3D/map console never does, and the
@@ -23,11 +37,21 @@
   import { createEventDispatcher } from "svelte";
   import "../components/scene/scene.css";
   import SceneGrid from "../components/scene/SceneGrid.svelte";
+  import SourceSeg, { type Source } from "../components/SourceSeg.svelte";
   import { playgroundPatternId } from "../lib/sceneRender";
   import { listPatterns } from "../lib/store";
   import { confirm } from "../stores/dialog";
   import { device, devicePatterns, isPlayground } from "../stores/device";
   import { layout, setPreviewAs } from "../stores/geometry";
+  import {
+    cloneLibraryScene,
+    libraryLookup,
+    libraryRev,
+    libraryScenes,
+    libraryScenesLoading,
+    librarySpriteBytesOf,
+    warmSceneLibrary,
+  } from "../stores/library";
   import { luxel } from "../stores/pattern";
   import { spriteBytesOf, spriteRev, warmSprites } from "../stores/sprites";
   import {
@@ -57,6 +81,33 @@
    *  playground it is the `Preview as` choice. */
   $: ready = $layout.dims === 2 && $layout.regular && $layout.w > 0 && $layout.h > 0;
 
+  // ---- the source control (#785) ----
+
+  type SourceId = "live" | "library";
+  /** The page opens on the LIVE source in both shells — see
+   *  `pages/Sprites.svelte` for why this control defaults differently from the
+   *  Patterns page's (a workspace opens on your own work; the shipped set is one
+   *  chip away, counted on the chip and named in the empty state). */
+  let sourceId: SourceId = "live";
+  $: liveSource = {
+    id: "live" as const,
+    label: $isPlayground ? "Mine" : "On device",
+    count: $scenes.length,
+  };
+  $: librarySource = {
+    id: "library" as const,
+    label: "Library",
+    count: $libraryScenes.length,
+  };
+  $: sources = [liveSource, librarySource] as Source[];
+
+  /** The narrowing lives in a FUNCTION: svelte-check does not parse a TS
+   *  assertion inside a template expression (the same reason
+   *  `SpriteInspector`'s `setFit` exists). */
+  function selectSource(id: string): void {
+    sourceId = id as SourceId;
+  }
+
   // The 5th cadence on the ONE poll scheduler — and ONLY while this page is
   // the one on screen. Every page stays mounted when it is hidden, so a poll
   // registered in `onMount` would keep asking a device for its scenes from
@@ -79,11 +130,14 @@
   $: syncPoll(active);
   onDestroy(() => syncPoll(false));
 
-  /** Re-read whenever the page comes forward — the scene library, and the
-   *  sprite library the tiles need to draw a sprite layer at all (#740). */
+  /** Re-read whenever the page comes forward — the scene library, the sprite
+   *  library the tiles need to draw a sprite layer at all (#740), and the
+   *  shipped set behind the `Library` chip (its tiles composite real pattern
+   *  layers, so `warmSceneLibrary` pulls `gallery.json` too, once). */
   $: if (active) {
     void refreshScenes();
     void warmSprites();
+    void warmSceneLibrary();
   }
 
   function lookup(id: string): string | null {
@@ -122,6 +176,24 @@
     const made = await duplicateScene(id);
     if (made) dispatch("open", made);
   }
+
+  /**
+   * `+ Add` on a shipped tile. The scene is copied into the live library
+   * together with the patterns and sprites its layers name — created only where
+   * the store does not already hold them (matched by CONTENT, not by name:
+   * `lib/sceneRefs.ts`) — and the editor opens on the result so the layer stack
+   * is the next thing on screen.
+   *
+   * Nothing is activated. Every refusal along the way is the HOST's own
+   * sentence: `sprite: … over the 16 KiB cap`, `scenes: store full (N of 3840
+   * B)`, a pattern the device would not take.
+   */
+  async function add(id: string): Promise<void> {
+    const row = $libraryScenes.find((s) => s.scene.id === id);
+    if (!row) return;
+    const made = await cloneLibraryScene(row.slug);
+    if (made) dispatch("open", made);
+  }
 </script>
 
 <section
@@ -147,19 +219,15 @@
       >
       <div class="hint">Then + New scene.</div>
     </div>
-  {:else if $scenes.length === 0}
-    <!-- S6c: the tab has to say something useful with nothing in it — the
-         same definition the populated page carries, and the page's one
-         primary, centred. No page bar, no empty grid, no illustration. -->
-    <div class="empty" data-role="scenes-empty">
-      <div class="dim" style="font-size:13px">{LEDE}{LEDE_2}</div>
-      <button class="btn primary" data-role="new-scene" on:click={() => void create()}
-        >+ New scene</button
-      >
-    </div>
   {:else}
     <div class="pagebar">
-      <div class="hint" data-role="scenes-lede">{LEDE}<span class="second">{LEDE_2}</span></div>
+      <SourceSeg
+        {sources}
+        value={sourceId}
+        dataRole="scenes-sources"
+        on:select={(e) => selectSource(e.detail)}
+      />
+      <div class="hint lede" data-role="scenes-lede">{LEDE}<span class="second">{LEDE_2}</span></div>
       <div class="spacer"></div>
       <!-- ONE flex item, not two: `.btn`'s 6px gap would otherwise land
            between the `+` and the label and widen the button past the mock's
@@ -168,20 +236,57 @@
         ><span>+ <span class="newlabel">New scene</span></span></button
       >
     </div>
-    <SceneGrid
-      luxel={$luxel}
-      items={$scenes}
-      playingId={$activeSceneId}
-      canPlay={!$isPlayground}
-      rig={$layout}
-      {lookup}
-      sprites={spriteBytesOf}
-      spriteRev={$spriteRev}
-      on:play={(e) => void activateScene(e.detail)}
-      on:edit={(e) => dispatch("open", e.detail)}
-      on:duplicate={(e) => void duplicate(e.detail)}
-      on:remove={(e) => void remove(e.detail)}
-    />
+    {#if sourceId === "library"}
+      {#if $libraryScenesLoading}
+        <p class="hint pad" data-role="scenes-library-loading">loading the scene library…</p>
+      {:else if $libraryScenes.length === 0}
+        <p class="hint pad" data-role="scenes-library-note">
+          no shipped scenes in this build (scenes.json is missing)
+        </p>
+      {:else}
+        <!-- The shipped tiles composite the real thing: `libraryLookup` resolves
+             a `pat` reference to its clean-room source and `librarySpriteBytesOf`
+             a `spr` one to its `LXSP` record, so what you see on the tile is
+             what `+ Add` lands. `$libraryRev` is their re-bind signal. -->
+        <SceneGrid
+          luxel={$luxel}
+          mode="library"
+          items={$libraryScenes.map((s) => s.scene)}
+          canPlay={false}
+          rig={$layout}
+          lookup={libraryLookup}
+          sprites={librarySpriteBytesOf}
+          spriteRev={$libraryRev}
+          on:add={(e) => void add(e.detail)}
+        />
+      {/if}
+    {:else if $scenes.length === 0}
+      <!-- S6c: the tab has to say something useful with nothing in it — the
+           same definition the populated page carries, and the page's one
+           primary, centred. No empty grid, no illustration. -->
+      <div class="empty" data-role="scenes-empty">
+        <div class="dim" style="font-size:13px">{LEDE}{LEDE_2}</div>
+        <button class="btn primary" data-role="new-scene-empty" on:click={() => void create()}
+          >+ New scene</button
+        >
+        <div class="hint">…or start from the Library.</div>
+      </div>
+    {:else}
+      <SceneGrid
+        luxel={$luxel}
+        items={$scenes}
+        playingId={$activeSceneId}
+        canPlay={!$isPlayground}
+        rig={$layout}
+        {lookup}
+        sprites={spriteBytesOf}
+        spriteRev={$spriteRev}
+        on:play={(e) => void activateScene(e.detail)}
+        on:edit={(e) => dispatch("open", e.detail)}
+        on:duplicate={(e) => void duplicate(e.detail)}
+        on:remove={(e) => void remove(e.detail)}
+      />
+    {/if}
   {/if}
 </section>
 
@@ -205,7 +310,20 @@
     display: none;
   }
 
-  /* S6d: the primary shrinks to an icon beside the one-line explanation */
+  /* the library source's own "loading" / "nothing here" line */
+  .pad {
+    margin: 12px 20px 0;
+  }
+
+  /* The source chips took the left of the bar, so the sentence yields first:
+     it is the one thing on the strip that is pure explanation. */
+  @media (max-width: 900px) {
+    .lede {
+      display: none;
+    }
+  }
+
+  /* S6d: the primary shrinks to an icon beside the source chips */
   @media (max-width: 600px) {
     .newlabel {
       display: none;
