@@ -1,5 +1,32 @@
 # Update log
 
+## 2026-09-27 — spare-plane swap: chase the beam, no window (#829)
+
+Jeremy's eye on the #826 build: "×4 is very close" — rare freezes for ~10 s
+after a pattern change, a judder at 287 Hz, and at an 861 Hz step the
+frame-rate-scan pattern ran at 35 fps. All three were the window: the flush
+would only start inside the MSB run and had to finish every copy there; at
+a fast schedule that run is a few hundred microseconds, so frames waited the
+26 ms force timeout (1 per 26 ms = 38 fps) and the engine could not compose
+behind them.
+
+**Now the flush chases the beam.** Arm the flip (it lands at the wrap), write
+the spare MSB at once (no ring reaches it before the wrap), then write each
+plane the moment the DMA has finished reading it for this pass — from then
+on nothing reads it until the next pass, which reads the other view.
+`Schedule::plane_end_descs` gives the per-plane consumption points (host
+tested); the chase starts at the top of a pass and spins at most one pass
+per poll, resuming on the next 250 µs poll otherwise; the three lowest
+planes (1/127..4/127) are written without waiting. `Window`,
+`spare_window_fits`'s use, `SLACK_NS` and `FORCE_US` are gone from the
+firmware; `forced` and `torn_p1` read 0 and stay on the wire.
+
+On metal at Jeremy's 861 Hz / blank 7 / `lsb 2`: 271 fps (from 35), 270
+flushes/s, 0 forced, 0 abandoned, `torn_wrap` 1.5 % of frames (7.5 %
+before the top-of-pass start and the third free plane) — one pass with a
+stale low plane each, after a WiFi pre-emption longer than the 1.16 ms pass.
+Still off by default; Jeremy's eye on ×4 decides.
+
 ## 2026-09-27 — a stored layout the heap cannot serve now self-heals at boot and is refused at POST (#822)
 
 The night before, a stored `matrix 64 64 2 1` (8192 px — legal since #768
