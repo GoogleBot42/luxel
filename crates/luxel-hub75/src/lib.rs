@@ -84,8 +84,10 @@ use alloc::vec::Vec;
 
 pub mod arrange;
 pub mod chip;
+pub mod cost;
 pub mod schedule;
 
+pub use cost::{boot_cost, BootAlloc, BootCost};
 pub use schedule::Schedule;
 
 /// The six colour bits of an entry word: R1 G1 B1 R2 G2 B2 at bits 9..=14.
@@ -392,8 +394,19 @@ impl Scratch {
     /// Bytes held.
     #[must_use]
     pub fn bytes(&self) -> usize {
-        self.cols() * (2 * core::mem::size_of::<u32>() + 2 * 3)
+        scratch_bytes(self.cols())
     }
+}
+
+/// Bytes a [`Scratch`] for a `cols`-wide framebuffer holds: two `u32` pads and
+/// two RGB pads per column, 14 B.
+///
+/// Spelled once because [`cost::boot_cost`] predicts it before the allocation
+/// exists — a second copy of this arithmetic is exactly how the prediction
+/// would drift from what the packer really takes.
+#[must_use]
+pub const fn scratch_bytes(cols: usize) -> usize {
+    cols * (2 * core::mem::size_of::<u32>() + 2 * 3)
 }
 
 /// Take a `pad.len()`-wide slice of `rgb` starting at `start`, padding with

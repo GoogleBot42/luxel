@@ -249,3 +249,31 @@ test("a scene save the device had no heap for says to stop the running scene", (
   assert.equal(ex.field, "scene-save");
   assert.equal(ex.details, "scenes: not enough memory to save (6616 B free)");
 });
+
+// ---- the boot-heap refusal (Gitea #822) ----
+
+test("a panel the board's heap cannot serve at boot is explained with its own numbers", () => {
+  const raw =
+    "this panel would leave 12345 B of heap at boot (floor 65536 B) — " +
+    "it cannot be driven on this board";
+  const ex = explainApiError(raw, { scope: "layout", maxPixels: 16384, line: 1 });
+  // the device's two numbers, grouped, and what to do about it
+  assert.match(ex.text, /12,345 bytes/);
+  assert.match(ex.text, /65,536/);
+  assert.match(ex.text, /fewer bit planes/);
+  assert.match(ex.text, /Nothing was changed\./);
+  // and NOT the pixel-ceiling explanation: a chain can be well under the cap
+  // and still be refused here
+  assert.doesNotMatch(ex.text, /tops out at/);
+  assert.equal(ex.field, "layout-cols");
+  // the device's own words survive verbatim, with the line it pointed at
+  assert.equal(ex.details, `${raw} (line 1)`);
+});
+
+test("the boot-heap refusal still explains itself if the numbers cannot be read", () => {
+  const ex = explainApiError("this panel would leave 0 B of heap at boot (floor ???)", {
+    scope: "layout",
+  });
+  assert.match(ex.text, /does not have the internal memory/);
+  assert.match(ex.text, /not leave enough for the rest of the boot/);
+});

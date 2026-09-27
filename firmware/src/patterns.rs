@@ -69,6 +69,7 @@
 //! | [PALETTE_KEY] | ≤ 64 | per palette edit |
 //! | [LAYOUT_KEY] | ~40–110 | per Layout edit |
 //! | [TEXT_KEY] | ≤ 529 | per text-slot write (debounced + deduped) |
+//! | [LAYOUT_REVERT_KEY] | 8 | per boot self-heal, and cleared by the next Layout edit |
 //!
 //! Patterns are NOT in here any more — not even their directory.
 //!
@@ -399,6 +400,12 @@ pub const SCENES_KEY: u32 = 0x7FFF_FFF7;
 /// non-empty slot, so a scene's `T slot n` layer has its text on the first
 /// frame after a reboot rather than when a host next re-sends it (#745).
 pub const TEXT_KEY: u32 = 0x7FFF_FFF6;
+/// The boot self-heal's revert record (see layout.rs, Gitea #822) — eight
+/// bytes, `[from_pixels: u32, heap_free: u32]` little-endian, all zero when
+/// nothing has been reverted. It has to outlive the reboot the self-heal
+/// performs, which is the whole reason it is in flash rather than in RTC
+/// memory: a console has to be able to explain a shape that changed under it.
+pub const LAYOUT_REVERT_KEY: u32 = 0x7FFF_FFF5;
 
 /// The reserved keys live in this range, top-down. The migrator
 /// (migrate.rs) sweeps the WHOLE range rather than a hand-written list, so
@@ -406,7 +413,7 @@ pub const TEXT_KEY: u32 = 0x7FFF_FFF6;
 /// carrying a key from a NEWER firmware than the one migrating it keeps it.
 pub const RESERVED_LO: u32 = 0x7FFF_FFF0;
 pub const RESERVED_HI: u32 = 0x7FFF_FFFF;
-const _: () = assert!(TEXT_KEY >= RESERVED_LO && FORMAT_KEY <= RESERVED_HI);
+const _: () = assert!(LAYOUT_REVERT_KEY >= RESERVED_LO && FORMAT_KEY <= RESERVED_HI);
 
 /// Store a small blob under a reserved key. False if storage is unavailable or
 /// the blob is too large for one page.

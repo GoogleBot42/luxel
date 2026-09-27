@@ -1,5 +1,85 @@
 # Update log
 
+## 2026-09-27 — a stored layout the heap cannot serve now self-heals at boot and is refused at POST (#822)
+
+The night before, a stored `matrix 64 64 2 1` (8192 px — legal since #768
+raised the panel cap to 16384) made the Seengreat **unusable over the
+network on every boot**. The panel's own guard did its job: `try_boot`'s
+`BOOT_HEAP_FLOOR` check (#823) saw the two 57 KB framebuffers and fell back
+to 64×64. It was not enough. The rest of the boot at 8192 px left so little
+internal heap that every HTTP route answered 503 `out of memory` or hung,
+`POST /api/layout` could not complete a store, `POST /api/reboot` never
+landed, and an OTA of a corrected image booted straight back into the same
+stored layout. Three physical power cycles to trip the boot-loop rollback
+were the only way out — two hours of bench time, and a brick for a device in
+the field.
+
+**The real guard is the self-heal**, because the expensive half cannot be
+predicted. At the point the boot-loop guard decides the image is healthy
+(~60 s in — WiFi up, web up, engine built), `main.rs` now also calls
+`layout::heal_if_starved(HEAP.free())`. Under `budget::RUNTIME_FLOOR`
+(20 KB) with a stored shape bigger than the board default's, it re-persists
+the default's **shape** — keeping the stored `panel` line, the outputs table
+and the projection defaults — writes the pixel count back to the nvs device
+record (the stored Layout carries none, and that record is what the next
+boot's engine is sized from), records the revert under a new reserved key,
+logs `layout: 8192 px left the heap at 15920 B after boot (floor 20480) —
+reverting to the board default` and reboots once through `REBOOT`, so the
+guard counts it as a requested reboot rather than a failed boot.
+
+It cannot become the boot loop it prevents. The decision is
+`luxel_core::layout::heal_decision`, host-tested, and three of its five
+answers refuse to reboot: already at the board default (a board too small
+for what is running on it, not a bad layout), a default that is no smaller,
+and — the one that matters — this exact shape already reverted once, which
+is what a revert whose flash write was refused would otherwise repeat
+for ever. The marker is written *before* the new layout so that ordering
+holds.
+
+**The cheap half is a POST-time refusal**, panel-side only and honest about
+it. `firmware/src/hub75.rs` records free heap at the very top of the first
+`try_boot`, before a single panel byte is allocated, and
+`POST /api/layout` weighs a `matrix`/`panel` change against it using a new
+pure `luxel_hub75::boot_cost` — both framebuffers (or the spare-plane pair),
+the descriptor rings, the packer tables and its row pads, from the same
+`fb_geometry`/`Schedule::plan` the boot itself uses. Under the 64 KB boot
+floor the body is refused with the numbers in it and nothing is stored:
+`this panel would leave N B of heap at boot (floor M B) — it cannot be
+driven on this board`. What the engine, the compositor and the JIT then cost
+at that pixel count is not modelled anywhere and deliberately is not guessed
+at — the doc comments say so, and that is why the self-heal above is the
+authoritative guard rather than this one.
+
+Reporting: `GET /api/layout` gains `"reverted":{"from_pixels":N,"heap_free":X}`
+(absent on every ordinary boot, so the body is byte-identical to before) and
+`/api/status` a boolean `layout_reverted`; both survive the reboot and are
+cleared by the next successful `POST /api/layout`. The console shows an
+amber line above the LED layout form — "The stored 8,192 px layout left the
+board without memory at boot; it was reverted to the board default" — and
+`lib/apiErrors.ts` turns the refusal into a sentence carrying the device's
+own two numbers. `luxel serve --board panel --reverted <px>,<bytes>`
+impersonates the state so the notice is drivable in a browser.
+
+Verified: `cargo test --workspace` green (new host tests for the cost
+arithmetic in `luxel-hub75`, the `reverted` JSON shape and the five-way
+revert decision in `luxel-core`, two apiErrors cases in `npm test`);
+`npm test` 289/289 and svelte-check 0 errors; the notice driven in real
+chromium against the mirror and screenshotted, including that a successful
+save clears it. Firmware builds and `tools/stack-check.sh` ok on
+`board-seengreat-hub75` (plain and `hub75-spare-plane`) and
+`board-pixelblaze-v3`; `.stack` 31,532 / 31,348 / 24,604 B, the last 28 B
+above its floor and 8 B off master's own 24,612. Seengreat app image
+1,177,680 → 1,181,152 B (+3,472 B of a 3 MiB slot), measured against a
+detached worktree at the same master.
+
+**Untested on metal** (docs/UNTESTED.md, and the reason the on-bench check
+is awkward): the POST refusal is safe to run any time, but exercising the
+self-heal means first storing a layout the board cannot serve — which is
+exactly what the refusal now blocks. The way in is a
+`hub75-spare-plane` build (#620), where a 2×1 chain passes the panel check
+while still being more than the engine side can carry.
+
+
 ## 2026-09-27 — spare-plane swap: the freeze was the window check (#620)
 
 The single-framebuffer mode froze the image twice earlier tonight. Looking

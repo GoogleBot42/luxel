@@ -350,6 +350,13 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   "Nothing playing" in the gotchas. `jit.state` reads `"none"` in exactly
   that case, and `jit.layers` says what each of those engines is running
   (Gitea #718).
+- `layout_reverted` — `true` when a **boot self-heal** put the board default's
+  shape back because the stored one left the heap under the runtime floor
+  (Gitea #822). The one-bit form of `GET /api/layout`'s `reverted` block, so a
+  client that already polls status notices without a second fetch; the numbers
+  (the pixel count reverted from, the heap reading) are in that block. Cleared
+  by the next successful `POST /api/layout`. See "A layout the board cannot
+  serve" under `/api/layout`.
 - `psram_free` / `psram_total` — the external pattern-array arena (Gitea
   #253), in bytes. A SECOND heap: it is not part of `heap_free`, and a
   pattern's arrays come out of here instead of out of that number. **Both are
@@ -655,6 +662,14 @@ mirror allocates pattern arrays on the host heap, so nothing consumes it and
 `caps.outputs`, which is what lets a two-output `/api/layout` be driven
 without the Athom. Together they let the Settings page's capability gating be
 driven without the hardware; see docs/tools.md.
+
+`--reverted <from_pixels>,<heap_free>` makes the mirror report a **boot
+self-heal** (Gitea #822) it could not otherwise reach: `reverted` on
+`/api/layout` and `layout_reverted:true` on `/api/status`, cleared by the
+first successful `POST /api/layout` exactly as the device clears it. A mirror
+never boots and never starves, so this is pure impersonation — it exists so
+the console's "your layout was reverted" notice can be driven in a browser
+without bricking a panel.
 
 `--scenes FILE` preloads the scene store from a file of scene blocks — the
 same text the store persists (Gitea #478) — so a harness can bring a mirror up
@@ -1144,6 +1159,7 @@ embedded so a client needs one fetch:
 | `matrix` | **Present only when `kind` is `matrix`.** `pw`×`ph` is one panel (or, with `cols`=`rows`=1, the whole grid); `cols`×`rows` tile them; `start` (`tl\|tr\|bl\|br`), `dir` (`row\|col`), `snake`, `rot180` describe how the chain threads the tiles — and, in the one-tile case, how the pixel run threads the grid (a strip-built matrix's wiring, proposal §5.3). `scan` is the HUB75 scan divisor — `1/N` on a module's label; `0` means the usual ratio for this height, `ph / 2` (nothing reads it off the module: HUB75 is write-only). On a board with a panel driver it also carries `est_hz` and `drive` — see "Panel arrangement" below. |
 | `driver` | **Present only on a board with a HUB75 panel.** How the panel is DRIVEN — bit depth, pixel clock, chip init, latch blanking — plus the chip list a client should offer and what the firmware actually booted. See "How the panel is driven" below. |
 | `outputs` | One entry per configured output — `n` (0-based, `< caps.outputs`), `pin`, `proto`, `order`, `count` (pixels on a strip Layout, **panels** on a matrix one), `rev`. Each drives a consecutive run of the one pixel space, in `n` order (see "Driving" below). A host with no table configured reports ONE implicit output built from its live data pin, protocol and colour order. |
+| `reverted` | **Absent unless a boot self-heal happened** (Gitea #822): `{"from_pixels":N,"heap_free":X}` — the stored shape left this board's heap at `X` bytes, under the firmware's runtime floor, so it was reverted to the board default and the device rebooted once. Say so: the shape on screen is not the one the user set. It survives the reboot and is cleared by the next successful `POST /api/layout`. `/api/status`'s `layout_reverted` is the one-bit form, for a client that polls status. See "A layout the board cannot serve" below. |
 | `proj` | The §5.4d projection defaults (`docs/spec/projection.md`), tokens `index\|x\|y\|z\|xy\|xz\|yz`. |
 | `map` | The `GET /api/map` body verbatim. |
 
@@ -1483,6 +1499,62 @@ share a data pad; protocol names from
 space** — pixels on a strip, panels on a matrix (proposal D11: an output
 drives a consecutive run of the ONE pixel space). A HUB75 board refuses both
 `strip` and `out`: it IS a matrix and has no configurable strip output.
+
+### A layout the board cannot serve (Gitea #822)
+
+`max` is a pixel ceiling, not a promise: since #768 raised it to 16384 a chain
+can be well under it and still be more than the board's **internal SRAM** can
+carry through a boot. Two guards, and they answer different questions.
+
+**Refused at POST time — the panel side.** On a HUB75 board,
+`POST /api/layout` predicts what the requested arrangement would take out of
+internal SRAM at boot: both bitplane framebuffers (or the single buffer plus a
+spare plane under `hub75-spare-plane`), the DMA descriptor rings, the packer
+tables and its row pads (`luxel_hub75::boot_cost`). It weighs that against the
+free heap **this** boot measured at the top of the panel bring-up, before a
+single panel byte was allocated — so the answer is about the board in front of
+you, not a table. If the remainder is under the firmware's boot floor the body
+is refused and nothing is stored:
+
+```json
+{"ok":false,"error":"this panel would leave 12345 B of heap at boot (floor 65536 B) — it cannot be driven on this board","line":1}
+```
+
+The way out is fewer bit planes, a smaller panel, or fewer panels — all three
+scale the framebuffers linearly. The check only runs when the `matrix` or
+`panel` inputs actually move, so re-posting an unchanged arrangement is never
+refused by a floor the running configuration already sits under.
+
+**Reverted at boot — everything else.** What the engine, the compositor, the
+JIT and the protocol encode buffers cost at a given pixel count is not
+modelled anywhere, so the POST-time check cannot be the whole guard. The
+authoritative one is the **boot self-heal**: at the point the boot-loop guard
+decides the image is healthy (~60 s in — WiFi up, web up, engine built) the
+firmware reads free heap, and if it is under `budget::RUNTIME_FLOOR` (20 KB)
+while the stored shape is bigger than the board default's, it re-persists the
+board default's shape — **keeping** the stored `panel` line, the outputs table
+and the projection defaults — writes a revert record, logs
+
+```text
+layout: 8192 px left the heap at 15920 B after boot (floor 20480) — reverting to the board default
+```
+
+and reboots once. That record is what `GET /api/layout`'s `reverted` block and
+`/api/status`'s `layout_reverted` report, and the next successful
+`POST /api/layout` clears it.
+
+It cannot loop. A board already at its own default, one whose default is no
+smaller, and one that has already reverted from this exact shape all log their
+reason and stay put rather than reboot
+(`luxel_core::layout::heal_decision`).
+
+Without this a stored layout the heap could not serve was a **brick over the
+network**: on 2026-09-26 a stored `matrix 64 64 2 1` (8192 px) on the
+Seengreat left every route answering 503 `out of memory` or hanging, so
+`POST /api/layout` could not complete a store, `POST /api/reboot` never landed,
+and an OTA of a corrected image booted straight back into the same stored
+layout. Three physical power cycles to trip the boot-loop rollback were the
+only way out.
 
 **Driving (Gitea #474, proposal D11).** The outputs partition ONE pixel
 space: output `n` carries the `count` pixels that follow every lower-indexed

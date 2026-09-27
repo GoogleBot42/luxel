@@ -271,6 +271,36 @@ const TABLE: Entry[] = [
       "The device takes an LSB on-time of 0 to 65,535 pixel clocks, 0 meaning the full " +
       "on-time. Move the Refresh control back to ×1 and try again.",
   },
+  {
+    // The boot-heap refusal (Gitea #822): the device predicted what this
+    // panel would take out of internal SRAM at boot and it does not leave
+    // enough for WiFi, the web server and the engine. `this panel would leave
+    // 12,345 B of heap at boot (floor 65,536 B) — it cannot be driven on this
+    // board`. The device's own numbers are the whole explanation, so they are
+    // quoted back rather than paraphrased; `details` carries the line verbatim
+    // as well.
+    //
+    // It is NOT the pixel ceiling: a chain can be well under `max_pixels` and
+    // still be refused here, because the ceiling counts pixels and this counts
+    // the bytes THIS board has left at boot (#768's cap raise is exactly what
+    // made the two diverge).
+    match: /^this panel would leave \d+ B of heap at boot/,
+    field: "layout-cols",
+    text: (c) => {
+      const m = /leave (\d+) B of heap at boot \(floor (\d+) B\)/.exec(c.raw ?? "");
+      const left = m ? group(Number(m[1])) : null;
+      const floor = m ? group(Number(m[2])) : null;
+      const nums =
+        left && floor
+          ? `it would leave ${left} bytes where the rest of the boot needs ${floor}`
+          : "it would not leave enough for the rest of the boot";
+      return (
+        `This board does not have the internal memory to drive that panel — ${nums}. ` +
+        "The frame buffers are sized from the panel and the chain, so use fewer bit " +
+        "planes, a smaller panel, or fewer panels. Nothing was changed."
+      );
+    },
+  },
   { match: /^panel: chip must be/, field: "panel-chip", text: () =>
       "This firmware does not know that driver chip. The list in the card is the " +
       "device's own (`driver.chips`), so this means the two disagree — push matching firmware." },

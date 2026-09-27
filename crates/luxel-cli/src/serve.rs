@@ -501,6 +501,13 @@ struct State {
     /// same state rather than a second copy, exactly as on the firmware.
     /// A mirror has no flash, so nothing here survives the process.
     layout: Mutex<luxel_core::layout::Layout>,
+    /// The boot self-heal a device would be reporting (Gitea #822) — pure
+    /// impersonation, from `--reverted <from_pixels>,<heap_free>`. A mirror
+    /// never boots and never starves, so there is no way to reach this state
+    /// honestly; the flag exists so the console's "your layout was reverted"
+    /// notice can be driven in a real browser without bricking a panel. A
+    /// successful `POST /api/layout` clears it, as on the device.
+    reverted: Mutex<Option<luxel_core::layout::Reverted>>,
     map_dirty: AtomicBool,
     /// The projection the render loop installs on the next frame — the twin
     /// of the firmware's `layout::PROJ_PENDING` (Gitea #598). `0..=6` is a
@@ -1209,7 +1216,7 @@ fn status_json(state: &State) -> String {
         String::new()
     };
     format!(
-        "{{\"name\":\"{}\",\"fps\":{},\"frame_us\":{},\"vm_us\":{},\"pipe_us\":{},\"out_us\":0,\"out_fps\":{},\"rescan_hz\":{},\"dropped\":0,\"pixels\":{},\"max_pixels\":{},\"geom\":{},\"caps\":{},\"slot\":\"native\",\"version\":\"{}\",\"board\":\"{}\",\"bc_format\":{},\"heap_free\":{},\"engine_heap\":{}{},\"live\":{},\"vmerr\":{}{}{}{}}}",
+        "{{\"name\":\"{}\",\"fps\":{},\"frame_us\":{},\"vm_us\":{},\"pipe_us\":{},\"out_us\":0,\"out_fps\":{},\"rescan_hz\":{},\"dropped\":0,\"pixels\":{},\"max_pixels\":{},\"geom\":{},\"caps\":{},\"slot\":\"native\",\"version\":\"{}\",\"board\":\"{}\",\"bc_format\":{},\"heap_free\":{},\"engine_heap\":{}{},\"layout_reverted\":{},\"live\":{},\"vmerr\":{}{}{}{}}}",
         json_escape(&state.name.lock().unwrap()),
         fps,
         state.frame_us.load(Ordering::Relaxed),
@@ -1227,6 +1234,7 @@ fn status_json(state: &State) -> String {
         state.heap_free.load(Ordering::Relaxed),
         state.engine_heap.load(Ordering::Relaxed),
         psram,
+        state.reverted.lock().unwrap().is_some(),
         live,
         vmerr,
         jit,
@@ -1510,6 +1518,11 @@ fn with_layout_view<R>(
             drive: matrix.panels(),
             driver_live: synthetic_live(&matrix, &driver),
         }),
+        // `--reverted N,B` only (Gitea #822): the mirror never boots, so it
+        // cannot starve itself — this is the impersonation knob that makes the
+        // console's self-heal notice drivable in a browser. Cleared by a
+        // successful `POST /api/layout`, exactly as the device clears it.
+        reverted: *state.reverted.lock().unwrap(),
     })
 }
 
@@ -3697,6 +3710,8 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
                     let reboot = edit.reboot_required;
                     let pixels_requested = edit.pixels;
                     *state.layout.lock().unwrap() = edit.layout;
+                    // a successful edit retires the self-heal report (#822)
+                    *state.reverted.lock().unwrap() = None;
                     state.map_dirty.store(true, Ordering::Relaxed); // reinstall the projection
                     layout_ok_json(&state, reboot, pixels_requested)
                 }
@@ -3937,6 +3952,8 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
     // default) or "panel" — a 64x64 HUB75 board, which changes max_pixels,
     // the installed grid and every capability the Settings page gates on.
     let mut panel = false;
+    // None = no self-heal to report, which is every honest mirror run (#822)
+    let mut reverted: Option<luxel_core::layout::Reverted> = None;
     let mut outputs: u8 = 1;
     // What this mirror calls itself (Gitea #538); a device defaults to
     // luxel-<mac6>, which a mirror has no MAC for.
@@ -4036,6 +4053,18 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
             ("--outputs", Some(v)) => match v.parse::<u8>() {
                 Ok(n) if n >= 1 => outputs = n,
                 _ => return super::usage(),
+            },
+            // impersonate a device whose boot self-heal reverted the stored
+            // layout (#822): `--reverted <from_pixels>,<heap_free>`
+            ("--reverted", Some(v)) => match v.split_once(',') {
+                Some((a, b)) => match (a.trim().parse::<u32>(), b.trim().parse::<u32>()) {
+                    (Ok(from_pixels), Ok(heap_free)) if from_pixels > 0 => {
+                        reverted =
+                            Some(luxel_core::layout::Reverted { from_pixels, heap_free })
+                    }
+                    _ => return super::usage(),
+                },
+                None => return super::usage(),
             },
             ("--ddp-port", Some(v)) => match v.parse() {
                 Ok(n) => ddp_port = n,
@@ -4179,6 +4208,7 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         device_grid: Mutex::new(None),
         map_source: AtomicU8::new(0),
         layout: Mutex::new(board_default_layout(panel)),
+        reverted: Mutex::new(reverted),
         map_dirty: AtomicBool::new(false),
         proj_pending: AtomicU8::new(PROJ_NONE),
         live_pixels: Mutex::new(Vec::new()),

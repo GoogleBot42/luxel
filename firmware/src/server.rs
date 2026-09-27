@@ -864,6 +864,12 @@ fn status_json() -> luxel_core::jsonview::Chunks {
     // one per PATTERN layer for a scene, 0 with nothing loaded.
     push_piece(&mut out, ",\"engines\":");
     push_u32(&mut out, crate::shared::ENGINES.load(Ordering::Relaxed));
+    // A boot self-heal reverted the stored layout (Gitea #822) — the one-bit
+    // form, so a console polling status notices without fetching the Layout;
+    // `GET /api/layout`'s `reverted` block carries the numbers. Cleared by the
+    // next successful `POST /api/layout`.
+    push_piece(&mut out, ",\"layout_reverted\":");
+    push_piece(&mut out, if crate::layout::was_reverted() { "true" } else { "false" });
     // External pattern-array arena (Gitea #253) — present only on a board
     // that has one, so no other board's JSON (or image) changes. This is a
     // SECOND heap: it is not part of `heap_free`, and a pattern's arrays

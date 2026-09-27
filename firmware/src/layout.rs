@@ -40,12 +40,14 @@
 
 use alloc::string::String;
 use core::cell::RefCell;
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use esp_println::println;
-use luxel_core::layout::{Layout, LayoutKind, Limits, Matrix, Output, PanelDriver, Run, View};
+use luxel_core::layout::{
+    Heal, Layout, LayoutKind, Limits, Matrix, Output, PanelDriver, Reverted, Run, View,
+};
 use luxel_core::projection::Projection;
 
 use crate::leds::Protocol;
@@ -67,6 +69,180 @@ pub const PROJ_DEFAULTS: u8 = 0xFE;
 /// Nothing pending. Not a [`ProjectionMode`] code (those are 0..=6), so
 /// `ProjectionMode::from_u8` tells all three cases apart on its own.
 const PROJ_NONE: u8 = 0xFF;
+
+/// The boot self-heal's revert record, cached out of flash at [`init`] so a
+/// status poll costs no fenced read (Gitea #822). `0` in [`REVERT_FROM`] = no
+/// revert; that doubles as the "revert at most once per stored shape" marker,
+/// because the pixel count IS what identifies the shape that was thrown away.
+static REVERT_FROM: AtomicU32 = AtomicU32::new(0);
+/// Free heap at the end of the boot that reverted — see [`REVERT_FROM`].
+static REVERT_HEAP: AtomicU32 = AtomicU32::new(0);
+
+/// The revert this device is reporting on `GET /api/layout`, if any.
+pub fn reverted() -> Option<Reverted> {
+    match REVERT_FROM.load(Ordering::Relaxed) {
+        0 => None,
+        from_pixels => {
+            Some(Reverted { from_pixels, heap_free: REVERT_HEAP.load(Ordering::Relaxed) })
+        }
+    }
+}
+
+/// `/api/status`'s `layout_reverted` — the one-bit form, so a client polling
+/// status notices without fetching the Layout.
+pub fn was_reverted() -> bool {
+    REVERT_FROM.load(Ordering::Relaxed) != 0
+}
+
+/// Persist (or clear) the revert record and its cache. `None` writes eight
+/// zero bytes rather than removing the key — a fixed-size record has no
+/// "absent" state to get wrong, and the key area is swept wholesale by the
+/// migrator either way.
+fn set_reverted(r: Option<Reverted>) {
+    let (from, heap) = r.map_or((0, 0), |r| (r.from_pixels, r.heap_free));
+    REVERT_FROM.store(from, Ordering::Relaxed);
+    REVERT_HEAP.store(heap, Ordering::Relaxed);
+    let mut rec = [0u8; 8];
+    rec[..4].copy_from_slice(&from.to_le_bytes());
+    rec[4..].copy_from_slice(&heap.to_le_bytes());
+    if !patterns::store_blob(patterns::LAYOUT_REVERT_KEY, &rec) {
+        println!("layout: could not persist the revert record");
+    }
+}
+
+/// Load the cache from flash. Call from [`init`], after `patterns::init()`.
+fn load_reverted() {
+    let Some(b) = patterns::read_blob(patterns::LAYOUT_REVERT_KEY) else { return };
+    if b.len() < 8 {
+        return;
+    }
+    let n = |o: usize| u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]);
+    REVERT_FROM.store(n(0), Ordering::Relaxed);
+    REVERT_HEAP.store(n(4), Ordering::Relaxed);
+}
+
+/// Pixels the SHAPE of `l` describes — a matrix Layout's own area, else the
+/// live pixel count, which is what a strip or a map Layout's extent is.
+///
+/// This is the number the self-heal compares, because it is the one that
+/// scales every per-pixel allocation on the board: the framebuffers on a
+/// panel, the frame and the engine's pixel state everywhere.
+fn shape_pixels(l: &Layout, pixels_now: u32) -> u32 {
+    match l.kind {
+        LayoutKind::Matrix => l.matrix.width().saturating_mul(l.matrix.height()),
+        _ => pixels_now,
+    }
+}
+
+/// The boot self-heal (Gitea #822): a stored layout the heap cannot serve must
+/// not be able to make the board unreachable for ever.
+///
+/// Called once, where the boot-loop guard decides this image is healthy
+/// (`main.rs`, ~60 s in — WiFi up, web up, engine built, the playlist or the
+/// resumed pattern loaded), with the free internal heap measured there.
+/// Returns true when the caller must reboot.
+///
+/// **Why this and not a POST-time check alone.** `crate::hub75::boot_cost`
+/// predicts the PANEL's share of internal RAM and `POST /api/layout` refuses a
+/// body whose panel would not leave room — but what the engine, the
+/// compositor, the JIT and the protocol encode buffers cost at a given pixel
+/// count is not modelled anywhere, and deliberately is not guessed at. So the
+/// authoritative guard is this one: it measures the heap a whole real boot
+/// ended with, and if the stored shape is what starved it, that shape goes.
+///
+/// On 2026-09-26 a stored `matrix 64 64 2 1` (8192 px) on the Seengreat left
+/// the board answering 503 or hanging on every route — `POST /api/layout`
+/// could not complete a store, `POST /api/reboot` never landed, and an OTA of
+/// a corrected image booted straight back into the same stored layout. Three
+/// physical power cycles to trip the boot-loop guard were the only way out.
+///
+/// The three [`Heal`] refusals are each a boot loop avoided; see
+/// [`luxel_core::layout::heal_decision`], which is where that logic is tested.
+///
+/// **What it can revert.** The check runs on every board, but the shape it can
+/// fall back to is the board default's, and a strip board's default Layout
+/// carries no pixel count of its own ([`shape_pixels`]) — so there the two
+/// counts are equal and the answer is [`Heal::NoSmaller`] unless a `matrix`
+/// line is what set the count. That is the honest answer, not a gap being
+/// papered over: on a strip board the expensive stored number is the pixel
+/// count in the nvs device record, which `board::MAX_PIXELS` and the protocol
+/// encode buffer's own allocation already bound.
+pub fn heal_if_starved(free: usize) -> bool {
+    let cur = current();
+    let def = board_default();
+    let pixels_now = crate::shared::PIXEL_COUNT.load(Ordering::Relaxed);
+    let stored_px = shape_pixels(&cur, pixels_now);
+    let default_px = shape_pixels(&def, pixels_now);
+    let at_default = cur.kind == def.kind && cur.matrix == def.matrix;
+    let decision = luxel_core::layout::heal_decision(
+        free,
+        luxel_core::budget::RUNTIME_FLOOR,
+        stored_px,
+        default_px,
+        at_default,
+        REVERT_FROM.load(Ordering::Relaxed),
+    );
+    let why = match decision {
+        Heal::Healthy => return false,
+        Heal::AtDefault => "already the board default",
+        Heal::NoSmaller => "the board default is no smaller",
+        Heal::AlreadyReverted => "already reverted once from this shape",
+        Heal::Revert => {
+            println!(
+                "layout: {} px left the heap at {} B after boot (floor {}) — reverting to the \
+                 board default",
+                stored_px,
+                free,
+                luxel_core::budget::RUNTIME_FLOOR
+            );
+            // The board default's SHAPE, everything else the user configured
+            // kept: the `panel` driver line (planes/clock/chip/blank/lsb), the
+            // outputs table and the projection defaults cost no memory that
+            // scales with the pixel count, and throwing them away would make
+            // the self-heal worse than the problem.
+            let next = Layout {
+                kind: def.kind,
+                matrix: def.matrix,
+                outputs: cur.outputs.clone(),
+                proj: cur.proj,
+                driver: cur.driver,
+            };
+            // The layout store FIRST, and the marker only once it landed: on
+            // the starved board this exists for, a store can fail, and a
+            // marker without a stored default would read as "already
+            // reverted" on the next boot and leave the board starved for
+            // good. A failed store is logged and the next boot retries.
+            if !store(next, default_px) {
+                println!("layout: the revert could not persist the board default — next boot retries");
+                return false;
+            }
+            // The stored Layout carries no pixel count — it lives in the nvs
+            // device record, and that is what the next boot's engine is built
+            // from (`main.rs`). Reverting the shape without it would give a
+            // board-default panel still rendering 8192 px, which is half a
+            // fix. The WANT_* atomic is what `device_config_snapshot` reads.
+            crate::shared::WANT_PIXEL_COUNT.store(default_px, Ordering::Relaxed);
+            if let Err(e) = crate::config::write_device(&crate::shared::device_config_snapshot()) {
+                println!("layout: revert could not persist the pixel count ({e})");
+            }
+            // The marker last, so a stored default and a boot that is still
+            // starved cannot revert twice from the same shape.
+            set_reverted(Some(Reverted {
+                from_pixels: stored_px,
+                heap_free: free.min(u32::MAX as usize) as u32,
+            }));
+            return true;
+        }
+    };
+    println!(
+        "layout: {} B of heap left after boot (floor {}) — {}, staying at {} px",
+        free,
+        luxel_core::budget::RUNTIME_FLOOR,
+        why,
+        stored_px
+    );
+    false
+}
 
 /// The Layout a board with nothing stored comes up in: a HUB75 board IS its
 /// panel, a strip board is its strip — and either becomes `map` the moment
@@ -263,6 +439,7 @@ fn json(pixels: Option<u32>, ok: Option<bool>) -> String {
         // board's `View` has no such field and pays nothing for it (#501).
         #[cfg(feature = "hub75")]
         panel: Some(crate::hub75::panel_view(&matrix())),
+        reverted: reverted(),
     };
     let mut out = String::new();
     if let Some(reboot) = ok {
@@ -356,10 +533,39 @@ pub fn set_from_wire(body: &str) -> Result<Applied, String> {
                 edit.layout.driver.blank,
                 latch,
                 cols,
-                panel_line_no(body),
+                wire_line_no(body, "panel"),
             ));
         }
         crate::hub75::want_blank(edit.layout.driver.blank);
+    }
+    // Would the panel this body asks for leave a boot any heap? (Gitea #822.)
+    // The measurement is this boot's own — free internal heap at the top of
+    // `try_boot`, before a single panel byte was allocated — so the answer is
+    // about THIS board, not a table. Only when the panel's inputs actually
+    // moved: re-posting an unchanged arrangement must not be refused by a
+    // floor the running configuration already sits under.
+    #[cfg(feature = "hub75")]
+    if edit.layout.matrix != cur.matrix || edit.driver_set {
+        let before = crate::hub75::heap_before_panel();
+        let floor = crate::hub75::boot_heap_floor();
+        if let Some(cost) = crate::hub75::boot_cost(&edit.layout.matrix, &edit.layout.driver) {
+            let left = before.saturating_sub(cost);
+            // `before == 0` = the panel never booted (a `LUXEL_NO_OTA` build,
+            // or a POST that somehow beat the wiring): nothing measured,
+            // nothing predicted, nothing refused.
+            if before > 0 && left < floor {
+                return Err(alloc::format!(
+                    "{{\"ok\":false,\"error\":\"this panel would leave {} B of heap at boot \
+                     (floor {} B) — it cannot be driven on this board\",\"line\":{}}}",
+                    left,
+                    floor,
+                    wire_line_no(
+                        body,
+                        if edit.layout.matrix != cur.matrix { "matrix" } else { "panel" }
+                    ),
+                ));
+            }
+        }
     }
     // A `proj` line is the RUNNING pattern's override and outranks the
     // defaults in the same body; without one, a changed default is itself
@@ -367,6 +573,12 @@ pub fn set_from_wire(body: &str) -> Result<Applied, String> {
     let proj_now = edit.proj_now;
     let defaults_changed = edit.layout.proj != cur.proj;
     let persisted = store(edit.layout, edit.pixels.unwrap_or(pixels_now));
+    // A successful edit is the user having seen (or at least overwritten) the
+    // self-heal's verdict — the record has done its job (Gitea #822). Only
+    // written when there is one, so the ordinary POST costs no flash.
+    if was_reverted() {
+        set_reverted(None);
+    }
     match proj_now {
         Some(o) => want_projection(o.map_or(PROJ_DEFAULTS, |m| m.as_u8())),
         None if defaults_changed => want_projection(PROJ_DEFAULTS),
@@ -382,14 +594,14 @@ pub fn set_from_wire(body: &str) -> Result<Applied, String> {
     })
 }
 
-/// The 1-based line the `panel` verb is on, numbered exactly as
+/// The 1-based line `verb` is on, numbered exactly as
 /// `luxel_core::layout::parse` numbers its own errors (raw lines, blanks
-/// included). 1 when there is none — the refusal above only runs on a body
-/// that carried one.
+/// included). 1 when there is none — the refusals above only run on a body
+/// that carried the line they name.
 #[cfg(feature = "hub75")]
-fn panel_line_no(body: &str) -> u32 {
+fn wire_line_no(body: &str, verb: &str) -> u32 {
     body.lines()
-        .position(|l| l.trim().split_whitespace().next() == Some("panel"))
+        .position(|l| l.trim().split_whitespace().next() == Some(verb))
         .map_or(1, |i| i as u32 + 1)
 }
 
@@ -405,6 +617,7 @@ pub fn ok_json(reboot_required: bool, pixels: Option<u32>) -> String {
 /// installed, so its first `GET /api/layout` is already right.
 #[inline(never)]
 pub fn init() {
+    load_reverted();
     let mut l = board_default();
     if crate::devicemap::source() == luxel_core::caps::DeviceMap::User {
         l.kind = LayoutKind::Map;
