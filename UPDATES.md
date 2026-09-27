@@ -62,6 +62,29 @@ is again the entry chunk, which is the same finding master recorded in
 docs/boards.md this morning: content is not what is eating this partition, the
 console's own code is (Gitea #691).
 
+## 2026-09-27 — HUB75 ring driver step 3: `hub75-ring`, core 0 packing alone (#857, first PR)
+
+`firmware/src/hub75_ring.rs`: the ring driver behind feature `hub75-ring`
+(replaces `Hub75Output` as the board output when on; off by default until
+#858). A fixed ring of row-pair slots in internal SRAM sized from the new
+`panel` line field `ring_ms` (default 3; optional on the way in, always
+written out; `driver.ring_ms`, `live.ring_ms`, `live.ring_rows`,
+`live.ring_slack_us`; the Settings panel-module card grows the control),
+`Hub75::new_ring` over the #856 chain, the PIE packer as the refill from
+the output task's `flush` at a new `OutputDriver::poll_interval`, claims
+from one queue word with the frame choice in its top bit, four RGB frames
+in the arena, the skip-and-count rule for a claim the beam would win, and
+`pass.ring` in `/api/status` (`rows slack_us late blanked backoffs
+packed_core0 packed_core1 idle pack_us pack_us_max`). `boot_cost` learns
+the ring (`BootAlloc::ring_slots`; the 2x1 chain that bricked the board is
+~28 KB of slots + descriptors instead of 120 KB); the mirror synthesises
+the ring readout. No second ISR hook turned out to be needed (design §9).
+Docs: api.md (panel line, live fields, `pass.ring`, the refusal),
+firmware.md, the design doc; flake variant `luxel-fw-seengreat-hub75-ring`.
+Host: 80 luxel-hub75 tests, 57 layout tests, the ring build + stack check.
+**Unverified on metal in this PR** — the bench run (late 0 at stock and ×4,
+then Jeremy's lsb step) follows once the panel is handed over.
+
 ## 2026-09-27 — the panel: scene resume and sprites on metal (#818, #774)
 
 Master `eb984808` deployed to the Seengreat 64x64 — firmware to **both** OTA

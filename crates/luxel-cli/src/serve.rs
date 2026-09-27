@@ -1471,6 +1471,23 @@ fn synthetic_live(
         scan: g.rows as u16,
         fb_bytes: g.with_trail(sched.needs_trail()).bytes() as u32,
         fallback: false,
+        ring_ms: driver.ring_ms,
+        // The ring driver's reading for this configuration (Gitea #857) —
+        // what `ring_ms` resolves to, so the console's readout is drivable
+        // with no panel on the bench.
+        ring_rows: luxel_hub75::ring::slots_for_slack(
+            u32::from(driver.ring_ms) * 1000,
+            &sched,
+            g.cols,
+            driver.clock_hz(),
+            g.rows,
+        ) as u16,
+        ring_slack_us: luxel_hub75::ring::slack_us(
+            luxel_hub75::ring::slots_for_slack(u32::from(driver.ring_ms) * 1000, &sched, g.cols, driver.clock_hz(), g.rows),
+            &sched,
+            g.cols,
+            driver.clock_hz(),
+        ),
     })
 }
 

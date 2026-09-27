@@ -128,6 +128,12 @@ hub75-spare-plane = []
 # packer otherwise (it says which at boot). Xtensa inline asm — S3 only in
 # practice; needs `hub75`. Off by default until the ring driver lands.
 hub75-pie = ["luxel-hub75/pie"]
+# The HUB75 RING driver (Gitea #857, src/hub75_ring.rs, docs/hub75-ring-design.md):
+# a fixed ring of row-pair slots packed just ahead of the beam by the PIE
+# packer, instead of two whole framebuffers. Replaces `Hub75Output` as the
+# board output when on. Off by default until Jeremy's eye retires the
+# two-buffer driver (#858). Needs `hub75`; implies `hub75-pie`.
+hub75-ring = ["hub75-pie"]
 # Boot-time packer microbench (src/packbench.rs): times the scalar packer
 # against the PIE kernel over a 256-column row pair on each core and reports
 # under `/api/status` "packbench". Never in a shipped image. Build with

@@ -195,6 +195,39 @@ pub fn format_slot(words: &mut [u16], g: Geometry, c: Control, s: &Schedule) {
     }
 }
 
+/// [`format_slot`] and [`set_slot_address`] in one pass over the words —
+/// what the driver does when it claims a slot for row pair `r`: the whole
+/// control template with the row's addresses, colour bits cleared, ready
+/// for the packer. One write per word instead of two.
+pub fn format_slot_for(words: &mut [u16], g: Geometry, c: Control, s: &Schedule, r: usize) {
+    assert!(g.planes >= 1 && g.planes <= MAX_PLANES, "planes");
+    assert!(g.cols > 0 && g.rows > 0 && r < g.rows, "shape");
+    assert_eq!(words.len(), slot_words(g.planes, g.cols), "slot length");
+    let cols = g.cols;
+    let blank = usize::from(c.blank);
+    let latch = usize::from(c.latch_clocks);
+    let oe_from = blank;
+    let oe_end = cols.saturating_sub(latch + blank);
+    let latch_from = cols.saturating_sub(latch);
+    let widths = row_widths(s);
+    let prev = ((r + g.rows - 1) % g.rows) as u16 & ADDR_MASK;
+    let this = (r as u16) & ADDR_MASK;
+    for (row, chunk) in words.chunks_exact_mut(cols).enumerate() {
+        let oe_to = oe_end.min(oe_from.saturating_add(widths[row]));
+        let addr = if row == ENTRY_ROW { prev } else { this };
+        for (i, w) in chunk.iter_mut().enumerate() {
+            let mut v = addr;
+            if i >= oe_from && i < oe_to {
+                v |= OE_ACTIVE;
+            }
+            if i >= latch_from {
+                v |= LATCH;
+            }
+            *w = v;
+        }
+    }
+}
+
 /// Stamp row pair `r` of `rows` into a slot: the ENTRY row names the
 /// previous row (`(r + rows − 1) % rows`), the plane rows name `r`. Every
 /// other bit is left alone, so this is safe on a packed slot.
@@ -546,6 +579,22 @@ mod tests {
         assert!(slot[..64].iter().all(|w| w & ADDR_MASK == 16));
         assert!(slot[64..].iter().all(|w| w & ADDR_MASK == 17));
         let _ = before;
+    }
+
+    #[test]
+    fn format_slot_for_equals_format_then_stamp() {
+        let c = Control::new(3, 1);
+        for lsb in [0u16, 7] {
+            let s = Schedule::plan(G, c, lsb);
+            for r in [0usize, 1, 17, 31] {
+                let mut want = vec![0u16; slot_words(7, 64)];
+                format_slot(&mut want, G, c, &s);
+                set_slot_address(&mut want, 7, 64, r, 32);
+                let mut got = vec![0xffffu16; slot_words(7, 64)];
+                format_slot_for(&mut got, G, c, &s, r);
+                assert_eq!(got, want, "lsb {lsb} row {r}");
+            }
+        }
     }
 
     #[test]

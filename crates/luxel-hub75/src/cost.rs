@@ -53,6 +53,13 @@ pub struct BootAlloc {
     /// `esp_hub75::max_dma_chunk_size()` — what one descriptor can span, and
     /// so how many descriptors a plane's bytes need.
     pub max_chunk: usize,
+    /// The RING driver (Gitea #857, `hub75-ring`): slots in the ring, from
+    /// `crate::ring::slots_for_slack`. 0 = the framebuffer drivers above.
+    /// With a ring, `buffers`/`spare_planes`/`rings` are ignored: internal
+    /// SRAM holds `ring_slots` slots of `planes + 1` rows, ONE descriptor
+    /// chain over them, and the vector packer's pair pads instead of the
+    /// scalar packer's scratch; the RGB frames live in the PSRAM arena.
+    pub ring_slots: usize,
 }
 
 /// Internal-SRAM bytes one boot attempt takes for the panel, itemised so a
@@ -90,6 +97,16 @@ impl BootCost {
 /// once so the prediction cannot drift from the boot.
 #[must_use]
 pub fn boot_cost(g: Geometry, s: &Schedule, a: &BootAlloc) -> BootCost {
+    if a.ring_slots > 0 {
+        // `g.trail` is irrelevant here: the ring's ENTRY row does that job
+        // (`crate::ring`), and a slot is `planes + 1` rows either way.
+        return BootCost {
+            framebuffers: a.ring_slots * crate::ring::slot_bytes(g.planes, g.cols),
+            descriptors: crate::ring::ring_descriptors(a.ring_slots, s, g.cols, a.max_chunk) * a.desc_bytes,
+            tables: core::mem::size_of::<Tables>(),
+            scratch: crate::pie::pads_bytes(g.cols),
+        };
+    }
     BootCost {
         framebuffers: g.bytes() * a.buffers + g.plane_bytes() * a.spare_planes,
         descriptors: s.descriptors(g.plane_bytes(), a.max_chunk) * a.rings * a.desc_bytes,
@@ -107,7 +124,7 @@ mod tests {
     /// The Seengreat's allocation shape: two framebuffers, two descriptor
     /// rings, 12-byte descriptors, 4092-byte DMA chunks (esp-hal's ceiling).
     fn seengreat() -> BootAlloc {
-        BootAlloc { buffers: 2, spare_planes: 0, rings: 2, desc_bytes: 12, max_chunk: 4092 }
+        BootAlloc { buffers: 2, spare_planes: 0, rings: 2, desc_bytes: 12, max_chunk: 4092, ring_slots: 0 }
     }
 
     fn cost_of(m: &Matrix, d: &PanelDriver, a: &BootAlloc) -> BootCost {
@@ -152,6 +169,46 @@ mod tests {
 
     /// Spare-plane mode (#610) is what makes that chain fit: one internal
     /// framebuffer plus one plane, the staging buffer in the PSRAM arena.
+    /// The ring driver (Gitea #857): the 2x1 chain that bricked the board is
+    /// a few KB of slots, and the wall the design is for fits.
+    #[test]
+    fn the_ring_is_a_fraction_of_the_framebuffers() {
+        let d = PanelDriver { ring_ms: 3, ..PanelDriver::default() };
+        let ring_alloc = |m: &Matrix, d: &PanelDriver| {
+            let g = arrange::fb_geometry(m, usize::from(d.planes)).unwrap();
+            let s = Schedule::plan(g, Control::new(d.blank, d.latch_clocks()), d.lsb);
+            let n = crate::ring::slots_for_slack(u32::from(d.ring_ms) * 1000, &s, g.cols, d.clock_hz(), g.rows);
+            BootAlloc { ring_slots: n as usize, rings: 1, ..seengreat() }
+        };
+        let two_by_one = Matrix { cols: 2, ..Matrix::single(64, 64) };
+        let plain = cost_of(&two_by_one, &d, &seengreat());
+        let a = ring_alloc(&two_by_one, &d);
+        let ring = cost_of(&two_by_one, &d, &a);
+        assert!(plain.total() > 120 * 1024, "{}", plain.total());
+        // 3 ms at stock on 128 columns at 30 MHz: 6 slots + the guard, each
+        // 8 rows x 128 words x 2 B
+        assert_eq!(a.ring_slots, 8);
+        assert_eq!(ring.framebuffers, 8 * 8 * 128 * 2);
+        // …and the descriptors are the other half of it at stock: 128
+        // emissions x 8 slots x 12 B — the schedule's E is the descriptor
+        // count's lever, not the ring's byte count's
+        assert_eq!(ring.descriptors, 8 * 128 * 12);
+        assert!(ring.total() < 32 * 1024, "{}", ring.total());
+        assert_eq!(ring.scratch, crate::pie::PairPads::new(128).bytes());
+        // the 128x128 wall of the design doc (§8), at stock: a fixed slack
+        // buys fewer rows on a wider chain
+        let wall = Matrix { cols: 4, ..Matrix::single(64, 64) };
+        let a = ring_alloc(&wall, &d);
+        let ring = cost_of(&wall, &d, &a);
+        assert_eq!(a.ring_slots, 5);
+        assert!(ring.total() < 32 * 1024, "{}", ring.total());
+        // and a ring cost never depends on the trailing block
+        let g = arrange::fb_geometry(&wall, 7).unwrap();
+        let s = Schedule::plan(g, Control::new(d.blank, d.latch_clocks()), 7);
+        let a = ring_alloc(&wall, &PanelDriver { lsb: 7, ..d });
+        assert_eq!(boot_cost(g, &s, &a), boot_cost(g.with_trail(true), &s, &a));
+    }
+
     #[test]
     fn spare_plane_halves_the_internal_cost() {
         let m = Matrix { cols: 2, rows: 1, ..Matrix::single(64, 64) };

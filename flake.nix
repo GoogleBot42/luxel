@@ -417,6 +417,18 @@
           # self-install table describe different slots.
           partitions = "partitions-16mb.csv";
         };
+        # The same board on the RING driver (Gitea #857): a fixed ring of
+        # row-pair slots packed ahead of the beam instead of two framebuffers.
+        # Off by default until #858; this variant keeps it building.
+        luxel-fw-seengreat-hub75-ring = {
+          board = "board-seengreat-hub75";
+          chip = "esp32s3";
+          target = "xtensa-esp32s3-none-elf";
+          xtensa = true;
+          iram = [ "iram-vm" ];
+          extraFeatures = [ "jit" "hub75-ring" ];
+          partitions = "partitions-16mb.csv";
+        };
       };
     in
     {

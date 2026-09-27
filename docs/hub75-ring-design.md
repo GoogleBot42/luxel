@@ -301,7 +301,15 @@ core.
   (firmware/patches/README.md). *Step 2 (#856) shipped the builder:*
   `esp-hub75-0.14.0-ring-chain.patch` — `fill_ring_chain`,
   `CircularBcmBuf::new_ring`, `Hub75::new_ring` (the circular constructor
-  with the ring in place of the framebuffer). The ISR hook is step 3.
+  with the ring in place of the framebuffer). *Step 3 (#857) needed no
+  second ISR hook:* with `suc_eof` on the ring's last slot only, the
+  existing frame-count ISR's `frame_count()` is the wrap count, and the
+  packer reads the slot under the beam from `dma_position()` on its own
+  turn — the "slot-EOF interrupt" of §6 became no interrupt at all, and
+  the frame flip moved into the claim word (§6, step 2 detail). The
+  skip-and-count rule replaces "blank the slot" for a claim the packer
+  gives up on; the descriptor-swap blanking stays for the flash fence
+  (#852).
 - `firmware/src/hub75.rs`: a `Hub75Ring` output behind a feature
   (`hub75-ring`), keeping `Hub75Output` as is until Jeremy's eye retires it;
   boot: allocate the ring from `ring_ms`, format the templates, build the

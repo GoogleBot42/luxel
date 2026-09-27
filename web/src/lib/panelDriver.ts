@@ -6,18 +6,18 @@
 // people can optionally configure, but once it is configured they probably
 // won't touch it again, so being collapsed still makes sense." So it is one
 // collapsed row under the arrangement, carrying the scan rate as well as the
-// four `panel` fields — everything printed on the back of a module.
+// `panel` fields — everything printed on the back of a module.
 //
-// The HUB75 driver's bit depth, pixel clock, chip init sequence and latch
-// blanking are DEVICE SETTINGS now, not this build's constants: `/api/layout`
+// The HUB75 driver's bit depth, pixel clock, chip init sequence, latch
+// blanking and ring slack are DEVICE SETTINGS now, not this build's constants: `/api/layout`
 // reports them as a `driver` block and takes them back as one wire line,
 //
-//     panel <planes> <clock_mhz> <chip> <blank>
+//     panel <planes> <clock_mhz> <chip> <blank> <lsb> <ring_ms>
 //
 // which the firmware merges into the stored Layout and applies at the next
-// boot. So there are two readings of the same four values — the CONFIGURED
-// one the form edits and the LIVE one the DMA is running — and the card's job
-// is to say which is on the panel right now. That decision lives here,
+// boot. So there are two readings of the same values — the CONFIGURED one the
+// form edits and the LIVE one the DMA is running — and the card's job is to
+// say which is on the panel right now. That decision lives here,
 // Svelte-free and fetch-free, so it is unit tested against fixtures
 // (`web/tests/panelDriver.test.mjs`) rather than eyeballed on a board: the
 // interesting states (a configured driver that did not fit, panel output that
@@ -69,7 +69,7 @@ export {
   type LsbStep,
 } from "./settingsCaps.ts";
 
-/** The `panel` line's own five values (the wire's spelling, so a line is
+/** The `panel` line's own six values (the wire's spelling, so a line is
  *  built by writing them out in order and nothing has to be mapped). */
 export interface PanelDriverConfig {
   planes: number;
@@ -80,6 +80,10 @@ export interface PanelDriverConfig {
    *  #460 / #789 / #797). The wire's OPTIONAL fifth field; this form always
    *  writes it, and only ever writes a step top (`lsbSteps`). */
   lsb: number;
+  /** Ring slack in milliseconds, 1..50 — how far the beam may run ahead of the
+   *  packer on the ring driver (Gitea #857). The wire's OPTIONAL sixth field;
+   *  this form always writes it, for the same reason it always writes `lsb`. */
+  ring_ms: number;
 }
 
 /** Bit depth: 4..8, and the refresh halves per extra plane. */
@@ -119,6 +123,18 @@ export const BLANK_MAX = 8;
  *  means this. */
 export const LSB_FULL = 0;
 
+/** Ring slack, milliseconds: how far ahead of the packer the beam is allowed to
+ *  run, which is what the ring driver sizes its slot ring for (Gitea #857).
+ *  More slack is more tolerance of a late frame and more internal RAM; the
+ *  two-buffer driver has no ring and ignores it entirely.
+ *
+ *  It is a BOOT field — the ring is allocated once, at boot, like the DMA
+ *  descriptor chain `planes` and `lsb` decide — so `panelDriverState` compares
+ *  it against `live.ring_ms` and a change waits for a reboot. */
+export const RING_MS_DEFAULT = 3;
+export const RING_MS_MIN = 1;
+export const RING_MS_MAX = 50;
+
 /** The driver every board boots with, as the `panel` line spells it. */
 export const PANEL_DRIVER_LINE_DEFAULT: PanelDriverConfig = {
   planes: PANEL_DRIVER_DEFAULT.planes,
@@ -126,6 +142,7 @@ export const PANEL_DRIVER_LINE_DEFAULT: PanelDriverConfig = {
   chip: "shiftreg",
   blank: 1,
   lsb: LSB_FULL,
+  ring_ms: RING_MS_DEFAULT,
 };
 
 /** Clocks the latch is held high: 3 on a DP3246, 1 on everything else. The
@@ -180,6 +197,10 @@ export function configuredDriver(wire: LayoutWire | null): PanelDriverConfig {
     // Firmware between #525 and #789 reports no `lsb` at all, and what it is
     // running is the full schedule — which is exactly what 0 means.
     lsb: d.lsb ?? LSB_FULL,
+    // Same story one field along: firmware before #857 carries no `ring_ms`
+    // and runs the two-buffer driver, which has no ring to size — the default
+    // is what a line written from this form has to say.
+    ring_ms: d.ring_ms ?? RING_MS_DEFAULT,
   };
 }
 
@@ -214,16 +235,17 @@ export function panelRefreshHz(wire: LayoutWire | null, a: RefreshInput): number
   return estimatedRefreshHz(a, refreshDriver(wire));
 }
 
-/** The one write: `panel <planes> <clock_mhz> <chip> <blank> <lsb>`. A POST
- *  carries this line alone — the firmware merges it into the stored Layout, so
- *  the matrix line does not have to be resent (and must not be, or a
+/** The one write: `panel <planes> <clock_mhz> <chip> <blank> <lsb> <ring_ms>`.
+ *  A POST carries this line alone — the firmware merges it into the stored
+ *  Layout, so the matrix line does not have to be resent (and must not be, or a
  *  concurrent edit elsewhere in the form would be clobbered by a stale copy).
  *
- *  The fifth field is optional on the wire (#789) but always written here: a
- *  four-field line would read as `lsb 0` and silently reset the trade whenever
- *  any other field on the card is edited. */
+ *  The fifth and sixth fields are optional on the wire (#789, #857) but always
+ *  written here, for one reason: a short line reads as `lsb 0` /
+ *  `ring_ms` default, which would silently reset the refresh trade or the ring
+ *  slack whenever any other field on the card is edited. */
 export function panelLine(d: PanelDriverConfig): string {
-  return `panel ${d.planes} ${d.clock_mhz} ${d.chip} ${d.blank} ${d.lsb}`;
+  return `panel ${d.planes} ${d.clock_mhz} ${d.chip} ${d.blank} ${d.lsb} ${d.ring_ms}`;
 }
 
 /**
@@ -264,6 +286,14 @@ export function snapClock(mhz: number, driver: PanelDriverWire | null): number {
 export function clampBlank(n: number): number {
   const v = Math.round(Number(n) || 0);
   return Math.min(BLANK_MAX, Math.max(BLANK_MIN, v));
+}
+
+/** …and for the ring slack, whose floor is 1 rather than 0: a zero-slack ring
+ *  is not a setting the firmware takes, so an empty or garbage field reads as
+ *  the minimum rather than as something the device would refuse. */
+export function clampRingMs(n: number): number {
+  const v = Math.round(Number(n) || 0);
+  return Math.min(RING_MS_MAX, Math.max(RING_MS_MIN, v));
 }
 
 /** The configured arrangement the framebuffer is sized from — the `matrix`
@@ -540,7 +570,11 @@ export interface PanelDriverState {
 /** `7 planes · 30 MHz · plain shift register · blanking 1 · 64×64 1/32`, plus
  *  `· LSB 30 of 61 clocks` when the running schedule TRUNCATES (#789). At the
  *  full on-time there is nothing to say — that is what every board has always
- *  done — so the phrase only appears where it explains something. */
+ *  done — so the phrase only appears where it explains something.
+ *
+ *  `· ring 12 rows / 3000 µs` for the same reason (#857): the two-buffer driver
+ *  reports `ring_rows` 0 because it has no ring, and older firmware reports no
+ *  ring at all, and in both cases the phrase would only describe an absence. */
 export function liveSummary(live: LiveDriverWire | null): string {
   if (!live) return "";
   const bits = [
@@ -553,6 +587,9 @@ export function liveSummary(live: LiveDriverWire | null): string {
   const w = liveLitWidth(live);
   if (typeof live.lsb === "number" && live.lsb > 0 && live.lsb < w) {
     bits.push(`LSB ${live.lsb} of ${w} clocks`);
+  }
+  if (typeof live.ring_rows === "number" && live.ring_rows > 0) {
+    bits.push(`ring ${live.ring_rows} rows / ${live.ring_slack_us ?? 0} µs`);
   }
   return bits.join(" · ");
 }
@@ -590,6 +627,16 @@ export function panelDriverState(
     lsbEffective(driver.lsb ?? LSB_FULL, liveLitWidth(live)) !== live.lsb
   ) {
     changed.push("the LSB on-time");
+  }
+  // `ring_ms` is a BOOT field too (Gitea #857): the slot ring is allocated once,
+  // at boot, so a stored value the running driver did not boot with waits for
+  // one. It is compared RAW — unlike `lsb` there is no clamping between the two
+  // readings — and only where the live block carries it: firmware before #857
+  // runs the two-buffer driver, which has no ring, and a phantom
+  // "reboot to apply" on a device that cannot have one is exactly the #789
+  // mistake one field along.
+  if (typeof live.ring_ms === "number" && (driver.ring_ms ?? RING_MS_DEFAULT) !== live.ring_ms) {
+    changed.push("ring slack");
   }
   // `blank` is deliberately NOT compared (Gitea #778): the firmware applies it
   // on its next frame, so `live.blank` legitimately lags the reply to the POST

@@ -750,6 +750,30 @@ out of PSRAM for exactly this reason). A single upright panel — every
 device shipped so far — builds the table, finds it is the identity, frees
 it again, and holds nothing.
 
+**The ring driver (`hub75-ring`, Gitea #857 / #838, off by default until
+Jeremy's eye retires the two-buffer driver in #858).** `firmware/src/hub75_ring.rs`,
+the design in docs/hub75-ring-design.md and the arithmetic in
+`luxel_hub75::ring`. No packed frame anywhere: a fixed ring of row-pair
+slots in internal SRAM — `planes + 1` rows of `cols` words each, sized in
+MILLISECONDS of slack from the `panel` line's `ring_ms` (9 slots, 9 KB for a
+64x64 at stock, against two 29 KB framebuffers; the wall the design is for
+stays under 32 KB) — packed just ahead of the beam by the PIE packer
+(`luxel_hub75::pie`, #855) straight from one of four RGB frames in the
+PSRAM arena. The DMA chain is `esp_hub75::fill_ring_chain`'s row-major
+circular chain (`Hub75::new_ring`, firmware/patches), `suc_eof` on the ring's
+last slot only, so the driver's `frame_count()` is the wrap count and
+`dma_position()` the slot under the beam. The packer runs from the output
+task's `flush` on core 0 at `poll_interval` (a quarter of the slack): it
+claims slots out of one queue word (`ring::claim_next` — the counter and,
+in its top bit, which RGB frame the pass reads, chosen at row 0, so a pass is
+frame-atomic with no swap), re-templates the slot for its new row pair,
+packs it, and skips — counting `pass.ring.late` — any claim the beam would
+win; a skipped slot shows the row it already held at that row's own address
+(stale, never a mixed-address row). `write_frame` is a copy into a free RGB
+frame and a pointer publish; `ready_for_frame` waits for the next pass to be
+claimed, which paces the render task the way the swap's landing did. The
+core-1 steal (design §6) is the second PR.
+
 **Spare-plane swap (`hub75-spare-plane`, Gitea #610, off by default until
 verified on metal).** The two-framebuffer atomic swap costs a second full
 bitplane buffer of internal SRAM — 28 KB at 64x64, 115 KB for a 256-column
