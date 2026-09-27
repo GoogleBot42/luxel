@@ -199,6 +199,15 @@ value while collapsed. Everything below is on the new page.
     the predicted panel cost, so the arithmetic in
     `luxel_hub75::cost` is checkable against the boot log's `hub75:` lines.
     The console shows the same sentence in the LED layout card's banner.
+  - **The self-heal — VERIFIED on metal 2026-09-27** (the board arrived at the
+    shape by accident: a 2x1 stored on images that predate the guards). Boot
+    log: `layout: 8192 px left the heap at 19844 B free / 15748 B largest
+    after boot (floors 20480 / 12288) — reverting to the board default`, ONE
+    reboot, 1x1 back, HTTP back, `layout_reverted:true`. It only worked once
+    the heal moved to WiFi-up with a heap reserve and `boot_ok` stopped
+    allocating (UPDATES.md 2026-09-27) — before that the board panicked one
+    line ahead of it, every boot. The paragraph below is the pre-verification
+    plan, kept for the POST-refusal half, which is still unexercised.
   - **The self-heal** cannot be exercised without first storing a layout the
     board cannot serve — which is precisely the brick this ticket removes, and
     the POST refusal above now blocks the only way to store one. Two ways in,

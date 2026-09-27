@@ -174,8 +174,12 @@ Consequences:
   sleep 4
   timeout 2 socat -u /dev/ttyACM0,raw,echo=0,b115200 STDOUT > /dev/null   # the reset
   ```
-  `espflash monitor` is NOT an option while the app runs — it insists on
-  connecting to a bootloader and fails with "Error while connecting to device".
+  `espflash monitor` failed with "Error while connecting to device" while the
+  app ran on 2026-09-05 — but on 2026-09-27 `espflash board-info` and
+  `write-bin` connected from the RUNNING app every time, no BOOT hold: the
+  DTR/RTS emulation does enter download mode from a running app. The one
+  thing that reliably breaks the connection is a second process holding the
+  port (see "Download mode is a one-way door").
 - **A watchdog reset or panic RE-ENUMERATES the USB node** (a USB-triggered
   reset does not): the reader dies, the node comes back `root:dialout 660`,
   and you need `doas chmod 666` again. So a serial capture that stops
@@ -237,6 +241,16 @@ espflash write-bin -p /dev/ttyACM0 0x10000  app.bin
 espflash write-bin -p /dev/ttyACM0 0x310000 app.bin
 # 5. STOP. Ask Jeremy to press EN. Do not "just try" a reset.
 ```
+
+The same four commands also work with the APP running (2026-09-27, 17:13:
+`write-bin` connected by itself, twice, board panic-looping at the time) —
+so a board that is merely unreachable over the network is flashable from the
+container with no hands at all. Two things to know: **every espflash reset
+is a boot the guard counts**, so two `write-bin`s plus one serial open in
+under a minute flipped the slot (`preboot guard: 2 consecutive failed boots`)
+— harmless only because both slots held the same image, which is why both
+get written; and the boot after the write comes up on its own, the reader
+attaches passively, no second open needed.
 
 How it got there: a `stty`/`socat` open resets the chip through the USB
 Serial/JTAG DTR/RTS emulation, and if BOOT happens to be held at that
