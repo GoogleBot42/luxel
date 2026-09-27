@@ -19,11 +19,21 @@
 //! LSB's on-time in pixel clocks: planes whose on-time fits inside one row
 //! shift are shifted ONCE with OE cut off after `lsb · 2^k` words, and only
 //! the planes above them keep descriptor repeats. With `t` such planes a
-//! rescan is `t + 2^(planes − t) − 1` row shifts, and the panel's peak
-//! brightness is `lsb / W` of full. The trade is therefore continuous in `lsb`
-//! (brightness) and steps in `t` (refresh): at `lsb = W` the schedule IS the
-//! stock one, at `lsb = W/2` the rescan is nearly twice as fast at half the
-//! brightness, and so on. Binary weights stay EXACT — plane `k` is lit
+//! rescan is `E = t + 2^(planes − t) − 1` row shifts.
+//!
+//! **What it costs in brightness is small, not proportional.** Perceived
+//! brightness is on-time per unit TIME, and the pass shrinks along with the
+//! on-time: at full white the LEDs are on `lsb · (2^planes − 1)` of every
+//! `cols · E` clocks, against `W · (2^planes − 1)` of `cols · (2^planes − 1)`
+//! for stock, so relative brightness is `lsb · (2^planes − 1) / (W · E)`. At
+//! the top of each step (`lsb = W >> t`) that is ~96 % for one truncated plane,
+//! ~95 % for two, ~81 % for three on the 64-wide bench panel — the refresh
+//! doubles per step and the brightness barely moves, which is the whole point
+//! (measured on the Seengreat 2026-09-26: the panel looked as bright as stock
+//! at four times the rescan). Within a step the refresh is constant and the
+//! brightness falls linearly with `lsb`, so the step tops are the only
+//! positions worth offering. `lsb = W` (or 0) IS the stock schedule.
+//! Binary weights stay EXACT — plane `k` is lit
 //! `lsb · 2^k` clocks whether truncated or repeated — which is what keeps
 //! the grey ramp monotonic; the C++ library's version of this trick got the
 //! arithmetic wrong (mrfaptastic #862) and is not what this is.
@@ -39,7 +49,7 @@
 //! `blank` applies without a reboot and shrinks `W`; `t` cannot move without
 //! rebuilding the DMA descriptor chain, so [`Schedule::refit`] keeps `t` and
 //! re-clamps `lsb` to `W >> t`. Every plane's on-time scales by the same
-//! factor, so the weights stay exact and only the peak brightness moves.
+//! factor, so the weights stay exact and only the brightness moves.
 
 use crate::{Control, Geometry, MAX_PLANES};
 
@@ -180,13 +190,32 @@ impl Schedule {
     }
 
     /// Peak brightness as a fraction of the stock schedule's, in permille:
-    /// `1000 · lsb / W`. 1000 at full.
+    /// `1000 · lsb · (2^planes − 1) / (W · emissions)` — on-time per unit
+    /// TIME, since the pass shortens with the on-time (module docs). 1000 at
+    /// full.
     #[must_use]
-    pub fn on_time_permille(&self) -> u32 {
+    pub fn brightness_permille(&self) -> u32 {
         if self.width == 0 {
             return 0;
         }
-        (u32::from(self.lsb) * 1000 + u32::from(self.width) / 2) / u32::from(self.width)
+        let num = u64::from(self.lsb) * self.full_emissions() as u64 * 1000;
+        let den = u64::from(self.width) * self.emissions() as u64;
+        ((num + den / 2) / den) as u32
+    }
+
+    /// The `lsb` at the top of step `t` — `W >> t` — where the refresh gain
+    /// of truncating `t` planes costs the least brightness. `0` (= full) at
+    /// `t = 0`; `None` when `t` is not a valid step for this depth/width.
+    #[must_use]
+    pub fn step_lsb(&self, t: u8) -> Option<u16> {
+        if t >= self.planes {
+            return None;
+        }
+        if t == 0 {
+            return Some(0);
+        }
+        let v = self.width >> t;
+        (v >= 1).then_some(v)
     }
 
     /// Estimated rescan rate: `clock / (rows · cols · emissions)`.
@@ -203,6 +232,8 @@ impl Schedule {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
+    use alloc::vec::Vec;
 
     fn bench() -> Geometry {
         Geometry::new(32, 64, 7)
@@ -218,7 +249,7 @@ mod tests {
             assert_eq!(s.reps(p), 1 << (6 - p));
             assert_eq!(s.lit(p), 61);
         }
-        assert_eq!(s.on_time_permille(), 1000);
+        assert_eq!(s.brightness_permille(), 1000);
         assert_eq!(s.est_hz(bench(), 30_000_000), 115);
         // an lsb at or past the width is the same plan (bar what it remembers
         // it was configured as)
@@ -243,7 +274,7 @@ mod tests {
             // the MSB is always a repeated plane, so the ring still opens
             // with the MSB run
             assert!(s.reps(0) >= 1 && s.trunc < 7);
-            // brighter ↔ faster: never more shifts than stock, and the
+            // faster, never slower: never more shifts than stock, and the
             // emission count is exactly t + 2^(P − t) − 1
             let t = usize::from(s.trunc);
             assert_eq!(s.emissions(), t + (1 << (7 - t)) - 1);
@@ -262,17 +293,52 @@ mod tests {
         assert_eq!((bare.width, bare.trunc), (64, 2));
         assert_eq!(bare.emissions(), 2 + 31);
         assert_eq!(bare.est_hz(bench(), 30_000_000), 30_000_000 / (32 * 64 * 33));
-        // half brightness doubles the refresh (bar the one extra shift)
+        // one truncated plane doubles the refresh (bar the one extra shift)
+        // at ~2.4 % of brightness — on-time per unit time, not per pass
         let half = Schedule::plan(bench(), Control::default(), 30);
         assert_eq!(half.trunc, 1);
         assert_eq!(half.emissions(), 64);
-        assert_eq!(half.on_time_permille(), 492);
-        // the refresh is monotonic in lsb, and so is the brightness
+        assert_eq!(half.brightness_permille(), 976); // 30·127 / (61·64)
+        // the step tops: refresh doubles per step, brightness barely moves
+        let full = Schedule::plan(bench(), Control::default(), 0);
+        let tops: Vec<(u8, u16, usize, u32)> = (0..6u8)
+            .map(|t| {
+                let lsb = full.step_lsb(t).unwrap();
+                let s = Schedule::plan(bench(), Control::default(), lsb);
+                (t, lsb, s.emissions(), s.brightness_permille())
+            })
+            .collect();
+        assert_eq!(
+            tops,
+            vec![
+                (0, 0, 127, 1000),
+                (1, 30, 64, 976),
+                (2, 15, 33, 946),
+                (3, 7, 18, 810),
+                (4, 3, 11, 568),
+                (5, 1, 8, 260),
+            ]
+        );
+        // W >> 6 = 0: there is no sixth step on a 61-clock window, and no
+        // step at the depth itself
+        assert_eq!(full.step_lsb(6), None);
+        assert_eq!(full.step_lsb(7), None);
+        // Jeremy's panel (20 MHz, blank 2 → W 59): the three measured points
+        let g20 = bench();
+        for (lsb, e, b, hz) in [(29u16, 64usize, 975u32, 152u32), (14, 33, 913, 295), (7, 18, 837, 542)] {
+            let s = Schedule::plan(g20, Control::new(2, 1), lsb);
+            assert_eq!((s.emissions(), s.brightness_permille()), (e, b), "lsb {lsb}");
+            assert_eq!(s.est_hz(g20, 20_000_000), hz, "lsb {lsb}");
+        }
+        // the refresh is monotonic in lsb; within a step the brightness falls
+        // linearly, and a step top always beats every position below it
         let mut prev = Schedule::plan(bench(), Control::default(), 61);
         for lsb in (1..61u16).rev() {
             let s = Schedule::plan(bench(), Control::default(), lsb);
             assert!(s.emissions() <= prev.emissions(), "lsb {lsb}");
-            assert!(s.on_time_permille() <= prev.on_time_permille(), "lsb {lsb}");
+            if s.trunc == prev.trunc {
+                assert!(s.brightness_permille() <= prev.brightness_permille(), "lsb {lsb}");
+            }
             prev = s;
         }
     }
@@ -333,7 +399,7 @@ mod tests {
         let s = Schedule::plan(g, Control::new(8, 3), 0);
         assert_eq!((s.width, s.lsb, s.trunc), (0, 0, 0));
         assert_eq!(s.emissions(), 127);
-        assert_eq!(s.on_time_permille(), 0);
+        assert_eq!(s.brightness_permille(), 0);
         for p in 0..7 {
             assert_eq!(s.lit(p), 0);
         }

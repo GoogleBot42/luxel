@@ -1,5 +1,63 @@
 # Update log
 
+## 2026-09-26 — the `lsb` schedule on metal (#795), and its brightness model was wrong in a good way
+
+First run of PR #797's `lsb` panel field on the Seengreat (20 MHz, blank 2,
+7 planes → lit width 59), five API reboots, no rollback:
+
+| `lsb` | truncated | row shifts | predicted | `rescan_hz` | `pass.short` |
+|---:|---:|---:|---:|---:|---:|
+| 0 | 0 | 127 | 76.9 | 76 | as found |
+| 29 | 1 | 64 | 152.6 | **153** | 0 / 7.7k |
+| 14 | 2 | 33 | 296 | **295** | 0 / 15k |
+| 7 | 3 | 18 | 542 | **542** | 4 / 27k |
+
+`live.lsb` reported each effective value, `fallback` false, descriptors
+unchanged in size; a live `blank 4` at `lsb 14` re-clamped `live.lsb` to 13
+without a reboot (`Schedule::refit`) and back. A 128-level grey ramp read back
+exact through `/api/pixels`. The four short passes at a 1.8 ms pass are the
+detector-margin effect #765 saw at 64x32 (2.6 ms of ISR jitter on a
+36-descriptor ring), not a torn ring.
+
+**The correction.** Jeremy's photo at `lsb 14` showed a panel nearly as
+bright as stock, where #797's model said 24 %. That model — peak brightness
+= `lsb / W` — is on-time per PASS; perceived brightness is on-time per unit
+TIME, and the pass shortens with the on-time. Relative brightness is
+`lsb · (2^planes − 1) / (W · E)`: 97.5 % at `lsb 29`, 91 % at 14, 84 % at 7
+on this panel. So truncating the low planes is a nearly free refresh
+multiplier: at the top of each step (`lsb = W >> t`) the rescan doubles for
+~2–5 % of brightness per step on a 64-wide panel, and positions between
+step tops only dim without speeding up. `Schedule::brightness_permille`
+replaces `on_time_permille`, `Schedule::step_lsb` names the step tops, the
+boot line prints "% of stock brightness", the Settings control snaps to the
+steps (refresh ×1/×2/×4…), and docs/api.md + boards.md carry the corrected
+formula and the on-metal table. For a 128x128 wall this changes the plan:
+on 20 MHz panels, 7 planes with three truncated planes is ~136 Hz at ~86 %
+brightness, not the quarter-brightness trade the earlier estimate gave.
+
+Jeremy's second photo (eight plane bands: single planes on top, cumulative
+below) showed each band brighter than the last — the weights are right. One
+open item from it: a single row reads slightly brighter in the LSB-only band,
+most likely the address wrap (31 → 0) leaking into a 14-clock OE window that
+now sits right after the address change; `blank` is the live knob to test it
+with (#795).
+
+**And the #768 half: a 2x1 chain does not fall back — it fits at boot and
+starves the rest.** `matrix 64 64 2 1` was accepted (8192 px) and after the
+reboot the board was alive but unusable: `/api/status` 503 (the OOM reply),
+`/api/brightness` hanging 30 s. The two 57 KB framebuffers are allocated
+before WiFi's mallocs, so they succeed, and the ~27 KB left cannot carry
+WiFi + net + web + engine. Fix here: `try_boot` now refuses a panel whose
+buffers leave the heap under `BOOT_HEAP_FLOOR` (64 KB; a 64x64 pair leaves
+~87 KB, the board then idles at 41–50 KB) and falls back with a boot line
+naming the numbers. The 2x1 under the spare-plane build (57 + 8 KB) leaves
+~81 KB and is allowed — #620's job to prove. Recovery of the starved board
+went badly: the restore POST landed (the handler stores before it replies),
+`POST /api/reboot` never did, and a USB two-open reset put the board into a
+panic loop on both slots with `0 bytes of PSRAM` in the log — PSRAM did not
+come back from the warm reset, and the no-arena path cannot run at 4096 px.
+A power cycle (Jeremy) is the way back; don't USB-reset a starved board.
+
 ## 2026-09-26 — the 2D preview can wear the panel (#786)
 
 Jeremy: "setting toggle for the webui which makes the rendering 2D preview

@@ -36,10 +36,13 @@ import {
   estimatedRefreshHz,
   litWidth,
   lsbEffective,
+  lsbStepIndex,
+  lsbSteps,
   PANEL_DRIVER_DEFAULT,
   peakBrightnessFraction,
   rowBlockWords,
   truncatedPlanes,
+  type LsbStep,
   type PanelDriver,
   type RefreshInput,
 } from "./settingsCaps.ts";
@@ -53,9 +56,12 @@ export {
   emissions,
   litWidth,
   lsbEffective,
+  lsbStepIndex,
+  lsbSteps,
   peakBrightnessFraction,
   rowBlockWords,
   truncatedPlanes,
+  type LsbStep,
 } from "./settingsCaps.ts";
 
 /** The `panel` line's own five values (the wire's spelling, so a line is
@@ -65,9 +71,9 @@ export interface PanelDriverConfig {
   clock_mhz: number;
   chip: string;
   blank: number;
-  /** LSB on-time in pixel clocks, `0` = full — the brighter ↔ faster trade
-   *  (Gitea #460 / #789). The wire's OPTIONAL fifth field; this form always
-   *  writes it. */
+  /** LSB on-time in pixel clocks, `0` = full — the refresh multiplier (Gitea
+   *  #460 / #789 / #797). The wire's OPTIONAL fifth field; this form always
+   *  writes it, and only ever writes a step top (`lsbSteps`). */
   lsb: number;
 }
 
@@ -103,8 +109,8 @@ export const CLOCK_CEILING_MHZ = 30;
 export const BLANK_MIN = 0;
 export const BLANK_MAX = 8;
 
-/** `lsb 0` — the FULL on-time, the stock BCM schedule, and the slider's
- *  right-hand "brighter" end. Every `panel` line written before Gitea #789
+/** `lsb 0` — the FULL on-time, the stock BCM schedule, and the control's
+ *  `×1` position (`t = 0`). Every `panel` line written before Gitea #789
  *  means this. */
 export const LSB_FULL = 0;
 
@@ -284,15 +290,21 @@ export function refreshInput(g: PanelGeometry): RefreshInput {
   return { pw: g.pw, ph: g.ph, panels: g.chain, scan: g.scan };
 }
 
-// ---- the brighter ↔ faster trade (Gitea #460 / #789) ----------------------
+// ---- the refresh multiplier (Gitea #460 / #789 / #797) --------------------
 //
-// One slider, `lsb` — the on-time of the least significant bitplane in pixel
-// clocks, `0` = full. It buys refresh with brightness: the planes whose
-// on-time fits inside one row shift are emitted ONCE with OE cut off early
-// instead of being re-shifted, so a rescan costs `t + 2^(planes − t) − 1` row
-// shifts rather than `2^planes − 1`. Brightness is CONTINUOUS in `lsb` and the
-// Hz STEP, each time `lsb` crosses `W / 2^t` — which is why the card shows both
-// numbers under the slider rather than one label per end.
+// One stepped control, `lsb` — the on-time of the least significant bitplane
+// in pixel clocks, `0` = full. It buys refresh at a small cost in brightness:
+// the planes whose on-time fits inside one row shift are emitted ONCE with OE
+// cut off early instead of being re-shifted, so a rescan costs
+// `E = t + 2^(planes − t) − 1` row shifts rather than `2^planes − 1`.
+//
+// The control has `planes` positions, not `W` of them (#797 corrected #789's
+// continuous slider): the Hz are constant across a truncation step and the
+// brightness falls linearly inside it, so only the step TOPS —
+// `lsb = floor(W / 2^t)`, written as `0` at `t = 0` — are worth offering. At a
+// step top the panel keeps very nearly its stock brightness
+// (`lsb · (2^planes − 1) / (W · E)`), which is the honest framing of the
+// control: faster refresh at a small brightness cost, not "brighter ↔ faster".
 //
 // The arithmetic is `settingsCaps.ts`'s (and the device's, in
 // `crates/luxel-hub75/src/schedule.rs`); what is here is the reading of it for
@@ -313,9 +325,9 @@ export function liveLitWidth(live: LiveDriverWire): number {
   return litWidth(liveRowBlockWords(live), live.blank, latchClocks(live.chip));
 }
 
-/** What one `lsb` setting costs and buys, for the readouts under the slider. */
+/** What one `lsb` setting costs and buys, for the readouts under the control. */
 export interface LsbTrade {
-  /** `W`, the lit clocks of a row block — the slider's top, i.e. "full". */
+  /** `W`, the lit clocks of a row block — the `×1` position's on-time. */
   width: number;
   /** The EFFECTIVE on-time, never 0: `lsb`, or `W` when `lsb` is 0 or over it. */
   lsb: number;
@@ -327,8 +339,13 @@ export interface LsbTrade {
   fullEmissions: number;
   /** Predicted rescan rate, Hz. */
   hz: number;
-  /** Peak brightness as a fraction of full, 0..1. */
+  /** Peak brightness as a fraction of full, 0..1 —
+   *  `lsb · (2^planes − 1) / (W · E)`, NOT `lsb / W` (#797). */
   brightness: number;
+  /** Nominal refresh multiplier of this step, `2^t`: the `×N` the control is
+   *  labelled with. The TRUE ratio is `fullEmissions / emissions`, a few
+   *  percent under it. */
+  multiple: number;
   /** Is this the full on-time — the schedule every board shipped with? */
   full: boolean;
 }
@@ -337,10 +354,14 @@ export interface LsbTrade {
  * The trade at `lsb` for a configured driver on a configured arrangement.
  *
  * `lsb` defaults to the stored value, and is passed explicitly while the
- * slider is being dragged so the readouts track the thumb rather than the last
+ * control is being moved so the readouts track the thumb rather than the last
  * POST. Everything is computed from the CONFIGURED values for the same reason
  * the refresh estimate is (`panelRefreshHz`): the number must not lag the
  * control the user is holding.
+ *
+ * It takes any `lsb`, not just a step top — a Layout stored by #789's
+ * continuous slider is READ here exactly as the device runs it, and is only
+ * rewritten to a step top when the user moves the control.
  */
 export function lsbTrade(
   cfg: PanelDriverConfig,
@@ -365,19 +386,39 @@ export function lsbTrade(
       blank: cfg.blank,
       latch: latchClocks(cfg.chip),
     }),
-    brightness: peakBrightnessFraction(eff, width),
+    brightness: peakBrightnessFraction(eff, width, planes),
+    multiple: 2 ** trunc,
     full: eff >= width,
   };
 }
 
-/** The number to PUT ON THE WIRE for a slider position: the top of the range
- *  is `0` (full), which is what makes the setting FOLLOW a later change to the
- *  panel size, the chain length or the blanking instead of pinning the panel
- *  to today's `W`. Anything else is the clocks themselves. */
+/** The number to PUT ON THE WIRE for an on-time: the full width is `0`, which
+ *  is what makes the setting FOLLOW a later change to the panel size, the chain
+ *  length or the blanking instead of pinning the panel to today's `W`. Anything
+ *  else is the clocks themselves. */
 export function lsbWire(picked: number, width: number): number {
   const w = Math.max(1, Math.round(width));
   const v = Math.round(Math.max(0, Number(picked) || 0));
   return v <= 0 || v >= w ? LSB_FULL : v;
+}
+
+/** The control's positions for a configured driver on a configured
+ *  arrangement, brightest (`×1`, the stock schedule) first. */
+export function lsbStepsFor(cfg: PanelDriverConfig, geom: PanelGeometry): LsbStep[] {
+  const width = litWidth(rowBlockWords(refreshInput(geom)), cfg.blank, latchClocks(cfg.chip));
+  return lsbSteps(width, Math.max(1, Math.round(cfg.planes)));
+}
+
+/** Which of those positions an `lsb` sits at — the step whose truncation count
+ *  it runs, so an off-step stored value reads at the refresh it really does. */
+export function lsbStepAt(
+  cfg: PanelDriverConfig,
+  geom: PanelGeometry,
+  lsb: number = cfg.lsb,
+): number {
+  const planes = Math.max(1, Math.round(cfg.planes));
+  const width = litWidth(rowBlockWords(refreshInput(geom)), cfg.blank, latchClocks(cfg.chip));
+  return lsbStepIndex(lsbSteps(width, planes), lsbEffective(lsb, width), width, planes);
 }
 
 // ---- the scan rate (Gitea #778) ------------------------------------------

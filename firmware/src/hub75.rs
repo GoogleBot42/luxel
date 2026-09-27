@@ -122,6 +122,18 @@ pub const DEFAULT_PANEL_H: u16 = 64;
 /// five address lines (A..E), so no arrangement can scan deeper than this.
 const MAX_SCAN: usize = 32;
 
+/// Heap that must still be free once the panel's buffers are allocated, or
+/// the boot falls back to the board default (Gitea #768).
+///
+/// Measured basis, Seengreat (152 KB heap): a 64x64 pair leaves ~87 KB here
+/// and the board then idles at 41–50 KB `heap_free`, so WiFi + embassy-net +
+/// the web slots + the engine take ~40–45 KB on top of `RUNTIME_FLOOR`
+/// (20 KB). A 2x1 chain double-buffered leaves ~27 KB and starves the web
+/// server (503s, 30 s hangs); the same chain under `hub75-spare-plane`
+/// (57 + 8 KB internal) leaves ~81 KB. 64 KB sits between the two with the
+/// runtime floor intact.
+const BOOT_HEAP_FLOOR: usize = 64 * 1024;
+
 /// The arrangement a board with nothing stored is, and the one a boot falls
 /// back to.
 pub fn board_default_matrix() -> Matrix {
@@ -891,21 +903,22 @@ impl Hub75Output {
         }
     }
 
-    /// Print the brighter ↔ faster schedule once, at boot — the numbers the
-    /// bench compares `rescan_hz` against (Gitea #460 / #789).
+    /// Print the `lsb` schedule once, at boot — the numbers the bench
+    /// compares `rescan_hz` against (Gitea #460 / #789). The brightness is
+    /// relative to the stock schedule, on-time per unit time.
     fn print_schedule(s: &Schedule, g: Geometry, d: &PanelDriver) {
         println!(
-            "hub75: lsb {} of {} lit clocks ({}.{}% on-time), {} low plane{} truncated, \
-             {} row shifts/pass (stock {}), est {} Hz",
+            "hub75: lsb {} of {} lit clocks, {} low plane{} truncated, \
+             {} row shifts/pass (stock {}), est {} Hz at {}.{}% of stock brightness",
             s.lsb,
             s.width,
-            s.on_time_permille() / 10,
-            s.on_time_permille() % 10,
             s.trunc,
             if s.trunc == 1 { "" } else { "s" },
             s.emissions(),
             s.full_emissions(),
             s.est_hz(g, d.clock_hz()),
+            s.brightness_permille() / 10,
+            s.brightness_permille() % 10,
         );
     }
 
@@ -1033,6 +1046,24 @@ impl Hub75Output {
         // again for the fallback attempt.
         if esp_alloc::HEAP.free() < g.cols * 14 + 4096 {
             return Err("no room for the packer's row pads");
+        }
+        // The panel is allocated BEFORE the WiFi blob, embassy-net, the web
+        // slots and the engine take their share of the same heap — which is
+        // what makes the framebuffers a certainty, and also what lets a chain
+        // that is too wide SUCCEED here and starve everything after it. On
+        // 2026-09-26 a 2x1 chain (two 57 KB framebuffers) booted, and the
+        // board then answered `/api/status` with 503 and hung `/api/brightness`
+        // for 30 s: nothing had failed, so nothing fell back (Gitea #768). Ask
+        // the question the allocator cannot: is there still room for the rest
+        // of the boot?
+        let left = esp_alloc::HEAP.free();
+        if left < BOOT_HEAP_FLOOR {
+            println!(
+                "hub75: this panel leaves {} B of heap for WiFi, the web server and the engine \
+                 (floor {} B)",
+                left, BOOT_HEAP_FLOOR
+            );
+            return Err("the framebuffers leave too little heap for the rest of the boot");
         }
         let scratch = Scratch::for_geometry(g);
 

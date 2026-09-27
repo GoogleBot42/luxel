@@ -266,15 +266,17 @@ pub struct PanelDriver {
     /// between address rows — a knob you tune while watching the panel.
     pub blank: u8,
     /// On-time of the LEAST significant bitplane, in pixel clocks — the
-    /// brighter ↔ faster trade (Gitea #460 / #789). **0 = full**: every plane
+    /// refresh lever (Gitea #460 / #789). **0 = full**: every plane
     /// is lit for the whole row block and re-shifted `2^k` times, the stock
     /// BCM schedule. A smaller value lights plane `k` for exactly `lsb · 2^k`
     /// clocks instead; the planes whose on-time is shorter than a row shift
     /// are then emitted ONCE with OE cut off early, so a rescan costs
-    /// `t + 2^(planes − t) − 1` row shifts instead of `2^planes − 1` (`t` =
-    /// the number of such planes), and the panel's peak brightness is
-    /// `lsb / W` of full, `W` being the lit clocks of a row block
-    /// (`cols − latch − 2·blank`). Binary weights stay exact. Clamped to `W`
+    /// `E = t + 2^(planes − t) − 1` row shifts instead of `2^planes − 1` (`t`
+    /// = the number of such planes). Brightness relative to stock is
+    /// `lsb · (2^planes − 1) / (W · E)` — on-time per unit time, the pass
+    /// having shortened too — so at `lsb = W >> t` the refresh doubles per
+    /// step for a few percent of brightness (`W` = the lit clocks of a row
+    /// block, `cols − latch − 2·blank`). Binary weights stay exact. Clamped to `W`
     /// at boot; read at boot (the DMA descriptor chain is built from it), so
     /// `reboot_required`. `live.lsb` reports the effective value.
     pub lsb: u16,

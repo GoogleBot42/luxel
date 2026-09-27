@@ -1229,7 +1229,8 @@ against 76.9–77.0 / 153.5–154.0.
 The `matrix` block says how the panels are ARRANGED; this says how they are
 DRIVEN. The first four were compile-time constants until #525, which is why
 one image could not drive both a plain shift-register panel and an FM6126A
-one; the fifth is the brighter ↔ faster trade added by #789:
+one; the fifth is the refresh-multiplier schedule added by #789, whose
+brightness model #797 corrected:
 
 ```text
 panel <planes> <clock_mhz> <chip> <blank> [<lsb>]
@@ -1247,7 +1248,7 @@ card silently resets the trade.
 | `clock_mhz` | one of **8 · 10 · 12 · 15 · 20 · 24 · 30** | 30 | The LCD_CAM pixel clock — a fixed list, not a range (Gitea #771). Anything else is refused with `panel: clock_mhz must be one of 8\|10\|12\|15\|20\|24\|30`. Offer it as a dropdown over `driver.clocks`, never a number field. |
 | `chip` | `shiftreg` · `fm6126a` · `icn2038s` · `dp3246` | `shiftreg` | The driver chip's init, bit-banged before the DMA starts. `shiftreg` covers FM6124, SM16208, ICN2037 and every other plain shift register — no init at all. `fm6126a` and `icn2038s` share a two-register init; `dp3246` has its own, and holds the latch for the last **3** clocks of every row instead of 1. |
 | `blank` | 0..8 | 1 | Clocks at the start of every row block, and again just before the latch word, where OE is off. `1` is the stock template; raising it trades a little brightness for less ghosting between address rows. **The one field here that applies LIVE** — see below. |
-| `lsb` | 0..65535 | 0 | On-time of the LEAST significant bitplane, in pixel clocks — the brighter ↔ faster trade (Gitea #460 / #789). **`0` = full**, the stock BCM schedule. A smaller value truncates the low planes' OE and drops their descriptor repeats: the rescan steps up and the panel dims, in proportion. Clamped to the lit width `W` at boot. Optional, and boot-built like `planes` — see below. |
+| `lsb` | 0..65535 | 0 | On-time of the LEAST significant bitplane, in pixel clocks — the refresh multiplier (Gitea #460 / #789 / #797). **`0` = full**, the stock BCM schedule. A smaller value truncates the low planes' OE and drops their descriptor repeats: the rescan STEPS up each time `lsb` crosses `W / 2^t`, and at the top of each step the panel keeps very nearly its stock brightness. Clamped to the lit width `W` at boot. Optional, and boot-built like `planes` — see below. |
 
 **`blank` applies live; the other three wait for a boot** (Gitea #778). It is
 nothing but control bits in the framebuffer words — the OE window and the latch
@@ -1258,7 +1259,7 @@ their next turn. A `panel` line that changes only `blank` therefore answers
 point: ghosting between address rows is what the knob is for, and it is tuned
 by *looking* at the panel — which a reboot per attempt makes unusable.
 
-**The brighter ↔ faster trade** (Gitea #460 / #789). Stock BCM lights every
+**Faster refresh: the `lsb` schedule** (Gitea #460 / #789 / #797). Stock BCM lights every
 plane for the whole row block and gets the binary weights by re-shifting plane
 `k` (0 = LSB) `2^k` times, so one rescan costs `2^planes − 1` row shifts and the
 LSB is lit for a whole shift even though its weight needs a fraction of one.
@@ -1275,17 +1276,41 @@ lsb_eff    = (lsb == 0 || lsb > W) ? W : lsb
 t          = largest t in 0..planes−1 with (lsb_eff << t) ≤ W
 emissions  = t + 2^(planes − t) − 1                  (stock BCM is 2^planes − 1, i.e. t = 0)
 est_hz     = clock_hz / (scan · cols_words · emissions)
-peak       = lsb_eff / W    of full brightness
+peak       = lsb_eff · (2^planes − 1) / (W · emissions)    of full brightness
 ```
 
-Brightness is CONTINUOUS in `lsb` and the refresh STEPS, each time `lsb` crosses
-`W / 2^t`. At `lsb 0` the `est_hz` formula is identical to the old
+**`peak` is NOT `lsb_eff / W`** — that is what #789 documented and it is wrong
+by up to a factor of 8 (#797). `lsb_eff / W` is the duty cycle of ONE PASS, but
+truncating shortens the pass as well: the panel runs `(2^planes − 1) / emissions`
+times as many passes per second and gets that factor straight back. Perceived
+brightness is on-time per unit TIME, hence the formula above.
+
+The refresh STEPS, each time `lsb` crosses `W / 2^t`; the brightness falls
+linearly BETWEEN those crossings. So the values worth offering a user are the
+step TOPS, `lsb = floor(W / 2^t)`: each holds very nearly the stock brightness,
+and every smaller value on the same step has that step's refresh with less
+light. The console's control has exactly those positions, labelled `×1` `×2`
+`×4` … (`web/src/lib/settingsCaps.ts`, `lsbSteps`).
+
+At `lsb 0` the `est_hz` formula is identical to the old
 `clock / (pw · panels · stripes · scan · (2^planes − 1))`, so nothing a client
 already read moves. On the bench panel — one 64×64 module, 1/32 scan, 7 planes,
-30 MHz, `blank 1`, `shiftreg`, so `W` = 61 — `lsb 0` is 115 Hz at 100 %,
-`lsb 30` is `t` 1, 64 emissions, ~229 Hz at 49 %, and `lsb 8` is `t` 2, 33
-emissions, ~444 Hz at 13 %. It compounds with the ordinary `brightness` (a
-channel LUT) rather than replacing it.
+30 MHz, `blank 1`, `shiftreg`, so `W` = 61:
+
+| `lsb` | `t` | emissions | est Hz | peak |
+|---:|---:|---:|---:|---:|
+| `0` (= 61) | 0 | 127 | 115 | **100 %** |
+| 30 | 1 | 64 | 229 | **97.6 %** |
+| 15 | 2 | 33 | 444 | **94.6 %** |
+| 8 | 2 | 33 | 444 | **50.5 %** |
+| 7 | 3 | 18 | 814 | **81.0 %** |
+
+The `lsb 8` row is why the step tops matter: the same 444 Hz as `lsb 15`, at
+half the light. Measured on Jeremy's panel (20 MHz, `blank 2`, so `W` = 59) on
+2026-09-26: `lsb 29` → 153 Hz (152.6 predicted) at 97.5 %, `lsb 14` → 295 (296)
+at 91.3 %, `lsb 7` → 542 (542) at 83.7 %, and the panel is visibly close to
+stock at `lsb 14`. It compounds with the ordinary `brightness` (a channel LUT)
+rather than replacing it.
 
 **`lsb` is BOOT-built**, like `planes` / `clock_mhz` / `chip` and unlike
 `blank`: `t` sizes the DMA descriptor chain, so a `panel` line that changes it

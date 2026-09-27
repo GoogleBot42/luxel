@@ -269,7 +269,7 @@ const TABLE: Entry[] = [
     field: "panel-lsb",
     text: () =>
       "The device takes an LSB on-time of 0 to 65,535 pixel clocks, 0 meaning the full " +
-      "on-time. Move the brighter ↔ faster slider back to full and try again.",
+      "on-time. Move the Refresh control back to ×1 and try again.",
   },
   { match: /^panel: chip must be/, field: "panel-chip", text: () =>
       "This firmware does not know that driver chip. The list in the card is the " +
