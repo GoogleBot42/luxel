@@ -39,7 +39,11 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
 - Each bench device is a single shared unit (dev unit, Athom rig, Seengreat panel —
   .claude/skills/deploy-device lists them) and there is ONE Pixel Blaze oracle —
   never parallelize device-touching work across subagents or sessions; a soak or
-  bring-up owns its device until it says otherwise.
+  bring-up owns its device until it says otherwise. Before the first request to a
+  device, `pgrep -fa <its IP>` for another session's script (2026-09-26: two
+  sessions drove the Seengreat at once — one OTA'd an older image and polled
+  status while the other measured; the "reverted OTA" and the black panel were
+  that). If you find one, stop and ask Jeremy whose the device is.
 - Other Claude instances may be working in this checkout concurrently. ALWAYS do your
   work in a fresh git worktree (.claude/skills/worktree-setup), never in the main
   checkout directly. Treat uncommitted changes in the main checkout as another live
