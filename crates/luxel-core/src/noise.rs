@@ -40,8 +40,6 @@
 
 use crate::fixed::Fx;
 
-const ONE: i64 = 1 << 16;
-
 /// Hard cap on the octave loop so a runaway argument can't stall a frame.
 /// Above ~24 the frequency has run off the end of 16.16 anyway; PB's own
 /// ceiling (if any) is above the 8 octaves the sweeps cover.
@@ -51,6 +49,21 @@ const MAX_OCTAVES: i32 = 32;
 fn fmul(a: i64, b: i64) -> i64 {
     (a * b) >> 16
 }
+
+/// 16.16 × 16.16 → 16.16 on 32-bit operands (Gitea #840). The widened
+/// product is ONE multiply pair on the LX7 (`mull` + `mulsh`) and on
+/// RISC-V (`mul` + `mulh`); [`fmul`] on two i64s is three or four
+/// multiplies plus the carries, and every add/compare/shift around it is
+/// two instructions instead of one. Inside a simplex cell every operand is
+/// bounded (see the note on [`simplex3_inner`]), so on those operands the
+/// two are bit-identical — pinned by `the_32_bit_kernel_matches_the_i64_reference`.
+#[inline]
+fn fmul32(a: i32, b: i32) -> i32 {
+    ((a as i64 * b as i64) >> 16) as i32
+}
+
+/// `ONE` as the 32-bit kernel's word.
+const ONE32: i32 = 1 << 16;
 
 #[inline]
 fn hash(x: i32, y: i32, z: i32, seed: i32) -> u32 {
@@ -67,7 +80,7 @@ fn hash(x: i32, y: i32, z: i32, seed: i32) -> u32 {
 
 /// Ken Perlin's 12-direction gradient dot product.
 #[inline]
-fn grad(h: u32, fx: i64, fy: i64, fz: i64) -> i64 {
+fn grad(h: u32, fx: i32, fy: i32, fz: i32) -> i32 {
     let h = h & 15;
     let u = if h < 8 { fx } else { fy };
     let v = if h < 4 {
@@ -272,12 +285,12 @@ pub fn perlin(x: Fx, y: Fx, z: Fx, seed: Fx, wraps: [i32; 3]) -> Fx {
 // apply — wrapping a skewed lattice isn't meaningful). ----
 
 /// 2D skew/unskew constants in 16-frac: F2 = (√3−1)/2, G2 = (3−√3)/6.
-const F2: i64 = 23994;
-const G2: i64 = 13849;
+const F2: i32 = 23994;
+const G2: i32 = 13849;
 
 /// 8 gradient directions for 2D (never a zero component pair).
 #[inline]
-fn grad2(h: u32, fx: i64, fy: i64) -> i64 {
+fn grad2(h: u32, fx: i32, fy: i32) -> i32 {
     match h & 7 {
         0 => fx + fy,
         1 => -fx + fy,
@@ -294,27 +307,27 @@ fn grad2(h: u32, fx: i64, fy: i64) -> i64 {
 /// returns the dot product `g·d`; the analytic derivative also needs the
 /// components of `g` themselves.
 #[inline]
-fn grad2_vec(h: u32) -> (i64, i64) {
+fn grad2_vec(h: u32) -> (i32, i32) {
     match h & 7 {
-        0 => (ONE, ONE),
-        1 => (-ONE, ONE),
-        2 => (ONE, -ONE),
-        3 => (-ONE, -ONE),
-        4 => (ONE, 0),
-        5 => (-ONE, 0),
-        6 => (0, ONE),
-        _ => (0, -ONE),
+        0 => (ONE32, ONE32),
+        1 => (-ONE32, ONE32),
+        2 => (ONE32, -ONE32),
+        3 => (-ONE32, -ONE32),
+        4 => (ONE32, 0),
+        5 => (-ONE32, 0),
+        6 => (0, ONE32),
+        _ => (0, -ONE32),
     }
 }
 
 /// [`grad`]'s 12 directions as component triples — the `u`/`v` axis pick
 /// and the two sign bits, read out as a vector instead of a dot product.
 #[inline]
-fn grad3_vec(h: u32) -> (i64, i64, i64) {
+fn grad3_vec(h: u32) -> (i32, i32, i32) {
     let h = h & 15;
-    let su = if h & 1 == 0 { ONE } else { -ONE };
-    let sv = if h & 2 == 0 { ONE } else { -ONE };
-    let (mut gx, mut gy, mut gz) = (0i64, 0i64, 0i64);
+    let su = if h & 1 == 0 { ONE32 } else { -ONE32 };
+    let sv = if h & 2 == 0 { ONE32 } else { -ONE32 };
+    let (mut gx, mut gy, mut gz) = (0i32, 0i32, 0i32);
     // u = fx for h < 8 else fy
     if h < 8 {
         gx += su;
@@ -356,92 +369,114 @@ fn grad3_vec(h: u32) -> (i64, i64, i64) {
 /// nowhere near overflowing i64.
 const SUBBITS: u32 = 8;
 
-/// One 2D corner: `(t⁴·(g·d) as 16.16, ∂/∂x, ∂/∂y as 16.24)`.
+/// `t⁴` and `8·t³·(g·d)` in 16.24 — the two derivative factors a corner
+/// shares across its axes. Every intermediate fits i32: `t ≤ 0.6`, so `t²
+/// ≤ 0.36`, `t⁴ ≤ 0.13` and `t³ ≤ 0.22` (< 2²³ in 16.24), and `|g·d| <
+/// 1.6` inside a live corner, so `k < 2.8` (< 2²⁶ in 16.24).
 #[inline]
-fn corner2<const GRAD: bool>(t: i64, h: u32, dx: i64, dy: i64) -> (i64, i64, i64) {
+fn deriv_factors(t: i32, t2: i32, g: i32) -> (i32, i32) {
+    let t4 = ((t2 as i64 * t2 as i64) >> (16 - SUBBITS)) as i32;
+    let t3 = ((t2 as i64 * t as i64) >> (16 - SUBBITS)) as i32;
+    (t4, 8 * fmul32(t3, g))
+}
+
+/// One 2D corner: `(t⁴·(g·d) as 16.16, ∂/∂x, ∂/∂y as 16.24)`.
+///
+/// 32-bit operands throughout (Gitea #840): `t`, `dx`, `dy` are
+/// cell-relative and bounded, so each `(a·b) >> 16` is one widening
+/// multiply and its result fits a word — the same arithmetic in the same
+/// order as the i64 form it replaced, bit for bit.
+#[inline]
+fn corner2<const GRAD: bool>(t: i32, h: u32, dx: i32, dy: i32) -> (i32, i32, i32) {
     if t <= 0 {
         return (0, 0, 0);
     }
     let g = grad2(h, dx, dy);
-    let t2 = fmul(t, t);
-    let n = fmul(fmul(t2, t2), g);
+    let t2 = fmul32(t, t);
+    let n = fmul32(fmul32(t2, t2), g);
     if !GRAD {
         return (n, 0, 0);
     }
-    let t4 = (t2 * t2) >> (16 - SUBBITS);
-    let k = 8 * ((((t2 * t) >> (16 - SUBBITS)) * g) >> 16); // 8·t³·(g·d)
+    let (t4, k) = deriv_factors(t, t2, g); // k = 8·t³·(g·d)
     let (gx, gy) = grad2_vec(h);
     (
         n,
-        ((t4 * gx) >> 16) - ((k * dx) >> 16),
-        ((t4 * gy) >> 16) - ((k * dy) >> 16),
+        fmul32(t4, gx) - fmul32(k, dx),
+        fmul32(t4, gy) - fmul32(k, dy),
     )
 }
 
-/// One 3D corner: `(t⁴·(g·d) as 16.16, ∂/∂x, ∂/∂y, ∂/∂z as 16.24)`.
+/// One 3D corner: `(t⁴·(g·d) as 16.16, ∂/∂x, ∂/∂y, ∂/∂z as 16.24)`. See
+/// [`corner2`] for the 32-bit contract.
 #[inline]
-fn corner3<const GRAD: bool>(t: i64, h: u32, dx: i64, dy: i64, dz: i64) -> (i64, i64, i64, i64) {
+fn corner3<const GRAD: bool>(t: i32, h: u32, dx: i32, dy: i32, dz: i32) -> (i32, i32, i32, i32) {
     if t <= 0 {
         return (0, 0, 0, 0);
     }
     let g = grad(h, dx, dy, dz);
-    let t2 = fmul(t, t);
-    let n = fmul(fmul(t2, t2), g);
+    let t2 = fmul32(t, t);
+    let n = fmul32(fmul32(t2, t2), g);
     if !GRAD {
         return (n, 0, 0, 0);
     }
-    let t4 = (t2 * t2) >> (16 - SUBBITS);
-    let k = 8 * ((((t2 * t) >> (16 - SUBBITS)) * g) >> 16);
+    let (t4, k) = deriv_factors(t, t2, g);
     let (gx, gy, gz) = grad3_vec(h);
     (
         n,
-        ((t4 * gx) >> 16) - ((k * dx) >> 16),
-        ((t4 * gy) >> 16) - ((k * dy) >> 16),
-        ((t4 * gz) >> 16) - ((k * dz) >> 16),
+        fmul32(t4, gx) - fmul32(k, dx),
+        fmul32(t4, gy) - fmul32(k, dy),
+        fmul32(t4, gz) - fmul32(k, dz),
     )
 }
 
 fn simplex2_inner<const GRAD: bool>(x: Fx, y: Fx, seed: Fx) -> (Fx, Fx, Fx) {
+    // The skew stage stays 64-bit: `xr + s` can pass 2³¹ for a coordinate
+    // near the 16.16 rail, and this is the arithmetic the frames were
+    // pinned with. It is a handful of operations per CALL; the per-corner
+    // work below is where the i64 cost was (Gitea #840).
     let (xr, yr) = (x.raw() as i64, y.raw() as i64);
-    let s = fmul(xr + yr, F2);
+    let s = fmul(xr + yr, F2 as i64);
     let i = ((xr + s) >> 16) as i32;
     let j = ((yr + s) >> 16) as i32;
-    let t = fmul(((i as i64) + (j as i64)) << 16, G2);
-    // distance from cell origin
-    let x0 = xr - ((i as i64) << 16) + t;
-    let y0 = yr - ((j as i64) << 16) + t;
+    let t = fmul(((i as i64) + (j as i64)) << 16, G2 as i64);
+    // distance from cell origin — bounded (|x0| < 3 for ANY i32 input, see
+    // `simplex3_inner`), so a word from here on
+    let x0 = (xr - ((i as i64) << 16) + t) as i32;
+    let y0 = (yr - ((j as i64) << 16) + t) as i32;
     // which triangle of the skewed cell
     let (i1, j1) = if x0 > y0 { (1, 0) } else { (0, 1) };
-    let x1 = x0 - ((i1 as i64) << 16) + G2;
-    let y1 = y0 - ((j1 as i64) << 16) + G2;
+    let x1 = x0 - (i1 << 16) + G2;
+    let y1 = y0 - (j1 << 16) + G2;
     let x2 = x0 - (1 << 16) + 2 * G2;
     let y2 = y0 - (1 << 16) + 2 * G2;
 
     let sd = seed.raw();
-    let half = ONE / 2;
+    let half = ONE32 / 2;
     let c0 = corner2::<GRAD>(
-        half - fmul(x0, x0) - fmul(y0, y0),
+        half - fmul32(x0, x0) - fmul32(y0, y0),
         hash(i, j, 0, sd),
         x0,
         y0,
     );
     let c1 = corner2::<GRAD>(
-        half - fmul(x1, x1) - fmul(y1, y1),
+        half - fmul32(x1, x1) - fmul32(y1, y1),
         hash(i + i1, j + j1, 0, sd),
         x1,
         y1,
     );
     let c2 = corner2::<GRAD>(
-        half - fmul(x2, x2) - fmul(y2, y2),
+        half - fmul32(x2, x2) - fmul32(y2, y2),
         hash(i + 1, j + 1, 0, sd),
         x2,
         y2,
     );
-    // 70× puts the sum in ~[-1, 1] (Gustavson's constant)
+    // 70× puts the sum in ~[-1, 1] (Gustavson's constant). The value sum is
+    // three words below 0.07 each, so it stays a word; the derivative sums
+    // are 16.24 and can pass 2³¹ after the scale, so they are widened first.
     (
-        Fx::from_raw((70 * (c0.0 + c1.0 + c2.0)) as i32),
-        Fx::from_raw(((70 * (c0.1 + c1.1 + c2.1)) >> SUBBITS) as i32),
-        Fx::from_raw(((70 * (c0.2 + c1.2 + c2.2)) >> SUBBITS) as i32),
+        Fx::from_raw(70 * (c0.0 + c1.0 + c2.0)),
+        Fx::from_raw(((70 * (c0.1 as i64 + c1.1 as i64 + c2.1 as i64)) >> SUBBITS) as i32),
+        Fx::from_raw(((70 * (c0.2 as i64 + c1.2 as i64 + c2.2 as i64)) >> SUBBITS) as i32),
     )
 }
 
@@ -493,18 +528,35 @@ pub fn curl3(x: Fx, y: Fx, z: Fx, seed: Fx) -> (Fx, Fx, Fx) {
     (p3y - p2z, p1z - p3x, p2x - p1y)
 }
 
+/// # The 32-bit kernel (Gitea #840)
+///
+/// Everything after the skew is done on i32 words with a widening
+/// multiply, and it is bit-identical to the i64 form it replaced because
+/// every operand is bounded. With `S = xr + yr + zr` and `f` the
+/// fractional part of `xr + s`, the cell-relative `x0 = f + (t − s)` where
+/// `t − s = −S·1.8e-5 − G3·(fᵢ+fⱼ+fₖ)/ONE` (the `1.8e-5` is the truncation
+/// of `F3`/`G3` to 16 fraction bits). Over the whole i32 range of `S`
+/// (±98 304 units) that is `x0 ∈ (−2.3, 1)` — a word with room to spare,
+/// and so are `x0²` (< 5.3) and the falloff `t`. A corner contributes only
+/// while `t > 0`, i.e. `|d|² < 0.6`, which bounds the gradient dot and every
+/// derivative factor (see [`deriv_factors`]). The one sum that can pass a
+/// word is the scaled derivative in 16.24, which is widened before the
+/// scale. `the_32_bit_kernel_matches_the_i64_reference` sweeps the
+/// retired i64 kernel against this one over the rails, the lattice edges
+/// and a random field.
 fn simplex3_inner<const GRAD: bool>(x: Fx, y: Fx, z: Fx, seed: Fx) -> (Fx, Fx, Fx, Fx) {
-    const F3: i64 = ONE / 3;
-    const G3: i64 = ONE / 6;
+    const F3: i32 = ONE32 / 3;
+    const G3: i32 = ONE32 / 6;
+    // 64-bit skew stage, as in `simplex2_inner`.
     let (xr, yr, zr) = (x.raw() as i64, y.raw() as i64, z.raw() as i64);
-    let s = fmul(xr + yr + zr, F3);
+    let s = fmul(xr + yr + zr, F3 as i64);
     let i = ((xr + s) >> 16) as i32;
     let j = ((yr + s) >> 16) as i32;
     let k = ((zr + s) >> 16) as i32;
-    let t = fmul(((i as i64) + (j as i64) + (k as i64)) << 16, G3);
-    let x0 = xr - ((i as i64) << 16) + t;
-    let y0 = yr - ((j as i64) << 16) + t;
-    let z0 = zr - ((k as i64) << 16) + t;
+    let t = fmul(((i as i64) + (j as i64) + (k as i64)) << 16, G3 as i64);
+    let x0 = (xr - ((i as i64) << 16) + t) as i32;
+    let y0 = (yr - ((j as i64) << 16) + t) as i32;
+    let z0 = (zr - ((k as i64) << 16) + t) as i32;
 
     // simplex (tetrahedron) traversal order by coordinate ranking
     let (i1, j1, k1, i2, j2, k2) = if x0 >= y0 {
@@ -523,19 +575,19 @@ fn simplex3_inner<const GRAD: bool>(x: Fx, y: Fx, z: Fx, seed: Fx) -> (Fx, Fx, F
         (0, 1, 0, 1, 1, 0)
     };
 
-    let x1 = x0 - ((i1 as i64) << 16) + G3;
-    let y1 = y0 - ((j1 as i64) << 16) + G3;
-    let z1 = z0 - ((k1 as i64) << 16) + G3;
-    let x2 = x0 - ((i2 as i64) << 16) + 2 * G3;
-    let y2 = y0 - ((j2 as i64) << 16) + 2 * G3;
-    let z2 = z0 - ((k2 as i64) << 16) + 2 * G3;
+    let x1 = x0 - (i1 << 16) + G3;
+    let y1 = y0 - (j1 << 16) + G3;
+    let z1 = z0 - (k1 << 16) + G3;
+    let x2 = x0 - (i2 << 16) + 2 * G3;
+    let y2 = y0 - (j2 << 16) + 2 * G3;
+    let z2 = z0 - (k2 << 16) + 2 * G3;
     let x3 = x0 - (1 << 16) + 3 * G3;
     let y3 = y0 - (1 << 16) + 3 * G3;
     let z3 = z0 - (1 << 16) + 3 * G3;
 
     let sd = seed.raw();
-    let cap = (ONE * 6) / 10; // 0.6, the classic 3D falloff radius²
-    let d = |xx: i64, yy: i64, zz: i64| cap - fmul(xx, xx) - fmul(yy, yy) - fmul(zz, zz);
+    let cap = (ONE32 * 6) / 10; // 0.6, the classic 3D falloff radius²
+    let d = |xx: i32, yy: i32, zz: i32| cap - fmul32(xx, xx) - fmul32(yy, yy) - fmul32(zz, zz);
     let c0 = corner3::<GRAD>(d(x0, y0, z0), hash(i, j, k, sd), x0, y0, z0);
     let c1 = corner3::<GRAD>(
         d(x1, y1, z1),
@@ -559,10 +611,10 @@ fn simplex3_inner<const GRAD: bool>(x: Fx, y: Fx, z: Fx, seed: Fx) -> (Fx, Fx, F
         z3,
     );
     (
-        Fx::from_raw((32 * (c0.0 + c1.0 + c2.0 + c3.0)) as i32),
-        Fx::from_raw(((32 * (c0.1 + c1.1 + c2.1 + c3.1)) >> SUBBITS) as i32),
-        Fx::from_raw(((32 * (c0.2 + c1.2 + c2.2 + c3.2)) >> SUBBITS) as i32),
-        Fx::from_raw(((32 * (c0.3 + c1.3 + c2.3 + c3.3)) >> SUBBITS) as i32),
+        Fx::from_raw(32 * (c0.0 + c1.0 + c2.0 + c3.0)),
+        Fx::from_raw(((32 * (c0.1 as i64 + c1.1 as i64 + c2.1 as i64 + c3.1 as i64)) >> SUBBITS) as i32),
+        Fx::from_raw(((32 * (c0.2 as i64 + c1.2 as i64 + c2.2 as i64 + c3.2 as i64)) >> SUBBITS) as i32),
+        Fx::from_raw(((32 * (c0.3 as i64 + c1.3 as i64 + c2.3 as i64 + c3.3 as i64)) >> SUBBITS) as i32),
     )
 }
 
@@ -745,6 +797,304 @@ mod tests {
     /// The `*_grad` variants must return exactly the noise value the plain
     /// entry points do — existing patterns cannot be allowed to shift by an
     /// LSB. Swept over negatives, cell boundaries and several seeds.
+    /// The i64 simplex kernel as it stood before Gitea #840, verbatim
+    /// (`fmul`, `grad`, `grad2`, the vec forms, the corners and both
+    /// `_inner`s), so the 32-bit kernel can be asserted equal to what every
+    /// frame was pinned with rather than to a description of it. Test-only;
+    /// nothing ships twice.
+    mod ref64 {
+        use super::super::{hash, SUBBITS};
+        use crate::fixed::Fx;
+        const ONE: i64 = 1 << 16;
+        const F2: i64 = 23994;
+        const G2: i64 = 13849;
+        fn fmul(a: i64, b: i64) -> i64 {
+            (a * b) >> 16
+        }
+        fn grad(h: u32, fx: i64, fy: i64, fz: i64) -> i64 {
+            let h = h & 15;
+            let u = if h < 8 { fx } else { fy };
+            let v = if h < 4 {
+                fy
+            } else if h == 12 || h == 14 {
+                fx
+            } else {
+                fz
+            };
+            (if h & 1 == 0 { u } else { -u }) + (if h & 2 == 0 { v } else { -v })
+        }
+        fn grad2(h: u32, fx: i64, fy: i64) -> i64 {
+            match h & 7 {
+                0 => fx + fy,
+                1 => -fx + fy,
+                2 => fx - fy,
+                3 => -fx - fy,
+                4 => fx,
+                5 => -fx,
+                6 => fy,
+                _ => -fy,
+            }
+        }
+        fn grad2_vec(h: u32) -> (i64, i64) {
+            match h & 7 {
+                0 => (ONE, ONE),
+                1 => (-ONE, ONE),
+                2 => (ONE, -ONE),
+                3 => (-ONE, -ONE),
+                4 => (ONE, 0),
+                5 => (-ONE, 0),
+                6 => (0, ONE),
+                _ => (0, -ONE),
+            }
+        }
+        fn grad3_vec(h: u32) -> (i64, i64, i64) {
+            let h = h & 15;
+            let su = if h & 1 == 0 { ONE } else { -ONE };
+            let sv = if h & 2 == 0 { ONE } else { -ONE };
+            let (mut gx, mut gy, mut gz) = (0i64, 0i64, 0i64);
+            if h < 8 {
+                gx += su;
+            } else {
+                gy += su;
+            }
+            if h < 4 {
+                gy += sv;
+            } else if h == 12 || h == 14 {
+                gx += sv;
+            } else {
+                gz += sv;
+            }
+            (gx, gy, gz)
+        }
+        fn corner2<const GRAD: bool>(t: i64, h: u32, dx: i64, dy: i64) -> (i64, i64, i64) {
+            if t <= 0 {
+                return (0, 0, 0);
+            }
+            let g = grad2(h, dx, dy);
+            let t2 = fmul(t, t);
+            let n = fmul(fmul(t2, t2), g);
+            if !GRAD {
+                return (n, 0, 0);
+            }
+            let t4 = (t2 * t2) >> (16 - SUBBITS);
+            let k = 8 * ((((t2 * t) >> (16 - SUBBITS)) * g) >> 16);
+            let (gx, gy) = grad2_vec(h);
+            (
+                n,
+                ((t4 * gx) >> 16) - ((k * dx) >> 16),
+                ((t4 * gy) >> 16) - ((k * dy) >> 16),
+            )
+        }
+        fn corner3<const GRAD: bool>(
+            t: i64,
+            h: u32,
+            dx: i64,
+            dy: i64,
+            dz: i64,
+        ) -> (i64, i64, i64, i64) {
+            if t <= 0 {
+                return (0, 0, 0, 0);
+            }
+            let g = grad(h, dx, dy, dz);
+            let t2 = fmul(t, t);
+            let n = fmul(fmul(t2, t2), g);
+            if !GRAD {
+                return (n, 0, 0, 0);
+            }
+            let t4 = (t2 * t2) >> (16 - SUBBITS);
+            let k = 8 * ((((t2 * t) >> (16 - SUBBITS)) * g) >> 16);
+            let (gx, gy, gz) = grad3_vec(h);
+            (
+                n,
+                ((t4 * gx) >> 16) - ((k * dx) >> 16),
+                ((t4 * gy) >> 16) - ((k * dy) >> 16),
+                ((t4 * gz) >> 16) - ((k * dz) >> 16),
+            )
+        }
+        pub fn simplex2<const GRAD: bool>(x: Fx, y: Fx, seed: Fx) -> (Fx, Fx, Fx) {
+            let (xr, yr) = (x.raw() as i64, y.raw() as i64);
+            let s = fmul(xr + yr, F2);
+            let i = ((xr + s) >> 16) as i32;
+            let j = ((yr + s) >> 16) as i32;
+            let t = fmul(((i as i64) + (j as i64)) << 16, G2);
+            let x0 = xr - ((i as i64) << 16) + t;
+            let y0 = yr - ((j as i64) << 16) + t;
+            let (i1, j1) = if x0 > y0 { (1, 0) } else { (0, 1) };
+            let x1 = x0 - ((i1 as i64) << 16) + G2;
+            let y1 = y0 - ((j1 as i64) << 16) + G2;
+            let x2 = x0 - (1 << 16) + 2 * G2;
+            let y2 = y0 - (1 << 16) + 2 * G2;
+            let sd = seed.raw();
+            let half = ONE / 2;
+            let c0 = corner2::<GRAD>(half - fmul(x0, x0) - fmul(y0, y0), hash(i, j, 0, sd), x0, y0);
+            let c1 = corner2::<GRAD>(
+                half - fmul(x1, x1) - fmul(y1, y1),
+                hash(i + i1, j + j1, 0, sd),
+                x1,
+                y1,
+            );
+            let c2 = corner2::<GRAD>(
+                half - fmul(x2, x2) - fmul(y2, y2),
+                hash(i + 1, j + 1, 0, sd),
+                x2,
+                y2,
+            );
+            (
+                Fx::from_raw((70 * (c0.0 + c1.0 + c2.0)) as i32),
+                Fx::from_raw(((70 * (c0.1 + c1.1 + c2.1)) >> SUBBITS) as i32),
+                Fx::from_raw(((70 * (c0.2 + c1.2 + c2.2)) >> SUBBITS) as i32),
+            )
+        }
+        pub fn simplex3<const GRAD: bool>(x: Fx, y: Fx, z: Fx, seed: Fx) -> (Fx, Fx, Fx, Fx) {
+            const F3: i64 = ONE / 3;
+            const G3: i64 = ONE / 6;
+            let (xr, yr, zr) = (x.raw() as i64, y.raw() as i64, z.raw() as i64);
+            let s = fmul(xr + yr + zr, F3);
+            let i = ((xr + s) >> 16) as i32;
+            let j = ((yr + s) >> 16) as i32;
+            let k = ((zr + s) >> 16) as i32;
+            let t = fmul(((i as i64) + (j as i64) + (k as i64)) << 16, G3);
+            let x0 = xr - ((i as i64) << 16) + t;
+            let y0 = yr - ((j as i64) << 16) + t;
+            let z0 = zr - ((k as i64) << 16) + t;
+            let (i1, j1, k1, i2, j2, k2) = if x0 >= y0 {
+                if y0 >= z0 {
+                    (1, 0, 0, 1, 1, 0)
+                } else if x0 >= z0 {
+                    (1, 0, 0, 1, 0, 1)
+                } else {
+                    (0, 0, 1, 1, 0, 1)
+                }
+            } else if y0 < z0 {
+                (0, 0, 1, 0, 1, 1)
+            } else if x0 < z0 {
+                (0, 1, 0, 0, 1, 1)
+            } else {
+                (0, 1, 0, 1, 1, 0)
+            };
+            let x1 = x0 - ((i1 as i64) << 16) + G3;
+            let y1 = y0 - ((j1 as i64) << 16) + G3;
+            let z1 = z0 - ((k1 as i64) << 16) + G3;
+            let x2 = x0 - ((i2 as i64) << 16) + 2 * G3;
+            let y2 = y0 - ((j2 as i64) << 16) + 2 * G3;
+            let z2 = z0 - ((k2 as i64) << 16) + 2 * G3;
+            let x3 = x0 - (1 << 16) + 3 * G3;
+            let y3 = y0 - (1 << 16) + 3 * G3;
+            let z3 = z0 - (1 << 16) + 3 * G3;
+            let sd = seed.raw();
+            let cap = (ONE * 6) / 10;
+            let d = |xx: i64, yy: i64, zz: i64| cap - fmul(xx, xx) - fmul(yy, yy) - fmul(zz, zz);
+            let c0 = corner3::<GRAD>(d(x0, y0, z0), hash(i, j, k, sd), x0, y0, z0);
+            let c1 = corner3::<GRAD>(d(x1, y1, z1), hash(i + i1, j + j1, k + k1, sd), x1, y1, z1);
+            let c2 = corner3::<GRAD>(d(x2, y2, z2), hash(i + i2, j + j2, k + k2, sd), x2, y2, z2);
+            let c3 = corner3::<GRAD>(d(x3, y3, z3), hash(i + 1, j + 1, k + 1, sd), x3, y3, z3);
+            (
+                Fx::from_raw((32 * (c0.0 + c1.0 + c2.0 + c3.0)) as i32),
+                Fx::from_raw(((32 * (c0.1 + c1.1 + c2.1 + c3.1)) >> SUBBITS) as i32),
+                Fx::from_raw(((32 * (c0.2 + c1.2 + c2.2 + c3.2)) >> SUBBITS) as i32),
+                Fx::from_raw(((32 * (c0.3 + c1.3 + c2.3 + c3.3)) >> SUBBITS) as i32),
+            )
+        }
+    }
+
+    /// Gitea #840: the 32-bit kernel against the retired i64 one, value AND
+    /// gradient, over the raw rails (`i32::MIN`, `i32::MAX`, ±0x7FFF_0000),
+    /// the lattice edges (whole units, half units, ±1 LSB either side), and
+    /// a pseudo-random field at three scales (±1, ±100, the full i32 range),
+    /// with several seeds including the rails. Any difference is a bug in
+    /// the bound analysis on `simplex3_inner`, not an acceptable drift.
+    #[test]
+    fn the_32_bit_kernel_matches_the_i64_reference() {
+        let rails: [i32; 16] = [
+            i32::MIN,
+            i32::MIN + 1,
+            -0x7FFF_0000,
+            -0x2_0001,
+            -0x1_0000,
+            -0xFFFF,
+            -0x8000,
+            -1,
+            0,
+            1,
+            0x8000,
+            0xFFFF,
+            0x1_0000,
+            0x1_0001,
+            0x7FFF_0000,
+            i32::MAX,
+        ];
+        let seeds = [0, 0x1_0000, 0x9_0000, -0x3_8000, i32::MIN, i32::MAX];
+        let mut checked = 0u64;
+        let mut check = |xr: i32, yr: i32, zr: i32, sd: i32| {
+            let (x, y, z, seed) = (
+                Fx::from_raw(xr),
+                Fx::from_raw(yr),
+                Fx::from_raw(zr),
+                Fx::from_raw(sd),
+            );
+            assert_eq!(
+                simplex2_inner::<false>(x, y, seed),
+                ref64::simplex2::<false>(x, y, seed),
+                "simplex2 at ({xr:#x}, {yr:#x}) seed {sd:#x}"
+            );
+            assert_eq!(
+                simplex2_inner::<true>(x, y, seed),
+                ref64::simplex2::<true>(x, y, seed),
+                "simplex2_grad at ({xr:#x}, {yr:#x}) seed {sd:#x}"
+            );
+            assert_eq!(
+                simplex3_inner::<false>(x, y, z, seed),
+                ref64::simplex3::<false>(x, y, z, seed),
+                "simplex3 at ({xr:#x}, {yr:#x}, {zr:#x}) seed {sd:#x}"
+            );
+            assert_eq!(
+                simplex3_inner::<true>(x, y, z, seed),
+                ref64::simplex3::<true>(x, y, z, seed),
+                "simplex3_grad at ({xr:#x}, {yr:#x}, {zr:#x}) seed {sd:#x}"
+            );
+            checked += 1;
+        };
+        // every rail triple, every seed
+        for &xr in &rails {
+            for &yr in &rails {
+                for &zr in &rails {
+                    for &sd in &seeds {
+                        check(xr, yr, zr, sd);
+                    }
+                }
+            }
+        }
+        // lattice edges: whole and half units, ±1 LSB, both signs
+        for u in -6i32..=6 {
+            for frac in [-1i32, 0, 1, 0x7FFF, 0x8000, 0x8001, 0xFFFF] {
+                let a = u * 0x1_0000 + frac;
+                for sd in [0, 0x5_0000] {
+                    check(a, a, a, sd);
+                    check(a, -a, a / 2, sd);
+                    check(a / 3, a, -a, sd);
+                }
+            }
+        }
+        // a pseudo-random field at three scales (xorshift, fixed seed)
+        let mut st: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = || {
+            st ^= st << 13;
+            st ^= st >> 7;
+            st ^= st << 17;
+            st as u32 as i32
+        };
+        for scale in [1i64, 100, 32768] {
+            let lim = scale * 0x1_0000;
+            for _ in 0..40_000 {
+                let (a, b, c) = (next(), next(), next());
+                let sd = next();
+                let sq = |v: i32| ((v as i64 * lim) >> 31) as i32;
+                check(sq(a), sq(b), sq(c), sd);
+            }
+        }
+        assert!(checked > 100_000, "swept {checked}");
+    }
+
     #[test]
     fn simplex_grad_value_matches_plain() {
         for si in 0..4 {

@@ -1,5 +1,54 @@
 # Update log
 
+## 2026-09-27 — noise: the simplex kernel on 32-bit operands (#840 step 1)
+
+`simplex2`/`simplex3` did every operation in i64 — `fmul(a: i64, b: i64) =
+(a·b) >> 16` — and on the LX7 an i64×i64 is three or four multiplies plus
+carries, every add/compare/shift two instructions, and the register
+pressure spills to the frame. Aurora 2D's 4096 `simplex3` calls per frame
+were ~60 % of its ~50 ms native frame on the S3 (#840's arithmetic).
+
+- **The kernel after the skew stage is now i32 with a widening multiply**
+  (`fmul32`: `((a as i64 * b as i64) >> 16) as i32`, one `mull`+`mulsh`
+  pair). The skew stage stays i64 — `xr + s` can pass 2³¹ for a
+  coordinate near the rail — and is a handful of operations per CALL.
+  Every cell-relative operand is bounded (`x0 ∈ (−2.3, 1)` over the whole
+  i32 input range, including the truncation drift of `F3`/`G3`; the bound
+  derivation is on `simplex3_inner`), so the 32-bit form is **bit-identical**
+  to the i64 one. The only sums that can pass a word — the scaled 16.24
+  derivative sums of the `_grad` variants — are widened before the scale.
+- **Pinned, not argued**: `noise::tests::ref64` is the retired i64 kernel
+  verbatim, and `the_32_bit_kernel_matches_the_i64_reference` sweeps it
+  against the new one — value and gradient, 2D and 3D — over the raw rails
+  (`i32::MIN/MAX`, ±0x7FFF_0000), the lattice edges (whole/half units, ±1
+  LSB), and a 120k-point pseudo-random field at three scales, with six
+  seeds including the rails. Every frame gate (`library_diff`, whole-library
+  `engine_diff`, the core suite) is unchanged and green.
+- **On the S3 image** (`board-seengreat-hub75`, `xtensa-esp32s3-elf-objdump`,
+  same build flags):
+
+  | fn | insns before → after | multiplies | loads | stores |
+  |---|---:|---:|---:|---:|
+  | `simplex3` | 1,077 → **475** | 96 → 67 | 166 → 48 | 76 → 23 |
+  | `simplex2` | 1,130 → **267** | 244 → 44 | 115 → 16 | 32 → 7 |
+  | `simplex3_grad` | — → 939 | 135 | 117 | 68 |
+  | `simplex2_grad` | — → 483 | 89 | 49 | 25 |
+
+  The straight-line count is the proxy; the on-metal number (Aurora 2D
+  `frame_us`, `tools/patbench.mjs` on the panel) is owed and is the
+  ticket's acceptance test. On x86 the change is a wash (native 64-bit
+  multiply; `luxel bench` aurora-2d 2,040 vs 2,020 fps equivalent, within
+  run-to-run noise) — which is the point: the cost was Xtensa's.
+- **Steps 2–4 of #840 stay open pending that measurement.** Step 2 (IRAM
+  placement) is not free on the S3: `.rwtext` and `.stack` are one budget
+  there and `iram-math` (9.4 KB) would take `.stack` under the 24 KB floor
+  beside `iram-vm` (firmware/board-target.sh) — the candidate is a SWAP,
+  `iram-vm` → `iram-math`, on a JIT board where the interpreter loop is
+  cold, and only the panel can say. Step 3 (lattice-coherent `fillNoise`)
+  saves the per-row skew and shares cube-corner hashes; with the kernel
+  now under half its size it is a ~15 % lever to spend only if the frame
+  is still noise-bound.
+
 ## 2026-09-27 — jit: `saturate`, `paint`, `setPixel` go direct; short-arity defaults (#841)
 
 The paint-per-cell `renderFrame` loop — Aurora 2D's inner body and every
