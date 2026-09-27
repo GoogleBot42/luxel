@@ -130,6 +130,21 @@ pub struct Geometry {
     pub cols: usize,
     /// Bitplanes (BCM depth), at most [`MAX_PLANES`].
     pub planes: usize,
+    /// Every plane carries one extra TRAILING row block that displays the
+    /// last address row (Gitea #795, the row-31 bug).
+    ///
+    /// A row block shifts row `r` while OE displays the row latched before
+    /// it, `r − 1`, so the last row of a plane is displayed during block 0 of
+    /// the NEXT plane. Stock BCM never notices: every plane's OE window is
+    /// the same width. With truncated low planes ([`Schedule`]) the widths
+    /// differ, and the last row's bit weights come out rotated by one plane —
+    /// the bottom row of each half of the panel shows the wrong colour and
+    /// brightness. With `trail`, block 0 has OE OFF, blocks `1..rows` display
+    /// rows `0..rows − 1` as before, and block `rows` (address `rows − 1`, OE
+    /// at the plane's own width, no latch) displays the last row. Costs
+    /// `1/rows` of the pass and of the framebuffer; the stock layout at
+    /// `lsb 0` is untouched.
+    pub trail: bool,
 }
 
 impl Geometry {
@@ -137,19 +152,31 @@ impl Geometry {
     /// [`pack`] assert what they need.
     #[must_use]
     pub const fn new(rows: usize, cols: usize, planes: usize) -> Self {
-        Self { rows, cols, planes }
+        Self { rows, cols, planes, trail: false }
+    }
+
+    /// The same geometry with the trailing display block on or off.
+    #[must_use]
+    pub const fn with_trail(self, trail: bool) -> Self {
+        Self { trail, ..self }
+    }
+
+    /// Row blocks clocked out per plane: `rows`, plus the trailing block.
+    #[must_use]
+    pub const fn blocks(&self) -> usize {
+        self.rows + self.trail as usize
     }
 
     /// Total 16-bit entries.
     #[must_use]
     pub const fn words(&self) -> usize {
-        self.rows * self.cols * self.planes
+        self.plane_words() * self.planes
     }
 
     /// Entries in one bitplane.
     #[must_use]
     pub const fn plane_words(&self) -> usize {
-        self.rows * self.cols
+        self.blocks() * self.cols
     }
 
     /// Bytes in one bitplane — the DMA descriptor chunk size.
@@ -249,17 +276,23 @@ pub fn format_scheduled(words: &mut [u16], g: Geometry, c: Control, s: &Schedule
     let latch_from = cols.saturating_sub(latch);
     let plane_stride = g.plane_words();
 
-    for r in 0..rows {
+    for r in 0..g.blocks() {
+        // Block `r` shifts row `r` and displays the row latched before it.
+        // With the trailing block (Geometry::trail) that display moves one
+        // block later: block 0 shows nothing, block `rows` shows the last
+        // row and latches nothing.
+        let trailing = g.trail && r == rows;
+        let dark = g.trail && r == 0;
         let addr = (((r + rows - 1) % rows) as u16) & ADDR_MASK;
         for p in 0..g.planes {
-            let oe_to = oe_end.min(oe_from.saturating_add(s.lit(p)));
+            let oe_to = if dark { 0 } else { oe_end.min(oe_from.saturating_add(s.lit(p))) };
             let base = p * plane_stride + r * cols;
             for (i, w) in words[base..base + cols].iter_mut().enumerate() {
                 let mut v = addr;
                 if i >= oe_from && i < oe_to {
                     v |= OE_ACTIVE;
                 }
-                if i >= latch_from {
+                if i >= latch_from && !trailing {
                     v |= LATCH;
                 }
                 *w = v;
@@ -1161,5 +1194,127 @@ mod tests {
     #[test]
     fn spare_window_empty_ring() {
         assert!(!spare_window_fits(0, false, 8_700, 200, 0, 0, 7, 0));
+    }
+
+    /// Walk the DMA ring the way the panel sees it and return, per address
+    /// row and per plane (0 = MSB), how many clocks OE was on for that row —
+    /// the row's real bit weight. A block latches the row whose data it
+    /// shifted at its LATCH words; OE-on words light the row named by the
+    /// block's address lines, which must be the row last latched, or the
+    /// template is lying about what is on the panel.
+    fn on_time_per_row(words: &[u16], g: Geometry, s: &Schedule) -> Vec<Vec<usize>> {
+        let mut on = vec![vec![0usize; g.planes]; g.rows];
+        // what the column drivers hold: the row and the PLANE whose data was
+        // latched last — the on-time belongs to that plane, whichever plane's
+        // block is being clocked out while OE is on
+        let (mut latched, mut latched_plane) = (g.rows - 1, g.planes - 1);
+        // two passes, count the second: the first primes the latch across
+        // the wrap exactly as the running ring does
+        for pass in 0..2 {
+            for p in 0..g.planes {
+                for _rep in 0..s.reps(p) {
+                    for r in 0..g.blocks() {
+                        let base = p * g.plane_words() + r * g.cols;
+                        let block = &words[base..base + g.cols];
+                        let addr = usize::from(block[0] & ADDR_MASK);
+                        for w in block {
+                            if w & OE_ACTIVE != 0 {
+                                assert_eq!(addr, latched, "plane {p} block {r}: OE on for a row that is not the latched one");
+                                if pass == 1 {
+                                    on[addr][latched_plane] += 1;
+                                }
+                            }
+                        }
+                        if block.iter().any(|w| w & LATCH != 0) {
+                            latched = r % g.rows;
+                            latched_plane = p;
+                        }
+                    }
+                }
+            }
+        }
+        on
+    }
+
+    #[test]
+    fn every_row_gets_exact_weights_with_the_trailing_block() {
+        // Jeremy's finding (2026-09-27, #795): with truncated planes the
+        // bottom row of each half showed the wrong colour and brightness.
+        let g = Geometry::new(32, 64, 7);
+        let c = Control::default();
+        for lsb in [30u16, 15, 7] {
+            let s = Schedule::plan(g, c, lsb);
+            assert!(s.needs_trail());
+            // without the trailing block the last row's weights are rotated
+            let mut plain = vec![0u16; g.words()];
+            format_scheduled(&mut plain, g, c, &s);
+            let on = on_time_per_row(&plain, g, &s);
+            for r in 0..31 {
+                for p in 0..7 {
+                    assert_eq!(on[r][p], s.on_time(p), "lsb {lsb} row {r} plane {p}");
+                }
+            }
+            // (the TOTAL is preserved — every plane hands row 31 its
+            // neighbour's window — which is why white looked right and
+            // colours did not)
+            assert_eq!(on[31].iter().sum::<usize>(), (0..7).map(|p| s.on_time(p)).sum::<usize>());
+            assert_eq!(on[31][6], s.lit(0), "lsb {lsb}: row 31's LSB carried the MSB's window");
+            assert_ne!(on[31][6], s.on_time(6), "lsb {lsb}: the bug");
+            // with it every row is exact, including 31
+            let gt = g.with_trail(true);
+            let mut trailed = vec![0u16; gt.words()];
+            format_scheduled(&mut trailed, gt, c, &s);
+            let on = on_time_per_row(&trailed, gt, &s);
+            for r in 0..32 {
+                for p in 0..7 {
+                    assert_eq!(on[r][p], s.on_time(p), "lsb {lsb} row {r} plane {p} (trail)");
+                }
+            }
+            // the shape: block 0 dark, the trailing block lit at the plane's
+            // width with the last row's address and no latch, and the
+            // packer never touches it
+            for p in 0..7 {
+                let plane = &trailed[p * gt.plane_words()..(p + 1) * gt.plane_words()];
+                assert!(plane[..64].iter().all(|w| w & OE_ACTIVE == 0), "block 0 must be dark");
+                let tail = &plane[32 * 64..33 * 64];
+                assert_eq!(tail.iter().filter(|w| *w & OE_ACTIVE != 0).count(), s.lit(p));
+                assert!(tail.iter().all(|w| w & LATCH == 0 && w & ADDR_MASK == 31));
+            }
+            assert_eq!(gt.bytes(), 33 * 64 * 7 * 2);
+            assert_eq!(gt.pixels(), 4096);
+            assert_eq!(s.est_hz(gt, 30_000_000), 30_000_000 / (33 * 64 * s.emissions() as u32));
+        }
+        // the stock schedule needs no trailing block and is byte-identical
+        let s0 = Schedule::plan(g, c, 0);
+        assert!(!s0.needs_trail());
+        let mut stock = vec![0u16; g.words()];
+        format(&mut stock, g, c);
+        let on = on_time_per_row(&stock, g, &s0);
+        for r in 0..32 {
+            for p in 0..7 {
+                assert_eq!(on[r][p], s0.on_time(p));
+            }
+        }
+        assert_eq!(s0.brightness_permille_at(g), 1000);
+        assert_eq!(Schedule::plan(g, c, 30).brightness_permille_at(g.with_trail(true)), 946);
+    }
+
+    #[test]
+    fn packing_leaves_the_trailing_block_alone() {
+        let g = Geometry::new(4, 16, 3).with_trail(true);
+        let s = Schedule::plan(g, Control::default(), 3);
+        let mut w = vec![0u16; g.words()];
+        format_scheduled(&mut w, g, Control::default(), &s);
+        let before = w.clone();
+        let rgb: Vec<[u8; 3]> = (0..g.pixels()).map(|i| [i as u8, 255 - i as u8, 77]).collect();
+        let tables = Tables::from_lut(&core::array::from_fn(|i| i as u8));
+        let mut scratch = Scratch::for_geometry(g);
+        pack(&mut w, g, &rgb, &tables, &mut scratch);
+        for p in 0..3 {
+            let base = p * g.plane_words() + 4 * 16;
+            assert_eq!(&w[base..base + 16], &before[base..base + 16], "plane {p} trailing block");
+            // and the rows are packed: colour bits differ from the template
+            assert!(w[p * g.plane_words()..base].iter().zip(&before[p * g.plane_words()..base]).any(|(a, b)| a != b));
+        }
     }
 }

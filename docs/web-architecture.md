@@ -1557,7 +1557,11 @@ against `live.lsb`, never the raw numbers.
 It is also the one control here that is STEPPED rather than continuous (#797).
 `lsb` is the LSB's on-time in pixel clocks, and the rescan rate only moves when
 it crosses `W / 2^t` — while peak brightness,
-`lsb · (2^planes − 1) / (W · E)`, falls linearly between those crossings. So
+`lsb · (2^planes − 1) · rows / (W · E · (rows + trail))`, falls linearly between
+those crossings. (`trail` is the trailing display block a truncating schedule
+needs — 1 at `t > 0`, 0 for the stock pass — which costs a flat `1/(rows+1)` of
+both the refresh and the light; Gitea #795, the row-31 bug. `rows` is the
+address rows, so `fb_bytes` grows with it too: never hard-code 28,672.) So
 every position except the top of a step, `lsb = floor(W / 2^t)`, runs that
 step's refresh with less light, and the card offers the tops only: one position
 per truncation step, labelled `×1` `×2` `×4` …, with `0` on the wire at `×1` so

@@ -333,8 +333,25 @@ export function rowBlockWords(a: RefreshInput): number {
 // than a continuous 1..W slider.
 //
 // Binary weights stay exact either way (plane `k` is lit `lsb · 2^k` clocks
-// however it is emitted), which is what keeps a grey ramp monotonic. The same
-// schedule arithmetic runs on the device in
+// however it is emitted), which is what keeps a grey ramp monotonic.
+//
+// A truncating schedule also needs one EXTRA row block per plane — the
+// trailing display block (Gitea #795, the row-31 bug). A row block shifts row
+// `r` while OE displays the row latched before it, so a plane's LAST address
+// row is displayed during block 0 of the NEXT plane, whose OE window is a
+// different width once the planes are truncated: the last row of each half
+// (rows 31 and 63 of a 64×64) came out with its bit weights rotated by one
+// plane — wrong colour and wrong brightness, which is what Jeremy saw on the
+// panel on 2026-09-27. So at `t > 0` block 0 runs with OE OFF, blocks
+// `1..rows−1` display rows `0..rows−2` as before, and a trailing block
+// (address `rows−1`, OE at the plane's own width, no latch) displays the last
+// row. A plane therefore costs `rows + 1` row blocks instead of `rows`, which
+// slows the rescan by `rows/(rows+1)` — 3 % at 1/32 scan — and costs the same
+// 3 % of peak brightness, since the extra block adds pass TIME and no on-time.
+// At `t = 0` (the stock schedule) the OE widths are all equal, no trailing
+// block is needed, and the layout is byte-identical to what shipped.
+//
+// The same schedule arithmetic runs on the device in
 // `crates/luxel-hub75/src/schedule.rs` — this is the browser's copy of it, so
 // the readouts cannot lag the field the user just moved.
 
@@ -387,11 +404,32 @@ export function emissions(planes: number, trunc = 0): number {
   return t + 2 ** (p - t) - 1;
 }
 
+/** The TRAILING display block a plane needs: `1` as soon as a plane is
+ *  truncated, `0` for the stock schedule (Gitea #795).
+ *
+ *  Truncating makes the planes' OE windows different widths, and a row block
+ *  displays the row latched by the block BEFORE it — so without this block the
+ *  last address row of a plane is displayed under the next plane's window and
+ *  comes out a plane-rotated weight (rows 31 and 63 of a 64×64). Mirrors
+ *  `Schedule::needs_trail` / `Geometry::trail` on the device. */
+export function trailingBlock(trunc: number): number {
+  return Math.max(0, Math.round(trunc)) > 0 ? 1 : 0;
+}
+
+/** Row blocks ONE plane clocks out: the address `rows`, plus the trailing
+ *  display block when the schedule truncates. `Geometry::blocks` on the
+ *  device. */
+export function rowBlocksPerPlane(rows: number, trunc: number): number {
+  return Math.max(0, Math.round(rows)) + trailingBlock(trunc);
+}
+
 /**
  * Peak brightness as a fraction of the STOCK schedule's, 0..1:
  *
  * ```text
- * brightness = lsb_eff · (2^planes − 1) / (W · E)      E = emissions(planes, t)
+ * brightness = lsb_eff · (2^planes − 1) · rows
+ *              ───────────────────────────────    E = emissions(planes, t)
+ *                 W · E · (rows + trail)          trail = 1 when t > 0
  * ```
  *
  * `lsb_eff / W` is the duty cycle of one pass and is NOT the answer — that is
@@ -399,22 +437,36 @@ export function emissions(planes: number, trunc = 0): number {
  * Truncating also shortens the pass, so the panel runs `(2^planes − 1) / E`
  * times as many passes per second and gets that factor back.
  *
+ * The `rows / (rows + trail)` tail is the trailing display block (#795): a
+ * truncating pass clocks out one more row block per plane than the stock pass
+ * does, which is pass TIME with no extra on-time, so it costs a flat
+ * `1/(rows+1)` of the light — 3 % at 1/32 scan. `rows` is the ADDRESS rows
+ * (`scanRows`), not the panel height.
+ *
  * Still independent of WHICH plane — every plane's on-time scales by the same
  * factor, so the ramp keeps its shape and only the peak moves — but no longer
  * independent of the bit DEPTH, because `E` is built from it. It compounds with
  * the ordinary `brightness` channel LUT rather than replacing it.
  *
  * At the top of each `t` step this is within a few percent of full (bench
- * `W` 61 at 7 planes: 97.6 % at `lsb` 30, 94.6 % at 15, 81.0 % at 7) and it
- * falls linearly with `lsb` INSIDE a step (50.5 % at `lsb` 8, which runs the
- * same 444 Hz as 15).
+ * `W` 61 at 7 planes, 1/32 scan: 94.6 % at `lsb` 30, 91.8 % at 15, 78.5 % at
+ * 7) and it falls linearly with `lsb` INSIDE a step (48.9 % at `lsb` 8, which
+ * runs the same 430 Hz as 15).
  */
-export function peakBrightnessFraction(lsbEff: number, width: number, planes: number): number {
+export function peakBrightnessFraction(
+  lsbEff: number,
+  width: number,
+  planes: number,
+  rows: number,
+): number {
   const w = Math.max(1, Math.round(width));
   const p = Math.max(1, Math.round(planes));
+  const r = Math.max(1, Math.round(rows));
   const eff = Math.min(w, Math.max(0, Math.round(Math.max(0, lsbEff))));
-  const shifts = emissions(p, truncatedPlanes(Math.max(1, eff), w, p));
-  return Math.min(1, Math.max(0, (eff * (2 ** p - 1)) / (w * shifts)));
+  const trunc = truncatedPlanes(Math.max(1, eff), w, p);
+  const shifts = emissions(p, trunc);
+  const blocks = rowBlocksPerPlane(r, trunc);
+  return Math.min(1, Math.max(0, (eff * (2 ** p - 1) * r) / (w * shifts * blocks)));
 }
 
 /** One offered position of the `lsb` control: the TOP of a truncation step,
@@ -431,6 +483,9 @@ export interface LsbStep {
   wire: number;
   /** Row shifts per rescan, `E`. */
   emissions: number;
+  /** The trailing display block this step needs: 1 at `t > 0`, 0 at the stock
+   *  schedule (#795). A plane costs `rows + trail` row blocks. */
+  trail: number;
   /** Peak brightness as a fraction of the stock schedule's. */
   brightness: number;
 }
@@ -448,12 +503,16 @@ export interface LsbStep {
  * seven.
  *
  * The NOMINAL refresh multiplier of step `t` is `2^t`; the true ratio is
- * `(2^planes − 1) / E`, a few percent under it (127/64, 127/33, 127/18 … at 7
- * planes), which is why the card prints the Hz beside the × label.
+ * `(2^planes − 1) · rows / (E · (rows + 1))`, a few percent under it (at 7
+ * planes and 1/32 scan: 1.92×, 3.73×, 6.84× … against a nominal 2/4/8),
+ * which is why the card prints the Hz beside the × label. `rows` is the
+ * address rows, needed for the trailing display block's share of both the
+ * refresh and the brightness (#795).
  */
-export function lsbSteps(width: number, planes: number): LsbStep[] {
+export function lsbSteps(width: number, planes: number, rows: number): LsbStep[] {
   const w = Math.max(1, Math.round(width));
   const p = Math.max(1, Math.round(planes));
+  const r = Math.max(1, Math.round(rows));
   const steps: LsbStep[] = [];
   for (let t = 0; t <= p - 1; t++) {
     const lsb = Math.floor(w / 2 ** t);
@@ -463,7 +522,8 @@ export function lsbSteps(width: number, planes: number): LsbStep[] {
       lsb,
       wire: t === 0 ? 0 : lsb,
       emissions: emissions(p, t),
-      brightness: peakBrightnessFraction(lsb, w, p),
+      trail: trailingBlock(t),
+      brightness: peakBrightnessFraction(lsb, w, p, r),
     });
   }
   return steps;
@@ -492,11 +552,11 @@ export function lsbStepIndex(
 /**
  * Estimated panel refresh in Hz.
  *
- * One rescan shifts `rowBlockWords` words for each of `scan` row addresses,
- * once per emission:
+ * One rescan shifts `rowBlockWords` words for each row block of a plane, once
+ * per emission:
  *
  * ```text
- * Hz = clock / (pw · panels · stripes · scan · emissions)
+ * Hz = clock / (pw · panels · stripes · (scan + trail) · emissions)
  * ```
  *
  * `emissions` is `2^planes − 1` for the stock BCM schedule — and that is what
@@ -505,12 +565,17 @@ export function lsbStepIndex(
  * to `t + 2^(planes − t) − 1`; `blank` and `latch` only matter there, because
  * they set the lit width the on-time is clamped against.
  *
+ * `trail` is the trailing display block (#795): `1` as soon as a plane is
+ * truncated, `0` for the stock schedule, so a truncating rescan is
+ * `(scan + 1)/scan` longer than the emission count alone suggests — 3 % at
+ * 1/32 scan.
+ *
  * The stock model is the one the bench measurements fit exactly (Gitea #255,
  * the table in `firmware/src/hub75.rs`): one 64×64 panel at 1/32 scan and 7
  * planes reads 77 Hz at 20 MHz, 115 Hz at 30 MHz, 154 Hz at 40 MHz, and 58 Hz
  * at 8 planes — the numbers measured on the Seengreat panel. At 30 MHz with
- * `blank` 1 on a shift register (`W` = 61) an `lsb` of 30 reads ~229 Hz and an
- * `lsb` of 8 reads ~444 Hz.
+ * `blank` 1 on a shift register (`W` = 61) an `lsb` of 30 reads ~222 Hz and an
+ * `lsb` of 8 reads ~430 Hz.
  *
  * Returns 0 when the inputs cannot describe a panel.
  */
@@ -522,8 +587,9 @@ export function estimatedRefreshHz(
   const planes = Math.max(1, Math.round(driver.planes));
   const width = litWidth(colsWords, driver.blank ?? 0, driver.latch ?? 1);
   const eff = lsbEffective(driver.lsb ?? 0, width);
-  const shifts = emissions(planes, truncatedPlanes(eff, width, planes));
-  const clocks = colsWords * scanRows(a) * shifts;
+  const trunc = truncatedPlanes(eff, width, planes);
+  const shifts = emissions(planes, trunc);
+  const clocks = colsWords * rowBlocksPerPlane(scanRows(a), trunc) * shifts;
   if (clocks <= 0 || driver.clockHz <= 0) return 0;
   return driver.clockHz / clocks;
 }

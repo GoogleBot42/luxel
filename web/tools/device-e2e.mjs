@@ -4447,10 +4447,11 @@ try {
             hz !== before,
           `${before} -> ${mult} / ${hz} / ${pct}`,
         );
-        // the corrected brightness model (#797): a step TOP keeps very nearly
-        // the stock schedule's light, so this must not read like the old
-        // `lsb / W`, which is 24 % at W 59 / lsb 14 against 88 % here (6
-        // planes) and 91 % on Jeremy's 7-plane panel
+        // the corrected brightness model (#797, and the trailing display
+        // block's 3 % in #795): a step TOP keeps very nearly the stock
+        // schedule's light, so this must not read like the old `lsb / W`,
+        // which is 24 % at W 59 / lsb 14 against 85 % here (6 planes, 1/32
+        // scan) and 89 % on Jeremy's 7-plane panel
         const shown = Number((pct.match(/(\d+)\s*%/) ?? [])[1]);
         check(
           "panel module: a step top reads as nearly stock brightness, not lsb/W",

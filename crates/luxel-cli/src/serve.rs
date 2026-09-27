@@ -1446,22 +1446,22 @@ fn synthetic_live(
     driver: &luxel_core::layout::PanelDriver,
 ) -> Option<luxel_core::layout::LiveDriver> {
     let g = luxel_hub75::arrange::fb_geometry(matrix, driver.planes as usize)?;
+    let sched = luxel_hub75::Schedule::plan(
+        g,
+        luxel_hub75::Control::new(driver.blank, driver.latch_clocks()),
+        driver.lsb,
+    );
     let stripes = luxel_hub75::arrange::stripes(matrix);
     Some(luxel_core::layout::LiveDriver {
         planes: driver.planes,
         clock_mhz: driver.clock_mhz,
         chip: driver.chip,
         blank: driver.blank,
-        lsb: luxel_hub75::Schedule::plan(
-            g,
-            luxel_hub75::Control::new(driver.blank, driver.latch_clocks()),
-            driver.lsb,
-        )
-        .lsb,
+        lsb: sched.lsb,
         w: (g.cols / stripes) as u16,
         h: (2 * g.rows * stripes) as u16,
         scan: g.rows as u16,
-        fb_bytes: g.bytes() as u32,
+        fb_bytes: g.with_trail(sched.needs_trail()).bytes() as u32,
         fallback: false,
     })
 }

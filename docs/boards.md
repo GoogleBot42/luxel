@@ -3347,8 +3347,10 @@ hub75: 64x64 panel, scan 1/32, 7 bitplanes, LCD_CAM @ 30 MHz, chip shiftreg, bla
        circular DMA, 254 descriptors x 2 rings = 6096 B, framebuffer 28672 B
 ```
 
-(`framebuffer 28672 B` is ONE of the two — `rows · cols · planes · 2 B` at
-`32 · 64 · 7` — which is the number `driver.live.fb_bytes` reports.)
+(`framebuffer 28672 B` is ONE of the two — `blocks · cols · planes · 2 B` at
+`32 · 64 · 7` — which is the number `driver.live.fb_bytes` reports. A truncating
+`lsb` makes `blocks` 33 rather than 32, for the trailing display block, so the
+same panel reports 29,568 B — see "Faster refresh: the `lsb` schedule".)
 
 A fallback adds `— FALLBACK, the configured panel would not build` to the end
 of that last line, preceded by `hub75: <why> — falling back to the board
@@ -3367,7 +3369,7 @@ old firmware ("kind of worked, some parts wrong, unexpected parts lit") most
 likely wants the two knobs that did not exist then: **`clock_mhz 20` and
 `blank 2`–`4`**. In wire terms, `panel 7 20 shiftreg 2`.
 
-### Faster refresh: the `lsb` schedule (Gitea #460 / #789 / #797)
+### Faster refresh: the `lsb` schedule (Gitea #460 / #789 / #797 / #795)
 
 The fifth `panel` field multiplies the rescan rate for a small cost in peak
 brightness, without touching the bit depth. A framebuffer word carries the OE
@@ -3384,7 +3386,24 @@ a rescan is `E = t + 2^(planes − t) − 1` shifts; binary weights stay exact, 
 the grey ramp stays monotonic (host-tested, `luxel_hub75::schedule`). `0` =
 full = the stock schedule, byte-identical to what shipped before.
 
-**Peak brightness is `lsb · (2^planes − 1) / (W · E)`, not `lsb / W`.** #789
+**The row-31 finding** (2026-09-27, Gitea #795). Jeremy's eye on the panel: at
+every truncating step the LAST row of each half — rows 31 and 63 of the 64×64,
+the last address row — was the wrong colour and the wrong brightness, at `×2`,
+`×4` and `×8` alike. A row block shifts row `r` while OE displays the row the
+block before it latched, so a plane's last row is displayed during block 0 of
+the NEXT plane — and once the planes are truncated that block's OE window is a
+different width, so the last row's bit weights came out rotated by one plane.
+The fix is a TRAILING display block: at `t > 0` block 0 runs with OE off, blocks
+`1..rows−1` display rows `0..rows−2` as before, and a 33rd block (address
+`rows−1`, OE at the plane's own width, no latch) displays the last row. A plane
+therefore costs `rows + 1` row blocks instead of `rows`, which takes
+`rows/(rows+1)` — 3 % at 1/32 scan — off both the rescan rate and the peak
+brightness, and grows one framebuffer from 28,672 to **29,568 B**. At `t = 0`
+every plane's window is the same width, no trailing block is emitted, and the
+stock pass is unchanged down to the byte.
+
+**Peak brightness is `lsb · (2^planes − 1) · rows / (W · E · (rows + trail))`,
+not `lsb / W`** (`trail` = 1 at `t > 0`, else 0). #789
 shipped the latter and it understates a truncating schedule by up to 8×:
 `lsb / W` is the duty cycle of one PASS, and truncating makes the pass shorter
 too, so the panel runs `(2^planes − 1) / E` times as many passes per second.
@@ -3395,23 +3414,24 @@ offering: each keeps nearly the stock brightness, and everything below a top
 runs that top's refresh with less light. The boot line prints the schedule:
 
 ```text
-hub75: lsb 30 of 61 lit clocks (49.2% on-time), 1 low plane truncated, 64 row shifts/pass (stock 127), est 229 Hz
+hub75: lsb 30 of 61 lit clocks, 1 low plane truncated, 64 row shifts/pass (stock 127), est 221 Hz at 94.6% of stock brightness
 ```
 
-(the `%` there is the per-pass on-time the firmware plans against, not the
-perceived brightness — 49.2 % of a pass, but 97.6 % of stock light.)
+(the `%` there is the perceived brightness — on-time per unit time, the
+trailing block included — not the per-pass duty cycle, which is 49.2 % here.)
 
-On the bench 64×64 (7 planes, 30 MHz, blank 1, so `W` = 61) the step tops are:
+On the bench 64×64 (7 planes, 30 MHz, blank 1, so `W` = 61, 1/32 scan so a
+truncating plane clocks 33 row blocks) the step tops are:
 
-| `lsb` | `t` | `E` | est Hz | peak |
-|---:|---:|---:|---:|---:|
-| `0` (= 61) | 0 | 127 | 115 | **100 %** |
-| 30 | 1 | 64 | 229 | **97.6 %** |
-| 15 | 2 | 33 | 444 | **94.6 %** |
-| 7 | 3 | 18 | 814 | **81.0 %** |
+| `lsb` | `t` | `E` | blocks | est Hz | peak |
+|---:|---:|---:|---:|---:|---:|
+| `0` (= 61) | 0 | 127 | 32 | 115.3 | **100 %** |
+| 30 | 1 | 64 | 33 | 221.9 | **94.6 %** |
+| 15 | 2 | 33 | 33 | 430.4 | **91.8 %** |
+| 7 | 3 | 18 | 33 | 789.1 | **78.5 %** |
 
-— and `lsb 8`, which #789's continuous slider let you pick, is the same 444 Hz
-as `lsb 15` at **50.5 %**, which is exactly the case the stepped control now
+— and `lsb 8`, which #789's continuous slider let you pick, is the same 430 Hz
+as `lsb 15` at **48.9 %**, which is exactly the case the stepped control now
 removes. It is a BOOT field — the descriptor rings encode the repeats — so
 `reboot_required`; a live `blank` change keeps the truncation count and
 re-clamps `lsb` so the weights stay exact (`Schedule::refit`). The Settings
@@ -3419,20 +3439,24 @@ card shows it as a stepped **Refresh ×1 / ×2 / ×4 …** control with the
 predicted Hz, the measured `rescan_hz` and the brightness percentage.
 
 **On metal** (Seengreat 64×64, 2026-09-26, 20 MHz / `blank 2` / 7 planes, so
-`W` = 59):
+`W` = 59). The measurements are **pre-fix** — taken before the trailing display
+block (#795), i.e. against 32 row blocks per plane — and the predictions are the
+post-fix model, 32/33 of what was measured:
 
-| `lsb` | `t` | `E` | predicted Hz | **measured `rescan_hz`** | peak | `pass.short` |
+| `lsb` | `t` | `E` | predicted Hz (post-fix) | **measured `rescan_hz`** (pre-fix) | peak | `pass.short` |
 |---:|---:|---:|---:|---:|---:|---:|
-| 29 | 1 | 64 | 152.6 | **153** | 97.5 % | 0 over 7.7k passes |
-| 14 | 2 | 33 | 296 | **295** | 91.3 % | 0 over 15k passes |
-| 7 | 3 | 18 | 542 | **542** | 83.7 % | 4 over 27k passes |
+| 29 | 1 | 64 | 148.0 | **153** (152.6 predicted pre-fix) | 94.6 % | 0 over 7.7k passes |
+| 14 | 2 | 33 | 287.0 | **295** (295.9) | 88.6 % | 0 over 15k passes |
+| 7 | 3 | 18 | 526.1 | **542** (542.5) | 81.2 % | 4 over 27k passes |
 
 The grey-ramp readback is exact at every step, and the panel is visibly close
-to stock brightness at `lsb 14` — which the corrected model predicts (91 %) and
+to stock brightness at `lsb 14` — which the corrected model predicts (89 %) and
 the `lsb / W` one did not (24 %). A LIVE `blank` 2 → 4 re-clamps the running
 `lsb 14` to **13** with no reboot, as designed (`W` drops to 55, and 14 no
-longer fits four times). The remaining on-metal items — the eyeballed ghosting
-at the fast end, and the photographed ramp — are in docs/UNTESTED.md.
+longer fits four times). The remaining on-metal items — the re-read of
+`rescan_hz` and the bottom row of each half after the trailing-block fix, the
+eyeballed ghosting at the fast end, and the photographed ramp — are in
+docs/UNTESTED.md.
 
 Cost (devshell builds, 2026-09-26):
 `seengreat-hub75` 1,166,912 → **1,168,416 B** (+1,504), console bundle

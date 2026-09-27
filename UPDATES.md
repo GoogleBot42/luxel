@@ -1,5 +1,36 @@
 # Update log
 
+## 2026-09-27 — the `lsb` schedule mis-weighted the last row of each half: a trailing display block per plane (#795)
+
+Jeremy, after a session with the new Refresh control: "the lowest pixel in
+each of the two vertical halves of the screen doesn't have the right colour
+and brightness. The other pixels are fine. I see this at all of the
+levels." Rows 31 and 63 share address 31, the last row block of every plane.
+
+**Cause.** A row block shifts row `r` while OE displays the row latched
+before it, `r − 1`, so a plane's last row is displayed during block 0 of the
+NEXT plane in the ring. Stock BCM never notices: every plane's OE window is
+the same width. With truncated planes the widths differ, so row 31's bit
+weights come out rotated by one plane — each plane hands it the next plane's
+window and the LSB gets the MSB's. The total is preserved (white looked
+right), the colour weights are not. The "slightly brighter row in the
+LSB-only band" from the earlier photo was the same thing.
+
+**Fix.** `Geometry::trail`: when any plane is truncated
+(`Schedule::needs_trail`), every plane carries one extra row block — block 0
+has OE off, blocks 1..31 display rows 0..30 as before, and block 32
+(address 31, OE at the plane's own width, no latch) displays row 31. Costs
+`1/rows` of the pass (a 7-plane 64x64 at `lsb 14` goes 296 → 287 Hz on the
+20 MHz panel) and of the framebuffer (28,672 → 29,568 B); the stock layout
+at `lsb 0` is byte-identical. `format_scheduled` writes it, the packer never
+touches the trailing block, `est_hz` and the brightness ratio
+(`brightness_permille_at`) account for it, the boot fallback check judges
+the whole first plane rather than block 0 (which is dark now). A ring
+simulation in `luxel-hub75`'s tests walks the descriptor order the way the
+panel sees it — latch tracking across the wrap included — and asserts every
+row's per-plane on-time is exactly `lsb · 2^k` with the trailing block, and
+demonstrates the rotation without it. Web model and docs follow.
+
 ## 2026-09-27 — the rest of the panel night: a stored 2x1 layout bricks the board (#822), the spare-plane swap freezes (#620), and the recovery
 
 Continuation of the entry below. Three things learned the hard way, all on
