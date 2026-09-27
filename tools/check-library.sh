@@ -5,13 +5,16 @@
 # required, plus the decoded program must render identically to the fresh
 # compile — that is the device's execution path) and a 3-frame smoke run.
 #
-# Before the engine sweep it also runs two source lints:
+# Before the engine sweep it also runs three source lints:
 #   * `//#` control directives — one that is not adjacent to an export is
 #     silently ignored by the parser, so a pattern can ship a directive that
 #     does nothing at all (Gitea #179). See "directive lint" below.
 #   * two-argument `arrayReplace(a, v)` — the splat builtin misread as a fill,
 #     which quietly freezes a buffer-based pattern. See "arrayReplace fill
 #     lint" below (Gitea #225).
+#   * unitless `min=0 max=1` sliders — house style is real units. Fails on the
+#     no-op shape (no `step=` at all), counts the rest. See "unitless 0..1
+#     slider lint" below (Gitea #243).
 #
 # Every pattern runs on FIVE rigs: two grids (`check`'s default 10x10 and an
 # explicit 16x16) and three MAPLESS STRIPS (60, 300, 512 px). Rig shape is
@@ -170,6 +173,100 @@ if [ -n "$lint_out" ]; then
   exit 1
 fi
 echo "arrayReplace lint: no two-argument arrayReplace() calls in $DIR"
+
+# ---- unitless 0..1 slider lint (Gitea #243) -----------------------------------
+# House style (.claude/rules/library.md) is that a `//#` directive declares REAL
+# units — seconds, degrees, pixels, percent; an integer count with step=1; a mode
+# selector as min=0 max=n-1 step=1. "A bare 0..1 slider with meaningless values is
+# the single most common review complaint", and until now nothing enforced it.
+#
+# Two tiers, because the two shapes differ in how wrong they are:
+#
+#   FAIL — `min=0 max=1` with no `step=` on a slider. That directive declares
+#     EXACTLY what a stock Pixelblaze slider already sends, so it is a pure no-op:
+#     it buys no bounds, no granularity and no default. Zero sites in library/ as
+#     of 2026-09-27, so this is a regression gate.
+#
+#   WARN — `min=0 max=1` with a fractional `step=` on a slider: a continuous
+#     unitless dial. 297 of these across 107 patterns today, most of them integer
+#     counts or mode selectors wearing a 0..1 coat (`sliderReplicas`,
+#     `sliderArms`, `sliderMode`, `sliderIterations`, 38 × `sliderSpeed`). Fixing
+#     one means rewriting its handler's mapping and re-proving the render is
+#     byte-identical at the declared default, so this reports a count instead of
+#     failing the sweep. `UNITLESS01=list` prints every site; `UNITLESS01=fail`
+#     turns it into a gate, which is the ratchet once the fix pass lands.
+#
+# Not flagged, by design:
+#   * `min=0 max=1 step=1` — the two-state mode selector the rule blesses.
+#   * anything that is not a `slider*` export. A `toggle*` is a SWITCH in both the
+#     playground and on a stock PB, so `//# default=1` with no bounds is its
+#     correct and complete form (23 such directives in library/, all toggles).
+#   * a directive carrying the bare word `unitless-ok` — the opt-out for a dial
+#     that genuinely is a unitless factor (a blend/mix ratio). It goes INSIDE the
+#     directive comment, since a trailing `//#` leaves no room for a second `//`
+#     comment; both hint parsers only read `key=value` pairs, so a word with no
+#     `=` is inert (web/src/lib/hints.ts, tools/verify/hints.mjs).
+UNITLESS01="${UNITLESS01:-warn}"
+lint_out=""
+for f in "$DIR"/*.js; do
+  hits=$(awk '
+    function ctlName(s,   t) {
+      if (!match(s, /export[ \t]+function[ \t]+[A-Za-z_$][A-Za-z0-9_$]*[ \t]*\(/)) return ""
+      t = substr(s, RSTART, RLENGTH)
+      sub(/^export[ \t]+function[ \t]+/, "", t)
+      sub(/[ \t]*\($/, "", t)
+      return t
+    }
+    function num(d, key,   v) {
+      if (!match(d, key "[ \t]*=[ \t]*-?[0-9]+(\\.[0-9]+)?")) return "nil"
+      v = substr(d, RSTART, RLENGTH)
+      sub(/^.*=[ \t]*/, "", v)
+      return v + 0
+    }
+    { line[FNR] = $0; last = FNR }
+    END {
+      ex = "export[ \t]+function[ \t]+[A-Za-z_$][A-Za-z0-9_$]*[ \t]*\\("
+      for (i = 1; i <= last; i++) {
+        if (line[i] !~ /\/\/#[^\n]*(min|max|step|default)[ \t]*=/) continue
+        if (line[i] ~ /unitless-ok/) continue
+        name = ""
+        if (line[i] ~ ("^.*" ex "[^)]*\\).*//#")) name = ctlName(line[i])                      # trailing
+        else if (line[i] ~ /^[ \t]*\/\/#/ && i < last && line[i+1] ~ ("^[ \t]*" ex)) name = ctlName(line[i+1])
+        if (name !~ /^slider/) continue
+        d = line[i]; sub(/^.*\/\/#/, "", d)
+        mn = num(d, "min"); mx = num(d, "max"); st = num(d, "step")
+        if (mn == "nil" || mx == "nil") continue
+        if (mn != 0 || mx != 1) continue
+        if (st != "nil" && st >= 1) continue
+        printf "  %s%s:%d: %s //#%s\n", (st == "nil" ? "NO-OP " : ""), FILENAME, i, name, d
+      }
+    }' "$f")
+  if [ -n "$hits" ]; then lint_out="$lint_out$hits"$'\n'; fi
+done
+noop=$(printf '%s' "$lint_out" | grep -c '^  NO-OP ' || true)
+if [ "$noop" -ne 0 ]; then
+  printf 'check-library: //# min=0 max=1 with no step= on a slider declares exactly what a\n' >&2
+  printf '  stock Pixelblaze slider already sends — the directive does nothing. Give the\n' >&2
+  printf '  dial real units (seconds, degrees, pixels, a count with step=1), or a step= if\n' >&2
+  printf '  it truly is a unitless factor. (#243)\n' >&2
+  printf '%s' "$lint_out" | grep '^  NO-OP ' >&2
+  exit 1
+fi
+if [ -n "$lint_out" ]; then
+  n=$(printf '%s' "$lint_out" | grep -c ':' || true)
+  pats=$(printf '%s' "$lint_out" | sed 's/^  //; s/:.*//' | sort -u | wc -l | tr -d ' ')
+  if [ "$UNITLESS01" = list ] || [ "$UNITLESS01" = fail ]; then
+    printf 'unitless 0..1 lint: %d slider(s) in %d pattern(s) declare a unitless 0..1 range (#243)\n' \
+      "$n" "$pats" >&2
+    printf '%s' "$lint_out" >&2
+    if [ "$UNITLESS01" = fail ]; then exit 1; fi
+  else
+    printf 'unitless 0..1 lint: %d slider(s) in %d pattern(s) declare a unitless 0..1 range —\n' "$n" "$pats"
+    printf '  house style is real units (#243). UNITLESS01=list to see them, UNITLESS01=fail to gate.\n'
+  fi
+else
+  echo "unitless 0..1 lint: no unitless 0..1 sliders in $DIR"
+fi
 
 cargo build --release -p luxel-cli
 LUXEL="$ROOT/target/release/luxel"

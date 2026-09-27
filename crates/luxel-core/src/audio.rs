@@ -155,7 +155,7 @@ fn isqrt(v: u64) -> u64 {
     if v == 0 {
         return 0;
     }
-    let mut x = 1u64 << ((64 - v.leading_zeros() + 1) / 2);
+    let mut x = 1u64 << (64 - v.leading_zeros()).div_ceil(2);
     loop {
         let nx = (x + v / x) / 2;
         if nx >= x {
@@ -183,6 +183,9 @@ fn log2f(x: f32) -> f32 {
     e as f32 + t * (1.4426951 + t * (-0.7181452 + t * (0.4451067 + t * -0.1421344)))
 }
 
+// 0.6931472 is the leading coefficient of this fitted 2^f polynomial, not a use of
+// ln(2) as a constant — keep the literal so the whole fit stays as measured.
+#[allow(clippy::approx_constant)]
 fn exp2f(x: f32) -> f32 {
     let i = if x < 0.0 { (x - 0.9999) as i32 } else { x as i32 };
     let f = x - i as f32; // 0..1

@@ -1,5 +1,74 @@
 # Update log
 
+## 2026-09-27 — workspace clippy runs again, a unitless-slider lint, the README's JIT gap
+
+Three small host-only items, no device touched.
+
+**`cargo clippy --workspace --all-targets` is runnable again** (#769). Six
+`clippy::approx_constant` sites — deny-by-default, so they were *errors*, and
+they aborted `luxel-core` before clippy reached anything that depends on it —
+now sit under four targeted `#[allow]`s, each with a one-line reason. None was
+actually using the constant: `audio.rs`'s `0.6931472` is the leading
+coefficient of a fitted `2^f` polynomial, and the other five are expected
+OUTPUTS in test tables (`3.14159` as a number-formatting input, `0.7071` as
+`easeOutSine(0.5)`, `1.5708` as an `angleBetween` result checked to 1e-2). No
+numerics were changed — the rule was "when in doubt, allow". With that, clippy
+comes back **exit 0 and 137 warning sites**, all of them cleanup rather than
+bugs; the five trivial ones in files this touched anyway are fixed
+(`manual_div_ceil`, `manual_clamp`, two `unnecessary_cast`, one `unused_mut`)
+and the rest is inventoried per crate in **Gitea #865**, with the traps
+written down (`luxel-cli`'s six `neg_cmp_op_on_partial_ord` are deliberate NaN
+guards and must not be autofixed; the 28 `drop_non_drop` are one test file;
+`manual_is_multiple_of` is a Rust 1.87 API and `luxel-core`/`luxel-jit` are
+built by the ESP toolchain; the four `precedence` hits are `a * b >> 16`
+fixed-point multiplies that already mean what they say). Still no clippy gate
+in CI, which is how six deny-level errors sat on master unnoticed.
+
+**`tools/check-library.sh` gained a third source lint** (#243): unitless
+`min=0 max=1` `//#` sliders, the house-style violation `.claude/rules/library.md`
+calls "the single most common review complaint". Two tiers, because the two
+shapes differ in how wrong they are. `min=0 max=1` with **no `step=`** on a
+`slider*` **fails** the sweep — that directive declares exactly what a stock
+Pixelblaze slider already sends, so it buys no bounds, no granularity and no
+default; there are zero such sites in `library/`, so it ships as a regression
+gate. `min=0 max=1` with a *fractional* step is a continuous unitless dial and
+is only **counted**: **297 of them across 107 of the 308 patterns**, and the
+sweep prints that as one line rather than failing. `UNITLESS01=list` dumps
+every site, `UNITLESS01=fail` makes it a gate — the ratchet for when the fix
+pass lands.
+
+Not flagged, by design: `min=0 max=1 step=1` (the two-state mode selector the
+rule blesses) and anything that is not a `slider*` — a `toggle*` is a SWITCH in
+both the playground and on a stock PB, so `//# default=1` with no bounds is its
+complete and correct form, and all 23 boundless directives in `library/` are
+toggles. The opt-out for a dial that genuinely is a unitless factor is the bare
+word `unitless-ok` **inside** the directive: a trailing `//#` leaves no room for
+a second `//` comment, and both hint parsers read only `key=value` pairs, so a
+word with no `=` is inert.
+
+The 297 were **not** fixed and that is deliberate. They are not a mechanical
+rename: most are integer counts or mode selectors wearing a 0..1 coat —
+`sliderReplicas`, `sliderArms`, `sliderMode`, `sliderIterations`,
+`sliderNumberOfStripes`, and 38 separate `sliderSpeed`s — so each one means
+rewriting its handler's mapping and then re-proving the render is byte-identical
+at the declared default (the `--controls-port "<every default>"` run, not just
+the undriven md5). The full list and its sub-classification are on #243, which
+stays open as the fix-pass ticket. Two incidental finds went there too:
+`rainbow-v2.js` and `ryb-colors.js` ship a `sliderBrightness` master dim, which
+the rule says never to add.
+
+**The README** never mentioned the on-device JIT, default-on across all five
+Xtensa boards since 2026-09-24, and its repo map listed three of five crates.
+Added a firmware bullet (what it does, where the code lives per tier, the
+1.9–5.2× measured on metal, the interpreter fallback and the `POST /api/jit`
+kill switch) and rows for `crates/luxel-jit` and `crates/luxel-hub75` in both
+the repo map and the licence table. `luxel-jit`'s own crate doc still claimed
+it was "NOT linked into the firmware yet; phase 3 does that" — five phases
+stale, now fixed.
+
+Gates: `cargo test --workspace`, `cargo clippy --workspace --all-targets`
+(exit 0), `tools/check-library.sh` (308/308 on all five rigs, three lints).
+
 ## 2026-09-27 — noise: the simplex kernel on 32-bit operands (#840 step 1)
 
 `simplex2`/`simplex3` did every operation in i64 — `fmul(a: i64, b: i64) =
