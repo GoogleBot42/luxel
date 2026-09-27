@@ -320,3 +320,26 @@ nothing in this container is public.
 - Forgetting `npm run wasm`/`gen-gallery.mjs` reran after a `library/` or corpus change —
   `e2e.mjs`/`device-e2e.mjs` serve whatever `web/dist` currently holds, which is stale
   until you rebuild.
+- **"Confirmed pre-existing on master" means nothing without a rebuild.** The same
+  `web/dist` staleness makes a *checkout* lie, not just a `library/` edit: checking
+  out `origin/master` (detached or otherwise) in a worktree and re-running
+  `e2e.mjs`/`device-e2e.mjs` re-tests the bundle that is already on disk, so a
+  branch's own bug and a genuine master regression look identical, and so does a
+  harness assertion the UI moved past hours ago. That is how Gitea #819 was filed:
+  an `Onion` label reported against a master where the same commit had already
+  renamed it `Ghost prev` and written the matching check. `npm run build` on the
+  tree you are accusing, THEN run the harness — and say in the ticket that you did.
+- **Harness fixtures pinned to a firmware constant are a standing bug, not an
+  accident.** #547, #809 and #810 are all the same failure: a number the harness
+  spelled out (a pixel cap, a scan depth) moved in the firmware and the case either
+  stopped testing anything or went red. Derive it instead — the device serves its own
+  ceiling at `/api/status`'s `max_pixels` / `/api/layout`'s `max`, and a mirror-only
+  constant can be read out of the Rust source — then assert the RELATION (this chain
+  exceeds that cap; the suggested arrangement fits under it) rather than the literal
+  sentence.
+- **Never let one missing element abort a 600-check suite.** `page.$eval` throws when
+  the selector matches nothing, so an unguarded read turns a single wrong expectation
+  into a run that reports nothing after it (#810 died at check 553 of 594; #819 took
+  the §5.7 disabled sweep with it). Both browser harnesses carry an
+  `evalOr(page, sel, fn, fallback)` next to `check` — use it for any read where the
+  element's own presence is part of what is under test, and `check` the fallback.

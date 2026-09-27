@@ -6,7 +6,7 @@
 //   node tools/serve-e2e.mjs
 
 import { execSync, spawn } from "node:child_process";
-import { rmSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { PORT as E2E } from "../web/tools/e2e-common.mjs";
 import { lxpBody } from "../web/tools/lxp.mjs"; // needs web/public/luxel.wasm (npm run wasm)
@@ -645,9 +645,26 @@ await new Promise((resolve, reject) => {
 });
 await sleep(800);
 const pst = await (await fetch(`http://127.0.0.1:${PORT + 1}/api/status`)).json();
+// The panel board's pixel ceiling lives in exactly one place —
+// `PANEL_MAX_PIXELS` in crates/luxel-cli/src/serve.rs, which mirrors
+// `firmware/src/board.rs`'s `MAX_PIXELS` under `hub75`. Read it out rather than
+// spelling it here: #768/#802 moved it 4,096 -> 16,384 and every harness that
+// had the old number written down went red (#809, #810). What this check is
+// for is that a `--board panel` mirror reports the PANEL cap and not the
+// strip's, which the floor below keeps honest.
+const PANEL_CAP = Number(
+  /const PANEL_MAX_PIXELS: u32 = (\d+)/.exec(
+    readFileSync("crates/luxel-cli/src/serve.rs", "utf8"),
+  )?.[1],
+);
 check(
-  "--board panel: 4096 px ceiling and the board's own 64x64 grid",
-  pst.max_pixels === 4096 &&
+  "--board panel: the ceiling constant is readable and above a bare panel",
+  Number.isFinite(PANEL_CAP) && PANEL_CAP >= 4096,
+  String(PANEL_CAP),
+);
+check(
+  `--board panel: ${PANEL_CAP} px ceiling and the board's own 64x64 grid`,
+  pst.max_pixels === PANEL_CAP &&
     pst.geom.dims === 2 &&
     pst.geom.regular === true &&
     pst.geom.w === 64 &&
@@ -824,7 +841,15 @@ check(
   (await (await fetch(`${base}/api/config`)).json()).pixels === 240,
 );
 
-const lMatrix = await postLayout(base, "matrix 32 16 2 1 tl row 1 0 16");
+// `scan` must divide `ph / 2` exactly — a HUB75 panel shifts two half-height
+// rows at once, so a shallower address depth stripes the framebuffer
+// `(ph / 2) / scan` ways and a partial stripe has nowhere to go (docs/api.md,
+// crates/luxel-core/src/layout.rs, Gitea #401). This fixture predates that
+// validation (#465) and asked for `scan 16` on a 16-high panel, which
+// `luxel_core::layout` has refused with "scan must divide ph/2" ever since
+// (#809). `4` is a real 1/4-scan depth for `ph 16` (`ph / 2` is 8) and is NOT
+// the usual ratio, so the stated-scan round-trip is still what is under test.
+const lMatrix = await postLayout(base, "matrix 32 16 2 1 tl row 1 0 4");
 check(
   "layout: `matrix` derives the grid, keeps the arrangement, needs a reboot",
   lMatrix.ok === true &&
@@ -836,7 +861,7 @@ check(
     lMatrix.pixels === 1024 &&
     lMatrix.matrix.cols === 2 &&
     lMatrix.matrix.snake === 1 &&
-    lMatrix.matrix.scan === 16 &&
+    lMatrix.matrix.scan === 4 &&
     lMatrix.outputs[0].count === 2 && // panels, not pixels
     lMatrix.map.kind === "grid" &&
     lMatrix.map.w === 64,
