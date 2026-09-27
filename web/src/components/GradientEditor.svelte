@@ -173,6 +173,10 @@
   import { createEventDispatcher, onDestroy, tick } from "svelte";
   import ColorPicker from "./ColorPicker.svelte";
   import { hexToRgb, rgbToHex, type Rgb } from "../lib/color";
+  // The three rules that decide whether an edit can LOSE work live in
+  // `lib/gradient.ts`, with no DOM, so `web/tests/gradient.test.mjs` holds
+  // them (Gitea #787 §2/§3/§4).
+  import { fieldNumber, removeStopAt, trailingCommit } from "../lib/gradient";
 
   /** The stops, ascending by position. */
   export let stops: GradientStop[] = [];
@@ -242,8 +246,13 @@
     return `${list.length} stop${list.length === 1 ? "" : "s"}`;
   }
 
-  /** Emit. `commit` distinguishes a finished edit from a drag frame. */
+  /** Emit. `commit` distinguishes a finished edit from a drag frame.
+   *
+   *  EVERY edit passes through here, which is where the pending colour commit
+   *  is dropped: a drag, an add, a removal or a clear inside the colour
+   *  editor's 250 ms window must not be undone by it (Gitea #787 §2). */
   function emit(next: GradientStop[], commit: boolean): void {
+    colorCommit.cancel();
     draft = commit ? null : next;
     if (commit) dispatch("change", { stops: next, amount });
     else dispatch("input", { stops: next, amount });
@@ -271,22 +280,32 @@
   /** `ColorPicker` emits on every pointermove across its saturation field, so
    *  a colour edit is a STORM like a drag is: live locally, committed once the
    *  hand stops. Without the trailing timer Settings would POST the whole
-   *  palette per mouse move. */
-  let colorTimer = 0;
+   *  palette per mouse move.
+   *
+   *  It commits the CURRENT list, not the one captured when it was armed
+   *  (#787 §2) — `lib/gradient.ts` states both halves of that rule. */
+  const colorCommit = trailingCommit(
+    250,
+    () => view,
+    (list) => emit(list, true),
+  );
+
   function setColor(i: number, rgb: number[]): void {
     const c: Rgb = [rgb[0] ?? 0, rgb[1] ?? 0, rgb[2] ?? 0];
     const hex = rgbToHex(c).replace(/^#/, "");
     const next = view.map((s, n) => (n === i ? { pos: s.pos, hex } : s));
     emit(next, false);
-    clearTimeout(colorTimer);
-    colorTimer = window.setTimeout(() => emit(next, true), 250);
+    colorCommit.arm();
   }
 
-  onDestroy(() => clearTimeout(colorTimer));
+  onDestroy(() => colorCommit.cancel());
 
   function setAmount(v: number): void {
     const next = Math.max(0, Math.min(100, Math.round(Number.isFinite(v) ? v : 0)));
     amount = next;
+    // this already commits `view`, so a pending colour commit would only
+    // re-POST the same list (#787 §2)
+    colorCommit.cancel();
     dispatch("change", { stops: view, amount: next });
   }
 
@@ -307,14 +326,15 @@
     return last ? Math.min(255, last.pos + 64) : 0;
   }
 
+  /** Remove one stop. At the floor it is REFUSED, never escalated into
+   *  destroying the whole ramp — that was #787 §3, and `clear` is the named
+   *  action for it. The `remove` button is disabled with a `data-reason` in
+   *  that state, and Delete on a handle does nothing. */
   function removeStop(i: number): void {
-    if (!canRemove(view)) {
-      clearAll();
-      return;
-    }
-    const list = view.filter((_, n) => n !== i);
-    picked = Math.max(0, Math.min(i, list.length - 1));
-    emit(list, true);
+    const r = removeStopAt(view, i, minStops);
+    if (!r) return;
+    picked = r.picked;
+    emit(r.stops, true);
   }
 
   function clearAll(): void {
@@ -411,6 +431,30 @@
 
   function onStopKeyUp(e: KeyboardEvent): void {
     if (draft && /^(Arrow|Home|End)/.test(e.key)) emit(view, true);
+  }
+
+  // ---- the two number fields ----
+  // An emptied field is "no change", never 0 (#787 §4): `Number("")` used to
+  // slam a stop to position 0 and set the blend amount to 0, which turns the
+  // palette off with nothing saying so. On a refusal the box is put back to
+  // the value in effect rather than left showing one the model did not take.
+
+  function onAmountField(el: HTMLInputElement): void {
+    const v = fieldNumber(el.value);
+    if (v === null) {
+      el.value = String(amount);
+      return;
+    }
+    setAmount(v);
+  }
+
+  function onPosField(el: HTMLInputElement): void {
+    const v = fieldNumber(el.value);
+    if (v === null) {
+      el.value = String(cur?.pos ?? 0);
+      return;
+    }
+    moveStop(picked, v, true);
   }
 
   async function refocus(i: number): Promise<void> {
@@ -528,7 +572,7 @@
         step="5"
         data-role={`${role}-amount`}
         value={amount}
-        on:change={(e) => setAmount(Number(e.currentTarget.value))}
+        on:change={(e) => onAmountField(e.currentTarget)}
       />
       %
     </label>
@@ -564,13 +608,21 @@
               max="255"
               data-role={`${role}-pos`}
               value={cur.pos}
-              on:change={(e) => moveStop(picked, Number(e.currentTarget.value), true)}
+              on:change={(e) => onPosField(e.currentTarget)}
             />
           </label>
+          <!-- At `minStops` the removal is refused, so the button says so
+               instead of silently doing nothing: disabled WITH a
+               `data-reason`, the same treatment the stop cap gets (§5.7's
+               deliberate exception, #529). #787 §3. -->
           <button
             class="btn sm"
             type="button"
             data-role={`${role}-remove`}
+            disabled={!canRemove(view)}
+            data-reason={canRemove(view)
+              ? undefined
+              : `a ramp needs at least ${minStops} stop${minStops === 1 ? "" : "s"}`}
             on:click={() => removeStop(picked)}>remove</button
           >
         </div>

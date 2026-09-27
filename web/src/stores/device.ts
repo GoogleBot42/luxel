@@ -659,6 +659,36 @@ export async function refreshOutput(): Promise<void> {
   }
 }
 
+/**
+ * Re-read JUST the palette half of `/api/output` (Gitea #787 §1).
+ *
+ * The Settings tab polls this. Without it the palette editor kept whatever the
+ * device held when the tab was opened, and the next edit — one arrow-key nudge
+ * is enough — POSTed that stale stop list, with its stale amount, over
+ * whatever the device had been given since (another client, a restore, a
+ * second tab). Both the user's colours and their blend amount were gone, with
+ * no warning.
+ *
+ * `outputStatus` is deliberately NOT touched here: gamma, power cap, blur and
+ * glow are `bind:value` form fields, and re-reading those under the user's
+ * fingers is exactly why `pages/Settings.svelte` reads `/api/output` only once
+ * on arrival. The palette is different — the editor holds its own draft for
+ * the duration of a gesture (`components/GradientEditor.svelte`), so a poll
+ * landing mid-drag cannot snap a handle back.
+ */
+export async function refreshPalette(): Promise<void> {
+  const d = get(device);
+  if (!d) return;
+  try {
+    const o = await d.output();
+    paletteSupported.set(o.palette !== undefined);
+    paletteFlat.set(o.palette ?? []);
+    paletteAmount.set(o.paletteAmount ?? 100);
+  } catch {
+    /* older firmware without /api/output */
+  }
+}
+
 /** Where the `w×h×d` of the lattice this browser installed is remembered.
  *  `GET /api/map` reports a COUNT, so without it a reload turns
  *  `8×8×8 lattice` back into `512 px custom map` (Gitea #538). It is only

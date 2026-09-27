@@ -2628,19 +2628,22 @@ try {
   // free — on the Athom it did not, and a second client (or the page's own
   // next poll) was refused. Two properties keep it there: `/api/status` is
   // fetched ONCE per second by the session poll (the tab used to re-GET the
-  // whole body at 0.5 Hz as well, just to read `live`), and the tab's three
+  // whole body at 0.5 Hz as well, just to read `live`), and the tab's four
   // reads go one at a time rather than as a burst that fills both gate slots.
   {
     const inflight = new Map();
     const counts = new Map();
     let maxConcurrent = 0;
-    let trioOverlap = 0;
-    const isTrio = (u) => /\/api\/(mqtt|sync|clock)$/.test(u);
+    let overlaps = 0;
+    // `/api/output` joined the chain with #787 §1 (the palette half of it is
+    // polled so an edit cannot push a stale palette), so it is one of the
+    // reads that must not overlap the others either.
+    const isTabRead = (u) => /\/api\/(output|mqtt|sync|clock)$/.test(u);
     const onReq = (r) => {
       inflight.set(r, r.url());
       maxConcurrent = Math.max(maxConcurrent, inflight.size);
-      const n = [...inflight.values()].filter(isTrio).length;
-      if (n > 1) trioOverlap++;
+      const n = [...inflight.values()].filter(isTabRead).length;
+      if (n > 1) overlaps++;
       const key = new URL(r.url()).pathname;
       counts.set(key, (counts.get(key) ?? 0) + 1);
     };
@@ -2664,10 +2667,16 @@ try {
       mqtt >= 3 && mqtt <= 7,
       `${mqtt} mqtt in 10 s`,
     );
+    const output = counts.get("/api/output") ?? 0;
+    check(
+      "settings poll: the palette re-read is one of them, not a burst (#787 §1)",
+      output >= 3 && output <= 8,
+      `${output} output in 10 s`,
+    );
     check(
       "settings poll: the tab's reads never overlap each other",
-      trioOverlap === 0,
-      `${trioOverlap} overlaps`,
+      overlaps === 0,
+      `${overlaps} overlaps`,
     );
     check(
       "settings poll: never more than the gate's two requests in flight",
@@ -2756,6 +2765,49 @@ try {
       p4.palette.length === 0 && p4.paletteAmount === 0,
       JSON.stringify(p4),
     );
+  }
+
+  // the editor RE-READS the device's palette (Gitea #787 §1). The inventory's
+  // own walk: the device's palette changes underneath the open tab (another
+  // client, a restore, a second tab), and the next edit is one arrow-key
+  // nudge — which POSTs the whole record. Before the fix the page still held
+  // the reading it opened with and that single nudge pushed the STALE colours
+  // and the stale amount over the device's real state, silently. The tab polls
+  // `/api/output`'s palette half at 0.5 Hz now, so the editor is never more
+  // than one poll behind.
+  {
+    await fetch(`${DEV}/api/output/palette`, {
+      method: "POST",
+      body: "40 0 0 0 255 128 255 255 0",
+    });
+    await sleep(3000); // ≥ one 2 s Settings poll
+    const seen = await page.$$eval('[data-role="out-palette-stop"]', (els) =>
+      els.map((el) => el.getAttribute("aria-valuetext")),
+    );
+    check(
+      "palette: the editor re-reads a palette changed out of band (#787 §1)",
+      seen.length === 2 &&
+        (seen[0] ?? "").includes("#0000ff") &&
+        (seen[1] ?? "").includes("#ffff00"),
+      JSON.stringify(seen),
+    );
+    const amt = await page.$eval('[data-role="out-palette-amount"]', (el) => el.value);
+    check("palette: the amount field re-reads with it (#787 §1)", amt === "40", String(amt));
+    // one ArrowRight on the first handle: the POST it makes must carry the
+    // DEVICE's colours and amount, with only the nudge on top
+    await page.$$eval('[data-role="out-palette-stop"]', (els) => els[0].focus());
+    await page.keyboard.press("ArrowRight");
+    await sleep(700);
+    const p5 = await (await fetch(`${DEV}/api/output`)).json();
+    check(
+      "palette: an edit after that change does not clobber it (#787 §1)",
+      p5.paletteAmount === 40 &&
+        JSON.stringify(p5.palette) === JSON.stringify([1, 0, 0, 255, 128, 255, 255, 0]),
+      JSON.stringify(p5),
+    );
+    await page.screenshot({ path: `${shotDir}/device-e2e-palette-reread.png` });
+    await fetch(`${DEV}/api/output/palette`, { method: "DELETE" });
+    await sleep(400);
   }
   // ---- the map program's screen (A10, Gitea #471) ----
   // The console reaches it from Settings → LED layout → "Custom map program →"
