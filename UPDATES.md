@@ -1,5 +1,75 @@
 # Update log
 
+## 2026-09-27 — the colour ramp editor, redesigned from scratch (#787, #537, #697, #748)
+
+Jeremy, 2026-09-26: *"a complete UI redesign of color ramp (it is a
+horrible/confusing interface, and very buggy)"*. Step 1 of #787 walked the old
+control in real chromium and recorded **21 defects**; step 2 drew nine mock
+frames (S8a–S8i) and put two questions to Jeremy; he answered them on
+2026-09-27 and this is steps 3 and 4.
+
+**One component.** `components/ColorRamp.svelte` replaces
+`components/GradientEditor.svelte` and is mounted by both homes the app has for
+a ramp — Settings › Advanced › Output processing › **Color ramp** and the scene
+editor's per-layer **Color ramp** — so the two cannot disagree again (#697).
+The **bar is the model**: click empty bar to add a stop there, drag to move,
+drag off to remove, click to select. There is no per-stop row list; there is
+one row, for the one selected stop, with the app's own `ColorPicker` (never
+`<input type="color">`, #537), a numeric position and *Remove stop*. The
+selection is the stop's **identity**, not its index. Handles are 12 px of paint
+in a **24×24** hit box, and stops within 3 px collapse to one handle with a
+count badge and a *next of N* button. What the stage does is **body text**, not
+a hover title. The preview is a labelled **pair** — what the pattern renders,
+and what the LEDs do with the ramp at the current amount — with the amount
+**slider** beside it, falling back to a brightness wedge, labelled as one, when
+nothing is running. Six presets, *Reset*, a real **Undo** (`Ctrl-Z`), and one
+destructive action that confirms and never touches the amount. Which of #563's
+modes the editor is in is printed on it; if the device's ramp changes under an
+editor with local edits, a strip offers *Keep mine* / *Load theirs* and
+**nothing is sent until the user chooses**. One legality rule, printed and
+enforced at both mounts: a ramp is **0 stops (off) or at least 2 — never 1**.
+
+**The engine clamps at both ends now** — Jeremy's answer to the mock's open
+question (option A, frame S8c). `outpipe::fill_palette_lut` clamps its sample
+position to the last stop, so above it the end colour continues instead of
+cutting to black; every caller inherits it (the device palette, a pattern's
+`setOutputPalette`, and `compose.rs::ensure_lut`'s per-layer scene ramp — one
+semantic, one component, which was the second question). **`vm::sample_palette`
+is untouched**: its black-above-the-last-stop edge is bug-for-bug Pixel Blaze
+for `paint()`/`setPalette()`, established against the oracle on 2026-08-22 and
+pinned by `palette_edges_match_pixelblaze`; `setOutputPalette` is a documented
+Luxel extension with no PB behaviour to match. **Stored data is left alone and
+there is no migration**: a stored palette or scene ramp whose last stop is
+below 255 now renders that colour above it rather than black — brighter, not
+darker. Appending a black stop at 255 on first read would silently rewrite the
+user's data and spend one of 32 stop slots for the sake of a region most ramps
+never use, and a format bump has real deploy consequences (#643). The cut to
+black is still one black stop away, or the *To black* preset. The change is
+written down in docs/api.md, docs/lang.md and docs/spec/scenes.md.
+
+**The browser gets the real table.** New `lx_palette_lut(ptr, n_stops,
+amount_pct)` wasm export, cooked by `fill_palette_lut` and blended by
+`palette_remap_frame` themselves, so the bar and both preview cells are the
+engine's own arithmetic rather than a second implementation of it (#748).
+`lib/gradient.ts`'s `rampLut` stays as the synchronous fallback for the first
+paint before the module is up, and `web/tests/paletteLut.test.mjs` pins the two
+against each other — a single stop, stops inside 0..255, a zero-width span,
+adjacent positions, falling channels, the 32-stop cap, amounts 0/1/33/50/99/100
+and 50 seeded-random shapes, all 768 bytes each. That test found a real
+divergence on the way in (two stops sharing a position resolved to opposite
+ends), which is exactly what it exists for.
+
+**A ramp edit no longer restarts the layer's clock.** `SceneRenderer.setRamps()`
+re-installs the scene and rebinds the engines it already holds instead of
+recompiling them, and `SceneEditor` routes a ramp-only wire change through it
+immediately rather than through the 1 s coalesced rebuild — dragging a colour
+stop used to throw every pattern in the scene back to t = 0 a second later.
+
+All 21 inventory items are gone (item by item in the PR); the eight "confusing
+by design" decisions are answered except the one that is a different ticket
+(Settings being four levels deep). Verified against the mock with `mockdiff`,
+and every repro re-driven in real chromium at both mounts.
+
 ## 2026-09-27 — a builtin sprite and scene library, browsable like the patterns (#785)
 
 Jeremy, 2026-09-26: *"a builtin scene and sprite library (just like the pattern

@@ -391,6 +391,36 @@ const litPixels = (handle, n) => {
   e.lx_comp_free(slow);
 }
 
+// ---- the colour ramp's cooked table across the ABI (Gitea #748) ----
+//
+// `lx_palette_lut` is handle-free and cooks through the engine's OWN
+// `outpipe::fill_palette_lut` + `palette_remap_frame`, so what is worth
+// asserting here is that the 768 bytes come back across the C ABI and carry
+// the #787 edge rule: the ramp clamps at BOTH ends.
+{
+  const stops = new Uint8Array([0, 0x1b, 0x0e, 0x3a, 96, 0xc2, 0x3a, 0x6b, 176, 0xf7, 0xe0, 0x8a]);
+  const ptr = e.lx_alloc(stops.length);
+  mem().set(stops, ptr);
+  const at = e.lx_palette_lut(ptr, stops.length / 4, 100);
+  const lut = [...mem().slice(at, at + 768)];
+  e.lx_dealloc(ptr, stops.length);
+  assert.strictEqual(lut.length, 768);
+  const top = lut.slice(176 * 3, 176 * 3 + 3);
+  assert.ok(top.some((c) => c !== 0), "the last stop's colour must not be black");
+  for (let i = 176; i <= 255; i++) {
+    assert.deepStrictEqual(
+      lut.slice(i * 3, i * 3 + 3),
+      top,
+      `entry ${i} must continue the last stop's colour, not cut to black (Gitea #787)`,
+    );
+  }
+  // amount 0 is the identity blend: every entry is the greyscale it started as
+  const zero = e.lx_palette_lut(0, 0, 0);
+  const grey = [...mem().slice(zero, zero + 768)];
+  assert.deepStrictEqual(grey.slice(0, 3), [0, 0, 0]);
+  assert.deepStrictEqual(grey.slice(255 * 3, 255 * 3 + 3), [255, 255, 255]);
+}
+
 e.lx_free(h);
 e.lx_free(h2);
 e.lx_free(h3);

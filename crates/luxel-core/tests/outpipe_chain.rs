@@ -117,6 +117,12 @@ fn frame(n: usize) -> Vec<[u8; 3]> {
 
 const STOPS: [(u8, [u8; 3]); 3] = [(0, [0, 0, 0]), (128, [0, 200, 40]), (255, [180, 0, 255])];
 
+/// A palette whose LAST stop sits below 255 — the #787 shape. The ramp
+/// clamps at both ends, so the brightest pixels continue the last colour
+/// instead of cutting to black (`outpipe::fill_palette_lut`).
+const INSIDE_STOPS: [(u8, [u8; 3]); 3] =
+    [(0, [27, 14, 58]), (96, [194, 58, 107]), (176, [247, 224, 138])];
+
 /// Every setting combination worth distinguishing, each named so a failure
 /// says which stage diverged.
 fn cases() -> Vec<(&'static str, ChainSettings)> {
@@ -156,9 +162,20 @@ fn run_both(
     grid: Option<GridMap>,
     model: PowerModel,
 ) -> (Vec<[u8; 3]>, Vec<[u8; 3]>) {
+    run_both_with(px, s, brightness5, grid, model, &STOPS)
+}
+
+fn run_both_with(
+    px: &[[u8; 3]],
+    s: &ChainSettings,
+    brightness5: u8,
+    grid: Option<GridMap>,
+    model: PowerModel,
+    stops: &[(u8, [u8; 3])],
+) -> (Vec<[u8; 3]>, Vec<[u8; 3]>) {
     let mut chain = DeviceChain::new();
     let new = chain
-        .apply(px, s, brightness5, grid, model, || STOPS.to_vec())
+        .apply(px, s, brightness5, grid, model, || stops.to_vec())
         .to_vec();
 
     let mut buf = Vec::new();
@@ -178,7 +195,7 @@ fn run_both(
         s.glow_pct,
         s.palette_pct,
         s.palette_epoch,
-        &STOPS,
+        stops,
         model,
     )
     .to_vec();
@@ -236,6 +253,39 @@ fn identical_at_low_brightness_where_the_cap_bites_differently() {
             let (old, new) = run_both(&px, &s, b5, None, PowerModel::Strip);
             assert_eq!(old, new, "brightness {b5}, {name}");
         }
+    }
+}
+
+/// Gitea #787: a stored palette whose last stop is below 255, driven through
+/// the WHOLE chain. Both halves cook through `outpipe::fill_palette_lut`, so
+/// old-vs-new stays byte-identical; what this pins is the semantic the clamp
+/// gives the pipe — the brightest pixels come out as the last stop's colour,
+/// not black.
+#[test]
+fn the_ramp_continues_the_last_stop_through_the_whole_chain() {
+    // A ramp-only chain: no gamma, no cap, rgb order, so `apply` is identity
+    // and what lands on the wire is exactly the cooked table.
+    let s = ChainSettings { palette_pct: 100, palette_epoch: 11, ..ChainSettings::default() };
+    // luma([i,i,i]) == i, so these pixels index the table at 176..255 — the
+    // plateau above the last stop — plus one inside the ramp as a control.
+    let px: Vec<[u8; 3]> = [176u8, 200, 255, 96].iter().map(|v| [*v; 3]).collect();
+    let (old, new) = run_both_with(&px, &s, 31, None, PowerModel::Strip, &INSIDE_STOPS);
+    assert_eq!(old, new, "the chain and the frozen oracle still agree");
+
+    let top = new[0];
+    assert_ne!(top, [0, 0, 0], "the last stop's colour, not black");
+    for (i, got) in new[..3].iter().enumerate() {
+        assert_eq!(*got, top, "pixel {i} (luma {}) continues the last stop", px[i][0]);
+    }
+    // and the control inside the ramp is the middle stop, so the plateau is
+    // genuinely the clamp and not a flat table
+    assert_ne!(new[3], top, "luma 96 is still the middle stop");
+
+    // every case in the matrix also stays byte-identical on these stops
+    for (name, s) in cases() {
+        let f = frame(128);
+        let (old, new) = run_both_with(&f, &s, 31, None, PowerModel::Strip, &INSIDE_STOPS);
+        assert_eq!(old, new, "inside-stops, {name}");
     }
 }
 

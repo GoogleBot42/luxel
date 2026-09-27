@@ -56,6 +56,18 @@ The whole page was reshaped by A8 (Gitea #469, v2): Device (brightness first)
 · LED layout · WiFi, then one **Advanced** list whose rows each state their
 value while collapsed. Everything below is on the new page.
 
+- [ ] **The colour ramp editor, redrawn from scratch** (Gitea #787 — this is
+  the one you asked for: *"a complete UI redesign of color ramp"*). Settings ›
+  Advanced › Output processing › **Color ramp** › `Edit…`, and the same control
+  on a scene pattern layer. Worth doing on the panel with something running:
+  click the bar to add a stop, drag one, drag one off the bottom to delete it,
+  open a stop's swatch, try a preset, `Ctrl-Z`, and watch the right-hand
+  preview cell against the LEDs — it is supposed to be what the panel shows.
+  **The semantic changed**: above the last stop the ramp now continues the
+  last colour instead of cutting to black (you picked that on 2026-09-27).
+  A stored ramp of yours whose last stop is below 255 will look different —
+  brighter at the top — and the *To black* preset is the old behaviour said
+  out loud.
 - [ ] **The ranked page itself** — does the order match what you actually open
   Settings for? Brightness is the first control; the Advanced rows should be
   scannable without expanding any of them.

@@ -2213,4 +2213,36 @@ mod tests {
             "an in-place ramp holds the LUT and no frame scratch"
         );
     }
+
+    /// Gitea #787: the per-layer scene ramp is the SAME stage as the device
+    /// output palette, so a ramp whose last stop is below 255 clamps here
+    /// too — and byte for byte the same way, because `ensure_lut` cooks
+    /// through `outpipe::fill_palette_lut` rather than re-deriving it.
+    #[test]
+    fn a_scene_ramp_clamps_above_its_last_stop_like_the_device_palette() {
+        let stops: Vec<(u8, [u8; 3])> =
+            vec![(0, [27, 14, 58]), (96, [194, 58, 107]), (176, [247, 224, 138])];
+        let ramp = Ramp { pct: 100, stops: stops.clone() };
+        let mut lut: Option<(u32, Box<[[u8; 3]; 256]>)> = None;
+        ensure_lut(&ramp, &mut lut, 1);
+        let cooked = lut.unwrap().1;
+
+        // the plateau: every entry above the last stop continues its colour
+        let top = cooked[176];
+        assert_ne!(top, [0, 0, 0], "the last stop's colour, not black");
+        for i in 176..=255usize {
+            assert_eq!(cooked[i], top, "scene ramp entry {i}");
+        }
+        assert_ne!(cooked[96], top, "inside the ramp is still interpolated");
+
+        // and the device path cooks the identical table from the same stops
+        let b = |v: u8| crate::fixed::Fx::from_raw(((v as i32) << 16) / 255);
+        let pal: Vec<(crate::fixed::Fx, [crate::fixed::Fx; 3])> = stops
+            .iter()
+            .map(|(p, c)| (b(*p), [b(c[0]), b(c[1]), b(c[2])]))
+            .collect();
+        let mut device = [[0u8; 3]; 256];
+        crate::outpipe::fill_palette_lut(&pal, &mut device);
+        assert_eq!(*cooked, device, "scene ramp == device palette, byte for byte");
+    }
 }

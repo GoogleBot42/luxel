@@ -277,6 +277,15 @@ frame at `pct·256/100` — the engine's own buffer is never written. This is
 the same output-palette stage the Settings page applies device-wide, per
 layer.
 
+**The ramp clamps at both ends.** Below the first stop the first stop's
+colour holds; above the last stop the last stop's colour continues. A ramp
+whose last stop is at `pos` 176 paints 176..255 in that colour — cutting the
+brightest pixels to black is said explicitly, with a black last stop. This is
+a property of `outpipe::fill_palette_lut`, so the device output palette, a
+pattern's `setOutputPalette` and this per-layer ramp cannot disagree; it is
+*not* `paint()`'s edge rule, whose black above the last stop is Pixel Blaze's
+own and stays (Gitea #787).
+
 ## 3. `/api/scenes` JSON
 
 ```json

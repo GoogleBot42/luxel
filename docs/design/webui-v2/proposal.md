@@ -729,17 +729,19 @@ modes the editor is in (live, or saved with the scene) is printed on it.
 |---|---|
 | **S8a** | Settings › Advanced › Output processing › *Color ramp*, editor open, a stop selected — the whole control. |
 | **S8b** | The stop swatch open into `components/ColorPicker.svelte`, and the mid-gesture write contract (no trailing snapshot commit). |
-| **S8c** / **S8d** | *Outside the stops*, drawn both ways: **A** clamp both ends · **B** black above the last stop (what ships today). |
+| **S8c** / **S8d** | *Outside the stops*, drawn both ways: **A** clamp both ends (CHOSEN, and what ships since #787) · **B** black above the last stop. |
 | **S8e** / **S8f** | The scene layer's ramp row collapsed, and the same editor expanded in the 320 px inspector (one column, save-based mode line). |
 | **S8g** | 390 px — every hit target ≥ 24 px (§5.7, #703). |
 | **S8h** | No ramp · nothing running (the two-stop minimum) · at the 32-stop cap with stacked stops. |
 | **S8i** | The three #563 modes, the device-changed-underneath strip, and the two confirms. |
 
-**Open questions for Jeremy** (both in `ramp-editor.md` in full): **Q1** — outside the stops,
-clamp both ends (S8c, recommended) or keep black above the last stop (S8d, what ships)?
-**Q2** — whichever Q1 picks, does it apply to the per-layer scene ramp as well as the device
-palette? The mock assumes yes; one editor with two semantics is how the current control ended
-up with three different minimum-stop rules.
+**Both questions are answered** (Jeremy, 2026-09-27). **Q1 — option A: the ramp clamps at BOTH
+ends**; above the last stop the end colour continues instead of cutting to black, and the old
+behaviour survives only as the *To black* preset. **Q2 — yes**: the device palette and the
+per-layer scene ramp are one semantic and one component. Shipped in #787 —
+`web/src/components/ColorRamp.svelte` plus a one-line clamp in
+`outpipe::fill_palette_lut`; S8c is the frame that specifies it and S8d is the option that was
+not taken.
 
 ## 6. Text in patterns (D5)
 

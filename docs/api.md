@@ -1733,6 +1733,18 @@ table.
   `rgb rbg grb gbr brg bgr`.
 - The device palette **composes with** a pattern's own `setOutputPalette`
   rather than replacing it.
+- **Both edges of the palette clamp.** Entries below the first stop take the
+  first stop's colour and entries above the last stop continue the last
+  stop's, so a palette whose last stop is at `pos` 176 paints every pixel
+  from luma 176 up in that colour. To make the brightest pixels go dark, end
+  the palette with a black stop.
+  *Changed 2026-09-27 (Gitea #787).* Before that, luma above the last stop
+  cut to **black**. The wire format is untouched and stored palettes are left
+  exactly as they are — no migration, no rewrite — so a device whose stored
+  last stop is below 255 renders differently after the update than before,
+  and the fix if that is unwanted is to add the black stop the old behaviour
+  implied. (`paint()`/`setPalette()` in a pattern still go black above the
+  last stop; that edge is Pixel Blaze's own and is preserved — docs/lang.md.)
 - `POST /api/map` takes `dims` (2 or 3) followed by `dims` raw 16.16 coordinates
   per pixel, **or `grid <w> <h>`** for a procedural row-major grid — no
   per-pixel body, and zero heap on the device (a 64x64 panel's map is 48 KB

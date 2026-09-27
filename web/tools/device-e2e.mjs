@@ -260,10 +260,91 @@ if (!grid2d || !strip1d) {
 /** A real mouse click on a Settings control, scrolled into view first — the
  * Output card sits far down a scrolling panel, where a bare `page.click`
  * fails with "Node is either not clickable or not an HTMLElement". */
-async function clickRole(page, role) {
-  const sel = `[data-role="${role}"]`;
+async function clickSel(page, sel) {
   await page.$eval(sel, (el) => el.scrollIntoView({ block: "center" }));
   await page.click(sel);
+}
+
+async function clickRole(page, role) {
+  await clickSel(page, `[data-role="${role}"]`);
+}
+
+/**
+ * Expand the colour-ramp editor (`components/ColorRamp.svelte`, Gitea #787).
+ * Idempotent.
+ *
+ * It opens COLLAPSED at both of its mounts, and the collapsed row carries only
+ * `-collapsed` / `-preview` / `-ticks` / `-summary` / `-edit`: the bar, the
+ * handles, the amount slider, the presets and every action are inside
+ * `-card` and do not exist in the DOM until this has run. `-edit` is no longer
+ * a toggle either — it exists only while collapsed, and `-done` only while
+ * open — so a harness cannot get away with clicking it twice.
+ *
+ * `out-palette` only: the scene mount's teaser reuses `scene-ramp-edit` for
+ * "make me a ramp", which lands on the COLLAPSED row rather than the card.
+ */
+async function expandRamp(pg, prefix = "out-palette") {
+  const sel = `[data-role="${prefix}-edit"]`;
+  if ((await pg.$(sel)) === null) return;
+  await clickSel(pg, sel);
+  await pg.waitForSelector(`[data-role="${prefix}-card"]`, { timeout: 5000 });
+}
+
+/**
+ * Press a ramp handle for real, and leave it focused.
+ *
+ * Since #787 a stop is selected by its IDENTITY, off a `pointerdown` on its
+ * 24x24 hit box — the bar and its handles are one pointer surface. So the
+ * `el.click()` this harness used before selects nothing at all (a MouseEvent
+ * is not a PointerEvent and `onDown` never sees it), and every edit through
+ * the per-stop row then silently lands on whichever stop WAS selected — which
+ * is `+ Add stop`'s new one, not the one the test meant.
+ */
+async function pressStop(pg, prefix, nth = 0) {
+  const sel = `[data-role="${prefix}-stop"]`;
+  await pg.$$eval(sel, (els, i) => els[i]?.scrollIntoView({ block: "center" }), nth);
+  await sleep(250);
+  const at = await pg.$$eval(
+    sel,
+    (els, i) => {
+      const r = els[i]?.getBoundingClientRect();
+      return r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null;
+    },
+    nth,
+  );
+  if (at === null) return false;
+  await pg.mouse.move(at.x, at.y);
+  await pg.mouse.down();
+  await pg.mouse.up();
+  await pg.$$eval(sel, (els, i) => els[i]?.focus(), nth);
+  await sleep(250);
+  return true;
+}
+
+/**
+ * How many writes the ramp editor sends the device over one action.
+ *
+ * `POST /api/output/palette` is an edit and `DELETE` is a clear; the Settings
+ * tab's own `GET /api/output` poll is neither. Counting is the only way to
+ * assert the two properties #787 is built on that a final state cannot show:
+ * that a key press which moves nothing writes NOTHING (inventory item 11 —
+ * five identical POSTs of an unchanged palette in the repro), and that a
+ * confirm strip or a conflict strip holds every write back until the user
+ * chooses (items 1 and 3).
+ */
+async function countPaletteWrites(pg, act, settle = 800) {
+  let n = 0;
+  const onReq = (r) => {
+    if (r.method() !== "GET" && new URL(r.url()).pathname === "/api/output/palette") n++;
+  };
+  pg.on("request", onReq);
+  try {
+    await act();
+    await sleep(settle);
+  } finally {
+    pg.off("request", onReq);
+  }
+  return n;
 }
 
 /**
@@ -2685,42 +2766,129 @@ try {
     );
   }
 
-  // device output palette (Gitea #139): the Output card's editor drives
-  // POST/DELETE /api/output/palette, and GET /api/output echoes it back
+  // device output palette (Gitea #139), through the editor #787 replaced it
+  // with: the Output card mounts `components/ColorRamp.svelte` under the
+  // `out-palette` prefix and it drives POST/DELETE /api/output/palette, which
+  // GET /api/output echoes back. `GradientEditor.svelte` is gone, and with it
+  // every shape this section used to assume — the editor opens COLLAPSED, a
+  // ramp is 0 stops or at least 2 (so the way in from empty is a PRESET, not
+  // `+ Add stop`), `+ Add stop` lands in the widest GAP, the amount is a
+  // range input, and `Clear ramp` asks in an inline strip.
   {
+    await openAdv(page, "adv-output");
     const p0 = await (await fetch(`${DEV}/api/output`)).json();
     check(
       "palette: absent by default",
       Array.isArray(p0.palette) && p0.palette.length === 0 && p0.paletteAmount === 0,
       JSON.stringify(p0.palette),
     );
-    // "add stop" twice, then recolor the second one — real clicks on real
-    // controls, the way a user builds a ramp
-    await clickRole(page, "out-palette-add");
-    await sleep(300);
-    await clickRole(page, "out-palette-add");
-    await sleep(400);
+
+    // ---- S8e: the collapsed row -----------------------------------------
+    // A console shows the ramp as a summary until asked: the LUT painted as a
+    // canvas, read-only ticks, the stop count and the amount in words, and
+    // `Edit…`. Nothing here is draggable.
+    const summary0 = await evalOr(
+      page,
+      '[data-role="out-palette-summary"]',
+      (el) => (el.textContent ?? "").trim(),
+      "",
+    );
+    check(
+      "palette: the collapsed row states the stop count and the amount (S8e)",
+      /^no stops · 0 % — recolors the frame/.test(summary0),
+      summary0,
+    );
+    check(
+      "palette: collapsed, there is no card and no handle to drag (S8e)",
+      (await page.$('[data-role="out-palette-collapsed"]')) !== null &&
+        (await page.$('[data-role="out-palette-ticks"]')) !== null &&
+        (await page.$('[data-role="out-palette-card"]')) === null &&
+        (await page.$('[data-role="out-palette-stop"]')) === null,
+    );
+    await page.$eval('[data-role="out-palette-collapsed"]', (el) =>
+      el.scrollIntoView({ block: "center" }),
+    );
+    await sleep(250);
+    await page.screenshot({ path: `${shotDir}/device-e2e-palette-collapsed.png` });
+    await clickRole(page, "out-palette-edit");
+    await page.waitForSelector('[data-role="out-palette-card"]', { timeout: 5000 });
+    // `-edit` is not a toggle any more: it exists only collapsed and `-done`
+    // only open, so "click it twice" can no longer close what it opened.
+    check(
+      "palette: `Edit…` expands it in place, and `-edit` gives way to `Done`",
+      (await page.$('[data-role="out-palette-collapsed"]')) === null &&
+        (await page.$('[data-role="out-palette-edit"]')) === null &&
+        (await page.$('[data-role="out-palette-done"]')) !== null,
+    );
+
+    // ---- an EMPTY ramp is its own state (items 16/21) --------------------
+    // No bar (there is nothing honest to paint), no amount slider, no Clear —
+    // and `+ Add stop` disabled BECAUSE a ramp is never 1 stop. The way in is
+    // a preset chip, which is what the action row says.
+    const fromEmpty = await evalOr(
+      page,
+      '[data-role="out-palette-add"]',
+      (el) => ({
+        disabled: el.hasAttribute("disabled"),
+        reason: el.getAttribute("data-reason") ?? "",
+      }),
+      null,
+    );
+    check(
+      "palette: from empty, `+ Add stop` is disabled with the two-stop reason (#787 item 21)",
+      fromEmpty !== null && fromEmpty.disabled && /at least two stops/.test(fromEmpty.reason),
+      JSON.stringify(fromEmpty),
+    );
+    check(
+      "palette: an empty ramp has no bar, no amount slider and no Clear",
+      (await page.$('[data-role="out-palette-empty"]')) !== null &&
+        (await page.$('[data-role="out-palette-amount"]')) === null &&
+        (await page.$('[data-role="out-palette-clear"]')) === null,
+    );
+    await clickSel(page, '[data-role="out-palette-preset"][data-preset="Mono"]');
+    await sleep(700);
     const p1 = await (await fetch(`${DEV}/api/output`)).json();
     check(
-      "palette: two stops installed from the editor",
-      p1.palette.length === 8 && p1.palette[0] === 0 && p1.palette[4] === 64,
+      "palette: a preset chip is the way in from empty, and it installs a legal ramp",
+      JSON.stringify(p1.palette) === JSON.stringify([0, 0, 0, 0, 255, 255, 255, 255]),
       JSON.stringify(p1.palette),
     );
-    // Recolour stop 0. Since Gitea #734 the palette is the shared
-    // `GradientEditor`, and a stop's colour is the app's own `ColorPicker`,
-    // not an `<input type="color">` — so this drives the real controls:
-    // open the stop editor (stop 0 is `picked` by default), open the
-    // picker's popover from its swatch, and type a hex. The editor commits
-    // on a 250 ms trailing timer (a ColorPicker drag is a pointermove storm
-    // and Settings must not POST the palette per move), hence the wait.
-    // Select stop 0 EXPLICITLY, and note that CLICKING A STOP OPENS THE
-    // EDITOR (`GradientEditor.svelte:461`) while `out-palette-edit` is a
-    // TOGGLE (:488) — so doing both closes it again. Two traps in one line:
-    // adding a stop selects the one just added, so the editor opens on stop 1
-    // and a test that assumes 0 silently recolours the wrong one (it did —
-    // the red landed at palette[5..7], not [1..3]).
-    await page.$$eval('[data-role="out-palette-stop"]', (els) => els[0].click());
-    await sleep(250);
+
+    // ---- `+ Add stop` lands in the widest GAP (item 5) ------------------
+    // It used to be `min(255, last.pos + 64)`, so from the fifth stop on every
+    // new one landed at 255 exactly on top of the previous one — thirty
+    // invisible stops and a ramp at its cap with two handles. The rule now is
+    // "the middle of the widest gap", and the widest gap is always BETWEEN two
+    // stops, so a new stop is always visible and always draggable.
+    await clickRole(page, "out-palette-add");
+    await sleep(600);
+    await clickRole(page, "out-palette-add");
+    await sleep(600);
+    const p2 = await (await fetch(`${DEV}/api/output`)).json();
+    const pos2 = p2.palette.filter((_, i) => i % 4 === 0);
+    check(
+      "palette: `+ Add stop` lands strictly BETWEEN two stops, never past the last (#787 item 5)",
+      pos2.length === 4 &&
+        pos2[0] === 0 &&
+        pos2[3] === 255 &&
+        pos2.every((v, i) => i === 0 || v > pos2[i - 1]),
+      JSON.stringify(pos2),
+    );
+
+    // Recolour the FIRST stop. A stop's colour is the app's own `ColorPicker`
+    // (unchanged by #787), and the editor commits on a 250 ms trailing timer —
+    // a ColorPicker drag is a pointermove storm and Settings must not POST the
+    // palette per move — hence the wait. Selection is the trap this section
+    // was written around and still is: `+ Add stop` selects the stop it just
+    // added, so the per-stop row is showing stop 1 or 2, and the press below
+    // is what moves it back to stop 0 (see `pressStop`).
+    await pressStop(page, "out-palette", 0);
+    const selPos = await evalOr(page, '[data-role="out-palette-pos"]', (el) => el.value, "");
+    check(
+      "palette: a real press on a handle selects THAT stop by identity (#787 item 8)",
+      selPos === "0",
+      selPos,
+    );
     await page.click('[data-role="out-palette-color"] [data-role="color-swatch"]');
     await sleep(200);
     await page.$eval('[data-role="color-hex"]', (el) => {
@@ -2729,21 +2897,78 @@ try {
       el.dispatchEvent(new Event("input", { bubbles: true }));
     });
     await sleep(700);
-    const p2 = await (await fetch(`${DEV}/api/output`)).json();
+    await page.keyboard.press("Escape");
+    await sleep(200);
+    const p3 = await (await fetch(`${DEV}/api/output`)).json();
     check(
       "palette: color picker writes the stop",
-      p2.palette[1] === 255 && p2.palette[2] === 0 && p2.palette[3] === 0,
-      JSON.stringify(p2.palette),
+      p3.palette[1] === 255 && p3.palette[2] === 0 && p3.palette[3] === 0,
+      JSON.stringify(p3.palette),
     );
+
+    // The amount is an `<input type="range">` now (S8a stands it beside the
+    // preview pair), so it takes BOTH events: `on:input` is the local frame
+    // and `on:change` is the one committed write.
     await page.$eval('[data-role="out-palette-amount"]', (el) => {
       el.value = "60";
       el.dispatchEvent(new Event("input", { bubbles: true }));
       el.dispatchEvent(new Event("change", { bubbles: true }));
     });
-    await sleep(400);
-    const p3 = await (await fetch(`${DEV}/api/output`)).json();
-    check("palette: amount field applies", p3.paletteAmount === 60, JSON.stringify(p3));
+    await sleep(600);
+    const p4 = await (await fetch(`${DEV}/api/output`)).json();
+    check("palette: the amount slider applies", p4.paletteAmount === 60, JSON.stringify(p4.paletteAmount));
+    const amtVal = await evalOr(
+      page,
+      '[data-role="out-palette-amount-val"]',
+      (el) => (el.textContent ?? "").trim(),
+      "",
+    );
+    check("palette: …and the readout beside it says so", amtVal === "60 %", amtVal);
     await page.screenshot({ path: `${shotDir}/device-e2e-output-palette.png` });
+
+    // ---- the two-stop floor (item 3) -------------------------------------
+    // A removal removes a stop or is REFUSED; it never escalates into
+    // destroying the whole ramp, which is what `Clear ramp` is for. At the
+    // floor the button is §5.7's deliberate exception — disabled WITH a
+    // `data-reason` — and the ramp survives the attempt.
+    for (let i = 0; i < 2; i++) {
+      await pressStop(page, "out-palette", 1);
+      await clickRole(page, "out-palette-remove");
+      await sleep(500);
+    }
+    const p5 = await (await fetch(`${DEV}/api/output`)).json();
+    check(
+      "palette: `Remove stop` removes one stop at a time",
+      p5.palette.length === 8,
+      `${p5.palette.length / 4} stops`,
+    );
+    await pressStop(page, "out-palette", 1);
+    const floor = await evalOr(
+      page,
+      '[data-role="out-palette-remove"]',
+      (el) => ({
+        disabled: el.hasAttribute("disabled"),
+        reason: el.getAttribute("data-reason") ?? "",
+      }),
+      null,
+    );
+    const floorWhy = await evalOr(
+      page,
+      '[data-role="out-palette-reason"]',
+      (el) => (el.textContent ?? "").replace(/\s+/g, " ").trim(),
+      "",
+    );
+    const p6 = await (await fetch(`${DEV}/api/output`)).json();
+    check(
+      "palette: at two stops a removal is refused with a reason, and the ramp survives",
+      floor !== null &&
+        floor.disabled &&
+        /at least 2 stops/.test(floor.reason) &&
+        /Clear ramp/.test(floorWhy) &&
+        p6.palette.length === 8,
+      JSON.stringify({ floor, floorWhy: floorWhy.slice(0, 60), n: p6.palette.length }),
+    );
+
     // the API rejects the shapes the record can't hold
     for (const [name, body] of [
       ["ragged group", "50 0 1 2"],
@@ -2756,14 +2981,139 @@ try {
       ).json();
       check(`palette: rejects ${name}`, bad.ok === false, JSON.stringify(bad));
     }
-    // clear button → DELETE
-    await clickRole(page, "out-palette-clear");
+
+    // ---- `Clear ramp` asks first, in an INLINE strip ---------------------
+    // The mock draws a confirm strip inside the card (S8a), not the console's
+    // `Dialog` — so `waitDialog`/`acceptDialog` do not apply here — and
+    // nothing reaches the device until it is accepted.
+    const asked = await countPaletteWrites(page, () => clickRole(page, "out-palette-clear"));
+    const strip = (await page.$('[data-role="out-palette-confirm"]')) !== null;
+    const p7 = await (await fetch(`${DEV}/api/output`)).json();
+    check(
+      "palette: `Clear ramp` asks in an inline strip and sends nothing yet",
+      strip && asked === 0 && p7.palette.length === 8,
+      JSON.stringify({ strip, asked, n: p7.palette.length }),
+    );
+    await page.screenshot({ path: `${shotDir}/device-e2e-palette-confirm.png` });
+    await clickRole(page, "out-palette-confirm-cancel");
     await sleep(400);
-    const p4 = await (await fetch(`${DEV}/api/output`)).json();
+    const p8 = await (await fetch(`${DEV}/api/output`)).json();
+    check(
+      "palette: …and Cancel leaves the ramp exactly as it was",
+      (await page.$('[data-role="out-palette-confirm"]')) === null && p8.palette.length === 8,
+      `${p8.palette.length / 4} stops`,
+    );
+    await clickRole(page, "out-palette-clear");
+    await sleep(300);
+    await clickRole(page, "out-palette-confirm-ok");
+    await sleep(700);
+    const p9 = await (await fetch(`${DEV}/api/output`)).json();
     check(
       "palette: clear removes it",
-      p4.palette.length === 0 && p4.paletteAmount === 0,
-      JSON.stringify(p4),
+      p9.palette.length === 0 && p9.paletteAmount === 0,
+      JSON.stringify(p9),
+    );
+    // Item 7: clearing no longer zeroes the EDITOR's amount. The device stores
+    // 0 with the cleared record (`firmware/src/outpal.rs::clear`) and the
+    // editor deliberately does not take that 0 back, so the ramp the user
+    // builds next goes out at the blend they were already using — before this,
+    // clear-then-rebuild was silently invisible with nothing on screen saying
+    // why.
+    await clickSel(page, '[data-role="out-palette-preset"][data-preset="Ice"]');
+    await sleep(800);
+    const p10 = await (await fetch(`${DEV}/api/output`)).json();
+    check(
+      "palette: a ramp built after Clear goes out at the amount the user had, not 0 (#787 item 7)",
+      p10.palette.length === 12 && p10.paletteAmount === 60,
+      JSON.stringify({ n: p10.palette.length / 4, amount: p10.paletteAmount }),
+    );
+
+    // ---- a key that moves nothing writes nothing (item 11) --------------
+    // Every arrow press used to be a full device write, no-ops included: five
+    // identical POSTs of an unchanged palette in the repro. Only counting the
+    // requests can see that — the final state is the same either way.
+    const at0 = await evalOr(
+      page,
+      '[data-role="out-palette-stop"]',
+      (el) => el.getAttribute("aria-valuenow"),
+      "",
+    );
+    await page.$$eval('[data-role="out-palette-stop"]', (els) => els[0].focus());
+    const noop = await countPaletteWrites(page, () => page.keyboard.press("ArrowLeft"));
+    check(
+      "palette: an arrow key that cannot move the stop writes nothing (#787 item 11)",
+      at0 === "0" && noop === 0,
+      `stop at ${at0}, ${noop} writes`,
+    );
+    const moved = await countPaletteWrites(page, () => page.keyboard.press("ArrowRight"));
+    const p11 = await (await fetch(`${DEV}/api/output`)).json();
+    check(
+      "palette: …and one that does move writes exactly once",
+      moved === 1 && p11.palette[0] === 1,
+      `${moved} writes, first stop at ${p11.palette[0]}`,
+    );
+
+    // ---- the device changes under local edits (S8i, item 1) -------------
+    // The old editor pushed its stale stops AND its stale amount over whatever
+    // the device held. Now the editor holds: it says so, it sends nothing
+    // until the user chooses, and `Load theirs` adopts the device's ramp.
+    // (The ArrowRight above is the local edit this leans on.)
+    const raised = await countPaletteWrites(
+      page,
+      async () => {
+        await fetch(`${DEV}/api/output/palette`, {
+          method: "POST",
+          body: "25 0 9 9 9 255 200 30 30",
+        });
+        await sleep(3500); // ≥ one 2 s Settings poll
+      },
+      0,
+    );
+    const conflict = await evalOr(
+      page,
+      '[data-role="out-palette-conflict"]',
+      (el) => (el.textContent ?? "").replace(/\s+/g, " ").trim(),
+      "",
+    );
+    const holdMode = await evalOr(
+      page,
+      '[data-role="out-palette-mode"]',
+      (el) => (el.textContent ?? "").trim(),
+      "",
+    );
+    check(
+      "palette: the device's ramp changing under local edits raises the conflict strip (S8i)",
+      /changed while you were editing/.test(conflict) &&
+        /2 stops, 25 %/.test(conflict) &&
+        /Nothing is sent until you choose/.test(holdMode) &&
+        raised === 0,
+      JSON.stringify({ conflict: conflict.slice(0, 90), holdMode }),
+    );
+    await page.screenshot({ path: `${shotDir}/device-e2e-palette-conflict.png` });
+    const held = await countPaletteWrites(page, async () => {
+      await page.$$eval('[data-role="out-palette-stop"]', (els) => els[0].focus());
+      await page.keyboard.press("ArrowRight");
+    });
+    const p12 = await (await fetch(`${DEV}/api/output`)).json();
+    check(
+      "palette: …and nothing is sent while it is up, not even an edit (#787 item 1)",
+      held === 0 && p12.paletteAmount === 25 && p12.palette.length === 8,
+      JSON.stringify({ held, amount: p12.paletteAmount, n: p12.palette.length / 4 }),
+    );
+    await clickRole(page, "out-palette-theirs");
+    await sleep(700);
+    const adopted = await page.$$eval('[data-role="out-palette-stop"]', (els) =>
+      els.map((el) => el.getAttribute("aria-valuetext")),
+    );
+    const adoptedAmt = await evalOr(page, '[data-role="out-palette-amount"]', (el) => el.value, "");
+    check(
+      "palette: `Load theirs` adopts the device's ramp and the strip goes",
+      adopted.length === 2 &&
+        (adopted[0] ?? "").includes("#090909") &&
+        (adopted[1] ?? "").includes("#c81e1e") &&
+        adoptedAmt === "25" &&
+        (await page.$('[data-role="out-palette-conflict"]')) === null,
+      JSON.stringify({ adopted, adoptedAmt }),
     );
   }
 
@@ -2791,7 +3141,8 @@ try {
         (seen[1] ?? "").includes("#ffff00"),
       JSON.stringify(seen),
     );
-    const amt = await page.$eval('[data-role="out-palette-amount"]', (el) => el.value);
+    // the amount is a range input since #787, so this reads a slider's value
+    const amt = await evalOr(page, '[data-role="out-palette-amount"]', (el) => el.value, "");
     check("palette: the amount field re-reads with it (#787 §1)", amt === "40", String(amt));
     // one ArrowRight on the first handle: the POST it makes must carry the
     // DEVICE's colours and amount, with only the nudge on top
@@ -2806,8 +3157,21 @@ try {
       JSON.stringify(p5),
     );
     await page.screenshot({ path: `${shotDir}/device-e2e-palette-reread.png` });
+    // Leave the editor AGREEING with the device. The ArrowRight above is a
+    // local edit, so the DELETE is another out-of-band change and raises the
+    // conflict strip (S8i) — which would then hold a stale two-stop ramp on
+    // screen for every later section, and the §5.7 sweep reads this card.
     await fetch(`${DEV}/api/output/palette`, { method: "DELETE" });
-    await sleep(400);
+    await sleep(3500); // ≥ one 2 s Settings poll
+    if (await page.$('[data-role="out-palette-theirs"]')) {
+      await clickRole(page, "out-palette-theirs");
+      await sleep(500);
+    }
+    check(
+      "palette: the editor ends agreeing with the cleared device",
+      (await page.$('[data-role="out-palette-conflict"]')) === null &&
+        (await page.$('[data-role="out-palette-empty"]')) !== null,
+    );
   }
   // ---- the map program's screen (A10, Gitea #471) ----
   // The console reaches it from Settings → LED layout → "Custom map program →"
@@ -4748,6 +5112,173 @@ try {
         await sleep(900);
       }
 
+      // ---- the SCENE mount of the ramp editor (Gitea #787) ----------------
+      // `components/ColorRamp.svelte` has two mounts and they are ONE
+      // component: the device's output palette above, and a pattern layer's
+      // `Color ramp` here, under the `scene-ramp` prefix. What only a console
+      // can show is the half the unit tests cannot reach — that an edit made
+      // in the bar lands in the stored RECORD, that the mount states which of
+      // #563's modes it is in (a scene the device is not showing is SAVED,
+      // not live), and that the two-stop floor is the same rule on both.
+      {
+        // A wedge, so the ramp has a brightness gradient to recolour — the
+        // pixel check at the end of this block reads it back off the mirror.
+        const wedge = await (
+          await fetch(`${SC}/api/patterns`, {
+            method: "POST",
+            body: await lxpBody(
+              "Ramp wedge",
+              "export function render2D(index, x, y) { hsv(0, 0, y) }\n",
+              4096,
+            ),
+          })
+        ).json();
+        const rampScene = await (
+          await fetch(`${SC}/api/scenes`, {
+            method: "POST",
+            body: [
+              "S - Ramp layer",
+              "L pat 0 0 0 0 normal 100 none fill 1",
+              `I ${wedge.id}`,
+            ].join("\n"),
+          })
+        ).json();
+        await gotoConsole(scPage, SC, `#/scenes/${rampScene.id}`);
+        await scPage.waitForSelector('[data-role="scene-editor-view"]:not([hidden])', {
+          timeout: 15000,
+        });
+        // the top layer is selected on open, and it is the only one here
+        await scPage.waitForSelector('[data-role="scene-ramp-edit"]', { timeout: 10000 });
+        await sleep(800);
+        check(
+          "scene ramp: a layer with no ramp shows the teaser, not an editor (S7b)",
+          (await scPage.$('[data-role="scene-ramp-collapsed"]')) === null &&
+            (await scPage.$('[data-role="scene-ramp-card"]')) === null,
+        );
+        // the teaser's `Edit…` MAKES the ramp — and the editor it makes opens
+        // collapsed, exactly as the device's does (S8e)
+        await clickRole(scPage, "scene-ramp-edit");
+        await scPage.waitForSelector('[data-role="scene-ramp-collapsed"]', { timeout: 5000 });
+        const sceneSummary = await evalOr(
+          scPage,
+          '[data-role="scene-ramp-summary"]',
+          (el) => (el.textContent ?? "").trim(),
+          "",
+        );
+        check(
+          "scene ramp: `Edit…` seeds a two-stop ramp and lands on the collapsed row (S8e)",
+          /^2 stops · 100 % — recolors this layer/.test(sceneSummary),
+          sceneSummary,
+        );
+        await clickRole(scPage, "scene-ramp-edit");
+        await scPage.waitForSelector('[data-role="scene-ramp-card"]', { timeout: 5000 });
+        const sceneMode = await evalOr(
+          scPage,
+          '[data-role="scene-ramp-mode"]',
+          (el) => (el.textContent ?? "").trim(),
+          "",
+        );
+        check(
+          "scene ramp: a scene the device is NOT showing says it is SAVE mode (#563, item 20)",
+          /^Saved with the scene/.test(sceneMode),
+          sceneMode,
+        );
+        // the two-stop floor is the same rule at this mount
+        await pressStop(scPage, "scene-ramp", 0);
+        const sceneFloor = await evalOr(
+          scPage,
+          '[data-role="scene-ramp-remove"]',
+          (el) => ({
+            disabled: el.hasAttribute("disabled"),
+            reason: el.getAttribute("data-reason") ?? "",
+          }),
+          null,
+        );
+        check(
+          "scene ramp: the two-stop floor refuses a removal here too, with its reason",
+          sceneFloor !== null && sceneFloor.disabled && /at least 2 stops/.test(sceneFloor.reason),
+          JSON.stringify(sceneFloor),
+        );
+        // move the first stop with the keyboard — a handle is a slider, so it
+        // takes the keys one takes (Shift = 16 units)
+        await scPage.keyboard.down("Shift");
+        await scPage.keyboard.press("ArrowRight");
+        await scPage.keyboard.up("Shift");
+        await sleep(800);
+        const unsaved = await (await fetch(`${SC}/api/scenes/${rampScene.id}`)).json();
+        check(
+          "scene ramp: in SAVE mode the edit reaches nothing until Save (#563)",
+          unsaved.layers[0].pat.ramp === undefined || unsaved.layers[0].pat.ramp === null,
+          JSON.stringify(unsaved.layers[0].pat.ramp ?? null),
+        );
+        await scPage.screenshot({ path: `${shotDir}/device-e2e-scene-ramp.png` });
+        await scPage.click('[data-role="scene-save"]');
+        await sleep(1200);
+        const savedRamp = (await (await fetch(`${SC}/api/scenes/${rampScene.id}`)).json()).layers[0]
+          .pat.ramp;
+        check(
+          "scene ramp: Save writes the moved stop into the scene RECORD (#787)",
+          savedRamp !== undefined &&
+            savedRamp !== null &&
+            savedRamp.pct === 100 &&
+            JSON.stringify(savedRamp.stops) ===
+              JSON.stringify([
+                [16, "000000"],
+                [255, "ffffff"],
+              ]),
+          JSON.stringify(savedRamp ?? null),
+        );
+
+        // ---- the engine's new edge rule, end to end (#787) ---------------
+        // Jeremy's decision (option A): the ramp CLAMPS above its last stop
+        // instead of going black, so a ramp whose last stop is below 255 keeps
+        // the brightest pixels — it no longer cuts them out. The mirror
+        // composites scenes, so the per-layer ramp is visible in its own
+        // pixels; the DEVICE palette stage is not applied by `luxel serve`
+        // (crates/luxel-cli/src/serve.rs), which is why this leg is the scene
+        // mount's and not the Output card's.
+        const edge = await (
+          await fetch(`${SC}/api/scenes`, {
+            method: "POST",
+            body: [
+              "S - Clamp above",
+              "L pat 0 0 0 0 normal 100 none fill 1",
+              `I ${wedge.id}`,
+              "R 100 0:0000ff 128:ff0000",
+            ].join("\n"),
+          })
+        ).json();
+        await fetch(`${SC}/api/scenes/${edge.id}/activate`, { method: "POST" });
+        await sleep(2500); // the crossfade, then a few composited frames
+        const frame = new Uint8Array(await (await fetch(`${SC}/api/pixels`)).arrayBuffer());
+        let last = 0;
+        let black = 0;
+        for (let i = 0; i + 2 < frame.length; i += 3) {
+          if (frame[i] === 255 && frame[i + 1] === 0 && frame[i + 2] === 0) last++;
+          if (frame[i] === 0 && frame[i + 1] === 0 && frame[i + 2] === 0) black++;
+        }
+        // The wedge's luma runs 0..255 over the panel's rows and the ramp ends
+        // at 128, so a clamping ramp paints every row from the halfway one up
+        // in the last stop's colour — a bit under half the frame — and paints
+        // nothing black (the first stop is blue). Going black above the last
+        // stop would invert both numbers.
+        check(
+          "scene ramp: above the last stop the ramp CLAMPS, it does not go black (#787)",
+          last > frame.length / 3 / 3 && black === 0,
+          `${last} at the last stop, ${black} black of ${frame.length / 3}`,
+        );
+        await scPage.screenshot({ path: `${shotDir}/device-e2e-scene-ramp-clamp.png` });
+        // hand the store-budget check below the state it expects: the scene
+        // this section opened, running and on screen, with no scene of mine in
+        // the way
+        await fetch(`${SC}/api/scenes/${edge.id}`, { method: "DELETE" });
+        await fetch(`${SC}/api/scenes/${sceneId}/activate`, { method: "POST" });
+        await gotoConsole(scPage, SC, `#/scenes/${sceneId}`);
+        await scPage.waitForSelector('[data-role="scene-editor-view"]:not([hidden])', {
+          timeout: 15000,
+        });
+        await sleep(1200);
+      }
 
       // the shared 3840 B blob is a budget the user has to be told about:
       // fill it from outside and let the next save be refused
@@ -5928,11 +6459,18 @@ try {
     await sleep(300);
 
     await mountSettings();
+    // Every role the ramp editor's action row carries lives inside its CARD,
+    // and it opens collapsed (#787) — so the sweep has to open it, or it
+    // sweeps a summary row and proves nothing.
+    await expandRamp(page);
     check(
       "§5.7: a palette with no stops has no clear button",
       (await page.$('[data-role="out-palette-clear"]')) === null,
     );
-    await page.$eval('[data-role="out-palette-preview"]', (el) =>
+    // …and no bar either: an empty ramp says the stage is off rather than
+    // painting a black gradient the device will not produce (#787 item 16), so
+    // this scrolls to the card, not to a preview that is not there.
+    await page.$eval('[data-role="out-palette-card"]', (el) =>
       el.scrollIntoView({ block: "center" }),
     );
     await sleep(250);
@@ -5975,19 +6513,30 @@ try {
         )),
     );
     await mountSettings();
-    const capped = await page.$eval('[data-role="out-palette-add"]', (el) => ({
-      disabled: el.hasAttribute("disabled"),
-      reason: el.getAttribute("data-reason") ?? "",
-    }));
-    const capText = await page
-      .$eval('[data-role="out-palette-cap"]', (el) => (el.textContent ?? "").trim())
-      .catch(() => "");
+    await expandRamp(page);
+    const capped = await evalOr(
+      page,
+      '[data-role="out-palette-add"]',
+      (el) => ({
+        disabled: el.hasAttribute("disabled"),
+        reason: el.getAttribute("data-reason") ?? "",
+      }),
+      null,
+    );
+    // `-cap` is the hint span in the action row, and it is ABSENT below the
+    // card's 520 px reflow (#787) — this state is at 1400 px, where it reads.
+    const capText = await evalOr(
+      page,
+      '[data-role="out-palette-cap"]',
+      (el) => (el.textContent ?? "").replace(/\s+/g, " ").trim(),
+      "",
+    );
     check(
       "§5.7: the ONE exception — the palette-stop budget — is disabled WITH a reason",
-      capped.disabled && /32/.test(capped.reason) && /32/.test(capText),
+      capped !== null && capped.disabled && /32/.test(capped.reason) && /32/.test(capText),
       JSON.stringify({ ...capped, capText }),
     );
-    await page.$eval('[data-role="out-palette-cap"]', (el) =>
+    await page.$eval('[data-role="out-palette-card"]', (el) =>
       el.scrollIntoView({ block: "center" }),
     );
     await sleep(250);

@@ -663,6 +663,16 @@ async function seedMirror(base, seed, pixels) {
     await fetch(`${base}/api/protocol`, { method: "POST", body: String(seed.protocol) }).catch(
       () => {},
     );
+  // The device's own colour ramp (#787), as the wire spells it:
+  // `<amount_pct> <pos> <r> <g> <b> …`. A bare mirror has NO palette, so every
+  // S8 frame would measure an empty ramp — the `.rebarempty` card — against a
+  // mock drawing four stops, and the collapsed row S3/S3i map would have no
+  // gradient to paint either.
+  if (seed.palette)
+    await fetch(`${base}/api/output/palette`, {
+      method: "POST",
+      body: String(seed.palette),
+    }).catch(() => {});
   // Text slots (#485/#486): `{ "0": "PARTY 21:00" }`. S7h's slot column
   // echoes the slot's CURRENT value under `Now`, so it has to have one.
   for (const [n, s] of Object.entries(seed.text ?? {}))

@@ -157,12 +157,41 @@ pub fn parse_palette_stops(body: &str) -> Result<(u8, alloc::vec::Vec<(u8, [u8; 
 /// pixels. Filled in place so neither caller puts 768 bytes on its stack —
 /// the engine caches one behind its palette epoch, the firmware one behind
 /// the device-palette epoch.
+///
+/// **The RAMP stage clamps at BOTH ends**: below the first stop the first
+/// stop's colour holds (that is [crate::vm::sample_palette]'s own edge), and
+/// above the LAST stop the last stop's colour continues. This is the ONE
+/// place that decides it, which is why every mount of the stage agrees by
+/// construction — the device output palette (`engine.rs`), a pattern's
+/// `setOutputPalette` (the same call site), the per-layer scene ramp
+/// (`compose.rs::ensure_lut`) and the `OutPipe` the firmware runs (below).
+///
+/// It deliberately differs from `paint()`/`setPalette()`/`paintCanvas()`,
+/// which go BLACK above the last stop: that is a real Pixel Blaze's own
+/// behaviour, reproduced bug-for-bug against the hardware oracle on
+/// 2026-08-22 (docs/research/04-oracle-findings.md, pinned by
+/// `vm::tests::palette_edges_match_pixelblaze`) and it stays. `sample_palette`
+/// is therefore left alone and the ramp clamps its SAMPLE POSITION instead.
+/// `setOutputPalette` and the scene ramp are Luxel extensions with no PB
+/// behaviour to match, so they are free to do the useful thing — Jeremy's
+/// decision, 2026-09-27 (Gitea #787, mock frame S8c). Cutting to black above
+/// the last stop is still reachable, by ending the ramp with a black stop
+/// (the *To black* preset).
 pub fn fill_palette_lut(pal: &[(crate::fixed::Fx, [crate::fixed::Fx; 3])], lut: &mut [[u8; 3]; 256]) {
     use crate::fixed::Fx;
     // floor(v·255), matching engine::quantize (PB-exact, oracle-checked)
     let q = |v: Fx| ((v.clamp(Fx::ZERO, Fx::ONE).raw() as i64 * 255) >> 16) as u8;
+    // An EMPTY palette keeps returning the identity ([v,v,v]) — there is no
+    // last stop to clamp to and "no ramp" means "leave the pixel alone".
+    let top = pal.last().map(|(p, _)| *p);
     for (i, slot) in lut.iter_mut().enumerate() {
-        let c = crate::vm::sample_palette(pal, Fx::from_raw(((i as i32) << 16) / 255));
+        let mut v = Fx::from_raw(((i as i32) << 16) / 255);
+        if let Some(last) = top {
+            if v > last {
+                v = last;
+            }
+        }
+        let c = crate::vm::sample_palette(pal, v);
         *slot = [q(c[0]), q(c[1]), q(c[2])];
     }
 }
@@ -1056,6 +1085,69 @@ mod tests {
         assert!(lut[128][0] > 120 && lut[128][0] < 136);
         // monotone in the ramp direction
         assert!(lut.windows(2).all(|w| w[0][0] <= w[1][0]));
+    }
+
+    /// The #787 edge rule: the ramp clamps at BOTH ends. Deliberately NOT
+    /// `vm::sample_palette`'s behaviour above the last stop — that one is
+    /// PB-exact for `paint()` and is pinned separately by
+    /// `vm::tests::palette_edges_match_pixelblaze`.
+    #[test]
+    fn palette_lut_clamps_above_the_last_stop_and_below_the_first() {
+        use crate::fixed::Fx;
+        let b = |v: u8| Fx::from_raw(((v as i32) << 16) / 255);
+        let rgb = |r: u8, g: u8, bl: u8| [b(r), b(g), b(bl)];
+        // a stop colour as the cooked table quantizes it: byte → 16.16 →
+        // floor(v·255) is not the identity on every byte (247 comes back 246),
+        // so an exact-value assertion has to round-trip the same way.
+        let qb = |v: u8| ((b(v).raw() as i64 * 255) >> 16) as u8;
+        let q3 = |r: u8, g: u8, bl: u8| [qb(r), qb(g), qb(bl)];
+
+        // three stops strictly inside 0..255, so BOTH edges are exercised
+        let pal = [
+            (b(0), rgb(0x1b, 0x0e, 0x3a)),
+            (b(96), rgb(0xc2, 0x3a, 0x6b)),
+            (b(176), rgb(0xf7, 0xe0, 0x8a)),
+        ];
+        let mut lut = [[0u8; 3]; 256];
+        fill_palette_lut(&pal, &mut lut);
+        // the last stop's colour CONTINUES to the top of the table, and is
+        // emphatically not black (which is what the pre-#787 cook produced)
+        let top = lut[176];
+        assert_eq!(top, q3(0xf7, 0xe0, 0x8a), "entry at the last stop");
+        for (i, e) in lut.iter().enumerate().skip(176) {
+            assert_eq!(*e, top, "entry {i} must continue the last stop");
+            assert_ne!(*e, [0, 0, 0], "entry {i} must not be black");
+        }
+        // below the first stop still clamps too (it always did)
+        assert_eq!(lut[0], q3(0x1b, 0x0e, 0x3a));
+
+        // and with the FIRST stop off 0 as well, both plateaus are visible
+        let inside = [(b(40), rgb(0x1b, 0x0e, 0x3a)), (b(176), rgb(0xf7, 0xe0, 0x8a))];
+        fill_palette_lut(&inside, &mut lut);
+        for (i, e) in lut.iter().enumerate().take(41) {
+            assert_eq!(*e, q3(0x1b, 0x0e, 0x3a), "entry {i} below the first stop");
+        }
+        for (i, e) in lut.iter().enumerate().skip(176) {
+            assert_eq!(*e, q3(0xf7, 0xe0, 0x8a), "entry {i} above the last stop");
+        }
+
+        // a single stop is that colour EVERYWHERE (first and last coincide)
+        let one = [(b(128), rgb(0x12, 0x34, 0x56))];
+        fill_palette_lut(&one, &mut lut);
+        assert!(
+            lut.iter().all(|e| *e == q3(0x12, 0x34, 0x56)),
+            "a one-stop ramp is flat"
+        );
+
+        // an EMPTY palette is still the identity — `sample_palette` returns
+        // [v,v,v], there is no stop to clamp to, and the cook must not have
+        // grown a special case
+        fill_palette_lut(&[], &mut lut);
+        for (i, e) in lut.iter().enumerate() {
+            assert_eq!(*e, [qb(i as u8); 3], "empty palette, entry {i}");
+        }
+        assert_eq!(lut[0], [0; 3]);
+        assert_eq!(lut[255], [255; 3]);
     }
 
     #[test]

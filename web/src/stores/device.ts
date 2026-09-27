@@ -673,7 +673,7 @@ export async function refreshOutput(): Promise<void> {
  * glow are `bind:value` form fields, and re-reading those under the user's
  * fingers is exactly why `pages/Settings.svelte` reads `/api/output` only once
  * on arrival. The palette is different — the editor holds its own draft for
- * the duration of a gesture (`components/GradientEditor.svelte`), so a poll
+ * the duration of a gesture (`components/ColorRamp.svelte`), so a poll
  * landing mid-drag cannot snap a handle back.
  */
 export async function refreshPalette(): Promise<void> {

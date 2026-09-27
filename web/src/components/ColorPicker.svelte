@@ -39,6 +39,14 @@
   /** Dim the swatch: the value shown is a placeholder, not the running one
    *  (Controls.svelte's `isGuess`). */
   export let dim = false;
+  /**
+   * How the TRIGGER looks. `square` is the 26x22 swatch mockup S2 draws beside
+   * a pattern control; `chip` is the colour-ramp editor's selected-stop swatch
+   * (mockups S8a/S8b `.reswatch`) — a bordered pill carrying a 16 px square
+   * and the hex, because there the swatch is naming one stop rather than
+   * sitting in a row of six. Same popover, same emissions; only the button.
+   */
+  export let variant: "square" | "chip" = "square";
 
   const dispatch = createEventDispatcher<{ input: number[] }>();
 
@@ -156,15 +164,17 @@
   <button
     class="swatch"
     class:dim
+    class:chip={variant === "chip"}
     bind:this={anchor}
     data-role="color-swatch"
     data-value={hex}
-    style={`background:${css}`}
+    style={variant === "chip" ? "" : `background:${css}`}
     title={`${label} — ${hex}`}
     aria-label={`${label}, ${hex}`}
     aria-expanded={open}
     on:click|stopPropagation={() => (open = !open)}
-  ></button>
+  >{#if variant === "chip"}<i class="chipsw" style={`background:${css}`}></i>{hex}{/if}</button
+  >
 
   <!-- hung from the swatch's LEFT edge: a 296px chooser right-aligned to a
        26px button reaches back across the code column for no reason -->
@@ -180,7 +190,7 @@
     <!-- saturation across, value up: the arrangement every picker uses, so
          nobody has to learn this one -->
     <div
-      class="field"
+      class="svfield"
       bind:this={field}
       data-role="color-field"
       role="slider"
@@ -291,7 +301,35 @@
     opacity: 0.4;
   }
 
-  .field {
+  /* mockups S8a/S8b `.reswatch` — the ramp editor's selected-stop swatch */
+  .swatch.chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    width: auto;
+    height: 26px;
+    padding: 0 9px 0 6px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-inset);
+    color: var(--text);
+    font: 12px/1 var(--mono);
+  }
+
+  .swatch.chip .chipsw {
+    display: block;
+    width: 16px;
+    height: 16px;
+    border-radius: 3px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+  }
+
+  /* NOT `.field`: `web/src/settings/cards.css` styles `.settings .field` as a
+     two-column form row, at the same specificity as a Svelte-scoped class — so
+     inside Settings it won the cascade and turned the saturation/value square
+     into a `display:grid` with a 14px gap. Harmless only because the one child
+     is absolutely positioned; renamed before it was not (Gitea #787). */
+  .svfield {
     position: relative;
     height: 132px;
     margin: 2px 2px 8px;
@@ -305,7 +343,7 @@
     cursor: crosshair;
   }
 
-  .field:focus-visible {
+  .svfield:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
   }

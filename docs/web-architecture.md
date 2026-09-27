@@ -1360,9 +1360,16 @@ Editor: `scene-editor-view`, `scene-editor-header`, `scene-editor-back`,
 `scene-handle-nw`/`-ne`/`-sw`/`-se`; `scene-inspector`,
 `scene-layer-name`, `scene-pattern`, `scene-pattern-name`,
 `scene-pattern-shape`, `scene-pattern-change`, `scene-controls`,
-`scene-controls-label`, `scene-ramp`, `scene-ramp-stops`, `scene-ramp-stop`,
-`scene-ramp-edit`, `scene-ramp-editor`,
-`scene-ramp-color`/`-pos`/`-add`/`-remove`/`-amount`/`-clear`, `scene-box`
+`scene-controls-label`; the colour-ramp editor's set, which is ONE component
+(`components/ColorRamp.svelte`, Gitea #787) and so exists twice — under
+`scene-ramp-` here and under `out-palette-` in Settings › Output:
+`-collapsed`, `-preview`, `-ticks`, `-summary`, `-edit` (collapsed), then
+`-card`, `-count`, `-done`, `-statement`, `-stops`, `-stop`, `-bubble`,
+`-affordance`, `-selected`, `-color`, `-pos`, `-next`, `-remove`, `-reason`,
+`-empty`, `-conflict`, `-keep`, `-theirs`, `-preview-src`, `-preview-out`,
+`-amount`, `-amount-val`, `-amount-hint`, `-amount-note`, `-amount-fix`,
+`-presets`, `-preset`, `-add`, `-undo`, `-reset`, `-cap`, `-clear`,
+`-confirm`, `-confirm-cancel`, `-confirm-ok`, `-mode` (expanded); `scene-box`
 (+`-x`/`-y`/`-w`/`-h`), `scene-fit`, `scene-blend`, `scene-key`,
 `scene-key-fixed`, `scene-opacity`, `scene-opacity-value`,
 `scene-delete-layer`,
