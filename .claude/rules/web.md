@@ -95,7 +95,13 @@ paths:
   back 12.2 % and **spent every build-side lever there was** (a wasm-specific
   cargo profile + `wasm-opt -Oz`, zopfli in `pack-assets.mjs`, terser instead
   of esbuild). There is no third round of flags: what is left is content
-  (`gallery.json` 354 kB, CodeMirror most of the JS) — Gitea #691. So MEASURE
+  (`gallery.json` 355 kB, CodeMirror 165 kB of the JS chunk) — Gitea #691.
+  **Code-splitting is NOT a lever here, and #691 recommended it anyway for
+  three days.** `pack-assets.mjs` packs everything in `dist/` and gzips each
+  blob independently, so a dynamic `import()` moves bytes between blobs
+  without removing any and then pays per-chunk framing: eight chunks measured
+  **+10,209 B gzipped** (2026-09-27, #885). Split for cold-load LATENCY
+  (#883) if you like, never for the gate. So MEASURE
   a new surface rather than assuming it fits:
   `cd web && npm run build && node tools/pack-assets.mjs /tmp/x.luxa && stat -c%s /tmp/x.luxa`,
   and quote the number in the PR. Two traps when you do: `npm run wasm` is
