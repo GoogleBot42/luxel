@@ -33,6 +33,17 @@ paths:
   line, the fix is `await tick()` *before* the assignment instead of moving
   every derivation into the assigning function: after the flush an ordinary
   invalidation schedules the next one.
+  A THIRD fix, and usually the cheapest: move the ASSIGNING `$:` above every
+  `$:` that derives from what it assigns. Svelte orders reactive statements by
+  the assignments it can SEE, and it cannot see one made inside a called
+  function — so those statements are ordered by SOURCE POSITION alone. #787 hit
+  this twice in one component: the editor's re-read (`$: syncIn(stops, amount)`
+  at the bottom) left the header, the cluster list and the floor check saying
+  "no stops" over four drawn handles, and `previewLive` — assigned inside the
+  repaint a `$:` calls — left two captions saying "nothing is running" over a
+  layer that was painting. Both fixed by moving one statement up, with a
+  comment saying why. Pick `tick()` when the derivations are spread across the
+  file, source order when the assigning statement can simply lead.
 - **A `$:` that both READS and ASSIGNS the same variable is its own
   dependency, and re-runs forever.** `stopPoll = stopPoll ?? startPoll()` and
   `rafId = rafId || requestAnimationFrame(tick)` are the shapes; both froze a

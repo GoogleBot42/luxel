@@ -417,6 +417,18 @@ lx_comp_sprite(ch, layer: u32, ptr, len) -> i32   // sprite layers: the LXSP rec
 lx_comp_text(ch, layer: u32, ptr, len)
 lx_comp_frame(ch, delta_raw: i32) -> *const u8     // w·h·3 RGB, valid until the next call
 lx_comp_layer_count(ch) -> u32
+
+lx_palette_lut(ptr, n_stops: u32, amount_pct: u32) -> *const u8
+                                        // 768 B: the cooked RAMP table, r,g,b per
+                                        // brightness 0..255, valid until the next call.
+                                        // `ptr` is n_stops x (pos, r, g, b) bytes — the
+                                        // same four `POST /api/output/palette` and an
+                                        // `R` record take. Cooked by
+                                        // `outpipe::fill_palette_lut` and blended by
+                                        // `outpipe::palette_remap_frame` themselves,
+                                        // over a greyscale frame (luma([i,i,i]) == i),
+                                        // so entry i is what the device turns a pixel
+                                        // of brightness i into at this amount.
 ```
 
 `lx_comp_frame` steps every bound **pattern** engine through `Engine::frame`,
@@ -426,6 +438,13 @@ copies its record into the compositor slot and the driver reads texels from
 that copy (§4). Feed the composite
 through `lx_outpipe` the way a pattern frame is fed, to see what the wire
 would carry.
+
+`lx_palette_lut` exists so the browser never re-derives that table (Gitea #748):
+the ramp editor's bar and both of its preview cells are the engine's own
+arithmetic. `Luxel.paletteLut(stopBytes, amountPct)` wraps it and returns a
+COPY, because the buffer is the module's; `lib/gradient.ts`'s `rampLut` is the
+synchronous fallback for the first paint before the module is up, and
+`web/tests/paletteLut.test.mjs` pins the two against each other.
 
 TypeScript wrapper: `Luxel.compositor(w, h)` → `Compositor` with
 `setScene(wire) → string | null`, `bind(layer, engine | null)`,

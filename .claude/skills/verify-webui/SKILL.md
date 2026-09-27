@@ -268,6 +268,14 @@ nothing in this container is public.
   `acceptDialog`/`cancelDialog` from `web/tools/e2e-common.mjs`; never install a
   `page.on("dialog")` handler (a native prompt/confirm reaching the browser is itself
   the regression).
+- `el.click()` (or `page.$eval(sel, (el) => el.click())`) selecting NOTHING on a
+  control that drives itself from `pointerdown` — a synthesised `MouseEvent` is not
+  a `PointerEvent`, so the handler never fires and the harness then drives whatever
+  was selected BEFORE, silently. #787's ramp handles are the case: the fix is a real
+  press (`page.mouse.move` → `.down()` → `.up()` on the element's own box), which
+  is also the only way to exercise a drag. The component should ALSO select on
+  `click` and on `focus` for the keyboard's sake — if it does not, that is a real
+  accessibility gap the harness has just found, not a harness problem.
 - A `page.click` on a Settings-tab field throwing "Node is either not clickable or not
   an Element" — the settings panel is rendered into the DOM even while the editor is
   open (`hidden={editing || tab !== "settings"}`), so the element *exists* and
