@@ -105,7 +105,8 @@ slot for free. Rows needed for 3 ms on a 256-column wall: 2 at stock, 8 at
 whole frame (32 row pairs), at which point this is today's driver.
 Descriptors are `N × E × 12 B` and stay near 3 KB for a fixed slack.
 
-`ring_ms` is a `panel` line setting (default 1.5 ms on core 1; see §5) and
+`ring_ms` is a `panel` line setting (default 3 ms while core 0 packs alone,
+see §6) and
 `driver.live` reports the rows it resolved to.
 
 ## 5. Cost model — the packer sets the ceiling
@@ -140,28 +141,49 @@ to the 16-bit bus words. ~14 cycles/px on paper; call 3× the floor. PIE has
 no Rust intrinsics (inline `asm!`; the GNU assembler for xtensa-esp32s3
 knows the mnemonics), and its q-registers are not saved by the scheduler,
 so the packer must own the unit from one context with interrupts masked
-around the kernel — fine for an ISR on one core. **Measure this first**
+around the kernel — fine for a packer that runs in task context on its own core (§6). **Measure this first**
 (§10 step 1): it needs no panel, and every other number depends on it.
 
-## 6. Cores and interrupts
+## 6. Cores: the refill is a work queue, not a core
 
-The refill has a hard deadline (the slack) and core 0's WiFi has held the
-output task off for 2,029 µs (#620). On core 0 the ring must cover ≥ 3 ms
-and the packer eats the web server's share; on core 1 it eats the engine's.
-Decision: **the refill ISR runs on core 1**, bound there (`bind_handler`
-from core 1 — GDMA channel interrupts route to the core that enables them),
-at a priority above the render task. Its latency there is tens of µs except
-inside a flash op, when PSRAM is unreadable anyway (§7). Above ×4 the packer
-wants most of a core; Gitea #833 (core-1 work stealing) is the lever if the
-engine suffers.
+Which core packs is a **lever, not a decision** (Jeremy, 2026-09-27): start
+with core 0 doing all of it, and let core 1 pick slots up when core 0 is
+held off (WiFi) and core 1 is free anyway because it is waiting on vsync.
+So the refill is designed as a claimable queue from the start:
 
-The existing frame-count ISR (`esp-hub75` `isr.rs`, the EOF at the wrap)
-keeps its job: pass counting, `pass.*` forensics, and now the frame-pointer
-flip. Tell the two EOFs apart by descriptor address (the #376 probe).
+- **The queue** is two atomics over the ring: `free_upto` (advanced by the
+  slot-EOF interrupt from the DMA position: every slot the DMA has left) and
+  `next_fill` (the next slot a packer will take). A packer claims a slot by
+  CAS on `next_fill` while `next_fill < free_upto`, packs it, and moves on;
+  it never waits. Row pair `r + N` for slot `s` follows from the claim
+  index, so two packers never pack the same row and order never matters.
+- **Core 0, the output task**, is the default packer: `write_frame` becomes
+  "publish this frame pointer", and the task's loop is "drain the queue,
+  then yield". This is where the two-buffer driver's compose already runs.
+- **Core 1, the render task**, steals: between frames — where it currently
+  waits for vsync/handoff — it drains the queue too. That is Gitea #833
+  applied to the pack, and it is what keeps the panel fed through core 0's
+  2,029 µs WiFi holds (#620) without a 3 ms ring. Its share of the engine's
+  time is whatever the queue leaves it, and it is only ever work core 0 was
+  too late for.
+- **The slot-EOF interrupt** does no packing itself: it advances
+  `free_upto`, flips the frame pointer at the wrap, counts `late` when
+  `next_fill` has fallen behind the DMA, and blanks the slot the DMA is
+  about to enter if it was never filled (§7). Keep it under 5 µs; bind it
+  on core 0 with the existing frame-count ISR.
 
-Every PSRAM access rule in `psram.rs` and `core1.rs` still applies: the ISR
-reads PSRAM only in task-like context on core 1, never while the flash
-fence has that core parked.
+What this costs the packer: it must be reentrant across cores — per-core
+`Scratch`, per-core PIE state (each CPU has its own q-registers, so the
+vector packer needs no cross-core save, only interrupts masked on its own
+core around the kernel), and the brightness tables read-only once built.
+The ring slack (§4) then only has to cover the longer of the two cores'
+worst hold, and the `pass.ring` counters say which core packed what
+(`packed_core0`, `packed_core1`, `late`), so Jeremy can see the lever
+working before he pulls it.
+
+Every PSRAM access rule in `psram.rs` and `core1.rs` still applies: a packer
+reads the RGB frame only in task context on its own core, never while the
+flash fence has that core parked (§7).
 
 ## 7. Flash writes and the failure policy (Gitea #852)
 
@@ -200,7 +222,7 @@ pipeline's travelling buffer (#777), so this is one more of the same.
 | ×16 | 8 | 296 | 46 % | 30 rows, 105 KB | 10 rows, 35 KB | 39 % | 295 % / 74 % |
 
 Compare today: 237 KB two-buffer, 135 KB chase — neither fits. With the
-vector packer, ×12 on core 1 at a 1 ms ring is 28 KB internal and half a
+vector packer, ×12 with core 1 stealing at a 1 ms ring is 28 KB internal and half a
 core.
 
 ## 9. What changes where
@@ -217,7 +239,7 @@ core.
 - `firmware/src/hub75.rs`: a `Hub75Ring` output behind a feature
   (`hub75-ring`), keeping `Hub75Output` as is until Jeremy's eye retires it;
   boot: allocate the ring from `ring_ms`, format the templates, build the
-  chain, bind the ISR on core 1; `write_frame` becomes "publish this frame
+  chain, install the slot-EOF ISR and the fill queue (§6); `write_frame` becomes "publish this frame
   pointer"; `flush` is gone. `boot_cost` learns the ring shape so `POST
   /api/layout` refuses honestly, and the self-heal (#822) stays as the
   measured guard.
@@ -239,8 +261,9 @@ core.
 2. **Ring maths on the host**: row-major chain builder, descriptor counts,
    release predicate, `ringsim.py` coverage. No hardware.
 3. **`hub75-ring` on the bench at 64x64**: ring sized by `ring_ms`, ISR on
-   core 1, frame flip at the wrap, `pass.ring` counters, `/api/pixels`
-   byte-identical to the two-buffer build for the same frame.
+   core 0 packing alone, frame flip at the wrap, `pass.ring` counters, `/api/pixels`
+   byte-identical to the two-buffer build for the same frame. Then the core-1
+   steal (§6) as its own PR, with `packed_core1` and `late` before/after.
 4. **Failure policy** (#852): fence blanking, late-slot blanking, back-off.
    Prove it with a pattern save and an OTA on the bench.
 5. **2x1 and Jeremy's eye**: the chain that is on the bench, at ×4 and at
@@ -253,6 +276,7 @@ Each step is its own PR and its own ticket under #838.
 
 Made (Jeremy, 2026-09-27): one fixed-size internal buffer, the packer is the
 refill, no packed frame anywhere; blank and back off on failure, never
-garbage. Open: none that block step 1. Step 3 will need his `lsb` step of
+garbage; which core packs is a lever, with core 0 first and core 1 stealing
+when he asks for it. Open: none that block step 1. Step 3 will need his `lsb` step of
 choice for the bench comparison, and step 5 his call on whether the ring
 driver becomes the default.
