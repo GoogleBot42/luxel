@@ -1765,11 +1765,16 @@ falls back to the board default 64x64 and reports `driver.live.fallback:
 true` (see "Panel driver settings"). So a layout can be under the cap and
 still be refused, with the reason on serial.
 
-**The internal-heap floor at 8192 / 16384 px has NOT been measured on
-metal.** That is the on-metal half of #768: a 2x1 and a 2x2 chain, `heap_free`
-and `heap_largest` at each, a resident pattern and a two-layer scene beside
-them, and the fallback path actually taken. Everything in this section above
-that line is source arithmetic.
+**The internal-heap floor at 8192 px, measured on metal 2026-09-27 (#822):**
+the boot now prints `hub75: panel took N B of internal heap, M B left (floor
+F B)` every boot. On the ~216 KB heap a 64x64 two-buffer panel takes
+61,760 B and leaves 154,652; the 2x1 chain takes 120,944 B and leaves 95,452 —
+which passed the old 64 KB floor — and WiFi + embassy-net + the web pool then
+cost ~75 KB, leaving 19,844 B free / 15,748 B largest, every route 503. The
+floor is 100 KB now (that 75 KB plus the 20 KB runtime floor), so the 2x1 pair
+falls back at boot; the self-heal caught it first and reverted the stored
+layout, verified end to end (docs/UNTESTED.md). Still unmeasured: 16384 px,
+and the chain under `hub75-spare-plane` (predicted ~67 KB taken).
 
 **What #768 cost in image and stack**, devshell builds, `origin/master`
 `a42f732` as the baseline:

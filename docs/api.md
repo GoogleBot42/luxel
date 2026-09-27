@@ -1521,7 +1521,7 @@ you, not a table. If the remainder is under the firmware's boot floor the body
 is refused and nothing is stored:
 
 ```json
-{"ok":false,"error":"this panel would leave 12345 B of heap at boot (floor 65536 B) — it cannot be driven on this board","line":1}
+{"ok":false,"error":"this panel would leave 12345 B of heap at boot (floor 102400 B) — it cannot be driven on this board","line":1}
 ```
 
 The way out is fewer bit planes, a smaller panel, or fewer panels — all three

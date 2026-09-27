@@ -43,7 +43,10 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
   device, `pgrep -fa <its IP>` for another session's script (2026-09-26: two
   sessions drove the Seengreat at once — one OTA'd an older image and polled
   status while the other measured; the "reverted OTA" and the black panel were
-  that). If you find one, stop and ask Jeremy whose the device is.
+  that). If you find one, stop and ask Jeremy whose the device is. For the
+  Seengreat also list what holds `/dev/ttyACM0` (`ls -l /proc/*/fd | grep ttyACM0`):
+  a reader loop left by a dead session ate the ROM bootloader's replies for nine
+  hours on 2026-09-27 and read as "espflash hangs" — kill it, it is never live work.
 - Other Claude instances may be working in this checkout concurrently. ALWAYS do your
   work in a fresh git worktree (.claude/skills/worktree-setup), never in the main
   checkout directly. Treat uncommitted changes in the main checkout as another live
