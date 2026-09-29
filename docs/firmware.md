@@ -772,7 +772,22 @@ win; a skipped slot shows the row it already held at that row's own address
 (stale, never a mixed-address row). `write_frame` is a copy into a free RGB
 frame and a pointer publish; `ready_for_frame` waits for the next pass to be
 claimed, which paces the render task the way the swap's landing did. The
-core-1 steal (design §6) is the second PR.
+core-1 steal (design §6) is the second PR. *Since #892:* `write_frame` packs
+the frame ONCE into one of four slot-formatted packed frames in the PSRAM
+arena and a claim is a copy of one row pair; *since #892 step 2* that copy
+is a **GDMA memory-to-memory transfer** (channel 1, `mem_trans_en`, 64-byte
+external bursts, programmed at the register level through `DMA::regs()` —
+esp-hal's `Mem2Mem` keeps the transfer and interrupt plumbing crate-private):
+a copier's turn claims up to 8 slots and hands them to the DMA as one
+descriptor chain, a completion interrupt bound on core 1 accounts the batch
+and starts the next whatever the `steal` lever says (that lever is the
+core-1 timer's turns), the packed frame is written back from the data cache
+after every eight packed row pairs, and the skip rule budgets a batch with
+the DMA's measured per-slot time. The CPU `memcpy` stays as the fallback and
+the lever (`POST /api/ring {"dma":false}`). The ring is also **capped by the
+heap** at boot: `ring_ms` asks, the boot gives the fewer of that and what
+leaves `BOOT_HEAP_FLOOR` plus `RING_HEAP_RESERVE` (48 KB) free
+(`hub75_ring::capped_slots`, shared with the `POST /api/layout` predictor).
 
 **Spare-plane swap (`hub75-spare-plane`, Gitea #610, off by default until
 verified on metal).** The two-framebuffer atomic swap costs a second full

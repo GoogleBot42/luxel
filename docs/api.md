@@ -313,11 +313,44 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   so a preemption (esp-wifi holds core 0 for up to 590 ms during WiFi
   bring-up, 2–3 ms in steady state) shows in `pack_us_max` and not in the
   skip rule. On core 0 alone expect 2.6–4.8 % late at the stock 3 ms ring on
-  the 64×64, 0.3 % at 10 ms.
-- `POST /api/ring` — `hub75-ring` builds only (Gitea #857): body
-  `{"steal":true|false}` turns the core-1 steal on or off for this boot;
-  answers `{"ok":true,"steal":B}`. Not persisted. The A/B lever for
-  `pass.ring.late` / `packed_core1` on a running panel.
+  the 64×64, 0.3 % at 10 ms — with the CPU copy; see `dma` below.
+  **Since #892 step 2 the refill is a GDMA memory-to-memory copy** (channel
+  1, PSRAM → the slot, 64-byte bursts) and the fields for it are: `dma`
+  (the lever — `true` unless the boot's calibration copy failed, in which
+  case the CPU copies and `pack_us` is live again); `dma_us` the DMA's
+  time per slot (clipped EWMA, what the skip rule budgets a batch with) and
+  `dma_us_max` the raw worst — a flash write suspends the cache the DMA
+  reads PSRAM through, so the worst reads in milliseconds around a store;
+  `dma_cal_us` the boot calibration copy's time per slot (an idle bus,
+  before WiFi or an engine — the DMA's own speed at this slot size);
+  `dma_batches` batches completed (a copier's turn hands the DMA up to 8
+  claimed slots as one chain), `dma_isr` of those started by the completion
+  interrupt on core 1 (the rest by a copier's turn), `dma_errors` batches
+  that ended in a descriptor error or a 20 ms stall and were reset (their
+  claims count `late`); `packed_core0` / `packed_core1` then credit the core
+  whose turn STARTED the batch. `asked` is the slot count `ring_ms` resolved
+  to before the heap cap; `rows < asked` means the cap bit (below). `pri`
+  is the GDMA arbitration lever (default on: the panel chain at priority 9,
+  the copy channel at 0 — at equal priority the copy's PSRAM bursts starved
+  the panel chain and the LCD stopped, 2026-09-29), `hybrid` the lever that
+  lets core 0's turn copy claims itself while a DMA batch is in flight
+  (default off), `lcd_restarts` how often the LCD watchdog found the
+  LCD_CAM's continuous transaction ended (`lcd_start` clear) and restarted
+  it — 0 is the claim — and `lcd` a raw register probe for that diagnosis
+  (`[ch0 OUT_INT_RAW, ch0 OUT_STATE, ch0 OUT_LINK, ch0 OUTFIFO_STATUS, ch0
+  OUT_DSCR, LCD_USER, LC_DMA_INT_RAW, copy OUT_INT_RAW, copy IN_INT_RAW,
+  ch0 OUT_PRI]`; a healthy panel has `LCD_USER` bit 27 set).
+- `POST /api/ring` — `hub75-ring` builds only (Gitea #857 / #892): body
+  with any of `{"steal":B}`, `{"dma":B}`, `{"pri":B}`, `{"hybrid":B}` — the
+  core-1 TIMER's refill turns, the GDMA copy against the CPU `memcpy`, the
+  panel chain's GDMA priority, and core 0 copying beside a busy DMA — for
+  this boot;
+  the DMA's completion interrupt chains batches whatever `steal` says (it
+  costs core 1 a few microseconds per batch, only when one ends), so with
+  the DMA on `steal` off measures the chain alone; answers
+  `{"ok":true,"steal":B,"dma":B}` with both current values. Not persisted;
+  `dma` cannot be turned on where the boot found no working engine. The A/B
+  levers for `pass.ring.late` / `packed_core1` on a running panel.
 - `rescan_hz` — how many times a second the HUB75 panel is really redrawn
   from the framebuffer, read from the driver's own BCM frame counter. `0` on
   every board without a panel. This is the panel's clock **and** the render
@@ -628,6 +661,7 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   | `storage_bytes` | the live `storage` partition. `store.total` is this minus the key area and the ad-hoc slot. |
   | `assets_bytes` | the live `assets` partition. |
   | `ceiling_bytes` | the highest flash offset this device can reach: `min(chip size, bootloader ceiling)`. Normally the chip size; lower on a board whose bootloader was flashed for a smaller part (Gitea #634 — the ROM's `g_rom_flashchip.chip_size` comes from the bootloader's image header, and an OTA never replaces the bootloader). 0 on the mirror. |
+  | `flash_id`, `flash_bytes` | S3 boards only (Gitea #852): the flash chip's JEDEC id as the ROM packs it — `manufacturer << 16 \| type << 8 \| capacity`, so 13,123,608 = `0xC84018` = GigaDevice GD25Q128 — and the size the ROM derived from it. Which part is soldered decides whether it can suspend an erase for the cache (the flash auto-suspend option). Absent elsewhere. |
   | `upgrade_available` | present, and `true`, **only** when the chip is larger than that bootloader ceiling and this image embeds a layout the chip could back. A one-time serial re-flash of the bootloader (`BOARD=… firmware/build-esp32.sh flash`) unlocks it, and the device migrates again on the next boot. Absent means no. |
 
   Three more fields appear **only when a migration refused to start**, which
@@ -1319,7 +1353,7 @@ other field on the card silently resets them.
 | `clock_mhz` | one of **8 · 10 · 12 · 15 · 20 · 24 · 30** | 30 | The LCD_CAM pixel clock — a fixed list, not a range (Gitea #771). Anything else is refused with `panel: clock_mhz must be one of 8\|10\|12\|15\|20\|24\|30`. Offer it as a dropdown over `driver.clocks`, never a number field. |
 | `chip` | `shiftreg` · `fm6126a` · `icn2038s` · `dp3246` | `shiftreg` | The driver chip's init, bit-banged before the DMA starts. `shiftreg` covers FM6124, SM16208, ICN2037 and every other plain shift register — no init at all. `fm6126a` and `icn2038s` share a two-register init; `dp3246` has its own, and holds the latch for the last **3** clocks of every row instead of 1. |
 | `blank` | 0..8 | 1 | Clocks at the start of every row block, and again just before the latch word, where OE is off. `1` is the stock template; raising it trades a little brightness for less ghosting between address rows. **The one field here that applies LIVE** — see below. |
-| `ring_ms` | 1..50 | 3 | Milliseconds of slack the **ring driver** (`hub75-ring`, Gitea #857) sizes its slot ring for — how far the beam may run ahead of the packer before a row pair is late. Sized in time, not rows: `live.ring_rows` reports what it resolved to for this schedule and chain width. Ignored by the two-buffer driver. Boot-built like `planes`. |
+| `ring_ms` | 1..50 | 3 | Milliseconds of slack the **ring driver** (`hub75-ring`, Gitea #857) sizes its slot ring for — how far the beam may run ahead of the packer before a row pair is late. Sized in time, not rows: `live.ring_rows` reports what it resolved to for this schedule and chain width. **Capped by the heap** (#892): the boot never gives the ring more slots than leave its 100 KB floor plus a 48 KB reserve for the engine — on a 4x1 chain 3 ms asked for 22 slots of 4 KB and would have left 15 KB; `pass.ring.asked` beside `rows` says when the cap decided. Ignored by the two-buffer driver. Boot-built like `planes`. |
 | `lsb` | 0..65535 | 0 | On-time of the LEAST significant bitplane, in pixel clocks — the refresh multiplier (Gitea #460 / #789 / #797). **`0` = full**, the stock BCM schedule. A smaller value truncates the low planes' OE and drops their descriptor repeats: the rescan STEPS up each time `lsb` crosses `W / 2^t`, and at the top of each step the panel keeps very nearly its stock brightness. Clamped to the lit width `W` at boot. Optional, and boot-built like `planes` — see below. |
 
 **`blank` applies live; the other three wait for a boot** (Gitea #778). It is
@@ -1576,7 +1610,10 @@ is refused and nothing is stored:
 
 The way out is fewer bit planes, a smaller panel, or fewer panels — all three
 scale the framebuffers linearly. On the ring driver almost nothing scales with
-the wall; the lever there is a smaller `ring_ms`. The check only runs when the `matrix` or
+the wall, and the ring is already capped by the heap at boot (the prediction
+here applies the same cap), so a `ring_ms` the heap cannot serve is shrunk
+rather than refused; the lever is a smaller `ring_ms` only when the slack it
+lost matters. The check only runs when the `matrix` or
 `panel` inputs actually move, so re-posting an unchanged arrangement is never
 refused by a floor the running configuration already sits under.
 

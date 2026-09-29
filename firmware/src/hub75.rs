@@ -201,16 +201,14 @@ pub fn boot_cost(m: &Matrix, d: &PanelDriver) -> Option<usize> {
     let (buffers, spare_planes) = (1, 1);
     #[cfg(all(feature = "hub75-spare-plane", not(feature = "psram-arena")))]
     let (buffers, spare_planes) = (2, 1);
-    // The ring driver (Gitea #857): slots from `ring_ms`, one chain, the
-    // vector packer's pads; nothing else scales with the wall.
+    // The ring driver (Gitea #857): slots from `ring_ms`, capped by the
+    // heap the way the boot caps them (`hub75_ring::capped_slots`, #892),
+    // one chain, the vector packer's pads; nothing else scales with the wall.
     #[cfg(feature = "hub75-ring")]
-    let ring_slots = luxel_hub75::ring::slots_for_slack(
-        u32::from(d.ring_ms) * 1000,
-        &s,
-        g.cols,
-        d.clock_hz(),
-        g.rows,
-    ) as usize;
+    let ring_slots = {
+        let asked = luxel_hub75::ring::slots_for_slack(u32::from(d.ring_ms) * 1000, &s, g.cols, d.clock_hz(), g.rows);
+        crate::hub75_ring::capped_slots(asked, &s, g).unwrap_or(asked) as usize
+    };
     #[cfg(not(feature = "hub75-ring"))]
     let ring_slots = 0;
     Some(
