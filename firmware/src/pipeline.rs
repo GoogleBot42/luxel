@@ -511,6 +511,10 @@ mod pipe {
         }
         let t0 = Instant::now();
         loop {
+            // This core is idle until the buffer comes back: on the ring
+            // driver, pack the queue instead of spinning (Gitea #857, the
+            // core-1 steal). A no-op on every other driver.
+            crate::output::steal_pack();
             Timer::after(VSYNC_POLL).await;
             let waited = t0.elapsed();
             if let Some(buf) = SLOT.lock(|c| c.borrow_mut().free.take()) {

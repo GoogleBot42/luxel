@@ -52,6 +52,18 @@ pub type BoardOutput = crate::hub75::Hub75Output;
 #[cfg(feature = "hub75-ring")]
 pub type BoardOutput = crate::hub75_ring::Hub75Ring;
 
+/// The render task's idle hook: on the ring driver it packs whatever the
+/// queue holds (the core-1 steal, Gitea #857 / design §6); everywhere
+/// else there is nothing to do. Called from the vsync wait in
+/// `pipeline::vsync::claim_paced`.
+#[inline]
+pub fn steal_pack() {
+    #[cfg(feature = "hub75-ring")]
+    {
+        crate::hub75_ring::steal();
+    }
+}
+
 /// One frame sink. Contract notes for implementors:
 ///
 /// - `write_frame` must tolerate a failed/deferred `resize`: it re-checks

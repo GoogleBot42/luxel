@@ -20,11 +20,17 @@
 //!   packer's own worst pack; a claim that cannot make it is SKIPPED and
 //!   counted `late` — the slot then shows the row it already held, at that
 //!   row's own address (stale, never a mixed-address row, design §7).
-//! - **Core 0 packs, from the output task.** [`Hub75Ring::flush`] drains the
-//!   queue on every turn of the output task's loop; the task polls at
-//!   [`Hub75Ring::poll_interval`] (a fraction of the ring's slack) instead
-//!   of waiting a frame. The core-1 steal (design §6) is the next PR: the
-//!   queue is already atomics, and nothing here assumes one packer.
+//! - **Core 0 packs, from the output task; core 1 steals** (design §6).
+//!   [`Hub75Ring::flush`] drains the queue on every turn of the output
+//!   task's loop (polled at [`Hub75Ring::poll_interval`], a fraction of the
+//!   ring's slack), and the render task calls [`steal`] from its vsync wait
+//!   on the AppCpu, where it would otherwise spin for the hand-off buffer.
+//!   Both go through one [`drain`] over a [`Shared`] view of the ring
+//!   (published once, from `flush`, when the driver's address is final)
+//!   with a [`Packer`] of their own: pads, a copy of the slot template and
+//!   a pack-time estimate per core. The queue word is the only thing they
+//!   contend on. `POST /api/ring {"steal":false}` is the lever back to
+//!   core 0 alone; `pass.ring.packed_core1` shows what the steal took.
 //! - **`write_frame` publishes.** The wire frame is copied into one of four
 //!   RGB frames in the PSRAM arena (48 KB at 4096 px; the arena has
 //!   megabytes) and its index becomes `newest`. The claim of a pass's row 0
@@ -42,12 +48,16 @@
 //! `late` (claims skipped), `blanked` and `backoffs` (#852, 0 here),
 //! `packed_core0`, `packed_core1` (0 until the steal).
 
-use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
+use core::cell::{Cell, UnsafeCell};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 
 use alloc::vec::Vec;
 use esp_hal::dma::DmaDescriptor;
 use esp_hal::peripherals::{DMA_CH0, LCD_CAM};
+use esp_hal::system::Cpu;
 use esp_hal::Blocking;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use esp_hub75::{Hub75, Hub75Pins16};
 use esp_println::println;
 use luxel_core::arena::FrameVec;
@@ -87,6 +97,86 @@ pub static RING_PACK_US_MAX: AtomicU32 = AtomicU32::new(0);
 /// Claims that were held because nothing was fillable when the packer
 /// looked — the queue was full (a healthy sign, the ring is ahead).
 pub static RING_IDLE: AtomicU32 = AtomicU32::new(0);
+/// Core 1's typical row-pair pack, microseconds (core 0's is `RING_PACK_US`).
+pub static RING_PACK1_US: AtomicU32 = AtomicU32::new(0);
+/// The lever (design §6): may the render task steal claims? Runtime,
+/// not persisted — `POST /api/ring {"steal":false}` for an A/B.
+pub static STEAL: AtomicBool = AtomicBool::new(true);
+/// Brightness the packer tables were last built for (`u8::MAX` = none
+/// yet, or being rebuilt — the steal stays out while it reads so).
+static TABLES_B5: AtomicU8 = AtomicU8::new(u8::MAX);
+/// Core 1 is inside `drain`: the table rebuild on core 0 waits for it.
+static CORE1_PACKING: AtomicBool = AtomicBool::new(false);
+/// The slot template both packers stamp (control + schedule), and a
+/// generation counter so each packer refreshes its copy only when the
+/// blanking changed (`adopt_blank`).
+static TEMPLATE: BlockingMutex<CriticalSectionRawMutex, Cell<Option<(Control, Schedule)>>> =
+    BlockingMutex::new(Cell::new(None));
+static TEMPLATE_GEN: AtomicU32 = AtomicU32::new(0);
+
+/// What both packers read: raw views of the ring the output task owns.
+/// Published once by [`Hub75Ring::publish`]; the driver never moves after
+/// that (it lives inside `output_task`'s future, which never returns) and
+/// nothing here is freed.
+struct Shared {
+    hub75: *const Hub75<Blocking, DynFb>,
+    slots: *mut u16,
+    slot_words: usize,
+    /// Descriptors (emissions) per slot — `dma_position`'s index unit.
+    emissions: usize,
+    frames: [*const [u8; 3]; FRAMES],
+    frame_len: usize,
+    tables: *const Tables,
+    remap: Option<&'static [u16]>,
+    g: Geometry,
+    ring: Ring,
+    slot_clocks: u32,
+    clock_hz: u32,
+    slack_cycles: u32,
+}
+struct SharedCell(UnsafeCell<Option<Shared>>);
+// SAFETY: written once before `SHARED_READY` is released, read-only after;
+// the raw pointers inside are used under the queue's own claim discipline.
+unsafe impl Sync for SharedCell {}
+static SHARED: SharedCell = SharedCell(UnsafeCell::new(None));
+static SHARED_READY: AtomicBool = AtomicBool::new(false);
+
+fn shared() -> Option<&'static Shared> {
+    if !SHARED_READY.load(Ordering::Acquire) {
+        return None;
+    }
+    // SAFETY: read-only after the release above.
+    unsafe { (*SHARED.0.get()).as_ref() }
+}
+
+/// One packer's own state — one per core. `pads` is the vector packer's
+/// scratch (each CPU has its own q-registers, so nothing else is per-core),
+/// `control`/`sched` the slot template as of `template_gen`, and
+/// `pack_cycles` the clipped EWMA the skip rule reads — measured on the
+/// core that packs, since a preemption on one core says nothing about
+/// the other.
+struct Packer {
+    pads: PairPads,
+    control: Control,
+    sched: Schedule,
+    template_gen: u32,
+    /// Typical pack of one row pair in cycles (EWMA) — the skip rule.
+    pack_cycles: u32,
+    /// The queue has been brought level with the beam once (the first
+    /// drain after boot); later catch-ups are stalls and count `late`.
+    synced: bool,
+}
+
+impl Packer {
+    fn new(g: Geometry, control: Control, sched: Schedule) -> Self {
+        Self { pads: PairPads::for_geometry(g), control, sched, template_gen: 0, pack_cycles: 0, synced: false }
+    }
+}
+
+/// The render task's packer (design §6): lives on whichever core runs
+/// `render_task` — the AppCpu on this board — and is touched by that task
+/// only, from [`steal`].
+static mut CORE1: Option<Packer> = None;
 
 /// The queue word (`ring::Claim::encode`): the next claim's counter, and
 /// the frame index of the pass being claimed in its top bit. CAS-claimed.
@@ -104,30 +194,29 @@ pub struct Hub75Ring {
     control: Control,
     sched: Schedule,
     ring: Ring,
-    /// Slot `k` starts at `slots[k * slot_words]`; 16-byte aligned.
-    slots: &'static mut [u16],
+    /// Slot `k` starts at word `k * slot_words`; 16-byte aligned. A raw
+    /// pointer, not a slice: two cores write slots (each its own claims),
+    /// so no `&mut` may cover the block.
+    slots: *mut u16,
     slot_words: usize,
     /// Slot rows the DMA reads per slot, in order (`ring::slot_emissions`).
     order: Vec<u8>,
     frames: [FrameVec; FRAMES],
     tables: Option<&'static mut Tables>,
-    tables_b5: u8,
-    pads: PairPads,
     remap: Option<&'static [u16]>,
     /// Pass of the last frame `write_frame` accepted; `ready_for_frame`
     /// waits for the queue to move past it.
     last_frame_pass: u32,
-    /// Typical pack of one row pair in cycles (EWMA) — the skip rule.
-    pack_cycles: u32,
     /// Clocks per slot at the panel's pixel clock, for the skip rule.
     slot_clocks: u32,
     clock_hz: u32,
     /// The ring's usable slack in CPU cycles (`ring::slack_us`), the most
     /// time any claim can ever have: the ceiling on a believable pack.
     slack_cycles: u32,
-    /// The queue has been brought level with the beam once (the first
-    /// drain after boot); later catch-ups are stalls and count `late`.
-    synced: bool,
+    /// Core 0's packer — the output task's.
+    packer: Packer,
+    /// `SHARED` has been published (once, from the first `flush`).
+    published: bool,
 }
 
 impl Hub75Ring {
@@ -169,7 +258,7 @@ impl Hub75Ring {
             control: Control::new(0, 0),
             sched: Schedule::plan(Geometry::new(0, 0, 0), Control::new(0, 0), 0),
             ring: Ring::new(ring::GUARD_SLOTS + 1, 1),
-            slots: &mut [],
+            slots: core::ptr::null_mut(),
             slot_words: 0,
             order: Vec::new(),
             frames: [
@@ -179,15 +268,20 @@ impl Hub75Ring {
                 luxel_core::arena::empty(),
             ],
             tables: None,
-            tables_b5: u8::MAX,
-            pads: PairPads::new(0),
             remap: None,
             last_frame_pass: u32::MAX,
-            pack_cycles: 0,
             slot_clocks: 1,
             clock_hz: 1,
             slack_cycles: 1,
-            synced: false,
+            packer: Packer {
+                pads: PairPads::new(0),
+                control: Control::new(0, 0),
+                sched: Schedule::plan(Geometry::new(0, 0, 0), Control::new(0, 0), 0),
+                template_gen: 0,
+                pack_cycles: 0,
+                synced: false,
+            },
+            published: true, // nothing to publish: `steal` finds no `SHARED`
         }
     }
 
@@ -236,17 +330,21 @@ impl Hub75Ring {
         let desc_layout = core::alloc::Layout::array::<DmaDescriptor>(descs).map_err(|_| "bad descriptor layout")?;
         let desc_block = Block::zeroed(desc_layout).ok_or("DMA descriptor alloc failed")?;
         let (tables_block, tables) = alloc_tables().ok_or("packer table alloc failed")?;
-        let pads = PairPads::for_geometry(g);
-        // SAFETY: the block is `n * slot_words` zeroed, 16-byte-aligned u16s
-        // we own for the life of the driver (leaked below).
-        let slots: &'static mut [u16] =
-            unsafe { core::slice::from_raw_parts_mut(slots_block.ptr.cast::<u16>(), n as usize * slot_words) };
-        // Pre-fill: slot k carries row pair k (dark) with its template.
-        for (k, slot) in slots.chunks_exact_mut(slot_words).enumerate() {
-            ring::format_slot_for(slot, g, c, &s, k % g.rows);
+        let slots: *mut u16 = slots_block.ptr.cast::<u16>();
+        {
+            // SAFETY: the block is `n * slot_words` zeroed, 16-byte-aligned
+            // u16s we own for the life of the driver (leaked below); this
+            // is the only whole-block borrow, before the DMA or any packer
+            // exists. Pre-fill: slot k carries row pair k (dark) with its
+            // template.
+            let all = unsafe { core::slice::from_raw_parts_mut(slots, n as usize * slot_words) };
+            for (k, slot) in all.chunks_exact_mut(slot_words).enumerate() {
+                ring::format_slot_for(slot, g, c, &s, k % g.rows);
+            }
         }
         let slot_bases: Vec<*const u8> =
-            (0..n as usize).map(|k| slots[k * slot_words..].as_ptr().cast::<u8>()).collect();
+            // SAFETY: in-bounds offsets of the block above.
+            (0..n as usize).map(|k| unsafe { slots.add(k * slot_words) }.cast::<u8>().cast_const()).collect();
         // SAFETY: `descs` EMPTY-initialised descriptors in a block we own.
         let descriptors: &'static mut [DmaDescriptor] = unsafe {
             let p = desc_block.ptr.cast::<DmaDescriptor>();
@@ -360,6 +458,8 @@ impl Hub75Ring {
                 RING_ROWS.store(n, Ordering::Relaxed);
                 RING_SLACK_US.store(slack_us, Ordering::Relaxed);
                 NEXT_FILL.store(Claim { buf: 0, abs: ring_.first_claim() }.encode(), Ordering::Relaxed);
+                TEMPLATE.lock(|t| t.set(Some((c, s))));
+                TEMPLATE_GEN.store(1, Ordering::Release);
                 let _ = slots_block.leak();
                 let _ = desc_block.leak();
                 let _ = tables_block.leak();
@@ -374,15 +474,13 @@ impl Hub75Ring {
                     order,
                     frames,
                     tables: Some(tables),
-                    tables_b5: u8::MAX,
-                    pads,
                     remap,
                     last_frame_pass: u32::MAX,
-                    pack_cycles: 0,
                     slot_clocks: ring::slot_clocks(&s, g.cols) as u32,
                     clock_hz,
                     slack_cycles: slack_us.saturating_mul(240).max(1),
-                    synced: false,
+                    packer: Packer::new(g, c, s),
+                    published: false,
                 })
             }
             Err(e) => {
@@ -395,122 +493,46 @@ impl Hub75Ring {
         }
     }
 
-    /// Where the beam is, as the ring's absolute counter: ring wraps (the
-    /// EOF count — one EOF per ring, on its last slot) times `n` plus the
-    /// slot of the descriptor being read. A raised-but-unserviced EOF is a
-    /// wrap the count has not seen yet.
-    fn abs_dma(&self) -> Option<u32> {
-        let hub75 = self.hub75.as_ref()?;
-        let (_ring, idx, eof_pending) = hub75.dma_position()?;
-        let wraps = hub75.frame_count().wrapping_add(u32::from(eof_pending));
-        let slot = (idx / self.order.len()) as u32;
-        Some(self.ring.abs(wraps, slot))
+    /// Publish the cross-core view of the ring (once). Called from `flush`,
+    /// i.e. from inside `output_task`'s future, whose address is final.
+    fn publish(&mut self) {
+        self.published = true;
+        let (Some(h), Some(t)) = (self.hub75.as_ref(), self.tables.as_deref()) else { return };
+        let sh = Shared {
+            hub75: h as *const _,
+            slots: self.slots,
+            slot_words: self.slot_words,
+            emissions: self.order.len().max(1),
+            frames: [self.frames[0].as_ptr(), self.frames[1].as_ptr(), self.frames[2].as_ptr(), self.frames[3].as_ptr()],
+            frame_len: self.frames[0].len(),
+            tables: t as *const Tables,
+            remap: self.remap,
+            g: self.g,
+            ring: self.ring,
+            slot_clocks: self.slot_clocks,
+            clock_hz: self.clock_hz,
+            slack_cycles: self.slack_cycles,
+        };
+        // SAFETY: the single write, before the release below.
+        unsafe { *SHARED.0.get() = Some(sh) };
+        SHARED_READY.store(true, Ordering::Release);
     }
 
-    /// Pack one claimed row pair into its slot.
-    fn pack_claim(&mut self, claim: Claim) {
-        let slot = self.ring.slot(claim.abs) as usize;
-        let row = self.ring.row(claim.abs) as usize;
-        let Some(t) = self.tables.as_deref_mut() else { return };
+    /// Rebuild the brightness tables when the setting moved. Core 0 only:
+    /// the steal is told to stay out (`TABLES_B5` = none) and a pack it
+    /// already has in flight is waited for, so no row is ever packed
+    /// against a half-built table.
+    fn rebuild_tables(&mut self) {
         let b5 = crate::out_brightness();
-        if self.tables_b5 != b5 {
-            t.build_scale5(b5);
-            self.tables_b5 = b5;
+        if TABLES_B5.load(Ordering::Acquire) == b5 {
+            return;
         }
-        let words = &mut self.slots[slot * self.slot_words..(slot + 1) * self.slot_words];
-        ring::format_slot_for(words, self.g, self.control, &self.sched, row);
-        let frame = &self.frames[usize::from(claim.buf) % FRAMES];
-        // The packer takes the PLANE rows only — `planes * cols` words from
-        // `plane_row(0)` — never the ENTRY row in front of them (its length
-        // assert reset the board three times on 2026-09-28 and the guard
-        // rolled the slot back). Still 16-aligned: `cols` is a multiple of
-        // the lane count, so the ENTRY row is a multiple of 16 bytes.
-        let planes = &mut words[ring::plane_row(0) * self.g.cols..];
-        // The kernel refuses only a shape the boot already refused.
-        let _ = pie::pack_row_pair(planes, self.g, row, frame, self.remap, t, &mut self.pads);
-    }
-
-    /// Drain the queue: claim and pack every slot the beam has left that
-    /// can still be packed in time. Returns how many were packed.
-    fn drain(&mut self) -> u32 {
-        let Some(abs_dma) = self.abs_dma() else { return 0 };
-        let mut packed = 0u32;
-        loop {
-            let word = NEXT_FILL.load(Ordering::Acquire);
-            let (claim, next) = ring::claim_next(word, NEWEST.load(Ordering::Acquire), &self.ring);
-            if self.ring.late(claim.abs, abs_dma) {
-                // The beam has overtaken the queue head — the first drain
-                // after boot (the DMA has run since `new_ring`, seconds
-                // before the output task's first turn) or a stall long
-                // enough to lap the ring. Nothing behind the beam can be
-                // packed and a late head never becomes fillable by itself,
-                // so re-join right after the beam and count what was
-                // skipped (the boot catch-up is not a late row: the ring
-                // was dark and expected to be). The pass being re-joined
-                // reads `newest`, and `PASS_FRAME` says so, so `write_frame`
-                // keeps its hands off that frame.
-                let buf = NEWEST.load(Ordering::Acquire);
-                let target = self.ring.catch_up(abs_dma);
-                let word2 = Claim { buf, abs: target }.encode();
-                if NEXT_FILL.compare_exchange(word, word2, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
-                    PASS_FRAME[(self.ring.pass(target) % 2) as usize].store(buf, Ordering::Release);
-                    if self.synced {
-                        RING_LATE.fetch_add(self.ring.dist(claim.abs, target), Ordering::Relaxed);
-                    }
-                    self.synced = true;
-                }
-                continue;
-            }
-            if !self.ring.fillable(claim.abs, abs_dma) {
-                if packed == 0 {
-                    RING_IDLE.fetch_add(1, Ordering::Relaxed);
-                }
-                break;
-            }
-            // The skip rule (design §7): slots left before the beam, less
-            // the one it may be in, must cover the worst pack plus margin.
-            let left_clocks = self.ring.until_late(claim.abs, abs_dma).saturating_sub(1) * self.slot_clocks;
-            let left_cycles = (u64::from(left_clocks) * 240_000_000 / u64::from(self.clock_hz.max(1))) as u32;
-            let need = self.pack_cycles + (self.pack_cycles >> PACK_MARGIN_SHIFT);
-            // An estimate the whole ring cannot cover is not a pack time,
-            // it is a preemption (esp-wifi's scheduler owns this core too:
-            // one 590 ms "pack" during WiFi bring-up on 2026-09-28 left the
-            // ×4 ring skipping every claim as late for good — the spare-plane
-            // freeze of #620 in a new coat). Forget it and measure again.
-            if need > self.slack_cycles {
-                self.pack_cycles = 0;
-            }
-            let need = self.pack_cycles + (self.pack_cycles >> PACK_MARGIN_SHIFT);
-            if self.pack_cycles != 0 && left_cycles < need {
-                if NEXT_FILL.compare_exchange(word, next, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
-                    RING_LATE.fetch_add(1, Ordering::Relaxed);
-                    if self.ring.row(claim.abs) == 0 {
-                        PASS_FRAME[(self.ring.pass(claim.abs) % 2) as usize].store(claim.buf, Ordering::Release);
-                    }
-                }
-                continue;
-            }
-            if NEXT_FILL.compare_exchange(word, next, Ordering::AcqRel, Ordering::Relaxed).is_err() {
-                continue; // another packer took it (the core-1 steal)
-            }
-            if self.ring.row(claim.abs) == 0 {
-                PASS_FRAME[(self.ring.pass(claim.abs) % 2) as usize].store(claim.buf, Ordering::Release);
-            }
-            let t0 = esp_hal::xtensa_lx::timer::get_cycle_count();
-            self.pack_claim(claim);
-            let dt = esp_hal::xtensa_lx::timer::get_cycle_count().wrapping_sub(t0);
-            // The typical pack, not the worst: a sample can at most double
-            // the estimate (a preempted pack decays out over the next few
-            // clean ones), and the first sample is bounded by the slack.
-            // `pack_us_max` keeps the raw worst.
-            let clipped = if self.pack_cycles == 0 { dt.min(self.slack_cycles) } else { dt.min(self.pack_cycles * 2) };
-            self.pack_cycles = if self.pack_cycles == 0 { clipped } else { (self.pack_cycles * 7 + clipped) / 8 };
-            RING_PACK_US.store(self.pack_cycles / 240, Ordering::Relaxed);
-            RING_PACK_US_MAX.fetch_max(dt / 240, Ordering::Relaxed);
-            RING_PACKED_CORE0.fetch_add(1, Ordering::Relaxed);
-            packed += 1;
-        }
-        packed
+        let Some(t) = self.tables.as_deref_mut() else { return };
+        TABLES_B5.store(u8::MAX, Ordering::SeqCst);
+        let t0 = embassy_time::Instant::now();
+        while CORE1_PACKING.load(Ordering::SeqCst) && t0.elapsed() < embassy_time::Duration::from_millis(5) {}
+        t.build_scale5(b5);
+        TABLES_B5.store(b5, Ordering::Release);
     }
 
     /// A frame index no in-flight pass reads and that is not `newest`.
@@ -527,6 +549,166 @@ impl Hub75Ring {
         let us = RING_SLACK_US.load(Ordering::Relaxed) / 4;
         embassy_time::Duration::from_micros(u64::from(us.max(500)))
     }
+}
+
+/// Where the beam is, as the ring's absolute counter: ring wraps (the
+/// EOF count — one EOF per ring, on its last slot) times `n` plus the
+/// slot of the descriptor being read. A raised-but-unserviced EOF is a
+/// wrap the count has not seen yet.
+fn abs_dma(s: &Shared) -> Option<u32> {
+    // SAFETY: the driver outlives every caller (see `Shared`); both probes
+    // read statics behind their own multicore-safe locks.
+    let hub75 = unsafe { &*s.hub75 };
+    let (_ring, idx, eof_pending) = hub75.dma_position()?;
+    let wraps = hub75.frame_count().wrapping_add(u32::from(eof_pending));
+    let slot = (idx / s.emissions) as u32;
+    Some(s.ring.abs(wraps, slot))
+}
+
+/// Pack one claimed row pair into its slot.
+fn pack_claim(p: &mut Packer, s: &Shared, claim: Claim) {
+    let slot = s.ring.slot(claim.abs) as usize;
+    let row = s.ring.row(claim.abs) as usize;
+    // SAFETY: this slot is ours by the CAS on the queue word — no other
+    // packer holds the claim — and the DMA has left it (`fillable`).
+    let words = unsafe { core::slice::from_raw_parts_mut(s.slots.add(slot * s.slot_words), s.slot_words) };
+    ring::format_slot_for(words, s.g, p.control, &p.sched, row);
+    // SAFETY: the frame a pass reads is kept out of `write_frame`'s choice
+    // (`NEWEST` / `PASS_FRAME`) for as long as the pass is in flight, and
+    // the tables are read-only while `TABLES_B5` names a brightness.
+    let frame = unsafe { core::slice::from_raw_parts(s.frames[usize::from(claim.buf) % FRAMES], s.frame_len) };
+    let tables = unsafe { &*s.tables };
+    // The packer takes the PLANE rows only — `planes * cols` words from
+    // `plane_row(0)` — never the ENTRY row in front of them (its length
+    // assert reset the board three times on 2026-09-28 and the guard
+    // rolled the slot back). Still 16-aligned: `cols` is a multiple of
+    // the lane count, so the ENTRY row is a multiple of 16 bytes.
+    let planes = &mut words[ring::plane_row(0) * s.g.cols..];
+    // The kernel refuses only a shape the boot already refused.
+    let _ = pie::pack_row_pair(planes, s.g, row, frame, s.remap, tables, &mut p.pads);
+}
+
+/// Drain the queue with packer `p` on `core`: claim and pack every slot
+/// the beam has left that can still be packed in time. Returns how many
+/// were packed. Reentrant across cores: the queue word is the only shared
+/// write, and a CAS that loses simply looks again.
+fn drain(p: &mut Packer, s: &Shared, core: usize) -> u32 {
+    let Some(abs_dma) = abs_dma(s) else { return 0 };
+    let gen = TEMPLATE_GEN.load(Ordering::Acquire);
+    if gen != p.template_gen {
+        if let Some((c, sc)) = TEMPLATE.lock(|t| t.get()) {
+            p.control = c;
+            p.sched = sc;
+        }
+        p.template_gen = gen;
+    }
+    let (packed_ctr, pack_us) = if core == 0 { (&RING_PACKED_CORE0, &RING_PACK_US) } else { (&RING_PACKED_CORE1, &RING_PACK1_US) };
+    let mut packed = 0u32;
+    loop {
+        let word = NEXT_FILL.load(Ordering::Acquire);
+        let (claim, next) = ring::claim_next(word, NEWEST.load(Ordering::Acquire), &s.ring);
+        if s.ring.late(claim.abs, abs_dma) {
+            // The beam has overtaken the queue head — the first drain
+            // after boot (the DMA has run since `new_ring`, seconds
+            // before the output task's first turn) or a stall long
+            // enough to lap the ring. Nothing behind the beam can be
+            // packed and a late head never becomes fillable by itself,
+            // so re-join right after the beam and count what was
+            // skipped (the boot catch-up is not a late row: the ring
+            // was dark and expected to be). The pass being re-joined
+            // reads `newest`, and `PASS_FRAME` says so, so `write_frame`
+            // keeps its hands off that frame.
+            let buf = NEWEST.load(Ordering::Acquire);
+            let target = s.ring.catch_up(abs_dma);
+            let word2 = Claim { buf, abs: target }.encode();
+            if NEXT_FILL.compare_exchange(word, word2, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+                PASS_FRAME[(s.ring.pass(target) % 2) as usize].store(buf, Ordering::Release);
+                if p.synced {
+                    RING_LATE.fetch_add(s.ring.dist(claim.abs, target), Ordering::Relaxed);
+                }
+            }
+            p.synced = true;
+            continue;
+        }
+        if !s.ring.fillable(claim.abs, abs_dma) {
+            if packed == 0 {
+                RING_IDLE.fetch_add(1, Ordering::Relaxed);
+            }
+            break;
+        }
+        // The skip rule (design §7): slots left before the beam, less
+        // the one it may be in, must cover the worst pack plus margin.
+        let left_clocks = s.ring.until_late(claim.abs, abs_dma).saturating_sub(1) * s.slot_clocks;
+        let left_cycles = (u64::from(left_clocks) * 240_000_000 / u64::from(s.clock_hz.max(1))) as u32;
+        let need = p.pack_cycles + (p.pack_cycles >> PACK_MARGIN_SHIFT);
+        // An estimate the whole ring cannot cover is not a pack time,
+        // it is a preemption (esp-wifi's scheduler owns core 0 too:
+        // one 590 ms "pack" during WiFi bring-up on 2026-09-28 left the
+        // ×4 ring skipping every claim as late for good — the spare-plane
+        // freeze of #620 in a new coat). Forget it and measure again.
+        if need > s.slack_cycles {
+            p.pack_cycles = 0;
+        }
+        let need = p.pack_cycles + (p.pack_cycles >> PACK_MARGIN_SHIFT);
+        if p.pack_cycles != 0 && left_cycles < need {
+            if NEXT_FILL.compare_exchange(word, next, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+                RING_LATE.fetch_add(1, Ordering::Relaxed);
+                if s.ring.row(claim.abs) == 0 {
+                    PASS_FRAME[(s.ring.pass(claim.abs) % 2) as usize].store(claim.buf, Ordering::Release);
+                }
+            }
+            continue;
+        }
+        if NEXT_FILL.compare_exchange(word, next, Ordering::AcqRel, Ordering::Relaxed).is_err() {
+            continue; // the other core took it
+        }
+        if s.ring.row(claim.abs) == 0 {
+            PASS_FRAME[(s.ring.pass(claim.abs) % 2) as usize].store(claim.buf, Ordering::Release);
+        }
+        let t0 = esp_hal::xtensa_lx::timer::get_cycle_count();
+        pack_claim(p, s, claim);
+        let dt = esp_hal::xtensa_lx::timer::get_cycle_count().wrapping_sub(t0);
+        // The typical pack, not the worst: a sample can at most double
+        // the estimate (a preempted pack decays out over the next few
+        // clean ones), and the first sample is bounded by the slack.
+        // `pack_us_max` keeps the raw worst.
+        let clipped = if p.pack_cycles == 0 { dt.min(s.slack_cycles) } else { dt.min(p.pack_cycles * 2) };
+        p.pack_cycles = if p.pack_cycles == 0 { clipped } else { (p.pack_cycles * 7 + clipped) / 8 };
+        pack_us.store(p.pack_cycles / 240, Ordering::Relaxed);
+        RING_PACK_US_MAX.fetch_max(dt / 240, Ordering::Relaxed);
+        packed_ctr.fetch_add(1, Ordering::Relaxed);
+        packed += 1;
+    }
+    packed
+}
+
+/// The core-1 steal (design §6): the render task calls this wherever it
+/// would otherwise wait for the hand-off buffer, and packs whatever the
+/// queue has that core 0 has not reached. Cheap when there is nothing:
+/// one atomic load and a position probe. Stays out while core 0 is
+/// rebuilding the brightness tables. Counters credit the core it actually
+/// ran on (the render task falls back to core 0 on a single-core boot).
+pub fn steal() -> u32 {
+    if !STEAL.load(Ordering::Relaxed) {
+        return 0;
+    }
+    let Some(s) = shared() else { return 0 };
+    let b5 = crate::out_brightness();
+    if TABLES_B5.load(Ordering::Acquire) != b5 {
+        return 0;
+    }
+    // SAFETY: `CORE1` belongs to the render task alone — one task, one
+    // core, never re-entered (this is not called from an interrupt).
+    let p = unsafe { &mut *core::ptr::addr_of_mut!(CORE1) };
+    let p = p.get_or_insert_with(|| {
+        let (c, sc) = TEMPLATE.lock(|t| t.get()).unwrap_or((Control::new(0, 0), Schedule::plan(s.g, Control::new(0, 0), 0)));
+        Packer::new(s.g, c, sc)
+    });
+    let core = if Cpu::current() == Cpu::AppCpu { 1 } else { 0 };
+    CORE1_PACKING.store(true, Ordering::SeqCst);
+    let n = if TABLES_B5.load(Ordering::SeqCst) == b5 { drain(p, s, core) } else { 0 };
+    CORE1_PACKING.store(false, Ordering::SeqCst);
+    n
 }
 
 impl OutputDriver for Hub75Ring {
@@ -577,7 +759,13 @@ impl OutputDriver for Hub75Ring {
     /// The refill: every turn of the output task's loop.
     fn flush(&mut self) -> bool {
         self.adopt_blank();
-        self.drain();
+        if !self.published {
+            self.publish();
+        }
+        self.rebuild_tables();
+        if let Some(s) = shared() {
+            drain(&mut self.packer, s, 0);
+        }
         true
     }
 }
@@ -596,6 +784,8 @@ impl Hub75Ring {
         }
         self.control.blank = want;
         self.sched = self.sched.refit(self.g, self.control);
+        TEMPLATE.lock(|t| t.set(Some((self.control, self.sched))));
+        TEMPLATE_GEN.fetch_add(1, Ordering::Release);
         let lsb = self.sched.lsb;
         LIVE.lock(|c| {
             if let Some(mut l) = c.get() {
