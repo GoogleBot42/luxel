@@ -78,6 +78,14 @@ Reading the panel (2026-09-07):
   **Order of reading a black panel: `live`/`src`/`engines` → `vmerr` →
   `pass`/`rescan_hz` → hardware.** `POST /api/patterns/<id>/activate` is
   the one-line test.
+  **And a SCRAMBLED panel — sheared bands, one colour, garbage that
+  changes shape with the template but never becomes the picture — is
+  hardware first: the panel's own 5 V supply** (2026-09-29: it was
+  unplugged, the panel ran on the header's logic power, and every build
+  from e755c22 to master "showed garbage" while `/api/pixels` was fine —
+  a build bisect was under way when Jeremy found the plug). Ask "is the
+  panel powered?" before the first OTA of a bisect; the firmware cannot
+  tell, `rescan_hz` and `pass` read healthy either way.
 - `tools/panel-load-bench.mjs` needs a FAST live pattern (push
   `library/frame-rate-scan.js` via `POST /api/code`, re-activate the stored
   pattern by id after); its tab phase repeats to about ±18 %, so take a
