@@ -295,9 +295,12 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   core packed how many row pairs (`packed_core1` is 0 until the core-1
   steal); `idle` counts the turns on which nothing was fillable (the ring was
   full — healthy); `pack_us` / `pack_us_max` the typical and worst row-pair
-  pack on core 0, `pack1_us` the typical on core 1; `steal` whether core 1's
-  timer interrupt may pack beside the render task (design §6 — the lever,
-  `POST /api/ring` `{"steal":true|false}`, runtime only, default on); `blanked` and `backoffs` belong to the flash-write policy (#852) and
+  refill on core 0 and `pack1_us` the typical on core 1 — since #892 a
+  refill is a COPY of the row pair out of a packed frame in PSRAM, not a
+  pack; `frame_pack_us` is the once-per-frame pack of the whole frame
+  (`write_frame`, core 0); `steal` whether core 1's timer interrupt may
+  refill beside the render task (design §6 — the lever, `POST /api/ring`
+  `{"steal":true|false}`, runtime only, default on); `blanked` and `backoffs` belong to the flash-write policy (#852) and
   read 0 until it lands. Read `late` over a minute: 0 is the claim; a
   climbing `late` at a given `lsb` step means the packer cannot keep up and
   the step is too aggressive for one core. **Two accounting notes from the

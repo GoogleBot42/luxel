@@ -131,6 +131,26 @@ see §6) and
 
 ## 5. Cost model — the packer sets the ceiling
 
+*Revised 2026-09-29 (Jeremy, #892): the frame is packed ONCE, in PSRAM.*
+The model below assumed the packer re-packs every pass because "nothing
+stores the result" — true for internal RAM, and the reason its cost scaled
+with the pass rate. Measured on the bench (docs/boards.md "The ring on a
+chain") a row-pair pack was 65–240 µs and mostly fixed per row pair, and a
+2x1 saturated at `lsb 3` with both cores. The content only changes at the
+frame rate, so `write_frame` now packs the whole frame into one of four
+slot-formatted packed frames in the PSRAM arena (32 KB at 64×64, 64 KB at
+2x1, 128 KB at 128×128 — the arena has megabytes), and the per-pass refill
+is a `memcpy` of one row pair (1–4 KB, sequential, the PSRAM access shape
+the cache serves) into the ring slot. PSRAM traffic per pass is unchanged
+(3.5 B/px packed against 3 B/px of RGB gathered before); the CPU work per
+pass drops to the copy, and a pattern at 2 fps packs at 2 fps. Everything
+else in this section — the ring, the claim word, the skip rule, the steal —
+is unchanged; "pack" below reads "copy" for the per-pass cost. Step 2 of
+#892 is the copy by mem2mem GDMA (a descriptor and an interrupt per slot,
+plus one cache write-back of the packed frame after each pack). This is
+also ESP-IDF's RGB-LCD "bounce buffer" shape.
+
+
 The whole frame is re-packed every pass because nothing stores the result.
 Pixels per pass × passes per second = `64 × 20e6 / (33 × E)`, independent of
 width, so every cost is a function of E only:
