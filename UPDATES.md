@@ -1,5 +1,24 @@
 # Update log
 
+## 2026-09-29 — the ring on a 2x1 and a 4x1 chain: `lsb 15` is the 2x1 setting, the pack cost is per row pair, the 4x1 ring eats the heap (#858)
+
+Jeremy chained four panels; the ring build (steal on) ran as 2x1 and 4x1
+(docs/boards.md "The ring on a chain"). At 2x1 the auto schedule is 37
+passes/s — an unwatchable flicker, so the `lsb` step is mandatory on a chain
+— and `lsb 15` (147 Hz) holds 0.03 % late with Aurora rendering (6.4 %
+without the steal), at the price of the render frame rate: 23 → 15 fps,
+because the pack is ~130 µs a 128-column row pair. The pack cost is mostly
+fixed per row pair (65–73 µs at 64 columns, 100–134 at 128, 193–240 at 256):
+the PIE kernel is a minority, the template rewrite and the gather are the
+rest — the next packer lever, and the reason `lsb 7` (417 passes/s) is only
+0.9 % late with NO render running and `lsb 3` saturates. The 4x1 packs
+(0.6 % late at 209 passes/s, 256-column slots, remap fine) but `ring_ms 3` is
+22 slots of 4 KB and leaves 15 KB of heap, under the runtime floor, so no
+pattern loaded; `ring_ms 1` is the setting to try. Not seen by eye: the
+picture on panels 1–2 (#858 keeps it). Restored: 1x1, board map, master
+`c6d3…` (post-#890) on both slots, the scene. Also: the 2026-09-28 "garbage"
+was the panel's own supply unplugged (PR #890, #886).
+
 ## 2026-09-29 — the core-1 steal: `late` 4.6 % → 0.03 % on the ring driver, 10 % of the render frame rate for it (#857 second PR)
 
 Design §6 as written, minus the slot-EOF ISR the first bench run found

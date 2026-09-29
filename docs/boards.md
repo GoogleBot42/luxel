@@ -3387,6 +3387,72 @@ Reading it:
 Restored after: master on both slots, assets, scene `5cef0a3a`
 re-activated, brightness/playlist/config/layout as found.
 
+### The ring on a chain: 2x1 and 4x1 (2026-09-29, Gitea #858)
+
+Jeremy chained four 64×64 panels in a row and the ring build (`hub75-ring`,
+steal on) was stored as `matrix 64 64 2 1` and then `4 1`, `panel 7 20
+shiftreg 7 <lsb> 3`. A quiet minute per row, the steal flipped with
+`POST /api/ring`; "no render" rows are packer-only (the scene did not
+resume — the ring had taken the heap the resume pre-flight wants, #869):
+
+| chain | `lsb` | passes/s | ring | heap free | what rendered | `late`, steal OFF | steal ON | pack µs c0 / c1 | fps OFF → ON |
+|---|---:|---:|---:|---:|---|---:|---:|---:|---:|
+| 2x1 (8192 px) | auto (113) | 37 | 6 slots, 12 KB | 76 KB | the 2-engine scene | 10.2 % | **0.03 %** | 114 / 158 | 18 → 17 |
+| 2x1 | 15 | 147 | 16 slots, 32 KB | 70 KB | Aurora alone | 6.4 % | **0.03 %** | 130 / 131 | 23 → 15 |
+| 2x1 | 15 | 148 | 16 | 70 KB | nothing | 1.9 % | **0.02 %** | 114 / 134 | — |
+| 2x1 | 7 | 417 | 32 = the frame, 64 KB | 43 KB | nothing | 39.5 % | **0.9 %** | 100 / 124 | — |
+| 2x1 | 3 | 458 (of 591 asked) | 32, 64 KB | 41 KB | nothing | 55 % | **18 %** | 104 / 129 | — |
+| 4x1 (16384 px) | 15 | 209 (of 215) | 22 slots, 90 KB | **15 KB** | nothing — Aurora refused (19 KB left, 20 KB floor) | 37.6 % | **0.6 %** | 193 / 238 | — |
+
+Reading it:
+
+- **The stock schedule on a chain is a flicker.** `lsb` auto at 128
+  columns is 37 passes/s, at 256 it would be ~19: Jeremy could not stay in
+  the room. The `lsb` step is not optional on a chain; `lsb 15` gives
+  ~145 Hz at 2x1 and the ring holds it at 0.03 % late with a pattern
+  rendering — that is the 2x1 setting to store.
+- **The pack cost is per row pair and mostly fixed**, not per pixel: 65–73
+  µs at 64 columns, 100–134 at 128, 193–240 at 256 — ~+60 µs per 64
+  columns on top of ~40 µs. The PIE kernel (22 cycles/px = 12 µs per 128
+  px) is a minority of it; the template rewrite (`format_slot_for`, one
+  write per word of the slot), the cold PSRAM gather and the position
+  probe are the rest. That is the next lever for the packer, and it is
+  why the ceiling comes so soon:
+- **2x1 ceiling today: `lsb 15` comfortably, `lsb 7` only with an idle
+  render core.** At `lsb 7` (417 passes/s) the two cores together pack
+  801,000 row pairs a minute at ~120 µs — 1.6 core-seconds per second —
+  and manage 0.9 % late with nothing rendering; a pattern on core 1 would
+  push that well past 10 %. `lsb 3` saturates (458 of 591 passes, 18 %
+  late with both cores). Jeremy's `lsb 2` (860 Hz on 1x1) is out of reach
+  at 2x1 until the pack is cheaper.
+- **The steal's price on a chain is the render frame rate: 23 → 15 fps
+  at 2x1 `lsb 15`** (183,000 packs a minute at 131 µs is 40 % of the
+  AppCpu). On 1x1 it was 10 %. So on a chain the lever is a real choice —
+  every row on time at 15 fps, or 23 fps with one row in sixteen a pass
+  stale — and the answer probably wants the packer cheaper, not a
+  default.
+- **4x1 packs (0.6 % late at 209 passes/s) but the ring ate the heap**:
+  `ring_ms 3` at 256 columns is 22 slots of 4 KB, and 15 KB of internal
+  heap is left — under the 20 KB runtime floor, so no pattern loads.
+  `ring_ms 1` (about 8 slots, 33 KB) is the setting to try next, with a
+  pattern that fits 16384 px; nothing was rendered on the 4x1 this run.
+  The remap (`arrange`) and the DMA chain at 256 columns worked — the
+  packer filled 22 slots of 256-column row pairs with no `fallback`.
+- `pack_us_max` 618–645 ms on the `lsb 15` rows is core 0's boot-time
+  esp-wifi hold again; the clipped estimate rode it out.
+- The scene did not resume on any ring wider than the 6-slot 2x1
+  (`engines` 0 after the reboot): the resume pre-flight wants
+  `2 × stored bytes + 24 KiB` of heap (#869) and the bigger rings leave
+  40–70 KB. Re-activate by id after a layout change on a chain.
+
+What this run could not see: the picture on panels 1–2 (Jeremy left
+because of the flicker at the auto `lsb`, before the `lsb 15` rows). The
+2x1 remap on the ring is therefore machine-verified (the chain built,
+`fallback:false`, every slot packed) but not eyeballed — #858 keeps that
+item. Restored after: `matrix 64 64 1 1`, the board map (`POST /api/map`
+empty — the matrix POST had installed a user map), master on both slots,
+the scene.
+
 ## The LCD_CAM pixel clock on the panel (2026-09-07)
 
 The panel's rescan rate had only ever been an estimate — a comment in
