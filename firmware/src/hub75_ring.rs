@@ -122,6 +122,9 @@ pub struct Hub75Ring {
     /// Clocks per slot at the panel's pixel clock, for the skip rule.
     slot_clocks: u32,
     clock_hz: u32,
+    /// The ring's usable slack in CPU cycles (`ring::slack_us`), the most
+    /// time any claim can ever have: the ceiling on a believable pack.
+    slack_cycles: u32,
     /// The queue has been brought level with the beam once (the first
     /// drain after boot); later catch-ups are stalls and count `late`.
     synced: bool,
@@ -183,6 +186,7 @@ impl Hub75Ring {
             pack_cycles: 0,
             slot_clocks: 1,
             clock_hz: 1,
+            slack_cycles: 1,
             synced: false,
         }
     }
@@ -377,6 +381,7 @@ impl Hub75Ring {
                     pack_cycles: 0,
                     slot_clocks: ring::slot_clocks(&s, g.cols) as u32,
                     clock_hz,
+                    slack_cycles: slack_us.saturating_mul(240).max(1),
                     synced: false,
                 })
             }
@@ -467,6 +472,15 @@ impl Hub75Ring {
             let left_clocks = self.ring.until_late(claim.abs, abs_dma).saturating_sub(1) * self.slot_clocks;
             let left_cycles = (u64::from(left_clocks) * 240_000_000 / u64::from(self.clock_hz.max(1))) as u32;
             let need = self.pack_cycles + (self.pack_cycles >> PACK_MARGIN_SHIFT);
+            // An estimate the whole ring cannot cover is not a pack time,
+            // it is a preemption (esp-wifi's scheduler owns this core too:
+            // one 590 ms "pack" during WiFi bring-up on 2026-09-28 left the
+            // ×4 ring skipping every claim as late for good — the spare-plane
+            // freeze of #620 in a new coat). Forget it and measure again.
+            if need > self.slack_cycles {
+                self.pack_cycles = 0;
+            }
+            let need = self.pack_cycles + (self.pack_cycles >> PACK_MARGIN_SHIFT);
             if self.pack_cycles != 0 && left_cycles < need {
                 if NEXT_FILL.compare_exchange(word, next, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
                     RING_LATE.fetch_add(1, Ordering::Relaxed);
@@ -485,7 +499,12 @@ impl Hub75Ring {
             let t0 = esp_hal::xtensa_lx::timer::get_cycle_count();
             self.pack_claim(claim);
             let dt = esp_hal::xtensa_lx::timer::get_cycle_count().wrapping_sub(t0);
-            self.pack_cycles = if self.pack_cycles == 0 { dt } else { (self.pack_cycles * 7 + dt) / 8 };
+            // The typical pack, not the worst: a sample can at most double
+            // the estimate (a preempted pack decays out over the next few
+            // clean ones), and the first sample is bounded by the slack.
+            // `pack_us_max` keeps the raw worst.
+            let clipped = if self.pack_cycles == 0 { dt.min(self.slack_cycles) } else { dt.min(self.pack_cycles * 2) };
+            self.pack_cycles = if self.pack_cycles == 0 { clipped } else { (self.pack_cycles * 7 + clipped) / 8 };
             RING_PACK_US.store(self.pack_cycles / 240, Ordering::Relaxed);
             RING_PACK_US_MAX.fetch_max(dt / 240, Ordering::Relaxed);
             RING_PACKED_CORE0.fetch_add(1, Ordering::Relaxed);
