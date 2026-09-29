@@ -824,6 +824,8 @@ fn status_json() -> luxel_core::jsonview::Chunks {
             push_u32(&mut out, ring::RING_PACK_US_MAX.load(Ordering::Relaxed));
             push_piece(&mut out, ",\"pack1_us\":");
             push_u32(&mut out, ring::RING_PACK1_US.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"frame_pack_us\":");
+            push_u32(&mut out, ring::RING_FRAME_PACK_US.load(Ordering::Relaxed));
             push_piece(&mut out, ",\"steal\":");
             push_piece(&mut out, if ring::STEAL.load(Ordering::Relaxed) { "true" } else { "false" });
             push_piece(&mut out, "}");

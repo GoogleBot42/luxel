@@ -3453,6 +3453,63 @@ item. Restored after: `matrix 64 64 1 1`, the board map (`POST /api/map`
 empty — the matrix POST had installed a user map), master on both slots,
 the scene.
 
+### Pack once, copy per pass (2026-09-29, Gitea #892 — Jeremy's design)
+
+The first ring build re-packed every pass and its cost scaled with the
+pass rate; the content changes at the frame rate. So `write_frame` now
+packs the frame once into one of four slot-formatted packed frames in the
+PSRAM arena and a claim is a `memcpy` of one row pair into its slot
+(design §5, revised). Same bench as the sections above, same boot per
+row with the lever flipped, Aurora rendering unless noted:
+
+| chain, `lsb` | passes/s | ring | heap | copy µs c0 / c1 (pack before) | frame pack | `late` OFF (before) | `late` ON (before) | fps OFF → ON (before) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1x1 stock, scene | 78 | 10 slots | 66 KB | 7–26 / 43 (63–73 / 73–79) | 5.6 ms | 3.3 % (4.6) | **0.03 %** (0.03–0.06) | 32 → 31 (34 → 30) |
+| 1x1 stock, Aurora | 76 | 10 | 82 KB | 4–8 / 21 (66 / 80) | 3.6 ms | 3.0 % (2.8) | **0.06 %** (0.02) | 45 → 42 (47 → 42) |
+| 2x1 `lsb 15` | 145 | 16 | 64 KB | 51–84 / 55 (130 / 131) | 9–11 ms | 4.1 % (6.4) | **0.05 %** (0.03) | 23 → 18 (23 → 15) |
+| 2x1 `lsb 7` | 414 | 32 = the frame | 41 KB | 18–30 / 21 (~120, no render) | 11–13 ms | 16.5 % (39.5) | **0.26 %** (0.9, no render) | 22 → 14 (—) |
+| 2x1 `lsb 3` | 541 | 32 | 32 KB | 15–43 / 15 (~130, no render) | 12–14 ms | 25.6 % (55) | **1.1 %** (18, no render) | 22 → 13 (—) |
+| 4x1 `lsb 15`, `ring_ms 1` | 219 | 9 slots, 36 KB | 62–73 KB | **246–303 / 235–421** (193–240, no render) | 17–18 ms | 82 % | **9.1 %** (0.6, no render, 3 ms ring) | 38 → 8 |
+
+Reading it:
+
+- **On 1x1 and 2x1 the copy is 3–8× cheaper than the pack was** (4–55 µs
+  a row pair against 65–130), and the 2x1 ceiling moved two steps: `lsb 7`
+  (414 passes/s) is 0.26 % late WITH a pattern rendering where the packer
+  managed 0.9 % with nothing rendering, and `lsb 3` (541/s) is 1.1 % where
+  it saturated at 18 %. The render frame rate the steal takes on a 2x1
+  `lsb 15` fell from 8 fps to 5 (23 → 18 instead of 23 → 15).
+- **The late floor on core 0 alone did not move at 1x1** (3.0–3.3 % against
+  2.8–4.6 %) even with 4–7 µs copies: it was never the per-claim cost, it
+  is the output task not running for a whole ring (esp-wifi, the web
+  pool). The steal stays the fix for that, and now costs a few percent.
+- **The whole-frame pack is 3.6 ms at 64×64, 9–14 ms at 2x1, 17–18 ms at
+  4x1, once per frame on core 0** — 14–20 % of core 0 at these frame
+  rates, about what the per-pass packer cost at 1x1, and independent of
+  the pass rate. It drains the queue every 8 row pairs so it never holds
+  the refill off for a ring; the 1x1 rows show that working (`late` 0.03 %
+  through 5.6 ms packs at 31 fps). A pattern at 2 fps packs at 2 fps.
+- **At 4x1 the CPU copy from PSRAM is the limit.** A 4 KB slot copies in
+  235–300 µs while the engine is also on PSRAM — ~15 MB/s, not the 80 the
+  bus can do — against ~140 µs of slot time in a 1 ms ring at 219
+  passes/s, so both cores together are 9 % late and core 0 alone 82 %.
+  The "memcpy is free" assumption holds through 128 columns and fails at
+  256 with a 16384-px engine sharing the bus. That is the case for step
+  2 of #892: the copy by mem2mem GDMA, which reads PSRAM without the
+  cache-line fills the CPU pays for (and one cache write-back after each
+  pack). Until then a 4x1 wants `ring_ms 2`–`3` at a lower `lsb`, or six
+  planes.
+- **First render on 16384 px**: with `ring_ms 1` the 4x1 leaves 62–73 KB
+  of heap (against 15 KB at 3 ms) and Aurora loaded and ran — 8 fps with
+  the steal taking 73 % of core 1, 38 without. `ring_ms` is now a heap
+  knob on a chain and its default of 3 is wrong past 128 columns; the
+  boot could cap the ring by heap (#892).
+- `pack_us_max` ~594–597 ms on the wide rows is the boot-time esp-wifi
+  hold, as before; `frame_pack_us` is the new field.
+
+Restored after: 1x1, board map, master on both slots, the scene; the four
+panels stay chained.
+
 ## The LCD_CAM pixel clock on the panel (2026-09-07)
 
 The panel's rescan rate had only ever been an estimate — a comment in
