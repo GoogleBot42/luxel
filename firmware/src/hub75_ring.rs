@@ -122,6 +122,12 @@ pub struct Hub75Ring {
     /// Clocks per slot at the panel's pixel clock, for the skip rule.
     slot_clocks: u32,
     clock_hz: u32,
+    /// The ring's usable slack in CPU cycles (`ring::slack_us`), the most
+    /// time any claim can ever have: the ceiling on a believable pack.
+    slack_cycles: u32,
+    /// The queue has been brought level with the beam once (the first
+    /// drain after boot); later catch-ups are stalls and count `late`.
+    synced: bool,
 }
 
 impl Hub75Ring {
@@ -180,6 +186,8 @@ impl Hub75Ring {
             pack_cycles: 0,
             slot_clocks: 1,
             clock_hz: 1,
+            slack_cycles: 1,
+            synced: false,
         }
     }
 
@@ -373,6 +381,8 @@ impl Hub75Ring {
                     pack_cycles: 0,
                     slot_clocks: ring::slot_clocks(&s, g.cols) as u32,
                     clock_hz,
+                    slack_cycles: slack_us.saturating_mul(240).max(1),
+                    synced: false,
                 })
             }
             Err(e) => {
@@ -410,8 +420,14 @@ impl Hub75Ring {
         let words = &mut self.slots[slot * self.slot_words..(slot + 1) * self.slot_words];
         ring::format_slot_for(words, self.g, self.control, &self.sched, row);
         let frame = &self.frames[usize::from(claim.buf) % FRAMES];
+        // The packer takes the PLANE rows only — `planes * cols` words from
+        // `plane_row(0)` — never the ENTRY row in front of them (its length
+        // assert reset the board three times on 2026-09-28 and the guard
+        // rolled the slot back). Still 16-aligned: `cols` is a multiple of
+        // the lane count, so the ENTRY row is a multiple of 16 bytes.
+        let planes = &mut words[ring::plane_row(0) * self.g.cols..];
         // The kernel refuses only a shape the boot already refused.
-        let _ = pie::pack_row_pair(words, self.g, row, frame, self.remap, t, &mut self.pads);
+        let _ = pie::pack_row_pair(planes, self.g, row, frame, self.remap, t, &mut self.pads);
     }
 
     /// Drain the queue: claim and pack every slot the beam has left that
@@ -422,6 +438,29 @@ impl Hub75Ring {
         loop {
             let word = NEXT_FILL.load(Ordering::Acquire);
             let (claim, next) = ring::claim_next(word, NEWEST.load(Ordering::Acquire), &self.ring);
+            if self.ring.late(claim.abs, abs_dma) {
+                // The beam has overtaken the queue head — the first drain
+                // after boot (the DMA has run since `new_ring`, seconds
+                // before the output task's first turn) or a stall long
+                // enough to lap the ring. Nothing behind the beam can be
+                // packed and a late head never becomes fillable by itself,
+                // so re-join right after the beam and count what was
+                // skipped (the boot catch-up is not a late row: the ring
+                // was dark and expected to be). The pass being re-joined
+                // reads `newest`, and `PASS_FRAME` says so, so `write_frame`
+                // keeps its hands off that frame.
+                let buf = NEWEST.load(Ordering::Acquire);
+                let target = self.ring.catch_up(abs_dma);
+                let word2 = Claim { buf, abs: target }.encode();
+                if NEXT_FILL.compare_exchange(word, word2, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+                    PASS_FRAME[(self.ring.pass(target) % 2) as usize].store(buf, Ordering::Release);
+                    if self.synced {
+                        RING_LATE.fetch_add(self.ring.dist(claim.abs, target), Ordering::Relaxed);
+                    }
+                    self.synced = true;
+                }
+                continue;
+            }
             if !self.ring.fillable(claim.abs, abs_dma) {
                 if packed == 0 {
                     RING_IDLE.fetch_add(1, Ordering::Relaxed);
@@ -432,6 +471,15 @@ impl Hub75Ring {
             // the one it may be in, must cover the worst pack plus margin.
             let left_clocks = self.ring.until_late(claim.abs, abs_dma).saturating_sub(1) * self.slot_clocks;
             let left_cycles = (u64::from(left_clocks) * 240_000_000 / u64::from(self.clock_hz.max(1))) as u32;
+            let need = self.pack_cycles + (self.pack_cycles >> PACK_MARGIN_SHIFT);
+            // An estimate the whole ring cannot cover is not a pack time,
+            // it is a preemption (esp-wifi's scheduler owns this core too:
+            // one 590 ms "pack" during WiFi bring-up on 2026-09-28 left the
+            // ×4 ring skipping every claim as late for good — the spare-plane
+            // freeze of #620 in a new coat). Forget it and measure again.
+            if need > self.slack_cycles {
+                self.pack_cycles = 0;
+            }
             let need = self.pack_cycles + (self.pack_cycles >> PACK_MARGIN_SHIFT);
             if self.pack_cycles != 0 && left_cycles < need {
                 if NEXT_FILL.compare_exchange(word, next, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
@@ -451,7 +499,12 @@ impl Hub75Ring {
             let t0 = esp_hal::xtensa_lx::timer::get_cycle_count();
             self.pack_claim(claim);
             let dt = esp_hal::xtensa_lx::timer::get_cycle_count().wrapping_sub(t0);
-            self.pack_cycles = if self.pack_cycles == 0 { dt } else { (self.pack_cycles * 7 + dt) / 8 };
+            // The typical pack, not the worst: a sample can at most double
+            // the estimate (a preempted pack decays out over the next few
+            // clean ones), and the first sample is bounded by the slack.
+            // `pack_us_max` keeps the raw worst.
+            let clipped = if self.pack_cycles == 0 { dt.min(self.slack_cycles) } else { dt.min(self.pack_cycles * 2) };
+            self.pack_cycles = if self.pack_cycles == 0 { clipped } else { (self.pack_cycles * 7 + clipped) / 8 };
             RING_PACK_US.store(self.pack_cycles / 240, Ordering::Relaxed);
             RING_PACK_US_MAX.fetch_max(dt / 240, Ordering::Relaxed);
             RING_PACKED_CORE0.fetch_add(1, Ordering::Relaxed);
@@ -502,7 +555,13 @@ impl OutputDriver for Hub75Ring {
     /// `newest` at it. The next pass claimed reads it.
     fn write_frame(&mut self, rgb: &[[u8; 3]], _brightness5: u8) -> bool {
         let Some(hub75) = self.hub75.as_ref() else { return false };
-        crate::shared::RESCANS.store(hub75.frame_count(), Ordering::Relaxed);
+        // `frame_count` is RING WRAPS here (one EOF per ring), and a ring
+        // is `n` of the frame's `rows` row pairs — so `rescan_hz` would read
+        // 243 for a 76 Hz panel on a 10-slot ring (2026-09-28). Scale it to
+        // passes so the field keeps meaning what docs/api.md says.
+        let wraps = u64::from(hub75.frame_count());
+        let passes = (wraps * u64::from(self.ring.n) / u64::from(self.ring.rows.max(1))) as u32;
+        crate::shared::RESCANS.store(passes, Ordering::Relaxed);
         let Some(i) = self.free_frame() else { return false };
         let dst = &mut self.frames[usize::from(i)];
         let n = rgb.len().min(dst.len());

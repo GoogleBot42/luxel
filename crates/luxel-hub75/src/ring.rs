@@ -359,6 +359,17 @@ impl Ring {
     pub const fn first_claim(&self) -> u32 {
         self.n
     }
+
+    /// Where a queue head the beam has overtaken re-joins: the slot right
+    /// after the one the beam is in — the earliest fillable claim. A late
+    /// head can never become fillable on its own (the beam only moves
+    /// away from it), so a packer that finds one jumps here and counts the
+    /// claims it skipped; the rows between show their stale content at
+    /// their own addresses, exactly as a skipped claim does.
+    #[must_use]
+    pub const fn catch_up(&self, abs_dma: u32) -> u32 {
+        (abs_dma + 1) % self.period
+    }
 }
 
 /// One claim out of the queue: which frame buffer to read, and the
@@ -697,5 +708,42 @@ mod tests {
         assert_eq!(c.abs, ring.period - 1);
         assert_eq!(Claim::decode(next), Claim { buf: 1, abs: 0 });
         assert_eq!(Claim::decode(Claim { buf: 1, abs: 12345 }.encode()), Claim { buf: 1, abs: 12345 });
+    }
+
+    /// The boot deadlock met on the Seengreat (2026-09-28): the DMA had
+    /// run for seconds before the first drain, the queue head `n` was a
+    /// thousand wraps behind the beam, and `fillable` stayed false forever.
+    #[test]
+    fn a_late_head_catches_up_to_a_fillable_claim() {
+        let ring = Ring::new(10, 32);
+        let head = ring.first_claim();
+        for wraps in [0u32, 1, 3, 1000, ring.wrap_period() - 1] {
+            for slot in 0..10 {
+                let dma = ring.abs(wraps, slot);
+                if ring.late(head, dma) {
+                    assert!(!ring.fillable(head, dma));
+                    let target = ring.catch_up(dma);
+                    assert!(!ring.late(target, dma), "wraps {wraps} slot {slot}");
+                    assert!(ring.fillable(target, dma), "wraps {wraps} slot {slot}");
+                    assert_eq!(ring.dist(dma, target), 1);
+                    // slot and row stay coherent: both come off the same counter
+                    assert_eq!(ring.slot(target), (dma + 1) % 10);
+                    assert_eq!(ring.row(target), (dma + 1) % 32);
+                } else if wraps == 0 {
+                    // the pre-filled first wrap: the head becomes fillable
+                    // once the beam has left slot 0 by the guard
+                    assert_eq!(ring.fillable(head, dma), slot >= GUARD_SLOTS, "wraps {wraps} slot {slot}");
+                } else {
+                    // the beam is in the last wrap before the period: the
+                    // seeded head is a wrap or two AHEAD of it, not behind —
+                    // too far ahead to fill, and not late either
+                    assert!(!ring.fillable(head, dma), "wraps {wraps} slot {slot}");
+                }
+            }
+        }
+        // the very first wrap is never late for the seeded head
+        assert!(!ring.late(head, ring.abs(0, 9)));
+        // one wrap on, the head is late from slot 0 of wrap 1 onward
+        assert!(ring.late(head, ring.abs(1, 0)));
     }
 }

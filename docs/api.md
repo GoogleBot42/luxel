@@ -298,7 +298,17 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   pack; `blanked` and `backoffs` belong to the flash-write policy (#852) and
   read 0 until it lands. Read `late` over a minute: 0 is the claim; a
   climbing `late` at a given `lsb` step means the packer cannot keep up and
-  the step is too aggressive for one core.
+  the step is too aggressive for one core. **Two accounting notes from the
+  first bench run (2026-09-28, docs/boards.md "The ring driver on metal"):**
+  a queue head the beam has overtaken is re-synced to the slot after the
+  beam's and the claims skipped in the jump count as `late` (the first such
+  sync after boot does not — the dark pre-fill is expected); and `pack_us`
+  is a *clipped* EWMA of wall time — a sample can at most double it, and an
+  estimate the ring's own slack could not cover is dropped and re-measured —
+  so a preemption (esp-wifi holds core 0 for up to 590 ms during WiFi
+  bring-up, 2–3 ms in steady state) shows in `pack_us_max` and not in the
+  skip rule. On core 0 alone expect 2.6–4.8 % late at the stock 3 ms ring on
+  the 64×64, 0.3 % at 10 ms.
 - `rescan_hz` — how many times a second the HUB75 panel is really redrawn
   from the framebuffer, read from the driver's own BCM frame counter. `0` on
   every board without a panel. This is the panel's clock **and** the render

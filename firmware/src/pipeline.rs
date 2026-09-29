@@ -666,6 +666,12 @@ mod pipe {
                             break;
                         }
                         Timer::after(VSYNC_POLL).await;
+                        // The ring driver (Gitea #857) becomes ready only by
+                        // packing — its `flush` IS the refill — so a hold
+                        // that never turns the driver waits out VSYNC_HOLD
+                        // every frame and starves the ring. Every other
+                        // driver's `flush` is an unconditional no-op here.
+                        out.flush();
                     }
                 }
                 let seq = f.seq;
