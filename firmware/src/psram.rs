@@ -219,7 +219,8 @@ unsafe fn dealloc(ptr: *mut u8, layout: Layout) {
 }
 
 /// Zeroed allocation for a large buffer that is only ever touched from task
-/// context — the HUB75 spare-plane staging framebuffer (Gitea #610). Arena
+/// context — the packer microbench's RGB rows (packbench.rs; it was written
+/// for the HUB75 spare-plane staging framebuffer, Gitea #610, retired). Arena
 /// first, main heap if the arena is absent or full, exactly like the array
 /// hook; the caller never frees it. Null when neither has room.
 pub fn alloc_bulk_zeroed(layout: Layout) -> *mut u8 {

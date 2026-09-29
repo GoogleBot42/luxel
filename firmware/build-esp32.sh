@@ -76,6 +76,10 @@ fi
 FEATURES="$BOARD${IRAM:+ $IRAM}"
 if [ "${IRAM_OFF:-0}" = 1 ]; then FEATURES="$BOARD"; fi
 if [ "${JIT:-0}" = 1 ] && [ "${JIT_OFF:-0}" != 1 ]; then FEATURES="$FEATURES jit"; fi
+# Per-board HUB75 ring driver (RING from board-target.sh, Gitea #858).
+# RING_OFF=1 builds the same board on the two-buffer driver — the fallback,
+# kept for one release after the ring became the S3 panel default.
+if [ "${RING:-0}" = 1 ] && [ "${RING_OFF:-0}" != 1 ]; then FEATURES="$FEATURES hub75-ring"; fi
 # Extra non-board cargo features, space-separated. The one in practical use
 # is `small-chip` (RAM-constrained profile: web pool 2 + 88 KB heap + tuned
 # WiFi buffer pools — docs/boards.md tiers). Example:

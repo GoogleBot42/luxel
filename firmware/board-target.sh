@@ -69,9 +69,19 @@ RISCV_IRAM="${RISCV_IRAM:-}"
 #               (docs/boards.md "The migrating release"). The RISC-V boards
 #               have no backend at all. `JIT_OFF=1` builds any board without
 #               it — the A/B lever, exactly like IRAM_OFF.
+#   RING        1 -> the board's HUB75 panel runs on the RING driver (the
+#               `hub75-ring` cargo feature, firmware/src/hub75_ring.rs,
+#               docs/hub75-ring-design.md): a ring of row-pair slots refilled
+#               from a frame packed once into the PSRAM arena, instead of the
+#               two-buffer `Hub75Output` (src/hub75.rs). The S3 panel default
+#               since 2026-09-29 (Gitea #858). board-seengreat-hub75 ONLY:
+#               the ring needs `psram-arena`, which board-s3-devkit (+ `hub75`)
+#               does not carry. `RING_OFF=1` builds the two-buffer driver
+#               instead — the fallback, kept for one release.
 board_target() {
   IRAM=""
   JIT=0
+  RING=0
   case "$1" in
     board-pixelblaze-v3|board-athom-music|board-esp32-generic)
       # 128 KB of dedicated IRAM (SRAM0), separate from the DRAM the stack
@@ -86,6 +96,9 @@ board_target() {
       # floor for ~1 % — measured on the panel, not worth it (Gitea #328).
       CHIP=esp32s3;  TARGET=xtensa-esp32s3-none-elf;    XTENSA=1; CORE_O3=1
       JIT=1
+      # The ring driver packs into the PSRAM arena, which only the Seengreat
+      # carries (Cargo.toml `board-seengreat-hub75`); see RING above.
+      if [ "$1" = board-seengreat-hub75 ]; then RING=1; fi
       # The JIT's code lives in PSRAM (or, without PSRAM, in a main-heap
       # block through SRAM1's instruction alias) since Gitea #665, so it
       # costs no `.rwtext` and `iram-vm` stays — phase 3 (#658) had to

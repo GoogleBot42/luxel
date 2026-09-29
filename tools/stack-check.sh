@@ -23,10 +23,12 @@ board_target "$BOARD"
 # `.rwtext` and `.stack` are the same SRAM (board-target.sh IRAM, #328).
 # The JIT's exec buffer is a `.rwtext` static (Gitea #658), so it comes out
 # of the same SRAM on the S3 — which is precisely the measurement this
-# script exists to make. JIT/JIT_OFF are board-target.sh's, same as IRAM.
+# script exists to make. JIT/JIT_OFF are board-target.sh's, same as IRAM,
+# and so are RING/RING_OFF (the HUB75 ring driver, Gitea #858).
 FEATURES="$BOARD${IRAM:+ $IRAM}${EXTRA_FEATURES:+ $EXTRA_FEATURES}"
 if [ "${IRAM_OFF:-0}" = 1 ]; then FEATURES="$BOARD${EXTRA_FEATURES:+ $EXTRA_FEATURES}"; fi
 if [ "${JIT:-0}" = 1 ] && [ "${JIT_OFF:-0}" != 1 ]; then FEATURES="$FEATURES jit"; fi
+if [ "${RING:-0}" = 1 ] && [ "${RING_OFF:-0}" != 1 ]; then FEATURES="$FEATURES hub75-ring"; fi
 
 CARGO=cargo
 # Same -Zbuild-std / optimize_for_size pair as firmware/build-esp32.sh and

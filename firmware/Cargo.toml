@@ -113,26 +113,21 @@ wled-takeover = []
 # heap (and everything measured against it) is unchanged. Never a default —
 # a board turns it on for itself, like `hub75`.
 psram-arena = []
-# HUB75 spare-plane swap (Gitea #610, src/hub75.rs): ONE internal DMA
-# framebuffer plus one spare MSB plane instead of two full framebuffers, with
-# the frame composed into a staging buffer (PSRAM arena where there is one)
-# and copied into the live buffer inside the MSB run of a pass — the half of
-# every pass in which the DMA reads nothing but the MSB plane. Same
-# frame-atomic guarantee as the two-ring swap (nothing is written where the
-# DMA can read it), at ~1/PLANES of the second buffer's RAM. Off by default
-# until verified on metal; needs `hub75`.
-hub75-spare-plane = []
 # The ESP32-S3 PIE vector packer (Gitea #855, crates/luxel-hub75/src/pie.rs):
 # `compose_into` packs through `luxel_hub75::pie::pack_pie` when the
 # framebuffer meets its alignment/width rules and falls back to the scalar
 # packer otherwise (it says which at boot). Xtensa inline asm — S3 only in
-# practice; needs `hub75`. Off by default until the ring driver lands.
+# practice; needs `hub75`. On wherever the ring driver is (which implies it).
 hub75-pie = ["luxel-hub75/pie"]
 # The HUB75 RING driver (Gitea #857, src/hub75_ring.rs, docs/hub75-ring-design.md):
-# a fixed ring of row-pair slots packed just ahead of the beam by the PIE
-# packer, instead of two whole framebuffers. Replaces `Hub75Output` as the
-# board output when on. Off by default until Jeremy's eye retires the
-# two-buffer driver (#858). Needs `hub75`; implies `hub75-pie`.
+# a fixed ring of row-pair slots refilled just ahead of the beam from a frame
+# packed once into the PSRAM arena, instead of two whole framebuffers.
+# Replaces `Hub75Output` as the board output when on. The S3 panel default
+# since 2026-09-29 (#858): board-target.sh sets RING=1 for
+# board-seengreat-hub75 (the one panel board with `psram-arena`), and
+# `RING_OFF=1` builds the two-buffer `Hub75Output` instead — the fallback,
+# kept for one release. Not implied by the board feature itself, like `jit`.
+# Needs `hub75`; implies `hub75-pie`.
 hub75-ring = ["hub75-pie"]
 # Boot-time packer microbench (src/packbench.rs): times the scalar packer
 # against the PIE kernel over a 256-column row pair on each core and reports

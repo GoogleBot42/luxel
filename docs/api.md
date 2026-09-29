@@ -264,27 +264,9 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   `tags` is the last 24 displayed frame numbers so the sequence can be read
   directly, and `swap.landing_mismatch` counts flips the driver refused to
   call landed because the engine was provably still on the old ring.
-- `pass.spare` — present only on a `hub75-spare-plane` build (Gitea #610):
-  the spare-plane swap's own forensics. `flushes` counts staged frames copied
-  into the live framebuffer. Since Gitea #829 the flush CHASES the beam:
-  the flip is armed, the spare MSB written at once, and every other plane
-  written the moment the DMA has finished reading it for the current pass —
-  so a frame goes out within one pass at every schedule and nothing waits
-  for a window. `deferred` counts polls that were still waiting — for the
-  top of a pass to start the chase in, or for the beam to pass the next
-  plane (a rate, ~one per flush, not a fault); `forced` is kept for
-  compatibility and reads 0; `abandoned` counts staged frames dropped after
-  50 ms with no DMA position at all (a dead DMA; the engine never freezes
-  behind it). **`torn_wrap` is the honesty counter**: the wrap arrived
-  before the last copies did (the output task pre-empted for longer than
-  the rest of the pass), so the next pass showed one or more stale low
-  planes for ONE pass — 1.5 % of frames at an 861 Hz pass on the bench, 0
-  at ×4 and ×1 within the sampling. The three lowest planes are written
-  without waiting by design (weights 1/127..4/127, invisible when torn).
-  `torn_p1` is legacy and reads 0. `copy_us`/`copy_us_max` are the whole
-  chase's cost (including the waits), `plane_us` the typical single-plane
-  copy (an EWMA) and `plane_us_max` the slowest ever seen — a value far
-  above `copy_us` is a pre-emption, not a copy.
+- `pass.spare` — **retired 2026-09-29** (Gitea #858): it was the
+  `hub75-spare-plane` build's forensics (#610/#829), and that build was
+  removed when the ring driver became the S3 panel default; no image emits it.
 - `pass.ring` — present only on a `hub75-ring` build (Gitea #857): the ring
   driver's own counters. `rows` and `slack_us` are what the `panel` line's
   `ring_ms` resolved to for this schedule and chain width (the ring is sized
@@ -1598,9 +1580,9 @@ carry through a boot. Two guards, and they answer different questions.
 
 **Refused at POST time — the panel side.** On a HUB75 board,
 `POST /api/layout` predicts what the requested arrangement would take out of
-internal SRAM at boot: both bitplane framebuffers (or the single buffer plus a
-spare plane under `hub75-spare-plane`, or — under `hub75-ring` — the slot ring
-`ring_ms` resolves to and its one descriptor chain), the DMA descriptor rings,
+internal SRAM at boot: under the ring driver (`hub75-ring`, the S3 panel
+default) the slot ring `ring_ms` resolves to and its one descriptor chain, or,
+on a `RING_OFF=1` two-buffer build, both bitplane framebuffers, the DMA descriptor rings,
 the packer tables and its row pads (`luxel_hub75::boot_cost`). It weighs that against the
 free heap **this** boot measured at the top of the panel bring-up, before a
 single panel byte was allocated — so the answer is about the board in front of

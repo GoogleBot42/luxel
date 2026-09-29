@@ -107,8 +107,9 @@
           # frame-atomic swap: two descriptor rings, one per framebuffer
           # (Gitea #376). Applies on top of the esp-hal-git patch.
           ./firmware/patches/esp-hub75-0.14.0-atomic-swap.patch
-          # DMA position + last-EOF accessors for the spare-plane swap
-          # (Gitea #610). Applies on top of the atomic-swap patch.
+          # DMA position + last-EOF accessors, written for the spare-plane
+          # swap (Gitea #610, retired #858); the ring driver reads
+          # `dma_position`. Applies on top of the atomic-swap patch.
           ./firmware/patches/esp-hub75-0.14.0-dma-position.patch
           # per-plane repeat schedule for OE-truncated low planes
           # (Gitea #460 / #789). Applies on top of the dma-position patch.
@@ -395,38 +396,27 @@
           # #665: the JIT's code lives in PSRAM / a heap alias, not in
           # `.rwtext`, so `iram-vm` stays. Mirrors firmware/board-target.sh.
           iram = [ "iram-vm" ];
-          extraFeatures = [ "jit" ];
+          # The panel runs on the RING driver (Gitea #857/#858): a ring of
+          # row-pair slots refilled from a frame packed once into PSRAM,
+          # instead of two framebuffers. RING=1 in board-target.sh.
+          extraFeatures = [ "jit" "hub75-ring" ];
           partitions = "partitions-16mb.csv";
         };
-        # The same board with the spare-plane swap on (Gitea #610): one DMA
-        # framebuffer + one spare MSB plane instead of two framebuffers, the
-        # frame staged in the PSRAM arena. Off by default in the shipped
-        # image until verified on metal (#620); this variant keeps it building.
-        luxel-fw-seengreat-hub75-spare = {
+        # The same board on the two-buffer driver (`Hub75Output`,
+        # src/hub75.rs) — the `RING_OFF=1` fallback, kept buildable for ONE
+        # release after the ring became the default (Gitea #858). Not a
+        # release artifact.
+        luxel-fw-seengreat-hub75-classic = {
           board = "board-seengreat-hub75";
           chip = "esp32s3";
           target = "xtensa-esp32s3-none-elf";
           xtensa = true;
-          # #665: the JIT's code lives in PSRAM / a heap alias, not in
-          # `.rwtext`, so `iram-vm` stays. Mirrors firmware/board-target.sh.
           iram = [ "iram-vm" ];
-          extraFeatures = [ "jit" "hub75-spare-plane" ];
+          extraFeatures = [ "jit" ];
           # Same BOARD, so the same 16 MB flash — and firmware/build.rs keys
           # the embedded table off the board cargo feature, so leaving this
           # on the 4 MB table would ship an image whose flashed table and
           # self-install table describe different slots.
-          partitions = "partitions-16mb.csv";
-        };
-        # The same board on the RING driver (Gitea #857): a fixed ring of
-        # row-pair slots packed ahead of the beam instead of two framebuffers.
-        # Off by default until #858; this variant keeps it building.
-        luxel-fw-seengreat-hub75-ring = {
-          board = "board-seengreat-hub75";
-          chip = "esp32s3";
-          target = "xtensa-esp32s3-none-elf";
-          xtensa = true;
-          iram = [ "iram-vm" ];
-          extraFeatures = [ "jit" "hub75-ring" ];
           partitions = "partitions-16mb.csv";
         };
       };

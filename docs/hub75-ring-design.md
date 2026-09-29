@@ -419,7 +419,11 @@ core.
    Prove it with a pattern save and an OTA on the bench.
 5. **2x1 and Jeremy's eye**: the chain that is on the bench, at ×4 and at
    his `lsb 2`, against the chase build; then the 128x128 when the panels
-   exist.
+   exist. **Decided 2026-09-29 (#858):** the ring is the S3 panel default
+   (`RING=1` for `board-seengreat-hub75` in `firmware/board-target.sh`),
+   the spare-plane swap and its chase build are retired, and the two-buffer
+   driver stays buildable for one release as the `RING_OFF=1` fallback
+   (flake `luxel-fw-seengreat-hub75-classic`).
 
 Each step is its own PR and its own ticket under #838.
 
@@ -430,4 +434,6 @@ refill, no packed frame anywhere; blank and back off on failure, never
 garbage; which core packs is a lever, with core 0 first and core 1 stealing
 when he asks for it. Open: none that block step 1. Step 3 will need his `lsb` step of
 choice for the bench comparison, and step 5 his call on whether the ring
-driver becomes the default.
+driver becomes the default — **made 2026-09-29 (#858): it is the default on
+the Seengreat; the spare-plane swap (#610) and its chase (#829) are retired;
+the two-buffer driver is the `RING_OFF=1` fallback for one release.**
