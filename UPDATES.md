@@ -1,5 +1,30 @@
 # Update log
 
+## 2026-09-29 — pack once per frame, copy per pass: the 2x1 ceiling moves from `lsb 15` to `lsb 3`, and the 4x1 renders (#892, Jeremy's design)
+
+The ring driver re-packed every pass and its cost scaled with the pass
+rate, while the content changes at the frame rate — Jeremy's call: pack
+once into PSRAM, copy per pass. `write_frame` now packs the wire frame with
+the PIE kernel into one of four slot-formatted packed frames in the arena
+(template, address and brightness baked in; the queue drained between
+chunks so the 4–18 ms pack never holds core 0's refill off), and a claim is
+a `memcpy` of one row pair into its slot; the steal needs no pads, tables
+or template any more, so the cross-core table handshake is gone. Measured
+on the bench, same boot per row, lever flipped (docs/boards.md "Pack once,
+copy per pass"): copies of 4–55 µs a row pair on 1x1/2x1 against 65–130 µs
+packs; 2x1 `lsb 7` (414 passes/s) **0.26 % late with Aurora rendering**
+(the packer: 0.9 % with nothing rendering), `lsb 3` (541/s) **1.1 %** (was
+saturated at 18 %); the steal's price on 2x1 `lsb 15` down from 8 to 5 fps.
+The 1x1 late floor on core 0 alone did not move (3 %): it is scheduling,
+not the claim, and the steal stays the fix. At 4x1 the CPU copy from PSRAM
+under a 16384-px engine is ~15 MB/s (235–300 µs a 4 KB slot) and the ring
+runs 9 % late with both cores — the case for step 2, the mem2mem GDMA copy.
+With `ring_ms 1` the 4x1 leaves 62 KB of heap and **Aurora rendered on
+16384 px for the first time** (8 fps with the steal, 38 without). `ring_ms`
+is a heap knob on a chain; 3 is the wrong default past 128 columns. New
+status field `pass.ring.frame_pack_us`. Restored: 1x1, board map, master on
+both slots, the scene.
+
 ## 2026-09-29 — the ring on a 2x1 and a 4x1 chain: `lsb 15` is the 2x1 setting, the pack cost is per row pair, the 4x1 ring eats the heap (#858)
 
 Jeremy chained four panels; the ring build (steal on) ran as 2x1 and 4x1
