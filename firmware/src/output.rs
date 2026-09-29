@@ -314,6 +314,25 @@ pub fn transfer_busy() -> bool {
     crate::hub75_ring::copy_busy()
 }
 
+/// The ring driver's flash-write policy (Gitea #852): blank the panel for
+/// an erase/program fence and restore it after. `fence_blank` says whether
+/// it did anything (a board without a ring, or before the ring exists,
+/// answers false and `fence_unblank` is never called).
+#[cfg(feature = "hub75-ring")]
+pub fn fence_blank() -> bool {
+    crate::hub75_ring::fence_blank()
+}
+#[cfg(feature = "hub75-ring")]
+pub fn fence_unblank() {
+    crate::hub75_ring::fence_unblank()
+}
+#[cfg(not(feature = "hub75-ring"))]
+pub fn fence_blank() -> bool {
+    false
+}
+#[cfg(not(feature = "hub75-ring"))]
+pub fn fence_unblank() {}
+
 /// HUB75 (circular DMA, never idle by design) and the other chips: no
 /// shared-DMA hazard known; the fence does not wait. The S3 strip build is
 /// unverified on metal (Gitea #266).

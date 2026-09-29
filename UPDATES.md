@@ -1,5 +1,24 @@
 # Update log
 
+## 2026-09-29 — the ring blanks the panel for flash erases and programs (#852's fallback, design §7)
+
+#852 was evaluated first (verdict on the ticket): on this stack neither
+esp-storage nor the fence disables a cache around a flash op on the S3, so
+PSRAM stays readable through a write; what stops the ring's refill is the
+fence itself, and the DMA chain then cycles the ring's `N` resident rows at
+`32/N` times their duty while the other rows go dark. Neither
+XIP-from-PSRAM (a boot-path patch to esp-hal's PSRAM mapping) nor flash
+auto-suspend (a new IRAM SPI1 driver — ESP-IDF refuses it with the ROM
+driver) was worth it for that, so the blank policy Jeremy agreed on
+2026-09-27 ships: `core1::Fence` blanks the panel chain for the erase and
+program doors (`tag::blanks`; reads and the MMU door are microseconds inside
+the slack and are not blanked) by swapping every chain descriptor's buffer
+to the same offset in one dark slot, and restores them in `drop` before the
+other core is released; `pass.ring.blanked` counts the fences that did. The
+chip is XMC-D `0x464018` (`partitions.flash_id`), suspend-capable by
+ESP-IDF's list, should the port ever be wanted. Not yet seen on the panel
+(a pattern save should blink dark, an OTA go dark for its length).
+
 ## 2026-09-29 — the ring's refill by GDMA mem2mem copy, the ring capped by the heap, and the PSRAM bus found to be the ceiling (#892 step 2)
 
 Step 2 of #892: the per-pass copy of a row pair out of the packed frame in

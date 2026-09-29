@@ -300,8 +300,11 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   pack; `frame_pack_us` is the once-per-frame pack of the whole frame
   (`write_frame`, core 0); `steal` whether core 1's timer interrupt may
   refill beside the render task (design §6 — the lever, `POST /api/ring`
-  `{"steal":true|false}`, runtime only, default on); `blanked` and `backoffs` belong to the flash-write policy (#852) and
-  read 0 until it lands. Read `late` over a minute: 0 is the claim; a
+  `{"steal":true|false}`, runtime only, default on); `blanked` counts the flash fences (erase/program doors) that pointed the
+  panel chain at the dark slot for the op — the flash-write policy of #852,
+  design §7: dark for the write, never the ring's few resident rows shown
+  over-bright; a pattern save is several hundred short fences, an OTA is
+  seconds of them — and `backoffs` is reserved (0). Read `late` over a minute: 0 is the claim; a
   climbing `late` at a given `lsb` step means the packer cannot keep up and
   the step is too aggressive for one core. **Two accounting notes from the
   first bench run (2026-09-28, docs/boards.md "The ring driver on metal"):**
