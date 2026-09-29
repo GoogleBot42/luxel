@@ -202,6 +202,17 @@ paths:
   board mid-save (Gitea #292); with the shared cache it is ~930 and 0.5 s.
   Measure it: `/api/status` `core1.fences` is `[begun, completed]` for this
   boot, so a before/after delta around one operation is two curls.
+- **The ProCpu is esp-wifi's core too, and it preempts anything there
+  for milliseconds — and for ~590 ms during WiFi bring-up, every boot**
+  (2026-09-28, the ring driver's first pack). A wall-clock estimate taken
+  on core 0 (`get_cycle_count` around a pack, a copy window, a poll
+  interval) will contain 2–3.6 ms stalls in steady state and one
+  half-second outlier at boot; feed it raw into a decision rule and the
+  rule locks up — the spare-plane window (#620) and the ring's skip rule
+  both did. Clip samples (at most double the estimate per sample), bound
+  the first by the slack the mechanism actually has, and drop an estimate
+  the mechanism could never satisfy so it re-measures. Report the raw
+  worst separately (`*_max`) so the preemption stays visible.
 - **A long flash burst must feed the RTC watchdog.** It blocks the ProCpu
   executor, and the watchdog task lives there: a 728 KB asset install is
   ~15 s of erases and a garbage-collecting pattern save was measured at
