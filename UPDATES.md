@@ -1,5 +1,28 @@
 # Update log
 
+## 2026-09-29 — the ring driver is the S3 panel default; the spare-plane swap and its chase are retired (#858, #620, #829)
+
+Jeremy's call on #858: the HUB75 ring driver (`hub75-ring`,
+`firmware/src/hub75_ring.rs`) is now what a plain
+`BOARD=board-seengreat-hub75 firmware/build-esp32.sh` builds, following the
+JIT's pattern — `firmware/board-target.sh` sets `RING=1` for that board,
+`RING_OFF=1` builds the two-buffer `Hub75Output` instead, and
+`build-esp32.sh` and `tools/stack-check.sh` both honour it. Seengreat only:
+the ring packs its frames into the PSRAM arena, which `board-s3-devkit` +
+`hub75` (`luxel-fw-s3-hub75`) does not carry, so that variant stays on the
+two-buffer driver. In flake.nix `luxel-fw-seengreat-hub75` (the release
+artifact) gains `hub75-ring`, `luxel-fw-seengreat-hub75-classic` is the
+two-buffer fallback kept buildable for one release, and the `-ring` and
+`-spare` variants are gone. The spare-plane swap (#610) and its beam chase
+(#829) are retired outright: the `hub75-spare-plane` cargo feature, `mod
+spare`, the staging buffer and chase in `hub75.rs`, the `SPARE_*` statics,
+the `pass.spare` block of `/api/status` and the ring-vs-spare
+`compile_error!` are removed; the two-buffer driver, `DynFb`, the atomic
+two-ring swap and the `dma-position` patch (the ring reads `dma_position`)
+all stay, as does the PIE packer. Docs carry retirement notes at the
+historical sections rather than losing the measurements. App images
+(devshell, `espflash save-image`): ring **1,187,664 B** (37.8 % of the
+3 MiB slot), two-buffer fallback 1,174,992 B.
 ## 2026-09-29 — the ring blanks the panel for flash erases and programs (#852's fallback, design §7)
 
 #852 was evaluated first (verdict on the ticket): on this stack neither

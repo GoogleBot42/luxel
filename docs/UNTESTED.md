@@ -224,7 +224,8 @@ value while collapsed. Everything below is on the new page.
     board cannot serve — which is precisely the brick this ticket removes, and
     the POST refusal above now blocks the only way to store one. Two ways in,
     neither casual: **(a)** build the panel with `EXTRA_FEATURES=hub75-spare-plane`
-    (#620) — the spare-plane pair costs 48 KB less internal SRAM, so a 2×1
+    (#620; **retired 2026-09-29, #858** — (a) now needs the ring driver, the
+    S3 default, which takes even less internal SRAM) — the spare-plane pair costs 48 KB less internal SRAM, so a 2×1
     chain PASSES the POST check while still being more than the engine side can
     carry, which is exactly the shape the self-heal exists for; or **(b)** a
     debug-only path that stores a layout without the check. (a) is preferred,

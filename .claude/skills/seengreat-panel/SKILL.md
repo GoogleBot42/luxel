@@ -44,6 +44,9 @@ the other slot held.
 
 ## The spare-plane swap freezes the image (2026-09-27, #620)
 
+RETIRED 2026-09-29 (#858): the feature is gone and the ring driver is the
+panel default (`RING_OFF=1` builds the two-buffer fallback). Kept as history.
+
 `hub75-spare-plane` boots and saves the predicted 24 KB, but within seconds
 the panel shows a static image while `fps` reads 19–20: `spare.flushes` stops,
 `deferred` climbs by thousands per second, `abandoned` too. One preempted
@@ -455,7 +458,8 @@ device answers in 10–20 s and a 4 s timeout reads as "down", #259).
   counters, and remember the OTHER slot now holds the crasher — the next
   push overwrites it.
 - **Benching the ring driver (`hub75-ring`, #857) needs no serial**:
-  `EXTRA_FEATURES=hub75-ring BOARD=board-seengreat-hub75 firmware/build-esp32.sh`
+  `BOARD=board-seengreat-hub75 firmware/build-esp32.sh` (the ring is the
+  default since #858; `RING_OFF=1` builds the two-buffer driver)
   → `espflash save-image --chip esp32s3 <elf> ring.bin` → plain
   `curl --data-binary @ring.bin …/api/ota` (4/4 first try, ~15 s); a variant =
   `POST /api/layout` body `panel 7 20 shiftreg 7 <lsb> <ring_ms>` (answers

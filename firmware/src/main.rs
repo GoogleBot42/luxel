@@ -88,12 +88,8 @@ mod hub75;
 mod hub75_ring;
 #[cfg(feature = "packbench")]
 mod packbench;
-#[cfg(all(feature = "hub75-spare-plane", not(feature = "hub75")))]
-compile_error!("`hub75-spare-plane` is a HUB75 driver mode and needs the `hub75` feature");
 #[cfg(all(feature = "hub75-ring", not(feature = "hub75")))]
 compile_error!("`hub75-ring` is a HUB75 driver mode and needs the `hub75` feature");
-#[cfg(all(feature = "hub75-ring", feature = "hub75-spare-plane"))]
-compile_error!("`hub75-ring` and `hub75-spare-plane` are two drivers for one panel — pick one");
 mod layout;
 #[cfg(layer_core0)]
 mod layers;

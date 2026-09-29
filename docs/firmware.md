@@ -702,8 +702,7 @@ which for the DMA targets is a requirement and not a preference:
 
 - **two bitplane framebuffers**, `rows · cols · planes · 2 B` each — 28,672 B
   at 64×64/7 planes (`rows` is the address depth, so 32 · 64 · 7 · 2), i.e.
-  7 B per driver pixel each and 14 B for the pair — or in spare-plane mode one
-  framebuffer plus one spare MSB plane plus a staging framebuffer;
+  7 B per driver pixel each and 14 B for the pair;
 - **two DMA descriptor rings** at the runtime descriptor count (6,096 B at
   64×64/7 planes). These were a `.bss` static until #401 —
   `esp_hub75::hub75_dma_descriptors!` sizes itself from a const framebuffer
@@ -732,10 +731,8 @@ OE-active clock in a row block (`template_lights`), or `Hub75::new` rejects
 the clock — the firmware retries **once at the board default** (64×64, 7
 planes, 30 MHz, `shiftreg`, `blank 1`) and reports `driver.live.fallback` on
 `/api/layout`; only if that fails too is panel output disabled with the render
-loop still ticking. Two allocations cannot be given back and are documented
-where they happen: spare-plane mode's **staging buffer**, which comes from the
-PSRAM arena on a `psram-arena` board and the arena has no `free` (it is the
-last allocation, so nothing after it can fail), and the framebuffers plus
+loop still ticking. One set of allocations cannot be given back and is
+documented where it happens: the framebuffers plus
 descriptor ring on the one path where `Hub75::new` itself fails — a
 half-started GDMA may already hold pointers into both, and returning that
 memory to the allocator would be a use-after-free the moment the peripheral
@@ -750,8 +747,12 @@ out of PSRAM for exactly this reason). A single upright panel — every
 device shipped so far — builds the table, finds it is the identity, frees
 it again, and holds nothing.
 
-**The ring driver (`hub75-ring`, Gitea #857 / #838, off by default until
-Jeremy's eye retires the two-buffer driver in #858).** `firmware/src/hub75_ring.rs`,
+**The ring driver (`hub75-ring`, Gitea #857 / #838) — the S3 panel default
+since 2026-09-29 (#858).** `firmware/board-target.sh` sets `RING=1` for
+`board-seengreat-hub75` (the ring packs into the PSRAM arena, which
+`board-s3-devkit` + `hub75` does not have), and `RING_OFF=1` builds the
+two-buffer driver described above instead — the fallback, kept buildable for
+one release (flake variant `luxel-fw-seengreat-hub75-classic`). `firmware/src/hub75_ring.rs`,
 the design in docs/hub75-ring-design.md and the arithmetic in
 `luxel_hub75::ring`. No packed frame anywhere: a fixed ring of row-pair
 slots in internal SRAM — `planes + 1` rows of `cols` words each, sized in
@@ -789,8 +790,9 @@ heap** at boot: `ring_ms` asks, the boot gives the fewer of that and what
 leaves `BOOT_HEAP_FLOOR` plus `RING_HEAP_RESERVE` (48 KB) free
 (`hub75_ring::capped_slots`, shared with the `POST /api/layout` predictor).
 
-**Spare-plane swap (`hub75-spare-plane`, Gitea #610, off by default until
-verified on metal).** The two-framebuffer atomic swap costs a second full
+**Spare-plane swap (`hub75-spare-plane`, Gitea #610) — RETIRED 2026-09-29
+(#858)** in favour of the ring driver above, along with its beam chase
+(#829); the feature and its code are gone, and this paragraph is the record. The two-framebuffer atomic swap costs a second full
 bitplane buffer of internal SRAM — 28 KB at 64x64, 115 KB for a 256-column
 chain, which is what stood between this board and a 128x128 wall (#611). The
 spare-plane mode keeps the guarantee (nothing is ever written where the DMA

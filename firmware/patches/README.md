@@ -74,9 +74,11 @@ for the spare-plane swap (Gitea #610, `firmware/src/hub75.rs`
 engine is on right now, plus whether an `out_eof` is pending, from the same
 GDMA `OUT_DSCR` probe the atomic swap already registers — and
 `last_eof_us()`, the frame-count ISR's timestamp of the current pass's
-start. No behaviour change; nothing in the ISR moves. The firmware uses the
-position to decide whether the MSB run of the current pass still has room
-for the plane copy, and to count a copy that overran it.
+start. No behaviour change; nothing in the ISR moves. The spare-plane swap used the
+position to decide whether the MSB run of the current pass still had room
+for the plane copy; that swap was retired on 2026-09-29 (#858), and the
+patch stays because the ring driver (`firmware/src/hub75_ring.rs`) reads
+`dma_position()` for the slot under the beam.
 
 ## esp-hub75-0.14.0-plane-repeats.patch
 

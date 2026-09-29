@@ -3234,6 +3234,12 @@ ceiling gets confirmed.
 
 ## The ring driver on metal: the first bench run (2026-09-28, Gitea #857)
 
+> **Status (2026-09-29, #858):** the ring is now the S3 panel default —
+> `board-target.sh` sets `RING=1` for `board-seengreat-hub75`, and
+> `RING_OFF=1` (flake: `luxel-fw-seengreat-hub75-classic`) builds the
+> two-buffer driver as the fallback for one release. The sections below are
+> the bench record that led there.
+
 `hub75-ring` (docs/hub75-ring-design.md; PR #878) met the Seengreat panel
 for the first time on 2026-09-28. The host-verified build did not pack a
 single row pair, and four bugs came out of the run before a number could be
@@ -4181,6 +4187,12 @@ which is why the table above reads `out_fps` 113–120 against a 115 Hz
 rescan. See "Vsync: the panel is the clock" below (Gitea #387, #378).
 
 ## Spare-plane swap: the second framebuffer becomes one plane (2026-09-20, Gitea #610)
+
+> **Retired 2026-09-29 (#858)** in favour of the ring driver, together with
+> its beam chase (#829): the `hub75-spare-plane` feature, its code, its
+> `pass.spare` counters and the `luxel-fw-seengreat-hub75-spare` flake
+> variant are gone, so the build commands below no longer work. Kept as the
+> record of what was measured.
 
 Jeremy's target is a 128x128 wall (four chained 64x64, electrically one 256
 x 64 chain). The two-framebuffer atomic swap above needs 229 KB of internal
