@@ -425,6 +425,25 @@ device answers in 10–20 s and a 4 s timeout reads as "down", #259).
   exactly like a dead DMA. If you rebooted with a scene on screen, that is why;
   re-activate it by id. Scenes under ~17.7 KB of summed stored pattern bytes do
   resume correctly (verified 2026-09-27, #818).
+- **An OTA that answers `ok` and then comes back on the OLD slot ~30 s
+  later is a boot-time panic, not a lost push** (2026-09-28, the first
+  `hub75-ring` pack): the new image reset the board three times, the boot
+  guard rolled the slot back, and with no serial node the whole story was
+  `slot` unchanged + `core1.last.reset` `CoreSw` + a FULL-length previous
+  blackbox (`bb[3]` ≈ a normal boot's fence count, so it panicked after
+  boot, not during it). Three boots fit in 30 s. Read the slot before the
+  counters, and remember the OTHER slot now holds the crasher — the next
+  push overwrites it.
+- **Benching the ring driver (`hub75-ring`, #857) needs no serial**:
+  `EXTRA_FEATURES=hub75-ring BOARD=board-seengreat-hub75 firmware/build-esp32.sh`
+  → `espflash save-image --chip esp32s3 <elf> ring.bin` → plain
+  `curl --data-binary @ring.bin …/api/ota` (4/4 first try, ~15 s); a variant =
+  `POST /api/layout` body `panel 7 20 shiftreg 7 <lsb> <ring_ms>` (answers
+  `reboot_required:true`) + `POST /api/reboot` (~30 s), then 20 s settle and
+  two `/api/status` reads 60 s apart with NO other HTTP in between — diff
+  `pass.ring.late` against `packed_core0`. Anything talking to the board
+  during the window inflates `late` (it is core-0 stalls). Numbers and the
+  four bench bugs: docs/boards.md "The ring driver on metal".
 - **OTA on the 16 MB table is fast and did not wedge** (2026-09-27, first OTAs
   since the serial re-flash): `ota-push.sh` landed first try twice, 21 s and
   34 s, 1,182,752 B each, `{"ok":true,"bytes":…}` and the board back with the
