@@ -352,7 +352,10 @@ ESP32 ELF — pass the S3 one).
   like a crash and is not. `tools/jit-diff.mjs` is single-socket with
   `connection: close` + retry; copy that shape (Gitea #675).
 - **A POST fired right behind another request can come back with an EMPTY
-  body AND not take effect** — the 3-socket pool again, but silent. Seen
+  body AND not take effect** — the 3-socket pool again, but silent (a
+  `POST /api/reboot` that returned nothing did NOT reboot on 2026-09-29;
+  a bench script that assumes it did measures the old boot). Check the
+  reply says `rebooting` / `"ok":true`, and retry after 4 s if it is empty. Seen
   twice on 2026-09-24 (#709): `POST /api/scenes/<id>/activate` returned
   nothing, `GET /api/scenes` still showed the previous scene `active`, and
   four perfectly steady `frame_us` samples were of the WRONG scene. Sleep
