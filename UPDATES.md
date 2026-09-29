@@ -61,9 +61,9 @@ steady state), which is the case the core-1 steal (#857's second PR) exists
 for. Heap: +38 KB internal at stock with the scene resident, and with that
 headroom the 4-layer scene resumes at boot on the ring build where master
 comes back dark (#869). The picture itself is still unseen: no serial node,
-no DMA readback — Jeremy's eye is Gitea #886, which also records that the
-panel was found showing "mostly garbage" on the pre-#878 master it ran
-overnight, engine frame sensible. Restored: master `e16db672` on BOTH slots
+no DMA readback — Jeremy's eye is Gitea #886. (The "mostly garbage" the
+panel was found showing that day turned out to be its own supply unplugged
+— found 2026-09-29 while bisecting builds by eye; not firmware.) Restored: master `e16db672` on BOTH slots
 (live `ota_0`), assets 968,819 B / 9 files, scene `5cef0a3a` re-activated by
 id, brightness 31 / playlist / config / layout byte-identical to found (the
 new `ring_ms` field aside).
