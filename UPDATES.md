@@ -1,5 +1,33 @@
 # Update log
 
+## 2026-09-29 — the core-1 steal: `late` 4.6 % → 0.03 % on the ring driver, 10 % of the render frame rate for it (#857 second PR)
+
+Design §6 as written, minus the slot-EOF ISR the first bench run found
+unnecessary — and with one departure the bench forced. The packer is now one
+`drain` over a once-published `Shared` view of the ring (slots, the four RGB
+frames, the brightness tables, the DMA probe) with a `Packer` per core (its
+own vector pads, a copy of the slot template refreshed by generation, its
+own clipped pack estimate); the CAS on the queue word is the only contended
+write, and a table rebuild on core 0 tells the steal to stay out and waits
+for a pack in flight. `POST /api/ring {"steal":true|false}` is the runtime
+lever, `pass.ring.steal` / `packed_core1` / `pack1_us` the readout.
+
+**The departure:** §6 put the steal in the render task's vsync wait. The
+first steal build packed nothing on core 1 — with a 4096-px scene at 34 fps
+the render task never waits (the hand-off buffer is back before it asks), so
+the idle time §6 counted on was empty exactly when `late` was highest. The
+steal is a periodic timer interrupt on the AppCpu instead (TIMG1, a quarter
+of the ring's slack, armed from the core-1 init closure, packer built in task
+context, one priority level so it cannot re-enter, the flash fence's park
+runs after it). Measured on the same boot, lever flipped (docs/boards.md "The
+core-1 steal on metal"): scene resident **4.6 % → 0.03–0.06 % late**; the
+same with one HTTP client looping **9.6 % → 0.03 %**; Aurora alone 2.8 % →
+0.02 %; `lsb 15` 3.1 % → 0.01–0.03 %. Core 1 takes ~two-thirds of the packs
+and the render task pays **10–13 % of its frame rate** (34 → 30–31 fps on
+the scene). Whether that trade becomes the default is #858. Restored: master
+`39b6cc8f` on both slots, assets, scene, brightness/playlist/config/layout as
+found.
+
 ## 2026-09-28 — the ring driver met the panel: four bugs, five numbers, and `late` is not 0 on core 0 alone (#857)
 
 The first `hub75-ring` build (PR #878, host-verified) went onto the Seengreat

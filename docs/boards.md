@@ -3324,9 +3324,66 @@ Reading it:
   master build it was found on, with a sensible engine frame behind it,
   so the eye check should start from what master shows today.
 
-Next: the core-1 steal (#857, second PR) — `packed_core1` and `late`
-before/after under `tools/panel-load-bench.mjs`, then #852's flash-write
-blanking, then #858 (2x1, Jeremy's `lsb 2`, default or not).
+Next after the steal below: #852's flash-write blanking, then #858 (2x1,
+Jeremy's `lsb 2`, default or not).
+
+### The core-1 steal on metal (2026-09-29, #857 second PR)
+
+Design §6's lever, measured on the same boot with `POST /api/ring
+{"steal":…}` flipping it: a periodic timer interrupt on the AppCpu (TIMG1,
+a quarter of the ring's slack — 819 µs at stock) drains the queue beside
+the render task, with its own pads and pack estimate; core 0's output task
+keeps packing as before, and the queue word is the only thing the two
+contend on. A quiet minute (or a minute of one client looping
+`/api/status` + `/api/patterns`) per row, 64×64, 20 MHz, blank 7:
+
+| configuration | `late` per minute, steal OFF | steal ON | core 1's share of packs | fps OFF → ON | pack µs core 0 / core 1 |
+|---|---:|---:|---:|---:|---:|
+| stock 3 ms ring, scene "Test 2" (2 engines) | 7,072 (**4.6 %**) | 49–86 (**0.03–0.06 %**) | 65–67 % | 34 → 30–31 | 63–73 / 73–79 |
+| same, plus one HTTP client looping | 14,634 (**9.6 %**) | 51 (**0.03 %**) | 70 % | 33 → 31 | 72 / 122 |
+| stock, Aurora 2D alone | 4,274 (**2.8 %**) | 32 (**0.02 %**) | 65 % | 47 → 42 | 73 / 80 |
+| `lsb 15` (146 passes/s), 3 ms ring = 17 slots | 9,534 (**3.1 %**) | 39–76 (**0.01–0.03 %**) | 61–62 % | 45 → 38–40 | 63–67 / 74–78 |
+
+Reading it:
+
+- **The late floor was core 0's, and it is gone.** Every configuration
+  lands at a few dozen late claims a minute out of 150,000–300,000 — the
+  residue is the boot catch-up and the odd flash fence — against 2.8–4.6 %
+  with core 0 alone, and 9.6 % once a browser-shaped client is talking to
+  the board. That last row is the real case: the panel is looked at
+  through its own console, and on core 0 alone one open tab costs a tenth
+  of the rows a pass of lag.
+- **Core 1 takes about two-thirds of the packs**, not because it is
+  faster (its pack is ~10 µs slower — the render task's working set and
+  the JIT's PSRAM code share its cache) but because its interrupt fires on
+  a clock while core 0's turn waits behind WiFi and the web pool. The
+  claim discipline needs no priority between them; whoever probes first
+  packs.
+- **The render task pays 10–13 % of its frame rate** — 100,000 packs a
+  minute at ~78 µs is 13 % of the AppCpu, taken in 65 µs slices the engine
+  cannot see. That is the whole cost of the lever, and it is Jeremy's
+  call whether 30 fps with every row on time beats 34 fps with one row
+  in twenty a pass stale (#858 has the decision; `steal` defaults to on).
+- **Under HTTP load core 1's pack goes to 122 µs** while core 0's stays
+  at 72: the JSON the web pool builds on core 0 evicts the PSRAM frame
+  from the shared cache faster than core 1 can gather it. Still 40× under
+  the slack.
+- **The vsync wait was the wrong home.** §6 said the render task should
+  steal "where it waits for vsync"; the first steal build did exactly
+  that and packed nothing on core 1, because a 4096-px scene at 34 fps
+  never waits — the hand-off buffer is back before the render task asks
+  for it. The idle time §6 counted on exists only for patterns faster
+  than the panel. A timer interrupt has no such dependence, and the
+  packer it runs was written reentrant across cores from the start (per-
+  core pads and estimates, a once-published shared view, a
+  brightness-table handshake), so the move was the arming code alone.
+- `pack_us_max` 604 ms on the `lsb 15` rows is the boot-time esp-wifi
+  hold again (core 0's counter); the clipped estimate rode it out as
+  designed. `rescan_hz` now reads passes (76 / 150), as the first PR's
+  fix intended.
+
+Restored after: master on both slots, assets, scene `5cef0a3a`
+re-activated, brightness/playlist/config/layout as found.
 
 ## The LCD_CAM pixel clock on the panel (2026-09-07)
 
