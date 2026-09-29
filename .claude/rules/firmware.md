@@ -227,6 +227,14 @@ paths:
   so it cannot re-enter itself. The flash fence's park (SWI3, also
   `Priority1`) runs after the handler returns, so a handler that reads
   PSRAM is safe as long as it is shorter than the fence timeout.
+- **A CPU copy out of PSRAM is not free, and it is slower beside an
+  engine** (2026-09-29, the ring's pack-once refill): a `memcpy` of a 2 KB
+  row pair through the cache ran at ~40 MB/s on an otherwise idle bus and
+  ~15 MB/s (235–300 µs per 4 KB) while a 16384-px engine had its frame and
+  its native code in PSRAM too. Budget continuous PSRAM→SRAM traffic at
+  15 MB/s with the CPU, and reach for mem2mem GDMA (a descriptor and an
+  interrupt per block, one cache write-back after the producer writes)
+  for anything that must keep pace with a DMA consumer.
 - **A long flash burst must feed the RTC watchdog.** It blocks the ProCpu
   executor, and the watchdog task lives there: a 728 KB asset install is
   ~15 s of erases and a garbage-collecting pattern save was measured at
