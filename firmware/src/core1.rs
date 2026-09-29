@@ -421,6 +421,10 @@ mod imp {
         /// site, so anything living there is paid for ~20 times over
         /// (measured: 2.6 KB of image).
         mask: u32,
+        /// The panel was blanked for this op (`output::fence_blank`, the
+        /// ring driver's flash-write policy, Gitea #852) and `drop` must
+        /// restore it before the other core is released.
+        blanked: bool,
     }
 
     impl Fence {
@@ -435,7 +439,7 @@ mod imp {
             // running" answer would silently skip the park. The parker
             // flag is our own DRAM state and the second core never stops.
             if !PARKER_READY[other].load(Ordering::Acquire) {
-                return Fence { parked: None, mask: 0 };
+                return Fence { parked: None, mask: 0, blanked: false };
             }
             bb_write(1 + me, 1);
             while FENCE
@@ -506,12 +510,20 @@ mod imp {
                     }
                 }
             }
+            // The ring driver's flash-write policy (Gitea #852, design §7):
+            // for the doors that ERASE or PROGRAM — the ones that hold the
+            // bus for milliseconds — point the panel chain at a dark slot
+            // for the op, so the ring's few resident rows are not shown
+            // over-bright while nothing refills them. Reads and the MMU
+            // door are microseconds and the ring's slack covers them.
+            let blanked = tag::blanks(tag) && crate::output::fence_blank();
             bb_write(8, tag as u32);
             bb_write(9, APP_PARKS.load(Ordering::Relaxed));
             bb_write(1 + me, 3);
             Fence {
                 parked: Some(other),
                 mask,
+                blanked,
             }
         }
     }
@@ -520,6 +532,9 @@ mod imp {
         #[inline(never)]
         fn drop(&mut self) {
             let Some(other) = self.parked else { return };
+            if self.blanked {
+                crate::output::fence_unblank();
+            }
             // This core's interrupts have been masked since `acquire` took
             // the fence lock, and stay masked until the other core is
             // running again — the half of ESP-IDF's
@@ -700,6 +715,13 @@ pub mod tag {
     pub const RAW_WRITE: usize = 10;
     pub const MAP: usize = 11;
     pub const COUNT: usize = 12;
+
+    /// Doors that erase or program flash — the ones the ring driver blanks
+    /// the panel for (Gitea #852). `OTHER` is `ota::with_flash`'s generic
+    /// door and may write, so it counts.
+    pub const fn blanks(tag: usize) -> bool {
+        !matches!(tag, ASSET_READ | STORE_READ | MAP)
+    }
 }
 
 /// Single-core: no second core, nothing to fence.

@@ -213,6 +213,54 @@ pub static RING_DMA_CAL_US: AtomicU32 = AtomicU32::new(0);
 pub static RING_DMA_BATCHES: AtomicU32 = AtomicU32::new(0);
 pub static RING_DMA_ISR: AtomicU32 = AtomicU32::new(0);
 pub static RING_DMA_ERRORS: AtomicU32 = AtomicU32::new(0);
+/// The flash-write blank (Gitea #852, design §7): the panel chain's
+/// descriptors, each one's live buffer pointer and its stand-in in one
+/// dark slot at the same offset. Published once at boot; the fence swaps
+/// every `buffer` to the dark pointer before an erase/program and back
+/// after, from the fencing core with its interrupts masked — a 32-bit
+/// store the DMA picks up at its next descriptor fetch, the way the
+/// atomic-swap patch flips a ring.
+struct Blank {
+    descs: *mut DmaDescriptor,
+    n: usize,
+    live: *const *mut u8,
+    dark: *const *mut u8,
+}
+struct BlankCell(UnsafeCell<Option<Blank>>);
+// SAFETY: written once at boot before the fence can matter, read-only after.
+unsafe impl Sync for BlankCell {}
+static BLANK: BlankCell = BlankCell(UnsafeCell::new(None));
+static BLANK_READY: AtomicBool = AtomicBool::new(false);
+
+/// Point the panel chain at the dark slot. Returns false when there is no
+/// ring to blank (the fence then skips the restore).
+pub fn fence_blank() -> bool {
+    if !BLANK_READY.load(Ordering::Acquire) {
+        return false;
+    }
+    // SAFETY: read-only after the release; the descriptors and the pointer
+    // tables are leaked internal SRAM the driver owns.
+    let Some(b) = (unsafe { (*BLANK.0.get()).as_ref() }) else { return false };
+    for i in 0..b.n {
+        unsafe { core::ptr::addr_of_mut!((*b.descs.add(i)).buffer).write_volatile(*b.dark.add(i)) };
+    }
+    RING_BLANKED.fetch_add(1, Ordering::Relaxed);
+    true
+}
+
+/// Put the live buffers back after the op. The rows the beam passed
+/// meanwhile are stale until the queue catches up (`late`), at their own
+/// addresses, as for any other stall.
+pub fn fence_unblank() {
+    if !BLANK_READY.load(Ordering::Acquire) {
+        return;
+    }
+    let Some(b) = (unsafe { (*BLANK.0.get()).as_ref() }) else { return };
+    for i in 0..b.n {
+        unsafe { core::ptr::addr_of_mut!((*b.descs.add(i)).buffer).write_volatile(*b.live.add(i)) };
+    }
+}
+
 /// A copy batch is in flight (mirrors `Engine::busy` without the lock):
 /// what the flash fence reads before a flash op (`output::transfer_busy`).
 static COPY_BUSY: AtomicBool = AtomicBool::new(false);
@@ -928,9 +976,43 @@ impl Hub75Ring {
                 RING_SLACK_US.store(slack_us, Ordering::Relaxed);
                 NEXT_FILL.store(Claim { buf: 0, abs: ring_.first_claim() }.encode(), Ordering::Relaxed);
                 let _ = slots_block.leak();
-                let _ = desc_block.leak();
+                let desc_ptr_leaked = desc_block.leak();
                 let _ = tables_block.leak();
                 let _ = copy_block.leak();
+                // The flash-write blank (#852): one dark slot (formatted for
+                // row 0, colour bits zero) and, per chain descriptor, its
+                // live buffer and the dark stand-in at the same offset.
+                let dark_layout = core::alloc::Layout::from_size_align(slot_words * 2, 16).ok();
+                match dark_layout.and_then(Block::zeroed) {
+                    Some(dark_block) => {
+                        // SAFETY: a fresh zeroed block of one slot, ours.
+                        let dark = unsafe { core::slice::from_raw_parts_mut(dark_block.ptr.cast::<u16>(), slot_words) };
+                        ring::format_slot_for(dark, g, c, &s, 0);
+                        let dark_base = dark_block.leak();
+                        let slots_base = slots.cast::<u8>() as usize;
+                        let slot_bytes = slot_words * 2;
+                        let descs_ptr = desc_ptr_leaked.cast::<DmaDescriptor>();
+                        let mut live: Vec<*mut u8> = Vec::with_capacity(descs);
+                        let mut darkp: Vec<*mut u8> = Vec::with_capacity(descs);
+                        for i in 0..descs {
+                            // SAFETY: `descs` descriptors were written by the
+                            // chain builder; `buffer` points inside the slots.
+                            let buf = unsafe { core::ptr::addr_of!((*descs_ptr.add(i)).buffer).read_volatile() };
+                            let off = (buf as usize).wrapping_sub(slots_base) % slot_bytes;
+                            live.push(buf);
+                            // SAFETY: `off < slot_bytes`, inside the dark slot.
+                            darkp.push(unsafe { dark_base.add(off) });
+                        }
+                        let (live, darkp) = (live.leak(), darkp.leak());
+                        // SAFETY: the single write, before the release below.
+                        unsafe {
+                            *BLANK.0.get() =
+                                Some(Blank { descs: descs_ptr, n: descs, live: live.as_ptr(), dark: darkp.as_ptr() })
+                        };
+                        BLANK_READY.store(true, Ordering::Release);
+                    }
+                    None => println!("hub75-ring: no heap for the dark slot — flash writes show the ring's resident rows"),
+                }
                 if dma_ok {
                     ENGINE.lock(|c| *c.borrow_mut() = Some(engine));
                 }

@@ -328,6 +328,22 @@ threshold the driver drops the schedule one step (`lsb` up) and says so on
 serial and in `driver.live` — SmartMatrix's back-off, not scanvideo's
 coloured line. Nothing ever shows a stale row at the wrong address.
 
+*Status (2026-09-29, #852 evaluated and the blank shipped):* the premise
+above was wrong on this stack — neither esp-storage nor the fence disables
+a cache around a flash op on the S3, so PSRAM stays readable; what stops
+the refill is the fence itself (the other core parked, the writing core's
+interrupts masked), and the DMA chain meanwhile cycles the ring's `N`
+resident rows at `32/N` times their duty while the other rows go dark.
+Neither XIP-from-PSRAM nor flash auto-suspend was worth porting for that
+(the verdict is on #852), so the blank is the policy: `core1::Fence`
+blanks the chain for the erase/program doors (`tag::blanks`) through
+`output::fence_blank` — every descriptor's `buffer` swapped to the same
+offset in one dark slot, restored in `drop` before the other core is
+released — and `pass.ring.blanked` counts the fences that did. Reads and
+the MMU door are microseconds inside the ring's slack and are not blanked.
+The back-off (dropping the `lsb` step after a late threshold) is not
+implemented; `late` is reported instead.
+
 ## 8. Memory
 
 Internal: the ring (§4) + descriptors (~3 KB) + the packer's 2 KB tables +
