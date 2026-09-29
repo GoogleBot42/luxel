@@ -1,5 +1,45 @@
 # Update log
 
+## 2026-09-28 — the ring driver met the panel: four bugs, five numbers, and `late` is not 0 on core 0 alone (#857)
+
+The first `hub75-ring` build (PR #878, host-verified) went onto the Seengreat
+and packed nothing: the panel sat on its dark pre-fill while `pass.ring.idle`
+climbed. Four bugs came out of the bench before a number could be taken, all
+fixed here without touching the design: a queue head the beam has overtaken
+was never re-synced (the DMA starts seconds before the output task's first
+turn — `Ring::catch_up`, tested on the host); the vsync hold in `output_task`
+polled `ready_for_frame` without ever turning the driver whose `flush` IS
+the refill; `pack_claim` handed `pack_row_pair` the whole `(planes + 1) × cols`
+slot instead of the plane rows, and the assert reset the board three times
+so the boot guard rolled the slot back — visible without serial only as a
+`CoreSw` reset with a full-length blackbox; and one 590 ms pack (esp-wifi's
+scheduler holding core 0 during WiFi bring-up — it recurs every boot)
+poisoned the EWMA the skip rule reads, so at the `lsb 15` step every claim
+was counted late for good — the spare-plane freeze (#620) in a new coat. The
+estimate now clips (a sample can at most double it), the first is bounded by
+the slack, and one the ring's own slack cannot cover is dropped and
+re-measured. Also `rescan_hz` on the ring build reported ring WRAPS (243 for
+a 76 Hz panel); it is scaled to passes now (unverified on metal — arithmetic).
+
+Measured, a quiet minute each, core 0 packing alone (docs/boards.md "The ring
+driver on metal"): stock 3 ms ring = 10 slots / 10 KB, **2.6 % of row pairs
+late** with Aurora alone, 4.4 % with the 2-engine scene; ring 10 ms (27 slots)
+0.3 %; the `lsb 15` step (×2 at blank 7, 146 passes/s) 3.1 % at 3 ms and
+1.1 % at 10 ms, where the ring is capped at the frame (32 KB). A pack is
+65–73 µs of wall time a row pair (the microbench's kernel is 12) — 17 % of
+core 0 at stock, 32 % at ×2 — and a claim goes late when the executor's core
+does not run the output task for a whole ring (`pack_us_max` 2–3.6 ms in
+steady state), which is the case the core-1 steal (#857's second PR) exists
+for. Heap: +38 KB internal at stock with the scene resident, and with that
+headroom the 4-layer scene resumes at boot on the ring build where master
+comes back dark (#869). The picture itself is still unseen: no serial node,
+no DMA readback — Jeremy's eye is Gitea #886, which also records that the
+panel was found showing "mostly garbage" on the pre-#878 master it ran
+overnight, engine frame sensible. Restored: master `e16db672` on BOTH slots
+(live `ota_0`), assets 968,819 B / 9 files, scene `5cef0a3a` re-activated by
+id, brightness 31 / playlist / config / layout byte-identical to found (the
+new `ring_ms` field aside).
+
 ## 2026-09-27 — per-entry CSS buys back 12.8 kB, and code-splitting is measured as the wrong lever (#691)
 
 The `.luxa` asset bundle was at **981,613 B of 983,040 — 1,427 B, 0.14 %

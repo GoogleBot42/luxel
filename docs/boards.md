@@ -3232,6 +3232,102 @@ core-1 steal. Every number here is a row-pair microbench, not a pass on
 a running panel: the ring driver's `pass.ring` counters are where the
 ceiling gets confirmed.
 
+## The ring driver on metal: the first bench run (2026-09-28, Gitea #857)
+
+`hub75-ring` (docs/hub75-ring-design.md; PR #878) met the Seengreat panel
+for the first time on 2026-09-28. The host-verified build did not pack a
+single row pair, and four bugs came out of the run before a number could be
+taken — all four are in the follow-up PR, none needed a design change:
+
+1. **A queue head the beam has passed was never re-synced.** The DMA runs
+   from `Hub75::new_ring`, the output task's first `flush` comes seconds
+   later (WiFi first), so the seeded claim `n` was a thousand wraps behind
+   the beam, `fillable` was false and stayed false: the panel showed its
+   dark pre-fill for good while `pass.ring.idle` climbed. `drain` now jumps
+   to `Ring::catch_up` (the slot after the beam's) and counts the claims it
+   skipped as `late` — except on the first sync after boot, which is the
+   expected dark pass, not a stall.
+2. **The vsync hold never turned the driver.** `output_task` polled
+   `ready_for_frame` for up to `VSYNC_HOLD` (50 ms) without calling
+   `flush`, and the ring becomes ready only by packing, so every frame
+   waited the hold out. The hold loop calls `flush` now (a no-op for every
+   other driver).
+3. **The packer was handed the whole slot.** `pack_row_pair` asserts
+   `planes × cols` words; a slot is `(planes + 1) × cols` with the ENTRY row
+   in front. The first real pack reset the board, three boots tripped the
+   guard, and the slot rolled back — invisible without serial except as a
+   `CoreSw` reset with a full-length blackbox. The plane rows are sliced
+   from `plane_row(0)` now.
+4. **A preempted pack poisoned the skip rule for good.** esp-wifi's
+   scheduler owns core 0 too: at the `lsb 15` step one early pack measured
+   **590 ms** (it recurs on every boot, WiFi bring-up), the EWMA sat at
+   74 ms against 3.1 ms of slack, and the rule counted every claim late
+   from then on — nothing packed, so nothing re-measured. The spare-plane
+   freeze of #620 in a new coat. A sample can now at most double the
+   estimate, the first is bounded by the slack, and an estimate the whole
+   ring could not cover is dropped and measured again.
+
+With those in, a quiet minute (no HTTP) per configuration, 64×64, 7 planes,
+20 MHz, blank 7, brightness 31, core 0 packing alone:
+
+| stored `panel` line | live `lsb` | passes/s | ring | slack | `late` per minute | of claims | typical pack | worst pack |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `… 7 0` (stock), Aurora 2D | 49 | 76 | 10 slots, 10 KB | 3.3 ms | 3,860 | **2.6 %** | 65 µs | 2.4 ms |
+| stock, scene "Test 2" (2 engines) | 49 | 76 | 10 | 3.3 ms | 6,474 | **4.4 %** | 73 µs | 3.3 ms |
+| `… 7 0 10` (ring 10 ms), Aurora | 49 | 75 | 27 slots, 27 KB | 10.2 ms | 558 | **0.3 %** | 61 µs | 2.9 ms |
+| `… 7 15 3` (×2, ring 3 ms), Aurora | 15 | 146 | 17 slots, 17 KB | 3.1 ms | 8,963 | **3.1 %** | 68 µs | 3.3 ms |
+| `… 7 15 10` (×2, ring 10 ms), Aurora | 15 | 151 | 32 = the frame, 32 KB | 6.2 ms (capped) | 3,437 | **1.1 %** | 67 µs | 590 ms (boot) |
+
+Reading it:
+
+- **`late` is not 0 at stock on core 0 alone — it is 2.6–4.8 %.** Every
+  late claim is one row pair shown a pass stale at its own address (design
+  §7), so the panel is correct but a few percent of rows lag by 13 ms.
+  The cause is not the pack: 8 slots of slack is 3.3 ms, a pack is
+  ~70 µs, and a claim goes late only when the output task does not run for
+  a whole ring. `pack_us_max` shows core 0 stalls of 2–3.6 ms in steady
+  state (esp-wifi, the net stack and the web pool all share the executor's
+  core), which is exactly the case §6 makes for the core-1 steal: the
+  render task's vsync wait is on the other core. Ring 10 ms hides most of
+  it for 17 KB more (0.3 %).
+- **The pack is 65–73 µs a row pair, not the microbench's 12.** The PIE
+  kernel is 22 cycles/px hot (above); the driver's pack also rewrites the
+  slot template (`format_slot_for`, 512 words), gathers from a PSRAM frame
+  cold, runs from a cold I-cache between other work, and is preempted at
+  will — and `pack_us` is a clipped EWMA of wall time, not CPU time. At
+  stock that is 2,400 packs/s × 70 µs = **17 % of core 0**; at the `lsb
+  15` step, 4,700/s = **32 %**. The two-buffer driver packs once per
+  rendered FRAME (2.2 ms at 20 fps = 4 %); the ring packs every PASS,
+  whatever the frame rate — that is the price of the buffers it gives
+  back, and why the packer's speed is the ceiling (§5).
+- **The `lsb 15` step gave ×2, not ×4, at blank 7**: 146–152 passes/s
+  against 76 (the ×4 quoted for `lsb 14` on 2026-09-27 was at blank 2).
+  The ring followed the schedule as designed — 17 slots for 3 ms, and at
+  10 ms it is capped at the frame (32 slots, 32 KB), which is the
+  two-buffer driver's footprint again and the point past which the ring
+  buys nothing.
+- **Heap: +38 KB internal at stock with the scene resident** (73–77 KB
+  free against 35–39 KB on master), +45 KB with Aurora alone (86.8 KB).
+  A side effect worth knowing: with that headroom the 4-layer scene
+  **resumed at boot** on every ring reboot (`engines` 2), which the same
+  scene does NOT do on master (#869 — it came back dark on the restore
+  push and was re-activated by hand).
+- **`rescan_hz` on the ring build reads ring wraps, not panel passes**
+  (243 at stock = 76 × 32 / 10; 287 at `lsb 15` with 17 slots). The
+  follow-up PR scales it by `rows / n` so the field keeps meaning what
+  docs/api.md says; the passes/s above are that conversion.
+- **What this run could not see**: the picture. No serial node was
+  attached and nothing reads the DMA memory back over HTTP, so wrong-
+  address rows (the ENTRY-row logic) are still Jeremy's eyeball check
+  (Gitea #886); `/api/pixels` is the engine frame and cannot tell the two
+  drivers apart. The panel was showing "mostly garbage" on the pre-#878
+  master build it was found on, with a sensible engine frame behind it,
+  so the eye check should start from what master shows today.
+
+Next: the core-1 steal (#857, second PR) — `packed_core1` and `late`
+before/after under `tools/panel-load-bench.mjs`, then #852's flash-write
+blanking, then #858 (2x1, Jeremy's `lsb 2`, default or not).
+
 ## The LCD_CAM pixel clock on the panel (2026-09-07)
 
 The panel's rescan rate had only ever been an estimate — a comment in

@@ -555,7 +555,13 @@ impl OutputDriver for Hub75Ring {
     /// `newest` at it. The next pass claimed reads it.
     fn write_frame(&mut self, rgb: &[[u8; 3]], _brightness5: u8) -> bool {
         let Some(hub75) = self.hub75.as_ref() else { return false };
-        crate::shared::RESCANS.store(hub75.frame_count(), Ordering::Relaxed);
+        // `frame_count` is RING WRAPS here (one EOF per ring), and a ring
+        // is `n` of the frame's `rows` row pairs — so `rescan_hz` would read
+        // 243 for a 76 Hz panel on a 10-slot ring (2026-09-28). Scale it to
+        // passes so the field keeps meaning what docs/api.md says.
+        let wraps = u64::from(hub75.frame_count());
+        let passes = (wraps * u64::from(self.ring.n) / u64::from(self.ring.rows.max(1))) as u32;
+        crate::shared::RESCANS.store(passes, Ordering::Relaxed);
         let Some(i) = self.free_frame() else { return false };
         let dst = &mut self.frames[usize::from(i)];
         let n = rgb.len().min(dst.len());
