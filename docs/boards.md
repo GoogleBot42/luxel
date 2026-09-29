@@ -3320,9 +3320,11 @@ Reading it:
   attached and nothing reads the DMA memory back over HTTP, so wrong-
   address rows (the ENTRY-row logic) are still Jeremy's eyeball check
   (Gitea #886); `/api/pixels` is the engine frame and cannot tell the two
-  drivers apart. The panel was showing "mostly garbage" on the pre-#878
-  master build it was found on, with a sensible engine frame behind it,
-  so the eye check should start from what master shows today.
+  drivers apart. (The "mostly garbage" the panel was found showing that
+  day, on every build and every template, was the panel's own supply
+  unplugged — logic power alone from the HUB75 header — found 2026-09-29
+  while bisecting builds by eye. Not firmware; the engine frame was
+  always fine.)
 
 Next after the steal below: #852's flash-write blanking, then #858 (2x1,
 Jeremy's `lsb 2`, default or not).
