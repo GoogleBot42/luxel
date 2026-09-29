@@ -383,6 +383,8 @@ async fn main(spawner: Spawner) -> ! {
     packbench::run(0);
 
     let timg0 = TimerGroup::new(p.TIMG0);
+    #[cfg(feature = "hub75-ring")]
+    let timg1 = p.TIMG1;
     let sw_int = SoftwareInterruptControl::new(p.SW_INTERRUPT);
     esp_rtos::start(timg0.timer0, sw_int.software_interrupt0);
     // Dual-core: the ProCpu's half of the flash fence (core1.rs) — armed
@@ -694,6 +696,10 @@ async fn main(spawner: Spawner) -> ! {
             move |s: Spawner| {
                 #[cfg(feature = "packbench")]
                 packbench::run(1);
+                // The ring driver's core-1 steal: a timer interrupt on
+                // THIS core that packs beside the render task (#857).
+                #[cfg(feature = "hub75-ring")]
+                hub75_ring::arm_steal(timg1);
                 s.spawn(render_task(sink).unwrap())
             },
         ) {

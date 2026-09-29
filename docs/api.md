@@ -295,7 +295,9 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   core packed how many row pairs (`packed_core1` is 0 until the core-1
   steal); `idle` counts the turns on which nothing was fillable (the ring was
   full — healthy); `pack_us` / `pack_us_max` the typical and worst row-pair
-  pack; `blanked` and `backoffs` belong to the flash-write policy (#852) and
+  pack on core 0, `pack1_us` the typical on core 1; `steal` whether core 1's
+  timer interrupt may pack beside the render task (design §6 — the lever,
+  `POST /api/ring` `{"steal":true|false}`, runtime only, default on); `blanked` and `backoffs` belong to the flash-write policy (#852) and
   read 0 until it lands. Read `late` over a minute: 0 is the claim; a
   climbing `late` at a given `lsb` step means the packer cannot keep up and
   the step is too aggressive for one core. **Two accounting notes from the
@@ -309,6 +311,10 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   bring-up, 2–3 ms in steady state) shows in `pack_us_max` and not in the
   skip rule. On core 0 alone expect 2.6–4.8 % late at the stock 3 ms ring on
   the 64×64, 0.3 % at 10 ms.
+- `POST /api/ring` — `hub75-ring` builds only (Gitea #857): body
+  `{"steal":true|false}` turns the core-1 steal on or off for this boot;
+  answers `{"ok":true,"steal":B}`. Not persisted. The A/B lever for
+  `pass.ring.late` / `packed_core1` on a running panel.
 - `rescan_hz` — how many times a second the HUB75 panel is really redrawn
   from the framebuffer, read from the driver's own BCM frame counter. `0` on
   every board without a panel. This is the panel's clock **and** the render

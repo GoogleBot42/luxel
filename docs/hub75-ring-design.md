@@ -235,6 +235,21 @@ all of this with two packers, random ISR latency, a prefetching probe and
 core-0 holds: zero writes under the beam and zero mixed-frame passes in
 every safe configuration, skips (not tears) when the ring is too small.
 
+*Status (2026-09-29, #857 second PR):* implemented as written, with one
+simplification — there is no slot-EOF interrupt at all (step 3 found
+`frame_count`/`dma_position` enough), so `free_upto` is the position probe
+and `late` is counted by the packer that skips. The render task calls
+`hub75_ring::steal()` from `claim_paced`'s wait loop; per-core `Packer`
+(pads, template copy, pack estimate), a once-published `Shared` view of the
+ring, and a brightness-table handshake so the steal never reads a table
+mid-rebuild. One departure: the steal is a periodic TIMER INTERRUPT on the
+AppCpu (TIMG1, a quarter of the slack), not a call from the render task's
+vsync wait — with a 4096-px scene that task never waits (the hand-off
+buffer is back before it asks), so the wait was empty exactly when `late`
+was highest; the first steal build packed nothing on core 1. `POST /api/ring
+{"steal":false}` is the lever back to core 0 alone. Numbers: docs/boards.md
+"The ring driver on metal".
+
 What this costs the packer: it must be reentrant across cores — per-core
 `Scratch`, per-core PIE state (each CPU has its own q-registers, so the
 vector packer needs no cross-core save, only interrupts masked on its own

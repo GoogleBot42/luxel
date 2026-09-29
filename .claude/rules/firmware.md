@@ -213,6 +213,20 @@ paths:
   the first by the slack the mechanism actually has, and drop an estimate
   the mechanism could never satisfy so it re-measures. Report the raw
   worst separately (`*_max`) so the preemption stays visible.
+- **A second periodic job on the AppCpu is a timer interrupt, not a task
+  and not "the render task's idle time"** (2026-09-29, the ring driver's
+  core-1 steal). esp-rtos exposes no thread spawn — one main thread per
+  core plus `CurrentThreadHandle` — and the embassy executor on the AppCpu
+  is cooperative, so nothing can preempt a 30 ms render frame from task
+  context; and the render task's vsync wait is EMPTY whenever the pattern
+  is slower than the panel (the hand-off buffer is back before it asks),
+  which is every real 4096-px pattern. Arm a `PeriodicTimer` on TIMG1
+  (free) from the core-1 init closure — `set_interrupt_handler` binds on
+  the calling core — at `Priority1`, allocate whatever the handler needs in
+  that closure (task context), and keep the handler at one priority level
+  so it cannot re-enter itself. The flash fence's park (SWI3, also
+  `Priority1`) runs after the handler returns, so a handler that reads
+  PSRAM is safe as long as it is shorter than the fence timeout.
 - **A long flash burst must feed the RTC watchdog.** It blocks the ProCpu
   executor, and the watchdog task lives there: a 728 KB asset install is
   ~15 s of erases and a garbage-collecting pattern save was measured at

@@ -822,6 +822,10 @@ fn status_json() -> luxel_core::jsonview::Chunks {
             push_u32(&mut out, ring::RING_PACK_US.load(Ordering::Relaxed));
             push_piece(&mut out, ",\"pack_us_max\":");
             push_u32(&mut out, ring::RING_PACK_US_MAX.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"pack1_us\":");
+            push_u32(&mut out, ring::RING_PACK1_US.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"steal\":");
+            push_piece(&mut out, if ring::STEAL.load(Ordering::Relaxed) { "true" } else { "false" });
             push_piece(&mut out, "}");
         }
         push_piece(&mut out, ",\"shorts\":[");
@@ -2543,6 +2547,33 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                                 push_piece(&mut out, "\"");
                             }
                             push_piece(&mut out, ",\"applies\":\"next activation\"}");
+                            out
+                        }
+                    }))
+                }
+                // POST /api/ring — the ring driver's lever (Gitea #857,
+                // design §6): `{"steal":true|false}` lets the render task
+                // pack from its vsync wait on core 1, or leaves core 0
+                // alone. Runtime only, not persisted; `pass.ring.steal`
+                // reads it back.
+                #[cfg(feature = "hub75-ring")]
+                "/api/ring" => {
+                    let body = text(&raw);
+                    let body = body.trim();
+                    let want = if body.contains("false") {
+                        Some(false)
+                    } else if body.contains("true") {
+                        Some(true)
+                    } else {
+                        None
+                    };
+                    Some(json_response(match want {
+                        None => String::from("{\"ok\":false,\"error\":\"body must be {\\\"steal\\\":true|false}\"}"),
+                        Some(on) => {
+                            crate::hub75_ring::STEAL.store(on, Ordering::Relaxed);
+                            let mut out = String::from("{\"ok\":true,\"steal\":");
+                            push_piece(&mut out, if on { "true" } else { "false" });
+                            push_piece(&mut out, "}");
                             out
                         }
                     }))
