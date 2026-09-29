@@ -295,9 +295,9 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   core packed how many row pairs (`packed_core1` is 0 until the core-1
   steal); `idle` counts the turns on which nothing was fillable (the ring was
   full — healthy); `pack_us` / `pack_us_max` the typical and worst row-pair
-  pack on core 0, `pack1_us` the typical on core 1; `steal` whether the render
-  task may pack from its vsync wait (design §6 — the lever, `POST /api/ring`
-  `{"steal":true|false}`, runtime only, default on); `blanked` and `backoffs` belong to the flash-write policy (#852) and
+  pack on core 0, `pack1_us` the typical on core 1; `steal` whether core 1's
+  timer interrupt may pack beside the render task (design §6 — the lever,
+  `POST /api/ring` `{"steal":true|false}`, runtime only, default on); `blanked` and `backoffs` belong to the flash-write policy (#852) and
   read 0 until it lands. Read `late` over a minute: 0 is the claim; a
   climbing `late` at a given `lsb` step means the packer cannot keep up and
   the step is too aggressive for one core. **Two accounting notes from the

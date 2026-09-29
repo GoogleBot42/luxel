@@ -23,14 +23,18 @@
 //! - **Core 0 packs, from the output task; core 1 steals** (design §6).
 //!   [`Hub75Ring::flush`] drains the queue on every turn of the output
 //!   task's loop (polled at [`Hub75Ring::poll_interval`], a fraction of the
-//!   ring's slack), and the render task calls [`steal`] from its vsync wait
-//!   on the AppCpu, where it would otherwise spin for the hand-off buffer.
-//!   Both go through one [`drain`] over a [`Shared`] view of the ring
-//!   (published once, from `flush`, when the driver's address is final)
-//!   with a [`Packer`] of their own: pads, a copy of the slot template and
-//!   a pack-time estimate per core. The queue word is the only thing they
-//!   contend on. `POST /api/ring {"steal":false}` is the lever back to
-//!   core 0 alone; `pass.ring.packed_core1` shows what the steal took.
+//!   ring's slack). On the AppCpu a periodic timer interrupt ([`arm_steal`],
+//!   TIMG1, the same interval) drains it too — an INTERRUPT, not the render
+//!   task's vsync wait as §6 first put it: with a 4096-px scene the render
+//!   task never waits (the hand-off buffer is back before it asks), so
+//!   "idle time" was empty exactly when `late` was highest (2026-09-29).
+//!   Both packers go through one [`drain`] over a [`Shared`] view of the
+//!   ring (published once, from `flush`, when the driver's address is
+//!   final) with a [`Packer`] of their own: pads, a copy of the slot
+//!   template and a pack-time estimate per core. The queue word is the
+//!   only thing they contend on. `POST /api/ring {"steal":false}` is the
+//!   lever back to core 0 alone; `pass.ring.packed_core1` shows what the
+//!   steal took.
 //! - **`write_frame` publishes.** The wire frame is copied into one of four
 //!   RGB frames in the PSRAM arena (48 KB at 4096 px; the arena has
 //!   megabytes) and its index becomes `newest`. The claim of a pass's row 0
@@ -48,12 +52,15 @@
 //! `late` (claims skipped), `blanked` and `backoffs` (#852, 0 here),
 //! `packed_core0`, `packed_core1` (0 until the steal).
 
-use core::cell::{Cell, UnsafeCell};
+use core::cell::{Cell, RefCell, UnsafeCell};
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 
 use alloc::vec::Vec;
 use esp_hal::dma::DmaDescriptor;
-use esp_hal::peripherals::{DMA_CH0, LCD_CAM};
+use esp_hal::interrupt::{InterruptHandler, Priority};
+use esp_hal::peripherals::{DMA_CH0, LCD_CAM, TIMG1};
+use esp_hal::timer::timg::TimerGroup;
+use esp_hal::timer::PeriodicTimer;
 use esp_hal::system::Cpu;
 use esp_hal::Blocking;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -110,8 +117,11 @@ static CORE1_PACKING: AtomicBool = AtomicBool::new(false);
 /// The slot template both packers stamp (control + schedule), and a
 /// generation counter so each packer refreshes its copy only when the
 /// blanking changed (`adopt_blank`).
-static TEMPLATE: BlockingMutex<CriticalSectionRawMutex, Cell<Option<(Control, Schedule)>>> =
+static TEMPLATE: BlockingMutex<CriticalSectionRawMutex, Cell<Option<(Geometry, Control, Schedule)>>> =
     BlockingMutex::new(Cell::new(None));
+/// The steal's timer, kept so its handler can clear the interrupt.
+static STEAL_TIMER: BlockingMutex<CriticalSectionRawMutex, RefCell<Option<PeriodicTimer<'static, Blocking>>>> =
+    BlockingMutex::new(RefCell::new(None));
 static TEMPLATE_GEN: AtomicU32 = AtomicU32::new(0);
 
 /// What both packers read: raw views of the ring the output task owns.
@@ -173,9 +183,9 @@ impl Packer {
     }
 }
 
-/// The render task's packer (design §6): lives on whichever core runs
-/// `render_task` — the AppCpu on this board — and is touched by that task
-/// only, from [`steal`].
+/// The steal's packer (design §6): built by [`arm_steal`] on the AppCpu and
+/// touched only by the steal interrupt on that core, which cannot re-enter
+/// itself (one priority level).
 static mut CORE1: Option<Packer> = None;
 
 /// The queue word (`ring::Claim::encode`): the next claim's counter, and
@@ -458,7 +468,7 @@ impl Hub75Ring {
                 RING_ROWS.store(n, Ordering::Relaxed);
                 RING_SLACK_US.store(slack_us, Ordering::Relaxed);
                 NEXT_FILL.store(Claim { buf: 0, abs: ring_.first_claim() }.encode(), Ordering::Relaxed);
-                TEMPLATE.lock(|t| t.set(Some((c, s))));
+                TEMPLATE.lock(|t| t.set(Some((g, c, s))));
                 TEMPLATE_GEN.store(1, Ordering::Release);
                 let _ = slots_block.leak();
                 let _ = desc_block.leak();
@@ -596,7 +606,7 @@ fn drain(p: &mut Packer, s: &Shared, core: usize) -> u32 {
     let Some(abs_dma) = abs_dma(s) else { return 0 };
     let gen = TEMPLATE_GEN.load(Ordering::Acquire);
     if gen != p.template_gen {
-        if let Some((c, sc)) = TEMPLATE.lock(|t| t.get()) {
+        if let Some((_, c, sc)) = TEMPLATE.lock(|t| t.get()) {
             p.control = c;
             p.sched = sc;
         }
@@ -682,12 +692,49 @@ fn drain(p: &mut Packer, s: &Shared, core: usize) -> u32 {
     packed
 }
 
-/// The core-1 steal (design §6): the render task calls this wherever it
-/// would otherwise wait for the hand-off buffer, and packs whatever the
-/// queue has that core 0 has not reached. Cheap when there is nothing:
-/// one atomic load and a position probe. Stays out while core 0 is
-/// rebuilding the brightness tables. Counters credit the core it actually
-/// ran on (the render task falls back to core 0 on a single-core boot).
+/// Arm the core-1 steal on THIS core (design §6): call from the AppCpu's
+/// init closure, before the render task runs. A periodic timer interrupt
+/// on TIMG1 at a quarter of the ring's slack (≥ 500 µs, the output task's
+/// own poll) drains the queue in interrupt context — the one home on that
+/// core that a 30 ms render frame cannot hold off. The packer's pads are
+/// allocated here, in task context, never from the interrupt. A no-op
+/// when there is no panel (`RING_SLACK_US` 0).
+pub fn arm_steal(timg1: TIMG1<'static>) {
+    let slack = RING_SLACK_US.load(Ordering::Relaxed);
+    let Some((g, c, sc)) = TEMPLATE.lock(|t| t.get()) else { return };
+    if slack == 0 {
+        return;
+    }
+    // SAFETY: before the interrupt exists; the only other access is the
+    // handler itself, on this core, which cannot run yet.
+    unsafe { *core::ptr::addr_of_mut!(CORE1) = Some(Packer::new(g, c, sc)) };
+    let us = u64::from((slack / 4).max(500));
+    let mut t = PeriodicTimer::new(TimerGroup::new(timg1).timer0);
+    t.set_interrupt_handler(InterruptHandler::new(steal_isr, Priority::Priority1));
+    if t.start(esp_hal::time::Duration::from_micros(us)).is_err() {
+        println!("hub75-ring: steal timer would not start — core 0 packs alone");
+        return;
+    }
+    t.listen();
+    STEAL_TIMER.lock(|c| *c.borrow_mut() = Some(t));
+    println!("hub75-ring: core-1 steal armed on {:?}, every {} us", Cpu::current(), us);
+}
+
+extern "C" fn steal_isr() {
+    STEAL_TIMER.lock(|c| {
+        if let Some(t) = c.borrow_mut().as_mut() {
+            t.clear_interrupt();
+        }
+    });
+    steal();
+}
+
+/// One turn of the steal (design §6): pack whatever the queue has that
+/// core 0 has not reached. Cheap when there is nothing: one atomic load
+/// and a position probe. Stays out while core 0 is rebuilding the
+/// brightness tables. Counters credit the core it actually ran on (the
+/// AppCpu init closure runs on core 0 when the second core failed to
+/// start, and the timer then lands there too).
 pub fn steal() -> u32 {
     if !STEAL.load(Ordering::Relaxed) {
         return 0;
@@ -697,13 +744,9 @@ pub fn steal() -> u32 {
     if TABLES_B5.load(Ordering::Acquire) != b5 {
         return 0;
     }
-    // SAFETY: `CORE1` belongs to the render task alone — one task, one
-    // core, never re-entered (this is not called from an interrupt).
-    let p = unsafe { &mut *core::ptr::addr_of_mut!(CORE1) };
-    let p = p.get_or_insert_with(|| {
-        let (c, sc) = TEMPLATE.lock(|t| t.get()).unwrap_or((Control::new(0, 0), Schedule::plan(s.g, Control::new(0, 0), 0)));
-        Packer::new(s.g, c, sc)
-    });
+    // SAFETY: `CORE1` is the steal interrupt's alone — one priority level,
+    // so it never re-enters — and was built by `arm_steal` before it.
+    let Some(p) = (unsafe { &mut *core::ptr::addr_of_mut!(CORE1) }).as_mut() else { return 0 };
     let core = if Cpu::current() == Cpu::AppCpu { 1 } else { 0 };
     CORE1_PACKING.store(true, Ordering::SeqCst);
     let n = if TABLES_B5.load(Ordering::SeqCst) == b5 { drain(p, s, core) } else { 0 };
@@ -784,7 +827,7 @@ impl Hub75Ring {
         }
         self.control.blank = want;
         self.sched = self.sched.refit(self.g, self.control);
-        TEMPLATE.lock(|t| t.set(Some((self.control, self.sched))));
+        TEMPLATE.lock(|t| t.set(Some((self.g, self.control, self.sched))));
         TEMPLATE_GEN.fetch_add(1, Ordering::Release);
         let lsb = self.sched.lsb;
         LIVE.lock(|c| {

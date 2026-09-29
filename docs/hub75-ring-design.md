@@ -242,8 +242,13 @@ and `late` is counted by the packer that skips. The render task calls
 `hub75_ring::steal()` from `claim_paced`'s wait loop; per-core `Packer`
 (pads, template copy, pack estimate), a once-published `Shared` view of the
 ring, and a brightness-table handshake so the steal never reads a table
-mid-rebuild. `POST /api/ring {"steal":false}` is the lever back to core 0
-alone. Numbers: docs/boards.md "The ring driver on metal".
+mid-rebuild. One departure: the steal is a periodic TIMER INTERRUPT on the
+AppCpu (TIMG1, a quarter of the slack), not a call from the render task's
+vsync wait — with a 4096-px scene that task never waits (the hand-off
+buffer is back before it asks), so the wait was empty exactly when `late`
+was highest; the first steal build packed nothing on core 1. `POST /api/ring
+{"steal":false}` is the lever back to core 0 alone. Numbers: docs/boards.md
+"The ring driver on metal".
 
 What this costs the packer: it must be reentrant across cores — per-core
 `Scratch`, per-core PIE state (each CPU has its own q-registers, so the
