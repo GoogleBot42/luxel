@@ -150,6 +150,32 @@ is unchanged; "pack" below reads "copy" for the per-pass cost. Step 2 of
 plus one cache write-back of the packed frame after each pack). This is
 also ESP-IDF's RGB-LCD "bounce buffer" shape.
 
+*Step 2 shipped (2026-09-29, #892 step 2):* GDMA channel 1 in
+memory-to-memory mode does the copy. A copier's turn (the output task on
+core 0, the steal's timer on core 1) claims up to eight slots and hands
+them to the DMA as one descriptor chain — PSRAM row pairs in, internal
+slots out, 64-byte external bursts; the completion interrupt (bound on
+core 1 beside the steal) accounts the batch and starts the next, so the
+DMA stays busy while the queue has claims and the CPU's part of a pass is
+a few microseconds of descriptor writes. The packed frame is written back
+from the data cache after every eight packed row pairs. The skip rule
+budgets a batch with the DMA's measured time per slot (clipped EWMA,
+seeded by a synchronous calibration copy at boot) plus a fixed latency
+margin. The CPU `memcpy` remains as the fallback (a failed calibration)
+and as the lever (`POST /api/ring {"dma":false}`). The ring is capped by
+the heap at boot as well (`RING_HEAP_RESERVE`). Numbers: docs/boards.md
+"The DMA copy". Two facts from that bench bind every later step: the
+panel chain must hold the top GDMA priority (at equal priority the copy
+channel starved it and the LCD_CAM ended its continuous transaction — the
+panel froze), and the PSRAM bus at the 40 MHz clock delivers 35–40 MB/s to
+a DMA reader, which is the copy's ceiling at `320 MB/s ÷ (E+1)` of
+per-pass traffic — 27 MB/s at `lsb 7`, 35 at `lsb 3`, the same for every
+wall width. Below one frame the ring's SIZE changes that traffic by
+nothing (a slot holds a different row pair every pass); at `N = rows` the
+copy can be skipped while the frame is unchanged (#896), which is the
+2x1's way out, and the 4x1's are the `lsb` step, the PSRAM clock (#895)
+and a chain that never idles (#897).
+
 
 The whole frame is re-packed every pass because nothing stores the result.
 Pixels per pass × passes per second = `64 × 20e6 / (33 × E)`, independent of

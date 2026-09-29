@@ -309,6 +309,18 @@ pub fn push_status(out: &mut dyn luxel_core::jsonview::Sink) {
     push_u32(out, assets);
     push_piece(out, ",\"ceiling_bytes\":");
     push_u32(out, CEILING.load(Ordering::Relaxed));
+    // The flash chip the ROM found (S3): its JEDEC id as the ROM packs it
+    // (`manufacturer << 16 | type << 8 | capacity`) and the size it derived.
+    // What decides whether the part can suspend an erase for the cache
+    // (Gitea #852) — read here because the board has no serial console.
+    #[cfg(feature = "esp32s3")]
+    {
+        let (id, size) = flash_chip();
+        push_piece(out, ",\"flash_id\":");
+        push_u32(out, id);
+        push_piece(out, ",\"flash_bytes\":");
+        push_u32(out, size);
+    }
     // Absent means false. On a board with one embedded layout this whole
     // branch — the string literal included — is dead code.
     if parttab::upgrade_available() {
@@ -775,4 +787,34 @@ fn move_assets(live: &[u8], target: &[u8]) -> bool {
         return false;
     }
     true
+}
+
+/// The ROM's flash chip record on the S3: `rom_spiflash_legacy_data`
+/// (esp32s3.rom.ld) points at a struct whose first member is the
+/// `esp_rom_spiflash_chip_t` ESP-IDF calls `g_rom_flashchip` —
+/// `device_id`, `chip_size`, `block_size`, `sector_size`, `page_size`,
+/// `status_mask`. Returns `(device_id, chip_size)`.
+#[cfg(feature = "esp32s3")]
+fn flash_chip() -> (u32, u32) {
+    #[repr(C)]
+    struct Chip {
+        device_id: u32,
+        chip_size: u32,
+        _block_size: u32,
+        _sector_size: u32,
+        _page_size: u32,
+        _status_mask: u32,
+    }
+    unsafe extern "C" {
+        static rom_spiflash_legacy_data: *const Chip;
+    }
+    // SAFETY: a ROM-provided pointer to ROM data that lives for ever; the
+    // struct layout is the ROM's ABI (esp_rom_spiflash_legacy_data_t).
+    unsafe {
+        let p = rom_spiflash_legacy_data;
+        if p.is_null() {
+            return (0, 0);
+        }
+        ((*p).device_id, (*p).chip_size)
+    }
 }

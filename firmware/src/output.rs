@@ -306,10 +306,18 @@ pub fn transfer_busy() -> bool {
     false
 }
 
+/// The ring driver's copy engine (#892 step 2): the fence waits for a
+/// memory-to-memory batch that is still reading PSRAM — see
+/// `hub75_ring::copy_busy` for why the panel chain needs that.
+#[cfg(feature = "hub75-ring")]
+pub fn transfer_busy() -> bool {
+    crate::hub75_ring::copy_busy()
+}
+
 /// HUB75 (circular DMA, never idle by design) and the other chips: no
 /// shared-DMA hazard known; the fence does not wait. The S3 strip build is
 /// unverified on metal (Gitea #266).
-#[cfg(not(all(not(feature = "hub75"), feature = "esp32")))]
+#[cfg(not(any(all(not(feature = "hub75"), feature = "esp32"), feature = "hub75-ring")))]
 pub fn transfer_busy() -> bool {
     false
 }

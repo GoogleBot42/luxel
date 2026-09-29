@@ -235,6 +235,24 @@ paths:
   15 MB/s with the CPU, and reach for mem2mem GDMA (a descriptor and an
   interrupt per block, one cache write-back after the producer writes)
   for anything that must keep pace with a DMA consumer.
+- **A second GDMA channel must never run at the panel chain's priority,
+  and the LCD_CAM stops for good when its FIFO runs dry** (2026-09-29, the
+  ring's mem2mem copy, #892 step 2). At equal `out_pri` the copy channel's
+  64-byte PSRAM bursts held channel 0 off the bus long enough for the LCD
+  FIFO to empty, and the S3 LCD treats that as the end of its continuous
+  transaction (TRM: "…or all the data in GDMA is sent out"): `lcd_start`
+  clears, `trans_done` fires, the picture freezes with the DMA still
+  cycling and `fps` still healthy — only `rescan_hz` 0 says so. Give the
+  panel chain `out_pri` 9 and every other channel 0 (`hub75_ring::set_
+  priority`), keep a watchdog that re-sets `lcd_start` (`lcd_restarts`),
+  and never let a channel that may stall on PSRAM (a flash op holds SPI1)
+  be in flight while the fence runs (`output::transfer_busy`).
+- **GDMA out of the octal PSRAM is 35–40 MB/s at the 40 MHz PSRAM clock,
+  the same as the CPU through the cache** — measured by the ring's
+  calibration copy (`dma_cal_us`). Budget any DMA reader of PSRAM at that,
+  and remember a memcpy of rows the packer wrote a frame ago runs at 80–
+  100 MB/s from cache lines: the DMA is the copier that frees the CPU, not
+  the faster one, until #895 moves the clock.
 - **A long flash burst must feed the RTC watchdog.** It blocks the ProCpu
   executor, and the watchdog task lives there: a 728 KB asset install is
   ~15 s of erases and a garbage-collecting pattern save was measured at

@@ -1,5 +1,47 @@
 # Update log
 
+## 2026-09-29 — the ring's refill by GDMA mem2mem copy, the ring capped by the heap, and the PSRAM bus found to be the ceiling (#892 step 2)
+
+Step 2 of #892: the per-pass copy of a row pair out of the packed frame in
+PSRAM is now a GDMA channel-1 memory-to-memory transfer — a copier's turn
+claims up to eight slots and hands them to the DMA as one descriptor chain,
+a completion interrupt on core 1 accounts the batch and starts the next, the
+packed frame is written back from the data cache after every eight packed
+row pairs, and the skip rule budgets a batch with the DMA's measured time per
+slot (esp-hal's `Mem2Mem` keeps its transfer and interrupt plumbing
+crate-private, so the channel is programmed through `DMA::regs()`, with the
+`Channel` handle held for its guard and interrupt binding). The CPU `memcpy`
+stays as the fallback and the lever (`POST /api/ring {"dma":false}`, plus
+`pri`, `hybrid`); the ring is capped at boot so the heap keeps a 48 KB
+reserve beyond the boot floor (`RING_HEAP_RESERVE`; the 4x1 at `ring_ms 3`
+gets 13 slots and 55 KB of heap instead of 22 and 15). Measured on the
+Seengreat, one boot per row group, levers flipped on the boot (docs/boards.md
+"The DMA copy"): **1x1 stock goes to 0 late claims of 147,000 a minute** (the
+CPU copy left 0.03 %) at no fps cost; the core-1 timer's kicks still matter
+there (2.9 % with it off, the chain runs dry between passes on a 1x1) but
+cost microseconds, not copies, while on a chain the completion interrupt's
+chaining does all of it. Two findings on the way: (1) **at
+equal GDMA priority the copy channel starved the panel chain and the LCD
+stopped** — the LCD_CAM ends its continuous transaction when its FIFO runs
+dry (`lcd_start` clear, `trans_done` raised, channel 0 still cycling), found
+with a register probe now in `pass.ring.lcd`; the panel chain runs at GDMA
+priority 9 by default now, a watchdog in `flush` restarts a stopped LCD
+(`lcd_restarts`), and the flash fence waits for a copy batch in flight. (2)
+**The PSRAM bus is the copy's ceiling: 35–40 MB/s at the 40 MHz PSRAM clock**
+(`dma_cal_us`), so on the 2x1 the cache-hot CPU copy stays better on `late`
+(0.27 % vs 6.9 % at `lsb 7`, 1.2 % vs 16 % at `lsb 3`) while the DMA is
+better on fps (20 vs 14, 19 vs 13), and on the 4x1 the DMA is the copier that
+leaves the render core alive (24 fps against 8; 12–14 % late either way at
+40 MHz). Follow-ups filed: #895 (PSRAM at 80 MHz), #896 (skip the copy at a
+full-frame ring while the frame is unchanged — the 2x1 becomes ~1 MB/s),
+#897 (append-to-tail chain so the DMA never idles between batches), #898
+(the write-back's cost), #899 (the CPU skip rule starves itself), #894 (the
+plain Seengreat build's `.stack` floor, pre-existing). #852 got its
+evaluation: esp-storage never disables the cache on the S3, PSRAM stays
+readable through a flash write, the fence's park is what stops the refill;
+the flash chip is XMC-D `0x464018` (`partitions.flash_id`); neither port is
+worth it now. Restored: 1x1, board map, master on both slots, the scene.
+
 ## 2026-09-29 — pack once per frame, copy per pass: the 2x1 ceiling moves from `lsb 15` to `lsb 3`, and the 4x1 renders (#892, Jeremy's design)
 
 The ring driver re-packed every pass and its cost scaled with the pass

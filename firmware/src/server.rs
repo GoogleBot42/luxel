@@ -826,6 +826,39 @@ fn status_json() -> luxel_core::jsonview::Chunks {
             push_u32(&mut out, ring::RING_PACK1_US.load(Ordering::Relaxed));
             push_piece(&mut out, ",\"frame_pack_us\":");
             push_u32(&mut out, ring::RING_FRAME_PACK_US.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"asked\":");
+            push_u32(&mut out, ring::RING_ASKED.load(Ordering::Relaxed));
+            // The DMA copy engine (#892 step 2): the lever, its per-slot
+            // time (the skip rule's number) and worst, batches done, of
+            // which the completion interrupt started, and errors/stalls.
+            push_piece(&mut out, ",\"dma\":");
+            push_piece(&mut out, if ring::DMA_ON.load(Ordering::Relaxed) { "true" } else { "false" });
+            push_piece(&mut out, ",\"dma_us\":");
+            push_u32(&mut out, ring::RING_DMA_US.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"dma_us_max\":");
+            push_u32(&mut out, ring::RING_DMA_US_MAX.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"dma_cal_us\":");
+            push_u32(&mut out, ring::RING_DMA_CAL_US.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"dma_batches\":");
+            push_u32(&mut out, ring::RING_DMA_BATCHES.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"dma_isr\":");
+            push_u32(&mut out, ring::RING_DMA_ISR.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"dma_errors\":");
+            push_u32(&mut out, ring::RING_DMA_ERRORS.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"pri\":");
+            push_piece(&mut out, if ring::PRI.load(Ordering::Relaxed) { "true" } else { "false" });
+            push_piece(&mut out, ",\"hybrid\":");
+            push_piece(&mut out, if ring::HYBRID.load(Ordering::Relaxed) { "true" } else { "false" });
+            push_piece(&mut out, ",\"lcd_restarts\":");
+            push_u32(&mut out, ring::RING_LCD_RESTARTS.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"lcd\":[");
+            for (i, v) in ring::lcd_probe().iter().enumerate() {
+                if i > 0 {
+                    push_piece(&mut out, ",");
+                }
+                push_u32(&mut out, *v);
+            }
+            push_piece(&mut out, "]");
             push_piece(&mut out, ",\"steal\":");
             push_piece(&mut out, if ring::STEAL.load(Ordering::Relaxed) { "true" } else { "false" });
             push_piece(&mut out, "}");
@@ -2553,31 +2586,50 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                         }
                     }))
                 }
-                // POST /api/ring — the ring driver's lever (Gitea #857,
-                // design §6): `{"steal":true|false}` lets the render task
-                // pack from its vsync wait on core 1, or leaves core 0
-                // alone. Runtime only, not persisted; `pass.ring.steal`
-                // reads it back.
+                // POST /api/ring — the ring driver's levers (Gitea #857 /
+                // #892, design §6): `{"steal":true|false}` lets core 1
+                // take refill turns, or leaves core 0 alone;
+                // `{"dma":true|false}` copies by the GDMA engine or by the
+                // CPU. Either or both keys; runtime only, not persisted;
+                // `pass.ring.steal` / `pass.ring.dma` read them back.
                 #[cfg(feature = "hub75-ring")]
                 "/api/ring" => {
                     let body = text(&raw);
                     let body = body.trim();
-                    let want = if body.contains("false") {
-                        Some(false)
-                    } else if body.contains("true") {
-                        Some(true)
-                    } else {
-                        None
-                    };
-                    Some(json_response(match want {
-                        None => String::from("{\"ok\":false,\"error\":\"body must be {\\\"steal\\\":true|false}\"}"),
-                        Some(on) => {
-                            crate::hub75_ring::STEAL.store(on, Ordering::Relaxed);
-                            let mut out = String::from("{\"ok\":true,\"steal\":");
-                            push_piece(&mut out, if on { "true" } else { "false" });
-                            push_piece(&mut out, "}");
-                            out
+                    // "<key>":<bool> with any spacing, no JSON parser.
+                    let key = |k: &str| -> Option<bool> {
+                        let at = body.find(k)?;
+                        let rest = body[at + k.len()..].trim_start_matches([' ', '"', ':']);
+                        if rest.starts_with("false") {
+                            Some(false)
+                        } else if rest.starts_with("true") {
+                            Some(true)
+                        } else {
+                            None
                         }
+                    };
+                    let (steal, dma, pri, hybrid) = (key("steal"), key("dma"), key("pri"), key("hybrid"));
+                    if let Some(on) = pri {
+                        crate::hub75_ring::set_priority(on);
+                    }
+                    if let Some(on) = hybrid {
+                        crate::hub75_ring::HYBRID.store(on, Ordering::Relaxed);
+                    }
+                    Some(json_response(if steal.is_none() && dma.is_none() && pri.is_none() && hybrid.is_none() {
+                        String::from("{\"ok\":false,\"error\":\"body must be {\\\"steal\\\":true|false} and/or {\\\"dma\\\":true|false}\"}")
+                    } else {
+                        if let Some(on) = steal {
+                            crate::hub75_ring::STEAL.store(on, Ordering::Relaxed);
+                        }
+                        if let Some(on) = dma {
+                            crate::hub75_ring::set_dma(on);
+                        }
+                        let mut out = String::from("{\"ok\":true,\"steal\":");
+                        push_piece(&mut out, if crate::hub75_ring::STEAL.load(Ordering::Relaxed) { "true" } else { "false" });
+                        push_piece(&mut out, ",\"dma\":");
+                        push_piece(&mut out, if crate::hub75_ring::DMA_ON.load(Ordering::Relaxed) { "true" } else { "false" });
+                        push_piece(&mut out, "}");
+                        out
                     }))
                 }
                 // POST /api/config — body is a pixel count 1..=MAX_PIXELS.

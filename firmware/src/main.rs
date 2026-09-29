@@ -610,7 +610,7 @@ async fn main(spawner: Spawner) -> ! {
     #[cfg(all(feature = "hub75", not(feature = "hub75-ring")))]
     let out = hub75::Hub75Output::new(p.LCD_CAM, board::hub75_pins!(p), p.DMA_CH0);
     #[cfg(feature = "hub75-ring")]
-    let out = hub75_ring::Hub75Ring::new(p.LCD_CAM, board::hub75_pins!(p), p.DMA_CH0);
+    let out = hub75_ring::Hub75Ring::new(p.LCD_CAM, board::hub75_pins!(p), p.DMA_CH0, p.DMA_CH1, p.SPI3);
     // ---- end board wiring ----
 
     // Seed runtime settings from flash (else compile-time defaults) BEFORE the

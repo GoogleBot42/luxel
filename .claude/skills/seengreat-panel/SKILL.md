@@ -78,6 +78,15 @@ Reading the panel (2026-09-07):
   **Order of reading a black panel: `live`/`src`/`engines` → `vmerr` →
   `pass`/`rescan_hz` → hardware.** `POST /api/patterns/<id>/activate` is
   the one-line test.
+  **A FROZEN picture with `fps` healthy and `rescan_hz` 0 on a ring build is
+  the LCD_CAM having ended its continuous transaction** (2026-09-29, #892
+  step 2): its FIFO ran dry because another GDMA channel out-arbitrated
+  the panel chain, `lcd_start` cleared, `trans_done` raised, channel 0
+  still cycling. `pass.ring.lcd` is the register probe (`LCD_USER` bit 27
+  set = running; `LC_DMA_INT_RAW` 3 = it ended), `pass.ring.lcd_restarts`
+  the watchdog that restarts it; a reboot also clears it. The fix that
+  holds is the panel chain at GDMA priority 9 (`pass.ring.pri`, default
+  on) — never let a second channel run at the panel's priority.
   **And a SCRAMBLED panel — sheared bands, one colour, garbage that
   changes shape with the template but never becomes the picture — is
   hardware first: the panel's own 5 V supply** (2026-09-29: it was
@@ -343,7 +352,10 @@ ESP32 ELF — pass the S3 one).
   like a crash and is not. `tools/jit-diff.mjs` is single-socket with
   `connection: close` + retry; copy that shape (Gitea #675).
 - **A POST fired right behind another request can come back with an EMPTY
-  body AND not take effect** — the 3-socket pool again, but silent. Seen
+  body AND not take effect** — the 3-socket pool again, but silent (a
+  `POST /api/reboot` that returned nothing did NOT reboot on 2026-09-29;
+  a bench script that assumes it did measures the old boot). Check the
+  reply says `rebooting` / `"ok":true`, and retry after 4 s if it is empty. Seen
   twice on 2026-09-24 (#709): `POST /api/scenes/<id>/activate` returned
   nothing, `GET /api/scenes` still showed the previous scene `active`, and
   four perfectly steady `frame_us` samples were of the WRONG scene. Sleep
@@ -449,9 +461,14 @@ device answers in 10–20 s and a 4 s timeout reads as "down", #259).
   `POST /api/layout` body `panel 7 20 shiftreg 7 <lsb> <ring_ms>` (answers
   `reboot_required:true`) + `POST /api/reboot` (~30 s), then 20 s settle and
   two `/api/status` reads 60 s apart with NO other HTTP in between — diff
-  `pass.ring.late` against `packed_core0`. Anything talking to the board
-  during the window inflates `late` (it is core-0 stalls). Numbers and the
-  four bench bugs: docs/boards.md "The ring driver on metal".
+  `pass.ring.late` against `packed_core0 + packed_core1`. Anything talking
+  to the board during the window inflates `late` (it is core-0 stalls).
+  The levers flip on one boot: `POST /api/ring` `{"steal":false}` and
+  `{"dma":false}` (the GDMA copy against the CPU `memcpy`, #892 step 2) —
+  give each flip 5 s before the first read. A chain layout does not resume
+  the scene (#869): `POST /api/patterns/5eed1e54/activate` (Aurora) is the
+  rendering load the tables use. Numbers and the bench bugs: docs/boards.md
+  "The ring driver on metal" and the sections after it.
 - **OTA on the 16 MB table is fast and did not wedge** (2026-09-27, first OTAs
   since the serial re-flash): `ota-push.sh` landed first try twice, 21 s and
   34 s, 1,182,752 B each, `{"ok":true,"bytes":…}` and the board back with the

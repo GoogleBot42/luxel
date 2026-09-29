@@ -36,6 +36,9 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
   releases/CI only — never push, PR, or file issues there; everything happens on Gitea.
   See docs/releases.md.
 - OTA deploys and real-chromium browser testing DO work from inside the container.
+- `pkill -f`/`pgrep -f <pattern>` matches the Bash tool's OWN `bash -c` line (it
+  contains the pattern text) and kills your shell — exit 144, nothing after it runs
+  (twice on 2026-09-29). Use the bracket trick (`run-al[l].sh`) or explicit PIDs.
 - Each bench device is a single shared unit (dev unit, Athom rig, Seengreat panel —
   .claude/skills/deploy-device lists them) and there is ONE Pixel Blaze oracle —
   never parallelize device-touching work across subagents or sessions; a soak or

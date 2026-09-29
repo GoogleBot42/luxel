@@ -3510,6 +3510,112 @@ Reading it:
 Restored after: 1x1, board map, master on both slots, the scene; the four
 panels stay chained.
 
+### The DMA copy: GDMA mem2mem refills the ring, and the PSRAM bus is the ceiling (2026-09-29, Gitea #892 step 2)
+
+Step 2 of #892: the per-pass copy of a row pair out of the packed frame in
+PSRAM is done by **GDMA channel 1 in memory-to-memory mode** instead of the
+CPU. A copier's turn (the output task on core 0, or the steal timer / the
+completion interrupt on core 1) claims up to eight slots and hands them to
+the DMA as one descriptor chain — PSRAM in, internal SRAM out, 64-byte
+external bursts; the completion interrupt accounts the batch and starts the
+next; the packed frame is written back from the data cache after every
+eight packed row pairs; the skip rule budgets a batch with the DMA's
+measured time per slot. The CPU `memcpy` of step 1 stays as the fallback
+and as a lever (`POST /api/ring {"dma":false}`), and the ring is capped by
+the heap at boot (`RING_HEAP_RESERVE`, 48 KB beyond the boot floor — the
+4x1 at `ring_ms 3` now gets 13 slots and keeps 55 KB of heap instead of 22
+slots and 15 KB). Same bench as the sections above: one boot per row group,
+levers flipped on the boot, a quiet minute per row, Aurora rendering unless
+noted. `pri` (the panel chain at GDMA priority 9) is on in every DMA row
+below except where it says off.
+
+| chain, `lsb` | passes/s | ring | heap | copier | `late` | fps | DMA µs/slot (idle cal) | batches/min, slots/batch |
+|---|---:|---:|---:|---|---:|---:|---:|---:|
+| 1x1 stock, scene | 75 | 10 | 76 KB | DMA + steal | **0.00 %** (0 of 146,916) | 31 | 91 (29) | 108k, 1.4 |
+| 1x1 stock, scene | 77 | 10 | 76 KB | DMA, core-0 turns only (no chain, no timer) | 4.43 % | 32 | 47 | 56k, 2.5 |
+| 1x1 stock, scene | 79 | 10 | 72 KB | CPU + steal (step 1) | 0.03 % | 31 | — | — |
+| 1x1 stock, scene | 77 | 10 | 76 KB | CPU alone | 4.41 % | 34 | — | — |
+| 1x1 stock, Aurora | 75 | 10 | 82 KB | DMA + steal | **0.00 %** | 43 | 80 | 109k, 1.3 |
+| 1x1 stock, Aurora | 76 | 10 | 86 KB | DMA, turns only | 3.12 % | 44 | 41 | 59k, 2.4 |
+| 2x1 `lsb 7` | 403 | 25 (asked 32) | 53 KB | DMA + steal | 6.9 % | **20** | 122 (51) | 291k, 2.5 |
+| 2x1 `lsb 7` | 409 | 25 | 53 KB | DMA, chain only (timer off) | 7.4 % | 20 | 109 | 243k, 3.0 |
+| 2x1 `lsb 7` | 417 | 25 | 57 KB | CPU + steal | **0.27 %** | 14 | (memcpy 20–26 µs) | — |
+| 2x1 `lsb 3` | 543 | 25 | 53 KB | DMA + steal | 16.1 % | 19 | 111 (52) | 431k, 2.0 |
+| 2x1 `lsb 3` | 547 | 25 | 53 KB | DMA, chain only | 16.6 % | 19 | 131 | 382k, 2.3 |
+| 2x1 `lsb 3` | 548 | 25 | 53 KB | CPU + steal | 1.2 % | 13 | (memcpy 17–27 µs) | — |
+| 4x1 `lsb 15`, `ring_ms 3` | 204 | 13 (asked 22) | 55 KB | DMA + steal | 12.8 % | **24** | 221 (96) | 68k, 5.0 |
+| 4x1 `lsb 15`, `ring_ms 3` | 204 | 13 | 51 KB | DMA, chain only | 15.3 % | 24 | 302 | 66k, 5.1 |
+| 4x1 `lsb 15`, `ring_ms 3` | 184 | 13 | 51 KB | CPU + steal | 6.4 % | **7** | (memcpy 211 / 396 µs) | — |
+| 4x1 `lsb 15`, `ring_ms 1` | 207 | 9 | 72 KB | DMA + steal | 14.3 % | 24 | 240 (96) | 127k, 2.6 |
+| 4x1 `lsb 15`, `ring_ms 1` | 203 | 9 | 68 KB | DMA + steal + hybrid | 12.0 % | 21 | 246 | 145k, 2.4 |
+| 4x1 `lsb 15`, `ring_ms 1` | 203 | 9 | 64 KB | CPU + steal | 93.6 % (core 1 copied nothing — #899) | 40 | (memcpy 252 / 677 µs) | — |
+| 2x1 `lsb 7` | 410 | 25 | 53 KB | DMA + steal + hybrid | 5.3 % | 18 | 109 | 269k, 2.8 |
+| 2x1 `lsb 7` | 402 | 25 | 50 KB | DMA chain + hybrid (timer off) | 5.9 % | 19 | 154 | 230k, 3.2 |
+| 2x1 `lsb 3` | 527 | 25 | 58 KB | DMA + steal + hybrid | 13.4 % | 17 | 129 | 311k, 2.9 |
+| 1x1 stock, Aurora (dma8) | 76 | 10 | 86 KB | DMA, chain only (timer off) | 2.9 % | 44 | 49 (30) | 72k, 2.0 |
+| 1x1 stock, Aurora (dma8) | 76 | 10 | 86 KB | DMA + steal + hybrid | 0.00 % | 42 | 79 | 108k, 1.4 |
+
+Reading it:
+
+- **On the 1x1 the DMA copy takes `late` to zero** — 0 of 147,000 claims a
+  minute with the scene resident, where the CPU copy with the steal left
+  0.03 % — and at no cost to the render core (31 fps either way). The
+  core-1 timer still earns its place at 1x1: the batches there are 1–2
+  slots and the chain runs dry between passes, so without the timer's
+  kicks a claim waits for core 0's next turn — 2.9 % late with the timer
+  off (the core-0 scheduling floor again), 0 % with it on. On a chain the
+  queue never runs dry and the timer adds nothing (2x1: 6.9 % with, 7.4 %
+  without). Either way the timer's turns cost core 1 microseconds now, not
+  copies — the fps rows say so — so `steal` stays on by default and the
+  lever is an A/B, not a trade.
+- **The panel chain must own the GDMA arbitration.** At equal priority the
+  copy channel's PSRAM bursts held channel 0 off the bus long enough for
+  the LCD_CAM's FIFO to run dry at 2x1 `lsb 7`, and the LCD then ENDS its
+  continuous transaction (the TRM's "…or all the data in GDMA is sent
+  out"): `lcd_start` clear, `trans_done` raised, channel 0 still cycling a
+  full FIFO, the panel frozen on its last rows within 10–70 s of boot, and
+  nothing in `pass` or `vmerr` to say so but `rescan_hz` 0. `pass.ring.lcd`
+  is the register probe that found it; `set_priority` (channel 0 TX at 9,
+  the copy channel at 0, `pri` in `pass.ring`, default on) held 400+
+  passes/s for the rest of the night; `lcd_restarts` counts a watchdog in
+  `flush` that would put `lcd_start` back. The flash fence also waits for
+  a batch in flight now (`output::transfer_busy` → `hub75_ring::copy_busy`):
+  a burst stalled on PSRAM while SPI1 programs flash is the same hazard.
+- **The PSRAM bus is the copy's ceiling, and it is 35–40 MB/s at the 40 MHz
+  PSRAM clock** (`dma_cal_us`: 29 µs per 1 KB slot, 51 per 2 KB, 96 per
+  4 KB on an idle bus — the same ~37 MB/s the CPU sees through the cache,
+  #599). A 2x1 at `lsb 7` needs 27 MB/s of copy, `lsb 3` 35, a 4x1 at
+  `lsb 15` 28 — beside the engine's frames, the JIT's code fetch and the
+  packer's own traffic on the same bus — and the batches are short (2–5
+  slots: the queue is drained as fast as the beam frees slots) so each
+  batch pays an interrupt latency before the next starts: the DMA is busy
+  ~60 % of the time at 2x1 `lsb 7` and still 7 % late. Gitea #895 asks for
+  the PSRAM at 80 MHz, which doubles this ceiling for everything on the
+  bus; an append-to-tail chain that never lets the DMA idle is the other
+  lever (a follow-up ticket).
+- **The CPU copy beats the DMA on the 2x1 because the rows are hot**: the
+  packer wrote them through the cache a frame ago, and a 2 KB `memcpy`
+  runs at 80–100 MB/s from cache lines (20–27 µs) where the DMA reads the
+  chip at 40. It pays for that on core 1 — 14 fps against 20. On the 4x1
+  the cache is thrashed by the 16384-px engine and the CPU copy fell to
+  15 MB/s (step 1), so there the DMA is the better copier and the render
+  core is free: **24 fps with Aurora on 16384 px where the CPU steal left
+  8**, at 12–14 % late. The hybrid rows (core 0 copying cache-hot
+  rows while the DMA runs) are the combination: a modest gain, 6.9 → 5.3 % at 2x1 `lsb 7` and 16 → 13 % at `lsb 3` for a frame or two of fps, because core 0 only copies on its own turns while the DMA is busy (19–23 % of the slots at 7–9 µs each — the cache-hot rate). The CPU copy with both cores stays the better copier for `late` on the 2x1 until #896 makes the copy itself go away there.
+- **The heap cap works as intended**: 4x1 `ring_ms 3` resolved to 13 slots
+  (asked 22) and left 55 KB; 2x1 at `lsb 7`/`lsb 3` to 25 of 32 (53 KB
+  against 41 before). `pass.ring.asked` beside `rows` says when it bit.
+- `frame_pack_us` grew by the write-back: 4.7–6.9 ms at 1x1 (was 3.6–5.6),
+  13–14 ms at 2x1 (9–14), 33 ms at 4x1 (17–18). The write-back walks every
+  line of the range whether dirty or not; a follow-up could write back per
+  row pair as it is packed, or pack into a small internal staging block and
+  let the DMA carry that to PSRAM as well.
+- `dma_us_max` 2.7–9.4 ms on every boot is a batch that straddled a flash
+  write (the boot-ok store, a scene write): the copy stalled while SPI1 had
+  the bus and completed after — no error, no reset. That is the whole of
+  the ring's flash-write exposure with the cache live (#852 has the
+  evaluation).
+
 ## The LCD_CAM pixel clock on the panel (2026-09-07)
 
 The panel's rescan rate had only ever been an estimate — a comment in

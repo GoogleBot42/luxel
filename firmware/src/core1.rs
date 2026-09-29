@@ -471,12 +471,16 @@ mod imp {
                 FENCE_TIMEOUTS.fetch_add(1, Ordering::Relaxed);
                 bb_bump(6);
             }
-            // The parked core executes nothing, but its cache controller can
-            // still have a fill in flight from the instruction it was
-            // interrupted on; ESP-IDF waits for that cache to go idle and
-            // disables it before touching SPI1 (spi_flash_disable_cache),
-            // and so do we, via the ROM helper. Re-enabled (with a flush) in
-            // Drop before the core is released.
+            // The parked core executes nothing from flash. Note what this
+            // fence does NOT do (checked 2026-09-29, Gitea #852): neither it
+            // nor esp-storage at this rev disables or suspends a cache around
+            // the ROM flash op — ESP-IDF's spi_flash_disable_cache has no
+            // counterpart here (flashmap.rs suspends the caches only while it
+            // programs the MMU). The cache stays on and PSRAM, on its own
+            // chip select, stays readable through it; what is unreadable for
+            // the op's duration is FLASH — code, rodata and the mapped
+            // regions — which is why the park handler is IRAM and the other
+            // core spins there rather than fetching anything.
             // The parked core may have been stopped mid-frame with the
             // strip's SPI2 DMA transfer still running. On the classic ESP32
             // the SPI hosts share the SPI DMA engine, and a ROM SPI1 flash op
