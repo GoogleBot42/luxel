@@ -122,6 +122,9 @@ pub struct Hub75Ring {
     /// Clocks per slot at the panel's pixel clock, for the skip rule.
     slot_clocks: u32,
     clock_hz: u32,
+    /// The queue has been brought level with the beam once (the first
+    /// drain after boot); later catch-ups are stalls and count `late`.
+    synced: bool,
 }
 
 impl Hub75Ring {
@@ -180,6 +183,7 @@ impl Hub75Ring {
             pack_cycles: 0,
             slot_clocks: 1,
             clock_hz: 1,
+            synced: false,
         }
     }
 
@@ -373,6 +377,7 @@ impl Hub75Ring {
                     pack_cycles: 0,
                     slot_clocks: ring::slot_clocks(&s, g.cols) as u32,
                     clock_hz,
+                    synced: false,
                 })
             }
             Err(e) => {
@@ -410,8 +415,14 @@ impl Hub75Ring {
         let words = &mut self.slots[slot * self.slot_words..(slot + 1) * self.slot_words];
         ring::format_slot_for(words, self.g, self.control, &self.sched, row);
         let frame = &self.frames[usize::from(claim.buf) % FRAMES];
+        // The packer takes the PLANE rows only — `planes * cols` words from
+        // `plane_row(0)` — never the ENTRY row in front of them (its length
+        // assert reset the board three times on 2026-09-28 and the guard
+        // rolled the slot back). Still 16-aligned: `cols` is a multiple of
+        // the lane count, so the ENTRY row is a multiple of 16 bytes.
+        let planes = &mut words[ring::plane_row(0) * self.g.cols..];
         // The kernel refuses only a shape the boot already refused.
-        let _ = pie::pack_row_pair(words, self.g, row, frame, self.remap, t, &mut self.pads);
+        let _ = pie::pack_row_pair(planes, self.g, row, frame, self.remap, t, &mut self.pads);
     }
 
     /// Drain the queue: claim and pack every slot the beam has left that
@@ -422,6 +433,29 @@ impl Hub75Ring {
         loop {
             let word = NEXT_FILL.load(Ordering::Acquire);
             let (claim, next) = ring::claim_next(word, NEWEST.load(Ordering::Acquire), &self.ring);
+            if self.ring.late(claim.abs, abs_dma) {
+                // The beam has overtaken the queue head — the first drain
+                // after boot (the DMA has run since `new_ring`, seconds
+                // before the output task's first turn) or a stall long
+                // enough to lap the ring. Nothing behind the beam can be
+                // packed and a late head never becomes fillable by itself,
+                // so re-join right after the beam and count what was
+                // skipped (the boot catch-up is not a late row: the ring
+                // was dark and expected to be). The pass being re-joined
+                // reads `newest`, and `PASS_FRAME` says so, so `write_frame`
+                // keeps its hands off that frame.
+                let buf = NEWEST.load(Ordering::Acquire);
+                let target = self.ring.catch_up(abs_dma);
+                let word2 = Claim { buf, abs: target }.encode();
+                if NEXT_FILL.compare_exchange(word, word2, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+                    PASS_FRAME[(self.ring.pass(target) % 2) as usize].store(buf, Ordering::Release);
+                    if self.synced {
+                        RING_LATE.fetch_add(self.ring.dist(claim.abs, target), Ordering::Relaxed);
+                    }
+                    self.synced = true;
+                }
+                continue;
+            }
             if !self.ring.fillable(claim.abs, abs_dma) {
                 if packed == 0 {
                     RING_IDLE.fetch_add(1, Ordering::Relaxed);
