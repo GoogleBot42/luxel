@@ -6,6 +6,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use crate::arena::AString;
 use crate::engine::{ControlKind, Engine};
 use crate::vm::Value;
 
@@ -27,6 +28,15 @@ pub trait Sink {
 }
 
 impl Sink for String {
+    fn put(&mut self, s: &str) {
+        self.push_str(s);
+    }
+}
+
+/// The arena-backed twin of `String`'s impl: what the snapshot builders
+/// below write into, so on a PSRAM board a vars dump never costs internal
+/// DRAM (Gitea #905).
+impl Sink for AString {
     fn put(&mut self, s: &str) {
         self.push_str(s);
     }
@@ -60,11 +70,15 @@ pub const CHUNK: usize = 256;
 /// by construction — a `Content-Length` a two-pass measure-then-emit could
 /// get wrong (`tools/wire-check.sh`) cannot be wrong here.
 ///
+/// The segments are [`AString`]s, so on a board with a PSRAM arena the body
+/// itself lives there; only the index (a pointer triple per segment) is on
+/// the ordinary heap (Gitea #905).
+///
 /// Every allocation it makes is fallible: a segment or index it cannot have
 /// sets [`Chunks::ok`] false and the caller answers 503 rather than taking
 /// the allocator's panic.
 pub struct Chunks {
-    parts: Vec<String>,
+    parts: Vec<AString>,
     len: usize,
     ok: bool,
 }
@@ -113,14 +127,14 @@ impl Chunks {
     }
 
     /// The segments, in order, for a response to write out.
-    pub fn parts(&self) -> &[String] {
+    pub fn parts(&self) -> &[AString] {
         &self.parts
     }
 
     /// The segments, owned — so a response writer can free each one the
     /// moment it is on the wire instead of holding the whole body until the
     /// response ends.
-    pub fn into_parts(self) -> Vec<String> {
+    pub fn into_parts(self) -> Vec<AString> {
         self.parts
     }
 
@@ -137,7 +151,7 @@ impl Chunks {
 
     /// A fresh empty segment, or `false` having poisoned the builder.
     fn grow(&mut self) -> bool {
-        let mut seg = String::new();
+        let mut seg = AString::new();
         if seg.try_reserve_exact(CHUNK).is_err() || self.parts.try_reserve(1).is_err() {
             self.ok = false;
             return false;
@@ -370,8 +384,8 @@ pub fn control_kind_str(k: ControlKind) -> &'static str {
 }
 
 /// `[{"kind":"slider","label":"Speed","name":"sliderSpeed"},…]`
-pub fn controls_json(engine: &Engine) -> String {
-    let mut out = String::from("[");
+pub fn controls_json(engine: &Engine) -> AString {
+    let mut out = AString::from("[");
     for (i, c) in engine.controls().iter().enumerate() {
         if i > 0 {
             push_piece(&mut out, ",");
@@ -405,9 +419,9 @@ pub const VARS_ARRAY_MAX: usize = 1024;
 /// `{"heat":[…1024 raws…],"@truncated":{"heat":16384}}`. `@` cannot start a
 /// pattern identifier (the lexer's `[A-Za-z_$][A-Za-z0-9_$]*`), so that key
 /// can never collide with an exported var's own name.
-pub fn vars_json(engine: &Engine) -> String {
+pub fn vars_json(engine: &Engine) -> AString {
     let names: Vec<String> = engine.exported_vars().map(String::from).collect();
-    let mut out = String::from("{");
+    let mut out = AString::from("{");
     // (name, real length) per array the dump cut short.
     let mut cut: Vec<(&str, usize)> = Vec::new();
     for (i, name) in names.iter().enumerate() {
@@ -463,14 +477,14 @@ pub fn vars_json(engine: &Engine) -> String {
 
 /// `{"showFps":raw,…}` — current display values of showNumber/gauge
 /// controls (invokes them, so needs `&mut`).
-pub fn readouts_json(engine: &mut Engine) -> String {
+pub fn readouts_json(engine: &mut Engine) -> AString {
     let names: Vec<String> = engine
         .controls()
         .iter()
         .filter(|c| matches!(c.kind, ControlKind::ShowNumber | ControlKind::Gauge))
         .map(|c| c.name.clone())
         .collect();
-    let mut out = String::from("{");
+    let mut out = AString::from("{");
     for (i, name) in names.iter().enumerate() {
         if i > 0 {
             push_piece(&mut out, ",");

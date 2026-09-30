@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use luxel_core::arena::AString;
 use luxel_core::engine::Engine;
 use luxel_core::fixed::Fx;
 use luxel_core::jsonview::{self, json_escape};
@@ -444,9 +445,9 @@ struct State {
     pattern_src: Mutex<String>,
     /// LXBC blob of the running pattern (GET /api/pattern.lxp — sync adopt).
     pattern_bc: Mutex<Vec<u8>>,
-    controls_json: Mutex<String>,
-    vars_json: Mutex<String>,
-    readouts_json: Mutex<String>,
+    controls_json: Mutex<AString>,
+    vars_json: Mutex<AString>,
+    readouts_json: Mutex<AString>,
     library: Mutex<Vec<StoredPattern>>,
     /// The sprite store (Gitea #740). In memory like `library`, and like it
     /// NOT persisted between runs — the mirror has no flash, and a sprite
@@ -1261,10 +1262,10 @@ fn publish_geom(state: &State, engine: Option<&Engine>) {
         luxel_core::caps::Geom::derive(dev_map, dims, grid, pixels, pattern_dims);
 }
 
-fn controls_json(state: &State) -> String {
+fn controls_json(state: &State) -> AString {
     let s = state.controls_json.lock().unwrap().clone();
     if s.is_empty() {
-        String::from("[]")
+        AString::from("[]")
     } else {
         s
     }
@@ -1889,7 +1890,7 @@ fn enter_scene(state: &State, id: &str) -> Option<Stage> {
             *state.current_pattern_id.lock().unwrap() = String::new();
             *state.pattern_src.lock().unwrap() = String::new();
             state.pattern_bc.lock().unwrap().clear();
-            *state.controls_json.lock().unwrap() = String::new();
+            *state.controls_json.lock().unwrap() = AString::new();
             *state.vmerr.lock().unwrap() = None;
             Some(st)
         }
@@ -3254,12 +3255,12 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
         }
         ("GET", "/api/vars") => {
             let s = state.vars_json.lock().unwrap().clone();
-            let s = if s.is_empty() { String::from("{}") } else { s };
+            let s = if s.is_empty() { AString::from("{}") } else { s };
             respond(&mut stream, 200, "application/json", s.as_bytes());
         }
         ("GET", "/api/readouts") => {
             let s = state.readouts_json.lock().unwrap().clone();
-            let s = if s.is_empty() { String::from("{}") } else { s };
+            let s = if s.is_empty() { AString::from("{}") } else { s };
             respond(&mut stream, 200, "application/json", s.as_bytes());
         }
         ("GET", "/api/brightness") => {
@@ -4204,9 +4205,9 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         vmerr: Mutex::new(None),
         pattern_src: Mutex::new(String::new()),
         pattern_bc: Mutex::new(Vec::new()),
-        controls_json: Mutex::new(String::from("[]")),
-        vars_json: Mutex::new(String::from("{}")),
-        readouts_json: Mutex::new(String::from("{}")),
+        controls_json: Mutex::new(AString::from("[]")),
+        vars_json: Mutex::new(AString::from("{}")),
+        readouts_json: Mutex::new(AString::from("{}")),
         library: Mutex::new(Vec::new()),
         sprites: Mutex::new(Vec::new()),
         next_id: AtomicU32::new(0x1a5e_0001),

@@ -26,6 +26,20 @@
 //! floor in a heap that idles at ~36 KB — it could not, and the text layer
 //! or the second engine silently went without (Gitea #777).
 //!
+//! Since #905 the HTTP response bodies that scale with the device's state
+//! ride the same hook, each written once and read once by one task:
+//!
+//! * `/api/pixels` — the preview frame copy (`pipeline::preview` /
+//!   `shared::get_pixels`), 3 B per pixel: 12,288 B at 4096 px and 49,152 B
+//!   at the 16,384-px cap, which internal DRAM could never serve.
+//! * `GET /api/patterns/<id>` — one pattern's escaped JSON, pattern-sized.
+//! * the jsonview snapshots (`CONTROLS_JSON`/`VARS_JSON`/`READOUTS_JSON`
+//!   in `shared.rs`), up to ~11 KB, rebuilt every 250 ms on the render task
+//!   and cloned per request (`luxel_core::arena::AString`).
+//! * every `jsonview::Chunks` segment — `/api/status`, `/api/scenes`,
+//!   `/api/patterns`, `/api/playlist` bodies; only the segment index stays
+//!   internal.
+//!
 //! Deliberately NOT here, because PSRAM is cache-backed over an octal SPI
 //! bus and several times slower per access than DRAM:
 //!

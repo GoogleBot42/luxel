@@ -68,8 +68,6 @@
 //! `output::transfer_busy()` stays `false` for it and the fence needs no
 //! new wait.
 
-use alloc::vec::Vec;
-
 use embassy_time::{Duration, Instant, Timer};
 use luxel_core::arena::FrameVec;
 use luxel_core::outpipe::{DeviceChain, GridMap};
@@ -566,9 +564,12 @@ mod pipe {
     /// that a 4096 px pattern can leave under 30 KB free, so a second 12 KB
     /// temporary (49 KB at 16384 px) is the difference between serving the
     /// preview and an OOM panic; and allocating with interrupts masked would
-    /// stall both cores on the allocator's own lock.
-    pub async fn preview() -> Result<Vec<u8>, ()> {
-        let mut v: Vec<u8> = Vec::new();
+    /// stall both cores on the allocator's own lock. The body is an
+    /// [`luxel_core::arena::ArrVec`], so on a board with a PSRAM arena it
+    /// costs no internal DRAM at all — 12,288 B at 4096 px, 49,152 B at
+    /// 16384 px, which internal DRAM could never serve (Gitea #905).
+    pub async fn preview() -> Result<luxel_core::arena::ArrVec<u8>, ()> {
+        let mut v: luxel_core::arena::ArrVec<u8> = luxel_core::arena::empty();
         for _ in 0..16 {
             let need = shared::PIXEL_COUNT.load(Ordering::Relaxed) as usize * 3;
             if v.capacity() < need && v.try_reserve_exact(need).is_err() {
@@ -592,7 +593,7 @@ mod pipe {
             }
             Timer::after(Duration::from_millis(2)).await;
         }
-        Ok(Vec::new())
+        Ok(luxel_core::arena::empty())
     }
 
     /// The ProCpu half: preview copy, output pipeline, panel compose.
