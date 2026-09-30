@@ -239,6 +239,42 @@ pub const fn layer_fits_with(
     heap_free >= RUNTIME_FLOOR + reserve + layer_cost(pixel_count, frame_external)
 }
 
+/// Free heap a load that REPLACES the resident stack must find before it
+/// starts building — a boot-time resume of a stored scene or pattern
+/// (`firmware/src/resume.rs`), or equally an activate from an empty stack.
+///
+/// `pattern_layers` engines are built ONE AT A TIME (`scenes::build_runtime`
+/// walks the layers in order, each through [`layer_fits_with`] and then the
+/// post-build [`RUNTIME_FLOOR`] check), so what has to be free up front is
+/// the floor, every layer's resident [`layer_cost`], the compositor's
+/// [`compositor_scratch`], and the transient copy the LARGEST single layer
+/// needs while it decodes — `staging`, which is 0 when the bytecode executes
+/// in place out of the flash mapping (or its copy lands in an external
+/// arena) and that layer's bytecode length otherwise. Never a sum of
+/// stagings: a layer's copy is dropped before the next layer decodes.
+///
+/// This replaced `2 × Σ stored bytes + 24 KiB` (Gitea #869, #905), which
+/// charged every layer's source, bytecode and upload envelope as resident
+/// at once. Nothing on the install path loads source, and on a mapped board
+/// nothing copies bytecode either, so for a two-pattern scene on the
+/// Seengreat panel it demanded 91,546 B against a real net cost of ~7.8 KB:
+/// the same scene installs at runtime from 51,396 B free, while the resume
+/// refused it at 60,072 B and the panel came back dark after every reboot.
+/// Like [`layer_fits_with`] this is a pre-flight, not the gate — a layer
+/// that turns out bigger than [`LAYER_BASE`] is still refused (never
+/// panicked) by the post-build floor check.
+pub const fn install_need(
+    pixel_count: u32,
+    pattern_layers: usize,
+    staging: usize,
+    frame_external: bool,
+) -> usize {
+    RUNTIME_FLOOR
+        + pattern_layers * layer_cost(pixel_count, frame_external)
+        + compositor_scratch(pixel_count, frame_external)
+        + staging
+}
+
 /// How many bytes of RESIDENT engine a pattern may leave behind before the
 /// post-load floor check rejects it, given `base_free` bytes free at the
 /// start of the load (see [`load_base`]).
@@ -302,6 +338,31 @@ pub const fn fit(resident: usize, peak: usize, base_free: usize) -> Fit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Gitea #869's numbers, from the Seengreat panel (4096 px, frames in
+    /// PSRAM, bytecode executing in place out of the flash mapping).
+    #[test]
+    fn install_need_is_the_installers_arithmetic() {
+        let test2 = install_need(4096, 2, 0, true);
+        // `Test 2` installed at runtime from 51,396 B free, so a pre-flight
+        // demanding more than that refuses a scene that demonstrably fits
+        assert!(test2 < 51_000, "{}", test2);
+        assert!(test2 > RUNTIME_FLOOR);
+        // the old rule, 2 × (12,300 + 21,185) + 24 KiB
+        assert_ne!(test2, 2 * 33_485 + 24 * 1024);
+        assert_eq!(test2, RUNTIME_FLOOR + 2 * LAYER_BASE);
+        // flashmap-off without an arena: the largest layer's bytecode
+        // (Infinite Snake v2, 9,744 B) is staged once, not summed
+        assert_eq!(install_need(4096, 2, 9_744, true), test2 + 9_744);
+        // frames internal (a strip board): every layer carries its frame
+        // and the compositor scratch is charged too
+        assert_eq!(
+            install_need(300, 3, 1_000, false),
+            20 * 1024 + 3 * (4 * 1024 + 900) + 900 + 1_000
+        );
+        // a single pattern is a one-layer stack
+        assert_eq!(install_need(300, 1, 0, false), RUNTIME_FLOOR + 4 * 1024 + 900 + 900);
+    }
 
     #[test]
     fn budget_tracks_free_heap() {

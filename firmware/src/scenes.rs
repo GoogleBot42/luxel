@@ -267,8 +267,9 @@ pub enum Slot {
     /// the compositor reads texels straight out of flash, so a sprite layer
     /// costs this `String` and nothing else; with the mapping off there is
     /// no in-place read, so the record is copied ONCE at build time rather
-    /// than per frame.
-    Sprite(String, Option<Vec<u8>>),
+    /// than per frame — into the PSRAM arena where there is one (#905),
+    /// since the compositor reads it once per frame, straight through.
+    Sprite(String, Option<luxel_core::arena::ArrVec<u8>>),
 }
 
 /// A scene resident in the render task: the compositor plus one slot per

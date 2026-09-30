@@ -13,8 +13,8 @@
 //! upsert-by-name, replace-by-id and the error sentences.
 
 use alloc::string::String;
-use alloc::vec::Vec;
 
+use luxel_core::arena::ArrVec;
 use luxel_core::jsonview::{push_escaped, push_piece, push_u32, Chunks};
 use luxel_core::sprite::{self, SpriteHead, SpriteView, SPRITE_HDR, SPRITE_MAX_BYTES};
 
@@ -93,7 +93,7 @@ pub fn get(id: &str) -> Option<&'static [u8]> {
 }
 
 /// [`get`]'s `flashmap-off` fallback: the record in a transient fallible Vec.
-pub fn get_vec(id: &str) -> Option<Vec<u8>> {
+pub fn get_vec(id: &str) -> Option<ArrVec<u8>> {
     patterns::sprite_vec(id)
 }
 

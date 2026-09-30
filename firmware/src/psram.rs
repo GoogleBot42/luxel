@@ -24,7 +24,10 @@
 //! frame each): at 4096 px they are 36,864 B of internal DRAM that a
 //! three-layer scene had to find beside two engines and the 20 KB runtime
 //! floor in a heap that idles at ~36 KB — it could not, and the text layer
-//! or the second engine silently went without (Gitea #777).
+//! or the second engine silently went without (Gitea #777). Since #905
+//! the store's blob copies join them (`patterns::payload_vec`): the
+//! flashmap-off bytecode staging a decode drops again at once, and a scene
+//! sprite layer's record copy, read once per frame like a layer frame.
 //!
 //! Since #905 the HTTP response bodies that scale with the device's state
 //! ride the same hook, each written once and read once by one task:
