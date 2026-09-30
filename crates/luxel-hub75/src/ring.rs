@@ -265,8 +265,8 @@ pub fn slots_for_slack(ring_us: u32, s: &Schedule, cols: usize, clock_hz: u32, r
 
 /// The ring's counting rules: `n` slots over `rows` row pairs, with every
 /// absolute counter taken modulo `period` — the largest multiple of both
-/// under 2^31, so slot and row arithmetic survive the wrap and the top bit
-/// of a claim word is free for the frame choice.
+/// under 2^30, so slot and row arithmetic survive the wrap and the top two
+/// bits of a claim word are free for the frame choice.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Ring {
     pub n: u32,
@@ -288,7 +288,7 @@ impl Ring {
     pub const fn new(n: u32, rows: u32) -> Self {
         assert!(n > GUARD_SLOTS && rows >= 1, "ring shape");
         let lcm = n / gcd(n, rows) * rows;
-        let period = (1u32 << 31) / lcm * lcm;
+        let period = (1u32 << 30) / lcm * lcm;
         Self { n, rows, period }
     }
 
@@ -376,7 +376,11 @@ impl Ring {
 /// absolute emission it fills.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Claim {
-    /// Frame buffer index (0 or 1) for this claim's pass.
+    /// Packed-frame index (0..=3) for this claim's pass — two bits, for
+    /// the driver's four packed frames (#892). One bit here with four
+    /// frames put every pass whose frame was 2 or 3 onto frame 0 or 1, a
+    /// frame or two old: the snake's head ran backwards and forwards on
+    /// the bench until Jeremy saw it (2026-09-30).
     pub buf: u8,
     /// Absolute emission counter, `< Ring::period`.
     pub abs: u32,
@@ -386,13 +390,13 @@ impl Claim {
     /// The queue word: frame choice in bit 31, counter below.
     #[must_use]
     pub const fn encode(self) -> u32 {
-        ((self.buf as u32 & 1) << 31) | (self.abs & 0x7fff_ffff)
+        ((self.buf as u32 & 3) << 30) | (self.abs & 0x3fff_ffff)
     }
 
     /// The claim a queue word denotes.
     #[must_use]
     pub const fn decode(word: u32) -> Self {
-        Self { buf: (word >> 31) as u8, abs: word & 0x7fff_ffff }
+        Self { buf: (word >> 30) as u8, abs: word & 0x3fff_ffff }
     }
 }
 
@@ -404,7 +408,7 @@ impl Claim {
 #[must_use]
 pub const fn claim_next(word: u32, newest_buf: u8, ring: &Ring) -> (Claim, u32) {
     let cur = Claim::decode(word);
-    let buf = if ring.row(cur.abs) == 0 { newest_buf & 1 } else { cur.buf };
+    let buf = if ring.row(cur.abs) == 0 { newest_buf & 3 } else { cur.buf };
     let claim = Claim { buf, abs: cur.abs };
     let next = Claim { buf, abs: (cur.abs + 1) % ring.period };
     (claim, next.encode())
@@ -416,6 +420,25 @@ mod tests {
     use crate::COLOR_MASK;
     use std::vec;
     use std::vec::Vec;
+
+    /// The claim word carries FOUR packed-frame indices (the driver's
+    /// `FRAMES`), not two: with one bit, a pass whose frame was 2 or 3
+    /// read frame 0 or 1 — a frame or two old — and the picture stuttered
+    /// backwards (2026-09-30, Jeremy's eye on the first ring-default boot).
+    #[test]
+    fn claim_word_carries_four_frames_and_the_full_period() {
+        let ring = Ring::new(10, 32);
+        for buf in 0..4u8 {
+            for abs in [0u32, 1, ring.period - 1] {
+                let c = Claim { buf, abs };
+                assert_eq!(Claim::decode(c.encode()), c, "buf {buf} abs {abs}");
+                // A pass's row 0 picks `newest`, whatever its index.
+                let word = Claim { buf: 0, abs: 0 }.encode();
+                let (claim, _) = claim_next(word, buf, &ring);
+                assert_eq!(claim.buf, buf);
+            }
+        }
+    }
 
     const G: Geometry = Geometry::new(32, 64, 7);
 
@@ -644,7 +667,7 @@ mod tests {
         let ring = Ring::new(6, 32);
         assert_eq!(ring.period % 6, 0);
         assert_eq!(ring.period % 32, 0);
-        assert!(ring.period > 1 << 30 && ring.period < 1 << 31);
+        assert!(ring.period > 1 << 29 && ring.period < 1 << 30);
         assert_eq!(ring.first_claim(), 6);
         // the DMA sits at abs 10 (slot 4 of wrap 1)
         let dma = ring.abs(1, 4);
