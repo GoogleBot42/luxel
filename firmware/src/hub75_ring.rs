@@ -29,10 +29,21 @@
 //!   64-byte bursts straight off the bus — no cache-line fills, which is what
 //!   made the CPU copy 15 MB/s beside a 16384-px engine), one over the slots
 //!   (internal SRAM). The CPU's part of a pass is a few microseconds of
-//!   descriptor writes; the copy runs while the CPU does something else, and
-//!   a completion interrupt (bound on the AppCpu with the steal) accounts
-//!   the batch and starts the next — whatever the `steal` lever says, which
-//!   is the core-1 TIMER's turns only. The packed frame is written back from
+//!   descriptor writes; the copy runs while the CPU does something else.
+//!   Since #897 a turn that finds the DMA busy does not wait for it: the
+//!   descriptor pools are circular rings with `check_owner` on (the DMA
+//!   stops at the first CPU-owned entry), and the turn APPENDS its run
+//!   behind the chain in flight — owner bits handed over, then the
+//!   `inlink_restart`/`outlink_restart` bits for a DMA that had already
+//!   stopped — so the DMA does not idle between batches for an interrupt's
+//!   latency. The skip rule counts the slots still queued ahead of each
+//!   claim. Completion is per run (one EOF each), read from the receive
+//!   descriptors' owner write-back; the completion interrupt (bound on the
+//!   AppCpu with the steal) retires runs and appends the next — whatever
+//!   the `steal` lever says, which is the core-1 TIMER's turns only. The
+//!   `append` lever (default on when the boot's append probe passed) and
+//!   `minfill` (a minimum run length while the slack allows, default off)
+//!   are the A/Bs. The packed frame is written back from
 //!   the data cache after every eight row pairs of `pack_frame`, so the DMA
 //!   reads what the packer wrote. Claims are taken only while
 //!   [`Ring::fillable`] and while the slots left before the beam cover the
@@ -87,11 +98,13 @@
 //! core), `pack_us_max`, `frame_pack_us` (the once-per-frame pack, write-back
 //! included), `dma` (the lever), `dma_us` (the DMA's time per slot, EWMA),
 //! `dma_us_max`, `dma_cal_us` (the boot calibration, an idle bus),
-//! `dma_batches`, `dma_isr` (batches the completion interrupt started),
-//! `dma_errors`, `steal`.
+//! `dma_batches` (runs completed), `dma_isr` (runs the completion interrupt started),
+//! `dma_errors`, `appends` (runs appended to a chain in flight),
+//! `dma_restarts` (appends the restart bits resumed), `deferred` (`minfill`),
+//! `append`, `minfill`, `steal`.
 
 use core::cell::{RefCell, UnsafeCell};
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU8, Ordering};
 
 use alloc::vec::Vec;
 use esp_hal::dma::{Channel, DmaDescriptor, Owner};
@@ -133,6 +146,17 @@ const PACK_MARGIN_SHIFT: u32 = 1;
 /// against. Eight is a quarter of a 32-row frame: 8–32 KB per batch, 100–
 /// 500 µs at the bus rates seen, under any poll interval the ring runs at.
 const BATCH_SLOTS: usize = 8;
+
+/// Entries in the copy engine's circular descriptor rings (#897): two runs
+/// of [`BATCH_SLOTS`] — the run the DMA is on, and one appended behind it
+/// while it copies. An entry is freed when its run completes, so this many
+/// slots at most are ever queued ahead of a claim.
+const QUEUE_SLOTS: usize = 2 * BATCH_SLOTS;
+
+/// Runs in flight at most — a run is often 1–3 slots (the queue is drained
+/// as fast as the beam frees slots), so this, not [`QUEUE_SLOTS`], is what
+/// usually bounds the chain.
+const MAX_RUNS: usize = 6;
 
 /// The GDMA channel the copy runs on. Channel 0 is the panel's own LCD_CAM
 /// chain (`esp_hub75`); every AHB GDMA channel on the S3 can do
@@ -212,6 +236,23 @@ pub static DMA_ON: AtomicBool = AtomicBool::new(true);
 /// the bus rate of the DMA plus whatever the cache serves the CPU. Core 1
 /// stays DMA-only (its interrupts must stay short).
 pub static HYBRID: AtomicBool = AtomicBool::new(false);
+/// The `append` lever (#897, `POST /api/ring {"append":…}`, default on): a
+/// turn that finds the DMA busy appends a run to the chain in flight. Off
+/// is step 2's shape — one run in flight, the next started by the
+/// completion interrupt or a later turn — for the A/B.
+pub static APPEND: AtomicBool = AtomicBool::new(true);
+/// The `minfill` lever (#897, `POST /api/ring {"minfill":N}`, default 1 =
+/// off): a turn that finds fewer than N claims fillable leaves them for a
+/// later turn while the queue head's slack allows (`ring::defer_run`), so
+/// runs are longer and fewer. Clamped to 1..=`BATCH_SLOTS`.
+pub static MINFILL: AtomicU32 = AtomicU32::new(1);
+/// Runs appended to a chain in flight (#897), and of those, the ones that
+/// found the previous run already complete — where the restart bits are
+/// what resumed the DMA.
+pub static RING_APPENDS: AtomicU32 = AtomicU32::new(0);
+pub static RING_DMA_RESTARTS: AtomicU32 = AtomicU32::new(0);
+/// Turns that left a short run for later under `minfill`.
+pub static RING_DEFERRED: AtomicU32 = AtomicU32::new(0);
 /// The DMA's time per slot, microseconds (clipped EWMA — the skip rule's
 /// number), and the raw worst.
 pub static RING_DMA_US: AtomicU32 = AtomicU32::new(0);
@@ -352,9 +393,13 @@ fn blank_tick() {
     BLANKED.store(false, Ordering::Release);
 }
 
-/// A copy batch is in flight (mirrors `Engine::busy` without the lock):
+/// A copy run is in flight (mirrors `Engine::nruns > 0` without the lock):
 /// what the flash fence reads before a flash op (`output::transfer_busy`).
 static COPY_BUSY: AtomicBool = AtomicBool::new(false);
+/// The last receive descriptor of the NEWEST run in flight: once it has
+/// landed, the whole chain has (runs complete in order), whatever the
+/// engine's bookkeeping has seen yet.
+static COPY_TAIL: AtomicPtr<DmaDescriptor> = AtomicPtr::new(core::ptr::null_mut());
 /// The steal's timer, kept so its handler can clear the interrupt.
 static STEAL_TIMER: BlockingMutex<CriticalSectionRawMutex, RefCell<Option<PeriodicTimer<'static, Blocking>>>> =
     BlockingMutex::new(RefCell::new(None));
@@ -371,19 +416,51 @@ static ENGINE: BlockingMutex<CriticalSectionRawMutex, RefCell<Option<Engine>>> =
 
 /// The memory-to-memory copy engine on GDMA channel [`COPY_CH`].
 ///
-/// One batch in flight at a time: `slots` claims whose row pairs are being
-/// copied, started at `t0` by `core`. The two descriptor pools (internal
-/// SRAM — the DMA reads its descriptors from internal memory only) hold
-/// [`BATCH_SLOTS`] slots' worth each; a slot is `per_slot` descriptors of
-/// `chunk_rows` slot rows (a descriptor carries at most 4095 bytes, a slot
-/// is 1–8 KB).
+/// A chain that is EXTENDED while in flight (#897). The two descriptor
+/// pools (internal SRAM — the DMA reads its descriptors from internal
+/// memory only) are each a CIRCULAR ring of [`QUEUE_SLOTS`] entries, an
+/// entry being one slot's `per_slot` descriptors of `chunk_rows` slot rows
+/// (a descriptor carries at most 4095 bytes, a slot is 1–8 KB). The `next`
+/// links are written once, at boot, and never change; both halves run with
+/// `check_owner` on, so the DMA stops at the first descriptor the CPU owns
+/// — the entry after the last one handed over — and nothing else ends a
+/// chain. A turn hands over a RUN of up to [`BATCH_SLOTS`] entries at
+/// `tail` by writing each descriptor's buffer and then its flag word with
+/// the DMA owner bit (one 32-bit store; the receive side first, so the
+/// transmit side never pushes data the receive side has no descriptor
+/// for), the run's last transmit descriptor carrying the EOF, so the IN
+/// half's `in_suc_eof` fires once per run. With nothing in flight the run
+/// is started fresh (`start`: reset, link address, start). With runs in
+/// flight it is APPENDED: the owner bits are all it takes while the DMA
+/// has not reached the stop, and `inlink_restart`/`outlink_restart` —
+/// issued after every append, ESP-IDF's `async_memcpy` pattern — make a
+/// DMA that had already stopped re-read the descriptor it stopped on,
+/// which is now the new run's head. `dma_restarts` counts the appends that
+/// found the previous run already complete, i.e. where the restart is what
+/// resumed the copy.
+///
+/// Completion is per run and read from the descriptors, not from the
+/// interrupt bits (which coalesce): the GDMA always writes a receive
+/// descriptor back with the owner bit cleared once its buffer is full, so
+/// a run whose last receive descriptor reads CPU-owned has landed.
+/// [`Engine::settle`] retires completed runs oldest first — `pending`
+/// stamps [`SLOT_GEN`] per entry (#896), the per-slot time is measured
+/// from the later of the run's hand-over and the previous run's completion
+/// — and resets the whole queue on an error bit or a stall of the oldest
+/// run (every run still in flight then counts `late`, its slots unknown).
 struct Engine {
-    busy: bool,
-    slots: u32,
-    t0: u64,
-    core: usize,
-    /// Started by the completion interrupt (credited to `dma_isr`).
-    by_isr: bool,
+    /// Runs in flight, oldest at `run_head`; `nruns` of them.
+    runs: [Run; MAX_RUNS],
+    run_head: u8,
+    nruns: u8,
+    /// The oldest entry in flight, the next free entry, and how many are
+    /// in flight (`head + inflight == tail` modulo the ring).
+    head: u8,
+    tail: u8,
+    inflight: u8,
+    /// When the last run completion was seen — the earliest the next run
+    /// in the chain can have started copying.
+    done_at: u64,
     /// The DMA's time per slot, microseconds — clipped EWMA (a sample can
     /// at most double it), seeded by the boot calibration.
     slot_us: u32,
@@ -393,13 +470,30 @@ struct Engine {
     chunk_rows: usize,
     row_bytes: usize,
     slot_rows: usize,
-    /// `(slot, generation)` of each claim in the batch in flight, stamped
-    /// into [`SLOT_GEN`] when the batch completes (#896).
-    pending: [(u8, u32); BATCH_SLOTS],
+    /// `(slot, generation)` of each entry's claim, stamped into
+    /// [`SLOT_GEN`] when the entry's run completes (#896).
+    pending: [(u8, u32); QUEUE_SLOTS],
+}
+
+/// One run of entries handed to the DMA by one turn.
+#[derive(Clone, Copy)]
+struct Run {
+    first: u8,
+    len: u8,
+    /// The core whose turn handed it over (credited `packed_core0/1`).
+    core: u8,
+    /// Handed over by the completion interrupt (credited to `dma_isr`).
+    by_isr: bool,
+    t0: u64,
+}
+
+impl Run {
+    const EMPTY: Self = Self { first: 0, len: 0, core: 0, by_isr: false, t0: 0 };
 }
 
 // SAFETY: the raw descriptor pointers are used only under `ENGINE`'s
-// critical section, and the pools are leaked internal SRAM.
+// critical section (and `copy_busy`'s single read of an owner bit), and
+// the pools are leaked internal SRAM.
 unsafe impl Send for Engine {}
 
 /// The copy channel's register block.
@@ -409,21 +503,30 @@ macro_rules! copy_ch {
     };
 }
 
+/// The receive descriptor has been written back by the GDMA (owner CPU):
+/// its buffer is full. A volatile read of the flag word.
+fn landed(d: *const DmaDescriptor) -> bool {
+    // SAFETY: `d` is a descriptor in the engine's leaked pools.
+    !unsafe { core::ptr::addr_of!((*d).flags).read_volatile() }.owner()
+}
+
 impl Engine {
     /// Program the channel for memory-to-memory copies from PSRAM into
-    /// internal SRAM. Once, at boot; a batch start only resets the FSMs.
+    /// internal SRAM. Once, at boot; a fresh start only resets the FSMs.
+    /// `check_owner` on both halves: the owner bit is what ends the chain
+    /// (the descriptor rings are circular).
     fn configure() {
         let ch = copy_ch!();
         Self::reset_fsm();
         // SAFETY (the `bits` writes): field-width values from the TRM —
         // burst size 2 = 64 B, peripheral select `COPY_PERI`.
         ch.in_conf0().modify(|_, w| w.mem_trans_en().set_bit().indscr_burst_en().set_bit().in_data_burst_en().set_bit());
-        ch.in_conf1().modify(|_, w| unsafe { w.in_ext_mem_bk_size().bits(EXT_BURST_64) }.in_check_owner().clear_bit());
+        ch.in_conf1().modify(|_, w| unsafe { w.in_ext_mem_bk_size().bits(EXT_BURST_64) }.in_check_owner().set_bit());
         ch.in_peri_sel().modify(|_, w| unsafe { w.peri_in_sel().bits(COPY_PERI) });
         ch.out_conf0().modify(|_, w| {
             w.outdscr_burst_en().set_bit().out_data_burst_en().set_bit().out_auto_wrback().set_bit().out_eof_mode().set_bit()
         });
-        ch.out_conf1().modify(|_, w| unsafe { w.out_ext_mem_bk_size().bits(EXT_BURST_64) }.out_check_owner().clear_bit());
+        ch.out_conf1().modify(|_, w| unsafe { w.out_ext_mem_bk_size().bits(EXT_BURST_64) }.out_check_owner().set_bit());
         ch.out_peri_sel().modify(|_, w| unsafe { w.peri_out_sel().bits(COPY_PERI) });
     }
 
@@ -446,32 +549,29 @@ impl Engine {
     }
 
     /// Enable the completion and error interrupts on the IN half (the
-    /// handler is bound by [`arm_steal`] on the core that runs it).
+    /// handler is bound by [`arm_steal`] on the core that runs it). Not the
+    /// descriptor-error bits: with `check_owner` on, reaching the CPU-owned
+    /// entry after the last run is how every chain ends, and the owner
+    /// error it may raise is the normal stop, not a fault.
     fn listen() {
         let ch = copy_ch!();
-        ch.in_int().ena().modify(|_, w| {
-            w.in_suc_eof().set_bit().in_dscr_err().set_bit().in_dscr_empty().set_bit().in_err_eof().set_bit()
-        });
-        ch.out_int().ena().modify(|_, w| w.out_dscr_err().set_bit());
+        ch.in_int().ena().modify(|_, w| w.in_suc_eof().set_bit().in_dscr_empty().set_bit().in_err_eof().set_bit());
     }
 
-    /// `(done, failed)` for the batch in flight, from the raw interrupt
-    /// bits: done = the IN half received the chain's EOF; failed = a
-    /// descriptor error or an empty IN chain on either half.
-    fn poll() -> (bool, bool) {
-        let ch = copy_ch!();
-        let i = ch.in_int().raw().read();
-        let o = ch.out_int().raw().read();
-        let failed =
-            i.in_dscr_err().bit_is_set() || i.in_dscr_empty().bit_is_set() || i.in_err_eof().bit_is_set() || o.out_dscr_err().bit_is_set();
-        (i.in_suc_eof().bit_is_set(), failed)
+    /// A fault on the channel, from the raw interrupt bits: the IN half ran
+    /// out of receive descriptors with data still arriving (the two chains
+    /// out of step), or a data error.
+    fn faulted() -> bool {
+        let i = copy_ch!().in_int().raw().read();
+        i.in_dscr_empty().bit_is_set() || i.in_err_eof().bit_is_set()
     }
 
-    /// Start a batch: RX chain first, then TX (the order the TRM asks for
-    /// on every chip with a memory-to-memory mode).
-    fn start(rx_head: *const DmaDescriptor, tx_head: *const DmaDescriptor) {
+    /// Start the chain at entry `e`: RX first, then TX (the order the TRM
+    /// asks for on every chip with a memory-to-memory mode).
+    fn start(&self, e: usize) {
         let ch = copy_ch!();
         Self::reset_fsm();
+        let (rx_head, tx_head) = (self.rx_desc(e, 0), self.tx_desc(e, 0));
         // SAFETY: the low 20 bits of an internal-SRAM descriptor address,
         // the field's width; the DMA supplies the rest.
         ch.in_link().modify(|_, w| unsafe { w.inlink_addr().bits((rx_head as u32) & 0xf_ffff) });
@@ -480,97 +580,216 @@ impl Engine {
         ch.out_link().modify(|_, w| w.outlink_start().set_bit());
     }
 
-    /// Fill slot `i`'s descriptors in both pools for one claim: `src` is
-    /// the row pair in the packed frame (PSRAM), `dst` its slot (internal).
-    /// Every descriptor links to the next; [`Engine::close`] cuts the
-    /// chains after the batch's last slot.
-    ///
-    /// # Safety
-    /// `i < BATCH_SLOTS`; `src`/`dst` point at `slot_rows * row_bytes`
-    /// readable/writable bytes that nothing else touches until the batch
-    /// completes.
-    unsafe fn fill(&mut self, i: usize, src: *const u8, dst: *mut u8) {
-        let chunk_bytes = self.chunk_rows * self.row_bytes;
-        let slot_bytes = self.slot_rows * self.row_bytes;
-        for c in 0..self.per_slot {
-            let off = c * chunk_bytes;
-            let bytes = chunk_bytes.min(slot_bytes - off);
-            let k = i * self.per_slot + c;
-            // SAFETY: `k` is within the pools (`i < BATCH_SLOTS`), and the
-            // buffer offsets are within the caller's row pair / slot.
+    /// Make appended descriptors visible to a DMA that may have stopped on
+    /// the first of them: re-read the descriptor at the current link
+    /// address, RX first.
+    fn restart() {
+        let ch = copy_ch!();
+        ch.in_link().modify(|_, w| w.inlink_restart().set_bit());
+        ch.out_link().modify(|_, w| w.outlink_restart().set_bit());
+    }
+
+    fn tx_desc(&self, e: usize, c: usize) -> *mut DmaDescriptor {
+        // SAFETY: `e < QUEUE_SLOTS`, `c < per_slot` — inside the pool.
+        unsafe { self.tx.add(e * self.per_slot + c) }
+    }
+
+    fn rx_desc(&self, e: usize, c: usize) -> *mut DmaDescriptor {
+        // SAFETY: as `tx_desc`.
+        unsafe { self.rx.add(e * self.per_slot + c) }
+    }
+
+    /// Bytes descriptor `c` of an entry carries.
+    fn chunk_bytes(&self, c: usize) -> usize {
+        let chunk = self.chunk_rows * self.row_bytes;
+        chunk.min(self.slot_rows * self.row_bytes - c * chunk)
+    }
+
+    /// Write both pools as circular rings, every descriptor CPU-owned
+    /// (the stop). Once, at boot, before the DMA is ever started.
+    fn link_rings(&mut self) {
+        let total = QUEUE_SLOTS * self.per_slot;
+        for k in 0..total {
+            let nk = (k + 1) % total;
+            // SAFETY: `k`, `nk` < `total`, the pools' length; nothing runs yet.
             unsafe {
                 let mut d = DmaDescriptor::EMPTY;
-                d.set_size(bytes);
-                d.set_length(bytes);
-                d.set_owner(Owner::Dma);
-                d.set_suc_eof(false);
-                d.buffer = src.add(off).cast_mut();
-                d.next = self.tx.add(k + 1);
+                d.set_owner(Owner::Cpu);
+                d.next = self.tx.add(nk);
                 self.tx.add(k).write_volatile(d);
-                let mut d = DmaDescriptor::EMPTY;
-                d.set_size(bytes);
-                d.set_length(0);
-                d.set_owner(Owner::Dma);
-                d.buffer = dst.add(off);
-                d.next = self.rx.add(k + 1);
+                d.next = self.rx.add(nk);
                 self.rx.add(k).write_volatile(d);
             }
         }
     }
 
-    /// Close the chains after `slots` filled slots: the last TX descriptor
-    /// carries the EOF (what the IN half's `in_suc_eof` reports) and both
-    /// tails point nowhere.
-    fn close(&mut self, slots: usize) {
-        debug_assert!(slots >= 1 && slots <= BATCH_SLOTS);
-        let k = slots * self.per_slot - 1;
-        // SAFETY: `k` is within the pools; the descriptors were written by
-        // `fill` and are not yet handed to the DMA.
-        unsafe {
-            let mut d = self.tx.add(k).read_volatile();
-            d.set_suc_eof(true);
-            d.next = core::ptr::null_mut();
-            self.tx.add(k).write_volatile(d);
-            let mut d = self.rx.add(k).read_volatile();
-            d.next = core::ptr::null_mut();
-            self.rx.add(k).write_volatile(d);
+    /// Point entry `e` at one claim: `src` is the row pair in the packed
+    /// frame (PSRAM), `dst` its slot (internal). Buffers only — the entry
+    /// stays CPU-owned (invisible to the DMA) until [`Engine::launch`].
+    ///
+    /// # Safety
+    /// `e` is a free entry (not in flight); `src`/`dst` point at
+    /// `slot_rows * row_bytes` readable/writable bytes that nothing else
+    /// touches until the entry's run completes.
+    unsafe fn stage(&mut self, e: usize, src: *const u8, dst: *mut u8) {
+        let chunk = self.chunk_rows * self.row_bytes;
+        for c in 0..self.per_slot {
+            let off = c * chunk;
+            // SAFETY: in-pool descriptors of a free entry; offsets inside
+            // the caller's row pair / slot.
+            unsafe {
+                core::ptr::addr_of_mut!((*self.tx_desc(e, c)).buffer).write_volatile(src.add(off).cast_mut());
+                core::ptr::addr_of_mut!((*self.rx_desc(e, c)).buffer).write_volatile(dst.add(off));
+            }
         }
     }
 
-    /// Account for the batch in flight, if any: `Busy` (still copying),
-    /// `Idle` (nothing in flight, or it just completed and was credited),
-    /// `Failed` (reset; its claims counted late). Called under the engine's
-    /// critical section by every turn and by the completion interrupt.
+    /// Set the flag words of entries `first..first + len` to DMA-owned —
+    /// all receive descriptors, then all transmit ones, the last transmit
+    /// descriptor with the EOF. Each flag word is one 32-bit store after the
+    /// buffers are in place (`fence`), so the DMA sees an entry whole or
+    /// not at all.
+    fn hand_over(&mut self, first: usize, len: usize) {
+        core::sync::atomic::fence(Ordering::SeqCst);
+        for j in 0..len {
+            let e = (first + j) % QUEUE_SLOTS;
+            for c in 0..self.per_slot {
+                let bytes = self.chunk_bytes(c);
+                let mut d = DmaDescriptor::EMPTY;
+                d.set_size(bytes);
+                d.set_length(0);
+                d.set_owner(Owner::Dma);
+                // SAFETY: an in-pool descriptor of an entry being handed over.
+                unsafe { core::ptr::addr_of_mut!((*self.rx_desc(e, c)).flags).write_volatile(d.flags) };
+            }
+        }
+        core::sync::atomic::fence(Ordering::SeqCst);
+        for j in 0..len {
+            let e = (first + j) % QUEUE_SLOTS;
+            for c in 0..self.per_slot {
+                let bytes = self.chunk_bytes(c);
+                let mut d = DmaDescriptor::EMPTY;
+                d.set_size(bytes);
+                d.set_length(bytes);
+                d.set_owner(Owner::Dma);
+                d.set_suc_eof(j + 1 == len && c + 1 == self.per_slot);
+                // SAFETY: as above.
+                unsafe { core::ptr::addr_of_mut!((*self.tx_desc(e, c)).flags).write_volatile(d.flags) };
+            }
+        }
+        core::sync::atomic::fence(Ordering::SeqCst);
+    }
+
+    /// Give entry `e` back to the CPU on both halves — the stop the DMA
+    /// halts on. The GDMA clears the owner bit itself on a written-back
+    /// descriptor; this makes the stop certain after a reset too.
+    fn reclaim(&mut self, e: usize) {
+        for c in 0..self.per_slot {
+            for d in [self.tx_desc(e, c), self.rx_desc(e, c)] {
+                // SAFETY: an in-pool descriptor the DMA is done with (its
+                // run completed, or the channel was reset).
+                unsafe {
+                    let p = core::ptr::addr_of_mut!((*d).flags);
+                    let mut f = p.read_volatile();
+                    f.set_owner(false);
+                    p.write_volatile(f);
+                }
+            }
+        }
+    }
+
+    /// The last receive descriptor of `run`: landed ⇔ the run is done.
+    fn run_last(&self, run: &Run) -> *mut DmaDescriptor {
+        let e = (usize::from(run.first) + usize::from(run.len) - 1) % QUEUE_SLOTS;
+        self.rx_desc(e, self.per_slot - 1)
+    }
+
+    /// Entries a new run may take now: none while [`MAX_RUNS`] runs are in
+    /// flight, else up to [`BATCH_SLOTS`] of the free ring.
+    fn room(&self) -> usize {
+        if usize::from(self.nruns) >= MAX_RUNS {
+            return 0;
+        }
+        BATCH_SLOTS.min(QUEUE_SLOTS - usize::from(self.inflight))
+    }
+
+    /// Hand the `len` entries staged at `tail` to the DMA as one run —
+    /// started fresh when nothing is in flight, appended to the chain
+    /// otherwise.
+    fn launch(&mut self, len: usize, core: usize, by_isr: bool, now: u64) {
+        let first = usize::from(self.tail);
+        let appending = self.nruns > 0;
+        // Whether the chain had already drained before this run exists:
+        // then the DMA sits (or is about to sit) on the stop that is now
+        // this run's head, and the restart below is what resumes it.
+        let drained = appending && {
+            let prev = self.runs[(usize::from(self.run_head) + usize::from(self.nruns) - 1) % MAX_RUNS];
+            landed(self.run_last(&prev))
+        };
+        self.hand_over(first, len);
+        let run = Run { first: first as u8, len: len as u8, core: core as u8, by_isr, t0: now };
+        self.runs[(usize::from(self.run_head) + usize::from(self.nruns)) % MAX_RUNS] = run;
+        self.nruns += 1;
+        self.tail = ((first + len) % QUEUE_SLOTS) as u8;
+        self.inflight += len as u8;
+        COPY_TAIL.store(self.run_last(&run), Ordering::Release);
+        COPY_BUSY.store(true, Ordering::Release);
+        if appending {
+            Self::restart();
+            RING_APPENDS.fetch_add(1, Ordering::Relaxed);
+            if drained {
+                RING_DMA_RESTARTS.fetch_add(1, Ordering::Relaxed);
+            }
+        } else {
+            self.start(first);
+        }
+    }
+
+    /// Account for the runs in flight: retire every completed one (oldest
+    /// first), then `Busy` (runs still copying), `Idle` (nothing left in
+    /// flight) or `Failed` (an error bit or a stalled oldest run: the
+    /// channel reset, every run still in flight counted late). Called under
+    /// the engine's critical section by every turn and by the completion
+    /// interrupt.
     fn settle(&mut self, now_us: u64, slack_us: u32) -> Settled {
-        if !self.busy {
+        // The fault bits first, then clear: a run that completes after the
+        // owner reads below raises `in_suc_eof` again and is seen next time.
+        let faulted = self.nruns > 0 && Self::faulted();
+        Self::clear_ints();
+        while self.nruns > 0 {
+            let run = self.runs[usize::from(self.run_head)];
+            if !landed(self.run_last(&run)) {
+                break;
+            }
+            self.retire(run, now_us, slack_us);
+        }
+        if self.nruns == 0 {
+            COPY_BUSY.store(false, Ordering::Release);
             return Settled::Idle;
         }
-        let (done, failed) = Self::poll();
-        let age = now_us.saturating_sub(self.t0);
-        if failed || (!done && age > DMA_STALL_US) {
-            Self::reset_fsm();
-            self.busy = false;
-            COPY_BUSY.store(false, Ordering::Release);
-            RING_DMA_ERRORS.fetch_add(1, Ordering::Relaxed);
-            RING_LATE.fetch_add(self.slots, Ordering::Relaxed);
-            // Whatever the DMA left in those slots is unknown: never reuse it.
-            for &(slot, _) in &self.pending[..self.slots as usize] {
-                SLOT_GEN[usize::from(slot)].store(SLOT_GEN_NONE, Ordering::Release);
-            }
+        let oldest = self.runs[usize::from(self.run_head)];
+        let age = now_us.saturating_sub(oldest.t0.max(self.done_at));
+        if faulted || age > DMA_STALL_US {
+            self.fail_all();
             return Settled::Failed;
         }
-        if !done {
-            return Settled::Busy;
-        }
-        Self::clear_ints();
-        self.busy = false;
-        COPY_BUSY.store(false, Ordering::Release);
-        for &(slot, gen) in &self.pending[..self.slots as usize] {
+        Settled::Busy
+    }
+
+    /// Credit one completed run (the oldest) and free its entries.
+    fn retire(&mut self, run: Run, now_us: u64, slack_us: u32) {
+        let len = u32::from(run.len);
+        for j in 0..usize::from(run.len) {
+            let e = (usize::from(run.first) + j) % QUEUE_SLOTS;
+            let (slot, gen) = self.pending[e];
             SLOT_GEN[usize::from(slot)].store(gen, Ordering::Release);
+            self.reclaim(e);
         }
-        let per_slot = (age / u64::from(self.slots.max(1))) as u32;
+        // Its copy began when it was handed over or when the run ahead of
+        // it finished, whichever was later.
+        let per_slot = (now_us.saturating_sub(run.t0.max(self.done_at)) / u64::from(len.max(1))) as u32;
         // Clipped like the CPU copy's estimate: at most double per sample,
-        // the first bounded by the slack (the poll that found it done ran
+        // the first bounded by the slack (a poll that found it done ran
         // behind the completion by up to the poll interval, so the number
         // is an upper bound until the interrupt reports one).
         let clipped = if self.slot_us == 0 { per_slot.min(slack_us.max(1)) } else { per_slot.min(self.slot_us * 2) };
@@ -578,12 +797,34 @@ impl Engine {
         RING_DMA_US.store(self.slot_us, Ordering::Relaxed);
         RING_DMA_US_MAX.fetch_max(per_slot, Ordering::Relaxed);
         RING_DMA_BATCHES.fetch_add(1, Ordering::Relaxed);
-        if self.by_isr {
+        if run.by_isr {
             RING_DMA_ISR.fetch_add(1, Ordering::Relaxed);
         }
-        let ctr = if self.core == 0 { &RING_PACKED_CORE0 } else { &RING_PACKED_CORE1 };
-        ctr.fetch_add(self.slots, Ordering::Relaxed);
-        Settled::Idle
+        let ctr = if run.core == 0 { &RING_PACKED_CORE0 } else { &RING_PACKED_CORE1 };
+        ctr.fetch_add(len, Ordering::Relaxed);
+        self.done_at = now_us;
+        self.head = ((usize::from(self.head) + usize::from(run.len)) % QUEUE_SLOTS) as u8;
+        self.inflight -= run.len;
+        self.run_head = ((usize::from(self.run_head) + 1) % MAX_RUNS) as u8;
+        self.nruns -= 1;
+    }
+
+    /// Reset the channel and drop every run in flight: their claims count
+    /// late, their slots' contents are unknown (never reused), and their
+    /// entries go back to the CPU so the next run starts on a clean stop.
+    fn fail_all(&mut self) {
+        Self::reset_fsm();
+        RING_DMA_ERRORS.fetch_add(1, Ordering::Relaxed);
+        RING_LATE.fetch_add(u32::from(self.inflight), Ordering::Relaxed);
+        for j in 0..usize::from(self.inflight) {
+            let e = (usize::from(self.head) + j) % QUEUE_SLOTS;
+            SLOT_GEN[usize::from(self.pending[e].0)].store(SLOT_GEN_NONE, Ordering::Release);
+            self.reclaim(e);
+        }
+        self.head = self.tail;
+        self.inflight = 0;
+        self.nruns = 0;
+        COPY_BUSY.store(false, Ordering::Release);
     }
 }
 
@@ -850,13 +1091,13 @@ impl Hub75Ring {
         let desc_layout = core::alloc::Layout::array::<DmaDescriptor>(descs).map_err(|_| "bad descriptor layout")?;
         let desc_block = Block::zeroed(desc_layout).ok_or("DMA descriptor alloc failed")?;
         let (tables_block, tables) = alloc_tables().ok_or("packer table alloc failed")?;
-        // The copy engine's descriptor pools: `BATCH_SLOTS` slots per side,
+        // The copy engine's descriptor rings: `QUEUE_SLOTS` slots per side (#897),
         // a slot in as many ≤ 4095-byte chunks of whole slot rows as it
         // takes (1 at 64 and 128 columns, 2 at 256, 3 at 512).
         let slot_rows = ring::slot_rows(g.planes);
         let chunk_rows = slot_rows.min(4095 / row_bytes.max(1)).max(1);
         let per_slot = slot_rows.div_ceil(chunk_rows);
-        let pool = BATCH_SLOTS * per_slot;
+        let pool = QUEUE_SLOTS * per_slot;
         let copy_layout = core::alloc::Layout::array::<DmaDescriptor>(2 * pool).map_err(|_| "bad copy descriptor layout")?;
         let copy_block = Block::zeroed(copy_layout).ok_or("copy descriptor alloc failed")?;
         let slots: *mut u16 = slots_block.ptr.cast::<u16>();
@@ -967,11 +1208,13 @@ impl Hub75Ring {
         // 1 stays in charge and says so.
         let copy_channel = Channel::new(copy);
         let mut engine = Engine {
-            busy: false,
-            slots: 0,
-            t0: 0,
-            core: 0,
-            by_isr: false,
+            runs: [Run::EMPTY; MAX_RUNS],
+            run_head: 0,
+            nruns: 0,
+            head: 0,
+            tail: 0,
+            inflight: 0,
+            done_at: 0,
             slot_us: 0,
             tx: copy_block.ptr.cast::<DmaDescriptor>(),
             // SAFETY: the block holds `2 * pool` descriptors.
@@ -980,42 +1223,82 @@ impl Hub75Ring {
             chunk_rows,
             row_bytes,
             slot_rows,
-            pending: [(0, SLOT_GEN_NONE); BATCH_SLOTS],
+            pending: [(0, SLOT_GEN_NONE); QUEUE_SLOTS],
         };
+        engine.link_rings();
         Engine::configure();
+        // Three probes over the same `cal` row pairs of frame 0 into slots
+        // 0.. (identical dark content; the LCD DMA is not running yet):
+        // one fresh run — the calibration, which proves the copy and seeds
+        // the skip rule — then a one-slot run with the rest APPENDED while
+        // it copies, and a run appended to a chain that has already drained
+        // (the restart from the stop). The append probes failing leaves the
+        // `append` lever off: one run at a time, step 2's shape.
         let cal = (n as usize).min(BATCH_SLOTS);
-        for i in 0..cal {
-            // SAFETY: row pair `i` of frame 0 and slot `i` are in bounds
-            // (`cal ≤ n ≤ rows`), and nothing reads or writes either yet.
-            unsafe {
-                engine.fill(i, packed_ptr[0].add(i * slot_words).cast::<u8>().cast_const(), slots.add(i * slot_words).cast::<u8>());
+        let probe = |engine: &mut Engine, runs: &[usize], wait_between: bool| -> Option<u64> {
+            let t0 = now_us();
+            let mut row = 0usize;
+            for (i, &len) in runs.iter().enumerate() {
+                if i > 0 && wait_between {
+                    // Let the chain drain WITHOUT settling it, so the next
+                    // launch is an append onto a DMA sitting on the stop.
+                    let last = engine.runs[(usize::from(engine.run_head) + usize::from(engine.nruns) - 1) % MAX_RUNS];
+                    while !landed(engine.run_last(&last)) {
+                        if now_us().saturating_sub(t0) > 5_000 {
+                            engine.fail_all();
+                            return None;
+                        }
+                    }
+                }
+                for j in 0..len {
+                    let e = (usize::from(engine.tail) + j) % QUEUE_SLOTS;
+                    let r = (row + j) % cal;
+                    // SAFETY: row pair `r` of frame 0 and slot `r` are in
+                    // bounds (`cal ≤ n ≤ rows`), and nothing else reads or
+                    // writes either yet; entry `e` is free.
+                    unsafe {
+                        engine.stage(e, packed_ptr[0].add(r * slot_words).cast::<u8>().cast_const(), slots.add(r * slot_words).cast::<u8>());
+                    }
+                    engine.pending[e] = (r as u8, SLOT_GEN_NONE);
+                }
+                row += len;
+                engine.launch(len, 0, false, now_us());
             }
-        }
-        engine.close(cal);
-        let t0 = now_us();
-        Engine::start(engine.rx, engine.tx);
-        let mut dma_ok = false;
-        loop {
-            let (done, failed) = Engine::poll();
-            if failed {
-                break;
+            loop {
+                match engine.settle(now_us(), 5_000) {
+                    Settled::Idle => return Some(now_us().saturating_sub(t0)),
+                    Settled::Failed => return None,
+                    Settled::Busy if now_us().saturating_sub(t0) > 5_000 => {
+                        engine.fail_all();
+                        return None;
+                    }
+                    Settled::Busy => {}
+                }
             }
-            if done {
-                dma_ok = true;
-                break;
-            }
-            if now_us().saturating_sub(t0) > 5_000 {
-                break;
-            }
-        }
-        let cal_us = now_us().saturating_sub(t0);
+        };
+        let cal_run = probe(&mut engine, &[cal], false);
+        let dma_ok = cal_run.is_some();
+        let cal_us = cal_run.unwrap_or(5_001);
+        let append_ok = dma_ok
+            && cal >= 2
+            && probe(&mut engine, &[1, cal - 1], false).is_some()
+            && probe(&mut engine, &[1, cal - 1], true).is_some();
         Engine::reset_fsm();
+        // The probes' own accounting is not the ring's.
+        for c in [&RING_DMA_BATCHES, &RING_PACKED_CORE0, &RING_APPENDS, &RING_DMA_RESTARTS, &RING_DMA_US_MAX, &RING_LATE, &RING_DMA_ERRORS] {
+            c.store(0, Ordering::Relaxed);
+        }
+        for g in SLOT_GEN.iter() {
+            g.store(SLOT_GEN_NONE, Ordering::Relaxed);
+        }
         if dma_ok {
             engine.slot_us = ((cal_us / cal as u64) as u32).max(1);
+            RING_DMA_US.store(engine.slot_us, Ordering::Relaxed);
             RING_DMA_CAL_US.store(engine.slot_us, Ordering::Relaxed);
             DMA_ON.store(true, Ordering::Relaxed);
+            APPEND.store(append_ok, Ordering::Relaxed);
             println!(
-                "hub75-ring: GDMA ch{} copies the refill — {} slots of {} B in {} us ({} us a slot, {} MB/s), {} descriptors a slot, 64 B bursts",
+                "hub75-ring: GDMA ch{} copies the refill — {} slots of {} B in {} us ({} us a slot, {} MB/s), {} descriptors a slot, 64 B bursts, append {}",
                 COPY_CH,
                 cal,
                 slot_words * 2,
@@ -1023,14 +1306,14 @@ impl Hub75Ring {
                 engine.slot_us,
                 (cal as u64 * (slot_words * 2) as u64) / cal_us.max(1),
                 per_slot,
+                if append_ok { "on" } else { "OFF (the append probe failed — one run in flight at a time)" },
             );
         } else {
             DMA_ON.store(false, Ordering::Relaxed);
             println!(
-                "hub75-ring: GDMA ch{} calibration copy {} after {} us — the CPU copies the refill",
+                "hub75-ring: GDMA ch{} calibration copy {} — the CPU copies the refill",
                 COPY_CH,
-                if cal_us > 5_000 { "timed out" } else { "failed" },
-                cal_us
+                if cal_us > 5_000 { "timed out or failed" } else { "failed" },
             );
         }
 
@@ -1348,11 +1631,13 @@ fn rejoin(p: &mut Packer, s: &Shared, word: u32, claim: Claim, abs_dma: u32) {
 }
 
 /// The DMA path of [`drain`]: under the engine's critical section, settle
-/// the batch in flight (still copying → nothing to do this turn), then
-/// claim up to [`BATCH_SLOTS`] fillable slots whose deadlines the batch's
-/// own copy time can meet, and start them as one transfer. `by_isr` marks
-/// a turn taken by the completion interrupt. The claims are credited to
-/// `core` when the batch completes.
+/// the runs in flight, then claim up to a run's worth of fillable slots
+/// whose deadlines the copy engine can meet — counting the slots still
+/// queued ahead of them (#897) — and hand them over as one run: started
+/// fresh when the DMA is idle, appended to the chain in flight otherwise
+/// (the `append` lever; off, a busy engine ends the turn as in step 2).
+/// `by_isr` marks a turn taken by the completion interrupt. The claims are
+/// credited to `core` when their run completes.
 fn drain_dma(p: &mut Packer, s: &Shared, core: usize, by_isr: bool) -> u32 {
     ENGINE.lock(|c| {
         let mut b = c.borrow_mut();
@@ -1363,9 +1648,18 @@ fn drain_dma(p: &mut Packer, s: &Shared, core: usize, by_isr: bool) -> u32 {
             return 0;
         };
         let slack_us = RING_SLACK_US.load(Ordering::Relaxed);
-        if e.settle(now_us(), slack_us) == Settled::Busy {
+        let busy = e.settle(now_us(), slack_us) == Settled::Busy;
+        // Nothing is handed to the DMA while a flash fence is open: the
+        // fence waits for the chain to drain (`copy_busy`) and must see it
+        // stay drained. (The fence parks the other core and masks this
+        // one's interrupts, so no turn runs then anyway; this says so.)
+        if IN_FENCE.load(Ordering::Acquire) != 0 {
+            return 0;
+        }
+        let room = if busy && !APPEND.load(Ordering::Relaxed) { 0 } else { e.room() };
+        if room == 0 {
             if core == 0 && !by_isr && HYBRID.load(Ordering::Relaxed) {
-                // The DMA is still copying: the output task copies the
+                // The DMA cannot take more: the output task copies the
                 // next claims itself meanwhile (the lock is held for the
                 // copies — core 1's turns are DMA kicks and find it busy
                 // for at most a few slots' worth).
@@ -1373,12 +1667,25 @@ fn drain_dma(p: &mut Packer, s: &Shared, core: usize, by_isr: bool) -> u32 {
             }
             return 0;
         }
-        let Some(abs_dma) = abs_dma(s) else {
-            Engine::clear_ints();
-            return 0;
-        };
+        let Some(abs_dma) = abs_dma(s) else { return 0 };
+        let queued = u32::from(e.inflight);
+        // The `minfill` lever: a short run may wait for a later turn while
+        // the queue head's slack covers the wait.
+        let minfill = MINFILL.load(Ordering::Relaxed).min(room as u32);
+        if minfill > 1 {
+            let head = Claim::decode(NEXT_FILL.load(Ordering::Acquire)).abs;
+            if !s.ring.late(head, abs_dma) {
+                let poll_us = (slack_us / 4).max(500);
+                let avail = s.ring.fillable_ahead(head, abs_dma);
+                if ring::defer_run(avail, minfill, left_us(s, head, abs_dma), DMA_MARGIN_US, queued, e.slot_us, poll_us) {
+                    RING_DEFERRED.fetch_add(1, Ordering::Relaxed);
+                    return 0;
+                }
+            }
+        }
+        let first = usize::from(e.tail);
         let mut k = 0usize;
-        while k < BATCH_SLOTS {
+        while k < room {
             let word = NEXT_FILL.load(Ordering::Acquire);
             let (claim, next) = ring::claim_next(word, NEWEST.load(Ordering::Acquire), &s.ring);
             if s.ring.late(claim.abs, abs_dma) {
@@ -1404,10 +1711,11 @@ fn drain_dma(p: &mut Packer, s: &Shared, core: usize, by_isr: bool) -> u32 {
                 }
                 continue;
             }
-            // The skip rule (design §7) for a batch: this claim's slot is
-            // written when the DMA has done the `k` before it and this one,
-            // plus the turn's own latency. Half again as margin.
-            let need_us = DMA_MARGIN_US + (k as u32 + 1) * e.slot_us * 3 / 2;
+            // The skip rule (design §7) for a run: this claim's slot is
+            // written when the DMA has done the `queued` slots still in
+            // flight ahead of it, the `k` before it in this run, and this
+            // one — plus the turn's own latency (`ring::dma_need_us`).
+            let need_us = ring::dma_need_us(DMA_MARGIN_US, queued + k as u32 + 1, e.slot_us);
             if left_us(s, claim.abs, abs_dma) < need_us {
                 if NEXT_FILL.compare_exchange(word, next, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
                     RING_LATE.fetch_add(1, Ordering::Relaxed);
@@ -1424,46 +1732,40 @@ fn drain_dma(p: &mut Packer, s: &Shared, core: usize, by_isr: bool) -> u32 {
                 PASS_FRAME[(s.ring.pass(claim.abs) % 2) as usize].store(claim.buf, Ordering::Release);
             }
             let row = s.ring.row(claim.abs) as usize;
+            let entry = (first + k) % QUEUE_SLOTS;
             // SAFETY: the claim is ours by the CAS; the DMA has left the
             // slot (`fillable`); the packed frame a pass reads is kept out
-            // of `write_frame`'s choice while the pass is in flight.
+            // of `write_frame`'s choice while the pass is in flight; the
+            // entry is free (`room`).
             unsafe {
-                e.fill(
-                    k,
+                e.stage(
+                    entry,
                     s.packed[usize::from(claim.buf) % FRAMES].add(row * s.slot_words).cast::<u8>(),
                     s.slots.add(slot * s.slot_words).cast::<u8>(),
                 );
             }
-            // Stamped into `SLOT_GEN` when the batch completes; the slot is
+            // Stamped into `SLOT_GEN` when the run completes; the slot is
             // half-written until then and a full-frame ring must not reuse it.
-            e.pending[k] = (slot as u8, if s.full { gen } else { SLOT_GEN_NONE });
+            e.pending[entry] = (slot as u8, if s.full { gen } else { SLOT_GEN_NONE });
             SLOT_GEN[slot].store(SLOT_GEN_NONE, Ordering::Release);
             k += 1;
         }
         if k == 0 {
-            Engine::clear_ints();
             return 0;
         }
-        e.close(k);
-        e.busy = true;
-        COPY_BUSY.store(true, Ordering::Release);
-        e.slots = k as u32;
-        e.core = core;
-        e.by_isr = by_isr;
-        e.t0 = now_us();
-        Engine::start(e.rx, e.tx);
+        e.launch(k, core, by_isr, now_us());
         k as u32
     })
 }
 
-/// The copy channel's interrupt (`in_suc_eof` and the error bits, bound by
-/// [`arm_steal`] on the AppCpu): account for the batch that just finished
-/// and start the next one at once, so the DMA is never idle while the
-/// queue has claims. This chaining runs whatever the `steal` lever says —
-/// that lever is the core-1 TIMER's turns; the completion interrupt costs
-/// this core a few microseconds per batch and only when a batch ends, so
-/// "steal off" measures the chain alone and "steal on" the chain plus the
-/// timer. (`dma` off leaves the handler to the accounting only.)
+/// The copy channel's interrupt (`in_suc_eof` — once per run — and the
+/// fault bits, bound by [`arm_steal`] on the AppCpu): retire the runs that
+/// finished and hand the DMA the next one at once, so the chain has work
+/// while the queue has claims. This chaining runs whatever the `steal`
+/// lever says — that lever is the core-1 TIMER's turns; the completion
+/// interrupt costs this core a few microseconds per run and only when one
+/// ends, so "steal off" measures the chain alone and "steal on" the chain
+/// plus the timer. (`dma` off leaves the handler to the accounting only.)
 extern "C" fn copy_isr() {
     let Some(s) = shared() else {
         Engine::clear_ints();
@@ -1480,9 +1782,6 @@ extern "C" fn copy_isr() {
         ENGINE.lock(|c| match c.borrow_mut().as_mut() {
             Some(e) => {
                 let _ = e.settle(now_us(), RING_SLACK_US.load(Ordering::Relaxed));
-                if !e.busy {
-                    Engine::clear_ints();
-                }
             }
             None => Engine::clear_ints(),
         });
@@ -1696,17 +1995,41 @@ pub fn set_priority(on: bool) {
     PRI.store(on, Ordering::Relaxed);
 }
 
-/// Is a copy batch still reading PSRAM? The flash fence (`core1.rs`) asks
+/// Is a copy run still reading PSRAM? The flash fence (`core1.rs`) asks
 /// before every flash op and waits until this is false: a GDMA burst that
 /// is stalled on a PSRAM read while SPI1 programs flash sits on the
 /// engine's shared read path and holds off the panel chain's own reads on
 /// channel 0 for the whole op — the LCD then underflows (2026-09-29, the
 /// 2x1 `lsb 7` chain stopped ~60 s after boot, at the boot-ok store).
-/// Nothing can START a batch during the op (the other core is parked, the
-/// fencing core's interrupts are masked), so waiting out the one in flight
-/// is the whole rule. One raw-bit read; no lock.
+/// With runs appended to the chain (#897) "busy" is ANY run in flight: the
+/// newest run's last receive descriptor has not landed ([`COPY_TAIL`] —
+/// runs complete in order, so that one landing means all have). Nothing
+/// can append a run during the op (the other core is parked, the fencing
+/// core's interrupts are masked, and `drain_dma` hands nothing over while
+/// `IN_FENCE` is open), so waiting out the chain in flight is the whole
+/// rule — at most [`QUEUE_SLOTS`] slots of copy. One descriptor read; no
+/// lock.
 pub fn copy_busy() -> bool {
-    COPY_BUSY.load(Ordering::Acquire) && !Engine::poll().0
+    if !COPY_BUSY.load(Ordering::Acquire) {
+        return false;
+    }
+    let tail = COPY_TAIL.load(Ordering::Acquire);
+    !tail.is_null() && !landed(tail)
+}
+
+/// The `append` lever (`POST /api/ring {"append":…}`, #897). Off takes
+/// effect at the next turn: the chain in flight drains, and nothing more is
+/// appended to it. On is honoured even where the boot's append probe
+/// failed — an experiment; a chain that does not resume shows as
+/// `dma_errors` (the 20 ms stall reset) and costs `late`, never garbage.
+pub fn set_append(on: bool) {
+    APPEND.store(on, Ordering::Relaxed);
+}
+
+/// The `minfill` lever (`POST /api/ring {"minfill":N}`, #897): clamped to
+/// 1 (off) ..= [`BATCH_SLOTS`].
+pub fn set_minfill(n: u32) {
+    MINFILL.store(n.clamp(1, BATCH_SLOTS as u32), Ordering::Relaxed);
 }
 
 /// The `dma` lever (`POST /api/ring {"dma":…}`): on only when the engine

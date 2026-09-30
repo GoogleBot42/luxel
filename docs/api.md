@@ -323,12 +323,22 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   interrupt on core 1 (the rest by a copier's turn), `dma_errors` batches
   that ended in a descriptor error or a 20 ms stall and were reset (their
   claims count `late`); `packed_core0` / `packed_core1` then credit the core
-  whose turn STARTED the batch. `asked` is the slot count `ring_ms` resolved
+  whose turn STARTED the batch. Since #897 a turn that finds the DMA busy
+  appends its batch (a "run") behind the chain in flight instead of waiting
+  for it: `appends` counts the runs appended to a chain in flight, and
+  `dma_restarts` those that found the chain already drained, where the
+  GDMA's restart bits are what resumed it (a high share means the DMA still
+  idles between runs); `dma_batches` and `dma_isr` count runs. `append` is
+  the lever (default on, off when the boot's append probe failed) and
+  `minfill` the minimum run a turn will hand over while the queue head's
+  slack allows it to wait (1 = off, the default), with `deferred` counting
+  the turns that waited. `asked` is the slot count `ring_ms` resolved
   to before the heap cap; `rows < asked` means the cap bit (below). `pri`
   is the GDMA arbitration lever (default on: the panel chain at priority 9,
   the copy channel at 0 — at equal priority the copy's PSRAM bursts starved
   the panel chain and the LCD stopped, 2026-09-29), `hybrid` the lever that
-  lets core 0's turn copy claims itself while a DMA batch is in flight
+  lets core 0's turn copy claims itself while the DMA can take no more
+  (since #897: `append` off, or its queue full)
   (default off), `lcd_restarts` how often the LCD watchdog found the
   LCD_CAM's continuous transaction ended (`lcd_start` clear) and restarted
   it — 0 is the claim — and `lcd` a raw register probe for that diagnosis
@@ -336,14 +346,17 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   OUT_DSCR, LCD_USER, LC_DMA_INT_RAW, copy OUT_INT_RAW, copy IN_INT_RAW,
   ch0 OUT_PRI]`; a healthy panel has `LCD_USER` bit 27 set).
 - `POST /api/ring` — `hub75-ring` builds only (Gitea #857 / #892): body
-  with any of `{"steal":B}`, `{"dma":B}`, `{"pri":B}`, `{"hybrid":B}` — the
-  core-1 TIMER's refill turns, the GDMA copy against the CPU `memcpy`, the
-  panel chain's GDMA priority, and core 0 copying beside a busy DMA — for
-  this boot;
+  with any of `{"steal":B}`, `{"dma":B}`, `{"pri":B}`, `{"hybrid":B}`,
+  `{"append":B}`, `{"minfill":N}` — the core-1 TIMER's refill turns, the
+  GDMA copy against the CPU `memcpy`, the panel chain's GDMA priority, core
+  0 copying beside a DMA that can take no more, appending runs to the chain
+  in flight (#897), and the minimum run length (1..8, 1 = off) — for this
+  boot;
   the DMA's completion interrupt chains batches whatever `steal` says (it
   costs core 1 a few microseconds per batch, only when one ends), so with
   the DMA on `steal` off measures the chain alone; answers
-  `{"ok":true,"steal":B,"dma":B}` with both current values. Not persisted;
+  `{"ok":true,"steal":B,"dma":B,"append":B,"minfill":N}` with the current
+  values. Not persisted;
   `dma` cannot be turned on where the boot found no working engine. The A/B
   levers for `pass.ring.late` / `packed_core1` on a running panel.
 - `rescan_hz` — how many times a second the HUB75 panel is really redrawn
