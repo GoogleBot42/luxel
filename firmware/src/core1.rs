@@ -716,11 +716,16 @@ pub mod tag {
     pub const MAP: usize = 11;
     pub const COUNT: usize = 12;
 
-    /// Doors that erase or program flash — the ones the ring driver blanks
-    /// the panel for (Gitea #852). `OTHER` is `ota::with_flash`'s generic
-    /// door and may write, so it counts.
+    /// Doors the ring driver blanks the panel for (Gitea #852): the ones
+    /// that hold the bus LONGER than the ring's slack — sector erases
+    /// (~45 ms) and the OTA's programs (a chunk every ~50 ms for 15 s).
+    /// A page program is ~0.3 ms and a store write a few of them, inside a
+    /// 3 ms ring: those cost a stale row pair or two for one pass, where a
+    /// blank costs a 200 ms dark blink per write — every slider move on the
+    /// console blinked the panel (Jeremy, 2026-09-30, 17 blinks in a
+    /// session). Reads and the MMU door never blank.
     pub const fn blanks(tag: usize) -> bool {
-        !matches!(tag, ASSET_READ | STORE_READ | MAP)
+        matches!(tag, ASSET_ERASE | OTA_ERASE | OTA_WRITE | STORE_ERASE | RAW_ERASE)
     }
 }
 
