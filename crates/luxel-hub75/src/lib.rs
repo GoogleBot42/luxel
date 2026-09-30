@@ -1210,10 +1210,12 @@ mod tests {
         let mut rng = Rng(0x2026_0919_475a);
         let frame = rng.frame(PIXELS);
         let t = Tables::from_lut(&lut_for(31));
-        // two 32-wide tiles, chain starting at the top-right: halves swapped
+        // two 32-wide tiles, chain starting at the top-LEFT: halves swapped
+        // (IN on the right is the identity — the data shifts leftwards, so
+        // the far end of the chain owns driver block 0; Gitea #917)
         let mut m = luxel_core::layout::Matrix::single(32, 64);
         m.cols = 2;
-        m.start = luxel_core::layout::Corner::Tr;
+        m.start = luxel_core::layout::Corner::Tl;
         let mut lut = vec![0u16; PIXELS];
         assert_eq!(crate::arrange::build_lut(&mut lut, &m, COLS, NROWS * 2), 2);
 

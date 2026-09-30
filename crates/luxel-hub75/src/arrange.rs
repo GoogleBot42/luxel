@@ -19,9 +19,19 @@
 //!
 //! **The identity case costs nothing.** A single upright tile (and any
 //! arrangement that happens to come out row-major, e.g. two 32-wide tiles
-//! side by side wired `tl row`) produces `lut[i] == i`; the firmware checks
-//! that with [`is_identity`], drops the table, and composes exactly the code
-//! it composed before this module existed.
+//! side by side wired `tr row` — IN on the right, since the data shifts
+//! leftwards) produces `lut[i] == i`; the firmware checks that with
+//! [`is_identity`], drops the table, and composes exactly the code it
+//! composed before this module existed.
+//!
+//! **Which driver block is which tile.** Chain positions count from the IN
+//! connector (tile 1 in the UI is the panel the ribbon enters). The driver
+//! clocks a row out as `panels` blocks of `pw` words, and the FIRST block
+//! travels through every panel's shift register to the far END of the chain;
+//! the last block stays on the IN panel. So chain tile `p` owns driver block
+//! `drive - 1 - p` (see [`build_lut`]), which is what makes a chain of
+//! upright panels with IN on the right come out `tr row` — the way the
+//! metal actually is — rather than `tl row`.
 //!
 //! **Scan depth.** A HUB75 panel drives two rows at once, so an upright
 //! `ph`-tall panel normally has `ph / 2` address rows. A 1/N-scan panel has
@@ -228,7 +238,16 @@ pub fn build_lut(lut: &mut [u16], m: &Matrix, fb_w: usize, fb_h: usize) -> usize
                     _ => (lx, ly),
                 };
                 let engine = (oy + sy) * w + ox + sx;
-                let x = p * pw + lx;
+                // Chain position p is counted from the IN connector, as the
+                // UI draws it — but the driver's FIRST block of a row is the
+                // one that travels furthest down the shift registers, to the
+                // panel at the far END of the chain (and the last block stays
+                // on the IN panel). So tile p owns driver block `drive-1-p`,
+                // not `p`. Found on Jeremy's 2x2 (Gitea #917, 2026-09-30):
+                // with `p` the two columns of a `tr col` snake came out
+                // swapped, rows fine; a 4x1 wired `tl row` with IN on the
+                // right had hidden it, because there the far end IS tile 0.
+                let x = (drive - 1 - p) * pw + lx;
                 let i = if stripes == 1 {
                     ly * fb_w + x
                 } else {
@@ -349,16 +368,20 @@ mod tests {
     /// two 32-wide tiles side by side, wired plainly, ARE a 64-wide grid.
     #[test]
     fn two_tiles_wired_plainly_side_by_side_are_also_the_identity() {
-        let m = tiles(32, 64, 2, 1, (Corner::Tl, RunDir::Row, false, [0, 0]));
+        // IN on the right: the data shifts leftwards, so the panel the ribbon
+        // enters (tile 0) is the RIGHT one and owns the last driver block
+        let m = tiles(32, 64, 2, 1, (Corner::Tr, RunDir::Row, false, [0, 0]));
         let mut lut = vec![0u16; 64 * 64];
         assert_eq!(build_lut(&mut lut, &m, 64, 64), 2);
         assert!(is_identity(&lut));
     }
 
-    /// …and starting the same chain from the other corner swaps the halves.
+    /// …and starting the same chain from the other corner swaps the halves
+    /// (what Jeremy's 2x2 showed with the block order the other way round —
+    /// Gitea #917, 2026-09-30).
     #[test]
     fn starting_at_the_far_corner_swaps_the_halves() {
-        let m = tiles(32, 64, 2, 1, (Corner::Tr, RunDir::Row, false, [0, 0]));
+        let m = tiles(32, 64, 2, 1, (Corner::Tl, RunDir::Row, false, [0, 0]));
         let mut lut = vec![0u16; 64 * 64];
         assert_eq!(build_lut(&mut lut, &m, 64, 64), 2);
         assert!(!is_identity(&lut));
@@ -470,10 +493,42 @@ mod tests {
         let (fw, fh) = chain_fb(&m);
         let mut lut = vec![0u16; fw * fh];
         build_lut(&mut lut, &m, fw, fh);
-        // tile 1 is the bottom row (engine rows 4..8), mounted upside-down:
-        // its first driver pixel is the grid's bottom-right corner.
-        assert_eq!(lut[4], 7 * 4 + 3);
-        assert_eq!(lut[3 * fw + 7], 4 * 4);
+        // tile 1 is the bottom row (engine rows 4..8), mounted upside-down,
+        // and being the far end of the chain it owns driver block 0: its
+        // first driver pixel is the grid's bottom-right corner, its last the
+        // bottom row's first pixel.
+        assert_eq!(lut[0], 7 * 4 + 3);
+        assert_eq!(lut[3 * fw + 3], 4 * 4);
+        // tile 0 (the IN panel, upright) owns the last block
+        assert_eq!(lut[4], 0);
+        assert_eq!(lut[3 * fw + 7], 3 * 4 + 3);
+    }
+
+    /// Jeremy's wall (Gitea #917, 2026-09-30): four 64x64 panels, ribbon in at
+    /// the top-right, running down, snaking back up the left column. With the
+    /// block order the wrong way round the two columns came out swapped and
+    /// the rows fine — so the IN panel (chain tile 0, top-right) must own the
+    /// LAST driver block and the far end of the chain (tile 3, top-left) the
+    /// first.
+    #[test]
+    fn the_in_panel_owns_the_last_driver_block() {
+        let m = tiles(4, 4, 2, 2, (Corner::Tr, RunDir::Col, true, [0, 0]));
+        let (fw, fh) = chain_fb(&m);
+        let mut lut = vec![0u16; fw * fh];
+        assert_eq!(build_lut(&mut lut, &m, fw, fh), 4);
+        let w = m.width() as usize;
+        let cell_of = |block: usize| (lut[block * 4] as usize % w / 4, lut[block * 4] as usize / w / 4);
+        assert_eq!(cell_of(3), (1, 0), "last block = IN panel = top-right");
+        assert_eq!(cell_of(2), (1, 1), "then down");
+        assert_eq!(cell_of(1), (0, 1), "snake back along the bottom");
+        assert_eq!(cell_of(0), (0, 0), "first block = far end = top-left");
+        // …and a plain row of upright panels with IN on the right is the
+        // identity, which is how a physical chain is actually laid out
+        let row = tiles(4, 4, 4, 1, (Corner::Tr, RunDir::Row, false, [0, 0]));
+        let (fw, fh) = chain_fb(&row);
+        let mut lut = vec![0u16; fw * fh];
+        build_lut(&mut lut, &row, fw, fh);
+        assert!(is_identity(&lut));
     }
 
     /// Gitea #917: `rot[0]` turns the EVEN lines — the first panel included —
@@ -493,7 +548,8 @@ mod tests {
 
     /// A single tile hung upside-down (`180/0`) shows the grid rotated 180° —
     /// the driver's first pixel is the engine's last — and a 4x1 chain of
-    /// such tiles, wired from the right, is the whole picture rotated.
+    /// such tiles wired from the LEFT (so its far end, block 0, is the right-hand
+    /// cell) is the whole picture rotated.
     #[test]
     fn an_upside_down_first_panel_is_the_grid_rotated() {
         let m = tiles(8, 4, 1, 1, (Corner::Tl, RunDir::Row, false, [2, 0]));
@@ -504,7 +560,7 @@ mod tests {
         assert_eq!(lut[31], 0);
         assert_eq!(lut[7], 24, "end of driver row 0 is the start of engine row 3");
 
-        let m = tiles(4, 4, 4, 1, (Corner::Tr, RunDir::Row, false, [2, 2]));
+        let m = tiles(4, 4, 4, 1, (Corner::Tl, RunDir::Row, false, [2, 2]));
         let (fw, fh) = chain_fb(&m);
         let mut lut = vec![0u16; fw * fh];
         assert_eq!(build_lut(&mut lut, &m, fw, fh), 4);

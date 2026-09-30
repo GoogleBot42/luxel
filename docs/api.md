@@ -1296,6 +1296,18 @@ wide and `ph` tall, and the tiles hang wherever the installer put them. The
 **panel→pixel remap built once at boot**, so the engine keeps rendering one
 `pw·cols` × `ph·rows` row-major grid and never knows about the chain.
 
+**Chain positions count from the IN connector** — tile 1 in the arrangement
+picture is the panel the ribbon enters — and the firmware maps them onto the
+driver's row the way the shift registers do: the FIRST block of `pw` words
+clocked out travels through every panel to the far END of the chain, the last
+block stays on the IN panel, so chain tile `p` owns driver block
+`panels − 1 − p`. Two things follow. A row of upright panels with the ribbon
+entering on the right is `tr row` (the data shifts leftwards; that is the
+identity remap), not `tl row`. And a chain wider than the framebuffer lights
+the tiles NEAREST the IN connector (`drive` of them) and leaves the far ones
+dark. (Until 2026-09-30 tile `p` owned block `p`; on Jeremy's 2x2 `tr col`
+snake that swapped the two columns — Gitea #917.)
+
 **Chain order**, exactly as the firmware walks it. Tiles are visited line by
 line; a *line* is a row of tiles when `dir` is `row` and a column when it is
 `col`:
