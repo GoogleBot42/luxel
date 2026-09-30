@@ -813,6 +813,8 @@ fn status_json() -> luxel_core::jsonview::Chunks {
             push_u32(&mut out, ring::RING_SLACK_US.load(Ordering::Relaxed));
             push_piece(&mut out, ",\"late\":");
             push_u32(&mut out, ring::RING_LATE.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"reused\":");
+            push_u32(&mut out, ring::RING_REUSED.load(Ordering::Relaxed));
             push_piece(&mut out, ",\"blanked\":");
             push_u32(&mut out, ring::RING_BLANKED.load(Ordering::Relaxed));
             push_piece(&mut out, ",\"backoffs\":");

@@ -769,4 +769,30 @@ mod tests {
         // one wrap on, the head is late from slot 0 of wrap 1 onward
         assert!(ring.late(head, ring.abs(1, 0)));
     }
+
+    /// The premise of the full-frame reuse (#896): with `n == rows` a
+    /// claim's slot IS its row pair, on every pass, across the period —
+    /// so a slot that holds row `r` of a frame holds exactly what the next
+    /// pass's claim for that slot wants, until the frame changes. Below a
+    /// full frame the same slot carries a different row every pass.
+    #[test]
+    fn a_full_frame_ring_maps_each_slot_to_one_row() {
+        for rows in [1u32, 8, 16, 32] {
+            let full = Ring::new(rows.max(GUARD_SLOTS + 1), rows);
+            if full.n == rows {
+                for a in (0..full.period).step_by(7).chain([full.period - 1]) {
+                    assert_eq!(full.slot(a), full.row(a), "rows {rows} abs {a}");
+                }
+            }
+        }
+        let partial = Ring::new(10, 32);
+        // the same slot, one pass apart, carries a different row pair
+        let a = partial.first_claim();
+        let b = a + 32;
+        assert_eq!(partial.row(a), partial.row(b));
+        assert_ne!(partial.slot(a), partial.slot(b));
+        // and the ring's max is the frame: `slots_for_slack` never exceeds rows
+        let s = Schedule::plan(Geometry::new(32, 64, 7), Control::new(7, 1), 15);
+        assert_eq!(slots_for_slack(1_000_000, &s, 64, 20_000_000, 32), 32);
+    }
 }

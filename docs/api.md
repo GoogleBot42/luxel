@@ -275,7 +275,13 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   that slot then shows the row it already held, at that row's own address,
   never a mixed one (design §7). `packed_core0` / `packed_core1` say which
   core packed how many row pairs (`packed_core1` is 0 until the core-1
-  steal); `idle` counts the turns on which nothing was fillable (the ring was
+  steal); `reused` counts claims advanced WITHOUT a copy because the slot
+  already held that row pair of that packed frame (Gitea #896) — only on a
+  full-frame ring (`rows` equal to the panel's row pairs, i.e. `ring_ms`
+  large enough), where slot `r` carries row pair `r` every pass and a copy
+  is only needed when the frame changed: there `reused` dominates and the
+  PSRAM traffic follows the render rate, not the pass rate; `late +
+  reused + packed_core0 + packed_core1` is the claim count; `idle` counts the turns on which nothing was fillable (the ring was
   full — healthy); `pack_us` / `pack_us_max` the typical and worst row-pair
   refill on core 0 and `pack1_us` the typical on core 1 — since #892 a
   refill is a COPY of the row pair out of a packed frame in PSRAM, not a

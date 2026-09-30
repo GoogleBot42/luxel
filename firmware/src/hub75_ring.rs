@@ -42,6 +42,18 @@
 //!   The CPU `memcpy` of step 1 stays as the fallback when the DMA engine
 //!   could not be built, and as the A/B lever (`POST /api/ring
 //!   {"dma":false}`).
+//! - **At a full-frame ring the copy is skipped while the frame is
+//!   unchanged** (#896): with `n == rows` slot `r` carries row pair `r`
+//!   on every pass, so a claim is only worth a copy when the pass's packed
+//!   frame is not the one the slot was last filled from. Every publish
+//!   stamps the frame with a fresh generation (`FRAME_GEN`), every landed
+//!   copy stamps its slot (`SLOT_GEN`), and a claim whose stamps match is
+//!   advanced without a copy — `pass.ring.reused` counts them. PSRAM
+//!   traffic then follows the RENDER rate instead of the pass rate
+//!   (2x1 `lsb 7`: 32 row pairs × 20 fps instead of × 400 passes/s),
+//!   which is what makes the low-plane schedules watchable on the 2x1.
+//!   Below a full frame nothing changes: the stamps are kept but never
+//!   match, because the same slot holds a different row pair every pass.
 //! - **The ring is capped by the heap** ([`RING_HEAP_RESERVE`]): `ring_ms`
 //!   asks for a slack, the boot gives the slots that slack needs OR as many
 //!   as leave the boot floor plus a reserve for the engine, whichever is
@@ -213,6 +225,28 @@ pub static RING_DMA_CAL_US: AtomicU32 = AtomicU32::new(0);
 pub static RING_DMA_BATCHES: AtomicU32 = AtomicU32::new(0);
 pub static RING_DMA_ISR: AtomicU32 = AtomicU32::new(0);
 pub static RING_DMA_ERRORS: AtomicU32 = AtomicU32::new(0);
+/// Claims advanced WITHOUT a copy because the slot already held that row
+/// pair of that packed frame (Gitea #896) — only ever non-zero on a
+/// full-frame ring (`rows == asked == the panel's row pairs`), where slot
+/// `r` carries row pair `r` on every pass and the copy is needed only
+/// when the frame changed. `reused + packed_core0 + packed_core1 + late`
+/// is the claim count; on the 2x1 at `lsb 7` the copies fall from the pass
+/// rate (~400/s × 32) to the render rate (~20/s × 32).
+pub static RING_REUSED: AtomicU32 = AtomicU32::new(0);
+/// The packed-frame generation counter: bumped by every `write_frame`
+/// publish, stamped on the published frame ([`FRAME_GEN`]) and, once a
+/// slot has been copied from it, on the slot ([`SLOT_GEN`]). Two equal
+/// stamps mean byte-identical content: a frame index is recycled every
+/// four publishes, a generation never is.
+static GEN: AtomicU32 = AtomicU32::new(0);
+/// Generation of the frame each packed-frame index currently holds.
+static FRAME_GEN: [AtomicU32; FRAMES] = [const { AtomicU32::new(0) }; FRAMES];
+/// Generation of the packed frame each slot was last COPIED from — written
+/// after the copy landed (by the copying core, or by the batch's
+/// completion) — `SLOT_GEN_NONE` when unknown: never copied, or a batch
+/// that failed with the slot half-written.
+static SLOT_GEN: [AtomicU32; MAX_SCAN] = [const { AtomicU32::new(SLOT_GEN_NONE) }; MAX_SCAN];
+const SLOT_GEN_NONE: u32 = u32::MAX;
 /// The flash-write blank (Gitea #852, design §7): the panel chain's
 /// descriptors, each one's live buffer pointer and its stand-in in one
 /// dark slot at the same offset. Published once at boot; the fence swaps
@@ -359,6 +393,9 @@ struct Engine {
     chunk_rows: usize,
     row_bytes: usize,
     slot_rows: usize,
+    /// `(slot, generation)` of each claim in the batch in flight, stamped
+    /// into [`SLOT_GEN`] when the batch completes (#896).
+    pending: [(u8, u32); BATCH_SLOTS],
 }
 
 // SAFETY: the raw descriptor pointers are used only under `ENGINE`'s
@@ -516,6 +553,10 @@ impl Engine {
             COPY_BUSY.store(false, Ordering::Release);
             RING_DMA_ERRORS.fetch_add(1, Ordering::Relaxed);
             RING_LATE.fetch_add(self.slots, Ordering::Relaxed);
+            // Whatever the DMA left in those slots is unknown: never reuse it.
+            for &(slot, _) in &self.pending[..self.slots as usize] {
+                SLOT_GEN[usize::from(slot)].store(SLOT_GEN_NONE, Ordering::Release);
+            }
             return Settled::Failed;
         }
         if !done {
@@ -524,6 +565,9 @@ impl Engine {
         Self::clear_ints();
         self.busy = false;
         COPY_BUSY.store(false, Ordering::Release);
+        for &(slot, gen) in &self.pending[..self.slots as usize] {
+            SLOT_GEN[usize::from(slot)].store(gen, Ordering::Release);
+        }
         let per_slot = (age / u64::from(self.slots.max(1))) as u32;
         // Clipped like the CPU copy's estimate: at most double per sample,
         // the first bounded by the slack (the poll that found it done ran
@@ -585,6 +629,10 @@ struct Shared {
     slot_clocks: u32,
     clock_hz: u32,
     slack_cycles: u32,
+    /// A full-frame ring (`n == rows`): slot `r` always carries row pair
+    /// `r`, so a claim whose slot already holds that row of that packed
+    /// frame is advanced without a copy (#896).
+    full: bool,
 }
 struct SharedCell(UnsafeCell<Option<Shared>>);
 // SAFETY: written once before `SHARED_READY` is released, read-only after;
@@ -932,6 +980,7 @@ impl Hub75Ring {
             chunk_rows,
             row_bytes,
             slot_rows,
+            pending: [(0, SLOT_GEN_NONE); BATCH_SLOTS],
         };
         Engine::configure();
         let cal = (n as usize).min(BATCH_SLOTS);
@@ -1163,6 +1212,7 @@ impl Hub75Ring {
             slot_clocks: self.slot_clocks,
             clock_hz: self.clock_hz,
             slack_cycles: self.slack_cycles,
+            full: self.ring.n == self.ring.rows,
         };
         // SAFETY: the single write, before the release below.
         unsafe { *SHARED.0.get() = Some(sh) };
@@ -1341,6 +1391,19 @@ fn drain_dma(p: &mut Packer, s: &Shared, core: usize, by_isr: bool) -> u32 {
                 }
                 break;
             }
+            let slot = s.ring.slot(claim.abs) as usize;
+            let gen = FRAME_GEN[usize::from(claim.buf) % FRAMES].load(Ordering::Acquire);
+            if s.full && SLOT_GEN[slot].load(Ordering::Acquire) == gen {
+                // The slot already holds this row pair of this frame (#896):
+                // advance the claim, copy nothing, no deadline to meet.
+                if NEXT_FILL.compare_exchange(word, next, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+                    if s.ring.row(claim.abs) == 0 {
+                        PASS_FRAME[(s.ring.pass(claim.abs) % 2) as usize].store(claim.buf, Ordering::Release);
+                    }
+                    RING_REUSED.fetch_add(1, Ordering::Relaxed);
+                }
+                continue;
+            }
             // The skip rule (design §7) for a batch: this claim's slot is
             // written when the DMA has done the `k` before it and this one,
             // plus the turn's own latency. Half again as margin.
@@ -1360,7 +1423,6 @@ fn drain_dma(p: &mut Packer, s: &Shared, core: usize, by_isr: bool) -> u32 {
             if s.ring.row(claim.abs) == 0 {
                 PASS_FRAME[(s.ring.pass(claim.abs) % 2) as usize].store(claim.buf, Ordering::Release);
             }
-            let slot = s.ring.slot(claim.abs) as usize;
             let row = s.ring.row(claim.abs) as usize;
             // SAFETY: the claim is ours by the CAS; the DMA has left the
             // slot (`fillable`); the packed frame a pass reads is kept out
@@ -1372,6 +1434,10 @@ fn drain_dma(p: &mut Packer, s: &Shared, core: usize, by_isr: bool) -> u32 {
                     s.slots.add(slot * s.slot_words).cast::<u8>(),
                 );
             }
+            // Stamped into `SLOT_GEN` when the batch completes; the slot is
+            // half-written until then and a full-frame ring must not reuse it.
+            e.pending[k] = (slot as u8, if s.full { gen } else { SLOT_GEN_NONE });
+            SLOT_GEN[slot].store(SLOT_GEN_NONE, Ordering::Release);
             k += 1;
         }
         if k == 0 {
@@ -1452,6 +1518,19 @@ fn drain_cpu(p: &mut Packer, s: &Shared, core: usize) -> u32 {
             }
             break;
         }
+        let slot = s.ring.slot(claim.abs) as usize;
+        let gen = FRAME_GEN[usize::from(claim.buf) % FRAMES].load(Ordering::Acquire);
+        if s.full && SLOT_GEN[slot].load(Ordering::Acquire) == gen {
+            // The slot already holds this row pair of this frame (#896):
+            // advance the claim and copy nothing.
+            if NEXT_FILL.compare_exchange(word, next, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+                if s.ring.row(claim.abs) == 0 {
+                    PASS_FRAME[(s.ring.pass(claim.abs) % 2) as usize].store(claim.buf, Ordering::Release);
+                }
+                RING_REUSED.fetch_add(1, Ordering::Relaxed);
+            }
+            continue;
+        }
         // The skip rule (design §7): slots left before the beam, less
         // the one it may be in, must cover the worst pack plus margin.
         let left_clocks = s.ring.until_late(claim.abs, abs_dma).saturating_sub(1) * s.slot_clocks;
@@ -1483,6 +1562,11 @@ fn drain_cpu(p: &mut Packer, s: &Shared, core: usize) -> u32 {
         }
         let t0 = esp_hal::xtensa_lx::timer::get_cycle_count();
         copy_claim(s, claim);
+        if s.full {
+            // After the copy landed, never before: a copy this core is
+            // preempted in must not read as done to the other core.
+            SLOT_GEN[slot].store(gen, Ordering::Release);
+        }
         let dt = esp_hal::xtensa_lx::timer::get_cycle_count().wrapping_sub(t0);
         // The typical pack, not the worst: a sample can at most double
         // the estimate (a preempted pack decays out over the next few
@@ -1689,6 +1773,10 @@ impl OutputDriver for Hub75Ring {
         if !self.pack_frame(usize::from(i), rgb) {
             return false;
         }
+        // A fresh generation on the frame BEFORE it is newest: a claimer that
+        // sees the index sees the stamp it will compare its slot's against.
+        let gen = GEN.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
+        FRAME_GEN[usize::from(i)].store(if gen == SLOT_GEN_NONE { 0 } else { gen }, Ordering::Release);
         NEWEST.store(i, Ordering::Release);
         self.last_frame_pass = self.ring.pass(Claim::decode(NEXT_FILL.load(Ordering::Acquire)).abs);
         true
