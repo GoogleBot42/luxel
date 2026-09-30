@@ -326,12 +326,20 @@ pub fn fence_blank() -> bool {
 pub fn fence_unblank() {
     crate::hub75_ring::fence_unblank()
 }
+/// The board is about to reset: blank the panel and keep it dark
+/// (`main::reboot_task`).
+#[cfg(feature = "hub75-ring")]
+pub fn hold_blank() {
+    crate::hub75_ring::hold_blank()
+}
 #[cfg(not(feature = "hub75-ring"))]
 pub fn fence_blank() -> bool {
     false
 }
 #[cfg(not(feature = "hub75-ring"))]
 pub fn fence_unblank() {}
+#[cfg(not(feature = "hub75-ring"))]
+pub fn hold_blank() {}
 
 /// HUB75 (circular DMA, never idle by design) and the other chips: no
 /// shared-DMA hazard known; the fence does not wait. The S3 strip build is

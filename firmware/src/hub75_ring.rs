@@ -294,6 +294,15 @@ pub fn fence_unblank() {
     IN_FENCE.fetch_sub(1, Ordering::AcqRel);
 }
 
+/// Blank for good: the board is about to reset (`reboot_task`, after an
+/// OTA or `POST /api/reboot`). Same as a fence that is never released, so
+/// the picture does not come back for the 400 ms between the last flash
+/// write and the reset (Jeremy saw that frame, 2026-09-30) and the DMA is
+/// not stopped mid-pass with rows lit.
+pub fn hold_blank() {
+    let _ = fence_blank();
+}
+
 /// From the output task's turn: restore the chain once the flash has been
 /// quiet for the hold and no fence is open.
 fn blank_tick() {

@@ -2505,6 +2505,10 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
 async fn reboot_task() -> ! {
     REBOOT.wait().await;
     println!("rebooting into new firmware…");
+    // A panel goes dark now and stays dark through the reset (the ring
+    // driver's blank, Gitea #852) rather than showing one last frame
+    // between the OTA's final write and the reset.
+    output::hold_blank();
     // the response first: the flash write below takes the cross-core fence,
     // and the handler is already waiting on nothing but the wire
     Timer::after(Duration::from_millis(400)).await;
