@@ -1268,7 +1268,7 @@ impl Hub75Ring {
             m.start.as_str(),
             m.dir.as_str(),
             if m.snake { " snake" } else { "" },
-            if m.rot180 { " rot180" } else { "" },
+            [" rot180 0", " rot180 1", " rot180 2", " rot180 3"][usize::from(m.rot180 & 3)],
             w,
             h,
             g.rows,

@@ -3871,7 +3871,7 @@ the panel.
 boot**: `lut[driver pixel] = engine pixel`. The engine keeps rendering one
 `pw·cols` × `ph·rows` row-major grid and never learns about the chain; the
 compose path (`luxel_hub75::pack_remap`) gathers through the table instead
-of walking the frame in order. Chain order, `rot180` semantics and the
+of walking the frame in order. Chain order, the `rot180` line mask (bit 1 odd lines, bit 2 even lines and so the first panel — #917) and the
 identity rule are in docs/api.md "Panel arrangement"; the builder and its
 27 host tests are `crates/luxel-hub75/src/arrange.rs`.
 

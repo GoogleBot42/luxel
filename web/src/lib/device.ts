@@ -313,6 +313,8 @@ export interface LayoutWire {
     dir: "row" | "col";
     /** 0/1 on the wire, not a bool. */
     snake: number;
+    /** A 0..3 line mask (Gitea #917): bit 1 = odd lines' tiles mounted
+     *  upside-down, bit 2 = even lines', the first panel included. */
     rot180: number;
     /** HUB75 scan divisor; 0 = the board's own. */
     scan: number;

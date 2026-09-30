@@ -1462,6 +1462,10 @@ try {
     "layout: a board with no panel driver has no refresh estimate",
     (await page.$('[data-role="refresh"]')) === null,
   );
+  check(
+    "layout: a strip-built matrix has no 'panel upside-down' checkbox (#917)",
+    (await page.$('[data-role="layout-rot-first"]')) === null,
+  );
   // An arrangement change is stored-and-reported until a reboot builds it
   // (#475). Since #538 that is a STICKY BAR pinned to the viewport, not a
   // line of dim text at the bottom of the form — and it names the field.
@@ -4585,6 +4589,29 @@ try {
       check("panel: four chained panels go amber under 100 Hz", amber && hz4 === "29 Hz", hz4);
       const dark = await hubPage.$('[data-role="layout-dark"]');
       check("panel: the mirror drives the whole chain, so nothing is dark", dark === null);
+      // The first panel's orientation is a stored fact, not an assumption
+      // (Gitea #917): a panel board offers "first row upside-down", which
+      // sets bit 2 of the `rot180` line mask and leaves bit 1 (alternate
+      // rows) alone, and the chain picture marks line 0's tiles with the ↻.
+      // A strip-built matrix says the same thing with its start corner and
+      // never shows the box (checked in the strip flow above).
+      check(
+        "panel: 'first row upside-down' is offered (#917)",
+        (await hubPage.$('[data-role="layout-rot-first"]')) !== null,
+      );
+      await hubPage.$eval('[data-role="layout-rot-first"]', (el) => el.click());
+      await sleep(800);
+      const rotMask = (await (await fetch(`${HUB}/api/layout`)).json()).matrix?.rot180;
+      check("panel: ticking it stores rot180 2 — the even lines' bit", rotMask === 2, String(rotMask));
+      const rotMarks = await hubPage.$$eval('[data-role="arrangement"] text.rot', (ts) => ts.length);
+      check("panel: the chain picture marks the first line's two tiles", rotMarks === 2, String(rotMarks));
+      await hubPage.$eval('[data-role="layout-rot180"]', (el) => el.click());
+      await sleep(800);
+      const rotBoth = (await (await fetch(`${HUB}/api/layout`)).json()).matrix?.rot180;
+      check("panel: 'alternate rows' adds bit 1 without clearing bit 2", rotBoth === 3, String(rotBoth));
+      await hubPage.$eval('[data-role="layout-rot-first"]', (el) => el.click());
+      await hubPage.$eval('[data-role="layout-rot180"]', (el) => el.click());
+      await sleep(800);
       const note = await hubPage
         .waitForFunction(
           () => document.querySelector('[data-role="reboot-bar-text"]')?.textContent?.trim() ?? false,

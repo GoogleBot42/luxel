@@ -667,17 +667,37 @@
           >
           serpentine
         </label>
+        <!-- `rot180` is a line MASK (Gitea #917): bit 1 = the odd lines (the
+             serpentine's return legs), bit 2 = the even lines, the first
+             panel included — the driver assumes where the ribbon enters
+             tile 0, and this is the only way to say it enters from the
+             other side. Two checkboxes, one bit each. -->
+        {#if vis.rotFirst}
+          <label class="ckrow">
+            <input
+              class="cbxin"
+              type="checkbox"
+              data-role="layout-rot-first-input"
+              checked={(m.rot180 & 2) !== 0}
+              on:change={(e) => setMatrix({ rot180: (m.rot180 & 1) | (e.currentTarget.checked ? 2 : 0) })}
+            />
+            <span class="cbx" class:on={(m.rot180 & 2) !== 0} data-role="layout-rot-first"
+              >{(m.rot180 & 2) !== 0 ? "✓" : ""}</span
+            >
+            {vis.rot180 ? "first row upside-down" : "panel upside-down"}
+          </label>
+        {/if}
         {#if vis.rot180}
           <label class="ckrow">
             <input
               class="cbxin"
               type="checkbox"
               data-role="layout-rot180-input"
-              checked={m.rot180 === 1}
-              on:change={(e) => setMatrix({ rot180: e.currentTarget.checked ? 1 : 0 })}
+              checked={(m.rot180 & 1) !== 0}
+              on:change={(e) => setMatrix({ rot180: (m.rot180 & 2) | (e.currentTarget.checked ? 1 : 0) })}
             />
-            <span class="cbx" class:on={m.rot180 === 1} data-role="layout-rot180"
-              >{m.rot180 === 1 ? "✓" : ""}</span
+            <span class="cbx" class:on={(m.rot180 & 1) !== 0} data-role="layout-rot180"
+              >{(m.rot180 & 1) !== 0 ? "✓" : ""}</span
             >
             rotate alternate rows 180°
           </label>
@@ -826,7 +846,7 @@
         start={m.start}
         dir={m.dir}
         snake={m.snake === 1}
-        rot180={m.rot180 === 1}
+        rot180={m.rot180}
         outputCounts={outputs.map((o) => o.count)}
         drive={driven}
       />
@@ -842,7 +862,7 @@
     start={m.start}
     dir={m.dir}
     snake={m.snake === 1}
-    rot180={m.rot180 === 1}
+    rot180={m.rot180}
     drive={driven}
   />
 {/if}

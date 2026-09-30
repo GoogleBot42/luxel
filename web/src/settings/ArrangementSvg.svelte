@@ -22,7 +22,12 @@
   export let start: Corner;
   export let dir: RunDir;
   export let snake: boolean;
-  export let rot180 = false;
+  /** The `rot180` line mask (Gitea #917): bit 1 = odd lines mounted upside-down,
+   *  bit 2 = even lines, tile 1 included. A boolean from before the mask reads
+   *  as bit 1. */
+  export let rot180: number | boolean = 0;
+  $: rotMask = typeof rot180 === "boolean" ? (rot180 ? 1 : 0) : rot180;
+  const rotated = (line: number, mask: number): boolean => (mask & (line % 2 === 1 ? 1 : 2)) !== 0;
   /** Tiles per output, in chain order. `[]` / one entry = one undivided run. */
   export let outputCounts: readonly number[] = [];
   /** Leading tiles the board's framebuffer can actually shift out (`drive`,
@@ -225,7 +230,7 @@
           class="scan"
           marker-end="url(#arr-scan)"
         />
-        {#if rot180 && t.line % 2 === 1}
+        {#if rotated(t.line, rotMask)}
           <text x={cell.x0 + t.col * cell.w + 9} y={cell.y0 + t.row * cell.h + 20} class="rot">↻</text>
         {/if}
       {/each}

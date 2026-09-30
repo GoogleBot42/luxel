@@ -1743,7 +1743,7 @@ button re-reads `/api/clock` after it.
 `sect-<x>-note`) ·
 `advanced` · `adv-<row>-{row,toggle,status,body}` · `brightness` ·
 `device-name`, `device-name-note` · `layout-{summary,headline,subhead,kind,lat-w,lat-h,lat-d,lat-count,lat-install,lat-note,pixels,pw,ph,scan,
-cols,rows,start,dir,snake,rot180,proto,order,datapin,datapin-apply,notes,note,
+cols,rows,start,dir,snake,rot180,rot-first,proto,order,datapin,datapin-apply,notes,note,
 dark,map-link}` · `reboot-bar`, `reboot-bar-text`, `reboot-now` ·
 `clock-{status,sync,tz,offset,note}` · `wifi-address` · `arrangement` (with `data-mode`) · `refresh`, `refresh-hz`,
 `refresh-measured` · `outputs`, `output-{row,pin,proto,order,count,rev,range,
@@ -1803,8 +1803,8 @@ The module also owns the pure arithmetic the section draws with:
 `estimatedRefreshHz()` (whose `PANEL_DRIVER_DEFAULT` parameter is now only the
 fallback for firmware that reports no driver), `chainOrder()` (the tile order the SVG numbers —
 tiles line by line, a line being a tile row under `dir: "row"` and a column
-under `"col"`, `snake` reversing the odd lines and `rot180` marking their
-tiles as mounted upside-down; the same walk #475's boot-time remap does),
+under `"col"`, `snake` reversing the odd lines and the `rot180` mask marking the odd (bit 1)
+and/or even (bit 2, the first panel — #917) lines' tiles as mounted upside-down; the same walk #475's boot-time remap does),
 `outputRanges()`, the time-zone helpers (`zoneOffsetMinutes`, `zoneLabel`,
 `zonesByRegion`, `offsetLabel`) and
 `squarish()` (picking Matrix factors the pixel count — 120 px is 12×10, not

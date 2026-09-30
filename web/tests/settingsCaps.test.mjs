@@ -129,6 +129,13 @@ test("a single-tile matrix's wiring row is PIXEL wiring, and has no rot180", () 
   assert.equal(v.rot180, false, "nothing to alternate");
 });
 
+test("'panel upside-down' (rot180 bit 2, #917) is a HUB75 field, whatever the tile count", () => {
+  assert.equal(vis(PANEL).rotFirst, true, "a single tile can hang upside-down too");
+  assert.equal(settingsVisibility(PANEL.caps, { ...PANEL.layout, panels: 4 }).rotFirst, true);
+  assert.equal(vis(MATRIX_FROM_STRIPS).rotFirst, false, "a strip-built matrix says it with its start corner");
+  assert.equal(vis(STRIP).rotFirst, false);
+});
+
 test("the Outputs table follows caps.outputs, not the board or the kind", () => {
   assert.equal(vis(MATRIX_FROM_STRIPS).outputsTable, true);
   assert.equal(vis(STRIP).outputsTable, false);

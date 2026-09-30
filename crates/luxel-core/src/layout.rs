@@ -8,7 +8,7 @@
 //!
 //! ```text
 //! kind    strip | matrix | map          ← "custom map" is a coordinate SOURCE
-//! matrix  pw ph cols rows start dir snake rot180 [scan]
+//! matrix  pw ph cols rows start dir snake rot180 [scan]   ← rot180 is a 0..3 line mask
 //! out     n pin proto order count [rev] ← wiring segments of ONE pixel space
 //! proj    proj1d proj2d proj3d          ← §5.4d defaults (crate::projection)
 //! ```
@@ -129,7 +129,14 @@ pub struct Matrix {
     pub start: Corner,
     pub dir: RunDir,
     pub snake: bool,
-    pub rot180: bool,
+    /// Which chain lines have their tiles mounted rotated 180°, as a mask:
+    /// bit 1 = the odd lines (the return legs of a serpentine wall — the value
+    /// every wall stored before this was a mask), bit 2 = the even lines,
+    /// line 0 and so the FIRST panel included. `2` says the ribbon enters
+    /// the first panel from the side opposite the one the driver assumes;
+    /// `3` rotates every tile. The remap (`luxel_hub75::arrange`) reads it,
+    /// the UI shows it as two checkboxes.
+    pub rot180: u8,
     /// HUB75 scan divisor (16 = 1/16 scan); 0 = the board's own.
     pub scan: u8,
 }
@@ -146,9 +153,16 @@ impl Matrix {
             start: Corner::Tl,
             dir: RunDir::Row,
             snake: false,
-            rot180: false,
+            rot180: 0,
             scan: 0,
         }
+    }
+
+    /// Are the tiles on chain line `line` mounted rotated 180°? Bit 1 of
+    /// `rot180` answers for the odd lines, bit 2 for the even ones (#917).
+    pub const fn rotated(&self, line: usize) -> bool {
+        let bit = if line % 2 == 1 { 1 } else { 2 };
+        self.rot180 & bit != 0
     }
 
     /// Total grid width in pixels.
@@ -171,7 +185,7 @@ impl Matrix {
     /// The part #475 consumes: everything about how the chain threads the
     /// tiles. Two arrangements that differ only in `pw`/`ph` resize the grid
     /// (live), they do not rewire it (reboot).
-    const fn wiring(&self) -> (u8, u8, u8, u8, bool, bool, u8) {
+    const fn wiring(&self) -> (u8, u8, u8, u8, bool, u8, u8) {
         (
             self.cols,
             self.rows,
@@ -514,7 +528,7 @@ impl Layout {
                 out.push(' ');
                 push_piece(&mut out, m.dir.as_str());
                 out.push(' ');
-                for v in [u32::from(m.snake), u32::from(m.rot180), m.scan as u32] {
+                for v in [u32::from(m.snake), m.rot180 as u32, m.scan as u32] {
                     push_u32(&mut out, v);
                     out.push(' ');
                 }
@@ -780,7 +794,7 @@ pub fn parse(
             "matrix" => {
                 kind_seen = true;
                 let m = parse_matrix(&mut it).ok_or(err(
-                    "expected: matrix <pw> <ph> <cols> <rows> <tl|tr|bl|br> <row|col> <0|1> <0|1> [scan]",
+                    "expected: matrix <pw> <ph> <cols> <rows> <tl|tr|bl|br> <row|col> <0|1> <0..3> [scan]",
                 ))?;
                 if m.pixels() < 1 || m.pixels() > lim.max_pixels {
                     return Err(err("pw*ph*cols*rows out of range for this board"));
@@ -1003,7 +1017,9 @@ fn parse_matrix<'a>(it: &mut impl Iterator<Item = &'a str>) -> Option<Matrix> {
     let start = Corner::from_str(it.next()?)?;
     let dir = RunDir::from_str(it.next()?)?;
     let snake = flag(it.next()?)?;
-    let rot180 = flag(it.next()?)?;
+    // 0 and 1 are the values every stored wire has carried; 2 and 3 add the
+    // even lines (Gitea #917, the first panel hung the other way round).
+    let rot180 = u8::try_from(num(it.next()?)?).ok().filter(|v| *v <= 3)?;
     let scan = match it.next() {
         None => 0,
         Some(v) => u8::try_from(num(v)?).ok()?,
@@ -1317,7 +1333,7 @@ impl Layout {
             push_piece(out, "\",\"snake\":");
             push_u32(out, u32::from(self.matrix.snake));
             push_piece(out, ",\"rot180\":");
-            push_u32(out, u32::from(self.matrix.rot180));
+            push_u32(out, self.matrix.rot180 as u32);
             push_piece(out, ",\"scan\":");
             push_u32(out, self.matrix.scan as u32);
             #[cfg(feature = "panel")]
@@ -1871,6 +1887,22 @@ mod tests {
         assert_eq!(e.map, None, "a proj-only body leaves the map alone");
     }
 
+
+    /// `rot180` is a 0..3 line mask (Gitea #917): 2 and 3 are accepted and
+    /// reported as written, anything past the mask is refused.
+    #[test]
+    fn rot180_is_a_line_mask() {
+        let mut cur = strip_layout();
+        cur.kind = LayoutKind::Matrix;
+        cur.matrix = Matrix::single(32, 32);
+        for v in 0..4u8 {
+            let body = alloc::format!("matrix 32 32 2 2 tl row 1 {v}");
+            let e = parse(&body, &cur, 4096, &big_limits()).unwrap();
+            assert_eq!(e.layout.matrix.rot180, v, "{body}");
+            assert!(e.layout.to_wire(4096, &proto_name).starts_with(&alloc::format!("matrix 32 32 2 2 tl row 1 {v} ")));
+        }
+        assert!(parse("matrix 32 32 2 2 tl row 1 4", &cur, 4096, &big_limits()).is_err());
+    }
     #[test]
     fn the_persisted_wire_round_trips() {
         let mut l = Layout::board_default(LayoutKind::Matrix, Matrix::single(64, 32));

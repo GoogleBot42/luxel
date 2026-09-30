@@ -1277,7 +1277,7 @@ embedded so a client needs one fetch:
 | `source` | `regular` (the shape comes from the strip/matrix fields) · `map` (from a map program's coordinates). "Custom" is a coordinate SOURCE, not a dimensionality. |
 | `dims` / `regular` / `w` / `h` | The **Layout's own** shape: 1×`pixels` for a strip, `pw·cols`×`ph·rows` for a matrix, the installed map's detected grid (or `0`/`0`, `regular:false`) for a map. |
 | `pixels` / `max` | The pixel count and this board's ceiling — the same numbers `/api/config` reports. |
-| `matrix` | **Present only when `kind` is `matrix`.** `pw`×`ph` is one panel (or, with `cols`=`rows`=1, the whole grid); `cols`×`rows` tile them; `start` (`tl\|tr\|bl\|br`), `dir` (`row\|col`), `snake`, `rot180` describe how the chain threads the tiles — and, in the one-tile case, how the pixel run threads the grid (a strip-built matrix's wiring, proposal §5.3). `scan` is the HUB75 scan divisor — `1/N` on a module's label; `0` means the usual ratio for this height, `ph / 2` (nothing reads it off the module: HUB75 is write-only). On a board with a panel driver it also carries `est_hz` and `drive` — see "Panel arrangement" below. |
+| `matrix` | **Present only when `kind` is `matrix`.** `pw`×`ph` is one panel (or, with `cols`=`rows`=1, the whole grid); `cols`×`rows` tile them; `start` (`tl\|tr\|bl\|br`), `dir` (`row\|col`), `snake`, `rot180` (a `0..3` line mask — see below) describe how the chain threads the tiles — and, in the one-tile case, how the pixel run threads the grid (a strip-built matrix's wiring, proposal §5.3). `scan` is the HUB75 scan divisor — `1/N` on a module's label; `0` means the usual ratio for this height, `ph / 2` (nothing reads it off the module: HUB75 is write-only). On a board with a panel driver it also carries `est_hz` and `drive` — see "Panel arrangement" below. |
 | `driver` | **Present only on a board with a HUB75 panel.** How the panel is DRIVEN — bit depth, pixel clock, chip init, latch blanking — plus the chip list a client should offer and what the firmware actually booted. See "How the panel is driven" below. |
 | `outputs` | One entry per configured output — `n` (0-based, `< caps.outputs`), `pin`, `proto`, `order`, `count` (pixels on a strip Layout, **panels** on a matrix one), `rev`. Each drives a consecutive run of the one pixel space, in `n` order (see "Driving" below). A host with no table configured reports ONE implicit output built from its live data pin, protocol and colour order. |
 | `reverted` | **Absent unless a boot self-heal happened** (Gitea #822): `{"from_pixels":N,"heap_free":X}` — the stored shape left this board's heap at `X` bytes, under the firmware's runtime floor, so it was reverted to the board default and the device rebooted once. Say so: the shape on screen is not the one the user set. It survives the reboot and is cleared by the next successful `POST /api/layout`. `/api/status`'s `layout_reverted` is the one-bit form, for a client that polls status. See "A layout the board cannot serve" below. |
@@ -1304,9 +1304,16 @@ line; a *line* is a row of tiles when `dir` is `row` and a column when it is
   left-to-right / top-to-bottom, `tr` mirrors x, `bl` mirrors y, `br` both.
 - `snake` = 1 makes every **odd** line run back the other way (a serpentine
   chain, the usual way to wall-mount more than one row of panels).
-- `rot180` = 1 marks the tiles on those **odd lines as mounted rotated 180°**
-  — which is how a serpentine wall is physically built, since the return row's
-  connectors face the other way. It is per line, not per display.
+- `rot180` is a **line mask**, `0..3`: bit 1 (`1`, what every wall stored
+  before it was a mask) marks the tiles on the **odd lines as mounted rotated
+  180°** — how a serpentine wall is physically built, since the return row's
+  connectors face the other way; bit 2 (`2`) marks the **even lines, line 0
+  and so the first panel included**. The driver assumes which side the
+  ribbon enters tile 0 from (its first pixel lands at that tile's top-left);
+  `2` says it enters from the other side, i.e. the picture on the first panel
+  is upside-down, and `3` rotates every tile. Neither `start` (which only
+  places the tiles) nor bit 1 could say that before (Gitea #917). It is per
+  line, not per display.
 
 **Two fields a panel board adds to the `matrix` block:**
 
@@ -1562,7 +1569,7 @@ Blank lines and `#` comments are ignored; line order is free; **at most one**
 
 ```text
 strip <pixels>
-matrix <pw> <ph> <cols> <rows> <tl|tr|bl|br> <row|col> <snake 0|1> <rot180 0|1> [<scan>]
+matrix <pw> <ph> <cols> <rows> <tl|tr|bl|br> <row|col> <snake 0|1> <rot180 0..3> [<scan>]
 map [grid <w> <h> | <dims> <raw16.16…>]
 panel <planes> <8|10|12|15|20|24|30> <shiftreg|fm6126a|icn2038s|dp3246> <blank> [<lsb>]
 out <n> <pin> <sk9822|ws2812> <rgb|rbg|grb|gbr|brg|bgr> <count> [rev]

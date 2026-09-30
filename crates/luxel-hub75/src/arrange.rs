@@ -37,8 +37,11 @@
 //! tiles when `dir` is [`RunDir::Row`] and a column when it is
 //! [`RunDir::Col`]; `start` says which corner line 0 begins at (and hence
 //! which way the first line travels); `snake` reverses every odd line; and
-//! `rot180` marks the tiles on odd lines as mounted rotated 180°, which is
-//! how a serpentine wall is physically built (proposal §5.3, mockup S3c).
+//! `rot180` is a line mask — bit 1 marks the tiles on odd lines as mounted
+//! rotated 180°, bit 2 the even lines and so the FIRST panel (Gitea #917:
+//! the ribbon enters it from the other side). A serpentine wall stores 1, which is
+//! how such a wall is physically built (proposal §5.3, mockup S3c); one whose
+//! first row was hung upside-down stores 2, and a chain of upside-down tiles 3.
 
 use crate::{Control, Geometry, Schedule};
 use luxel_core::layout::{Corner, Matrix, PanelDriver, RunDir};
@@ -154,7 +157,7 @@ pub fn panel_cell(m: &Matrix, p: usize) -> Option<(u32, u32, bool)> {
     };
     let cx = if flip_x { cols - 1 - cx } else { cx };
     let cy = if flip_y { rows - 1 - cy } else { cy };
-    Some((cx as u32, cy as u32, m.rot180 && line % 2 == 1))
+    Some((cx as u32, cy as u32, m.rotated(line)))
 }
 
 /// Fill `lut` with the driver→engine remap, indexed by DRIVER pixel index.
@@ -288,13 +291,13 @@ mod tests {
     use std::vec;
     use std::vec::Vec;
 
-    /// Every corner × run direction × snake × rot180 the grammar allows.
-    fn all_wirings() -> Vec<(Corner, RunDir, bool, bool)> {
+    /// Every corner × run direction × snake × rot180 mask the grammar allows.
+    fn all_wirings() -> Vec<(Corner, RunDir, bool, u8)> {
         let mut v = Vec::new();
         for start in [Corner::Tl, Corner::Tr, Corner::Bl, Corner::Br] {
             for dir in [RunDir::Row, RunDir::Col] {
                 for snake in [false, true] {
-                    for rot180 in [false, true] {
+                    for rot180 in 0..4u8 {
                         v.push((start, dir, snake, rot180));
                     }
                 }
@@ -303,7 +306,7 @@ mod tests {
         v
     }
 
-    fn tiles(pw: u16, ph: u16, cols: u8, rows: u8, w: (Corner, RunDir, bool, bool)) -> Matrix {
+    fn tiles(pw: u16, ph: u16, cols: u8, rows: u8, w: (Corner, RunDir, bool, u8)) -> Matrix {
         let mut m = Matrix::single(pw, ph);
         m.cols = cols;
         m.rows = rows;
@@ -331,7 +334,7 @@ mod tests {
     /// two 32-wide tiles side by side, wired plainly, ARE a 64-wide grid.
     #[test]
     fn two_tiles_wired_plainly_side_by_side_are_also_the_identity() {
-        let m = tiles(32, 64, 2, 1, (Corner::Tl, RunDir::Row, false, false));
+        let m = tiles(32, 64, 2, 1, (Corner::Tl, RunDir::Row, false, 0));
         let mut lut = vec![0u16; 64 * 64];
         assert_eq!(build_lut(&mut lut, &m, 64, 64), 2);
         assert!(is_identity(&lut));
@@ -340,7 +343,7 @@ mod tests {
     /// …and starting the same chain from the other corner swaps the halves.
     #[test]
     fn starting_at_the_far_corner_swaps_the_halves() {
-        let m = tiles(32, 64, 2, 1, (Corner::Tr, RunDir::Row, false, false));
+        let m = tiles(32, 64, 2, 1, (Corner::Tr, RunDir::Row, false, 0));
         let mut lut = vec![0u16; 64 * 64];
         assert_eq!(build_lut(&mut lut, &m, 64, 64), 2);
         assert!(!is_identity(&lut));
@@ -401,14 +404,14 @@ mod tests {
             (Corner::Bl, (0, 1)),
             (Corner::Br, (2, 1)),
         ] {
-            let m = tiles(4, 4, 3, 2, (start, RunDir::Row, false, false));
+            let m = tiles(4, 4, 3, 2, (start, RunDir::Row, false, 0));
             assert_eq!(panel_cell(&m, 0).unwrap(), (want.0, want.1, false), "{start:?}");
         }
     }
 
     #[test]
     fn a_snaked_row_chain_comes_back_the_other_way() {
-        let m = tiles(4, 4, 3, 2, (Corner::Tl, RunDir::Row, true, true));
+        let m = tiles(4, 4, 3, 2, (Corner::Tl, RunDir::Row, true, 1));
         let got: Vec<_> = (0..6).map(|p| panel_cell(&m, p).unwrap()).collect();
         assert_eq!(
             got,
@@ -426,7 +429,7 @@ mod tests {
 
     #[test]
     fn a_column_chain_runs_down_before_across() {
-        let m = tiles(4, 4, 3, 2, (Corner::Tl, RunDir::Col, false, false));
+        let m = tiles(4, 4, 3, 2, (Corner::Tl, RunDir::Col, false, 0));
         // (cx,cy) as cx*10+cy: down column 0, then down column 1, then 2
         let got: Vec<_> = (0..6)
             .map(|p| {
@@ -441,14 +444,14 @@ mod tests {
     /// chain flips columns, not rows.
     #[test]
     fn rot180_follows_the_lines_the_run_direction_defines() {
-        let m = tiles(4, 4, 2, 2, (Corner::Tl, RunDir::Col, false, true));
+        let m = tiles(4, 4, 2, 2, (Corner::Tl, RunDir::Col, false, 1));
         let rots: Vec<_> = (0..4).map(|p| panel_cell(&m, p).unwrap().2).collect();
         assert_eq!(rots, vec![false, false, true, true]);
     }
 
     #[test]
     fn a_rotated_tile_shows_its_far_corner_first() {
-        let m = tiles(4, 4, 1, 2, (Corner::Tl, RunDir::Row, false, true));
+        let m = tiles(4, 4, 1, 2, (Corner::Tl, RunDir::Row, false, 1));
         let (fw, fh) = chain_fb(&m);
         let mut lut = vec![0u16; fw * fh];
         build_lut(&mut lut, &m, fw, fh);
@@ -458,11 +461,50 @@ mod tests {
         assert_eq!(lut[3 * fw + 7], 4 * 4);
     }
 
+    /// Gitea #917: bit 2 of the mask rotates the EVEN lines — the first
+    /// panel included — which neither `start` (tile placement only) nor bit 1
+    /// (odd lines only) could say. Bit 1 keeps meaning what every stored `1`
+    /// meant.
+    #[test]
+    fn the_mask_picks_which_lines_hang_upside_down() {
+        let rots = |mask: u8| -> Vec<bool> {
+            let m = tiles(4, 4, 2, 2, (Corner::Tl, RunDir::Row, true, mask));
+            (0..4).map(|p| panel_cell(&m, p).unwrap().2).collect()
+        };
+        assert_eq!(rots(0), vec![false, false, false, false]);
+        assert_eq!(rots(1), vec![false, false, true, true], "odd lines, as before");
+        assert_eq!(rots(2), vec![true, true, false, false], "the first line");
+        assert_eq!(rots(3), vec![true, true, true, true], "every tile");
+    }
+
+    /// A single tile hung upside-down (`rot180 2`) shows the grid rotated
+    /// 180° — the driver's first pixel is the engine's last — and a 4x1 chain
+    /// of such tiles, wired from the right, is the whole picture rotated.
+    #[test]
+    fn an_upside_down_first_panel_is_the_grid_rotated() {
+        let m = tiles(8, 4, 1, 1, (Corner::Tl, RunDir::Row, false, 2));
+        let mut lut = vec![0u16; 32];
+        assert_eq!(build_lut(&mut lut, &m, 8, 4), 1);
+        assert!(!is_identity(&lut));
+        assert_eq!(lut[0], 31);
+        assert_eq!(lut[31], 0);
+        assert_eq!(lut[7], 24, "end of driver row 0 is the start of engine row 3");
+
+        let m = tiles(4, 4, 4, 1, (Corner::Tr, RunDir::Row, false, 3));
+        let (fw, fh) = chain_fb(&m);
+        let mut lut = vec![0u16; fw * fh];
+        assert_eq!(build_lut(&mut lut, &m, fw, fh), 4);
+        let last = m.pixels() as usize - 1;
+        for (i, &e) in lut.iter().enumerate() {
+            assert_eq!(e as usize, last - i, "driver {i}");
+        }
+    }
+
     /// A framebuffer smaller than the chain drives the prefix that fits and
     /// leaves the rest unmapped — never a wrong pixel.
     #[test]
     fn a_chain_wider_than_the_framebuffer_drives_its_prefix() {
-        let m = tiles(64, 64, 2, 1, (Corner::Tl, RunDir::Row, false, false));
+        let m = tiles(64, 64, 2, 1, (Corner::Tl, RunDir::Row, false, 0));
         let mut lut = vec![0u16; 64 * 64];
         assert_eq!(build_lut(&mut lut, &m, 64, 64), 1);
         assert_eq!(driven_panels(&m, 64, 64), 1);
@@ -475,7 +517,7 @@ mod tests {
 
     #[test]
     fn tiles_taller_than_the_framebuffer_drive_nothing() {
-        let m = tiles(32, 128, 2, 1, (Corner::Tl, RunDir::Row, false, false));
+        let m = tiles(32, 128, 2, 1, (Corner::Tl, RunDir::Row, false, 0));
         let mut lut = vec![0u16; 64 * 64];
         assert_eq!(build_lut(&mut lut, &m, 64, 64), 0);
         assert!(lut.iter().all(|e| *e == UNMAPPED));
@@ -498,10 +540,10 @@ mod tests {
     /// the ~29 Hz the #255 research predicted.
     #[test]
     fn a_four_tile_chain_is_a_quarter_of_the_refresh() {
-        let m = tiles(64, 64, 2, 2, (Corner::Tl, RunDir::Row, true, true));
+        let m = tiles(64, 64, 2, 2, (Corner::Tl, RunDir::Row, true, 1));
         assert_eq!(est_hz(&m, 7, 30_000_000), 28);
         // the arrangement does not change the shift length, only the count
-        let line = tiles(64, 64, 4, 1, (Corner::Tl, RunDir::Row, false, false));
+        let line = tiles(64, 64, 4, 1, (Corner::Tl, RunDir::Row, false, 0));
         assert_eq!(est_hz(&line, 7, 30_000_000), 28);
     }
 
@@ -530,7 +572,7 @@ mod tests {
             assert_eq!(fb_geometry(&m, 7).unwrap().pixels(), 64 * 64, "scan {scan}");
         }
         // a chain multiplies the row length; the scan multiplies it again
-        let mut m = tiles(64, 64, 4, 1, (Corner::Tl, RunDir::Row, false, false));
+        let mut m = tiles(64, 64, 4, 1, (Corner::Tl, RunDir::Row, false, 0));
         m.scan = 16;
         assert_eq!(fb_geometry(&m, 7), Some(Geometry::new(16, 512, 7)));
     }
