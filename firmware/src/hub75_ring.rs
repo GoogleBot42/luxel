@@ -189,6 +189,16 @@ const EXT_BURST_64: u8 = 2;
 /// cap that bit.
 pub(crate) const RING_HEAP_RESERVE: usize = 48 * 1024;
 
+/// The reserve a FULL-FRAME ring may cut into instead (`capped_slots`,
+/// #896, 2026-09-30): the 2x1 needs 32 slots of 2 KB for the ring that
+/// skips its copies, and 48 KB trimmed it to 25. The 16 KB comes out of
+/// what #905 freed — the per-request and load-time transients (HTTP
+/// bodies, the jsonview snapshots, the resume staging, the JIT compile) are
+/// arena blocks now. Measured on the 2x1 with Jeremy's two-engine scene
+/// resident: 22–28 KB of runtime heap at `lsb 7` / `lsb 3` on the 32-slot
+/// ring, 0.05 % / 0.16 % late where the 25-slot ring ran 6.9 % / 16 %.
+pub(crate) const RING_HEAP_RESERVE_FULL: usize = 32 * 1024;
+
 /// A batch still in flight this long after it started is presumed wedged
 /// — a flash write suspends the cache the DMA reads PSRAM through (#852),
 /// or an error the interrupt did not see. The channel is reset, the
@@ -1458,6 +1468,15 @@ const RING_FIXED_BYTES: usize = 8 * 1024;
 /// costs with its share of the DMA chain. No reading (a board that never
 /// booted a panel) means no cap. Shared with `hub75::boot_cost` so `POST
 /// /api/layout` predicts the ring the boot will build.
+///
+/// Two reserves (#896, 2026-09-30): a FULL-FRAME ring (`asked == rows`)
+/// may dip into [`RING_HEAP_RESERVE_FULL`], because at `n == rows` the
+/// copy is skipped while the frame is unchanged and the ring earns its
+/// slots back in bus time and `late` (the 2x1 at `lsb 7`: 6.9 % → 0.05 %);
+/// any smaller ring keeps [`RING_HEAP_RESERVE`], since three more rotating
+/// slots buy nothing a 4x1 at `lsb 40` can see (measured: 15 slots instead
+/// of 12 for 15 KB of runtime heap and the same 0 late). A full-frame ask
+/// the lower reserve still cannot complete falls back to the ordinary cap.
 pub(crate) fn capped_slots(asked: u32, s: &Schedule, g: Geometry) -> Option<u32> {
     let heap0 = crate::hub75::heap_before_panel();
     if heap0 == 0 {
@@ -1465,9 +1484,15 @@ pub(crate) fn capped_slots(asked: u32, s: &Schedule, g: Geometry) -> Option<u32>
     }
     let per_slot = ring::slot_bytes(g.planes, g.cols)
         + ring::descs_per_slot(s, g.cols, esp_hub75::max_dma_chunk_size()) * core::mem::size_of::<DmaDescriptor>();
-    let budget = heap0.saturating_sub(BOOT_HEAP_FLOOR + RING_HEAP_RESERVE + RING_FIXED_BYTES);
-    let cap = (budget / per_slot.max(1)) as u32;
-    let n = asked.min(cap);
+    let cap_for = |reserve: usize| {
+        let budget = heap0.saturating_sub(BOOT_HEAP_FLOOR + reserve + RING_FIXED_BYTES);
+        (budget / per_slot.max(1)) as u32
+    };
+    let rows = g.rows as u32;
+    if asked == rows && rows > ring::GUARD_SLOTS && cap_for(RING_HEAP_RESERVE_FULL) >= rows {
+        return Some(rows);
+    }
+    let n = asked.min(cap_for(RING_HEAP_RESERVE));
     (n > ring::GUARD_SLOTS).then_some(n)
 }
 
