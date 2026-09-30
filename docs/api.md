@@ -275,7 +275,13 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   that slot then shows the row it already held, at that row's own address,
   never a mixed one (design §7). `packed_core0` / `packed_core1` say which
   core packed how many row pairs (`packed_core1` is 0 until the core-1
-  steal); `idle` counts the turns on which nothing was fillable (the ring was
+  steal); `reused` counts claims advanced WITHOUT a copy because the slot
+  already held that row pair of that packed frame (Gitea #896) — only on a
+  full-frame ring (`rows` equal to the panel's row pairs, i.e. `ring_ms`
+  large enough), where slot `r` carries row pair `r` every pass and a copy
+  is only needed when the frame changed: there `reused` dominates and the
+  PSRAM traffic follows the render rate, not the pass rate; `late +
+  reused + packed_core0 + packed_core1` is the claim count; `idle` counts the turns on which nothing was fillable (the ring was
   full — healthy); `pack_us` / `pack_us_max` the typical and worst row-pair
   refill on core 0 and `pack1_us` the typical on core 1 — since #892 a
   refill is a COPY of the row pair out of a packed frame in PSRAM, not a
@@ -317,12 +323,22 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   interrupt on core 1 (the rest by a copier's turn), `dma_errors` batches
   that ended in a descriptor error or a 20 ms stall and were reset (their
   claims count `late`); `packed_core0` / `packed_core1` then credit the core
-  whose turn STARTED the batch. `asked` is the slot count `ring_ms` resolved
+  whose turn STARTED the batch. Since #897 a turn that finds the DMA busy
+  appends its batch (a "run") behind the chain in flight instead of waiting
+  for it: `appends` counts the runs appended to a chain in flight, and
+  `dma_restarts` those that found the chain already drained, where the
+  GDMA's restart bits are what resumed it (a high share means the DMA still
+  idles between runs); `dma_batches` and `dma_isr` count runs. `append` is
+  the lever (default on, off when the boot's append probe failed) and
+  `minfill` the minimum run a turn will hand over while the queue head's
+  slack allows it to wait (1 = off, the default), with `deferred` counting
+  the turns that waited. `asked` is the slot count `ring_ms` resolved
   to before the heap cap; `rows < asked` means the cap bit (below). `pri`
   is the GDMA arbitration lever (default on: the panel chain at priority 9,
   the copy channel at 0 — at equal priority the copy's PSRAM bursts starved
   the panel chain and the LCD stopped, 2026-09-29), `hybrid` the lever that
-  lets core 0's turn copy claims itself while a DMA batch is in flight
+  lets core 0's turn copy claims itself while the DMA can take no more
+  (since #897: `append` off, or its queue full)
   (default off), `lcd_restarts` how often the LCD watchdog found the
   LCD_CAM's continuous transaction ended (`lcd_start` clear) and restarted
   it — 0 is the claim — and `lcd` a raw register probe for that diagnosis
@@ -330,14 +346,17 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   OUT_DSCR, LCD_USER, LC_DMA_INT_RAW, copy OUT_INT_RAW, copy IN_INT_RAW,
   ch0 OUT_PRI]`; a healthy panel has `LCD_USER` bit 27 set).
 - `POST /api/ring` — `hub75-ring` builds only (Gitea #857 / #892): body
-  with any of `{"steal":B}`, `{"dma":B}`, `{"pri":B}`, `{"hybrid":B}` — the
-  core-1 TIMER's refill turns, the GDMA copy against the CPU `memcpy`, the
-  panel chain's GDMA priority, and core 0 copying beside a busy DMA — for
-  this boot;
+  with any of `{"steal":B}`, `{"dma":B}`, `{"pri":B}`, `{"hybrid":B}`,
+  `{"append":B}`, `{"minfill":N}` — the core-1 TIMER's refill turns, the
+  GDMA copy against the CPU `memcpy`, the panel chain's GDMA priority, core
+  0 copying beside a DMA that can take no more, appending runs to the chain
+  in flight (#897), and the minimum run length (1..8, 1 = off) — for this
+  boot;
   the DMA's completion interrupt chains batches whatever `steal` says (it
   costs core 1 a few microseconds per batch, only when one ends), so with
   the DMA on `steal` off measures the chain alone; answers
-  `{"ok":true,"steal":B,"dma":B}` with both current values. Not persisted;
+  `{"ok":true,"steal":B,"dma":B,"append":B,"minfill":N}` with the current
+  values. Not persisted;
   `dma` cannot be turned on where the boot found no working engine. The A/B
   levers for `pass.ring.late` / `packed_core1` on a running panel.
 - `rescan_hz` — how many times a second the HUB75 panel is really redrawn
@@ -1349,7 +1368,7 @@ other field on the card silently resets them.
 | `clock_mhz` | one of **8 · 10 · 12 · 15 · 20 · 24 · 30** | 30 | The LCD_CAM pixel clock — a fixed list, not a range (Gitea #771). Anything else is refused with `panel: clock_mhz must be one of 8\|10\|12\|15\|20\|24\|30`. Offer it as a dropdown over `driver.clocks`, never a number field. |
 | `chip` | `shiftreg` · `fm6126a` · `icn2038s` · `dp3246` | `shiftreg` | The driver chip's init, bit-banged before the DMA starts. `shiftreg` covers FM6124, SM16208, ICN2037 and every other plain shift register — no init at all. `fm6126a` and `icn2038s` share a two-register init; `dp3246` has its own, and holds the latch for the last **3** clocks of every row instead of 1. |
 | `blank` | 0..8 | 1 | Clocks at the start of every row block, and again just before the latch word, where OE is off. `1` is the stock template; raising it trades a little brightness for less ghosting between address rows. **The one field here that applies LIVE** — see below. |
-| `ring_ms` | 1..50 | 3 | Milliseconds of slack the **ring driver** (`hub75-ring`, Gitea #857) sizes its slot ring for — how far the beam may run ahead of the packer before a row pair is late. Sized in time, not rows: `live.ring_rows` reports what it resolved to for this schedule and chain width. **Capped by the heap** (#892): the boot never gives the ring more slots than leave its 100 KB floor plus a 48 KB reserve for the engine — on a 4x1 chain 3 ms asked for 22 slots of 4 KB and would have left 15 KB; `pass.ring.asked` beside `rows` says when the cap decided. Ignored by the two-buffer driver. Boot-built like `planes`. |
+| `ring_ms` | 1..50 | 3 | Milliseconds of slack the **ring driver** (`hub75-ring`, Gitea #857) sizes its slot ring for — how far the beam may run ahead of the packer before a row pair is late. Sized in time, not rows: `live.ring_rows` reports what it resolved to for this schedule and chain width. **Capped by the heap** (#892): the boot never gives the ring more slots than leave its 100 KB floor plus a 48 KB reserve for the engine — on a 4x1 chain 3 ms asked for 22 slots of 4 KB and would have left 15 KB; `pass.ring.asked` beside `rows` says when the cap decided. **A full-frame ask gets a second chance** (#896, 2026-09-30): when `ring_ms` resolves to the panel's row-pair count (32 on a 64-high chain — `ring_ms 20` at `lsb 7`), the boot lets the ring complete against a 32 KB reserve instead, because at `n == rows` the copies are skipped while the frame is unchanged (`pass.ring.reused`) and the slots pay for themselves; on the 2x1 that is 32 slots and 22–28 KB of runtime heap with a two-engine scene where 48 KB trimmed it to 25 and 6.9 % late. Ignored by the two-buffer driver. Boot-built like `planes`. |
 | `lsb` | 0..65535 | 0 | On-time of the LEAST significant bitplane, in pixel clocks — the refresh multiplier (Gitea #460 / #789 / #797). **`0` = full**, the stock BCM schedule. A smaller value truncates the low planes' OE and drops their descriptor repeats: the rescan STEPS up each time `lsb` crosses `W / 2^t`, and at the top of each step the panel keeps very nearly its stock brightness. Clamped to the lit width `W` at boot. Optional, and boot-built like `planes` — see below. |
 
 **`blank` applies live; the other three wait for a boot** (Gitea #778). It is

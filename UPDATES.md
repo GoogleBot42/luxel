@@ -1,5 +1,61 @@
 # Update log
 
+## 2026-09-30 — transients to PSRAM (#905), the full-frame ring reuses its slots (#896), the DMA chain appends (#897), a live layer cap (#709), Aurora at 256 columns
+
+Jeremy's 2026-09-30 list, worked in order and benched on the Seengreat 4x1
+in one session (docs/boards.md "The full-frame ring reuses its slots";
+tickets #905, #896, #897, #869, #821, #895, #909):
+
+- **#905 — the runtime's transient and per-request allocations come out of
+  the PSRAM arena** on a board that has one, in three PRs. Site 1, the JIT
+  compile (PR #907): measured rather than moved — the per-depth scratch was
+  ~150 B of a compile's internal residue and moving it cost 7.5 KB of S3
+  flash, so the feature was dropped; what remains internal is the
+  verifier's per-branch-target `BTreeMap` (3.8 KB at the worst pattern,
+  follow-up #909) and the internal-residue rule tightened to
+  `words × 3 + fns × 24 + 1,536` (snake-2d charged 5.2 KB instead of
+  8.4 KB). Site 2, the resume (PR #910, closes #869): the boot pre-flight is
+  `budget::install_need` — `RUNTIME_FLOOR + layers × layer_cost +
+  compositor_scratch + staging`, 28,672 B for Jeremy's `Test 2` where the
+  old `2 × stored + 24 KiB` rule wanted 91,546 and the panel never had it;
+  the wait gives up once the heap stops rising; the flashmap-off blob
+  staging and scene sprite copies are arena vectors. Verified 3 of 3
+  reboots on the 4x1 bring `Test 2` back with both layers native. Sites
+  3–4 (PR #908): `luxel_core::arena::AString`, an arena-backed String;
+  `/api/pixels` (49,152 B at 16,384 px, served where master answered 503),
+  the pattern JSON, the controls/vars/readouts snapshots and the segmented
+  bodies' 256-B chunks all ride it; `heap_free` on the 4x1 is byte-identical
+  through every body now. A preview poll costs the ring ~0.6 late claims.
+- **#896 — at a full-frame ring the copy is skipped while the frame is
+  unchanged** (`FRAME_GEN`/`SLOT_GEN` generation stamps, `pass.ring.reused`),
+  and the heap cap became two-tier: a full-frame ask may cut the reserve to
+  32 KB (`RING_HEAP_RESERVE_FULL`, what #905 freed), a rotating ring keeps
+  48 KB. The 2x1 at `lsb 7`: 6.9 % → **0.04 %** late, `lsb 3`: 16 % →
+  **0.17 %**, 17 fps with the two-engine scene, 26–28 KB of heap; the 4x1
+  at `lsb 40` is untouched (12 slots, 39.2 KB). The ticket's second half
+  (pack straight into the slots) is not done.
+- **#897 — the GDMA copy appends to the chain in flight** (16-entry
+  circular descriptor pools with the owner check on, restart bits after
+  every append, per-run completion by owner bit, boot probes that turn
+  `append` off if the DMA misbehaves; levers `append`/`minfill`, counters
+  `appends`/`dma_restarts`/`deferred`). 4x1 `lsb 15` ring 3: 8.4 % → 7.8 %
+  late; 2x1 `lsb 7`: 0.068 % → 0.040 %. The 4x1 stays bus-bound (#895).
+- **#709 follow-on (PR #911)** — `caps.layers` from a live, smoothed
+  `load_base` (EWMA on every read, 2 KiB hysteresis, `ENGINE_HEAP` zeroed
+  at teardown so a status read mid-swap cannot double-count) and no static
+  pixel-count tier where frames are external; `/api/status` gained
+  `load_base`. On-metal flapping check in this entry's session notes.
+- **#895** — PSRAM at 80 MHz: a staged plan is on the ticket (esp-hal sets
+  the PSRAM and flash dividers independently and does no timing tuning;
+  stage A is OTA-only with a boot self-test; only the optional bootloader
+  header change is a serial flash). Jeremy's call.
+- **Aurora 2D `MAXC` 128 → 256** (PR #906): per-pixel at Cell Size 1 on a
+  4x1 chain.
+- Found and recorded, not fixed: #821 (an activate beside the two-engine
+  scene at ~39 KB free still reboots the board on the #905 image — the
+  incoming engine's own VM state is internal by design; data point on the
+  ticket).
+
 ## 2026-09-29 — the ring driver is the S3 panel default; the spare-plane swap and its chase are retired (#858, #620, #829)
 
 Jeremy's call on #858: the HUB75 ring driver (`hub75-ring`,

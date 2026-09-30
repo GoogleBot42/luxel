@@ -372,6 +372,54 @@ impl Ring {
     }
 }
 
+impl Ring {
+    /// Consecutive claims from `head` on that are fillable now: 0 when
+    /// `head` itself is not, else the claims up to the guard before the
+    /// beam's slot. What a copier could take this turn at most.
+    #[must_use]
+    pub const fn fillable_ahead(&self, head: u32, abs_dma: u32) -> u32 {
+        if self.fillable(head, abs_dma) {
+            self.n - GUARD_SLOTS + 1 - self.dist(abs_dma, head)
+        } else {
+            0
+        }
+    }
+}
+
+/// The DMA copy's deadline for one claim (#892 step 2, #897): the claim is
+/// written once the copy engine has done every slot queued AHEAD of it —
+/// the runs still in flight and the claims before it in its own run — and
+/// itself, `ahead` slots in all, at `slot_us` each with half again as
+/// margin, plus the fixed latency `margin_us`. A claim whose beam distance
+/// is shorter than this is skipped (`late`) rather than copied under the
+/// beam.
+#[must_use]
+pub const fn dma_need_us(margin_us: u32, ahead: u32, slot_us: u32) -> u32 {
+    margin_us.saturating_add(ahead.saturating_mul(slot_us).saturating_mul(3) / 2)
+}
+
+/// The `minfill` lever (#897): should a copier leave a short run for a
+/// later turn? Only when fewer than `minfill` claims are fillable (`avail`)
+/// AND the queue head can afford to wait: its beam distance `head_left_us`
+/// covers a full `minfill` run behind the `queued` slots in flight plus
+/// one `poll_us` until the next turn. Never defers at `minfill ≤ 1` (the
+/// default) or when nothing is fillable anyway.
+#[must_use]
+pub const fn defer_run(
+    avail: u32,
+    minfill: u32,
+    head_left_us: u32,
+    margin_us: u32,
+    queued: u32,
+    slot_us: u32,
+    poll_us: u32,
+) -> bool {
+    if minfill <= 1 || avail == 0 || avail >= minfill {
+        return false;
+    }
+    head_left_us >= dma_need_us(margin_us, queued.saturating_add(minfill), slot_us).saturating_add(poll_us)
+}
+
 /// One claim out of the queue: which frame buffer to read, and the
 /// absolute emission it fills.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -707,6 +755,54 @@ mod tests {
     }
 
     #[test]
+    fn fillable_ahead_counts_to_the_guard() {
+        let ring = Ring::new(6, 32);
+        let dma = ring.abs(1, 4); // 10: claims 11..=14 fillable
+        assert_eq!(ring.fillable_ahead(11, dma), 4);
+        assert_eq!(ring.fillable_ahead(13, dma), 2);
+        assert_eq!(ring.fillable_ahead(14, dma), 1);
+        assert_eq!(ring.fillable_ahead(15, dma), 0);
+        assert_eq!(ring.fillable_ahead(10, dma), 0);
+        for head in 8..=16 {
+            let n = (head..head + 8).take_while(|&a| ring.fillable(a, dma)).count() as u32;
+            assert_eq!(ring.fillable_ahead(head, dma), n, "{head}");
+        }
+        // across the period wrap
+        assert_eq!(ring.fillable_ahead(0, ring.period - 1), 4);
+    }
+
+    #[test]
+    fn dma_deadline_counts_the_slots_queued_ahead() {
+        // a lone slot: margin + 1.5 slots
+        assert_eq!(dma_need_us(40, 1, 100), 190);
+        // the third claim of a run behind five slots still in flight
+        assert_eq!(dma_need_us(40, 5 + 2 + 1, 100), 40 + 1200);
+        // an appended claim never gets a smaller budget than the same
+        // claim in a run started fresh
+        for queued in 0..16 {
+            for k in 0..8 {
+                assert!(dma_need_us(40, queued + k + 1, 51) >= dma_need_us(40, k + 1, 51));
+            }
+        }
+        assert_eq!(dma_need_us(u32::MAX, u32::MAX, u32::MAX), u32::MAX);
+    }
+
+    #[test]
+    fn minfill_defers_only_with_slack_to_spare() {
+        // off (0/1), nothing fillable, or enough fillable: never defer
+        assert!(!defer_run(1, 1, 100_000, 40, 0, 50, 500));
+        assert!(!defer_run(1, 0, 100_000, 40, 0, 50, 500));
+        assert!(!defer_run(0, 4, 100_000, 40, 0, 50, 500));
+        assert!(!defer_run(4, 4, 100_000, 40, 0, 50, 500));
+        // a short run and a far-off head: wait for a longer one
+        assert!(defer_run(2, 4, 100_000, 40, 0, 50, 500));
+        // the head must cover a full minfill run behind the queue, plus a poll
+        let need = dma_need_us(40, 3 + 4, 50) + 500;
+        assert!(defer_run(2, 4, need, 40, 3, 50, 500));
+        assert!(!defer_run(2, 4, need - 1, 40, 3, 50, 500));
+    }
+
+    #[test]
     fn claims_carry_the_frame_choice_per_pass() {
         let ring = Ring::new(6, 32);
         let mut word = Claim { buf: 0, abs: ring.first_claim() }.encode();
@@ -768,5 +864,31 @@ mod tests {
         assert!(!ring.late(head, ring.abs(0, 9)));
         // one wrap on, the head is late from slot 0 of wrap 1 onward
         assert!(ring.late(head, ring.abs(1, 0)));
+    }
+
+    /// The premise of the full-frame reuse (#896): with `n == rows` a
+    /// claim's slot IS its row pair, on every pass, across the period —
+    /// so a slot that holds row `r` of a frame holds exactly what the next
+    /// pass's claim for that slot wants, until the frame changes. Below a
+    /// full frame the same slot carries a different row every pass.
+    #[test]
+    fn a_full_frame_ring_maps_each_slot_to_one_row() {
+        for rows in [1u32, 8, 16, 32] {
+            let full = Ring::new(rows.max(GUARD_SLOTS + 1), rows);
+            if full.n == rows {
+                for a in (0..full.period).step_by(7).chain([full.period - 1]) {
+                    assert_eq!(full.slot(a), full.row(a), "rows {rows} abs {a}");
+                }
+            }
+        }
+        let partial = Ring::new(10, 32);
+        // the same slot, one pass apart, carries a different row pair
+        let a = partial.first_claim();
+        let b = a + 32;
+        assert_eq!(partial.row(a), partial.row(b));
+        assert_ne!(partial.slot(a), partial.slot(b));
+        // and the ring's max is the frame: `slots_for_slack` never exceeds rows
+        let s = Schedule::plan(Geometry::new(32, 64, 7), Control::new(7, 1), 15);
+        assert_eq!(slots_for_slack(1_000_000, &s, 64, 20_000_000, 32), 32);
     }
 }

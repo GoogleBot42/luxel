@@ -176,6 +176,52 @@ copy can be skipped while the frame is unchanged (#896), which is the
 2x1's way out, and the 4x1's are the `lsb` step, the PSRAM clock (#895)
 and a chain that never idles (#897).
 
+**Step 3 (#896, 2026-09-30): the full-frame ring reuses its slots.** With
+`N = rows`, `slot(a) = a mod N = a mod rows = row(a)`: slot `r` carries row
+pair `r` on every pass, so the only reason to copy is that the pass's
+packed frame is not the one the slot was last filled from. `write_frame`
+stamps each published frame with a generation counter (`FRAME_GEN`; a frame
+index is recycled every four publishes, a generation never), and every copy
+that has LANDED stamps its slot (`SLOT_GEN` — after the `memcpy` on the CPU
+path, at batch completion on the DMA path; a failed batch marks its slots
+unknown). A claim whose stamps match is taken off the queue like any other
+(the CAS, the row-0 `PASS_FRAME` note) and copied by nobody; it has no
+deadline, so it cannot be late. `pass.ring.reused` counts them. Below a
+full frame the stamps never match and the driver is step 2 exactly. The
+copier — DMA or CPU — is then nearly idle on the 2x1 at any `lsb`, and the
+PSRAM traffic is `32 row pairs × the render rate`. The second half of the
+ticket — pack straight into the slot at `N = rows`, removing the pack-time
+write-back and the copy entirely — is not done: the packed frame in PSRAM
+is still what a pass reads, and a chain wider than the 2x1 keeps the
+rotating ring.
+
+**Step 4 (#897): the copy chain is extended while in flight.** Step 2's
+engine had one batch in flight: a turn that found the DMA busy returned,
+and the next batch waited for the completion interrupt, so every batch
+paid an interrupt's latency with the DMA idle (busy ~60 % of the time at
+2x1 `lsb 7`). Now the two descriptor pools are circular rings of 16
+entries (a slot's descriptors each), linked once at boot, with
+`check_owner` on both halves, so the DMA stops at the first CPU-owned
+entry rather than at a null `next`. A turn hands over a RUN of up to eight
+entries at the ring's tail — buffers first, then each flag word with the
+DMA owner bit in one store, receive side before transmit side, an EOF on
+the run's last transmit descriptor — and either starts it fresh (nothing
+in flight) or APPENDS it: the owner bits suffice while the DMA has not
+reached the stop, and `inlink_restart`/`outlink_restart` after every
+append (ESP-IDF's `async_memcpy` pattern) make a DMA that had stopped on
+that entry re-read it. Completion is per run and read from the receive
+descriptors' owner write-back (the interrupt bits coalesce); a run's slots
+get their #896 stamps when it lands, and a fault bit or a stalled oldest
+run resets the channel and fails every run in flight (`late`, stamps
+unknown). The skip rule counts the slots still queued ahead of each claim
+(`ring::dma_need_us`), `minfill` (default off) lets a turn leave a short
+run for a later one while the head's slack allows (`ring::defer_run`), the
+flash fence waits for the newest run's last descriptor to land and no run
+is handed over while a fence is open, and the boot probes the append (a
+run appended while one copies, and one appended after the chain drained)
+and leaves `append` off, step 2's shape, if either fails. Counters:
+`pass.ring.appends`, `dma_restarts`, `deferred`.
+
 
 The whole frame is re-packed every pass because nothing stores the result.
 Pixels per pass × passes per second = `64 × 20e6 / (33 × E)`, independent of

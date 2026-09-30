@@ -813,6 +813,8 @@ fn status_json() -> luxel_core::jsonview::Chunks {
             push_u32(&mut out, ring::RING_SLACK_US.load(Ordering::Relaxed));
             push_piece(&mut out, ",\"late\":");
             push_u32(&mut out, ring::RING_LATE.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"reused\":");
+            push_u32(&mut out, ring::RING_REUSED.load(Ordering::Relaxed));
             push_piece(&mut out, ",\"blanked\":");
             push_u32(&mut out, ring::RING_BLANKED.load(Ordering::Relaxed));
             push_piece(&mut out, ",\"backoffs\":");
@@ -850,6 +852,18 @@ fn status_json() -> luxel_core::jsonview::Chunks {
             push_u32(&mut out, ring::RING_DMA_ISR.load(Ordering::Relaxed));
             push_piece(&mut out, ",\"dma_errors\":");
             push_u32(&mut out, ring::RING_DMA_ERRORS.load(Ordering::Relaxed));
+            // #897: runs appended to a chain in flight, the appends the
+            // restart bits resumed, and the `append`/`minfill` levers.
+            push_piece(&mut out, ",\"appends\":");
+            push_u32(&mut out, ring::RING_APPENDS.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"dma_restarts\":");
+            push_u32(&mut out, ring::RING_DMA_RESTARTS.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"deferred\":");
+            push_u32(&mut out, ring::RING_DEFERRED.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"append\":");
+            push_piece(&mut out, if ring::APPEND.load(Ordering::Relaxed) { "true" } else { "false" });
+            push_piece(&mut out, ",\"minfill\":");
+            push_u32(&mut out, ring::MINFILL.load(Ordering::Relaxed));
             push_piece(&mut out, ",\"pri\":");
             push_piece(&mut out, if ring::PRI.load(Ordering::Relaxed) { "true" } else { "false" });
             push_piece(&mut out, ",\"hybrid\":");
@@ -2604,8 +2618,9 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 // #892, design §6): `{"steal":true|false}` lets core 1
                 // take refill turns, or leaves core 0 alone;
                 // `{"dma":true|false}` copies by the GDMA engine or by the
-                // CPU. Either or both keys; runtime only, not persisted;
-                // `pass.ring.steal` / `pass.ring.dma` read them back.
+                // CPU; `pri`, `hybrid`, and (#897) `append` / `minfill`.
+                // Any subset of the keys; runtime only, not persisted;
+                // `pass.ring.<key>` reads each back.
                 #[cfg(feature = "hub75-ring")]
                 "/api/ring" => {
                     let body = text(&raw);
@@ -2623,14 +2638,33 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                         }
                     };
                     let (steal, dma, pri, hybrid) = (key("steal"), key("dma"), key("pri"), key("hybrid"));
+                    // #897: `{"append":B}` (append runs to the chain in
+                    // flight) and `{"minfill":N}` (1 = off).
+                    let append = key("append");
+                    let minfill = body.find("minfill").and_then(|at| {
+                        let rest = body[at + "minfill".len()..].trim_start_matches([' ', '"', ':']);
+                        num(&rest[..rest.find(|ch: char| !ch.is_ascii_digit()).unwrap_or(rest.len())])
+                    });
                     if let Some(on) = pri {
                         crate::hub75_ring::set_priority(on);
                     }
                     if let Some(on) = hybrid {
                         crate::hub75_ring::HYBRID.store(on, Ordering::Relaxed);
                     }
-                    Some(json_response(if steal.is_none() && dma.is_none() && pri.is_none() && hybrid.is_none() {
-                        String::from("{\"ok\":false,\"error\":\"body must be {\\\"steal\\\":true|false} and/or {\\\"dma\\\":true|false}\"}")
+                    if let Some(on) = append {
+                        crate::hub75_ring::set_append(on);
+                    }
+                    if let Some(n) = minfill {
+                        crate::hub75_ring::set_minfill(n);
+                    }
+                    Some(json_response(if steal.is_none()
+                        && dma.is_none()
+                        && pri.is_none()
+                        && hybrid.is_none()
+                        && append.is_none()
+                        && minfill.is_none()
+                    {
+                        String::from("{\"ok\":false,\"error\":\"body must set any of steal, dma, pri, hybrid, append (true|false) or minfill (1..8)\"}")
                     } else {
                         if let Some(on) = steal {
                             crate::hub75_ring::STEAL.store(on, Ordering::Relaxed);
@@ -2642,6 +2676,10 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                         push_piece(&mut out, if crate::hub75_ring::STEAL.load(Ordering::Relaxed) { "true" } else { "false" });
                         push_piece(&mut out, ",\"dma\":");
                         push_piece(&mut out, if crate::hub75_ring::DMA_ON.load(Ordering::Relaxed) { "true" } else { "false" });
+                        push_piece(&mut out, ",\"append\":");
+                        push_piece(&mut out, if crate::hub75_ring::APPEND.load(Ordering::Relaxed) { "true" } else { "false" });
+                        push_piece(&mut out, ",\"minfill\":");
+                        push_u32(&mut out, crate::hub75_ring::MINFILL.load(Ordering::Relaxed));
                         push_piece(&mut out, "}");
                         out
                     }))
