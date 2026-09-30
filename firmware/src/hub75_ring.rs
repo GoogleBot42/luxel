@@ -102,7 +102,12 @@
 //! `dma_batches` (runs completed), `dma_isr` (runs the completion interrupt started),
 //! `dma_errors`, `appends` (runs appended to a chain in flight),
 //! `dma_restarts` (appends the restart bits resumed), `deferred` (`minfill`),
-//! `append`, `minfill`, `steal`.
+//! `append`, `minfill`, `steal`; and since #914 `torn` (copies that landed
+//! after the beam had reached their slot — the design's forbidden case,
+//! the oracle for "garbage on the far panels"), `dma_us_win` / `run_us_max`
+//! / `run_us_win` (the per-slot copy's and a whole run's worst of the last
+//! few seconds, `WindowMax`) and `steal_lat_max` / `steal_lat_win` (core
+//! 1's interrupt latency as the steal timer sees it).
 
 use core::cell::{RefCell, UnsafeCell};
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU8, Ordering};
@@ -268,6 +273,54 @@ pub static RING_DEFERRED: AtomicU32 = AtomicU32::new(0);
 /// number), and the raw worst.
 pub static RING_DMA_US: AtomicU32 = AtomicU32::new(0);
 pub static RING_DMA_US_MAX: AtomicU32 = AtomicU32::new(0);
+/// Copies that landed AFTER the beam had reached their slot — a slot the
+/// DMA was still writing while channel 0 read it, i.e. a torn row pair
+/// (mixed frames, or mixed row pairs below a full-frame ring). The skip
+/// rule's promise (design §7) is that this reads 0; it is what the eye
+/// sees as garbage on the far end of a chain (2026-09-30, Mandelbrot 2D
+/// on the 4x1).
+pub static RING_TORN: AtomicU32 = AtomicU32::new(0);
+/// A run's whole latency, hand-over to landing, microseconds — the worst
+/// ever and the worst of the last second or so (`WindowMax`). The per-slot
+/// numbers hide a run that queued behind a stalled chain.
+pub static RING_RUN_US_MAX: AtomicU32 = AtomicU32::new(0);
+pub static RING_RUN_US_WIN: WindowMax = WindowMax::new();
+/// The per-slot copy time's worst of the last few seconds — `dma_us_max`
+/// is a lifetime worst and reads the WiFi bring-up stall for ever. A
+/// diagnostic, NOT the skip rule's number: budgeting claims at it was
+/// tried and starved the ring (`ring::dma_need_us` has the story).
+pub static RING_DMA_US_WIN: WindowMax = WindowMax::new();
+
+/// A maximum over a sliding window of a few seconds: the worst of the
+/// current [`WindowMax::BUCKET_US`] bucket and of the previous one, `read`
+/// the larger of the two — so a value is held for two to four seconds,
+/// long enough to be read by a status poll after the burst it recorded.
+pub struct WindowMax {
+    cur: AtomicU32,
+    last: AtomicU32,
+    sec: AtomicU32,
+}
+
+impl WindowMax {
+    const BUCKET_US: u64 = 2_000_000;
+
+    const fn new() -> Self {
+        Self { cur: AtomicU32::new(0), last: AtomicU32::new(0), sec: AtomicU32::new(0) }
+    }
+
+    fn sample(&self, now_us: u64, v: u32) {
+        let s = (now_us / Self::BUCKET_US) as u32;
+        if self.sec.load(Ordering::Relaxed) != s {
+            self.last.store(self.cur.swap(0, Ordering::Relaxed), Ordering::Relaxed);
+            self.sec.store(s, Ordering::Relaxed);
+        }
+        self.cur.fetch_max(v, Ordering::Relaxed);
+    }
+
+    pub fn read(&self) -> u32 {
+        self.last.load(Ordering::Relaxed).max(self.cur.load(Ordering::Relaxed))
+    }
+}
 /// The boot calibration copy's time per slot, microseconds — the DMA on an
 /// idle bus, before WiFi or an engine (0 = the calibration failed).
 pub static RING_DMA_CAL_US: AtomicU32 = AtomicU32::new(0);
@@ -484,6 +537,9 @@ struct Engine {
     /// `(slot, generation)` of each entry's claim, stamped into
     /// [`SLOT_GEN`] when the entry's run completes (#896).
     pending: [(u8, u32); QUEUE_SLOTS],
+    /// The claim (absolute emission) each entry copies, for the torn check
+    /// at retirement (`RING_TORN`).
+    pending_abs: [u32; QUEUE_SLOTS],
 }
 
 /// One run of entries handed to the DMA by one turn.
@@ -762,7 +818,7 @@ impl Engine {
     /// channel reset, every run still in flight counted late). Called under
     /// the engine's critical section by every turn and by the completion
     /// interrupt.
-    fn settle(&mut self, now_us: u64, slack_us: u32) -> Settled {
+    fn settle(&mut self, now_us: u64, slack_us: u32, beam: Option<(u32, &Ring)>) -> Settled {
         // The fault bits first, then clear: a run that completes after the
         // owner reads below raises `in_suc_eof` again and is seen next time.
         let faulted = self.nruns > 0 && Self::faulted();
@@ -772,7 +828,7 @@ impl Engine {
             if !landed(self.run_last(&run)) {
                 break;
             }
-            self.retire(run, now_us, slack_us);
+            self.retire(run, now_us, slack_us, beam);
         }
         if self.nruns == 0 {
             COPY_BUSY.store(false, Ordering::Release);
@@ -788,14 +844,28 @@ impl Engine {
     }
 
     /// Credit one completed run (the oldest) and free its entries.
-    fn retire(&mut self, run: Run, now_us: u64, slack_us: u32) {
+    fn retire(&mut self, run: Run, now_us: u64, slack_us: u32, beam: Option<(u32, &Ring)>) {
         let len = u32::from(run.len);
+        let mut torn = 0u32;
         for j in 0..usize::from(run.len) {
             let e = (usize::from(run.first) + j) % QUEUE_SLOTS;
             let (slot, gen) = self.pending[e];
             SLOT_GEN[usize::from(slot)].store(gen, Ordering::Release);
             self.reclaim(e);
+            // Landed with the beam already in (or past) the slot: the copy
+            // overlapped the read — torn.
+            if let Some((abs_dma, ring)) = beam {
+                if ring.late(self.pending_abs[e], abs_dma) {
+                    torn += 1;
+                }
+            }
         }
+        if torn > 0 {
+            RING_TORN.fetch_add(torn, Ordering::Relaxed);
+        }
+        let run_us = now_us.saturating_sub(run.t0) as u32;
+        RING_RUN_US_MAX.fetch_max(run_us, Ordering::Relaxed);
+        RING_RUN_US_WIN.sample(now_us, run_us);
         // Its copy began when it was handed over or when the run ahead of
         // it finished, whichever was later.
         let per_slot = (now_us.saturating_sub(run.t0.max(self.done_at)) / u64::from(len.max(1))) as u32;
@@ -807,6 +877,7 @@ impl Engine {
         self.slot_us = if self.slot_us == 0 { clipped.max(1) } else { ((self.slot_us * 7 + clipped) / 8).max(1) };
         RING_DMA_US.store(self.slot_us, Ordering::Relaxed);
         RING_DMA_US_MAX.fetch_max(per_slot, Ordering::Relaxed);
+        RING_DMA_US_WIN.sample(now_us, per_slot);
         RING_DMA_BATCHES.fetch_add(1, Ordering::Relaxed);
         if run.by_isr {
             RING_DMA_ISR.fetch_add(1, Ordering::Relaxed);
@@ -1235,6 +1306,7 @@ impl Hub75Ring {
             row_bytes,
             slot_rows,
             pending: [(0, SLOT_GEN_NONE); QUEUE_SLOTS],
+            pending_abs: [0; QUEUE_SLOTS],
         };
         engine.link_rings();
         Engine::configure();
@@ -1276,7 +1348,7 @@ impl Hub75Ring {
                 engine.launch(len, 0, false, now_us());
             }
             loop {
-                match engine.settle(now_us(), 5_000) {
+                match engine.settle(now_us(), 5_000, None) {
                     Settled::Idle => return Some(now_us().saturating_sub(t0)),
                     Settled::Failed => return None,
                     Settled::Busy if now_us().saturating_sub(t0) > 5_000 => {
@@ -1674,7 +1746,8 @@ fn drain_dma(p: &mut Packer, s: &Shared, core: usize, by_isr: bool) -> u32 {
             return 0;
         };
         let slack_us = RING_SLACK_US.load(Ordering::Relaxed);
-        let busy = e.settle(now_us(), slack_us) == Settled::Busy;
+        let beam = abs_dma(s);
+        let busy = e.settle(now_us(), slack_us, beam.map(|b| (b, &s.ring))) == Settled::Busy;
         // Nothing is handed to the DMA while a flash fence is open: the
         // fence waits for the chain to drain (`copy_busy`) and must see it
         // stay drained. (The fence parks the other core and masks this
@@ -1693,7 +1766,7 @@ fn drain_dma(p: &mut Packer, s: &Shared, core: usize, by_isr: bool) -> u32 {
             }
             return 0;
         }
-        let Some(abs_dma) = abs_dma(s) else { return 0 };
+        let Some(abs_dma) = beam else { return 0 };
         let queued = u32::from(e.inflight);
         // The `minfill` lever: a short run may wait for a later turn while
         // the queue head's slack covers the wait.
@@ -1773,6 +1846,7 @@ fn drain_dma(p: &mut Packer, s: &Shared, core: usize, by_isr: bool) -> u32 {
             // Stamped into `SLOT_GEN` when the run completes; the slot is
             // half-written until then and a full-frame ring must not reuse it.
             e.pending[entry] = (slot as u8, if s.full { gen } else { SLOT_GEN_NONE });
+            e.pending_abs[entry] = claim.abs;
             SLOT_GEN[slot].store(SLOT_GEN_NONE, Ordering::Release);
             k += 1;
         }
@@ -1807,7 +1881,7 @@ extern "C" fn copy_isr() {
     } else {
         ENGINE.lock(|c| match c.borrow_mut().as_mut() {
             Some(e) => {
-                let _ = e.settle(now_us(), RING_SLACK_US.load(Ordering::Relaxed));
+                let _ = e.settle(now_us(), RING_SLACK_US.load(Ordering::Relaxed), abs_dma(s).map(|b| (b, &s.ring)));
             }
             None => Engine::clear_ints(),
         });
@@ -1920,6 +1994,7 @@ pub fn arm_steal(timg1: TIMG1<'static>) {
         return;
     }
     let us = u64::from((slack / 4).max(500));
+    STEAL_PERIOD_US.store(us as u32, Ordering::Relaxed);
     let mut t = PeriodicTimer::new(TimerGroup::new(timg1).timer0);
     t.set_interrupt_handler(InterruptHandler::new(steal_isr, Priority::Priority1));
     if t.start(esp_hal::time::Duration::from_micros(us)).is_err() {
@@ -1946,12 +2021,30 @@ pub fn arm_steal(timg1: TIMG1<'static>) {
     }
 }
 
+/// The steal timer's period, and when it last fired (low 32 bits of the
+/// systimer): the interval's excess over the period is core 1's interrupt
+/// latency, the worst ever and the worst of the last second or so —
+/// `steal_lat_max` / `steal_lat_sec`. The copy engine's completion is
+/// observed from this core's interrupts, so this bounds how late a landing
+/// (and a `torn` verdict) can be seen.
+static STEAL_PERIOD_US: AtomicU32 = AtomicU32::new(0);
+static STEAL_LAST_US: AtomicU32 = AtomicU32::new(0);
+pub static RING_STEAL_LAT_MAX: AtomicU32 = AtomicU32::new(0);
+pub static RING_STEAL_LAT_WIN: WindowMax = WindowMax::new();
+
 extern "C" fn steal_isr() {
     STEAL_TIMER.lock(|c| {
         if let Some(t) = c.borrow_mut().as_mut() {
             t.clear_interrupt();
         }
     });
+    let now = now_us();
+    let last = STEAL_LAST_US.swap(now as u32, Ordering::Relaxed);
+    if last != 0 {
+        let lat = (now as u32).wrapping_sub(last).saturating_sub(STEAL_PERIOD_US.load(Ordering::Relaxed));
+        RING_STEAL_LAT_MAX.fetch_max(lat, Ordering::Relaxed);
+        RING_STEAL_LAT_WIN.sample(now, lat);
+    }
     steal();
 }
 

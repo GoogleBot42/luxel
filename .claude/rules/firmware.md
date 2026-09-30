@@ -235,6 +235,17 @@ paths:
   15 MB/s with the CPU, and reach for mem2mem GDMA (a descriptor and an
   interrupt per block, one cache write-back after the producer writes)
   for anything that must keep pace with a DMA consumer.
+- **Never copy a large PSRAM body in one go — the ring's refill has ~4 ms
+  of slack and a single 49 KB `memcpy` through the cache took it** (2026-
+  09-30, #914): `/api/pixels` copied the frame PSRAM → PSRAM inside one
+  critical section, the copy DMA lost the bus for milliseconds, and the
+  beam overtook copies inside a slot — garbage on the far panels, counted
+  by `pass.ring.torn`. Copy big bodies in chunks of a few KB with a pause
+  between them (`pipeline::preview`: 4 KB, 1 ms), and bench any new route
+  or task that streams out of PSRAM with `torn` beside it. Do NOT try to
+  absorb such stalls in the ring's skip rule — budgeting the recent worst
+  copy starved the ring (a third of all claims `late`); the stall must go
+  at its source.
 - **A second GDMA channel must never run at the panel chain's priority,
   and the LCD_CAM stops for good when its FIFO runs dry** (2026-09-29, the
   ring's mem2mem copy, #892 step 2). At equal `out_pri` the copy channel's

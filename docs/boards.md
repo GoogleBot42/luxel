@@ -3684,6 +3684,59 @@ Reading it:
   the ring's flash-write exposure with the cache live (#852 has the
   evaluation).
 
+### Torn rows on the 4x1: the `/api/pixels` copy starved the refill (2026-09-30, Gitea #914)
+
+Jeremy's report: Mandelbrot 2D on the 4x1 chain shows garbage on the last
+panel, sometimes the third too, "periodically"; Aurora ran for a long time
+without it. The pattern was never the variable. Instrumented ring build
+(`pass.ring.torn` = copies that landed after the beam had reached their
+slot, i.e. a slot channel 0 read while the copy DMA was still writing it;
+`dma_us_win` / `run_us_win` / `steal_lat_win` = the last few seconds' worst
+per-slot copy, run latency and core-1 interrupt latency), 4x1 `matrix 64 64
+4 1 tl row 0 0` + `panel 7 20 shiftreg 7 40 6` (12 slots, 4,352 µs slack),
+Mandelbrot 2D at 7–13 fps (its sweep), one status read per sample:
+
+| load                                        | torn / 15 s | late / 15 s |
+|---------------------------------------------|-------------|-------------|
+| quiet, 5 min                                | 0           | 0           |
+| `GET /api/status` at 2 Hz                   | 0           | 0–1         |
+| `GET /api/pixels` at 2 Hz (49 KB body)      | 36–54       | 96–160      |
+| same, Aurora 2D                             | 36          | 118–140     |
+| `steal` off (calibration of the counter)    | 577         | 503         |
+
+The per-slot copy beside a 16384-px engine is 300–350 µs typical (128 µs
+on the idle bus at boot), 70 % of a slot's 435 µs of beam time — and the
+pixels route `memcpy`'d the 49 KB frame PSRAM → PSRAM through the data
+cache inside ONE critical section, which held the copy's 64-byte bursts
+off the bus for milliseconds. A copy the beam overtakes inside a slot
+shows the head of the row (the words clocked first = the far panels) from
+the new row pair and the tail with the latch from the old one: a
+mixed-address row, design §7's forbidden case, and exactly "garbage on the
+last panel, sometimes the third".
+
+Two fixes were tried. **Budgeting the skip rule at the recent worst copy**
+(`dma_us_win` capped at half the slack) starved the ring: the copier could
+queue one slot at a time, `late` went to ~11,000 per 15 s (a third of all
+claims — rows dark for a pass) and torn only fell to 3–9 — a stall that
+begins after a claim is handed over cannot be budgeted, and a 12-slot ring
+cannot absorb a 3 ms one by skipping. Reverted; `ring::dma_need_us` has
+the note. **Chunking the snapshot copy** (`pipeline::preview`: 4 KB per
+critical section, 1 ms apart, restart when the frame moved under it,
+bounded) is the fix: the body is still 49,152 B in ~0.49 s a request, and
+under the same polls:
+
+| load, chunked preview                       | torn / 15 s | late / 15 s |
+|---------------------------------------------|-------------|-------------|
+| Mandelbrot + `/api/pixels` at 2 Hz, 120 s   | 0           | 0–1         |
+| Aurora + `/api/pixels` at 2 Hz, 60 s        | 0           | 0–2         |
+| Aurora + `/api/pixels` at 5 Hz, 45 s        | 0           | 0–1         |
+
+Residue: every boot shows a burst of 10–13 torn between 30 and 90 s of
+uptime with nothing polling — the shape of the boot-ok flash store
+(`dma_us_max` 9.4 ms on the same boots) — filed separately. `torn` is
+the oracle from here: a handful at boot, flat afterwards, and any client
+that pulls large bodies out of PSRAM is the first suspect when it moves.
+
 ### The full-frame ring reuses its slots, and the chain appends (2026-09-30, Gitea #896 / #897, after #905)
 
 Step 3 of the ring (#896): with `n == rows` slot `r` carries row pair `r` on

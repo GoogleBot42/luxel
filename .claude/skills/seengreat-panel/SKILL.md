@@ -514,3 +514,19 @@ device answers in 10–20 s and a 4 s timeout reads as "down", #259).
   in the environment (they read the board map for the ELF path and `--chip`).
 - Physical EN/BOOT presses and re-plugging are Jeremy's; everything else here
   is pre-authorized like the Athom rig.
+
+## The ring's tear oracle: `pass.ring.torn`, and the client that moves it (2026-09-30, #914)
+
+"Garbage on the far panels" of a chain is a torn slot — a copy the beam
+overtook — and `pass.ring.torn` counts them without eyes: expect a handful
+in the first ~90 s of a boot (the boot-ok store's shape, its own ticket)
+and a flat line after. Bench any ring change with a client pulling the
+big body, not just status: `while :; do curl -s -o /dev/null
+http://192.168.0.238/api/pixels; sleep 0.5; done` beside two status reads
+60 s apart — that poll alone took the 4x1 from 0 to ~45 torn per 15 s
+before `pipeline::preview` was chunked. `dma_us_win` / `run_us_win` /
+`steal_lat_win` are the last few seconds' worst (per-slot copy, run
+latency, core-1 interrupt latency); `dma_us_max` is lifetime and always
+reads the WiFi bring-up stall. Two pollers at once saturate the device's
+three-socket pool and your own status read comes back EMPTY — keep the
+load to one client and retry empty reads.
