@@ -100,6 +100,7 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use esp_println::println;
 use esp_storage::FlashStorage;
+use luxel_core::arena::AString;
 use luxel_core::jsonview::{push_escaped, push_hex, push_piece, push_u32, Chunks};
 use sequential_storage::cache::PageStateCache;
 use sequential_storage::map;
@@ -1152,7 +1153,7 @@ pub fn id_by_name(name: &str) -> Option<String> {
 
 /// Escape a string as JSON *into* an existing buffer — no intermediate
 /// allocation (mirrors luxel_core::jsonview::json_escape's rules).
-fn escape_into(out: &mut String, s: &str) {
+fn escape_into(out: &mut AString, s: &str) {
     for c in s.chars() {
         match c {
             '"' => push_piece(out, "\\\""),
@@ -1176,18 +1177,20 @@ fn escape_into(out: &mut String, s: &str) {
 /// read guard is held across that synchronous copy only, so a concurrent
 /// save waits microseconds; if a save or compaction is already running we
 /// wait for it (up to ~200 ms) rather than reporting the pattern missing.
-pub async fn get_json(id: &str) -> Result<String, GetErr> {
+pub async fn get_json(id: &str) -> Result<AString, GetErr> {
     let r = rec_of(id).ok_or(GetErr::Missing)?;
     let name = rec_name(&r).ok_or(GetErr::Busy)?;
     let guard = MapRead::acquire().await.ok_or(GetErr::Busy)?;
     let len = r.src_len as usize;
-    let mut out = String::new();
+    let mut out = AString::new();
     // The one allocation on this path that is sized by the PATTERN rather
     // than by a segment: a 6 KB source on a panel whose largest free block
     // has read 0–9 KB with a scene resident. That is `Busy`, never
     // `Missing` — the console blanked every scene layer for an hour of
     // "no such pattern" answers that were really "no heap right now"
-    // (2026-09-26, Gitea #777).
+    // (2026-09-26, Gitea #777). An `AString`, so on a board with a PSRAM
+    // arena the block comes from there and internal DRAM never sees it
+    // (Gitea #905).
     out.try_reserve_exact(len + len / 8 + name.len() + 48).map_err(|_| GetErr::Busy)?;
     push_piece(&mut out, "{\"id\":\"");
     push_piece(&mut out, id);

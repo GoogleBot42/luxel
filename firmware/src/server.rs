@@ -26,6 +26,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
 
 use embassy_net::Stack;
+use luxel_core::arena::{AString, ArrVec};
 use luxel_core::fixed::Fx;
 use luxel_core::jsonview::{json_escape, push_escaped, push_i32, push_i64, push_piece, push_u32, push_u64};
 use picoserve::response::{Content, StatusCode};
@@ -81,6 +82,13 @@ enum ApiBody {
     /// `application/json` — ~40 routes whose body is small and fixed in
     /// shape (an ack, a settings object, an error).
     Json(String),
+    /// `application/json` held in an [`AString`] — the bodies big enough
+    /// that internal DRAM should not pay for them: the jsonview snapshots
+    /// (`/api/controls`, `/api/vars`, `/api/readouts`, up to ~11 KB) and one
+    /// pattern's JSON (`GET /api/patterns/<id>`, pattern-sized, up to
+    /// ~30 KB). A `String` on a board without a PSRAM arena; a PSRAM block
+    /// on one that has it (Gitea #905).
+    AJson(AString),
     /// `application/json` built in [`luxel_core::jsonview::CHUNK`]-sized
     /// segments and written straight out of them: the GENERATED bodies —
     /// `/api/status`, `/api/scenes`, `/api/patterns`, `/api/playlist` —
@@ -92,6 +100,8 @@ enum ApiBody {
     /// a panic. A segmented body never asks for one. `Content-Length` is
     /// [`luxel_core::jsonview::Chunks::len`], counted as the bytes went in,
     /// so it is exactly what `write_content` puts on the wire (Gitea #753).
+    /// The segments are `AString`s: on a board with a PSRAM arena the body
+    /// lives there and only the segment index is internal (Gitea #905).
     Chunked(luxel_core::jsonview::Chunks),
     /// A `&'static str` body with an explicit content type (the embedded
     /// index page is `text/html`, the 404 / redirect notes are `text/plain`).
@@ -99,8 +109,11 @@ enum ApiBody {
         ct: &'static str,
         s: &'static str,
     },
-    /// `application/octet-stream` — `/api/pixels`.
-    Bytes(Vec<u8>),
+    /// `application/octet-stream` — `/api/pixels`, 3 B per pixel (12,288 B
+    /// at 4096 px, 49,152 B at the panel's 16,384-px cap). An arena vector,
+    /// so on a PSRAM board the frame copy costs no internal DRAM — at the
+    /// cap it could never have been served from there (Gitea #905).
+    ABytes(ArrVec<u8>),
     #[cfg(not(feature = "hosted-ui"))]
     Asset(FlashAsset),
     Source(CurrentSource),
@@ -123,9 +136,9 @@ enum ApiBody {
 impl Content for ApiBody {
     fn content_type(&self) -> &'static str {
         match self {
-            ApiBody::Json(_) | ApiBody::Chunked(_) => "application/json",
+            ApiBody::Json(_) | ApiBody::AJson(_) | ApiBody::Chunked(_) => "application/json",
             ApiBody::Text { ct, .. } => ct,
-            ApiBody::Bytes(_) => "application/octet-stream",
+            ApiBody::ABytes(_) => "application/octet-stream",
             #[cfg(not(feature = "hosted-ui"))]
             ApiBody::Asset(a) => a.content_type(),
             ApiBody::Source(s) => s.content_type(),
@@ -138,10 +151,11 @@ impl Content for ApiBody {
     fn content_length(&self) -> usize {
         match self {
             ApiBody::Json(s) => s.len(),
+            ApiBody::AJson(s) => s.len(),
             // exact by construction: counted as the bytes were pushed
             ApiBody::Chunked(c) => c.len(),
             ApiBody::Text { s, .. } => s.len(),
-            ApiBody::Bytes(v) => v.len(),
+            ApiBody::ABytes(v) => v.len(),
             // exact-from-snapshot: these three compute their length from the
             // location snapshot the body will stream, so a swap landing
             // mid-response can never desync Content-Length from the wire
@@ -157,9 +171,10 @@ impl Content for ApiBody {
     async fn write_content<W: picoserve::io::Write>(self, writer: W) -> Result<(), W::Error> {
         match self {
             ApiBody::Json(s) => s.write_content(writer).await,
+            ApiBody::AJson(s) => s.as_bytes().write_content(writer).await,
             ApiBody::Chunked(c) => write_chunks(c, writer).await,
             ApiBody::Text { s, .. } => s.write_content(writer).await,
-            ApiBody::Bytes(v) => v.write_content(writer).await,
+            ApiBody::ABytes(v) => (&v[..]).write_content(writer).await,
             #[cfg(not(feature = "hosted-ui"))]
             ApiBody::Asset(a) => a.write_content(writer).await,
             ApiBody::Source(s) => s.write_content(writer).await,
@@ -228,6 +243,11 @@ impl Reply {
     /// `ContentHeaders`; do NOT add one here or it goes out twice.
     fn json(body: String) -> Self {
         Reply::ok(ApiBody::Json(body)).cors()
+    }
+
+    /// [`Reply::json`] for an arena-held body — see [`ApiBody::AJson`].
+    fn ajson(body: AString) -> Self {
+        Reply::ok(ApiBody::AJson(body)).cors()
     }
 
     /// `200 application/json` + CORS for a SEGMENTED body — the generated
@@ -1843,22 +1863,22 @@ async fn api_pixels() -> ApiResponse {
     // cannot hold is the same 503 every other out-of-heap read answers with,
     // not a silently empty frame (Gitea #768).
     match px {
-        Ok(px) => Reply::ok(ApiBody::Bytes(px)).cors(),
+        Ok(px) => Reply::ok(ApiBody::ABytes(px)).cors(),
         Err(()) => oom_reply(),
     }
 }
 
 async fn api_controls() -> ApiResponse {
     let s = snapshot(&CONTROLS_JSON);
-    json_response(if s == "{}" { String::from("[]") } else { s })
+    Reply::ajson(if s == "{}" { AString::from("[]") } else { s })
 }
 
 async fn api_vars() -> ApiResponse {
-    json_response(snapshot(&VARS_JSON))
+    Reply::ajson(snapshot(&VARS_JSON))
 }
 
 async fn api_readouts() -> ApiResponse {
-    json_response(snapshot(&READOUTS_JSON))
+    Reply::ajson(snapshot(&READOUTS_JSON))
 }
 
 /// Decode an LXP1 envelope and validate its bytecode blob. Compilation
@@ -3232,7 +3252,7 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 r if r.starts_with("/api/patterns/") => {
                     use crate::patterns::GetErr;
                     Some(match crate::patterns::get_json(&r["/api/patterns/".len()..]).await {
-                        Ok(j) => json_response(j),
+                        Ok(j) => Reply::ajson(j),
                         Err(GetErr::Missing) => {
                             json_response(String::from("{\"ok\":false,\"error\":\"no such pattern\"}"))
                         }

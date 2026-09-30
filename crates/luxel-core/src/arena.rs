@@ -189,6 +189,155 @@ pub fn frames_external() -> bool {
     installed()
 }
 
+/// An arena-backed `String` for request-sized and snapshot-sized text
+/// (Gitea #905): the `String` counterpart of [`FrameVec`].
+///
+/// Identical to a `String` on every host, the wasm playground and every
+/// board without PSRAM (no hook → [`ArenaAlloc`] is the global allocator);
+/// a PSRAM block on a board that installed one. It exists for the bodies a
+/// device builds and throws away — the jsonview snapshots the render task
+/// rebuilds every 250 ms, a pattern's JSON, the [`crate::jsonview::Chunks`]
+/// segments — which are large, written once and read once, so exactly the
+/// kind of thing internal DRAM should not be spent on.
+///
+/// UTF-8 invariant: the bytes are only ever extended by `&str` or `char`
+/// pushes ([`AString::push_str`], [`AString::push`], `fmt::Write`) and only
+/// ever shortened by [`AString::clear`], so they are always valid UTF-8 —
+/// which is what makes [`AString::as_str`] sound.
+#[derive(Clone)]
+pub struct AString(ArrVec<u8>);
+
+// By hand: `allocator_api2`'s `Vec` is `Default` for the global allocator only.
+impl Default for AString {
+    fn default() -> Self {
+        AString::new()
+    }
+}
+
+impl AString {
+    /// An empty string; allocates nothing.
+    pub const fn new() -> Self {
+        AString(empty())
+    }
+
+    /// `String::with_capacity(n)` — infallible, like the original.
+    pub fn with_capacity(n: usize) -> Self {
+        AString(with_capacity(n))
+    }
+
+    /// Reserve exactly `n` more bytes, or say no.
+    pub fn try_reserve_exact(
+        &mut self,
+        n: usize,
+    ) -> Result<(), allocator_api2::collections::TryReserveError> {
+        self.0.try_reserve_exact(n)
+    }
+
+    pub fn push_str(&mut self, s: &str) {
+        self.0.extend_from_slice(s.as_bytes());
+    }
+
+    pub fn push(&mut self, c: char) {
+        let mut b = [0u8; 4];
+        self.push_str(c.encode_utf8(&mut b));
+    }
+
+    pub fn as_str(&self) -> &str {
+        // SAFETY: the type's UTF-8 invariant — every byte got here through
+        // a `&str` or a `char`.
+        unsafe { core::str::from_utf8_unchecked(&self.0) }
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.0.capacity()
+    }
+
+    /// The bytes, still in the arena.
+    pub fn into_bytes(self) -> ArrVec<u8> {
+        self.0
+    }
+}
+
+impl core::ops::Deref for AString {
+    type Target = str;
+    fn deref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl AsRef<str> for AString {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl core::fmt::Write for AString {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        self.push_str(s);
+        Ok(())
+    }
+}
+
+impl core::fmt::Debug for AString {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Debug::fmt(self.as_str(), f)
+    }
+}
+
+impl core::fmt::Display for AString {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl From<&str> for AString {
+    fn from(s: &str) -> Self {
+        AString(from_slice(s.as_bytes()))
+    }
+}
+
+impl From<alloc::string::String> for AString {
+    fn from(s: alloc::string::String) -> Self {
+        AString::from(s.as_str())
+    }
+}
+
+impl PartialEq for AString {
+    fn eq(&self, o: &AString) -> bool {
+        self.as_bytes() == o.as_bytes()
+    }
+}
+
+impl Eq for AString {}
+
+impl PartialEq<str> for AString {
+    fn eq(&self, o: &str) -> bool {
+        self.as_str() == o
+    }
+}
+
+impl PartialEq<&str> for AString {
+    fn eq(&self, o: &&str) -> bool {
+        self.as_str() == *o
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,5 +378,38 @@ mod tests {
         v.try_reserve_exact(64).unwrap();
         v.resize(64, 7);
         assert_eq!(v.iter().copied().sum::<u32>(), 7 * 64);
+    }
+
+    /// `AString` is a `String` on a host: every way in reads back the same
+    /// bytes (Gitea #905).
+    #[test]
+    fn astring_round_trips_like_a_string() {
+        use core::fmt::Write;
+        let mut a = AString::new();
+        assert!(a.is_empty() && a.capacity() == 0);
+        a.try_reserve_exact(32).unwrap();
+        assert!(a.capacity() >= 32 && a.is_empty());
+        a.push_str("héllo");
+        a.push(' ');
+        a.push('\u{1f680}');
+        write!(a, " {}-{}", 4096, "px").unwrap();
+        let want = "héllo \u{1f680} 4096-px";
+        assert_eq!(a.as_str(), want);
+        assert_eq!(a.len(), want.len());
+        assert_eq!(a.as_bytes(), want.as_bytes());
+        assert_eq!(alloc::format!("{a}"), want);
+        assert_eq!(alloc::format!("{a:?}"), alloc::format!("{want:?}"));
+        assert!(a.contains("4096")); // Deref<Target = str>
+        let b = a.clone();
+        assert_eq!(a, b);
+        assert_eq!(b, want);
+        assert_eq!(AString::from(want), a);
+        assert_eq!(AString::from(alloc::string::String::from(want)), a);
+        assert_eq!(&b.into_bytes()[..], want.as_bytes());
+        a.clear();
+        assert!(a.is_empty());
+        assert!(a.try_reserve_exact(usize::MAX / 2).is_err());
+        assert!(AString::with_capacity(8).capacity() >= 8);
+        assert_eq!(AString::default(), "");
     }
 }

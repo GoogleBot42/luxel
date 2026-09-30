@@ -10,6 +10,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use embassy_sync::channel::Channel;
+use luxel_core::arena::AString;
 use luxel_core::fixed::Fx;
 
 /// Writes from HTTP handlers to the engine. Patterns cross as the RAW LXP1
@@ -607,14 +608,15 @@ pub fn set_pixels(rgb: &[[u8; 3]]) {
 }
 
 /// The snapshot as an owned body — ONE fallible allocation, made OUTSIDE the
-/// critical section, exactly like `pipeline::preview`. An empty `Ok` means "no
+/// critical section, exactly like `pipeline::preview` — and, like it, out of
+/// the PSRAM arena on a board that has one (Gitea #905). An empty `Ok` means "no
 /// frame yet"; `Err(())` means the heap could not hold the response, which the
 /// route answers with a 503 rather than an empty body (Gitea #768,
 /// docs/api.md).
 #[cfg(not(pipelined))]
-pub fn get_pixels() -> Result<Vec<u8>, ()> {
+pub fn get_pixels() -> Result<luxel_core::arena::ArrVec<u8>, ()> {
     let need = PIXELS.lock(|c| c.borrow().len());
-    let mut v: Vec<u8> = Vec::new();
+    let mut v: luxel_core::arena::ArrVec<u8> = luxel_core::arena::empty();
     if need == 0 {
         return Ok(v);
     }
@@ -1183,18 +1185,18 @@ pub fn live_proto(now_ms: u32) -> Option<&'static str> {
 
 /// JSON snapshots published by the render task (see luxel_core::jsonview):
 /// controls on pattern swap; vars/readouts every ~250 ms.
-pub static CONTROLS_JSON: Shared<String> = BlockingMutex::new(RefCell::new(String::new()));
-pub static VARS_JSON: Shared<String> = BlockingMutex::new(RefCell::new(String::new()));
-pub static READOUTS_JSON: Shared<String> = BlockingMutex::new(RefCell::new(String::new()));
+pub static CONTROLS_JSON: Shared<AString> = BlockingMutex::new(RefCell::new(AString::new()));
+pub static VARS_JSON: Shared<AString> = BlockingMutex::new(RefCell::new(AString::new()));
+pub static READOUTS_JSON: Shared<AString> = BlockingMutex::new(RefCell::new(AString::new()));
 
-pub fn publish(cell: &Shared<String>, json: String) {
+pub fn publish(cell: &Shared<AString>, json: AString) {
     cell.lock(|c| *c.borrow_mut() = json);
 }
 
-pub fn snapshot(cell: &Shared<String>) -> String {
+pub fn snapshot(cell: &Shared<AString>) -> AString {
     let s = share_get(cell);
     if s.is_empty() {
-        String::from("{}")
+        AString::from("{}")
     } else {
         s
     }
