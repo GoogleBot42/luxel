@@ -3465,7 +3465,9 @@ Reading it:
 - The scene did not resume on any ring wider than the 6-slot 2x1
   (`engines` 0 after the reboot): the resume pre-flight wants
   `2 × stored bytes + 24 KiB` of heap (#869) and the bigger rings leave
-  40–70 KB. Re-activate by id after a layout change on a chain.
+  40–70 KB. Re-activate by id after a layout change on a chain. (That
+  rule is gone since 2026-09-30, #905: the pre-flight is now
+  `budget::install_need`, 28,672 B for a two-pattern scene here.)
 
 What this run could not see: the picture on panels 1–2 (Jeremy left
 because of the flicker at the auto `lsb`, before the `lsb 15` rows). The

@@ -1025,13 +1025,15 @@ stale, is skipped with a console line and the device plays nothing (the
 single-pattern rule). Firmware only: the mirror has no flash and resumes
 nothing.
 
-**The "room for every layer engine" test is currently too strict on the
-Seengreat panel** — at 4096 px it asks for more heap than the board has at
-boot, so a scene of two real 2D patterns is skipped with
-`resume: heap too tight for scene <id> (… free, need …)` and the panel comes
-back dark. Verified on metal 2026-09-27 (#818); the re-derivation is
-Gitea #869. Scenes under ~17.7 KB of summed stored pattern bytes resume
-correctly there, and every other board is unaffected.
+"Room for every layer engine" is the scene installer's own arithmetic
+(`budget::install_need`, 2026-09-30, Gitea #869/#905): the runtime floor,
+each pattern layer's resident cost and the compositor scratch, plus one
+staging copy of the largest unmapped layer's bytecode. A scene that cannot
+meet it is skipped with
+`resume: heap too tight for scene <id> (… free, need … = floor … + …) — playing nothing`,
+every term spelled out. The earlier `2 × Σ stored bytes + 24 KiB` rule asked
+more heap than the Seengreat panel has at boot, so a scene of two real 2D
+patterns never came back there.
 
 **Storage.** Every scene block concatenated is ONE blob — on a device, one
 flash record beside the palette — capped at **3840 B** (`max`). A write that

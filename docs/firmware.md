@@ -2280,30 +2280,38 @@ nothing else. Every resume bail-out now says on the console that the device
 is playing nothing, because the absence of light *is* the user-visible
 signal; it used to leave the rainbow rendering and only log to serial.
 
-#### The scene pre-flight is measured, and on the panel it is too big (Gitea #869)
+#### The resume pre-flight is the installer's own arithmetic (Gitea #869, #905)
 
-`resume::apply_stored` waits up to 20 s for
-`resume_headroom(stored) = 2 × Σ stored bytes of every pattern layer + 24 KiB`
-before it sends `Msg::Scene`. On the Seengreat at 4096 px (2026-09-27,
-Gitea #818) that number is larger than the heap the board ever has at that
-point in boot, so both of Jeremy's scenes time out and the panel plays
-nothing:
+Before it sends `Msg::Scene` / `Msg::Library`, `resume::apply_stored` waits
+for `budget::install_need(px, pattern_layers, staging, frames_external)` of
+free heap:
 
 ```
-heap free: 79892
-resume: heap too tight for scene 5cef0a3a (60072 free, need 91546) — playing nothing
+RUNTIME_FLOOR + pattern_layers × layer_cost(px) + compositor_scratch(px) + staging
 ```
 
-The free heap at the check is ~60 KB (it falls from the ~79.9 KB printed at
-WiFi-up, so the 20 s wait can never help), which caps a resumable scene at
-about **17.7 KB of summed stored pattern bytes** — `Aurora 2D` alone is
-12,300 (8,072 src + 4,228 bc) and `Infinite Snake v2` is 21,185. The same
-scene *activates* at runtime from a state with less free heap than the boot
-check refuses (51,396 → 43,580 B free, both layers `native`), so the estimate
-is wrong rather than the board: `2 × Σ` assumes every layer's source, blob
-and envelope are resident at once, where the installer builds layers one at a
-time. The graceful skip itself is right and should stay — it is what turns an
-OOM panic into a console line. #869 carries the re-derivation.
+`staging` is the bytecode length of the LARGEST layer that cannot execute out
+of the flash mapping, and 0 when every layer is mapped or a PSRAM arena is
+installed (the copy then lands there, #905). A max, not a sum: the installer
+builds layers one at a time and drops each staging copy before the next
+decode. It polls every 2 s for at most 20 s, and gives up as soon as two
+samples in a row fail to rise — free heap only falls after WiFi-up on the
+panel, so a check that fails once never passes later. A refusal prints every
+term, e.g.
+`resume: heap too tight for scene <id> (… free, need … = floor 20480 + 2 layer(s) x 4096 + scratch 0 + staging 0) — playing nothing`.
+Like the per-layer `layer_fits_with` it is a pre-flight; the post-build
+`RUNTIME_FLOOR` check stays the real gate and still refuses, never panics.
+
+It replaced `2 × Σ stored bytes of every pattern layer + 24 KiB`
+(2026-09-30), which charged every layer's source, blob and envelope as
+resident at once. Nothing on the install path loads source, and on a mapped
+board nothing copies bytecode, so on the Seengreat at 4096 px it asked
+91,546 B for Jeremy's `Test 2` (Aurora 2D + Infinite Snake v2) against the
+~60 KB the board has at that point of boot — and the panel came back dark
+after every reboot (#818, and on every ring build) — while the same scene
+activates at runtime from 51,396 B free for a net ~7.8 KB. With frames in
+PSRAM the new need for any two-pattern scene is 28,672 B, at 4096 px or
+16384.
 
 ### `LUXEL_DEFAULT_PATTERN`
 

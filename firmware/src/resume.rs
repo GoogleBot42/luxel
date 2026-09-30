@@ -161,23 +161,55 @@ fn persist_now() {
     }
 }
 
-/// Free heap a resume needs before it loads `stored` bytes of pattern:
-/// source + blob + the envelope ≈ 2× the stored bytes, plus room to keep
-/// running.
+/// Free heap a resume must see before it hands the render task a stack of
+/// `layers` pattern engines, the largest of which stages `staging` bytes of
+/// bytecode while it decodes: [`luxel_core::budget::install_need`], the
+/// installer's own arithmetic (Gitea #869, #905). It used to be
+/// `2 × Σ stored bytes + 24 KiB` — source, blob and envelope of every layer
+/// resident at once — which nothing on the install path does, and which
+/// asked 91,546 B on the Seengreat panel for a scene that installs from
+/// 51,396 B at runtime.
 ///
 /// The `black_box` is a TOOLCHAIN WORKAROUND, not a tuning knob. With the
-/// headroom as a plain literal the Xtensa LLVM fork (xtensa-rust-1.95.0.0)
-/// aborts instruction selection on `resume_task`'s poll function:
-/// `rustc-LLVM ERROR: Cannot select: i32 = Constant<24576>` — the number
-/// tracks the literal (23 * 1024 fails as `Constant<23552>`), so it is the
-/// constant node itself the backend cannot place, not a frame size. It only
-/// appears once the surrounding state machine is complex enough: the same
-/// source built fine before the #330 store rewrite, and `#[inline(never)]`
-/// alone does not help (fat LTO folds the body back in). Making the value
-/// opaque to the optimizer costs one register move on a once-per-boot path.
+/// constant term as a plain literal the Xtensa LLVM fork
+/// (xtensa-rust-1.95.0.0) aborted instruction selection on `resume_task`'s
+/// poll function: `rustc-LLVM ERROR: Cannot select: i32 = Constant<24576>`
+/// — the number tracked the literal (23 * 1024 failed as
+/// `Constant<23552>`), so it is the constant node itself the backend cannot
+/// place, not a frame size. It only appears once the surrounding state
+/// machine is complex enough: the same source built fine before the #330
+/// store rewrite, and `#[inline(never)]` alone does not help (fat LTO folds
+/// the body back in). So the floor — the constant term of `install_need` —
+/// is swapped for an opaque copy of itself; one register move on a
+/// once-per-boot path.
 #[inline(never)]
-fn resume_headroom(stored: usize) -> usize {
-    stored * 2 + core::hint::black_box(24 * 1024)
+fn resume_need(layers: usize, staging: usize) -> usize {
+    use luxel_core::budget::{install_need, RUNTIME_FLOOR};
+    let px = crate::shared::PIXEL_COUNT.load(core::sync::atomic::Ordering::Relaxed);
+    install_need(px, layers, staging, luxel_core::arena::frames_external()) - RUNTIME_FLOOR
+        + core::hint::black_box(RUNTIME_FLOOR)
+}
+
+/// The "heap too tight" line, with the terms of [resume_need] spelled out
+/// so a serial log explains its number. Out of line so the formatting and
+/// the per-term constants stay out of the task future's poll function.
+#[inline(never)]
+fn too_tight(what: &str, id: &str, free: usize, layers: usize, staging: usize, need: usize) {
+    use luxel_core::budget::{compositor_scratch, layer_cost, RUNTIME_FLOOR};
+    let px = crate::shared::PIXEL_COUNT.load(core::sync::atomic::Ordering::Relaxed);
+    let ext = luxel_core::arena::frames_external();
+    println!(
+        "resume: heap too tight for {} {} ({} free, need {} = floor {} + {} layer(s) x {} + scratch {} + staging {}) — playing nothing",
+        what,
+        id,
+        free,
+        need,
+        RUNTIME_FLOOR,
+        layers,
+        layer_cost(px, ext),
+        compositor_scratch(px, ext),
+        staging
+    );
 }
 
 /// Load and apply the stored record at boot. The caller has already checked
@@ -209,33 +241,37 @@ async fn apply_stored() {
         Record::Scene(id) => (id, Vec::new(), true),
     };
     let what = if is_scene { "scene" } else { "pattern" };
-    let Some(stored) = stored_bytes(&id, is_scene) else {
+    let Some((layers, staging)) = install_shape(&id, is_scene) else {
         println!("resume: stored {} {} is gone — playing nothing", what, id);
         return;
     };
     // Boot-time heap is at its trough while WiFi (whose mallocs don't
-    // null-check) is still coming up, and everything below allocates
-    // infallibly: src + bc + the envelope ≈ 2× the stored bytes. Loading
-    // straight away at a heavy config (big LED buffer, large pattern)
-    // OOM-panicked into the boot-loop guard — three strikes flipped the OTA
-    // slot back to the previous firmware. Wait for comfortable headroom;
-    // if it never shows up, skip resume — the device then plays nothing
-    // (Gitea #744), which is a dark strip and a serial line, not a crash.
-    let need = resume_headroom(stored);
+    // null-check) is still coming up. Loading straight away at a heavy
+    // config OOM-panicked into the boot-loop guard once — three strikes
+    // flipped the OTA slot back to the previous firmware — so the install
+    // waits for what it will actually take (`resume_need`: the floor, each
+    // layer's resident cost, the largest layer's staging copy). If that
+    // never shows up, skip resume — the device then plays nothing (Gitea
+    // #744), which is a dark strip and a serial line, not a crash.
+    //
+    // Poll every 2 s for up to 20 s, but give up as soon as two samples in
+    // a row fail to rise: on the Seengreat panel free heap only FALLS after
+    // WiFi-up, so a check that fails once fails all ten and the extra 18 s
+    // were darkness for nothing (#869). Two more words in the task future.
+    let need = resume_need(layers, staging);
+    let mut free = esp_alloc::HEAP.free();
     let mut waited = 0u32;
-    while esp_alloc::HEAP.free() < need {
-        if waited >= 20 {
-            println!(
-                "resume: heap too tight for {} {} ({} free, need {}) — playing nothing",
-                what,
-                id,
-                esp_alloc::HEAP.free(),
-                need
-            );
+    let mut flat = 0u32;
+    while free < need {
+        if waited >= 20 || flat >= 2 {
+            too_tight(what, &id, free, layers, staging, need);
             return;
         }
         Timer::after(Duration::from_secs(2)).await;
         waited += 2;
+        let now = esp_alloc::HEAP.free();
+        flat = if now > free { 0 } else { flat + 1 };
+        free = now;
     }
     if let Err(e) = validate(&id, is_scene) {
         println!("resume: {} — playing nothing", e);
@@ -258,27 +294,47 @@ async fn apply_stored() {
     println!("resume: {} {} restored", what, id);
 }
 
-/// Bytes of stored pattern a resume will load: the pattern's own, or the
-/// sum over a scene's pattern layers (every layer engine is resident at
-/// once, so the boot-time heap check has to cover all of them). `None` when
-/// the record's target is gone from its store.
+/// (pattern layers, staging bytes) of what a resume will install: one
+/// layer for a pattern, every pattern layer of a scene (each is a resident
+/// engine). `staging` is the transient bytecode copy of the LARGEST layer
+/// that cannot execute out of the flash mapping — the installer builds one
+/// layer at a time and drops each copy before the next decode, so it is a
+/// max, never a sum — and 0 when every layer is mapped or the copy lands in
+/// the PSRAM arena (`patterns::payload_vec`, #905). `None` when the
+/// record's target is gone from its store.
 ///
-/// Synchronous and never inlined, like [resume_headroom]: the scene copy
-/// and the walk stay on the stack for the call, not in the task future.
+/// Pattern header fields only — no payload read, no copy. Synchronous and never
+/// inlined: the scene copy and the walk stay on the stack for the call, not
+/// in the task future.
 #[inline(never)]
-fn stored_bytes(id: &str, is_scene: bool) -> Option<usize> {
-    if !is_scene {
-        return patterns::stored_size_hint(id);
-    }
-    let sc = crate::scenes::get(id)?;
-    let mut total = 0usize;
-    for l in &sc.layers {
-        if let Some(pid) = l.pattern_id() {
+fn install_shape(id: &str, is_scene: bool) -> Option<(usize, usize)> {
+    // a mapped layer executes in place (`code_of`); otherwise its copy is
+    // `bc_len` bytes
+    let staged = |pid: &str| -> usize {
+        if patterns::code_of(pid).is_some() {
+            0
+        } else {
             // a gone layer pattern costs nothing here; `validate` names it
-            total += patterns::stored_size_hint(pid).unwrap_or(0);
+            patterns::bytecode_len_hint(pid).unwrap_or(0)
         }
-    }
-    Some(total)
+    };
+    let (layers, largest) = if is_scene {
+        let sc = crate::scenes::get(id)?;
+        let mut n = 0usize;
+        let mut largest = 0usize;
+        for l in &sc.layers {
+            if let Some(pid) = l.pattern_id() {
+                n += 1;
+                largest = largest.max(staged(pid));
+            }
+        }
+        (n, largest)
+    } else {
+        patterns::bytecode_len_hint(id)?;
+        (1, staged(id))
+    };
+    let staging = if luxel_core::arena::installed() { 0 } else { largest };
+    Some((layers, staging))
 }
 
 /// The single-pattern rule, applied to every pattern layer of a scene: a

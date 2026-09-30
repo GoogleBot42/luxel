@@ -100,7 +100,7 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use esp_println::println;
 use esp_storage::FlashStorage;
-use luxel_core::arena::AString;
+use luxel_core::arena::{AString, ArrVec};
 use luxel_core::jsonview::{push_escaped, push_hex, push_piece, push_u32, Chunks};
 use sequential_storage::cache::PageStateCache;
 use sequential_storage::map;
@@ -1056,9 +1056,16 @@ fn payload_slice(off: u32, len: u32) -> Option<&'static [u8]> {
 
 /// A file's payload in a transient fallible Vec — the `flashmap-off`
 /// fallback, and the only path that ever copies a stored blob.
-fn payload_vec(off: u32, len: u32) -> Option<Vec<u8>> {
+///
+/// The copy is a [`luxel_core::arena::ArrVec`], so on a board with a PSRAM
+/// arena it lands there, not in internal DRAM (Gitea #905): every consumer
+/// reads it once, straight through, as a `&[u8]` — a bytecode decode, a
+/// response body, a sprite record parsed per frame — and the internal
+/// heap is what a boot-time resume and a scene install are short of
+/// (#869). With no arena installed it is the global heap, as before.
+fn payload_vec(off: u32, len: u32) -> Option<ArrVec<u8>> {
     let len = len as usize;
-    let mut out: Vec<u8> = Vec::new();
+    let mut out: ArrVec<u8> = luxel_core::arena::empty();
     if out.try_reserve_exact(len).is_err() {
         println!("store: {} B file buffer failed to allocate", len);
         return None;
@@ -1233,7 +1240,7 @@ pub fn source_slice(id: &str) -> Option<&'static [u8]> {
 
 /// A stored pattern's source in a transient Vec — the `flashmap-off`
 /// fallback for [source_slice].
-pub fn source_vec(id: &str) -> Option<Vec<u8>> {
+pub fn source_vec(id: &str) -> Option<ArrVec<u8>> {
     let r = rec_of(id)?;
     payload_vec(r.src_off(), r.src_len)
 }
@@ -1255,7 +1262,7 @@ pub fn sprite_slice(id: &str) -> Option<&'static [u8]> {
 
 /// A stored sprite's record in a transient Vec — the `flashmap-off`
 /// fallback for [sprite_slice].
-pub fn sprite_vec(id: &str) -> Option<Vec<u8>> {
+pub fn sprite_vec(id: &str) -> Option<ArrVec<u8>> {
     let r = rec_of_kind(patlog::KIND_SPRITE, id)?;
     payload_vec(r.src_off(), r.src_len)
 }
@@ -1318,7 +1325,7 @@ pub fn sprite_exists(id: &str) -> bool {
 
 /// Read a stored pattern's LXBC bytecode into a transient Vec — the
 /// `flashmap-off` fallback for [code_of].
-pub fn bytecode_of(id: &str) -> Option<Vec<u8>> {
+pub fn bytecode_of(id: &str) -> Option<ArrVec<u8>> {
     let r = rec_of(id)?;
     payload_vec(r.bc_off(), r.bc_len)
 }
@@ -1358,11 +1365,12 @@ pub fn source_stat(id: &str) -> Option<(usize, u32)> {
     rec_of(id).map(|r| (r.src_len as usize, r.src_hash))
 }
 
-/// A stored pattern's source + bytecode bytes — exact, from the header.
-/// No flash reads, no allocation. For heap pre-flights.
+/// A stored pattern's bytecode length — exact, from the header. No flash
+/// reads, no allocation. For heap pre-flights: it is what [bytecode_of]
+/// copies when the pattern cannot execute out of the mapping.
 #[inline(never)]
-pub fn stored_size_hint(id: &str) -> Option<usize> {
-    rec_of(id).map(|r| (r.src_len + r.bc_len) as usize)
+pub fn bytecode_len_hint(id: &str) -> Option<usize> {
+    rec_of(id).map(|r| r.bc_len as usize)
 }
 
 /// Human name of a stored pattern.

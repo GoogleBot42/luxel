@@ -1333,7 +1333,7 @@ async fn stream_flash_readback<W: picoserve::io::Write>(
 /// same discipline as [stream_flash_readback].
 async fn stream_store_readback<W: picoserve::io::Write>(
     writer: &mut W,
-    bytes: Option<alloc::vec::Vec<u8>>,
+    bytes: Option<luxel_core::arena::ArrVec<u8>>,
     len: usize,
     label: &str,
 ) -> Result<(), W::Error> {
