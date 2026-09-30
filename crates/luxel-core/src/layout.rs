@@ -8,7 +8,7 @@
 //!
 //! ```text
 //! kind    strip | matrix | map          ← "custom map" is a coordinate SOURCE
-//! matrix  pw ph cols rows start dir snake rot180 [scan]
+//! matrix  pw ph cols rows start dir snake rot [scan]     ← rot = <even>/<odd> degrees, or the legacy 0..3 mask
 //! out     n pin proto order count [rev] ← wiring segments of ONE pixel space
 //! proj    proj1d proj2d proj3d          ← §5.4d defaults (crate::projection)
 //! ```
@@ -114,7 +114,7 @@ impl RunDir {
 
 /// The matrix arrangement (proposal §5.3, S3c). `pw`×`ph` is ONE panel (or,
 /// on a strip-built matrix with `cols`=`rows`=1, the whole grid); `cols`×
-/// `rows` tile them; `start`/`dir`/`snake`/`rot180` describe how the chain
+/// `rows` tile them; `start`/`dir`/`snake`/`rot` describe how the chain
 /// threads the tiles — and, in the one-tile case, how the pixel run threads
 /// the grid, which is the same widget one level down.
 ///
@@ -129,7 +129,16 @@ pub struct Matrix {
     pub start: Corner,
     pub dir: RunDir,
     pub snake: bool,
-    pub rot180: bool,
+    /// How the tiles are MOUNTED, in quarter turns clockwise (0..3 = 0°, 90°,
+    /// 180°, 270°): `rot[0]` for the even chain lines — line 0 and so the
+    /// FIRST panel — and `rot[1]` for the odd lines, the return legs of a
+    /// serpentine wall. The driver assumes an upright tile (its first pixel
+    /// at the tile's top-left); anything else is stated here, per line
+    /// (Gitea #917: the first panel hung the other way, or a quarter turn
+    /// so the ribbon runs down a column). A quarter turn needs a square
+    /// tile. On the wire the field is `<even>/<odd>` in degrees, or the
+    /// legacy `0..3` 180°-only mask every wall stored before this.
+    pub rot: [u8; 2],
     /// HUB75 scan divisor (16 = 1/16 scan); 0 = the board's own.
     pub scan: u8,
 }
@@ -146,8 +155,34 @@ impl Matrix {
             start: Corner::Tl,
             dir: RunDir::Row,
             snake: false,
-            rot180: false,
+            rot: [0, 0],
             scan: 0,
+        }
+    }
+
+    /// Quarter turns clockwise the tiles on chain line `line` are mounted
+    /// at: `rot[0]` for the even lines, `rot[1]` for the odd ones (#917).
+    pub const fn turns(&self, line: usize) -> u8 {
+        self.rot[line % 2] & 3
+    }
+
+    /// Does any line hold a quarter turn (90° / 270°)? Those need `pw == ph`.
+    pub const fn quarter_turned(&self) -> bool {
+        self.rot[0] % 2 == 1 || self.rot[1] % 2 == 1
+    }
+
+    /// The wire form of `rot`: the legacy `0..3` mask when only 180° turns
+    /// are involved (byte-identical to every stored wire before #917 — and
+    /// what firmware from before it still parses), else `<even>/<odd>` in
+    /// degrees.
+    fn push_rot_wire(&self, out: &mut String) {
+        if !self.quarter_turned() {
+            let mask = u32::from(self.rot[1] == 2) | (u32::from(self.rot[0] == 2) << 1);
+            push_u32(out, mask);
+        } else {
+            push_u32(out, u32::from(self.rot[0]) * 90);
+            out.push('/');
+            push_u32(out, u32::from(self.rot[1]) * 90);
         }
     }
 
@@ -171,14 +206,14 @@ impl Matrix {
     /// The part #475 consumes: everything about how the chain threads the
     /// tiles. Two arrangements that differ only in `pw`/`ph` resize the grid
     /// (live), they do not rewire it (reboot).
-    const fn wiring(&self) -> (u8, u8, u8, u8, bool, bool, u8) {
+    const fn wiring(&self) -> (u8, u8, u8, u8, bool, [u8; 2], u8) {
         (
             self.cols,
             self.rows,
             self.start as u8,
             self.dir as u8,
             self.snake,
-            self.rot180,
+            self.rot,
             self.scan,
         )
     }
@@ -514,10 +549,12 @@ impl Layout {
                 out.push(' ');
                 push_piece(&mut out, m.dir.as_str());
                 out.push(' ');
-                for v in [u32::from(m.snake), u32::from(m.rot180), m.scan as u32] {
-                    push_u32(&mut out, v);
-                    out.push(' ');
-                }
+                push_u32(&mut out, u32::from(m.snake));
+                out.push(' ');
+                m.push_rot_wire(&mut out);
+                out.push(' ');
+                push_u32(&mut out, m.scan as u32);
+                out.push(' ');
                 // The driver is only meaningful for a matrix, and the stored
                 // record IS the wire, so it goes out whenever the kind does
                 // — a reader without a `panel` line keeps its own default.
@@ -721,7 +758,7 @@ pub struct Edit {
 ///
 /// ```text
 /// strip <pixels>
-/// matrix <pw> <ph> <cols> <rows> <start> <dir> <snake> <rot180> [<scan>]
+/// matrix <pw> <ph> <cols> <rows> <start> <dir> <snake> <rot> [<scan>]
 /// map [grid <w> <h> | <dims> <raw16.16…>]
 /// panel <planes> <clock_mhz> <chip> <blank> [<lsb>]
 /// out <n> <pin> <proto> <order> <count> [rev]
@@ -780,8 +817,11 @@ pub fn parse(
             "matrix" => {
                 kind_seen = true;
                 let m = parse_matrix(&mut it).ok_or(err(
-                    "expected: matrix <pw> <ph> <cols> <rows> <tl|tr|bl|br> <row|col> <0|1> <0|1> [scan]",
+                    "expected: matrix <pw> <ph> <cols> <rows> <tl|tr|bl|br> <row|col> <0|1> <rot> [scan]",
                 ))?;
+                if m.quarter_turned() && m.pw != m.ph {
+                    return Err(err("a tile turned 90° must be square (pw == ph)"));
+                }
                 if m.pixels() < 1 || m.pixels() > lim.max_pixels {
                     return Err(err("pw*ph*cols*rows out of range for this board"));
                 }
@@ -1003,7 +1043,7 @@ fn parse_matrix<'a>(it: &mut impl Iterator<Item = &'a str>) -> Option<Matrix> {
     let start = Corner::from_str(it.next()?)?;
     let dir = RunDir::from_str(it.next()?)?;
     let snake = flag(it.next()?)?;
-    let rot180 = flag(it.next()?)?;
+    let rot = parse_rot(it.next()?)?;
     let scan = match it.next() {
         None => 0,
         Some(v) => u8::try_from(num(v)?).ok()?,
@@ -1011,7 +1051,30 @@ fn parse_matrix<'a>(it: &mut impl Iterator<Item = &'a str>) -> Option<Matrix> {
     if pw == 0 || ph == 0 || cols == 0 || rows == 0 {
         return None;
     }
-    Some(Matrix { pw, ph, cols, rows, start, dir, snake, rot180, scan })
+    Some(Matrix { pw, ph, cols, rows, start, dir, snake, rot, scan })
+}
+
+/// The `rot` field of a `matrix` line (Gitea #917): `<even>/<odd>` in
+/// degrees, each `0|90|180|270` clockwise, for the even lines (the first
+/// panel's) and the odd lines — or the legacy 180°-only mask `0..3` every
+/// wall stored before this (bit 1 = odd lines, bit 2 = even lines), which
+/// is also what a 180°-only arrangement is written back as.
+fn parse_rot(s: &str) -> Option<[u8; 2]> {
+    if let Some((e, o)) = s.split_once('/') {
+        let deg = |t: &str| -> Option<u8> {
+            let d = num(t)?;
+            if d % 90 != 0 || d > 270 {
+                return None;
+            }
+            Some((d / 90) as u8)
+        };
+        return Some([deg(e)?, deg(o)?]);
+    }
+    let mask = num(s)?;
+    if mask > 3 {
+        return None;
+    }
+    Some([if mask & 2 != 0 { 2 } else { 0 }, if mask & 1 != 0 { 2 } else { 0 }])
 }
 
 fn parse_out<'a>(it: &mut impl Iterator<Item = &'a str>, lim: &Limits) -> Option<Output> {
@@ -1316,8 +1379,11 @@ impl Layout {
             push_piece(out, self.matrix.dir.as_str());
             push_piece(out, "\",\"snake\":");
             push_u32(out, u32::from(self.matrix.snake));
-            push_piece(out, ",\"rot180\":");
-            push_u32(out, u32::from(self.matrix.rot180));
+            push_piece(out, ",\"rot\":[");
+            push_u32(out, u32::from(self.matrix.rot[0]) * 90);
+            out.push(',');
+            push_u32(out, u32::from(self.matrix.rot[1]) * 90);
+            push_piece(out, "]");
             push_piece(out, ",\"scan\":");
             push_u32(out, self.matrix.scan as u32);
             #[cfg(feature = "panel")]
@@ -1871,6 +1937,39 @@ mod tests {
         assert_eq!(e.map, None, "a proj-only body leaves the map alone");
     }
 
+
+    /// The `rot` field (Gitea #917): the legacy `0..3` 180°-only mask still
+    /// parses and is written back as itself, `<even>/<odd>` degrees carry
+    /// quarter turns, and anything else is refused.
+    #[test]
+    fn rot_is_degrees_per_line_or_the_legacy_mask() {
+        let mut cur = strip_layout();
+        cur.kind = LayoutKind::Matrix;
+        cur.matrix = Matrix::single(32, 32);
+        for (v, want) in [(0u8, [0u8, 0]), (1, [0, 2]), (2, [2, 0]), (3, [2, 2])] {
+            let body = alloc::format!("matrix 32 32 2 2 tl row 1 {v}");
+            let e = parse(&body, &cur, 4096, &big_limits()).unwrap();
+            assert_eq!(e.layout.matrix.rot, want, "{body}");
+            let wire = e.layout.to_wire(4096, &proto_name);
+            assert!(wire.starts_with(&alloc::format!("matrix 32 32 2 2 tl row 1 {v} ")), "{wire}");
+        }
+        for (s, want, back) in [("90/270", [1u8, 3], "90/270"), ("0/180", [0, 2], "1"), ("270/0", [3, 0], "270/0"), ("180/180", [2, 2], "3")] {
+            let body = alloc::format!("matrix 32 32 2 2 tl row 1 {s}");
+            let e = parse(&body, &cur, 4096, &big_limits()).unwrap();
+            assert_eq!(e.layout.matrix.rot, want, "{body}");
+            let wire = e.layout.to_wire(4096, &proto_name);
+            assert!(wire.starts_with(&alloc::format!("matrix 32 32 2 2 tl row 1 {back} ")), "{wire}");
+        }
+        for bad in ["4", "45/0", "0/360", "90", "90/", "/90"] {
+            let body = alloc::format!("matrix 32 32 2 2 tl row 1 {bad}");
+            assert!(parse(&body, &cur, 4096, &big_limits()).is_err(), "{body}");
+        }
+        // a quarter turn swaps a tile's axes, so the tile has to be square
+        let e = parse("matrix 64 32 2 1 tl row 0 90/0", &cur, 4096, &big_limits());
+        assert_eq!(e.unwrap_err().msg, "a tile turned 90° must be square (pw == ph)");
+        assert!(parse("matrix 64 32 2 1 tl row 0 180/0", &cur, 4096, &big_limits()).is_ok());
+    }
+
     #[test]
     fn the_persisted_wire_round_trips() {
         let mut l = Layout::board_default(LayoutKind::Matrix, Matrix::single(64, 32));
@@ -1941,7 +2040,7 @@ mod tests {
         let mut s = String::new();
         l.push_json(&mut s, &view(&l, 4096, "{}"));
         assert!(s.contains("\"kind\":\"matrix\""));
-        assert!(s.contains("\"matrix\":{\"pw\":64,\"ph\":64,\"cols\":1,\"rows\":1,\"start\":\"tl\",\"dir\":\"row\",\"snake\":0,\"rot180\":0,\"scan\":0}"));
+        assert!(s.contains("\"matrix\":{\"pw\":64,\"ph\":64,\"cols\":1,\"rows\":1,\"start\":\"tl\",\"dir\":\"row\",\"snake\":0,\"rot\":[0,0],\"scan\":0}"));
         assert!(s.contains("\"w\":64,\"h\":64"));
         assert!(s.contains("\"count\":1"), "one implicit output = one panel");
         assert!(!s.contains("est_hz"), "no panel driver, no estimate");
@@ -1957,7 +2056,7 @@ mod tests {
         v.panel = Some(PanelView { est_hz: 57, drive: 1, driver_live: None });
         let mut s = String::new();
         l.push_json(&mut s, &v);
-        assert!(s.contains("\"rot180\":0,\"scan\":0,\"est_hz\":57,\"drive\":1}"), "{s}");
+        assert!(s.contains("\"rot\":[0,0],\"scan\":0,\"est_hz\":57,\"drive\":1}"), "{s}");
         assert!(s.contains("\"w\":128,\"h\":64"));
         assert!(s.contains("\"count\":2"), "one implicit output covers both panels");
     }

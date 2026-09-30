@@ -101,6 +101,15 @@ and `node_modules`, and the harnesses below assume a real `npm run build` succee
    tofu boxes in screenshots — and in any UI you build for it. ✕ ✓ ✗ ⟳ ▶ ‖ ⋔ ⚙ ⚠ ★ »
    are all covered. Boxes in a screenshot are the font, not your markup; prefer the
    covered glyphs so the UI reads correctly in this browser too.
+4c. Adding a check to `device-e2e.mjs`: pick the section by the MIRROR it spawns,
+   not by its comments. The "panel" mirror of the fps section (`E2E.mirror.panel`,
+   `--out-fps`/`--rescan-hz` only) impersonates a refresh readout, NOT a panel board
+   — `caps.panel` is false there and every HUB75-gated control is hidden. Panel-caps
+   checks belong in the `--board panel` section on `E2E.mirror.hub75` (`hubPage`,
+   "A HUB75 panel: no kind picker at all"). Cost one full ~15 min run (2026-09-30).
+   And don't run a firmware build or an OTA alongside the harness: the playlist
+   "clear repaints the list exactly once" mutation-count check flaked under that
+   load (5 batches instead of 1) and passed on the quiet run.
 5. Watch `PIPESTATUS` when piping build output: `npm run build | tail` masks a failing
    `wasm`/`gen-gallery`/`svelte-check`/`vite build` step behind `tail`'s own success exit
    code. Either don't pipe, or check `${PIPESTATUS[0]}` explicitly.

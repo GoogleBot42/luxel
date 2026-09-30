@@ -156,6 +156,15 @@
 .settings .w96 {
   width: 96px;
 }
+.settings .pair {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  white-space: nowrap;
+}
+.settings .w86 {
+  width: 86px;
+}
 .settings .w114 {
   width: 114px;
 }
