@@ -1,6 +1,6 @@
 # Update log
 
-## 2026-09-30 — the first HUB75 panel's orientation was assumed: `rot180` is now a line mask (#917)
+## 2026-09-30 — the first HUB75 panel's orientation was assumed: `rot180` becomes `rot`, a mount rotation per line (#917)
 
 Jeremy: "It seems to assume the input direction for my first panel and there
 isn't a way to change it. Because of this, every panel after is rotate wrong
@@ -8,23 +8,33 @@ too." True: `arrange::panel_cell` rotated a tile only when `rot180 && line %
 2 == 1`, so line 0 — the first panel, the whole of a 4x1, the whole first
 column of the Seengreat's `matrix 64 64 2 2 tr col 1 0` — was always assumed
 upright, and `start` only places tiles. Nothing on the engine side rotates
-180° either (`proj2d` picks axes), so there was no workaround.
+either (`proj2d` picks axes), so there was no workaround. A first cut made
+the field a 180°-only line mask; Jeremy's reply — "my first panel in the top
+right is actually flipped only 90 degrees" — is why it is now a **rotation**.
 
-`rot180` keeps its wire slot and JSON key and becomes a `0..3` **line mask**:
-bit 1 = the odd lines (what every stored `1` already meant), bit 2 = the even
-lines, line 0 included. `2` says the ribbon enters the first panel from the
-side the driver did not assume (the picture on it is upside-down); `3`
-rotates every tile. `Matrix::rotated(line)` is the one place the bits are
-read; the parser refuses `4+`; older firmware refuses `2`/`3` outright rather
-than misreading them. The Layout card grows a second checkbox ("first row
-upside-down", or "panel upside-down" on a single tile — HUB75 boards only, a
-strip-built matrix says the same thing with its start corner), the
-arrangement SVG marks every rotated tile with the `↻`, and docs/api.md
-"Panel arrangement" documents the mask. Host tests: the mask picks lines
-(`0`/`1`/`2`/`3` on a snaked 2x2), a single `rot180 2` tile is the grid
-rotated, a `tr row 0 3` 4x1 is the whole picture rotated, every mask value is
-still a permutation; parser round-trips. Untouched on metal — the Seengreat
-grant ended with the last hand-back; #917 carries the on-device check.
+`Matrix.rot: [u8; 2]` holds quarter turns clockwise for the even lines (line
+0, so the first panel) and the odd lines (a serpentine's return legs). On the
+wire the slot reads `<even>/<odd>` in degrees (`90/270`, `180/0`), or the
+legacy `0..3` 180°-only mask every stored wall carries — and a 180°-only
+arrangement is written BACK in that form, so stored wires stay byte-identical
+and older firmware still parses them. JSON reports `"rot":[even,odd]`
+(`rot180` is gone). A quarter turn swaps a tile's axes, so it needs a square
+tile: the parser refuses `a tile turned 90° must be square (pw == ph)` and the
+LUT builder keeps only the 180° part of one that slipped through (never OOB).
+The remap: native pixel `(lx, ly)` lands at `(pw-1-ly, lx)` for 90°,
+`(pw-1-lx, ph-1-ly)` for 180°, `(ly, ph-1-lx)` for 270°. The Layout card grows
+two dropdowns — *first row turned* (HUB75 boards, any tile count; "panel
+turned" on a single tile) and *alternate rows turned* (more than one tile;
+quarter turns only offered on a HUB75 board and only enabled when `pw == ph`)
+— the arrangement SVG labels every turned tile `↻90°`/`↻180°`/`↻270°`, and
+docs/api.md "Panel arrangement" documents the field. Host tests: each parity
+has its own turn, `180/0` on one tile is the grid rotated, a `tr row 0 180/180`
+4x1 is the picture rotated, the 90°/270° pixel mapping and 90°∘90° = 180°,
+every rotation pair stays a permutation; parser round-trips for both forms
+and the refusals; caps visibility; device-e2e drives the dropdowns on the
+`--board panel` mirror (`[90,0]`, `[90,270]`, `[0,270]`, the SVG labels).
+Deployed to the Seengreat (both slots + assets); #917 stays open for Jeremy's
+own dropdown pick, since only eyes on the wall can say which turn it is.
 
 ## 2026-09-30 — torn rows on the 4x1 chain: the pixels snapshot copy starved the ring's refill (#914)
 

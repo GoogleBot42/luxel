@@ -1264,7 +1264,7 @@ embedded so a client needs one fetch:
 {"kind":"matrix","source":"regular","dims":2,"regular":true,
  "pixels":1024,"max":2048,"w":64,"h":16,
  "matrix":{"pw":32,"ph":16,"cols":2,"rows":1,"start":"tl","dir":"row",
-           "snake":1,"rot180":0,"scan":16},
+           "snake":1,"rot":[0,180],"scan":16},
  "outputs":[{"n":0,"pin":18,"proto":"ws2812","order":"grb","count":2,
              "rev":false}],
  "proj":{"proj1d":"index","proj2d":"z","proj3d":"xy"},
@@ -1277,7 +1277,7 @@ embedded so a client needs one fetch:
 | `source` | `regular` (the shape comes from the strip/matrix fields) · `map` (from a map program's coordinates). "Custom" is a coordinate SOURCE, not a dimensionality. |
 | `dims` / `regular` / `w` / `h` | The **Layout's own** shape: 1×`pixels` for a strip, `pw·cols`×`ph·rows` for a matrix, the installed map's detected grid (or `0`/`0`, `regular:false`) for a map. |
 | `pixels` / `max` | The pixel count and this board's ceiling — the same numbers `/api/config` reports. |
-| `matrix` | **Present only when `kind` is `matrix`.** `pw`×`ph` is one panel (or, with `cols`=`rows`=1, the whole grid); `cols`×`rows` tile them; `start` (`tl\|tr\|bl\|br`), `dir` (`row\|col`), `snake`, `rot180` (a `0..3` line mask — see below) describe how the chain threads the tiles — and, in the one-tile case, how the pixel run threads the grid (a strip-built matrix's wiring, proposal §5.3). `scan` is the HUB75 scan divisor — `1/N` on a module's label; `0` means the usual ratio for this height, `ph / 2` (nothing reads it off the module: HUB75 is write-only). On a board with a panel driver it also carries `est_hz` and `drive` — see "Panel arrangement" below. |
+| `matrix` | **Present only when `kind` is `matrix`.** `pw`×`ph` is one panel (or, with `cols`=`rows`=1, the whole grid); `cols`×`rows` tile them; `start` (`tl\|tr\|bl\|br`), `dir` (`row\|col`), `snake`, `rot` (how the tiles are mounted, degrees per line parity — see below) describe how the chain threads the tiles — and, in the one-tile case, how the pixel run threads the grid (a strip-built matrix's wiring, proposal §5.3). `scan` is the HUB75 scan divisor — `1/N` on a module's label; `0` means the usual ratio for this height, `ph / 2` (nothing reads it off the module: HUB75 is write-only). On a board with a panel driver it also carries `est_hz` and `drive` — see "Panel arrangement" below. |
 | `driver` | **Present only on a board with a HUB75 panel.** How the panel is DRIVEN — bit depth, pixel clock, chip init, latch blanking — plus the chip list a client should offer and what the firmware actually booted. See "How the panel is driven" below. |
 | `outputs` | One entry per configured output — `n` (0-based, `< caps.outputs`), `pin`, `proto`, `order`, `count` (pixels on a strip Layout, **panels** on a matrix one), `rev`. Each drives a consecutive run of the one pixel space, in `n` order (see "Driving" below). A host with no table configured reports ONE implicit output built from its live data pin, protocol and colour order. |
 | `reverted` | **Absent unless a boot self-heal happened** (Gitea #822): `{"from_pixels":N,"heap_free":X}` — the stored shape left this board's heap at `X` bytes, under the firmware's runtime floor, so it was reverted to the board default and the device rebooted once. Say so: the shape on screen is not the one the user set. It survives the reboot and is cleared by the next successful `POST /api/layout`. `/api/status`'s `layout_reverted` is the one-bit form, for a client that polls status. See "A layout the board cannot serve" below. |
@@ -1286,7 +1286,7 @@ embedded so a client needs one fetch:
 
 A client that wants the index→coordinate mapping (a console preview showing
 "real wiring") has everything here: `kind` + `w`/`h` + the `matrix` block's
-`start`/`dir`/`snake`/`rot180`.
+`start`/`dir`/`snake`/`rot`.
 
 ### Panel arrangement and estimated refresh (HUB75, Gitea #475)
 
@@ -1304,16 +1304,23 @@ line; a *line* is a row of tiles when `dir` is `row` and a column when it is
   left-to-right / top-to-bottom, `tr` mirrors x, `bl` mirrors y, `br` both.
 - `snake` = 1 makes every **odd** line run back the other way (a serpentine
   chain, the usual way to wall-mount more than one row of panels).
-- `rot180` is a **line mask**, `0..3`: bit 1 (`1`, what every wall stored
-  before it was a mask) marks the tiles on the **odd lines as mounted rotated
-  180°** — how a serpentine wall is physically built, since the return row's
-  connectors face the other way; bit 2 (`2`) marks the **even lines, line 0
-  and so the first panel included**. The driver assumes which side the
-  ribbon enters tile 0 from (its first pixel lands at that tile's top-left);
-  `2` says it enters from the other side, i.e. the picture on the first panel
-  is upside-down, and `3` rotates every tile. Neither `start` (which only
-  places the tiles) nor bit 1 could say that before (Gitea #917). It is per
-  line, not per display.
+- `rot` says how the tiles are **mounted**, per line parity, in degrees
+  clockwise: `"rot":[<even>,<odd>]` in the JSON, `<even>/<odd>` on the wire,
+  each `0|90|180|270`. The **even** lines are line 0 and so the **first
+  panel**; the **odd** lines are a serpentine's return legs, which is how such
+  a wall is physically built (its connectors face the other way), so the
+  common wall is `0/180`. The driver assumes an upright tile — its first pixel
+  at the tile's top-left, its rows running left-to-right — and neither
+  `start` (which only places tiles) nor the old odd-lines-only flag could say
+  otherwise (Gitea #917, Jeremy's top-right panel mounted a quarter turn). A
+  first panel hung upside-down is `180/0`; a column of square tiles the ribbon
+  runs down is `90/…` or `270/…`, and a **quarter turn needs a square tile**
+  (`pw == ph`): the parser refuses `a tile turned 90° must be square`. The
+  wire also accepts the **legacy `0..3` mask** every wall stored before this
+  (`1` = odd lines 180°, `2` = even lines 180°, `3` = both), and writes a
+  180°-only arrangement back in that form — so a stored `matrix … 1 0` line is
+  byte-identical to what it was, and firmware from before #917 still parses
+  it. It is per line, not per display.
 
 **Two fields a panel board adds to the `matrix` block:**
 
@@ -1362,7 +1369,7 @@ against 76.9–77.0 / 153.5–154.0.
   change. A UI offers the ratios the way a module prints them — `1/32`, `1/16`,
   `1/8`, `1/4`, those that divide `ph / 2` — marks the `ph / 2` one as the usual
   one, and sends `0` for it; never the words "board default".
-- **Reboot to apply.** `cols rows start dir snake rot180 scan` are
+- **Reboot to apply.** `cols rows start dir snake rot scan` are
   `reboot_required` everywhere; on a **HUB75 board** so are `pw`/`ph`, whose
   DMA framebuffer is allocated from the arrangement at boot. On a strip-built
   matrix those two only resize the grid and apply live.
@@ -1569,7 +1576,7 @@ Blank lines and `#` comments are ignored; line order is free; **at most one**
 
 ```text
 strip <pixels>
-matrix <pw> <ph> <cols> <rows> <tl|tr|bl|br> <row|col> <snake 0|1> <rot180 0..3> [<scan>]
+matrix <pw> <ph> <cols> <rows> <tl|tr|bl|br> <row|col> <snake 0|1> <rot: E/O degrees | 0..3> [<scan>]
 map [grid <w> <h> | <dims> <raw16.16…>]
 panel <planes> <8|10|12|15|20|24|30> <shiftreg|fm6126a|icn2038s|dp3246> <blank> [<lsb>]
 out <n> <pin> <sk9822|ws2812> <rgb|rbg|grb|gbr|brg|bgr> <count> [rev]
@@ -1733,7 +1740,7 @@ protocol latch tail, not a second frame. docs/boards.md has the full table.
 | the map, and the `proj*` defaults | **live** |
 | `proj` (the running pattern's override) | **live**, and never stored |
 | `matrix` `pw` `ph` | **live** on a strip-built matrix — they only resize the grid — and **reboot** on a HUB75 board, whose DMA framebuffer is allocated from them at boot (#525) |
-| `matrix` `cols` `rows` `start` `dir` `snake` `rot180` `scan` | **reboot** — the chain remap is built once (#475) |
+| `matrix` `cols` `rows` `start` `dir` `snake` `rot` `scan` | **reboot** — the chain remap is built once (#475) |
 | `panel` `planes` `clock_mhz` `chip` | **reboot** — the DMA descriptors, the LCD_CAM clock and the chip's init sequence are all set up once, at boot (#525). The field a client notes as pending is `panel`. |
 | `panel` `blank` | **live** — control bits in the framebuffer words, which the packer never writes, so the output task re-formats each buffer in place and the new blanking is on the panel within a frame (#778). `live.blank` follows one frame later; a blanking that would leave no OE-active clock in the running row block is refused at POST time |
 | `out` `count` (the split) | **live** on every output — the run boundaries are re-read from the Layout each frame, so an output whose run shrank drives fewer pixels at once and one the table no longer covers goes dark |

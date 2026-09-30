@@ -315,7 +315,10 @@ export interface LayoutWire {
     snake: number;
     /** A 0..3 line mask (Gitea #917): bit 1 = odd lines' tiles mounted
      *  upside-down, bit 2 = even lines', the first panel included. */
-    rot180: number;
+    /** Mount rotation of the tiles in degrees clockwise, `[even lines, odd
+     *  lines]` — line 0 and so the first panel is even (Gitea #917). A
+     *  quarter turn is only legal on a square tile. */
+    rot: [number, number];
     /** HUB75 scan divisor; 0 = the board's own. */
     scan: number;
     /** The HOST's estimated rescan rate for this chain, Hz (Gitea #475).

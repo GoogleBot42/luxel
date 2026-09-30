@@ -96,6 +96,17 @@
     { v: "row", label: "horizontal" },
     { v: "col", label: "vertical" },
   ];
+  /** Mount rotations (Gitea #917): degrees clockwise a line's tiles are
+   *  turned from upright. A quarter turn swaps a tile's axes, so it is only
+   *  offered on a square tile; a strip-built matrix has no notion of a
+   *  turned tile beyond upside-down. */
+  const ROTS: { v: string; label: string; quarter: boolean }[] = [
+    { v: "0", label: "upright", quarter: false },
+    { v: "90", label: "90° ↻", quarter: true },
+    { v: "180", label: "180°", quarter: false },
+    { v: "270", label: "270° ↻", quarter: true },
+  ];
+  const ROTS_HALF = ROTS.filter((r) => !r.quarter);
   const KIND_LABEL: Record<LayoutKind, string> = {
     strip: "Strip",
     matrix: "Matrix",
@@ -193,7 +204,9 @@
     start: Corner;
     dir: RunDir;
     snake: number;
-    rot180: number;
+    /** Mount rotation in degrees for the even lines (the first panel) and
+     *  the odd lines (Gitea #917). */
+    rot: [number, number];
     scan: number;
     est_hz?: number;
     drive?: number;
@@ -208,7 +221,7 @@
         start: "tl",
         dir: "row",
         snake: 0,
-        rot180: 0,
+        rot: [0, 0],
         scan: 0,
       }
     );
@@ -240,7 +253,7 @@
 
   function matrixLine(patch: Partial<ReturnType<typeof matrixOf>>): string {
     const n = { ...m, ...patch };
-    return `matrix ${n.pw} ${n.ph} ${n.cols} ${n.rows} ${n.start} ${n.dir} ${n.snake} ${n.rot180} ${n.scan}`;
+    return `matrix ${n.pw} ${n.ph} ${n.cols} ${n.rows} ${n.start} ${n.dir} ${n.snake} ${n.rot[0]}/${n.rot[1]} ${n.scan}`;
   }
 
   function setMatrix(patch: Partial<ReturnType<typeof matrixOf>>): void {
@@ -667,40 +680,39 @@
           >
           serpentine
         </label>
-        <!-- `rot180` is a line MASK (Gitea #917): bit 1 = the odd lines (the
-             serpentine's return legs), bit 2 = the even lines, the first
-             panel included — the driver assumes where the ribbon enters
-             tile 0, and this is the only way to say it enters from the
-             other side. Two checkboxes, one bit each. -->
+        <!-- How the tiles are MOUNTED (Gitea #917): `rot` is degrees clockwise
+             for the even lines (the first panel's) and the odd lines (a
+             serpentine's return legs). The driver assumes an upright tile;
+             the first panel hung upside-down, or a quarter turn so the ribbon
+             runs down a column, is stated here. A quarter turn needs a square
+             tile, so 90°/270° are only offered when pw == ph. -->
         {#if vis.rotFirst}
-          <label class="ckrow">
-            <input
-              class="cbxin"
-              type="checkbox"
-              data-role="layout-rot-first-input"
-              checked={(m.rot180 & 2) !== 0}
-              on:change={(e) => setMatrix({ rot180: (m.rot180 & 1) | (e.currentTarget.checked ? 2 : 0) })}
-            />
-            <span class="cbx" class:on={(m.rot180 & 2) !== 0} data-role="layout-rot-first"
-              >{(m.rot180 & 2) !== 0 ? "✓" : ""}</span
-            >
-            {vis.rot180 ? "first row upside-down" : "panel upside-down"}
-          </label>
+          <span class="pair">
+          <span class="dim tiny">{vis.rot180 ? "first row" : "panel"} turned</span>
+          <select
+            class="w86"
+            data-role="layout-rot-first"
+            value={String(m.rot[0])}
+            on:change={(e) => setMatrix({ rot: [Number(e.currentTarget.value), m.rot[1]] })}
+          >
+            {#each ROTS as r}<option value={r.v} disabled={r.quarter && m.pw !== m.ph}>{r.label}</option>{/each}
+          </select>
+          </span>
         {/if}
         {#if vis.rot180}
-          <label class="ckrow">
-            <input
-              class="cbxin"
-              type="checkbox"
-              data-role="layout-rot180-input"
-              checked={(m.rot180 & 1) !== 0}
-              on:change={(e) => setMatrix({ rot180: (m.rot180 & 2) | (e.currentTarget.checked ? 1 : 0) })}
-            />
-            <span class="cbx" class:on={(m.rot180 & 1) !== 0} data-role="layout-rot180"
-              >{(m.rot180 & 1) !== 0 ? "✓" : ""}</span
-            >
-            rotate alternate rows 180°
-          </label>
+          <span class="pair">
+          <span class="dim tiny">alternate rows turned</span>
+          <select
+            class="w86"
+            data-role="layout-rot180"
+            value={String(m.rot[1])}
+            on:change={(e) => setMatrix({ rot: [m.rot[0], Number(e.currentTarget.value)] })}
+          >
+            {#each vis.rotFirst ? ROTS : ROTS_HALF as r}<option value={r.v} disabled={r.quarter && m.pw !== m.ph}
+                >{r.label}</option
+              >{/each}
+          </select>
+          </span>
         {/if}
       </div>
     </div>
@@ -846,7 +858,7 @@
         start={m.start}
         dir={m.dir}
         snake={m.snake === 1}
-        rot180={m.rot180}
+        rot={m.rot}
         outputCounts={outputs.map((o) => o.count)}
         drive={driven}
       />
@@ -862,7 +874,7 @@
     start={m.start}
     dir={m.dir}
     snake={m.snake === 1}
-    rot180={m.rot180}
+    rot={m.rot}
     drive={driven}
   />
 {/if}

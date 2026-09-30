@@ -1463,7 +1463,7 @@ try {
     (await page.$('[data-role="refresh"]')) === null,
   );
   check(
-    "layout: a strip-built matrix has no 'panel upside-down' checkbox (#917)",
+    "layout: a strip-built matrix has no 'first row turned' control (#917)",
     (await page.$('[data-role="layout-rot-first"]')) === null,
   );
   // An arrangement change is stored-and-reported until a reboot builds it
@@ -4589,29 +4589,30 @@ try {
       check("panel: four chained panels go amber under 100 Hz", amber && hz4 === "29 Hz", hz4);
       const dark = await hubPage.$('[data-role="layout-dark"]');
       check("panel: the mirror drives the whole chain, so nothing is dark", dark === null);
-      // The first panel's orientation is a stored fact, not an assumption
-      // (Gitea #917): a panel board offers "first row upside-down", which
-      // sets bit 2 of the `rot180` line mask and leaves bit 1 (alternate
-      // rows) alone, and the chain picture marks line 0's tiles with the ↻.
-      // A strip-built matrix says the same thing with its start corner and
-      // never shows the box (checked in the strip flow above).
+      // How the tiles are MOUNTED is a stored fact, not an assumption (Gitea
+      // #917): a panel board offers a rotation per line parity — "first row
+      // turned" (`rot[0]`, the first panel's line) and "alternate rows
+      // turned" (`rot[1]`) — in quarter turns, and the chain picture marks
+      // every turned tile with its degrees. A strip-built matrix has no
+      // "first row" control (checked in the strip flow above).
+      const rotSel = async (role, deg) => {
+        await hubPage.select(`[data-role="${role}"]`, String(deg));
+        await sleep(800);
+        return (await (await fetch(`${HUB}/api/layout`)).json()).matrix?.rot ?? null;
+      };
       check(
-        "panel: 'first row upside-down' is offered (#917)",
+        "panel: 'first row turned' is offered (#917)",
         (await hubPage.$('[data-role="layout-rot-first"]')) !== null,
       );
-      await hubPage.$eval('[data-role="layout-rot-first"]', (el) => el.click());
-      await sleep(800);
-      const rotMask = (await (await fetch(`${HUB}/api/layout`)).json()).matrix?.rot180;
-      check("panel: ticking it stores rot180 2 — the even lines' bit", rotMask === 2, String(rotMask));
-      const rotMarks = await hubPage.$$eval('[data-role="arrangement"] text.rot', (ts) => ts.length);
-      check("panel: the chain picture marks the first line's two tiles", rotMarks === 2, String(rotMarks));
-      await hubPage.$eval('[data-role="layout-rot180"]', (el) => el.click());
-      await sleep(800);
-      const rotBoth = (await (await fetch(`${HUB}/api/layout`)).json()).matrix?.rot180;
-      check("panel: 'alternate rows' adds bit 1 without clearing bit 2", rotBoth === 3, String(rotBoth));
-      await hubPage.$eval('[data-role="layout-rot-first"]', (el) => el.click());
-      await hubPage.$eval('[data-role="layout-rot180"]', (el) => el.click());
-      await sleep(800);
+      const rot90 = await rotSel("layout-rot-first", 90);
+      check("panel: a quarter turn on the first row stores rot [90, 0]", JSON.stringify(rot90) === "[90,0]", JSON.stringify(rot90));
+      const rotMarks = await hubPage.$$eval('[data-role="arrangement"] text.rot', (ts) => ts.map((t) => t.textContent.trim()));
+      check("panel: the chain picture marks the first line's two tiles with 90°", JSON.stringify(rotMarks) === '["↻90°","↻90°"]', JSON.stringify(rotMarks));
+      const rotBoth = await rotSel("layout-rot180", 270);
+      check("panel: the alternate rows keep their own turn: [90, 270]", JSON.stringify(rotBoth) === "[90,270]", JSON.stringify(rotBoth));
+      const rotBack = await rotSel("layout-rot-first", 0);
+      check("panel: clearing the first row leaves the odd lines alone: [0, 270]", JSON.stringify(rotBack) === "[0,270]", JSON.stringify(rotBack));
+      await rotSel("layout-rot180", 0);
       const note = await hubPage
         .waitForFunction(
           () => document.querySelector('[data-role="reboot-bar-text"]')?.textContent?.trim() ?? false,

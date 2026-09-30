@@ -95,11 +95,11 @@ export interface SettingsVisibility {
   wiringRow: boolean;
   /** …and that row reads as pixel wiring rather than a panel chain. */
   wiringIsPixels: boolean;
-  /** Rotate alternate rows 180° — only meaningful with tiles to alternate. */
+  /** The odd lines' mount rotation (`rot[1]`) — only with tiles to alternate. */
   rot180: boolean;
-  /** The first line's tiles hang upside-down (bit 2 of `rot180`, Gitea #917):
-   *  a HUB75 board assumes which side the ribbon enters tile 0 from, and this
-   *  is the one way to say it enters from the other. A strip-built matrix
+  /** The first line's mount rotation (`rot[0]`, Gitea #917):
+   *  a HUB75 board assumes an upright tile 0, and this is the one way to say
+   *  it hangs upside-down or a quarter turn. A strip-built matrix
    *  says the same thing with its start corner, so it is panel-only. */
   rotFirst: boolean;
   /** The arrangement SVG: panel grid, chain path, per-tile scan direction. */
@@ -630,8 +630,8 @@ export interface ChainTile {
   row: number;
   /** Which LINE of the chain this tile is on: a row of tiles under
    *  `dir: "row"`, a column under `dir: "col"`. `snake` reverses the odd
-   *  ones, and the `rot180` mask marks the odd (bit 1) and/or even (bit 2)
-   *  lines' tiles as mounted upside-down (Gitea #917). */
+   *  ones, and `rot` says how each parity's tiles are mounted — degrees
+   *  clockwise, `[even lines, odd lines]` (Gitea #917). */
   line: number;
   /** This tile's scan runs right-to-left (the snake's return leg, or a
    *  start corner on the right), i.e. it is drawn mirrored. */

@@ -22,12 +22,11 @@
   export let start: Corner;
   export let dir: RunDir;
   export let snake: boolean;
-  /** The `rot180` line mask (Gitea #917): bit 1 = odd lines mounted upside-down,
-   *  bit 2 = even lines, tile 1 included. A boolean from before the mask reads
-   *  as bit 1. */
-  export let rot180: number | boolean = 0;
-  $: rotMask = typeof rot180 === "boolean" ? (rot180 ? 1 : 0) : rot180;
-  const rotated = (line: number, mask: number): boolean => (mask & (line % 2 === 1 ? 1 : 2)) !== 0;
+  /** Mount rotation in degrees clockwise, `[even lines, odd lines]` — tile 1's
+   *  line is even (Gitea #917). Drawn on every turned tile as its degrees. */
+  export let rot: readonly [number, number] = [0, 0];
+  // reactive on `rot` (a helper closing over the prop would not re-run)
+  $: turns = [0, 1].map((k) => (((rot[k] ?? 0) % 360) + 360) % 360);
   /** Tiles per output, in chain order. `[]` / one entry = one undivided run. */
   export let outputCounts: readonly number[] = [];
   /** Leading tiles the board's framebuffer can actually shift out (`drive`,
@@ -230,8 +229,10 @@
           class="scan"
           marker-end="url(#arr-scan)"
         />
-        {#if rotated(t.line, rotMask)}
-          <text x={cell.x0 + t.col * cell.w + 9} y={cell.y0 + t.row * cell.h + 20} class="rot">↻</text>
+        {#if turns[t.line % 2] !== 0}
+          <text x={cell.x0 + t.col * cell.w + 9} y={cell.y0 + t.row * cell.h + 20} class="rot"
+            >↻{turns[t.line % 2]}°</text
+          >
         {/if}
       {/each}
       {#each runs as r, i (i)}

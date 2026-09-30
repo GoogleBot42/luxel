@@ -1260,7 +1260,7 @@ impl Hub75Ring {
         );
         let remap = build_remap(&m, g);
         println!(
-            "hub75-ring: {}x{} tiles of {}x{} from {} {}{}{}, framebuffer {}x{} scan 1/{}, remap {}, est {} Hz",
+            "hub75-ring: {}x{} tiles of {}x{} from {} {}{} rot {}/{}, framebuffer {}x{} scan 1/{}, remap {}, est {} Hz",
             m.cols,
             m.rows,
             m.pw,
@@ -1268,7 +1268,8 @@ impl Hub75Ring {
             m.start.as_str(),
             m.dir.as_str(),
             if m.snake { " snake" } else { "" },
-            [" rot180 0", " rot180 1", " rot180 2", " rot180 3"][usize::from(m.rot180 & 3)],
+            u32::from(m.rot[0]) * 90,
+            u32::from(m.rot[1]) * 90,
             w,
             h,
             g.rows,
