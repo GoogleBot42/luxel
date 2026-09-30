@@ -63,7 +63,7 @@ setPalette([
   1.0,  0.75, 0.45, 0.95
 ])
 
-var MAXC = 128           // widest lattice we keep column tables for
+var MAXC = 256           // widest lattice we keep column tables for (a 4x1 chain of 64-wide panels)
 var CANVAS_MAX = 1024    // cells the coarse path's two canvases hold
 
 var band = array(MAXC)   // curtain height per column, rebuilt every frame
