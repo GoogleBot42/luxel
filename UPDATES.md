@@ -1,5 +1,24 @@
 # Update log
 
+## 2026-09-30 — HUB75 chain: tile 0 owns the LAST driver block, not the first (#917, the swapped columns)
+
+Jeremy, on the rotation build: "With the current config, it looks like the
+right and left columns are swapped." The remap gave chain tile `p` driver
+block `p` — but the first block of a row is the one that travels through
+every panel's shift register to the far END of the chain, and the last block
+stays on the IN panel. On his 2x2 `tr col` snake (IN top-right, down, back up
+the left) the top-left panel therefore showed the top-right cell and vice
+versa, rows fine. A 4x1 wired `tl row` with IN on the right had hidden it
+since #475, because there the far end IS tile 0. `build_lut` now hands tile
+`p` block `drive - 1 - p`; `panel_cell`, `driven_panels` and `drive` keep
+counting from IN, as the UI's picture does. Consequence worth knowing: a row
+of upright panels with IN on the right is `tr row` (the identity), not
+`tl row` — so the docs' "two 32-wide tiles wired `tl row` are the identity"
+example flips to `tr row`, and Jeremy's old 4x1 line would read `tr row`. Tests:
+the IN panel owns the last block on his exact arrangement, `tr row` of upright
+panels is the identity, the pack-vs-rearranged-frame test and the
+far-corner tests re-derived. Deployed to the Seengreat (both slots).
+
 ## 2026-09-30 — the first HUB75 panel's orientation was assumed: `rot180` becomes `rot`, a mount rotation per line (#917)
 
 Jeremy: "It seems to assume the input direction for my first panel and there

@@ -3880,7 +3880,10 @@ table is built unconditionally and then checked: if `lut[i] == i` for every
 driver pixel it is freed on the spot and the driver composes byte-for-byte
 the code it composed before. That covers one upright tile — every device
 shipped so far — *and* arrangements that merely happen to come out
-row-major, such as two 32-wide tiles wired `tl row`, which a
+row-major, such as two 32-wide tiles wired `tr row` (IN on the right, the
+way the data shifts — it was `tl row` until the block order was put right
+on 2026-09-30, #917, so the measured row below was taken with the tiles
+the other way round), which a
 `cols == 1 && rows == 1` test would have missed.
 
 **Measured on the bench panel** (Seengreat 64×64, 7 planes / 30 MHz,
