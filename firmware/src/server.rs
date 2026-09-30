@@ -556,27 +556,37 @@ fn device_caps(geom: &luxel_core::caps::Geom, pixels: u32) -> luxel_core::caps::
 ///
 /// This is the ONE number the scene compositor, the playlist transition rule
 /// and the editor's "N of N used" note all read, so they cannot disagree.
+///
+/// Every call folds a LIVE `load_base` into `shared::HEAP_BASE_EWMA` and
+/// re-derives the count from that average with hysteresis
+/// (`luxel_core::caps::advertise`), so the number follows the heap the board
+/// really has without flapping on poll traffic — see the static's doc for
+/// the two measurements that shaped it (2026-09-30, #709 follow-on, #905).
 pub fn scene_layer_cap() -> u8 {
-    use luxel_core::budget::{load_base, load_headroom};
-    let heap = esp_alloc::HEAP.free() as usize;
-    let resident = crate::shared::ENGINE_HEAP.load(Ordering::Relaxed) as usize;
+    use crate::shared::{ENGINE_HEAP, HEAP_BASE_EWMA, LAYERS_ADVERTISED};
+    let sample = luxel_core::budget::load_base(
+        esp_alloc::HEAP.free() as usize,
+        ENGINE_HEAP.load(Ordering::Relaxed) as usize,
+    );
+    let ewma = luxel_core::caps::fold_base(HEAP_BASE_EWMA.load(Ordering::Relaxed) as usize, sample);
+    HEAP_BASE_EWMA.store(ewma as u32, Ordering::Relaxed);
     let ceiling = if cfg!(feature = "small-chip") {
         2
     } else {
         luxel_core::caps::MAX_LAYERS
     };
-    // The render task's HIGH-WATER `load_base`, not a reading taken here:
-    // see `shared::HEAP_BASE_MAX` for the two measurements that made that
-    // necessary. Before the first load there is no mark yet, so fall back to
-    // the local reconstruction (which is exact while nothing is resident).
-    let mark = crate::shared::HEAP_BASE_MAX.load(Ordering::Relaxed) as usize;
-    let base = if mark > 0 { mark } else { load_base(heap, resident) };
-    luxel_core::caps::layers_for_headroom(
+    let prev = LAYERS_ADVERTISED.load(Ordering::Relaxed);
+    let n = luxel_core::caps::advertise(
+        prev,
+        ewma,
         PIXEL_COUNT.load(Ordering::Relaxed),
-        load_headroom(base),
         ceiling,
         luxel_core::arena::frames_external(),
-    )
+    );
+    if n != prev {
+        LAYERS_ADVERTISED.store(n, Ordering::Relaxed);
+    }
+    n
 }
 
 
@@ -932,6 +942,15 @@ fn status_json() -> luxel_core::jsonview::Chunks {
     }
     push_piece(&mut out, ",\"engine_heap\":");
     push_u32(&mut out, crate::shared::ENGINE_HEAP.load(Ordering::Relaxed));
+    // The smoothed `heap_free + engine_heap` `caps.layers` is advertised
+    // from (`shared::HEAP_BASE_EWMA`, 0 until something asked for the
+    // caps) — reported so a flapping or stuck count can be read off the
+    // number behind it.
+    push_piece(&mut out, ",\"load_base\":");
+    push_u32(
+        &mut out,
+        crate::shared::HEAP_BASE_EWMA.load(Ordering::Relaxed),
+    );
     // Resident engines behind that sum (Gitea #479): 1 for a plain pattern,
     // one per PATTERN layer for a scene, 0 with nothing loaded.
     push_piece(&mut out, ",\"engines\":");

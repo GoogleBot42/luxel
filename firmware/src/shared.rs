@@ -336,8 +336,10 @@ pub static RESCANS: AtomicU32 = AtomicU32::new(0);
 
 /// Heap the CURRENTLY loaded pattern's engine occupies, in bytes — measured
 /// at load time as free-heap-before minus free-heap-after, with no engine
-/// resident on either side of the subtraction. 0 = nothing loaded, or the
-/// last load couldn't be measured.
+/// resident on either side of the subtraction. 0 = nothing loaded, the
+/// last load couldn't be measured, or the stack is being torn down for a
+/// rebuild (`forget_engine_heap` in main.rs zeroes it BEFORE the drop, so a
+/// live `heap_free + engine_heap` never counts the freed engines twice).
 ///
 /// Reported as `/api/status` `engine_heap` purely so the playground can
 /// predict the NEXT load correctly. The render task drops the outgoing
@@ -981,41 +983,46 @@ pub fn wall_now_local() -> Option<i64> {
     Some(base + at.elapsed().as_secs() as i64 + TZ_MINUTES.load(Ordering::Relaxed) as i64 * 60)
 }
 
-/// High-water `budget::load_base` (free heap + every resident engine) since
-/// boot, in bytes — the board's steady-state DRAM budget, which is what
-/// `caps.layers` is derived from (Gitea #479).
+/// Smoothed LIVE `budget::load_base` (free heap + every resident engine),
+/// in bytes — the board's steady DRAM budget, which is what `caps.layers`
+/// is derived from (Gitea #479; this mechanism since 2026-09-30, the #709
+/// follow-on). `/api/status` reports it as `load_base`.
 ///
-/// Written by the render task from [`note_engine_heap`]'s `free_before`,
-/// which is sampled with NO engine resident — so it is `load_base` measured
-/// rather than reconstructed, and it is never taken mid-swap.
+/// Folded on EVERY `server::scene_layer_cap()` call from
+/// `load_base(HEAP.free(), ENGINE_HEAP)` by `luxel_core::caps::fold_base`
+/// (7/8 old + 1/8 new, seeded by the first reading; 0 = no reading yet),
+/// and [`LAYERS_ADVERTISED`] then moves only with a margin to spare
+/// (`luxel_core::caps::advertise`). It replaced `HEAP_BASE_MAX`, a boot-time
+/// high-water that nothing else read, which answered the two measurements
+/// the Seengreat panel made on 2026-09-24:
 ///
-/// Two measurements on the Seengreat panel (2026-09-24) forced this shape:
-///
-/// * A LIVE reading is not usable for an advertised capability. Four
-///   *identical* pattern activations reported `heap_free` 18,904 / 23,000 /
-///   33,332 / 37,508 — ±18 KB of WiFi and HTTP transient against a ~16 KB
-///   per-layer cost, so the number flapped 1 ↔ 2 with nothing but poll
-///   traffic. A maximum converges on the idle figure in a few samples and
-///   cannot over-promise on a board that never reaches it.
-/// * Reconstructing it in the HTTP handler as `heap_free + engine_heap`
-///   double-counts during a swap: a `/api/status` landing between the
-///   teardown and the build sees the freed heap AND the outgoing engine's
-///   `engine_heap`, and reads ~15 KB too high — which the maximum then
-///   keeps forever. Hence the render task publishes it instead.
-pub static HEAP_BASE_MAX: AtomicU32 = AtomicU32::new(0);
+/// * A LIVE reading flapped: four *identical* pattern activations reported
+///   `heap_free` 18,904 / 23,000 / 33,332 / 37,508 — ±18 KB of WiFi and HTTP
+///   transient against a ~16 KB per-layer cost, so the count went 1 ↔ 2 with
+///   nothing but poll traffic. The average leaves ±1.2 KB of that ripple and
+///   the 2 KiB hysteresis absorbs it; #905 (transients to PSRAM) is what
+///   made the underlying number steady enough for that to be true, and with
+///   frames external a layer is 4 KB, not 16. A high-water, by contrast,
+///   never let go of a transient peak and never saw headroom a boot-time
+///   sample missed.
+/// * Reconstructing it as `heap_free + engine_heap` double-counted during a
+///   swap: a read between the teardown and the build saw the freed heap AND
+///   the outgoing engine's `engine_heap`, ~15 KB too high. The render task
+///   now zeroes [`ENGINE_HEAP`] BEFORE every hard teardown
+///   (`forget_engine_heap` in main.rs), so a read in that window
+///   reconstructs `heap_free + 0`, which is the truth. (While the incoming
+///   stack builds it reads LOW until `note_engine_heap` stores the new cost
+///   — milliseconds, and the conservative direction.) A crossfade keeps the
+///   outgoing engine alive by design and does not zero: for its few seconds
+///   `ENGINE_HEAP` covers one engine of the two, so the reading dips by the
+///   other, which is also the conservative direction and 1/8-weighted.
+pub static HEAP_BASE_EWMA: AtomicU32 = AtomicU32::new(0);
 
-/// Fold a fresh `load_base` reading into [`HEAP_BASE_MAX`] and return the
-/// mark. load+store rather than `fetch_max`: rv32imc (the C3) has no atomic
-/// RMW, and a lost update only delays convergence by one sample.
-pub fn note_heap_base(v: u32) -> u32 {
-    let m = HEAP_BASE_MAX.load(Ordering::Relaxed);
-    if v > m {
-        HEAP_BASE_MAX.store(v, Ordering::Relaxed);
-        v
-    } else {
-        m
-    }
-}
+/// The `caps.layers` this device last advertised (0 = never asked) — the
+/// hysteresis state [`HEAP_BASE_EWMA`] is compared against. Plain load and
+/// store on both statics, never an RMW: rv32imc (the C3) has no atomic RMW,
+/// and a lost update between two concurrent callers only costs one fold.
+pub static LAYERS_ADVERTISED: AtomicU8 = AtomicU8::new(0);
 
 /// The control plane's copy of the eight text slots (Gitea #485).
 ///

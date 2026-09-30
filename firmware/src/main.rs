@@ -1225,13 +1225,26 @@ pub(crate) fn try_budgeted_layer(
 fn note_engine_heap(free_before: usize) {
     let now = esp_alloc::HEAP.free() as usize;
     shared::ENGINE_HEAP.store(free_before.saturating_sub(now) as u32, Ordering::Relaxed);
-    // `free_before` was sampled with NO engine resident, which is exactly
-    // `budget::load_base` — measured, not reconstructed from two numbers
-    // that overlap during a swap. That overlap is why `caps.layers` must not
-    // recompute it in the HTTP handler: a `/api/status` landing between the
-    // teardown and the build sees the freed heap AND the outgoing engine's
-    // cost, and reads 15 KB too high (seen on the panel, 2026-09-24).
-    shared::note_heap_base(free_before as u32);
+}
+
+/// Zero [`shared::ENGINE_HEAP`] because the resident stack is about to be
+/// torn down for good. Call it BEFORE the drop: `caps.layers` reconstructs
+/// `load_base` live as `heap_free + engine_heap` (`server::scene_layer_cap`),
+/// and a read landing after the drop but before this store would count the
+/// freed heap AND the outgoing engines — ~15 KB too high on the panel
+/// (2026-09-24). Zeroed first, a read in the window sees `heap_free + 0`,
+/// which is at worst a little LOW until the drop lands and exactly right
+/// after it. The next successful build's `note_engine_heap` restores the
+/// real figure; a failed one leaves 0, which is what "nothing resident"
+/// reads as.
+///
+/// Not on a crossfade: its outgoing stack stays alive as the blend source by
+/// design. For the fade `ENGINE_HEAP` keeps the outgoing stack's measurement
+/// (one of the two resident, so the live `load_base` reads low by the
+/// other), and after `drop_prev` it stands in for the incoming one — the
+/// #287 approximation, unchanged (see `shared::HEAP_BASE_EWMA`).
+fn forget_engine_heap() {
+    shared::ENGINE_HEAP.store(0, Ordering::Relaxed);
 }
 
 /// Drop the crossfade's outgoing engine AND release the arena pin that kept
@@ -1327,6 +1340,7 @@ fn install_scene(
     );
     drop_prev(prev, prev_scene); // never THREE stacks
     if ms == 0 {
+        forget_engine_heap();
         *engine = None;
         *scene = None;
     } else {
@@ -1724,6 +1738,7 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                     // Envelope-validated by the sender. Drop the outgoing
                     // engine BEFORE decoding the new program — peak heap
                     // lands here, where the most is free.
+                    forget_engine_heap();
                     engine = None;
                     scene = None; // a bare pattern replaces the whole stack
                     drop_prev(&mut prev, &mut prev_scene);
@@ -1782,6 +1797,7 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                     // free the engine's heap for whoever asked (OTA flash
                     // phase, or a pattern upload that couldn't allocate);
                     // the next Code/Crossfade revives rendering
+                    forget_engine_heap();
                     engine = None;
                     scene = None;
                     drop_prev(&mut prev, &mut prev_scene);
@@ -1810,6 +1826,7 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                 Msg::Config(count) => {
                     let count = count.clamp(1, MAX_PIXELS);
                     PIXEL_COUNT.store(count, Ordering::Relaxed);
+                    forget_engine_heap();
                     engine = None; // free before re-decoding (peak heap)
                     // Every layer engine is built at the OLD pixel count and
                     // the compositor's scratch is grid-sized: a live resize
@@ -1860,6 +1877,7 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                             // engines (Freeze semantics — the strip holds its
                             // last frame) and retry; the next Code/Crossfade
                             // revives rendering
+                            forget_engine_heap();
                             engine = None;
                             scene = None;
                             drop_prev(&mut prev, &mut prev_scene);
@@ -1890,6 +1908,7 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                     // into it would need four resident engines.
                     let ms = transition_ms(ms, cur_pattern_layers(&scene, &engine), 1);
                     if ms == 0 {
+                        forget_engine_heap();
                         engine = None;
                         scene = None;
                     }
@@ -2092,6 +2111,7 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                 }
             } else {
                 // cleared → rebuild without a map (do not re-mark dirty)
+                forget_engine_heap();
                 drop(engine.take()); // free before re-decoding (peak heap)
                 engine = rebuild();
             }
