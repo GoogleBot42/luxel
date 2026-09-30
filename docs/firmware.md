@@ -2064,7 +2064,8 @@ the board's arena is up:
   heap **silently** when the arena is full, and that fallback is exactly the
   allocation this gate exists to keep off the internal heap. What the
   internal heap must still hold is the residue: `jit::emit_int_need`,
-  **`words × 6 + fns × 48 + 1,024` bytes**, under the same `COMPILE_FLOOR`.
+  **`words × 3 + fns × 24 + 1,536` bytes** (`words × 6 + fns × 48 + 1,024`
+  until #905, below), under the same `COMPILE_FLOOR`.
   The residue is the verifier's per-branch-target `BTreeMap` nodes — a
   `BTreeMap` has no allocator parameter, so its nodes cannot be routed — plus
   the per-depth scratch that stayed internal on purpose (above) and the
@@ -2119,6 +2120,22 @@ working set actually want is arena now, not heap. `compile_us` 12,714
 on the first activation and 9,191 on a re-activation; no `no-memory` refusal,
 no `vmerr`, no reboot. The full rows, the second scene and the fps finding
 that came with them are in docs/boards.md "JIT on metal".
+
+**2026-09-30: what the residue actually is, and a tighter rule** (Gitea #905,
+site 1). The per-depth scratch was measured by routing it through the arena
+behind a feature flag and counting: it is **~150 B** of a compile's internal
+residue (115 B on average across the library, 188 B at most), and moving it
+cost 7,488 B of S3 flash (`kinds::walk_fn` +6,801 B), so it stays where it
+is. The rest — **~3.8 KB** of `2d-fireworks-fade`'s 4,122 B peak — is
+`walk_fn`'s per-branch-target `BTreeMap` nodes (plus ~180 B of `FnView`
+table). No allocator change can move those, since a `BTreeMap` takes none;
+a flat map like `StackMap` could (Gitea #909). The residue rule was refitted
+to what master ships: **`words × 3 + fns × 24 + 1,536`** (was
+`words × 6 + fns × 48 + 1,024`, whose tightest pattern used 72 %). The binding
+patterns are small ones, so the margin sits in the fixed term: tightest
+`novas` (2,844 B) at 83 %. It charges `snake-2d` 5,247 B instead of 8,446 B,
+`2d-fireworks-fade` 8,229 B instead of 14,410 B, and
+`music-sequencer-for-v3-only` 11,898 B instead of 21,748 B.
 
 ### The call, and the stack floor
 

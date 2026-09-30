@@ -50,17 +50,26 @@ const FIXED: usize = 1024;
 const CEILING: usize = 96 * 1024;
 
 /// The internal residue with an arena hook installed: bytes <= words *
-/// INT_PER_WORD + fns * INT_PER_FN + INT_FIXED. Fitted over `library/`
-/// 2026-09-26 (#671): the tightest pattern (`rainbow-smiley`) uses 72 % of
-/// it, the largest residue (`2d-fireworks-fade`, 4,122 B) 29 %. Mirrored
-/// by `EMIT_INT_PER_WORD`/`EMIT_INT_PER_FN`/`EMIT_INT_FIXED` in
-/// `firmware/src/jit.rs`. Per word because the verifier keeps one
-/// `BTreeMap` node and one operand-depth `Vec<Ab>` per branch target (kept
-/// off the arena on purpose — `kinds::walk_fn` says why), and per function
-/// for the `Placed` result.
-const INT_PER_WORD: usize = 6;
-const INT_PER_FN: usize = 48;
-const INT_FIXED: usize = 1024;
+/// INT_PER_WORD + fns * INT_PER_FN + INT_FIXED. Mirrored by
+/// `EMIT_INT_PER_WORD`/`EMIT_INT_PER_FN`/`EMIT_INT_FIXED` in
+/// `firmware/src/jit.rs`.
+///
+/// Refitted over `library/` 2026-09-30 (Gitea #905; the #671 rule was
+/// 6/48/1,024 and its tightest pattern used only 72 % of it). What the
+/// residue IS was measured then too: at the worst pattern's peak
+/// (`2d-fireworks-fade`, 4,122 B) ~3.8 KB is `kinds::walk_fn`'s
+/// per-branch-target `BTreeMap` nodes, ~180 B the `FnView` table, and the
+/// operand-depth `Vec<Ab>`s only ~150 B — routing those through the arena
+/// moved that much for 7.5 KB of flash, so they stay (`kinds::walk_fn`).
+/// Hence per word (branch targets scale with code) and per function (the
+/// `Placed` result). `words × 3 + fns × 24` is the tightest slope; the
+/// fixed term is 1,536 rather than the tightest 1,024 because the patterns
+/// that bind are SMALL ones (`novas`, `rainbow-smiley`): at 1,024 the
+/// tightest uses 97.5 %, at 1,536 it uses 83 %, for +512 B on every
+/// charge.
+const INT_PER_WORD: usize = 3;
+const INT_PER_FN: usize = 24;
+const INT_FIXED: usize = 1536;
 
 struct Counting;
 

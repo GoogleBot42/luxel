@@ -558,14 +558,14 @@ fn walk_fn(
     // word. A first visit records; a later visit compares (§2.4).
     //
     // Deliberately NOT arena vectors, unlike the `StackMap` this walk
-    // fills (Gitea #671): an abstract stack is a few bytes — the operand
-    // depth, ~2 at the median — and there is one per branch target, so
-    // the whole set is a couple of KB at most and is what
-    // `firmware/src/jit.rs`'s `emit_int_need` residue rule budgets. Routing
-    // them through the hook instead cost 6 KB of flash on every board
+    // fills (Gitea #671): an abstract stack is a few bytes (operand depth,
+    // ~2 at the median). Routing them through the hook cost 6 KB of flash
     // (allocator_api2 inlines its grow path at each of the ~40 push sites
-    // below) for nothing the panel needed; the per-WORD tables are what
-    // had to move, and they did.
+    // below), and #905 measured what it buys: ~150 B of a compile's
+    // internal residue. The rest of that residue (3.8 KB at the worst
+    // pattern) is THIS map's own nodes, one share per branch target — a
+    // `BTreeMap` takes no allocator, so only a flat map could move it.
+    // `firmware/src/jit.rs`'s `emit_int_need` budgets it.
     let mut states: BTreeMap<u32, (Vec<Ab>, Origin)> = BTreeMap::new();
     let mut cur: Option<Vec<Ab>> = Some(Vec::new());
     let mut at = 0usize;
