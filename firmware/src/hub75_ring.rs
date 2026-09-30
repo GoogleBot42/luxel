@@ -65,10 +65,11 @@
 //!   which is what makes the low-plane schedules watchable on the 2x1.
 //!   Below a full frame nothing changes: the stamps are kept but never
 //!   match, because the same slot holds a different row pair every pass.
-//! - **The ring is capped by the heap** ([`RING_HEAP_RESERVE`]): `ring_ms`
-//!   asks for a slack, the boot gives the slots that slack needs OR as many
-//!   as leave the boot floor plus a reserve for the engine, whichever is
-//!   fewer. A 4x1 at `ring_ms 3` asked for 22 slots of 4 KB and left 15 KB
+//! - **The ring is capped by the heap** ([`RING_HEAP_RESERVE`], or
+//!   [`RING_HEAP_RESERVE_FULL`] for a full-frame ask — `capped_slots`):
+//!   `ring_ms` asks for a slack, the boot gives the slots that slack needs
+//!   OR as many as leave the boot floor plus a reserve for the engine,
+//!   whichever is fewer. A 4x1 at `ring_ms 3` asked for 22 slots of 4 KB and left 15 KB
 //!   of heap (2026-09-29); `pass.ring.asked` beside `rows` says when the
 //!   cap bit.
 //! - **Core 0 copies, from the output task; core 1 steals** (design §6):

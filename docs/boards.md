@@ -3684,6 +3684,76 @@ Reading it:
   the ring's flash-write exposure with the cache live (#852 has the
   evaluation).
 
+### The full-frame ring reuses its slots, and the chain appends (2026-09-30, Gitea #896 / #897, after #905)
+
+Step 3 of the ring (#896): with `n == rows` slot `r` carries row pair `r` on
+every pass, so `write_frame` stamps each published frame with a generation
+and a claim whose slot already holds that row of that frame is advanced
+without a copy (`pass.ring.reused`). Step 4 (#897): the GDMA copy engine's
+descriptor pools became 16-entry rings with the owner check on, and a turn
+that finds a run in flight APPENDS its claims to the chain's tail and sets
+the restart bits (ESP-IDF's async-memcpy pattern) instead of waiting for the
+completion interrupt; a boot-time probe (a run appended while one copies, a
+run appended after the chain drained) turns `append` off if the DMA does
+not behave, and `POST /api/ring {"append":B}` / `{"minfill":N}` are the
+levers. And the heap cap grew a second tier: a FULL-FRAME ask may cut the
+reserve to 32 KB (`RING_HEAP_RESERVE_FULL`, the 16 KB that #905 freed by
+moving the HTTP bodies, the jsonview snapshots, the resume staging and the
+JIT compile into the arena), any smaller ring keeps 48 KB.
+
+Same bench shape as the sections above, one boot per row group, a quiet
+minute per row — but the load is Jeremy's `Test 2` (Aurora 2D + Infinite
+Snake v2, both native, plus a text and a sprite layer), which is heavier
+than the Aurora-only rows above, so compare `late` and `reused`, not fps,
+across sections. Master `7d3386f0` + the three ring commits; `pri` and
+`steal` on throughout.
+
+| chain, `lsb`, `ring_ms` | passes/s | ring (asked) | heap | copier | `late` | `reused` / claims a minute | fps | runs/min, appends, restarts |
+|---|---:|---:|---:|---|---:|---:|---:|---:|
+| 2x1 `lsb 7` 20 | 400 | **32** (32) | 26.5 KB | DMA, append | **0.040 %** (316) | 749k / 782k | 17 | 16.7k, 9.5k, 140 |
+| 2x1 `lsb 7` 20 | 400 | 32 | 26.5 KB | DMA, append off | 0.068 % | 750k / 782k | 17 | 11.5k, —, — |
+| 2x1 `lsb 7` 20 | 397 | 32 | 22–26 KB | CPU memcpy | 0.043 % | 751k / 782k | 17 | — |
+| 2x1 `lsb 3` 20 | 540 | **32** (32) | 26.8 KB | DMA, append | **0.17 %** (1,812) | 1,009k / 1,043k | 17 | 13.6k, 11.9k, 71 |
+| 2x1 `lsb 3` 20 | 545 | 32 | 28.5 KB | DMA, append off | 0.15 % | 1,010k / 1,043k | 17 | 5.4k, —, — |
+| 2x1 `lsb 15` 20 | 144 | 29 (32) | 16.5–20.6 KB (flat 32 KB reserve) | DMA, append | 0.014 % | 0 / 276k | 15–16 | 129k, 20.9k, 932 |
+| 4x1 `lsb 15` 3 | 204 | 16 (22) | 27 KB (flat 32 KB reserve) | DMA, append | 7.75 % | 0 / 391k | 7 | 293k, 167k, 1,451 |
+| 4x1 `lsb 15` 3 | 199 | 16 | 23–27 KB | DMA, append off | 8.36 % | 0 / 391k | 8 | 166k, —, — |
+| 4x1 `lsb 40` 6 (Jeremy's wall) | 70 | **12** (16) | **39.2 KB** | DMA, append | 0.004 % (6) | 0 / 138k | 9 | 99.8k, 7.2k, 592 |
+| 4x1 `lsb 40` 6, flat 32 KB reserve | 68 | 15 (16) | 24.9 KB | DMA, append | 0.0007 % (1) | 0 / 138k | 9 | 88.8k, 7.3k, 489 |
+
+Reading it:
+
+- **The 2x1 is flicker-free at any `lsb` now.** At `lsb 7` 96 % of the
+  claims are reused and the copier — DMA or CPU, it no longer matters —
+  moves 32 row pairs per rendered frame instead of per pass: 0.04 % late
+  where step 2 ran 6.9 % (DMA) / 0.27 % (CPU), and `lsb 3` 0.17 % where it
+  saturated at 16 %. That is the whole of Jeremy's 2x1 ask from 2026-09-29:
+  `lsb 7` and `lsb 3` on the wall without the horizontal flicker of stale
+  rows, with the scene rendering. The bus traffic is the render rate ×
+  64 KB ≈ 1.1 MB/s.
+- **It needs the full frame, and the full frame needs the heap.** With the
+  48 KB reserve the 2x1 got 25 slots and reused nothing; the 32 KB reserve
+  gives it 32 and leaves 22–28 KB of runtime heap with the two-engine scene
+  resident — above `RUNTIME_FLOOR`, not generous (an activate beside the
+  scene is #821 territory here as on the 4x1). At `lsb 15` even 32 KB only
+  reached 29 (the schedule's repeats cost descriptors per slot), which is
+  why the reserve is two-tier: the lower one applies only when it
+  COMPLETES a full-frame ring, and a rotating ring keeps 48 KB — the 4x1
+  at `lsb 40` was handed three more slots and 15 KB less heap by a flat
+  32 KB reserve for the same zero `late`.
+- **Appending to the chain in flight is a small, real gain on a chain**:
+  4x1 `lsb 15` 8.4 % → 7.8 % late (runs per minute 166k → 293k, 57 % of
+  them appended; 1.4k restarts a minute where the DMA had already stopped
+  at the owner boundary), 2x1 `lsb 7` 0.068 % → 0.040 %. The 4x1 at
+  `lsb 15` stays bus-bound (#895): the DMA is now never idle while the
+  queue has claims, and the copy still cannot keep 28 MB/s beside the
+  panel's own 40 MB/s scan-out at the 40 MHz PSRAM clock. The boot probes
+  passed on every boot of the night (`append` on, no `dma_errors`, no
+  `lcd_restarts`).
+- Jeremy's wall (4x1 `lsb 40` ring 6) is unchanged by all of this: 12
+  slots, 39.2 KB of heap, 6 late claims in 138k, 9 fps with the scene —
+  plus `Test 2` now RESUMES at boot on it (#869, from #905's pre-flight).
+
 ## The LCD_CAM pixel clock on the panel (2026-09-07)
 
 The panel's rescan rate had only ever been an estimate — a comment in
