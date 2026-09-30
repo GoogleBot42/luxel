@@ -1,5 +1,25 @@
 # Update log
 
+## 2026-09-30 — torn rows on the 4x1 chain: the pixels snapshot copy starved the ring's refill (#914)
+
+Jeremy: Mandelbrot 2D showed garbage on the far panels of the 4x1
+"periodically", Aurora did not. Benched on the panel with a new
+`pass.ring.torn` counter (copies that landed after the beam reached their
+slot — design §7's forbidden mixed-address row, which the eye sees as
+garbage on the panels whose words are clocked first): zero in five quiet
+minutes on either pattern, 36–54 per 15 s on BOTH patterns as soon as a
+client polled `/api/pixels` at 2 Hz. The route `memcpy`'d the 49 KB frame
+PSRAM → PSRAM in one critical section and held the copy DMA off the bus
+for milliseconds against 4.3 ms of slack. Budgeting the skip rule at the
+recent worst copy was tried and starved the ring (a third of all claims
+`late`); the fix is `pipeline::preview` copying in 4 KB chunks a
+millisecond apart with a restart when the frame moves under it — 0 torn
+in 120 s of Mandelbrot and 60 s of Aurora under the same poll, and at 5 Hz.
+`torn`, `dma_us_win`, `run_us_max`/`run_us_win`, `steal_lat_max`/
+`steal_lat_win` stay in `pass.ring`. Numbers: docs/boards.md "Torn rows on
+the 4x1". Residue: a burst of ~10 torn 30–90 s after every boot (the
+boot-ok store's shape) — its own ticket.
+
 ## 2026-09-30 — transients to PSRAM (#905), the full-frame ring reuses its slots (#896), the DMA chain appends (#897), a live layer cap (#709), Aurora at 256 columns
 
 Jeremy's 2026-09-30 list, worked in order and benched on the Seengreat 4x1

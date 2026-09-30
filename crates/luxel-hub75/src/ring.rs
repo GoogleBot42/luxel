@@ -393,6 +393,17 @@ impl Ring {
 /// margin, plus the fixed latency `margin_us`. A claim whose beam distance
 /// is shorter than this is skipped (`late`) rather than copied under the
 /// beam.
+///
+/// `slot_us` is the TYPICAL copy (a clipped EWMA), deliberately not a
+/// recent worst: budgeting every queued slot at the worst per-slot copy
+/// of the last few seconds was tried on the 4x1 against a client pulling
+/// `/api/pixels` (Gitea #914, 2026-09-30) and starved the pipeline — the
+/// copier could queue one slot at a time, a third of all claims went
+/// `late`, and the tears only fell from ~45 to ~6 per 15 s, because a
+/// bus stall that begins AFTER a claim is handed over cannot be budgeted
+/// at all. A 12-slot ring has ~4 ms of slack; a stall of that order has
+/// to be removed at its source (the 49 KB snapshot copy was), not
+/// absorbed by this rule.
 #[must_use]
 pub const fn dma_need_us(margin_us: u32, ahead: u32, slot_us: u32) -> u32 {
     margin_us.saturating_add(ahead.saturating_mul(slot_us).saturating_mul(3) / 2)

@@ -844,6 +844,18 @@ fn status_json() -> luxel_core::jsonview::Chunks {
             push_u32(&mut out, ring::RING_DMA_US.load(Ordering::Relaxed));
             push_piece(&mut out, ",\"dma_us_max\":");
             push_u32(&mut out, ring::RING_DMA_US_MAX.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"dma_us_sec\":");
+            push_u32(&mut out, ring::RING_DMA_US_WIN.read());
+            push_piece(&mut out, ",\"run_us_max\":");
+            push_u32(&mut out, ring::RING_RUN_US_MAX.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"run_us_sec\":");
+            push_u32(&mut out, ring::RING_RUN_US_WIN.read());
+            push_piece(&mut out, ",\"torn\":");
+            push_u32(&mut out, ring::RING_TORN.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"steal_lat_max\":");
+            push_u32(&mut out, ring::RING_STEAL_LAT_MAX.load(Ordering::Relaxed));
+            push_piece(&mut out, ",\"steal_lat_sec\":");
+            push_u32(&mut out, ring::RING_STEAL_LAT_WIN.read());
             push_piece(&mut out, ",\"dma_cal_us\":");
             push_u32(&mut out, ring::RING_DMA_CAL_US.load(Ordering::Relaxed));
             push_piece(&mut out, ",\"dma_batches\":");

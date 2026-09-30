@@ -329,6 +329,21 @@ all of this with two packers, random ISR latency, a prefetching probe and
 core-0 holds: zero writes under the beam and zero mixed-frame passes in
 every safe configuration, skips (not tears) when the ring is too small.
 
+*Status (2026-09-30, Gitea #914):* the rule cannot cover a bus stall that
+begins after a claim is handed over, and the 4x1 had one: a client pulling
+`/api/pixels` made the firmware `memcpy` the 49 KB frame PSRAM → PSRAM
+through the data cache inside one critical section, which held the copy
+DMA off the bus for milliseconds against ~4 ms of slack — ~180 torn slots
+a minute, seen as garbage on the far panels (the words clocked first are
+the new row pair, the tail and the latch the old one). Budgeting every
+queued slot at the recent worst copy (`dma_us_win`) was tried first and
+starved the ring (one slot queued at a time, a third of all claims `late`,
+tears only down to a sixth); the fix is at the source — the snapshot is
+copied in 4 KB chunks a millisecond apart (`pipeline::preview`). The rule
+stays the typical × 1.5. `pass.ring.torn` counts copies that landed after
+the beam reached their slot and is the oracle for this section: a handful
+right after boot, flat afterwards.
+
 *Status (2026-09-29, #857 second PR):* implemented as written, with one
 simplification — there is no slot-EOF interrupt at all (step 3 found
 `frame_count`/`dma_position` enough), so `free_upto` is the position probe

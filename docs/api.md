@@ -315,7 +315,22 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   case the CPU copies and `pack_us` is live again); `dma_us` the DMA's
   time per slot (clipped EWMA, what the skip rule budgets a batch with) and
   `dma_us_max` the raw worst — a flash write suspends the cache the DMA
-  reads PSRAM through, so the worst reads in milliseconds around a store;
+  reads PSRAM through, so the worst reads in milliseconds around a store —
+  and `dma_us_win` the worst of the last few seconds (a diagnostic: a
+  client pulling `/api/pixels` used to hold the PSRAM bus for
+  milliseconds and the copy of a slot then took three times the typical,
+  Gitea #914 — the skip rule still budgets the typical, because budgeting
+  the recent worst starved the ring instead);
+  `run_us_max` / `run_us_win` a whole run's latency from hand-over to
+  landing, lifetime worst and last few seconds; `steal_lat_max` /
+  `steal_lat_win` core 1's interrupt latency as the steal timer sees it
+  (its interval's excess over the period), which bounds how late a landing
+  can be observed; and **`torn`** — copies that landed AFTER the beam had
+  reached their slot, i.e. a slot channel 0 read while the copy was still
+  writing it: a mixed-address row, the one failure design §7 forbids. It
+  reads a handful right after boot (WiFi bring-up stalls) and must stay
+  flat afterwards; the eye sees a torn slot as garbage on the far end of a
+  chain (the words clocked first);
   `dma_cal_us` the boot calibration copy's time per slot (an idle bus,
   before WiFi or an engine — the DMA's own speed at this slot size);
   `dma_batches` batches completed (a copier's turn hands the DMA up to 8

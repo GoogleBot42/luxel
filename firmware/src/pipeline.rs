@@ -568,32 +568,119 @@ mod pipe {
     /// [`luxel_core::arena::ArrVec`], so on a board with a PSRAM arena it
     /// costs no internal DRAM at all — 12,288 B at 4096 px, 49,152 B at
     /// 16384 px, which internal DRAM could never serve (Gitea #905).
+    ///
+    /// The copy is CHUNKED — [`PREVIEW_CHUNK`] bytes per critical section,
+    /// [`PREVIEW_PAUSE`] between chunks — because on a board whose frame
+    /// buffer and arena both live in PSRAM one 49 KB `memcpy` through the
+    /// data cache held the PSRAM bus for milliseconds, and the HUB75 ring's
+    /// refill (a GDMA copy out of PSRAM with ~4 ms of slack on the 4x1)
+    /// starved behind it: ~180 torn row pairs a minute with a client
+    /// polling `/api/pixels` at 2 Hz, seen as garbage on the far panels
+    /// (Gitea #914). Twelve 4 KB chunks a millisecond apart keep the bus
+    /// free most of the time and the snapshot still lands in ~15 ms. The
+    /// frame is the same one throughout — the buffer's place in the slot,
+    /// its address and its sequence number are checked every chunk and the
+    /// copy starts over when they moved — for a bounded number of restarts,
+    /// after which the mixed copy is served rather than nothing (a preview
+    /// of a fast pattern may then straddle two frames).
     pub async fn preview() -> Result<luxel_core::arena::ArrVec<u8>, ()> {
         let mut v: luxel_core::arena::ArrVec<u8> = luxel_core::arena::empty();
-        for _ in 0..16 {
-            let need = shared::PIXEL_COUNT.load(Ordering::Relaxed) as usize * 3;
-            if v.capacity() < need && v.try_reserve_exact(need).is_err() {
-                return Err(());
-            }
-            if SLOT.lock(|c| {
-                let s = c.borrow();
-                let Some(buf) = s.free.as_ref().or(s.ready.as_ref().map(|f| &f.buf)) else {
-                    return false;
-                };
-                let bytes = buf.as_flattened();
-                // never grow inside the critical section
-                if bytes.len() > v.capacity() {
-                    return false;
-                }
-                v.clear();
-                v.extend_from_slice(bytes);
-                true
-            }) {
-                return Ok(v);
-            }
-            Timer::after(Duration::from_millis(2)).await;
+        let need = shared::PIXEL_COUNT.load(Ordering::Relaxed) as usize * 3;
+        if v.capacity() < need && v.try_reserve_exact(need).is_err() {
+            return Err(());
         }
-        Ok(luxel_core::arena::empty())
+        // Where the frame is: (address, sequence — `u32::MAX` for the free
+        // buffer, which has none) — the identity a chunk checks against.
+        let identity = |s: &Slot| -> Option<(usize, u32)> {
+            if let Some(buf) = s.free.as_ref() {
+                return Some((buf.as_ptr() as usize, u32::MAX));
+            }
+            s.ready.as_ref().map(|f| (f.buf.as_ptr() as usize, f.seq))
+        };
+        let mut waits = 0u32;
+        let mut restarts = 0u32;
+        'frame: loop {
+            let mut want: Option<(usize, u32)> = None;
+            let mut off = 0usize;
+            // Past the restart budget the identity is no longer checked:
+            // the copy finishes on whatever frame is parked.
+            let strict = restarts <= PREVIEW_RESTARTS;
+            loop {
+                // One chunk per critical section: copied if the frame is
+                // parked and still the one the copy began on.
+                let step = SLOT.lock(|c| {
+                    let s = c.borrow();
+                    let Some(id) = identity(&s) else { return Chunk::Parked };
+                    let buf = s.free.as_ref().or(s.ready.as_ref().map(|f| &f.buf)).unwrap();
+                    let bytes = buf.as_flattened();
+                    // never grow inside the critical section
+                    if bytes.len() > v.capacity() {
+                        return Chunk::Parked;
+                    }
+                    match want {
+                        Some(w) if strict && w != id => return Chunk::Moved,
+                        None => {
+                            want = Some(id);
+                            v.clear();
+                        }
+                        _ => {}
+                    }
+                    // A frame that shrank under a non-strict copy: start
+                    // that copy over rather than read past its end.
+                    if off > bytes.len() {
+                        want = None;
+                        return Chunk::Moved;
+                    }
+                    let end = (off + PREVIEW_CHUNK).min(bytes.len());
+                    v.extend_from_slice(&bytes[off..end]);
+                    off = end;
+                    if off >= bytes.len() {
+                        Chunk::Done
+                    } else {
+                        Chunk::More
+                    }
+                });
+                match step {
+                    Chunk::Done => return Ok(v),
+                    Chunk::More => Timer::after(PREVIEW_PAUSE).await,
+                    Chunk::Moved => {
+                        // The frame moved under the copy: start over — the
+                        // next round is non-strict once the budget is spent,
+                        // so a fast pattern is never chased for ever.
+                        restarts += 1;
+                        continue 'frame;
+                    }
+                    Chunk::Parked => {
+                        // Out of the slot (being rendered or composed): retry
+                        // briefly, as before.
+                        waits += 1;
+                        if waits > 16 {
+                            return Ok(luxel_core::arena::empty());
+                        }
+                        Timer::after(Duration::from_millis(2)).await;
+                        if want.is_some() {
+                            continue 'frame;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Bytes of the frame `preview` copies per critical section, and the
+    /// pause between chunks that gives the PSRAM bus back to the panel's
+    /// refill (Gitea #914). Twelve chunks at 16384 px, three at 4096.
+    const PREVIEW_CHUNK: usize = 4096;
+    const PREVIEW_PAUSE: Duration = Duration::from_millis(1);
+    /// Restarts `preview` allows when the frame moved under it before it
+    /// serves a copy that straddles two frames.
+    const PREVIEW_RESTARTS: u32 = 4;
+
+    enum Chunk {
+        Done,
+        More,
+        Moved,
+        Parked,
     }
 
     /// The ProCpu half: preview copy, output pipeline, panel compose.
