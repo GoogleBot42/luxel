@@ -382,7 +382,13 @@ ESP32 ELF — pass the S3 one).
   returns an EMPTY body (indistinguishable from the socket-pool case above),
   the write is lost, and the board comes back with the scene deactivated. Same
   class as #702; made reachable by #704's resident buffers. Until it is fixed:
-  deactivate first (`POST /api/patterns/<id>/activate`), then write.
+  deactivate first (`POST /api/patterns/<id>/activate`), then write —
+  **but NOT beside Jeremy's `Test 2` on the 4x1**: a pattern activate beside
+  a resident two-engine scene at ~39 KB free (16,384 px) REBOOTS the board
+  (#821; reproduced 2026-09-30 on the #905 image, and one crash flipped the
+  live slot to the other build). Bench with the resident scene as the load
+  — it resumes at boot since #910 — and activate patterns only from a
+  one-engine or empty state.
 - **`/api/pixels` is the camera-less proof for a PANEL feature — and it stops
   answering exactly when you need it.** 12,288 B = 4096 px of raw RGB; decode
   3 bytes per pixel, index `y*64 + x`, and print it as ASCII art. That is how
@@ -462,7 +468,15 @@ device answers in 10–20 s and a 4 s timeout reads as "down", #259).
   default since #858; `RING_OFF=1` builds the two-buffer driver)
   → `espflash save-image --chip esp32s3 <elf> ring.bin` → plain
   `curl --data-binary @ring.bin …/api/ota` (4/4 first try, ~15 s); a variant =
-  `POST /api/layout` body `panel 7 20 shiftreg 7 <lsb> <ring_ms>` (answers
+  `POST /api/layout` body `panel 7 20 shiftreg 7 <lsb> <ring_ms>` — and a
+  chain change is the FULL matrix line, `matrix 64 64 2 1 tl row 0 0`: the
+  short `matrix 64 64 2 1` is REJECTED (`expected: matrix <pw> <ph> <cols>
+  <rows> <tl|tr|bl|br> <row|col> <0|1> <0|1> [scan]`), and on 2026-09-30
+  the panel line that followed it then drove the 4x1 at `lsb 7` on a
+  13-slot ring (19 % late) — the flicker Jeremy saw. Read `driver.live`
+  after the reboot before believing a row; `pass.ring.reused` beside
+  `packed_*` says whether the full-frame ring (#896, `rows` 32) is what
+  booted (answers
   `reboot_required:true`) + `POST /api/reboot` (~30 s), then 20 s settle and
   two `/api/status` reads 60 s apart with NO other HTTP in between — diff
   `pass.ring.late` against `packed_core0 + packed_core1`. Anything talking
