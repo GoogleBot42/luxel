@@ -282,8 +282,10 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   pack; `frame_pack_us` is the once-per-frame pack of the whole frame
   (`write_frame`, core 0); `steal` whether core 1's timer interrupt may
   refill beside the render task (design §6 — the lever, `POST /api/ring`
-  `{"steal":true|false}`, runtime only, default on); `blanked` counts the flash fences (erase/program doors) that pointed the
-  panel chain at the dark slot for the op — the flash-write policy of #852,
+  `{"steal":true|false}`, runtime only, default on); `blanked` counts the dark stretches in which a sector erase or an OTA
+  write (the fences longer than the ring's slack; store writes and reads
+  are not blanked — a slider move used to blink the panel) pointed the
+  panel chain at the dark slot — the flash-write policy of #852,
   design §7: dark for the write, never the ring's few resident rows shown
   over-bright, and the picture comes back only after 200 ms without another
   erase/program, so an OTA is one dark stretch and a pattern save one short
