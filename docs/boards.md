@@ -2928,6 +2928,22 @@ on top of aurora's ~18 ms, and that cost is evidently not in the arithmetic
 the JIT compiles, so making the layer native bought almost nothing. A
 follow-up ticket profiles where those 38 ms go.
 
+**2026-09-30: what the residue actually is, and a tighter rule** (Gitea #905,
+site 1). The per-depth scratch was measured by routing it through the arena
+behind a feature flag and counting: it is **~150 B** of a compile's internal
+residue (115 B on average across the library, 188 B at most), and moving it
+cost 7,488 B of S3 flash (`kinds::walk_fn` +6,801 B), so it stays where it
+is. The rest — **~3.8 KB** of `2d-fireworks-fade`'s 4,122 B peak — is
+`walk_fn`'s per-branch-target `BTreeMap` nodes (plus ~180 B of `FnView`
+table). No allocator change can move those, since a `BTreeMap` takes none;
+a flat map like `StackMap` could (Gitea #909). The residue rule was refitted
+to what master ships: **`words × 3 + fns × 24 + 1,536`** (was
+`words × 6 + fns × 48 + 1,024`, whose tightest pattern used 72 %). The binding
+patterns are small ones, so the margin sits in the fixed term: tightest
+`novas` (2,844 B) at 83 %. It charges `snake-2d` 5,247 B instead of 8,446 B,
+`2d-fireworks-fade` 8,229 B instead of 14,410 B, and
+`music-sequencer-for-v3-only` 11,898 B instead of 21,748 B.
+
 **Library differential on metal** (`tools/jit-diff.mjs`, 2026-09-24). Athom, 144 px, all 307 patterns: **295 ran natively** (54 pixel-identical, 241 differing only through a wall-clock input), **0 mismatches, 0 vmerr, 0 crashes**; 11 refused — 7 `too-large` over the classic board's 12 KB half (dbzbattlefinal, fireworks-finale, flash-posterize-music-sequencer-framework, multisegment-demo, snake-2d-v2, stargen-polar-2d, utility-palettes) and 4 `no-memory` (2d-fireworks-fade, frogger-2d, the two music sequencers); 1 `unstable` (beat-bounce, sound-reactive, the interpreter does not repeat itself either). Seengreat, 4096 px, 141 patterns (every third plus every 2D one — the full sweep is ~90 s a pattern at this pixel count): **131 ran natively** (10 identical, 121 clock), **0 mismatches, 0 vmerr**, 7 refused `no-memory` (bouncy-boxes, lightning-strike, snake-2d, snake-2d-v2, sound-spectrokalidamandala, sunrise-2d, stargen-polar-2d), 1 upload refused for heap fragmentation, and 2 rows (frogger-2d, music-sequencer-for-v2) whose 30–35 KB blobs the board rejects at 4096 px with the JIT off as well — that rejection leaves ~3.6 KB of heap and the next HTTP request panics, which is Gitea #678, not the JIT.
 **Soak with the JIT on** (2026-09-24): Athom, Jeremy's own 4-item playlist swapping every 5 s, 55 min native — 0 resets, `fence_timeouts` 0, 118 watcher samples all `native`; Seengreat, a 2-item playlist (_Fairies, Aurora 2D) swapping every 30 s, 33 min — 0 resets, `fence_timeouts` 0, 66 samples all `native`, heap 30.6–37.6 KB, 41 native activations narrated on serial and no panic. Not `tools/hw-bench.mjs`: that pushes every gallery pattern, which on the panel is Gitea #678 waiting to happen, and the library differential had already activated every pattern natively once.
 

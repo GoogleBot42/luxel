@@ -1008,11 +1008,28 @@ under the 6 % warn line. Left on the ordinary `Vec` the change is +1,040 B.
 `kinds::walk_fn`'s comment states the rule at the call site so the next
 reader does not "finish the job".
 
+**2026-09-30: what the residue actually is, and a tighter rule** (Gitea #905,
+site 1). The per-depth scratch was measured by routing it through the arena
+behind a feature flag and counting: it is **~150 B** of a compile's internal
+residue (115 B on average across the library, 188 B at most), and moving it
+cost 7,488 B of S3 flash (`kinds::walk_fn` +6,801 B), so it stays where it
+is. The rest — **~3.8 KB** of `2d-fireworks-fade`'s 4,122 B peak — is
+`walk_fn`'s per-branch-target `BTreeMap` nodes (plus ~180 B of `FnView`
+table). No allocator change can move those, since a `BTreeMap` takes none;
+a flat map like `StackMap` could (Gitea #909). The residue rule was refitted
+to what master ships: **`words × 3 + fns × 24 + 1,536`** (was
+`words × 6 + fns × 48 + 1,024`, whose tightest pattern used 72 %). The binding
+patterns are small ones, so the margin sits in the fixed term: tightest
+`novas` (2,844 B) at 83 %. It charges `snake-2d` 5,247 B instead of 8,446 B,
+`2d-fireworks-fade` 8,229 B instead of 14,410 B, and
+`music-sequencer-for-v3-only` 11,898 B instead of 21,748 B.
+
 So the gate is now two rules: on a board whose arena is up
 (`psram::stats()` is `Some`) `emit_heap_need + JIT_MAX_CODE` is checked
 against the ARENA — the hook falls back to the internal heap silently when
 the arena is full, which is exactly what must not happen here — and
-`jit::emit_int_need`, `words × 6 + fns × 48 + 1,024`, against the internal
+`jit::emit_int_need`, `words × 6 + fns × 48 + 1,024`
+(3/24/1,536 since #905), against the internal
 heap under the same `COMPILE_FLOOR`; on a board without one the check is
 byte-for-byte what it was, #752's contiguity check included. The residue that
 second rule budgets is what a `BTreeMap` cannot route (its nodes, one per
