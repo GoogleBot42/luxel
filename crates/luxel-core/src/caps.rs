@@ -241,6 +241,13 @@ pub const MAX_LAYERS: u8 = 4;
 /// being negligible, deliberately conservative: this number sizes the UI's
 /// "2 of 2 used" note, and the scene editor still refuses an over-budget
 /// layer with a reason.
+///
+/// The whole rationale is that INTERNAL frame, so the tier applies only
+/// where the frame is internal. On a board whose frames live in a PSRAM
+/// arena ([`layers_for_headroom`]'s `frame_external`) a layer costs its
+/// program alone and the tier is [`MAX_LAYERS`]: the live arithmetic and
+/// the ceiling decide (2026-09-30, the #709 follow-on). The `luxel serve`
+/// mirror has no arena and keeps calling this directly.
 pub const fn layers_for(pixel_count: u32) -> u8 {
     if pixel_count <= 512 {
         3
@@ -251,9 +258,11 @@ pub const fn layers_for(pixel_count: u32) -> u8 {
 
 /// [`layers_for`] narrowed by the heap the device actually has (Gitea #479).
 ///
-/// The pixel-count tier above is a static *upper* bound — it says what the
-/// board's shape affords when the heap is healthy. This is the same number
-/// with two live corrections applied:
+/// The pixel-count tier above is a static *upper* bound on a board whose
+/// layer frames are internal DRAM — it says what the board's shape affords
+/// when the heap is healthy. This is the same number with two live
+/// corrections applied (and, with `frame_external`, without the tier at all:
+/// the tier's rationale is the internal frame, and there is none):
 ///
 /// * `headroom` — what the device could spend on resident engines with the
 ///   current stack torn down, i.e.
@@ -269,14 +278,17 @@ pub const fn layers_for(pixel_count: u32) -> u8 {
 /// * `frame_external` — [`crate::arena::frames_external`], passed through to
 ///   [`crate::budget::layer_cost`]: on a `psram-arena` board the layer
 ///   engines' frames are not internal DRAM and a layer costs 4 KB rather
-///   than 16 KB at 4096 px (Gitea #709).
+///   than 16 KB at 4096 px (Gitea #709). It also lifts the static tier to
+///   [`MAX_LAYERS`], so the arithmetic and `ceiling` alone decide.
 ///
 /// Never 0: a device that cannot afford a second layer still runs one, which
 /// is the single-pattern case every board has always handled.
 ///
 /// Worked numbers (docs/boards.md "Scene layers"): the S3 panel at 4096 px
-/// has ~36 KB of headroom against an 18 KB layer → 2, and the tier says 2 →
-/// **2**. A 300-px strip on a classic ESP32 has ~85 KB against a 7 KB layer
+/// with internal frames has ~36 KB of headroom against an 18 KB layer → 2,
+/// and the tier says 2 → **2**; the same panel with its frames in the PSRAM
+/// arena at 16,384 px (4x1) has ~28 KB against a 4 KB layer → 7, clamped by
+/// [`MAX_LAYERS`] → **4**. A 300-px strip on a classic ESP32 has ~85 KB against a 7 KB layer
 /// → 12, clamped by the tier → **3**. A c3-devkit is capped by `ceiling` →
 /// **2**. A panel whose heap has been eaten by the device blur+glow chain
 /// falls to **1** rather than promising a layer it cannot build.
@@ -297,7 +309,8 @@ pub const fn layers_for_headroom(
     let headroom =
         headroom.saturating_sub(crate::budget::compositor_scratch(pixel_count, frame_external));
     // Floored, and the host must pass a STEADY-STATE headroom (the
-    // firmware's `shared::HEAP_BASE_MAX`) rather than an instantaneous one:
+    // firmware's smoothed `shared::HEAP_BASE_EWMA`, then [`advertise`]'s
+    // hysteresis on top) rather than an instantaneous one:
     // measuring costs heap, and rounding up over-promises. Both were tried
     // on the Seengreat panel 2026-09-24 — 26 KB of steady headroom against a
     // real ~15.3 KB per-layer cost at 4096 px, where one layer fits and two
@@ -306,7 +319,9 @@ pub const fn layers_for_headroom(
     // TRUNCATE to a small u32 and read as starved.
     let n = headroom / per;
     let afford = if n > MAX_LAYERS as usize { MAX_LAYERS as u32 } else { n as u32 };
-    let tier = layers_for(pixel_count) as u32;
+    // The tier is an internal-frame rule; with the frames external it does
+    // not apply and MAX_LAYERS (via `cap` below) is the only static bound.
+    let tier = if frame_external { MAX_LAYERS } else { layers_for(pixel_count) } as u32;
     let cap = if ceiling < MAX_LAYERS { ceiling } else { MAX_LAYERS } as u32;
     let n = if afford < tier { afford } else { tier };
     let n = if n < cap { n } else { cap };
@@ -314,6 +329,82 @@ pub const fn layers_for_headroom(
         1
     } else {
         n as u8
+    }
+}
+
+/// Margin a smoothed `load_base` must clear past a layer boundary before
+/// [`advertise`] moves the advertised count across it — in either direction.
+///
+/// Half a PSRAM-arena layer ([`crate::budget::LAYER_BASE`] / 2), so the
+/// dead band around each boundary is a full layer wide on the board class
+/// whose boundaries are closest together. It sits comfortably above the
+/// residual ripple the [`fold_base`] average leaves: an alternating ±18 KB
+/// reading (the panel's measured WiFi/HTTP transient, 2026-09-24) settles to
+/// ±1.2 KB after the 1/8 fold.
+pub const ADVERTISE_MARGIN: usize = 2 * 1024;
+
+/// Fold one live `budget::load_base` reading into the running average the
+/// firmware advertises `caps.layers` from (`shared::HEAP_BASE_EWMA`):
+/// 7/8 of the old value plus 1/8 of the new. `prev` 0 means "no sample yet"
+/// and seeds the average with the reading itself.
+///
+/// Pure integer arithmetic that cannot overflow (`prev − prev/8`, never
+/// `prev × 7`), so a host with a very large heap folds just as well.
+pub const fn fold_base(prev: usize, sample: usize) -> usize {
+    if prev == 0 {
+        sample
+    } else {
+        prev - prev / 8 + sample / 8
+    }
+}
+
+/// The layer count to ADVERTISE, given the one advertised last time (`prev`,
+/// 0 before the first call) and the smoothed `load_base` ([`fold_base`]) —
+/// [`layers_for_headroom`] with hysteresis, so a board whose steady budget
+/// sits right on a layer boundary does not flap between two answers.
+///
+/// The count moves only when the arithmetic says so with
+/// [`ADVERTISE_MARGIN`] to spare: UP to what the base affords with the
+/// margin taken OFF it, DOWN to what it affords with the margin ADDED. Both
+/// are [`layers_for_headroom`] and it is monotonic in the headroom, so
+/// `up ≤ down` and the two rules never pull against each other; between
+/// them the previous answer holds. The first call (`prev` 0) returns the
+/// plain arithmetic, and a change of pixel count or ceiling that lowers the
+/// cap below `prev` moves down at once (the `down` answer is already capped).
+pub const fn advertise(
+    prev: u8,
+    ewma_base: usize,
+    pixel_count: u32,
+    ceiling: u8,
+    frame_external: bool,
+) -> u8 {
+    use crate::budget::load_headroom;
+    if prev == 0 {
+        return layers_for_headroom(
+            pixel_count,
+            load_headroom(ewma_base),
+            ceiling,
+            frame_external,
+        );
+    }
+    let up = layers_for_headroom(
+        pixel_count,
+        load_headroom(ewma_base.saturating_sub(ADVERTISE_MARGIN)),
+        ceiling,
+        frame_external,
+    );
+    let down = layers_for_headroom(
+        pixel_count,
+        load_headroom(ewma_base.saturating_add(ADVERTISE_MARGIN)),
+        ceiling,
+        frame_external,
+    );
+    if up > prev {
+        up
+    } else if down < prev {
+        down
+    } else {
+        prev
     }
 }
 
@@ -585,7 +676,7 @@ mod layer_tests {
         // B/C's): 26 KB of headroom affords one 4096-px layer, not two.
         assert_eq!(layers(4096, 31_200, 15_348, MAX_LAYERS), 1);
         // The panel's own boot-time high-water, which is what the firmware
-        // actually feeds this (`shared::HEAP_BASE_MAX`): before #704 it read
+        // fed this until 2026-09-30 (`HEAP_BASE_MAX`): before #704 it read
         // 2 from the layer arithmetic alone and then refused layer 2 at
         // activation, because the 12.3 KB staging frame every scene needs
         // had not been charged to anything. Measured `load_base` 49,120 on
@@ -605,22 +696,50 @@ mod layer_tests {
 
     /// Gitea #709: the panel's frames move to the PSRAM arena and its
     /// MEASURED steady-state numbers — the ones that said 1 above — deliver
-    /// the 2 the tier promises. With the compositor's scratch in the arena
-    /// as well, the 20,480 floor leaves 26.6 KB of the 47.1 KB low reading,
-    /// which is six 4,096 B layers, clamped by the tier to 2.
+    /// at least the pair. With the compositor's scratch in the arena as
+    /// well, the 20,480 floor leaves 26.6 KB of the 47.1 KB low reading,
+    /// which is six 4,096 B layers — clamped by the tier to 2 until the #709
+    /// follow-on (2026-09-30) dropped the tier for external frames, and by
+    /// [`MAX_LAYERS`] to 4 since.
     #[test]
     fn psram_frames_make_the_panels_second_layer_real() {
-        assert_eq!(layers_psram(4096, 47_121, 0, MAX_LAYERS), 2);
-        assert_eq!(layers_psram(4096, 31_200, 15_348, MAX_LAYERS), 2);
+        assert_eq!(layers_psram(4096, 47_121, 0, MAX_LAYERS), 4);
+        // 46,548 − 20,480 = 26,068 → six layers → 4
+        assert_eq!(layers_psram(4096, 31_200, 15_348, MAX_LAYERS), 4);
         // the panel's 2026-09-26 idle reading (35.8 KB after #770's rings
-        // and tables moved onto the heap) still affords the pair
-        assert_eq!(layers_psram(4096, 33_248, 2_552, MAX_LAYERS), 2);
+        // and tables moved onto the heap): 15,320 B → three layers
+        assert_eq!(layers_psram(4096, 33_248, 2_552, MAX_LAYERS), 3);
         // it is not a blank cheque: a genuinely starved board still says 1
         assert_eq!(layers_psram(4096, 24_576, 0, MAX_LAYERS), 1);
         assert_eq!(layers_psram(4096, 0, 0, MAX_LAYERS), 1);
         // the exact two-layer edge: 20,480 floor + 2x4,096
         assert_eq!(layers_psram(4096, 28_672, 0, MAX_LAYERS), 2);
         assert_eq!(layers_psram(4096, 28_671, 0, MAX_LAYERS), 1);
+    }
+
+    /// The #709 follow-on (2026-09-30): with frames external there is no
+    /// pixel-count tier, so an arena board advertises what its heap affords,
+    /// up to [`MAX_LAYERS`] — at 4096 px AND at the 4x1 chain's 16,384 px,
+    /// where a layer still costs only its 4 KB program.
+    #[test]
+    fn an_arena_board_is_bounded_by_its_heap_not_the_tier() {
+        // the Seengreat 4x1 (16,384 px) as measured 2026-09-30: heap_free
+        // 39.5 KB with two engines resident, engine_heap 8–12 KB →
+        // load_base ~48–52 KB → 7 layers of headroom → MAX_LAYERS
+        assert_eq!(layers_psram(16_384, 39_500, 10_000, MAX_LAYERS), 4);
+        assert_eq!(layers_psram(16_384, 39_500, 8_000, MAX_LAYERS), 4);
+        // …and the same numbers at 4096 px, which a pixel count never moved
+        assert_eq!(layers_psram(4096, 39_500, 10_000, MAX_LAYERS), 4);
+        // the exact edges: floor + 3 × 4,096 and floor + 4 × 4,096
+        assert_eq!(layers_psram(16_384, 32_768, 0, MAX_LAYERS), 3);
+        assert_eq!(layers_psram(16_384, 32_767, 0, MAX_LAYERS), 2);
+        assert_eq!(layers_psram(16_384, 36_864, 0, MAX_LAYERS), 4);
+        // a starved arena board still says 1, and the ceiling still binds
+        assert_eq!(layers_psram(16_384, 24_000, 0, MAX_LAYERS), 1);
+        assert_eq!(layers_psram(16_384, 39_500, 10_000, 2), 2);
+        // the SAME 16,384 px with internal frames would be the tier's 2 at
+        // most — and in practice 1, since one 48 KB frame does not fit
+        assert_eq!(layers(16_384, 39_500, 10_000, MAX_LAYERS), 1);
     }
 
     #[test]
@@ -645,5 +764,155 @@ mod layer_tests {
             layers_for(4096)
         );
         assert!(layers_for_headroom(64, usize::MAX / 2, 100, false) <= MAX_LAYERS);
+        // with frames external the tier is lifted: MAX_LAYERS binds instead
+        assert_eq!(
+            layers_for_headroom(4096, usize::MAX / 2, MAX_LAYERS, true),
+            MAX_LAYERS
+        );
+        assert_eq!(
+            layers_for_headroom(64, usize::MAX / 2, 100, true),
+            MAX_LAYERS
+        );
+    }
+}
+
+/// The firmware's advertise loop (`server::scene_layer_cap`): every call
+/// folds a live `load_base` into the average and re-derives the count with
+/// hysteresis. These drive that loop over synthetic readings.
+#[cfg(test)]
+mod advertise_tests {
+    use super::*;
+    use crate::budget::{compositor_scratch, layer_cost, RUNTIME_FLOOR};
+
+    /// One firmware call: fold, then advertise.
+    fn step(state: &mut (usize, u8), sample: usize, px: u32, external: bool) -> u8 {
+        state.0 = fold_base(state.0, sample);
+        state.1 = advertise(state.1, state.0, px, MAX_LAYERS, external);
+        state.1
+    }
+
+    #[test]
+    fn the_seeded_first_call_is_the_arithmetic() {
+        for &(px, base, ext) in &[
+            (4096u32, 65_536usize, false),
+            (4096, 65_535, false),
+            (16_384, 48_000, true),
+            (16_384, 24_000, true),
+            (300, 104_832, false),
+        ] {
+            let mut st = (0usize, 0u8);
+            assert_eq!(
+                step(&mut st, base, px, ext),
+                layers_for_headroom(px, crate::budget::load_headroom(base), MAX_LAYERS, ext)
+            );
+            assert_eq!(st.0, base, "the first fold seeds the average");
+        }
+    }
+
+    /// The 2026-09-24 flap: identical activations read ±18 KB apart, against
+    /// a 16 KB internal-frame layer, and the live number went 1 ↔ 2 with
+    /// nothing but poll traffic. Straddle the 1→2 boundary at 4096 px
+    /// exactly and the advertised count must settle and stay put.
+    #[test]
+    fn a_base_oscillating_across_a_boundary_does_not_flap() {
+        let px = 4096;
+        let edge = RUNTIME_FLOOR + compositor_scratch(px, false) + 2 * layer_cost(px, false);
+        assert_eq!(edge, 65_536);
+        for &(mean, first_high) in &[
+            (edge, true),
+            (edge, false),
+            (edge - 1_000, true),
+            (edge + 1_000, false),
+        ] {
+            let mut st = (0usize, 0u8);
+            let mut seen = [0u8; 200];
+            for (i, slot) in seen.iter_mut().enumerate() {
+                let high = (i % 2 == 0) == first_high;
+                let s = if high { mean + 18_000 } else { mean - 18_000 };
+                *slot = step(&mut st, s, px, false);
+            }
+            let changes = seen.windows(2).filter(|w| w[0] != w[1]).count();
+            assert!(changes <= 1, "flapped {} times around {}", changes, mean);
+            // once the average has settled, not a single change
+            assert!(seen[40..].windows(2).all(|w| w[0] == w[1]));
+        }
+        // the same on an arena board whose boundaries are 4 KB apart, with
+        // a ±18 KB ripple around the 2→3 edge
+        let px = 16_384;
+        let edge = RUNTIME_FLOOR + 3 * layer_cost(px, true);
+        let mut st = (0usize, 0u8);
+        let mut seen = [0u8; 200];
+        for (i, slot) in seen.iter_mut().enumerate() {
+            let s = if i % 2 == 0 {
+                edge + 18_000
+            } else {
+                edge - 18_000
+            };
+            *slot = step(&mut st, s, px, true);
+        }
+        assert!(seen[40..].windows(2).all(|w| w[0] == w[1]));
+    }
+
+    /// Real headroom that arrives and STAYS (a scene torn down, a transient
+    /// gone for good) must show up — the average is a lag, not a ratchet.
+    #[test]
+    fn a_base_that_rises_and_stays_moves_up_within_a_few_folds() {
+        let px = 16_384;
+        let mut st = (0usize, 0u8);
+        // 30,000 − 20,480 = 9,520 → two 4 KB layers
+        for _ in 0..50 {
+            step(&mut st, 30_000, px, true);
+        }
+        assert_eq!(st.1, 2);
+        // +20 KB: 50,000 affords seven, i.e. MAX_LAYERS
+        let mut folds = 0;
+        while st.1 < MAX_LAYERS {
+            step(&mut st, 50_000, px, true);
+            folds += 1;
+            assert!(folds <= 16, "still {} after {} folds", st.1, folds);
+        }
+        // and it moves back down when the headroom goes away for good
+        let mut folds = 0;
+        while st.1 > 2 {
+            step(&mut st, 30_000, px, true);
+            folds += 1;
+            assert!(folds <= 32, "still {} after {} folds", st.1, folds);
+        }
+        assert_eq!(st.1, 2);
+    }
+
+    /// Inside the dead band the previous answer holds in both directions.
+    #[test]
+    fn the_margin_is_a_dead_band_around_each_boundary() {
+        let px = 16_384;
+        let edge = RUNTIME_FLOOR + 3 * layer_cost(px, true); // 2 → 3
+        for d in [0usize, 1, ADVERTISE_MARGIN - 1] {
+            assert_eq!(advertise(2, edge + d, px, MAX_LAYERS, true), 2);
+            assert_eq!(advertise(3, edge + d, px, MAX_LAYERS, true), 3);
+        }
+        assert_eq!(
+            advertise(2, edge + ADVERTISE_MARGIN, px, MAX_LAYERS, true),
+            3
+        );
+        assert_eq!(advertise(3, edge - 1, px, MAX_LAYERS, true), 3);
+        assert_eq!(
+            advertise(3, edge - ADVERTISE_MARGIN, px, MAX_LAYERS, true),
+            3
+        );
+        assert_eq!(
+            advertise(3, edge - ADVERTISE_MARGIN - 1, px, MAX_LAYERS, true),
+            2
+        );
+        // a cap that drops below `prev` (ceiling, pixel count) binds at once
+        assert_eq!(advertise(4, 1_000_000, px, 2, true), 2);
+        assert_eq!(advertise(3, 1_000_000, 4096, MAX_LAYERS, false), 2);
+    }
+
+    #[test]
+    fn the_fold_is_a_seeded_eighth() {
+        assert_eq!(fold_base(0, 40_000), 40_000);
+        assert_eq!(fold_base(40_000, 48_000), 41_000);
+        // never overflows, however large the heap
+        assert_eq!(fold_base(usize::MAX, usize::MAX), usize::MAX);
     }
 }

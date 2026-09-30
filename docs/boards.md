@@ -1844,15 +1844,19 @@ not per-board configuration, by `luxel_core::caps::layers_for_headroom`:
 ```
 layers = clamp(1, min(tier, (headroom − stage) / layer_cost), ceiling)
   tier       = caps::layers_for(pixel_count)    — 3 at ≤512 px, else 2
-  headroom   = budget::load_headroom(shared::HEAP_BASE_MAX)
-             = (max since boot of the render task's measured load_base)
-               − RUNTIME_FLOOR (20 KiB)
+             = caps::MAX_LAYERS on a `psram-arena` board (no tier, 2026-09-30)
+  headroom   = budget::load_headroom(shared::HEAP_BASE_EWMA)
+             = (smoothed live heap_free + engine_heap) − RUNTIME_FLOOR (20 KiB)
   stage      = budget::compositor_scratch(pixel_count, frame_external)
              = pixel_count × 3, and 0 on a `psram-arena` board (#777)
   layer_cost = budget::LAYER_BASE (4 KiB) + pixel_count × 3
              = budget::LAYER_BASE alone on a `psram-arena` board
   ceiling    = 2 on a `small-chip` board, else caps::MAX_LAYERS (4)
 ```
+
+…and then `caps::advertise` applies hysteresis to that answer: the
+advertised count moves only when the smoothed base is 2 KiB past a layer
+boundary in the direction of travel (below).
 
 **On a `psram-arena` board a layer's frame is not internal DRAM** (Gitea
 #709). Each engine's per-frame RGB888 buffer comes from the PSRAM arena
@@ -1876,14 +1880,53 @@ both come out of the arena, so `compositor_scratch` answers 0 and the
 subtraction disappears. On every other board it is `pixel_count × 3` exactly
 as before.
 
-**The headroom is a high-water mark, not a live reading.** Measured on the
-Seengreat panel 2026-09-24, four *identical* pattern activations reported
-`heap_free` 18,904 / 23,000 / 33,332 / 37,508 — ±18 KB of WiFi and HTTP
-transient against a ~16 KB per-layer cost. An advertised capability derived
-from the instantaneous number flapped 1 ↔ 2 with nothing but poll traffic.
-`shared::HEAP_BASE_MAX` folds each reading into a maximum, which converges on
-the idle figure in a few samples and cannot over-promise on a board that
-never reaches it.
+**The headroom is a smoothed live reading with hysteresis** (2026-09-30, the
+#709 follow-on; #905). Measured on the Seengreat panel 2026-09-24, four
+*identical* pattern activations reported `heap_free` 18,904 / 23,000 /
+33,332 / 37,508 — ±18 KB of WiFi and HTTP transient against a ~16 KB
+per-layer cost. An advertised capability derived from the instantaneous
+number flapped 1 ↔ 2 with nothing but poll traffic, so from 2026-09-24 the
+board advertised off `HEAP_BASE_MAX`, a boot-time high-water of the render
+task's `load_base`. That held a transient peak forever and never saw
+headroom that arrived after boot, and it is gone.
+
+Every `caps.layers` read (the status body, the scene store's `layers_max`,
+the playlist's transition rule) now folds a LIVE `load_base` —
+`heap_free + engine_heap` — into `shared::HEAP_BASE_EWMA` at 1/8 weight
+(`caps::fold_base`), reported as `/api/status` `load_base`, and
+`caps::advertise` moves the advertised count (`shared::LAYERS_ADVERTISED`)
+only when the average is `ADVERTISE_MARGIN` (2 KiB) past a boundary: up to
+what `base − 2 KiB` affords, down to what `base + 2 KiB` affords, otherwise
+unchanged. Three things make that steady now where the raw number was not:
+
+* **#905 moved the transients to PSRAM** (the HTTP bodies — `/api/pixels`,
+  pattern JSON, jsonview snapshots, chunk segments — the JIT compile residue
+  and the resume staging), so the internal heap no longer swings by a layer's worth
+  with each request.
+* **With frames external a layer costs 4 KB, not 16**, and the average of an
+  alternating ±18 KB reading settles to ±1.2 KB — inside the 2 KiB dead
+  band. `caps::advertise_tests` pins exactly that input: no flap after the
+  average settles, and a base that rises 20 KB and stays moves up within a
+  handful of folds.
+* **The swap double-count is closed at the source.** A reconstruction read
+  between a teardown and the next build used to see the freed heap AND the
+  outgoing engine's `engine_heap`, ~15 KB high. The render task now zeroes
+  `ENGINE_HEAP` BEFORE every hard teardown (`forget_engine_heap` in
+  `main.rs`), so a read in that window sees `heap_free + 0` — the truth, or
+  slightly low while the incoming stack builds. A crossfade keeps the
+  outgoing engine alive by design and does not zero; for its few seconds the
+  reading dips by one engine, which is the conservative direction.
+
+**On a `psram-arena` board there is no pixel-count tier any more.** The
+tier's whole rationale is the per-layer frame in internal DRAM; with frames
+in PSRAM `caps::layers_for_headroom` uses `MAX_LAYERS` (4) as the tier and
+lets the arithmetic and the ceiling decide. The Seengreat 4x1 (16,384 px)
+reads `heap_free` 39.5 KB with two engines resident and `engine_heap`
+8–12 KB, i.e. a live `load_base` of ~48–52 KB: 28 KB of headroom against
+4 KB layers is seven, so it should advertise **4** where the tier held it at
+2 (expected from the arithmetic; the on-metal check that `caps.layers` holds
+steady under polling is the orchestrator's). The `luxel serve` mirror has no
+arena and still reports the tier.
 
 `layer_cost` is a frame buffer plus a flat base rather than a per-pattern
 model, because it sizes an *advertised* number and a *pre-flight* refusal.
@@ -1956,6 +1999,7 @@ A full-layout, opaque, unkeyed, unmirrored `normal` layer is a
 | **Seengreat S3 @4096 px, MEASURED 2026-09-24, frames in PSRAM (#709)** | **47.0 KB** | **4.1 KB** | **2** |
 | Seengreat S3 @4096 px, MEASURED 2026-09-26, engine frames only in PSRAM (#770 shrank the heap) | 35.8 KB | 4.1 KB | **2** (and a text layer no longer fitted) |
 | **Seengreat S3 @4096 px, MEASURED 2026-09-26, ALL frames in PSRAM (#777)** | **50.6 KB** | **4.1 KB** | **2** (tier) |
+| Seengreat S3 4x1 @16,384 px, 2026-09-30, frames in PSRAM, no tier (expected) | ~48–52 KB | 4.1 KB | **4** (ceiling) |
 | Seengreat S3 @4096 px, device blur+glow on | 26.9 KB | 16.4 KB | **1** |
 | Athom / classic ESP32 @300 px | 122.8 KB | 4.9 KB | **3** (tier) |
 | classic ESP32 @1024 px | 108 KB | 7.2 KB | **2** (tier) |
