@@ -22,7 +22,7 @@
 //!   only changes at the frame rate. Now the per-pass work is a copy.
 //! - **The copy is the refill, and the GDMA does it** (#892 step 2). A slot
 //!   the beam has left is claimed out of one queue word (`ring::claim_next`:
-//!   the counter and, in its top bit, which packed frame this pass reads).
+//!   the counter and, in its top two bits, which packed frame this pass reads).
 //!   A turn of a copier claims up to [`BATCH_SLOTS`] such slots and hands
 //!   the batch to GDMA channel 1 in memory-to-memory mode ([`Engine`]): one
 //!   descriptor chain over the row pairs in the packed frame (PSRAM, read in
@@ -232,33 +232,81 @@ unsafe impl Sync for BlankCell {}
 static BLANK: BlankCell = BlankCell(UnsafeCell::new(None));
 static BLANK_READY: AtomicBool = AtomicBool::new(false);
 
-/// Point the panel chain at the dark slot. Returns false when there is no
-/// ring to blank (the fence then skips the restore).
-pub fn fence_blank() -> bool {
-    if !BLANK_READY.load(Ordering::Acquire) {
-        return false;
-    }
-    // SAFETY: read-only after the release; the descriptors and the pointer
-    // tables are leaked internal SRAM the driver owns.
-    let Some(b) = (unsafe { (*BLANK.0.get()).as_ref() }) else { return false };
+/// The chain is pointed at the dark slot right now.
+static BLANKED: AtomicBool = AtomicBool::new(false);
+/// Erase/program fences currently inside `fence_blank`..`fence_unblank`
+/// (the restore never runs while one is open).
+static IN_FENCE: AtomicU32 = AtomicU32::new(0);
+/// Milliseconds since boot at which the chain may be restored: the last
+/// fence's release plus [`BLANK_HOLD_MS`].
+static UNBLANK_AT_MS: AtomicU32 = AtomicU32::new(0);
+/// Quiet time after the last erase/program before the picture comes back.
+/// A flash write is never alone — an OTA is a chunk every ~50 ms for 15 s,
+/// a pattern save several hundred fences in half a second — and restoring
+/// between them made the whole panel flicker at the chunk rate (Jeremy,
+/// 2026-09-30, the first OTA onto the ring default). With the hold an OTA
+/// is one dark stretch and a save one short one; a lone config write costs
+/// a 200 ms blink.
+const BLANK_HOLD_MS: u32 = 200;
+
+fn now_ms() -> u32 {
+    (now_us() / 1000) as u32
+}
+
+fn set_chain(b: &Blank, dark: bool) {
+    let from = if dark { b.dark } else { b.live };
     for i in 0..b.n {
-        unsafe { core::ptr::addr_of_mut!((*b.descs.add(i)).buffer).write_volatile(*b.dark.add(i)) };
+        // SAFETY: the descriptors and the pointer tables are leaked internal
+        // SRAM the driver owns; a 32-bit store the DMA reads at its next
+        // descriptor fetch.
+        unsafe { core::ptr::addr_of_mut!((*b.descs.add(i)).buffer).write_volatile(*from.add(i)) };
     }
-    RING_BLANKED.fetch_add(1, Ordering::Relaxed);
+}
+
+fn blank_table() -> Option<&'static Blank> {
+    if !BLANK_READY.load(Ordering::Acquire) {
+        return None;
+    }
+    // SAFETY: read-only after the release.
+    unsafe { (*BLANK.0.get()).as_ref() }
+}
+
+/// Point the panel chain at the dark slot for an erase/program fence.
+/// Returns false when there is no ring to blank (the fence then skips the
+/// release call). Idempotent across back-to-back fences: the chain stays
+/// dark until [`blank_tick`] sees the quiet time out.
+pub fn fence_blank() -> bool {
+    let Some(b) = blank_table() else { return false };
+    IN_FENCE.fetch_add(1, Ordering::AcqRel);
+    if !BLANKED.swap(true, Ordering::AcqRel) {
+        set_chain(b, true);
+        RING_BLANKED.fetch_add(1, Ordering::Relaxed);
+    }
     true
 }
 
-/// Put the live buffers back after the op. The rows the beam passed
-/// meanwhile are stale until the queue catches up (`late`), at their own
-/// addresses, as for any other stall.
+/// The fence is over: start (or restart) the quiet timer. The picture comes
+/// back from the output task's next turn after [`BLANK_HOLD_MS`] without
+/// another fence; the rows the beam passed meanwhile are refilled by then
+/// (the copiers run while the chain is dark), so nothing stale is shown.
 pub fn fence_unblank() {
-    if !BLANK_READY.load(Ordering::Acquire) {
+    UNBLANK_AT_MS.store(now_ms().wrapping_add(BLANK_HOLD_MS), Ordering::Release);
+    IN_FENCE.fetch_sub(1, Ordering::AcqRel);
+}
+
+/// From the output task's turn: restore the chain once the flash has been
+/// quiet for the hold and no fence is open.
+fn blank_tick() {
+    if !BLANKED.load(Ordering::Acquire) || IN_FENCE.load(Ordering::Acquire) != 0 {
         return;
     }
-    let Some(b) = (unsafe { (*BLANK.0.get()).as_ref() }) else { return };
-    for i in 0..b.n {
-        unsafe { core::ptr::addr_of_mut!((*b.descs.add(i)).buffer).write_volatile(*b.live.add(i)) };
+    let due = UNBLANK_AT_MS.load(Ordering::Acquire);
+    if (now_ms().wrapping_sub(due) as i32) < 0 {
+        return;
     }
+    let Some(b) = blank_table() else { return };
+    set_chain(b, false);
+    BLANKED.store(false, Ordering::Release);
 }
 
 /// A copy batch is in flight (mirrors `Engine::busy` without the lock):
@@ -566,7 +614,7 @@ impl Packer {
 static mut CORE1: Packer = Packer::new();
 
 /// The queue word (`ring::Claim::encode`): the next claim's counter, and
-/// the frame index of the pass being claimed in its top bit. CAS-claimed.
+/// the frame index of the pass being claimed in its top two bits. CAS-claimed.
 static NEXT_FILL: AtomicU32 = AtomicU32::new(0);
 /// The packed frame most recently published by `write_frame`.
 static NEWEST: AtomicU8 = AtomicU8::new(0);
@@ -1645,6 +1693,7 @@ impl OutputDriver for Hub75Ring {
         }
         if self.hub75.is_some() {
             lcd_watchdog();
+            blank_tick();
         }
         if let Some(s) = shared() {
             drain(&mut self.packer, s, 0);

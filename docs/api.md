@@ -285,8 +285,10 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   `{"steal":true|false}`, runtime only, default on); `blanked` counts the flash fences (erase/program doors) that pointed the
   panel chain at the dark slot for the op — the flash-write policy of #852,
   design §7: dark for the write, never the ring's few resident rows shown
-  over-bright; a pattern save is several hundred short fences, an OTA is
-  seconds of them — and `backoffs` is reserved (0). Read `late` over a minute: 0 is the claim; a
+  over-bright, and the picture comes back only after 200 ms without another
+  erase/program, so an OTA is one dark stretch and a pattern save one short
+  one rather than a flicker at the chunk rate (`blanked` counts dark
+  stretches, not fences) — and `backoffs` is reserved (0). Read `late` over a minute: 0 is the claim; a
   climbing `late` at a given `lsb` step means the packer cannot keep up and
   the step is too aggressive for one core. **Two accounting notes from the
   first bench run (2026-09-28, docs/boards.md "The ring driver on metal"):**

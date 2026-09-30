@@ -263,7 +263,9 @@ So the refill is designed as a claimable queue from the start:
   on core 0 with the existing frame-count ISR.
 
 *Step 2 detail (#856):* the claim word carries the FRAME CHOICE in its
-top bit. The packer that claims a pass's row 0 picks the newest complete
+top two bits (one bit until 2026-09-30 — with the four packed frames of
+#892 that showed a frame or two old on every pass whose index was 2 or 3,
+the backwards stutter Jeremy saw on the first ring-default boot). The packer that claims a pass's row 0 picks the newest complete
 frame and CASes that bit in with the counter; every later row of the pass
 inherits it from the word (`ring::claim_next`), so all 32 rows of a pass
 read one frame with no second atomic and no wait — the ISR's "flip at the
