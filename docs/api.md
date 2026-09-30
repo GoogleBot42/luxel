@@ -63,6 +63,14 @@ on a board without the output
 pipeline the render task keeps the frame copy fallibly too, so a frame it
 could not afford to copy is simply not previewable (Gitea #728).
 
+The snapshot is copied out of the frame buffer in **4 KB chunks a
+millisecond apart** (Gitea #914): one 49 KB copy through the cache held the
+PSRAM bus long enough to tear the HUB75 ring's refill on a 4x1 chain, so a
+request now takes ~15 ms longer than the transfer alone. The copy restarts
+if the frame moved under it, up to four times, after which a fast pattern's
+snapshot may straddle two frames — fine for a preview; a tool that needs
+frame-exact reads (`tools/jit-diff.mjs`) already reads twice and compares.
+
 `GET /api/status` on **firmware** is built in 256-byte segments and written to
 the socket out of those segments (Gitea #753), so the body is never assembled
 as one contiguous allocation and a fragmented heap cannot make a read-only poll
