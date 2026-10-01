@@ -705,7 +705,7 @@ impl LiveArrangement {
                 // remap is bypassed in `frame`, so what each block shows is
                 // what that PHYSICAL panel shows
                 let drive = arrange::driven_panels(&m, fb_w, fb_h);
-                luxel_hub75::card::panels(buf, m.pw as usize, m.ph as usize, drive);
+                luxel_hub75::card::panels(buf, m.pw as usize, m.ph as usize, drive, &crate::layout::tiles());
             }
             luxel_core::layout::Card::Cells => {
                 luxel_hub75::card::cells(buf, &m, &crate::layout::tiles());

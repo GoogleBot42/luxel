@@ -6,10 +6,12 @@
 //! sits, which panel it is along the ribbon, which way it is turned. So the
 //! device can draw two cards instead of the pattern:
 //!
-//! - [`panels`] — straight into the DRIVER's blocks, remap bypassed: every
-//!   physical panel shows its ribbon number (1 = the panel the ribbon
-//!   enters) and an arrow pointing to its own native top. The user reads
-//!   that off the wall into the arrangement editor, cell by cell.
+//! - [`panels`] — straight into the DRIVER's blocks: every physical panel
+//!   shows its OWN ribbon number (1 = the panel the ribbon enters), whatever
+//!   cell the arrangement puts it in, and an arrow. The label is drawn
+//!   through the turn the arrangement currently gives that panel, so it
+//!   answers the console's rotate button live: the user picks, per cell, the
+//!   number they see there and rotates until the arrow points up.
 //! - [`cells`] — in ENGINE space, through the live remap: every grid cell
 //!   shows its ribbon number and an up arrow. When the transcription is
 //!   right, every panel shows its number upright; a wrong cell or turn is
@@ -57,15 +59,6 @@ impl Canvas<'_> {
             *p = c;
         }
     }
-
-    /// A filled `s × s` block at `(x, y)` — one scaled font pixel.
-    fn block(&mut self, x: isize, y: isize, s: isize, c: [u8; 3]) {
-        for dy in 0..s {
-            for dx in 0..s {
-                self.plot(x + dx, y + dy, c);
-            }
-        }
-    }
 }
 
 /// The integer scale that fits a number of `digits` digits and the arrow
@@ -79,19 +72,44 @@ fn scale_for(tw: usize, th: usize, digits: usize) -> isize {
     s.max(1) as isize
 }
 
-/// Draw one tile's label — its 1-based number and a chevron pointing
-/// `turns` quarter turns clockwise from up — into the `tw × th` region at
-/// `(ox, oy)` of the canvas, with a 1-pixel frame around the region.
+/// A tile-local pixel `(x, y)` of an upright `tw × th` label, placed in the
+/// tile turned `turns` quarter turns clockwise — the same map the remap uses
+/// for a mounted tile ([`crate::arrange`]): the label's top-left lands at the
+/// tile's top-right (90°), bottom-right (180°) or bottom-left (270°). A
+/// quarter turn only fits a square tile; a non-square one keeps the 180°
+/// part.
+fn turned(x: isize, y: isize, tw: isize, th: isize, turns: u8) -> (isize, isize) {
+    let turns = if tw != th { turns & 2 } else { turns & 3 };
+    match turns {
+        1 => (tw - 1 - y, x),
+        2 => (tw - 1 - x, th - 1 - y),
+        3 => (y, th - 1 - x),
+        _ => (x, y),
+    }
+}
+
+/// Draw one tile's label — a 1-pixel frame, its 1-based number and a
+/// chevron above it — into the `tw × th` region at `(ox, oy)` of the canvas,
+/// the WHOLE label turned `turns` quarter turns clockwise. `turns == 0` is
+/// upright: the chevron points to the region's top.
 fn label(c: &mut Canvas, ox: usize, oy: usize, tw: usize, th: usize, number: usize, turns: u8) {
     let (ox, oy, tw_i, th_i) = (ox as isize, oy as isize, tw as isize, th as isize);
+    // every pixel goes through the turn, then the region's offset
+    let mut put = |x: isize, y: isize, col: [u8; 3]| {
+        if x < 0 || y < 0 || x >= tw_i || y >= th_i {
+            return;
+        }
+        let (rx, ry) = turned(x, y, tw_i, th_i, turns);
+        c.plot(ox + rx, oy + ry, col);
+    };
     // the frame: the tile's edge, so a dark panel still shows where it is
     for x in 0..tw_i {
-        c.plot(ox + x, oy, FRAME);
-        c.plot(ox + x, oy + th_i - 1, FRAME);
+        put(x, 0, FRAME);
+        put(x, th_i - 1, FRAME);
     }
     for y in 0..th_i {
-        c.plot(ox, oy + y, FRAME);
-        c.plot(ox + tw_i - 1, oy + y, FRAME);
+        put(0, y, FRAME);
+        put(tw_i - 1, y, FRAME);
     }
     let mut digits = [0u8; 3];
     let mut n = number.min(999);
@@ -105,55 +123,51 @@ fn label(c: &mut Canvas, ox: usize, oy: usize, tw: usize, th: usize, number: usi
         }
     }
     let s = scale_for(tw, th, count);
+    let mut block = |x: isize, y: isize, col: [u8; 3]| {
+        for dy in 0..s {
+            for dx in 0..s {
+                put(x + dx, y + dy, col);
+            }
+        }
+    };
     // the glyph block: `count` digits, centred; the arrow centred above
     let text_w = (count as isize * 4 - 1) * s;
     let total_h = (3 + 1 + 5) * s;
-    let x0 = ox + (tw_i - text_w) / 2;
-    let y0 = oy + (th_i - total_h) / 2;
+    let x0 = (tw_i - text_w) / 2;
+    let y0 = (th_i - total_h) / 2;
     for (i, d) in digits[..count].iter().rev().enumerate() {
         let gx = x0 + i as isize * 4 * s;
         let gy = y0 + 4 * s;
         for (row, bits) in DIGITS[usize::from(*d)].iter().enumerate() {
             for col in 0..3 {
                 if bits & (0b100 >> col) != 0 {
-                    c.block(gx + col * s, gy + row as isize * s, s, NUMBER);
+                    block(gx + col * s, gy + row as isize * s, NUMBER);
                 }
             }
         }
     }
-    // the chevron: 5 wide, 3 tall, pointing up, then turned about the
-    // tile's centre with the digits — the ARROW is what the user matches
-    // against the panel's real top, so it must turn with the mount
-    let ax = ox + tw_i / 2;
-    let ay = y0 + s + s / 2;
+    // the chevron: 5 wide, 3 tall, tip up, centred over the digits
+    let ax = tw_i / 2 - s / 2;
+    let ay = y0 + s;
     let up: [(isize, isize); 9] = [(0, -1), (-1, 0), (1, 0), (-2, 1), (2, 1), (0, 0), (0, 1), (-1, 1), (1, 1)];
-    let (cx, cy) = (ox + tw_i / 2, oy + th_i / 2);
     for (dx, dy) in up {
-        // the arrow's own pixel, then the whole glyph rotated about the
-        // tile centre so it points to the panel's native top
-        let (px, py) = (ax + dx * s, ay + dy * s);
-        let (rx, ry) = rotate(px - cx, py - cy, turns);
-        c.block(cx + rx, cy + ry, s, ARROW);
-    }
-}
-
-/// `(x, y)` about the origin, `turns` quarter turns clockwise (y down).
-fn rotate(x: isize, y: isize, turns: u8) -> (isize, isize) {
-    match turns & 3 {
-        1 => (-y, x),
-        2 => (-x, -y),
-        3 => (y, -x),
-        _ => (x, y),
+        block(ax + dx * s, ay + dy * s, ARROW);
     }
 }
 
 /// The PANELS card, in driver space: `frame` is `pw · drive` wide and `ph`
 /// tall (the driver's row of `drive` blocks), and block `b` is the panel at
 /// chain position `drive − 1 − b` — the first block clocked out lands on
-/// the far end of the chain ([`crate::arrange`]). Each block gets its
-/// 1-based ribbon number and an arrow to its native top (upright, since the
-/// block IS the panel's own pixel order). Zero pixels first.
-pub fn panels(frame: &mut [[u8; 3]], pw: usize, ph: usize, drive: usize) {
+/// the far end of the chain ([`crate::arrange`]). Each block gets that
+/// position's 1-based ribbon number and an arrow, drawn THROUGH the
+/// rotation the arrangement currently gives that panel (`tiles`, in ribbon
+/// order): the label is turned by the inverse of the tile's mount turn, so
+/// a panel whose configured turn matches how it really hangs shows its
+/// number upright with the arrow pointing up — and the card answers the
+/// console's rotate button live, exactly like the cells card. Which CELL a
+/// panel is assigned to plays no part: the number is the panel's own.
+/// Zero pixels first.
+pub fn panels(frame: &mut [[u8; 3]], pw: usize, ph: usize, drive: usize, tiles: &[Tile]) {
     let w = pw * drive;
     if frame.len() < w * ph || pw == 0 || ph == 0 || drive == 0 {
         return;
@@ -162,7 +176,8 @@ pub fn panels(frame: &mut [[u8; 3]], pw: usize, ph: usize, drive: usize) {
     let mut c = Canvas { px: &mut frame[..w * ph], w, h: ph };
     for b in 0..drive {
         let position = drive - 1 - b;
-        label(&mut c, b * pw, 0, pw, ph, position + 1, 0);
+        let mount = tiles.get(position).map_or(0, |t| t.turns & 3);
+        label(&mut c, b * pw, 0, pw, ph, position + 1, (4 - mount) & 3);
     }
 }
 
@@ -205,7 +220,7 @@ mod tests {
     fn the_panels_card_numbers_blocks_from_the_in_panel() {
         let (pw, ph, drive) = (16usize, 16usize, 4usize);
         let mut frame = vec![[0u8; 3]; pw * drive * ph];
-        panels(&mut frame, pw, ph, drive);
+        panels(&mut frame, pw, ph, drive, &[]);
         // every block has a frame, a number and an arrow
         for b in 0..drive {
             let block: Vec<[u8; 3]> =
@@ -270,15 +285,49 @@ mod tests {
         assert!(max_x > 8 && min_x >= 8, "the whole chevron sits in the right half: {min_x}..{max_x}");
     }
 
+    /// The panels card answers the rotate button (Gitea #920, Jeremy
+    /// 2026-10-01): a block's label is drawn through the inverse of its
+    /// tile's mount turn, so a tile configured 90° (mounted a quarter turn
+    /// clockwise) gets its label turned 270° — arrow tip on the LEFT edge of
+    /// the block — and on a panel that really hangs that way it reads
+    /// upright. An unconfigured tile is drawn upright.
+    #[test]
+    fn the_panels_card_draws_through_each_tiles_rotation() {
+        let tiles = [Tile { cx: 0, cy: 0, turns: 0 }, Tile { cx: 1, cy: 0, turns: 1 }];
+        let mut frame = vec![[0u8; 3]; 16 * 16 * 2];
+        panels(&mut frame, 16, 16, 2, &tiles);
+        let arrow = |b: usize| -> Vec<(usize, usize)> {
+            (0..16).flat_map(|y| (0..16).map(move |x| (x, y))).filter(|&(x, y)| frame[y * 32 + b * 16 + x] == ARROW).collect()
+        };
+        // block 1 is chain position 0 (the IN panel): upright, tip on top
+        let up = arrow(1);
+        assert_eq!(up.len(), 9);
+        let top = up.iter().map(|p| p.1).min().unwrap();
+        assert_eq!(up.iter().filter(|p| p.1 == top).count(), 1, "one tip pixel at the top");
+        // block 0 is chain position 1, configured 90°: label turned 270°,
+        // tip furthest LEFT
+        let left = arrow(0);
+        assert_eq!(left.len(), 9);
+        let min_x = left.iter().map(|p| p.0).min().unwrap();
+        assert_eq!(left.iter().filter(|p| p.0 == min_x).count(), 1, "one tip pixel at the left");
+        assert!(left.iter().all(|p| p.0 < 8), "the chevron sits in the left half");
+        // …which is exactly what the cells card shows through that tile's
+        // remap: R_1 applied to a label turned R_3 is the upright label
+        for (x, y) in &left {
+            let (ux, uy) = turned(*x as isize, *y as isize, 16, 16, 1);
+            assert!(up.contains(&(ux as usize, uy as usize)), "({x},{y}) → ({ux},{uy})");
+        }
+    }
+
     #[test]
     fn a_tiny_tile_still_fits_its_label() {
         let mut frame = vec![[0u8; 3]; 8 * 8 * 2];
-        panels(&mut frame, 8, 8, 2);
+        panels(&mut frame, 8, 8, 2, &[]);
         assert!(lit(&frame, NUMBER) > 0);
         assert_eq!(lit(&frame, ARROW), 18);
         // and a huge one scales up rather than drawing a 3x5 speck
         let mut frame = vec![[0u8; 3]; 64 * 64];
-        panels(&mut frame, 64, 64, 1);
+        panels(&mut frame, 64, 64, 1, &[]);
         assert!(lit(&frame, ARROW) > 9 * 16, "scaled chevron: {}", lit(&frame, ARROW));
     }
 }

@@ -4571,10 +4571,35 @@ try {
       // one panel: the refresh estimate, no chain picture yet
       const hz = await hubPage.$eval('[data-role="refresh-hz"]', (e) => e.textContent.trim());
       check("panel: the estimated refresh is computed from the arrangement", hz === "115 Hz", hz);
-      check(
-        "panel: a single tile draws no chain picture (mockup S3)",
-        (await hubPage.$('[data-role="arrangement"]')) === null,
-      );
+      // A lone panel gets the wall editor too (Gitea #920): with the rule
+      // row gone, it is how a single panel hung turned is said. The one cell
+      // is selected from the start, and there is no number to pick.
+      {
+        const lay1 = async () => (await (await fetch(`${HUB}/api/layout`)).json()).matrix;
+        check(
+          "single panel: the editor is there, on its one cell, with no number select (#920)",
+          (await hubPage.$('[data-role="chain-box"] [data-role="arrangement"]')) !== null &&
+            (await hubPage.$$('[data-role^="arr-cell-"]')).length === 1 &&
+            (await hubPage.$('[data-role="arr-cell-0-0"][data-selected]')) !== null &&
+            (await hubPage.$('[data-role="chain-editor"]')) !== null &&
+            (await hubPage.$('[data-role="chain-number"]')) === null &&
+            (await hubPage.$('[data-role="identify"]')) !== null,
+        );
+        await hubPage.click('[data-role="chain-rotate"]');
+        await sleep(900);
+        const t1 = (await lay1()).tiles;
+        check(
+          "single panel: ↻ rotate turns the PICTURE clockwise — the wire stores mount 270",
+          JSON.stringify(t1) === "[[0,0,270]]" &&
+            (await hubPage.$eval('[data-role="chain-turn"]', (e) => e.value)) === "90" &&
+            (await hubPage.$eval('[data-role="arr-cell-0-0"]', (e) => e.dataset.turn)) === "90",
+          JSON.stringify(t1),
+        );
+        await hubPage.select('[data-role="chain-turn"]', "0");
+        await sleep(900);
+        const t0 = (await lay1()).tiles;
+        check("single panel: `upright` puts it back — mount 0", JSON.stringify(t0) === "[[0,0,0]]", JSON.stringify(t0));
+      }
       // tile it 2×2 and the chain SVG appears, amber because the estimate drops
       await hubPage.$eval('[data-role="layout-cols"]', (el) => {
         el.value = "2";
@@ -4599,38 +4624,30 @@ try {
       check("panel: four chained panels go amber under 100 Hz", amber && hz4 === "29 Hz", hz4);
       const dark = await hubPage.$('[data-role="layout-dark"]');
       check("panel: the mirror drives the whole chain, so nothing is dark", dark === null);
-      // How the tiles are MOUNTED is a stored fact, not an assumption (Gitea
-      // #917): a panel board offers a rotation per line parity — "first row
-      // turned" (`rot[0]`, the first panel's line) and "alternate rows
-      // turned" (`rot[1]`) — in quarter turns, and the chain picture marks
-      // every turned tile with its degrees. A strip-built matrix has no
-      // "first row" control (checked in the strip flow above).
-      const rotSel = async (role, deg) => {
-        await hubPage.select(`[data-role="${role}"]`, String(deg));
-        await sleep(800);
-        return (await (await fetch(`${HUB}/api/layout`)).json()).matrix?.rot ?? null;
-      };
-      // Since #920 a panel board describes its wall panel by panel, and the
-      // rule row is folded under "Regular pattern" — open it to reach it.
-      check(
-        "panel: the rule row is folded under a collapsed `Regular pattern` (#920)",
-        (await hubPage.$('[data-role="chain-rule"] [data-role="chain-rule-toggle"]')) !== null &&
-          (await hubPage.$('[data-role="layout-start"]')) === null,
-      );
-      await openAdv(hubPage, "chain-rule");
-      check(
-        "panel: 'first row turned' is offered (#917)",
-        (await hubPage.$('[data-role="layout-rot-first"]')) !== null,
-      );
-      const rot90 = await rotSel("layout-rot-first", 90);
-      check("panel: a quarter turn on the first row stores rot [90, 0]", JSON.stringify(rot90) === "[90,0]", JSON.stringify(rot90));
-      const rotMarks = await hubPage.$$eval('[data-role="arrangement"] text.rot', (ts) => ts.map((t) => t.textContent.trim()));
-      check("panel: the chain picture marks the first line's two tiles with 90°", JSON.stringify(rotMarks) === '["↻90°","↻90°"]', JSON.stringify(rotMarks));
-      const rotBoth = await rotSel("layout-rot180", 270);
-      check("panel: the alternate rows keep their own turn: [90, 270]", JSON.stringify(rotBoth) === "[90,270]", JSON.stringify(rotBoth));
-      const rotBack = await rotSel("layout-rot-first", 0);
-      check("panel: clearing the first row leaves the odd lines alone: [0, 270]", JSON.stringify(rotBack) === "[0,270]", JSON.stringify(rotBack));
-      await rotSel("layout-rot180", 0);
+      // The rule row (start · runs · serpentine · first/alternate rows
+      // turned, Gitea #917) is GONE on a panel board — the picture editor
+      // below is the only way its wall is described (Gitea #920; Jeremy:
+      // "completely remove the regular pattern settings"). A strip-built
+      // matrix keeps its pixel-wiring row (checked in the strip flow above).
+      {
+        const roles = [
+          "layout-start",
+          "layout-dir",
+          "layout-snake",
+          "layout-rot-first",
+          "layout-rot180",
+          "chain-rule",
+          "chain-rule-toggle",
+          "chain-reset",
+        ];
+        const present = [];
+        for (const r of roles) if ((await hubPage.$(`[data-role="${r}"]`)) !== null) present.push(r);
+        check(
+          "panel: no rule row and no `Regular pattern` anywhere (#920)",
+          present.length === 0,
+          present.join(","),
+        );
+      }
       const note = await hubPage
         .waitForFunction(
           () => document.querySelector('[data-role="reboot-bar-text"]')?.textContent?.trim() ?? false,
@@ -4974,94 +4991,92 @@ try {
       // the user reads the numbers off.
       {
         const lay = async () => (await (await fetch(`${HUB}/api/layout`)).json()).matrix;
-        const ruleBefore = await lay();
-        await hubPage.select('[data-role="layout-start"]', "tr");
-        await sleep(600);
-        await hubPage.select('[data-role="layout-dir"]', "col");
-        await sleep(600);
-        if ((await lay()).snake !== 1) {
-          await hubPage.$eval('[data-role="layout-snake"]', (el) => el.click());
-          await sleep(600);
-        }
         const m0 = await lay();
         check(
-          "wall editor: the rule's walk arrives as `tiles`, not explicit",
-          JSON.stringify(m0.tiles) === "[[1,0,0],[1,1,0],[0,1,0],[0,0,0]]" && m0.explicit === false,
+          "wall editor: the stored walk arrives as `tiles` for all four cells",
+          Array.isArray(m0.tiles) && m0.tiles.length === 4,
           JSON.stringify({ tiles: m0.tiles, explicit: m0.explicit }),
         );
+        const want0 = m0.tiles.map(([x, y], i) => `arr-cell-${x}-${y}=${i + 1}`).sort();
         const cells = await hubPage.$$eval('[data-role^="arr-cell-"]', (es) =>
           es.map((e) => `${e.dataset.role}=${e.dataset.panel}`).sort(),
         );
         check(
           "wall editor: the picture has one click target per cell, numbered from the device",
-          JSON.stringify(cells) ===
-            JSON.stringify(["arr-cell-0-0=4", "arr-cell-0-1=3", "arr-cell-1-0=1", "arr-cell-1-1=2"]),
+          JSON.stringify(cells) === JSON.stringify(want0),
           JSON.stringify(cells),
-        );
-        check(
-          "wall editor: the rule's collapsed line summarises it",
-          (await hubPage.$eval('[data-role="chain-rule-status"]', (e) => e.textContent.trim())) ===
-            "top-right · vertical · serpentine",
         );
         check(
           "wall editor: no editor row until a cell is picked",
           (await hubPage.$('[data-role="chain-editor"]')) === null &&
-            (await hubPage.$('[data-role="chain-reset"]')) === null,
+            (await hubPage.$('[data-role="chain-pick-hint"]')) !== null,
         );
-        await hubPage.click('[data-role="arr-cell-0-0"]');
+        // the cell that is panel 4 now
+        const [lx, ly] = m0.tiles[3];
+        const last = `arr-cell-${lx}-${ly}`;
+        await hubPage.click(`[data-role="${last}"]`);
         await hubPage.waitForSelector('[data-role="chain-editor"]', { timeout: 4000 });
         check(
           "wall editor: clicking a cell selects it and opens its editor on its number",
-          (await hubPage.$('[data-role="arr-cell-0-0"][data-selected]')) !== null &&
+          (await hubPage.$(`[data-role="${last}"][data-selected]`)) !== null &&
             (await hubPage.$$('[data-role^="arr-cell-"][data-selected]')).length === 1 &&
             (await hubPage.$eval('[data-role="chain-number"]', (e) => e.value)) === "4" &&
             (await hubPage.$eval('[data-role="chain-turn"]', (e) => e.value)) === "0",
         );
-        // the top-left cell is panel 1: it trades places with the cell that
-        // was panel 1 (the list stays a permutation)
+        // it becomes panel 1: it trades places with the cell that was panel 1
+        // (the list stays a permutation)
         await hubPage.select('[data-role="chain-number"]', "1");
         await sleep(900);
         const m1 = await lay();
+        const swapped = [m0.tiles[3], m0.tiles[1], m0.tiles[2], m0.tiles[0]];
         check(
           "wall editor: renumbering posts a `chain` line that swaps the two cells",
-          JSON.stringify(m1.tiles) === "[[0,0,0],[1,1,0],[0,1,0],[1,0,0]]" && m1.explicit === true,
+          JSON.stringify(m1.tiles) === JSON.stringify(swapped) && m1.explicit === true,
           JSON.stringify({ tiles: m1.tiles, explicit: m1.explicit }),
         );
+        const [fx, fy] = m0.tiles[0];
         check(
           "wall editor: the picture and the editor follow the reply",
-          (await hubPage.$eval('[data-role="arr-cell-1-0"]', (e) => e.dataset.panel)) === "4" &&
+          (await hubPage.$eval(`[data-role="arr-cell-${fx}-${fy}"]`, (e) => e.dataset.panel)) === "4" &&
             (await hubPage.$eval('[data-role="chain-number"]', (e) => e.value)) === "1" &&
-            (await hubPage.$('[data-role="arr-cell-0-0"][data-selected]')) !== null,
+            (await hubPage.$(`[data-role="${last}"][data-selected]`)) !== null,
         );
-        check(
-          "wall editor: the rule line says the wall is transcribed now",
-          (await hubPage.$eval('[data-role="chain-rule-status"]', (e) => e.textContent.trim())) ===
-            "transcribed panel by panel",
-        );
+        // The turn is the PICTURE's (Jeremy on the real wall: "the rotate
+        // button rotates the wrong direction"). One press turns the picture a
+        // quarter clockwise, which is the mount turned 270° on the wire.
         await hubPage.click('[data-role="chain-rotate"]');
         await sleep(900);
         const m2 = await lay();
         check(
-          "wall editor: ↻ rotate turns the cell a quarter clockwise (square panel)",
-          JSON.stringify(m2.tiles?.[0]) === "[0,0,90]" &&
-            (await hubPage.$eval('[data-role="arr-cell-0-0"]', (e) => e.dataset.turn)) === "90",
+          "wall editor: ↻ rotate on an upright panel stores mount 270, shows 90° ↻",
+          JSON.stringify(m2.tiles?.[0]) === JSON.stringify([lx, ly, 270]) &&
+            (await hubPage.$eval('[data-role="chain-turn"]', (e) => e.value)) === "90" &&
+            (await hubPage.$eval(`[data-role="${last}"]`, (e) => e.dataset.turn)) === "90",
           JSON.stringify(m2.tiles),
+        );
+        check(
+          "wall editor: the picture labels it ↻90°",
+          (
+            await hubPage.$$eval('[data-role="arrangement"] text.rot', (ts) =>
+              ts.map((t) => t.textContent.trim()),
+            )
+          ).join(",") === "↻90°",
+        );
+        await hubPage.click('[data-role="chain-rotate"]');
+        await sleep(900);
+        check(
+          "wall editor: a second press — picture 180°, mount 180",
+          JSON.stringify((await lay()).tiles?.[0]) === JSON.stringify([lx, ly, 180]) &&
+            (await hubPage.$eval('[data-role="chain-turn"]', (e) => e.value)) === "180",
         );
         await hubPage.select('[data-role="chain-turn"]', "270");
         await sleep(900);
         const m3 = await lay();
         check(
-          "wall editor: the Turned select posts its own rotation",
-          JSON.stringify(m3.tiles?.[0]) === "[0,0,270]",
+          "wall editor: the Turned select speaks the picture too — 270° ↻ is mount 90",
+          JSON.stringify(m3.tiles?.[0]) === JSON.stringify([lx, ly, 90]) &&
+            (await hubPage.$eval(`[data-role="${last}"]`, (e) => e.dataset.turn)) === "270",
           JSON.stringify(m3.tiles),
-        );
-        check(
-          "wall editor: the turned cell is labelled in the picture",
-          (
-            await hubPage.$$eval('[data-role="arrangement"] text.rot', (ts) =>
-              ts.map((t) => t.textContent.trim()),
-            )
-          ).join(",") === "↻270°",
         );
         // the contract the editor leans on: an arrangement edit is LIVE
         {
@@ -5086,11 +5101,11 @@ try {
         await hubPage.click('[data-role="identify"]');
         await sleep(700);
         check(
-          "identify: the device shows the panels card, the button says how to stop",
+          "identify: the device shows the panels card, the hint says rotate until the arrow points up",
           (await lay()).card === "panels" &&
             (await hubPage.$eval('[data-role="identify"]', (e) => e.textContent.trim())) ===
               "Stop identifying" &&
-            /arrow pointing to its top/.test(
+            /rotate until the panel's arrow points up/.test(
               await hubPage.$eval('[data-role="identify-hint"]', (e) => e.textContent.replace(/\s+/g, " ")),
             ),
         );
@@ -5100,7 +5115,7 @@ try {
         check(
           "identify: Check switches the device to the cells card",
           (await lay()).card === "cells" &&
-            /Every panel should show its own number/.test(
+            /Every panel should show its own number with the arrow pointing up/.test(
               await hubPage.$eval('[data-role="identify-hint"]', (e) => e.textContent.replace(/\s+/g, " ")),
             ) &&
             (await hubPage.$eval('[data-role="identify"]', (e) => e.textContent.trim())) ===
@@ -5120,28 +5135,14 @@ try {
         await sleep(900);
         check("identify: leaving Settings turns the card off", (await lay()).card === "off");
         await hubPage.click('[data-role="tab-settings"]');
-        await hubPage.waitForSelector('[data-role="chain-reset"]', { timeout: 6000 });
-
-        await hubPage.click('[data-role="chain-reset"]');
-        await sleep(900);
-        const m4 = await lay();
+        await hubPage.waitForSelector('[data-role="chain-box"]', { timeout: 6000 });
         check(
-          "wall editor: `Back to the regular pattern` clears the explicit list",
-          m4.explicit === false &&
-            JSON.stringify(m4.tiles) === "[[1,0,0],[1,1,0],[0,1,0],[0,0,0]]" &&
-            (await hubPage.$('[data-role="chain-reset"]')) === null,
-          JSON.stringify({ tiles: m4.tiles, explicit: m4.explicit }),
+          "wall editor: there is no way back to a rule on a panel board",
+          (await hubPage.$('[data-role="chain-reset"]')) === null,
         );
-        // leave the rule as this section found it
-        await openAdv(hubPage, "chain-rule");
-        await hubPage.select('[data-role="layout-start"]', ruleBefore.start);
-        await sleep(600);
-        await hubPage.select('[data-role="layout-dir"]', ruleBefore.dir);
-        await sleep(600);
-        if ((await lay()).snake !== ruleBefore.snake) {
-          await hubPage.$eval('[data-role="layout-snake"]', (el) => el.click());
-          await sleep(600);
-        }
+        // leave the stored layout as this section found it (the console has no
+        // button for it any more; the wire still takes a bare `chain`)
+        await fetch(`${HUB}/api/layout`, { method: "POST", body: "chain" });
       }
     } finally {
       await hubPage.close();

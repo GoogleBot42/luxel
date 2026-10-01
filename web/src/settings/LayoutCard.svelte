@@ -28,10 +28,10 @@
     chainLine,
     chainOrder,
     chainPositionOf,
-    chainRuleLine,
     chainSwap,
     chainTurn,
     nextTurn,
+    pictureTurn,
     REFRESH_AMBER_HZ,
     settingsVisibility,
     squarish,
@@ -85,7 +85,6 @@
   import { luxel } from "../stores/pattern";
   import ArrangementSvg from "./ArrangementSvg.svelte";
   import Disclosure from "./Disclosure.svelte";
-  import MaybeDisclosure from "./MaybeDisclosure.svelte";
   import OutputsTable from "./OutputsTable.svelte";
   import PanelModuleCard from "./PanelModuleCard.svelte";
 
@@ -111,10 +110,12 @@
     { v: "row", label: "horizontal" },
     { v: "col", label: "vertical" },
   ];
-  /** Mount rotations (Gitea #917): degrees clockwise a line's tiles are
-   *  turned from upright. A quarter turn swaps a tile's axes, so it is only
-   *  offered on a square tile; a strip-built matrix has no notion of a
-   *  turned tile beyond upside-down. */
+  /** Rotations, degrees clockwise. In the wall editor they are the PICTURE's
+   *  rotation on a panel (Gitea #920) — the wire's mount rotation is its
+   *  inverse, `lib/settingsCaps.ts` `pictureTurn`/`wireTurn`. A quarter turn
+   *  swaps a tile's axes, so it is only offered on a square tile; a
+   *  strip-built matrix has no notion of a turned tile beyond upside-down
+   *  (`ROTS_HALF`, where picture and mount agree). */
   const ROTS: { v: string; label: string; quarter: boolean }[] = [
     { v: "0", label: "upright", quarter: false },
     { v: "90", label: "90° ↻", quarter: true },
@@ -168,16 +169,24 @@
 
   // ---- the wall editor (Gitea #920) ----
   //
-  // On a panel board the picture IS the editor: the user transcribes the
-  // wall panel by panel, reading each panel's number and arrow off the
-  // device's Identify card, instead of reverse-engineering a rule for it.
-  // Only firmware that reports `tiles` understands a `chain` line.
+  // On a panel board the picture IS the editor, and the only way the wall is
+  // described: the user transcribes it panel by panel, reading each panel's
+  // number and arrow off the device's Identify card, instead of
+  // reverse-engineering a rule for it (the start/dir/snake/rot row is gone
+  // on a panel board — Jeremy: "completely remove the regular pattern
+  // settings"). Only firmware that reports `tiles` understands a `chain`
+  // line.
+  //
+  // A turn is shown and edited as the PICTURE's rotation — what the user
+  // sees the panel do — and stored as the mount's, its inverse
+  // (`pictureTurn`/`wireTurn` in lib/settingsCaps.ts).
   $: chainEditing = vis.chainEditor && Array.isArray(m.tiles);
   /** The chain as the device holds it, `[cx, cy, deg]` in ribbon order —
    *  the rule's walk when the device sent none (the editor is absent then;
    *  this only keeps the types honest). */
   $: wallTiles = wallOf(m);
   $: explicit = m.explicit === true;
+  $: single = wallTiles.length === 1;
   $: card = (m.card ?? "off") satisfies LayoutCardMode;
   $: square = m.pw === m.ph;
   /** The grid cell being edited. Follows the CELL, not its ribbon position,
@@ -185,9 +194,13 @@
    *  gone (fewer panels across/down). */
   let selCell: [number, number] | null = null;
   $: if (selCell !== null && (selCell[0] >= m.cols || selCell[1] >= m.rows)) selCell = null;
-  $: selPos = selCell === null ? -1 : chainPositionOf(wallTiles, selCell[0], selCell[1]);
-  $: selTurn = selPos >= 0 ? (wallTiles[selPos]?.[2] ?? 0) : 0;
-  $: ruleStatus = chainRuleLine(explicit, m.start, m.dir, m.snake === 1);
+  /** …and a lone panel is always the one being edited — there is nothing to
+   *  pick, only which way it is turned. */
+  $: selAt = selCell ?? (single ? ([0, 0] as [number, number]) : null);
+  $: selPos = selAt === null ? -1 : chainPositionOf(wallTiles, selAt[0], selAt[1]);
+  /** The selected panel's PICTURE rotation — what the select and the button
+   *  speak; the wire's mount rotation is its inverse. */
+  $: selTurn = selPos >= 0 ? pictureTurn(wallTiles[selPos]?.[2] ?? 0) : 0;
   $: if (!active) void cardOff();
   onDestroy(() => void cardOff());
 
@@ -216,13 +229,10 @@
     postChain(chainSwap(wallTiles, selPos, to));
   }
 
-  function setTurn(deg: number): void {
-    if (selPos < 0 || deg === selTurn) return;
-    postChain(chainTurn(wallTiles, selPos, deg));
-  }
-
-  function resetChain(): void {
-    postChain([]);
+  /** Turn the selected panel's PICTURE to `pictureDeg` clockwise. */
+  function setTurn(pictureDeg: number): void {
+    if (selPos < 0 || pictureDeg === selTurn) return;
+    postChain(chainTurn(wallTiles, selPos, pictureDeg));
   }
 
   /** Identify (`panels`) and Check (`cells`) are one toggle each: pressing
@@ -752,12 +762,13 @@
     </div>
   {/if}
 
-  <!-- The wall editor (Gitea #920). Jeremy, on the rule row below: it makes
+  <!-- The wall editor (Gitea #920). Jeremy, on the old rule row: it made
        him "reverse-engineer a RULE for my wall". So on a panel board the
-       picture is where the wall is described — the device draws each panel's
-       ribbon number and an arrow to its top (Identify), and the user copies
-       what they see into the cell it hangs in. Every edit posts the whole
-       list as ONE `chain` line and applies live. -->
+       picture is where the wall is described, and the only place — the
+       device draws each panel's ribbon number and an arrow (Identify), the
+       user picks the number they see in the cell it hangs in and rotates
+       until the arrow points up. Every edit posts the whole list as ONE
+       `chain` line and applies live. -->
   {#if chainEditing}
     <div class="chainbox" data-role="chain-box">
       <div class="idrow">
@@ -782,17 +793,17 @@
           {card === "cells" ? "Stop checking" : "Check"}
         </button>
         {#if card === "off"}
-          <span class="dim hint">shows each panel's number on the wall</span>
+          <span class="dim hint">shows {single ? "the panel's number and an arrow" : "each panel's number on the wall"}</span>
         {/if}
       </div>
       {#if card !== "off"}
         <p class="hint idhint" data-role="identify-hint">
-          {#if card === "panels"}
-            Each panel on the wall now shows its number and an arrow pointing to its top. Click a
-            cell in the picture and enter the number and the arrow direction you see on that panel.
+          {#if card === "panels" && single}
+            The panel shows its number and an arrow. Rotate until the arrow points up.
+          {:else if card === "panels"}
+            Each panel on the wall shows its number and an arrow. Click a cell in the picture, pick the number you see on that panel, then rotate until the panel's arrow points up.
           {:else}
-            Each cell now shows its number through the current arrangement. Every panel should show
-            its own number with the arrow pointing up; fix any that doesn't.
+            Each cell shows its number through the current arrangement. Every panel should show its own number with the arrow pointing up.
           {/if}
         </p>
       {/if}
@@ -809,20 +820,26 @@
         tiles={wallTiles}
         {explicit}
         editable
-        selected={selCell}
+        selected={selAt}
         outputCounts={vis.outputsTable ? outputs.map((o) => o.count) : []}
         drive={driven}
         on:pick={pickCell}
       />
-      {#if selCell !== null && selPos >= 0}
+      {#if selAt !== null && selPos >= 0}
+        <!-- the turn is the PICTURE's: `90° ↻` = the image on that panel is
+             turned a quarter clockwise, which is what ↻ rotate does to it -->
         <div class="cheditor" data-role="chain-editor">
-          <span class="dim tiny" data-role="chain-cell">column {selCell[0] + 1}, row {selCell[1] + 1} is</span>
-          <span class="pair">
-            <span class="dim tiny">panel</span>
-            <select class="w64" data-role="chain-number" value={String(selPos + 1)} on:change={setNumber}>
-              {#each wallTiles as _, i}<option value={String(i + 1)}>{i + 1}</option>{/each}
-            </select>
-          </span>
+          {#if single}
+            <span class="dim tiny" data-role="chain-cell">the panel's picture is</span>
+          {:else}
+            <span class="dim tiny" data-role="chain-cell">column {selAt[0] + 1}, row {selAt[1] + 1} is</span>
+            <span class="pair">
+              <span class="dim tiny">panel</span>
+              <select class="w64" data-role="chain-number" value={String(selPos + 1)} on:change={setNumber}>
+                {#each wallTiles as _, i}<option value={String(i + 1)}>{i + 1}</option>{/each}
+              </select>
+            </span>
+          {/if}
           <span class="pair">
             <span class="dim tiny">turned</span>
             <select
@@ -837,30 +854,24 @@
           <button
             class="btn sm"
             data-role="chain-rotate"
-            title={square ? "a quarter turn clockwise" : "a half turn (the panel is not square)"}
+            title={square
+              ? "turn the picture a quarter clockwise"
+              : "turn the picture half way round (the panel is not square)"}
             on:click={() => setTurn(nextTurn(selTurn, square))}>↻ rotate</button
           >
         </div>
       {:else}
         <p class="dim hint under" data-role="chain-pick-hint">
-          Click a panel in the picture to set its number and which way it is turned.
+          Click a panel in the picture to set its number and turn it upright.
         </p>
-      {/if}
-      {#if explicit}
-        <div class="resetrow">
-          <button class="link" data-role="chain-reset" on:click={resetChain}>
-            Back to the regular pattern
-          </button>
-        </div>
       {/if}
     </div>
   {/if}
 
+  <!-- Pixel wiring of a STRIP-built matrix (start · runs · serpentine, and
+       the odd lines' tiles hung upside-down). A panel board has none of it:
+       its wall is the picture editor above (Gitea #920). -->
   {#if vis.wiringRow}
-    <MaybeDisclosure wrap={chainEditing} title="Regular pattern" status={ruleStatus} role="chain-rule">
-    <p slot="note" class="dim hint rulenote" data-role="chain-rule-note">
-      Editing these describes the wall as a rule and replaces any per-panel edits.
-    </p>
     <div class="field">
       <span class="flabel">{vis.wiringIsPixels ? "Pixel wiring" : "Chain"}</span>
       <div class="fctl row g10">
@@ -885,25 +896,6 @@
           >
           serpentine
         </label>
-        <!-- How the tiles are MOUNTED (Gitea #917): `rot` is degrees clockwise
-             for the even lines (the first panel's) and the odd lines (a
-             serpentine's return legs). The driver assumes an upright tile;
-             the first panel hung upside-down, or a quarter turn so the ribbon
-             runs down a column, is stated here. A quarter turn needs a square
-             tile, so 90°/270° are only offered when pw == ph. -->
-        {#if vis.rotFirst}
-          <span class="pair">
-          <span class="dim tiny">{vis.rot180 ? "first row" : "panel"} turned</span>
-          <select
-            class="w86"
-            data-role="layout-rot-first"
-            value={String(m.rot[0])}
-            on:change={(e) => setMatrix({ rot: [Number(e.currentTarget.value), m.rot[1]] })}
-          >
-            {#each ROTS as r}<option value={r.v} disabled={r.quarter && m.pw !== m.ph}>{r.label}</option>{/each}
-          </select>
-          </span>
-        {/if}
         {#if vis.rot180}
           <span class="pair">
           <span class="dim tiny">alternate rows turned</span>
@@ -913,15 +905,12 @@
             value={String(m.rot[1])}
             on:change={(e) => setMatrix({ rot: [m.rot[0], Number(e.currentTarget.value)] })}
           >
-            {#each vis.rotFirst ? ROTS : ROTS_HALF as r}<option value={r.v} disabled={r.quarter && m.pw !== m.ph}
-                >{r.label}</option
-              >{/each}
+            {#each ROTS_HALF as r}<option value={r.v}>{r.label}</option>{/each}
           </select>
           </span>
         {/if}
       </div>
     </div>
-    </MaybeDisclosure>
   {/if}
 
   <!-- Panel module (Gitea #778): the scan rate and the four `panel` fields, in
@@ -1238,16 +1227,4 @@
     background: rgba(255, 255, 255, 0.02);
   }
 
-  .resetrow {
-    display: flex;
-    margin-top: 8px;
-  }
-
-  .resetrow .link {
-    margin-left: 0;
-  }
-
-  .rulenote {
-    margin: 10px 0 4px;
-  }
 </style>

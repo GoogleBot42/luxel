@@ -1,5 +1,30 @@
 # Update log
 
+## 2026-10-01 — #920 on the wall: rotate turns the PICTURE, the panels card follows it, the rule controls are gone
+
+Jeremy, after transcribing his 2x2 with the new editor: "This is very close.
+It looks like the rotate button rotates the wrong direction. So the 90/270
+degree labels are also wrong. Also, I want to just completely remove the
+regular pattern settings. This is just so much better."
+
+- **Direction.** The wire's `deg` is the panel's MOUNT rotation; the person
+  at the wall watches the PICTURE, which turns the other way. The console now
+  shows and edits the picture's rotation (`pictureTurn = (360 − deg) % 360`;
+  `↻ rotate` sends `deg + 270`). Wire and firmware remap unchanged.
+- **The panels card answers rotate.** It drew every label upright in driver
+  space ("enter the arrow you see"), so in that mode the button did nothing
+  on the wall. `card::panels` now takes the tile list and draws each block's
+  label through the inverse of its tile's mount turn (`card::turned`, the
+  remap's own map) — a panel whose configured turn matches how it hangs shows
+  its number upright, arrow up. Both cards: "rotate until the arrow points
+  up". Host test: a tile configured 90° gets its label turned 270°, and that
+  is exactly the upright label seen through the tile's remap.
+- **Rule controls removed** from the panel console (the "Regular pattern"
+  disclosure, "Back to the regular pattern", start / direction / serpentine /
+  the two turn dropdowns). The picture is the only editor on a panel board,
+  one panel included. The fields stay on the wire and a strip-built matrix
+  keeps its pixel-wiring row.
+
 ## 2026-09-30 — console: a snaked panel chain mirrored every other row of the 2D pattern tiles
 
 Jeremy, on the second Seengreat (2x2 wall, `tr col 1 270/90`): "the coords

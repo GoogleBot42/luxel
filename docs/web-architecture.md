@@ -1743,13 +1743,14 @@ button re-reads `/api/clock` after it.
 `sect-<x>-note`) ·
 `advanced` · `adv-<row>-{row,toggle,status,body}` · `brightness` ·
 `device-name`, `device-name-note` · `layout-{summary,headline,subhead,kind,lat-w,lat-h,lat-d,lat-count,lat-install,lat-note,pixels,pw,ph,scan,
-cols,rows,start,dir,snake,rot180,rot-first,proto,order,datapin,datapin-apply,notes,note,
+cols,rows,start,dir,snake,rot180,proto,order,datapin,datapin-apply,notes,note,
 dark,map-link}` · `reboot-bar`, `reboot-bar-text`, `reboot-now` ·
 `clock-{status,sync,tz,offset,note}` · `wifi-address` · `arrangement` (with `data-mode`) ·
-`arr-cell-<cx>-<cy>` (the wall editor's click targets, with `data-panel`, `data-turn` and
-`data-selected`; #920) · `chain-{box,editor,cell,number,turn,rotate,reset,pick-hint}` ·
-`chain-rule` (+ `chain-rule-{row,toggle,status,body,note}`) · `identify`, `identify-check`
-(with `data-on`), `identify-hint` · `refresh`, `refresh-hz`,
+`arr-cell-<cx>-<cy>` (the wall editor's click targets, with `data-panel`, `data-selected`
+and `data-turn` — the PICTURE's rotation, the inverse of the wire's mount; #920) ·
+`chain-{box,editor,cell,number,turn,rotate,pick-hint}` (a panel board only, which has
+no `layout-{start,dir,snake,rot180}` row) · `identify`, `identify-check` (with
+`data-on`), `identify-hint` · `refresh`, `refresh-hz`,
 `refresh-measured` · `outputs`, `output-{row,pin,proto,order,count,rev,range,
 add,remove}` · `projection-block`, `projection-kind` (with `data-dims`),
 `projection-card` (with `data-mode`) · `wifi-change` ·
