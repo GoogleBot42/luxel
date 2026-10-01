@@ -91,26 +91,25 @@ export interface SettingsVisibility {
   panelCounts: boolean;
   /** Start corner · run direction · snake. ONE row: it describes the chain
    *  through the tiles, or — at `cols`=`rows`=1 — the pixel run through the
-   *  grid, which is the same widget one level down (§5.3, S3c/S3d). */
+   *  grid, which is the same widget one level down (§5.3, S3c/S3d). A
+   *  STRIP-built matrix only: a panel board describes its wall in the
+   *  picture editor instead and has no rule row at all (Gitea #920). */
   wiringRow: boolean;
   /** …and that row reads as pixel wiring rather than a panel chain. */
   wiringIsPixels: boolean;
-  /** The odd lines' mount rotation (`rot[1]`) — only with tiles to alternate. */
+  /** The odd lines' tiles hang upside-down (`rot[1]`, upright or 180°) — a
+   *  strip-built matrix with tiles to alternate. */
   rot180: boolean;
-  /** The first line's mount rotation (`rot[0]`, Gitea #917):
-   *  a HUB75 board assumes an upright tile 0, and this is the one way to say
-   *  it hangs upside-down or a quarter turn. A strip-built matrix
-   *  says the same thing with its start corner, so it is panel-only. */
-  rotFirst: boolean;
   /** The arrangement SVG: panel grid, chain path, per-tile scan direction. */
   arrangement: boolean;
-  /** The arrangement picture IS the editor (Gitea #920): a panel board with
-   *  tiles to arrange transcribes its wall panel by panel — click a cell,
-   *  say which panel of the ribbon it is and how it is turned — with the
-   *  device's Identify test card to read the numbers off. The rule fields
-   *  (start/dir/snake/rot) fold under a "Regular pattern" disclosure. A
-   *  strip-built matrix keeps the read-only picture and the rule row; one
-   *  lone panel has nothing to transcribe. */
+  /** The arrangement picture IS the editor (Gitea #920): a panel board
+   *  transcribes its wall panel by panel — click a cell, say which panel of
+   *  the ribbon it is and turn it until its arrow points up — with the
+   *  device's Identify test card to read the numbers off. It is the ONLY way
+   *  a panel board describes its wall (Jeremy: "completely remove the
+   *  regular pattern settings"), so a lone panel gets it too: that is how a
+   *  single panel hung turned is said. A strip-built matrix keeps the
+   *  read-only picture and its pixel-wiring row. */
   chainEditor: boolean;
   /** The estimated-refresh readout (panels × planes × clock). */
   estimatedRefresh: boolean;
@@ -165,12 +164,11 @@ export function settingsVisibility(
     panelSize: matrix,
     panelModule: matrix && c.panel,
     panelCounts: matrix,
-    wiringRow: matrix,
-    wiringIsPixels: matrix && tiles === 1,
-    rot180: matrix && tiles > 1,
-    rotFirst: matrix && c.panel,
+    wiringRow: matrix && !c.panel,
+    wiringIsPixels: matrix && !c.panel && tiles === 1,
+    rot180: matrix && !c.panel && tiles > 1,
     arrangement: matrix,
-    chainEditor: matrix && c.panel && tiles > 1,
+    chainEditor: matrix && c.panel,
     estimatedRefresh: matrix && c.panel,
     outputsTable: c.outputs > 1,
     addOutput: c.outputs > 1,
@@ -772,29 +770,41 @@ export function chainSwap(tiles: readonly WireTile[], from: number, to: number):
   return out;
 }
 
-/** The same list with the tile at `at` mounted `deg` clockwise. */
-export function chainTurn(tiles: readonly WireTile[], at: number, deg: number): WireTile[] {
-  return tiles.map((t, i) => (i === at ? ([t[0], t[1], normTurn(deg)] as const) : [t[0], t[1], t[2]] as const));
+// Two rotations, one the INVERSE of the other (Gitea #920, Jeremy on the
+// real wall: "the rotate button rotates the wrong direction"). The wire
+// (`chain cx,cy,deg`, `tiles[i][2]`) carries the panel's MOUNT rotation —
+// how far clockwise the module itself is turned. What the user watches is
+// the PICTURE on that panel, and to stand a picture upright on a module
+// turned 90° clockwise the remap turns the picture 90° ANTI-clockwise. So
+// every place the console shows or edits a turn speaks the picture's
+// rotation, `(360 − mount) % 360`, and only the wire speaks the mount's.
+
+/** The picture rotation a panel shows for its wire (mount) rotation. */
+export function pictureTurn(wireDeg: number): number {
+  return normTurn(360 - normTurn(wireDeg));
 }
 
-/** The next rotation for the `↻ rotate` button: a quarter turn clockwise on
- *  a square tile, a half turn otherwise (a quarter turn swaps a tile's axes,
- *  which the device refuses unless `pw == ph`). */
-export function nextTurn(deg: number, square: boolean): number {
-  return normTurn(normTurn(deg) + (square ? 90 : 180));
+/** The wire (mount) rotation that shows picture rotation `pictureDeg`. The
+ *  same fold as `pictureTurn` — the inverse of a rotation is one — named
+ *  separately so each call site says which way it is converting. */
+export function wireTurn(pictureDeg: number): number {
+  return normTurn(360 - normTurn(pictureDeg));
 }
 
-/** The collapsed "Regular pattern" line: what the rule says, or that the
- *  wall is transcribed panel by panel and the rule is not what drives it. */
-export function chainRuleLine(
-  explicit: boolean,
-  start: Corner,
-  dir: RunDir,
-  snake: boolean,
-): string {
-  if (explicit) return "transcribed panel by panel";
-  const corner = { tl: "top-left", tr: "top-right", bl: "bottom-left", br: "bottom-right" }[start];
-  return [corner, dir === "row" ? "horizontal" : "vertical", snake ? "serpentine" : "straight"].join(" · ");
+/** The same list with the tile at `at` turned so its PICTURE is rotated
+ *  `pictureDeg` clockwise (stored as the mount rotation, `wireTurn`). */
+export function chainTurn(tiles: readonly WireTile[], at: number, pictureDeg: number): WireTile[] {
+  return tiles.map((t, i) =>
+    i === at ? ([t[0], t[1], wireTurn(pictureDeg)] as const) : ([t[0], t[1], t[2]] as const),
+  );
+}
+
+/** The next PICTURE rotation for the `↻ rotate` button: the picture on the
+ *  panel turns a quarter clockwise on a square tile, a half turn otherwise
+ *  (a quarter turn swaps a tile's axes, which the device refuses unless
+ *  `pw == ph`). On the wire one press is `(mount + 270) % 360`. */
+export function nextTurn(pictureDeg: number, square: boolean): number {
+  return normTurn(normTurn(pictureDeg) + (square ? 90 : 180));
 }
 
 // ---- outputs (§5.3b: an output drives a consecutive run of ONE space) ----

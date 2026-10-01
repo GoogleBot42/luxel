@@ -21,6 +21,7 @@
   import {
     chainFromWire,
     chainOrder,
+    pictureTurn,
     type ChainTile,
     type Corner,
     type RunDir,
@@ -82,8 +83,10 @@
 
   // every input is named here, so it re-runs when any of them moves
   $: rule = chainOrder(nc, nr, start, dir, snake, rot);
-  $: chain =
-    tiles !== null && tiles.length === nc * nr ? chainFromWire(tiles, rule, explicit) : rule;
+  $: chain = withShown(
+    tiles !== null && tiles.length === nc * nr ? chainFromWire(tiles, rule, explicit) : rule,
+    editable,
+  );
   $: ownerOf = buildOwners(chain.length, outputCounts);
   $: multi = outputCounts.length > 1;
   /** In pixel mode the whole grid is ONE box; in chain mode it is nc×nr. */
@@ -94,7 +97,8 @@
       : { w: box.w, h: box.h, x0: box.x0, y0: box.y0 };
   // the editor's badge is a touch smaller: it carries a pointer, and the
   // tile's corner carries the `↻` label, on a 4×4 wall too
-  $: radius = Math.min(cell.w, cell.h) * (editable ? 0.2 : 0.24);
+  // (capped, so a lone panel's badge does not swallow its tile)
+  $: radius = editable ? Math.min(28, Math.min(cell.w, cell.h) * 0.2) : Math.min(cell.w, cell.h) * 0.24;
   $: showIndex = mode === "chain" && (editable || (radius >= 7 && chain.length > 1));
   /** The rotation label's size: 13px on a roomy cell, smaller on a crowded
    *  grid so `↻270°` stays inside its tile and clear of the badge. */
@@ -145,6 +149,15 @@
     pts: string;
     head: { x: number; y: number };
     side: -1 | 1;
+  }
+
+  /** A tile plus the turn the picture DRAWS for it. The editor speaks the
+   *  PICTURE's rotation — the inverse of the mount the wire carries, and what
+   *  the user watches the panel do (Gitea #920); the read-only picture of a
+   *  strip-built matrix keeps its mount degrees (only ever 0/180, where the
+   *  two agree anyway). */
+  function withShown(list: readonly ChainTile[], picture: boolean): (ChainTile & { shown: number })[] {
+    return list.map((t) => ({ ...t, shown: picture ? pictureTurn(t.turns) : t.turns }));
   }
 
   function isSel(t: ChainTile, sel: readonly [number, number] | null): boolean {
@@ -335,23 +348,24 @@
       {/each}
       <!-- the turn labels go over the chain path, which can cross a corner -->
       {#each chain as t (t.index)}
-        {#if t.turns !== 0 && rotFits}
+        {#if t.shown !== 0 && rotFits}
           <text
             x={cell.x0 + t.col * cell.w + 2 + rotFont * 0.55}
             y={cell.y0 + t.row * cell.h + 4 + rotFont * 1.1}
             class="rot"
-            style="font-size:{rotFont.toFixed(1)}px">↻{t.turns}°</text
+            style="font-size:{rotFont.toFixed(1)}px">↻{t.shown}°</text
           >
         {/if}
       {/each}
       {#if showIndex}
         {#each chain as t (t.index)}
           {#if editable}
-            <!-- the badge's pointer: this panel's TOP, as the Identify card
-                 draws it on the wall (upright = up, ↻90° = right, …) -->
+            <!-- the badge's pointer: where the picture's TOP is on this
+                 panel (upright = up, ↻90° = right, …) — it turns clockwise
+                 with each press of ↻ rotate -->
             <path
               d="M0 {-(radius + 7)} L{-radius * 0.5} {-radius * 0.72} L{radius * 0.5} {-radius * 0.72} Z"
-              transform="translate({cx(t).toFixed(1)},{cy(t).toFixed(1)}) rotate({t.turns})"
+              transform="translate({cx(t).toFixed(1)},{cy(t).toFixed(1)}) rotate({t.shown})"
               class="top"
               class:sel={isSel(t, selected)}
             />
@@ -385,12 +399,12 @@
             class="hit"
             role="button"
             tabindex="0"
-            aria-label="panel {t.index + 1}{t.turns ? `, turned ${t.turns}°` : ''}"
+            aria-label="panel {t.index + 1}{t.shown ? `, picture turned ${t.shown}°` : ''}"
             aria-pressed={isSel(t, selected)}
             data-role="arr-cell-{t.col}-{t.row}"
             data-selected={isSel(t, selected) ? "" : undefined}
             data-panel={t.index + 1}
-            data-turn={t.turns}
+            data-turn={t.shown}
             on:click={() => dispatch("pick", { cx: t.col, cy: t.row })}
             on:keydown={(e) => pickKey(e, t)}
           />

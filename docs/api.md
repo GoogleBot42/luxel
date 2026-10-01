@@ -1435,8 +1435,20 @@ board draw a card instead of the pattern from the next frame; `GET
 
 | mode | what the wall shows | what it is for |
 |---|---|---|
-| `panels` | every PHYSICAL panel: its ribbon number (1 = the panel the ribbon enters) and an arrow pointing to that panel's own top — drawn straight into the driver's blocks, remap bypassed | reading the wall into the editor: click a cell, enter the number and the arrow you see there |
+| `panels` | every PHYSICAL panel: its OWN ribbon number (1 = the panel the ribbon enters), whatever cell the arrangement puts it in, plus an arrow — drawn straight into the driver's blocks, through the TURN the arrangement currently gives that panel (so the arrow points up exactly when the configured turn matches how the panel hangs) | reading the wall into the editor: click a cell, pick the number seen there, rotate until the arrow points up |
 | `cells` | every GRID CELL: its ribbon number with an UP arrow, through the live remap | checking: with the right transcription every panel shows its own number upright; a wrong cell shows the wrong number, a wrong turn a sideways one |
+
+Both cards therefore answer a turn edit on the next frame, and the loop on
+the wall is the same in either: **rotate until the arrow points up**. Note
+the direction: `deg` on the wire is how the panel is MOUNTED, clockwise;
+turning the PICTURE on a panel clockwise by 90° is the inverse (`deg` goes
+down by 90). The console shows and edits the picture's rotation — its `↻
+rotate` button sends `(deg + 270) % 360` — because that is what the person
+watching the wall sees turn (Jeremy, 2026-10-01: "the rotate button rotates
+the wrong direction"). The console also no longer offers the rule fields on
+a panel board at all: the picture is the only editor there. They remain on
+the wire, and a strip-built matrix still uses `start dir snake` for its
+pixel wiring.
 
 The numbers are a 3x5 font scaled to the tile, the arrow a chevron; both are
 white/cyan on black with a grey frame per tile, so they read at any
