@@ -21,10 +21,17 @@
   // docs/api.md "Live vs reboot".
   //
   // Every field is gated by `lib/settingsCaps.ts` — absent, never disabled.
-  import { createEventDispatcher } from "svelte";
+  import { createEventDispatcher, onDestroy } from "svelte";
   import PatternThumb from "../components/PatternThumb.svelte";
-  import type { LayoutWire } from "../lib/device";
+  import type { LayoutCardMode, LayoutWire } from "../lib/device";
   import {
+    chainLine,
+    chainOrder,
+    chainPositionOf,
+    chainRuleLine,
+    chainSwap,
+    chainTurn,
+    nextTurn,
     REFRESH_AMBER_HZ,
     settingsVisibility,
     squarish,
@@ -32,6 +39,7 @@
     type Corner,
     type LayoutKind,
     type RunDir,
+    type WireTile,
   } from "../lib/settingsCaps";
   import {
     configuredDriver,
@@ -68,6 +76,7 @@
     pixelMax,
     protocolOptions,
     refreshOutput,
+    setLayoutCard,
   } from "../stores/device";
   import { confirm } from "../stores/dialog";
   import { layout as geomLayout, layoutLabel, type Layout } from "../stores/geometry";
@@ -76,10 +85,16 @@
   import { luxel } from "../stores/pattern";
   import ArrangementSvg from "./ArrangementSvg.svelte";
   import Disclosure from "./Disclosure.svelte";
+  import MaybeDisclosure from "./MaybeDisclosure.svelte";
   import OutputsTable from "./OutputsTable.svelte";
   import PanelModuleCard from "./PanelModuleCard.svelte";
 
   const dispatch = createEventDispatcher<{ pixelchange: void; openmap: void }>();
+
+  /** The Settings page is on screen. Pages stay MOUNTED behind other tabs,
+   *  so this — not `onDestroy` alone — is what takes a test card down when
+   *  the user walks away from the wall they were transcribing. */
+  export let active = true;
 
   /** A sample 1D pattern: the summary thumbnail is a live picture of the
    *  FIXTURE, so it takes the Layout's shape straight from the geometry
@@ -150,6 +165,84 @@
    *  choice anybody makes (mockup S3 has no picture). */
   $: arrangementMode = panels > 1 ? ("chain" as const) : ("pixels" as const);
   $: showArrangement = vis.arrangement && (panels > 1 || !($deviceCaps?.panel ?? false));
+
+  // ---- the wall editor (Gitea #920) ----
+  //
+  // On a panel board the picture IS the editor: the user transcribes the
+  // wall panel by panel, reading each panel's number and arrow off the
+  // device's Identify card, instead of reverse-engineering a rule for it.
+  // Only firmware that reports `tiles` understands a `chain` line.
+  $: chainEditing = vis.chainEditor && Array.isArray(m.tiles);
+  /** The chain as the device holds it, `[cx, cy, deg]` in ribbon order —
+   *  the rule's walk when the device sent none (the editor is absent then;
+   *  this only keeps the types honest). */
+  $: wallTiles = wallOf(m);
+  $: explicit = m.explicit === true;
+  $: card = (m.card ?? "off") satisfies LayoutCardMode;
+  $: square = m.pw === m.ph;
+  /** The grid cell being edited. Follows the CELL, not its ribbon position,
+   *  so renumbering it keeps it selected. Cleared when the grid it names is
+   *  gone (fewer panels across/down). */
+  let selCell: [number, number] | null = null;
+  $: if (selCell !== null && (selCell[0] >= m.cols || selCell[1] >= m.rows)) selCell = null;
+  $: selPos = selCell === null ? -1 : chainPositionOf(wallTiles, selCell[0], selCell[1]);
+  $: selTurn = selPos >= 0 ? (wallTiles[selPos]?.[2] ?? 0) : 0;
+  $: ruleStatus = chainRuleLine(explicit, m.start, m.dir, m.snake === 1);
+  $: if (!active) void cardOff();
+  onDestroy(() => void cardOff());
+
+  function wallOf(n: ReturnType<typeof matrixOf>): WireTile[] {
+    if (n.tiles) return n.tiles;
+    return chainOrder(n.cols, n.rows, n.start, n.dir, n.snake === 1, n.rot).map(
+      (t) => [t.col, t.row, t.turns] as const,
+    );
+  }
+
+  /** Write the whole list back as ONE `chain` line; the reply is the state. */
+  function postChain(tiles: readonly WireTile[]): void {
+    void post(chainLine(tiles), "the panel arrangement", { field: "chain-editor" });
+  }
+
+  function pickCell(e: CustomEvent<{ cx: number; cy: number }>): void {
+    const { cx, cy } = e.detail;
+    selCell = selCell !== null && selCell[0] === cx && selCell[1] === cy ? null : [cx, cy];
+  }
+
+  /** "Panel [n]": the selected cell takes ribbon position n; whichever cell
+   *  held it takes this cell's old one (the list stays a permutation). */
+  function setNumber(e: Event): void {
+    const to = Number((e.target as HTMLSelectElement).value) - 1;
+    if (selPos < 0 || to === selPos) return;
+    postChain(chainSwap(wallTiles, selPos, to));
+  }
+
+  function setTurn(deg: number): void {
+    if (selPos < 0 || deg === selTurn) return;
+    postChain(chainTurn(wallTiles, selPos, deg));
+  }
+
+  function resetChain(): void {
+    postChain([]);
+  }
+
+  /** Identify (`panels`) and Check (`cells`) are one toggle each: pressing
+   *  the one that is on turns the card off. */
+  function toggleCard(mode: Exclude<LayoutCardMode, "off">): void {
+    void (async () => {
+      const want = card === mode ? "off" : mode;
+      const r = await setLayoutCard(want);
+      if (!r.ok) reportApiError(r.error ?? "rejected", { scope: "layout", field: "identify" });
+    })();
+  }
+
+  /** Take a test card down when the page goes away — a wall left showing
+   *  numbers instead of the pattern reads as a broken device. Reads the
+   *  STORE, not `card`: at destroy time the component's own values may
+   *  already be torn down. */
+  async function cardOff(): Promise<void> {
+    const on = $deviceLayoutWire?.matrix?.card;
+    if (on === "panels" || on === "cells") await setLayoutCard("off");
+  }
   /** The panel driver the estimate is spent on: the device's STORED clock and
    *  bit depth since #401/#525, this build's constants on firmware that does
    *  not report them (`lib/panelDriver.ts`). */
@@ -210,6 +303,10 @@
     scan: number;
     est_hz?: number;
     drive?: number;
+    /** The chain in ribbon order, `[cx, cy, deg]` (Gitea #920). */
+    tiles?: [number, number, number][];
+    explicit?: boolean;
+    card?: LayoutCardMode;
   } {
     const square = squarish(px || w?.pixels || 1);
     return (
@@ -655,7 +752,115 @@
     </div>
   {/if}
 
+  <!-- The wall editor (Gitea #920). Jeremy, on the rule row below: it makes
+       him "reverse-engineer a RULE for my wall". So on a panel board the
+       picture is where the wall is described — the device draws each panel's
+       ribbon number and an arrow to its top (Identify), and the user copies
+       what they see into the cell it hangs in. Every edit posts the whole
+       list as ONE `chain` line and applies live. -->
+  {#if chainEditing}
+    <div class="chainbox" data-role="chain-box">
+      <div class="idrow">
+        <button
+          class="btn sm"
+          class:primary={card === "panels"}
+          data-role="identify"
+          data-on={card === "panels" ? "" : undefined}
+          aria-pressed={card === "panels"}
+          on:click={() => toggleCard("panels")}
+        >
+          {card === "panels" ? "Stop identifying" : "Identify panels"}
+        </button>
+        <button
+          class="btn sm"
+          class:primary={card === "cells"}
+          data-role="identify-check"
+          data-on={card === "cells" ? "" : undefined}
+          aria-pressed={card === "cells"}
+          on:click={() => toggleCard("cells")}
+        >
+          {card === "cells" ? "Stop checking" : "Check"}
+        </button>
+        {#if card === "off"}
+          <span class="dim hint">shows each panel's number on the wall</span>
+        {/if}
+      </div>
+      {#if card !== "off"}
+        <p class="hint idhint" data-role="identify-hint">
+          {#if card === "panels"}
+            Each panel on the wall now shows its number and an arrow pointing to its top. Click a
+            cell in the picture and enter the number and the arrow direction you see on that panel.
+          {:else}
+            Each cell now shows its number through the current arrangement. Every panel should show
+            its own number with the arrow pointing up; fix any that doesn't.
+          {/if}
+        </p>
+      {/if}
+      <ArrangementSvg
+        mode="chain"
+        pw={m.pw}
+        ph={m.ph}
+        cols={m.cols}
+        rows={m.rows}
+        start={m.start}
+        dir={m.dir}
+        snake={m.snake === 1}
+        rot={m.rot}
+        tiles={wallTiles}
+        {explicit}
+        editable
+        selected={selCell}
+        outputCounts={vis.outputsTable ? outputs.map((o) => o.count) : []}
+        drive={driven}
+        on:pick={pickCell}
+      />
+      {#if selCell !== null && selPos >= 0}
+        <div class="cheditor" data-role="chain-editor">
+          <span class="dim tiny" data-role="chain-cell">column {selCell[0] + 1}, row {selCell[1] + 1} is</span>
+          <span class="pair">
+            <span class="dim tiny">panel</span>
+            <select class="w64" data-role="chain-number" value={String(selPos + 1)} on:change={setNumber}>
+              {#each wallTiles as _, i}<option value={String(i + 1)}>{i + 1}</option>{/each}
+            </select>
+          </span>
+          <span class="pair">
+            <span class="dim tiny">turned</span>
+            <select
+              class="w96"
+              data-role="chain-turn"
+              value={String(selTurn)}
+              on:change={(e) => setTurn(Number(e.currentTarget.value))}
+            >
+              {#each ROTS as r}<option value={r.v} disabled={r.quarter && !square}>{r.label}</option>{/each}
+            </select>
+          </span>
+          <button
+            class="btn sm"
+            data-role="chain-rotate"
+            title={square ? "a quarter turn clockwise" : "a half turn (the panel is not square)"}
+            on:click={() => setTurn(nextTurn(selTurn, square))}>↻ rotate</button
+          >
+        </div>
+      {:else}
+        <p class="dim hint under" data-role="chain-pick-hint">
+          Click a panel in the picture to set its number and which way it is turned.
+        </p>
+      {/if}
+      {#if explicit}
+        <div class="resetrow">
+          <button class="link" data-role="chain-reset" on:click={resetChain}>
+            Back to the regular pattern
+          </button>
+        </div>
+      {/if}
+    </div>
+  {/if}
+
   {#if vis.wiringRow}
+    <MaybeDisclosure wrap={chainEditing} title="Regular pattern" status={ruleStatus} role="chain-rule">
+    <p slot="note" class="dim hint rulenote" data-role="chain-rule-note">
+      Editing these describes the wall as a rule and replaces any per-panel edits.
+    </p>
     <div class="field">
       <span class="flabel">{vis.wiringIsPixels ? "Pixel wiring" : "Chain"}</span>
       <div class="fctl row g10">
@@ -716,6 +921,7 @@
         {/if}
       </div>
     </div>
+    </MaybeDisclosure>
   {/if}
 
   <!-- Panel module (Gitea #778): the scan rate and the four `panel` fields, in
@@ -848,7 +1054,7 @@
     total={outTotal}
     on:apply={(e) => setOutputs(e.detail)}
   >
-    {#if kind === "matrix" && showArrangement}
+    {#if kind === "matrix" && showArrangement && !chainEditing}
       <ArrangementSvg
         mode={arrangementMode}
         pw={m.pw}
@@ -859,12 +1065,14 @@
         dir={m.dir}
         snake={m.snake === 1}
         rot={m.rot}
+        tiles={m.tiles ?? null}
+        explicit={m.explicit === true}
         outputCounts={outputs.map((o) => o.count)}
         drive={driven}
       />
     {/if}
   </OutputsTable>
-{:else if kind === "matrix" && showArrangement}
+{:else if kind === "matrix" && showArrangement && !chainEditing}
   <ArrangementSvg
     mode={arrangementMode}
     pw={m.pw}
@@ -875,6 +1083,8 @@
     dir={m.dir}
     snake={m.snake === 1}
     rot={m.rot}
+    tiles={m.tiles ?? null}
+    explicit={m.explicit === true}
     drive={driven}
   />
 {/if}
@@ -887,9 +1097,9 @@
     {/if}
     {#if $deviceCaps?.panel}
       <div>
-        Panel size, scan, the chain (panels across/down, start, direction, snake, rotation) and the
-        module's chip, clock and bit planes are built once at boot — a reboot applies them. Latch
-        blanking applies live.
+        Panel size, scan, panels across/down and the module's chip, clock and bit planes are built
+        once at boot — a reboot applies them. Which panel goes where, how each is turned, and latch
+        blanking apply live.
       </div>
     {:else}
       <div>
@@ -992,5 +1202,52 @@
 
   .latthumb {
     line-height: 0;
+  }
+
+  /* the wall editor (Gitea #920): the Identify row, the picture, and the
+     one-cell editor under it, as one block */
+  .chainbox {
+    margin: 14px 0 4px;
+  }
+
+  .chainbox :global(.arrbox) {
+    margin-top: 10px;
+  }
+
+  .idrow,
+  .cheditor {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 10px;
+  }
+
+  .idhint {
+    margin: 8px 0 0;
+    padding: 8px 10px;
+    border-left: 2px solid var(--accent);
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--text);
+  }
+
+  .cheditor {
+    margin-top: 10px;
+    padding: 8px 10px;
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .resetrow {
+    display: flex;
+    margin-top: 8px;
+  }
+
+  .resetrow .link {
+    margin-left: 0;
+  }
+
+  .rulenote {
+    margin: 10px 0 4px;
   }
 </style>

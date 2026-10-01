@@ -235,6 +235,8 @@ pub fn heal_if_starved(free: usize, largest: usize) -> bool {
             let next = Layout {
                 kind: def.kind,
                 matrix: def.matrix,
+                // the shape changed, so a per-panel chain for it cannot survive
+                chain: alloc::vec::Vec::new(),
                 outputs: cur.outputs.clone(),
                 proj: cur.proj,
                 driver: cur.driver,
@@ -332,6 +334,39 @@ pub fn configured_output(n: u8) -> Option<Output> {
 /// describes. Copied out rather than cloning the whole Layout.
 pub fn matrix() -> Matrix {
     LAYOUT.lock(|c| c.borrow().as_ref().map_or_else(|| board_default().matrix, |l| l.matrix))
+}
+
+/// The chain as the remap walks it (Gitea #920): the explicit `chain` line's
+/// tiles when one is stored, else the rule's. Allocates the list; called at
+/// boot and on an arrangement change, never per frame.
+#[cfg(feature = "hub75")]
+pub fn tiles() -> alloc::vec::Vec<luxel_core::layout::Tile> {
+    LAYOUT.lock(|c| c.borrow().as_ref().map_or_else(|| board_default().tiles(), |l| l.tiles()))
+}
+
+/// `POST /api/layout/card` (Gitea #920): the test card to draw instead of
+/// the pattern. `Err` is the `{"ok":false,…}` body.
+#[cfg(feature = "hub75")]
+pub fn set_card(body: &str) -> Result<String, String> {
+    let t = body.trim();
+    // `{"mode":"panels"}` or the bare word
+    let word = match t.find("\"mode\"") {
+        Some(i) => {
+            let rest = &t[i + 6..];
+            rest.find('"').and_then(|q| {
+                let v = &rest[q + 1..];
+                v.find('"').map(|e| &v[..e])
+            })
+        }
+        None => Some(t),
+    };
+    match word.and_then(luxel_core::layout::Card::from_str) {
+        Some(c) => {
+            crate::hub75::set_card(c);
+            Ok(alloc::format!("{{\"ok\":true,\"card\":\"{}\"}}", c.as_str()))
+        }
+        None => Err(String::from("{\"ok\":false,\"error\":\"mode must be off, panels or cells\"}")),
+    }
 }
 
 /// The configured panel driver — the `panel` wire line (#525): bit depth,
@@ -613,7 +648,19 @@ pub fn set_from_wire(body: &str) -> Result<Applied, String> {
     // what the next frame installs (#598).
     let proj_now = edit.proj_now;
     let defaults_changed = edit.layout.proj != cur.proj;
+    // The arrangement is a table the output task can swap between frames
+    // (Gitea #920): when only WHICH panel sits where / how it is turned
+    // moved — not the framebuffer's shape — ask for the swap. That is the
+    // same test the core used to answer `reboot_required: false`.
+    #[cfg(feature = "hub75")]
+    let swap_remap = edit.layout.kind == luxel_core::layout::LayoutKind::Matrix
+        && cur.arrangement_differs(&edit.layout)
+        && !cur.fb_geometry_changed(&edit.layout);
     let persisted = store(edit.layout, edit.pixels.unwrap_or(pixels_now));
+    #[cfg(feature = "hub75")]
+    if swap_remap {
+        crate::hub75::want_remap();
+    }
     // A successful edit is the user having seen (or at least overwritten) the
     // self-heal's verdict — the record has done its job (Gitea #822). Only
     // written when there is one, so the ordinary POST costs no flash.

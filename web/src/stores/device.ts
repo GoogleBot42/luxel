@@ -12,6 +12,7 @@ import {
   type DeviceCaps,
   type DevicePatternRow,
   type DeviceStatus,
+  type LayoutCardMode,
   type LayoutResult,
   type LayoutWire,
   type MqttStatus,
@@ -769,6 +770,28 @@ export async function applyLayout(lines: string): Promise<LayoutResult> {
   }
   if (r.ok) adoptLayout(r);
   return r;
+}
+
+/**
+ * Show a panel test card, or stop (`POST /api/layout/card`, Gitea #920). The
+ * reply's `card` lands in the Layout store's matrix block, so the Identify
+ * buttons read what the DEVICE is showing, not what was clicked.
+ */
+export async function setLayoutCard(
+  mode: LayoutCardMode,
+): Promise<{ ok: boolean; error?: string }> {
+  const d = get(device);
+  if (!d) return { ok: false, error: "no device" };
+  let r;
+  try {
+    r = await d.setLayoutCard(mode);
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+  if (!r.ok) return r;
+  const card = r.card;
+  deviceLayoutWire.update((w) => (w?.matrix ? { ...w, matrix: { ...w.matrix, card } } : w));
+  return { ok: true };
 }
 
 /**

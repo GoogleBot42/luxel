@@ -1,5 +1,46 @@
 # Update log
 
+## 2026-09-30 — HUB75: transcribe the wall panel by panel, live, with a test card (#920)
+
+Jeremy, after three rounds on #917: "this setting option is unintuitive …
+the mechanism/config options here are just fundamentally wrong. You should
+come up with some ideas to express this in the UI." He picked the two on the
+ticket: describe the wall PER PANEL from a card the device draws, and make
+the arrangement live so the loop is look-and-adjust, not reboot-and-look.
+
+- **`chain` line** (luxel-core): `chain <cx>,<cy>,<deg> …`, one entry per
+  panel in ribbon order, validated as a permutation of the cells (quarter
+  turns still need a square tile); bare `chain` clears it; a `matrix` line
+  whose rule fields or tiling changed drops it. `Layout.chain: Vec<Tile>`,
+  `Layout::tiles()` is the effective list (rule-generated when empty —
+  `Matrix::rule_tile` moved in from `arrange::panel_cell`, which now wraps
+  it). JSON: `matrix.tiles` (always, ribbon order) and `matrix.explicit`.
+  Stored text of a rule-described Layout is byte-identical to before.
+- **Live arrangement** (firmware): `hub75::LiveArrangement` sits in both
+  drivers; `POST /api/layout` calls `want_remap()` when the arrangement moved
+  but the framebuffer's shape did not, and the output task rebuilds the table
+  from `layout::tiles()` at the top of its next `write_frame`, swaps it in
+  and frees the previous one. The core answers `reboot_required:false` for
+  those edits on a panel board (`pw ph cols rows scan` still boot); a
+  strip-built matrix keeps the #475 rule.
+- **Test cards** (`luxel_hub75::card`, `POST /api/layout/card`
+  `{"mode":"off|panels|cells"}`, reported as `matrix.card`, never
+  persisted): `panels` draws every physical panel's ribbon number and an
+  arrow to its native top straight into the driver's blocks (remap
+  bypassed); `cells` draws every grid cell's number with an up arrow through
+  the live remap. 3x5 digits and a chevron scaled to the tile, white/cyan on
+  black with a grey tile frame. Host tests: block numbering from the IN
+  panel, cell labelling by ribbon position, the arrow turning with the tile,
+  8-px and 64-px tiles.
+- **Console** (Settings › LED layout): the arrangement picture is the editor
+  on a panel board — click a cell, pick the panel number and the turn you
+  read off the wall (swapping keeps the list a permutation), every edit posts
+  one `chain` line; *Identify panels* / *Check* toggle the two cards with a
+  hint; *Back to the regular pattern* clears the list; the rule controls live
+  under a collapsed "Regular pattern" disclosure. Mirror: `luxel serve
+  --board panel` round-trips the chain and the card state.
+- Docs: api.md "Transcribing the wall", the reboot table; boards.md.
+
 ## 2026-09-30 — HUB75 chain: tile 0 owns the LAST driver block, not the first (#917, the swapped columns)
 
 Jeremy, on the rotation build: "With the current config, it looks like the

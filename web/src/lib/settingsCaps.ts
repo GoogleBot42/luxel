@@ -104,6 +104,14 @@ export interface SettingsVisibility {
   rotFirst: boolean;
   /** The arrangement SVG: panel grid, chain path, per-tile scan direction. */
   arrangement: boolean;
+  /** The arrangement picture IS the editor (Gitea #920): a panel board with
+   *  tiles to arrange transcribes its wall panel by panel — click a cell,
+   *  say which panel of the ribbon it is and how it is turned — with the
+   *  device's Identify test card to read the numbers off. The rule fields
+   *  (start/dir/snake/rot) fold under a "Regular pattern" disclosure. A
+   *  strip-built matrix keeps the read-only picture and the rule row; one
+   *  lone panel has nothing to transcribe. */
+  chainEditor: boolean;
   /** The estimated-refresh readout (panels × planes × clock). */
   estimatedRefresh: boolean;
   /** The Outputs table (§5.3b) — a board with more than one physical output. */
@@ -162,6 +170,7 @@ export function settingsVisibility(
     rot180: matrix && tiles > 1,
     rotFirst: matrix && c.panel,
     arrangement: matrix,
+    chainEditor: matrix && c.panel && tiles > 1,
     estimatedRefresh: matrix && c.panel,
     outputsTable: c.outputs > 1,
     addOutput: c.outputs > 1,
@@ -638,6 +647,10 @@ export interface ChainTile {
   flipX: boolean;
   /** …and top-to-bottom is reversed. */
   flipY: boolean;
+  /** How the tile is MOUNTED: degrees clockwise from upright, 0|90|180|270
+   *  (Gitea #917/#920). From the rule's `rot[line % 2]`, or the device's own
+   *  per-tile `tiles` entry. */
+  turns: number;
 }
 
 /**
@@ -654,6 +667,7 @@ export function chainOrder(
   start: Corner,
   dir: RunDir,
   snake: boolean,
+  rot: readonly [number, number] = [0, 0],
 ): ChainTile[] {
   const nc = Math.max(1, Math.round(cols) || 1);
   const nr = Math.max(1, Math.round(rows) || 1);
@@ -682,10 +696,105 @@ export function chainOrder(
         // the chain enters this tile from its right / bottom edge
         flipX: byRow && reversed,
         flipY: !byRow && reversed,
+        turns: normTurn(rot[o % 2] ?? 0),
       });
     }
   }
   return tiles;
+}
+
+// ---- the explicit chain (Gitea #920: transcribe the wall panel by panel) ----
+//
+// `GET /api/layout`'s matrix block carries `tiles: [[cx, cy, deg], …]` — the
+// chain in RIBBON order (entry 0 is the panel the ribbon enters, shown as
+// panel 1), each grid cell exactly once. The editor edits that list and
+// posts it back whole as ONE `chain` line; these are its pure halves.
+
+/** One `tiles` entry: grid column, grid row (0-based from the top-left) and
+ *  the mount rotation in degrees clockwise. */
+export type WireTile = readonly [number, number, number];
+
+/** A rotation folded into 0|90|180|270. */
+export function normTurn(deg: number): number {
+  const q = Math.round((Number(deg) || 0) / 90);
+  return (((q % 4) + 4) % 4) * 90;
+}
+
+/**
+ * The picture's tiles from the device's `tiles` list. `rule` is the same
+ * wall walked by the rule fields (`chainOrder`): a derived list takes its
+ * `line`/`flipX`/`flipY` from it, cell by cell, so a strip-built matrix still
+ * draws its scan arrows; an explicit list has no lines to speak of.
+ */
+export function chainFromWire(
+  tiles: readonly WireTile[],
+  rule: readonly ChainTile[],
+  explicit: boolean,
+): ChainTile[] {
+  return tiles.map(([cx, cy, deg], index) => {
+    const r = explicit ? undefined : rule.find((t) => t.col === cx && t.row === cy);
+    return {
+      index,
+      col: cx,
+      row: cy,
+      line: r?.line ?? 0,
+      flipX: r?.flipX ?? false,
+      flipY: r?.flipY ?? false,
+      turns: normTurn(deg),
+    };
+  });
+}
+
+/** The `chain` wire line for a whole list, in ribbon order. An empty list is
+ *  the bare `chain` that clears the explicit list back to the rule. */
+export function chainLine(tiles: readonly WireTile[]): string {
+  if (tiles.length === 0) return "chain";
+  return `chain ${tiles.map(([cx, cy, deg]) => `${cx},${cy},${normTurn(deg)}`).join(" ")}`;
+}
+
+/** The ribbon position (0-based) of grid cell `cx,cy`, or -1. */
+export function chainPositionOf(tiles: readonly WireTile[], cx: number, cy: number): number {
+  return tiles.findIndex((t) => t[0] === cx && t[1] === cy);
+}
+
+/**
+ * Give the tile at ribbon position `from` the position `to`. The list must
+ * stay a permutation of the grid, so whichever cell held `to` takes `from`:
+ * the two ENTRIES trade places, each cell keeping its own rotation.
+ */
+export function chainSwap(tiles: readonly WireTile[], from: number, to: number): WireTile[] {
+  const out = tiles.map((t) => [t[0], t[1], t[2]] as const);
+  const a = out[from];
+  const b = out[to];
+  if (a === undefined || b === undefined || from === to) return out;
+  out[from] = b;
+  out[to] = a;
+  return out;
+}
+
+/** The same list with the tile at `at` mounted `deg` clockwise. */
+export function chainTurn(tiles: readonly WireTile[], at: number, deg: number): WireTile[] {
+  return tiles.map((t, i) => (i === at ? ([t[0], t[1], normTurn(deg)] as const) : [t[0], t[1], t[2]] as const));
+}
+
+/** The next rotation for the `↻ rotate` button: a quarter turn clockwise on
+ *  a square tile, a half turn otherwise (a quarter turn swaps a tile's axes,
+ *  which the device refuses unless `pw == ph`). */
+export function nextTurn(deg: number, square: boolean): number {
+  return normTurn(normTurn(deg) + (square ? 90 : 180));
+}
+
+/** The collapsed "Regular pattern" line: what the rule says, or that the
+ *  wall is transcribed panel by panel and the rule is not what drives it. */
+export function chainRuleLine(
+  explicit: boolean,
+  start: Corner,
+  dir: RunDir,
+  snake: boolean,
+): string {
+  if (explicit) return "transcribed panel by panel";
+  const corner = { tl: "top-left", tr: "top-right", bl: "bottom-left", br: "bottom-right" }[start];
+  return [corner, dir === "row" ? "horizontal" : "vertical", snake ? "serpentine" : "straight"].join(" · ");
 }
 
 // ---- outputs (§5.3b: an output drives a consecutive run of ONE space) ----

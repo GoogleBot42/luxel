@@ -56,7 +56,7 @@
 //! swaps a tile's axes, so the parser only allows it on square tiles.
 
 use crate::{Control, Geometry, Schedule};
-use luxel_core::layout::{Corner, Matrix, PanelDriver, RunDir};
+use luxel_core::layout::{Matrix, PanelDriver, Tile};
 
 /// A driver pixel with no engine pixel behind it: outside the arrangement,
 /// or past the end of the chain the framebuffer covers. Composed black.
@@ -139,37 +139,18 @@ pub fn fb_geometry(m: &Matrix, planes: usize) -> Option<Geometry> {
     Some(Geometry::new(scan, chain_w * stripes, planes))
 }
 
-/// Which tile of the grid chain position `p` is, and how many quarter turns
-/// clockwise it is mounted at. `None` past the end of the chain.
+/// Which tile of the grid chain position `p` is under the RULE fields, and
+/// how many quarter turns clockwise it is mounted at — the regular-pattern
+/// generator, [`Matrix::rule_tile`]. `None` past the end of the chain. The
+/// remap itself takes the effective tile list ([`build_lut`]), which is this
+/// for a rule-described wall and the explicit `chain` line otherwise
+/// (Gitea #920).
 ///
 /// Returns `(cx, cy, turns)` in tile coordinates, `cx` increasing right and
 /// `cy` increasing down — the same axes the engine grid uses.
 #[must_use]
 pub fn panel_cell(m: &Matrix, p: usize) -> Option<(u32, u32, u8)> {
-    let (cols, rows) = (m.cols as usize, m.rows as usize);
-    if p >= cols * rows || cols == 0 || rows == 0 {
-        return None;
-    }
-    // Which corner line 0 starts at, as a pair of axis flips.
-    let flip_x = matches!(m.start, Corner::Tr | Corner::Br);
-    let flip_y = matches!(m.start, Corner::Bl | Corner::Br);
-    // `line` walks across the lines, `k` walks along one.
-    let run = match m.dir {
-        RunDir::Row => cols,
-        RunDir::Col => rows,
-    };
-    let (line, mut k) = (p / run, p % run);
-    // A snaked chain comes back the other way along every odd line.
-    if m.snake && line % 2 == 1 {
-        k = run - 1 - k;
-    }
-    let (cx, cy) = match m.dir {
-        RunDir::Row => (k, line),
-        RunDir::Col => (line, k),
-    };
-    let cx = if flip_x { cols - 1 - cx } else { cx };
-    let cy = if flip_y { rows - 1 - cy } else { cy };
-    Some((cx as u32, cy as u32, m.turns(line)))
+    m.rule_tile(p).map(|t| (u32::from(t.cx), u32::from(t.cy), t.turns))
 }
 
 /// Fill `lut` with the driver→engine remap, indexed by DRIVER pixel index.
@@ -206,6 +187,16 @@ pub fn panel_cell(m: &Matrix, p: usize) -> Option<(u32, u32, u8)> {
 /// # Panics
 /// If `lut` is not exactly `fb_w * fb_h` entries.
 pub fn build_lut(lut: &mut [u16], m: &Matrix, fb_w: usize, fb_h: usize) -> usize {
+    build_lut_tiles(lut, m, &m.rule_tiles(), fb_w, fb_h)
+}
+
+/// [`build_lut`] for an EXPLICIT chain (Gitea #920): `tiles` is the wall in
+/// ribbon order — [`luxel_core::layout::Layout::tiles`], which is the rule's
+/// list when no `chain` line is stored — and the arithmetic is otherwise
+/// identical. Tiles past `drive`, or naming a cell outside the grid, are
+/// skipped (the parser refuses such a list; this is the never-out-of-bounds
+/// rule for a stored wire).
+pub fn build_lut_tiles(lut: &mut [u16], m: &Matrix, tiles: &[Tile], fb_w: usize, fb_h: usize) -> usize {
     assert_eq!(lut.len(), fb_w * fb_h, "remap table length");
     lut.fill(UNMAPPED);
     let drive = driven_panels(m, fb_w, fb_h);
@@ -218,8 +209,12 @@ pub fn build_lut(lut: &mut [u16], m: &Matrix, fb_w: usize, fb_h: usize) -> usize
     let (scan, stripes) = scan_stripes(m).unwrap_or((ph / 2, 1));
     let (half_h, fb_cols) = (ph / 2, fb_w * stripes);
     for p in 0..drive {
-        let Some((cx, cy, turns)) = panel_cell(m, p) else { continue };
-        let (ox, oy) = (cx as usize * pw, cy as usize * ph);
+        let Some(t) = tiles.get(p) else { continue };
+        let (cx, cy, turns) = (usize::from(t.cx), usize::from(t.cy), t.turns);
+        if cx >= m.cols as usize || cy >= m.rows as usize {
+            continue;
+        }
+        let (ox, oy) = (cx * pw, cy * ph);
         // A quarter turn swaps the tile's axes, which only fits its cell when
         // the tile is square; the parser refuses anything else, and a stored
         // wire that slipped through keeps the 180° part only (never OOB).
@@ -321,7 +316,7 @@ pub fn est_hz_driver(m: &Matrix, d: &PanelDriver) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use luxel_core::layout::Matrix;
+    use luxel_core::layout::{Corner, Matrix, RunDir};
     use std::vec;
     use std::vec::Vec;
 

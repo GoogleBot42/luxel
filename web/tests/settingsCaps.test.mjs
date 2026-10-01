@@ -12,7 +12,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  chainFromWire,
+  chainLine,
   chainOrder,
+  chainPositionOf,
+  chainRuleLine,
+  chainSwap,
+  chainTurn,
+  nextTurn,
+  normTurn,
   estimatedRefreshHz,
   FALLBACK_CAPS,
   offsetLabel,
@@ -436,4 +444,98 @@ test("offsetLabel is the status line's words", () => {
   assert.equal(offsetLabel(0), "UTC+0");
   assert.equal(offsetLabel(345), "UTC+5:45");
   assert.equal(offsetLabel(-270), "UTC-4:30");
+});
+
+// ---- the explicit chain (Gitea #920: the wall transcribed panel by panel) ----
+
+test("chainEditor: a panel board with tiles to arrange, nothing else", () => {
+  assert.equal(settingsVisibility(PANEL.caps, { ...PANEL.layout, panels: 4 }).chainEditor, true);
+  assert.equal(vis(PANEL).chainEditor, false, "one lone panel has nothing to transcribe");
+  assert.equal(vis(MATRIX_FROM_STRIPS).chainEditor, false, "a strip-built matrix keeps the read-only picture");
+  assert.equal(vis(STRIP).chainEditor, false);
+  assert.equal(vis(MAP_2D).chainEditor, false);
+});
+
+/** Jeremy's 2x2 wall (Gitea #920): enters top-right, down the right column,
+ *  back up the left, the right column turned 90° and the left 270°. */
+const WALL = [
+  [1, 0, 90],
+  [1, 1, 90],
+  [0, 1, 270],
+  [0, 0, 270],
+];
+
+test("chainLine: one entry per panel in ribbon order; empty = the bare clear", () => {
+  assert.equal(chainLine(WALL), "chain 1,0,90 1,1,90 0,1,270 0,0,270");
+  assert.equal(chainLine([]), "chain");
+  // a rotation off the quarter grid or outside 0..359 is folded, never sent raw
+  assert.equal(chainLine([[0, 0, -90], [1, 0, 450]]), "chain 0,0,270 1,0,90");
+});
+
+test("normTurn / nextTurn: quarter turns on a square tile, half turns otherwise", () => {
+  assert.deepEqual([0, 90, 180, 270, 360, -90, 89].map(normTurn), [0, 90, 180, 270, 0, 270, 90]);
+  assert.deepEqual([0, 90, 180, 270].map((d) => nextTurn(d, true)), [90, 180, 270, 0]);
+  assert.deepEqual([0, 180].map((d) => nextTurn(d, false)), [180, 0]);
+});
+
+test("chainPositionOf: the cell's ribbon position, -1 off the grid", () => {
+  assert.equal(chainPositionOf(WALL, 1, 0), 0);
+  assert.equal(chainPositionOf(WALL, 0, 0), 3);
+  assert.equal(chainPositionOf(WALL, 2, 0), -1);
+});
+
+test("chainSwap: renumbering a cell trades places with the cell that held the number", () => {
+  const got = chainSwap(WALL, 3, 0); // the top-left cell becomes panel 1
+  assert.deepEqual(got, [
+    [0, 0, 270],
+    [1, 1, 90],
+    [0, 1, 270],
+    [1, 0, 90],
+  ]);
+  // still a permutation of the grid, each cell keeping its own rotation
+  assert.deepEqual(
+    got.map((t) => `${t[0]},${t[1]}`).sort(),
+    WALL.map((t) => `${t[0]},${t[1]}`).sort(),
+  );
+  assert.deepEqual(chainSwap(WALL, 2, 2), WALL, "the same number is a no-op");
+  assert.deepEqual(chainSwap(WALL, 0, 9), WALL, "an out-of-range number changes nothing");
+  assert.deepEqual(WALL[0], [1, 0, 90], "the input is not mutated");
+});
+
+test("chainTurn: one cell's rotation, nothing else", () => {
+  assert.deepEqual(chainTurn(WALL, 1, 180), [
+    [1, 0, 90],
+    [1, 1, 180],
+    [0, 1, 270],
+    [0, 0, 270],
+  ]);
+  assert.equal(chainLine(chainTurn(WALL, 0, nextTurn(WALL[0][2], true))).split(" ")[1], "1,0,180");
+});
+
+test("chainFromWire: device tiles drive the picture; a derived list keeps the rule's scan", () => {
+  const rule = chainOrder(2, 2, "tr", "col", true, [0, 0]);
+  const derived = chainFromWire(rule.map((t) => [t.col, t.row, t.turns]), rule, false);
+  assert.deepEqual(derived, rule, "a derived list is the rule's own walk");
+  const explicit = chainFromWire(WALL, rule, true);
+  assert.deepEqual(
+    explicit.map((t) => [t.index, t.col, t.row, t.turns, t.flipX, t.flipY]),
+    [
+      [0, 1, 0, 90, false, false],
+      [1, 1, 1, 90, false, false],
+      [2, 0, 1, 270, false, false],
+      [3, 0, 0, 270, false, false],
+    ],
+  );
+});
+
+test("chainOrder: each tile carries its line's mount rotation", () => {
+  const t = chainOrder(2, 2, "tl", "row", true, [180, 90]);
+  assert.deepEqual(t.map((x) => x.turns), [180, 180, 90, 90]);
+  assert.deepEqual(chainOrder(2, 1, "tl", "row", false).map((x) => x.turns), [0, 0], "default upright");
+});
+
+test("chainRuleLine: the collapsed Regular pattern row", () => {
+  assert.equal(chainRuleLine(false, "tr", "col", true), "top-right · vertical · serpentine");
+  assert.equal(chainRuleLine(false, "tl", "row", false), "top-left · horizontal · straight");
+  assert.equal(chainRuleLine(true, "tr", "col", true), "transcribed panel by panel");
 });

@@ -509,6 +509,10 @@ struct State {
     /// notice can be driven in a real browser without bricking a panel. A
     /// successful `POST /api/layout` clears it, as on the device.
     reverted: Mutex<Option<luxel_core::layout::Reverted>>,
+    /// The test card a `--board panel` mirror "shows" (Gitea #920): state
+    /// only — the mirror drives no panel — so the console's Identify flow
+    /// round-trips here exactly as on the device.
+    card: Mutex<luxel_core::layout::Card>,
     map_dirty: AtomicBool,
     /// The projection the render loop installs on the next frame — the twin
     /// of the firmware's `layout::PROJ_PENDING` (Gitea #598). `0..=6` is a
@@ -1535,6 +1539,7 @@ fn with_layout_view<R>(
             est_hz: luxel_hub75::arrange::est_hz_driver(&matrix, &driver),
             drive: matrix.panels(),
             driver_live: synthetic_live(&matrix, &driver),
+            card: *state.card.lock().unwrap(),
         }),
         // `--reverted N,B` only (Gitea #822): the mirror never boots, so it
         // cannot starve itself — this is the impersonation knob that makes the
@@ -1579,6 +1584,25 @@ fn data_pin_fields(state: &State) -> String {
 }
 
 /// `GET /api/layout` (`pixels` = `None` reports the applied count; a POST
+/// The mode word of a `POST /api/layout/card` body: the value of `"mode"`
+/// in a JSON object, else the body itself trimmed — so `panels` and
+/// `{"mode":"panels"}` mean the same thing (the firmware reads it the same
+/// way).
+fn card_mode_word(body: &str) -> &str {
+    let t = body.trim();
+    if let Some(i) = t.find("\"mode\"") {
+        let rest = &t[i + 6..];
+        if let Some(q) = rest.find('"') {
+            let v = &rest[q + 1..];
+            if let Some(e) = v.find('"') {
+                return &v[..e];
+            }
+        }
+        return "";
+    }
+    t
+}
+
 /// answer passes the requested one — see `layout::View::pixels`).
 fn layout_json(state: &State, pixels: Option<u32>) -> String {
     let mut out = String::new();
@@ -3736,6 +3760,26 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
             };
             respond(&mut stream, 200, "application/json", r.as_bytes());
         }
+        // POST /api/layout/card — the test card a panel board draws instead
+        // of the pattern while the wall is transcribed (Gitea #920):
+        // `{"mode":"off"|"panels"|"cells"}` (or the bare word). Not
+        // persisted. A strip host has no panel to draw on and says so.
+        ("POST", "/api/layout/card") => {
+            let body = String::from_utf8_lossy(&req.body);
+            let word = card_mode_word(&body);
+            let r = if !state.hw.panel {
+                String::from("{\"ok\":false,\"error\":\"this board has no panel\"}")
+            } else {
+                match luxel_core::layout::Card::from_str(word) {
+                    Some(c) => {
+                        *state.card.lock().unwrap() = c;
+                        format!("{{\"ok\":true,\"card\":\"{}\"}}", c.as_str())
+                    }
+                    None => String::from("{\"ok\":false,\"error\":\"mode must be off, panels or cells\"}"),
+                }
+            };
+            respond(&mut stream, 200, "application/json", r.as_bytes());
+        }
         ("GET", "/api/map") => {
             respond(&mut stream, 200, "application/json", map_json(&state).as_bytes());
         }
@@ -4227,6 +4271,7 @@ pub fn serve_cmd(rest: &[String]) -> ExitCode {
         map_source: AtomicU8::new(0),
         layout: Mutex::new(board_default_layout(panel)),
         reverted: Mutex::new(reverted),
+        card: Mutex::new(luxel_core::layout::Card::Off),
         map_dirty: AtomicBool::new(false),
         proj_pending: AtomicU8::new(PROJ_NONE),
         live_pixels: Mutex::new(Vec::new()),

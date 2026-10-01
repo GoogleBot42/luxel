@@ -133,7 +133,7 @@ use luxel_hub75::{arrange, Control, Geometry, Schedule, Tables};
 
 use crate::hub75::{
     alloc_tables, board_default_matrix, build_remap, chip_init, clock_rate, control_of,
-    schedule_of, Block, DynFb, BOOT_HEAP_FLOOR, LIVE, LIVE_COLS, LIVE_SCAN, MAX_SCAN, WANT_BLANK,
+    schedule_of, Block, DynFb, LiveArrangement, BOOT_HEAP_FLOOR, LIVE, LIVE_COLS, LIVE_SCAN, MAX_SCAN, WANT_BLANK,
 };
 use crate::leds::Protocol;
 use crate::output::OutputDriver;
@@ -1025,6 +1025,9 @@ pub struct Hub75Ring {
     tables_b5: u8,
     pads: PairPads,
     remap: Option<&'static [u16]>,
+    /// The arrangement's live half (Gitea #920): a remap swapped in between
+    /// frames, and the test card drawn instead of the pattern.
+    live: LiveArrangement,
     /// The once-per-frame pack in cycles (EWMA), for `frame_pack_us`.
     frame_pack_cycles: u32,
     /// Pass of the last frame `write_frame` accepted; `ready_for_frame`
@@ -1106,6 +1109,7 @@ impl Hub75Ring {
             tables_b5: u8::MAX,
             pads: PairPads::new(0),
             remap: None,
+            live: LiveArrangement::new(),
             frame_pack_cycles: 0,
             last_frame_pass: u32::MAX,
             slot_clocks: 1,
@@ -1508,6 +1512,7 @@ impl Hub75Ring {
                     tables_b5: u8::MAX,
                     pads,
                     remap,
+                    live: LiveArrangement::new(),
                     frame_pack_cycles: 0,
                     last_frame_pass: u32::MAX,
                     slot_clocks: ring::slot_clocks(&s, g.cols) as u32,
@@ -1608,7 +1613,7 @@ impl Hub75Ring {
     /// queue is drained, so a long pack (8 ms at 4x1) does not hold core
     /// 0's refill off for a whole ring. Returns false if the frame is
     /// shorter than the panel (nothing written).
-    fn pack_frame(&mut self, i: usize, rgb: &[[u8; 3]]) -> bool {
+    fn pack_frame(&mut self, i: usize, rgb: &[[u8; 3]], remap: Option<&'static [u16]>) -> bool {
         if rgb.len() < self.g.pixels() {
             return false;
         }
@@ -1631,7 +1636,7 @@ impl Hub75Ring {
             let words = unsafe { core::slice::from_raw_parts_mut(dst.add(r * slot_words), slot_words) };
             ring::format_slot_for(words, g, control, &sched, r);
             let planes = &mut words[ring::plane_row(0) * g.cols..];
-            let _ = pie::pack_row_pair(planes, g, r, rgb, self.remap, t, &mut self.pads);
+            let _ = pie::pack_row_pair(planes, g, r, rgb, remap, t, &mut self.pads);
             if r % CHUNK == CHUNK - 1 || r + 1 == rows {
                 let from = r / CHUNK * CHUNK;
                 // SAFETY: rows `from..=r` of frame `i`, just written.
@@ -2212,8 +2217,13 @@ impl OutputDriver for Hub75Ring {
         let wraps = u64::from(hub75.frame_count());
         let passes = (wraps * u64::from(self.ring.n) / u64::from(self.ring.rows.max(1))) as u32;
         crate::shared::RESCANS.store(passes, Ordering::Relaxed);
+        // A remap the API stored since the last frame, or a test card to
+        // draw instead of the pattern (Gitea #920): both land here, on the
+        // one task that reads the table.
+        self.live.refresh(self.g, &mut self.remap);
+        let (rgb, remap) = self.live.frame(rgb, self.remap);
         let Some(i) = self.free_frame() else { return false };
-        if !self.pack_frame(usize::from(i), rgb) {
+        if !self.pack_frame(usize::from(i), rgb, remap) {
             return false;
         }
         // A fresh generation on the frame BEFORE it is newest: a claimer that
