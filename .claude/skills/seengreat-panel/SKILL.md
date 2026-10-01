@@ -13,6 +13,40 @@ http://192.168.0.238/api/ota` is the fallback when the script fails silently —
 the app image is `espflash save-image --chip esp32s3 <ELF> app.bin` inside the
 devshell; `ota-push.sh` writes it to a `mktemp` and deletes it).
 
+**There are TWO of these boards since 2026-09-30.** The second unit (MAC
+`90:70:69:ea:6f:70`) is **192.168.0.142** (`luxel-ea6f70`), flashed straight
+onto the 16 MB table; everything below was learned on the first one. Tell
+them apart by MAC before any USB work — both enumerate as 303a:1001 →
+`/dev/ttyACM*`, and `cat /sys/bus/usb/devices/*/serial` prints the MAC of
+whichever is attached, with or without a `/dev` node.
+
+## First flash of a new unit (2026-09-30)
+
+What the second unit's bring-up cost, in the order it bit:
+
+- **The `/dev/ttyACM0` node can be absent while the board is on the bus**
+  (`/sys/class/tty/ttyACM0` exists, `/dev` has nothing, `mknod` is refused in
+  the container). A replug by Jeremy brings it; then `doas chmod 666`.
+- **`espflash write-bin 0x0 target/luxel-full.bin` died twice at ~49 s with
+  `Error while connecting to device` and had written everything EXCEPT the
+  asset bundle** (Gitea #923). Don't re-run it a third time and don't trust
+  the error: checksum the regions against the image
+  (`espflash checksum-md5 <off> <len>` vs `dd … | md5sum` of the same slice,
+  ~28 s for all 16 MiB), then write what is missing —
+  `espflash write-bin --after no-reset 0xa10000 target/dist.luxa` landed
+  first try in 9 s.
+- **A unit Jeremy hands over "ready for flashing" is in ROM download mode**
+  (BOOT held at power-up), so after the write it needs his EN press — see
+  "Download mode is a one-way door". Watch
+  `/sys/bus/usb/devices/<port>/devnum` for the re-enumeration instead of
+  asking him to say when.
+- **Device hostnames do not resolve from the container** and the LAN is a
+  routed hop away (no ARP), so the IP of a fresh unit comes from its boot
+  log: one `socat` open ≥75 s after the EN press (`ip: http://…/`).
+- A fresh unit boots with an empty store: `resume: nothing stored — playing
+  nothing`, panel DARK, `engines` 0 — that is healthy, not a dead DMA.
+  `ota_1` is blank until the first OTA.
+
 ## Before anything: is another session driving it?
 
 `pgrep -fa 192.168.0.238` and `pgrep -fa recover-` first. On 2026-09-26 a

@@ -1,5 +1,18 @@
 # Update log
 
+## 2026-09-30 — second Seengreat HUB75 S3 flashed (`luxel-ea6f70`, 192.168.0.142)
+
+A second Seengreat board arrived and went from stock XiaoZhi to master
+`008ef480` over USB: `board-seengreat-hub75`, the 16 MB table from the first
+write (3 MiB slots, `layout:"partitions-16mb.csv"`), app 1,199,328 B on
+`ota_0`, console bundle 969,536 B / 9 files, PSRAM 8 MB, empty store. The
+full-image `espflash write-bin 0x0 luxel-full.bin` failed twice at ~49 s with
+`Error while connecting to device`, having written everything but the asset
+bundle; region checksums found the hole and a separate `write-bin 0xa10000
+dist.luxa` filled it (Gitea #923). All 16 MiB then matched the image by md5.
+The bring-up traps are in `.claude/skills/seengreat-panel` ("First flash of a
+new unit").
+
 ## 2026-09-30 — HUB75: transcribe the wall panel by panel, live, with a test card (#920)
 
 Jeremy, after three rounds on #917: "this setting option is unintuitive …

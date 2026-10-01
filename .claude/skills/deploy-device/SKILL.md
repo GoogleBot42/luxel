@@ -49,6 +49,9 @@ memory (athom-flash-rig.md), `~/.config/mqtt/broker.env` (user-level
   Its OTA used to wedge ~44 % of pushes (#294) — #309's flash-fence fix cured
   that (13/13 clean in one session, 2026-09-06), so a failed push there is
   now a real failure, not the known flake.
+- **Second Seengreat HUB75 S3** — 192.168.0.142, DHCP hostname
+  `luxel-ea6f70`, same `BOARD=board-seengreat-hub75`. Serial-flashed
+  2026-09-30 onto the 16 MB table; see the seengreat-panel skill.
   Its USB is the S3's native USB-Serial/JTAG at `/dev/ttyACM0`, and a plain
   open is **not** a reliable reset (it is often passive — but not always:
   one bare `socat` open DID reboot the board on 2026-09-26, boot-ROM lines
