@@ -8,10 +8,26 @@
   //    connector, the scan direction each tile ends up with, the 180° markers,
   //    the resulting total size, and (with more than one output) each run in
   //    its own identity colour.
+  //  * `editable` (a panel board, Gitea #920) — the same picture as the
+  //    wall's EDITOR: each cell is a click target, and each panel's badge
+  //    carries a pointer to the panel's own top — the arrow the device's
+  //    Identify card draws on the real panel, so the picture and the wall
+  //    read the same way. The tiles come from the device's `tiles` list
+  //    (the explicit per-panel chain, or the rule it derived).
   //  * `mode="pixels"` — the SAME widget one level down: how the strip snakes
   //    through a single matrix's pixels. Identical question, identical
   //    picture, only the noun changes.
-  import { chainOrder, type Corner, type RunDir } from "../lib/settingsCaps";
+  import { createEventDispatcher } from "svelte";
+  import {
+    chainFromWire,
+    chainOrder,
+    type ChainTile,
+    type Corner,
+    type RunDir,
+    type WireTile,
+  } from "../lib/settingsCaps";
+
+  const dispatch = createEventDispatcher<{ pick: { cx: number; cy: number } }>();
 
   /** `chain` = tiles in a chain; `pixels` = the pixel run inside one matrix. */
   export let mode: "chain" | "pixels" = "chain";
@@ -25,8 +41,18 @@
   /** Mount rotation in degrees clockwise, `[even lines, odd lines]` — tile 1's
    *  line is even (Gitea #917). Drawn on every turned tile as its degrees. */
   export let rot: readonly [number, number] = [0, 0];
-  // reactive on `rot` (a helper closing over the prop would not re-run)
-  $: turns = [0, 1].map((k) => (((rot[k] ?? 0) % 360) + 360) % 360);
+  /** The device's chain, `[cx, cy, deg]` in ribbon order (`GET
+   *  /api/layout` `matrix.tiles`, Gitea #920). `null` — or a list that does
+   *  not cover the grid, i.e. a stale one mid-resize — falls back to the rule
+   *  fields above, which is also all firmware older than #920 sends. */
+  export let tiles: readonly WireTile[] | null = null;
+  /** `tiles` is an explicit per-panel list rather than the rule's walk. */
+  export let explicit = false;
+  /** The picture is the editor: cells are buttons, badges point to each
+   *  panel's top. */
+  export let editable = false;
+  /** The grid cell the editor is on, `[cx, cy]`. */
+  export let selected: readonly [number, number] | null = null;
   /** Tiles per output, in chain order. `[]` / one entry = one undivided run. */
   export let outputCounts: readonly number[] = [];
   /** Leading tiles the board's framebuffer can actually shift out (`drive`,
@@ -54,8 +80,11 @@
   $: totalW = nc * gw;
   $: totalH = nr * gh;
 
-  $: tiles = chainOrder(nc, nr, start, dir, snake);
-  $: ownerOf = buildOwners(tiles.length, outputCounts);
+  // every input is named here, so it re-runs when any of them moves
+  $: rule = chainOrder(nc, nr, start, dir, snake, rot);
+  $: chain =
+    tiles !== null && tiles.length === nc * nr ? chainFromWire(tiles, rule, explicit) : rule;
+  $: ownerOf = buildOwners(chain.length, outputCounts);
   $: multi = outputCounts.length > 1;
   /** In pixel mode the whole grid is ONE box; in chain mode it is nc×nr. */
   $: box = fit(mode === "chain" ? nc : 1, mode === "chain" ? nr : 1, totalW, totalH);
@@ -63,9 +92,18 @@
     mode === "chain"
       ? box
       : { w: box.w, h: box.h, x0: box.x0, y0: box.y0 };
-  $: radius = Math.min(cell.w, cell.h) * 0.24;
-  $: showIndex = mode === "chain" && radius >= 7 && tiles.length > 1;
-  $: runs = mode === "chain" ? splitRuns(tiles, ownerOf) : [];
+  // the editor's badge is a touch smaller: it carries a pointer, and the
+  // tile's corner carries the `↻` label, on a 4×4 wall too
+  $: radius = Math.min(cell.w, cell.h) * (editable ? 0.2 : 0.24);
+  $: showIndex = mode === "chain" && (editable || (radius >= 7 && chain.length > 1));
+  /** The rotation label's size: 13px on a roomy cell, smaller on a crowded
+   *  grid so `↻270°` stays inside its tile and clear of the badge. */
+  $: rotFont = Math.max(8, Math.min(13, cell.w / 6.5));
+  /** …and in the editor it is drawn only where it is still legible and
+   *  clears the badge: on a crowded wall the badge's pointer already says
+   *  which way the panel is turned, and the editor row says it in words. */
+  $: rotFits = !editable || (rotFont >= 11 && 4 + rotFont * 1.1 + 2 <= cell.h / 2 - radius);
+  $: runs = mode === "chain" ? splitRuns(chain, ownerOf) : [];
   $: pixelRun = mode === "pixels" ? pixelPath() : null;
 
   function buildOwners(n: number, counts: readonly number[]): number[] {
@@ -100,20 +138,45 @@
   const cx = (t: { col: number }): number => cell.x0 + (t.col + 0.5) * cell.w;
   const cy = (t: { row: number }): number => cell.y0 + (t.row + 0.5) * cell.h;
 
+  /** One output's run through the tiles, and where its IN connector sits
+   *  (`side` −1 = left of the head tile, +1 = right of it). */
+  interface Run {
+    color: string;
+    pts: string;
+    head: { x: number; y: number };
+    side: -1 | 1;
+  }
+
+  function isSel(t: ChainTile, sel: readonly [number, number] | null): boolean {
+    return sel !== null && sel[0] === t.col && sel[1] === t.row;
+  }
+
+  function pickKey(e: KeyboardEvent, t: ChainTile): void {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    e.preventDefault();
+    dispatch("pick", { cx: t.col, cy: t.row });
+  }
+
   function splitRuns(
-    list: ReturnType<typeof chainOrder>,
+    list: readonly ChainTile[],
     owners: number[],
-  ): { color: string; pts: string; head: { x: number; y: number } }[] {
-    const out: { color: string; pts: string; head: { x: number; y: number } }[] = [];
-    let cur: typeof list = [];
+  ): Run[] {
+    const out: Run[] = [];
+    let cur: ChainTile[] = [];
     let owner = owners[0] ?? 0;
     const flush = (): void => {
       const head = cur[0];
       if (head === undefined) return;
+      // The IN connector enters from the grid's left edge — or, when the
+      // ribbon starts in the right-hand column of a wider grid, from its
+      // right, so it never lands inside the neighbouring tile over its badge
+      // (the editor only: the read-only picture is what the mockups pin).
+      const fromRight = editable && nc > 1 && head.col === nc - 1;
       out.push({
         color: OUT_COLORS[owner % OUT_COLORS.length] ?? "#e8a33d",
         pts: cur.map((t) => `${cx(t).toFixed(1)},${cy(t).toFixed(1)}`).join(" "),
         head: { x: cx(head), y: cy(head) },
+        side: fromRight ? 1 : -1,
       });
     };
     for (const t of list) {
@@ -164,7 +227,7 @@
     viewBox="0 0 {VIEW_W} {VIEW_H}"
     role="img"
     aria-label={mode === "chain"
-      ? `${nc} by ${nr} panel chain, ${totalW} by ${totalH} pixels`
+      ? `${nc} by ${nr} panel chain, ${totalW} by ${totalH} pixels${editable ? " — click a panel to edit it" : ""}`
       : `pixel wiring of a ${totalW} by ${totalH} matrix`}
   >
     <defs>
@@ -208,7 +271,7 @@
     />
 
     {#if mode === "chain"}
-      {#each tiles as t (t.index)}
+      {#each chain as t (t.index)}
         <rect
           x={cell.x0 + t.col * cell.w + 2}
           y={cell.y0 + t.row * cell.h + 2}
@@ -217,22 +280,23 @@
           rx="4"
           class="tile"
           class:dark={drive > 0 && t.index >= drive}
-          style={multi
+          class:sel={editable && isSel(t, selected)}
+          style={multi && !(editable && isSel(t, selected))
             ? `stroke:${OUT_COLORS[(ownerOf[t.index] ?? 0) % OUT_COLORS.length]}`
             : undefined}
         />
-        <line
-          x1={cx(t) + (t.flipX ? 1 : -1) * cell.w * 0.22}
-          y1={cy(t) + cell.h * 0.34}
-          x2={cx(t) - (t.flipX ? 1 : -1) * cell.w * 0.22}
-          y2={cy(t) + cell.h * 0.34}
-          class="scan"
-          marker-end="url(#arr-scan)"
-        />
-        {#if turns[t.line % 2] !== 0}
-          <text x={cell.x0 + t.col * cell.w + 9} y={cell.y0 + t.row * cell.h + 20} class="rot"
-            >↻{turns[t.line % 2]}°</text
-          >
+        <!-- the scan arrow is a STRIP's fact (which way the pixel run goes
+             through this tile); a panel's scan is its own, and what the
+             editor draws instead is where the panel's top is -->
+        {#if !editable}
+          <line
+            x1={cx(t) + (t.flipX ? 1 : -1) * cell.w * 0.22}
+            y1={cy(t) + cell.h * 0.34}
+            x2={cx(t) - (t.flipX ? 1 : -1) * cell.w * 0.22}
+            y2={cy(t) + cell.h * 0.34}
+            class="scan"
+            marker-end="url(#arr-scan)"
+          />
         {/if}
       {/each}
       {#each runs as r, i (i)}
@@ -244,21 +308,92 @@
           stroke-linejoin="round"
           stroke-linecap="round"
         />
-        <rect x={r.head.x - cell.w * 0.5 - 22} y={r.head.y - 6} width="12" height="12" rx="2" style="fill:{r.color}" />
+        <rect
+          x={r.head.x + r.side * (cell.w * 0.5 + 16) - 6}
+          y={r.head.y - 6}
+          width="12"
+          height="12"
+          rx="2"
+          style="fill:{r.color}"
+        />
         <line
-          x1={r.head.x - cell.w * 0.5 - 10}
+          x1={r.head.x + r.side * (cell.w * 0.5 + 10)}
           y1={r.head.y}
-          x2={r.head.x - cell.w * 0.5}
+          x2={r.head.x + r.side * cell.w * 0.5}
           y2={r.head.y}
           style="stroke:{r.color}"
           stroke-width="2.4"
         />
-        <text x={r.head.x - cell.w * 0.5 - 26} y={r.head.y + 4} style="fill:{r.color}" class="inlbl">IN</text>
+        {#if r.side < 0}
+          <text x={r.head.x - cell.w * 0.5 - 26} y={r.head.y + 4} style="fill:{r.color}" class="inlbl">IN</text>
+        {:else}
+          <!-- the right margin is too narrow for the label beside the box -->
+          <text x={r.head.x + cell.w * 0.5 + 16} y={r.head.y - 10} style="fill:{r.color}" class="inlbl mid"
+            >IN</text
+          >
+        {/if}
+      {/each}
+      <!-- the turn labels go over the chain path, which can cross a corner -->
+      {#each chain as t (t.index)}
+        {#if t.turns !== 0 && rotFits}
+          <text
+            x={cell.x0 + t.col * cell.w + 2 + rotFont * 0.55}
+            y={cell.y0 + t.row * cell.h + 4 + rotFont * 1.1}
+            class="rot"
+            style="font-size:{rotFont.toFixed(1)}px">↻{t.turns}°</text
+          >
+        {/if}
       {/each}
       {#if showIndex}
-        {#each tiles as t (t.index)}
-          <circle cx={cx(t)} cy={cy(t)} r={radius} class="knock" />
-          <text x={cx(t)} y={cy(t) + radius * 0.38} class="idx" font-size={radius * 1.1}>{t.index + 1}</text>
+        {#each chain as t (t.index)}
+          {#if editable}
+            <!-- the badge's pointer: this panel's TOP, as the Identify card
+                 draws it on the wall (upright = up, ↻90° = right, …) -->
+            <path
+              d="M0 {-(radius + 7)} L{-radius * 0.5} {-radius * 0.72} L{radius * 0.5} {-radius * 0.72} Z"
+              transform="translate({cx(t).toFixed(1)},{cy(t).toFixed(1)}) rotate({t.turns})"
+              class="top"
+              class:sel={isSel(t, selected)}
+            />
+          {/if}
+          <circle
+            cx={cx(t)}
+            cy={cy(t)}
+            r={radius}
+            class="knock"
+            class:badge={editable}
+            class:sel={editable && isSel(t, selected)}
+          />
+          <text
+            x={cx(t)}
+            y={cy(t) + radius * 0.38}
+            class="idx"
+            class:sel={editable && isSel(t, selected)}
+            font-size={radius * 1.1}>{t.index + 1}</text
+          >
+        {/each}
+      {/if}
+      {#if editable}
+        <!-- the hit targets, last so nothing drawn above can eat a click -->
+        {#each chain as t (t.index)}
+          <rect
+            x={cell.x0 + t.col * cell.w + 2}
+            y={cell.y0 + t.row * cell.h + 2}
+            width={Math.max(1, cell.w - 4)}
+            height={Math.max(1, cell.h - 4)}
+            rx="4"
+            class="hit"
+            role="button"
+            tabindex="0"
+            aria-label="panel {t.index + 1}{t.turns ? `, turned ${t.turns}°` : ''}"
+            aria-pressed={isSel(t, selected)}
+            data-role="arr-cell-{t.col}-{t.row}"
+            data-selected={isSel(t, selected) ? "" : undefined}
+            data-panel={t.index + 1}
+            data-turn={t.turns}
+            on:click={() => dispatch("pick", { cx: t.col, cy: t.row })}
+            on:keydown={(e) => pickKey(e, t)}
+          />
         {/each}
       {/if}
     {:else if pixelRun}
@@ -283,9 +418,9 @@
       text-anchor="middle"
     >
       {#if mode === "chain"}
-        {tiles.length} panel{tiles.length === 1 ? "" : "s"} · {totalW}×{totalH} px{drive > 0 &&
-        drive < tiles.length
-          ? ` · ${tiles.length - drive} dark`
+        {chain.length} panel{chain.length === 1 ? "" : "s"} · {totalW}×{totalH} px{drive > 0 &&
+        drive < chain.length
+          ? ` · ${chain.length - drive} dark`
           : ""}
       {:else}
         {totalW * totalH} px, {dir === "row" ? "row by row" : "column by column"}
@@ -356,6 +491,59 @@
     fill: #171a20;
   }
 
+  /* the editor's selected cell (Gitea #920): accent outline and a tinted
+     fill on the tile, and the badge inverted, so it reads at 16 cells too */
+  .tile.sel {
+    stroke: var(--accent);
+    stroke-width: 2.5;
+    fill: color-mix(in srgb, var(--accent) 14%, #171a20);
+  }
+
+  /* in the editor the knockout is a BADGE — ringed, so the pointer to the
+     panel's top reads as part of it rather than as a stray triangle */
+  .knock.badge {
+    stroke: #5f6775;
+    stroke-width: 1.2;
+  }
+
+  .knock.sel {
+    fill: var(--accent);
+    stroke: var(--accent);
+  }
+
+  .idx.sel {
+    fill: #171a20;
+    font-weight: 700;
+  }
+
+  .top {
+    fill: var(--text-dim);
+  }
+
+  .top.sel {
+    fill: var(--accent);
+  }
+
+  /* the browser's own focus ring would outline the cell in white over the
+     selection's accent; keyboard focus gets the dashed stroke below */
+  .hit {
+    fill: transparent;
+    stroke: none;
+    cursor: pointer;
+    outline: none;
+  }
+
+  .hit:hover {
+    fill: rgba(255, 255, 255, 0.04);
+  }
+
+  .hit:focus-visible {
+    outline: none;
+    stroke: var(--accent);
+    stroke-width: 1.5;
+    stroke-dasharray: 3 3;
+  }
+
   .idx {
     text-anchor: middle;
     fill: var(--text-dim);
@@ -368,5 +556,9 @@
   .inlbl {
     font-size: 10px;
     text-anchor: end;
+  }
+
+  .inlbl.mid {
+    text-anchor: middle;
   }
 </style>

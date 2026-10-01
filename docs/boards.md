@@ -3875,6 +3875,21 @@ of walking the frame in order. Chain order, the per-line mount rotation `rot` (`
 identity rule are in docs/api.md "Panel arrangement"; the builder and its
 27 host tests are `crates/luxel-hub75/src/arrange.rs`.
 
+**The arrangement is live, and the wall can be transcribed (2026-09-30,
+Gitea #920).** The table is no longer built only at boot: `POST /api/layout`
+with changed rule fields or a per-panel `chain` line asks the output task to
+rebuild it from the stored Layout on its next frame (`hub75::want_remap`,
+`LiveArrangement::refresh`) — the same task that reads it, so the swap is an
+assignment between two frames and the previous table is freed (only the
+boot's is leaked). Only the framebuffer's shape (`pw ph cols rows scan`)
+still needs a boot. Beside it the task can draw a **test card** instead of
+the pattern (`POST /api/layout/card`, `luxel_hub75::card`): `panels` labels
+every physical panel with its ribbon number and an arrow to its own top,
+straight into the driver's blocks with the remap bypassed; `cells` labels
+every grid cell through the live remap. The card buffer is an arena
+allocation of `max(driver px, grid px)` × 3 B, handed back when the card is
+off. docs/api.md "Transcribing the wall" has the wire and the semantics.
+
 **The identity case costs nothing, and is found rather than assumed.** The
 table is built unconditionally and then checked: if `lut[i] == i` for every
 driver pixel it is freed on the spot and the driver composes byte-for-byte

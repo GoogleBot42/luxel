@@ -2863,6 +2863,15 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                         }
                     }))
                 }
+                // POST /api/layout/card — draw a test card instead of the
+                // pattern while the wall is transcribed (Gitea #920):
+                // `{"mode":"off"|"panels"|"cells"}`. Not persisted.
+                #[cfg(feature = "hub75")]
+                "/api/layout/card" => Some(json_response(
+                    match crate::layout::set_card(&text(&raw)) {
+                        Ok(b) | Err(b) => b,
+                    },
+                )),
                 // POST /api/map — install a computed 2D/3D map (raw 16.16).
                 // Empty/invalid body clears it. Applied live + persisted.
                 // ALIAS of `/api/layout map …` (Gitea #465): it writes the

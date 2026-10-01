@@ -87,6 +87,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 pub mod arrange;
+pub mod card;
 pub mod chip;
 pub mod cost;
 pub mod pie;

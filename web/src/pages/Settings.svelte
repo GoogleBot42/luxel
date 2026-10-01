@@ -224,6 +224,7 @@
 
     <Section title="LED layout" role="sect-layout" note={layoutNote}>
       <LayoutCard
+        {active}
         on:pixelchange={() => dispatch("pixelchange")}
         on:openmap={() => dispatch("openmap")}
       />

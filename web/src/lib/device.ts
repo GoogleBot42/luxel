@@ -321,6 +321,18 @@ export interface LayoutWire {
     rot: [number, number];
     /** HUB75 scan divisor; 0 = the board's own. */
     scan: number;
+    /** The chain in RIBBON order (Gitea #920): `[cx, cy, deg]` per panel,
+     *  entry 0 = the panel the ribbon enters (shown as panel 1), `cx,cy`
+     *  0-based grid cells from the top-left, `deg` the tile's mount rotation
+     *  clockwise. Derived from the rule fields or the explicit list —
+     *  `explicit` says which. Absent on firmware older than #920. */
+    tiles?: [number, number, number][];
+    /** The stored layout carries an explicit per-panel list (`chain` line)
+     *  rather than the rule fields. */
+    explicit?: boolean;
+    /** The test card the panel is showing instead of the pattern (Gitea
+     *  #920, `POST /api/layout/card`). Panel hosts only; not persisted. */
+    card?: LayoutCardMode;
     /** The HOST's estimated rescan rate for this chain, Hz (Gitea #475).
      *  Absent on a host with no panel driver. The browser computes the same
      *  number from the same inputs (`lib/settingsCaps.ts`); this one wins,
@@ -360,6 +372,12 @@ export interface LayoutWire {
   /** The `GET /api/map` body verbatim. */
   map: DeviceMapStatus;
 }
+
+/** `POST /api/layout/card` modes (Gitea #920): `panels` = every PHYSICAL
+ *  panel shows its ribbon number and an arrow to its own top, drawn past the
+ *  remap; `cells` = every GRID cell shows its number upright through the
+ *  current arrangement; `off` = the pattern again. */
+export type LayoutCardMode = "off" | "panels" | "cells";
 
 /** What `POST /api/layout` answers with: the GET body plus the verdict, so a
  *  client never has to re-fetch. A rejected body changes nothing and names
@@ -749,6 +767,18 @@ export class DeviceSession {
   async setLayout(lines: string): Promise<LayoutResult> {
     const res = await this.fetch("/api/layout", { method: "POST", body: lines });
     return (await res.json()) as LayoutResult;
+  }
+
+  /** Show a panel test card instead of the pattern, or stop (`off`) —
+   *  `POST /api/layout/card` (Gitea #920). A strip host refuses. */
+  async setLayoutCard(
+    mode: LayoutCardMode,
+  ): Promise<{ ok: true; card: LayoutCardMode } | { ok: false; error: string }> {
+    const res = await this.fetch("/api/layout/card", {
+      method: "POST",
+      body: JSON.stringify({ mode }),
+    });
+    return (await res.json()) as { ok: true; card: LayoutCardMode } | { ok: false; error: string };
   }
 
   /** Reboot the device (`caps.reboot`). The other half of

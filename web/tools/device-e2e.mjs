@@ -1466,6 +1466,16 @@ try {
     "layout: a strip-built matrix has no 'first row turned' control (#917)",
     (await page.$('[data-role="layout-rot-first"]')) === null,
   );
+  // The wall editor and its Identify card are a PANEL board's (Gitea #920):
+  // a strip host draws no test card, and its rule row stays a plain row.
+  check(
+    "layout: a strip-built matrix has no wall editor and no Identify (#920)",
+    (await page.$('[data-role="chain-box"]')) === null &&
+      (await page.$('[data-role="chain-editor"]')) === null &&
+      (await page.$('[data-role="identify"]')) === null &&
+      (await page.$('[data-role="chain-rule"]')) === null &&
+      (await page.$('[data-role="layout-start"]')) !== null,
+  );
   // An arrangement change is stored-and-reported until a reboot builds it
   // (#475). Since #538 that is a STICKY BAR pinned to the viewport, not a
   // line of dim text at the bottom of the form — and it names the field.
@@ -4600,6 +4610,14 @@ try {
         await sleep(800);
         return (await (await fetch(`${HUB}/api/layout`)).json()).matrix?.rot ?? null;
       };
+      // Since #920 a panel board describes its wall panel by panel, and the
+      // rule row is folded under "Regular pattern" — open it to reach it.
+      check(
+        "panel: the rule row is folded under a collapsed `Regular pattern` (#920)",
+        (await hubPage.$('[data-role="chain-rule"] [data-role="chain-rule-toggle"]')) !== null &&
+          (await hubPage.$('[data-role="layout-start"]')) === null,
+      );
+      await openAdv(hubPage, "chain-rule");
       check(
         "panel: 'first row turned' is offered (#917)",
         (await hubPage.$('[data-role="layout-rot-first"]')) !== null,
@@ -4620,7 +4638,9 @@ try {
         )
         .then((h) => h.jsonValue())
         .catch(() => "");
-      check("panel: the arrangement change raises the reboot bar", /reboot/i.test(note), note);
+      // (the TILING — 2×2 above — is what still waits for a boot; since #920
+      // the turns and the order apply live, `reboot_required: false`)
+      check("panel: the tiling change raises the reboot bar", /reboot/i.test(note), note);
       // …and the action that applies it is caps-gated like everything else:
       // the mirror advertises `reboot:false` and has no /api/reboot route, so
       // the bar states the fact and leaves the power cycle to the human.
@@ -4943,6 +4963,186 @@ try {
         );
       }
       await shotSettings(hubPage, `${shotDir}/settings-panel.png`, 200);
+
+      // ---- the wall editor (Gitea #920) ---------------------------------
+      //
+      // Jeremy's wall: a 2×2 of 64×64 panels the ribbon enters top-right,
+      // down the right column and back up the left. The picture is the
+      // editor — click a cell, say which panel of the ribbon it is and how
+      // it is turned — and every edit posts ONE `chain` line of the whole
+      // list; the device's Identify card (`POST /api/layout/card`) is what
+      // the user reads the numbers off.
+      {
+        const lay = async () => (await (await fetch(`${HUB}/api/layout`)).json()).matrix;
+        const ruleBefore = await lay();
+        await hubPage.select('[data-role="layout-start"]', "tr");
+        await sleep(600);
+        await hubPage.select('[data-role="layout-dir"]', "col");
+        await sleep(600);
+        if ((await lay()).snake !== 1) {
+          await hubPage.$eval('[data-role="layout-snake"]', (el) => el.click());
+          await sleep(600);
+        }
+        const m0 = await lay();
+        check(
+          "wall editor: the rule's walk arrives as `tiles`, not explicit",
+          JSON.stringify(m0.tiles) === "[[1,0,0],[1,1,0],[0,1,0],[0,0,0]]" && m0.explicit === false,
+          JSON.stringify({ tiles: m0.tiles, explicit: m0.explicit }),
+        );
+        const cells = await hubPage.$$eval('[data-role^="arr-cell-"]', (es) =>
+          es.map((e) => `${e.dataset.role}=${e.dataset.panel}`).sort(),
+        );
+        check(
+          "wall editor: the picture has one click target per cell, numbered from the device",
+          JSON.stringify(cells) ===
+            JSON.stringify(["arr-cell-0-0=4", "arr-cell-0-1=3", "arr-cell-1-0=1", "arr-cell-1-1=2"]),
+          JSON.stringify(cells),
+        );
+        check(
+          "wall editor: the rule's collapsed line summarises it",
+          (await hubPage.$eval('[data-role="chain-rule-status"]', (e) => e.textContent.trim())) ===
+            "top-right · vertical · serpentine",
+        );
+        check(
+          "wall editor: no editor row until a cell is picked",
+          (await hubPage.$('[data-role="chain-editor"]')) === null &&
+            (await hubPage.$('[data-role="chain-reset"]')) === null,
+        );
+        await hubPage.click('[data-role="arr-cell-0-0"]');
+        await hubPage.waitForSelector('[data-role="chain-editor"]', { timeout: 4000 });
+        check(
+          "wall editor: clicking a cell selects it and opens its editor on its number",
+          (await hubPage.$('[data-role="arr-cell-0-0"][data-selected]')) !== null &&
+            (await hubPage.$$('[data-role^="arr-cell-"][data-selected]')).length === 1 &&
+            (await hubPage.$eval('[data-role="chain-number"]', (e) => e.value)) === "4" &&
+            (await hubPage.$eval('[data-role="chain-turn"]', (e) => e.value)) === "0",
+        );
+        // the top-left cell is panel 1: it trades places with the cell that
+        // was panel 1 (the list stays a permutation)
+        await hubPage.select('[data-role="chain-number"]', "1");
+        await sleep(900);
+        const m1 = await lay();
+        check(
+          "wall editor: renumbering posts a `chain` line that swaps the two cells",
+          JSON.stringify(m1.tiles) === "[[0,0,0],[1,1,0],[0,1,0],[1,0,0]]" && m1.explicit === true,
+          JSON.stringify({ tiles: m1.tiles, explicit: m1.explicit }),
+        );
+        check(
+          "wall editor: the picture and the editor follow the reply",
+          (await hubPage.$eval('[data-role="arr-cell-1-0"]', (e) => e.dataset.panel)) === "4" &&
+            (await hubPage.$eval('[data-role="chain-number"]', (e) => e.value)) === "1" &&
+            (await hubPage.$('[data-role="arr-cell-0-0"][data-selected]')) !== null,
+        );
+        check(
+          "wall editor: the rule line says the wall is transcribed now",
+          (await hubPage.$eval('[data-role="chain-rule-status"]', (e) => e.textContent.trim())) ===
+            "transcribed panel by panel",
+        );
+        await hubPage.click('[data-role="chain-rotate"]');
+        await sleep(900);
+        const m2 = await lay();
+        check(
+          "wall editor: ↻ rotate turns the cell a quarter clockwise (square panel)",
+          JSON.stringify(m2.tiles?.[0]) === "[0,0,90]" &&
+            (await hubPage.$eval('[data-role="arr-cell-0-0"]', (e) => e.dataset.turn)) === "90",
+          JSON.stringify(m2.tiles),
+        );
+        await hubPage.select('[data-role="chain-turn"]', "270");
+        await sleep(900);
+        const m3 = await lay();
+        check(
+          "wall editor: the Turned select posts its own rotation",
+          JSON.stringify(m3.tiles?.[0]) === "[0,0,270]",
+          JSON.stringify(m3.tiles),
+        );
+        check(
+          "wall editor: the turned cell is labelled in the picture",
+          (
+            await hubPage.$$eval('[data-role="arrangement"] text.rot', (ts) =>
+              ts.map((t) => t.textContent.trim()),
+            )
+          ).join(",") === "↻270°",
+        );
+        // the contract the editor leans on: an arrangement edit is LIVE
+        {
+          const line = `chain ${m3.tiles.map((t) => t.join(",")).join(" ")}`;
+          const r = await (await fetch(`${HUB}/api/layout`, { method: "POST", body: line })).json();
+          check(
+            "wall editor: a `chain` line applies live (reboot_required false)",
+            r.ok === true && r.reboot_required === false,
+            JSON.stringify({ ok: r.ok, reboot_required: r.reboot_required, error: r.error }),
+          );
+        }
+
+        // ---- Identify / Check: the device's test card ----
+        check(
+          "identify: both buttons are offered, the card is off",
+          (await hubPage.$eval('[data-role="identify"]', (e) => e.textContent.trim())) ===
+            "Identify panels" &&
+            (await hubPage.$('[data-role="identify-check"]')) !== null &&
+            (await hubPage.$('[data-role="identify-hint"]')) === null &&
+            (await lay()).card === "off",
+        );
+        await hubPage.click('[data-role="identify"]');
+        await sleep(700);
+        check(
+          "identify: the device shows the panels card, the button says how to stop",
+          (await lay()).card === "panels" &&
+            (await hubPage.$eval('[data-role="identify"]', (e) => e.textContent.trim())) ===
+              "Stop identifying" &&
+            /arrow pointing to its top/.test(
+              await hubPage.$eval('[data-role="identify-hint"]', (e) => e.textContent.replace(/\s+/g, " ")),
+            ),
+        );
+        await shotSettings(hubPage, `${shotDir}/settings-panel-chain.png`, 0);
+        await hubPage.click('[data-role="identify-check"]');
+        await sleep(700);
+        check(
+          "identify: Check switches the device to the cells card",
+          (await lay()).card === "cells" &&
+            /Every panel should show its own number/.test(
+              await hubPage.$eval('[data-role="identify-hint"]', (e) => e.textContent.replace(/\s+/g, " ")),
+            ) &&
+            (await hubPage.$eval('[data-role="identify"]', (e) => e.textContent.trim())) ===
+              "Identify panels",
+        );
+        await hubPage.click('[data-role="identify-check"]');
+        await sleep(700);
+        check(
+          "identify: pressing the lit button again turns the card off",
+          (await lay()).card === "off" && (await hubPage.$('[data-role="identify-hint"]')) === null,
+        );
+        // a wall left showing numbers reads as a broken device: leaving the
+        // Settings page takes the card down
+        await hubPage.click('[data-role="identify"]');
+        await sleep(700);
+        await hubPage.click('[data-role="tab-patterns"]');
+        await sleep(900);
+        check("identify: leaving Settings turns the card off", (await lay()).card === "off");
+        await hubPage.click('[data-role="tab-settings"]');
+        await hubPage.waitForSelector('[data-role="chain-reset"]', { timeout: 6000 });
+
+        await hubPage.click('[data-role="chain-reset"]');
+        await sleep(900);
+        const m4 = await lay();
+        check(
+          "wall editor: `Back to the regular pattern` clears the explicit list",
+          m4.explicit === false &&
+            JSON.stringify(m4.tiles) === "[[1,0,0],[1,1,0],[0,1,0],[0,0,0]]" &&
+            (await hubPage.$('[data-role="chain-reset"]')) === null,
+          JSON.stringify({ tiles: m4.tiles, explicit: m4.explicit }),
+        );
+        // leave the rule as this section found it
+        await openAdv(hubPage, "chain-rule");
+        await hubPage.select('[data-role="layout-start"]', ruleBefore.start);
+        await sleep(600);
+        await hubPage.select('[data-role="layout-dir"]', ruleBefore.dir);
+        await sleep(600);
+        if ((await lay()).snake !== ruleBefore.snake) {
+          await hubPage.$eval('[data-role="layout-snake"]', (el) => el.click());
+          await sleep(600);
+        }
+      }
     } finally {
       await hubPage.close();
       hubDev.kill();

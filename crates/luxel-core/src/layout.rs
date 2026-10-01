@@ -414,6 +414,57 @@ pub struct Output {
     pub rev: bool,
 }
 
+/// One panel of a HUB75 chain, as the wall has it (Gitea #920): which grid
+/// cell it fills and how it is mounted. A chain is a list of these in ribbon
+/// order — index 0 is the panel the ribbon enters.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Tile {
+    /// Grid cell, 0-based from the top-left, `cx < cols`, `cy < rows`.
+    pub cx: u8,
+    pub cy: u8,
+    /// Quarter turns clockwise from upright (0..3), as [`Matrix::rot`].
+    pub turns: u8,
+}
+
+impl Matrix {
+    /// Chain position `p` under the RULE fields (`start`/`dir`/`snake`/`rot`)
+    /// — the regular-pattern generator, which is what every wall was
+    /// described by before an explicit `chain` line existed. `None` past the
+    /// end of the chain.
+    #[must_use]
+    pub fn rule_tile(&self, p: usize) -> Option<Tile> {
+        let (cols, rows) = (self.cols as usize, self.rows as usize);
+        if p >= cols * rows || cols == 0 || rows == 0 {
+            return None;
+        }
+        // Which corner line 0 starts at, as a pair of axis flips.
+        let flip_x = matches!(self.start, Corner::Tr | Corner::Br);
+        let flip_y = matches!(self.start, Corner::Bl | Corner::Br);
+        // `line` walks across the lines, `k` walks along one.
+        let run = match self.dir {
+            RunDir::Row => cols,
+            RunDir::Col => rows,
+        };
+        let (line, mut k) = (p / run, p % run);
+        // A snaked chain comes back the other way along every odd line.
+        if self.snake && line % 2 == 1 {
+            k = run - 1 - k;
+        }
+        let (cx, cy) = match self.dir {
+            RunDir::Row => (k, line),
+            RunDir::Col => (line, k),
+        };
+        let cx = if flip_x { cols - 1 - cx } else { cx };
+        let cy = if flip_y { rows - 1 - cy } else { cy };
+        Some(Tile { cx: cx as u8, cy: cy as u8, turns: self.turns(line) })
+    }
+
+    /// Every chain position under the rule, in ribbon order.
+    pub fn rule_tiles(&self) -> Vec<Tile> {
+        (0..self.panels() as usize).filter_map(|p| self.rule_tile(p)).collect()
+    }
+}
+
 /// The whole configured Layout, minus the pixel count and the map payload —
 /// see the module docs for why those stay where they already live.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -422,6 +473,12 @@ pub struct Layout {
     /// Meaningful when `kind` is [`LayoutKind::Matrix`]; carried across a
     /// kind change so switching to Strip and back does not lose the wiring.
     pub matrix: Matrix,
+    /// The chain as an explicit per-panel list (the `chain` wire line, Gitea
+    /// #920) — what the arrangement editor writes when the wall is
+    /// transcribed panel by panel. Empty = derive it from the rule fields of
+    /// `matrix`, which is every Layout stored before this existed. When
+    /// present it is exactly `cols × rows` entries, each cell once.
+    pub chain: Vec<Tile>,
     /// Empty = "one output, the host's defaults" (see [`View`]).
     pub outputs: Vec<Output>,
     pub proj: Projection,
@@ -438,10 +495,27 @@ impl Layout {
         Layout {
             kind,
             matrix,
+            chain: Vec::new(),
             outputs: Vec::new(),
             proj: Projection::DEFAULT,
             driver: PanelDriver::default(),
         }
+    }
+
+    /// The chain as the remap builder walks it, in ribbon order: the explicit
+    /// list when there is one, else the rule's (Gitea #920).
+    pub fn tiles(&self) -> Vec<Tile> {
+        if self.chain.is_empty() {
+            self.matrix.rule_tiles()
+        } else {
+            self.chain.clone()
+        }
+    }
+
+    /// Does the arrangement — which panel sits where and how it is turned —
+    /// differ between the two, however each one spells it?
+    pub fn arrangement_differs(&self, next: &Layout) -> bool {
+        self.tiles() != next.tiles()
     }
 
     /// Whether moving from `self` to `next` needs a reboot to take effect:
@@ -474,11 +548,21 @@ impl Layout {
     pub fn reboot_required(&self, next: &Layout, default_pin: u8, panel_board: bool) -> bool {
         if next.kind == LayoutKind::Matrix
             && (self.kind != LayoutKind::Matrix
-                || self.matrix.wiring() != next.matrix.wiring()
                 // the `panel` line: three of its four fields are read once,
                 // at boot. `blank` applies live — see
                 // [`PanelDriver::boot_differs`] (Gitea #778).
                 || self.driver.boot_differs(&next.driver))
+        {
+            return true;
+        }
+        // The arrangement — which panel sits where, how it is turned — is a
+        // remap TABLE: on a panel board the driver swaps it between frames
+        // (Gitea #920), so only the framebuffer's shape needs a boot there.
+        // A strip-built matrix builds no table at all; its wiring fields were
+        // reboot-required since #475 and stay so.
+        if next.kind == LayoutKind::Matrix
+            && !panel_board
+            && (self.kind != LayoutKind::Matrix || self.matrix.wiring() != next.matrix.wiring())
         {
             return true;
         }
@@ -575,6 +659,15 @@ impl Layout {
                 // Likewise the sixth (Gitea #857): optional in, always out.
                 out.push(' ');
                 push_u32(&mut out, d.ring_ms as u32);
+                // The explicit chain (Gitea #920), only when there is one —
+                // a rule-described wall stays byte-identical to what it was.
+                if !self.chain.is_empty() {
+                    push_piece(&mut out, "\nchain");
+                    for t in &self.chain {
+                        out.push(' ');
+                        push_tile_wire(&mut out, t);
+                    }
+                }
             }
         }
         for o in &self.outputs {
@@ -782,6 +875,9 @@ pub fn parse(
     let mut kind_seen = false;
     let mut driver_set = false;
     let mut proj_now = None;
+    // `Some` = the body spoke about the chain: a list, or `chain` alone to
+    // clear it. `None` = it did not, and the rules below decide.
+    let mut chain: Option<Vec<Tile>> = None;
 
     for (i, raw) in body.lines().enumerate() {
         let line = i as u32 + 1;
@@ -873,6 +969,24 @@ pub fn parse(
                 driver_set = true;
                 next.driver = parse_driver(&mut it).map_err(err)?;
             }
+            // The chain as the wall has it (Gitea #920): every panel in
+            // ribbon order, `cx,cy,deg`. Validated against the matrix line
+            // in force once the whole body is read (it may come first).
+            "chain" => {
+                if chain.is_some() {
+                    return Err(err("only one chain line per body"));
+                }
+                let mut list = Vec::new();
+                for tok in it.by_ref() {
+                    let t = parse_tile(tok)
+                        .ok_or(err("expected: chain <cx>,<cy>,<0|90|180|270> … (one per panel, in ribbon order)"))?;
+                    if list.len() >= 255 * 255 {
+                        return Err(err("chain is longer than any arrangement"));
+                    }
+                    list.push(t);
+                }
+                chain = Some(list);
+            }
             "out" => {
                 if lim.panel {
                     return Err(err("this board has no configurable strip output"));
@@ -950,8 +1064,46 @@ pub fn parse(
             }
             _ => {
                 return Err(err(
-                    "unknown line (want strip|matrix|map|panel|out|proj|proj1d|proj2d|proj3d)",
+                    "unknown line (want strip|matrix|map|panel|chain|out|proj|proj1d|proj2d|proj3d)",
                 ))
+            }
+        }
+    }
+
+    // The explicit chain (Gitea #920). A body that lists one must list the
+    // whole arrangement, each cell exactly once; a bare `chain` clears it;
+    // and a body that re-describes the wall by RULE (a matrix line whose
+    // arrangement fields moved) or changes its tiling drops the list, so
+    // the rule the user just edited is what shows — the editor writes the
+    // list back the moment they touch a panel.
+    match chain {
+        Some(list) if list.is_empty() => next.chain.clear(),
+        Some(list) => {
+            let m = &next.matrix;
+            if list.len() != m.panels() as usize {
+                return Err(LayoutError { line: 0, msg: "chain must name every panel exactly once (cols*rows entries)" });
+            }
+            let mut seen = Vec::new();
+            seen.resize(list.len(), false);
+            for t in &list {
+                if t.cx >= m.cols || t.cy >= m.rows {
+                    return Err(LayoutError { line: 0, msg: "chain names a cell outside the arrangement" });
+                }
+                let i = t.cy as usize * m.cols as usize + t.cx as usize;
+                if seen[i] {
+                    return Err(LayoutError { line: 0, msg: "chain names a cell twice" });
+                }
+                seen[i] = true;
+                if t.turns % 2 == 1 && m.pw != m.ph {
+                    return Err(LayoutError { line: 0, msg: "a tile turned 90° must be square (pw == ph)" });
+                }
+            }
+            next.chain = list;
+        }
+        None => {
+            let g = |m: &Matrix| (m.cols, m.rows);
+            if g(&cur.matrix) != g(&next.matrix) || cur.matrix.wiring() != next.matrix.wiring() {
+                next.chain.clear();
             }
         }
     }
@@ -1059,6 +1211,26 @@ fn parse_matrix<'a>(it: &mut impl Iterator<Item = &'a str>) -> Option<Matrix> {
 /// panel's) and the odd lines — or the legacy 180°-only mask `0..3` every
 /// wall stored before this (bit 1 = odd lines, bit 2 = even lines), which
 /// is also what a 180°-only arrangement is written back as.
+/// One `chain` entry, `cx,cy,deg`.
+fn parse_tile(s: &str) -> Option<Tile> {
+    let mut it = s.split(',');
+    let cx = u8::try_from(num(it.next()?)?).ok()?;
+    let cy = u8::try_from(num(it.next()?)?).ok()?;
+    let deg = num(it.next()?)?;
+    if it.next().is_some() || deg % 90 != 0 || deg > 270 {
+        return None;
+    }
+    Some(Tile { cx, cy, turns: (deg / 90) as u8 })
+}
+
+fn push_tile_wire(out: &mut String, t: &Tile) {
+    push_u32(out, u32::from(t.cx));
+    out.push(',');
+    push_u32(out, u32::from(t.cy));
+    out.push(',');
+    push_u32(out, u32::from(t.turns & 3) * 90);
+}
+
 fn parse_rot(s: &str) -> Option<[u8; 2]> {
     if let Some((e, o)) = s.split_once('/') {
         let deg = |t: &str| -> Option<u8> {
@@ -1287,6 +1459,44 @@ pub struct PanelView {
     /// pending. `None` = there is no panel output at all: the framebuffer
     /// allocation or the LCD_CAM init failed even at the board default.
     pub driver_live: Option<LiveDriver>,
+    /// The test card the panel is showing instead of the pattern (Gitea
+    /// #920), `POST /api/layout/card`.
+    pub card: Card,
+}
+
+/// What a panel board draws instead of the pattern while the wall is being
+/// transcribed (Gitea #920). Not persisted; a boot is always `Off`.
+#[cfg(feature = "panel")]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Card {
+    #[default]
+    Off,
+    /// Every PHYSICAL panel shows its ribbon number and an arrow to its own
+    /// top — drawn straight into the driver's blocks, remap bypassed. What
+    /// the user reads off the wall into the editor.
+    Panels,
+    /// Every GRID cell shows its ribbon number and an up arrow, through the
+    /// live remap: right when every panel shows its number upright.
+    Cells,
+}
+
+#[cfg(feature = "panel")]
+impl Card {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Card::Off => "off",
+            Card::Panels => "panels",
+            Card::Cells => "cells",
+        }
+    }
+    pub fn from_str(s: &str) -> Option<Card> {
+        match s {
+            "off" => Some(Card::Off),
+            "panels" => Some(Card::Panels),
+            "cells" => Some(Card::Cells),
+            _ => None,
+        }
+    }
 }
 
 /// The driver the firmware actually booted — the live half of the `driver`
@@ -1386,12 +1596,33 @@ impl Layout {
             push_piece(out, "]");
             push_piece(out, ",\"scan\":");
             push_u32(out, self.matrix.scan as u32);
+            // The chain as the remap walks it (Gitea #920): every panel in
+            // ribbon order as `[cx, cy, deg]`, whether it came from the rule
+            // or from an explicit list — `explicit` says which.
+            push_piece(out, ",\"tiles\":[");
+            for (i, t) in self.tiles().iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push('[');
+                push_u32(out, u32::from(t.cx));
+                out.push(',');
+                push_u32(out, u32::from(t.cy));
+                out.push(',');
+                push_u32(out, u32::from(t.turns & 3) * 90);
+                out.push(']');
+            }
+            push_piece(out, "],\"explicit\":");
+            push_piece(out, if self.chain.is_empty() { "false" } else { "true" });
             #[cfg(feature = "panel")]
             if let Some(p) = v.panel {
                 push_piece(out, ",\"est_hz\":");
                 push_u32(out, p.est_hz);
                 push_piece(out, ",\"drive\":");
                 push_u32(out, p.drive);
+                push_piece(out, ",\"card\":\"");
+                push_piece(out, p.card.as_str());
+                push_piece(out, "\"");
             }
             push_piece(out, "}");
         }
@@ -1970,6 +2201,118 @@ mod tests {
         assert!(parse("matrix 64 32 2 1 tl row 0 180/0", &cur, 4096, &big_limits()).is_ok());
     }
 
+    /// The explicit chain (Gitea #920): a `chain` line names every panel in
+    /// ribbon order, replaces the rule, round-trips, and is validated as a
+    /// permutation of the cells.
+    #[test]
+    fn a_chain_line_describes_the_wall_panel_by_panel() {
+        let mut cur = strip_layout();
+        cur.kind = LayoutKind::Matrix;
+        cur.matrix = Matrix::single(32, 32);
+        let lim = big_limits();
+        // the rule alone: tiles come from it, nothing explicit
+        let e = parse("matrix 32 32 2 2 tr col 1 0", &cur, 4096, &lim).unwrap();
+        assert!(e.layout.chain.is_empty());
+        let rule: Vec<(u8, u8, u8)> = e.layout.tiles().iter().map(|t| (t.cx, t.cy, t.turns)).collect();
+        assert_eq!(rule, vec![(1, 0, 0), (1, 1, 0), (0, 1, 0), (0, 0, 0)]);
+        // Jeremy's wall, transcribed: same cells, quarter turns per panel
+        let body = "matrix 32 32 2 2 tr col 1 0\nchain 1,0,90 1,1,90 0,1,270 0,0,270";
+        let e = parse(body, &cur, 4096, &lim).unwrap();
+        let got: Vec<(u8, u8, u8)> = e.layout.tiles().iter().map(|t| (t.cx, t.cy, t.turns)).collect();
+        assert_eq!(got, vec![(1, 0, 1), (1, 1, 1), (0, 1, 3), (0, 0, 3)]);
+        assert_eq!(e.layout.chain.len(), 4);
+        let wire = e.layout.to_wire(4096, &proto_name);
+        assert!(wire.contains("\nchain 1,0,90 1,1,90 0,1,270 0,0,270"), "{wire}");
+        // …and the persisted form reads back to the same chain
+        let back = parse(&wire, &cur, 4096, &lim).unwrap();
+        assert_eq!(back.layout.chain, e.layout.chain);
+        // a chain line may come first, and alone (the editor posts just it)
+        let stored = e.layout.clone();
+        let e2 = parse("chain 0,0,0 1,0,0 0,1,180 1,1,180", &stored, 4096, &lim).unwrap();
+        assert_eq!(e2.layout.chain[2], Tile { cx: 0, cy: 1, turns: 2 });
+        assert_eq!(e2.layout.matrix, stored.matrix, "the matrix line is untouched");
+        // a bare `chain` clears it back to the rule
+        let e3 = parse("chain", &stored, 4096, &lim).unwrap();
+        assert!(e3.layout.chain.is_empty());
+        // JSON: the effective tiles, and whether they are explicit
+        let mut s = String::new();
+        stored.push_json(&mut s, &view(&stored, 4096, "{}"));
+        assert!(s.contains("\"tiles\":[[1,0,90],[1,1,90],[0,1,270],[0,0,270]],\"explicit\":true"), "{s}");
+        let mut s = String::new();
+        e3.layout.push_json(&mut s, &view(&e3.layout, 4096, "{}"));
+        assert!(s.contains("\"tiles\":[[1,0,0],[1,1,0],[0,1,0],[0,0,0]],\"explicit\":false"), "{s}");
+    }
+
+    #[test]
+    fn a_chain_must_be_a_permutation_of_the_cells() {
+        let mut cur = strip_layout();
+        cur.kind = LayoutKind::Matrix;
+        cur.matrix = Matrix::single(32, 32);
+        cur.matrix.cols = 2;
+        cur.matrix.rows = 2;
+        let lim = big_limits();
+        let msg = |body: &str| parse(body, &cur, 4096, &lim).unwrap_err().msg;
+        assert_eq!(msg("chain 0,0,0 1,0,0 0,1,0"), "chain must name every panel exactly once (cols*rows entries)");
+        assert_eq!(msg("chain 0,0,0 1,0,0 0,1,0 2,1,0"), "chain names a cell outside the arrangement");
+        assert_eq!(msg("chain 0,0,0 1,0,0 0,1,0 0,1,0"), "chain names a cell twice");
+        assert!(msg("chain 0,0,45 1,0,0 0,1,0 1,1,0").starts_with("expected: chain"));
+        assert!(msg("chain 0,0 1,0,0 0,1,0 1,1,0").starts_with("expected: chain"));
+        assert_eq!(msg("chain 0,0,0 1,0,0\nchain 0,1,0 1,1,0"), "only one chain line per body");
+        // a quarter turn needs a square tile, in the list as on the matrix line
+        assert_eq!(
+            msg("matrix 32 16 2 2 tl row 0 0\nchain 0,0,90 1,0,0 0,1,0 1,1,0"),
+            "a tile turned 90° must be square (pw == ph)"
+        );
+    }
+
+    /// Re-describing the wall by rule, or re-tiling it, drops the list — the
+    /// thing the user just edited is what shows.
+    #[test]
+    fn a_rule_or_tiling_change_drops_the_explicit_chain() {
+        let mut cur = strip_layout();
+        cur.kind = LayoutKind::Matrix;
+        cur.matrix = Matrix::single(32, 32);
+        let lim = big_limits();
+        let stored = parse("matrix 32 32 2 2 tr col 1 0\nchain 1,0,90 1,1,90 0,1,270 0,0,270", &cur, 4096, &lim)
+            .unwrap()
+            .layout;
+        // same matrix line restated: the list survives
+        let e = parse("matrix 32 32 2 2 tr col 1 0", &stored, 4096, &lim).unwrap();
+        assert_eq!(e.layout.chain.len(), 4, "restating the rule keeps the transcription");
+        // a `panel` line or projection alone: untouched too
+        let e = parse("proj2d xy", &stored, 4096, &lim).unwrap();
+        assert_eq!(e.layout.chain.len(), 4);
+        // the rule moved: the list goes
+        let e = parse("matrix 32 32 2 2 tl row 0 0", &stored, 4096, &lim).unwrap();
+        assert!(e.layout.chain.is_empty());
+        // the tiling changed (a 4x1 cannot keep a 2x2's list)
+        let e = parse("matrix 32 32 4 1 tr col 1 0", &stored, 4096, &lim).unwrap();
+        assert!(e.layout.chain.is_empty());
+        // …unless the body brings a matching list along
+        let e = parse("matrix 32 32 4 1 tl row 0 0\nchain 3,0,0 2,0,0 1,0,0 0,0,0", &stored, 4096, &lim).unwrap();
+        assert_eq!(e.layout.chain.len(), 4);
+    }
+
+    /// On a panel board the arrangement is a table the driver swaps live
+    /// (Gitea #920); only the framebuffer's shape needs a boot. A strip-built
+    /// matrix keeps the #475 rule.
+    #[test]
+    fn the_arrangement_is_live_on_a_panel_board() {
+        let mut cur = strip_layout();
+        cur.kind = LayoutKind::Matrix;
+        cur.matrix = Matrix::single(32, 32);
+        cur.matrix.cols = 2;
+        cur.matrix.rows = 2;
+        let live = |body: &str| !parse(body, &cur, 4096, &panel_limits()).unwrap().reboot_required;
+        assert!(live("matrix 32 32 2 2 tr col 1 90/270"), "rule fields");
+        assert!(live("chain 1,0,90 1,1,90 0,1,270 0,0,270"), "an explicit list");
+        assert!(!live("matrix 32 32 4 1 tl row 0 0"), "the tiling is the framebuffer's shape");
+        assert!(!live("matrix 16 16 2 2 tl row 0 0"), "so is the tile size");
+        // a strip-built matrix: still a boot, as since #475
+        let e = parse("matrix 32 32 2 2 tr col 1 0", &cur, 4096, &big_limits()).unwrap();
+        assert!(e.reboot_required);
+    }
+
     #[test]
     fn the_persisted_wire_round_trips() {
         let mut l = Layout::board_default(LayoutKind::Matrix, Matrix::single(64, 32));
@@ -2040,7 +2383,7 @@ mod tests {
         let mut s = String::new();
         l.push_json(&mut s, &view(&l, 4096, "{}"));
         assert!(s.contains("\"kind\":\"matrix\""));
-        assert!(s.contains("\"matrix\":{\"pw\":64,\"ph\":64,\"cols\":1,\"rows\":1,\"start\":\"tl\",\"dir\":\"row\",\"snake\":0,\"rot\":[0,0],\"scan\":0}"));
+        assert!(s.contains("\"matrix\":{\"pw\":64,\"ph\":64,\"cols\":1,\"rows\":1,\"start\":\"tl\",\"dir\":\"row\",\"snake\":0,\"rot\":[0,0],\"scan\":0,\"tiles\":[[0,0,0]],\"explicit\":false}"));
         assert!(s.contains("\"w\":64,\"h\":64"));
         assert!(s.contains("\"count\":1"), "one implicit output = one panel");
         assert!(!s.contains("est_hz"), "no panel driver, no estimate");
@@ -2053,10 +2396,10 @@ mod tests {
         let mut l = Layout::board_default(LayoutKind::Matrix, Matrix::single(64, 64));
         l.matrix.cols = 2;
         let mut v = view(&l, 8192, "null");
-        v.panel = Some(PanelView { est_hz: 57, drive: 1, driver_live: None });
+        v.panel = Some(PanelView { est_hz: 57, drive: 1, driver_live: None, card: Card::Off });
         let mut s = String::new();
         l.push_json(&mut s, &v);
-        assert!(s.contains("\"rot\":[0,0],\"scan\":0,\"est_hz\":57,\"drive\":1}"), "{s}");
+        assert!(s.contains("\"rot\":[0,0],\"scan\":0,\"tiles\":[[0,0,0],[1,0,0]],\"explicit\":false,\"est_hz\":57,\"drive\":1,\"card\":\"off\"}"), "{s}");
         assert!(s.contains("\"w\":128,\"h\":64"));
         assert!(s.contains("\"count\":2"), "one implicit output covers both panels");
     }
@@ -2382,7 +2725,7 @@ mod tests {
         let mut l = panel_cur();
         l.driver = PanelDriver { planes: 6, clock_mhz: 20, chip: Chip::Fm6126a, blank: 2, lsb: 0, ring_ms: 3 };
         let mut v = view(&l, 4096, "null");
-        v.panel = Some(PanelView { est_hz: 57, drive: 1, driver_live: None });
+        v.panel = Some(PanelView { est_hz: 57, drive: 1, driver_live: None, card: Card::Off });
         let mut s = String::new();
         l.push_json(&mut s, &v);
         assert!(
@@ -2414,6 +2757,7 @@ mod tests {
                 ring_rows: 9,
                 ring_slack_us: 2870,
             }),
+            card: Card::Off,
         });
         let mut s = String::new();
         l.push_json(&mut s, &v);

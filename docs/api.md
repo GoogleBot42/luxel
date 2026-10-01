@@ -1277,7 +1277,7 @@ embedded so a client needs one fetch:
 | `source` | `regular` (the shape comes from the strip/matrix fields) · `map` (from a map program's coordinates). "Custom" is a coordinate SOURCE, not a dimensionality. |
 | `dims` / `regular` / `w` / `h` | The **Layout's own** shape: 1×`pixels` for a strip, `pw·cols`×`ph·rows` for a matrix, the installed map's detected grid (or `0`/`0`, `regular:false`) for a map. |
 | `pixels` / `max` | The pixel count and this board's ceiling — the same numbers `/api/config` reports. |
-| `matrix` | **Present only when `kind` is `matrix`.** `pw`×`ph` is one panel (or, with `cols`=`rows`=1, the whole grid); `cols`×`rows` tile them; `start` (`tl\|tr\|bl\|br`), `dir` (`row\|col`), `snake`, `rot` (how the tiles are mounted, degrees per line parity — see below) describe how the chain threads the tiles — and, in the one-tile case, how the pixel run threads the grid (a strip-built matrix's wiring, proposal §5.3). `scan` is the HUB75 scan divisor — `1/N` on a module's label; `0` means the usual ratio for this height, `ph / 2` (nothing reads it off the module: HUB75 is write-only). On a board with a panel driver it also carries `est_hz` and `drive` — see "Panel arrangement" below. |
+| `matrix` | **Present only when `kind` is `matrix`.** `pw`×`ph` is one panel (or, with `cols`=`rows`=1, the whole grid); `cols`×`rows` tile them; `start` (`tl\|tr\|bl\|br`), `dir` (`row\|col`), `snake`, `rot` (how the tiles are mounted, degrees per line parity — see below) describe how the chain threads the tiles as a RULE; `tiles` is the chain the remap actually walks and `explicit` whether a per-panel `chain` line is stored (see "Transcribing the wall"); on a panel board `card` is the test card being shown — and, in the one-tile case, how the pixel run threads the grid (a strip-built matrix's wiring, proposal §5.3). `scan` is the HUB75 scan divisor — `1/N` on a module's label; `0` means the usual ratio for this height, `ph / 2` (nothing reads it off the module: HUB75 is write-only). On a board with a panel driver it also carries `est_hz` and `drive` — see "Panel arrangement" below. |
 | `driver` | **Present only on a board with a HUB75 panel.** How the panel is DRIVEN — bit depth, pixel clock, chip init, latch blanking — plus the chip list a client should offer and what the firmware actually booted. See "How the panel is driven" below. |
 | `outputs` | One entry per configured output — `n` (0-based, `< caps.outputs`), `pin`, `proto`, `order`, `count` (pixels on a strip Layout, **panels** on a matrix one), `rev`. Each drives a consecutive run of the one pixel space, in `n` order (see "Driving" below). A host with no table configured reports ONE implicit output built from its live data pin, protocol and colour order. |
 | `reverted` | **Absent unless a boot self-heal happened** (Gitea #822): `{"from_pixels":N,"heap_free":X}` — the stored shape left this board's heap at `X` bytes, under the firmware's runtime floor, so it was reverted to the board default and the device rebooted once. Say so: the shape on screen is not the one the user set. It survives the reboot and is cleared by the next successful `POST /api/layout`. `/api/status`'s `layout_reverted` is the one-bit form, for a client that polls status. See "A layout the board cannot serve" below. |
@@ -1381,16 +1381,62 @@ against 76.9–77.0 / 153.5–154.0.
   change. A UI offers the ratios the way a module prints them — `1/32`, `1/16`,
   `1/8`, `1/4`, those that divide `ph / 2` — marks the `ph / 2` one as the usual
   one, and sends `0` for it; never the words "board default".
-- **Reboot to apply.** `cols rows start dir snake rot scan` are
-  `reboot_required` everywhere; on a **HUB75 board** so are `pw`/`ph`, whose
-  DMA framebuffer is allocated from the arrangement at boot. On a strip-built
-  matrix those two only resize the grid and apply live.
+- **What needs a reboot.** On a **HUB75 board** only the framebuffer's
+  shape does — `pw ph cols rows scan`, which the DMA framebuffer is allocated
+  from at boot. Which panel sits where and how it is turned (`start dir snake
+  rot`, or a `chain` line) is a remap TABLE the output task swaps between
+  frames, so it applies live and answers `"reboot_required":false` (Gitea
+  #920). On a strip-built matrix `pw`/`ph` only resize the grid (live) and the
+  wiring fields stay `reboot_required` as since #475.
 - An arrangement whose chain is wider than `drive` tiles is accepted, stored
   and reported — the board just drives the prefix. That is the honest state,
   not a rejection. Since #401 the framebuffer follows the arrangement, so this
   is now the case where it could not: the panel is over the board's pixel cap
   or over the internal SRAM two bitplane buffers need, and the boot fell back
   (`driver.live.fallback`).
+
+### Transcribing the wall: the `chain` line and the test cards (Gitea #920)
+
+The rule fields above describe a REGULAR wall. What an installer actually
+knows is per panel — where it hangs, which panel it is along the ribbon,
+which way it is turned — and an irregular wall has no rule at all. So the
+arrangement can also be stated panel by panel:
+
+```text
+chain <cx>,<cy>,<deg> <cx>,<cy>,<deg> …       one entry per panel, in ribbon order
+chain                                          (bare) back to the rule fields
+```
+
+`cx,cy` is the grid cell (0-based from the top-left), `deg` the panel's mount
+rotation clockwise (`0|90|180|270`; a quarter turn needs a square tile). The
+list must name every cell exactly once (`cols·rows` entries) — `chain must
+name every panel exactly once`, `chain names a cell outside the arrangement`,
+`chain names a cell twice` are the refusals. It may be posted alone; the
+stored `matrix` line is kept. A `matrix` line whose rule fields or tiling
+CHANGED, posted without a `chain` line, drops the list (the rule just edited
+is what shows); restating it unchanged keeps the list. Persisted as its own
+line after `panel` only when explicit, so a rule-described Layout's stored
+text is byte-identical to before.
+
+`GET /api/layout` always reports the chain the remap walks, however it was
+described: `"tiles":[[cx,cy,deg],…]` in ribbon order (tile 0 is the panel the
+ribbon enters — the arrangement picture numbers it **1**), and
+`"explicit":true|false` says whether a `chain` line is stored.
+
+**The test cards.** `POST /api/layout/card` with `{"mode":"panels"}`,
+`{"mode":"cells"}` or `{"mode":"off"}` (the bare word works too) makes a panel
+board draw a card instead of the pattern from the next frame; `GET
+/api/layout` reports it as `matrix.card`, and it is never persisted (a boot is
+`off`). A strip host answers `{"ok":false,"error":"this board has no panel"}`.
+
+| mode | what the wall shows | what it is for |
+|---|---|---|
+| `panels` | every PHYSICAL panel: its ribbon number (1 = the panel the ribbon enters) and an arrow pointing to that panel's own top — drawn straight into the driver's blocks, remap bypassed | reading the wall into the editor: click a cell, enter the number and the arrow you see there |
+| `cells` | every GRID CELL: its ribbon number with an UP arrow, through the live remap | checking: with the right transcription every panel shows its own number upright; a wrong cell shows the wrong number, a wrong turn a sideways one |
+
+The numbers are a 3x5 font scaled to the tile, the arrow a chevron; both are
+white/cyan on black with a grey frame per tile, so they read at any
+brightness and survive a wrong colour order.
 
 ### How the panel is driven — the `panel` line (Gitea #401 + #525)
 
@@ -1589,6 +1635,7 @@ Blank lines and `#` comments are ignored; line order is free; **at most one**
 ```text
 strip <pixels>
 matrix <pw> <ph> <cols> <rows> <tl|tr|bl|br> <row|col> <snake 0|1> <rot: E/O degrees | 0..3> [<scan>]
+chain <cx>,<cy>,<deg> …   | chain          # per-panel list in ribbon order / back to the rule (#920)
 map [grid <w> <h> | <dims> <raw16.16…>]
 panel <planes> <8|10|12|15|20|24|30> <shiftreg|fm6126a|icn2038s|dp3246> <blank> [<lsb>]
 out <n> <pin> <sk9822|ws2812> <rgb|rbg|grb|gbr|brg|bgr> <count> [rev]
@@ -1752,7 +1799,8 @@ protocol latch tail, not a second frame. docs/boards.md has the full table.
 | the map, and the `proj*` defaults | **live** |
 | `proj` (the running pattern's override) | **live**, and never stored |
 | `matrix` `pw` `ph` | **live** on a strip-built matrix — they only resize the grid — and **reboot** on a HUB75 board, whose DMA framebuffer is allocated from them at boot (#525) |
-| `matrix` `cols` `rows` `start` `dir` `snake` `rot` `scan` | **reboot** — the chain remap is built once (#475) |
+| `matrix` `cols` `rows` `scan` (and `pw` `ph` on a panel board) | **reboot** — the DMA framebuffer is allocated from them at boot |
+| `matrix` `start` `dir` `snake` `rot`, `chain` | **live** on a panel board — the remap table is swapped between frames (#920); reboot on a strip-built matrix (#475) |
 | `panel` `planes` `clock_mhz` `chip` | **reboot** — the DMA descriptors, the LCD_CAM clock and the chip's init sequence are all set up once, at boot (#525). The field a client notes as pending is `panel`. |
 | `panel` `blank` | **live** — control bits in the framebuffer words, which the packer never writes, so the output task re-formats each buffer in place and the new blanking is on the panel within a frame (#778). `live.blank` follows one frame later; a blanking that would leave no OE-active clock in the running row block is refused at POST time |
 | `out` `count` (the split) | **live** on every output — the run boundaries are re-read from the Layout each frame, so an output whose run shrank drives fewer pixels at once and one the table no longer covers goes dark |
