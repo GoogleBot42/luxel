@@ -1,5 +1,22 @@
 # Update log
 
+## 2026-09-30 — console: a snaked panel chain mirrored every other row of the 2D pattern tiles
+
+Jeremy, on the second Seengreat (2x2 wall, `tr col 1 270/90`): "the coords
+seem completely messed up" in the web UI, the panels themselves fine, and
+"it kind of looks like the webui is rendering patterns … twice". The console
+turned `matrix.snake` — how the ribbon walks from tile to tile — into
+serpentine PIXEL wiring for its preview engines (`stores/device.ts`, since
+#573), so every per-pixel `render2D` tile and thumbnail drew its odd rows
+mirrored; `renderFrame` patterns and by-index 1D ones looked right, which is
+why only some tiles were wrong. The firmware's remap absorbs the chain and
+the engine is row-major, so the console now never reads `snake` as wiring
+(`layoutGeomOf` in `lib/geometry.ts`, with the wall's own `/api/layout` body
+as the regression test). Latent since 2026-09-20; first exposed when the wall
+went 2x2 serpentine today. Verified in chromium against the board
+(`?device=`): the Library and On-device tiles are whole. The fix reaches a
+board with its next console bundle.
+
 ## 2026-09-30 — second Seengreat HUB75 S3 flashed (`luxel-ea6f70`, 192.168.0.142)
 
 A second Seengreat board arrived and went from stock XiaoZhi to master

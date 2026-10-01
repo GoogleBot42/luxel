@@ -32,6 +32,7 @@ import {
   latticeMapFits,
   latticeMapLine,
   maxLatticeSide,
+  layoutGeomOf,
   layoutKey,
   layoutLabel,
   parsePreviewAs,
@@ -271,6 +272,40 @@ test("#573 reverse: a 64×64 panel handed a 1D program is still a 64×64 panel",
     const l = reconcileLayout(input({ connected: true, geom: g, patternDims }));
     assert.equal(layoutLabel(l), "64×64 matrix", `pattern dims ${patternDims}`);
   }
+});
+
+test("a snaked CHAIN is not serpentine pixel wiring: the preview grid stays row-major", () => {
+  // Jeremy's 2x2 wall of 64×64 panels, `tr col 1 270/90` — `GET /api/layout`
+  // as the Seengreat answers it. `matrix.snake` is how the ribbon walks from
+  // tile to tile; the firmware's remap absorbs it and the engine renders one
+  // row-major 128×128 grid. Reading it as pixel wiring mirrored every odd row
+  // of every per-pixel 2D tile in the console (2026-09-30).
+  const wire = {
+    kind: "matrix",
+    source: "regular",
+    dims: 2,
+    regular: true,
+    pixels: 16384,
+    w: 128,
+    h: 128,
+    matrix: { pw: 64, ph: 64, cols: 2, rows: 2, start: "tr", dir: "col", snake: 1, rot: [270, 90], scan: 0 },
+  };
+  const geom = layoutGeomOf(wire);
+  assert.equal(geom.serpentine, undefined);
+  const g = deviceGeometry({
+    layout: geom,
+    status: { dims: 2, regular: true, w: 128, h: 128, source: "user", patternDims: 2 },
+    pixels: 16384,
+    map: { installed: true, dims: 2, kind: "grid", w: 128, h: 128 },
+    coords: null,
+  });
+  const l = reconcileLayout(input({ connected: true, geom: g }));
+  assert.equal(layoutLabel(l), "128×128 matrix");
+  assert.equal(wiringCoords(l), null); // the engine builds the row-major grid itself
+  // and so does the tile-sized copy of it, which is where it showed
+  const tile = thumbLayout(l, 1024);
+  assert.equal(`${tile.w}x${tile.h}`, "32x32");
+  assert.equal(wiringCoords(tile), null);
 });
 
 test("#573: /api/layout is the fixture and always wins over /api/status geom", () => {
