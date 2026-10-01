@@ -63,6 +63,9 @@ these before trusting any build/test failure as a real regression.
    `npm run dev` / `npm run build`. (`npm run wasm` itself stopped caring when it
    became `web/tools/build-wasm.sh`, which mkdirs — Gitea #683.)
 3. `web/node_modules` — run `npm ci` inside `nix develop` (bare shells have no `node`).
+   A symlink to another worktree's `web/node_modules` also works and saves the
+   install, but it shows up as untracked (`?? web/node_modules`) — stage paths
+   by name, never `git add -A`, while it is there (2026-09-30).
 3b. `firmware/creds.env` (gitignored WiFi creds) — required by any firmware build
    (`build-esp32.sh` reads it). Copy it from the main checkout:
    `cp /home/googlebot/workspace/pixler/firmware/creds.env firmware/creds.env`.

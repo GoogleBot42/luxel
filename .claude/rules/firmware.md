@@ -258,6 +258,19 @@ paths:
   priority`), keep a watchdog that re-sets `lcd_start` (`lcd_restarts`),
   and never let a channel that may stall on PSRAM (a flash op holds SPI1)
   be in flight while the fence runs (`output::transfer_busy`).
+- **The first block a HUB75 row clocks out lands on the FAR END of the
+  chain; the IN panel shows the LAST block** (2026-09-30, #917/#919). Chain
+  positions count from the IN connector everywhere a user sees them, so
+  tile `p` owns driver block `drive − 1 − p` (`arrange::build_lut_tiles`).
+  Getting it backwards is invisible on one panel and on a row whose far end
+  happens to be tile 0 — it took a 2x2 snake (columns swapped, rows fine)
+  to show. Consequences: a row of upright panels with IN on the right is
+  `tr row`; the PANELS test card numbers block `b` as `drive − b`; "the far
+  panels" in a ring-starvation report are the FIRST words clocked. And an
+  arrangement claim is not verified until the wall has been LOOKED at:
+  `POST /api/layout/card {"mode":"panels"}` draws each panel's ribbon
+  number and native-top arrow with the remap bypassed (#920) — ask for that
+  reading instead of reasoning about which rule the wall follows.
 - **GDMA out of the octal PSRAM is 35–40 MB/s at the 40 MHz PSRAM clock,
   the same as the CPU through the cache** — measured by the ring's
   calibration copy (`dma_cal_us`). Budget any DMA reader of PSRAM at that,
