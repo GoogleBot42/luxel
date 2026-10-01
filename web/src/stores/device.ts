@@ -28,6 +28,7 @@ import {
   latticeCoords,
   latticeMapFits,
   latticeMapLine,
+  layoutGeomOf,
   PROJECTION_CODES,
   type DeviceGeom,
   type Projection,
@@ -234,17 +235,7 @@ export const deviceLayout: Readable<DeviceGeom | null> = derived(
   [deviceLayoutWire, deviceGeomStatus, devicePixels, deviceMap, deviceMapCoords],
   ([wire, g, pixels, dm, coords]) =>
     deviceGeometry({
-      layout: wire
-        ? {
-            dims: wire.dims,
-            regular: wire.regular,
-            w: wire.w,
-            h: wire.h,
-            pixels: wire.pixels,
-            source: wire.source,
-            serpentine: wire.matrix ? wire.matrix.snake === 1 : undefined,
-          }
-        : null,
+      layout: wire ? layoutGeomOf(wire) : null,
       status: g
         ? {
             dims: g.dims,

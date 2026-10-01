@@ -1284,9 +1284,13 @@ embedded so a client needs one fetch:
 | `proj` | The §5.4d projection defaults (`docs/spec/projection.md`), tokens `index\|x\|y\|z\|xy\|xz\|yz`. |
 | `map` | The `GET /api/map` body verbatim. |
 
-A client that wants the index→coordinate mapping (a console preview showing
-"real wiring") has everything here: `kind` + `w`/`h` + the `matrix` block's
-`start`/`dir`/`snake`/`rot`.
+The index→coordinate mapping a client's own preview engine needs is `kind` +
+`w`/`h` and nothing else: pixel `i` of a matrix is row-major, `(i % w,
+i / w)`. The `matrix` block's `start`/`dir`/`snake`/`rot` describe how the
+ribbon walks from TILE to tile, which the firmware's remap absorbs — they are
+for drawing the arrangement, never for placing pixels. (The console read
+`snake` as serpentine pixel rows until 2026-09-30 and mirrored every other
+row of its per-pixel 2D thumbnails on a snaked wall.)
 
 ### Panel arrangement and estimated refresh (HUB75, Gitea #475)
 

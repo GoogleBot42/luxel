@@ -518,8 +518,38 @@ export interface LayoutGeom {
   /** `map` = a map program's coordinates are the shape; `regular` = the
    *  strip/matrix fields are. */
   source: "regular" | "map";
-  /** Alternate rows run backwards (`matrix.snake` on the wire). */
+  /** Alternate PIXEL rows run backwards in index order. Nothing on the wire
+   *  says this today — see [`layoutGeomOf`]. */
   serpentine?: boolean;
+}
+
+/**
+ * `GET /api/layout`'s body as the fixture reading [`deviceGeometry`] takes.
+ *
+ * `serpentine` is deliberately NOT read off `matrix.snake`. That flag is how
+ * the chain walks from TILE to tile (docs/api.md "Chain order"); the firmware
+ * folds it into its panel→pixel remap, so the engine — the device's and the
+ * preview's — renders one row-major `w`×`h` grid and never knows about the
+ * chain. Reading it as pixel wiring mirrored every other row of every
+ * per-pixel 2D preview the moment a wall was snaked (the 2x2 `tr col 1`
+ * Seengreat, 2026-09-30).
+ */
+export function layoutGeomOf(wire: {
+  dims: number;
+  regular: boolean;
+  w: number;
+  h: number;
+  pixels: number;
+  source: "regular" | "map";
+}): LayoutGeom {
+  return {
+    dims: wire.dims,
+    regular: wire.regular,
+    w: wire.w,
+    h: wire.h,
+    pixels: wire.pixels,
+    source: wire.source,
+  };
 }
 
 /** `GET /api/map` as this module reads it — the pre-`/api/layout` fallback. */
@@ -587,9 +617,8 @@ export function deviceGeometry(i: DeviceGeomInput): DeviceGeom | null {
       source: wire.source === "map" ? "user" : "board",
       pixels: px || wire.w * wire.h,
       coords: wire.regular ? undefined : (i.coords ?? undefined),
-      // the device's REAL wiring: a snaked matrix walks alternate rows
-      // backwards, so a by-index 1D pattern previews as the fixture shows it
-      // rather than row-major (#463's open item).
+      // pixel rows that run backwards in index order — never the chain's
+      // `matrix.snake`, which `layoutGeomOf` keeps out of here
       serpentine: wire.serpentine,
     };
   }
