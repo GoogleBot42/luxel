@@ -287,8 +287,79 @@ impl Div for Fx {
             // small dividend (|a| < 0.5): a << 16 fits in i32
             return Fx((self.0 << FRAC_BITS).wrapping_div(rhs.0));
         }
+        // The general case (Gitea #938): the 48-bit dividend over a 32-bit
+        // divisor in 32-bit halves, two hardware divides, whenever the
+        // quotient fits 32 bits — `|a|·2^16 < |b|·2^32`, i.e. the result
+        // does not wrap. A truncated signed quotient is the sign times the
+        // floor of the magnitudes' quotient, and `as i32` of the i64 form
+        // is its low 32 bits, which `wrapping_neg` reproduces. The i64 form
+        // (a `__divdi3` ROM call on Xtensa, ~90 cycles more than this) is
+        // left for the quotient that wraps.
+        let a = self.0.unsigned_abs();
+        let b = rhs.0.unsigned_abs();
+        if (a >> FRAC_BITS) < b {
+            let q = div48_32(a, b);
+            let neg = (self.0 < 0) != (rhs.0 < 0);
+            return Fx(if neg { q.wrapping_neg() as i32 } else { q as i32 });
+        }
         Fx((((self.0 as i64) << FRAC_BITS) / rhs.0 as i64) as i32)
     }
+}
+
+/// `floor(a · 2^16 / b)` for `b != 0` and `(a >> 16) < b` (so the quotient
+/// fits u32), in 32-bit arithmetic with two hardware divides (Gitea #938).
+///
+/// `b < 2^16` is schoolbook in base 2^16: the integer digit `a / b` (below
+/// 2^16 by the precondition) and the fraction digit `(r << 16) / b` with
+/// `r < b < 2^16`. Larger divisors are Knuth's Algorithm D with 16-bit
+/// digits as Hacker's Delight 9-3 `divlu` spells it: normalise so the top
+/// bit of `b` is bit 31, estimate each quotient digit from the top 16 bits
+/// of the divisor, and correct it (at most twice) against the next digit.
+/// Every intermediate is bounded as in that derivation: a digit estimate
+/// is first clamped below 2^16, so `q·vn0 < 2^32`, and `rhat` is only
+/// retested while `rhat < 2^16`, so `(rhat << 16) + un < 2^32`.
+/// `tests::division_fast_paths_match_the_i64_form` sweeps it against the
+/// i64 division, densely.
+#[inline]
+fn div48_32(a: u32, b: u32) -> u32 {
+    const B: u32 = 1 << 16;
+    debug_assert!(b != 0 && (a >> 16) < b);
+    if b < B {
+        let q1 = a / b;
+        let r = a - q1 * b;
+        return (q1 << 16) + ((r << 16) / b);
+    }
+    let s = b.leading_zeros(); // 0..=15, since b >= 2^16
+    let v = b << s;
+    let vn1 = v >> 16;
+    let vn0 = v & 0xFFFF;
+    let u1 = a >> 16;
+    let u0 = a << 16;
+    let un32 = (u1 << s) | if s == 0 { 0 } else { u0 >> (32 - s) };
+    let un10 = u0 << s;
+    let un1 = un10 >> 16;
+    let un0 = un10 & 0xFFFF;
+
+    let mut q1 = un32 / vn1;
+    let mut rhat = un32 - q1 * vn1;
+    while q1 >= B || q1 * vn0 > (rhat << 16) + un1 {
+        q1 -= 1;
+        rhat += vn1;
+        if rhat >= B {
+            break;
+        }
+    }
+    let un21 = (un32 << 16).wrapping_add(un1).wrapping_sub(q1.wrapping_mul(v));
+    let mut q0 = un21 / vn1;
+    let mut rhat = un21 - q0 * vn1;
+    while q0 >= B || q0 * vn0 > (rhat << 16) + un0 {
+        q0 -= 1;
+        rhat += vn1;
+        if rhat >= B {
+            break;
+        }
+    }
+    (q1 << 16) + q0
 }
 
 impl Rem for Fx {
@@ -582,6 +653,43 @@ mod tests {
         }
         for &a in &vals {
             for &b in &vals {
+                assert_eq!(
+                    (Fx::from_raw(a) / Fx::from_raw(b)).raw(),
+                    reference(a, b),
+                    "{a} / {b}"
+                );
+            }
+        }
+        // Gitea #938: the 48/32 path — dense random pairs biased toward the
+        // shapes that exercise its two branches and their seams: divisors
+        // on both sides of 2^16 at every normalisation shift, dividends
+        // just under and just over the quotient-fits-32-bits boundary,
+        // and the sign quadrants.
+        for _ in 0..600_000 {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let bits = 1 + (seed >> 27) % 31; // |b| in [1, 2^31)
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let mut b = ((seed | (1 << 31)) >> (32 - bits)) as i32;
+            if b & 0xFFFF == 0 {
+                b |= 1; // keep it on the general path
+            }
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let a = match seed % 6 {
+                0 => seed as i32,
+                // just inside / just outside the fits-32-bits boundary
+                1 => ((b as u32).saturating_mul(1 << 16).wrapping_sub(1)) as i32,
+                2 => ((b as u32).saturating_mul(1 << 16)) as i32,
+                3 => (seed >> 8) as i32,
+                4 => -((seed >> 4) as i32),
+                _ => i32::MIN + (seed % 3) as i32,
+            };
+            for (x, y) in [(a, b), (a, -b), (-a, b), (-a, -b)] {
+                let got = (Fx::from_raw(x) / Fx::from_raw(y)).raw();
+                assert_eq!(got, reference(x, y), "{x} / {y}");
+            }
+        }
+        for &a in &vals {
+            for b in [3i32, -3, 0x1_8000, -0x1_8000, 0x7FFF_FFFF, i32::MIN + 1, 0x1_0001, 0xFFFF] {
                 assert_eq!(
                     (Fx::from_raw(a) / Fx::from_raw(b)).raw(),
                     reference(a, b),
