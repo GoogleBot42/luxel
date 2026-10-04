@@ -2133,6 +2133,17 @@ impl Engine {
         };
         let argc = argc.min(4);
         let midr = mid.raw();
+        // A register-convention entry on the device is called through a
+        // typed pointer from right here — one call level fewer per pixel
+        // than `dyn NativeCall::enter` and its argument match (each level
+        // is a windowed `entry`/`retw`, and past four of them the LX7
+        // takes a window-overflow exception on the way down and an
+        // underflow on the way back up, every pixel). `argc` is the render
+        // kind's count, so a function declaring fewer parameters is still
+        // passed `argc` words — extra arguments in `a3..a6` are simply
+        // never read, exactly as `enter` would have done.
+        let direct = np.call.direct() && abi.args_in_regs && (1..=4).contains(&(abi.params as usize));
+        let dparams = if direct { abi.params as usize } else { 0 };
         for i in from..to {
             self.vm.pixel = [Fx::ZERO; 3];
             self.vm.pixel_written = false;
@@ -2149,6 +2160,15 @@ impl Engine {
                 raw[2] = p[1].raw();
                 raw[3] = p[2].raw();
             }
+            // Words past `argc` are what a parameter the render kind does
+            // not supply must read — `push_frame`'s default, 0 — not the
+            // mid-space fill; the direct call hands the callee all of its
+            // declared parameters, so they are zeroed here.
+            let mut k = argc;
+            while k < 4 {
+                raw[k] = 0;
+                k += 1;
+            }
             // Re-derive the VM pointer from a fresh `&mut` each pixel. The
             // loop touches `self.vm` between calls (`pixel_for`, the brush),
             // and a raw pointer taken before that is stale provenance the
@@ -2161,7 +2181,28 @@ impl Engine {
             // SAFETY: `ctx` was built for `np` above and both are still
             // live; `raw` holds the parameters in order. The error slot is
             // `None` here: it starts so and every raised status takes it.
-            unsafe { np.call.enter(addr, &mut ctx, abi, &raw[..argc]) };
+            // The typed-pointer call is sound only because `direct()` says
+            // `addr` is this target's machine code for exactly this ABI.
+            unsafe {
+                let c: *mut JitCtx = &mut ctx;
+                match dparams {
+                    1 => {
+                        core::mem::transmute::<usize, crate::jit::native::regs_abi::F1>(addr)(c, raw[0]);
+                    }
+                    2 => {
+                        core::mem::transmute::<usize, crate::jit::native::regs_abi::F2>(addr)(c, raw[0], raw[1]);
+                    }
+                    3 => {
+                        core::mem::transmute::<usize, crate::jit::native::regs_abi::F3>(addr)(c, raw[0], raw[1], raw[2]);
+                    }
+                    4 => {
+                        core::mem::transmute::<usize, crate::jit::native::regs_abi::F4>(addr)(
+                            c, raw[0], raw[1], raw[2], raw[3],
+                        );
+                    }
+                    _ => np.call.enter(addr, c, abi, &raw[..argc]),
+                }
+            }
             if ctx.status != STATUS_OK {
                 ctx.status = STATUS_OK;
                 let e = errslot.take().unwrap_or_else(|| VmError {
