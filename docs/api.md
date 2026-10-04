@@ -339,6 +339,27 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   reads a handful right after boot (WiFi bring-up stalls) and must stay
   flat afterwards; the eye sees a torn slot as garbage on the far end of a
   chain (the words clocked first);
+  the **slot audit** (a diagnostic, the data-level twin of `torn`): every
+  `audit_every`-th output-task turn (default 4; `audit` the lever, default
+  OFF — an audit is a 4 KB PSRAM read on core 0, ~2.7 % of it at the
+  default rate) the slot the beam has just left is compared with the
+  packed-frame row pair its record says it holds; nothing may rewrite that
+  slot before the beam has moved on by one more AND a copier has issued
+  its next claim for it, which the check after the compare catches. Of
+  `audit_n` completed audits, `audit_bad` found differing words
+  (`audit_bad_addr`: with a wrong row address, or a skipped slot that is
+  not purely the old row), `audit_stale` a slot still showing the previous
+  claim's row pair (`audit_stale_rec`: although its copy was recorded as
+  landed); not compared were `audit_inflight` (copy handed over, not yet
+  retired), `audit_skipped` (no record, a repacked frame, or the beam or
+  record moved during the compare) and `audit_jump` (a second beam probe
+  ≥ 2 slots on — a compare that straddled two slot boundaries, which the
+  4 KB PSRAM read does beside a 16384-px engine, or a probe glitch; on the
+  128x128 it reads ~5 % of audits and is not a defect). `audit_first_min`
+  / `audit_first_max`
+  are the smallest/largest byte offset into a slot of a bad slot's first
+  differing word (0 when none; offset 0 is clocked first, i.e. the far
+  panel) and `audit_bad_words` the worst slot's count;
   `dma_cal_us` the boot calibration copy's time per slot (an idle bus,
   before WiFi or an engine — the DMA's own speed at this slot size);
   `dma_batches` batches completed (a copier's turn hands the DMA up to 8
@@ -370,15 +391,17 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   ch0 OUT_PRI]`; a healthy panel has `LCD_USER` bit 27 set).
 - `POST /api/ring` — `hub75-ring` builds only (Gitea #857 / #892): body
   with any of `{"steal":B}`, `{"dma":B}`, `{"pri":B}`, `{"hybrid":B}`,
-  `{"append":B}`, `{"minfill":N}` — the core-1 TIMER's refill turns, the
+  `{"append":B}`, `{"minfill":N}`, `{"audit":B}`, `{"audit_every":N}` —
+  the core-1 TIMER's refill turns, the
   GDMA copy against the CPU `memcpy`, the panel chain's GDMA priority, core
   0 copying beside a DMA that can take no more, appending runs to the chain
-  in flight (#897), and the minimum run length (1..8, 1 = off) — for this
+  in flight (#897), the minimum run length (1..8, 1 = off), and the slot
+  audit (on restarts its counts; one audit every N turns, 1..64) — for this
   boot;
   the DMA's completion interrupt chains batches whatever `steal` says (it
   costs core 1 a few microseconds per batch, only when one ends), so with
   the DMA on `steal` off measures the chain alone; answers
-  `{"ok":true,"steal":B,"dma":B,"append":B,"minfill":N}` with the current
+  `{"ok":true,"steal":B,"dma":B,"append":B,"minfill":N,"audit":B,"audit_every":N}` with the current
   values. Not persisted;
   `dma` cannot be turned on where the boot found no working engine. The A/B
   levers for `pass.ring.late` / `packed_core1` on a running panel.

@@ -1,5 +1,43 @@
 # Update log
 
+## 2026-10-04 — 128x128 far-panel garbage: the ring is NOT tearing; a data-level slot audit says so
+
+Jeremy's second Seengreat (2x2 of 64x64 = a 256x64 driver frame, `panel 7
+20 shiftreg 7 60 6`) shows garbage, mild on the first two panels of the
+chain and bad on the last two, with no console open, and he suspected HTTP
+traffic and heavy patterns. Measured against `pass.ring` on his board:
+
+- **HTTP is not it.** A quiet minute: 0 torn / 0 late. Sixty seconds each
+  of `/api/status`, `/api/pixels`, `/api/patterns`, `/api/layout` polling
+  at 1–2 Hz and a console-bundle download loop: 0–1 torn, 0–5 late.
+- **Pattern weight is not it either.** The sinc pattern (707 ms/frame),
+  Aurora 2D (11 fps) and Bouncing Balls 2D (19 fps): 0 torn in a quiet
+  minute each.
+- **The ring is bandwidth-marginal there, and the core-1 timer carries it**
+  (`steal` off: 385 torn + 592 late a minute; the per-slot copy is 330–380 µs
+  against a 440 µs slot). Numbers on #895; a full-frame ring is out of reach
+  at 128 KB.
+- **Every boot tears ~15 slots once**, 30–90 s in, at the boot-ok store: a
+  20 ms stall of core 1 and the PSRAM bus against 4.8 ms of lead (#916,
+  numbers and three fix candidates on the ticket).
+- **One activation beside the resident engine reset the board** (CoreSw,
+  black box: STORE_READ fence, 6 park-ack timeouts) — not reproducible on
+  demand, filed as #932.
+- **New diagnostic: the slot audit** (`POST /api/ring {"audit":true}`,
+  `audit_every`), the data-level twin of `torn`: the slot the beam has just
+  left is compared word by word with the packed row it was copied from, no
+  lock, race-free by the issued/landed records (`ring::audit_slot`, host
+  tested). On the wall at 20 MHz and at 10 MHz, with the test card and with
+  Aurora: **81,000+ audited slots, 0 bad words** — the chip clocks out
+  exactly what it packed. Default off (2.7 % of core 0 when on).
+- **Where that leaves the garbage: off the board.** The sister unit resets
+  outright from panel current at brightness ≥ 10 with the same sinc pattern
+  (ChipPowerOn); the far two panels are the end of the power chain. Jeremy's
+  eye on the static test card and on a brightness drop decides it.
+
+Docs: docs/boards.md "128x128 on the second unit"; docs/api.md (the audit
+keys and lever). Branch agent/luxel/hub75-hiccups.
+
 ## 2026-10-01 — #920 on the wall: rotate turns the PICTURE, the panels card follows it, the rule controls are gone
 
 Jeremy, after transcribing his 2x2 with the new editor: "This is very close.

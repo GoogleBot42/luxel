@@ -852,6 +852,30 @@ fn status_json() -> luxel_core::jsonview::Chunks {
             push_u32(&mut out, ring::RING_RUN_US_WIN.read());
             push_piece(&mut out, ",\"torn\":");
             push_u32(&mut out, ring::RING_TORN.load(Ordering::Relaxed));
+            // The slot audit (a data-level `torn`): the lever, its sampling,
+            // and the counts (`hub75_ring::RING_AUDIT_N` documents them).
+            push_piece(&mut out, ",\"audit\":");
+            push_piece(&mut out, if ring::AUDIT.load(Ordering::Relaxed) { "true" } else { "false" });
+            for (k, v) in [
+                ("audit_every", &ring::AUDIT_EVERY),
+                ("audit_n", &ring::RING_AUDIT_N),
+                ("audit_bad", &ring::RING_AUDIT_BAD),
+                ("audit_bad_addr", &ring::RING_AUDIT_BAD_ADDR),
+                ("audit_stale", &ring::RING_AUDIT_STALE),
+                ("audit_stale_rec", &ring::RING_AUDIT_STALE_REC),
+                ("audit_inflight", &ring::RING_AUDIT_INFLIGHT),
+                ("audit_skipped", &ring::RING_AUDIT_SKIPPED),
+                ("audit_jump", &ring::RING_AUDIT_JUMP),
+                ("audit_first_min", &ring::RING_AUDIT_FIRST_MIN),
+                ("audit_first_max", &ring::RING_AUDIT_FIRST_MAX),
+                ("audit_bad_words", &ring::RING_AUDIT_BAD_WORDS),
+            ] {
+                push_piece(&mut out, ",\"");
+                push_piece(&mut out, k);
+                push_piece(&mut out, "\":");
+                let v = v.load(Ordering::Relaxed);
+                push_u32(&mut out, if v == u32::MAX { 0 } else { v });
+            }
             push_piece(&mut out, ",\"steal_lat_max\":");
             push_u32(&mut out, ring::RING_STEAL_LAT_MAX.load(Ordering::Relaxed));
             push_piece(&mut out, ",\"steal_lat_sec\":");
@@ -2630,7 +2654,8 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                 // #892, design §6): `{"steal":true|false}` lets core 1
                 // take refill turns, or leaves core 0 alone;
                 // `{"dma":true|false}` copies by the GDMA engine or by the
-                // CPU; `pri`, `hybrid`, and (#897) `append` / `minfill`.
+                // CPU; `pri`, `hybrid`, (#897) `append` / `minfill`, and
+                // the slot audit's `audit` / `audit_every`.
                 // Any subset of the keys; runtime only, not persisted;
                 // `pass.ring.<key>` reads each back.
                 #[cfg(feature = "hub75-ring")]
@@ -2657,6 +2682,17 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                         let rest = body[at + "minfill".len()..].trim_start_matches([' ', '"', ':']);
                         num(&rest[..rest.find(|ch: char| !ch.is_ascii_digit()).unwrap_or(rest.len())])
                     });
+                    // The slot audit: `{"audit":B}` (on restarts the
+                    // counts) and `{"audit_every":N}` (1..64 turns). The
+                    // quoted key, so "audit" never matches "audit_every".
+                    let audit = key("\"audit\"");
+                    let audit_every = body.find("audit_every").and_then(|at| {
+                        let rest = body[at + "audit_every".len()..].trim_start_matches([' ', '"', ':']);
+                        num(&rest[..rest.find(|ch: char| !ch.is_ascii_digit()).unwrap_or(rest.len())])
+                    });
+                    if audit.is_some() || audit_every.is_some() {
+                        crate::hub75_ring::set_audit(audit, audit_every);
+                    }
                     if let Some(on) = pri {
                         crate::hub75_ring::set_priority(on);
                     }
@@ -2675,8 +2711,10 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                         && hybrid.is_none()
                         && append.is_none()
                         && minfill.is_none()
+                        && audit.is_none()
+                        && audit_every.is_none()
                     {
-                        String::from("{\"ok\":false,\"error\":\"body must set any of steal, dma, pri, hybrid, append (true|false) or minfill (1..8)\"}")
+                        String::from("{\"ok\":false,\"error\":\"body must set any of steal, dma, pri, hybrid, append, audit (true|false), minfill (1..8) or audit_every (1..64)\"}")
                     } else {
                         if let Some(on) = steal {
                             crate::hub75_ring::STEAL.store(on, Ordering::Relaxed);
@@ -2692,6 +2730,10 @@ impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathPar
                         push_piece(&mut out, if crate::hub75_ring::APPEND.load(Ordering::Relaxed) { "true" } else { "false" });
                         push_piece(&mut out, ",\"minfill\":");
                         push_u32(&mut out, crate::hub75_ring::MINFILL.load(Ordering::Relaxed));
+                        push_piece(&mut out, ",\"audit\":");
+                        push_piece(&mut out, if crate::hub75_ring::AUDIT.load(Ordering::Relaxed) { "true" } else { "false" });
+                        push_piece(&mut out, ",\"audit_every\":");
+                        push_u32(&mut out, crate::hub75_ring::AUDIT_EVERY.load(Ordering::Relaxed));
                         push_piece(&mut out, "}");
                         out
                     }))

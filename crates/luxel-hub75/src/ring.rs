@@ -244,6 +244,75 @@ pub fn set_slot_address(words: &mut [u16], planes: usize, cols: usize, r: usize,
     }
 }
 
+/// What [`audit_slot`] found in one ring slot: the words that differ from
+/// what the slot should hold (`bad_words`, the first and last such word
+/// index), whether any word's address bits are not row pair `r`'s, and
+/// whether the whole slot is still the previous claim's row pair `r_old`
+/// (a skipped claim's stale content — every address bit `r_old`'s).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct SlotAudit {
+    pub bad_words: u32,
+    pub first: u32,
+    pub last: u32,
+    pub addr_bad: bool,
+    pub stale: bool,
+}
+
+/// The address bits slot row `k` carries for row pair `r` of `rows`: the
+/// ENTRY row names the previous row pair, the plane rows `r` itself.
+const fn slot_row_addr(k: usize, r: usize, rows: usize) -> u16 {
+    let a = if k == ENTRY_ROW { (r + rows - 1) % rows } else { r };
+    (a as u16) & ADDR_MASK
+}
+
+/// Audit a slot the beam has just left (the firmware's `audit` oracle):
+/// `got` is the slot as the DMA read it, `want` the packed-frame row pair
+/// it should hold (row pair `r` of `rows`). `want` None = address-only
+/// check (a known-skipped claim): a "bad" word is then one whose address
+/// bits are not the stale row pair `r_old`'s. `stale` is "every word
+/// still carries `r_old`'s addresses" and is never set when `r_old == r`
+/// (a full-frame ring, where the stale row is the same row pair). One pass.
+#[must_use]
+pub fn audit_slot(got: &[u16], want: Option<&[u16]>, cols: usize, r: usize, r_old: usize, rows: usize) -> SlotAudit {
+    let mut a = SlotAudit::default();
+    if cols == 0 || rows == 0 {
+        return a;
+    }
+    let mut all_old = true;
+    for (i, &w) in got.iter().enumerate() {
+        let k = i / cols;
+        let addr = w & ADDR_MASK;
+        if addr != slot_row_addr(k, r, rows) {
+            a.addr_bad = true;
+        }
+        let old = addr == slot_row_addr(k, r_old, rows);
+        all_old &= old;
+        let bad = match want {
+            Some(want) => want.get(i) != Some(&w),
+            None => !old,
+        };
+        if bad {
+            if a.bad_words == 0 {
+                a.first = i as u32;
+            }
+            a.last = i as u32;
+            a.bad_words += 1;
+        }
+    }
+    a.stale = all_old && r_old != r;
+    a
+}
+
+/// Where slot word `word` lands: its slot row, and which panel of a chain
+/// of `panel_cols`-wide panels it is clocked into, counted from the FAR
+/// end (column 0 is shifted in first, so it ends up in the last panel).
+#[must_use]
+pub const fn panel_of(word: usize, cols: usize, panel_cols: usize) -> (usize, usize) {
+    let cols = if cols == 0 { 1 } else { cols };
+    let panel_cols = if panel_cols == 0 { 1 } else { panel_cols };
+    (word / cols, (word % cols) / panel_cols)
+}
+
 /// Microseconds a packer has from a claim becoming fillable until it is
 /// late: `n − GUARD_SLOTS` slots' worth of clocks.
 #[must_use]
@@ -688,6 +757,45 @@ mod tests {
                 assert_eq!(got, want, "lsb {lsb} row {r}");
             }
         }
+    }
+
+    /// The slot audit oracle's helper: an identical slot is clean, flipped
+    /// words are counted with their span, a slot still holding the previous
+    /// claim's row pair reads stale (with or without a frame to compare),
+    /// and a full-frame ring (`r_old == r`) is never stale.
+    #[test]
+    fn audit_slot_counts_tears_and_stale_rows() {
+        let c = Control::new(3, 1);
+        let s = Schedule::plan(G, c, 7);
+        let words = slot_words(7, 64);
+        let (r, r_old) = (17usize, 7usize);
+        let mut want = vec![0u16; words];
+        format_slot_for(&mut want, G, c, &s, r);
+        for (i, w) in want.iter_mut().enumerate() {
+            *w |= (i as u16).wrapping_mul(0x0200) & COLOR_MASK;
+        }
+        let a = audit_slot(&want, Some(&want), 64, r, r_old, 32);
+        assert_eq!(a, SlotAudit::default());
+        let mut got = want.clone();
+        got[5] ^= 0x0200;
+        got[300] ^= 0x0400;
+        let a = audit_slot(&got, Some(&want), 64, r, r_old, 32);
+        assert_eq!((a.bad_words, a.first, a.last, a.addr_bad, a.stale), (2, 5, 300, false, false));
+        let mut old = vec![0u16; words];
+        format_slot_for(&mut old, G, c, &s, r_old);
+        let a = audit_slot(&old, Some(&want), 64, r, r_old, 32);
+        assert!(a.stale && a.addr_bad && a.bad_words > 0, "{a:?}");
+        let a = audit_slot(&old, None, 64, r, r_old, 32);
+        assert!(a.stale && a.addr_bad && a.bad_words == 0, "{a:?}");
+        // one word of the new row pair in a skipped slot: not purely stale
+        old[130] = want[130];
+        let a = audit_slot(&old, None, 64, r, r_old, 32);
+        assert!(!a.stale && a.bad_words == 1 && a.first == 130 && a.last == 130, "{a:?}");
+        // n == rows: the stale row IS row pair r — never stale
+        let a = audit_slot(&want, None, 64, r, r, 32);
+        assert!(!a.stale && !a.addr_bad && a.bad_words == 0, "{a:?}");
+        // column 0 is clocked first: it lands in the far panel
+        assert_eq!((panel_of(0, 128, 64), panel_of(64 + 128, 128, 64)), ((0, 0), (1, 1)));
     }
 
     #[test]

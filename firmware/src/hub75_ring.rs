@@ -280,6 +280,38 @@ pub static RING_DMA_US_MAX: AtomicU32 = AtomicU32::new(0);
 /// sees as garbage on the far end of a chain (2026-09-30, Mandelbrot 2D
 /// on the 4x1).
 pub static RING_TORN: AtomicU32 = AtomicU32::new(0);
+/// The slot audit (a diagnostic oracle, [`audit`]): shortly after the beam
+/// leaves a slot, its bytes are compared with the packed-frame row pair it
+/// was meant to hold — a DATA-level check that sees a tear `torn` (a
+/// position check at retirement) cannot. `audit_n` counts every completed
+/// audit; of those `audit_bad` found words that differ (`audit_bad_addr`:
+/// some with the wrong row address), `audit_stale` a slot still holding
+/// the previous claim's row pair (`audit_stale_rec`: although the record
+/// said the copy had landed). Not compared: `audit_inflight` (handed to
+/// the DMA, not retired), `audit_skipped` (no usable record, a repack, or
+/// the beam/record moved during the compare), `audit_jump` (the second
+/// beam probe ran ≥ 2 slots ahead — a probe glitch). `audit_first_min` /
+/// `_max` are the byte offsets of the earliest/latest first bad word seen,
+/// `audit_bad_words` the worst slot's count.
+pub static RING_AUDIT_N: AtomicU32 = AtomicU32::new(0);
+pub static RING_AUDIT_BAD: AtomicU32 = AtomicU32::new(0);
+pub static RING_AUDIT_BAD_ADDR: AtomicU32 = AtomicU32::new(0);
+pub static RING_AUDIT_STALE: AtomicU32 = AtomicU32::new(0);
+pub static RING_AUDIT_STALE_REC: AtomicU32 = AtomicU32::new(0);
+pub static RING_AUDIT_INFLIGHT: AtomicU32 = AtomicU32::new(0);
+pub static RING_AUDIT_SKIPPED: AtomicU32 = AtomicU32::new(0);
+pub static RING_AUDIT_JUMP: AtomicU32 = AtomicU32::new(0);
+pub static RING_AUDIT_FIRST_MIN: AtomicU32 = AtomicU32::new(u32::MAX);
+pub static RING_AUDIT_FIRST_MAX: AtomicU32 = AtomicU32::new(0);
+pub static RING_AUDIT_BAD_WORDS: AtomicU32 = AtomicU32::new(0);
+/// The audit lever (`POST /api/ring {"audit":B}`) — off by default: it
+/// costs the output task ~130 µs of PSRAM reads per audit, ~2.7 % of core
+/// 0 at `audit_every` 4 — and its sampling: one audit every `AUDIT_EVERY`
+/// output-task turns (`{"audit_every":N}`, 1..=64). `AUDIT_TICK` is the
+/// output task's alone.
+pub static AUDIT: AtomicBool = AtomicBool::new(false);
+pub static AUDIT_EVERY: AtomicU32 = AtomicU32::new(4);
+static AUDIT_TICK: AtomicU32 = AtomicU32::new(0);
 /// A run's whole latency, hand-over to landing, microseconds — the worst
 /// ever and the worst of the last second or so (`WindowMax`). The per-slot
 /// numbers hide a run that queued behind a stalled chain.
@@ -352,6 +384,19 @@ static FRAME_GEN: [AtomicU32; FRAMES] = [const { AtomicU32::new(0) }; FRAMES];
 /// that failed with the slot half-written.
 static SLOT_GEN: [AtomicU32; MAX_SCAN] = [const { AtomicU32::new(SLOT_GEN_NONE) }; MAX_SCAN];
 const SLOT_GEN_NONE: u32 = u32::MAX;
+/// "No claim recorded" in the slot audit's records. `Claim::encode` CAN
+/// yield it — buf 3, abs 2^30 − 1, on a ring whose `period` is exactly
+/// 2^30 (`lcm(n, rows)` a power of two) — so a record equal to it is read
+/// as "none" and that one real claim per period is merely not audited.
+const CLAIM_NONE: u32 = u32::MAX;
+/// The slot audit's records ([`audit`]): the claim word handed over to
+/// fill each slot (`SLOT_ISSUED`, at hand-over), the claim word known to
+/// have LANDED in it (`SLOT_CLAIM`, at retirement / after the CPU copy),
+/// and the generation of the packed frame it was copied from
+/// (`SLOT_SRC_GEN`, stored before `SLOT_CLAIM`).
+static SLOT_ISSUED: [AtomicU32; MAX_SCAN] = [const { AtomicU32::new(CLAIM_NONE) }; MAX_SCAN];
+static SLOT_CLAIM: [AtomicU32; MAX_SCAN] = [const { AtomicU32::new(CLAIM_NONE) }; MAX_SCAN];
+static SLOT_SRC_GEN: [AtomicU32; MAX_SCAN] = [const { AtomicU32::new(0) }; MAX_SCAN];
 /// The flash-write blank (Gitea #852, design §7): the panel chain's
 /// descriptors, each one's live buffer pointer and its stand-in in one
 /// dark slot at the same offset. Published once at boot; the fence swaps
@@ -540,6 +585,9 @@ struct Engine {
     /// The claim (absolute emission) each entry copies, for the torn check
     /// at retirement (`RING_TORN`).
     pending_abs: [u32; QUEUE_SLOTS],
+    /// `(claim word, source frame generation)` of each entry, for the slot
+    /// audit's records (`SLOT_CLAIM` / `SLOT_SRC_GEN`) at retirement.
+    pending_src: [(u32, u32); QUEUE_SLOTS],
 }
 
 /// One run of entries handed to the DMA by one turn.
@@ -851,6 +899,9 @@ impl Engine {
             let e = (usize::from(run.first) + j) % QUEUE_SLOTS;
             let (slot, gen) = self.pending[e];
             SLOT_GEN[usize::from(slot)].store(gen, Ordering::Release);
+            let (w, g) = self.pending_src[e];
+            SLOT_SRC_GEN[usize::from(slot)].store(g, Ordering::Relaxed);
+            SLOT_CLAIM[usize::from(slot)].store(w, Ordering::Release);
             self.reclaim(e);
             // Landed with the beam already in (or past) the slot: the copy
             // overlapped the read — torn.
@@ -901,6 +952,7 @@ impl Engine {
         for j in 0..usize::from(self.inflight) {
             let e = (usize::from(self.head) + j) % QUEUE_SLOTS;
             SLOT_GEN[usize::from(self.pending[e].0)].store(SLOT_GEN_NONE, Ordering::Release);
+            SLOT_CLAIM[usize::from(self.pending[e].0)].store(CLAIM_NONE, Ordering::Release);
             self.reclaim(e);
         }
         self.head = self.tail;
@@ -945,6 +997,8 @@ struct Shared {
     slot_words: usize,
     /// Descriptors (emissions) per slot — `dma_position`'s index unit.
     emissions: usize,
+    /// Words per slot row (the panel chain's columns) — the slot audit's unit.
+    cols: usize,
     /// The packed frames (PSRAM, 16-aligned): row pair `r` of frame `f`
     /// is `slot_words` words at `packed[f] + r * slot_words`, slot-formatted.
     packed: [*const u16; FRAMES],
@@ -1312,6 +1366,7 @@ impl Hub75Ring {
             slot_rows,
             pending: [(0, SLOT_GEN_NONE); QUEUE_SLOTS],
             pending_abs: [0; QUEUE_SLOTS],
+            pending_src: [(CLAIM_NONE, 0); QUEUE_SLOTS],
         };
         engine.link_rings();
         Engine::configure();
@@ -1348,6 +1403,7 @@ impl Hub75Ring {
                         engine.stage(e, packed_ptr[0].add(r * slot_words).cast::<u8>().cast_const(), slots.add(r * slot_words).cast::<u8>());
                     }
                     engine.pending[e] = (r as u8, SLOT_GEN_NONE);
+                    engine.pending_src[e] = (CLAIM_NONE, 0);
                 }
                 row += len;
                 engine.launch(len, 0, false, now_us());
@@ -1378,6 +1434,9 @@ impl Hub75Ring {
         }
         for g in SLOT_GEN.iter() {
             g.store(SLOT_GEN_NONE, Ordering::Relaxed);
+        }
+        for w in SLOT_CLAIM.iter().chain(SLOT_ISSUED.iter()) {
+            w.store(CLAIM_NONE, Ordering::Relaxed);
         }
         if dma_ok {
             engine.slot_us = ((cal_us / cal as u64) as u32).max(1);
@@ -1589,6 +1648,7 @@ impl Hub75Ring {
             slots: self.slots,
             slot_words: self.slot_words,
             emissions: self.order.len().max(1),
+            cols: self.g.cols,
             packed: [
                 self.packed_ptr[0].cast_const(),
                 self.packed_ptr[1].cast_const(),
@@ -1674,13 +1734,139 @@ impl Hub75Ring {
 /// slot of the descriptor being read. A raised-but-unserviced EOF is a
 /// wrap the count has not seen yet.
 fn abs_dma(s: &Shared) -> Option<u32> {
+    beam(s).map(|(abs, _)| abs)
+}
+
+/// [`abs_dma`] and the descriptor index the beam is on (`idx %
+/// s.emissions` is the emission within its slot — the slot audit's phase).
+fn beam(s: &Shared) -> Option<(u32, usize)> {
     // SAFETY: the driver outlives every caller (see `Shared`); both probes
     // read statics behind their own multicore-safe locks.
     let hub75 = unsafe { &*s.hub75 };
     let (_ring, idx, eof_pending) = hub75.dma_position()?;
     let wraps = hub75.frame_count().wrapping_add(u32::from(eof_pending));
     let slot = (idx / s.emissions) as u32;
-    Some(s.ring.abs(wraps, slot))
+    Some((s.ring.abs(wraps, slot), idx))
+}
+
+/// The slot audit's record of a claim that is in its slot without a copy
+/// in flight — a reuse (#896), or (via the stores around `copy_claim`) a
+/// CPU copy that has landed.
+fn record_landed(slot: usize, claim: Claim, gen: u32) {
+    SLOT_SRC_GEN[slot].store(gen, Ordering::Relaxed);
+    SLOT_ISSUED[slot].store(claim.encode(), Ordering::Release);
+    SLOT_CLAIM[slot].store(claim.encode(), Ordering::Release);
+}
+
+/// The slot audit (a diagnostic oracle; the `audit` lever): compare the
+/// slot the beam has JUST left with the packed-frame row pair its record
+/// says it holds, and count what differs (`RING_AUDIT_*`).
+///
+/// Race-free without a lock: with the beam at `a`, the slot of claim
+/// `e = a − 1` is next claimed for `e + n`, which is not fillable until
+/// the beam reaches `a + 1` (`Ring::fillable`, `GUARD_SLOTS`), so while
+/// every copier's probe still reads `a` nothing writes the slot — and a
+/// copier that does reach it first ISSUES its claim (`SLOT_ISSUED`)
+/// before the DMA or the memcpy touches a byte, so the compare may run
+/// past the slot boundary (it does, beside a 16384-px engine) and its
+/// result is kept only if the slot's issued and landed records and the
+/// source frame's generation are unchanged afterwards. A second beam
+/// probe only feeds `audit_jump`. Run from the output task's `flush`, after its drain and
+/// never inside `pack_frame` (whose drains run before the frame's
+/// generation is published), so a source generation that matches is the
+/// frame's content exactly.
+fn audit(s: &Shared) {
+    if IN_FENCE.load(Ordering::Acquire) != 0 {
+        return;
+    }
+    // No phase gate: slot `a − 1` stays unwritten until the beam reaches
+    // `a + 1` AND a copier issues its next claim for it, and the
+    // issued-claim check after the compare catches exactly that, so the
+    // compare may straddle a slot boundary (it does under a 16384-px
+    // engine, where the 4 KB PSRAM read runs at the contended bus rate).
+    let Some((a, _idx)) = beam(s) else { return };
+    let rg = &s.ring;
+    let n = rg.n;
+    let e = (a + rg.period - 1) % rg.period;
+    let e_old = (e + rg.period - n) % rg.period;
+    let slot = rg.slot(e) as usize;
+    let cw = SLOT_CLAIM[slot].load(Ordering::Acquire);
+    let iw = SLOT_ISSUED[slot].load(Ordering::Acquire);
+    let g = SLOT_SRC_GEN[slot].load(Ordering::Acquire);
+    if cw == CLAIM_NONE || iw == CLAIM_NONE {
+        RING_AUDIT_SKIPPED.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    let (c, i) = (Claim::decode(cw), Claim::decode(iw));
+    let buf = usize::from(c.buf) % FRAMES;
+    // `copied`: the record says claim `e` landed — compare with its frame.
+    // Otherwise the slot should still hold `e − n` (a known skip): check
+    // only that every address is that row pair's.
+    let copied = if c.abs == e {
+        if FRAME_GEN[buf].load(Ordering::Acquire) != g {
+            RING_AUDIT_SKIPPED.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        true
+    } else if c.abs == e_old && i.abs == e {
+        RING_AUDIT_INFLIGHT.fetch_add(1, Ordering::Relaxed);
+        return;
+    } else if c.abs == e_old && i.abs == e_old {
+        false
+    } else {
+        RING_AUDIT_SKIPPED.fetch_add(1, Ordering::Relaxed);
+        return;
+    };
+    let rows = rg.rows as usize;
+    let r = rg.row(e) as usize;
+    let r_old = rg.row(e_old) as usize;
+    // SAFETY: slot `slot` and row pair `r` of packed frame `buf` are in
+    // bounds (as in `copy_claim`). Nothing writes the slot while the beam
+    // is in slot `a` (above); the packed frame is not repacked while its
+    // generation reads `g` (`write_frame` picks a frame no pass reads, and
+    // a repack is caught by the generation check after the compare). A
+    // concurrent write would only make the counts wrong — and the result
+    // is then discarded — the loads are plain u16 reads of memory that
+    // stays allocated for the driver's lifetime.
+    let got = unsafe { core::slice::from_raw_parts(s.slots.add(slot * s.slot_words).cast_const(), s.slot_words) };
+    let want = copied.then(|| unsafe { core::slice::from_raw_parts(s.packed[buf].add(r * s.slot_words), s.slot_words) });
+    let res = ring::audit_slot(got, want, s.cols, r, r_old, rows);
+    let Some((a2, _)) = beam(s) else {
+        RING_AUDIT_SKIPPED.fetch_add(1, Ordering::Relaxed);
+        return;
+    };
+    if rg.dist(a, a2) >= 2 {
+        RING_AUDIT_JUMP.fetch_add(1, Ordering::Relaxed);
+    }
+    if SLOT_CLAIM[slot].load(Ordering::Acquire) != cw
+        || SLOT_ISSUED[slot].load(Ordering::Acquire) != iw
+        || FRAME_GEN[buf].load(Ordering::Acquire) != g
+    {
+        RING_AUDIT_SKIPPED.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    RING_AUDIT_N.fetch_add(1, Ordering::Relaxed);
+    let clean = if copied { res.bad_words == 0 } else { res.bad_words == 0 && (res.stale || r_old == r) };
+    if copied && clean {
+        return;
+    }
+    // A known skip that still shows `e − n` everywhere is what a skip
+    // shows; on a full-frame ring (`r_old == r`) that row pair is the same
+    // one, so its addresses are right and it can never read `stale`.
+    if res.stale || (!copied && clean) {
+        RING_AUDIT_STALE.fetch_add(1, Ordering::Relaxed);
+        if copied {
+            RING_AUDIT_STALE_REC.fetch_add(1, Ordering::Relaxed);
+        }
+        return;
+    }
+    RING_AUDIT_BAD.fetch_add(1, Ordering::Relaxed);
+    if res.addr_bad || !copied {
+        RING_AUDIT_BAD_ADDR.fetch_add(1, Ordering::Relaxed);
+    }
+    RING_AUDIT_FIRST_MIN.fetch_min(res.first * 2, Ordering::Relaxed);
+    RING_AUDIT_FIRST_MAX.fetch_max(res.first * 2, Ordering::Relaxed);
+    RING_AUDIT_BAD_WORDS.fetch_max(res.bad_words, Ordering::Relaxed);
 }
 
 /// Copy one claimed row pair from its pass's packed frame into its slot.
@@ -1809,6 +1995,7 @@ fn drain_dma(p: &mut Packer, s: &Shared, core: usize, by_isr: bool) -> u32 {
                 // The slot already holds this row pair of this frame (#896):
                 // advance the claim, copy nothing, no deadline to meet.
                 if NEXT_FILL.compare_exchange(word, next, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+                    record_landed(slot, claim, gen);
                     if s.ring.row(claim.abs) == 0 {
                         PASS_FRAME[(s.ring.pass(claim.abs) % 2) as usize].store(claim.buf, Ordering::Release);
                     }
@@ -1853,6 +2040,8 @@ fn drain_dma(p: &mut Packer, s: &Shared, core: usize, by_isr: bool) -> u32 {
             // half-written until then and a full-frame ring must not reuse it.
             e.pending[entry] = (slot as u8, if s.full { gen } else { SLOT_GEN_NONE });
             e.pending_abs[entry] = claim.abs;
+            e.pending_src[entry] = (claim.encode(), gen);
+            SLOT_ISSUED[slot].store(claim.encode(), Ordering::Release);
             SLOT_GEN[slot].store(SLOT_GEN_NONE, Ordering::Release);
             k += 1;
         }
@@ -1929,6 +2118,7 @@ fn drain_cpu(p: &mut Packer, s: &Shared, core: usize) -> u32 {
             // The slot already holds this row pair of this frame (#896):
             // advance the claim and copy nothing.
             if NEXT_FILL.compare_exchange(word, next, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+                record_landed(slot, claim, gen);
                 if s.ring.row(claim.abs) == 0 {
                     PASS_FRAME[(s.ring.pass(claim.abs) % 2) as usize].store(claim.buf, Ordering::Release);
                 }
@@ -1965,6 +2155,8 @@ fn drain_cpu(p: &mut Packer, s: &Shared, core: usize) -> u32 {
         if s.ring.row(claim.abs) == 0 {
             PASS_FRAME[(s.ring.pass(claim.abs) % 2) as usize].store(claim.buf, Ordering::Release);
         }
+        SLOT_SRC_GEN[slot].store(gen, Ordering::Relaxed);
+        SLOT_ISSUED[slot].store(claim.encode(), Ordering::Release);
         let t0 = esp_hal::xtensa_lx::timer::get_cycle_count();
         copy_claim(s, claim);
         if s.full {
@@ -1972,6 +2164,7 @@ fn drain_cpu(p: &mut Packer, s: &Shared, core: usize) -> u32 {
             // preempted in must not read as done to the other core.
             SLOT_GEN[slot].store(gen, Ordering::Release);
         }
+        SLOT_CLAIM[slot].store(claim.encode(), Ordering::Release);
         let dt = esp_hal::xtensa_lx::timer::get_cycle_count().wrapping_sub(t0);
         // The typical pack, not the worst: a sample can at most double
         // the estimate (a preempted pack decays out over the next few
@@ -2157,6 +2350,34 @@ pub fn set_minfill(n: u32) {
     MINFILL.store(n.clamp(1, BATCH_SLOTS as u32), Ordering::Relaxed);
 }
 
+/// The slot-audit lever (`POST /api/ring {"audit":B,"audit_every":N}`):
+/// turning it on (again) starts the counts afresh; `every` (the output
+/// task turns per audit) is clamped to 1..=64.
+pub fn set_audit(on: Option<bool>, every: Option<u32>) {
+    if let Some(n) = every {
+        AUDIT_EVERY.store(n.clamp(1, 64), Ordering::Relaxed);
+    }
+    let Some(on) = on else { return };
+    if on {
+        for c in [
+            &RING_AUDIT_N,
+            &RING_AUDIT_BAD,
+            &RING_AUDIT_BAD_ADDR,
+            &RING_AUDIT_STALE,
+            &RING_AUDIT_STALE_REC,
+            &RING_AUDIT_INFLIGHT,
+            &RING_AUDIT_SKIPPED,
+            &RING_AUDIT_JUMP,
+            &RING_AUDIT_FIRST_MAX,
+            &RING_AUDIT_BAD_WORDS,
+        ] {
+            c.store(0, Ordering::Relaxed);
+        }
+        RING_AUDIT_FIRST_MIN.store(u32::MAX, Ordering::Relaxed);
+    }
+    AUDIT.store(on, Ordering::Relaxed);
+}
+
 /// The `dma` lever (`POST /api/ring {"dma":…}`): on only when the engine
 /// exists (a board whose calibration copy failed stays on the CPU path
 /// whatever is asked). Flipping it off mid-batch is safe — the batch in
@@ -2247,6 +2468,17 @@ impl OutputDriver for Hub75Ring {
         }
         if let Some(s) = shared() {
             drain(&mut self.packer, s, 0);
+            // The slot audit: here, not in `drain` (`pack_frame` drains
+            // between its chunks, before the frame's generation is out).
+            if AUDIT.load(Ordering::Relaxed) {
+                let t = AUDIT_TICK.load(Ordering::Relaxed).wrapping_add(1);
+                if t >= AUDIT_EVERY.load(Ordering::Relaxed) {
+                    AUDIT_TICK.store(0, Ordering::Relaxed);
+                    audit(s);
+                } else {
+                    AUDIT_TICK.store(t, Ordering::Relaxed);
+                }
+            }
         }
         true
     }
