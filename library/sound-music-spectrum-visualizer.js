@@ -17,7 +17,9 @@ var bands = array(16)                 // 32 raw bands averaged in pairs
 var pix = array(pixelCount)           // smoothed per-pixel brightness
 var segOf = array(pixelCount)         // pixel -> segment index
 var i
-for (i = 0; i < pixelCount; i++) segOf[i] = floor(i * segments / pixelCount)
+// divide first: `i * segments` wraps 16.16 fixed point once i >= 3277, and
+// at 16384 px that handed `bands[]` negative indices (2026-10-04 soak)
+for (i = 0; i < pixelCount; i++) segOf[i] = floor(i / pixelCount * segments)
 
 // EQ regions: bass / lower-mid / upper-mid / treble breakpoints, as
 // fractions of the segment count. Exported for room tuning.

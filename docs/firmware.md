@@ -887,6 +887,32 @@ the wasm playground —
 `arena::ArenaAlloc` *is* the global allocator, `frames_external()` is
 `false`, and none of this exists.
 
+**A live push keeps neither its upload nor its code in internal DRAM
+(2026-10-04).** A `POST /api/code` (and a sync adoption, `netin.rs`) reads
+the whole LXP1 envelope into a `shared::UploadBuf`: a PSRAM arena vector on
+a `psram-arena` board, a plain `Vec` elsewhere. Before this a 48 KB
+envelope ("Main Stage") sat on the Seengreat's ~52 KB internal heap and the
+decode's own small reservations failed (`not enough memory for this
+pattern`). The render task's `Msg::Code` arm then **persists first and
+decodes from the ad-hoc read-back slot it just wrote**:
+`patterns::store_current` writes the slot's idle bytecode side, and
+`deserialize_lean_static` over `patterns::current_slot_code` borrows the
+code and constant pool from mapped flash exactly as a library pattern does
+(`Msg::Library`) and as `rebuild()` already did for an ad-hoc pattern. So on
+EVERY mapped board a live program's words cost no RAM, and the upload is
+freed before the engine builds. Only when the slot write fails (OTA in
+flight, flash leased, source over the slot's 32 KB) or the region is
+unmapped does `decode_live_upload` decode from the upload itself. On an
+arena board it borrows the upload in place: it slides the bytecode up to
+`shared::UPLOAD_SLACK` (3) bytes so the word region is 4-aligned, and keeps
+the buffer in the render task's `held` list. `reap_uploads` frees a held
+buffer only once neither `engine` nor `prev` has `Words::Static` pointing
+into it (`HeldUploads` in `main.rs` has the invariant). On every other board
+it copies the words, as before. The order changed with this: the slot is
+written before the decode, so a decode that still fails (only a starved
+heap — the sender already validated the blob) leaves read-back naming the
+pattern that was pushed.
+
 One consequence for anything reading `/api/status`: `engine_heap` is an
 **internal-DRAM** figure. On an arena board it no longer includes the frame,
 so a 4096-px engine reports 0–5 KB rather than 13–20 KB. `load_base`
@@ -2237,6 +2263,41 @@ gate reports those rather than asserting on them.
 native run found a second bug, in the compiler's heap rather than its
 codegen, which is "The compile's own heap" above.
 
+### The S3 write-back erratum: right bytes, wrong cache (2026-10-04)
+
+The first full-library soak on the 2x2 Seengreat chain (16,384 px, master
+`dfb60162`, brightness 4) rebooted the board 7 times in 308 pushes, every
+one an `Exception occurred on AppCpu 'Illegal'` (once `'InstrProhibited'
+PC: 0`) inside the code the `jit:` line had just published, with the ISA-model
+differential gate (`cargo test -p luxel-jit --test library_diff`) green for
+every one of those patterns. The faulting PCs sat inside the lease; one was a
+`retw` landing on the first byte of a cache line, one a `callx8` through a
+register that had read back as zero out of the literal pool. The bytes the
+emitter wrote were right; what the CPU fetched was not.
+
+The ESP32-S3 has a hardware erratum on the manual data-cache write-back
+(the `EXTMEM_DCACHE_SYNC_CTRL` path): while lines are being written back, an
+access to one of them from the OTHER core, or from an interrupt on the
+writing core, completes with wrong data. ESP-IDF's ROM patch
+(`esp_rom_cache_writeback_esp32s3.S`) masks interrupts, FREEZES the data
+cache so the other core stalls on a miss instead of touching the line, drives
+the write-back by hand, and unfreezes. esp-hal links the raw ROM
+`rom_Cache_WriteBack_Addr`, and the firmware had two callers of it, both
+racing the other core: `jit::publish` writes a fresh image back on the render
+core while core 0's packer streams frames out of PSRAM, and the ring packer
+writes each chunk of a packed frame back on core 0, four times a frame, while
+the render core reads its arrays and literal pool from the same PSRAM.
+
+`firmware/src/dcache.rs` is the IDF routine in Rust inline asm — in IRAM,
+every constant built in registers so there is no literal to fetch, the only
+memory traffic the EXTMEM registers — wrapped in interrupts-off and
+autoload-suspended, and it freezes for the WHOLE range rather than IDF's
+partial edge lines (the cost is the other core stalling on misses for one
+write-back: a few hundred µs per JIT image, tens of µs per packer chunk).
+Both callers go through it; the rule in .claude/rules/firmware.md says never
+to call the ROM routine again. The A/B is the same 308-pattern soak on the
+fixed image, in docs/bench-report-seengreat.md: 7 reboots in 308 pushes → 4 (every `Illegal` gone), then → 1 once the live upload left internal DRAM too; the three runs are tabled at the top of that report.
+
 ## Boot: nothing plays until something is loaded
 
 A shipped image carries **no pattern**. Until 2026-09-24 it carried
@@ -2323,6 +2384,18 @@ emulator, where the network never comes up and neither the playlist nor the
 resume task ever runs (Gitea #658). Since #744 *every* run of that gate has to
 build its own image — the cached flake output would boot with nothing
 resident and compile nothing.
+
+### `LUXEL_NO_RESUME`
+
+A bench lever, build-time like the one above: `LUXEL_NO_RESUME=1
+BOARD=… ./build-esp32.sh` makes `resume_task` skip `apply_stored`, so the
+board boots to "nothing playing" with HTTP up and the stored record intact.
+It exists because of 2026-10-04: the Seengreat resumed a bright pattern at
+brightness 31 at every boot and the panel current reset the chip ~1 s later
+(Gitea #931), a loop with no HTTP window and no serial-side cure. Download
+mode, this image on both slots, EN, then brightness and resume over HTTP, then
+master back over OTA — procedure in .claude/skills/seengreat-panel. Never on
+by default; a shipped image has no reason to carry it.
 
 ### The "WiFi freezes the pattern" report, and why it is not the boot order
 

@@ -214,6 +214,14 @@ fn in_arena(ptr: *mut u8) -> bool {
     a >= START.load(Ordering::Relaxed) && a < END.load(Ordering::Acquire)
 }
 
+/// Did the hook serve `ptr` from PSRAM rather than its main-heap fallback?
+/// Always false without an arena. The render task asks this of a live
+/// `/api/code` upload before keeping it alive under the program decoded
+/// from it (main.rs `decode_live_upload`).
+pub fn contains(ptr: *const u8) -> bool {
+    in_arena(ptr as *mut u8)
+}
+
 /// Arena allocation hook. Falls back to the main heap when the arena is
 /// full so a pattern degrades the way it always did (byte-budget vmerr)
 /// instead of failing differently.

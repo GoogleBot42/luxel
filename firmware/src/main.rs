@@ -105,6 +105,8 @@ mod playlist;
 mod provision;
 #[cfg(feature = "psram-arena")]
 mod psram;
+#[cfg(feature = "esp32s3")]
+mod dcache;
 mod resume;
 mod scenes;
 mod scenestore;
@@ -1247,6 +1249,102 @@ fn forget_engine_heap() {
     shared::ENGINE_HEAP.store(0, Ordering::Relaxed);
 }
 
+/// How much of a live upload sits in internal DRAM: all of it, unless the
+/// arena hook served it from PSRAM.
+fn upload_internal_len(env: &[u8]) -> usize {
+    #[cfg(feature = "psram-arena")]
+    if psram::contains(env.as_ptr()) {
+        return 0;
+    }
+    env.len()
+}
+
+/// Live `/api/code` uploads that a resident program BORROWS its word region
+/// from (psram-arena boards only, 2026-10-04).
+///
+/// The invariant that makes [`decode_live_upload`]'s `'static` borrow sound:
+/// a buffer in this list is never written, resized or freed while any
+/// resident engine's `Words::Static` points into it. Moving the `ArrVec`
+/// into the list moves its header, not its PSRAM block. The only code that
+/// removes an entry is [`reap_uploads`], and it removes exactly the buffers
+/// that neither `engine` nor `prev` (the crossfade's outgoing engine)
+/// points into. Those are the only two places such a program can live:
+/// `Msg::Code` builds into `engine`, every crossfade moves `engine` to
+/// `prev`, and a scene's other layers decode only from mapped store
+/// extents (`scenes::build_runtime`). Nothing clones a `Program`.
+#[cfg(feature = "psram-arena")]
+type HeldUploads = alloc::vec::Vec<shared::UploadBuf>;
+
+/// Free every held upload no resident program still borrows. Cheap enough
+/// to call every loop iteration: an empty list returns at once, and the
+/// list holds at most two buffers (one per resident engine).
+#[cfg(feature = "psram-arena")]
+fn reap_uploads(held: &mut HeldUploads, engine: &Option<Engine>, prev: &Option<Engine>) {
+    if held.is_empty() {
+        return;
+    }
+    held.retain(|buf| {
+        let r = buf.as_ptr_range();
+        [engine, prev].into_iter().flatten().any(|e| match &e.program().words {
+            luxel_core::vm::Words::Static(w) => {
+                let p = w.as_ptr().cast::<u8>();
+                r.start <= p && p <= r.end
+            }
+            luxel_core::vm::Words::Owned(_) => false,
+        })
+    });
+}
+
+/// Decode a live upload's program from the upload itself — the fallback for
+/// when its bytes did not land in the mapped ad-hoc slot (the slot write
+/// failed, the region is unmapped, or the push carried a library id).
+/// `off`/`len` locate the bytecode inside `env`.
+///
+/// On a board with an arena, and an upload the hook actually served from
+/// PSRAM, the program BORROWS its word region in place and the buffer moves
+/// into `held` for as long as it does ([`HeldUploads`] has the invariant):
+/// no copy of the words in internal DRAM. The word region must be 4-byte
+/// aligned in memory to be borrowed, so the bytecode is first slid up to 3
+/// bytes along inside the buffer's own spare capacity
+/// ([`shared::UPLOAD_SLACK`]) — never past it, so the block cannot move.
+/// When any of that does not hold, the decode copies, like everywhere else.
+fn decode_live_upload(
+    env: shared::UploadBuf,
+    off: usize,
+    len: usize,
+    #[cfg(feature = "psram-arena")] held: &mut HeldUploads,
+) -> Result<luxel_core::vm::Program, luxel_core::bytecode::BcError> {
+    // `try_reserve` first: once a program borrows `env`, the push into
+    // `held` must not be able to fail.
+    #[cfg(feature = "psram-arena")]
+    if psram::contains(env.as_ptr()) && held.try_reserve(1).is_ok() {
+        let mut env = env;
+        let mut off = off;
+        let skew = (4 - (env.as_ptr() as usize + off) % 4) % 4;
+        let total = env.len();
+        if skew != 0 && env.capacity() >= total + skew {
+            // within capacity: no reallocation, the block stays put
+            env.resize(total + skew, 0);
+            env.copy_within(off..off + len, off + skew);
+            off += skew;
+        }
+        // SAFETY: `off + len <= env.len()`, so this is `len` initialized
+        // bytes of `env`'s block. It is only kept past this function when
+        // the decode borrowed it, and then `env` goes into `held`, whose
+        // invariant keeps the block alive and unwritten for as long as the
+        // program (or any engine built from it) is resident.
+        let bc: &'static [u8] = unsafe { core::slice::from_raw_parts(env.as_ptr().add(off), len) };
+        let r = luxel_core::bytecode::deserialize_lean_static(bc);
+        if let Ok(p) = &r {
+            if matches!(p.words, luxel_core::vm::Words::Static(_)) {
+                held.push(env); // capacity reserved above: cannot allocate
+            }
+        }
+        return r;
+    }
+    luxel_core::bytecode::deserialize_lean(&env[off..off + len])
+}
+
 /// Drop the crossfade's outgoing engine AND release the arena pin that kept
 /// its extent from being moved or freed while it was still executing from it
 /// (patterns.rs' pin set, Gitea #260). Order matters — the engine goes
@@ -1653,6 +1751,9 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
     // no record.
     let mut scene: Option<scenes::Runtime> = None;
     let mut prev_scene: Option<scenes::Runtime> = None;
+    // Live uploads a resident program borrows its code from (HeldUploads).
+    #[cfg(feature = "psram-arena")]
+    let mut held: HeldUploads = alloc::vec::Vec::new();
     // Composite buffer for an OUTGOING scene during a crossfade. A bare
     // outgoing pattern needs none — its engine's own frame is the blend
     // source, exactly as before scenes existed — so this stays empty on
@@ -1742,43 +1843,72 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                     engine = None;
                     scene = None; // a bare pattern replaces the whole stack
                     drop_prev(&mut prev, &mut prev_scene);
+                    #[cfg(feature = "psram-arena")]
+                    reap_uploads(&mut held, &engine, &prev);
                     // Free heap with no engine resident — the upload envelope
                     // is the only thing alive here and it is transient, so add
-                    // it back. This is the base the NEXT load will start from,
-                    // and what `engine_heap` is measured against (Gitea #287).
-                    let free_before = esp_alloc::HEAP.free() as usize + env.len();
-                    // The Program owns its bytes, so once it's decoded and the
-                    // envelope is persisted to the flash read-back slot, the
-                    // ~envelope-sized buffer can be DROPPED before the engine
-                    // builds — its 10s-of-KB then count toward the array budget
-                    // and the post-load floor check instead of against them.
-                    // (Observed on-device: Music Sequencer @300 px missed the
-                    // floor by 456 B purely because the envelope was still
-                    // held here.)
-                    let decoded = match luxel_core::bytecode::decode_envelope(&env) {
-                        Ok(le) => match luxel_core::bytecode::deserialize_lean(le.bytecode) {
-                            Ok(p) => {
-                                persist_current_pattern(le.source, le.bytecode, &id).await;
-                                Ok(p)
-                            }
-                            // decode can legitimately fail on a starved heap
-                            // (try_reserve) — surface it, don't just log
-                            Err(e) => Err(Some(e)),
-                        },
+                    // it back where it sits in internal DRAM (on an arena
+                    // board it is in PSRAM and costs this nothing). This is
+                    // the base the NEXT load will start from, and what
+                    // `engine_heap` is measured against (Gitea #287).
+                    let free_before = esp_alloc::HEAP.free() as usize + upload_internal_len(&env);
+                    // Persist FIRST, then decode out of the slot just written
+                    // (2026-10-04). The ad-hoc slot is mapped flash with two
+                    // bytecode sides (`patterns::store_current` writes the one
+                    // nothing executes), so the Program BORROWS its code and
+                    // constant pool from flash exactly like a library pattern
+                    // and the rebuild path — no copy of the words in internal
+                    // DRAM, and the upload is dropped before the engine
+                    // builds. The sender validated the blob, so a decode that
+                    // still fails is a starved heap, which the vmerr reports;
+                    // read-back then names the pattern that was pushed.
+                    let at = match luxel_core::bytecode::decode_envelope(&env) {
+                        Ok(le) => {
+                            persist_current_pattern(le.source, le.bytecode, &id).await;
+                            Ok((le.bytecode.as_ptr() as usize - env.as_ptr() as usize, le.bytecode.len()))
+                        }
                         Err(e) => {
                             println!("envelope decode failed (bug?): {}", e);
+                            Err(())
+                        }
+                    };
+                    let decoded = match at {
+                        Ok((off, len)) => {
+                            let slot = match shared::current_bc() {
+                                shared::BcLoc::Flash(n) if n == len => patterns::current_slot_code(n),
+                                _ => None,
+                            };
+                            match slot {
+                                Some(code) => {
+                                    drop(env);
+                                    luxel_core::bytecode::deserialize_lean_static(code).map_err(Some)
+                                }
+                                // the slot write failed (or is unmapped):
+                                // decode from the upload itself
+                                None => {
+                                    #[cfg(feature = "psram-arena")]
+                                    let r = decode_live_upload(env, off, len, &mut held);
+                                    #[cfg(not(feature = "psram-arena"))]
+                                    let r = decode_live_upload(env, off, len);
+                                    r.map_err(Some)
+                                }
+                            }
+                        }
+                        Err(()) => {
+                            drop(env);
                             Err(None)
                         }
                     };
-                    drop(env);
                     match decoded {
                         Ok(p) => {
                             if let Some(e) = engine_or_vmerr(p) {
                                 publish(&CONTROLS_JSON, jsonview::controls_json(&e));
                                 engine = Some(e);
                                 note_engine_heap(free_before);
-                                // this Program owns its words (the envelope
-                                // was a Vec) — an empty id clears the pin
+                                // its words are the ad-hoc slot's (double-
+                                // buffered, never compacted), a held upload's
+                                // or its own — none is a store extent, so an
+                                // empty id clears the pin
                                 patterns::pin_running(&id);
                                 set_vmerr(None);
                                 vmerr_seen = None;
@@ -2088,6 +2218,9 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
                 }
             }
         }
+        // any message above may have dropped the engine a held upload fed
+        #[cfg(feature = "psram-arena")]
+        reap_uploads(&mut held, &engine, &prev);
 
         // apply (or clear) the installed pixel map when it changed
         if devicemap::take_dirty() {

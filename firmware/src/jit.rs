@@ -377,19 +377,15 @@ unsafe fn publish(l: &Lease, len: usize) {
     debug_assert!(len <= l.len);
     if l.place == PLACE_PSRAM {
         unsafe extern "C" {
-            // esp32s3.rom.ld (esp-rom-sys). The `rom_` spelling is the
-            // linker script's, not a wrapper of ours.
-            fn rom_Cache_WriteBack_Addr(addr: u32, items: u32);
-            fn Cache_Suspend_DCache_Autoload() -> u32;
-            fn Cache_Resume_DCache_Autoload(v: u32);
+            // esp32s3.rom.ld (esp-rom-sys)
             fn Cache_Invalidate_Addr(addr: u32, size: u32) -> i32;
         }
-        // Suspend autoload around the write-back, as esp-hal does: an
-        // autoloaded line landing mid-operation would be written back
-        // too, which is harmless but slow.
-        let al = Cache_Suspend_DCache_Autoload();
-        rom_Cache_WriteBack_Addr(l.data as u32, len as u32);
-        Cache_Resume_DCache_Autoload(al);
+        // NOT the raw ROM `rom_Cache_WriteBack_Addr`: the S3's manual
+        // write-back has an erratum beside a running second core, and this
+        // call races core 0's packer — `Illegal` inside fresh code every ~40
+        // pushes in the 2026-10-04 soak (dcache.rs has the story).
+        #[cfg(feature = "esp32s3")]
+        crate::dcache::writeback(l.data, len);
         Cache_Invalidate_Addr(exec_addr(l) as u32, len as u32);
     }
     #[cfg(target_arch = "xtensa")]

@@ -243,9 +243,15 @@ async fn adopt_leader_pattern(stack: Stack<'static>, leader: embassy_net::IpAddr
         Ok(()) => {
             crate::playlist::stop(); // following the leader takes over
             // forward the envelope bytes as-is (one copy, no src/bc splits —
-            // producer-side copies OOM under a heavy running pattern)
+            // producer-side copies OOM under a heavy running pattern), into
+            // the same fallible arena buffer an /api/code upload uses
+            let Some(mut buf) = shared::upload_buf(payload.len()) else {
+                esp_println::println!("sync: no memory for the leader's {} B pattern", payload.len());
+                return;
+            };
+            buf.extend_from_slice(payload);
             shared::MSG_QUEUE
-                .send(shared::Msg::Code { env: payload.to_vec(), id: alloc::string::String::new() })
+                .send(shared::Msg::Code { env: buf, id: alloc::string::String::new() })
                 .await;
             esp_println::println!("sync: adopted the leader's pattern");
         }

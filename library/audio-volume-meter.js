@@ -39,11 +39,13 @@ function fillFraction(s, nSec, pos, len) {
 
 var i
 for (i = 0; i < pixelCount; i++) {
-  // five equal sections
-  var s = floor(i * 5 / pixelCount)
+  // five equal sections. Divide BEFORE multiplying: `i * 5` and
+  // `s * pixelCount` wrap 16.16 fixed point at 16384 px (2026-10-04 soak)
+  var s = floor(i / pixelCount * 5)
   if (s > 4) s = 4
-  var lo = ceil(s * pixelCount / 5)
-  var hi = ceil((s + 1) * pixelCount / 5)
+  var fifth = pixelCount / 5
+  var lo = ceil(fifth * s)
+  var hi = ceil(fifth * (s + 1))
   sec5[i] = s
   frac5[i] = fillFraction(s, 5, i - lo, max(hi - lo, 1))
 

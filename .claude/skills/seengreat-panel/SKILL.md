@@ -18,12 +18,17 @@ devshell; `ota-push.sh` writes it to a `mktemp` and deletes it).
 onto the 16 MB table; everything below was learned on the first one. Tell
 them apart by MAC before any USB work — both enumerate as 303a:1001 →
 `/dev/ttyACM*`, and `cat /sys/bus/usb/devices/*/serial` prints the MAC of
-whichever is attached, with or without a `/dev` node. With BOTH attached,
-map a unit to its node through sysfs, never by guessing the number:
-`ls /sys/bus/usb/devices/<port>/<port>:1.0/tty/` for the `<port>` whose
-`serial` is the MAC (2026-10-04: unit 2 was `ttyACM1` on port 5-1.4.3,
-unit 1 `ttyACM0` on 3-2.2). A passive `socat` open on unit 2 did NOT reset
-it that day — still treat any open as a possible reboot.
+whichever is attached, with or without a `/dev` node. **Both can be on USB at
+once** — map a unit to its node through sysfs, never by guessing the number
+(2026-10-04: unit 1 `44:BD:8D:F6:B0:A8` was `ttyACM0` on port 3-2.2, unit 2
+`90:70:69:EA:6F:70` — another session's — `ttyACM1` on 5-1.4.3), and never
+open the other session's node:
+```sh
+for d in /sys/bus/usb/devices/*; do [ "$(cat $d/idVendor 2>/dev/null)" = 303a ] && echo "$d $(cat $d/serial) $(ls $d/*/tty/)"; done
+```
+A passive `socat` open on unit 2 did NOT reset it that day; on unit 1 every
+`socat` open did — treat any `socat`/`stty` open as a possible reboot and
+use a bare `cat` to listen (below).
 
 ## First flash of a new unit (2026-09-30)
 
@@ -142,7 +147,8 @@ Reading the panel (2026-09-07):
   pattern by id after); its tab phase repeats to about ±18 %, so take a
   repeated baseline in the same session before claiming a delta. `--clients 3`
   saturates the 3-socket web pool and returns nothing — use `--clients 1`.
-- Brightness is Jeremy's setting — read it, never set it.
+- Brightness is Jeremy's setting — read it, never set it (but see "The
+  board resets on panel current" before activating anything at it).
 - **A 30-60 s hole in the network is not automatically a crash.** On 2026-09-20
   the panel went fully unreachable mid-session — chromium
   `net::ERR_ADDRESS_UNREACHABLE` after 3.1 s and `curl` HTTP 000 at its connect
@@ -220,12 +226,19 @@ comes back `660` after a physical reset). The peripheral treats a host-side
 nothing, `stty`/`socat …,b115200`/`espflash monitor` all reboot the board.
 Consequences:
 
-- **No passive monitoring.** A reader loop that reopens the port reboots the
-  board on every reopen (it did, for minutes, on 2026-09-05). Never leave one
-  running; use `/api/status` polling for liveness during soaks.
-- **The reset is not reliable on a plain open** (2026-09-06, several hours of
-  it): a single `socat …,b115200` open often attaches *passively* — no reset,
-  and no output at all until the firmware prints something. What resets the
+- **A bare `open()` IS the passive tap** (2026-10-04): `cat /dev/ttyACM0 >>
+  log` attached without a reset every time and captured every app line
+  (`core1: last reset …`, `resume:`, `jit:`, `sntp:`). Any `socat …,b115200`
+  open is a termios setup = `rst:0x15 (USB_UART_CHIP_RESET)`. So a reader
+  LOOP is fine as long as it is `cat`, never `socat`/`stty` — that day a
+  re-attaching socat loop reset the board on EVERY reattach, the preboot
+  guard counted two failed boots per cycle and flipped slots each time (the
+  2026-09-05 "reboots on every reopen" was the same mistake). Recipe in
+  "Capturing a boot log or a panic".
+- **The socat reset is not reliable either way** (2026-09-06, several hours
+  of it): a single `socat …,b115200` open sometimes attached *passively* — no
+  reset, no output until the firmware printed something; on 2026-10-04 it
+  reset the chip every time. Don't count on either. What resets the
   chip every time is a **second, short socat open while a long-lived reader is
   already attached**; the long reader then captures the whole boot log:
   ```sh
@@ -247,10 +260,17 @@ Consequences:
   DTR/RTS emulation does enter download mode from a running app. The one
   thing that reliably breaks the connection is a second process holding the
   port (see "Download mode is a one-way door").
-- **A watchdog reset or panic RE-ENUMERATES the USB node** (a USB-triggered
-  reset does not): the reader dies, the node comes back `root:dialout 660`,
-  and you need `doas chmod 666` again. So a serial capture that stops
-  mid-session is itself evidence the board reset.
+- **What drops the USB node is a reset of the power/RTC domain** — POR
+  (`ChipPowerOn`), brownout, RTC watchdog: the reader dies, the node comes
+  back `root:dialout 660` (`doas chmod 666` again), and the ROM `rst:` line
+  of that boot is LOST; the next boot's `core1: last reset Some(...)` line /
+  `/api/status` `core1.last.reset` is all you get. A software reset keeps
+  the node and is captured in-line: a firmware panic prints via esp-backtrace,
+  then `custom_halt` → `software_reset()` = `CoreSw`; the preboot guard's own
+  rollback reboot is `rst:0x3 RTC_SW_SYS_RST` / `CoreSw` too (2026-10-04).
+  So **no panic text + node dropped + `ChipPowerOn` = power/EN, not
+  software**, and a `CoreSw` right after a silent death may be the GUARD's
+  reset, not the death's — in a guard loop every second boot reads `CoreSw`.
 - **A board in download mode (`boot:0x3`) cannot be reset over USB at all** —
   see "Download mode is a one-way door" below. Flash it there, then ask for EN.
 - **The board sometimes will not reset over USB at all** — two full
@@ -330,7 +350,21 @@ kill foreign reader loops** — they are never another session's live work.
 
 ## Capturing a boot log or a panic (the only way to see one)
 
-One long-lived reader, opened deliberately, costs exactly one reset:
+**Passive, no reset (2026-10-04, preferred):** a `cat` loop that re-attaches
+whenever the node re-enumerates after a reset, run under `setsid nohup`:
+
+```sh
+# reader.sh
+while :; do [ -e /dev/ttyACM0 ] && { doas chmod 666 /dev/ttyACM0; echo "=== attach $(date +%T)" >> log; cat /dev/ttyACM0 >> log 2>/dev/null; echo "=== detach $(date +%T)" >> log; }; sleep 0.2; done
+```
+
+It misses the ROM `rst:` line of a node-dropping reset (see above) but gets
+every app line. Kill it with `pkill -f '^cat /dev/ttyACM0'` and
+`pkill -f '^/bin/sh /path/to/reader.sh'` — a bare `pkill -f reader.sh`
+matches the Bash tool's own shell (exit 144), the same trap as below.
+
+To force a boot and see the ROM lines, one long-lived socat reader, opened
+deliberately, costs exactly one reset:
 
 ```sh
 timeout 200 socat -u /dev/ttyACM0,raw,echo=0,b115200 STDOUT > boot.log &
@@ -553,6 +587,34 @@ device answers in 10–20 s and a 4 s timeout reads as "down", #259).
   in the environment (they read the board map for the ELF path and `--chip`).
 - Physical EN/BOOT presses and re-plugging are Jeremy's; everything else here
   is pre-authorized like the Athom rig.
+
+## The board resets on panel current (2026-10-04)
+
+After Jeremy moved the panels to a separate power run, the 2x2 chain resets
+with `ChipPowerOn`, no panic, USB node dropped — on a plain `POST
+/api/brightness` 1→31 with `2D sinc(theta)/theta` running, on every
+activation of a bright pattern at 31, and on the boot RESUME of one at 31 (a
+boot loop, ~6 s per cycle, guard flipping slots, HTTP never reachable). With
+sinc running: 7 OK, 10 resets. Dim patterns (Aurora 2D) run at 31 for days;
+drops (31→1) never reset it; a firmware soft-ramp (3 levels per frame) did
+NOT help — a load threshold, not a transient. Numbers: docs/boards.md
+"Power: the chip resets on panel current".
+
+- **Before any activation or soak at Jeremy's brightness, know the
+  threshold; soak at ≤7 until the power path is fixed.**
+- **A resume loop at a too-high brightness has one way out without a
+  serial-side flash:** Jeremy puts the board in download mode; you
+  `espflash write-bin` an image built with `LUXEL_NO_RESUME=1
+  BOARD=board-seengreat-hub75 ./build-esp32.sh` (the build-time lever in
+  firmware/src/resume.rs: boot skips the stored resume, comes up idle with
+  HTTP) to BOTH slots (0x10000 and 0x310000 on the 16 MB table); he presses
+  EN; you set brightness/resume over HTTP and OTA master back to both
+  slots. `espflash read-flash 0xd000 0x2000` (otadata) shows which slot
+  boots — the higher `ota_seq`.
+- **`core1.fences[0]` is a reboot oracle only when it DECREASES.** It jumps
+  by ~900 on every activation and at boot (key-area store reads — Gitea #928,
+  "the key area is not flash-mapped"). On a no-resume
+  image `engines: 0` after a reboot is expected, not a dead DMA.
 
 ## The ring's tear oracle: `pass.ring.torn`, and the client that moves it (2026-09-30, #914)
 
