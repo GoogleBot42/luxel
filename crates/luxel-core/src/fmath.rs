@@ -291,8 +291,9 @@ const SQRT_SEED: [u16; 192] = [
 /// 4. one Newton step on the EXACT 64-bit remainder, `(m − r1²)/(2·r1)`
 ///    as `(rem >> 8) / (r1 >> 7)` in 32 bits (`|rem| < 2^35`), brings it
 ///    under about one;
-/// 5. the floor is then settled against `r² <= m < (r+1)²` in u64, a loop
-///    of at most two steps either way.
+/// 5. the floor is then settled on the 32-bit remainder `m − r²` (which
+///    fits, r being within a couple of units), a loop of at most two steps
+///    either way with no 64-bit square per step.
 ///
 /// Deliberately NOT `#[inline]`, on any of the three functions here.
 /// Marking them inline lets `sqrt` be pulled into `hypot`/`hypot3`/`asin`
@@ -308,18 +309,34 @@ fn isqrt48(n: u64) -> u32 {
     if n == 0 {
         return 0;
     }
-    let sh = (n.leading_zeros() - 16) & !1; // even, 0..=30
+    // `u64::leading_zeros` is a ~30-instruction software sequence on
+    // Xtensa; the u32 form is one `nsau`.
+    let nh = (n >> 32) as u32;
+    let lz = if nh != 0 {
+        nh.leading_zeros()
+    } else {
+        32 + (n as u32).leading_zeros()
+    };
+    let sh = (lz - 16) & !1; // even, 0..=30
     let m = n << sh; // [2^46, 2^48)
     let hi = (m >> 16) as u32; // [2^30, 2^32)
     let r0 = (SQRT_SEED[(hi >> 24) as usize - 64] as u32) << 8; // ≈ sqrt(m)
     let r1 = (r0 + ((hi / (r0 >> 8)) << 8)) >> 1;
-    let rem = m as i64 - (r1 as u64 * r1 as u64) as i64;
+    let rem = m.wrapping_sub((r1 as u64) * (r1 as u64)) as i64;
     let delta = ((rem >> 8) as i32) / ((r1 >> 7) as i32);
-    let mut r = (r1 as i32 + delta) as u32;
-    while (r as u64) * (r as u64) > m {
+    let mut r = r1.wrapping_add(delta as u32);
+    // The remainder of the corrected root, `m − r²`, is `rem − δ·(2·r1 + δ)`
+    // and is within a few multiples of `r` of zero (r is within a couple of
+    // units of the root, see above), so it fits i32 and every step below is
+    // 32-bit: stepping r down adds `2r − 1` to it, stepping up takes
+    // `2r + 1` away. No 64-bit square per step.
+    let mut rem = (rem as i32).wrapping_sub(delta.wrapping_mul(((r1 << 1) as i32).wrapping_add(delta)));
+    while rem < 0 {
+        rem += ((r << 1) - 1) as i32;
         r -= 1;
     }
-    while (r as u64 + 1) * (r as u64 + 1) <= m {
+    while rem >= ((r << 1) + 1) as i32 {
+        rem -= ((r << 1) + 1) as i32;
         r += 1;
     }
     r >> (sh / 2)
