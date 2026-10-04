@@ -333,7 +333,7 @@ Fixed-point semantics are `crates/luxel-core/src/fixed.rs`, cited per row.
 | `LoadIdx` | Arr/Dyn,Num | `callx8 arr_load_dyn` → tag,payload | |
 | `StoreIdx` | any | `callx8 arr_store` | CoW promotion of `ArrRepr::Const`, byte budget |
 | `ArrLen`, `NewArray n`, `ConstArr i` | | helpers | budget errors |
-| `CallBuiltin b, argc` | direct signature | args → `a10…a13; callx8 tbl[b].direct` | the numeric tier-1 set: `sin cos abs floor … hsv rgb`, plus `saturate paint setPixel` since #841; no `Vm` needed for pure ones, `ctx` in `a10` for `hsv`/`rgb`/`time`/`random`/`paint`/`setPixel`; a call one argument short of the signature fills the builtin's default (`table::direct_default`: `square` 0.5, `paint` 1) |
+| `CallBuiltin b, argc` | direct signature | args → `a10…a13; callx8 tbl[b].direct` | the numeric tier-1 set: `sin cos abs floor … hsv rgb`, plus `saturate paint setPixel` since #841 and every pure numeric `builtin_hot` arm (`hypot pow atan2 … perlin`, N5/N6/C4 for the wide ones) since #938; no `Vm` needed for pure ones, `ctx` in `a10` for `hsv`/`rgb`/`time`/`random`/`paint`/`setPixel`; a call one argument short of the signature fills the builtin's default (`table::direct_default`: `square` 0.5, `paint` 1) |
 | `CallBuiltin b, argc` | generic | box args into scratch; `a10 = ctx, a11 = &scratch, a12 = argc; callx8 tbl[b].generic` → `Ret2`/`RetDyn` | any builtin, any arity; missing args read 0 as today |
 | `CallBuiltinC/CC` | | as above with the immediates as `movi`/`l32r` | |
 | `CallFn f, argc` | | args → `a11…a15` + `ctx.args`; `a10 = ctx; callx8 lit(f)`; `l32i t, ctx, STATUS; bnez t, bail` | |
@@ -637,8 +637,19 @@ design at all.
 name so the aliases come along: `abs floor ceil round trunc frac sqrt sin
 cos wave triangle saturate` (N1), `min max mod square` (N2), `clamp mix`
 (N3), `random prng time setPixel` (C1), `paint` (C2), `hsv rgb` (C3) — plus
-`fract` (= `frac`), `lerp` (= `mix`) and `hsv24` (= `hsv`). Everything else
-is `direct = 0` and goes through `generic`. They are raw 16.16 words in
+`fract` (= `frac`), `lerp` (= `mix`) and `hsv24` (= `hsv`). **Since Gitea
+#938 every remaining pure numeric arm of `builtin_hot` is direct too**: `tan
+asin acos atan exp log log2 sign hash` (N1), `atan2 pow hypot step hash2`
+(N2), `hypot3 smoothstep simplex2` (N3), `dist dot simplex3` (N4), `map`
+(N5), `dist3 dot3` (N6) and `perlin` (C4, for the VM's wrap state) — with
+`length`/`length3` riding along as `hypot`/`hypot3`, and `simplex2`,
+`simplex3` and `perlin` defaulting their seed to 0 at the short arity. The
+new signatures N5/N6/C4 use the windowed ABI's six argument words
+(`a10…a15`); nothing wider can be direct (`perlinFbm` and friends stay
+generic). Everything else is `direct = 0` and goes through `generic`. The
+reason is the ladder in docs/boards.md "Builtins on metal": a generic call
+cost ~280 cycles of boxing before its kernel ran, so `hypot` was 660 cycles
+around a 351-cycle `sqrt` and `sign` 286 cycles for two compares. They are raw 16.16 words in
 registers with no boxing: `d_abs` is `entry / abs a2, a2 / retw.n` and
 `d_clamp` is `entry / max / min / retw.n` on the S3. Two contracts worth
 naming: a direct fn takes the **effective** arguments, so a one-argument
