@@ -203,9 +203,27 @@ fn tier_one_calls_never_enter_the_generic_wrapper() {
         let n = check(body);
         assert_eq!(n, 0, "`{body}` entered a generic wrapper {n} times");
     }
+    // Gitea #938: the numeric arms of `builtin_hot` go direct too, the
+    // seed-defaulting noise calls at both arities.
+    for body in [
+        "out = hypot(x, 3)",
+        "out = pow(x + 1, 2.5)",
+        "out = atan2(x, 0.5)",
+        "out = dist(0, 0, x, 1)",
+        "out = dist3(0, 0, 0, x, 1, 1)",
+        "out = map(x, 0, 1, 2, 3)",
+        "out = simplex2(x, 1)",
+        "out = simplex2(x, 1, 7)",
+        "out = simplex3(x, 1, 2)",
+        "out = perlin(x, 1, 2)",
+        "out = perlin(x, 1, 2, 7)",
+    ] {
+        let n = check(body);
+        assert_eq!(n, 0, "`{body}` entered a generic wrapper {n} times");
+    }
     // …and the counter is live: a builtin with no direct form is counted,
     // as is a direct-form builtin called at an arity no default covers.
-    assert!(check("out = hypot(i, 3)") > 0);
+    assert!(check("out = perlinFbm(x, 0, 0, 2, 0.5, 3)") > 0);
     assert!(check("out = clamp(x, 0)") > 0);
 }
 

@@ -288,6 +288,16 @@ unsafe fn service(cpu: &mut Cpu, ctx: *mut JitCtx, addr: u32) -> (u32, u32) {
             DirectSig::C1 => (d.c1)(ctx, a[1] as i32),
             DirectSig::C2 => (d.c2)(ctx, a[1] as i32, a[2] as i32),
             DirectSig::C3 => (d.c3)(ctx, a[1] as i32, a[2] as i32, a[3] as i32),
+            DirectSig::N5 => (d.n5)(a[0] as i32, a[1] as i32, a[2] as i32, a[3] as i32, a[4] as i32),
+            DirectSig::N6 => (d.n6)(
+                a[0] as i32,
+                a[1] as i32,
+                a[2] as i32,
+                a[3] as i32,
+                a[4] as i32,
+                a[5] as i32,
+            ),
+            DirectSig::C4 => (d.c4)(ctx, a[1] as i32, a[2] as i32, a[3] as i32, a[4] as i32),
             DirectSig::None => unreachable!("no direct entry for {id}"),
         };
         (v as u32, 0)

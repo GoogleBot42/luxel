@@ -1356,7 +1356,7 @@ pub struct Vm {
     /// cooked stops lazily when the backing array is mutated.
     palette_src: Option<u32>,
     palette_dirty: bool,
-    perlin_wrap: [i32; 3],
+    pub(crate) perlin_wrap: [i32; 3],
     /// Wall-clock unix seconds (timezone-adjusted by the host); None → the
     /// clock builtins return 0. With-time civil conversion is oracle-exact
     /// (2026-08-22); the no-time case is UNTESTABLE on a configured PB
@@ -5130,7 +5130,7 @@ fn civil_from_unix(secs: i64) -> Civil {
 /// lowbias32 (Chris Wellons) — well-mixed 32-bit integer hash, the basis of
 /// the deterministic `hash`/`hash2` builtins. Pinned: changing this changes
 /// pattern output on every device, so treat it as part of the bytecode ABI.
-fn hash32(mut x: u32) -> u32 {
+pub(crate) fn hash32(mut x: u32) -> u32 {
     x ^= x >> 16;
     x = x.wrapping_mul(0x21f0_aaad);
     x ^= x >> 15;
@@ -5140,7 +5140,7 @@ fn hash32(mut x: u32) -> u32 {
 }
 
 /// Hash to a uniform value in [0, 1).
-fn hash_unit(x: u32) -> Fx {
+pub(crate) fn hash_unit(x: u32) -> Fx {
     Fx::from_raw((hash32(x) & 0xFFFF) as i32)
 }
 
