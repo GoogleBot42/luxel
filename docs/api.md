@@ -413,7 +413,11 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   bitplanes and a 30 MHz LCD_CAM clock; it scales linearly with that clock
   and halves per extra bitplane (docs/boards.md, "The LCD_CAM pixel clock on
   the panel"). Sampled where the frames are, so it reads 0 whenever nothing
-  is rendering — exactly when `out_fps` does.
+  is rendering — exactly when `out_fps` does — and under a very slow
+  pattern it is quantised by the frame: at 2 fps on a 71-pass/s wall it
+  flips between 51 and 103 from one read to the next. The boot line's
+  `est N Hz` (or `/api/layout`'s `matrix.est_hz`) is the number to quote
+  there.
 - `max_pixels` — this board's cap: **16384** on HUB75-panel boards (Gitea
   #768; a 2x2 chain of 64x64 tiles), 2048 otherwise. It says the pixel space
   is addressable, not that a chain that size will boot — the panel driver
