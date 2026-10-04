@@ -4806,6 +4806,7 @@ impl Vm {
 
     /// Coordinates for pixel `i`: the installed map, else the 1D fallback
     /// (x = i/pixelCount, remaining axes from `fill`).
+    #[inline]
     pub fn pixel_coords(&self, i: u32, fill: [Fx; 3]) -> [Fx; 3] {
         match &self.map {
             Some(m) => {

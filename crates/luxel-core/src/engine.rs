@@ -1958,33 +1958,6 @@ impl Engine {
             RenderKind::R1(f) => self.prog.fns[f as usize].params < 2,
             _ => false,
         };
-        // Native code replaces `render_pixel` and nothing else: the
-        // coordinate work, the projection, the brush read-back, the
-        // first-error rule and the frame tail below are shared, so there is
-        // one per-pixel pass and not two (docs/jit-design.md §6).
-        //
-        // The context is built ONCE per pass — it is 180 bytes, most of it
-        // the argument handoff area, and rebuilding it per pixel would put
-        // a memset back on the path #260 took one off.
-        #[cfg(feature = "jit")]
-        let mut errslot: Option<VmError> = None;
-        #[cfg(feature = "jit")]
-        let native: Option<(*const crate::jit::NativeProgram, crate::jit::JitCtx)> =
-            if self.native_active() {
-                let np: *const crate::jit::NativeProgram =
-                    self.native.as_ref().expect("native_active");
-                // SAFETY: the context borrows `self.vm`, `self.prog` and
-                // `errslot` as raw pointers for the length of this
-                // function; nothing below takes a conflicting reference to
-                // `self.vm` while native code is running, and the image
-                // `np` points at is not touched until the pass ends.
-                let ctx = unsafe { self.native_ctx(&mut errslot) };
-                Some((np, ctx))
-            } else {
-                None
-            };
-        #[cfg(feature = "jit")]
-        let mut native = native;
         // `begin_pixel_pass` also clears any suspended run, which is what
         // makes a swap from a paused interpreter run into a native pass
         // safe, so it runs on both paths; native code ignores the plan.
@@ -1996,89 +1969,31 @@ impl Engine {
             ProjPlan::Select(s) => Some(s),
             _ => None,
         };
-        let mut args = [
-            Value::Num(Fx::ZERO),
-            Value::Num(mid),
-            Value::Num(mid),
-            Value::Num(mid),
-        ];
         let to = match budget {
             Some(b) => from.saturating_add(b).min(self.render_count),
             None => self.render_count,
         };
-        for i in from..to {
-            self.vm.pixel = [Fx::ZERO; 3];
-            self.vm.pixel_written = false;
-            args[0] = Value::Num(Fx::from_int(i as i32));
-            if !index_only {
-                // transforms apply to 2D/3D coordinates (1D x: unverifiable
-                // on our oracle — its installed map can never be removed;
-                // keeping 1D raw)
-                let c = self.vm.pixel_coords(i, [mid; 3]);
-                let c = match sel {
-                    Some(s) => select_coords(c, s, mid),
-                    None => c,
-                };
-                // `apply_transform` is out of line; most patterns never
-                // install a transform, so the flag is read here and the
-                // call skipped (Gitea #938).
-                let p = match render {
-                    RenderKind::R1(_) => c,
-                    _ if !self.vm.transform_active => c,
-                    _ => self.vm.apply_transform(c),
-                };
-                args[1] = Value::Num(p[0]);
-                args[2] = Value::Num(p[1]);
-                args[3] = Value::Num(p[2]);
+        // Native code replaces `render_pixel` and nothing else — the
+        // coordinate work (`pixel_for`), the projection, the brush
+        // read-back, the first-error rule and the frame tail are the same
+        // code on both paths (docs/jit-design.md §6). The two LOOPS are
+        // separate since Gitea #938: the shared loop marshalled every pixel's
+        // arguments through `[Value; 4]` and resolved the native entry per
+        // pixel, ~300 instructions around a call that may do nothing, and
+        // an empty render2D cost 38.9 ms at 16384 px on the S3.
+        #[cfg(feature = "jit")]
+        if self.native_active() {
+            if self.render_pixels_native(render, fn_idx, argc, index_only, sel, from, to, mid) {
+                return;
             }
-            // One call, two implementations of the SAME entry. Everything
-            // around it — coordinates, projection, brush, error policy —
-            // is shared, which is what makes the two paths comparable
-            // pixel for pixel (docs/jit-design.md §7).
-            #[cfg(feature = "jit")]
-            let outcome = match native.as_mut() {
-                // SAFETY: `ctx` was built for `np` above and both are
-                // still live; `args` holds four words in parameter order.
-                Some((np, ctx)) => unsafe {
-                    let raw = [
-                        args[0].num().raw(),
-                        args[1].num().raw(),
-                        args[2].num().raw(),
-                        args[3].num().raw(),
-                    ];
-                    // Re-derive the VM pointer from a fresh `&mut` each
-                    // pixel. The loop touches `self.vm` between calls
-                    // (`pixel_coords`, the brush), and a raw pointer taken
-                    // before that is stale provenance the moment it does.
-                    // One store per pixel, next to a call that costs
-                    // hundreds of cycles.
-                    (*ctx).vm = &mut self.vm;
-                    // Only `argc` arguments are live for this entry, and a
-                    // function declaring MORE parameters than its render
-                    // kind supplies must see the interpreter's default (0)
-                    // in the rest — not the mid-space 0.5 the coordinate
-                    // array is pre-filled with. `NativeCall::enter` reads
-                    // 0 past the end of this slice, which is exactly
-                    // `push_frame`'s rule.
-                    Self::native_enter(&**np, ctx, fn_idx, &raw[..argc.min(raw.len())])
-                },
-                None => self.vm.render_pixel(&self.prog, &plan, &args),
-            };
-            #[cfg(not(feature = "jit"))]
-            let outcome = self.vm.render_pixel(&self.prog, &plan, &args);
-            if let Err(e) = outcome {
-                let fatal = e.is_assert || e.is_resource_guard();
-                if (self.last_error.is_none() || fatal) && !self.arrays_refused {
-                    self.last_error = Some(e);
-                }
-                if fatal {
-                    self.blank_from(i);
-                    self.run_stage = None;
-                    return;
-                }
+        } else {
+            if self.render_pixels_interp(render, &plan, argc, index_only, sel, from, to, mid) {
+                return;
             }
-            let [r, g, b] = self.vm.pixel;
-            self.pixels[i as usize] = [quantize(r), quantize(g), quantize(b)];
+        }
+        #[cfg(not(feature = "jit"))]
+        if self.render_pixels_interp(render, &plan, argc, index_only, sel, from, to, mid) {
+            return;
         }
         if to < self.render_count {
             // budget spent: the pass resumes here on the next `frame_step`
@@ -2088,6 +2003,185 @@ impl Engine {
         self.project_replicate();
         self.post_chain();
         self.finish_frame();
+    }
+
+    /// The coordinates render call `i` receives: the map (or 1D fallback),
+    /// the §5.4d selector, then the pattern's transform for 2D/3D. Shared
+    /// by both pixel loops so a native frame and an interpreted one get
+    /// the same words pixel for pixel.
+    #[inline(always)]
+    fn pixel_for(&self, render: RenderKind, i: u32, sel: Option<[u8; 3]>, mid: Fx) -> [Fx; 3] {
+        let c = self.vm.pixel_coords(i, [mid; 3]);
+        let c = match sel {
+            Some(s) => select_coords(c, s, mid),
+            None => c,
+        };
+        // transforms apply to 2D/3D coordinates (1D x: unverifiable on our
+        // oracle — its installed map can never be removed; keeping 1D raw).
+        // `apply_transform` is out of line; most patterns never install a
+        // transform, so the flag is read here and the call skipped.
+        match render {
+            RenderKind::R1(_) => c,
+            _ if !self.vm.transform_active => c,
+            _ => self.vm.apply_transform(c),
+        }
+    }
+
+    /// First-error rule and the fatal-error exit, shared by both loops.
+    /// Returns true when the pass must stop (the frame from `i` is blanked
+    /// and the stage cleared).
+    #[inline(never)]
+    fn pixel_error(&mut self, i: u32, e: VmError) -> bool {
+        let fatal = e.is_assert || e.is_resource_guard();
+        if (self.last_error.is_none() || fatal) && !self.arrays_refused {
+            self.last_error = Some(e);
+        }
+        if fatal {
+            self.blank_from(i);
+            self.run_stage = None;
+        }
+        fatal
+    }
+
+    /// The interpreter's pixel loop. Returns true if the pass stopped on a
+    /// fatal error (the caller then skips the frame tail).
+    #[allow(clippy::too_many_arguments)]
+    fn render_pixels_interp(
+        &mut self,
+        render: RenderKind,
+        plan: &crate::vm::PixelPlan,
+        argc: usize,
+        index_only: bool,
+        sel: Option<[u8; 3]>,
+        from: u32,
+        to: u32,
+        mid: Fx,
+    ) -> bool {
+        let _ = argc;
+        let mut args = [
+            Value::Num(Fx::ZERO),
+            Value::Num(mid),
+            Value::Num(mid),
+            Value::Num(mid),
+        ];
+        for i in from..to {
+            self.vm.pixel = [Fx::ZERO; 3];
+            self.vm.pixel_written = false;
+            args[0] = Value::Num(Fx::from_int(i as i32));
+            if !index_only {
+                let p = self.pixel_for(render, i, sel, mid);
+                args[1] = Value::Num(p[0]);
+                args[2] = Value::Num(p[1]);
+                args[3] = Value::Num(p[2]);
+            }
+            if let Err(e) = self.vm.render_pixel(&self.prog, plan, &args) {
+                if self.pixel_error(i, e) {
+                    return true;
+                }
+            }
+            let [r, g, b] = self.vm.pixel;
+            self.pixels[i as usize] = [quantize(r), quantize(g), quantize(b)];
+        }
+        false
+    }
+
+    /// The native pixel loop (Gitea #938): raw 16.16 words straight into
+    /// the call, the entry address and ABI resolved once, the context's
+    /// budget fields reset in place, and the error slot read only when the
+    /// call raised a status. Returns true if the pass stopped on a fatal
+    /// error, like [`Engine::render_pixels_interp`].
+    #[cfg(feature = "jit")]
+    #[allow(clippy::too_many_arguments)]
+    fn render_pixels_native(
+        &mut self,
+        render: RenderKind,
+        fn_idx: u16,
+        argc: usize,
+        index_only: bool,
+        sel: Option<[u8; 3]>,
+        from: u32,
+        to: u32,
+        mid: Fx,
+    ) -> bool {
+        use crate::jit::{STATUS_OK, JitCtx};
+        // The context is built ONCE per pass — it is 180 bytes, most of it
+        // the argument handoff area, and rebuilding it per pixel would put
+        // a memset back on the path #260 took one off.
+        let mut errslot: Option<VmError> = None;
+        let np: *const crate::jit::NativeProgram = self.native.as_ref().expect("native_active");
+        // SAFETY: the context borrows `self.vm`, `self.prog` and `errslot`
+        // as raw pointers for the length of this function; nothing below
+        // takes a conflicting reference to `self.vm` while native code is
+        // running, and the image `np` points at is not touched until the
+        // pass ends.
+        let mut ctx: JitCtx = unsafe { self.native_ctx(&mut errslot) };
+        let np = unsafe { &*np };
+        let Some((addr, abi)) = np.entry(fn_idx) else {
+            // Cannot happen: the image covers every bytecode function.
+            // Reported rather than panicked — a panic here takes the render
+            // task down on a board with no serial port.
+            let e = VmError {
+                message: String::from("native entry missing (JIT bug)"),
+                fn_idx,
+                pc: 0,
+                line: 0,
+                col: 0,
+                is_assert: true,
+            };
+            self.pixel_error(from, e);
+            return true;
+        };
+        let argc = argc.min(4);
+        let midr = mid.raw();
+        for i in from..to {
+            self.vm.pixel = [Fx::ZERO; 3];
+            self.vm.pixel_written = false;
+            // Only `argc` arguments are live for this entry, and a function
+            // declaring MORE parameters than its render kind supplies must
+            // see the interpreter's default (0) in the rest — not the
+            // mid-space 0.5 the coordinate words are pre-filled with.
+            // `NativeCall::enter` reads 0 past the end of this slice, which
+            // is exactly `push_frame`'s rule.
+            let mut raw = [Fx::from_int(i as i32).raw(), midr, midr, midr];
+            if !index_only {
+                let p = self.pixel_for(render, i, sel, mid);
+                raw[1] = p[0].raw();
+                raw[2] = p[1].raw();
+                raw[3] = p[2].raw();
+            }
+            // Re-derive the VM pointer from a fresh `&mut` each pixel. The
+            // loop touches `self.vm` between calls (`pixel_for`, the brush),
+            // and a raw pointer taken before that is stale provenance the
+            // moment it does.
+            ctx.vm = &mut self.vm;
+            // Every host entry resets the fuel budget (§3.6 / `Vm::call`).
+            ctx.fuel = crate::vm::FUEL as i32;
+            ctx.fn_idx = fn_idx;
+            ctx.insn_at = 0;
+            // SAFETY: `ctx` was built for `np` above and both are still
+            // live; `raw` holds the parameters in order. The error slot is
+            // `None` here: it starts so and every raised status takes it.
+            unsafe { np.call.enter(addr, &mut ctx, abi, &raw[..argc]) };
+            if ctx.status != STATUS_OK {
+                ctx.status = STATUS_OK;
+                let e = errslot.take().unwrap_or_else(|| VmError {
+                    // A raised status with no error is a helper bug; report
+                    // it rather than losing the failure.
+                    message: String::from("native call failed without an error (JIT bug)"),
+                    fn_idx,
+                    pc: 0,
+                    line: 0,
+                    col: 0,
+                    is_assert: false,
+                });
+                if self.pixel_error(i, e) {
+                    return true;
+                }
+            }
+            let [r, g, b] = self.vm.pixel;
+            self.pixels[i as usize] = [quantize(r), quantize(g), quantize(b)];
+        }
+        false
     }
 
     /// Blank the frame from render call `i` on. Under a strip projection the
