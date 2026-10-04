@@ -977,14 +977,11 @@ fn now_us() -> u64 {
 
 /// Write the data cache back for `len` bytes at `addr` (PSRAM): what the
 /// packer wrote through the cache becomes what the DMA reads off the bus.
-/// ROM routine (esp32s3.rom.ld), the one esp-hal's own DMA buffers and the
-/// JIT's code publish use.
+/// Through `dcache::writeback`, never the raw ROM routine: this runs on core
+/// 0 four times a frame while the render core reads PSRAM, which is exactly
+/// the S3 write-back erratum's shape (dcache.rs; the 2026-10-04 soak).
 fn cache_writeback(addr: *const u8, len: usize) {
-    unsafe extern "C" {
-        fn rom_Cache_WriteBack_Addr(addr: u32, items: u32);
-    }
-    // SAFETY: a ROM routine over an address range this driver owns.
-    unsafe { rom_Cache_WriteBack_Addr(addr as u32, len as u32) };
+    crate::dcache::writeback(addr, len);
 }
 
 /// What both copiers read: raw views of the ring the output task owns.

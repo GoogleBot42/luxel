@@ -2490,6 +2490,22 @@ comes up `jit.layers[1].state: native`, 12,932 B of code, with `heap_free` /
 whole compile and both exec blocks having come out of the arena
 (`psram_free` 8,155,072 → 8,024,000). Full rows in "JIT on metal" below.
 
+### Power: the chip resets on panel current (2026-10-04)
+
+On the 2x2 chain of 64x64 panels (16,384 px), first unit (192.168.0.238), the
+board resets with `core1.last.reset` `ChipPowerOn`, **no panic text, USB node
+dropped** — the chip's power/EN domain, not software. Reproduced by a plain
+`POST /api/brightness` 1→31 with `2D sinc(theta)/theta` running, by every
+activation of a bright pattern at 31, and by the boot RESUME of one at 31 (a
+boot loop, ~6 s per cycle, the guard flipping slots, HTTP never reachable).
+Ladder with sinc running: **7 OK, 10 resets.** Dim patterns (Aurora 2D) run at
+31 for days, and drops (31→1) never reset it. It got WORSE after Jeremy moved
+the panels to a separate power run. A firmware brightness soft-ramp (3 levels
+per frame) did not help: a load threshold, not a transient. For benches: soak
+at ≤7 until the power path is fixed, and a resume loop needs download mode + a
+`LUXEL_NO_RESUME=1` image on both slots to get out (procedure in
+.claude/skills/seengreat-panel). Tracked as Gitea #931.
+
 
 ## Second light: master on the panel (2026-09-06)
 

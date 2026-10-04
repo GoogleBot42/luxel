@@ -369,7 +369,10 @@ fn validate(id: &str, is_scene: bool) -> Result<(), String> {
 pub async fn resume_task() {
     // Precedence: an active playlist resume wins — playlist::init() ran
     // before any task spawned, so this check is race-free.
-    if !crate::playlist::is_playing() {
+    // LUXEL_NO_RESUME=1 at build time: boot without restoring the stored
+    // pattern or scene — a bench lever for a device that resets inside its
+    // own resume and never reaches HTTP (2026-10-04, Seengreat boot loop).
+    if option_env!("LUXEL_NO_RESUME").is_none() && !crate::playlist::is_playing() {
         apply_stored().await;
     }
     loop {

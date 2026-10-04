@@ -1747,55 +1747,59 @@ impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, Pat
                 push_piece(&mut out, " KB)\"}");
                 break 'resp out;
             }
-            let mut env: Vec<u8> = Vec::new();
-            if env.try_reserve_exact(expected).is_err() {
+            // An arena vector (2026-10-04): PSRAM on a board with an arena,
+            // the main heap otherwise. A 48 KB envelope held in internal
+            // DRAM on the Seengreat left the decode too little to finish.
+            let mut env = crate::shared::upload_buf(expected);
+            if env.is_none() {
                 // the running pattern owns the heap — freeze it (frees its
                 // program + arrays; the strip holds its last frame) and
                 // retry once the render task has drained the message
                 MSG_QUEUE.send(Msg::Freeze).await;
                 embassy_time::Timer::after(embassy_time::Duration::from_millis(60)).await;
-                if env.try_reserve_exact(expected).is_err() {
-                    // Two different failures wear one message otherwise
-                    // (Gitea #390). `try_reserve_exact` needs `expected`
-                    // bytes CONTIGUOUS; `HEAP.free()` is a sum. When the
-                    // sum is big enough and the reservation still failed,
-                    // the heap is merely fragmented — the same upload
-                    // succeeded a minute ago and will succeed again after
-                    // a reboot, so "too large to run here" is a wrong
-                    // diagnosis. Only when the sum itself is short is the
-                    // upload genuinely over this device's budget.
-                    let free = esp_alloc::HEAP.free() as usize;
-                    let mut out = String::new();
-                    if expected <= free {
-                        push_piece(
-                            &mut out,
-                            "{\"ok\":false,\"error\":\"device heap too fragmented for this ",
-                        );
-                        push_u32(&mut out, (expected / 1024) as u32);
-                        push_piece(&mut out, " KB upload (");
-                        push_u32(&mut out, (free / 1024) as u32);
-                        push_piece(&mut out, " KB free, largest block ");
-                        push_u32(
-                            &mut out,
-                            (crate::shared::largest_free_block() / 1024) as u32,
-                        );
-                        push_piece(
-                            &mut out,
-                            " KB) — try again shortly, or reboot the device\"}",
-                        );
-                    } else {
-                        push_piece(
-                            &mut out,
-                            "{\"ok\":false,\"error\":\"not enough free memory on the device for this ",
-                        );
-                        push_u32(&mut out, (expected / 1024) as u32);
-                        push_piece(&mut out, " KB upload (about ");
-                        push_u32(&mut out, (free / 1024) as u32);
-                        push_piece(&mut out, " KB free) — it is too large to run here\"}");
-                    }
-                    break 'resp out;
-                }
+                env = crate::shared::upload_buf(expected);
             }
+            let Some(mut env) = env else {
+                // Two different failures wear one message otherwise
+                // (Gitea #390). `try_reserve_exact` needs `expected`
+                // bytes CONTIGUOUS; `HEAP.free()` is a sum. When the
+                // sum is big enough and the reservation still failed,
+                // the heap is merely fragmented — the same upload
+                // succeeded a minute ago and will succeed again after
+                // a reboot, so "too large to run here" is a wrong
+                // diagnosis. Only when the sum itself is short is the
+                // upload genuinely over this device's budget.
+                let free = esp_alloc::HEAP.free() as usize;
+                let mut out = String::new();
+                if expected <= free {
+                    push_piece(
+                        &mut out,
+                        "{\"ok\":false,\"error\":\"device heap too fragmented for this ",
+                    );
+                    push_u32(&mut out, (expected / 1024) as u32);
+                    push_piece(&mut out, " KB upload (");
+                    push_u32(&mut out, (free / 1024) as u32);
+                    push_piece(&mut out, " KB free, largest block ");
+                    push_u32(
+                        &mut out,
+                        (crate::shared::largest_free_block() / 1024) as u32,
+                    );
+                    push_piece(
+                        &mut out,
+                        " KB) — try again shortly, or reboot the device\"}",
+                    );
+                } else {
+                    push_piece(
+                        &mut out,
+                        "{\"ok\":false,\"error\":\"not enough free memory on the device for this ",
+                    );
+                    push_u32(&mut out, (expected / 1024) as u32);
+                    push_piece(&mut out, " KB upload (about ");
+                    push_u32(&mut out, (free / 1024) as u32);
+                    push_piece(&mut out, " KB free) — it is too large to run here\"}");
+                }
+                break 'resp out;
+            };
             env.resize(expected, 0);
             let mut reader = body.reader();
             let mut fill = 0usize;
@@ -1977,7 +1981,7 @@ fn decode_upload(raw: &[u8]) -> Result<luxel_core::bytecode::Envelope<'_>, Strin
 /// allocate source/blob copies — while a heavy pattern owns the heap those
 /// copies OOM'd (soak v5). The render task frees the old engine first,
 /// then parses.
-async fn api_code(raw: Vec<u8>) -> String {
+async fn api_code(raw: crate::shared::UploadBuf) -> String {
     match decode_upload(&raw) {
         Ok(_) => {
             crate::playlist::stop(); // a manual push takes over from the playlist

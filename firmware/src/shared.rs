@@ -11,7 +11,43 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use embassy_sync::channel::Channel;
 use luxel_core::arena::AString;
+#[cfg(feature = "psram-arena")]
+use luxel_core::arena::ArrVec;
 use luxel_core::fixed::Fx;
+
+/// A live `/api/code` (or sync-adopt) upload: the whole LXP1 envelope.
+///
+/// An arena vector on a board with a PSRAM arena (2026-10-04), so the
+/// envelope never touches internal DRAM there — a 48 KB upload used to
+/// starve the decode on the Seengreat of the few hundred bytes of DRAM it
+/// needs. A plain `Vec` everywhere else: with no arena the two allocate
+/// identically, and `allocator_api2`'s grow paths cost ~1.5 KB of flash on
+/// the Athom for nothing (.claude/rules/firmware.md, vector types).
+#[cfg(feature = "psram-arena")]
+pub type UploadBuf = ArrVec<u8>;
+#[cfg(not(feature = "psram-arena"))]
+pub type UploadBuf = Vec<u8>;
+
+/// Spare capacity a live upload buffer carries past its envelope. A program
+/// can only borrow its word region in place when that region is 4-byte
+/// aligned in memory, and where the bytecode lands inside an envelope
+/// depends on the name and source lengths — so the render task may slide
+/// the bytecode up to 3 bytes along within the buffer's own capacity
+/// (main.rs `decode_live_upload`). Only boards with an arena ever borrow
+/// from an upload; everywhere else this is 0 and the buffer is exact.
+pub const UPLOAD_SLACK: usize = if cfg!(feature = "psram-arena") { 3 } else { 0 };
+
+/// An empty upload buffer with room reserved for `len` envelope bytes plus
+/// [`UPLOAD_SLACK`], fallibly: arena first, main heap when there is no arena
+/// (or it is full) — `luxel_core::arena`'s own fallback.
+pub fn upload_buf(len: usize) -> Option<UploadBuf> {
+    #[cfg(feature = "psram-arena")]
+    let mut v: UploadBuf = luxel_core::arena::empty();
+    #[cfg(not(feature = "psram-arena"))]
+    let mut v: UploadBuf = Vec::new();
+    v.try_reserve_exact(len.checked_add(UPLOAD_SLACK)?).ok()?;
+    Some(v)
+}
 
 /// Writes from HTTP handlers to the engine. Patterns cross as the RAW LXP1
 /// envelope buffer (name + source + bytecode), decode-validated by the
@@ -27,7 +63,11 @@ pub enum Msg {
     /// separately raced the queue (the playlist task set it after send, so
     /// a fast render task could bind the PREVIOUS item's id to the new
     /// pattern's read-back).
-    Code { env: Vec<u8>, id: String },
+    ///
+    /// `env` is an [`UploadBuf`] from [`upload_buf`] — PSRAM on a board
+    /// with an arena, so the envelope stays out of internal DRAM from the
+    /// socket read to the swap.
+    Code { env: UploadBuf, id: String },
     /// Drop the running engine to free its heap (strip freezes on the last
     /// frame). Sent before an OTA (a reboot follows anyway) and when a
     /// pattern upload can't allocate its buffer — the next Code revives

@@ -1,5 +1,45 @@
 # Update log
 
+## 2026-10-04 — Seengreat soak: the S3 write-back erratum, the live upload in PSRAM, four patterns that wrapped 16.16, and a board that resets on panel current
+
+Jeremy: "some patterns fail to run and seem to even crash the device … I
+specifically couldn't run `2D sinc(theta)/theta` without crashing but there
+were lots of others." Three full-library soaks on the 2x2 chain (16384 px)
+in one night, with a serial reader attached (docs/bench-report-seengreat.md
+has the three-run table):
+
+- **The sinc crash is the power path, not firmware** (Gitea #931). A
+  `ChipPowerOn` reset with no panic and the USB node gone — reproduced by a
+  plain `POST /api/brightness 1→31` with sinc running, by every bright
+  activation at 31, and by the boot resume of one at 31 (a 6 s boot loop
+  only download mode + a `LUXEL_NO_RESUME=1` image broke). Ladder with sinc:
+  7 OK, 10 resets; a firmware soft-ramp did not help. Soaks ran at 4.
+- **The S3's manual data-cache write-back has a hardware erratum** and both
+  of ours ran it raw beside a busy second core — the JIT publish on the
+  render core, the ring packer on core 0. 7 reboots in 308 pushes, all
+  `Illegal`/`InstrProhibited` inside freshly published JIT code with the
+  ISA-model gate green. `firmware/src/dcache.rs` ports ESP-IDF's
+  freeze-the-DCache routine (inline asm, IRAM, no literals); both callers use
+  it. Reboots 7 → 4, every `Illegal` gone. Rule in .claude/rules/firmware.md.
+- **The live `/api/code` upload lived on the internal heap** (48 KB for Main
+  Stage beside ~52 KB free): `heap_free` bottomed at 4,996 B, Main Stage was
+  refused, two patterns OOM-panicked the push after them. The upload is now
+  an arena vector and the render task decodes the program out of the ad-hoc
+  flash slot it just wrote (borrowing, like a library pattern), so neither
+  touches internal DRAM. Low-water mark 44,920 B; reboots 4 → 1.
+- **Four library patterns wrapped 16.16 at 16384 px** (`Drip`, `XmasFlies`,
+  `Sound & Music Spectrum Visualizer`, `Audio Volume Meter` — `pixelCount *
+  k`, `i * k / pixelCount`): pattern bugs a real Pixelblaze shares. Fixed by
+  dividing first / strip fractions / four arrays instead of one packed one;
+  replayed clean on the device. The host sweep cannot see them (#934).
+- `tools/hw-bench.mjs`: fences/slot reboot oracle, `--no-curve` (auto on a
+  panel), restores what it found, `HW_BENCH_ONLY`/`HW_BENCH_GAP_MS`, and
+  `drops` + ring counters per row — the counters are what showed every
+  crash followed a `pipe 0 out 0` row (a ring DMA-restart storm, #936, the
+  one residual: 1 in 308).
+- Also filed: #928 (the store's key area is not flash-mapped — ~900 fenced
+  reads per activation), #929 (fps depends on brightness), #930 (no active
+  pattern id in `/api/status`), #935 (`mixColors` cost).
 ## 2026-10-04 — 128x128 far-panel garbage: the ring is NOT tearing; a data-level slot audit says so
 
 Jeremy's second Seengreat (2x2 of 64x64 = a 256x64 driver frame, `panel 7

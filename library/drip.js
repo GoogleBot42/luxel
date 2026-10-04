@@ -18,13 +18,16 @@ export function beforeRender(delta) {
     leds[0] = size * size
     if (size >= 1) {
       state = 1
+      // position and velocity as FRACTIONS of the strip, not pixels: in
+      // 16.16 fixed point `pixelCount * 2.2` wraps negative at 16384 px
+      // (the drop fell upward and indexed below 0 — 2026-10-04 soak)
       pos = 0
-      vel = pixelCount * 0.05
+      vel = 0.05
     }
   } else if (state == 1) {
-    vel += pixelCount * 2.2 * dt  // gravity: ~1 s to fall any strip
+    vel += 2.2 * dt  // gravity: ~1 s to fall any strip
     pos += vel * dt
-    if (pos >= pixelCount - 1) {
+    if (pos >= 1) {
       // splash: a burst that the feedback decay fades out
       leds[pixelCount - 1] = 1
       leds[pixelCount - 2] = 0.7
@@ -33,7 +36,7 @@ export function beforeRender(delta) {
       state = 2
       pause = 0.4
     } else {
-      leds[floor(pos)] = 1
+      leds[floor(pos * (pixelCount - 1))] = 1
     }
   } else {
     pause -= dt

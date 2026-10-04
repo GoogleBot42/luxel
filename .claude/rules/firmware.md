@@ -235,6 +235,21 @@ paths:
   15 MB/s with the CPU, and reach for mem2mem GDMA (a descriptor and an
   interrupt per block, one cache write-back after the producer writes)
   for anything that must keep pace with a DMA consumer.
+- **Never call the ROM `rom_Cache_WriteBack_Addr` on the S3 — go through
+  `dcache::writeback`** (2026-10-04). The S3's manual data-cache write-back
+  has a hardware erratum: an access from the OTHER core, or from an
+  interrupt on the writing core, to a line being written back completes
+  with wrong data. ESP-IDF patches its ROM `Cache_WriteBack_Addr` for it
+  (mask interrupts, freeze the DCache, write back by hand, unfreeze);
+  esp-hal links the raw routine. Both of ours raced the other core — the
+  JIT publish on the render core beside core 0's packer, the ring packer on
+  core 0 four times a frame beside the render core — and the full-library
+  soak paid with `Exception occurred on AppCpu 'Illegal'` /
+  `'InstrProhibited' PC: 0` inside fresh JIT code every ~40 pushes while
+  the ISA-model gate was green for every one of them. `firmware/src/dcache.rs`
+  is the IDF routine in inline asm (IRAM, no literals, whole range frozen);
+  anything new that pushes PSRAM bytes out for a DMA or the instruction
+  side uses it, and the frozen window must touch nothing the DCache serves.
 - **Never copy a large PSRAM body in one go — the ring's refill has ~4 ms
   of slack and a single 49 KB `memcpy` through the cache took it** (2026-
   09-30, #914): `/api/pixels` copied the frame PSRAM → PSRAM inside one

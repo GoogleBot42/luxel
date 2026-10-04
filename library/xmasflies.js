@@ -15,8 +15,13 @@
 var numSparks = floor(pixelCount / 5) + 1
 var sparkV = array(numSparks)
 var sparkX = array(numSparks)
-// four per-pixel energy buffers, packed group-major into one array
-var energy = array(pixelCount * 4)
+// four per-pixel energy buffers, one per spark group. NOT one packed
+// `array(pixelCount * 4)`: in 16.16 fixed point that length wraps to 0 at
+// 8192 px and the group offsets wrap negative (2026-10-04, 16384-px soak)
+var energy0 = array(pixelCount)
+var energy1 = array(pixelCount)
+var energy2 = array(pixelCount)
+var energy3 = array(pixelCount)
 
 var MAXV = .2       // max speed, pixels per scaled time unit
 var STALL = .012    // |v| below this = coasted to a stop, respawn
@@ -33,7 +38,10 @@ groupHue[3] = .09
 
 export function beforeRender(delta) {
   var dt = delta * .1   // the fork's ~10x slowdown
-  feedback(energy, DECAY)
+  feedback(energy0, DECAY)
+  feedback(energy1, DECAY)
+  feedback(energy2, DECAY)
+  feedback(energy3, DECAY)
 
   var i
   for (i = 0; i < numSparks; i++) {
@@ -48,15 +56,20 @@ export function beforeRender(delta) {
     if (sparkX[i] >= pixelCount) sparkX[i] -= pixelCount
     if (sparkX[i] < 0) sparkX[i] += pixelCount
     // deposit the signed velocity into this spark's group buffer
-    energy[(i % 4) * pixelCount + floor(sparkX[i])] += sparkV[i]
+    var g = i % 4
+    var x = floor(sparkX[i])
+    if (g == 0) energy0[x] += sparkV[i]
+    else if (g == 1) energy1[x] += sparkV[i]
+    else if (g == 2) energy2[x] += sparkV[i]
+    else energy3[x] += sparkV[i]
   }
 }
 
 export function render(index) {
-  var e0 = energy[index]
-  var e1 = energy[pixelCount + index]
-  var e2 = energy[pixelCount * 2 + index]
-  var e3 = energy[pixelCount * 3 + index]
+  var e0 = energy0[index]
+  var e1 = energy1[index]
+  var e2 = energy2[index]
+  var e3 = energy3[index]
 
   // hue of the group with the (signed) maximum energy here
   var h = groupHue[0]
