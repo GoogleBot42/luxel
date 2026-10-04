@@ -18,7 +18,12 @@ devshell; `ota-push.sh` writes it to a `mktemp` and deletes it).
 onto the 16 MB table; everything below was learned on the first one. Tell
 them apart by MAC before any USB work — both enumerate as 303a:1001 →
 `/dev/ttyACM*`, and `cat /sys/bus/usb/devices/*/serial` prints the MAC of
-whichever is attached, with or without a `/dev` node.
+whichever is attached, with or without a `/dev` node. With BOTH attached,
+map a unit to its node through sysfs, never by guessing the number:
+`ls /sys/bus/usb/devices/<port>/<port>:1.0/tty/` for the `<port>` whose
+`serial` is the MAC (2026-10-04: unit 2 was `ttyACM1` on port 5-1.4.3,
+unit 1 `ttyACM0` on 3-2.2). A passive `socat` open on unit 2 did NOT reset
+it that day — still treat any open as a possible reboot.
 
 ## First flash of a new unit (2026-09-30)
 

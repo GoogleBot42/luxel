@@ -3737,6 +3737,57 @@ uptime with nothing polling — the shape of the boot-ok flash store
 the oracle from here: a handful at boot, flat afterwards, and any client
 that pulls large bodies out of PSRAM is the first suspect when it moves.
 
+### 128x128 on the second unit: the ring is clean, the far panels are not (2026-10-04)
+
+Jeremy's second Seengreat drives a 2x2 of 64x64 (`matrix 64 64 2 2 tr col
+1 270/90`, a 256x64 driver frame, `panel 7 20 shiftreg 7 60 6`: 13 slots of
+4 KB, 4,787 µs slack, 71 passes/s) and shows garbage with no console open —
+mild on the first two panels of the chain, bad on the last two. One quiet
+boot of master `008ef480`, `pass.ring` read every 15 s, each load 60 s:
+
+| load (sinc pattern, 707 ms/frame, resident)       | torn | late |
+|---------------------------------------------------|-----:|-----:|
+| quiet, 5 min                                       | 0 | 0 |
+| `GET /api/status` 2 Hz                             | 1 | 1 |
+| `GET /api/pixels` 2 Hz (49 KB, chunked since #915) | 0 | 0 |
+| `GET /api/patterns` 1 Hz                           | 0 | 0 |
+| `GET /api/layout` 2 Hz                             | 0 | 1 |
+| console bundle (`index.html` + 95 KB js) in a loop | 0 | 5 |
+| Aurora 2D (11 fps) quiet / + status 2 Hz           | 0 / 0 | 0 / 1 |
+| Bouncing Balls 2D (19 fps) quiet                   | 0 | 0 |
+| `append` off / `minfill 4` / `dma` off (CPU copy)  | 0 / 12 / — | 0 / 9 / 11 |
+| **`steal` off**                                    | **385** | **592** |
+| every boot, 30–90 s in (the boot-ok store, #916)   | 13–17 | 8–9 |
+
+So neither HTTP nor the pattern moves the oracles, the core-1 timer is what
+keeps the ring fed (the per-slot copy is 330–380 µs beside any 16384-px
+engine against a 440 µs slot — a copier 1.2x the beam, #895 has the
+numbers), and the one reproducible tear is the boot-ok store's 20 ms stall.
+
+**The slot audit** (`POST /api/ring {"audit":true}` + `{"audit_every":N}`,
+`pass.ring.audit_*`) was built to see what `torn` cannot: a position
+model that misleads the copier misleads the position oracle the same way.
+The output task compares the slot the beam has just left, word by word,
+with the packed-frame row pair its record says it holds; no lock, and the
+result stands only if the slot's issued and landed records and the source
+frame's generation are unchanged after the compare (a copier records the
+issue before it touches a byte). On the wall, `audit_every 1`:
+
+| line | load | audited | bad | stale (known late skips) |
+|---|---|---:|---:|---:|
+| `panel 7 10 shiftreg 7 30 6` (half clock, same ring timing) | Aurora + panels card | 21,018 | 0 | 2 |
+| `panel 7 20 shiftreg 7 60 6` (Jeremy's) | Aurora + panels card | 55,309 | 0 | 6 |
+
+Through the boot-ok burst as well. The chip clocks out exactly what it
+packed, on both clocks, so the garbage is made after the ribbon: the far
+two panels are the end of the power chain, and the sister unit resets
+outright from panel current at brightness 10 with the same sinc pattern.
+The audit's `skipped` is high (~50 %) and `jump` ~5 % beside a 16384-px
+engine because the 4 KB PSRAM read straddles a slot at the contended bus
+rate — neither is a defect. Default off: 2.7 % of core 0 at `audit_every`
+4. Found on the way: one activation beside the resident engine reset the
+board on a park-ack timeout (#932).
+
 ### The full-frame ring reuses its slots, and the chain appends (2026-09-30, Gitea #896 / #897, after #905)
 
 Step 3 of the ring (#896): with `n == rows` slot `r` carries row pair `r` on
