@@ -106,6 +106,12 @@ pub enum DirectSig {
     C1 = 6,
     C2 = 7,
     C3 = 8,
+    /// Gitea #938: `map` is five arguments, `dist3`/`dot3` six, `perlin`
+    /// a context and four. The windowed ABI passes six words in
+    /// `a10…a15`, so these are the widest shapes a direct call can take.
+    N5 = 9,
+    N6 = 10,
+    C4 = 11,
 }
 
 /// The `direct` word: a function pointer of the shape [`DirectSig`] names,
@@ -131,6 +137,9 @@ pub union Direct {
     pub c1: unsafe extern "C" fn(*mut JitCtx, i32) -> i32,
     pub c2: unsafe extern "C" fn(*mut JitCtx, i32, i32) -> i32,
     pub c3: unsafe extern "C" fn(*mut JitCtx, i32, i32, i32) -> i32,
+    pub n5: unsafe extern "C" fn(i32, i32, i32, i32, i32) -> i32,
+    pub n6: unsafe extern "C" fn(i32, i32, i32, i32, i32, i32) -> i32,
+    pub c4: unsafe extern "C" fn(*mut JitCtx, i32, i32, i32, i32) -> i32,
 }
 
 const _: () = assert!(core::mem::size_of::<Direct>() == core::mem::size_of::<usize>());
@@ -178,6 +187,9 @@ impl BuiltinEntry {
             6 => DirectSig::C1,
             7 => DirectSig::C2,
             8 => DirectSig::C3,
+            9 => DirectSig::N5,
+            10 => DirectSig::N6,
+            11 => DirectSig::C4,
             _ => DirectSig::None,
         }
     }
@@ -287,6 +299,72 @@ direct_pure! {
         let t = t.wrap_unit();
         if t < duty { Fx::ONE } else { Fx::ZERO }
     };
+    // Gitea #938: the rest of the pure numeric arms of `Vm::builtin_hot`,
+    // restated argument-for-argument. `hypot` alone was a generic call in
+    // 51 library patterns — ~300 cycles of boxing around a 350-cycle
+    // kernel on the S3 — and `pow` in 57.
+    d_tan(a) = fmath::tan(a);
+    d_asin(a) = fmath::asin(a);
+    d_acos(a) = fmath::acos(a);
+    d_atan(a) = fmath::atan(a);
+    d_atan2(y, x) = fmath::atan2(y, x);
+    d_pow(b, e) = fmath::pow(b, e);
+    d_exp(a) = fmath::exp(a);
+    d_log(a) = fmath::ln(a);
+    d_log2(a) = fmath::log2(a);
+    d_hypot(x, y) = fmath::hypot(x, y);
+    d_hypot3(x, y, z) = fmath::hypot3(x, y, z);
+    d_sign(a) = if a > Fx::ZERO {
+        Fx::ONE
+    } else if a < Fx::ZERO {
+        -Fx::ONE
+    } else {
+        Fx::ZERO
+    };
+    // step(edge, x): 0 below the edge, 1 at/above it (GLSL order)
+    d_step(edge, x) = if x < edge { Fx::ZERO } else { Fx::ONE };
+    d_dist(x1, y1, x2, y2) = fmath::hypot(x2 - x1, y2 - y1);
+    d_dist3(x1, y1, z1, x2, y2, z2) = fmath::hypot3(x2 - x1, y2 - y1, z2 - z1);
+    d_smoothstep(lo, hi, v) = {
+        let d = hi - lo;
+        let t = if d == Fx::ZERO {
+            Fx::ZERO
+        } else {
+            ((v - lo) / d).clamp(Fx::ZERO, Fx::ONE)
+        };
+        t * t * (Fx::from_int(3) - (t + t))
+    };
+    d_map(x, ilo, ihi, olo, ohi) = {
+        let d = ihi - ilo;
+        if d == Fx::ZERO {
+            olo
+        } else {
+            olo + (x - ilo) * (ohi - olo) / d
+        }
+    };
+    d_hash(a) = crate::vm::hash_unit(a.raw() as u32);
+    d_hash2(a, b) = crate::vm::hash_unit(
+        (a.raw() as u32).wrapping_add(crate::vm::hash32(b.raw() as u32)),
+    );
+    d_dot(x1, y1, x2, y2) = x1 * x2 + y1 * y2;
+    d_dot3(x1, y1, z1, x2, y2, z2) = x1 * x2 + y1 * y2 + z1 * z2;
+    d_simplex2(x, y, seed) = crate::noise::simplex2(x, y, seed);
+    d_simplex3(x, y, z, seed) = crate::noise::simplex3(x, y, z, seed);
+}
+
+/// `perlin(x, y, z, seed)` reads the VM's `setPerlinWrap` state, so it is a
+/// ctx-taking entry (Gitea #938): the `Perlin` arm of `Vm::builtin_hot`
+/// with the boxing removed.
+unsafe extern "C" fn d_perlin(ctx: *mut JitCtx, x: i32, y: i32, z: i32, seed: i32) -> i32 {
+    let vm = &*(*ctx).vm;
+    crate::noise::perlin(
+        Fx::from_raw(x),
+        Fx::from_raw(y),
+        Fx::from_raw(z),
+        Fx::from_raw(seed),
+        vm.perlin_wrap,
+    )
+    .raw()
 }
 
 /// The context-taking tier-1 arms. These reach the VM (the RNG, the clock,
@@ -375,6 +453,9 @@ pub const fn direct_default(id: u16) -> Option<i32> {
         BKind::Impl(Builtin::Square) => Some(1 << 15),
         // `paint(x)`: brightness 1 (`builtin_hot`'s `argc >= 2` test).
         BKind::Impl(Builtin::Paint) => Some(1 << 16),
+        // `simplex2(x, y)` / `simplex3(x, y, z)` / `perlin(x, y, z)`: the
+        // seed argument reads as 0 when absent (`n(i)` past `argc` is 0).
+        BKind::Impl(Builtin::Simplex2 | Builtin::Simplex3 | Builtin::Perlin) => Some(0),
         _ => None,
     }
 }
@@ -416,6 +497,31 @@ const fn direct_of(id: u16) -> (Direct, DirectSig) {
         Builtin::Saturate => (Direct { n1: d_saturate }, DirectSig::N1),
         Builtin::SetPixel => (Direct { c1: d_set_pixel }, DirectSig::C1),
         Builtin::Paint => (Direct { c2: d_paint }, DirectSig::C2),
+        // Gitea #938: every remaining pure numeric arm of `builtin_hot`.
+        Builtin::Tan => (Direct { n1: d_tan }, DirectSig::N1),
+        Builtin::Asin => (Direct { n1: d_asin }, DirectSig::N1),
+        Builtin::Acos => (Direct { n1: d_acos }, DirectSig::N1),
+        Builtin::Atan => (Direct { n1: d_atan }, DirectSig::N1),
+        Builtin::Atan2 => (Direct { n2: d_atan2 }, DirectSig::N2),
+        Builtin::Pow => (Direct { n2: d_pow }, DirectSig::N2),
+        Builtin::Exp => (Direct { n1: d_exp }, DirectSig::N1),
+        Builtin::Log => (Direct { n1: d_log }, DirectSig::N1),
+        Builtin::Log2 => (Direct { n1: d_log2 }, DirectSig::N1),
+        Builtin::Hypot => (Direct { n2: d_hypot }, DirectSig::N2),
+        Builtin::Hypot3 => (Direct { n3: d_hypot3 }, DirectSig::N3),
+        Builtin::Sign => (Direct { n1: d_sign }, DirectSig::N1),
+        Builtin::Step => (Direct { n2: d_step }, DirectSig::N2),
+        Builtin::Dist => (Direct { n4: d_dist }, DirectSig::N4),
+        Builtin::Dist3 => (Direct { n6: d_dist3 }, DirectSig::N6),
+        Builtin::Smoothstep => (Direct { n3: d_smoothstep }, DirectSig::N3),
+        Builtin::Map => (Direct { n5: d_map }, DirectSig::N5),
+        Builtin::Hash => (Direct { n1: d_hash }, DirectSig::N1),
+        Builtin::Hash2 => (Direct { n2: d_hash2 }, DirectSig::N2),
+        Builtin::Dot => (Direct { n4: d_dot }, DirectSig::N4),
+        Builtin::Dot3 => (Direct { n6: d_dot3 }, DirectSig::N6),
+        Builtin::Simplex2 => (Direct { n3: d_simplex2 }, DirectSig::N3),
+        Builtin::Simplex3 => (Direct { n4: d_simplex3 }, DirectSig::N4),
+        Builtin::Perlin => (Direct { c4: d_perlin }, DirectSig::C4),
         _ => (Direct { none: 0 }, DirectSig::None),
     }
 }

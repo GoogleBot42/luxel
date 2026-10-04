@@ -177,6 +177,11 @@ fn a_direct_word_exists_exactly_when_a_direct_sig_does() {
         "fract", "lerp", "hsv24",
         // Gitea #841
         "saturate", "setPixel", "paint",
+        // Gitea #938: the rest of the pure numeric arms of `builtin_hot`
+        // (`length`/`length3` are `hypot`/`hypot3`), plus `perlin`.
+        "tan", "asin", "acos", "atan", "atan2", "pow", "exp", "log", "log2", "hypot", "hypot3",
+        "length", "length3", "sign", "step", "dist", "dist3", "smoothstep", "map", "hash",
+        "hash2", "dot", "dot3", "simplex2", "simplex3", "perlin",
     ];
     want.sort_unstable();
     assert_eq!(with_direct, want);
@@ -417,7 +422,9 @@ fn every_direct_entry_matches_its_generic_wrapper() {
             DirectSig::N1 | DirectSig::C1 => 1,
             DirectSig::N2 | DirectSig::C2 => 2,
             DirectSig::N3 | DirectSig::C3 => 3,
-            DirectSig::N4 => 4,
+            DirectSig::N4 | DirectSig::C4 => 4,
+            DirectSig::N5 => 5,
+            DirectSig::N6 => 6,
             DirectSig::C0 => 0,
             DirectSig::None => unreachable!(),
         };
@@ -426,7 +433,14 @@ fn every_direct_entry_matches_its_generic_wrapper() {
         // word without the product exploding at higher arities.
         for (i, &x) in SWEEP.iter().enumerate() {
             for (j, &y) in SWEEP.iter().enumerate() {
-                let raw = [x, y, SWEEP[(i + j) % SWEEP.len()], SWEEP[(i + 1) % SWEEP.len()]];
+                let raw = [
+                    x,
+                    y,
+                    SWEEP[(i + j) % SWEEP.len()],
+                    SWEEP[(i + 1) % SWEEP.len()],
+                    SWEEP[(j + 2) % SWEEP.len()],
+                    SWEEP[(i + j + 3) % SWEEP.len()],
+                ];
                 let args: Vec<Value> = raw[..argc]
                     .iter()
                     .map(|&w| Value::Num(Fx::from_raw(w)))
@@ -450,6 +464,11 @@ fn every_direct_entry_matches_its_generic_wrapper() {
                         DirectSig::C1 => (e.direct.c1)(&mut ctx, raw[0]),
                         DirectSig::C2 => (e.direct.c2)(&mut ctx, raw[0], raw[1]),
                         DirectSig::C3 => (e.direct.c3)(&mut ctx, raw[0], raw[1], raw[2]),
+                        DirectSig::N5 => (e.direct.n5)(raw[0], raw[1], raw[2], raw[3], raw[4]),
+                        DirectSig::N6 => {
+                            (e.direct.n6)(raw[0], raw[1], raw[2], raw[3], raw[4], raw[5])
+                        }
+                        DirectSig::C4 => (e.direct.c4)(&mut ctx, raw[0], raw[1], raw[2], raw[3]),
                         DirectSig::None => unreachable!(),
                     }
                 };
@@ -498,9 +517,20 @@ fn every_direct_default_is_what_the_arm_defaults_to() {
         let sig = e.sig();
         assert_ne!(sig, DirectSig::None, "a default without a direct form");
         with_default.push(BUILTINS[id as usize].name);
-        for &x in SWEEP.iter() {
+        for (i, &x) in SWEEP.iter().enumerate() {
+            // The short call: every argument but the last, rotated through
+            // the sweep so a 3- or 4-arity shape sees more than one word.
+            let y = SWEEP[(i + 5) % SWEEP.len()];
+            let z = SWEEP[(i + 9) % SWEEP.len()];
+            let short: &[i32] = match sig {
+                DirectSig::N2 | DirectSig::C2 => &[x],
+                DirectSig::N3 => &[x, y],
+                DirectSig::N4 | DirectSig::C4 => &[x, y, z],
+                other => panic!("no short-arity shape for {other:?}"),
+            };
+            let args: Vec<Value> = short.iter().map(|&w| Value::Num(Fx::from_raw(w))).collect();
             let mut vg = harness_vm(&prog);
-            let want = through_the_table(&mut vg, &prog, id, &[Value::Num(Fx::from_raw(x))])
+            let want = through_the_table(&mut vg, &prog, id, &args)
                 .unwrap_or_else(|e| panic!("tier-1 builtin cannot fail: {}", e.message));
             let mut vd = harness_vm(&prog);
             let mut err: Option<VmError> = None;
@@ -509,6 +539,9 @@ fn every_direct_default_is_what_the_arm_defaults_to() {
                 match sig {
                     DirectSig::N2 => (e.direct.n2)(x, fill),
                     DirectSig::C2 => (e.direct.c2)(&mut ctx, x, fill),
+                    DirectSig::N3 => (e.direct.n3)(x, y, fill),
+                    DirectSig::N4 => (e.direct.n4)(x, y, z, fill),
+                    DirectSig::C4 => (e.direct.c4)(&mut ctx, x, y, z, fill),
                     other => panic!("no short-arity shape for {other:?}"),
                 }
             };
@@ -528,7 +561,8 @@ fn every_direct_default_is_what_the_arm_defaults_to() {
         }
     }
     with_default.sort_unstable();
-    assert_eq!(with_default, ["paint", "square"]);
+    // #841's two, plus the three seed-defaulting noise calls of #938.
+    assert_eq!(with_default, ["paint", "perlin", "simplex2", "simplex3", "square"]);
 }
 
 // ---------------------------------------------------------------- Ret2 ABI

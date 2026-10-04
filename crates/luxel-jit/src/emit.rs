@@ -1742,6 +1742,9 @@ impl<'a> Emitter<'a> {
             DirectSig::C1 => Some((1, true)),
             DirectSig::C2 => Some((2, true)),
             DirectSig::C3 => Some((3, true)),
+            DirectSig::N5 => Some((5, false)),
+            DirectSig::N6 => Some((6, false)),
+            DirectSig::C4 => Some((4, true)),
             DirectSig::None => None,
         };
         if let Some((n, takes_ctx)) = direct_arity {

@@ -48,20 +48,29 @@ var offB = PI2 * 0.45
 
 var ringPhase = 0, wanderX = 0, wanderY = 0
 
+// the three wandering centres, one pair per channel: cosines span about
+// twice the panel width, so a centre is frequently off-screen and waves
+// sweep in from outside. They depend only on the frame's phases, so they
+// are computed once per frame here rather than six cos() per pixel in
+// ripple() -- a 1.9x frame on the 128x128 panel (Gitea #938).
+var cxR = 0, cyR = 0, cxG = 0, cyG = 0, cxB = 0, cyB = 0
+
 export function beforeRender(delta) {
   // main outward ring motion
   ringPhase = time(speedInterval) * PI2 * phaseGain
   // center wandering: two phases derived from the main period
   wanderX = time(speedInterval * sizeB) * PI2 * phaseGain
   wanderY = time(speedInterval * sizeC) * PI2 * phaseGain
+  cxR = 0.5 + cos(wanderX + offR)
+  cyR = 0.5 + cos(wanderY + offR * 2)
+  cxG = 0.5 + cos(wanderX + offG)
+  cyG = 0.5 + cos(wanderY + offG * 2)
+  cxB = 0.5 + cos(wanderX + offB)
+  cyB = 0.5 + cos(wanderY + offB * 2)
 }
 
-// one channel's ripple field at (x, y)
-function ripple(x, y, off) {
-  // wandering center: cosines span about twice the panel width, so the
-  // center is frequently off-screen and waves sweep in from outside
-  var cx = 0.5 + cos(wanderX + off)
-  var cy = 0.5 + cos(wanderY + off * 2)
+// one channel's ripple field at (x, y), around its centre (cx, cy)
+function ripple(x, y, off, cx, cy) {
   var d = hypot(x - cx, y - cy)
   // ring oscillation divided by distance = the sinc trick (div-by-0 -> 0)
   var v = 1 - cos(d * PI2 * ringsPerUnit - ringPhase + off) / d
@@ -72,8 +81,8 @@ function ripple(x, y, off) {
 
 export function render2D(index, x, y) {
   rgb(
-    ripple(x, y, offR),
-    ripple(x, y, offG),
-    ripple(x, y, offB)
+    ripple(x, y, offR, cxR, cyR),
+    ripple(x, y, offG, cxG, cyG),
+    ripple(x, y, offB, cxB, cyB)
   )
 }

@@ -1,5 +1,61 @@
 # Update log
 
+## 2026-10-04 — builtins: every numeric builtin goes direct in the JIT, sin/sqrt/atan2/pow kernels rewritten, the grid map stops dividing per pixel (#938)
+
+Jeremy: *"massively improve the performance of patterns by improving the
+performance of the builtins the patterns use … I am very disappointed in the
+speed of `2D sinc(theta)/theta` on the 128x128 display."* That pattern ran
+at 2 fps on the Seengreat (585 ms in the VM at 16384 px); it runs at 6 fps
+now (177 ms), 3.3×, and every builtin-heavy 2D pattern measured is 1.2–2.2×
+faster. docs/boards.md "Builtins on metal" has both tables.
+
+- **`tools/builtinbench.mjs`** (new): the per-builtin cost ladder — cycles
+  per call for ~40 builtins on a device with the JIT on, by the opbench
+  slope method with the empty loop body subtracted. It is what found that a
+  GENERIC builtin call cost ~280 cycles of boxing before its kernel ran
+  (`sign` 286 cycles for two compares), that `hypot` was 660 around a
+  351-cycle `sqrt`, and that ~240 of `sin`'s 355 cycles were the radian
+  reduction.
+- **Twenty-six more direct JIT entries** (`crates/luxel-core/src/jit/table.rs`):
+  every pure numeric arm of `builtin_hot` — tan asin acos atan atan2 pow
+  exp log log2 hypot hypot3 sign step dist dist3 smoothstep map hash hash2
+  dot dot3 simplex2 simplex3 — plus `perlin` (ctx-taking). New signatures
+  N5/N6/C4 use the windowed ABI's six argument words; simplex2/simplex3/
+  perlin default their seed to 0 at the short arity. Each restates its arm
+  argument for argument; the core sweep compares all of them against the
+  generic wrapper. `sign`/`step` 290 → 25 cycles, `perlin` 1099 → 774.
+- **fmath, bit-exact** (sweeps against the pre-#938 i64 forms, exhaustive
+  where the domain allows): `sin()`/`cos()` reduce radians to turns with one
+  signed widening multiply by `floor(2^48/2π)` and a 32-bit remainder
+  fix-up (355 → 164 cycles); `isqrt48` is a 192-entry seed table, two
+  Newton steps and a 32-bit floor fix-up — two hardware divides where the
+  digit-by-digit loop unrolled to ~310 instructions (`sqrt` 351 → 172,
+  `hypot` 660 → 193, `asin` 855 → 284); `div_shift16` uses the hardware
+  divider (`atan2` 619 → 179); `Fx` division takes a 48/32 path in 32-bit
+  halves when the quotient fits, leaving `__divdi3` to the wrapping case
+  (129 → 107).
+- **`pow(x, n)` for integer `n` in 1..=16 is repeated multiplication** —
+  the one deliberate change of bits: `pow(x,1) == x`, `pow(x,2) == x*x`,
+  `pow(2,10) == 1024` exactly where the log/exp route gave 1023.9; sign by
+  parity and saturation as before. 785 → 119 cycles. Fractional and larger
+  exponents keep the log/exp route and its i64 pin.
+- **The per-pixel floor** — an EMPTY `render2D` was 38.9 ms at 16384 px,
+  ~570 cycles per pixel, a ~25 fps ceiling for every pattern on the panel.
+  The procedural grid map normalised each pixel's coordinates with two i64
+  divisions (ROM calls); `MapData::grid` now precomputes a `(w + h)`-word
+  axis table (1 KB at 128x128), and the loop skips the out-of-line
+  transform call and the per-pixel error-slot store. 38.9 → 33.8 ms. The
+  rest (~300 instructions of `Value` shuffling and two calls per pixel in
+  `render_pixels`) is the next lever and is written up in docs/boards.md.
+- **`2D sinc(theta)/theta`** computes its three wandering centres once per
+  frame instead of six `cos()` per pixel — byte-identical output (15 host
+  frames, 0 differing bytes), the hand version of a hoist because
+  **`hoistcensus`** (new `luxel-cli` example) shows a compiler pass would
+  touch 2.4 % of the library's `render*` builtin calls.
+- Ruled out, with reasons in docs/boards.md: a frame-invariant hoisting
+  pass, and SIMD for the 16.16 VM (the S3's PIE unit has no 32x32 vector
+  multiply; the kernels are call-bound).
+
 ## 2026-10-04 — Seengreat soak: the S3 write-back erratum, the live upload in PSRAM, four patterns that wrapped 16.16, and a board that resets on panel current
 
 Jeremy: "some patterns fail to run and seem to even crash the device … I

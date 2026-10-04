@@ -385,6 +385,20 @@ impl<'p> Bridge<'p> {
                     DirectSig::C1 => (d.c1)(p, a[1] as i32),
                     DirectSig::C2 => (d.c2)(p, a[1] as i32, a[2] as i32),
                     DirectSig::C3 => (d.c3)(p, a[1] as i32, a[2] as i32, a[3] as i32),
+                    DirectSig::N5 => {
+                        (d.n5)(a[0] as i32, a[1] as i32, a[2] as i32, a[3] as i32, a[4] as i32)
+                    }
+                    DirectSig::N6 => (d.n6)(
+                        a[0] as i32,
+                        a[1] as i32,
+                        a[2] as i32,
+                        a[3] as i32,
+                        a[4] as i32,
+                        a[5] as i32,
+                    ),
+                    DirectSig::C4 => {
+                        (d.c4)(p, a[1] as i32, a[2] as i32, a[3] as i32, a[4] as i32)
+                    }
                     DirectSig::None => unreachable!("no direct entry for {id}"),
                 };
                 (v as u32, 0)

@@ -15,12 +15,16 @@
 //! `mod tests` sweeps every one of them against a verbatim copy of the
 //! original 64-bit form (Gitea #312).
 //!
-//! Three of them (`div_shift16`, `isqrt48`, `sq16`) trade one wide machine
-//! instruction for a 32-bit loop, which is a *loss* on hosts that do have a
-//! 64-bit ALU — including wasm32, which the web playground runs on. Those
-//! keep both forms and pick at compile time on [`NARROW_WORD`]; both are
-//! compiled everywhere and the tests assert `narrow == wide` directly, so a
-//! host test run still proves the device path bit-exact.
+//! Two of them (`div_shift16`, `sq16`) trade one wide machine instruction
+//! for 32-bit work, which is a *loss* on hosts that do have a 64-bit ALU —
+//! including wasm32, which the web playground runs on. Those keep both
+//! forms and pick at compile time on [`NARROW_WORD`]; both are compiled
+//! everywhere and the tests assert `narrow == wide` directly, so a host
+//! test run still proves the device path bit-exact. `isqrt48` is one
+//! Newton-based form on every target since Gitea #938 (a floor root is a
+//! unique integer, so there is nothing to pick between); the two loop forms
+//! it replaced stay as test references. The radian reduction in `sin` is
+//! likewise a single multiply-and-correct on every target (`rad_to_turns`).
 //!
 //! Pixel Blaze's exact algorithms for these functions are not public. All
 //! of them have been differential-tested against real hardware via dense
@@ -98,33 +102,68 @@ fn div_shift16_wide(num: u32, d: u32) -> u32 {
     (((num as u64) << 16) / d as u64) as u32
 }
 
-/// Narrow form: restoring binary division — one pre-step for the (at most
-/// 1) integer part plus 16 quotient bits. The remainder is always
-/// `< d <= 2^31`, so `r << 1` stays inside u32 and the whole thing runs in
-/// 32-bit registers, where [`div_shift16_wide`] compiles to a
-/// `__divdi3`/`__udivdi3` ROM call on a 35–48-bit dividend.
+/// Narrow form: the hardware 32-bit divider (`quou` on Xtensa, `divu` on
+/// RISC-V), never a 64-bit libcall and never the 17-step restoring loop
+/// this was until Gitea #938 (~90 instructions and as many branches,
+/// ~240 cycles of every `sin()` call on the S3).
+///
+/// `d < 2^16` — every normalised coordinate ratio `atan2` sees — is one
+/// divide: `num <= d` keeps `num << 16` inside u32. Larger divisors are
+/// normalised so the top bit of `d` is bit 31 and estimated from its top
+/// 16 bits: with `dn = dh·2^16 + dl`, `nn·2^16/dn <= nn/dh`, and
+/// `nn/dh − nn·2^16/dn = nn·dl/(dh·dn) < 2·nn/dn <= 2`, so the estimate
+/// is never low and at most 3 high after both floors. The correction walks
+/// it down against the exact 64-bit product — at most three steps, usually
+/// none.
 #[inline]
 fn div_shift16_narrow(num: u32, d: u32) -> u32 {
     debug_assert!(d != 0 && num <= d && d <= 1u32 << 31);
-    let mut r = num;
-    let mut q: u32 = 0;
-    if r >= d {
-        r -= d;
-        q = 1;
+    if d < 1 << 16 {
+        return (num << 16) / d;
     }
-    let mut i = 0;
-    while i < 16 {
-        // r < d <= 2^31, so this shift never drops a bit; the numerator's
-        // low 16 bits are all zero, so nothing is shifted in.
-        r <<= 1;
-        q <<= 1;
-        if r >= d {
-            r -= d;
-            q |= 1;
-        }
-        i += 1;
+    let s = d.leading_zeros(); // 0..=15
+    let dn = d << s;
+    let nn = num << s; // num <= d, so nn <= dn < 2^32
+    let mut q = nn / (dn >> 16); // <= 2^32 / 2^15 = 2^17
+    let target = (nn as u64) << 16;
+    let mut prod = (q as u64) * (dn as u64);
+    while prod > target {
+        q -= 1;
+        prod -= dn as u64;
     }
     q
+}
+
+/// `floor(x · 2^16 / 2π_raw) mod 2^16`: the phase of `x` radians (a raw
+/// 16.16 word) in 16-frac turns. Bit-identical to the pre-#938 two-step
+/// form — `r = x.mod_floor(2π)`, then `floor(r·2^16/2π)` — because
+/// `x = k·2π + r` makes `floor(x·2^16/2π) = k·2^16 + floor(r·2^16/2π)`,
+/// whose low 16 bits are the second term. One signed widening multiply
+/// and a 32-bit fix-up replace a hardware remainder plus the 17-step
+/// restoring division of `div_shift16_narrow` (Gitea #938).
+///
+/// With `M = floor(2^48/2π_raw)` (30 bits) the high word of `x·M` is
+/// `floor(x·M/2^32)`, and `x·2^16/2π − x·M/2^32 = x·ε/2^32` for some
+/// `ε ∈ [0, 1)`, so `|x| <= 2^31` bounds the error below 0.5 and the
+/// candidate is within one of the true floor. Its remainder
+/// `x·2^16 − q·2π_raw` lies in `(−2π_raw, 2·2π_raw)`, which fits i32, so
+/// the wrapped 32-bit difference IS the remainder and one compare each way
+/// settles the floor. Swept exhaustively over a period and randomly over
+/// the whole word against the i64 form in `tests`.
+#[inline]
+fn rad_to_turns(x: i32) -> i32 {
+    const M: i64 = (1i64 << 48) / PI2_RAW as i64;
+    const _: () = assert!(M < i32::MAX as i64);
+    let q = ((x as i64 * M) >> 32) as i32;
+    let r = (x << 16).wrapping_sub(q.wrapping_mul(PI2_RAW));
+    let q = if r < 0 {
+        q - 1
+    } else if r >= PI2_RAW {
+        q + 1
+    } else {
+        q
+    };
+    q & 0xFFFF
 }
 
 /// sin of a phase in *turns* (1.0 = full cycle). The waveform functions are
@@ -140,8 +179,10 @@ pub fn cos_turns(t: Fx) -> Fx {
 #[cfg_attr(feature = "iram-math", link_section = ".rwtext")]
 #[cfg_attr(feature = "iram-math", inline(never))]
 pub fn sin_turns(t: Fx) -> Fx {
-    // wrap to [0, 1)
-    let t = t.mod_floor(Fx::ONE).raw();
+    // wrap to [0, 1): the low 16 bits ARE the floored unit modulo
+    // (`Fx::wrap_unit`, bit-identical to `mod_floor(Fx::ONE)` and no
+    // hardware remainder).
+    let t = t.wrap_unit().raw();
     // fold to a quarter wave: t ∈ [0, 16384]
     let (t, neg) = if t >= 32_768 {
         (t - 32_768, true)
@@ -180,14 +221,9 @@ pub fn sin_turns(t: Fx) -> Fx {
 #[cfg_attr(feature = "iram-math", link_section = ".rwtext")]
 #[cfg_attr(feature = "iram-math", inline(never))]
 pub fn sin(x: Fx) -> Fx {
-    // reduce mod 2π first (better precision than multiplying large x by 1/2π)
-    let r = x.mod_floor(Fx::from_raw(PI2_RAW)).raw();
-    // to turns: r / 2π. `mod_floor` with a positive divisor gives
-    // r ∈ [0, PI2_RAW), so `((r as i64) << 16) / PI2_RAW` is a nonnegative
-    // quotient < 65536 — exactly what `div_shift16` computes, without the
-    // 35-bit dividend that forced `__udivdi3`.
-    let turns = div_shift16(r as u32, PI2_RAW as u32) as i32;
-    sin_turns(Fx::from_raw(turns))
+    // Reduce mod 2π and convert to turns in one step — `rad_to_turns` is
+    // the floored `x mod 2π`, scaled by `2^16/2π`, as one widening multiply.
+    sin_turns(Fx::from_raw(rad_to_turns(x.raw())))
 }
 
 /// cos(x), x in radians.
@@ -212,8 +248,52 @@ pub fn sqrt(x: Fx) -> Fx {
     Fx::from_raw(if x.raw() < 0 { -mag } else { mag })
 }
 
+/// `round(sqrt(i + 64.5) · 2^12)` for `i ∈ 0..192`: the seed of
+/// [`isqrt48`]'s Newton iteration, indexed by the top eight bits of the
+/// normalised radicand (which start at 64 because the top bit is set).
+/// 384 bytes of `const` data, read once per root.
+#[rustfmt::skip]
+const SQRT_SEED: [u16; 192] = [
+    32896, 33150, 33402, 33652, 33900, 34147, 34392, 34635, 34876, 35116, 35354, 35590,
+    35825, 36059, 36291, 36521, 36750, 36978, 37204, 37429, 37652, 37874, 38095, 38315,
+    38533, 38750, 38966, 39181, 39394, 39606, 39818, 40028, 40237, 40445, 40652, 40857,
+    41062, 41266, 41469, 41671, 41871, 42071, 42270, 42468, 42665, 42861, 43057, 43251,
+    43445, 43637, 43829, 44020, 44210, 44400, 44588, 44776, 44963, 45149, 45334, 45519,
+    45703, 45886, 46069, 46250, 46431, 46612, 46791, 46970, 47149, 47326, 47503, 47679,
+    47855, 48030, 48204, 48378, 48551, 48723, 48895, 49067, 49237, 49407, 49577, 49746,
+    49914, 50082, 50249, 50416, 50582, 50747, 50912, 51077, 51241, 51404, 51567, 51730,
+    51892, 52053, 52214, 52374, 52534, 52694, 52853, 53011, 53169, 53327, 53484, 53640,
+    53797, 53952, 54108, 54262, 54417, 54571, 54724, 54877, 55030, 55182, 55334, 55485,
+    55636, 55787, 55937, 56087, 56236, 56385, 56534, 56682, 56830, 56977, 57124, 57271,
+    57417, 57563, 57709, 57854, 57999, 58143, 58287, 58431, 58574, 58717, 58860, 59002,
+    59144, 59286, 59427, 59568, 59709, 59849, 59989, 60129, 60268, 60407, 60546, 60684,
+    60822, 60960, 61098, 61235, 61372, 61508, 61644, 61780, 61916, 62051, 62186, 62321,
+    62456, 62590, 62724, 62857, 62991, 63124, 63256, 63389, 63521, 63653, 63785, 63916,
+    64047, 64178, 64309, 64439, 64569, 64699, 64828, 64957, 65086, 65215, 65344, 65472,
+];
+
 /// Exact `floor(sqrt(n))` for `n < 2^48` (both call sites are bounded:
 /// `sqrt` feeds `|raw| << 16 < 2^47`, `asin` feeds `<= 2^32`).
+///
+/// A floor root is a unique integer, so any correct algorithm is
+/// bit-identical to any other; this one is chosen for the LX7 (Gitea
+/// #938). The digit-by-digit forms below ran 24 iterations — ~310
+/// straight-line instructions once unrolled, ~350 cycles per `sqrt()` on
+/// the S3 — where two Newton steps and a floor fix-up need two hardware
+/// divides and a dozen multiplies:
+///
+/// 1. normalise by an EVEN shift so the top set bit is bit 46 or 47 —
+///    `sqrt(m) ∈ [2^23, 2^24)`, and `floor(sqrt(n)) = floor(sqrt(m)) >> sh/2`
+///    exactly (floor commutes with dividing by a power of two);
+/// 2. seed from [`SQRT_SEED`] on the top 8 bits (within ~0.4 %);
+/// 3. one Newton step on the top 32 bits — `m/r0 ≈ (hi / (r0 >> 8)) << 8`,
+///    a 32-bit divide — brings the error under ~400 units;
+/// 4. one Newton step on the EXACT 64-bit remainder, `(m − r1²)/(2·r1)`
+///    as `(rem >> 8) / (r1 >> 7)` in 32 bits (`|rem| < 2^35`), brings it
+///    under about one;
+/// 5. the floor is then settled on the 32-bit remainder `m − r²` (which
+///    fits, r being within a couple of units), a loop of at most two steps
+///    either way with no 64-bit square per step.
 ///
 /// Deliberately NOT `#[inline]`, on any of the three functions here.
 /// Marking them inline lets `sqrt` be pulled into `hypot`/`hypot3`/`asin`
@@ -221,21 +301,53 @@ pub fn sqrt(x: Fx) -> Fx {
 /// on `dire-spider-2d` (6 sin + 3 hypot + 2 cos + 1 atan2 per pixel) while
 /// buying nothing on `crosstown-traffic-2d` (24 `dist` per pixel) — both
 /// measured with `luxel bench`, 512 px x 400 frames, best of 9-12
-/// interleaved rounds, 2026-09-06. See [`NARROW_WORD`].
+/// interleaved rounds, 2026-09-06.
 #[cfg_attr(feature = "iram-math", link_section = ".rwtext")]
 #[cfg_attr(feature = "iram-math", inline(never))]
 fn isqrt48(n: u64) -> u32 {
-    if NARROW_WORD {
-        isqrt48_narrow(n)
-    } else {
-        isqrt48_wide(n)
+    debug_assert!(n < 1u64 << 48);
+    if n == 0 {
+        return 0;
     }
+    // `u64::leading_zeros` is a ~30-instruction software sequence on
+    // Xtensa; the u32 form is one `nsau`.
+    let nh = (n >> 32) as u32;
+    let lz = if nh != 0 {
+        nh.leading_zeros()
+    } else {
+        32 + (n as u32).leading_zeros()
+    };
+    let sh = (lz - 16) & !1; // even, 0..=30
+    let m = n << sh; // [2^46, 2^48)
+    let hi = (m >> 16) as u32; // [2^30, 2^32)
+    let r0 = (SQRT_SEED[(hi >> 24) as usize - 64] as u32) << 8; // ≈ sqrt(m)
+    let r1 = (r0 + ((hi / (r0 >> 8)) << 8)) >> 1;
+    let rem = m.wrapping_sub((r1 as u64) * (r1 as u64)) as i64;
+    let delta = ((rem >> 8) as i32) / ((r1 >> 7) as i32);
+    let mut r = r1.wrapping_add(delta as u32);
+    // The remainder of the corrected root, `m − r²`, is `rem − δ·(2·r1 + δ)`
+    // and is within a few multiples of `r` of zero (r is within a couple of
+    // units of the root, see above), so it fits i32 and every step below is
+    // 32-bit: stepping r down adds `2r − 1` to it, stepping up takes
+    // `2r + 1` away. No 64-bit square per step.
+    let mut rem = (rem as i32).wrapping_sub(delta.wrapping_mul(((r1 << 1) as i32).wrapping_add(delta)));
+    while rem < 0 {
+        rem += ((r << 1) - 1) as i32;
+        r -= 1;
+    }
+    while rem >= ((r << 1) + 1) as i32 {
+        rem -= ((r << 1) + 1) as i32;
+        r += 1;
+    }
+    r >> (sh / 2)
 }
 
 /// Wide form: the classic bitwise integer square root on 64-bit words —
 /// one compare / add / subtract per iteration on any target with a 64-bit
 /// ALU, and it skips all the leading zero digit-pairs up front. This is the
-/// original implementation, unchanged.
+/// original implementation, unchanged. Since Gitea #938 it is a reference
+/// the tests hold [`isqrt48`] to, not a code path.
+#[allow(dead_code)]
 fn isqrt48_wide(n: u64) -> u32 {
     let mut x = n;
     let mut c: u64 = 0;
@@ -259,7 +371,9 @@ fn isqrt48_wide(n: u64) -> u32 {
 /// first. The classic invariant `rem <= 2·root` bounds every value:
 /// `root < 2^24` and `rem <= 2^25`, so `rem << 2 <= 2^27` — all of it in
 /// 32-bit registers, where [`isqrt48_wide`] does 64-bit compares, adds and
-/// subtracts (3–4 Xtensa instructions each) for ~24 iterations.
+/// subtracts (3–4 Xtensa instructions each) for ~24 iterations. The device
+/// path from #312 until #938; now a second reference for the tests.
+#[allow(dead_code)]
 fn isqrt48_narrow(n: u64) -> u32 {
     debug_assert!(n < 1u64 << 48);
     let hi = (n >> 32) as u32; // bits 32..48
@@ -475,6 +589,19 @@ pub fn exp(x: Fx) -> Fx {
 /// usual sign rule (pow(-2, 3) == -8). Negative base with a fractional
 /// exponent yields Fx::MIN — the PB does log2(negative) = MIN and lets it
 /// propagate (oracle-verified 2026-07-07, pow_neg2_half/pow_neg2_15).
+///
+/// **A positive integer exponent up to [`POW_INT_MAX`] is repeated 16.16
+/// multiplication instead** (Gitea #938): `pow(x, 1) == x`, `pow(x, 2) ==
+/// x * x`, `pow(2, 10) == 1024` exactly, where the log/exp route was off by
+/// its 16-bit `log2` fraction (`pow(2, 10)` read 1023.9) and cost ~480
+/// cycles on the S3 against ~10 per multiply. The magnitude is multiplied
+/// and the sign restored from the exponent's parity, so `pow(-x, n) ==
+/// ±pow(x, n)` holds exactly as it did on the log/exp route (an operator
+/// chain `x*x*x` on a negative `x` can differ from this by one LSB — it
+/// floors each signed product toward −∞). Overflow saturates to `Fx::MAX`,
+/// or `Fx::MIN` for a negative result, as before. This is a deliberate
+/// change of bits for the integer-exponent case: more accurate, not
+/// bit-identical to the pre-#938 output.
 #[cfg_attr(feature = "iram-math", link_section = ".rwtext")]
 #[cfg_attr(feature = "iram-math", inline(never))]
 pub fn pow(base: Fx, e: Fx) -> Fx {
@@ -483,6 +610,12 @@ pub fn pow(base: Fx, e: Fx) -> Fx {
     }
     if base.raw() == 0 {
         return Fx::ZERO;
+    }
+    if e.raw() & 0xFFFF == 0 {
+        let n = e.raw() >> 16;
+        if n >= 1 && n <= POW_INT_MAX {
+            return pow_int(base, n as u32);
+        }
     }
     if base.raw() < 0 {
         if e.frac() != Fx::ZERO {
@@ -498,6 +631,35 @@ pub fn pow(base: Fx, e: Fx) -> Fx {
         return if e.to_int_trunc() & 1 == 1 { -mag } else { mag };
     }
     exp2(e * log2(base))
+}
+
+/// The largest integer exponent [`pow`] evaluates by repeated
+/// multiplication. Above it the log/exp route is both cheaper and, with
+/// `(n−1)` truncations of a sub-unit base no longer negligible, about as
+/// accurate.
+pub const POW_INT_MAX: i32 = 16;
+
+/// `base^n` for `n ∈ 1..=POW_INT_MAX` by repeated multiplication of the
+/// magnitude; see [`pow`]. Each step is one widening 32x32 multiply and a
+/// saturation test on the high word.
+#[cfg_attr(feature = "iram-math", link_section = ".rwtext")]
+#[cfg_attr(feature = "iram-math", inline(never))]
+fn pow_int(base: Fx, n: u32) -> Fx {
+    let b = base.raw().unsigned_abs(); // <= 2^31
+    let neg = base.raw() < 0 && n & 1 == 1;
+    let mut acc: u32 = b;
+    let mut i = 1;
+    while i < n {
+        let p = ((acc as u64) * (b as u64)) >> 16;
+        if p > i32::MAX as u64 {
+            return if neg { Fx::MIN } else { Fx::MAX };
+        }
+        acc = p as u32;
+        i += 1;
+    }
+    // `acc` exceeds i32::MAX only for n == 1 and base == Fx::MIN, whose
+    // negation IS Fx::MIN.
+    Fx::from_raw(if neg { (acc as i32).wrapping_neg() } else { acc as i32 })
 }
 
 /// atan(x) via odd minimax polynomial (error ≈ 1e-4 rad).
@@ -960,6 +1122,26 @@ mod tests {
             let num = lcg.next() % (d + 1);
             check_div_shift16(num, d);
         }
+        // Gitea #938: the narrow form's two paths and their seams — small
+        // divisors (one divide), and every normalisation shift of the big
+        // ones with numerators at and just under the divisor, where the
+        // estimate's overshoot is largest.
+        for _ in 0..200_000 {
+            let bits = 1 + lcg.next() % 31; // d ∈ [1, 2^31]
+            let d = ((lcg.next() | (1 << 31)) >> (32 - bits)).max(1);
+            let num = match lcg.next() % 4 {
+                0 => d,
+                1 => d - 1,
+                2 => d / 2,
+                _ => lcg.next() % (d + 1),
+            };
+            check_div_shift16(num, d);
+        }
+        for d in [1u32 << 16, (1 << 16) - 1, (1 << 16) + 1, 1 << 30, (1 << 31) - 1, 1 << 31] {
+            for num in [0, 1, d / 3, d / 2, d - 1, d] {
+                check_div_shift16(num, d);
+            }
+        }
         // Exhaustive over the whole domain `sin` uses: r ∈ [0, 2π_raw).
         for r in 0..411_775u32 {
             check_div_shift16(r, 411_775);
@@ -998,6 +1180,19 @@ mod tests {
             let hi = (lcg.next() as u64) & 0xFFFF;
             let lo = lcg.next() as u64;
             ns.push((hi << 32) | lo);
+        }
+        // Gitea #938: the Newton form's seams — every even normalisation
+        // shift, every seed-table row, and the floor boundary from both
+        // sides at every magnitude.
+        for _ in 0..300_000 {
+            let bits = 1 + lcg.next() % 48;
+            let w = ((lcg.next() as u64) << 32) | lcg.next() as u64;
+            let n = (w | (1 << 63)) >> (64 - bits);
+            ns.push(n);
+            let r = reference_isqrt64(n) as u64;
+            ns.push(r * r);
+            ns.push(r * r + 2 * r); // (r+1)² − 1
+            ns.push((r * r + 2 * r + 1).min((1 << 48) - 1));
         }
         for &n in &ns {
             let n = n & ((1u64 << 48) - 1);
@@ -1091,6 +1286,32 @@ mod tests {
                 "sin_turns raw {r}"
             );
             assert_eq!(cos_turns(x).raw(), reference_sin_turns(x + Fx::from_raw(1 << 14)).raw());
+        }
+    }
+
+    /// `rad_to_turns` against the two-step i64 reduction it replaced
+    /// (Gitea #938): exhaustive over one period and its neighbours at both
+    /// ends of the word, then random over the whole word.
+    #[test]
+    fn rad_to_turns_matches_the_i64_reduction() {
+        let want = |x: i32| -> i32 {
+            let r = Fx::from_raw(x).mod_floor(Fx::from_raw(R_PI2_RAW as i32)).raw() as i64;
+            ((r << 16) / R_PI2_RAW) as i32
+        };
+        let d = R_PI2_RAW as i32;
+        for r in 0..d {
+            assert_eq!(rad_to_turns(r), want(r), "turns of {r}");
+            // the same phase a long way up and down the word
+            for k in [-5215i32, -1, 1, 2, 5215] {
+                let x = r.wrapping_add(k.wrapping_mul(d));
+                assert_eq!(rad_to_turns(x), want(x), "turns of {x} (r {r}, k {k})");
+            }
+        }
+        for &x in &edge_raws() {
+            assert_eq!(rad_to_turns(x), want(x), "turns of {x}");
+        }
+        for &x in &random_raws(400_000) {
+            assert_eq!(rad_to_turns(x), want(x), "turns of {x}");
         }
     }
 
@@ -1247,6 +1468,13 @@ mod tests {
         for &b in &bases {
             for &e in &exps {
                 let (fb, fe) = (Fx::from_raw(b), Fx::from_raw(e));
+                // Integer exponents 1..=POW_INT_MAX are the repeated
+                // multiplication of #938, pinned by `pow_int_is_repeated_
+                // multiplication` below; every other exponent is still the
+                // log/exp route and must match the i64 form.
+                if e & 0xFFFF == 0 && (1..=POW_INT_MAX).contains(&(e >> 16)) {
+                    continue;
+                }
                 assert_eq!(
                     pow(fb, fe).raw(),
                     reference_pow(fb, fe).raw(),
@@ -1254,6 +1482,85 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Gitea #938: a small positive integer exponent is the product chain,
+    /// exactly — `pow(x, 1) == x`, `pow(x, 2) == x * x`, whole powers of
+    /// whole numbers are whole — with the log/exp route's sign rule and
+    /// saturation, and never further from the real power than that route
+    /// was.
+    #[test]
+    fn pow_int_is_repeated_multiplication() {
+        let mut bases: Vec<i32> = edge_raws();
+        bases.extend(random_raws(2_000));
+        for &b in &bases {
+            let fb = Fx::from_raw(b);
+            assert_eq!(pow(fb, Fx::ONE), fb, "pow({b}, 1)");
+            let mag = b.unsigned_abs() as u64;
+            // `x * x` wraps where `pow` saturates, so the identity holds
+            // below the square's overflow (|x| < 181.02)
+            if (mag * mag) >> 16 <= i32::MAX as u64 {
+                assert_eq!(pow(fb, Fx::from_int(2)), fb * fb, "pow({b}, 2)");
+            }
+            // the chain of magnitudes, sign by parity, saturating
+            for n in 1..=POW_INT_MAX as u32 {
+                let mut acc = mag;
+                let mut sat = false;
+                for _ in 1..n {
+                    acc = (acc * mag) >> 16;
+                    if acc > i32::MAX as u64 {
+                        sat = true;
+                        break;
+                    }
+                }
+                let neg = b < 0 && n & 1 == 1;
+                let want = if sat {
+                    if neg {
+                        Fx::MIN
+                    } else {
+                        Fx::MAX
+                    }
+                } else if neg {
+                    Fx::from_raw((acc as i32).wrapping_neg())
+                } else {
+                    Fx::from_raw(acc as i32)
+                };
+                assert_eq!(pow(fb, Fx::from_int(n as i32)), want, "pow({b}, {n})");
+            }
+        }
+        // whole powers of small whole numbers are exact
+        for b in -12i32..=12 {
+            for n in 1..=POW_INT_MAX {
+                let exact = (b as i64).pow(n as u32);
+                let want = if exact > 32_767 {
+                    Fx::MAX
+                } else if exact < -32_768 {
+                    Fx::MIN
+                } else {
+                    Fx::from_int(exact as i32)
+                };
+                assert_eq!(pow(Fx::from_int(b), Fx::from_int(n)), want, "pow({b}, {n})");
+            }
+        }
+        // and on sub-unit bases the chain sits within its truncation bound
+        // of the real power: every step floors, so the result is never
+        // above it and at most (n−1) LSBs below (checked against f64)
+        let mut lcg = Lcg::new();
+        for _ in 0..20_000 {
+            let b = (lcg.next() & 0xFFFF) as i32; // [0, 1)
+            let n = 2 + (lcg.next() % (POW_INT_MAX as u32 - 1)) as i32;
+            let (fb, fe) = (Fx::from_raw(b), Fx::from_int(n));
+            let real = (b as f64 / 65536.0).powi(n);
+            let got = pow(fb, fe).to_f64();
+            let ulp = 1.0 / 65536.0;
+            assert!(
+                got <= real + 1e-12 && got >= real - (n as f64) * ulp,
+                "pow({b}, {n}): chain {got} vs real {real}"
+            );
+        }
+        // the exponent ONE past the cap is still the log/exp route
+        let over = Fx::from_int(POW_INT_MAX + 1);
+        assert_eq!(pow(Fx::from_f64(1.5), over), reference_pow(Fx::from_f64(1.5), over));
     }
 
     // ---------------------------------------------------------------

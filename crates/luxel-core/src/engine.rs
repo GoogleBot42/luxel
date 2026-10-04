@@ -757,9 +757,13 @@ impl Engine {
         (*ctx).insn_at = 0;
         // The error slot is reached only through `ctx.err`: taking a second
         // `&mut` to the caller's local would invalidate the pointer the
-        // helpers write through.
+        // helpers write through. Cleared only when something is in it — a
+        // `VmError` holds a `String`, so an unconditional store is a drop
+        // check per pixel.
         let err = &mut *(*ctx).err;
-        *err = None;
+        if err.is_some() {
+            *err = None;
+        }
         np.call.enter(addr, ctx, abi, args);
         if (*ctx).status == crate::jit::STATUS_OK {
             return Ok(());
@@ -1308,7 +1312,7 @@ impl Engine {
                 c[axis] = Fx::from_raw(v as i32);
             }
         }
-        self.vm.map = Some(MapData { dims, coords, grid: None });
+        self.vm.map = Some(MapData { dims, coords, grid: None, axes: Vec::new() });
         if !self.requires_violated {
             self.render = self.resolve_render_now();
         }
@@ -2015,8 +2019,12 @@ impl Engine {
                     Some(s) => select_coords(c, s, mid),
                     None => c,
                 };
+                // `apply_transform` is out of line; most patterns never
+                // install a transform, so the flag is read here and the
+                // call skipped (Gitea #938).
                 let p = match render {
                     RenderKind::R1(_) => c,
+                    _ if !self.vm.transform_active => c,
                     _ => self.vm.apply_transform(c),
                 };
                 args[1] = Value::Num(p[0]);

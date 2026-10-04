@@ -91,11 +91,18 @@ fn the_direct_set_is_the_tier_one_numeric_set() {
     // docs/jit-design.md §3.5 names seventeen pure ops and five ctx-taking
     // ones; `fract`, `lerp` and `hsv24` come along because they ARE `frac`,
     // `mix` and `hsv` (same `Builtin`, different spelling). Gitea #841
-    // added `saturate` (pure), `setPixel` and `paint` (ctx-taking).
+    // added `saturate` (pure), `setPixel` and `paint` (ctx-taking). Gitea
+    // #938 added every remaining pure numeric arm of `builtin_hot` —
+    // `length`/`length3` come along because they ARE `hypot`/`hypot3` —
+    // and `perlin` (ctx-taking, for the wrap state).
     let mut want = vec![
         "abs", "ceil", "clamp", "cos", "floor", "frac", "fract", "hsv", "hsv24", "lerp", "max",
         "min", "mix", "mod", "paint", "prng", "random", "round", "rgb", "saturate", "setPixel",
         "sin", "sqrt", "square", "time", "triangle", "trunc", "wave",
+        // #938
+        "acos", "asin", "atan", "atan2", "dist", "dist3", "dot", "dot3", "exp", "hash", "hash2",
+        "hypot", "hypot3", "length", "length3", "log", "log2", "map", "perlin", "pow", "sign",
+        "simplex2", "simplex3", "smoothstep", "step", "tan",
     ];
     want.sort_unstable();
     assert_eq!(names, want);

@@ -56,7 +56,10 @@ const GOLDENS: [Golden; 5] = [
     Golden { name: "rainbow.js", bytes: 160, pool: 4, fns: 2, digest: 0x18af292747f563fd },
     Golden { name: "snake.js", bytes: 1172, pool: 12, fns: 8, digest: 0xb659400b6f6cff15 },
     Golden { name: "snake-2d.js", bytes: 11256, pool: 51, fns: 19, digest: 0xd8a73584af0e02d7 },
-    Golden { name: "perlin-fire-wind-tunnel.js", bytes: 2536, pool: 22, fns: 10, digest: 0x7acb31222a526137 },
+    // Re-pinned for Gitea #938: its `perlin(...)` calls go direct (ctx +
+    // four words in registers) instead of boxing four arguments into the
+    // frame scratch for the generic wrapper — 104 bytes less image.
+    Golden { name: "perlin-fire-wind-tunnel.js", bytes: 2432, pool: 22, fns: 10, digest: 0x76b1ddddea324259 },
     Golden { name: "bulk-canvas-ripples-2d.js", bytes: 3576, pool: 19, fns: 11, digest: 0xafeb58cfc53c5133 },
 ];
 
