@@ -2774,6 +2774,93 @@ The full gallery soak on the same build agrees: `tools/hw-bench.mjs`,
 out. The sweep's lowest `heap_free` moved the other way, 83,448 → 59,668 B;
 still far above the ~20 KB floor and nothing errored, unexplained, Gitea #368.
 
+## Builtins on metal (2026-10-04, Gitea #938)
+
+Jeremy: *"massively improve the performance of patterns by improving the
+performance of the builtins the patterns use"*, with `2D sinc(theta)/theta`
+on the 128x128 Seengreat as the case in point — 2 fps, 585 ms in the VM,
+~8,600 cycles per pixel at 16384 px. `tools/builtinbench.mjs` (new) prices
+ONE call of each builtin on the board, JIT native, by the opbench slope
+method with the empty loop body subtracted; these are its rows before and
+after, Seengreat HUB75 S3 at 16384 px (2x2 chain), 240 MHz, master
+`420ad7f1` against this branch. Everything below `pow` is bit-exact to the
+old output and pinned by sweeps against the pre-#938 i64 forms; `pow` with
+an integer exponent is a deliberate change (see the row).
+
+| builtin | before, cycles/call | after | how |
+|---|---:|---:|---|
+| `sign(x)`, `step(e, x)` | 286, 294 | 25, 25 | direct entry — the ~280 cycles WAS the generic wrapper (box the args into the frame scratch, enter the wrapper, zero a `[Value; 16]`, walk `builtin_ladder`, box the result) |
+| `hash(x)` | 281 | 48 | direct |
+| `smoothstep`, `map` | 404, 435 | 78, 64 | direct (N3, N5) |
+| `sqrt(x)` | 351 | 172 | seed table + two Newton steps + 32-bit floor fix-up, two hardware divides, where the digit-by-digit loop unrolled to ~310 instructions |
+| `hypot(x, y)` / `dist` | 660 / 727 | 193 / 234 | direct + the new `sqrt` |
+| `sin(x)` / `cos(x)` | 355 / 355 | 164 / 165 | the radian reduction is one widening multiply by `floor(2^48/2π)` + a 32-bit fix-up, replacing a hardware remainder and a 17-step restoring division (~240 of the 355); `sin_turns` wraps by mask |
+| `wave(t)` | 135 | 146 | unchanged kernel (noise) |
+| `tan(x)` | 1009 | 382 | direct + the two above |
+| `atan(x)` / `atan2(y, x)` | 449 / 619 | 127 / 179 | direct + `div_shift16` on the hardware divider (one `quou` below 2^16, normalise-estimate-correct above) |
+| `asin(x)` / `acos(x)` | 855 / 837 | 284 / 326 | direct + the new `sqrt` and `atan2` |
+| `pow(x, 3)` | 785 | 119 | direct + **integer exponents 1..=16 are repeated 16.16 multiplication** (`pow(x,1) == x`, `pow(x,2) == x*x`, `pow(2,10) == 1024` exactly; the log/exp route gave 1023.9) — NOT bit-identical to before, more accurate |
+| `pow(x, 2.5)` | 801 | 511 | direct; the log/exp route unchanged |
+| `exp(x)` / `log(x)` / `log2(x)` | 359 / 661 / 648 | 116 / 404 / 408 | direct; `log2`'s 16-step squaring loop stays (bit-exact, ~350 cycles) |
+| `simplex2` / `simplex3` / `perlin` | 617 / 918 / 1099 | 314 / 586 / 774 | direct (N3 / N4 / C4) |
+| `x / y`, general | 129 | 107 | the 48/32 division in 32-bit halves (two `quou`) when the quotient fits; `__divdi3` only for a wrapping quotient |
+| `x / 3`, `x * y` | 44, 10 | 45, 10 | unchanged |
+| `abs clamp min mix mod floor` | 20–38 | 19–40 | unchanged (already direct; the ~20 is the call) |
+| `hsv`, `rgb` | 98, 43 | 111, 59 | unchanged (noise) |
+
+Patterns, same board, `vm_us` per frame median of 7 samples (fps is the
+displayed rate; the 128x128 ring rescans at 84 Hz):
+
+| pattern | master 420ad7f1 | this branch | speedup |
+|---|---:|---:|---:|
+| `2D sinc(theta)/theta`, source as shipped | 585–655 ms (2 fps) | 250 ms (4 fps) | 2.3–2.6× |
+| `2D sinc(theta)/theta`, with its six per-frame cosines hoisted (the shipped source now) | 475 ms (3 fps)* | **177 ms (6 fps)** | **3.3×** (vs 585 as shipped) |
+| `kaleidoscope-2d` | 560 ms | 336–366 ms | 1.6× |
+| `radar-2d` | 544 ms | 244 ms | 2.2× |
+| `interference-2d` | 386 ms | 308 ms | 1.25× |
+| `distance-function-kaleidoscope-2` | 518 ms | 383 ms | 1.35× |
+| `perlin-fire-wind-tunnel` | 275 ms | 172 ms | 1.6× |
+| `stargen-polar-2d` | 168 ms | 114 ms | 1.5× |
+| `blue-holiday-candle-2d` | 229 ms | 188 ms | 1.2× |
+| `spiral-twirls-star-2d` | 148 ms | 101 ms | 1.5× |
+| `dire-spider-2d` | 1,125 ms | 917 ms | 1.2× |
+| `tixy` | 106 ms | 91 ms | 1.15× |
+| `aurora-2d` (bulk `fillNoise`, no builtin calls per pixel) | 90 ms | 94 ms | — |
+| `fractal-flower`, `rainbow` | 16.5 / — ms | 15.4 / 37.9 ms | — |
+| empty `render2D(i, x, y) { rgb(x, y, 0) }` | 38.9 ms (22 fps) | 33.8 ms (25 fps) | the per-pixel floor, below |
+
+\* the hoisted source on master is the baseline's own measurement of the
+hand-hoisted pattern; the pattern-side change is byte-identical in output
+(15 host frames, 0 differing bytes).
+
+**The per-pixel floor is the next ceiling.** An empty `render2D` costs
+33.8 ms at 16384 px — ~495 cycles per pixel of engine work around a
+native call that does nothing — so no pattern on this panel can pass ~29
+fps whatever its builtins cost. The split (`web/.scratch`-style probes,
+JIT on): 380 cycles for a 1D `render(index) { rgb(0,0,0) }` (the pixel
+loop + the native entry + the `rgb`), +115 for the 2D coordinates, and
+968 interpreted. Two things were taken off it here: the procedural grid
+map normalised each pixel with two i64 divisions (`__divdi3` ROM calls)
+and two 32-bit ones — a `(w + h)`-word axis table makes `MapData::coord`
+one divide and two loads (38.9 → 33.8 ms); and the loop no longer calls
+the out-of-line `apply_transform` or clears the error slot when there is
+nothing to clear. What remains is the Rust loop body itself — ~300
+instructions per pixel of `Value`-typed argument shuffling, the
+coordinate copy through `select_coords`, two calls (`pixel_coords`,
+`native_enter` → the `dyn NativeCall` → the generated prologue) and the
+three `quantize`s — and is the obvious next lever: a raw-word pixel loop
+for the native path, or the loop moved into generated code.
+
+**What was ruled out.** A compiler pass hoisting frame-invariant
+expressions out of `render*` (the fix sinc needed) would touch 2.4 % of
+the library's per-pixel builtin calls (`cargo run -p luxel-cli --example
+hoistcensus`, docs/tools.md) — sinc's six invariant `cos()` sit inside a
+helper function and need inlining first — so sinc got the hoist by hand
+and no pass was built. SIMD (the S3's PIE unit, which the HUB75 packer
+uses) has no 32x32 vector multiply, so 16.16 arithmetic does not map onto
+it and a lockstep-four-pixels JIT would be a compiler rewrite for a
+kernel set that is call-bound, not ALU-bound; not pursued.
+
 ## JIT on metal (2026-09-24, Gitea #665/#666)
 
 The first bytes of emitted code any real chip has executed. Two boards, the
