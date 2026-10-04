@@ -1988,3 +1988,38 @@ fn chunked_frames_match_whole_frames() {
     // a call with nothing pending is a no-op
     assert!(e.frame_step(1));
 }
+
+// Gitea #938: a grid map's coordinates come from a precomputed axis table
+// (one divide and two loads per pixel instead of two i64 divisions); the
+// words must be exactly the `(v·65535 + span/2) / span` the formula gave,
+// at every pixel, every size — including the 128x128 and 256x64 panels and
+// the degenerate single-column/row grids.
+#[test]
+fn grid_map_axis_table_is_the_normalisation_formula_exactly() {
+    fn norm(v: usize, n: usize) -> i32 {
+        if n <= 1 {
+            0
+        } else {
+            let span = n as i64 - 1;
+            ((v as i64 * 65_535 + span / 2) / span) as i32
+        }
+    }
+    let src = "export function render2D(index, x, y) { rgb(x, y, 0) }";
+    for (w, h) in [(128u16, 128u16), (256, 64), (64, 64), (5, 3), (1, 7), (7, 1), (1, 1), (300, 2)] {
+        let n = w as u32 * h as u32;
+        let mut e = Engine::new(src, n, 1).unwrap();
+        e.set_grid_map(w, h);
+        let m = e.installed_map().expect("grid installed");
+        assert_eq!(m.axes.len(), w as usize + h as usize, "{w}x{h} axes");
+        for i in 0..n as usize {
+            let (col, row) = (i % w as usize, i / w as usize);
+            let c = m.coord(i);
+            assert_eq!(c[0].raw(), norm(col, w as usize), "{w}x{h} px {i} x");
+            assert_eq!(c[1].raw(), norm(row, h as usize), "{w}x{h} px {i} y");
+            assert_eq!(c[2].raw(), 0);
+        }
+        // past the end: zeros, as before
+        assert_eq!(m.coord(n as usize), [Fx::ZERO; 3]);
+        assert_eq!(m.coord(n as usize + 12345), [Fx::ZERO; 3]);
+    }
+}

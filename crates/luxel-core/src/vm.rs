@@ -1538,12 +1538,35 @@ pub struct MapData {
     /// here (Gitea #258). Normalization matches [`Engine::set_map`] exactly
     /// (0..65535/65536 per axis, `(v·65535 + span/2)/span`).
     pub grid: Option<(u16, u16)>,
+    /// The grid's normalised axis values, `w` columns then `h` rows —
+    /// `(w + h)` words, 1 KB for a 128x128 panel — so [`MapData::coord`] is
+    /// one divide and two loads instead of the normalisation's two i64
+    /// divisions per pixel (`__divdi3` ROM calls on Xtensa: ~250 of the
+    /// ~570 cycles an EMPTY render2D cost per pixel on the S3 at 16384 px,
+    /// Gitea #938). Empty for a `coords` map.
+    pub axes: Vec<Fx>,
 }
 
 impl MapData {
     /// A procedural `w`×`h` row-major grid (2D).
     pub fn grid(w: u16, h: u16) -> MapData {
-        MapData { dims: 2, coords: Vec::new(), grid: Some((w.max(1), h.max(1))) }
+        let (w, h) = (w.max(1), h.max(1));
+        let mut axes = Vec::with_capacity(w as usize + h as usize);
+        axes.extend((0..w as usize).map(|c| Self::norm(c, w as usize)));
+        axes.extend((0..h as usize).map(|r| Self::norm(r, h as usize)));
+        MapData { dims: 2, coords: Vec::new(), grid: Some((w, h)), axes }
+    }
+
+    /// `v / (n − 1)` as the 16.16 fraction a stored grid map carries:
+    /// `(v·65535 + span/2) / span`, matching [`crate::engine::Engine::set_map`].
+    #[inline]
+    fn norm(v: usize, n: usize) -> Fx {
+        if n <= 1 {
+            Fx::ZERO
+        } else {
+            let span = n as i64 - 1;
+            Fx::from_raw(((v as i64 * 65_535 + span / 2) / span) as i32)
+        }
     }
 
     /// Number of pixels the map covers.
@@ -1560,20 +1583,17 @@ impl MapData {
         match self.grid {
             Some((w, h)) => {
                 let (w, h) = (w as usize, h as usize);
-                let (col, row) = (i % w, i / w);
+                let row = i / w;
                 if row >= h {
                     return [Fx::ZERO; 3];
                 }
-                #[inline]
-                fn norm(v: usize, n: usize) -> Fx {
-                    if n <= 1 {
-                        Fx::ZERO
-                    } else {
-                        let span = n as i64 - 1;
-                        Fx::from_raw(((v as i64 * 65_535 + span / 2) / span) as i32)
-                    }
+                let col = i - row * w;
+                // `axes` is built by `grid()` for exactly this `(w, h)`; a
+                // hand-built `MapData` without it falls back to the formula.
+                match (self.axes.get(col), self.axes.get(w + row)) {
+                    (Some(&x), Some(&y)) => [x, y, Fx::ZERO],
+                    _ => [Self::norm(col, w), Self::norm(row, h), Fx::ZERO],
                 }
-                [norm(col, w), norm(row, h), Fx::ZERO]
             }
             None => self.coords.get(i).copied().unwrap_or([Fx::ZERO; 3]),
         }
