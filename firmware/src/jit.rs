@@ -549,6 +549,12 @@ mod abi {
 pub struct XtensaCall;
 
 impl NativeCall for XtensaCall {
+    /// The addresses are real code in the exec arena: the engine's pixel
+    /// loop may call a register-convention entry through a typed pointer.
+    fn direct(&self) -> bool {
+        true
+    }
+
     unsafe fn enter(&self, addr: usize, ctx: *mut JitCtx, a: NativeAbi, args: &[i32]) {
         let p = addr as *const ();
         let g = |i: usize| args.get(i).copied().unwrap_or(0);

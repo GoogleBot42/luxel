@@ -115,6 +115,27 @@ pub trait NativeCall {
     /// # Safety
     /// See the trait-level contract.
     unsafe fn enter(&self, addr: usize, ctx: *mut JitCtx, abi: NativeAbi, args: &[i32]);
+
+    /// True when `addr` IS machine code of the running target that an
+    /// `extern "C"` function pointer may call outright — the device's
+    /// caller. The ISA-model caller of the host tests leaves this false:
+    /// its "addresses" are model memory. The engine's pixel loop uses it to
+    /// skip one call level (the `dyn` hop plus `enter`'s marshalling) per
+    /// pixel for a register-convention entry (Gitea #938); every other call
+    /// still goes through [`NativeCall::enter`].
+    fn direct(&self) -> bool {
+        false
+    }
+}
+
+/// `extern "C"` pointer shapes of a `ParamConv::Regs` entry, for the direct
+/// pixel call. Mirrors the firmware's `abi` module.
+pub mod regs_abi {
+    use super::JitCtx;
+    pub type F1 = unsafe extern "C" fn(*mut JitCtx, i32) -> i32;
+    pub type F2 = unsafe extern "C" fn(*mut JitCtx, i32, i32) -> i32;
+    pub type F3 = unsafe extern "C" fn(*mut JitCtx, i32, i32, i32) -> i32;
+    pub type F4 = unsafe extern "C" fn(*mut JitCtx, i32, i32, i32, i32) -> i32;
 }
 
 /// A whole program compiled to native code, plus the memory it lives in.

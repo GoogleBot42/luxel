@@ -1,5 +1,21 @@
 # Update log
 
+## 2026-10-04 — the native pixel loop marshals raw words (#938, PR #944)
+
+The per-pixel floor found in #938 (an empty `render2D` at 33.8 ms for 16384
+px on the S3) came partly from `render_pixels` keeping one loop for both
+paths: every pixel's arguments were boxed into `[Value; 4]` and unboxed
+again, the native entry re-resolved, the error slot cleared, and the call
+wrapped in `Result` plumbing. The loop is split — `render_pixels_interp`
+(the old body) and `render_pixels_native` (raw words, entry resolved once,
+context reset in place, error slot read only on a raised status, a
+register-convention entry called through a typed pointer via the new
+`NativeCall::direct()`), sharing `pixel_for`/`pixel_error` so
+`engine_diff`/`library_diff` keep proving the two paths equal. Empty
+`render2D` 33.8 → 28.4 ms, 1D 26.0 → 19.8, sinc 177 → 169, tixy 91 → 83,
+rainbow 37.9 → 34.6. The remaining ~400 cycles/px are the Rust loop body
+itself; moving the loop into generated code is Gitea #940.
+
 ## 2026-10-04 — builtins: every numeric builtin goes direct in the JIT, sin/sqrt/atan2/pow kernels rewritten, the grid map stops dividing per pixel (#938)
 
 Jeremy: *"massively improve the performance of patterns by improving the
