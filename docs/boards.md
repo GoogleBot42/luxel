@@ -2827,7 +2827,7 @@ displayed rate; the 128x128 ring rescans at 84 Hz):
 | `tixy` | 106 ms | 91 ms | 1.15× |
 | `aurora-2d` (bulk `fillNoise`, no builtin calls per pixel) | 90 ms | 94 ms | — |
 | `fractal-flower`, `rainbow` | 16.5 / — ms | 15.4 / 37.9 ms | — |
-| empty `render2D(i, x, y) { rgb(x, y, 0) }` | 38.9 ms (22 fps) | 33.8 ms (25 fps); **28.4 ms (PR #940)** | the per-pixel floor, below |
+| empty `render2D(i, x, y) { rgb(x, y, 0) }` | 38.9 ms (22 fps) | 33.8 ms (25 fps); **28.4 ms (PR #944)** | the per-pixel floor, below |
 
 \* the hoisted source on master is the baseline's own measurement of the
 hand-hoisted pattern; the pattern-side change is byte-identical in output
@@ -2851,7 +2851,7 @@ coordinate copy through `select_coords`, two calls (`pixel_coords`,
 three `quantize`s — and is the obvious next lever: a raw-word pixel loop
 for the native path, or the loop moved into generated code.
 
-*PR #940 took the first of those*: `render_pixels` is two loops now,
+*PR #944 took the first of those*: `render_pixels` is two loops now,
 `render_pixels_interp` (the old body) and `render_pixels_native` (raw
 16.16 words straight into the call, the entry address and ABI resolved
 once per pass, the context's budget fields reset in place, the error slot
@@ -2866,7 +2866,7 @@ cost; what is left is ~290 cycles of loop body for a call that does
 nothing, and the answer to that is the loop in generated code: the JIT
 emitting the per-frame pixel loop (coordinates from the axis table,
 `render*` as a direct call, the brush quantised straight into the frame)
-so the Rust side is one call per frame. Gitea #941.
+so the Rust side is one call per frame. Gitea #940.
 
 **What was ruled out.** A compiler pass hoisting frame-invariant
 expressions out of `render*` (the fix sinc needed) would touch 2.4 % of
