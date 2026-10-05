@@ -157,6 +157,11 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
   pattern). They routinely disagree, and the pattern number is the one that
   matters — `Vm::run`'s footprint against `call_builtin` in the flash
   instruction cache outweighs anything inside the loop (2026-09-06, #312/#318).
+  A BUILTIN or fmath kernel change → `tools/builtinbench.mjs` (cycles per
+  call, JIT on) plus a pattern basket at the panel's own pixel count; and
+  subtract the per-pixel ENGINE floor before crediting a pattern's time to
+  its builtins — an empty `render2D` is ~28 ms at 16384 px (docs/boards.md
+  "Builtins on metal", Gitea #940), a third of a 10 fps pattern's frame.
 - Validate the INSTRUMENT before trusting the reproduction. Three new counters
   on 2026-09-07 (a pass timer in the ISR, a pointer→frame map, a caller-side
   snapshot) each reported phantom failures that flattered the hypothesis — a
