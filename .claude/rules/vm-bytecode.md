@@ -109,7 +109,12 @@ paths:
   count instructions on the TAKEN path only, following each branch as the
   empty-render case would. Watch for `callx8` (each is an `entry`/`retw`
   window transition) and for ROM `memcpy`/`memset` calls, which
-  `copy_from_slice`/`resize` emit for even one or two words.
+  `copy_from_slice`/`resize` emit for even one or two words. Also for
+  anything `u64`/`i64`: a 64-bit divide is a `__divdi3` ROM call,
+  `u64::leading_zeros` is a ~30-instruction software sequence (the u32 form
+  is one `nsau`), and a u64 shift is a `ssl`/`src`/`sll` triple — split
+  into u32 halves on the hot path (2026-10-04, #938: `MapData::coord` did
+  two i64 divides per pixel, `isqrt48` a u64 clz).
 - **Judge an engine change on ops/px × cycles/op, never on ops/px alone.**
   Fewer, fatter operations are not automatically faster: a superinstruction
   that dispatches more expensively, or that costs `Vm::run` a register, can

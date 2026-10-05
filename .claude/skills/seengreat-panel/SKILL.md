@@ -426,7 +426,12 @@ ESP32 ELF — pass the S3 one).
   beside it) exhaust the 3-socket web pool — rows come back `TypeError:
   fetch failed` / `ECONNREFUSED` and `restore pattern failed`, which reads
   like a crash and is not. `tools/jit-diff.mjs` is single-socket with
-  `connection: close` + retry; copy that shape (Gitea #675).
+  `connection: close` + retry; copy that shape (Gitea #675). **`patbench.mjs`
+  also restores RAINBOW, not the pattern it found, and POSTs its `--pixels`
+  to `/api/config`** — on the panel the pixel count belongs to the layout
+  and the live pattern is Jeremy's; `tools/builtinbench.mjs` / `jit-diff.mjs`
+  re-post `GET /api/pattern.lxp` and never touch the count — use that shape
+  (2026-10-04).
 - **A POST fired right behind another request can come back with an EMPTY
   body AND not take effect** — the 3-socket pool again, but silent (a
   `POST /api/reboot` that returned nothing did NOT reboot on 2026-09-29;

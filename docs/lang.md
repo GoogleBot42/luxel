@@ -302,7 +302,7 @@ where PB compile-errors on arity).
 | `mod(x, y)` | floored modulo (sign of `y`); `%` is truncated (sign of `x`) |
 | `sqrt(x)` | sign-preserving |
 | `sin cos tan asin acos atan` `atan2(y, x)` | radians |
-| `pow(b, e)` `exp(x)` `log(x)` `log2(x)` | negative bases: integer exponents follow the sign rule, fractional yield −32768 (raw MIN, PB-exact); overflow saturates to ±32768, never wraps (PB-exact — the one non-wrapping corner of the arithmetic) |
+| `pow(b, e)` `exp(x)` `log(x)` `log2(x)` | negative bases: integer exponents follow the sign rule, fractional yield −32768 (raw MIN, PB-exact); overflow saturates to ±32768, never wraps (PB-exact — the one non-wrapping corner of the arithmetic). A whole-number exponent from 1 to 16 is evaluated as repeated multiplication (since 2026-10-04): `pow(x, 1)` is exactly `x`, `pow(x, 2)` exactly `x * x`, `pow(2, 10)` exactly 1024, with the sign from the exponent's parity — more accurate than the `2^(e·log2 b)` route every other exponent takes, and ~7x cheaper on the device |
 | `hypot(a, b)` `hypot3(a, b, c)` | wraps like all arithmetic |
 
 ### Waveforms, time, randomness
