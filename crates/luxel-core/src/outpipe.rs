@@ -398,55 +398,67 @@ pub struct Tiling {
 #[derive(Clone, Copy, Debug)]
 pub struct TileCursor {
     t: &'static Tiling,
-    /// Panel row (0..ph) and the current driver block's local column.
+    /// The grid cell the cursor is on, and the step one slot takes inside
+    /// the current driver block: along a row (`0, ±1`) for an upright or
+    /// upside-down tile, down a column (`±1, 0`) for a quarter turn.
+    row: i32,
+    col: i32,
+    dr: i32,
+    dc: i32,
+    /// Panel row (0..ph), the current driver block and its local column.
     ly: u16,
-    lx: u16,
-    /// Current driver block, and its cell origin / turns from `blocks`.
     b: u8,
-    ox: u16,
-    oy: u16,
-    turns: u8,
+    lx: u16,
 }
 
 impl TileCursor {
+    fn at(t: &'static Tiling, ly: u16, b: u8, lx: u16) -> TileCursor {
+        let (pw, ph) = (t.pw as i32, t.ph as i32);
+        let (ox, oy, turns) = t.blocks[b as usize];
+        let (lx_, ly_) = (lx as i32, ly as i32);
+        let ((sx, sy), (dr, dc)) = match turns {
+            1 => ((pw - 1 - ly_, lx_), (1, 0)),
+            2 => ((pw - 1 - lx_, ph - 1 - ly_), (0, -1)),
+            3 => ((ly_, ph - 1 - lx_), (-1, 0)),
+            _ => ((lx_, ly_), (0, 1)),
+        };
+        TileCursor { t, row: oy as i32 + sy, col: ox as i32 + sx, dr, dc, ly, b, lx }
+    }
+
     /// The grid cell `(row, col)` of the slot the cursor is on.
     #[inline(always)]
     pub fn cell(&self) -> (usize, usize) {
-        let (pw, ph) = (self.t.pw as usize, self.t.ph as usize);
-        let (lx, ly) = (self.lx as usize, self.ly as usize);
-        let (sx, sy) = match self.turns {
-            1 => (pw - 1 - ly, lx),
-            2 => (pw - 1 - lx, ph - 1 - ly),
-            3 => (ly, ph - 1 - lx),
-            _ => (lx, ly),
-        };
-        (self.oy as usize + sy, self.ox as usize + sx)
+        (self.row as usize, self.col as usize)
     }
 
-    /// Step to the next slot. Past the last slot the cursor wraps to slot
-    /// 0, which no caller reads (the loop bound is the frame).
+    /// Step to the next slot: one add per axis inside a driver block, a
+    /// block re-seat every `pw` slots. Past the last slot the cursor wraps
+    /// to slot 0, which no caller reads (the loop bound is the frame).
     #[inline(always)]
     pub fn advance(&mut self) {
         self.lx += 1;
         if self.lx < self.t.pw {
+            self.row += self.dr;
+            self.col += self.dc;
             return;
         }
-        self.lx = 0;
-        self.b += 1;
-        if self.b as usize >= self.t.drive() {
-            self.b = 0;
-            self.ly += 1;
-            if self.ly >= self.t.ph {
-                self.ly = 0;
+        self.reseat();
+    }
+
+    #[inline(never)]
+    fn reseat(&mut self) {
+        let mut b = self.b + 1;
+        let mut ly = self.ly;
+        if b as usize >= self.t.drive() {
+            b = 0;
+            ly += 1;
+            if ly >= self.t.ph {
+                ly = 0;
             }
         }
-        let (ox, oy, turns) = self.t.blocks[self.b as usize];
-        self.ox = ox;
-        self.oy = oy;
-        self.turns = turns;
+        *self = TileCursor::at(self.t, ly, b, 0);
     }
 }
-
 
 impl Tiling {
     /// Validate and build. `tiles` is the chain in ribbon order as
@@ -508,8 +520,7 @@ impl Tiling {
         let ly = i / fb_w;
         let x = i - ly * fb_w;
         let b = x / pw;
-        let (ox, oy, turns) = self.blocks[b];
-        Some(TileCursor { t: self, ly: ly as u16, lx: (x - b * pw) as u16, b: b as u8, ox, oy, turns })
+        Some(TileCursor::at(self, ly as u16, b as u8, (x - b * pw) as u16))
     }
 
     /// Pin the tiling for the life of the program. ~140 B, once per boot
