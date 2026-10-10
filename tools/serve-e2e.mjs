@@ -791,6 +791,30 @@ await fetch(`${panelBase}/api/playlist`, { method: "POST", body: `D 0\nI ${pid} 
 await fetch(`${panelBase}/api/playlist/play`, { method: "POST", body: "0" });
 await sleep(600);
 check("projection: a playlist item's `P` is applied on activation", (await projShape(panelBase)) === "along-y");
+
+// ---- the frame is in WIRE order on a chain (Gitea #948) ----
+// A HUB75 chain clocks its FAR panel out first, so on a 2x1 wall frame slot
+// 0 is a pixel of the right-hand tile — `/api/pixels` is what the driver
+// sends, not a row-major picture. A brightness ramp along x tells the two
+// halves apart; naming the chain the other way round must flip it.
+await fetch(`${panelBase}/api/playlist/stop`, { method: "POST" });
+await fetch(`${panelBase}/api/code`, {
+  method: "POST",
+  body: await lxpBody("", "export function render2D(index, x, y) { hsv(0, 0, x) }"),
+});
+const slot0 = async (chain) => {
+  const r = await postLayout(panelBase, `matrix 16 16 2 1 tl row 0 0\nchain ${chain}`);
+  await sleep(400);
+  const buf = new Uint8Array(await (await fetch(`${panelBase}/api/pixels`)).arrayBuffer());
+  return { ok: r.ok === true && buf.length === 512 * 3, v: buf[0], r };
+};
+const near = await slot0("0,0,0 1,0,0");
+const far = await slot0("1,0,0 0,0,0");
+check(
+  "wire order: slot 0 of a 2x1 chain is the far tile, and follows the chain",
+  near.ok && far.ok && near.v > 128 && far.v < 128,
+  `chain 0,0 then 1,0: v=${near.v}; reversed: v=${far.v} ${JSON.stringify(near.r).slice(0, 200)}`,
+);
 panel.kill();
 
 // ---- GET/POST /api/layout (Gitea #465) ----
