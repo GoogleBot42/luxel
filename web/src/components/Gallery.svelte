@@ -215,7 +215,7 @@
   const dimsOf = (t: Tile): PatternDims => (t.rig ? t.dims : t.guess);
 
   /** `gallery.json`'s advisory `kind` as a dimensionality. "any" is the
-   *  DIMENSIONLESS kind (0) — a `renderFrame` painting in index space, native
+   *  DIMENSIONLESS kind (0) — a `renderBulk` painting in index space, native
    *  on every Layout — and must not collapse to 1, which is a strip pattern
    *  the Layout projects along an axis. */
   const kindDims = (kind: string | undefined): PatternDims =>

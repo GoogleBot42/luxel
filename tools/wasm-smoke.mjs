@@ -145,7 +145,7 @@ assert.deepStrictEqual(
   "1D pattern on a 2D Layout",
 );
 assert.strictEqual(e.lx_projection_options(2, 2), 0, "a native pair offers nothing");
-// 0 is DIMENSIONLESS — an index-space `renderFrame` names no geometry, so it
+// 0 is DIMENSIONLESS — an index-space `renderBulk` names no geometry, so it
 // is native on every Layout and no surface offers it a projection. It is NOT
 // the 1D row, which `dims(0) == 1` would have made it.
 for (const ld of [1, 2, 3]) {
@@ -165,11 +165,11 @@ assert.deepStrictEqual(
 // …and an engine running such a pattern reports dims 0 and no projection,
 // on a matrix, whatever the device default says (library/fairies.js, #538).
 {
-  const s = putStr("export function renderFrame() { fillHSV(0, 1, 1) }");
+  const s = putStr("export function renderBulk() { fillHSV(0, 1, 1) }");
   const hAny = e.lx_new(s.ptr, s.len, 8, 1);
   s.free();
   assert.ok(hAny >= 0, response());
-  assert.strictEqual(e.lx_pattern_dims(hAny), 0, "renderFrame alone declares nothing");
+  assert.strictEqual(e.lx_pattern_dims(hAny), 0, "renderBulk alone declares nothing");
   e.lx_set_map_grid(hAny, 4, 2);
   e.lx_set_projection(hAny, 1, 3, 4); // proj1d = along x
   assert.strictEqual(e.lx_effective_geometry(hAny), 1);

@@ -4,9 +4,9 @@
 //   public/pixelblaze-library.json ← corpus/*.epe   (scraped Pixelblaze exports)
 //
 // `kind` is an ADVISORY hint at the pattern's dimensionality — "cloud" for
-// render3D-only, "grid" for render2D (or a renderFrame that calls a
+// render3D-only, "grid" for render2D (or a renderBulk that calls a
 // coordinate/grid-space bulk builtin), "strip" for a `render(index)` 1D
-// pattern, and "any" for a DIMENSIONLESS one: `renderFrame` alone, painting
+// pattern, and "any" for a DIMENSIONLESS one: `renderBulk` alone, painting
 // in index space, which names no geometry and is native on every Layout
 // (`library/fairies.js`). "any" must not read as "strip" — a strip pattern is
 // projectable along an axis and a dimensionless one is not. Since Gitea #463 the
@@ -33,9 +33,9 @@ import { fileURLToPath } from "node:url";
 const webDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repo = path.dirname(webDir);
 
-// Coordinate- and grid-space bulk builtins: a `renderFrame` pattern that
+// Coordinate- and grid-space bulk builtins: a `renderBulk` pattern that
 // calls any of these draws in 2D even though it never mentions render2D.
-// Same list the engine uses to decide whether a renderFrame-only pattern
+// Same list the engine uses to decide whether a renderBulk-only pattern
 // gets the default square grid map (`uses_coordinate_bulk_op`, engine.rs) —
 // keep the two in sync. A pattern that declares its OWN function of one of
 // these names shadows the builtin and does not count (several 1D patterns
@@ -46,9 +46,11 @@ const BULK_2D_NAMES = [
   "splat",
   "drawLine",
   "fillCanvas",
+  "paintCanvas",
   "blit",
   "gridWidth",
   "gridHeight",
+  "gridIndex",
 ];
 
 const usesBulk2D = (source) =>

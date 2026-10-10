@@ -388,7 +388,7 @@ test("playground Auto: 3D › 2D › 1D", () => {
   assert.equal(strip.pixels, DEFAULT_STRIP_PIXELS);
   assert.equal(strip.source, "default");
 
-  const bulk = reconcileLayout(input({ patternDims: 0 })); // renderFrame, index space
+  const bulk = reconcileLayout(input({ patternDims: 0 })); // renderBulk, index space
   assert.equal(bulk.dims, 1);
 
   const grid = reconcileLayout(input({ patternDims: 2 }));
@@ -584,7 +584,7 @@ test("withProjectionOverride replaces only the slot for the pattern's dims", () 
 });
 
 test("a dimensionless pattern is native on every Layout", () => {
-  // `patternDims === 0` is an index-space `renderFrame`: a field over
+  // `patternDims === 0` is an index-space `renderBulk`: a field over
   // pixelCount that names no geometry. It is NOT a 1D pattern — nothing
   // projects it, nothing captions it, and no Layout filters it out. Calling
   // it 1D gave library/fairies.js a "1D · by index" caption and along-x /
@@ -610,16 +610,16 @@ test("a dimensionless pattern is native on every Layout", () => {
   assert.equal(projectionCaption(1, panel), "1D · by index");
 });
 
-test("guessPatternDims tells a dimensionless renderFrame from a 1D pattern", () => {
-  const frameOnly = "export function renderFrame() { fillHSV(0, 1, 1) }";
-  assert.equal(guessPatternDims(frameOnly), 0, "renderFrame alone declares nothing");
+test("guessPatternDims tells a dimensionless renderBulk from a 1D pattern", () => {
+  const frameOnly = "export function renderBulk() { fillHSV(0, 1, 1) }";
+  assert.equal(guessPatternDims(frameOnly), 0, "renderBulk alone declares nothing");
   assert.equal(
     guessPatternDims(`${frameOnly}\nexport function render(i) { hsv(0, 1, 1) }`),
     1,
     "…but `render` alongside it is a strip pattern",
   );
   assert.equal(guessPatternDims("export function render(index) { hsv(0, 1, 1) }"), 1);
-  assert.equal(guessPatternDims("export function renderFrame() { fillRect(0, 0, 1, 1) }"), 2);
+  assert.equal(guessPatternDims("export function renderBulk() { fillRect(0, 0, 1, 1) }"), 2);
   assert.equal(guessPatternDims("export function render3D(i, x, y, z) { hsv(z, 1, 1) }"), 3);
 });
 
