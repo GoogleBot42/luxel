@@ -376,7 +376,77 @@ pub struct Tiling {
     tiles: [[u8; 3]; MAX_TILES],
     /// Chain position of grid cell `cy * cols + cx` — the inverse of `tiles`.
     pos: [u8; MAX_TILES],
+    /// Per DRIVER BLOCK `b` (block 0 is the first `pw` words the driver
+    /// clocks out): the tile's cell origin `(ox, oy)` in pixels and its
+    /// turns — what [`Tiling::cell`] and the cursor read per pixel instead
+    /// of walking `drive - 1 - b` → `tiles[p]` → multiplies.
+    blocks: [(u16, u16, u8); MAX_TILES],
+    /// `log2(pw)` / `log2(pw * drive)` when those are powers of two (every
+    /// real HUB75 panel), else `u8::MAX`: the per-pixel divides become
+    /// shifts and masks.
+    pw_sh: u8,
+    fbw_sh: u8,
+    ph_sh: u8,
 }
+
+/// Sequential walk over a tiled grid's frame slots (Gitea #948): the
+/// per-pixel render loop visits `i, i+1, …`, and for that walk the cell of
+/// each slot is the previous one stepped along the driver's shift — a few
+/// adds and compares instead of [`Tiling::cell`]'s divides. Only the
+/// `stripes == 1` layout is walked this way (a 1/N-scan panel falls back
+/// to the formula per slot).
+#[derive(Clone, Copy, Debug)]
+pub struct TileCursor {
+    t: &'static Tiling,
+    /// Panel row (0..ph) and the current driver block's local column.
+    ly: u16,
+    lx: u16,
+    /// Current driver block, and its cell origin / turns from `blocks`.
+    b: u8,
+    ox: u16,
+    oy: u16,
+    turns: u8,
+}
+
+impl TileCursor {
+    /// The grid cell `(row, col)` of the slot the cursor is on.
+    #[inline(always)]
+    pub fn cell(&self) -> (usize, usize) {
+        let (pw, ph) = (self.t.pw as usize, self.t.ph as usize);
+        let (lx, ly) = (self.lx as usize, self.ly as usize);
+        let (sx, sy) = match self.turns {
+            1 => (pw - 1 - ly, lx),
+            2 => (pw - 1 - lx, ph - 1 - ly),
+            3 => (ly, ph - 1 - lx),
+            _ => (lx, ly),
+        };
+        (self.oy as usize + sy, self.ox as usize + sx)
+    }
+
+    /// Step to the next slot. Past the last slot the cursor wraps to slot
+    /// 0, which no caller reads (the loop bound is the frame).
+    #[inline(always)]
+    pub fn advance(&mut self) {
+        self.lx += 1;
+        if self.lx < self.t.pw {
+            return;
+        }
+        self.lx = 0;
+        self.b += 1;
+        if self.b as usize >= self.t.drive() {
+            self.b = 0;
+            self.ly += 1;
+            if self.ly >= self.t.ph {
+                self.ly = 0;
+            }
+        }
+        let (ox, oy, turns) = self.t.blocks[self.b as usize];
+        self.ox = ox;
+        self.oy = oy;
+        self.turns = turns;
+    }
+}
+
 
 impl Tiling {
     /// Validate and build. `tiles` is the chain in ribbon order as
@@ -396,6 +466,7 @@ impl Tiling {
         if half == 0 || scan == 0 || scan > half || half % scan != 0 {
             return None;
         }
+        let sh = |v: usize| if v.is_power_of_two() { v.trailing_zeros() as u8 } else { u8::MAX };
         let mut t = Tiling {
             pw,
             ph,
@@ -404,6 +475,10 @@ impl Tiling {
             scan: scan as u16,
             tiles: [[0; 3]; MAX_TILES],
             pos: [u8::MAX; MAX_TILES],
+            blocks: [(0, 0, 0); MAX_TILES],
+            pw_sh: sh(pw as usize),
+            fbw_sh: sh(pw as usize * n),
+            ph_sh: sh(ph as usize),
         };
         for (p, &(cx, cy, turns)) in tiles.iter().enumerate() {
             if cx as usize >= cols as usize || cy as usize >= rows as usize {
@@ -416,8 +491,25 @@ impl Tiling {
             t.pos[cell] = p as u8;
             let turns = if pw != ph { turns & 2 } else { turns & 3 };
             t.tiles[p] = [cx, cy, turns];
+            // chain position p owns driver block drive-1-p (see the docs)
+            t.blocks[n - 1 - p] = (cx as u16 * pw, cy as u16 * ph, turns);
         }
         Some(t)
+    }
+
+    /// A [`TileCursor`] positioned on slot `i` — `None` for a 1/N-scan
+    /// layout (or `i` past the frame), where the per-slot formula stays.
+    pub fn cursor(&'static self, i: usize) -> Option<TileCursor> {
+        if self.stripes() != 1 || i >= self.len() {
+            return None;
+        }
+        let (pw, drive) = (self.pw as usize, self.drive());
+        let fb_w = pw * drive;
+        let ly = i / fb_w;
+        let x = i - ly * fb_w;
+        let b = x / pw;
+        let (ox, oy, turns) = self.blocks[b];
+        Some(TileCursor { t: self, ly: ly as u16, lx: (x - b * pw) as u16, b: b as u8, ox, oy, turns })
     }
 
     /// Pin the tiling for the life of the program. ~140 B, once per boot
@@ -472,8 +564,12 @@ impl Tiling {
         let fb_w = pw * drive;
         let stripes = self.stripes();
         let (ly, x) = if stripes == 1 {
-            let drow = i / fb_w;
-            (drow, i - drow * fb_w)
+            if self.fbw_sh != u8::MAX {
+                (i >> self.fbw_sh, i & (fb_w - 1))
+            } else {
+                let drow = i / fb_w;
+                (drow, i - drow * fb_w)
+            }
         } else {
             let scan = self.scan as usize;
             let fb_cols = fb_w * stripes;
@@ -483,27 +579,23 @@ impl Tiling {
             let s = dcol / fb_w;
             (half + s * scan + r, dcol - s * fb_w)
         };
-        let b = x / pw;
-        let lx = x - b * pw;
-        let p = drive - 1 - b.min(drive - 1);
-        let [cx, cy, turns] = self.tiles[p];
+        let (b, lx) = if self.pw_sh != u8::MAX { (x >> self.pw_sh, x & (pw - 1)) } else { (x / pw, x % pw) };
+        let (ox, oy, turns) = self.blocks[b.min(drive - 1)];
         let (sx, sy) = match turns {
             1 => (pw - 1 - ly, lx),
             2 => (pw - 1 - lx, ph - 1 - ly),
             3 => (ly, ph - 1 - lx),
             _ => (lx, ly),
         };
-        (cy as usize * ph + sy, cx as usize * pw + sx)
+        (oy as usize + sy, ox as usize + sx)
     }
 
     /// Frame slot (driver index) of engine grid cell (`row`, `col`).
     #[inline]
     pub fn index(&self, row: usize, col: usize) -> usize {
         let (pw, ph) = (self.pw as usize, self.ph as usize);
-        let cx = col / pw;
-        let sx = col - cx * pw;
-        let cy = row / ph;
-        let sy = row - cy * ph;
+        let (cx, sx) = if self.pw_sh != u8::MAX { (col >> self.pw_sh, col & (pw - 1)) } else { (col / pw, col % pw) };
+        let (cy, sy) = if self.ph_sh != u8::MAX { (row >> self.ph_sh, row & (ph - 1)) } else { (row / ph, row % ph) };
         let drive = self.drive();
         let p = self.pos[(cy * self.cols as usize + cx).min(MAX_TILES - 1)] as usize;
         let p = p.min(drive - 1);
@@ -1136,6 +1228,25 @@ mod tests {
             let (r, c) = t.cell(i);
             assert_eq!(t.index(r, c), i);
         }
+    }
+
+    #[test]
+    fn the_cursor_walks_exactly_what_cell_computes() {
+        for (cols, rows, pw) in [(2u8, 2u8, 4u16), (3, 2, 4), (1, 1, 8), (4, 1, 6), (2, 1, 5)] {
+            for chain in all_chains(cols, rows) {
+                let t = Tiling::new(pw, pw, cols, rows, 0, &chain).unwrap().leak();
+                for start in [0usize, 1, 7, t.len() / 2, t.len() - 1] {
+                    let mut c = t.cursor(start).unwrap();
+                    for i in start..t.len() {
+                        assert_eq!(c.cell(), t.cell(i), "{chain:?} pw {pw} slot {i} from {start}");
+                        c.advance();
+                    }
+                }
+            }
+        }
+        // a 1/N-scan layout has no cursor
+        let t = Tiling::new(4, 8, 1, 1, 2, &[(0, 0, 0)]).unwrap().leak();
+        assert!(t.cursor(0).is_none());
     }
 
     #[test]

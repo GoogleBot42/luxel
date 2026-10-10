@@ -4855,6 +4855,39 @@ impl Vm {
         Fx::from_int(i as i32)
     }
 
+    /// A sequential-walk cursor over the installed map starting at slot
+    /// `i` (Gitea #948): `Some` only for a tiled procedural grid the
+    /// cursor can walk, where [`Vm::pixel_coords_at`] then costs a few
+    /// adds per pixel instead of the tiling's per-slot arithmetic.
+    #[inline(never)]
+    pub fn grid_cursor(&self, i: u32) -> Option<crate::outpipe::TileCursor> {
+        let m = self.map.as_ref()?;
+        let g = m.grid.as_ref()?;
+        let t = g.tiling?;
+        if m.axes.len() != g.w as usize + g.h as usize {
+            return None;
+        }
+        t.cursor(i as usize)
+    }
+
+    /// [`Vm::pixel_coords`] for the slot a [`crate::outpipe::TileCursor`]
+    /// from [`Vm::grid_cursor`] is on. The map is the 2D grid the cursor was
+    /// made from, so the third axis is the fill.
+    #[inline(always)]
+    pub fn pixel_coords_at(&self, c: &crate::outpipe::TileCursor, fill: [Fx; 3]) -> [Fx; 3] {
+        let (row, col) = c.cell();
+        match &self.map {
+            Some(m) => {
+                let w = m.grid.map_or(0, |g| g.w as usize);
+                match (m.axes.get(col), m.axes.get(w + row)) {
+                    (Some(&x), Some(&y)) => [x, y, fill[2]],
+                    _ => [Fx::ZERO, Fx::ZERO, fill[2]],
+                }
+            }
+            None => fill,
+        }
+    }
+
     /// Coordinates for pixel `i`: the installed map, else the 1D fallback
     /// (x = i/pixelCount, remaining axes from `fill`).
     #[inline]

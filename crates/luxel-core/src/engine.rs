@@ -2062,6 +2062,21 @@ impl Engine {
     #[inline(always)]
     fn pixel_for(&self, render: RenderKind, i: u32, sel: Option<[u8; 3]>, mid: Fx) -> [Fx; 3] {
         let c = self.vm.pixel_coords(i, [mid; 3]);
+        self.pixel_from(render, c, sel, mid)
+    }
+
+    /// [`Engine::pixel_for`] with the coordinate read through a tiled-grid
+    /// cursor (Gitea #948): the loops walk slots in order, and on a chain
+    /// the next slot's cell is a step, not a divide. Same words as
+    /// `pixel_for` for the same slot — `the_cursor_walks_exactly_what_cell_computes`.
+    #[inline(always)]
+    fn pixel_for_cursor(&self, render: RenderKind, c: &crate::outpipe::TileCursor, sel: Option<[u8; 3]>, mid: Fx) -> [Fx; 3] {
+        let c = self.vm.pixel_coords_at(c, [mid; 3]);
+        self.pixel_from(render, c, sel, mid)
+    }
+
+    #[inline(always)]
+    fn pixel_from(&self, render: RenderKind, c: [Fx; 3], sel: Option<[u8; 3]>, mid: Fx) -> [Fx; 3] {
         let c = match sel {
             Some(s) => select_coords(c, s, mid),
             None => c,
@@ -2114,12 +2129,21 @@ impl Engine {
             Value::Num(mid),
             Value::Num(mid),
         ];
+        // A tiled chain walks its slots through a cursor (Gitea #948).
+        let mut cur = if index_only { None } else { self.vm.grid_cursor(from) };
         for i in from..to {
             self.vm.pixel = [Fx::ZERO; 3];
             self.vm.pixel_written = false;
             args[0] = Value::Num(Fx::from_int(i as i32));
             if !index_only {
-                let p = self.pixel_for(render, i, sel, mid);
+                let p = match cur.as_mut() {
+                    Some(c) => {
+                        let p = self.pixel_for_cursor(render, c, sel, mid);
+                        c.advance();
+                        p
+                    }
+                    None => self.pixel_for(render, i, sel, mid),
+                };
                 args[1] = Value::Num(p[0]);
                 args[2] = Value::Num(p[1]);
                 args[3] = Value::Num(p[2]);
@@ -2194,6 +2218,8 @@ impl Engine {
         // never read, exactly as `enter` would have done.
         let direct = np.call.direct() && abi.args_in_regs && (1..=4).contains(&(abi.params as usize));
         let dparams = if direct { abi.params as usize } else { 0 };
+        // A tiled chain walks its slots through a cursor (Gitea #948).
+        let mut cur = if index_only { None } else { self.vm.grid_cursor(from) };
         for i in from..to {
             self.vm.pixel = [Fx::ZERO; 3];
             self.vm.pixel_written = false;
@@ -2205,7 +2231,14 @@ impl Engine {
             // is exactly `push_frame`'s rule.
             let mut raw = [Fx::from_int(i as i32).raw(), midr, midr, midr];
             if !index_only {
-                let p = self.pixel_for(render, i, sel, mid);
+                let p = match cur.as_mut() {
+                    Some(c) => {
+                        let p = self.pixel_for_cursor(render, c, sel, mid);
+                        c.advance();
+                        p
+                    }
+                    None => self.pixel_for(render, i, sel, mid),
+                };
                 raw[1] = p[0].raw();
                 raw[2] = p[1].raw();
                 raw[3] = p[2].raw();
