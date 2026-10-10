@@ -1,5 +1,16 @@
 # Update log
 
+## 2026-10-10 — the browser wasm drops the JIT runtime (+5.6 KB of assets headroom, #691)
+
+`luxel-wasm` now depends on luxel-core without the `jit` feature: the
+browser never runs native code, and the JIT's runtime surface (the builtin-
+entry table with its generic/direct wrappers, the helpers, the native pixel
+loop) was 16 KB of `luxel.wasm` (496,744 → 480,753 B raw). The editor's JIT
+warnings (`jitlint`) need only `kinds`, which stays. Packed assets 982,564 →
+976,971 B of the 983,040 B partition — 476 B of headroom became 6,069 B,
+which the queued engine PRs (#941, #943, #947, #953 rect runs) each spend a
+little of. The CLI, every `cargo test` and the JIT boards keep the feature.
+
 ## 2026-10-10 — the native pixel pass runs as spans (#940, first part)
 
 Cycle probes showed the native call was only ~15 % of an empty render2D's
