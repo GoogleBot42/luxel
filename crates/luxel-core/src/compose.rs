@@ -353,14 +353,24 @@ fn blend_box(
     // every cell goes through `index` on both sides. The row-run path below
     // stays for the row-major and serpentine grids every other host has.
     if grid.tiling.is_some() {
-        for j in j0..j1 {
-            let dr = (by + j) as usize;
-            let sj = (by + if my { bh - 1 - j } else { j }) as usize;
-            for i in i0..i1 {
-                let dc = (bx + i) as usize;
+        // In frame-slot runs (#953), so the destination is written in
+        // order; an unmirrored source cell IS the destination's slot.
+        let rows = ((by + j0) as usize, (by + j1) as usize);
+        let cols = ((bx + i0) as usize, (bx + i1) as usize);
+        grid.rect_runs(rows, cols, &mut |run| {
+            for k in 0..run.n {
+                let slot = run.slot + k;
                 let s = if wash {
                     src[0]
+                } else if !mx && !my {
+                    match src.get(slot) {
+                        Some(&s) => s,
+                        None => continue,
+                    }
                 } else {
+                    let (dr, dc) = run.cell(k);
+                    let (j, i) = (dr as i32 - by, dc as i32 - bx);
+                    let sj = (by + if my { bh - 1 - j } else { j }) as usize;
                     let sc = (bx + if mx { bw - 1 - i } else { i }) as usize;
                     match src.get(grid.index(sj, sc)) {
                         Some(&s) => s,
@@ -369,12 +379,12 @@ fn blend_box(
                 };
                 let a = layer_alpha(key, s, base);
                 if a > 0 {
-                    if let Some(d) = dst.get_mut(grid.index(dr, dc)) {
+                    if let Some(d) = dst.get_mut(slot) {
                         blend_px_into(d, s, style.blend, a);
                     }
                 }
             }
-        }
+        });
         return;
     }
     let cols = (i1 - i0) as usize;
@@ -479,11 +489,12 @@ pub fn blit_sprite(dst: Canvas, sprite: &SpriteView, frame: u8, style: &LayerSty
     let (mx, my) = mirrors(style);
     let a0 = opacity_alpha(style.opacity);
     let base = (frame as usize % sprite.frames as usize) * sprite.texels();
-    for j in 0..dh {
-        let dr = by + oy + j;
-        if dr < 0 || dr >= grid.h as i32 {
-            continue;
-        }
+    // The drawn extent clipped to the grid, walked in frame-slot runs
+    // (#953) so a tiled chain is written in order.
+    let (y0, x0) = (by + oy, bx + ox);
+    let rows = (y0.max(0) as usize, (y0 + dh).clamp(0, grid.h as i32) as usize);
+    let cols = (x0.max(0) as usize, (x0 + dw).clamp(0, grid.w as i32) as usize);
+    let px_of = |j: i32, i: i32| {
         let jj = if my { dh - 1 - j } else { j };
         let sy = if tile {
             jj.rem_euclid(sh)
@@ -492,27 +503,28 @@ pub fn blit_sprite(dst: Canvas, sprite: &SpriteView, frame: u8, style: &LayerSty
         } else {
             (jj * sh / dh).min(sh - 1)
         };
-        for i in 0..dw {
-            let dc = bx + ox + i;
-            if dc < 0 || dc >= grid.w as i32 {
+        let ii = if mx { dw - 1 - i } else { i };
+        let sx = if tile {
+            ii.rem_euclid(sw)
+        } else if dw == sw {
+            ii
+        } else {
+            (ii * sw / dw).min(sw - 1)
+        };
+        // `None` is index 0: the record's transparency
+        sprite.texel(base + (sy * sw + sx) as usize)
+    };
+    grid.rect_runs(rows, cols, &mut |run| {
+        for k in 0..run.n {
+            let (dr, dc) = run.cell(k);
+            let Some(px) = px_of(dr as i32 - y0, dc as i32 - x0) else {
                 continue;
-            }
-            let ii = if mx { dw - 1 - i } else { i };
-            let sx = if tile {
-                ii.rem_euclid(sw)
-            } else if dw == sw {
-                ii
-            } else {
-                (ii * sw / dw).min(sw - 1)
             };
-            let Some(px) = sprite.texel(base + (sy * sw + sx) as usize) else {
-                continue; // index 0: the record's transparency
-            };
-            if let Some(d) = dst.px.get_mut(grid.index(dr as usize, dc as usize)) {
+            if let Some(d) = dst.px.get_mut(run.slot + k) {
                 blend_px_mode(d, px, style.blend, a0);
             }
         }
-    }
+    });
 }
 
 // ---- text ----
@@ -2090,9 +2102,20 @@ mod tests {
         let modes = [Blend::Normal, Blend::Add, Blend::Lighten, Blend::Multiply, Blend::Mask];
         let keys = [Key::None, Key::Black, Key::Luma];
         let mut cases = 0usize;
+        let mut grids = alloc::vec::Vec::new();
         for (w, h) in [(8u16, 6u16), (7, 7), (1, 9)] {
             for serpentine in [false, true] {
-                let g = grid(w, h, serpentine);
+                grids.push(grid(w, h, serpentine));
+            }
+        }
+        // HUB75 walls in driver order (#948): the tiled paths (#953)
+        for turns in [[3u8, 3, 1, 1], [0, 2, 1, 3]] {
+            let chain = [(1, 0, turns[0]), (1, 1, turns[1]), (0, 1, turns[2]), (0, 0, turns[3])];
+            grids.push(GridMap::tiled(crate::outpipe::Tiling::new(4, 4, 2, 2, 0, &chain).unwrap().leak()));
+        }
+        for g in grids {
+            {
+                let (w, h, serpentine) = (g.w, g.h, g.serpentine);
                 let n = g.len();
                 let src = frame(n, 0x5eed_0001 ^ (w as u32) << 8);
                 let under = frame(n, 0xc0ff_ee01 ^ (h as u32) << 8);
