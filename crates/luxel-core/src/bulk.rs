@@ -297,10 +297,14 @@ fn map_coord(map: &MapData, i: usize) -> [Fx; 3] {
     map.coord(i)
 }
 
-/// The mapped coordinate of grid cell (`r`, `c`).
+/// The mapped coordinate of grid cell (`r`, `c`): the axis table when the
+/// map is this procedural grid, else the map at the cell's frame slot.
 #[inline]
 fn cell_coord(map: &MapData, g: &GridMap, r: usize, c: usize) -> [Fx; 3] {
-    map_coord(map, g.index(r, c))
+    match map.grid_cell_coord(g, r, c) {
+        Some(p) => p,
+        None => map_coord(map, g.index(r, c)),
+    }
 }
 
 impl GridView<'_> {
@@ -784,15 +788,15 @@ fn canvas_fill(
 }
 
 /// [`canvas_fill`] on a tiled grid: the frame in SLOT order through a
-/// [`crate::outpipe::TileCursor`] (a step per slot), the canvas cell of each
-/// slot from two per-axis tables built once per call (`cell_index` of each
-/// grid column's x and each grid row's y — the scan's own arithmetic, so the
-/// two paths agree byte for byte), and one `texel` per canvas-cell CHANGE:
-/// consecutive slots of an upright tile share a canvas cell for `bw` slots
-/// and of a quarter-turned one for `bh`, so a coarse canvas costs about the
-/// texel count the block expand paid, while the writes — the expensive side
-/// on PSRAM — stay sequential. A full-resolution canvas is one texel per
-/// pixel on either path.
+/// [`crate::outpipe::TileCursor`], one RUN at a time. The cursor's
+/// [`span`](crate::outpipe::TileCursor::span) is a straight line of slots
+/// along one grid row or column; along it the canvas cell only changes
+/// where that axis's cell index does, so per-axis run lengths (built once
+/// per call from the scan's own `cell_index` tables — the two paths agree
+/// byte for byte) cut each span into runs of one canvas cell: one `texel`
+/// and one slice fill per run, no per-slot bookkeeping (#953). An upright
+/// tile's runs are `bw` slots long and a quarter-turned one's `bh`; a
+/// full-resolution canvas is one texel per pixel on either path.
 ///
 /// `false` when this layout has no cursor (a 1/N-scan panel) or the tables
 /// would not allocate; the caller then takes the generic scan.
@@ -812,26 +816,84 @@ fn canvas_fill_slots(
         return false;
     };
     let (w, h) = (gv.g.w as usize, gv.g.h as usize);
+    // [xs | ys | x runs up | x runs down | y runs up | y runs down]
     let mut cells: alloc::vec::Vec<u32> = alloc::vec::Vec::new();
-    if cells.try_reserve_exact(w + h).is_err() {
+    if cells.try_reserve_exact(3 * (w + h)).is_err() {
         return false;
     }
     cells.extend((0..w).map(|c| cell_index(gv.coord(0, c)[0], cw) as u32));
     cells.extend((0..h).map(|r| (cell_index(gv.coord(r, 0)[1], ch) * cw) as u32));
-    let (xs, ys) = cells.split_at(w);
+    cells.resize(3 * (w + h), 0);
+    let (xy, runs) = cells.split_at_mut(w + h);
+    let (xs, ys) = xy.split_at(w);
+    let (xrun, yrun) = runs.split_at_mut(2 * w);
+    axis_runs(xs, xrun);
+    axis_runs(ys, yrun);
+    let (xup, xdown) = xrun.split_at(w);
+    let (yup, ydown) = yrun.split_at(h);
+    let n = frame.len();
+    // A canvas coarser than the frame is visited in many runs per cell
+    // (a 16x16 canvas on a 128x128 wall of quarter-turned tiles: 2,048
+    // eight-slot runs over 256 cells), so each cell's texel is computed
+    // once, on first use. `u32::MAX` = not yet; a texel is 24 bits.
+    let mut memo: crate::arena::ArrVec<u32> = crate::arena::empty();
+    if cw * ch < n && memo.try_reserve_exact(cw * ch).is_ok() {
+        memo.resize(cw * ch, u32::MAX);
+    }
+    let mut i = 0;
     let mut last = usize::MAX;
     let mut px = [0u8; 3];
-    for dst in frame.iter_mut() {
-        let (r, c) = cur.cell();
-        let t = (ys[r] + xs[c]) as usize;
-        if t != last {
-            px = texel(t);
-            last = t;
+    while i < n {
+        let (span, dr, dc) = cur.span();
+        let span = span.min(n - i);
+        let (mut r, mut c) = cur.cell();
+        let mut k = 0;
+        loop {
+            let run = match (dr, dc) {
+                (0, 1) => xup[c],
+                (0, _) => xdown[c],
+                (1, _) => yup[r],
+                _ => ydown[r],
+            } as usize;
+            let m = run.min(span - k);
+            let t = (ys[r] + xs[c]) as usize;
+            if t != last {
+                px = match memo.get_mut(t) {
+                    Some(e) if *e != u32::MAX => [*e as u8, (*e >> 8) as u8, (*e >> 16) as u8],
+                    Some(e) => {
+                        let p = texel(t);
+                        *e = u32::from(p[0]) | u32::from(p[1]) << 8 | u32::from(p[2]) << 16;
+                        p
+                    }
+                    None => texel(t),
+                };
+                last = t;
+            }
+            frame[i + k..i + k + m].fill(px);
+            k += m;
+            if k == span {
+                break;
+            }
+            r = (r as i32 + dr * m as i32) as usize;
+            c = (c as i32 + dc * m as i32) as usize;
         }
-        *dst = px;
-        cur.advance();
+        cur.advance_by(span);
+        i += span;
     }
     true
+}
+
+/// Run lengths of equal values in `v`, both ways: `out[..n][j]` counts the
+/// equal values from `j` upward, `out[n..][j]` from `j` downward.
+fn axis_runs(v: &[u32], out: &mut [u32]) {
+    let n = v.len();
+    let (up, down) = out.split_at_mut(n);
+    for j in (0..n).rev() {
+        up[j] = if j + 1 < n && v[j + 1] == v[j] { up[j + 1] + 1 } else { 1 };
+    }
+    for j in 0..n {
+        down[j] = if j > 0 && v[j - 1] == v[j] { down[j - 1] + 1 } else { 1 };
+    }
 }
 
 /// `fillCanvas(hArr, sArr, vArr, w, h)`: sample a w×h row-major canvas
@@ -1036,6 +1098,15 @@ mod tests {
     /// `chain 1,0,270 1,1,270 0,1,90 0,0,90`.
     fn wall_2x2(pw: u16) -> &'static crate::outpipe::Tiling {
         crate::outpipe::Tiling::new(pw, pw, 2, 2, 0, &[(1, 0, 3), (1, 1, 3), (0, 1, 1), (0, 0, 1)])
+            .unwrap()
+            .leak()
+    }
+
+    /// A 2x2 wall with every turn once (upright, half, quarter, three
+    /// quarters): runs along grid rows in both directions as well as
+    /// columns, which the all-quarter-turn [`wall_2x2`] never walks.
+    fn wall_mixed(pw: u16) -> &'static crate::outpipe::Tiling {
+        crate::outpipe::Tiling::new(pw, pw, 2, 2, 0, &[(0, 0, 0), (1, 0, 2), (1, 1, 1), (0, 1, 3)])
             .unwrap()
             .leak()
     }
@@ -1620,6 +1691,7 @@ mod tests {
             // slot-order path (Gitea #953) against the same scan
             if gw == gh && gw % 2 == 0 {
                 rigs.push(("tiled 2x2", Rig::Tiled(wall_2x2((gw / 2) as u16))));
+                rigs.push(("tiled mixed turns", Rig::Tiled(wall_mixed((gw / 2) as u16))));
             }
             for (name, rig) in rigs {
                 let (scan, fast) = scan_and_fast(&src, n as u32, &rig);
@@ -1629,6 +1701,30 @@ mod tests {
                     "{gw}x{gh}/{cw}x{ch} {name}: nothing painted"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn a_grid_cells_axis_coordinate_is_the_map_at_its_slot() {
+        // the #953 shortcut must agree with the slot round trip everywhere
+        for (rig, w, h) in [
+            (Rig::Grid(12, 8), 12usize, 8usize),
+            (Rig::Tiled(wall_2x2(4)), 8, 8),
+            (Rig::Tiled(wall_mixed(4)), 8, 8),
+        ] {
+            let e = build(&rf(""), (w * h) as u32, &rig);
+            let (map, g) = (e.vm().map.as_ref().unwrap(), e.vm().frame_grid.unwrap());
+            for r in 0..h {
+                for c in 0..w {
+                    assert_eq!(map.grid_cell_coord(&g, r, c), Some(map.coord(g.index(r, c))), "{w}x{h} ({r}, {c})");
+                }
+            }
+            assert_eq!(map.grid_cell_coord(&g, h, 0), None);
+        }
+        // a coordinate map is never shortcut
+        let e = build(&rf(""), 16, &Rig::Coords(grid_coords(4, 4, false)));
+        if let (Some(map), Some(g)) = (e.vm().map.as_ref(), e.vm().frame_grid) {
+            assert_eq!(map.grid_cell_coord(&g, 0, 0), None);
         }
     }
 
@@ -1677,7 +1773,7 @@ mod tests {
             // the loop is spelled through gridIndex — and paintCanvas's
             // slot-order path (Gitea #953) must match it and its own scan.
             if w == h && w % 2 == 0 {
-                let rig = Rig::Tiled(wall_2x2((w / 2) as u16));
+                for rig in [Rig::Tiled(wall_2x2((w / 2) as u16)), Rig::Tiled(wall_mixed((w / 2) as u16))] {
                 let cells = alloc::format!(
                     "{head}export function renderBulk() {{\n\
                        for (r = 0; r < {h}; r++) {{ for (c = 0; c < {w}; c++) {{\n\
@@ -1687,6 +1783,7 @@ mod tests {
                 let (scan, fast) = scan_and_fast(&bulk, n as u32, &rig);
                 assert_eq!(scan, fast, "{w}x{h} tiled: slot path vs scan");
                 assert_eq!(fast, frame1(&cells, n as u32, &rig), "{w}x{h} tiled: vs gridIndex loop");
+                }
             }
         }
         // the brightness argument is optional and defaults to 1

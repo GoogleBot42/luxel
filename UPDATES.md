@@ -1,5 +1,17 @@
 # Update log
 
+## 2026-10-10 — canvas run fill on a tiled grid; grid-cell coordinates from the axis table (#953)
+
+`canvas_fill_slots` walks the frame a `TileCursor::span` at a time (new
+`span`/`advance_by`), cut into runs of one canvas cell by per-axis run
+lengths, one texel (memoised per call) and one slice fill per run.
+`MapData::grid_cell_coord` reads a procedural grid cell's coordinate from the
+axis table instead of the `index` → `cell` round trip, for every
+`GridView::coord` user; it checks grid identity with the new `GridMap::same`
+(derived `==` compares the `Tiling` by value and cost 2.7 ms in a first
+build). Unit 2's 2x2 at 16,384 px, VM ms: fillCanvas 16x16 12.3 → 7.2,
+ripples 18.1 → 13.8. Byte-identical (tests with a mixed-turn wall added).
+blit/text/compose/blur still write per `index()` — #953 stays open for them.
 ## 2026-10-10 — 64-byte data-cache lines on the S3; frame stores are line traffic, not store width (#958)
 
 #958 proposed writing the PSRAM frame as 32-bit words. A boot-time bench

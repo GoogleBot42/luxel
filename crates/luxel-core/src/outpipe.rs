@@ -297,6 +297,21 @@ impl GridMap {
         self.w as usize * self.h as usize
     }
 
+    /// The same grid by IDENTITY: equal dimensions and wiring and the same
+    /// leaked [`Tiling`] (or none). `==` compares a tiling by VALUE — ~140
+    /// bytes field by field — which is too slow for a per-cell check (#953);
+    /// two equal tilings at different addresses read as different here,
+    /// which only costs a caller its shortcut.
+    #[inline]
+    pub fn same(&self, other: &GridMap) -> bool {
+        let t = match (self.tiling, other.tiling) {
+            (None, None) => true,
+            (Some(a), Some(b)) => core::ptr::eq(a, b),
+            _ => false,
+        };
+        t && self.w == other.w && self.h == other.h && self.serpentine == other.serpentine
+    }
+
     pub fn is_empty(&self) -> bool {
         self.w == 0 || self.h == 0
     }
@@ -440,6 +455,29 @@ impl TileCursor {
         if self.lx < self.t.pw {
             self.row += self.dr;
             self.col += self.dc;
+            return;
+        }
+        self.reseat();
+    }
+
+    /// The straight run the cursor is in: the slots left in the current
+    /// driver block (this one included) and the `(dr, dc)` grid step each
+    /// of them takes — all `span` slots lie on one grid row (`dr == 0`) or
+    /// one grid column (`dc == 0`). What a run fill walks instead of
+    /// stepping slot by slot (#953).
+    #[inline(always)]
+    pub fn span(&self) -> (usize, i32, i32) {
+        ((self.t.pw - self.lx) as usize, self.dr, self.dc)
+    }
+
+    /// [`TileCursor::advance`] `k` times, for `1 <= k <=` [`TileCursor::span`]'s
+    /// count.
+    #[inline(always)]
+    pub fn advance_by(&mut self, k: usize) {
+        self.lx += k as u16;
+        if self.lx < self.t.pw {
+            self.row += self.dr * k as i32;
+            self.col += self.dc * k as i32;
             return;
         }
         self.reseat();
@@ -1258,6 +1296,38 @@ mod tests {
         // a 1/N-scan layout has no cursor
         let t = Tiling::new(4, 8, 1, 1, 2, &[(0, 0, 0)]).unwrap().leak();
         assert!(t.cursor(0).is_none());
+    }
+
+    #[test]
+    fn a_span_is_a_straight_run_of_cells_and_advance_by_lands_on_its_end() {
+        for (cols, rows, pw) in [(2u8, 2u8, 4u16), (3, 2, 4), (1, 1, 8), (4, 1, 6), (2, 1, 5)] {
+            for chain in all_chains(cols, rows) {
+                let t = Tiling::new(pw, pw, cols, rows, 0, &chain).unwrap().leak();
+                for start in [0usize, 1, 7, t.len() / 2, t.len() - 1] {
+                    let mut c = t.cursor(start).unwrap();
+                    let mut i = start;
+                    // alternate whole spans with partial steps
+                    let mut part = false;
+                    while i < t.len() {
+                        let (n, dr, dc) = c.span();
+                        assert!(n >= 1 && (dr == 0) != (dc == 0), "{chain:?} slot {i}");
+                        let n = n.min(t.len() - i);
+                        let (r0, c0) = c.cell();
+                        for k in 0..n {
+                            let want = ((r0 as i32 + dr * k as i32) as usize, (c0 as i32 + dc * k as i32) as usize);
+                            assert_eq!(t.cell(i + k), want, "{chain:?} pw {pw} slot {}", i + k);
+                        }
+                        let k = if part && n > 1 { n / 2 } else { n };
+                        part = !part;
+                        c.advance_by(k);
+                        i += k;
+                        if i < t.len() {
+                            assert_eq!(c.cell(), t.cell(i), "{chain:?} pw {pw} after advance_by to {i}");
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]
