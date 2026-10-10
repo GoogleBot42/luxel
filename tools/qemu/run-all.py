@@ -10,14 +10,19 @@ What it does:
   1. Builds the athom firmware (`.#luxel-fw-athom-music`) to ./result,
      Espressif's patched QEMU (`.#qemu-espressif`) to ./result-qemu, and —
      for the 16 MB layout check — the Seengreat firmware
-     (`.#luxel-fw-seengreat-hub75`) to ./result-s3. All nix-cached, seconds
-     when warm. Separate out-links on purpose: building one flake output
-     reuses the default ./result symlink and would clobber the other
-     (worktree gotcha, .claude/skills/worktree-setup).
+     (`.#luxel-fw-seengreat-hub75`) to ./result-s3, and — for the
+     Pixelblaze takeover — the PB v3 firmware (`.#luxel-fw-pixelblaze-v3`)
+     to ./result-pb. All nix-cached, seconds when warm. Separate out-links
+     on purpose: building one flake output reuses the default ./result
+     symlink and would clobber the other (worktree gotcha,
+     .claude/skills/worktree-setup).
   2. Locates the two gitignored Athom dumps the takeover/heap tests need
      (athom-wled-stock.bin, athom-wled-fs-configured.bin) — via --stock/--fs,
      the LUXEL_ATHOM_STOCK / LUXEL_ATHOM_FS env vars, or autodetection in the
-     repo root and the sibling main checkout.
+     repo root and the sibling main checkout. Likewise the stock Pixelblaze
+     v3 dump (pb-v3-stock.bin, via --pb-stock / LUXEL_PB_STOCK) for the
+     pb-takeover tests — it carries real WiFi creds, so that test never
+     prints them.
   3. Runs each test as a subprocess and prints a pass/fail summary.
 
 Tests that need the dumps are skipped (not failed) when the dumps aren't
@@ -28,6 +33,8 @@ compose their fixtures from the stock merged image plus `tools/storegen`.
 The suite's three families:
 
   takeover-*   WLED -> Luxel self-install (firmware/src/takeover.rs)
+  pb-takeover-*  the Pixelblaze v3 flavour of the same (pbfs/pbnvs
+               inheritance), from either PB app slot
   migrate-*    the self-applied partition migration (firmware/src/migrate.rs,
                Gitea #501/#634) — on BOTH layouts: the 4 MB table on the
                esp32 machine and the 16 MB one on esp32s3, each from either
@@ -88,6 +95,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--stock", help="athom-wled-stock.bin (else env/autodetect)")
     ap.add_argument("--fs", help="athom-wled-fs-configured.bin (else env/autodetect)")
+    ap.add_argument("--pb-stock", help="pb-v3-stock.bin (else env/autodetect)")
     ap.add_argument("--result-dir", default=os.path.join(REPO, "result"),
                     help="firmware build out-link (default ./result)")
     ap.add_argument("-k", "--filter", default="",
@@ -104,6 +112,7 @@ def main() -> int:
         result_dir = build("luxel-fw-athom-music", args.result_dir)
         qemu = build("qemu-espressif", os.path.join(REPO, "result-qemu"))
         build("luxel-fw-seengreat-hub75", os.path.join(REPO, "result-s3"))
+        build("luxel-fw-pixelblaze-v3", os.path.join(REPO, "result-pb"))
     if not os.path.exists(os.path.join(qemu, "bin", "qemu-system-xtensa")):
         raise SystemExit(f"no qemu-system-xtensa under {qemu} (run without --no-build?)")
 
@@ -115,12 +124,23 @@ def main() -> int:
     else:
         print("  dumps: NOT FOUND — takeover/heap tests will be skipped "
               "(pass --stock/--fs or set LUXEL_ATHOM_STOCK/_FS)")
+    pb_stock = find_dump(args.pb_stock, "LUXEL_PB_STOCK", "pb-v3-stock.bin")
+    if pb_stock:
+        print(f"  pb dump: {pb_stock}")
+    else:
+        print("  pb dump: NOT FOUND — pb-takeover tests will be skipped "
+              "(pass --pb-stock or set LUXEL_PB_STOCK)")
 
     s3 = os.path.join(REPO, "result-s3")
+    pb = os.path.join(REPO, "result-pb")
     common = ["--qemu", qemu, "--result-dir", result_dir]
     dump_args = ["--stock", stock or "", "--fs", fs or ""]
+    # pb-takeover-test.py takes its OWN --result-dir (the PB build); it is
+    # appended after `common` so argparse's last-wins overrides the Athom one.
+    pb_args = ["--stock", pb_stock or "", "--result-dir", pb]
 
-    # (name, script, args, needs_dumps)
+    # (name, script, args, needs_dumps) — needs_dumps names WHICH dump set:
+    # True = the Athom pair, "pb" = the Pixelblaze dump.
     suite = [
         ("takeover-app1", "takeover-test.py", dump_args + ["--slot", "app1"], True),
         ("takeover-app0", "takeover-test.py", dump_args + ["--slot", "app0"], True),
@@ -133,6 +153,10 @@ def main() -> int:
          dump_args + ["--slot", "app0", "--wled-pin", "19"], True),
         ("takeover-pin-reserved", "takeover-test.py",
          dump_args + ["--slot", "app0", "--wled-pin", "10"], True),
+        # The Pixelblaze v3 flavour (pbfs/pbnvs): the stock PB dump already
+        # holds config.json AND the NVS creds, so one fixture, no --fs.
+        ("pb-takeover-app1", "pb-takeover-test.py", pb_args + ["--slot", "app1"], "pb"),
+        ("pb-takeover-app0", "pb-takeover-test.py", pb_args + ["--slot", "app0"], "pb"),
         ("heap-regions-selfheal", "heap-regions-test.py", dump_args + ["--mode", "selfheal"], True),
         ("heap-regions-rollback", "heap-regions-test.py", dump_args + ["--mode", "rollback"], True),
         # cache-MMU flash mapping (firmware/src/flashmap.rs) — stock merged
@@ -230,7 +254,8 @@ def main() -> int:
     for name, script, extra, needs_dumps in suite:
         if args.filter and args.filter not in name:
             continue
-        if needs_dumps and not have_dumps:
+        missing = (not pb_stock) if needs_dumps == "pb" else (needs_dumps and not have_dumps)
+        if missing:
             results.append((name, "SKIP", 0.0))
             print(f"\n-- {name}: SKIP (no dumps)")
             continue

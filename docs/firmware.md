@@ -2769,6 +2769,15 @@ ESP-WROOM-32 (Xtensa, 4 MB flash), AP2112K 3.3 V regulator, micro-USB is
 | button | 32 | unused so far |
 | expansion header | GND, RST, 3v3, RX, TX, IO0, IO25, IO26 | sensor board / serial; labels silkscreened at 45° beside each pin, on the edge opposite the screw terminals ("RST" = the ESP32 EN/reset pin) |
 
+Since `board-pixelblaze-v3` gained the `pixelblaze-takeover` feature, a
+stock Pixelblaze v3 can also be **converted in place**, inheriting its WiFi
+and LED settings instead of being reflashed from scratch — the sibling of
+the WLED takeover. See docs/pixelblaze-migration.md. The serial procedure
+below remains the guaranteed install/restore path (and the likely delivery
+path for the takeover, since Pixelblaze's own web updater may reject an
+unsigned image — that is the one thing the migration page defers to the
+hardware test).
+
 ### Flashing + restore procedure (serial, fully recoverable)
 
 The expansion header carries everything esptool needs. Wire a 3.3 V

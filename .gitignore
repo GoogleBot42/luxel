@@ -4,6 +4,8 @@ node_modules/
 # second nix out-link used by the QEMU harness (tools/qemu/run-all.py) so
 # building .#qemu-espressif doesn't clobber ./result
 /result-qemu
+/result-pb
+/result-athom
 # …and the 16 MB Seengreat image run-all.py builds for the migration test
 /result-s3
 __pycache__/
