@@ -21,8 +21,10 @@ stay bit-identical to each other. Library frame digests (framedump, 16x16,
 `beatSin`/`ease` user; no checked-in golden pins sin output, so none moved.
 Recorded oracle vectors (fw 3.67): `sin(1)`/`sin(-1)` one LSB further from
 PB, `cos(1)`/`tan(1)` one closer, the rest unchanged — the radian
-reduction's floor dominates those errors, not the sine. On-metal cycles
-still to measure (builtinbench).
+reduction's floor dominates those errors, not the sine. On unit 2
+(builtinbench): sin 163 → 77 cycles/call, cos 163 → 78, tan 371 → 175, wave
+137 → 60; 2d-sinc-theta-theta at 16384 px 174.0 → 156.4 ms VM.
+
 ## 2026-10-10 — the native pixel pass runs as spans (#940, first part)
 
 Cycle probes showed the native call was only ~15 % of an empty render2D's
