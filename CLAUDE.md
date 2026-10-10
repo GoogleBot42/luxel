@@ -219,12 +219,14 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
   `tools/deploy.sh <ip> --assets-only`.
 - The web bundle must fit the assets partition (0xF0000 = 983,040 B on every board but
   the 16 MB Seengreat, and one bundle ships to all of them, so the small one binds):
-  958 KB used, **0.22 % headroom** as of 2026-09-27 after #787 (docs/boards.md;
-  Gitea #691, which now carries the per-file breakdown — the biggest single
-  waste is `cssCodeSplit:false` inlining ONE stylesheet into BOTH entry HTMLs,
-  so `flash.html` carries every console-only component's CSS).
-  `tools/ci.sh` prints and gates it — read that line, a new web surface now costs
-  real margin. Past the gate it only fails at `POST /api/assets` on a device.
+  979,860 B used, **3,180 B headroom** at master 2a40cc38 (2026-10-10; Gitea
+  #691 has the per-file breakdown and the remaining levers, all Jeremy's calls).
+  ENGINE changes spend it too: `luxel.wasm` carries luxel-core, so every
+  core/compiler PR adds a few hundred bytes (#941/#947/#953 did; #943's
+  inliner wanted 2.4 KB and is parked on it, PR #969). The wasm builds
+  luxel-core WITHOUT `jit` since #964 — keep it that way.
+  `tools/ci.sh` prints and gates it — read that line on every PR, not just
+  web ones. Past the gate it only fails at `POST /api/assets` on a device.
 - `/api/status` `fps` is frames RENDERED. Where the output stage runs on the
   other core (HUB75 panels, `out_fps` nonzero) the render loop free-runs ahead
   of the wire, so `fps` can be double what reached the LEDs — quote `out_fps`
