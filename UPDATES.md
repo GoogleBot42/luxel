@@ -1,5 +1,43 @@
 # Update log
 
+## 2026-10-10 — renderBulk replaces renderFrame; the frame is in wire order on a HUB75 chain (#948)
+
+Jeremy's 2026-10-05 decision: the engine writes `pixels[i]` in the order the
+panel driver consumes them, so the once-per-frame bitplane pack is a
+sequential read and the per-pixel remap LUT (#475, 32 KB on the 128x128, a
+PSRAM line fill per gathered pixel on a rotated chain) is gone. The chain's
+arrangement is `outpipe::Tiling` — pure arithmetic (`cell(i)` / `index(row,
+col)`, the old `build_lut_tiles` formula evaluated lazily) carried by
+`GridMap` (`GridMap::new` / `GridMap::tiled`, by `&'static` reference so a
+grid stays `Copy` and 8 bytes), and `MapData::coord` reads cells through it.
+`Engine::set_wire_tiling` installs it; a coordinate map is permuted into wire
+order in place. The render loops walk a `TileCursor` (a step per slot) and
+the arithmetic uses shifts for power-of-two tiles. The firmware installs the
+tiling from the stored Layout (`layout::wire_tiling`), the live chain editor
+re-applies the map instead of swapping a table, `card::cells` and DDP/E1.31
+input scatter through it, `/api/pixels` serves wire order (docs/api.md), and
+the `luxel serve` panel mirror does the same.
+
+The whole-frame entry is **`renderBulk()`** (same lifecycle); its index space
+is WIRE order, so grid cells go through the new **`gridIndex(col, row)`**
+builtin (id 193, the inverse of `pixelCoord`; both direct JIT entries) or the
+coordinate ops. `export function renderFrame` is a compile error naming the
+rename, and a stored blob that exports it is refused with `BcError::Stale`
+→ the `bc-version` recompile reply (no `FORMAT_VERSION` bump). All 36
+library patterns ported, 185/185 frame digests identical to master on the
+five `check-library` rigs (`crates/luxel-cli/examples/framedump.rs`); only
+`aurora-2d`, `frame-rate-scan`, `frame-rate-scan-fast`, `frame-rate-test`
+changed beyond the rename. On the rotated 2x2 at 16384 px: `frame_pack_us`
+23–27 → 17–20 ms on every probe, empty `render2D` 28.1 → 28.7 ms VM (the
+first build was +6 ms before the cursor), bulk patterns +3 to +6 fps,
+`/api/pixels` decoded through the tiling equals master's picture exactly
+(docs/boards.md "The wire-ordered frame on metal"). Follow-ups: #953 (row-run
+iteration for the grid-walking bulk ops, compose and 2D blur/glow), #949
+(`/api/pixels` empty at full frame rate, pre-existing), #800 (master's
+pixelblaze-v3 stack floor). Jeremy's stored patterns that export
+`renderFrame` (Aurora 2D on both Seengreats) need re-saving from the library
+or a one-word edit.
+
 ## 2026-10-04 — the native pixel loop marshals raw words (#938, PR #944)
 
 The per-pixel floor found in #938 (an empty `render2D` at 33.8 ms for 16384
