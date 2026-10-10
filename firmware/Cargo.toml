@@ -79,7 +79,7 @@ default = ["board-c3-devkit"]
 # WLED's own /update page. See the feature's own comment below.
 board-c3-devkit = ["esp32c3", "wled-takeover"]
 board-athom-music = ["esp32", "wled-takeover"]
-board-pixelblaze-v3 = ["esp32"]
+board-pixelblaze-v3 = ["esp32", "pixelblaze-takeover"]
 board-esp32-generic = ["esp32", "wled-takeover"]
 # Untested on metal (no bench hardware) — reviewed wiring only; see docs/boards.md.
 board-s3-devkit = ["esp32s3", "wled-takeover"]
@@ -100,13 +100,24 @@ board-seengreat-hub75 = ["esp32s3", "hub75", "psram-arena"]
 # Enabled by the BOARDS that can actually be
 # installed that way and left off where the install path is serial:
 #   on  — athom-music, esp32-generic, c3-devkit, c6-devkit, s3-devkit
-#   off — pixelblaze-v3 (a stock PB v3 runs Pixelblaze firmware and is
-#         flashed over serial), seengreat-hub75 (ships XiaoZhi)
+#   off — pixelblaze-v3 (converts from a different foreign firmware; see
+#         `pixelblaze-takeover` below), seengreat-hub75 (ships XiaoZhi)
 # A board feature turns it on for itself, like `hub75` — never a default.
 # tools/image-check.sh asserts BOTH directions off firmware/board-target.sh's
 # `board_takeover`, so a WLED-capable board that silently lost the feature
 # fails the build rather than shipping a no-op installer.
 wled-takeover = []
+# Pixelblaze v3 -> Luxel self-install (src/takeover.rs + src/pbfs.rs +
+# src/pbnvs.rs): the same foreign-table takeover as `wled-takeover`, but the
+# outgoing firmware is Pixelblaze, so the settings it inherits come from a
+# different place — the LED wiring/defaults out of Pixelblaze's SPIFFS
+# config.json (src/pbfs.rs) and the WiFi credentials out of its ESP-IDF NVS
+# partition (src/pbnvs.rs), since a stock PB keeps no creds on its
+# filesystem. The table-writing/self-copy/boot-guard half is shared
+# (src/parttab.rs). Per board, same as wled-takeover; a board that ships one
+# must not ship the other. Only board-pixelblaze-v3 turns it on. Delivery of
+# the image onto a stock PB is settled on hardware (docs/pixelblaze-migration.md).
+pixelblaze-takeover = []
 # External PSRAM as a dedicated pattern-array arena (Gitea #253, src/psram.rs).
 # S3-only, and only on a board that actually carries a PSRAM die: the array
 # arena moves off internal DRAM into a SECOND esp-alloc heap, so the main

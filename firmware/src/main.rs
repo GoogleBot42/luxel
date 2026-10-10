@@ -116,10 +116,14 @@ mod sprites;
 mod sntp;
 mod shared;
 mod textslots;
-#[cfg(feature = "wled-takeover")]
+#[cfg(any(feature = "wled-takeover", feature = "pixelblaze-takeover"))]
 mod takeover;
 #[cfg(feature = "wled-takeover")]
 mod wledfs;
+#[cfg(feature = "pixelblaze-takeover")]
+mod pbfs;
+#[cfg(feature = "pixelblaze-takeover")]
+mod pbnvs;
 
 use leds::Protocol;
 use luxel_core::jsonview;
@@ -447,7 +451,7 @@ async fn main(spawner: Spawner) -> ! {
     // `board_takeover` in firmware/board-target.sh, and tools/image-check.sh
     // fails the build in both directions if those two ever disagree with
     // what actually got linked. Never comment this call out instead.
-    #[cfg(feature = "wled-takeover")]
+    #[cfg(any(feature = "wled-takeover", feature = "pixelblaze-takeover"))]
     takeover::maybe_takeover();
     // Map the assets partition through the cache MMU (flashmap.rs) before
     // the TOC parse so init() and every asset response read it as memory.

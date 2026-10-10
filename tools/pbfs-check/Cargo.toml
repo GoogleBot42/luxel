@@ -1,0 +1,20 @@
+# Host-side test rig for firmware/src/pbfs.rs (the read-only SPIFFS reader
+# the Pixelblaze takeover uses to inherit LED settings). Compiles the exact
+# on-device source file against a real flash dump:
+#
+#   cargo run --release -- <pb-flash-dump.bin | spiffs-image.bin> [file-to-dump ...]
+#   cargo test --release
+#
+# A 4 MiB full-flash dump is sliced at the v3's SPIFFS partition
+# (0x290000, 0x170000 long); anything smaller is taken as a bare partition
+# image. Dumps live in the repo root (pb-v3-stock.bin, git-ignored — they
+# carry the device name and the owner's patterns).
+[package]
+name = "pbfs-check"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+
+[workspace]

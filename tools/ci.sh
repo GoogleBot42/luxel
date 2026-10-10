@@ -69,6 +69,16 @@ BOARD="${CI_BOARD:-board-pixelblaze-v3}"
 # only in pin maps and features), the tightest image in the fleet
 # (c6-devkit-hosted), and the only riscv32imc target (c3-devkit).
 #
+# NOTE (pixelblaze-takeover): board-pixelblaze-v3 used to be the variant that
+# exercised image-check's ABSENT-takeover-marker direction (it was
+# board_takeover=0). Since it now ships `pixelblaze-takeover` it asserts the
+# marker PRESENT like the other two, so NONE of the default variants test the
+# absent direction any more — the one board without a self-installer is now
+# board-seengreat-hub75. That invariant is still enforced wherever seengreat
+# is image-checked (.github/workflows/release.yml, and CI_QEMU=1 builds it),
+# just not in this default loop. Add seengreat-hub75 to CI_VARIANTS to cover
+# it locally too, at the cost of a 16 MB S3 build each run (Gitea follow-up).
+#
 # And the margin is measured on the FLAKE image, not a devshell one. They
 # are not the same artifact: a devshell build bakes the dev WiFi creds, and
 # the gate has to weigh the bytes release.yml actually publishes. `nix build
