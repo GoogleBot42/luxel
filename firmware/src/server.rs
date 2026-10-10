@@ -990,6 +990,14 @@ fn status_json() -> luxel_core::jsonview::Chunks {
         let _ = crate::packbench::status_json(&mut s);
         push_piece(&mut out, &s);
     }
+    // The boot-time frame-store microbench (Gitea #958), same reason.
+    #[cfg(feature = "storebench")]
+    {
+        push_piece(&mut out, ",\"storebench\":");
+        let mut s = alloc::string::String::new();
+        let _ = crate::storebench::status_json(&mut s);
+        push_piece(&mut out, &s);
+    }
     push_piece(&mut out, ",\"engine_heap\":");
     push_u32(&mut out, crate::shared::ENGINE_HEAP.load(Ordering::Relaxed));
     // The smoothed `heap_free + engine_heap` `caps.layers` is advertised

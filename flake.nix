@@ -243,7 +243,11 @@
               } else {
                 # -Z flags on mainline stable rustc
                 RUSTC_BOOTSTRAP = "1";
-              });
+              }) // lib.optionalAttrs (chip == "esp32s3") {
+                # 64-byte data-cache lines — firmware/board-target.sh sets
+                # the same for devshell builds (Gitea #958). S3-only option.
+                ESP_HAL_CONFIG_DATA_CACHE_LINE_SIZE = "64B";
+              };
 
               buildPhase = ''
                 runHook preBuild
