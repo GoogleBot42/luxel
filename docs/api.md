@@ -50,6 +50,16 @@ pattern's own `setBlur`/`setGlow`/`setOutputPalette` exactly and the Settings
 chain not at all (docs/firmware.md). The playground runs that chain itself
 through `lx_outpipe` (Gitea #466) rather than reading it back.
 
+**Pixel order is the WIRE's** (Gitea #948). On a HUB75 board whose chain is
+not already row-major (anything but one upright tile, or two side by side
+with the ribbon entering on the right) the engine writes its frame in the
+order the panel driver clocks it out, so `/api/pixels` is in that order too:
+slot `i` shows grid cell `Tiling::cell(i)` of the layout's chain
+(`luxel_core::outpipe::Tiling` / `GridMap::cell` — the arithmetic over
+`matrix`'s `pw ph cols rows scan` and the `tiles` list `GET /api/layout`
+reports). Decode through that, not as `(i % w, i / w)`. Every other board,
+and a plain panel, is row-major exactly as before.
+
 `/api/pixels` answers an **empty body** when there is no frame yet (before the
 first render). Treat a zero-length response as "no snapshot right now", not as
 an all-black frame. When the heap cannot hold the response it answers
@@ -1312,10 +1322,11 @@ embedded so a client needs one fetch:
 | `map` | The `GET /api/map` body verbatim. |
 
 The index→coordinate mapping a client's own preview engine needs is `kind` +
-`w`/`h` and nothing else: pixel `i` of a matrix is row-major, `(i % w,
-i / w)`. The `matrix` block's `start`/`dir`/`snake`/`rot` describe how the
-ribbon walks from TILE to tile, which the firmware's remap absorbs — they are
-for drawing the arrangement, never for placing pixels. (The console read
+`w`/`h`: a client renders the grid row-major, `(i % w, i / w)`, and the
+`matrix` block's `start`/`dir`/`snake`/`rot` describe how the ribbon walks
+from TILE to tile — for drawing the arrangement, never for placing pixels in
+a client's own frame. The DEVICE's frame on a tiled HUB75 chain is in wire
+order instead (Gitea #948, see `/api/pixels` above). (The console read
 `snake` as serpentine pixel rows until 2026-09-30 and mirrored every other
 row of its per-pixel 2D thumbnails on a snaked wall.)
 
@@ -1323,9 +1334,10 @@ row of its per-pixel 2D thumbnails on a snaked wall.)
 
 A HUB75 chain is one ribbon: the driver shifts a single row `pw · panels`
 wide and `ph` tall, and the tiles hang wherever the installer put them. The
-`matrix` block describes that, and the firmware turns it into a
-**panel→pixel remap built once at boot**, so the engine keeps rendering one
-`pw·cols` × `ph·rows` row-major grid and never knows about the chain.
+`matrix` block describes that, and the engine renders one `pw·cols` ×
+`ph·rows` grid whose frame it writes **in driver order** through the chain's
+arithmetic (`Tiling`, Gitea #948 — until then a panel→pixel remap table the
+packer gathered through), so patterns see the grid and never the chain.
 
 **Chain positions count from the IN connector** — tile 1 in the arrangement
 picture is the panel the ribbon enters — and the firmware maps them onto the
@@ -1334,7 +1346,7 @@ clocked out travels through every panel to the far END of the chain, the last
 block stays on the IN panel, so chain tile `p` owns driver block
 `panels − 1 − p`. Two things follow. A row of upright panels with the ribbon
 entering on the right is `tr row` (the data shifts leftwards; that is the
-identity remap), not `tl row`. And a chain wider than the framebuffer lights
+identity, a row-major frame), not `tl row`. And a chain wider than the framebuffer lights
 the tiles NEAREST the IN connector (`drive` of them) and leaves the far ones
 dark. (Until 2026-09-30 tile `p` owned block `p`; on Jeremy's 2x2 `tr col`
 snake that swapped the two columns — Gitea #917.)
@@ -1415,8 +1427,9 @@ against 76.9–77.0 / 153.5–154.0.
 - **What needs a reboot.** On a **HUB75 board** only the framebuffer's
   shape does — `pw ph cols rows scan`, which the DMA framebuffer is allocated
   from at boot. Which panel sits where and how it is turned (`start dir snake
-  rot`, or a `chain` line) is a remap TABLE the output task swaps between
-  frames, so it applies live and answers `"reboot_required":false` (Gitea
+  rot`, or a `chain` line) is arithmetic the engine writes its frame through,
+  re-applied by the render task on the next frame (a remap table the output
+  task swapped before #948), so it applies live and answers `"reboot_required":false` (Gitea
   #920). On a strip-built matrix `pw`/`ph` only resize the grid (live) and the
   wiring fields stay `reboot_required` as since #475.
 - An arrangement whose chain is wider than `drive` tiles is accepted, stored
@@ -1449,7 +1462,7 @@ is what shows); restating it unchanged keeps the list. Persisted as its own
 line after `panel` only when explicit, so a rule-described Layout's stored
 text is byte-identical to before.
 
-`GET /api/layout` always reports the chain the remap walks, however it was
+`GET /api/layout` always reports the chain the frame is written through, however it was
 described: `"tiles":[[cx,cy,deg],…]` in ribbon order (tile 0 is the panel the
 ribbon enters — the arrangement picture numbers it **1**), and
 `"explicit":true|false` says whether a `chain` line is stored.
@@ -1463,7 +1476,7 @@ board draw a card instead of the pattern from the next frame; `GET
 | mode | what the wall shows | what it is for |
 |---|---|---|
 | `panels` | every PHYSICAL panel: its OWN ribbon number (1 = the panel the ribbon enters), whatever cell the arrangement puts it in, plus an arrow — drawn straight into the driver's blocks, through the TURN the arrangement currently gives that panel (so the arrow points up exactly when the configured turn matches how the panel hangs) | reading the wall into the editor: click a cell, pick the number seen there, rotate until the arrow points up |
-| `cells` | every GRID CELL: its ribbon number with an UP arrow, through the live remap | checking: with the right transcription every panel shows its own number upright; a wrong cell shows the wrong number, a wrong turn a sideways one |
+| `cells` | every GRID CELL: its ribbon number with an UP arrow, written through the chain like any frame | checking: with the right transcription every panel shows its own number upright; a wrong cell shows the wrong number, a wrong turn a sideways one |
 
 Both cards therefore answer a turn edit on the next frame, and the loop on
 the wall is the same in either: **rotate until the arrow points up**. Note
@@ -1832,7 +1845,7 @@ Measured on the Athom (60 px WS2812, `/api/status` `out_us`): 2,524 us for one
 protocol latch tail, not a second frame. docs/boards.md has the full table.
 
 **Live vs reboot.** `reboot_required` is true for exactly what a boot BUILDS
-— the panel→pixel chain remap (Gitea #475) and an output's driver INSTANCE
+— the panel's DMA framebuffer (Gitea #475/#525) and an output's driver INSTANCE
 (#474) — and false for everything a frame re-reads. Field by field (Gitea
 #550):
 
@@ -1843,7 +1856,7 @@ protocol latch tail, not a second frame. docs/boards.md has the full table.
 | `proj` (the running pattern's override) | **live**, and never stored |
 | `matrix` `pw` `ph` | **live** on a strip-built matrix — they only resize the grid — and **reboot** on a HUB75 board, whose DMA framebuffer is allocated from them at boot (#525) |
 | `matrix` `cols` `rows` `scan` (and `pw` `ph` on a panel board) | **reboot** — the DMA framebuffer is allocated from them at boot |
-| `matrix` `start` `dir` `snake` `rot`, `chain` | **live** on a panel board — the remap table is swapped between frames (#920); reboot on a strip-built matrix (#475) |
+| `matrix` `start` `dir` `snake` `rot`, `chain` | **live** on a panel board — the render task re-applies the map through the new chain on the next frame (#920, #948); reboot on a strip-built matrix (#475) |
 | `panel` `planes` `clock_mhz` `chip` | **reboot** — the DMA descriptors, the LCD_CAM clock and the chip's init sequence are all set up once, at boot (#525). The field a client notes as pending is `panel`. |
 | `panel` `blank` | **live** — control bits in the framebuffer words, which the packer never writes, so the output task re-formats each buffer in place and the new blanking is on the panel within a frame (#778). `live.blank` follows one frame later; a blanking that would leave no OE-active clock in the running row block is refused at POST time |
 | `out` `count` (the split) | **live** on every output — the run boundaries are re-read from the Layout each frame, so an output whose run shrank drives fewer pixels at once and one the table no longer covers goes dark |

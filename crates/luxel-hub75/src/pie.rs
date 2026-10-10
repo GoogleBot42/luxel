@@ -8,7 +8,7 @@
 //! per-plane work sixteen pixels at a time on the S3's 128-bit PIE unit and
 //! leaves the packer's contract untouched: given the same formatted words,
 //! the same RGB frame and the same brightness LUT it writes the same bytes as
-//! [`crate::pack`] / [`crate::pack_remap`] — a host test asserts that against
+//! [`crate::pack`] — a host test asserts that against
 //! a portable model of the lane arithmetic, and the firmware's `packbench`
 //! image asserts the assembly against `pack` on metal.
 //!
@@ -171,18 +171,19 @@ fn as_u16(lines: &mut [Line]) -> &mut [u16] {
     }
 }
 
-/// The scalar prologue: gather row pair `r` of `rgb` (through `lut` when the
-/// panel is remapped) into the pair pads. With [`LutMode::Table`] the byte
+/// The scalar prologue: gather row pair `r` of `rgb` into the pair pads.
+/// The frame is already in driver order (Gitea #948 — the engine writes a
+/// tiled chain's frame the way the driver clocks it), so both rows are
+/// plain slices. With [`LutMode::Table`] the byte
 /// LUT is applied here (six dependent loads per pixel — measured at ~48
 /// cycles/px on the S3, which is why the firmware never uses this mode);
 /// with `Identity` or `Scale` the bytes are copied and the scale, if any,
 /// is applied by [`scale_pads`] on the vector unit.
 ///
-/// A short frame reads black past its end, and an unmapped driver pixel
-/// reads black — the same contract as [`crate::pack`].
+/// A short frame reads black past its end — the same contract as
+/// [`crate::pack`].
 fn gather_pair(
     rgb: &[[u8; 3]],
-    lut: Option<&[u16]>,
     r: usize,
     rows: usize,
     cols: usize,
@@ -195,7 +196,7 @@ fn gather_pair(
     let table = matches!(tables.mode(), LutMode::Table);
     let blut = tables.lut();
     // The plain case: both rows are whole slices of the frame, no LUT.
-    if lut.is_none() && !table {
+    if !table {
         let top = r * cols;
         let bot = (r + rows) * cols;
         if let (Some(t), Some(b)) = (rgb.get(top..top + cols), rgb.get(bot..bot + cols)) {
@@ -215,31 +216,15 @@ fn gather_pair(
         };
         (ch(0), ch(1), ch(2))
     };
-    match lut {
-        None => {
-            let top = r * cols;
-            let bot = (r + rows) * cols;
-            for x in 0..cols {
-                let t = rgb.get(top + x).copied().unwrap_or(black);
-                let b = rgb.get(bot + x).copied().unwrap_or(black);
-                let (pr, pg, pb) = pair(t, b);
-                rr[x] = pr;
-                gg[x] = pg;
-                bb[x] = pb;
-            }
-        }
-        Some(l) => {
-            let lt = &l[r * cols..(r + 1) * cols];
-            let lb = &l[(r + rows) * cols..(r + rows + 1) * cols];
-            for x in 0..cols {
-                let t = rgb.get(usize::from(lt[x])).copied().unwrap_or(black);
-                let b = rgb.get(usize::from(lb[x])).copied().unwrap_or(black);
-                let (pr, pg, pb) = pair(t, b);
-                rr[x] = pr;
-                gg[x] = pg;
-                bb[x] = pb;
-            }
-        }
+    let top = r * cols;
+    let bot = (r + rows) * cols;
+    for x in 0..cols {
+        let t = rgb.get(top + x).copied().unwrap_or(black);
+        let b = rgb.get(bot + x).copied().unwrap_or(black);
+        let (pr, pg, pb) = pair(t, b);
+        rr[x] = pr;
+        gg[x] = pg;
+        bb[x] = pb;
     }
 }
 
@@ -648,37 +633,32 @@ fn pack_pair_planes(dst: &mut [u16], stride: usize, cols: usize, planes: usize, 
     }
 }
 
-/// [`crate::pack`] / [`crate::pack_remap`] on the vector unit.
+/// [`crate::pack`] on the vector unit.
 ///
 /// Same contract, same output: `dst` is the whole formatted framebuffer,
-/// `rgb` the row-major frame, `lut` the optional driver→engine remap, and
-/// `tables` the brightness tables (this reads their byte LUT). Returns
+/// `rgb` the frame in driver order, and `tables` the brightness tables (this reads their byte LUT). Returns
 /// `false` — having written NOTHING — when [`fits`] fails or the pads are too
 /// narrow; the caller then packs the scalar way.
 ///
 /// # Panics
 /// On [`crate::pack`]'s own conditions: `dst` not `g.words()` entries, more
-/// than [`MAX_PLANES`] planes, or a `lut` that is not `g.pixels()` entries.
+/// than [`MAX_PLANES`] planes.
 pub fn pack_pie(
     dst: &mut [u16],
     g: Geometry,
     rgb: &[[u8; 3]],
-    lut: Option<&[u16]>,
     tables: &Tables,
     pads: &mut PairPads,
 ) -> bool {
     assert!(g.planes <= MAX_PLANES, "bit = 7 - plane; more than 8 planes has no source bit");
     assert_eq!(dst.len(), g.words(), "framebuffer length");
-    if let Some(l) = lut {
-        assert_eq!(l.len(), g.pixels(), "remap table length");
-    }
     if !fits(dst, g) || pads.cols() < g.cols {
         return false;
     }
     let (rows, cols) = (g.rows, g.cols);
     let stride = g.plane_words();
     for r in 0..rows {
-        gather_pair(rgb, lut, r, rows, cols, tables, pads);
+        gather_pair(rgb, r, rows, cols, tables, pads);
         pack_pair_planes(&mut dst[r * cols..], stride, cols, g.planes, tables, pads);
     }
     true
@@ -693,7 +673,6 @@ pub fn pack_row_pair(
     g: Geometry,
     r: usize,
     rgb: &[[u8; 3]],
-    lut: Option<&[u16]>,
     tables: &Tables,
     pads: &mut PairPads,
 ) -> bool {
@@ -706,7 +685,7 @@ pub fn pack_row_pair(
     {
         return false;
     }
-    gather_pair(rgb, lut, r, g.rows, g.cols, tables, pads);
+    gather_pair(rgb, r, g.rows, g.cols, tables, pads);
     pack_pair_planes(dst_slot, g.cols, g.cols, g.planes, tables, pads);
     true
 }
@@ -714,7 +693,7 @@ pub fn pack_row_pair(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{format, pack, pack_remap, Control, Scratch};
+    use crate::{format, pack, Control, Scratch};
     use std::vec::Vec;
     use std::{format, vec};
 
@@ -762,11 +741,11 @@ mod tests {
         lut
     }
 
-    fn assert_pie_matches_pack(g: Geometry, rgb: &[[u8; 3]], lut: Option<&[u16]>, blut: &[u8; 256], what: &str) {
-        assert_pie_matches_pack_with(g, rgb, lut, &Tables::from_lut(blut), what);
+    fn assert_pie_matches_pack(g: Geometry, rgb: &[[u8; 3]], blut: &[u8; 256], what: &str) {
+        assert_pie_matches_pack_with(g, rgb, &Tables::from_lut(blut), what);
     }
 
-    fn assert_pie_matches_pack_with(g: Geometry, rgb: &[[u8; 3]], lut: Option<&[u16]>, tables: &Tables, what: &str) {
+    fn assert_pie_matches_pack_with(g: Geometry, rgb: &[[u8; 3]], tables: &Tables, what: &str) {
         let tables = tables.clone();
         let c = Control::default();
         let mut want_v = aligned_words(g.words());
@@ -776,12 +755,9 @@ mod tests {
         format(want, g, c);
         format(got, g, c);
         let mut scratch = Scratch::for_geometry(g);
-        match lut {
-            None => pack(want, g, rgb, &tables, &mut scratch),
-            Some(l) => pack_remap(want, g, rgb, l, &tables, &mut scratch),
-        }
+        pack(want, g, rgb, &tables, &mut scratch);
         let mut pads = PairPads::for_geometry(g);
-        assert!(pack_pie(got, g, rgb, lut, &tables, &mut pads), "{what}: preconditions");
+        assert!(pack_pie(got, g, rgb, &tables, &mut pads), "{what}: preconditions");
         if want != got {
             let i = want.iter().zip(got.iter()).position(|(a, b)| a != b).unwrap();
             let plane = i / g.plane_words();
@@ -800,7 +776,7 @@ mod tests {
         for trial in 0..4 {
             let frame = rng.frame(G.pixels());
             for b5 in 0..=31u8 {
-                assert_pie_matches_pack(G, &frame, None, &scale5_lut(b5), &format!("random frame {trial} b5={b5}"));
+                assert_pie_matches_pack(G, &frame, &scale5_lut(b5), &format!("random frame {trial} b5={b5}"));
             }
         }
     }
@@ -825,7 +801,7 @@ mod tests {
         for b5 in [0u8, 1, 3, 14, 17, 30, 31] {
             let mut t = Tables::zeroed();
             t.build_scale5(b5);
-            assert_pie_matches_pack_with(G, &frame, None, &t, &format!("scale5 b5={b5}"));
+            assert_pie_matches_pack_with(G, &frame, &t, &format!("scale5 b5={b5}"));
         }
         // and through the model's scale pass directly
         let mut pad: Vec<u16> = (0..64u16).map(|i| (i * 977) ^ 0x3c5a).collect();
@@ -841,12 +817,12 @@ mod tests {
         for (k, px) in frame.iter_mut().enumerate() {
             *px = [edges[k % 8], edges[(k / 8) % 8], edges[(k / 64) % 8]];
         }
-        assert_pie_matches_pack(G, &frame, None, &scale5_lut(31), "edges full");
-        assert_pie_matches_pack(G, &frame, None, &scale5_lut(7), "edges b5=7");
-        assert_pie_matches_pack(G, &frame, None, &gamma_lut(), "edges gamma");
+        assert_pie_matches_pack(G, &frame, &scale5_lut(31), "edges full");
+        assert_pie_matches_pack(G, &frame, &scale5_lut(7), "edges b5=7");
+        assert_pie_matches_pack(G, &frame, &gamma_lut(), "edges gamma");
         for v in edges {
             let solid = vec![[v; 3]; G.pixels()];
-            assert_pie_matches_pack(G, &solid, None, &scale5_lut(31), "solid");
+            assert_pie_matches_pack(G, &solid, &scale5_lut(31), "solid");
         }
     }
 
@@ -854,29 +830,17 @@ mod tests {
     fn short_frames_trailing_block_and_other_geometries_match() {
         let mut rng = Rng(9);
         let short = rng.frame(G.pixels() / 3);
-        assert_pie_matches_pack(G, &short, None, &scale5_lut(31), "short frame");
+        assert_pie_matches_pack(G, &short, &scale5_lut(31), "short frame");
         let long = rng.frame(G.pixels() + 1000);
-        assert_pie_matches_pack(G, &long, None, &scale5_lut(20), "long frame");
+        assert_pie_matches_pack(G, &long, &scale5_lut(20), "long frame");
         let trail = G.with_trail(true);
         let frame = rng.frame(G.pixels());
-        assert_pie_matches_pack(trail, &frame, None, &scale5_lut(31), "trailing block");
+        assert_pie_matches_pack(trail, &frame, &scale5_lut(31), "trailing block");
         for (rows, cols, planes) in [(16usize, 32usize, 7usize), (32, 128, 7), (32, 256, 7), (8, 8, 8), (32, 64, 4)] {
             let g = Geometry::new(rows, cols, planes);
             let frame = rng.frame(g.pixels());
-            assert_pie_matches_pack(g, &frame, None, &scale5_lut(13), &format!("{rows}x{cols}x{planes}"));
+            assert_pie_matches_pack(g, &frame, &scale5_lut(13), &format!("{rows}x{cols}x{planes}"));
         }
-    }
-
-    #[test]
-    fn remapped_frames_match_pack_remap() {
-        let mut rng = Rng(11);
-        let frame = rng.frame(G.pixels());
-        // A rotate-by-half remap with a few unmapped and out-of-range entries.
-        let mut lut: Vec<u16> = (0..G.pixels()).map(|i| ((i + G.pixels() / 2) % G.pixels()) as u16).collect();
-        lut[5] = crate::arrange::UNMAPPED;
-        lut[77] = 60000;
-        assert_pie_matches_pack(G, &frame, Some(&lut), &scale5_lut(31), "remap full");
-        assert_pie_matches_pack(G, &frame, Some(&lut), &scale5_lut(9), "remap b5=9");
     }
 
     #[test]
@@ -887,7 +851,7 @@ mod tests {
         let words = words_of(&mut v, g.words());
         let frame = vec![[1u8; 3]; g.pixels()];
         let mut pads = PairPads::for_geometry(g);
-        assert!(!pack_pie(words, g, &frame, None, &tables, &mut pads));
+        assert!(!pack_pie(words, g, &frame, &tables, &mut pads));
         assert!(words.iter().all(|&w| w == 0), "nothing written on refusal");
         // Misaligned destination.
         let mut v = aligned_words(G.words() + 8);
@@ -895,12 +859,12 @@ mod tests {
         let words = &mut all[1..1 + G.words()];
         let mut pads = PairPads::for_geometry(G);
         let frame = vec![[1u8; 3]; G.pixels()];
-        assert!(!pack_pie(words, G, &frame, None, &tables, &mut pads));
+        assert!(!pack_pie(words, G, &frame, &tables, &mut pads));
         // Pads too narrow.
         let mut v = aligned_words(G.words());
         let words = words_of(&mut v, G.words());
         let mut narrow = PairPads::new(8);
-        assert!(!pack_pie(words, G, &frame, None, &tables, &mut narrow));
+        assert!(!pack_pie(words, G, &frame, &tables, &mut narrow));
     }
 
     #[test]
@@ -912,7 +876,7 @@ mod tests {
         let fb = words_of(&mut fb_v, G.words());
         format(fb, G, Control::default());
         let mut pads = PairPads::for_geometry(G);
-        assert!(pack_pie(fb, G, &frame, None, &tables, &mut pads));
+        assert!(pack_pie(fb, G, &frame, &tables, &mut pads));
         for r in [0usize, 7, 31] {
             let mut slot_v = aligned_words(G.planes * G.cols);
             let slot = words_of(&mut slot_v, G.planes * G.cols);
@@ -925,7 +889,7 @@ mod tests {
                     *w &= !COLOR_MASK;
                 }
             }
-            assert!(pack_row_pair(slot, G, r, &frame, None, &tables, &mut pads));
+            assert!(pack_row_pair(slot, G, r, &frame, &tables, &mut pads));
             for p in 0..G.planes {
                 let base = p * G.plane_words() + r * G.cols;
                 assert_eq!(&slot[p * G.cols..(p + 1) * G.cols], &fb[base..base + G.cols], "row {r} plane {p}");

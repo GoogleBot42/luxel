@@ -1,4 +1,5 @@
-//! Panel arrangement → the boot-time panel→pixel remap (Gitea #475).
+//! Panel arrangement → the chain's tiling: which engine cell every driver
+//! pixel shows (Gitea #475, evaluated lazily by the engine since #948).
 //!
 //! A HUB75 chain is one ribbon: the driver shifts a single row of
 //! `pw * panels` pixels, `ph` tall, and the panels sit wherever the
@@ -6,23 +7,22 @@
 //! physical arrangement — `cols`×`rows` tiles, which corner the chain
 //! starts from, whether it runs along rows or columns, whether it snakes,
 //! and whether alternate lines are mounted upside-down — and this module
-//! turns it into ONE lookup table:
+//! turns it into ONE mapping between a driver pixel and an engine grid cell.
 //!
-//! ```text
-//! lut[driver pixel index] = engine pixel index      (or UNMAPPED)
-//! ```
-//!
-//! so the engine keeps rendering one `cols*pw` × `rows*ph` row-major grid
-//! and the compose path gathers through the table ([`crate::pack_remap`]).
-//! Built once at boot — the arrangement is a `reboot_required` field of
-//! `/api/layout` precisely so nothing has to re-derive it per frame.
+//! Until Gitea #948 that mapping was a 2 B/px table (`lut[driver index] =
+//! engine index`) the packer gathered through every frame. Now it is the
+//! formula the engine evaluates lazily: [`tiling`] hands the firmware a
+//! [`luxel_core::outpipe::Tiling`], the engine writes its frame in DRIVER
+//! order through it (`Engine::set_wire_tiling`), and the packer reads the
+//! frame straight — no table, no gather. The table builder survives only as
+//! `#[cfg(test)]` reference code (`build_lut_tiles`), which
+//! `the_tiling_is_the_table` proves the formula against for every wiring.
 //!
 //! **The identity case costs nothing.** A single upright tile (and any
 //! arrangement that happens to come out row-major, e.g. two 32-wide tiles
 //! side by side wired `tr row` — IN on the right, since the data shifts
-//! leftwards) produces `lut[i] == i`; the firmware checks that with
-//! [`is_identity`], drops the table, and composes exactly the code it
-//! composed before this module existed.
+//! leftwards) is an identity tiling; `GridMap::tiled` drops it and the
+//! engine runs exactly the row-major path it always did.
 //!
 //! **Which driver block is which tile.** Chain positions count from the IN
 //! connector (tile 1 in the UI is the panel the ribbon enters). The driver
@@ -39,9 +39,8 @@
 //! rows of the panel, and the driver has to clock out a correspondingly
 //! LONGER row — `stripes = (ph / 2) / scan` copies of the chain's width per
 //! address row. [`fb_geometry`] turns a `Matrix` into the framebuffer shape
-//! that implies, and [`build_lut`] folds the stripe mapping into the same
-//! table as the tile arrangement, so a 1/16-scan panel costs the compose path
-//! nothing beyond the gather it already does for a chain.
+//! that implies, and the tiling folds the stripe mapping into the same
+//! formula as the tile arrangement.
 //!
 //! **Chain order.** Panels are visited line by line. A *line* is a row of
 //! tiles when `dir` is [`RunDir::Row`] and a column when it is
@@ -60,9 +59,12 @@ use luxel_core::layout::{Matrix, PanelDriver, Tile};
 
 /// A driver pixel with no engine pixel behind it: outside the arrangement,
 /// or past the end of the chain the framebuffer covers. Composed black.
+/// (Reference table only — see the module docs.)
+#[cfg(test)]
 pub const UNMAPPED: u16 = u16::MAX;
 
 /// Largest engine pixel index a remap can name (`UNMAPPED` is the sentinel).
+#[cfg(test)]
 pub const MAX_INDEX: u32 = UNMAPPED as u32 - 1;
 
 /// How many tiles the chain threads.
@@ -142,7 +144,7 @@ pub fn fb_geometry(m: &Matrix, planes: usize) -> Option<Geometry> {
 /// Which tile of the grid chain position `p` is under the RULE fields, and
 /// how many quarter turns clockwise it is mounted at — the regular-pattern
 /// generator, [`Matrix::rule_tile`]. `None` past the end of the chain. The
-/// remap itself takes the effective tile list ([`build_lut`]), which is this
+/// tiling itself takes the effective tile list ([`tiling`]), which is this
 /// for a rule-described wall and the explicit `chain` line otherwise
 /// (Gitea #920).
 ///
@@ -165,7 +167,9 @@ pub fn tiling(m: &Matrix, tiles: &[Tile]) -> Option<luxel_core::outpipe::Tiling>
     luxel_core::outpipe::Tiling::new(m.pw, m.ph, m.cols, m.rows, scan, &chain)
 }
 
-/// Fill `lut` with the driver→engine remap, indexed by DRIVER pixel index.
+/// Fill `lut` with the driver→engine table, indexed by DRIVER pixel index —
+/// the pre-#948 remap, kept as `#[cfg(test)]` reference code that
+/// [`tiling`]'s formula is tested against.
 /// Returns the number of leading chain tiles the framebuffer drives (see
 /// [`driven_panels`]).
 ///
@@ -198,6 +202,7 @@ pub fn tiling(m: &Matrix, tiles: &[Tile]) -> Option<luxel_core::outpipe::Tiling>
 ///
 /// # Panics
 /// If `lut` is not exactly `fb_w * fb_h` entries.
+#[cfg(test)]
 pub fn build_lut(lut: &mut [u16], m: &Matrix, fb_w: usize, fb_h: usize) -> usize {
     build_lut_tiles(lut, m, &m.rule_tiles(), fb_w, fb_h)
 }
@@ -208,6 +213,7 @@ pub fn build_lut(lut: &mut [u16], m: &Matrix, fb_w: usize, fb_h: usize) -> usize
 /// identical. Tiles past `drive`, or naming a cell outside the grid, are
 /// skipped (the parser refuses such a list; this is the never-out-of-bounds
 /// rule for a stored wire).
+#[cfg(test)]
 pub fn build_lut_tiles(lut: &mut [u16], m: &Matrix, tiles: &[Tile], fb_w: usize, fb_h: usize) -> usize {
     assert_eq!(lut.len(), fb_w * fb_h, "remap table length");
     lut.fill(UNMAPPED);
@@ -270,10 +276,9 @@ pub fn build_lut_tiles(lut: &mut [u16], m: &Matrix, tiles: &[Tile], fb_w: usize,
     drive
 }
 
-/// Does this table leave every pixel where it was? Then the arrangement is
-/// already what the compose path does natively and the table can be thrown
-/// away — the whole point of building it eagerly rather than branching on
-/// `cols == 1 && rows == 1`.
+/// Does this table leave every pixel where it was? (Reference code; the
+/// firmware asks [`luxel_core::outpipe::Tiling::is_identity`].)
+#[cfg(test)]
 #[must_use]
 pub fn is_identity(lut: &[u16]) -> bool {
     lut.iter().enumerate().all(|(i, &e)| e as usize == i)
