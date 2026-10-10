@@ -176,46 +176,73 @@ pub fn cos_turns(t: Fx) -> Fx {
 
 /// specified in turns, so this is the core primitive; radian `sin` reduces
 /// into it.
+///
+/// A 256-step quarter-wave table with linear interpolation (Gitea #941),
+/// replacing a 9th-order Taylor series of five widening multiplies and four
+/// constant divides. The phase wraps to 16 bits, folds to a quarter wave
+/// `t ∈ [0, 16384]`, and splits into a table step `i = t >> 6` and a
+/// 6-bit fraction. [`SIN_DEV`] holds `sin` MINUS its chord `4t` (the
+/// straight line from 0 to 1.0 over the quarter) in quarter-LSB units,
+/// which fits a `u16` with two extra fraction bits where the bare sine
+/// (which reaches 65536) would not. The chord is exact in integers, so
+/// interpolating the deviation is interpolating the sine itself.
+///
+/// Accuracy: within 0.91 LSB (1.4e-5) of the true sine everywhere and
+/// within 2 LSB of the pre-#941 Taylor form (itself up to 1.84 LSB off),
+/// both pinned exhaustively over the 16-bit phase in `tests`. Exact at the
+/// quarter points (0, ±1.0), odd (`sin(−t) == −sin(t)`) and monotone on
+/// every quarter, because the table, fold and rounding are symmetric.
 #[cfg_attr(feature = "iram-math", link_section = ".rwtext")]
 #[cfg_attr(feature = "iram-math", inline(never))]
 pub fn sin_turns(t: Fx) -> Fx {
     // wrap to [0, 1): the low 16 bits ARE the floored unit modulo
     // (`Fx::wrap_unit`, bit-identical to `mod_floor(Fx::ONE)` and no
     // hardware remainder).
-    let t = t.wrap_unit().raw();
+    let t = t.wrap_unit().raw() as u32;
     // fold to a quarter wave: t ∈ [0, 16384]
-    let (t, neg) = if t >= 32_768 {
-        (t - 32_768, true)
-    } else {
-        (t, false)
-    };
+    let neg = t >= 32_768;
+    let t = t & 0x7FFF;
     let t = if t >= 16_384 { 32_768 - t } else { t };
-    // z = t·2π ∈ [0, π/2]. t <= 16384 = 2^14 and PI2_RAW < 2^19, so the
-    // widening product is < 2^33 and z = (t·2π)>>16 <= 102943 < 2^17.
-    let z = fmul32(t, PI2_RAW);
-    // Taylor: z - z³/6 + z⁵/120 - z⁷/5040 + z⁹/362880 (error < 3e-6 on [0,π/2])
-    //
-    // Every power is bounded by its real value times 2^16 (each fmul32 only
-    // truncates downward): z2 <= 161709 (2.4675·2^16), z3 <= 254004,
-    // z5 <= 626433, z7 <= 1545300, z9 <= 3811700 < 2^22. So all of them fit
-    // i32 with ~9 bits to spare and the >>16 in fmul32 never truncates a
-    // significant bit — the i64 form computed exactly these values.
-    let z2 = fmul32(z, z);
-    let z3 = fmul32(z2, z);
-    let z5 = fmul32(z3, z2);
-    let z7 = fmul32(z5, z2);
-    let z9 = fmul32(z7, z2);
-    // z >= 0 and every step is `>>16` of a nonnegative product, so all z_k
-    // are nonnegative: the unsigned divides are bit-identical to the signed
-    // i64 ones (which truncate toward zero == floor here) and compile to a
-    // 32-bit magic multiply instead of `__divdi3`.
-    // truncating fmuls can overshoot ±1.0 by an ulp or two near the peak
-    let s = (z - (z3 as u32 / 6) as i32 + (z5 as u32 / 120) as i32
-        - (z7 as u32 / 5_040) as i32
-        + (z9 as u32 / 362_880) as i32)
-        .min(65_536);
+    // i ∈ [0, 256] (256 only at exactly the quarter, where f == 0 and the
+    // padding entry 257 is read with weight zero)
+    let i = (t >> 6) as usize;
+    let f = (t & 63) as i32;
+    let (d0, d1) = (SIN_DEV[i] as i32, SIN_DEV[i + 1] as i32);
+    // 4t + round((d0 + (d1 − d0)·f/64) / 4): d0·64 <= 55184·64 < 2^22
+    let s = (t << 2) as i32 + ((d0 * 64 + (d1 - d0) * f + 128) >> 8);
     Fx::from_raw(if neg { -s } else { s })
 }
+
+/// `round(4 · 65536 · sin(i·π/512)) − 1024·i` for `i ∈ 0..=256`, plus one
+/// zero of padding: the quarter-wave sine minus its chord, in quarter-LSB
+/// units of 16.16. 516 bytes of `const` data in flash rodata — never a
+/// `static`, which would cost DRAM `.stack` (#484). Regenerated and
+/// checked against `f64::sin` in `tests::sin_dev_table_matches_its_formula`.
+#[rustfmt::skip]
+const SIN_DEV: [u16; 258] = [
+0, 584, 1169, 1753, 2337, 2921, 3505, 4088, 4671, 5253, 5835, 6416,
+    6997, 7576, 8155, 8733, 9311, 9887, 10462, 11036, 11609, 12181, 12752, 13321,
+    13889, 14455, 15020, 15583, 16145, 16705, 17263, 17819, 18374, 18926, 19477, 20026,
+    20572, 21116, 21658, 22198, 22736, 23271, 23804, 24334, 24861, 25386, 25908, 26428,
+    26944, 27458, 27969, 28477, 28982, 29484, 29982, 30478, 30970, 31458, 31944, 32426,
+    32904, 33379, 33851, 34318, 34782, 35242, 35699, 36151, 36600, 37044, 37485, 37921,
+    38353, 38781, 39205, 39624, 40039, 40449, 40855, 41257, 41654, 42046, 42434, 42816,
+    43194, 43567, 43936, 44299, 44657, 45010, 45358, 45701, 46038, 46371, 46698, 47019,
+    47335, 47646, 47951, 48251, 48545, 48833, 49115, 49392, 49663, 49928, 50187, 50440,
+    50687, 50928, 51163, 51392, 51614, 51831, 52041, 52244, 52441, 52632, 52816, 52994,
+    53165, 53330, 53487, 53639, 53783, 53920, 54051, 54175, 54292, 54402, 54505, 54600,
+    54689, 54771, 54845, 54912, 54972, 55024, 55070, 55107, 55138, 55161, 55176, 55184,
+    55184, 55177, 55162, 55139, 55108, 55070, 55024, 54970, 54908, 54838, 54760, 54675,
+    54581, 54479, 54369, 54251, 54125, 53990, 53848, 53697, 53537, 53370, 53194, 53009,
+    52816, 52615, 52405, 52187, 51960, 51725, 51481, 51228, 50966, 50696, 50417, 50130,
+    49833, 49528, 49214, 48891, 48559, 48219, 47869, 47510, 47143, 46766, 46380, 45985,
+    45581, 45168, 44746, 44315, 43874, 43425, 42966, 42498, 42020, 41533, 41037, 40532,
+    40017, 39493, 38959, 38417, 37864, 37302, 36731, 36150, 35560, 34960, 34351, 33732,
+    33104, 32466, 31818, 31161, 30494, 29818, 29132, 28436, 27731, 27016, 26291, 25557,
+    24813, 24059, 23295, 22522, 21739, 20946, 20143, 19331, 18509, 17677, 16835, 15983,
+    15122, 14250, 13369, 12478, 11578, 10667, 9747, 8816, 7876, 6926, 5966, 4997,
+    4017, 3028, 2028, 1019, 0, 0,
+];
 
 /// sin(x), x in radians.
 #[cfg_attr(feature = "iram-math", link_section = ".rwtext")]
@@ -821,10 +848,20 @@ mod tests {
         Fx::from_raw(if neg { -s } else { s } as i32)
     }
 
-    fn reference_sin(x: Fx) -> Fx {
+    fn reference_turns(x: Fx) -> Fx {
         let r = x.mod_floor(Fx::from_raw(R_PI2_RAW as i32)).raw() as i64;
-        let turns = ((r << 16) / R_PI2_RAW) as i32;
-        reference_sin_turns(Fx::from_raw(turns))
+        Fx::from_raw(((r << 16) / R_PI2_RAW) as i32)
+    }
+
+    fn reference_sin(x: Fx) -> Fx {
+        reference_sin_turns(reference_turns(x))
+    }
+
+    /// The table `sin_turns` (Gitea #941) behind the i64 radian reduction:
+    /// what `sin` must equal bit for bit now that only the reduction is
+    /// still pinned to the pre-#312 form.
+    fn table_sin(x: Fx) -> Fx {
+        sin_turns(reference_turns(x))
     }
 
     fn reference_sqrt(x: Fx) -> Fx {
@@ -1257,35 +1294,103 @@ mod tests {
         }
     }
 
+    /// The table `sin_turns` (Gitea #941) against the pre-#941 Taylor form
+    /// it replaced, which stays the accuracy oracle: within 2 LSB of it and
+    /// within 0.91 LSB of the true sine over the WHOLE 16-bit phase space.
+    /// `sin_turns` only ever sees the low 16 bits (`wrap_unit`), so the
+    /// exhaustive sweep is the whole domain; the random sweep across the
+    /// word pins that wrap.
     #[test]
-    fn sin_turns_matches_the_i64_reference() {
-        // sin_turns only sees the low 16 bits after mod_floor, so the whole
-        // 65536-wide phase space is swept exhaustively here.
+    fn sin_turns_within_2_lsb_of_the_taylor_reference() {
+        let mut worst_ref = (0i32, 0i32);
+        let mut worst_true = (0f64, 0i32);
         for r in 0..65_536i32 {
             let x = Fx::from_raw(r);
+            let got = sin_turns(x).raw();
+            let d = (got - reference_sin_turns(x).raw()).abs();
+            if d > worst_ref.0 {
+                worst_ref = (d, r);
+            }
+            let exact = (r as f64 * core::f64::consts::TAU / 65_536.0).sin() * 65_536.0;
+            let e = (got as f64 - exact).abs();
+            if e > worst_true.0 {
+                worst_true = (e, r);
+            }
+            // the negative phase wraps onto the same word
             assert_eq!(
-                sin_turns(x).raw(),
-                reference_sin_turns(x).raw(),
-                "sin_turns raw {r}"
-            );
-            let xn = Fx::from_raw(-r);
-            assert_eq!(
-                sin_turns(xn).raw(),
-                reference_sin_turns(xn).raw(),
-                "sin_turns raw {}",
-                -r
+                sin_turns(Fx::from_raw(-r)).raw(),
+                sin_turns(Fx::from_raw(65_536 - r)).raw()
             );
         }
+        assert!(
+            worst_ref.0 <= 2,
+            "|table - taylor| = {} LSB at raw {}",
+            worst_ref.0,
+            worst_ref.1
+        );
+        assert!(
+            worst_true.0 < 0.91,
+            "|table - sin| = {} LSB at raw {}",
+            worst_true.0,
+            worst_true.1
+        );
         let mut vals = edge_raws();
         vals.extend(random_raws(20_000));
         for &r in &vals {
             let x = Fx::from_raw(r);
             assert_eq!(
                 sin_turns(x).raw(),
-                reference_sin_turns(x).raw(),
-                "sin_turns raw {r}"
+                sin_turns(Fx::from_raw(r & 0xFFFF)).raw(),
+                "wrap {r}"
             );
-            assert_eq!(cos_turns(x).raw(), reference_sin_turns(x + Fx::from_raw(1 << 14)).raw());
+            let d = (sin_turns(x).raw() - reference_sin_turns(x).raw()).abs();
+            assert!(d <= 2, "sin_turns raw {r}: {d} LSB off the reference");
+            assert_eq!(
+                cos_turns(x).raw(),
+                sin_turns(x + Fx::from_raw(1 << 14)).raw()
+            );
+        }
+    }
+
+    /// The guarantees patterns lean on: exact zeros and ±1.0 at the quarter
+    /// points, odd symmetry, `cos` exactly `sin` a quarter on, monotone and
+    /// in `[-1, 1]` on every quarter.
+    #[test]
+    fn sin_turns_symmetry_and_exact_points() {
+        assert_eq!(sin_turns(Fx::from_raw(0)).raw(), 0);
+        assert_eq!(sin_turns(Fx::from_raw(16_384)).raw(), 65_536);
+        assert_eq!(sin_turns(Fx::from_raw(32_768)).raw(), 0);
+        assert_eq!(sin_turns(Fx::from_raw(49_152)).raw(), -65_536);
+        assert_eq!(cos_turns(Fx::ZERO).raw(), 65_536);
+        assert_eq!(cos_turns(Fx::from_raw(32_768)).raw(), -65_536);
+        let mut prev = 0;
+        for r in 0..65_536i32 {
+            let s = sin_turns(Fx::from_raw(r)).raw();
+            assert!((-65_536..=65_536).contains(&s), "raw {r}: {s}");
+            assert_eq!(sin_turns(Fx::from_raw(-r)).raw(), -s, "odd at raw {r}");
+            assert_eq!(
+                sin_turns(Fx::from_raw(32_768 - r)).raw(),
+                s,
+                "mirror at raw {r}"
+            );
+            if (1..=16_384).contains(&r) {
+                assert!(s >= prev, "not monotone at raw {r}");
+            }
+            prev = s;
+        }
+    }
+
+    /// `SIN_DEV` is exactly its documented formula.
+    #[test]
+    fn sin_dev_table_matches_its_formula() {
+        for (i, &d) in SIN_DEV.iter().enumerate() {
+            let want = if i > 256 {
+                0
+            } else {
+                let s = 4.0 * 65_536.0 * (i as f64 * core::f64::consts::PI / 512.0).sin();
+                s.round() as i64 - 1024 * i as i64
+            };
+            assert_eq!(d as i64, want, "SIN_DEV[{i}]");
         }
     }
 
@@ -1319,18 +1424,22 @@ mod tests {
     fn sin_matches_the_i64_reference() {
         for r in 0..200_000i32 {
             let x = Fx::from_raw(r);
-            assert_eq!(sin(x).raw(), reference_sin(x).raw(), "sin raw {r}");
+            assert_eq!(sin(x).raw(), table_sin(x).raw(), "sin raw {r}");
+            assert!(
+                (sin(x).raw() - reference_sin(x).raw()).abs() <= 2,
+                "sin raw {r}"
+            );
             let xn = Fx::from_raw(-r);
-            assert_eq!(sin(xn).raw(), reference_sin(xn).raw(), "sin raw {}", -r);
+            assert_eq!(sin(xn).raw(), table_sin(xn).raw(), "sin raw {}", -r);
         }
         let mut vals = edge_raws();
         vals.extend(random_raws(20_000));
         for &r in &vals {
             let x = Fx::from_raw(r);
-            assert_eq!(sin(x).raw(), reference_sin(x).raw(), "sin raw {r}");
+            assert_eq!(sin(x).raw(), table_sin(x).raw(), "sin raw {r}");
             assert_eq!(
                 cos(x).raw(),
-                reference_sin(x + Fx::from_raw(HALF_PI_RAW)).raw(),
+                table_sin(x + Fx::from_raw(HALF_PI_RAW)).raw(),
                 "cos raw {r}"
             );
             assert_eq!(exp(x).raw(), reference_exp(x).raw(), "exp raw {r}");
@@ -1441,7 +1550,7 @@ mod tests {
             let x = Fx::from_raw(r);
             assert_eq!(
                 tan(x).raw(),
-                (reference_sin(x) / reference_sin(x + Fx::from_raw(HALF_PI_RAW))).raw(),
+                (table_sin(x) / table_sin(x + Fx::from_raw(HALF_PI_RAW))).raw(),
                 "tan raw {r}"
             );
             assert_eq!(
@@ -1451,7 +1560,7 @@ mod tests {
             );
             assert_eq!(
                 cos_turns(x).raw(),
-                reference_sin_turns(x + Fx::from_raw(1 << 14)).raw(),
+                sin_turns(x + Fx::from_raw(1 << 14)).raw(),
                 "cos_turns raw {r}"
             );
         }
