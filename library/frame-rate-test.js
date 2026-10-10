@@ -18,7 +18,7 @@
 // THE STROBOSCOPE BEAT (the top band, rows 0..3/4 H)
 // Every composed frame the whole field flips colour: RED on even frames,
 // GREEN on odd ones. The flip is driven by a counter incremented once per
-// `renderFrame` call — never by the clock — so it is exactly one flip per
+// `renderBulk` call — never by the clock — so it is exactly one flip per
 // composed frame.
 //   * If the panel displayed every composed frame exactly once, the eye
 //     would fuse the alternation into steady YELLOW.
@@ -81,7 +81,7 @@ var composeCap = 0
 
 var emaFps = 60          // EMA of 1000/delta — the measured compose rate
 var refPhase = 0         // 0..1 phase of the beat-reference blink
-var frameParity = 0      // flips once per renderFrame call
+var frameParity = 0      // flips once per renderBulk call
 var tickFps = array(4)
 tickFps[0] = 60
 tickFps[1] = 77
@@ -106,7 +106,7 @@ export function beforeRender(delta) {
   refPhase = mod(refPhase + (dt * beatHz) / 1000, 1)
 }
 
-export function renderFrame() {
+export function renderBulk() {
   var W = gridWidth()
   var H = gridHeight()
 

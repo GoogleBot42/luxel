@@ -102,6 +102,6 @@ export function beforeRender(delta) {
 
 // One whole-frame sample of the 16x16 canvas instead of 4096 VM entries that
 // answer 256 distinct questions (Gitea #405).
-export function renderFrame() {
+export function renderBulk() {
   fillCanvas(hues, sC, vC, W, H)
 }

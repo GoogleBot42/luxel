@@ -169,6 +169,6 @@ export function beforeRender(delta) {
   }
 }
 
-export function renderFrame() {
+export function renderBulk() {
   fillCanvas(hueBuf, whiteMode ? satBuf : 1, vBuf, SIZE, SIZE)
 }

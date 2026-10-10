@@ -8,7 +8,7 @@
 //
 // The old `render2D` recomputed the ENTIRE curtain per LED: `simplex2(x *
 // 1.8, z, 5)` depends on nothing but the column, yet a 64x64 panel
-// evaluated it 4096 times a frame for 64 distinct answers. `renderFrame()`
+// evaluated it 4096 times a frame for 64 distinct answers. `renderBulk()`
 // walks the grid itself, so the band is 64 `simplex2` calls.
 //
 // The shimmer really is one sample per cell, and no bulk op removes that —
@@ -48,7 +48,7 @@
 // a 10,236 budget, and ~96 KB on the S3 — docs/bulk-render.md).
 //
 // With no map installed a 2D pattern already got the engine's `ceil(sqrt(n))`
-// default grid, and a `renderFrame` that names `gridWidth()` gets the same
+// default grid, and a `renderBulk` that names `gridWidth()` gets the same
 // one — so a bare strip still runs the curtain across it the way it always
 // did (60 px sees an 8x8 grid, 300 px an 18x17). On a fixture that is not a
 // matrix at all `gridWidth()` reports 0; there are no per-pixel coordinates
@@ -167,7 +167,7 @@ export function beforeRender(delta) {
   for (var c = 0; c < W; c++) band[c] = 0.45 + simplex2(x18[c], z, 5) * 0.25
 }
 
-export function renderFrame() {
+export function renderBulk() {
   if (exact) {
     // one lattice cell per pixel: the palette brush, straight onto the index
     var i = 0

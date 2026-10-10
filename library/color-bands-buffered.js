@@ -82,6 +82,6 @@ export function beforeRender(delta) {
 // per-pixel VM entry — 317-440 Xtensa cycles a pixel before the body runs —
 // disappears entirely. This is index space: no map is used or needed, and the
 // pattern stays a strip pattern on a bare strip.
-export function renderFrame() {
+export function renderBulk() {
   fillHSV(hueB, satB, briB)
 }

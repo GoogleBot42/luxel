@@ -37,6 +37,6 @@ export function beforeRender(delta) {
 
 // The buffered idiom's read-out as one call: hsv(hues[i], 1, vals[i]) over
 // the whole strip, with no per-pixel VM entry at all (Gitea #405).
-export function renderFrame() {
+export function renderBulk() {
   fillHSV(hues, 1, vals)
 }

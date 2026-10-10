@@ -49,7 +49,7 @@ export function beforeRender(delta) {
   bgHue = mod(bgHue + dt * 0.02, 1)
 }
 
-export function renderFrame() {
+export function renderBulk() {
   // dim two-tone wash along mapped x (axis 1), so the sprite has something
   // to be transparent over
   fillGradient(bgHue, 0.9, 0.06, bgHue + 0.45, 0.9, 0.16, 1)

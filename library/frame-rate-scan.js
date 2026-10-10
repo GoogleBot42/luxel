@@ -11,7 +11,7 @@
 // A dropped frame leaves no mark on any single composed frame: every frame is
 // a complete picture, and the one that never reached the panel simply never
 // existed. So the pattern spends one visible state per composed frame — a bar
-// one column wide that steps exactly one column per `renderFrame` call. A
+// one column wide that steps exactly one column per `renderBulk` call. A
 // frame the panel never showed is a column you never see.
 //
 // THE THREE BARS (all one column wide, so a position is countable)
@@ -89,13 +89,13 @@ export var clockMs = 0
 export function beforeRender(delta) {
   // A stall must not fast-forward the clock past a whole coarse wrap. The
   // 30000 ms roll only ever fires on a fixture with no clock bars to draw —
-  // renderFrame reduces the clock modulo the coarse cycle every frame — and
+  // renderBulk reduces the clock modulo the coarse cycle every frame — and
   // exists so a bare strip cannot walk the counter into 16.16 overflow.
   elapsedMs = mod(elapsedMs + clamp(delta, 0, 1000), 30000)
   clockMs = elapsedMs
 }
 
-export function renderFrame() {
+export function renderBulk() {
   var W = gridWidth()
   var H = gridHeight()
 

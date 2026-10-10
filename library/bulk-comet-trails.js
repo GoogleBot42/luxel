@@ -25,7 +25,7 @@ export function beforeRender(delta) {
   ph3 = mod(ph3 + dt * 0.61 * speed, 1)
 }
 
-export function renderFrame() {
+export function renderBulk() {
   fade(decay)                     // last frame, dimmer — the whole trail
   var last = pixelCount - 1
   hsv(age, 1, 1)                  // hsv() sets the "brush" the bulk ops use

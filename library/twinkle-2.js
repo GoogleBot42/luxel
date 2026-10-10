@@ -47,6 +47,6 @@ export function beforeRender(delta) {
 // `slots == pixelCount`, so the old `index % slots` was the identity and the
 // read-out is one fillHSV. Negative (fully decayed) values need no max():
 // fillHSV quantizes through the same clamp hsv() applies (Gitea #405).
-export function renderFrame() {
+export function renderBulk() {
   fillHSV(hues, sat, vals)
 }

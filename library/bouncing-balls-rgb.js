@@ -150,6 +150,6 @@ export function beforeRender(delta) {
 // With the direction fold moved to the deposit, the accumulator is already
 // in strip order and the whole read-out is one `fillRGB`. Index space, so a
 // bare strip stays a bare strip and nothing asks for a map.
-export function renderFrame() {
+export function renderBulk() {
   fillRGB(rBuf, gBuf, bBuf)
 }

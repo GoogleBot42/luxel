@@ -26,7 +26,7 @@ var prevSweep = -1      // row (or pixel) drawn last frame; -1 = nothing yet
 
 export var frameIndex = 0
 
-export function renderFrame() {
+export function renderBulk() {
   var W = gridWidth()
   var H = gridHeight()
   if (W < 1 || H < 1) {

@@ -20,7 +20,7 @@
 //
 // So the colour resolution moved into the simulation's own resolution.
 // `shade()` writes the same hue/saturation/value math into three parallel
-// canvas arrays — `hC`, `sC`, `vC`, one entry per CELL — and `renderFrame()`
+// canvas arrays — `hC`, `sC`, `vC`, one entry per CELL — and `renderBulk()`
 // issues a single `fillCanvas(hC, sC, vC, W, H)`. `fillCanvas` samples that
 // canvas through each pixel's mapped coordinates with nearest sampling,
 // which is exactly what the old `floor(y * 15.99) * 16 + floor(x * 15.99)`
@@ -58,7 +58,7 @@
 //     assumed.
 //
 // With no map installed a 2D pattern already got the engine's `ceil(sqrt(n))`
-// default grid, and a `renderFrame` that names a coordinate-space builtin
+// default grid, and a `renderBulk` that names a coordinate-space builtin
 // gets the same one — so a bare strip still runs the pool out across it the
 // way it always did (60 px sees an 8x8 grid, 300 px an 18x17).
 
@@ -339,6 +339,6 @@ export function beforeRender(delta) {
 
 // One call, one frame: nearest-sampled through the map, exactly the cell
 // the old render2D resolved per pixel.
-export function renderFrame() {
+export function renderBulk() {
   fillCanvas(hC, sC, vC, W, H)
 }

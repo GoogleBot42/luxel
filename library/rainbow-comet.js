@@ -51,7 +51,7 @@ export function beforeRender(delta) {
   lastHead = head
 }
 
-// One `renderFrame` instead of one `render` call per LED (docs/bulk-render.md).
+// One `renderBulk` instead of one `render` call per LED (docs/bulk-render.md).
 //
 // Not a `fillHSV`, for two reasons. The value channel is `bri[i] * bri[i]`,
 // not `bri` — a fourth `array(pixelCount)` for it would drop the pattern's
@@ -71,8 +71,8 @@ export function beforeRender(delta) {
 // passes of the head. A naive port with neither measured 0.81x against the
 // per-pixel `render` it replaces; this one wins. Index space: no map is used
 // or needed.
-export function renderFrame() {
-  clear()                              // renderFrame does NOT clear between
+export function renderBulk() {
+  clear()                              // renderBulk does NOT clear between
                                        // frames, and the loop below skips dead
                                        // pixels — without this they would keep
                                        // last frame's colour forever

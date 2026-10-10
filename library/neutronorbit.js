@@ -115,7 +115,7 @@ export function beforeRender(delta) {
 // `clear`, `rgb` and `setPixel` are all index-space, so this is identical with
 // a map and without one -- on a bare strip exactly the old `render(index)`
 // loop, and on a matrix the atom still runs along the pixel index.
-export function renderFrame() {
+export function renderBulk() {
   clear()
   var i
   for (i = 0; i < pixelCount; i++) {

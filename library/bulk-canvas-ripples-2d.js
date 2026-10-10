@@ -67,7 +67,7 @@ export function beforeRender(delta) {
   arrayMapTo(cur, hueBuf, (v) => baseHue + v * 0.25)
 }
 
-export function renderFrame() {
+export function renderBulk() {
   fillCanvas(hueBuf, 1, disp, CW, CH)
 }
 

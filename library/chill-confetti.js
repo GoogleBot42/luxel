@@ -76,6 +76,6 @@ export function beforeRender(delta) {
 
 // Whole-frame read-out: the per-pixel entry is pure overhead here, since
 // beforeRender already owns both buffers (Gitea #405).
-export function renderFrame() {
+export function renderBulk() {
   fillHSV(hues, 1, brights)
 }

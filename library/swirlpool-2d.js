@@ -99,7 +99,7 @@ export function beforeRender(delta) {
 // Without a map this is the same default `ceil(sqrt(n))` grid a `render2D`-only
 // pattern already got, so a bare strip is unchanged: it wraps the whirlpool
 // across the strip in rows exactly as before.
-export function renderFrame() {
+export function renderBulk() {
   for (var i = 0; i < W * W; i++) {
     var b = bright[i]
     vC[i] = b * b
