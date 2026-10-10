@@ -14,8 +14,10 @@ homes, frame homes, `Dyn`, `CallBuiltinC/CC` immediates, aliasing, nesting)
 through the model over the full `i32` edge cube plus random words against the
 `table.rs` kernel and the interpreter. Library JIT image −19.6 KB (−1.9 %);
 four goldens re-pinned (snake −44 B, snake-2d −280 B, perlin-fire −52 B,
-bulk-canvas-ripples −12 B). On-metal cycles are Jeremy's
-`tools/builtinbench.mjs` run.
+bulk-canvas-ripples −12 B). Unit 2 (builtinbench, cycles/call, before →
+after): abs 16 → ~0, floor 23 → ~0, frac 22 → 2, clamp 21 → ~0, min 24 →
+~0, mix 27 → 5, mod 32 → 15, triangle 32 → 9; geometry-morphing-demo-2d
+106.0 → 101.4 ms VM at 16,384 px.
 
 ## 2026-10-10 — all-number arrays stored as 4-byte words (#947)
 
