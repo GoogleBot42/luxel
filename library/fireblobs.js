@@ -151,6 +151,6 @@ export function beforeRender(delta) {
 // One bulk read-out instead of pixelCount VM entries. `fillRGB` is an
 // index-space op: identical with a map and without one, and on a bare strip
 // it is exactly the old `render(index)` loop.
-export function renderFrame() {
+export function renderBulk() {
   fillRGB(bufR, bufG, bufB)
 }

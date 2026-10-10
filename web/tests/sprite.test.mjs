@@ -328,6 +328,11 @@ test("the tagged-pattern migration reader converts the old HSV format", () => {
   // v == 0 became index 0, not a black palette entry
   assert.deepEqual([...sp.index], [1, 0, 2, 0]);
   assert.equal(checkSprite(encodeSprite(sp)), null, "and it encodes to a valid record");
+  // the reader keys on the tag, not the export: a source saved after the
+  // renderFrame → renderBulk rename (#948) reads the same
+  const bulk = src.replace("renderFrame", "renderBulk");
+  assert.ok(isTaggedSpriteSource(bulk));
+  assert.deepEqual(spriteFromTaggedPattern(bulk), sp);
 
   // the name falls back when the tag line has no follower
   const noName = spriteFromTaggedPattern(

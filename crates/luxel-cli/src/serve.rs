@@ -1382,10 +1382,46 @@ fn apply_map_wire(state: &State, body: &str) -> (bool, usize) {
     out
 }
 
+/// The HUB75 chain a `--board panel` mirror's Layout describes, as the
+/// engine's wire tiling — what `luxel_hub75::arrange::tiling` builds on a
+/// board, from the core types alone. `None` on a strip mirror, a non-matrix
+/// Layout, or a chain `Tiling::new` refuses (the row-major grid then, as a
+/// board falls back too); a scan that does not divide the panel reads as the
+/// panel's own, like `arrange::scan_stripes`.
+fn wire_tiling(state: &State) -> Option<&'static luxel_core::outpipe::Tiling> {
+    // One leaked Tiling per distinct arrangement (~140 B each, see
+    // `GridMap::tiling`), cached by the chain that produced it: this runs on
+    // every engine rebuild, and a chain edit is the only thing that changes it.
+    static CACHE: std::sync::Mutex<Vec<(luxel_core::layout::Matrix, Vec<(u8, u8, u8)>, Option<&'static luxel_core::outpipe::Tiling>)>> =
+        std::sync::Mutex::new(Vec::new());
+    if !state.hw.panel {
+        return None;
+    }
+    let l = state.layout.lock().unwrap();
+    if l.kind != luxel_core::layout::LayoutKind::Matrix {
+        return None;
+    }
+    let m = l.matrix;
+    let chain: Vec<(u8, u8, u8)> = l.tiles().iter().map(|t| (t.cx, t.cy, t.turns)).collect();
+    drop(l);
+    let mut cache = CACHE.lock().unwrap();
+    if let Some((_, _, t)) = cache.iter().find(|(cm, cc, _)| *cm == m && *cc == chain) {
+        return *t;
+    }
+    let tiling = |scan| luxel_core::outpipe::Tiling::new(m.pw, m.ph, m.cols, m.rows, scan, &chain);
+    let t = tiling(u16::from(m.scan)).or_else(|| tiling(0)).map(|t| t.leak());
+    cache.push((m, chain, t));
+    t
+}
+
 /// Apply the installed map to an engine (no-op if none), then the projection
 /// defaults — a map install re-derives the engine's projection plan, so the
 /// order matters.
 fn apply_map(state: &State, engine: &mut Engine) {
+    // The chain first (Gitea #948): a panel mirror's frame is in WIRE order
+    // like a HUB75 board's, so `/api/pixels` reads the same bytes a device
+    // would serve. Before the map, which `set_map` permutes through it.
+    engine.set_wire_tiling(wire_tiling(state));
     if let Some((dims, coords)) = state.device_map.lock().unwrap().as_ref() {
         engine.set_map(*dims, coords);
     }
@@ -2426,7 +2462,7 @@ fn decode_upload(raw: &[u8]) -> Result<luxel_core::bytecode::Envelope<'_>, Strin
         .map_err(|e| format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e.to_string())))?;
     match validate(env.bytecode) {
         Ok(_) => Ok(env),
-        Err(e @ BcError::Version { .. }) => Err(format!(
+        Err(e @ (BcError::Version { .. } | BcError::Stale(_))) => Err(format!(
             "{{\"ok\":false,\"code\":\"bc-version\",\"error\":\"{}\"}}",
             json_escape(&e.to_string())
         )),
@@ -2875,14 +2911,16 @@ fn layers_max(state: &State) -> usize {
 /// harness's scene cases cheap.
 fn scene_grid(state: &State) -> luxel_core::outpipe::GridMap {
     let n = state.pixel_count.load(Ordering::Relaxed) as usize;
-    let strip = luxel_core::outpipe::GridMap {
-        w: n.min(u16::MAX as usize) as u16,
-        h: 1,
-        serpentine: false,
-    };
+    let strip = luxel_core::outpipe::GridMap::new(n.min(u16::MAX as usize) as u16, 1, false);
     if let Some((w, h)) = *state.device_grid.lock().unwrap() {
         if (w as usize) * (h as usize) == n && w <= u16::MAX as u32 && h <= u16::MAX as u32 {
-            return luxel_core::outpipe::GridMap { w: w as u16, h: h as u16, serpentine: false };
+            // The compositor's grid is the engines' (Gitea #948): on a panel
+            // mirror whose Layout is a chain, their frames are in wire order
+            // and the scene stage has to index them the same way.
+            if let Some(t) = wire_tiling(state).filter(|t| t.len() == n) {
+                return luxel_core::outpipe::GridMap::tiled(t);
+            }
+            return luxel_core::outpipe::GridMap::new(w as u16, h as u16, false);
         }
     }
     if let Some((dims, coords)) = state.device_map.lock().unwrap().as_ref() {
@@ -3951,7 +3989,7 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
                             *state.current_pattern_id.lock().unwrap() = p.id;
                             String::from("{\"ok\":true}")
                         }
-                        Err(e @ luxel_core::bytecode::BcError::Version { .. }) => format!(
+                        Err(e @ (luxel_core::bytecode::BcError::Version { .. } | luxel_core::bytecode::BcError::Stale(_))) => format!(
                             "{{\"ok\":false,\"code\":\"bc-version\",\"error\":\"{}\"}}",
                             json_escape(&e.to_string())
                         ),

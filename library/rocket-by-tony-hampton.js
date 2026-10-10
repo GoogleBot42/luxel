@@ -132,6 +132,6 @@ export function beforeRender(delta) {
 // per-pixel `render` was a readout: `fillRGB` does it in one call and
 // applies the same 0..1 clamp on the way to bytes. Index space — a bare
 // strip is the native rig and nothing asks for a map.
-export function renderFrame() {
+export function renderBulk() {
   fillRGB(rBuf, gBuf, bBuf)
 }

@@ -374,9 +374,10 @@ export interface LayoutWire {
 }
 
 /** `POST /api/layout/card` modes (Gitea #920): `panels` = every PHYSICAL
- *  panel shows its ribbon number and an arrow to its own top, drawn past the
- *  remap; `cells` = every GRID cell shows its number upright through the
- *  current arrangement; `off` = the pattern again. */
+ *  panel shows its ribbon number and an arrow to its own top, drawn in
+ *  driver order; `cells` = every GRID cell shows its number upright through
+ *  the current arrangement (the chain's tiling, #948); `off` = the pattern
+ *  again. */
 export type LayoutCardMode = "off" | "panels" | "cells";
 
 /** What `POST /api/layout` answers with: the GET body plus the verdict, so a

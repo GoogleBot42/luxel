@@ -53,7 +53,7 @@ export type Dims = 1 | 2 | 3;
 /**
  * What a compiled pattern declares (`Engine.patternDims()`).
  *
- * **0 is "any", not 1.** A pattern that exports only `renderFrame` and paints
+ * **0 is "any", not 1.** A pattern that exports only `renderBulk` and paints
  * in index space names no geometry — it is a field over `pixelCount` that
  * looks the same on a strip, a panel or a cloud (`library/fairies.js`). It is
  * native on every Layout: no projection options, no caption, never filtered,
@@ -103,7 +103,7 @@ export function projectionOptions(patternDims: number, layoutDims: number): Proj
   return [];
 }
 
-// Coordinate- and grid-space bulk builtins: a `renderFrame` pattern that
+// Coordinate- and grid-space bulk builtins: a `renderBulk` pattern that
 // calls one of these draws in 2D even though it never says `render2D`. The
 // list is `uses_coordinate_bulk_op` in crates/luxel-core/src/engine.rs, and
 // web/tools/gen-gallery.mjs carries the same one for `gallery.json`'s `kind`
@@ -114,9 +114,11 @@ const BULK_2D_NAMES = [
   "splat",
   "drawLine",
   "fillCanvas",
+  "paintCanvas",
   "blit",
   "gridWidth",
   "gridHeight",
+  "gridIndex",
 ];
 
 /**
@@ -140,9 +142,9 @@ export function guessPatternDims(source: string): PatternDims {
     );
   if (has2D) return 2;
   if (/\brender3D\b/.test(source)) return 3;
-  // No `render(index)` either: a `renderFrame`-only pattern painting in index
+  // No `render(index)` either: a `renderBulk`-only pattern painting in index
   // space is DIMENSIONLESS (0), not 1D — it declares no geometry, so nothing
-  // projects it. `renderFrame` alongside `render` is still a 1D pattern,
+  // projects it. `renderBulk` alongside `render` is still a 1D pattern,
   // which is what the engine's `pattern_dims()` says too.
   return /\brender\s*\(/.test(source) ? 1 : 0;
 }
@@ -527,12 +529,12 @@ export interface LayoutGeom {
  * `GET /api/layout`'s body as the fixture reading [`deviceGeometry`] takes.
  *
  * `serpentine` is deliberately NOT read off `matrix.snake`. That flag is how
- * the chain walks from TILE to tile (docs/api.md "Chain order"); the firmware
- * folds it into its panel→pixel remap, so the engine — the device's and the
- * preview's — renders one row-major `w`×`h` grid and never knows about the
- * chain. Reading it as pixel wiring mirrored every other row of every
- * per-pixel 2D preview the moment a wall was snaked (the 2x2 `tr col 1`
- * Seengreat, 2026-09-30).
+ * the chain walks from TILE to tile (docs/api.md "Chain order"); the device's
+ * engine folds it into its tiled grid (`Tiling`, #948 — a remap table before
+ * that), and the PREVIEW's engine renders one row-major `w`×`h` grid and
+ * never knows about the chain. Reading it as pixel wiring mirrored every
+ * other row of every per-pixel 2D preview the moment a wall was snaked (the
+ * 2x2 `tr col 1` Seengreat, 2026-09-30).
  */
 export function layoutGeomOf(wire: {
   dims: number;
@@ -827,7 +829,7 @@ export function effectiveFor(patternDims: PatternDims, l: Layout): Effective {
     h: l.dims === 2 && l.regular ? l.h : 0,
   };
   if (pd === 2 && l.dims === 1) {
-    // incompatible, but a grid-space renderFrame still owns the buffer and
+    // incompatible, but a grid-space renderBulk still owns the buffer and
     // gets a w×1 grid so its grid-space builtins describe the strip (#538)
     eff.w = l.pixels;
     eff.h = 1;

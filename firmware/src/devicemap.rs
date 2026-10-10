@@ -145,10 +145,18 @@ pub fn has_map() -> bool {
 /// that failed). With an engine the effective geometry comes from the engine
 /// instead, because only it knows about the fabricated square grid.
 pub fn shape() -> (u8, Option<luxel_core::outpipe::GridMap>) {
+    // the grid the engine would install: tiled when it covers the panel
+    // chain (Gitea #948), so a compositor re-pointed at it walks the frame
+    // in the same wire order its layers write
+    let wire = crate::layout::wire_tiling();
     MAP.lock(|c| match c.borrow().as_ref() {
-        Some(MapData::Grid { w, h }) => {
-            (2, Some(luxel_core::outpipe::GridMap { w: *w, h: *h, serpentine: false }))
-        }
+        Some(MapData::Grid { w, h }) => (
+            2,
+            Some(match wire {
+                Some(t) if (t.width(), t.height()) == (*w, *h) => luxel_core::outpipe::GridMap::tiled(t),
+                _ => luxel_core::outpipe::GridMap::new(*w, *h, false),
+            }),
+        ),
         Some(MapData::Coords { dims, coords }) => {
             (*dims, luxel_core::outpipe::detect_grid(*dims, coords))
         }
@@ -174,7 +182,14 @@ pub fn mark_dirty() {
 }
 
 /// Apply the installed map to a freshly-built engine (no-op if none).
+///
+/// On a panel board the engine is told the chain FIRST (Gitea #948): a grid
+/// of the chain's extent then installs tiled and a coordinate map is
+/// permuted into wire order, so the frame the engine writes is the order the
+/// HUB75 driver clocks out — there is no remap after it. A live arrangement
+/// change (`POST /api/layout`, #920) re-runs this through `mark_dirty`.
 pub fn apply(engine: &mut Engine) {
+    engine.set_wire_tiling(crate::layout::wire_tiling());
     MAP.lock(|c| match c.borrow().as_ref() {
         Some(MapData::Grid { w, h }) => engine.set_grid_map(*w, *h),
         Some(MapData::Coords { dims, coords }) => {

@@ -137,7 +137,7 @@ fn diff_one(name: &str, src: &str) -> Verdict {
 
     // --- the render path
     let Some((f, argc)) = render_entry(&prog) else {
-        // A renderFrame-only pattern: the frame builtins need the engine's
+        // A renderBulk-only pattern: the frame builtins need the engine's
         // lent buffer, which this harness does not build. Init and
         // beforeRender still had to agree.
         return Verdict {

@@ -11,7 +11,7 @@
 // A dropped frame leaves no mark on any single composed frame: every frame is
 // a complete picture, and the one that never reached the panel simply never
 // existed. So the pattern spends one visible state per composed frame — a bar
-// one column wide that steps exactly one column per `renderFrame` call. A
+// one column wide that steps exactly one column per `renderBulk` call. A
 // frame the panel never showed is a column you never see.
 //
 // THE THREE BARS (all one column wide, so a position is countable)
@@ -89,13 +89,13 @@ export var clockMs = 0
 export function beforeRender(delta) {
   // A stall must not fast-forward the clock past a whole coarse wrap. The
   // 30000 ms roll only ever fires on a fixture with no clock bars to draw —
-  // renderFrame reduces the clock modulo the coarse cycle every frame — and
+  // renderBulk reduces the clock modulo the coarse cycle every frame — and
   // exists so a bare strip cannot walk the counter into 16.16 overflow.
   elapsedMs = mod(elapsedMs + clamp(delta, 0, 1000), 30000)
   clockMs = elapsedMs
 }
 
-export function renderFrame() {
+export function renderBulk() {
   var W = gridWidth()
   var H = gridHeight()
 
@@ -149,9 +149,10 @@ function sweepBrush() {
   else rgb(1, 0, 0)
 }
 
-// One column of the brush, rows [r0, r1), on a W-wide row-major grid.
+// One column of the brush, rows [r0, r1). Cells go through gridIndex: the
+// frame is in wire order, so `r * W + col` is not cell (col, r) on a chain.
 function column(r0, r1, W, col) {
-  for (var r = r0; r < r1; r++) setPixel(r * W + col)
+  for (var r = r0; r < r1; r++) setPixel(gridIndex(col, r))
 }
 
 // Every 8th column on one row, dim; column 0 marked cyan.
@@ -160,7 +161,7 @@ function ticks(row, W, H) {
   for (var c = 0; c < W; c += 8) {
     if (c == 0) rgb(0, 0.22, 0.22)
     else rgb(0.16, 0.16, 0.16)
-    setPixel(row * W + c)
+    setPixel(gridIndex(c, row))
   }
 }
 

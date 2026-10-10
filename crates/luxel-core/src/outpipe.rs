@@ -246,11 +246,13 @@ pub fn blur_frame(frame: &mut [[u8; 3]], k: u32, passes: u8) {
     }
 }
 
-/// A regular W×H grid recovered from an installed pixel map, so the spatial
-/// stages can spread light in *map* space instead of along the wiring. Six
-/// bytes and `Copy`: the layout is fully described by its dimensions plus
-/// whether alternate rows run backwards, so there is no per-pixel neighbour
-/// table to build, keep, or invalidate — and nothing to allocate per frame.
+/// A regular W×H grid: the geometry the spatial stages spread light in, and
+/// (since Gitea #948) the ONE coordinate source for a procedural grid map —
+/// which engine cell frame slot `i` shows ([`GridMap::cell`]) and which slot
+/// an engine cell lives in ([`GridMap::index`]). `Copy`, no per-pixel table:
+/// a plain grid is its dimensions plus whether alternate rows run backwards,
+/// and a HUB75 chain adds a [`Tiling`] — a few integer ops per lookup, so
+/// there is nothing to build, keep or invalidate per frame.
 ///
 /// "Row" is whichever axis the pixel indices walk first; a column-wired panel
 /// is the same structure transposed, and a separable blur treats both axes
@@ -263,9 +265,34 @@ pub struct GridMap {
     pub h: u16,
     /// Serpentine wiring: odd rows run backwards along the row axis.
     pub serpentine: bool,
+    /// The frame is in HUB75 DRIVER order over a chain of tiles rather than
+    /// row-major over the grid (Gitea #948). `None` for every grid that is
+    /// row-major (or serpentine) by index — the identity case costs nothing.
+    /// A REFERENCE, not the 140-byte value: a `GridMap` is copied into every
+    /// frame hand-off, task future and compositor on the firmware, and the
+    /// value form cost classic boards ~1.9 KB of leftover DRAM (the
+    /// stack-check floor). A chain is a once-per-boot / once-per-edit object
+    /// — [`Tiling::leak`] is how it becomes `'static`, exactly as the remap
+    /// table it replaces was leaked at boot.
+    pub tiling: Option<&'static Tiling>,
 }
 
 impl GridMap {
+    /// A row-major (or serpentine) grid walked by index.
+    pub const fn new(w: u16, h: u16, serpentine: bool) -> GridMap {
+        GridMap { w, h, serpentine, tiling: None }
+    }
+
+    /// The grid a tiled chain covers, with its frame in driver order. A
+    /// tiling that comes out row-major (one upright tile; two upright tiles
+    /// side by side with IN on the right) is dropped, so a plain panel takes
+    /// exactly the untiled path.
+    pub fn tiled(t: &'static Tiling) -> GridMap {
+        let (w, h) = (t.width(), t.height());
+        let tiling = if t.is_identity() { None } else { Some(t) };
+        GridMap { w, h, serpentine: false, tiling }
+    }
+
     pub fn len(&self) -> usize {
         self.w as usize * self.h as usize
     }
@@ -274,9 +301,12 @@ impl GridMap {
         self.w == 0 || self.h == 0
     }
 
-    /// Pixel index of grid cell (`row`, `col`). Both must be in range.
+    /// Frame slot of grid cell (`row`, `col`). Both must be in range.
     #[inline]
     pub fn index(&self, row: usize, col: usize) -> usize {
+        if let Some(t) = &self.tiling {
+            return t.index(row, col);
+        }
         let w = self.w as usize;
         let col = if self.serpentine && row & 1 == 1 {
             w - 1 - col
@@ -284,6 +314,320 @@ impl GridMap {
             col
         };
         row * w + col
+    }
+
+    /// Grid cell `(row, col)` of frame slot `i` — the inverse of
+    /// [`GridMap::index`]. `i` must be below `len()`.
+    #[inline]
+    pub fn cell(&self, i: usize) -> (usize, usize) {
+        if let Some(t) = &self.tiling {
+            return t.cell(i);
+        }
+        let w = self.w as usize;
+        let row = i / w;
+        let col = i - row * w;
+        let col = if self.serpentine && row & 1 == 1 {
+            w - 1 - col
+        } else {
+            col
+        };
+        (row, col)
+    }
+}
+
+/// Most tiles a [`Tiling`] holds — a fixed array keeps [`GridMap`] `Copy`.
+/// 32 is the 16384-pixel ceiling over the smallest common HUB75 tile
+/// (32×16); the Layout parser refuses a chain beyond it on a tiled board.
+pub const MAX_TILES: usize = 32;
+
+/// A HUB75 chain's arrangement as the pure arithmetic between a frame slot
+/// (DRIVER order — the order the panel driver clocks pixels out, and since
+/// Gitea #948 the order the engine writes the frame in) and an engine grid
+/// cell. The formula is the one `luxel_hub75::arrange::build_lut_tiles` used
+/// to tabulate (Gitea #475/#917/#920), evaluated lazily instead of stored as
+/// a 2 B/px table:
+///
+/// - the driver clocks a row of `pw * drive` words, `ph` rows tall, as
+///   `drive` blocks of `pw`; chain position `p` (0 = the panel the ribbon
+///   enters) owns block `drive - 1 - p`, because the FIRST block shifts
+///   through every panel to the far end of the chain;
+/// - a tile mounted `turns` quarter turns clockwise shows its native pixel
+///   `(lx, ly)` at cell offset `(pw-1-ly, lx)` / `(pw-1-lx, ph-1-ly)` /
+///   `(ly, ph-1-lx)` for 1 / 2 / 3 turns (quarter turns need `pw == ph`);
+/// - a 1/N-scan panel (`scan < ph / 2`) folds `stripes = (ph/2)/scan`
+///   copies of the chain width into one driver row: driver `(drow, dcol)`
+///   is panel row `half·(ph/2) + (dcol / fb_w)·scan + drow % scan`.
+///
+/// `cell`/`index` are inverses on `0..len()`; every chain the parser accepts
+/// is a permutation of the grid (`tests` sweep all wirings).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Tiling {
+    /// Tile size in pixels.
+    pub pw: u16,
+    pub ph: u16,
+    /// Grid of tiles: the engine grid is `pw*cols` × `ph*rows`.
+    pub cols: u8,
+    pub rows: u8,
+    /// Address rows per panel half (the HUB75 scan depth); `ph / 2` unless
+    /// the panel is 1/N-scan.
+    pub scan: u16,
+    /// Tiles in chain (ribbon) order: `(cx, cy, turns)`. `cols * rows` of
+    /// them are meaningful.
+    tiles: [[u8; 3]; MAX_TILES],
+    /// Chain position of grid cell `cy * cols + cx` — the inverse of `tiles`.
+    pos: [u8; MAX_TILES],
+    /// Per DRIVER BLOCK `b` (block 0 is the first `pw` words the driver
+    /// clocks out): the tile's cell origin `(ox, oy)` in pixels and its
+    /// turns — what [`Tiling::cell`] and the cursor read per pixel instead
+    /// of walking `drive - 1 - b` → `tiles[p]` → multiplies.
+    blocks: [(u16, u16, u8); MAX_TILES],
+    /// `log2(pw)` / `log2(pw * drive)` when those are powers of two (every
+    /// real HUB75 panel), else `u8::MAX`: the per-pixel divides become
+    /// shifts and masks.
+    pw_sh: u8,
+    fbw_sh: u8,
+    ph_sh: u8,
+}
+
+/// Sequential walk over a tiled grid's frame slots (Gitea #948): the
+/// per-pixel render loop visits `i, i+1, …`, and for that walk the cell of
+/// each slot is the previous one stepped along the driver's shift — a few
+/// adds and compares instead of [`Tiling::cell`]'s divides. Only the
+/// `stripes == 1` layout is walked this way (a 1/N-scan panel falls back
+/// to the formula per slot).
+#[derive(Clone, Copy, Debug)]
+pub struct TileCursor {
+    t: &'static Tiling,
+    /// The grid cell the cursor is on, and the step one slot takes inside
+    /// the current driver block: along a row (`0, ±1`) for an upright or
+    /// upside-down tile, down a column (`±1, 0`) for a quarter turn.
+    row: i32,
+    col: i32,
+    dr: i32,
+    dc: i32,
+    /// Panel row (0..ph), the current driver block and its local column.
+    ly: u16,
+    b: u8,
+    lx: u16,
+}
+
+impl TileCursor {
+    fn at(t: &'static Tiling, ly: u16, b: u8, lx: u16) -> TileCursor {
+        let (pw, ph) = (t.pw as i32, t.ph as i32);
+        let (ox, oy, turns) = t.blocks[b as usize];
+        let (lx_, ly_) = (lx as i32, ly as i32);
+        let ((sx, sy), (dr, dc)) = match turns {
+            1 => ((pw - 1 - ly_, lx_), (1, 0)),
+            2 => ((pw - 1 - lx_, ph - 1 - ly_), (0, -1)),
+            3 => ((ly_, ph - 1 - lx_), (-1, 0)),
+            _ => ((lx_, ly_), (0, 1)),
+        };
+        TileCursor { t, row: oy as i32 + sy, col: ox as i32 + sx, dr, dc, ly, b, lx }
+    }
+
+    /// The grid cell `(row, col)` of the slot the cursor is on.
+    #[inline(always)]
+    pub fn cell(&self) -> (usize, usize) {
+        (self.row as usize, self.col as usize)
+    }
+
+    /// Step to the next slot: one add per axis inside a driver block, a
+    /// block re-seat every `pw` slots. Past the last slot the cursor wraps
+    /// to slot 0, which no caller reads (the loop bound is the frame).
+    #[inline(always)]
+    pub fn advance(&mut self) {
+        self.lx += 1;
+        if self.lx < self.t.pw {
+            self.row += self.dr;
+            self.col += self.dc;
+            return;
+        }
+        self.reseat();
+    }
+
+    #[inline(never)]
+    fn reseat(&mut self) {
+        let mut b = self.b + 1;
+        let mut ly = self.ly;
+        if b as usize >= self.t.drive() {
+            b = 0;
+            ly += 1;
+            if ly >= self.t.ph {
+                ly = 0;
+            }
+        }
+        *self = TileCursor::at(self.t, ly, b, 0);
+    }
+}
+
+impl Tiling {
+    /// Validate and build. `tiles` is the chain in ribbon order as
+    /// `(cx, cy, turns)`; `scan` 0 means `ph / 2`. `None` when the chain is
+    /// not a permutation of the `cols × rows` cells, has more than
+    /// [`MAX_TILES`] tiles, or names a scan that does not divide the panel.
+    /// Quarter turns on a non-square tile keep their 180° part only, as the
+    /// table builder did (the parser refuses them; this is the never-OOB
+    /// rule for a stored wire).
+    pub fn new(pw: u16, ph: u16, cols: u8, rows: u8, scan: u16, tiles: &[(u8, u8, u8)]) -> Option<Tiling> {
+        let n = cols as usize * rows as usize;
+        if pw == 0 || ph == 0 || n == 0 || n > MAX_TILES || tiles.len() != n {
+            return None;
+        }
+        let half = ph as usize / 2;
+        let scan = if scan == 0 { half } else { scan as usize };
+        if half == 0 || scan == 0 || scan > half || half % scan != 0 {
+            return None;
+        }
+        let sh = |v: usize| if v.is_power_of_two() { v.trailing_zeros() as u8 } else { u8::MAX };
+        let mut t = Tiling {
+            pw,
+            ph,
+            cols,
+            rows,
+            scan: scan as u16,
+            tiles: [[0; 3]; MAX_TILES],
+            pos: [u8::MAX; MAX_TILES],
+            blocks: [(0, 0, 0); MAX_TILES],
+            pw_sh: sh(pw as usize),
+            fbw_sh: sh(pw as usize * n),
+            ph_sh: sh(ph as usize),
+        };
+        for (p, &(cx, cy, turns)) in tiles.iter().enumerate() {
+            if cx as usize >= cols as usize || cy as usize >= rows as usize {
+                return None;
+            }
+            let cell = cy as usize * cols as usize + cx as usize;
+            if t.pos[cell] != u8::MAX {
+                return None; // the same cell twice
+            }
+            t.pos[cell] = p as u8;
+            let turns = if pw != ph { turns & 2 } else { turns & 3 };
+            t.tiles[p] = [cx, cy, turns];
+            // chain position p owns driver block drive-1-p (see the docs)
+            t.blocks[n - 1 - p] = (cx as u16 * pw, cy as u16 * ph, turns);
+        }
+        Some(t)
+    }
+
+    /// A [`TileCursor`] positioned on slot `i` — `None` for a 1/N-scan
+    /// layout (or `i` past the frame), where the per-slot formula stays.
+    pub fn cursor(&'static self, i: usize) -> Option<TileCursor> {
+        if self.stripes() != 1 || i >= self.len() {
+            return None;
+        }
+        let (pw, drive) = (self.pw as usize, self.drive());
+        let fb_w = pw * drive;
+        let ly = i / fb_w;
+        let x = i - ly * fb_w;
+        let b = x / pw;
+        Some(TileCursor::at(self, ly as u16, b as u8, (x - b * pw) as u16))
+    }
+
+    /// Pin the tiling for the life of the program. ~140 B, once per boot
+    /// or per live arrangement edit — the price of keeping `GridMap` `Copy`
+    /// and 8 bytes (see the field's docs).
+    pub fn leak(self) -> &'static Tiling {
+        alloc::boxed::Box::leak(alloc::boxed::Box::new(self))
+    }
+
+    /// Number of tiles the chain threads (and the driver drives).
+    #[inline]
+    pub fn drive(&self) -> usize {
+        self.cols as usize * self.rows as usize
+    }
+
+    /// The chain in ribbon order, `(cx, cy, turns)`.
+    pub fn tiles(&self) -> &[[u8; 3]] {
+        &self.tiles[..self.drive()]
+    }
+
+    pub const fn width(&self) -> u16 {
+        self.pw * self.cols as u16
+    }
+
+    pub const fn height(&self) -> u16 {
+        self.ph * self.rows as u16
+    }
+
+    pub fn len(&self) -> usize {
+        self.width() as usize * self.height() as usize
+    }
+
+    /// Stripes a 1/N-scan panel folds into one driver row (1 for a plain
+    /// panel).
+    #[inline]
+    pub fn stripes(&self) -> usize {
+        (self.ph as usize / 2) / self.scan as usize
+    }
+
+    /// Does every frame slot show the cell at its own row-major index? Then
+    /// the tiling is a no-op and [`GridMap::tiled`] drops it.
+    pub fn is_identity(&self) -> bool {
+        let w = self.width() as usize;
+        (0..self.len()).all(|i| self.cell(i) == (i / w, i % w))
+    }
+
+    /// Engine grid cell `(row, col)` shown by frame slot `i` (driver index).
+    #[inline]
+    pub fn cell(&self, i: usize) -> (usize, usize) {
+        let (pw, ph) = (self.pw as usize, self.ph as usize);
+        let drive = self.drive();
+        let fb_w = pw * drive;
+        let stripes = self.stripes();
+        let (ly, x) = if stripes == 1 {
+            if self.fbw_sh != u8::MAX {
+                (i >> self.fbw_sh, i & (fb_w - 1))
+            } else {
+                let drow = i / fb_w;
+                (drow, i - drow * fb_w)
+            }
+        } else {
+            let scan = self.scan as usize;
+            let fb_cols = fb_w * stripes;
+            let drow = i / fb_cols;
+            let dcol = i - drow * fb_cols;
+            let (half, r) = if drow >= scan { (ph / 2, drow - scan) } else { (0, drow) };
+            let s = dcol / fb_w;
+            (half + s * scan + r, dcol - s * fb_w)
+        };
+        let (b, lx) = if self.pw_sh != u8::MAX { (x >> self.pw_sh, x & (pw - 1)) } else { (x / pw, x % pw) };
+        let (ox, oy, turns) = self.blocks[b.min(drive - 1)];
+        let (sx, sy) = match turns {
+            1 => (pw - 1 - ly, lx),
+            2 => (pw - 1 - lx, ph - 1 - ly),
+            3 => (ly, ph - 1 - lx),
+            _ => (lx, ly),
+        };
+        (oy as usize + sy, ox as usize + sx)
+    }
+
+    /// Frame slot (driver index) of engine grid cell (`row`, `col`).
+    #[inline]
+    pub fn index(&self, row: usize, col: usize) -> usize {
+        let (pw, ph) = (self.pw as usize, self.ph as usize);
+        let (cx, sx) = if self.pw_sh != u8::MAX { (col >> self.pw_sh, col & (pw - 1)) } else { (col / pw, col % pw) };
+        let (cy, sy) = if self.ph_sh != u8::MAX { (row >> self.ph_sh, row & (ph - 1)) } else { (row / ph, row % ph) };
+        let drive = self.drive();
+        let p = self.pos[(cy * self.cols as usize + cx).min(MAX_TILES - 1)] as usize;
+        let p = p.min(drive - 1);
+        let turns = self.tiles[p][2];
+        let (lx, ly) = match turns {
+            1 => (sy, pw - 1 - sx),
+            2 => (pw - 1 - sx, ph - 1 - sy),
+            3 => (ph - 1 - sy, sx),
+            _ => (sx, sy),
+        };
+        let fb_w = pw * drive;
+        let x = (drive - 1 - p) * pw + lx;
+        let stripes = self.stripes();
+        if stripes == 1 {
+            ly * fb_w + x
+        } else {
+            let scan = self.scan as usize;
+            let half_h = ph / 2;
+            let (hi, yy) = if ly >= half_h { (scan, ly - half_h) } else { (0, ly) };
+            (hi + yy % scan) * (fb_w * stripes) + (yy / scan) * fb_w + x
+        }
     }
 }
 
@@ -352,11 +696,7 @@ pub fn detect_grid(dims: u8, coords: &[[crate::fixed::Fx; 3]]) -> Option<GridMap
             }
         }
     }
-    Some(GridMap {
-        w: w as u16,
-        h: h as u16,
-        serpentine,
-    })
+    Some(GridMap::new(w as u16, h as u16, serpentine))
 }
 
 /// Light-bleed bloom along the pixel index: each pixel takes the brighter of
@@ -780,6 +1120,165 @@ impl DeviceChain {
 
 #[cfg(test)]
 mod tests {
+    // ---- Gitea #948: the tiled grid --------------------------------------
+
+    /// `(cx, cy, turns)` chain for a `cols × rows` wall under a rule, the
+    /// way `Matrix::rule_tile` spells it (row/col run, snake, start corner).
+    fn rule_chain(cols: u8, rows: u8, by_col: bool, snake: bool, flip_x: bool, flip_y: bool, rot: [u8; 2]) -> Vec<(u8, u8, u8)> {
+        let (c, r) = (cols as usize, rows as usize);
+        let run = if by_col { r } else { c };
+        (0..c * r)
+            .map(|p| {
+                let (line, mut k) = (p / run, p % run);
+                if snake && line % 2 == 1 {
+                    k = run - 1 - k;
+                }
+                let (cx, cy) = if by_col { (line, k) } else { (k, line) };
+                let cx = if flip_x { c - 1 - cx } else { cx };
+                let cy = if flip_y { r - 1 - cy } else { cy };
+                (cx as u8, cy as u8, rot[line % 2])
+            })
+            .collect()
+    }
+
+    fn all_chains(cols: u8, rows: u8) -> Vec<Vec<(u8, u8, u8)>> {
+        let mut v = Vec::new();
+        for by_col in [false, true] {
+            for snake in [false, true] {
+                for (fx, fy) in [(false, false), (true, false), (false, true), (true, true)] {
+                    for rot in [[0u8, 0], [0, 2], [2, 0], [2, 2], [1, 3], [3, 1], [1, 1], [2, 1]] {
+                        v.push(rule_chain(cols, rows, by_col, snake, fx, fy, rot));
+                    }
+                }
+            }
+        }
+        v
+    }
+
+    #[test]
+    fn a_single_upright_tile_is_the_identity_and_is_dropped() {
+        let t = Tiling::new(64, 64, 1, 1, 0, &[(0, 0, 0)]).unwrap().leak();
+        assert!(t.is_identity());
+        assert_eq!(GridMap::tiled(t), GridMap::new(64, 64, false));
+        // two upright tiles side by side, IN on the right: identity too
+        let t = Tiling::new(4, 4, 2, 1, 0, &[(1, 0, 0), (0, 0, 0)]).unwrap();
+        assert!(t.is_identity());
+        // the other way round is not
+        let t = Tiling::new(4, 4, 2, 1, 0, &[(0, 0, 0), (1, 0, 0)]).unwrap().leak();
+        assert!(!t.is_identity());
+        assert_eq!(GridMap::tiled(t).tiling, Some(t));
+    }
+
+    #[test]
+    fn every_chain_is_a_permutation_and_cell_inverts_index() {
+        for (cols, rows, scan) in [(2u8, 2u8, 0u16), (3, 2, 0), (1, 1, 0), (4, 1, 0), (1, 3, 0), (2, 2, 1), (2, 1, 1)] {
+            for chain in all_chains(cols, rows) {
+                let t = Tiling::new(4, 4, cols, rows, scan, &chain).unwrap_or_else(|| panic!("{chain:?}")).leak();
+                let g = GridMap::tiled(t);
+                assert_eq!((g.w, g.h), (4 * cols as u16, 4 * rows as u16));
+                let n = t.len();
+                let mut seen = vec![false; n];
+                for i in 0..n {
+                    let (r, c) = t.cell(i);
+                    assert!(r < g.h as usize && c < g.w as usize, "{chain:?} slot {i} → ({r},{c})");
+                    let k = r * g.w as usize + c;
+                    assert!(!seen[k], "{chain:?}: cell ({r},{c}) twice");
+                    seen[k] = true;
+                    assert_eq!(t.index(r, c), i, "{chain:?}: index(cell({i}))");
+                    // and through the GridMap, whether or not it kept the tiling
+                    assert_eq!(g.index(r, c), i);
+                    assert_eq!(g.cell(i), (r, c));
+                }
+                assert!(seen.iter().all(|s| *s), "{chain:?}: a cell no slot shows");
+            }
+        }
+    }
+
+    #[test]
+    fn a_quarter_turned_tile_runs_its_rows_down_the_cell() {
+        // one 4x4 tile mounted 90° clockwise: its native top-left (slot 0)
+        // lands at the cell's top-right
+        let t = Tiling::new(4, 4, 1, 1, 0, &[(0, 0, 1)]).unwrap();
+        assert_eq!(t.cell(0), (0, 3));
+        assert_eq!(t.cell(1), (1, 3)); // the next clocked pixel is one row DOWN
+        assert_eq!(t.cell(4), (0, 2)); // the next address row is one column left
+        // 180°: slot 0 is the bottom-right cell
+        let t = Tiling::new(4, 4, 1, 1, 0, &[(0, 0, 2)]).unwrap();
+        assert_eq!(t.cell(0), (3, 3));
+        assert_eq!(t.cell(1), (3, 2));
+        // 270°: slot 0 is the bottom-left, the run goes up
+        let t = Tiling::new(4, 4, 1, 1, 0, &[(0, 0, 3)]).unwrap();
+        assert_eq!(t.cell(0), (3, 0));
+        assert_eq!(t.cell(1), (2, 0));
+    }
+
+    #[test]
+    fn the_in_panel_owns_the_last_driver_block() {
+        // 2x1, chain position 0 (IN) is the LEFT cell: the driver's first
+        // block (slots 0..4 of row 0) shows the RIGHT cell, the far end
+        let t = Tiling::new(4, 4, 2, 1, 0, &[(0, 0, 0), (1, 0, 0)]).unwrap();
+        assert_eq!(t.cell(0), (0, 4));
+        assert_eq!(t.cell(4), (0, 0));
+        assert_eq!(t.index(0, 0), 4);
+    }
+
+    #[test]
+    fn a_1_16_scan_panel_stripes_into_a_double_width_frame() {
+        // 4 wide, 8 tall, scan 2: half = 4 rows, stripes = 2, so a driver
+        // row is 8 slots wide and there are 2*scan = 4 of them
+        let t = Tiling::new(4, 8, 1, 1, 2, &[(0, 0, 0)]).unwrap();
+        assert_eq!(t.stripes(), 2);
+        assert_eq!(t.len(), 32);
+        // driver (drow 0, dcol 0..4) is panel row 0, (drow 0, dcol 4..8) is
+        // panel row 2 (stripe 1 of address row 0); drow 2 is the bottom half
+        assert_eq!(t.cell(0), (0, 0));
+        assert_eq!(t.cell(4), (2, 0));
+        assert_eq!(t.cell(8), (1, 0));
+        assert_eq!(t.cell(16), (4, 0));
+        for i in 0..32 {
+            let (r, c) = t.cell(i);
+            assert_eq!(t.index(r, c), i);
+        }
+    }
+
+    #[test]
+    fn the_cursor_walks_exactly_what_cell_computes() {
+        for (cols, rows, pw) in [(2u8, 2u8, 4u16), (3, 2, 4), (1, 1, 8), (4, 1, 6), (2, 1, 5)] {
+            for chain in all_chains(cols, rows) {
+                let t = Tiling::new(pw, pw, cols, rows, 0, &chain).unwrap().leak();
+                for start in [0usize, 1, 7, t.len() / 2, t.len() - 1] {
+                    let mut c = t.cursor(start).unwrap();
+                    for i in start..t.len() {
+                        assert_eq!(c.cell(), t.cell(i), "{chain:?} pw {pw} slot {i} from {start}");
+                        c.advance();
+                    }
+                }
+            }
+        }
+        // a 1/N-scan layout has no cursor
+        let t = Tiling::new(4, 8, 1, 1, 2, &[(0, 0, 0)]).unwrap().leak();
+        assert!(t.cursor(0).is_none());
+    }
+
+    #[test]
+    fn a_tiling_that_is_not_a_permutation_is_refused() {
+        assert!(Tiling::new(4, 4, 2, 1, 0, &[(0, 0, 0), (0, 0, 0)]).is_none()); // twice
+        assert!(Tiling::new(4, 4, 2, 1, 0, &[(0, 0, 0), (2, 0, 0)]).is_none()); // off grid
+        assert!(Tiling::new(4, 4, 2, 1, 0, &[(0, 0, 0)]).is_none()); // short
+        assert!(Tiling::new(4, 8, 1, 1, 3, &[(0, 0, 0)]).is_none()); // scan does not divide
+        assert!(Tiling::new(4, 4, 8, 8, 0, &[(0, 0, 0); 64]).is_none()); // over MAX_TILES
+    }
+
+    #[test]
+    fn a_serpentine_grid_cell_inverts_its_index() {
+        let g = GridMap::new(5, 4, true);
+        for i in 0..20 {
+            let (r, c) = g.cell(i);
+            assert_eq!(g.index(r, c), i);
+        }
+        assert_eq!(g.cell(5), (1, 4));
+    }
+
     use super::*;
 
     #[test]
@@ -887,9 +1386,9 @@ mod tests {
     #[test]
     fn detect_grid_reads_the_wiring() {
         let prog = detect_grid(2, &grid_coords(8, 4, false)).expect("progressive grid");
-        assert_eq!(prog, GridMap { w: 8, h: 4, serpentine: false });
+        assert_eq!(prog, GridMap::new(8, 4, false));
         let snake = detect_grid(2, &grid_coords(8, 4, true)).expect("serpentine grid");
-        assert_eq!(snake, GridMap { w: 8, h: 4, serpentine: true });
+        assert_eq!(snake, GridMap::new(8, 4, true));
         // the two disagree about where index 8 sits, and agree about index 0
         assert_eq!(prog.index(1, 0), 8);
         assert_eq!(snake.index(1, 0), 15);
@@ -902,7 +1401,7 @@ mod tests {
         }
         assert_eq!(
             detect_grid(2, &colwise),
-            Some(GridMap { w: 4, h: 8, serpentine: false })
+            Some(GridMap::new(4, 8, false))
         );
         // an entirely backwards panel is a mirror, not a third wiring
         let mut mirrored = grid_coords(4, 4, false);
@@ -911,7 +1410,7 @@ mod tests {
         }
         assert_eq!(
             detect_grid(2, &mirrored),
-            Some(GridMap { w: 4, h: 4, serpentine: false })
+            Some(GridMap::new(4, 4, false))
         );
     }
 
@@ -1038,7 +1537,7 @@ mod tests {
     #[test]
     fn grid_stages_ignore_a_mismatched_frame() {
         // the grid describes a different pixel count than the frame has
-        let g = GridMap { w: 8, h: 8, serpentine: false };
+        let g = GridMap::new(8, 8, false);
         let mut f = alloc::vec![[0u8; 3]; 25];
         f[12] = [255; 3];
         let before = f.clone();

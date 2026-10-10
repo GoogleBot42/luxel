@@ -12,7 +12,8 @@
 //!   through the turn the arrangement currently gives that panel, so it
 //!   answers the console's rotate button live: the user picks, per cell, the
 //!   number they see there and rotates until the arrow points up.
-//! - [`cells`] — in ENGINE space, through the live remap: every grid cell
+//! - [`cells`] — in ENGINE space, written through the chain's tiling into
+//!   driver order like any frame (Gitea #948): every grid cell
 //!   shows its ribbon number and an up arrow. When the transcription is
 //!   right, every panel shows its number upright; a wrong cell or turn is
 //!   visible as which panel shows the wrong number, or a sideways one.
@@ -22,6 +23,7 @@
 //! tile still fits. No `alloc`; the caller owns the frame.
 
 use luxel_core::layout::{Matrix, Tile};
+use luxel_core::outpipe::Tiling;
 
 /// 3x5 digits, one byte per row, bit 2 = left column.
 const DIGITS: [[u8; 5]; 10] = [
@@ -43,11 +45,13 @@ pub const NUMBER: [u8; 3] = [255, 255, 255];
 pub const ARROW: [u8; 3] = [0, 200, 255];
 pub const FRAME: [u8; 3] = [40, 40, 40];
 
-/// A frame of `w × h` pixels the caller owns, addressed by (x, y).
+/// A frame of `w × h` pixels the caller owns, addressed by (x, y): row-major,
+/// or through `tiling` into driver order when there is one.
 struct Canvas<'a> {
     px: &'a mut [[u8; 3]],
     w: usize,
     h: usize,
+    tiling: Option<&'a Tiling>,
 }
 
 impl Canvas<'_> {
@@ -55,7 +59,11 @@ impl Canvas<'_> {
         if x < 0 || y < 0 || x as usize >= self.w || y as usize >= self.h {
             return;
         }
-        if let Some(p) = self.px.get_mut(y as usize * self.w + x as usize) {
+        let i = match self.tiling {
+            Some(t) => t.index(y as usize, x as usize),
+            None => y as usize * self.w + x as usize,
+        };
+        if let Some(p) = self.px.get_mut(i) {
             *p = c;
         }
     }
@@ -73,7 +81,7 @@ fn scale_for(tw: usize, th: usize, digits: usize) -> isize {
 }
 
 /// A tile-local pixel `(x, y)` of an upright `tw × th` label, placed in the
-/// tile turned `turns` quarter turns clockwise — the same map the remap uses
+/// tile turned `turns` quarter turns clockwise — the same map the tiling uses
 /// for a mounted tile ([`crate::arrange`]): the label's top-left lands at the
 /// tile's top-right (90°), bottom-right (180°) or bottom-left (270°). A
 /// quarter turn only fits a square tile; a non-square one keeps the 180°
@@ -173,7 +181,7 @@ pub fn panels(frame: &mut [[u8; 3]], pw: usize, ph: usize, drive: usize, tiles: 
         return;
     }
     frame[..w * ph].fill([0; 3]);
-    let mut c = Canvas { px: &mut frame[..w * ph], w, h: ph };
+    let mut c = Canvas { px: &mut frame[..w * ph], w, h: ph, tiling: None };
     for b in 0..drive {
         let position = drive - 1 - b;
         let mount = tiles.get(position).map_or(0, |t| t.turns & 3);
@@ -181,19 +189,24 @@ pub fn panels(frame: &mut [[u8; 3]], pw: usize, ph: usize, drive: usize, tiles: 
     }
 }
 
-/// The CELLS card, in engine space: `frame` is the `m.width() × m.height()`
-/// grid, and every cell gets the 1-based ribbon number of the tile that
-/// fills it (per `tiles`, in ribbon order) with an UP arrow — so through a
-/// correct remap each panel shows its own number upright. Cells no tile
-/// names stay dark. Zero pixels first.
-pub fn cells(frame: &mut [[u8; 3]], m: &Matrix, tiles: &[Tile]) {
+/// The CELLS card, in engine space: `frame` holds the `m.width() ×
+/// m.height()` grid, and every cell gets the 1-based ribbon number of the
+/// tile that fills it (per `tiles`, in ribbon order) with an UP arrow — so
+/// through a correct arrangement each panel shows its own number upright.
+/// Cells no tile names stay dark. Zero pixels first.
+///
+/// `tiling` is the chain the engine writes its frame through (Gitea #948):
+/// with one, each cell is stored at `tiling.index(row, col)` — driver order,
+/// which the packer reads straight — and `None` is row-major (a chain whose
+/// tiling is the identity). It must cover the same grid as `m`.
+pub fn cells(frame: &mut [[u8; 3]], m: &Matrix, tiles: &[Tile], tiling: Option<&Tiling>) {
     let (w, h) = (m.width() as usize, m.height() as usize);
     let (pw, ph) = (m.pw as usize, m.ph as usize);
     if frame.len() < w * h || pw == 0 || ph == 0 {
         return;
     }
     frame[..w * h].fill([0; 3]);
-    let mut c = Canvas { px: &mut frame[..w * h], w, h };
+    let mut c = Canvas { px: &mut frame[..w * h], w, h, tiling };
     for (p, t) in tiles.iter().enumerate() {
         let (cx, cy) = (usize::from(t.cx), usize::from(t.cy));
         if cx >= m.cols as usize || cy >= m.rows as usize {
@@ -254,7 +267,7 @@ mod tests {
             Tile { cx: 0, cy: 0, turns: 3 },
         ];
         let mut frame = vec![[0u8; 3]; 32 * 32];
-        cells(&mut frame, &m, &tiles);
+        cells(&mut frame, &m, &tiles, None);
         fn cell(frame: &[[u8; 3]], cx: usize, cy: usize) -> Vec<[u8; 3]> {
             (0..16).flat_map(|y| (0..16).map(move |x| (x, y))).map(|(x, y)| frame[(cy * 16 + y) * 32 + cx * 16 + x]).collect()
         }
@@ -263,7 +276,7 @@ mod tests {
         assert_eq!(lit(&cell(&frame, 1, 0), ARROW), 9);
         // three tiles only: the fourth cell is dark but for its frame
         let mut frame = vec![[0u8; 3]; 32 * 32];
-        cells(&mut frame, &m, &tiles[..3]);
+        cells(&mut frame, &m, &tiles[..3], None);
         assert_eq!(lit(&cell(&frame, 0, 0), NUMBER), 0);
         assert_eq!(lit(&cell(&frame, 0, 0), ARROW), 0);
     }
@@ -273,7 +286,7 @@ mod tests {
     #[test]
     fn the_arrow_turns_with_the_tile() {
         let mut frame = vec![[0u8; 3]; 16 * 16];
-        let mut c = Canvas { px: &mut frame, w: 16, h: 16 };
+        let mut c = Canvas { px: &mut frame, w: 16, h: 16, tiling: None };
         label(&mut c, 0, 0, 16, 16, 1, 1);
         let arrow: Vec<(usize, usize)> =
             (0..16).flat_map(|y| (0..16).map(move |x| (x, y))).filter(|&(x, y)| frame[y * 16 + x] == ARROW).collect();
@@ -312,10 +325,37 @@ mod tests {
         assert_eq!(left.iter().filter(|p| p.0 == min_x).count(), 1, "one tip pixel at the left");
         assert!(left.iter().all(|p| p.0 < 8), "the chevron sits in the left half");
         // …which is exactly what the cells card shows through that tile's
-        // remap: R_1 applied to a label turned R_3 is the upright label
+        // mount: R_1 applied to a label turned R_3 is the upright label
         for (x, y) in &left {
             let (ux, uy) = turned(*x as isize, *y as isize, 16, 16, 1);
             assert!(up.contains(&(ux as usize, uy as usize)), "({x},{y}) → ({ux},{uy})");
+        }
+    }
+
+    /// Through a tiling the cells card is the row-major card permuted into
+    /// driver order: slot `i` holds what row-major cell `Tiling::cell(i)`
+    /// holds (Gitea #948).
+    #[test]
+    fn the_cells_card_writes_through_the_tiling() {
+        let mut m = Matrix::single(16, 16);
+        m.cols = 2;
+        m.rows = 2;
+        let tiles = [
+            Tile { cx: 1, cy: 0, turns: 1 },
+            Tile { cx: 1, cy: 1, turns: 1 },
+            Tile { cx: 0, cy: 1, turns: 3 },
+            Tile { cx: 0, cy: 0, turns: 3 },
+        ];
+        let chain: Vec<(u8, u8, u8)> = tiles.iter().map(|t| (t.cx, t.cy, t.turns)).collect();
+        let t = Tiling::new(16, 16, 2, 2, 0, &chain).unwrap();
+        assert!(!t.is_identity());
+        let mut plain = vec![[0u8; 3]; 32 * 32];
+        cells(&mut plain, &m, &tiles, None);
+        let mut wire = vec![[0u8; 3]; 32 * 32];
+        cells(&mut wire, &m, &tiles, Some(&t));
+        for (i, px) in wire.iter().enumerate() {
+            let (row, col) = t.cell(i);
+            assert_eq!(*px, plain[row * 32 + col], "slot {i}");
         }
     }
 

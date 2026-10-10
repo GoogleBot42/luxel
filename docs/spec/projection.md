@@ -10,12 +10,12 @@ A **Layout** is the rig: how many pixels there are and where they sit. Its
 
 A **pattern** has its own dimensionality: **0** for a pattern that declares no
 geometry at all, 1 for `render(index[, x])`, 2 for
-`render2D`, 3 for `render3D`. A `renderFrame` pattern follows the 2D row when
+`render2D`, 3 for `render3D`. A `renderBulk` pattern follows the 2D row when
 it actually draws in grid space — i.e. it names one of the coordinate/grid-space
 bulk builtins (`gridWidth`, `fillRect`, `splat`, `blit`, …), the same signal
 the engine already uses to decide whether to fabricate a default grid.
 **Dimensionality 0 is "any", and it is native on every Layout.** A pattern
-whose only render entry is `renderFrame` painting in index space (`fillHSV`,
+whose only render entry is `renderBulk` painting in index space (`fillHSV`,
 `fade`, `setPixel`) names no geometry: it is a field over `pixelCount` that
 looks the same on a strip, a panel or a cloud — `library/fairies.js` is the
 example. It is **not** a 1D pattern. A 1D pattern is a strip drawn on this
@@ -39,7 +39,8 @@ render calls — the pattern gets. That decision is the **projection**.
 Projection keys off **dims alone**. "Custom map" is a coordinate *source*, not
 a dimensionality: a slice or an axis is a coordinate substitution and does not
 care whether the pixels sit on a regular grid. Regularity matters for exactly
-two things — what by-index means (row-major on a grid, wiring order otherwise)
+two things — what by-index means (the frame's wire order: row-major on a plain
+grid, the driver's tiled order on a HUB75 chain, wiring order otherwise)
 and how cheaply an along-axis projection can be run (below).
 
 ## 1. The table
@@ -47,7 +48,7 @@ and how cheaply an along-axis projection can be run (below).
 Options are listed in display order; the **first is the default**, and every
 default reproduces the engine's behaviour from before projections existed.
 
-| Layout dims | dims 0 (any) | 1D patterns | 2D patterns (incl. grid-space `renderFrame`) | 3D patterns |
+| Layout dims | dims 0 (any) | 1D patterns | 2D patterns (incl. grid-space `renderBulk`) | 3D patterns |
 |---|---|---|---|---|
 | 1D (strip) | *native* | *native* | — | — |
 | 2D (matrix or 2D map) | *native* | By index `index` · Along x `x` · Along y `y` | *native* | — |
@@ -67,8 +68,9 @@ What each remaining token names:
 - **2D pattern on a lattice, `x`/`y`/`z`** — the Layout axis the image is
   repeated (extruded) along; the image occupies the complementary plane.
 
-`index` means the pixel's index in the Layout's own order — row-major on a
-grid, wiring order on a custom map. It is the engine's historical fallback and
+`index` means the pixel's index in the Layout's own order — the frame's wire
+order: row-major on a plain grid, the chain's tiled driver order on a HUB75
+chain (Gitea #948), wiring order on a custom map. It is the engine's historical fallback and
 changes nothing.
 
 ## 1a. Incompatible patterns
@@ -84,7 +86,7 @@ so the pattern simply gets the engine's plain fallback coordinates:
 - a 3D pattern on a strip sees the same, with `z = 0.5` — the old "line along x";
 - a 3D pattern on a plane sees the Layout's `x, y` and `z = 0.5` — the old
   "slice xy";
-- a grid-space `renderFrame` on a strip still gets a **w×1** grid, so
+- a grid-space `renderBulk` on a strip still gets a **w×1** grid, so
   `gridWidth`/`gridHeight` and the grid-space bulk builtins describe the strip
   instead of nothing. It owns the buffer, so there is no per-pixel fallback to
   give it.
@@ -204,15 +206,15 @@ Any other Layout — an irregular 2D cloud, any 3D Layout — has no cell count,
 so the strip is as long as the Layout and pixels sample it by coordinate: the
 same picture, without the saving.
 
-A grid-space `renderFrame` pattern on a 1D Layout gets a **w×1** grid so
+A grid-space `renderBulk` pattern on a 1D Layout gets a **w×1** grid so
 `gridWidth`/`gridHeight` and the grid-space bulk builtins still describe the
 strip. That pairing is incompatible (§1a) rather than a choice, so there is no
 1×h transpose any more. A whole-frame pattern is **never** strip-rendered — it
 owns the buffer, so there is no per-pixel strip to replicate. That is exactly
-why an index-space `renderFrame` is dims **0** and not 1: there is no
+why an index-space `renderBulk` is dims **0** and not 1: there is no
 projection for a host to offer it, so it must not be offered one.
 
-A `renderFrame` pattern that genuinely IS positional — one where the index is
+A `renderBulk` pattern that genuinely IS positional — one where the index is
 a place along a strip, e.g. `library/bulk-comet-trails.js` or
 `library/rainbow-comet.js` — is classed dims 0 too, and so is shown by index
 on a panel rather than replicated along an axis. Serving those means rendering
@@ -264,7 +266,7 @@ wasm (`crates/luxel-wasm`, wrapped in `web/src/lib/luxel.ts`):
 | `lx_projection_options(pattern_dims, layout_dims)` | JSON `[{mode,code,label}]`, returns the count |
 | `lx_effective_geometry(h)` | JSON `{pixelCount,patternDims,layoutDims,w,h,mode,label,compatible}` |
 | `lx_layout_dims(h)` | the Layout's dims |
-| `lx_pattern_dims(h)` | what the pattern DECLARES: 0 dimensionless · 1 `render` · 2 `render2D`/grid-space `renderFrame` · 3 `render3D`. What a projection surface asks — `lx_preferred_dims` answers a different question and folds 0 and 1 together |
+| `lx_pattern_dims(h)` | what the pattern DECLARES: 0 dimensionless · 1 `render` · 2 `render2D`/grid-space `renderBulk` · 3 `render3D`. What a projection surface asks — `lx_preferred_dims` answers a different question and folds 0 and 1 together |
 | `lx_set_strip_layout(h)` | install the 1D Layout |
 
 `luxel run|bench --proj MODE` applies a mode to the slot matching the

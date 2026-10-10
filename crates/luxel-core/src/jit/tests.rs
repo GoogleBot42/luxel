@@ -182,6 +182,8 @@ fn a_direct_word_exists_exactly_when_a_direct_sig_does() {
         "tan", "asin", "acos", "atan", "atan2", "pow", "exp", "log", "log2", "hypot", "hypot3",
         "length", "length3", "sign", "step", "dist", "dist3", "smoothstep", "map", "hash",
         "hash2", "dot", "dot3", "simplex2", "simplex3", "perlin",
+        // Gitea #948: the renderBulk loop's coordinate source.
+        "pixelCoord", "gridIndex",
     ];
     want.sort_unstable();
     assert_eq!(with_direct, want);
@@ -249,7 +251,7 @@ fn harness_vm(prog: &Program) -> Vm {
     // Gitea #841: `setPixel` writes the frame and `paint` reads the palette,
     // and both went direct — so the harness has to have both, or the sweep
     // below would compare two no-ops. A lent 8-pixel frame (what
-    // `renderFrame` does), and a three-stop palette installed through the
+    // `renderBulk` does), and a three-stop palette installed through the
     // interpreter's own `setPalette` arm as array 2: red at 0, green at
     // 0.5, blue at 1, so a lookup inside a span exercises the divide.
     vm.frame = crate::arena::frame(8);

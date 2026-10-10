@@ -46,7 +46,7 @@ struct Golden {
 
 /// The five of docs/jit-design.md §7.1: two strip patterns, a 2D one, the
 /// noise-heavy probe #260 uses as its stateless benchmark, and a
-/// `renderFrame` pattern.
+/// `renderBulk` pattern.
 const GOLDENS: [Golden; 5] = [
     // Re-pinned for the corrected frame layout (Gitea #658): the window
     // save areas moved from `a1+0` to the top of the frame, so every

@@ -76,7 +76,7 @@ export function beforeRender(delta) {
 // through the same clamp `rgb()` applies.
 // Index space, so this stays a mapless strip pattern; with a 2D map every
 // pixel still reads its own slot the way `render(index)` did.
-export function renderFrame() {
+export function renderBulk() {
   arrayAdd(trailR, ambR)
   fillRGB(trailR, trailG, 0)
   arraySub(trailR, ambR)

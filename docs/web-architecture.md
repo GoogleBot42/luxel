@@ -348,7 +348,7 @@ tile at a time as they scroll into view. `gallery.json` ships an advisory
 tile compiles, and the tile moves if it was wrong.
 
 `patternDims()`, not `preferredDims()`: the latter answers "does this pattern
-want a map installed" and folds `render` and `renderFrame` into one `0`, while a
+want a map installed" and folds `render` and `renderBulk` into one `0`, while a
 caption, a filter and a projection picker have to tell a **1D** pattern (a
 strip drawn on this Layout, projectable along an axis) from a **dimensionless**
 one (`0` — a field over `pixelCount`, native everywhere, `gallery.json` kind

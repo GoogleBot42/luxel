@@ -393,7 +393,7 @@ fn render_path(prog: &Program) -> (BTreeSet<usize>, Vec<BTreeSet<usize>>) {
         }
     }
     let mut seen: BTreeSet<usize> = BTreeSet::new();
-    for n in ["render", "render2D", "render3D", "renderFrame"] {
+    for n in ["render", "render2D", "render3D", "renderBulk"] {
         if let Some(f) = prog.exported_fn(n) {
             seen.insert(f as usize);
         }

@@ -177,6 +177,6 @@ function buildCanvas() {
   }
 }
 
-export function renderFrame() {
+export function renderBulk() {
   fillCanvas(cH, cS, cV, W, W)
 }

@@ -56,6 +56,22 @@ use crate::patterns;
 type Shared<T> = BlockingMutex<CriticalSectionRawMutex, RefCell<T>>;
 
 static LAYOUT: Shared<Option<Layout>> = BlockingMutex::new(RefCell::new(None));
+/// [`wire_tiling`]'s answer, tagged with the `LAYOUT_GEN` it was computed
+/// at — the scene compositor asks for it every frame when no base engine is
+/// resident (`devicemap::shape`), and the identity test behind it walks the
+/// whole grid. Computed outside any lock (it is ~16k cell evaluations), so
+/// a Layout written meanwhile is caught by the generation, not by clearing.
+#[cfg(feature = "hub75")]
+static WIRE: Shared<Option<(u32, Option<&'static luxel_core::outpipe::Tiling>)>> = BlockingMutex::new(RefCell::new(None));
+#[cfg(feature = "hub75")]
+static LAYOUT_GEN: AtomicU32 = AtomicU32::new(0);
+
+/// Replace the live Layout (which retires the tiling derived from the old one).
+fn set_live(l: Layout) {
+    LAYOUT.lock(|c| *c.borrow_mut() = Some(l));
+    #[cfg(feature = "hub75")]
+    LAYOUT_GEN.store(LAYOUT_GEN.load(Ordering::Relaxed).wrapping_add(1), Ordering::Release);
+}
 /// The projection the render task is to install on the next frame — the ONE
 /// live-projection path on this device (Gitea #470/#598). `0..=6` is a
 /// [`ProjectionMode`] OVERRIDE for the running pattern (a playlist item's
@@ -330,18 +346,58 @@ pub fn configured_output(n: u8) -> Option<Output> {
 }
 
 /// The configured matrix arrangement — what the HUB75 driver builds its
-/// panel→pixel remap from at boot (#475), and what the refresh estimate
-/// describes. Copied out rather than cloning the whole Layout.
+/// framebuffer from at boot (#475), what the engine's wire tiling is derived
+/// from ([`wire_tiling`], #948), and what the refresh estimate describes. Copied out rather than cloning the whole Layout.
 pub fn matrix() -> Matrix {
     LAYOUT.lock(|c| c.borrow().as_ref().map_or_else(|| board_default().matrix, |l| l.matrix))
 }
 
-/// The chain as the remap walks it (Gitea #920): the explicit `chain` line's
+/// The chain as the tiling walks it (Gitea #920): the explicit `chain` line's
 /// tiles when one is stored, else the rule's. Allocates the list; called at
 /// boot and on an arrangement change, never per frame.
 #[cfg(feature = "hub75")]
 pub fn tiles() -> alloc::vec::Vec<luxel_core::layout::Tile> {
     LAYOUT.lock(|c| c.borrow().as_ref().map_or_else(|| board_default().tiles(), |l| l.tiles()))
+}
+
+/// The HUB75 chain the engine writes its frame through (Gitea #948): the
+/// stored arrangement's [`luxel_hub75::arrange::tiling`], or `None` when it
+/// is row-major anyway (one upright tile, two side by side wired IN-right)
+/// or cannot be expressed as a tiling — then the frame is row-major, as on
+/// every board before #948. Whatever the Layout's `kind`: a user coordinate
+/// map on a panel board still feeds the same chain, and the engine permutes
+/// it into wire order on install. `None` on a board without a panel.
+/// Computed once per stored Layout (see `WIRE`).
+pub fn wire_tiling() -> Option<&'static luxel_core::outpipe::Tiling> {
+    #[cfg(feature = "hub75")]
+    {
+        let gen = LAYOUT_GEN.load(Ordering::Acquire);
+        if let Some((g, w)) = WIRE.lock(|c| *c.borrow()) {
+            if g == gen {
+                return w;
+            }
+        }
+        // Leaked (~140 B) once per stored Layout, as the remap table it
+        // replaces was: `GridMap` carries it by reference so a copy of the
+        // grid stays 8 bytes in every frame hand-off and task future.
+        let w = luxel_hub75::arrange::tiling(&matrix(), &tiles()).filter(|t| !t.is_identity()).map(|t| t.leak());
+        WIRE.lock(|c| *c.borrow_mut() = Some((gen, w)));
+        w
+    }
+    #[cfg(not(feature = "hub75"))]
+    {
+        None
+    }
+}
+
+/// [`wire_tiling`] for a log line: what order the panel's frame is in.
+#[cfg(feature = "hub75")]
+pub fn wire_desc() -> &'static str {
+    if wire_tiling().is_some() {
+        "tiled chain (engine writes driver order)"
+    } else {
+        "row-major"
+    }
 }
 
 /// `POST /api/layout/card` (Gitea #920): the test card to draw instead of
@@ -466,7 +522,7 @@ fn store(l: Layout, pixels: u32) -> bool {
     if !ok {
         println!("layout: applied live, but the store refused to persist it");
     }
-    LAYOUT.lock(|c| *c.borrow_mut() = Some(l));
+    set_live(l);
     ok
 }
 
@@ -648,18 +704,20 @@ pub fn set_from_wire(body: &str) -> Result<Applied, String> {
     // what the next frame installs (#598).
     let proj_now = edit.proj_now;
     let defaults_changed = edit.layout.proj != cur.proj;
-    // The arrangement is a table the output task can swap between frames
-    // (Gitea #920): when only WHICH panel sits where / how it is turned
-    // moved — not the framebuffer's shape — ask for the swap. That is the
-    // same test the core used to answer `reboot_required: false`.
+    // The arrangement applies live (Gitea #920): when only WHICH panel sits
+    // where / how it is turned moved — not the framebuffer's shape — the
+    // render task re-applies the map through the new wire tiling on its
+    // next frame (Gitea #948; the engine writes the frame in driver order,
+    // so there is no table to swap), and an up test card is redrawn. That
+    // is the same test the core used to answer `reboot_required: false`.
     #[cfg(feature = "hub75")]
-    let swap_remap = edit.layout.kind == luxel_core::layout::LayoutKind::Matrix
-        && cur.arrangement_differs(&edit.layout)
-        && !cur.fb_geometry_changed(&edit.layout);
+    let arrangement_live = cur.arrangement_differs(&edit.layout) && !cur.fb_geometry_changed(&edit.layout);
     let persisted = store(edit.layout, edit.pixels.unwrap_or(pixels_now));
     #[cfg(feature = "hub75")]
-    if swap_remap {
-        crate::hub75::want_remap();
+    if arrangement_live {
+        println!("layout: arrangement applied live, wire {}", wire_desc());
+        crate::devicemap::mark_dirty();
+        crate::hub75::arrangement_moved();
     }
     // A successful edit is the user having seen (or at least overwritten) the
     // self-heal's verdict — the record has done its job (Gitea #822). Only
@@ -732,6 +790,6 @@ pub fn init() {
     if l.kind == LayoutKind::Matrix {
         crate::devicemap::refresh_board_grid(l.matrix.width() as u16, l.matrix.height() as u16);
     }
-    LAYOUT.lock(|c| *c.borrow_mut() = Some(l));
+    set_live(l);
     want_projection(PROJ_DEFAULTS);
 }

@@ -714,9 +714,13 @@ which for the DMA targets is a requirement and not a preference:
 - the packer's **per-row scratch**, 14 B per column, allocated once — what
   keeps composition allocation-free now that `cols` is not a constant. The
   global allocator aborts rather than returning on OOM, so the heap is
-  checked for it explicitly before the `Vec` is built;
-- and — only when the configured arrangement is not already row-major — the
-  **panel→pixel remap table**, 2 B per driver pixel (8 KiB at 64×64).
+  checked for it explicitly before the `Vec` is built.
+
+There is no panel→pixel remap table any more (Gitea #948): the engine is
+handed the chain's `Tiling` (`devicemap::apply` → `Engine::set_wire_tiling`,
+from `layout::wire_tiling()`) and writes its frame in DRIVER order, so the
+packer reads it straight. Boot prints `wire row-major` or `wire tiled chain`
+on the panel line.
 
 All of it is allocated in `main()` wiring, before the WiFi blob's boot
 mallocs, when contiguous blocks that size are still a certainty.
@@ -738,14 +742,20 @@ half-started GDMA may already hold pointers into both, and returning that
 memory to the allocator would be a use-after-free the moment the peripheral
 twitched. On success everything is leaked and never freed.
 
-The remap is the one that varies with a device setting without being sized by
-the panel: it is 2 B per driver pixel, one seventh of the framebuffers it
-accompanies, and it is read once per pixel inside the 8.66 ms compose
-window — which is why it stays in internal DRAM and not in the PSRAM
-arena (`psram.rs` keeps every buffer the output path reads within a frame
-out of PSRAM for exactly this reason). A single upright panel — every
-device shipped so far — builds the table, finds it is the identity, frees
-it again, and holds nothing.
+**The tiled frame (Gitea #948).** Until #948 a chain that was not
+row-major (a 2x2, a rotated or snaked wall, a 1/N-scan panel) cost a 2 B/px
+table and a gather per pixel in the packer — ~24 ms of `frame_pack_us` on
+the rotated 2x2. Now the arrangement is `luxel_core::outpipe::Tiling`, pure
+arithmetic (`cell(i)` / `index(row, col)`), and the engine's procedural grid
+installs TILED: `pixels[i]` is the pixel the driver clocks out `i`-th, the
+pattern's coordinates come from `GridMap::cell`, grid-space ops write through
+`GridMap::index`, and a coordinate map is permuted into wire order once at
+install. A live arrangement change (`POST /api/layout`, #920) is a
+`devicemap::mark_dirty()` — the render task re-applies the map through the
+new tiling — plus a card redraw. The remaining permutations are net input
+(DDP/E1.31 arrive row-major and are scattered through `Tiling::index` once
+per frame) and the CELLS test card (`card::cells` writes through it).
+`/api/pixels` serves the frame as it is — wire order (docs/api.md).
 
 **The ring driver (`hub75-ring`, Gitea #857 / #838) — the S3 panel default
 since 2026-09-29 (#858).** `firmware/board-target.sh` sets `RING=1` for
@@ -864,7 +874,7 @@ a heap that idles at ~36 KB (docs/boards.md, "Scene layers"). Since Gitea #768 t
 reason: the outpipe chain's scratch frame, the netin (DDP/E1.31) live frame
 in `shared::LIVE_PIXELS`, the `pixelState` double buffer
 (`vm::PixelState`) and the HUB75 panel->pixel remap LUT
-(`hub75::build_remap`, 2 B/px). `pixelState` was the one that was also
+(`hub75::build_remap`, 2 B/px — gone since #948). `pixelState` was the one that was also
 WRONG rather than merely large: it is charged to the arena byte budget by
 `charge_array_bytes`, so before #768 the bill and the heap disagreed. What
 still stays internal: the HUB75 DMA framebuffers and their descriptor rings,

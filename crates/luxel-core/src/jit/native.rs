@@ -45,7 +45,7 @@ pub struct NativeAbi {
     /// The result comes back in two words (`a10:a11`) rather than one.
     ///
     /// The engine never reads a result — `beforeRender`, `render*` and
-    /// `renderFrame` all return into the void — so this is carried for
+    /// `renderBulk` all return into the void — so this is carried for
     /// completeness and for the host tests, not consulted on the call path.
     pub ret_dyn: bool,
     /// Bit `i` set = parameter `i` is `Dyn`, so it takes TWO handoff words

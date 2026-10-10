@@ -134,7 +134,7 @@ export function beforeRender(delta) {
 // launch pixel's blue — which `fillRGB` broadcasts for free. `min(v, 1)` is
 // gone: the fill quantizes through the same clamp `rgb()` applies.
 // Index space, so this stays a mapless strip pattern and asks for no geometry.
-export function renderFrame() {
+export function renderBulk() {
   // with the volley mirrored, the bolts re-fire from the far end, so that is
   // where the lightning flash is read from
   var b = blueLightning ? bufB[mirror ? pixelCount - 1 : 0] : bufB

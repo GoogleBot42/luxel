@@ -183,7 +183,7 @@ export function beforeRender(delta) {
 // every `stripeWidth` pixels, so the divide-floor-modulo is hoisted into a
 // walking edge and the three block colours are picked once per band rather
 // than once per pixel.
-export function renderFrame() {
+export function renderBulk() {
   var band = floor(bunting / stripeWidth) % 3
   var edge = ceil((floor(bunting / stripeWidth) + 1) * stripeWidth - bunting)
   var r0 = 0.02, g0 = 0.03, b0 = 0.3

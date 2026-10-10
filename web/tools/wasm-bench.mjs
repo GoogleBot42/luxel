@@ -33,7 +33,7 @@ const LABEL = arg("--label", path.basename(WASM));
 const JSON_OUT = arg("--json", null);
 // Five library patterns spanning what the tiles actually run: two plain 1D
 // `render` patterns, a 2D `render2D` one, a noise-heavy float workload, and a
-// dimensionless `renderFrame` one. Named, not sampled, so two runs of
+// dimensionless `renderBulk` one. Named, not sampled, so two runs of
 // different builds are comparable; `--patterns` overrides the set.
 const DEFAULT_PATTERNS = [
   "rainbow.js",

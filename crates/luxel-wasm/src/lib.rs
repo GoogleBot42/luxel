@@ -747,7 +747,7 @@ pub extern "C" fn lx_wants_sensors(h: i32) -> i32 {
 }
 
 /// The geometry the compiled pattern asks for: 0 = strip, 2 = 2D grid
-/// (render2D, or renderFrame + a coordinate/grid-space bulk op), 3 = 3D point
+/// (render2D, or renderBulk + a coordinate/grid-space bulk op), 3 = 3D point
 /// cloud. The playground picks its default preview rig from this rather than
 /// from the gallery manifest, so a pasted/imported/device-loaded pattern gets
 /// the same rig a gallery pick would (Gitea #372).
@@ -757,13 +757,13 @@ pub extern "C" fn lx_preferred_dims(h: i32) -> i32 {
 }
 
 /// The dimensionality the pattern DECLARES: `0` = dimensionless (only
-/// `renderFrame`, and it paints in index space — native on every Layout),
-/// `1` = `render(index)`, `2` = `render2D` or a grid-space `renderFrame`,
+/// `renderBulk`, and it paints in index space — native on every Layout),
+/// `1` = `render(index)`, `2` = `render2D` or a grid-space `renderBulk`,
 /// `3` = `render3D`.
 ///
 /// This, not [`lx_preferred_dims`], is what a projection surface asks:
 /// `preferred_dims` answers "does this pattern want a map installed", where
-/// `render` and `renderFrame` are the same `0`, while a picker has to tell a
+/// `render` and `renderBulk` are the same `0`, while a picker has to tell a
 /// 1D pattern (projectable along an axis) from a dimensionless one (nothing
 /// to project). Collapsing the two gave `library/fairies.js` a `1D · by index`
 /// caption and along-x/along-y options that changed nothing (2026-09-20).
@@ -1561,11 +1561,7 @@ fn with_comp<R>(ch: i32, f: impl FnOnce(&mut CompSlot) -> R) -> Option<R> {
 /// share a pixel order. Returns a handle ≥ 0.
 #[no_mangle]
 pub extern "C" fn lx_comp_new(w: u32, h: u32) -> i32 {
-    let grid = GridMap {
-        w: w.min(u16::MAX as u32) as u16,
-        h: h.min(u16::MAX as u32) as u16,
-        serpentine: false,
-    };
+    let grid = GridMap::new(w.min(u16::MAX as u32) as u16, h.min(u16::MAX as u32) as u16, false);
     let slot = CompSlot {
         comp: Compositor::new(grid),
         scene: Scene::default(),

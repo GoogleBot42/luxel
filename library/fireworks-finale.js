@@ -280,6 +280,6 @@ export function beforeRender(delta) {
 // the `saturate()` calls the readout carried are redundant here.
 // Index space, so a mapless strip is the native case and no geometry is
 // requested; on a 2D map every pixel still takes its own buffer slot.
-export function renderFrame() {
+export function renderBulk() {
   fillRGB(rBuf, gBuf, bBuf)
 }

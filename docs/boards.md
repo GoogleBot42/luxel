@@ -2777,6 +2777,43 @@ The full gallery soak on the same build agrees: `tools/hw-bench.mjs`,
 out. The sweep's lowest `heap_free` moved the other way, 83,448 → 59,668 B;
 still far above the ~20 KB floor and nothing errored, unexplained, Gitea #368.
 
+## The wire-ordered frame on metal (2026-10-10, Gitea #948)
+
+The engine writes the frame in the order the HUB75 driver clocks it out
+(`outpipe::Tiling` inside the grid map; no remap table), so the once-per-
+frame pack is a sequential read. Measured on Seengreat unit 2 (192.168.0.142,
+Jeremy's rotated 2x2 `chain 1,0,270 1,1,270 0,1,90 0,0,90`, 16384 px, JIT
+native, medians of 7 `/api/status` samples; master d7039892 vs the #948
+branch at 4117448e, same host build, same probes via `POST /api/code`):
+
+| probe | `frame_pack_us` before → after | `vm_us` ms | `fps` |
+|---|---|---|---|
+| empty `render2D(i,x,y){rgb(x,y,0)}` | 23.2 → 17.4 | 28.1 → 28.7 | 29 → 28 |
+| `render(index)` ramp (1D, by index) | 23.5 → 17.3 | 27.6 → 27.1 | 29 → 30 |
+| `aurora-2d` (exact path, `gridIndex` per cell) | 24.4 → 19.3 | 94 → 104 | 10 → 10 |
+| `bulk-canvas-ripples-2d` (`fillCanvas` 16x16) | 26.7 → 20.3 | 11.6 → 24.9 | 28 → 31 |
+| `frame-rate-scan` (`gridIndex` scatters) | 25.2 → 18.8 | 6.1 → 5.2 | 29 → 35 |
+
+- **The pack**: 23–27 ms → 17–20 ms on every probe — the identity-order 4x1's
+  number (docs above), with no gather, no 32 KB LUT and no SRAM staging.
+  `pass.ring.late` stayed 0 across the runs.
+- **The per-pixel floor**: the first build walked `Tiling::cell(i)` per pixel
+  (two divides and a tile lookup) and cost +6.2 ms (34.3 ms, 24 fps); the
+  `TileCursor` (a step per slot in the render loops) and shift arithmetic for
+  power-of-two tiles brought it to +0.6 ms — inside the run-to-run spread.
+- **Grid-walking bulk ops pay `index()` per cell** (the canvas block expand,
+  `paste`, text, compose, blur/glow): ripples' VM doubled yet its fps rose
+  because the pack bounded it; Aurora's exact path (one `gridIndex` + one
+  `setPixel` per cell) is ~10 % slower in VM. Row-run iteration is Gitea #953.
+- **Picture proof**: `/api/pixels` of a static `rgb(x, y, .25)` probe, decoded
+  through `Tiling::cell` (a Python mirror checked against the Rust formula on
+  all 16384 slots), equals master's row-major frame pixel for pixel; a 1D
+  probe's frame is byte-identical undecoded (index order is unchanged).
+  `/api/pixels` only answers while the pattern is slow (Gitea #949).
+- Statics: `.stack` 29,796 B on the Seengreat; the classic boards pay 88 B
+  (board-pixelblaze-v3 24,356 vs master's 24,444 — master is already under
+  the floor, Gitea #800).
+
 ## Builtins on metal (2026-10-04, Gitea #938)
 
 Jeremy: *"massively improve the performance of patterns by improving the
@@ -4032,6 +4069,16 @@ at 30 MHz, against ~38 Hz at 20 MHz), and **chained panels** get the
 bandwidth they need (Gitea #255).
 
 ## HUB75 panel arrangement: the boot-time remap (2026-09-19, Gitea #475)
+
+> **#948 (2026-10-09): the remap is gone.** The table below, its live swap
+> (`want_remap`) and the packer's gather (`pack_remap`, the LUT branch of the
+> PIE `gather_pair`) were retired: the same formula is now
+> `luxel_core::outpipe::Tiling`, the engine writes its frame in driver order
+> through it, and the packer reads the frame straight. A live arrangement
+> change is a map re-apply on the render task. The table builder survives as
+> `#[cfg(test)]` reference code in `arrange.rs` (`the_tiling_is_the_table`).
+> docs/firmware.md "The tiled frame" has the current story; what follows is
+> the history.
 
 A HUB75 chain is one ribbon. The driver shifts a single row `pw · panels`
 wide and `ph` tall, and the tiles hang wherever the installer put them —

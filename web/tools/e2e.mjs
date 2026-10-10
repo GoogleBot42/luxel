@@ -1402,14 +1402,14 @@ try {
   await pasteEditor(page, "export function render(index) { hsv(index / pixelCount, 1, 1) }");
   check("layout: a render() pattern stays a bar", (await rig(page)).shape === "bar");
 
-  // A renderFrame pattern that draws in coordinate space is 2D too, even
+  // A renderBulk pattern that draws in coordinate space is 2D too, even
   // though it never mentions render2D (the engine's own uses_coordinate_bulk_op).
   await pasteEditor(
     page,
-    "export function renderFrame() {\n  clear()\n  hsv(0.3, 1, 1)\n  fillCircle(0.5, 0.5, 0.3)\n}",
+    "export function renderBulk() {\n  clear()\n  hsv(0.3, 1, 1)\n  fillCircle(0.5, 0.5, 0.3)\n}",
   );
   check(
-    "layout: a renderFrame pattern drawing in coordinate space gets the grid",
+    "layout: a renderBulk pattern drawing in coordinate space gets the grid",
     (await rig(page)).shape === "grid",
   );
 

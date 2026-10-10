@@ -131,6 +131,6 @@ export function beforeRender(delta) {
 // rig tested. With no map at all the pattern still gets the default
 // ceil(sqrt(n)) grid a `render2D`-only pattern got, so a bare strip shows the
 // same wrapped 16x16 field it always did.
-export function renderFrame() {
+export function renderBulk() {
   fillCanvas(hC, sC, vC, W, W)
 }

@@ -658,7 +658,7 @@ export function beforeRender(delta) {
 // The mini-patterns already write three parallel per-pixel channel buffers and
 // the old renderers only read them back, so the read-out goes native: index
 // space, no map used or needed, and `render2D`/`render3D` forwarding to the 1D
-// content is exactly what `renderFrame` does on any fixture.
+// content is exactly what `renderBulk` does on any fixture.
 //
 // `Theme Hue` is the one thing `fillHSV` cannot express — it is a scalar added
 // to an array channel, and `arrayAdd` wants an array (Gitea #373 proposes
@@ -668,7 +668,7 @@ export function beforeRender(delta) {
 // taken straight back out. Fixed-point add/subtract is exact, so the buffer the
 // mini-patterns see next frame is bit-for-bit the one they left, and the
 // shipped default (offset 0) skips both loops and pays nothing at all.
-export function renderFrame() {
+export function renderBulk() {
   if (hueOffset == 0) {
     fillHSV(hueA, satA, valA)
     return
@@ -679,8 +679,8 @@ export function renderFrame() {
   for (i = 0; i < pixelCount; i++) hueA[i] -= hueOffset
 }
 
-// Kept for engines with no `renderFrame` (a real Pixel Blaze): all three read
-// the same 1D content. Luxel always takes `renderFrame` above.
+// Kept for engines with no `renderBulk` (a real Pixel Blaze): all three read
+// the same 1D content. Luxel always takes `renderBulk` above.
 export function render(index) {
   hsv(hueA[index] + hueOffset, satA[index], valA[index])
 }

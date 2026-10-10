@@ -54,7 +54,7 @@ export function beforeRender(delta) {
   }
 }
 
-export function renderFrame() {
+export function renderBulk() {
   clear()                        // the frame persists, so start it fresh
   var b
   for (b = 0; b < balls; b++) {

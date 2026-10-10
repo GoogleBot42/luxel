@@ -5,7 +5,7 @@
 //!
 //! `library_diff.rs` proves the emitted CODE computes what the interpreter
 //! computes, entering each function by hand. This test proves the GLUE:
-//! that `Engine::render_pixels`, the `beforeRender` and `renderFrame`
+//! that `Engine::render_pixels`, the `beforeRender` and `renderBulk`
 //! stages, the per-pass `JitCtx`, the fuel reset, the argument handoff and
 //! the error path all agree with the interpreted engine on the bytes that
 //! reach a strip. Those are exactly the pieces the firmware has no host
@@ -405,7 +405,7 @@ fn diff(name: &str, src: &str) -> Result<usize, String> {
 
 /// The five patterns docs/jit-design.md §7.1 names, driven through the
 /// engine. Two strip patterns, a 2D one, the noise-heavy #260 benchmark,
-/// and a `renderFrame` pattern — which is the one the by-hand harness in
+/// and a `renderBulk` pattern — which is the one the by-hand harness in
 /// `library_diff.rs` cannot cover at all, because the frame builtins need
 /// the engine's lent buffer.
 #[test]

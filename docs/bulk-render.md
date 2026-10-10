@@ -1,9 +1,20 @@
-# `renderFrame` — whole-frame rendering and the bulk ops
+# `renderBulk` — whole-frame rendering and the bulk ops
 
-`renderFrame()` is a fourth render entry beside `render`/`render2D`/`render3D`.
+`renderBulk()` is a fourth render entry beside `render`/`render2D`/`render3D`.
 It runs **once per frame**, not once per pixel, and comes with sixteen native
 builtins (ids 166–181) that touch many pixels per call. This page is the
 design in one place plus the measured evaluation of it.
+
+> **Renamed in Gitea #948.** The entry was `renderFrame` when everything on
+> this page was designed and measured; the name changed when the frame's
+> index space became **wire order** (slot `i` = the `i`-th pixel the driver
+> clocks out, which on a HUB75 chain of rotated panels is not cell
+> `(i % w, i / w)`). Index-space ops are unchanged and right for strips; a
+> pattern that addresses grid cells goes through `gridIndex(col, row)` or
+> the coordinate-/grid-space ops. Historical benchmark rows below say
+> `renderBulk` for the entry they measured under its old name. The
+> language-level contract is docs/lang.md "Whole-frame rendering"; the host
+> contract is docs/spec/vm.md.
 
 Branch `agent/luxel/bulk-render`, merge base `c7e0266`. All throughput and
 size numbers below were re-measured after the grid-coverage fix and the
@@ -42,29 +53,35 @@ native op.
 
 ## The model
 
-**Entry.** `renderFrame` is a fourth well-known name in `render_targets`
+**Entry.** `renderBulk` is a fourth well-known name in `render_targets`
 (`RenderKind::Frame`, `RunStage::Frame`). Present, it wins over
 `render2D`/`render3D`/`render` regardless of map dimensions; late binding
-(`export var renderFrame` holding a `Fun`) works like the others.
+(`export var renderBulk` holding a `Fun`) works like the others.
 `beforeRender(delta)` is unchanged, and `post_chain()` + `finish_frame()`
 still run after the call, so `setFrameRate`, `timeScale`, `setBlur`,
 `setGlow` and the output palette all behave as before.
 
 **Frame persistence.** The engine's `pixels` Vec is **not** cleared between
-frames — `renderFrame` starts on last frame's final output. That is what
+frames — `renderBulk` starts on last frame's final output. That is what
 makes `fade(k)` + a few `setPixel`s a trail with **no pattern-side array**
 (a 4096-element `Value` array is 32 KB and has OOMed the S3 panel: #275/#258).
 A pattern that wants a fresh canvas calls `clear()`. Post-chain stages
 compound frame over frame under persistence unless the pattern clears.
 
+**Index order (#948).** The `pixels` Vec is in wire order — on a tiled HUB75
+chain the procedural grid map carries the chain's tiling and yields the
+frame in driver order. Index-space ops address slots; `gridIndex(col, row)`
+maps a cell to its slot (−1 off grid), `pixelCoord(i, axis)` a slot to its
+coordinate. Never compute a slot as `row * gridWidth() + col`.
+
 **Buffer plumbing.** `Engine::frame_buffer_out` `mem::take`s `pixels` into
 `Vm::frame` and `frame_buffer_in` takes it back — a move, never a copy (12 KB
 at 4096 px, every frame), paired on every exit path including pattern error
-and debug pause. Outside `renderFrame` the Vec is empty, which makes every
+and debug pause. Outside `renderBulk` the Vec is empty, which makes every
 bulk builtin a silent no-op; that is the entire guard, there is no mode flag.
 
 **The brush.** `hsv()`/`rgb()`/`paint()`/`oklch()` keep writing `Vm::pixel`;
-under `renderFrame` that slot is the current colour and the shape ops read it.
+under `renderBulk` that slot is the current colour and the shape ops read it.
 Every existing colour builtin therefore works here with no new plumbing. The
 engine resets the brush to black at the top of each frame; within a frame it
 is sticky.
@@ -97,7 +114,7 @@ brush alone; a `bArr` of `v * v` (the usual `paint(v, v * v)` shape) is a
 second array, so budget two.
 
 **Producing a canvas.** Two ops fill one natively, and both are ordinary
-array builtins — they work outside `renderFrame` too:
+array builtins — they work outside `renderBulk` too:
 
 | op | what |
 |---|---|
@@ -163,8 +180,8 @@ randomised shape parameters; a transform routes to the scan.
 (black source transparent — `blit` only).
 
 **Default map.** A pattern with no `render`/`render2D`/`render3D` but a
-`renderFrame` that *calls a coordinate- or grid-space builtin* gets the same
-`ceil(√n)` default grid a 2D-only pattern gets. `renderFrame` + `fillHSV` is
+`renderBulk` that *calls a coordinate- or grid-space builtin* gets the same
+`ceil(√n)` default grid a 2D-only pattern gets. `renderBulk` + `fillHSV` is
 a strip pattern and is handed no geometry it never asked for.
 
 **The canvas block expand.** `fillCanvas` and `paintCanvas` have a second
@@ -211,7 +228,7 @@ comparable sweep they were taken as.
 
 | pair | what | px ns/px | bulk ns/px | px µs/frame | bulk µs/frame | ratio |
 |---|---|---:|---:|---:|---:|---:|
-| k-empty | `render(index){}` vs `renderFrame(){}` | 9.68 | 0.004 | 39.6 | 0.02 | **2201×** |
+| k-empty | `render(index){}` vs `renderBulk(){}` | 9.68 | 0.004 | 39.6 | 0.02 | **2201×** |
 | a-fill | constant `hsv` vs `fill()` | 15.75 | 0.21 | 64.5 | 0.86 | 75.1× |
 | b-rainbow | per-pixel hue vs `fillGradient` | 20.74 | 4.76 | 84.9 | 19.5 | 4.4× |
 | c-readout | `hsv(hues[i],1,vals[i])` vs `fillHSV(hues,1,vals)` | 19.15 | 4.16 | 78.4 | 17.0 | 4.6× |
@@ -291,7 +308,7 @@ Every beneficiary drops to ~0 interpreted instructions per pixel: the whole
 per-pixel stream, entry and body, moves into native code, and what remains is
 the handful of instructions `beforeRender` and the bulk call itself execute
 once per frame. The dense-procedural control is the mirror image — rewriting
-it as `renderFrame` *doubles* its interpreted work (27 → 52 insns/px), because
+it as `renderBulk` *doubles* its interpreted work (27 → 52 insns/px), because
 the loop bookkeeping and the index→(x, y) arithmetic that the engine did
 natively are now bytecode.
 
@@ -427,7 +444,7 @@ the day **`ed2ac3f`** — with a single `web/public/luxel.wasm` compiling every
 pattern, so the bytecode on the wire is byte-identical across builds and only
 the firmware differs. Both S3 slots carried the same image before any
 measurement (#294); `core1.last` was clean after all six pushes and no OTA
-wedged. Full tables live in docs/boards.md, "Bulk render (`renderFrame`) on
+wedged. Full tables live in docs/boards.md, "Bulk render (`renderBulk`) on
 metal".
 
 **The I-cache risk did not materialise.** `tools/patbench.mjs` on
@@ -564,7 +581,7 @@ came out of them, each measured at least once:
   pixels costs no ceiling and measured the same as `fillRGB` over prebuilt
   buffers (`neutronorbit`, 1.98x vs 2.00x). On the Seengreat S3 the PSRAM
   arena (#253) lifts the wall; every other board keeps it.
-- **Convert the frame's clears too.** `renderFrame` + one fill alone is
+- **Convert the frame's clears too.** `renderBulk` + one fill alone is
   ~1.02x when `beforeRender` already does full-strip passes; the win came
   from `feedback(buf, 0)` replacing `for (i…) buf[i] = 0`.
 - **An interpreted `pixelCount` loop is not a substitute for a missing bulk
@@ -585,7 +602,7 @@ came out of them, each measured at least once:
 - **`fillCanvas` on a mapless fixture is not a no-op** (the 1-D fallback
   hands every pixel `y = 0.5`); a pattern exporting `render` needs a
   `has2DMap()` guard or its strip behaviour changes silently.
-- **Per-pixel `random()` forbids a bulk fill but not `renderFrame`** — the RNG
+- **Per-pixel `random()` forbids a bulk fill but not `renderBulk`** — the RNG
   is one shared stream, so preserve the draw order exactly and take the win
   from hoisting column-constant terms (`4th`).
 - **Measure with `tools/pairbench.mjs`**, interleaved; host best-of-5 is too
@@ -594,7 +611,7 @@ came out of them, each measured at least once:
 
 ## Converted library patterns
 
-`renderFrame` is an entry point, not a migration: the rule in "Scope" below
+`renderBulk` is an entry point, not a migration: the rule in "Scope" below
 still holds. These are the library patterns that have actually been moved onto
 it, with the numbers each conversion was accepted on. Host `luxel bench`, best
 of five interleaved runs; `--profile` for the instruction counts.
@@ -635,7 +652,7 @@ with one `rgb()` per pixel, which is exactly `fillRGB`'s shape:
 
 ```
 render(index) { rgb(rBuf[index], gBuf[index], bBuf[index]) }
-    ->  renderFrame() { fillRGB(rBuf, gBuf, bBuf) }
+    ->  renderBulk() { fillRGB(rBuf, gBuf, bBuf) }
 ```
 
 The readout's own `saturate()` / `clamp(v, 0, 1)` / `min(v, 1)` guards drop out:
@@ -800,7 +817,7 @@ bilinear mode on `fillCanvas`, or a `paintCanvas` that takes one, would make it
 convertible — that is the concrete ask on #373.
 
 **The reusable piece: a nearest canvas fill with an RGB (or palette) brush.**
-A `renderFrame` can reproduce `fillCanvas`'s nearest sampling exactly using one
+A `renderBulk` can reproduce `fillCanvas`'s nearest sampling exactly using one
 `fillRect` per *run* of identical cells along a canvas row, which is what a
 non-HSV canvas pattern needs until `paintCanvas` exists. On a mostly-dark
 canvas that is a handful of rects per row instead of `CW` of them. Two details
@@ -951,7 +968,7 @@ on these numbers it is worth about half of what is left of the frame.
 The dense-procedural counter-example, converted anyway because one of its two
 noise fields is not actually per pixel. `simplex2(x * 1.8, z, 5)` depends only
 on the column, and the old `render2D` evaluated it 4096 times a frame on the
-64x64 panel for 64 distinct answers; `renderFrame` walks the grid itself, so
+64x64 panel for 64 distinct answers; `renderBulk` walks the grid itself, so
 the band is a 64-entry table rebuilt in `beforeRender` and the shimmer stays
 one `simplex3` per pixel. Builtin calls per frame: **simplex2 4096 -> 64**,
 everything else unchanged.
@@ -1087,8 +1104,8 @@ nothing below is drift).
 | variant | vm µs | vm µs/px | fps | vs pre |
 |---|---:|---:|---:|---:|
 | pre-conversion (`render2D`, per-pixel) | 130,681 | 31.905 | 8 | 1.00x |
-| **loop-shape isolation** (`renderFrame`, `simplex2` put back per pixel) | 139,289 | 34.006 | 8 | **0.94x** |
-| 8cdf5b5 (`renderFrame`, `simplex2` hoisted) | 113,116 | 27.616 | 9 | **1.16x** |
+| **loop-shape isolation** (`renderBulk`, `simplex2` put back per pixel) | 139,289 | 34.006 | 8 | **0.94x** |
+| 8cdf5b5 (`renderBulk`, `simplex2` hoisted) | 113,116 | 27.616 | 9 | **1.16x** |
 | master 00b39f6 (`fillNoise3D` + `paintCanvas`) | 102,671 | 25.066 | 10 | **1.27x** |
 | 8cdf5b5, Cell Size 2 | 96,746 | 23.620 | 11 | 1.35x |
 | master, Cell Size 2 | 27,695 | 6.761 | 36 | **4.72x** |
@@ -1100,7 +1117,7 @@ nothing below is drift).
 as the per-pixel original (4096 `simplex2` + 4096 `simplex3`), same picture
 (byte-identical over 60 frames at 4096 px / 64x64, and so is 8cdf5b5 itself),
 and *only* the loop shape differs: the engine's native per-pixel `render2D`
-entry against an interpreted `renderFrame` walk that does its own index
+entry against an interpreted `renderBulk` walk that does its own index
 arithmetic, column-table reads and `setPixel`. It costs **+2.101 µs/px, ~504
 cycles at 240 MHz** — the interpreted walk is roughly twice the price of the
 317–440-cycle native entry it replaces.
@@ -1118,7 +1135,7 @@ same way on both.
 
 Two consequences for the conversion rule in "Scope":
 
-- `renderFrame` is worth reaching for when it lets you **remove work** (hoist a
+- `renderBulk` is worth reaching for when it lets you **remove work** (hoist a
   non-per-pixel term, or replace the body with a bulk op). Reaching for it to
   "avoid the per-pixel entry" is a **6.6 % regression** at one cell per pixel,
   on the hardware where that entry is most expensive.
@@ -1211,7 +1228,7 @@ moves every time:
    anywhere else: these patterns are already four or five `pixelCount` buffers
    against a 10,236-element budget, so a conversion that added a fourth channel
    trio would have cost more ceiling than it bought speed.
-2. **`renderFrame()` is one `fillRGB`.** `fillRGB` is an *index-space* op — it
+2. **`renderBulk()` is one `fillRGB`.** `fillRGB` is an *index-space* op — it
    takes an array or a scalar per channel and addresses pixel `i` — so it is
    map-independent: on a bare strip it is exactly the old `render(index)` loop,
    and on a matrix these patterns still run along the pixel index rather than
@@ -1220,7 +1237,7 @@ moves every time:
 3. **The zero-fills go native.** Each frame these patterns cleared three or four
    `pixelCount` buffers with an interpreted `for` loop. `feedback(a, 0)` is the
    same thing as one VM call, and it is where most of the measured win actually
-   comes from — the `renderFrame` entry alone is worth ~1.02x on this host.
+   comes from — the `renderBulk` entry alone is worth ~1.02x on this host.
    Two per-pixel passes also gained a `v > 0` / `iv <= 0` skip, exact because
    every term reaching these buffers is non-negative (a zero channel squares to
    itself, and a zero intensity contributes nothing to the composite).
@@ -1308,13 +1325,13 @@ differs by up to 207 per channel.
 
 `bouncy-boxes` is byte-identical everywhere because it exports `render` as well
 as `render2D`, which suppresses the default grid: on a mapless strip it was
-black and still is. Keeping it that way needed a guard, because `renderFrame`
+black and still is. Keeping it that way needed a guard, because `renderBulk`
 wins over `render` unconditionally and `fillCanvas` on a mapless fixture is not
 a no-op — the 1-D fallback coordinate hands every pixel `y = 0.5`, which would
 paint one row of the canvas along the whole strip. `has2DMap()` is the branch:
 
 ```js
-export function renderFrame() {
+export function renderBulk() {
   if (has2DMap()) fillCanvas(hc, sc, vc, W, H)
   else clear()          // no map: the shipped 1-D fallback was black
 }
@@ -1392,8 +1409,8 @@ rounding.
 What made it convert anyway is the two things the loop *can* hand to the engine:
 
 ```js
-export function renderFrame() {
-  clear()                              // renderFrame does NOT clear between frames
+export function renderBulk() {
+  clear()                              // renderBulk does NOT clear between frames
   for (i = 0; i < pixelCount; i++) {
     b = bri[i]
     if (b == 0) continue               // black already, and hue/sat are
@@ -1412,7 +1429,7 @@ is scaled once, and the dead-pixel skip is exact because a dark pixel's hue and
 saturation are overwritten wholesale when the head next stamps it. The skip is
 most of a strip between passes of the head, and it is what turns the trade
 positive: a naive port with neither measured **0.81x**. `clear()` is
-load-bearing, not decoration — `renderFrame` starts on last frame's output, so
+load-bearing, not decoration — `renderBulk` starts on last frame's output, so
 without it a skipped pixel would keep its old colour forever, and a 60-frame
 equivalence sweep does **not** catch that (no pixel decays to exactly 0 inside
 two seconds). The sweep was extended to 400 frames for exactly this reason.
@@ -1443,7 +1460,7 @@ and exactly what a bulk op would have absorbed.
 ### `neutronorbit` and `4th` — when the read-out cannot be a bulk fill (2026-09-07)
 
 Two more #405 conversions where `fillRGB` is the *wrong* answer and
-`renderFrame` is still the right one. Both keep `clear()` + a `setPixel` loop,
+`renderBulk` is still the right one. Both keep `clear()` + a `setPixel` loop,
 and both are byte-identical over 60 frames at a fixed delta and seed on six
 rigs (16x16 / 32x32 / 64x64 maps, 60 / 300 / 512 px mapless strips), undriven
 and driven.
@@ -1670,7 +1687,7 @@ per-pixel entry, and a ceiling where the win is a native builtin call whose
 cost is the same share of the frame on both (2026-09-08).
 
 - **Attribute the win before you believe it — build an isolation variant.** A
-  `renderFrame` rewrite usually changes two things at once, the loop shape
+  `renderBulk` rewrite usually changes two things at once, the loop shape
   *and* the work done inside it, and only one of them is normally worth
   anything. Take the converted file, undo the work-removing half (put the
   hoisted builtin back in the pixel loop), confirm on the host that it renders
@@ -1688,10 +1705,10 @@ cost is the same share of the frame on both (2026-09-08).
 
 - **`tools/opbench.mjs` cannot see this change at all.** Its K-sweep loop
   fits the slope of a bytecode loop and cancels the per-pixel entry by
-  construction — which is precisely what `renderFrame` removes. It will read
+  construction — which is precisely what `renderBulk` removes. It will read
   flat. Run it only to confirm dispatch has not regressed.
 - **`tools/patbench.mjs <pattern>` is the measurement**: push the per-pixel
-  pattern, record median `vm_us/px`, push the `renderFrame` rewrite of the
+  pattern, record median `vm_us/px`, push the `renderBulk` rewrite of the
   same pattern, record again. Use a **stateless** probe — `snake-2d` swings
   74 % between builds a kilobyte apart and is useless as an A/B; the pairs
   above are all deterministic given a fixed delta.
@@ -1720,7 +1737,7 @@ goes to zero. That is ~145 of 299 library patterns.
 
 They do **not** help the ~110 dense-procedural patterns, and rewriting one is
 an active regression (0.72–0.76× here, interpreted work 27 → 52 insns/px).
-`renderFrame` is an additional entry point, not a replacement: the right rule
+`renderBulk` is an additional entry point, not a replacement: the right rule
 is *stay on `render` unless a bulk op replaces the body*.
 
 The costs are real and should be weighed against that: **+8.8–9.3 KB of flash

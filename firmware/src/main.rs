@@ -1505,11 +1505,7 @@ fn scene_grid(engine: &Option<Engine>) -> luxel_core::outpipe::GridMap {
         .as_ref()
         .and_then(|e| e.grid())
         .or_else(|| devicemap::shape().1)
-        .unwrap_or(luxel_core::outpipe::GridMap {
-            w: 0,
-            h: 0,
-            serpentine: false,
-        })
+        .unwrap_or(luxel_core::outpipe::GridMap::new(0, 0, false))
 }
 
 /// [try_budgeted_engine] plus the user-facing "too large" vmerr on failure.
@@ -2321,16 +2317,36 @@ async fn render_task(mut sink: pipeline::RenderSink) -> ! {
             // (Gitea #704), so claim it here — fallibly, because the fill
             // below pushes infallibly
             if sink.reserve_stage(count) {
+                // A tiled panel chain (Gitea #948) takes its frame in DRIVER
+                // order, but the sender's is row-major over the grid: scatter
+                // it through the chain once per frame — the one place a
+                // remap cost survives, and only while net input flows.
+                let wire = layout::wire_tiling().filter(|t| t.len() == count);
                 shared::LIVE_PIXELS.lock(|c| {
                     let live = c.borrow();
                     let stage = sink.stage();
                     stage.clear();
-                    for i in 0..count {
+                    let px_at = |i: usize| {
                         let p = i * 3;
-                        stage.push(match live.get(p..p + 3) {
+                        match live.get(p..p + 3) {
                             Some(px) => [px[0], px[1], px[2]],
                             None => [0, 0, 0],
-                        });
+                        }
+                    };
+                    match wire {
+                        Some(t) => {
+                            stage.resize(count, [0, 0, 0]);
+                            let w = t.width() as usize;
+                            for i in 0..count {
+                                let (y, x) = (i / w, i % w);
+                                stage[t.index(y, x)] = px_at(i);
+                            }
+                        }
+                        None => {
+                            for i in 0..count {
+                                stage.push(px_at(i));
+                            }
+                        }
                     }
                 });
                 let grid = engine.as_ref().and_then(|e| e.grid());

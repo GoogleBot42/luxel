@@ -76,6 +76,6 @@ export function beforeRender(delta) {
 }
 
 // One whole-frame read-out; hue is a scalar the fill broadcasts (Gitea #405).
-export function renderFrame() {
+export function renderBulk() {
   fillHSV(hue, satB, briB)
 }

@@ -18,7 +18,7 @@
 // THE STROBOSCOPE BEAT (the top band, rows 0..3/4 H)
 // Every composed frame the whole field flips colour: RED on even frames,
 // GREEN on odd ones. The flip is driven by a counter incremented once per
-// `renderFrame` call — never by the clock — so it is exactly one flip per
+// `renderBulk` call — never by the clock — so it is exactly one flip per
 // composed frame.
 //   * If the panel displayed every composed frame exactly once, the eye
 //     would fuse the alternation into steady YELLOW.
@@ -81,7 +81,7 @@ var composeCap = 0
 
 var emaFps = 60          // EMA of 1000/delta — the measured compose rate
 var refPhase = 0         // 0..1 phase of the beat-reference blink
-var frameParity = 0      // flips once per renderFrame call
+var frameParity = 0      // flips once per renderBulk call
 var tickFps = array(4)
 tickFps[0] = 60
 tickFps[1] = 77
@@ -106,7 +106,7 @@ export function beforeRender(delta) {
   refPhase = mod(refPhase + (dt * beatHz) / 1000, 1)
 }
 
-export function renderFrame() {
+export function renderBulk() {
   var W = gridWidth()
   var H = gridHeight()
 
@@ -134,7 +134,7 @@ export function renderFrame() {
 
   // --- the strobe field -------------------------------------------------
   strobeBrush()
-  fillRange(0, barTop * W)
+  band(0, W, 0, barTop, W, H)
 
   // --- compose-fps bar, 2 fps per column, ticks on its top row ----------
   var barCols = clamp(floor((emaFps * W) / 128 + 0.5), 0, W)
@@ -144,26 +144,46 @@ export function renderFrame() {
     for (var t = 0; t < 4; t++) {
       if (tickFps[t] == 115) hsv(0.85, 1, 1)      // the rate under test
       else hsv(0.5, 1, 0.8)
-      setPixel(barTop * W + floor((tickFps[t] * W) / 128))
+      setPixel(gridIndex(floor((tickFps[t] * W) / 128), barTop))
     }
   }
   hsv(0.08, 1, 1)
-  for (var r = barFirst; r < parTop; r++) fillRange(r * W + 0, r * W + barCols)
+  band(0, barCols, barFirst, parTop, W, H)
 
   // --- frame-parity halves, dim ----------------------------------------
   var half = floor(W / 2)
   hsv(0, 0, 0.25)
   var x0 = frameParity ? half : 0
   var x1 = frameParity ? W : half
-  for (var q = parTop; q < refTop; q++) fillRange(q * W + x0, q * W + x1)
+  band(x0, x1, parTop, refTop, W, H)
 
   // --- beat reference ---------------------------------------------------
   if (refPhase < 0.5) {
     hsv(0.6, 1, 1)
-    fillRange(refTop * W, H * W)
+    band(0, W, refTop, H, W, H)
   }
 
   frameStep()
+}
+
+// Cells [c0, c1) x [r0, r1) of the W x H grid, in the brush, as ONE native
+// `fillRect`. The frame is in wire order, so a grid row is not an index
+// range on a chain of panels; a rectangle in mapped coordinates is, on any
+// grid. An inner edge is the edge cell's own mapped coordinate (`pixelCoord`
+// of its `gridIndex`), so the inclusive bound lands exactly on that cell's
+// centre and takes in exactly the cells inside it. An edge at the grid's
+// border is left open (-1 / 2, outside 0..1) instead: a one-row grid — what
+// a bare strip gets — has no y axis of its own, and `pixelCoord` would read
+// it as 0 where the shape test sees the 1D fallback's 0.5. The y edges are
+// read from column 0 and the x edges from row 0: those cells always have a
+// pixel, where the tail of an over-provisioned last row does not.
+function band(c0, c1, r0, r1, W, H) {
+  if (c1 <= c0 || r1 <= r0) return
+  var x0 = c0 <= 0 ? -1 : pixelCoord(gridIndex(c0, 0), 0)
+  var x1 = c1 >= W ? 2 : pixelCoord(gridIndex(c1 - 1, 0), 0)
+  var y0 = r0 <= 0 ? -1 : pixelCoord(gridIndex(0, r0), 1)
+  var y1 = r1 >= H ? 2 : pixelCoord(gridIndex(0, r1 - 1), 1)
+  fillRect(x0, y0, x1, y1)
 }
 
 // Red on even composed frames, green on odd. `contrast` only scales the

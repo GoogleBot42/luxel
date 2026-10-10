@@ -65,7 +65,7 @@ Common contract, which is `blit`'s:
   it cannot draw.
 - **Clipped at all four edges**; cells past the end of the frame (the tail of
   an over-provisioned last row) are skipped.
-- Outside `renderFrame` the frame buffer is empty, so every draw is a no-op.
+- Outside `renderBulk` the frame buffer is empty, so every draw is a no-op.
 
 `align`: `0` left (default), `1` centre, `2` right — `x` is the anchor.
 Anything else reads as left, matching the "missing args read as 0"
@@ -82,7 +82,7 @@ to zero. Fixed-point aware — the fraction comes from the 16.16 word, so
 changes nothing, so `font("")` reads the active face.
 
 ```js
-export function renderFrame() {
+export function renderBulk() {
   if (gridWidth() == 0) return
   clear()
   rgb(1, .6, 0)
@@ -196,6 +196,6 @@ pub fn with_slot<R>(n: u8, f: impl FnOnce(&str) -> R) -> R;
 pub fn clear_slots();
 ```
 
-`draw`/`draw_aligned` composite into a row-major frame through
-`GridMap::index`, so serpentine wiring is handled for the caller exactly as
-it is for `bulk::paste`.
+`draw`/`draw_aligned` composite into the frame through `GridMap::index`, so
+serpentine wiring — and, since Gitea #948, a HUB75 chain's wire-order tiling
+— is handled for the caller exactly as it is for `bulk::paste`.

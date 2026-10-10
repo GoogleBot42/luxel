@@ -29,7 +29,7 @@ For mapped fixtures, export `render2D(index, x, y)` or
 0..1 from the installed pixel map. The most specific exported renderer
 wins for the installed map; plain `render` is the 1D fallback.
 
-A fourth entry, `renderFrame()` (a Luxel extension), is called **once per
+A fourth entry, `renderBulk()` (a Luxel extension), is called **once per
 frame** instead of once per pixel and paints the whole frame with bulk
 builtins — see [Whole-frame rendering](#whole-frame-rendering-luxel-extension).
 Exporting it wins over all three per-pixel renderers.
@@ -203,7 +203,7 @@ answer — keeps the PB number, which is also what `luxel check` reports.
 1. `beforeRender(delta)` — once per frame. Do your animation math here.
 2. `render(index)` / `render2D(index, x, y)` / `render3D(…)` — once per
    pixel. Keep it cheap; it runs `pixelCount` times per frame. A pattern
-   that exports `renderFrame()` (Luxel extension) gets that called once
+   that exports `renderBulk()` (Luxel extension) gets that called once
    per frame *instead*, and paints every pixel itself — see [Whole-frame
    rendering](#whole-frame-rendering-luxel-extension).
 3. Coordinate transforms (`translate`, `rotate`, `scale`, …) apply to the
@@ -685,7 +685,9 @@ pixel `i` on axis 0 (x), 1 (y) or 2 (z), with the current transform
 applied. Axes the map does not carry read 0, and the axis clamps to 0..2.
 It is what `mapPixels` is built out of (it is a prelude function — see
 Arrays), and it is the way to ask for one pixel's coordinates outside a
-render pass without walking them all.
+render pass without walking them all. `i` is a frame slot, in the same
+wire order `setPixel(i)` writes, which makes it `renderBulk`'s per-slot
+coordinate source; `gridIndex(col, row)` goes the other way.
 
 ### Device & environment
 
@@ -815,7 +817,7 @@ two `array(pixelCount)` buffers swapped by hand this is half the RAM
 
 ### Whole-frame rendering (Luxel extension)
 
-A fourth render entry, `renderFrame()`, that the engine calls **once per
+A fourth render entry, `renderBulk()`, that the engine calls **once per
 frame** with no arguments instead of calling `render*` once per pixel.
 The pattern paints the frame itself with the bulk builtins below — one VM
 call fills a whole strip, one `splat()` draws a whole ball — so the
@@ -828,21 +830,29 @@ different expression evaluated at every pixel — are exactly what
 the frame is a few big strokes: gradients, buffer read-outs, decay
 trails, N moving sprites, a small simulated canvas.
 
+**It was called `renderFrame` until Gitea #948.** That name is now a
+compile error, and a stored bytecode blob that still exports it is
+refused for recompile rather than run: the frame's index space became
+**wire order** (below), so a pattern written against the old row-major
+assumption would paint the wrong pixels on a chain of panels. Renaming
+the export is the whole port for a strip-shaped pattern; one that turns a
+grid cell into an index by arithmetic also needs `gridIndex`.
+
 **Lifecycle.** `beforeRender(delta)` runs first, exactly as always, then
-`renderFrame()` runs once. Afterwards the engine applies the same post
+`renderBulk()` runs once. Afterwards the engine applies the same post
 chain (`setGamma`, `setBlur`, `setGlow`, `setOutputPalette`) and the same
 `setPixelState` hand-over as a per-pixel frame, and `setFrameRate` /
 `timeScale` behave identically.
 
-- **Priority**: an exported `renderFrame` wins over `render2D`,
+- **Priority**: an exported `renderBulk` wins over `render2D`,
   `render3D` and `render`, on any map or none. Export both if you want a
   per-pixel fallback for another engine — Luxel will always take
-  `renderFrame`.
-- **Late binding** works like the other entries: `export var renderFrame`
+  `renderBulk`.
+- **Late binding** works like the other entries: `export var renderBulk`
   assigned a function at runtime dispatches from the next frame, and
   stops dispatching if the global stops holding a function.
 - **The frame persists.** The pixel buffer is *not* cleared between
-  frames: `renderFrame` starts with the previous frame's finished output.
+  frames: `renderBulk` starts with the previous frame's finished output.
   That is what makes `fade(k)` + a few `setPixel()`s a decay trail with
   no pattern-side array at all (an `array(pixelCount)` is 32 KB on a
   4096-pixel panel). A pattern that wants a fresh canvas calls `clear()`
@@ -854,7 +864,7 @@ chain (`setGamma`, `setBlur`, `setGlow`, `setOutputPalette`) and the same
   doing what they always did — set "the current color" — and that slot is
   the **brush** every shape and point op draws with. Set it, then draw;
   set it again, draw again. The brush is reset to black at the start of
-  every `renderFrame` call — *after* `beforeRender`, so a color set there
+  every `renderBulk` call — *after* `beforeRender`, so a color set there
   does not carry in, and a shape drawn before the frame's first color
   call paints black rather than last frame's leftover.
 
@@ -862,7 +872,16 @@ chain (`setGamma`, `setBlur`, `setGlow`, `setOutputPalette`) and the same
 
 - **Index space** (`clear`, `fill`, `fade`, `setPixel`, `fillRange`,
   `fillHSV`, `fillRGB`, `fillGradient` on its default axis) — addresses
-  pixel `i`. Map-independent; works on any fixture, mapped or not.
+  frame slot `i`, and the frame is in **wire order**: slot `i` is the
+  `i`-th pixel the output driver clocks out. Map-independent, and exactly
+  right for a strip (or any pattern whose arrays are indexed by pixel) on
+  any fixture. It is NOT the grid's row-major order: on a HUB75 chain of
+  rotated or serpentined panels, slot `y * gridWidth() + x` is some other
+  cell entirely. On a matrix, turn a cell into a slot with
+  `gridIndex(col, row)`, or draw with the coordinate- and grid-space ops,
+  which were always cell-driven. (On a plain row-major grid the two
+  agree — `gridIndex(c, r) == r * gridWidth() + c` — so a port through
+  `gridIndex` renders identically there.)
 - **Coordinate space** (`fillRect`, `fillCircle`, `splat`, `drawLine`,
   `fillCanvas`, `fillGradient` on axis 1/2/3) — "every pixel whose
   mapped (x, y) satisfies this shape", using exactly the normalized
@@ -871,19 +890,19 @@ chain (`setGamma`, `setBlur`, `setGlow`, `setOutputPalette`) and the same
   in it simply has no pixels to fill, and a shape that lands there paints
   nothing. Without a 2D/3D map the coordinates are `render2D`'s own 1D
   fallback (x from the map or the index, y = 0.5).
-- **Grid space** (`blit`, and the `gridWidth()` / `gridHeight()` pair) —
-  addresses integer cells of a w×h matrix. The grid has to **cover** the
-  frame, not match it: the default `ceil(√n)` map over-provisions
+- **Grid space** (`blit`, `gridIndex`, and the `gridWidth()` /
+  `gridHeight()` pair) — addresses integer cells of a w×h matrix. The
+  grid has to **cover** the frame, not match it: the default `ceil(√n)` map over-provisions
   whenever the pixel count is not a rectangle (60 px → 8×8 = 64 cells),
   and the unused cells at the end of the last row simply clip. Without a
   grid — or with one too small to address every pixel — these are a
   **no-op**, not an error, and `gridWidth()` returns 0 so a pattern can
   branch on it.
 
-A `renderFrame`-only pattern that names any coordinate- or grid-space op
-(`gridWidth`, `gridHeight`, `fillRect`, `fillCircle`, `splat`,
-`drawLine`, `fillCanvas`, `blit`) gets the same default `ceil(√n)` grid
-map a `render2D`-only pattern gets. One that only uses index-space ops is
+A `renderBulk`-only pattern that names any coordinate- or grid-space op
+(`gridWidth`, `gridHeight`, `gridIndex`, `fillRect`, `fillCircle`,
+`splat`, `drawLine`, `fillCanvas`, `paintCanvas`, `blit`) gets the same
+default `ceil(√n)` grid map a `render2D`-only pattern gets. One that only uses index-space ops is
 a strip pattern and is left mapless, so it never acquires a geometry it
 did not ask for.
 
@@ -904,6 +923,22 @@ path ran.
 | 2 | max (lighten) — overlaps keep the brighter source |
 | 3 | keyed: a source pixel that comes out black is transparent — the mask blit. Accepted by all three, but only `blit` has a source it means something for; on `splat`/`drawLine` it just drops the falloff's darkest edge |
 
+**Per-slot coordinates.** `pixelCoord(i, axis)` (see Mapped
+coordinates) is the mapped coordinate of frame slot `i` — the same value
+`render2D` would have received for that pixel — so a loop over the frame
+in its own (wire) order needs no grid arithmetic at all:
+
+```js
+export function renderBulk() {
+  for (var i = 0; i < pixelCount; i++) {
+    var x = pixelCoord(i, 0)
+    var y = pixelCoord(i, 1)
+    hsv(x + t, 1, triangle(y + t))  // t set in beforeRender
+    setPixel(i)                     // slot i IS the pixel at (x, y)
+  }
+}
+```
+
 **Don't loop `setPixel` over every pixel — unless the per-pixel body
 is a native builtin call.** A `for` loop calling `setPixel(i)` for all
 `pixelCount` pixels pays interpreted-loop overhead on top of a builtin
@@ -916,6 +951,10 @@ per-pixel render entry for loop bookkeeping and still wins, and it is the
 `fillRGB`, `fillCanvas` and `blit` are all HSV and there is no
 palette-space bulk fill. `library/aurora-2d.js` is that case: 1.14× at
 4096 px with interpreted instructions per pixel going slightly *up*.
+`pixelCoord` and `gridIndex` count as that kind of body too — each is a
+direct JIT entry of ~30 cycles, so the loop above, or a `setPixel(
+gridIndex(c, r))` walk over the cells, costs about what the per-pixel
+entry it replaces did.
 
 #### Index space
 
@@ -968,6 +1007,12 @@ coordinates.
 
 #### Grid space
 
+- `gridIndex(col, row)` — the frame slot of grid cell (`col`, `row`)
+  (arguments floored), or −1 off the grid, without a grid, or for a cell
+  the frame has no pixel for (the tail of an over-provisioned last row).
+  Since −1 is a no-op for `setPixel`, `setPixel(gridIndex(c, r))` needs no
+  guard. The inverse of `pixelCoord`, and the only correct way to turn a
+  cell into an index (see Three spaces).
 - `blit(hArr, sArr, vArr, w, h, col, row, mode)` — paste a `w × h`
   canvas with its top-left at integer cell `(col, row)`, clipped to the
   grid (negative and off-grid offsets are fine — nothing outside is
@@ -985,7 +1030,7 @@ coordinates.
 // a decay trail with no buffers at all: the frame IS the buffer
 export function beforeRender(delta) { t = time(0.03) }
 
-export function renderFrame() {
+export function renderBulk() {
   fade(0.9)                       // last frame, dimmer
   hsv(t, 1, 1)                    // set the brush…
   setPixel(triangle(t) * (pixelCount - 1))   // …and put one pixel down
@@ -994,7 +1039,7 @@ export function renderFrame() {
 
 ```js
 // N sprites, drawn once each instead of tested at every pixel
-export function renderFrame() {
+export function renderBulk() {
   clear()
   for (i = 0; i < n; i++) {
     hsv(hue[i], 1, 1)
@@ -1045,7 +1090,7 @@ nothing on the device you are connected to (Gitea #486,
 they do on a device whose map is removed later.
 
 ```js
-export function renderFrame() {
+export function renderBulk() {
   if (gridWidth() == 0) return       // not a matrix — nothing to draw on
   clear()
   rgb(1, .6, 0)

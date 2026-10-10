@@ -103,6 +103,8 @@ fn the_direct_set_is_the_tier_one_numeric_set() {
         "acos", "asin", "atan", "atan2", "dist", "dist3", "dot", "dot3", "exp", "hash", "hash2",
         "hypot", "hypot3", "length", "length3", "log", "log2", "map", "perlin", "pow", "sign",
         "simplex2", "simplex3", "smoothstep", "step", "tan",
+        // #948: the renderBulk loop's coordinate source
+        "gridIndex", "pixelCoord",
     ];
     want.sort_unstable();
     assert_eq!(names, want);

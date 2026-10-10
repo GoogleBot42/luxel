@@ -108,7 +108,7 @@ tko = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(tko)
 
 # The five of docs/jit-design.md §7.1: two strip patterns, a 2D one, the
-# noise-heavy #260 probe, and a renderFrame pattern.
+# noise-heavy #260 probe, and a renderBulk pattern.
 FIVE = [
     "rainbow.js",
     "snake.js",

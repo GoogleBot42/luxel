@@ -1,6 +1,6 @@
 // name: Bulk Rainbow
 // Curated example (hand-written showcase of the Luxel language/builtins).
-// The whole-frame entry in its smallest useful form: `renderFrame()` runs
+// The whole-frame entry in its smallest useful form: `renderBulk()` runs
 // ONCE per frame instead of `render()` per pixel, and one `fillGradient`
 // paints the entire strip. Hue is lerped unwrapped and `hsv()` wraps it, so
 // a span of `cycles` turns is exactly `cycles` rainbows across the fixture.
@@ -17,7 +17,7 @@ export function beforeRender(delta) {
   phase = mod(phase + delta * 0.0002 * speed, 1)
 }
 
-export function renderFrame() {
+export function renderBulk() {
   fillGradient(phase, 1, 1, phase + cycles, 1, 1)
 }
 

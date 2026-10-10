@@ -166,7 +166,7 @@ fn compose_bench() {
             (side, side)
         }
     };
-    let grid = GridMap { w, h, serpentine: true };
+    let grid = GridMap::new(w, h, true);
     let n = grid.len();
     let src = frame(n, 0x5eed_0001);
     let mut dst = frame(n, 0xc0ff_ee01);

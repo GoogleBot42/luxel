@@ -18,16 +18,16 @@
 // the original `paintCell` colour math. Nothing else changes between steps:
 // `bodyHue` moves only when `len` does (an eat, which is a step), so the
 // steady-state per-frame work is one cell (the food's `foodPulse`) plus the
-// single `fillCanvas(hC, sC, vC, W, H)` that `renderFrame()` issues. The
+// single `fillCanvas(hC, sC, vC, W, H)` that `renderBulk()` issues. The
 // cost is per board cell per board CHANGE, not per pixel per frame.
 //
 // `fillCanvas` samples that 16x16 canvas through each pixel's mapped
 // coordinates, which is exactly what `render2D` did — so it still plays the
 // same game on a 16x16 panel, a 32x32 one or a 64x64 one. With no map at
-// all the engine hands a `renderFrame` pattern that names a coordinate-space
+// all the engine hands a `renderBulk` pattern that names a coordinate-space
 // builtin its default `ceil(sqrt(n))` square grid, and that stands in for
 // the original's `render` fallback of running the board out along the strip.
-// The per-pixel entries are gone: `renderFrame` wins over them anyway, and a
+// The per-pixel entries are gone: `renderBulk` wins over them anyway, and a
 // dead per-pixel path would only be a second thing to keep in step.
 //
 // One sampling detail: the original wrote `floor(x * (W - 0.01))`,
@@ -329,6 +329,6 @@ function paintBoard() {
 
 // One call, one frame: nearest-sampled through the map, exactly the cell
 // `render2D` used to resolve per pixel.
-export function renderFrame() {
+export function renderBulk() {
   fillCanvas(hC, sC, vC, W, H)
 }

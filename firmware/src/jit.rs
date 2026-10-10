@@ -525,7 +525,7 @@ fn lease_place(l: &Lease) -> u8 {
 ///
 /// **The return value is deliberately typed `i32` for every shape,
 /// `ret_dyn` included.** The engine never reads one: `beforeRender`,
-/// `render*` and `renderFrame` all return into the void. A two-word return
+/// `render*` and `renderBulk` all return into the void. A two-word return
 /// comes back in `a10:a11` with no hidden `sret` pointer (§7.1's ABI
 /// probe), so a caller that declares one word and ignores `a11` is ABI
 /// compatible with both shapes — and declaring the narrower one means the

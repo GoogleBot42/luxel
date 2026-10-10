@@ -349,6 +349,34 @@ fn blend_box(
     if j1 <= j0 || i1 <= i0 {
         return;
     }
+    // A tiled grid (a HUB75 chain, Gitea #948) has no contiguous rows:
+    // every cell goes through `index` on both sides. The row-run path below
+    // stays for the row-major and serpentine grids every other host has.
+    if grid.tiling.is_some() {
+        for j in j0..j1 {
+            let dr = (by + j) as usize;
+            let sj = (by + if my { bh - 1 - j } else { j }) as usize;
+            for i in i0..i1 {
+                let dc = (bx + i) as usize;
+                let s = if wash {
+                    src[0]
+                } else {
+                    let sc = (bx + if mx { bw - 1 - i } else { i }) as usize;
+                    match src.get(grid.index(sj, sc)) {
+                        Some(&s) => s,
+                        None => continue,
+                    }
+                };
+                let a = layer_alpha(key, s, base);
+                if a > 0 {
+                    if let Some(d) = dst.get_mut(grid.index(dr, dc)) {
+                        blend_px_into(d, s, style.blend, a);
+                    }
+                }
+            }
+        }
+        return;
+    }
     let cols = (i1 - i0) as usize;
     let dc0 = bx + i0;
     let sc0 = bx + if mx { bw - 1 - i0 } else { i0 };
@@ -1143,7 +1171,7 @@ mod tests {
     use alloc::vec;
 
     fn grid(w: u16, h: u16, serpentine: bool) -> GridMap {
-        GridMap { w, h, serpentine }
+        GridMap::new(w, h, serpentine)
     }
 
     fn style(blend: Blend, opacity: u8, key: Key) -> LayerStyle {

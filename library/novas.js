@@ -150,6 +150,6 @@ export function beforeRender(delta) {
 // index-space op, so this behaves identically with a map and without one --
 // on a bare strip it is exactly the old `render(index)` loop, and on a matrix
 // the blooms still run along the pixel index, not the geometry, as before.
-export function renderFrame() {
+export function renderBulk() {
   fillRGB(rBuf, gBuf, bBuf)
 }

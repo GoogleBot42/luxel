@@ -576,11 +576,7 @@ pub fn build_runtime(
 ) -> (Runtime, Option<Engine>, Option<String>) {
     let mut rt = Runtime {
         id: sc.id.clone(),
-        comp: Compositor::new(grid.unwrap_or(GridMap {
-            w: 0,
-            h: 0,
-            serpentine: false,
-        })),
+        comp: Compositor::new(grid.unwrap_or(GridMap::new(0, 0, false))),
         slots: Vec::new(),
         pinned: Vec::new(),
         driver: SceneDriver::new(),

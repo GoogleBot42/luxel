@@ -14,7 +14,7 @@ use luxel_core::text::{self, Align, Font};
 
 /// Wrap a body in the whole-frame entry — the only place a draw op works.
 fn rf(body: &str) -> String {
-    format!("export function renderFrame() {{\n{body}\n}}")
+    format!("export function renderBulk() {{\n{body}\n}}")
 }
 
 /// One frame of `src` on a `w×h` row-major grid.
@@ -38,11 +38,7 @@ fn strip_frame(src: &str, n: u32) -> Vec<[u8; 3]> {
 /// every VM-path assertion below compares against, so the builtin and the
 /// kernel can never drift.
 fn reference(w: u16, h: u16, x: i32, y: i32, s: &str, f: Font, rgb: [u8; 3], a: Align) -> Vec<[u8; 3]> {
-    let g = GridMap {
-        w,
-        h,
-        serpentine: false,
-    };
+    let g = GridMap::new(w, h, false);
     let mut px = vec![[0u8; 3]; w as usize * h as usize];
     text::draw_aligned(&mut px, &g, x, y, s, f, rgb, a);
     px

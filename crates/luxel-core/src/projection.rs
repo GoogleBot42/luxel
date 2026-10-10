@@ -38,12 +38,12 @@
 //! incompatible with any other), and `proj2d` only on a 3D Layout; both stay
 //! in the grammar so persisted forms written before #538 keep parsing.
 //!
-//! A `renderFrame` pattern follows the 2D row when it actually draws in grid
+//! A `renderBulk` pattern follows the 2D row when it actually draws in grid
 //! space (it names a coordinate/grid-space bulk builtin — the same signal the
 //! default-grid rule uses).
 //!
 //! **Dimensionality 0 is "any": native on every Layout.** A pattern that
-//! exports only `renderFrame` and paints in index space
+//! exports only `renderBulk` and paints in index space
 //! ([`crate::engine::Engine::pattern_dims`] `== 0`) is not a 1D pattern — it
 //! names no geometry at all, just a field over `pixelCount`, and
 //! `library/fairies.js` is the example: a point field that looks the same on a
@@ -178,7 +178,7 @@ impl FromStr for ProjectionMode {
 pub struct Projection {
     /// `proj1d` — how a 1D pattern is shown on a 2D/3D Layout.
     pub proj1d: ProjectionMode,
-    /// `proj2d` — how a 2D (or `renderFrame`) pattern is shown on a 3D Layout.
+    /// `proj2d` — how a 2D (or `renderBulk`) pattern is shown on a 3D Layout.
     pub proj2d: ProjectionMode,
     /// `proj3d` — reserved. A 3D pattern is native to a 3D Layout and is
     /// never shown on a smaller one (#538), so this is never in force; it is

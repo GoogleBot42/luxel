@@ -51,16 +51,16 @@
 //! 1. allocate `g.words()` `u16`s (plus one [`Tables`] and one [`Scratch`]),
 //! 2. [`format`] it once, which writes the control template (row address,
 //!    latch, output-enable) that composition must not disturb,
-//! 3. [`pack`] (or [`pack_remap`]) every frame, which writes only the colour
-//!    bits.
+//! 3. [`pack`] every frame, which writes only the colour bits.
 //!
 //! [`Scratch`] holds the per-row working pads the packer needs. It is
 //! allocated once, sized for the widest `cols` it will ever see, and passed
 //! back in on every frame — the packer never allocates.
 //!
 //! [`arrange`] derives that `Geometry` from a stored `Matrix` layout
-//! ([`arrange::fb_geometry`]) and builds the driver→engine remap that makes a
-//! chain, a rotated wall or a 1/N-scan panel look row-major to the engine.
+//! ([`arrange::fb_geometry`]) and the chain's [`arrange::tiling`] — the
+//! formula the engine writes a chain, a rotated wall or a 1/N-scan panel's
+//! frame through, so it arrives here already in driver order (Gitea #948).
 //! [`chip`] carries the driver-chip register-init sequences the firmware
 //! bit-bangs before the DMA starts, and [`chip::ChipInit::latch_clocks`] is half
 //! of the [`Control`] that goes into [`format`].
@@ -516,22 +516,12 @@ fn row_slice<'a>(rgb: &'a [[u8; 3]], start: usize, pad: &'a mut [[u8; 3]]) -> &'
     pad
 }
 
-/// Gather one driver row through one row of a remap table ([`arrange`]):
-/// `lut[x]` is the engine pixel that belongs at driver column `x`.
-/// [`arrange::UNMAPPED`] — and any index past the end of the frame — reads
-/// black, exactly as a short frame does above.
-fn gather_row<'a>(rgb: &[[u8; 3]], lut: &[u16], pad: &'a mut [[u8; 3]]) -> &'a [[u8; 3]] {
-    for (d, e) in pad.iter_mut().zip(lut.iter()) {
-        *d = rgb.get(usize::from(*e)).copied().unwrap_or([0; 3]);
-    }
-    pad
-}
-
 /// Pack an RGB888 frame into a `plane -> row -> column` bitplane framebuffer.
 ///
 /// `dst` is the whole framebuffer viewed as 16-bit entries; it must already
 /// have been [`format`]ed (row address / latch / output-enable bits are
-/// preserved, colour bits are overwritten). `rgb` is row-major, `g.cols`
+/// preserved, colour bits are overwritten). `rgb` is in driver order
+/// (row-major over the framebuffer — Gitea #948), `g.cols`
 /// wide, up to `g.rows * 2` tall; a short frame leaves the remaining pixels
 /// black, and pixels past the panel are ignored — the same contract as the
 /// per-pixel path it replaces.
@@ -543,41 +533,6 @@ fn gather_row<'a>(rgb: &[[u8; 3]], lut: &[u16], pad: &'a mut [[u8; 3]]) -> &'a [
 /// If `dst` is not exactly `g.words()` entries, `g.planes` exceeds
 /// [`MAX_PLANES`], or `scratch` is narrower than `g.cols`.
 pub fn pack(dst: &mut [u16], g: Geometry, rgb: &[[u8; 3]], tables: &Tables, scratch: &mut Scratch) {
-    pack_inner(dst, g, rgb, None, tables, scratch);
-}
-
-/// [`pack`], but the frame is gathered through a panel→pixel remap
-/// (Gitea #475): `lut[driver index]` is the engine pixel that belongs there.
-///
-/// This is what makes a multi-panel chain — or a rotated, snaked, corner-
-/// started or 1/N-scan one — look like a single row-major grid to the engine.
-/// A remap that turns out to be the identity is thrown away at boot rather
-/// than run through here, so nothing on a plain single upright panel pays
-/// for the gather (see [`arrange::is_identity`]).
-///
-/// # Panics
-/// If `lut` is not exactly `g.pixels()` entries, or on [`pack`]'s own
-/// conditions.
-pub fn pack_remap(
-    dst: &mut [u16],
-    g: Geometry,
-    rgb: &[[u8; 3]],
-    lut: &[u16],
-    tables: &Tables,
-    scratch: &mut Scratch,
-) {
-    assert_eq!(lut.len(), g.pixels(), "remap table length");
-    pack_inner(dst, g, rgb, Some(lut), tables, scratch);
-}
-
-fn pack_inner(
-    dst: &mut [u16],
-    g: Geometry,
-    rgb: &[[u8; 3]],
-    lut: Option<&[u16]>,
-    tables: &Tables,
-    scratch: &mut Scratch,
-) {
     assert!(g.planes <= MAX_PLANES, "bit = 7 - plane; more than 8 planes has no source bit");
     assert_eq!(dst.len(), g.words(), "framebuffer length");
     assert!(scratch.cols() >= g.cols, "scratch too narrow for the geometry");
@@ -591,18 +546,8 @@ fn pack_inner(
     let xhi = &mut xhi[..cols];
 
     for r in 0..rows {
-        // One branch per ROW PAIR, not per pixel: an unmapped panel walks
-        // exactly the slices it always walked.
-        let (top, bot) = match lut {
-            None => (
-                row_slice(rgb, r * cols, &mut tpad[..cols]),
-                row_slice(rgb, (r + rows) * cols, &mut bpad[..cols]),
-            ),
-            Some(l) => (
-                gather_row(rgb, &l[r * cols..(r + 1) * cols], &mut tpad[..cols]),
-                gather_row(rgb, &l[(r + rows) * cols..(r + rows + 1) * cols], &mut bpad[..cols]),
-            ),
-        };
+        let top = row_slice(rgb, r * cols, &mut tpad[..cols]);
+        let bot = row_slice(rgb, (r + rows) * cols, &mut bpad[..cols]);
 
         // Iterators, not indices: with `cols` no longer a const generic, an
         // `xlo[x]` here is a bounds check the compiler cannot hoist.
@@ -1184,77 +1129,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    // --- the panel→pixel remap (Gitea #475) -------------------------------
-
-    /// An identity remap must compose exactly what the plain path composes —
-    /// the property the firmware relies on when it throws the table away.
-    #[test]
-    fn an_identity_remap_packs_identically() {
-        let mut rng = Rng(0x2026_0919_51d0);
-        let frame = rng.frame(PIXELS);
-        let t = Tables::from_lut(&lut_for(19));
-        let lut: Vec<u16> = (0..PIXELS as u16).collect();
-        let mut a = Fb::new();
-        let mut b = Fb::new();
-        let mut scratch = Scratch::for_geometry(G);
-        pack(as_words_mut(&mut a), G, &frame, &t, &mut scratch);
-        pack_remap(as_words_mut(&mut b), G, &frame, &lut, &t, &mut scratch);
-        assert_eq!(as_words(&a), as_words(&b));
-    }
-
-    /// A real arrangement must compose exactly what packing the rearranged
-    /// frame would — i.e. the gather is the only difference.
-    #[test]
-    fn a_remapped_frame_packs_as_the_rearranged_frame() {
-        let mut rng = Rng(0x2026_0919_475a);
-        let frame = rng.frame(PIXELS);
-        let t = Tables::from_lut(&lut_for(31));
-        // two 32-wide tiles, chain starting at the top-LEFT: halves swapped
-        // (IN on the right is the identity — the data shifts leftwards, so
-        // the far end of the chain owns driver block 0; Gitea #917)
-        let mut m = luxel_core::layout::Matrix::single(32, 64);
-        m.cols = 2;
-        m.start = luxel_core::layout::Corner::Tl;
-        let mut lut = vec![0u16; PIXELS];
-        assert_eq!(crate::arrange::build_lut(&mut lut, &m, COLS, NROWS * 2), 2);
-
-        let rearranged: Vec<[u8; 3]> =
-            lut.iter().map(|&e| frame.get(usize::from(e)).copied().unwrap_or([0; 3])).collect();
-        let mut a = Fb::new();
-        let mut b = Fb::new();
-        let mut scratch = Scratch::for_geometry(G);
-        pack(as_words_mut(&mut a), G, &rearranged, &t, &mut scratch);
-        pack_remap(as_words_mut(&mut b), G, &frame, &lut, &t, &mut scratch);
-        assert_eq!(as_words(&a), as_words(&b));
-        // and it really did move: the two halves are not where they were
-        let plain = {
-            let mut fb = Fb::new();
-            pack(as_words_mut(&mut fb), G, &frame, &t, &mut scratch);
-            fb
-        };
-        assert_ne!(as_words(&plain), as_words(&b));
-    }
-
-    /// An unmapped driver pixel is black, exactly like a short frame's tail.
-    #[test]
-    fn unmapped_driver_pixels_compose_black() {
-        let mut rng = Rng(0x2026_0919_1234);
-        let frame = rng.frame(PIXELS);
-        let t = Tables::from_lut(&lut_for(31));
-        let mut lut: Vec<u16> = (0..PIXELS as u16).collect();
-        for e in lut.iter_mut().skip(PIXELS / 2) {
-            *e = crate::arrange::UNMAPPED;
-        }
-        let mut half = frame.clone();
-        half[PIXELS / 2..].fill([0; 3]);
-        let mut a = Fb::new();
-        let mut b = Fb::new();
-        let mut scratch = Scratch::for_geometry(G);
-        pack(as_words_mut(&mut a), G, &half, &t, &mut scratch);
-        pack_remap(as_words_mut(&mut b), G, &frame, &lut, &t, &mut scratch);
-        assert_eq!(as_words(&a), as_words(&b));
     }
 
     /// The 64x64 / 7-plane bench ring: 254 descriptors, MSB run = 128 of

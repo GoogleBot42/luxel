@@ -51,6 +51,6 @@ export function beforeRender(delta) {
   }
 }
 
-export function renderFrame() {
+export function renderBulk() {
   fillCanvas(hC, sC, vC, gw, gw)
 }

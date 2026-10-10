@@ -22,7 +22,7 @@
 //! then [`Engine::frame_step`] of [`CHUNK`] pixels with a `yield_now`
 //! between them, so the output task's compose, the network stack and the web
 //! pool wait at most one chunk (~1 ms at `_Fairies`' 4.3 µs/px) rather than
-//! a frame. A `renderFrame` layer is one VM call and cannot be sliced, so
+//! a frame. A `renderBulk` layer is one VM call and cannot be sliced, so
 //! [`post_slots`] leaves it on the render task ([`Engine::frame_chunkable`]).
 //!
 //! ## Protocol

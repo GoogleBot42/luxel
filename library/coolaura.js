@@ -117,6 +117,6 @@ export function beforeRender(delta) {
 // Red is a scalar 0 broadcast to every pixel. Index space: this is a strip
 // pattern and stays mapless, and on a 2D map each pixel keeps reading its own
 // slot exactly as `render(index)` did.
-export function renderFrame() {
+export function renderBulk() {
   fillRGB(0, gbuf, bbuf)
 }

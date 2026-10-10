@@ -99,6 +99,6 @@ export function beforeRender(delta) {
 // broadcast to every pixel -- `fillRGB` takes an array or a number per
 // channel. It is an index-space op, so this is identical with a map and
 // without one: on a bare strip it is exactly the old `render(index)` loop.
-export function renderFrame() {
+export function renderBulk() {
   fillRGB(chR, chG, 0)
 }

@@ -214,13 +214,13 @@ function paintCanvas() {
 // `fillCanvas` samples the canvas at every pixel's mapped (x, y) with nearest
 // sampling — what `floor(y * 15.99) * W + floor(x * 15.99)` was reaching for.
 //
-// On a strip with no map at all there is nothing to sample: `renderFrame`
+// On a strip with no map at all there is nothing to sample: `renderBulk`
 // wins over `render`, and the 1-D fallback coordinate would hand every pixel
 // y = 0.5 and paint one row of the canvas across the whole strip. `has2DMap()`
 // keeps the shipped behaviour instead — a mapless fixture stays black, exactly
 // as the `render(index)` fallback below (still exported for engines that have
-// no `renderFrame`) always made it.
-export function renderFrame() {
+// no `renderBulk`) always made it.
+export function renderBulk() {
   if (has2DMap()) {
     fillCanvas(hc, sc, vc, W, H)
   } else {

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Host A/B throughput bench for PAIRS of patterns that render the same
-// thing two ways (Gitea: the `renderFrame` bulk-op evaluation).
+// thing two ways (Gitea: the `renderBulk` bulk-op evaluation).
 //
 //   nix develop -c node tools/pairbench.mjs [opts] a1.js b1.js [a2.js b2.js …]
 //
