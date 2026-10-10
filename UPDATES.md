@@ -1,5 +1,22 @@
 # Update log
 
+## 2026-10-10 — 64-byte data-cache lines on the S3; frame stores are line traffic, not store width (#958)
+
+#958 proposed writing the PSRAM frame as 32-bit words. A boot-time bench
+(`EXTRA_FEATURES=storebench`, `firmware/src/storebench.rs`, published under
+`/api/status`) showed the S3's data cache is write-back: byte stores hit at
+SRAM speed and cold bytes cost exactly what cold words cost (38.8 cycles/px
+over a 16,384-px frame) — the price is a write-allocate line FILL plus the
+dirty eviction on the 40 MHz octal bus. So no word stores: every esp32s3
+build now runs 64-byte data-cache lines (`ESP_HAL_CONFIG_DATA_CACHE_LINE_SIZE`,
+set per chip in `firmware/board-target.sh` and `flake.nix` — it is an
+S3-only esp-config option). Cold writes 38.8 → 28.4 cycles/px, cold reads
+21.9 → 15.5. On unit 2's 2x2 (16,384 px): the pack 16.4 → 13.0 ms, empty
+`renderBulk` 35 → 46 fps, bulk-rainbow 34 → 42 fps, ripples VM 18.1 → 14.6
+ms, empty render2D 25.7 → 24.1 ms. DCache autoload, armed and verified, made
+no measurable difference; PSRAM at 80 MHz needs MSPI timing tuning esp-hal
+does not do (separate ticket). Numbers: docs/boards.md "PSRAM line traffic".
+
 ## 2026-10-10 — fillCanvas/paintCanvas walk the frame in slot order on a tiled grid (#953, first slice)
 
 After #948 the canvas block expand walked the engine GRID and, on a

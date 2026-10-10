@@ -88,6 +88,8 @@ mod hub75;
 mod hub75_ring;
 #[cfg(feature = "packbench")]
 mod packbench;
+#[cfg(feature = "storebench")]
+mod storebench;
 #[cfg(all(feature = "hub75-ring", not(feature = "hub75")))]
 compile_error!("`hub75-ring` is a HUB75 driver mode and needs the `hub75` feature");
 mod layout;
@@ -383,6 +385,9 @@ async fn main(spawner: Spawner) -> ! {
     // executor runs.
     #[cfg(feature = "packbench")]
     packbench::run(0);
+    // The frame-store microbench (Gitea #958), same placement.
+    #[cfg(feature = "storebench")]
+    storebench::run(0);
 
     let timg0 = TimerGroup::new(p.TIMG0);
     #[cfg(feature = "hub75-ring")]
@@ -698,6 +703,8 @@ async fn main(spawner: Spawner) -> ! {
             move |s: Spawner| {
                 #[cfg(feature = "packbench")]
                 packbench::run(1);
+                #[cfg(feature = "storebench")]
+                storebench::run(1);
                 // The ring driver's core-1 steal: a timer interrupt on
                 // THIS core that packs beside the render task (#857).
                 #[cfg(feature = "hub75-ring")]

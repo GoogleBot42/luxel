@@ -105,7 +105,17 @@ board_target() {
       # trade it away for a 14 KB `.rwtext` static, because `.rwtext` and
       # `.stack` are one budget on this chip. The interpreter loop matters
       # again on a JIT board: a pattern the JIT refuses runs on it.
-      IRAM="iram-vm" ;;
+      IRAM="iram-vm"
+      # 64-byte data-cache lines (esp-hal's default is 32): every PSRAM
+      # access is a line transaction over the octal bus, and a write-allocate
+      # miss pays a FILL before its stores hit. Twice the line, half the
+      # transactions — on the panel's 16,384-px wall a frame write went
+      # 38.8 -> 28.4 cycles/px, a read 21.9 -> 15.5, the pack 16.4 -> 13.0
+      # ms (Gitea #958, firmware/src/storebench.rs). An S3-only esp-config
+      # option (setting it for another chip panics the build), so it lives
+      # here per chip; flake.nix sets the same for esp32s3. Overridable for
+      # an A/B: ESP_HAL_CONFIG_DATA_CACHE_LINE_SIZE=32B.
+      export ESP_HAL_CONFIG_DATA_CACHE_LINE_SIZE="${ESP_HAL_CONFIG_DATA_CACHE_LINE_SIZE:-64B}" ;;
     board-c3-devkit)
       CHIP=esp32c3;  TARGET=riscv32imc-unknown-none-elf;  XTENSA=0; CORE_O3=1
       IRAM="$RISCV_IRAM" ;;

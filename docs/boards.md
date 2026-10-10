@@ -2825,6 +2825,64 @@ branch at 4117448e, same host build, same probes via `POST /api/code`):
   (board-pixelblaze-v3 24,356 vs master's 24,444 — master is already under
   the floor, Gitea #800).
 
+## PSRAM line traffic: 64-byte data-cache lines (2026-10-10, Gitea #958)
+
+#958 asked why writing the 16,384-px frame into the PSRAM arena cost ~90
+cycles per pixel, and whether 32-bit stores would fix it. They would not:
+the S3's data cache is **write-back with write-allocate**, so a byte store
+that hits costs what it costs in SRAM, and every miss pays a line FILL (the
+old bytes we are about to overwrite) plus, later, the dirty line's
+eviction. The boot-time bench (`EXTRA_FEATURES=storebench`,
+`firmware/src/storebench.rs`; cycles per pixel over 49,152 B, interrupts
+masked, before WiFi and the panel driver):
+
+| cycles/px | 32 B lines (esp-hal default) | 64 B lines |
+|---|---|---|
+| internal SRAM, `[u8; 3]` stores / `u32` stores | 9.0 / 11.3 | 9.0 / 11.3 |
+| PSRAM, cache-hot (one 48 KB buffer) | 9.0 / 11.3 | 9.0 / 11.3 |
+| PSRAM, cache-cold write (4 buffers, 192 KB) — bytes = words | 38.8 | 28.4 |
+| PSRAM, cache-cold read (word sweep) | 21.9 | 15.5 |
+| the cold cases with DCache autoload armed (ctrl reads `0x5`) | — | unchanged |
+
+- **Store width is irrelevant**: cold bytes and cold words cost the same to
+  the cycle. Word stores in the render loop, the fills or the canvas path
+  would buy nothing; the cost is the line transactions on the 40 MHz octal
+  bus (~234 cycles per 32 B fill, ~1 µs).
+- **64-byte lines halve the transaction count** and cut cold writes 27 % and
+  cold reads 29 %. It is a build setting, not code:
+  `ESP_HAL_CONFIG_DATA_CACHE_LINE_SIZE=64B` for every esp32s3 build
+  (`firmware/board-target.sh`, mirrored in `flake.nix`; an S3-only esp-config
+  option, so it cannot go in the global `[env]`). `dcache.rs` reads the line
+  size at run time and `psram::EXEC_ALIGN` was already 64.
+- **Autoload** (the cache's prefetch on a miss) armed through the ROM with
+  section 0 over the data-bus window changes nothing measurable, reads
+  included. Left off, as boot leaves it.
+- **Not tried**: PSRAM at 80 MHz. esp-hal has the octal 80 MHz path (MSPI
+  core clock 160 MHz) but skips the timing tuning ESP-IDF runs at that
+  speed (`spi_timing_psram_tuning` is commented out "unsupported"), so it
+  risks silent corruption — a ticket of its own.
+
+Live on unit 2 (Jeremy's 2x2, 16,384 px, JIT native, medians of 7 samples,
+probes via `POST /api/code`, the same image with only the line size
+changed):
+
+| probe | `vm_us` ms 32 → 64 B | `frame_pack_us` ms | `out_fps` |
+|---|---|---|---|
+| empty `renderBulk` | 0.37 → 0.36 | 16.4 → 13.0 | 35 → 46 |
+| `fillCanvas` 16x16 static | 12.3 → 10.3 | 19.8 → 15.0 | 35 → 41 |
+| `fillCanvas` 64x64 static | 21.2 → 18.1 | 19.8 → 14.8 | 33 → 37 |
+| `fill()` whole frame | 3.9 → 3.6 | 17.8 → 14.3 | 35 → 45 |
+| empty `render2D` | 25.7 → 24.1 | 17.0 → 13.7 | 31 → 33 |
+| `bulk-canvas-ripples-2d` | 18.1 → 14.6 | 21.8 → 15.5 | 33 → 36 |
+| `bulk-rainbow` | 17.5 → 16.4 | 18.5 → 14.2 | 34 → 42 |
+| `aurora-2d` | 106 → 103 | 19.5 → 16.0 | 9 → 9 |
+
+The pack — a sequential read of the frame on the other core — gains most
+(-20 to -29 %), which is what lifts the cheap patterns' `out_fps`. Note
+`fill()` over the whole frame costs only ~3.6 ms: the 16x16 `fillCanvas`
+probe's other ~6.7 ms is the slot walk's per-slot bookkeeping (#953), not
+the stores.
+
 ## Builtins on metal (2026-10-04, Gitea #938)
 
 Jeremy: *"massively improve the performance of patterns by improving the

@@ -145,6 +145,11 @@ hub75-ring = ["hub75-pie"]
 # under `/api/status` "packbench". Never in a shipped image. Build with
 # `EXTRA_FEATURES=packbench BOARD=board-seengreat-hub75 ./build-esp32.sh`.
 packbench = ["hub75-pie"]
+# Boot-time frame-store microbench (src/storebench.rs, Gitea #958): byte vs
+# word stores of a 16,384-px frame in SRAM and the PSRAM arena (cache-hot and
+# cache-cold), reported under `/api/status` "storebench". Never shipped. Build
+# with `EXTRA_FEATURES=storebench BOARD=board-seengreat-hub75 ./build-esp32.sh`.
+storebench = ["psram-arena"]
 # RAM-constrained profile (S2/C2 tier, see docs/boards.md): web pool 3→2
 # (+8 KB heap on esp32) at the cost of an occasionally-refused FIRST
 # browser navigation — Chromium preconnect wants 3 sockets at cold nav.

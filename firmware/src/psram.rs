@@ -265,8 +265,8 @@ pub fn alloc_bulk_zeroed(layout: Layout) -> *mut u8 {
 /// reports `no-buffer` and interprets.
 ///
 /// The address returned is the DBUS (data) address, byte-writable through
-/// the data cache. Cache-line aligned (the S3's data cache line is 32 B;
-/// 64 keeps it true for either configuration) so the write-back after
+/// the data cache. Cache-line aligned (the S3's data cache line is 64 B
+/// since #958, esp-hal's default 32 B in an A/B build) so the write-back after
 /// filling it never touches a neighbouring allocation's line, and so the
 /// invalidate on the instruction side covers whole lines.
 pub fn alloc_exec(len: usize) -> *mut u8 {
