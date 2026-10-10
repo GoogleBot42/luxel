@@ -35,10 +35,11 @@ kinds = []
 # `kinds`: the table's `ret_kind` column IS `vm::builtin_sig`, evaluated at
 # compile time, which keeps the inference and the JIT from disagreeing.
 #
-# ON by default, like `kinds`, so the browser wasm, the CLI and every
-# `cargo test` carry it. The FIRMWARE depends on luxel-core with
-# `default-features = false` and does not name it, so a board with no
-# backend pays nothing for the table.
+# ON by default, like `kinds`, so the CLI and every `cargo test` carry it.
+# The FIRMWARE depends on luxel-core with `default-features = false` and
+# names it only on a board with a backend, so the others pay nothing for
+# the table; the browser wasm opts out the same way (it never runs native
+# code — crates/luxel-wasm/Cargo.toml).
 jit = ["kinds"]
 # Route the interpreter's `CallBuiltin` through `BUILTIN_ENTRIES[id].generic`
 # instead of walking the three-tier ladder inline (docs/jit-design.md §4).

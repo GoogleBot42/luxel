@@ -9,4 +9,9 @@ license.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-luxel-core = { path = "../luxel-core" }
+# Everything luxel-core defaults to EXCEPT `jit`: the browser never runs
+# native code, and the JIT's runtime surface (the builtin-entry table, the
+# helpers, the native pixel loop) was 16 KB of luxel.wasm in an assets
+# partition with under 0.5 KB left (Gitea #691). The editor's JIT warnings
+# (`jitlint`) need only `kinds`.
+luxel-core = { path = "../luxel-core", default-features = false, features = ["frontend", "panel", "kinds"] }
