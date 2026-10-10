@@ -4030,6 +4030,16 @@ bandwidth they need (Gitea #255).
 
 ## HUB75 panel arrangement: the boot-time remap (2026-09-19, Gitea #475)
 
+> **#948 (2026-10-09): the remap is gone.** The table below, its live swap
+> (`want_remap`) and the packer's gather (`pack_remap`, the LUT branch of the
+> PIE `gather_pair`) were retired: the same formula is now
+> `luxel_core::outpipe::Tiling`, the engine writes its frame in driver order
+> through it, and the packer reads the frame straight. A live arrangement
+> change is a map re-apply on the render task. The table builder survives as
+> `#[cfg(test)]` reference code in `arrange.rs` (`the_tiling_is_the_table`).
+> docs/firmware.md "The tiled frame" has the current story; what follows is
+> the history.
+
 A HUB75 chain is one ribbon. The driver shifts a single row `pw · panels`
 wide and `ph` tall, and the tiles hang wherever the installer put them —
 side by side, stacked, snaked, half of them upside-down. Until this change
