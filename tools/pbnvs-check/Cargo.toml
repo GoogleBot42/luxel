@@ -1,0 +1,22 @@
+# Host-side test rig for firmware/src/pbnvs.rs (the read-only ESP-IDF NVS
+# reader the Pixelblaze→Luxel takeover uses to inherit WiFi station
+# credentials). Compiles the exact on-device source file against a real
+# Pixelblaze flash dump:
+#
+#   cargo run --release -- <flash-dump.bin> [--wipe-guard]
+#
+# Prints ONLY the credential LENGTHS and which page each came from — never
+# the secret bytes — so its output is safe for logs. --wipe-guard clobbers
+# the partition-relative 0x3000 page (abs 0xC000) the way ota::preboot_guard
+# does on first boot, to prove the reader still recovers the creds.
+#
+# Dumps live in the repo root (pb-v3-stock.bin, git-ignored — real creds).
+[package]
+name = "pbnvs-check"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+
+[workspace]

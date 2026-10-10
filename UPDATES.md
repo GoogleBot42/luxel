@@ -1,5 +1,48 @@
 # Update log
 
+## 2026-10-09 — Pixelblaze v3 → Luxel takeover (foreign-table self-install)
+
+A stock Pixelblaze v3 can now convert to Luxel the way a WLED device can,
+inheriting its WiFi and LED settings instead of being reflashed from
+scratch. A PB v3's flash layout has app slots byte-identical to Luxel's
+4 MB table, so the partition-rewrite / verified self-copy / boot-guard half
+in `parttab.rs` already fits unchanged; the only new work is reading
+Pixelblaze's own settings, which live in different places than WLED's:
+
+- `firmware/src/pbfs.rs` — a minimal read-only SPIFFS reader that walks the
+  object index for the live (newest-`rev`) `/config.json` and maps pixel
+  count, `ledType` -> protocol, `colorOrder` -> Luxel color order, and
+  `brightness` x `maxBrightness` -> one Luxel brightness (so the strip comes
+  up the brightness it visibly was, not the raw slider).
+- `firmware/src/pbnvs.rs` — a minimal ESP-IDF NVS reader for the WiFi creds
+  (`nvs.net80211` / `sta.ssid` / `sta.pswd`), tolerating the one NVS page
+  (0xC000) that `ota::preboot_guard` erases before the takeover runs.
+
+`takeover.rs` is refactored into one generic install skeleton with the
+inheritance behind per-flavour `inherit_wifi`/`inherit_device` (exactly one
+compiles per board); the WLED path's test-asserted log strings are
+unchanged bar "WLED table intact" -> "stock table intact" (shared retry
+path). New `pixelblaze-takeover` cargo feature on `board-pixelblaze-v3`;
+`board_takeover` flips PB to 1, so `board-seengreat-hub75` is now the lone
+board image-check holds to the ABSENT-marker rule (that direction left the
+default `ci.sh` variant set — noted in ci.sh, follow-up filed).
+
+Verified VM-only, as asked: both readers validated against a real
+`pb-v3-stock.bin` by `tools/pbfs-check` / `tools/pbnvs-check` (secrets
+printed as lengths only), and `tools/qemu/pb-takeover-test.py` boots a
+composed flash under QEMU and asserts the whole conversion on both app
+slots (45 / 42 assertions). `board-pixelblaze-v3` and `board-athom-music`
+both build and pass image-check; the WLED takeover QEMU test is unchanged
+(its `--slot app1` failure is the pre-existing Gitea #717, reproduced on
+plain master).
+
+**Open for the hardware test** (docs/pixelblaze-migration.md): Pixelblaze's
+own web updater appears to verify a firmware signature (`.stfu` = "Signed
+Transfer Firmware Update"), so delivering an unsigned Luxel image over
+`/update` may be rejected — the takeover itself is independent of delivery,
+and the fallback is a one-time serial seed into an app slot, which still
+preserves WiFi/LED config. Filed as a Gitea ticket.
+
 ## 2026-10-04 — the native pixel loop marshals raw words (#938, PR #944)
 
 The per-pixel floor found in #938 (an empty `render2D` at 33.8 ms for 16384

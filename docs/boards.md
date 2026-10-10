@@ -36,12 +36,15 @@ credential-baking caveats.
 
 `WLED` = the `wled-takeover` feature (install by uploading Luxel to WLED's own
 `/update` page — docs/wled-migration.md). It costs ~25 KB of app image, so it
-is on only where that install path exists.
+is on only where that install path exists. `board-pixelblaze-v3` instead
+carries the sibling `pixelblaze-takeover` feature (same foreign-table
+takeover, Pixelblaze's own WiFi/LED settings inherited — docs/pixelblaze-migration.md),
+so its `WLED` cell is "no" but it is not takeover-less.
 
 | feature | chip | strip pins | defaults | pixel cap | WLED | status | notes |
 |---|---|---|---|---|---|---|---|
 | `board-c3-devkit` (default) | ESP32-C3 | CLK GPIO6, DATA GPIO7 | SK9822, 60 px | 2048 | yes | supported (hardware-verified) | bare devkit |
-| `board-pixelblaze-v3` | ESP32 | CLK GPIO18, DATA GPIO23 | SK9822, 300 px | 2048 | no | supported (the dev unit) | official PB v3 Standard schematic; onboard 5 V level shifter; status LED GPIO12 (lit at boot = Luxel alive); button GPIO32 (unused) |
+| `board-pixelblaze-v3` | ESP32 | CLK GPIO18, DATA GPIO23 | SK9822, 300 px | 2048 | no¹ | supported (the dev unit) | official PB v3 Standard schematic; onboard 5 V level shifter; status LED GPIO12 (lit at boot = Luxel alive); button GPIO32 (unused). ¹ no WLED install, but carries `pixelblaze-takeover` (docs/pixelblaze-migration.md) |
 | `board-athom-music` | ESP32 | CLK1 GPIO5, DATA1 GPIO18; **CLK2 GPIO16, DATA2 GPIO17** | WS2812, 60 px | 2048 | yes | on the bench (the rig) | Athom music-reactive WLED controller; strip-VCC relay on GPIO2 must be driven high or the strip stays dark. **The only two-output board** (`board::OUTPUTS` = 2, Gitea #474): `POST /api/layout` `out 0`/`out 1` lines split the one pixel space across both channels — see "Two outputs on the Athom" below. Mic + IR unused |
 | `board-esp32-generic` | ESP32 | CLK GPIO18, DATA GPIO23 | WS2812, 60 px | 2048 | yes | builds, untested on hardware | VSPI defaults — most WROOM/DevKitC boards break these out |
 | `board-s3-devkit` | ESP32-S3 | CLK GPIO12, DATA GPIO11 | WS2812, 60 px | 2048 | yes | **builds, UNTESTED ON METAL** | ESP32-S3-DevKitC-1; SPI2/FSPI IO_MUX pins (direct DMA route), clear of the octal-PSRAM pins GPIO33–37 |
