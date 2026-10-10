@@ -560,6 +560,61 @@ impl<'a> Asm<'a> {
         self.rrr(0xf, 0x2, r as u32, s as u32, t as u32, 0);
     }
 
+    // ------------------------------------------- MINMAX + conditional moves
+    //
+    // The RST3 group (op0 0, op1 3) — the inline builtins of Gitea #942.
+    // `min`/`max` are the `MINMAX` option; the four conditional moves are
+    // core ISA. Both the ESP32 (LX6) and the ESP32-S3 (LX7) configure
+    // `XCHAL_HAVE_MINMAX 1` (their `core-isa.h`), and `tests/objdump.rs`
+    // disassembles these with BOTH chips' objdump.
+
+    /// `min ar, as, at` — signed minimum (`MINMAX`).
+    pub fn min(&mut self, r: Reg, s: Reg, t: Reg) {
+        self.rrr(0x4, 0x3, r as u32, s as u32, t as u32, 0);
+    }
+    /// `max ar, as, at` — signed maximum (`MINMAX`).
+    pub fn max(&mut self, r: Reg, s: Reg, t: Reg) {
+        self.rrr(0x5, 0x3, r as u32, s as u32, t as u32, 0);
+    }
+    /// `moveqz ar, as, at` — `ar = as` when `at == 0`, else `ar` unchanged.
+    pub fn moveqz(&mut self, r: Reg, s: Reg, t: Reg) {
+        self.rrr(0x8, 0x3, r as u32, s as u32, t as u32, 0);
+    }
+    /// `movnez ar, as, at` — `ar = as` when `at != 0`.
+    pub fn movnez(&mut self, r: Reg, s: Reg, t: Reg) {
+        self.rrr(0x9, 0x3, r as u32, s as u32, t as u32, 0);
+    }
+    /// `movltz ar, as, at` — `ar = as` when `at < 0` (signed).
+    pub fn movltz(&mut self, r: Reg, s: Reg, t: Reg) {
+        self.rrr(0xa, 0x3, r as u32, s as u32, t as u32, 0);
+    }
+    /// `movgez ar, as, at` — `ar = as` when `at >= 0` (signed).
+    pub fn movgez(&mut self, r: Reg, s: Reg, t: Reg) {
+        self.rrr(0xb, 0x3, r as u32, s as u32, t as u32, 0);
+    }
+
+    /// `extui ar, at, shift, bits` — `(at >> shift) & ((1 << bits) - 1)`,
+    /// `shift` 0..=31 and `bits` 1..=16 (core ISA). `false` outside those,
+    /// for the reason [`Asm::ssai`] gives: an out-of-range field silently
+    /// encodes a different instruction.
+    #[must_use]
+    pub fn extui(&mut self, r: Reg, t: Reg, shift: u32, bits: u32) -> bool {
+        if shift >= 32 || !(1..=16).contains(&bits) {
+            return false;
+        }
+        // op1 is `010` + bit 4 of the shift, `s` its low nibble, op2 the
+        // mask width minus one.
+        self.rrr(
+            bits - 1,
+            0x4 | (shift >> 4),
+            r as u32,
+            shift & 0xf,
+            t as u32,
+            0,
+        );
+        true
+    }
+
     /// `addi at, as, imm` — 8-bit signed.
     #[must_use]
     pub fn addi(&mut self, t: Reg, s: Reg, imm: i32) -> bool {

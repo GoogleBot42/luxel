@@ -583,6 +583,42 @@ impl Cpu {
                     self.set_ar(r, a.wrapping_rem(b) as u32);
                     Ok(())
                 }
+
+                // RST3: `Asm::min`/`max` (signed, the MINMAX option) and
+                // the four conditional moves — `ar = as` when `at` passes
+                // the test, `ar` UNTOUCHED otherwise (the inline builtins
+                // of Gitea #942 lean on that).
+                (0x3, 0x4) => {
+                    let v = (self.ar(s) as i32).min(self.ar(t) as i32);
+                    self.set_ar(r, v as u32);
+                    Ok(())
+                }
+                (0x3, 0x5) => {
+                    let v = (self.ar(s) as i32).max(self.ar(t) as i32);
+                    self.set_ar(r, v as u32);
+                    Ok(())
+                }
+                (0x3, 0x8..=0xb) => {
+                    let c = self.ar(t) as i32;
+                    let take = match op2 {
+                        0x8 => c == 0,
+                        0x9 => c != 0,
+                        0xa => c < 0,
+                        _ => c >= 0,
+                    };
+                    if take {
+                        self.set_ar(r, self.ar(s));
+                    }
+                    Ok(())
+                }
+                // `Asm::extui`: shift = op1 bit 0 : s, width = op2 + 1.
+                (0x4 | 0x5, _) => {
+                    let sh = ((op1 & 1) << 4) | s as u32;
+                    let bits = op2 + 1;
+                    let mask = (1u32 << bits) - 1; // op2 is 4 bits: 1..=16
+                    self.set_ar(r, (self.ar(t) >> sh) & mask);
+                    Ok(())
+                }
                 _ => unknown,
             },
 

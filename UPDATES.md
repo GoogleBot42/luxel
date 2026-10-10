@@ -1,5 +1,22 @@
 # Update log
 
+## 2026-10-10 — JIT: the trivial builtins are instructions, not calls (#942)
+
+`abs floor ceil round trunc frac min max clamp saturate mix mod sign step
+square triangle` (plus `fract`/`lerp`) are emitted inline at their exact
+arity (`emit.rs` `inline_of`/`inline_builtin`): no spill of the register-
+homed depths, no argument moves, no table load, no `callx8`. New encoders
+`min max moveqz movnez movltz movgez extui` (MINMAX is configured on both the
+ESP32 and the S3 — `core-isa.h`, and `tests/objdump.rs` now disassembles the
+new forms with both chips' objdump), the ISA model executes them with
+selftests, and `tests/inline.rs` drives every call-site shape (register
+homes, frame homes, `Dyn`, `CallBuiltinC/CC` immediates, aliasing, nesting)
+through the model over the full `i32` edge cube plus random words against the
+`table.rs` kernel and the interpreter. Library JIT image −19.6 KB (−1.9 %);
+four goldens re-pinned (snake −44 B, snake-2d −280 B, perlin-fire −52 B,
+bulk-canvas-ripples −12 B). On-metal cycles are Jeremy's
+`tools/builtinbench.mjs` run.
+
 ## 2026-10-10 — canvas run fill on a tiled grid; grid-cell coordinates from the axis table (#953)
 
 `canvas_fill_slots` walks the frame a `TileCursor::span` at a time (new

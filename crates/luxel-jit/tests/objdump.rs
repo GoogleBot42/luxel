@@ -55,6 +55,12 @@ fn norm(s: &str) -> String {
 /// every address (`--adjust-vma`), so a buffer that starts partway into an
 /// image still reports image offsets.
 fn disassemble_at(bytes: &[u8], origin: usize) -> Vec<(usize, String)> {
+    disassemble_with(&find_objdump(), bytes, origin)
+}
+
+/// [`disassemble_at`] with a named objdump — the classic-ESP32 check below
+/// runs the same bytes through `xtensa-esp32-elf-objdump` too.
+fn disassemble_with(objdump: &str, bytes: &[u8], origin: usize) -> Vec<(usize, String)> {
     let dir = std::env::temp_dir().join(format!("luxel-jit-objdump-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
     // One file per call: the tests run on separate threads in one process,
@@ -65,8 +71,7 @@ fn disassemble_at(bytes: &[u8], origin: usize) -> Vec<(usize, String)> {
     let bin = dir.join(format!("code-{n}.bin"));
     std::fs::write(&bin, bytes).expect("write the code buffer");
 
-    let objdump = find_objdump();
-    let out = Command::new(&objdump)
+    let out = Command::new(objdump)
         .args(["-D", "-b", "binary", "-m", "xtensa", "-EL"])
         .arg(format!("--adjust-vma={origin:#x}"))
         .arg(&bin)
@@ -188,6 +193,14 @@ fn every_form_matches_the_vendor_disassembler() {
     case!("addi.n a2, a3, -1", assert!(a.addi_n(A2, A3, -1)));
     case!("addmi a2, a3, 0x400", assert!(a.addmi(A2, A3, 1024)));
     case!("addmi a2, a3, 0xffffff00", assert!(a.addmi(A2, A3, -256)));
+
+    // ---- MINMAX, conditional moves, extui (the inline builtins, #942)
+    for (want, at) in inline_forms(&mut a) {
+        cases.push(Case {
+            want: norm(&want),
+            at,
+        });
+    }
 
     // ---- shifts
     case!("ssai 16", a.ssai(16));
@@ -385,6 +398,74 @@ fn align4_pads_with_nops() {
             .collect();
         for t in &text {
             assert!(t.starts_with("nop"), "padding produced `{t}`");
+        }
+    }
+}
+
+/// Every form the inline builtins (Gitea #942) added, emitted into `a`;
+/// returns `(objdump spelling, offset)` per instruction.
+fn inline_forms(a: &mut Asm) -> Vec<(String, usize)> {
+    let mut v = Vec::new();
+    let mut put = |a: &mut Asm, want: String, emit: &dyn Fn(&mut Asm)| {
+        let at = a.here();
+        emit(a);
+        v.push((want, at));
+    };
+    put(a, "min a2, a3, a4".into(), &|a| a.min(A2, A3, A4));
+    put(a, "max a2, a3, a4".into(), &|a| a.max(A2, A3, A4));
+    put(a, "min a15, a8, a10".into(), &|a| a.min(A15, A8, A10));
+    put(a, "max a10, a15, a9".into(), &|a| a.max(A10, A15, A9));
+    put(a, "moveqz a2, a3, a4".into(), &|a| a.moveqz(A2, A3, A4));
+    put(a, "movnez a2, a3, a4".into(), &|a| a.movnez(A2, A3, A4));
+    put(a, "movltz a2, a3, a4".into(), &|a| a.movltz(A2, A3, A4));
+    put(a, "movgez a2, a3, a4".into(), &|a| a.movgez(A2, A3, A4));
+    put(a, "movgez a15, a10, a8".into(), &|a| a.movgez(A15, A10, A8));
+    for (sh, bits) in [
+        (0u32, 16u32),
+        (15, 1),
+        (0, 1),
+        (16, 16),
+        (31, 1),
+        (4, 8),
+        (17, 3),
+    ] {
+        put(a, format!("extui a2, a3, {sh}, {bits}"), &move |a| {
+            assert!(a.extui(A2, A3, sh, bits))
+        });
+    }
+    v
+}
+
+/// The ISA options the inline builtins lean on — `MINMAX` above all — are
+/// configured on BOTH Xtensa targets the JIT runs on (docs/jit-design.md
+/// §3.5): the S3's LX7 and the classic ESP32's LX6. Each chip's own
+/// objdump carries that chip's configuration, and an option a
+/// configuration lacks does not disassemble to its mnemonic. (The QEMU
+/// source's `core-esp32/core-isa.h` and `core-esp32s3/core-isa.h` both say
+/// `XCHAL_HAVE_MINMAX 1`; this is the checked-in half of that.)
+#[test]
+fn inline_builtin_forms_decode_on_both_chips() {
+    let mut a = Asm::new();
+    let cases = inline_forms(&mut a);
+    let mut out_of_range = Asm::new();
+    // and the guard: widths/shifts outside the field do not encode
+    assert!(!out_of_range.extui(A2, A3, 0, 17));
+    assert!(!out_of_range.extui(A2, A3, 0, 0));
+    assert!(!out_of_range.extui(A2, A3, 32, 1));
+    assert!(out_of_range.bytes().is_empty());
+
+    let bytes = a.bytes().to_vec();
+    for objdump in ["xtensa-esp32s3-elf-objdump", "xtensa-esp32-elf-objdump"] {
+        let got: std::collections::BTreeMap<usize, String> = disassemble_with(objdump, &bytes, 0)
+            .into_iter()
+            .map(|(o, t)| (o, norm(&t)))
+            .collect();
+        for (want, at) in &cases {
+            assert_eq!(
+                got.get(at).map(String::as_str),
+                Some(norm(want).as_str()),
+                "{objdump} at {at:#x}"
+            );
         }
     }
 }
