@@ -1,5 +1,18 @@
 # Update log
 
+## 2026-10-10 — rectangle ops write the frame in slot runs on a tiled grid (#953)
+
+`GridMap::rect_runs` (with `outpipe::Run`) visits a grid rectangle as runs of
+consecutive frame slots — on a HUB75 chain, the clipped straight line of
+each driver row through each tile; on a plain grid, rows. `fillRect` /
+`fillCircle`, `blit`, the tiled layer-box composite and `blit_sprite` use it
+instead of `index()` per cell, so a quarter-turned tile is written in order
+rather than one PSRAM line per pixel. Unit 2 at 16,384 px, VM ms: full-frame
+fillRect 27.7 → 13.2, a large fillCircle 37.1 → 26.9, 64x64 blit 9.1 → 7.8,
+frame-rate-test 29.8 → 17.0. Byte-identical: exhaustive `rect_runs` coverage
+test over every chain, tiled rigs added to the shape-vs-scan, blit-vs-
+`gridIndex` and compose fast-vs-naive tests.
+
 ## 2026-10-10 — table-driven `sin_turns` (#941)
 
 `fmath::sin_turns` (under `sin`, `cos`, `wave`, `tan`, `rotate`, `beatSin`,

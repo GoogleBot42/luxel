@@ -2830,6 +2830,18 @@ branch at 4117448e, same host build, same probes via `POST /api/code`):
   axis table when the map IS the frame's grid. That check compares grids
   by identity (`GridMap::same`): the derived `==` compares the ~140 B
   `Tiling` by value and made a first build 2.7 ms SLOWER.
+  **Rectangle ops in slot runs (2026-10-10, same board, 64 B lines):**
+  `GridMap::rect_runs` yields any grid rectangle as runs of consecutive
+  frame slots (per tile, the clipped part of each driver row's straight
+  line; a row on a plain grid), and `fillRect`/`fillCircle` (`paint_shape`),
+  `blit` (`paste`), a layer's box composite (`blend_box`, tiled path) and
+  `blit_sprite` write through it instead of `index()` per cell — the
+  shape path also reads each cell's coordinate from the axis table instead
+  of back through its slot. VM ms: full-frame `fillRect` 27.7 → 13.2, a
+  0.45-radius `fillCircle` 37.1 → 26.9, a 64x64 `blit` 9.1 → 7.8,
+  frame-rate-test (patbench) 29.8 → 17.0; `fill()` 4.0 either way. Text
+  still writes per ink cell (glyph boxes stay cache-resident) and the 2D
+  blur/glow is off on this board (`caps.blur_glow` false).
 - **Picture proof**: `/api/pixels` of a static `rgb(x, y, .25)` probe, decoded
   through `Tiling::cell` (a Python mirror checked against the Rust formula on
   all 16384 slots), equals master's row-major frame pixel for pixel; a 1D

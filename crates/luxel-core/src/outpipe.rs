@@ -277,6 +277,30 @@ pub struct GridMap {
     pub tiling: Option<&'static Tiling>,
 }
 
+/// A straight run of frame slots from [`GridMap::rect_runs`]: `n` slots
+/// from `slot`, the first on grid cell (`row`, `col`), each next one a step
+/// of (`dr`, `dc`) in the grid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Run {
+    pub slot: usize,
+    pub row: usize,
+    pub col: usize,
+    pub n: usize,
+    pub dr: isize,
+    pub dc: isize,
+}
+
+impl Run {
+    /// The grid cell of the run's `k`-th slot.
+    #[inline(always)]
+    pub fn cell(&self, k: usize) -> (usize, usize) {
+        (
+            (self.row as isize + self.dr * k as isize) as usize,
+            (self.col as isize + self.dc * k as isize) as usize,
+        )
+    }
+}
+
 impl GridMap {
     /// A row-major (or serpentine) grid walked by index.
     pub const fn new(w: u16, h: u16, serpentine: bool) -> GridMap {
@@ -347,6 +371,33 @@ impl GridMap {
             col
         };
         (row, col)
+    }
+
+    /// Every cell of rows `r0..r1` x columns `c0..c1` (clipped to the
+    /// grid) as [`Run`]s of consecutive frame slots, each a straight line
+    /// in the grid — so a rectangle op writes the frame sequentially on a
+    /// tiled chain, where walking the GRID row by row lands a quarter-turned
+    /// tile's writes a whole driver row apart, one PSRAM line each (#953).
+    /// A row per run on a plain grid (reversed on a serpentine odd row).
+    /// Every cell is visited exactly once; the order of the runs is not
+    /// part of the contract.
+    pub fn rect_runs(&self, (r0, r1): (usize, usize), (c0, c1): (usize, usize), f: &mut dyn FnMut(Run)) {
+        let (w, h) = (self.w as usize, self.h as usize);
+        let (r1, c1) = (r1.min(h), c1.min(w));
+        if r0 >= r1 || c0 >= c1 {
+            return;
+        }
+        if let Some(t) = self.tiling {
+            return t.rect_runs((r0, r1), (c0, c1), f);
+        }
+        for row in r0..r1 {
+            if self.serpentine && row & 1 == 1 {
+                // slots ascend as the columns descend
+                f(Run { slot: row * w + (w - c1), row, col: c1 - 1, n: c1 - c0, dr: 0, dc: -1 });
+            } else {
+                f(Run { slot: row * w + c0, row, col: c0, n: c1 - c0, dr: 0, dc: 1 });
+            }
+        }
     }
 }
 
@@ -559,6 +610,51 @@ impl Tiling {
         let x = i - ly * fb_w;
         let b = x / pw;
         Some(TileCursor::at(self, ly as u16, b as u8, (x - b * pw) as u16))
+    }
+
+    /// [`GridMap::rect_runs`] on this chain: per tile the rectangle meets,
+    /// one run per panel row it crosses — the clipped part of that driver
+    /// row's straight line through the tile (the cell mapping is
+    /// [`TileCursor`]'s). A 1/N-scan layout yields one run per cell.
+    pub fn rect_runs(&self, (r0, r1): (usize, usize), (c0, c1): (usize, usize), f: &mut dyn FnMut(Run)) {
+        if self.stripes() != 1 {
+            for row in r0..r1 {
+                for col in c0..c1 {
+                    f(Run { slot: self.index(row, col), row, col, n: 1, dr: 0, dc: 1 });
+                }
+            }
+            return;
+        }
+        let (pw, ph) = (self.pw as usize, self.ph as usize);
+        let fb_w = pw * self.drive();
+        for b in 0..self.drive() {
+            let (ox, oy, turns) = self.blocks[b];
+            let (ox, oy) = (ox as usize, oy as usize);
+            let (a0, a1) = (r0.max(oy), r1.min(oy + ph));
+            let (b0, b1) = (c0.max(ox), c1.min(ox + pw));
+            if a0 >= a1 || b0 >= b1 {
+                continue;
+            }
+            // the rectangle in the tile's own cells, then as panel rows
+            // `ly` and the local columns `lx` along each
+            let (a0, a1, b0, b1) = (a0 - oy, a1 - oy, b0 - ox, b1 - ox);
+            let (lys, lxs) = match turns {
+                1 => ((pw - b1, pw - b0), (a0, a1)),
+                2 => ((ph - a1, ph - a0), (pw - b1, pw - b0)),
+                3 => ((b0, b1), (ph - a1, ph - a0)),
+                _ => ((a0, a1), (b0, b1)),
+            };
+            let lx = lxs.0;
+            for ly in lys.0..lys.1 {
+                let ((row, col), (dr, dc)) = match turns {
+                    1 => ((oy + lx, ox + pw - 1 - ly), (1, 0)),
+                    2 => ((oy + ph - 1 - ly, ox + pw - 1 - lx), (0, -1)),
+                    3 => ((oy + ph - 1 - lx, ox + ly), (-1, 0)),
+                    _ => ((oy + ly, ox + lx), (0, 1)),
+                };
+                f(Run { slot: ly * fb_w + b * pw + lx, row, col, n: lxs.1 - lxs.0, dr, dc });
+            }
+        }
     }
 
     /// Pin the tiling for the life of the program. ~140 B, once per boot
@@ -1326,6 +1422,66 @@ mod tests {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    /// Every cell of `rect` exactly once, every run's slots consecutive
+    /// and on the cells `index` names.
+    fn check_rect_runs(g: &GridMap, rect: ((usize, usize), (usize, usize)), what: &str) {
+        let (w, h) = (g.w as usize, g.h as usize);
+        let mut seen = alloc::vec![0u8; w * h];
+        g.rect_runs(rect.0, rect.1, &mut |run: Run| {
+            assert!(run.n >= 1, "{what}: empty run");
+            assert!((run.dr == 0) != (run.dc == 0), "{what}: run not straight");
+            for k in 0..run.n {
+                let (r, c) = run.cell(k);
+                assert!(r < h && c < w, "{what}: run left the grid");
+                assert_eq!(g.index(r, c), run.slot + k, "{what}: slot of ({r}, {c})");
+                seen[r * w + c] += 1;
+            }
+        });
+        let ((r0, r1), (c0, c1)) = rect;
+        for r in 0..h {
+            for c in 0..w {
+                let inside = r >= r0 && r < r1.min(h) && c >= c0 && c < c1.min(w);
+                assert_eq!(seen[r * w + c], inside as u8, "{what}: cell ({r}, {c}) of {rect:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn rect_runs_cover_a_rectangle_once_in_slot_runs() {
+        let rects = |w: usize, h: usize| {
+            alloc::vec![
+                ((0, h), (0, w)),
+                ((1, h - 1), (1, w - 1)),
+                ((0, 1), (0, w)),
+                ((0, h), (w - 1, w)),
+                ((h / 3, h / 2 + 1), (w / 4, w - 1)),
+                ((2, 3), (3, 4)),
+                ((0, h + 5), (2, w + 9)),
+                ((3, 3), (0, w)),
+                ((h, h + 2), (0, w)),
+            ]
+        };
+        for (cols, rows, pw, ph) in [(2u8, 2u8, 4u16, 4u16), (3, 2, 4, 4), (1, 1, 8, 8), (4, 1, 6, 6), (2, 1, 5, 5), (2, 2, 6, 4)] {
+            for chain in all_chains(cols, rows) {
+                let t = Tiling::new(pw, ph, cols, rows, 0, &chain).unwrap().leak();
+                let g = GridMap { w: t.width(), h: t.height(), serpentine: false, tiling: Some(t) };
+                for rect in rects(g.w as usize, g.h as usize) {
+                    check_rect_runs(&g, rect, &alloc::format!("{chain:?} {pw}x{ph}"));
+                }
+            }
+        }
+        // 1/N-scan: one run per cell, still exact
+        let t = Tiling::new(4, 8, 1, 1, 2, &[(0, 0, 0)]).unwrap().leak();
+        let g = GridMap { w: 4, h: 8, serpentine: false, tiling: Some(t) };
+        check_rect_runs(&g, ((1, 7), (1, 3)), "1/4 scan");
+        for serpentine in [false, true] {
+            let g = GridMap::new(7, 5, serpentine);
+            for rect in rects(7, 5) {
+                check_rect_runs(&g, rect, &alloc::format!("plain serpentine={serpentine}"));
             }
         }
     }

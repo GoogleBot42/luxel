@@ -406,18 +406,18 @@ fn paint_shape(vm: &mut Vm, bx: (Fx, Fx), by: (Fx, Fx), f: &mut dyn FnMut(&mut [
                 if let (Some((c0, c1)), Some((r0, r1))) =
                     (gv.span(true, bx, by), gv.span(false, bx, by))
                 {
-                    for r in r0..=r1 {
-                        for c in c0..=c1 {
-                            // one `index` per cell: it is also how the map
-                            // is read, so deriving the coordinate from the
-                            // pixel index saves recomputing it to store
-                            let i = gv.g.index(r, c);
-                            let p = map_coord(gv.map, i);
+                    // In frame-slot runs (#953): sequential writes on a
+                    // tiled chain, and each cell's coordinate from the
+                    // axis table rather than back through its slot.
+                    gv.g.rect_runs((r0, r1 + 1), (c0, c1 + 1), &mut |run| {
+                        for k in 0..run.n {
+                            let (r, c) = run.cell(k);
+                            let p = gv.coord(r, c);
                             if p[0] >= bx.0 && p[0] <= bx.1 && p[1] >= by.0 && p[1] <= by.1 {
-                                f(&mut frame[i], p[0], p[1]);
+                                f(&mut frame[run.slot + k], p[0], p[1]);
                             }
                         }
-                    }
+                    });
                 }
             }
             None => {
@@ -1057,19 +1057,22 @@ fn paste(
     sc: (i32, i32),
     mode: Blend,
 ) {
-    // The source row offset walks by `cw` rather than multiplying per
-    // texel. Everything is i32 — see the bound proved in `blit_into`.
-    let mut base = sr.0 * cw;
-    for r in sr.0..sr.1 {
-        for c in sc.0..sc.1 {
-            let px = texel_at(s, (base + c) as usize, true);
-            let cell = g.index((row0 + r) as usize, (col0 + c) as usize);
-            if let Some(dst) = frame.get_mut(cell) {
-                put(dst, px, mode);
+    // Everything is i32 — see the bound proved in `blit_into`. The cells
+    // go in frame-slot runs (#953), so a tiled chain is written in order.
+    if sr.1 <= sr.0 || sc.1 <= sc.0 {
+        return;
+    }
+    let rows = ((row0 + sr.0) as usize, (row0 + sr.1) as usize);
+    let cols = ((col0 + sc.0) as usize, (col0 + sc.1) as usize);
+    g.rect_runs(rows, cols, &mut |run| {
+        for k in 0..run.n {
+            let (r, c) = run.cell(k);
+            let t = (r as i32 - row0) * cw + (c as i32 - col0);
+            if let Some(dst) = frame.get_mut(run.slot + k) {
+                put(dst, texel_at(s, t as usize, true), mode);
             }
         }
-        base += cw;
-    }
+    });
 }
 
 #[cfg(all(test, feature = "frontend"))]
@@ -1483,6 +1486,32 @@ mod tests {
     }
 
     #[test]
+    fn blit_on_a_tiled_wall_matches_a_grid_index_loop() {
+        // #953: the paste walks frame-slot runs; each cell must land where
+        // `gridIndex` puts it, clipped at every edge
+        for wall in [wall_2x2(4), wall_mixed(4)] {
+            let rig = Rig::Tiled(wall);
+            for (cw, ch, col, row) in [(3, 2, 1, 2), (5, 3, -2, 6), (8, 8, 0, 0), (9, 4, 3, -1)] {
+                let cells = cw * ch;
+                let head = alloc::format!(
+                    "hs = array({cells})\nfor (i = 0; i < {cells}; i++) {{ hs[i] = i / {cells} }}\n"
+                );
+                let bulk = alloc::format!(
+                    "{head}export function renderBulk() {{ blit(hs, 1, 1, {cw}, {ch}, {col}, {row}, 0) }}"
+                );
+                let loopy = alloc::format!(
+                    "{head}export function renderBulk() {{\n\
+                       for (r = 0; r < {ch}; r++) {{ for (c = 0; c < {cw}; c++) {{\n\
+                         k = gridIndex({col} + c, {row} + r)\n\
+                         if (k >= 0) {{ hsv(hs[r * {cw} + c], 1, 1)\n setPixel(k) }} }} }}\n\
+                     }}"
+                );
+                assert_eq!(frame1(&bulk, 64, &rig), frame1(&loopy, 64, &rig), "{cw}x{ch} at ({col}, {row})");
+            }
+        }
+    }
+
+    #[test]
     fn blit_cost_is_bounded_by_the_grid_not_the_canvas() {
         // A 30000x30000 canvas may cost no more than the grid has cells:
         // the source rectangle is clipped up front, so this is 16 texels,
@@ -1579,6 +1608,9 @@ mod tests {
             ("coords 8x32 serpentine", Rig::Coords(grid_coords(8, 32, true)), 256),
             ("coords 32x8", Rig::Coords(grid_coords(32, 8, false)), 256),
             ("ring (not a grid)", Rig::Coords(ring_coords(64)), 64),
+            ("tiled 2x2", Rig::Tiled(wall_2x2(4)), 64),
+            ("tiled mixed turns", Rig::Tiled(wall_mixed(4)), 64),
+            ("tiled 16x16", Rig::Tiled(wall_mixed(8)), 256),
         ];
         let mut rng = Rng(0x1234_5678);
         for (name, rig, n) in &rigs {
