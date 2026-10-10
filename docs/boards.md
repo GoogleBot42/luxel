@@ -2816,6 +2816,20 @@ branch at 4117448e, same host build, same probes via `POST /api/code`):
   expand's run fills — the rest of #953. Aurora's exact path cannot become a
   full-resolution `paintCanvas`: two 16384-element canvases are over the
   array budget, which is why the pattern has an exact path at all.
+  **Run fill (2026-10-10, same board, 32 B cache lines):** the slot walk
+  goes a `TileCursor::span` at a time — a straight line of slots along one
+  grid row or column — cut into runs of one canvas cell by per-axis run
+  lengths: one texel and one slice fill per run, with each cell's texel
+  memoised per call. Probes via `POST /api/code`, VM ms: `fillCanvas` 16x16
+  static 12.3 → 7.2, 1x1 → 5.4, ripples 18.1 → 13.8; a whole-frame `fill()`
+  (3.7–3.9 ms here) is the floor, so ~3 ms was never on the table under
+  live pack contention. The run loop itself measured at `fill()`'s cost in
+  cycle probes; the setup was the surprise: the 256 axis coordinates went
+  through `index(r, c)` then back through `cell(i)` — ~500–900 cycles a
+  cell — and `MapData::grid_cell_coord` now reads them straight from the
+  axis table when the map IS the frame's grid. That check compares grids
+  by identity (`GridMap::same`): the derived `==` compares the ~140 B
+  `Tiling` by value and made a first build 2.7 ms SLOWER.
 - **Picture proof**: `/api/pixels` of a static `rgb(x, y, .25)` probe, decoded
   through `Tiling::cell` (a Python mirror checked against the Rust formula on
   all 16384 slots), equals master's row-major frame pixel for pixel; a 1D

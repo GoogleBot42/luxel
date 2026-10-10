@@ -1611,6 +1611,25 @@ impl MapData {
             None => self.coords.get(i).copied().unwrap_or([Fx::ZERO; 3]),
         }
     }
+
+    /// `coord(g.index(row, col))` straight from the axis table when this
+    /// map IS the procedural grid `g` — on a tiled grid the slot round trip
+    /// (`index` then [`GridMap::cell`]) is two chain transforms per cell
+    /// that only come back to `(row, col)`; scattered reads through it cost
+    /// ~500 cycles a cell on the panel (#953). `None` for any other map,
+    /// or a cell outside the grid.
+    #[inline]
+    pub fn grid_cell_coord(&self, g: &crate::outpipe::GridMap, row: usize, col: usize) -> Option<[Fx; 3]> {
+        let mg = self.grid.as_ref()?;
+        let (w, h) = (g.w as usize, g.h as usize);
+        if !mg.same(g) || row >= h || col >= w {
+            return None;
+        }
+        Some(match (self.axes.get(col), self.axes.get(w + row)) {
+            (Some(&x), Some(&y)) => [x, y, Fx::ZERO],
+            _ => [Self::norm(col, w), Self::norm(row, h), Fx::ZERO],
+        })
+    }
 }
 
 pub const IDENTITY: [[Fx; 4]; 4] = {

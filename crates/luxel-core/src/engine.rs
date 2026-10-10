@@ -1275,6 +1275,12 @@ impl Engine {
         }
     }
 
+    /// The VM, for crate tests that check its derived state directly.
+    #[cfg(test)]
+    pub(crate) fn vm(&self) -> &Vm {
+        &self.vm
+    }
+
     pub fn grid(&self) -> Option<crate::outpipe::GridMap> {
         self.grid
     }
