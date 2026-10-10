@@ -33,7 +33,9 @@
 //
 // At Cell Size 1 a lattice cell IS a grid cell, and the colour stays the
 // real `paint()`: the brush the palette produces, put down with
-// `setPixel(index)`. That is byte-exact and, at one cell per pixel, cheaper
+// `setPixel(gridIndex(c, r))` — the frame is in wire order, so a cell's
+// slot comes from the engine, never from `r * W + c` (on a chain of
+// rotated panels that is a scrambled picture). That is byte-exact and, at one cell per pixel, cheaper
 // than any canvas — `paint` + `setPixel` is ~39 interpreted instructions
 // per cell less than resolving a palette into an HSV canvas, and it needs
 // no canvas arrays at all.
@@ -169,8 +171,7 @@ export function beforeRender(delta) {
 
 export function renderBulk() {
   if (exact) {
-    // one lattice cell per pixel: the palette brush, straight onto the index
-    var i = 0
+    // one lattice cell per pixel: the palette brush, straight onto the cell
     for (var r = 0; r < H; r++) {
       var yv = normAxis(r, gh)
       fillNoise3D(nRow, W, 1, nsx, 0, nox, yv * 2, z4, 9)
@@ -179,8 +180,7 @@ export function renderBulk() {
         var glow = saturate(1 - abs(yv - band[c]) * 2)
         var v = saturate(glow * shimmer * 1.4)
         paint(v, v * v)
-        setPixel(i)
-        i = i + 1
+        setPixel(gridIndex(c, r))
       }
     }
     return

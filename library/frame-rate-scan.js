@@ -149,9 +149,10 @@ function sweepBrush() {
   else rgb(1, 0, 0)
 }
 
-// One column of the brush, rows [r0, r1), on a W-wide row-major grid.
+// One column of the brush, rows [r0, r1). Cells go through gridIndex: the
+// frame is in wire order, so `r * W + col` is not cell (col, r) on a chain.
 function column(r0, r1, W, col) {
-  for (var r = r0; r < r1; r++) setPixel(r * W + col)
+  for (var r = r0; r < r1; r++) setPixel(gridIndex(col, r))
 }
 
 // Every 8th column on one row, dim; column 0 marked cyan.
@@ -160,7 +161,7 @@ function ticks(row, W, H) {
   for (var c = 0; c < W; c += 8) {
     if (c == 0) rgb(0, 0.22, 0.22)
     else rgb(0.16, 0.16, 0.16)
-    setPixel(row * W + c)
+    setPixel(gridIndex(c, row))
   }
 }
 
