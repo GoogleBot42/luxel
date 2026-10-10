@@ -36,12 +36,16 @@ both build and pass image-check; the WLED takeover QEMU test is unchanged
 (its `--slot app1` failure is the pre-existing Gitea #717, reproduced on
 plain master).
 
-**Open for the hardware test** (docs/pixelblaze-migration.md): Pixelblaze's
-own web updater appears to verify a firmware signature (`.stfu` = "Signed
-Transfer Firmware Update"), so delivering an unsigned Luxel image over
-`/update` may be rejected — the takeover itself is independent of delivery,
-and the fallback is a one-time serial seed into an app slot, which still
-preserves WiFi/LED config. Filed as a Gitea ticket.
+**Delivery is serial** (docs/pixelblaze-migration.md): genuine `pb32`
+`.stfu` files (v3.66/3.67/3.70) carry a per-member ECDSA P-256 signature
+over SHA-256, and the device's `/recovery.html` uploader ships no
+client-side crypto — so Pixelblaze's web updater rejects an unsigned Luxel
+image and `/update` is not a delivery path (established off-device from the
+public update files + the served web bundle; no firmware reversing). The
+takeover is independent of delivery; the image is seeded into an app slot
+over the expansion-header UART and converts on boot, preserving WiFi/LED
+config. Hardware e2e (confirm the rejection + the serial conversion) is
+Gitea #951.
 
 ## 2026-10-04 — the native pixel loop marshals raw words (#938, PR #944)
 

@@ -4,9 +4,10 @@ How a stock Pixelblaze v3 becomes a Luxel device over the air, inheriting
 its WiFi and LED settings. The firmware mechanism is the sibling of the WLED
 takeover (docs/wled-migration.md) and shares its whole table-writing half;
 this page is the Pixelblaze-specific part. **The firmware side is proven
-end to end under QEMU only** (`tools/qemu/pb-takeover-test.py`); the delivery
-of the image onto a stock Pixelblaze is the open question, settled on
-hardware — see "Delivery" below.
+end to end under QEMU only** (`tools/qemu/pb-takeover-test.py`); delivery of
+the image onto a stock Pixelblaze is over **serial**, because Pixelblaze's
+own web updater verifies a real signature we cannot forge — see "Delivery"
+below.
 
 ## How the takeover works
 
@@ -106,37 +107,56 @@ namespace registration on 0xB000). This is verified by `tools/pbnvs-check
 --wipe-guard` and by the QEMU test, which boots through a real
 `preboot_guard` pass.
 
-## Delivery (the open question for the hardware test)
+## Delivery: serial, not the web updater
 
 The WLED takeover rides in on WLED's `/update` page, which accepts any ESP32
-app image with the `0xE9` magic. **Pixelblaze's own web updater appears to
-verify a firmware signature** (its update files are `.stfu`, "Signed
-Transfer Firmware Update"), so a plain, unsigned Luxel image may be rejected
-by a stock Pixelblaze's `/update` or `/recovery.html`. We do not have, and
-will not forge, Pixelblaze's signing key.
+app image with the `0xE9` magic. Pixelblaze's does not: its update files
+(`.stfu`, "Signed Transfer Firmware Update") carry a **real asymmetric
+signature**, and the device firmware verifies it before installing. So a
+plain, unsigned Luxel image is rejected. We do not have, and will not forge,
+Pixelblaze's signing key.
 
-This does **not** affect the takeover itself — the takeover is independent of
-how the image arrived; it only needs a Luxel image sitting in app0 or app1
-under Pixelblaze's table. Two delivery paths to settle on hardware, in order
-of preference:
+This was established off-device from the genuine update files and the
+device's served web bundle (so, no reversing the oracle's firmware):
 
-1. **Pixelblaze's web updater**, if it in fact accepts an unsigned/foreign
-   image through `/update` or `/recovery.html`. Unverified; this is the
-   first thing to try on the real device, since it would make the conversion
-   fully no-serial like WLED's.
-2. **Serial seed.** A Pixelblaze v3's expansion header carries UART + the
-   strapping pins (docs/firmware.md, "Board: Pixelblaze v3"), so the Luxel
-   image can be written into an app slot over serial — after which the
-   takeover converts the layout and inherits WiFi/LED settings on the next
-   boot. This is strictly more capable than today's "serial-flash the whole
-   Luxel image" path (it preserves the user's WiFi and strip config without
-   re-provisioning), and it is the guaranteed fallback if (1) is blocked by
-   the signature check.
+- A real `pb32` `.stfu` (checked across v3.66 / v3.67 / v3.70) is an `STFU`
+  container of four members — three web assets plus a raw `firmware.bin`
+  (`0xE9` ESP32 image) — and **every member carries a 96-byte trailer:
+  32 bytes of SHA-256 over the member, then a 64-byte ECDSA P-256 `r‖s`
+  signature of that hash.** The hash is reproducible for any payload; the
+  signature is not, without Pixelblaze's private key (which is baked into
+  the firmware, not shipped in the file).
+- The device's `/recovery.html` uploader just does a plain multipart
+  `POST /update` of the raw file with **no client-side crypto**; the
+  verifier (mbedTLS ECDSA/X.509, "signature valid, installing file") is
+  firmware-resident. So there is nothing to bypass from the browser — a
+  direct `curl -F update=@…` hits the same firmware verifier.
 
-Either way, **back up the stock flash first** (`espflash read-flash 0
-0x400000 pb-v3-stock.bin`): it is the only restore path, and it holds the
-device's WiFi config and saved patterns — keep it, don't commit it
-(gitignored).
+This does **not** affect the takeover itself — it is independent of how the
+image arrived; it only needs a Luxel image sitting in app0 or app1 under
+Pixelblaze's table. The delivery route is therefore **serial**:
+
+- **Serial seed.** A Pixelblaze v3's expansion header carries UART + the
+  strapping pins (docs/firmware.md, "Board: Pixelblaze v3"), so the Luxel
+  image is written into an app slot over serial — after which the takeover
+  converts the layout and inherits WiFi/LED settings on the next boot. This
+  is strictly more capable than today's "serial-flash the whole Luxel image"
+  path: it preserves the user's WiFi and strip config without
+  re-provisioning. (Seeding one app slot + letting the takeover run is the
+  minimal form; flashing the full Luxel layout directly is the same thing
+  without the inheritance.)
+
+What the hardware e2e still adds (Gitea #951): a single `curl -F
+update=@luxel-fw-ota.bin http://<pb>/update` to **confirm** the firmware
+rejects it (the file-format analysis shows the signature is present on every
+member but cannot prove the local `/update` path enforces it rather than
+only the SHA-256 — only the live device can), and then the serial-seed
+conversion end to end (rejoins WiFi on inherited creds, LED settings match,
+assets push lights the UI).
+
+**Back up the stock flash first** (`espflash read-flash 0 0x400000
+pb-v3-stock.bin`): it is the only restore path, and it holds the device's
+WiFi config and saved patterns — keep it, don't commit it (gitignored).
 
 ## Verifying without hardware
 
