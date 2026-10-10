@@ -149,12 +149,12 @@ mod def {
 /// which is 128x128. It used to be 4096 (one tile), and raising it is a
 /// *permission*, not a promise: this constant only says the pixel space is
 /// addressable. Whether a given chain actually FITS is decided at boot by
-/// `hub75::try_boot`, which sizes the DMA framebuffers, descriptors and the
-/// panel→pixel remap from the stored layout and falls back to the board
+/// `hub75::try_boot`, which sizes the DMA framebuffers and descriptors from
+/// the stored layout and falls back to the board
 /// default (64x64) when any of them will not allocate. Everything that
 /// scales per pixel and is *not* DMA-visible lives in the PSRAM arena on
 /// these boards — engine frames, pipeline stages, the compositor scratch,
-/// the output chain's scratch frame, `pixelState`, the remap LUT — so the
+/// the output chain's scratch frame, `pixelState` — so the
 /// internal-SRAM cost of a bigger chain is the framebuffers plus the
 /// descriptor rings and nothing else. docs/boards.md has the table.
 #[cfg(feature = "hub75")]

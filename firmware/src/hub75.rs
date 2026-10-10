@@ -535,40 +535,6 @@ fn alloc_descriptors(g: Geometry, s: &Schedule) -> Option<(Block, &'static mut [
 /// What the DMA driver is built against: the framebuffer itself.
 type DmaFb = DynFb;
 
-/// Build the boot-time panel→pixel remap for `m` (Gitea #475), leaked like
-/// the framebuffers. `None` = the arrangement is already what the compose
-/// path does natively (one upright tile, or any chain that comes out
-/// row-major) or the table would not fit — either way the frame is packed
-/// exactly as it was before this existed, with no per-pixel cost.
-///
-/// `fb_w`/`fb_h` are the framebuffer's extent in PANEL pixels, which for a
-/// 1/N-scan panel is not the driver's own `cols`/`rows`: the driver array is
-/// `stripes` times wider and `stripes` times shallower, and `build_lut` folds
-/// that back itself.
-///
-/// The table is 2 B/px and the DMA never reads it — only the compose, from
-/// task context — so it comes from the array arena
-/// (`luxel_core::arena::ArrVec`), which on a `psram-arena` board is the 8 MB
-/// external region and everywhere else is exactly the main heap it always was
-/// (Gitea #768). That matters at the new cap: a 2x2 chain is non-identity by
-/// construction, so a 128x128 wall pays 32 KB here — a third of the internal
-/// DRAM heap on the S3 panel board, and free in the arena. It goes through
-/// the allocator rather than `psram::alloc_bulk_zeroed`, because an identity
-/// table has to be handed BACK, and `ArrVec`'s `Drop` does that through the
-/// same hook.
-pub(crate) fn build_remap(m: &Matrix, g: Geometry) -> Option<&'static [u16]> {
-    // Fallible, then infallibly filled: a reserve that fails is a `None`, and
-    // `try_boot` then formats the frame exactly as it did before remaps
-    // existed. The chain walked is the stored Layout's effective tile list —
-    // the explicit `chain` line when there is one, else the rule's (#920).
-    // Leaked, like the framebuffers: the compose reads it for the life of the
-    // driver. The `Box` is the 24-byte handle, not the table.
-    match build_remap_owned(m, g) {
-        Ok(Some(lut)) => Some(alloc::boxed::Box::leak(lut).as_mut_slice()),
-        _ => None,
-    }
-}
-
 /// What the running driver was built with — the `live` block of
 /// `GET /api/layout`'s `driver`. `None` = no panel output.
 pub fn live_driver() -> Option<LiveDriver> {
@@ -590,21 +556,18 @@ pub fn want_blank(blank: u8) {
 
 // ---- the live arrangement and the test cards (Gitea #920) ------------------
 
-/// Bumped by [`want_remap`]: the output task rebuilds its panel→pixel table
-/// from the stored Layout when it sees a generation it has not adopted.
-static REMAP_GEN: AtomicU32 = AtomicU32::new(0);
 /// The test card the panel should draw instead of the pattern, as
 /// `luxel_core::layout::Card as u8` (0 off, 1 panels, 2 cells), and the
 /// generation the output task re-renders it on.
 static CARD: AtomicU8 = AtomicU8::new(0);
 static CARD_GEN: AtomicU32 = AtomicU32::new(0);
 
-/// Ask the output task to rebuild the remap from the stored Layout on its
-/// next frame — which panel sits where and how it is turned is a TABLE, so
-/// a `chain` line (or a rule edit) applies without a boot as long as the
-/// framebuffer's shape is unchanged (`POST /api/layout` checks that).
-pub fn want_remap() {
-    REMAP_GEN.fetch_add(1, Ordering::Release);
+/// The arrangement changed under a running driver (Gitea #920): redraw the
+/// test card, if one is up, from the stored Layout on the next frame. The
+/// FRAME follows on its own — the render task re-applies the map through
+/// the new tiling (`devicemap::mark_dirty`, Gitea #948).
+pub fn arrangement_moved() {
+    CARD_GEN.fetch_add(1, Ordering::Release);
 }
 
 /// The test card the panel is showing (`GET /api/layout` `matrix.card`).
@@ -630,49 +593,26 @@ pub fn set_card(c: luxel_core::layout::Card) {
     CARD_GEN.fetch_add(1, Ordering::Release);
 }
 
-/// What the output task keeps beside its remap so the arrangement can change
-/// under a running driver: the table it last built (owned, so the previous
-/// one is freed on the next swap — only the boot's is leaked), and the test
-/// card it is drawing, if any. Polled once per frame from task context, the
-/// only context that ever reads the remap, so a swap is a plain assignment.
+/// The test card the output task is drawing instead of the pattern, if any
+/// (Gitea #920). Polled once per frame from task context. The arrangement
+/// itself is no longer the output task's business: since Gitea #948 the
+/// engine writes its frame in driver order, so a live chain edit is a map
+/// re-apply on the render task, and only the card is redrawn here.
 pub(crate) struct LiveArrangement {
-    remap_seen: u32,
-    owned: Option<alloc::boxed::Box<luxel_core::arena::ArrVec<u16>>>,
     card_seen: u32,
     card: Option<luxel_core::arena::ArrVec<[u8; 3]>>,
 }
 
 impl LiveArrangement {
     pub(crate) const fn new() -> Self {
-        Self { remap_seen: 0, owned: None, card_seen: 0, card: None }
+        Self { card_seen: 0, card: None }
     }
 
-    /// Adopt a pending remap and/or (re)draw the card. `g` is the
-    /// framebuffer the driver runs; `remap` is the driver's table slot.
-    pub(crate) fn refresh(&mut self, g: Geometry, remap: &mut Option<&'static [u16]>) {
-        let want = REMAP_GEN.load(Ordering::Acquire);
-        let arrangement_moved = want != self.remap_seen;
-        if arrangement_moved {
-            self.remap_seen = want;
-            let m = crate::layout::matrix();
-            match build_remap_owned(&m, g) {
-                Ok(next) => {
-                    // The slice outlives the borrow checker's view of the
-                    // Box, not the Box itself: it is replaced (and the Box
-                    // dropped) only here, on the same task that reads it,
-                    // between two frames — no reader is ever left holding
-                    // the old table.
-                    let slice: Option<&'static [u16]> =
-                        next.as_ref().map(|b| unsafe { &*(b.as_slice() as *const [u16]) });
-                    *remap = slice;
-                    self.owned = next;
-                    println!("hub75: arrangement applied live, remap {}", if slice.is_some() { "on" } else { "off (row-major)" });
-                }
-                Err(()) => println!("hub75: arrangement change: the remap table would not allocate — keeping the old one"),
-            }
-        }
+    /// (Re)draw the card when it or the arrangement changed. `g` is the
+    /// framebuffer the driver runs.
+    pub(crate) fn refresh(&mut self, g: Geometry) {
         let cgen = CARD_GEN.load(Ordering::Acquire);
-        if cgen == self.card_seen && !arrangement_moved {
+        if cgen == self.card_seen {
             return;
         }
         self.card_seen = cgen;
@@ -701,53 +641,40 @@ impl LiveArrangement {
         let (fb_w, fb_h) = (g.cols / stripes, 2 * g.rows * stripes);
         match mode {
             luxel_core::layout::Card::Panels => {
-                // driver space: one row of `drive` blocks, `ph` tall — the
-                // remap is bypassed in `frame`, so what each block shows is
-                // what that PHYSICAL panel shows
+                // driver space: one row of `drive` blocks, `ph` tall — what
+                // each block shows is what that PHYSICAL panel shows
                 let drive = arrange::driven_panels(&m, fb_w, fb_h);
                 luxel_hub75::card::panels(buf, m.pw as usize, m.ph as usize, drive, &crate::layout::tiles());
             }
             luxel_core::layout::Card::Cells => {
-                luxel_hub75::card::cells(buf, &m, &crate::layout::tiles());
+                // engine space, written through the chain's tiling into
+                // driver order like any frame (Gitea #948)
+                let t = crate::layout::wire_tiling();
+                luxel_hub75::card::cells(buf, &m, &crate::layout::tiles(), t.as_ref());
             }
             luxel_core::layout::Card::Off => {}
         }
         println!("hub75: test card {}", mode.as_str());
     }
 
-    /// The frame to compose and the table to compose it through: the
-    /// engine's frame through the live remap, or the card — the PANELS card
-    /// straight into the driver's blocks (no remap), the CELLS card through
-    /// the remap like any frame.
+    /// The frame to compose: the engine's, or the card — both already in
+    /// driver order (the PANELS card is drawn per driver block, the CELLS
+    /// card through the tiling).
     ///
     /// The card slice is handed out `'a`-free on purpose: the driver packs it
     /// through `&mut self` methods that this borrow would otherwise block.
     /// It is valid until the next [`LiveArrangement::refresh`], which runs on
     /// the same task, before the next frame's pack — never during one.
-    pub(crate) fn frame<'a>(&self, rgb: &'a [[u8; 3]], remap: Option<&'static [u16]>) -> (&'a [[u8; 3]], Option<&'static [u16]>) {
+    pub(crate) fn frame<'a>(&self, rgb: &'a [[u8; 3]]) -> &'a [[u8; 3]] {
         match (self.card.as_deref(), card()) {
             // SAFETY: see above — the buffer outlives every use of the
             // returned slice, and nothing writes it until the next refresh.
-            (Some(c), luxel_core::layout::Card::Panels) => (unsafe { &*(c as *const [[u8; 3]]) }, None),
-            (Some(c), luxel_core::layout::Card::Cells) => (unsafe { &*(c as *const [[u8; 3]]) }, remap),
-            _ => (rgb, remap),
+            (Some(c), luxel_core::layout::Card::Panels | luxel_core::layout::Card::Cells) => unsafe {
+                &*(c as *const [[u8; 3]])
+            },
+            _ => rgb,
         }
     }
-}
-
-/// [`build_remap`] without the leak: `Ok(None)` is the identity (no table
-/// needed), `Err` is an allocation that failed.
-fn build_remap_owned(m: &Matrix, g: Geometry) -> Result<Option<alloc::boxed::Box<luxel_core::arena::ArrVec<u16>>>, ()> {
-    let stripes = arrange::stripes(m);
-    let (fb_w, fb_h) = (g.cols / stripes, 2 * g.rows * stripes);
-    let mut lut: luxel_core::arena::ArrVec<u16> = luxel_core::arena::empty();
-    lut.try_reserve_exact(g.pixels()).map_err(|_| ())?;
-    lut.resize(g.pixels(), 0);
-    arrange::build_lut_tiles(&mut lut, m, &crate::layout::tiles(), fb_w, fb_h);
-    if arrange::is_identity(&lut) {
-        return Ok(None);
-    }
-    Ok(Some(alloc::boxed::Box::new(lut)))
 }
 
 /// Would `blank` leave the LIVE framebuffer's row block with no OE-active
@@ -917,12 +844,8 @@ pub struct Hub75Output {
     /// The vector packer's pair pads (Gitea #855), same lifetime and reason.
     #[cfg(feature = "hub75-pie")]
     pads: luxel_hub75::pie::PairPads,
-    /// The boot-time panel→pixel remap (Gitea #475). `None` = the configured
-    /// arrangement IS the driver's own row-major order, so nothing is
-    /// gathered and the compose path is byte-for-byte what it always was.
-    remap: Option<&'static [u16]>,
-    /// The arrangement's live half (Gitea #920): a remap swapped in between
-    /// frames, and the test card drawn instead of the pattern.
+    /// The test card drawn instead of the pattern (Gitea #920). The frame
+    /// arrives in driver order (Gitea #948), so there is no remap here.
     live: LiveArrangement,
 }
 
@@ -978,7 +901,6 @@ impl Hub75Output {
             scratch: Scratch::new(0),
             #[cfg(feature = "hub75-pie")]
             pads: luxel_hub75::pie::PairPads::new(0),
-            remap: None,
             live: LiveArrangement::new(),
         }
     }
@@ -1134,10 +1056,10 @@ impl Hub75Output {
 
         // The configured arrangement (#475). `layout::init()` has already run
         // (main.rs wires the panel after it), so `m` is the stored Layout's.
-        let remap = build_remap(&m, g);
+        // The engine writes the frame in this wire order (Gitea #948).
         println!(
             "hub75: {}x{} tiles of {}x{} from {} {}{} rot {}/{}, framebuffer {}x{} scan 1/{}, \
-             remap {}, est {} Hz",
+             wire {}, est {} Hz",
             m.cols,
             m.rows,
             m.pw,
@@ -1150,7 +1072,7 @@ impl Hub75Output {
             w,
             h,
             g.rows,
-            if remap.is_some() { "on" } else { "off (row-major)" },
+            crate::layout::wire_desc(),
             arrange::est_hz_driver(&m, &d),
         );
         Self::print_schedule(&s, g, &d);
@@ -1228,7 +1150,6 @@ impl Hub75Output {
                     scratch,
                     #[cfg(feature = "hub75-pie")]
                     pads,
-                    remap,
                     live: LiveArrangement::new(),
                 })
             }
@@ -1239,8 +1160,7 @@ impl Hub75Output {
                 // both (`Hub75::new` is past `CircularBcmBuf::new` by the time
                 // the transfer can fail), and handing that memory back to the
                 // allocator would be a use-after-free the moment the
-                // peripheral twitched. So does the remap, which is leaked at
-                // its own allocation site. The packer tables and the row pads
+                // peripheral twitched. The packer tables and the row pads
                 // go back. Every allocation FAILURE above — the likely reason
                 // to fall back at all — gives everything back.
                 let _ = desc_block.leak();
@@ -1391,11 +1311,9 @@ impl OutputDriver for Hub75Output {
         // A latch-blanking change the API stored since the last frame: control
         // bits only, so it lands here rather than at the next boot (#778).
         self.adopt_blank();
-        // A remap the API stored since the last frame, or a test card to
-        // draw instead of the pattern (Gitea #920): both land here, on the
-        // one task that reads the table.
-        self.live.refresh(self.g, &mut self.remap);
-        let (rgb, remap) = self.live.frame(rgb, self.remap);
+        // A test card to draw instead of the pattern (Gitea #920).
+        self.live.refresh(self.g);
+        let rgb = self.live.frame(rgb);
         // Audit which frames the panel actually scanned out since last time.
         // Copy the log out first so the driver borrow ends before the &mut
         // self call (Gitea #395).
@@ -1477,7 +1395,6 @@ impl OutputDriver for Hub75Output {
             self.control,
             &self.sched,
             self.fmt_gen,
-            remap,
             back,
             rgb,
             brightness5,
@@ -1538,7 +1455,6 @@ fn compose_into(
     control: Control,
     sched: &Schedule,
     fmt_gen: u32,
-    remap: Option<&'static [u16]>,
     target: &mut DynFb,
     rgb: &[[u8; 3]],
     brightness5: u8,
@@ -1560,11 +1476,8 @@ fn compose_into(
     // when the buffer does not meet its rules, and the scalar path is then
     // exactly what ran before.
     #[cfg(feature = "hub75-pie")]
-    if luxel_hub75::pie::pack_pie(dst, g, rgb, remap, t, pads) {
+    if luxel_hub75::pie::pack_pie(dst, g, rgb, t, pads) {
         return;
     }
-    match remap {
-        None => luxel_hub75::pack(dst, g, rgb, t, scratch),
-        Some(lut) => luxel_hub75::pack_remap(dst, g, rgb, lut, t, scratch),
-    }
+    luxel_hub75::pack(dst, g, rgb, t, scratch);
 }
