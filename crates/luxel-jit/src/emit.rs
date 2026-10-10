@@ -39,7 +39,7 @@ use luxel_core::arena::{self, ArrVec};
 use luxel_core::bytecode::{enc, is_binop_sub, op};
 use luxel_core::jit::{dev32, direct_default, DirectSig, BUILTIN_ENTRIES, RET_NUM, STATUS_ERR};
 use luxel_core::kinds::{builtin_sig, elem_kind, ilen, Kind, Kinds, SigRet};
-use luxel_core::vm::{Program, TAG_ARR, TAG_BUILTIN, TAG_FUN, TAG_NUM};
+use luxel_core::vm::{BKind, Builtin, Program, BUILTINS, TAG_ARR, TAG_BUILTIN, TAG_FUN, TAG_NUM};
 
 use crate::plan::{
     payload_at, plan_all, tag_at, FnPlan, ParamConv, SlotHome, MAX_REG_PARAMS,
@@ -269,6 +269,77 @@ struct Emitter<'a> {
     /// convention and return shape, not just its own.
     plans: &'a [FnPlan],
     f: Frame,
+}
+
+/// A builtin the emitter writes as instructions instead of a `callx8`
+/// (Gitea #942). Each is the `direct` kernel of `luxel_core::jit::table`
+/// restated in a handful of ALU ops, bit for bit — `tests/inline.rs`
+/// drives every sequence through the ISA model over the `i32` edges and
+/// random words and compares it with that kernel and the interpreter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Inline {
+    Abs,
+    Floor,
+    Ceil,
+    Round,
+    Trunc,
+    Frac,
+    Min,
+    Max,
+    Clamp,
+    Saturate,
+    Mix,
+    Mod,
+    Sign,
+    Step,
+    /// `square(t, duty)`.
+    Square,
+    /// `square(t)`: the 0.5 default duty folded into a bit test.
+    SquareHalf,
+    Triangle,
+}
+
+/// The inline form of builtin `b` called with `argc` arguments, if it has
+/// one. Keyed on the [`Builtin`] like `table::direct_of`, so the aliases
+/// (`fract`, `lerp`) come along. Only the EXACT arity is inlined (plus
+/// `square`'s defaulted one): any other call keeps the path it had.
+fn inline_of(b: u16, argc: usize) -> Option<Inline> {
+    let BKind::Impl(k) = BUILTINS.get(b as usize)?.kind else {
+        return None;
+    };
+    let (op, n) = match k {
+        Builtin::Abs => (Inline::Abs, 1),
+        Builtin::Floor => (Inline::Floor, 1),
+        Builtin::Ceil => (Inline::Ceil, 1),
+        Builtin::Round => (Inline::Round, 1),
+        Builtin::Trunc => (Inline::Trunc, 1),
+        Builtin::Frac => (Inline::Frac, 1),
+        Builtin::Min => (Inline::Min, 2),
+        Builtin::Max => (Inline::Max, 2),
+        Builtin::Clamp => (Inline::Clamp, 3),
+        Builtin::Saturate => (Inline::Saturate, 1),
+        Builtin::Mix => (Inline::Mix, 3),
+        Builtin::Mod => (Inline::Mod, 2),
+        Builtin::Sign => (Inline::Sign, 1),
+        Builtin::Step => (Inline::Step, 2),
+        Builtin::Triangle => (Inline::Triangle, 1),
+        Builtin::Square => {
+            // The one-argument form tests bit 15, which is only the
+            // default duty while that default is exactly 0.5.
+            if argc == 1 && direct_default(b) == Some(1 << 15) {
+                return Some(Inline::SquareHalf);
+            }
+            (Inline::Square, 2)
+        }
+        _ => return None,
+    };
+    (argc == n).then_some(op)
+}
+
+/// An encoder form whose operands are constants of the emitter's own
+/// choosing — a `false` here is an emitter bug, not an input.
+fn fits(ok: bool) {
+    debug_assert!(ok);
 }
 
 /// The two-register branch that tests a bytecode comparison, and whether
@@ -1722,6 +1793,13 @@ impl<'a> Emitter<'a> {
             }
         };
 
+        // The trivial numeric builtins are instructions, not calls (Gitea
+        // #942): no spill, no `callx8`, operands straight from their homes.
+        if let Some(op) = inline_of(b, argc) {
+            debug_assert_eq!(entry.ret_kind, RET_NUM);
+            return self.inline_builtin(plan, op, bottom, from_stack, consts);
+        }
+
         self.spill_all(plan)?;
 
         // The direct tier-1 path (§3.5/§4), used when the call's arity
@@ -1809,6 +1887,221 @@ impl<'a> Emitter<'a> {
             // `RetDyn` is (tag, payload); an unboxed result is the payload.
             self.put(plan, bottom, res, 11)
         }
+    }
+
+    /// An [`Inline`] builtin, written out (Gitea #942).
+    ///
+    /// The operands are read where they live — a register home, or a
+    /// scratch loaded from the frame, coerced by `Value::num` exactly as
+    /// the direct path's `arg_num` coerces them — and the result lands in
+    /// depth `bottom`'s home. That home may be operand 0's register, never
+    /// any other operand's, so every sequence below reads operand 0 for
+    /// the last time no later than the instruction that first writes `r`.
+    /// Operands past the stack (`CallBuiltinC`/`CC` immediates) are
+    /// materialised into scratch.
+    fn inline_builtin(
+        &mut self,
+        plan: &FnPlan,
+        op: Inline,
+        bottom: usize,
+        from_stack: usize,
+        consts: &[i32],
+    ) -> Result<(), Refusal> {
+        self.step();
+        let mut x: [Reg; 3] = [0; 3];
+        for j in 0..from_stack + consts.len() {
+            x[j] = if j < from_stack {
+                self.rd_num(plan, bottom + j)?
+            } else {
+                let t = self.sc();
+                self.imm(t, consts[j - from_stack]);
+                t
+            };
+        }
+        let out = match op {
+            // `wrapping_abs`: `abs` of i32::MIN is i32::MIN on Xtensa too.
+            Inline::Abs => {
+                let r = self.dest(bottom, Kind::Num);
+                self.code.abs(r, x[0]);
+                r
+            }
+            // `x & !0xFFFF` as a shift pair: no mask register needed.
+            Inline::Floor => {
+                let r = self.dest(bottom, Kind::Num);
+                fits(self.code.srai(r, x[0], 16));
+                fits(self.code.slli(r, r, 16));
+                r
+            }
+            // `(x + 0xFFFF) & !0xFFFF` is `-floor(-x)` in wrapping
+            // arithmetic, i32::MIN and MAX included.
+            Inline::Ceil => {
+                let r = self.dest(bottom, Kind::Num);
+                self.code.neg(r, x[0]);
+                fits(self.code.srai(r, r, 16));
+                fits(self.code.slli(r, r, 16));
+                self.code.neg(r, r);
+                r
+            }
+            // `(x + 0x8000) & !0xFFFF`; `addmi` reaches 0x4000, not 0x8000.
+            Inline::Round => {
+                let r = self.dest(bottom, Kind::Num);
+                fits(self.code.addmi(r, x[0], 0x4000));
+                fits(self.code.addmi(r, r, 0x4000));
+                fits(self.code.srai(r, r, 16));
+                fits(self.code.slli(r, r, 16));
+                r
+            }
+            // `x.wrapping_rem(0x10000)`: the low 16 bits of |x|, carrying
+            // the sign of x (|i32::MIN| has none, and its remainder is 0).
+            // `trunc` is `x - frac(x)`.
+            Inline::Frac | Inline::Trunc => {
+                let t = self.sc();
+                let u = self.sc();
+                self.code.abs(t, x[0]);
+                fits(self.code.extui(t, t, 0, 16));
+                self.code.neg(u, t);
+                self.code.movltz(t, u, x[0]);
+                if op == Inline::Frac {
+                    t
+                } else {
+                    let r = self.dest(bottom, Kind::Num);
+                    self.code.sub(r, x[0], t);
+                    r
+                }
+            }
+            Inline::Min => {
+                let r = self.dest(bottom, Kind::Num);
+                self.code.min(r, x[0], x[1]);
+                r
+            }
+            Inline::Max => {
+                let r = self.dest(bottom, Kind::Num);
+                self.code.max(r, x[0], x[1]);
+                r
+            }
+            // `x.max(lo).min(hi)` — in that order, so `lo > hi` gives `hi`.
+            Inline::Clamp => {
+                let r = self.dest(bottom, Kind::Num);
+                self.code.max(r, x[0], x[1]);
+                self.code.min(r, r, x[2]);
+                r
+            }
+            Inline::Saturate => {
+                let r = self.dest(bottom, Kind::Num);
+                let t = self.sc();
+                self.imm(t, 0);
+                self.code.max(r, x[0], t);
+                self.imm(t, 1);
+                fits(self.code.slli(t, t, 16));
+                self.code.min(r, r, t);
+                r
+            }
+            // `a + (b - a) * t`, the multiply being binop's exact
+            // `(p as i64 >> 16) as i32` sequence.
+            Inline::Mix => {
+                let r = self.dest(bottom, Kind::Num);
+                let d = self.sc();
+                let h = self.sc();
+                self.code.sub(d, x[1], x[0]);
+                self.code.mulsh(h, d, x[2]);
+                self.code.mull(d, d, x[2]);
+                fits(self.code.ssai(16));
+                self.code.src(h, h, d);
+                self.code.add(r, x[0], h);
+                r
+            }
+            // `mod_floor`: 0 for a zero divisor (`rems` would trap, hence
+            // the branch), else the truncated remainder plus the divisor
+            // when the two differ in sign and the remainder is not 0.
+            Inline::Mod => {
+                let m = self.sc();
+                let s = self.sc();
+                let v = self.sc();
+                self.imm(m, 0);
+                let skip = self.code.branch_z_forward(ZCond::Eqz, x[1]);
+                self.code.rems(m, x[0], x[1]);
+                self.code.xor(s, m, x[1]);
+                self.code.moveqz(s, m, m);
+                self.code.add(v, m, x[1]);
+                self.code.movltz(m, v, s);
+                let here = self.code.here();
+                self.code
+                    .patch_branch_z(skip, here)
+                    .map_err(|e| self.reach(e))?;
+                m
+            }
+            // -1 / 0 / 1 from the sign word, then scaled to 16.16.
+            Inline::Sign => {
+                let t = self.sc();
+                let u = self.sc();
+                fits(self.code.srai(t, x[0], 31));
+                self.imm(u, 1);
+                self.code.movgez(t, u, x[0]);
+                self.code.moveqz(t, x[0], x[0]);
+                let r = self.dest(bottom, Kind::Num);
+                fits(self.code.slli(r, t, 16));
+                r
+            }
+            // `step(edge, x)`: `max(x, edge) - x` is 0 exactly when
+            // `x >= edge` (a strictly positive difference never wraps
+            // to 0).
+            Inline::Step => {
+                let t = self.sc();
+                let u = self.sc();
+                self.code.max(t, x[1], x[0]);
+                self.code.sub(t, t, x[1]);
+                self.imm(u, 1);
+                fits(self.code.slli(u, u, 16));
+                let r = self.dest(bottom, Kind::Num);
+                self.imm(r, 0);
+                self.code.moveqz(r, u, t);
+                r
+            }
+            // `wrap_unit(t) < duty`, the same max/sub test.
+            Inline::Square => {
+                let w = self.sc();
+                let m = self.sc();
+                let u = self.sc();
+                fits(self.code.extui(w, x[0], 0, 16));
+                self.code.max(m, w, x[1]);
+                self.code.sub(m, m, w);
+                self.imm(u, 1);
+                fits(self.code.slli(u, u, 16));
+                let r = self.dest(bottom, Kind::Num);
+                self.imm(r, 0);
+                self.code.movnez(r, u, m);
+                r
+            }
+            // `wrap_unit(t) < 0.5` is "bit 15 clear": `(1 - bit15) << 16`.
+            Inline::SquareHalf => {
+                let w = self.sc();
+                let u = self.sc();
+                fits(self.code.extui(w, x[0], 15, 1));
+                self.imm(u, 1);
+                self.code.sub(u, u, w);
+                let r = self.dest(bottom, Kind::Num);
+                fits(self.code.slli(r, u, 16));
+                r
+            }
+            // With `t = wrap_unit(a)`: `2t` below 0.5, `2(1 - t)` from it
+            // up — which is `1 - |2t - 1|` over the whole of [0, 1).
+            Inline::Triangle => {
+                let t = self.sc();
+                let u = self.sc();
+                fits(self.code.extui(t, x[0], 0, 16));
+                fits(self.code.slli(t, t, 1));
+                self.imm(u, 1);
+                fits(self.code.slli(u, u, 16));
+                self.code.sub(t, t, u);
+                self.code.abs(t, t);
+                let r = self.dest(bottom, Kind::Num);
+                self.code.sub(r, u, t);
+                r
+            }
+        };
+        self.truncate(bottom);
+        self.push(Kind::Num);
+        self.put(plan, bottom, Kind::Num, out)
     }
 
     /// `CallValue argc` — the callee is a run-time value.

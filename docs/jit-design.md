@@ -333,6 +333,7 @@ Fixed-point semantics are `crates/luxel-core/src/fixed.rs`, cited per row.
 | `LoadIdx` | Arr/Dyn,Num | `callx8 arr_load_dyn` → tag,payload | |
 | `StoreIdx` | any | `callx8 arr_store` | CoW promotion of `ArrRepr::Const`, byte budget |
 | `ArrLen`, `NewArray n`, `ConstArr i` | | helpers | budget errors |
+| `CallBuiltin b, argc` | inline (Gitea #942) | the kernel as instructions, no spill, no `callx8`: `abs`; `min`/`max`; `clamp` = `max; min`; `floor` = `srai 16; slli 16`; `ceil` = `neg` around floor; `round` = `addmi 0x4000` ×2 then floor; `frac` = `abs; extui 0,16; neg; movltz`, `trunc` = `x - frac`; `saturate` = `max 0; min 1.0`; `mix` = `sub` + the `Mul` row + `add`; `mod` = `beqz` guard, `rems`, `xor; moveqz; add; movltz` sign fix; `sign` = `srai 31; movgez; moveqz; slli 16`; `step`/`square` = `max; sub; moveqz`/`movnez` of 1.0; one-argument `square` = bit 15; `triangle` = `1 - |2·wrap(t) - 1|` | exact arity only (plus `square`'s default); aliases `fract`/`lerp` included; bit-identical to the `direct` kernel — `tests/inline.rs` sweeps every sequence over the `i32` edges (the full cube for three operands) and random words against the kernel and the interpreter. `min`/`max` are the MINMAX option, configured on the LX6 and the LX7 alike (`core-isa.h`; `tests/objdump.rs` decodes them with both chips' objdump); `moveqz…movgez` and `extui` are core ISA |
 | `CallBuiltin b, argc` | direct signature | args → `a10…a13; callx8 tbl[b].direct` | the numeric tier-1 set: `sin cos abs floor … hsv rgb`, plus `saturate paint setPixel` since #841 and every pure numeric `builtin_hot` arm (`hypot pow atan2 … perlin`, N5/N6/C4 for the wide ones) since #938; no `Vm` needed for pure ones, `ctx` in `a10` for `hsv`/`rgb`/`time`/`random`/`paint`/`setPixel`; a call one argument short of the signature fills the builtin's default (`table::direct_default`: `square` 0.5, `paint` 1) |
 | `CallBuiltin b, argc` | generic | box args into scratch; `a10 = ctx, a11 = &scratch, a12 = argc; callx8 tbl[b].generic` → `Ret2`/`RetDyn` | any builtin, any arity; missing args read 0 as today |
 | `CallBuiltinC/CC` | | as above with the immediates as `movi`/`l32r` | |
@@ -662,6 +663,21 @@ for the five that live there, which folds to the one arm; `Vm::paint` (the
 `bulk::set_pixel` (what the `SetPixel` arm of `builtin_cold` calls) for the
 two that do not. There is no second implementation of any builtin anywhere
 in the JIT.
+
+**The trivial ones are not calls at all (Gitea #942, 2026-10-10).** On the
+S3 `abs` cost 20 cycles, `min` 19, `clamp` 29, `mod` 40 — the `callx8`/
+`entry`/`retw` round trip and the table load around a 1–3 instruction
+kernel, plus the spill of every register-homed depth a call forces. `emit.rs`
+`inline_of` now writes `abs floor ceil round trunc frac min max clamp
+saturate mix mod sign step square triangle` (and `fract`/`lerp`) as
+instructions at their exact arity — §3.5's "inline" row has the sequences.
+The `direct` entries stay in the table for `CallValue` and the
+interpreter-through-table build; every other arity still goes direct or
+generic as before. The kernel stays the definition: a sequence that
+disagrees with `table.rs` on one input is a bug, and `tests/inline.rs` is
+the sweep that says so. Image size over the library: −19.6 KB (−1.9 %),
+290 patterns changed, 264 smaller; `triangle`/`mod`/`square` sequences are a
+few bytes longer than the call they replace, so 26 grew by ≤ 92 B.
 
 **Why `saturate`, `paint` and `setPixel` joined (Gitea #841, 2026-09-27).**
 The paint-per-cell `renderBulk` loop — Aurora 2D's and every #405

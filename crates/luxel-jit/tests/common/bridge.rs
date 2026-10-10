@@ -64,6 +64,10 @@ pub struct Bridge<'p> {
     /// the emitter chose NOT to make direct. `ops.rs` pins the tier-1 set
     /// to zero of these (Gitea #841).
     pub generic_calls: u64,
+    /// Of those, calls into a `BUILTIN_ENTRIES[id].direct` entry — what
+    /// the emitter neither boxed nor inlined. `inline.rs` pins the inline
+    /// set (Gitea #942) to zero of these.
+    pub direct_calls: u64,
     last_steps: u64,
 }
 
@@ -113,6 +117,7 @@ impl<'p> Bridge<'p> {
             abi: img.abi.clone(),
             native_calls: 0,
             generic_calls: 0,
+            direct_calls: 0,
             last_steps: 0,
         };
         b.write_ctx();
@@ -298,6 +303,9 @@ impl<'p> Bridge<'p> {
 
         if addr >= GENERIC_BASE && addr < DIRECT_BASE {
             self.generic_calls += 1;
+        }
+        if addr >= DIRECT_BASE {
+            self.direct_calls += 1;
         }
 
         // Everything else sees the VM, so the two copies of the shared

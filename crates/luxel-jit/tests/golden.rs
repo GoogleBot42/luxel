@@ -54,13 +54,17 @@ const GOLDENS: [Golden; 5] = [
     // of the five images shrank — offsets now start at 0, and more of
     // them fit `l32i.n`/`s32i.n`'s 4-bit scaled field.
     Golden { name: "rainbow.js", bytes: 160, pool: 4, fns: 2, digest: 0x18af292747f563fd },
-    Golden { name: "snake.js", bytes: 1172, pool: 12, fns: 8, digest: 0xb659400b6f6cff15 },
-    Golden { name: "snake-2d.js", bytes: 11256, pool: 51, fns: 19, digest: 0xd8a73584af0e02d7 },
+    // Re-pinned for Gitea #942 (with the two below): `abs floor clamp min
+    // max mod step square triangle` are instructions now, not a spill +
+    // argument moves + table load + `callx8` each — 44, 280, 52 and 12
+    // bytes less image. `rainbow` calls none of them.
+    Golden { name: "snake.js", bytes: 1128, pool: 12, fns: 8, digest: 0x4a58370d07e19684 },
+    Golden { name: "snake-2d.js", bytes: 10976, pool: 51, fns: 19, digest: 0xa6d98c4d866e3a4d },
     // Re-pinned for Gitea #938: its `perlin(...)` calls go direct (ctx +
     // four words in registers) instead of boxing four arguments into the
     // frame scratch for the generic wrapper — 104 bytes less image.
-    Golden { name: "perlin-fire-wind-tunnel.js", bytes: 2432, pool: 22, fns: 10, digest: 0x76b1ddddea324259 },
-    Golden { name: "bulk-canvas-ripples-2d.js", bytes: 3576, pool: 19, fns: 11, digest: 0xafeb58cfc53c5133 },
+    Golden { name: "perlin-fire-wind-tunnel.js", bytes: 2380, pool: 22, fns: 10, digest: 0x88e49888bb74aa2e },
+    Golden { name: "bulk-canvas-ripples-2d.js", bytes: 3564, pool: 19, fns: 11, digest: 0xe3e38d261d1f240d },
 ];
 
 #[test]
