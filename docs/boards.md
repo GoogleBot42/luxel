@@ -2805,6 +2805,17 @@ branch at 4117448e, same host build, same probes via `POST /api/code`):
   `paste`, text, compose, blur/glow): ripples' VM doubled yet its fps rose
   because the pack bounded it; Aurora's exact path (one `gridIndex` + one
   `setPixel` per cell) is ~10 % slower in VM. Row-run iteration is Gitea #953.
+  **First slice of #953 (2026-10-10, same board):** `fillCanvas`/`paintCanvas`
+  on a tiled grid walk the FRAME in slot order through the `TileCursor` and
+  sample the canvas by cell (two per-axis tables, one texel per canvas-cell
+  change), so the writes are sequential again — VM ms before → after:
+  ripples 24.5 → 18.0 (33 → 35 fps), flow-field-2d 23.7 → 17.5,
+  nyan-lights 19.2 → 11.9, ice-floes-2d 24.0 → 18.6 (34 → 36 fps); the
+  empty render2D and Aurora's exact path unchanged. The ~6 ms ripples still
+  sits above master's 11.6 is the per-pixel write loop against the block
+  expand's run fills — the rest of #953. Aurora's exact path cannot become a
+  full-resolution `paintCanvas`: two 16384-element canvases are over the
+  array budget, which is why the pattern has an exact path at all.
 - **Picture proof**: `/api/pixels` of a static `rgb(x, y, .25)` probe, decoded
   through `Tiling::cell` (a Python mirror checked against the Rust formula on
   all 16384 slots), equals master's row-major frame pixel for pixel; a 1D

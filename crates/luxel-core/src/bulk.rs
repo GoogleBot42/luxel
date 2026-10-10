@@ -750,6 +750,13 @@ fn canvas_fill(
     texel: &mut dyn FnMut(usize) -> [u8; 3],
 ) {
     if let Some(gv) = grid_view(vm, frame.len()) {
+        // A tiled chain (Gitea #948/#953): walk the FRAME in slot order so
+        // the writes are sequential, and sample the canvas by cell. The
+        // block expand below walks the GRID, and on a quarter-turned tile
+        // that is one PSRAM line fill per pixel written.
+        if gv.g.tiling.is_some() && canvas_fill_slots(vm, &gv, frame, cw, ch, texel) {
+            return;
+        }
         if let Some((bw, bh)) = canvas_blocks(&gv, cw, ch) {
             let mut r = 0;
             for cr in 0..ch {
@@ -774,6 +781,57 @@ fn canvas_fill(
         let t = cell_index(p[1], ch) * cw + cell_index(p[0], cw);
         frame[i] = texel(t);
     }
+}
+
+/// [`canvas_fill`] on a tiled grid: the frame in SLOT order through a
+/// [`crate::outpipe::TileCursor`] (a step per slot), the canvas cell of each
+/// slot from two per-axis tables built once per call (`cell_index` of each
+/// grid column's x and each grid row's y — the scan's own arithmetic, so the
+/// two paths agree byte for byte), and one `texel` per canvas-cell CHANGE:
+/// consecutive slots of an upright tile share a canvas cell for `bw` slots
+/// and of a quarter-turned one for `bh`, so a coarse canvas costs about the
+/// texel count the block expand paid, while the writes — the expensive side
+/// on PSRAM — stay sequential. A full-resolution canvas is one texel per
+/// pixel on either path.
+///
+/// `false` when this layout has no cursor (a 1/N-scan panel) or the tables
+/// would not allocate; the caller then takes the generic scan.
+#[inline(never)]
+fn canvas_fill_slots(
+    vm: &Vm,
+    gv: &GridView,
+    frame: &mut [[u8; 3]],
+    cw: usize,
+    ch: usize,
+    texel: &mut dyn FnMut(usize) -> [u8; 3],
+) -> bool {
+    if gv.fast != 0 {
+        return false;
+    }
+    let Some(mut cur) = vm.grid_cursor(0) else {
+        return false;
+    };
+    let (w, h) = (gv.g.w as usize, gv.g.h as usize);
+    let mut cells: alloc::vec::Vec<u32> = alloc::vec::Vec::new();
+    if cells.try_reserve_exact(w + h).is_err() {
+        return false;
+    }
+    cells.extend((0..w).map(|c| cell_index(gv.coord(0, c)[0], cw) as u32));
+    cells.extend((0..h).map(|r| (cell_index(gv.coord(r, 0)[1], ch) * cw) as u32));
+    let (xs, ys) = cells.split_at(w);
+    let mut last = usize::MAX;
+    let mut px = [0u8; 3];
+    for dst in frame.iter_mut() {
+        let (r, c) = cur.cell();
+        let t = (ys[r] + xs[c]) as usize;
+        if t != last {
+            px = texel(t);
+            last = t;
+        }
+        *dst = px;
+        cur.advance();
+    }
+    true
 }
 
 /// `fillCanvas(hArr, sArr, vArr, w, h)`: sample a w×h row-major canvas
@@ -969,6 +1027,17 @@ mod tests {
         /// An explicit coordinate map — `detect_grid` decides whether it
         /// reads as a grid.
         Coords(Vec<[Fx; 3]>),
+        /// A HUB75 chain's grid in wire order (Gitea #948): the frame is in
+        /// driver order and every grid op goes through the tiling.
+        Tiled(&'static crate::outpipe::Tiling),
+    }
+
+    /// Jeremy's 2x2 wall at tile size `pw`: four quarter-turned tiles,
+    /// `chain 1,0,270 1,1,270 0,1,90 0,0,90`.
+    fn wall_2x2(pw: u16) -> &'static crate::outpipe::Tiling {
+        crate::outpipe::Tiling::new(pw, pw, 2, 2, 0, &[(1, 0, 3), (1, 1, 3), (0, 1, 1), (0, 0, 1)])
+            .unwrap()
+            .leak()
     }
 
     /// A W×H row-major (or serpentine) map in host coordinate units.
@@ -999,6 +1068,11 @@ mod tests {
             Rig::Strip => {}
             Rig::Grid(w, h) => e.set_grid_map(*w, *h),
             Rig::Coords(c) => assert!(e.set_map(2, c)),
+            Rig::Tiled(t) => {
+                e.set_wire_tiling(Some(t));
+                e.set_grid_map(t.width(), t.height());
+                assert!(e.grid().and_then(|g| g.tiling).is_some(), "the tiling was dropped");
+            }
         }
         e
     }
@@ -1537,11 +1611,17 @@ mod tests {
                    fillCanvas(hs, 1, 1, {cw}, {ch})\n\
                  }}"
             );
-            for (name, rig) in [
+            let mut rigs = alloc::vec![
                 ("procedural", Rig::Grid(gw as u16, gh as u16)),
                 ("coords", Rig::Coords(grid_coords(gw, gh, false))),
                 ("coords serpentine", Rig::Coords(grid_coords(gw, gh, true))),
-            ] {
+            ];
+            // a square grid is also a 2x2 wall of quarter-turned tiles: the
+            // slot-order path (Gitea #953) against the same scan
+            if gw == gh && gw % 2 == 0 {
+                rigs.push(("tiled 2x2", Rig::Tiled(wall_2x2((gw / 2) as u16))));
+            }
+            for (name, rig) in rigs {
                 let (scan, fast) = scan_and_fast(&src, n as u32, &rig);
                 assert_eq!(scan, fast, "{gw}x{gh} grid, {cw}x{ch} canvas, {name}");
                 assert!(
@@ -1592,6 +1672,21 @@ mod tests {
                     frame1(&loopy, n as u32, &rig),
                     "{w}x{h} {name}"
                 );
+            }
+            // On a tiled wall `setPixel(i)` is a wire slot, not a cell, so
+            // the loop is spelled through gridIndex — and paintCanvas's
+            // slot-order path (Gitea #953) must match it and its own scan.
+            if w == h && w % 2 == 0 {
+                let rig = Rig::Tiled(wall_2x2((w / 2) as u16));
+                let cells = alloc::format!(
+                    "{head}export function renderBulk() {{\n\
+                       for (r = 0; r < {h}; r++) {{ for (c = 0; c < {w}; c++) {{\n\
+                         paint(vs[r * {w} + c], bs[r * {w} + c])\n setPixel(gridIndex(c, r)) }} }}\n\
+                     }}"
+                );
+                let (scan, fast) = scan_and_fast(&bulk, n as u32, &rig);
+                assert_eq!(scan, fast, "{w}x{h} tiled: slot path vs scan");
+                assert_eq!(fast, frame1(&cells, n as u32, &rig), "{w}x{h} tiled: vs gridIndex loop");
             }
         }
         // the brightness argument is optional and defaults to 1

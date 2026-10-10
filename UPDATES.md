@@ -1,5 +1,18 @@
 # Update log
 
+## 2026-10-10 — fillCanvas/paintCanvas walk the frame in slot order on a tiled grid (#953, first slice)
+
+After #948 the canvas block expand walked the engine GRID and, on a
+quarter-turned tile, wrote one PSRAM cache line per pixel (ripples 11.6 →
+24.5 ms VM on the 2x2). `bulk::canvas_fill_slots`: a tiled grid walks the
+FRAME through the `TileCursor` (sequential writes) and samples the canvas by
+cell from two per-axis tables, one texel per canvas-cell change. Byte-
+identical to the scan and to a `gridIndex` loop (new tiled rigs in the bulk
+tests). On the 2x2 at 16384 px: ripples 24.5 → 18.0 ms, flow-field 23.7 →
+17.5, nyan-lights 19.2 → 11.9, ice-floes 24.0 → 18.6 (docs/boards.md). No
+pattern or API change. `blit`, text, compose and the 2D blur/glow still pay
+`index()` per cell — the rest of #953.
+
 ## 2026-10-10 — renderBulk replaces renderFrame; the frame is in wire order on a HUB75 chain (#948)
 
 Jeremy's 2026-10-05 decision: the engine writes `pixels[i]` in the order the
