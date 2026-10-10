@@ -650,7 +650,7 @@ impl LiveArrangement {
                 // engine space, written through the chain's tiling into
                 // driver order like any frame (Gitea #948)
                 let t = crate::layout::wire_tiling();
-                luxel_hub75::card::cells(buf, &m, &crate::layout::tiles(), t.as_ref());
+                luxel_hub75::card::cells(buf, &m, &crate::layout::tiles(), t);
             }
             luxel_core::layout::Card::Off => {}
         }

@@ -248,7 +248,7 @@ pub struct Engine {
     /// [`crate::outpipe::GridMap`], a coordinate map is permuted into wire
     /// order on install. `None` on every other host — the frame is then
     /// row-major / index order, as it always was.
-    wire_tiling: Option<crate::outpipe::Tiling>,
+    wire_tiling: Option<&'static crate::outpipe::Tiling>,
     /// An `assert()` invariant failed during init: rendering is blocked
     /// for this engine's lifetime (map installs must not resurrect it —
     /// the fix is a config change, which rebuilds the engine).
@@ -570,7 +570,7 @@ impl Engine {
     /// is installed. Call it BEFORE installing the map; a procedural grid
     /// already installed is re-installed here, a coordinate map is not
     /// (install it again).
-    pub fn set_wire_tiling(&mut self, t: Option<crate::outpipe::Tiling>) {
+    pub fn set_wire_tiling(&mut self, t: Option<&'static crate::outpipe::Tiling>) {
         if self.wire_tiling == t {
             return;
         }
@@ -581,7 +581,7 @@ impl Engine {
     }
 
     /// The chain [`Engine::set_wire_tiling`] installed, if any.
-    pub fn wire_tiling(&self) -> Option<crate::outpipe::Tiling> {
+    pub fn wire_tiling(&self) -> Option<&'static crate::outpipe::Tiling> {
         self.wire_tiling
     }
 
@@ -1342,7 +1342,7 @@ impl Engine {
                 }
                 _ => None,
             };
-            permute_into_wire(&mut coords, &t);
+            permute_into_wire(&mut coords, t);
         }
         self.vm.frame_grid = self.grid;
         for axis in 0..(dims as usize).min(3) {

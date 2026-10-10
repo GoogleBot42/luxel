@@ -62,7 +62,7 @@ static LAYOUT: Shared<Option<Layout>> = BlockingMutex::new(RefCell::new(None));
 /// whole grid. Computed outside any lock (it is ~16k cell evaluations), so
 /// a Layout written meanwhile is caught by the generation, not by clearing.
 #[cfg(feature = "hub75")]
-static WIRE: Shared<Option<(u32, Option<luxel_core::outpipe::Tiling>)>> = BlockingMutex::new(RefCell::new(None));
+static WIRE: Shared<Option<(u32, Option<&'static luxel_core::outpipe::Tiling>)>> = BlockingMutex::new(RefCell::new(None));
 #[cfg(feature = "hub75")]
 static LAYOUT_GEN: AtomicU32 = AtomicU32::new(0);
 
@@ -368,7 +368,7 @@ pub fn tiles() -> alloc::vec::Vec<luxel_core::layout::Tile> {
 /// map on a panel board still feeds the same chain, and the engine permutes
 /// it into wire order on install. `None` on a board without a panel.
 /// Computed once per stored Layout (see `WIRE`).
-pub fn wire_tiling() -> Option<luxel_core::outpipe::Tiling> {
+pub fn wire_tiling() -> Option<&'static luxel_core::outpipe::Tiling> {
     #[cfg(feature = "hub75")]
     {
         let gen = LAYOUT_GEN.load(Ordering::Acquire);
@@ -377,7 +377,10 @@ pub fn wire_tiling() -> Option<luxel_core::outpipe::Tiling> {
                 return w;
             }
         }
-        let w = luxel_hub75::arrange::tiling(&matrix(), &tiles()).filter(|t| !t.is_identity());
+        // Leaked (~140 B) once per stored Layout, as the remap table it
+        // replaces was: `GridMap` carries it by reference so a copy of the
+        // grid stays 8 bytes in every frame hand-off and task future.
+        let w = luxel_hub75::arrange::tiling(&matrix(), &tiles()).filter(|t| !t.is_identity()).map(|t| t.leak());
         WIRE.lock(|c| *c.borrow_mut() = Some((gen, w)));
         w
     }

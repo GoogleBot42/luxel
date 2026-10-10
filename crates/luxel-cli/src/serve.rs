@@ -1388,7 +1388,12 @@ fn apply_map_wire(state: &State, body: &str) -> (bool, usize) {
 /// Layout, or a chain `Tiling::new` refuses (the row-major grid then, as a
 /// board falls back too); a scan that does not divide the panel reads as the
 /// panel's own, like `arrange::scan_stripes`.
-fn wire_tiling(state: &State) -> Option<luxel_core::outpipe::Tiling> {
+fn wire_tiling(state: &State) -> Option<&'static luxel_core::outpipe::Tiling> {
+    // One leaked Tiling per distinct arrangement (~140 B each, see
+    // `GridMap::tiling`), cached by the chain that produced it: this runs on
+    // every engine rebuild, and a chain edit is the only thing that changes it.
+    static CACHE: std::sync::Mutex<Vec<(luxel_core::layout::Matrix, Vec<(u8, u8, u8)>, Option<&'static luxel_core::outpipe::Tiling>)>> =
+        std::sync::Mutex::new(Vec::new());
     if !state.hw.panel {
         return None;
     }
@@ -1399,8 +1404,14 @@ fn wire_tiling(state: &State) -> Option<luxel_core::outpipe::Tiling> {
     let m = l.matrix;
     let chain: Vec<(u8, u8, u8)> = l.tiles().iter().map(|t| (t.cx, t.cy, t.turns)).collect();
     drop(l);
+    let mut cache = CACHE.lock().unwrap();
+    if let Some((_, _, t)) = cache.iter().find(|(cm, cc, _)| *cm == m && *cc == chain) {
+        return *t;
+    }
     let tiling = |scan| luxel_core::outpipe::Tiling::new(m.pw, m.ph, m.cols, m.rows, scan, &chain);
-    tiling(u16::from(m.scan)).or_else(|| tiling(0))
+    let t = tiling(u16::from(m.scan)).or_else(|| tiling(0)).map(|t| t.leak());
+    cache.push((m, chain, t));
+    t
 }
 
 /// Apply the installed map to an engine (no-op if none), then the projection

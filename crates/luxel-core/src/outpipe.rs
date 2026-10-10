@@ -268,7 +268,13 @@ pub struct GridMap {
     /// The frame is in HUB75 DRIVER order over a chain of tiles rather than
     /// row-major over the grid (Gitea #948). `None` for every grid that is
     /// row-major (or serpentine) by index — the identity case costs nothing.
-    pub tiling: Option<Tiling>,
+    /// A REFERENCE, not the 140-byte value: a `GridMap` is copied into every
+    /// frame hand-off, task future and compositor on the firmware, and the
+    /// value form cost classic boards ~1.9 KB of leftover DRAM (the
+    /// stack-check floor). A chain is a once-per-boot / once-per-edit object
+    /// — [`Tiling::leak`] is how it becomes `'static`, exactly as the remap
+    /// table it replaces was leaked at boot.
+    pub tiling: Option<&'static Tiling>,
 }
 
 impl GridMap {
@@ -281,7 +287,7 @@ impl GridMap {
     /// tiling that comes out row-major (one upright tile; two upright tiles
     /// side by side with IN on the right) is dropped, so a plain panel takes
     /// exactly the untiled path.
-    pub fn tiled(t: Tiling) -> GridMap {
+    pub fn tiled(t: &'static Tiling) -> GridMap {
         let (w, h) = (t.width(), t.height());
         let tiling = if t.is_identity() { None } else { Some(t) };
         GridMap { w, h, serpentine: false, tiling }
@@ -412,6 +418,13 @@ impl Tiling {
             t.tiles[p] = [cx, cy, turns];
         }
         Some(t)
+    }
+
+    /// Pin the tiling for the life of the program. ~140 B, once per boot
+    /// or per live arrangement edit — the price of keeping `GridMap` `Copy`
+    /// and 8 bytes (see the field's docs).
+    pub fn leak(self) -> &'static Tiling {
+        alloc::boxed::Box::leak(alloc::boxed::Box::new(self))
     }
 
     /// Number of tiles the chain threads (and the driver drives).
@@ -1041,14 +1054,14 @@ mod tests {
 
     #[test]
     fn a_single_upright_tile_is_the_identity_and_is_dropped() {
-        let t = Tiling::new(64, 64, 1, 1, 0, &[(0, 0, 0)]).unwrap();
+        let t = Tiling::new(64, 64, 1, 1, 0, &[(0, 0, 0)]).unwrap().leak();
         assert!(t.is_identity());
         assert_eq!(GridMap::tiled(t), GridMap::new(64, 64, false));
         // two upright tiles side by side, IN on the right: identity too
         let t = Tiling::new(4, 4, 2, 1, 0, &[(1, 0, 0), (0, 0, 0)]).unwrap();
         assert!(t.is_identity());
         // the other way round is not
-        let t = Tiling::new(4, 4, 2, 1, 0, &[(0, 0, 0), (1, 0, 0)]).unwrap();
+        let t = Tiling::new(4, 4, 2, 1, 0, &[(0, 0, 0), (1, 0, 0)]).unwrap().leak();
         assert!(!t.is_identity());
         assert_eq!(GridMap::tiled(t).tiling, Some(t));
     }
@@ -1057,7 +1070,7 @@ mod tests {
     fn every_chain_is_a_permutation_and_cell_inverts_index() {
         for (cols, rows, scan) in [(2u8, 2u8, 0u16), (3, 2, 0), (1, 1, 0), (4, 1, 0), (1, 3, 0), (2, 2, 1), (2, 1, 1)] {
             for chain in all_chains(cols, rows) {
-                let t = Tiling::new(4, 4, cols, rows, scan, &chain).unwrap_or_else(|| panic!("{chain:?}"));
+                let t = Tiling::new(4, 4, cols, rows, scan, &chain).unwrap_or_else(|| panic!("{chain:?}")).leak();
                 let g = GridMap::tiled(t);
                 assert_eq!((g.w, g.h), (4 * cols as u16, 4 * rows as u16));
                 let n = t.len();
