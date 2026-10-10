@@ -4006,7 +4006,7 @@ try {
   );
   const kindOf = new Map(galleryJson.map((p) => [p.name, p.kind]));
   // "any" is the generator's DIMENSIONLESS kind — an index-space
-  // `renderFrame` that declares no geometry and is native on EVERY Layout, so
+  // `renderBulk` that declares no geometry and is native on EVERY Layout, so
   // a strip offers it exactly as it offers a "strip" one. Only "grid" and
   // "cloud" are the ones a 1D fixture must hide (#538/#629).
   check(

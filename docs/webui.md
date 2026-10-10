@@ -223,8 +223,8 @@ engine uses to decide whether to install its own default grid map:
 
 | compiled pattern | rig |
 |---|---|
-| `render` only, or `renderFrame` in index space (`fillHSV`, `fade`, `setPixel`) | unchanged (a strip stays a strip) |
-| `render2D`, or `renderFrame` + a coordinate/grid-space bulk op (`fillRect`, `fillCircle`, `splat`, `drawLine`, `fillCanvas`, `blit`, `gridWidth`, `gridHeight`) | grid |
+| `render` only, or `renderBulk` in index space (`fillHSV`, `fade`, `setPixel`) | unchanged (a strip stays a strip) |
+| `render2D`, or `renderBulk` + a coordinate/grid-space bulk op (`fillRect`, `fillCircle`, `splat`, `drawLine`, `fillCanvas`, `paintCanvas`, `blit`, `gridWidth`, `gridHeight`, `gridIndex`) | grid |
 | `render3D` and nothing 2D | the rotating cube-lattice map (playground only — on a device the pixel count is hardware truth) |
 
 Reading the compiled program rather than the source text means a `render2D`

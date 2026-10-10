@@ -254,7 +254,7 @@
   }
 
   /** `1D`/`2D`/`3D` (mockups S2c `Sunset Fade · 1D`, S2d `Aurora 2D · 2D`),
-   *  and "" for a DIMENSIONLESS pattern: an index-space `renderFrame` declares
+   *  and "" for a DIMENSIONLESS pattern: an index-space `renderBulk` declares
    *  no geometry, so there is no dimensionality to state and the name stands
    *  alone. Calling it `1D` was the visible half of the bug — it read as "a
    *  strip pattern", which is what the projection row then offered to project

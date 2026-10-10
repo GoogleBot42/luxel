@@ -1382,10 +1382,35 @@ fn apply_map_wire(state: &State, body: &str) -> (bool, usize) {
     out
 }
 
+/// The HUB75 chain a `--board panel` mirror's Layout describes, as the
+/// engine's wire tiling — what `luxel_hub75::arrange::tiling` builds on a
+/// board, from the core types alone. `None` on a strip mirror, a non-matrix
+/// Layout, or a chain `Tiling::new` refuses (the row-major grid then, as a
+/// board falls back too); a scan that does not divide the panel reads as the
+/// panel's own, like `arrange::scan_stripes`.
+fn wire_tiling(state: &State) -> Option<luxel_core::outpipe::Tiling> {
+    if !state.hw.panel {
+        return None;
+    }
+    let l = state.layout.lock().unwrap();
+    if l.kind != luxel_core::layout::LayoutKind::Matrix {
+        return None;
+    }
+    let m = l.matrix;
+    let chain: Vec<(u8, u8, u8)> = l.tiles().iter().map(|t| (t.cx, t.cy, t.turns)).collect();
+    drop(l);
+    let tiling = |scan| luxel_core::outpipe::Tiling::new(m.pw, m.ph, m.cols, m.rows, scan, &chain);
+    tiling(u16::from(m.scan)).or_else(|| tiling(0))
+}
+
 /// Apply the installed map to an engine (no-op if none), then the projection
 /// defaults — a map install re-derives the engine's projection plan, so the
 /// order matters.
 fn apply_map(state: &State, engine: &mut Engine) {
+    // The chain first (Gitea #948): a panel mirror's frame is in WIRE order
+    // like a HUB75 board's, so `/api/pixels` reads the same bytes a device
+    // would serve. Before the map, which `set_map` permutes through it.
+    engine.set_wire_tiling(wire_tiling(state));
     if let Some((dims, coords)) = state.device_map.lock().unwrap().as_ref() {
         engine.set_map(*dims, coords);
     }

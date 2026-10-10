@@ -100,13 +100,13 @@ export const previewAs: Writable<PreviewAs> = writable(loadPreviewAs() ?? DEFAUL
 previewAs.subscribe((v) => savePreviewAs(v));
 
 /** What the pattern in the editor DECLARES (`Engine.patternDims()`):
- *  0 = dimensionless (an index-space `renderFrame` — native on every Layout),
- *  1 = `render`, 2 = `render2D` or a grid-space `renderFrame`, 3 = `render3D`.
+ *  0 = dimensionless (an index-space `renderBulk` — native on every Layout),
+ *  1 = `render`, 2 = `render2D` or a grid-space `renderBulk`, 3 = `render3D`.
  *  Auto follows it (D7). Written by the editor after each successful compile
  *  — never parsed out of the source text.
  *
  *  Not `preferredDims()`, which answers "does this pattern want a map" and
- *  folds `render` and `renderFrame` into the same 0: the two pick the same
+ *  folds `render` and `renderBulk` into the same 0: the two pick the same
  *  Auto rig, but only this one tells a 1D pattern (projectable along an axis)
  *  from a dimensionless one (nothing to project). */
 export const patternDims: Writable<PatternDims> = writable(0);

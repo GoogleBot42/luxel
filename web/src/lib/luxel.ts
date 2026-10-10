@@ -711,7 +711,7 @@ export class Engine {
   }
 
   /** The geometry the COMPILED pattern asks for — 0 = strip, 2 = a 2D grid
-   *  (`render2D`, or `renderFrame` plus a coordinate/grid-space bulk op),
+   *  (`render2D`, or `renderBulk` plus a coordinate/grid-space bulk op),
    *  3 = a 3D point cloud (`render3D` only). Read off the compiled program,
    *  not the source text, so a `render2D` in a comment or a string never
    *  counts. The playground picks its default preview rig from this
@@ -722,13 +722,13 @@ export class Engine {
   }
 
   /** The dimensionality the pattern DECLARES: 0 = dimensionless (only
-   *  `renderFrame`, painting in index space — native on every Layout, no
+   *  `renderBulk`, painting in index space — native on every Layout, no
    *  projection anywhere), 1 = `render(index)`, 2 = `render2D` or a
-   *  grid-space `renderFrame`, 3 = `render3D`.
+   *  grid-space `renderBulk`, 3 = `render3D`.
    *
    *  This, not [`preferredDims`], is what a projection surface asks: that one
    *  answers "does this pattern want a map installed" and folds `render` and
-   *  `renderFrame` into one 0, while a picker has to tell a 1D pattern
+   *  `renderBulk` into one 0, while a picker has to tell a 1D pattern
    *  (projectable along an axis) from a dimensionless one. A build older than
    *  the export falls back to the old collapse. */
   patternDims(): 0 | 1 | 2 | 3 {
