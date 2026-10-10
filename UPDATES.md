@@ -1,5 +1,24 @@
 # Update log
 
+## 2026-10-10 — JIT: the trivial builtins are instructions, not calls (#942)
+
+`abs floor ceil round trunc frac min max clamp saturate mix mod sign step
+square triangle` (plus `fract`/`lerp`) are emitted inline at their exact
+arity (`emit.rs` `inline_of`/`inline_builtin`): no spill of the register-
+homed depths, no argument moves, no table load, no `callx8`. New encoders
+`min max moveqz movnez movltz movgez extui` (MINMAX is configured on both the
+ESP32 and the S3 — `core-isa.h`, and `tests/objdump.rs` now disassembles the
+new forms with both chips' objdump), the ISA model executes them with
+selftests, and `tests/inline.rs` drives every call-site shape (register
+homes, frame homes, `Dyn`, `CallBuiltinC/CC` immediates, aliasing, nesting)
+through the model over the full `i32` edge cube plus random words against the
+`table.rs` kernel and the interpreter. Library JIT image −19.6 KB (−1.9 %);
+four goldens re-pinned (snake −44 B, snake-2d −280 B, perlin-fire −52 B,
+bulk-canvas-ripples −12 B). Unit 2 (builtinbench, cycles/call, before →
+after): abs 16 → ~0, floor 23 → ~0, frac 22 → 2, clamp 21 → ~0, min 24 →
+~0, mix 27 → 5, mod 32 → 15, triangle 32 → 9; geometry-morphing-demo-2d
+106.0 → 101.4 ms VM at 16,384 px.
+
 ## 2026-10-10 — all-number arrays stored as 4-byte words (#947)
 
 `ArrRepr::Num(ArrVec<u32>)` holds an all-number array as raw 16.16 words:

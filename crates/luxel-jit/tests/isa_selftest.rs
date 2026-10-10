@@ -164,6 +164,66 @@ fn arithmetic_and_logic_match_a_rust_reference() {
     }
 }
 
+/// `min`/`max` are SIGNED (the MINMAX option's `min`, not `minu`), and a
+/// conditional move leaves its destination untouched when the test fails —
+/// the inline builtins of Gitea #942 lean on both.
+#[test]
+fn minmax_and_conditional_moves_match_a_rust_reference() {
+    const KEEP: u32 = 0xdead_beef;
+    for &x in &OPS {
+        for &y in &OPS {
+            let cpu = exec(
+                &[
+                    (A3, x as u32),
+                    (A4, y as u32),
+                    (A7, KEEP),
+                    (A8, KEEP),
+                    (A9, KEEP),
+                    (A10, KEEP),
+                ],
+                |a| {
+                    a.min(A5, A3, A4);
+                    a.max(A6, A3, A4);
+                    a.moveqz(A7, A3, A4);
+                    a.movnez(A8, A3, A4);
+                    a.movltz(A9, A3, A4);
+                    a.movgez(A10, A3, A4);
+                    // the destination aliasing a source
+                    a.mov_n(A11, A3);
+                    a.min(A11, A11, A4);
+                    a.mov_n(A12, A4);
+                    a.max(A12, A3, A12);
+                },
+            );
+            let m = format!("x={x} y={y}");
+            let pick = |c: bool| if c { x as u32 } else { KEEP };
+            assert_eq!(cpu.ar(A5), x.min(y) as u32, "min {m}");
+            assert_eq!(cpu.ar(A6), x.max(y) as u32, "max {m}");
+            assert_eq!(cpu.ar(A7), pick(y == 0), "moveqz {m}");
+            assert_eq!(cpu.ar(A8), pick(y != 0), "movnez {m}");
+            assert_eq!(cpu.ar(A9), pick(y < 0), "movltz {m}");
+            assert_eq!(cpu.ar(A10), pick(y >= 0), "movgez {m}");
+            assert_eq!(cpu.ar(A11), x.min(y) as u32, "min in place {m}");
+            assert_eq!(cpu.ar(A12), x.max(y) as u32, "max in place {m}");
+        }
+    }
+}
+
+#[test]
+fn extui_extracts_every_field() {
+    for &x in &OPS {
+        for shift in 0..32u32 {
+            for bits in 1..=16u32 {
+                let cpu = exec(&[(A3, x as u32)], move |a| {
+                    assert!(a.extui(A4, A3, shift, bits));
+                });
+                let want = ((x as u32) >> shift) & ((1u32 << bits) - 1);
+                assert_eq!(cpu.ar(A4), want, "extui {x:#x} >> {shift}, {bits} bits");
+            }
+        }
+    }
+}
+
 #[test]
 fn addi_addi_n_and_addmi_wrap() {
     for &x in &OPS {
