@@ -812,7 +812,7 @@ fn canvas_fill_slots(
         return false;
     };
     let (w, h) = (gv.g.w as usize, gv.g.h as usize);
-    let mut cells: Vec<u32> = Vec::new();
+    let mut cells: alloc::vec::Vec<u32> = alloc::vec::Vec::new();
     if cells.try_reserve_exact(w + h).is_err() {
         return false;
     }
