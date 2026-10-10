@@ -8,7 +8,8 @@
 //!
 //! ## What lives here and what must not
 //!
-//! `ArrRepr::Owned` element storage, each engine's per-frame pixel buffer
+//! Pattern-array element storage (`ArrRepr::Owned` values and, since
+//! #947, `ArrRepr::Num` words), each engine's per-frame pixel buffer
 //! (`luxel_core::arena::FrameVec`, Gitea #709), and — since #777 — every
 //! other whole-frame RGB888 buffer a frame passes through: the pipeline's
 //! staging buffer and travelling hand-off buffer (`pipeline.rs`) and the

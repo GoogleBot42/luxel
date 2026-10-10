@@ -47,7 +47,8 @@ pub const TIGHT_PERCENT: usize = 85;
 /// The array-arena byte budget the firmware grants a pattern loading against
 /// `heap_free` bytes of free heap.
 ///
-/// Byte-accurate (elements × 8 + per-array overhead), so one big array isn't
+/// Byte-accurate (elements × 4 for an all-number array, × 8 for one that
+/// holds handles, + per-array overhead; Gitea #947), so one big array isn't
 /// taxed for overhead that only swarms of tiny arrays pay.
 ///
 /// The device reads `esp_alloc::HEAP.free()` inside `budgeted_engine`, i.e.
@@ -92,10 +93,19 @@ pub const fn external_array_budget(heap_free: usize, arena_free: usize) -> usize
     }
 }
 
-/// Bytes one arena element costs. Pinned against the real `Value` below,
-/// because [`external_element_budget`] converts between the two ledgers.
+/// Bytes one element of a `Value`-form arena array costs (an array that
+/// holds a handle — another array, a function). Pinned against the real
+/// `Value` below.
 pub const BYTES_PER_ELEMENT: usize = 8;
 const _: () = assert!(core::mem::size_of::<crate::vm::Value>() == BYTES_PER_ELEMENT);
+
+/// Bytes one element of an all-number arena array costs: the word form
+/// (`ArrRepr::Num`, Gitea #947) stores the raw 16.16 word alone, so
+/// `array(n)` — every per-pixel state and canvas buffer — costs half of
+/// [`BYTES_PER_ELEMENT`]. This is the CHEAPEST element, which is what
+/// [`external_element_budget`] divides by.
+pub const BYTES_PER_NUM_ELEMENT: usize = 4;
+const _: () = assert!(core::mem::size_of::<crate::fixed::Fx>() == BYTES_PER_NUM_ELEMENT);
 
 /// Element ledger to pair with [`external_array_budget`].
 ///
@@ -106,11 +116,16 @@ const _: () = assert!(core::mem::size_of::<crate::vm::Value>() == BYTES_PER_ELEM
 /// the bytes do the work. `crate::vm::MAX_ARENA_SLOTS` independently bounds
 /// the slot vector, which stays on the ordinary allocator.
 ///
+/// "Stop binding" means dividing by the CHEAPEST element,
+/// [`BYTES_PER_NUM_ELEMENT`]: since the word form (Gitea #947) an
+/// all-number array costs 4 B/element, so a ledger of `bytes / 8` would
+/// bind at half the arena and hand back the capacity #947 bought.
+///
 /// This is a deliberate, board-scoped divergence from PB: a pattern that a
 /// real Pixel Blaze rejects with "array element budget exceeded" can run
 /// here. Every board without an arena keeps the PB number exactly.
 pub const fn external_element_budget(array_byte_budget: usize) -> usize {
-    array_byte_budget / BYTES_PER_ELEMENT
+    array_byte_budget / BYTES_PER_NUM_ELEMENT
 }
 
 /// Free heap a pattern load actually starts from, given the two numbers

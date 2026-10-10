@@ -80,6 +80,20 @@ must not renumber or reorder the variants — the tag values are also the
   is made, so a promotion that would exceed the budget raises the same
   ordinary runtime error an over-budget `array(n)` does (it aborts the
   current entry point only; Gitea #132).
+- **Element storage has two forms** (Gitea #947). An array holding only
+  numbers is stored as raw 16.16 words, 4 bytes per element: `array(n)`,
+  a literal whose values are all numbers, and the copy-on-write copy of a
+  const literal all start that way. The first store of a NON-number (an
+  array, function or builtin handle) through any path — `a[i] = h`,
+  `arrayReplace`, `canvasSet`, an `arrayMapTo` callback's result —
+  promotes that array in place to 8-byte tagged values, and nothing ever
+  demotes it. The promotion charges the 4 B/element difference to
+  `array_byte_budget` before it allocates, exactly like the const
+  copy-on-write above: over budget it is the same ordinary runtime error,
+  and the array is left as it was. The PB-compatible ELEMENT ledger
+  counts elements, not bytes, so neither form nor a promotion touches it.
+  The two forms are indistinguishable to a pattern: a word reads back as
+  exactly the number that was stored, so output is byte-identical.
 - Indexing truncates fractional indices toward zero — for reads **and**
   writes, literal and variable index alike — and the bounds check runs on
   the truncated index, so `a[3.5]` on a 3-slot array is out of range. Any

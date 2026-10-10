@@ -1864,7 +1864,7 @@ fn the_byte_budget_refusal_names_the_numbers_and_keeps_its_tail() {
     assert!(m.contains("array memory budget exceeded"), "{m}");
     assert!(m.contains("pattern too large for this device"), "{m}");
     assert!(m.contains("4096 B"), "{m}"); // the budget
-    assert!(m.contains("16032 B"), "{m}"); // 2000 x 8 + 32, what it needed
+    assert!(m.contains("8032 B"), "{m}"); // 2000 x 4 + 32 (word form, #947)
     assert!(luxel_core::vm::is_array_budget_error(m), "{m}");
 }
 
