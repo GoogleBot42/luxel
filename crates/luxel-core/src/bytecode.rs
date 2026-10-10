@@ -76,6 +76,11 @@ pub enum BcError {
     /// The blob was produced for a different format version. Hosts with a
     /// compiler react by recompiling from source; devices surface it.
     Version { found: u16 },
+    /// The blob is this format version but was compiled against a language
+    /// surface this build no longer has — an export it refuses (Gitea #948:
+    /// `renderFrame`). Hosts react exactly as to [`BcError::Version`]:
+    /// recompile from source, which then reports the real fix.
+    Stale(&'static str),
     Malformed(String),
 }
 
@@ -86,10 +91,17 @@ impl core::fmt::Display for BcError {
                 f,
                 "bytecode format v{found} (this build reads v{FORMAT_VERSION}) — recompile the pattern"
             ),
+            BcError::Stale(m) => write!(f, "{m} — recompile the pattern"),
             BcError::Malformed(m) => write!(f, "invalid bytecode: {m}"),
         }
     }
 }
+
+/// Gitea #948: a stored blob whose frame entry is the pre-wire-order
+/// `renderFrame`. Refused rather than run — on a chain it would paint the
+/// wrong pixels — and the source it was compiled from gets the compiler's
+/// own message on recompile.
+const STALE_RENDER_FRAME: &str = "the pattern exports `renderFrame`, which `renderBulk` replaced (Gitea #948)";
 
 fn err<T>(m: &str) -> Result<T, BcError> {
     Err(BcError::Malformed(m.to_string()))
@@ -394,7 +406,7 @@ impl Writer {
 /// an opcode. Code that doesn't walk (which the decoder would already have
 /// rejected) reads as "no".
 ///
-/// Used by [`crate::engine`]'s default-map heuristic: a `renderFrame`
+/// Used by [`crate::engine`]'s default-map heuristic: a `renderBulk`
 /// pattern that never asks for a coordinate is a strip pattern and must
 /// not be handed a square grid it didn't ask for.
 #[inline(never)]
@@ -957,6 +969,9 @@ fn decode(
         let name = r.str8()?;
         let flags = r.u8()?;
         let init = Fx::from_raw(r.i32()?);
+        if flags & 1 != 0 && name == "renderFrame" {
+            return Err(BcError::Stale(STALE_RENDER_FRAME));
+        }
         if collect {
             globals.push(GlobalDef {
                 name: String::from(name),
@@ -1177,6 +1192,9 @@ fn decode(
         let idx = r.u16()?;
         if idx as usize >= n_fns {
             return err("export function index out of range");
+        }
+        if name == "renderFrame" {
+            return Err(BcError::Stale(STALE_RENDER_FRAME));
         }
         if collect {
             exported_fns.push((String::from(name), idx));

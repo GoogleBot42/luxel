@@ -253,7 +253,7 @@ fn scan(prog: &Program) -> Scan {
     s
 }
 
-const ENTRY_NAMES: [&str; 4] = ["render", "render2D", "render3D", "renderFrame"];
+const ENTRY_NAMES: [&str; 4] = ["render", "render2D", "render3D", "renderBulk"];
 
 /// Functions the engine can reach from a render entry.
 fn render_path(prog: &Program, s: &Scan) -> BTreeSet<usize> {
@@ -365,7 +365,7 @@ fn analyze(path: &str, src: &str) -> Rec {
             r.entries.push(n.to_string());
         }
     }
-    r.renderframe = r.entries.iter().any(|e| e == "renderFrame");
+    r.renderframe = r.entries.iter().any(|e| e == "renderBulk");
 
     let s = scan(&prog);
     r.uses_call_value = s.uses_call_value;
@@ -612,12 +612,12 @@ fn main() {
         ok.iter().map(|r| r.boxes).sum::<usize>()
     );
     println!(
-        "renderFrame                          {}",
+        "renderBulk                          {}",
         cnt(&|r| r.renderframe)
     );
     println!(
         "render/render2D/render3D             {}",
-        cnt(&|r| r.entries.iter().any(|e| e != "renderFrame"))
+        cnt(&|r| r.entries.iter().any(|e| e != "renderBulk"))
     );
     println!(
         "no render entry at all               {}",

@@ -149,6 +149,12 @@ impl Default for CompileOpts {
     }
 }
 
+/// The one export name the compiler refuses outright (Gitea #948): the
+/// whole-frame entry was `renderFrame` until the frame became wire-ordered,
+/// and a pattern written against the old row-major index space would
+/// silently scramble on a chain — so it fails loudly, by name, with the fix.
+pub const RENDER_FRAME_RENAMED: &str = "`renderFrame` was renamed `renderBulk` (Gitea #948): the frame is in WIRE order now, so rename the export and address pixels through gridIndex()/pixelCoord() or the coordinate-space ops, never as y*width+x";
+
 pub fn compile(src: &str) -> Result<Program, Diagnostic> {
     compile_with(src, CompileOpts::default())
 }
@@ -1301,6 +1307,9 @@ impl<'s> Compiler<'s> {
     }
 
     fn ensure_global(&mut self, name: &str, export: bool, span: Span) -> Result<u16, Diagnostic> {
+        if export && name == "renderFrame" {
+            return Err(Diagnostic::new(span, RENDER_FRAME_RENAMED));
+        }
         if let Some(i) = self.global_idx(name) {
             if export {
                 self.globals[i as usize].export = true;
@@ -1549,6 +1558,9 @@ impl<'s> Compiler<'s> {
             let def = self.emit_function(name.clone(), params, body, s.span)?;
             self.prelude_pos = None;
             self.fns[idx as usize] = def;
+            if *export && name == "renderFrame" {
+                return Err(Diagnostic::new(s.span, RENDER_FRAME_RENAMED));
+            }
             if *export && !self.exported_fns.iter().any(|(n, _)| n == name) {
                 self.exported_fns.push((name.clone(), idx));
             }

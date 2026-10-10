@@ -147,7 +147,7 @@ pub fn has_map() -> bool {
 pub fn shape() -> (u8, Option<luxel_core::outpipe::GridMap>) {
     MAP.lock(|c| match c.borrow().as_ref() {
         Some(MapData::Grid { w, h }) => {
-            (2, Some(luxel_core::outpipe::GridMap { w: *w, h: *h, serpentine: false }))
+            (2, Some(luxel_core::outpipe::GridMap::new(*w, *h, false)))
         }
         Some(MapData::Coords { dims, coords }) => {
             (*dims, luxel_core::outpipe::detect_grid(*dims, coords))

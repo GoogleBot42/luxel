@@ -111,7 +111,7 @@ fn pattern_arrays_come_from_the_arena_and_the_vm_does_not() {
         in_arena(e.frame(luxel_core::fixed::Fx::from_int(16)).as_ptr()),
         "the per-frame pixel buffer must come from the arena"
     );
-    // It is lent to the VM by move for a `renderFrame` call and taken back;
+    // It is lent to the VM by move for a `renderBulk` call and taken back;
     // rendering again must not have quietly reallocated it on the heap.
     let px = e.frame(luxel_core::fixed::Fx::from_int(16));
     assert_eq!(px.len(), 256);

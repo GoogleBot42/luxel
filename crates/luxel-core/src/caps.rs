@@ -70,7 +70,7 @@ pub struct Geom {
     /// Rows along the slow axis; 1 on a strip, 0 when `regular` is false.
     pub h: u16,
     pub source: GeomSource,
-    /// What the RUNNING PATTERN wants: 0 (no preference — `renderFrame` in
+    /// What the RUNNING PATTERN wants: 0 (no preference — `renderBulk` in
     /// index space), 1 (`render`), 2 (`render2D`), 3 (`render3D`). Differs
     /// from `dims` exactly when the pattern is being projected.
     pub pattern_dims: u8,
@@ -485,7 +485,7 @@ mod tests {
     use super::*;
 
     fn grid(w: u16, h: u16) -> Option<GridMap> {
-        Some(GridMap { w, h, serpentine: false })
+        Some(GridMap::new(w, h, false))
     }
 
     #[test]
@@ -549,7 +549,7 @@ mod tests {
     /// underneath is a bare strip, so the pattern is NOT compatible.
     #[test]
     fn compatible_reads_the_layout_not_the_fabricated_grid() {
-        let fabricated = Geom::derive(DeviceMap::None, 2, Some(GridMap { w: 8, h: 8, serpentine: false }), 64, 2);
+        let fabricated = Geom::derive(DeviceMap::None, 2, Some(GridMap::new(8, 8, false)), 64, 2);
         assert_eq!(fabricated.source, GeomSource::Default);
         assert_eq!(fabricated.dims, 2);
         assert!(!fabricated.compatible);
@@ -557,7 +557,7 @@ mod tests {
         assert!(Geom::derive(DeviceMap::None, 0, None, 60, 1).compatible);
         assert!(Geom::derive(DeviceMap::None, 0, None, 60, 0).compatible);
         // a real panel: 1D and 2D patterns yes, 3D no
-        let panel = |pd| Geom::derive(DeviceMap::Board, 2, Some(GridMap { w: 64, h: 64, serpentine: false }), 4096, pd);
+        let panel = |pd| Geom::derive(DeviceMap::Board, 2, Some(GridMap::new(64, 64, false)), 4096, pd);
         assert!(panel(1).compatible);
         assert!(panel(2).compatible);
         assert!(!panel(3).compatible);

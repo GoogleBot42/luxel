@@ -479,7 +479,7 @@ pub enum Builtin {
     Curl2,
     Curl3,
     // Luxel extension builtins, batch 10: whole-frame ("bulk") ops for the
-    // `renderFrame` entry — see `crate::bulk`. They write the engine's
+    // `renderBulk` entry — see `crate::bulk`. They write the engine's
     // frame buffer directly and are no-ops anywhere else.
     GridWidth,
     GridHeight,
@@ -498,7 +498,7 @@ pub enum Builtin {
     FillCanvas,
     Blit,
     // Luxel extension builtins, batch 11: the ops #373 measured out of the
-    // first two `renderFrame` conversions — a lattice noise fill, a
+    // first two `renderBulk` conversions — a lattice noise fill, a
     // palette-space canvas fill, a linear 2D stencil and the reduction the
     // stencil needs to stay ahead of a second bytecode pass.
     FillNoise2D,
@@ -518,6 +518,10 @@ pub enum Builtin {
     DrawNumber,
     Font,
     TextSlot,
+    // Luxel extension builtins, batch 14 (Gitea #948): the frame is in wire
+    // order, so a whole-frame pattern that draws by grid cell needs the
+    // cell → slot inverse of `pixelCoord`.
+    GridIndex,
 }
 
 pub struct BuiltinDef {
@@ -645,7 +649,7 @@ pub static BUILTINS: &[BuiltinDef] = &[
     // Luxel extensions, batch 9 (appended): curl noise.
     b!("curl2", Curl2), b!("curl3", Curl3),
     // Luxel extensions, batch 10 (appended): the whole-frame bulk ops that
-    // back the `renderFrame` entry (crate::bulk). Ids 166..=181.
+    // back the `renderBulk` entry (crate::bulk). Ids 166..=181.
     b!("gridWidth", GridWidth), b!("gridHeight", GridHeight),
     b!("clear", Clear), b!("fill", FillAll), b!("fade", Fade),
     b!("setPixel", SetPixel), b!("fillRange", FillRange),
@@ -655,7 +659,7 @@ pub static BUILTINS: &[BuiltinDef] = &[
     b!("splat", Splat), b!("drawLine", DrawLine),
     b!("fillCanvas", FillCanvas), b!("blit", Blit),
     // Luxel extensions, batch 11 (appended): the ops #373 measured out of
-    // the aurora-2d and raindrops-2d `renderFrame` conversions — a lattice
+    // the aurora-2d and raindrops-2d `renderBulk` conversions — a lattice
     // noise fill, a palette-space canvas fill, a linear 2D stencil and the
     // reduction the stencil needs. Ids 182..=186.
     b!("fillNoise2D", FillNoise2D), b!("fillNoise3D", FillNoise3D),
@@ -673,6 +677,8 @@ pub static BUILTINS: &[BuiltinDef] = &[
     b!("drawText", DrawText), b!("textWidth", TextWidth),
     b!("drawNumber", DrawNumber), b!("font", Font),
     b!("textSlot", TextSlot),
+    // batch 14 (Gitea #948)
+    b!("gridIndex", GridIndex),
 ];
 
 // ---- builtin kind signatures (Gitea #607, docs/jit-design.md §2.3) ----
@@ -1334,7 +1340,7 @@ pub struct Vm {
     /// Installed pixel map (engine-set): dims (1/2/3) + normalized coords.
     pub map: Option<MapData>,
     /// The engine's frame buffer, lent to the VM (by move — never copied)
-    /// for the duration of a `renderFrame` call so the bulk builtins can
+    /// for the duration of a `renderBulk` call so the bulk builtins can
     /// write RGB888 straight into it. Empty at every other moment, which
     /// is what makes every bulk op a no-op outside the whole-frame entry.
     pub frame: crate::arena::FrameVec,
@@ -1532,12 +1538,14 @@ pub struct MapData {
     pub dims: u8,
     /// Per-pixel normalized coordinates — empty when `grid` is set.
     pub coords: Vec<[Fx; 3]>,
-    /// Procedural row-major grid, `(w, h)`: coordinates are computed per
-    /// pixel on read and nothing is stored. A 64x64 panel's map is 48 KB as
-    /// `coords` — the whole idle heap on the S3 panel board — and zero bytes
-    /// here (Gitea #258). Normalization matches [`Engine::set_map`] exactly
+    /// Procedural grid: coordinates are computed per pixel on read and
+    /// nothing is stored. A 64x64 panel's map is 48 KB as `coords` — the
+    /// whole idle heap on the S3 panel board — and zero bytes here (Gitea
+    /// #258). Which cell frame slot `i` shows is [`GridMap::cell`]: row-major
+    /// for a plain grid, the chain's driver order for a tiled one (Gitea
+    /// #948). Normalization matches [`Engine::set_map`] exactly
     /// (0..65535/65536 per axis, `(v·65535 + span/2)/span`).
-    pub grid: Option<(u16, u16)>,
+    pub grid: Option<crate::outpipe::GridMap>,
     /// The grid's normalised axis values, `w` columns then `h` rows —
     /// `(w + h)` words, 1 KB for a 128x128 panel — so [`MapData::coord`] is
     /// one divide and two loads instead of the normalisation's two i64
@@ -1550,11 +1558,17 @@ pub struct MapData {
 impl MapData {
     /// A procedural `w`×`h` row-major grid (2D).
     pub fn grid(w: u16, h: u16) -> MapData {
-        let (w, h) = (w.max(1), h.max(1));
-        let mut axes = Vec::with_capacity(w as usize + h as usize);
-        axes.extend((0..w as usize).map(|c| Self::norm(c, w as usize)));
-        axes.extend((0..h as usize).map(|r| Self::norm(r, h as usize)));
-        MapData { dims: 2, coords: Vec::new(), grid: Some((w, h)), axes }
+        Self::grid_map(crate::outpipe::GridMap::new(w.max(1), h.max(1), false))
+    }
+
+    /// A procedural grid over `g` — row-major, or a tiled chain whose frame
+    /// is in driver order (Gitea #948). The axes are the grid's.
+    pub fn grid_map(g: crate::outpipe::GridMap) -> MapData {
+        let (w, h) = (g.w.max(1) as usize, g.h.max(1) as usize);
+        let mut axes = Vec::with_capacity(w + h);
+        axes.extend((0..w).map(|c| Self::norm(c, w)));
+        axes.extend((0..h).map(|r| Self::norm(r, h)));
+        MapData { dims: 2, coords: Vec::new(), grid: Some(g), axes }
     }
 
     /// `v / (n − 1)` as the 16.16 fraction a stored grid map carries:
@@ -1571,8 +1585,8 @@ impl MapData {
 
     /// Number of pixels the map covers.
     pub fn len(&self) -> usize {
-        match self.grid {
-            Some((w, h)) => w as usize * h as usize,
+        match &self.grid {
+            Some(g) => g.len(),
             None => self.coords.len(),
         }
     }
@@ -1580,16 +1594,15 @@ impl MapData {
     /// Normalized coordinate of pixel `i`; zeros past the end of the map.
     #[inline]
     pub fn coord(&self, i: usize) -> [Fx; 3] {
-        match self.grid {
-            Some((w, h)) => {
-                let (w, h) = (w as usize, h as usize);
-                let row = i / w;
-                if row >= h {
+        match &self.grid {
+            Some(g) => {
+                let (w, h) = (g.w as usize, g.h as usize);
+                if i >= w * h {
                     return [Fx::ZERO; 3];
                 }
-                let col = i - row * w;
-                // `axes` is built by `grid()` for exactly this `(w, h)`; a
-                // hand-built `MapData` without it falls back to the formula.
+                let (row, col) = g.cell(i);
+                // `axes` is built by `grid_map()` for exactly this `(w, h)`;
+                // a hand-built `MapData` without it falls back to the formula.
                 match (self.axes.get(col), self.axes.get(w + row)) {
                     (Some(&x), Some(&y)) => [x, y, Fx::ZERO],
                     _ => [Self::norm(col, w), Self::norm(row, h), Fx::ZERO],
@@ -4012,11 +4025,15 @@ impl Vm {
             // arm computed per pixel, now reachable from the prelude
             // (Gitea #626). Unmapped axes read 0, exactly as the map
             // fallback fills them; an out-of-range axis clamps.
-            PixelCoord => {
-                let i = n(0).to_int_trunc().max(0) as u32;
-                let p = self.apply_transform(self.pixel_coords(i, [Fx::ZERO; 3]));
-                num(p[n(1).to_int_trunc().clamp(0, 2) as usize])
-            }
+            PixelCoord => num(self.pixel_coord(n(0), n(1))),
+            // gridIndex(col, row): the frame slot of grid cell (col, row),
+            // −1 off the grid, without a grid, or for a cell the frame has no
+            // pixel for (the tail of an over-provisioned last row). The
+            // inverse of `pixelCoord` — and the ONLY way a whole-frame
+            // pattern may turn a cell into an index now that the frame is in
+            // wire order (Gitea #948): `y * gridWidth() + x` is a chain's
+            // scrambled picture.
+            GridIndex => num(self.grid_index(n(0), n(1))),
             SetPerlinWrap => {
                 for (i, w) in self.perlin_wrap.iter_mut().enumerate() {
                     *w = n(i).to_int_trunc().clamp(2, 256);
@@ -4512,12 +4529,12 @@ impl Vm {
                 Ok(Value::default())
             }
             // ---- Luxel extensions, batch 10: whole-frame bulk ops ----
-            // The `renderFrame` entry's vocabulary (crate::bulk). Each one
+            // The `renderBulk` entry's vocabulary (crate::bulk). Each one
             // writes the engine's frame buffer — lent to `Vm::frame` for
             // the duration of the call — directly in RGB888; outside that
             // entry the buffer is empty and they all no-op. Bodies live in
             // `bulk` so this dispatcher stays thin. They are TIER 3
-            // (`builtin_cold`) by construction: a `renderFrame` pattern calls
+            // (`builtin_cold`) by construction: a `renderBulk` pattern calls
             // each of these once per FRAME, never per pixel, and their bodies
             // are far too big to drag through the hot tiers' cache/IRAM
             // budget (Gitea #328, docs/firmware.md "Code placement").
@@ -4802,6 +4819,40 @@ impl Vm {
         self.transform_active = true;
         self.transform = mat_mul(&op, &self.transform);
         Ok(())
+    }
+
+    /// `pixelCoord(i, axis)`: the mapped coordinate of pixel `i` on axis
+    /// 0/1/2 (x/y/z) with the current transform applied — the "outside a
+    /// render pass" coordinate the deleted `mapPixels` arm computed per
+    /// pixel, reachable from the prelude (Gitea #626) and the per-slot
+    /// coordinate source of a `renderBulk` loop (Gitea #948). Unmapped axes
+    /// read 0, exactly as the map fallback fills them; an out-of-range axis
+    /// clamps.
+    #[inline(never)]
+    pub(crate) fn pixel_coord(&self, i: Fx, axis: Fx) -> Fx {
+        let i = i.to_int_trunc().max(0) as u32;
+        let p = self.apply_transform(self.pixel_coords(i, [Fx::ZERO; 3]));
+        p[axis.to_int_trunc().clamp(0, 2) as usize]
+    }
+
+    /// `gridIndex(col, row)` — see the builtin arm.
+    #[inline(never)]
+    pub(crate) fn grid_index(&self, col: Fx, row: Fx) -> Fx {
+        let (c, r) = (col.to_int_floor(), row.to_int_floor());
+        let Some(g) = self.frame_grid else {
+            return Fx::from_int(-1);
+        };
+        if g.is_empty() || g.len() < self.pixel_count as usize || c < 0 || r < 0 {
+            return Fx::from_int(-1);
+        }
+        if c as usize >= g.w as usize || r as usize >= g.h as usize {
+            return Fx::from_int(-1);
+        }
+        let i = g.index(r as usize, c as usize);
+        if i >= self.pixel_count as usize {
+            return Fx::from_int(-1);
+        }
+        Fx::from_int(i as i32)
     }
 
     /// Coordinates for pixel `i`: the installed map, else the 1D fallback

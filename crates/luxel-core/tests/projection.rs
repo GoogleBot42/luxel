@@ -183,11 +183,11 @@ fn two_d_on_a_strip_is_incompatible_and_falls_back() {
 
 #[test]
 fn render_frame_on_strip_gets_a_row_grid() {
-    // A grid-space `renderFrame` on a strip is incompatible too, but it owns
+    // A grid-space `renderBulk` on a strip is incompatible too, but it owns
     // the buffer: hand it a w×1 grid so gridWidth/gridHeight describe the
     // strip rather than nothing. There is no choice to make about it.
     let src = "export var w = 0\nexport var h = 0\n\
-               export function renderFrame() { w = gridWidth()\n h = gridHeight()\n fillRect(0, 0, 1, 1) }";
+               export function renderBulk() { w = gridWidth()\n h = gridHeight()\n fillRect(0, 0, 1, 1) }";
     let mut e = with_proj(src, 6, 2, ProjectionMode::X);
     e.set_strip_layout();
     let g = e.effective_geometry();
@@ -206,14 +206,14 @@ fn render_frame_on_strip_gets_a_row_grid() {
 
 #[test]
 fn an_index_space_render_frame_is_dimensionless() {
-    // `renderFrame` + `fillHSV` never asked for a geometry: it is a field over
+    // `renderBulk` + `fillHSV` never asked for a geometry: it is a field over
     // `pixelCount`, not a strip drawn on the Layout. So it reports dims 0 —
     // native on every Layout, no options, no caption, never flagged — gets no
     // fabricated grid on a strip, and is not strip-projected on a matrix (a
     // whole-frame pattern owns the buffer, which is exactly why calling it 1D
     // offered an along-x choice that changed nothing: `library/fairies.js`,
     // 2026-09-20).
-    let src = "export function renderFrame() { fillHSV(0, 0, 0, 1, 1, 1) }";
+    let src = "export function renderBulk() { fillHSV(0, 0, 0, 1, 1, 1) }";
     let mut e = Engine::new(src, 8, 1).unwrap();
     assert_eq!(e.layout_dims(), 1, "no fabricated grid");
     assert_eq!(e.effective_geometry().pattern_dims, 0);
@@ -319,8 +319,8 @@ fn native_pairs_have_no_projection() {
 fn every_default_is_a_no_op() {
     // The default triple must reproduce the pre-projection engine on every
     // pair, so upgrading a device changes nothing until someone picks.
-    const FRAME_BULK: &str = "export function renderFrame() { fillRect(0, 0, 1, 1) }";
-    const FRAME_INDEX: &str = "export function renderFrame() { fillHSV(0, 0, 0, 1, 1, 1) }";
+    const FRAME_BULK: &str = "export function renderBulk() { fillRect(0, 0, 1, 1) }";
+    const FRAME_INDEX: &str = "export function renderBulk() { fillHSV(0, 0, 0, 1, 1, 1) }";
     for (src, install) in [
         (COORDS_2D, 1u8),
         (COORDS_3D, 1),
@@ -357,7 +357,7 @@ fn every_default_is_a_no_op() {
         assert_eq!(g.pixel_count, 8, "{src} on a {install}D Layout: pixelCount");
         let want = match (install, src) {
             (2, _) => (4, 2),
-            // the one deliberate addition: a grid-space `renderFrame` on a
+            // the one deliberate addition: a grid-space `renderBulk` on a
             // strip Layout gets the w×1 grid §5.4d gives it, which no
             // pre-projection engine could reach (nothing installed the 1D
             // Layout under a bulk pattern — it got the fabricated √n grid)

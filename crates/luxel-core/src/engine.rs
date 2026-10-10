@@ -31,7 +31,7 @@ enum RenderKind {
     R1(u16),
     R2(u16),
     R3(u16),
-    /// `renderFrame()` — the whole-frame entry: one zero-argument call per
+    /// `renderBulk()` — the whole-frame entry: one zero-argument call per
     /// frame instead of one call per pixel, with the frame buffer lent to
     /// the VM so the bulk builtins (`crate::bulk`) write it directly.
     Frame(u16),
@@ -53,7 +53,7 @@ enum RenderTarget {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RunStage {
     Before,
-    /// Inside `renderFrame`. The engine's `pixels` Vec lives in
+    /// Inside `renderBulk`. The engine's `pixels` Vec lives in
     /// `Vm::frame` for the duration; [`Engine::frame_buffer_in`] always
     /// takes it back before this stage's outcome is inspected, including
     /// on a debug pause, so `pixels()` is never empty behind the caller's
@@ -126,7 +126,7 @@ enum ProjPlan {
     /// `axis` (0 = x, 1 = y, 2 = z). This is the engine win: a 1D pattern on
     /// a 64×64 panel costs 64 render calls, not 4096.
     Strip { axis: u8, len: u32 },
-    /// A `renderFrame` (whole-frame, 2D) pattern on a 1D Layout — an
+    /// A `renderBulk` (whole-frame, 2D) pattern on a 1D Layout — an
     /// incompatible pairing no host offers (#538), but one the engine still
     /// has to render: it gets a w×1 grid so the grid-space bulk builtins
     /// describe the strip instead of a grid that is not there.
@@ -142,7 +142,7 @@ pub struct EffectiveGeometry {
     /// along-axis projection, the Layout's pixel count otherwise).
     pub pixel_count: u32,
     /// The space the pattern renders in: 0 = none (a dimensionless
-    /// index-space `renderFrame` — native on every Layout), 1 = strip,
+    /// index-space `renderBulk` — native on every Layout), 1 = strip,
     /// 2 = plane, 3 = volume. The RESOLVED entry's dimensionality, so it can
     /// differ from `/api/status`'s `geom.pattern_dims` (what the pattern
     /// declares) for a pattern that exports more than one render entry.
@@ -183,7 +183,7 @@ pub struct Engine {
     vm: Vm,
     pixel_count: u32,
     before: Option<u16>,
-    /// Entry candidates for render/render2D/render3D/renderFrame (fixed
+    /// Entry candidates for render/render2D/render3D/renderBulk (fixed
     /// at load).
     render_tgt: [Option<RenderTarget>; 4],
     /// The resolved entry for the current frame (see [`resolve_render`]).
@@ -243,6 +243,12 @@ pub struct Engine {
     /// on [`set_map`]; `None` means "not a grid", and the stages keep their
     /// index-space behavior.
     grid: Option<crate::outpipe::GridMap>,
+    /// The HUB75 chain the frame is written in the order of (Gitea #948):
+    /// a procedural grid map whose extent matches it is installed as a tiled
+    /// [`crate::outpipe::GridMap`], a coordinate map is permuted into wire
+    /// order on install. `None` on every other host — the frame is then
+    /// row-major / index order, as it always was.
+    wire_tiling: Option<crate::outpipe::Tiling>,
     /// An `assert()` invariant failed during init: rendering is blocked
     /// for this engine's lifetime (map installs must not resurrect it —
     /// the fix is a config change, which rebuilds the engine).
@@ -264,16 +270,16 @@ pub struct Engine {
     /// when a strip plan is installed (fallibly — a refusal falls back to
     /// by-index), reused every frame: no per-frame and no per-pixel alloc.
     strip_scratch: crate::arena::FrameVec,
-    /// This pattern's `renderFrame` names a coordinate/grid-space bulk op,
+    /// This pattern's `renderBulk` names a coordinate/grid-space bulk op,
     /// so it is a 2D pattern for projection purposes (proposal §5.4d: bulk
-    /// patterns follow the 2D row). A `renderFrame` that only paints in
+    /// patterns follow the 2D row). A `renderBulk` that only paints in
     /// index space is a strip pattern and stays one. Scanned once at load —
     /// [`uses_coordinate_bulk_op`] walks the bytecode.
     frame_is_2d: bool,
     /// This program compiled to native code (Gitea #658,
     /// docs/jit-design.md §6). `Some` means WHOLE-program native: every
     /// entry the engine calls has a native entry point, and the
-    /// interpreter is not used for `beforeRender`/`render*`/`renderFrame`
+    /// interpreter is not used for `beforeRender`/`render*`/`renderBulk`
     /// until this is dropped.
     ///
     /// docs/jit-design.md §6 puts this on `Program`. It lives here
@@ -472,6 +478,7 @@ impl Engine {
             map_coords: Vec::new(),
             map_dims: 0,
             grid: None,
+            wire_tiling: None,
             requires_violated: violated,
             projection: Projection::DEFAULT,
             plan: ProjPlan::Native,
@@ -495,8 +502,8 @@ impl Engine {
         // `sqrt(pixelCount)`-grid patterns depend on that. A host-installed
         // map replaces this (set_map), exactly like saving a map on a PB.
         // A whole-frame pattern joins that rule when — and only when — it
-        // actually asks for coordinates: `renderFrame` + `fillRect` wants
-        // the square grid a `render2D` pattern gets, while `renderFrame` +
+        // actually asks for coordinates: `renderBulk` + `fillRect` wants
+        // the square grid a `render2D` pattern gets, while `renderBulk` +
         // `fillHSV` is a strip pattern and must not be handed a geometry
         // it never mentioned (it would change `pixelMapDimensions()` and
         // the post chain's spatial stages under it).
@@ -537,14 +544,45 @@ impl Engine {
     /// map uses (Gitea #258).
     pub fn set_grid_map(&mut self, w: u16, h: u16) {
         let (w, h) = (w.max(1), h.max(1));
+        let g = match self.wire_tiling {
+            // The wire is a chain covering exactly this grid: the frame is
+            // written in driver order and the grid says which cell each slot
+            // shows (Gitea #948).
+            Some(t) if t.width() == w && t.height() == h => crate::outpipe::GridMap::tiled(t),
+            _ => crate::outpipe::GridMap::new(w, h, false),
+        };
         self.plan_reset();
-        self.grid = Some(crate::outpipe::GridMap { w, h, serpentine: false });
+        self.grid = Some(g);
         self.vm.frame_grid = self.grid;
-        self.vm.map = Some(MapData::grid(w, h));
+        self.vm.map = Some(MapData::grid_map(g));
         if !self.requires_violated {
             self.render = self.resolve_render_now();
         }
         self.sync_plan();
+    }
+
+    /// Tell the engine which HUB75 chain its frame feeds (Gitea #948), or
+    /// `None` for a row-major host. From here on a procedural grid map of
+    /// the chain's extent is installed TILED — `pixels[i]` is the pixel the
+    /// driver clocks out `i`-th, and `pixel_coords(i)` / `gridIndex` /
+    /// every grid-space bulk op go through the chain's arithmetic — and a
+    /// coordinate map of that many pixels is permuted into wire order as it
+    /// is installed. Call it BEFORE installing the map; a procedural grid
+    /// already installed is re-installed here, a coordinate map is not
+    /// (install it again).
+    pub fn set_wire_tiling(&mut self, t: Option<crate::outpipe::Tiling>) {
+        if self.wire_tiling == t {
+            return;
+        }
+        self.wire_tiling = t;
+        if let Some(g) = self.layout_map().and_then(|m| m.grid) {
+            self.set_grid_map(g.w, g.h);
+        }
+    }
+
+    /// The chain [`Engine::set_wire_tiling`] installed, if any.
+    pub fn wire_tiling(&self) -> Option<crate::outpipe::Tiling> {
+        self.wire_tiling
     }
 
     /// Install the 1D Layout: no map at all, so the pattern's coordinates are
@@ -623,7 +661,7 @@ impl Engine {
     ///
     /// Whole-program or nothing: the caller has already decided that every
     /// function compiled (a [`luxel_jit::Refusal`] is never partial), so
-    /// from here on `beforeRender`, `render*` and `renderFrame` are native
+    /// from here on `beforeRender`, `render*` and `renderBulk` are native
     /// calls and the interpreter is the fallback only for the debugger.
     ///
     /// Callers MUST NOT install native code when [`Engine::debug_enabled`]
@@ -782,7 +820,7 @@ impl Engine {
     }
 
     /// Start one of [`drive`]'s stage entries (`beforeRender`,
-    /// `renderFrame`) — natively when an image is installed and the
+    /// `renderBulk`) — natively when an image is installed and the
     /// debugger is not attached, through the interpreter otherwise.
     ///
     /// Native code is never resumable, which is exactly why it is off
@@ -802,7 +840,7 @@ impl Engine {
     }
 
     /// One native call standing in for a whole [`drive`] stage
-    /// (`beforeRender`, `renderFrame`). The stage entries run once a frame,
+    /// (`beforeRender`, `renderBulk`). The stage entries run once a frame,
     /// so the context is built per call rather than hoisted the way the
     /// per-pixel pass hoists it.
     #[cfg(feature = "jit")]
@@ -1020,7 +1058,7 @@ impl Engine {
 
     /// The dimensionality the pattern is CURRENTLY being rendered as — the
     /// RESOLVED entry's, which is what a projection has to bridge. A
-    /// `renderFrame` follows the 2D row when it actually draws in grid space
+    /// `renderBulk` follows the 2D row when it actually draws in grid space
     /// ([`Engine::frame_is_2d`]) and is a strip pattern otherwise — the same
     /// distinction the default-grid rule already makes (proposal §5.4d).
     ///
@@ -1029,7 +1067,7 @@ impl Engine {
     /// `render` and `render2D` declares 2, but renders 1D on a strip) and
     /// whenever a late-bound entry changes between frames.
     ///
-    /// `0` means DIMENSIONLESS — an index-space `renderFrame` that names no
+    /// `0` means DIMENSIONLESS — an index-space `renderBulk` that names no
     /// geometry — and is native on every Layout
     /// ([`crate::projection::projection_options`]). It is not 1: a 1D pattern
     /// is a strip drawn on this Layout and can be projected along an axis,
@@ -1130,17 +1168,13 @@ impl Engine {
             // substitute. That is why an index-space one is `render_dims() ==
             // 0` (dimensionless) rather than 1 — there is no projection for a
             // host to offer it. The one thing it can need is a grid — a grid-space
-            // `renderFrame` on a 1D Layout is an incompatible pairing no host
+            // `renderBulk` on a 1D Layout is an incompatible pairing no host
             // offers (#538), but if one is activated anyway it gets a w×1
             // grid so `gridWidth`/`gridHeight` and the grid-space bulk
             // builtins describe the strip instead of nothing.
             if pdims == 2 && ldims == 1 {
                 let n = self.pixel_count.min(u16::MAX as u32) as u16;
-                return ProjPlan::FrameGrid(crate::outpipe::GridMap {
-                    w: n,
-                    h: 1,
-                    serpentine: false,
-                });
+                return ProjPlan::FrameGrid(crate::outpipe::GridMap::new(n, 1, false));
             }
             return ProjPlan::Native;
         }
@@ -1189,10 +1223,10 @@ impl Engine {
         let Some(m) = self.layout_map() else {
             return 0;
         };
-        if let Some((w, h)) = m.grid {
+        if let Some(g) = m.grid {
             return match axis {
-                0 => w as u32,
-                1 => h as u32,
+                0 => g.w as u32,
+                1 => g.h as u32,
                 _ => 0,
             };
         }
@@ -1294,6 +1328,22 @@ impl Engine {
         self.plan_reset();
         // grid detection wants the raw (pattern-unit) coordinates
         self.grid = crate::outpipe::detect_grid(dims, &coords);
+        // A coordinate map on a tiled wire (Gitea #948): the caller lists
+        // pixels in engine (row-major) order, the frame is in driver order,
+        // so permute once here — zero copies, a 1-bit-per-pixel scratch.
+        // Grid-space ops survive only when the map IS the chain's own grid
+        // walked row-major with x fast; any other regular map loses them
+        // (its cells have no inverse through the chain).
+        if let Some(t) = self.wire_tiling.filter(|t| t.len() == n) {
+            let x_fast = matches!((coords.first(), coords.get(1)), (Some(a), Some(b)) if a[0] != b[0]);
+            self.grid = match self.grid {
+                Some(g) if !g.serpentine && x_fast && g.w == t.width() && g.h == t.height() => {
+                    Some(crate::outpipe::GridMap::tiled(t))
+                }
+                _ => None,
+            };
+            permute_into_wire(&mut coords, &t);
+        }
         self.vm.frame_grid = self.grid;
         for axis in 0..(dims as usize).min(3) {
             let mut min = i64::MAX;
@@ -1365,8 +1415,8 @@ impl Engine {
 
     /// The geometry the COMPILED pattern asks for, independent of whatever
     /// map a host later installs: `0` = a strip (only `render`, or a
-    /// `renderFrame` that draws in index space), `2` = a 2D grid (`render2D`,
-    /// or `renderFrame` plus a coordinate/grid-space bulk op), `3` = a 3D
+    /// `renderBulk` that draws in index space), `2` = a 2D grid (`render2D`,
+    /// or `renderBulk` plus a coordinate/grid-space bulk op), `3` = a 3D
     /// point cloud (`render3D` and nothing 2D).
     ///
     /// These are the same signals `from_program_budgeted` uses to decide
@@ -1390,12 +1440,12 @@ impl Engine {
     }
 
     /// The dimensionality the pattern DECLARES, as the UI reports it:
-    /// 0 (no preference — a `renderFrame`-only pattern that never asks for
+    /// 0 (no preference — a `renderBulk`-only pattern that never asks for
     /// coordinates), 1 (`render`), 2 (`render2D`), 3 (`render3D`).
     ///
     /// This is [`preferred_dims`](Self::preferred_dims) with the 1D case
     /// separated out of its `0`: `preferred_dims` answers "does this pattern
-    /// want a map installed", where `render` and `renderFrame` are the same
+    /// want a map installed", where `render` and `renderBulk` are the same
     /// answer, while `/api/status`'s `pattern_dims` answers "what shape was
     /// this pattern written for", where they are not — a 1D pattern on a
     /// panel is projected and captioned, a dimensionless one is not.
@@ -1661,7 +1711,7 @@ impl Engine {
 
     /// The first half of [`frame`] (Gitea #842): the clock and frame-rate
     /// bookkeeping, `beforeRender`, the render-entry resolution — and, for a
-    /// `renderFrame` pattern, the whole frame — leaving a per-pixel pass
+    /// `renderBulk` pattern, the whole frame — leaving a per-pixel pass
     /// PENDING rather than running it. Returns `true` when [`frame_step`]
     /// has pixels to render, `false` when the frame is already complete
     /// (held under a `setFrameRate` cap, no render entry, a whole-frame
@@ -1738,7 +1788,7 @@ impl Engine {
 
     /// Whether [`frame_step`] would actually slice this engine's frame: a
     /// per-pixel render entry with no debugger attached and not a map
-    /// program. A `renderFrame` pattern is one VM call and `frame_begin`
+    /// program. A `renderBulk` pattern is one VM call and `frame_begin`
     /// runs it whole; a host deciding WHERE to render a layer asks this
     /// first (Gitea #842).
     pub fn frame_chunkable(&self) -> bool {
@@ -2240,7 +2290,7 @@ impl Engine {
         }
     }
 
-    /// Lend the frame buffer to the VM for a `renderFrame` call. A MOVE,
+    /// Lend the frame buffer to the VM for a `renderBulk` call. A MOVE,
     /// never a copy: at 4096 px the buffer is 12 KB and this happens every
     /// frame. The VM's bulk builtins (`crate::bulk`) write it in place and
     /// never change its length.
@@ -2256,7 +2306,7 @@ impl Engine {
     }
 
     /// Does this pattern's code call a bulk builtin that reads a pixel's
-    /// coordinate or the grid? Decides whether a `renderFrame`-only
+    /// coordinate or the grid? Decides whether a `renderBulk`-only
     /// pattern gets the default square grid map.
     #[inline(never)]
     fn uses_coordinate_bulk_op(&self) -> bool {
@@ -2265,9 +2315,10 @@ impl Engine {
         // conjure a geometry. `fillGradient`'s axis is a runtime argument,
         // so it stays out of this list — a pattern that wants a spatial
         // gradient asks for it with one of these or installs a map.
-        const NAMES: [&str; 9] = [
+        const NAMES: [&str; 10] = [
             "gridWidth",
             "gridHeight",
+            "gridIndex",
             "fillRect",
             "fillCircle",
             "splat",
@@ -2505,8 +2556,35 @@ fn fx_to_256(v: Fx) -> u32 {
     ((v.raw().max(0) as u32) >> 8).min(256)
 }
 
+/// `coords[i] = coords[engine index of the cell wire slot i shows]`, in
+/// place: the cycle-following permutation with a visited bitmap, so a
+/// 16384-pixel map costs 2 KB of scratch rather than a second 192 KB copy.
+fn permute_into_wire(coords: &mut [[Fx; 3]], t: &crate::outpipe::Tiling) {
+    let n = coords.len();
+    let w = t.width() as usize;
+    let mut done = alloc::vec![0u8; n.div_ceil(8)];
+    for start in 0..n {
+        if done[start >> 3] & (1 << (start & 7)) != 0 {
+            continue;
+        }
+        let saved = coords[start];
+        let mut i = start;
+        loop {
+            let (r, c) = t.cell(i);
+            let src = r * w + c;
+            done[i >> 3] |= 1 << (i & 7);
+            if src == start {
+                coords[i] = saved;
+                break;
+            }
+            coords[i] = coords[src];
+            i = src;
+        }
+    }
+}
+
 /// The four render entry candidates by name (`render`, `render2D`,
-/// `render3D`, `renderFrame`): an exported function wins; otherwise a
+/// `render3D`, `renderBulk`): an exported function wins; otherwise a
 /// global of that name is a late-binding candidate (see [`RenderTarget`]).
 fn render_targets(prog: &Program) -> [Option<RenderTarget>; 4] {
     let tgt = |name: &str| {
@@ -2518,7 +2596,7 @@ fn render_targets(prog: &Program) -> [Option<RenderTarget>; 4] {
         tgt("render"),
         tgt("render2D"),
         tgt("render3D"),
-        tgt("renderFrame"),
+        tgt("renderBulk"),
     ]
 }
 
@@ -2547,7 +2625,7 @@ fn resolve_render(
             _ => RenderKind::Frame(f),
         })
     };
-    // `renderFrame` is not a fourth dimensionality — it is a different
+    // `renderBulk` is not a fourth dimensionality — it is a different
     // shape of entry (one call per FRAME), so it wins over all three
     // per-pixel candidates regardless of what the map looks like.
     if let Some(f) = get(3) {

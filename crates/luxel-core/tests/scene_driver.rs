@@ -29,7 +29,7 @@ const N: usize = (W as usize) * (H as usize);
 const DT60: i32 = 1_092_267;
 
 fn grid() -> GridMap {
-    GridMap { w: W, h: H, serpentine: false }
+    GridMap::new(W, H, false)
 }
 
 /// A scene with one of every layer kind, so the dispatch arm for each is

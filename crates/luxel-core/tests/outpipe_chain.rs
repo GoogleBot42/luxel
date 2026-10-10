@@ -216,7 +216,7 @@ fn identical_on_a_strip() {
 #[test]
 fn identical_on_a_grid() {
     let px = frame(128);
-    let grid = Some(GridMap { w: 16, h: 8, serpentine: false });
+    let grid = Some(GridMap::new(16, 8, false));
     for (name, s) in cases() {
         let (old, new) = run_both(&px, &s, 31, grid, PowerModel::Strip);
         assert_eq!(old, new, "grid, {name}");
@@ -226,7 +226,7 @@ fn identical_on_a_grid() {
 #[test]
 fn identical_on_a_serpentine_grid_and_a_panel_power_model() {
     let px = frame(128);
-    let grid = Some(GridMap { w: 16, h: 8, serpentine: true });
+    let grid = Some(GridMap::new(16, 8, true));
     for (name, s) in cases() {
         let (old, new) = run_both(&px, &s, 17, grid, PowerModel::Hub75 { scan: 4 });
         assert_eq!(old, new, "serpentine panel, {name}");
@@ -238,7 +238,7 @@ fn identical_when_the_grid_does_not_match_the_frame() {
     // the firmware's `grid.filter(|g| g.len() == frame.len())` guard: a stale
     // grid must fall back to index space, not index out of bounds
     let px = frame(100);
-    let grid = Some(GridMap { w: 16, h: 8, serpentine: false });
+    let grid = Some(GridMap::new(16, 8, false));
     for (name, s) in cases() {
         let (old, new) = run_both(&px, &s, 31, grid, PowerModel::Strip);
         assert_eq!(old, new, "mismatched grid, {name}");

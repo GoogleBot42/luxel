@@ -1501,11 +1501,7 @@ fn scene_grid(engine: &Option<Engine>) -> luxel_core::outpipe::GridMap {
         .as_ref()
         .and_then(|e| e.grid())
         .or_else(|| devicemap::shape().1)
-        .unwrap_or(luxel_core::outpipe::GridMap {
-            w: 0,
-            h: 0,
-            serpentine: false,
-        })
+        .unwrap_or(luxel_core::outpipe::GridMap::new(0, 0, false))
 }
 
 /// [try_budgeted_engine] plus the user-facing "too large" vmerr on failure.

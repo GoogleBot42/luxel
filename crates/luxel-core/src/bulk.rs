@@ -1,7 +1,7 @@
-//! Whole-frame ("bulk") pattern ops — the vocabulary of the `renderFrame`
+//! Whole-frame ("bulk") pattern ops — the vocabulary of the `renderBulk`
 //! entry point (`Engine::drive`'s `RunStage::Frame`).
 //!
-//! A `renderFrame` pattern runs ONCE per frame instead of once per pixel,
+//! A `renderBulk` pattern runs ONCE per frame instead of once per pixel,
 //! which removes the ~317–440 Xtensa cycles/px the per-pixel entry costs
 //! (docs/boards.md "Second light"). To make that useful the pattern needs
 //! native ops that touch many pixels per call: that is everything here.
@@ -11,11 +11,11 @@
 //! - **The frame buffer is lent, not copied.** `Engine` `mem::take`s its
 //!   `pixels` into [`crate::vm::Vm::frame`] for the duration of the call
 //!   and takes it back afterwards, so these ops write the real output
-//!   buffer in RGB888 with no intermediate. Outside `renderFrame` the Vec
+//!   buffer in RGB888 with no intermediate. Outside `renderBulk` the Vec
 //!   is empty, which makes every op below a silent no-op — that is the
 //!   whole guard, there is no mode flag.
 //! - **The brush.** `hsv()`/`rgb()`/`paint()`/`oklch()` keep writing
-//!   `Vm::pixel`; under `renderFrame` that slot is the current colour and
+//!   `Vm::pixel`; under `renderBulk` that slot is the current colour and
 //!   the shape ops read it. Every existing colour builtin therefore works
 //!   here for free. The engine resets it to black at the top of each
 //!   frame; within a frame it is sticky.
@@ -451,7 +451,7 @@ pub(crate) fn grid_dim(vm: &Vm, axis: usize) -> Fx {
 }
 
 /// `clear()`: the whole frame to black. The frame PERSISTS between
-/// `renderFrame` calls (that is what makes `fade` + `setPixel` trails work
+/// `renderBulk` calls (that is what makes `fade` + `setPixel` trails work
 /// with no pattern-side array), so a pattern that wants a fresh canvas
 /// clears it itself.
 pub(crate) fn clear(vm: &mut Vm) -> Value {
@@ -1020,7 +1020,7 @@ mod tests {
 
     /// Wrap a body in the whole-frame entry.
     fn rf(body: &str) -> alloc::string::String {
-        alloc::format!("export function renderFrame() {{\n{body}\n}}")
+        alloc::format!("export function renderBulk() {{\n{body}\n}}")
     }
 
     // ---- index space ----
@@ -1082,7 +1082,7 @@ mod tests {
         assert_eq!(px, vec![[255, 127, 0]; 2]);
         // arrays index by pixel; a scalar broadcasts alongside them
         let src = "vals = array(4)\n\
-                   export function renderFrame() {\n\
+                   export function renderBulk() {\n\
                      vals[0] = 0\n vals[1] = .25\n vals[2] = .5\n vals[3] = .75\n\
                      fillHSV(vals, 1, 1)\n\
                    }";
@@ -1093,7 +1093,7 @@ mod tests {
         );
         // a short array bounds the run and leaves the tail untouched
         let src = "vals = array(2)\n\
-                   export function renderFrame() {\n\
+                   export function renderBulk() {\n\
                      rgb(0, 0, 1)\n fill()\n\
                      vals[0] = 1\n vals[1] = 1\n\
                      fillRGB(vals, 0, 0)\n\
@@ -1105,7 +1105,7 @@ mod tests {
     #[test]
     fn fill_hsv_rejects_a_non_array_non_number() {
         let src = "export function f() { }\n\
-                   export function renderFrame() { fillHSV(f, 1, 1) }";
+                   export function renderBulk() { fillHSV(f, 1, 1) }";
         let mut e = build(src, 2, &Rig::Strip);
         e.frame(Fx::from_int(10));
         let err = e.take_error().expect("a type error");
@@ -1167,7 +1167,7 @@ mod tests {
         // mapless: y is the mid-space 0.5 fill, x is index-normalized —
         // exactly what render2D would receive
         let src = "export function render(i) { }\n\
-                   export function renderFrame() { rgb(1, 0, 0)\n fillRect(0, .4, .5, .6) }";
+                   export function renderBulk() { rgb(1, 0, 0)\n fillRect(0, .4, .5, .6) }";
         let px = frame1(src, 4, &Rig::Strip);
         // bounds are INCLUSIVE, so x = 0.5 is inside
         assert_eq!(px, vec![[255, 0, 0], [255, 0, 0], [255, 0, 0], [0, 0, 0]]);
@@ -1258,7 +1258,7 @@ mod tests {
     fn fill_canvas_samples_nearest() {
         // a 2x2 canvas on a 4x4 panel: each texel covers a 2x2 block
         let src = "hs = array(4)\n\
-                   export function renderFrame() {\n\
+                   export function renderBulk() {\n\
                      hs[0] = 0\n hs[1] = .3333\n hs[2] = .6667\n hs[3] = 0\n\
                      fillCanvas(hs, 1, 1, 2, 2)\n\
                    }";
@@ -1285,7 +1285,7 @@ mod tests {
     #[test]
     fn grid_dims_report_the_installed_grid() {
         let src = "export var gw, gh\n\
-                   export function renderFrame() { gw = gridWidth()\n gh = gridHeight() }";
+                   export function renderBulk() { gw = gridWidth()\n gh = gridHeight() }";
         let mut e = build(src, 12, &Rig::Grid(4, 3));
         e.frame(Fx::from_int(10));
         assert_eq!(e.var("gw"), Some(Value::Num(Fx::from_int(4))));
@@ -1301,7 +1301,7 @@ mod tests {
     fn blit_pastes_clips_and_keys() {
         // a 2x1 red/green sprite at cell (1, 1) of a 4x4 panel
         let src = "hs = array(2)\n\
-                   export function renderFrame() {\n\
+                   export function renderBulk() {\n\
                      hs[0] = 0\n hs[1] = .3333\n\
                      blit(hs, 1, 1, 2, 1, 1, 1, 0)\n\
                    }";
@@ -1311,7 +1311,7 @@ mod tests {
         assert_eq!(px[4], [0, 0, 0]);
         // negative / off-grid placement clips instead of wrapping or erroring
         let src = "hs = array(2)\n\
-                   export function renderFrame() {\n\
+                   export function renderBulk() {\n\
                      hs[0] = 0\n hs[1] = .3333\n\
                      blit(hs, 1, 1, 2, 1, -1, 2, 0)\n\
                    }";
@@ -1320,7 +1320,7 @@ mod tests {
         assert_eq!(px[9], [0, 0, 0]);
         // keyed: a black texel leaves the destination alone
         let src = "vs = array(2)\n\
-                   export function renderFrame() {\n\
+                   export function renderBulk() {\n\
                      rgb(0, 0, 1)\n fill()\n\
                      vs[0] = 0\n vs[1] = 1\n\
                      blit(0, 0, vs, 2, 1, 0, 0, 3)\n\
@@ -1359,7 +1359,7 @@ mod tests {
 
     /// The dims-reporting pattern the two grid-coverage tests share.
     const DIMS: &str = "export var gw, gh\n\
-                        export function renderFrame() { gw = gridWidth()\n gh = gridHeight() }";
+                        export function renderBulk() { gw = gridWidth()\n gh = gridHeight() }";
 
     #[test]
     fn grid_ops_run_on_an_over_provisioned_grid_and_clip_the_tail() {
@@ -1532,7 +1532,7 @@ mod tests {
             let cells = cw * ch;
             let src = alloc::format!(
                 "hs = array({cells})\n\
-                 export function renderFrame() {{\n\
+                 export function renderBulk() {{\n\
                    for (i = 0; i < {cells}; i++) {{ hs[i] = i / {cells} }}\n\
                    fillCanvas(hs, 1, 1, {cw}, {ch})\n\
                  }}"
@@ -1572,10 +1572,10 @@ mod tests {
             let n = w * h;
             let head = palette_canvas(n);
             let bulk = alloc::format!(
-                "{head}export function renderFrame() {{ paintCanvas(vs, {w}, {h}, bs) }}"
+                "{head}export function renderBulk() {{ paintCanvas(vs, {w}, {h}, bs) }}"
             );
             let loopy = alloc::format!(
-                "{head}export function renderFrame() {{\n\
+                "{head}export function renderBulk() {{\n\
                    for (i = 0; i < {n}; i++) {{ paint(vs[i], bs[i])\n setPixel(i) }}\n\
                  }}"
             );
@@ -1597,13 +1597,13 @@ mod tests {
         // the brightness argument is optional and defaults to 1
         let head = palette_canvas(16);
         let with_one = alloc::format!(
-            "{head}export function renderFrame() {{ paintCanvas(vs, 4, 4, 1) }}"
+            "{head}export function renderBulk() {{ paintCanvas(vs, 4, 4, 1) }}"
         );
-        let without = alloc::format!("{head}export function renderFrame() {{ paintCanvas(vs, 4, 4) }}");
+        let without = alloc::format!("{head}export function renderBulk() {{ paintCanvas(vs, 4, 4) }}");
         assert_eq!(frame1(&with_one, 16, &Rig::Grid(4, 4)), frame1(&without, 16, &Rig::Grid(4, 4)));
         // a degenerate canvas paints nothing
         let px = frame1(
-            &alloc::format!("{head}export function renderFrame() {{ paintCanvas(vs, 0, 0) }}"),
+            &alloc::format!("{head}export function renderBulk() {{ paintCanvas(vs, 0, 0) }}"),
             16,
             &Rig::Grid(4, 4),
         );
@@ -1616,7 +1616,7 @@ mod tests {
             let n = gw * gh;
             let cells = cw * ch;
             let src = alloc::format!(
-                "{}export function renderFrame() {{ paintCanvas(vs, {cw}, {ch}, bs) }}",
+                "{}export function renderBulk() {{ paintCanvas(vs, {cw}, {ch}, bs) }}",
                 palette_canvas(cells)
             );
             for (name, rig) in [
@@ -1636,7 +1636,7 @@ mod tests {
         // It is a fill, not a `paint()` call: a pattern that set a colour
         // before it still has that colour after.
         let src = alloc::format!(
-            "{}export function renderFrame() {{\n\
+            "{}export function renderBulk() {{\n\
                rgb(1, 0, 0)\n paintCanvas(vs, 4, 4, bs)\n fill()\n\
              }}",
             palette_canvas(16)

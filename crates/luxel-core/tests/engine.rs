@@ -1463,7 +1463,7 @@ fn default_grid_is_procedural_and_covers_a_64x64_panel() {
     let src = "export function render2D(index, x, y) { rgb(x, y, 0) }";
     let mut e = Engine::new(src, 4096, 1).unwrap();
     let m = e.installed_map().expect("2D-only pattern gets the default grid");
-    assert_eq!(m.grid, Some((64, 64)));
+    assert_eq!(m.grid.map(|g| (g.w, g.h)), Some((64, 64)));
     assert!(m.coords.is_empty(), "procedural grid must not store coordinates");
     assert_eq!(m.len(), 4096);
     // last pixel is the bottom-right corner, first the top-left
@@ -1479,7 +1479,7 @@ fn default_grid_is_procedural_and_covers_a_64x64_panel() {
 //
 // The playground picks its default preview rig from this, so it has to read
 // the compiled program: a `render2D` in a comment or a string is not 2D, and
-// a `renderFrame` pattern is 2D only when it draws in coordinate/grid space.
+// a `renderBulk` pattern is 2D only when it draws in coordinate/grid space.
 #[test]
 fn preferred_dims_reads_the_compiled_entries() {
     let cases: [(&str, u8); 8] = [
@@ -1498,13 +1498,13 @@ export function render3D(i, x, y, z) { rgb(x, y, z) }",
 export function render2D(i, x, y) { rgb(x, y, 0) }",
             2,
         ),
-        // renderFrame in index space is a strip pattern
-        ("export function renderFrame() {
+        // renderBulk in index space is a strip pattern
+        ("export function renderBulk() {
   hsv(0.3, 1, 1)
   fillHSV(0.3, 1, 1)
 }", 0),
         // ...and in coordinate space it wants the grid
-        ("export function renderFrame() {
+        ("export function renderBulk() {
   clear()
   hsv(0.3, 1, 1)
   fillCircle(0.5, 0.5, 0.3)
@@ -1519,7 +1519,7 @@ export function render(index) { rgb(1, 0, 0) }", 0),
     }
 }
 
-// ---- renderFrame: the whole-frame entry (crate::bulk) ----
+// ---- renderBulk: the whole-frame entry (crate::bulk) ----
 //
 // One zero-argument call per frame instead of one call per pixel, with the
 // engine's frame buffer lent to the VM so the bulk builtins write it in
@@ -1532,7 +1532,7 @@ fn render_frame_wins_over_every_per_pixel_entry() {
     // it is not a fourth dimensionality — it wins regardless of the map
     let src = "export function render(i) { rgb(1, 0, 0) }\n\
                export function render2D(i, x, y) { rgb(0, 1, 0) }\n\
-               export function renderFrame() { rgb(0, 0, 1)\n fill() }";
+               export function renderBulk() { rgb(0, 0, 1)\n fill() }";
     let mut e = Engine::new(src, 4, 1).unwrap();
     assert_eq!(e.frame(Fx::ZERO), [[0, 0, 255]; 4]);
     let mut e = Engine::new(src, 4, 1).unwrap();
@@ -1542,12 +1542,12 @@ fn render_frame_wins_over_every_per_pixel_entry() {
 
 #[test]
 fn render_frame_can_be_late_bound_through_a_global() {
-    // `export var renderFrame` assigned a function in beforeRender — the
+    // `export var renderBulk` assigned a function in beforeRender — the
     // same RenderTarget::Global mechanism render2D has (oracle-confirmed
     // for the per-pixel names, 2026-08-29)
-    let src = "export var renderFrame\n\
+    let src = "export var renderBulk\n\
                export function beforeRender(delta) {\n\
-                 if (time(1) >= 0) { renderFrame = paintIt }\n\
+                 if (time(1) >= 0) { renderBulk = paintIt }\n\
                }\n\
                function paintIt() { rgb(1, 1, 0)\n fill() }\n\
                export function render(i) { rgb(1, 0, 0) }";
@@ -1561,19 +1561,19 @@ fn render_frame_only_pattern_gets_the_default_grid_when_it_asks_for_one() {
     // asks for coordinates → the same ceil(sqrt(n)) grid a render2D-only
     // pattern gets
     let mut e = Engine::new(
-        "export function renderFrame() { rgb(1, 0, 0)\n fillRect(0, 0, 1, 1) }",
+        "export function renderBulk() { rgb(1, 0, 0)\n fillRect(0, 0, 1, 1) }",
         16,
         1,
     )
     .unwrap();
-    assert_eq!(e.installed_map().and_then(|m| m.grid), Some((4, 4)));
+    assert_eq!(e.installed_map().and_then(|m| m.grid).map(|g| (g.w, g.h)), Some((4, 4)));
     assert_eq!(e.grid().map(|g| (g.w, g.h)), Some((4, 4)));
     assert_eq!(e.frame(Fx::ZERO), [[255, 0, 0]; 16]);
 
     // index-space only → a strip stays a strip; conjuring a grid would
     // change pixelMapDimensions() and the post chain under the pattern
     let e = Engine::new(
-        "export function renderFrame() { fillHSV(0, 1, 1)\n fade(.5) }",
+        "export function renderBulk() { fillHSV(0, 1, 1)\n fade(.5) }",
         16,
         1,
     )
@@ -1588,7 +1588,7 @@ fn render_frame_persists_between_frames() {
     // pattern-side array (a 4096-element one is 32 KB and has OOMed the
     // S3 panel — Gitea #275)
     let src = "export var n\n\
-               export function renderFrame() {\n\
+               export function renderBulk() {\n\
                  fade(.5)\n rgb(1, 1, 1)\n setPixel(n)\n n = n + 1\n\
                }";
     let mut e = Engine::new(src, 4, 1).unwrap();
@@ -1608,13 +1608,13 @@ fn render_frame_still_runs_the_post_chain_and_pixel_state() {
     // gamma is the last stage of the chain, and it must see the frame the
     // bulk ops wrote
     let plain = {
-        let mut e = Engine::new("export function renderFrame() { rgb(.5, .5, .5)\n fill() }", 2, 1)
+        let mut e = Engine::new("export function renderBulk() { rgb(.5, .5, .5)\n fill() }", 2, 1)
             .unwrap();
         e.frame(Fx::ZERO).to_vec()
     };
     let gamma = {
         let mut e = Engine::new(
-            "export function renderFrame() { setGamma(2.2)\n rgb(.5, .5, .5)\n fill() }",
+            "export function renderBulk() { setGamma(2.2)\n rgb(.5, .5, .5)\n fill() }",
             2,
             1,
         )
@@ -1627,7 +1627,7 @@ fn render_frame_still_runs_the_post_chain_and_pixel_state() {
     // setPixelState's end-of-frame hand-over happens in finish_frame, which
     // the whole-frame path must also route through
     let src = "export var seen\n\
-               export function renderFrame() {\n\
+               export function renderBulk() {\n\
                  seen = pixelState(0)\n setPixelState(0, 0.5)\n\
                }";
     let mut e = Engine::new(src, 2, 1).unwrap();
@@ -1640,7 +1640,7 @@ fn render_frame_still_runs_the_post_chain_and_pixel_state() {
 #[test]
 fn render_frame_errors_keep_the_engine_and_the_buffer() {
     // a non-fatal runtime error aborts the handler only — PB blast radius
-    let src = "export function renderFrame() {\n\
+    let src = "export function renderBulk() {\n\
                  rgb(1, 0, 0)\n fill()\n feedback(7, .5)\n rgb(0, 1, 0)\n fill()\n\
                }";
     let mut e = Engine::new(src, 3, 1).unwrap();
@@ -1650,7 +1650,7 @@ fn render_frame_errors_keep_the_engine_and_the_buffer() {
     assert!(e.take_error().is_some());
     // a VM resource guard is frame-fatal: the whole frame blanks, and the
     // buffer still comes back the right length
-    let src = "export function renderFrame() {\n\
+    let src = "export function renderBulk() {\n\
                  rgb(1, 0, 0)\n fill()\n while (1) { }\n\
                }";
     let mut e = Engine::new(src, 3, 1).unwrap();
@@ -1664,7 +1664,7 @@ fn render_frame_errors_keep_the_engine_and_the_buffer() {
 fn render_frame_respects_frame_rate_and_time_scale() {
     // both live in Engine::frame, so the whole-frame entry gets them free
     let src = "export var runs\n\
-               export function renderFrame() { setFrameRate(10)\n runs = runs + 1 }";
+               export function renderBulk() { setFrameRate(10)\n runs = runs + 1 }";
     let mut e = Engine::new(src, 2, 1).unwrap();
     e.frame(Fx::from_int(10));
     e.frame(Fx::from_int(10)); // 20 ms total, under the 100 ms period
@@ -1677,7 +1677,7 @@ fn render_frame_respects_frame_rate_and_time_scale() {
 fn render_frame_steps_in_the_debugger_without_losing_the_buffer() {
     // line numbers:      1
     let src = "\
-export function renderFrame() {
+export function renderBulk() {
   rgb(1, 0, 0)
   fill()
   rgb(0, 0, 1)
@@ -1690,7 +1690,7 @@ export function renderFrame() {
     e.frame(Fx::ZERO);
     assert!(e.debug_paused());
     assert_eq!(e.debug_location().unwrap().0, 4);
-    assert_eq!(e.debug_stack()[0].name, "renderFrame");
+    assert_eq!(e.debug_stack()[0].name, "renderBulk");
     // the buffer is BACK while paused — a debugger UI reads it every stop
     assert_eq!(e.pixels().len(), 3);
     assert_eq!(e.pixels()[0], [255, 0, 0], "fill() already ran");
@@ -1981,7 +1981,7 @@ fn chunked_frames_match_whole_frames() {
         }
     }
     // a whole-frame pattern is not chunkable, and `frame_begin` runs it whole
-    let mut e = Engine::new("export function renderFrame() { rgb(0, 1, 0); fill() }", 4, 1).unwrap();
+    let mut e = Engine::new("export function renderBulk() { rgb(0, 1, 0); fill() }", 4, 1).unwrap();
     assert!(!e.frame_chunkable());
     assert!(!e.frame_begin(Fx::ZERO));
     assert_eq!(e.pixels(), &[[0, 255, 0]; 4]);

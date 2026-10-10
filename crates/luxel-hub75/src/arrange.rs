@@ -153,6 +153,18 @@ pub fn panel_cell(m: &Matrix, p: usize) -> Option<(u32, u32, u8)> {
     m.rule_tile(p).map(|t| (u32::from(t.cx), u32::from(t.cy), t.turns))
 }
 
+/// The arrangement as the engine's lazy coordinate source (Gitea #948):
+/// what the frame's driver order means in engine cells, as arithmetic
+/// instead of a table. `None` when the chain is not a permutation of the
+/// grid or is longer than [`luxel_core::outpipe::MAX_TILES`] — the caller
+/// then installs the plain row-major grid, as every board did before #948.
+#[must_use]
+pub fn tiling(m: &Matrix, tiles: &[Tile]) -> Option<luxel_core::outpipe::Tiling> {
+    let chain: alloc::vec::Vec<(u8, u8, u8)> = tiles.iter().map(|t| (t.cx, t.cy, t.turns)).collect();
+    let scan = scan_stripes(m).map_or(0, |(scan, _)| scan as u16);
+    luxel_core::outpipe::Tiling::new(m.pw, m.ph, m.cols, m.rows, scan, &chain)
+}
+
 /// Fill `lut` with the driver→engine remap, indexed by DRIVER pixel index.
 /// Returns the number of leading chain tiles the framebuffer drives (see
 /// [`driven_panels`]).
@@ -406,6 +418,34 @@ mod tests {
                     seen[e as usize] = true;
                 }
                 assert!(seen.iter().all(|s| *s), "{cols}x{rows} {w:?}: pixel never shown");
+            }
+        }
+    }
+
+    /// Gitea #948: the lazy [`tiling`] computes exactly what the table held,
+    /// for every wiring, with and without a 1/N scan.
+    #[test]
+    fn the_tiling_is_the_table() {
+        for (cols, rows) in [(2u8, 2u8), (3, 2), (1, 1), (4, 1), (1, 3)] {
+            for w in all_wirings() {
+                for scan in [0u8, 1] {
+                    let mut m = tiles(4, 4, cols, rows, w);
+                    m.scan = scan;
+                    let (fw, fh) = chain_fb(&m);
+                    let stripes = stripes(&m);
+                    let mut lut = vec![0u16; fw * fh];
+                    build_lut(&mut lut, &m, fw, fh);
+                    let t = tiling(&m, &m.rule_tiles()).expect("a rule chain is a permutation");
+                    assert_eq!(t.stripes(), stripes);
+                    assert_eq!(t.len(), lut.len(), "{cols}x{rows} scan {scan} {w:?}");
+                    let gw = m.width() as usize;
+                    for (i, &e) in lut.iter().enumerate() {
+                        let (r, c) = t.cell(i);
+                        assert_eq!(r * gw + c, e as usize, "{cols}x{rows} scan {scan} {w:?}: slot {i}");
+                        assert_eq!(t.index(r, c), i);
+                    }
+                    assert_eq!(t.is_identity(), is_identity(&lut), "{cols}x{rows} scan {scan} {w:?}");
+                }
             }
         }
     }

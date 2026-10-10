@@ -1966,7 +1966,7 @@ fn decode_upload(raw: &[u8]) -> Result<luxel_core::bytecode::Envelope<'_>, Strin
     // (building it here too OOM'd the heap under soak-speed pattern churn).
     match validate(env.bytecode) {
         Ok(_) => Ok(env),
-        Err(e @ BcError::Version { .. }) => {
+        Err(e @ (BcError::Version { .. } | BcError::Stale(_))) => {
             let mut out = String::from("{\"ok\":false,\"code\":\"bc-version\",\"error\":\"");
             push_piece(&mut out, &json_escape(&e.to_string()));
             push_piece(&mut out, "\"}");
@@ -2035,7 +2035,7 @@ async fn api_patterns_activate(id: &str) -> String {
             crate::resume::mark_dirty(); // debounced single-pattern persist
             String::from("{\"ok\":true}")
         }
-        Err(e @ BcError::Version { .. }) => {
+        Err(e @ (BcError::Version { .. } | BcError::Stale(_))) => {
             let mut out = String::from("{\"ok\":false,\"code\":\"bc-version\",\"error\":\"");
             push_piece(&mut out, &json_escape(&e.to_string()));
             push_piece(&mut out, "\"}");

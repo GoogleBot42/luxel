@@ -782,11 +782,7 @@ mod tests {
 
     /// Render `text` into a `w×h` row-major grid as ASCII art, `#` = ink.
     fn art(text: &str, font: Font, w: u16, h: u16, x: i32, y: i32) -> String {
-        let grid = GridMap {
-            w,
-            h,
-            serpentine: false,
-        };
+        let grid = GridMap::new(w, h, false);
         let mut px = vec![[0u8; 3]; w as usize * h as usize];
         draw(&mut px, &grid, x, y, text, font, [255, 255, 255]);
         let mut out = String::new();
@@ -958,16 +954,8 @@ mod tests {
 
     #[test]
     fn a_serpentine_grid_draws_the_same_picture() {
-        let straight = GridMap {
-            w: 8,
-            h: 8,
-            serpentine: false,
-        };
-        let snake = GridMap {
-            w: 8,
-            h: 8,
-            serpentine: true,
-        };
+        let straight = GridMap::new(8, 8, false);
+        let snake = GridMap::new(8, 8, true);
         let mut a = vec![[0u8; 3]; 64];
         let mut b = vec![[0u8; 3]; 64];
         draw(&mut a, &straight, 1, 1, "A", Font::Tiny, [9, 9, 9]);
@@ -987,11 +975,7 @@ mod tests {
     #[test]
     fn alignment_anchors_the_run() {
         let w = width("AB", Font::Tiny) as i32; // 8
-        let grid = GridMap {
-            w: 32,
-            h: 6,
-            serpentine: false,
-        };
+        let grid = GridMap::new(32, 6, false);
         let first_lit_col = |align: Align, x: i32| {
             let mut px = vec![[0u8; 3]; 32 * 6];
             draw_aligned(&mut px, &grid, x, 0, "AB", Font::Tiny, [1, 1, 1], align);

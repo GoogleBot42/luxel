@@ -2426,7 +2426,7 @@ fn decode_upload(raw: &[u8]) -> Result<luxel_core::bytecode::Envelope<'_>, Strin
         .map_err(|e| format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e.to_string())))?;
     match validate(env.bytecode) {
         Ok(_) => Ok(env),
-        Err(e @ BcError::Version { .. }) => Err(format!(
+        Err(e @ (BcError::Version { .. } | BcError::Stale(_))) => Err(format!(
             "{{\"ok\":false,\"code\":\"bc-version\",\"error\":\"{}\"}}",
             json_escape(&e.to_string())
         )),
@@ -2875,14 +2875,10 @@ fn layers_max(state: &State) -> usize {
 /// harness's scene cases cheap.
 fn scene_grid(state: &State) -> luxel_core::outpipe::GridMap {
     let n = state.pixel_count.load(Ordering::Relaxed) as usize;
-    let strip = luxel_core::outpipe::GridMap {
-        w: n.min(u16::MAX as usize) as u16,
-        h: 1,
-        serpentine: false,
-    };
+    let strip = luxel_core::outpipe::GridMap::new(n.min(u16::MAX as usize) as u16, 1, false);
     if let Some((w, h)) = *state.device_grid.lock().unwrap() {
         if (w as usize) * (h as usize) == n && w <= u16::MAX as u32 && h <= u16::MAX as u32 {
-            return luxel_core::outpipe::GridMap { w: w as u16, h: h as u16, serpentine: false };
+            return luxel_core::outpipe::GridMap::new(w as u16, h as u16, false);
         }
     }
     if let Some((dims, coords)) = state.device_map.lock().unwrap().as_ref() {
@@ -3951,7 +3947,7 @@ fn handle_connection(stream: TcpStream, state: Arc<State>) {
                             *state.current_pattern_id.lock().unwrap() = p.id;
                             String::from("{\"ok\":true}")
                         }
-                        Err(e @ luxel_core::bytecode::BcError::Version { .. }) => format!(
+                        Err(e @ (luxel_core::bytecode::BcError::Version { .. } | luxel_core::bytecode::BcError::Stale(_))) => format!(
                             "{{\"ok\":false,\"code\":\"bc-version\",\"error\":\"{}\"}}",
                             json_escape(&e.to_string())
                         ),

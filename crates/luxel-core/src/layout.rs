@@ -2778,7 +2778,7 @@ mod tests {
         let mut s = String::new();
         let mut v = view(&l, 128, "{}");
         v.map_dims = 2;
-        v.map_grid = Some(GridMap { w: 16, h: 8, serpentine: false });
+        v.map_grid = Some(GridMap::new(16, 8, false));
         l.push_json(&mut s, &v);
         assert!(s.contains("\"source\":\"map\""));
         assert!(s.contains("\"dims\":2,\"regular\":true"));
