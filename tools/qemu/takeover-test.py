@@ -394,7 +394,7 @@ def check_serial(log: str, slot: str, ota_len: int, c: Checks,
         c.line(boot1, "takeover:   sector 0x10000 attempt 2: data mismatch", "boot1a")
         c.line(boot1, "read back still erased", "boot1a")
         c.line(boot1, "takeover: verify failed at 0x10000", "boot1a")
-        c.line(boot1, "takeover: copy failed — aborting before table rewrite (WLED table intact)",
+        c.line(boot1, "takeover: copy failed — aborting before table rewrite (stock table intact)",
                "boot1a")
         c.line(boot1, RETRY_LINE, "boot1a")
         c.require(log.count(RETRY_LINE) == 1, "serial: exactly one reboot-to-retry",

@@ -127,15 +127,22 @@ board_target() {
 # a build. Sets TAKEOVER=1/0 from $1.
 #
 #   1 — athom-music, esp32-generic, c3-devkit, c6-devkit, s3-devkit: boards a
-#       user reaches through a WLED install.
-#   0 — pixelblaze-v3 (a stock PB v3 runs Pixelblaze firmware; the install is
-#       serial), seengreat-hub75 (ships XiaoZhi).
+#       user reaches through a WLED install (the `wled-takeover` feature); AND
+#       pixelblaze-v3, which ships the SAME foreign-table takeover from stock
+#       Pixelblaze firmware (the `pixelblaze-takeover` feature — different
+#       settings-inheritance path, same marker and table-writing half).
+#   0 — seengreat-hub75 (ships XiaoZhi; no foreign-table installer). This is
+#       the one board that now exercises image-check's ABSENT-marker half.
+#
+# TAKEOVER is a yes/no on "does this board link src/takeover.rs", which is
+# true for either feature — the marker string ("takeover: foreign partition
+# table") is shared, so image-check asserts its presence for both flavours.
 #
 # Adding a board? Answer this question for it here AND in Cargo.toml.
 board_takeover() {
   case "$1" in
-    board-pixelblaze-v3|board-seengreat-hub75) TAKEOVER=0 ;;
-    board-athom-music|board-esp32-generic|board-c3-devkit|board-c6-devkit|board-s3-devkit)
+    board-seengreat-hub75) TAKEOVER=0 ;;
+    board-pixelblaze-v3|board-athom-music|board-esp32-generic|board-c3-devkit|board-c6-devkit|board-s3-devkit)
       TAKEOVER=1 ;;
     *)
       echo "unknown BOARD '$1' — see docs/boards.md" >&2; return 1 ;;

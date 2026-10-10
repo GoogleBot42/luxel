@@ -49,11 +49,12 @@ MIGRATE_MARKER="migrate: partition table on flash"
 # `board_name` drifting out of sync with firmware/src/board.rs. It is the
 # same string tools/ota-push.sh checks at the push — the wrong board's
 # image boots fine and differs only in RESERVED_PINS and pin defaults.
-# The WLED takeover (src/takeover.rs, the `wled-takeover` feature) is per
-# board — see `board_takeover` in firmware/board-target.sh. Assert BOTH
-# directions: a WLED-capable board that lost the feature would ship an
-# installer that silently no-ops, and a serial-only board that kept it would
-# carry ~25 KB it can never use (Gitea #501). No board named → no assertion,
+# The foreign-table takeover (src/takeover.rs, the `wled-takeover` OR
+# `pixelblaze-takeover` feature) is per board — see `board_takeover` in
+# firmware/board-target.sh. Both features link the same marker. Assert BOTH
+# directions: a takeover-capable board that lost its feature would ship an
+# installer that silently no-ops, and a board with no self-installer that
+# kept it would carry ~25 KB it can never use (Gitea #501). No board named → no assertion,
 # which is how a bare `image-check.sh <elf>` on an unknown build still works.
 ABSENT_MARKERS=()
 for _f in ${EXPECT_FEATURES:-}; do
@@ -66,9 +67,9 @@ for _f in ${EXPECT_FEATURES:-}; do
       fi
       if board_takeover "$_f"; then
         if [ "$TAKEOVER" = 1 ]; then
-          MARKERS+=("$TAKEOVER_MARKER|WLED takeover (src/takeover.rs) is not linked into a board that ships it — via-WLED installs would silently no-op. $_f must enable the wled-takeover feature in firmware/Cargo.toml")
+          MARKERS+=("$TAKEOVER_MARKER|the foreign-table takeover (src/takeover.rs) is not linked into a board that ships it — self-installs would silently no-op. $_f must enable its takeover feature (wled-takeover or pixelblaze-takeover) in firmware/Cargo.toml")
         else
-          ABSENT_MARKERS+=("$TAKEOVER_MARKER|WLED takeover (src/takeover.rs) is still linked into $_f, which is installed over serial — ~25 KB of OTA slot for code that can never run. Drop wled-takeover from its feature list in firmware/Cargo.toml")
+          ABSENT_MARKERS+=("$TAKEOVER_MARKER|the foreign-table takeover (src/takeover.rs) is still linked into $_f, which ships no self-installer — ~25 KB of OTA slot for code that can never run. Drop wled-takeover/pixelblaze-takeover from its feature list in firmware/Cargo.toml")
         fi
       fi
       # …and the board's app-slot size, for the margin gate below. Slots are
