@@ -136,6 +136,15 @@ pub struct CompileOpts {
     /// ever refuses a program. `Box` is a no-op in the interpreter, so on
     /// or off must render bit-identically.
     pub kinds: bool,
+    /// Expand calls from a `render*` entry to small user functions in
+    /// place (Gitea #943): the ~48-cycle call per use goes, and the
+    /// interpreter and the JIT both run straight-line code. Same values,
+    /// same runtime errors at the same source positions — but a runtime
+    /// error inside an inlined body is attributed to the CALLER's function
+    /// index, and the expansion has one call level (and one fuel charge)
+    /// fewer than the call it replaces. `tests/inline.rs` renders the
+    /// library inlined and not; `luxel compile --no-inline` is the A/B lever.
+    pub inline: bool,
 }
 
 impl Default for CompileOpts {
@@ -145,6 +154,7 @@ impl Default for CompileOpts {
             const_folding: true,
             store_forwarding: true,
             kinds: true,
+            inline: true,
         }
     }
 }
@@ -174,10 +184,12 @@ pub fn compile_with(src: &str, opts: CompileOpts) -> Result<Program, Diagnostic>
         ast = with_prelude;
     }
     let mut c = Compiler::new(src);
+    c.inline = opts.inline;
     c.prelude_decls = prelude_decls;
     c.collect(&ast)?;
     c.emit_program(&ast)?;
     c.prune_unused_prelude();
+    c.prune_inlined();
     Ok(assemble(
         c.fns,
         c.globals,
@@ -1257,6 +1269,15 @@ struct Compiler<'s> {
     /// call site: a runtime error inside `arrayMutate` then points where a
     /// reader would look, which is where the builtin's error pointed.
     prelude_pos: Option<(u32, u32)>,
+    // ---- call inlining (Gitea #943) ----
+    /// [`CompileOpts::inline`].
+    inline: bool,
+    /// The declaration each inlinable user function compiles from — the
+    /// LAST in walk order, exactly as `emit_program` lets the last
+    /// duplicate win — keyed by function index.
+    inline_decls: Vec<(u16, Stmt)>,
+    /// Functions expanded at least once — candidates for [`Compiler::prune_inlined`].
+    inlined: Vec<u16>,
 }
 
 /// Matches the parser's nesting bound (see parse.rs MAX_DEPTH).
@@ -1288,6 +1309,9 @@ impl<'s> Compiler<'s> {
             specialised: Vec::new(),
             callback_bind: None,
             prelude_pos: None,
+            inline: false,
+            inline_decls: Vec::new(),
+            inlined: Vec::new(),
         }
     }
 
@@ -1534,6 +1558,24 @@ impl<'s> Compiler<'s> {
         // registered global slots; duplicates emit in walk order, last wins.
         let mut decls: Vec<&Stmt> = Vec::new();
         walk_fns(top, &mut |s| decls.push(s));
+        if self.inline {
+            for s in &decls {
+                let StmtKind::Func { name, params, body, .. } = &s.kind else {
+                    continue;
+                };
+                let Some(&(_, idx, _)) = self.named_fns.iter().find(|(n, _, _)| n == name) else {
+                    continue;
+                };
+                // prelude helpers keep their own call (and specialisation)
+                if self.prelude_linked.iter().any(|(_, i)| *i == idx) {
+                    continue;
+                }
+                self.inline_decls.retain(|(i, _)| *i != idx);
+                if inlinable(params, body) {
+                    self.inline_decls.push((idx, (*s).clone()));
+                }
+            }
+        }
         for s in decls {
             let StmtKind::Func {
                 export,
@@ -1555,7 +1597,9 @@ impl<'s> Compiler<'s> {
                 .iter()
                 .any(|(n, i)| n == name && *i == idx)
                 .then_some((0, 0));
-            let def = self.emit_function(name.clone(), params, body, s.span)?;
+            // Calls are inlined only from the per-pixel entries (#943).
+            let hot = *export && matches!(name.as_str(), "render" | "render2D" | "render3D");
+            let def = self.emit_function(name.clone(), params, body, s.span, hot)?;
             self.prelude_pos = None;
             self.fns[idx as usize] = def;
             if *export && name == "renderFrame" {
@@ -1600,6 +1644,7 @@ impl<'s> Compiler<'s> {
         params: &[String],
         body: &[Stmt],
         span: Span,
+        inline_calls: bool,
     ) -> Result<FnIr, Diagnostic> {
         let locals = function_scope(params, body);
         if locals.len() > MAX_LOCALS {
@@ -1609,6 +1654,7 @@ impl<'s> Compiler<'s> {
             ));
         }
         let mut ctx = FnCtx::new(locals, false);
+        ctx.inline_calls = inline_calls;
         for s in body {
             self.emit_stmt(&mut ctx, s)?;
         }
@@ -1856,6 +1902,19 @@ impl<'s> Compiler<'s> {
                 Ok(())
             }
             StmtKind::Return(v) => {
+                if ctx.inline_ret.is_some() {
+                    // inside an inlined body: the value, then the end of
+                    // the expansion — the stack holds exactly that value
+                    match v {
+                        Some(e) => self.emit_expr(ctx, e)?,
+                        None => ctx.push(Insn::Const(Value::default())),
+                    }
+                    let p = ctx.emit_placeholder();
+                    if let Some(r) = ctx.inline_ret.as_mut() {
+                        r.push(p);
+                    }
+                    return Ok(());
+                }
                 match v {
                     Some(e) => {
                         self.emit_expr(ctx, e)?;
@@ -2260,6 +2319,9 @@ impl<'s> Compiler<'s> {
                                     return Ok(());
                                 }
                             }
+                            if self.inline_call(ctx, fn_idx, &eargs)? {
+                                return Ok(());
+                            }
                             for a in &eargs {
                                 self.emit_expr(ctx, a)?;
                             }
@@ -2500,10 +2562,207 @@ impl<'s> Compiler<'s> {
     }
 }
 
+impl<'s> Compiler<'s> {
+    /// Empty out an expanded function nothing references any more (#943):
+    /// no `CallFn` of it outside its own body, no function-value constant,
+    /// not exported. Left in place, a callee with no call sites infers its
+    /// parameters as `Dyn` — and the calls IT makes then widen THEIR
+    /// callees' parameters, which cost six library patterns their fully
+    /// typed render path. Repeated until nothing changes, since emptying
+    /// one can orphan another. The slot stays, as for the prelude.
+    fn prune_inlined(&mut self) {
+        loop {
+            let mut changed = false;
+            for idx in self.inlined.clone() {
+                let i = idx as usize;
+                if self.exported_fns.iter().any(|(_, e)| *e == idx) || self.fns[i].code.len() <= 1 {
+                    continue;
+                }
+                let used = self.fns.iter().enumerate().any(|(j, f)| {
+                    f.code.iter().any(|x| {
+                        matches!(x, Insn::CallFn { fn_idx, .. } if *fn_idx == idx && j != i)
+                            || matches!(x, Insn::Const(Value::Fun(f)) if *f == idx as u32)
+                    })
+                });
+                if used {
+                    continue;
+                }
+                let name = core::mem::take(&mut self.fns[i].name);
+                self.fns[i] = FnIr {
+                    name,
+                    params: 0,
+                    code: alloc::vec![Insn::RetNull],
+                    pos: alloc::vec![(0, 0)],
+                    local_names: Vec::new(),
+                };
+                changed = true;
+            }
+            if !changed {
+                break;
+            }
+        }
+    }
+}
+
 /// The builtin id `name` resolves to in CALL position. A TOMBSTONE resolves
 /// to nothing: the six retired names are prelude functions, and a program
 /// that reaches here for one of them shadowed the prelude with a variable,
 /// so "unknown identifier" is the honest answer (Gitea #626).
+impl<'s> Compiler<'s> {
+    /// Expand `fn_idx(eargs…)` in place when this function inlines calls
+    /// and the callee qualifies ([`inlinable`]); `false` = emit the call.
+    ///
+    /// The expansion is the call's own semantics spelled out: every
+    /// argument evaluated in order, then the first `params` of them stored
+    /// to the callee's parameter slots (extras dropped, missing ones 0) and
+    /// its other locals zeroed — `push_frame`'s rule — then the body, every
+    /// `return` leaving its value (`RetNull`'s is `Num(0)`) and jumping to
+    /// the end, falling off the end leaving 0. The callee's locals are
+    /// fresh slots of THIS function; while the body is emitted every other
+    /// local is unnamed, so a name the callee reads as a global cannot
+    /// resolve to a caller local, and the caller's loops are hidden from
+    /// its `break`/`continue`. One level: nothing in an inlined body is
+    /// expanded again.
+    fn inline_call(&mut self, ctx: &mut FnCtx, fn_idx: u16, eargs: &[&Expr]) -> Result<bool, Diagnostic> {
+        if !ctx.inline_calls || ctx.inline_ret.is_some() || self.callback_bind.is_some() {
+            return Ok(false);
+        }
+        let Some(decl) = self.inline_decls.iter().find(|(i, _)| *i == fn_idx).map(|(_, d)| d.clone()) else {
+            return Ok(false);
+        };
+        let StmtKind::Func { name, params, body, .. } = &decl.kind else {
+            return Ok(false);
+        };
+        let callee = function_scope(params, body);
+        let base = match ctx.inline_slots.iter().find(|(f, _)| *f == fn_idx) {
+            Some(&(_, b)) => b,
+            None => {
+                if ctx.locals.len() + callee.len() > MAX_LOCALS {
+                    return Ok(false);
+                }
+                let b = ctx.locals.len();
+                ctx.locals.extend(callee.iter().map(|l| format!("{name}${l}")));
+                ctx.inline_slots.push((fn_idx, b));
+                b
+            }
+        };
+        for a in eargs {
+            self.emit_expr(ctx, a)?;
+        }
+        let np = params.len();
+        for i in (0..eargs.len()).rev() {
+            if i < np {
+                ctx.push(Insn::StoreL((base + i) as u8));
+            }
+            ctx.push(Insn::Pop);
+        }
+        for i in eargs.len().min(np)..callee.len() {
+            ctx.push(Insn::Const(Value::default()));
+            ctx.push(Insn::StoreL((base + i) as u8));
+            ctx.push(Insn::Pop);
+        }
+        // the body sees only its own names; everything else is unnamed
+        let names = core::mem::take(&mut ctx.locals);
+        ctx.locals = names
+            .iter()
+            .enumerate()
+            .map(|(i, n)| {
+                if i >= base && i < base + callee.len() {
+                    callee[i - base].clone()
+                } else {
+                    format!("\u{0}{n}")
+                }
+            })
+            .collect();
+        let loops = core::mem::take(&mut ctx.loops);
+        let pos = ctx.cur_pos;
+        ctx.inline_ret = Some(Vec::new());
+        let mut r = Ok(());
+        for st in body {
+            r = self.emit_stmt(ctx, st);
+            if r.is_err() {
+                break;
+            }
+        }
+        let rets = ctx.inline_ret.take().unwrap_or_default();
+        ctx.locals = names;
+        ctx.loops = loops;
+        r?;
+        ctx.push(Insn::Const(Value::default()));
+        let end = ctx.here();
+        for p in rets {
+            ctx.patch(p, Insn::Jmp(end));
+        }
+        ctx.set_pos(pos);
+        if !self.inlined.contains(&fn_idx) {
+            self.inlined.push(fn_idx);
+        }
+        Ok(true)
+    }
+}
+
+/// Body-size bound for [`inlinable`], in AST nodes. Large enough for the
+/// library's per-pixel helpers (tixy's 20-formula `evalFormula`), small
+/// enough that an expansion per call site cannot balloon a function.
+const INLINE_MAX_NODES: usize = 600;
+
+/// Whether a user function may be expanded at a call site (#943): no
+/// `switch` (its discriminant rides the operand stack, which a `return`
+/// jumping out of it would strand), no lambda or nested function (their
+/// bodies would be emitted with the caller's context), no `assert`, no
+/// duplicate parameter names, and at most [`INLINE_MAX_NODES`] nodes.
+fn inlinable(params: &[String], body: &[Stmt]) -> bool {
+    for (i, p) in params.iter().enumerate() {
+        if params[..i].contains(p) {
+            return false;
+        }
+    }
+    let mut nodes = 0usize;
+    body.iter().all(|s| inline_ok_stmt(s, &mut nodes)) && nodes <= INLINE_MAX_NODES
+}
+
+fn inline_ok_stmt(s: &Stmt, n: &mut usize) -> bool {
+    *n += 1;
+    let e = |x: &Expr, n: &mut usize| inline_ok_expr(x, n);
+    match &s.kind {
+        StmtKind::Switch { .. } | StmtKind::Func { .. } | StmtKind::Assert { .. } => false,
+        StmtKind::Var { decls, .. } => decls.iter().all(|d| d.init.as_ref().is_none_or(|x| e(x, n))),
+        StmtKind::Expr(x) => e(x, n),
+        StmtKind::If { cond, then, els } => {
+            e(cond, n) && inline_ok_stmt(then, n) && els.as_deref().is_none_or(|x| inline_ok_stmt(x, n))
+        }
+        StmtKind::While { cond, body } => e(cond, n) && inline_ok_stmt(body, n),
+        StmtKind::For { init, cond, update, body } => {
+            init.as_deref().is_none_or(|x| inline_ok_stmt(x, n))
+                && cond.as_ref().is_none_or(|x| e(x, n))
+                && update.as_ref().is_none_or(|x| e(x, n))
+                && inline_ok_stmt(body, n)
+        }
+        StmtKind::Block(b) => b.iter().all(|x| inline_ok_stmt(x, n)),
+        StmtKind::Return(v) => v.as_ref().is_none_or(|x| e(x, n)),
+        StmtKind::Break | StmtKind::Continue | StmtKind::Empty => true,
+    }
+}
+
+fn inline_ok_expr(x: &Expr, n: &mut usize) -> bool {
+    *n += 1;
+    match &x.kind {
+        ExprKind::Num(_) | ExprKind::Str(_) | ExprKind::Ident(_) => true,
+        ExprKind::Lambda { .. } => false,
+        ExprKind::ArrayLit(v) => v.iter().all(|a| inline_ok_expr(a, n)),
+        ExprKind::Unary { expr, .. } => inline_ok_expr(expr, n),
+        ExprKind::Binary { lhs, rhs, .. } => inline_ok_expr(lhs, n) && inline_ok_expr(rhs, n),
+        ExprKind::Assign { target, value, .. } => inline_ok_expr(target, n) && inline_ok_expr(value, n),
+        ExprKind::IncDec { target, .. } => inline_ok_expr(target, n),
+        ExprKind::Ternary { cond, then, els } => {
+            inline_ok_expr(cond, n) && inline_ok_expr(then, n) && inline_ok_expr(els, n)
+        }
+        ExprKind::Call { callee, args } => inline_ok_expr(callee, n) && args.iter().all(|a| inline_ok_expr(a, n)),
+        ExprKind::Index { obj, index } => inline_ok_expr(obj, n) && inline_ok_expr(index, n),
+        ExprKind::Member { obj, .. } => inline_ok_expr(obj, n),
+    }
+}
+
 fn callable_builtin(name: &str) -> Option<u16> {
     lookup_builtin(name).filter(|b| !crate::vm::builtin_removed(*b))
 }
@@ -2608,6 +2867,16 @@ struct FnCtx {
     const_locals: BTreeSet<u8>,
     /// This is fn 0 (top-level init) — where `assert()` is legal.
     is_top: bool,
+    /// Calls to inlinable user functions are expanded here (#943).
+    inline_calls: bool,
+    /// While an inlined body is being emitted: the placeholder jumps its
+    /// `return`s left, patched to the end of the expansion.
+    inline_ret: Option<Vec<usize>>,
+    /// First local slot of each callee already expanded in this function.
+    /// Expansions of one callee are never live at once — arguments are all
+    /// evaluated (any nested expansion finished) before the slots are
+    /// written, and a body never expands a call itself — so they share.
+    inline_slots: Vec<(u16, usize)>,
 }
 
 /// A `break`/`continue` target. Loops answer both; a `switch` answers only
@@ -2646,6 +2915,9 @@ impl FnCtx {
             loops: Vec::new(),
             const_locals: BTreeSet::new(),
             is_top,
+            inline_calls: false,
+            inline_ret: None,
+            inline_slots: Vec::new(),
         }
     }
 

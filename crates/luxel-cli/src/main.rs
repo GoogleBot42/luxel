@@ -36,6 +36,7 @@
 //!                  falls back to that pair's default.
 //!   --no-fuse      compile without the superinstruction peephole (#261 A/B)
 //!   --no-storefwd  compile without store forwarding (#320 A/B)
+//!   --no-inline    compile without call inlining (#943 A/B)
 //!                  (also on `luxel compile`, so a device can be handed an
 //!                  unfused blob against unchanged firmware)
 //!   --no-kinds     compile without kind inference + Box barriers (#607 A/B);
@@ -349,7 +350,7 @@ fn vars_cmd(path: &str, rest: &[String]) -> ExitCode {
 
 pub(crate) fn usage() -> ExitCode {
     eprintln!(
-        "usage: luxel parse <pattern.js>\n       luxel run   <pattern.js> [--pixels N] [--frames N] [--fps F] [--out PATH] [--seed S] [--control NAME=V] [--map-grid WxH] [--proj MODE]\n       luxel bench <pattern.js> [--pixels N] [--frames N] [--map-grid WxH] [--proj MODE]\n       luxel check <pattern.js|.epe> [--grid WxH | --strip N]\n       luxel compile <pattern.js|.epe> [--out PATH.lxbc] [--no-fuse] [--no-storefwd] [--no-kinds] [--kinds] [--stats]\n       luxel sprite import <image> [--size WxH] [--fit fit|fill|crop] [--resample nearest|area] [--colors N] [--alpha N] [--fps N] [--keep-every N] [--dither] [--name S] [--fit-cap] [-o OUT.lxsp]\n       luxel serve [--pixels N] [--max-pixels N] [--port P] [--fps F] [--out-fps F] [--rescan-hz HZ] [--heap-free BYTES] [--engine-heap BYTES] [--ddp-port P] [--e131-port P] [--board strip|panel] [--outputs N] [--reverted FROM_PX,HEAP] [--name NAME] [--board-name NAME] [--bc-format N] [--stale-store] [--accept-ota] [--jit STATE[:REASON][,STATE[:REASON]…]] [--scenes FILE]"
+        "usage: luxel parse <pattern.js>\n       luxel run   <pattern.js> [--pixels N] [--frames N] [--fps F] [--out PATH] [--seed S] [--control NAME=V] [--map-grid WxH] [--proj MODE]\n       luxel bench <pattern.js> [--pixels N] [--frames N] [--map-grid WxH] [--proj MODE]\n       luxel check <pattern.js|.epe> [--grid WxH | --strip N]\n       luxel compile <pattern.js|.epe> [--out PATH.lxbc] [--no-fuse] [--no-storefwd] [--no-kinds] [--no-inline] [--kinds] [--stats]\n       luxel sprite import <image> [--size WxH] [--fit fit|fill|crop] [--resample nearest|area] [--colors N] [--alpha N] [--fps N] [--keep-every N] [--dither] [--name S] [--fit-cap] [-o OUT.lxsp]\n       luxel serve [--pixels N] [--max-pixels N] [--port P] [--fps F] [--out-fps F] [--rescan-hz HZ] [--heap-free BYTES] [--engine-heap BYTES] [--ddp-port P] [--e131-port P] [--board strip|panel] [--outputs N] [--reverted FROM_PX,HEAP] [--name NAME] [--board-name NAME] [--bc-format N] [--stale-store] [--accept-ota] [--jit STATE[:REASON][,STATE[:REASON]…]] [--scenes FILE]"
     );
     ExitCode::from(2)
 }
@@ -377,6 +378,9 @@ fn compile_cmd(path: &str, rest: &[String]) -> ExitCode {
     // `Box` barriers. The A/B lever, and the proof that `Box` is a no-op.
     let no_kinds = rest.iter().any(|a| a == "--no-kinds");
     rest.retain(|a| a != "--no-kinds");
+    // `--no-inline`: keep every call a call (Gitea #943's A/B lever).
+    let no_inline = rest.iter().any(|a| a == "--no-inline");
+    rest.retain(|a| a != "--no-inline");
     // `--kinds`: print the inferred kind of every global and function slot,
     // and why each `Dyn` one is `Dyn`. Writes no .lxbc on its own.
     let show_kinds = rest.iter().any(|a| a == "--kinds");
@@ -423,6 +427,7 @@ fn compile_cmd(path: &str, rest: &[String]) -> ExitCode {
             const_folding: !no_fold,
             store_forwarding: !no_storefwd,
             kinds: !no_kinds,
+            inline: !no_inline,
         },
     ) {
         Ok(p) => p,
@@ -733,6 +738,7 @@ fn run_cmd(path: &str, rest: &[String], bench: bool) -> ExitCode {
             const_folding: !o.no_fold,
             store_forwarding: !o.no_storefwd,
             kinds: !o.no_kinds,
+            inline: true,
         },
     );
     let mut engine = match compiled {

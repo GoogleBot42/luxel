@@ -1,5 +1,25 @@
 # Update log
 
+## 2026-10-10 — the compiler inlines small user functions called from render* (#943)
+
+A `CallFn` from a `render`/`render2D`/`render3D` body to a user function is
+expanded in place, as the call's own semantics spelled out: arguments
+evaluated in order into the callee's own (fresh) local slots, extras dropped
+and missing ones 0, other locals zeroed, the body emitted with every
+`return` jumping to the end with its value. One level only; refused for
+`switch` (its discriminant rides the stack), lambdas, nested functions,
+`assert`, duplicate parameters and bodies over 600 AST nodes. An expanded
+function nothing references any more is emptied — left in place, its
+call-less parameters inferred `Dyn` and widened its own callees' (six
+library patterns lost their fully typed render path until that was added).
+`CompileOpts::inline` / `luxel compile --no-inline` is the A/B lever;
+`tests/inline.rs` renders the whole library both ways (identical) plus the
+edge cases. A runtime error inside an inlined body keeps its message and
+source line but is attributed to the caller's function. Unit 2, 16,384 px,
+VM ms: tixy 75.4 → 71.9, 2d-clock 194.5 → 188.8, geometry-morphing 109.0 →
+106.9; sinc/spiral −1 %. The frame-invariant hoisting half of the ticket is
+not done: hoistcensus puts it at 2.4 % of render* builtin calls.
+
 ## 2026-10-10 — JIT: the trivial builtins are instructions, not calls (#942)
 
 `abs floor ceil round trunc frac min max clamp saturate mix mod sign step

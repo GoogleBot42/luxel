@@ -59,11 +59,13 @@ const GOLDENS: [Golden; 5] = [
     // argument moves + table load + `callx8` each — 44, 280, 52 and 12
     // bytes less image. `rainbow` calls none of them.
     Golden { name: "snake.js", bytes: 1128, pool: 12, fns: 8, digest: 0x4a58370d07e19684 },
-    Golden { name: "snake-2d.js", bytes: 10976, pool: 51, fns: 19, digest: 0xa6d98c4d866e3a4d },
+    // #943: render2D's helper calls are inlined (+1,068 B on top of #942)
+    Golden { name: "snake-2d.js", bytes: 12044, pool: 50, fns: 19, digest: 0xb562512ffa2a42a9 },
     // Re-pinned for Gitea #938: its `perlin(...)` calls go direct (ctx +
     // four words in registers) instead of boxing four arguments into the
     // frame scratch for the generic wrapper — 104 bytes less image.
-    Golden { name: "perlin-fire-wind-tunnel.js", bytes: 2380, pool: 22, fns: 10, digest: 0x88e49888bb74aa2e },
+    // #943: render2D's helper calls are inlined (+1,272 B on top of #942)
+    Golden { name: "perlin-fire-wind-tunnel.js", bytes: 3652, pool: 20, fns: 10, digest: 0x9febe5f270f49ea8 },
     Golden { name: "bulk-canvas-ripples-2d.js", bytes: 3564, pool: 19, fns: 11, digest: 0xe3e38d261d1f240d },
 ];
 

@@ -101,7 +101,9 @@ fn every_library_pattern_compiles() {
 #[test]
 fn only_fn_address_literals_depend_on_code_base() {
     let (prog, kinds) = program_of(
-        "export function render(i) { hsv(i, 1, helper(i)) }\n\
+        // the call is from beforeRender: render* calls are inlined (#943)
+        "var v = 0\nexport function beforeRender(d) { v = helper(d) }\n\
+         export function render(i) { hsv(i, 1, v) }\n\
          function helper(x) { return x * 2 }\n",
     )
     .unwrap();

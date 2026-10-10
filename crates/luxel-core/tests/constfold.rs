@@ -22,12 +22,14 @@ const UNFOLDED: CompileOpts = CompileOpts {
     const_folding: false,
     store_forwarding: true,
     kinds: true,
+    inline: true,
 };
 const UNFUSED_UNFOLDED: CompileOpts = CompileOpts {
     superinstructions: false,
     const_folding: false,
     store_forwarding: true,
     kinds: true,
+    inline: true,
 };
 
 /// One source per rewrite, plus the shapes that must NOT be rewritten.
@@ -121,6 +123,7 @@ fn folding_is_independent_of_the_superinstruction_peephole() {
                     const_folding: true,
                     store_forwarding: true,
                     kinds: true,
+                    inline: true,
                 },
             ),
         ] {
