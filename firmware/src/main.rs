@@ -1142,7 +1142,8 @@ fn element_budget(_byte_budget: usize) -> usize {
 
 fn budgeted_engine(prog: luxel_core::vm::Program, count: u32) -> Engine {
     // Arrays may consume free heap down to (but not past) the runtime
-    // floor — byte-accurate (elements × 8 + per-array overhead), so one
+    // floor — byte-accurate (elements × 4 for an all-number array, × 8
+    // once it holds a handle, + per-array overhead; Gitea #947), so one
     // big array isn't taxed for overhead only swarms of tiny ones pay.
     // See luxel_core::budget::array_budget for the slack + minimum rules.
     let budget = array_budget_now();

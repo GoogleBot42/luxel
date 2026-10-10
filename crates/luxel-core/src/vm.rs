@@ -235,7 +235,7 @@ pub struct Program {
     /// the same rows/triplets hundreds of times. Each entry is a range of
     /// raw `Fx` words in `words`; `ConstArr` instructions allocate arena
     /// entries that INDEX into this pool until first mutation
-    /// (copy-on-write in [`Vm::arr_mut`]).
+    /// (copy-on-write in [`Vm::arr_num_mut`] / [`Vm::index_write`]).
     pub pool: Vec<PoolEntry>,
     /// `fns[0]` is top-level initialization code.
     pub fns: Vec<FnDef>,
@@ -994,6 +994,7 @@ pub struct VmError {
 /// can't drift from the `fail!` sites that raise them.
 pub(crate) const ERR_STACK_OVERFLOW: &str = "value stack overflow";
 pub(crate) const ERR_STACK_UNDERFLOW: &str = "stack underflow (compiler bug)";
+const ERR_OOB: &str = "array index out of bounds";
 pub(crate) const ERR_EXEC_LIMIT: &str = "execution limit exceeded (infinite loop?)";
 
 impl VmError {
@@ -1195,20 +1196,48 @@ pub fn is_array_budget_error(message: &str) -> bool {
 /// (docs/jit-design.md §3.6).
 pub const FUEL: u32 = 8_000_000;
 
-/// One arena array: owned storage, or an index into the program's
-/// const-array pool (until first mutation — copy-on-write). Every `[…]`
-/// literal occurrence keeps its own arena identity either way: writing
-/// through one handle never affects another. Pool indices are
-/// decoder-validated, like every other id the VM trusts.
+/// One arena array: owned `Value`s, owned raw 16.16 words, or an index
+/// into the program's const-array pool (until first mutation —
+/// copy-on-write). Every `[…]` literal occurrence keeps its own arena
+/// identity either way: writing through one handle never affects another.
+/// Pool indices are decoder-validated, like every other id the VM trusts.
+///
+/// `Num` (Gitea #947) is the all-number form: one 4-byte word per element
+/// instead of an 8-byte tagged `Value`, so a `pixelCount`-sized state or
+/// canvas buffer costs half the arena bytes and half the per-frame memory
+/// traffic. `array(n)`, an all-number literal and a const array's
+/// copy-on-write all produce it; the FIRST store of a non-number (an
+/// array, function or builtin handle) promotes it in place to `Owned`
+/// ([`Vm::index_write`]), re-charging the byte difference — a promotion that
+/// does not fit is an ordinary budget error. Nothing ever demotes. The
+/// words are exactly the `Fx` raw values, so every read is
+/// `Value::Num(Fx::from_raw(w as i32))` and output is byte-identical to
+/// the `Value` form by construction.
 #[derive(Debug, Clone)]
 pub enum ArrRepr {
     Owned(ArrVec<Value>),
+    Num(ArrVec<u32>),
     Const(u32),
+}
+
+// Test-only switch that makes every allocation the `Value` form — the
+// pre-#947 representation — so the unit tests can run the same pattern
+// both ways and compare byte for byte (`vm_numarr_tests.rs`). `cfg(test)`
+// only: no device or host build carries it.
+#[cfg(test)]
+std::thread_local! {
+    pub(crate) static FORCE_VALUE_FORM: core::cell::Cell<bool> =
+        const { core::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+fn force_value_form() -> bool {
+    FORCE_VALUE_FORM.with(|f| f.get())
 }
 
 impl Default for ArrRepr {
     fn default() -> Self {
-        ArrRepr::Owned(crate::arena::empty())
+        ArrRepr::Num(crate::arena::empty())
     }
 }
 
@@ -1217,18 +1246,20 @@ impl ArrRepr {
     fn view<'a>(&'a self, prog: &'a Program) -> ArrView<'a> {
         match self {
             ArrRepr::Owned(v) => ArrView::Owned(v),
-            ArrRepr::Const(d) => ArrView::Const(prog.pool_words(*d)),
+            ArrRepr::Num(w) => ArrView::Words(w),
+            ArrRepr::Const(d) => ArrView::Words(prog.pool_words(*d)),
         }
     }
 }
 
-/// Read-only view of an arena array: owned `Value`s, or the raw 16.16
-/// words of a const-pool entry (every element a `Num`) read straight from
-/// the program's word region — which on the device is flash.
+/// Read-only view of an arena array: owned `Value`s, or raw 16.16 words
+/// (every element a `Num`) — an `ArrRepr::Num` array's own storage, or a
+/// const-pool entry read straight from the program's word region (which
+/// on the device is flash).
 #[derive(Clone, Copy)]
 pub enum ArrView<'a> {
     Owned(&'a [Value]),
-    Const(&'a [u32]),
+    Words(&'a [u32]),
 }
 
 impl<'a> ArrView<'a> {
@@ -1236,7 +1267,7 @@ impl<'a> ArrView<'a> {
     pub fn len(&self) -> usize {
         match self {
             ArrView::Owned(v) => v.len(),
-            ArrView::Const(w) => w.len(),
+            ArrView::Words(w) => w.len(),
         }
     }
 
@@ -1249,7 +1280,7 @@ impl<'a> ArrView<'a> {
     pub fn get(&self, i: usize) -> Option<Value> {
         match self {
             ArrView::Owned(v) => v.get(i).copied(),
-            ArrView::Const(w) => w.get(i).map(|&x| Value::Num(Fx::from_raw(x as i32))),
+            ArrView::Words(w) => w.get(i).map(|&x| Value::Num(Fx::from_raw(x as i32))),
         }
     }
 
@@ -1258,14 +1289,14 @@ impl<'a> ArrView<'a> {
     pub fn at(&self, i: usize) -> Value {
         match self {
             ArrView::Owned(v) => v[i],
-            ArrView::Const(w) => Value::Num(Fx::from_raw(w[i] as i32)),
+            ArrView::Words(w) => Value::Num(Fx::from_raw(w[i] as i32)),
         }
     }
 
     pub fn iter(self) -> impl Iterator<Item = Value> + 'a {
         let (o, c) = match self {
             ArrView::Owned(v) => (Some(v.iter()), None),
-            ArrView::Const(w) => (None, Some(w.iter())),
+            ArrView::Words(w) => (None, Some(w.iter())),
         };
         o.into_iter()
             .flatten()
@@ -1273,9 +1304,76 @@ impl<'a> ArrView<'a> {
             .chain(c.into_iter().flatten().map(|&x| Value::Num(Fx::from_raw(x as i32))))
     }
 
-    /// Materialize as owned `Value`s (a const entry decodes its words).
+    /// Element `i` as a number — `get(i).map(Value::num)` without the
+    /// `Value` round trip on the word form (the bulk fills' read).
+    #[inline]
+    pub fn get_num(&self, i: usize) -> Option<Fx> {
+        match self {
+            ArrView::Owned(v) => v.get(i).map(|v| v.num()),
+            ArrView::Words(w) => w.get(i).map(|&x| Fx::from_raw(x as i32)),
+        }
+    }
+
+    /// Materialize as owned `Value`s (the word form decodes its words).
     pub fn to_vec(&self) -> Vec<Value> {
         self.iter().collect()
+    }
+}
+
+/// Mutable access to an array's elements for a writer that stores only
+/// NUMBERS (`blur1D`, `feedback`, `arrayAdd`, `write3`, …): either form,
+/// without promoting the word form. Out-of-range indices panic like slice
+/// indexing, which is what the callers' own length checks rely on.
+pub(crate) enum ArrMut<'a> {
+    Vals(&'a mut [Value]),
+    Words(&'a mut [u32]),
+}
+
+impl ArrMut<'_> {
+    #[inline]
+    pub(crate) fn len(&self) -> usize {
+        match self {
+            ArrMut::Vals(v) => v.len(),
+            ArrMut::Words(w) => w.len(),
+        }
+    }
+
+    /// Element `i` as a number (`Value::num`: a handle reads 0).
+    #[inline]
+    pub(crate) fn num(&self, i: usize) -> Fx {
+        match self {
+            ArrMut::Vals(v) => v[i].num(),
+            ArrMut::Words(w) => Fx::from_raw(w[i] as i32),
+        }
+    }
+
+    /// Element `i` as a `Value` (the word form's are all `Num`).
+    #[inline]
+    pub(crate) fn get(&self, i: usize) -> Value {
+        match self {
+            ArrMut::Vals(v) => v[i],
+            ArrMut::Words(w) => Value::Num(Fx::from_raw(w[i] as i32)),
+        }
+    }
+
+    /// Store `x` at `i`. On the word form only a NUMBER may be stored
+    /// (`x.num()` is what lands): a caller that may hold a handle promotes
+    /// first ([`Vm::promote_num`]) — or, like `arraySort`, only ever moves
+    /// values it read from this same array.
+    #[inline]
+    pub(crate) fn set(&mut self, i: usize, x: Value) {
+        match self {
+            ArrMut::Vals(v) => v[i] = x,
+            ArrMut::Words(w) => w[i] = x.num().raw() as u32,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn set_num(&mut self, i: usize, x: Fx) {
+        match self {
+            ArrMut::Vals(v) => v[i] = Value::Num(x),
+            ArrMut::Words(w) => w[i] = x.raw() as u32,
+        }
     }
 }
 
@@ -1286,10 +1384,11 @@ pub struct Vm {
     /// PB-compat element budget (10,236 units, each array costing len+4 —
     /// arrays are never freed; see DEFAULT_ARRAY_BUDGET).
     pub array_budget: usize,
-    /// Actual bytes charged so far (elements × 8 + per-array overhead).
+    /// Actual bytes charged so far (elements × 4 for the word form, × 8
+    /// for the `Value` form, + per-array overhead; Gitea #947).
     array_bytes: usize,
     /// Device-RAM byte budget for the arena; `usize::MAX` on hosts. Byte-
-    /// accurate so one big array (8 B/element) isn't taxed for the Vec
+    /// accurate so one big array (4 or 8 B/element) isn't taxed for the Vec
     /// overhead only swarms of tiny arrays pay.
     pub array_byte_budget: usize,
     stack: Vec<Value>,
@@ -1807,13 +1906,6 @@ impl Vm {
         self.arrays.get(id as usize).map(|a| a.view(prog))
     }
 
-    /// Mutable view of an array (sensor-frame injection writes in place).
-    /// A const-backed array is materialized first (copy-on-write); on
-    /// allocation failure this returns None rather than panicking.
-    pub fn array_mut(&mut self, prog: &Program, id: u32) -> Option<&mut [Value]> {
-        self.arr_mut(prog, id).ok().map(|v| v.as_mut_slice())
-    }
-
     /// Drive a digital input pin from OUTSIDE the pattern — the pin-injection
     /// ABI (Gitea #177 item 2). `Some(true)`/`Some(false)` holds the pin HIGH
     /// or LOW no matter what `pinMode` asked for; `None` releases it back to
@@ -1935,16 +2027,11 @@ impl Vm {
         self.arrays[id as usize].view(prog)
     }
 
-    /// Mutable storage by id, materializing const-backed arrays
-    /// (copy-on-write). Fails only if the copy can't be allocated.
-    pub(crate) fn arr_mut(
-        &mut self,
-        prog: &Program,
-        id: u32,
-    ) -> Result<&mut ArrVec<Value>, String> {
-        if self.palette_src == Some(id) {
-            self.palette_dirty = true;
-        }
+    /// Copy-on-write of a const-backed array into its own WORD storage
+    /// (`ArrRepr::Num` — a const entry is all numbers). A no-op for the
+    /// other two forms. Fails only if the copy can't be allocated.
+    #[inline(never)]
+    fn materialize_const(&mut self, prog: &Program, id: u32) -> Result<(), String> {
         if let ArrRepr::Const(d) = self.arrays[id as usize] {
             let data: &[u32] = prog.pool_words(d);
             // The const data was never on the byte ledger (it is shared with
@@ -1956,20 +2043,116 @@ impl Vm {
             // (Gitea #132). The error is a plain pattern-level runtime error
             // like the OOM below, so the blast radius stays PB-shaped
             // (Gitea #84): the current handler invocation aborts, nothing more.
-            let delta = Self::array_cost(data.len()) - CONST_ENTRY_COST;
-            self.charge_array_bytes(delta)?;
-            let mut owned: ArrVec<Value> = crate::arena::empty();
-            if owned.try_reserve_exact(data.len()).is_err() {
-                return Err(oom_err(data.len()));
+            let delta = Self::num_array_cost(data.len()) - CONST_ENTRY_COST;
+            let mut owned = self.zeroed_storage(data.len(), true, delta)?;
+            if let ArrRepr::Num(w) = &mut owned {
+                w.copy_from_slice(data);
             }
-            owned.extend(data.iter().map(|&w| Value::Num(Fx::from_raw(w as i32))));
-            self.array_bytes += delta;
-            self.arrays[id as usize] = ArrRepr::Owned(owned);
+            self.arrays[id as usize] = owned;
+            #[cfg(test)]
+            if force_value_form() {
+                self.promote_num(id)?;
+            }
         }
-        match &mut self.arrays[id as usize] {
-            ArrRepr::Owned(v) => Ok(v),
+        Ok(())
+    }
+
+    /// Promote a word-form array to `Value`s in place — the first store of
+    /// a non-number into it (Gitea #947). Re-charges the 4 B/element
+    /// difference on the byte ledger BEFORE reserving, exactly like the
+    /// const copy-on-write above: over budget or out of memory is an
+    /// ordinary runtime error and the array is left as it was. The ELEMENT
+    /// ledger (PB's) counts elements, not bytes, so it is not touched. A
+    /// no-op for the other two forms.
+    #[cold]
+    #[inline(never)]
+    fn promote_num(&mut self, id: u32) -> Result<(), String> {
+        let len = match &self.arrays[id as usize] {
+            ArrRepr::Num(w) => w.len(),
+            _ => return Ok(()),
+        };
+        let delta = Self::array_cost(len) - Self::num_array_cost(len);
+        let mut owned = self.zeroed_storage(len, false, delta)?;
+        if let (ArrRepr::Owned(o), ArrRepr::Num(w)) = (&mut owned, &self.arrays[id as usize]) {
+            for (slot, &x) in o.iter_mut().zip(w.iter()) {
+                *slot = Value::Num(Fx::from_raw(x as i32));
+            }
+        }
+        self.arrays[id as usize] = owned;
+        Ok(())
+    }
+
+    /// Mutable elements by id for a NUMBER-only writer: materializes a
+    /// const-backed array into the word form (copy-on-write) and never
+    /// promotes. Fails only if the copy can't be allocated.
+    pub(crate) fn arr_num_mut(&mut self, prog: &Program, id: u32) -> Result<ArrMut<'_>, String> {
+        if self.palette_src == Some(id) {
+            self.palette_dirty = true;
+        }
+        self.materialize_const(prog, id)?;
+        Ok(match &mut self.arrays[id as usize] {
+            ArrRepr::Owned(v) => ArrMut::Vals(v),
+            ArrRepr::Num(w) => ArrMut::Words(w),
             ArrRepr::Const(_) => unreachable!("materialized above"),
+        })
+    }
+
+    /// `a[i] = val` with `i` already truncated and non-negative — the
+    /// `StoreIdx` arm and the JIT's `arr_store` helper. The word form
+    /// stores a number as its raw word; a non-number promotes it first
+    /// (after the bounds check, so an out-of-range store promotes
+    /// nothing). A const-backed array is materialized before the bounds
+    /// check, as it always was, so a copy-on-write refusal still wins.
+    #[inline]
+    pub(crate) fn index_write(
+        &mut self,
+        prog: &Program,
+        a: u32,
+        i: usize,
+        val: Value,
+    ) -> Result<(), alloc::borrow::Cow<'static, str>> {
+        if self.palette_src == Some(a) {
+            self.palette_dirty = true;
         }
+        match (&mut self.arrays[a as usize], val) {
+            (ArrRepr::Num(w), Value::Num(x)) => match w.get_mut(i) {
+                Some(slot) => *slot = x.raw() as u32,
+                None => return Err(ERR_OOB.into()),
+            },
+            (ArrRepr::Owned(v), _) => match v.get_mut(i) {
+                Some(slot) => *slot = val,
+                None => return Err(ERR_OOB.into()),
+            },
+            _ => return self.index_write_slow(prog, a, i, val),
+        }
+        Ok(())
+    }
+
+    /// [`Vm::index_write`]'s copy-on-write / promotion half.
+    #[cold]
+    #[inline(never)]
+    fn index_write_slow(
+        &mut self,
+        prog: &Program,
+        a: u32,
+        i: usize,
+        val: Value,
+    ) -> Result<(), alloc::borrow::Cow<'static, str>> {
+        self.materialize_const(prog, a)?;
+        if i >= self.arrays[a as usize].view(prog).len() {
+            return Err(ERR_OOB.into());
+        }
+        if let Value::Num(x) = val {
+            if let ArrRepr::Num(w) = &mut self.arrays[a as usize] {
+                w[i] = x.raw() as u32;
+                return Ok(());
+            }
+        }
+        self.promote_num(a)?;
+        if let ArrRepr::Owned(v) = &mut self.arrays[a as usize] {
+            v[i] = val;
+        }
+        Ok(())
     }
 
     /// Simultaneous mutable-dst + read-only-src views for the bulk array
@@ -1981,9 +2164,9 @@ impl Vm {
         prog: &'a Program,
         dst: u32,
         src: u32,
-    ) -> Result<(&'a mut [Value], ArrView<'a>), String> {
+    ) -> Result<(ArrMut<'a>, ArrView<'a>), String> {
         debug_assert_ne!(dst, src);
-        self.arr_mut(prog, dst)?;
+        self.arr_num_mut(prog, dst)?;
         let (d, s) = (dst as usize, src as usize);
         let (dslot, sslot) = if d < s {
             let (lo, hi) = self.arrays.split_at_mut(s);
@@ -1992,10 +2175,12 @@ impl Vm {
             let (lo, hi) = self.arrays.split_at_mut(d);
             (&mut hi[0], &lo[s])
         };
-        let ArrRepr::Owned(dv) = dslot else {
-            unreachable!("materialized above")
+        let d = match dslot {
+            ArrRepr::Owned(v) => ArrMut::Vals(v),
+            ArrRepr::Num(w) => ArrMut::Words(w),
+            ArrRepr::Const(_) => unreachable!("materialized above"),
         };
-        Ok((dv.as_mut_slice(), sslot.view(prog)))
+        Ok((d, sslot.view(prog)))
     }
 
     /// Read-only view of the (possibly suspended) call stack.
@@ -2306,6 +2491,29 @@ impl Vm {
         match self.arr(prog, a).get(i) {
             Some(v) => Ok(v),
             None => Err("array index out of bounds"),
+        }
+    }
+
+    /// [`Vm::index_read`] coerced to a number (`Value::num`: a handle
+    /// element reads 0) — the JIT's `arr_load_num`. The word form answers
+    /// with its word directly (Gitea #947).
+    #[inline]
+    pub(crate) fn index_read_num(
+        &self,
+        prog: &Program,
+        arr: Value,
+        idx: Fx,
+    ) -> Result<Fx, &'static str> {
+        let Value::Arr(a) = arr else {
+            return Err("indexing a non-array value");
+        };
+        if idx.raw() < 0 {
+            return Err(ERR_OOB);
+        }
+        let i = idx.to_int_trunc() as usize;
+        match self.arr(prog, a).get_num(i) {
+            Some(v) => Ok(v),
+            None => Err(ERR_OOB),
         }
     }
 
@@ -2651,12 +2859,8 @@ impl Vm {
                             fail!("array index out of bounds");
                         }
                         let i = idx.to_int_trunc() as usize;
-                        match self.arr_mut(prog, a) {
-                            Ok(v) => match v.get_mut(i) {
-                                Some(slot) => *slot = val,
-                                None => fail!("array index out of bounds"),
-                            },
-                            Err(m) => fail!(&m),
+                        if let Err(m) = self.index_write(prog, a, i, val) {
+                            fail!(&m);
                         }
                         push!(val);
                     }
@@ -2671,18 +2875,8 @@ impl Vm {
                         let n = enc::imm16(w) as usize;
                         // budget-first: the elements are popped into the slot
                         // only once the (fallible) allocation succeeded
-                        match self.alloc_array_zeroed(n) {
-                            Ok(v) => {
-                                let Value::Arr(id) = v else { unreachable!() };
-                                for i in (0..n).rev() {
-                                    let e = pop!();
-                                    // freshly allocated ⇒ always Owned
-                                    if let ArrRepr::Owned(vs) = &mut self.arrays[id as usize] {
-                                        vs[i] = e;
-                                    }
-                                }
-                                push!(v);
-                            }
+                        match self.alloc_literal(n) {
+                            Ok(v) => push!(v),
                             Err(m) => fail!(&m),
                         }
                     }
@@ -3039,13 +3233,26 @@ impl Vm {
         self.array_elems
     }
 
-    /// Real arena cost of an array: elements plus Vec header + allocator
-    /// overhead (what many tiny nested [r,g,b] arrays actually pay).
+    /// Real arena cost of a `Value`-form array: elements plus Vec header +
+    /// allocator overhead (what many tiny nested [r,g,b] arrays actually
+    /// pay).
     fn array_cost(len: usize) -> usize {
-        len * core::mem::size_of::<Value>() + 32
+        len * crate::budget::BYTES_PER_ELEMENT + 32
+    }
+
+    /// The same for the word form (`ArrRepr::Num`, Gitea #947): half the
+    /// element bytes, the same overhead.
+    fn num_array_cost(len: usize) -> usize {
+        len * crate::budget::BYTES_PER_NUM_ELEMENT + 32
     }
 
     fn charge_array(&mut self, len: usize, bytes: usize) -> Result<(), String> {
+        self.charge_array_elems(len)?;
+        self.charge_array_bytes(bytes)
+    }
+
+    /// The element/slot half of [`Vm::charge_array`].
+    fn charge_array_elems(&mut self, len: usize) -> Result<(), String> {
         let want = len + ARRAY_HEADER_UNITS;
         if self.array_elems + want > self.array_budget {
             return Err(elem_budget_err(len, want, self.array_elems, self.array_budget));
@@ -3055,12 +3262,13 @@ impl Vm {
         if self.arrays.len() >= MAX_ARENA_SLOTS {
             return Err(slot_cap_err(MAX_ARENA_SLOTS));
         }
-        self.charge_array_bytes(bytes)
+        Ok(())
     }
 
     /// The byte half of [`Vm::charge_array`], for bytes added to an arena
     /// entry whose elements are already on the element ledger — i.e. the
-    /// const→owned copy-on-write promotion in [`Vm::arr_mut`] (Gitea #132).
+    /// const→owned copy-on-write promotion (Gitea #132) and the word→`Value`
+    /// promotion (Gitea #947), both through [`Vm::zeroed_storage`].
     /// Re-checking the element budget there would demand a spurious extra
     /// header's worth of headroom for an entry that allocates no new slot.
     fn charge_array_bytes(&mut self, bytes: usize) -> Result<(), String> {
@@ -3068,6 +3276,36 @@ impl Vm {
             return Err(byte_budget_err(bytes, self.array_bytes, self.array_byte_budget));
         }
         Ok(())
+    }
+
+    /// Zero-filled element storage of `len` elements — the word form when
+    /// `words`, `Value`s otherwise — charged as `bytes` on the byte ledger.
+    /// Checked BEFORE anything is reserved and reserved fallibly, so on a
+    /// small-heap device an oversized allocation is a recorded runtime
+    /// error, never an allocator panic (= reboot); nothing is charged if it
+    /// fails. The one allocation path for new arrays, the const
+    /// copy-on-write and the word→`Value` promotion (one copy of this code
+    /// in the image, not three).
+    #[inline(never)]
+    fn zeroed_storage(&mut self, len: usize, words: bool, bytes: usize) -> Result<ArrRepr, String> {
+        self.charge_array_bytes(bytes)?;
+        let r = if words {
+            let mut v: ArrVec<u32> = crate::arena::empty();
+            if v.try_reserve_exact(len).is_err() {
+                return Err(oom_err(len));
+            }
+            v.resize(len, 0);
+            ArrRepr::Num(v)
+        } else {
+            let mut v: ArrVec<Value> = crate::arena::empty();
+            if v.try_reserve_exact(len).is_err() {
+                return Err(oom_err(len));
+            }
+            v.resize(len, Value::default());
+            ArrRepr::Owned(v)
+        };
+        self.array_bytes += bytes;
+        Ok(r)
     }
 
     pub fn alloc_array(&mut self, elems: ArrVec<Value>) -> Result<Value, String> {
@@ -3093,17 +3331,58 @@ impl Vm {
     /// BEFORE any memory is reserved, and the reservation itself is
     /// fallible — on a small-heap device a huge `array(n)` must be a
     /// recorded runtime error, never an allocator panic (= reboot).
+    ///
+    /// Zeroes are numbers, so this is the word form (`ArrRepr::Num`, Gitea
+    /// #947) at 4 B/element: `array(n)` and the engine's sensor arrays.
     pub(crate) fn alloc_array_zeroed(&mut self, len: usize) -> Result<Value, String> {
-        self.charge_array(len, Self::array_cost(len))?;
-        let mut elems: ArrVec<Value> = crate::arena::empty();
-        if elems.try_reserve_exact(len).is_err() {
-            return Err(oom_err(len));
-        }
-        elems.resize(len, Value::default());
+        self.alloc_zeroed(len, true)
+    }
+
+    /// [`Vm::alloc_array_zeroed`] in either form: `words` false is the
+    /// `Value` form at 8 B/element, for a literal that holds a non-number
+    /// (which would otherwise be allocated as words only to be promoted
+    /// at once).
+    pub(crate) fn alloc_zeroed(&mut self, len: usize, words: bool) -> Result<Value, String> {
+        #[cfg(test)]
+        let words = words && !force_value_form();
+        self.charge_array_elems(len)?;
+        let bytes = if words {
+            Self::num_array_cost(len)
+        } else {
+            Self::array_cost(len)
+        };
+        let r = self.zeroed_storage(len, words, bytes)?;
         self.array_elems += len + ARRAY_HEADER_UNITS;
-        self.array_bytes += Self::array_cost(len);
-        self.arrays.push(ArrRepr::Owned(elems));
+        self.arrays.push(r);
         Ok(Value::Arr((self.arrays.len() - 1) as u32))
+    }
+
+    /// `NewArray n`: the top `n` stack values, in order, as a fresh array
+    /// — the word form when every one is a number, the `Value` form
+    /// otherwise. Budget first: a refusal leaves the arena and the stack
+    /// untouched. Out of line so the dispatch arm stays a call; a short
+    /// stack (which the decoder's depth proof rules out) is the arm's old
+    /// underflow error.
+    #[inline(never)]
+    fn alloc_literal(&mut self, n: usize) -> Result<Value, String> {
+        let Some(base) = self.stack.len().checked_sub(n) else {
+            return Err(String::from(ERR_STACK_UNDERFLOW));
+        };
+        let words = self.stack[base..].iter().all(|v| matches!(v, Value::Num(_)));
+        let arr = self.alloc_zeroed(n, words)?;
+        // the fresh array is the last slot, and its form fits every value
+        let vals = &self.stack[base..];
+        match self.arrays.last_mut() {
+            Some(ArrRepr::Num(w)) => {
+                for (slot, v) in w.iter_mut().zip(vals) {
+                    *slot = v.num().raw() as u32;
+                }
+            }
+            Some(ArrRepr::Owned(o)) => o.copy_from_slice(vals),
+            _ => {}
+        }
+        self.stack.truncate(base);
+        Ok(arr)
     }
 
     /// `random()`'s generator: **splitmix64**, low 32 bits of each output.
@@ -3923,17 +4202,22 @@ impl Vm {
                 // call as a no-op instead (missing args are nothing to
                 // splat), so an empty slice is the PB-shaped answer.
                 let vals = args.get(first..argc).unwrap_or(&[]);
-                {
-                    let slots = self.arr_mut(prog, arr).map_err(no_site)?;
-                    let count = vals.len() as isize;
-                    if off.saturating_add(count) > slots.len() as isize {
-                        return Err(no_site("array index out of bounds".into()));
-                    }
-                    for (j, arg) in vals.iter().enumerate() {
-                        let i = off + j as isize;
-                        if i >= 0 {
-                            slots[i as usize] = *arg;
-                        }
+                // Copy-on-write first and the span check second, as
+                // always; only then promote the word form, and only if a
+                // non-number is actually being stored (Gitea #947).
+                let len = self.arr_num_mut(prog, arr).map_err(no_site)?.len();
+                let count = vals.len() as isize;
+                if off.saturating_add(count) > len as isize {
+                    return Err(no_site("array index out of bounds".into()));
+                }
+                if !vals.iter().all(|v| matches!(v, Value::Num(_))) {
+                    self.promote_num(arr).map_err(no_site)?;
+                }
+                let mut slots = self.arr_num_mut(prog, arr).map_err(no_site)?;
+                for (j, arg) in vals.iter().enumerate() {
+                    let i = off + j as isize;
+                    if i >= 0 {
+                        slots.set(i as usize, *arg);
                     }
                 }
                 Ok(a(0))
@@ -3942,24 +4226,21 @@ impl Vm {
                 let Value::Arr(arr) = a(0) else {
                     return Err(no_site("arraySort of a non-array".into()));
                 };
-                self.arr_mut(prog, arr).map_err(no_site)?; // materialize (CoW)
-                let ArrRepr::Owned(mut data) = core::mem::take(&mut self.arrays[arr as usize])
-                else {
-                    unreachable!("materialized above")
-                };
                 // insertion sort (documented as not stable; small arrays).
                 // `arraySortBy` is the prelude's now — same algorithm, same
-                // comparison direction (Gitea #626).
+                // comparison direction (Gitea #626). The word form sorts
+                // its words as signed 16.16 — the same order and the same
+                // moves as `Value::num` on the `Value` form.
+                let mut data = self.arr_num_mut(prog, arr).map_err(no_site)?;
                 for i in 1..data.len() {
-                    let key = data[i];
+                    let key = data.get(i);
                     let mut j = i;
-                    while j > 0 && data[j - 1].num() > key.num() {
-                        data[j] = data[j - 1];
+                    while j > 0 && data.get(j - 1).num() > key.num() {
+                        data.set(j, data.get(j - 1));
                         j -= 1;
                     }
-                    data[j] = key;
+                    data.set(j, key);
                 }
-                self.arrays[arr as usize] = ArrRepr::Owned(data);
                 Ok(a(0))
             }
             // ---- coordinate transforms (see field docs for conventions) ----
@@ -4169,7 +4450,7 @@ impl Vm {
                 };
                 let r = n(1).to_int_trunc().max(0) as usize;
                 // materialize up front (copy-on-write) — this writes in place
-                let data = self.arr_mut(prog, arr).map_err(no_site)?;
+                let mut data = self.arr_num_mut(prog, arr).map_err(no_site)?;
                 // Sliding window, O(radius) scratch — see blur1d_inplace.
                 // The prefix-sum version this replaced wanted 8 bytes per
                 // ELEMENT, i.e. 32 KiB for a pixelCount-sized array on a
@@ -4177,7 +4458,7 @@ impl Vm {
                 // blur1D simply failed there (Gitea #296; before that an
                 // infallible Vec aborted the firmware outright — "memory
                 // allocation of 32776 bytes failed", 2026-09-06, #295).
-                if blur1d_inplace(data, r).is_err() {
+                if blur1d_inplace(&mut data, r).is_err() {
                     return Err(no_site("out of memory for blur1D".into()));
                 }
                 Ok(a(0))
@@ -4189,12 +4470,9 @@ impl Vm {
                     return Err(no_site("feedback of a non-array".into()));
                 };
                 let decay = n(1);
-                for slot in self
-                    .arr_mut(prog, arr)
-                    .map_err(no_site)?
-                    .iter_mut()
-                {
-                    *slot = Value::Num(slot.num() * decay);
+                let mut data = self.arr_num_mut(prog, arr).map_err(no_site)?;
+                for i in 0..data.len() {
+                    data.set_num(i, data.num(i) * decay);
                 }
                 Ok(a(0))
             }
@@ -4264,14 +4542,14 @@ impl Vm {
                 let Value::Arr(arr) = a(0) else {
                     return Err(no_site("readEvent: `out` must be an array".into()));
                 };
-                let slots = self.arr_mut(prog, arr).map_err(no_site)?;
+                let slots = self.arr_num_mut(prog, arr).map_err(no_site)?;
                 if slots.len() < 4 {
                     return Err(no_site("readEvent: `out` array needs length >= 4".into()));
                 }
                 let ev = self.events.pop_front().unwrap_or_default();
-                let slots = self.arr_mut(prog, arr).map_err(no_site)?;
-                for (slot, v) in slots.iter_mut().zip(ev) {
-                    *slot = Value::Num(v);
+                let mut slots = self.arr_num_mut(prog, arr).map_err(no_site)?;
+                for (i, v) in ev.into_iter().enumerate() {
+                    slots.set_num(i, v);
                 }
                 num(Fx::ONE)
             }
@@ -4291,7 +4569,7 @@ impl Vm {
                 );
                 if w >= 1 && h >= 1 && r >= 1 {
                     let (w, h, r) = (w as usize, h as usize, r as usize);
-                    let data = self.arr_mut(prog, arr).map_err(no_site)?;
+                    let mut data = self.arr_num_mut(prog, arr).map_err(no_site)?;
                     if data.len() < w * h {
                         return Err(no_site(format!(
                             "blur2D: array shorter than w\u{d7}h ({} < {})",
@@ -4310,26 +4588,26 @@ impl Vm {
                         pre.clear();
                         pre.push(0i64);
                         for i in 0..w {
-                            pre.push(pre[i] + data[base + i].num().raw() as i64);
+                            pre.push(pre[i] + data.num(base + i).raw() as i64);
                         }
                         for i in 0..w {
                             let lo = i.saturating_sub(r);
                             let hi = (i + r).min(w - 1);
                             let avg = (pre[hi + 1] - pre[lo]) / (hi - lo + 1) as i64;
-                            data[base + i] = Value::Num(Fx::from_raw(avg as i32));
+                            data.set_num(base + i, Fx::from_raw(avg as i32));
                         }
                     }
                     for col in 0..w {
                         pre.clear();
                         pre.push(0i64);
                         for i in 0..h {
-                            pre.push(pre[i] + data[i * w + col].num().raw() as i64);
+                            pre.push(pre[i] + data.num(i * w + col).raw() as i64);
                         }
                         for i in 0..h {
                             let lo = i.saturating_sub(r);
                             let hi = (i + r).min(h - 1);
                             let avg = (pre[hi + 1] - pre[lo]) / (hi - lo + 1) as i64;
-                            data[i * w + col] = Value::Num(Fx::from_raw(avg as i32));
+                            data.set_num(i * w + col, Fx::from_raw(avg as i32));
                         }
                     }
                 }
@@ -4348,28 +4626,32 @@ impl Vm {
                 let t = n(2);
                 if dst == src {
                     // closed forms for the aliased call
-                    for slot in self
-                        .arr_mut(prog, dst)
-                        .map_err(no_site)?
-                        .iter_mut()
-                    {
-                        *slot = Value::Num(match builtin {
-                            ArrayAdd => slot.num() + slot.num(),
-                            ArraySub => Fx::ZERO,
-                            _ => slot.num(), // mix(x, x, t) = x
-                        });
+                    let mut d = self.arr_num_mut(prog, dst).map_err(no_site)?;
+                    for i in 0..d.len() {
+                        let x = d.num(i);
+                        d.set_num(
+                            i,
+                            match builtin {
+                                ArrayAdd => x + x,
+                                ArraySub => Fx::ZERO,
+                                _ => x, // mix(x, x, t) = x
+                            },
+                        );
                     }
                 } else {
-                    let (d, s) = self
+                    let (mut d, s) = self
                         .arr_pair(prog, dst, src)
                         .map_err(no_site)?;
-                    for (dv, sv) in d.iter_mut().zip(s.iter()) {
-                        let (x, y) = (dv.num(), sv.num());
-                        *dv = Value::Num(match builtin {
-                            ArrayAdd => x + y,
-                            ArraySub => x - y,
-                            _ => x + (y - x) * t,
-                        });
+                    for i in 0..d.len().min(s.len()) {
+                        let (x, y) = (d.num(i), s.at(i).num());
+                        d.set_num(
+                            i,
+                            match builtin {
+                                ArrayAdd => x + y,
+                                ArraySub => x - y,
+                                _ => x + (y - x) * t,
+                            },
+                        );
                     }
                 }
                 Ok(a(0))
@@ -4388,10 +4670,16 @@ impl Vm {
                 if w >= 1 {
                     let w = w as usize;
                     let (x, y) = (n(2), n(3));
-                    let data = self.arr_mut(prog, arr).map_err(no_site)?;
-                    let h = data.len() / w;
+                    // copy-on-write first (as always), then a plain index
+                    // store: the word form stays words for a number and is
+                    // promoted only for a handle (Gitea #947)
+                    let h = self.arr_num_mut(prog, arr).map_err(no_site)?.len() / w;
                     if h >= 1 {
-                        data[cell_index(y, h) * w + cell_index(x, w)] = v;
+                        if !matches!(v, Value::Num(_)) {
+                            self.promote_num(arr).map_err(no_site)?;
+                        }
+                        let i = cell_index(y, h) * w + cell_index(x, w);
+                        self.arr_num_mut(prog, arr).map_err(no_site)?.set(i, v);
                     }
                 }
                 Ok(v)
@@ -4412,12 +4700,12 @@ impl Vm {
                 if w >= 1 {
                     let w = w as usize;
                     let (x, y) = (n(2), n(3));
-                    let data = self.arr_mut(prog, arr).map_err(no_site)?;
+                    let mut data = self.arr_num_mut(prog, arr).map_err(no_site)?;
                     let h = data.len() / w;
                     if h >= 1 {
                         let i = cell_index(y, h) * w + cell_index(x, w);
-                        let sum = data[i].num() + v;
-                        data[i] = Value::Num(sum);
+                        let sum = data.num(i) + v;
+                        data.set_num(i, sum);
                         return num(sum);
                     }
                 }
@@ -4658,7 +4946,7 @@ impl Vm {
                 let (z, seed) = if three { (n(7), n(8)) } else { (Fx::ZERO, n(7)) };
                 if w >= 1 && h >= 1 {
                     let (w, h) = (w as usize, h as usize);
-                    let data = self.arr_mut(prog, arr).map_err(no_site)?;
+                    let mut data = self.arr_num_mut(prog, arr).map_err(no_site)?;
                     if data.len() < w * h {
                         return Err(no_site(format!(
                             "{}: array shorter than w\u{d7}h ({} < {})",
@@ -4672,11 +4960,14 @@ impl Vm {
                         let base = r * w;
                         for c in 0..w {
                             let x = Fx::from_int(c as i32) * sx + ox;
-                            data[base + c] = Value::Num(if three {
-                                crate::noise::simplex3(x, y, z, seed)
-                            } else {
-                                crate::noise::simplex2(x, y, seed)
-                            });
+                            data.set_num(
+                                base + c,
+                                if three {
+                                    crate::noise::simplex3(x, y, z, seed)
+                                } else {
+                                    crate::noise::simplex2(x, y, seed)
+                                },
+                            );
                         }
                     }
                 }
@@ -4713,7 +5004,7 @@ impl Vm {
                 let (kself, kedge, kdiag) = (n(4), n(5), n(6));
                 if w >= 1 && h >= 1 {
                     let (w, h) = (w as usize, h as usize);
-                    let (d, s) = self
+                    let (mut d, s) = self
                         .arr_pair(prog, dst, src)
                         .map_err(no_site)?;
                     if d.len() < w * h || s.len() < w * h {
@@ -4723,7 +5014,7 @@ impl Vm {
                             w * h
                         )));
                     }
-                    let at = |i: usize| s.get(i).map_or(Fx::ZERO, |v| v.num());
+                    let at = |i: usize| s.get_num(i).unwrap_or(Fx::ZERO);
                     for y in 0..h {
                         let row = y * w;
                         let up = if y > 0 { row - w } else { row };
@@ -4732,14 +5023,14 @@ impl Vm {
                             let i = row + x;
                             let l = if x > 0 { x - 1 } else { x };
                             let r = if x + 1 < w { x + 1 } else { x };
-                            let mut v = d[i].num() + kself * at(i);
+                            let mut v = d.num(i) + kself * at(i);
                             v = v + kedge * (at(row + l) + at(row + r) + at(up + x) + at(dn + x));
                             if kdiag != Fx::ZERO {
                                 v = v
                                     + kdiag
                                         * (at(up + l) + at(up + r) + at(dn + l) + at(dn + r));
                             }
-                            d[i] = Value::Num(v);
+                            d.set_num(i, v);
                         }
                     }
                 }
@@ -4799,12 +5090,12 @@ impl Vm {
         let Value::Arr(arr) = out else {
             return Err(String::from("`out` must be an array"));
         };
-        let slots = self.arr_mut(prog, arr)?;
+        let mut slots = self.arr_num_mut(prog, arr)?;
         if slots.len() < 2 {
             return Err(String::from("`out` array needs length >= 2"));
         }
-        for (slot, v) in slots.iter_mut().zip(vals) {
-            *slot = Value::Num(v);
+        for (i, v) in vals.into_iter().enumerate() {
+            slots.set_num(i, v);
         }
         Ok(())
     }
@@ -4814,12 +5105,12 @@ impl Vm {
         let Value::Arr(arr) = out else {
             return Err(String::from("`out` must be an array"));
         };
-        let slots = self.arr_mut(prog, arr)?;
+        let mut slots = self.arr_num_mut(prog, arr)?;
         if slots.len() < 3 {
             return Err(String::from("`out` array needs length >= 3"));
         }
-        for (slot, v) in slots.iter_mut().zip(vals) {
-            *slot = Value::Num(v);
+        for (i, v) in vals.into_iter().enumerate() {
+            slots.set_num(i, v);
         }
         Ok(())
     }
@@ -4986,7 +5277,7 @@ impl Vm {
     /// Re-cook the installed palette if the pattern has written through the
     /// array since the last lookup. `setPalette` holds a LIVE reference on
     /// PB (oracle, 2026-08-29): writes through the installed array change
-    /// later lookups with no second `setPalette` call, and `arr_mut` flags
+    /// later lookups with no second `setPalette` call, and every writer flags
     /// the mutation. Split out of [`palette_lookup`] so `paintCanvas` can
     /// do it once and then read [`Vm::palette`] per cell.
     pub(crate) fn palette_refresh(&mut self, prog: &Program) {
@@ -5030,7 +5321,7 @@ impl Vm {
 ///
 /// `Err(())` means the (small) scratch allocation failed; the array is
 /// untouched in that case.
-fn blur1d_inplace(data: &mut [Value], r: usize) -> Result<(), ()> {
+fn blur1d_inplace(data: &mut ArrMut<'_>, r: usize) -> Result<(), ()> {
     let len = data.len();
     if r == 0 || len == 0 {
         return Ok(());
@@ -5044,20 +5335,23 @@ fn blur1d_inplace(data: &mut [Value], r: usize) -> Result<(), ()> {
     ring.resize(cap, 0i64);
 
     let (mut lo, mut hi) = (0usize, r.min(len - 1));
-    let mut sum: i64 = data[..=hi].iter().map(|v| v.num().raw() as i64).sum();
+    let mut sum: i64 = 0;
+    for i in 0..=hi {
+        sum += data.num(i).raw() as i64;
+    }
     // ring cursors kept by hand — `i % cap` would be a hardware divide per
     // element, and `lo` only ever advances one slot at a time
     let (mut wp, mut rp) = (0usize, 0usize);
     for i in 0..len {
         // stash the original before it is clobbered; `lo` never falls further
         // than `i - r` behind, so `cap` slots keep every value still needed
-        ring[wp] = data[i].num().raw() as i64;
+        ring[wp] = data.num(i).raw() as i64;
         wp += 1;
         if wp == cap {
             wp = 0;
         }
         let avg = sum / (hi - lo + 1) as i64;
-        data[i] = Value::Num(Fx::from_raw(avg as i32));
+        data.set_num(i, Fx::from_raw(avg as i32));
         if i + 1 == len {
             break;
         }
@@ -5070,7 +5364,7 @@ fn blur1d_inplace(data: &mut [Value], r: usize) -> Result<(), ()> {
             }
         }
         if nhi > hi {
-            sum += data[nhi].num().raw() as i64; // entering: still original
+            sum += data.num(nhi).raw() as i64; // entering: still original
         }
         lo = nlo;
         hi = nhi;
@@ -5484,8 +5778,12 @@ impl Vm {
 }
 
 #[cfg(test)]
+#[path = "vm_numarr_tests.rs"]
+mod numarr_tests;
+
+#[cfg(test)]
 mod blur1d_tests {
-    use super::{blur1d_inplace, Value};
+    use super::{blur1d_inplace, ArrMut, Value};
     use crate::fixed::Fx;
     use alloc::vec::Vec;
 
@@ -5551,8 +5849,12 @@ mod blur1d_tests {
                     let mut want = src.clone();
                     blur1d_prefix_reference(&mut want, r);
                     let mut got = src.clone();
-                    blur1d_inplace(&mut got, r).expect("scratch alloc");
+                    blur1d_inplace(&mut ArrMut::Vals(&mut got), r).expect("scratch alloc");
+                    // the word form (Gitea #947) runs the same body
+                    let mut words: Vec<u32> = src.iter().map(|v| v.num().raw() as u32).collect();
+                    blur1d_inplace(&mut ArrMut::Words(&mut words), r).expect("scratch alloc");
                     for i in 0..len {
+                        assert_eq!(words[i] as i32, want[i].num().raw(), "word form, index {i}");
                         assert_eq!(
                             got[i].num().raw(),
                             want[i].num().raw(),
@@ -5571,10 +5873,10 @@ mod blur1d_tests {
     #[test]
     fn empty_and_zero_radius_are_no_ops() {
         let mut empty: Vec<Value> = Vec::new();
-        blur1d_inplace(&mut empty, 4).expect("scratch alloc");
+        blur1d_inplace(&mut ArrMut::Vals(&mut empty), 4).expect("scratch alloc");
         assert!(empty.is_empty());
         let mut one = alloc::vec![Value::Num(Fx::from_raw(7)), Value::Num(Fx::from_raw(9))];
-        blur1d_inplace(&mut one, 0).expect("scratch alloc");
+        blur1d_inplace(&mut ArrMut::Vals(&mut one), 0).expect("scratch alloc");
         assert_eq!(one[0].num().raw(), 7);
         assert_eq!(one[1].num().raw(), 9);
     }

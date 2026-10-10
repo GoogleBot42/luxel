@@ -196,7 +196,7 @@ impl Src<'_> {
     fn at(&self, i: usize) -> Fx {
         match self {
             Src::Scalar(v) => *v,
-            Src::Arr(a) => a.get(i).map_or(Fx::ZERO, |v| v.num()),
+            Src::Arr(a) => a.get_num(i).unwrap_or(Fx::ZERO),
         }
     }
 

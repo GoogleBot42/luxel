@@ -397,9 +397,8 @@ impl Engine {
         ] {
             if let Some(i) = prog.global_index(name) {
                 if prog.globals[i as usize].export {
-                    let mut zeros: crate::arena::ArrVec<Value> = crate::arena::empty();
-                    zeros.resize(len, Value::default());
-                    if let Ok(v) = vm.alloc_array(zeros) {
+                    // word form (Gitea #947): sensor frames are numbers
+                    if let Ok(v) = vm.alloc_array_zeroed(len) {
                         vm.globals[i as usize] = v;
                     }
                 }
@@ -1504,9 +1503,11 @@ impl Engine {
         let Some(Value::Arr(id)) = self.var(name) else {
             return;
         };
-        if let Some(arr) = self.vm.array_mut(&self.prog, id) {
-            for (dst, v) in arr.iter_mut().zip(vals) {
-                *dst = Value::Num(*v);
+        // numbers only, so a word-form array stays words (Gitea #947); a
+        // copy-on-write that can't be allocated drops the frame silently
+        if let Ok(mut arr) = self.vm.arr_num_mut(&self.prog, id) {
+            for (i, &v) in vals.iter().enumerate().take(arr.len()) {
+                arr.set_num(i, v);
             }
         }
     }

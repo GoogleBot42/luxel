@@ -811,9 +811,10 @@ nothing. On first write the engine allocates `pixelCount × channels ×
 draw from, so an oversized buffer on a small-heap device is the usual
 "pattern too large" error rather than a crash. A higher channel used
 later grows the buffer in place, keeping existing values. Compared with
-two `array(pixelCount)` buffers swapped by hand this is half the RAM
-(4-byte fixed point, not 8-byte values) and stays off the PB-compatible
-10,240-element ledger.
+two `array(pixelCount)` buffers swapped by hand this is the same RAM
+(both are 4-byte fixed point since Gitea #947 — an all-number array is
+stored as raw words) but stays off the PB-compatible 10,240-element
+ledger.
 
 ### Whole-frame rendering (Luxel extension)
 

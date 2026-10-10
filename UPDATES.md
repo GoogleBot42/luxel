@@ -1,5 +1,30 @@
 # Update log
 
+## 2026-10-10 — all-number arrays stored as 4-byte words (#947)
+
+`ArrRepr::Num(ArrVec<u32>)` holds an all-number array as raw 16.16 words:
+`array(n)`, every all-number literal, the engine's sensor arrays and a const
+literal's copy-on-write all allocate it, at 4 B/element instead of the 8-B
+tagged `Value`. `ArrView::Words` serves it and the const pool alike, so every
+reader (index loads, `arraySum`, canvasGet, the bulk fills, `/api/vars`)
+works unchanged. Number-only writers (blur1D/2D, feedback, arrayAdd/Sub/Mix,
+canvasAdd, fillNoise, stencil2D, sort, the `out`-array builtins, readEvent,
+sensor frames) go through `Vm::arr_num_mut` and keep the words; a store of a
+NON-number (`a[i] = h`, arrayReplace, canvasSet, an arrayMapTo callback)
+promotes that one array to `Value`s in place (`Vm::index_write` /
+`Vm::promote_num`) — bounds check first, byte ledger re-charged before the
+copy, an over-budget promotion is the ordinary budget error. The PB element ledger
+is untouched; on arena boards `external_element_budget` now divides by 4,
+the cheapest element, so it still never binds. The JIT's `arr_load_num` /
+`arr_store` / `new_array` bodies take the word path (no emitter change).
+Costs +2.4 KB raw / +0.5 KB gzip of `luxel.wasm`, i.e. of the assets
+bundle (see the PR for the archive line).
+Byte-identical: all 308 library patterns × 4 rigs (60/512 px strips,
+16x16/64x64 grids, 40 frames) render the same PPM and messages from the
+master and branch CLIs; `vm_numarr_tests.rs` runs every array builtin with
+the word form forced off and compares. `.stack` unchanged (pixelblaze-v3
+24,308 B — #800 —, Seengreat 29,796 B).
+
 ## 2026-10-10 — canvas run fill on a tiled grid; grid-cell coordinates from the axis table (#953)
 
 `canvas_fill_slots` walks the frame a `TileCursor::span` at a time (new

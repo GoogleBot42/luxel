@@ -168,8 +168,8 @@ pub unsafe extern "C" fn arr_load_num(ctx: *mut JitCtx, atag: u32, apay: u32, id
     let c = &mut *ctx;
     let vm = &mut *c.vm;
     let prog = &*c.prog;
-    match vm.index_read(prog, value_of(atag, apay), Fx::from_raw(idx)) {
-        Ok(v) => v.num().raw(),
+    match vm.index_read_num(prog, value_of(atag, apay), Fx::from_raw(idx)) {
+        Ok(v) => v.raw(),
         Err(m) => {
             fail_str(c, m);
             0
@@ -203,10 +203,13 @@ pub unsafe extern "C" fn arr_load_dyn(ctx: *mut JitCtx, atag: u32, apay: u32, id
 /// `op::STORE_IDX` arm of `Vm::run`.
 ///
 /// The arm in order: non-`Arr` operand → `"indexing a non-array value"`;
-/// negative raw index → `"array index out of bounds"`; `Vm::arr_mut`,
-/// which is the copy-on-write promotion of an `ArrRepr::Const` array and
-/// can refuse on the byte budget (its `String` is propagated verbatim);
-/// `get_mut` past the end → `"array index out of bounds"`.
+/// negative raw index → `"array index out of bounds"`; then
+/// `Vm::index_write`, the arm's own store: the copy-on-write of an
+/// `ArrRepr::Const` array (which can refuse on the byte budget — its
+/// `String` is propagated verbatim), past the end → `"array index out of
+/// bounds"`, and a number into the word form (`ArrRepr::Num`, Gitea #947)
+/// as one 32-bit store — a non-number promotes that array to `Value`s
+/// first, which can refuse on the byte budget the same way.
 ///
 /// Returns nothing. The interpreter pushes the stored value back on the
 /// value stack (`a[i] = v` is an expression), but generated code already
@@ -235,12 +238,8 @@ pub unsafe extern "C" fn arr_store(
         return fail_str(c, "array index out of bounds");
     }
     let i = Fx::from_raw(idx).to_int_trunc() as usize;
-    match vm.arr_mut(prog, a) {
-        Ok(v) => match v.get_mut(i) {
-            Some(slot) => *slot = val,
-            None => fail_str(c, "array index out of bounds"),
-        },
-        Err(m) => fail_str(c, &m),
+    if let Err(m) = vm.index_write(prog, a, i, val) {
+        fail_str(c, &m);
     }
 }
 
@@ -266,10 +265,12 @@ pub unsafe extern "C" fn arr_len(ctx: *mut JitCtx, atag: u32, apay: u32) -> i32 
 /// `NewArray n` — the `op::NEW_ARRAY` arm of `Vm::run`
 /// (docs/jit-design.md §3.5).
 ///
-/// BUDGET FIRST, exactly as the arm: `Vm::alloc_array_zeroed(n)` runs
-/// before a single element is stored, so a refusal leaves the arena
-/// untouched. Its `String` (element budget, slot cap, byte budget, OOM) is
-/// propagated verbatim. Then element `i` is filled from `vals[i]`.
+/// BUDGET FIRST, exactly as the arm: `Vm::alloc_zeroed` charges and
+/// reserves before a single element is stored, so a refusal leaves the
+/// arena untouched. Its `String` (element budget, slot cap, byte budget,
+/// OOM) is propagated verbatim. Element `i` is `vals[i]`, and the array
+/// takes the word form exactly when every value is a number (Gitea #947),
+/// the same choice the arm makes.
 ///
 /// Returns the arena id — the payload of the `Value::Arr` the arm pushes —
 /// so the emitted code pairs it with a `movi tag, 1`. Returns `0` on
@@ -284,24 +285,27 @@ pub unsafe extern "C" fn new_array(ctx: *mut JitCtx, n: u32, vals: *const ValueR
     let vm = &mut *c.vm;
     let prog = &*c.prog;
     let n = n as usize;
-    let v = match vm.alloc_array_zeroed(n) {
+    let vals: &[ValueRaw] = if n == 0 {
+        &[]
+    } else {
+        core::slice::from_raw_parts(vals, n)
+    };
+    let words = vals.iter().all(|r| matches!(Value::from_raw(*r), Value::Num(_)));
+    let v = match vm.alloc_zeroed(n, words) {
         Ok(v) => v,
         Err(m) => {
             fail_str(c, &m);
             return 0;
         }
     };
-    // `alloc_array_zeroed` always returns `Value::Arr`; matched rather than
+    // `alloc_zeroed` always returns `Value::Arr`; matched rather than
     // `unreachable!()` because a helper must not panic.
     let Value::Arr(id) = v else { return 0 };
-    // Freshly allocated ⇒ `ArrRepr::Owned`, so `arr_mut` cannot fail here
-    // (no const promotion to pay for). The interpreter reaches the storage
-    // through `self.arrays[id]` directly; this is the same slot.
-    if let Ok(slots) = vm.arr_mut(prog, id) {
-        let mut i = 0;
-        while i < n {
-            slots[i] = Value::from_raw(*vals.add(i));
-            i += 1;
+    // Fresh, so no copy-on-write to fail, and the form fits every value:
+    // `set` stores each one as it is.
+    if let Ok(mut slots) = vm.arr_num_mut(prog, id) {
+        for (i, r) in vals.iter().enumerate() {
+            slots.set(i, Value::from_raw(*r));
         }
     }
     id

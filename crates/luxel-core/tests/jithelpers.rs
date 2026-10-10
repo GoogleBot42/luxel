@@ -465,9 +465,10 @@ fn arr_store_into_a_non_array_matches_the_interpreter() {
 #[test]
 fn arr_store_propagates_the_promotion_budget_error_verbatim() {
     // Two const entries cost `CONST_ENTRY_COST` (32 B) each; promoting one
-    // to an owned three-element copy costs `3*8 + 32 - 32` more. A byte
-    // budget one short of that is refused BEFORE anything is reserved
-    // (Gitea #132), and the message is `Vm::arr_mut`'s, not the helper's.
+    // to an owned three-element copy (the word form, Gitea #947) costs
+    // `3*4 + 32 - 32` more. A byte budget one short of that is refused
+    // BEFORE anything is reserved (Gitea #132), and the message is the
+    // VM's, not the helper's.
     let src = "var a = [1, 2, 3]\n\
                var b = [1, 2, 3]\n\
                export var ix\n\
@@ -477,7 +478,7 @@ fn arr_store_propagates_the_promotion_budget_error_verbatim() {
                out = 1\n";
     let p = prog(src);
     let mut vm = vm_for(&p);
-    vm.array_byte_budget = 32 + 32 + (3 * 8 + 32 - 32) - 1;
+    vm.array_byte_budget = 32 + 32 + (3 * 4 + 32 - 32) - 1;
     let e = init(&p, &mut vm).expect_err("promotion must be refused");
     assert!(
         e.message.starts_with("array memory budget exceeded"),
