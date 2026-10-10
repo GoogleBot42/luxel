@@ -1,5 +1,28 @@
 # Update log
 
+## 2026-10-10 — table-driven `sin_turns` (#941)
+
+`fmath::sin_turns` (under `sin`, `cos`, `wave`, `tan`, `rotate`, `beatSin`,
+the sine easings, `oklch` and the FFT twiddles) was a 9th-order Taylor
+series on a quarter wave — five widening multiplies and four constant
+divides, ~110 of the 164 cycles a `sin()` cost on the S3 after #938. It is
+now a 256-step quarter-wave table with linear interpolation: the sine minus
+its exact chord `4t`, in quarter-LSB `u16`s (`SIN_DEV`, 258 entries, 516 B
+of `const` rodata, no DRAM), 24 branchless x86 instructions with no
+bounds check. Jeremy approved the bit change 2026-10-09. Accuracy, pinned
+exhaustively over the 16-bit phase: ≤ 0.91 LSB (1.4e-5) from the true sine
+(the Taylor form was up to 1.84 off) and ≤ 2 LSB from the Taylor form, which
+stays in the tests as the oracle (41 % of phases differ by 1, 0.9 % by 2).
+Exact 0 / ±1.0 at the quarter points, odd, mirror-symmetric and monotone per
+quarter, `cos_turns` still exactly `sin_turns` a quarter on. Interpreter,
+JIT (its `sin`/`wave` direct entries call the same Rust function) and wasm
+stay bit-identical to each other. Library frame digests (framedump, 16x16,
+8 frames): 78 of 308 moved, every one a `sin`/`cos`/`tan`/`wave`/`rotate`/
+`beatSin`/`ease` user; no checked-in golden pins sin output, so none moved.
+Recorded oracle vectors (fw 3.67): `sin(1)`/`sin(-1)` one LSB further from
+PB, `cos(1)`/`tan(1)` one closer, the rest unchanged — the radian
+reduction's floor dominates those errors, not the sine. On-metal cycles
+still to measure (builtinbench).
 ## 2026-10-10 — the native pixel pass runs as spans (#940, first part)
 
 Cycle probes showed the native call was only ~15 % of an empty render2D's
