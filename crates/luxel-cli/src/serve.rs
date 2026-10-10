@@ -2903,6 +2903,12 @@ fn scene_grid(state: &State) -> luxel_core::outpipe::GridMap {
     let strip = luxel_core::outpipe::GridMap::new(n.min(u16::MAX as usize) as u16, 1, false);
     if let Some((w, h)) = *state.device_grid.lock().unwrap() {
         if (w as usize) * (h as usize) == n && w <= u16::MAX as u32 && h <= u16::MAX as u32 {
+            // The compositor's grid is the engines' (Gitea #948): on a panel
+            // mirror whose Layout is a chain, their frames are in wire order
+            // and the scene stage has to index them the same way.
+            if let Some(t) = wire_tiling(state).filter(|t| t.len() == n) {
+                return luxel_core::outpipe::GridMap::tiled(t);
+            }
             return luxel_core::outpipe::GridMap::new(w as u16, h as u16, false);
         }
     }

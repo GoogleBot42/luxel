@@ -144,7 +144,7 @@ const CALL_TIMEOUT_MS = 20_000;
 const RECOVER_MS = 180_000; // how long a crashed device gets to come back
 
 // The five of docs/jit-design.md §7.1, same set as tools/qemu/jit-test.py:
-// two strip patterns, a 2D one, the #260 noise probe, and a renderFrame one.
+// two strip patterns, a 2D one, the #260 noise probe, and a renderBulk one.
 const FIVE = [
   "rainbow.js",
   "snake.js",

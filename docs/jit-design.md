@@ -229,7 +229,7 @@ for `Num`-only locals) but not part of this design.
 
 At activation the whole program compiles or nothing does (§6). Each
 bytecode function becomes one native function; every export the engine
-calls (`beforeRender`, `render`/`render2D`/`render3D`, `renderFrame`) gets
+calls (`beforeRender`, `render`/`render2D`/`render3D`, `renderBulk`) gets
 its entry recorded in a `NativeProgram { entries, fn_table, code }`.
 Pattern-to-pattern calls are direct `callx8` through a literal holding the
 callee's address (the pool is emitted before the code, so every address is
@@ -664,7 +664,7 @@ two that do not. There is no second implementation of any builtin anywhere
 in the JIT.
 
 **Why `saturate`, `paint` and `setPixel` joined (Gitea #841, 2026-09-27).**
-The paint-per-cell `renderFrame` loop — Aurora 2D's and every #405
+The paint-per-cell `renderBulk` loop — Aurora 2D's and every #405
 conversion's inner body — is `saturate`, `saturate`, `paint`, `setPixel`
 per pixel, and each of those was a `generic` call: box the arguments into
 the frame scratch, enter the wrapper, zero a `[Value; MAX_ARGS]` buffer,
@@ -846,7 +846,7 @@ still stands.
   replaces the ~400-cycle entry (`begin_pixel_pass`/`render_pixel`: frame
   push, locals reserve, fuel reset, `run_unwinding`) with a `callx8` plus
   the callee's `entry` — on the order of 20 cycles.
-- `beforeRender(delta)` and `renderFrame()` call their entries the same
+- `beforeRender(delta)` and `renderBulk()` call their entries the same
   way; the frame-buffer lend (`frame_buffer_out/in`) is unchanged because
   bulk ops are builtins and read `Vm::frame` through helpers.
 - `Value` gets its `repr`. `Vm::globals` becomes a `#[repr(C)]` word
@@ -895,7 +895,7 @@ suite installs a caller that runs the same image through the phase-2 ISA
 model. `Engine`'s own path is then literally the same code under both,
 which is what makes `crates/luxel-jit/tests/engine_diff.rs` — 307 of 307
 library patterns, four frames each, bit-identical — a test of the GLUE and
-not of a second implementation of it. A `renderFrame` pattern is only
+not of a second implementation of it. A `renderBulk` pattern is only
 reachable this way at all: the frame builtins need the engine's lent
 buffer, which `library_diff.rs`'s by-hand harness does not have.
 
@@ -1142,7 +1142,7 @@ before it can take a release (docs/boards.md, docs/releases.md).
   **SHIPPED (Gitea #651): `crates/luxel-jit/tests/golden.rs`** — size,
   pool length, function count and an FNV-1a digest for five patterns
   (`rainbow`, `snake`, `snake-2d`, `perlin-fire-wind-tunnel`, the
-  `renderFrame` pattern `bulk-canvas-ripples-2d`), plus the library-wide
+  `renderBulk` pattern `bulk-canvas-ripples-2d`), plus the library-wide
   size total phase 4's code cache is sized against.
 - **The ISA gate — and it is the one that matters**
   (**SHIPPED, Gitea #651**: `crates/luxel-jit/tests/isa/` +
@@ -1318,7 +1318,7 @@ stores only (the §2.3 init rule). Self-check: the abstract walk reaches
 | higher-order builtin with a pattern-function callback | 8 (`arrayMutate` 5, `mapPixels` 2, `arrayMapTo` 1) |
 | stores a non-`Num` into an array | 13 |
 | conditional join whose edges differ in kind (needs `Box`) | 9 patterns, 11 sites |
-| `renderFrame` / `render` / `render2D` / `render3D` | 35 / 183 / 128 / 27 |
+| `renderBulk` / `render` / `render2D` / `render3D` | 35 / 183 / 128 / 27 |
 | allocates no array at all | 121 |
 
 Size: code words per pattern min 10, median 207, max 3 102 (93 196
@@ -1348,7 +1348,7 @@ total by one pattern — not worth building.
 
 **v1 scope check** (as measured then — the callback-builtin half of it is
 moot since #626, see §9a): refusing every program that uses `CallValue` or
-a callback-taking builtin excludes 19 / 307 (6.2 %); `renderFrame` patterns
+a callback-taking builtin excludes 19 / 307 (6.2 %); `renderBulk` patterns
 are not meaningfully over-represented (4 of 35, three from one author's
 sequencer family). **286 / 307 (93.2 %) are both v1-eligible and fully
 typed**; of the 288 eligible, exactly two carry a `Dyn` slot on the render
