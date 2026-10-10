@@ -65,7 +65,10 @@ these before trusting any build/test failure as a real regression.
 3. `web/node_modules` — run `npm ci` inside `nix develop` (bare shells have no `node`).
    A symlink to another worktree's `web/node_modules` also works and saves the
    install, but it shows up as untracked (`?? web/node_modules`) — stage paths
-   by name, never `git add -A`, while it is there (2026-09-30).
+   by name, never `git add -A`, while it is there (2026-09-30). Not the MAIN
+   checkout's, though: its `node_modules` is as stale as the rest of it
+   (`vite build` died with "terser not found" on 2026-10-10) — symlink a
+   worktree that ran `npm ci` recently, or run it yourself.
 3b. `firmware/creds.env` (gitignored WiFi creds) — required by any firmware build
    (`build-esp32.sh` reads it). Copy it from the main checkout:
    `cp /home/googlebot/workspace/pixler/firmware/creds.env firmware/creds.env`.

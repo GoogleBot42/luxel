@@ -112,6 +112,13 @@ Reading the panel (2026-09-07):
   >10 minutes straight on 2026-09-20 with a single `curl` as our only traffic.
   A bare `curl` that returns EMPTY, or two quick curls where the second returns
   nothing, is the same condition — space reads a few seconds apart.
+- **`GET /api/pixels` answers an EMPTY `200` while a FAST pattern runs**
+  (anything near the panel's ~29 fps at 16384 px): `pipeline::preview()`
+  gives up after 16 × 2 ms of the hand-off buffer being out of the slot
+  (Gitea #949). Only a slow pattern (≤ ~5 fps) serves the 49 KB. For a
+  picture proof, make the probe slow with a PER-PIXEL busy loop
+  (`for (k…) z += sin(x*k)`) — a `beforeRender` loop whose result is unused
+  is folded away and does not slow anything (2026-10-10, #948).
 - **A rejected pattern load leaves the panel DARK** with `out_fps` 0 and
   `rescan_hz` 0 — it reads like a hang but is the documented rejection path
   (array budget / `RUNTIME_FLOOR`). Check `vmerr` before diagnosing.
