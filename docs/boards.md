@@ -2317,7 +2317,7 @@ Consequences on this board:
 | | before | with the arena |
 |---|---|---|
 | array BYTE budget | `HEAP.free() − 24 KiB` (~28 KB at 4096 px — less than ONE pixel-sized array) | arena free − `ARENA_RESERVE` (256 KiB), ~7.7 MB |
-| array ELEMENT ledger | PB's 10,236 units | `bytes / 8`, i.e. the byte budget is the only thing that binds |
+| array ELEMENT ledger | PB's 10,236 units | `bytes / 4` (the cheapest element, an all-number array's word since #947), i.e. the byte budget is the only thing that binds |
 | arena slot count | bounded by the element ledger | `vm::MAX_ARENA_SLOTS` (2,559 — the same bound, now explicit) |
 | DRAM cost of a big pattern | arrays + program + engine | program + engine only |
 

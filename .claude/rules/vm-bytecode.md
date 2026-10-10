@@ -21,9 +21,24 @@ paths:
   every `pc` — frames, breakpoints `(fn_idx, pc)`, `VmError.pc`, debug
   position runs, `insn_start` — is a fn-relative WORD index. The constant
   pool is raw 16.16 words in the same region: `ArrRepr::Const` reads go
-  through `ArrView` (`get`/`at`/`len`/`iter`), never `&[Value]`, and
-  `arr_mut` materializes an owned `Vec<Value>` on first write. Don't add a
-  byte-indexed anything, and don't hand out `&[Value]` for arrays.
+  through `ArrView` (`get`/`at`/`len`/`iter`), never `&[Value]`. Don't add
+  a byte-indexed anything, and don't hand out `&[Value]` for arrays.
+- **An arena array has THREE forms** (Gitea #947): `Owned(ArrVec<Value>)`,
+  `Num(ArrVec<u32>)` — raw 16.16 words, what `array(n)` and every
+  all-number literal allocate — and `Const`. `ArrView::Words` serves both
+  word forms. A writer that stores only numbers goes through
+  `Vm::arr_num_mut` (an `ArrMut`, keeps the word form; a const array
+  copies-on-write INTO words); a store of an arbitrary `Value` goes through
+  `Vm::index_write` (the `StoreIdx` arm, the JIT's `arr_store`), or — in a
+  builtin that has already bounds-checked — `Vm::promote_num` when the
+  value is not a number, then `ArrMut::set`. Either way `Num` → `Owned`
+  happens only when a non-number actually lands, with the byte ledger
+  re-charged before the copy. A new array builtin must pick one of these —
+  reaching into `arrays[id]` for `Owned` silently misses every `array(n)`
+  buffer, and `ArrMut::set` of a handle on the word form stores 0. The
+  unit tests in `vm_numarr_tests.rs` run each array builtin with the word
+  form forced off (`FORCE_VALUE_FORM`) and compare byte for byte: add the
+  new builtin there.
 - Bumping `FORMAT_VERSION` is deliberate and rare: the recompile path
   (device replies `bc-version`, the web UI recompiles from source) already
   exists, so a bump costs users one recompile, but every stored blob on
