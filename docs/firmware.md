@@ -2773,10 +2773,10 @@ Since `board-pixelblaze-v3` gained the `pixelblaze-takeover` feature, a
 stock Pixelblaze v3 can also be **converted in place**, inheriting its WiFi
 and LED settings instead of being reflashed from scratch — the sibling of
 the WLED takeover. See docs/pixelblaze-migration.md. The serial procedure
-below remains the guaranteed install/restore path (and the likely delivery
-path for the takeover, since Pixelblaze's own web updater may reject an
-unsigned image — that is the one thing the migration page defers to the
-hardware test).
+below is also the **delivery** path for the takeover (seed a Luxel image
+into an app slot, then it converts on boot): Pixelblaze's own web updater
+verifies a real ECDSA signature on its `.stfu` files, so it rejects an
+unsigned Luxel image — see docs/pixelblaze-migration.md "Delivery".
 
 ### Flashing + restore procedure (serial, fully recoverable)
 

@@ -411,7 +411,7 @@ paths:
   tests assert exactly that pair.
 - **A new `mod` line in `main.rs`: look at the line ABOVE it.** The module
   list carries per-board `#[cfg(...)]` attributes (`multi_core`, `hub75`,
-  `wled-takeover`) that apply to the NEXT `mod`; inserting above one of
+  `wled-takeover`, `pixelblaze-takeover`) that apply to the NEXT `mod`; inserting above one of
   them silently moves the gate onto your module. Xtensa builds fine and
   the RISC-V flake variants fail with "cannot find `x` in `crate`"
   (2026-09-23, `appimg` landed under `#[cfg(multi_core)]`). Build
