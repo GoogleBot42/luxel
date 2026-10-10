@@ -2224,6 +2224,17 @@ impl Engine {
         // never read, exactly as `enter` would have done.
         let direct = np.call.direct() && abi.args_in_regs && (1..=4).contains(&(abi.params as usize));
         let dparams = if direct { abi.params as usize } else { 0 };
+        // The common case runs as spans (Gitea #940); the loop below keeps
+        // the selector, transform and computed-coordinate cases.
+        if sel.is_none() {
+            // SAFETY: `ctx` and `errslot` are this pass's, built for `np`.
+            let spans = unsafe {
+                self.native_spans(np, &mut ctx, render, fn_idx, addr, abi, argc, dparams, index_only, from, to, mid)
+            };
+            if let Some(stopped) = spans {
+                return stopped;
+            }
+        }
         // A tiled chain walks its slots through a cursor (Gitea #948).
         let mut cur = if index_only { None } else { self.vm.grid_cursor(from) };
         for i in from..to {
@@ -2312,6 +2323,121 @@ impl Engine {
             self.pixels[i as usize] = [quantize(r), quantize(g), quantize(b)];
         }
         false
+    }
+
+    /// The native pixel pass as SPANS (Gitea #940): runs of slots whose
+    /// coordinates are a pointer and a stride each — a [`TileCursor`] span
+    /// on a tiled grid, the rest of a row on a plain one, the whole range
+    /// of a coordinate map or of a `render(index)` — so the per-pixel work
+    /// is two or three loads, the context resets, the call, three
+    /// quantizes and the store. The general loop it bypasses resolved the
+    /// coordinate source, the selector and the transform per pixel and
+    /// re-read everything the opaque call might have changed, which was
+    /// most of the ~350 cycles an empty `render2D` cost per pixel on the
+    /// panel; the native call itself was ~15 % of it.
+    ///
+    /// `None` when the pass needs the general loop: a §5.4d selector (the
+    /// caller checks), a transform, a 1D `render(index, x)` (`x` is
+    /// computed, not stored), a strip with no map, a serpentine grid, or a
+    /// map shorter than the pass. Otherwise `Some(stopped)` with the general
+    /// loop's meaning. Same words per pixel as [`Engine::pixel_for`], and
+    /// the same first-error rule: a raised status hands the pixel to
+    /// [`Engine::pixel_error`] and, unless fatal, stores it and resumes
+    /// with the next slot.
+    ///
+    /// # Safety
+    /// `ctx` must be [`Engine::native_ctx`]'s for `np` (its `err` slot is
+    /// read through the raw pointer, never a `&mut`: a helper writes it
+    /// behind the compiler's back), and `addr`/`abi` `fn_idx`'s entry in
+    /// `np`.
+    ///
+    /// [`TileCursor`]: crate::outpipe::TileCursor
+    #[cfg(feature = "jit")]
+    #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
+    unsafe fn native_spans(
+        &mut self,
+        np: &crate::jit::NativeProgram,
+        ctx: &mut crate::jit::JitCtx,
+        render: RenderKind,
+        fn_idx: u16,
+        addr: usize,
+        abi: crate::jit::NativeAbi,
+        argc: usize,
+        dparams: usize,
+        index_only: bool,
+        from: u32,
+        to: u32,
+        mid: Fx,
+    ) -> Option<bool> {
+        use crate::jit::STATUS_OK;
+        if !index_only && (matches!(render, RenderKind::R1(_)) || self.vm.transform_active) {
+            return None;
+        }
+        if to as usize > self.pixels.len() {
+            return None;
+        }
+        let midv = [mid; 1];
+        let mut i = from;
+        // One round per raised status: `pixel_error` takes `&mut self`, so
+        // every raw pointer is derived afresh after it.
+        while i < to {
+            let vm: *mut Vm = &mut self.vm;
+            let mut src = if index_only { SpanSrc::Index } else { SpanSrc::of(&*vm, i, to)? };
+            ctx.vm = vm;
+            let out = self.pixels.as_mut_ptr();
+            let mut idx = Fx::from_int(i as i32).raw();
+            let mut failed = None;
+            'spans: while i < to {
+                let (n, mut ax) = src.span(i, to, midv.as_ptr());
+                for _ in 0..n {
+                    (*vm).pixel = [Fx::ZERO; 3];
+                    (*vm).pixel_written = false;
+                    // Every host entry resets the fuel budget (§3.6).
+                    ctx.fuel = crate::vm::FUEL as i32;
+                    ctx.fn_idx = fn_idx;
+                    ctx.insn_at = 0;
+                    let mut raw = [idx, (*ax[0].0).raw(), (*ax[1].0).raw(), (*ax[2].0).raw()];
+                    for w in raw.iter_mut().skip(argc) {
+                        *w = 0;
+                    }
+                    call_native(np, addr, abi, dparams, ctx, &raw, argc);
+                    if ctx.status != STATUS_OK {
+                        failed = Some(i);
+                        break 'spans;
+                    }
+                    let [r, g, b] = (*vm).pixel;
+                    *out.add(i as usize) = [quantize(r), quantize(g), quantize(b)];
+                    for a in ax.iter_mut() {
+                        a.0 = a.0.offset(a.1);
+                    }
+                    idx = idx.wrapping_add(1 << 16);
+                    i += 1;
+                }
+                src.advance(n);
+            }
+            let Some(at) = failed else {
+                break;
+            };
+            ctx.status = STATUS_OK;
+            let e = (*ctx.err).take().unwrap_or_else(|| VmError {
+                // A raised status with no error is a helper bug; report it
+                // rather than losing the failure.
+                message: String::from("native call failed without an error (JIT bug)"),
+                fn_idx,
+                pc: 0,
+                line: 0,
+                col: 0,
+                is_assert: false,
+            });
+            if self.pixel_error(at, e) {
+                return Some(true);
+            }
+            let [r, g, b] = self.vm.pixel;
+            self.pixels[at as usize] = [quantize(r), quantize(g), quantize(b)];
+            i = at + 1;
+        }
+        Some(false)
     }
 
     /// Blank the frame from render call `i` on. Under a strip projection the
@@ -2584,6 +2710,126 @@ fn select_coords(c: [Fx; 3], sel: [u8; 3], mid: Fx) -> [Fx; 3] {
 /// Fx 0..1 → 0..255 by floor(v·255) — PB-exact (pixel oracle, fw 3.67:
 /// 0.5 → 127, 1−ε → 254). We used to round to nearest; floor makes whole
 /// frames diff bit-identical against previewFrame captures.
+/// Where a [`Engine::native_spans`] pass reads each span's coordinates.
+#[cfg(feature = "jit")]
+enum SpanSrc {
+    /// `render(index)`: no coordinates.
+    Index,
+    /// A tiled procedural grid: the cursor's straight runs over the axis
+    /// table (`w` x values, then the y values).
+    Tiled { cur: crate::outpipe::TileCursor, axes: *const Fx, w: usize },
+    /// A plain row-major grid: the rest of the current row.
+    Rows { axes: *const Fx, w: usize },
+    /// A coordinate map, `[Fx; 3]` per slot, `dims` of them meaningful.
+    Coords { p: *const Fx, dims: u8 },
+}
+
+#[cfg(feature = "jit")]
+impl SpanSrc {
+    /// The source for a pass starting at slot `from`, or `None` when the
+    /// map cannot be read as spans (see [`Engine::native_spans`]).
+    fn of(vm: &Vm, from: u32, to: u32) -> Option<SpanSrc> {
+        let m = vm.map.as_ref()?;
+        match &m.grid {
+            Some(g) => {
+                let (w, h) = (g.w as usize, g.h as usize);
+                if m.dims != 2 || m.axes.len() != w + h || to as usize > w * h {
+                    return None;
+                }
+                let axes = m.axes.as_ptr();
+                match g.tiling {
+                    Some(t) => Some(SpanSrc::Tiled { cur: t.cursor(from as usize)?, axes, w }),
+                    None if !g.serpentine && w > 0 => Some(SpanSrc::Rows { axes, w }),
+                    None => None,
+                }
+            }
+            None => {
+                if to as usize > m.coords.len() {
+                    return None;
+                }
+                Some(SpanSrc::Coords { p: m.coords.as_ptr().cast::<Fx>(), dims: m.dims })
+            }
+        }
+    }
+
+    /// The span at slot `i` (`< to`): its length and, per axis, the first
+    /// coordinate's address and the step in `Fx` between slots. An axis the
+    /// source does not carry reads `mid` with step 0 — `pixel_coords`'s fill.
+    ///
+    /// # Safety
+    /// The source's pointers must still be live, and `i` the slot the pass
+    /// is on.
+    #[inline(always)]
+    unsafe fn span(&self, i: u32, to: u32, mid: *const Fx) -> (u32, [(*const Fx, isize); 3]) {
+        let left = to - i;
+        match *self {
+            SpanSrc::Index => (left, [(mid, 0); 3]),
+            SpanSrc::Tiled { ref cur, axes, w } => {
+                let (n, dr, dc) = cur.span();
+                let (row, col) = cur.cell();
+                let n = (n as u32).min(left);
+                (n, [(axes.add(col), dc as isize), (axes.add(w + row), dr as isize), (mid, 0)])
+            }
+            SpanSrc::Rows { axes, w } => {
+                let (row, col) = (i as usize / w, i as usize % w);
+                let n = ((w - col) as u32).min(left);
+                (n, [(axes.add(col), 1), (axes.add(w + row), 0), (mid, 0)])
+            }
+            SpanSrc::Coords { p, dims } => {
+                let c = p.add(3 * i as usize);
+                let y = if dims >= 2 { (c.add(1), 3) } else { (mid, 0) };
+                let z = if dims >= 3 { (c.add(2), 3) } else { (mid, 0) };
+                (left, [(c, 3), y, z])
+            }
+        }
+    }
+
+    /// Past a span of `n` slots.
+    #[inline(always)]
+    fn advance(&mut self, n: u32) {
+        if let SpanSrc::Tiled { cur, .. } = self {
+            cur.advance_by(n as usize);
+        }
+    }
+}
+
+/// One native pixel call: the typed register-convention pointer when the
+/// entry allows it (`dparams` 1..=4, see `render_pixels_native`), else
+/// [`crate::jit::NativeCall::enter`].
+///
+/// # Safety
+/// As for `render_pixels_native`'s call: `ctx` built for `np`, `addr`/`abi`
+/// an entry of it, `dparams` non-zero only when `np.call.direct()`.
+#[cfg(feature = "jit")]
+#[inline(always)]
+unsafe fn call_native(
+    np: &crate::jit::NativeProgram,
+    addr: usize,
+    abi: crate::jit::NativeAbi,
+    dparams: usize,
+    ctx: &mut crate::jit::JitCtx,
+    raw: &[i32; 4],
+    argc: usize,
+) {
+    use crate::jit::native::regs_abi;
+    let c: *mut crate::jit::JitCtx = ctx;
+    match dparams {
+        1 => {
+            core::mem::transmute::<usize, regs_abi::F1>(addr)(c, raw[0]);
+        }
+        2 => {
+            core::mem::transmute::<usize, regs_abi::F2>(addr)(c, raw[0], raw[1]);
+        }
+        3 => {
+            core::mem::transmute::<usize, regs_abi::F3>(addr)(c, raw[0], raw[1], raw[2]);
+        }
+        4 => {
+            core::mem::transmute::<usize, regs_abi::F4>(addr)(c, raw[0], raw[1], raw[2], raw[3]);
+        }
+        _ => np.call.enter(addr, c, abi, &raw[..argc]),
+    }
+}
+
 pub(crate) fn quantize(v: Fx) -> u8 {
     // raw ≤ 65536 so the product fits i32: no 64-bit arithmetic per channel
     ((v.clamp(Fx::ZERO, Fx::ONE).raw() * 255) >> 16) as u8

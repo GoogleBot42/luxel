@@ -1,5 +1,18 @@
 # Update log
 
+## 2026-10-10 — the native pixel pass runs as spans (#940, first part)
+
+Cycle probes showed the native call was only ~15 % of an empty render2D's
+per-pixel cost; the Rust loop around it was most of it. `Engine::native_spans`
+runs the pass span by span — a `TileCursor` run, a grid row, a coordinate
+map or a `render(index)` range — with pointer + stride coordinates, the
+context resets, the call, quantize and store. Selector/transform/strip-x
+passes keep the general loop. Unit 2 at 16,384 px: empty render2D VM 23.8 →
+14.8 ms (34 → 41 fps), tixy 83.8 → 75.2, rainbow 32.6 → 30.2; opbench's
+per-op cost unchanged. New host test renders every span source native vs
+interpreted. The emitted frame loop (#940 proper) stays open for the call
+itself.
+
 ## 2026-10-10 — canvas run fill on a tiled grid; grid-cell coordinates from the axis table (#953)
 
 `canvas_fill_slots` walks the frame a `TileCursor::span` at a time (new

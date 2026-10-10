@@ -403,6 +403,109 @@ fn diff(name: &str, src: &str) -> Result<usize, String> {
     Ok(FRAMES)
 }
 
+/// A layout to render on: what [`diff_on`] installs on both engines.
+#[derive(Clone, Copy)]
+enum Rig {
+    /// A procedural row-major grid.
+    Grid(u16, u16),
+    /// A HUB75-style wall of `pw`-pixel tiles in driver order (#948).
+    Tiled(&'static luxel_core::outpipe::Tiling),
+    /// A coordinate map of a `w`×`h` grid in arbitrary units, `dims` axes.
+    Coords(u16, u16, u8),
+}
+
+fn rig(e: &mut Engine, r: Rig) {
+    match r {
+        Rig::Grid(w, h) => e.set_grid_map(w, h),
+        Rig::Tiled(t) => {
+            e.set_wire_tiling(Some(t));
+            e.set_grid_map(t.width(), t.height());
+        }
+        Rig::Coords(w, h, dims) => {
+            let mut c = Vec::new();
+            for r in 0..h as i32 {
+                for k in 0..w as i32 {
+                    // irregular spacing so a wrong stride shows
+                    c.push([Fx::from_int(3 * k + r), Fx::from_int(2 * r), Fx::from_int(k * r)]);
+                }
+            }
+            assert!(e.set_map(dims, &c));
+        }
+    }
+}
+
+/// [`diff`] on a mapped layout, `n` pixels — the span loop's coordinate
+/// sources (Gitea #940) against the interpreter's per-pixel lookups.
+fn diff_on(name: &str, src: &str, n: u32, r: Rig) -> Result<(), String> {
+    let mut interp = Engine::new(src, n, 7).map_err(|d| d.message.clone())?;
+    let mut native = Engine::new(src, n, 7).map_err(|d| d.message.clone())?;
+    rig(&mut interp, r);
+    rig(&mut native, r);
+    install(&mut native)?;
+    let delta = Fx::from_int(DELTA_MS);
+    for f in 0..FRAMES {
+        let a = interp.frame(delta).to_vec();
+        let b = native.frame(delta).to_vec();
+        if a != b {
+            let at = a.iter().zip(&b).position(|(x, y)| x != y).unwrap_or(0);
+            return Err(format!("{name}: frame {f} pixel {at} interpreted {:?} native {:?}", a[at], b[at]));
+        }
+        let ea = interp.take_error().map(|e| (e.message, e.fn_idx, e.pc));
+        let eb = native.take_error().map(|e| (e.message, e.fn_idx, e.pc));
+        if ea != eb {
+            return Err(format!("{name}: frame {f} error disagrees: interpreted {ea:?} native {eb:?}"));
+        }
+    }
+    Ok(())
+}
+
+/// The span loop (Gitea #940) on every coordinate source it reads —
+/// plain and tiled grids, 2D and 3D coordinate maps — and the cases it
+/// hands back to the general loop (a transform, a `render(index, x)`).
+#[test]
+fn mapped_layouts_match_the_interpreter() {
+    let wall = |turns: [u8; 4]| {
+        luxel_core::outpipe::Tiling::new(
+            4,
+            4,
+            2,
+            2,
+            0,
+            &[(1, 0, turns[0]), (1, 1, turns[1]), (0, 1, turns[2]), (0, 0, turns[3])],
+        )
+        .unwrap()
+        .leak()
+    };
+    let rigs = [
+        ("grid 8x6", Rig::Grid(8, 6), 48),
+        ("tiled quarter turns", Rig::Tiled(wall([3, 3, 1, 1])), 64),
+        ("tiled mixed turns", Rig::Tiled(wall([0, 2, 1, 3])), 64),
+        ("coords 2D", Rig::Coords(7, 5, 2), 35),
+        ("coords 3D", Rig::Coords(7, 5, 3), 35),
+        ("coords 1D", Rig::Coords(7, 5, 1), 35),
+    ];
+    const SRCS: [(&str, &str); 6] = [
+        ("render2D", "export function render2D(index, x, y) { hsv(x * 0.7 + y * 0.3, 1, index / pixelCount) }"),
+        ("render3D", "export function render3D(index, x, y, z) { rgb(x, y, z) }"),
+        ("render(index)", "export function render(index) { hsv(index / pixelCount, 1, 1) }"),
+        ("render(index, x)", "export function render(index, x) { hsv(x, 1, 1) }"),
+        (
+            "transform",
+            "export function beforeRender(d) { resetTransform(); rotate(0.3) }\n\
+             export function render2D(index, x, y) { rgb(x, y, 0.5) }",
+        ),
+        (
+            "error mid-span",
+            "var a = [1, 2]\nexport function render2D(index, x, y) { rgb(x, y, 0)\n if (index == 13) { hsv(a[index], 1, 1) } }",
+        ),
+    ];
+    for (rn, r, n) in rigs {
+        for (sn, src) in SRCS {
+            diff_on(&format!("{sn} on {rn}"), src, n, r).unwrap_or_else(|e| panic!("{e}"));
+        }
+    }
+}
+
 /// The five patterns docs/jit-design.md §7.1 names, driven through the
 /// engine. Two strip patterns, a 2D one, the noise-heavy #260 benchmark,
 /// and a `renderBulk` pattern — which is the one the by-hand harness in

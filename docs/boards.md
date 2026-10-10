@@ -2839,6 +2839,38 @@ branch at 4117448e, same host build, same probes via `POST /api/code`):
   (board-pixelblaze-v3 24,356 vs master's 24,444 — master is already under
   the floor, Gitea #800).
 
+## The native span loop (2026-10-10, Gitea #940)
+
+Cycle probes around the native pixel loop (render core, inflated alike by
+the HUB75 steal ISR, so read as ratios) split an empty `render2D` on unit 2
+as: the native call itself — prologue, the `rgb` direct call, the returns —
+~15 %; quantize + the frame store ~30 %; the rest the Rust loop around them
+(the coordinate source, selector and transform resolved per pixel, the
+argument marshalling, the context resets, and every field reloaded after the
+opaque call). So most of #940's lever is the plumbing, not the call: the
+pass now runs as SPANS (`Engine::native_spans`) — a `TileCursor` straight
+run on a tiled grid, the rest of a row on a plain grid, the whole range of
+a coordinate map or of a `render(index)` — with each axis a pointer and a
+stride. The general loop keeps the selector, transform and computed-
+coordinate (strip `render(index, x)`) cases. Same words per pixel; host
+`engine_diff` now renders every span source against the interpreter
+(`mapped_layouts_match_the_interpreter`, with a mid-span error).
+
+Unit 2 (2x2, 16,384 px, 64 B lines, JIT native), VM ms:
+
+| | before | span loop |
+|---|---|---|
+| empty `render2D` probe | 23.8 (34 fps) | 14.8 (41 fps) |
+| patbench rainbow | 32.6 | 30.2 |
+| patbench tixy | 83.8 | 75.2 |
+| patbench spiral-2d | 88.8 | 81.2 |
+| patbench perlin-fire-wind-tunnel | 166 | 160 |
+| opbench (cycles/iter, intercept) | 45, 27.0 ms | 45, 24.4 ms |
+
+~349 → ~217 cycles per pixel of floor on the empty probe. What is left is
+the call (an emitted loop with the render body inlined would remove the
+call and the prologue, and #942 the `rgb` call) and the frame store.
+
 ## PSRAM line traffic: 64-byte data-cache lines (2026-10-10, Gitea #958)
 
 #958 asked why writing the 16,384-px frame into the PSRAM arena cost ~90
