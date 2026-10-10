@@ -23,7 +23,9 @@ Byte-identical: all 308 library patterns × 4 rigs (60/512 px strips,
 16x16/64x64 grids, 40 frames) render the same PPM and messages from the
 master and branch CLIs; `vm_numarr_tests.rs` runs every array builtin with
 the word form forced off and compares. `.stack` unchanged (pixelblaze-v3
-24,308 B — #800 —, Seengreat 29,796 B).
+24,308 B — #800 —, Seengreat 29,796 B). Unit 2 (Seengreat, 16,384 px), VM
+ms: a two-`array(pixelCount)` state probe 58.2 → 46.1, blink-fade 95.3 →
+80.8, sparkfire 96.1 → 86.6, twinkle 47.8 → 44.7.
 
 ## 2026-10-10 — rectangle ops write the frame in slot runs on a tiled grid (#953)
 
