@@ -529,12 +529,12 @@ export interface LayoutGeom {
  * `GET /api/layout`'s body as the fixture reading [`deviceGeometry`] takes.
  *
  * `serpentine` is deliberately NOT read off `matrix.snake`. That flag is how
- * the chain walks from TILE to tile (docs/api.md "Chain order"); the firmware
- * folds it into its panel→pixel remap, so the engine — the device's and the
- * preview's — renders one row-major `w`×`h` grid and never knows about the
- * chain. Reading it as pixel wiring mirrored every other row of every
- * per-pixel 2D preview the moment a wall was snaked (the 2x2 `tr col 1`
- * Seengreat, 2026-09-30).
+ * the chain walks from TILE to tile (docs/api.md "Chain order"); the device's
+ * engine folds it into its tiled grid (`Tiling`, #948 — a remap table before
+ * that), and the PREVIEW's engine renders one row-major `w`×`h` grid and
+ * never knows about the chain. Reading it as pixel wiring mirrored every
+ * other row of every per-pixel 2D preview the moment a wall was snaked (the
+ * 2x2 `tr col 1` Seengreat, 2026-09-30).
  */
 export function layoutGeomOf(wire: {
   dims: number;

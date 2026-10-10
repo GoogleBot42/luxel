@@ -623,7 +623,7 @@ export function squarish(pixels: number): { w: number; h: number } {
   return { w: side, h: side };
 }
 
-// ---- the chain (the arrangement SVG's geometry, and #475's remap order) ----
+// ---- the chain (the arrangement SVG's geometry, and #475's chain order) ----
 
 export type Corner = "tl" | "tr" | "bl" | "br";
 export type RunDir = "row" | "col";
@@ -656,8 +656,8 @@ export interface ChainTile {
  *
  * `start` is the corner the chain begins at, `dir` whether it advances along
  * a row (x first) or a column (y first), and `snake` whether alternate
- * lines run backwards. Pure, so the SVG and (later) the firmware's boot-time
- * remap (#475) can be checked against the same table.
+ * lines run backwards. Pure, so the SVG and the engine's tiling (#475, #948)
+ * can be checked against the same table.
  */
 export function chainOrder(
   cols: number,
@@ -775,7 +775,7 @@ export function chainSwap(tiles: readonly WireTile[], from: number, to: number):
 // (`chain cx,cy,deg`, `tiles[i][2]`) carries the panel's MOUNT rotation —
 // how far clockwise the module itself is turned. What the user watches is
 // the PICTURE on that panel, and to stand a picture upright on a module
-// turned 90° clockwise the remap turns the picture 90° ANTI-clockwise. So
+// turned 90° clockwise the tiling turns the picture 90° ANTI-clockwise. So
 // every place the console shows or edits a turn speaks the picture's
 // rotation, `(360 − mount) % 360`, and only the wire speaks the mount's.
 
