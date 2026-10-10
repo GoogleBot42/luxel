@@ -64,3 +64,10 @@ paths:
   ("Curated original …", not a port), controls from day one, no
   docs/pattern-specs entry. Long-running exported counters wrap negative
   past 32767 (16.16) — roll them explicitly.
+- A `renderBulk` pattern that addresses grid CELLS goes through
+  `gridIndex(col, row)` (or a coordinate-space op such as `fillRect`),
+  never `row * gridWidth() + col`: the frame is in wire order, which on a
+  HUB75 chain is not row-major (Gitea #948). The two agree on a plain
+  grid, so the five check-library rigs cannot catch the mistake — review
+  for it. `library/frame-rate-test.js`'s `band()` is the native row/rect
+  fill idiom.

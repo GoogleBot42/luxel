@@ -113,7 +113,8 @@ playground: random); pattern and scene ids are different namespaces.
 Frames are RGB888 `[[u8; 3]]`. Everything composites in **row-major canvas
 space**: a `Canvas` carries the frame plus the `GridMap` that maps a
 `(row, col)` cell onto a pixel index, the way `bulk.rs`'s `paste` addresses a
-frame. Serpentine wiring, panel rotation and the output chain stay the
+frame (row-major, serpentine, or — Gitea #948 — a chain's wire-order tiling,
+which `blend_box` walks cell by cell). Serpentine wiring, panel rotation and the output chain stay the
 existing pipeline's business.
 
 Per pixel, with `B` beneath, `L` the layer and `α = opacity/100 × key factor`:

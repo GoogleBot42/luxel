@@ -126,10 +126,10 @@ GlobalDef { name, export: bool, init: Fx, predefined: bool }
 - `export` on a global makes it visible to the host's vars API;
   `exported_fns` are the host-callable entry points. Frontends decide what
   to export; the engine looks for `render`, `render2D`, `render3D`,
-  `renderFrame`, `beforeRender` and control functions by name.
+  `renderBulk`, `beforeRender` and control functions by name.
 - **Late-bound render entries** (oracle-confirmed 2026-08-29): when no
   exported function of the name exists, a plain GLOBAL named `render`/
-  `render2D`/`render3D`/`renderFrame` is a dispatch candidate. The entry
+  `render2D`/`render3D`/`renderBulk` is a dispatch candidate. The entry
   is re-resolved every frame after `beforeRender`, using the global only
   while it holds a function value — so `export var render2D` assigned
   (and re-assigned) at runtime renders exactly as on a real PB, and a
@@ -285,15 +285,25 @@ point `beforeRender` receives the whole interval. Hosts keep their own
 output cadence either way — the cap throttles pattern evaluation, not the
 LED/preview refresh.
 
-### The whole-frame entry (`renderFrame`)
+### The whole-frame entry (`renderBulk`)
 
-`renderFrame` is a **fourth** entry point of a different shape: one
+`renderBulk` is a **fourth** entry point of a different shape: one
 zero-argument call per frame in place of the whole per-pixel pass. It is
 resolved by the same mechanism as the other three (exported function, or
 a global holding a function, re-resolved every frame) and, when present,
 wins over `render`/`render2D`/`render3D` regardless of the map's
 dimensionality — it is not a fourth dimensionality but a different
 contract.
+
+It was named `renderFrame` until Gitea #948, when the frame's index space
+became wire order (below). The old name is refused at both ends: the
+compiler rejects `export function renderFrame` with a rename message
+(`compile::RENDER_FRAME_RENAMED`), and the LXBC decoder rejects a blob that
+exports `renderFrame` — as a function or as an exported global — with
+`BcError::Stale`. Hosts treat `Stale` exactly like `BcError::Version`:
+recompile from source (which then reports the rename), never run the blob,
+because a pre-#948 pattern's row-major index math paints the wrong pixels
+on a tiled chain.
 
 The contract for a host:
 
@@ -309,9 +319,19 @@ The contract for a host:
   The buffer's length is invariant; the bulk builtins only ever write
   into it, using the same `quantize()` and `hsv_to_rgb` the per-pixel
   path uses, so output is bit-identical to the equivalent `render`.
+- **The buffer is in wire order.** Slot `i` is the `i`-th pixel the
+  output driver clocks out, and the map's `coord(i)` is that pixel's
+  coordinate. On a HUB75 chain the host installs the chain's tiling
+  (`Engine::set_wire_tiling`), so a grid's cell (col, row) is NOT slot
+  `row * w + col`; `gridIndex(col, row)` (builtin 193) is the cell → slot
+  map and `pixelCoord(i, axis)` the slot → coordinate one, and both read
+  the same `GridMap`. Index-space builtins (`setPixel`, `fillRange`,
+  `fillHSV`/`fillRGB` arrays, `fade`, …) address slots; coordinate- and
+  grid-space builtins resolve cells through the map, so they are correct
+  in any order. On an untiled row-major grid the two orders coincide.
 - Alongside it the host lends `Vm::frame_grid`: the installed map's grid
-  (`outpipe::detect_grid`'s result, or the procedural grid) when the
-  fixture is a regular matrix, else `None`. That is what grid-space
+  (`outpipe::detect_grid`'s result, or the procedural grid, tiled on a
+  chain) when the fixture is a regular matrix, else `None`. That is what grid-space
   builtins address and what `gridWidth()`/`gridHeight()` report; it is an
   optimization hint for coordinate-space ops and never changes their
   result.
@@ -339,7 +359,7 @@ the map's normalization rounding, and for some dimension pairs they do not
 land on the multiple. The observable result is the scan's, always.
 
 Producing a canvas has native ops of its own, which are ordinary array
-builtins and work anywhere (not just under `renderFrame`): `fillNoise2D` /
+builtins and work anywhere (not just under `renderBulk`): `fillNoise2D` /
 `fillNoise3D` write simplex noise sampled on a regular lattice, and
 `stencil2D` accumulates a linear 4-/8-neighbour stencil with mirrored
 (clamped-index) borders from one array into another. Both are defined to

@@ -35,10 +35,20 @@ paths:
   left at 5, and `tests/superinsns.rs` pins that an unfused blob still
   validates and runs. Adding a builtin does not need a bump either.
   CHANGING the meaning or encoding of an existing opcode does.
+- **A language-surface change that strands old blobs uses `BcError::Stale`,
+  not a version bump.** When a construct a stored blob may contain stops
+  being valid (Gitea #948: the `renderFrame` export, renamed `renderBulk`
+  because the frame went to wire order), the decoder refuses just those
+  blobs with `BcError::Stale(msg)` and every other blob keeps loading.
+  Hosts treat `Stale` exactly like `Version` — the device replies
+  `bc-version`, the web UI and `luxel serve` recompile from source, and the
+  compiler then names the real fix (`compile::RENDER_FRAME_RENAMED`). A
+  host that matches on `BcError::Version { .. }` alone must match `Stale`
+  too or it shows the user a dead blob instead of recompiling.
 - **New engine code is charged against a ~10 KB image budget.** The
   classic-ESP32 boards sit at ~4 % OTA-slot margin, and the CI gate
   (`tools/image-check.sh`, 3 % floor on `board-pixelblaze-v3`) is the
-  first thing a luxel-core-only PR can fail. The sixteen `renderFrame`
+  first thing a luxel-core-only PR can fail. The sixteen `renderBulk`
   builtins (#335, ~550 lines of Rust) cost +14.9 KB on the first cut —
   four monomorphized copies of one generic `paint_shape` closure alone
   were 3.5 KB, `hsv_to_rgb`+`quantize` inlined into five loops, `format!`
