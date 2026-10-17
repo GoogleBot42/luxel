@@ -23,12 +23,14 @@ const UNFORWARDED: CompileOpts = CompileOpts {
     const_folding: true,
     store_forwarding: false,
     kinds: true,
+    inline: true,
 };
 const BARE: CompileOpts = CompileOpts {
     superinstructions: false,
     const_folding: false,
     store_forwarding: false,
     kinds: true,
+    inline: true,
 };
 
 /// One source per shape the pass fires on, plus the shapes it must refuse.
@@ -143,6 +145,7 @@ fn forwarding_is_independent_of_the_other_two_passes() {
                         const_folding: fold,
                         store_forwarding: fwd,
                         kinds: true,
+                        inline: true,
                     };
                     assert_eq!(
                         frames(src, Some(opts), 6),
@@ -180,6 +183,7 @@ fn the_rewrite_fires_where_it_should_and_nowhere_else() {
         const_folding: true,
         store_forwarding: true,
         kinds: true,
+        inline: true,
     };
     let off = CompileOpts {
         store_forwarding: false,

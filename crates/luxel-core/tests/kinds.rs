@@ -15,6 +15,7 @@ const NO_KINDS: CompileOpts = CompileOpts {
     const_folding: true,
     store_forwarding: true,
     kinds: false,
+    inline: true,
 };
 
 // ---------------------------------------------------------------- lattice
