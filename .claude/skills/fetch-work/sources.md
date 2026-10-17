@@ -52,10 +52,11 @@ add it here once.
 ## Gitea issues
 
 `tea issues list --repo zuckerberg/luxel --output simple` — Jeremy's own
-tracker for feature-sized work. `tea` is only on PATH inside `nix develop`
-in this container (bare shell: `command not found`, 2026-09-01); wrap it
-like every other devshell tool. (the WLED installer page, hosted
-playground, ESPNow, image display, …). To read ONE issue's body it's
+tracker for feature-sized work (the WLED installer page, hosted playground,
+ESPNow, image display, …). `tea` is on NO PATH here — not the bare shell and
+NOT `nix develop` either (`exec: tea: not found`, 2026-09-19 and again
+2026-10-17): call it by its store path, `ls -d /nix/store/*-tea-*/bin/tea`,
+as the user-level git-forges skill says. To read ONE issue's body it's
 `tea issues --repo zuckerberg/luxel <n>` — there is no `show`
 subcommand (`tea issues show <n>` silently re-prints the whole
 list) — and it prints the BODY only, so read the comments too: corrections
