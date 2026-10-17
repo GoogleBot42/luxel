@@ -311,6 +311,9 @@ cmd_selftest() {
   ok()  { echo "  ok   $1"; }
   bad() { echo "  FAIL $1"; fails=$((fails + 1)); }
   export LUXEL_DEVLOCK_DIR="$t/locks"
+  # Run as an AGENT whatever the environment: CI has no CLAUDE_PID, and a
+  # human checkout has no ttl, so the ttl check below never expired there.
+  export CLAUDE_CODE_SESSION_ID=selftest-session CLAUDE_PID=$$
   # 1. free → checkout → mine; alias and IP resolve to the same lock
   "$me" checkout athom -m "selftest" >/dev/null && ok "checkout" || bad "checkout"
   "$me" check 192.168.0.183 2>/dev/null && ok "check by ip is mine" || bad "check by ip"
