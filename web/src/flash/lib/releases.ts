@@ -6,7 +6,8 @@
 //    workflow publishes the installer together with the per-board OTA
 //    images and the LUXA web-asset bundle). Everything is same-origin, so
 //    the page can fetch the binaries itself and drive the whole flash.
-//  - "github": no bundle (e.g. a self-hosted web-dist). Release *metadata*
+//  - "github": no bundle (a self-hosted web-dist; devices do not serve this
+//    page since #884). Release *metadata*
 //    is CORS-open on api.github.com, but the binary downloads are not
 //    (verified 2026-08-15: no Access-Control-Allow-Origin on the asset
 //    hosts, either hop), so the user downloads the file via a normal link

@@ -89,3 +89,20 @@ test("no CSS asset is emitted at all", { skip: !built }, () => {
   const css = existsSync(assets) ? readdirSync(assets).filter((f) => f.endsWith(".css")) : [];
   assert.deepEqual(css, [], "the inlined stylesheet must not also ship as a file");
 });
+
+// Gitea #884: the installer page is hosted-only. The DEVICE archive
+// (tools/pack-assets.mjs) packs what tools/device-files.mjs keeps: no
+// flash.html, no chunk only it loads — and every chunk the console loads,
+// including the one it shares with the installer.
+test("the device archive leaves the installer out, and nothing the console needs", { skip: !built }, async () => {
+  const { deviceFiles } = await import("../tools/device-files.mjs");
+  const { keep, dropped } = deviceFiles(fileURLToPath(new URL("../dist", import.meta.url)));
+  assert.ok(dropped.includes("flash.html"), "flash.html is still packed");
+  assert.ok(dropped.some((f) => /^assets\/flash-[\w-]+\.js$/.test(f)), "the installer chunk is still packed");
+  assert.ok(keep.includes("index.html") && keep.includes("gallery.json") && keep.includes("luxel.wasm"));
+  const shared = readdirSync(dist("assets")).filter((f) => /^app-[\w-]+\.js$/.test(f));
+  assert.ok(shared.length > 0, "no shared app-*.js chunk — update this test");
+  for (const f of shared) assert.ok(keep.includes(`assets/${f}`), `shared chunk ${f} was dropped`);
+  const entry = readFileSync(dist("index.html"), "utf8").match(/assets\/(index-[\w-]+\.js)/)?.[1];
+  assert.ok(entry && keep.includes(`assets/${entry}`), "the console's own chunk was dropped");
+});

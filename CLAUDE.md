@@ -219,11 +219,12 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
   `tools/deploy.sh <ip> --assets-only`.
 - The web bundle must fit the assets partition (0xF0000 = 983,040 B on every board but
   the 16 MB Seengreat, and one bundle ships to all of them, so the small one binds):
-  979,860 B used, **3,180 B headroom** at master 2a40cc38 (2026-10-10; Gitea
-  #691 has the per-file breakdown and the remaining levers, all Jeremy's calls).
+  969,465 B used, **13,575 B headroom** after #884 (2026-10-17; the installer
+  page is hosted-only now — `web/tools/device-files.mjs`; Gitea #691 has the
+  per-file breakdown and the remaining levers).
   ENGINE changes spend it too: `luxel.wasm` carries luxel-core, so every
   core/compiler PR adds a few hundred bytes (#941/#947/#953 did; #943's
-  inliner wanted 2.4 KB and is parked on it, PR #969). The wasm builds
+  inliner, PR #969, took 2.4 KB). The wasm builds
   luxel-core WITHOUT `jit` since #964 — keep it that way.
   `tools/ci.sh` prints and gates it — read that line on every PR, not just
   web ones. Past the gate it only fails at `POST /api/assets` on a device.
