@@ -21,6 +21,10 @@ IMAGE="${2:-}"
 
 cd "$(dirname "$0")/.."
 
+# One session per device: a live checkout by someone else aborts the push
+# (tools/devlock.sh; an unlocked device only prints a hint).
+tools/devlock.sh check "$HOST" || exit 1
+
 # Remember whether the caller picked the board: an image passed explicitly
 # on the command line (e.g. a nix-built result/luxel-fw-ota.bin) carries its
 # own board, so it must not be checked against the script's default.

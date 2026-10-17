@@ -24,6 +24,11 @@ own header and in docs/tools.md — read those before improvising a variant.
 
 ## 2. Devices this skill covers
 
+Every unit below is one shared device: **check it out first**
+(`tools/devlock.sh checkout <device> -m "why"`, the device-lock skill) and
+check it in when the task is done. `deploy.sh` and `ota-push.sh` refuse a
+device another live session holds.
+
 LAN IPs aren't secrets and are listed here for convenience; WiFi
 credentials and any MQTT/HA broker details are not — those live in agent
 memory (athom-flash-rig.md), `~/.config/mqtt/broker.env` (user-level
