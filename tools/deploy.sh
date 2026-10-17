@@ -63,6 +63,9 @@ case "$IP" in
     exit 2 ;;
 esac
 MODE="${2:-}"
+# One session per device: a live checkout by someone else aborts before the
+# build starts (tools/devlock.sh; an unlocked device only prints a hint).
+tools/devlock.sh check "$IP" || exit 1
 LUXA="$(mktemp -t luxel-assets-XXXX.luxa)"
 trap 'rm -f "$LUXA"' EXIT
 

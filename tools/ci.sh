@@ -194,6 +194,12 @@ step "tools/offset-check.py (no hard-coded partition offsets)"
 python3 tools/offset-check.py
 done_step offsets
 
+# The device check-out lock every deploy script and the oracle harness
+# consult (tools/devlock.sh). Self-contained in a temp dir, ~2 s.
+step "tools/devlock.sh selftest (device check-out lock)"
+tools/devlock.sh selftest
+done_step devlock
+
 # ----------------------------------------------------------- firmware
 # firmware/build-esp32.sh with no argument builds only (no flash, no
 # monitor, no device) and ends by running tools/image-check.sh over the ELF

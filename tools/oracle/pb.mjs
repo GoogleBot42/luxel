@@ -3,6 +3,7 @@
 // frames (live-code, nothing is saved to the device's flash).
 
 import zlib from "node:zlib";
+import { spawnSync } from "node:child_process";
 
 const FRAME_FIRST = 0x01;
 const FRAME_MIDDLE = 0x02;
@@ -18,9 +19,21 @@ export function makeId() {
   return id;
 }
 
+/**
+ * One session per device (tools/devlock.sh): a live checkout by someone
+ * else refuses the connect; an unlocked device only prints the hint the
+ * script writes. DEVLOCK_SKIP=1 bypasses (Jeremy's shell, never an agent).
+ */
+function devlockCheck(ip) {
+  const script = new URL("../devlock.sh", import.meta.url).pathname;
+  const r = spawnSync("bash", [script, "check", ip], { stdio: ["ignore", "inherit", "inherit"] });
+  if (r.status === 1) throw new Error(`devlock: ${ip} is checked out by another session`);
+}
+
 export class PB {
   /** ESP32 websocket slots free up lazily after a disconnect — retry. */
   static async connect(ip, attempts = 5) {
+    devlockCheck(ip);
     for (let i = 0; ; i++) {
       try {
         return await PB.connectOnce(ip);

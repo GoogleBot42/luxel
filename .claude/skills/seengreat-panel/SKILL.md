@@ -59,7 +59,10 @@ What the second unit's bring-up cost, in the order it bit:
 
 ## Before anything: is another session driving it?
 
-`pgrep -fa 192.168.0.238` and `pgrep -fa recover-` first. On 2026-09-26 a
+`tools/devlock.sh checkout seengreat-1 -m "why"` (or `seengreat-2`) first —
+a BUSY answer is another session's lock, and the device-lock skill says what
+to do (ask Jeremy; never `--force`). Then `pgrep -fa 192.168.0.238` and
+`pgrep -fa recover-` as well, for scripts older sessions left running. On 2026-09-26 a
 second Claude session ran its own OTA + status-polling script against the
 panel while this one was measuring — the "reverted OTA", the black screen and
 the saturated `web:[1,1,1]` pool all came from it. Jeremy's ruling: the panel
