@@ -171,13 +171,20 @@ const proto0 = (await api("/api/config")).protocol ?? "unknown";
 const playlist0 = await api("/api/playlist").catch(() => null);
 const scene0 = (await api("/api/scenes").catch(() => null))?.active ?? null;
 const pattern0 = status0.engines === 0 ? null : await getBytes("/api/pattern.lxp");
+// The STORED pattern's id (status `pattern_id`, Gitea #930): an activation
+// puts that row back as itself; the envelope re-push below is the fallback
+// for ad-hoc code and for firmware older than the field, and it leaves the
+// console showing an unsaved live copy of what was a library pattern.
+const patternId0 = status0.pattern_id || "";
 const found = playlist0?.playing
   ? `playlist (item ${playlist0.index})`
   : scene0
     ? `scene ${scene0}`
-    : pattern0?.length
-      ? "the running pattern"
-      : "nothing running";
+    : patternId0
+      ? `stored pattern ${patternId0}`
+      : pattern0?.length
+        ? "the running pattern"
+        : "nothing running";
 // a panel's pixel count is its layout — never sweep /api/config there
 const curveSkip = PERF ? null : NO_CURVE ? "--no-curve" : status0.caps?.panel ? "panel board" : null;
 const todo = gallery.filter((p, k) => k + 1 >= FROM && (!ONLY || p.name.includes(ONLY)));
@@ -313,9 +320,10 @@ try {
   await sleep(GAP_MS);
   if (playlist0?.playing) await api("/api/playlist/play", String(playlist0.index ?? 0));
   else if (scene0) await api(`/api/scenes/${scene0}/activate`, "");
+  else if (patternId0) await api(`/api/patterns/${patternId0}/activate`, "");
   else if (pattern0?.length) await api("/api/code", pattern0);
   else await api("/api/code", rainbowBody);
-  console.log(`restored: ${pattern0?.length || scene0 || playlist0?.playing ? found : "rainbow (nothing was running)"}`);
+  console.log(`restored: ${patternId0 || pattern0?.length || scene0 || playlist0?.playing ? found : "rainbow (nothing was running)"}`);
 } catch (e) {
   console.log(`curve/restore aborted: ${String(e).slice(0, 80)} — device may need a manual restore`);
 }

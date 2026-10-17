@@ -1,5 +1,29 @@
 # Update log
 
+## 2026-10-17 — `/api/status` names the stored pattern it is running (#881, #930); device-e2e fixture (#973)
+
+`pattern_id` in `GET /api/status`, firmware and mirror alike: the id the last
+`POST /api/patterns/<id>/activate`, playlist step or boot resume named, `""`
+after an ad-hoc `POST /api/code` and while a scene is active (`GET
+/api/scenes`'s `active` names that). The firmware already held the id for the
+resume record (`shared::get_current_pattern_id`) — this is a field, not a
+mechanism. `stores/device.ts` takes a non-empty answer into `deviceRunningId`
+on every status poll, so an activation from Home Assistant, MQTT or another
+browser now moves the Patterns page's playing badge, where before only this
+tab's own activations and the editor's source-match handshake could; `""`
+leaves the store alone (the editor's live push of a stored pattern's draft is
+still that pattern to its user, and older firmware omits the field).
+`tools/hw-bench.mjs` restores what it found with an activation when the id is
+there, instead of re-pushing the envelope as ad-hoc code. docs/api.md.
+Verified: device-e2e asserts both readings against the mirror; on the second
+Seengreat (16,384 px) the field reads the activated id, `""` after a live
+push, and the found state (sinc, brightness 10) was put back by activation.
+
+Also: `web/tools/device-e2e.mjs`'s legacy `// @sprite` fixture exported
+`renderFrame`, which the compiler refuses since #948, so the run aborted at
+check ~473 on every PR since (#973) — it exports `renderBulk` now (the body
+is a `blit`, which addresses the frame itself).
+
 ## 2026-10-17 — the installer page is hosted-only: off the device asset archive (#884)
 
 The WLED→Luxel installer (`flash.html` + `assets/flash-*.js`) no longer ships

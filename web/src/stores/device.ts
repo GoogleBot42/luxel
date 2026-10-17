@@ -578,6 +578,13 @@ export async function refreshStatus(): Promise<void> {
     deviceBcFormat.set(st.bc_format ?? 0);
     deviceVmerr.set(st.vmerr);
     deviceJit.set(st.jit ?? null); // native / interpreted, and why (#658)
+    // The device names the stored pattern it is running (#881): an activation
+    // from Home Assistant, MQTT or another console moves the playing badge
+    // here, where before only this tab's own activations and the editor's
+    // source-match handshake could. `""` (ad-hoc code, or a scene) leaves the
+    // store alone: the editor's own live push of a stored pattern's draft is
+    // still "that pattern" to its user, and older firmware omits the field.
+    if (st.pattern_id) deviceRunningId.set(st.pattern_id);
     // DDP/E1.31 liveness rides along here (#540): it is a field of this same
     // body, and the Settings tab used to re-GET the WHOLE of `/api/status` at
     // 0.5 Hz just to read it — the heaviest endpoint on the device, fetched

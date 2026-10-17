@@ -1013,6 +1013,17 @@ fn status_json() -> luxel_core::jsonview::Chunks {
     // one per PATTERN layer for a scene, 0 with nothing loaded.
     push_piece(&mut out, ",\"engines\":");
     push_u32(&mut out, crate::shared::ENGINES.load(Ordering::Relaxed));
+    // WHICH stored pattern those engines run (Gitea #881/#930): the id the
+    // last activation or playlist step named, `""` for an ad-hoc `/api/code`
+    // push (no store row) and while a scene is up (`GET /api/scenes`'s
+    // `active` names that; the engine behind the scene's base layer is not
+    // "the running pattern"). A console reads the device's answer instead
+    // of guessing from a source match, and a soak restores by activation.
+    push_piece(&mut out, ",\"pattern_id\":\"");
+    if crate::scenes::active_id().is_empty() {
+        push_piece(&mut out, &json_escape(&crate::shared::get_current_pattern_id()));
+    }
+    push_piece(&mut out, "\"");
     // A boot self-heal reverted the stored layout (Gitea #822) — the one-bit
     // form, so a console polling status notices without fetching the Layout;
     // `GET /api/layout`'s `reverted` block carries the numbers. Cleared by the
