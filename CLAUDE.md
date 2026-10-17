@@ -38,7 +38,10 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
 - OTA deploys and real-chromium browser testing DO work from inside the container.
 - `pkill -f`/`pgrep -f <pattern>` matches the Bash tool's OWN `bash -c` line (it
   contains the pattern text) and kills your shell — exit 144, nothing after it runs
-  (twice on 2026-09-29). Use the bracket trick (`run-al[l].sh`) or explicit PIDs.
+  (twice on 2026-09-29). Use the bracket trick (`run-al[l].sh`) or explicit PIDs —
+  and the trick only holds if NO other argument on the same command line spells
+  the name out: `pgrep -f 'device-e2[e]'` still killed the shell on 2026-10-17
+  because a `sed … web/tools/device-e2e.mjs` sat in the same `&&` chain.
 - Each bench device is a single shared unit (dev unit, Athom rig, Seengreat panel —
   .claude/skills/deploy-device lists them) and there is ONE Pixel Blaze oracle —
   never parallelize device-touching work across subagents or sessions; a soak or
@@ -180,9 +183,10 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
   baseline it before attributing anything to your branch.** On 2026-09-26
   `mockdiff` (all frames) read 61 deltas, `device-e2e` aborted at check 545 and
   `serve-e2e` had 2 failures, all three on plain `origin/master` and none of
-  them the branch's. The cheap check is in the SAME worktree: `git stash push
-  -u`, rebuild, re-run the affected frames/checks, `git stash pop` — or
-  `git checkout origin/master` for a full second reading. Report the branch
+  them the branch's. The cheap check is a throwaway `git worktree add <tmp>
+  origin/master` (never `git stash` — see Environment boundaries), rebuild
+  there, re-run the affected frames/checks; a harness bound to fixed ports
+  (device-e2e) runs one tree at a time. Report the branch
   number AND the baseline number; "61 deltas, identical to a stashed tree" is
   evidence, "61 deltas" is an alarm. File master's reds as their own tickets
   (#809, #810 — the precedent is #547) rather than fixing them in an unrelated
