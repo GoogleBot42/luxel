@@ -5,7 +5,9 @@ description: Use when the Athom ESP32 board on Jeremy's bench needs serial-level
 
 Scope: this skill is for serial- and power-level operations on the Athom
 rig — recovering a bricked board, restoring stock WLED, dumping and
-verifying flash. For routine firmware/asset updates to the same board over
+verifying flash. Check the rig out first (`tools/devlock.sh checkout athom
+-m "why"`, the device-lock skill) and in when done: a serial recovery is
+exactly the kind of work a second session's OTA must not land in. For routine firmware/asset updates to the same board over
 the network, use the deploy-device skill instead; this skill is the
 fallback when that path is unavailable. The WLED-to-Luxel takeover
 mechanism itself (how the app image installs over WLED's OTA endpoint,

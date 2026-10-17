@@ -3,6 +3,9 @@ paths:
   - "tools/oracle/**"
 ---
 
+- The oracle is ONE device: `tools/devlock.sh checkout oracle -m "why"`
+  before the first connect and `checkin` after (device-lock skill).
+  `PB.connect` in `pb.mjs` refuses while another live session holds it.
 - The real Pixel Blaze (the oracle) wedges PERMANENTLY if a websocket client
   disconnects without a clean close handshake — recovery is a physical power
   cycle. Never regress the harness's clean-close behavior (see

@@ -1,5 +1,25 @@
 # Update log
 
+## 2026-10-17 — device check-out lock (`tools/devlock.sh`)
+
+Bench devices and the Pixel Blaze oracle are checked out and in through a
+local lock: one file per device under `~/.local/state/luxel/devlocks`,
+shared by every worktree, session and shell on the dev machine (all
+development is on one box). `checkout <device> -m "why"` / `checkin` /
+`checkin --all` / `status` / `check` / `devices`; the registry is five
+lines in the script (dev unit, Athom, both Seengreats, oracle; aliases and
+IPs resolve). A lock records the Claude session id + pid, or user@host, plus
+worktree, branch, reason and time; creation is an atomic hard link, so a
+race has one winner. Stale = holder pid gone or ttl passed (8 h for agents,
+none for a human) and the next checkout takes it over; a live foreign lock
+refuses, and the rule is ask Jeremy, never `--force`. `deploy.sh`,
+`ota-push.sh` and `PB.connect` in the oracle harness run `check <ip>` first
+and abort on a foreign live lock (`DEVLOCK_SKIP=1` for Jeremy's own shell).
+`selftest` (25 checks in a temp dir, including the race) runs in
+`tools/ci.sh`. Skill: `.claude/skills/device-lock`; CLAUDE.md, the
+deploy-device / seengreat-panel / athom-rig skills and the oracle rule
+point at it.
+
 ## 2026-10-10 — JIT: the trivial builtins are instructions, not calls (#942)
 
 `abs floor ceil round trunc frac min max clamp saturate mix mod sign step
