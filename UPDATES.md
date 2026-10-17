@@ -1,5 +1,20 @@
 # Update log
 
+## 2026-10-17 — the installer page is hosted-only: off the device asset archive (#884)
+
+The WLED→Luxel installer (`flash.html` + `assets/flash-*.js`) no longer ships
+in the device `.luxa`: `web/tools/device-files.mjs` reads the built chunk
+graph (`assets/X.js` in an entry's inlined loader, `./X.js` in a chunk's
+imports) and drops the hosted-only pages plus every chunk ONLY they reach, so
+`assets/app-*.js`, which the console shares with the installer, stays.
+`pack-assets.mjs` packs what it keeps; `dist/`, the Pages site and the
+web-dist tarball are unchanged. A device now answers `/flash.html` with 404.
+Archive 982,233 → **969,465 B (−12,768 B)**, headroom 807 B → 13,575 B
+(1.38 %) of the 983,040 B partition, on master f6d05fa2 (#943's inliner
+merged first). Verified: `tools/ci.sh` green, and the console booted in
+chromium from the UNPACKED trimmed archive under `luxel serve --web-dir`
+with zero console errors; `tests/bundleShape.test.mjs` asserts the split.
+
 ## 2026-10-10 — the compiler inlines small user functions called from render* (#943)
 
 A `CallFn` from a `render`/`render2D`/`render3D` body to a user function is

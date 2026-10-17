@@ -2129,7 +2129,9 @@ half became `parttab.rs`, shared. Gitea #143's conditions were met by #501
 rather than by this board.
 
 What did **not** change is the assets margin, which is still the number
-worth watching on every board: the 4 MB `assets` partition
+worth watching on every board (**update 2026-10-17, #884: 969,465 B packed,
+13,575 B / 1.38 % free** after the installer page left the device archive;
+the 2026-09-27 numbers below are history): the 4 MB `assets` partition
 (0xF0000 = 983,040 B) holds a **946 KB bundle as of 2026-09-27 evening —
 1.44 % headroom** (968,819 B packed, 14,221 B free; `tools/ci.sh` fails the
 build over 983,040 B, and `POST /api/assets` refuses an oversized install
@@ -2219,7 +2221,7 @@ every remaining lever is a decision rather than a build flag:
 |---|---:|---|
 | `gallery.json` as a curated on-device subset | up to 355 kB | product decision — the 308 sources ship verbatim as readable examples (#691 option 1) |
 | an explicit CodeMirror extension list instead of `basicSetup` | up to 165 kB — the measured CodeMirror + lezer total; what any single extension is worth is NOT measured | removes editor features (Ctrl-F, fold, lint) — needs the mock/feature list, not a guess (#691 option 2) |
-| drop the installer page from the DEVICE archive only | 12,633 B (`flash.html` 3,156 + `assets/flash-*.js` 9,477) | `lib/releases.ts`'s *github* firmware-source mode exists for exactly the "device-served copy", and docs/wled-migration.md documents the page as being "on every Luxel device" — a supported mode, so Jeremy's call |
+| ~~drop the installer page from the DEVICE archive only~~ **DONE (#884)** | 12,768 B measured (`flash.html` + `assets/flash-*.js`) | none — the hosted site and web-dist tarball keep it; `web/tools/device-files.mjs` picks what the device packs |
 | grow `assets` past 0xF0000 | as much as wanted | a THIRD partition migration on top of #501, and both OTA slots and `storage` are themselves tight (#691 option 4) |
 | **#686's brotli-on-flash with an in-page decoder** | **~110 kB** | a bespoke loading path for every asset and a re-verify of `coldload.mjs` — filed as "not planned; keep as the next hammer if the assets partition gets tight again". It is tight, and the shortfall is now measured. |
 

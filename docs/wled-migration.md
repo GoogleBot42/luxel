@@ -110,8 +110,12 @@ One static page, no backend: `web/src/flash/` (wizard UI) +
 `lib/releases.ts` (where firmware comes from) + `lib/device.ts` (talking
 to the device). E2e: `web/tools/flash-e2e.mjs` against
 `web/tools/fake-wled.mjs` (both WLED CORS generations, esp8266 stop,
-both firmware-source modes). It ships inside the web dist, so it's also
-on every Luxel device and in the release web-dist tarball.
+both firmware-source modes). It ships inside the web dist, so it's on the
+hosted site and in the release web-dist tarball — but NOT on a Luxel
+device: since #884 `web/tools/pack-assets.mjs` leaves it (and the chunk only
+it loads) out of the device asset archive (`web/tools/device-files.mjs`),
+which saved 12.8 kB of the assets partition. A device answers `/flash.html`
+with a 404.
 
 **Firmware source, two modes** (`lib/releases.ts`):
 
@@ -120,7 +124,7 @@ on every Luxel device and in the release web-dist tarball.
   site (docs/releases.md). Same-origin, page fetches binaries itself,
   fully automatic. `web/tools/gen-flash-manifest.mjs` builds the
   manifest.
-- *github*: no bundle (self-hosted web-dist, device-served copy) —
+- *github*: no bundle (a self-hosted web-dist) —
   release *metadata* comes from api.github.com (CORS `*`), but the
   binary downloads are NOT browser-fetchable: **GitHub's release-asset
   hosts send no `Access-Control-Allow-Origin` on any hop** (measured

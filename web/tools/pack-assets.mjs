@@ -21,6 +21,9 @@
 // Brotli and zstd are NOT options however much they would help: a browser
 // only advertises `Accept-Encoding: br`/`zstd` on a secure origin, and the
 // device is plain http on a LAN IP.
+//
+// Not every file of dist/ ships: the hosted-only installer page (flash.html)
+// and the chunk only it loads are left out — tools/device-files.mjs (#884).
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -28,6 +31,7 @@ import os from "node:os";
 import { gunzipSync, gzipSync } from "node:zlib";
 import fs from "node:fs";
 import path from "node:path";
+import { deviceFiles } from "./device-files.mjs";
 
 const OUT = process.argv[2] ?? "dist.luxa";
 const DIST = "dist";
@@ -81,17 +85,13 @@ function deflate(raw, name) {
   }
 }
 
-function* walk(dir) {
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-    const p = path.join(dir, e.name);
-    if (e.isDirectory()) yield* walk(p);
-    else yield p;
-  }
-}
+const { keep, dropped } = deviceFiles(DIST);
+if (dropped.length) console.log(`pack-assets: hosted-only, not packed: ${dropped.join(" ")}`);
 
 const files = [];
-for (const f of walk(DIST)) {
-  const rel = "/" + path.relative(DIST, f).replaceAll("\\", "/");
+for (const r of keep) {
+  const f = path.join(DIST, r);
+  const rel = "/" + r;
   const ext = path.extname(f);
   const ctype = TYPES[ext] ?? "application/octet-stream";
   const raw = fs.readFileSync(f);
