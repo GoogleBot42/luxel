@@ -1221,7 +1221,7 @@ fn status_json(state: &State) -> String {
         String::new()
     };
     format!(
-        "{{\"name\":\"{}\",\"fps\":{},\"frame_us\":{},\"vm_us\":{},\"pipe_us\":{},\"out_us\":0,\"out_fps\":{},\"rescan_hz\":{},\"dropped\":0,\"pixels\":{},\"max_pixels\":{},\"geom\":{},\"caps\":{},\"slot\":\"native\",\"version\":\"{}\",\"board\":\"{}\",\"bc_format\":{},\"heap_free\":{},\"engine_heap\":{}{},\"layout_reverted\":{},\"live\":{},\"vmerr\":{}{}{}{}}}",
+        "{{\"name\":\"{}\",\"fps\":{},\"frame_us\":{},\"vm_us\":{},\"pipe_us\":{},\"out_us\":0,\"out_fps\":{},\"rescan_hz\":{},\"dropped\":0,\"pixels\":{},\"max_pixels\":{},\"geom\":{},\"caps\":{},\"slot\":\"native\",\"version\":\"{}\",\"board\":\"{}\",\"bc_format\":{},\"heap_free\":{},\"engine_heap\":{},\"pattern_id\":\"{}\"{},\"layout_reverted\":{},\"live\":{},\"vmerr\":{}{}{}{}}}",
         json_escape(&state.name.lock().unwrap()),
         fps,
         state.frame_us.load(Ordering::Relaxed),
@@ -1238,6 +1238,10 @@ fn status_json(state: &State) -> String {
         state.bc_format,
         state.heap_free.load(Ordering::Relaxed),
         state.engine_heap.load(Ordering::Relaxed),
+        // the running STORED pattern (Gitea #881): "" for ad-hoc code and
+        // while a scene is active — `enter_scene` clears it — same as the
+        // firmware, so a client reads both the same way (docs/api.md)
+        json_escape(&state.current_pattern_id.lock().unwrap()),
         psram,
         state.reverted.lock().unwrap().is_some(),
         live,

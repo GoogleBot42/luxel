@@ -55,6 +55,12 @@ export interface DeviceStatus {
     pattern_dims: number;
   };
   vmerr: string | null;
+  /** The id of the STORED pattern the device is running (Gitea #881/#930):
+   *  what the last activation or playlist step named, `""` for an ad-hoc
+   *  `/api/code` push and while a scene is active (`/api/scenes` `active`
+   *  names that). Absent on firmware older than the field, where the console
+   *  falls back to guessing from the editor's source match. */
+  pattern_id?: string;
   /** What the LIVE pattern is running as, and why (Gitea #658,
    *  docs/jit-design.md §4a). `state` is `"native"` when the device
    *  compiled it, `"interp"` when it has a JIT and refused, `"none"` when

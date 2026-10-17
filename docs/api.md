@@ -106,7 +106,8 @@ absent.
  "caps":{"strip_driver":true,"panel":false,"outputs":1,"power_cap":true,"blur_glow":true,
          "layers":3,"text_slots":8,"sprites":true,"reboot":true,"ota":true,"psram":false,"assets":false},
  "slot":"ota_0","version":"0.1.39",
- "heap_free":104832,"heap_largest":73728,"engine_heap":21504,"engines":1,"live":null,
+ "heap_free":104832,"heap_largest":73728,"engine_heap":21504,"engines":1,"pattern_id":"a3f9c2",
+ "live":null,
  "assets_mapped":true,"code_mapped":true,
  "store":{"used":18452,"total":225280,"dead":0,"patterns":3},
  "src":true,"bc":true,"web":[0,1,0],"vmerr":null,
@@ -493,6 +494,16 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   "Nothing playing" in the gotchas. `jit.state` reads `"none"` in exactly
   that case, and `jit.layers` says what each of those engines is running
   (Gitea #718).
+- `pattern_id` — the id of the STORED pattern the device is running (Gitea
+  #881/#930): what the last `POST /api/patterns/<id>/activate`, playlist step
+  or boot resume named. `""` after an ad-hoc `POST /api/code` (no store row)
+  and while a scene is active — `GET /api/scenes`'s `active` names the scene,
+  and the engine behind its base layer is not "the running pattern". This is
+  the device's own answer to "what is playing", so a console shows an
+  activation made from Home Assistant, MQTT or another browser, and a soak
+  (`tools/hw-bench.mjs`) puts back what it found with an activation rather
+  than re-pushing the source as ad-hoc code. Absent on firmware older than
+  the field.
 - `layout_reverted` — `true` when a **boot self-heal** put the board default's
   shape back because the stored one left the heap under the runtime floor
   (Gitea #822). The one-bit form of `GET /api/layout`'s `reverted` block, so a

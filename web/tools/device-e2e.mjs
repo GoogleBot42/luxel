@@ -426,6 +426,20 @@ try {
     ).id;
     const ranBefore = await (await fetch(`${DEV}/api/pattern`)).text();
     await fetch(`${DEV}/api/patterns/${shellId}/activate`, { method: "POST" });
+    // `/api/status` names the STORED pattern it is running (Gitea #881/#930):
+    // the activated id, then "" once an ad-hoc push replaces it — the same
+    // two readings the firmware gives, docs/api.md `pattern_id`.
+    {
+      const stAct = await (await fetch(`${DEV}/api/status`)).json();
+      check("status: pattern_id names the activated stored pattern (#881)", stAct.pattern_id === shellId, `${stAct.pattern_id} vs ${shellId}`);
+      await fetch(`${DEV}/api/code`, {
+        method: "POST",
+        body: await lxpBody("", "export function render(index) { hsv(0.6, 1, 1) }"),
+      });
+      const stCode = await (await fetch(`${DEV}/api/status`)).json();
+      check('status: pattern_id is "" after an ad-hoc /api/code push (#881)', stCode.pattern_id === "", JSON.stringify(stCode.pattern_id));
+      await fetch(`${DEV}/api/patterns/${shellId}/activate`, { method: "POST" });
+    }
     const brightBefore = (await (await fetch(`${DEV}/api/brightness`)).json()).brightness;
     // Every request a device-mode cold load makes, so the sweep below can say
     // that none of them failed (Gitea #564: the corpus gallery was probed
@@ -5611,7 +5625,7 @@ try {
       "var sprW = 2",
       "var sprHt = 2",
       "",
-      "export function renderFrame() {",
+      "export function renderBulk() {",
       "  blit(sprH, sprS, sprV, sprW, sprHt, 0, 0, 3)",
       "}",
       "",
