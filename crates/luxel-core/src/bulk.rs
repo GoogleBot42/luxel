@@ -512,6 +512,86 @@ pub(crate) fn fill_range(vm: &mut Vm, args: &[Value]) -> Value {
     Value::default()
 }
 
+// ---- index space, anti-aliased ----
+//
+// Positions are FRACTIONAL pixel indices in 16.16: pixel `i` covers
+// [i, i + 1). The three ops share one walker (no closures: three `dyn`
+// shims cost more image than the ops themselves), blending with `mode`
+// (0 replace, 1 add, 2 max — the `put` arms). The arithmetic is spelled
+// here once and pinned by tests/bulk_index_ops.rs against a reference loop.
+
+/// Which of the three [`index_aa`] paints.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IndexOp {
+    /// `splatIndex(pos, radius, mode)`: the brush × `1 − |i − pos| ·
+    /// (1 / radius)` wherever that is positive; `radius` in pixels, ≥ 0.5.
+    Splat,
+    /// `fillRangeAA(p0, p1, mode)`: the brush on [p0, p1), each end pixel
+    /// scaled by its coverage `min(i + 1, p1) − max(i, p0)` (clamped 0..1).
+    /// Integer ends cover whole pixels, so it equals `fillRange` there;
+    /// `p1 < p0` swaps.
+    Range,
+    /// `gradientRange(p0, p1, h0, s0, v0, h1, s1, v1, mode)`: an HSV lerp
+    /// along [p0, p1) sampled at each pixel's CENTRE — `t = (i + ½ − p0) ·
+    /// (1 / (p1 − p0))`, clamped 0..1, hue unwrapped like `fillGradient` —
+    /// with the value scaled by the coverage. `p1 < p0` runs it backwards:
+    /// the (h0, s0, v0) end sits at p0 either way.
+    Gradient,
+}
+
+#[inline(never)]
+pub(crate) fn index_aa(vm: &mut Vm, args: &[Value], op: IndexOp) -> Value {
+    let (mut p0, mut p1) = (num(args, 0), num(args, 1));
+    let mut a = [num(args, 2), num(args, 3), num(args, 4)];
+    let mut b = [num(args, 5), num(args, 6), num(args, 7)];
+    let mode;
+    // `inv` is 1/radius for a splat, 1/length for a gradient
+    let inv;
+    if op == IndexOp::Splat {
+        let r = p1.max(Fx::from_raw(1 << 15));
+        inv = Fx::ONE / r;
+        (p0, p1) = (p0 - r, p0 + r + Fx::ONE);
+        mode = blend(num(args, 2));
+    } else {
+        if p1 < p0 {
+            core::mem::swap(&mut p0, &mut p1);
+            core::mem::swap(&mut a, &mut b);
+        }
+        inv = Fx::ONE / (p1 - p0);
+        mode = blend(num(args, if op == IndexOp::Gradient { 8 } else { 2 }));
+    }
+    let centre = num(args, 0);
+    let c = vm.pixel;
+    let mut frame = core::mem::replace(&mut vm.frame, crate::arena::empty());
+    let n = frame.len() as i64;
+    let lo = (p0.to_int_floor() as i64).clamp(0, n);
+    let hi = ((-p1).to_int_floor() as i64).saturating_neg().clamp(0, n); // ceil
+    for i in lo..hi {
+        let fi = Fx::from_int(i as i32);
+        let k = if op == IndexOp::Splat {
+            Fx::ONE - (fi - centre).abs() * inv
+        } else {
+            ((fi + Fx::ONE).min(p1) - fi.max(p0)).clamp(Fx::ZERO, Fx::ONE)
+        };
+        if k <= Fx::ZERO {
+            continue;
+        }
+        let src = if op == IndexOp::Gradient {
+            let t = ((fi + Fx::from_raw(1 << 15) - p0) * inv).clamp(Fx::ZERO, Fx::ONE);
+            texel_hsv(
+                a[0] + (b[0] - a[0]) * t,
+                a[1] + (b[1] - a[1]) * t,
+                (a[2] + (b[2] - a[2]) * t) * k,
+            )
+        } else {
+            brush_scaled(c, k)
+        };
+        put(&mut frame[i as usize], src, mode);
+    }
+    vm.frame = frame;
+    Value::default()
+}
+
 /// `fillHSV(h, s, v)` / `fillRGB(r, g, b)`: each argument is a scalar OR
 /// an array indexed by pixel index — the persistent-buffer readout that
 /// 29 % of the library does per pixel (`hsv(hues[i], 1, vals[i])`), as one
