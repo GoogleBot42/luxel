@@ -1,234 +1,129 @@
 // name: Bouncy Boxes
-// Clean-room reimplementation from a prose functional description of the
-// community pattern "Bouncy Boxes"; original source never consulted.
-//
-// Four solid squares glide over a cylindrical matrix: wrapping horizontally,
-// bouncing off top and bottom, colliding elastically (impulse swap + per-frame
-// speed renormalization, so they never overlap and never slow down). Rainbow
-// hues rotate slowly, offset a quarter wheel per square, with a radial hue
-// gradient inside each square. Optional "digital glitch" garnish: hashed
-// sparkles plus a short streak, both off by default. The original's frozen
-// "tearing bands" (rows whose sample position jumps sideways) are
-// deliberately NOT reproduced — a reviewed decision, the artifact reads as a
-// rendering fault rather than an effect.
-//
-// Simulated on a 16x16 virtual canvas (wrapping horizontally = the cylinder);
-// render2D samples the canvas, so any mapped layout works.
+// Clean-room reimplementation from the prose spec docs/pattern-specs/bouncy-boxes.md — reimagined, not a replica.
+// Square blocks glide around a cylinder — wrapping left/right, bouncing off
+// the top and bottom — and collide like billiard blocks that never slow
+// down. Each block is drawn at native resolution as nested fillRect rings,
+// so its rainbow runs in concentric squares. Glitch adds hashed sparkles
+// and a torn streak. Simulated in a 16-unit-wide space scaled to the panel.
 
-var W = 16
-var H = 16
-var CELLS = 256
-var S = 4                  // square side, in cells (half the original height)
-var NB = 4                 // number of squares
-var TARGET_SPEED = 6       // cells per second, renormalized every frame
-
-// canvas
-var hc = array(CELLS)
-var sc = array(CELLS)
-var vc = array(CELLS)
-
-// square state: top-left corner (x wraps), velocity
-var bx = array(NB)
-var by = array(NB)
-var bvx = array(NB)
-var bvy = array(NB)
-bx[0] = 1;  by[0] = 1;  bvx[0] = 4.2;  bvy[0] = 4.2
-bx[1] = 5;  by[1] = 9;  bvx[1] = -4.2; bvy[1] = 4.2
-bx[2] = 9;  by[2] = 4;  bvx[2] = 4.2;  bvy[2] = -4.2
-bx[3] = 13; by[3] = 11; bvx[3] = -3;   bvy[3] = 5
-
-// glitch state
-var sparkAcc = 0, sparkTick = 0
-var hueBase = 0
-
-// ---- controls -----------------------------------------------------------------
-// Sparkle Rate is the master switch for the whole glitch garnish (confetti
-// AND the streak): at 0 — the default — the boxes run clean.
-var sparkRate = 0
-//# min=0 max=1 step=0.01 default=0
-export function sliderSparkleRate(v) {
-  sparkRate = v * 0.3
-}
-var sparkBright = 1
-//# min=0 max=1 step=0.01 default=1
-export function sliderSparkleBrightness(v) {
-  sparkBright = v
-}
-var sparkSat = 1
-//# min=0 max=1 step=0.01 default=1
-export function sliderSparkleSaturation(v) {
-  sparkSat = v
+var MAXB = 8
+var W = 16, H = 16             // sim space; H follows the panel's aspect
+var bx = array(MAXB), by = array(MAXB), bvx = array(MAXB), bvy = array(MAXB)
+for (var k = 0; k < MAXB; k++) {
+  bx[k] = mod(k * 9.89, W)
+  by[k] = mod(k * 5.3 + 1, 12)
+  var a = 0.6 + k * 1.37
+  bvx[k] = cos(a)
+  bvy[k] = sin(a)
 }
 
-// shortest signed horizontal distance around the cylinder
-function wrapDist(d) {
-  return mod(d + W / 2, W) - W / 2
-}
+var nb = 4
+var sizePct = 25
+var speed = 0.4
+var glitch = 0
+
+//# min=1 max=8 step=1 default=4
+export function sliderBoxes(v) { nb = clamp(floor(v), 1, MAXB) }
+
+// Block side as a percentage of the panel height.
+//# min=10 max=45 step=1 default=25
+export function sliderSizePct(v) { sizePct = clamp(v, 10, 45) }
+
+// Panel widths per second.
+//# min=0.05 max=1.5 step=0.05 default=0.4
+export function sliderSpeedPanelsS(v) { speed = clamp(v, 0.05, 1.5) }
+
+//# default=0
+export function toggleGlitch(v) { glitch = v > 0.5 }
+
+var S = 4, hueBase = 0, tick = 0, tickAcc = 0
+
+function wrapDist(d) { return mod(d + W / 2, W) - W / 2 }
 
 function bounceY(k) {
-  if (by[k] < 0) {
-    by[k] = -by[k]
-    bvy[k] = abs(bvy[k])
-  }
-  if (by[k] > H - S) {
-    by[k] = 2 * (H - S) - by[k]
-    bvy[k] = -abs(bvy[k])
-  }
+  if (by[k] < 0) { by[k] = -by[k]; bvy[k] = abs(bvy[k]) }
+  if (by[k] > H - S) { by[k] = 2 * (H - S) - by[k]; bvy[k] = -abs(bvy[k]) }
   by[k] = clamp(by[k], 0, H - S)
 }
 
 export function beforeRender(delta) {
-  var i, j, k, pass, tmp
-  var dt = min(delta, 50) / 1000    // clamp delta so physics stays stable
-
-  // integrate: wrap horizontally, reflect off top/bottom
-  for (k = 0; k < NB; k++) {
+  var gw = gridWidth(), gh = gridHeight()
+  H = gw > 0 ? W * gh / gw : W
+  S = min(H * sizePct / 100, sqrt(0.45 * W * H / nb))   // never more blocks than fit
+  var dt = min(delta, 50) / 1000, i, j, k, tmp
+  for (k = 0; k < nb; k++) {
     bx[k] = mod(bx[k] + bvx[k] * dt, W)
     by[k] += bvy[k] * dt
     bounceY(k)
   }
-
-  // rigid collisions, several passes over all six unordered pairs
-  for (pass = 0; pass < 3; pass++) {
-    for (i = 0; i < NB - 1; i++) {
-      for (j = i + 1; j < NB; j++) {
-        var dx = wrapDist(bx[j] - bx[i])   // center delta == corner delta
-        var dy = by[j] - by[i]
-        var ox = S - abs(dx)
-        var oy = S - abs(dy)
-        if (ox > 0 && oy > 0) {
-          if (ox < oy) {
-            // resolve along x: split the penetration, minus a tiny slop
-            var sgx = dx >= 0 ? 1 : -1
-            var push = max(ox * 0.45 - 0.01, 0)
-            bx[i] = mod(bx[i] - sgx * push, W)
-            bx[j] = mod(bx[j] + sgx * push, W)
-            // approaching along the normal? elastic swap of that component
-            if ((bvx[j] - bvx[i]) * sgx < 0) {
-              tmp = bvx[i]; bvx[i] = bvx[j]; bvx[j] = tmp
-            }
-          } else {
-            var sgy = dy >= 0 ? 1 : -1
-            var pushy = max(oy * 0.45 - 0.01, 0)
-            by[i] -= sgy * pushy
-            by[j] += sgy * pushy
-            bounceY(i)
-            bounceY(j)
-            if ((bvy[j] - bvy[i]) * sgy < 0) {
-              tmp = bvy[i]; bvy[i] = bvy[j]; bvy[j] = tmp
-            }
-          }
-        }
-      }
-    }
-  }
-
-  // renormalize speed: collisions redirect, liveliness never decays
-  for (k = 0; k < NB; k++) {
-    var sp = hypot(bvx[k], bvy[k])
-    if (sp > 0.01) {
-      bvx[k] *= TARGET_SPEED / sp
-      bvy[k] *= TARGET_SPEED / sp
-    } else {
-      bvx[k] = TARGET_SPEED * 0.7
-      bvy[k] = TARGET_SPEED * 0.7
-    }
-  }
-
-  // slow global rainbow, ~10 s per revolution
-  hueBase = time(0.15)
-
-  // sparkle tick: hashed, so the confetti holds still between re-rolls
-  sparkAcc += delta
-  if (sparkAcc > 50) {              // sparkles refresh ~20x/s
-    sparkAcc = mod(sparkAcc, 50)
-    sparkTick = (sparkTick + 1) % 997
-  }
-
-  paintCanvas()
-}
-
-var HALF_DIAG = S * SQRT2 / 2
-
-function paintCanvas() {
-  var cx, cy, k
-  var streakRow = floor(hash2(sparkTick, 7) * H)
-  var streakCol = hash2(sparkTick, 11) * W
-  for (cy = 0; cy < H; cy++) {
-    for (cx = 0; cx < W; cx++) {
-      var idx = cy * W + cx
-      var sx = cx + 0.5             // sample at the cell center
-      var sy = cy + 0.5
-
-      // soft-box coverage of each square (~one pixel of edge falloff)
-      var bestCov = 0
-      var bestK = 0
-      var bestD = 0
-      var totCov = 0
-      for (k = 0; k < NB; k++) {
-        var dx = wrapDist(sx - (bx[k] + S / 2))
-        var dy = sy - (by[k] + S / 2)
-        var cov = min(
-          clamp(S / 2 - abs(dx) + 0.5, 0, 1),
-          clamp(S / 2 - abs(dy) + 0.5, 0, 1)
-        )
-        if (cov > 0) {
-          totCov += cov
-          if (cov > bestCov) {
-            bestCov = cov
-            bestK = k
-            bestD = hypot(dx, dy)
-          }
-        }
-      }
-
-      var h = 0, s = 1, v = 0
-      if (bestCov > 0) {
-        // radial two-tone gradient out from the square's center
-        h = hueBase + bestK * 0.25 + bestD / HALF_DIAG * 0.55
-        v = min(totCov, 1)
-        s = 1
+  for (var pass = 0; pass < 3; pass++) for (i = 0; i < nb - 1; i++) for (j = i + 1; j < nb; j++) {
+    var dx = wrapDist(bx[j] - bx[i]), dy = by[j] - by[i]
+    var ox = S - abs(dx), oy = S - abs(dy)
+    if (ox > 0 && oy > 0) {
+      if (ox < oy) {                             // separate along x, swap x velocities if closing
+        var sx = dx >= 0 ? 1 : -1, px = max(ox * 0.45 - 0.01, 0)
+        bx[i] = mod(bx[i] - sx * px, W)
+        bx[j] = mod(bx[j] + sx * px, W)
+        if ((bvx[j] - bvx[i]) * sx < 0) { tmp = bvx[i]; bvx[i] = bvx[j]; bvx[j] = tmp }
       } else {
-        // hashed confetti sparkles + one short horizontal streak
-        if (hash2(idx, sparkTick) < sparkRate) {
-          h = hash2(idx + 500, sparkTick)
-          s = sparkSat
-          v = sparkBright
-        }
-        if (sparkRate > 0 && cy == streakRow && abs(wrapDist(cx - streakCol)) < 1.5) {
-          h = hash2(sparkTick, 13)
-          s = sparkSat
-          v = max(v, sparkBright * 0.6)
-        }
+        var sy = dy >= 0 ? 1 : -1, py = max(oy * 0.45 - 0.01, 0)
+        by[i] -= sy * py
+        by[j] += sy * py
+        bounceY(i)
+        bounceY(j)
+        if ((bvy[j] - bvy[i]) * sy < 0) { tmp = bvy[i]; bvy[i] = bvy[j]; bvy[j] = tmp }
       }
-      hc[idx] = h
-      sc[idx] = s
-      vc[idx] = v
     }
   }
+  var target = speed * W                         // renormalize: collisions redirect, never slow
+  for (k = 0; k < nb; k++) {
+    var sp = hypot(bvx[k], bvy[k])
+    if (sp < 0.01) { bvx[k] = 0.7; bvy[k] = 0.7; sp = 0.99 }
+    bvx[k] *= target / sp
+    bvy[k] *= target / sp
+  }
+  hueBase = time(0.15)
+  tickAcc += delta
+  if (tickAcc > 60) { tickAcc = 0; tick = (tick + 1) % 997 }
 }
 
-// One `fillCanvas` per frame instead of one `hsv()` per LED: the boxes were
-// always simulated on the 16x16 canvas and `render2D` only resolved a colour
-// out of it, so the readout moves into the engine (docs/bulk-render.md).
-// `fillCanvas` samples the canvas at every pixel's mapped (x, y) with nearest
-// sampling — what `floor(y * 15.99) * W + floor(x * 15.99)` was reaching for.
-//
-// On a strip with no map at all there is nothing to sample: `renderBulk`
-// wins over `render`, and the 1-D fallback coordinate would hand every pixel
-// y = 0.5 and paint one row of the canvas across the whole strip. `has2DMap()`
-// keeps the shipped behaviour instead — a mapless fixture stays black, exactly
-// as the `render(index)` fallback below (still exported for engines that have
-// no `renderBulk`) always made it.
-export function renderBulk() {
-  if (has2DMap()) {
-    fillCanvas(hc, sc, vc, W, H)
-  } else {
-    clear()
+var kx = 1, ky = 1
+// pixel-edge rectangle [x0, x1) x [y0, y1): pixels whose centres fall inside
+function box(x0, y0, x1, y1) { fillRect((x0 - 0.5) * kx, (y0 - 0.5) * ky, (x1 - 0.51) * kx, (y1 - 0.51) * ky) }
+
+function block(k, x, y, side) {
+  var rings = clamp(round(side / 2), 1, 10), step = side / 2 / rings
+  for (var r = 0; r < rings; r++) {
+    hsv(hueBase + k * 0.25 + 0.35 * (1 - r / rings), 1 - 0.25 * r / rings, 1)
+    box(x + r * step, y + r * step, x + side - r * step, y + side - r * step)
   }
 }
 
-// 1D fallback exists but just outputs black (matches the original's behavior)
-export function render(index) {
-  rgb(0, 0, 0)
+export function renderBulk() {
+  var gw = gridWidth(), gh = gridHeight()
+  if (gw == 0) { gw = 32; gh = 32 }
+  kx = 1 / max(gw - 1, 1)
+  ky = 1 / max(gh - 1, 1)
+  var u = gw / W, side = S * u, k
+  clear()
+  for (k = 0; k < nb; k++) {                     // dim halo under every block first
+    hsv(hueBase + k * 0.25 + 0.35, 1, 0.22)
+    box(bx[k] * u - 1, by[k] * u - 1, bx[k] * u + side + 1, by[k] * u + side + 1)
+    if (bx[k] * u + side > gw) box(bx[k] * u - gw - 1, by[k] * u - 1, bx[k] * u + side - gw + 1, by[k] * u + side + 1)
+  }
+  for (k = 0; k < nb; k++) {
+    block(k, bx[k] * u, by[k] * u, side)
+    if (bx[k] * u + side > gw) block(k, bx[k] * u - gw, by[k] * u, side)   // wrapped around the cylinder
+  }
+  if (glitch) {
+    for (var i = 0; i < pixelCount / 120; i++) {
+      hsv(hash2(i, tick + 500), 0.6, 1)
+      setPixel(floor(hash2(i, tick) * pixelCount))
+    }
+    if (hash(tick) < 0.4) {
+      var row = floor(hash2(tick, 7) * gh), c0 = hash2(tick, 11) * gw
+      hsv(hash2(tick, 13), 0.3, 1)
+      box(c0, row, c0 + gw * 0.2, row + 1)
+    }
+  }
 }
