@@ -1,48 +1,23 @@
 // name: Infinite Snake
-// Curated original for the Luxel library.
-//
-// A snake plays itself, forever. It hunts the food pellet, grows a segment
-// each time it eats, and when it finally runs into a wall or into its own
-// body the board flashes and a fresh snake starts. How well it plays is a
-// dial: at Smartness 0 it wanders blindly and dies within seconds, at 100 it
-// checks that a move does not seal it into a pocket smaller than its own
-// body and survives for minutes.
-//
-// The game runs on a fixed 16x16 board on its own step clock (Steps Per
-// Second), independent of the frame rate, and render2D samples that board
-// through normalized map coordinates — so it plays the same game on a 16x16
-// panel, a 32x32 one, or (via render) a bare strip. Head is near-white, body
-// is a hue ramp that drifts as the score climbs, food is its own colour and
-// pulses. `snakeLength`, `bestLength`, `deaths` and `moves` are exported for
-// the vars watcher — a live scoreboard (the counters roll at 30000).
+// Curated original (hand-written showcase of the Luxel language/builtins).
+// A snake plays itself forever: it hunts the pellet, grows, and when it hits a wall or itself
+// the board flashes red and a new snake starts. Smartness is how well it plays — above 55 % it
+// flood-fills ahead and refuses moves that would seal it into a pocket shorter than itself.
+// The board is sized from the grid (half resolution, up to 32 cells) inside a faint border and
+// painted into a small canvas only when a step changes it; renderBulk is one fillCanvas plus a
+// splat that glides the head between steps. snakeLength, bestLength, deaths and moves are a
+// live scoreboard for the vars watcher (they roll at 30000).
 
-var W = 16
-var H = 16
-var N = 256              // W * H
-var DEATH_T = 0.55       // seconds of death flash before the board resets
+var boardCells = 0      // 0 = auto: half the grid width, up to 32
+//# min=0 max=32 step=1 default=0
+export function sliderBoardCells(v) { boardCells = clamp(floor(v), 0, 32) }
 
-var occ = array(N)       // 0 empty, 1 food, 2 snake
-var seg = array(N)       // ring index of the head when it entered this cell
-var bx = array(N)        // body ring buffer, cell x
-var by = array(N)        // body ring buffer, cell y
-var vis = array(N)       // flood-fill visit stamps
-var qx = array(N)        // flood-fill queue
-var qy = array(N)
-
-var DX = array(4)
-var DY = array(4)
-DX[0] = 1;  DY[0] = 0
-DX[1] = 0;  DY[1] = 1
-DX[2] = -1; DY[2] = 0
-DX[3] = 0;  DY[3] = -1
-
-// --- controls -------------------------------------------------------------
 var smart = 0.7
 //# min=0 max=100 step=1 default=70
 export function sliderSmartness(v) { smart = clamp(v / 100, 0, 1) }
 
-var sps = 8
-//# min=1 max=20 step=1 default=8
+var sps = 10
+//# min=1 max=20 step=1 default=10
 export function sliderStepsPerSecond(v) { sps = clamp(floor(v), 1, 30) }
 
 var snakeHue = 100 / 360
@@ -57,223 +32,242 @@ var wrap = 0
 //# default=0
 export function toggleWrapWalls(v) { wrap = v }
 
-// --- scoreboard (visible to the vars watcher) -----------------------------
 export var snakeLength = 3
 export var bestLength = 3
 export var deaths = 0
 export var moves = 0
 
-// --- state ----------------------------------------------------------------
-var head = 0             // ring index of the head segment
-var len = 3
-var dir = 0
-var fx = 8, fy = 4       // food cell
-var acc = 0              // step-clock accumulator, ms
-var dead = 0
-var deathT = 0
-var visGen = 0
-var inited = 0
-var foodPulse = 1
-var bodyHue = 100 / 360
+var MAXN = 1024          // canvas cells, border included (32 x 32)
+var DEATH_T = 0.55       // seconds of death flash before the board resets
+var occ = array(MAXN)    // 0 empty, 1 food, 2 snake, 3 border
+var ring = array(MAXN)   // body ring buffer: canvas cell of each segment
+var vis = array(MAXN)    // flood-fill visit stamps
+var q = array(MAXN)      // flood-fill queue
+var hC = array(MAXN), sC = array(MAXN), vC = array(MAXN)
+var DX = [1, 0, -1, 0], DY = [0, 1, 0, -1]
 
-function idx(cx, cy) { return cy * W + cx }
+var CW = 0, CH = 0, IW = 1, IH = 1, N = 1   // canvas and interior (playable) size
+var seenW = -1, seenH = -1, seenB = -1
+var head = 0, len = 3, dir = 0, prevCell = 0, food = 0
+var acc = 0, dead = 0, deathT = 0, visGen = 0
+var bodyHue = 100 / 360, paintedHue = -1, paintedFood = -1
+var popCell = 0, popT = 9, breath = 1
+
+function idx(cx, cy) { return (cy + 1) * CW + cx + 1 }   // interior -> canvas cell
+function cx(i) { return i % CW - 1 }
+function cy(i) { return floor(i / CW) - 1 }
+
+function layout() {
+  seenW = gridWidth(); seenH = gridHeight(); seenB = boardCells
+  var gw = seenW > 0 ? seenW : 32, gh = seenW > 0 ? seenH : 32
+  if (boardCells > 0) {
+    CW = clamp(boardCells, 8, 32)
+    CH = clamp(round(boardCells * gh / gw), 8, 32)
+  } else {
+    CW = clamp(floor(gw / 2), 8, 32)
+    CH = clamp(floor(gh / 2), 8, 32)
+  }
+  IW = CW - 2
+  IH = CH - 2
+  N = CW * CH
+  for (var i = 0; i < N; i++) {
+    var x = i % CW, y = floor(i / CW)
+    var edge = x == 0 || y == 0 || x == CW - 1 || y == CH - 1
+    occ[i] = edge ? 3 : 0
+    vis[i] = 0
+  }
+  reset()
+}
 
 function reset() {
-  for (var i = 0; i < N; i++) { occ[i] = 0; seg[i] = 0; vis[i] = 0 }
-  visGen = 0
+  for (var i = 0; i < N; i++) if (occ[i] != 3) occ[i] = 0
   head = 0
-  len = 3
+  len = max(3, floor(IW / 5))   // a bigger board starts a longer snake
   dir = floor(random(4))
+  var sx = floor(IW / 2), sy = floor(IH / 2)
   for (var k = 0; k < len; k++) {
-    var ri = mod(0 - k, N)          // ring index of the k-th segment back
-    var px = 8 - DX[dir] * k
-    var py = 8 - DY[dir] * k
-    bx[ri] = px
-    by[ri] = py
-    var ci = idx(px, py)
-    occ[ci] = 2
-    seg[ci] = ri
+    var c = idx(sx - DX[dir] * k, sy - DY[dir] * k)
+    ring[mod(-k, MAXN)] = c
+    occ[c] = 2
   }
+  prevCell = ring[0]
   placeFood()
+  repaint()
 }
 
 function placeFood() {
   for (var t = 0; t < 60; t++) {
-    var cx = clamp(floor(random(W)), 0, W - 1)
-    var cy = clamp(floor(random(H)), 0, H - 1)
-    var i = idx(cx, cy)
-    if (occ[i] == 0) { occ[i] = 1; fx = cx; fy = cy; return }
+    var c = idx(floor(random(IW)), floor(random(IH)))
+    if (occ[c] == 0) { occ[c] = 1; food = c; return }
   }
-  for (var j = 0; j < N; j++) {
-    if (occ[j] == 0) { occ[j] = 1; fx = j % W; fy = floor(j / W); return }
-  }
+  for (var j = 0; j < N; j++) if (occ[j] == 0) { occ[j] = 1; food = j; return }
 }
 
-// board distance to the food, wrap-aware
-function foodDist(cx, cy) {
-  var dx = abs(cx - fx)
-  var dy = abs(cy - fy)
-  if (wrap) { dx = min(dx, W - dx); dy = min(dy, H - dy) }
+function foodDist(c) {
+  var dx = abs(cx(c) - cx(food)), dy = abs(cy(c) - cy(food))
+  if (wrap) { dx = min(dx, IW - dx); dy = min(dy, IH - dy) }
   return dx + dy
 }
 
-// Reachable empty cells from (sx, sy), counted up to `cap`. Bounded so the
-// per-step cost stays flat no matter how big the open area is.
-function freeSpace(sx, sy, cap) {
+// The canvas cell one step from c in direction d, or -1 off the board.
+function nextCell(c, d) {
+  var x = cx(c) + DX[d], y = cy(c) + DY[d]
+  if (wrap) { x = mod(x, IW); y = mod(y, IH) }
+  else if (x < 0 || x >= IW || y < 0 || y >= IH) return -1
+  return idx(x, y)
+}
+
+// Reachable free cells from c, counted up to cap (bounded so a step stays cheap).
+function freeSpace(c, cap) {
   visGen++
   if (visGen > 30000) { visGen = 1; for (var z = 0; z < N; z++) vis[z] = 0 }
-  var qh = 0, qt = 0
-  qx[0] = sx
-  qy[0] = sy
-  qt = 1
-  vis[idx(sx, sy)] = visGen
-  var count = 0
+  var qh = 0, qt = 1, count = 0
+  q[0] = c
+  vis[c] = visGen
   while (qh < qt && count < cap) {
-    var cx = qx[qh]
-    var cy = qy[qh]
-    qh++
+    var cur = q[qh++]
     count++
     for (var d = 0; d < 4; d++) {
-      var nx = cx + DX[d]
-      var ny = cy + DY[d]
-      if (wrap) { nx = mod(nx, W); ny = mod(ny, H) }
-      else if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue
-      var ni = idx(nx, ny)
-      if (vis[ni] == visGen) continue
-      if (occ[ni] == 2) continue
-      vis[ni] = visGen
-      if (qt < N) { qx[qt] = nx; qy[qt] = ny; qt++ }
+      var n = nextCell(cur, d)
+      if (n < 0 || vis[n] == visGen || occ[n] >= 2) continue
+      vis[n] = visGen
+      if (qt < MAXN) q[qt++] = n
     }
   }
   return count
 }
 
-// The considered move: never reverse, never into a wall or body, prefer
-// closing on the food — and above 55% smartness, refuse a move that leaves
-// less room than the snake is long. Returns -1 when every option is fatal.
+// Never reverse, never into a wall or body, close on the food; when smart, refuse a
+// move that leaves less room than the snake is long. -1 when every option is fatal.
 function chooseDir() {
-  var back = (dir + 2) % 4
-  var best = -1
-  var bestScore = -30000
-  var deep = smart > 0.55
-  var cap = min(len + 4, 90)
+  var back = (dir + 2) % 4, best = -1, bestScore = -30000
+  var deep = smart > 0.55, cap = min(len + 4, 120)
   for (var d = 0; d < 4; d++) {
-    if (d == back && len > 1) continue
-    var nx = bx[head] + DX[d]
-    var ny = by[head] + DY[d]
-    if (wrap) { nx = mod(nx, W); ny = mod(ny, H) }
-    else if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue
-    var ni = idx(nx, ny)
-    if (occ[ni] == 2) continue
-    var sc = -foodDist(nx, ny)
+    if (d == back) continue
+    var n = nextCell(ring[head], d)
+    if (n < 0 || occ[n] >= 2) continue
+    var sc = -foodDist(n)
     if (deep) {
-      var room = freeSpace(nx, ny, cap)
+      var room = freeSpace(n, cap)
       if (room < len + 1) sc -= (len + 1 - room) * 8
     }
-    sc += random(0.6)            // tie-break jitter: keeps it from looking robotic
+    sc += random(0.6)            // tie-break jitter keeps it from looking robotic
     if (sc > bestScore) { bestScore = sc; best = d }
   }
   return best
 }
 
-// The blunder: straight half the time, otherwise a turn — no safety check at
-// all, which is exactly how a dumb snake walks into a wall.
+// The blunder: straight half the time, otherwise a turn, no safety check.
 function wanderDir() {
   var u = random(1)
   return u < 0.5 ? dir : u < 0.75 ? (dir + 3) % 4 : (dir + 1) % 4
 }
 
 function step() {
-  // 16.16 holds +-32768, so the scoreboard counters roll rather than wrap negative
   moves = moves >= 30000 ? 0 : moves + 1
-  var pBlunder = (1 - smart) * (1 - smart)
-  var d = random(1) < pBlunder ? wanderDir() : chooseDir()
-  if (d < 0) d = wanderDir()     // boxed in: blunder on and take the loss
+  var d = random(1) < (1 - smart) * (1 - smart) ? wanderDir() : chooseDir()
+  if (d < 0) d = wanderDir()
   dir = d
-
-  var nx = bx[head] + DX[d]
-  var ny = by[head] + DY[d]
-  if (wrap) { nx = mod(nx, W); ny = mod(ny, H) }
-  else if (nx < 0 || nx >= W || ny < 0 || ny >= H) { die(); return }
-
-  var ni = idx(nx, ny)
-  var tr = mod(head - (len - 1), N)
-  var ate = occ[ni] == 1
-  // the tail cell is legal to enter when the tail is about to vacate it
-  if (occ[ni] == 2 && !(bx[tr] == nx && by[tr] == ny)) { die(); return }
-
+  var n = nextCell(ring[head], d)
+  var tail = ring[mod(head - len + 1, MAXN)]
+  if (n < 0 || (occ[n] >= 2 && n != tail)) { die(); return }
+  var ate = occ[n] == 1
   if (ate) {
-    len = min(len + 1, N - 2)
-    placeFood()                  // before the head lands, so it never overlaps
+    len = min(len + 1, IW * IH - 2)
+    popCell = n
+    popT = 0
+    placeFood()
+    paintCell(food)
   } else {
-    occ[idx(bx[tr], by[tr])] = 0 // tail vacates
+    occ[tail] = 0
+    paintCell(tail)
   }
-  head = mod(head + 1, N)
-  bx[head] = nx
-  by[head] = ny
-  occ[ni] = 2
-  seg[ni] = head
+  prevCell = ring[head]
+  head = mod(head + 1, MAXN)
+  ring[head] = n
+  occ[n] = 2
+  paintBody()
 }
 
 function die() {
   dead = 1
   deathT = 0
   deaths = deaths >= 30000 ? 0 : deaths + 1
-}
-
-export function beforeRender(delta) {
-  var dt = delta / 1000
-  if (!inited) { inited = 1; reset() }
-
-  if (dead) {
-    deathT += dt
-    if (deathT >= DEATH_T) { dead = 0; reset() }
-  } else {
-    acc += min(delta, 250)       // a long stall must not fast-forward the game
-    var ms = 1000 / sps
-    var guard = 0
-    while (acc >= ms && guard < 8 && !dead) { acc -= ms; step(); guard++ }
-    if (acc > ms) acc = ms
-  }
-
-  snakeLength = len
-  bestLength = max(bestLength, len)
-  foodPulse = 0.65 + 0.35 * wave(time(0.008))
-  bodyHue = snakeHue + min(len * 0.003, 0.12)  // strand shifts as the score climbs
+  prevCell = ring[head]
 }
 
 function paintCell(i) {
   var o = occ[i]
-  if (dead) {
-    var f = 1 - deathT / DEATH_T
-    var fl = square(deathT * 12, 0.5)
-    if (o == 2) hsv(0.02, 1 - fl * 0.85, f * (0.45 + 0.55 * fl))
-    else if (o == 1) hsv(foodHue, 1, f * 0.25)
-    else hsv(0.02, 1, f * f * 0.09)   // the board itself washes red
-    return
+  if (o == 3) { hC[i] = 0.62; sC[i] = 0.55; vC[i] = 0.14 }      // faint border
+  else if (o == 1) { hC[i] = foodHue; sC[i] = 0.85; vC[i] = 1 }
+  else { hC[i] = 0; sC[i] = 0; vC[i] = 0 }
+}
+
+// Body cells by age: a hue ramp that darkens toward the tail. The head cell is drawn
+// dim here; the gliding head splat in renderBulk is the bright part.
+function paintBody() {
+  for (var k = 0; k < len; k++) {
+    var c = ring[mod(head - k, MAXN)]
+    var t = len > 1 ? k / (len - 1) : 0
+    hC[c] = bodyHue + t * 0.1
+    sC[c] = 0.8 + t * 0.2
+    vC[c] = k == 0 ? 0.55 : 1 - t * 0.62
   }
-  if (o == 1) {
-    hsv(foodHue, 0.85, foodPulse)
-  } else if (o == 2) {
-    var age = mod(head - seg[i], N)
-    if (age == 0) {
-      hsv(bodyHue + 0.02, 0.2, 1)          // head: almost white
-    } else {
-      var t = len > 1 ? age / (len - 1) : 0
-      hsv(bodyHue + t * 0.1, 0.8 + t * 0.2, 1 - t * 0.62)
+}
+
+function repaint() {
+  for (var i = 0; i < N; i++) paintCell(i)
+  paintBody()
+  paintedHue = bodyHue
+  paintedFood = foodHue
+}
+
+export function beforeRender(delta) {
+  if (gridWidth() != seenW || gridHeight() != seenH || boardCells != seenB) layout()
+  var dt = delta / 1000
+  if (dead) {
+    deathT += dt
+    if (deathT >= DEATH_T) { dead = 0; reset() }
+    else {
+      var f = 1 - deathT / DEATH_T, fl = square(deathT * 12, 0.5)
+      for (var i = 0; i < N; i++) {
+        var o = occ[i]
+        if (o == 2) { hC[i] = 0.02; sC[i] = 1 - fl * 0.85; vC[i] = f * (0.45 + 0.55 * fl) }
+        else if (o == 0) { hC[i] = 0.02; sC[i] = 1; vC[i] = f * f * 0.09 }  // the board washes red
+      }
     }
   } else {
-    hsv(0, 0, 0)                           // the board: empty cells are OFF
+    acc += min(delta, 250)       // a long stall must not fast-forward the game
+    var ms = 1000 / sps, guard = 0
+    while (acc >= ms && guard < 8 && !dead) { acc -= ms; step(); guard++ }
+    if (acc > ms) acc = ms
   }
+  snakeLength = len
+  bestLength = max(bestLength, len)
+  bodyHue = snakeHue + min(len * 0.003, 0.12)   // the strand shifts as the score climbs
+  if (!dead && (bodyHue != paintedHue || foodHue != paintedFood)) repaint()
+  breath = wave(time(0.008))
+  vC[food] = 0.65 + 0.35 * breath                 // the pellet breathes
+  popT += dt
 }
 
-export function render2D(index, x, y) {
-  var cx = clamp(floor(x * (W - 0.01)), 0, W - 1)
-  var cy = clamp(floor(y * (H - 0.01)), 0, H - 1)
-  paintCell(cy * W + cx)
-}
-
-// No map: run the board out along the strip, row after row.
-export function render(index) {
-  paintCell(clamp(floor(index / pixelCount * N), 0, N - 1))
+export function renderBulk() {
+  fillCanvas(hC, sC, vC, CW, CH)
+  if (dead) return
+  // a soft halo on the pellet, and a ring of light where the last one was eaten
+  hsv(foodHue, 0.9, 0.12 + 0.12 * breath)
+  splat((food % CW + 0.5) / CW, (floor(food / CW) + 0.5) / CH, 2.6 / CW, 1)
+  if (popT < 0.4) {
+    hsv(bodyHue, 0.5, 0.6 * (1 - popT / 0.4))
+    splat((popCell % CW + 0.5) / CW, (floor(popCell / CW) + 0.5) / CH, (1.5 + popT * 12) / CW, 1)
+  }
+  // the head glides from the cell it left to the one it entered over each step
+  var t = clamp(acc * sps / 1000, 0, 1)
+  var c = ring[head]
+  var x = mix(prevCell % CW, c % CW, t), y = mix(floor(prevCell / CW), floor(c / CW), t)
+  if (abs(prevCell % CW - c % CW) > 1 || abs(floor(prevCell / CW) - floor(c / CW)) > 1) {
+    x = c % CW; y = floor(c / CW)                  // a wrap-around jump does not glide
+  }
+  hsv(bodyHue + 0.02, 0.2, 1)
+  splat((x + 0.5) / CW, (y + 0.5) / CH, 0.8 / CW, 2)
 }
