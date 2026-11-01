@@ -1,5 +1,21 @@
 # Update log
 
+## 2026-11-01 — `setTrail(decay, mode)`: an afterglow stage at the head of the post chain
+
+`setTrail(0.85)` gives any pattern — per-pixel `render`/`render2D` ones
+included — a decaying trail with no pattern-side buffer: each channel
+becomes `max(new, prev × decay)` (mode 1: the sum, clamped), where `prev`
+is the stage's own output last frame. It is the FIRST post-chain stage
+(`setTrail → setOutputPalette → setBlur → setGlow → setGamma`) and keeps
+its own 3 B/px memory (allocated on enable, released on `setTrail(0)`),
+so the trail is of the pattern's own colours and the later stages grade it
+afresh each frame without feeding back (gamma never compounds). Writing
+the blend into the render loops instead would have needed no buffer but
+put a branch in every pixel loop (interpreter, JIT, spans, every bulk op)
+and trailed the graded frame. Off by default: one comparison per frame
+when unset. Under `setRenderSize` it runs on the small frame. Returns the
+previous decay. Builtin id 198.
+
 ## 2026-11-01 — `splatIndex`, `fillRangeAA`, `gradientRange`: anti-aliased, blended index-space bulk ops
 
 Three `renderBulk` ops that take FRACTIONAL pixel positions (pixel `i`
