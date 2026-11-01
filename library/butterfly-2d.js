@@ -1,177 +1,188 @@
-// name: Butterfly 2D
-// Clean-room reimplementation from a prose functional description of the
-// community pattern "Butterfly 2D"; original source never consulted.
+// name: Butterfly
+// Clean-room reimplementation from the prose spec docs/pattern-specs/butterfly-2d.md
+// — reimagined, not a replica.
+// Butterflies rise in from below, flutter harder and harder, and lift off the
+// top; each is reborn with its own wing outline, markings, hue and tilt. The
+// wing (petal-lobe polar boundary + markings) is baked once per butterfly into
+// a texture in wing space; each frame looks it up mirrored and flap-scaled for
+// the cells in the butterfly's box, then draws body and antennae as strokes.
 
-// One butterfly drawn explicitly and mirrored about the body axis. Each wing
-// pair is a petal lobe of a polar boundary function radiating from the wing
-// root — a big swept forewing above, a smaller rounded hindwing below, with a
-// waist notch between them — over a dark body spine (abdomen, thorax, head)
-// and a thin antenna pair. The wings beat by anisotropic horizontal scaling
-// (folded toward vertical, then thrown wide open) and carry a pale margin
-// band plus one eyespot per wing in a golden-ratio-spaced companion hue.
-// Each cycle the butterfly rises in from below, flutters harder and harder
-// and lifts off the top; the next one is born with a fresh hue and a fresh
-// resting tilt.
+var NB = 4, TEXMAX = 6144, GOLDEN = 0.61803399
+var UMAX = 0.68, VMAX = 0.47, VSPAN = 0.9    // wing space baked into the texture
 
-var GOLDEN = 0.61803399    // golden-ratio conjugate hue step
-
-// control-backed tunables
-var flapPeak = 3.0         // peak wingbeats per second
-var cycleClock = 0.122     // time() clock for one butterfly's arc (~8 s)
-var hueBase = 0.0778       // base wing hue (0..1)
-var pat = 0.7              // wing-pattern intensity 0..1
-
-// state kept across frames
-var flapPhase = 0          // integrates the flap frequency
-var open = 1               // 0.62 (folded) .. 1.00 (wings wide)
-var lift = 0               // vertical fly-in / fly-away offset
-var tilt = 0               // resting tilt of this butterfly
-var lastPhase = 0          // cycle sawtooth from the previous frame
-var jitter = 0             // per-butterfly hue nudge
-var hue = 0
-
-// Peak wingbeats per second at the frantic end of the cycle.
+var flapPeak = 3
 //# min=0.5 max=8 step=0.1 default=3
-export function sliderFlapSpeed(v) { flapPeak = clamp(v, 0.2, 12) }
+export function sliderFlapSpeed(v) { flapPeak = clamp(v, 0.5, 8) }
 
-// Seconds one butterfly gets: rise in, flutter, lift away, reborn.
+var cycleSec = 8
 //# min=3 max=40 step=1 default=8
-export function sliderCycleSeconds(v) { cycleClock = max(v, 1) / 65.536 }
+export function sliderCycleSeconds(v) { cycleSec = clamp(v, 3, 40) }
 
-// Base wing hue in degrees; the eyespots sit a golden-ratio step away from
-// it and the margin band is a pale wash of the same hue.
+// The first butterfly's hue; companions sit golden-ratio steps away.
+var hueBase = 28 / 360
 //# min=0 max=359 step=1 default=28
-export function sliderWingHue(v) { hueBase = frac(v / 360) }
+export function sliderWingHue(v) { hueBase = clamp(v, 0, 359) / 360 }
 
-// How hard the wing markings are pushed: 0 leaves a plain single-hue wing,
-// 100 gives full-contrast margin banding and eyespots.
+var pat = 0.7
 //# min=0 max=100 step=1 default=70
 export function sliderPatternPercent(v) { pat = clamp(v, 0, 100) / 100 }
 
-function reseed() {
-  tilt = (random(1) - 0.5) * 0.52     // +/- ~15 degrees, stays upright
-  jitter = (random(1) - 0.5) * 0.16   // small hue drift per butterfly
-}
-reseed()
+// How many fly at once on panels 48 px and wider; smaller panels show one.
+var count = 2
+//# min=1 max=4 step=1 default=2
+export function sliderCount(v) { count = clamp(floor(v), 1, 4) }
 
-export function beforeRender(delta) {
-  var dt = delta / 1000
+var tex = array(TEXMAX)
+var TW = 1, TH = 1, TU = 1, TV = 1, eff = 0, gw0 = -1
+var life = array(NB), flapPh = array(NB), open = array(NB)
+var hx = array(NB), hy = array(NB), cx = array(NB), cy = array(NB), drift = array(NB)
+var tc = array(NB), ts = array(NB), hue = array(NB), sz = 1
+// marking classes: base, pale margin, eyespot, dark margin, margin dot,
+// dark root, hindwing tone, pale bar, pale spot
+var clsDh = [0, 0, 0, GOLDEN - 1, 0, 0, 0, GOLDEN - 1, 0, 0]
+var clsS = [1, 1, 0.3, 1, 1, 0.1, 1, 1, 0.25, 0.2]
+var clsV = [0, 0.9, 1, 1, 0.14, 1, 0.65, 0.9, 1, 1]
+var dhC = array(10), sC = array(10), vC = array(10)
 
-  // One sawtooth per butterfly: 0 = just born, 1 = gone.
-  var p = time(cycleClock)
-  if (p < lastPhase) {
-    reseed()                          // wrapped -> a brand-new butterfly
-  }
-  lastPhase = p
-
-  // Flap oscillator: lazy at rest, frantic just before takeoff.
-  var freq = flapPeak * (0.25 + 0.75 * p * p)
-  flapPhase = frac(flapPhase + freq * dt)
-  // eased so the beat snaps shut and dwells open — a folded butterfly is a
-  // sliver, and dwelling there would cost the silhouette on a small grid
-  var w = wave(flapPhase)
-  open = 0.62 + 0.38 * (1 - (1 - w) * (1 - w))
-
-  // Vertical arc: rise in from below, hold center, lift off the top.
-  lift = 1.15 * smoothstep(0.88, 1, p) - 1.15 * (1 - smoothstep(0, 0.09, p))
-
-  hue = frac(hueBase + jitter)
-
-  resetTransform()
-  translate(-0.5, -0.5)               // origin at display center
-  rotate(tilt)
-}
-
-// Axis-aligned ellipse field: > 0 inside, 1 at the center, 0 on the boundary.
-function ell(u, v, cx, cy, rx, ry) {
-  var ex = (u - cx) / rx
-  var ey = (v - cy) / ry
-  return 1 - sqrt(ex * ex + ey * ey)
-}
-
-// One wing petal: a lopsided gaussian bump in the polar boundary radius,
-// centered on `dir`, wider on the outboard side than the inboard one.
 function lobe(th, dir, amp, wLo, wHi) {
-  var d = th - dir
-  var w = wLo
-  if (d > 0) {
-    w = wHi
-  }
-  var q = d / w
+  var q = (th - dir) / (th > dir ? wHi : wLo)
   return amp * exp(-q * q)
 }
 
-export function render2D(index, x, y) {
-  var u = abs(x)            // mirror about the body axis -> both wings at once
-  var v = -y - lift         // + is up; lift slides the whole insect vertically
-
-  // --- body: abdomen, thorax, head. Never scaled by the flap. ---
-  var body = max(max(ell(u, v, 0, -0.120, 0.048, 0.190),
-                     ell(u, v, 0, 0.115, 0.056, 0.120)),
-                 ell(u, v, 0, 0.250, 0.046, 0.050))
-
-  // --- antennae: two thin strokes sweeping up and out from the head ---
-  var ant = 0
-  var av = v - 0.28
-  if (av > 0 && av < 0.15) {
-    ant = 1 - abs(u - (0.030 + av * 0.85)) / 0.028
+// a new butterfly in slot k: shape, markings, colour, tilt, home
+function reborn(k) {
+  var fd = 0.55 + random(0.3), fa = 0.32 + random(0.08), fw = 0.45 + random(0.15)
+  var hd = -0.8 - random(0.3), ha = 0.24 + random(0.08), hw = 0.6 + random(0.2)
+  var fsx = cos(fd) * fa * 0.93 + 0.015, fsy = sin(fd) * fa * 0.6 + 0.03
+  var hsx = cos(hd) * ha * 0.93 + 0.015, hsy = sin(hd) * ha * 0.6 + 0.03
+  var st = floor(random(3)), base = k * TW * TH
+  for (var tr = 0; tr < TH; tr++) {
+    var vv = VMAX - (tr + 0.5) / TV, dv = vv - 0.03
+    for (var tcol = 0; tcol < TW; tcol++) {
+      var uu = (tcol + 0.5) / TU, ex = (uu - 0.015) / 1.55
+      var th = atan2(dv, ex), rr = hypot(ex, dv)
+      var b = max(lobe(th, fd, fa, 0.8, fw), lobe(th, hd, ha, hw, 0.75))
+      b = max(b * (1 + 0.035 * sin(th * 11)), 0.09)
+      var wa = smoothstep(-0.02, 0.012, b - rr), depth = (b - rr) / b
+      var sx = vv > 0.03 ? uu - fsx : uu - hsx, sy = vv > 0.03 ? vv - fsy : vv - hsy
+      var spot = sx * sx + sy * sy < 0.0018, cl = 1
+      if (st == 0) {
+        if (depth < 0.12) cl = 2
+        if (spot) cl = 3
+      } else if (st == 1) {
+        if (depth < 0.17) cl = frac(th * 2.6) < 0.4 && depth > 0.04 ? 5 : 4
+        else if (depth > 0.7) cl = 6
+      } else {
+        if (vv < 0.03) cl = 7
+        else if (depth > 0.42 && depth < 0.6) cl = 8
+        if (depth < 0.07) cl = 4
+        if (spot) cl = 9
+      }
+      tex[base + tr * TW + tcol] = wa > 0.01 ? cl + wa * 0.99 : 0
+    }
   }
+  var tl = (random(1) - 0.5) * 0.52
+  tc[k] = cos(tl); ts[k] = sin(tl)
+  hue[k] = frac(hueBase + k * GOLDEN + (random(1) - 0.5) * 0.12)
+  drift[k] = (random(1) - 0.5) * 0.6
+  // each slot keeps its own patch of the panel, jittered per life
+  var j = eff == 3 ? k + 4 : k + (eff == 4 ? 8 : 0)
+  hx[k] = eff > 1 ? clamp(slotX[j] + random(0.14) - 0.07, sz * 0.45, 1 - sz * 0.45) : 0.5
+  hy[k] = eff > 1 ? slotY[j] + random(0.1) - 0.05 : 0.5
+}
+var slotX = [0.3, 0.7, 0, 0, 0.26, 0.74, 0.45, 0, 0.27, 0.73, 0.27, 0.73]
+var slotY = [0.33, 0.67, 0, 0, 0.3, 0.42, 0.73, 0, 0.28, 0.3, 0.72, 0.7]
 
-  // --- wings: fold horizontally, stretch a touch when folded ---
-  var uu = u / open
-  var vv = v / (1 + 0.14 * (1 - open))
+// size the flock and its textures for this panel
+function layout() {
+  gw0 = gridWidth()
+  eff = gw0 >= 48 ? count : 1
+  sz = eff > 1 ? 0.82 - eff * 0.08 : 1
+  var gw = max(gw0, 16), gh = max(gridHeight(), 16)
+  TW = ceil(UMAX * gw * sz); TH = ceil(VSPAN * gh * sz)
+  while (TW * TH * eff > TEXMAX) { TW = floor(TW * 0.9); TH = floor(TH * 0.9) }
+  TU = TW / UMAX; TV = TH / VSPAN
+  for (var k = 0; k < eff; k++) { life[k] = k / eff; reborn(k) }
+}
 
-  // polar frame at the wing root, widened horizontally so the span reads
-  var ex = (uu - 0.015) / 1.55
-  var dv = vv - 0.030
-  var rr = sqrt(ex * ex + dv * dv)
-  var th = atan2(dv, ex)
-
-  var bound = max(lobe(th, 0.70, 0.355, 0.82, 0.50),    // forewing
-                  lobe(th, -0.95, 0.300, 0.62, 0.75))   // hindwing
-  bound = bound * (1 + 0.035 * sin(th * 11))            // scalloped margin
-  bound = max(bound, 0.090)                             // wing roots meet the body
-
-  var wing = bound - rr                 // > 0 inside the wing
-  var depth = wing / bound              // 0 at the margin, 1 at the root
-
-  var wa = smoothstep(-0.020, 0.012, wing)
-  var ba = smoothstep(-0.020, 0.012, body)
-
-  // --- wing markings ---
-  // eyespots: one on each forewing, one on each hindwing
-  var spot = clamp(max(1 - dist(uu, vv, 0.252, 0.160) / 0.042,
-                       1 - dist(uu, vv, 0.176, -0.118) / 0.036) * 4, 0, 1)
-
-  // Two hues only, a golden-ratio step apart, both near full brightness — at
-  // 16x16 a wing is about four pixels across, so anything busier, or any
-  // pattern carried by luminance, reads as noise instead of markings.
-  var dh = 0                            // hue offset of this plate, in turns
-  var sv = 1                            // saturation
-  var bv = 0.90                         // brightness
-  if (depth < 0.10) {
-    sv = 0.30                           // pale margin band
-    bv = 1
+export function beforeRender(delta) {
+  var dt = min(delta, 100) / 1000
+  if (gridWidth() != gw0 || (gw0 >= 48 ? count : 1) != eff) layout()
+  for (var i = 0; i < 10; i++) {
+    dhC[i] = clsDh[i] * pat; sC[i] = mix(1, clsS[i], pat); vC[i] = mix(0.9, clsV[i], pat)
   }
-  if (spot > 0.5) {
-    dh = GOLDEN - 1                     // eyespots, one golden step off
-    sv = 1
-    bv = 1
+  vC[0] = 0
+  for (var k = 0; k < eff; k++) {
+    var p = life[k] + dt / cycleSec
+    if (p >= 1) { p -= 1; reborn(k) }
+    life[k] = p
+    // lazy at rest, frantic just before takeoff; snaps shut, dwells open
+    flapPh[k] = frac(flapPh[k] + flapPeak * (0.25 + 0.75 * p * p) * dt)
+    var w = 1 - wave(flapPh[k])
+    open[k] = 0.62 + 0.38 * (1 - w * w)
+    var a = smoothstep(0, 0.1, p), d = easeInQuad(smoothstep(0.86, 1, p))
+    cy[k] = mix(1 + sz * 0.5, hy[k], a) + (-sz * 0.55 - hy[k]) * d + 0.012 * sz * sin(flapPh[k] * PI2)
+    cx[k] = hx[k] + drift[k] * d * sz
   }
-  dh = dh * pat                         // pat = 0 -> flat single-hue wing
-  sv = mix(1, sv, pat)
-  bv = mix(0.90, bv, pat)
+}
 
-  // --- composite: wings, then the dark body over them ---
-  var outV = bv * wa * (1 - ba) + 0.16 * ba
-  var outS = sv * (1 - ba) + 0.25 * ba
-  var outH = frac(hue + dh * (1 - ba))
+// wing-space point -> world, for the strokes
+function wxp(k, u, v) { return cx[k] + sz * (u * tc[k] + v * ts[k]) }
+function wyp(k, u, v) { return cy[k] + sz * (u * ts[k] - v * tc[k]) }
 
-  var aa = clamp(ant, 0, 1) * 0.5
-  if (aa > outV) {
-    outS = 0.25                         // pale antenna stroke, not a colour blob
-    outV = aa
+function wingAt(k, lx, v) {
+  var ti = floor(abs(lx) / open[k] * TU)
+  var tj = floor((VMAX - v / (1.14 - 0.14 * open[k])) * TV)
+  if (ti >= TW || tj < 0 || tj >= TH) return 0
+  var code = tex[k * TW * TH + tj * TW + ti]
+  if (code <= 0) return 0
+  var cl = floor(code)
+  hsv(hue[k] + dhC[cl], sC[cl], vC[cl] * (code - cl))
+  return 1
+}
+
+function strokes(k) {
+  var w = sz / max(gridWidth(), 24)
+  hsv(hue[k], 0.3, 0.28)
+  drawLine(wxp(k, 0, -0.29), wyp(k, 0, -0.29), wxp(k, 0, 0.2), wyp(k, 0, 0.2), max(0.05 * sz, w * 1.6), 0)
+  fillCircle(wxp(k, 0, 0.25), wyp(k, 0, 0.25), max(0.045 * sz, w))
+  hsv(hue[k], 0.25, 0.6)
+  for (var e = -1; e <= 1; e += 2) {
+    drawLine(wxp(k, 0.025 * e, 0.28), wyp(k, 0.025 * e, 0.28), wxp(k, 0.15 * e, 0.43), wyp(k, 0.15 * e, 0.43), w * 1.3, 2)
   }
+}
 
-  hsv(outH, clamp(outS, 0, 1), clamp(outV, 0, 1))
+export function renderBulk() {
+  clear()
+  var gw = gridWidth(), gh = gridHeight(), k
+  if (gw < 2 || gh < 2) {
+    // no grid: every pixel against every butterfly
+    for (var i = 0; i < pixelCount; i++) {
+      var x = pixelCoord(i, 0), y = pixelCoord(i, 1)
+      for (k = 0; k < eff; k++) {
+        var dx = x - cx[k], dy = y - cy[k]
+        if (wingAt(k, (dx * tc[k] + dy * ts[k]) / sz, (dx * ts[k] - dy * tc[k]) / sz)) { setPixel(i); break }
+      }
+    }
+    for (k = 0; k < eff; k++) strokes(k)
+    return
+  }
+  var is = 1 / sz, sx = 1 / (gw - 1), sy = 1 / (gh - 1)
+  for (k = eff - 1; k >= 0; k--) {
+    var ac = abs(tc[k]), as = abs(ts[k]), a = UMAX * open[k]
+    var ex = sz * (a * ac + 0.45 * as), ey = sz * (a * as + 0.45 * ac)
+    var c0 = max(0, ceil((cx[k] - ex) / sx)), c1 = min(gw - 1, floor((cx[k] + ex) / sx))
+    var r0 = max(0, ceil((cy[k] - ey) / sy)), r1 = min(gh - 1, floor((cy[k] + ey) / sy))
+    var dl = tc[k] * is * sx, dvv = ts[k] * is * sx
+    for (var r = r0; r <= r1; r++) {
+      var ddx = c0 * sx - cx[k], ddy = r * sy - cy[k]
+      var lx = (ddx * tc[k] + ddy * ts[k]) * is, v = (ddx * ts[k] - ddy * tc[k]) * is
+      for (var c = c0; c <= c1; c++) {
+        if (wingAt(k, lx, v)) setPixel(gridIndex(c, r))
+        lx += dl
+        v += dvv
+      }
+    }
+    strokes(k)
+  }
 }
