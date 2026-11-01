@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/digital-rain-2d.js (2026-11).
+
 # matrix rain
 kind: 2D
 sensors: no
