@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/searchlights.js (2026-11).
+
 # All Lasers Fire
 kind: 1D+2D
 sensors: no
