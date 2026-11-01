@@ -1,3 +1,4 @@
+> Reimagined 2026-11 as library/sunrise-alarm-clock.js "Sunrise Alarm": the gamma slider is gone (device output setting), and it absorbs sunrise.md as a "Sunrise now" trigger.
 # Sunrise Alarm Clock
 kind: 1D
 sensors: no (uses the real-time clock — hour/minute/second/weekday — not the sensor board)
