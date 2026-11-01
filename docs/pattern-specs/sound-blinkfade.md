@@ -1,3 +1,4 @@
+> Superseded: this idea now lives in library/twinkle.js (2026-11).
 # sound - blinkfade
 kind: 1D
 sensors: yes
