@@ -159,7 +159,7 @@ async function recover(why) {
 }
 
 const gallery = JSON.parse(fs.readFileSync("web/public/gallery.json", "utf8"));
-const rainbow = fs.readFileSync("library/rainbow.js", "utf8");
+const rainbow = fs.readFileSync("tools/bench-patterns/rainbow.js", "utf8");
 const status0 = await api("/api/status");
 const bright0 = (await api("/api/brightness")).brightness;
 // the LED protocol is not in /api/status — the header used to hardcode

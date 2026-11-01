@@ -332,10 +332,9 @@ fn box_count(prog: &Program) -> usize {
 
 // ------------------------------------------------------- library census
 
-fn library() -> Vec<(String, String)> {
-    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../library");
+fn read_js_dir(dir: &str) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = std::fs::read_dir(dir)
-        .expect("library/ must exist")
+        .unwrap_or_else(|e| panic!("{dir}: {e}"))
         .filter_map(|e| {
             let p = e.ok()?.path();
             if p.extension()? != "js" {
@@ -347,6 +346,21 @@ fn library() -> Vec<(String, String)> {
         .collect();
     out.sort();
     out
+}
+
+/// The live `library/`. It is rewritten, merged and pruned freely (the
+/// 2026-11 library overhaul), so tests over it check invariants per pattern
+/// and never count it.
+fn library() -> Vec<(String, String)> {
+    read_js_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../../library"))
+}
+
+/// Frozen verbatim copies of the library files the Rust tests pin
+/// (`tests/data/lib/`, copied from master `2c949e4e` on 2026-11-01). The
+/// census numbers are pinned over THIS set, so a library rewrite can never
+/// move them — only a compiler change can.
+fn frozen() -> Vec<(String, String)> {
+    read_js_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/lib"))
 }
 
 /// Functions the engine can reach from a render entry — the census's
@@ -426,13 +440,16 @@ fn render_path(prog: &Program) -> (BTreeSet<usize>, Vec<BTreeSet<usize>>) {
     (seen, ref_globals)
 }
 
-/// The §9 census, as a regression gate. Every number here is what the real
-/// implementation produces today; a compiler change that moves one is
-/// either a win worth re-pinning or a bug.
-#[test]
-fn library_census_is_pinned() {
-    let lib = library();
-    assert!(lib.len() > 300, "expected the whole library, got {}", lib.len());
+struct Census {
+    n: usize,
+    boxes: usize,
+    box_patterns: Vec<String>,
+    fully_typed: usize,
+}
+
+/// Every pattern typed, verified and blob-round-tripped (asserted per
+/// pattern), plus the counts the §9 census reports.
+fn census(lib: &[(String, String)]) -> Census {
     let mut typed = 0usize;
     let mut verified = 0usize;
     let mut boxes = 0usize;
@@ -440,7 +457,7 @@ fn library_census_is_pinned() {
     let mut round_tripped = 0usize;
     let mut box_patterns: Vec<String> = Vec::new();
     let mut untyped: Vec<String> = Vec::new();
-    for (name, src) in &lib {
+    for (name, src) in lib {
         let prog = compile(src).unwrap_or_else(|d| panic!("{name}: {}", d.message));
         let Some(k) = prog.kinds.clone() else {
             untyped.push(name.clone());
@@ -482,27 +499,49 @@ fn library_census_is_pinned() {
     assert_eq!(typed, lib.len());
     assert_eq!(verified, lib.len());
     assert_eq!(round_tripped, lib.len());
-    // docs/jit-design.md §9 predicted ~11 Box sites from the prototype;
-    // the shipped inference needs 8, in 6 patterns.
-    assert_eq!(boxes, 8, "Box sites moved: {box_patterns:?}");
-    assert_eq!(box_patterns.len(), 6, "{box_patterns:?}");
-    // The prototype measured 291/307 fully typed render paths without
-    // modelling the engine's own writes or the declared init value; the
-    // shipped, sound inference gets 271 by this test's (stricter,
-    // whole-program-globals) definition. `jitcensus` counts only the
-    // globals a render-path function actually references and reports 286.
-    assert!(
-        fully_typed >= 271,
-        "fully typed render paths regressed: {fully_typed}/{}",
+    eprintln!(
+        "census: {} patterns, {boxes} Box sites in {box_patterns:?}, {fully_typed} fully typed",
         lib.len()
     );
+    Census { n: lib.len(), boxes, box_patterns, fully_typed }
+}
+
+/// `tests/data/lib/`: how many frozen copies, and how many of them have a
+/// fully typed render path (measured 2026-11-01).
+const FROZEN_N: usize = 32;
+const FROZEN_FULLY_TYPED: usize = 25;
+
+/// The §9 census, as a regression gate, over the FROZEN set. Every number
+/// here is what the real implementation produces today; a compiler change
+/// that moves one is either a win worth re-pinning or a bug. (Until
+/// 2026-11-01 this counted the live library — 8 Box sites in 6 patterns,
+/// 271+ of 307 fully typed — and every library rewrite would have moved
+/// it; the frozen set keeps all six Box patterns.)
+#[test]
+fn library_census_is_pinned() {
+    let c = census(&frozen());
+    assert_eq!(c.n, FROZEN_N, "tests/data/lib/ changed");
+    assert_eq!(c.boxes, 8, "Box sites moved: {:?}", c.box_patterns);
+    assert_eq!(c.box_patterns.len(), 6, "{:?}", c.box_patterns);
+    assert!(
+        c.fully_typed >= FROZEN_FULLY_TYPED,
+        "fully typed render paths regressed: {}/{}",
+        c.fully_typed,
+        c.n
+    );
+}
+
+/// The same per-pattern invariants over the live library — no counts.
+#[test]
+fn live_library_kinds_hold() {
+    census(&library());
 }
 
 /// `Box` is a no-op, so a typed blob and an untyped one must render the
 /// same pixels — every pattern, bit for bit.
 #[test]
 fn library_renders_identically_with_and_without_kinds() {
-    for (name, src) in library() {
+    for (name, src) in frozen().into_iter().chain(library()) {
         let a = frames(&src, None, 2);
         let b = frames(&src, Some(NO_KINDS), 2);
         assert_eq!(a, b, "{name}: --no-kinds renders differently");

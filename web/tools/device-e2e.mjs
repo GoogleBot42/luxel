@@ -252,6 +252,16 @@ const THREE_CHANNELS = [
 const galleryJson = JSON.parse(fs.readFileSync("public/gallery.json", "utf8"));
 const grid2d = galleryJson.find((p) => p.kind === "grid");
 const strip1d = galleryJson.find((p) => p.kind === "strip");
+// A render3D-only pattern, if the library still has one (null = the
+// "3D is filtered on a panel" half of #538 is vacuous, not failing).
+const cloud3d = galleryJson.find((p) => p.kind === "cloud") ?? null;
+// The #420 preview-ledger fixture: a library pattern holding three or more
+// `array(pixelCount)` buffers — past PB's 10,236 elements at 4096 px, inside
+// the panel's. `_Fairies` was the one that found the bug; picked by source,
+// not by name, because the library is rewritten freely.
+const ledgerProbe =
+  galleryJson.find((p) => (p.source.match(/array\(\s*pixelCount\s*\)/g) ?? []).length >= 3) ??
+  null;
 if (!grid2d || !strip1d) {
   // Fail loudly here rather than as a confusing TypeError 3000 lines down.
   throw new Error("public/gallery.json has no grid/strip pattern — run `npm run build` first");
@@ -988,17 +998,23 @@ try {
       // a 64x64 matrix shows, and only the 3D patterns are filtered here
       await mappedPage.click('[data-role="patterns-source-library"]');
       await sleep(2500);
-      const libOnPanel = await mappedPage.evaluate(() => {
-        const name = (e) => e.querySelector('[data-role="tile-name"]')?.textContent ?? "";
-        const tiles = [...document.querySelectorAll('[data-source="library"] .tile')];
-        const ct = document.querySelector('[data-role="patterns-source-library"] .ct');
-        return {
-          shown: tiles.length,
-          chip: Number((ct?.textContent ?? "").trim()),
-          plane: tiles.some((e) => /2D Fireworks Fade/.test(name(e))),
-          cloud: tiles.some((e) => /3D Rotation/.test(name(e))),
-        };
-      });
+      // the probes come off gallery.json's own `kind`, never a pattern name:
+      // the library is rewritten and renamed freely
+      const libOnPanel = await mappedPage.evaluate(
+        (planeName, cloudName) => {
+          const name = (e) => (e.querySelector('[data-role="tile-name"]')?.textContent ?? "").trim();
+          const tiles = [...document.querySelectorAll('[data-source="library"] .tile')];
+          const ct = document.querySelector('[data-role="patterns-source-library"] .ct');
+          return {
+            shown: tiles.length,
+            chip: Number((ct?.textContent ?? "").trim()),
+            plane: tiles.some((e) => name(e) === planeName),
+            cloud: cloudName !== null && tiles.some((e) => name(e) === cloudName),
+          };
+        },
+        grid2d.name,
+        cloud3d?.name ?? null,
+      );
       check(
         "filter: a 2D library pattern IS offered on a 64x64 panel console",
         libOnPanel.plane === true && libOnPanel.chip === libOnPanel.shown,
@@ -1006,7 +1022,7 @@ try {
       );
       check(
         "filter: …and only the 3D ones are dropped there",
-        libOnPanel.cloud === false && libOnPanel.shown > 250,
+        libOnPanel.cloud === false && libOnPanel.shown > galleryJson.length / 2,
         JSON.stringify(libOnPanel),
       );
       await mappedPage.click('[data-role="patterns-source-device"]');
@@ -2506,21 +2522,21 @@ try {
     // counts what is on screen (the panel console's twin check is above)
     await page.click('[data-role="patterns-source-library"]');
     await sleep(2000);
-    const libOnStrip = await page.evaluate(() => {
-      const name = (e) => e.querySelector('[data-role="tile-name"]')?.textContent ?? "";
+    const libOnStrip = await page.evaluate((planeName) => {
+      const name = (e) => (e.querySelector('[data-role="tile-name"]')?.textContent ?? "").trim();
       const tiles = [...document.querySelectorAll('[data-source="library"] .tile')];
       const ct = document.querySelector('[data-role="patterns-source-library"] .ct');
       return {
         shown: tiles.length,
         chip: Number((ct?.textContent ?? "").trim()),
-        plane: tiles.some((e) => /2D Fireworks Fade/.test(name(e))),
+        plane: tiles.some((e) => name(e) === planeName),
       };
-    });
+    }, grid2d.name);
     check(
       "filter: a 2D library pattern is absent on a strip console",
       libOnStrip.plane === false &&
         libOnStrip.shown > 0 &&
-        libOnStrip.shown < 250 &&
+        libOnStrip.shown < galleryJson.length &&
         libOnStrip.chip === libOnStrip.shown,
       JSON.stringify(libOnStrip),
     );
@@ -4486,24 +4502,35 @@ try {
       // drew a BLACK canvas for a pattern the LEDs were showing — which is
       // exactly what `library/fairies.js` (15,104 elements at 4096 px) did on
       // the bench. The canvas is the assertion: a compile error or a capacity
-      // banner would be a different (and visible) failure.
+      // banner would be a different (and visible) failure. The fixture is
+      // `ledgerProbe` (picked from gallery.json by source); a library with no
+      // such pattern skips this block — the ledger itself is still checked
+      // on the mirror above (CHANNELS) and in tools/wasm-smoke.mjs.
       await hubPage.click('[data-role="patterns-source-library"]');
       await hubPage.waitForFunction(
-        () => document.querySelectorAll('[data-source="library"] .tile').length > 50,
+        (want) => document.querySelectorAll('[data-source="library"] .tile').length > want,
         { timeout: 15000 },
+        Math.min(50, Math.floor(galleryJson.length / 2)),
       );
-      const tagged = await hubPage.evaluate(() => {
-        const name = (e) => e.querySelector('[data-role="tile-name"]')?.textContent ?? "";
-        const t = [...document.querySelectorAll('[data-source="library"] .tile')].find((e) =>
-          /Fairies/i.test(name(e)),
+      if (!ledgerProbe) console.log("  (skip) no library pattern exceeds PB's array ledger — #420 preview probe not run");
+      const tagged = !ledgerProbe ? false : await hubPage.evaluate((probeName) => {
+        const name = (e) => (e.querySelector('[data-role="tile-name"]')?.textContent ?? "").trim();
+        const t = [...document.querySelectorAll('[data-source="library"] .tile')].find(
+          (e) => name(e) === probeName,
         );
         if (t) {
           t.setAttribute("data-probe", "fairies");
           t.scrollIntoView({ block: "center" });
         }
         return t !== undefined;
-      });
-      check("panel: the library carries _Fairies (the #420 fixture)", tagged);
+      }, ledgerProbe.name);
+      if (ledgerProbe) {
+        check(
+          "panel: the library carries a pattern past PB's array ledger (the #420 fixture)",
+          tagged,
+          ledgerProbe.name,
+        );
+      }
       if (tagged) {
         await tileAction(hubPage, '[data-probe="fairies"]', "tile-edit");
         await hubPage.waitForSelector('[data-role="editor-view"]:not([hidden])', { timeout: 8000 });
@@ -4523,7 +4550,11 @@ try {
           )
           .then((h) => h.jsonValue())
           .catch(() => 0);
-        check("panel: _Fairies previews at 4096 px instead of rendering black", litPx > 50, `lit=${litPx}`);
+        check(
+          `panel: ${ledgerProbe.name} previews at 4096 px instead of rendering black`,
+          litPx > 50,
+          `lit=${litPx}`,
+        );
         check(
           "panel: …and no capacity banner cries wolf about the panel's arena",
           (await hubPage.$('[data-role="capacity-rejected"], [data-role="capacity-warning"]')) === null,

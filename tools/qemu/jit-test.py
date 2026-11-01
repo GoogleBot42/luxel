@@ -108,7 +108,8 @@ tko = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(tko)
 
 # The five of docs/jit-design.md §7.1: two strip patterns, a 2D one, the
-# noise-heavy #260 probe, and a renderBulk pattern.
+# noise-heavy #260 probe, and a renderBulk pattern. A name resolves to its
+# frozen copy in tools/bench-patterns/ first, then library/ (pattern_path).
 FIVE = [
     "rainbow.js",
     "snake.js",
@@ -116,6 +117,14 @@ FIVE = [
     "perlin-fire-wind-tunnel.js",
     "bulk-canvas-ripples-2d.js",
 ]
+
+
+def pattern_path(name: str) -> str:
+    """A pattern name's source: the frozen copy (tools/bench-patterns/, kept
+    verbatim so the gate's set survives library rewrites), else library/."""
+    frozen = os.path.join(REPO, "tools", "bench-patterns", name)
+    return frozen if os.path.exists(frozen) else os.path.join(REPO, "library", name)
+
 
 PANIC_HALT = "panic: rebooting in 3s"
 BOOT_LINE = "luxel-fw: boot"
@@ -209,9 +218,9 @@ def build_image(pattern: str | None, workdir: str) -> tuple[str, str]:
         )
         return os.path.join(out, "luxel-fw.bin"), os.path.join(out, "luxel-fw.elf")
 
-    src = os.path.join(REPO, "library", pattern)
+    src = pattern_path(pattern)
     if not os.path.exists(src):
-        raise Fail(f"library/{pattern} does not exist")
+        raise Fail(f"{pattern} is in neither tools/bench-patterns/ nor library/")
     env = dict(os.environ, BOARD="board-esp32-generic", EXTRA_FEATURES="jit",
                SKIP_ASSETS="1", LUXEL_DEFAULT_PATTERN=src)
     r = subprocess.run(["./build-esp32.sh"], cwd=os.path.join(REPO, "firmware"),
@@ -379,7 +388,7 @@ def check_one(qemu: str, efuse: str, workdir: str, pattern: str | None,
     """Run one pattern both ways. Returns the notes to print; raises on a
     failure."""
     name = pattern or "rainbow.js (built in)"
-    src = open(os.path.join(REPO, "library", pattern or "rainbow.js")).read()
+    src = open(pattern_path(pattern or "rainbow.js")).read()
     flash, elf = build_image(pattern, workdir)
     tag = (pattern or "default").replace(".", "_")
 

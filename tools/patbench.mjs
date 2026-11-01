@@ -13,7 +13,9 @@
 //
 //   nix develop -c node tools/patbench.mjs <device-ip> <pattern> [opts]
 //
-//   <pattern>        a name in library/ (no .js), or a path to a .js file
+//   <pattern>        a name (no .js) — looked up in tools/bench-patterns/ first
+//                    (frozen copies, so numbers stay comparable with the
+//                    docs/boards.md history), then library/ — or a path to a .js
 //   --pixels N       pixel count for the run       (default 256)
 //   --samples N      /api/status samples           (default 9)
 //   --settle MS      wait after the push           (default 5000)
@@ -29,7 +31,7 @@
 // repeats to ±0.3 % on this rig.
 //
 // The device is restored to the pixel count it was found with, running
-// library/rainbow.js. It is a MEASUREMENT tool, not a stability check.
+// tools/bench-patterns/rainbow.js. It is a MEASUREMENT tool, not a stability check.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -57,13 +59,18 @@ const SETTLE = Number(opt("settle", "5000"));
 const REPEAT = Number(opt("repeat", "1"));
 const JSON_OUT = opt("json", null);
 
-const srcPath = pattern.endsWith(".js") ? pattern : path.join(ROOT, "library", `${pattern}.js`);
+const frozenPath = path.join(ROOT, "tools", "bench-patterns", `${pattern}.js`);
+const srcPath = pattern.endsWith(".js")
+  ? pattern
+  : fs.existsSync(frozenPath)
+    ? frozenPath
+    : path.join(ROOT, "library", `${pattern}.js`);
 if (!fs.existsSync(srcPath)) {
   console.error(`no such pattern: ${srcPath}`);
   process.exit(2);
 }
 const src = fs.readFileSync(srcPath, "utf8");
-const rainbow = fs.readFileSync(path.join(ROOT, "library", "rainbow.js"), "utf8");
+const rainbow = fs.readFileSync(path.join(ROOT, "tools", "bench-patterns", "rainbow.js"), "utf8");
 
 const H = { connection: "close" };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

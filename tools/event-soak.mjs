@@ -219,7 +219,7 @@ console.log(`heap: base ${heapBase}, min-under-load ${heapMin}, final ${last.hea
 console.log(`fps: min ${fpsMin} under load`);
 
 // --- restore: rainbow live (the rodata default the device boots into) ---
-const rainbow = fs.readFileSync("library/rainbow.js", "utf8");
+const rainbow = fs.readFileSync("tools/bench-patterns/rainbow.js", "utf8");
 const rr = await api("/api/code", await lxpBody("", rainbow));
 console.log(`restore rainbow: ${JSON.stringify(rr)}`);
 const stf = await api("/api/status");

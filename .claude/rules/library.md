@@ -69,5 +69,5 @@ paths:
   never `row * gridWidth() + col`: the frame is in wire order, which on a
   HUB75 chain is not row-major (Gitea #948). The two agree on a plain
   grid, so the five check-library rigs cannot catch the mistake — review
-  for it. `library/frame-rate-test.js`'s `band()` is the native row/rect
+  for it. `tools/patterns/frame-rate-test.js`'s `band()` is the native row/rect
   fill idiom.

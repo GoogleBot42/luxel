@@ -4675,7 +4675,7 @@ bitplanes of frame N+1*, i.e. colour corruption at moving edges rather than a
 clean horizontal tear. `SWAP_DONE` was frame-boundary, but it only guarded
 reclaiming the old buffer, not the switch itself. The firmware composes up to
 125 frames a second against a 115 Hz rescan, so most displayed passes mixed
-two frames. Filmed on the bench panel with `library/frame-rate-scan.js`: at a
+two frames. Filmed on the bench panel with `tools/patterns/frame-rate-scan.js`: at a
 sweep-column change, **two columns are lit at once, one of them partially**.
 
 **The fix** is a local patch to esp-hub75
@@ -4721,7 +4721,7 @@ the app image goes 950,480 → 951,264 B (+784 with headers and padding),
 leaving 97,312 B (9.28 %) of the OTA slot still free. Heap is untouched — the framebuffers themselves did not change.
 
 **Measured on the panel** (`board-seengreat-hub75`, 4096 px, 30 MHz, 7
-planes, `library/frame-rate-scan.js` at ComposeCap 0), before and after:
+planes, `tools/patterns/frame-rate-scan.js` at ComposeCap 0), before and after:
 
 | | `fps` | `out_fps` | `rescan_hz` | `vm_us` | `frame_us` | heap free |
 |---|---:|---:|---:|---:|---:|---:|
@@ -4897,7 +4897,7 @@ HUB75-only — a strip is wire-bound and keeps the 8 ms floor:
 A 50 ms cap on both waits is a liveness floor, not the pacing — a dead panel
 must not freeze the engine, the pattern clock or `fps`.
 
-Measured on the panel, `library/frame-rate-scan.js` at ComposeCap 0, 4096 px:
+Measured on the panel, `tools/patterns/frame-rate-scan.js` at ComposeCap 0, 4096 px:
 
 | | `fps` | `out_fps` | `rescan_hz` | `vm_us` | `frame_us` | `out_us` |
 |---|---:|---:|---:|---:|---:|---:|
@@ -5016,7 +5016,7 @@ a channel byte's plane bits to that stride — and **brightness scaling is
 folded into those tables**, so `scale5` leaves the inner loop entirely. The
 packer writes every colour bit of every entry, so it also subsumes `erase()`.
 
-Measured on the bench panel, `library/frame-rate-scan.js`, 4096 px,
+Measured on the bench panel, `tools/patterns/frame-rate-scan.js`, 4096 px,
 brightness 3, 30 MHz:
 
 | | `fps` | `out_fps` | `rescan_hz` | `vm_us` | `out_us` |
@@ -5092,9 +5092,9 @@ task's frame 1,360 B against the 12,288 B budget, stack-check green.
 changed crate-metadata hash — no code from the new crate links there, and a
 hash-normalised symbol diff of the two ELFs is identical.
 
-## Seeing the displayed frame rate: `library/frame-rate-test.js` (2026-09-07)
+## Seeing the displayed frame rate: `tools/patterns/frame-rate-test.js` (2026-09-07)
 
-`rescan_hz` is the driver's own count. `library/frame-rate-test.js` ("Frame
+`rescan_hz` is the driver's own count. `tools/patterns/frame-rate-test.js` ("Frame
 Rate Test") is the independent check — an instrument pattern that makes the
 gap between the **composed** and the **displayed** rate visible on the panel
 itself. Push it live (`POST /api/code`) and read the panel, not the API.
@@ -5163,7 +5163,7 @@ uncapped and measures the beat instead. Dropping the cap *below* the display
 rate is still useful: every composed frame is then shown at least once, the
 beat disappears, and a gross regular flicker at `F/2` takes its place.
 
-### `library/frame-rate-scan.js` — the camera version
+### `tools/patterns/frame-rate-scan.js` — the camera version
 
 Frame Rate Test above reads the displayed rate as a *beat*, which takes a
 practised eye. **Frame Rate Scan** is the version to point a phone at: it

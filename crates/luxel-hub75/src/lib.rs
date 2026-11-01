@@ -998,16 +998,24 @@ mod tests {
 
     /// Frames from the real engine, on the real 64x64 grid map the bench
     /// panel runs — the inputs the packer will actually see. Rendered here
-    /// rather than committed as fixtures so a library or engine change can
-    /// never leave the assertion testing a stale frame.
+    /// rather than committed as fixtures so an engine change can never leave
+    /// the assertion testing a stale frame. The SOURCES are pinned: the
+    /// frame-rate instrument from `tools/patterns/`, the two library
+    /// patterns from their frozen copies in `crates/luxel-core/tests/data/lib/`
+    /// (2026-11-01), so a library rewrite never moves this test.
     #[test]
     fn rendered_library_frames_are_byte_identical() {
         use luxel_core::engine::Engine;
         use luxel_core::fixed::Fx;
 
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        for name in ["frame-rate-scan", "rainbow", "snake-2d-v2"] {
-            let path = root.join("library").join(format!("{name}.js"));
+        for path in [
+            "tools/patterns/frame-rate-scan.js",
+            "crates/luxel-core/tests/data/lib/rainbow.js",
+            "crates/luxel-core/tests/data/lib/snake-2d-v2.js",
+        ] {
+            let path = root.join(path);
+            let name = path.file_stem().unwrap().to_string_lossy().into_owned();
             let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
             let mut engine = Engine::new_at(&src, PIXELS as u32, 1, Some(1_757_000_000))
                 .unwrap_or_else(|d| panic!("{name}: {}", d.message));

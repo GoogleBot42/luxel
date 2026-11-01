@@ -215,5 +215,5 @@ if (JSON_OUT) {
 // device has no "what was playing" query, so this matches hw-bench.mjs).
 await api("/api/config", String(status0.pixels));
 await sleep(1000);
-await api("/api/code", await lxpBody("", readFileSync(join(root, "library/rainbow.js"), "utf8")));
+await api("/api/code", await lxpBody("", readFileSync(join(root, "tools/bench-patterns/rainbow.js"), "utf8")));
 console.log(`(device restored to ${status0.pixels} px, rainbow; protocol ${cfg0?.protocol ?? "?"})`);

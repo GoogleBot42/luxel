@@ -388,9 +388,13 @@ fn render_priority_prefers_1d() {
     assert_eq!(e.var("which"), Some(Value::Num(Fx::ONE)));
 }
 
+// Library patterns below are read from `tests/data/lib/`: frozen verbatim
+// copies (master `2c949e4e`, 2026-11-01), so a library rewrite, rename or
+// delete never moves these tests.
+
 #[test]
 fn blinkfade_soaks_clean() {
-    let src = include_str!("../../../library/blink-fade.js");
+    let src = include_str!("data/lib/blink-fade.js");
     let mut e = Engine::new(src, 60, 7).unwrap();
     assert!(e.last_error.is_none(), "{:?}", e.last_error);
     let delta = Fx::from_f64(1000.0 / 60.0);
@@ -439,7 +443,7 @@ fn pointer_event(x: Fx, y: Fx) -> [Fx; 4] {
 
 #[test]
 fn ripples_2d_event_splashes_at_the_poked_cell() {
-    let src = include_str!("../../../library/ripples-2d.js");
+    let src = include_str!("data/lib/ripples-2d.js");
     let delta = Fx::from_f64(1000.0 / 60.0);
     let target = 9 * GRID + 6; // an interior cell, away from the edges
 
@@ -467,7 +471,7 @@ fn ripples_2d_event_splashes_at_the_poked_cell() {
 
 #[test]
 fn slime_mold_event_seeds_the_poked_cell() {
-    let src = include_str!("../../../library/slime-mold-palette.js");
+    let src = include_str!("data/lib/slime-mold-palette.js");
     let delta = Fx::from_f64(1000.0 / 60.0);
 
     let mut control = Engine::new(src, GRID * GRID, 7).unwrap();
@@ -494,7 +498,7 @@ fn slime_mold_event_seeds_the_poked_cell() {
 
 #[test]
 fn saberdeploy_event_reverses_the_blade() {
-    let src = include_str!("../../../library/saberdeploy-tutorial.js");
+    let src = include_str!("data/lib/saberdeploy-tutorial.js");
     let delta = Fx::from_f64(1000.0 / 60.0);
     let mut e = Engine::new(src, 60, 1).unwrap();
     for _ in 0..10 {
@@ -520,7 +524,7 @@ fn saberdeploy_event_reverses_the_blade() {
 
 #[test]
 fn determinism_same_seed_same_bytes() {
-    let src = include_str!("../../../library/blink-fade.js");
+    let src = include_str!("data/lib/blink-fade.js");
     let delta = Fx::from_f64(16.0);
     let run = |seed| {
         let mut e = Engine::new(src, 30, seed).unwrap();
@@ -1721,7 +1725,7 @@ fn grid_frames(src: &str, w: u32, h: u32, frames: usize, delta_ms: f64) -> Vec<V
 
 #[test]
 fn easing_library_marker_covers_exactly_one_pixel() {
-    let src = include_str!("../../../library/easing-library-v1-0.js");
+    let src = include_str!("data/lib/easing-library-v1-0.js");
     // 100 ms frames walk all thirty easings (one every 5 s) in 1500 frames.
     for &(w, h, frames, ms) in &[(16u32, 16u32, 1500usize, 100.0f64), (64, 64, 60, 100.0)] {
         for (i, px) in grid_frames(src, w, h, frames, ms).iter().enumerate() {
@@ -1736,7 +1740,7 @@ fn easing_library_marker_covers_exactly_one_pixel() {
 
 #[test]
 fn us_flag_stars_stay_separated_on_a_small_canton() {
-    let src = include_str!("../../../library/us-flag-2d.js");
+    let src = include_str!("data/lib/us-flag-2d.js");
     let (w, h) = (16u32, 16u32);
     let px = grid_frames(src, w, h, 60, 1000.0 / 60.0).pop().unwrap();
     // The canton the pattern computes for a 16-row panel: 40% of the width,
@@ -1773,7 +1777,7 @@ fn us_flag_stars_stay_separated_on_a_small_canton() {
 
 #[test]
 fn lissajous_trail_does_not_depend_on_the_frame_rate() {
-    let src = include_str!("../../../library/lissajous-curve-tracer.js");
+    let src = include_str!("data/lib/lissajous-curve-tracer.js");
     // Two seconds of wall clock at 60 fps and at 120 fps. The dot is driven by
     // time(), so a per-frame stamp leaves a scattered constellation at the
     // lower rate; the swept-segment stamp has to land on the same trail.

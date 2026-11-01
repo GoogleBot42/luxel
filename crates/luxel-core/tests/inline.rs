@@ -190,10 +190,12 @@ fn an_error_inside_an_inlined_body_keeps_its_source_position() {
     assert_eq!(line, 3, "attributed to the callee's `return` line");
 }
 
-fn library() -> Vec<(String, String)> {
-    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../library");
+/// `library/` (live, rewritten freely — never counted) or `tests/data/lib/`
+/// (frozen verbatim copies, master `2c949e4e`, 2026-11-01 — the set the
+/// expansion count below is pinned over).
+fn js_dir(dir: &str) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = std::fs::read_dir(dir)
-        .expect("library/ must exist")
+        .unwrap_or_else(|e| panic!("{dir}: {e}"))
         .filter_map(|e| {
             let p = e.ok()?.path();
             if p.extension()? != "js" {
@@ -207,23 +209,32 @@ fn library() -> Vec<(String, String)> {
     out
 }
 
+/// How many of the frozen copies the inliner must expand a call in (7 of
+/// 32, measured 2026-11-01; the live library read 20+ of 307 before the
+/// overhaul).
+const FROZEN_EXPANDED: usize = 7;
+
 /// The whole library, inlined against not: 6 frames on a 64-px strip and
 /// on an 8x8 grid. A wrong rewrite shows here and NOWHERE else — the
 /// interpreter-vs-JIT diffs compare two runs of the same bytecode.
 #[test]
 fn the_library_renders_identically_inlined() {
+    let frozen = js_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/lib"));
+    let live = js_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../../library"));
+    let n_frozen = frozen.len();
     let mut expanded = 0usize;
-    for (name, src) in library() {
+    for (k, (name, src)) in frozen.into_iter().chain(live).enumerate() {
         let Ok(on) = compile_with(&src, CompileOpts::default()) else {
             continue; // a pattern the compiler refuses is refused either way
         };
         let off = compile_with(&src, OFF).expect("compiles with inlining off too");
         let ons = ["render", "render2D", "render3D"].iter().map(|n| calls_in(&on, n)).sum::<usize>();
         let offs = ["render", "render2D", "render3D"].iter().map(|n| calls_in(&off, n)).sum::<usize>();
-        if ons < offs {
+        if ons < offs && k < n_frozen {
             expanded += 1;
         }
         same(&src, &name);
     }
-    assert!(expanded >= 20, "only {expanded} library patterns expand a call");
+    eprintln!("{expanded} frozen patterns expand a call");
+    assert!(expanded >= FROZEN_EXPANDED, "only {expanded} frozen patterns expand a call");
 }
