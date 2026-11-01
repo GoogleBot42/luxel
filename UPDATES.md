@@ -1,5 +1,41 @@
 # Update log
 
+## 2026-11-01 — `setRenderSize(w, h, filter)`: a pattern's own render resolution; bilinear `fillCanvas`/`paintCanvas`
+
+A pattern can now declare the grid it renders on: `setRenderSize(16, 16)`
+(nearest) or `setRenderSize(64, 64, 1)` (bilinear). The engine runs any
+render entry on that w×h grid — `pixelCount` = w·h (immediately, so a
+top-level `array(pixelCount)` after the call is small), a procedural w×h
+grid map, `gridWidth`/`gridHeight`/`gridIndex`/`pixelCoord` and a
+row-major `renderBulk` frame of w·h slots; `h = 1` is a w-pixel strip (a 1D
+pattern stretched along the fixture) — then the post chain runs on the
+small frame and a new last step expands it onto the fixture through each
+pixel's mapped (x, y): `fillCanvas`'s nearest geometry (block-expand and
+tiled-run fast paths included) or `canvasGet`'s bilinear one, integer-only
+and bit-identical native ↔ wasm. Works on every Layout (sparse maps sample
+the small grid where each pixel sits); outranks projection; `(0, 0)`
+restores native; `setPixelState` sizes to the small grid; events are
+unchanged; a scene layer engine with a size just works. New
+`ProjPlan::Resized` in `engine.rs`, kernels in `bulk.rs`, builtin id 194.
+The same kernel gave `fillCanvas(…, filter)` / `paintCanvas(…, b, filter)`
+a bilinear mode — the bilinear bulk fill #373 asked for. Refs #843 (the
+scene-side twin, a per-layer scale chosen by the scene, is still open).
+
+Size: luxel.wasm 492,802 → 495,545 B raw (+2,743); asset archive 969,411 →
+970,963 B, headroom 13,629 → 12,077 B. pixelblaze-v3 OTA slot 3.80 % free.
+Host bench, 128×128 sinc-style `render2D`: 1.88 ms/frame native, 0.39 ms at
+`setRenderSize(64, 64)`, 0.54 ms bilinear (host is a smoke test — the
+device split is unmeasured).
+
+Verified: `crates/luxel-core/tests/render_size.rs` (15 tests — equivalences
+against the native small frame block-expanded, against `fillCanvas`/
+`paintCanvas` of the same canvas on ring/grid/serpentine maps, an independent
+spelling of the bilinear kernel, a pinned bilinear golden, projection,
+pixel state, events, a scene layer); `tools/wasm-smoke.mjs` asserts the
+golden through the FFI; `tools/ci.sh` green. `tools/stack-check.sh` reads
+24,260 B (floor 24,576) — but `origin/master` itself reads 24,308 B and
+fails the same floor, so that red is master's.
+
 ## 2026-10-17 — `/api/status` names the stored pattern it is running (#881, #930); device-e2e fixture (#973)
 
 `pattern_id` in `GET /api/status`, firmware and mirror alike: the id the last
