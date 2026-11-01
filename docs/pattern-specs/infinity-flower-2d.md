@@ -1,3 +1,4 @@
+> Superseded: this idea now lives in library/lotus-bloom.js (2026-11).
 # Infinity Flower 2D
 kind: 2D
 sensors: no
