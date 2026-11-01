@@ -426,6 +426,20 @@ injected as `RefSource` and `RefTarget`) and is deliberately reusable by **#746*
 `SceneRef[]` and its importer is the same `RefTarget`, so that ticket should
 import this rather than grow a second copy.
 
+## Scene layers move: the Motion field ✅ (2026-11-01)
+
+Every layer inspector ends (above `Delete layer`) with **Motion**: the layer's
+keyframe track as a monospace text field, one `M` line a row
+(`M <ms> <x> <y> <opacity> <ease> [<frame>]`, docs/spec/scenes.md §1
+"Keyframes"; the leading `M` may be left off). Rows go through the codec's own
+`parseKeysText` — the wire parser's rules and messages, numbered by row — and a
+bad row shows its error under the field and changes nothing; the field keeps
+what was typed until the track changes from outside. The preview runs the
+track through the real compositor, so what moves on screen is what the device
+draws. Deliberately minimal (a timeline is the nicer v2): the asset partition
+has ~13 KB of headroom and this feature's whole web+wasm cost had to fit in
+about 1.5 KB of it.
+
 ## Status-bar frame rate ✅ (Gitea #381)
 
 The counter at the right of the header (`data-role="fps"`) shows **the device's

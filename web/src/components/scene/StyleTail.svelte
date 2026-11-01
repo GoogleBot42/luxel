@@ -19,7 +19,8 @@
   import { createEventDispatcher } from "svelte";
   import RichSelect from "../RichSelect.svelte";
   import { blendOptions, KEY_OPTIONS } from "../../lib/blendMeta";
-  import type { Blend, LayerKey, LayerKind, LayerStyle } from "../../lib/scene";
+  import { keysText, parseKeysText } from "../../lib/scene";
+  import type { Blend, Keyframe, LayerKey, LayerKind, LayerStyle } from "../../lib/scene";
 
   export let style: LayerStyle;
   /** Which inspector this tail is on. Only Normal's DESCRIPTION depends on it
@@ -31,7 +32,32 @@
   /** A sprite's fixed key, stated rather than offered (S7c). */
   export let keyFixed = "";
 
-  const dispatch = createEventDispatcher<{ change: LayerStyle; delete: void }>();
+  /** The layer's keyframe track — the `Motion` field, one `M` line a row,
+   *  checked by the wire's own parser (`parseKeysText`). */
+  export let keys: Keyframe[] | undefined = undefined;
+
+  const dispatch = createEventDispatcher<{ change: LayerStyle; delete: void; keys: Keyframe[] }>();
+
+  // The field keeps what was TYPED (a half-written row is not an error to
+  // undo) and only resyncs when the track changes from outside — another
+  // layer selected, an undo.
+  let keyText = keysText(keys);
+  let keyShown = keyText;
+  let keyErr = "";
+  $: if (keysText(keys) !== keyShown) {
+    keyShown = keyText = keysText(keys);
+    keyErr = "";
+  }
+
+  function setKeys(v: string): void {
+    keyText = v;
+    const r = parseKeysText(v);
+    keyErr = r.ok ? "" : r.error;
+    if (r.ok) {
+      keyShown = keysText(r.keys);
+      dispatch("keys", r.keys);
+    }
+  }
 
   // The narrowing lives in the script, not in the markup: a TS assertion
   // inside a template expression is not something svelte-check parses.
@@ -92,6 +118,25 @@
   </div>
 </div>
 
+<div class="irow start">
+  <div class="ilab">Motion</div>
+  <div>
+    <textarea
+      class="inp mono keys"
+      rows="3"
+      spellcheck="false"
+      data-role="scene-keys"
+      aria-label="keyframes, one M line per row"
+      placeholder="M <ms> <x> <y> <opacity> <ease> [<frame>]"
+      value={keyText}
+      on:input={(e) => setKeys(e.currentTarget.value)}
+    ></textarea>
+    {#if keyErr}
+      <div class="hint kerr" data-role="scene-keys-error">{keyErr}</div>
+    {/if}
+  </div>
+</div>
+
 <div class="delwrap">
   <button class="btn del" data-role="scene-delete-layer" on:click={() => dispatch("delete")}
     >Delete layer</button
@@ -103,6 +148,18 @@
     display: flex;
     align-items: center;
     gap: 10px;
+  }
+
+  .keys {
+    width: 100%;
+    height: auto;
+    padding: 6px 8px;
+    line-height: 1.5;
+    resize: vertical;
+  }
+
+  .kerr {
+    color: var(--error);
   }
 
   /* `Delete layer` sits alone at the bottom, error-tinted and quiet, far from

@@ -20,6 +20,8 @@
 //!   T <source> <arg…>             text: lit <utf8…> | clock <fmt> | slot <n>
 //!   F <font> <rrggbb> <align> <scroll> <speed>
 //!   K <rrggbb>                    color: the wash colour
+//!   M <ms> <x> <y> <opacity> <ease> [<frame>]
+//!                                 any: one keyframe of the layer's motion
 //! ```
 //!
 //! [`serialize`] emits only the lines that differ from the defaults, so a
@@ -39,6 +41,12 @@ pub const MAX_LAYER_NAME: usize = 32;
 /// Most colour-ramp stops a scene layer may carry — the output palette's
 /// cap, since the cooked table is the same 256-entry LUT.
 pub const MAX_RAMP_STOPS: usize = crate::outpipe::MAX_OUTPUT_PALETTE_STOPS;
+/// Most keyframes (`M` lines) one layer may carry — what bounds a keyed
+/// layer's share of the 3,840 B scene blob.
+pub const MAX_KEYS: usize = 16;
+/// The latest a keyframe may sit, in ms from the scene's start: one hour.
+/// The last key's time is the track's loop period.
+pub const MAX_KEY_MS: u32 = 3_600_000;
 
 // ---- types ----
 
@@ -387,11 +395,105 @@ impl LayerBody {
     }
 }
 
+/// The curve a keyframe track follows on the segment that ENDS at a key.
+/// Every curve but `linear` and `step` is a [`crate::ease`] kernel — the
+/// same body the pattern language's `ease*` builtins run.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Ease {
+    #[default]
+    Linear,
+    /// Holds the previous key's values and jumps on arrival.
+    Step,
+    /// Cubic in (`easeInCubic`).
+    In,
+    /// Cubic out (`easeOutCubic`).
+    Out,
+    /// Cubic in-out (`easeInOutCubic`).
+    InOut,
+    /// `easeInOutSine`.
+    Sine,
+    /// `easeOutBack` — overshoots and settles.
+    Back,
+    /// `easeOutBounce`.
+    Bounce,
+    /// `easeOutElastic`.
+    Elastic,
+}
+
+impl Ease {
+    pub const ALL: [Ease; 9] = [
+        Ease::Linear,
+        Ease::Step,
+        Ease::In,
+        Ease::Out,
+        Ease::InOut,
+        Ease::Sine,
+        Ease::Back,
+        Ease::Bounce,
+        Ease::Elastic,
+    ];
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Ease::Linear => "linear",
+            Ease::Step => "step",
+            Ease::In => "in",
+            Ease::Out => "out",
+            Ease::InOut => "inout",
+            Ease::Sine => "sine",
+            Ease::Back => "back",
+            Ease::Bounce => "bounce",
+            Ease::Elastic => "elastic",
+        }
+    }
+    /// The eased fraction for a segment `u` (0..=1, 16.16) of the way
+    /// through. Back and elastic overshoot 0..1 on purpose.
+    pub fn apply(self, u: crate::fixed::Fx) -> crate::fixed::Fx {
+        use crate::ease;
+        match self {
+            Ease::Linear => u,
+            Ease::Step => {
+                if u >= crate::fixed::Fx::ONE {
+                    u
+                } else {
+                    crate::fixed::Fx::ZERO
+                }
+            }
+            Ease::In => ease::in_cubic(u),
+            Ease::Out => ease::out_cubic(u),
+            Ease::InOut => ease::in_out_cubic(u),
+            Ease::Sine => ease::in_out_sine(u),
+            Ease::Back => ease::out_back(u),
+            Ease::Bounce => ease::out_bounce(u),
+            Ease::Elastic => ease::out_elastic(u),
+        }
+    }
+}
+
+/// One `M` line: where the layer is at `ms` from the scene's start. `None`
+/// in `x`/`y`/`opacity` is the wire's `=` — the `L` line's own value.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Keyframe {
+    pub ms: u32,
+    pub x: Option<i16>,
+    pub y: Option<i16>,
+    /// 0..=100.
+    pub opacity: Option<u8>,
+    /// The curve of the segment that ends at this key.
+    pub ease: Ease,
+    /// A sprite frame to hold from this key until the next one; `None`
+    /// leaves the sprite's own frame clock running. Ignored on any other
+    /// layer kind.
+    pub frame: Option<u8>,
+}
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Layer {
     pub name: String,
     pub style: LayerStyle,
     pub body: LayerBody,
+    /// The layer's keyframe track (`M` lines), ascending by `ms`, at most
+    /// [`MAX_KEYS`]. Empty = the layer stands where its `L` line puts it.
+    pub keys: Vec<Keyframe>,
 }
 
 impl Layer {
@@ -658,6 +760,7 @@ fn parse_layer(line: &str, n: usize) -> Result<Layer, String> {
         name: kind.default_name().into(),
         style,
         body,
+        keys: Vec::new(),
     })
 }
 
@@ -815,10 +918,62 @@ fn parse_binding(layer: &mut Layer, tag: &str, line: &str, n: usize) -> Result<(
                 *c = rgb;
             }
         }
+        "M" => {
+            let key = parse_key(it, n)?;
+            if layer.keys.len() == MAX_KEYS {
+                return Err(err(n, "too many keyframes (max 16)"));
+            }
+            if layer.keys.last().is_some_and(|k| k.ms > key.ms) {
+                return Err(err(n, "keyframe times must not go backwards"));
+            }
+            layer.keys.push(key);
+        }
         // Anything else is a line from a newer console: ignored.
         _ => {}
     }
     Ok(())
+}
+
+/// The fields of one `M` line after its tag:
+/// `<ms> <x> <y> <opacity> <ease> [<frame>]`, `=` for an unchanged
+/// x / y / opacity. Trailing tokens past `frame` are a newer console's and
+/// are ignored, like every binding line's.
+///
+/// One table-driven loop and ONE message naming the offending token: every
+/// byte here ships in the firmware image AND the console's wasm, whose
+/// asset partition has ~13 KB of headroom.
+fn parse_key<'a>(it: impl Iterator<Item = &'a str>, n: usize) -> Result<Keyframe, String> {
+    const I16: (i32, i32) = (i16::MIN as i32, i16::MAX as i32);
+    // ms, x, y, opacity, ease (an index into `Ease::ALL`), frame
+    const LIM: [(i32, i32); 6] = [(0, MAX_KEY_MS as i32), I16, I16, (0, 100), (0, 8), (0, 255)];
+    let mut f: [Option<i32>; 6] = [None; 6];
+    let mut seen = 0;
+    for (i, tok) in it.take(6).enumerate() {
+        seen = i + 1;
+        if tok == "=" && (1..=3).contains(&i) {
+            continue;
+        }
+        let v = if i == 4 {
+            Ease::ALL.iter().position(|e| e.as_str() == tok).map_or(-1, |p| p as i32)
+        } else {
+            tok.parse::<i32>().unwrap_or(i32::MIN)
+        };
+        if v < LIM[i].0 || v > LIM[i].1 {
+            return Err(err_tok(n, "bad M field", tok));
+        }
+        f[i] = Some(v);
+    }
+    if seen < 5 {
+        return Err(err(n, "M needs <ms> <x> <y> <opacity> <ease> [<frame>]"));
+    }
+    Ok(Keyframe {
+        ms: f[0].unwrap_or(0) as u32,
+        x: f[1].map(|v| v as i16),
+        y: f[2].map(|v| v as i16),
+        opacity: f[3].map(|v| v as u8),
+        ease: Ease::ALL[f[4].unwrap_or(0) as usize],
+        frame: f[5].map(|v| v as u8),
+    })
 }
 
 // ---- serialization ----
@@ -952,7 +1107,30 @@ pub fn serialize(s: &Scene, out: &mut String) {
                 }
             }
         }
+        for k in &l.keys {
+            push_key(out, k);
+        }
     }
+}
+
+/// `M <ms> <x> <y> <opacity> <ease>[ <frame>]`, `=` for a kept value.
+fn push_key(out: &mut String, k: &Keyframe) {
+    out.push_str("M ");
+    push_u32(out, k.ms);
+    for v in [k.x.map(i32::from), k.y.map(i32::from), k.opacity.map(i32::from)] {
+        out.push(' ');
+        match v {
+            Some(v) => push_i32(out, v),
+            None => out.push('='),
+        }
+    }
+    out.push(' ');
+    out.push_str(k.ease.as_str());
+    if let Some(f) = k.frame {
+        out.push(' ');
+        push_u32(out, f as u32);
+    }
+    out.push('\n');
 }
 
 // ---- JSON (the `/api/scenes` shape) ----
@@ -976,6 +1154,12 @@ const FX_DEC_MAX: usize = 23;
 /// name and the body are the variable parts and are added on top.
 const LAYER_FIXED: usize = 240;
 
+/// `,"keys":[]` around a layer's keyframes, and the widest one of them:
+/// `{"ms":3600000,"x":-32768,"y":-32768,"opacity":100,"ease":"elastic","frame":255}`
+/// plus its separating comma.
+const KEYS_FIXED: usize = 10;
+const KEY_JSON_MAX: usize = 84;
+
 /// The scene object around its layers — `{"id":"…","name":"…","layers":[]}`
 /// with both strings empty.
 const SCENE_FIXED: usize = 40;
@@ -994,6 +1178,9 @@ pub fn json_bound(s: &Scene) -> usize {
     let mut n = SCENE_FIXED + esc(&s.id) + esc(&s.name);
     for l in &s.layers {
         n += LAYER_FIXED + esc(&l.name);
+        if !l.keys.is_empty() {
+            n += KEYS_FIXED + l.keys.len() * KEY_JSON_MAX;
+        }
         n += match &l.body {
             LayerBody::Pattern(p) => {
                 // `,"pat":{"id":"…","controls":{…}}` plus the optional
@@ -1069,6 +1256,36 @@ pub fn push_json(s: &Scene, out: &mut dyn Sink) {
         push_bool(out, st.flipy);
         push_piece(out, ",\"rot180\":");
         push_bool(out, st.rot180);
+        // present only when the layer has a track, like the sprite's `fps`
+        if !l.keys.is_empty() {
+            push_piece(out, ",\"keys\":[");
+            for (ki, k) in l.keys.iter().enumerate() {
+                if ki > 0 {
+                    push_piece(out, ",");
+                }
+                push_piece(out, "{\"ms\":");
+                push_u32(out, k.ms);
+                for (name, v) in [
+                    (",\"x\":", k.x.map(i32::from)),
+                    (",\"y\":", k.y.map(i32::from)),
+                    (",\"opacity\":", k.opacity.map(i32::from)),
+                ] {
+                    if let Some(v) = v {
+                        push_piece(out, name);
+                        push_i32(out, v);
+                    }
+                }
+                push_piece(out, ",\"ease\":\"");
+                push_piece(out, k.ease.as_str());
+                push_piece(out, "\"");
+                if let Some(f) = k.frame {
+                    push_piece(out, ",\"frame\":");
+                    push_u32(out, f as u32);
+                }
+                push_piece(out, "}");
+            }
+            push_piece(out, "]");
+        }
         match &l.body {
             LayerBody::Pattern(p) => {
                 push_piece(out, ",\"pat\":{");
@@ -1432,6 +1649,16 @@ mod tests {
             ("F regular ffffff l sideways 0", "unknown scroll \"sideways\""),
             ("C speed nope", "control values are raw 16.16 integers \"nope\""),
             ("K nope", "wash colour is rrggbb \"nope\""),
+            ("M 0 1 2 3 wobble", "bad M field \"wobble\""),
+            ("M 0 1 2 3", "M needs <ms> <x> <y> <opacity> <ease> [<frame>]"),
+            ("M -1 1 2 3 linear", "bad M field \"-1\""),
+            ("M 3600001 1 2 3 linear", "bad M field \"3600001\""),
+            ("M = 1 2 3 linear", "bad M field \"=\""),
+            ("M 0 40000 2 3 linear", "bad M field \"40000\""),
+            ("M 0 1 * 3 linear", "bad M field \"*\""),
+            ("M 0 1 2 101 linear", "bad M field \"101\""),
+            ("M 0 1 2 3 linear 256", "bad M field \"256\""),
+            ("M 0 1 2 3 linear =", "bad M field \"=\""),
         ];
         for (line, want) in cases {
             let mut wire = head.to_string();
@@ -1442,6 +1669,107 @@ mod tests {
             expect.push_str(want);
             assert_eq!(got, expect, "for {line}");
         }
+    }
+
+    #[test]
+    fn keyframes_round_trip_on_every_layer_kind() {
+        let wire = concat!(
+            "S 0000000a keyed\n",
+            "L pat 0 0 16 16 normal 100 none fill 1\n",
+            "I 0123abcd\n",
+            "M 0 0 0 100 linear\n",
+            "M 500 = -4 = step\n",
+            "M 1000 8 = 0 in\n",
+            "L text 0 0 0 0 normal 100 none fill 1\n",
+            "T lit HI\n",
+            "M 0 = = = out\n",
+            "M 1 = = = inout\n",
+            "L sprite 4 40 22 22 normal 100 none contain 1\n",
+            "I 0123abce\n",
+            "A 6\n",
+            "M 0 4 40 0 sine 2\n",
+            "M 3000 4 20 100 back\n",
+            "M 3000 4 20 100 bounce 0\n",
+            "M 20000 4 40 0 elastic 255\n",
+            "L color 0 0 0 0 add 50 none fill 1\n",
+            "K ff8800\n",
+            "M 3600000 -32768 32767 0 linear\n",
+        );
+        assert_eq!(round(wire), wire);
+        let s = parse(wire).unwrap();
+        assert_eq!(parse(&round(wire)).unwrap(), s);
+        assert_eq!(s.layers[0].keys.len(), 3);
+        assert_eq!(
+            s.layers[0].keys[1],
+            Keyframe {
+                ms: 500,
+                x: None,
+                y: Some(-4),
+                opacity: None,
+                ease: Ease::Step,
+                frame: None,
+            }
+        );
+        assert_eq!(s.layers[2].keys[0].frame, Some(2));
+        // every ease spelling parses back to itself
+        for e in Ease::ALL {
+            let mut w = String::from("S 0000000a e\nL color 0 0 0 0 normal 100 none fill 1\nM 0 = = = ");
+            w.push_str(e.as_str());
+            assert_eq!(parse(&w).unwrap().layers[0].keys[0].ease, e);
+        }
+    }
+
+    #[test]
+    fn keyframe_lines_canonicalise_and_tolerate_a_newer_console() {
+        // aligned columns (a library source's habit) and a token past
+        // `frame` from some later grammar both parse; serialize is canonical
+        let wire = "S 0000000a k\nL color 0 0 0 0 normal 100 none fill 1\nM  0    4 40  0   linear\nM 9 1 2 3 out 4 later\n";
+        assert_eq!(
+            round(wire),
+            "S 0000000a k\nL color 0 0 0 0 normal 100 none fill 1\nM 0 4 40 0 linear\nM 9 1 2 3 out 4\n"
+        );
+    }
+
+    #[test]
+    fn a_keyframe_track_is_capped_and_ordered() {
+        let head = "S 0000000a k\nL color 0 0 0 0 normal 100 none fill 1\n";
+        let mut wire = String::from(head);
+        for i in 0..MAX_KEYS {
+            wire.push_str("M ");
+            push_u32(&mut wire, i as u32 * 10);
+            wire.push_str(" 0 0 0 linear\n");
+        }
+        assert_eq!(parse(&wire).unwrap().layers[0].keys.len(), MAX_KEYS);
+        wire.push_str("M 999 0 0 0 linear\n");
+        assert_eq!(parse(&wire).unwrap_err(), "scene: line 19: too many keyframes (max 16)");
+        let mut back = String::from(head);
+        back.push_str("M 100 0 0 0 linear\nM 100 1 1 1 step\nM 50 0 0 0 linear\n");
+        assert_eq!(
+            parse(&back).unwrap_err(),
+            "scene: line 5: keyframe times must not go backwards"
+        );
+        // an M before any L binds to nothing and is ignored, like any
+        // binding line there
+        assert!(parse("S 0000000a k\nM 0 0 0 0 linear\n").unwrap().layers.is_empty());
+    }
+
+    #[test]
+    fn json_carries_keys_only_when_the_layer_has_a_track() {
+        let s = parse(concat!(
+            "S 0000000a k\n",
+            "L color 0 0 0 0 normal 100 none fill 1\n",
+            "L sprite 1 2 0 0 normal 100 none fill 1\n",
+            "M 0 = 5 0 linear 3\n",
+            "M 250 7 = = elastic\n",
+        ))
+        .unwrap();
+        let mut out = String::new();
+        push_json(&s, &mut out);
+        assert_eq!(out.matches("\"keys\"").count(), 1);
+        assert!(out.contains(concat!(
+            "\"rot180\":false,\"keys\":[{\"ms\":0,\"y\":5,\"opacity\":0,\"ease\":\"linear\",\"frame\":3},",
+            "{\"ms\":250,\"x\":7,\"ease\":\"elastic\"}],\"sprite\":{"
+        )));
     }
 
     #[test]
@@ -1566,6 +1894,14 @@ mod tests {
                 "L color 0 0 0 0 mask 0 luma tile 0\n",
                 "K ff8800\n",
             )),
+            // a keyframe track at its cap, every field at its widest
+            {
+                let mut b = String::from("S 0000000a keyed\nL color 0 0 0 0 normal 100 none fill 1\n");
+                for _ in 0..MAX_KEYS {
+                    b.push_str("M 3600000 -32768 -32768 100 elastic 255\n");
+                }
+                b
+            },
             // a ramp at the stop cap, which is the widest optional block
             {
                 let mut b = String::from("S 0000000a ramped\nL pat 0 0 0 0 normal 100 none fill 1\nI 0123abcd\nR 100");

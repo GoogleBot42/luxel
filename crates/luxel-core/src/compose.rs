@@ -39,7 +39,8 @@ use alloc::vec::Vec;
 use crate::fixed::Fx;
 use crate::outpipe::{luma, palette_remap_frame, GridMap};
 use crate::scene::{
-    Blend, Fit, Key, Layer, LayerBody, LayerKind, LayerStyle, Ramp, Scroll, TextLayer, TextSource,
+    Blend, Fit, Key, Keyframe, Layer, LayerBody, LayerKind, LayerStyle, Ramp, Scroll, TextLayer,
+    TextSource,
 };
 use crate::text::{self, Font};
 
@@ -588,7 +589,18 @@ pub fn draw_text_layer(
 /// carry.
 struct LayerRt {
     kind: LayerKind,
+    /// The style this frame draws with: the `L` line's, moved by the
+    /// keyframe track when the layer has one.
     style: LayerStyle,
+    /// The `L` line's own style — what a track's `=` keeps.
+    base: LayerStyle,
+    /// The keyframe track (`M` lines), empty for a layer that stands still.
+    keys: Vec<Keyframe>,
+    /// The track's clock in ms, kept below its loop period.
+    key_ms: u32,
+    /// The sprite frame the track holds right now, if its current key
+    /// names one.
+    key_frame: Option<u8>,
     text: TextLayer,
     /// Host-resolved string for this frame (clock/slot are the host's job;
     /// a `lit` source seeds it at [`Compositor::set_scene`]).
@@ -700,6 +712,7 @@ impl Compositor {
                 if self.layers[i].ident == rt.ident {
                     rt.scroll_mpx = self.layers[i].scroll_mpx;
                     rt.sprite_ms = self.layers[i].sprite_ms;
+                    rt.key_ms = self.layers[i].key_ms;
                 }
                 self.layers[i] = rt;
             } else {
@@ -707,6 +720,9 @@ impl Compositor {
             }
         }
         self.layers.truncate(scene.layers.len());
+        // A host draws the first frame of a freshly set scene before any
+        // `advance`: the tracks have to be where their clocks say already.
+        self.advance(0);
     }
 
     pub fn layer_count(&self) -> usize {
@@ -749,9 +765,24 @@ impl Compositor {
             .map(|l| &l.text.source)
     }
 
-    /// Advance the scroll and sprite-frame clocks.
+    /// Advance the scroll, sprite-frame and keyframe clocks, and move every
+    /// keyed layer to where its track puts it now.
     pub fn advance(&mut self, dt_ms: u32) {
         for l in self.layers.iter_mut() {
+            if let Some(last) = l.keys.last() {
+                let period = last.ms;
+                l.key_ms = if period == 0 {
+                    0
+                } else {
+                    // kept below the period so the clock never saturates
+                    ((l.key_ms as u64 + dt_ms as u64) % period as u64) as u32
+                };
+                let at = eval_keys(&l.keys, &l.base, l.key_ms);
+                l.style.rect.x = at.x;
+                l.style.rect.y = at.y;
+                l.style.opacity = at.opacity;
+                l.key_frame = at.frame;
+            }
             if l.kind == LayerKind::Text && l.text.scroll != Scroll::None && l.text.speed > 0 {
                 l.scroll_mpx += l.text.speed as i64 * dt_ms as i64;
             }
@@ -834,7 +865,12 @@ impl Compositor {
                 // LAYER's `A` rate outranks the record's own, and `A 0`
                 // holds frame 0 even for an animated record.
                 let fps = l.sprite_fps.unwrap_or(sp.fps);
-                blit_sprite(canvas, sp, sp.frame_at_fps(l.sprite_ms, fps), &l.style);
+                // ...and a keyframe that names a frame outranks both
+                let frame = match l.key_frame {
+                    Some(f) => f,
+                    None => sp.frame_at_fps(l.sprite_ms, fps),
+                };
+                blit_sprite(canvas, sp, frame, &l.style);
             }
             LayerKind::Text => {
                 let (_, _, bw, bh) = resolved_rect(&l.style, &grid);
@@ -861,6 +897,70 @@ impl Compositor {
         scratch
             + self.layers.iter().filter(|l| l.lut.is_some()).count() * 768
             + self.layers.len() * core::mem::size_of::<LayerRt>()
+            + self.layers.iter().map(|l| l.keys.capacity()).sum::<usize>()
+                * core::mem::size_of::<Keyframe>()
+    }
+}
+
+/// Where a keyframe track puts its layer at `t_ms` — the box origin, the
+/// opacity and the sprite frame to hold, if any.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct KeyState {
+    pub x: i16,
+    pub y: i16,
+    pub opacity: u8,
+    pub frame: Option<u8>,
+}
+
+/// Evaluate a keyframe track (docs/spec/scenes.md §1 "Keyframes").
+///
+/// The LAST key's `ms` is the loop period, so `t_ms` is taken modulo it.
+/// Before the first key the first key's values hold; between two keys the
+/// values run from the earlier to the later along the LATER key's ease; a
+/// key's `frame` holds from that key until the next one. `=` (a `None`)
+/// is `base`'s value. Positions round to whole layout pixels (v1); the
+/// opacity clamps to 0..=100 under an overshooting ease.
+///
+/// An empty track is `base` itself.
+pub fn eval_keys(keys: &[Keyframe], base: &LayerStyle, t_ms: u32) -> KeyState {
+    let at = |k: &Keyframe| {
+        (
+            k.x.unwrap_or(base.rect.x) as i32,
+            k.y.unwrap_or(base.rect.y) as i32,
+            k.opacity.unwrap_or(base.opacity) as i32,
+        )
+    };
+    let Some(last) = keys.last() else {
+        return KeyState {
+            x: base.rect.x,
+            y: base.rect.y,
+            opacity: base.opacity,
+            frame: None,
+        };
+    };
+    let t = if last.ms == 0 { 0 } else { t_ms % last.ms };
+    // the latest key at or before t; before the first key, the first holds
+    let i = keys.iter().rposition(|k| k.ms <= t).unwrap_or(0);
+    let k0 = &keys[i];
+    let (mut x, mut y, mut o) = at(k0);
+    // `i` is the LAST key at or before t, so the next one is strictly later
+    if let Some(k1) = keys.get(i + 1).filter(|_| k0.ms <= t) {
+        // u in 16.16, 0 ≤ u < 1; the u64 is one divide per keyed layer per
+        // frame, never per pixel
+        let u = (((t - k0.ms) as u64) << 16) / (k1.ms - k0.ms) as u64;
+        let e = k1.ease.apply(Fx::from_raw(u as i32)).raw() as i64;
+        let (x1, y1, o1) = at(k1);
+        let lerp = |a: i32, b: i32| a + (((b - a) as i64 * e + 0x8000) >> 16) as i32;
+        x = lerp(x, x1);
+        y = lerp(y, y1);
+        o = lerp(o, o1);
+    }
+    let clamp16 = |v: i32| v.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+    KeyState {
+        x: clamp16(x),
+        y: clamp16(y),
+        opacity: o.clamp(0, 100) as u8,
+        frame: k0.frame,
     }
 }
 
@@ -1131,6 +1231,10 @@ impl From<&Layer> for LayerRt {
         let mut rt = LayerRt {
             kind: l.kind(),
             style: l.style,
+            base: l.style,
+            keys: l.keys.clone(),
+            key_ms: 0,
+            key_frame: None,
             text: TextLayer::default(),
             resolved: String::new(),
             color: [0, 0, 0],
@@ -2295,5 +2399,152 @@ mod tests {
         let mut device = [[0u8; 3]; 256];
         crate::outpipe::fill_palette_lut(&pal, &mut device);
         assert_eq!(*cooked, device, "scene ramp == device palette, byte for byte");
+    }
+
+    // ---- keyframes (`M` lines) ----
+
+    fn track(wire_keys: &str) -> Vec<Keyframe> {
+        let mut wire = String::from("S 0000000a k\nL color 7 8 1 1 normal 60 none fill 1\n");
+        wire.push_str(wire_keys);
+        crate::scene::parse(&wire).expect("parses").layers.remove(0).keys
+    }
+
+    fn base_style() -> LayerStyle {
+        LayerStyle {
+            rect: Rect { x: 7, y: 8, w: 1, h: 1 },
+            opacity: 60,
+            ..LayerStyle::default()
+        }
+    }
+
+    fn at(keys: &[Keyframe], t: u32) -> (i16, i16, u8, Option<u8>) {
+        let k = eval_keys(keys, &base_style(), t);
+        (k.x, k.y, k.opacity, k.frame)
+    }
+
+    #[test]
+    fn every_ease_lands_exactly_on_its_keys() {
+        for e in crate::scene::Ease::ALL {
+            let mut w = String::from("M 0 0 0 0 linear\nM 1000 10 -20 50 ");
+            w.push_str(e.as_str());
+            w.push_str("\nM 2000 0 0 0 linear\n");
+            let keys = track(&w);
+            assert_eq!(at(&keys, 0), (0, 0, 0, None), "{e:?} at its first key");
+            assert_eq!(at(&keys, 1000), (10, -20, 50, None), "{e:?} at its own key");
+            // the last key's time is the period: 2000 IS 0 again
+            assert_eq!(at(&keys, 2000), (0, 0, 0, None), "{e:?} loops");
+            assert_eq!(at(&keys, 3000), (10, -20, 50, None), "{e:?} second lap");
+        }
+    }
+
+    #[test]
+    fn the_segment_follows_the_ease_of_the_key_it_ends_at() {
+        let lin = track("M 0 0 0 0 linear\nM 1000 10 20 100 linear\nM 2000 0 0 0 step\n");
+        assert_eq!(at(&lin, 500), (5, 10, 50, None), "linear halfway");
+        // step holds the previous key right up to the next one
+        assert_eq!(at(&lin, 1999), (10, 20, 100, None), "step holds");
+        // `in` is slow off the mark, `out` fast
+        let i = track("M 0 0 0 0 linear\nM 1000 100 0 0 in\n");
+        let o = track("M 0 0 0 0 linear\nM 1000 100 0 0 out\n");
+        assert!(at(&i, 250).0 < 25 && at(&o, 250).0 > 25);
+        // `back` overshoots the target in position; the opacity it carries
+        // along is clamped to 0..100 instead
+        let b = track("M 0 0 0 0 linear\nM 1000 100 0 100 back\nM 1001 100 0 100 linear\n");
+        let peak = (0..1000).map(|t| at(&b, t)).max_by_key(|s| s.0).unwrap();
+        assert!(peak.0 > 100, "back overshoots: {peak:?}");
+        assert_eq!(peak.2, 100, "opacity clamps at 100: {peak:?}");
+    }
+
+    #[test]
+    fn equals_keeps_the_l_lines_value() {
+        let keys = track("M 0 = 0 = linear\nM 100 = 10 = linear\n");
+        for t in [0, 30, 99] {
+            let (x, _, o, _) = at(&keys, t);
+            assert_eq!((x, o), (7, 60), "x and opacity are the L line's at {t}");
+        }
+        assert_eq!(at(&keys, 50).1, 5);
+    }
+
+    #[test]
+    fn before_the_first_key_it_holds_and_a_single_key_is_static() {
+        let keys = track("M 500 10 0 0 linear\nM 1000 20 0 0 linear\n");
+        assert_eq!(at(&keys, 100).0, 10, "the first key holds until it is reached");
+        assert_eq!(at(&keys, 750).0, 15);
+        let one = track("M 0 3 4 = linear 2\n");
+        for t in [0, 1, 99_999] {
+            assert_eq!(at(&one, t), (3, 4, 60, Some(2)), "a period-0 track is a pose");
+        }
+    }
+
+    #[test]
+    fn a_keys_frame_holds_until_the_next_key() {
+        let keys = track("M 0 0 0 0 linear 3\nM 100 0 0 0 linear\nM 200 0 0 0 linear 1\nM 300 0 0 0 linear\n");
+        assert_eq!(at(&keys, 0).3, Some(3));
+        assert_eq!(at(&keys, 99).3, Some(3));
+        assert_eq!(at(&keys, 100).3, None, "no frame: the clock is back in charge");
+        assert_eq!(at(&keys, 250).3, Some(1));
+    }
+
+    /// The compositor moves the layer: a 1x1 wash walking a 4x1 strip.
+    #[test]
+    fn the_compositor_moves_a_keyed_layer() {
+        let scene = crate::scene::parse(concat!(
+            "S 0000000a walk\n",
+            "L color 0 0 1 1 normal 100 none fill 1\n",
+            "K ffffff\n",
+            "M 0 0 0 = linear\n",
+            "M 300 3 0 = linear\n",
+            "M 400 3 0 = step\n",
+        ))
+        .unwrap();
+        let mut comp = Compositor::new(grid(4, 1, false));
+        comp.set_scene(&scene);
+        let mut lit = Vec::new();
+        for _ in 0..5 {
+            let mut px = vec![[0u8; 3]; 4];
+            comp.native_layer(&mut px, 0, None);
+            lit.push(px.iter().position(|p| *p == [255, 255, 255]).unwrap());
+            comp.advance(100);
+        }
+        // 0 ms, 100, 200, 300 (at the key), 400 = the period → home again
+        assert_eq!(lit, vec![0, 1, 2, 3, 0]);
+        // a re-install of the same scene keeps the track's clock (#733's
+        // rule for the scroll and sprite clocks): 100 ms now, +200
+        comp.advance(200);
+        comp.set_scene(&scene);
+        let mut px = vec![[0u8; 3]; 4];
+        comp.native_layer(&mut px, 0, None);
+        assert_eq!(px[3], [255, 255, 255], "still at 300 ms after set_scene");
+    }
+
+    /// A key's frame outranks the sprite's clock, through the driver.
+    #[test]
+    fn a_keyframe_frame_outranks_the_sprite_clock() {
+        // the 2-frame, 10 fps blink record from the fps tests
+        let record = rec("blink", 2, 1, 2, 10, &[RED], &[1, 0, 0, 1]);
+        let scene = crate::scene::parse(concat!(
+            "S 0000000a s\n",
+            "L sprite 0 0 0 0 normal 100 none fill 1\n",
+            "I 5b17e5ef\n",
+            "M 0 = = = linear 1\n",
+            "M 500 = = = linear\n",
+            "M 1000 = = = linear\n",
+        ))
+        .unwrap();
+        let mut comp = Compositor::new(grid(2, 1, false));
+        comp.set_scene(&scene);
+        let mut driver = SceneDriver::new();
+        let mut host = SpriteHost(record);
+        let mut px: crate::arena::FrameVec = crate::arena::empty();
+        let step = Fx::from_raw(100 << 16);
+        let mut seen = Vec::new();
+        for _ in 0..10 {
+            assert!(driver.frame(&mut comp, &mut px, 2, step, &mut host));
+            seen.push(if px[0] == RED { 0 } else { 1 });
+        }
+        // 100..400 ms: frame 1 held; 500..900: the 10 fps clock (frame =
+        // sprite_ms/100 mod 2, and sprite_ms runs from the scene's start);
+        // 1000 ms is the period, so the held frame is back
+        assert_eq!(seen, vec![1, 1, 1, 1, 1, 0, 1, 0, 1, 1]);
     }
 }

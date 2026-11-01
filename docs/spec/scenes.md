@@ -43,14 +43,61 @@ Lines that bind to the most recent `L`:
 | `T <source> <arg…>` | text | `lit <utf8…>` \| `clock <fmt>` \| `slot <n 0..7>` |
 | `F <font> <rrggbb> <align> <scroll> <speed>` | text | font `tiny\|regular\|large`; align `l\|c\|r`; scroll `none\|left\|right\|up\|down\|bounce`; speed px/s |
 | `K <rrggbb>` | color | the wash colour |
+| `M <ms> <x> <y> <opacity> <ease> [<frame>]` | all | one keyframe of the layer's motion — below |
 
 `<fmt>` ∈ `HH:MM` · `HH:MM:SS` · `hh:MM` · `hh:MM:SS` · `MM-DD` · `YYYY-MM-DD`.
 
 **Defaults** when a binding line is absent: `N` = `Text` / `Sprite` / `Color`,
 and the EMPTY string for a `pat` layer (only the host knows a pattern's name);
 `F regular ffffff l none 0`; `T lit ` (empty); `K 000000`; no controls, no
-projection override, no ramp, and no `A` — a sprite layer without one plays
-the record's own `fps` (§4).
+projection override, no ramp, no `A` — a sprite layer without one plays
+the record's own `fps` (§4) — and no `M`: the layer stands where `L` puts it.
+
+### Keyframes (`M` lines)
+
+A layer's `M` lines are its **track**: where its box origin and opacity are,
+and which sprite frame it holds, at a time measured from the scene's start.
+
+```
+M <ms> <x> <y> <opacity> <ease> [<frame>]
+   ms       0..3600000, ascending (equal = an instant jump); the LAST key's ms
+            is the loop period
+   x y      the box ORIGIN in layout px (the box size is the L line's);
+            `=` keeps the L line's value
+   opacity  0..100, or `=`
+   ease     linear | step | in | out | inout | sine | back | bounce | elastic
+            — the curve of the segment that ENDS at this key
+   frame    optional, 0..255: the sprite frame held from this key until the
+            next one (ignored on non-sprite layers)
+```
+
+| ease | curve (the pattern builtin it shares a body with, `luxel_core::ease`) |
+|---|---|
+| `linear` | straight |
+| `step` | holds the previous key, jumps on arrival |
+| `in` / `out` / `inout` | `easeInCubic` / `easeOutCubic` / `easeInOutCubic` |
+| `sine` | `easeInOutSine` |
+| `back` | `easeOutBack` (overshoots, then settles) |
+| `bounce` | `easeOutBounce` |
+| `elastic` | `easeOutElastic` |
+
+Evaluation (`compose::eval_keys`, run by `Compositor::advance` every frame and
+by `set_scene` before the first one): the clock is ms since the scene was set,
+modulo the period (a period of 0 — one key, or all at 0 — is a static pose).
+Before the first key the first key's values hold; between two keys the values
+run from the earlier to the later along the LATER key's ease, and round to
+whole layout pixels (v1 — no sub-pixel blit). Opacity clamps to 0..100 under
+an overshooting ease; positions do not. A key's `frame` outranks both the
+layer's `A` rate and the record's own clock until the next key; a key without
+one hands the sprite back to its clock. The track's clock carries over a
+`set_scene` like the scroll phase (§2), so editing a scene does not restart
+its motion. A seamless loop repeats its first key's values at the last.
+
+At most **16** keys a layer (`too many keyframes (max 16)`), which is what
+bounds a track's share of the 3,840 B scene blob; a key earlier than the one
+before it is `keyframe times must not go backwards`, and any bad field is
+`bad M field "<token>"`. An older host ignores `M` lines (unknown tag), so a
+keyed scene still draws there — standing still.
 
 **Errors.** Any parse error rejects the whole block with a message naming the
 line: `scene: line 4: unknown blend "foo"`. That string is what the API hands
@@ -91,7 +138,11 @@ pub struct PatternLayer { pub id: String, pub controls: Vec<(String, Vec<i32>)>,
 pub enum LayerBody { Pattern(PatternLayer), Text(TextLayer),
                      Sprite { id: String, fps: Option<u8> },   // fps = the `A` override
                      Color([u8; 3]) }
-pub struct Layer { pub name: String, pub style: LayerStyle, pub body: LayerBody }
+pub enum Ease { Linear, Step, In, Out, InOut, Sine, Back, Bounce, Elastic }
+pub struct Keyframe { pub ms: u32, pub x: Option<i16>, pub y: Option<i16>,   // None = `=`
+                      pub opacity: Option<u8>, pub ease: Ease, pub frame: Option<u8> }
+pub struct Layer { pub name: String, pub style: LayerStyle, pub body: LayerBody,
+                   pub keys: Vec<Keyframe> }
 pub struct Scene { pub id: String, pub name: String, pub layers: Vec<Layer> }
 
 pub fn parse(block: &str) -> Result<Scene, String>;
@@ -102,6 +153,8 @@ pub fn pattern_layers(s: &Scene) -> usize;      // counts pat layers only
 pub fn valid_id(s: &str) -> bool;               // 8 lowercase hex
 pub const MAX_NAME: usize = 64;
 pub const MAX_LAYER_NAME: usize = 32;
+pub const MAX_KEYS: usize = 16;
+pub const MAX_KEY_MS: u32 = 3_600_000;
 ```
 
 `Font` and `ClockFmt` are re-exported from `luxel_core::text`. Scene ids are
@@ -176,6 +229,7 @@ pub fn blit_sprite(dst: Canvas, sprite: &SpriteView, frame: u16, style: &LayerSt
 pub fn draw_text_layer(dst: Canvas, scratch: &mut [[u8; 3]], text: &str,
                        layer: &TextLayer, style: &LayerStyle, scroll_px: i32);
 pub fn blend_px_mode(dst: &mut [u8; 3], src: [u8; 3], mode: Blend, alpha: i32);
+pub fn eval_keys(keys: &[Keyframe], base: &LayerStyle, t_ms: u32) -> KeyState; // §1 "Keyframes"
 ```
 
 `draw_text_layer` renders the glyphs into a caller-owned full-frame `scratch`
@@ -193,7 +247,7 @@ impl Compositor {
     pub fn set_scene(&mut self, scene: &Scene);   // rebuilds layer runtime state
     pub fn set_text(&mut self, layer: usize, s: &str);
     pub fn text_source(&self, layer: usize) -> Option<&TextSource>;
-    pub fn advance(&mut self, dt_ms: u32);        // scroll + sprite frame clocks
+    pub fn advance(&mut self, dt_ms: u32);        // scroll, sprite and keyframe clocks
     pub fn begin(&mut self, dst: &mut [[u8; 3]]);  // clears dst to black
     pub fn pattern_layer(&mut self, dst: &mut [[u8; 3]], layer: usize, src: &[[u8; 3]]);
     pub fn native_layer(&mut self, dst: &mut [[u8; 3]], layer: usize, sprite: Option<&SpriteView>);
@@ -298,6 +352,11 @@ own and stays (Gitea #787).
          "ramp":{"pct":100,"stops":[[0,"000000"],[255,"ffffff"]]}}
 }]}
 ```
+
+A layer with a track carries `"keys":[{"ms":0,"x":4,"y":40,"opacity":0,"ease":"linear","frame":2},…]`
+right after `rot180`: `x` / `y` / `opacity` are absent for a `=`, `frame`
+absent when the key holds none, and `keys` itself absent when the layer has
+no `M` lines.
 
 The last member is one of:
 

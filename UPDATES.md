@@ -1,5 +1,39 @@
 # Update log
 
+## 2026-11-01 — scene layers move: keyframed `M` lines
+
+A binding line `M <ms> <x> <y> <opacity> <ease> [<frame>]` on any scene layer
+is one keyframe of that layer's track (docs/spec/scenes.md §1 "Keyframes"):
+the box origin in layout px, the opacity, `=` for the `L` line's own value,
+the ease of the segment ENDING at the key (`linear step in out inout sine
+back bounce elastic`), and an optional sprite frame held until the next key.
+The last key's time is the loop period; at most 16 keys a layer, times 0 to
+one hour and never backwards. `luxel_core::scene` parses/serializes them
+(fixed point kept) and `push_json` carries them as `"keys"`;
+`Compositor::advance` evaluates each track (`compose::eval_keys`, integer
+pixels in v1) into the frame's style, and the track's clock carries over a
+`set_scene` like the scroll phase. The curves are the pattern builtins' own:
+`easeInCubic`…`easeOutElastic` moved out of `call_builtin` into
+`luxel_core::ease`, one body each (a code move, the builtins' results are
+unchanged — the native/wasm golden suites pass; not re-measured on metal).
+An older host ignores `M` lines and draws the layer standing still.
+
+Console: `lib/scene.ts` round-trips `M` lines and the JSON `keys`, and every
+layer inspector gained a **Motion** field — the track as one `M` line a row,
+validated by the same parser (`parseKeysText`), a bad row named under it
+(`row 2: bad M field "zoom"`). `library/scenes/sunrise.scene` now rises and
+sets its sun over 20 s; `check-sprite-scene-library.mjs` checks the canonical
+wire that ships kept every `M` line and still parses in Rust. Tests: Rust
+parse/serialize/JSON/bound and evaluation (every ease lands on its keys,
+`=`, loop, hold-before-first, step, back's overshoot vs the opacity clamp,
+frame hold through the driver, clock carry over `set_scene`), wasm-smoke (a
+keyed wash walking a strip through `lx_comp_frame`), web unit tests pinned to
+the Rust fixtures, and an e2e block driving the Motion field. Asset archive:
+970,963 → 973,271 B of 983,040 on master 0a57c678 (12,077 → 9,769 B headroom,
++2,308 B: wasm ≈ +1.3 KB, console JS ≈ +1.0 KB — over the ~1.5 KB aim; the
+parser was folded to one table and one message, and four ease kernels left
+un-inlined, to get there).
+
 ## 2026-11-01 — `setTrail(decay, mode)`: an afterglow stage at the head of the post chain
 
 `setTrail(0.85)` gives any pattern — per-pixel `render`/`render2D` ones

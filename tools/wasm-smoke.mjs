@@ -391,6 +391,34 @@ const litPixels = (handle, n) => {
   e.lx_comp_free(slow);
 }
 
+// ---- keyframed layer motion across the ABI (`M` lines) ----
+//
+// A white 1x1 wash keyed to walk a 4x1 strip, one pixel per 100 ms. The
+// track is evaluated inside `Compositor::advance`, so what this pins is that
+// `lx_comp_set` keeps the `M` lines and `lx_comp_frame`'s clock reaches them.
+{
+  const ch = e.lx_comp_new(4, 1);
+  const w = putStr(
+    "S 0123abcd Walk\n" +
+      "L color 0 0 1 1 normal 100 none fill 1\n" +
+      "K ffffff\n" +
+      "M 0 0 0 = linear\n" +
+      "M 300 3 0 = linear\n" +
+      "M 400 3 0 = step\n",
+  );
+  assert.strictEqual(e.lx_comp_set(ch, w.ptr, w.len), 0, response());
+  w.free();
+  const lit = [];
+  for (let i = 0; i < 5; i++) {
+    const ptr = e.lx_comp_frame(ch, 100 * 65536);
+    const px = [...mem().slice(ptr, ptr + 4 * 3)];
+    lit.push([0, 1, 2, 3].find((k) => px[k * 3] === 255));
+  }
+  // each frame advances 100 ms BEFORE drawing; 400 ms is the period
+  assert.deepStrictEqual(lit, [1, 2, 3, 0, 1], "the keyed wash did not walk the strip");
+  e.lx_comp_free(ch);
+}
+
 // ---- the colour ramp's cooked table across the ABI (Gitea #748) ----
 //
 // `lx_palette_lut` is handle-free and cooks through the engine's OWN

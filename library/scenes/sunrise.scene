@@ -1,6 +1,9 @@
 # A Luxel library scene (Gitea #785) — Apache-2.0. Grammar: library/README.md.
 # A warm ramp over a pattern, a sprite scaled up by `fit contain` (11x11 into a
-# 22x22 box), and a greeting crawling along the bottom.
+# 22x22 box), and a greeting crawling along the bottom. The sun RISES and SETS
+# on a 20 s keyframe track (`M` lines, docs/spec/scenes.md "Keyframes"): up
+# from below the greeting while it fades in, a long hold at the L line's own
+# spot (`=`), then down and out to the west; the loop restarts invisible.
 S - Sunrise
 L pat 0 0 0 0 normal 100 none fill 1
 N Glow
@@ -9,6 +12,11 @@ R 100 0:1b0b2e 80:8c2d4b 170:f4772e 230:ffd166 255:fff3c4
 L sprite 4 3 22 22 normal 100 none contain 1
 N Sun
 I @spr/sun-spin
+#   ms    x  y  opacity ease
+M 0       0  24 0       linear
+M 4000    =  =  100     out
+M 16000   =  =  100     linear
+M 20000   8  24 0       in
 L text 0 26 0 0 normal 100 black fill 1
 N Greeting
 T lit GOOD MORNING

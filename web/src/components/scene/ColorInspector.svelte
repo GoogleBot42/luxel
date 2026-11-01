@@ -67,5 +67,7 @@
   style={layer.style}
   kind="color"
   on:change={(e) => patchLayer({ style: e.detail })}
+  keys={layer.keys}
+  on:keys={(e) => patchLayer({ keys: e.detail })}
   on:delete
 />

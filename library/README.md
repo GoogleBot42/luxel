@@ -85,6 +85,12 @@ with two liberties taken for reviewability and undone by the generator:
   an `I` line is an error: eight hex digits minted by somebody else's flash mean
   nothing here, and a shipped scene must not carry one.
 
+A scene may carry keyframe tracks (`M` lines, docs/spec/scenes.md §1
+"Keyframes") — `sunrise` does — and they are free to align their columns
+with extra spaces and to sit under a `#` header row: the generator ships the
+console's canonical serialization (single spaces), and the gate checks that
+it kept every `M` line and that `luxel_core` still takes it.
+
 Each reference is rewritten to a **derived** 8-hex id — FNV-1a over
 `<kind>/<slug>`, `libRefId` — before the record is serialized. What ships is
 therefore an ordinary scene record: `luxel_core::scene::parse` validates it and
