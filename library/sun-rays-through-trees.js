@@ -1,93 +1,117 @@
-// name: Sun rays through trees
-// Clean-room reimplementation from a prose functional description of the
-// community pattern "Sun rays through trees"; original source never consulted.
+// name: God Rays
+// Clean-room reimplementation from the prose spec(s) docs/pattern-specs/sun-rays-through-trees.md — reimagined, not a replica.
+// Low sun just above the top edge, glaring through a band of silhouetted leaves:
+// warm shafts fan across the whole panel, swaying and flickering as the canopy
+// drifts, over a soft golden haze, with dust motes glinting as they float through.
+// Per frame the canopy is 64 angular bins of two-octave simplex; a 64 x 16 polar
+// canvas (angle x sqrt-distance) multiplies it by the falloff and adds haze and
+// sun glow; each panel cell reads it bilinearly through a packed table, and one
+// paintCanvas through a warm amber-to-white ramp paints it. Motes are splats.
 
-// A warm sun just above the top-center of the panel; bright shafts fan
-// downward through drifting turbulence like sunlight through a forest
-// canopy. Near-white at the core, the chosen body color further out,
-// black between the shafts. Slow and ambient — no beats, no RNG; all
-// motion comes from the coherent noise field.
+var NA = 64, NR = 16, CAP = 64
+var FAN = 1.45                    // half-angle of the fan, radians from straight down
+var SUNY = -0.1                   // sun height, panel heights (above the top edge)
+var DMAX = 1.5                    // farthest distance the canvas covers
+var CANOPY = 0.32                 // depth of the leafy band below the sun
+var NM = 18                       // dust motes
 
-// Sun position in map coordinates (just above the visible frame)
-var SUN_X = 0.5
-var SUN_Y = -0.12
+var shafts = 12                   // light shafts across the fan
+var drift = 14                    // seconds for the canopy to drift one shaft
+var haze = 25                     // ambient scattered light, percent
 
-// Angular noise wrap: a full turn of angle is mapped onto WRAP noise
-// units and the lattice is told to tile there, hiding the seam where
-// atan2 wraps — without this a hard vertical crack shows under the sun.
-var WRAP = 6
-setPerlinWrap(WRAP, 0, 0)
+//# min=4 max=32 step=1 default=12
+export function sliderShafts(v) { shafts = clamp(floor(v), 4, 32) }
+//# min=2 max=60 step=1 default=14
+export function sliderDriftSeconds(v) { drift = clamp(v, 2, 60) }
+//# min=0 max=60 step=1 default=25
+export function sliderHazePercent(v) { haze = clamp(v, 0, 60) }
 
-var CORE_R = 0.32       // sun core radius (order of the coordinate scale)
-var CORE_IN = 0.08      // small inner offset (~quarter of the core radius)
+setPalette([0, 0, 0, 0, 0.12, 0.13, 0.04, 0.01, 0.35, 0.55, 0.22, 0.03,
+  0.6, 0.95, 0.6, 0.16, 0.85, 1, 0.87, 0.58, 1, 1, 0.97, 0.9])
 
-// --- controls ---
-var rayStrength = 0.75
-//# min=0 max=1 step=0.01 default=0.75
-export function sliderRayStrength(v) { rayStrength = v }
+var S = array(NA)                 // canopy openness per angular bin
+var pol = array(NA * NR)          // polar light canvas, 0..1
+var tab = array(CAP * CAP)        // per panel cell: angle x*4096 + distance y, packed
+var cv = array(CAP * CAP)
+var mx = array(NM), my = array(NM), mph = array(NM)
+for (var m = 0; m < NM; m++) { mx[m] = random(1); my[m] = random(1); mph[m] = random(PI2) }
 
-var rayCountA = 5
-//# min=0 max=1 step=0.125 default=0.5
-export function sliderRayCountA(v) { rayCountA = 1 + floor(v * 8.49) }
+var CW = 0, CH = 0, M = 1
+var T = 0, T2 = 0, slide = 0
 
-var rayCountB = 3
-//# min=0 max=1 step=0.125 default=0.25
-export function sliderRayCountB(v) { rayCountB = 1 + floor(v * 8.49) }
-
-var baseHue = 0.09, baseSat = 1, baseVal = 1   // warm golden amber
-export function hsvPickerBaseColor(h, s, v) {
-  baseHue = h
-  baseSat = s
-  baseVal = v
+function buildTable() {
+  var sxp = CW * 0.5 - 0.5, syp = SUNY * CH - 0.5
+  for (var r = 0; r < CH; r++) {
+    var dy = (r - syp) / M
+    for (var c = 0; c < CW; c++) {
+      var dx = (c - sxp) / M
+      var a = clamp((atan2(dx, dy) + FAN) / (2 * FAN), 0, 1)
+      var d = sqrt(min(hypot(dx, dy), DMAX) / DMAX)
+      tab[r * CW + c] = floor((a * (NA - 1) + 0.5) / NA * 4096) + (d * (NR - 1) + 0.5) / NR
+    }
+  }
 }
-
-var colorVar = 0.12
-//# min=0 max=1 step=0.01 default=0.3
-export function sliderColorVariation(v) { colorVar = v * 0.4 }
-
-var master, drift
 
 export function beforeRender(delta) {
-  master = time(1.8) * 4      // noise "time" axis, ~2 minute loop
-  drift = time(0.45)          // radial streaming, ~30 s loop
+  var dt = min(delta, 100) * 0.001
+  var w = gridWidth() > 0 ? min(gridWidth(), CAP) : 32
+  var h = gridHeight() > 0 ? min(gridHeight(), CAP) : 32
+  if (w != CW || h != CH) { CW = w; CH = h; M = min(w, h); buildTable() }
+
+  slide = mod(slide + dt / drift, 4096)   // the canopy slides sideways...
+  T = mod(T + dt * 0.11, 4096)            // ...while its gaps open and close
+  T2 = mod(T2 + dt * 0.37, 4096)          // and the leaves flutter
+
+  var k = shafts * 0.62
+  for (var i = 0; i < NA; i++) {
+    var u = i / (NA - 1) * k + slide * 0.62
+    var n = simplex2(u, T) + 0.45 * simplex2(u * 2.7, T2, 3)
+    S[i] = smoothstep(-0.05, 0.55, n)
+  }
+
+  var hz = haze * 0.01
+  for (var j = 0; j < NR; j++) {
+    var q = j / (NR - 1), d = q * q * DMAX
+    var fall = 1 / (1 + d * 1.3)
+    var glow = 1 / (1 + d * d * 90)
+    var amb = hz * (0.2 + 0.5 * fall)
+    var row = j * NA
+    // the canopy itself near the top: leaves silhouetted against the glare,
+    // densest where the shafts below are blocked
+    var leafy = d < CANOPY ? saturate((CANOPY - d) * 8) : 0
+    for (i = 0; i < NA; i++) {
+      var v = S[i] * fall * 0.8 + amb + glow
+      if (leafy > 0) {
+        var lf = saturate((1 - S[i]) * 1.3 + 0.6 * simplex3(i * 0.45 + slide * 6, d * 14, T2 * 0.5) - 0.2)
+        v = v * (1 - lf * leafy * 0.9)
+      }
+      pol[row + i] = min(1, v)
+    }
+  }
+
+  for (m = 0; m < NM; m++) {                // motes sink slowly and sway
+    my[m] += dt * 0.03
+    mx[m] += sin(mph[m] + T2 * 3) * dt * 0.01
+    if (my[m] > 1.02) { my[m] = -0.02; mx[m] = random(1) }
+  }
 }
 
-export function render2D(index, x, y) {
-  // polar coordinates about the (off-screen) sun
-  var dx = x - SUN_X
-  var dy = y - SUN_Y
-  var angle = atan2(dy, dx)
-  var d = hypot(dx, dy)
+export function renderBulk() {
+  var n = CW * CH
+  for (var i = 0; i < n; i++) {
+    var p = tab[i]
+    cv[i] = canvasGet(pol, NA, floor(p) * 0.000244140625, frac(p))
+  }
+  paintCanvas(cv, CW, CH)
 
-  // angle scaled so a full turn spans exactly the wrapped noise period
-  var a = (angle / PI2 + 0.5) * WRAP
-
-  // 3-octave turbulence over (angle, drifting radius, slow time), inverted
-  // so bright regions sit where the "foliage" is thin
-  var n = perlinTurbulence(a, d * 3 - drift * WRAP, master, 2, 0.5, 3)
-  var v = 1 - clamp(n, 0, 1)
-
-  // flare shaping: keep only the top of the noise range (discrete flare
-  // tongues) OR let brightness grow as distance*noise falls toward the
-  // core (guaranteed solid bright sun disc)
-  var tongues = smoothstep(0.68, 0.95, v)
-  var core = saturate(1 - (d - CORE_IN) * (1 - v * 0.7) / CORE_R)
-  var flare = max(tongues, core)   // saved: also drives the hue shimmer
-
-  // rays filter: wave-of-a-wave over the angle — primary count phase-
-  // modulated by a lower-amplitude secondary count so the shafts bend and
-  // shimmer instead of reading as a static asterisk
-  var turn = angle / PI2
-  var rays = wave(turn * rayCountA + wave(turn * rayCountB) / 3)
-  var shaped = flare * mix(1, rays, rayStrength)
-  shaped = shaped * shaped   // square to deepen contrast
-
-  // hue: signed shimmer around the base, centered so typical flare
-  // levels shift near zero
-  var h = baseHue + (flare - 0.55) * colorVar
-  // saturation climbs steeply with distance and drops with brightness:
-  // white-hot at the sun and in ray cores, re-saturating outward
-  var s = baseSat * saturate(d * d * 9 - shaped)
-
-  hsv(h, s, shaped * baseVal)
+  // a mote only glints where a shaft actually reaches it
+  var r = 0.9 / CW
+  for (var m = 0; m < NM; m++) {
+    var dx = (mx[m] - 0.5) * CW / M, dy = (my[m] - SUNY) * CH / M
+    var a = clamp((atan2(dx, dy) + FAN) / (2 * FAN), 0, 1)
+    var b = S[floor(a * (NA - 1))] * (0.4 + 0.6 * wave(mph[m] + T2))
+    if (b < 0.1) continue
+    rgb(b, b * 0.85, b * 0.6)
+    splat(mx[m], my[m], r * 1.6, 1)
+  }
 }
