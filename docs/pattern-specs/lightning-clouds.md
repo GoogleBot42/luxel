@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/thunderstorm.js (2026-11).
+
 # Lightning clouds
 kind: 2D
 sensors: no

@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/thunderstorm.js (2026-11).
+
 # b_lightning_flashes
 kind: 1D
 sensors: no
