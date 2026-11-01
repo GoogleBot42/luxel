@@ -177,6 +177,18 @@ pub fn frame(pixel_count: usize) -> FrameVec {
     v
 }
 
+/// [`frame`], fallible: `None` when the allocator refuses — for the frames
+/// a PATTERN asks for (`setRenderSize`'s small frame, `setTrail`'s memory),
+/// which must never abort a device. Out of line: each inlined reserve is
+/// ~0.8 KB of wasm.
+#[inline(never)]
+pub fn try_frame(pixel_count: usize) -> Option<FrameVec> {
+    let mut v: FrameVec = empty();
+    v.try_reserve_exact(pixel_count).ok()?;
+    v.resize(pixel_count, [0u8; 3]);
+    Some(v)
+}
+
 /// Whether an engine frame allocated *now* would come from the external
 /// arena — i.e. whether [`crate::budget::layer_cost`] should charge a
 /// layer's 3 B/px to internal DRAM.
