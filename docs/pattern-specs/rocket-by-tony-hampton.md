@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/rocket-launch.js (2026-11).
+
 # Rocket by Tony Hampton
 kind: 1D
 sensors: no
