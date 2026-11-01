@@ -1,5 +1,21 @@
 # Update log
 
+## 2026-11-01 — `splatIndex`, `fillRangeAA`, `gradientRange`: anti-aliased, blended index-space bulk ops
+
+Three `renderBulk` ops that take FRACTIONAL pixel positions (pixel `i`
+covers [i, i + 1)) and blend with `mode` 0 replace / 1 add / 2 max, so a
+strip comet, scanner or spark moves smoothly between LEDs with no
+pattern-side buffer: `splatIndex(pos, radius, mode)` (brush × `1 − |i − pos|
+/ radius`, radius ≥ 0.5 px), `fillRangeAA(p0, p1, mode)` (the brush on
+[p0, p1) with coverage-scaled ends; integer ends are exactly `fillRange`;
+`p1 < p0` swaps) and `gradientRange(p0, p1, h0, s0, v0, h1, s1, v1, mode)`
+(HSV lerp sampled at pixel centres, hue unwrapped like `fillGradient`,
+coverage-scaled ends, `p1 < p0` runs backwards). Index space: naming them
+installs no grid (they stay out of `uses_coordinate_bulk_op` and the web's
+`BULK_2D_NAMES`). Builtin ids 195..=197; one closure-free walker in
+`bulk.rs` (`index_aa` — three `dyn` closures cost twice the image).
+docs/lang.md "Index space", docs/bulk-render.md "Three spaces", hover docs.
+
 ## 2026-11-01 — `setRenderSize(w, h, filter)`: a pattern's own render resolution; bilinear `fillCanvas`/`paintCanvas`
 
 A pattern can now declare the grid it renders on: `setRenderSize(16, 16)`
