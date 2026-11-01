@@ -242,6 +242,18 @@ bytecode execution is being worked on now; the rest are queued:
   (Gitea #139). Device and pattern palettes
   compose — the device stage runs on the frame the pattern already
   recolored.
+- **Pattern render resolution** [M] ★★★ — DONE (2026-11-01).
+  `setRenderSize(w, h, filter = 0)`: the engine runs the pattern (any
+  render entry) on a w×h grid — `pixelCount`, the map, `gridWidth`/
+  `gridHeight` and `pixelCoord` all describe it, `h = 1` is a w-pixel
+  strip — and the post chain's last step expands it onto the fixture
+  through each pixel's mapped (x, y), nearest (`fillCanvas`'s geometry)
+  or bilinear (`canvasGet`'s, integer-only and bit-identical native ↔
+  wasm). Replaces the hand-rolled 16×16-canvas idiom and cuts a heavy
+  ambient pattern's per-pixel work by the area ratio on a 128×128 chain.
+  The same kernel gave `fillCanvas`/`paintCanvas` a `filter` argument
+  (the bilinear bulk fill #373 asked for). The scene-side twin — a
+  per-layer render scale chosen by the SCENE — is still Gitea #843.
 - **Per-pixel persistent state buffer** [M] ★★ — DONE. `pixelState(i[, ch])`
   / `setPixelState(i[, ch], v)`: an engine-owned, double-buffered per-pixel
   buffer (up to 4 channels) — reads see last frame's snapshot, writes land

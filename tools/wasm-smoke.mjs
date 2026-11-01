@@ -421,6 +421,29 @@ const litPixels = (handle, n) => {
   assert.deepStrictEqual(grey.slice(255 * 3, 255 * 3 + 3), [255, 255, 255]);
 }
 
+// setRenderSize's bilinear expand through the FFI: a 2x2 frame of pure
+// colours onto a 4x4 grid, integer lerps only, so the bytes are the native
+// suite's (crates/luxel-core/tests/render_size.rs::bilinear_golden).
+{
+  const s = putStr(
+    "setRenderSize(2, 2, 1)\nexport function render2D(index, x, y) " +
+      "{ rgb(index == 0 || index == 3, index == 1, index >= 2) }",
+  );
+  const hr = e.lx_new(s.ptr, s.len, 16, 1);
+  s.free();
+  assert.ok(hr >= 0, response());
+  e.lx_set_map_grid(hr, 4, 4);
+  const at = e.lx_frame(hr, 0);
+  assert.deepStrictEqual([...mem().slice(at, at + 48)], [
+    255, 0, 0, 212, 42, 0, 42, 212, 0, 0, 255, 0,
+    212, 0, 42, 183, 35, 42, 70, 176, 42, 42, 212, 42,
+    42, 0, 212, 70, 7, 212, 183, 35, 212, 212, 42, 212,
+    0, 0, 255, 42, 0, 255, 212, 0, 255, 255, 0, 255,
+  ]);
+  assert.strictEqual(e.lx_take_error(hr), 0);
+  e.lx_free(hr);
+}
+
 e.lx_free(h);
 e.lx_free(h2);
 e.lx_free(h3);

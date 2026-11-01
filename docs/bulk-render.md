@@ -184,7 +184,8 @@ randomised shape parameters; a transform routes to the scan.
 `ceil(√n)` default grid a 2D-only pattern gets. `renderBulk` + `fillHSV` is
 a strip pattern and is handed no geometry it never asked for.
 
-**The canvas block expand.** `fillCanvas` and `paintCanvas` have a second
+**The canvas block expand.** `fillCanvas` and `paintCanvas` (nearest, the
+default `filter` 0 — the bilinear arm has no grid fast path yet) have a second
 fast path of their own, for the case the whole canvas idiom exists to serve:
 a panel that is an exact integer multiple of the canvas. A 64×64 panel
 showing a 16×16 canvas is a 4× block expand, so instead of the map lookup
@@ -815,6 +816,22 @@ is *not* equivalent: 1.3–7 % of bytes differ on every rig with maxdiff up to
 255. Left unconverted; the win is real but it is not this pattern's look. A
 bilinear mode on `fillCanvas`, or a `paintCanvas` that takes one, would make it
 convertible — that is the concrete ask on #373.
+
+**Both exist now (2026-11-01).** `fillCanvas(h, s, v, w, h, 1)` and
+`paintCanvas(v, w, h, b, 1)` sample bilinearly — `canvasGet`'s geometry
+(`sample_axis`: texel centres at (i + 0.5)/n, edges clamped), blended in RGB
+after each cell's colour is resolved, 8-bit channels with a 16-bit fraction,
+integer only. The four corner texels are re-resolved only when the corner
+cells change, so an HSV or palette texel costs about once per cell per row on
+an upscale. It is the same kernel as `setRenderSize(w, h, 1)`'s expand
+(docs/lang.md "Render resolution"), which is the other way to write this
+pattern: draw the canvas as the pattern's own small frame and let the engine
+expand it. Note the blend is in RGB of the RESOLVED cells, while `canvasGet`
+blends whatever the canvas stores (a value, or one HSV channel) before it
+becomes a colour — so a `canvasGet` pattern converted this way is the same
+picture only where it interpolated colour channels directly, as
+`2d-fireworks-fade.js` does with its RGB accumulators. Measure and compare
+before claiming a conversion exact.
 
 **The reusable piece: a nearest canvas fill with an RGB (or palette) brush.**
 A `renderBulk` can reproduce `fillCanvas`'s nearest sampling exactly using one

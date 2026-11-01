@@ -222,7 +222,9 @@ answer — keeps the PB number, which is also what `luxel check` reports.
    not feed reads 0.5, exactly like an absent map axis. Nothing about the
    pattern source changes, and the default on every rig is the historical
    behaviour (by index; one render call per pixel). Full table and wire
-   names: `docs/spec/projection.md`.
+   names: `docs/spec/projection.md`. A pattern that declares its own
+   [render resolution](#render-resolution-luxel-extension) is never
+   projected — it has said what space it renders in.
 5. UI controls: `export function sliderSpeed(v) { … }` creates a slider
    named "Speed" that calls your function with 0..1 when moved. Prefixes:
    `slider`, `toggle`, `trigger`, `inputNumber`, `hsvPicker`, `rgbPicker`
@@ -286,6 +288,86 @@ render loop. Two consequences worth knowing:
   reported to the pattern as elapsed delta. `timeScale` is a local
   authoring/debug control, though — a device that scales its clock will
   drift from its sync group and keep getting yanked back.
+
+### Render resolution (Luxel extension)
+
+**`setRenderSize(w, h, filter = 0)`** — render this pattern on a `w × h`
+grid of its own choosing and let the engine stretch the result over the
+fixture: `filter` 0 is **nearest** (crisp blocks — pixel art, cellular
+automata, games), 1 is **bilinear** (a smooth upscale — fire, plasma,
+fluid, anything soft). `setRenderSize(0, 0)` (either side below 1) goes
+back to native. Returns the `pixelCount` the pattern now sees.
+
+Two reasons to call it. A pattern that *simulates* on a small canvas —
+the `floor(y * 15.99) * 16 + …` idiom — writes plain row-major code at
+16×16 instead of carrying a canvas, a clamp fudge and a read-out. And an
+expensive per-pixel pattern on a big panel pays for the small grid only:
+`setRenderSize(64, 64, 1)` on a 128×128 chain is a quarter of the
+`render2D` calls, plus one native expand pass.
+
+What the pattern sees is **the small grid, everywhere**:
+
+- `pixelCount` is `w · h`, and changes **at the call** — so
+  `setRenderSize(16, 16)` at the top level followed by
+  `var heat = array(pixelCount)` allocates 256, not the panel's 4096.
+- The map is a procedural `w × h` row-major grid: `render2D` gets that
+  grid's normalized `x, y`, `pixelCoord` reads it, `gridWidth()` /
+  `gridHeight()` report `w` / `h`, `gridIndex(c, r)` is `r * w + c`, and
+  a `renderBulk` frame is `w · h` slots in plain row-major order.
+- With `h = 1` it is a **strip** of `w` pixels instead (no map, like a
+  bare strip): a `render(index)` pattern runs `w` times and is stretched
+  along the fixture — the 60-pixel comet on a 300-pixel strip, at a fifth
+  of the cost. On a panel the strip is laid along x.
+- The render entry is picked for the small grid: a pattern exporting both
+  `render` and `render2D` runs `render2D` under a `w × h` size and
+  `render` under a `w × 1` one, whatever the fixture is.
+- `setPixelState` sizes its buffer to `w · h` (call `setRenderSize`
+  before the first `setPixelState`; a buffer allocated at another size
+  keeps it).
+- The post chain (`setOutputPalette`, `setBlur`, `setGlow`, `setGamma`)
+  runs on the **small** frame, then the expand runs last — so it costs
+  `w · h` and a blur radius is in the pattern's own cells. A
+  `renderBulk` frame persists between frames as always, at the small size.
+- Events (`readEvent`) keep their normalized 0..1 coordinates, which mean
+  the same place on the small grid as on the fixture.
+
+**How the fixture is filled.** Each fixture pixel samples the small frame
+at its own mapped `(x, y)` — exactly `fillCanvas`'s nearest geometry
+(`cell = floor(x · w)`) or `canvasGet`'s bilinear one (texel centres at
+`(i + 0.5)/w`, edges clamped), so it works on **any** layout: a matrix, a
+serpentine or chained panel, a sparse or irregular map (each pixel reads
+the small grid where it sits), a mapless strip (x from the index, y = 0.5
+— a 2D size shows its middle row), a 3D map (x and y; the image repeats along
+z). On a panel that is an integer multiple of the grid, nearest is a block
+expand. Bilinear is integer arithmetic (8-bit channels, a 16-bit
+fraction), so every host — device, playground, CLI — produces the same
+bytes. The small grid may also be *larger* than a sparse fixture: a 300-px
+ring can run a 32×32 simulation and show where each LED sits.
+
+**When it applies.** The size takes effect at the engine's next plan sync:
+the first frame when called at the top level, the same frame's render
+pass when called in `beforeRender`, the next frame's when called from a
+control. It may change every frame (the small frame starts black on each
+change). It outranks projection — under a render size the host's
+projection choice is not in force (`effective_projection` reads none).
+At most 16384 cells (`w · h`; 128×128) — larger is a runtime error. A
+device that cannot spare the small frame (3 B per cell, beside the
+fixture's own) renders native, as a refused projection does.
+
+```js
+// a 16×16 heat simulation shown smoothly on any panel
+setRenderSize(16, 16, 1)
+var heat = array(pixelCount)          // 256 cells, whatever the panel
+
+export function beforeRender(delta) {
+  for (var i = 0; i < pixelCount; i++) heat[i] *= 0.96
+  heat[floor(random(pixelCount))] = 1
+}
+
+export function render2D(index, x, y) {
+  hsv(0.02 + heat[index] * 0.1, 1, heat[index])  // index IS the cell
+}
+```
 
 ## Builtin reference
 
@@ -432,7 +514,8 @@ setOutputPalette  →  setBlur  →  setGlow  →  setGamma
 
 Recolor first (the remap works on the pattern's own luma), then spread
 light spatially, then apply the output transfer curve last — the order a
-display pipeline uses. Every stage is off by default and costs one
+display pipeline uses. Under [`setRenderSize`](#render-resolution-luxel-extension)
+the chain runs on the pattern's small frame, before the expand. Every stage is off by default and costs one
 comparison per frame when unset, so a pattern that never calls them
 renders exactly as it always did. Call them anywhere (top level,
 `beforeRender`, or `render`); the value in effect when the frame finishes
@@ -999,12 +1082,19 @@ coordinates.
 - `drawLine(x0, y0, x1, y1, w, mode)` — a capsule: the brush ×
   `(1 − d/w)` where `d` is the distance to the segment. A hard line is a
   tiny `w` with mode 0.
-- `fillCanvas(hArr, sArr, vArr, w, h)` — sample a `w × h` row-major
-  canvas (three parallel arrays, each of which may be a scalar) at every
-  pixel's mapped (x, y) with **nearest** sampling, and replace. The
-  `canvas[floor(y·h)·w + floor(x·w)]` idiom of buffer-based 2D patterns,
-  as one call; the simulation resolution stays decoupled from the
-  fixture's.
+- `fillCanvas(hArr, sArr, vArr, w, h, filter = 0)` — sample a `w × h`
+  row-major HSV canvas (three parallel arrays, each of which may be a
+  scalar) at every pixel's mapped (x, y) with **nearest** sampling, and
+  replace. The `canvas[floor(y·h)·w + floor(x·w)]` idiom of buffer-based
+  2D patterns, as one call; the simulation resolution stays decoupled from
+  the fixture's. `filter` 1 is **bilinear** instead — `canvasGet`'s
+  geometry, blended in RGB after each cell's colour is resolved, the same
+  integer kernel `setRenderSize` expands with.
+- `paintCanvas(vArr, w, h, bArr = 1, filter = 0)` — `fillCanvas`'s
+  geometry with `paint()`'s colour: the installed palette at `vArr[i]`,
+  times `bArr[i]` (or a scalar), byte-identical to `paint(v, b)` per cell.
+  One array instead of three. `filter` as for `fillCanvas` (pass `bArr` —
+  `1` will do — to reach it).
 
 #### Grid space
 
