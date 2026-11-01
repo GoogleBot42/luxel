@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/christmas-candy-cane.js (panel form, Palette 1; 2026-11).
+
 # Holiday_Diagonal_Stripes
 kind: 2D
 sensors: no

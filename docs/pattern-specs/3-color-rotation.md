@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/custom-sequences.js (2026-11).
+
 # 3 color rotation
 kind: 1D
 sensors: no

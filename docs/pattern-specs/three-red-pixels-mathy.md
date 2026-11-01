@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/marquee-chase.js (Bulb px, Background picker; 2026-11).
+
 # Three Red Pixels (mathy)
 kind: 1D
 sensors: no
