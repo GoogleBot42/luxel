@@ -1,3 +1,4 @@
+> Superseded: this idea now lives in library/plasma.js (2026-11).
 # sinpulse 3D
 kind: 1D+2D+3D
 sensors: no
