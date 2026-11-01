@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/saber.js (2026-11).
+
 # SaberDeploy Tutorial
 kind: 1D
 sensors: no (a UI toggle stands in for a momentary hardware pushbutton; comments in the original suggest wiring it to a GPIO read instead)

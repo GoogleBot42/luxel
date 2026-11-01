@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/lamp.js (2026-11).
+
 # UtilityColorTemp
 kind: 1D (index-agnostic — every pixel identical, so it works on any layout)
 sensors: no
