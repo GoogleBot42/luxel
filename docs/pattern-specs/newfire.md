@@ -1,3 +1,4 @@
+> Superseded: this idea now lives in library/perlin-fire.js (2026-11).
 # Newfire
 kind: 1D
 sensors: no
