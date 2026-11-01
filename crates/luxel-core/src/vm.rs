@@ -33,6 +33,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::arena::ArrVec;
+use crate::ease;
 use crate::fixed::Fx;
 use crate::fmath;
 
@@ -971,25 +972,6 @@ pub fn method_global(name: &str) -> Option<&'static str> {
     })
 }
 
-
-/// Shared by the three bounce easings: piecewise parabolas, n1 = 7.5625,
-/// d1 = 2.75 (the standard fit). "in" and "in-out" are reflections of it.
-fn ease_out_bounce(t: Fx) -> Fx {
-    let n1 = Fx::from_f64(7.5625);
-    let d1 = Fx::from_f64(2.75);
-    if t < Fx::ONE / d1 {
-        n1 * t * t
-    } else if t < Fx::from_int(2) / d1 {
-        let u = t - Fx::from_f64(1.5) / d1;
-        n1 * u * u + Fx::from_f64(0.75)
-    } else if t < Fx::from_f64(2.5) / d1 {
-        let u = t - Fx::from_f64(2.25) / d1;
-        n1 * u * u + Fx::from_f64(0.9375)
-    } else {
-        let u = t - Fx::from_f64(2.625) / d1;
-        n1 * u * u + Fx::from_f64(0.984375)
-    }
-}
 
 // ---- VM ----
 
@@ -3964,58 +3946,22 @@ impl Vm {
                     -Fx::ONE + (Fx::from_int(4) - Fx::from_int(2) * t) * t
                 })
             }
-            EaseInCubic => {
-                let t = n(0);
-                num(t * t * t)
-            }
-            EaseOutCubic => {
-                let u = n(0) - Fx::ONE;
-                num(u * u * u + Fx::ONE)
-            }
-            EaseInOutCubic => {
-                let t = n(0);
-                num(if t < Fx::from_raw(1 << 15) {
-                    Fx::from_int(4) * t * t * t
-                } else {
-                    let u = t + t - Fx::from_int(2);
-                    u * u * u / Fx::from_int(2) + Fx::ONE
-                })
-            }
-            // 1 + c3·(t-1)³ + c1·(t-1)² with c1 = 1.70158 (the classic ~10%
-            // overshoot constant), c3 = c1 + 1
-            EaseOutBack => {
-                let u = n(0) - Fx::ONE;
-                let c1 = Fx::from_f64(1.70158);
-                let c3 = c1 + Fx::ONE;
-                num(Fx::ONE + c3 * u * u * u + c1 * u * u)
-            }
-            // 2^(-10t)·sin((10t - 0.75)·2π/3) + 1, endpoints pinned exactly
-            EaseOutElastic => {
-                let t = n(0);
-                num(if t <= Fx::ZERO {
-                    Fx::ZERO
-                } else if t >= Fx::ONE {
-                    Fx::ONE
-                } else {
-                    let ten_t = Fx::from_int(10) * t;
-                    let decay = fmath::pow(Fx::from_int(2), -ten_t);
-                    // sin's argument in turns: (10t - 0.75) / 3
-                    let s = fmath::sin_turns((ten_t - Fx::from_f64(0.75)) / Fx::from_int(3));
-                    decay * s + Fx::ONE
-                })
-            }
-            // piecewise parabolas (see ease_out_bounce)
-            EaseOutBounce => num(ease_out_bounce(n(0))),
+            // the cubics, back, elastic, bounce and in-out sine are
+            // `crate::ease`, which the scene keyframes share (one body per
+            // curve, so the two cannot round differently)
+            EaseInCubic => num(ease::in_cubic(n(0))),
+            EaseOutCubic => num(ease::out_cubic(n(0))),
+            EaseInOutCubic => num(ease::in_out_cubic(n(0))),
+            EaseOutBack => num(ease::out_back(n(0))),
+            EaseOutElastic => num(ease::out_elastic(n(0))),
+            EaseOutBounce => num(ease::out_bounce(n(0))),
             // --- batch 7: the rest of the standard thirty easings. Same
             // contract as the ones above: polynomial/analytic forms on t,
             // no clamping except where the reference pins the endpoints.
             // sine: 1 - cos(t·π/2) etc, in turns (π/2 rad = 1/4 turn)
             EaseInSine => num(Fx::ONE - fmath::cos_turns(n(0) / Fx::from_int(4))),
             EaseOutSine => num(fmath::sin_turns(n(0) / Fx::from_int(4))),
-            EaseInOutSine => {
-                let c = fmath::cos_turns(n(0) / Fx::from_int(2));
-                num((Fx::ONE - c) / Fx::from_int(2))
-            }
+            EaseInOutSine => num(ease::in_out_sine(n(0))),
             EaseInQuart => {
                 let t = n(0);
                 num(t * t * t * t)
@@ -4155,14 +4101,14 @@ impl Vm {
                     }
                 })
             }
-            // bounce: the standard reflections of ease_out_bounce
-            EaseInBounce => num(Fx::ONE - ease_out_bounce(Fx::ONE - n(0))),
+            // bounce: the standard reflections of ease::out_bounce
+            EaseInBounce => num(Fx::ONE - ease::out_bounce(Fx::ONE - n(0))),
             EaseInOutBounce => {
                 let t = n(0);
                 num(if t < Fx::from_raw(1 << 15) {
-                    (Fx::ONE - ease_out_bounce(Fx::ONE - t - t)) / Fx::from_int(2)
+                    (Fx::ONE - ease::out_bounce(Fx::ONE - t - t)) / Fx::from_int(2)
                 } else {
-                    (Fx::ONE + ease_out_bounce(t + t - Fx::ONE)) / Fx::from_int(2)
+                    (Fx::ONE + ease::out_bounce(t + t - Fx::ONE)) / Fx::from_int(2)
                 })
             }
             PrngSeed => {

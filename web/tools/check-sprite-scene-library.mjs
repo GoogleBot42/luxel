@@ -21,7 +21,9 @@
 //     feature breaks silently — the tile just draws fewer layers — so it is
 //     checked here rather than discovered on a panel;
 //   * every `I` line in a shipped scene is one of that scene's own references,
-//     and no two references collapse onto the same derived id.
+//     and no two references collapse onto the same derived id;
+//   * the canonical wire that ships (the console's `serializeScene`) keeps
+//     every keyframe (`M` line) and is still a record `luxel_core` takes.
 //
 // Usage (from web/):
 //   node --experimental-strip-types tools/check-sprite-scene-library.mjs
@@ -33,7 +35,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { libRefId, parseSceneSource, parseSpriteSource, libSlug } from "../src/lib/librarySource.ts";
-import { parseScene } from "../src/lib/scene.ts";
+import { parseScene, serializeScene } from "../src/lib/scene.ts";
 import { checkSprite, encodeSprite, SPRITE_MAX_BYTES } from "../src/lib/sprite.ts";
 
 const webDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -171,6 +173,16 @@ for (const f of sceneFiles) {
     continue;
   }
   if (parsed.scene.name === "") fail(what, "the S line carries no name");
+  // What SHIPS is the console's canonical serialization
+  // (gen-sprite-scene-gallery.mjs), not the source: it has to keep every
+  // keyframe (`M` line) and still be a record luxel_core takes.
+  const canon = serializeScene({ ...parsed.scene, id: "" });
+  const mLines = (w) => w.split("\n").filter((l) => /^\s*M\s/.test(l)).length;
+  if (mLines(canon) !== mLines(src.wire)) {
+    fail(what, `the console's serializer kept ${mLines(canon)} of ${mLines(src.wire)} keyframes`);
+  }
+  const rustCanon = rustParseScene(sceneCh, canon);
+  if (rustCanon !== null) fail(what, `luxel_core::scene refuses the canonical wire: ${rustCanon}`);
 
   for (const ref of src.refs) {
     refsChecked++;
@@ -205,7 +217,8 @@ for (const f of sceneFiles) {
   }
   console.log(
     `  scene  ${libSlug(f).padEnd(20)} ${parsed.scene.layers.length} layers · ` +
-      `${src.refs.length} ref${src.refs.length === 1 ? "" : "s"} · ${src.wire.length} B`,
+      `${src.refs.length} ref${src.refs.length === 1 ? "" : "s"} · ${src.wire.length} B` +
+      (mLines(src.wire) > 0 ? ` · ${mLines(src.wire)} keyframes` : ""),
   );
 }
 

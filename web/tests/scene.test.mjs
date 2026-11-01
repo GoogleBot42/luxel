@@ -23,6 +23,9 @@ import {
   truncateUtf8,
   validSceneId,
   withPatternOnTop,
+  keysText,
+  parseKeysText,
+  EASES,
 } from "../src/lib/scene.ts";
 
 /** The fixture `scene::tests::json_carries_the_api_shape` parses. */
@@ -362,4 +365,124 @@ test("a fresh sprite layer has no fps override", () => {
   const l = newLayer("sprite");
   assert.equal(l.body.kind, "sprite");
   assert.equal(l.body.fps, undefined);
+});
+
+// ---- keyframes (`M` lines) — fixtures verbatim from scene.rs's tests ----
+
+/** `scene::tests::keyframes_round_trip_on_every_layer_kind`. */
+const KEYED_WIRE =
+  "S 0000000a keyed\n" +
+  "L pat 0 0 16 16 normal 100 none fill 1\n" +
+  "I 0123abcd\n" +
+  "M 0 0 0 100 linear\n" +
+  "M 500 = -4 = step\n" +
+  "M 1000 8 = 0 in\n" +
+  "L text 0 0 0 0 normal 100 none fill 1\n" +
+  "T lit HI\n" +
+  "M 0 = = = out\n" +
+  "M 1 = = = inout\n" +
+  "L sprite 4 40 22 22 normal 100 none contain 1\n" +
+  "I 0123abce\n" +
+  "A 6\n" +
+  "M 0 4 40 0 sine 2\n" +
+  "M 3000 4 20 100 back\n" +
+  "M 3000 4 20 100 bounce 0\n" +
+  "M 20000 4 40 0 elastic 255\n" +
+  "L color 0 0 0 0 add 50 none fill 1\n" +
+  "K ff8800\n" +
+  "M 3600000 -32768 32767 0 linear\n";
+
+test("M lines round trip on every layer kind, byte for byte", () => {
+  const s = ok(parseScene(KEYED_WIRE));
+  assert.equal(serializeScene(s), KEYED_WIRE);
+  assert.deepEqual(s.layers[0].keys[1], { ms: 500, x: null, y: -4, opacity: null, ease: "step" });
+  assert.equal(s.layers[2].keys[0].frame, 2);
+  assert.equal(s.layers[2].keys[2].frame, 0, "frame 0 is a value, not absent");
+  assert.equal(EASES.length, 9);
+});
+
+test("a keyed layer survives the device's JSON and back", () => {
+  const s = ok(parseScene(KEYED_WIRE));
+  assert.equal(serializeScene(sceneFromJson(JSON.parse(sceneJson(s)))), KEYED_WIRE);
+});
+
+test("the JSON carries keys exactly as push_json writes them", () => {
+  // `scene::tests::json_carries_keys_only_when_the_layer_has_a_track`
+  const s = ok(
+    parseScene(
+      "S 0000000a k\n" +
+        "L color 0 0 0 0 normal 100 none fill 1\n" +
+        "L sprite 1 2 0 0 normal 100 none fill 1\n" +
+        "M 0 = 5 0 linear 3\n" +
+        "M 250 7 = = elastic\n",
+    ),
+  );
+  const out = sceneJson(s);
+  assert.equal(out.split('"keys"').length - 1, 1);
+  assert.ok(
+    out.includes(
+      '"rot180":false,"keys":[{"ms":0,"y":5,"opacity":0,"ease":"linear","frame":3},' +
+        '{"ms":250,"x":7,"ease":"elastic"}],"sprite":{',
+    ),
+    out,
+  );
+});
+
+test("aligned M columns canonicalise; a newer console's extra token is ignored", () => {
+  const s = ok(
+    parseScene(
+      "S 0000000a k\nL color 0 0 0 0 normal 100 none fill 1\nM  0    4 40  0   linear\nM 9 1 2 3 out 4 later\n",
+    ),
+  );
+  assert.equal(
+    serializeScene(s),
+    "S 0000000a k\nL color 0 0 0 0 normal 100 none fill 1\nM 0 4 40 0 linear\nM 9 1 2 3 out 4\n",
+  );
+});
+
+test("M errors are the device's, word for word", () => {
+  const head = "S 0000000a n\nL pat 0 0 0 0 normal 100 none fill 1\n";
+  const cases = [
+    ["M 0 1 2 3 wobble", 'bad M field "wobble"'],
+    ["M 0 1 2 3", "M needs <ms> <x> <y> <opacity> <ease> [<frame>]"],
+    ["M -1 1 2 3 linear", 'bad M field "-1"'],
+    ["M 3600001 1 2 3 linear", 'bad M field "3600001"'],
+    ["M = 1 2 3 linear", 'bad M field "="'],
+    ["M 0 40000 2 3 linear", 'bad M field "40000"'],
+    ["M 0 1 * 3 linear", 'bad M field "*"'],
+    ["M 0 1 2 101 linear", 'bad M field "101"'],
+    ["M 0 1 2 3 linear 256", 'bad M field "256"'],
+    ["M 0 1 2 3 linear =", 'bad M field "="'],
+  ];
+  for (const [line, want] of cases) {
+    const r = parseScene(`${head}${line}\n`);
+    assert.equal(r.ok, false, line);
+    assert.equal(r.error, `scene: line 3: ${want}`, line);
+  }
+  let wire = "S 0000000a k\nL color 0 0 0 0 normal 100 none fill 1\n";
+  for (let i = 0; i < 16; i++) wire += `M ${i * 10} 0 0 0 linear\n`;
+  assert.equal(ok(parseScene(wire)).layers[0].keys.length, 16);
+  assert.equal(parseScene(wire + "M 999 0 0 0 linear\n").error, "scene: line 19: too many keyframes (max 16)");
+  assert.equal(
+    parseScene("S 0000000a k\nL color 0 0 0 0 normal 100 none fill 1\nM 100 0 0 0 linear\nM 100 1 1 1 step\nM 50 0 0 0 linear\n")
+      .error,
+    "scene: line 5: keyframe times must not go backwards",
+  );
+});
+
+test("a layer without keys emits no M line and carries no keys member", () => {
+  const s = ok(parseScene("S 0000000a k\nL color 0 0 0 0 normal 100 none fill 1\n"));
+  assert.equal(s.layers[0].keys, undefined);
+  s.layers[0].keys = [];
+  assert.equal(serializeScene(s), "S 0000000a k\nL color 0 0 0 0 normal 100 none fill 1\n");
+  assert.ok(!sceneJson(s).includes("keys"));
+});
+
+test("the inspector's text field is the same parser, row-numbered", () => {
+  const r = parseKeysText("M 0 4 40 0 linear\n\n3000 4 20 100 out\nM 20000 = = 0 in 2");
+  assert.equal(r.ok, true);
+  assert.equal(keysText(r.keys), "M 0 4 40 0 linear\nM 3000 4 20 100 out\nM 20000 = = 0 in 2");
+  const bad = parseKeysText("M 0 4 40 0 linear\nM 10 4 40 0 zoom");
+  assert.deepEqual(bad, { ok: false, error: 'row 2: bad M field "zoom"' });
+  assert.deepEqual(parseKeysText("  \n"), { ok: true, keys: [] });
 });

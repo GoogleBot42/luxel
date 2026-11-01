@@ -364,6 +364,8 @@
   style={layer.style}
   kind="sprite"
   on:change={(e) => patchLayer({ style: e.detail })}
+  keys={layer.keys}
+  on:keys={(e) => patchLayer({ keys: e.detail })}
   on:delete
 />
 

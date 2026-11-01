@@ -35,6 +35,8 @@ export type SceneFont = "tiny" | "regular" | "large";
 export type Align = "l" | "c" | "r";
 export type Scroll = "none" | "left" | "right" | "up" | "down" | "bounce";
 export type ClockFmt = "HH:MM" | "HH:MM:SS" | "hh:MM" | "hh:MM:SS" | "MM-DD" | "YYYY-MM-DD";
+/** A keyframe segment's curve — `luxel_core::scene::Ease`. */
+export type Ease = "linear" | "step" | "in" | "out" | "inout" | "sine" | "back" | "bounce" | "elastic";
 
 export const LAYER_KINDS: readonly LayerKind[] = ["pat", "text", "sprite", "color"];
 export const BLENDS: readonly Blend[] = ["normal", "add", "lighten", "multiply", "mask"];
@@ -43,6 +45,20 @@ export const FITS: readonly Fit[] = ["fill", "contain", "tile"];
 export const FONTS: readonly SceneFont[] = ["tiny", "regular", "large"];
 export const ALIGNS: readonly Align[] = ["l", "c", "r"];
 export const SCROLLS: readonly Scroll[] = ["none", "left", "right", "up", "down", "bounce"];
+export const EASES: readonly Ease[] = [
+  "linear",
+  "step",
+  "in",
+  "out",
+  "inout",
+  "sine",
+  "back",
+  "bounce",
+  "elastic",
+];
+/** `MAX_KEYS` / `MAX_KEY_MS` — the keyframe track's caps. */
+export const MAX_KEYS = 16;
+export const MAX_KEY_MS = 3_600_000;
 export const CLOCK_FMTS: readonly ClockFmt[] = [
   "HH:MM",
   "HH:MM:SS",
@@ -127,10 +143,25 @@ export type LayerBody =
   | { kind: "sprite"; id: string; fps?: number }
   | { kind: "color"; color: string };
 
+/** One `M` line: where the layer is `ms` after the scene starts. `null` is
+ *  the wire's `=` — the `L` line's own value. `frame` holds a sprite frame
+ *  from this key to the next; absent leaves the sprite's clock running. */
+export interface Keyframe {
+  ms: number;
+  x: number | null;
+  y: number | null;
+  opacity: number | null;
+  ease: Ease;
+  frame?: number;
+}
+
 export interface Layer {
   name: string;
   style: LayerStyle;
   body: LayerBody;
+  /** The keyframe track (docs/spec/scenes.md §1 "Keyframes"), ascending by
+   *  `ms`. Absent or empty = no motion; only a non-empty one is emitted. */
+  keys?: Keyframe[];
 }
 
 export interface Scene {
@@ -604,10 +635,64 @@ function parseBinding(layer: Layer, tag: string, line: string, n: number): void 
       if (layer.body.kind === "color") layer.body.color = rgb;
       break;
     }
+    case "M":
+      layer.keys = pushKey(layer.keys ?? [], t, n);
+      break;
     default:
       // A line from a newer console: ignored.
       break;
   }
+}
+
+/** One `M` line's tokens (tag first) appended to `keys` — `scene.rs`'s
+ *  `parse_key` (one table, one message naming the token) plus the cap and
+ *  the ordering rule, word for word. */
+function pushKey(keys: Keyframe[], t: string[], n: number): Keyframe[] {
+  // ms, x, y, opacity, ease (an index into EASES), frame
+  const lim = [MAX_KEY_MS, 32767, 32767, 100, 8, 255];
+  const f: (number | null)[] = [];
+  const toks = t.slice(1, 7);
+  toks.forEach((tok, i) => {
+    if (tok === "=" && i >= 1 && i <= 3) return void (f[i] = null);
+    const v = i === 4 ? EASES.indexOf(tok as Ease) : /^[+-]?\d+$/.test(tok) ? Number(tok) : NaN;
+    const lo = i === 1 || i === 2 ? -32768 : 0;
+    if (!(v >= lo && v <= (lim[i] as number))) throw new ParseError(errTok(n, "bad M field", tok));
+    f[i] = v;
+  });
+  if (toks.length < 5) throw new ParseError(err(n, "M needs <ms> <x> <y> <opacity> <ease> [<frame>]"));
+  const key: Keyframe = { ms: f[0] as number, x: f[1] ?? null, y: f[2] ?? null, opacity: f[3] ?? null, ease: EASES[f[4] as number] as Ease };
+  if (f[5] != null) key.frame = f[5];
+  if (keys.length === MAX_KEYS) throw new ParseError(err(n, "too many keyframes (max 16)"));
+  const last = keys[keys.length - 1];
+  if (last && last.ms > key.ms) throw new ParseError(err(n, "keyframe times must not go backwards"));
+  return [...keys, key];
+}
+
+/** A track as its `M` lines, one per row — what the layer inspector edits. */
+export function keysText(keys: readonly Keyframe[] | undefined): string {
+  return (keys ?? [])
+    .map((k) => {
+      const v = (n: number | null): string => (n === null ? "=" : String(n));
+      return `M ${k.ms} ${v(k.x)} ${v(k.y)} ${v(k.opacity)} ${k.ease}${k.frame === undefined ? "" : ` ${k.frame}`}`;
+    })
+    .join("\n");
+}
+
+/** The inspector's field back into a track, through the SAME rules as the
+ *  wire (blank rows skipped; the `M` is optional there). Errors name the row. */
+export function parseKeysText(text: string): { ok: true; keys: Keyframe[] } | { ok: false; error: string } {
+  let keys: Keyframe[] = [];
+  try {
+    splitLines(text).forEach((row, i) => {
+      const t = tokens(row);
+      if (t.length === 0) return;
+      keys = pushKey(keys, t[0] === "M" ? t : ["M", ...t], i + 1);
+    });
+  } catch (e) {
+    if (e instanceof ParseError) return { ok: false, error: e.message.replace(/^scene: line/, "row") };
+    throw e;
+  }
+  return { ok: true, keys };
 }
 
 // ---- the wire: serialize ----
@@ -658,6 +743,7 @@ export function serializeScene(s: Scene): string {
     } else if (l.body.color !== "000000") {
       out += `K ${l.body.color}\n`;
     }
+    if (l.keys?.length) out += keysText(l.keys) + "\n";
   }
   return out;
 }
@@ -685,6 +771,8 @@ export interface SceneLayerJson {
   flipx: boolean;
   flipy: boolean;
   rot180: boolean;
+  /** Present only when the layer has a track; `=` values are absent. */
+  keys?: { ms: number; x?: number; y?: number; opacity?: number; ease: Ease; frame?: number }[];
   pat?: {
     id: string;
     controls: Record<string, number[]>;
@@ -789,7 +877,14 @@ function layerFromJson(j: SceneLayerJson): Layer {
   } else {
     body = { kind: "color", color: parseRgb(String(j.color ?? "")) ?? "000000" };
   }
-  return { name: String(j.name ?? defaultLayerName(kind)), style, body };
+  const out: Layer = { name: String(j.name ?? defaultLayerName(kind)), style, body };
+  // A track that does not hold up is DROPPED rather than half-kept: the
+  // device only ever writes one its own parser accepted.
+  if (Array.isArray(j.keys) && j.keys.length > 0) {
+    const r = parseKeysText(keysText(j.keys.map((k) => ({ ...k, x: k.x ?? null, y: k.y ?? null, opacity: k.opacity ?? null }))));
+    if (r.ok) out.keys = r.keys;
+  }
+  return out;
 }
 
 /** Exactly the bytes `luxel_core::scene::push_json` writes. Only the tests
@@ -807,6 +902,13 @@ function layerJson(l: Layer): string {
     `"x":${st.rect.x},"y":${st.rect.y},"w":${st.rect.w},"h":${st.rect.h},` +
     `"blend":"${st.blend}","opacity":${st.opacity},"key":"${st.key}","fit":"${st.fit}",` +
     `"visible":${st.visible},"flipx":${st.flipx},"flipy":${st.flipy},"rot180":${st.rot180}`;
+  if (l.keys?.length) {
+    const f = (name: string, v: number | null | undefined): string => (v == null ? "" : `,"${name}":${v}`);
+    const keys = l.keys.map(
+      (k) => `{"ms":${k.ms}${f("x", k.x)}${f("y", k.y)}${f("opacity", k.opacity)},"ease":"${k.ease}"${f("frame", k.frame)}}`,
+    );
+    o += `,"keys":[${keys.join(",")}]`;
+  }
   if (l.body.kind === "pat") {
     const p = l.body.pat;
     const ctl = Object.entries(p.controls)

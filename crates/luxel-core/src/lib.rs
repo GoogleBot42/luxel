@@ -32,6 +32,7 @@ pub mod engine;
 pub mod fixed;
 pub mod color;
 pub mod compose;
+pub mod ease;
 pub mod fmath;
 pub mod hamqtt;
 #[cfg(any(feature = "jit", feature = "dispatch-table"))]

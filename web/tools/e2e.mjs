@@ -2266,6 +2266,59 @@ try {
     check("scenes: a reload reopens the scene the route named", back === 2, String(back));
     await page.screenshot({ path: `${shotDir}/e2e-scenes-editor.png` });
 
+    // ── Keyframes: every inspector's Motion field (`M` lines) ─────────────
+    //
+    // One `M` line a row through the codec's own parser: a bad row names
+    // itself and changes nothing, a good track reaches the stored wire and
+    // comes back on reload. Cleared again at the end so the blocks below see
+    // the scene they always did.
+    {
+      const field = '[data-role="scene-editor-view"] [data-role="scene-keys"]';
+      const keyErr = '[data-role="scene-editor-view"] [data-role="scene-keys-error"]';
+      await page.click('[data-role="scene-layer"][data-layer="0"] [data-role="scene-layer-pick"]');
+      await sleep(300);
+      check("keys: the layer inspector carries the Motion field", (await page.$(field)) !== null);
+      await page.click(field);
+      await page.keyboard.type("M 0 0 0 100 linear\nM 1000 = 4 = zoom");
+      await sleep(300);
+      const said = await page.$eval(keyErr, (el) => (el.textContent ?? "").trim()).catch(() => "");
+      check("keys: a bad row is named in the parser's own words", said === 'row 2: bad M field "zoom"', said);
+      await page.screenshot({ path: `${shotDir}/e2e-scenes-keys-error.png` });
+      for (let i = 0; i < 4; i++) await page.keyboard.press("Backspace");
+      await page.keyboard.type("out");
+      await sleep(300);
+      check("keys: a valid track clears the error", (await page.$(keyErr)) === null);
+      await page.click('[data-role="scene-save"]');
+      await sleep(700);
+      const keyed = await page.evaluate(() => localStorage.getItem("luxel.scenes") ?? "");
+      check(
+        "keys: the stored wire carries the track as M lines",
+        keyed.includes("\nM 0 0 0 100 linear\nM 1000 = 4 = out\n"),
+        keyed.slice(0, 160),
+      );
+      await page.screenshot({ path: `${shotDir}/e2e-scenes-keys.png` });
+      await page.reload({ waitUntil: "networkidle2" });
+      await sleep(1800);
+      await page.click('[data-role="scene-layer"][data-layer="0"] [data-role="scene-layer-pick"]');
+      await sleep(300);
+      const again = await page.$eval(field, (el) => el.value).catch(() => "");
+      check(
+        "keys: the track survives a reload into the field",
+        again === "M 0 0 0 100 linear\nM 1000 = 4 = out",
+        JSON.stringify(again),
+      );
+      await page.click(field);
+      await page.keyboard.down("Control");
+      await page.keyboard.press("a");
+      await page.keyboard.up("Control");
+      await page.keyboard.press("Backspace");
+      await sleep(300);
+      await page.click('[data-role="scene-save"]');
+      await sleep(700);
+      const cleared = await page.evaluate(() => localStorage.getItem("luxel.scenes") ?? "");
+      check("keys: an emptied field stores no M line", !/\nM /.test(cleared), cleared.slice(0, 160));
+    }
+
     // ── A SPRITE LAYER moves like every other layer (Gitea #741) + the text
     //    inspector (#486) ──────────────────────────────────────────────────
     //
