@@ -1,3 +1,4 @@
+> Superseded: this idea now lives in library/ocean.js (2026-11).
 # green ripple reflections
 kind: 1D
 sensors: no

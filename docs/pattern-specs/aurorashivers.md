@@ -1,3 +1,4 @@
+> Superseded: this idea now lives in library/aurora-2d.js (2026-11).
 # aurorashivers
 kind: 1D
 sensors: no
