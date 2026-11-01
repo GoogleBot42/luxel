@@ -279,6 +279,10 @@ pub struct Engine {
     /// when a strip plan is installed (fallibly — a refusal falls back to
     /// by-index), reused every frame: no per-frame and no per-pixel alloc.
     strip_scratch: crate::arena::FrameVec,
+    /// `setTrail`'s memory: last frame's trail-stage output, one RGB triple
+    /// per RENDERED pixel. Empty while the stage is off — allocated when a
+    /// pattern turns it on, released when it turns it off.
+    trail: crate::arena::FrameVec,
     /// The Layout-sized frame while [`ProjPlan::Resized`] has `pixels`
     /// holding the pattern's small one: what [`Engine::pixels`] returns
     /// then. Empty under every other plan.
@@ -498,6 +502,7 @@ impl Engine {
             layout_map: None,
             strip_scratch: crate::arena::empty(),
             out: crate::arena::empty(),
+            trail: crate::arena::empty(),
             frame_is_2d: false,
             // Compilation happens AFTER construction, because it needs the
             // init errors this constructor collects (§2.3's exemption is
@@ -1171,15 +1176,13 @@ impl Engine {
             ProjPlan::FrameGrid(g) => self.vm.frame_grid = Some(g),
             ProjPlan::Resized { w, h, .. } => {
                 let n = w as usize * h as usize;
-                let mut small: crate::arena::FrameVec = crate::arena::empty();
-                if small.try_reserve_exact(n).is_err() {
+                let Some(small) = crate::arena::try_frame(n) else {
                     // Native it stays, like a refused strip: `pixelCount`
                     // back to what renders (the builtin already said w·h).
                     self.vm.globals[self.prog.pixel_count_g as usize] =
                         Value::Num(Fx::from_int(self.vm.pixel_count as i32));
                     return;
-                }
-                small.resize(n, [0; 3]);
+                };
                 self.out = core::mem::replace(&mut self.pixels, small);
                 self.layout_map = self.vm.map.take();
                 let g = crate::outpipe::GridMap::new(w, h, false);
@@ -2628,7 +2631,7 @@ impl Engine {
     /// The global post-process chain: whole-frame stages the engine runs
     /// once, after the last `render()` call of a frame, in a fixed order —
     ///
-    ///   `setOutputPalette` → `setBlur` → `setGlow` → `setGamma`
+    ///   `setTrail` → `setOutputPalette` → `setBlur` → `setGlow` → `setGamma`
     ///
     /// — on the frame the pattern rendered, which under `setRenderSize` is
     /// the SMALL one: the chain costs w·h, blur radii are in the pattern's
@@ -2650,6 +2653,11 @@ impl Engine {
     fn post_chain(&mut self) {
         if self.is_map {
             return;
+        }
+        if self.vm.post_trail != Fx::ZERO {
+            self.trail_stage();
+        } else if self.trail.capacity() > 0 {
+            self.trail = crate::arena::empty();
         }
         if !self.vm.post_palette.is_empty() && self.vm.post_palette_amount != Fx::ZERO {
             self.ensure_remap_lut();
@@ -2699,6 +2707,37 @@ impl Engine {
         }
         if let ProjPlan::Resized { w, h, filter } = self.plan {
             self.expand(w as usize, h as usize, filter);
+        }
+    }
+
+    /// `setTrail`: each channel becomes `max(new, prev · decay)` (or the
+    /// sum, clamped, in add mode), where `prev` is LAST frame's output of
+    /// this same stage — kept in `self.trail`, before any later stage
+    /// touched it. So the trail is of the pattern's own colours: palette,
+    /// blur, glow and gamma grade it every frame without feeding back.
+    /// `decay` is quantized to 1/256ths like the other stages. The first
+    /// frame after a (re)start, or after the rendered size changes, seeds
+    /// the memory with the frame as it is.
+    #[inline(never)]
+    fn trail_stage(&mut self) {
+        let k = fx_to_256(self.vm.post_trail);
+        let add = self.vm.post_trail_add;
+        if self.trail.len() != self.pixels.len() {
+            self.trail = crate::arena::empty();
+            if let Some(mut t) = crate::arena::try_frame(self.pixels.len()) {
+                t.copy_from_slice(&self.pixels);
+                self.trail = t;
+            }
+            return;
+        }
+        // one byte at a time over both frames: the stage is per channel
+        let (px, tr) = (self.pixels.as_flattened_mut(), self.trail.as_flattened_mut());
+        for (p, t) in px.iter_mut().zip(tr.iter_mut()) {
+            let old = (*t as u32 * k) >> 8;
+            let new = *p as u32;
+            let v = if add { (new + old).min(255) } else { new.max(old) };
+            *p = v as u8;
+            *t = v as u8;
         }
     }
 

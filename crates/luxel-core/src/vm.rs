@@ -530,6 +530,8 @@ pub enum Builtin {
     SplatIndex,
     FillRangeAa,
     GradientRange,
+    // batch 17: the afterglow stage at the head of the post chain.
+    SetTrail,
 }
 
 pub struct BuiltinDef {
@@ -692,6 +694,8 @@ pub static BUILTINS: &[BuiltinDef] = &[
     // batch 16: index-space AA ops. Ids 195..=197.
     b!("splatIndex", SplatIndex), b!("fillRangeAA", FillRangeAa),
     b!("gradientRange", GradientRange),
+    // batch 17: afterglow. Id 198.
+    b!("setTrail", SetTrail),
 ];
 
 // ---- builtin kind signatures (Gitea #607, docs/jit-design.md §2.3) ----
@@ -1495,6 +1499,11 @@ pub struct Vm {
     pub post_palette: Vec<(Fx, [Fx; 3])>,
     pub post_palette_amount: Fx,
     pub post_palette_epoch: u32,
+    /// `setTrail(decay, mode)`: the afterglow stage's per-frame keep
+    /// fraction 0..1 (ZERO = off) and blend (0 max, 1 add). First stage of
+    /// the post chain.
+    pub post_trail: Fx,
+    pub post_trail_add: bool,
     /// `setRenderSize(w, h, filter)`: the grid the pattern asks to be
     /// rendered on, `[0, 0]` = native. The ENGINE applies it (its
     /// `ProjPlan::Resized`) at the next plan sync — after init, after every
@@ -1804,6 +1813,8 @@ impl Vm {
             post_palette: Vec::new(),
             post_palette_amount: Fx::ONE,
             post_palette_epoch: 0,
+            post_trail: Fx::ZERO,
+            post_trail_add: false,
             render_size: [0; 2],
             render_filter: 0,
             render_base: Fx::ZERO,
@@ -4837,6 +4848,16 @@ impl Vm {
             SetGlow => {
                 let old = self.post_glow;
                 self.post_glow = n(0).clamp(Fx::ZERO, Fx::ONE);
+                num(old)
+            }
+            // setTrail(decay, mode = 0): afterglow — every pixel keeps the
+            // brighter of its new colour and `decay` × its last trailed one
+            // (mode 1: the sum, clamped). 0 turns it off. Returns the
+            // previous decay.
+            SetTrail => {
+                let old = self.post_trail;
+                self.post_trail = n(0).clamp(Fx::ZERO, Fx::ONE);
+                self.post_trail_add = n(1) >= Fx::ONE;
                 num(old)
             }
             // setRenderSize(w, h, filter = 0): render the pattern on a w×h

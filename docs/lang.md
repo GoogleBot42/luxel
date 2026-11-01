@@ -504,12 +504,12 @@ export function render(index) {
 }
 ```
 
-**Luxel extension — the post-process chain**: four whole-frame stages the
+**Luxel extension — the post-process chain**: five whole-frame stages the
 engine runs *once per frame*, after the last `render` call, in a fixed
 order:
 
 ```
-setOutputPalette  →  setBlur  →  setGlow  →  setGamma
+setTrail  →  setOutputPalette  →  setBlur  →  setGlow  →  setGamma
 ```
 
 Recolor first (the remap works on the pattern's own luma), then spread
@@ -521,6 +521,25 @@ renders exactly as it always did. Call them anywhere (top level,
 `beforeRender`, or `render`); the value in effect when the frame finishes
 is the one that applies.
 
+- `setTrail(decay, mode = 0)` — afterglow for **any** pattern, per-pixel
+  ones included, with no buffer in the pattern: every channel becomes
+  `max(new, prev × decay)` (mode 1: `new + prev × decay`, clamped at full),
+  where `prev` is what this stage produced last frame. `decay` 0..1 is the
+  fraction kept per rendered frame (in 1/256ths, like the other stages) —
+  `0.85` is a short comet tail, `0.97` a long smear; pair it with
+  `setFrameRate` if the tail length must not depend on the frame rate.
+  `setTrail(0)` turns it off. Returns the previous decay.
+
+  It runs *first*, so the trail is of the **pattern's own colours**: the
+  stage keeps its own memory of what it output (3 bytes per rendered
+  pixel, allocated when you turn it on and released when you turn it off)
+  rather than reading the finished frame back, and the palette, blur,
+  glow and gamma stages grade the trailed frame afresh each frame without
+  ever feeding back into it — gamma is never applied twice. A `renderBulk`
+  frame that persists is the post-chain output, as always, so a pattern
+  that both `fade()`s and trails decays by both. Under `setRenderSize`
+  the trail runs on the small frame. The first frame after it is turned on
+  (or after the rendered size changes) is the frame as drawn.
 - `setGamma(g)` — output gamma curve (a cached 256-entry table, so no
   per-pixel `pow`). LEDs are linear but eyes aren't; `setGamma(2.2)`
   makes fades and dim colors perceptually even. `setGamma(0)` or
@@ -924,7 +943,7 @@ grid cell into an index by arithmetic also needs `gridIndex`.
 
 **Lifecycle.** `beforeRender(delta)` runs first, exactly as always, then
 `renderBulk()` runs once. Afterwards the engine applies the same post
-chain (`setGamma`, `setBlur`, `setGlow`, `setOutputPalette`) and the same
+chain (`setTrail`, `setOutputPalette`, `setBlur`, `setGlow`, `setGamma`) and the same
 `setPixelState` hand-over as a per-pixel frame, and `setFrameRate` /
 `timeScale` behave identically.
 
