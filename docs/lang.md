@@ -955,7 +955,8 @@ chain (`setGamma`, `setBlur`, `setGlow`, `setOutputPalette`) and the same
 **Three spaces.** Each bulk builtin works in one of them:
 
 - **Index space** (`clear`, `fill`, `fade`, `setPixel`, `fillRange`,
-  `fillHSV`, `fillRGB`, `fillGradient` on its default axis) — addresses
+  `fillHSV`, `fillRGB`, `fillGradient` on its default axis, and the
+  anti-aliased `splatIndex`, `fillRangeAA`, `gradientRange`) — addresses
   frame slot `i`, and the frame is in **wire order**: slot `i` is the
   `i`-th pixel the output driver clocks out. Map-independent, and exactly
   right for a strip (or any pattern whose arrays are indexed by pixel) on
@@ -1068,6 +1069,37 @@ entry it replaces did.
   1, 2 and 3 run along the mapped x, y and z (coordinate space). Hue is
   lerped **unwrapped** and `hsv()` wraps it, so
   `fillGradient(t, 1, 1, t + 1, 1, 1)` is a full rainbow in one call.
+
+**Anti-aliased, blended.** Three more index-space ops take *fractional*
+pixel positions — pixel `i` covers `[i, i + 1)` — so a comet head, a
+scanner or a spark moves smoothly between LEDs instead of jumping, with no
+pattern-side buffer. Each blends with `mode`: 0 replace (the default), 1
+add (saturating per channel), 2 max. Naming them never gives a pattern a
+grid: they are strip ops, on any fixture.
+
+- `splatIndex(pos, radius, mode)` — a soft 1-D blob centred at `pos`:
+  the brush × `1 − |i − pos| / radius` on every pixel where that is
+  positive (computed as `|i − pos| × (1 / radius)` in 16.16). `radius`
+  is in pixels, at least 0.5.
+- `fillRangeAA(p0, p1, mode)` — the brush on `[p0, p1)`, each end pixel
+  scaled by how much of it the range covers. Whole-number ends cover
+  whole pixels, so `fillRangeAA(a, b)` is exactly `fillRange(a, b)`;
+  `p1 < p0` swaps the ends.
+- `gradientRange(p0, p1, h0, s0, v0, h1, s1, v1, mode)` — an HSV lerp
+  along `[p0, p1)`, sampled at each pixel's centre (`t = (i + 0.5 − p0) /
+  (p1 − p0)`, clamped 0..1; hue unwrapped as in `fillGradient`), with the
+  end pixels' value scaled by their coverage. `p1 < p0` runs it backwards:
+  the `(h0, s0, v0)` end always sits at `p0`.
+
+```js
+// a comet on any strip: last frame dimmer, a soft head, no arrays
+export function beforeRender(delta) { t = time(0.08) }
+export function renderBulk() {
+  fade(0.85)
+  hsv(0.6, 0.7, 1)
+  splatIndex(triangle(t) * (pixelCount - 1), 2.5, 1)   // mode 1: add
+}
+```
 
 #### Coordinate space
 

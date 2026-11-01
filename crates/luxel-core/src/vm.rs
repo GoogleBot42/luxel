@@ -525,6 +525,11 @@ pub enum Builtin {
     // Luxel extension builtins, batch 15: the pattern's own render
     // resolution (the engine renders a w×h grid and expands it).
     SetRenderSize,
+    // batch 16: anti-aliased, blended index-space bulk ops — strip comets,
+    // scanners and sparks at fractional positions with no buffer.
+    SplatIndex,
+    FillRangeAa,
+    GradientRange,
 }
 
 pub struct BuiltinDef {
@@ -684,6 +689,9 @@ pub static BUILTINS: &[BuiltinDef] = &[
     b!("gridIndex", GridIndex),
     // batch 15: render resolution. Id 194.
     b!("setRenderSize", SetRenderSize),
+    // batch 16: index-space AA ops. Ids 195..=197.
+    b!("splatIndex", SplatIndex), b!("fillRangeAA", FillRangeAa),
+    b!("gradientRange", GradientRange),
 ];
 
 // ---- builtin kind signatures (Gitea #607, docs/jit-design.md §2.3) ----
@@ -4910,6 +4918,9 @@ impl Vm {
             Fade => Ok(crate::bulk::fade(self, &args[..argc])),
             SetPixel => Ok(crate::bulk::set_pixel(self, &args[..argc])),
             FillRange => Ok(crate::bulk::fill_range(self, &args[..argc])),
+            SplatIndex => Ok(crate::bulk::index_aa(self, &args[..argc], crate::bulk::IndexOp::Splat)),
+            FillRangeAa => Ok(crate::bulk::index_aa(self, &args[..argc], crate::bulk::IndexOp::Range)),
+            GradientRange => Ok(crate::bulk::index_aa(self, &args[..argc], crate::bulk::IndexOp::Gradient)),
             FillHsv => crate::bulk::fill_hsv(self, prog, &args[..argc]).map_err(no_site),
             FillRgb => crate::bulk::fill_rgb(self, prog, &args[..argc]).map_err(no_site),
             FillGradient => Ok(crate::bulk::fill_gradient(self, &args[..argc])),

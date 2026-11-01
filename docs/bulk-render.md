@@ -90,7 +90,7 @@ is sticky.
 
 | space | ops | needs |
 |---|---|---|
-| index | `clear` `fill` `fade` `setPixel` `fillRange` `fillHSV` `fillRGB` `fillGradient`(axis 0) | nothing — works on a bare strip |
+| index | `clear` `fill` `fade` `setPixel` `fillRange` `fillHSV` `fillRGB` `fillGradient`(axis 0), and the anti-aliased, blended `splatIndex` `fillRangeAA` `gradientRange` | nothing — works on a bare strip (naming them never conjures a grid) |
 | coordinate | `fillRect` `fillCircle` `splat` `drawLine` `fillCanvas` `paintCanvas` `fillGradient`(axis 1–3) | any map, including sparse/irregular; a predicate over each pixel's mapped (x, y) exactly as `render2D` sees it |
 | grid | `blit`, `gridWidth`/`gridHeight` | a W×H grid that COVERS the frame (`grid.len() >= pixelCount`); cells past the end of the frame — the tail of the last row on an over-provisioned `ceil(√n)` map — clip. A silent no-op with no grid or one too small, and `gridWidth()` returns 0 in exactly those cases so a pattern can branch |
 

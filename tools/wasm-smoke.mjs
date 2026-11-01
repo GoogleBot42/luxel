@@ -444,6 +444,26 @@ const litPixels = (handle, n) => {
   e.lx_free(hr);
 }
 
+// The anti-aliased index-space ops through the FFI: a gradient with
+// fractional ends, an additive soft splat, a max-blended AA range on a 12 px
+// strip (crates/luxel-core/tests/bulk_index_ops.rs::smoke_golden).
+{
+  const s = putStr(
+    "export function renderBulk() { clear()\n gradientRange(0.5, 7.75, 0, 1, 1, 0.5, 1, 0.5)\n" +
+      " rgb(1, 0.5, 0)\n splatIndex(8.25, 2.5, 1)\n rgb(0, 0, 1)\n fillRangeAA(9.5, 12, 2) }",
+  );
+  const ha = e.lx_new(s.ptr, s.len, 12, 1);
+  s.free();
+  assert.ok(ha >= 0, response());
+  const at = e.lx_frame(ha, 0);
+  assert.deepStrictEqual([...mem().slice(at, at + 36)], [
+    127, 0, 0, 237, 98, 0, 219, 181, 0, 153, 202, 0, 63, 184, 0, 0, 167, 11,
+    25, 161, 72, 127, 161, 88, 229, 114, 0, 178, 89, 127, 76, 38, 255, 0, 0, 255,
+  ]);
+  assert.strictEqual(e.lx_take_error(ha), 0);
+  e.lx_free(ha);
+}
+
 e.lx_free(h);
 e.lx_free(h2);
 e.lx_free(h3);
