@@ -228,6 +228,19 @@ installs a projection, so a pattern that sizes a buffer with
 allocated. Hosts should set the projection immediately after building the
 engine, before the first frame.
 
+**A pattern's own render size outranks all of this.** A pattern that calls
+`setRenderSize(w, h, filter)` (docs/lang.md "Render resolution") has declared
+the space it renders in: the engine renders that w×h grid (a w-pixel strip
+when h = 1) and expands it onto the Layout by each Layout pixel's mapped
+(x, y), so no projection is in force (`effective_projection()` is `None`) and
+the host's choice for that dimensionality is simply not consulted while the
+size stands. The sampling reproduces the useful cells of the table for free:
+a w×1 size on a matrix is "along x", a 2D size on a mapless strip shows the
+middle row, a 2D size on a 3D Layout repeats along z. It also gives Gitea
+#628's positional `renderBulk` a pattern-side route whenever the pattern can
+name its own length: `setRenderSize(60, 1)` at the top level, and the
+`array(pixelCount)` after it is already 60 long.
+
 ## 4. API
 
 `luxel-core`:

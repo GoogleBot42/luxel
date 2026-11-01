@@ -41,7 +41,7 @@ use crate::engine::quantize;
 use crate::fixed::Fx;
 use crate::fmath;
 use crate::outpipe::GridMap;
-use crate::vm::{cell_index, hsv_to_rgb, ArrView, MapData, Program, Value, Vm};
+use crate::vm::{cell_index, hsv_to_rgb, sample_axis, ArrView, MapData, Program, Value, Vm};
 
 /// 0.5 — the mid-space fill for coordinate axes the map doesn't carry,
 /// spelled raw so no softfloat conversion survives into the image.
@@ -883,6 +883,77 @@ fn canvas_fill_slots(
     true
 }
 
+/// [`canvas_fill`] (`filter` < 1) or [`canvas_bilinear`] (`filter` ≥ 1)
+/// over a canvas whose cell `t` is `texel(t)` — `fillCanvas`,
+/// `paintCanvas` and the engine's `setRenderSize` expand share it.
+#[inline(never)]
+fn canvas_filtered(
+    vm: &Vm,
+    frame: &mut [[u8; 3]],
+    cw: usize,
+    ch: usize,
+    filter: Fx,
+    texel: &mut dyn FnMut(usize) -> [u8; 3],
+) -> Result<Value, String> {
+    if filter < Fx::ONE {
+        canvas_fill(vm, frame, cw, ch, texel);
+    } else {
+        canvas_bilinear(vm, frame, cw, ch, texel);
+    }
+    Ok(Value::default())
+}
+
+/// Paint every pixel from the four canvas cells around its mapped (x, y),
+/// blended — the `canvasGet` geometry (texel centres at (i + 0.5)/n, edges
+/// clamped, [`sample_axis`]) on 8-bit channels with a 16-bit fraction:
+/// `a + ((b - a)·t >> 16)` per lerp, x first, then y. Integer arithmetic
+/// only, so the bytes are the same on every host (wasm, x86, Xtensa).
+///
+/// The four corner texels are fetched only when the corner CELLS change:
+/// on an upscale neighbouring pixels share them, so an HSV or palette
+/// texel is resolved about once per cell per row, not four times a pixel.
+#[inline(never)]
+fn canvas_bilinear(
+    vm: &Vm,
+    frame: &mut [[u8; 3]],
+    cw: usize,
+    ch: usize,
+    texel: &mut dyn FnMut(usize) -> [u8; 3],
+) {
+    let lerp = |a: i32, b: i32, t: i32| a + (((b - a) * t) >> 16);
+    let mut key = usize::MAX;
+    let mut q = [[0u8; 3]; 4];
+    for (i, px) in frame.iter_mut().enumerate() {
+        let p = coord_of(vm, i);
+        let (c0, c1, tx) = sample_axis(p[0], cw);
+        let (r0, r1, ty) = sample_axis(p[1], ch);
+        // (r0, c0) plus whether each axis is at a clamped edge pins all four
+        let k = r0 * cw + c0;
+        let id = k << 2 | ((c1 != c0) as usize) << 1 | (r1 != r0) as usize;
+        if id != key {
+            key = id;
+            q = [texel(k), texel(r0 * cw + c1), texel(r1 * cw + c0), texel(r1 * cw + c1)];
+        }
+        for (ch_, out) in px.iter_mut().enumerate() {
+            let top = lerp(q[0][ch_] as i32, q[1][ch_] as i32, tx as i32);
+            let bot = lerp(q[2][ch_] as i32, q[3][ch_] as i32, tx as i32);
+            *out = lerp(top, bot, ty as i32) as u8;
+        }
+    }
+}
+
+/// `setRenderSize`'s expand (the engine's `ProjPlan::Resized`): the
+/// pattern's small `cw × ch` frame `src` onto the fixture's `frame`,
+/// through the map `vm` currently holds — the engine swaps the Layout's
+/// map back in for the call. Exactly `fillCanvas`'s geometry, nearest (with
+/// its block and tiled-run fast paths) or bilinear, so a pattern can
+/// predict which fixture pixel shows which cell.
+pub(crate) fn expand_frame(vm: &Vm, frame: &mut [[u8; 3]], src: &[[u8; 3]], cw: usize, ch: usize, filter: u8) {
+    if src.len() >= cw * ch {
+        let _ = canvas_filtered(vm, frame, cw, ch, Fx::from_int(filter as i32), &mut |t| src[t]);
+    }
+}
+
 /// Run lengths of equal values in `v`, both ways: `out[..n][j]` counts the
 /// equal values from `j` upward, `out[n..][j]` from `j` downward.
 fn axis_runs(v: &[u32], out: &mut [u32]) {
@@ -896,12 +967,13 @@ fn axis_runs(v: &[u32], out: &mut [u32]) {
     }
 }
 
-/// `fillCanvas(hArr, sArr, vArr, w, h)`: sample a w×h row-major canvas
-/// (three parallel arrays, each of which may be a scalar) at each pixel's
-/// mapped (x, y) with NEAREST sampling — the
+/// `fillCanvas(hArr, sArr, vArr, w, h, filter = 0)`: sample a w×h
+/// row-major canvas (three parallel arrays, each of which may be a scalar)
+/// at each pixel's mapped (x, y) with NEAREST sampling — the
 /// `canvas[floor(y·H)·W + floor(x·W)]` idiom of the 2D-canvas patterns,
 /// as one call. On a procedural grid that is an integer multiple of the
-/// canvas (1× included) it degenerates to a block expand.
+/// canvas (1× included) it degenerates to a block expand. `filter` 1 is
+/// [`canvas_bilinear`] instead — `canvasGet`'s smooth upscale.
 pub(crate) fn fill_canvas(vm: &mut Vm, prog: &Program, args: &[Value]) -> Result<Value, String> {
     let mut frame = core::mem::replace(&mut vm.frame, crate::arena::empty());
     let r = fill_canvas_into(vm, prog, args, &mut frame);
@@ -921,8 +993,7 @@ fn fill_canvas_into(
         return Ok(Value::default());
     }
     let (cw, ch) = (cw as usize, ch as usize);
-    canvas_fill(vm, frame, cw, ch, &mut |t| texel_at(&s, t, true));
-    Ok(Value::default())
+    canvas_filtered(vm, frame, cw, ch, num(args, 5), &mut |t| texel_at(&s, t, true))
 }
 
 /// `paintCanvas(vArr, w, h [, bArr])`: `fillCanvas`'s geometry with
@@ -968,10 +1039,9 @@ fn paint_canvas_into(
         return Ok(Value::default());
     }
     let pal = vm.palette();
-    canvas_fill(vm, frame, cw as usize, ch as usize, &mut |t| {
+    canvas_filtered(vm, frame, cw as usize, ch as usize, num(args, 4), &mut |t| {
         palette_texel(pal, v.at(t), b.at(t))
-    });
-    Ok(Value::default())
+    })
 }
 
 /// One output texel of `paintCanvas`, spelled exactly as the `Paint` arm

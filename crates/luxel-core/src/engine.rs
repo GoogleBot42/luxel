@@ -131,6 +131,15 @@ enum ProjPlan {
     /// has to render: it gets a w×1 grid so the grid-space bulk builtins
     /// describe the strip instead of a grid that is not there.
     FrameGrid(crate::outpipe::GridMap),
+    /// `setRenderSize(w, h, filter)`: the pattern renders a `w`×`h` grid of
+    /// its own choosing — `pixelCount` = w·h, a procedural w×h grid map
+    /// (none when `h` is 1: an n-pixel strip), the engine's `pixels` the
+    /// small frame — and the post chain's last step expands it onto the
+    /// Layout through each Layout pixel's mapped (x, y), nearest (0) or
+    /// bilinear (1) ([`crate::bulk::expand_frame`]). Overrides projection:
+    /// the pattern has declared the space it renders in, and sampling it
+    /// by Layout coordinate already shows it on any Layout.
+    Resized { w: u16, h: u16, filter: u8 },
 }
 
 /// What the pattern actually sees this frame once the projection is applied
@@ -270,6 +279,10 @@ pub struct Engine {
     /// when a strip plan is installed (fallibly — a refusal falls back to
     /// by-index), reused every frame: no per-frame and no per-pixel alloc.
     strip_scratch: crate::arena::FrameVec,
+    /// The Layout-sized frame while [`ProjPlan::Resized`] has `pixels`
+    /// holding the pattern's small one: what [`Engine::pixels`] returns
+    /// then. Empty under every other plan.
+    out: crate::arena::FrameVec,
     /// This pattern's `renderBulk` names a coordinate/grid-space bulk op,
     /// so it is a 2D pattern for projection purposes (proposal §5.4d: bulk
     /// patterns follow the 2D row). A `renderBulk` that only paints in
@@ -484,6 +497,7 @@ impl Engine {
             render_count: pixel_count,
             layout_map: None,
             strip_scratch: crate::arena::empty(),
+            out: crate::arena::empty(),
             frame_is_2d: false,
             // Compilation happens AFTER construction, because it needs the
             // init errors this constructor collects (§2.3's exemption is
@@ -995,9 +1009,19 @@ impl Engine {
 
     /// The Layout's map wherever it currently lives — `vm.map` normally, the
     /// engine's own slot while an along-axis projection has the VM running
-    /// on a bare virtual strip.
+    /// on a bare virtual strip, or [`ProjPlan::Resized`] on its small grid.
     fn layout_map(&self) -> Option<&MapData> {
-        self.layout_map.as_ref().or(self.vm.map.as_ref())
+        if self.layout_aside() {
+            self.layout_map.as_ref()
+        } else {
+            self.vm.map.as_ref()
+        }
+    }
+
+    /// The plan has the Layout's map set aside in `layout_map` (and the VM
+    /// on a map of the plan's own, or none).
+    fn layout_aside(&self) -> bool {
+        matches!(self.plan, ProjPlan::Strip { .. } | ProjPlan::Resized { .. })
     }
 
     /// The Layout's dimensionality: 1 = strip (no map), 2 = matrix or a 2D
@@ -1033,6 +1057,9 @@ impl Engine {
     /// The projection actually in force, or `None` when the pattern is
     /// native to the Layout (nothing is being projected).
     pub fn effective_projection(&self) -> Option<ProjectionMode> {
+        if matches!(self.plan, ProjPlan::Resized { .. }) {
+            return None;
+        }
         self.projection
             .effective(self.render_dims(), self.layout_dims())
     }
@@ -1097,8 +1124,13 @@ impl Engine {
         if self.plan == ProjPlan::Native {
             return;
         }
-        if let Some(m) = self.layout_map.take() {
-            self.vm.map = Some(m);
+        if self.layout_aside() {
+            self.vm.map = self.layout_map.take();
+        }
+        if matches!(self.plan, ProjPlan::Resized { .. }) {
+            // the Layout frame comes back as the frame, holding the last
+            // expanded picture
+            self.pixels = core::mem::replace(&mut self.out, crate::arena::empty());
         }
         self.vm.frame_grid = self.grid;
         self.set_vm_pixel_count(self.pixel_count);
@@ -1137,6 +1169,27 @@ impl Engine {
                 self.render_count = len;
             }
             ProjPlan::FrameGrid(g) => self.vm.frame_grid = Some(g),
+            ProjPlan::Resized { w, h, .. } => {
+                let n = w as usize * h as usize;
+                let mut small: crate::arena::FrameVec = crate::arena::empty();
+                if small.try_reserve_exact(n).is_err() {
+                    // Native it stays, like a refused strip: `pixelCount`
+                    // back to what renders (the builtin already said w·h).
+                    self.vm.globals[self.prog.pixel_count_g as usize] =
+                        Value::Num(Fx::from_int(self.vm.pixel_count as i32));
+                    return;
+                }
+                small.resize(n, [0; 3]);
+                self.out = core::mem::replace(&mut self.pixels, small);
+                self.layout_map = self.vm.map.take();
+                let g = crate::outpipe::GridMap::new(w, h, false);
+                if h > 1 {
+                    self.vm.map = Some(MapData::grid_map(g));
+                }
+                self.vm.frame_grid = Some(g);
+                self.set_vm_pixel_count(n as u32);
+                self.render_count = n as u32;
+            }
             ProjPlan::Native | ProjPlan::Select(_) => {}
         }
         self.plan = want;
@@ -1158,6 +1211,11 @@ impl Engine {
         let Some(render) = self.render else {
             return ProjPlan::Native;
         };
+        // The pattern's own render size outranks every projection.
+        let [w, h] = self.vm.render_size;
+        if w > 0 && h > 0 && self.pixel_count > 0 {
+            return ProjPlan::Resized { w, h, filter: self.vm.render_filter };
+        }
         let is_frame = matches!(render, RenderKind::Frame(_));
         let pdims = self.render_dims();
         let ldims = self.layout_dims();
@@ -1380,7 +1438,13 @@ impl Engine {
     /// the VM for the duration, and entry selection must not flip-flop with
     /// it (see [`Engine::layout_map`]).
     fn resolve_render_now(&self) -> Option<RenderKind> {
-        let dims = self.layout_map().map_or(0, |m| m.dims);
+        // Under `setRenderSize` the pattern's own grid is the Layout it
+        // renders on: a w×h matrix picks the 2D entry, a w×1 strip the 1D.
+        let dims = match self.vm.render_size {
+            [0, _] => self.layout_map().map_or(0, |m| m.dims),
+            [_, 1] => 0,
+            _ => 2,
+        };
         resolve_render(&self.render_tgt, &self.vm.globals, dims)
     }
 
@@ -1713,7 +1777,7 @@ impl Engine {
         if self.frame_begin(delta_ms) {
             self.drive(None, None);
         }
-        &self.pixels
+        self.pixels()
     }
 
     /// The first half of [`frame`] (Gitea #842): the clock and frame-rate
@@ -1906,9 +1970,7 @@ impl Engine {
                         match self.run_stage {
                             Some(RunStage::Pixel(i)) => self.blank_from(i),
                             // a whole-frame handler owns the whole frame
-                            Some(RunStage::Frame) => {
-                                self.pixels.iter_mut().for_each(|p| *p = [0; 3])
-                            }
+                            Some(RunStage::Frame) => self.blank_from(0),
                             _ => {}
                         }
                         self.run_stage = None;
@@ -2454,6 +2516,8 @@ impl Engine {
         for p in self.pixels.iter_mut().skip(from) {
             *p = [0; 3];
         }
+        // a resized frame never reaches its expand: blank what is shown
+        self.out.fill([0; 3]);
     }
 
     /// Lend the frame buffer to the VM for a `renderBulk` call. A MOVE,
@@ -2468,7 +2532,7 @@ impl Engine {
     /// path — normal return, pattern error, and debug pause.
     fn frame_buffer_in(&mut self) {
         self.pixels = core::mem::replace(&mut self.vm.frame, crate::arena::empty());
-        debug_assert_eq!(self.pixels.len(), self.pixel_count as usize);
+        debug_assert_eq!(self.pixels.len(), self.render_count as usize);
     }
 
     /// Does this pattern's code call a bulk builtin that reads a pixel's
@@ -2551,14 +2615,24 @@ impl Engine {
         }
     }
 
+    /// The finished frame, one RGB triple per Layout pixel — the expanded
+    /// one under `setRenderSize`.
     pub fn pixels(&self) -> &[[u8; 3]] {
-        &self.pixels
+        if matches!(self.plan, ProjPlan::Resized { .. }) {
+            &self.out
+        } else {
+            &self.pixels
+        }
     }
 
     /// The global post-process chain: whole-frame stages the engine runs
     /// once, after the last `render()` call of a frame, in a fixed order —
     ///
     ///   `setOutputPalette` → `setBlur` → `setGlow` → `setGamma`
+    ///
+    /// — on the frame the pattern rendered, which under `setRenderSize` is
+    /// the SMALL one: the chain costs w·h, blur radii are in the pattern's
+    /// own cells, and the expand onto the Layout runs last.
     ///
     /// Recolor first (it works on the pattern's own luma), then spread light
     /// spatially, then apply the output transfer curve last, the way a
@@ -2587,7 +2661,12 @@ impl Engine {
         // Map-aware when the installed map is a regular grid: rows then
         // columns, so a matrix softens in 2D instead of smearing along the
         // wiring. Otherwise (strip, irregular map, no map) index space.
-        let grid = self.grid.filter(|g| g.len() == self.pixels.len());
+        // A resized pattern's frame is its own small grid.
+        let grid = match self.plan {
+            ProjPlan::Resized { .. } => self.vm.frame_grid,
+            _ => self.grid,
+        };
+        let grid = grid.filter(|g| g.len() == self.pixels.len());
         // amount 0..1 → each neighbour's weight in 1/256ths, max 128
         let k = fx_to_256(self.vm.post_blur) / 2;
         if k > 0 {
@@ -2618,6 +2697,28 @@ impl Engine {
                 ];
             }
         }
+        if let ProjPlan::Resized { w, h, filter } = self.plan {
+            self.expand(w as usize, h as usize, filter);
+        }
+    }
+
+    /// [`ProjPlan::Resized`]'s last step: the finished small frame onto
+    /// the Layout frame. The sampler reads coordinates through the VM, so
+    /// the Layout's view (map, grid, pixel count, no transform — the
+    /// pattern's transform moves what IT renders, not the expand) is put
+    /// in for the call and the small grid's restored after.
+    #[inline(never)]
+    fn expand(&mut self, w: usize, h: usize, filter: u8) {
+        let vm = &mut self.vm;
+        let map = core::mem::replace(&mut vm.map, self.layout_map.take());
+        let grid = core::mem::replace(&mut vm.frame_grid, self.grid);
+        let n = core::mem::replace(&mut vm.pixel_count, self.pixel_count);
+        let xf = core::mem::replace(&mut vm.transform_active, false);
+        crate::bulk::expand_frame(vm, &mut self.out, &self.pixels, w, h, filter);
+        self.layout_map = core::mem::replace(&mut vm.map, map);
+        vm.frame_grid = grid;
+        vm.pixel_count = n;
+        vm.transform_active = xf;
     }
 
     /// Cook the luma → color table for the installed `setOutputPalette`

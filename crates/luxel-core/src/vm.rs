@@ -522,6 +522,9 @@ pub enum Builtin {
     // order, so a whole-frame pattern that draws by grid cell needs the
     // cell → slot inverse of `pixelCoord`.
     GridIndex,
+    // Luxel extension builtins, batch 15: the pattern's own render
+    // resolution (the engine renders a w×h grid and expands it).
+    SetRenderSize,
 }
 
 pub struct BuiltinDef {
@@ -679,6 +682,8 @@ pub static BUILTINS: &[BuiltinDef] = &[
     b!("textSlot", TextSlot),
     // batch 14 (Gitea #948)
     b!("gridIndex", GridIndex),
+    // batch 15: render resolution. Id 194.
+    b!("setRenderSize", SetRenderSize),
 ];
 
 // ---- builtin kind signatures (Gitea #607, docs/jit-design.md §2.3) ----
@@ -1482,6 +1487,16 @@ pub struct Vm {
     pub post_palette: Vec<(Fx, [Fx; 3])>,
     pub post_palette_amount: Fx,
     pub post_palette_epoch: u32,
+    /// `setRenderSize(w, h, filter)`: the grid the pattern asks to be
+    /// rendered on, `[0, 0]` = native. The ENGINE applies it (its
+    /// `ProjPlan::Resized`) at the next plan sync — after init, after every
+    /// `beforeRender` — and expands the small frame with `render_filter`
+    /// (0 nearest, 1 bilinear).
+    pub render_size: [u16; 2],
+    pub render_filter: u8,
+    /// `pixelCount` as it read before `setRenderSize` turned a size on, so
+    /// `setRenderSize(0, 0)` can put it back in the same call.
+    render_base: Fx,
     /// Injected external events `[type, x, y, value]`, drained FIFO by
     /// `readEvent`. The engine pushes (bounded — see `MAX_EVENTS`); a
     /// pattern switch rebuilds the VM, which clears the queue.
@@ -1566,6 +1581,11 @@ pub const MAX_EVENTS: usize = 32;
 /// finished frame; 8 is already a very wide blur and keeps the worst case
 /// bounded on an ESP32.
 pub const MAX_BLUR_PASSES: i32 = 8;
+
+/// `setRenderSize`'s cell ceiling: a 128×128 grid, the largest fixture
+/// Luxel drives. The small frame is allocated BESIDE the fixture's, so a
+/// "small" grid bigger than this is never what a pattern wants.
+pub const MAX_RENDER_CELLS: i64 = 16384;
 
 /// Longest period `setFrameRate` can ask for, 60 s in 16.16 ms. A pattern
 /// asking for 1/3600 fps would otherwise stop rendering for an hour and
@@ -1662,6 +1682,9 @@ impl MapData {
 
     /// A procedural grid over `g` — row-major, or a tiled chain whose frame
     /// is in driver order (Gitea #948). The axes are the grid's.
+    /// Out of line: the engine builds one on a map install and on a
+    /// `setRenderSize` plan, and two inlined copies are image for nothing.
+    #[inline(never)]
     pub fn grid_map(g: crate::outpipe::GridMap) -> MapData {
         let (w, h) = (g.w.max(1) as usize, g.h.max(1) as usize);
         let mut axes = Vec::with_capacity(w + h);
@@ -1773,6 +1796,9 @@ impl Vm {
             post_palette: Vec::new(),
             post_palette_amount: Fx::ONE,
             post_palette_epoch: 0,
+            render_size: [0; 2],
+            render_filter: 0,
+            render_base: Fx::ZERO,
             events: VecDeque::new(),
             pin_pullup: 0,
             pin_driven: 0,
@@ -4805,6 +4831,36 @@ impl Vm {
                 self.post_glow = n(0).clamp(Fx::ZERO, Fx::ONE);
                 num(old)
             }
+            // setRenderSize(w, h, filter = 0): render the pattern on a w×h
+            // grid and let the engine expand it to the fixture, nearest (0)
+            // or bilinear (1). Either side < 1 restores native. `pixelCount`
+            // follows at once, so `array(pixelCount)` right after the call
+            // sizes for the small grid; the map, the grid and the render
+            // pass follow at the engine's next plan sync (docs/lang.md
+            // "Render resolution"). Returns the new `pixelCount`.
+            SetRenderSize => {
+                let (w, h) = (n(0).to_int_trunc(), n(1).to_int_trunc());
+                let on = w >= 1 && h >= 1;
+                if on && w as i64 * h as i64 > MAX_RENDER_CELLS {
+                    return Err(no_site("setRenderSize: more than 16384 cells".into()));
+                }
+                let was_on = self.render_size[0] > 0;
+                let pc = prog.pixel_count_g as usize;
+                if on && !was_on {
+                    self.render_base = self.globals[pc].num();
+                }
+                if on {
+                    self.globals[pc] = Value::Num(Fx::from_int(w * h));
+                    self.render_size = [w as u16, h as u16];
+                } else {
+                    if was_on {
+                        self.globals[pc] = Value::Num(self.render_base);
+                    }
+                    self.render_size = [0; 2];
+                }
+                self.render_filter = (n(2) >= Fx::ONE) as u8;
+                Ok(self.globals[pc])
+            }
             // setOutputPalette(pal, amount = 1): recolor the finished frame
             // by luma through `pal` (setPalette's flat [pos,r,g,b,…] form),
             // blending `amount` of the way. Any non-array argument (e.g. 0)
@@ -5574,7 +5630,7 @@ pub(crate) fn cell_index(x: Fx, n: usize) -> usize {
 /// (i + 0.5)/n, so the sample position is x·n − ½. Returns the two
 /// edge-clamped texel indices and the 16-bit blend fraction between
 /// them (coordinates past the borders clamp to the border texel).
-fn sample_axis(x: Fx, n: usize) -> (usize, usize, i64) {
+pub(crate) fn sample_axis(x: Fx, n: usize) -> (usize, usize, i64) {
     let pos = x.raw() as i64 * n as i64 - (1i64 << 15); // 16.16
     let (i, t) = (pos >> 16, pos & 0xFFFF);
     let last = n as i64 - 1;
