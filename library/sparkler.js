@@ -1,5 +1,5 @@
 // name: Sparkler
-// tags: strip, holiday
+// tags: both, holiday
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // A hand sparkler burning along the strip: the white-hot point creeps forward,
 // throwing sparks both ways that fork once into smaller stars and wink out;
