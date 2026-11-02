@@ -366,36 +366,60 @@ pub fn draw_aligned(
     rgb: [u8; 3],
     align: Align,
 ) -> i32 {
-    let w = width(text, font);
+    draw_scaled(dst, grid, x, y, text, font, rgb, align, 1)
+}
+
+/// [`draw_aligned`] magnified by a whole number `z`: every ink bit becomes
+/// a `z`×`z` block, and the cell, the advance and the returned width all
+/// grow by `z`. `z` 0 reads as 1. A scene's design size uses this for its
+/// glyphs (Gitea #997, docs/spec/scenes.md §2 "Design size"); `z` 1 is
+/// [`draw_aligned`] pixel for pixel.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_scaled(
+    dst: &mut [[u8; 3]],
+    grid: &GridMap,
+    x: i32,
+    y: i32,
+    text: &str,
+    font: Font,
+    rgb: [u8; 3],
+    align: Align,
+    z: u16,
+) -> i32 {
+    let z = z.max(1) as i32;
+    let w = width(text, font) as i32 * z;
     let psf = font.psf();
     let (gw, gh) = (grid.w as i32, grid.h as i32);
-    let mut pen = align.origin(x, w);
+    let adv = font.advance() as i32 * z;
+    let mut pen = align.origin(x, w as u32);
     for ch in text.chars() {
         // whole glyph off the left/right edge: skip the row walk
-        if pen + psf.width as i32 > 0 && pen < gw {
+        if pen + psf.width as i32 * z > 0 && pen < gw {
             let g = psf.glyph(ch as u32);
             for row in 0..psf.height as i32 {
-                let py = y + row;
-                if py < 0 || py >= gh {
+                let py = y + row * z;
+                if py + z <= 0 || py >= gh {
                     continue;
                 }
                 for col in 0..psf.width as i32 {
-                    let px = pen + col;
-                    if px < 0 || px >= gw {
+                    let px = pen + col * z;
+                    if px + z <= 0 || px >= gw || !psf.ink(g, row as u32, col as u32) {
                         continue;
                     }
-                    if psf.ink(g, row as u32, col as u32) {
-                        let i = grid.index(py as usize, px as usize);
-                        if let Some(p) = dst.get_mut(i) {
-                            *p = rgb;
+                    for by in py.max(0)..(py + z).min(gh) {
+                        for bx in px.max(0)..(px + z).min(gw) {
+                            let i = grid.index(by as usize, bx as usize);
+                            if let Some(p) = dst.get_mut(i) {
+                                *p = rgb;
+                            }
                         }
                     }
                 }
             }
         }
-        pen += font.advance() as i32;
+        pen += adv;
     }
-    w as i32
+    w
 }
 
 // -------------------------------------------------------------- formatting
@@ -797,6 +821,45 @@ mod tests {
             out.push('\n');
         }
         out
+    }
+
+    #[test]
+    fn draw_scaled_makes_every_ink_bit_a_z_by_z_block() {
+        let (g1, g2) = (GridMap::new(14, 9, false), GridMap::new(28, 18, false));
+        for font in FONTS {
+            let mut one = vec![[0u8; 3]; 14 * 9];
+            let mut two = vec![[0u8; 3]; 28 * 18];
+            let w1 = draw_scaled(&mut one, &g1, 1, 0, "A7", font, [9, 9, 9], Align::Left, 1);
+            let w2 = draw_scaled(&mut two, &g2, 2, 0, "A7", font, [9, 9, 9], Align::Left, 2);
+            assert_eq!(w2, 2 * w1, "{}: the width doubles", font.as_str());
+            // z 1 is draw_aligned exactly
+            let mut plain = vec![[0u8; 3]; 14 * 9];
+            draw_aligned(&mut plain, &g1, 1, 0, "A7", font, [9, 9, 9], Align::Left);
+            assert_eq!(plain, one);
+            for y in 0..18 {
+                for x in 0..28 {
+                    assert_eq!(
+                        two[y * 28 + x],
+                        one[(y / 2) * 14 + x / 2],
+                        "{} ({x},{y})",
+                        font.as_str()
+                    );
+                }
+            }
+        }
+        // clipped at every edge without a panic, centre anchor included
+        let mut px = vec![[0u8; 3]; 16];
+        draw_scaled(
+            &mut px,
+            &GridMap::new(4, 4, false),
+            2,
+            -3,
+            "W",
+            Font::Large,
+            [1, 1, 1],
+            Align::Center,
+            4,
+        );
     }
 
     #[test]

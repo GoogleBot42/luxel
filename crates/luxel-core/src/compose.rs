@@ -39,8 +39,8 @@ use alloc::vec::Vec;
 use crate::fixed::Fx;
 use crate::outpipe::{luma, palette_remap_frame, GridMap};
 use crate::scene::{
-    Blend, Fit, Key, Keyframe, Layer, LayerBody, LayerKind, LayerStyle, Ramp, Scroll, TextLayer,
-    TextSource,
+    Blend, Fit, Key, Keyframe, Layer, LayerBody, LayerKind, LayerStyle, Ramp, Rect, Scroll,
+    TextLayer, TextSource,
 };
 use crate::text::{self, Font};
 
@@ -306,19 +306,47 @@ fn is_frame_copy(style: &LayerStyle, grid: &GridMap, src_len: usize, dst_len: us
 }
 
 /// The layer's box resolved against a grid: `(x0, y0, w, h)` in cells,
-/// before clipping. A zero `w`/`h` means the whole layout on that axis.
+/// before clipping. A zero `w`/`h` is the REST of the layout on that axis
+/// from the box's origin — `grid.w − x` for an `x` > 0 (Gitea #1026), the
+/// whole layout for an origin at or before 0 — so a box never overhangs
+/// the far edge, and a flip mirrors only what is on the grid.
 fn resolved_rect(style: &LayerStyle, grid: &GridMap) -> (i32, i32, i32, i32) {
-    let w = if style.rect.w == 0 {
-        grid.w as i32
-    } else {
-        style.rect.w as i32
+    let rest = |n: u16, at: i16, full: u16| {
+        if n != 0 {
+            n as i32
+        } else if at > 0 {
+            (full as i32 - at as i32).max(0)
+        } else {
+            full as i32
+        }
     };
-    let h = if style.rect.h == 0 {
-        grid.h as i32
-    } else {
-        style.rect.h as i32
-    };
-    (style.rect.x as i32, style.rect.y as i32, w, h)
+    let (x, y) = (style.rect.x, style.rect.y);
+    (
+        x as i32,
+        y as i32,
+        rest(style.rect.w, x, grid.w),
+        rest(style.rect.h, y, grid.h),
+    )
+}
+
+/// True when a SPRITE layer with this style draws at the sprite's natural
+/// size rather than into its box: a zero `w` (or `h`, off a one-row grid)
+/// on a `fill`/`contain` layer (docs/spec/scenes.md §4 "Placement"). Under
+/// `fit tile` a zero axis is the whole layout instead (Gitea #985).
+#[inline]
+fn natural(style: &LayerStyle, grid: &GridMap) -> bool {
+    style.fit != Fit::Tile && (style.rect.w == 0 || (style.rect.h == 0 && grid.h != 1))
+}
+
+/// A TEXT layer's alignment frame: `(w, h)` with a zero axis the whole
+/// layout's extent whatever the origin — the box [`resolved_rect`] gave
+/// before Gitea #1026. Alignment and the scroll wrap run in this frame, so
+/// a caption keeps its place when its `x` nudges it by a pixel (the glow
+/// copies of `neon-sign` sit at `x` ±1 around a crisp one); only the
+/// composite through the box uses the rest-of-layout rule.
+fn text_frame(style: &LayerStyle, grid: &GridMap) -> (i32, i32) {
+    let full = |n: u16, g: u16| if n == 0 { g as i32 } else { n as i32 };
+    (full(style.rect.w, grid.w), full(style.rect.h, grid.h))
 }
 
 /// `rot180` is `flipx` and `flipy` together, so the three flags collapse
@@ -514,10 +542,21 @@ pub use crate::sprite::{
 /// itself when it is placed naturally or contained, the box when it fills
 /// or tiles), so a mirrored sprite never moves.
 pub fn blit_sprite(dst: Canvas, sprite: &SpriteView, frame: u8, style: &LayerStyle) {
-    blit_sprite_with(dst, sprite, frame, style, &mut Clip::none());
+    blit_sprite_with(dst, sprite, frame, style, 1, &mut Clip::none());
 }
 
-fn blit_sprite_with(dst: Canvas, sprite: &SpriteView, frame: u8, style: &LayerStyle, clip: &mut Clip) {
+/// [`blit_sprite`] with a whole-number `zoom` (Gitea #997): a natural-size
+/// sprite draws `zoom`× its size and a tile cell is `zoom`× the sprite —
+/// every texel a `zoom`×`zoom` block. `fill`/`contain` already scale to the
+/// (mapped) box and ignore it. 1 is the plain blit.
+fn blit_sprite_with(
+    dst: Canvas,
+    sprite: &SpriteView,
+    frame: u8,
+    style: &LayerStyle,
+    zoom: u16,
+    clip: &mut Clip,
+) {
     let grid = *dst.grid;
     if skip(style, &grid) || sprite.is_empty() {
         return;
@@ -536,10 +575,10 @@ fn blit_sprite_with(dst: Canvas, sprite: &SpriteView, frame: u8, style: &LayerSt
     // * a one-row grid (a strip) — `h` 0 is the one row there is, so a box
     //   `x 0 w 0` is a segment for `fill` and `contain` as well.
     let tile = style.fit == Fit::Tile;
-    let natural = !tile && (style.rect.w == 0 || (style.rect.h == 0 && grid.h != 1));
+    let z = zoom.max(1) as i32;
     // The extent actually drawn, as an offset inside the box plus a size.
-    let (ox, oy, dw, dh) = if natural {
-        (0, 0, sw, sh)
+    let (ox, oy, dw, dh) = if natural(style, &grid) {
+        (0, 0, sw * z, sh * z)
     } else {
         match style.fit {
             Fit::Fill | Fit::Tile => (0, 0, bw, bh),
@@ -569,7 +608,7 @@ fn blit_sprite_with(dst: Canvas, sprite: &SpriteView, frame: u8, style: &LayerSt
     let px_of = |j: i32, i: i32| {
         let jj = if my { dh - 1 - j } else { j };
         let sy = if tile {
-            jj.rem_euclid(sh)
+            (jj / z).rem_euclid(sh)
         } else if dh == sh {
             jj
         } else {
@@ -577,7 +616,7 @@ fn blit_sprite_with(dst: Canvas, sprite: &SpriteView, frame: u8, style: &LayerSt
         };
         let ii = if mx { dw - 1 - i } else { i };
         let sx = if tile {
-            ii.rem_euclid(sw)
+            (ii / z).rem_euclid(sw)
         } else if dw == sw {
             ii
         } else {
@@ -619,7 +658,16 @@ pub fn draw_text_layer(
     style: &LayerStyle,
     scroll_px: i32,
 ) {
-    draw_text_with(dst, scratch, text, layer, style, scroll_px, &mut Clip::none());
+    draw_text_with(
+        dst,
+        scratch,
+        text,
+        layer,
+        style,
+        scroll_px,
+        1,
+        &mut Clip::none(),
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -630,6 +678,7 @@ fn draw_text_with(
     layer: &TextLayer,
     style: &LayerStyle,
     scroll_px: i32,
+    zoom: u16,
     clip: &mut Clip,
 ) {
     let grid = *dst.grid;
@@ -639,8 +688,9 @@ fn draw_text_with(
     if skip(style, &grid) || text.is_empty() || grid.h < 2 {
         return;
     }
-    let (bx, by, bw, _bh) = resolved_rect(style, &grid);
-    let tw = text::width(text, layer.font) as i32;
+    let (bx, by) = (style.rect.x as i32, style.rect.y as i32);
+    let (bw, _) = text_frame(style, &grid);
+    let tw = text::width(text, layer.font) as i32 * zoom.max(1) as i32;
     let anchor = bx + align_off(layer.align, bw, tw);
     let (ox, oy) = if layer.scroll.vertical() {
         (0, scroll_px)
@@ -650,7 +700,7 @@ fn draw_text_with(
     for p in scratch.iter_mut() {
         *p = [0, 0, 0];
     }
-    text::draw(
+    text::draw_scaled(
         scratch,
         &grid,
         anchor + ox,
@@ -658,6 +708,8 @@ fn draw_text_with(
         text,
         layer.font,
         layer.color,
+        text::Align::Left,
+        zoom,
     );
     // The glyphs are the layer; the space around them is not. Text is
     // therefore always black-keyed, like a sprite.
@@ -674,6 +726,170 @@ fn draw_text_with(
         &keyed,
         clip,
     );
+}
+
+// ---- the design size (Gitea #997) ----
+
+/// One axis of a design-size mapping: `v ↦ off + ⌊v·num/den⌋` — floor
+/// division, so it stays monotone for negative `v` — computed in `i64`.
+///
+/// The mapping runs once per [`Compositor::set_scene`] / `set_grid` for
+/// every box, and once per frame for each keyed layer's two keys; never
+/// per pixel.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Axis {
+    pub num: i32,
+    pub den: i32,
+    /// The centring offset of the design area on this axis, in cells.
+    pub off: i32,
+}
+
+impl Axis {
+    /// `v ↦ v`.
+    pub const ID: Axis = Axis {
+        num: 1,
+        den: 1,
+        off: 0,
+    };
+
+    /// `v` mapped onto the grid (callers clamp to their field's range).
+    // Out of line, like everything on this path: one copy of the 64-bit
+    // floor division rather than one per call site (the classic boards'
+    // OTA margin is a few KB).
+    #[inline(never)]
+    pub fn map(self, v: i32) -> i64 {
+        self.off as i64 + (v as i64 * self.num as i64).div_euclid(self.den.max(1) as i64)
+    }
+
+    /// One box axis `v .. v + n` mapped. EDGES are mapped, not sizes, so
+    /// two adjacent design boxes stay adjacent at any scale; a placed axis
+    /// never resolves to 0 (that would flip it to "the whole layout"). A
+    /// zero axis stays zero: its origin is mapped without the centring
+    /// offset when it means the whole layout (`whole`), with it when it
+    /// means a sprite's natural size.
+    #[inline(never)]
+    fn span(self, v: i16, n: u16, whole: bool) -> (i16, u16) {
+        let clamp16 = |v: i64| v.clamp(i16::MIN as i64, i16::MAX as i64) as i16;
+        if n == 0 {
+            let a = if whole { Axis { off: 0, ..self } } else { self };
+            return (clamp16(a.map(v as i32)), 0);
+        }
+        let lo = self.map(v as i32);
+        let hi = self.map(v as i32 + n as i32);
+        (clamp16(lo), (hi - lo).clamp(1, u16::MAX as i64) as u16)
+    }
+}
+
+/// A scene's design size (`U <w> <h>`) resolved against the real grid —
+/// docs/spec/scenes.md §2 "Design size":
+///
+/// * **panel** — the whole-number zoom `z = min(gw/rw, gh/rh)`, the design
+///   area centred; below the design size (`z` = 0) the rational
+///   `min(gw/rw, gh/rh)` instead, so positions shrink while pixel art and
+///   glyphs stay 1:1;
+/// * **strip** (`rh` or `gh` 1) — `x` proportional (`gw/rw`, no offset),
+///   `y` untouched.
+///
+/// `zoom` (≥ 1) magnifies natural-size sprites, tile cells, glyphs and the
+/// scroll speed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Place {
+    pub x: Axis,
+    pub y: Axis,
+    pub zoom: u16,
+}
+
+impl Place {
+    /// No design size: every layer draws its `L` line's numbers 1:1.
+    pub const IDENTITY: Place = Place {
+        x: Axis::ID,
+        y: Axis::ID,
+        zoom: 1,
+    };
+
+    /// The mapping for a scene designed at `space` on `grid`.
+    pub fn new(space: Option<(u16, u16)>, grid: &GridMap) -> Place {
+        let Some((rw, rh)) = space else {
+            return Place::IDENTITY;
+        };
+        let (gw, gh, rw, rh) = (
+            grid.w as i64,
+            grid.h as i64,
+            rw.max(1) as i64,
+            rh.max(1) as i64,
+        );
+        if gw == 0 || gh == 0 {
+            return Place::IDENTITY;
+        }
+        let zoom = |num: i64, den: i64| (num / den).clamp(1, u16::MAX as i64) as u16;
+        if rh == 1 || gh == 1 {
+            return Place {
+                x: Axis {
+                    num: gw as i32,
+                    den: rw as i32,
+                    off: 0,
+                },
+                y: Axis::ID,
+                zoom: zoom(gw, rw),
+            };
+        }
+        let z0 = (gw / rw).min(gh / rh);
+        let (num, den) = if z0 >= 1 {
+            (z0, 1)
+        } else if gw * rh <= gh * rw {
+            (gw, rw)
+        } else {
+            (gh, rh)
+        };
+        let axis = |g: i64, r: i64| Axis {
+            num: num as i32,
+            den: den as i32,
+            off: ((g - r * num / den) / 2) as i32,
+        };
+        Place {
+            x: axis(gw, rw),
+            y: axis(gh, rh),
+            zoom: zoom(num, den),
+        }
+    }
+
+    /// Does a zero axis on this layer mean the whole layout (`true`), or —
+    /// on a natural-size sprite — the sprite's own size?
+    fn whole(kind: LayerKind, base: &LayerStyle, grid: &GridMap) -> bool {
+        !(kind == LayerKind::Sprite && natural(base, grid))
+    }
+
+    /// A layer's `L` style with its box mapped onto the grid. The early
+    /// return is the backwards-compatibility guarantee: a scene without a
+    /// `U` line draws exactly its `L` numbers.
+    #[inline(never)]
+    fn style(&self, kind: LayerKind, base: &LayerStyle, grid: &GridMap) -> LayerStyle {
+        if *self == Place::IDENTITY {
+            return *base;
+        }
+        let whole = Place::whole(kind, base, grid);
+        let (x, w) = self.x.span(base.rect.x, base.rect.w, whole);
+        let (y, h) = self.y.span(base.rect.y, base.rect.h, whole);
+        LayerStyle {
+            rect: Rect { x, y, w, h },
+            ..*base
+        }
+    }
+
+    /// The two axes a layer's keyframe ORIGINS map through — exactly the
+    /// `L` origin's (a whole-layout zero axis drops the centring offset).
+    #[inline(never)]
+    fn origin_axes(&self, kind: LayerKind, base: &LayerStyle, grid: &GridMap) -> (Axis, Axis) {
+        let whole = Place::whole(kind, base, grid);
+        let pick = |a: Axis, n: u16| {
+            if n == 0 && whole {
+                Axis { off: 0, ..a }
+            } else {
+                a
+            }
+        };
+        (pick(self.x, base.rect.w), pick(self.y, base.rect.h))
+    }
 }
 
 // ---- the host-facing compositor ----
@@ -696,6 +912,8 @@ struct LayerRt {
     key_frame: Option<u8>,
     /// `X clip`: confined to the coverage of the layer below.
     clip: bool,
+    /// `X abs`: never mapped by the scene's design size (Gitea #997).
+    abs: bool,
     text: TextLayer,
     /// Host-resolved string for this frame (clock/slot are the host's job;
     /// a `lit` source seeds it at [`Compositor::set_scene`]).
@@ -759,6 +977,11 @@ fn layer_ident(scene_id: &str, l: &Layer) -> u64 {
 /// text / sprite / colour layers.
 pub struct Compositor {
     grid: GridMap,
+    /// The scene's design size (its `U` line), kept so [`Compositor::set_grid`]
+    /// can re-map the layers without the record.
+    space: Option<(u16, u16)>,
+    /// `space` resolved against `grid` — [`Place::IDENTITY`] without one.
+    place: Place,
     layers: Vec<LayerRt>,
     scratch: crate::arena::FrameVec,
     epoch: u32,
@@ -784,6 +1007,8 @@ impl Compositor {
     pub fn new(grid: GridMap) -> Self {
         Compositor {
             grid,
+            space: None,
+            place: Place::IDENTITY,
             layers: Vec::new(),
             scratch: crate::arena::empty(),
             epoch: 0,
@@ -793,14 +1018,69 @@ impl Compositor {
     }
 
     /// Point the compositor at a different layout (a console whose device
-    /// geometry changed). Clears the scratch, which is grid-sized.
+    /// geometry changed). Clears the scratch, which is grid-sized, and
+    /// re-maps a scene with a design size onto the new grid.
     pub fn set_grid(&mut self, grid: GridMap) {
         if self.grid != grid {
             self.grid = grid;
             self.scratch = crate::arena::empty();
             self.cover = crate::arena::empty();
             self.cover_of = COVER_NONE;
+            self.replace();
         }
+    }
+
+    /// Resolve the design size against the grid and re-place every layer
+    /// (its `L` box now, its keyframe track on the next `advance`) — the
+    /// once-per-`set_scene`/`set_grid` step of Gitea #997. A scene without
+    /// a `U` line resolves to [`Place::IDENTITY`] and every layer's style
+    /// is its `L` line's, exactly as before.
+    #[inline(never)]
+    fn replace(&mut self) {
+        self.place = Place::new(self.space, &self.grid);
+        let grid = self.grid;
+        for l in self.layers.iter_mut() {
+            l.style = l.placement(&self.place).style(l.kind, &l.base, &grid);
+        }
+        // the tracks are evaluated in grid pixels: put every keyed layer
+        // where its clock says on the new grid
+        self.advance(0);
+    }
+
+    /// The scene's design size and its mapping onto the current grid.
+    pub fn place(&self) -> Place {
+        self.place
+    }
+
+    /// Where layer `layer` draws this frame, in grid cells, as
+    /// `(x, y, w, h)` — after the design size and after the keyframe track.
+    /// A zero `w`/`h` box is the whole layout on that axis, as the kernels
+    /// resolve it; a NATURAL-size sprite is its record's size times the
+    /// layer's zoom when `sprite` is given, and `w`/`h` 0 when it is not
+    /// (the compositor holds no records). This is the console's selection
+    /// box (`lx_comp_layer_rect`, Gitea #996 item 1 / #997).
+    pub fn layer_rect(
+        &self,
+        layer: usize,
+        sprite: Option<&SpriteView>,
+    ) -> Option<(i32, i32, i32, i32)> {
+        let l = self.layers.get(layer)?;
+        let (x, y, w, h) = resolved_rect(&l.style, &self.grid);
+        if l.kind == LayerKind::Sprite && natural(&l.style, &self.grid) {
+            let z = self.layer_zoom(layer) as i32;
+            let (sw, sh) = sprite.map_or((0, 0), |s| (s.w as i32 * z, s.h as i32 * z));
+            return Some((x, y, sw, sh));
+        }
+        Some((x, y, w, h))
+    }
+
+    /// The whole-number zoom layer `layer` draws its glyphs, natural-size
+    /// sprites and tile cells at: the design size's [`Place::zoom`], or 1
+    /// for an `X abs` layer, a scene without a `U` line or no such layer.
+    pub fn layer_zoom(&self, layer: usize) -> u16 {
+        self.layers
+            .get(layer)
+            .map_or(1, |l| l.placement(&self.place).zoom)
     }
 
     pub fn grid(&self) -> GridMap {
@@ -819,6 +1099,7 @@ impl Compositor {
     /// the speed or the direction still takes effect immediately.
     pub fn set_scene(&mut self, scene: &crate::scene::Scene) {
         self.epoch = self.epoch.wrapping_add(1);
+        self.space = scene.space;
         let had = self.layers.len();
         for (i, l) in scene.layers.iter().enumerate() {
             let mut rt = LayerRt::from(l);
@@ -835,9 +1116,10 @@ impl Compositor {
             }
         }
         self.layers.truncate(scene.layers.len());
-        // A host draws the first frame of a freshly set scene before any
-        // `advance`: the tracks have to be where their clocks say already.
-        self.advance(0);
+        // Map the boxes onto the grid, then — because a host draws the first
+        // frame of a freshly set scene before any `advance` — put the tracks
+        // where their clocks say already.
+        self.replace();
     }
 
     pub fn layer_count(&self) -> usize {
@@ -882,9 +1164,12 @@ impl Compositor {
 
     /// Advance the scroll, sprite-frame and keyframe clocks, and move every
     /// keyed layer to where its track puts it now.
+    #[inline(never)]
     pub fn advance(&mut self, dt_ms: u32) {
         self.cover_of = COVER_NONE;
+        let grid = self.grid;
         for l in self.layers.iter_mut() {
+            let p = l.placement(&self.place);
             if let Some(last) = l.keys.last() {
                 let period = last.ms;
                 l.key_ms = if period == 0 {
@@ -893,14 +1178,19 @@ impl Compositor {
                     // kept below the period so the clock never saturates
                     ((l.key_ms as u64 + dt_ms as u64) % period as u64) as u32
                 };
-                let at = eval_keys(&l.keys, &l.base, l.key_ms);
+                // keys are design units in a `U` scene: each is mapped
+                // like the `L` origin BEFORE the lerp, so the motion is
+                // interpolated in grid pixels (Gitea #997)
+                let (ax, ay) = p.origin_axes(l.kind, &l.base, &grid);
+                let at = eval_keys_in(&l.keys, &l.base, l.key_ms, ax, ay);
                 l.style.rect.x = at.x;
                 l.style.rect.y = at.y;
                 l.style.opacity = at.opacity;
                 l.key_frame = at.frame;
             }
             if l.kind == LayerKind::Text && l.text.scroll != Scroll::None && l.text.speed > 0 {
-                l.scroll_mpx += l.text.speed as i64 * dt_ms as i64;
+                // the speed is design px/s: ×zoom on a magnified layer
+                l.scroll_mpx += l.text.speed as i64 * p.zoom as i64 * dt_ms as i64;
             }
             if l.kind == LayerKind::Sprite {
                 l.sprite_ms = l.sprite_ms.saturating_add(dt_ms);
@@ -1038,6 +1328,7 @@ impl Compositor {
         let Some(l) = layers.get(layer) else {
             return;
         };
+        let zoom = l.placement(&self.place).zoom;
         let canvas = Canvas { px: dst, grid: &grid };
         match l.kind {
             LayerKind::Color => fill_color_with(canvas, l.color, &l.style, &mut clip),
@@ -1054,15 +1345,15 @@ impl Compositor {
                     Some(f) => f,
                     None => sp.frame_at_fps(l.sprite_ms, fps),
                 };
-                blit_sprite_with(canvas, sp, frame, &l.style, &mut clip);
+                blit_sprite_with(canvas, sp, frame, &l.style, zoom, &mut clip);
             }
             LayerKind::Text => {
                 // nothing to draw on a strip, so no scratch to take for it
                 if grid.h < 2 {
                     return;
                 }
-                let (_, _, bw, bh) = resolved_rect(&l.style, &grid);
-                let scroll = scroll_offset(&l.text, &l.resolved, bw, bh, l.scroll_mpx);
+                let (bw, bh) = text_frame(&l.style, &grid);
+                let scroll = scroll_offset(&l.text, &l.resolved, bw, bh, l.scroll_mpx, zoom);
                 // A grid-sized scratch — 12,288 B on a 64x64 panel — taken
                 // INSIDE the host's render loop. Infallibly, that is an
                 // allocator panic, i.e. a device reboot, and it is what took
@@ -1070,7 +1361,16 @@ impl Compositor {
                 if !scratch_for(scratch, grid.len()) {
                     return;
                 }
-                draw_text_with(canvas, scratch, &l.resolved, &l.text, &l.style, scroll, &mut clip);
+                draw_text_with(
+                    canvas,
+                    scratch,
+                    &l.resolved,
+                    &l.text,
+                    &l.style,
+                    scroll,
+                    zoom,
+                    &mut clip,
+                );
             }
             LayerKind::Pattern => {}
         }
@@ -1112,18 +1412,26 @@ pub struct KeyState {
 ///
 /// An empty track is `base` itself.
 pub fn eval_keys(keys: &[Keyframe], base: &LayerStyle, t_ms: u32) -> KeyState {
+    eval_keys_in(keys, base, t_ms, Axis::ID, Axis::ID)
+}
+
+/// [`eval_keys`] with every key position (and `base`'s, for `=`) first
+/// mapped through `ax`/`ay` — a design-size scene's track, interpolated in
+/// grid pixels (Gitea #997). [`Axis::ID`] on both is [`eval_keys`].
+fn eval_keys_in(keys: &[Keyframe], base: &LayerStyle, t_ms: u32, ax: Axis, ay: Axis) -> KeyState {
     let at = |k: &Keyframe| {
         (
-            k.x.unwrap_or(base.rect.x) as i32,
-            k.y.unwrap_or(base.rect.y) as i32,
+            ax.map(k.x.unwrap_or(base.rect.x) as i32) as i32,
+            ay.map(k.y.unwrap_or(base.rect.y) as i32) as i32,
             k.opacity.unwrap_or(base.opacity) as i32,
         )
     };
     let Some(last) = keys.last() else {
+        let (x, y, o) = at(&Keyframe::default());
         return KeyState {
-            x: base.rect.x,
-            y: base.rect.y,
-            opacity: base.opacity,
+            x: x.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+            y: y.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+            opacity: o as u8,
             frame: None,
         };
     };
@@ -1371,14 +1679,15 @@ fn align_off(align: crate::scene::Align, bw: i32, tw: i32) -> i32 {
 /// The caller adds this to the alignment anchor, so each running arm
 /// subtracts [`align_off`] back off: a `left` scroll is one sweep from the
 /// right edge to off the left edge, identical for all three alignments.
-fn scroll_offset(t: &TextLayer, text: &str, bw: i32, bh: i32, phase_mpx: i64) -> i32 {
+fn scroll_offset(t: &TextLayer, text: &str, bw: i32, bh: i32, phase_mpx: i64, zoom: u16) -> i32 {
     if t.scroll == Scroll::None || t.speed == 0 {
         return 0;
     }
+    let z = zoom.max(1) as i32;
     let px = (phase_mpx / 1000) as i32;
-    let tw = text::width(text, t.font) as i32;
+    let tw = text::width(text, t.font) as i32 * z;
     let a = align_off(t.align, bw, tw);
-    let lh = line_h(t.font);
+    let lh = line_h(t.font) * z;
     match t.scroll {
         Scroll::None => 0,
         // wrap over the text plus the box so the string leaves the box
@@ -1415,6 +1724,19 @@ fn line_h(f: Font) -> i32 {
     }
 }
 
+impl LayerRt {
+    /// The mapping this layer draws through: the scene's, or the identity
+    /// for an `X abs` layer.
+    #[inline]
+    fn placement(&self, scene: &Place) -> Place {
+        if self.abs {
+            Place::IDENTITY
+        } else {
+            *scene
+        }
+    }
+}
+
 impl From<&Layer> for LayerRt {
     fn from(l: &Layer) -> LayerRt {
         let mut rt = LayerRt {
@@ -1425,6 +1747,7 @@ impl From<&Layer> for LayerRt {
             key_ms: 0,
             key_frame: None,
             clip: l.clip,
+            abs: l.abs,
             text: TextLayer::default(),
             resolved: String::new(),
             color: [0, 0, 0],
@@ -1948,6 +2271,62 @@ mod tests {
     }
 
     #[test]
+    fn a_zero_w_past_the_origin_is_the_rest_of_the_layout() {
+        // Gitea #1026: `75 0 0 0` flipped on a 150 px strip mirrors 75..149
+        // (it used to be the box 75..224, so pixel 75 sampled 224: black)
+        let g = grid(150, 1, false);
+        let src: Vec<[u8; 3]> = (0..150).map(|i| [i as u8, 1, 0]).collect();
+        let mut px = vec![[0u8; 3]; 150];
+        let style = LayerStyle {
+            rect: Rect {
+                x: 75,
+                y: 0,
+                w: 0,
+                h: 0,
+            },
+            flipx: true,
+            ..LayerStyle::default()
+        };
+        composite_frame(
+            Canvas {
+                px: &mut px,
+                grid: &g,
+            },
+            &src,
+            &style,
+        );
+        for (i, p) in px.iter().enumerate() {
+            let want = if i < 75 {
+                [0, 0, 0]
+            } else {
+                [(224 - i) as u8, 1, 0]
+            };
+            assert_eq!(*p, want, "pixel {i}");
+        }
+        // the same rule on a panel, both axes; an origin at 0 or before it
+        // is still the whole layout, and one past the edge draws nothing
+        let g = grid(8, 6, false);
+        let rect = |x, y| LayerStyle {
+            rect: Rect { x, y, w: 0, h: 0 },
+            ..LayerStyle::default()
+        };
+        assert_eq!(resolved_rect(&rect(3, 2), &g), (3, 2, 5, 4));
+        assert_eq!(resolved_rect(&rect(0, 0), &g), (0, 0, 8, 6));
+        assert_eq!(resolved_rect(&rect(-2, -1), &g), (-2, -1, 8, 6));
+        assert_eq!(resolved_rect(&rect(9, 7), &g), (9, 7, 0, 0));
+        let px = wash(
+            g,
+            Rect {
+                x: 9,
+                y: 0,
+                w: 0,
+                h: 0,
+            },
+        );
+        assert!(px.iter().all(|p| *p == [0, 0, 0]));
+    }
+
+    #[test]
     fn flips_mirror_the_drawn_extent_not_its_position() {
         let flipped = LayerStyle {
             flipx: true,
@@ -2144,12 +2523,12 @@ mod tests {
         // "HI" is 12 px in the default face, so the wrap is 12 + the box
         assert_eq!(text::width("HI", t.font), 12);
         // phase 0 is the string just off the RIGHT edge of an 8 px box
-        assert_eq!(scroll_offset(&t, "HI", 8, 8, 0), 8);
-        assert_eq!(scroll_offset(&t, "HI", 8, 8, 3_000), 5);
-        assert_eq!(scroll_offset(&t, "HI", 8, 8, 19_000), -11);
-        assert_eq!(scroll_offset(&t, "HI", 8, 8, 20_000), 8); // wrapped
+        assert_eq!(scroll_offset(&t, "HI", 8, 8, 0, 1), 8);
+        assert_eq!(scroll_offset(&t, "HI", 8, 8, 3_000, 1), 5);
+        assert_eq!(scroll_offset(&t, "HI", 8, 8, 19_000, 1), -11);
+        assert_eq!(scroll_offset(&t, "HI", 8, 8, 20_000, 1), 8); // wrapped
         let still = TextLayer::default();
-        assert_eq!(scroll_offset(&still, "HI", 8, 8, 9_999), 0);
+        assert_eq!(scroll_offset(&still, "HI", 8, 8, 9_999, 1), 0);
     }
 
     /// Gitea #733 (1): a string that FITS its box used to make `bounce`
@@ -2163,7 +2542,7 @@ mod tests {
                 align,
                 ..TextLayer::default()
             };
-            scroll_offset(&t, "HI", bw, 8, phase_mpx)
+            scroll_offset(&t, "HI", bw, 8, phase_mpx, 1)
         };
         // "HI" is 12 px. In a 20 px box it has 8 px of slack and sweeps it.
         let fits: Vec<i32> = (0..=16).map(|p| bounce(Align::Left, 20, p * 1000)).collect();
@@ -2207,7 +2586,7 @@ mod tests {
                 };
                 // the offset is added to the ALIGNMENT ANCHOR, so that is
                 // what "off the box" has to be measured from
-                let x = align_off(align, bw, 12) + scroll_offset(&t, "HI", bw, bh, 0);
+                let x = align_off(align, bw, 12) + scroll_offset(&t, "HI", bw, bh, 0, 1);
                 assert_eq!(x, entering, "{dir:?} at {align:?}");
                 // fully outside: either right of the last column, or left
                 // of the first by the whole string
@@ -2221,7 +2600,7 @@ mod tests {
                 ..TextLayer::default()
             };
             let path: Vec<i32> = (0..28)
-                .map(|p| align_off(align, bw, 12) + scroll_offset(&t, "HI", bw, bh, p * 1000))
+                .map(|p| align_off(align, bw, 12) + scroll_offset(&t, "HI", bw, bh, p * 1000, 1))
                 .collect();
             assert_eq!(path[0], bw);
             assert_eq!(*path.last().unwrap(), bw - 27);
@@ -2232,14 +2611,18 @@ mod tests {
             speed: 10,
             ..TextLayer::default()
         };
-        assert_eq!(scroll_offset(&up, "HI", bw, bh, 0), bh, "up starts below");
+        assert_eq!(
+            scroll_offset(&up, "HI", bw, bh, 0, 1),
+            bh,
+            "up starts below"
+        );
         let down = TextLayer {
             scroll: Scroll::Down,
             speed: 10,
             ..TextLayer::default()
         };
         assert_eq!(
-            scroll_offset(&down, "HI", bw, bh, 0),
+            scroll_offset(&down, "HI", bw, bh, 0, 1),
             -line_h(Font::Regular),
             "down starts above"
         );
@@ -2946,5 +3329,397 @@ mod tests {
         let mut px = vec![[0u8; 3]; 4096];
         comp.native_layer(&mut px, 0, None);
         assert_eq!(comp.cover.capacity(), 0);
+    }
+
+    // ---- the design size (`U <w> <h>`, Gitea #997) ----
+
+    /// A compositor over a `w`x`h` row-major grid holding `wire`.
+    fn placed(wire: &str, w: u16, h: u16) -> Compositor {
+        let scene = crate::scene::parse(wire).expect("parses");
+        let mut comp = Compositor::new(grid(w, h, false));
+        comp.set_scene(&scene);
+        comp
+    }
+
+    fn rect_of(comp: &Compositor, layer: usize) -> (i32, i32, i32, i32) {
+        comp.layer_rect(layer, None).expect("layer exists")
+    }
+
+    #[test]
+    fn the_design_size_resolves_to_a_whole_number_zoom_centred() {
+        let p = |w, h| Place::new(Some((32, 32)), &grid(w, h, false));
+        let ax = |num, den, off| Axis { num, den, off };
+        assert_eq!(Place::new(None, &grid(64, 64, false)), Place::IDENTITY);
+        assert_eq!(
+            Place::new(Some((32, 32)), &grid(0, 0, false)),
+            Place::IDENTITY
+        );
+        assert_eq!(
+            p(32, 32),
+            Place::IDENTITY,
+            "at its own size a U scene is 1:1"
+        );
+        assert_eq!(
+            p(64, 64),
+            Place {
+                x: ax(2, 1, 0),
+                y: ax(2, 1, 0),
+                zoom: 2
+            }
+        );
+        assert_eq!(
+            p(128, 128),
+            Place {
+                x: ax(4, 1, 0),
+                y: ax(4, 1, 0),
+                zoom: 4
+            }
+        );
+        // a non-integer ratio rounds the zoom DOWN and centres the slack
+        assert_eq!(
+            p(100, 100),
+            Place {
+                x: ax(3, 1, 2),
+                y: ax(3, 1, 2),
+                zoom: 3
+            }
+        );
+        // a wide panel: the smaller axis decides, the design area is centred
+        assert_eq!(
+            p(64, 32),
+            Place {
+                x: ax(1, 1, 16),
+                y: ax(1, 1, 0),
+                zoom: 1
+            }
+        );
+        // below the design size: the rational min(gw/rw, gh/rh), zoom 1
+        assert_eq!(
+            p(16, 16),
+            Place {
+                x: ax(16, 32, 0),
+                y: ax(16, 32, 0),
+                zoom: 1
+            }
+        );
+        assert_eq!(
+            p(16, 24),
+            Place {
+                x: ax(16, 32, 0),
+                y: ax(16, 32, 4),
+                zoom: 1
+            }
+        );
+        // a strip: proportional along it, no offset, the row untouched
+        assert_eq!(
+            p(150, 1),
+            Place {
+                x: ax(150, 32, 0),
+                y: Axis::ID,
+                zoom: 4
+            }
+        );
+        // ...and a `U <n> 1` strip design on a panel maps the same way
+        let strip_on_panel = Place::new(Some((150, 1)), &grid(64, 64, false));
+        assert_eq!(
+            strip_on_panel,
+            Place {
+                x: ax(64, 150, 0),
+                y: Axis::ID,
+                zoom: 1
+            }
+        );
+    }
+
+    #[test]
+    fn a_scene_without_u_draws_its_l_numbers() {
+        let wire = "S 0000000a n\nL color 8 0 16 28 normal 100 none fill 1\nL color 0 30 0 0 normal 100 none fill 1\n";
+        for (w, h) in [(32, 32), (64, 64), (128, 128), (150, 1)] {
+            let comp = placed(wire, w, h);
+            assert_eq!(comp.place(), Place::IDENTITY);
+            assert_eq!(rect_of(&comp, 0), (8, 0, 16, 28), "{w}x{h}");
+            // a zero h from y 30 is the rest of the layout (Gitea #1026)
+            let rest = (h as i32 - 30).max(0);
+            assert_eq!(rect_of(&comp, 1), (0, 30, w as i32, rest), "{w}x{h}");
+            assert_eq!(comp.layer_zoom(0), 1);
+        }
+    }
+
+    /// docs/design/scenes-designed-size.md example B: campfire.
+    #[test]
+    fn campfire_maps_boxes_natural_sprites_and_zero_axes() {
+        let wire = concat!(
+            "S 0000000a campfire\n",
+            "U 32 32\n",
+            "L pat 8 0 16 28 normal 100 none fill 1\n",
+            "L sprite 8 17 0 0 normal 100 none fill 1\n",
+            "L color 0 30 0 0 normal 100 none fill 1\n",
+        );
+        let fire = rec("fire", 16, 14, 1, 0, &[RED], &[1; 16 * 14]);
+        let fire = SpriteView::parse(&fire).unwrap();
+        let cases = [
+            ((32, 32), (8, 0, 16, 28), (8, 17, 16, 14), 30),
+            ((64, 64), (16, 0, 32, 56), (16, 34, 32, 28), 60),
+            ((128, 128), (32, 0, 64, 112), (32, 68, 64, 56), 120),
+            // z0 = 1 and 16 columns of slack each side; the zero axes still
+            // cover the real layout
+            ((64, 32), (24, 0, 16, 28), (24, 17, 16, 14), 30),
+        ];
+        for ((w, h), embers, sprite, ground) in cases {
+            let comp = placed(wire, w, h);
+            assert_eq!(rect_of(&comp, 0), embers, "embers on {w}x{h}");
+            assert_eq!(
+                comp.layer_rect(1, Some(&fire)).unwrap(),
+                sprite,
+                "fire on {w}x{h}"
+            );
+            assert_eq!(
+                comp.layer_rect(1, None).unwrap().2,
+                0,
+                "no record, no natural size"
+            );
+            assert_eq!(
+                rect_of(&comp, 2),
+                (0, ground, w as i32, h as i32 - ground),
+                "ground on {w}x{h}: the rest of the height"
+            );
+        }
+    }
+
+    #[test]
+    fn a_mapped_box_never_resolves_to_zero() {
+        // 32 → 16 halves every edge: a 1-wide design box keeps one cell
+        // whether its edges land in one grid cell or two
+        let wire = "S 0000000a n\nU 32 32\nL color 2 2 1 1 normal 100 none fill 1\nL color 3 3 1 1 normal 100 none fill 1\n";
+        let comp = placed(wire, 16, 16);
+        assert_eq!(
+            rect_of(&comp, 0),
+            (1, 1, 1, 1),
+            "both edges in cell 1: max(1, 0)"
+        );
+        assert_eq!(rect_of(&comp, 1), (1, 1, 1, 1));
+    }
+
+    #[test]
+    fn below_the_design_size_positions_shrink_and_pixels_do_not() {
+        let wire = concat!(
+            "S 0000000a n\n",
+            "U 32 32\n",
+            "L color 8 8 16 16 normal 100 none fill 1\n",
+            "L sprite 10 6 0 0 normal 100 none fill 1\n",
+            "L text 0 16 0 0 normal 100 none fill 1\n",
+        );
+        let comp = placed(wire, 16, 16);
+        assert_eq!(rect_of(&comp, 0), (4, 4, 8, 8));
+        let dot = rec("dot", 3, 2, 1, 0, &[RED], &[1; 6]);
+        let dot = SpriteView::parse(&dot).unwrap();
+        assert_eq!(
+            comp.layer_rect(1, Some(&dot)).unwrap(),
+            (5, 3, 3, 2),
+            "natural size 1:1"
+        );
+        assert_eq!(comp.layer_zoom(1), 1);
+        assert_eq!(comp.layer_zoom(2), 1, "glyphs 1:1");
+    }
+
+    /// Example D: WLED-style zones on strips of three lengths.
+    #[test]
+    fn strip_segments_map_proportionally_and_stay_gapless() {
+        let wire = concat!(
+            "S 0000000a zones\n",
+            "U 150 1\n",
+            "L pat 0 0 75 0 normal 100 none fill 1\n",
+            "L pat 75 0 75 0 normal 100 none fill 3\n",
+        );
+        for (n, cut) in [(150, 75), (300, 150), (61, 30)] {
+            let comp = placed(wire, n, 1);
+            assert_eq!(rect_of(&comp, 0), (0, 0, cut, 1), "zone 1 on {n}");
+            assert_eq!(
+                rect_of(&comp, 1),
+                (cut, 0, n as i32 - cut, 1),
+                "zone 2 on {n}"
+            );
+        }
+        // gapless at EVERY length: zone 1's end is zone 2's start and zone 2
+        // ends at the strip's end
+        for n in 1..=400u16 {
+            let comp = placed(wire, n, 1);
+            let (a, b) = (rect_of(&comp, 0), rect_of(&comp, 1));
+            assert_eq!(a.0, 0);
+            assert_eq!(b.0 + b.2, n as i32, "{n}: zone 2 ends at the end");
+            if n >= 2 {
+                assert_eq!(a.0 + a.2, b.0, "{n}: no gap, no overlap");
+            }
+        }
+    }
+
+    /// Example F: snow pinned with `X abs` beside a mapped tree.
+    #[test]
+    fn x_abs_pins_a_layer_to_grid_pixels() {
+        let wire = concat!(
+            "S 0000000a n\n",
+            "U 32 32\n",
+            "L sprite 0 0 0 0 normal 100 none tile 1\n",
+            "X abs\n",
+            "L color 4 6 24 26 normal 100 none fill 1\n",
+            "L color 4 6 24 26 normal 100 none fill 1\n",
+            "X clip abs\n",
+        );
+        let comp = placed(wire, 128, 128);
+        assert_eq!(rect_of(&comp, 0), (0, 0, 128, 128));
+        assert_eq!(comp.layer_zoom(0), 1, "an abs tile repeats 1:1");
+        assert_eq!(rect_of(&comp, 1), (16, 24, 96, 104));
+        assert_eq!(comp.layer_zoom(1), 4);
+        assert_eq!(rect_of(&comp, 2), (4, 6, 24, 26), "abs keeps the L numbers");
+        // and draws them: the snow tile's texels stay single cells
+        let snow = rec("snow", 2, 1, 1, 0, &[RED], &[1, 0]);
+        let mut px = vec![BG; 128 * 128];
+        let mut comp = comp;
+        comp.native_layer(&mut px, 0, Some(&SpriteView::parse(&snow).unwrap()));
+        assert_eq!(&px[..4], &[RED, BG, RED, BG]);
+    }
+
+    /// Example E: keyframes are design units, interpolated in grid pixels.
+    #[test]
+    fn keyframes_map_like_the_l_origin_and_move_in_grid_pixels() {
+        let wire = concat!(
+            "S 0000000a sunrise\n",
+            "U 32 32\n",
+            "L sprite 4 3 22 22 normal 100 none contain 1\n",
+            "M 0 0 24 = linear\n",
+            "M 16000 8 24 = linear\n",
+            "L color 4 3 8 8 normal 100 none fill 1\n",
+            "M 0 6 = = linear\n",
+        );
+        let mut comp = placed(wire, 128, 128);
+        assert_eq!(
+            rect_of(&comp, 0),
+            (0, 96, 88, 88),
+            "the first key at t 0, box size from L"
+        );
+        // 1/16 of the way: 2 grid px (in design units it would be half a
+        // pixel, rounded to a whole design pixel = 4 grid px)
+        comp.advance(1000);
+        assert_eq!(rect_of(&comp, 0), (2, 96, 88, 88));
+        comp.advance(7000);
+        assert_eq!(rect_of(&comp, 0).0, 16);
+        // `=` keeps the L line's value — MAPPED (y 3 → 12)
+        assert_eq!(rect_of(&comp, 1), (24, 12, 32, 32));
+        // on a letterboxed panel the keys take the centring offset like the
+        // L origin does, and a whole-layout (zero) axis does not
+        let wire = concat!(
+            "S 0000000a n\n",
+            "U 32 32\n",
+            "L color 8 8 16 16 normal 100 none fill 1\n",
+            "M 0 4 = = linear\n",
+            "L color 0 0 0 8 normal 100 none fill 1\n",
+            "M 0 2 = = linear\n",
+        );
+        let comp = placed(wire, 64, 32);
+        assert_eq!(rect_of(&comp, 0), (20, 8, 16, 16));
+        assert_eq!(
+            rect_of(&comp, 1),
+            (2, 0, 62, 8),
+            "the rest of the width from x 2"
+        );
+    }
+
+    #[test]
+    fn set_grid_re_maps_the_scene() {
+        let wire =
+            "S 0000000a n\nU 32 32\nL color 8 8 16 16 normal 100 none fill 1\nM 0 4 = = linear\n";
+        let mut comp = placed(wire, 32, 32);
+        assert_eq!(rect_of(&comp, 0), (4, 8, 16, 16));
+        comp.set_grid(grid(128, 128, false));
+        assert_eq!(rect_of(&comp, 0), (16, 32, 64, 64));
+        assert_eq!(comp.layer_zoom(0), 4);
+        comp.set_grid(grid(32, 32, false));
+        assert_eq!(rect_of(&comp, 0), (4, 8, 16, 16));
+    }
+
+    /// Example A: fire-clock's digits, `U 32 32`, large face, centred.
+    #[test]
+    fn glyphs_scale_by_the_zoom() {
+        let wire = concat!(
+            "S 0000000a fire clock\n",
+            "U 32 32\n",
+            "L text 0 16 0 0 normal 100 none fill 1\n",
+            "T lit 12:34\n",
+            "F large ffffff c none 0\n",
+        );
+        for (n, z) in [(32u16, 1i32), (64, 2), (128, 4)] {
+            let mut comp = placed(wire, n, n);
+            let mut px = vec![[0u8; 3]; n as usize * n as usize];
+            comp.native_layer(&mut px, 0, None);
+            let lit: Vec<(i32, i32)> = (0..px.len())
+                .filter(|&i| px[i] != [0, 0, 0])
+                .map(|i| ((i % n as usize) as i32, (i / n as usize) as i32))
+                .collect();
+            let rows = (
+                lit.iter().map(|p| p.1).min().unwrap(),
+                lit.iter().map(|p| p.1).max().unwrap(),
+            );
+            let cols = (
+                lit.iter().map(|p| p.0).min().unwrap(),
+                lit.iter().map(|p| p.0).max().unwrap(),
+            );
+            // 8 glyph rows from y 16·z; the 30 px advance anchored at z
+            assert!(
+                rows.0 >= 16 * z && rows.1 < 16 * z + 8 * z,
+                "{n}: rows {rows:?}"
+            );
+            assert!(cols.0 >= z && cols.1 < z + 30 * z, "{n}: cols {cols:?}");
+            // every ink run is a whole z×z block: the lit cells' coordinates
+            // relative to the anchor come in multiples of z
+            assert!(lit
+                .iter()
+                .all(|&(x, y)| (x - z) % z == 0 || lit.contains(&(x - 1, y))));
+            assert_eq!(lit.len() % (z * z) as usize, 0, "{n}: {} cells", lit.len());
+        }
+    }
+
+    #[test]
+    fn natural_sprites_and_tile_cells_scale_by_the_zoom() {
+        // a 2x1 sprite, red then transparent, natural at design (1, 0) and
+        // tiled across row 2 — design 4x4 drawn on 8x8 (zoom 2)
+        let wire = concat!(
+            "S 0000000a n\n",
+            "U 4 4\n",
+            "L sprite 1 0 0 0 normal 100 none fill 1\n",
+            "L sprite 0 2 0 1 normal 100 none tile 1\n",
+        );
+        let record = rec("pip", 2, 1, 1, 0, &[RED], &[1, 0]);
+        let sp = SpriteView::parse(&record).unwrap();
+        let mut comp = placed(wire, 8, 8);
+        let mut px = vec![BG; 64];
+        comp.native_layer(&mut px, 0, Some(&sp));
+        comp.native_layer(&mut px, 1, Some(&sp));
+        let row = |y: usize| px[y * 8..y * 8 + 8].to_vec();
+        let (r, b) = (RED, BG);
+        assert_eq!(
+            row(0),
+            vec![b, b, r, r, b, b, b, b],
+            "natural: 2x2 texel at x 2"
+        );
+        assert_eq!(row(1), row(0));
+        assert_eq!(row(2), vec![b, b, b, b, b, b, b, b]);
+        assert_eq!(row(4), vec![r, r, b, b, r, r, b, b], "tile: 2-cell texels");
+        assert_eq!(row(5), row(4));
+        assert_eq!(row(6), vec![b; 8]);
+    }
+
+    #[test]
+    fn the_scroll_speed_is_design_pixels_per_second() {
+        let wire = "S 0000000a n\nU 32 32\nL text 0 0 0 0 normal 100 none fill 1\nT lit HI\nF regular ffffff l left 10\nL text 0 8 0 0 normal 100 none fill 1\nT lit HI\nF regular ffffff l left 10\nX abs\n";
+        let mut comp = placed(wire, 128, 128);
+        comp.advance(1000);
+        assert_eq!(
+            comp.layers[0].scroll_mpx, 40_000,
+            "10 design px/s at zoom 4"
+        );
+        assert_eq!(
+            comp.layers[1].scroll_mpx, 10_000,
+            "an abs layer keeps grid px/s"
+        );
     }
 }

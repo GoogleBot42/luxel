@@ -16,10 +16,12 @@
 //!   its text layers hidden.
 //!
 //! `LUXEL_SCENE_DIGESTS=1 cargo test -p luxel-core --test library_scenes --
-//! --nocapture` also prints an FNV-1a digest of each scene's 64x64 frames.
-//! That is how #985 showed its `w = 0` rule for tiled sprites leaves every
-//! shipped scene byte-identical: the same file, run against `origin/master`
-//! and against the branch, printed the same 41 lines.
+//! --nocapture` also prints an FNV-1a digest of each scene's frames on a
+//! 64x64, a 32x32 and a 128x128 panel and on a 150 px strip. That is how
+//! #985 showed its `w = 0` rule for tiled sprites leaves every shipped scene
+//! byte-identical (the same file, run against `origin/master` and against
+//! the branch, printed the same lines), and how #997 showed the same for
+//! its `U` design size on every scene that does not declare one.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -245,29 +247,48 @@ fn render(shipped: &Shipped, scene: &Scene, grid: GridMap) -> Vec<[u8; 3]> {
 fn every_shipped_scene_composites_on_a_panel() {
     let digests = std::env::var_os("LUXEL_SCENE_DIGESTS").is_some();
     for s in shipped() {
-        let frames = render(&s, &s.scene, GridMap::new(64, 64, false));
-        assert_eq!(frames.len(), 64 * 64 * DELTAS.len());
-        assert!(
-            frames.iter().any(|p| *p != [0, 0, 0]),
-            "{} draws something on 64x64",
-            s.slug
-        );
-        if digests {
-            println!(
-                "digest {} {:016x}",
-                s.slug,
-                fnv(frames.as_flattened(), 0xcbf2_9ce4_8422_2325)
+        // 64x64 is what the library is authored and gated on; 32 and 128
+        // are the two other panel sizes on the bench (Gitea #997)
+        for (w, h) in [(64u16, 64u16), (32, 32), (128, 128)] {
+            let frames = render(&s, &s.scene, GridMap::new(w, h, false));
+            assert_eq!(frames.len(), w as usize * h as usize * DELTAS.len());
+            assert!(
+                frames.iter().any(|p| *p != [0, 0, 0]),
+                "{} draws something on {w}x{h}",
+                s.slug
             );
+            if digests {
+                // the 64x64 line keeps its pre-#997 spelling so an older
+                // run's output still diffs against this one
+                let size = if w == 64 {
+                    String::new()
+                } else {
+                    format!(" {w}x{h}")
+                };
+                println!(
+                    "digest {}{size} {:016x}",
+                    s.slug,
+                    fnv(frames.as_flattened(), 0xcbf2_9ce4_8422_2325)
+                );
+            }
         }
     }
 }
 
 #[test]
 fn on_a_strip_text_layers_draw_nothing() {
+    let digests = std::env::var_os("LUXEL_SCENE_DIGESTS").is_some();
     let strip = GridMap::new(150, 1, false);
     for s in shipped() {
         let frames = render(&s, &s.scene, strip);
         assert_eq!(frames.len(), 150 * DELTAS.len());
+        if digests {
+            println!(
+                "digest {} 150x1 {:016x}",
+                s.slug,
+                fnv(frames.as_flattened(), 0xcbf2_9ce4_8422_2325)
+            );
+        }
         if !s.scene.layers.iter().any(|l| l.kind() == LayerKind::Text) {
             continue;
         }

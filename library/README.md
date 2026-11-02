@@ -158,7 +158,47 @@ draws nothing. Most shipped ones are authored for a 64×64 panel
 keep every placed box inside 32×32, so they still read on a smaller matrix —
 the exception being a layer that is deliberately the whole layout
 (`spark-field`'s tiled sprite), which clips rather than disappears. The
-`strip-*` scenes are written for a strip (`kind: "strip"`, below).
+`strip-*` scenes are written for a strip (`kind: "strip"`, below). A scene
+without a `U` line is in layout pixels like these; a new scene declares a
+design size instead (below), and fits every panel.
+
+### Design size (`U <w> <h>`)
+
+One line between the `S` and the first `L` says what size the scene was
+drawn at; every box and `M` position below it is then a **design unit**
+(docs/spec/scenes.md §2 "Design size", Gitea #997):
+
+```
+S - Fire Clock
+U 32 32
+L text 0 16 0 0 normal 100 none fill 1
+T clock HH:MM
+F large 5a1404 c none 0
+L pat 0 0 0 0 lighten 100 none fill 1
+I @pat/perlin-fire
+X clip
+```
+
+- **Design at `U 32 32`** unless the composition genuinely needs 64 columns
+  (`U 64 64`). Keep every placed box inside the design area, and every
+  non-scrolling `lit` caption inside the design width at 1×.
+- **On a panel the device zooms by a whole number** — `min(gw/32, gh/32)`, so
+  ×2 on 64×64 and ×4 on 128×128 — and centres the design area. Boxes, keyframe
+  positions, natural-size sprites, tile cells, glyphs and scroll speed all
+  scale by that one integer, so a fire box stays over its fire sprite and a
+  scrim behind its text; pixel art stays crisp.
+- **A zero `w`/`h` is still the whole real panel**, letterbox margins
+  included — the right box for a backdrop or a full-panel pattern.
+- **Below the design size** (a 16×16 matrix) positions shrink; pixels never
+  do — sprites and glyphs stay 1:1, so check that a 32×32 design still reads.
+- **On a strip** the `x` axis maps proportionally (`U 150 1` zones keep their
+  share of any strip, gapless) and `y` is untouched.
+- **`X abs`** pins ONE layer to grid pixels and 1:1 content — a fine texture
+  (snowfall, sparks) that should get MORE pixels on a bigger panel rather than
+  bigger ones. `X clip abs` combines both words.
+- **Older firmware ignores the `U` line** and draws the numbers 1:1, the
+  picture the scene had before it declared one — the line can never break a
+  stored scene list.
 
 ### Strips
 
@@ -170,13 +210,10 @@ On a strip of `n` pixels the canvas is `n`×1, so a scene is written in
   the strip from `x`. A pattern layer's segment is a WINDOW onto that
   pattern's full-strip render, not a squeezed copy: `75 0 75 0` on a 150 px
   strip shows the pattern's own pixels 75..149.
-- **A zero `w` is the LAYOUT's width, not "what is left".** `x 75 w 0`
-  resolves to a box 75 .. 75+n that overhangs the end and clips, which reads
-  as "the rest of the strip" — until the layer is flipped: `flipx` mirrors
-  the whole overhanging box, so the visible part samples past the end and
-  draws BLACK (Gitea #1026). Give a flipped segment an explicit `w`, or flip
-  a whole-strip base instead and lay the other segments over it, as
-  `strip-zones` does.
+- **A zero `w` is the rest of the strip from `x`, flips included.** `x 75 w 0`
+  is the box 75 .. n−1 on any length, and `flipx` mirrors exactly that
+  (Gitea #1026 — before it the box overhung the end and a flip drew black),
+  so `L pat 75 0 0 0 … fill 3` is a length-independent second zone.
 - **`flipx` (flags 3) reverses a segment in place** — the way to run a
   pattern outward from a seam, or mirror two halves. `flipy` does nothing on
   one row.
@@ -195,8 +232,10 @@ On a strip of `n` pixels the canvas is `n`×1, so a scene is written in
 - Keep strip scenes to ≤ 2 `pat` layers, like every scene (`caps.layers`).
 - **Boxes are pixels, so a split does not scale.** A seam at 75 is the
   middle of a 150 px strip, a quarter of a 300 and off the end of a 60. Only
-  whole-layout boxes (`0 0 0 0`) and tiles read the same at every length;
-  say in the scene's header what it does at 60 and 300 px.
+  whole-layout boxes (`0 0 0 0`), rest-of-strip boxes (`x 0 0 0`) and tiles
+  read the same at every length — or declare a design size, `U 150 1`
+  ("Design size" above), and the seam maps proportionally to any length,
+  gapless; otherwise say in the scene's header what it does at 60 and 300 px.
 - **Declare the shape: `# layout: strip`** as a comment line in the scene
   source makes its `scenes.json` entry `kind: "strip"` (no line, or
   `# layout: grid`, is `"grid"`), which is what lets the console offer it

@@ -419,6 +419,66 @@ const litPixels = (handle, n) => {
   e.lx_comp_free(ch);
 }
 
+// ---- a scene's design size and `lx_comp_layer_rect` (Gitea #997) ----
+//
+// `U 32 32` makes the boxes design units: on a 64x64 panel everything is
+// ×2, on a 150 px strip the x axis is ×150/32 and the row is untouched.
+// `lx_comp_layer_rect` answers the RESOLVED box `[x, y, w, h, zoom]` — the
+// console's selection marquee — after the mapping and after the keyframe
+// track; a bad layer is null.
+{
+  const wire =
+    "S 0123abcd Fit\n" +
+    "U 32 32\n" +
+    "L color 8 0 16 0 normal 100 none fill 1\n" +
+    "K ff0000\n" +
+    "L color 8 8 16 16 normal 100 none fill 1\n" +
+    "K ffffff\n" +
+    "L color 1 2 3 4 normal 100 none fill 1\n" +
+    "X abs\n" +
+    "M 0 5 = = linear\n";
+  const rectOf = (ch, i) => {
+    const p = e.lx_comp_layer_rect(ch, i);
+    assert.ok(p !== 0, `layer ${i} has a rect`);
+    return [...new Int32Array(e.memory.buffer, p, 5)];
+  };
+  const run = (w, h) => {
+    const ch = e.lx_comp_new(w, h);
+    const s = putStr(wire);
+    assert.strictEqual(e.lx_comp_set(ch, s.ptr, s.len), 0, response());
+    s.free();
+    const ptr = e.lx_comp_frame(ch, 0);
+    assert.ok(ptr !== 0);
+    const px = [...mem().slice(ptr, ptr + w * h * 3)];
+    const rects = [0, 1, 2].map((i) => rectOf(ch, i));
+    assert.strictEqual(e.lx_comp_layer_rect(ch, 3), 0, "past the stack: null");
+    e.lx_comp_free(ch);
+    const cells = (rgb) => {
+      const out = [];
+      for (let i = 0; i < w * h; i++) {
+        if (px[i * 3] === rgb[0] && px[i * 3 + 1] === rgb[1] && px[i * 3 + 2] === rgb[2]) out.push(i);
+      }
+      return out;
+    };
+    return { rects, white: cells([255, 255, 255]), red: cells([255, 0, 0]) };
+  };
+  // 64x64: zoom 2, no slack to centre
+  const p = run(64, 64);
+  assert.deepStrictEqual(p.rects[0], [16, 0, 32, 64, 2], "a zero h from y 0 is the whole real height");
+  assert.deepStrictEqual(p.rects[1], [16, 16, 32, 32, 2]);
+  assert.deepStrictEqual(p.rects[2], [5, 2, 3, 4, 1], "X abs: grid pixels, zoom 1, keyed x 5");
+  // the abs layer is black (no K) and sits left of the red band
+  assert.strictEqual(p.white.length, 32 * 32, "white lights exactly (16·z)²");
+  assert.strictEqual(p.white[0], 16 * 64 + 16, "white starts at (8·z, 8·z)");
+  assert.strictEqual(p.red.length, 32 * 64 - 32 * 32, "the red band minus the white box");
+  // 150x1: the strip regime — proportional x, the row untouched
+  const s = run(150, 1);
+  assert.deepStrictEqual(s.rects[0], [37, 0, 75, 1, 4], "8..24 of 32 → 37..112 of 150");
+  assert.deepStrictEqual(s.rects[1], [37, 8, 75, 16, 4], "y 8 is off the one row");
+  assert.strictEqual(s.white.length, 0, "a box below row 0 draws nothing on a strip");
+  assert.deepStrictEqual(s.red, Array.from({ length: 75 }, (_, k) => 37 + k));
+}
+
 // ---- the colour ramp's cooked table across the ABI (Gitea #748) ----
 //
 // `lx_palette_lut` is handle-free and cooks through the engine's OWN
