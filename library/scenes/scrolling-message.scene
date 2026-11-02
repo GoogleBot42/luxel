@@ -3,6 +3,7 @@
 # crawling along it. Edit the T line to change the words, or make it
 # `T slot 0` to set them from outside (POST /api/text, Home Assistant).
 S - Scrolling Message
+U 32 32
 L pat 0 0 0 0 normal 70 none fill 1
 N Aurora
 I @pat/aurora-2d

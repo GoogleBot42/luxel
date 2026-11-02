@@ -3,18 +3,19 @@
 # black colour layer at 55 % behind the text dims the pattern without hiding
 # it. The interference rings are ramped to one teal palette.
 S - Date & Time
+U 32 32
 L pat 0 0 0 0 normal 100 none fill 1
 N Field
 I @pat/interference
 C sliderStyle 65536
 R 100 0:00080c 120:0a5c6b 220:4fd1c5 255:e6fffb
-L color 0 4 0 22 normal 55 none fill 1
+L color 0 5 0 22 normal 55 none fill 1
 N Scrim
-L text 0 7 0 0 normal 100 black fill 1
+L text 0 8 0 0 normal 100 black fill 1
 N Time
 T clock HH:MM
 F large ffffff c none 0
-L text 0 18 0 0 normal 100 black fill 1
+L text 0 19 0 0 normal 100 black fill 1
 N Date
 T clock MM-DD
 F tiny 9fd8ff c none 0

@@ -4,41 +4,42 @@
 # Text is always black-keyed, so a glow or shadow colour must never be
 # exactly 000000 — it would vanish. Full-width boxes centre it on any panel.
 S - Neon Sign
+U 32 32
 L color 0 0 0 0 normal 100 none fill 1
 N Wall
 K 06000a
-L color 0 8 0 22 normal 100 none fill 1
+L color 0 5 0 22 normal 100 none fill 1
 N Spill
 K 14031a
-L text -1 12 0 0 add 45 black fill 1
+L text -1 9 0 0 add 45 black fill 1
 N Glow L
 T lit OPEN
 F large ff2d95 c none 0
-L text 1 12 0 0 add 45 black fill 1
+L text 1 9 0 0 add 45 black fill 1
 N Glow R
 T lit OPEN
 F large ff2d95 c none 0
-L text 0 11 0 0 add 45 black fill 1
+L text 0 8 0 0 add 45 black fill 1
 N Glow U
 T lit OPEN
 F large ff2d95 c none 0
-L text 0 13 0 0 add 45 black fill 1
+L text 0 10 0 0 add 45 black fill 1
 N Glow D
 T lit OPEN
 F large ff2d95 c none 0
-L text 0 12 0 0 normal 100 black fill 1
+L text 0 9 0 0 normal 100 black fill 1
 N Tube
 T lit OPEN
 F large ffc2e0 c none 0
-L text -1 23 0 0 add 40 black fill 1
+L text -1 20 0 0 add 40 black fill 1
 N Glow
 T lit LATE
 F tiny 18c8ff c none 0
-L text 1 23 0 0 add 40 black fill 1
+L text 1 20 0 0 add 40 black fill 1
 N Glow
 T lit LATE
 F tiny 18c8ff c none 0
-L text 0 23 0 0 normal 100 black fill 1
+L text 0 20 0 0 normal 100 black fill 1
 N Tube
 T lit LATE
 F tiny b8f4ff c none 0

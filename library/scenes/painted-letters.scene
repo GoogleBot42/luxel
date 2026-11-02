@@ -4,6 +4,7 @@
 # = pattern, black x pattern = black, so the colours show only in the glyphs.
 # (`mask` on a text layer cannot do this: text is always black-keyed.)
 S - Painted Letters
+U 32 32
 L pat 0 0 0 0 normal 100 none fill 1
 N Aurora
 I @pat/aurora-2d

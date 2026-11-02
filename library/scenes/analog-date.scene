@@ -2,10 +2,11 @@
 # A watch face with the date on the dial: the analog clock pattern full
 # frame and today's date in tiny type below the hub, where a watch prints it.
 S - Analog Date
+U 32 32
 L pat 0 0 0 0 normal 100 none fill 1
 N Clock
 I @pat/analog-clock
-L text 0 20 0 0 normal 100 black fill 1
+L text 0 22 0 0 normal 100 black fill 1
 N Date
 T clock MM-DD
 F tiny aab4c8 c none 0

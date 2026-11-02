@@ -4,6 +4,7 @@
 # crawling message, slot 1 the short "from" beside the envelope. Nothing in
 # the scene is edited to change what it says.
 S - Message Board
+U 32 32
 L pat 0 0 0 0 normal 100 none fill 1
 N Flow
 I @pat/curl-flow-2d

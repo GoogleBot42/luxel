@@ -3,6 +3,7 @@
 # it) crawling beside a bobbing note, over a sound field ramped to one
 # palette. With no sensor feed the field plays its built-in demo groove.
 S - Now Playing
+U 32 32
 L pat 0 0 0 0 normal 100 none fill 1
 N Field
 I @pat/spectrum-field

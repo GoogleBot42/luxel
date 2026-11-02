@@ -406,7 +406,7 @@ Worked examples (`U 32 32` unless said):
 | 128×128 | [32,96)×[0,112) | (32,68) 64×56 | rows 120+ |
 | 64×32 | z0=1, ox=16: [24,40)×[0,28) | (24,17) 16×14 | rows 30+, full width (zero axis) |
 
-**C. neon-sign glow at 128** — `L text -1 12 0 0`: `x` is a zero axis, so
+**C. neon-sign glow at 128** — `L text -1 9 0 0`: `x` is a zero axis, so
 its origin is map(−1) = −4 and the box is the real width; the glyphs are 4×
 and centre-aligned, so the glow copy sits exactly one scaled pixel (4 px)
 left of the tube.
