@@ -5,6 +5,8 @@
 // whatever silhouette the morph is passing through. Quad shows four figures,
 // each a step apart in the sequence, counter-rotating (panels of 48 px and up).
 // The SDF is evaluated on a 32x32 field per frame; pixels sample it bilinearly.
+// Above 4,096 px a grid renders at <= 4,096 cells (64x64 on 128x128), expanded
+// bilinearly by the engine (setRenderSize): a quarter of the work on a 128x128 chain.
 
 var size = 0.38
 var filled = 1
@@ -44,7 +46,16 @@ export function toggleQuad(v) { quad = v > 0.5 }
 var clock = 0, cur = 0, blend = 0, rot = 0, drift = 0, cs = 1, sn = 0
 var useQuad = 0, sz = 0.38, lw = 0.05, invLw = 20, reach = 1
 
+var rs = 0                          // 1 once a big grid renders at <= 4,096 cells
+function bigGrid() {                // above 4,096 px: render <= 4,096 cells, engine expands bilinearly
+  if (rs || pixelCount <= 4096 || !has2DMap() || gridWidth() < 1 || gridHeight() < 2) return
+  var gw = gridWidth(), gh = gridHeight(), w = min(gw, floor(64 * sqrt(gw / gh) + 0.001))
+  setRenderSize(w, min(gh, floor(4096 / w)), 1)   // gridWidth/gridHeight/pixelCount follow at once
+  rs = 1
+}
+
 export function beforeRender(delta) {
+  bigGrid()
   var dt = delta / 1000
   clock = mod(clock + dt, (holdS + morphS) * 6)
   var step = floor(clock / (holdS + morphS))

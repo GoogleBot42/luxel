@@ -37,6 +37,27 @@ so a flipped `75 0 0 0` segment mirrors over a box that overhangs the end
 and draws black — Gitea #1026 (the README's "rest of the strip" wording
 now carries the caveat; `strip-zones` flips a whole-strip base instead).
 
+## 2026-11-02 — 128x128 `setRenderSize` pass: nine ambient patterns faster on the chain
+
+Jeremy approved rendering the slowest ambient patterns at <= 4,096 cells
+(64x64) above 4,096 px, with the engine expanding them bilinearly. Measured on
+Seengreat unit 2 (2x2 chain, 16384 px) with patbench's method plus `out_fps`.
+**Portal 9 → 16 out_fps, Topo Map 7 → 12, Pool Caustics 9 → 12, Oil Slick
+9 → 12, Kaleidoscope 9 → 12, Reaction Diffusion 8 → 9, Interference 9 → 13,
+Wavy Bands 10 → 14, Geometry Morph 11 → 14.** The first six are
+byte-identical to master at 128x128: they already drew a <= 64x64 canvas, and
+`paintCanvas` shares the expand's sampler, so moving the upscale into the
+engine only removes the slower full-panel `paintCanvas`. Every edit is a no-op at
+4,096 px and below. HUD Ticker, Meadow, Lotus Bloom and Quasicrystal were left
+alone: at 64x64 they lose crisp detail (pixel-sized lanes and digits, grass
+blades, petal rims, a pixel-denominated wavelength) (#1023). The probes found
+that the bilinear expand itself costs ~43 ms/frame on the tiled chain, capping
+any such pattern at ~21 fps (#1022, the next lever). Table and probes in
+docs/bench-seengreat-hub75-rendersize.md. The idiom is now in
+.claude/rules/library.md. Device found on sinc (`5eed1e55`) at brightness 10,
+re-activated by id; `/api/pattern`, `/api/pattern.lxp` and `/api/controls`
+read back byte-identical to the pre-run capture.
+
 ## 2026-11-02 — Scenes on 1-D strips: the engine half (Gitea #985)
 
 Jeremy approved #985 on 2026-11-02. A scene now composites on a strip: a
