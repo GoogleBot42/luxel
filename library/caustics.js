@@ -6,6 +6,8 @@
 // lines cross into a net and swell into knots where they meet. One noise row
 // per canvas row, one palette (sharpness lives in its stops), one paintCanvas.
 // On a strip it is a sunlit shallow stream, glints flowing down its length.
+// Above 4,096 px a grid renders at <= 4,096 cells (64x64 on 128x128), expanded
+// bilinearly by the engine (setRenderSize): the same picture, minus a full-panel paintCanvas.
 
 var CAP = 64                   // canvas cap per side (128 px panels run at 2x)
 var vArr = array(4096)
@@ -82,7 +84,17 @@ function build() {
 }
 build()
 
+var rs = 0, rsK = 1                 // 1 once a big grid renders at <= 4,096 cells; fixture px per cell
+function bigGrid() {                // above 4,096 px: render <= 4,096 cells, engine expands bilinearly
+  if (rs || pixelCount <= 4096 || !has2DMap() || gridWidth() < 1 || gridHeight() < 2) return
+  var gw = gridWidth(), gh = gridHeight(), w = min(gw, floor(64 * sqrt(gw / gh) + 0.001))
+  setRenderSize(w, min(gh, floor(4096 / w)), 1)   // gridWidth/gridHeight/pixelCount follow at once
+  rs = 1
+  rsK = gw / w                      // cellPx and the 8 px tiles stay in fixture pixels
+}
+
 export function beforeRender(delta) {
+  bigGrid()
   var dt = min(delta, 100) / 1000
   var u = speed * dt / cellPx              // cells travelled this frame
   z = mod(z + u * 0.45 + dt * 0.04, 256)
@@ -106,8 +118,8 @@ export function renderBulk() {
   if (gw == 0) { gw = 32; gh = 32 }
   var k = 1
   while (ceil(gw / k) > CAP || ceil(gw / k) * ceil(gh / k) > 4096) k++
-  var cw = ceil(gw / k), ch = ceil(gh / k), s = k / cellPx
-  var tile = max(round(8 / k), 3)                // 8 px floor tiles
+  var cw = ceil(gw / k), ch = ceil(gh / k), s = k * rsK / cellPx
+  var tile = max(round(8 / (k * rsK)), 3)        // 8 px floor tiles
   for (var c = 0; c < cw; c++) gcol[c] = c % tile == tile - 1 ? 0.5 : 0
   var i = 0
   for (var r = 0; r < ch; r++) {
