@@ -62,6 +62,7 @@ Verified: `tools/check-library.sh` 150/150 on all five rigs, the sprite/scene
 gate, cargo + web tests, `tools/ci.sh`; hw-bench soak on the second Seengreat
 (see the report); every pattern eyeballed on 32×32/64×64 sheets (and strip
 waterfalls) by its implementer, a sample by the orchestrator.
+
 ## 2026-11-01 — bilinear canvas sampling at pixel centres; `gridWidth` follows `setRenderSize` at once
 
 Engine findings from the library rewrite's U1 pass over #979/#981, fixed in
