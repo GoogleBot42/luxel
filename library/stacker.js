@@ -1,4 +1,5 @@
 // name: Stacker
+// tags: both, ambient
 // Clean-room reimplementation from the prose spec docs/pattern-specs/stacker.md — reimagined, not a replica.
 // Strip filler: in every segment a block glides in from both ends and locks onto a
 // pile growing out of the centre. Each lock flashes white, a full segment blinks and

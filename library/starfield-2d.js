@@ -1,4 +1,5 @@
 // name: Starfield
+// tags: both, nature, ambient
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // Three skies from one star pool. Warp: stars stream at you through a
 // perspective divide, each drawn as a drawLine from last frame's projection to

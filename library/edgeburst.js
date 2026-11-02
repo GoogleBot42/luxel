@@ -1,4 +1,5 @@
 // name: Edge Burst
+// tags: both, ambient
 // Curated original (hand-written showcase of the Luxel language/builtins), after the
 // community pattern "Edgeburst" (idea only, no source consulted).
 // Bursts of colour race out from the centre to the edges, a bright rainbow-

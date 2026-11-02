@@ -1,4 +1,5 @@
 // name: Wander Edges
+// tags: both, ambient
 // Clean-room reimplementation from the prose spec docs/pattern-specs/wanderedges.md
 // — reimagined, not a replica.
 // Soft pulses swell, drift and fade, summed into one field read through a

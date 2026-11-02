@@ -1,4 +1,5 @@
 // name: Candy Stripes
+// tags: both, holiday
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/christmas-candy-cane.md,
 // holiday-diagonal-stripes.md — reimagined, not a replica.
 // Candy-cane stripes crawling like a barber pole: two colours (or red / white / green)

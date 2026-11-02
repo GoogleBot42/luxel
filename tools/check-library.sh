@@ -5,7 +5,7 @@
 # required, plus the decoded program must render identically to the fresh
 # compile — that is the device's execution path) and a 3-frame smoke run.
 #
-# Before the engine sweep it also runs three source lints:
+# Before the engine sweep it also runs four source lints:
 #   * `//#` control directives — one that is not adjacent to an export is
 #     silently ignored by the parser, so a pattern can ship a directive that
 #     does nothing at all (Gitea #179). See "directive lint" below.
@@ -15,6 +15,9 @@
 #   * unitless `min=0 max=1` sliders — house style is real units. Fails on the
 #     no-op shape (no `step=` at all), counts the rest. See "unitless 0..1
 #     slider lint" below (Gitea #243).
+#   * the `// tags:` line every library pattern carries right after its
+#     `// name:` header — closed vocabulary, one shape, one or more themes. See
+#     "gallery tags lint" below.
 #
 # Every pattern runs on FIVE rigs: two grids (`check`'s default 10x10 and an
 # explicit 16x16) and three MAPLESS STRIPS (60, 300, 512 px). Rig shape is
@@ -267,6 +270,92 @@ if [ -n "$lint_out" ]; then
 else
   echo "unitless 0..1 lint: no unitless 0..1 sliders in $DIR"
 fi
+
+# ---- gallery tags lint ---------------------------------------------------------
+# Every library pattern carries a `// tags:` line IMMEDIATELY after its
+# `// name:` header — the Patterns page's shape control and theme chips filter
+# on it (web/tools/gen-gallery.mjs parses it into gallery.json's `tags`; the
+# grammar is in library/README.md "Gallery tags"):
+#
+#   // name: Aurora 2D
+#   // tags: panel, ambient, nature
+#
+# Closed vocabulary, lower-case, comma-separated. Exactly ONE shape — `strip`
+# (right only on a 1-D strip), `panel` (needs a 2-D map), `both` (looks right
+# either way) — and at least one theme: ambient holiday game clock sound
+# nature retro. A missing line, an unknown tag, zero or two shapes, or no theme
+# FAILS the sweep. Two cross-checks against the source are WARNINGS only (the
+# tag is a judgement about the LOOK, the source only hints at it):
+#   * `panel` on a file that exports only `render(index)` and calls no 2-D
+#     builtin — it draws in index space, so what makes it panel-only?
+#   * `strip`/`both` on a file with no `render(index)` export and no
+#     `has2DMap()` branch — nothing in it draws a strip on purpose.
+TAGS_SHAPES="strip panel both"
+TAGS_THEMES="ambient holiday game clock sound nature retro"
+lint_out=""
+warn_out=""
+for f in "$DIR"/*.js; do
+  hits=$(awk -v shapes="$TAGS_SHAPES" -v themes="$TAGS_THEMES" '
+    BEGIN {
+      ns = split(shapes, S, " "); for (i = 1; i <= ns; i++) isShape[S[i]] = 1
+      nt = split(themes, T, " "); for (i = 1; i <= nt; i++) isTheme[T[i]] = 1
+      bulk2d = "(fillRect|fillCircle|splat|drawLine|fillCanvas|paintCanvas|blit|gridWidth|gridHeight|gridIndex)"
+    }
+    { line[FNR] = $0; last = FNR
+      code = $0; ci = index(code, "//"); if (ci > 0) code = substr(code, 1, ci - 1)
+      src = src "\n" code }
+    END {
+      nameAt = 0
+      for (i = 1; i <= last; i++) if (line[i] ~ /^\/\/ name:/) { nameAt = i; break }
+      if (nameAt == 0) { print "FAIL no `// name:` header (the tags line follows it)"; exit }
+      t = line[nameAt + 1]
+      if (t !~ /^\/\/ tags:/) { print "FAIL line " nameAt + 1 ": no `// tags:` line right after `// name:`"; exit }
+      sub(/^\/\/ tags:[ \t]*/, "", t); sub(/[ \t]+$/, "", t)
+      n = split(t, tag, ",")
+      shapeN = 0; themeN = 0; shape = ""
+      for (i = 1; i <= n; i++) {
+        g = tag[i]; gsub(/^[ \t]+|[ \t]+$/, "", g)
+        if (g == "") { print "FAIL empty tag in `" t "`"; continue }
+        if (seen[g]++) { print "FAIL duplicate tag `" g "`"; continue }
+        if (g in isShape) { shapeN++; shape = g }
+        else if (g in isTheme) themeN++
+        else print "FAIL unknown tag `" g "` (shapes: " shapes "; themes: " themes ")"
+      }
+      if (shapeN != 1) print "FAIL " shapeN " shape tags — exactly one of: " shapes
+      if (themeN == 0) print "FAIL no theme tag — at least one of: " themes
+      hasRender = src ~ /export[ \t]+function[ \t]+render[ \t]*\(/
+      hasBranch = src ~ /has2DMap[ \t]*\(/
+      other = src ~ /export[ \t]+function[ \t]+(render2D|render3D|renderBulk)[ \t]*\(/
+      uses2d = 0
+      if (match(src, bulk2d "[ \t]*\\(")) {
+        # a local helper of the same name shadows the builtin (gen-gallery.mjs)
+        nm = substr(src, RSTART, RLENGTH); sub(/[ \t]*\($/, "", nm)
+        uses2d = src !~ ("function[ \t]+" nm "[ \t]*\\(")
+      }
+      if (shape == "panel" && hasRender && !other && !uses2d)
+        print "WARN `panel` but it exports only render(index) and calls no 2-D builtin"
+      if ((shape == "strip" || shape == "both") && !hasRender && !hasBranch)
+        print "WARN `" shape "` but it has no render(index) export and no has2DMap() branch"
+    }' "$f")
+  while IFS= read -r h; do
+    [ -z "$h" ] && continue
+    case "$h" in
+      FAIL*) lint_out="$lint_out  $f: ${h#FAIL }"$'\n' ;;
+      WARN*) warn_out="$warn_out  $f: ${h#WARN }"$'\n' ;;
+    esac
+  done <<< "$hits"
+done
+if [ -n "$warn_out" ]; then
+  printf 'tags lint: shape tag vs source (warnings — check the tag is the LOOK you meant):\n'
+  printf '%s' "$warn_out"
+fi
+if [ -n "$lint_out" ]; then
+  printf 'check-library: bad or missing `// tags:` line(s). Put `// tags: <shape>, <theme>[, …]`\n' >&2
+  printf '  right after `// name:` — shapes: %s; themes: %s (library/README.md).\n' "$TAGS_SHAPES" "$TAGS_THEMES" >&2
+  printf '%s' "$lint_out" >&2
+  exit 1
+fi
+echo "tags lint: every pattern in $DIR has a valid // tags: line"
 
 cargo build --release -p luxel-cli
 LUXEL="$ROOT/target/release/luxel"

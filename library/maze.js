@@ -1,4 +1,5 @@
 // name: Maze
+// tags: panel, ambient, retro
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // A white-hot mole carves a perfect maze through dark rock (recursive
 // backtracker on an explicit stack), its trail cooling behind it. Then a

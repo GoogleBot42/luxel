@@ -1,4 +1,5 @@
 // name: tixy
+// tags: both, retro
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/tixy.md, golden-tix.md — reimagined, not a replica.
 // A tixy.land-style reel of tiny formulas f(t, i, x, y) -> -1..1 on a coarse grid of
 // cells: Dots draws each cell as a disc sized by |value| (white for +, red for -, or

@@ -1,4 +1,5 @@
 // name: Pulse Train
+// tags: both, ambient
 // Clean-room reimplementation from the prose specs docs/pattern-specs/color-pick-fade.md,
 // color-fade-pulse.md — reimagined, not a replica.
 // Evenly spaced soft pulses glide along the strip: one picked colour for calm

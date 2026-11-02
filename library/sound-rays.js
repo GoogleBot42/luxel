@@ -1,4 +1,5 @@
 // name: Sound Rays
+// tags: both, sound
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/sound-rays.md, sound-rays-frequency-bpm-reactive-1.md — reimagined, not a replica.
 // A chart recorder for sound: rays are born at the start of the strip and
 // stream along it. Brightness is loudness against its own recent peak (only

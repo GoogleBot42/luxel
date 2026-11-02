@@ -1,4 +1,5 @@
 // name: Scanner
+// tags: both, retro
 // Clean-room reimplementation from the prose specs docs/pattern-specs/scanner.md, cylon.md,
 // kitt.md, kitt-w-color-picker.md — reimagined, not a replica.
 // The sweeping eye: a hot-cored head glides end to end and leaves a glowing wake.

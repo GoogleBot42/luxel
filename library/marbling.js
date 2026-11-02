@@ -1,4 +1,5 @@
 // name: Marbling
+// tags: panel, ambient
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // Suminagashi: ink drops land on still water one after another, each pushing
 // the earlier rings outward (the area-preserving drop map, inverted in closed

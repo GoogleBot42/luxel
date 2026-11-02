@@ -1,4 +1,5 @@
 // name: GlowFlow
+// tags: both, ambient, sound
 // Clean-room reimplementation from the prose specs docs/pattern-specs/glowflow-3d-coord-transform-api-port.md, upward-waves-3d-using-accelerometer.md — reimagined, not a replica.
 // A tank of glowing rainbow liquid whose surface stays level with real
 // gravity (accelerometer, smoothed); with no sensor it sloshes gently on

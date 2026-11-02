@@ -1,4 +1,5 @@
 // name: Dot Globe
+// tags: panel, ambient
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // A planet of a few hundred glowing dots, spread evenly by the golden-angle spiral,
 // spinning on a tilted, gently nodding axis. Near dots are big and bright, far ones

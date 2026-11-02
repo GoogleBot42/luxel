@@ -1,4 +1,5 @@
 // name: Bulk Sprite Scroll 2D
+// tags: panel, retro
 // Curated example (hand-written showcase of the Luxel language/builtins).
 // Grid-space drawing: an 8x8 sprite held in three parallel canvas arrays
 // (hue / saturation / value, row-major) is pasted onto the matrix with one

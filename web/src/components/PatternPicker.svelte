@@ -29,6 +29,7 @@
   import type { Luxel } from "../lib/luxel";
   import type { SourceLookup } from "../lib/sceneRender";
   import type { Scene } from "../lib/scene";
+  import { tagShowsOn, tagsFromSource } from "../lib/tags";
   import {
     captionFor,
     guessPatternDims,
@@ -83,7 +84,13 @@
   /** The generated clean-room library (`tools/gen-gallery.mjs` → gallery.json,
    *  the same file the Patterns page's Library source reads). Fetched once,
    *  on the first open, so a picker that is never opened costs nothing. */
-  let library: { key: string; name: string; source: string; dims: PatternDims }[] = [];
+  let library: {
+    key: string;
+    name: string;
+    source: string;
+    dims: PatternDims;
+    tags?: string[];
+  }[] = [];
   let libraryLoading = false;
   let libraryLoaded = false;
 
@@ -93,7 +100,12 @@
     try {
       const r = await gatedFetch(`${import.meta.env.BASE_URL}gallery.json`);
       if (r.ok) {
-        const list = (await r.json()) as { name: string; kind?: string; source: string }[];
+        const list = (await r.json()) as {
+          name: string;
+          kind?: string;
+          tags?: string[];
+          source: string;
+        }[];
         const seen = new Set<string>();
         library = list
           .filter((p) => {
@@ -109,6 +121,7 @@
             // gen-gallery's `kind` is the same advisory hint the Patterns
             // page's tiles start from (components/Gallery.svelte)
             dims: (p.kind === "grid" ? 2 : p.kind === "cloud" ? 3 : 1) as PatternDims,
+            tags: Array.isArray(p.tags) ? p.tags : undefined,
           }));
       }
     } catch {
@@ -162,10 +175,16 @@
    *
    * Dimensionality is the same advisory each grid starts from: gen-gallery's
    * `kind` for a library row, a regex guess at the source for a device one.
+   * A `// tags: both` header puts a strip + panel file back on a strip
+   * (lib/tags.ts `tagShowsOn`), exactly as on the Patterns page.
    */
   $: fixture = $layout.source === "device" || $layout.source === "user";
-  const fits = (dims: PatternDims, ld: number, fix: boolean): boolean =>
-    !fix || projectionCompatible(dims, ld);
+  const fits = (
+    dims: PatternDims,
+    ld: number,
+    fix: boolean,
+    tags: string[] | undefined,
+  ): boolean => !fix || projectionCompatible(dims, ld) || tagShowsOn(tags, ld);
 
   /** A row whose `source` has not streamed in yet is UNKNOWN, and unknown is
    *  never a "no" (.claude/rules/web.md, Gitea #730): it counts as
@@ -181,12 +200,13 @@
     captionFor(dims, $layout) ?? (dims > 0 ? `${dims}D` : "");
 
   $: deviceMatches = patterns
-    .filter((p) => match(p.name || p.id, needle) && fits(dimsOf(p.source), $layout.dims, fixture))
+    .filter((p) => match(p.name || p.id, needle) && fits(dimsOf(p.source), $layout.dims, fixture, tagsFromSource(p.source)),
+    )
     .map((p): PickItem => ({
       id: p.id,
       name: p.name,
       source: p.source,
-      fact: patternFact(dimsOf(p.source)),
+      fact: tagShowsOn(tagsFromSource(p.source), $layout.dims) ? "" : patternFact(dimsOf(p.source)),
     }));
   // Every scene in `stores/scenes.ts` carries an id: a console's come from
   // `/api/scenes` (both hosts mint one on save, and since Gitea #701 a mirror
@@ -209,13 +229,14 @@
       (p) =>
         !onDevice.has(p.name.toLowerCase()) &&
         match(p.name, needle) &&
-        fits(p.dims, $layout.dims, fixture),
+        fits(p.dims, $layout.dims, fixture, p.tags),
     )
     .map((p): PickItem => ({
       id: p.key,
       name: p.name,
       source: p.source,
-      fact: patternFact(p.dims),
+      // a `both` row on a strip is native there, whatever the engine says
+      fact: tagShowsOn(p.tags, $layout.dims) ? "" : patternFact(p.dims),
     }));
 
   /** One group per source, in the mock's order. */

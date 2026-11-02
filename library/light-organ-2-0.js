@@ -1,4 +1,5 @@
 // name: Light Organ
+// tags: both, sound
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/light-organ-2-0.md, light-organ-sensor-board.md — reimagined, not a replica.
 // The disco light organ: four colour channels (bass, low, mid, high) tiled
 // along the strip in bars, each pulsing with its band against that band's own

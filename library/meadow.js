@@ -1,4 +1,5 @@
 // name: Meadow
+// tags: panel, nature
 // Original work from the prose idea spec docs/pattern-specs/patternflow/firefly-hollow.md (Patternflow preset, CC BY-SA 4.0 — prose-described idea only, no code).
 // Dusk over a meadow: a sunset sky with first stars, lit clouds and a sinking
 // sun, two rolling hill lines, and a field of grass blades that bend as gust

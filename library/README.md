@@ -29,7 +29,9 @@ the goal.
 File conventions:
 
 - First line: `// name: <Display Name>` — the pattern browser reads this.
-- Second line, the provenance, in one of these forms:
+- Second line: `// tags: <shape>, <theme>[, <theme>…]` — the Patterns page's
+  shape control and theme chips filter on it (see "Gallery tags" below).
+- Third line, the provenance, in one of these forms:
   - `// Clean-room reimplementation from the prose spec(s) docs/pattern-specs/<a>.md[, <b>.md] — reimagined, not a replica.`
   - `// Original work from the prose idea spec docs/pattern-specs/patternflow/<slug>.md (Patternflow preset, CC BY-SA 4.0 — prose-described idea only, no code).`
   - `// Curated original (hand-written showcase of the Luxel language/builtins).`
@@ -64,6 +66,26 @@ was folded into another file is kept too, with a first line
 `> Superseded: this idea now lives in library/<survivor>.js (2026-11).` The
 scraped corpus is never read by the build; it survives only as an untracked,
 local compile-compatibility test battery.
+
+### Gallery tags
+
+A closed vocabulary, lower-case, comma-separated, any spacing:
+
+- **Shape — exactly one.** `strip`: looks right only on a 1-D strip. `panel`:
+  needs a 2-D map. `both`: looks right either way (typically a file that
+  branches on `has2DMap()`, or a `render(index)` that reads well in index
+  order on a panel too).
+- **Themes — one or more.** `ambient` (moods, washes, generative fields),
+  `nature` (organic or physical phenomena), `sound` (reads `frequencyData` /
+  `energyAverage`), `game`, `retro` (pixel-art / 8-bit styled), `clock`,
+  `holiday`.
+
+`tools/check-library.sh` fails a missing line, an unknown tag, zero or two
+shapes, or no theme, and WARNS when the shape looks unlike the source (`panel`
+on an index-only `render(index)`, `strip`/`both` with no `render(index)` and
+no `has2DMap()`). `web/tools/gen-gallery.mjs` writes the line into
+`gallery.json` as `tags` (shape first). In the console, `Strip` offers strip +
+both, `Panel` panel + both; a console opens on its own fixture's shape.
 
 ## Sprites (`sprites/*.sprite`)
 

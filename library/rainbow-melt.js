@@ -1,4 +1,5 @@
 // name: Rainbow Melt
+// tags: both, ambient
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/marching-rainbow.md,
 // marching-rainbow-buffered.md (and the "rainbow melt" description) — reimagined, not a replica.
 // Melt: a mirrored rainbow slowly rotates while its brightness churns in fluid

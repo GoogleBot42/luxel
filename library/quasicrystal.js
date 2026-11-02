@@ -1,4 +1,5 @@
 // name: Quasicrystal
+// tags: panel, ambient
 // Original work from the prose idea spec docs/pattern-specs/patternflow/nodal-lattice.md (Patternflow preset, CC BY-SA 4.0 — prose-described idea only, no code).
 // Plane waves at evenly spaced angles summed into a rosette lattice that never
 // repeats: flowers, stars and wheels bloom out of the centre as the shared phase

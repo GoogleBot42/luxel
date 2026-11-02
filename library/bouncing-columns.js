@@ -1,4 +1,5 @@
 // name: Bouncing Columns
+// tags: panel, ambient
 // Clean-room reimplementation from the prose spec docs/pattern-specs/bouncing-balls-2d.md — reimagined, not a replica.
 // One white ball per panel column, bouncing under real gravity on top of a
 // rainbow column of light, like a graphic equaliser that obeys physics. Every

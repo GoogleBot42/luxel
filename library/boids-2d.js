@@ -1,4 +1,5 @@
 // name: Boids
+// tags: panel, nature
 // Clean-room reimplementation from the prose spec docs/pattern-specs/time-flies-2d.md — reimagined, not a replica.
 // A real flock at native resolution: Reynolds' separation, alignment and
 // cohesion over a coarse 8x8 neighbour grid (a linked list per cell), so each

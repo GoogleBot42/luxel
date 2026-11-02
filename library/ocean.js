@@ -1,4 +1,5 @@
 // name: Ocean
+// tags: both, nature
 // Clean-room reimplementation from the prose specs docs/pattern-specs/oasis.md,
 // green-ripple-reflections.md and docs/pattern-specs/patternflow/midsummer-sea.md (Patternflow
 // preset, CC BY-SA 4.0 — prose-described idea only, no code) — reimagined, not a replica.

@@ -1,4 +1,5 @@
 // name: Pipes
+// tags: panel, retro
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // The screensaver classic: shaded pipes grow cell by cell across a coarse
 // occupancy grid, turning 90 degrees at ball joints. When the grid is full the

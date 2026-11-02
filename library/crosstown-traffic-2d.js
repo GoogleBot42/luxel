@@ -1,4 +1,5 @@
 // name: Crosstown Traffic
+// tags: both, ambient
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/crosstown-traffic-2d.md, bustle.md — reimagined, not a replica.
 // A long-exposure photo of a city grid: cars stream both ways in their own lanes,
 // each leaving a fading light trail. On a panel half run across and half up and

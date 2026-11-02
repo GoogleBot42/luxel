@@ -1,4 +1,5 @@
 // name: Soap
+// tags: panel, ambient
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // Domain warping: two low-frequency noise fields push the coordinates around
 // before a third is sampled through them, so the colour smears and swirls like

@@ -1,4 +1,5 @@
 // name: Bessel Chaos
+// tags: both, ambient
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/bessel-chaos.md — reimagined, not a replica.
 // Deterministic "chaos" with no randomness: cubic and quartic chirps inside two
 // sines around a wandering focal point — broad breathing blobs at the focus,

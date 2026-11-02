@@ -1,4 +1,5 @@
 // name: Thunderstorm
+// tags: both, nature
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/lightning-clouds.md,
 // rainstorm.md, b-lightning-flashes.md — reimagined, not a replica.
 // Real lightning: a faint stepped leader, a one-frame return stroke, dimmer

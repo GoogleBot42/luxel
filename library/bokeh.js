@@ -1,4 +1,5 @@
 // name: Bokeh
+// tags: panel, ambient
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // Out-of-focus city lights: big soft discs drift and breathe, warm amber and
 // cool teal, overlapping into glowing clusters. Like real lens bokeh each disc

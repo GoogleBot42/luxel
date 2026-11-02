@@ -1,4 +1,5 @@
 // name: Plasma
+// tags: both, ambient, retro
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/sinpulse-3d.md, matrix-2d-honeycomb.md, matrix-2-tone-pulse.md, sunset.md — reimagined, not a replica.
 // The classic sine plasma — column, row and diagonal waves drifting against each
 // other while the blob scale breathes — in four looks: rainbow blobs, neon contour

@@ -1,4 +1,5 @@
 // name: Geometry Morph
+// tags: panel, ambient
 // Clean-room reimplementation from the prose spec docs/pattern-specs/geometry-morphing-demo-2d.md — reimagined, not a replica.
 // A spinning figure melts through circle, cross, star, square, triangle and
 // hexagon by blending signed distances, painted in contour bands that follow

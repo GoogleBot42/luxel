@@ -1,4 +1,5 @@
 // name: Heart
+// tags: panel, holiday
 // Clean-room reimplementation from the prose spec docs/pattern-specs/heart.md
 // — reimagined, not a replica.
 // A filled, antialiased heart (a diamond point plus two circular lobes, as a

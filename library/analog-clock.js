@@ -1,4 +1,5 @@
 // name: Analog Clock
+// tags: both, clock
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/rgbclock-2d.md, 2d-clock-with-hand-color-pickers.md, pixelclock.md — reimagined, not a replica.
 // A wall-clock face. Panels: renderBulk draws a rim, ticks and three tapered
 // anti-aliased drawLine hands; Style 0 is a classic watch face, 1 RGB additive

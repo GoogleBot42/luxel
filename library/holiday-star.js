@@ -1,4 +1,5 @@
 // name: Holiday Star
+// tags: panel, holiday
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/carrie-s-holiday-star-2d.md,
 // blue-holiday-star-2d.md — reimagined, not a replica.
 // An eight-pointed holiday star filling most of the panel: four long axis rays

@@ -1,4 +1,5 @@
 // name: Radiant Bloom
+// tags: panel, ambient
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/radiant-pulse-3.md — reimagined, not a replica.
 // Soft bands pulse out of and into the centre, morphing between concentric rings,
 // straight beams and a spinning clover; bright cores bleach to pastel. One clock drives

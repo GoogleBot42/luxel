@@ -1,4 +1,5 @@
 // name: Turmites
+// tags: panel, ambient
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // Langton's ant and its many-coloured cousins: one walker reads its cell's
 // colour, turns left or right as the rule string says, bumps the colour and

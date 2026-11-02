@@ -1,4 +1,5 @@
 // name: Opposites
+// tags: both, ambient
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/opposites.md
 // — reimagined, not a replica.
 // Two swells travel opposite ways and a third wave is warped by their sum;

@@ -1,4 +1,5 @@
 // name: Fractal Flower
+// tags: panel, ambient
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/fractal-flower.md — reimagined, not a replica.
 // A ring of recursive binary-tree petals drawn as glowing dots. Two branch angles flex
 // on incommensurate clocks, so the flower folds between ferns, stars and pinwheels;
