@@ -69,7 +69,8 @@ export class SceneRenderer {
   constructor(
     private lx: Luxel,
     /** The rig every layer renders through — the device's shape, or a
-     *  thumbnail-sized copy of it. MUST be a regular 2D Layout. */
+     *  thumbnail-sized copy of it. MUST have a scene canvas: a regular 2D
+     *  Layout, or a strip as its `n`×1 row (`sceneRigOf`, Gitea #985). */
     readonly rig: Layout,
   ) {}
 

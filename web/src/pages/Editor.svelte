@@ -138,7 +138,7 @@
   /** What the back button returns to — the shell knows, the editor doesn't. */
   export let backLabel = "Patterns";
   /** Whether scenes can exist here at all — the shell's predicate (a regular
-   *  2D console, or the playground). `Add to scene ▸` is ABSENT without it,
+   *  1D or 2D console, or the playground; #985). `Add to scene ▸` is ABSENT without it,
    *  never disabled (§5.7, mock S2e). */
   export let scenesReady = false;
 
@@ -1195,9 +1195,9 @@
   // new TOP layer of the scene you choose. The primary path stays the scene
   // editor's own `Add layer → Pattern` (Gitea #480).
   //
-  // A scene needs a regular 2D grid, so on a strip, 3D or custom-map console
-  // the item is ABSENT — not disabled (§5.7; the S2e strip menu is simply one
-  // item shorter).
+  // A scene needs a canvas — a strip's row or a regular grid (#985) — so on a
+  // 3D or irregular-map console the item is ABSENT — not disabled (§5.7; such
+  // a menu is simply one item shorter).
   $: canAddToScene = scenesReady && $device !== null && $devicePatternId !== "";
 
   async function addToScene(sceneId: string, sceneName: string): Promise<void> {

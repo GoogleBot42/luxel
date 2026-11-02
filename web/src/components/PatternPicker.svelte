@@ -20,8 +20,8 @@
   //
   // Pattern sections are filtered by the Layout the same way the Patterns
   // page's grids are (§B, Gitea #562): a fixture is never offered a pattern it
-  // cannot show. See `fits` below. Scenes need a regular 2D grid to exist at
-  // all, so the section is simply empty off one.
+  // cannot show. See `fits` below. Scenes need a canvas (a strip's row or a
+  // regular grid, #985) to exist at all, so the section is simply empty off one.
   import { createEventDispatcher, tick } from "svelte";
   import PatternThumb from "./PatternThumb.svelte";
   import SceneThumb from "./SceneThumb.svelte";
@@ -52,7 +52,7 @@
    *  local library through the same component later. */
   export let patterns: { id: string; name: string; source?: string }[] = [];
   /** The scene library (`stores/scenes.ts`), newest last — the mock's second
-   *  section. Empty off a regular 2D Layout, where scenes cannot exist. */
+   *  section. Empty off a strip or regular 2D Layout, where scenes cannot exist. */
   export let scenes: Scene[] = [];
   /** Resolves a scene layer's stored pattern to its source, for the composite
    *  thumbnails — the same lookup the Scenes page hands its tiles. */

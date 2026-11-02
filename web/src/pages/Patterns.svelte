@@ -55,7 +55,7 @@
    *  found a populated corpus/ (dev-only, as today — see App.svelte's probe). */
   export let hasPixelblazeLibrary = false;
   /** Whether scenes can exist here at all — the shell's own predicate (a
-   *  regular 2D console, or the playground). `Add to scene ▸` is ABSENT
+   *  regular 1D or 2D console, or the playground; #985). `Add to scene ▸` is ABSENT
    *  without it, never disabled (§5.7, mock S2e). */
   export let scenesReady = false;
   /**
@@ -191,9 +191,9 @@
 
   // ---- Add to scene ▸ (proposal §5.4b, mock S2e) ----
   //
-  // Present only where scenes can exist — a regular 2D console (§5.4c, D10).
-  // On a strip, a lattice or a custom map the menu is simply one item shorter:
-  // ABSENT, never a greyed row with a reason (§5.7).
+  // Present only where scenes can exist — a strip or regular 2D console
+  // (§5.4c, D10; strips since #985). On a lattice or an irregular map the menu
+  // is simply one item shorter: ABSENT, never a greyed row with a reason (§5.7).
   $: canAddToScene = sourceId === "device" && scenesReady;
 
   /** Add the tile's pattern to an existing scene as its TOP layer, with the
@@ -669,8 +669,8 @@
 
 {#if menu}
   <!-- `Add to scene ▸` sits here, between the two playlist/scene verbs and
-       the document group (§5.4b, mock S2e) — and only on a regular 2D
-       console: absent, never disabled (Gitea #478). -->
+       the document group (§5.4b, mock S2e) — and only on a strip or regular
+       2D console: absent, never disabled (Gitea #478, #985). -->
   {@const item = menu.item}
   <Popover open anchor={menu.anchor} dataRole="tile-menu-popup" on:close={closeMenu}>
     <!-- the mock's three groups, separated the way it separates them: what

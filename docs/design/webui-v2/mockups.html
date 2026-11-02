@@ -2906,7 +2906,7 @@ responsive stacking, not a second flow. The search field stays first so a long l
 the scene row folds its duration into the type line exactly like a pattern row does (S4b).</p>
 
 <!-- ===================== S2e ===================== -->
-<p class="cap"><b>S2e</b> · Editor ⋯ menu — <i>Add to scene</i> on a matrix console, and the same menu on a strip</p>
+<p class="cap"><b>S2e</b> · Editor ⋯ menu — <i>Add to scene</i> on a matrix console, and the same menu on a strip (row for row since #985)</p>
 <div class="frame w1200" id="S2e">
   <header class="edhdr">
     <div class="btn quiet">← Patterns</div>
@@ -2954,6 +2954,7 @@ the scene row folds its duration into the type line exactly like a pattern row d
       <div class="btn icon">⋯</div>
       <div class="menu">
         <div class="mi hi">Add to playlist</div>
+        <div class="mi parent">Add to scene<span class="caret">▸</span></div>
         <div class="sepr"></div>
         <div class="mi">Duplicate</div>
         <div class="mi">Export .epe</div>
@@ -2965,14 +2966,14 @@ the scene row folds its duration into the type line exactly like a pattern row d
     <div class="edhdr-rail"><div class="devchip"><i class="dot"></i>luxel-4ae0d4 · 300 px strip</div></div>
   </header>
   <div style="height:236px;padding:16px 20px">
-    <div class="hint" style="max-width:420px">No greyed row, no "not available on this device": the menu is simply one
-    item shorter, and nothing else moves.</div>
+    <div class="hint" style="max-width:420px">A strip has scenes too since Gitea #985 — its canvas is one row in index
+    order — so this is the matrix's menu, row for row. A 3D or irregular-map console is where it is one item shorter.</div>
   </div>
 </div>
 <p class="note"><b>What this specifies.</b> <i>Add to scene</i> is the shortcut from the place you just tuned the look
-(§5.4b); the primary path stays the scene editor's own <i>Add layer → Pattern</i>. Scenes need a regular 2D grid, so on
-a strip, 3D or custom-map console the item is <b>absent</b>, not disabled — the same rule as the Scenes tab (S1b) and
-the capability-gated Settings rows (S3i). The tile ⋯ on the Patterns page carries the identical menu.</p>
+(§5.4b); the primary path stays the scene editor's own <i>Add layer → Pattern</i>. Scenes need a canvas — a regular 2D
+grid, or a strip's one row (#985) — so on a 3D or irregular-map console the item is <b>absent</b>, not disabled — the
+same rule as the Scenes tab and the capability-gated Settings rows (S3i). The tile ⋯ on the Patterns page carries the identical menu.</p>
 
 <!-- ===================== S6c ===================== -->
 <p class="cap"><b>S6c</b> · Scenes — console, empty state</p>

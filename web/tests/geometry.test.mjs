@@ -42,6 +42,10 @@ import {
   projectionLabel,
   projectionOptions,
   reconcileLayout,
+  SCENE_MAX_STRIP,
+  sceneCanvas,
+  sceneRigOf,
+  scenesFixture,
   serpentineCoords,
   thumbLayout,
   tileShape,
@@ -736,4 +740,78 @@ test("the playground's array ledger is the RIG's, floored at PB's count (#742)",
   // monotonic in the rig, and never below the floor whatever is passed
   assert.ok(playgroundArrayElements(8192, PB) > playgroundArrayElements(4096, PB));
   assert.equal(playgroundArrayElements(-5, PB), PB);
+});
+
+// ---- the scene canvas (D10 as "a regular 1D or 2D Layout", Gitea #985) ----
+//
+// The browser's copy of `outpipe::strip_grid` + the firmware's `scene_grid`:
+// it decides the Scenes/Sprites tabs, `Add to scene ▸` and the scene editor's
+// rig, so it must be exactly as strict as the engine, never looser.
+
+test("#985: a strip console is an n×1 canvas, a panel its own grid", () => {
+  const strip = reconcileLayout(input({ connected: true, geom: STRIP_CONSOLE }));
+  assert.deepEqual(sceneCanvas(strip), { w: 300, h: 1 });
+  assert.equal(scenesFixture(strip), true);
+  const panel = reconcileLayout(input({ connected: true, geom: PANEL_CONSOLE }));
+  assert.deepEqual(sceneCanvas(panel), { w: 64, h: 64 });
+  assert.equal(scenesFixture(panel), true);
+  // a regular 2-D map the device recognised as a grid is a grid too
+  const grid = reconcileLayout(
+    input({ connected: true, geom: { dims: 2, regular: true, w: 16, h: 8, source: "user", pixels: 128 } }),
+  );
+  assert.deepEqual(sceneCanvas(grid), { w: 16, h: 8 });
+});
+
+test("#985: a 1-D map is a strip whatever its coordinates; 1 px and 65,535 px are strips", () => {
+  const line = reconcileLayout(
+    input({
+      connected: true,
+      geom: { dims: 1, regular: false, w: 0, h: 0, source: "user", pixels: 12, coords: [[0], [3], [9]] },
+    }),
+  );
+  assert.deepEqual(sceneCanvas(line), { w: 12, h: 1 });
+  const rig = sceneRigOf(line);
+  assert.equal(rig.w, 12);
+  assert.equal(rig.h, 1);
+  assert.equal(rig.coords, undefined, "index order is the strip's order");
+  const one = reconcileLayout(input({ connected: true, geom: { ...STRIP_CONSOLE, w: 1, pixels: 1 } }));
+  assert.deepEqual(sceneCanvas(one), { w: 1, h: 1 });
+  const max = { ...one, w: SCENE_MAX_STRIP, pixels: SCENE_MAX_STRIP };
+  assert.deepEqual(sceneCanvas(max), { w: 65535, h: 1 });
+  assert.equal(sceneCanvas({ ...max, w: 65536, pixels: 65536 }), null, "more cells than a GridMap counts");
+  assert.equal(sceneCanvas({ ...max, w: 0, pixels: 0 }), null);
+});
+
+test("#985: an irregular 2-D map and every 3-D Layout have no canvas", () => {
+  const coords = [
+    [0, 0],
+    [1, 0.5],
+    [2, 1.7],
+    [3, 0.2],
+  ];
+  const scatter = reconcileLayout(
+    input({ connected: true, geom: { dims: 2, regular: false, w: 0, h: 0, source: "user", pixels: 4, coords } }),
+  );
+  assert.equal(sceneCanvas(scatter), null);
+  assert.equal(sceneRigOf(scatter), null);
+  const lattice = reconcileLayout(input({ connected: true, geom: LATTICE_CONSOLE }));
+  assert.equal(sceneCanvas(lattice), null);
+  assert.equal(scenesFixture(lattice), false);
+  // a REGULAR 3-D lattice too: the engine composites onto no 3-D Layout
+  assert.equal(sceneCanvas({ ...lattice, regular: true, w: 8, h: 8, d: 8 }), null);
+});
+
+test("#985: the playground's Auto placeholder strip is not a fixture, an explicit strip is", () => {
+  const auto = reconcileLayout(input());
+  assert.equal(auto.source, "default");
+  assert.deepEqual(sceneCanvas(auto), { w: DEFAULT_STRIP_PIXELS, h: 1 });
+  assert.equal(scenesFixture(auto), false, "S6b stays the empty state on Auto's stand-in");
+  const chosen = reconcileLayout(input({ previewAs: { mode: "strip", pixels: 150 } }));
+  assert.equal(scenesFixture(chosen), true);
+  assert.deepEqual(sceneCanvas(chosen), { w: 150, h: 1 });
+  const auto2d = reconcileLayout(input({ patternDims: 2 }));
+  assert.equal(scenesFixture(auto2d), true, "Auto's 16×16 for a 2D pattern, as before");
+  // the console's own pre-handshake placeholder is not a fixture either
+  const waiting = reconcileLayout(input({ connected: true, geom: null }));
+  assert.equal(scenesFixture(waiting), false);
 });

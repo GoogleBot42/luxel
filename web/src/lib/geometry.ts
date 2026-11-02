@@ -228,14 +228,64 @@ export interface Layout {
 }
 
 /**
- * A regular 2D matrix — the Layout the scene compositor draws on and the one
- * the text builtins need (Gitea #480/#486). A strip, a 3D lattice and an
- * irregular coordinate map are all false, which is exactly the gate S2f's
- * note describes: "the same Layout gate that hides the Scenes tab and
- * `Add to scene`".
+ * A regular 2D matrix — the Layout the text builtins need (Gitea #486). A
+ * strip, a 3D lattice and an irregular coordinate map are all false. It
+ * used to be the Scenes gate too (S2f's "the same Layout gate that hides the
+ * Scenes tab and `Add to scene`"); since #985 a strip has a scene canvas and
+ * that gate is [`sceneCanvas`] — a text builtin still draws nothing on one row.
  */
 export function isMatrixLayout(l: Layout): boolean {
   return l.dims === 2 && l.regular;
+}
+
+/** Most cells a compositor grid can count on one axis (`GridMap` is u16). */
+export const SCENE_MAX_STRIP = 65535;
+
+/**
+ * The canvas a SCENE composites onto on this Layout, or null when it has none
+ * — the browser's copy of the engine's rule (docs/spec/scenes.md §2 "The
+ * canvas"; `luxel_core::outpipe::strip_grid` + the firmware's `scene_grid`),
+ * and deliberately not a looser one:
+ *
+ * * a strip — no map, or ANY 1-D map — is `n`×1, one row in index order, for
+ *   `n` from 1 to 65,535 (Gitea #985). Its coordinates are not consulted;
+ * * a regular 2-D grid (a panel, a matrix, a 2-D map the engine recognises as
+ *   a grid) is that grid;
+ * * an irregular 2-D map and every 3-D Layout have none.
+ *
+ * Gates the Scenes and Sprites tabs, `Add to scene ▸` and the scene editor's
+ * rig (D10, now "a regular 1D or 2D Layout").
+ */
+export function sceneCanvas(l: Layout): { w: number; h: number } | null {
+  if (l.dims === 1) {
+    return l.pixels >= 1 && l.pixels <= SCENE_MAX_STRIP ? { w: l.pixels, h: 1 } : null;
+  }
+  if (l.dims === 2 && l.regular && l.w > 0 && l.h > 0) return { w: l.w, h: l.h };
+  return null;
+}
+
+/**
+ * Does the Scenes page (and the Sprites page beside it) have a fixture to
+ * work on? [`sceneCanvas`], minus the playground's Auto PLACEHOLDER strip:
+ * with no fixture chosen, Auto shows a 1-D pattern on a 60 px stand-in
+ * (`source: "default"`), and the page keeps the S6b empty state that picks
+ * one rather than compositing every shipped panel scene onto it. An explicit
+ * `Preview as` strip — and every console Layout — has its canvas.
+ */
+export function scenesFixture(l: Layout): boolean {
+  return l.source !== "default" && sceneCanvas(l) !== null;
+}
+
+/** The rig a scene renders through on `l`: the Layout itself on a matrix,
+ *  and on a strip the same Layout as a plain `n`×1 row (a 1-D map's
+ *  coordinates do not move the canvas — index order is the strip's order).
+ *  null where there is no canvas. */
+export function sceneRigOf(l: Layout): Layout | null {
+  const c = sceneCanvas(l);
+  if (c === null) return null;
+  if (c.h !== 1 || l.dims !== 1) return l;
+  if (l.regular && l.w === c.w && l.h === 1 && l.coords === undefined) return l;
+  return { ...l, regular: true, w: c.w, h: 1, d: 1, coords: undefined };
 }
 
 /** The shape a preview, tile or thumbnail draws (proposal §2 visibility

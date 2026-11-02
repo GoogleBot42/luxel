@@ -6559,7 +6559,7 @@
     },
     "S2estrip": {
       "mock": "S2e",
-      "title": "Editor ⋯ on a STRIP console — the same menu, one item shorter (no Add to scene)",
+      "title": "Editor ⋯ on a STRIP console — the matrix's menu, row for row (Add to scene since #985)",
       "width": 1200,
       "height": 940,
       "app": {
@@ -6602,7 +6602,7 @@
           "id": "menu",
           "mock": "#S2e header:nth-of-type(2) .menu",
           "app": "[data-role=\"editor-menu\"]",
-          "note": "the strip menu's HEIGHT is the assertion: no `Add to scene ▸` row, and nothing else moved (S2e's second header)"
+          "note": "the strip menu's HEIGHT is the assertion: the `Add to scene ▸` row is there since #985 (a strip has a one-row canvas), and nothing else moved (S2e's second header)"
         },
         {
           "id": "mi-playlist",
@@ -6616,11 +6616,11 @@
         },
         {
           "id": "mi-dup",
-          "mock": "#S2e header:nth-of-type(2) .menu > div:nth-child(3)",
+          "mock": "#S2e header:nth-of-type(2) .menu > div:nth-child(4)",
           "app": "[data-role=\"duplicate\"]",
           "text": true,
           "noBox": true,
-          "note": "mock order on a strip: Add to playlist · — · Duplicate · Export .epe · Import .epe… · — · Delete"
+          "note": "mock order on a strip: Add to playlist · Add to scene ▸ · — · Duplicate · Export .epe · Import .epe… · — · Delete"
         }
       ],
       "allow": [

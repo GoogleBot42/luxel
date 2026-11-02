@@ -389,6 +389,15 @@
   touch-action: none;
 }
 
+/* A strip's canvas is ONE row of n cells (Gitea #985): the stage draws it as
+   a bar of the column's width, the way a strip pattern's preview and tiles
+   are drawn, rather than stretching one row into a square. The marquee and
+   its handles are positioned in percentages, so they follow. */
+.scenes .stage canvas.bar {
+  aspect-ratio: auto;
+  height: 40px;
+}
+
 /* the selected layer's box, dashed in the accent (S7) */
 .scenes .marq {
   position: absolute;
@@ -880,6 +889,18 @@
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
+/* On a strip a scene is an n×1 row (Gitea #985), so its tile is the Patterns
+   page's strip tile: a 6:1 bar, three up, not a square stretched from one
+   row. Same specificity as the playground rule above and later, so it wins
+   on both shells. */
+.scenes .tiles.bars {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.scenes .tiles.bars .tile canvas {
+  aspect-ratio: 6 / 1;
+}
+
 @media (max-width: 1000px) {
   .scenes .tiles,
   .scenes.playground .tiles {
@@ -891,7 +912,8 @@
 
 @media (max-width: 600px) {
   .scenes .tiles,
-  .scenes.playground .tiles {
+  .scenes.playground .tiles,
+  .scenes .tiles.bars {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     padding: 12px;
   }
