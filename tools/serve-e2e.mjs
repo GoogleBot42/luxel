@@ -446,6 +446,27 @@ check(
   `fps=${stackStatus.fps} vmerr=${stackStatus.vmerr}`,
 );
 
+// (6b) on a strip the canvas is ONE ROW in index order (Gitea #985): two
+// boxes are two segments, each showing its own pattern
+const stripN = stackPx.length / 3;
+const half = Math.floor(stripN / 2);
+const segs = await postScene(
+  `S - segments\nL pat 0 0 ${half} 0 normal 100 none fill 1\nI ${scRed}\n` +
+    `L pat ${half} 0 ${stripN - half} 1 normal 100 none fill 1\nI ${scGreen}\n`,
+);
+await fetch(`${base}/api/scenes/${segs.id}/activate`, { method: "POST", body: "" });
+await sleep(1200);
+const segPx = new Uint8Array(await (await fetch(`${base}/api/pixels`)).arrayBuffer());
+const segAt = (i) => [...segPx.slice(i * 3, i * 3 + 3)].join(",");
+const isRed = (i) => segPx[i * 3] > 200 && segPx[i * 3 + 1] < 50;
+const isGreen = (i) => segPx[i * 3 + 1] > 200 && segPx[i * 3] < 50;
+check(
+  "scenes: on a strip two boxes are two segments (red | green)",
+  isRed(0) && isRed(half - 1) && isGreen(half) && isGreen(stripN - 1),
+  `n=${stripN} [0]=${segAt(0)} [${half - 1}]=${segAt(half - 1)} [${half}]=${segAt(half)} [${stripN - 1}]=${segAt(stripN - 1)}`,
+);
+await fetch(`${base}/api/scenes/${segs.id}`, { method: "DELETE" });
+
 // (7) playlist scene item — `I S<id> <sec>`; `C`/`P` under it are ignored
 await fetch(`${base}/api/playlist`, {
   method: "POST",
