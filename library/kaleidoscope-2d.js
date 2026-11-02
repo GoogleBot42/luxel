@@ -7,6 +7,8 @@
 // out through ridged colour. The source is built once per frame on a small polar
 // wedge canvas; each panel cell is one fold + one bilinear read through a packed
 // (angle, radius) table, and colour is a per-frame palette painted with paintCanvas.
+// Above 4,096 px a grid renders at <= 4,096 cells (64x64 on 128x128), expanded
+// bilinearly by the engine (setRenderSize): the same picture, minus a full-panel paintCanvas.
 
 var CAP = 64, NA = 16, NR = 32    // panel canvas cap; wedge canvas angles x radii
 var RMAX = 1.5, FAN = 0.95        // radius span (half-width = 1); radians of source per wedge
@@ -130,7 +132,16 @@ function zoomPalette() {
   }
 }
 
+var rs = 0                          // 1 once a big grid renders at <= 4,096 cells
+function bigGrid() {                // above 4,096 px: render <= 4,096 cells, engine expands bilinearly
+  if (rs || pixelCount <= 4096 || !has2DMap() || gridWidth() < 1 || gridHeight() < 2) return
+  var gw = gridWidth(), gh = gridHeight(), w = min(gw, floor(64 * sqrt(gw / gh) + 0.001))
+  setRenderSize(w, min(gh, floor(4096 / w)), 1)   // gridWidth/gridHeight/pixelCount follow at once
+  rs = 1
+}
+
 export function beforeRender(delta) {
+  bigGrid()
   var dt = min(delta, 100) * 0.001, st = dt * texSpeed
   var gw = gridWidth(), gh = gridHeight()
   var w = gw > 0 ? min(gw, CAP) : 32, h = gh > 0 ? min(gh, CAP) : 32

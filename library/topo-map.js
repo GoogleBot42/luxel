@@ -8,6 +8,8 @@
 // The whole look is ONE palette over height, rebuilt only when a control moves:
 // the frame is two native fillNoise3D canvases, an arrayMaxAbs normalise and one
 // paintCanvas — no per-pixel code. On a strip it is a slice through the same land.
+// Above 4,096 px a grid renders at <= 4,096 cells (64x64 on 128x128), expanded
+// bilinearly by the engine (setRenderSize): the same picture, minus a full-panel paintCanvas.
 
 var CAP = 64
 var A = array(CAP * CAP), B = array(CAP * CAP)
@@ -111,7 +113,16 @@ function buildPalette() {
 }
 
 var z = 0, drift = 0, gain = 0.4, CW = 32, CH = 32
+var rs = 0                          // 1 once a big grid renders at <= 4,096 cells
+function bigGrid() {                // above 4,096 px: render <= 4,096 cells, engine expands bilinearly
+  if (rs || pixelCount <= 4096 || !has2DMap() || gridWidth() < 1 || gridHeight() < 2) return
+  var gw = gridWidth(), gh = gridHeight(), w = min(gw, floor(64 * sqrt(gw / gh) + 0.001))
+  setRenderSize(w, min(gh, floor(4096 / w)), 1)   // gridWidth/gridHeight/pixelCount follow at once
+  rs = 1
+}
+
 export function beforeRender(delta) {
+  bigGrid()
   if (dirty) buildPalette()
   var dt = min(delta, 100) / 1000
   z = mod(z + dt / flowS * 2, 4096)

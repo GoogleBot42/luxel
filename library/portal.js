@@ -7,6 +7,8 @@
 // static radius canvas is painted through a palette rebuilt each frame from the
 // radial field (one paintCanvas, no per-pixel code). On a strip they bloom at
 // random spots into one capped field array.
+// Above 4,096 px a grid renders at <= 4,096 cells (64x64 on 128x128), expanded
+// bilinearly by the engine (setRenderSize): the same picture, minus a full-panel paintCanvas.
 
 var POOL = 8
 var born = array(POOL), amp = array(POOL), at = array(POOL), alive = array(POOL)
@@ -98,7 +100,16 @@ for (var i = 0; i < 3; i++) {
 // Luxel always runs renderBulk.
 export function render(index) { hsv(0, 0, 0) }
 
+var rs = 0                          // 1 once a big grid renders at <= 4,096 cells
+function bigGrid() {                // above 4,096 px: render <= 4,096 cells, engine expands bilinearly
+  if (rs || pixelCount <= 4096 || !has2DMap() || gridWidth() < 1 || gridHeight() < 2) return
+  var gw = gridWidth(), gh = gridHeight(), w = min(gw, floor(64 * sqrt(gw / gh) + 0.001))
+  setRenderSize(w, min(gh, floor(4096 / w)), 1)   // gridWidth/gridHeight/pixelCount follow at once
+  rs = 1
+}
+
 export function beforeRender(delta) {
+  bigGrid()
   var dt = min(delta, 100) / 1000
   clock += dt
   if (clock > 3600) {             // keep the clock small

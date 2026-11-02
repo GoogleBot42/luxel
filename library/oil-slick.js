@@ -6,6 +6,8 @@
 // breathes over time. Glitch slices thin rows sideways with stutters. Strata
 // mode shears noise bands past each other with dark seams. Panels: a canvas
 // at half resolution painted by paintCanvas; strips: two noise rows.
+// Above 4,096 px a grid renders at <= 4,096 cells (64x64 on 128x128), expanded
+// bilinearly by the engine (setRenderSize): the same picture, minus a full-panel paintCanvas.
 
 var cv = array(4096), cb = array(4096)      // palette position, brightness
 var wrow = array(64), bandOf = array(64), bandPos = array(64), tmp = array(3)
@@ -56,7 +58,16 @@ export function render(index) { hsv(0, 0, 0) }
 
 var cw = 32, ch = 32, lay = 0, z = 0, t = 0, ph = 0, fs = 0.25, ang = 0, kx = 0.05
 
+var rs = 0                          // 1 once a big grid renders at <= 4,096 cells
+function bigGrid() {                // above 4,096 px: render <= 4,096 cells, engine expands bilinearly
+  if (rs || pixelCount <= 4096 || !has2DMap() || gridWidth() < 1 || gridHeight() < 2) return
+  var gw = gridWidth(), gh = gridHeight(), w = min(gw, floor(64 * sqrt(gw / gh) + 0.001))
+  setRenderSize(w, min(gh, floor(4096 / w)), 1)   // gridWidth/gridHeight/pixelCount follow at once
+  rs = 1
+}
+
 export function beforeRender(delta) {
+  bigGrid()
   var dt = min(delta, 200) / 1000
   t = mod(t + dt, 3600)
   z = mod(z + dt / flowS * 1.4, 1000)
@@ -70,7 +81,7 @@ function layout() {
   var gw = gridWidth(), gh = gridHeight()
   if (gw == 0) { gw = 32; gh = 32 }
   var B = gw > 32 || gh > 32 ? 2 : 1
-  B = max(B, ceil(max(gw, gh) / 64))
+  B = rs ? 1 : max(B, ceil(max(gw, gh) / 64))
   if (lay && cw == ceil(gw / B) && ch == ceil(gh / B)) return
   cw = ceil(gw / B); ch = ceil(gh / B); kx = 1.7 / cw; lay = 1
   // strata of uneven height: hashed weights, normalised to the canvas

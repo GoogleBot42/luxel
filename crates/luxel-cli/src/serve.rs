@@ -2908,14 +2908,15 @@ fn layers_max(state: &State) -> usize {
     luxel_core::caps::layers_for(state.pixel_count.load(Ordering::Relaxed)) as usize
 }
 
-/// The canvas a scene composites on: the device's regular grid when it has
-/// one, otherwise the strip as a single row. Derived from the installed map,
-/// not from the running engine, so it survives every pattern swap — and a
-/// bare strip mirror can still show a scene, which is what makes the
-/// harness's scene cases cheap.
+/// The canvas a scene composites on — the firmware's `scene_grid` rule, so
+/// the mirror shows what a device would: a one-dimensional Layout (no map, or
+/// a 1-D map) is the strip as one row in index order (Gitea #985), a regular
+/// grid is that grid, and an irregular 2-D or any 3-D map is no canvas at all
+/// (every layer draws nothing). Derived from the installed map, not from the
+/// running engine, so it survives every pattern swap.
 fn scene_grid(state: &State) -> luxel_core::outpipe::GridMap {
     let n = state.pixel_count.load(Ordering::Relaxed) as usize;
-    let strip = luxel_core::outpipe::GridMap::new(n.min(u16::MAX as usize) as u16, 1, false);
+    let none = luxel_core::outpipe::GridMap::new(0, 0, false);
     if let Some((w, h)) = *state.device_grid.lock().unwrap() {
         if (w as usize) * (h as usize) == n && w <= u16::MAX as u32 && h <= u16::MAX as u32 {
             // The compositor's grid is the engines' (Gitea #948): on a panel
@@ -2927,14 +2928,13 @@ fn scene_grid(state: &State) -> luxel_core::outpipe::GridMap {
             return luxel_core::outpipe::GridMap::new(w as u16, h as u16, false);
         }
     }
-    if let Some((dims, coords)) = state.device_map.lock().unwrap().as_ref() {
-        if let Some(g) = luxel_core::outpipe::detect_grid(*dims, coords) {
-            if g.len() == n {
-                return g;
-            }
-        }
+    match state.device_map.lock().unwrap().as_ref() {
+        Some((dims, coords)) if *dims >= 2 => luxel_core::outpipe::detect_grid(*dims, coords)
+            .filter(|g| g.len() == n)
+            .unwrap_or(none),
+        Some((dims, _)) => luxel_core::outpipe::strip_grid(*dims, n).unwrap_or(none),
+        None => luxel_core::outpipe::strip_grid(0, n).unwrap_or(none),
     }
-    strip
 }
 
 fn scene_by_id(state: &State, id: &str) -> Option<luxel_core::scene::Scene> {

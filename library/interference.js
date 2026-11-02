@@ -7,6 +7,8 @@
 // rings: the summed field through one drifting OKLCH ramp (a 32-stop setPalette
 // rebuilt per frame, so the per-pixel cost is one paint). Per pixel: one hypot
 // and one wave per source; a strip shows a line cut through the middle.
+// Above 4,096 px a grid renders at <= 4,096 cells (64x64 on 128x128), expanded
+// bilinearly by the engine (setRenderSize): a quarter of the work on a 128x128 chain.
 
 var style = 0
 var nSrc = 3
@@ -44,7 +46,16 @@ function okRGB(L, C, h, o) {   // OKLCH -> gamma sRGB, Ottosson's OKLab matrices
 
 setPalette(pal)
 
+var rs = 0                          // 1 once a big grid renders at <= 4,096 cells
+function bigGrid() {                // above 4,096 px: render <= 4,096 cells, engine expands bilinearly
+  if (rs || pixelCount <= 4096 || !has2DMap() || gridWidth() < 1 || gridHeight() < 2) return
+  var gw = gridWidth(), gh = gridHeight(), w = min(gw, floor(64 * sqrt(gw / gh) + 0.001))
+  setRenderSize(w, min(gh, floor(4096 / w)), 1)   // gridWidth/gridHeight/pixelCount follow at once
+  rs = 1
+}
+
 export function beforeRender(delta) {
+  bigGrid()
   var dt = min(delta, 100) / 1000
   rp = mod(rp + dt * 18 / orbit, 1)
   hue = mod(hue + dt / 90, 1)

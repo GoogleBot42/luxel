@@ -23,6 +23,8 @@ S <id> <name…>                     id = 8 lowercase hex, or `-` on POST
 L <type> <x> <y> <w> <h> <blend> <opacity> <key> <fit> <flags>
    type     pat | text | sprite | color
    x y w h  integers in layout pixels; the layer's box. w or h = 0 → full layout
+            (a fill/contain sprite's natural size instead — §4); on a strip the
+            box is a segment: x, w along it, y 0, h 0 or 1 (§2 "The canvas")
    blend    normal | add | lighten | multiply | mask
    opacity  0..100
    key      none | black | luma
@@ -203,6 +205,49 @@ t ∈ {0, 0.25, 0.5, 1}). A scene→scene transition composites the incoming
 scene's layers on top at `opacity = t` and drops the outgoing stack when `t`
 reaches 100.
 
+### The canvas
+
+Every host composites onto ONE grid, derived from the device's **Layout**
+(the installed map), never from whichever pattern happens to be running:
+
+| Layout | canvas |
+|---|---|
+| a strip — no map at all, or a 1-D map (`dims` 1) | `n`×1, **one row in index order** (`outpipe::strip_grid`, Gitea #985) |
+| a regular 2-D grid — a panel, a `matrix`, a 2-D map `outpipe::detect_grid` recognises | that grid (tiled in wire order on a HUB75 chain, #948) |
+| an irregular 2-D map, any 3-D map | none — every layer draws nothing |
+
+The strip row holds for any `n` from 1 to 65,535 and ignores a 1-D map's
+coordinates: index order is the strip's own order, which is the order its
+pattern layers write their frames in. A 2D pattern on a mapless strip still
+renders on the square grid the engine fabricates for it — the canvas is the
+row regardless, so the pattern's frame is read in index order like any
+other. The ENGINE's grid is untouched (`detect_grid` still refuses a 1-D
+map), so no pattern sees anything new: only the compositor gets the row.
+
+On a strip a box is a **segment**: `x` and `w` place it along the strip, `y`
+is 0 and `h` is 0 or 1 — both mean the one row (a `y` past 0 is off the
+canvas and draws nothing, like any box outside the grid). `flipx` reverses
+the segment in place (`flipy` is a no-op on one row), `fit tile` repeats a
+1-row sprite along it, and ramps, masks, clip layers, keyframes (`M` lines
+move `x`) and every blend mode work unchanged — they never knew the grid's
+shape. A WLED-style "zones" scene on a 150 px strip is two pattern layers on
+two segments — pixels 0..74 show the first pattern's own 0..74, pixels
+75..149 the second pattern's 75..149 run backwards (`flags` 3 = visible +
+`flipx`):
+
+```
+S - Zones
+L pat 0 0 75 0 normal 100 none fill 1
+I 1a2b3c4d
+L pat 75 0 75 0 normal 100 none fill 3
+I 5e6f7a8b
+```
+
+**Text draws nothing on a one-row canvas.** No glyph fits one row, so a
+text layer there is skipped outright — no error, no partial glyph tops, and
+no coverage for a clip layer above it (such a clip layer draws nothing,
+exactly as over empty text). The same scene on a panel draws its text.
+
 ### Geometry
 
 `w` or `h` = 0 means "the whole layout" on that axis. The box clips at every
@@ -214,12 +259,12 @@ edge; a box wholly outside the grid draws nothing. `rot180` is `flipx` and
 
 * `pat` — the box CLIPS a full-layout render. The pattern still sees the whole
   grid; the layer shows a window onto it. `fit` is otherwise ignored.
-* `sprite` — `fill` and `contain` place the sprite 1:1 at the box origin;
-  `tile` repeats it across the box.
+* `sprite` — §4 "Placement": a zero `w` (or `h`, off a strip) is the natural
+  size for `fill`/`contain` and the whole layout for `tile`.
 * `text` — ignored.
 
-Like every `bulk.rs` kernel, a draw op is a **silent no-op without a regular
-grid**.
+Like every `bulk.rs` kernel, a draw op is a **silent no-op without a canvas**
+(the last row of the table above).
 
 ### API
 
@@ -231,8 +276,13 @@ pub fn fill_color(dst: Canvas, rgb: [u8; 3], style: &LayerStyle);
 pub fn blit_sprite(dst: Canvas, sprite: &SpriteView, frame: u16, style: &LayerStyle);
 pub fn draw_text_layer(dst: Canvas, scratch: &mut [[u8; 3]], text: &str,
                        layer: &TextLayer, style: &LayerStyle, scroll_px: i32);
+                       // draws nothing on a one-row grid
 pub fn blend_px_mode(dst: &mut [u8; 3], src: [u8; 3], mode: Blend, alpha: i32);
 pub fn eval_keys(keys: &[Keyframe], base: &LayerStyle, t_ms: u32) -> KeyState; // §1 "Keyframes"
+
+// luxel_core::outpipe — the canvas for a 1-D Layout ("The canvas" above):
+// Some(n×1) for layout_dims 0 (no map) or 1, n in 1..=65535; None otherwise
+pub fn strip_grid(layout_dims: u8, n: usize) -> Option<GridMap>;
 ```
 
 `draw_text_layer` renders the glyphs into a caller-owned full-frame `scratch`
@@ -480,11 +530,22 @@ copy (`lx_comp_sprite`, wasm) or over the mirror's in-memory record. A
 resident scene PINS the sprite records it draws exactly as it pins its
 pattern layers, so a compaction never moves them out from under a frame.
 
-**Placement (`fit`, decided in #741).** A sprite layer whose box has `w` or
-`h` of 0 draws at its NATURAL size at `(x, y)`, 1:1. With a box size set:
+**Placement (`fit`, decided in #741; zero boxes #985).** With a box size set,
 `fill` stretches the frame to the box (nearest neighbour), `contain` scales
 it uniformly to fit inside the box and centres it, `tile` repeats it 1:1
-across the box. `fit` still means nothing on any other layer kind. The frame
+across the box. A ZERO `w` or `h`:
+
+* on a `fill` / `contain` layer draws the sprite at its NATURAL size at
+  `(x, y)`, 1:1 — except that on a one-row canvas (a strip, §2) `h` 0 is the
+  row, so only `w` 0 means natural size there and `x 0 w 0` is a segment;
+* on a `tile` layer is **the whole layout on that axis**, as for a pattern
+  layer: `L sprite 0 0 0 0 … tile` wallpapers any panel and covers any strip
+  without its size typed in, and `0 40 0 24` is a full-width band. Before
+  #985 a zero box fell back to the natural size under `tile` too (one copy
+  of the tile); every shipped scene used an explicit box, so none changed
+  (`crates/luxel-core/tests/library_scenes.rs` digests them).
+
+`fit` still means nothing on any other layer kind. The frame
 shown is `frame_at_fps(ms since the scene was set, rate)`, per layer, where
 `rate` is the LAYER's `A <fps>` override when it has one and the record's own
 `fps` otherwise (Jeremy, 2026-09-26). `A 0` holds frame 0 however many frames

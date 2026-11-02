@@ -1,5 +1,56 @@
 # Update log
 
+## 2026-11-02 — 128x128 `setRenderSize` pass: nine ambient patterns faster on the chain
+
+Jeremy approved rendering the slowest ambient patterns at <= 4,096 cells
+(64x64) above 4,096 px, with the engine expanding them bilinearly. Measured on
+Seengreat unit 2 (2x2 chain, 16384 px) with patbench's method plus `out_fps`.
+**Portal 9 → 16 out_fps, Topo Map 7 → 12, Pool Caustics 9 → 12, Oil Slick
+9 → 12, Kaleidoscope 9 → 12, Reaction Diffusion 8 → 9, Interference 9 → 13,
+Wavy Bands 10 → 14, Geometry Morph 11 → 14.** The first six are
+byte-identical to master at 128x128: they already drew a <= 64x64 canvas, and
+`paintCanvas` shares the expand's sampler, so moving the upscale into the
+engine only removes the slower full-panel `paintCanvas`. Every edit is a no-op at
+4,096 px and below. HUD Ticker, Meadow, Lotus Bloom and Quasicrystal were left
+alone: at 64x64 they lose crisp detail (pixel-sized lanes and digits, grass
+blades, petal rims, a pixel-denominated wavelength) (#1023). The probes found
+that the bilinear expand itself costs ~43 ms/frame on the tiled chain, capping
+any such pattern at ~21 fps (#1022, the next lever). Table and probes in
+docs/bench-seengreat-hub75-rendersize.md. The idiom is now in
+.claude/rules/library.md. Device found on sinc (`5eed1e55`) at brightness 10,
+re-activated by id; `/api/pattern`, `/api/pattern.lxp` and `/api/controls`
+read back byte-identical to the pre-run capture.
+## 2026-11-02 — Scenes on 1-D strips: the engine half (Gitea #985)
+
+Jeremy approved #985 on 2026-11-02. A scene now composites on a strip: a
+one-dimensional Layout — no map, or a 1-D map — is an **n×1 canvas in index
+order** (`outpipe::strip_grid`, any n from 1 to 65,535), so a layer's box is
+a segment (`x`, `w`; `y` 0, `h` 0 or 1), `flipx` reverses it in place, a
+tiled 1-row sprite repeats along it, and ramps, masks, clip layers,
+keyframes and blend modes are unchanged — they never knew the grid's shape.
+Text layers draw nothing on a one-row canvas (no glyph fits), documented as
+behaviour; an irregular 2-D or any 3-D map still has no canvas.
+
+`detect_grid` itself is untouched on purpose: it sets the ENGINE's grid,
+which every grid-space builtin and post stage keys on, and a pattern on a
+strip must keep seeing index space. The firmware's `scene_grid` (and the
+mirror's, now the same rule — it used to treat an irregular or 3-D map as a
+strip too) asks `strip_grid` first, so a 2D base pattern's fabricated
+ceil(√n) grid no longer becomes the canvas on a strip either.
+
+`w = 0` (or `h = 0`) on a **tiled** sprite layer is now the whole layout on
+that axis, like a pattern layer's box, on every grid — `L sprite 0 0 0 0 …
+tile` covers a strip of any length or wallpapers any panel. It used to fall
+back to the natural size; no shipped scene relied on that, and the new
+`crates/luxel-core/tests/library_scenes.rs` proved it: all 41 shipped scenes
+print the same 64x64 digest on `origin/master` and on the branch (the
+instrument was validated by moving one scene's box to `w = 0` on master,
+which changed its digest). Spec: docs/spec/scenes.md §2 "The canvas" and §4;
+`library/README.md` gains a "Strips" section. The console half (the Scenes
+tab on strips, the D10 device-e2e flip, and the editor's sprite-box
+normalisation, which still rewrites a `w = 0` tile box to the natural size)
+is the follow-up PR.
+
 ## 2026-11-02 — Library cleanup: generic arcade names, #1008 housekeeping, Patternflow note draft
 
 Four library patterns carried arcade trademarks in their names. They are now

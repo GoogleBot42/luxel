@@ -150,13 +150,41 @@ The **slug is the file stem**, and it is the stable key on the library side: a
 scene reference and a clone both key on it, because the display name is the one
 thing a library entry is allowed to change.
 
-Scenes are inherently panel-only — a draw op is a silent no-op without a regular
-2D matrix (docs/spec/scenes.md §2), which is why the console's Scenes tab is
-gated on one and why `scenes.json` carries a constant `kind: "grid"` the way a
-pattern carries its own `kind`. The shipped ones are authored for a 64×64
-panel and keep every placed box inside 32×32, so they still read on a smaller
-matrix — the exception being a layer that is deliberately the whole layout
-(`spark-field`'s tiled sprite), which clips rather than disappears.
+A scene composites onto the device's Layout: a regular 2D matrix, or — since
+Gitea #985 — a strip, as one row in index order (docs/spec/scenes.md §2 "The
+canvas"). An irregular 2D map or any 3D map has no canvas, and a scene there
+draws nothing. The shipped ones are authored for a 64×64 panel (which is why
+`scenes.json` carries a constant `kind: "grid"` the way a pattern carries its
+own `kind`) and keep every placed box inside 32×32, so they still read on a
+smaller matrix — the exception being a layer that is deliberately the whole
+layout (`spark-field`'s tiled sprite), which clips rather than disappears.
+
+### Strips
+
+On a strip of `n` pixels the canvas is `n`×1, so a scene is written in
+**segments**:
+
+- **A box is a segment.** `L <type> <x> 0 <w> 0 …` covers pixels `x` ..
+  `x+w-1`; `h` 0 and `h` 1 both mean the one row, and `w` 0 is the rest of
+  the strip from `x`. A pattern layer's segment is a WINDOW onto that
+  pattern's full-strip render, not a squeezed copy: `75 0 75 0` on a 150 px
+  strip shows the pattern's own pixels 75..149.
+- **`flipx` (flags 3) reverses a segment in place** — the way to run a
+  pattern outward from a seam, or mirror two halves. `flipy` does nothing on
+  one row.
+- **Tiled 1-row sprites repeat along the strip.** Author the sprite 1 px
+  tall (an 8×1 bulb, a 12×1 dash), put it on a `tile` layer and give the
+  box `w` 0: under `tile` a zero `w` (or `h`) is the whole layout, so
+  `L sprite 0 0 0 0 normal 100 none tile 1` covers a strip of any length
+  without its pixel count typed in — and the same line wallpapers a panel.
+  A taller sprite shows only its top row on a strip.
+- **Ramps, masks, clip layers, keyframes and every blend mode work
+  unchanged.** An `M` line's `x` slides a segment along the strip; its `y`
+  should stay 0.
+- **Text draws nothing on a strip** — no glyph fits one row. It is not an
+  error: a scene with a clock caption still shows its other layers there.
+  Do not build a strip scene around a text layer.
+- Keep strip scenes to ≤ 2 `pat` layers, like every scene (`caps.layers`).
 
 ## The generator and the gate
 

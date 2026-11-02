@@ -8,6 +8,8 @@
 // Laplacians are native stencil2D passes and only the a*b*b reaction is an
 // interpreted loop. A culture that dies or has run its course is reseeded.
 // A canvas smaller than the panel is upscaled bilinearly.
+// Above 4,096 px the grid renders at the canvas size (48x48) and the engine expands
+// it bilinearly (setRenderSize): the same picture, without a full-panel paintCanvas.
 
 var CAP = 48
 var D = array(CAP * CAP)         // depletion of A (A = 1 - D)
@@ -124,7 +126,15 @@ function step() {
   arrayAdd(B, R)
 }
 
+var rs = 0                          // 1 once a big grid renders at the canvas size
+function bigGrid() {                // above 4,096 px: render at the canvas size, engine expands bilinearly
+  if (rs || pixelCount <= 4096 || !has2DMap() || gridWidth() < 1 || gridHeight() < 2) return
+  setRenderSize(min(gridWidth(), CAP), min(gridHeight(), CAP), 1)   // gridWidth/gridHeight follow at once
+  rs = 1
+}
+
 export function beforeRender(delta) {
+  bigGrid()
   acc += stepsPerSec * (delta / 1000)
   due = min(floor(acc), 6)
   acc = min(acc - due, 1)
