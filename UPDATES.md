@@ -1,5 +1,50 @@
 # Update log
 
+## 2026-11-02 — Scenes that fit any panel: the design size `U`, engine half (Gitea #997)
+
+Jeremy approved G3 on 2026-11-02. A scene may now declare the size it was
+designed at — `U <w> <h>` between the `S` and the first `L` — and the
+compositor maps its boxes and keyframe positions onto the real grid once,
+at `set_scene`/`set_grid`: a whole-number zoom `z = min(gw/rw, gh/rh)` on a
+panel with the design area centred (natural-size sprites, tile cells,
+glyphs and scroll speed scale by `z` too), proportional along a strip with
+gapless segment edges, positions-only shrink below the design size, and a
+mapped box never resolves to 0. `X abs` pins one layer to grid pixels.
+Scenes without `U` early-return (`Place::IDENTITY`) — the extended
+`tests/library_scenes.rs` now digests all 41 shipped scenes at 64x64,
+32x32, 128x128 and 150x1, and printed the same 164 lines on master and on
+the branch (instrument validated: `U 32 32` on campfire moved its
+64/128/150 lines and left 32x32 alone).
+
+- `luxel-core`: `Scene.space`, `Layer.abs`, the `U` arm and `X abs` in the
+  ONE parser/serializer/JSON (`"space"`, `"abs"`); `compose::{Axis, Place}`;
+  `Compositor::{place, layer_rect, layer_zoom}`; `text::draw_scaled`.
+- wasm: `lx_comp_layer_rect(ch, i) → [x, y, w, h, zoom]` (the console's
+  marquee — #996 item 1), `Compositor.layerRect()` in `luxel.ts`; the console
+  codec (`scene.ts`) round-trips `U`/`X abs` through the wire AND the
+  device's JSON, so the current console does not strip them on re-save.
+- Spec fix: §1 said a binding line before the first `L` is an error; both
+  parsers have always ignored it (verified back to 30938c29) — which is
+  exactly why `U` is safe on older firmware.
+- Design fix (also in `/tmp` DESIGN.md): its semantics block gave every zero
+  axis "no centring offset", which contradicted its own example B (a
+  natural-size sprite on 64x32 at (24,17), offset included). As built: the
+  no-offset rule is for zero axes that mean the whole layout; a natural
+  sprite's origin takes the offset. Example E's key also lacked its ease.
+- Gitea #1026 rides along (same code): a zero `w`/`h` is now the REST of the
+  layout from an `x`/`y` > 0 (`grid.w − x`), the whole layout at 0, so
+  `L pat 75 0 0 0 … fill 3` on a 150 px strip mirrors 75..149 instead of
+  drawing black. A text layer keeps the full-extent frame for alignment and
+  scroll (neon-sign's ±1 glow copies), which kept all 164 digests identical —
+  without that, neon-sign and now-playing moved.
+- Docs: docs/spec/scenes.md §2 "Design size" (rules + worked examples A–F),
+  docs/design/scenes-designed-size.md, library/README.md "Design size",
+  docs/api.md, docs/tools.md.
+
+Next under #997: the console PR (Layout chooser, Pin to pixels, marquee from
+`lx_comp_layer_rect`, preview-at size; mock S7j first) and the library
+batch (26 × `U 32 32`, 8 × `U 64 64`).
+
 ## 2026-11-02 — Scenes on 1-D strips: the engine half (Gitea #985)
 
 Jeremy approved #985 on 2026-11-02. A scene now composites on a strip: a

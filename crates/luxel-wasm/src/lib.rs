@@ -1487,6 +1487,7 @@ pub extern "C" fn lx_kinds(h: i32) -> i32 {
 // lx_comp_sprite(ch, layer: u32, ptr, len) -> i32            // LXSP record; len 0 clears
 // lx_comp_text(ch, layer: u32, ptr, len)
 // lx_comp_layer_count(ch) -> u32
+// lx_comp_layer_rect(ch, layer: u32) -> *const i32           // [x, y, w, h, zoom], or null
 // lx_comp_frame(ch, delta_raw: i32) -> *const u8             // w·h·3, or null
 // ```
 
@@ -1505,6 +1506,9 @@ struct CompSlot {
     sprites: Vec<Option<Vec<u8>>>,
     px: luxel_core::arena::FrameVec,
     out: Vec<u8>,
+    /// `lx_comp_layer_rect`'s answer, kept here so the pointer outlives the
+    /// call: `[x, y, w, h, zoom]`.
+    rect: [i32; 5],
     /// The SHARED full-frame driver (Gitea #732) — the same walk the device
     /// runs, and the owner of the sub-millisecond remainder of the frame
     /// deltas, so a 60 fps caller's 16.67 ms steps do not round the scroll
@@ -1569,6 +1573,7 @@ pub extern "C" fn lx_comp_new(w: u32, h: u32) -> i32 {
         sprites: Vec::new(),
         px: luxel_core::arena::empty(),
         out: Vec::new(),
+        rect: [0; 5],
         driver: SceneDriver::new(),
     };
     let mut comps = COMPOSITORS.lock().unwrap();
@@ -1690,6 +1695,36 @@ pub unsafe extern "C" fn lx_comp_text(ch: i32, layer: u32, ptr: *const u8, len: 
 #[no_mangle]
 pub extern "C" fn lx_comp_layer_count(ch: i32) -> u32 {
     with_comp(ch, |c| c.comp.layer_count() as u32).unwrap_or(0) as u32
+}
+
+/// Where layer `layer` draws right now, in grid cells: a pointer to five
+/// `i32`s, `[x, y, w, h, zoom]`, valid until the next call on this handle —
+/// or null for a bad handle or layer index.
+///
+/// The box is the RESOLVED one (`Compositor::layer_rect`): after the
+/// scene's `U` design size is mapped onto this compositor's grid and after
+/// the keyframe track has moved it to the current clock, with a zero `w`/`h`
+/// already turned into the whole layout on that axis. A natural-size sprite
+/// answers its record's size × `zoom` when `lx_comp_sprite` gave it one,
+/// and `w`/`h` 0 when it has none. `zoom` is the whole-number magnification
+/// the layer's glyphs, natural sprites and tile cells draw at (1 without a
+/// `U` line, and on an `X abs` layer). The console's selection marquee draws
+/// this (Gitea #996 item 1, #997).
+#[no_mangle]
+pub extern "C" fn lx_comp_layer_rect(ch: i32, layer: u32) -> *const i32 {
+    with_comp(ch, |c| {
+        let i = layer as usize;
+        let sprite = c
+            .sprites
+            .get(i)
+            .and_then(|s| s.as_deref())
+            .and_then(SpriteView::parse_trusted);
+        let (x, y, w, h) = c.comp.layer_rect(i, sprite.as_ref())?;
+        c.rect = [x, y, w, h, c.comp.layer_zoom(i) as i32];
+        Some(c.rect.as_ptr())
+    })
+    .flatten()
+    .unwrap_or(std::ptr::null())
 }
 
 /// Step every bound pattern engine, composite the whole stack bottom → top

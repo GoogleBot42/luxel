@@ -7,7 +7,7 @@ mirror and the wasm playground cannot disagree about any of them. Hosts only
 plumb.
 
 Gitea #477 (blend), #478 (record + native layers), #481 (sprites),
-#482 (composite thumbnails). Design: `docs/design/webui-v2/proposal.md` §5.5,
+#482 (composite thumbnails), #985 (strips), #997 (design size). Design: `docs/design/webui-v2/proposal.md` §5.5,
 §5.5b.
 
 ## 1. The wire record
@@ -20,10 +20,14 @@ the playlist's.
 S <id> <name…>                     id = 8 lowercase hex, or `-` on POST
                                    ("assign one"); name = rest of line,
                                    ≤ 64 B UTF-8, no newline
+U <w> <h>                          optional design size, each 1..4096; between
+                                   the S and the first L (§2 "Design size")
 L <type> <x> <y> <w> <h> <blend> <opacity> <key> <fit> <flags>
    type     pat | text | sprite | color
-   x y w h  integers in layout pixels; the layer's box. w or h = 0 → full layout
-            (a fill/contain sprite's natural size instead — §4); on a strip the
+   x y w h  integers in layout pixels — DESIGN units in a scene with a `U`
+            line (§2 "Design size"); the layer's box. w or h = 0 → the rest of
+            the layout from x / y, the whole layout at 0 (§2 "Geometry"; a
+            fill/contain sprite's natural size instead — §4); on a strip the
             box is a segment: x, w along it, y 0, h 0 or 1 (§2 "The canvas")
    blend    normal | add | lighten | multiply | mask
    opacity  0..100
@@ -45,7 +49,7 @@ Lines that bind to the most recent `L`:
 | `T <source> <arg…>` | text | `lit <utf8…>` \| `clock <fmt>` \| `slot <n 0..7>` |
 | `F <font> <rrggbb> <align> <scroll> <speed>` | text | font `tiny\|regular\|large`; align `l\|c\|r`; scroll `none\|left\|right\|up\|down\|bounce`; speed px/s |
 | `K <rrggbb>` | color | the wash colour |
-| `X <flag…>` | all | per-layer flags past the `L` line's 0..15: `clip` (§2 "Clip layers"); unknown words ignored |
+| `X <flag…>` | all | per-layer flags past the `L` line's 0..15: `clip` (§2 "Clip layers"), `abs` (§2 "Design size": this layer keeps grid pixels); unknown words ignored |
 | `M <ms> <x> <y> <opacity> <ease> [<frame>]` | all | one keyframe of the layer's motion — below |
 
 `<fmt>` ∈ `HH:MM` · `HH:MM:SS` · `hh:MM` · `hh:MM:SS` · `MM-DD` · `YYYY-MM-DD`.
@@ -54,9 +58,11 @@ Lines that bind to the most recent `L`:
 and the EMPTY string for a `pat` layer (only the host knows a pattern's name);
 `F regular ffffff l none 0`; `T lit ` (empty); `K 000000`; no controls, no
 projection override, no ramp, no `A` — a sprite layer without one plays
-the record's own `fps` (§4), no `X` (not clipped) — and no `M`: the layer
-stands where `L` puts it. `serialize` writes a layer's `X clip` after its
-body lines and before its `M` lines.
+the record's own `fps` (§4), no `X` (not clipped, not pinned) — and no `M`:
+the layer stands where `L` puts it; no `U` (layout pixels). `serialize`
+writes the `U` line straight after the `S` line, and a layer's ONE `X` line
+(`X clip`, `X abs` or `X clip abs`, in that order) after its body lines and
+before its `M` lines.
 
 ### Keyframes (`M` lines)
 
@@ -67,8 +73,9 @@ and which sprite frame it holds, at a time measured from the scene's start.
 M <ms> <x> <y> <opacity> <ease> [<frame>]
    ms       0..3600000, ascending (equal = an instant jump); the LAST key's ms
             is the loop period
-   x y      the box ORIGIN in layout px (the box size is the L line's);
-            `=` keeps the L line's value
+   x y      the box ORIGIN in layout px — design units under `U`, mapped
+            exactly like the L origin (§2 "Design size"); the box size is
+            the L line's; `=` keeps the L line's value
    opacity  0..100, or `=`
    ease     linear | step | in | out | inout | sine | back | bounce | elastic
             — the curve of the segment that ENDS at this key
@@ -110,10 +117,19 @@ the console verbatim.
 
 **Forward compatibility.** An unknown line tag is ignored, and so is a binding
 line that does not apply to the layer it follows — an older host survives a
-newer console's push. A binding line before the first `L`, or any line before
-the `S`, is an error. `A` is the one exception to the ignore rule: on a
-`pat`/`text`/`color` layer it is `scene: line N: A on a non-sprite layer`,
-because a frame rate the user typed is worth naming rather than dropping.
+newer console's push. So is a binding line that arrives BEFORE the first
+`L`: it has no layer to bind to and reads as an unknown line (both parsers
+have done this since the first scene commit, 30938c29 — an earlier version
+of this paragraph called it an error, which the code never did). That rule
+is what makes the `U` line safe on older firmware: such a host ignores it
+and draws the scene's numbers 1:1, and nothing in the stored blob is
+rejected. Any line before the `S` IS an error, and so — on a host that knows
+`U` — is a `U` after the first `L` (`a U line after the first L line`) or
+one whose fields are not two integers 1..4096 (`bad U field "<token>"`;
+trailing words are ignored like any line's). `A` is the one exception to the
+ignore rule: on a `pat`/`text`/`color` layer it is `scene: line N: A on a
+non-sprite layer`, because a frame rate the user typed is worth naming
+rather than dropping.
 
 **Round trip.** `serialize` emits only the lines that differ from the
 defaults, so `parse`∘`serialize` is the identity on a record and
@@ -147,8 +163,11 @@ pub enum Ease { Linear, Step, In, Out, InOut, Sine, Back, Bounce, Elastic }
 pub struct Keyframe { pub ms: u32, pub x: Option<i16>, pub y: Option<i16>,   // None = `=`
                       pub opacity: Option<u8>, pub ease: Ease, pub frame: Option<u8> }
 pub struct Layer { pub name: String, pub style: LayerStyle, pub body: LayerBody,
-                   pub keys: Vec<Keyframe>, pub clip: bool }   // clip = `X clip`
-pub struct Scene { pub id: String, pub name: String, pub layers: Vec<Layer> }
+                   pub keys: Vec<Keyframe>, pub clip: bool,   // clip = `X clip`
+                   pub abs: bool }                            // abs = `X abs`
+pub struct Scene { pub id: String, pub name: String,
+                   pub space: Option<(u16, u16)>,             // the `U` line
+                   pub layers: Vec<Layer> }
 
 pub fn parse(block: &str) -> Result<Scene, String>;
 pub fn parse_all(blob: &str) -> Result<Vec<Scene>, String>;
@@ -160,6 +179,7 @@ pub const MAX_NAME: usize = 64;
 pub const MAX_LAYER_NAME: usize = 32;
 pub const MAX_KEYS: usize = 16;
 pub const MAX_KEY_MS: u32 = 3_600_000;
+pub const MAX_SPACE: u16 = 4096;                // per axis of a `U` line
 ```
 
 `Font` and `ClockFmt` are re-exported from `luxel_core::text`. Scene ids are
@@ -250,8 +270,20 @@ exactly as over empty text). The same scene on a panel draws its text.
 
 ### Geometry
 
-`w` or `h` = 0 means "the whole layout" on that axis. The box clips at every
-edge; a box wholly outside the grid draws nothing. `rot180` is `flipx` and
+`w` or `h` = 0 means **the rest of the layout from the box's origin** on that
+axis: `grid.w − x` for an `x` > 0 (and `grid.h − y` for a `y` > 0), the whole
+layout for an origin at 0 or before it (Gitea #1026). Before #1026 a zero
+axis was the layout's full extent wherever it started, so `75 0 0 0` on a
+150 px strip was the box 75..224: unflipped it clipped to the same pixels,
+but `flipx` mirrored the whole overhanging box and sampled past the end —
+the visible half drew black. Now that box is 75..149 and a flip mirrors
+exactly it, which makes `L pat 75 0 0 0 … fill 3` a length-independent
+second zone. Every shipped scene's pattern, colour and sprite boxes either
+start at 0 or are unflipped, so none changed (the `library_scenes.rs`
+digests, all four grids). A TEXT layer keeps the full-extent frame for its
+alignment and scroll wrap (so `neon-sign`'s glow copies at `x` ±1 still sit
+one pixel either side of the tube) and composites through the rest-of-layout
+box. The box clips at every edge; a box wholly outside the grid draws nothing. `rot180` is `flipx` and
 `flipy` together, so the three flags collapse to two mirrors, applied
 **within the box**.
 
@@ -266,6 +298,141 @@ edge; a box wholly outside the grid draws nothing. `rot180` is `flipx` and
 Like every `bulk.rs` kernel, a draw op is a **silent no-op without a canvas**
 (the last row of the table above).
 
+### Design size (`U <w> <h>`, Gitea #997)
+
+A scene's boxes are layout pixels, so a composition authored on one panel
+sits in the top-left corner of a bigger one, and a 5×8 glyph is 8 of 128
+rows. A `U <w> <h>` line declares the size the scene was **designed at**;
+its boxes and keyframe positions are then design units, mapped onto the real
+grid once, when the scene is set (`Compositor::set_scene`) and again when
+the grid changes (`set_grid`) — no per-pixel and no per-frame cost beyond
+mapping a keyed layer's two current keys.
+
+```
+S - Fire Clock
+U 32 32                       coordinates are in a 32×32 design space
+L text 0 16 0 0 normal 100 none fill 1
+T clock HH:MM
+F large 5a1404 c none 0
+L pat 0 0 0 0 lighten 100 none fill 1
+I @pat/perlin-fire
+X clip
+```
+
+With the design size `(rw, rh)` and the canvas `(gw, gh)` (`n`×1 on a
+strip, "The canvas" above):
+
+```
+no U line, or the layer has X abs  →  identity: the L numbers, 1:1
+strip  (rh == 1 || gh == 1):  f = gw/rw (rational), ox = 0; y and h are not mapped
+panel:
+   z0 = min(gw / rw, gh / rh)                      integer division
+   z0 ≥ 1 → f = z0                                 whole-number zoom
+   z0 = 0 → f = min(gw/rw, gh/rh)                  rational, by cross-multiplying
+   ox = (gw − ⌊rw·f⌋) / 2,  oy = (gh − ⌊rh·f⌋) / 2   the design area centred
+z = max(1, ⌊f⌋)    zooms natural-size sprites (sw·z × sh·z), tile cells, glyph
+                   cells, advance and line height, and the scroll speed
+                   (an `F` speed is design px/s, ×z)
+map(v) = ⌊v·f⌋     i64, floor division (monotone for negative v)
+placed axis (n > 0): a = o + map(v),  b = o + map(v + n),  size = max(1, b − a)
+zero axis   (n = 0): origin = map(v) with NO centring offset, size 0 (the rest of the real layout)
+natural sprite:      both origins o + map(v), drawn at sw·z × sh·z
+M key x/y:  mapped exactly like the L origin on that axis, BEFORE the
+            interpolation; `=` stays the L origin (mapped)
+```
+
+* **Edges are mapped, not sizes**, so two adjacent design boxes stay
+  adjacent at any `f` — no gap, no overlap (a strip's zones stay gapless at
+  any length).
+* **A placed axis never resolves to 0** (`max(1, …)`): a resolved size of 0
+  would flip the box to "the whole layout".
+* **A zero axis is still the whole REAL layout**: `0 0 0 0` covers a
+  letterboxed panel's margins too, which is what a backdrop wants. Its origin
+  is scaled but not offset, so on a panel letterboxed vertically a zero-`h`
+  text box at `y` 16 lands 16·f from the top of the PANEL, not of the design
+  area; give the box an `h` to place it inside the design area.
+* **Below the design size** (`z0` = 0, e.g. a `U 32 32` scene on a 16×16
+  matrix) positions and box-fit content shrink; pixels never do — natural
+  sprites, tile cells and glyphs stay 1:1.
+* **A keyed layer keeps its `L` box's mapped size** while its origin moves;
+  the track interpolates mapped (grid) positions, so motion on a ×4 panel
+  moves in 1-px steps rather than 4-px jumps.
+* **`X abs`** opts ONE layer out: its numbers stay grid pixels, its content
+  1:1, its scroll speed grid px/s. Absolute and design-unit layers mix freely
+  (a fine snowfall tile over a scaled tree). In a scene without `U` it means
+  nothing.
+* `fill`/`contain` sprites already scale nearest-neighbour to their box,
+  which now maps; clip layers are per pixel and need nothing; text still
+  draws nothing on a one-row canvas.
+* **Backwards compatibility**: a scene without `U` takes an early return
+  (`Place::IDENTITY`) and draws byte-identically —
+  `crates/luxel-core/tests/library_scenes.rs` digests every shipped scene at
+  64×64, 32×32, 128×128 and 150×1, and printed the same 164 lines on
+  `origin/master` and on the #997 branch. On firmware older than #997 a `U`
+  scene draws at its design numbers 1:1 (§1 "Forward compatibility") —
+  exactly the picture it had before it declared one.
+
+Why one integer zoom and not percent fields or anchors: a new token INSIDE
+the `L` line (`10%`) fails an older host's integer parse, so the stored blob
+is rejected and the device starts with no scenes — an OTA rollback, which
+the boot-loop guard can trigger on its own, would wipe them all; 1 % steps
+are also 1.28 px at 128 and 3 px on a 300 px strip, and percent does nothing
+for glyph or sprite size. Anchors (`c`, `b`, `tr`) centre a fixed-size
+composition but do not scale it — on 128×128 everything is still tiny, just
+in the middle. A per-axis 0..1 fixed point distorts the aspect on 64×32 and
+gives pixel art no integer zoom. Boxes, sprites and glyphs scaling by ONE
+integer keeps a fire box over its fire sprite and a scrim behind its text,
+and a composition that fits its design size fits every multiple of it. The
+full rationale is `docs/design/scenes-designed-size.md`.
+
+Worked examples (`U 32 32` unless said):
+
+**A. fire-clock** — `L text 0 16 0 0`, large "12:34" (30 px advance), `c`:
+
+| canvas | f, z | box | text anchor | glyph rows |
+|---|---|---|---|---|
+| 32×32 | 1, 1 | y16, full width | x1 | 16–23 |
+| 64×64 | 2, 2 | y32 | x2 | 32–47 |
+| 128×128 | 4, 4 | y64 | x4 | 64–95 |
+| 150×1 | strip | text draws nothing, so a clip fire above it draws nothing | | |
+
+**B. campfire** — embers box `8 0 16 28`, fire sprite natural 16×14 at
+`8 17`, ground `0 30 0 0`:
+
+| canvas | embers box | fire sprite | ground |
+|---|---|---|---|
+| 32×32 | [8,24)×[0,28) | (8,17) 16×14 | rows 30+ |
+| 64×64 | [16,48)×[0,56) | (16,34) 32×28 | rows 60+ |
+| 128×128 | [32,96)×[0,112) | (32,68) 64×56 | rows 120+ |
+| 64×32 | z0=1, ox=16: [24,40)×[0,28) | (24,17) 16×14 | rows 30+, full width (zero axis) |
+
+**C. neon-sign glow at 128** — `L text -1 12 0 0`: `x` is a zero axis, so
+its origin is map(−1) = −4 and the box is the real width; the glyphs are 4×
+and centre-aligned, so the glow copy sits exactly one scaled pixel (4 px)
+left of the tube.
+
+**D. strip zones** — `U 150 1`, `L pat 0 0 75 0` and `L pat 75 0 75 0 … 3`:
+
+| strip | f | zone 1 | zone 2 |
+|---|---|---|---|
+| 150 | 1 | [0,75) | [75,150) |
+| 300 | 2 | [0,150) | [150,300) |
+| 61 | 61/150 | [0,30) | [30,61), gapless |
+
+**E. sunrise keyframes at 128** — the box `4 3 22 22 contain` maps to
+(16,12) 88×88 and `contain` fits an 11×11 sun at 8×; `M 0 0 24 0 linear` maps to
+(0,96) and `M 20000 8 24 0 in` to (32,96), and the rise is interpolated in
+grid pixels.
+
+**F. silent-night snow, `X abs`** — `L sprite 0 0 0 0 … tile 1` + `X abs`:
+the 16×16 snowfall tile repeats 1:1 over the whole 128×128, so the flakes
+stay fine, while the tree beside it (`4 6`, 24×26) maps to (16,24) 96×104.
+
+The unit tests next to `compose::Place` pin each rule (zoom and centring,
+the never-0 rule, strips proportional and gapless at every length 1..400,
+below-design shrink, `X abs`, keys in design units, `set_grid` re-mapping,
+scaled glyphs, natural sprites and tile cells, the scroll speed).
+
 ### API
 
 ```rust
@@ -273,12 +440,24 @@ pub struct Canvas<'a> { pub px: &'a mut [[u8; 3]], pub grid: &'a GridMap }
 
 pub fn composite_frame(dst: Canvas, src: &[[u8; 3]], style: &LayerStyle);
 pub fn fill_color(dst: Canvas, rgb: [u8; 3], style: &LayerStyle);
-pub fn blit_sprite(dst: Canvas, sprite: &SpriteView, frame: u16, style: &LayerStyle);
+pub fn blit_sprite(dst: Canvas, sprite: &SpriteView, frame: u16, style: &LayerStyle); // zoom 1
 pub fn draw_text_layer(dst: Canvas, scratch: &mut [[u8; 3]], text: &str,
                        layer: &TextLayer, style: &LayerStyle, scroll_px: i32);
                        // draws nothing on a one-row grid
 pub fn blend_px_mode(dst: &mut [u8; 3], src: [u8; 3], mode: Blend, alpha: i32);
 pub fn eval_keys(keys: &[Keyframe], base: &LayerStyle, t_ms: u32) -> KeyState; // §1 "Keyframes"
+
+// "Design size" above: a scene's `U` resolved against a grid
+pub struct Axis { pub num: i32, pub den: i32, pub off: i32 }   // v ↦ off + ⌊v·num/den⌋
+pub struct Place { pub x: Axis, pub y: Axis, pub zoom: u16 }
+impl Place {
+    pub const IDENTITY: Place;                                  // no `U`: 1:1
+    pub fn new(space: Option<(u16, u16)>, grid: &GridMap) -> Place;
+}
+
+// luxel_core::text — glyphs magnified by a whole number (z 1 = draw_aligned)
+pub fn draw_scaled(dst: &mut [[u8; 3]], grid: &GridMap, x: i32, y: i32, text: &str,
+                   font: Font, rgb: [u8; 3], align: Align, z: u16) -> i32;
 
 // luxel_core::outpipe — the canvas for a 1-D Layout ("The canvas" above):
 // Some(n×1) for layout_dims 0 (no map) or 1, n in 1..=65535; None otherwise
@@ -342,9 +521,21 @@ impl Compositor {
     pub fn layer_count(&self) -> usize;
     pub fn layer_kind(&self, layer: usize) -> Option<LayerKind>;
     pub fn layer_kinds(&self) -> impl Iterator<Item = LayerKind> + '_;
+    pub fn place(&self) -> Place;                 // the `U` line on this grid
+    pub fn layer_rect(&self, layer: usize, sprite: Option<&SpriteView>)
+        -> Option<(i32, i32, i32, i32)>;          // where it draws NOW, below
+    pub fn layer_zoom(&self, layer: usize) -> u16;
     pub fn resident_bytes(&self) -> usize;
 }
 ```
+
+`layer_rect` is the layer's box after the design size and after its
+keyframe track, in grid cells, with a zero `w`/`h` turned into the whole
+layout on that axis — except a natural-size sprite, which answers its
+record's size × `layer_zoom` when `sprite` is given and `w`/`h` 0 when it
+is not (the compositor holds no records). `layer_zoom` is 1 without a `U`
+line and on an `X abs` layer. The wasm binding exports both as
+`lx_comp_layer_rect` (§5).
 
 Layers are drawn in order, bottom → top: `pattern_layer` with that layer's
 engine frame, or `native_layer` for text / sprite / colour. The compositor
@@ -441,7 +632,10 @@ own and stays (Gitea #787).
 }]}
 ```
 
-A clip layer carries `"clip":true` right after `rot180` (absent otherwise),
+A scene with a design size carries `"space":[32,32]` right after `"name"`
+(absent without a `U` line). A clip layer carries `"clip":true` right after
+`rot180`, and an `X abs` layer `"abs":true` right after that (each absent
+otherwise),
 and a layer with a track carries `"keys":[{"ms":0,"x":4,"y":40,"opacity":0,"ease":"linear","frame":2},…]`
 right after `rot180`: `x` / `y` / `opacity` are absent for a `=`, `frame`
 absent when the key holds none, and `keys` itself absent when the layer has
@@ -538,12 +732,18 @@ across the box. A ZERO `w` or `h`:
 * on a `fill` / `contain` layer draws the sprite at its NATURAL size at
   `(x, y)`, 1:1 — except that on a one-row canvas (a strip, §2) `h` 0 is the
   row, so only `w` 0 means natural size there and `x 0 w 0` is a segment;
-* on a `tile` layer is **the whole layout on that axis**, as for a pattern
+* on a `tile` layer is **the whole layout on that axis** (the rest of it
+  from an `x`/`y` > 0, §2 "Geometry"), as for a pattern
   layer: `L sprite 0 0 0 0 … tile` wallpapers any panel and covers any strip
   without its size typed in, and `0 40 0 24` is a full-width band. Before
   #985 a zero box fell back to the natural size under `tile` too (one copy
   of the tile); every shipped scene used an explicit box, so none changed
   (`crates/luxel-core/tests/library_scenes.rs` digests them).
+
+In a scene with a design size (§2 "Design size") the natural size and the
+tile cell are magnified by the whole-number zoom `z` — every texel a `z`×`z`
+block, so pixel art stays crisp — and `fill`/`contain` scale to the mapped
+box as before. An `X abs` sprite layer stays 1:1.
 
 `fit` still means nothing on any other layer kind. The frame
 shown is `frame_at_fps(ms since the scene was set, rate)`, per layer, where
@@ -577,6 +777,11 @@ lx_comp_sprite(ch, layer: u32, ptr, len) -> i32   // sprite layers: the LXSP rec
 lx_comp_text(ch, layer: u32, ptr, len)
 lx_comp_frame(ch, delta_raw: i32) -> *const u8     // w·h·3 RGB, valid until the next call
 lx_comp_layer_count(ch) -> u32
+lx_comp_layer_rect(ch, layer: u32) -> *const i32   // [x, y, w, h, zoom] — Compositor::layer_rect
+                                                  // + layer_zoom, after `U` and the keyframe
+                                                  // track; natural sprites sized from the
+                                                  // lx_comp_sprite record; valid until the next
+                                                  // call; null for a bad handle or layer
 
 lx_palette_lut(ptr, n_stops: u32, amount_pct: u32) -> *const u8
                                         // 768 B: the cooked RAMP table, r,g,b per
@@ -609,6 +814,7 @@ synchronous fallback for the first paint before the module is up, and
 TypeScript wrapper: `Luxel.compositor(w, h)` → `Compositor` with
 `setScene(wire) → string | null`, `bind(layer, engine | null)`,
 `setSprite(layer, bytes | null) → string | null`, `setText(layer, s)`,
-`layerCount()`, `frame(dtMs) → Uint8Array`, `free()`
+`layerCount()`, `layerRect(layer) → {x, y, w, h, zoom} | null`,
+`frame(dtMs) → Uint8Array`, `free()`
 (`web/src/lib/luxel.ts`). `Engine.handle` exposes the wasm handle `bind`
 takes.

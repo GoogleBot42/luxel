@@ -10,6 +10,7 @@
 //!
 //! ```text
 //! S <id> <name…>
+//! U <w> <h>                       the design size (before the first L)
 //! L <type> <x> <y> <w> <h> <blend> <opacity> <key> <fit> <flags>
 //!   N <name…>                     layer display name
 //!   I <id>                        pat: pattern id, sprite: sprite id
@@ -20,7 +21,8 @@
 //!   T <source> <arg…>             text: lit <utf8…> | clock <fmt> | slot <n>
 //!   F <font> <rrggbb> <align> <scroll> <speed>
 //!   K <rrggbb>                    color: the wash colour
-//!   X clip                        any: confined to the coverage below
+//!   X clip abs                    any: `clip` confined to the coverage
+//!                                 below, `abs` pinned to grid pixels
 //!   M <ms> <x> <y> <opacity> <ease> [<frame>]
 //!                                 any: one keyframe of the layer's motion
 //! ```
@@ -48,6 +50,8 @@ pub const MAX_KEYS: usize = 16;
 /// The latest a keyframe may sit, in ms from the scene's start: one hour.
 /// The last key's time is the track's loop period.
 pub const MAX_KEY_MS: u32 = 3_600_000;
+/// The largest design size a `U` line may declare, per axis (Gitea #997).
+pub const MAX_SPACE: u16 = 4096;
 
 // ---- types ----
 
@@ -498,6 +502,10 @@ pub struct Layer {
     /// `X clip`: this layer's α is multiplied by the coverage of the layer
     /// below it (docs/spec/scenes.md §2 "Clip layers").
     pub clip: bool,
+    /// `X abs`: in a scene with a design size ([`Scene::space`]) this layer
+    /// keeps grid pixels and 1:1 content — it is not mapped (Gitea #997).
+    /// Meaningless, and harmless, in a scene without one.
+    pub abs: bool,
 }
 
 impl Layer {
@@ -531,6 +539,11 @@ pub struct Scene {
     /// 8 lowercase hex, or empty when the record said `S -` ("assign one").
     pub id: String,
     pub name: String,
+    /// The `U <w> <h>` line: the size the scene was designed at, each axis
+    /// 1..=[`MAX_SPACE`]. `Some` makes every box and keyframe position a
+    /// DESIGN unit that the compositor maps onto the real grid
+    /// (docs/spec/scenes.md §2 "Design size"); `None` is layout pixels.
+    pub space: Option<(u16, u16)>,
     /// Bottom → top; `layers[0]` is the base.
     pub layers: Vec<Layer>,
 }
@@ -671,6 +684,21 @@ fn parse_at(block: &str, first_line: usize) -> Result<Scene, String> {
                 }
                 scene.layers.push(parse_layer(line, n)?);
             }
+            // The design size (Gitea #997): scene-level, so it goes between
+            // the `S` and the first `L`. An older host reads it as a binding
+            // line before any layer — ignored — and draws the numbers 1:1.
+            "U" if seen_s && scene.layers.is_empty() => {
+                let mut it = line.split_whitespace().skip(1);
+                let mut dim = || -> Result<u16, String> {
+                    let tok = it.next().unwrap_or("");
+                    match tok.parse::<u16>() {
+                        Ok(v) if (1..=MAX_SPACE).contains(&v) => Ok(v),
+                        _ => Err(err_tok(n, "bad U field", tok)),
+                    }
+                };
+                scene.space = Some((dim()?, dim()?));
+            }
+            "U" if seen_s => return Err(err(n, "a U line after the first L line")),
             "" => {}
             _ => {
                 if !seen_s {
@@ -766,6 +794,7 @@ fn parse_layer(line: &str, n: usize) -> Result<Layer, String> {
         body,
         keys: Vec::new(),
         clip: false,
+        abs: false,
     })
 }
 
@@ -927,8 +956,12 @@ fn parse_binding(layer: &mut Layer, tag: &str, line: &str, n: usize) -> Result<(
         // line's 0..15 `flags` (an old host REJECTS a bigger number, but
         // ignores an unknown line). Unknown words are a newer console's.
         "X" => {
-            if it.any(|w| w == "clip") {
-                layer.clip = true;
+            for w in it {
+                match w {
+                    "clip" => layer.clip = true,
+                    "abs" => layer.abs = true,
+                    _ => {}
+                }
             }
         }
         "M" => {
@@ -1002,6 +1035,13 @@ pub fn serialize(s: &Scene, out: &mut String) {
         out.push_str(&s.name);
     }
     out.push('\n');
+    if let Some((w, h)) = s.space {
+        out.push_str("U ");
+        push_u32(out, w as u32);
+        out.push(' ');
+        push_u32(out, h as u32);
+        out.push('\n');
+    }
     for l in &s.layers {
         let st = &l.style;
         out.push_str("L ");
@@ -1120,8 +1160,16 @@ pub fn serialize(s: &Scene, out: &mut String) {
                 }
             }
         }
-        if l.clip {
-            out.push_str("X clip\n");
+        // one `X` line, its words in a fixed order: `clip`, then `abs`
+        if l.clip || l.abs {
+            out.push('X');
+            if l.clip {
+                out.push_str(" clip");
+            }
+            if l.abs {
+                out.push_str(" abs");
+            }
+            out.push('\n');
         }
         for k in &l.keys {
             push_key(out, k);
@@ -1217,8 +1265,8 @@ const KEYS_FIXED: usize = 10;
 const KEY_JSON_MAX: usize = 84;
 
 /// The scene object around its layers — `{"id":"…","name":"…","layers":[]}`
-/// with both strings empty.
-const SCENE_FIXED: usize = 40;
+/// with both strings empty, plus the widest `,"space":[4096,4096]`.
+const SCENE_FIXED: usize = 60;
 
 /// An UPPER bound on the bytes [`push_json`] appends for `s`, computed
 /// without building anything.
@@ -1233,8 +1281,8 @@ pub fn json_bound(s: &Scene) -> usize {
     let esc = crate::jsonview::json_escape_len;
     let mut n = SCENE_FIXED + esc(&s.id) + esc(&s.name);
     for l in &s.layers {
-        // `,"clip":true` included
-        n += LAYER_FIXED + 12 + esc(&l.name);
+        // `,"clip":true` and `,"abs":true` included
+        n += LAYER_FIXED + 23 + esc(&l.name);
         if !l.keys.is_empty() {
             n += KEYS_FIXED + l.keys.len() * KEY_JSON_MAX;
         }
@@ -1279,6 +1327,14 @@ pub fn push_json(s: &Scene, out: &mut dyn Sink) {
     push_escaped(out, &s.id);
     push_piece(out, "\",");
     push_str_field(out, "name", &s.name);
+    // present only when the scene declares a design size (Gitea #997)
+    if let Some((w, h)) = s.space {
+        push_piece(out, ",\"space\":[");
+        push_u32(out, w as u32);
+        push_piece(out, ",");
+        push_u32(out, h as u32);
+        push_piece(out, "]");
+    }
     push_piece(out, ",\"layers\":[");
     for (i, l) in s.layers.iter().enumerate() {
         if i > 0 {
@@ -1316,6 +1372,9 @@ pub fn push_json(s: &Scene, out: &mut dyn Sink) {
         // present only when set, like the sprite's `fps`
         if l.clip {
             push_piece(out, ",\"clip\":true");
+        }
+        if l.abs {
+            push_piece(out, ",\"abs\":true");
         }
         if !l.keys.is_empty() {
             push_keys_json(out, &l.keys);
@@ -1834,6 +1893,87 @@ mod tests {
     }
 
     #[test]
+    fn the_design_size_round_trips_and_sits_after_s() {
+        let wire = concat!(
+            "S 0000000a fire clock\n",
+            "U 32 32\n",
+            "L text 0 16 0 0 normal 100 none fill 1\n",
+            "T clock HH:MM\n",
+            "L sprite 0 0 0 0 normal 100 none tile 1\n",
+            "I 0123abcd\n",
+            "X abs\n",
+            "L pat 0 0 0 0 lighten 100 none fill 1\n",
+            "X clip abs\n",
+        );
+        assert_eq!(round(wire), wire);
+        let s = parse(wire).unwrap();
+        assert_eq!(s.space, Some((32, 32)));
+        assert_eq!(
+            s.layers.iter().map(|l| (l.clip, l.abs)).collect::<Vec<_>>(),
+            [(false, false), (false, true), (true, true)]
+        );
+        // canonical X: one line, `clip` before `abs`, unknown words dropped
+        let s = parse("S 0000000a c\nL color 0 0 0 0 normal 100 none fill 1\nX glow abs\nX clip\n")
+            .unwrap();
+        assert!(s.layers[0].clip && s.layers[0].abs);
+        let mut out = String::new();
+        serialize(&s, &mut out);
+        assert!(out.ends_with("L color 0 0 0 0 normal 100 none fill 1\nX clip abs\n"));
+        // the limits, and a bare scene with only S and U
+        assert_eq!(parse("S - a\nU 1 4096\n").unwrap().space, Some((1, 4096)));
+        assert_eq!(parse("S - a\n").unwrap().space, None);
+    }
+
+    #[test]
+    fn a_bad_u_line_names_itself() {
+        let bad = |u: &str| {
+            parse(&alloc::format!(
+                "S - a\n{u}\nL color 0 0 0 0 normal 100 none fill 1\n"
+            ))
+            .unwrap_err()
+        };
+        assert_eq!(bad("U 0 32"), "scene: line 2: bad U field \"0\"");
+        assert_eq!(bad("U 32 4097"), "scene: line 2: bad U field \"4097\"");
+        assert_eq!(bad("U 32"), "scene: line 2: bad U field \"\"");
+        assert_eq!(bad("U 32 x"), "scene: line 2: bad U field \"x\"");
+        assert_eq!(bad("U -1 32"), "scene: line 2: bad U field \"-1\"");
+        assert_eq!(
+            parse("S - a\nL color 0 0 0 0 normal 100 none fill 1\nU 32 32\n").unwrap_err(),
+            "scene: line 3: a U line after the first L line"
+        );
+        assert_eq!(
+            parse("U 32 32\nS - a\n").unwrap_err(),
+            "scene: line 1: a binding line before the S line"
+        );
+        // trailing words are a newer console's, like every line's
+        assert_eq!(parse("S - a\nU 32 16 rel\n").unwrap().space, Some((32, 16)));
+    }
+
+    #[test]
+    fn json_carries_space_and_abs_only_when_set() {
+        let mut out = String::new();
+        push_json(
+            &parse("S 0000000a n\nU 32 16\nL color 0 0 0 0 normal 100 none fill 1\nX clip abs\n")
+                .unwrap(),
+            &mut out,
+        );
+        assert!(
+            out.starts_with("{\"id\":\"0000000a\",\"name\":\"n\",\"space\":[32,16],\"layers\":["),
+            "{out}"
+        );
+        assert!(
+            out.contains("\"rot180\":false,\"clip\":true,\"abs\":true,\"color\""),
+            "{out}"
+        );
+        let mut out = String::new();
+        push_json(
+            &parse("S 0000000a n\nL color 0 0 0 0 normal 100 none fill 1\n").unwrap(),
+            &mut out,
+        );
+        assert!(!out.contains("space") && !out.contains("abs"), "{out}");
+    }
+
+    #[test]
     fn a_block_needs_its_s_line() {
         assert_eq!(
             parse("L color 0 0 0 0 normal 100 none fill 1\n").unwrap_err(),
@@ -1956,9 +2096,9 @@ mod tests {
                 "K ff8800\n",
             )),
             // a keyframe track at its cap, every field at its widest, on a
-            // clip layer
+            // clip + abs layer in a scene with the widest design size
             {
-                let mut b = String::from("S 0000000a keyed\nL color 0 0 0 0 normal 100 none fill 1\nX clip\n");
+                let mut b = String::from("S 0000000a keyed\nU 4096 4096\nL color 0 0 0 0 normal 100 none fill 1\nX clip abs\n");
                 for _ in 0..MAX_KEYS {
                     b.push_str("M 3600000 -32768 -32768 100 elastic 255\n");
                 }
