@@ -140,6 +140,14 @@ pub fn has_map() -> bool {
     MAP.lock(|c| c.borrow().is_some())
 }
 
+/// The installed map's dimensionality: 0 with no map (a bare strip), 1 for
+/// a 1-D coordinate map, 2 for a grid or a 2-D map, 3 for a 3-D one. Cheap
+/// — no grid detection — because the scene stage reads it every frame to
+/// decide whether the Layout is a strip (Gitea #985).
+pub fn dims() -> u8 {
+    MAP.lock(|c| c.borrow().as_ref().map_or(0, MapData::dims))
+}
+
 /// The installed map's shape as `(dims, regular grid)` — what `/api/status`
 /// reports while NO engine is resident (frozen for an OTA, or a boot decode
 /// that failed). With an engine the effective geometry comes from the engine
