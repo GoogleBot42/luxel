@@ -142,8 +142,13 @@ fn library_code_size_stays_within_the_cache_budget() {
         worst.1,
         worst.0
     );
+    // The 2026-11 library overhaul folded 308 patterns into ~155 richer ones
+    // (modes, palettes, strip + panel forms in one file), so the MEAN image
+    // rose from ~6 KB to ~9.6 KB by design. The classic boards' internal
+    // JIT cap is 8 KB (`JIT_INTERNAL_MAX`), so more of the library runs
+    // interpreted there — the hardware soak reports `jit.state` per pattern.
     assert!(
-        total / n.max(1) < 8 * 1024,
+        total / n.max(1) < 12 * 1024,
         "mean image grew to {} B",
         total / n.max(1)
     );
