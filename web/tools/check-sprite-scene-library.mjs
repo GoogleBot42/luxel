@@ -23,7 +23,12 @@
 //   * every `I` line in a shipped scene is one of that scene's own references,
 //     and no two references collapse onto the same derived id;
 //   * the canonical wire that ships (the console's `serializeScene`) keeps
-//     every keyframe (`M` line) and is still a record `luxel_core` takes.
+//     every keyframe (`M` line) and is still a record `luxel_core` takes;
+//   * the scene's `kind` (`scenes.json`) is well declared — at most one
+//     `# layout:` comment, `strip` or `grid` — and a STRIP scene is written
+//     in segments: every box has `y` 0 and `h` 0 or 1, and no keyframe moves
+//     `y` off 0 (a box below row 0 draws nothing on a strip), and it has no
+//     text layer (text draws nothing on one row). Library/README.md "Strips".
 //
 // Usage (from web/):
 //   node --experimental-strip-types tools/check-sprite-scene-library.mjs
@@ -148,6 +153,31 @@ function patternEntry(slug) {
 
 // ---- library/scenes/ ----
 
+/** A scene's `kind` (library/README.md "Strips"): a `# layout: strip`
+ *  comment line in the SOURCE makes it `"strip"`, a `# layout: grid` line or
+ *  none at all `"grid"`. Any other `# layout:` word is an error (null), and so
+ *  is a second `# layout:` line. A comment because the wire has no room for
+ *  it, and declared rather than inferred because a scene of whole-layout boxes
+ *  (`0 0 0 0`) is valid on both shapes — only its author knows which one it
+ *  was drawn for. The generator's copy (gen-sprite-scene-gallery.mjs) is the
+ *  one that writes `kind`; keep the two identical. */
+function sceneKind(text) {
+  const words = [...text.matchAll(/^\s*#\s*layout:\s*(\S*)\s*$/gm)].map((m) => m[1]);
+  if (words.length === 0) return "grid";
+  if (words.length > 1 || (words[0] !== "strip" && words[0] !== "grid")) return null;
+  return words[0];
+}
+
+/** Why a strip scene's layer is not a segment, or null. */
+function notASegment(l) {
+  const r = l.style.rect;
+  if (r.y !== 0 || r.h > 1) return `box ${r.x} ${r.y} ${r.w} ${r.h} is not a segment (y 0, h 0 or 1)`;
+  if (l.body.kind === "text") return "a text layer draws nothing on a strip";
+  if ((l.keys ?? []).some((k) => k.y !== null && k.y !== 0)) return "a keyframe moves y off 0";
+  return null;
+}
+const kinds = { grid: 0, strip: 0 };
+
 const sceneDir = path.join(repo, "library/scenes");
 const sceneFiles = fs.existsSync(sceneDir)
   ? fs.readdirSync(sceneDir).filter((f) => f.endsWith(".scene")).sort()
@@ -157,7 +187,11 @@ const seenIds = new Map();
 let refsChecked = 0;
 for (const f of sceneFiles) {
   const what = `library/scenes/${f}`;
-  const src = parseSceneSource(fs.readFileSync(path.join(sceneDir, f), "utf8"));
+  const text = fs.readFileSync(path.join(sceneDir, f), "utf8");
+  const kind = sceneKind(text);
+  if (kind === null) fail(what, "`# layout:` must appear at most once, as `strip` or `grid`");
+  else kinds[kind]++;
+  const src = parseSceneSource(text);
   if (!src.ok) {
     fail(what, src.error);
     continue;
@@ -173,6 +207,12 @@ for (const f of sceneFiles) {
     continue;
   }
   if (parsed.scene.name === "") fail(what, "the S line carries no name");
+  if (kind === "strip") {
+    parsed.scene.layers.forEach((l, i) => {
+      const why = notASegment(l);
+      if (why !== null) fail(what, `layer ${i + 1} “${l.name}”: ${why}`);
+    });
+  }
   // What SHIPS is the console's canonical serialization
   // (gen-sprite-scene-gallery.mjs), not the source: it has to keep every
   // keyframe (`M` line) and still be a record luxel_core takes.
@@ -216,7 +256,7 @@ for (const f of sceneFiles) {
     }
   }
   console.log(
-    `  scene  ${libSlug(f).padEnd(20)} ${parsed.scene.layers.length} layers · ` +
+    `  scene  ${libSlug(f).padEnd(20)} ${kind ?? "?"} · ${parsed.scene.layers.length} layers · ` +
       `${src.refs.length} ref${src.refs.length === 1 ? "" : "s"} · ${src.wire.length} B` +
       (mLines(src.wire) > 0 ? ` · ${mLines(src.wire)} keyframes` : ""),
   );
@@ -224,7 +264,7 @@ for (const f of sceneFiles) {
 
 console.log(
   `\nsprite/scene library: ${spriteFiles.length} sprites (${spriteBytesTotal} B of records), ` +
-    `${sceneFiles.length} scenes, ${refsChecked} references`,
+    `${sceneFiles.length} scenes (${kinds.grid} grid, ${kinds.strip} strip), ${refsChecked} references`,
 );
 
 if (problems.length > 0) {

@@ -131,13 +131,14 @@ thing a library entry is allowed to change.
 A scene composites onto the device's Layout: a regular 2D matrix, or — since
 Gitea #985 — a strip, as one row in index order (docs/spec/scenes.md §2 "The
 canvas"). An irregular 2D map or any 3D map has no canvas, and a scene there
-draws nothing. A scene WITHOUT a `U` line is in layout pixels: those are
-authored for a 64×64 panel (which is why `scenes.json` carries a constant
-`kind: "grid"` the way a pattern carries its own `kind`) and keep every placed
-box inside 32×32, so they still read on a smaller matrix — the exception being
-a layer that is deliberately the whole layout (`spark-field`'s tiled sprite),
-which clips rather than disappears. A new scene declares a design size
-instead (below), and fits every panel.
+draws nothing. Most shipped ones are authored for a 64×64 panel
+(`scenes.json` `kind: "grid"`, the way a pattern carries its own `kind`) and
+keep every placed box inside 32×32, so they still read on a smaller matrix —
+the exception being a layer that is deliberately the whole layout
+(`spark-field`'s tiled sprite), which clips rather than disappears. The
+`strip-*` scenes are written for a strip (`kind: "strip"`, below). A scene
+without a `U` line is in layout pixels like these; a new scene declares a
+design size instead (below), and fits every panel.
 
 ### Design size (`U <w> <h>`)
 
@@ -187,6 +188,10 @@ On a strip of `n` pixels the canvas is `n`×1, so a scene is written in
   the strip from `x`. A pattern layer's segment is a WINDOW onto that
   pattern's full-strip render, not a squeezed copy: `75 0 75 0` on a 150 px
   strip shows the pattern's own pixels 75..149.
+- **A zero `w` is the rest of the strip from `x`, flips included.** `x 75 w 0`
+  is the box 75 .. n−1 on any length, and `flipx` mirrors exactly that
+  (Gitea #1026 — before it the box overhung the end and a flip drew black),
+  so `L pat 75 0 0 0 … fill 3` is a length-independent second zone.
 - **`flipx` (flags 3) reverses a segment in place** — the way to run a
   pattern outward from a seam, or mirror two halves. `flipy` does nothing on
   one row.
@@ -203,6 +208,31 @@ On a strip of `n` pixels the canvas is `n`×1, so a scene is written in
   error: a scene with a clock caption still shows its other layers there.
   Do not build a strip scene around a text layer.
 - Keep strip scenes to ≤ 2 `pat` layers, like every scene (`caps.layers`).
+- **Boxes are pixels, so a split does not scale.** A seam at 75 is the
+  middle of a 150 px strip, a quarter of a 300 and off the end of a 60. Only
+  whole-layout boxes (`0 0 0 0`), rest-of-strip boxes (`x 0 0 0`) and tiles
+  read the same at every length — or declare a design size, `U 150 1`
+  ("Design size" above), and the seam maps proportionally to any length,
+  gapless; otherwise say in the scene's header what it does at 60 and 300 px.
+- **Declare the shape: `# layout: strip`** as a comment line in the scene
+  source makes its `scenes.json` entry `kind: "strip"` (no line, or
+  `# layout: grid`, is `"grid"`), which is what lets the console offer it
+  only on a strip. It is declared rather than inferred because a scene of
+  whole-layout boxes is valid on both shapes and only its author knows which
+  it was drawn for. The gate (`check-sprite-scene-library.mjs`) refuses any
+  other `# layout:` word, a second `# layout:` line, and — on a strip scene —
+  a box that is not a segment (`y` 0, `h` 0 or 1), a keyframe that moves `y`
+  off 0, or a text layer.
+- **Preview one**: `tools/verify/scene-sheet.mjs <out> --size 150x1
+  library/scenes/strip-zones.scene` draws a strip as a waterfall (one row
+  per frame, time running down).
+- **The shipped strip scenes**: `strip-zones` (fire and sea on two
+  segments, a breathing seam glow), `strip-bulbs` (the `bulb-string-8x1`
+  sprite tiled with a zero box, any length), `strip-colour-fade` (the "fade
+  between N colours" family: the `grey-fade` greyscale source under a colour
+  ramp per layer, two ramps crossfading on a keyframe track). A ramp turns
+  grey `pos` 0..255 into colour, so any N-colour fade is one `R` line of N
+  stops over `grey-fade`.
 
 ## The generator and the gate
 

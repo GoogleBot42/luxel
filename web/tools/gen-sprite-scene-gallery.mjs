@@ -101,13 +101,33 @@ function patternName(slug) {
 
 // ── library/scenes/*.scene → scenes.json ────────────────────────────────
 
+/** A scene's `kind` (library/README.md "Strips"): a `# layout: strip`
+ *  comment line in the SOURCE makes it `"strip"`, a `# layout: grid` line or
+ *  none at all `"grid"`. Any other `# layout:` word is an error (null), and so
+ *  is a second `# layout:` line. A comment because the wire has no room for
+ *  it, and declared rather than inferred because a scene of whole-layout boxes
+ *  (`0 0 0 0`) is valid on both shapes — only its author knows which one it
+ *  was drawn for. Mirrored in check-sprite-scene-library.mjs. */
+function sceneKind(text) {
+  const words = [...text.matchAll(/^\s*#\s*layout:\s*(\S*)\s*$/gm)].map((m) => m[1]);
+  if (words.length === 0) return "grid";
+  if (words.length > 1 || (words[0] !== "strip" && words[0] !== "grid")) return null;
+  return words[0];
+}
+
 const sceneFiles = fs.existsSync(sceneDir)
   ? fs.readdirSync(sceneDir).filter((f) => f.endsWith(".scene")).sort()
   : [];
 const scenes = [];
 for (const f of sceneFiles) {
   const file = path.join(sceneDir, f);
-  const src = parseSceneSource(fs.readFileSync(file, "utf8"));
+  const text = fs.readFileSync(file, "utf8");
+  const kind = sceneKind(text);
+  if (kind === null) {
+    fail(file, "`# layout:` must appear at most once, as `strip` or `grid`");
+    continue;
+  }
+  const src = parseSceneSource(text);
   if (!src.ok) {
     fail(file, src.error);
     continue;
@@ -159,11 +179,12 @@ for (const f of sceneFiles) {
   scenes.push({
     slug: libSlug(f),
     name: parsed.scene.name,
-    // Scenes need a regular 2D matrix to exist at all (docs/spec/scenes.md
-    // §2: a draw op is a silent no-op without one), so the field is a
-    // constant — it is here so a tile filter reads a scene's shape the same
-    // way it reads a pattern's `kind`.
-    kind: "grid",
+    // The shape the scene was drawn for — "grid" (a 2D matrix) or, since
+    // #985/#1018, "strip" (an n×1 canvas in index order, docs/spec/scenes.md
+    // §2 "The canvas") — so the console's Library source can offer a scene
+    // only where it fits, the way a tile filter reads a pattern's `kind`.
+    // Declared by a `# layout: strip` comment (sceneKind above).
+    kind,
     layers: parsed.scene.layers.length,
     refs,
     // Canonical, not verbatim: `serializeScene` drops every line equal to a

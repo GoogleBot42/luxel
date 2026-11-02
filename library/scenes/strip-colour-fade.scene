@@ -1,0 +1,38 @@
+# A Luxel library scene — Apache-2.0. Grammar: library/README.md "Strips".
+# layout: strip
+# The "fade between N colours" family as a scene: one GREYSCALE source and a
+# colour ramp. `grey-fade` sweeps every grey from black to white and back
+# (ping-pong) and the layer's `R` line turns each grey into a colour, so a
+# ramp of N stops IS a fade through N colours — here red, amber, pink, violet
+# and back. Half a fade lies along the strip at once (`sliderWaves` 0.5), so
+# the colours flow rather than switch; `C sliderWaves 0` is the classic
+# whole-strip-in-unison fade, and `sliderFadeSeconds` sets its pace (12 s).
+# The second layer is the SAME source in step with the first (same controls)
+# under a cool ramp — indigo, mint, blue, teal — and a 60 s keyframe track
+# crossfades the two: warm for 24 s, 6 s across, cool for 24 s, 6 s back.
+# A crossfade mixes the two colours each grey maps to, so the cool stops are
+# ordered to sit NEXT to the warm ones on the wheel (red with indigo, amber
+# with mint, pink with blue, violet with teal): opposite pairs would cross
+# through a muddy grey. Two ramps because a scene runs at most two pattern
+# layers; a third palette is a third scene in a playlist.
+# Every box is the whole strip, so it reads the same at 60, 150 or 300 px —
+# and on a panel (grey-fade runs across it there).
+S - Colour Fade
+L pat 0 0 0 0 normal 100 none fill 1
+N Warm
+I @pat/grey-fade
+C sliderFadeSeconds 786432
+C sliderWaves 32768
+R 100 0:ff2000 85:ff9a00 170:ff2a7a 255:9a30ff
+L pat 0 0 0 0 normal 100 none fill 1
+N Cool
+I @pat/grey-fade
+C sliderFadeSeconds 786432
+C sliderWaves 32768
+R 100 0:5a20e0 85:60ffb8 170:0070ff 255:00c8a0
+#   ms    x  y  opacity ease
+M 0       =  =  0       linear
+M 24000   =  =  0       linear
+M 30000   =  =  100     sine
+M 54000   =  =  100     linear
+M 60000   =  =  0       sine
