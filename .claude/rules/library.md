@@ -94,6 +94,15 @@ paths:
   a grid-sized canvas is the identity, so the "only when coarser" gating the
   2026-11 batches carry is no longer needed); nearest (0) for pixel art and
   dithers.
+- **Big panels (> 4,096 px): render at <= 4,096 cells** with the `bigGrid()`
+  helper (`library/interference.js` is the reference: one-shot
+  `setRenderSize(<=64x64, 1)` first thing in `beforeRender`, a no-op at
+  4,096 px and below). A pattern that already `paintCanvas`/`fillCanvas`es
+  a coarser canvas should render at the canvas size: the output is
+  byte-identical (same sampler) and 30–55 ms/frame cheaper on the 128x128
+  chain. Controls in fixture pixels must keep a `rsK = native / rendered`
+  factor (`library/caustics.js`). Leave text, pixel art and hairline
+  detail native (docs/bench-seengreat-hub75-rendersize.md, #1023).
 - **Never black by default** for more than ~1 s; `y = 0` is the TOP (fires,
   sand and liquid root at `y = 1`). Sound patterns stay lit with no sensor.
 - **A shipped scene's wire block must stay under 1 KB**

@@ -69,6 +69,13 @@ these before trusting any build/test failure as a real regression.
    checkout's, though: its `node_modules` is as stale as the rest of it
    (`vite build` died with "terser not found" on 2026-10-10) — symlink a
    worktree that ran `npm ci` recently, or run it yourself.
+   **`tools/ci.sh` runs `npm ci`, and `npm ci` through a symlinked
+   `node_modules` EMPTIES THE TARGET** (the other worktree's install) and
+   then leaves a real directory in yours. On 2026-11-02 a symlinked worktree's
+   gate wiped `bridge-cse_014Qiyzto…/web/node_modules` mid-session; it had to
+   be refilled with `cp -a <yours>/web/node_modules/. <target>/` (same
+   lockfile). If you will run the gate, `npm ci` your own worktree instead
+   of symlinking.
 3b. `firmware/creds.env` (gitignored WiFi creds) — required by any firmware build
    (`build-esp32.sh` reads it). Copy it from the main checkout:
    `cp /home/googlebot/workspace/pixler/firmware/creds.env firmware/creds.env`.
