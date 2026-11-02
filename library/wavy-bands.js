@@ -6,6 +6,8 @@
 // sine fold into one 16x16 displacement canvas, read back bilinearly, so a
 // pixel costs a single canvasGet. Palettes:
 // rainbow (slowly rolling), Halloween, Christmas. A strip shows one scanline.
+// Above 4,096 px a grid renders at <= 4,096 cells (64x64 on 128x128), expanded
+// bilinearly by the engine (setRenderSize): a quarter of the work on a 128x128 chain.
 
 var bands = 4
 var speed = 1
@@ -34,7 +36,16 @@ var xH = [0, 0.33, 0.12, 0.55, 0.97, 0.42], xS = [1, 1, 0.75, 0.08, 0.85, 0.9]
 var warpA = array(256), dxA = array(256)
 var t = 0, roll = 0
 
+var rs = 0                          // 1 once a big grid renders at <= 4,096 cells
+function bigGrid() {                // above 4,096 px: render <= 4,096 cells, engine expands bilinearly
+  if (rs || pixelCount <= 4096 || !has2DMap() || gridWidth() < 1 || gridHeight() < 2) return
+  var gw = gridWidth(), gh = gridHeight(), w = min(gw, floor(64 * sqrt(gw / gh) + 0.001))
+  setRenderSize(w, min(gh, floor(4096 / w)), 1)   // gridWidth/gridHeight/pixelCount follow at once
+  rs = 1
+}
+
 export function beforeRender(delta) {
+  bigGrid()
   t = mod(t + speed * min(delta, 100) / 1000, 3600)
   roll = mod(t / 40, 1)
   fillNoise3D(warpA, 16, 16, 2 / 15, 2 / 15, 0, 0, -t * 0.5, 3)
