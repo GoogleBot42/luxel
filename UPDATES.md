@@ -37,6 +37,46 @@ so a flipped `75 0 0 0` segment mirrors over a box that overhangs the end
 and draws black — Gitea #1026 (the README's "rest of the strip" wording
 now carries the caveat; `strip-zones` flips a whole-strip base instead).
 
+## 2026-11-02 — Library polish batch from the host review (15 patterns, 3 sprites)
+
+Fixes for what the 2026-11-02 review page found. **Panel forms** for the four
+renderBulk-only strip patterns that read as raster bands on a panel tile
+(sparkler: a slanted wire burning down, radial spray; sparks: a grinder fan /
+centre fountain / crossing corner jets under gravity, skidding on the floor;
+starburst: comets bursting out and falling in along a turning star's spokes;
+stacker: blocks dropping into columns, each column on its own round) — each
+branches on `has2DMap()` and exports `render(index)`, and its 144 px strip
+waterfall is byte-identical to before. **No black gaps**: butterfly-2d relays
+two butterflies on a one-at-a-time panel; fireflies idle at a faint glow
+between flashes, start phased apart, sync only part of the swarm and are
+denser and larger on small panels; sunrise-alarm-clock's dawn grows out of
+the night-sky colour with the stars fading through it (the black frames at
+each end of the twilight are gone); turmites starts the next colony at once
+while the old one crumbles cell by cell; typing-heatmap-2d lands two keys on
+frame 0; marbling opens with nine drops pre-baked on three centres; moon-phase
+has a brighter earthshine floor so new moon reads. **Strips**: starfield-2d
+has real strip skies (warp bursting from a wandering vanishing point,
+twinkling drift with meteors, long-exposure trails); xorcery's lane clock
+speeds are no longer whole multiples of 8 (lane 7 never flipped bit 2 and sat
+static); raindrops' pool is the same water as the strip at rest, with ripples
+spreading both ways from the splash. Lamp's header says it is a utility.
+Sprites: bat (violet body, lilac wing edges), envelope (slate outline,
+blue-grey flap, red seal) and log-pile (lighter bark) redrawn for contrast;
+the three scenes that use them re-rendered at 64x64.
+
+## 2026-11-02 — Library review page + scene/sprite contact-sheet tool
+
+Every shipped pattern (32x32, 64x64, 144 px strip waterfall), scene (64x64 and
+128x128) and sprite was rendered on the host and published as one browsable
+review page with a keep/fix/drop + note field per item
+(claude-luxel-library-review.sites.neet.dev; notes export as JSON). New
+`tools/verify/scene-sheet.mjs` renders scenes/sprites the way the playground
+does; `tools/verify/sheet.mjs --strip N` adds the strip waterfall for files
+that export `render` beside `renderBulk`. Findings: no compile or runtime
+errors anywhere; 5 patterns with sub-second black gaps; most scenes authored in
+fixed 64x64 pixels fill only a quadrant of the 128x128 chain (feeds #997/#1011);
+four renderBulk-only strip patterns read as raster bands on a panel tile.
+
 ## 2026-11-02 — 128x128 `setRenderSize` pass: nine ambient patterns faster on the chain
 
 Jeremy approved rendering the slowest ambient patterns at <= 4,096 cells

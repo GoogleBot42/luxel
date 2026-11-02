@@ -4,8 +4,11 @@
 // white-hot, flies fast and slows as it burns down, cooling through orange to a
 // deep ember before it winks out, and relaunches at once. Origin picks where the
 // shower starts: the first pixel, the centre (both ways), or both ends inward.
+// On a panel the sparks fly in 2-D under gravity: a grinder on the left edge
+// spraying a fan that arcs down and skids along the floor, a fountain from the
+// centre, or two corner jets that rise and cross.
 // Drawn on the persistent frame: fade() for the trail, fillRangeAA + splatIndex
-// per spark, so there are no pixel buffers at any strip length.
+// per spark (drawLine + splat on a panel), so no pixel buffers at any size.
 
 var MAX = 64
 
@@ -54,7 +57,56 @@ for (var i = 0; i < MAX; i++) { launch(i); energy[i] = random(1.3) }
 
 export function beforeRender(delta) { dt = min(delta, 80) * 0.001 * speedPct / 100 }
 
+// Mapless strips stay strips: this export suppresses the default grid.
+// Luxel always runs renderBulk.
+export function render(index) {}
+
+// ---- panel: the same sparks in 2-D (pos[] is x), thrown under gravity
+var py = array(MAX), vx = array(MAX), vy = array(MAX)
+var pinit = 0, unit = 0.03
+
+function plaunch(i) {
+  var a, x = 0.5, y = 0.5, sp = 1.7 * (0.6 + random(0.7))
+  if (origin == 0) { x = 0.05; y = 0.4; a = -0.6 + random(0.75) }
+  else if (origin == 1) { a = random(PI2); sp *= 0.6 }
+  else if (i % 2) { x = 0.97; y = 0.97; a = PI + 1.0 + random(0.45); sp *= 1.3 }
+  else { x = 0.03; y = 0.97; a = -1.0 - random(0.45); sp *= 1.3 }
+  pos[i] = x; py[i] = y
+  vx[i] = cos(a) * sp; vy[i] = sin(a) * sp
+  energy[i] = 1 + random(0.3)
+}
+
+function renderPanel() {
+  var gw = gridWidth()
+  if (gw < 1) gw = 32
+  unit = 1 / gw
+  fade(pow(0.5, dt * 100 / speedPct * 4.3 / trailS))
+  var m = min(MAX, round(count * 1.5)), h = hueDeg / 360
+  if (!pinit) { pinit = 1; for (var j = 0; j < MAX; j++) { plaunch(j); energy[j] = random(1.3) } }
+  var dk = exp(-1.1 * dt), g = 1.5 * dt
+  for (var i = 0; i < m; i++) {
+    var e = energy[i]
+    if (e <= 0) { plaunch(i); e = energy[i] }
+    e -= dt / LIFE
+    var x0 = pos[i], y0 = py[i]
+    var ux = vx[i] * dk, uy = vy[i] * dk + g
+    var x = x0 + ux * dt, y = y0 + uy * dt
+    if (y > 1) { y = 1; uy = -uy * 0.3; ux *= 0.6; e -= 0.15 }   // hit the floor: skid
+    if (e <= 0 || x < -0.05 || x > 1.05) { energy[i] = 0; continue }
+    energy[i] = e; pos[i] = x; py[i] = y; vx[i] = ux; vy[i] = uy
+    // hot = white, cooling = orange, dying = deep ember (as on the strip)
+    var s = clamp(2 - e * 1.6, 0.3, 1)
+    var v = clamp(0.2 + e, 0, 1)
+    var hh = h + 0.09 * clamp(e, 0, 1)
+    hsv(hh, min(1, s + 0.4), v * 0.25)
+    drawLine(x0, y0, x, y, unit * 0.9, 2)
+    hsv(hh, s, v)
+    splat(x, y, unit * 1.3, 2)
+  }
+}
+
 export function renderBulk() {
+  if (has2DMap()) { renderPanel(); return }
   fade(pow(0.5, dt * 100 / speedPct * 4.3 / trailS))
   var n = pixelCount
   // a full-strength spark crosses most of its run before it burns out

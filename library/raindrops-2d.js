@@ -260,10 +260,14 @@ function strip() {
   var n = pixelCount, p0 = floor(n * 0.92)
   paint(0.3, 0.3)
   fillRange(0, p0)
-  // the pool at the far end, rippling after each splash
-  for (var i = p0; i < n; i++) {
-    var u = (i - p0) / max(n - p0, 1)
-    paint(clamp(0.3 + poolE * 0.45 * wave(u * 2.5 - poolPh * 3) * (1 - u * 0.5), 0, 0.99))
+  // the pool at the far end: still, it is the same water as the rest of the
+  // strip; each splash sends ripples out both ways from where it landed,
+  // brightening as they crest and dying away with distance
+  var reach = max(n - p0, 4) * 1.6, e = min(poolE, 1)
+  for (var i = max(0, floor(p0 - reach * 0.5)); i < n; i++) {
+    var d = abs(i - p0) / reach
+    var rip = e * wave(d * 4 - poolPh * 3) * max(0, 1 - d)
+    paint(clamp(0.3 + rip * 0.4, 0, 0.99), 0.3 + rip * 0.55)
     setPixel(i)
   }
   // the swelling drop at the tap
