@@ -116,11 +116,9 @@ pub fn program_of(src: &str) -> Result<(Program, Kinds), String> {
     Ok((prog, kinds))
 }
 
-/// Every `library/*.js`, by name.
-pub fn library() -> Vec<(String, String)> {
-    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../library");
+fn read_js_dir(dir: &str) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = std::fs::read_dir(dir)
-        .expect("library/ must exist")
+        .unwrap_or_else(|e| panic!("{dir}: {e}"))
         .filter_map(|e| {
             let p = e.ok()?.path();
             if p.extension()? != "js" {
@@ -132,6 +130,21 @@ pub fn library() -> Vec<(String, String)> {
         .collect();
     out.sort();
     out
+}
+
+/// Every live `library/*.js`, by name. The library is rewritten and pruned
+/// freely, so a test over it checks per-pattern properties and never counts
+/// it or names a file in it — a named or measured pattern comes from
+/// [`frozen`].
+pub fn library() -> Vec<(String, String)> {
+    read_js_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../../library"))
+}
+
+/// Frozen verbatim copies of the library files the tests pin by name or
+/// fit numbers over (`crates/luxel-core/tests/data/lib/`, copied from
+/// master `2c949e4e` on 2026-11-01), by name.
+pub fn frozen() -> Vec<(String, String)> {
+    read_js_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../luxel-core/tests/data/lib"))
 }
 
 /// The ISA model, and the bridge that puts a real `Vm` behind it.

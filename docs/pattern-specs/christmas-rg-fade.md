@@ -1,3 +1,4 @@
+> Superseded: this idea now lives in library/twinkle.js (2026-11).
 # Christmas RG Fade
 kind: 1D
 sensors: no

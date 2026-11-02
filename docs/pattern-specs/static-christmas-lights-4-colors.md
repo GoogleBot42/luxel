@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/twinkling-classic-xmas-strands.js (Twinkle 0, Palette 2; 2026-11).
+
 # Static Christmas Lights - 4 Colors
 kind: 1D
 sensors: no

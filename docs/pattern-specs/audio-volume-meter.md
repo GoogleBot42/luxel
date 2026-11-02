@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/sound-spectrum-analyser.js (2026-11).
+
 # Audio Volume Meter
 kind: 1D
 sensors: yes

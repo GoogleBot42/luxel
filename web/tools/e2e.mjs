@@ -198,11 +198,24 @@ try {
     "no 'On device' source in the playground",
     (await page.$('[data-role="patterns-source-device"]')) === null,
   );
+  // The floor follows the generated gallery rather than a fixed count: the
+  // library is rewritten and pruned freely (149 patterns after the 2026-11
+  // overhaul, and corpus/ is local-only).
+  const galleryNames = JSON.parse(
+    fs.readFileSync(new URL("../public/gallery.json", import.meta.url), "utf8"),
+  ).map((p) => p.name);
+  const galleryLen = galleryNames.length;
+  const tileFloor = Math.min(150, Math.floor(galleryLen / 2));
   await page
-    .waitForFunction((sel) => document.querySelectorAll(sel).length > 150, { timeout: 8000 }, TILE)
+    .waitForFunction(
+      (sel, n) => document.querySelectorAll(sel).length > n,
+      { timeout: 8000 },
+      TILE,
+      tileFloor,
+    )
     .catch(() => null);
   const tileCount = await page.$$eval(TILE, (els) => els.length);
-  check("library shows examples + corpus", tileCount > 150, `${tileCount} tiles`);
+  check("library shows examples + corpus", tileCount > tileFloor, `${tileCount} tiles`);
   await page.screenshot({ path: `${shotDir}/e2e-1-library.png` });
 
   // ── 1b. tiles show a spinner until their preview draws its first frame ──
@@ -234,12 +247,18 @@ try {
   });
   await sleep(300);
 
-  // gallery search filters the tiles by name
-  await page.type('[data-role="gallery-search"]', "rainbow");
+  // gallery search filters the tiles by name ("rainbow" while the library
+  // has one; otherwise the first word of the first gallery name)
+  const term = galleryNames.some((n) => /rainbow/i.test(n))
+    ? "rainbow"
+    : (galleryNames[0] ?? "x").split(/\s+/)[0].toLowerCase();
+  await page.type('[data-role="gallery-search"]', term);
   await sleep(250);
   const visible = await page.$$eval(TILE, (els) => els.filter((e) => !e.hidden).length);
-  const allMatch = await page.$$eval(TILE, (els) =>
-    els.filter((e) => !e.hidden).every((e) => /rainbow/i.test(e.textContent ?? "")),
+  const allMatch = await page.$$eval(
+    TILE,
+    (els, t) => els.filter((e) => !e.hidden).every((e) => (e.textContent ?? "").toLowerCase().includes(t)),
+    term,
   );
   check("gallery search filters tiles", visible > 0 && visible < tileCount && allMatch, `${visible} shown`);
   await page.$eval('[data-role="gallery-search"]', (el) => {
@@ -3171,7 +3190,22 @@ try {
       /#\/scenes\/[0-9a-f]{8}$/.test(page.url()),
       page.url(),
     );
-    const resolved = await page.evaluate(() => {
+    // The pattern that scene references, by its library display name — read
+    // from the scene and pattern sources, never hard-coded: the library is
+    // rewritten and renamed freely.
+    const clockPat = (() => {
+      const lib = new URL("../../library/", import.meta.url);
+      for (const f of fs.readdirSync(new URL("scenes/", lib))) {
+        const src = fs.readFileSync(new URL(`scenes/${f}`, lib), "utf8");
+        if (!/^S - Clock over Aurora$/m.test(src)) continue;
+        const slug = /^I @pat\/(\S+)$/m.exec(src)?.[1];
+        if (!slug) break;
+        const pat = fs.readFileSync(new URL(`${slug}.js`, lib), "utf8");
+        return /^\/\/ name:\s*(.+)$/m.exec(pat)?.[1].trim() ?? slug;
+      }
+      return "Aurora 2D";
+    })();
+    const resolved = await page.evaluate((patName) => {
       const idOf = (name) => {
         let h = 0x811c9dc5;
         for (let i = 0; i < name.length; i++) {
@@ -3184,12 +3218,12 @@ try {
       const blob = localStorage.getItem("luxel.scenes") ?? "";
       const block = blob.split(/(?=^S )/m).find((b) => b.includes("Clock over Aurora")) ?? "";
       return {
-        made: pats.some((p) => p.name === "Aurora 2D"),
-        bound: block.includes("\nI " + idOf("Aurora 2D") + "\n"),
+        made: pats.some((p) => p.name === patName),
+        bound: block.includes("\nI " + idOf(patName) + "\n"),
         ids: [...block.matchAll(/^I (\S+)$/gm)].map((m) => m[1]),
         block,
       };
-    });
+    }, clockPat);
     check(
       "library: cloning a scene CREATED the pattern it references",
       resolved.made,
@@ -3261,15 +3295,15 @@ try {
     // put the playground back where the next block expects it
     await page.click('[data-role="scene-editor-back"]').catch(() => {});
     await sleep(500);
-    await page.evaluate(() => {
+    await page.evaluate((patName) => {
       localStorage.removeItem("luxel.scenes");
       localStorage.removeItem("luxel.sprites");
       const pats = JSON.parse(localStorage.getItem("luxel.patterns") ?? "[]");
       localStorage.setItem(
         "luxel.patterns",
-        JSON.stringify(pats.filter((p) => p.name !== "Aurora 2D")),
+        JSON.stringify(pats.filter((p) => p.name !== patName)),
       );
-    });
+    }, clockPat);
     await page.click('[data-role="tab-patterns"]');
     await sleep(400);
     await previewAs(page, "auto");

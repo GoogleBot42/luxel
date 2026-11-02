@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/sound-rays.js (2026-11).
+
 # sound - rays Frequency-BPM Reactive 1
 kind: 1D
 sensors: yes

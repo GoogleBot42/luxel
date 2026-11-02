@@ -1,152 +1,88 @@
-// name: Twinkling Classic Xmas Strands
-// Clean-room reimplementation from a prose functional description of the
-// community pattern "Twinkling Classic Xmas Strands"; original source never consulted.
-//
-// Each pixel keeps one fixed color slot from a five-color holiday palette
-// (assigned once, urn-style, so colors stay locally balanced and never repeat
-// on neighbors). Bulbs twinkle from a dim resting glow up to a bright swell,
-// while the whole strand slowly cross-fades between three palette moods.
+// name: Classic Christmas Strands
+// Clean-room reimplementation from the prose spec(s) docs/pattern-specs/twinkling-classic-xmas-strands.md,
+// static-christmas-lights-4-colors.md — reimagined, not a replica.
+// An old-fashioned light strand: every bulb keeps its colour (a hashed walk that never
+// repeats a neighbour; the RGBY mini-light palette runs in strict order), rests at a
+// warm glow, and on its own hashed schedule swells white-hot or briefly winks out.
+// Twinkle 0 is a steady strand. The strand can drift through its three palettes.
+// renderBulk: one setPixel or splatIndex per bulb, no per-pixel arrays.
 
-var SLOTS = 5           // red, green, amber, blue, purple
-var PALETTES = 3
-var URN_LAG = 3         // draws before a used color's ball returns to the urn
-var REST = 0.25         // dim resting brightness multiplier
+// palettes, 5 slots each, RGB: 0 C9 classic, 1 vintage painted glass, 2 RGBY minis (4 used)
+var PAL = array(45)
+function pc(p, s, r, g, b) { var i = (p * 5 + s) * 3; PAL[i] = r; PAL[i + 1] = g; PAL[i + 2] = b }
+pc(0, 0, 1, 0.02, 0); pc(0, 1, 0, 0.85, 0.08); pc(0, 2, 1, 0.42, 0); pc(0, 3, 0.04, 0.16, 1); pc(0, 4, 0.75, 0, 0.9)
+pc(1, 0, 1, 0.22, 0.35); pc(1, 1, 0.25, 0.85, 0.45); pc(1, 2, 1, 0.7, 0.15); pc(1, 3, 0.2, 0.55, 1); pc(1, 4, 0.75, 0.35, 1)
+pc(2, 0, 1, 0, 0); pc(2, 1, 0, 0.9, 0); pc(2, 2, 0, 0.1, 1); pc(2, 3, 1, 0.75, 0); pc(2, 4, 1, 0, 0)
 
-// ---- palettes: h, s, v per (palette, slot) ----------------------------------
-var pal = array(PALETTES * SLOTS * 3)
-function setPal(p, slot, h, s, v) {
-  var i = (p * SLOTS + slot) * 3
-  pal[i] = h
-  pal[i + 1] = s
-  pal[i + 2] = v
+var twinkle = 50         // how lively the strand is
+//# min=0 max=100 step=1 default=50
+export function sliderTwinklePercent(v) { twinkle = clamp(v, 0, 100) }
+
+var autoFade = 1         // drift through the palettes, starting at Palette
+export function toggleAutoFade(on) { autoFade = on ? 1 : 0 } //# default=1
+
+var palette = 0          // 0 classic C9 | 1 vintage | 2 RGBY minis
+//# min=0 max=2 step=1 default=0
+export function sliderPalette(v) { palette = clamp(floor(v), 0, 2) }
+
+var paletteS = 12        // seconds each palette holds when drifting (the last fifth is the fade)
+//# min=3 max=60 step=1 default=12
+export function sliderPaletteSeconds(v) { paletteS = clamp(v, 3, 60) }
+
+var bulbPx = 1
+//# min=1 max=8 step=1 default=1
+export function sliderBulbPixels(v) { bulbPx = clamp(floor(v), 1, 8) }
+
+var T = 0, palT = 0, pa = 0, pb = 0, blend = 0, tmp = array(3)
+export function beforeRender(delta) {
+  T = mod(T + delta / 1000, 240)               // every twinkle period divides 240 s
+  pa = palette; pb = palette; blend = 0
+  if (autoFade) {
+    palT = mod(palT + delta / 1000, paletteS * 3)
+    var pos = palT / paletteS, k = floor(pos)
+    pa = (palette + k) % 3; pb = (pa + 1) % 3
+    blend = smoothstep(0.8, 1, pos - k)
+  }
 }
-// Palette A "classic": fully vivid
-setPal(0, 0, 0.00, 1, 1)      // red
-setPal(0, 1, 0.333, 1, 1)     // green
-setPal(0, 2, 0.09, 1, 1)      // amber
-setPal(0, 3, 0.667, 1, 1)     // blue
-setPal(0, 4, 0.85, 1, 1)      // purple, near magenta
-// Palette B "aged pastels, warm"
-setPal(1, 0, 0.02, 0.60, 0.85)  // washed warm red
-setPal(1, 1, 0.36, 0.35, 0.40)  // very dim desaturated green
-setPal(1, 2, 0.10, 0.55, 0.90)  // washed amber
-setPal(1, 3, 0.55, 0.50, 0.45)  // dim muted teal-ish blue
-setPal(1, 4, 0.88, 0.80, 0.85)  // strong pinkish purple, slightly dimmed
-// Palette C "cool"
-setPal(2, 0, 0.98, 0.35, 0.55)  // very pale dusty rose
-setPal(2, 1, 0.333, 1, 1)       // vivid green
-setPal(2, 2, 0.09, 0.15, 0.95)  // soft warm-tinged white (replaces amber)
-setPal(2, 3, 0.667, 1, 1)       // vivid blue
-setPal(2, 4, 0.78, 1, 1)        // vivid violet
 
-// ---- once-at-startup per-pixel state ----------------------------------------
-var slots = array(pixelCount)   // fixed color slot per pixel
-var phase = array(pixelCount)   // stable twinkle phase offset per pixel
+var cr = 0, cg = 0, cb = 0
 
-// Urn draw with delayed replacement: one ball per color; each draw removes the
-// picked ball and, once past the lag, returns the ball drawn URN_LAG pixels ago.
-// Never repeats the previous pixel's color; keeps short windows nearly balanced.
-var balls = array(SLOTS)
-var history = array(URN_LAG)
-var cand = array(SLOTS)
-function assignColors() {
-  var i, c, n, prev, pick
-  for (c = 0; c < SLOTS; c++) balls[c] = 1
-  for (i = 0; i < pixelCount; i++) {
-    if (i >= URN_LAG) balls[history[i % URN_LAG]] += 1   // delayed replacement
-    prev = i > 0 ? slots[i - 1] : -1
-    n = 0
-    for (c = 0; c < SLOTS; c++) {
-      if (balls[c] > 0 && c != prev) {
-        cand[n] = c
-        n += 1
+// A mapless strip stays a strip; Luxel always runs renderBulk.
+export function render(index) { hsv(0, 0, 0) }
+
+export function renderBulk() {
+  clear()
+  var tw = twinkle / 100, rest = 1 - 0.6 * tw, part = 0.25 + 0.75 * tw
+  var n = ceil(pixelCount / bulbPx), slot = 0, i = 0
+  for (var k = 0; k < n; k++) {
+    var h = hash(k)
+    slot = k == 0 ? 0 : (slot + 1 + floor(frac(h * 5.3) * 3)) % 5   // never the neighbour's colour
+    i = (pa * 5 + (pa == 2 ? k % 4 : slot)) * 3                     // RGBY minis run in order
+    cr = PAL[i]; cg = PAL[i + 1]; cb = PAL[i + 2]
+    if (blend > 0) {
+      i = (pb * 5 + (pb == 2 ? k % 4 : slot)) * 3
+      mixColors(cr, cg, cb, PAL[i], PAL[i + 1], PAL[i + 2], blend, tmp)
+      cr = tmp[0]; cg = tmp[1]; cb = tmp[2]
+    }
+    var lv = 1, wh = 0
+    if (tw > 0) {
+      lv = rest
+      if (frac(h * 31.7) < part) {                                 // this bulb twinkles
+        var cyc = T * (40 + floor(frac(h * 13.1) * 57)) / 240 + frac(h * 7.3)  // 2.5..6 s cycles
+        var ph = frac(cyc)
+        if (ph < 0.3) {
+          if (hash2(k, floor(cyc)) < 0.45) {                       // some cycles: a swell
+            lv = rest + (1.2 - rest) * sin(ph / 0.3 * PI)
+            wh = max(0, lv - 1) * 1.6                              // past full: white-hot
+            lv = min(lv, 1)
+          }
+        } else if (ph > 0.62 && ph < 0.7 && hash2(k, floor(cyc) + 0.5) < 0.12 * tw) {
+          lv = rest * (1 - sin((ph - 0.62) / 0.08 * PI))           // now and then, a wink out
+        }
       }
     }
-    if (n > 0) pick = cand[floor(random(n))]
-    else pick = floor(random(SLOTS))                     // can't happen; safety
-    balls[pick] -= 1
-    slots[i] = pick
-    history[i % URN_LAG] = pick
-    phase[i] = random(1)                                 // stable twinkle phase
+    rgb(cr * lv + wh, cg * lv + wh, cb * lv + wh)
+    if (bulbPx == 1) setPixel(k)
+    else splatIndex(k * bulbPx + bulbPx * 0.5 - 0.5, bulbPx * 0.5 + 0.25, 2)
   }
-}
-assignColors()
-
-// ---- controls ----------------------------------------------------------------
-var cycleSec = 15
-// Seconds for one full trip through the three palette moods.
-//# min=3 max=30 step=0.5 default=15
-export function sliderCycleTime(v) {
-  cycleSec = max(1, v)
-}
-
-var twinkles = 0.5
-//# min=0 max=1 step=0.01 default=0.5
-export function sliderTwinkles(v) {
-  twinkles = v
-}
-
-var autoFade = 1
-//# min=0 max=1 step=1 default=1
-export function sliderAutoFadePalettes(v) {
-  autoFade = v > 0.5             // acts as a toggle: on above midpoint
-}
-
-var manualSel = 0
-//# min=0 max=1 step=0.01 default=0
-export function sliderManualPaletteSelect(v) {
-  manualSel = v
-}
-
-// ---- per-frame ----------------------------------------------------------------
-var palAcc = 0
-var pi = 0, pj = 1, blend = 0
-var twPhase = 0
-var twWindow = 0.15
-
-export function beforeRender(delta) {
-  // palette cross-fade position
-  palAcc = mod(palAcc + delta / 1000, cycleSec)
-  var pos
-  if (autoFade) pos = palAcc / cycleSec * PALETTES
-  else pos = min(manualSel, 0.999) * PALETTES
-  pi = floor(pos) % PALETTES
-  blend = pos - floor(pos)
-  pj = (pi + 1) % PALETTES
-
-  // twinkle clock: period scales with strip length (constant twinkles/second
-  // per strand) and shrinks as the twinkles control rises
-  var period = pixelCount * 0.15 / (0.25 + twinkles * 4)
-  twPhase = frac(twPhase + delta / 1000 / period)
-  twWindow = clamp(1 / period, 0.06, 0.5)   // about a second's worth of swell
-}
-
-export function render(index) {
-  var s = slots[index]
-  var i1 = (pi * SLOTS + s) * 3
-  var i2 = (pj * SLOTS + s) * 3
-
-  // hue interpolates the short way around the circle
-  var dh = pal[i2] - pal[i1]
-  if (dh > 0.5) dh -= 1
-  if (dh < -0.5) dh += 1
-  var h = pal[i1] + dh * blend
-  var sat = mix(pal[i1 + 1], pal[i2 + 1], blend)
-  var val = mix(pal[i1 + 2], pal[i2 + 2], blend)
-
-  // twinkle multiplier
-  var m = REST
-  if (twinkles > 0.01) {
-    var c = frac(twPhase + phase[index])
-    if (c < twWindow) {
-      var u = c / twWindow
-      m = REST + sin(u * PI) * 1.15          // swells past 1 for a held peak
-    }
-    if (twinkles > 0.97) m = frac(m)         // max: wrap -> blink out at peak
-    else m = min(m, 1)                       // otherwise clip: flattened top
-    if (random(1) < twinkles * 0.02) m = 0   // sparkly momentary blanks
-  }
-
-  // gamma-ish easing so mid-fade colors don't wash out or muddy
-  hsv(h, sqrt(sat), val * val * m)
 }

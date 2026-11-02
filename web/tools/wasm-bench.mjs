@@ -34,7 +34,9 @@ const JSON_OUT = arg("--json", null);
 // Five library patterns spanning what the tiles actually run: two plain 1D
 // `render` patterns, a 2D `render2D` one, a noise-heavy float workload, and a
 // dimensionless `renderBulk` one. Named, not sampled, so two runs of
-// different builds are comparable; `--patterns` overrides the set.
+// different builds are comparable — and read from the frozen copies in
+// tools/bench-patterns/ (falling back to library/), so a library rewrite
+// never changes what the numbers measure; `--patterns` overrides the set.
 const DEFAULT_PATTERNS = [
   "rainbow.js",
   "snake-2d.js",
@@ -70,9 +72,10 @@ const DELTA = Math.round(16.667 * 65536);
 const rows = [];
 let total = 0;
 for (const file of patterns) {
-  const p = path.join(repo, "library", file);
+  const frozen = path.join(repo, "tools/bench-patterns", file);
+  const p = fs.existsSync(frozen) ? frozen : path.join(repo, "library", file);
   if (!fs.existsSync(p)) {
-    console.error(`wasm-bench: ${file} not in library/ — skipping`);
+    console.error(`wasm-bench: ${file} not in tools/bench-patterns/ or library/ — skipping`);
     continue;
   }
   const h = compile(fs.readFileSync(p, "utf8"));

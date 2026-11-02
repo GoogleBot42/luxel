@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/plasma.js (2026-11).
+
 # Matrix 2 tone pulse
 kind: 1D (index-only renderer; written with an 8-wide matrix in mind but does its own index math)
 sensors: no

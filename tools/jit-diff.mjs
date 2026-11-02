@@ -93,8 +93,10 @@
 //                                [--pixels N] [--settle MS]
 //                                [--json out.json] [--report out.md]
 //
-//   --patterns  comma-separated `library/` names, or @five for the
-//               docs/jit-design.md §7.1 set. Default: every library/*.js,
+//   --patterns  comma-separated `library/` names (or repo-relative paths),
+//               or @five for the docs/jit-design.md §7.1 set — read from
+//               their frozen copies in tools/bench-patterns/, so the set
+//               survives library rewrites. Default: every library/*.js,
 //               the same list gen-gallery and hw-bench sweep.
 //   --from N    resume at 1-based index N (hw-bench's HW_BENCH_FROM).
 //   --pixels N  run at this pixel count; the found count is restored.
@@ -146,11 +148,11 @@ const RECOVER_MS = 180_000; // how long a crashed device gets to come back
 // The five of docs/jit-design.md §7.1, same set as tools/qemu/jit-test.py:
 // two strip patterns, a 2D one, the #260 noise probe, and a renderBulk one.
 const FIVE = [
-  "rainbow.js",
-  "snake.js",
-  "snake-2d.js",
-  "perlin-fire-wind-tunnel.js",
-  "bulk-canvas-ripples-2d.js",
+  "tools/bench-patterns/rainbow.js",
+  "tools/bench-patterns/snake.js",
+  "tools/bench-patterns/snake-2d.js",
+  "tools/bench-patterns/perlin-fire-wind-tunnel.js",
+  "tools/bench-patterns/bulk-canvas-ripples-2d.js",
 ];
 
 // Inputs that are NOT a function of the pattern across two activations of a

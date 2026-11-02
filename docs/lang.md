@@ -50,6 +50,14 @@ Every value is a **16.16 fixed-point** number: 32 bits, two's complement,
 - There is no separate integer or boolean type: comparisons yield 0/1,
   and any nonzero value is truthy.
 
+The range bites in two places that look harmless. An integer **literal**
+above 32767 has already wrapped before any arithmetic sees it, so
+`60000 / interval` divides a negative number — scale it down first
+(`60 / (interval / 1000)`, or keep the quantity in seconds). And a product
+that is only an intermediate still has to fit: `density * pixelCount / 1000`
+is fine on a strip and goes negative at 4096 px, where `density / 1000 *
+pixelCount` is not. Divide first whenever a factor is a pixel count.
+
 ## Variables and scoping
 
 ```js
@@ -652,8 +660,9 @@ message of the builtin's own. The source is
 `crates/luxel-core/src/prelude.js`; its cost is the interpreter's, which
 matters only if you call one per frame over a large array.
 
-Both `replace` forms take any number of values and store them from the
-offset onwards (`arrayReplace` starts at 0; `a.replace(…)` is that form).
+Both `replace` forms take a list of values (up to the call limit below)
+and store them from the offset onwards (`arrayReplace` starts at 0;
+`a.replace(…)` is that form).
 Neither is a fill: `arrayReplace(a, 0)` writes only `a[0]`. Zero a whole
 buffer with `feedback(a, 0)`, and fill one with a non-zero constant using
 `arrayMutate(a, (v) => c)`. `tools/check-library.sh` fails on any two-argument
@@ -663,6 +672,13 @@ a runtime error and **nothing** is written, not even the elements that
 would have fit. A negative offset is not an error — the splat shifts down
 and only the values landing at a valid index are stored. Both PB-matched
 (oracle fw 3.67).
+
+Every call takes at most **15 arguments** — the compiler refuses more with
+`too many arguments` — and the array counts as one of them (in the method
+form too), so one `arrayReplace(a, …)` or `a.replace(…)` stores at most
+14 values, and `arrayReplaceAt`, which also takes the offset, 13. Fill a
+longer table with several `arrayReplaceAt` calls at successive offsets, or
+compute it in a loop.
 
 **Luxel extensions**: `blur1D(arr, radius)` box-blurs the array in place
 (window `2·radius + 1`, edges clamped) and returns it; `feedback(arr,
@@ -1017,6 +1033,13 @@ default `ceil(√n)` grid map a `render2D`-only pattern gets. One that only uses
 a strip pattern and is left mapless, so it never acquires a geometry it
 did not ask for.
 
+The one case where a mapless strip does NOT read `gridWidth()` as 0: a
+pattern that exports `render(index)` beside its `renderBulk` gets the 1D
+fallback, a one-row grid as wide as the strip, so `gridWidth()` returns the
+pixel count (and `gridHeight()` 1). A pattern that has both a strip and a
+panel path must therefore branch on `has2DMap()`, never on `gridWidth() >
+0`, or the strip runs the panel code across a 1-pixel-tall "panel".
+
 When the fixture *is* a regular matrix — a procedural grid, or a
 coordinate map the engine recognizes as one, serpentine included — the
 coordinate-space ops walk only the cells inside the shape's bounding box
@@ -1060,8 +1083,9 @@ builtin anyway — noise, or a palette `paint()` — the loop only trades the
 per-pixel render entry for loop bookkeeping and still wins, and it is the
 *only* byte-exact option for a `paint()` pattern, since `fillHSV`,
 `fillRGB`, `fillCanvas` and `blit` are all HSV and there is no
-palette-space bulk fill. `library/aurora-2d.js` is that case: 1.14× at
-4096 px with interpreted instructions per pixel going slightly *up*.
+palette-space bulk fill. The 2026-09 `library/aurora-2d.js` was that case
+(historical — it has since moved to canvases): 1.14× at 4096 px with
+interpreted instructions per pixel going slightly *up*.
 `pixelCoord` and `gridIndex` count as that kind of body too — each is a
 direct JIT entry of ~30 cycles, so the loop above, or a `setPixel(
 gridIndex(c, r))` walk over the cells, costs about what the per-pixel
@@ -1133,6 +1157,13 @@ export function renderBulk() {
   splatIndex(triangle(t) * (pixelCount - 1), 2.5, 1)   // mode 1: add
 }
 ```
+
+Add mode is right for a moving head like this one and wrong for a blob that
+stays put. On a persistent frame that is `fade()`d each frame, a
+stationary or repeatedly overlapping add-mode `splat`/`splatIndex` settles
+where the fade removes what the add puts back — brush ÷ (1 − k) — so every
+channel saturates and the colour climbs toward white. Use mode 2 (max) or
+mode 0 (replace) for anything that lingers.
 
 #### Coordinate space
 

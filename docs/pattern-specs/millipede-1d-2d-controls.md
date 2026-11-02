@@ -1,3 +1,4 @@
+> Superseded: this idea now lives in library/millipede.js (2026-11).
 # millipede 1d/2d controls
 kind: 1D+2D
 sensors: no

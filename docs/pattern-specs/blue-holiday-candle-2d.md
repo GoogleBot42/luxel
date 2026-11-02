@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/candle.js (2026-11).
+
 # Blue Holiday Candle 2D
 kind: 2D
 sensors: no (despite the catalog tag, the code reads no sound or sensor inputs — it is purely time-driven)

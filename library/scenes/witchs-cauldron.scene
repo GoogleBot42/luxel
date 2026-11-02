@@ -1,0 +1,23 @@
+# A Luxel library scene — Apache-2.0. Grammar: library/README.md.
+# Same fire, different element, purely by ramp: Doom Fire keyed into toxic
+# green and boxed to the cauldron's mouth, the cauldron sprite occluding its
+# base (index 0 is the only transparency a sprite has).
+S - Witch's Cauldron
+L color 0 0 0 0 normal 100 none fill 1
+N Night
+K 0c0614
+L pat 9 0 14 23 normal 100 none fill 1
+N Brew fire
+I @pat/doom-fire
+C sliderFlameHeightPct 6553600
+R 100 0:0c0614 80:0b3d0b 160:39ff14 230:c6ff8a 255:ffffff
+L color 0 31 0 0 normal 100 none fill 1
+N Floor
+K 140c18
+L sprite 8 21 0 0 normal 100 none fill 1
+N Cauldron
+I @spr/cauldron
+L text 0 1 0 0 normal 100 black fill 1
+N Chant
+T lit DOUBLE DOUBLE
+F tiny 9dff7a l left 10

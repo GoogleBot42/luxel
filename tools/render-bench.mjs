@@ -1,8 +1,9 @@
 // Render-core benchmark: fps, heap and web-serving latency under load, on a
 // real device — the #259 / #260 measurement in one run.
 //
-// For each pixel count it pushes three reference patterns (rainbow — the
-// default; library/snake.js — a 1D per-pixel loop; library/snake-2d.js with
+// For each pixel count it pushes three reference patterns, frozen copies in
+// tools/bench-patterns/ so runs stay comparable (rainbow — the
+// default; snake.js — a 1D per-pixel loop; snake-2d.js with
 // Smartness at 100 — Jeremy's named "intensive" benchmark, render2D per
 // pixel), lets the fps counter settle, samples /api/status, then downloads
 // the playground's main bundle (/assets/index-*.js, ~228 KB) a few times
@@ -69,13 +70,13 @@ const median = (xs) => {
 
 const src = (f) => fs.readFileSync(f, "utf8");
 const patterns = [
-  { name: "rainbow", source: src("library/rainbow.js") },
-  { name: "snake (1D)", source: src("library/snake.js") },
+  { name: "rainbow", source: src("tools/bench-patterns/rainbow.js") },
+  { name: "snake (1D)", source: src("tools/bench-patterns/snake.js") },
   {
     name: "snake-2d (smart=100)",
     // the "AI level raised" variant: Smartness 100 = the flood-fill
     // look-ahead runs on every step
-    source: src("library/snake-2d.js").replace(/^var smart = [0-9.]+$/m, "var smart = 1"),
+    source: src("tools/bench-patterns/snake-2d.js").replace(/^var smart = [0-9.]+$/m, "var smart = 1"),
   },
 ];
 for (const p of patterns) {

@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/coronal-mass-ejection.js (2026-11).
+
 # Sunrise 2D
 kind: 2D
 sensors: no

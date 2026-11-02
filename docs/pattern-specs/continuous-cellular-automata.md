@@ -1,3 +1,4 @@
+> Superseded: this idea now lives in library/cellular-automata.js (2026-11).
 # Continuous Cellular Automata
 kind: 2D (requires a mapped matrix; concept credited to Wolfram's continuous-valued cellular automata)
 sensors: no

@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/topo-map.js (2026-11).
+
 # Perlin/Simplex Noise 2D
 kind: 2D
 sensors: yes (optional; 32-band audio spectrum from the sensor board, low bands only)

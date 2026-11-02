@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/scanner.js (2026-11).
+
 # KITT
 kind: 1D
 sensors: no

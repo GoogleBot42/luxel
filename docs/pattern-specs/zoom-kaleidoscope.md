@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/kaleidoscope-2d.js (2026-11).
+
 # zoom kaleidoscope
 kind: 2D
 sensors: no

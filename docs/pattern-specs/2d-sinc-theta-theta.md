@@ -1,3 +1,4 @@
+> Superseded: this idea now lives in library/interference.js (2026-11).
 # 2D sinc(theta)/theta
 kind: 2D
 sensors: no

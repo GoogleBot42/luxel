@@ -1,3 +1,4 @@
+> Superseded: this idea now lives in library/color-wash.js (2026-11).
 # Complements 3D
 kind: 1D+2D+3D (3D is canonical; 2D maps its second axis to the blend axis; 1D maps strip position to the blend axis)
 sensors: no

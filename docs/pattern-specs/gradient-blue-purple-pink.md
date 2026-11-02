@@ -1,3 +1,4 @@
+> Superseded: this idea now lives in library/color-wash.js (2026-11).
 # Gradient blue  purple pink
 kind: 1D
 sensors: no

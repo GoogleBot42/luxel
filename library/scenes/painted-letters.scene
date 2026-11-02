@@ -1,0 +1,18 @@
+# A Luxel library scene — Apache-2.0. Grammar: library/README.md.
+# Rainbow-filled letters, the multiply recipe: WHITE text on a BLACK band,
+# then a rainbow ABOVE them in `multiply`, boxed to the band. White x pattern
+# = pattern, black x pattern = black, so the colours show only in the glyphs.
+# (`mask` on a text layer cannot do this: text is always black-keyed.)
+S - Painted Letters
+L pat 0 0 0 0 normal 100 none fill 1
+N Aurora
+I @pat/aurora-2d
+L color 0 10 0 12 normal 100 none fill 1
+N Band
+L text 0 12 0 0 normal 100 black fill 1
+N Letters
+T lit HELLO WORLD
+F large ffffff l left 16
+L pat 0 10 0 12 multiply 100 none fill 1
+N Paint
+I @pat/rainbow

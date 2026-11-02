@@ -1,179 +1,231 @@
 // name: Coronal Mass Ejection
-// Clean-room reimplementation from a prose functional description of the
-// community pattern "Coronal Mass Ejection"; original source never consulted.
-//
-// FORK: deliberately departs from the original per the 2026-09-01 review.
-// The original exposes no dials at all and this port had drifted into placid
-// concentric rings; both are fixed here. The polar-noise architecture stays --
-// turbulence sampled in (angle, radius) space, streamed outward, one max()
-// per pixel -- but the angle axis now carries several noise periods so the
-// field breaks into RAYS instead of rings, a small event system throws real
-// eruptions off the limb, and the color ramps white -> gold -> ember red with
-// distance instead of flooding the panel with one flat hue.
-//
-// A white-hot star at the panel center throws ragged plasma tongues outward
-// over a mostly black field. Every so often the limb lets go and a bright
-// prominence tears away, fanning out as it climbs past the frame edge.
-//
-// Sibling of "Coronal Ejection 2D", which drives the same engine as a
-// stylized, mirrorable flower; this one is the naturalistic star.
+// Clean-room reimplementation from the prose spec(s) docs/pattern-specs/coronal-mass-ejection.md, sunrise-2d.md — reimagined, not a replica.
+// A white-hot star throws ragged plasma tongues over black; now and then the limb
+// tears loose as a prominence, and flare sparks arc off the surface and fall back.
+// Arms folds the corona into a k-fold pinwheel (Mirror makes it a flower); Rise On
+// Start lifts the sun up from the bottom edge first.
+// The corona is built once per frame on a 64-angle x 24-radius polar canvas, read
+// bilinearly per panel cell through a packed (angle, radius) table and painted with
+// one paintCanvas through a blackbody palette; the sparks are splats.
 
-var LOBES = 6                     // noise periods around the circle -> tongues
-var TWIST = 0.8                   // shear that leans the tongues as they rise
-var RSCALE = 0.9                  // radial detail: LOW, so features stretch into
-                                  // rays instead of closing into rings
-var MAXERUPT = 4                  // simultaneous prominences
-
-// ---- controls (real units) -------------------------------------------------
+var NA = 64, NR = 24, RMAX = 1.6  // polar canvas: angles, radii, radius span
+var NA1 = NA + 1                  // one wrap column so bilinear needs no modulo
+var CAP = 64                      // panel canvas cap per axis
+var MAXE = 4                      // simultaneous prominences
+var NS = 24                       // flare sparks
 
 var eruptRate = 14                // prominences per minute
 var intensity = 50                // how much of the corona lights up, percent
 var baseHue = 18                  // plasma hue, degrees
-var hueCycle = 0                  // seconds per full hue revolution, 0 = fixed
+var hueCycle = 0                  // seconds per hue revolution, 0 = solar, fixed
 var speed = 1                     // churn rate, x realtime
 var coreSize = 18                 // core radius, percent of the half-width
+var arms = 1                      // rotational symmetry, 1 = a natural star
+var twist = 48                    // lean of the tongues, degrees per half-width
+var mirror = 0
+var riseOnStart = 0
 
 //# min=0 max=60 step=1 default=14
-export function sliderEruptions(v) { eruptRate = max(0, v) }
-
+export function sliderEruptions(v) { eruptRate = clamp(v, 0, 60) }
 //# min=0 max=100 step=1 default=50
 export function sliderIntensity(v) { intensity = clamp(v, 0, 100) }
-
 //# min=0 max=360 step=1 default=18
-export function sliderHue(v) { baseHue = v }
-
-//# min=0 max=60 step=1 default=0
-export function sliderHueCycleSeconds(v) { hueCycle = max(0, v) }
-
+export function sliderHue(v) { baseHue = clamp(v, 0, 360) }
+//# min=0 max=120 step=1 default=0
+export function sliderHueCycleSeconds(v) { hueCycle = clamp(v, 0, 120) }
 //# min=0.1 max=4 step=0.1 default=1
-export function sliderSpeed(v) { speed = max(0.02, v) }
-
-//# min=2 max=60 step=1 default=18
-export function sliderCoreSize(v) { coreSize = clamp(v, 1, 80) }
-
-// Let one go on demand.
+export function sliderSpeed(v) { speed = clamp(v, 0.1, 4) }
+//# min=4 max=50 step=1 default=18
+export function sliderCoreSize(v) { coreSize = clamp(v, 4, 50) }
+//# min=1 max=12 step=1 default=1
+export function sliderArms(v) { arms = clamp(floor(v), 1, 12); tabDirty = 1 }
+//# min=-180 max=180 step=1 default=48
+export function sliderTwistDegrees(v) { twist = clamp(v, -180, 180); tabDirty = 1 }
+export function toggleMirror(v) { mirror = v; tabDirty = 1 }
+// Turning it on replays the sunrise straight away.
+export function toggleRiseOnStart(v) { if (v && !riseOnStart) rise = 0; riseOnStart = v }
 export function triggerErupt() { spawnErupt() }
 
-// ---- state -----------------------------------------------------------------
+var pol = array(NA1 * NR)         // polar value canvas, 0..1
+var tab = array(CAP * CAP)        // per panel cell: sector x*4096 + radius y, packed
+var cv = array(CAP * CAP)         // per panel cell value, painted
+var eAng = array(MAXE), eRad = array(MAXE), eVel = array(MAXE)
+var eWid = array(MAXE), eLife = array(MAXE)
+var sx = array(NS), sy = array(NS), svx = array(NS), svy = array(NS), sLife = array(NS)
+var pal = array(20)
+setPalette(pal)
+var rgbTmp = array(3)
 
-var eAng = array(MAXERUPT)        // launch angle, turns
-var eRad = array(MAXERUPT)        // current height, normalized radius
-var eVel = array(MAXERUPT)        // climb rate, radii per second
-var eWid = array(MAXERUPT)        // angular half-width, turns
-var eLife = array(MAXERUPT)       // 1 -> 0
-var eDecay = array(MAXERUPT)      // life lost per second
-
-var eruptTimer = 0.6
-var churn = 0                     // radial stream phase
-var shape = 0                     // shape-evolution phase
-var huePhase = 0
-var wrapped = 0
-
-var hueTurns = 0.05               // baseHue in turns, recomputed per frame
-var cut = 0.55                    // flare threshold, from intensity
-var coreR = 0.18                  // core radius in normalized units
+var CW = 0, CH = 0, GW = 0, GH = 0
+var unit = 1, cyU = 0             // half-width in canvas cells, sun centre y (units)
+var rise = 1                      // 0 -> 1 sunrise progress; 1 = risen
+var tabDirty = 1
+var churn = 0, shape = 0, huePhase = 0, eruptTimer = 0.6, sparkTimer = 0
+var cut = 0.67, coreR = 0.18, glow = 1
 
 function spawnErupt() {
-  var s = -1
-  for (var i = 0; i < MAXERUPT; i++) if (eLife[i] <= 0) { s = i; break }
-  if (s < 0) return 0
-  eAng[s] = random(1)
-  eRad[s] = coreR + 0.02
-  eVel[s] = 0.30 + random(0.30)
-  eWid[s] = 0.06 + random(0.06)
-  eLife[s] = 1
-  eDecay[s] = 1 / (1.4 + random(1.2))
-  return 1
+  for (var i = 0; i < MAXE; i++) if (eLife[i] <= 0) {
+    eAng[i] = random(1); eRad[i] = coreR
+    eVel[i] = 0.3 + random(0.3); eWid[i] = 0.05 + random(0.05)
+    eLife[i] = 1
+    return
+  }
 }
 
-// ---- frame -----------------------------------------------------------------
+// A burst of sparks from one point on the limb, flung out on looping arcs.
+function sparkBurst() {
+  var a = random(PI2), n = 3 + floor(random(4))
+  for (var i = 0; i < NS && n > 0; i++) if (sLife[i] <= 0) {
+    var aa = a + random(0.5) - 0.25, sp = 0.55 + random(0.45), tg = random(1.2) - 0.6
+    sx[i] = cos(aa) * coreR; sy[i] = sin(aa) * coreR
+    svx[i] = (cos(aa) - sin(aa) * tg) * sp; svy[i] = (sin(aa) + cos(aa) * tg) * sp
+    sLife[i] = 1; n--
+  }
+}
+
+// Each panel cell's place on the polar canvas, packed in one number. The canvas
+// holds ONE symmetry sector, so twist, arms and mirror are folded in here and
+// every arm count keeps the full angular resolution.
+function buildTable() {
+  var sc = 1 / unit, ry = (CH * 0.5 - 0.5) + cyU * unit, tw = twist / 360
+  for (var r = 0; r < CH; r++) {
+    var dy = (r - ry) * sc
+    for (var c = 0; c < CW; c++) {
+      var dx = (c - CW * 0.5 + 0.5) * sc
+      var d = hypot(dx, dy)
+      var s = mod((atan2(dy, dx) / PI2 + d * tw) * arms, 1)
+      if (mirror) s = 1 - abs(2 * s - 1)
+      var rr = min(d, RMAX) * (NR - 1) / RMAX
+      tab[r * CW + c] = floor((s * NA + 0.5) / NA1 * 4096) + (rr + 0.5) / NR
+    }
+  }
+  tabDirty = 0
+}
+
+function setPal(h, i, pos, s, v) {
+  hsv2rgb(h, s, v, rgbTmp)
+  pal[i] = pos; pal[i + 1] = rgbTmp[0]; pal[i + 2] = rgbTmp[1]; pal[i + 3] = rgbTmp[2]
+}
 
 export function beforeRender(delta) {
-  var dt = min(delta, 60) * 0.001
-  var st = dt * speed
+  var dt = min(delta, 60) * 0.001, st = dt * speed
 
-  if (!wrapped) {
-    // the angle axis is scaled to LOBES periods and wrapped at LOBES, so the
-    // turbulence tiles seamlessly around the circle while still carrying
-    // several tongues; the other two axes never repeat
-    setPerlinWrap(LOBES, 0, 0)
-    wrapped = 1
-  }
+  GW = gridWidth(); GH = gridHeight()
+  var w = GW > 0 ? min(GW, CAP) : 32, h = GH > 0 ? min(GH, CAP) : 32
+  if (w != CW || h != CH) { CW = w; CH = h; unit = min(w, h) * 0.5; tabDirty = 1 }
 
-  churn += st * 0.9               // tongues stream outward
-  if (churn > 4096) churn -= 4096
-  shape += st * 0.5               // and reshape as they go
-  if (shape > 4096) shape -= 4096
+  // sunrise: the centre climbs from below the bottom edge with an ease-out
+  if (rise < 1) {
+    rise = min(1, rise + dt / 5)
+    cyU = (1 - easeOutCubic(rise)) * (CH * 0.5 + unit * 0.5) / unit
+    tabDirty = 1
+  } else if (cyU != 0) { cyU = 0; tabDirty = 1 }
+  if (tabDirty) buildTable()
+  glow = 0.8 + 0.2 * rise
 
+  churn = mod(churn + st * 0.9, 4096)
+  shape = mod(shape + st * 0.5, 4096)
   if (hueCycle > 0) huePhase = mod(huePhase + dt / hueCycle, 1)
-  hueTurns = baseHue / 360 + huePhase
+  var hh = baseHue / 360 + huePhase, warm = 1 - rise   // a rising sun burns redder
+  setPal(hh - 0.04, 0, 0, 1, 0)
+  setPal(hh - 0.03, 4, 0.2, 1, 0.5)
+  setPal(hh + 0.01 - 0.02 * warm, 8, 0.45, 1, 1)
+  setPal(hh + 0.07 - 0.04 * warm, 12, 0.72, 0.6 + 0.4 * warm, 1)
+  setPal(hh + 0.1 - 0.05 * warm, 16, 1, 0.06 + 0.5 * warm, 1)
 
-  // Intensity is coverage: at 0 only the ridge tips survive, at 100 the whole
-  // corona lights and the dark lanes between tongues become the negative space.
   cut = 0.95 - intensity * 0.0055
   coreR = coreSize * 0.01
 
   if (eruptRate > 0) {
     eruptTimer -= dt
-    if (eruptTimer <= 0) {
-      spawnErupt()
-      eruptTimer = (60 / eruptRate) * (0.55 + random(0.9))
-    }
-  } else {
-    eruptTimer = 1
+    if (eruptTimer <= 0) { spawnErupt(); eruptTimer = (60 / eruptRate) * (0.55 + random(0.9)) }
+  }
+  for (var i = 0; i < MAXE; i++) if (eLife[i] > 0) {
+    eRad[i] += eVel[i] * st
+    eWid[i] += 0.05 * st
+    eLife[i] -= st / 1.9
+    if (eRad[i] > RMAX) eLife[i] = 0
   }
 
-  for (var i = 0; i < MAXERUPT; i++) {
-    if (eLife[i] <= 0) continue
-    eRad[i] += eVel[i] * st
-    eWid[i] += 0.05 * st          // the plume fans out as it climbs
-    eLife[i] -= eDecay[i] * st
-    if (eRad[i] > 1.6) eLife[i] = 0
+  // flare sparks: constant-magnitude pull to the centre, so they loop and fall back
+  sparkTimer -= st
+  if (sparkTimer <= 0) { sparkBurst(); sparkTimer = 0.25 + random(1.1 - intensity * 0.007) }
+  for (i = 0; i < NS; i++) if (sLife[i] > 0) {
+    var d = max(hypot(sx[i], sy[i]), 0.01), g = 1.6 * st / d
+    svx[i] -= sx[i] * g; svy[i] -= sy[i] * g
+    sx[i] += svx[i] * st; sy[i] += svy[i] * st
+    sLife[i] -= st * 0.45
+    if (d < coreR * 0.8 && sLife[i] < 0.9) sLife[i] = 0
   }
+
+  buildPolar()
 }
 
-export function render2D(index, x, y) {
-  var dx = x - 0.5
-  var dy = y - 0.5
-  var r = hypot(dx, dy) * 2       // 1 at the mid-edge, ~1.41 in the corners
-  var a = atan2(dy, dx) / PI2 + 0.5
-
-  // TWIST shears the angle with height, so a tongue leans as it rises
-  var n = 1 - perlinTurbulence(a * LOBES + r * TWIST, r * RSCALE - churn, shape, 2, 0.5, 3)
-
-  // ridges only, over a falloff gentle enough that a strong tongue still
-  // reaches the frame corner
-  var flare = smoothstep(cut, cut + 0.22, n) * saturate(1.3 - r * 0.5)
-
-  // core: a solid white-hot disc whose edge is chewed by the same noise, so it
-  // bulges outward wherever a tongue is rooted
-  var ce = coreR * (0.55 + n * 0.9)
-  var core = saturate(1 + (ce - r) / (0.35 * ce))
-
-  var v = max(flare, core)
-
-  // prominences: a radially stretched blob per event, roughened by the same
-  // noise field so it tears rather than glows
-  for (var i = 0; i < MAXERUPT; i++) {
-    var lf = eLife[i]
-    if (lf <= 0) continue
-    var da = abs(a - eAng[i])
-    if (da > 0.5) da = 1 - da
-    var u = da / eWid[i]
-    if (u > 1) continue
-    var dr = r - eRad[i]
-    var w = dr < 0 ? dr * 2.2 : dr * 5      // long tail below, sharp head above
-    var q = u * u + w * w
-    if (q >= 1) continue
-    var e = (1 - q) * (1 - q) * lf * (0.28 + n * 1.5) * 1.8
-    if (e > v) v = e
+// The corona on one sector of the polar canvas: one turbulence read per cell,
+// then the white core chewed by the same noise and the prominences as stretched
+// blobs, each pass touching only the rows it can reach. Values are squared.
+function buildPolar() {
+  var L = arms == 1 ? 6 : max(2, round(6 / arms))
+  setPerlinWrap(L, 0, 0)
+  var dR = RMAX / (NR - 1), du = L / NA
+  for (var j = 0; j < NR; j++) {
+    var r = j * dR, ry = r * 0.9 - churn, row = j * NA1
+    var fall = saturate(1.3 - r * 0.5) * saturate((RMAX - r) * 4)
+    for (var i = 0; i < NA; i++) {
+      var n = 1 - perlinTurbulence(i * du, ry, shape, 2, 0.5, 3)
+      cv[row + i] = n             // scratch: the noise, for the passes below
+      var f = smoothstep(cut, cut + 0.22, n) * fall
+      pol[row + i] = f * f
+    }
   }
+  for (j = 0; j * dR < coreR * 2.2; j++) {
+    r = j * dR; row = j * NA1
+    for (i = 0; i < NA; i++) {
+      var ce = coreR * (0.55 + cv[row + i] * 0.9)
+      var c = saturate(1 + (ce - r) / (0.35 * ce))
+      pol[row + i] = max(pol[row + i], c * c)
+    }
+  }
+  for (var e = 0; e < MAXE; e++) {
+    var lf = eLife[e]
+    if (lf <= 0) continue
+    var iw = 1 / (eWid[e] * arms * (mirror ? 2 : 1) * NA)   // per canvas column
+    for (j = max(0, ceil((eRad[e] - 0.45) / dR)); j < NR && j * dR < eRad[e] + 0.2; j++) {
+      r = j * dR; row = j * NA1
+      var dr = r - eRad[e], w = dr < 0 ? dr * 2.2 : dr * 5
+      w = w * w
+      for (i = 0; i < NA; i++) {
+        var da = abs(i - eAng[e] * NA)
+        if (!mirror && da > NA * 0.5) da = NA - da
+        var u = da * iw
+        if (u >= 1) continue
+        var q = u * u + w
+        if (q >= 1) continue
+        var p = min(1, (1 - q) * (1 - q) * lf * (0.3 + cv[row + i] * 1.5) * 1.8)
+        pol[row + i] = max(pol[row + i], p * p)
+      }
+    }
+  }
+  for (j = 0; j < NR; j++) pol[j * NA1 + NA] = pol[j * NA1]
+}
 
-  v = v * v                       // deepen contrast: the field goes properly black
+export function renderBulk() {
+  var n = CW * CH
+  for (var i = 0; i < n; i++) {
+    var p = tab[i]
+    cv[i] = canvasGet(pol, NA1, floor(p) * 0.000244140625, frac(p))
+  }
+  paintCanvas(cv, CW, CH, glow)
 
-  // blackbody ramp: white core, gold shoulders, ember red at the cold tips --
-  // the hue rides the brightness instead of flooding the panel with one tone
-  var hue = hueTurns + (v - 0.3) * 0.13
-  var sat = min(saturate(r * 2.8), saturate(1.18 - v * 0.8))
-  hsv(hue, sat, v)
+  // sparks: a short streak and a hot head, added over the corona
+  var ox = 0.5, oy = 0.5 + cyU * unit / CH, fx = unit / CW, fy = unit / CH
+  var sr = 1.3 / CW
+  for (i = 0; i < NS; i++) {
+    var l = sLife[i]
+    if (l <= 0) continue
+    hsv(baseHue / 360 + huePhase + 0.04, 0.4, l * glow)
+    var x = ox + sx[i] * fx, y = oy + sy[i] * fy
+    drawLine(x, y, x - svx[i] * fx * 0.08, y - svy[i] * fy * 0.08, sr * 0.8, 1)
+    splat(x, y, sr * 1.4, 1)
+  }
 }

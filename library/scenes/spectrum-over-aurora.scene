@@ -1,0 +1,15 @@
+# A Luxel library scene — Apache-2.0. Grammar: library/README.md.
+# A pattern box as a CLIP window: the analyser renders full frame, the box
+# keeps everything below row 8 so the top of the sky stays clear, and it is
+# ADDED over the aurora (black between the bars lets the curtains through),
+# ramped from blue through pink to white. Music-reactive with a sensor feed;
+# without one the analyser plays its built-in demo groove.
+S - Spectrum over Aurora
+L pat 0 0 0 0 normal 80 none fill 1
+N Aurora
+I @pat/aurora-2d
+L pat 0 8 0 0 add 100 none fill 1
+N Spectrum
+I @pat/sound-spectrum-analyser
+C sliderBands 524288
+R 100 0:000000 120:2b7fff 220:ff4fd8 255:ffffff

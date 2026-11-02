@@ -1,94 +1,153 @@
 // name: Scanner
-// Clean-room reimplementation from a prose functional description of the
-// community pattern "Scanner"; original source never consulted.
-//
-// Doubled KITT/Cylon scanner: the strip splits at its midpoint into two
-// halves, each with a bright lead dot bouncing between its ends and leaving
-// a fading comet trail (brightness cubed at output for crisp heads). Starts
-// mirrored from the outer ends. Rainbow mode freezes a double rainbow along
-// the strip; otherwise one hue slowly sweeps the wheel.
+// Clean-room reimplementation from the prose specs docs/pattern-specs/scanner.md, cylon.md,
+// kitt.md, kitt-w-color-picker.md — reimagined, not a replica.
+// The sweeping eye: a hot-cored head glides end to end and leaves a glowing wake.
+// One eye, a mirrored pair that crosses in the middle, or two eyes bouncing in
+// their own halves; sine-eased turnarounds and an optional tempo lock that
+// lands the eye on the ends and swells it on every beat. No buffers: the frame
+// persists, fade() is the wake, the span swept since last frame is filled
+// anti-aliased so fast sweeps never break up. On a panel it is a vertical bar.
 
-var mid = floor((pixelCount - 1) / 2)
-var bright = array(pixelCount + 1)   // +1 = overflow guard for the fill walk
+var pickH = 0, pickS = 1
+// Eye colour (hue and saturation; the picker's brightness is ignored).
+export function hsvPickerColor(h, s, v) { pickH = h; pickS = s }
 
-var lo = array(2)
-var hi = array(2)
-var pos = array(2)      // lead position, pixel units (float)
-var dir = array(2)      // +1 / -1
-var prevIdx = array(2)  // last frame's integer lead position
+var rainbow = 0
+// Colour the wake by position along the strip instead of the picker colour.
+//# default=0
+export function toggleRainbow(v) { rainbow = v }
 
-lo[0] = 0
-hi[0] = mid
-lo[1] = mid + 1
-hi[1] = pixelCount - 1
-pos[0] = 0
-dir[0] = 1
-prevIdx[0] = 0
-pos[1] = pixelCount - 1
-dir[1] = -1
-prevIdx[1] = pixelCount - 1
+var eyes = 0
+// 0 one eye, 1 mirrored pair crossing in the middle, 2 an eye in each half
+//# min=0 max=2 step=1 default=0
+export function sliderEyes(v) { eyes = clamp(floor(v), 0, 2) }
 
-var halfLen = mid + 1
+var sweepS = 2
+// Seconds for one end-to-end pass.
+//# min=0.3 max=10 step=0.1 default=2
+export function sliderSweepSeconds(v) { sweepS = clamp(v, 0.3, 10) }
 
-// control state (defaults match the slider defaults below)
-var speedPxMs = (0.3 + 1.8 * 0.4) * halfLen / 1000  // ~1 s per one-way sweep
-var decayPerMs = 0.016 / (1 + 15 * 0.5)
-var periodMs = 8000 + (1 - 0.5) * 96000
-var rainbow = 1
-var huePhase = 0
-var gHue = 0            // initialized so frame one never sees an undefined hue
+var tailS = 0.6
+// Seconds for the wake to fade to 5 %.
+//# min=0.05 max=3 step=0.05 default=0.6
+export function sliderTailSeconds(v) { tailS = clamp(v, 0.05, 3) }
 
-//# min=0 max=1 step=0.01 default=0.4
-export function sliderSpeed(v) {
-  // ~7x band between slowest and fastest; full slider = fastest
-  speedPxMs = (0.3 + 1.8 * v) * halfLen / 1000
-}
+var widthPx = 3
+// Width of the eye in pixels (panel: columns).
+//# min=1 max=20 step=1 default=3
+export function sliderWidth(v) { widthPx = clamp(v, 1, 20) }
 
-//# min=0 max=1 step=0.01 default=0.5
-export function sliderTrailLength(v) {
-  // inverse map to decay rate, ~16x band; full slider = longest trails
-  decayPerMs = 0.016 / (1 + 15 * v)
-}
+var ease = 1
+// Slow down into the turnarounds like a pendulum.
+//# default=1
+export function toggleEase(v) { ease = v }
 
-//# min=0 max=1 step=0.01 default=0.5
-export function sliderColorShift(v) {
-  // inverse map to hue cycle period, ~13x band; full slider = fastest cycling
-  periodMs = 8000 + (1 - v) * 96000
-}
+var bpmLock = 0
+// Lock the sweep to a tempo: the eye hits an end every two beats and swells on each beat.
+//# default=0
+export function toggleBpmLock(v) { bpmLock = v }
 
-export function toggleRainbow(v) {
-  rainbow = v
-}
+var bpm = 120
+//# min=40 max=200 step=1 default=120
+export function sliderBpm(v) { bpm = clamp(v, 40, 200) }
+
+// Mapless strips stay strips: this export suppresses the default grid.
+// Luxel always runs renderBulk.
+export function render(index) { hsv(0, 0, 0) }
+
+var ph = 0, p = 0, keep = 0.9, thump = 0, drift = 0
+var prev0 = -1, prev1 = -1
 
 export function beforeRender(delta) {
-  // single-hue mode: triangle sweep through the wheel (recomputed per frame)
-  huePhase = frac(huePhase + delta / periodMs)
-  gHue = triangle(huePhase)
-
-  for (var h = 0; h < 2; h++) {
-    // advance, then bounce off this half's boundaries
-    pos[h] += dir[h] * delta * speedPxMs
-    if (pos[h] > hi[h]) { pos[h] = hi[h]; dir[h] = -1 }
-    if (pos[h] < lo[h]) { pos[h] = lo[h]; dir[h] = 1 }
-
-    // gap fill: paint every pixel crossed since last frame so fast leads
-    // never leave dotted trails
-    var ni = floor(pos[h])
-    var pi = prevIdx[h]
-    var step = ni >= pi ? 1 : -1
-    for (var i = pi; i != ni + step; i += step) bright[i] = 1
-    prevIdx[h] = ni
+  var dt = min(delta, 100) / 1000
+  keep = pow(0.05, dt / tailS)
+  drift = mod(drift + dt / 30, 1)
+  if (bpmLock) {
+    ph = beat(bpm / 4)                 // one round trip per four beats
+    var b = beat(bpm)
+    thump = (1 - b) * (1 - b)
+  } else {
+    ph = mod(ph + dt / (2 * sweepS), 1)
+    thump = 0
   }
-
-  // linear decay, clamped at zero (trail-length control = decay rate)
-  for (var i = 0; i < pixelCount; i++) {
-    bright[i] = max(0, bright[i] - delta * decayPerMs)
-  }
+  p = triangle(ph)
+  if (ease) p = (1 - cos(p * PI)) / 2
 }
 
-export function render(index) {
-  var b = bright[index]
-  // double rainbow along the strip (one full wheel per half), or shared hue
-  var h = rainbow ? index / pixelCount * 2 : gHue
-  hsv(h, 1, b * b * b)
+var bh = 0, bs = 1
+function tint(u) {
+  if (rainbow) { bh = drift + u; bs = 1 }
+  else { bh = pickH; bs = pickS }
+}
+
+// one eye on the strip at pixel position x, coming from px
+function eye1D(x, px, n) {
+  var w = widthPx * (1 + thump)
+  tint(x / n)
+  if (px >= 0 && abs(x - px) < n / 2) {
+    // the span crossed this frame, already as faded as a frame-old wake
+    gradientRange(px + 0.5, x + 0.5, bh, bs, keep, bh, bs, 1, 2)
+  }
+  hsv(bh, bs, 0.6)
+  splatIndex(x + 0.5, w * 0.5 + 2, 2)                   // halo
+  hsv(bh, bs, 1)
+  fillRangeAA(x + 0.5 - w * 0.5, x + 0.5 + w * 0.5, 2)  // body
+  hsv(bh, bs * 0.3, 1)
+  splatIndex(x + 0.5, max(0.6, w * 0.3), 2)             // white-hot core
+}
+
+// one eye on the panel at column position x (0..1), coming from px
+function eye2D(x, px, gw) {
+  var w = widthPx * (1 + thump) / gw
+  tint(x)
+  if (px >= 0 && abs(x - px) < 0.5) {
+    var k = 0.5 + 0.5 * keep, a = min(x, px), b = max(x, px)
+    hsv(bh, bs, 0.55 * k)
+    fillRect(a, 0, b, 1)
+    hsv(bh, bs, k)
+    fillRect(a, 0.25, b, 0.75)
+  }
+  hsv(bh, bs, 0.55)
+  drawLine(x, -0.2, x, 1.2, w * 0.5 + 1.5 / gw, 2)     // full-height bar
+  hsv(bh, bs, 1)
+  drawLine(x, 0.22, x, 0.78, w * 0.5 + 0.8 / gw, 2)    // brighter middle
+  hsv(bh, bs * 0.3, 1)
+  drawLine(x, 0.38, x, 0.62, max(0.6, w * 0.25 * gw) / gw, 2)
+}
+
+// repaint last frame's white-hot core in the eye colour, so the wake behind
+// it stays saturated instead of keeping a pale dot per frame
+function uncore(x, two, n, gw) {
+  if (x < 0) return
+  tint(two ? x : x / n)
+  hsv(bh, bs, 1)
+  var c = max(0.6, widthPx * (1 + thump) * 0.3)
+  if (two) fillRect(x - c / gw, 0.36, x + c / gw, 0.64)
+  else fillRange(floor(x + 0.5 - c), ceil(x + 0.5 + c))
+}
+
+export function renderBulk() {
+  var two = has2DMap()
+  var n = pixelCount, gw = 1
+  if (two) { gw = gridWidth(); if (gw < 1) gw = 32 }
+  uncore(prev0, two, n, gw)
+  uncore(prev1, two, n, gw)
+  fade(keep)
+  var x0, x1
+  if (two) {
+    var m = widthPx * 0.5 / gw
+    var span = 1 - 2 * m
+    if (eyes == 2) { x0 = m + p * (span / 2 - m); x1 = 1 - x0 }
+    else { x0 = m + p * span; x1 = 1 - x0 }
+    eye2D(x0, prev0, gw)
+    if (eyes > 0) eye2D(x1, prev1, gw)
+  } else {
+    var last = n - 1
+    if (eyes == 2) { x0 = p * (floor(n / 2) - 1); x1 = last - x0 }
+    else { x0 = p * last; x1 = last - x0 }
+    eye1D(x0, prev0, n)
+    if (eyes > 0) eye1D(x1, prev1, n)
+  }
+  prev0 = x0
+  prev1 = eyes > 0 ? x1 : -1
 }

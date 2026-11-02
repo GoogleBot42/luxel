@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/lamp.js (2026-11).
+
 # Single Color Picker - wide or spot
 kind: 1D
 sensors: no

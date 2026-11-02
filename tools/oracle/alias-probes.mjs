@@ -1,9 +1,10 @@
 // One-shot probes for two late-binding questions (Gitea #108):
 //  1. Does setPalette(arr) hold a LIVE reference — do later writes through
 //     arr change what paint() renders, with no second setPalette call?
-//     (fast-palette-blending's palette manager depends on it.)
+//     (the old fast-palette-blending port's palette manager depended on it.)
 //  2. Is a render function assigned to an `export var render` dispatched?
-//     (slime-mold-palette switches render2D between functions at runtime.)
+//     (slime-mold-palette.js switched render2D at runtime until its 2026-11
+//     rewrite as Crystal Growth dropped that.)
 // Verdicts come from preview frames: paint colors are chosen so the two
 // answers are unambiguous channel-wise.
 // Usage (repo root, `nix develop`):  node tools/oracle/alias-probes.mjs <ip>

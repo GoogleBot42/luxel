@@ -5,7 +5,7 @@
 //
 //   nix develop -c node tools/oracle/fps-compare.mjs \
 //     --pb 192.168.0.140 --luxel 192.168.0.183 --pixels 420 --1d \
-//     library/perlin-fire-wind-tunnel.js library/rainbow.js
+//     tools/bench-patterns/perlin-fire-wind-tunnel.js tools/bench-patterns/rainbow.js
 //
 //   --pb IP        oracle Pixelblaze (live-code only, nothing saved)
 //   --luxel IP     Luxel device (pixel count is set and restored)
@@ -30,7 +30,7 @@
 // restored in a `finally`, with a clean websocket close -- see
 // .claude/rules/oracle.md, both are load-bearing. The Luxel device has its
 // pixel count changed and patterns POSTed to /api/code (RAM, not the store);
-// the found pixel count is restored and `library/rainbow.js` reloaded at the
+// the found pixel count is restored and `tools/bench-patterns/rainbow.js` reloaded at the
 // end. Neither device is reflashed.
 //
 // READING THE OUTPUT: the PB reports one number, `fps`, and it is a black box
@@ -208,7 +208,7 @@ async function runLuxel() {
       await api("/api/config", String(st0.pixels)).catch(() => {});
       await sleep(1500);
     }
-    await api("/api/code", await lxpBody("", fs.readFileSync(path.join(ROOT, "library/rainbow.js"), "utf8"), st0.pixels)).catch(() => {});
+    await api("/api/code", await lxpBody("", fs.readFileSync(path.join(ROOT, "tools/bench-patterns/rainbow.js"), "utf8"), st0.pixels)).catch(() => {});
     await sleep(2000);
     const st = await api("/api/status").catch(() => ({}));
     console.log(`Luxel restored: ${st.pixels} px, fps ${st.fps}, vmerr ${st.vmerr}`);

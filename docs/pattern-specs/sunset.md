@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/plasma.js (2026-11).
+
 # Sunset
 kind: 1D (a 1D renderer that internally maps the strip onto a 2D matrix; no mapper used)
 sensors: no

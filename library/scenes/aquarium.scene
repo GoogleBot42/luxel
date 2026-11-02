@@ -1,0 +1,38 @@
+# A Luxel library scene — Apache-2.0. Grammar: library/README.md.
+# Scenery from loop tiles: kelp tiled along the floor (`fit tile`), one fish
+# sprite used three times (flags 3 = flipped to swim the other way, `A` to
+# de-sync their tails) and a bubble column that is a 6x16 tile rising forever.
+# The kelp is rooted at row 64; on a 32-row panel only its tips sway into view,
+# and the third fish and second bubble column live outside the 32x32 corner.
+S - Aquarium
+L pat 0 0 0 0 normal 100 none fill 1
+N Water
+I @pat/caustics
+C sliderGroutPct 0
+R 100 0:000814 90:00304f 180:0f7f99 255:a8f4ff
+L pat 0 0 0 0 add 35 none fill 1
+N Plankton
+I @pat/twinkle
+C sliderDensity 196608
+R 100 0:000000 255:bff9ff
+L sprite 0 24 64 40 normal 100 none tile 1
+N Kelp
+I @spr/seaweed
+L sprite 26 0 6 64 normal 100 none tile 1
+N Bubbles
+I @spr/bubbles-tile
+L sprite 51 0 6 64 normal 100 none tile 1
+N Bubbles 2
+I @spr/bubbles-tile
+A 7
+L sprite 4 6 0 0 normal 100 none fill 1
+N Fish
+I @spr/fish
+L sprite 15 15 0 0 normal 100 none fill 3
+N Fish 2
+I @spr/fish
+A 3
+L sprite 38 34 0 0 normal 100 none fill 1
+N Fish 3
+I @spr/fish
+A 5

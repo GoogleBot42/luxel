@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/fast-pulse-3d.js (2026-11).
+
 # fast pulse
 kind: 1D
 sensors: no

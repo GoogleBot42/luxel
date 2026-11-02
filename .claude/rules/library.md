@@ -69,5 +69,38 @@ paths:
   never `row * gridWidth() + col`: the frame is in wire order, which on a
   HUB75 chain is not row-major (Gitea #948). The two agree on a plain
   grid, so the five check-library rigs cannot catch the mistake — review
-  for it. `library/frame-rate-test.js`'s `band()` is the native row/rect
+  for it. `tools/patterns/frame-rate-test.js`'s `band()` is the native row/rect
   fill idiom.
+
+## Since the 2026-11-01 overhaul (idea over fidelity)
+
+- **The idea, made better, is the deliverable** — not a replica. Jeremy
+  (2026-11-01): a pixel-for-pixel port "isn't necessarily bad but isn't
+  practical", and "identical … is harmful". The byte-identical before/after
+  check above applies only to a pure control re-plumb; a rewrite is judged by
+  its contact sheet (`tools/verify/sheet.mjs`, 32x32 + 64x64 + a strip
+  waterfall) against the old one, and must be clearly better.
+- **Strip + panel in one file**: export `render(index)` beside `renderBulk`
+  (that suppresses the default `ceil(√n)` grid on a mapless strip) and branch
+  on `has2DMap()` at the top of `renderBulk` — NEVER on `gridWidth() > 0`: on
+  a mapless strip `gridWidth()` is the pixel count (L07, 2026-11-01).
+- **No `array(pixelCount)` on strips**; the persistent frame + `fade()` +
+  `splatIndex`/`fillRangeAA`/`gradientRange` is the idiom (25 patterns were
+  black on 64x64 panels from three full-length buffers). Every file must pass
+  `luxel check --grid 64x64`.
+- **Canvases size from `gridWidth()`/`gridHeight()`** (capped, 32x32 fallback
+  when `gridWidth()` is 0), never a hard-coded 16x16. Bilinear
+  `fillCanvas`/`paintCanvas(…, 1)` is the default for soft fields (since #984
+  a grid-sized canvas is the identity, so the "only when coarser" gating the
+  2026-11 batches carry is no longer needed); nearest (0) for pixel art and
+  dithers.
+- **Never black by default** for more than ~1 s; `y = 0` is the TOP (fires,
+  sand and liquid root at `y = 1`). Sound patterns stay lit with no sensor.
+- **A shipped scene's wire block must stay under 1 KB**
+  (`web/tests/librarySource.test.mjs`; the device holds 3,840 B of scenes).
+- **Trademarked names / copyrighted characters are out** (KITT, Sauron, Nyan,
+  Grinch, DBZ were renamed or replaced); art in `library/sprites` is original.
+- The batch gate is `tools/verify/verify-pattern.sh <outdir> library/a.js …`
+  (lints + five rigs + 64x64 + sheets); `.claude/skills/phase-orchestration`
+  §2c has the multi-agent shape that rewrote the library.
+

@@ -1,210 +1,303 @@
 // name: Aurora 2D
-// Curated example (hand-written showcase of the Luxel language/builtins).
-// Aurora curtains: simplex2 draws the slowly-waving band, simplex3 adds
-// vertical shimmer rays, and a palette paints black → green → violet.
-// Simplex is smoother than perlin here — no axis-aligned artifacts.
+// Clean-room reimplementation from the prose specs docs/pattern-specs/1d-aurora-borealis.md,
+// aurorashivers.md, coolaura.md — reimagined, not a replica (the panel curtains are original).
+// Panel: rayed curtains hang from a wavy hem under a starry sky, bright at the hem and
+// shading to the palette's top colour toward their tops. Only per-column tables are
+// noise (four native fillNoise2D rows); a canvas of at most 64x32 goes on with one
+// paintCanvas. Strip: soft lights drift, bloom and fade, each one a pair of anti-aliased
+// additive splatIndex blobs; shiver's blue afterglow is one capped array shown with one
+// fillHSV. Styles: curtains | shiver (flares, afterglow) | aqua swell.
 
-// Whole-frame rendering, in two native passes and a per-cell loop.
-//
-// The old `render2D` recomputed the ENTIRE curtain per LED: `simplex2(x *
-// 1.8, z, 5)` depends on nothing but the column, yet a 64x64 panel
-// evaluated it 4096 times a frame for 64 distinct answers. `renderBulk()`
-// walks the grid itself, so the band is 64 `simplex2` calls.
-//
-// The shimmer really is one sample per cell, and no bulk op removes that —
-// but `fillNoise3D` removes the INTERPRETER around it. One call per lattice
-// row fills a whole row of samples natively:
-//
-//     fillNoise3D(nRow, W, 1, nsx, 0, nox, y, z4, 9)
-//       nRow[c] = simplex3(c * nsx + nox, y, z4, 9)
-//
-// with `h = 1` so the row's y is just the `oy` argument — a row buffer of
-// MAXC entries, not a full-panel canvas. What used to be 4096 interpreted
-// `simplex3` calls, each behind ~7 instructions of argument assembly and
-// two array reads, is 64 native calls that cost nothing but the noise.
-//
-// A lattice is not quite the map's own normalization: a grid map puts
-// column c at `round(c * 65535 / (w - 1))`, and `c * nsx + nox` can only
-// reproduce that exactly where `65535 / (w - 1)` divides evenly (it does at
-// 16 wide, not at 64). The shimmer is therefore sampled on an EVENLY spaced
-// lattice through the same field — a sub-LSB coordinate change, quantified
-// in docs/bulk-render.md. Everything the colour is built from — the band,
-// the glow's `abs(y - band)`, the palette — still uses `normAxis` exactly.
-//
-// At Cell Size 1 a lattice cell IS a grid cell, and the colour stays the
-// real `paint()`: the brush the palette produces, put down with
-// `setPixel(gridIndex(c, r))` — the frame is in wire order, so a cell's
-// slot comes from the engine, never from `r * W + c` (on a chain of
-// rotated panels that is a scrambled picture). That is byte-exact and, at one cell per pixel, cheaper
-// than any canvas — `paint` + `setPixel` is ~39 interpreted instructions
-// per cell less than resolving a palette into an HSV canvas, and it needs
-// no canvas arrays at all.
-//
-// Above Cell Size 1 the lattice is coarser than the fixture, which is where
-// a canvas starts paying: `paintCanvas(vC, W, H, bC)` samples the palette
-// at `vC[i]`, times `bC[i]`, through every pixel's mapped (x, y) — the same
-// colour `paint(v, v * v)` produces, for the whole panel, in one call
-// instead of one `fillRect` per cell. Two arrays of at most CANVAS_MAX
-// cells, so the lattice coarsens rather than allocating a full-resolution
-// canvas (three `array(4096)` HSV channels would be 12,288 elements against
-// a 10,236 budget, and ~96 KB on the S3 — docs/bulk-render.md).
-//
-// With no map installed a 2D pattern already got the engine's `ceil(sqrt(n))`
-// default grid, and a `renderBulk` that names `gridWidth()` gets the same
-// one — so a bare strip still runs the curtain across it the way it always
-// did (60 px sees an 8x8 grid, 300 px an 18x17). On a fixture that is not a
-// matrix at all `gridWidth()` reports 0; there are no per-pixel coordinates
-// to walk, so the pattern falls back to tiling normalized coordinate space
-// with a 32x32 lattice, which `paintCanvas` resolves without a grid.
+var MAXW = 64, MAXH = 32, CAP = 1024, POOL = 10
+// Allocated on first use, so a strip never pays for the panel's canvas or vice versa.
+var vC = 0, bC = 0, nA = 0, nB = 0, nR = 0, nL = 0, base = 0, ih = 0, amp = 0, pA = 0, pB = 0
+var skyB = 0, rA = 0, gA = 0, bA = 0, glow = 0          // rA..glow: strip cells, or panel columns
+var px = array(POOL), pv = array(POOL), age = array(POOL), life = array(POOL), hw = array(POOL)
+var cr = array(POOL), cg = array(POOL), cb = array(POOL)
+var lp = array(POOL), lw = array(POOL), le = array(POOL)   // strip: this frame's centre, half-width, light
 
-setPalette([
-  0.0,  0,    0,    0,
-  0.25, 0,    0.07, 0.03,
-  0.55, 0,    0.55, 0.18,
-  0.8,  0.15, 0.95, 0.5,
-  1.0,  0.75, 0.45, 0.95
-])
+// Panel palettes run sky (0.12) -> hem green (0.5) -> curtain top (1.0).
+var PALS = [
+  [0, 0, 0, 0, 0.12, 0.05, 0.08, 0.3, 0.32, 0, 0.3, 0.32, 0.5, 0.1, 1, 0.35,
+   0.75, 0.15, 0.9, 0.6, 1, 0, 0.45, 0.65],                      // green
+  [0, 0, 0, 0, 0.12, 0.05, 0.08, 0.3, 0.32, 0, 0.3, 0.3, 0.5, 0.15, 1, 0.3,
+   0.66, 0.2, 0.85, 0.4, 0.84, 0.75, 0.25, 0.75, 1, 0.5, 0.15, 0.95], // violet-green
+  [0, 0, 0, 0, 0.12, 0.04, 0.06, 0.3, 0.32, 0, 0.2, 0.45, 0.5, 0, 0.85, 0.85,
+   0.75, 0.1, 0.4, 1, 1, 0.4, 0.15, 0.9]                         // aqua
+]
+// Strip light colours per palette (r, g, b x 5): 0-2 everyday, 3 the shiver flare, 4 its rival.
+var LIGHTS = [
+  [0.1, 1, 0.3, 0.35, 1, 0.45, 0.6, 1, 0.15, 0, 0.75, 0.6, 0, 0.55, 0.8],
+  [0.1, 1, 0.3, 0, 0.8, 0.55, 0.95, 0.25, 0.55, 0.55, 0.2, 0.95, 0, 0.8, 0.8],
+  [0, 0.85, 0.85, 0, 0.5, 1, 0.1, 1, 0.6, 0.4, 0.2, 1, 0, 0.9, 0.7]
+]
 
-var MAXC = 256           // widest lattice we keep column tables for (a 4x1 chain of 64-wide panels)
-var CANVAS_MAX = 1024    // cells the coarse path's two canvases hold
+var style = 0, palMode = 1, cycle = 30, seeded = 0
+// 0 curtains, 1 shiver (flares that leave a blue afterglow), 2 aqua swell (slow blooms, breathing).
+//# min=0 max=2 step=1 default=0
+export function sliderStyle(v) {
+  var s = clamp(floor(v), 0, 2)
+  if (s != style) { style = s; seeded = 0 }
+}
+// 0 green, 1 violet-green, 2 aqua.
+//# min=0 max=2 step=1 default=1
+export function sliderPalette(v) {
+  palMode = clamp(floor(v), 0, 2)
+  setPalette(PALS[palMode])
+  seeded = 0
+}
+// Seconds for the sky to change its whole shape; lower is livelier.
+//# min=5 max=120 step=1 default=30
+export function sliderCycleSeconds(v) { cycle = clamp(v, 5, 120) }
+setPalette(PALS[palMode])
 
-var band = array(MAXC)   // curtain height per column, rebuilt every frame
-var x18 = array(MAXC)    // the band noise's x argument     (x * 1.8)
-var x6 = array(MAXC)     // the shimmer noise's x argument  (x * 6)
-var nRow = array(MAXC)   // one lattice row of shimmer samples
+// Mapless strips stay strips: this export suppresses the default grid. Luxel runs renderBulk.
+export function render(index) { hsv(0, 0, 0) }
 
-// the coarse path's canvas: palette position and brightness per cell
-var vC = array(CANVAS_MAX)
-var bC = array(CANVAS_MAX)
+var zt = random(50), ph = random(50), clock = 0, nextSpawn = 0, fam = 0
+var W = 32, H = 32, gw = 0, gh = 0, m = 0, breath = 1, panel = -1
 
-var z = 0
-var z4 = 0               // the shimmer's z argument, hoisted out of the loop
-
-var gw = 0               // the installed grid, 0 when the fixture is not one
-var gh = 0
-var W = 0                // lattice dimensions
-var H = 0
-var cell = 1             // grid cells per lattice cell (the Cell Size dial)
-var eff = 1              // grid cells per lattice cell, after the clamps
-var exact = 0            // 1 when a lattice cell IS one pixel
-var built = 0
-
-// the shimmer lattice: cell k's x argument is k * nsx + nox
-var nsx = 0
-var nox = 0
-
-// One 16.16 LSB. Written as two exact divides rather than a decimal literal
-// so it is raw 1 whatever the lexer rounds.
-var EPS = 1 / 256 / 256
-
-// The engine's grid normalization, reproduced exactly: `MapData::coord`
-// returns raw `(i * 65535 + (n - 1) / 2) / (n - 1)` for axis position i.
-function normAxis(i, n) {
-  if (n <= 1) return 0
-  var d = n - 1
-  return (i - i * EPS + floor(d / 2) * EPS) / d
+function tint(k, j) {
+  var L = LIGHTS[palMode]
+  cr[k] = L[j * 3]
+  cg[k] = L[j * 3 + 1]
+  cb[k] = L[j * 3 + 2]
 }
 
-function build() {
+function spawn(k, a0) {
+  life[k] = style == 0 ? 12 + random(12) : style == 1 ? 2 : 4 + random(2)
+  age[k] = a0 * life[k]
+  px[k] = random(1)
+  pv[k] = 0
+  if (style == 0) {
+    hw[k] = 0.04 + random(0.08)
+    pv[k] = (random(1) < 0.5 ? -1 : 1) * (0.008 + random(0.012))
+    var r = random(1)
+    tint(k, r < 0.3 ? 0 : r < 0.5 ? 1 : r < 0.62 ? 2 : r < 0.82 ? 3 : 4)
+  } else if (style == 1) {
+    fam = 1 - fam                  // the two families alternate and drift apart
+    hw[k] = panel ? 0.035 : 0.065
+    px[k] = fam ? random(0.8) : 0.2 + random(0.8)
+    pv[k] = fam ? 0.2 : -0.2
+    tint(k, fam ? 3 : 4)
+  } else {
+    hw[k] = 0.05
+    tint(k, floor(random(3)))
+  }
+  var o = style == 0 ? 0.5 + random(0.5) : 1
+  if (panel) { cr[k] = o; cg[k] = 0; cb[k] = 0 }   // a panel only needs the intensity
+  else { cr[k] *= o; cg[k] *= o; cb[k] *= o }
+}
+
+function seed() {
+  for (var k = 0; k < POOL; k++) {
+    life[k] = 0
+    if (style == 0 && k < 8) spawn(k, random(0.8))
+    if (style > 0 && k < 4) spawn(k, k / 4)
+  }
+  if (style == 1 && !glow) glow = array(m)
+  if (glow) feedback(glow, 0)
+  seeded = 1
+}
+
+// Advance every live light. A panel adds them into rA over its m columns; a strip
+// keeps each light's centre, width and level for renderBulk's splats (and, in
+// shiver, raises the afterglow under it).
+function deposit(dt) {
+  if (panel) feedback(rA, 0)
+  if (style > 0 && clock >= nextSpawn) {
+    for (var j = 0; j < POOL; j++) if (age[j] >= life[j]) { spawn(j, 0); break }
+    nextSpawn = clock + (style == 1 ? 0.3 + random(0.2) : 1.1 + random(0.8))
+  }
+  for (var k = 0; k < POOL; k++) {
+    le[k] = 0
+    if (age[k] >= life[k]) {
+      if (style == 0 && k < 8) spawn(k, 0)
+      continue
+    }
+    age[k] += dt
+    var a = min(age[k] / life[k], 1), env = 0, w = hw[k], c = px[k]
+    if (style == 0) {
+      env = smoothstep(0, 0.25, a) * (1 - smoothstep(0.35, 1, a))   // bloom, then a long fade
+      if (random(1) < dt * 0.15) pv[k] = -pv[k]
+      px[k] += pv[k] * dt
+      if (c < -w || c > 1 + w) life[k] = 0
+    } else if (style == 1) {
+      env = triangle(a)
+      c += pv[k] * a + (random(1) + random(1) - 1) * 0.012   // drift plus a per-frame shiver
+    } else {
+      env = sin(a * PI) * breath
+      w = 0.05 + a * 0.5
+    }
+    var ck = c * m, hk = max(w * m, 0.6)
+    var lo = max(0, ceil(ck - hk)), hi = min(m - 1, floor(ck + hk)), st = 1 / hk, i = lo, f = 0
+    if (panel) {
+      var kr = cr[k] * env
+      for (; i <= hi; i++) {
+        f = (i - ck) * st
+        f = 1 - f * f
+        rA[i] += f * f * kr
+      }
+      continue
+    }
+    env *= env                             // squared light: soft fades, deep darks
+    lp[k] = c
+    lw[k] = w
+    le[k] = env
+    if (style == 1) {
+      // afterglow: a decaying running max of the flares (stored at its deep-blue level)
+      var l = max(cr[k], max(cg[k], cb[k])) * env * 0.45
+      for (; i <= hi; i++) {
+        f = (i - ck) * st
+        f = 1 - f * f
+        glow[i] = max(glow[i], f * f * l)
+      }
+    }
+  }
+}
+
+// The strip: a background (afterglow / breathing field / black), then every light
+// as two additive anti-aliased blobs whose sum approximates a (1 - x^2)^2 bump.
+function stripDraw() {
+  var n = pixelCount
+  if (style == 1) {
+    if (n <= m) fillHSV(0.63, 1, glow)
+    else {
+      var ps = n / m
+      for (var q = 0; q < m; q++) {
+        hsv(0.63, 1, glow[q])
+        fillRange(floor(q * ps), floor((q + 1) * ps))
+      }
+    }
+  } else if (style == 2) {
+    rgb(0, 0.05 * breath, 0.16 * breath)   // the breathing blue field the swells rise out of
+    fill()
+  } else clear()
+  for (var k = 0; k < POOL; k++) {
+    var e = le[k] * 0.53                   // the pair sums to ~the bump's light
+    if (e <= 0) continue
+    var p = lp[k] * n, r = max(lw[k] * n, 0.6)
+    rgb(cr[k] * e, cg[k] * e, cb[k] * e)
+    splatIndex(p, r * 1.3, 1)
+    splatIndex(p, r * 0.8, 1)
+  }
+}
+
+function layout() {
+  if (!vC) {
+    vC = array(MAXW * MAXH)
+    bC = array(MAXW * MAXH)
+    nA = array(MAXW)
+    nB = array(MAXW)
+    nR = array(MAXW)
+    nL = array(MAXW)
+    base = array(MAXW)
+    ih = array(MAXW)
+    amp = array(MAXW)
+    pA = array(MAXW)
+    pB = array(MAXW)
+    skyB = array(MAXH)
+    rA = array(MAXW)
+    gA = array(MAXW)
+    bA = array(MAXW)
+    glow = array(MAXW)
+  }
   gw = gridWidth()
   gh = gridHeight()
-  if (gw > 0 && gh > 0) {
-    // a grid wider than the column tables coarsens until it fits, and the
-    // coarse path coarsens further until its canvas fits
-    var s = max(cell, ceil(gw / MAXC))
-    W = ceil(gw / s)
-    H = ceil(gh / s)
-    while (s > 1 && W * H > CANVAS_MAX) {
-      s = s + 1
-      W = ceil(gw / s)
-      H = ceil(gh / s)
-    }
-    eff = s
-    exact = s == 1
-    for (var c = 0; c < W; c++) {
-      var g0 = c * s
-      var g1 = min(g0 + s, gw) - 1
-      var x = normAxis(g0 + floor((g1 - g0) / 2), gw)
-      x18[c] = x * 1.8
-      x6[c] = x * 6
-    }
-  } else {
-    // not a matrix: tile normalized coordinate space instead
-    gw = 0
-    W = ceil(32 / cell)
-    H = W
-    exact = 0
-    for (var k = 0; k < W; k++) {
-      var xc = (k + 0.5) / W
-      x18[k] = xc * 1.8
-      x6[k] = xc * 6
-    }
+  W = gw > 0 ? min(gw, MAXW) : 32
+  H = gh > 0 ? min(gh, MAXH) : 32
+  m = W
+  for (var r = 0; r < H; r++) {
+    var y = (r + 0.5) / H
+    skyB[r] = 0.14 + 0.3 * y * y                 // airglow brightens toward the horizon
   }
-  // The linear lattice `fillNoise3D` samples, fitted to the column table's
-  // two ends so the far edge lands where the table says it does.
-  nox = x6[0]
-  nsx = W > 1 ? (x6[W - 1] - x6[0]) / (W - 1) : 0
-  built = 1
-}
-
-// How many pixels across one lattice cell is. 1 is native — every pixel gets
-// its own shimmer sample and the frame is exactly what the per-pixel version
-// drew. Larger trades that detail for speed: the shimmer field is only ~6
-// lattice units wide across the whole panel, so it survives being sampled
-// every 2-4 pixels far better than the curtain's edge does, which is what
-// visibly blocks first.
-//# min=1 max=4 step=1 default=1
-export function sliderCellSize(v) {
-  var s = clamp(floor(v), 1, 4)
-  if (s != cell) {
-    cell = s
-    built = 0
-  }
+  seeded = 0
 }
 
 export function beforeRender(delta) {
-  z = (z + delta * 0.00015) % 1024  // slow drift along one noise axis
-  if (!built) build()
-  z4 = z * 4
-  for (var c = 0; c < W; c++) band[c] = 0.45 + simplex2(x18[c], z, 5) * 0.25
+  var dt = min(delta, 100) / 1000 * 30 / cycle  // the sky's own clock
+  clock += dt
+  var p = has2DMap()
+  if (p) {
+    if (panel != 1 || gw != gridWidth() || gh != gridHeight()) { panel = 1; layout() }
+  } else if (panel != 0) {
+    panel = 0
+    m = min(pixelCount, CAP)
+    seeded = 0
+  }
+  if (!seeded) seed()
+  breath = style == 2 ? 0.55 + 0.45 * wave(clock / 8) : 1
+  if (style == 1) feedback(glow, pow(0.5, dt / 1.5))   // afterglow half-life 1.5 s
+  if (style > 0 || !panel) deposit(dt)
+  if (!panel) return
+
+  zt += dt * 0.2
+  ph += dt * 0.04
+  var sx = 1 / W, rf = max(4, W / 5.5)
+  fillNoise2D(nA, W, 1, 1.7 * sx, 0, 0.85 * sx + ph, zt, 3)            // hem folds
+  fillNoise2D(nB, W, 1, 1.1 * sx, 0, 0.55 * sx - ph * 0.6, zt * 0.8, 4) // curtain height
+  fillNoise2D(nR, W, 1, rf * sx, 0, rf * 0.5 * sx + ph * 3, zt * 2.5, 5) // rays
+  fillNoise2D(nL, W, 1, 2.6 * sx, 0, 1.3 * sx - ph, zt * 1.5, 6)       // brightness along it
+  for (var c = 0; c < W; c++) {
+    var ray = 0.4 + 0.6 * saturate(0.5 + 0.8 * nR[c])
+    var a = saturate(0.6 + 0.7 * nL[c]) * ray, fr = 1
+    var h = 0.44 + 0.16 * nB[c]
+    base[c] = 0.68 + 0.18 * nA[c]
+    if (style == 1) {
+      var fresh = rA[c], g = glow[c] * 0.9
+      if (fresh > glow[c]) glow[c] = fresh
+      a = 0.2 * a + fresh * ray + g
+      fr = fresh / max(fresh + g, 0.01)   // fresh flares climb the palette, afterglow stays low
+      h *= 0.85
+    } else if (style == 2) {
+      a = (0.1 + 0.55 * rA[c]) * (0.85 + 0.15 * ray)
+      h += 0.12
+      base[c] = 0.8 + 0.07 * nA[c]
+    }
+    amp[c] = a
+    ih[c] = 1 / h
+    pA[c] = 0.22 + 0.28 * fr
+    pB[c] = 0.47 * fr
+  }
+}
+
+function sky() {
+  var i = 0, hem = style == 2 ? 0.15 : 0.6
+  for (var r = 0; r < H; r++) {
+    var y = (r + 0.5) / H, sb = skyB[r]
+    for (var c = 0; c < W; c++) {
+      var u = (base[c] - y) * ih[c], a = 0
+      if (u > -0.12 && u < 1) {
+        // a bright hem, a long body, and a quick fade over the last fifth
+        a = u < 0 ? 1 + u * 8.3 : min(1, (1 - u) * 5) * (0.35 + 0.4 * (1 - u)) + max(0, hem - u * 4)
+        a *= amp[c]
+      }
+      if (a > 0.004) {
+        var e = pA[c] + pB[c] * max(u, 0)
+        vC[i] = a < 0.25 ? 0.12 + (e - 0.12) * a * 4 : e
+        bC[i] = sb + a
+      } else {
+        vC[i] = 0.12
+        bC[i] = sb
+      }
+      i++
+    }
+  }
+  paintCanvas(vC, W, H, bC, W < gw || H < gh ? 1 : 0)   // bilinear upscale
+  // stars, only in the sky above each curtain's top
+  var ns = min(40, floor(gw * gh / 100))
+  for (var s = 0; s < ns; s++) {
+    var sxn = hash(s * 1.37 + 0.5), syn = hash(s * 2.11 + 7) * 0.75
+    var cc = floor(sxn * W)
+    if (syn < base[cc] - 1.1 / ih[cc] || amp[cc] < 0.05) {
+      hsv(0.6, 0.25, 0.2 + 0.25 * wave(zt * 2 + hash(s + 3)))
+      setPixel(gridIndex(sxn * gw, syn * gh))
+    }
+  }
 }
 
 export function renderBulk() {
-  if (exact) {
-    // one lattice cell per pixel: the palette brush, straight onto the cell
-    for (var r = 0; r < H; r++) {
-      var yv = normAxis(r, gh)
-      fillNoise3D(nRow, W, 1, nsx, 0, nox, yv * 2, z4, 9)
-      for (var c = 0; c < W; c++) {
-        var shimmer = 0.6 + 0.4 * nRow[c]
-        var glow = saturate(1 - abs(yv - band[c]) * 2)
-        var v = saturate(glow * shimmer * 1.4)
-        paint(v, v * v)
-        setPixel(gridIndex(c, r))
-      }
-    }
-    return
-  }
-  // coarser than the fixture: build the palette canvas, then one call
-  for (var row = 0; row < H; row++) {
-    var yv2 = 0
-    if (gw > 0) {
-      var s = eff
-      var h0 = row * s
-      var h1 = min(h0 + s, gh) - 1
-      yv2 = normAxis(h0 + floor((h1 - h0) / 2), gh)
-    } else {
-      yv2 = (row + 0.5) / H
-    }
-    fillNoise3D(nRow, W, 1, nsx, 0, nox, yv2 * 2, z4, 9)
-    var base = row * W
-    for (var k = 0; k < W; k++) {
-      var sh2 = 0.6 + 0.4 * nRow[k]
-      var glow2 = saturate(1 - abs(yv2 - band[k]) * 2)
-      var v2 = saturate(glow2 * sh2 * 1.4)
-      vC[base + k] = v2
-      bC[base + k] = v2 * v2
-    }
-  }
-  paintCanvas(vC, W, H, bC)
+  if (panel) {
+    sky()
+  } else stripDraw()
 }

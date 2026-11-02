@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/scenes/scrolling-message.scene (a text layer over a pattern, 2026-11).
+
 # scrolling text marquee 2D
 kind: 1D+2D
 sensors: no

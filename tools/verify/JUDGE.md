@@ -1,5 +1,11 @@
 # Output-only port verification — judge procedure
 
+> **2026-11 note.** The library overhaul rewrote `library/` "idea over
+> fidelity": ports were merged, reimagined or deleted (308 → 155 patterns).
+> Fidelity to the original is no longer the library's bar — a surviving file
+> that differs from its original on purpose is not a defect. This procedure is
+> kept for the record and for any pair still in the pruned `pairs.json`.
+
 This is the prompt template for a judge agent verifying ONE clean-room port
 against its Pixelblaze original, purely from rendered output. The judge never
 reads pattern code; it renders both sides, twiddles dials, looks at the

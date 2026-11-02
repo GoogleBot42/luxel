@@ -1,0 +1,68 @@
+# Luxel library sprite — original art, Apache-2.0. Grammar: library/README.md.
+# Two candles to a cell, out of phase and of different heights, so a tiled
+# row reads as candles rather than one flame copied. Tile it across a box:
+# the box WIDTH is the candle count (two per 8 px).
+name: Candle Stick
+fps: 8
+palette:
+  w f4ecd8
+  s d8cdb0
+  W fff3c4
+  y ffd166
+  o ff8a00
+
+frame
+.o......
+.y......
+yWy..o..
+.W...y..
+wWs..W..
+wws.yWy.
+wws.wWs.
+wws.wws.
+wws.wws.
+wws.wws.
+wws.wws.
+wws.wws.
+
+frame
+o.......
+.y......
+yWy...o.
+.W...y..
+wws.yWy.
+wws..W..
+wws.wws.
+wws.wws.
+wws.wws.
+wws.wws.
+wws.wws.
+wws.wws.
+
+frame
+.o......
+.y......
+.W...o..
+yWy..y..
+wWs.yWy.
+wws..W..
+wws.wWs.
+wws.wws.
+wws.wws.
+wws.wws.
+wws.wws.
+wws.wws.
+
+frame
+..o.....
+.y......
+yWy.o...
+.W...y..
+wws.yWy.
+wws..W..
+wws.wws.
+wws.wws.
+wws.wws.
+wws.wws.
+wws.wws.
+wws.wws.

@@ -3,15 +3,16 @@
 > **FULLY IMPLEMENTED — 2026-09-08. This document is history, not a
 > backlog.** Every shortlist item (1–12) and every stretch item that was
 > not deliberately skipped now ships as a tracked file in `library/`:
-> `boids-2d.js`, `flow-field-2d.js`, `typing-heatmap-2d.js`,
-> `pendulum-wave.js`, `interference-2d.js`, `crosshair-pulse-2d.js`,
-> `drip.js`, `ocean.js`, `starfield-2d.js`, `dna-helix-2d.js`,
-> `radar-2d.js`, `chevron-2d.js`, plus `tetrix-2d.js`,
+> `boids-2d.js`, `curl-flow-2d.js`, `typing-heatmap-2d.js`,
+> `pendulum-wave.js`, `interference.js`, `notification-ripple.js`,
+> `raindrops-2d.js` (strip drip), `ocean.js`, `starfield-2d.js`, `dna-helix-2d.js`,
+> `radar-2d.js`, `rainbow.js` (chevron shape), plus `tetrix-2d.js`,
 > `falling-sand-2d.js`, `tv-simulator.js`, `soap-2d.js`,
 > `spirograph-2d.js` and `reaction-diffusion-2d.js` (Gray–Scott, in 16.16
 > fixed point). Popcorn and munching squares were skipped on purpose —
 > see the 2026-07-06 status note below. The clean-room reimplementation
-> of the whole corpus is complete too.
+> of the whole corpus is complete too. (File names updated to their
+> survivors after the 2026-11 library overhaul merged several of them.)
 >
 > The engine/builtin wants this survey generated are all shipped as well:
 > **`blur2D`**, **bulk array math** (`arrayAdd`/`arraySub`/`arrayScale`/

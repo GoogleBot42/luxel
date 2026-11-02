@@ -1,81 +1,56 @@
 // name: _Fairies
-// Clean-room reimplementation from a prose functional description of the
-// community pattern "_Fairies"; original source never consulted.
+// Clean-room reimplementation from the prose spec docs/pattern-specs/fairies.md
+// — reimagined, not a replica.
+// Dense, stationary fairy dust: points pop to full in the picked hue (magenta-pink
+// by default, optionally spread around it) and fade while new ones pop elsewhere,
+// with occasional pure-white glints among them. Built on the persistent frame —
+// one fade() plus a constant birth rate of setPixel() — so it costs O(births),
+// keeps no per-pixel buffers and runs unchanged on any strip or panel.
 
-// A dense field of stationary twinkles: many colored points (picked hue,
-// magenta-pink default) fade out over a few seconds and instantly respawn
-// at a new random position at full brightness, plus a much smaller crew of
-// short-lived pure white sparkles glinting on top. Nothing travels — pure
-// birth-fade-rebirth. Populations scale with pixel count so density looks
-// the same on any strip.
+var hue = 0.9          // magenta-pink
+var speed = 1          // twinkle rate multiplier: 1 = ~0.75 s half-life
+var density = 16       // births per second per 100 pixels
+var spread = 0         // hue spread, degrees either side of the picked hue
 
-var nFairies = max(1, floor(pixelCount / 2))
-var nSparks = max(1, floor(pixelCount / 16))
-var total = nFairies + nSparks
-
-// per-spark state; fairies occupy 0..nFairies-1, white sparks come after
-// so on a shared pixel the white spark's write wins
-var pos = array(total)
-var life = array(total)
-var lifetime = array(total)
-
-// per-pixel buffers — never cleared: a respawned spark abandons its old
-// pixel with a near-zero residual that just stays until reused (harmless,
-// avoids a clear pass)
-var briB = array(pixelCount)
-var satB = array(pixelCount)
-
-var hue = 0.9   // magenta-pink default
-export function hsvPickerPrimaryColor(h, s, v) {
-  hue = h        // only the hue is used; saturation forced full
-}
-
-var BASE_LIFE = 3000   // ms: nominal fairy lifetime at speed 1
-
-// Twinkle rate multiplier — HIGHER IS FASTER. Applied to the per-frame life
-// decrement rather than to the rolled lifetimes, so a slider move takes
-// effect on the whole field immediately instead of trickling in over the
-// next respawn cycle (which is why the old 0..1 slider looked inert).
-// 1 = the nominal ~3 s fade, 6 = a frantic 0.5 s sparkle, 0.2 = ~15 s.
-var speed = 1
+// Fairy colour — only the hue is used (fairies are fully saturated).
+export function hsvPickerPrimaryColor(h, s, v) { hue = h }
+// Twinkle rate, HIGHER IS FASTER: 1 fades a fairy to half in ~0.75 s.
 //# min=0.2 max=6 step=0.1 default=1
-export function sliderSpeed(v) {
-  speed = clamp(v, 0.05, 20)
-}
+export function sliderSpeed(v) { speed = clamp(v, 0.05, 20) }
+// New fairies per second for every 100 pixels.
+//# min=1 max=200 step=1 default=16
+export function sliderDensity(v) { density = clamp(v, 1, 200) }
+// Scatter each fairy's hue up to this many degrees either side of the colour.
+//# min=0 max=180 step=1 default=0
+export function sliderHueSpreadDegrees(v) { spread = clamp(v, 0, 180) }
 
-function rollLifetime(i) {
-  if (i < nFairies) return BASE_LIFE * (0.8 + random(0.4))  // base ±1/5
-  return BASE_LIFE * (0.2 + random(0.2))                    // 1/5..2/5 of base
-}
+var births = 0
+var keep = 1           // fade owed to the frame, applied in >= 6 % steps
+var seeded = 0
 
-// initialize with staggered ages so the field doesn't pulse in unison
-var ii = 0
-for (ii = 0; ii < total; ii++) {
-  pos[ii] = floor(random(pixelCount))
-  life[ii] = random(1)
-  lifetime[ii] = rollLifetime(ii)
+function fairy(v) {
+  if (random(1) < 0.12) hsv(0, 0, v)                  // white glint
+  else hsv(hue + (random(2) - 1) * spread / 360, 1, v)
+  setPixel(random(pixelCount))
 }
 
 export function beforeRender(delta) {
-  var i = 0
-  for (i = 0; i < total; i++) {
-    // life hits zero after lifetime/speed ms, frame-rate independently
-    life[i] -= delta * speed / lifetime[i]
-    if (life[i] <= 0) {
-      pos[i] = floor(random(pixelCount))
-      life[i] = 1
-      lifetime[i] = rollLifetime(i)
-    }
-    var p = pos[i]
-    // Store the SQUARED brightness (the gentle ease-out the read-out used to
-    // apply per pixel): the square then costs one multiply per spark instead
-    // of one per LED, and the buffer stays the fill's own V channel.
-    briB[p] = life[i] * life[i]
-    satB[p] = i < nFairies ? 1 : 0   // fairy = colored, spark = white
-  }
+  var dt = min(delta, 200) / 1000
+  // births this frame; the 15 % cap keeps 16.16 safe on a 128x128 chain
+  births = births + min(density * speed / 100 * dt, 0.15) * pixelCount
+  keep = keep * pow(0.5, dt * speed / 0.75)
 }
 
-// One whole-frame read-out; hue is a scalar the fill broadcasts (Gitea #405).
 export function renderBulk() {
-  fillHSV(hue, satB, briB)
+  var i
+  if (!seeded) {
+    // Open on a full field instead of an empty one.
+    seeded = 1
+    var n = min(pixelCount * 0.3, 3000)
+    for (i = 0; i < n; i++) { var e = random(1); fairy(e * e) }
+  }
+  if (keep < 0.94) { fade(keep); keep = 1 }
+  var n = min(floor(births), 3000)
+  births = births - floor(births)
+  for (i = 0; i < n; i++) fairy(1)
 }

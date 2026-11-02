@@ -1,3 +1,4 @@
+> Superseded: this idea now lives in library/twinkle.js (2026-11).
 # firework dust
 kind: 1D
 sensors: no

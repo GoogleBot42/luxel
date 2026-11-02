@@ -1,0 +1,113 @@
+# Luxel library sprite — original art, Apache-2.0. Grammar: library/README.md.
+# The Luxel wordmark standing on a flat lens of light, in the spirit of the
+# old bouncing-screensaver logos. Six frames, one per tint (cyan, magenta,
+# gold, lime, orange, violet), same pixels each: on its own it steps through
+# them once a second, and a keyframe track can pick the tint per key instead —
+# Bouncing Logo changes colour at every wall.
+name: Luxel Logo
+fps: 1
+palette:
+  a 33e0ff
+  A 136a80
+  b ff4fd8
+  B 7a1f68
+  c ffd23f
+  C 806414
+  d 7dff5a
+  D 2f7a1c
+  e ff7a2f
+  E 80330c
+  f a98bff
+  F 463296
+  h ffffff
+
+frame
+aa...aa.aa.aa.aa.aaaa.aa..
+aa...aa.aa.aa.aa.aa...aa..
+aa...aa.aa..aaa..aa...aa..
+aa...aa.aa...a...aaa..aa..
+aa...aa.aa..aaa..aa...aa..
+aaaa.aaaaa.aa.aa.aa...aaaa
+aaaa..aaa..aa.aa.aaaa.aaaa
+..........................
+......AAAAAAAAAAAAAA......
+..AAAAAAAhhhhhhhhhAAAAAA..
+AAAAAAAAAAAAAAAAAAAAAAAAAA
+..AAAAAAAAAAAAAAAAAAAAAA..
+......AAAAAAAAAAAAAA......
+
+frame
+bb...bb.bb.bb.bb.bbbb.bb..
+bb...bb.bb.bb.bb.bb...bb..
+bb...bb.bb..bbb..bb...bb..
+bb...bb.bb...b...bbb..bb..
+bb...bb.bb..bbb..bb...bb..
+bbbb.bbbbb.bb.bb.bb...bbbb
+bbbb..bbb..bb.bb.bbbb.bbbb
+..........................
+......BBBBBBBBBBBBBB......
+..BBBBBBBhhhhhhhhhBBBBBB..
+BBBBBBBBBBBBBBBBBBBBBBBBBB
+..BBBBBBBBBBBBBBBBBBBBBB..
+......BBBBBBBBBBBBBB......
+
+frame
+cc...cc.cc.cc.cc.cccc.cc..
+cc...cc.cc.cc.cc.cc...cc..
+cc...cc.cc..ccc..cc...cc..
+cc...cc.cc...c...ccc..cc..
+cc...cc.cc..ccc..cc...cc..
+cccc.ccccc.cc.cc.cc...cccc
+cccc..ccc..cc.cc.cccc.cccc
+..........................
+......CCCCCCCCCCCCCC......
+..CCCCCCChhhhhhhhhCCCCCC..
+CCCCCCCCCCCCCCCCCCCCCCCCCC
+..CCCCCCCCCCCCCCCCCCCCCC..
+......CCCCCCCCCCCCCC......
+
+frame
+dd...dd.dd.dd.dd.dddd.dd..
+dd...dd.dd.dd.dd.dd...dd..
+dd...dd.dd..ddd..dd...dd..
+dd...dd.dd...d...ddd..dd..
+dd...dd.dd..ddd..dd...dd..
+dddd.ddddd.dd.dd.dd...dddd
+dddd..ddd..dd.dd.dddd.dddd
+..........................
+......DDDDDDDDDDDDDD......
+..DDDDDDDhhhhhhhhhDDDDDD..
+DDDDDDDDDDDDDDDDDDDDDDDDDD
+..DDDDDDDDDDDDDDDDDDDDDD..
+......DDDDDDDDDDDDDD......
+
+frame
+ee...ee.ee.ee.ee.eeee.ee..
+ee...ee.ee.ee.ee.ee...ee..
+ee...ee.ee..eee..ee...ee..
+ee...ee.ee...e...eee..ee..
+ee...ee.ee..eee..ee...ee..
+eeee.eeeee.ee.ee.ee...eeee
+eeee..eee..ee.ee.eeee.eeee
+..........................
+......EEEEEEEEEEEEEE......
+..EEEEEEEhhhhhhhhhEEEEEE..
+EEEEEEEEEEEEEEEEEEEEEEEEEE
+..EEEEEEEEEEEEEEEEEEEEEE..
+......EEEEEEEEEEEEEE......
+
+frame
+ff...ff.ff.ff.ff.ffff.ff..
+ff...ff.ff.ff.ff.ff...ff..
+ff...ff.ff..fff..ff...ff..
+ff...ff.ff...f...fff..ff..
+ff...ff.ff..fff..ff...ff..
+ffff.fffff.ff.ff.ff...ffff
+ffff..fff..ff.ff.ffff.ffff
+..........................
+......FFFFFFFFFFFFFF......
+..FFFFFFFhhhhhhhhhFFFFFF..
+FFFFFFFFFFFFFFFFFFFFFFFFFF
+..FFFFFFFFFFFFFFFFFFFFFF..
+......FFFFFFFFFFFFFF......
+

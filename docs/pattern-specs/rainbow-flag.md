@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/us-flag-2d.js (2026-11).
+
 # Rainbow Flag
 kind: 1D
 sensors: no

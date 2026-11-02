@@ -1,139 +1,180 @@
 // name: Doom Fire
-// Clean-room reimplementation from a prose functional description of the
-// community pattern "Doom Fire"; original source never consulted.
-//
-// PSX-DOOM-style fire: no noise functions, just neighbor propagation with
-// random cooling. Simulated on a 16x16 virtual canvas; the heat buffers get
-// one pad column on each side (no horizontal clip checks) and one extra
-// row beyond the display that permanently holds the source heat.
+// Clean-room reimplementation from the prose spec docs/pattern-specs/doom-fire.md — reimagined, not a replica.
+// The PSX-era spread fire: no noise at all. Each step every cell copies the
+// cell below it — nudged a column sideways at random, more often downwind —
+// minus a cooling drawn in 1/36 steps, so heat climbs off a white-hot bed in
+// ragged tongues through a 36-step ramp. The sim is sized from the grid (an
+// integer fraction of it, at most 48 cells a side) and painted with one
+// paintCanvas. Dragon makes the bed exhale in surges. Strip: one column of at
+// most 64 cells; a longer strip draws one gradientRange per cell gap through an
+// HSV copy of the ramp (the neighbours' colours are close, so the lerp is the ramp).
 
-var SIZE = 16              // virtual canvas is SIZE x SIZE
-var W = SIZE + 2           // buffer width: display + a pad column each side
-var H = SIZE + 1           // buffer height: display rows + the source row
-var SRC = SIZE             // buffer row index of the source row
+var CAP = 48
+var cv = array(CAP * CAP)
+var pal = array(40)
+setPalette(pal)
+function stop(k, pos, r, g, b) {
+  pal[k * 4] = pos
+  pal[k * 4 + 1] = r
+  pal[k * 4 + 2] = g
+  pal[k * 4 + 3] = b
+}
+// black → soot → blood red → red → orange → amber → straw → white
+stop(0, 0, 0, 0, 0)
+stop(1, 0.08, 0.11, 0.02, 0.02)
+stop(2, 0.2, 0.36, 0.05, 0.02)
+stop(3, 0.33, 0.62, 0.1, 0.02)
+stop(4, 0.46, 0.83, 0.24, 0.03)
+stop(5, 0.58, 0.9, 0.4, 0.04)
+stop(6, 0.7, 0.88, 0.56, 0.1)
+stop(7, 0.82, 0.85, 0.72, 0.22)
+stop(8, 0.92, 0.93, 0.88, 0.55)
+stop(9, 1, 1, 1, 1)
 
-var bufA = array(W * H)
-var bufB = array(W * H)
-var cur = bufA
-var prev = bufB
-
-// light the source row at load
-var i0
-for (i0 = 0; i0 < W; i0++) {
-  bufA[SRC * W + i0] = 1
-  bufB[SRC * W + i0] = 1
+// The ramp as HSV at 65 heats, for the strip's gradientRange runs (built once).
+var LN = 64
+var lH = array(LN + 1), lS = array(LN + 1), lV = array(LN + 1), rgbT = array(3)
+for (var li = 0, si = 0; li <= LN; li++) {
+  var x = li / LN
+  while (si < 8 && pal[(si + 1) * 4] < x) si++
+  var f = (x - pal[si * 4]) / (pal[(si + 1) * 4] - pal[si * 4])
+  var o = si * 4
+  rgb2hsv(mix(pal[o + 1], pal[o + 5], f), mix(pal[o + 2], pal[o + 6], f), mix(pal[o + 3], pal[o + 7], f), rgbT)
+  lH[li] = rgbT[0]
+  lS[li] = rgbT[1]
+  lV[li] = rgbT[2]
+}
+lH[0] = lH[1]                                   // black and white have no hue of their own
+lH[LN] = lH[LN - 1]
+var cH = 0, cS = 0, cV = 0
+function heatHsv(h) {
+  var u = clamp(h, 0, 0.999) * LN, k = floor(u), f = u - k
+  cH = lH[k] + (lH[k + 1] - lH[k]) * f
+  cS = lS[k] + (lS[k + 1] - lS[k]) * f
+  cV = lV[k] + (lV[k + 1] - lV[k]) * f
 }
 
-// --- controls ---------------------------------------------------------
-var baseHue = 0            // red fire by default
-var bright = 1
-export function hsvPickerColor(h, s, v) {
-  // picker saturation is ignored: hue re-bases the fire, value scales it
-  baseHue = h
-  bright = v
-}
+var flameH = 0.75
+// How far the tongues climb, as a percentage of the panel height.
+//# min=20 max=100 step=1 default=75
+export function sliderFlameHeightPct(v) { flameH = clamp(v, 20, 100) / 100 }
 
-var maxCool = 0.25
-//# min=0 max=1 step=0.05 default=0.5
-export function sliderFlameHeight(v) {
-  // inverse: taller flames = gentler maximum cooling
-  maxCool = 0.4 - 0.3 * v
-}
+var steps = 30
+//# min=10 max=60 step=1 default=30
+export function sliderStepsPerSecond(v) { steps = clamp(v, 10, 60) }
+
+var wind = 0
+// Negative blows left. It gusts.
+//# min=-100 max=100 step=1 default=0
+export function sliderWindPct(v) { wind = clamp(v, -100, 100) / 100 }
 
 var dragon = 0
-//# min=0 max=1 step=1 default=0
-export function sliderDragonMode(v) {
-  dragon = v > 0.5
-}
+//# default=0
+export function toggleDragon(v) { dragon = v > 0.5 }
 
-var minStepMs = 30
-//# min=0 max=1 step=0.05 default=0.1
-export function sliderSpeed(v) {
-  // minimum ms between simulation steps: 0 = as fast as possible,
-  // 1 = a chunky retro ~300 ms per step
-  minStepMs = v * 300
-}
+var DQ = 2                     // cooling quantum, in 1/36 steps
+var cw = 32, ch = 32, acc = 0, t = 0, breath = 1, warm = 0
 
-// --- simulation -------------------------------------------------------
-var wind = 0
-var accum = 0
-
-function simStep() {
-  // swap buffers
-  var tmp = prev
-  prev = cur
-  cur = tmp
-
-  // wind: mostly calm; occasionally either calm down or gust sideways.
-  // Every change passes through a zero-wind interlude before a new
-  // random direction is picked.
-  if (random(1) < 0.05) {
-    if (wind != 0) {
-      wind = 0
-    } else {
-      wind = random(2.4) - 1.2   // roughly one column-width either way
-    }
-  }
-
-  // propagate heat upward. Row 0 is never written, so it stays dark;
-  // each cell pulls from the cell below it in the previous buffer.
-  var center = (SIZE - 1) / 2
-  var yy, xx
-  for (yy = 1; yy < SRC; yy++) {
-    // cooling is harshest near the source and gentle near the top, so
-    // surviving parcels get carried high as distinct tongues
-    var coolScale = maxCool * yy / SRC
-    for (xx = 1; xx <= SIZE; xx++) {
-      // wind bends the flanks more than the core: edge-weighted offset
-      var lean = wind * (xx - 1 - center) / center
-      var sx = clamp(round(xx + lean), 0, W - 1)
-      var heat = prev[(yy + 1) * W + sx] - random(coolScale)
-      cur[yy * W + xx] = max(0, heat)
-    }
-  }
-
-  // re-perturb the source row
-  if (dragon) {
-    // periodic die-back and eruption, several seconds per exhale
-    var breath = 1.3 * wave(time(0.09))
-    for (xx = 1; xx <= SIZE; xx++) {
-      cur[SRC * W + xx] = breath * (0.75 + 0.25 * wave((xx - 1) / SIZE))
-    }
+function size() {
+  var gw = gridWidth(), gh = gridHeight()
+  if (!has2DMap()) {
+    cw = 1                                     // a strip is one column
+    ch = clamp(pixelCount, 2, 64)
+  } else if (gw > 0) {
+    var k = ceil(gw / CAP)
+    while (gw % k != 0 && k < 6) k++          // whole blocks: an even, crisp upscale
+    cw = clamp(ceil(gw / k), 2, CAP)
+    ch = clamp(ceil(gh / k), 2, CAP)
   } else {
-    // high base heat with a slowly sliding spatial shimmer
-    var phase = triangle(time(0.3)) * 2
-    for (xx = 1; xx <= SIZE; xx++) {
-      cur[SRC * W + xx] = 0.88 + 0.12 * wave((xx - 1) / SIZE + phase)
+    cw = 32
+    ch = 32
+  }
+}
+
+function step() {
+  var rows = ch - 1
+  var q = 36 / max(rows * flameH, 1) * 0.85   // mean cooling, in 1/36 steps per row
+  if (dragon) q *= 1.5 - 0.8 * breath          // an exhale also burns taller
+  var qs = cw == 1 ? 1 : DQ                     // a strip cools in finer steps (less flicker)
+  var dq = qs / 36, p = min(q / qs, 1)
+  var w = wind * (0.6 + 0.4 * wave(t / 9)) + 0.12 * sin(t * 0.6)
+  var pr = clamp(0.25 + 0.3 * w, 0, 0.6)       // chance a parcel drifts a column right
+  var pl = 1 - clamp(0.25 - 0.3 * w, 0, 0.6)
+  var last = cw - 1
+  for (var r = 0; r < rows; r++) {
+    var o = r * cw, b = o + cw
+    for (var c = 0; c < cw; c++) {
+      var j = random(1)                       // one draw picks the drift and the cooling
+      var dc = c
+      if (j < pr) dc = min(c + 1, last)
+      else if (j > pl) dc = max(c - 1, 0)
+      var dec = frac(j * 13.7) < p ? dq : 0
+      if (cw == 1 && j < 0.3 && r < rows - 1) dec = 0   // strip: sometimes a parcel leaps
+      cv[o + dc] = max(0, cv[b + c] - dec)
     }
+  }
+  // the bed: white-hot with drifting cooler patches (the gaps between tongues), or a dragon's breath
+  var o2 = rows * cw
+  for (var c2 = 0; c2 < cw; c2++) {
+    var s = clamp(0.8 + 0.4 * simplex2(c2 * 5 / cw, t * 0.5, 3), 0.4, 0.995)
+    cv[o2 + c2] = dragon ? s * breath * (0.7 + 0.3 * wave(c2 / max(cw, 2) + t * 0.2)) : s
   }
 }
 
 export function beforeRender(delta) {
-  // simulation decoupled from rendering: slow steps look like chunky
-  // retro fire, not a slow frame rate
-  accum += delta
-  if (accum >= minStepMs) {
-    accum = 0
-    simStep()
+  var dt = min(delta, 100)
+  t = mod(t + dt / 1000, 3600)
+  var e = wave(t / 4.5)
+  breath = 0.5 + 0.5 * e * e * e
+  size()
+  if (warm != cw * 1000 + ch) {                  // new size: burn in, so it never starts dark
+    warm = cw * 1000 + ch
+    for (var i = 0; i < ch; i++) step()
+  }
+  setBlur(cw == 1 ? 0.5 : 0)
+  var rate = cw == 1 ? steps * ch / 32 : steps
+  acc = min(acc + dt, 4000 / rate)
+  while (acc >= 1000 / rate) {
+    acc -= 1000 / rate
+    step()
   }
 }
 
-export function render2D(index, x, y) {
-  var cell = floor(y * 15.99) * W + floor(x * 15.99) + 1  // +1 skips the pad
-  var heat = cur[cell]
-  var v = heat * heat * heat   // cubed: only genuinely hot cells glow
-
-  // PSX-DOOM fire ramp: black -> dark red -> red -> orange -> yellow ->
-  // white-hot. Hue and saturation track the RAW heat, not the cubed value:
-  // driving them off the cubed value kept the whole flame pinned at red
-  // while the saturation fell away, which painted it a washed-out salmon
-  // instead of fire. Everything below a quarter heat stays pure red (Doom's
-  // palette spends its bottom third on dark reds); the top of the ramp runs
-  // out to yellow and then bleaches to white only in the hottest cells.
-  var h = clamp((heat - 0.25) / 0.75, 0, 1)
-  h = h * h * h                // cubed: the ramp lingers in the reds and only
-                               // runs out to yellow in the hottest tenth
-  hsv(baseHue + 0.16 * h,
-      1 - 0.85 * clamp((heat - 0.92) / 0.08, 0, 1),
-      v * bright)
+export function renderBulk() {
+  if (cw > 1) {
+    paintCanvas(cv, cw, ch)
+    return
+  }
+  // strip: the column runs from index 0 (the bed) to the far end
+  var n = pixelCount
+  var sc = (ch - 1) / max(n - 1, 1)
+  if (n <= ch) {                                 // a cell (or more) per pixel
+    for (var i = 0; i < n; i++) {
+      var u = (ch - 1) - i * sc
+      var k = floor(u)
+      var h = cv[k] + (cv[min(k + 1, ch - 1)] - cv[k]) * (u - k)
+      paint(min(h, 0.999))
+      setPixel(i)
+    }
+    return
+  }
+  // longer strips: cell k sits at pixel centre ((ch - 1 - k) / sc); one run per gap,
+  // added over a cleared strip so the runs' shared end pixels sum to whole ones
+  clear()
+  var ps = 1 / sc, x0 = 0.5, k2 = ch - 1
+  heatHsv(cv[k2])
+  hsv(cH, cS, cV)
+  fillRangeAA(0, 0.5, 1)
+  while (k2 > 0) {
+    var h0 = cH, s0 = cS, v0 = cV, x1 = x0 + ps
+    k2--
+    heatHsv(cv[k2])
+    gradientRange(x0, x1, h0, s0, v0, cH, cS, cV, 1)
+    x0 = x1
+  }
+  hsv(cH, cS, cV)
+  fillRangeAA(n - 0.5, n, 1)
 }
+
+// declares the strip form (no default grid on a mapless strip); renderBulk wins
+export function render(index) { paint(0.5) }

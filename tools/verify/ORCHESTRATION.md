@@ -1,5 +1,11 @@
 # Running judge batches (orchestrator side)
 
+> **2026-11 note.** The library overhaul rewrote `library/` "idea over
+> fidelity": ports were merged, reimagined or deleted (308 → 155 patterns), so
+> every original-vs-port judgement below predates it and describes files that
+> are gone or no longer try to match their original. Kept as history;
+> `pairs.json`, `decisions.json` and `results/` were pruned to surviving files.
+
 `JUDGE.md` is the judge-facing procedure; this file is the loop that
 FEEDS judges, reconstructed so a re-judge session (queued in Gitea #84 /
 #99 / #101 after engine fixes) doesn't re-derive it. The 2026-08 sweep ran

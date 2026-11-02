@@ -1,69 +1,84 @@
-// name: sparks
-// Clean-room reimplementation from a prose functional description of the
-// community pattern "sparks"; original source never consulted.
+// name: Sparks
+// Clean-room reimplementation from the prose spec(s) docs/pattern-specs/sparks.md, sparks-center.md — reimagined, not a replica.
+// A grinder's shower of sparks along a strip. Each spark leaves its origin
+// white-hot, flies fast and slows as it burns down, cooling through orange to a
+// deep ember before it winks out, and relaunches at once. Origin picks where the
+// shower starts: the first pixel, the centre (both ways), or both ends inward.
+// Drawn on the persistent frame: fade() for the trail, fillRangeAA + splatIndex
+// per spark, so there are no pixel buffers at any strip length.
 
-var MAX_SPARKS = 64              // buffer size; the count control caps here
-var numSparks = 24               // (control) live sparks
-var timeScale = 0.1              // (control) delta scale for the whole shower
-var persistence = 0.2            // (control) share of a trail kept per frame
-var sparkHue = 0.02              // (control) ember hue
+var MAX = 64
 
-var pixels = array(pixelCount)   // per-pixel energy buffer, persists across frames
-var energy = array(MAX_SPARKS)
-var pos = array(MAX_SPARKS)
-
-// Stagger the initial shower so the strip is busy from the first frame.
-// Only the initially live sparks are seeded; raising the count later hands
-// the extra ones zero energy, so they respawn on the next frame.
-var i
-for (i = 0; i < numSparks; i++) {
-  energy[i] = random(1)
-  pos[i] = random(pixelCount)
-}
-
-// How many sparks are in flight at once.
+var count = 24
 //# min=1 max=64 step=1 default=24
-export function sliderSparks(v) { numSparks = clamp(floor(v), 1, MAX_SPARKS) }
+export function sliderSparks(v) { count = clamp(floor(v), 1, MAX) }
 
-// Speed of the whole shower, as a percentage of the stock rate.
+var speedPct = 100
 //# min=10 max=300 step=10 default=100
-export function sliderSpeed(v) { timeScale = 0.1 * max(1, v) / 100 }
+export function sliderSpeed(v) { speedPct = clamp(v, 10, 300) }
 
-// Share of a trail's brightness carried into the next frame: low values
-// leave pinpoint sparks, high values leave long comet tails.
-//# min=0 max=90 step=5 default=20
-export function sliderTrailPersistence(v) { persistence = clamp(v, 0, 95) / 100 }
+// seconds for a trail to fade out behind a spark
+var trailS = 0.6
+//# min=0.1 max=3 step=0.1 default=0.6
+export function sliderTrail(v) { trailS = clamp(v, 0.1, 3) }
 
+// 0 start, 1 centre, 2 both ends
+var origin = 0
+//# min=0 max=2 step=1 default=0
+export function sliderOrigin(v) { origin = clamp(floor(v), 0, 2) }
+
+// the colour a spark cools to (degrees); 7 is a classic ember
+var hueDeg = 7
 //# min=0 max=360 step=1 default=7
-export function sliderSparkHue(v) { sparkHue = v / 360 }
+export function sliderEmberHue(v) { hueDeg = clamp(v, 0, 360) }
 
-export function beforeRender(delta) {
-  delta *= timeScale                 // scale time down ~an order of magnitude
-  feedback(pixels, persistence)      // multiplicative decay: ~a fifth survives each frame
+var pos = array(MAX)
+var dir = array(MAX)
+var energy = array(MAX)
+var reach = array(MAX)      // this spark's speed scale
 
-  for (i = 0; i < numSparks; i++) {
-    if (energy[i] <= 0) {
-      // respawn: energy a bit above unity, position in the first few pixels
-      energy[i] = 1 + random(0.3)
-      pos[i] = random(4)
-    }
-    // friction ~ delta, inversely proportional to strip length, so a spark
-    // travels roughly the whole strip regardless of pixelCount
-    energy[i] -= delta * 0.5 / pixelCount
-    // velocity ~ energy squared: flare fast, then die slow
-    pos[i] += energy[i] * energy[i] * delta
-    if (pos[i] >= pixelCount) {
-      pos[i] = 0
-      energy[i] = 0                  // respawns next frame
-    } else {
-      pixels[floor(pos[i])] += max(0, energy[i])   // additive deposit makes the trail
-    }
-  }
+var LIFE = 2.2              // seconds for a spark to burn down at 100 %
+var dt = 0.05
+
+function launch(i) {
+  var n = pixelCount
+  energy[i] = 1 + random(0.3)
+  reach[i] = 0.7 + random(0.6)
+  if (origin == 1) { pos[i] = n / 2 + random(2) - 1; dir[i] = random(1) < 0.5 ? -1 : 1 }
+  else if (origin == 2 && i % 2) { pos[i] = n - 1 - random(3); dir[i] = -1 }
+  else { pos[i] = random(3); dir[i] = 1 }
 }
 
-export function render(index) {
-  var p = pixels[index]
-  var v = p * p                      // squared for punchy gamma
-  // hot cores desaturate toward white; faint trails stay deep ember orange
-  hsv(sparkHue, 1.1 - v, v)
+// stagger the opening shower so the strip is busy from the first frame
+for (var i = 0; i < MAX; i++) { launch(i); energy[i] = random(1.3) }
+
+export function beforeRender(delta) { dt = min(delta, 80) * 0.001 * speedPct / 100 }
+
+export function renderBulk() {
+  fade(pow(0.5, dt * 100 / speedPct * 4.3 / trailS))
+  var n = pixelCount
+  // a full-strength spark crosses most of its run before it burns out
+  var run = origin == 0 ? n : n * 0.5
+  var base = run / LIFE * 1.1
+  var h = hueDeg / 360
+  for (var i = 0; i < count; i++) {
+    var e = energy[i]
+    if (e <= 0) { launch(i); e = energy[i] }
+    e -= dt / LIFE
+    var p0 = pos[i]
+    var p = p0 + dir[i] * max(0, e) * max(0, e) * base * reach[i] * dt
+    if (e <= 0 || p < 0 || p >= n) { energy[i] = 0; continue }
+    energy[i] = e
+    pos[i] = p
+    // hot = white, cooling = orange, dying = deep ember
+    var s = clamp(2 - e * 1.6, 0.3, 1)
+    var v = clamp(0.2 + e, 0, 1)
+    var hh = h + 0.09 * clamp(e, 0, 1)
+    if (abs(p - p0) > 1) {
+      hsv(hh, min(1, s + 0.4), v * 0.3)
+      fillRangeAA(min(p0, p), max(p0, p), 2)
+    }
+    hsv(hh, s, v)
+    splatIndex(p, 1, 2)
+  }
 }

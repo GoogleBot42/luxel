@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/glowflow.js (2026-11).
+
 # GlowFlow (3D coord transform API port)
 kind: 3D (only; requires a 3D pixel map)
 sensors: yes — accelerometer (required), overall sound energy (on by default), ambient

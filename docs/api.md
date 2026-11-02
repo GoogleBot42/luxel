@@ -236,7 +236,7 @@ disabled** (proposal §5.3/§5.7). This replaces the old "`data_pins` missing fr
   `overwrite` is frames replaced in the slot before the output task took
   them, `refused` is frames the driver would not take. `hist` bins lost
   frames by frame number mod 64 as sparse `[column, count]` pairs — with
-  `library/frame-rate-scan.js` that is the sweep column, so a cluster says
+  `tools/patterns/frame-rate-scan.js` that is the sweep column, so a cluster says
   the loss correlates with what was being drawn and a flat spread says it
   does not. `log` is the last 16 losses as `[seq, route, ms]`, route being
   0 `handoff` / 1 `overwrite` / 2 `refused`, so a burst is distinguishable

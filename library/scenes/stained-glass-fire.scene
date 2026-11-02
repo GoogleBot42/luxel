@@ -1,0 +1,16 @@
+# A Luxel library scene — Apache-2.0. Grammar: library/README.md.
+# Fire seen through leaded glass: a cellular pattern as a `mask`, its bright
+# cell centres letting the flames through and its dark seams blacking them out.
+# Control overrides pick the mask's look — Style 2, pale floes split by dark
+# cracks, 10 cells — and its ramp is a contrast curve, so a pane is clear glass.
+S - Stained-Glass Fire
+L pat 0 0 0 0 normal 100 none fill 1
+N Fire
+I @pat/perlin-fire
+C sliderFlameHeightPct 6553600
+L pat 0 0 0 0 mask 100 none fill 1
+N Leading
+I @pat/voronoi-2d
+C sliderStyle 131072
+C sliderCells 655360
+R 100 0:000000 110:ffffff

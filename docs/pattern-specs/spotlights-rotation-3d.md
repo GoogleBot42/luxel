@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/searchlights.js (2026-11).
+
 # spotlights / rotation 3D
 kind: 3D (primary), with 2D and 1D fallbacks that project into the 3D math
 sensors: no

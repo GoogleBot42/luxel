@@ -131,15 +131,16 @@ const opts = {
 };
 const files = argv.filter((a) => !a.startsWith("--"));
 
-/** The #312 benchmark set. perlin-fire is here to be REPORTED as rejected. */
+/** The #312 benchmark set (frozen copies, so the set survives library
+ *  rewrites). perlin-fire is here to be REPORTED as rejected. */
 const DEFAULT_FILES = [
-  "library/rainbow.js",
-  "library/snake.js",
-  "library/snake-2d.js",
-  "library/perlin-fire.js",
+  "tools/bench-patterns/rainbow.js",
+  "tools/bench-patterns/snake.js",
+  "tools/bench-patterns/snake-2d.js",
+  "tools/bench-patterns/perlin-fire.js",
   // Stand-in for perlin-fire as the builtin-heavy case: same clean-room noise
   // model, but written without the `const` declarations PB's parser rejects.
-  "library/perlin-fire-wind-tunnel.js",
+  "tools/bench-patterns/perlin-fire-wind-tunnel.js",
 ].map((f) => path.join(root, f));
 
 /** The #312 microbenchmark, verbatim in shape: K iterations of x += i * 0.5. */

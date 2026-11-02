@@ -1,3 +1,4 @@
+> Superseded: this idea now lives in library/twinkle.js (2026-11).
 # Spring Colors
 kind: 1D (index-based; works unchanged on any layout since every pixel is independent)
 sensors: no

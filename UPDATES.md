@@ -1,5 +1,68 @@
 # Update log
 
+## 2026-11-01 — Library overhaul: 308 patterns → 150, 41 scenes, 40 sprites, idea over fidelity
+
+The whole shipped library was re-done against one principle: **capture the
+idea and make it better** — a clean-room replica of a community pattern is
+not the goal. Ten research agents audited every one of the 308 patterns
+(source, prose spec, and a rendered contact sheet each — `tools/verify/
+sheet.mjs`, new), swept host perf, mined ideas online, wrote 34 prose idea
+specs from the Patternflow presets (`docs/pattern-specs/patternflow/`; the
+presets are CC BY-SA 4.0 art, so only prose crossed the firewall), and
+proposed engine features. A reconciler turned that into one plan (309
+dispositions, 40 batches), which 32 implementer agents executed in one
+worktree partitioned by file ownership.
+
+**What changed in `library/`.** 144 near-duplicates folded into 97 survivors
+as modes, palettes and real-unit controls (one Twinkle absorbs 13 sparkle
+variants; one Fire absorbs 6; Bouncing Balls 8; Scanner takes KITT/Cylon);
+51 deleted outright (teaching examples, mapping/benchmark instruments — eight
+moved to `tools/patterns/` — the music-sequencer frameworks, rock-sparks
+which drove a GPIO relay, nyan-lights, broken ports); 30 rewritten; 52 new
+originals (Pool Caustics, Truchet Weave, Quasicrystal, Double Pendulum,
+Physarum, Strange Attractor, Life, Turmites, Maze, Circle Packing, Marbling,
+Chladni, Seasons Tree, Pipes, Wireframe, Twister, Word/Fibonacci/Pong/Block
+clocks, Asteroids, Chomp Chase, Sorting, Night City, Moon Phase, Snowfall,
+Lava Lamp, Rain on Glass, Gravity Wells, Rotozoomer, Jellyfish, Candle,
+Sparkler, Newton's Cradle, HUD Ticker, Bit Rain, Oil Slick, Moiré Gallery,
+Lotus Bloom, Plucked String, Orbits, Topo Map, Neon Veins, Spectrum Field,
+Notification Ripple, …). Every file: real-unit `//#` bounds, no pattern-level
+brightness/gamma control, no hard-coded 16×16 canvas (sized from the grid),
+never black by default, `y = 0` is the top. Strip + panel patterns use the
+documented idiom (`render(index)` exported beside `renderBulk`, branch on
+`has2DMap()` — on a MAPLESS strip `gridWidth()` is the pixel count, not 0).
+Zero `array(pixelCount)` buffers on strips: the 25 patterns that failed the
+64×64 ledger are gone or bufferless. Four live control-scaling bugs
+(bessel-chaos, interference, marquee, spiral) and the upside-down fires are
+fixed; sound patterns share one auto-gain/beat helper and stay lit without a
+sensor. Patterns converted to scenes: the marquee, emoji faces, rainbow
+smiley, scary pumpkin, Orv's tree.
+
+**Scenes and sprites.** 36 new example scenes and 29 new sprites (clocks and
+info cards, ambient recolours, masked and clipped layers, holidays, an
+aquarium, a hearth, a lighthouse, keyframed sprite scenes), all original art.
+
+**Engine, merged as their own PRs today:** `setRenderSize(w, h, filter)` and
+bilinear `fillCanvas`/`paintCanvas` (#979), `splatIndex` / `fillRangeAA` /
+`gradientRange` index-space anti-aliased ops (#981), `setTrail` (#982),
+scene keyframe `M` lines (#980) and `X clip` layers (#983). Deferred to
+tickets: scenes on 1-D strips (a product decision), director builtins, the
+palette system, and the rest of PLAN §D.2.
+
+**Numbers.** Library source 1,165 → ~918 KB in `gallery.json`; the device
+asset archive went from 7,610 B of headroom (after the engine PRs) to
+74,906 B (`tools/ci.sh`). Host ms/frame at 64×64: Crosstown Traffic 10.6 → 0.07, Dire Spider
+7.4 → 0.45, Glittering Jewels 4.8 → 0.19, Color Wash 2.2 → 0.02, Radar 2.5 →
+0.09, Butterfly 4.4 → 0.76; the JIT golden's mean-image budget was raised
+8 → 12 KB (richer patterns; the classic boards' 8 KB internal cap is a ticket).
+Tests and benches no longer pin live library files: frozen copies live in
+`crates/luxel-core/tests/data/lib/` and `tools/bench-patterns/`.
+
+Verified: `tools/check-library.sh` 150/150 on all five rigs, the sprite/scene
+gate, cargo + web tests, `tools/ci.sh`; hw-bench soak on the second Seengreat
+(see the report); every pattern eyeballed on 32×32/64×64 sheets (and strip
+waterfalls) by its implementer, a sample by the orchestrator.
+
 ## 2026-11-01 — bilinear canvas sampling at pixel centres; `gridWidth` follows `setRenderSize` at once
 
 Engine findings from the library rewrite's U1 pass over #979/#981, fixed in

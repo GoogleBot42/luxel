@@ -1,3 +1,4 @@
+> Superseded: this idea now lives in library/starburst.js (2026-11).
 # sound - Starburst 2
 kind: 1D
 sensors: yes

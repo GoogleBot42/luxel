@@ -1,32 +1,11 @@
-// name: Frogger 2D
-// Clean-room reimplementation from a prose functional description of the
-// community pattern "Frogger 2D"; original source never consulted.
-// DELIBERATELY REDESIGNED per the 2026-09-01 review: the described original is
-// only sliding rainbow bars in rows. Jeremy asked for the actual arcade game,
-// self-playing, with a smartness dial — fidelity to the description is waived.
-//
-// A frog crosses a sixteen-row board on its own, forever. Row 0 is the start
-// bank; rows 1-6 are a six-lane road where cars stream in alternating
-// directions at their own speeds; row 7 is the median; rows 8-13 are the
-// river, where the frog dies unless it is standing on a drifting log or a
-// turtle raft (two of the six turtle lanes periodically dive, taking any
-// passenger under with them); row 14 is the far bank, and row 15 holds five
-// lily pads. Fill all five and the board celebrates and re-rolls.
-//
-// How well the frog plays is a dial. `Smartness` sets both a blunder
-// probability and how many hops ahead it checks: at 0 it hops at random and is
-// roadkill within seconds, at 100 it runs a breadth-first survivability search
-// several hops deep, waits for gaps, rides logs sideways to line up with a pad
-// and edges away from the bank the current is sweeping it toward. Measured
-// headless on the 16x16 rig at the default 4 hops/s, 120 s, mean of 3 seeds:
-// Smartness 0 -> 89 deaths and 0 pads filled; 25 -> 67 and 0; 50 -> 34 and 3;
-// 75 -> 11 and 7; 100 -> 0.3 deaths, 13 pads and 2 boards cleared.
-//
-// The game runs on a fixed 16x16 board on its own hop clock, independent of the
-// frame rate, and render2D samples that board through normalized map
-// coordinates — so it plays the same game on a 16x16 panel, a 32x32 one, or
-// (via render) a bare strip. `goals`, `deaths`, `level`, `lives` and `hops` are
-// exported for the vars watcher; the counters roll at 30000.
+// name: Frogger
+// Clean-room reimplementation from the prose spec docs/pattern-specs/frogger-2d.md — reimagined, not a replica.
+// The arcade crossing, self-playing forever on a 16x16 board: a road of cars in
+// alternating lanes, a river of logs and diving turtles, five lily pads to fill.
+// Smartness sets the blunder rate and how many hops ahead a breadth-first search
+// looks (0: roadkill in seconds; 100: rarely dies). The board is drawn with fillRect
+// in board units, so traffic glides at panel resolution; the cost is per object,
+// not per LED. `goals`, `deaths`, `level`, `lives`, `hops` feed the vars watcher.
 
 var W = 16
 var H = 16
@@ -473,95 +452,119 @@ export function beforeRender(delta) {
 }
 
 // --- paint ----------------------------------------------------------------
-function paintCell(cx, cy) {
-  if (mode == 3) {
-    // board cleared: one rainbow band runs the whole crossing, start to pads.
-    // `frac` truncates toward zero here, so anything that can go negative uses
-    // mod(x, 1) instead.
-    var s = clamp(modeT / LEVEL_T, 0, 1)
-    var d = abs(cy / H - (0 - 0.25 + s * 1.5))
-    var lit = d < 0.28 ? 1 - d * 3.57 : 0
-    if (cy == GOAL_ROW && padIndex(cx) >= 0) {
-      hsv(0.26, 0.3, 0.35 + 0.65 * square(modeT * 9, 0.5))   // all five pads flash
-      return
+// Everything is a fillRect in board cells (x 0..16 left to right, board row 0 at
+// the bottom of the map), so cars and logs glide smoothly on big panels.
+var rowY0 = array(H), rowY1 = array(H)    // each board row's band, top to bottom
+for (var r0 = 0; r0 < H; r0++) {
+  rowY0[r0] = (H - 1 - r0) / H
+  rowY1[r0] = r0 == 0 ? 1.01 : (H - r0) / H - 0.0002
+}
+function cellRect(x0, r, x1) {
+  fillRect(x0 / W, rowY0[r], x1 >= W ? 1.01 : x1 / W - 0.0002, rowY1[r])
+}
+function subRect(x0, r, y0, x1, y1) {      // y0/y1: 0 = top of the cell
+  fillRect(x0 / W, rowY0[r] + y0 / H, x1 / W - 0.0002, rowY0[r] + y1 / H - 0.0002)
+}
+
+// The death wash: the board takes the colour of the cause, keeping its structure.
+var wh = 0, ws = 0, wv = 0
+function wash(h, s, v) {
+  wh = h; ws = s; wv = v
+  if (mode == 1) {
+    var fb = 1 - modeT / DEATH_T
+    wv = v * (0.35 + 0.45 * fb)
+    ws = mix(s, 1, 0.6 * fb)
+    wh = deathKind == 0 ? 0 : 0.6
+  }
+}
+function col(h, s, v) { wash(h, s, v); hsv(wh, ws, wv) }
+
+var bgH = array(H), bgS = array(H), bgV = array(H)   // lane colours, a 1x16 canvas
+
+// Each object of lane r: [start, start + laneLen) for every period that is on screen.
+function drawLane(r, big) {
+  var per = lanePeriod[r], len = laneLen[r]
+  if (len <= 0) return
+  var k = laneKind[r]
+  var sub = k == 2 ? turtleLevel(r, 0) : 0
+  var x = laneOff[r] - per * ceil((laneOff[r] + len) / per)
+  for (; x < W; x += per) {
+    if (k == 1) {
+      col(laneHue[r], 0.9, 0.85)
+      cellRect(x, r, x + len)
+      col(laneHue[r], 0.35, 1)                     // headlights lead the way
+      if (laneVel[r] > 0) cellRect(x + len - 0.5, r, x + len)
+      else cellRect(x, r, x + 0.5)
+    } else if (laneTurtle[r]) {
+      col(0.42, 0.85, 0.68 * (1 - sub * 0.93) + 0.02)
+      var c
+      for (c = 0; c < len; c++) {
+        if (big) fillCircle((x + c + 0.5) / W, (H - 0.5 - r) / H, 0.42 / W)
+        else cellRect(x + c + 0.1, r, x + c + 0.9)
+      }
+    } else {
+      col(0.075, 0.85, 0.62)                       // logs, with a lighter grain
+      cellRect(x, r, x + len)
+      if (big) { col(0.09, 0.6, 0.8); subRect(x + 0.3, r, 0.3, x + len - 0.3, 0.45) }
     }
-    hsv(mod(cx / W * 0.4 + cy / H * 0.6 + s * 2, 1), 0.85, 0.1 + 0.9 * lit * lit)
+  }
+}
+
+function drawFrog(x, r, big) {
+  var h = 0.28, s = 0.6, v = 0.8 + 0.2 * wave(time(0.012))
+  if (mode == 1) {
+    var fl = square(modeT * 14, 0.5)
+    h = deathKind == 0 ? 0 : 0.55
+    s = 1 - fl * 0.9
+    v = (1 - modeT / DEATH_T) * (0.35 + 0.65 * fl)
+  } else if (mode == 2) {
+    s = 0.15; v = 0.5 + 0.5 * square(modeT * 16, 0.5)
+  } else if (hopAge < 0.3 / hopsPerSecond) s = 0.05   // landing flash
+  hsv(h, s * 0.8, v * 0.35)                           // a halo so it is easy to find
+  splat((x + 0.5) / W, (H - 0.5 - r) / H, 1.6 / W, 1)
+  hsv(h, s, v)
+  cellRect(x + 0.08, r, x + 0.92)
+  if (big && mode != 1) {                             // eyes on the far side
+    hsv(0.15, 0.1, 1)
+    subRect(x + 0.1, r, 0, x + 0.38, 0.3)
+    subRect(x + 0.62, r, 0, x + 0.9, 0.3)
+  }
+}
+
+export function renderBulk() {
+  var big = gridWidth() >= 40
+  var r
+  if (mode == 3) {
+    // board cleared: a rainbow band runs the whole crossing, start to pads
+    var s = clamp(modeT / LEVEL_T, 0, 1)
+    for (r = 0; r < H; r++) {
+      var d = abs(r / H - (s * 1.5 - 0.25))
+      var lit = d < 0.28 ? 1 - d * 3.57 : 0
+      hsv(mod(r / H * 0.6 + s * 2, 1), 0.85, 0.15 + 0.85 * lit * lit)
+      cellRect(0, r, W)
+    }
+    hsv(0.26, 0.3, 0.35 + 0.65 * square(modeT * 9, 0.5))
+    for (r = 0; r < NPAD; r++) cellRect(padX[r], GOAL_ROW, padX[r] + 1)
     return
   }
-
-  var k = laneKind[cy]
-  var h = 0.31, sa = 0.85, v = 0.05           // bank grass
-  if (k == 1) { h = 0; sa = 0; v = 0.018 }    // asphalt
-  else if (k == 2) { h = 0.62; sa = 1; v = 0.06 }  // water
-  else if (k == 3) { h = 0.5; sa = 1; v = 0.02 }   // goal water
-
-  if (k == 1 && occAt(cy, cx)) {
-    // the leading pixel of each car is its headlight — kept coloured, so the
-    // only near-white thing on the board is the frog
-    var p = mod(cx - laneOff[cy], lanePeriod[cy])
-    var nose = laneVel[cy] > 0 ? p > laneLen[cy] - 1 : p < 1
-    h = laneHue[cy]
-    sa = nose ? 0.45 : 0.95
-    v = nose ? 0.95 : 0.6
-  } else if (k == 2 && occAt(cy, cx)) {
-    if (laneTurtle[cy]) {
-      var sub = turtleLevel(cy, 0)
-      h = 0.42; sa = 0.9; v = 0.45 * (1 - sub * 0.94) + 0.02   // teal shells
-    } else {
-      h = 0.075; sa = 0.85; v = 0.4                            // brown logs
-    }
-  } else if (k == 3) {
-    var pi = padIndex(cx)
-    if (pi >= 0) {
-      if (padFilled[pi]) {
-        h = 0.26; sa = 0.35; v = 0.5 + 0.4 * wave(time(0.02) + pi * 0.13)
-      } else {
-        h = 0.33; sa = 1; v = 0.28
-      }
-    }
+  for (r = 0; r < H; r++) {
+    var k = laneKind[r]
+    if (k == 0) wash(r == MED_ROW ? 0.8 : 0.31, r == MED_ROW ? 0.55 : 0.85, r == MED_ROW ? 0.16 : 0.2)
+    else if (k == 1) wash(0.62, 0.25, 0.07)
+    else if (k == 2) wash(0.62, 1, 0.24)
+    else wash(0.55, 1, 0.12)
+    bgH[H - 1 - r] = wh; bgS[H - 1 - r] = ws; bgV[H - 1 - r] = wv
   }
-
-  // the frog, and the after-image of the cell it just left
-  var onFrog = cx == fcx && cy == fcy
-  if (!onFrog && cx == prevX && cy == prevY && hopAge < 0.5 / hopsPerSecond && mode == 0) {
-    var g = 1 - hopAge * hopsPerSecond * 2
-    h = 0.26; sa = 0.5; v = max(v, 0.4 * g)
+  fillCanvas(bgH, bgS, bgV, 1, H)
+  for (r = 1; r < GOAL_ROW; r++) if (laneKind[r] == 1 || laneKind[r] == 2) drawLane(r, big)
+  for (r = 0; r < NPAD; r++) {                        // lily pads, and the frogs home on them
+    if (padFilled[r]) col(0.28, 0.45, 0.6 + 0.35 * wave(time(0.02) + r * 0.13))
+    else col(0.33, 1, 0.45)
+    cellRect(padX[r] + 0.1, GOAL_ROW, padX[r] + 0.9)
   }
-  if (onFrog) {
-    if (mode == 1) {
-      var f = 1 - modeT / DEATH_T
-      var fl = square(modeT * 14, 0.5)
-      h = deathKind == 0 ? 0 : 0.55
-      sa = 1 - fl * 0.9
-      v = f * (0.35 + 0.65 * fl)
-    } else if (mode == 2) {
-      h = 0.26; sa = 0.15; v = 0.5 + 0.5 * square(modeT * 16, 0.5)
-    } else {
-      h = 0.26; sa = 0.3; v = 1
-      // a landing flash so each hop reads as a hop on a filmstrip
-      if (hopAge < 0.3 / hopsPerSecond) { sa = 0.05 }
-    }
-  } else if (mode == 1) {
-    // the whole board washes to the cause of death — red for a squash, blue
-    // for a drowning — keeping only its brightness structure
-    var fb = 1 - modeT / DEATH_T
-    v = v * (0.3 + 0.4 * fb)
-    sa = mix(sa, 1, 0.6 * fb)
-    h = deathKind == 0 ? 0 : 0.58
+  if (mode == 0 && hopAge < 0.5 / hopsPerSecond) {    // after-image of the cell it left
+    hsv(0.28, 0.5, 0.45 * (1 - hopAge * hopsPerSecond * 2))
+    cellRect(prevX + 0.15, prevY, prevX + 0.85)
   }
-
-  hsv(h, sa, v)
-}
-
-export function render2D(index, x, y) {
-  var cx = clamp(floor(x * (W - 0.01)), 0, W - 1)
-  var gy = clamp(floor(y * (H - 0.01)), 0, H - 1)
-  paintCell(cx, H - 1 - gy)      // goal row at the top of the map
-}
-
-// No map: run the board out along the strip, row after row.
-export function render(index) {
-  var s = clamp(floor(index / pixelCount * N), 0, N - 1)
-  var cy = floor(s / W)
-  paintCell(s - cy * W, cy)
+  drawFrog(laneKind[fcy] == 2 ? fx : fcx, fcy, big)
 }

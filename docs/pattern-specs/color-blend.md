@@ -1,3 +1,4 @@
+> Superseded: this idea now lives in library/color-wash.js (2026-11).
 # Color Blend
 kind: 1D
 sensors: no

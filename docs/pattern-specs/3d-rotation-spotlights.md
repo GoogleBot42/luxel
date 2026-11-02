@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/searchlights.js (2026-11).
+
 # 3D Rotation / Spotlights
 kind: 3D
 sensors: no

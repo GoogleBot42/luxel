@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/lamp.js (2026-11).
+
 # NaturalLightSync
 kind: 1D (layout-independent — every pixel shows the same color, so it works on any geometry)
 sensors: no (uses the device's real-time clock)

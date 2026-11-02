@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/portal.js (2026-11).
+
 # scrolls
 kind: 1D
 sensors: no

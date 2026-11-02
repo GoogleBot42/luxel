@@ -1,0 +1,28 @@
+# Luxel library sprite — original art, Apache-2.0. Grammar: library/README.md.
+# Faces right; a scene flips it (flags 3) to swim the other way. Two frames:
+# the tail fans open, then flicks edge-on.
+name: Fish
+fps: 4
+palette:
+  o ff8a3d
+  w ffffff
+  e 101010
+  f ffbf80
+
+frame
+.....fff....
+ff..owoowo..
+.f.oowooweo.
+.fooowoowooo
+.f.oowoowoo.
+ff..owoowo..
+......ff....
+
+frame
+.....fff....
+....owoowo..
+.f.oowooweo.
+ffooowoowooo
+.f.oowoowoo.
+....owoowo..
+......ff....

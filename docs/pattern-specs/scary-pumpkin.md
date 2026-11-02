@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/scenes/jack-o-lantern.scene (carved pumpkin sprite over Fire, 2026-11).
+
 # Scary Pumpkin
 kind: 2D
 sensors: no

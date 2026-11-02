@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/bouncing-balls.js (2026-11).
+
 # bouncing balls - rgb
 kind: 1D
 sensors: no

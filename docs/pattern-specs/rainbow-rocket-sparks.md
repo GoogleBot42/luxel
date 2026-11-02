@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/rocket-launch.js (2026-11).
+
 # Rainbow rocket sparks
 kind: 1D
 sensors: no

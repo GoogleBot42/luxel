@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/custom-sequences.js (Transition 3, stretch-slide; 2026-11).
+
 # ChristmasStretch
 kind: 1D
 sensors: no

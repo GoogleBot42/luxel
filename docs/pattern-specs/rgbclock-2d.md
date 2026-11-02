@@ -1,3 +1,4 @@
+> Superseded: this idea now lives in library/analog-clock.js (2026-11).
 # RGBclock 2D
 kind: 2D
 sensors: no (uses the device's wall-clock time — hour/minute/second — not the sound or motion sensor board)

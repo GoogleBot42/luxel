@@ -1,163 +1,136 @@
-// name: Blinky Eyes 2D
-// Clean-room reimplementation from a prose functional description of the
-// community pattern "Blinky Eyes 2D"; original source never consulted.
+// name: Blinky Eyes
+// Clean-room reimplementation from the prose spec docs/pattern-specs/blinky-eyes-2d.md
+// — reimagined, not a replica.
+// A pair of cartoon eyes sized to the panel: white sclera, a coloured iris
+// with a dark limbal ring, pupil and specular glint. The gaze holds, then
+// darts anywhere in the eye (up, down, sideways) with an occasional quick
+// glance away and back; the upper lid rests a little low, follows the gaze
+// down and sweeps shut to blink. All shapes are aspect-correct, anti-aliased
+// ellipse and circle tests in render2D — no roots, no trig per pixel.
 
-// A pair of cartoon eyes on black: thin white elliptical outlines with
-// deep-blue ring-like irises. The irises dart to a random side and glide
-// back; independently the ellipses squash shut and reopen (a blink) at
-// randomized intervals. Both eyes are one eye: the x fold means the
-// ellipse/iris math is written once. Tuned for ~20x10 and larger grids.
+var blinkRate = 20
+//# min=4 max=60 step=1 default=20
+export function sliderBlinkRate(v) { blinkRate = clamp(v, 4, 60) }
 
-// --- controls -------------------------------------------------------------
-var eyes = 2            // 1 or 2 eyes
-var eyeWidthPct = 49    // eye WIDTH as a percentage of the panel width
-var blinkRate = 30      // blinks per minute
-var irisH = 0.60        // iris hue (measured off the original)
-var irisS = 1           // iris saturation
+var sizePct = 70
+//# min=40 max=95 step=1 default=70
+export function sliderEyeSize(v) { sizePct = clamp(v, 40, 95) }
 
-// --- derived geometry (recomputed in beforeRender) ------------------------
-// An eye is WIDER THAN TALL: width/height = 1.28, so half-height is
-// half-width / 1.28. hw below is the half-width in DISPLAY units; HALF_W is
-// the same length expressed in the folded (x-doubled) space the renderer
-// works in, so "Eye Width %" means the same on-screen size for 1 or 2 eyes.
-var ASPECT = 1.28
-var HALF_W = 0.48       // max ellipse half-width, in folded (x-doubled) units
-var HALF_H = 0.1875     // max ellipse half-height, display units
-var HALF_H_MIN = 0.03
-var IRIS_R = 0.11       // iris radius, display units
-var GAZE_AMP = 0.09     // max iris excursion, display units
-var EDGE = 0.05         // outline-thickness threshold
-// Half-thickness of the shut eyelid, in DISPLAY units so it survives on short
-// panels. A fully squashed ellipse is thinner than one pixel row, so its rim
-// falls between rows and the blink reads as blackout; the original holds a lit
-// lid line for the whole ~0.5 s blink. This bar is what holds it.
-var LID_T = 0.07
-
-// Gaze state machine: idle (centered) <-> moving (sine-hump glide out and
-// back). Blink state machine: open <-> blinking (wave-envelope squash).
-var gazeT = 0, gazeIdle = 0.7, gazeMoving = 0, gazeDir = 1
-var MOVE_LEN = 0.35
-var blinkT = 0, blinkOpen = 1.5, blinking = 0
-var BLINK_LEN = 0.5
-
-var gazeX = 0       // current iris x offset from eye center
-var halfH = 0.1875  // current (animated) ellipse half-height
-var squash = 0      // 0 fully open .. 1 fully shut (drives the lid fill)
-
-//# min=4 max=60 step=1 default=30
-export function sliderBlinkRate(v) { blinkRate = v }
-
-// 50% is the ceiling: two eyes each half the panel wide already meet at the
-// midline, which is exactly where the original's do.
-//# min=10 max=50 step=1 default=49
-export function sliderEyeWidth(v) { eyeWidthPct = clamp(v, 10, 50) }
-
+var eyes = 2
 //# min=1 max=2 step=1 default=2
-export function sliderEyes(v) { eyes = floor(v) }
+export function sliderEyes(v) { eyes = clamp(floor(v), 1, 2) }
 
+var sclera = 1
+//# default=1
+export function toggleWhiteSclera(on) { sclera = on }
+
+// Iris hue and saturation; the picker's brightness is ignored.
+var irisH = 0.58, irisS = 0.85
 export function hsvPickerIrisColor(h, s, v) { irisH = h; irisS = s }
 
+var asp = 1, eh = 0.35, ew = 0.25, ecx = 0, pu = 0.1
+var gx = 0, gy = 0, fromX = 0, fromY = 0, toX = 0, toY = 0
+var moveT = 1, holdT = 1, glance = 0
+var lid = 0.12, blinkT = -1, nextBlink = 2, twice = 0
+var icx = 0, icy = 0, ir = 0.1, ir2 = 0.01, gl2 = 0, gcx = 0, gcy = 0
+
+function aim(x, y) { fromX = gx; fromY = gy; toX = x; toY = y; moveT = 0 }
+
 export function beforeRender(delta) {
-  var dt = delta / 1000
+  var dt = min(delta, 100) / 1000
+  var gw = gridWidth(), gh = gridHeight()
+  asp = gw > 0 && gh > 0 ? gw / gh : 1
+  pu = 1 / max(gh, 8)                       // one pixel, in panel heights
+  eh = sizePct / 200
+  ew = eyes == 2 ? min(eh * 0.78, asp / 4 - 0.035) : min(eh * 0.85, asp * 0.45)
+  ecx = eyes == 2 ? ew + 0.035 : 0
 
-  // geometry from the controls
-  var hw = eyeWidthPct * 0.005        // half-width in display units
-  HALF_W = eyes == 2 ? hw + hw : hw   // ... in folded units
-  HALF_H = hw / ASPECT
-  HALF_H_MIN = HALF_H * 0.16
-  IRIS_R = hw * 0.4583
-  GAZE_AMP = hw * 0.375
-
-  // gaze
-  gazeT += dt
-  if (gazeMoving) {
-    if (gazeT >= MOVE_LEN) {
-      gazeMoving = 0
-      gazeT = 0
-      gazeIdle = 0.5 + random(0.5)  // next idle gap: 0.5..1 s
-      gazeX = 0
-    } else {
-      // smooth hump: out to one side and back in one continuous motion
-      gazeX = gazeDir * GAZE_AMP * sin(PI * gazeT / MOVE_LEN)
-    }
-  } else if (gazeT >= gazeIdle) {
-    gazeMoving = 1
-    gazeT = 0
-    gazeDir = random(1) < 0.5 ? -1 : 1  // coin flip
-  }
-
-  // blink. One blink every 60/blinkRate seconds on average: the eye stays
-  // open for that gap minus the blink itself, jittered +/-33%.
-  blinkT += dt
-  if (blinking) {
-    if (blinkT >= BLINK_LEN) {
-      blinking = 0
-      blinkT = 0
-      var openBase = max(60 / blinkRate - BLINK_LEN, 0.15) * 0.6667
-      blinkOpen = openBase + random(openBase)
-      halfH = HALF_H
-    } else {
-      // wave envelope starting on its falling half: closes first, reopens
-      var env = wave(0.25 + blinkT / BLINK_LEN)
-      halfH = clamp(HALF_H * env, HALF_H_MIN, HALF_H)
-    }
-  } else {
-    halfH = HALF_H
-    if (blinkT >= blinkOpen) {
-      blinking = 1
-      blinkT = 0
+  // gaze: hold, then dart (a fast eased saccade); a glance returns by itself
+  holdT -= dt
+  if (holdT <= 0 && moveT >= 1) {
+    if (glance) { aim(0, 0); glance = 0; holdT = 0.6 + random(1.5) }
+    else if (random(1) < 0.2) { aim(random(1) < 0.5 ? -1 : 1, random(0.6) - 0.3); glance = 1; holdT = 0.35 }
+    else if (random(1) < 0.3) { aim(0, 0); holdT = 0.8 + random(1.8) }
+    else {
+      var a = random(PI2), r = 0.4 + random(0.6)
+      aim(cos(a) * r, sin(a) * r * 0.8)
+      holdT = 0.5 + random(1.8)
     }
   }
+  moveT = min(moveT + dt / 0.14, 1)
+  var e = easeOutCubic(moveT)
+  gx = mix(fromX, toX, e)
+  gy = mix(fromY, toY, e)
 
-  // How shut the eye is. Near full closure the sliver is thinner than a pixel
-  // row's worth of rim, so fill its interior: that is the lit eyelid line the
-  // original holds instead of blacking out.
-  if (HALF_H > HALF_H_MIN) {
-    squash = clamp(1 - (halfH - HALF_H_MIN) / (HALF_H - HALF_H_MIN), 0, 1)
-  } else {
-    squash = 1
+  // lid: rests a little low, follows a downward look, sweeps shut to blink
+  var rest = 0.12 + max(gy, 0) * 0.16 - max(-gy, 0) * 0.06
+  nextBlink -= dt
+  if (blinkT < 0 && nextBlink <= 0) {
+    blinkT = 0
+    twice = random(1) < 0.2
+    nextBlink = (60 / blinkRate) * (0.6 + random(0.8))
   }
+  var c = 0
+  if (blinkT >= 0) {
+    blinkT += dt
+    c = blinkT < 0.07 ? easeInQuad(blinkT / 0.07) : blinkT < 0.11 ? 1 : 1 - easeOutQuad(min((blinkT - 0.11) / 0.16, 1))
+    if (blinkT > 0.27) { blinkT = twice ? 0 : -1; twice = 0 }
+  }
+  lid = mix(rest, 1, c)
+
+  // iris geometry, in panel heights relative to the eye centre
+  ir = ew * 0.58
+  ir2 = ir * ir
+  icx = gx * (ew - ir * 0.8)
+  icy = gy * (eh - ir * 0.9)
+  gcx = icx - ir * 0.36
+  gcy = icy - ir * 0.38
+  gl2 = max(ir * 0.2, pu * 0.9)
+  gl2 = gl2 * gl2
+  // per-frame constants for render2D
+  iew = 1 / ew
+  ieh = 1 / eh
+  iir2 = 1 / ir2
+  rimK = 0.5 * min(ew, eh) / pu
+  lidA = -1 + 2 * lid
+  lidB = 0.7 * lid * (1 - lid)
+  lidK = eh / pu
+  scl = sclera ? 0.88 : 0
+  rimV = sclera ? 0.45 : 0.85
 }
+var iew = 1, ieh = 1, iir2 = 1, rimK = 1, lidA = 0, lidB = 0, lidK = 1, scl = 0.88, rimV = 0.45
 
 export function render2D(index, x, y) {
-  var px = x - 0.5
-  var py = y - 0.5
-  if (eyes == 2) {
-    // scale x by two and fold each half toward its own eye center,
-    // preserving direction so both irises look the same way
-    px = px * 2
-    if (px < 0) px += 0.5
-    else px -= 0.5
+  var X = (x - 0.5) * asp, Y = y - 0.5
+  var px = eyes == 2 ? (X < 0 ? X + ecx : X - ecx) : X
+  var ux = px * iew, uy = Y * ieh
+  var m2 = ux * ux + uy * uy
+  if (m2 > 1.35) { rgb(0, 0, 0); return }
+  // distance to the rim in pixels (1 - m ~ (1 - m2) / 2 near it)
+  var rim = (1 - m2) * rimK
+  var under = (uy - lidA - lidB * (1 - ux * ux)) * lidK   // pixels below the lid edge
+  var v = 0.05, h = 0, s = 0                               // 0.05: the closed lid
+  if (under > -0.5) {
+    var dx = px - icx, dy = Y - icy, d2 = dx * dx + dy * dy
+    if (d2 < ir2) {
+      var q = d2 * iir2
+      h = irisH
+      s = irisS
+      v = q < 0.2 ? 0.02 : 1 - 0.45 * q - 0.45 * clamp(q * 2.5 - 1.5, 0, 1)   // pupil, limbal ring
+      dx = px - gcx
+      dy = Y - gcy
+      if (dx * dx + dy * dy < gl2) { s = 0; v = 1 }
+    } else {
+      h = 0.6
+      s = 0.05
+      v = scl * (0.72 + 0.28 * clamp(under * 0.33, 0, 1))   // shadow under the lid
+    }
+    if (under < 0.5) v *= under + 0.5
   }
-
-  // iris distance: x scaled back down so the iris stays circular
-  var dx = eyes == 2 ? (px - gazeX * 2) * 0.5 : px - gazeX
-  var d = hypot(dx, py)
-
-  // ellipse metric: 1 exactly on the boundary, <1 inside
-  var m = hypot(px / HALF_W, py / halfH)
-
-  // shut eyelid: a soft horizontal bar of fixed display thickness spanning the
-  // eye, faded in with the squash. Lives OUTSIDE the ellipse test so it still
-  // lights when the collapsed ellipse no longer covers any pixel row.
-  var lid = 0
-  if (squash > 0 && abs(px) < HALF_W) {
-    lid = squash * squash * squash * max(0, 1 - abs(py) / LID_T)
-  }
-
-  if (!blinking && d < IRIS_R) {
-    // ring-like iris: dark center brightening quadratically toward the rim
-    var r = d / IRIS_R
-    hsv(irisH, irisS, r * r)
-  } else if (m < 1) {
-    // thin soft white outline: steep power law keeps only the boundary
-    var b = max(m - EDGE, EDGE)
-    var v = b * b * b
-    v = max(v * v, lid)       // ^6, or the lid when the eye is shut
-    rgb(v, v, v)
-  } else if (lid > 0) {
-    rgb(lid, lid, lid)
-  } else {
-    rgb(0, 0, 0)
-  }
+  if (rim < 0.5) v *= clamp(rim + 0.5, 0, 1)
+  // the rim and the lid's lash line on top
+  var o = clamp(1.3 - abs(rim - 0.3), 0, 1) * rimV
+  if (lid > 0.02 && rim > -0.5) o = max(o, clamp(1.2 - abs(under), 0, 1) * 0.9)
+  if (o > v) { s = 0; v = o }
+  hsv(h, s, v)
 }

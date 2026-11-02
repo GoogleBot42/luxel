@@ -215,8 +215,9 @@ why an index-space `renderBulk` is dims **0** and not 1: there is no
 projection for a host to offer it, so it must not be offered one.
 
 A `renderBulk` pattern that genuinely IS positional — one where the index is
-a place along a strip, e.g. `library/bulk-comet-trails.js` or
-`library/rainbow-comet.js` — is classed dims 0 too, and so is shown by index
+a place along a strip, e.g. `bulk-comet-trails.js` (now `tools/bench-patterns/`) or the old
+`library/rainbow-comet.js` (both moved/folded by the 2026-11 library overhaul;
+the bench copy keeps the shape) — is classed dims 0 too, and so is shown by index
 on a panel rather than replicated along an axis. Serving those means rendering
 a w-long frame and replicating it, which needs the projection installed BEFORE
 program init (`array(pixelCount)` is sized there); that is Gitea #628,

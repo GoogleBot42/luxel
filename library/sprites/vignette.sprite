@@ -1,0 +1,49 @@
+# Luxel library sprite — original art, Apache-2.0. Grammar: library/README.md.
+# A lighting MASK, not a picture: eight greys from a white centre to dark
+# corners. Stretched over a scene in `multiply`, white leaves the base alone
+# and grey shades it, so any composition gets a vignette (Vignette & Tint).
+name: Vignette
+fps: 0
+palette:
+  a ffffff
+  b e0e0e0
+  c c0c0c0
+  d a0a0a0
+  e 808080
+  f 606060
+  g 404040
+  h 202020
+
+frame
+hhhhgggfffffeeeeeeeefffffggghhhh
+hhhgggfffeeeeeeeeeeeeeefffggghhh
+hhggfffeeeeeddddddddeeeeefffgghh
+hggfffeeeddddddddddddddeeefffggh
+ggfffeeedddccccccccccdddeeefffgg
+ggffeedddccccccbbccccccdddeeffgg
+gffeedddcccbbbbbbbbbbcccdddeeffg
+ffeeeddcccbbbbaaaabbbbcccddeeeff
+ffeeddcccbbaaaaaaaaaabbcccddeeff
+feeddcccbbaaaaaaaaaaaabbcccddeef
+feeddccbbaaaaaaaaaaaaaabbccddeef
+feedccbbaaaaaaaaaaaaaaaabbccdeef
+eeddccbbaaaaaaaaaaaaaaaabbccddee
+eeddccbbaaaaaaaaaaaaaaaabbccddee
+eeddccbaaaaaaaaaaaaaaaaaabccddee
+eeddcbbaaaaaaaaaaaaaaaaaabbcddee
+eeddcbbaaaaaaaaaaaaaaaaaabbcddee
+eeddccbaaaaaaaaaaaaaaaaaabccddee
+eeddccbbaaaaaaaaaaaaaaaabbccddee
+eeddccbbaaaaaaaaaaaaaaaabbccddee
+feedccbbaaaaaaaaaaaaaaaabbccdeef
+feeddccbbaaaaaaaaaaaaaabbccddeef
+feeddcccbbaaaaaaaaaaaabbcccddeef
+ffeeddcccbbaaaaaaaaaabbcccddeeff
+ffeeeddcccbbbbaaaabbbbcccddeeeff
+gffeedddcccbbbbbbbbbbcccdddeeffg
+ggffeedddccccccbbccccccdddeeffgg
+ggfffeeedddccccccccccdddeeefffgg
+hggfffeeeddddddddddddddeeefffggh
+hhggfffeeeeeddddddddeeeeefffgghh
+hhhgggfffeeeeeeeeeeeeeefffggghhh
+hhhhgggfffffeeeeeeeefffffggghhhh

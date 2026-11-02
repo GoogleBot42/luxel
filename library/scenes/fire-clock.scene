@@ -11,5 +11,6 @@ T clock HH:MM
 F large 5a1404 c none 0
 L pat 0 0 0 0 lighten 100 none fill 1
 N Fire
-I @pat/palette-fire-2d
+I @pat/perlin-fire
+C sliderFlameHeightPct 6553600
 X clip

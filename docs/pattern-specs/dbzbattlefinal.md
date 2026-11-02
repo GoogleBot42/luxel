@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/energy-duel.js (2026-11).
+
 # DBZBattleFinal
 kind: 2D
 sensors: no

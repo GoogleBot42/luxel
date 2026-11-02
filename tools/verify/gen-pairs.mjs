@@ -3,7 +3,12 @@
 // Each clean-room port in library/*.js carries a provenance line naming the
 // community pattern it was described from; that name is matched against the
 // `name` field of the scraped corpus/*.epe envelopes. Slug matching and a
-// short hand-fixup table cover the files whose names drifted.
+// short hand-fixup table cover the files whose names drifted. Since the
+// 2026-11 library overhaul most headers cite prose specs instead of a
+// community pattern name, so slug matching does most of the pairing and many
+// survivors (merged/reimagined ideas) pair with nothing; pairs.json was
+// hand-pruned to the surviving library files then (the corpus is not in every
+// worktree).
 //
 // The manifest holds only names, paths and a rig hint — no pattern source —
 // because the fidelity judges read it and must never see code.
@@ -25,9 +30,6 @@ const OUT = path.join(HERE, "pairs.json");
 const FIXUPS = {
   "Voronoi Mix 2D": "voronoi-2d",
   "Perlin Kaleidoscope 2D": "kaleidoscope-2d",
-  "Doom Fire (v2.0) 2D": "doom-fire-2d",
-  "Coronal Mass Ejection 2D sliders": "coronal-ejection-2d",
-  "Unstable Orbits": "unstable-orbits-2d",
 };
 
 const slugify = (s) =>

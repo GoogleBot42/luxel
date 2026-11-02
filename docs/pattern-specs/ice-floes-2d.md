@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/voronoi-2d.js (2026-11).
+
 # Ice Floes 2D
 kind: 2D
 sensors: no

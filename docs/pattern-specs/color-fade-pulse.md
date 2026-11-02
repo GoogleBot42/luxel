@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/color-pick-fade.js (2026-11).
+
 # color fade pulse
 kind: 1D
 sensors: no

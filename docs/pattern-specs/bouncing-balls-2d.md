@@ -1,3 +1,4 @@
+> Superseded: this idea now lives in library/bouncing-columns.js (2026-11).
 # Bouncing Balls 2D
 kind: 2D (only a 2D renderer; strips are handled by treating the layout as a one-column matrix)
 sensors: yes (3-axis accelerometer from the sensor expansion board)

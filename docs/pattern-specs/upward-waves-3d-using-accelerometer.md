@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/glowflow.js (2026-11).
+
 # Upward waves 3D using accelerometer
 kind: 3D
 sensors: yes (3-axis accelerometer)

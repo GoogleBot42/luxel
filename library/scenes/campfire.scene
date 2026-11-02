@@ -1,0 +1,25 @@
+# A Luxel library scene — Apache-2.0. Grammar: library/README.md.
+# A six-frame sprite as the focal animation, a still moon, and a pattern
+# ramped to ember orange as the particles: fireflies, boxed to the column
+# above the fire, become sparks drifting up out of it. The ground is a colour
+# layer from row 30 down, so the fire sits on it at any panel height.
+S - Campfire
+L pat 0 0 0 0 normal 100 none fill 1
+N Night sky
+I @pat/starfield-2d
+C sliderMode 65536
+L sprite 22 2 0 0 normal 100 none fill 1
+N Moon
+I @spr/moon
+L color 0 30 0 0 normal 100 none fill 1
+N Ground
+K 0a0705
+L pat 8 0 16 28 add 90 none fill 1
+N Embers
+I @pat/fireflies
+C sliderFliesPer100Px 786432
+C sliderLifetimeSeconds 98304
+R 100 0:000000 255:ff9a3c
+L sprite 8 17 0 0 normal 100 none fill 1
+N Fire
+I @spr/campfire

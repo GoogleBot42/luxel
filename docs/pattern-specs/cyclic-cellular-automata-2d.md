@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/life.js (2026-11).
+
 # Cyclic Cellular Automata 2D
 kind: 2D
 sensors: no

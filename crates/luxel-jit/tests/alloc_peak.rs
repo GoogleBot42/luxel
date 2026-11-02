@@ -31,11 +31,15 @@ mod common;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use common::{env_with_fake_addresses, library, program_of};
+use common::{env_with_fake_addresses, frozen, library, program_of};
 
 /// The per-program rule: working-set bytes <= words * PER_WORD +
 /// fns * PER_FN + FIXED. Fitted over `library/` 2026-09-24 (the tightest
-/// rule that clears every pattern; `ALLOC_PEAK_CSV=1` prints the rows).
+/// rule that clears every pattern; `ALLOC_PEAK_CSV=1` prints the rows), and
+/// asserted exactly over the FROZEN copies in
+/// `crates/luxel-core/tests/data/lib/` since 2026-11-01 — they keep the
+/// patterns that bound both rules, so a library rewrite cannot loosen the
+/// fit unnoticed. The live library is held to [`LIVE_SLACK`].
 /// Mirrored by `firmware/src/jit.rs` (`EMIT_PER_WORD`, `EMIT_PER_FN`,
 /// `EMIT_FIXED`) — the firmware applies it to the heap the working set
 /// will come from BEFORE compiling and refuses `no-memory` instead of
@@ -70,6 +74,22 @@ const CEILING: usize = 96 * 1024;
 const INT_PER_WORD: usize = 3;
 const INT_PER_FN: usize = 24;
 const INT_FIXED: usize = 1536;
+
+/// The live `library/` is rewritten freely, so it gets a sanity margin over
+/// both rules instead of the exact fit: 4/3, which is the host's own
+/// overstatement of the device (the rules above are host bytes, ~a third
+/// over the device's), so a live pattern inside the margin still fits the
+/// device's charge. A live pattern past it means: refit the rules here AND
+/// in firmware/src/jit.rs — and add the pattern to the frozen set.
+const LIVE_SLACK: (usize, usize) = (4, 3);
+
+fn limit(strict: bool, need: usize) -> usize {
+    if strict {
+        need
+    } else {
+        need * LIVE_SLACK.0 / LIVE_SLACK.1
+    }
+}
 
 struct Counting;
 
@@ -114,12 +134,17 @@ fn emitter_bookkeeping_peak_over_the_library() {
     let csv = std::env::var_os("ALLOC_PEAK_CSV").is_some();
     let env = env_with_fake_addresses();
     let mut out = vec![0u8; env.max_code];
+    // (strict, name, source): the frozen set under the fitted rules, the
+    // live library under LIVE_SLACK.
+    let mut all: Vec<(bool, String, String)> =
+        frozen().into_iter().map(|(n, s)| (true, n, s)).collect();
+    all.extend(library().into_iter().map(|(n, s)| (false, format!("library/{n}"), s)));
 
     // ---- pass 1: the working set, no arena --------------------------
     let mut worst = (0usize, String::new());
     let mut n = 0usize;
-    for (name, src) in library() {
-        let (prog, kinds) = program_of(&src).unwrap_or_else(|e| panic!("{name}: {e}"));
+    for (strict, name, src) in &all {
+        let (prog, kinds) = program_of(src).unwrap_or_else(|e| panic!("{name}: {e}"));
         let base = LIVE.load(Ordering::SeqCst);
         PEAK.store(base, Ordering::SeqCst);
         let plans = luxel_jit::__plan_all(&prog, &kinds);
@@ -146,7 +171,7 @@ fn emitter_bookkeeping_peak_over_the_library() {
         // The per-program rule the firmware applies BEFORE compiling
         // (`jit::emit_heap_need`): bookkeeping is linear in the bytecode.
         let fns = prog.fns.len();
-        let need = words * PER_WORD + fns * PER_FN + FIXED;
+        let need = limit(*strict, words * PER_WORD + fns * PER_FN + FIXED);
         assert!(
             peak <= need || csv,
             "{name}: bookkeeping peaked at {peak} B for {words} words / {fns} fns, over \
@@ -174,8 +199,8 @@ fn emitter_bookkeeping_peak_over_the_library() {
     assert!(luxel_core::arena::installed());
     let mut worst_int = (0usize, String::new());
     let mut worst_ext = (0usize, String::new());
-    for (name, src) in library() {
-        let (prog, kinds) = program_of(&src).unwrap_or_else(|e| panic!("{name}: {e}"));
+    for (strict, name, src) in &all {
+        let (prog, kinds) = program_of(src).unwrap_or_else(|e| panic!("{name}: {e}"));
         let base = LIVE.load(Ordering::SeqCst);
         PEAK.store(base, Ordering::SeqCst);
         let ext_base = EXT_LIVE.load(Ordering::SeqCst);
@@ -195,14 +220,14 @@ fn emitter_bookkeeping_peak_over_the_library() {
             worst_ext = (ext_peak, name.clone());
         }
         // Everything measured in pass 1 must have moved to the arena…
-        let need = words * PER_WORD + fns * PER_FN + FIXED;
+        let need = limit(*strict, words * PER_WORD + fns * PER_FN + FIXED);
         assert!(
             ext_peak <= need || csv,
             "{name}: the arena side peaked at {ext_peak} B, over the working-set rule ({need} B)"
         );
         // …and what is left internal is the small rule the arena board
         // applies to its internal heap (`jit::emit_int_need`).
-        let int_need = words * INT_PER_WORD + fns * INT_PER_FN + INT_FIXED;
+        let int_need = limit(*strict, words * INT_PER_WORD + fns * INT_PER_FN + INT_FIXED);
         assert!(
             int_peak <= int_need || csv,
             "{name}: {int_peak} B still reached the internal heap with an arena installed, \

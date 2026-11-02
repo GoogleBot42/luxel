@@ -509,10 +509,13 @@ fn a_runtime_callback_value_still_works() {
 
 // ------------------------------------------------- the library-wide gate
 
+/// The frozen library copies (`tests/data/lib/`, copied verbatim from
+/// master `2c949e4e` on 2026-11-01): the callback patterns below are pinned
+/// to pixels, so they must not move when the live `library/` is rewritten.
 fn library() -> Vec<(String, String)> {
-    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../library");
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/lib");
     let mut out: Vec<(String, String)> = std::fs::read_dir(dir)
-        .expect("library/ must exist")
+        .expect("tests/data/lib/ must exist")
         .filter_map(|e| {
             let p = e.ok()?.path();
             if p.extension()? != "js" {
@@ -546,10 +549,10 @@ fn library_frames_hash(prog: luxel_core::vm::Program) -> u64 {
 
 const LIB_GOLDEN: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/library-callbacks.txt");
 
-/// Every `library/` pattern that uses a prelude helper, pinned to the pixels
-/// the BUILTINS produced (Gitea #626). These eight are the only patterns the
-/// change can reach, and the file was written from the builtin arms before
-/// they were deleted.
+/// Every library pattern that used a prelude helper, pinned to the pixels
+/// the BUILTINS produced (Gitea #626). These eight were the only patterns the
+/// change could reach, and the file was written from the builtin arms before
+/// they were deleted; they are read from their frozen copies.
 #[test]
 fn the_callback_patterns_render_as_the_builtins_did() {
     let helpers = [

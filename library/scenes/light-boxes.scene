@@ -1,0 +1,14 @@
+# A Luxel library scene — Apache-2.0. Grammar: library/README.md.
+# What `add` does, at a glance: three colour boxes, red, green and blue,
+# overlap into yellow, cyan, magenta and a white centre. Switch the top two
+# to `lighten` and the overlaps take the brighter channel instead: no white.
+S - Light Boxes
+L color 3 3 16 16 normal 100 none fill 1
+N Red
+K ff0000
+L color 13 3 16 16 add 100 none fill 1
+N Green
+K 00ff00
+L color 8 13 16 16 add 100 none fill 1
+N Blue
+K 0000ff

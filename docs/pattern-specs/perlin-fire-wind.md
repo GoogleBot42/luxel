@@ -1,3 +1,4 @@
+> Superseded: this idea now lives in library/perlin-fire.js (2026-11).
 # perlin fire wind
 kind: 2D
 sensors: no

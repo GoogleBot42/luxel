@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/fireworks.js (2026-11).
+
 # 2D Fireworks Fade
 kind: 2D (declared; most sub-modes only use the horizontal coordinate, so it behaves largely 1D)
 sensors: no (but it reads the real-time clock and drives a GPIO output pin)

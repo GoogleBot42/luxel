@@ -1703,7 +1703,7 @@ fn engine_now(state: &State, prog: luxel_core::vm::Program, pixel_count: u32) ->
         .map(|d| d.as_secs() as i64 + state.tz_minutes.load(Ordering::Relaxed) as i64 * 60);
     // A mirror impersonating a board with an external array arena
     // (`--board panel`, Gitea #253) has to enforce that board's ELEMENT
-    // ledger, not PB's 10,236: `library/fairies.js` at 4096 px needs 15,104
+    // ledger, not PB's 10,236: a three-buffer strip pattern (the pre-2026-11 `fairies.js`) at 4096 px needed 15,104
     // and runs on the real panel, so a mirror keeping the PB count answered
     // `/api/pixels` all zeroes for a pattern the hardware shows (the mirror
     // half of the black-preview bug). Bytes are the host's — the mirror has

@@ -39,8 +39,8 @@ use core::cell::RefCell;
 
 use common::isa::{Cpu, Trap};
 use common::{
-    env_with_fake_addresses, helper_of, library, program_of, HelperId, BUILTINS_ADDR, DIRECT_BASE,
-    GENERIC_BASE, HELPER_ORDER,
+    env_with_fake_addresses, frozen, helper_of, library, program_of, HelperId, BUILTINS_ADDR,
+    DIRECT_BASE, GENERIC_BASE, HELPER_ORDER,
 };
 
 use luxel_core::engine::Engine;
@@ -510,7 +510,8 @@ fn mapped_layouts_match_the_interpreter() {
 /// engine. Two strip patterns, a 2D one, the noise-heavy #260 benchmark,
 /// and a `renderBulk` pattern — which is the one the by-hand harness in
 /// `library_diff.rs` cannot cover at all, because the frame builtins need
-/// the engine's lent buffer.
+/// the engine's lent buffer. Read from the frozen copies
+/// (`crates/luxel-core/tests/data/lib/`), so a library rewrite never moves it.
 #[test]
 fn engine_named_patterns_match_the_interpreter() {
     const NAMES: [&str; 5] = [
@@ -520,12 +521,12 @@ fn engine_named_patterns_match_the_interpreter() {
         "perlin-fire-wind-tunnel.js",
         "bulk-canvas-ripples-2d.js",
     ];
-    let lib = library();
+    let lib = frozen();
     for want in NAMES {
         let (name, src) = lib
             .iter()
             .find(|(n, _)| n == want)
-            .unwrap_or_else(|| panic!("library/{want} is missing"));
+            .unwrap_or_else(|| panic!("tests/data/lib/{want} is missing"));
         program_of(src).unwrap_or_else(|e| panic!("{name}: {e}"));
         diff(name, src).unwrap_or_else(|e| panic!("{e}"));
     }

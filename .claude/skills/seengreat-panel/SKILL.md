@@ -153,7 +153,7 @@ Reading the panel (2026-09-07):
   panel powered?" before the first OTA of a bisect; the firmware cannot
   tell, `rescan_hz` and `pass` read healthy either way.
 - `tools/panel-load-bench.mjs` needs a FAST live pattern (push
-  `library/frame-rate-scan.js` via `POST /api/code`, re-activate the stored
+  `tools/patterns/frame-rate-scan.js` via `POST /api/code`, re-activate the stored
   pattern by id after); its tab phase repeats to about ±18 %, so take a
   repeated baseline in the same session before claiming a delta. `--clients 3`
   saturates the 3-socket web pool and returns nothing — use `--clients 1`.

@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/xorcery-2d-3d.js (2026-11).
+
 # Sierpinski Rainbow 2D
 kind: 1D+2D
 sensors: no

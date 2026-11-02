@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/crosstown-traffic-2d.js (2026-11).
+
 # bustle
 kind: 1D
 sensors: no

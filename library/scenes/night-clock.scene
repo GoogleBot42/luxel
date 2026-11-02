@@ -1,0 +1,14 @@
+# A Luxel library scene — Apache-2.0. Grammar: library/README.md.
+# A bedside clock that does not light the room: a drifting star sky held dim
+# by a ramp whose LAST stop is dark (the ramp clamps above it, so nothing in
+# the sky can get brighter than 24345c), and the time in a night-vision red.
+S - Night Clock
+L pat 0 0 0 0 normal 100 none fill 1
+N Sky
+I @pat/starfield-2d
+C sliderMode 65536
+R 100 0:01030a 255:24345c
+L text 0 12 0 0 normal 100 black fill 1
+N Time
+T clock hh:MM
+F large b04a14 c none 0

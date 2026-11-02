@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/lava-lamp.js (2026-11).
+
 # Metaballs of Fire 2D
 kind: 2D
 sensors: no

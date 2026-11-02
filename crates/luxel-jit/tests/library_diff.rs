@@ -246,8 +246,10 @@ fn brush_diff(a: Brush, b: Brush) -> String {
 /// The whole library, native against interpreted.
 #[test]
 fn library_renders_identically_native_and_interpreted() {
+    // The live library, rewritten and pruned freely: never counted, only
+    // checked pattern by pattern.
     let lib = library();
-    assert!(lib.len() > 300, "expected the whole library, got {}", lib.len());
+    assert!(!lib.is_empty(), "library/ has no patterns");
     let mut bad: Vec<(String, String)> = Vec::new();
     let mut pass = 0usize;
     for (k, (name, src)) in lib.iter().enumerate() {

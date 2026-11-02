@@ -1,3 +1,4 @@
+> Superseded: this idea now lives in library/fire-eye.js (2026-11).
 # Eye of Sauron
 kind: 2D
 sensors: no

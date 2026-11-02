@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/radar-2d.js (2026-11).
+
 # angle and radius from coordinates
 kind: 2D+3D (native 3D renderer; the 2D renderer delegates to it at mid-height)
 sensors: no

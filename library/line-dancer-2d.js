@@ -1,69 +1,88 @@
-// name: Line Dancer 2D
-// Clean-room reimplementation from a prose functional description of the
-// community pattern "Line Dancer 2D"; original source never consulted.
+// name: Line Dancer
+// Clean-room reimplementation from the prose spec(s) docs/pattern-specs/line-dancer-2d.md — reimagined, not a replica.
+// A rainbow ribbon whips and coils round the centre: a radius-dependent shear smears
+// the picture into a dancing line, a breathing zoom widens and tightens the stripes
+// (floored, so it never melts into a flat wash), and Reflections folds it into a
+// seamless mirrored kaleidoscope. Each pixel's (folded) angle and radius are tabled
+// once; the shear depends on radius alone, so it is a small table rebuilt per frame.
+// Above 4,096 px a grid renders at <= 4,096 cells (64x64 on 128x128), expanded
+// bilinearly by the engine (setRenderSize): a quarter of the work, no 2x2 blocks.
 
-// A rainbow-striped ribbon twists and coils around the center of the 2D
-// surface, screensaver-style. A radius-dependent shear (only x is rewritten)
-// smears the image into a dancing line; a ~5 s triangle "breathing" zoom
-// widens and narrows the stripes; an optional kaleidoscope repeats the image
-// in rotating pie wedges.
+var TN = min(pixelCount, 4096), NR = 256
+var A = array(TN), R = array(TN)  // per pixel: folded angle (rad), radius in RL bins
+var RL = array(NR + 1), RH = array(NR + 1)  // per radius bin: shear angle, hue offset
+var mode = 0, cw = 0, ch = 0, TS = 0, key = -1, aspX = 1, aspY = 1
+var rs = 0, rsW = 0, rsH = 0      // 1 once a big grid renders at rsW x rsH
 
-var speed = 4.6      // animation clock multiplier (1..10)
-var twist = 1.75     // twist parameter (1.25..2)
-var sides = 1        // kaleidoscope wedge count (1 = off)
+var speed = 1                     // x the base dance rate
+var twist = 1.75                  // shear reach
+var refl = 1                      // mirrored folds; 1 = off
+var clock = 0, spin = 0, ph = 0, kz = 0, hz = 0, hc = 0
 
-var t = 0            // running time, seconds (wraps after ~10 min)
-var clock = 0        // t * speed
-var zoom = 0         // 0..1 triangle, ~5 s period
-var spin = 0         // kaleidoscope rotation angle
+//# min=0.2 max=3 step=0.1 default=1
+export function sliderSpeed(v) { speed = clamp(v, 0.2, 3) }
 
-// The dial trims a clock that never stops: even at 0 the twist term keeps
-// sweeping, so this is a trim over a live baseline, not an on/off master.
-//# min=0 max=1 step=0.01 default=0.4
-export function sliderSpeed(v) { speed = 1 + v * 9 }
+// How far out from the centre the coiling reaches, percent of its range.
+//# min=0 max=100 step=1 default=67
+export function sliderTwistPercent(v) { twist = 1.25 + clamp(v, 0, 100) * 0.0075 }
 
-//# min=0 max=1 step=0.01 default=0.67
-export function sliderTwist(v) { twist = 1.25 + v * 0.75 }
+// Kaleidoscope: 1 is off, n folds the picture into n mirrored pairs of wedges.
+//# min=1 max=7 step=1 default=1
+export function sliderReflections(v) { refl = clamp(floor(v), 1, 7); key = -1 }
 
-//# min=0 max=1 step=0.167 default=0
-export function sliderReflections(v) { sides = 1 + floor(v * 6.99) }
+function polar(x, y) {             // -> angle (rad, folded) and radius bin
+  x = (x - 0.5) * aspX; y = (y - 0.5) * aspY
+  var a = atan2(y, x) + PI
+  if (refl > 1) {                   // mirror alternate wedges: seamless at every fold
+    var wedge = PI / refl, k = floor(a / wedge)
+    a = a - k * wedge
+    if (k % 2) a = wedge - a
+  }
+  ph = a
+  return min(hypot(x, y), 0.999) * NR
+}
 
 export function beforeRender(delta) {
-  t = mod(t + delta / 1000, 600)
-  clock = t * speed
-  // ~5 s breathing cycle. Squaring flattens the BOTTOM of the breath, so the
-  // stripe scale lingers near zero: that long, deep trough is the "distort"
-  // phase where the whole image melts into a flat dim glow before blooming
-  // back into stripes.
-  zoom = triangle(time(0.076))
-  zoom = zoom * zoom * (2 - zoom)         // 1 at the top, ~2*z^2 near 0
-  spin = t * 0.15                    // slow kaleidoscope drift
-
-  resetTransform()
-  translate(-0.5, -0.5)              // origin at map center
+  if (!rs && pixelCount > TN && has2DMap() && gridWidth() > 0 && gridHeight() > 1) {
+    var gw = gridWidth(), gh = gridHeight()
+    rsW = min(gw, floor(64 * sqrt(gw / gh) + 0.001)); rsH = min(gh, floor(TN / rsW))
+    setRenderSize(rsW, rsH, 1)      // pixelCount is rsW * rsH from here on
+    rs = 1
+  }
+  var w = rs ? rsW : gridWidth(), h = rs ? rsH : gridHeight()
+  if (w * 4096 + h != key) {
+    key = w * 4096 + h
+    var m = max(max(w, h), 1)
+    aspX = w > 0 ? w / m : 1; aspY = h > 0 ? h / m : 1
+    // 1: table per pixel by map; 2: render-size table built by cell; 0: no table
+    mode = rs ? 2 : (pixelCount <= TN ? 1 : 0)
+    cw = w; ch = h
+    TS = mode == 1 ? pixelCount : (mode == 2 ? cw * ch : 0)
+    for (var i = 0; i < TS; i++) {
+      if (mode == 1) R[i] = polar(pixelCoord(i, 0), pixelCoord(i, 1))
+      else R[i] = polar((i % cw + 0.5) / cw, (floor(i / cw) + 0.5) / ch)
+      A[i] = ph
+    }
+  }
+  var dt = min(delta, 100) / 1000
+  clock = mod(clock + dt * 4.6 * speed, PI2 * 64)
+  spin = mod(spin + dt * 0.15, PI2)
+  var z = triangle(time(0.076))      // ~5 s breath, floored above the old melt
+  var zoom = 0.4 + 0.6 * z * z * (3 - 2 * z)
+  kz = 5 * zoom / NR; hz = zoom / NR; hc = zoom
+  for (i = 0; i <= NR; i++) {
+    var d = twist - i / NR * 2.2
+    var ang = d * d * sin(d + clock)
+    RL[i] = ang + spin
+    RH[i] = ang / PI2 + hc
+  }
 }
 
 export function render2D(index, x, y) {
-  // kaleidoscope: fold the angle into one wedge, add slow spin
-  if (sides > 1) {
-    var r = hypot(x, y)
-    var wedge = PI2 / sides
-    var a = mod(atan2(y, x), wedge) + spin
-    x = r * cos(a)
-    y = r * sin(a)
-  }
-
-  // twist: radius-dependent shear; only x is rewritten
-  var d = twist - hypot(x, y) * 2.2
-  var ang = d * d * sin(d + clock)
-  var tx = x * cos(ang) - y * sin(ang)
-
-  // Shading: bright ribbon core carved out of black. The stripe scale is
-  // PURELY the zoom (no floor), so when the breath bottoms out the argument
-  // collapses to zero for every pixel and the panel settles on wave(0)^2 =
-  // 0.25 — a flat, dim, featureless glow instead of a bright line.
-  var v = wave(tx * 5 * zoom)
-  v = v * v
-  var h = tx * zoom + zoom + ang / PI2
-  hsv(h, 1, v)
+  var rb, a
+  if (mode) { rb = R[index]; a = A[index] }
+  else { rb = polar(x, y); a = ph }
+  var tx = rb * cos(a + RL[rb])
+  var v = wave(tx * kz)
+  hsv(tx * hz + RH[rb], 1, v * v)
 }
