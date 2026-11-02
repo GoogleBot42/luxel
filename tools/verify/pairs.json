@@ -36,8 +36,8 @@
       "rig": "grid"
     },
     {
-      "slug": "breakout-2d",
-      "libFile": "library/breakout-2d.js",
+      "slug": "brick-breaker-2d",
+      "libFile": "library/brick-breaker-2d.js",
       "epeFile": "corpus/92wsuZDBB8juyRDFZ.epe",
       "epeName": "Breakout 2D",
       "rig": "grid"
@@ -152,13 +152,6 @@
       "libFile": "library/fractal-flower.js",
       "epeFile": "corpus/Z5EW5hegBqqfFCXhr.epe",
       "epeName": "fractal flower",
-      "rig": "grid"
-    },
-    {
-      "slug": "frogger-2d",
-      "libFile": "library/frogger-2d.js",
-      "epeFile": "corpus/RfPnGJiJuqeruAFXx.epe",
-      "epeName": "Frogger 2D",
       "rig": "grid"
     },
     {
@@ -299,6 +292,13 @@
       "libFile": "library/raindrops-2d.js",
       "epeFile": "corpus/RQp3pFEYDuRvwanPk.epe",
       "epeName": "Raindrops 2D",
+      "rig": "grid"
+    },
+    {
+      "slug": "road-hopper-2d",
+      "libFile": "library/road-hopper-2d.js",
+      "epeFile": "corpus/RfPnGJiJuqeruAFXx.epe",
+      "epeName": "Frogger 2D",
       "rig": "grid"
     },
     {
@@ -447,6 +447,7 @@
     "boids-2d",
     "digital-rain-2d",
     "dna-helix-2d",
+    "falling-blocks-2d",
     "falling-sand-2d",
     "marquee-chase",
     "ocean",
@@ -456,7 +457,6 @@
     "soap-2d",
     "spirograph-2d",
     "starfield-2d",
-    "tetrix-2d",
     "tv-simulator",
     "typing-heatmap-2d",
     "us-flag-2d"

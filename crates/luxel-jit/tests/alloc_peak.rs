@@ -61,7 +61,8 @@ const CEILING: usize = 96 * 1024;
 /// Refitted over `library/` 2026-09-30 (Gitea #905; the #671 rule was
 /// 6/48/1,024 and its tightest pattern used only 72 % of it). What the
 /// residue IS was measured then too: at the worst pattern's peak
-/// (`2d-fireworks-fade`, 4,122 B) ~3.8 KB is `kinds::walk_fn`'s
+/// (`2d-fireworks-fade`, 4,122 B; removed from library/ in 2026-11, frozen
+/// copy in tests/data/lib — see #1007) ~3.8 KB is `kinds::walk_fn`'s
 /// per-branch-target `BTreeMap` nodes, ~180 B the `FnView` table, and the
 /// operand-depth `Vec<Ab>`s only ~150 B — routing those through the arena
 /// moved that much for 7.5 KB of flash, so they stay (`kinds::walk_fn`).
