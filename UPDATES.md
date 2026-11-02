@@ -1,5 +1,53 @@
 # Update log
 
+## 2026-11-01 — clip layers: `X clip` fills text and sprites with a pattern
+
+A binding line `X clip` on a scene layer confines it to the **coverage** of
+the layer below — where that layer drew with α > 0 after its own key,
+opacity and box (docs/spec/scenes.md §2 "Clip layers"). Photoshop's clipping
+mask: `[text] [fire pat, X clip]` is fire inside the glyphs, which `mask`
+never could do because text is always black-keyed (scene-ideas gap G5); a
+sprite below clips by its texels (index 0 is not coverage, opaque black is).
+A run of clip layers all clip to the base under the run; `X clip` on the
+first layer is a no-op; a base that draws nothing this frame leaves its clip
+layers nothing. `X <flag…>` is a binding line rather than flag bit 16
+because older hosts reject `flags > 15` but ignore unknown lines (there the
+layer draws unclipped); unknown `X` words are ignored for the same reason.
+
+`luxel_core::compose`: one 1-bit-per-slot coverage mask per compositor (512 B
+at 4096 px, 2 KB at 16384 px), out of the arena on PSRAM boards, taken
+fallibly only while a clip scene draws — a base that cannot get it leaves its
+clip layers unclipped, #702's rule — and tagged with the frame it was drawn
+on so a clip layer never reads last frame's coverage. Only a base and its
+clip layers take the per-slot path; every other layer keeps the row kernel
+and the frame-copy fast path. `Layer.clip`, `X clip` round-trips (written
+after the body, before `M` lines) and `"clip":true` in the JSON.
+
+Console: the codec round-trips `X clip` and `"clip"`; every layer inspector
+has a **Clip** switch ("inside the layer below"). New shipped scene
+`library/scenes/fire-clock.scene`: an ember-coloured `HH:MM` with
+`palette-fire-2d` clipped to it and lightening it — `perlin-fire` and
+`doom-fire-2d` were tried first and leave a clock in the top of a 64x64 panel
+mostly dark. Tests: Rust at the pixel level (clipped vs unclipped, text
+glyph-exact, a sprite's texels incl. opaque black, first-layer no-op, a run
+sharing one base, a keyed pattern base through the driver with a frame the
+engine skips, no mask taken without a clip layer), web unit tests on the
+Rust fixtures, e2e (the switch stores `X clip` and clears it).
+
+Image size: the keyframe PR (#980) had cost the classic-ESP32 image ~7.6 KB
+(text+rodata) — its `M`-line serializer and `"keys"` JSON were inlined into
+`serialize`/`push_json` with the integer formatting and `String::push_str`
+copied per call site — and left `board-pixelblaze-v3` 3.04 % from a 3 %
+floor, which this PR's ~900 B would have broken. `push_key` and the new
+`push_keys_json` are now out of line and write through `push_piece` and one
+`push_num`, and `luxel_core::ease`'s four larger curves (sine, back, elastic,
+bounce) are `#[inline(never)]` so `call_builtin` and the keyframe evaluator
+share one copy (`ease_out_bounce` was already its own function; the other
+three builtins now pay a call — not re-measured on metal). Net, with clip
+layers in: pixelblaze-v3 1,270,816 → 1,268,048 B (3.04 → 3.25 % free), c3
+1,116,720 → 1,113,984, c6 1,143,616 → 1,145,216. Asset archive 974,511 →
+975,430 B of 983,040 (headroom 8,529 → 7,610 B).
+
 ## 2026-11-01 — scene layers move: keyframed `M` lines
 
 A binding line `M <ms> <x> <y> <opacity> <ease> [<frame>]` on any scene layer

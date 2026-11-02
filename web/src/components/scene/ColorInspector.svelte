@@ -69,5 +69,7 @@
   on:change={(e) => patchLayer({ style: e.detail })}
   keys={layer.keys}
   on:keys={(e) => patchLayer({ keys: e.detail })}
+  clip={layer.clip === true}
+  on:clip={(e) => patchLayer({ clip: e.detail })}
   on:delete
 />

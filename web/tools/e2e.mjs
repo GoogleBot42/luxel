@@ -2307,6 +2307,22 @@ try {
         again === "M 0 0 0 100 linear\nM 1000 = 4 = out",
         JSON.stringify(again),
       );
+      // …and the Clip switch beside it is the layer's `X clip`
+      const clipSw = '[data-role="scene-editor-view"] [data-role="scene-clip"]';
+      check("clip: the layer inspector carries the Clip switch", (await page.$(clipSw)) !== null);
+      await page.click(clipSw);
+      await sleep(300);
+      await page.click('[data-role="scene-save"]');
+      await sleep(700);
+      const clipped = await page.evaluate(() => localStorage.getItem("luxel.scenes") ?? "");
+      check(
+        "clip: switching it on stores `X clip`, before the track",
+        clipped.includes("\nX clip\nM 0 0 0 100 linear\n"),
+        clipped.slice(0, 200),
+      );
+      await page.screenshot({ path: `${shotDir}/e2e-scenes-clip.png` });
+      await page.click(clipSw);
+      await sleep(300);
       await page.click(field);
       await page.keyboard.down("Control");
       await page.keyboard.press("a");
@@ -2316,7 +2332,11 @@ try {
       await page.click('[data-role="scene-save"]');
       await sleep(700);
       const cleared = await page.evaluate(() => localStorage.getItem("luxel.scenes") ?? "");
-      check("keys: an emptied field stores no M line", !/\nM /.test(cleared), cleared.slice(0, 160));
+      check(
+        "keys: an emptied field stores no M line, and the switch off no X line",
+        !/\nM /.test(cleared) && !/\nX /.test(cleared),
+        cleared.slice(0, 160),
+      );
     }
 
     // ── A SPRITE LAYER moves like every other layer (Gitea #741) + the text

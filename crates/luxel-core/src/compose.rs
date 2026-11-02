@@ -239,6 +239,47 @@ fn clip_axis(b: i32, span: i32, limit: i32, mirrored: bool) -> (i32, i32) {
     (lo.max(0), hi.min(span))
 }
 
+/// A clip layer's bookkeeping for ONE draw (docs/spec/scenes.md §2 "Clip
+/// layers"): `gate` is the coverage this layer is confined to, `cover`
+/// records where it drew (α > 0) for a clip layer above it. Both 1 bit per
+/// frame SLOT, so every wiring — row-major, serpentine, a tiled chain —
+/// addresses them the same way. `Clip::none()` is every ordinary draw.
+pub(crate) struct Clip<'a> {
+    gate: Option<&'a [u8]>,
+    cover: Option<&'a mut [u8]>,
+}
+
+impl Clip<'_> {
+    pub(crate) fn none() -> Clip<'static> {
+        Clip {
+            gate: None,
+            cover: None,
+        }
+    }
+    #[inline]
+    fn active(&self) -> bool {
+        self.gate.is_some() || self.cover.is_some()
+    }
+    /// May this slot be drawn? Always, without a gate.
+    #[inline]
+    fn allows(&self, slot: usize) -> bool {
+        self.gate
+            .is_none_or(|g| g.get(slot >> 3).is_some_and(|b| b >> (slot & 7) & 1 != 0))
+    }
+    #[inline]
+    fn mark(&mut self, slot: usize) {
+        if let Some(b) = self.cover.as_deref_mut().and_then(|c| c.get_mut(slot >> 3)) {
+            *b |= 1 << (slot & 7);
+        }
+    }
+    /// The whole frame drew (an opaque full-layout copy).
+    fn mark_all(&mut self) {
+        if let Some(c) = self.cover.as_deref_mut() {
+            c.fill(0xff);
+        }
+    }
+}
+
 /// Is this layer's composite a straight frame copy? Full layout, opaque,
 /// unkeyed, unmirrored, `normal` — the base layer of almost every scene,
 /// and exactly the `emit!` case scenes replaced (Gitea #705).
@@ -303,27 +344,37 @@ fn skip(style: &LayerStyle, grid: &GridMap) -> bool {
 /// render — the pattern still sees the whole grid, the layer just shows a
 /// window onto it. Flips mirror the window's contents within the box.
 pub fn composite_frame(dst: Canvas, src: &[[u8; 3]], style: &LayerStyle) {
+    composite_frame_with(dst, src, style, &mut Clip::none());
+}
+
+fn composite_frame_with(dst: Canvas, src: &[[u8; 3]], style: &LayerStyle, clip: &mut Clip) {
     let grid = *dst.grid;
     if skip(style, &grid) {
         return;
     }
-    // The fast path: a whole-layout opaque `normal` layer IS its source.
-    if is_frame_copy(style, &grid, src.len(), dst.px.len()) {
+    // The fast path: a whole-layout opaque `normal` layer IS its source —
+    // and covers every slot.
+    if clip.gate.is_none() && is_frame_copy(style, &grid, src.len(), dst.px.len()) {
         let n = grid.len();
         dst.px[..n].copy_from_slice(&src[..n]);
+        clip.mark_all();
         return;
     }
-    blend_box(dst.px, &grid, src, style, false);
+    blend_box(dst.px, &grid, src, style, false, clip);
 }
 
 /// Wash the layer's box with one colour. Colour layers carry no key — the
 /// wash is the layer.
 pub fn fill_color(dst: Canvas, rgb: [u8; 3], style: &LayerStyle) {
+    fill_color_with(dst, rgb, style, &mut Clip::none());
+}
+
+fn fill_color_with(dst: Canvas, rgb: [u8; 3], style: &LayerStyle, clip: &mut Clip) {
     let grid = *dst.grid;
     if skip(style, &grid) {
         return;
     }
-    blend_box(dst.px, &grid, &[rgb], style, true);
+    blend_box(dst.px, &grid, &[rgb], style, true, clip);
 }
 
 /// The general path both kernels share: clip the box once per axis, then
@@ -340,6 +391,7 @@ fn blend_box(
     src: &[[u8; 3]],
     style: &LayerStyle,
     wash: bool,
+    clip: &mut Clip,
 ) {
     let (bx, by, bw, bh) = resolved_rect(style, grid);
     let (mx, my) = if wash { (false, false) } else { mirrors(style) };
@@ -352,8 +404,10 @@ fn blend_box(
     }
     // A tiled grid (a HUB75 chain, Gitea #948) has no contiguous rows:
     // every cell goes through `index` on both sides. The row-run path below
-    // stays for the row-major and serpentine grids every other host has.
-    if grid.tiling.is_some() {
+    // stays for the row-major and serpentine grids every other host has. A
+    // clip layer and the base it clips to take this per-slot path too: the
+    // masks are per slot, and an ordinary layer's row kernel stays as it was.
+    if grid.tiling.is_some() || clip.active() {
         // In frame-slot runs (#953), so the destination is written in
         // order; an unmirrored source cell IS the destination's slot.
         let rows = ((by + j0) as usize, (by + j1) as usize);
@@ -361,6 +415,9 @@ fn blend_box(
         grid.rect_runs(rows, cols, &mut |run| {
             for k in 0..run.n {
                 let slot = run.slot + k;
+                if !clip.allows(slot) {
+                    continue;
+                }
                 let s = if wash {
                     src[0]
                 } else if !mx && !my {
@@ -382,6 +439,7 @@ fn blend_box(
                 if a > 0 {
                     if let Some(d) = dst.get_mut(slot) {
                         blend_px_into(d, s, style.blend, a);
+                        clip.mark(slot);
                     }
                 }
             }
@@ -452,6 +510,10 @@ pub use crate::sprite::{
 /// itself when it is placed naturally or contained, the box when it fills
 /// or tiles), so a mirrored sprite never moves.
 pub fn blit_sprite(dst: Canvas, sprite: &SpriteView, frame: u8, style: &LayerStyle) {
+    blit_sprite_with(dst, sprite, frame, style, &mut Clip::none());
+}
+
+fn blit_sprite_with(dst: Canvas, sprite: &SpriteView, frame: u8, style: &LayerStyle, clip: &mut Clip) {
     let grid = *dst.grid;
     if skip(style, &grid) || sprite.is_empty() {
         return;
@@ -517,12 +579,17 @@ pub fn blit_sprite(dst: Canvas, sprite: &SpriteView, frame: u8, style: &LayerSty
     };
     grid.rect_runs(rows, cols, &mut |run| {
         for k in 0..run.n {
+            let slot = run.slot + k;
+            if !clip.allows(slot) {
+                continue;
+            }
             let (dr, dc) = run.cell(k);
             let Some(px) = px_of(dr as i32 - y0, dc as i32 - x0) else {
                 continue;
             };
-            if let Some(d) = dst.px.get_mut(run.slot + k) {
+            if let Some(d) = dst.px.get_mut(slot) {
                 blend_px_mode(d, px, style.blend, a0);
+                clip.mark(slot);
             }
         }
     });
@@ -542,6 +609,19 @@ pub fn draw_text_layer(
     layer: &TextLayer,
     style: &LayerStyle,
     scroll_px: i32,
+) {
+    draw_text_with(dst, scratch, text, layer, style, scroll_px, &mut Clip::none());
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_text_with(
+    dst: Canvas,
+    scratch: &mut [[u8; 3]],
+    text: &str,
+    layer: &TextLayer,
+    style: &LayerStyle,
+    scroll_px: i32,
+    clip: &mut Clip,
 ) {
     let grid = *dst.grid;
     if skip(style, &grid) || text.is_empty() {
@@ -573,13 +653,14 @@ pub fn draw_text_layer(
         key: Key::Black,
         ..*style
     };
-    composite_frame(
+    composite_frame_with(
         Canvas {
             px: dst.px,
             grid: dst.grid,
         },
         scratch,
         &keyed,
+        clip,
     );
 }
 
@@ -601,6 +682,8 @@ struct LayerRt {
     /// The sprite frame the track holds right now, if its current key
     /// names one.
     key_frame: Option<u8>,
+    /// `X clip`: confined to the coverage of the layer below.
+    clip: bool,
     text: TextLayer,
     /// Host-resolved string for this frame (clock/slot are the host's job;
     /// a `lit` source seeds it at [`Compositor::set_scene`]).
@@ -667,7 +750,23 @@ pub struct Compositor {
     layers: Vec<LayerRt>,
     scratch: crate::arena::FrameVec,
     epoch: u32,
+    /// The clip coverage mask, 1 bit per slot packed 24 to a `[u8; 3]` —
+    /// a [`crate::arena::FrameVec`], so it is sized by the same fallible
+    /// [`scratch_for`] as the text scratch and lives in the arena with it.
+    /// Allocated the first time a scene with a clip layer draws its base.
+    cover: crate::arena::FrameVec,
+    /// Which layer's coverage `cover` holds THIS frame ([`COVER_NONE`]
+    /// after every [`Compositor::advance`], [`COVER_FAILED`] when the base
+    /// could not get the mask). A clip layer whose base did not draw this
+    /// frame draws nothing.
+    cover_of: u8,
 }
+
+/// `Compositor::cover_of`: no base has drawn this frame.
+const COVER_NONE: u8 = 0xff;
+/// `Compositor::cover_of`: the base could not get its mask — clip layers
+/// draw unclipped.
+const COVER_FAILED: u8 = 0xfe;
 
 impl Compositor {
     pub fn new(grid: GridMap) -> Self {
@@ -676,6 +775,8 @@ impl Compositor {
             layers: Vec::new(),
             scratch: crate::arena::empty(),
             epoch: 0,
+            cover: crate::arena::empty(),
+            cover_of: COVER_NONE,
         }
     }
 
@@ -685,6 +786,8 @@ impl Compositor {
         if self.grid != grid {
             self.grid = grid;
             self.scratch = crate::arena::empty();
+            self.cover = crate::arena::empty();
+            self.cover_of = COVER_NONE;
         }
     }
 
@@ -768,6 +871,7 @@ impl Compositor {
     /// Advance the scroll, sprite-frame and keyframe clocks, and move every
     /// keyed layer to where its track puts it now.
     pub fn advance(&mut self, dt_ms: u32) {
+        self.cover_of = COVER_NONE;
         for l in self.layers.iter_mut() {
             if let Some(last) = l.keys.last() {
                 let period = last.ms;
@@ -792,6 +896,55 @@ impl Compositor {
         }
     }
 
+    /// The clip role of `layer` this frame, as the masks its draw uses —
+    /// `None` when it must not draw at all (a clip layer whose base drew
+    /// nothing this frame).
+    ///
+    /// A BASE is a non-clip layer with a clip layer directly above it: its
+    /// mask is cleared and records where it draws. A clip layer reads the
+    /// mask of the nearest non-clip layer below it, so a run of clip layers
+    /// all clip to one base, as in Photoshop. A clip layer with nothing but
+    /// clip layers below it (or none — the first layer) draws unclipped, and
+    /// so does one whose base could not afford its mask (#702's rule: a
+    /// treatment the heap cannot pay for is dropped, the layer is not).
+    #[inline(never)]
+    fn clip_for<'c>(
+        layers: &[LayerRt],
+        cover: &'c mut crate::arena::FrameVec,
+        cover_of: &mut u8,
+        n: usize,
+        layer: usize,
+    ) -> Option<Clip<'c>> {
+        let is_clip = |i: usize| layers.get(i).is_some_and(|l| l.clip);
+        if is_clip(layer) {
+            let Some(base) = (0..layer).rev().find(|&i| !is_clip(i)) else {
+                return Some(Clip::none());
+            };
+            return match *cover_of {
+                COVER_FAILED => Some(Clip::none()),
+                b if b as usize == base => Some(Clip {
+                    gate: Some(cover.as_flattened()),
+                    cover: None,
+                }),
+                _ => None,
+            };
+        }
+        if !is_clip(layer + 1) {
+            return Some(Clip::none());
+        }
+        if layer >= COVER_FAILED as usize || !scratch_for(cover, n.div_ceil(24)) {
+            *cover_of = COVER_FAILED;
+            return Some(Clip::none());
+        }
+        let bits = cover.as_flattened_mut();
+        bits.fill(0);
+        *cover_of = layer as u8;
+        Some(Clip {
+            gate: None,
+            cover: Some(bits),
+        })
+    }
+
     /// Clear `dst` to black — the base every scene composites onto.
     pub fn begin(&mut self, dst: &mut [[u8; 3]]) {
         for p in dst.iter_mut() {
@@ -805,7 +958,16 @@ impl Compositor {
     pub fn pattern_layer(&mut self, dst: &mut [[u8; 3]], layer: usize, src: &[[u8; 3]]) {
         let grid = self.grid;
         let epoch = self.epoch;
-        let Compositor { layers, scratch, .. } = self;
+        let Compositor {
+            layers,
+            scratch,
+            cover,
+            cover_of,
+            ..
+        } = self;
+        let Some(mut clip) = Self::clip_for(layers, cover, cover_of, grid.len(), layer) else {
+            return;
+        };
         let Some(l) = layers.get_mut(layer) else {
             return;
         };
@@ -820,43 +982,53 @@ impl Compositor {
                 ensure_lut(r, lut, epoch);
             }
         }
-        match l.lut.as_ref().filter(|_| amount > 0) {
-            Some((_, lut)) => {
-                // When the composite is a straight copy the ramp can run in
-                // place on the destination: no scratch frame at all, which
-                // is 3 B/px this scene then never has to hold (Gitea #705).
-                // `palette_remap_frame` is per-pixel and independent, so the
-                // result is identical either way.
-                let n = grid.len();
-                if is_frame_copy(&style, &grid, src.len(), dst.len()) {
-                    dst[..n].copy_from_slice(&src[..n]);
-                    palette_remap_frame(&mut dst[..n], lut, amount);
-                } else if scratch_for(scratch, src.len()) {
-                    scratch.copy_from_slice(src);
-                    palette_remap_frame(scratch, lut, amount);
-                    composite_frame(Canvas { px: dst, grid: &grid }, scratch, &style);
-                } else {
-                    // No heap for the scratch this frame (#702). The ramp is
-                    // a colour treatment, so drop the TREATMENT rather than
-                    // the layer: an unramped layer beats a reboot.
-                    composite_frame(Canvas { px: dst, grid: &grid }, src, &style);
-                }
+        let mut from = src;
+        if let Some((_, lut)) = l.lut.as_ref().filter(|_| amount > 0) {
+            // When the composite is a straight copy the ramp can run in
+            // place on the destination: no scratch frame at all, which is
+            // 3 B/px this scene then never has to hold (Gitea #705).
+            // `palette_remap_frame` is per-pixel and independent, so the
+            // result is identical either way.
+            let n = grid.len();
+            if clip.gate.is_none() && is_frame_copy(&style, &grid, src.len(), dst.len()) {
+                dst[..n].copy_from_slice(&src[..n]);
+                palette_remap_frame(&mut dst[..n], lut, amount);
+                clip.mark_all();
+                return;
             }
-            None => composite_frame(Canvas { px: dst, grid: &grid }, src, &style),
+            // No heap for the scratch this frame (#702) leaves `from` the
+            // engine's frame: the ramp is a colour treatment, so drop the
+            // TREATMENT rather than the layer — an unramped layer beats a
+            // reboot.
+            if scratch_for(scratch, src.len()) {
+                scratch.copy_from_slice(src);
+                palette_remap_frame(scratch, lut, amount);
+                from = scratch;
+            }
         }
+        composite_frame_with(Canvas { px: dst, grid: &grid }, from, &style, &mut clip);
     }
 
     /// Composite one native layer — text, sprite or colour. Pass the
     /// sprite layer's [`SpriteView`]; the other kinds ignore it.
     pub fn native_layer(&mut self, dst: &mut [[u8; 3]], layer: usize, sprite: Option<&SpriteView>) {
         let grid = self.grid;
-        let Compositor { layers, scratch, .. } = self;
+        let Compositor {
+            layers,
+            scratch,
+            cover,
+            cover_of,
+            ..
+        } = self;
+        let Some(mut clip) = Self::clip_for(layers, cover, cover_of, grid.len(), layer) else {
+            return;
+        };
         let Some(l) = layers.get(layer) else {
             return;
         };
         let canvas = Canvas { px: dst, grid: &grid };
         match l.kind {
-            LayerKind::Color => fill_color(canvas, l.color, &l.style),
+            LayerKind::Color => fill_color_with(canvas, l.color, &l.style, &mut clip),
             LayerKind::Sprite => {
                 let Some(sp) = sprite else { return };
                 // The fps clock rule lives with the record
@@ -870,7 +1042,7 @@ impl Compositor {
                     Some(f) => f,
                     None => sp.frame_at_fps(l.sprite_ms, fps),
                 };
-                blit_sprite(canvas, sp, frame, &l.style);
+                blit_sprite_with(canvas, sp, frame, &l.style, &mut clip);
             }
             LayerKind::Text => {
                 let (_, _, bw, bh) = resolved_rect(&l.style, &grid);
@@ -882,7 +1054,7 @@ impl Compositor {
                 if !scratch_for(scratch, grid.len()) {
                     return;
                 }
-                draw_text_layer(canvas, scratch, &l.resolved, &l.text, &l.style, scroll);
+                draw_text_with(canvas, scratch, &l.resolved, &l.text, &l.style, scroll, &mut clip);
             }
             LayerKind::Pattern => {}
         }
@@ -899,6 +1071,7 @@ impl Compositor {
             + self.layers.len() * core::mem::size_of::<LayerRt>()
             + self.layers.iter().map(|l| l.keys.capacity()).sum::<usize>()
                 * core::mem::size_of::<Keyframe>()
+            + if crate::arena::frames_external() { 0 } else { self.cover.capacity() * 3 }
     }
 }
 
@@ -1235,6 +1408,7 @@ impl From<&Layer> for LayerRt {
             keys: l.keys.clone(),
             key_ms: 0,
             key_frame: None,
+            clip: l.clip,
             text: TextLayer::default(),
             resolved: String::new(),
             color: [0, 0, 0],
@@ -2546,5 +2720,148 @@ mod tests {
         // sprite_ms/100 mod 2, and sprite_ms runs from the scene's start);
         // 1000 ms is the period, so the held frame is back
         assert_eq!(seen, vec![1, 1, 1, 1, 1, 0, 1, 0, 1, 1]);
+    }
+
+    // ---- clip layers (`X clip`) ----
+
+    /// Draw a scene's native layers bottom → top onto black, the way the
+    /// driver does, with `sprite` handed to every sprite layer.
+    fn stack(wire: &str, w: u16, h: u16, sprite: Option<&[u8]>) -> Vec<[u8; 3]> {
+        let scene = crate::scene::parse(wire).expect("parses");
+        let mut comp = Compositor::new(grid(w, h, false));
+        comp.set_scene(&scene);
+        let mut px = vec![[0u8; 3]; w as usize * h as usize];
+        let view = sprite.and_then(SpriteView::parse);
+        for i in 0..comp.layer_count() {
+            comp.native_layer(&mut px, i, view.as_ref());
+        }
+        px
+    }
+
+    const GRN: [u8; 3] = [0, 255, 0];
+    const BLU: [u8; 3] = [0, 0, 255];
+
+    #[test]
+    fn a_clip_layer_draws_only_where_the_layer_below_did() {
+        let head = concat!(
+            "S 0000000a c\n",
+            "L color 0 0 0 0 normal 100 none fill 1\n",
+            "K ff0000\n",
+            "L color 1 0 2 1 normal 100 none fill 1\n",
+            "K 00ff00\n",
+            "L color 0 0 0 0 normal 100 none fill 1\n",
+            "K 0000ff\n",
+        );
+        let unclipped = stack(head, 4, 1, None);
+        assert_eq!(unclipped, vec![BLU; 4], "without X the wash covers everything");
+        let mut wire = String::from(head);
+        wire.push_str("X clip\n");
+        assert_eq!(stack(&wire, 4, 1, None), vec![RED, BLU, BLU, RED], "inside the green box only");
+    }
+
+    #[test]
+    fn a_clip_over_text_fills_exactly_the_glyphs() {
+        let text = concat!(
+            "S 0000000a t\n",
+            "L text 0 0 0 0 normal 100 none fill 1\n",
+            "T lit HI\n",
+        );
+        let glyphs = stack(text, 16, 8, None);
+        let lit: Vec<bool> = glyphs.iter().map(|p| *p != [0, 0, 0]).collect();
+        assert!(lit.iter().any(|&b| b), "the text drew something");
+        let mut wire = String::from(text);
+        wire.push_str("L color 0 0 0 0 normal 100 none fill 1\nK 0000ff\nX clip\n");
+        let filled = stack(&wire, 16, 8, None);
+        for (i, p) in filled.iter().enumerate() {
+            assert_eq!(*p, if lit[i] { BLU } else { [0, 0, 0] }, "pixel {i}");
+        }
+    }
+
+    #[test]
+    fn a_clip_over_a_sprite_follows_its_texels_not_its_colours() {
+        // the checker: red, TRANSPARENT, transparent, opaque BLACK
+        let wire = concat!(
+            "S 0000000a s\n",
+            "L sprite 0 0 0 0 normal 100 none fill 1\n",
+            "I 5b17e5ef\n",
+            "L color 0 0 0 0 normal 100 none fill 1\n",
+            "K 00ff00\n",
+            "X clip\n",
+        );
+        let px = stack(wire, 2, 2, Some(&checker()));
+        // the opaque black texel is coverage like any other; index 0 is not
+        assert_eq!(px, vec![GRN, [0, 0, 0], [0, 0, 0], GRN]);
+        // …and a base with no record drew nothing, so neither does its clip
+        assert_eq!(stack(wire, 2, 2, None), vec![[0, 0, 0]; 4]);
+    }
+
+    #[test]
+    fn clip_on_the_first_layer_is_a_no_op_and_a_run_shares_one_base() {
+        let first = "S 0000000a f\nL color 0 0 0 0 normal 100 none fill 1\nK 00ff00\nX clip\n";
+        assert_eq!(stack(first, 2, 1, None), vec![GRN; 2], "nothing below: unclipped");
+        // base = a 1-px box; two clip layers above it both clip to IT
+        let run = concat!(
+            "S 0000000a r\n",
+            "L color 1 0 1 1 normal 100 none fill 1\n",
+            "K ff0000\n",
+            "L color 0 0 0 0 normal 100 none fill 1\n",
+            "K 00ff00\n",
+            "X clip\n",
+            "L color 0 0 0 0 add 100 none fill 1\n",
+            "K 0000ff\n",
+            "X clip\n",
+        );
+        assert_eq!(stack(run, 3, 1, None), vec![[0, 0, 0], [0, 255, 255], [0, 0, 0]]);
+    }
+
+    /// A pattern base, keyed black, through `pattern_layer` and the driver's
+    /// frame clock: the mask is per FRAME, so a clip layer never reads the
+    /// coverage its base drew a frame earlier.
+    #[test]
+    fn a_keyed_pattern_base_clips_through_the_driver() {
+        struct Host(Vec<[u8; 3]>, bool);
+        impl SceneHost for Host {
+            fn pattern_frame(&mut self, _l: usize, _d: Fx) -> Option<&[[u8; 3]]> {
+                self.1.then_some(&self.0[..])
+            }
+            fn sprite(&mut self, _l: usize) -> Option<SpriteView<'_>> {
+                None
+            }
+        }
+        let scene = crate::scene::parse(concat!(
+            "S 0000000a p\n",
+            "L pat 0 0 0 0 normal 100 black fill 1\n",
+            "I 0123abcd\n",
+            "L color 0 0 0 0 normal 100 none fill 1\n",
+            "K 00ff00\n",
+            "X clip\n",
+        ))
+        .unwrap();
+        let mut comp = Compositor::new(grid(3, 1, false));
+        comp.set_scene(&scene);
+        let mut driver = SceneDriver::new();
+        let mut host = Host(vec![[0, 0, 0], [9, 9, 9], [0, 0, 0]], true);
+        let mut px: crate::arena::FrameVec = crate::arena::empty();
+        let step = Fx::from_raw(16 << 16);
+        assert!(driver.frame(&mut comp, &mut px, 3, step, &mut host));
+        assert_eq!(&px[..], &[[0, 0, 0], GRN, [0, 0, 0]]);
+        // the engine has no frame this step: the base draws nothing, and the
+        // clip layer must not reuse last frame's mask
+        host.1 = false;
+        assert!(driver.frame(&mut comp, &mut px, 3, step, &mut host));
+        assert_eq!(&px[..], &[[0, 0, 0]; 3]);
+    }
+
+    #[test]
+    fn an_unclipped_scene_never_takes_the_mask() {
+        let scene = crate::scene::parse(
+            "S 0000000a u\nL color 0 0 0 0 normal 100 none fill 1\nK 00ff00\n",
+        )
+        .unwrap();
+        let mut comp = Compositor::new(grid(64, 64, false));
+        comp.set_scene(&scene);
+        let mut px = vec![[0u8; 3]; 4096];
+        comp.native_layer(&mut px, 0, None);
+        assert_eq!(comp.cover.capacity(), 0);
     }
 }

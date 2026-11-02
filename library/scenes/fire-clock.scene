@@ -1,0 +1,15 @@
+# A Luxel library scene — Apache-2.0. Grammar: library/README.md.
+# The time drawn IN fire, with a clip layer (`X clip`, docs/spec/scenes.md §2
+# "Clip layers"): an ember-coloured clock is the base, and the fire pattern
+# above it is clipped to the clock's glyphs and LIGHTENS them, so the digits
+# always glow and the flames run through them. Everything outside the digits
+# stays black — without the X line the fire would cover the whole panel.
+S - Fire Clock
+L text 0 10 0 0 normal 100 none fill 1
+N Embers
+T clock HH:MM
+F large 5a1404 c none 0
+L pat 0 0 0 0 lighten 100 none fill 1
+N Fire
+I @pat/palette-fire-2d
+X clip

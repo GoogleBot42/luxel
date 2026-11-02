@@ -486,3 +486,36 @@ test("the inspector's text field is the same parser, row-numbered", () => {
   assert.deepEqual(bad, { ok: false, error: 'row 2: bad M field "zoom"' });
   assert.deepEqual(parseKeysText("  \n"), { ok: true, keys: [] });
 });
+
+// ---- clip layers (`X clip`) — `scene::tests::x_clip_round_trips_and_ignores_words_it_does_not_know` ----
+
+const CLIP_WIRE =
+  "S 0000000a clipped\n" +
+  "L color 0 0 0 0 normal 100 none fill 1\n" +
+  "L text 0 0 0 0 normal 100 none fill 1\n" +
+  "T lit HI\n" +
+  "L pat 0 0 0 0 normal 100 none fill 1\n" +
+  "I 0123abcd\n" +
+  "X clip\n" +
+  "M 0 = = = linear\n";
+
+test("X clip round trips, after the body and before the track", () => {
+  const s = ok(parseScene(CLIP_WIRE));
+  assert.equal(serializeScene(s), CLIP_WIRE);
+  assert.equal(s.layers[1].clip, undefined);
+  assert.equal(s.layers[2].clip, true);
+  const json = sceneJson(s);
+  assert.equal(json.split('"clip":true').length - 1, 1);
+  assert.ok(json.includes('"rot180":false,"clip":true,"keys":['), json);
+  assert.equal(serializeScene(sceneFromJson(JSON.parse(json))), CLIP_WIRE);
+});
+
+test("an X line's unknown words are a newer console's: ignored", () => {
+  const head = "S 0000000a c\nL color 0 0 0 0 normal 100 none fill 1\n";
+  assert.equal(ok(parseScene(head + "X feather clip\nX glow\n")).layers[0].clip, true);
+  const s = ok(parseScene(head + "X glow\n"));
+  assert.equal(s.layers[0].clip, undefined);
+  assert.equal(serializeScene(s), head);
+  s.layers[0].clip = false;
+  assert.equal(serializeScene(s), head, "false is the default and is not emitted");
+});

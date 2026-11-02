@@ -35,8 +35,15 @@
   /** The layer's keyframe track — the `Motion` field, one `M` line a row,
    *  checked by the wire's own parser (`parseKeysText`). */
   export let keys: Keyframe[] | undefined = undefined;
+  /** `X clip`: drawn only where the layer below drew. */
+  export let clip = false;
 
-  const dispatch = createEventDispatcher<{ change: LayerStyle; delete: void; keys: Keyframe[] }>();
+  const dispatch = createEventDispatcher<{
+    change: LayerStyle;
+    delete: void;
+    keys: Keyframe[];
+    clip: boolean;
+  }>();
 
   // The field keeps what was TYPED (a half-written row is not an error to
   // undo) and only resyncs when the track changes from outside — another
@@ -116,6 +123,19 @@
     />
     <span class="mono tiny dim" data-role="scene-opacity-value">{style.opacity} %</span>
   </div>
+</div>
+
+<div class="irow">
+  <div class="ilab">Clip</div>
+  <label class="hint">
+    <input
+      type="checkbox"
+      data-role="scene-clip"
+      checked={clip}
+      on:change={(e) => dispatch("clip", e.currentTarget.checked)}
+    />
+    inside the layer below
+  </label>
 </div>
 
 <div class="irow start">
