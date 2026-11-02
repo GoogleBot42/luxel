@@ -1,8 +1,8 @@
 // Contact sheet for LIBRARY scenes and sprites — sheet.mjs's twin for
 // `library/scenes/*.scene` and `library/sprites/*.sprite`. A scene is drawn
 // the way the playground draws it (web/src/lib/sceneRender.ts): the wasm
-// compositor (`lx_comp_new/set/frame`) on a square SIZExSIZE grid, one engine
-// per pattern layer, each `@pat/<slug>` / `@spr/<slug>` resolved to its
+// compositor (`lx_comp_new/set/frame`) on a square SIZExSIZE grid (or a WxH
+// one, or a W-pixel STRIP — below), one engine per pattern layer, each `@pat/<slug>` / `@spr/<slug>` resolved to its
 // library file through web/src/lib/librarySource.ts, clock text formatted from
 // the pinned wall clock and slot text from `--slots`. Writes
 // <out>/<slug>.png — N frames side by side, spread over the scene's keyframe
@@ -11,12 +11,19 @@
 // compile/runtime error.
 //
 //   nix develop -c node --experimental-strip-types tools/verify/scene-sheet.mjs <outdir>
-//        [--size 64] [--frames 6] [--seconds 10] [--scale K] [--fps 30]
+//        [--size 64 | --size WxH] [--frames 6] [--rows 300] [--seconds 10] [--scale K] [--fps 30]
 //        [--slots "slot0|slot1|…"] library/scenes/a.scene …
 //   nix develop -c node --experimental-strip-types tools/verify/scene-sheet.mjs <outdir>
 //        --sprites [--scale K] library/sprites/a.sprite …
 //
-// `--scale` defaults to 256/SIZE (each frame ~256 px wide). `--sprites` writes
+// `--scale` defaults to 256/SIZE (each frame ~256 px wide). `--size WxH` with
+// H = 1 (`150x1`) is a STRIP (Gitea #985, docs/spec/scenes.md §2 "The
+// canvas"): the compositor gets the W×1 row a device composites a strip on,
+// every pattern layer runs MAPLESS on W pixels (no setMapGrid — a strip's own
+// index order), and <slug>.png is a WATERFALL like sheet.mjs's `--strip`: one
+// row per frame, time running DOWN, over the loop or `--seconds`, thinned to at
+// most `--rows` rows (each 2 px tall); `--scale` then defaults to 360/W. Any
+// other WxH is a rectangular grid drawn like the square one. `--sprites` writes
 // each sprite's frames as a strip on a checkerboard (transparent texels show
 // as the check), 16 frames to a row, plus <slug>.json {name, w, h, frames,
 // fps, bytes}. Patterns that bind sensors get a synthetic music frame, as in
@@ -47,7 +54,7 @@ for (let i = 0; i < args.length; i++) {
 const out = files.shift();
 if (!out || files.length === 0) {
   console.error(
-    "usage: scene-sheet.mjs <outdir> [--size N] [--frames N] [--seconds S] [--scale K] [--fps F] [--slots a|b] library/scenes/x.scene …\n" +
+    "usage: scene-sheet.mjs <outdir> [--size N|WxH] [--frames N] [--rows N] [--seconds S] [--scale K] [--fps F] [--slots a|b] library/scenes/x.scene …\n" +
       "       scene-sheet.mjs <outdir> --sprites [--scale K] library/sprites/x.sprite …",
   );
   process.exit(2);
@@ -92,8 +99,16 @@ if (opts.sprites) {
   process.exit(0);
 }
 
-const N = Number(opts.size), nFrames = Number(opts.frames), fps = Number(opts.fps);
-const scale = Number(opts.scale ?? Math.max(1, Math.floor(256 / N)));
+const nFrames = Number(opts.frames), fps = Number(opts.fps);
+// `--size N` is the square N×N grid; `--size WxH` a rectangle, and H = 1 a strip.
+const sizeWH = /^(\d+)x(\d+)$/.exec(String(opts.size));
+const GW = sizeWH ? Number(sizeWH[1]) : Number(opts.size), GH = sizeWH ? Number(sizeWH[2]) : GW;
+const N = GW; // the square path's one dimension
+const strip = GH === 1;
+const maxRows = Number(opts.rows ?? 300);
+const scale = Number(
+  opts.scale ?? (strip ? Math.max(1, Math.round(360 / GW)) : Math.max(1, Math.floor(256 / Math.max(GW, GH)))),
+);
 const slots = opts.slots === "" ? [] : String(opts.slots).split("|");
 const CLOCK = 1756000000; // sheet.mjs's pinned wall clock
 const PROJ = { index: 0, x: 1, y: 2, z: 3, xy: 4, xz: 5, yz: 6 };
@@ -130,7 +145,7 @@ function formatClock(fmt, at) {
 
 function renderScene(file) {
   const slug = slugOf(file);
-  const summary = { file, size: N, errors: [] };
+  const summary = { file, size: sizeWH ? `${GW}x${GH}` : N, errors: [] };
   const src = parseSceneSource(fs.readFileSync(file, "utf8"));
   if (!src.ok) return { ...summary, errors: [src.error] };
   const parsed = parseScene(src.wire);
@@ -153,7 +168,7 @@ function renderScene(file) {
   const span = period > 0 ? period : Number(opts.seconds) * 1000;
   summary.periodMs = period;
 
-  const ch = e.lx_comp_new(N, N);
+  const ch = e.lx_comp_new(GW, GH);
   const w = lx.putStr(src.wire);
   const rc = e.lx_comp_set(ch, w.ptr, w.len);
   w.free();
@@ -170,10 +185,10 @@ function renderScene(file) {
       const ref = refOf.get(b.pat.id);
       const pfile = ref && `${W}/library/${ref.slug}.js`;
       if (!pfile || !fs.existsSync(pfile)) return summary.errors.push(`layer ${i}: no pattern ${ref?.slug ?? b.pat.id}`);
-      const eng = lx.compile(fs.readFileSync(pfile, "utf8"), N * N, 1);
+      const eng = lx.compile(fs.readFileSync(pfile, "utf8"), GW * GH, 1);
       if (eng.compileError) return summary.errors.push(`layer ${i} ${ref.slug}: ${JSON.stringify(eng.compileError)}`);
       try { eng.setWallClock(CLOCK); } catch {}
-      eng.setMapGrid(N, N);
+      if (!strip) eng.setMapGrid(GW, GH);
       // geometry.ts withProjectionOverride: `P <mode>` replaces the field
       // matching the pattern's own dims in the default triple (index, z, xy)
       const triple = [0, 3, 4];
@@ -201,7 +216,16 @@ function renderScene(file) {
 
   const dt = 1000 / fps;
   const want = [];
-  for (let k = 0; k < nFrames; k++) want.push(Math.max(1, Math.round(((k + 0.5) * span) / nFrames / dt)));
+  if (strip) {
+    // the waterfall keeps every `step`-th frame as one row, `maxRows` at most
+    const total = Math.max(1, Math.round(span / dt));
+    const step = Math.max(1, Math.ceil(total / maxRows));
+    for (let f = step; f <= total; f += step) want.push(f);
+  } else {
+    for (let k = 0; k < nFrames; k++) want.push(Math.max(1, Math.round(((k + 0.5) * span) / nFrames / dt)));
+  }
+  const keep = new Set(want);
+  const NPX = GW * GH;
   const shots = [];
   const runtime = new Set();
   const t0 = performance.now();
@@ -216,28 +240,38 @@ function renderScene(file) {
     });
     for (const { eng } of engines) if (eng.wantsSensors()) eng.setSensors(music(ms / 1000));
     const ptr = e.lx_comp_frame(ch, Math.round(dt * 65536));
-    if (want.includes(f)) shots.push(ptr ? new Uint8Array(e.memory.buffer.slice(ptr, ptr + N * N * 3)) : new Uint8Array(N * N * 3));
+    if (keep.has(f)) shots.push(ptr ? new Uint8Array(e.memory.buffer.slice(ptr, ptr + NPX * 3)) : new Uint8Array(NPX * 3));
     for (const { eng, slug: ps } of engines) {
       const err = eng.takeError();
       if (err && runtime.size < 3) runtime.add(`${ps}: ${err.message ?? JSON.stringify(err)}`);
     }
   }
   summary.msPerFrame = +((performance.now() - t0) / last).toFixed(3);
-  summary.shotsMs = want.map((f) => Math.round(f * dt));
+  if (strip) summary.rowMs = +(want[0] * dt).toFixed(1);
+  else summary.shotsMs = want.map((f) => Math.round(f * dt));
   summary.errors.push(...runtime);
   summary.litShots = shots.filter((s) => s.some((v) => v > 8)).length;
+  if (strip) summary.rows = shots.length;
   engines.forEach(({ eng }) => eng.free());
   e.lx_comp_free(ch);
 
-  const cw = N * scale, gap = 2;
+  if (strip) {
+    // waterfall: frame k is row k, time running down (sheet.mjs `--strip`)
+    const rows = Buffer.alloc(GW * shots.length * 3);
+    shots.forEach((fr, k) => Buffer.from(fr).copy(rows, k * GW * 3));
+    const up = Buffer.from(upscale(GW, shots.length, rows, scale, 2).rgb);
+    fs.writeFileSync(path.join(out, `${slug}.png`), encodePNG(GW * scale, shots.length * 2, up));
+    return summary;
+  }
+  const cw = GW * scale, chh = GH * scale, gap = 2;
   const SW = shots.length * (cw + gap) - gap;
-  const sheet = Buffer.alloc(SW * cw * 3, 40); // grey gutters between frames
+  const sheet = Buffer.alloc(SW * chh * 3, 40); // grey gutters between frames
   shots.forEach((fr, k) => {
-    const up = Buffer.from(upscale(N, N, fr, scale, scale).rgb);
+    const up = Buffer.from(upscale(GW, GH, fr, scale, scale).rgb);
     const ox = k * (cw + gap);
-    for (let y = 0; y < cw; y++) up.copy(sheet, (y * SW + ox) * 3, y * cw * 3, (y + 1) * cw * 3);
+    for (let y = 0; y < chh; y++) up.copy(sheet, (y * SW + ox) * 3, y * cw * 3, (y + 1) * cw * 3);
   });
-  fs.writeFileSync(path.join(out, `${slug}.png`), encodePNG(SW, cw, sheet));
+  fs.writeFileSync(path.join(out, `${slug}.png`), encodePNG(SW, chh, sheet));
   return summary;
 }
 
@@ -246,7 +280,7 @@ for (const file of files) {
   const s = renderScene(file);
   fs.writeFileSync(path.join(out, `${slug}.json`), JSON.stringify(s));
   console.log(
-    `${slug}: ${s.layers?.length ?? 0} layers, ${s.periodMs ? `loop ${s.periodMs} ms` : "no loop"}, ${s.msPerFrame ?? "-"} ms/frame, lit ${s.litShots ?? 0}/${nFrames}` +
+    `${slug}: ${s.layers?.length ?? 0} layers, ${s.periodMs ? `loop ${s.periodMs} ms` : "no loop"}, ${s.msPerFrame ?? "-"} ms/frame, lit ${s.litShots ?? 0}/${strip ? `${s.rows ?? 0} rows` : nFrames}` +
       (s.errors.length ? ` ERR ${s.errors.join("; ")}` : ""),
   );
 }

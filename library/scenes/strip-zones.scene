@@ -1,0 +1,41 @@
+# A Luxel library scene — Apache-2.0. Grammar: library/README.md "Strips".
+# layout: strip
+# Two zones on one strip, WLED-segment style: fire on the first 75 px, the sea
+# on the rest, and a warm glow breathing where they meet. A pattern layer is a
+# WINDOW onto that pattern's own full-strip render, so the fire (rooted at
+# pixel 0, burning toward the seam) is its own pixels 0..74. The sea is the
+# BASE, the whole strip mirrored (`flipx`, flags 3): its far end meets the
+# fire, and on a 150 px strip pixels 75..149 are its own 74..0 run backwards.
+# It is the base rather than a `75 0 0 0` segment because a zero `w` is the
+# layout's width, not "what is left": the box overhangs the end, a flip
+# mirrors the whole overhanging box, and the visible part comes out black
+# (library/README.md "Strips"). The glow is three nested colour boxes in
+# `add` — 10, 4 and 2 px wide, each brighter than the last — a soft ramp a
+# box can stand in for, the core breathing on a 4 s keyframe track.
+# Authored for a 150 px strip. The seam sits at pixel 75 whatever the length
+# (a box is in pixels): on 300 px the fire keeps its 75 and the sea gets the
+# other 225; under 75 px — a 60 px strip — the seam falls off the end and the
+# strip is all fire. For another split, move the fire's 75 and the glow boxes
+# (70, 73, 74) together.
+S - Fire & Water
+L pat 0 0 0 0 normal 100 none fill 3
+N Sea
+I @pat/ocean
+C sliderPalette 65536
+C sliderFoamPct 3932160
+L pat 0 0 75 0 normal 100 none fill 1
+N Fire
+I @pat/perlin-fire
+L color 70 0 10 0 add 22 none fill 1
+N Glow
+K ff9a4a
+L color 73 0 4 0 add 40 none fill 1
+N Glow 2
+K ffc880
+L color 74 0 2 0 add 60 none fill 1
+N Core
+K fff2d8
+#   ms    x  y  opacity ease
+M 0       =  =  35      sine
+M 2000    =  =  80      sine
+M 4000    =  =  35      sine
