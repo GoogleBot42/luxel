@@ -1496,6 +1496,16 @@ pub struct Vm {
     /// `pixelCount` as it read before `setRenderSize` turned a size on, so
     /// `setRenderSize(0, 0)` can put it back in the same call.
     render_base: Fx,
+    /// What `gridWidth`/`gridHeight` report between a `setRenderSize`
+    /// call and the plan sync that applies it, so they switch in the same
+    /// instant `pixelCount` does. The ENGINE keeps both: `native_grid` is
+    /// `Some(g)` while its plan renders resized, `g` being the grid the
+    /// pattern saw before the size went on (what `setRenderSize(0, 0)`
+    /// goes back to); `render_refused` is set when the small frame would
+    /// not allocate (the size asked for is not what renders) and cleared
+    /// by the next call.
+    pub native_grid: Option<Option<crate::outpipe::GridMap>>,
+    pub render_refused: bool,
     /// Injected external events `[type, x, y, value]`, drained FIFO by
     /// `readEvent`. The engine pushes (bounded — see `MAX_EVENTS`); a
     /// pattern switch rebuilds the VM, which clears the queue.
@@ -1800,6 +1810,8 @@ impl Vm {
             render_size: [0; 2],
             render_filter: 0,
             render_base: Fx::ZERO,
+            native_grid: None,
+            render_refused: false,
             events: VecDeque::new(),
             pin_pullup: 0,
             pin_driven: 0,
@@ -4812,7 +4824,9 @@ impl Vm {
             // follows at once, so `array(pixelCount)` right after the call
             // sizes for the small grid; the map, the grid and the render
             // pass follow at the engine's next plan sync (docs/lang.md
-            // "Render resolution"). Returns the new `pixelCount`.
+            // "Render resolution"); `gridWidth`/`gridHeight` read the new
+            // size at once too (`bulk::grid_dim`). Returns the new
+            // `pixelCount`.
             SetRenderSize => {
                 let (w, h) = (n(0).to_int_trunc(), n(1).to_int_trunc());
                 let on = w >= 1 && h >= 1;
@@ -4834,6 +4848,7 @@ impl Vm {
                     self.render_size = [0; 2];
                 }
                 self.render_filter = (n(2) >= Fx::ONE) as u8;
+                self.render_refused = false;
                 Ok(self.globals[pc])
             }
             // setOutputPalette(pal, amount = 1): recolor the finished frame

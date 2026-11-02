@@ -818,8 +818,11 @@ bilinear mode on `fillCanvas`, or a `paintCanvas` that takes one, would make it
 convertible — that is the concrete ask on #373.
 
 **Both exist now (2026-11-01).** `fillCanvas(h, s, v, w, h, 1)` and
-`paintCanvas(v, w, h, b, 1)` sample bilinearly — `canvasGet`'s geometry
-(`sample_axis`: texel centres at (i + 0.5)/n, edges clamped), blended in RGB
+`paintCanvas(v, w, h, b, 1)` sample bilinearly — `canvasGet`'s texel
+geometry (centres at (i + 0.5)/n, edges clamped), with each fixture pixel
+taken at its CENTRE on a grid or a strip (docs/lang.md "Canvas sampling" —
+so a grid-sized canvas is the identity, and the result is not a per-pixel
+`canvasGet(buf, w, x, y)` at the inclusive mapped coordinate), blended in RGB
 after each cell's colour is resolved, 8-bit channels with a 16-bit fraction,
 integer only. The four corner texels are re-resolved only when the corner
 cells change, so an HSV or palette texel costs about once per cell per row on
