@@ -1,12 +1,13 @@
-// name: Breakout
-// Clean-room reimplementation from the prose spec docs/pattern-specs/breakout-2d.md — reimagined,
+// name: Brick Breaker
+// Clean-room reimplementation from the prose spec docs/pattern-specs/brick-breaker-2d.md — reimagined,
 // not a replica. Power-ups, combos and the item-chasing AI: original work from the prose idea spec
-// docs/pattern-specs/patternflow/breakout-arcade.md (Patternflow preset, CC BY-SA 4.0 — prose-described
-// idea only, no code). Attract-mode Breakout sized from the grid, bricks along the long axis. The AI
-// paddle predicts each ball's landing, aims it at a live brick and detours for falling power-ups:
-// multiball (cyan), wide paddle (green), fire ball (orange). Tap or drag the preview (or POST
-// /api/events, type 1) to take the paddle; the AI is back 4 s after the last touch. renderBulk:
-// a delta-timed fade() is the trail, bricks are two fillRects, hits are additive splat bursts.
+// docs/pattern-specs/patternflow/brick-breaker-arcade.md (Patternflow preset, CC BY-SA 4.0 —
+// prose-described idea only, no code). An attract-mode brick-breaking game, inspired by the
+// classic arcade one, sized from the grid, bricks along the long axis. The AI paddle predicts
+// each ball's landing, aims it at a live brick and detours for falling power-ups: multiball
+// (cyan), wide paddle (green), fire ball (orange). Tap or drag the preview (or POST /api/events,
+// type 1) to take the paddle; the AI is back 4 s after the last touch. renderBulk: a delta-timed
+// fade() is the trail, bricks are two fillRects, hits are additive splat bursts.
 
 var spd = 30            // ball speed, grid cells per second
 var padCells = 8        // paddle length, grid cells

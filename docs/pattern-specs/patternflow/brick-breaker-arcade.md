@@ -1,10 +1,10 @@
-# Breakout Arcade
+# Brick Breaker Arcade
 
-Idea spec written from Patternflow preset preset_0712_2.h (CC BY-SA 4.0 per its SPDX header, by Seunghun Lee; the brief said MIT); prose only, no code — the Luxel implementation is an original work built from this description.
+Idea spec written from Patternflow preset preset_0712_2.h (CC BY-SA 4.0 per its SPDX header, by Seunghun Lee; the brief said MIT). The preset's display name, "Breakout Arcade", carries an arcade trademark, so the name here is generic. Prose only, no code — the Luxel implementation is an original work built from this description.
 
 ## What it looks like
 
-A self-playing game of Breakout, composed for a portrait (tall) playfield and turned a quarter turn onto the landscape 128x64 panel, so on the wall the bricks are at one short end and the paddle at the other. A wall of bricks — a handful of rows, a column count that fills the width — sits near the far end; each brick is a filled rectangle with a darker one-pixel outline, and the rows are shaded from pale peach-white at the back row through warm orange toward the front. Faint grey-violet side walls frame the field, and the background has a barely visible alternating line texture. A small plus-shaped ball bounces around; the paddle is a short bright bar near the near end.
+A self-playing brick-breaking game, composed for a portrait (tall) playfield and turned a quarter turn onto the landscape 128x64 panel, so on the wall the bricks are at one short end and the paddle at the other. A wall of bricks — a handful of rows, a column count that fills the width — sits near the far end; each brick is a filled rectangle with a darker one-pixel outline, and the rows are shaded from pale peach-white at the back row through warm orange toward the front. Faint grey-violet side walls frame the field, and the background has a barely visible alternating line texture. A small plus-shaped ball bounces around; the paddle is a short bright bar near the near end.
 
 The fun is in the juice. Every brick hit leaves a soft glowing blob that fades over a moment, the ball leaves a faint comet trail, and the whole background flashes brighter on hits — more so when consecutive hits build a combo without touching the paddle. Some broken bricks drop a blinking power-up that falls toward the paddle: multiball (the ball splits into several), wide paddle (the paddle grows, with pulsing ends), or fire ball (the ball gets a bigger halo, ploughs straight through bricks without bouncing, and the remaining bricks shimmer). When the last brick falls the wall rebuilds with a big central burst of glow; when every ball is lost a new one serves from mid-field with a flash. The colour ramp runs black → slate violet → indigo → electric blue → magenta → hot red → orange → peach → white, so brightness reads as heat.
 
@@ -39,7 +39,7 @@ An attract-mode arcade game as an ambient light show: a deterministic little phy
 
 ## Making it better in Luxel
 
-- The library already has `breakout-2d`; merge the best of this into it: power-ups, combo-scaled flash, AI that predicts and detours for items, and manual takeover. In Luxel the takeover should come from external events (tap/drag on the preview, `POST /api/events`, MQTT) rather than a knob — drag the paddle with a finger on the web UI.
+- The library already has `brick-breaker-2d` (formerly `breakout-2d`); merge the best of this into it: power-ups, combo-scaled flash, AI that predicts and detours for items, and manual takeover. In Luxel the takeover should come from external events (tap/drag on the preview, `POST /api/events`, MQTT) rather than a knob — drag the paddle with a finger on the web UI.
 - Render with `renderBulk`: `fillRect` per live brick (only bricks that changed need re-drawing if the frame persists), `splat` with additive blend for ball, items and hit bursts, and `fade` on the persistent frame for trails — no glow buffer array at all. That is a fraction of the per-pixel cost and scales to 128x128.
 - Lay the playfield out from `gridWidth()`/`gridHeight()` and pick portrait or landscape automatically (bricks along the long axis on a wide panel) instead of hard-coding a quarter turn.
 - Colour bricks per row with an OKLCH ramp; use `easeOutBack` for the wide-paddle grow and an `easeOutElastic` shake of the brick wall on fire-ball hits.
@@ -47,4 +47,4 @@ An attract-mode arcade game as an ambient light show: a deterministic little phy
 
 ## Payoff
 
-4/5 — the most charming preset in this batch; a polished attract-mode game with real juice. Fold its features into the existing breakout pattern.
+4/5 — the most charming preset in this batch; a polished attract-mode game with real juice. Fold its features into the existing brick-breaker pattern.

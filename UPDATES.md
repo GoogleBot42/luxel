@@ -1,5 +1,32 @@
 # Update log
 
+## 2026-11-02 — Library cleanup: generic arcade names, #1008 housekeeping, Patternflow note draft
+
+Four library patterns carried arcade trademarks in their names. They are now
+**Rock Field** (`rock-field.js`, was Asteroids), **Brick Breaker**
+(`brick-breaker-2d.js`, was Breakout), **Road Hopper** (`road-hopper-2d.js`,
+was Frogger) and **Falling Blocks** (`falling-blocks-2d.js`, was Tetrix). No
+scene referenced any of them by `@pat/`, so the files were renamed too; the
+code is untouched (the 32x32 and 64x64 contact sheets are byte-identical to
+master's). The two prose specs moved with them
+(`docs/pattern-specs/{brick-breaker,road-hopper}-2d.md`), and the
+`tools/verify` registries (`pairs.json`, `decisions.json`, `results/`) now
+key on the new slugs. The frozen copies under `crates/luxel-core/tests/data/lib/`
+and `tools/bench-patterns/`, and historical bench reports, keep the old names.
+Brick Breaker's Patternflow idea spec became
+`patternflow/brick-breaker-arcade.md` (the preset's own display name carries
+the trademark; the spec says so, as `glitch-rings.md` does for an unnamed one).
+
+Gitea #1008: `tools/verify/fixups.json` is now `{}` (all 7 entries named ports
+the overhaul removed; `fixups.mjs` treats a missing or empty manifest as no
+fixups). Comments in `appwdt.rs`, `jit.rs`, `alloc_peak.rs` and `vm.rs` that
+cite removed patterns as evidence keep their numbers and now say where the
+pattern went. The worktree prune (item 2) was done separately.
+
+A draft credit note to the Patternflow author is in
+`docs/research/library-overhaul-2026-11/patternflow-note-draft.md`. It has
+not been sent; Jeremy decides.
+
 ## 2026-11-01 — Library overhaul: 308 patterns → 150, 41 scenes, 40 sprites, idea over fidelity
 
 The whole shipped library was re-done against one principle: **capture the

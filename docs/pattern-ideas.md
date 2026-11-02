@@ -6,7 +6,7 @@
 > `boids-2d.js`, `curl-flow-2d.js`, `typing-heatmap-2d.js`,
 > `pendulum-wave.js`, `interference.js`, `notification-ripple.js`,
 > `raindrops-2d.js` (strip drip), `ocean.js`, `starfield-2d.js`, `dna-helix-2d.js`,
-> `radar-2d.js`, `rainbow.js` (chevron shape), plus `tetrix-2d.js`,
+> `radar-2d.js`, `rainbow.js` (chevron shape), plus `falling-blocks-2d.js`,
 > `falling-sand-2d.js`, `tv-simulator.js`, `soap-2d.js`,
 > `spirograph-2d.js` and `reaction-diffusion-2d.js` (Gray–Scott, in 16.16
 > fixed point). Popcorn and munching squares were skipped on purpose —

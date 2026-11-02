@@ -1456,8 +1456,10 @@ pub struct Vm {
     /// Arena id backing the palette. On PB `setPalette(arr)` holds a LIVE
     /// reference: later writes through `arr` change what `paint()` looks
     /// up, with no second `setPalette` call (oracle-probed via
-    /// fast-palette-blending, 2026-08-29). We keep the id and rebuild the
-    /// cooked stops lazily when the backing array is mutated.
+    /// fast-palette-blending, 2026-08-29; that pattern was deleted from
+    /// library/ in the 2026-11 overhaul, no frozen copy). We keep the id
+    /// and rebuild the cooked stops lazily when the backing array is
+    /// mutated.
     palette_src: Option<u32>,
     palette_dirty: bool,
     pub(crate) perlin_wrap: [i32; 3],
@@ -2511,8 +2513,9 @@ impl Vm {
     /// Do NOT make this `#[inline(never)]` to shrink the dispatch loop: it
     /// buys nothing on Xtensa (the three indexing arms come out the same
     /// length or two instructions LONGER) and costs the host a lot — an
-    /// array-heavy pattern lost 18 % and `colourful-fireflies` 21 % on
-    /// x86, which the wasm playground would pay too (Gitea #312).
+    /// array-heavy pattern lost 18 % and `colourful-fireflies` (merged into
+    /// `fireflies` in 2026-11) 21 % on x86, which the wasm playground would
+    /// pay too (Gitea #312).
     #[inline]
     pub(crate) fn index_read(
         &mut self,
