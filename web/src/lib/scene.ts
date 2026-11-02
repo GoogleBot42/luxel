@@ -59,6 +59,8 @@ export const EASES: readonly Ease[] = [
 /** `MAX_KEYS` / `MAX_KEY_MS` — the keyframe track's caps. */
 export const MAX_KEYS = 16;
 export const MAX_KEY_MS = 3_600_000;
+/** `MAX_SPACE` — the largest design size a `U` line may declare, per axis. */
+export const MAX_SPACE = 4096;
 export const CLOCK_FMTS: readonly ClockFmt[] = [
   "HH:MM",
   "HH:MM:SS",
@@ -165,12 +167,20 @@ export interface Layer {
   /** `X clip` — drawn only where the layer below drew (docs/spec/scenes.md
    *  §2 "Clip layers"). Absent = false; only `true` is emitted. */
   clip?: boolean;
+  /** `X abs` — in a scene with a design size, this layer keeps grid pixels
+   *  and 1:1 content (docs/spec/scenes.md §2 "Design size"). Absent = false;
+   *  only `true` is emitted. */
+  abs?: boolean;
 }
 
 export interface Scene {
   /** 8 hex, or "" for a scene the host has not assigned an id to yet. */
   id: string;
   name: string;
+  /** The `U <w> <h>` line: the size the scene was designed at. Present, the
+   *  boxes and `M` positions are design units the device maps onto its real
+   *  grid (docs/spec/scenes.md §2 "Design size"); absent, layout pixels. */
+  space?: [number, number];
   /** Bottom → top: `layers[0]` is the base, as on the wire. */
   layers: Layer[];
 }
@@ -426,6 +436,17 @@ function parseAt(block: string, firstLine: number): SceneParse {
       } else if (tag === "L") {
         if (!seenS) throw new ParseError(err(n, "an L line before the S line"));
         scene.layers.push(parseLayer(line, n));
+      } else if (tag === "U" && seenS) {
+        // the design size: scene-level, between the S and the first L
+        if (scene.layers.length > 0) throw new ParseError(err(n, "a U line after the first L line"));
+        const t = tokens(line);
+        const dim = (tok: string): number => {
+          const v = /^\+?\d+$/.test(tok) ? Number(tok) : 0;
+          if (!(v >= 1 && v <= MAX_SPACE)) throw new ParseError(errTok(n, "bad U field", tok));
+          return v;
+        };
+        const w = dim(t[1] ?? "");
+        scene.space = [w, dim(t[2] ?? "")];
       } else if (tag === "") {
         // blank line
       } else {
@@ -645,6 +666,7 @@ function parseBinding(layer: Layer, tag: string, line: string, n: number): void 
       // per-layer flags past the L line's 0..15; unknown words are a newer
       // console's and are ignored
       if (t.includes("clip")) layer.clip = true;
+      if (t.includes("abs")) layer.abs = true;
       break;
     default:
       // A line from a newer console: ignored.
@@ -711,6 +733,7 @@ export function serializeScene(s: Scene): string {
   let out = `S ${s.id === "" ? "-" : s.id}`;
   if (s.name !== "") out += ` ${s.name}`;
   out += "\n";
+  if (s.space) out += `U ${s.space[0]} ${s.space[1]}\n`;
   for (const l of s.layers) {
     const st = l.style;
     const kind = layerKind(l);
@@ -751,7 +774,8 @@ export function serializeScene(s: Scene): string {
     } else if (l.body.color !== "000000") {
       out += `K ${l.body.color}\n`;
     }
-    if (l.clip) out += "X clip\n";
+    // one X line, its words in a fixed order: `clip`, then `abs`
+    if (l.clip || l.abs) out += `X${l.clip ? " clip" : ""}${l.abs ? " abs" : ""}\n`;
     if (l.keys?.length) out += keysText(l.keys) + "\n";
   }
   return out;
@@ -782,6 +806,8 @@ export interface SceneLayerJson {
   rot180: boolean;
   /** Present (and true) only on a clip layer. */
   clip?: boolean;
+  /** Present (and true) only on an `X abs` layer. */
+  abs?: boolean;
   /** Present only when the layer has a track; `=` values are absent. */
   keys?: { ms: number; x?: number; y?: number; opacity?: number; ease: Ease; frame?: number }[];
   pat?: {
@@ -809,6 +835,8 @@ export interface SceneLayerJson {
 export interface SceneJson {
   id: string;
   name: string;
+  /** Present only when the scene has a `U` line. */
+  space?: [number, number];
   layers: SceneLayerJson[];
 }
 
@@ -824,11 +852,17 @@ export interface ScenesJson {
 /** A scene from the device's JSON. Unknown enum tokens fall back to their
  *  defaults rather than throwing — a newer device must not blank the page. */
 export function sceneFromJson(j: SceneJson): Scene {
-  return {
+  const out: Scene = {
     id: String(j.id ?? ""),
     name: String(j.name ?? ""),
     layers: (j.layers ?? []).map(layerFromJson),
   };
+  // Kept, or a re-save from this console would strip the design size the
+  // device holds. A malformed one is dropped, like a bad keyframe track.
+  const sp = j.space;
+  const dim = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= 1 && (v as number) <= MAX_SPACE;
+  if (Array.isArray(sp) && sp.length === 2 && dim(sp[0]) && dim(sp[1])) out.space = [sp[0], sp[1]];
+  return out;
 }
 
 function layerFromJson(j: SceneLayerJson): Layer {
@@ -890,6 +924,7 @@ function layerFromJson(j: SceneLayerJson): Layer {
   }
   const out: Layer = { name: String(j.name ?? defaultLayerName(kind)), style, body };
   if (j.clip === true) out.clip = true;
+  if (j.abs === true) out.abs = true;
   // A track that does not hold up is DROPPED rather than half-kept: the
   // device only ever writes one its own parser accepted.
   if (Array.isArray(j.keys) && j.keys.length > 0) {
@@ -904,7 +939,8 @@ function layerFromJson(j: SceneLayerJson): Layer {
  *  lets `web/tests/scene.test.mjs` pin the two against one fixture. */
 export function sceneJson(s: Scene): string {
   const parts = s.layers.map(layerJson).join(",");
-  return `{"id":"${jsonEscape(s.id)}","name":"${jsonEscape(s.name)}","layers":[${parts}]}`;
+  const space = s.space ? `,"space":[${s.space[0]},${s.space[1]}]` : "";
+  return `{"id":"${jsonEscape(s.id)}","name":"${jsonEscape(s.name)}"${space},"layers":[${parts}]}`;
 }
 
 function layerJson(l: Layer): string {
@@ -915,6 +951,7 @@ function layerJson(l: Layer): string {
     `"blend":"${st.blend}","opacity":${st.opacity},"key":"${st.key}","fit":"${st.fit}",` +
     `"visible":${st.visible},"flipx":${st.flipx},"flipy":${st.flipy},"rot180":${st.rot180}`;
   if (l.clip) o += `,"clip":true`;
+  if (l.abs) o += `,"abs":true`;
   if (l.keys?.length) {
     const f = (name: string, v: number | null | undefined): string => (v == null ? "" : `,"${name}":${v}`);
     const keys = l.keys.map(

@@ -519,3 +519,62 @@ test("an X line's unknown words are a newer console's: ignored", () => {
   s.layers[0].clip = false;
   assert.equal(serializeScene(s), head, "false is the default and is not emitted");
 });
+
+// ---- the design size (`U`) and `X abs` — `scene::tests::the_design_size_round_trips_and_sits_after_s`,
+// `a_bad_u_line_names_itself`, `json_carries_space_and_abs_only_when_set` (Gitea #997) ----
+
+const SPACE_WIRE =
+  "S 0000000a fire clock\n" +
+  "U 32 32\n" +
+  "L text 0 16 0 0 normal 100 none fill 1\n" +
+  "T clock HH:MM\n" +
+  "L sprite 0 0 0 0 normal 100 none tile 1\n" +
+  "I 0123abcd\n" +
+  "X abs\n" +
+  "L pat 0 0 0 0 lighten 100 none fill 1\n" +
+  "X clip abs\n";
+
+test("U and X abs round trip through the wire and the device's JSON", () => {
+  const s = ok(parseScene(SPACE_WIRE));
+  assert.deepEqual(s.space, [32, 32]);
+  assert.deepEqual(
+    s.layers.map((l) => [l.clip === true, l.abs === true]),
+    [
+      [false, false],
+      [false, true],
+      [true, true],
+    ],
+  );
+  assert.equal(serializeScene(s), SPACE_WIRE);
+  const json = sceneJson(s);
+  assert.ok(json.startsWith('{"id":"0000000a","name":"fire clock","space":[32,32],"layers":['), json);
+  assert.ok(json.includes('"rot180":false,"clip":true,"abs":true'), json);
+  assert.equal(serializeScene(sceneFromJson(JSON.parse(json))), SPACE_WIRE);
+  // canonical X: one line, clip before abs, unknown words dropped
+  const c = ok(parseScene("S 0000000a c\nL color 0 0 0 0 normal 100 none fill 1\nX glow abs\nX clip\n"));
+  assert.ok(serializeScene(c).endsWith("L color 0 0 0 0 normal 100 none fill 1\nX clip abs\n"));
+  // absent stays absent, in both directions
+  const plain = ok(parseScene("S 0000000a n\nL color 0 0 0 0 normal 100 none fill 1\n"));
+  assert.equal(plain.space, undefined);
+  assert.ok(!sceneJson(plain).includes("space") && !sceneJson(plain).includes("abs"));
+  assert.equal(sceneFromJson({ id: "0000000a", name: "n", space: [0, 32], layers: [] }).space, undefined);
+  assert.deepEqual(ok(parseScene("S - a\nU 1 4096\n")).space, [1, 4096]);
+  assert.deepEqual(ok(parseScene("S - a\nU 32 16 rel\n")).space, [32, 16]);
+});
+
+test("a bad U line is the device's error, word for word", () => {
+  const bad = (u) => parseScene(`S - a\n${u}\nL color 0 0 0 0 normal 100 none fill 1\n`);
+  assert.deepEqual(bad("U 0 32"), { ok: false, error: 'scene: line 2: bad U field "0"' });
+  assert.deepEqual(bad("U 32 4097"), { ok: false, error: 'scene: line 2: bad U field "4097"' });
+  assert.deepEqual(bad("U 32"), { ok: false, error: 'scene: line 2: bad U field ""' });
+  assert.deepEqual(bad("U 32 x"), { ok: false, error: 'scene: line 2: bad U field "x"' });
+  assert.deepEqual(bad("U -1 32"), { ok: false, error: 'scene: line 2: bad U field "-1"' });
+  assert.deepEqual(parseScene("S - a\nL color 0 0 0 0 normal 100 none fill 1\nU 32 32\n"), {
+    ok: false,
+    error: "scene: line 3: a U line after the first L line",
+  });
+  assert.deepEqual(parseScene("U 32 32\nS - a\n"), {
+    ok: false,
+    error: "scene: line 1: a binding line before the S line",
+  });
+});

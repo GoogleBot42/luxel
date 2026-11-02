@@ -148,6 +148,10 @@ interface Exports {
   lx_comp_text(ch: number, layer: number, ptr: number, len: number): void;
   lx_comp_frame(ch: number, deltaRaw: number): number;
   lx_comp_layer_count(ch: number): number;
+  /** Five i32s `[x, y, w, h, zoom]`: where a layer draws now, after the
+   *  scene's `U` design size and its keyframe track; 0 for a bad layer.
+   *  Absent from a wasm built before Gitea #997. */
+  lx_comp_layer_rect?(ch: number, layer: number): number;
   lx_debug_enable(h: number, on: number): void;
   lx_debug_set_breakpoints(h: number, ptr: number, len: number): void;
   lx_debug_pause(h: number): void;
@@ -1012,6 +1016,21 @@ export class Compositor {
 
   layerCount(): number {
     return this.e.lx_comp_layer_count(this.ch);
+  }
+
+  /** Where layer `layer` draws right now, in grid cells — after the scene's
+   *  `U` design size is mapped onto this compositor's grid and after its
+   *  keyframe track (docs/spec/scenes.md §5). A zero `w`/`h` box comes back
+   *  as the whole layout on that axis; a natural-size sprite as its record's
+   *  size × `zoom` when `setSprite` gave it one (0×0 otherwise). `zoom` is
+   *  the layer's glyph / pixel-art magnification (1 without `U`, and on an
+   *  `X abs` layer). `null` for a bad layer, or a wasm built before #997. */
+  layerRect(layer: number): { x: number; y: number; w: number; h: number; zoom: number } | null {
+    if (typeof this.e.lx_comp_layer_rect !== "function") return null;
+    const ptr = this.e.lx_comp_layer_rect(this.ch, layer);
+    if (ptr === 0) return null;
+    const [x = 0, y = 0, w = 0, h = 0, zoom = 1] = new Int32Array(this.e.memory.buffer.slice(ptr, ptr + 20));
+    return { x, y, w, h, zoom };
   }
 
   /** Step the bound pattern engines and composite the stack; returns a copy

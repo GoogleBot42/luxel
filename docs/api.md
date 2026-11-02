@@ -1117,6 +1117,13 @@ black); an irregular 2-D or any 3-D map has no canvas, and the scene is
 accepted, activated and draws black. Firmware and mirror apply the same
 rule.
 
+A scene whose block carries a `U <w> <h>` line (Gitea #997) is drawn at its
+DESIGN size mapped onto that canvas — a whole-number zoom on a panel, centred,
+proportional along a strip (docs/spec/scenes.md §2 "Design size"); its JSON
+carries `"space":[w,h]`, and an `X abs` layer `"abs":true`. The store keeps
+the block as posted. Firmware older than #997 ignores the line and draws the
+scene's numbers 1:1 — it never rejects the stored blob over it.
+
 A scene shown this way **survives a reboot** (an OTA's included) the way a
 directly-activated pattern does (Gitea #790): while no playlist is playing,
 the firmware's resume record carries `S <sceneId>` in place of
