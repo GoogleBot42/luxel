@@ -1,0 +1,23 @@
+# Luxel library sprite — original art, Apache-2.0. Grammar: library/README.md.
+# The strip cut of `bulb-string`: four C9 bulbs — red, green, blue, gold — one
+# pixel each with a dark gap between, 8x1 so it tiles along a strip of any
+# length (library/README.md "Strips"). Two frames trade which pair glows: red
+# and blue lit while green and gold dim, then the other way round. The gaps
+# are transparent, so whatever is beneath shows as the wire.
+name: Bulb String 8x1
+fps: 1
+palette:
+  R ff2a2a
+  G 2aff5a
+  B 2a6bff
+  Y ffcc2a
+  r 5a0e0e
+  g 0e5a1e
+  b 0e245a
+  y 5a480e
+
+frame
+R.g.B.y.
+
+frame
+r.G.b.Y.

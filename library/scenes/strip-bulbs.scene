@@ -1,0 +1,16 @@
+# A Luxel library scene — Apache-2.0. Grammar: library/README.md "Strips".
+# layout: strip
+# No pattern at all: a string of C9 bulbs along the whole strip. The
+# `bulb-string-8x1` sprite is four bulbs in 8 px whose two frames trade which
+# pair glows; on a `tile` layer with a zero box it repeats along a strip of
+# ANY length with nothing typed in — 60 px is 7½ tiles, 300 px is 37½, and
+# the last tile simply clips. Beneath it a near-black wash is the wire the
+# sprite's transparent gaps let through. On a panel the same two lines
+# wallpaper the whole matrix in rows of bulbs.
+S - Bulb Strip
+L color 0 0 0 0 normal 100 none fill 1
+N Wire
+K 06040a
+L sprite 0 0 0 0 normal 100 none tile 1
+N Bulbs
+I @spr/bulb-string-8x1
