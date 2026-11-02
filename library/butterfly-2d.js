@@ -6,6 +6,8 @@
 // wing (petal-lobe polar boundary + markings) is baked once per butterfly into
 // a texture in wing space; each frame looks it up mirrored and flap-scaled for
 // the cells in the butterfly's box, then draws body and antennae as strokes.
+// A panel that shows one at a time relays two: the next one rises in from below
+// as the last lifts off, so the panel is never left empty.
 
 var NB = 4, TEXMAX = 6144, GOLDEN = 0.61803399
 var UMAX = 0.68, VMAX = 0.47, VSPAN = 0.9    // wing space baked into the texture
@@ -33,7 +35,7 @@ var count = 2
 export function sliderCount(v) { count = clamp(floor(v), 1, 4) }
 
 var tex = array(TEXMAX)
-var TW = 1, TH = 1, TU = 1, TV = 1, eff = 0, gw0 = -1
+var TW = 1, TH = 1, TU = 1, TV = 1, eff = 0, gw0 = -1, ns = 0
 var life = array(NB), flapPh = array(NB), open = array(NB)
 var hx = array(NB), hy = array(NB), cx = array(NB), cy = array(NB), drift = array(NB)
 var tc = array(NB), ts = array(NB), hue = array(NB), sz = 1
@@ -98,11 +100,14 @@ function layout() {
   gw0 = gridWidth()
   eff = gw0 >= 48 ? count : 1
   sz = eff > 1 ? 0.82 - eff * 0.08 : 1
+  ns = max(eff, 2)                  // slots: a lone butterfly gets a relay partner
   var gw = max(gw0, 16), gh = max(gridHeight(), 16)
   TW = ceil(UMAX * gw * sz); TH = ceil(VSPAN * gh * sz)
-  while (TW * TH * eff > TEXMAX) { TW = floor(TW * 0.9); TH = floor(TH * 0.9) }
+  while (TW * TH * ns > TEXMAX) { TW = floor(TW * 0.9); TH = floor(TH * 0.9) }
   TU = TW / UMAX; TV = TH / VSPAN
-  for (var k = 0; k < eff; k++) { life[k] = k / eff; reborn(k) }
+  // open with the first one already in view (k / eff + a little)
+  for (var k = 0; k < ns; k++) { life[k] = k / eff + 0.06; reborn(k) }
+  if (eff == 1) life[1] = -1          // parked until the first one takes off
 }
 
 export function beforeRender(delta) {
@@ -112,9 +117,14 @@ export function beforeRender(delta) {
     dhC[i] = clsDh[i] * pat; sC[i] = mix(1, clsS[i], pat); vC[i] = mix(0.9, clsV[i], pat)
   }
   vC[0] = 0
-  for (var k = 0; k < eff; k++) {
+  for (var k = 0; k < ns; k++) {
+    if (life[k] < 0) continue
     var p = life[k] + dt / cycleSec
-    if (p >= 1) { p -= 1; reborn(k) }
+    if (eff == 1) {
+      // relay: the partner is born as this one starts its climb out
+      if (p >= 0.9 && life[1 - k] < 0) { life[1 - k] = 0; reborn(1 - k) }
+      if (p >= 1) { life[k] = -1; continue }
+    } else if (p >= 1) { p -= 1; reborn(k) }
     life[k] = p
     // lazy at rest, frantic just before takeoff; snaps shut, dwells open
     flapPh[k] = frac(flapPh[k] + flapPeak * (0.25 + 0.75 * p * p) * dt)
@@ -159,16 +169,18 @@ export function renderBulk() {
     // no grid: every pixel against every butterfly
     for (var i = 0; i < pixelCount; i++) {
       var x = pixelCoord(i, 0), y = pixelCoord(i, 1)
-      for (k = 0; k < eff; k++) {
+      for (k = 0; k < ns; k++) {
+        if (life[k] < 0) continue
         var dx = x - cx[k], dy = y - cy[k]
         if (wingAt(k, (dx * tc[k] + dy * ts[k]) / sz, (dx * ts[k] - dy * tc[k]) / sz)) { setPixel(i); break }
       }
     }
-    for (k = 0; k < eff; k++) strokes(k)
+    for (k = 0; k < ns; k++) if (life[k] >= 0) strokes(k)
     return
   }
   var is = 1 / sz, sx = 1 / (gw - 1), sy = 1 / (gh - 1)
-  for (k = eff - 1; k >= 0; k--) {
+  for (k = ns - 1; k >= 0; k--) {
+    if (life[k] < 0) continue
     var ac = abs(tc[k]), as = abs(ts[k]), a = UMAX * open[k]
     var ex = sz * (a * ac + 0.45 * as), ey = sz * (a * as + 0.45 * ac)
     var c0 = max(0, ceil((cx[k] - ex) / sx)), c1 = min(gw - 1, floor((cx[k] + ex) / sx))

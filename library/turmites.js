@@ -4,8 +4,9 @@
 // colour, turns left or right as the rule string says, bumps the colour and
 // steps on. Some rules grow symmetric blooms, some chaotic clouds, some
 // suddenly lay an endless diagonal highway. Runs end when the ant walks off
-// the panel (or times out), hold, dissolve, and the next rule starts with a
-// fresh colour arc. Only the cell that changed is drawn — the frame persists.
+// the panel (or times out) and hold; then the next rule starts at once with a
+// fresh colour arc while the old picture crumbles away around it, cell by
+// random cell. Only the cells that change are drawn — the frame persists.
 
 var CAP = 64
 var st = array(CAP * CAP)       // colour index per cell
@@ -29,12 +30,14 @@ var K = 2
 var ax = 0
 var ay = 0
 var dir = 0                      // 0 up, 1 right, 2 down, 3 left
-var phase = 0                    // 0 walking, 1 holding, 2 dissolving
+var phase = 0                    // 0 walking, 1 holding
 var phaseT = 0
 var runT = 0
 var cur = floor(random(7))
 var budget = 0
-var fadeK = 0.88
+var dtS = 0.05
+var crumbleT = 0                 // seconds left of the old picture crumbling away
+var CRUMBLE = 1.2
 
 var ruleSel = 0
 //# min=0 max=7 step=1 default=0
@@ -51,7 +54,7 @@ var holdSec = 3
 //# min=0 max=20 step=0.5 default=3
 export function sliderHoldSeconds(v) { holdSec = clamp(v, 0, 20) }
 
-function newRun() {
+function newRun(keep) {
   gw = gridWidth()
   gwSeen = gw
   cs = gw > 0 ? ceil(max(gw, gridHeight()) / CAP) : 1
@@ -74,7 +77,24 @@ function newRun() {
   dir = 0
   phase = 0
   runT = 0
-  clear()
+  crumbleT = keep ? CRUMBLE : 0
+  if (!keep) clear()
+}
+
+// knock out random cells the new run has not touched; the last frame sweeps
+// whatever is left of the old picture
+function crumble() {
+  crumbleT -= dtS
+  rgb(0, 0, 0)
+  var x, y
+  if (crumbleT > 0) {
+    for (var k = ceil(BW * BH * dtS * 3 / CRUMBLE); k > 0; k--) {
+      x = floor(random(BW)); y = floor(random(BH))
+      if (st[y * BW + x] == 0) paintCell(x, y)
+    }
+  } else {
+    for (y = 0; y < BH; y++) for (x = 0; x < BW; x++) if (st[y * BW + x] == 0) paintCell(x, y)
+  }
 }
 
 function paintCell(x, y) {
@@ -108,14 +128,15 @@ function walk(n) {
 
 export function beforeRender(delta) {
   budget = min(budget + stepsPerSec * (delta / 1000), 2000)   // no 16.16 overflow
-  phaseT += delta / 1000
-  runT += delta / 1000
-  fadeK = pow(0.88, delta / 16)
+  dtS = delta / 1000
+  phaseT += dtS
+  runT += dtS
 }
 
 export function renderBulk() {
-  if (gridWidth() != gwSeen) newRun()
+  if (gridWidth() != gwSeen) newRun(0)
   if (phase == 0) {
+    if (crumbleT > 0) crumble()
     var n = floor(budget)
     budget -= n
     walk(n)
@@ -124,10 +145,6 @@ export function renderBulk() {
     if (phase == 0) { rgb(1, 1, 1); paintCell(ax, ay) }
   } else {
     budget = 0
-    if (phase == 1 && phaseT > holdSec) { phase = 2; phaseT = 0 }
-    if (phase == 2) {
-      fade(fadeK)
-      if (phaseT > 0.8) newRun()
-    }
+    if (phaseT > holdSec) newRun(1)
   }
 }
