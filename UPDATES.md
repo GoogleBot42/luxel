@@ -21,6 +21,36 @@ design area, and every non-scrolling `lit` caption fully drawn at 1× on the
 design-size grid (measured through the Rust compositor, so no glyph metrics
 are mirrored in JS) — both validated on a throwaway bad scene.
 
+## 2026-11-02 — Scenes on 1-D strips: the console half (Gitea #985)
+
+D10 is now "a regular 1D or 2D Layout". A strip console (no map, or any 1-D
+map) shows the Scenes and Sprites tabs and the `Add to scene ▸` rows; a 3D
+or irregular-map console still does not, exactly as the engine composites.
+The rule lives in one place, `sceneCanvas()` in `web/src/lib/geometry.ts`,
+and is unit-tested against the engine's edges: 1 px and 65,535 px strips,
+1-D maps whatever their coordinates, and no canvas for scatter or lattice.
+
+The scene editor on a strip previews an n×1 bar through the same compositor
+path as the matrix preview. The box editor shows `x`/`w` only, and the
+marquee slides and resizes along the row (`h` 0 stays 0). A text layer's row
+says `draws nothing on a strip` instead of the control vanishing. Scene
+tiles and playlist/picker thumbnails draw the strip bars a strip pattern
+gets. The three natural-size assumptions PR #1024 flagged are fixed:
+`normaliseSpriteBoxes` leaves a `tile` sprite's zero box alone (it means the
+whole layout now) and on one row normalises only `w` 0; the marquee and the
+`blendMeta` note follow the same rule.
+
+In the playground an explicit `Preview as` strip previews strip scenes.
+Auto's placeholder strip keeps the S6b empty state, so a fresh playground
+still opens there. `device-e2e` flips its D10 check ("a strip console has the
+Scenes tab"), checks the strip shell's five tabs, and adds a negative check
+on the 3D lattice. A new 150 px strip mirror (`E2E_PORT + 55`) runs the zones
+example through the UI: two pattern layers on `0 0 75 0` and `75 0 75 0`,
+red | green read off the n×1 stage, the stored boxes, the segment box editor,
+the text-row note and `Add to scene ▸` in the editor's ⋯. `tabwalk` now
+fails on a missing Scenes/Sprites tab on either shape. The S2e mock's strip
+menu and the `S2estrip` mockdiff frame now carry the `Add to scene` row.
+
 ## 2026-11-02 — Scenes that fit any panel: the design size `U`, engine half (Gitea #997)
 
 Jeremy approved G3 on 2026-11-02. A scene may now declare the size it was
@@ -97,6 +127,7 @@ the source header) and in the playlist picker (`lib/tags.ts` `tagShowsOn`); a
 120 px strip console now offers 76. The engine-level question is Gitea #1027.
 Asset archive +3,477 B (63,412 B headroom). Mock frame for the row: #1028;
 master harness reds found while baselining: #1035.
+
 ## 2026-11-02 — The first strip scenes (Gitea #1018)
 
 Three scenes written for a strip now that scenes composite on one (#985,

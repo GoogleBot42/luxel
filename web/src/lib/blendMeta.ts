@@ -149,8 +149,12 @@ void _keysCovered;
  * was "a synonym of `fill` on every code path there is", which was true of
  * the firmware that existed then and is not true any more: with a box set,
  * `fill` STRETCHES the frame to it, `contain` scales uniformly and centres,
- * `tile` repeats at 1:1. An UNSET box (w or h = 0) means the sprite's natural
- * size at (x, y), which is why the chooser only appears once the box has one.
+ * `tile` repeats at 1:1. An UNSET axis (w or h = 0) means the sprite's
+ * natural size at (x, y) under `fill`/`contain` — and only `w` 0 does on a
+ * strip, where `h` 0 is the one row — but under `tile` it is the WHOLE LAYOUT
+ * on that axis, as for a pattern layer (Gitea #985; docs/spec/scenes.md §4
+ * "Placement"). The scene editor normalises only the natural-size zeros to
+ * explicit numbers (`normaliseSpriteBoxes`), so a tiled zero survives.
  */
 export const FIT_OPTIONS: readonly RichOption<Fit>[] = [
   {

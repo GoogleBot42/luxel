@@ -402,11 +402,18 @@ configurable. So:
   optional `proj` field beside its control values.
 
 ### 5.4c When the Scenes tab shows (D10)
-- Console: strictly by Layout kind. A matrix console always has the tab (empty state:
-  "+ New scene"); a strip, 3D or custom console never does.
+- Console: strictly by Layout — **a regular 1D or 2D Layout** (amended 2026-11-02, Gitea
+  #985, the engine's own rule): a strip (no map, or a 1-D map) composites onto an n×1 row in
+  index order, a matrix onto its grid, and both always have the tab (empty state:
+  "+ New scene"). A 3D or irregular-map console never does. The Sprites tab and
+  `Add to scene ▸` follow the same gate.
 - Playground: no hardware constraint, so the tab is always present; when the "Preview as"
-  chip is not a matrix the page is a one-line empty state with a primary
-  `Preview as a 64×64 matrix` button. Hiding it there would make the feature undiscoverable.
+  chip names no fixture with a canvas — Auto's placeholder strip, a lattice, a map — the
+  page is a one-line empty state with a primary `Preview as a 64×64 matrix` button. Hiding
+  it there would make the feature undiscoverable. An explicit `Preview as` strip previews
+  strip scenes.
+- On a strip the scene editor's preview is an n×1 bar, the box editor shows `x`/`w` only
+  (a box is a segment), and a text layer's row says it draws nothing on a strip.
 
 ### 5.5 Scene editor (S6 — batch 2)
 ```
@@ -627,7 +634,7 @@ MQTT and network input are unconditional in every build; the variable axes are t
 
 | Where | Control | Visible only when | Was wrong in a mockup? |
 |---|---|---|---|
-| Shell | Scenes tab | regular 2D (console); D10 (playground) | — |
+| Shell | Scenes tab | regular 1D or 2D (console, #985); D10 (playground) | — |
 | Shell | device chip, "on device" fps | console | — |
 | Patterns | `On device` segment · `Play` tile action | console (playground: `Mine` · `Open`) | — |
 | Patterns | projection caption on a tile | pattern dims ≠ layout dims | — |
@@ -847,7 +854,8 @@ image layers, animated images. Nothing in Phases A–C depends on it; the design
 - **D8** **Keep the amber-on-dark** visual language.
 - **D9** Mobile = **responsive stacking only**; no separate flows.
 - **D10** Scenes tab **always visible in the playground** with a "preview as a matrix" empty
-  state; console: regular 2D only.
+  state; console: regular 2D only — **amended 2026-11-02 (Gitea #985): regular 1D or 2D**,
+  a strip being an n×1 canvas in index order.
 - **D11** **One Layout spanning all outputs**; each output drives a consecutive run.
 - **D12** **Keep device blur/glow, fix #446** (free the scratch when every stage is off), gate
   per board via `caps.blur_glow`.

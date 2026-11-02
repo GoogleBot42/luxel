@@ -294,6 +294,20 @@
   white-space: nowrap;
 }
 
+/* A text layer's `draws nothing on a strip` note (#985) is longer than any
+   metadata a row carries, so it yields to the layer's NAME: it shrinks four
+   times as fast and ellipsizes (the full sentence is in the row's title). */
+.scenes .lrow .pick:has(.snote) .nm2 {
+  flex: 1 1 auto;
+}
+
+.scenes .lrow .meta2.snote {
+  flex: 0 4 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ---------- Add layer ▾ (mock `.addwrap` / `.menu.full`) ---------- */
 
 .scenes .addwrap {
@@ -387,6 +401,15 @@
   background: #000;
   /* the marquee is dragged on the canvas; keep touch drags from scrolling */
   touch-action: none;
+}
+
+/* A strip's canvas is ONE row of n cells (Gitea #985): the stage draws it as
+   a bar of the column's width, the way a strip pattern's preview and tiles
+   are drawn, rather than stretching one row into a square. The marquee and
+   its handles are positioned in percentages, so they follow. */
+.scenes .stage canvas.bar {
+  aspect-ratio: auto;
+  height: 40px;
 }
 
 /* the selected layer's box, dashed in the accent (S7) */
@@ -880,6 +903,18 @@
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
+/* On a strip a scene is an n×1 row (Gitea #985), so its tile is the Patterns
+   page's strip tile: a 6:1 bar, three up, not a square stretched from one
+   row. Same specificity as the playground rule above and later, so it wins
+   on both shells. */
+.scenes .tiles.bars {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.scenes .tiles.bars .tile canvas {
+  aspect-ratio: 6 / 1;
+}
+
 @media (max-width: 1000px) {
   .scenes .tiles,
   .scenes.playground .tiles {
@@ -891,7 +926,8 @@
 
 @media (max-width: 600px) {
   .scenes .tiles,
-  .scenes.playground .tiles {
+  .scenes.playground .tiles,
+  .scenes .tiles.bars {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     padding: 12px;
   }

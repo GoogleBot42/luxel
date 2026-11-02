@@ -22,8 +22,9 @@
   //     explicit w/h, the fields always show the real numbers, the marquee and
   //     the fields write the same two, `Fit` is always offered, and `natural`
   //     is a BUTTON that puts the box back to the sprite's own size. The wire
-  //     still allows 0 (the firmware reads it as natural) — the editor
-  //     normalises it on load, `pages/SceneEditor.svelte`.
+  //     still allows 0 (the firmware reads it as natural under fill/contain)
+  //     — the editor normalises it on load, `pages/SceneEditor.svelte`. Under
+  //     `tile` a 0 is the whole layout on that axis (#985) and is kept.
   //
   // What ARRIVED: a real sprite PICKER over the sprite store, which PREVIEWS
   // each sprite animated at its own fps ("it doesn't actually preview the

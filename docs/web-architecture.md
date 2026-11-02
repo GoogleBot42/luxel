@@ -1137,16 +1137,34 @@ will look like, and push it.
 
 ### Where the tab comes from (D10, proposal §5.4c)
 
-`Scenes` is the one tab NOT gated on "is there a device" — it needs a regular
-2D grid to draw on and nothing else:
+`Scenes` is the one tab NOT gated on "is there a device" — it needs a scene
+CANVAS to draw on and nothing else. Since Gitea #985 that is "a regular 1D or
+2D Layout", and the rule is the engine's, copied once into
+`lib/geometry.ts`'s `sceneCanvas(layout)` (`outpipe::strip_grid` + the
+firmware's `scene_grid`, docs/spec/scenes.md §2): a strip — no map, or any
+1-D map — is an `n`×1 row in index order (n from 1 to 65,535), a regular 2-D
+grid is itself, and an irregular 2-D or any 3-D Layout has none. Never write
+a looser copy of it.
 
-* **console** — strictly the DEVICE's Layout kind
-  (`uiLayoutKind($deviceLayoutWire.kind, $layout.dims) === "matrix"`). A strip,
-  3D or custom-map board never shows it; an empty matrix always does, and the
-  page says what a scene is instead of showing an empty grid (mockup S6c).
+* **console** — strictly the DEVICE's Layout
+  (`$deviceLayoutWire !== null && sceneCanvas($layout) !== null`). A 3D or
+  irregular-map board never shows the tab; an empty strip or matrix always
+  does, and the page says what a scene is instead of showing an empty grid
+  (mockup S6c). Sprites and `Add to scene ▸` use the same gate.
 * **playground** — always. Hiding it there would make the feature
   undiscoverable, so the page carries the S6b empty state whose one action —
-  `Preview as a 64×64 matrix` — sets the fixture.
+  `Preview as a 64×64 matrix` — sets the fixture. The page's own test is
+  `scenesFixture(layout)`: `sceneCanvas` minus Auto's placeholder strip
+  (`source: "default"`), so an explicit `Preview as` strip previews strip
+  scenes while a fresh playground still opens on S6b.
+
+On a strip (`sceneRigOf` gives the editor its `n`×1 rig) the stage canvas is a
+bar (`canvas.bar`), `BoxRow` drops `y`/`h` because a box is a segment, the
+marquee keeps a dragged segment on the row (and `h` 0 stays 0), scene tiles and
+row thumbnails draw the 6:1 / 72×16 strip bar, and a text layer's row says
+`draws nothing on a strip`. `normaliseSpriteBoxes` rewrites only the zeros
+that mean NATURAL size — never a `tile` sprite's (a zero is the whole layout
+there), and on one row only `w` 0.
 
 ### Three files, three jobs
 

@@ -1547,12 +1547,20 @@ try {
     );
 
     // Same Layout gate as Scenes, and the same empty state — a sprite is for a
-    // scene layer and a scene needs a matrix.
+    // scene layer and a scene needs a canvas. A strip has one since #985 (one
+    // row in index order); a 3D lattice does not.
     await previewAs(page, "strip", { px: 60 });
     await page.click('[data-role="tab-sprites"]');
     await sleep(700);
     check(
-      "sprites: no 2D fixture → the empty state that sets one",
+      "sprites: an explicit strip is a fixture — the page, not the empty state (#985)",
+      (await page.$('[data-role="sprites-empty-fixture"]')) === null &&
+        (await page.$('[data-role="new-sprite"]')) !== null,
+    );
+    await previewAs(page, "lattice", { n: 5 });
+    await sleep(500);
+    check(
+      "sprites: no fixture with a canvas → the empty state that sets one",
       (await page.$('[data-role="sprites-empty-fixture"]')) !== null,
     );
     await page.click('[data-role="sprites-preview-as-matrix"]');
@@ -2147,13 +2155,21 @@ try {
 
     // A named state: under Auto the Layout follows whatever pattern the
     // editor happens to hold, so SAY what the fixture is rather than inherit
-    // the previous section's — the empty state below is about not having a
-    // 2D one.
+    // the previous section's. An explicit strip IS a fixture since #985 (its
+    // canvas is one row); the empty state below is about a Layout with no
+    // canvas at all, a 3D lattice.
     await previewAs(page, "strip", { px: 60 });
     await page.click('[data-role="tab-scenes"]');
     await sleep(700);
     check(
-      "scenes: no 2D fixture → the empty state that sets one (S6b)",
+      "scenes: an explicit strip is a fixture — the page, not S6b (#985)",
+      (await page.$('[data-role="scenes-empty-fixture"]')) === null &&
+        (await page.$('[data-role="scenes-sources"]')) !== null,
+    );
+    await previewAs(page, "lattice", { n: 5 });
+    await sleep(500);
+    check(
+      "scenes: no fixture with a canvas → the empty state that sets one (S6b)",
       (await page.$('[data-role="scenes-empty-fixture"]')) !== null,
     );
 
