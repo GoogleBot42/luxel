@@ -1,5 +1,17 @@
 # Update log
 
+## 2026-11-02 — Library review page + scene/sprite contact-sheet tool
+
+Every shipped pattern (32x32, 64x64, 144 px strip waterfall), scene (64x64 and
+128x128) and sprite was rendered on the host and published as one browsable
+review page with a keep/fix/drop + note field per item
+(claude-luxel-library-review.sites.neet.dev; notes export as JSON). New
+`tools/verify/scene-sheet.mjs` renders scenes/sprites the way the playground
+does; `tools/verify/sheet.mjs --strip N` adds the strip waterfall for files
+that export `render` beside `renderBulk`. Findings: no compile or runtime
+errors anywhere; 5 patterns with sub-second black gaps; most scenes authored in
+fixed 64x64 pixels fill only a quadrant of the 128x128 chain (feeds #997/#1011);
+four renderBulk-only strip patterns read as raster bands on a panel tile.
 ## 2026-11-02 — 128x128 `setRenderSize` pass: nine ambient patterns faster on the chain
 
 Jeremy approved rendering the slowest ambient patterns at <= 4,096 cells

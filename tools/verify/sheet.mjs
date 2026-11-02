@@ -4,7 +4,11 @@
 // plus <out>/<stem>.json with the frame-time and runtime-error summary.
 //
 //   nix develop -c node tools/verify/sheet.mjs <outdir> [--grid 32x32] [--seconds 8]
-//        [--frames 8] [--scale 4] [--fps 20] library/a.js library/b.js …
+//        [--frames 8] [--scale 4] [--fps 20] [--strip N] library/a.js library/b.js …
+//
+// `--strip N` waterfalls EVERY file that exports `render(index)` — the
+// strip + panel files beside `renderBulk` too, not only render-only ones — on
+// a mapless N-pixel strip (144 = the Athom) as <out>/<stem>.strip.png.
 //
 // Patterns that bind sensors get a synthetic music frame so sound patterns
 // render lit. Wall clock is pinned. Exit code 0 even when a pattern errors:
@@ -25,12 +29,13 @@ for (let i = 0; i < args.length; i++) {
 }
 const out = files.shift();
 if (!out || files.length === 0) {
-  console.error("usage: sheet.mjs <outdir> [--grid WxH] [--seconds S] [--frames N] [--scale K] library/x.js …");
+  console.error("usage: sheet.mjs <outdir> [--grid WxH] [--seconds S] [--frames N] [--scale K] [--strip N] library/x.js …");
   process.exit(2);
 }
 fs.mkdirSync(out, { recursive: true });
 const [GW, GH] = opts.grid.split("x").map(Number);
 const seconds = Number(opts.seconds), nFrames = Number(opts.frames), scale = Number(opts.scale), fps = Number(opts.fps);
+const SN = Number(opts.strip ?? 60), SX = Math.max(1, Math.round(360 / SN));
 
 const lx = await load();
 lx.setWallClock?.(1756000000);
@@ -68,7 +73,9 @@ function run(source, pixelCount, mapGrid) {
 for (const file of files) {
   const stem = path.basename(file, ".js");
   const src = fs.readFileSync(file, "utf8");
-  const isStrip = !/render2D|render3D|renderBulk/.test(src) && /\brender\s*\(/.test(src);
+  const isStrip = opts.strip
+    ? /export\s+function\s+render\s*\(/.test(src)
+    : !/render2D|render3D|renderBulk/.test(src) && /\brender\s*\(/.test(src);
   const summary = { file, grid: opts.grid };
   // grid sheet
   const g = run(src, GW * GH, [GW, GH]);
@@ -88,25 +95,25 @@ for (const file of files) {
     });
     fs.writeFileSync(path.join(out, `${stem}.png`), encodePNG(W, H, sheet));
   }
-  // strip waterfall (60 px, one row per frame over `seconds`)
+  // strip waterfall (SN px, one row per frame over `seconds`)
   if (isStrip && !g.compileError) {
-    const s = run(src, 60, null);
+    const s = run(src, SN, null);
     if (!s.compileError) {
       summary.strip_msPerFrame = +s.msPerFrame.toFixed(3);
       summary.strip_litFrames = `${s.litFrames}/${s.totalFrames}`;
       // re-run to capture every frame as a row
-      const eng = lx.compile(src, 60, 1);
+      const eng = lx.compile(src, SN, 1);
       const total = Math.round(seconds * fps);
-      const rows = Buffer.alloc(60 * total * 3);
+      const rows = Buffer.alloc(SN * total * 3);
       for (let f = 0; f < total; f++) {
         if (eng.wantsSensors()) eng.setSensors(music(f / fps));
         const px = eng.frame(1000 / fps);
         eng.takeError();
-        Buffer.from(px).copy(rows, f * 60 * 3);
+        Buffer.from(px).copy(rows, f * SN * 3);
       }
       eng.free();
-      const up = Buffer.from(upscale(60, total, rows, 6, 2).rgb);
-      fs.writeFileSync(path.join(out, `${stem}.strip.png`), encodePNG(360, total * 2, up));
+      const up = Buffer.from(upscale(SN, total, rows, SX, 2).rgb);
+      fs.writeFileSync(path.join(out, `${stem}.strip.png`), encodePNG(SN * SX, total * 2, up));
     }
   }
   fs.writeFileSync(path.join(out, `${stem}.json`), JSON.stringify(summary));
