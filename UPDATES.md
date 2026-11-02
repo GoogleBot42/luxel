@@ -56,6 +56,7 @@ the source header) and in the playlist picker (`lib/tags.ts` `tagShowsOn`); a
 120 px strip console now offers 76. The engine-level question is Gitea #1027.
 Asset archive +3,477 B (63,412 B headroom). Mock frame for the row: #1028;
 master harness reds found while baselining: #1035.
+
 ## 2026-11-02 — The first strip scenes (Gitea #1018)
 
 Three scenes written for a strip now that scenes composite on one (#985,
