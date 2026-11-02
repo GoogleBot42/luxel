@@ -1,3 +1,4 @@
+> Superseded: this idea now lives in library/spectrum-field.js (2026-11).
 # sound - spectrokalidamandala
 kind: 2D
 sensors: yes (32-band audio spectrum from a sensor expansion board; graceful fallback to simulated sound when no board is present)
