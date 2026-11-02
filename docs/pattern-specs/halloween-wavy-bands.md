@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/wavy-bands.js (2026-11).
+
 # Halloween Wavy Bands
 kind: 1D+2D (2D is the primary renderer; 1D delegates to it along a horizontal slice)
 sensors: no

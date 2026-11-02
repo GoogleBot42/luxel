@@ -2,43 +2,68 @@
 
 The starting content the playground and every device ship with, in three peer
 directories: patterns (`*.js`), sprites (`sprites/*.sprite`) and scenes
-(`scenes/*.scene`). All of it is Apache-2.0.
+(`scenes/*.scene`). All of it is Apache-2.0: the Patternflow-inspired patterns were built from prose idea specs only (ideas, not expression — the same describer firewall as the corpus ports), so the implementation is ours; each header credits the CC BY-SA 4.0 preset the idea came from.
 
 ## Patterns
 
-Clean-room reimplementations of the Pixel Blaze community corpus. The
-scraped corpus has unknown licensing, so none of its code appears here.
-Instead, every pattern in this directory was produced by a two-party
-firewall:
+155 patterns as of the 2026-11 overhaul (down from 308), beside 35 sprites and
+18 scenes. Each one is one of three kinds, and its header says which:
 
-1. A **describer** read the original and wrote a prose-only functional
-   specification — behavior, algorithm, colors, controls, timing — with
-   no code, no identifier names, and no copied numeric constants.
-2. An **implementer** who never saw the original wrote fresh Luxel code
-   from that specification alone.
+- **Clean-room reimplementations** of ideas from the Pixel Blaze community
+  corpus. The scraped corpus has unknown licensing, so none of its code
+  appears here: a **describer** read the original and wrote a prose-only spec
+  (behavior, algorithm, colors, controls — no code, no identifier names, no
+  copied constants), and an **implementer** who never saw the original wrote
+  fresh Luxel code from that spec alone.
+- **Patternflow ideas**, through the same firewall: prose idea specs under
+  `docs/pattern-specs/patternflow/`, never the source.
+- **Curated originals** — hand-written showcases of the language and builtins.
+
+**Idea over fidelity.** The 2026-11 overhaul deduplicated the library (variants
+became modes, palettes and controls of one survivor), deleted test scaffolding
+and weak ports, and rewrote the rest to capture each original's *idea* and do
+it better with what Luxel has — OKLCH, simplex/curl noise, easings,
+`renderBulk`, canvases, scenes. A pattern identical to its original is not
+the goal.
 
 File conventions:
 
 - First line: `// name: <Display Name>` — the pattern browser reads this.
-- A provenance comment noting the clean-room origin.
-- Patterns using a 2D buffer simulate on a 16×16 virtual canvas sampled
-  by normalized coordinates in `render2D`, so any map works.
-- Sound/motion patterns bind sensors the PB way (`export var
-  frequencyData`, etc.); the engine stubs them with zeros until real
-  peripherals land, so they run dark rather than erroring.
+- Second line, the provenance, in one of these forms:
+  - `// Clean-room reimplementation from the prose spec(s) docs/pattern-specs/<a>.md[, <b>.md] — reimagined, not a replica.`
+  - `// Original work from the prose idea spec docs/pattern-specs/patternflow/<slug>.md (Patternflow preset, CC BY-SA 4.0 — prose-described idea only, no code).`
+  - `// Curated original (hand-written showcase of the Luxel language/builtins).`
 
-This is the single source for every pattern the playground shows — the
-curated hand-written showcase examples and the reimplemented community
-corpus together. `web/tools/gen-gallery.mjs` builds the playground's
-pattern browser (`gallery.json`) from this directory alone; there is no
-separate inlined example set. The firmware/CLI/test default seed
-(`rainbow.js`, `blink-fade.js`) is `include_str!`'d from here too.
+  Then a few lines on what it does and how it is built.
+- Controls follow `.claude/rules/library.md`: real-unit `//#` bounds, the
+  top-level constant equal to `default=`, never a pattern-level brightness
+  control.
+- **Strip and panel in one file:** export `render(index)` beside
+  `renderBulk` (that keeps a mapless strip from being handed a default
+  square grid) and branch on `has2DMap()` — never on `gridWidth()`, which
+  reads the pixel count on such a strip (docs/lang.md). The strip branch uses
+  index-space ops (`splatIndex`, `fillRangeAA`, `gradientRange`) instead of
+  `array(pixelCount)` buffers.
+- **Canvases** size from the grid — `min(gridWidth(), cap)` ×
+  `min(gridHeight(), cap)`, with a fallback when there is no grid — never a
+  fixed 16×16. Fill with `fillCanvas`/`paintCanvas` filter 1 (bilinear) only
+  when the canvas is coarser than the grid; at 1:1 use filter 0.
+- **Never black:** an idle viewer should not face a dark panel for more than
+  about a second at the defaults. Sound patterns fall back to a built-in demo
+  groove when no sensor data arrives.
 
-The prose specification each corpus reimplementation was built from is
-preserved at
-`docs/pattern-specs/<slug>.md` — the clean-room firewall's audit trail.
-The original scraped corpus is never read by the build; it survives only
-as an untracked, local compile-compatibility test battery.
+This is the single source for every pattern the playground shows.
+`web/tools/gen-gallery.mjs` builds the playground's pattern browser
+(`gallery.json`) from this directory alone, and `luxel serve`'s default
+pattern (`rainbow.js`) is `include_str!`'d from here. Test and bench fixtures
+live under `tools/patterns/` and `tools/bench-patterns/`, never here.
+
+The prose spec each reimplementation was built from is kept at
+`docs/pattern-specs/<slug>.md` — the firewall's audit trail. A spec whose idea
+was folded into another file is kept too, with a first line
+`> Superseded: this idea now lives in library/<survivor>.js (2026-11).` The
+scraped corpus is never read by the build; it survives only as an untracked,
+local compile-compatibility test battery.
 
 ## Sprites (`sprites/*.sprite`)
 

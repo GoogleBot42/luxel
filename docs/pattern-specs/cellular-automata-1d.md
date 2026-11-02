@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/cellular-automata.js (2026-11).
+
 # Cellular Automata 1D
 kind: 1D
 sensors: no

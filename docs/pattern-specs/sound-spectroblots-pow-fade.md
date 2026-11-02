@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/spectrum-field.js (2026-11).
+
 # sound - spectroblots - pow fade
 kind: 1D+2D+3D (native renderer is 3D; the 2D and 1D entry points delegate to it with the missing coordinates zeroed)
 sensors: yes

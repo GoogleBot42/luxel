@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/dna-helix-2d.js (2026-11).
+
 # sinus
 kind: 2D
 sensors: no

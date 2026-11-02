@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/2d-spiral-twirls.js (2026-11).
+
 # spiral twirls star 2D
 kind: 2D + 3D (isometric projection onto the 2D scene) + 1D (horizontal slice fallback)
 sensors: no

@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/fireworks.js (2026-11).
+
 # firework rocket sparks
 kind: 1D
 sensors: no

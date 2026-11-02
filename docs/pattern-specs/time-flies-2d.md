@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/boids-2d.js (2026-11).
+
 # Time Flies 2D
 kind: 2D
 sensors: no

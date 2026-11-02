@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/sunrise-alarm-clock.js (2026-11).
+
 # Sunrise
 kind: 1D
 sensors: no audio/motion sensors; reads one GPIO digital input pin as a mode

@@ -111,7 +111,8 @@ fn the_init_value_is_dropped_when_init_definitely_assigns() {
 
 #[test]
 fn a_global_that_really_holds_two_kinds_stays_dyn() {
-    // fire-blue.js's shape: `heat = 0` at top level, `heat = array(n)`
+    // The old fire-blue.js's shape (gone since the 2026-11 library
+    // overhaul): `heat = 0` at top level, `heat = array(n)`
     // only once beforeRender has run. The init value IS observable.
     let (p, k) = kinds_of(
         "var heat = 0\n\

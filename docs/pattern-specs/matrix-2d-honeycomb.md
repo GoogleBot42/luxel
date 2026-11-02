@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/plasma.js (2026-11).
+
 # matrix 2D honeycomb
 kind: 1D (self-mapped to a 2D matrix; should be ported to a true 2D renderer)
 sensors: no

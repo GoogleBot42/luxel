@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/analog-clock.js (2026-11).
+
 # pixelClock
 kind: 1D
 sensors: no (uses the device's real-time wall clock, not the sensor board)

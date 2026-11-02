@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/spirograph-2d.js (2026-11).
+
 # Lissajous curve tracer
 kind: 2D
 sensors: no

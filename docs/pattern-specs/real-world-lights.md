@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/lamp.js (2026-11).
+
 # Real World Lights
 kind: 1D
 sensors: no

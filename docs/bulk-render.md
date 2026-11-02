@@ -16,6 +16,13 @@ design in one place plus the measured evaluation of it.
 > language-level contract is docs/lang.md "Whole-frame rendering"; the host
 > contract is docs/spec/vm.md.
 
+> **The worked examples predate the 2026-11 library overhaul.** Most of the
+> patterns converted and measured here — `aurora-2d.js` with its Cell Size
+> dial and `normAxis()`, `novas`, `fireblobs`, `heatshivers`'s channel
+> buffers, `flow-field-2d`, `sound-spectromatrix-agc` — have since been
+> rewritten, folded into survivors or deleted. Each dated section describes
+> the file as it was measured; `git log -- library/<file>.js` recovers it.
+
 Branch `agent/luxel/bulk-render`, merge base `c7e0266`. All throughput and
 size numbers below were re-measured after the grid-coverage fix and the
 image-size pass (`59fbd7e`); the ratio tables are one sweep each, so they are
@@ -166,7 +173,8 @@ the obvious `c / (w - 1)`. The two agree only where `65535 / (w - 1)` divides
 evenly (w = 16 does, and there only the far edge differs: a map normalizes it
 to 65535/65536, never 1); they disagree on 11 of 64 columns at 64 wide and on
 8 of 17 at 17 wide, which is a visible reconstruction error, not a rounding
-LSB. `normAxis()` in `library/aurora-2d.js` is the reference form.
+LSB. The 2026-09 `library/aurora-2d.js` carried the reference form as
+`normAxis()` (historical; the 2026-11 rewrite no longer walks cells).
 
 **Fast path.** With a grid map installed and no transform active, the
 coordinate ops walk only the cells in the shape's bounding box instead of

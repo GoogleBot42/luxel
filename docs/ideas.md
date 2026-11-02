@@ -260,8 +260,10 @@ bytecode execution is being worked on now; the rest are queued:
   next frame, unwritten pixels carry over. Allocated on the first write
   only, charged to the array byte budget, half the RAM of the `array(
   pixelCount)` idiom (Fx, not Value) and off the PB element ledger. See
-  docs/lang.md "Per-pixel state"; `library/ember-diffusion.js` is the
-  neighbour-reading showcase.
+  docs/lang.md "Per-pixel state"; `library/ember-diffusion.js` was the
+  neighbour-reading showcase until the 2026-11 library overhaul folded it
+  into the bufferless `heatshivers.js` (Embers); no library pattern uses
+  the buffer now.
 - **Deterministic seedable `prng` matching a documented algorithm** [S] ★ —
   DONE. Both generators are now pinned by test and spelled out in
   docs/lang.md ("Determinism and seeding"): `random()` = splitmix64,

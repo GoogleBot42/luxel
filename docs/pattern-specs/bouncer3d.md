@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/bouncing-balls.js (2026-11).
+
 # Bouncer3D
 kind: 2D+3D (no 1D renderer; requires a mapped 2D or 3D display)
 sensors: no

@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/spectrum-field.js (2026-11).
+
 # sound - spectromatrix agc
 kind: 2D (implemented through the 1D renderer with a hardcoded matrix width and zigzag decode)
 sensors: yes

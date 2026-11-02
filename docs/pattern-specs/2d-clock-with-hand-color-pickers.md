@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/analog-clock.js (2026-11).
+
 # 2d Clock with Hand Color Pickers
 kind: 2D
 sensors: no (but requires the device's real-time wall clock to be set/synced)

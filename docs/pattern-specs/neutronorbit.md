@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/orbits.js (2026-11).
+
 # neutronorbit
 kind: 1D
 sensors: no

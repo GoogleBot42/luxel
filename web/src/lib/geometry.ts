@@ -750,9 +750,10 @@ export function pixelCount(l: Layout): number {
 
 /**
  * Whole-pixel array buffers a playground rig allows a pattern — the per-pixel
- * half of `playgroundArrayElements`. Six is the most any pattern in
- * `library/` asks for (`heatshivers`, `pew-pew-pew`, `audio-volume-meter`);
- * sixteen leaves room and is still a bound.
+ * half of `playgroundArrayElements`. Six was the most any `library/`
+ * pattern asked for before the 2026-11 overhaul moved those (`heatshivers`,
+ * `pew-pew-pew`, `audio-volume-meter`) off per-pixel buffers; sixteen
+ * leaves room and is still a bound.
  */
 export const PLAYGROUND_ARRAYS_PER_PIXEL = 16;
 

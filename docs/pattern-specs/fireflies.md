@@ -1,5 +1,3 @@
-> Superseded: this idea now lives in library/fireflies.js (Style 2, coast; 2026-11).
-
 # FireFlies
 kind: 1D
 sensors: no

@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/starburst.js (2026-11).
+
 # White Rainbows
 kind: 1D
 sensors: no

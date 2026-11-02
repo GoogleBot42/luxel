@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/bouncing-balls.js (2026-11).
+
 # Bouncing RGB Balls - 2D
 kind: 1D+2D (native 2D; 1D fallback treats the strip as one horizontal line through the middle of the plane)
 sensors: no

@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/tixy.js (2026-11).
+
 # Golden Tix
 kind: 1D
 sensors: no

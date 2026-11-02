@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/bouncing-balls.js (2026-11).
+
 # 2D Bouncing Additive Primaries
 kind: 2D
 sensors: no

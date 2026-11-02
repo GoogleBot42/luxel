@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/fireflies.js (2026-11).
+
 # XmasFlies
 kind: 1D
 sensors: no

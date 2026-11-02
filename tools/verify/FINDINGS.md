@@ -1,5 +1,11 @@
 # Clean-room port verification sweep — aggregate findings
 
+> **2026-11 note.** The library overhaul rewrote `library/` "idea over
+> fidelity": ports were merged, reimagined or deleted (308 → 155 patterns), so
+> every original-vs-port judgement below predates it and describes files that
+> are gone or no longer try to match their original. Kept as history;
+> `pairs.json`, `decisions.json` and `results/` were pruned to surviving files.
+
 Output-only verification of all 293 paired patterns (original `.epe` vs
 clean-room port), judged purely from rendered output by independent Opus
 judges following `JUDGE.md`. Per-pair detail lives in `results/<slug>.json`

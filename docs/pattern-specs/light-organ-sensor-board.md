@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/light-organ-2-0.js (2026-11).
+
 # Light Organ -- sensor board
 kind: 1D
 sensors: yes

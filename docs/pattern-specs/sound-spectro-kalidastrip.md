@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/spectrum-field.js (2026-11).
+
 # sound - spectro kalidastrip
 kind: 1D
 sensors: yes

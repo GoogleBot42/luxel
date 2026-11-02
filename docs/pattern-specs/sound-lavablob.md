@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/lava-lamp.js (2026-11).
+
 # SOUND - lavablob
 kind: 1D+2D+3D (a single 3D renderer; the 1D and 2D entry points just call it
 with the missing coordinates as zero — 1D uses the normalized pixel index as x)

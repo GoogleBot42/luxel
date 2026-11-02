@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/topo-map.js (2026-11).
+
 # Perlin/Simplex Noise 1D
 kind: 1D
 sensors: yes (sound — frequency spectrum from the sensor expansion board)

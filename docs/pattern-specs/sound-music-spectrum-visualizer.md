@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/sound-spectrum-analyser.js (2026-11).
+
 # Sound & Music Spectrum Visualizer
 kind: 1D
 sensors: yes — requires the sensor expansion board (audio spectrum input)

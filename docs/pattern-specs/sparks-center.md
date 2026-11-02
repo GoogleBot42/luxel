@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/sparks.js (2026-11).
+
 # sparks center
 kind: 1D
 sensors: no
