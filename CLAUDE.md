@@ -226,9 +226,12 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
   `tools/deploy.sh <ip> --assets-only`.
 - The web bundle must fit the assets partition (0xF0000 = 983,040 B on every board but
   the 16 MB Seengreat, and one bundle ships to all of them, so the small one binds):
-  969,465 B used, **13,575 B headroom** after #884 (2026-10-17; the installer
-  page is hosted-only now — `web/tools/device-files.mjs`; Gitea #691 has the
-  per-file breakdown and the remaining levers).
+  908,134 B used, **74,906 B headroom** after the 2026-11-01 library overhaul
+  (it was 7,610 B after the five engine PRs that day; the installer page is
+  hosted-only — `web/tools/device-files.mjs`; Gitea #691 has the per-file
+  breakdown). **`gallery.json` — the SOURCE of every `library/*.js` — and
+  `sprites.json`/`scenes.json` ship inside this archive**, so library growth
+  spends it exactly like code does: a 10 KB pattern is 10 KB of headroom.
   ENGINE changes spend it too: `luxel.wasm` carries luxel-core, so every
   core/compiler PR adds a few hundred bytes (#941/#947/#953 did; #943's
   inliner, PR #969, took 2.4 KB). The wasm builds

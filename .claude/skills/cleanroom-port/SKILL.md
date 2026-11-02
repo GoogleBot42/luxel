@@ -50,6 +50,30 @@ conversation.
    itself, run it through the playground (`verify-webui` skill) or `luxel check` on the
    single file.
 
+## The deliverable is the IDEA, made better (Jeremy, 2026-11-01)
+
+The firewall above is a LICENSING mechanism, not a fidelity goal. The 2026-07
+sweep chased pixel-for-pixel ports and the results were poor ("identical …
+is harmful"); the 2026-11-01 overhaul rewrote the library against the
+opposite brief. So, for any new port:
+
+- The describer writes the *idea*: what it looks like, why it is compelling,
+  the algorithm in words, what the knobs do, and 2–5 "make it better in
+  Luxel" suggestions (simplex/curl noise, OKLCH, easings, renderBulk shape
+  ops, canvases, the post chain, scenes). `docs/pattern-specs/patternflow/`
+  shows the shape; the Patternflow presets are CC BY-SA 4.0 art and get the
+  same prose-only treatment as the corpus.
+- The implementer is briefed to build the best version, strip AND panel
+  where the idea suits both, under `.claude/rules/library.md` ("Since the
+  2026-11-01 overhaul"), and judges it on its own contact sheet
+  (`tools/verify/sheet.mjs`) — never against the original's pixels.
+- One source idea may become several patterns, a scene, or a mode of an
+  existing survivor; a weak idea is dropped, not ported.
+
+The section below is still right about *measurement* (running an original
+through the harness is fine), but it is now the rare case — a control-range
+question — not the acceptance test.
+
 ## Measuring an original is not reading it
 
 The firewall is about SOURCE, not behaviour. Running the original through the
