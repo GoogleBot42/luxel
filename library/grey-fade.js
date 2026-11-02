@@ -1,4 +1,5 @@
 // name: Grey Fade
+// tags: both, ambient
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // Every grey from black to white and back: the fixture breathes in unison, or
 // the fade flows along it as travelling waves. On its own it is a white light

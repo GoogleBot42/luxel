@@ -20,6 +20,13 @@
   // drop into a collapsed "Not for this layout (N)" group under the grid,
   // drawn in their own shape and with no Play verb. The heading is the whole
   // explanation; Jeremy asked for no prose about the rule.
+  //
+  // The Library source adds a TAG row under the bar (library `// tags:` lines,
+  // lib/tags.ts): a shape control `All | Strip | Panel` — Strip offers the
+  // strip + both patterns, Panel the panel + both — and theme chips (OR, each
+  // with the count it would show under the current shape). A console opens on
+  // its own shape (a strip on Strip, a matrix on Panel, anything else All);
+  // the user's explicit pick is remembered per device in localStorage.
   import { createEventDispatcher } from "svelte";
   import AddToSceneMenu from "../components/AddToSceneMenu.svelte";
   import AsyncButton from "../components/AsyncButton.svelte";
@@ -31,6 +38,8 @@
     addToPlaylist as addPatternToPlaylist,
     device,
     deviceError,
+    deviceLabel,
+    deviceLayout,
     deviceLayoutWire,
     devicePatterns,
     deviceRunningId,
@@ -38,6 +47,14 @@
     refreshDevicePatterns,
   } from "../stores/device";
   import { confirm } from "../stores/dialog";
+  import {
+    defaultShape,
+    parseShapeChoice,
+    shapeKey,
+    themeCounts,
+    THEMES,
+    type ShapeChoice,
+  } from "../lib/tags";
   import { note } from "../stores/notify";
   import {
     compileToBytecode,
@@ -141,6 +158,64 @@
   }
   /** …and fall back to the first available one if it is not on offer. */
   $: if (!sources.some((s) => s.id === sourceId)) sourceId = sources[0]?.id ?? "library";
+
+  // ---- the Library's tag row (lib/tags.ts) ----
+
+  const SHAPE_CHOICES: { id: ShapeChoice; label: string }[] = [
+    { id: "all", label: "All" },
+    { id: "strip", label: "Strip" },
+    { id: "panel", label: "Panel" },
+  ];
+  let shapeChoice: ShapeChoice = "all";
+  let pickedThemes: string[] = [];
+  /** The library grid's tags before the tag filter (Gallery's `pool`). */
+  let libPool: (string[] | undefined)[] = [];
+  /** Which device (and which of its shapes) `shapeChoice` was defaulted for. */
+  let shapeFor: string | null = null;
+
+  const storedShape = (who: string): ShapeChoice | null => {
+    try {
+      return parseShapeChoice(localStorage.getItem(shapeKey(who)));
+    } catch {
+      return null;
+    }
+  };
+
+  /** Re-default when the device (or what we know of its geometry) changes: the
+   *  device's own remembered pick wins, else its shape. Inline rather than in
+   *  a helper so Svelte SEES the assignment and orders `themeTally` after it
+   *  (.claude/rules/web.md). The playground is "" — All, never persisted. */
+  $: {
+    const who = $isPlayground ? "" : $deviceLabel;
+    const dims = $isPlayground ? null : ($deviceLayout?.dims ?? null);
+    const k = `${who}|${dims ?? ""}`;
+    if (k !== shapeFor) {
+      shapeFor = k;
+      shapeChoice = (who ? storedShape(who) : null) ?? defaultShape(dims);
+    }
+  }
+
+  function pickShape(c: ShapeChoice): void {
+    shapeChoice = c;
+    const who = $isPlayground ? "" : $deviceLabel;
+    if (!who) return;
+    try {
+      localStorage.setItem(shapeKey(who), c);
+    } catch {
+      /* private mode — the pick just lasts the session */
+    }
+  }
+
+  function toggleTheme(t: string): void {
+    pickedThemes = pickedThemes.includes(t)
+      ? pickedThemes.filter((x) => x !== t)
+      : [...pickedThemes, t];
+  }
+
+  $: themeTally = themeCounts(libPool, shapeChoice);
+  /** A theme with nothing under this shape is ABSENT (§5.7), unless it is
+   *  picked — a picked chip must stay reachable to un-pick. */
+  $: themeChips = THEMES.filter((t) => themeTally[t] > 0 || pickedThemes.includes(t));
 
   /** The device's stored library, as tiles. `source` streams in behind the
    *  list (stores/device.ts fetches one at a time), and a tile whose source
@@ -387,6 +462,43 @@
     {/if}
   </div>
 
+  {#if sourceId === "library"}
+    <!-- the tag row: one line that scrolls sideways on a phone, never a wall
+         of wrapped chips -->
+    <div class="tagbar" data-role="lib-tags">
+      <div class="seg tseg" role="radiogroup" aria-label="Fixture shape" data-role="lib-shape">
+        {#each SHAPE_CHOICES as c (c.id)}
+          <button
+            class="segbtn"
+            class:on={shapeChoice === c.id}
+            data-role={`lib-shape-${c.id}`}
+            role="radio"
+            aria-checked={shapeChoice === c.id}
+            on:click={() => pickShape(c.id)}>{c.label}</button
+          >
+        {/each}
+      </div>
+      <span class="tsep" aria-hidden="true"></span>
+      {#each themeChips as t (t)}
+        <button
+          class="tchip"
+          class:on={pickedThemes.includes(t)}
+          data-role="lib-theme"
+          data-theme={t}
+          aria-pressed={pickedThemes.includes(t)}
+          on:click={() => toggleTheme(t)}
+        >
+          {t}<span class="ct">{themeTally[t]}</span>
+        </button>
+      {/each}
+      {#if pickedThemes.length > 0}
+        <button class="tclear" data-role="lib-theme-clear" on:click={() => (pickedThemes = [])}
+          >clear</button
+        >
+      {/if}
+    </div>
+  {/if}
+
   {#if !$isPlayground && !$device && sourceId === "device"}
     <p class="dim hint" data-role="device-offline">
       device unreachable — {$deviceError || "reload to retry"}.
@@ -539,6 +651,9 @@
           luxel={$luxel}
           {search}
           only="compatible"
+          shape={shapeChoice}
+          themes={pickedThemes}
+          bind:pool={libPool}
           bind:count={libraryCount}
           bind:loading={libraryLoading}
           bind:note={libraryNote}
@@ -818,6 +933,84 @@
     width: 240px;
   }
 
+  /* the Library's tag row: the page bar's inset and hairline, one line */
+  .tagbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .tagbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .tagbar > * {
+    flex: none;
+  }
+
+  /* the shape control: the source `.seg` one size down */
+  .tseg .segbtn {
+    height: 26px;
+    padding: 0 11px;
+    font-size: 12px;
+  }
+
+  .tsep {
+    width: 1px;
+    height: 18px;
+    margin: 0 6px;
+    background: var(--border);
+  }
+
+  /* a theme chip: S4 `.chip`'s metrics (26px, 6px radius, inset ground),
+     and the active segment's amber-soft ground when picked */
+  .tchip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 26px;
+    padding: 0 9px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-inset);
+    color: var(--text-dim);
+    font: 12px/1 var(--sans);
+    white-space: nowrap;
+    cursor: pointer;
+  }
+
+  .tchip:hover {
+    color: var(--text);
+  }
+
+  .tchip.on {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+    color: var(--text);
+  }
+
+  .tchip.on .ct {
+    color: var(--accent);
+  }
+
+  .tclear {
+    height: 26px;
+    padding: 0 6px;
+    border: none;
+    background: none;
+    color: var(--text-dim);
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .tclear:hover {
+    color: var(--text);
+  }
+
   /* S1c: the primary shrinks to a `+` icon beside the search on a phone */
   .newicon {
     display: none;
@@ -941,6 +1134,10 @@
 
     .hint {
       margin: 8px 12px 0;
+    }
+
+    .tagbar {
+      padding: 8px 12px;
     }
 
     .disc {

@@ -1,4 +1,5 @@
 // name: Bouncing Balls
+// tags: both, ambient
 // Clean-room reimplementation from the prose specs docs/pattern-specs/2d-bouncing-additive-primaries.md,
 // bouncing-rgb-balls-2d.md, bouncing-balls-rgb.md, bouncing-balls-hsv.md, bouncer3d.md — reimagined, not a replica.
 // Glowing balls in three motions: billiard ricochets, gravity bounces where

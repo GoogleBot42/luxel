@@ -1,4 +1,5 @@
 // name: Voronoi
+// tags: panel, ambient
 // Clean-room reimplementation from the prose spec docs/pattern-specs/ice-floes-2d.md
 // (Ice style) — reimagined, not a replica; orbs and stained glass are curated originals.
 // Drifting seeds split the panel into cells, computed once per frame on a

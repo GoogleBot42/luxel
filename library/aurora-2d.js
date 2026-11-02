@@ -1,4 +1,5 @@
 // name: Aurora 2D
+// tags: both, ambient, nature
 // Clean-room reimplementation from the prose specs docs/pattern-specs/1d-aurora-borealis.md,
 // aurorashivers.md, coolaura.md — reimagined, not a replica (the panel curtains are original).
 // Panel: rayed curtains hang from a wavy hem under a starry sky, bright at the hem and

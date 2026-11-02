@@ -1,4 +1,5 @@
 // name: Curl Flow
+// tags: panel, ambient
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // Specks ride a drifting flow field at the panel's own resolution and leave
 // fading trails on the persistent frame: fade() plus one anti-aliased

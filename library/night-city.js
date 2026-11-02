@@ -1,4 +1,5 @@
 // name: Night City
+// tags: panel, ambient
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // A skyline after dark: two rows of towers whose windows flick on and off
 // (tungsten, flickering TV blue, the odd party colour), a red beacon on the

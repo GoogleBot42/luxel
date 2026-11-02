@@ -1,4 +1,5 @@
 // name: Glittering Jewels
+// tags: both, ambient
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // Soft gems bloom at random spots and fade: a wide half-strength halo, a hot
 // core whose radius breathes with the bloom, and a staggered glint that

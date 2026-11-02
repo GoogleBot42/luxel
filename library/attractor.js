@@ -1,4 +1,5 @@
 // name: Strange Attractor
+// tags: panel, ambient
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // A Clifford or de Jong map iterated thousands of times a frame from one
 // persistent point; every hit adds dust to a density canvas sized from the grid

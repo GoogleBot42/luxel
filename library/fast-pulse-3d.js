@@ -1,4 +1,5 @@
 // name: Fast Pulse
+// tags: both, ambient
 // Clean-room reimplementation from the prose specs docs/pattern-specs/fast-pulse-3d.md,
 // fast-pulse.md — reimagined, not a replica.
 // Razor-thin pulses with white-hot cores and rainbow fringes whip through the

@@ -1,4 +1,5 @@
 // name: Reaction Diffusion
+// tags: panel, nature
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // Gray-Scott chemistry on a canvas sized to the panel (up to 48 a side):
 // chemical B feeds on A, both diffuse, and spots, worms, dividing cells or

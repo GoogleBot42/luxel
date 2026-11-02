@@ -1,4 +1,5 @@
 // name: Coronal Mass Ejection
+// tags: panel, nature
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/coronal-mass-ejection.md, sunrise-2d.md — reimagined, not a replica.
 // A white-hot star throws ragged plasma tongues over black; now and then the limb
 // tears loose as a prominence, and flare sparks arc off the surface and fall back.

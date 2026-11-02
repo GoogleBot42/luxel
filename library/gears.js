@@ -1,4 +1,5 @@
 // name: Gears
+// tags: panel, ambient
 // Original work from the prose idea spec docs/pattern-specs/patternflow/spinning-crosses.md (Patternflow preset, CC BY-SA 4.0 — prose-described idea only, no code).
 // A clockwork wall: a checkerboard of cogs whose teeth really mesh. Every
 // gear ticks a quarter turn with an easeOutBack overshoot and rests, each

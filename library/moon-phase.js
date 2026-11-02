@@ -1,4 +1,5 @@
 // name: Moon Phase
+// tags: panel, clock, nature
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // Tonight's moon, from the device clock: days since a known new moon, modulo
 // the synodic month. A 32x32 sphere canvas holds the face (maria, rayed

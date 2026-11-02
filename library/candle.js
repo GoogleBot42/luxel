@@ -1,4 +1,5 @@
 // name: Candle
+// tags: both, ambient
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/blue-holiday-candle-2d.md
 // — reimagined, not a replica.
 // A lamp candle. Panel: a teardrop flame (round base, sharp tip, blue root,

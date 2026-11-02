@@ -1,4 +1,5 @@
 // name: Wavy Bands
+// tags: both, ambient, holiday
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/wavy-bands.md, halloween-wavy-bands.md — reimagined, not a replica.
 // Vertical colour bands whose edges snake sideways (a travelling sine) and whose
 // widths swell and pinch (a noise warp on y): bright band centres, soft dark

@@ -1,4 +1,5 @@
 // name: Rocket Launch
+// tags: both, ambient
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/rocket-by-tony-hampton.md, rainbow-rocket-sparks.md — reimagined, not a replica.
 // A launch, told along a strip (index 0 is the pad) or up a panel: a beacon
 // blinks through the countdown, the engine lights and sprays the pad, the rocket

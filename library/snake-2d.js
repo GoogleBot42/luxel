@@ -1,4 +1,5 @@
 // name: Infinite Snake
+// tags: panel, game, retro
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // A snake plays itself forever: it hunts the pellet, grows, and when it hits a wall or itself
 // the board flashes red and a new snake starts. Smartness is how well it plays — above 55 % it

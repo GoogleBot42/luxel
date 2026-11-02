@@ -1,4 +1,5 @@
 // name: Road Hopper
+// tags: panel, game, retro
 // Clean-room reimplementation from the prose spec docs/pattern-specs/road-hopper-2d.md — reimagined, not a replica.
 // The classic road-and-river crossing arcade game, self-playing forever on a 16x16 board:
 // a road of cars in alternating lanes, a river of logs and diving turtles, five lily pads to fill.

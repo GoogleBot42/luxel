@@ -1,4 +1,5 @@
 // name: Light Thief
+// tags: both, holiday
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // A string of holiday bulbs glows in the dark. A green glow creeps along it —
 // sneaking, freezing, darting — and every bulb it reaches flickers twice and

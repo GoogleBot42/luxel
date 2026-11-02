@@ -1,4 +1,5 @@
 // name: Gravity Wells
+// tags: panel, nature
 // Original work from the prose idea spec docs/pattern-specs/patternflow/mag-vortex.md
 // (Patternflow preset, CC BY-SA 4.0 — prose-described idea only, no code); mode 0 is
 // the classic multi-well particle toy. Mode 0: invisible wells wander and a stream of
