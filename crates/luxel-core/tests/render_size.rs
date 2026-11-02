@@ -2,13 +2,15 @@
 //! (docs/lang.md "Render resolution").
 //!
 //! The engine renders the pattern on a w×h grid and expands the small frame
-//! onto the fixture through each fixture pixel's mapped (x, y): nearest is
-//! `fillCanvas`'s geometry, bilinear is `canvasGet`'s. Most tests here are
+//! onto the fixture through each fixture pixel's mapped (x, y): nearest and
+//! bilinear are `fillCanvas`'s geometry (docs/lang.md "Canvas sampling" —
+//! bilinear takes each fixture pixel at its centre, so 1:1 is the
+//! identity). Most tests here are
 //! EQUIVALENCES rather than goldens — a resized pattern against the same
 //! pattern run natively on a fixture of the small size, or against a
 //! `fillCanvas` of the same canvas — so they pin the semantics, not just
-//! today's bytes. `bilinear_golden` pins the bytes too; tools/wasm-smoke.mjs
-//! asserts the same ones through the wasm FFI.
+//! today's bytes. `bilinear_golden` and the ramp upscales pin the bytes
+//! too; tools/wasm-smoke.mjs asserts the same ones through the wasm FFI.
 
 use luxel_core::compose::{Compositor, SceneDriver, SceneHost, SpriteView};
 use luxel_core::engine::Engine;
@@ -230,8 +232,10 @@ fn any_map_samples_the_small_grid_exactly_like_fill_canvas() {
     }
 }
 
-/// Bilinear bytes, pinned: a 2×2 frame of pure colours onto a 4×4 grid.
-/// tools/wasm-smoke.mjs asserts the same 48 bytes through the FFI.
+/// Bilinear bytes, pinned: a 2×2 frame of pure colours onto a 4×4 grid —
+/// every fixture pixel sampled at its centre, so the blend weights are
+/// ¼ and ¾ (docs/lang.md "Canvas sampling"). tools/wasm-smoke.mjs asserts
+/// the same 48 bytes through the FFI.
 const BILINEAR_SRC: &str = "setRenderSize(2, 2, 1)\n\
     export function render2D(index, x, y) { rgb(index == 0 || index == 3, index == 1, index >= 2) }";
 
@@ -242,17 +246,185 @@ fn bilinear_golden() {
     assert_eq!(
         got,
         [
-            255, 0, 0, 212, 42, 0, 42, 212, 0, 0, 255, 0, //
-            212, 0, 42, 183, 35, 42, 70, 176, 42, 42, 212, 42, //
-            42, 0, 212, 70, 7, 212, 183, 35, 212, 212, 42, 212, //
-            0, 0, 255, 42, 0, 255, 212, 0, 255, 255, 0, 255,
+            255, 0, 0, 191, 63, 0, 63, 191, 0, 0, 255, 0, //
+            191, 0, 63, 159, 47, 63, 95, 143, 63, 63, 191, 63, //
+            63, 0, 191, 95, 15, 191, 159, 47, 191, 191, 63, 191, //
+            0, 0, 255, 63, 0, 255, 191, 0, 255, 255, 0, 255,
         ]
     );
+}
+
+/// One axis of a k× bilinear upscale of a 2-texel 0 → 255 ramp, by hand:
+/// fixture pixel s of 2k sits at (s + ½)/(2k) of the axis, i.e. at texel
+/// position (2s + 1)/(2k) − ½, and the blend is `0 + (255·t >> 16)`.
+const RAMP_2X: [u8; 4] = [0, 63, 191, 255];
+const RAMP_4X: [u8; 8] = [0, 0, 31, 95, 159, 223, 255, 255];
+
+/// A 2×2 fillCanvas whose value follows the column (`axis` 0, red) or
+/// the row (`axis` 1, green): black, then full.
+fn ramp_canvas(axis: u32, filter: u32) -> String {
+    let (hue, v) = if axis == 0 {
+        ("0", "k % 2")
+    } else {
+        ("1 / 3", "floor(k / 2)")
+    };
+    format!(
+        "var vs = array(4)\nfor (var k = 0; k < 4; k++) vs[k] = {v}\n\
+         export function renderBulk() {{ fillCanvas({hue}, 1, vs, 2, 2, {filter}) }}"
+    )
+}
+
+/// tools/wasm-smoke.mjs renders this through the FFI and pins the same
+/// 8×8 picture: `[RAMP_4X[c], RAMP_4X[r], 0]`.
+const RAMP_SIZED_SRC: &str =
+    "setRenderSize(2, 2, 1)\nexport function render2D(index, x, y) { rgb(index % 2, index >= 2, 0) }";
+
+#[test]
+fn bilinear_upscales_sample_each_pixel_at_its_centre() {
+    for (n, ramp) in [(4usize, &RAMP_2X[..]), (8, &RAMP_4X[..])] {
+        for axis in [0, 1] {
+            let mut e = grid_engine(&ramp_canvas(axis, 1), n as u16, n as u16);
+            let got = frames(&mut e, 1);
+            for r in 0..n {
+                for c in 0..n {
+                    let want = if axis == 0 {
+                        [ramp[c], 0, 0]
+                    } else {
+                        [0, ramp[r], 0]
+                    };
+                    assert_eq!(
+                        got[r * n + c],
+                        want,
+                        "fillCanvas {n}x{n} axis {axis} at ({c}, {r})"
+                    );
+                }
+            }
+        }
+        // setRenderSize's expand is the same sampler, both axes at once
+        let got = frames(&mut grid_engine(RAMP_SIZED_SRC, n as u16, n as u16), 1);
+        for r in 0..n {
+            for c in 0..n {
+                assert_eq!(
+                    got[r * n + c],
+                    [ramp[c], ramp[r], 0],
+                    "setRenderSize {n}x{n} at ({c}, {r})"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_grid_sized_render_or_canvas_is_the_identity() {
+    // 1:1 is exact under bilinear: fillCanvas(…, 1) == fillCanvas(…, 0),
+    // and setRenderSize(w, h, 1) on a w×h grid == the pattern run native
+    let body = "export function render2D(index, x, y) { hsv(index * 0.618, 1, (index + floor(index / 7)) % 3 / 2) }";
+    for (w, h) in [(7u16, 7u16), (5, 3), (16, 16), (64, 64), (12, 1)] {
+        let native = frames(&mut grid_engine(body, w, h), 1);
+        let mut e = grid_engine(&sized(&format!("setRenderSize({w}, {h}, 1)"), body), w, h);
+        assert_eq!(frames(&mut e, 1), native, "setRenderSize {w}x{h}");
+        let cells = w as usize * h as usize;
+        let canvas = |f: u32| {
+            format!(
+                "var hs = array({cells})\nvar vs = array({cells})\n\
+                 for (var k = 0; k < {cells}; k++) {{ hs[k] = k * 0.618\n vs[k] = (k + floor(k / 7)) % 3 / 2 }}\n\
+                 export function renderBulk() {{ fillCanvas(hs, 1, vs, {w}, {h}, {f}) }}"
+            )
+        };
+        let near = frames(&mut grid_engine(&canvas(0), w, h), 1);
+        assert_eq!(
+            frames(&mut grid_engine(&canvas(1), w, h), 1),
+            near,
+            "fillCanvas {w}x{h}"
+        );
+    }
+    // a mapless strip too
+    let strip = "export function render(index) { hsv(index * 0.618, 1, index % 3 / 2) }";
+    let native = frames(&mut Engine::new(strip, 37, 1).unwrap(), 1);
+    let mut e = Engine::new(&sized("setRenderSize(37, 1, 1)", strip), 37, 1).unwrap();
+    assert_eq!(frames(&mut e, 1), native);
+}
+
+#[test]
+fn grid_width_switches_with_pixel_count() {
+    // sized in beforeRender: gridWidth/gridHeight answer with the size the
+    // call just set, the same instant pixelCount does — on, changed, off
+    let src = "export var size = 4\nexport var pc0 = 0\nexport var gw0 = 0\n\
+        export var pc = 0\nexport var gw = 0\nexport var gh = 0\nexport var rgw = 0\n\
+        export function beforeRender(d) { pc0 = pixelCount\n gw0 = gridWidth()\n \
+          setRenderSize(size, size)\n pc = pixelCount\n gw = gridWidth()\n gh = gridHeight() }\n\
+        export function render2D(index, x, y) { rgw = gridWidth()\n rgb(x, y, 0) }";
+    let mut e = grid_engine(src, 8, 8);
+    let check = |e: &Engine, before: (f64, f64), after: (f64, f64)| {
+        assert_eq!((num(e, "pc0"), num(e, "gw0")), before, "before the call");
+        assert_eq!(
+            (num(e, "pc"), num(e, "gw"), num(e, "gh")),
+            (after.0, after.1, after.1),
+            "after the call"
+        );
+        assert_eq!(num(e, "rgw"), after.1, "in the render pass");
+    };
+    e.frame(Fx::from_int(16));
+    check(&e, (64.0, 8.0), (16.0, 4.0));
+    e.frame(Fx::from_int(16));
+    check(&e, (16.0, 4.0), (16.0, 4.0));
+    e.set_var("size", Fx::from_int(2));
+    e.frame(Fx::from_int(16));
+    check(&e, (16.0, 4.0), (4.0, 2.0));
+    e.set_var("size", Fx::ZERO);
+    e.frame(Fx::from_int(16));
+    check(&e, (4.0, 2.0), (64.0, 8.0));
+    e.frame(Fx::from_int(16));
+    check(&e, (64.0, 8.0), (64.0, 8.0));
+    // and a 1D Layout: gridWidth is 0 natively, the small grid while sized
+    let src1 = src
+        .replace("render2D(index, x, y)", "render(index)")
+        .replace("rgb(x, y, 0)", "rgb(1, 0, 0)");
+    let mut s = Engine::new(&src1, 30, 1).unwrap();
+    s.frame(Fx::from_int(16));
+    assert_eq!(
+        (num(&s, "gw0"), num(&s, "pc"), num(&s, "gw")),
+        (0.0, 16.0, 4.0)
+    );
+    s.set_var("size", Fx::ZERO);
+    s.frame(Fx::from_int(16));
+    assert_eq!(
+        (num(&s, "gw0"), num(&s, "pc"), num(&s, "gw")),
+        (4.0, 30.0, 0.0)
+    );
+}
+
+#[test]
+fn a_strip_expand_samples_pixel_centres() {
+    // 150 px from 50: exactly 3 px a cell; 300 from 4, bilinear,
+    // symmetric about the middle
+    let body = "export function render(index) { rgb(index / pixelCount, 0, 0) }";
+    let mut e = Engine::new(&sized("setRenderSize(50, 1)", body), 150, 1).unwrap();
+    let got = frames(&mut e, 1);
+    let s = frames(&mut Engine::new(body, 50, 1).unwrap(), 1);
+    for i in 0..150 {
+        assert_eq!(got[i], s[i / 3], "pixel {i}");
+    }
+    // the mirror test: a ramp and its reverse, expanded, are mirror images
+    // (to the lerp's floor rounding, one step)
+    let ramp = |rev: &str| {
+        sized(
+            "setRenderSize(4, 1, 1)",
+            &format!("export function render(index) {{ rgb(({rev}) / 3, 0, 0) }}"),
+        )
+    };
+    let up = frames(&mut Engine::new(&ramp("index"), 300, 1).unwrap(), 1);
+    let down = frames(&mut Engine::new(&ramp("3 - index"), 300, 1).unwrap(), 1);
+    for i in 0..300 {
+        let (a, b) = (up[i][0] as i32, down[299 - i][0] as i32);
+        assert!((a - b).abs() <= 1, "pixel {i}: {a} vs mirrored {b}");
+    }
 }
 
 #[test]
 fn bilinear_is_the_integer_lerp_of_the_four_cells() {
     // an independent spelling of the kernel: texel centres at (i + 0.5)/n,
+    // each fixture pixel at ITS centre (docs/lang.md "Canvas sampling"),
     // `a + ((b - a)·t >> 16)`, x then y
     let src = "setRenderSize(3, 2, 1)\nexport function render2D(index, x, y) { rgb(index / 5, x, y) }";
     let mut small = grid_engine(
@@ -264,20 +436,18 @@ fn bilinear_is_the_integer_lerp_of_the_four_cells() {
     for (w, h) in [(7u16, 5u16), (12, 4), (3, 2)] {
         let mut e = grid_engine(src, w, h);
         let got = frames(&mut e, 1);
-        let norm = |v: usize, n: usize| -> i64 {
-            if n <= 1 { 0 } else { (v as i64 * 65_535 + (n as i64 - 1) / 2) / (n as i64 - 1) }
-        };
-        let axis = |x: i64, n: usize| {
-            let pos = x * n as i64 - (1 << 15);
+        // fixture pixel s of n sampled at its centre: (s + ½)·k/n − ½ texels
+        let axis = |s: usize, n: usize, k: usize| {
+            let pos = (((2 * s as i64 + 1) * k as i64) << 15) / n as i64 - (1 << 15);
             let (i, t) = (pos >> 16, pos & 0xFFFF);
-            let last = n as i64 - 1;
+            let last = k as i64 - 1;
             (i.clamp(0, last) as usize, (i + 1).clamp(0, last) as usize, t as i32)
         };
         let lerp = |a: i32, b: i32, t: i32| a + (((b - a) * t) >> 16);
         for r in 0..h as usize {
             for c in 0..w as usize {
-                let (c0, c1, tx) = axis(norm(c, w as usize), 3);
-                let (r0, r1, ty) = axis(norm(r, h as usize), 2);
+                let (c0, c1, tx) = axis(c, w as usize, 3);
+                let (r0, r1, ty) = axis(r, h as usize, 2);
                 let mut want = [0u8; 3];
                 for k in 0..3 {
                     let top = lerp(s[r0 * 3 + c0][k] as i32, s[r0 * 3 + c1][k] as i32, tx);

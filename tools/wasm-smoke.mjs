@@ -463,13 +463,53 @@ const litPixels = (handle, n) => {
   e.lx_set_map_grid(hr, 4, 4);
   const at = e.lx_frame(hr, 0);
   assert.deepStrictEqual([...mem().slice(at, at + 48)], [
-    255, 0, 0, 212, 42, 0, 42, 212, 0, 0, 255, 0,
-    212, 0, 42, 183, 35, 42, 70, 176, 42, 42, 212, 42,
-    42, 0, 212, 70, 7, 212, 183, 35, 212, 212, 42, 212,
-    0, 0, 255, 42, 0, 255, 212, 0, 255, 255, 0, 255,
+    255, 0, 0, 191, 63, 0, 63, 191, 0, 0, 255, 0,
+    191, 0, 63, 159, 47, 63, 95, 143, 63, 63, 191, 63,
+    63, 0, 191, 95, 15, 191, 159, 47, 191, 191, 63, 191,
+    0, 0, 255, 63, 0, 255, 191, 0, 255, 255, 0, 255,
   ]);
   assert.strictEqual(e.lx_take_error(hr), 0);
   e.lx_free(hr);
+}
+
+// Bilinear samples every fixture pixel at its CENTRE (docs/lang.md "Canvas
+// sampling"): a 2x2 red-by-column / green-by-row frame onto an 8x8 grid is
+// [RAMP[c], RAMP[r], 0] (render_size.rs::bilinear_upscales_sample_each_pixel_at_its_centre),
+// and a 7x5 canvas on a 7x5 grid is byte-identical to nearest.
+{
+  const RAMP = [0, 0, 31, 95, 159, 223, 255, 255];
+  const s = putStr(
+    "setRenderSize(2, 2, 1)\nexport function render2D(index, x, y) { rgb(index % 2, index >= 2, 0) }",
+  );
+  const hr = e.lx_new(s.ptr, s.len, 64, 1);
+  s.free();
+  assert.ok(hr >= 0, response());
+  e.lx_set_map_grid(hr, 8, 8);
+  const at = e.lx_frame(hr, 0);
+  const want = [];
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) want.push(RAMP[c], RAMP[r], 0);
+  assert.deepStrictEqual([...mem().slice(at, at + 192)], want);
+  assert.strictEqual(e.lx_take_error(hr), 0);
+  e.lx_free(hr);
+  const frameOf = (filter) => {
+    const c = putStr(
+      "var hs = array(35)\nvar vs = array(35)\n" +
+        "for (var k = 0; k < 35; k++) { hs[k] = k * 0.618\n vs[k] = (k + floor(k / 7)) % 3 / 2 }\n" +
+        `export function renderBulk() { fillCanvas(hs, 1, vs, 7, 5, ${filter}) }`,
+    );
+    const h1 = e.lx_new(c.ptr, c.len, 35, 1);
+    c.free();
+    assert.ok(h1 >= 0, response());
+    e.lx_set_map_grid(h1, 7, 5);
+    const p = e.lx_frame(h1, 0);
+    const out = [...mem().slice(p, p + 105)];
+    assert.strictEqual(e.lx_take_error(h1), 0);
+    e.lx_free(h1);
+    return out;
+  };
+  const near = frameOf(0);
+  assert.ok(near.some((v) => v > 0), "the 1:1 canvas painted something");
+  assert.deepStrictEqual(frameOf(1), near, "bilinear at 1:1 is the identity");
 }
 
 // The anti-aliased index-space ops through the FFI: a gradient with

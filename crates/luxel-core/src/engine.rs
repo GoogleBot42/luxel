@@ -1136,6 +1136,7 @@ impl Engine {
             // the Layout frame comes back as the frame, holding the last
             // expanded picture
             self.pixels = core::mem::replace(&mut self.out, crate::arena::empty());
+            self.vm.native_grid = None;
         }
         self.vm.frame_grid = self.grid;
         self.set_vm_pixel_count(self.pixel_count);
@@ -1152,6 +1153,12 @@ impl Engine {
         if want == self.plan {
             return;
         }
+        // the grid the pattern saw before any render size: what
+        // `gridWidth` reports once it turns the size off again
+        let native = match (self.plan, self.vm.native_grid) {
+            (ProjPlan::Resized { .. }, Some(g)) => g,
+            _ => self.vm.frame_grid,
+        };
         self.plan_reset();
         match want {
             ProjPlan::Strip { len, .. } => {
@@ -1181,6 +1188,7 @@ impl Engine {
                     // back to what renders (the builtin already said w·h).
                     self.vm.globals[self.prog.pixel_count_g as usize] =
                         Value::Num(Fx::from_int(self.vm.pixel_count as i32));
+                    self.vm.render_refused = true;
                     return;
                 };
                 self.out = core::mem::replace(&mut self.pixels, small);
@@ -1190,6 +1198,7 @@ impl Engine {
                     self.vm.map = Some(MapData::grid_map(g));
                 }
                 self.vm.frame_grid = Some(g);
+                self.vm.native_grid = Some(native);
                 self.set_vm_pixel_count(n as u32);
                 self.render_count = n as u32;
             }

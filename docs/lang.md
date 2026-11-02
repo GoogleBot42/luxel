@@ -310,6 +310,12 @@ What the pattern sees is **the small grid, everywhere**:
 - `pixelCount` is `w · h`, and changes **at the call** — so
   `setRenderSize(16, 16)` at the top level followed by
   `var heat = array(pixelCount)` allocates 256, not the panel's 4096.
+  `gridWidth()` / `gridHeight()` switch in the same instant, so a pattern
+  that resizes itself in `beforeRender` reads one geometry for the rest
+  of that frame (and `setRenderSize(0, 0)` gives back the fixture's grid
+  at once, too). The map, the frame and the render pass follow when
+  `beforeRender` returns — the render pass of that same frame is already
+  at the new size.
 - The map is a procedural `w × h` row-major grid: `render2D` gets that
   grid's normalized `x, y`, `pixelCoord` reads it, `gridWidth()` /
   `gridHeight()` report `w` / `h`, `gridIndex(c, r)` is `r * w + c`, and
@@ -332,16 +338,17 @@ What the pattern sees is **the small grid, everywhere**:
   the same place on the small grid as on the fixture.
 
 **How the fixture is filled.** Each fixture pixel samples the small frame
-at its own mapped `(x, y)` — exactly `fillCanvas`'s nearest geometry
-(`cell = floor(x · w)`) or `canvasGet`'s bilinear one (texel centres at
-`(i + 0.5)/w`, edges clamped), so it works on **any** layout: a matrix, a
-serpentine or chained panel, a sparse or irregular map (each pixel reads
-the small grid where it sits), a mapless strip (x from the index, y = 0.5
-— a 2D size shows its middle row), a 3D map (x and y; the image repeats along
-z). On a panel that is an integer multiple of the grid, nearest is a block
-expand. Bilinear is integer arithmetic (8-bit channels, a 16-bit
-fraction), so every host — device, playground, CLI — produces the same
-bytes. The small grid may also be *larger* than a sparse fixture: a 300-px
+where it sits — exactly `fillCanvas`'s geometry, nearest or bilinear (see
+**Canvas sampling** under Coordinate space), so it works on **any**
+layout: a matrix, a serpentine or chained panel, a sparse or irregular map
+(each pixel reads the small grid where it sits), a mapless strip (x from
+the index, y = 0.5 — a 2D size shows its middle row), a 3D map (x and y;
+the image repeats along z). A size equal to the fixture's grid is the
+identity under either filter; on a panel that is an integer multiple of
+the grid, nearest is a block expand and bilinear lands every fixture pixel
+at the same spot inside its cell. Bilinear is integer arithmetic (8-bit
+channels, a 16-bit fraction), so every host — device, playground, CLI —
+produces the same bytes. The small grid may also be *larger* than a sparse fixture: a 300-px
 ring can run a 32×32 simulation and show where each LED sits.
 
 **When it applies.** The size takes effect at the engine's next plan sync:
@@ -1090,16 +1097,23 @@ entry it replaces did.
   `fillGradient(t, 1, 1, t + 1, 1, 1)` is a full rainbow in one call.
 
 **Anti-aliased, blended.** Three more index-space ops take *fractional*
-pixel positions — pixel `i` covers `[i, i + 1)` — so a comet head, a
-scanner or a spark moves smoothly between LEDs instead of jumping, with no
-pattern-side buffer. Each blends with `mode`: 0 replace (the default), 1
+pixel positions, so a comet head, a scanner or a spark moves smoothly
+between LEDs instead of jumping, with no pattern-side buffer. The two
+RANGE ops measure **coverage**: pixel `i` covers `[i, i + 1)`, its centre
+is `i + 0.5`. `splatIndex` measures **distance to the pixel's index**:
+pixel `i` is the point `i`, so `splatIndex(k, …)` peaks exactly on pixel
+`k`. The same number is half a pixel apart in the two — a splat on the
+point a range op calls `q` is `splatIndex(q − 0.5, …)`, and a range
+centred on pixel `k` is `fillRangeAA(k + 0.5 − h, k + 0.5 + h)`. Each blends with `mode`: 0 replace (the default), 1
 add (saturating per channel), 2 max. Naming them never gives a pattern a
 grid: they are strip ops, on any fixture.
 
 - `splatIndex(pos, radius, mode)` — a soft 1-D blob centred at `pos`:
-  the brush × `1 − |i − pos| / radius` on every pixel where that is
-  positive (computed as `|i − pos| × (1 / radius)` in 16.16). `radius`
-  is in pixels, at least 0.5.
+  the brush × `1 − |i − pos| / radius` on every pixel `i` where that is
+  positive (computed as `|i − pos| × (1 / radius)` in 16.16) — `i` the
+  index itself, not `i + 0.5`. `radius` is in pixels, at least 0.5. A
+  sweep `splatIndex(t * (pixelCount - 1), …)` with `t` in 0..1 peaks on
+  the first and the last pixel at its ends.
 - `fillRangeAA(p0, p1, mode)` — the brush on `[p0, p1)`, each end pixel
   scaled by how much of it the range covers. Whole-number ends cover
   whole pixels, so `fillRangeAA(a, b)` is exactly `fillRange(a, b)`;
@@ -1139,13 +1153,40 @@ coordinates.
   replace. The `canvas[floor(y·h)·w + floor(x·w)]` idiom of buffer-based
   2D patterns, as one call; the simulation resolution stays decoupled from
   the fixture's. `filter` 1 is **bilinear** instead — `canvasGet`'s
-  geometry, blended in RGB after each cell's colour is resolved, the same
-  integer kernel `setRenderSize` expands with.
+  kernel with each fixture pixel taken at its centre (**Canvas sampling**
+  below: a grid-sized canvas is the identity), blended in RGB after each
+  cell's colour is resolved, the same integer kernel `setRenderSize`
+  expands with.
 - `paintCanvas(vArr, w, h, bArr = 1, filter = 0)` — `fillCanvas`'s
   geometry with `paint()`'s colour: the installed palette at `vArr[i]`,
   times `bArr[i]` (or a scalar), byte-identical to `paint(v, b)` per cell.
   One array instead of three. `filter` as for `fillCanvas` (pass `bArr` —
   `1` will do — to reach it).
+
+**Canvas sampling.** Where a fixture pixel lands on a `w × h` canvas —
+`fillCanvas`, `paintCanvas` and `setRenderSize`'s expand alike. The canvas
+side is `canvasGet`'s: texel `j` covers `[j/w, (j + 1)/w)` with its centre
+at `(j + 0.5)/w`. The fixture side depends on what the fixture is:
+
+- **A grid** (a matrix, a serpentine or chained panel, any map that reads
+  as rows and columns) is `W × H` *pixels*, and its mapped coordinates
+  run 0..1 **inclusive** — column `c` sits at `c / (W − 1)`, outermost
+  pixel to outermost pixel. Bilinear samples column `c` at its **centre**,
+  `(c + 0.5) / W` of the canvas width (likewise rows). So a canvas the
+  size of the grid is the identity (byte-identical to nearest), and a k×
+  upscale samples every fixture pixel at the same fractions of its texel
+  — a 2× upscale blends ¼ / ¾, a 4× one ⅛, ⅜, ⅝, ⅞ — with the outermost
+  half-texel clamped to the edge texel. Nearest is the cell the mapped
+  coordinate falls in, `floor(x · w)` (the identity at 1:1 and a block
+  expand on an integer multiple).
+- **A mapless strip** of `n` pixels: pixel `i` sits at its centre,
+  `(i + 0.5) / n`, from the index — not at the truncated `i / n` a
+  `render` receives — for both filters, so `n` pixels over `w` cells give
+  each cell `n / w` pixels exactly. y is 0.5, the canvas's middle row.
+  A 1D map's pixels are placed like a grid's columns.
+- **Anything else** (a ring, a sparse or 3D layout, or a `rotate`/
+  `translate` transform in force): the mapped point itself, `x · w` in
+  texel units (bilinear) or `floor(x · w)` (nearest), edges clamped.
 
 #### Grid space
 
