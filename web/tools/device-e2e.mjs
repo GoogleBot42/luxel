@@ -2540,6 +2540,44 @@ try {
         libOnStrip.chip === libOnStrip.shown,
       JSON.stringify(libOnStrip),
     );
+
+    // the library's TAG row (`// tags:` lines, lib/tags.ts): a strip console
+    // opens the shape control on Strip — the strip + both patterns — and All
+    // gives back everything the Layout can show. Put back in `finally`: the
+    // pick persists per device, and later sections count library tiles.
+    try {
+      const tagState = () =>
+        page.evaluate(() => {
+          const tiles = [...document.querySelectorAll('[data-source="library"] .tile')];
+          const ct = document.querySelector('[data-role="patterns-source-library"] .ct');
+          const on = document.querySelector('[data-role="lib-shape"] [aria-checked="true"]');
+          return {
+            on: on?.dataset.role ?? "",
+            shown: tiles.length,
+            chip: Number((ct?.textContent ?? "").trim()),
+            offShape: tiles.filter((e) => !/^(strip|both)\b/.test(e.dataset.tags ?? "")).length,
+          };
+        });
+      const onStrip = await tagState();
+      await page.click('[data-role="lib-shape-all"]');
+      await sleep(800);
+      const onAll = await tagState();
+      check(
+        "tags: a strip console's library opens on Strip (strip + both), and All restores the full count",
+        onStrip.on === "lib-shape-strip" &&
+          onStrip.offShape === 0 &&
+          onStrip.shown > 0 &&
+          onStrip.chip === onStrip.shown &&
+          onStrip.shown === libOnStrip.shown &&
+          onAll.on === "lib-shape-all" &&
+          onAll.shown >= onStrip.shown &&
+          onAll.chip === onAll.shown,
+        JSON.stringify({ onStrip, onAll }),
+      );
+    } finally {
+      await page.click('[data-role="lib-shape-strip"]');
+      await sleep(300);
+    }
     await page.click('[data-role="patterns-source-device"]');
     await sleep(600);
 

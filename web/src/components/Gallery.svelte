@@ -11,6 +11,9 @@
     /** gen-gallery's regex guess at the pattern's dims — ADVISORY only: it
      *  seeds the first compile's pixel count, and the engine's answer wins. */
     hint?: PatternDims;
+    /** gallery.json's `tags` (shape first) — the library's `// tags:` line.
+     *  Absent on device / saved / corpus patterns. */
+    tags?: string[];
   }
 </script>
 
@@ -51,6 +54,7 @@
   import { normalizePoints, paintBar, paintGrid, paintPoints, type PointRig } from "../lib/draw";
   import { Engine, Luxel } from "../lib/luxel";
   import { gatedFetch } from "../lib/fetchgate";
+  import { shapeMatches, themeMatches, type ShapeChoice } from "../lib/tags";
   import {
     autoLayoutFor,
     captionFor,
@@ -97,6 +101,16 @@
    *  needs, since the device's Layout is precisely the one that cannot show
    *  these patterns. */
   export let autoStyle = false;
+
+  /** The page's shape control and theme chips (lib/tags.ts): which tagged
+   *  patterns this grid offers. `all` + no themes = no tag filter. Like the
+   *  split, a tile the tags exclude is not RENDERED (so `.tile` counts what is
+   *  on screen) but keeps its engine. */
+  export let shape: ShapeChoice = "all";
+  export let themes: string[] = [];
+  /** OUT: the tags of every tile in this grid's half of the split, before the
+   *  tag filter — what the page counts its theme badges over. */
+  export let pool: (string[] | undefined)[] = [];
 
   /** How many patterns this source SHOWS (bound by the page for its segment
    *  chip — the split above is part of the count), and whether it is still
@@ -162,6 +176,7 @@
           key: it.key,
           name: it.name,
           source: it.source,
+          tags: it.tags,
           hint,
           guess: hint,
           dims: 0,
@@ -175,6 +190,7 @@
       }
       by.delete(it.key);
       prev.name = it.name;
+      prev.tags = it.tags;
       if (prev.source !== it.source) {
         // the source arrived (or changed) — the old engine is not this pattern
         prev.engine?.free();
@@ -232,8 +248,10 @@
    *  draw the playing tile first): the console opens on this page to see what
    *  the LEDs are doing, and hunting for the green ring in row four is not
    *  that. Everything else keeps the source's own order. */
-  $: shown = tiles
-    .filter((t) => inThisGrid(t, $layout.dims, splitting))
+  $: half = tiles.filter((t) => inThisGrid(t, $layout.dims, splitting));
+  $: pool = half.map((t) => t.tags);
+  $: shown = half
+    .filter((t) => shapeMatches(t.tags, shape) && themeMatches(t.tags, themes))
     .sort((a, b) => Number(b.key === playingKey) - Number(a.key === playingKey));
   $: count = shown.length;
 
@@ -395,7 +413,12 @@
     try {
       const r = await gatedFetch(`${import.meta.env.BASE_URL}${src}`);
       if (r.ok) {
-        const list = (await r.json()) as { name: string; kind: string; source: string }[];
+        const list = (await r.json()) as {
+          name: string;
+          kind: string;
+          tags?: string[];
+          source: string;
+        }[];
         const seen = new Set<string>();
         tiles = list
           .filter((p) => {
@@ -407,6 +430,7 @@
           .map((p) => ({
             key: p.name,
             name: p.name,
+            tags: Array.isArray(p.tags) ? p.tags : undefined,
             // "any" is the generator's DIMENSIONLESS kind (0) — never 1: a
             // strip pattern is projected along an axis and this one is not.
             hint: kindDims(p.kind),
@@ -447,6 +471,7 @@
       data-kind={shape}
       data-dims={t.rig ? t.dims : ""}
       data-key={t.key}
+      data-tags={t.tags ? t.tags.join(" ") : undefined}
       data-name={t.name}
       data-compiled={t.built}
       hidden={hiddenBy(t, filter)}
