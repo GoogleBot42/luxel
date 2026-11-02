@@ -6,6 +6,7 @@
 // sheet clears to clean water for the next print. Each event is applied by
 // inverse lookup into the baked sheet while it animates, then baked in, so a
 // frame costs one transform per canvas cell. Four OKLCH inks, a new set per sheet.
+// The first sheet opens already part-printed, so the pattern reads at once.
 
 var CAP = 48
 var B = array(CAP * CAP), O = array(CAP * CAP)   // baked sheet, animated output
@@ -54,7 +55,7 @@ function buildPalette() {           // water 0..0.2, then four inks in 0.2 bands
 // the event in flight: kind 1 = drop, 2 = comb; progress u 0..1
 var kind = 0, u = 0, ex = 0, ey = 0, er = 0, ecol = 0.3, dirX = 1, dirY = 0, gap = 8, zMax = 0
 var timer = 0.3, count = 0, combs = 0, hold = 0, ccx = 0.5, ccy = 0.5, onCentre = 0, ink = 1
-var CW = 32, CH = 32
+var CW = 32, CH = 32, seeded = 0
 
 function newSheet() {
   feedback(B, 0)                    // 0 is clean water
@@ -118,7 +119,15 @@ export function beforeRender(delta) {
   var dt = min(delta, 100) / 1000
   var gw = gridWidth() > 0 ? gridWidth() : 32, gh = gridHeight() > 0 ? gridHeight() : 32
   var w = min(gw, CAP), h = min(gh, CAP)
-  if (w != CW || h != CH) { CW = w; CH = h; newSheet(); kind = 0 }
+  if (w != CW || h != CH) { CW = w; CH = h; newSheet(); kind = 0; seeded = 0 }
+  if (!seeded) {                    // bake the first drops in at once
+    seeded = 1
+    for (var q = 0; q < 9; q++) {   // three centres, three rings each
+      if (q % 3 == 0) onCentre = 0
+      startDrop(); applyEvent(1); arrayMix(B, O, 1)
+    }
+    kind = 0
+  }
   if (kind) {
     u = min(u + dt / (kind == 1 ? 0.9 : 2.2), 1)
     applyEvent(u)

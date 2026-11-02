@@ -1,7 +1,8 @@
 // name: Lamp
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/utilitycolortemp.md,
 // single-color-picker-wide-or-spot.md, naturallightsync.md, real-world-lights.md — reimagined, not a replica.
-// The fixture as a room light. Color: any picked colour. White: a blackbody white
+// Utility: a solid lamp colour, not an animation — the fixture as a room light,
+// so a steady flat tile is it working. Color: any picked colour. White: a blackbody white
 // by Kelvin. Follow the day: warm at night, easing to a daylight white across
 // sunrise and back across sunset (needs the device clock). Preset: six real lamps.
 // Optional spot: the light gathered into a soft-edged pool (anti-aliased ranges on
