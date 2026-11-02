@@ -67,7 +67,7 @@
     refreshClock,
     refreshDevicePatterns,
   } from "../stores/device";
-  import { compileForLayout, layout, layoutKey } from "../stores/geometry";
+  import { compileForLayout, layout, layoutKey, sceneRigOf } from "../stores/geometry";
   import { compileToBytecode, luxel } from "../stores/pattern";
   import {
     activateScene,
@@ -165,7 +165,7 @@
   // (.claude/rules/web.md, and it cost a debug cycle here on 2026-09-26).
   // `needSprites` rides along because the two read the same thing.
   $: if (active) void needSprites(doc, $sprites);
-  $: if (active) normaliseSpriteBoxes(doc, $sprites, $spriteRev);
+  $: if (active) normaliseSpriteBoxes(doc, $sprites, $spriteRev, gridH);
 
   // A deep link (`#/scenes/<id>` in a fresh tab) lands HERE, not on the
   // Scenes page, so this screen asks for the library itself rather than
@@ -245,10 +245,15 @@
 
   /** The scene renders on the ONE Layout — the device's on a console, the
    *  `Preview as` choice in the playground. `deviceGeometry()` owns the
-   *  console half and nothing here may hand it anything else (#539/#573). */
-  $: rig = $layout;
+   *  console half and nothing here may hand it anything else (#539/#573).
+   *  On a strip that Layout's canvas is one row of `n` cells in index order
+   *  (`sceneRigOf`, Gitea #985), and the stage draws it as a bar. */
+  $: rig = sceneRigOf($layout) ?? $layout;
   $: gridW = rig.w;
   $: gridH = rig.h;
+  /** A one-row canvas (a strip): boxes are SEGMENTS — `x`, `w`; `y` 0, `h`
+   *  0 or 1 both the row — and a text layer draws nothing (scenes.md §2). */
+  $: oneRow = gridH === 1;
 
   /**
    * PATTERN source by store id. A device pattern's source streams in with the
@@ -617,23 +622,34 @@
   }
 
   /**
-   * NORMALISE a sprite layer's box to explicit w/h.
+   * NORMALISE a sprite layer's box to explicit w/h — where a zero means the
+   * sprite's NATURAL size, and only there.
    *
-   * The wire still allows `w`/`h` = 0 on a sprite layer and the firmware reads
-   * it as "the sprite's own size at (x, y)" — but the UI must not have two
-   * modes (Jeremy, 2026-09-26: "the stretch fit should force the UI to see the
-   * w + h the same always"). So a scene loaded from the store is normalised
-   * here, once its sprite's size is known, and `savedWire` is re-stamped with
-   * it: filling in a size that renders identically is not an edit the user
-   * made, and opening a scene must never arrive dirty.
+   * The wire allows `w`/`h` = 0 on a `fill`/`contain` sprite layer and the
+   * compositor reads it as "the sprite's own size at (x, y)" — but the UI must
+   * not have two modes (Jeremy, 2026-09-26: "the stretch fit should force the
+   * UI to see the w + h the same always"). So a scene loaded from the store is
+   * normalised here, once its sprite's size is known, and `savedWire` is
+   * re-stamped with it: filling in a size that renders identically is not an
+   * edit the user made, and opening a scene must never arrive dirty.
+   *
+   * Two zeros are NOT the natural size since Gitea #985, and rewriting them
+   * would change the picture:
+   *   * under `fit tile` a zero `w` or `h` is the WHOLE LAYOUT on that axis
+   *     (a bulb string that covers any strip without its length typed in),
+   *     so a tiled box is never touched;
+   *   * on a one-row canvas (a strip) `h` 0 is the row, so only `w` 0 is
+   *     natural there — and filling in the sprite's own `w`×`h` for it draws
+   *     exactly what the natural placement did.
    *
    * Its reactive statement is UP with `maybeAdopt`, not here — see there.
    */
-  function normaliseSpriteBoxes(s: Scene, _lib: unknown, _rev: unknown): void {
+  function normaliseSpriteBoxes(s: Scene, _lib: unknown, _rev: unknown, rows: number): void {
     let hit = false;
     const layers = s.layers.map((l) => {
       if (l.body.kind !== "sprite") return l;
-      if (l.style.rect.w !== 0 && l.style.rect.h !== 0) return l;
+      if (l.style.fit === "tile") return l;
+      if (l.style.rect.w !== 0 && (l.style.rect.h !== 0 || rows === 1)) return l;
       const size = sizeOf(l.body.id);
       if (!size) return l;
       hit = true;
@@ -646,10 +662,11 @@
   }
 
   /** What an unset box covers for the SELECTED layer — the sprite's own size
-   *  on a sprite layer, and "the whole layout" (null) on anything else. It is
-   *  what makes the marquee wrap a sprite whose box has not been normalised
-   *  yet (its record has not landed) instead of the whole grid
-   *  (`SceneStage`'s `natural`). Dependencies NAMED. */
+   *  on a `fill`/`contain` sprite layer, and "the whole layout" (null) on
+   *  anything else, a `tile` sprite included (#985). It is what makes the
+   *  marquee wrap a sprite whose box has not been normalised yet (its record
+   *  has not landed) instead of the whole grid (`SceneStage`'s `natural`).
+   *  Dependencies NAMED. */
   $: selNatural = naturalOf(sel, $sprites, $spriteRev);
 
   function naturalOf(
@@ -657,7 +674,7 @@
     _lib: unknown,
     _rev: unknown,
   ): { w: number; h: number } | null {
-    if (l?.body.kind !== "sprite") return null;
+    if (l?.body.kind !== "sprite" || l.style.fit === "tile") return null;
     // Narrowed into a local: the closure below re-widens `l.body` to the
     // whole union as far as svelte-check is concerned.
     return sizeOf(l.body.id);
@@ -737,14 +754,21 @@
 
   function onAdd(kind: LayerKind): void {
     const l = newLayer(kind);
-    if (kind === "color") l.style.rect = { x: 0, y: Math.max(0, gridH - 6), w: 0, h: 6 };
-    if (kind === "text") l.style.rect = { x: 0, y: Math.floor(gridH / 2) - 4, w: 0, h: 8 };
+    // On a strip a colour or text layer starts as the whole row (a text layer
+    // draws nothing there, but it keeps a box that means something on a
+    // panel), and a sprite sits ON the row: `y` 2 would be off the canvas.
+    if (kind === "color") {
+      l.style.rect = oneRow ? { x: 0, y: 0, w: 0, h: 0 } : { x: 0, y: Math.max(0, gridH - 6), w: 0, h: 6 };
+    }
+    if (kind === "text") {
+      l.style.rect = oneRow ? { x: 0, y: 0, w: 0, h: 0 } : { x: 0, y: Math.floor(gridH / 2) - 4, w: 0, h: 8 };
+    }
     // A fresh SPRITE layer is placed a little in from the corner. Its w/h stay
     // 0 for exactly as long as the layer names no sprite — there is no size to
     // be explicit ABOUT yet — and `setSprite`/`New…` fill them in the moment
     // one is bound (`normaliseSpriteBoxes` catches a stored scene the same
     // way).
-    if (kind === "sprite") l.style.rect = { x: 2, y: 2, w: 0, h: 0 };
+    if (kind === "sprite") l.style.rect = { x: 2, y: oneRow ? 0 : 2, w: 0, h: 0 };
     commit({ ...doc, layers: [...doc.layers, l] });
     selected = doc.layers.length - 1;
     // A PATTERN layer opens the picker (there is nothing useful to bind by
@@ -1120,6 +1144,7 @@
       {spriteDims}
       {patternNames}
       {layerErrors}
+      {oneRow}
       on:select={(e) => (selected = e.detail)}
       on:toggle={(e) => onToggle(e.detail)}
       on:reorder={(e) => onReorder(e.detail.from, e.detail.to)}

@@ -445,6 +445,31 @@ draws. Deliberately minimal (a timeline is the nicer v2): the asset partition
 has ~13 KB of headroom and this feature's whole web+wasm cost had to fit in
 about 1.5 KB of it.
 
+## Scenes on strips ✅ (2026-11-02, Gitea #985)
+
+D10 now reads **"a regular 1D or 2D Layout"** (proposal §5.4c, amended): a
+strip console — no map, or any 1-D map — has the Scenes and Sprites tabs and
+`Add to scene ▸`, because the engine composites a strip as one row of `n`
+cells in index order (docs/spec/scenes.md §2 "The canvas"). A 3D or
+irregular-map console still has none of them. The gate is one function,
+`sceneCanvas()` in `web/src/lib/geometry.ts`, a copy of the engine's rule
+and deliberately no looser.
+
+On a strip the scene editor's preview is an **n×1 bar** composited through
+the same `SceneRenderer` path the matrix preview uses; the box editor shows
+`x` and `w` only (a box is a segment; `y` 0, `h` 0 or 1 are the row), and the
+marquee slides and resizes along the bar. A text layer stays in `Add layer`
+and in the stack, but its row reads `draws nothing on a strip` (no glyph fits
+one row). Scene tiles and playlist/picker thumbnails draw the same 6:1 and
+72×16 bars a strip pattern gets.
+
+The playground follows the same rule for an explicit `Preview as` strip;
+Auto's placeholder strip (no fixture chosen yet) keeps the S6b empty state.
+
+The sprite-box normalisation no longer rewrites a `fit tile` layer's zero
+box: since #985 `w`/`h` 0 under `tile` is the whole layout on that axis, on
+every grid, not the sprite's natural size.
+
 ## Status-bar frame rate ✅ (Gitea #381)
 
 The counter at the right of the header (`data-role="fps"`) shows **the device's

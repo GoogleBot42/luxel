@@ -20,7 +20,6 @@
   import SpriteEditor from "./pages/SpriteEditor.svelte";
   import SceneEditor from "./pages/SceneEditor.svelte";
   import Settings from "./pages/Settings.svelte";
-  import { uiLayoutKind } from "./lib/settingsCaps";
   import { refreshScenes } from "./stores/scenes";
   import { refreshSprites } from "./stores/sprites";
   import BcBanner from "./components/BcBanner.svelte";
@@ -43,7 +42,7 @@
     refreshPlaylist,
     startSessionPoll,
   } from "./stores/device";
-  import { layout, pixelTotal, runMapProgram, setPreviewAs } from "./stores/geometry";
+  import { layout, pixelTotal, runMapProgram, sceneCanvas, setPreviewAs } from "./stores/geometry";
   import { setBanner } from "./stores/notify";
   import {
     decodeShare,
@@ -108,16 +107,18 @@
    * The tab strip, data-driven so Scenes (#480) is one more entry.
    *
    * SCENES (D10, proposal §5.4c) is the one tab that is NOT gated on "is
-   * there a device": it needs a regular 2D grid to draw on, nothing else. On
-   * a console that is strictly the DEVICE's Layout kind — a strip, 3D or
-   * custom-map board never shows it, and an empty matrix always does (S6c).
-   * In the playground there is no hardware constraint, so the tab is always
-   * present and the page carries the S6b empty state that sets the fixture;
-   * hiding it there would make the feature undiscoverable.
+   * there a device": it needs a canvas to draw on, nothing else. Since Gitea
+   * #985 that is "a regular 1D or 2D Layout" — the engine's own rule
+   * (`sceneCanvas`): a strip (mapless or 1-D mapped) composites onto an n×1
+   * row, a regular grid onto itself, and an irregular 2-D or any 3-D map
+   * onto nothing, so those boards never show the tab. On a console that is
+   * strictly the DEVICE's Layout, and an empty strip or matrix always has
+   * the tab (S6c). In the playground there is no hardware constraint, so the
+   * tab is always present and the page carries the S6b empty state that sets
+   * the fixture; hiding it there would make the feature undiscoverable.
    */
   $: scenesReady =
-    $device === null ||
-    ($deviceLayoutWire !== null && uiLayoutKind($deviceLayoutWire.kind, $layout.dims) === "matrix");
+    $device === null || ($deviceLayoutWire !== null && sceneCanvas($layout) !== null);
   // ORDER: Patterns · Sprites · Scenes · Playlist · Settings. Jeremy,
   // 2026-09-26: "the scene tab should be after the sprites tab" — the strip
   // reads bottom-up now, smallest thing you make first. A pattern is a
@@ -126,7 +127,7 @@
   $: tabs = [
     { id: "patterns" as const, label: "Patterns", show: true },
     // SPRITES (#740) is gated identically to Scenes and for the same reason: a
-    // sprite is drawn for a scene layer, and a scene needs a regular 2D grid.
+    // sprite is drawn for a scene layer, and a scene needs a canvas.
     // Same test, deliberately not a second one.
     { id: "sprites" as const, label: "Sprites", show: scenesReady },
     { id: "scenes" as const, label: "Scenes", show: scenesReady },

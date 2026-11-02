@@ -46,8 +46,9 @@
    * What an UNSET axis of the box really covers, when the layer knows.
    *
    * `w`/`h` = 0 means "the whole layout on that axis" for a pattern or a text
-   * layer — but for a SPRITE it means the sprite's own size at (x, y)
-   * (Gitea #740's fit rule). Drawing the marquee across the whole grid for a
+   * layer — but for a `fill`/`contain` SPRITE it means the sprite's own size
+   * at (x, y) (Gitea #740's fit rule; a `tile` sprite's zero is the whole
+   * layout again since #985, and the page passes null for it). Drawing the marquee across the whole grid for a
    * 12×12 sprite makes the one direct-manipulation affordance in the app read
    * as "you are dragging the canvas", which is the opposite of what #741 asked
    * for. The page passes the sprite's dimensions here and the marquee wraps
@@ -84,14 +85,22 @@
     }
   }
 
+  /** A one-row canvas — a strip (Gitea #985). The stage is a bar there and
+   *  a box is a SEGMENT: whatever `y`/`h` the record holds, it is drawn as
+   *  the row, and a drag only ever moves or resizes it along `x`. */
+  $: oneRow = h === 1;
+
   /** The box in CSS percentages of the stage — `w`/`h` = 0 is "the whole
-   *  layout on that axis" (docs/spec/scenes.md §2). */
+   *  layout on that axis" (docs/spec/scenes.md §2), except on a `fill` /
+   *  `contain` sprite, whose zero is its natural size (`natural`; the page
+   *  passes null for a `tile` sprite, where a zero is the whole layout too).
+   *  On one row `h` is the row whatever it says. */
   $: box = rect
     ? {
         x: rect.x,
-        y: rect.y,
+        y: oneRow ? 0 : rect.y,
         w: rect.w === 0 ? (natural?.w ?? w) : rect.w,
-        h: rect.h === 0 ? (natural?.h ?? h) : rect.h,
+        h: oneRow ? 1 : rect.h === 0 ? (natural?.h ?? h) : rect.h,
       }
     : null;
 
@@ -144,7 +153,9 @@
     const bw = s.w === 0 ? (natural?.w ?? w) : s.w;
     const bh = s.h === 0 ? (natural?.h ?? h) : s.h;
     if (grab.mode === "move") {
-      dispatch("rect", { ...s, x: c.col - grab.ox, y: c.row - grab.oy });
+      // on a strip the segment slides along the row: `y` lands on it and `h`
+      // keeps its word (0 stays 0 — a drag must not invent a height)
+      dispatch("rect", { ...s, x: c.col - grab.ox, y: oneRow ? 0 : c.row - grab.oy });
       return;
     }
     // A resize moves one corner and keeps the opposite one put; the box never
@@ -163,6 +174,10 @@
       y = c.row;
     } else {
       nh = c.row - y + 1;
+    }
+    if (oneRow) {
+      dispatch("rect", { ...s, x, y: 0, w: Math.max(1, nw) });
+      return;
     }
     dispatch("rect", { x, y, w: Math.max(1, nw), h: Math.max(1, nh) });
   }
@@ -221,7 +236,14 @@
     </div>
 
     <div class="stage" bind:this={stage}>
-      <canvas bind:this={canvas} width={w} height={h} data-role="scene-stage"></canvas>
+      <canvas
+        bind:this={canvas}
+        class:bar={oneRow}
+        width={w}
+        height={h}
+        data-role="scene-stage"
+        data-shape={oneRow ? "bar" : "grid"}
+      ></canvas>
       {#if marq}
         <div
           class="marq"

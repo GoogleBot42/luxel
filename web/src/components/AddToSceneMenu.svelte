@@ -5,9 +5,10 @@
   // "the place you just tuned the look" is identical wherever you are.
   //
   // It is a row, not a page: whether it exists at all is the CALLER's call
-  // (`scenesAvailable` in `lib/sceneWire.ts` — a scene needs a regular 2D
-  // grid, so on a strip, lattice or custom-map console the item is ABSENT, not
-  // disabled; S2e draws that menu as simply one item shorter).
+  // (the shell's `scenesReady`, over `sceneCanvas` in `lib/geometry.ts` — a
+  // scene needs a strip's row or a regular grid, so on a lattice or an
+  // irregular-map console the item is ABSENT, not disabled; S2e draws that
+  // menu as simply one item shorter).
   //
   // The parent row is a <div role="menuitem">, deliberately not a <button>:
   // `components/Popover.svelte` closes a `menu` popover on any button click

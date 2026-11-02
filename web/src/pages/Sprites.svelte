@@ -33,7 +33,7 @@
   import SpriteImport from "../components/sprite/SpriteImport.svelte";
   import { confirm } from "../stores/dialog";
   import { isPlayground } from "../stores/device";
-  import { layout, setPreviewAs } from "../stores/geometry";
+  import { layout, scenesFixture, setPreviewAs } from "../stores/geometry";
   import {
     cloneLibrarySprite,
     librarySprites,
@@ -64,9 +64,10 @@
   /** The one sentence, identical on the populated page and the empty one. */
   const LEDE = "Sprites are small pixel images you draw, for scene layers.";
 
-  /** A matrix is what a sprite is FOR. Same test as Scenes (`deviceGeometry()`
-   *  on a console, `Preview as` in the playground). */
-  $: ready = $layout.dims === 2 && $layout.regular && $layout.w > 0 && $layout.h > 0;
+  /** A scene canvas is what a sprite is FOR — a strip's row or a matrix
+   *  (#985). Same test as Scenes (`deviceGeometry()` on a console, `Preview
+   *  as` in the playground). */
+  $: ready = scenesFixture($layout);
 
   // ---- the source control (#785) ----
   //
@@ -252,7 +253,7 @@
          — a console's tab is gated on its Layout and never appears here. -->
     <div class="empty" data-role="sprites-empty-fixture">
       <div class="dim" style="font-size:13px">
-        Sprites are small pixel images you draw, for scene layers on a matrix.
+        Sprites are small pixel images you draw, for scene layers on a strip or a matrix.
       </div>
       <button
         class="btn primary"

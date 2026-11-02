@@ -102,7 +102,9 @@ await surface("patterns", "[data-role='patterns-panel']");
 for (const t of ["scenes", "sprites", "playlist", "settings"]) {
   const present = await page.$(`[data-role="tab-${t}"]`);
   if (!present) {
-    console.log(` --   ${t}: tab not offered on this board (expected on a strip)`);
+    // Both shapes this walks offer every tab: a strip has a scene canvas (one
+    // row in index order) since Gitea #985, so Scenes and Sprites are there too.
+    ok(`${t}: tab offered on a ${BOARD}`, false, "tab absent");
     continue;
   }
   await tab(t);
@@ -123,13 +125,13 @@ if (await page.$("[data-role='editor-back']")) {
 
 // The two document editors open by CREATING and routing (there is no `new`
 // route — see lib/router.ts), which is exactly what the tab's primary button
-// does. On a strip the tabs are not offered at all, so neither is the editor.
+// does. Both board shapes offer both tabs (a strip since #985).
 for (const [label, kind, view] of [
   ["scene-editor", "scenes", "scene-editor-view"],
   ["sprite-editor", "sprites", "sprite-editor-view"],
 ]) {
   if (!(await page.$(`[data-role="tab-${kind}"]`))) {
-    console.log(` --   ${label}: ${kind} tab not offered on this board`);
+    ok(`${label}: opened`, false, `no ${kind} tab on a ${BOARD}`);
     continue;
   }
   await tab(kind);

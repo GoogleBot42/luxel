@@ -232,7 +232,9 @@
   });
 </script>
 
-<div class="tiles" data-role="scenes-grid" data-source={mode}>
+<!-- `bars` on a strip: one row of cells is drawn as the 6:1 bar every strip
+     tile is (Gitea #985), not stretched into a square. -->
+<div class="tiles" class:bars={thumbRig.h === 1} data-role="scenes-grid" data-source={mode}>
   {#each tiles as t (t.scene.id)}
     <div
       class="tile"

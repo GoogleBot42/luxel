@@ -69,6 +69,7 @@ export const PORT = {
     devSprites: p(54), // device-e2e: panel mirror for the SPRITES section (#740/#741) — its
     //                    own mirror because the `// @sprite` migration runs once, at boot,
     //                    so the legacy pattern has to be in the store before the console opens
+    stripScenes: p(55), // device-e2e: 150 px strip mirror for the strip SCENES checks (#985)
   },
   /** sync-e2e's UDP beacon group port. */
   sync: p(42),

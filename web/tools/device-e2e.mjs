@@ -521,11 +521,11 @@ try {
         }),
       );
       // Jeremy, 2026-09-26: "the scene tab should be after the sprites tab."
-      // This mirror is a 120px STRIP, so the two matrix-gated tabs are absent
-      // here — the panel console below is where their order is read.
+      // This mirror is a 120px STRIP, and a strip has a scene canvas since
+      // Gitea #985 (one row in index order), so it carries all five.
       check(
-        "shell: a strip console's tabs are Patterns · Playlist · Settings",
-        tabs.map((t) => t.label).join(",") === "Patterns,Playlist,Settings",
+        "shell: a strip console's tabs are Patterns · Sprites · Scenes · Playlist · Settings",
+        tabs.map((t) => t.label).join(",") === "Patterns,Sprites,Scenes,Playlist,Settings",
         tabs.map((t) => t.label).join(","),
       );
       const on = tabs.find((t) => t.on);
@@ -2079,6 +2079,35 @@ try {
       .$eval('[data-role="layout-label"]', (el) => el.textContent.trim())
       .catch(() => "");
     check("3D: the header chip says what shape the fixture is", chipShape === "8×8×8 lattice", chipShape);
+    // D10 (#985): a 3-D Layout has no scene canvas, exactly as the engine
+    // says — so Scenes and Sprites leave the tab strip with it. Read on a
+    // FRESH console (its own context, so no shared working copy): this page
+    // may have the editor up over its Settings, and the shell's tab strip is
+    // not rendered under an editor, which would pass a "no tab" check for
+    // nothing.
+    const shellTabs = async () => {
+      const ctx = await browser.createBrowserContext();
+      const pg = await ctx.newPage();
+      try {
+        await pg.setViewport({ width: 1400, height: 900 });
+        await gotoConsole(pg, DEV);
+        await pg.waitForSelector('[data-role="tab-patterns"]', { timeout: 15000 });
+        await sleep(800);
+        return await pg.$$eval('[data-role="tabs"] button', (els) =>
+          els.map((e) => (e.textContent ?? "").trim()).join(","),
+        );
+      } catch (e) {
+        return `error: ${e}`;
+      } finally {
+        await ctx.close();
+      }
+    };
+    const latTabs = await shellTabs();
+    check(
+      "3D: a lattice console has no Scenes or Sprites tab (D10 — no canvas)",
+      latTabs === "Patterns,Playlist,Settings",
+      latTabs,
+    );
     const rows3d = await page.$$eval('[data-role="projection-kind"]', (els) =>
       els.map((e) => e.dataset.dims).join(","),
     );
@@ -2117,6 +2146,12 @@ try {
       "3D: …and switching back to Strip leaves the fixture as it was",
       restored3d.kind === "strip" && restored3d.dims === 1 && restored3d.pixels === 120,
       JSON.stringify({ kind: restored3d.kind, dims: restored3d.dims, pixels: restored3d.pixels }),
+    );
+    const stripTabs = await shellTabs();
+    check(
+      "3D: …and the strip's Scenes and Sprites tabs come back with it (#985)",
+      stripTabs === "Patterns,Sprites,Scenes,Playlist,Settings",
+      stripTabs,
     );
   }
 
@@ -2383,9 +2418,11 @@ try {
     afterSaveMenu.includes("add-to-playlist") && afterSaveMenu.includes("delete"),
     afterSaveMenu.join(","),
   );
+  // (a strip console carries `Add to scene ▸` in that group since #985)
   check(
     "E6: and the on-device group is ruled off first, as in the mock",
-    afterSaveMenu.join(",") === "add-to-playlist,—,duplicate,epe-export,epe-import,—,delete",
+    afterSaveMenu.join(",") ===
+      "add-to-playlist,add-to-scene,—,duplicate,epe-export,epe-import,—,delete",
     afterSaveMenu.join(","),
   );
   await page.keyboard.press("Escape");
@@ -2675,16 +2712,20 @@ try {
     await page.waitForSelector('[data-role="tile-menu-popup"]', { timeout: 3000 });
     await page.screenshot({ path: `${shotDir}/device-e2e-tile-menu.png` });
     // the menu is mockup S2's `.menu`: three separated groups, the document
-    // verbs in the middle, the destructive one last (#538 fidelity closure)
+    // verbs in the middle, the destructive one last (#538 fidelity closure).
+    // This mirror is a strip, which holds scenes since #985, so `Add to scene
+    // ▸` is in the first group (its submenu rows are not menu rows of their own).
     const menuShape = await page.$eval('[data-role="tile-menu-popup"]', (el) => ({
-      items: [...el.querySelectorAll(".mi")].map((b) => (b.textContent ?? "").trim()),
+      items: [...el.querySelectorAll(".mi")]
+        .filter((b) => b.closest(".sub") === null)
+        .map((b) => (b.classList.contains("parent") ? "Add to scene ▸" : (b.textContent ?? "").trim())),
       seprs: el.querySelectorAll(".sepr").length,
       lastIsDelete: el.lastElementChild?.getAttribute("data-role") === "tile-menu-delete",
     }));
     check(
       "patterns: the tile ⋯ menu carries the mock's item list, separated",
       menuShape.items.join("|") ===
-        "Add to playlist|Duplicate|Export .epe|Import .epe…|Delete" &&
+        "Add to playlist|Add to scene ▸|Duplicate|Export .epe|Import .epe…|Delete" &&
         menuShape.seprs === 2 &&
         menuShape.lastIsDelete,
       JSON.stringify(menuShape),
@@ -5253,10 +5294,12 @@ try {
 
   // ---- Scenes on a console (Gitea #480; mockups S6 · S6c · S7) ----------
   //
-  // D10, the visibility rule: a matrix console ALWAYS has the Scenes tab, a
-  // strip console never does. The main mirror here is a 120 px strip, so it
-  // is the negative case; a `--board panel` mirror beside it is the positive
-  // one.
+  // D10, the visibility rule — "a regular 1D or 2D Layout" since Gitea #985:
+  // a matrix console ALWAYS has the Scenes tab, and so does a strip, whose
+  // canvas is one row of n cells in index order. The main mirror here is a
+  // 120 px strip; a 150 px strip mirror beside it carries the strip editor
+  // checks (two segments, the n×1 bar, the segment box), and a `--board panel`
+  // mirror the matrix ones.
   //
   // The rest is the #563 live-push discipline applied to a scene: editing the
   // scene the device is SHOWING reaches it as it happens, editing any other
@@ -5264,8 +5307,9 @@ try {
   // cannot see, so it is asserted here.
   {
     check(
-      "scenes: a strip console has no Scenes tab (D10)",
-      (await page.$('[data-role="tab-scenes"]')) === null,
+      "scenes: a strip console has the Scenes tab (D10, #985)",
+      (await page.$('[data-role="tab-scenes"]')) !== null &&
+        (await page.$('[data-role="tab-sprites"]')) !== null,
     );
 
     // The same Layout gate on the EDITOR (Gitea #486, mockup S2f): a strip
@@ -5318,6 +5362,206 @@ try {
       );
       await page.click('[data-role="editor-back"]').catch(() => {});
       await sleep(600);
+    }
+
+    // ---- scenes on a STRIP (Gitea #985) --------------------------------
+    // Its own 150 px mirror, so the scene and the two patterns it stores never
+    // reach the main mirror's library (later sections count it). The boxes are
+    // the spec's zones example, docs/spec/scenes.md §2: `0 0 75 0` and
+    // `75 0 75 0` — two segments of one row.
+    {
+      const ST_PORT = E2E.mirror.stripScenes; // E2E_PORT + 55
+      const ST = `http://127.0.0.1:${ST_PORT}`;
+      const stDev = spawn(
+        "../target/debug/luxel",
+        ["serve", ...NO_NETIN, "--port", String(ST_PORT), "--pixels", "150"],
+        { stdio: ["ignore", "pipe", "inherit"] },
+      );
+      await new Promise((resolve, reject) => {
+        stDev.stdout.on("data", (d) => String(d).includes("luxel serve:") && resolve());
+        stDev.on("exit", () => reject(new Error("strip scenes mirror died")));
+        setTimeout(() => reject(new Error("strip scenes mirror start timeout")), 30000);
+      });
+      process.on("exit", () => stDev.kill());
+      const seed = async (name, src) =>
+        (
+          await fetch(`${ST}/api/patterns`, { method: "POST", body: await lxpBody(name, src, 150) })
+        ).json();
+      const red = await seed("Strip Red", "export function render(index) { rgb(1, 0, 0) }\n");
+      const green = await seed("Strip Green", "export function render(index) { rgb(0, 1, 0) }\n");
+      const stPage = await browser.newPage();
+      try {
+        await stPage.setViewport({ width: 1400, height: 950 });
+        await gotoConsole(stPage, ST);
+        await stPage.waitForSelector('[data-role="tab-scenes"]', { timeout: 15000 });
+        await stPage.click('[data-role="tab-scenes"]');
+        await stPage.waitForSelector('[data-role="scenes-empty"]', { timeout: 10000 });
+        check(
+          "strip scenes: the Scenes tab opens on the S6c empty state, not the no-fixture one",
+          (await stPage.$('[data-role="scenes-empty-fixture"]')) === null,
+        );
+        await stPage.screenshot({ path: `${shotDir}/device-e2e-strip-scenes-empty.png` });
+
+        await stPage.$eval('[data-role="new-scene-empty"]', (el) => el.click());
+        await stPage.waitForSelector('[data-role="scene-editor-view"]:not([hidden])', {
+          timeout: 10000,
+        });
+        await sleep(800);
+        const stage0 = await evalOr(
+          stPage,
+          '[data-role="scene-stage"]',
+          (c) => ({ w: c.width, h: c.height, shape: c.dataset.shape ?? "" }),
+          null,
+        );
+        check(
+          "strip scenes: the preview is the n×1 bar (150×1)",
+          stage0 !== null && stage0.w === 150 && stage0.h === 1 && stage0.shape === "bar",
+          JSON.stringify(stage0),
+        );
+
+        // two pattern layers, each bound through the picker and boxed through
+        // the SEGMENT box editor (`x`, `w` only)
+        const addPattern = async (id, x, w) => {
+          await stPage.click('[data-role="scene-add-layer"]');
+          await sleep(300);
+          await stPage.click('[data-role="scene-add-pat"]');
+          const item = `[data-role="pattern-picker"] [data-role="picker-item"][data-kind="pattern"][data-id="${id}"]`;
+          await stPage.waitForSelector(item, { timeout: 15000 });
+          await sleep(300);
+          await stPage.$eval(item, (el) => el.click());
+          await sleep(700);
+          for (const [field, v] of [
+            ["x", x],
+            ["w", w],
+          ]) {
+            await stPage.$eval(
+              `[data-role="scene-box-${field}"]`,
+              (el, val) => {
+                el.value = String(val);
+                el.dispatchEvent(new Event("change", { bubbles: true }));
+              },
+              v,
+            );
+            await sleep(250);
+          }
+        };
+        await addPattern(red.id, 0, 75);
+        check(
+          "strip scenes: the box editor is a segment — x and w, no y or h",
+          (await stPage.$('[data-role="scene-box-x"]')) !== null &&
+            (await stPage.$('[data-role="scene-box-w"]')) !== null &&
+            (await stPage.$('[data-role="scene-box-y"]')) === null &&
+            (await stPage.$('[data-role="scene-box-h"]')) === null,
+        );
+        await addPattern(green.id, 75, 75);
+        // the composite, read off the stage canvas: red on the first segment,
+        // green on the second
+        await stPage
+          .waitForFunction(
+            () => {
+              const c = document.querySelector('[data-role="scene-stage"]');
+              const g = c?.getContext("2d");
+              if (!g || c.width !== 150) return false;
+              const a = g.getImageData(10, 0, 1, 1).data;
+              const b = g.getImageData(140, 0, 1, 1).data;
+              return a[0] > 150 && b[1] > 150;
+            },
+            { timeout: 15000, polling: 250 },
+          )
+          .catch(() => {});
+        const halves = await stPage.$eval('[data-role="scene-stage"]', (c) => {
+          const g = c.getContext("2d");
+          const at = (x) => Array.from(g.getImageData(x, 0, 1, 1).data).slice(0, 3);
+          return { left: at(10), seamL: at(74), seamR: at(75), right: at(140) };
+        });
+        check(
+          "strip scenes: the n×1 preview is lit on both halves (red | green)",
+          halves.left[0] > 150 &&
+            halves.left[1] < 60 &&
+            halves.seamL[0] > 150 &&
+            halves.seamR[1] > 150 &&
+            halves.seamR[0] < 60 &&
+            halves.right[1] > 150,
+          JSON.stringify(halves),
+        );
+        // the selected (top) layer's marquee is the right half of the bar
+        const marq = await stPage.evaluate(() => {
+          const v = document.querySelector('[data-role="scene-editor-view"]');
+          const s = v.querySelector('[data-role="scene-stage"]').getBoundingClientRect();
+          const m = v.querySelector('[data-role="scene-marquee"]')?.getBoundingClientRect();
+          return m
+            ? { left: (m.left - s.left) / s.width, width: m.width / s.width, h: m.height / s.height, ar: s.width / s.height }
+            : null;
+        });
+        check(
+          "strip scenes: the marquee outlines the segment on the bar",
+          marq !== null &&
+            Math.abs(marq.left - 0.5) < 0.02 &&
+            Math.abs(marq.width - 0.5) < 0.02 &&
+            marq.h > 0.9 &&
+            marq.ar > 5,
+          JSON.stringify(marq),
+        );
+        await stPage.screenshot({ path: `${shotDir}/device-e2e-strip-scene-editor.png` });
+
+        await stPage.click('[data-role="scene-save"]');
+        await sleep(1000);
+        const stStored = await fetch(`${ST}/api/scenes`).then((r) => r.json());
+        const boxes = (stStored.scenes?.[0]?.layers ?? []).map((l) => [l.x, l.y, l.w, l.h]);
+        check(
+          "strip scenes: Save stores the two segments as `0 0 75 0` and `75 0 75 0`",
+          JSON.stringify(boxes) === JSON.stringify([[0, 0, 75, 0], [75, 0, 75, 0]]),
+          JSON.stringify(boxes),
+        );
+
+        // a text layer stays offered and SAYS it draws nothing on one row
+        await stPage.click('[data-role="scene-add-layer"]');
+        await sleep(300);
+        const textNote = await evalOr(
+          stPage,
+          '[data-role="scene-add-text-note"]',
+          (el) => (el.textContent ?? "").trim(),
+          "",
+        );
+        await stPage.click('[data-role="scene-add-text"]');
+        await sleep(600);
+        const rowNote = await evalOr(
+          stPage,
+          '[data-role="scene-layer-strip-note"]',
+          (el) => (el.textContent ?? "").trim(),
+          "",
+        );
+        check(
+          "strip scenes: a text layer is offered, and its row says it draws nothing on a strip",
+          textNote === "draws nothing on a strip" && rowNote === "draws nothing on a strip",
+          `${textNote} · ${rowNote}`,
+        );
+
+        // keep it (a clean editor leaves without asking), then `Add to scene ▸`
+        // in the pattern editor's ⋯, on a strip console
+        await stPage.click('[data-role="scene-save"]');
+        await sleep(900);
+        await stPage.click('[data-role="scene-editor-back"]');
+        await sleep(500);
+        await stPage.click('[data-role="tab-patterns"]');
+        await stPage.waitForSelector(`${DTILE}`, { timeout: 15000 });
+        await sleep(600);
+        await tileAction(stPage, `${DGRID} [data-role="tile"][data-name="Strip Red"]`, "tile-edit");
+        await stPage.waitForSelector('[data-role="editor-view"]:not([hidden]) .cm-content', {
+          timeout: 15000,
+        });
+        await sleep(1500);
+        await stPage.click('[data-role="overflow"]');
+        const addTo = await stPage
+          .waitForSelector('[data-role="add-to-scene"]', { timeout: 4000 })
+          .then(() => true)
+          .catch(() => false);
+        check("strip scenes: the editor ⋯ carries `Add to scene ▸` on a strip (#985)", addTo);
+        await stPage.keyboard.press("Escape");
+      } finally {
+        await stPage.close();
+        stDev.kill();
+      }
     }
 
     const SC_PORT = E2E.mirror.devScenes; // E2E_PORT + 51
@@ -6690,10 +6934,14 @@ try {
     }
   }
 
-  // ---- …and on a STRIP console the item is ABSENT, not disabled (S2e) ----
+  // ---- …and the same menu on a STRIP console (S2e) ----
   //
-  // The main mirror is a 120 px strip, so this is the same menu on hardware
-  // that cannot hold a scene: one item shorter, nothing greyed.
+  // The main mirror is a 120 px strip. Before #985 this asserted the menu was
+  // one item shorter there; a strip holds scenes now, and the "strip scenes"
+  // section asserts `Add to scene ▸` IS in it (for a stored pattern — this
+  // editor's document may be an unsaved working copy, which never has the
+  // row). What stays true on every console is the §5.7 half: nothing greyed
+  // without a reason.
   {
     await leaveEditor(page);
     await reloadInto(page, EDIT);
@@ -6702,10 +6950,6 @@ try {
     });
     await page.click('[data-role="overflow"]');
     await sleep(300);
-    check(
-      "scenes: a strip console's ⋯ has no `Add to scene` at all (absent, not disabled)",
-      (await page.$('[data-role="add-to-scene"]')) === null,
-    );
     const stripSweep = await disabledSweep(page);
     check(
       "scenes: and nothing in that menu is disabled without a reason",

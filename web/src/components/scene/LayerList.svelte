@@ -33,6 +33,14 @@
    *  that there is something to read, which is what makes a broken layer
    *  findable in a stack of five. */
   export let layerErrors: Record<number, string> = {};
+  /** The canvas is ONE row (a strip, Gitea #985). No glyph fits one row, so
+   *  a text layer draws nothing there — its row and the menu's Text entry say
+   *  so instead of the control disappearing (the same scene on a panel draws
+   *  its text, and a strip scene can still carry one). */
+  export let oneRow = false;
+
+  /** The note a text layer carries on a strip. */
+  const TEXT_ON_STRIP = "draws nothing on a strip";
 
   const dispatch = createEventDispatcher<{
     select: number;
@@ -258,6 +266,10 @@
                 <path d="M12 10v4.4M12 17.6v.1" />
               </svg>
             </span>
+          {:else if oneRow && r.layer.body.kind === "text" && r.layer.style.visible}
+            <span class="meta2 snote" data-role="scene-layer-strip-note" title="no glyph fits one row"
+              >{TEXT_ON_STRIP}</span
+            >
           {:else}
             <span class="meta2">{metaOf(r.layer, r.at, spriteDims)}</span>
           {/if}
@@ -330,6 +342,7 @@
         {/if}
         <button class="mi" data-role="scene-add-text" on:click={() => add("text")}>
           <LayerIcon kind="text" /><span class="ml">Text</span>
+          {#if oneRow}<span class="mdim" data-role="scene-add-text-note">{TEXT_ON_STRIP}</span>{/if}
         </button>
         <button class="mi" data-role="scene-add-sprite" on:click={() => add("sprite")}>
           <LayerIcon kind="sprite" /><span class="ml">Sprite</span>

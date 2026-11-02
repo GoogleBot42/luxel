@@ -89,7 +89,7 @@
   import { paintGrid } from "../lib/draw";
   import type { Luxel } from "../lib/luxel";
   import type { Scene } from "../lib/scene";
-  import { layout as layoutStore, thumbLayout, type Layout } from "../stores/geometry";
+  import { layout as layoutStore, sceneRigOf, thumbLayout, type Layout } from "../stores/geometry";
 
   export let luxel: Luxel | null = null;
   /** The scene to composite. */
@@ -108,9 +108,12 @@
   let last = 0;
   let built = "";
 
-  /** A scene is composited on a regular 2D grid; the thumbnail uses the same
-   *  tile-sized copy of it the Scenes page's tiles do. */
-  $: thumbRig = thumbLayout(rig ?? $layoutStore, 1024);
+  /** A scene is composited on the Layout's canvas — a regular grid, or a
+   *  strip's n×1 row (#985); the thumbnail uses the same tile-sized copy of it
+   *  the Scenes page's tiles do, and on a strip it is drawn as the 72×16 bar
+   *  `PatternThumb` draws a strip pattern with, so a row cannot tell the two
+   *  apart there either. */
+  $: thumbRig = thumbLayout(rig ?? sceneRigOf($layoutStore) ?? $layoutStore, 1024);
   /** Rebuild when the record or the rig actually changes — not on every tick. */
   $: key = `${scene.id}:${scene.layers.length}:${thumbRig.w}x${thumbRig.h}:${JSON.stringify(scene.layers)}`;
   $: if (canvas && luxel && key !== built) {
@@ -172,8 +175,9 @@
   });
 </script>
 
-<span class="thumb" class:dead data-shape="grid" data-role="scene-thumb">
-  <canvas class="sq" bind:this={canvas} width="48" height="48"></canvas>
+<span class="thumb" class:dead data-shape={thumbRig.h === 1 ? "bar" : "grid"} data-role="scene-thumb">
+  <canvas class:sq={thumbRig.h !== 1} class:bar={thumbRig.h === 1} bind:this={canvas} width="48" height="48"
+  ></canvas>
   {#if !ready && !dead}
     <span class="spinner overlay" data-role="thumb-spinner" aria-label="loading preview"></span>
   {/if}
@@ -199,6 +203,12 @@
   .sq {
     width: 48px;
     height: 48px;
+  }
+
+  /* PatternThumb's strip bar, to the pixel */
+  .bar {
+    width: 72px;
+    height: 16px;
   }
 
   .thumb.dead canvas {

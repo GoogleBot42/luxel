@@ -20,13 +20,16 @@
   // not change what the LEDs are doing (#563) — the scene is stored and the
   // editor opens on it.
   //
-  // WHEN THE PAGE HAS CONTENT (D10, §5.4c):
-  //   * console — strictly by Layout kind. A matrix console always has the
-  //     tab, empty or not (S6c). A strip/3D/map console never does, and the
-  //     shell's tab list is what enforces that.
+  // WHEN THE PAGE HAS CONTENT (D10, §5.4c — "a regular 1D or 2D Layout"
+  // since Gitea #985):
+  //   * console — strictly by Layout. A strip or matrix console always has
+  //     the tab, empty or not (S6c); a strip composites onto an n×1 row. An
+  //     irregular-map or 3D console never does, and the shell's tab list is
+  //     what enforces that (`sceneCanvas`, the engine's own rule).
   //   * playground — the tab is always there (hiding it would make the
-  //     feature undiscoverable), and when the `Preview as` chip is not a
-  //     matrix the page is the S6b empty state whose one action sets it.
+  //     feature undiscoverable), and when the `Preview as` chip names no
+  //     fixture with a canvas — Auto's placeholder strip, a lattice, a map —
+  //     the page is the S6b empty state whose one action sets one.
   //
   // PLAYING, in the playground (#742 item 40): there is no device, so the
   // tiles wear `Open` and the gesture opens the scene editor — whose stage
@@ -42,7 +45,7 @@
   import { listPatterns } from "../lib/store";
   import { confirm } from "../stores/dialog";
   import { device, devicePatterns, isPlayground } from "../stores/device";
-  import { layout, setPreviewAs } from "../stores/geometry";
+  import { layout, sceneRigOf, scenesFixture, setPreviewAs } from "../stores/geometry";
   import {
     cloneLibraryScene,
     libraryLookup,
@@ -76,10 +79,13 @@
   const LEDE = "Layer patterns, text and images on top of each other.";
   const LEDE_2 = " Scenes play like patterns.";
 
-  /** A matrix is what a scene needs. On a console this is the DEVICE's
-   *  Layout and nothing else (`deviceGeometry()`, #539/#573); in the
-   *  playground it is the `Preview as` choice. */
-  $: ready = $layout.dims === 2 && $layout.regular && $layout.w > 0 && $layout.h > 0;
+  /** A canvas is what a scene needs — a strip's row or a matrix's grid
+   *  (`scenesFixture`, #985). On a console this is the DEVICE's Layout and
+   *  nothing else (`deviceGeometry()`, #539/#573); in the playground it is
+   *  the `Preview as` choice. */
+  $: ready = scenesFixture($layout);
+  /** The rig the tiles composite on: the Layout, as the n×1 row on a strip. */
+  $: rig = sceneRigOf($layout) ?? $layout;
 
   // ---- the source control (#785) ----
 
@@ -203,13 +209,14 @@
   hidden={!active}
 >
   {#if !ready}
-    <!-- S6b: no 2D fixture. One sentence, the single action that unblocks the
-         page, and the follow-up step as dim text rather than a second button.
+    <!-- S6b: no fixture with a canvas. One sentence, the single action that
+         unblocks the page, and the follow-up step as dim text rather than a
+         second button.
          Reachable only in the playground — a console's tab is gated on its
          Layout and never appears here. -->
     <div class="empty" data-role="scenes-empty-fixture">
       <div class="dim" style="font-size:13px">
-        Scenes layer patterns, text and images on a matrix.
+        Scenes layer patterns, text and images on a strip or a matrix.
       </div>
       <button
         class="btn primary"
@@ -253,7 +260,7 @@
           mode="library"
           items={$libraryScenes.map((s) => s.scene)}
           canPlay={false}
-          rig={$layout}
+          {rig}
           lookup={libraryLookup}
           sprites={librarySpriteBytesOf}
           spriteRev={$libraryRev}
@@ -277,7 +284,7 @@
         items={$scenes}
         playingId={$activeSceneId}
         canPlay={!$isPlayground}
-        rig={$layout}
+        {rig}
         {lookup}
         sprites={spriteBytesOf}
         spriteRev={$spriteRev}
