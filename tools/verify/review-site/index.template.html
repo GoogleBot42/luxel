@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Luxel library review</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="review.css">
+</head>
+<body>
+<header id="top">
+  <div class="bar">
+    <h1>Luxel library review</h1>
+    <input id="q" type="search" placeholder="Search name or slug" autocomplete="off">
+    <nav id="chips">
+      <button data-f="all" class="on">All</button>
+      <button data-f="patterns">Patterns</button>
+      <button data-f="scenes">Scenes</button>
+      <button data-f="sprites">Sprites</button>
+      <button data-f="flagged">Flagged</button>
+      <button data-f="annotated">Annotated</button>
+    </nav>
+    <div class="actions">
+      <button id="export">Export notes</button>
+      <label class="import">Import<input id="import" type="file" accept="application/json,.json"></label>
+    </div>
+  </div>
+  <div id="counts"></div>
+</header>
+<main>
+  <p class="intro">Every item in the built-in library as of PR #1009 (master <code id="commit"></code>). Patterns: host renders at 32x32 and 64x64 (8 frames over 8 s) plus a 144 px strip waterfall (time runs down) for files that export <code>render(index)</code>. Scenes: the wasm compositor at 64x64 and 128x128 (the 2x2 chain), 6 frames over the loop or 10 s, clock pinned to 01:46 UTC. Verdicts are saved in this browser, keyed by library path (<code>fire</code>, <code>scenes/fire-clock</code>, <code>sprites/heart</code>); <b>Export notes</b> downloads them (and copies them to the clipboard).</p>
+  <section id="patterns"><h2>Patterns <span class="n"></span></h2><div class="grid"></div></section>
+  <section id="scenes"><h2>Scenes <span class="n"></span></h2><div class="grid"></div></section>
+  <section id="sprites"><h2>Sprites <span class="n"></span></h2><div class="grid"></div></section>
+</main>
+<div id="toast" hidden></div>
+<script type="application/json" id="data">@@DATA@@</script>
+<script src="review.js"></script>
+</body>
+</html>

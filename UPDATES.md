@@ -1,5 +1,19 @@
 # Update log
 
+## 2026-11-02 — Reflect after the library follow-up campaign
+
+Twelve PRs landed in one day (#1014 #1015 #1020 #1021 #1024 #1025 #1029 #1034
+#1036 #1038 #1039 #1040 #1041). What the harness learned: an OTA across the
+#948 `renderFrame` → `renderBulk` rename invalidates stored patterns with no
+format bump and the compiler refuses the old export (recipe in the
+deploy-device skill; unit 1 and the Athom were repaired that way); a
+symlinked `web/node_modules` is emptied by `tools/ci.sh`'s `npm ci` (#1019,
+worktree-setup + phase-orchestration); every PR conflicts on `UPDATES.md`
+and is resolved by keeping both (phase-orchestration §2c, with the new
+`tools/pr-merge-when-green.sh`); the review page is now a tool
+(`tools/verify/review-site/`). CLAUDE.md's asset headroom tripwire reads
+55,079 B.
+
 ## 2026-11-02 — Scenes that fit any panel: the console half (Gitea #997)
 
 The scene editor speaks the design size. A **Layout** chooser in its header
