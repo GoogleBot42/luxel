@@ -1,0 +1,17 @@
+# A Luxel library scene — Apache-2.0. Grammar: library/README.md.
+# `mask`: show what is beneath ONLY where this layer is bright. The colour
+# comes from one pattern (a swirling soap film), the shape from another (the
+# rings of raindrops on a pond) — rainbow light caught in the ripples. The
+# ramp on the mask is a contrast curve: a 10 % floor keeps the film faintly
+# there between the rings, and mid-grey is already fully open.
+S - Rainbow Ripples
+L pat 0 0 0 0 normal 100 none fill 1
+N Soap film
+I @pat/soap-2d
+C sliderPalette 65536
+L pat 0 0 0 0 mask 100 none fill 1
+N Ripples
+I @pat/raindrops-2d
+C sliderMode 65536
+C sliderDropsPerSecond 327680
+R 100 0:1a1a1a 90:ffffff

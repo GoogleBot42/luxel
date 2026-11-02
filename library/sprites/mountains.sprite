@@ -1,0 +1,61 @@
+# Luxel library sprite — original art, Apache-2.0. Grammar: library/README.md.
+# A moonlit range: snow on the far peaks, a near ridge with a rim of light,
+# pines at the shore and a still lake that carries the moon's reflection.
+# 64 wide; on a 32-row panel a scene placing it at row 20 shows the ridges.
+name: Mountains & Lake
+fps: 0
+palette:
+  f 232b4f
+  s b8c4e8
+  n 121729
+  m 2e3a66
+  p 0a0e18
+  w 0b1226
+  r 8a94c0
+  v 1c2850
+
+frame
+................................................................
+...................s............................................
+.................sssss.....................ss...................
+.................ssfsss....................sss..................
+.....s.........ssfffffs..................ssffsss.........s......
+...ffsff......fssfffffffff.....f........fssfffssf.......fsf.....
+...fffff.....fffffffffffff....fff......ffffffffffff...ffffff....
+..fffffff..ffffffffffffffff..fffff...fffffffffffffff..ffffffff..
+fffffffffffmmffffffffffffffffffffff.mfmmfffffffffffffffffffffff.
+fmmfffffffmnnmmmfffffffffffffffffffmnmnnmmffffffffffffffffffffmm
+mnnmmmfmmmnnnnnnmmmfffffffffffffmmmnnnnnnnmmmfffffffmmfffffmmmnn
+nnnnnnmnnnnnnnnnnnnmfffffmmffmfmnnnnnnnnnnnnnmmmfmmmnnmfffmnnnnn
+nnnnnnnnnnnnnnnnnnnnmmmfmnnmmnmnnnnnnnnnnnnnnnnnmnnnnnnmmmnnnnnn
+nnnnnnnnnnnnnnnnnnnnnnnmnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+pppnnpppnnpppnnpppnnpppnnpppnnpppnnpppnnpppnnpppnnpppnnpppnnpppn
+pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp
+pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp
+wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww
+wwwwwwwwwwwwwwwwwwwwwwwwwwwrwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww
+wwwwvwwwwwwwwwwwwvwwwwwwwwwwwwvwwwwwwwwwwwwvwwwwwwwwwwwwvwwwwwww
+wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww
+wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww
+vwwwwwwwwwwwwvwwwwwwwwwwwwvrwwwwwwwwwwwvwwwwwwwwwwwwvwwwwwwwwwww
+wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww
+wwwwwwwwwwwwwwwwwwwwwwwwwwwrwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww
+wwwwwvwwwwwwwwwwwwwvwwwwwwwwwwwwwvwwwwwwwwwwwwwvwwwwwwwwwwwwwvww
+wwwwwwwwwwwwwwwwwwwwwwwwwwrrwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww
+wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww
+wwvwwwwwwwwvwwwwwwwwvwwwrrrwwvwwwwwwwwvwwwwwwwwvwwwwwwwwvwwwwwww
+wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww
+wwwwwwwwwwwwwwwwwwwwwwwwwwrrrwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww
+wwvwwwwwwwwwwvwwwwwwwwwwvwwwwwwwwwwvwwwwwwwwwwvwwwwwwwwwwvwwwwww
+wwwwwwwwwwwwwwwwwwwwwwwwwrwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww
+wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww
+wwwwwwvwwwwwwwwwwvwwwwwwwrrwvwwwwwwwwwwvwwwwwwwwwwvwwwwwwwwwwvww
+wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww
+wwwwwwwwwwwwwwwwwwwwwwwwrrwrrwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww
+wwwvwwwwwwwwwwwwwvwwwwwwwwwwwwwvwwwwwwwwwwwwwvwwwwwwwwwwwwwvwwww
+wwwwwwwwwwwwwwwwwwwwwwwwrwrrwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww
+wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww
+wwvwwwwwwwwwvwwwwwwwwwvrwrwrwwwwvwwwwwwwwwvwwwwwwwwwvwwwwwwwwwvw
+wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww
+wwwwwwwwwwwwwwwwwwwwwwwrrrrrwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww

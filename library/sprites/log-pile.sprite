@@ -1,0 +1,24 @@
+# Luxel library sprite — original art, Apache-2.0. Grammar: library/README.md.
+# Three split logs for a hearth, their top edges charred to glowing coals.
+# Drawn opaque, so a fire layer beneath shows only around and above them.
+name: Log Pile
+fps: 0
+palette:
+  k 5a3416
+  d 3a200c
+  e c08a50
+  r 8a5a2b
+  g ff6a1a
+  y ffb347
+
+frame
+....rggdkkkggkdkkggkk...
+...rekkkkkdkkkkkkdkkk...
+...rekdkkkkkkdkkkkkkd...
+....rdddddddddddddddd...
+.rkggdkkkggkdkyy........
+rekkkkkkdkkgkkkdggkkkkr.
+rekkdkkkkkkdkkkkkkdkkker
+rekkkkkdkkkkkkdkkkkkkder
+.rdddddddddkkkkkkdkkkker
+...........dddddddddddr.

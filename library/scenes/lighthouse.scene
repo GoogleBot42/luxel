@@ -1,0 +1,20 @@
+# A Luxel library scene — Apache-2.0. Grammar: library/README.md.
+# A mask can sit over pictures, not just patterns: a radar sweep pivots on the
+# lighthouse lamp at the centre of a 32x32 harbour picture and reveals it, the
+# phosphor's slow decay letting the coast sink back into the night. The ramp
+# on the mask is a contrast curve — a floor of 20 % keeps the harbour faintly
+# moonlit, and anything past mid-grey opens it fully.
+S - Lighthouse
+L color 0 0 0 0 normal 100 none fill 1
+N Sea
+K 0a1a2e
+L sprite 0 0 0 0 normal 100 none fill 1
+N Harbor
+I @spr/harbor
+L pat 0 0 0 0 mask 100 none fill 1
+N Beam
+I @pat/radar-2d
+C sliderSweepSeconds 327680
+C sliderPersistenceSeconds 163840
+C sliderContacts 0
+R 100 0:1c1c1c 100:ffffff

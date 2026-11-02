@@ -1,0 +1,36 @@
+# A Luxel library scene — Apache-2.0. Grammar: library/README.md.
+# A yule-log screen from parts: a firebox cut into a wall with colour layers,
+# library fire boxed into it (`lighten`, so its dark gaps leave the soot-black
+# firebox showing), a log pile in front, and a second pattern — a one-colour
+# wash, breathing — ADDED over everything as the glow the fire throws on the
+# room. Text slot 0 is for a message (`/api/text`); empty, it draws nothing.
+S - Hearth
+L color 0 0 0 0 normal 100 none fill 1
+N Wall
+K 2a1008
+L color 2 4 28 2 normal 100 none fill 1
+N Mantel
+K 4a2414
+L color 4 6 24 26 normal 100 none fill 1
+N Firebox
+K 080302
+L pat 4 6 24 26 lighten 100 none fill 1
+N Fire
+I @pat/perlin-fire
+C sliderFlameHeightPct 5898240
+L sprite 4 22 0 0 normal 100 none fill 1
+N Logs
+I @spr/log-pile
+L pat 0 0 0 0 add 30 none fill 1
+N Glow
+I @pat/color-wash
+C sliderStops 65536
+C sliderScheme 0
+C hsvPickerColorA 3932 65536 65536
+C sliderMotion 0
+C sliderBreathSeconds 262144
+C sliderFloorPercent 2621440
+L text 0 0 0 0 normal 100 black fill 1
+N Message
+T slot 0
+F tiny ffd9b0 c left 10

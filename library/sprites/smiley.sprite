@@ -1,0 +1,25 @@
+# Luxel library sprite — original art, Apache-2.0. Grammar: library/README.md.
+# A white face whose eyes and grin are HOLES (index 0): stretched over any
+# pattern, the pattern shows through the features and around the face.
+name: Smiley
+fps: 0
+palette:
+  w ffffff
+
+frame
+.....wwwwww.....
+...wwwwwwwwww...
+..wwwwwwwwwwww..
+.wwwwwwwwwwwwww.
+.www..wwww..www.
+wwww..wwww..wwww
+wwww..wwww..wwww
+wwwwwwwwwwwwwwww
+wwwwwwwwwwwwwwww
+ww..wwwwwwww..ww
+www..wwwwww..www
+.www........www.
+.wwww......wwww.
+..wwwwwwwwwwww..
+...wwwwwwwwww...
+.....wwwwww.....

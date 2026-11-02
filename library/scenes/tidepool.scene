@@ -1,0 +1,16 @@
+# A Luxel library scene — Apache-2.0. Grammar: library/README.md.
+# A ramp turns a hue-cycling pattern into ONE palette: the interference field
+# keyed on its own brightness into deep-water blues. A sparse second pattern
+# ADDED on top — raindrop rings, ramped to sea-foam — ripples through it.
+S - Tidepool
+L pat 0 0 0 0 normal 100 none fill 1
+N Deep water
+I @pat/interference
+C sliderStyle 65536
+C sliderOrbitS 3932160
+R 100 0:000510 100:003a66 200:0f8fa8 255:9ff7ff
+L pat 0 0 0 0 add 70 none fill 1
+N Rings
+I @pat/raindrops-2d
+C sliderMode 65536
+R 100 0:000000 255:d8fffa

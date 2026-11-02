@@ -1,0 +1,28 @@
+# Luxel library sprite — original art, Apache-2.0. Grammar: library/README.md.
+# An original one-eyed jelly: the pupil is a HOLE, so the sky shows through it.
+# Two frames: antennae wave, arms swap up and down, feet shuffle.
+name: Pixel Alien
+fps: 2
+palette:
+  g 6cff6c
+  w ffffff
+
+frame
+..g.....g..
+...g...g...
+...ggggg...
+..ggwwwgg..
+g.gww.wwg.g
+.gggwwwggg.
+..ggggggg..
+..g.g.g.g..
+
+frame
+.g.......g.
+...g...g...
+...ggggg...
+..ggwwwgg..
+..gww.wwg..
+.gggwwwggg.
+g.ggggggg.g
+...g.g.g...

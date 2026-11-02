@@ -1,0 +1,60 @@
+# Luxel library sprite — original art, Apache-2.0. Grammar: library/README.md.
+# A 32x32 coastline picture for the Lighthouse scene: night sky, a headland
+# with lit windows, a moored sailboat, and a lighthouse on a rock whose lamp
+# sits at the picture's centre, where a centred sweep pattern pivots. Painted
+# as if lit by the beam: the scene's mask darkens it back to night.
+name: Harbor at Night
+fps: 0
+palette:
+  a 142650
+  b 243c78
+  s c8d4ff
+  h 2c3c6c
+  c 11416e
+  d 2f78b0
+  e 6fa8d8
+  k 3c4a36
+  g 5c7050
+  y ffcc55
+  q 3a3a44
+  l ffe680
+  w e8e8f0
+  t c83232
+  r 565664
+  u 7a7a90
+  o 6b4a2a
+  v d8d0c0
+
+frame
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+aaaaaaaaaaaaaaaaaaaaasaaaaaaaaaa
+aaasaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+aaaaaaaaaaaasaaaaaaaaaaaaaaaaaaa
+aaaaaaaaaaaaaaaaaaaaaaaaaaasaaaa
+aaaaaaaaasaaaaaaaaaaaaaaaaaaaaaa
+aaaaaaaaaaaaaaaaaaasaaaaaaaaaaaa
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaasa
+bbbbbbbbbbbbbbbbbbbbbbbbsbbbbbbb
+bbbbbbsbbbbbbbbbbbbbbbbbbbbbbbbb
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+bbbbbbbbbbbbbbbqqbbbbbbbbbbbbggg
+bbbbbbbbbbbbbbqqqqbbbbbbbbgggykk
+bsbbbbbbbbbbbbqllqbbbbbbbbykkkkk
+bbbbbbbbbbbbbbqllqbbbbbbbgkkkkkk
+bbbhhhhhhbbbbqqqqqqbbbbbbkkkkkyk
+bhhhhhhhhhhbbbwwwwbbbbbbgkkykkkk
+ccccccovcdccccwwwwccdccckkkkkkkk
+ccccdcovccccccttttcccccckkkkkkkk
+ccccccovvcdcccttttcccdcgkkkkkkkk
+cccccdovvccccwwwwwwcccckkkkkkkkk
+dcccccovvvcdcwwwwwwcccgkkkkkkkkk
+ccccccovvvcccttttttccckkkkkkkkkk
+cccoooooooccdttttttccckkkkkkkkkk
+ccccoooooccuuruuuururgkkkkkkkkkk
+ccdccccccurrrrrrrrrrrrrkkkkkkkkk
+ccccccccurrrrrrrrrrrrrrrkkkkkkkk
+ccccccccccccccdeecccckkkkkkkkkkk
+cccccccccdccccceccccdkkkkkkkkkkk
+ccccdcccccccccccecccckkkkkkkkkkk
+ccccccccccccccceccccckkkkkkkkkkk

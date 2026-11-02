@@ -1,0 +1,66 @@
+# Luxel library sprite — original art, Apache-2.0. Grammar: library/README.md.
+# Nose up, porthole lit; three exhaust frames at 12 fps make the flame flicker.
+name: Rocket
+fps: 12
+palette:
+  f e23d3d
+  h e8e8f0
+  s 9aa3b5
+  b 4ac8ff
+  x fff3c4
+  y ffd166
+  o ff8a00
+
+frame
+....f....
+...fff...
+...hhs...
+..hhhhs..
+..hxbbs..
+..hbbbs..
+..hhhhs..
+..hhhhs..
+..hhhhs..
+..hfffs..
+.fhhhhsf.
+ffhhhhsff
+ff.sss.ff
+...xxx...
+...yxy...
+....o....
+
+frame
+....f....
+...fff...
+...hhs...
+..hhhhs..
+..hxbbs..
+..hbbbs..
+..hhhhs..
+..hhhhs..
+..hhhhs..
+..hfffs..
+.fhhhhsf.
+ffhhhhsff
+ff.sss.ff
+...xxx...
+..oyxyo..
+...oyo...
+
+frame
+....f....
+...fff...
+...hhs...
+..hhhhs..
+..hxbbs..
+..hbbbs..
+..hhhhs..
+..hhhhs..
+..hhhhs..
+..hfffs..
+.fhhhhsf.
+ffhhhhsff
+ff.sss.ff
+...xyx...
+...oyo...
+....o....

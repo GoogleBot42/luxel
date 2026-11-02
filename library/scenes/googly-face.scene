@@ -1,0 +1,16 @@
+# A Luxel library scene — Apache-2.0. Grammar: library/README.md.
+# One animated sprite does it all: eight expressions at 2 fps (smile, grin,
+# blink, glance left and right, surprise, wink) scaled 2x by `fit contain`.
+# A 64x64 panel gets a second face across the diagonal, run at 3 fps by the
+# layer's `A` override so the two never pull the same face at once.
+S - Googly Face
+L color 0 0 0 0 normal 100 none fill 1
+N Backdrop
+K 101828
+L sprite 0 0 32 32 normal 100 none contain 1
+N Face
+I @spr/face-moods
+L sprite 32 32 32 32 normal 100 none contain 1
+N Face 2
+I @spr/face-moods
+A 3

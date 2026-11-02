@@ -1,0 +1,19 @@
+# A Luxel library scene — Apache-2.0. Grammar: library/README.md.
+# `add` a SPARSE pattern over a DIM base: fireflies blinking over a sky that
+# fades from indigo overhead to the last amber light at the horizon. Added
+# over a bright base, the sparks would vanish.
+S - Fireflies at Dusk
+L pat 0 0 0 0 normal 70 none fill 1
+N Dusk
+I @pat/color-wash
+C sliderScheme 0
+C hsvPickerColorA 47186 58982 65536
+C hsvPickerColorB 4588 62259 65536
+C sliderMotion 0
+C sliderBreathSeconds 1966080
+C sliderFloorPercent 4587520
+C sliderRepeats 32768
+L pat 0 0 0 0 add 100 none fill 1
+N Fireflies
+I @pat/fireflies
+R 100 0:000000 255:e8ff6a
