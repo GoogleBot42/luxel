@@ -1,9 +1,9 @@
-# Breakout 2D
+# Brick Breaker 2D
 kind: 2D
 sensors: no
 
 ## Visual behavior
-A self-playing game of Breakout on a matrix. The top third of the display is a wall of rainbow-colored bricks (hue varies by row and slowly shimmers). A white ball bounces around the middle, knocking out bricks one at a time; a white paddle bar along the bottom row slides to intercept it. In the default "demo" mode the paddle plays itself, tracking the ball with a little human-like error. When all bricks are cleared, the wall and ball reset and the game starts over. Ball motion is stepped but smoothed by anti-aliasing; a full game takes on the order of a minute or two.
+A self-playing brick-breaking game on a matrix. The top third of the display is a wall of rainbow-colored bricks (hue varies by row and slowly shimmers). A white ball bounces around the middle, knocking out bricks one at a time; a white paddle bar along the bottom row slides to intercept it. In the default "demo" mode the paddle plays itself, tracking the ball with a little human-like error. When all bricks are cleared, the wall and ball reset and the game starts over. Ball motion is stepped but smoothed by anti-aliasing; a full game takes on the order of a minute or two.
 
 ## Layout assumptions
 Assumes a **square matrix**: both width and height are taken as the square root of the pixel count. Obvious fix: use the real mapped width/height (or make them configurable) instead of assuming square.

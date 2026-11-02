@@ -1,7 +1,7 @@
-// name: Frogger
-// Clean-room reimplementation from the prose spec docs/pattern-specs/frogger-2d.md — reimagined, not a replica.
-// The arcade crossing, self-playing forever on a 16x16 board: a road of cars in
-// alternating lanes, a river of logs and diving turtles, five lily pads to fill.
+// name: Road Hopper
+// Clean-room reimplementation from the prose spec docs/pattern-specs/road-hopper-2d.md — reimagined, not a replica.
+// The classic road-and-river crossing arcade game, self-playing forever on a 16x16 board:
+// a road of cars in alternating lanes, a river of logs and diving turtles, five lily pads to fill.
 // Smartness sets the blunder rate and how many hops ahead a breadth-first search
 // looks (0: roadkill in seconds; 100: rarely dies). The board is drawn with fillRect
 // in board units, so traffic glides at panel resolution; the cost is per object,

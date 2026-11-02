@@ -24,7 +24,8 @@
 //! * **No pattern loaded / a pattern rejected with `out_fps 0`** — the loop
 //!   still iterates (a 50 ms idle sleep, then `continue`), so the heartbeat
 //!   advances. The gate is on the render LOOP, never on frames emitted.
-//! * **A legitimately slow frame** — `ripples-2d` is 234 ms/frame on the
+//! * **A legitimately slow frame** — `ripples-2d` (removed from library/
+//!   in 2026-11; frozen copy in tests/data/lib) is 234 ms/frame on the
 //!   panel (docs/boards.md). [`STALL_LIMIT_MS`] clears that by 40x.
 //! * **A long flash burst on the ProCpu** — a 728 KB asset install is ~15 s
 //!   of erases and a garbage-collecting pattern save was measured at 25 s
@@ -200,7 +201,8 @@ mod tests {
     fn slow_pattern_feeds() {
         // The heartbeat only has to move once per STALL_LIMIT_MS; a frame
         // an order of magnitude slower than the panel's worst (ripples-2d,
-        // 234 ms) still feeds.
+        // 234 ms — removed from library/ in 2026-11; frozen copy in
+        // tests/data/lib) still feeds.
         let mut w = StallWatch::new();
         let per_tick = (STALL_LIMIT_MS / TICK_MS) as usize;
         assert_eq!(run(&mut w, 0, 400, |i| (i / per_tick) as u32 + 1), None);
