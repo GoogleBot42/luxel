@@ -29,6 +29,7 @@ red | green read off the n×1 stage, the stored boxes, the segment box editor,
 the text-row note and `Add to scene ▸` in the editor's ⋯. `tabwalk` now
 fails on a missing Scenes/Sprites tab on either shape. The S2e mock's strip
 menu and the `S2estrip` mockdiff frame now carry the `Add to scene` row.
+
 ## 2026-11-02 — The first strip scenes (Gitea #1018)
 
 Three scenes written for a strip now that scenes composite on one (#985,
