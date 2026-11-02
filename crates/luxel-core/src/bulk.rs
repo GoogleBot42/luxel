@@ -41,7 +41,7 @@ use crate::engine::quantize;
 use crate::fixed::Fx;
 use crate::fmath;
 use crate::outpipe::GridMap;
-use crate::vm::{cell_index, hsv_to_rgb, sample_axis, ArrView, MapData, Program, Value, Vm};
+use crate::vm::{cell_index, hsv_to_rgb, ArrView, MapData, Program, Value, Vm};
 
 /// 0.5 — the mid-space fill for coordinate axes the map doesn't carry,
 /// spelled raw so no softfloat conversion survives into the image.
@@ -352,6 +352,12 @@ fn grid_view<'a>(vm: &'a Vm, n: usize) -> Option<GridView<'a>> {
     if force_scan() || vm.transform_active {
         return None;
     }
+    grid_of(vm, n)
+}
+
+/// [`grid_view`] without the fast-path gates (`FORCE_SCAN`, a transform):
+/// what the installed map IS, which [`fixture`] needs on the scan too.
+fn grid_of<'a>(vm: &'a Vm, n: usize) -> Option<GridView<'a>> {
     let g = vm.frame_grid?;
     if g.is_empty() || g.len() != n {
         return None;
@@ -446,11 +452,23 @@ fn paint_shape(vm: &mut Vm, bx: (Fx, Fx), by: (Fx, Fx), f: &mut dyn FnMut(&mut [
 /// what keeps "`gridWidth()` == 0 → no grid-space ops" exactly true.
 #[inline(never)]
 pub(crate) fn grid_dim(vm: &Vm, axis: usize) -> Fx {
-    match vm.frame_grid {
-        Some(g) if !g.is_empty() && g.len() >= vm.pixel_count as usize => {
-            Fx::from_int(if axis == 0 { g.w as i32 } else { g.h as i32 })
-        }
-        _ => Fx::ZERO,
+    // `setRenderSize` switches `pixelCount` in the call and the frame at
+    // the next plan sync; the grid answers with `pixelCount`, so a pattern
+    // that sizes itself in `beforeRender` reads one geometry all frame
+    let [w, h] = vm.render_size;
+    if w > 0 && h > 0 && !vm.render_refused {
+        return Fx::from_int(if axis == 0 { w as i32 } else { h as i32 });
+    }
+    let g = match vm.native_grid {
+        // turned off, still rendering resized: the grid it goes back to
+        Some(native) => native.filter(|g| !g.is_empty()),
+        None => vm
+            .frame_grid
+            .filter(|g| !g.is_empty() && g.len() >= vm.pixel_count as usize),
+    };
+    match g {
+        Some(g) => Fx::from_int(if axis == 0 { g.w as i32 } else { g.h as i32 }),
+        None => Fx::ZERO,
     }
 }
 
@@ -860,11 +878,127 @@ fn canvas_fill(
             return;
         }
     }
+    // A mapless strip samples at pixel CENTRES from the index: the i/n
+    // coordinate `render` gets is truncated in 16.16, so `floor(x·cw)`
+    // lands a cell boundary one pixel late wherever i·cw/n is a whole
+    // number (150 px onto 50 cells: 4, 3, 3, …, 2 pixels per cell).
+    let fx = fixture(vm, frame.len());
     for i in 0..frame.len() {
-        let p = coord_of(vm, i);
-        let t = cell_index(p[1], ch) * cw + cell_index(p[0], cw);
+        let t = if fx.strip {
+            let c = ((slot_pos(i, fx.nx, cw) + (1 << 15)) >> 16).clamp(0, cw as i64 - 1) as usize;
+            cell_index(MID, ch) * cw + c
+        } else {
+            let p = coord_of(vm, i);
+            cell_index(p[1], ch) * cw + cell_index(p[0], cw)
+        };
         frame[i] = texel(t);
     }
+}
+
+/// How a canvas fill places each fixture pixel on the canvas (docs/lang.md
+/// "Canvas sampling"). An axis of `n` > 0 SLOTS is `n` evenly spaced
+/// pixels whose mapped coordinates run 0..1 INCLUSIVE — a grid's columns
+/// or rows (column c at c/(w−1)), a 1D map's pixels — and pixel `s` is
+/// sampled at its centre, (s + ½)/n of the axis, so a canvas the size of
+/// the grid is the identity and an integer upscale lands every fixture
+/// pixel at the same spot inside its texel. `n` = 0 is a CONTINUOUS axis
+/// (a free-form or 3D map, or a transform in force): the mapped
+/// coordinate itself is the sample point, `canvasGet`'s convention.
+/// `strip` is the mapless case, where pixel i's slot is `i` itself: the
+/// i/n coordinate a pattern sees is truncated, the index is exact.
+#[derive(Clone, Copy)]
+struct Fixture {
+    strip: bool,
+    nx: usize,
+    ny: usize,
+}
+
+#[inline(never)]
+fn fixture(vm: &Vm, n: usize) -> Fixture {
+    let free = Fixture {
+        strip: false,
+        nx: 0,
+        ny: 0,
+    };
+    if vm.transform_active {
+        return free;
+    }
+    let Some(map) = vm.map.as_ref() else {
+        return Fixture {
+            strip: true,
+            nx: vm.pixel_count.max(1) as usize,
+            ny: 0,
+        };
+    };
+    match map.dims {
+        1 => Fixture {
+            strip: false,
+            nx: map.len(),
+            ny: 0,
+        },
+        // a procedural grid's axes are its columns and rows even where it
+        // over-covers the frame (the default ceil(√n) grid of a strip)
+        2 if map.grid.is_some() => {
+            let g = map
+                .grid
+                .unwrap_or_else(|| crate::outpipe::GridMap::new(1, 1, false));
+            Fixture {
+                strip: false,
+                nx: g.w as usize,
+                ny: g.h as usize,
+            }
+        }
+        2 => match grid_of(vm, n) {
+            Some(gv) => {
+                let (w, h) = (gv.g.w as usize, gv.g.h as usize);
+                let (nx, ny) = if gv.fast == 0 { (w, h) } else { (h, w) };
+                Fixture {
+                    strip: false,
+                    nx,
+                    ny,
+                }
+            }
+            None => free,
+        },
+        _ => free,
+    }
+}
+
+/// 16.16 position on a `k`-texel canvas axis — texel j's centre at j, the
+/// [`split_pos`] input — of slot `s`'s centre on an axis of `n` slots:
+/// (s + ½)·k/n − ½, exact (a 1:1 axis lands on whole texels).
+#[inline(never)]
+fn slot_pos(s: usize, n: usize, k: usize) -> i64 {
+    (((((2 * s + 1) as u64) * k as u64) << 15) / n.max(1) as u64) as i64 - (1 << 15)
+}
+
+/// [`slot_pos`] of the slot a mapped coordinate `x` sits on, for an axis
+/// of `n` slots (`n` = 0: continuous, x·k − ½). Snapping to the slot is
+/// what makes the result exact: a grid coordinate is `c/(w−1)` ROUNDED to
+/// 16.16, and the rounding error would otherwise leak into the blend.
+#[inline(never)]
+fn axis_pos(x: Fx, n: usize, k: usize) -> i64 {
+    if n == 0 {
+        return x.raw() as i64 * k as i64 - (1 << 15);
+    }
+    // u32 throughout: 0xFFFF · 0xFFFE + 0x7FFF < 2³², and a constant
+    // divide stays a multiply-high instead of a 64-bit sequence
+    let span = (n - 1).min(0xFFFE) as u32;
+    let s = ((x.raw().clamp(0, 0xFFFF) as u32) * span + 0x7FFF) / 0xFFFF;
+    slot_pos(s as usize, n, k)
+}
+
+/// The two edge-clamped texels either side of a [`slot_pos`]/[`axis_pos`]
+/// position and the 16-bit blend fraction between them.
+#[inline]
+fn split_pos(pos: i64, k: usize) -> (usize, usize, i64) {
+    let (i, t) = (pos >> 16, pos & 0xFFFF);
+    let last = k as i64 - 1;
+    (
+        i.clamp(0, last) as usize,
+        (i + 1).clamp(0, last) as usize,
+        t,
+    )
 }
 
 /// [`canvas_fill`] on a tiled grid: the frame in SLOT order through a
@@ -983,15 +1117,17 @@ fn canvas_filtered(
     Ok(Value::default())
 }
 
-/// Paint every pixel from the four canvas cells around its mapped (x, y),
-/// blended — the `canvasGet` geometry (texel centres at (i + 0.5)/n, edges
-/// clamped, [`sample_axis`]) on 8-bit channels with a 16-bit fraction:
-/// `a + ((b - a)·t >> 16)` per lerp, x first, then y. Integer arithmetic
-/// only, so the bytes are the same on every host (wasm, x86, Xtensa).
+/// Paint every pixel from the four canvas cells around its sample point,
+/// blended — texel centres at (i + 0.5)/n, edges clamped, the fixture
+/// pixel placed by [`Fixture`] (its centre on a grid or a strip, so a
+/// canvas the grid's size is the identity) — on 8-bit channels with a
+/// 16-bit fraction: `a + ((b - a)·t >> 16)` per lerp, x first, then y.
+/// Integer arithmetic only, so the bytes are the same on every host
+/// (wasm, x86, Xtensa).
 ///
-/// The four corner texels are fetched only when the corner CELLS change:
-/// on an upscale neighbouring pixels share them, so an HSV or palette
-/// texel is resolved about once per cell per row, not four times a pixel.
+/// A row-major grid takes [`bilinear_rows`]; everything else (a tiled
+/// chain, a transposed or free map, a strip) this per-pixel scan, and
+/// `FORCE_SCAN` asserts the two equal in tests.
 #[inline(never)]
 fn canvas_bilinear(
     vm: &Vm,
@@ -1000,13 +1136,27 @@ fn canvas_bilinear(
     ch: usize,
     texel: &mut dyn FnMut(usize) -> [u8; 3],
 ) {
-    let lerp = |a: i32, b: i32, t: i32| a + (((b - a) * t) >> 16);
+    if let Some(gv) = grid_view(vm, frame.len()) {
+        if gv.fast == 0 && gv.g.tiling.is_none() && bilinear_rows(&gv, frame, cw, ch, texel) {
+            return;
+        }
+    }
+    let fx = fixture(vm, frame.len());
+    // the four corner texels of the last sample, fetched again only when
+    // the corner CELLS change: on an upscale neighbouring pixels share
+    // them, so an HSV or palette texel is resolved about once per cell
+    // per row, not four times a pixel
     let mut key = usize::MAX;
     let mut q = [[0u8; 3]; 4];
     for (i, px) in frame.iter_mut().enumerate() {
-        let p = coord_of(vm, i);
-        let (c0, c1, tx) = sample_axis(p[0], cw);
-        let (r0, r1, ty) = sample_axis(p[1], ch);
+        let (sx, sy) = if fx.strip {
+            (slot_pos(i, fx.nx, cw), axis_pos(MID, 0, ch))
+        } else {
+            let p = coord_of(vm, i);
+            (axis_pos(p[0], fx.nx, cw), axis_pos(p[1], fx.ny, ch))
+        };
+        let (c0, c1, tx) = split_pos(sx, cw);
+        let (r0, r1, ty) = split_pos(sy, ch);
         // (r0, c0) plus whether each axis is at a clamped edge pins all four
         let k = r0 * cw + c0;
         let id = k << 2 | ((c1 != c0) as usize) << 1 | (r1 != r0) as usize;
@@ -1014,11 +1164,113 @@ fn canvas_bilinear(
             key = id;
             q = [texel(k), texel(r0 * cw + c1), texel(r1 * cw + c0), texel(r1 * cw + c1)];
         }
-        for (ch_, out) in px.iter_mut().enumerate() {
-            let top = lerp(q[0][ch_] as i32, q[1][ch_] as i32, tx as i32);
-            let bot = lerp(q[2][ch_] as i32, q[3][ch_] as i32, tx as i32);
-            *out = lerp(top, bot, ty as i32) as u8;
+        *px = lerp3(lerp3(q[0], q[1], tx), lerp3(q[2], q[3], tx), ty);
+    }
+}
+
+/// `a + ((b − a)·t >> 16)` per channel — the kernel's only arithmetic. A
+/// lerp of two bytes is a byte, so a pre-blended row stores losslessly.
+#[inline(never)]
+fn lerp3(a: [u8; 3], b: [u8; 3], t: i64) -> [u8; 3] {
+    let mut out = [0u8; 3];
+    for k in 0..3 {
+        let (a, b) = (a[k] as i32, b[k] as i32);
+        out[k] = (a + (((b - a) * t as i32) >> 16)) as u8;
+    }
+    out
+}
+
+/// [`canvas_bilinear`] on a row-major (or serpentine) grid. The sample
+/// positions are per AXIS — the scan's own [`axis_pos`] of each column's
+/// and each row's coordinate, tabled once (`w + h` entries) — and the
+/// kernel is separable: every fixture row is ONE lerp per channel between
+/// two canvas rows pre-blended along x ([`blend_row`]), which are rebuilt
+/// only when the row's pair of canvas rows changes (on a k× upscale, once
+/// every k rows). Byte-identical to the scan: same positions, same lerps
+/// in the same order. `false` when the scratch would not allocate.
+#[inline(never)]
+fn bilinear_rows(
+    gv: &GridView,
+    frame: &mut [[u8; 3]],
+    cw: usize,
+    ch: usize,
+    texel: &mut dyn FnMut(usize) -> [u8; 3],
+) -> bool {
+    let (w, h) = (gv.g.w as usize, gv.g.h as usize);
+    // [c0, c1, tx per column | r0, r1, ty per row | two blended rows]
+    let rows_at = 3 * (w + h);
+    let mut buf: alloc::vec::Vec<u32> = alloc::vec::Vec::new();
+    if buf.try_reserve_exact(rows_at + 2 * w).is_err() {
+        return false;
+    }
+    buf.resize(rows_at + 2 * w, 0);
+    for j in 0..w + h {
+        // row 0 is never reversed, so slot c is column c; row r starts at
+        // r·w (its far end when serpentine-reversed — the y is the same)
+        let (slot, axis, n, k) = if j < w {
+            (j, 0, w, cw)
+        } else {
+            ((j - w) * w, 1, h, ch)
+        };
+        let (a, b, t) = split_pos(axis_pos(map_coord(gv.map, slot)[axis], n, k), k);
+        buf[3 * j..3 * j + 3].copy_from_slice(&[a as u32, b as u32, t as u32]);
+    }
+    let (taps, rows) = buf.split_at_mut(rows_at);
+    let (ct, rt) = taps.split_at(3 * w);
+    let mut held = [u32::MAX; 2];
+    for (r, y) in rt.chunks_exact(3).enumerate() {
+        // the half holding canvas row y[0], then the one for y[1]
+        let mut half = [0usize; 2];
+        for e in 0..2 {
+            half[e] = match held.iter().position(|&x| x == y[e]) {
+                Some(k) => k,
+                None => {
+                    let k = if e == 1 {
+                        1 - half[0]
+                    } else {
+                        (held[0] == y[1]) as usize
+                    };
+                    blend_row(&mut rows[k * w..(k + 1) * w], ct, y[e] as usize * cw, texel);
+                    held[k] = y[e];
+                    k
+                }
+            };
         }
+        let flip = gv.g.serpentine && r & 1 == 1;
+        for c in 0..w {
+            let px = lerp3(
+                unpack(rows[half[0] * w + c]),
+                unpack(rows[half[1] * w + c]),
+                y[2] as i64,
+            );
+            frame[r * w + if flip { w - 1 - c } else { c }] = px;
+        }
+    }
+    true
+}
+
+#[inline]
+fn unpack(v: u32) -> [u8; 3] {
+    [v as u8, (v >> 8) as u8, (v >> 16) as u8]
+}
+
+/// One canvas row (cells `base..base + cw`) blended along x at every
+/// fixture column: `lerp(row[c0], row[c1], tx)`, packed `0x00BBGGRR`.
+/// Neighbouring columns share texels, so each is resolved once a run.
+#[inline(never)]
+fn blend_row(dst: &mut [u32], ct: &[u32], base: usize, texel: &mut dyn FnMut(usize) -> [u8; 3]) {
+    let mut last = [(u32::MAX, [0u8; 3]); 2];
+    for (d, x) in dst.iter_mut().zip(ct.chunks_exact(3)) {
+        let mut p = [[0u8; 3]; 2];
+        for e in 0..2 {
+            p[e] = match last.iter().find(|m| m.0 == x[e]) {
+                Some(m) => m.1,
+                None => texel(base + x[e] as usize),
+            };
+        }
+        last = [(x[0], p[0]), (x[1], p[1])];
+        let v = lerp3(p[0], p[1], x[2] as i64);
+        *d = u32::from(v[0]) | u32::from(v[1]) << 8 | u32::from(v[2]) << 16;
     }
 }
 
@@ -1053,7 +1305,8 @@ fn axis_runs(v: &[u32], out: &mut [u32]) {
 /// `canvas[floor(y·H)·W + floor(x·W)]` idiom of the 2D-canvas patterns,
 /// as one call. On a procedural grid that is an integer multiple of the
 /// canvas (1× included) it degenerates to a block expand. `filter` 1 is
-/// [`canvas_bilinear`] instead — `canvasGet`'s smooth upscale.
+/// [`canvas_bilinear`] instead — `canvasGet`'s kernel at each fixture
+/// pixel's centre ([`Fixture`]).
 pub(crate) fn fill_canvas(vm: &mut Vm, prog: &Program, args: &[Value]) -> Result<Value, String> {
     let mut frame = core::mem::replace(&mut vm.frame, crate::arena::empty());
     let r = fill_canvas_into(vm, prog, args, &mut frame);
@@ -2003,6 +2256,183 @@ mod tests {
                 assert!(fast.iter().any(|p| *p != [0, 0, 0]), "nothing painted");
             }
         }
+    }
+
+    /// A W×H map whose rows run along y (x moves only when a row ends) —
+    /// `detect_grid`'s transposed case, `GridView::fast == 1`.
+    fn transposed_coords(w: usize, h: usize) -> Vec<[Fx; 3]> {
+        let mut v = Vec::new();
+        for c in 0..w {
+            for r in 0..h {
+                v.push([Fx::from_int(c as i32), Fx::from_int(r as i32), Fx::ZERO]);
+            }
+        }
+        v
+    }
+
+    /// A grid mapped mirrored on both axes: coordinates DEcrease along a row
+    /// and down the rows.
+    fn mirrored_coords(w: usize, h: usize) -> Vec<[Fx; 3]> {
+        let mut v = Vec::new();
+        for r in 0..h {
+            for c in 0..w {
+                v.push([
+                    Fx::from_int((w - 1 - c) as i32),
+                    Fx::from_int((h - 1 - r) as i32),
+                    Fx::ZERO,
+                ]);
+            }
+        }
+        v
+    }
+
+    #[test]
+    fn bilinear_grid_paths_match_the_scan() {
+        // The row-separable path (`bilinear_rows`, a row-major or
+        // serpentine grid) against the per-pixel scan: 1x, integer
+        // upscales (2x, 3x, 4x, the 64 -> 128 case), non-integer ones, a
+        // downscale, single-row/column canvases and odd sizes. The tiled,
+        // transposed and mirrored rigs take the scan both ways, which pins
+        // that `fixture` places their pixels like the grid's.
+        for (gw, gh, cw, ch) in [
+            (8usize, 8usize, 8usize, 8usize),
+            (8, 8, 4, 4),
+            (12, 12, 4, 4),
+            (16, 16, 4, 4),
+            (128, 128, 64, 64),
+            (12, 8, 3, 4),
+            (10, 6, 7, 5),
+            (9, 9, 3, 3),
+            (6, 6, 9, 4),
+            (16, 4, 16, 1),
+            (5, 7, 1, 7),
+            (7, 7, 2, 3),
+        ] {
+            let (n, cells) = (gw * gh, cw * ch);
+            let fill = alloc::format!(
+                "hs = array({cells})\nvs = array({cells})\n\
+                 export function renderBulk() {{\n\
+                   for (i = 0; i < {cells}; i++) {{ hs[i] = i / {cells}\n vs[i] = (i * 7 % 5) / 4 }}\n\
+                   fillCanvas(hs, 1, vs, {cw}, {ch}, 1)\n\
+                 }}"
+            );
+            let paint = alloc::format!(
+                "{}export function renderBulk() {{ paintCanvas(vs, {cw}, {ch}, bs, 1) }}",
+                palette_canvas(cells)
+            );
+            let mut rigs = alloc::vec![
+                ("procedural", Rig::Grid(gw as u16, gh as u16)),
+                ("coords", Rig::Coords(grid_coords(gw, gh, false))),
+                ("coords serpentine", Rig::Coords(grid_coords(gw, gh, true))),
+                ("coords mirrored", Rig::Coords(mirrored_coords(gw, gh))),
+            ];
+            if gw >= 2 && gh >= 2 {
+                rigs.push(("coords transposed", Rig::Coords(transposed_coords(gw, gh))));
+            }
+            if gw == gh && gw % 2 == 0 {
+                rigs.push(("tiled 2x2", Rig::Tiled(wall_2x2((gw / 2) as u16))));
+                rigs.push(("tiled mixed turns", Rig::Tiled(wall_mixed((gw / 2) as u16))));
+            }
+            for (name, rig) in rigs {
+                for (op, src) in [("fillCanvas", &fill), ("paintCanvas", &paint)] {
+                    let (scan, fast) = scan_and_fast(src, n as u32, &rig);
+                    assert_eq!(scan, fast, "{op}: {gw}x{gh} grid, {cw}x{ch} canvas, {name}");
+                    assert!(
+                        fast.iter().any(|p| *p != [0, 0, 0]),
+                        "{op} {name}: nothing painted"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bilinear_at_one_to_one_is_nearest() {
+        // a canvas the size of the grid is the identity whatever the map
+        // says about wiring or direction: filter 1 == filter 0, byte for byte
+        for (gw, gh) in [(8usize, 8usize), (5, 3), (64, 64), (16, 1), (1, 9), (13, 7)] {
+            let (n, cells) = (gw * gh, gw * gh);
+            let src = |filter: u32| {
+                alloc::format!(
+                    "hs = array({cells})\nvs = array({cells})\n\
+                     export function renderBulk() {{\n\
+                       for (i = 0; i < {cells}; i++) {{ hs[i] = i * 0.618\n vs[i] = (i + floor(i / {gw})) % 2 }}\n\
+                       fillCanvas(hs, 1, vs, {gw}, {gh}, {filter})\n\
+                     }}"
+                )
+            };
+            let mut rigs = alloc::vec![("procedural", Rig::Grid(gw as u16, gh as u16))];
+            if gw >= 2 && gh >= 2 {
+                rigs.push(("coords serpentine", Rig::Coords(grid_coords(gw, gh, true))));
+                rigs.push(("coords mirrored", Rig::Coords(mirrored_coords(gw, gh))));
+                rigs.push(("coords transposed", Rig::Coords(transposed_coords(gw, gh))));
+            }
+            if gw == gh && gw % 2 == 0 {
+                rigs.push(("tiled 2x2", Rig::Tiled(wall_2x2((gw / 2) as u16))));
+            }
+            for (name, rig) in rigs {
+                let near = frame1(&src(0), n as u32, &rig);
+                let (scan, fast) = scan_and_fast(&src(1), n as u32, &rig);
+                assert_eq!(fast, near, "{gw}x{gh} {name}");
+                assert_eq!(scan, near, "{gw}x{gh} {name} (scan)");
+            }
+        }
+    }
+
+    #[test]
+    fn a_mapless_strip_samples_pixel_centres() {
+        // 150 px onto 50 cells is exactly 3 px a cell, both filters; the
+        // old i/n coordinate put 4 px in the first cell and 2 in the last.
+        // (The `render` export is what keeps a strip mapless: a bare
+        // `renderBulk` + `fillCanvas` gets the default square grid.)
+        let src = |w: usize, filter: u32| {
+            alloc::format!(
+                "export function render(i) {{ }}\nhs = array({w})\n\
+                 export function renderBulk() {{\n\
+                   for (i = 0; i < {w}; i++) {{ hs[i] = i / {w} }}\n\
+                   fillCanvas(hs, 1, 1, {w}, 1, {filter})\n\
+                 }}"
+            )
+        };
+        let px = frame1(&src(50, 0), 150, &Rig::Strip);
+        let want = frame1(&src(50, 0), 50, &Rig::Strip);
+        for (i, p) in px.iter().enumerate() {
+            assert_eq!(*p, want[i / 3], "pixel {i}");
+        }
+        // 1:1 is the identity under bilinear too, at any length
+        for n in [7usize, 50, 150, 300] {
+            let near = frame1(&src(n, 0), n as u32, &Rig::Strip);
+            assert_eq!(frame1(&src(n, 1), n as u32, &Rig::Strip), near, "{n} px");
+        }
+        // and a 3x bilinear upscale is symmetric about the strip's middle:
+        // a ramp's mirror image is the mirrored ramp (to the lerp's floor
+        // rounding, which is not symmetric — one step at most)
+        let ramp = |rev: bool| {
+            alloc::format!(
+                "export function render(i) {{ }}\nvs = array(5)\nexport function renderBulk() {{\n\
+                   for (i = 0; i < 5; i++) {{ vs[i] = {} }}\n\
+                   fillCanvas(0, 0, vs, 5, 1, 1)\n\
+                 }}",
+                if rev { "(4 - i) / 4" } else { "i / 4" }
+            )
+        };
+        let (up, down) = (
+            frame1(&ramp(false), 15, &Rig::Strip),
+            frame1(&ramp(true), 15, &Rig::Strip),
+        );
+        for i in 0..15 {
+            assert!(
+                (up[i][0] as i32 - down[14 - i][0] as i32).abs() <= 1,
+                "pixel {i}: {:?} {:?}",
+                up[i],
+                down[14 - i]
+            );
+        }
+        assert_eq!(
+            (up[0], up[14]),
+            ([0; 3], [255; 3]),
+            "the ends are the end texels"
+        );
     }
 
     #[test]

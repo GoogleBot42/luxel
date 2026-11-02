@@ -62,6 +62,54 @@ Verified: `tools/check-library.sh` 150/150 on all five rigs, the sprite/scene
 gate, cargo + web tests, `tools/ci.sh`; hw-bench soak on the second Seengreat
 (see the report); every pattern eyeballed on 32×32/64×64 sheets (and strip
 waterfalls) by its implementer, a sample by the orchestrator.
+## 2026-11-01 — bilinear canvas sampling at pixel centres; `gridWidth` follows `setRenderSize` at once
+
+Engine findings from the library rewrite's U1 pass over #979/#981, fixed in
+`luxel_core::bulk` (docs/lang.md "Canvas sampling", "Render resolution",
+"Index space"):
+
+- **Bilinear was not the identity at 1:1.** A grid map puts column c at
+  c/(W−1) (inclusive), and `fillCanvas`/`paintCanvas(…, 1)` and the
+  `setRenderSize(…, 1)` expand sampled at x·w − ½, drifting up to half a
+  cell (a checkerboard's row 0 came out 0,131,119,… instead of 0,255,0,…).
+  Each fixture pixel is now sampled at its CENTRE — on a grid the
+  coordinate is snapped to its column/row slot s and placed at (s + ½)/W;
+  on a mapless strip pixel i at (i + ½)/n from the index; a 1D map's pixels
+  like a grid's columns; free/3D maps and an active transform keep the
+  mapped point. A grid-sized canvas is byte-identical to nearest, a k×
+  upscale blends ¼/¾ (2×) or ⅛…⅞ (4×).
+- **Mapless strip, both filters**: the truncated i/n coordinate put a cell
+  boundary one pixel late wherever i·w/n is whole (150 px onto 50 cells: 4,
+  3, …, 2 px); the index centre gives exactly n/w each.
+- **Row-separable fast path** for bilinear on a row-major/serpentine grid:
+  per-axis tap tables, each fixture row one lerp between two pre-blended
+  canvas rows. Byte-identical to the per-pixel scan (FORCE_SCAN sweep over
+  1×–4×, non-integer, downscale, procedural/coords/serpentine). Host:
+  fillCanvas 64→128 0.47 → 0.14 ms, setRenderSize 64→128 expand 0.62 →
+  0.25–0.32 ms, paintCanvas 32→128 0.44 → 0.10 ms. Tiled chains and
+  transposed maps stay on the scan (a slot-walk variant cost +0.8 KB wasm
+  and was no faster on host) — measure the S3 128×128 chain before relying
+  on it there.
+- **`gridWidth()`/`gridHeight()`** now switch in the same instant as
+  `pixelCount` when `setRenderSize` runs in `beforeRender` (on, resized,
+  and back off to the fixture's grid); a refused small frame reverts both.
+- `splatIndex` (distance to the index i) vs the range ops (coverage, centre
+  i + 0.5) documented precisely; behaviour unchanged.
+
+Goldens: render_size.rs `bilinear_golden` re-pinned (¼/¾ weights),
+`bilinear_upscales_sample_each_pixel_at_its_centre` (2× and 4× ramps,
+fillCanvas and setRenderSize), `a_grid_sized_render_or_canvas_is_the_identity`,
+`grid_width_switches_with_pixel_count`, `a_strip_expand_samples_pixel_centres`;
+bulk.rs `bilinear_grid_paths_match_the_scan`, `bilinear_at_one_to_one_is_nearest`,
+`a_mapless_strip_samples_pixel_centres`; tools/wasm-smoke.mjs pins the new
+2× bytes, the 4× 8×8 ramp and 1:1 identity through the FFI.
+
+Cost: pixelblaze-v3 OTA image +2,576 B (1,267,984 → 1,270,560; margin
+3.26 % → 3.06 %, floor 3 % — the first cut was +5.9 KB and failed the
+gate); asset archive +1,493 B (headroom 7,610 → 6,117 B). Library patterns
+using filter 1 shift by up to half a cell (the intended fix).
+`tools/stack-check.sh` is red on plain master (24,308 B vs the 24,576
+floor) — not this change.
 
 ## 2026-11-01 — clip layers: `X clip` fills text and sprites with a pattern
 
