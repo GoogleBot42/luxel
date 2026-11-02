@@ -149,7 +149,7 @@ pixels.
 
 **F. silent-night snow, `X abs`**: `L sprite 0 0 0 0 … tile 1` + `X abs` — the
 16×16 snowfall tile repeats 1:1 over the whole 128×128, so the flakes stay fine;
-the tree beside it (`4 6`, 24×26) maps to (16,24) 96×104.
+the tree beside it (`1 6`, 24×26) maps to (4,24) 96×104.
 
 ## 4. Why not percent fields, anchors or a 0..1 space
 

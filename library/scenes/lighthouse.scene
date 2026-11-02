@@ -5,6 +5,7 @@
 # on the mask is a contrast curve — a floor of 20 % keeps the harbour faintly
 # moonlit, and anything past mid-grey opens it fully.
 S - Lighthouse
+U 32 32
 L color 0 0 0 0 normal 100 none fill 1
 N Sea
 K 0a1a2e

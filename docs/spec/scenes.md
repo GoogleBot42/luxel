@@ -426,7 +426,7 @@ grid pixels.
 
 **F. silent-night snow, `X abs`** — `L sprite 0 0 0 0 … tile 1` + `X abs`:
 the 16×16 snowfall tile repeats 1:1 over the whole 128×128, so the flakes
-stay fine, while the tree beside it (`4 6`, 24×26) maps to (16,24) 96×104.
+stay fine, while the tree beside it (`1 6`, 24×26) maps to (4,24) 96×104.
 
 The unit tests next to `compose::Place` pin each rule (zoom and centring,
 the never-0 rule, strips proportional and gapless at every length 1..400,

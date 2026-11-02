@@ -2,31 +2,27 @@
 # A lit marquee and a text SLOT in one scene: the name comes from slot 0
 # (POST /api/text, or the console's text box), the greeting crawls under an
 # animated cake, over rainbow confetti (Twinkle's rainbow palette, a touch
-# dimmed so the text reads). Firework-burst sprites, ADDED, are the poppers.
-# Authored for 64x64: the top-left 32x32 is the whole card on a small panel;
-# on 64x64 the name centres on the panel, the greeting crawls the full width
-# and three more poppers go off around the cake.
+# dimmed so the text reads). Firework-burst sprites, ADDED, are the poppers,
+# going off behind the cake's shoulders. Designed at 32x32 (`U`): the card
+# zooms to fill any panel.
 S - Happy Birthday
+U 32 32
 L pat 0 0 0 0 normal 85 none fill 1
 N Confetti
 I @pat/twinkle
 C sliderPalette 196608
 C sliderDensity 1310720
-L sprite 8 7 0 0 normal 100 none fill 1
-N Cake
-I @spr/cake
-L sprite 36 2 0 0 add 100 none fill 1
+L sprite 17 3 0 0 add 100 none fill 1
 N Popper
 I @spr/firework-burst
 A 9
-L sprite 44 34 0 0 add 100 none fill 3
+L sprite 0 6 0 0 add 100 none fill 3
 N Popper 2
 I @spr/firework-burst
 A 7
-L sprite 10 40 0 0 add 100 none fill 1
-N Popper 3
-I @spr/firework-burst
-A 11
+L sprite 8 7 0 0 normal 100 none fill 1
+N Cake
+I @spr/cake
 L text 0 0 0 0 normal 100 black fill 1
 N Name
 T slot 0

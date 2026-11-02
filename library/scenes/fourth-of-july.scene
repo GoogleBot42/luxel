@@ -2,9 +2,10 @@
 # A showcase pattern used as a BASE: the waving flag at 40 % opacity, the
 # red-white-blue fireworks ADDED over it (the flag stays readable under the
 # show), and burst sprites added on top, out of phase via their `A` rates.
-# Authored for 64x64: both patterns size themselves to the panel, and the
-# top-left 32x32 carries two of the four bursts, so it reads on a small panel.
+# Designed at 32x32 (`U`): both patterns size themselves to the panel, and the
+# three bursts zoom with it, so every panel gets the whole show.
 S - Fourth of July
+U 32 32
 L pat 0 0 0 0 normal 40 none fill 1
 N Flag
 I @pat/us-flag-2d
@@ -13,18 +14,14 @@ N Fireworks
 I @pat/fireworks
 C sliderPalette 131072
 C sliderLaunchRate 3932160
-L sprite 15 1 0 0 add 100 none fill 1
+L sprite 16 1 0 0 add 100 none fill 1
 N Burst
 I @spr/firework-burst
-L sprite 1 13 0 0 add 100 none fill 3
+L sprite 1 9 0 0 add 100 none fill 3
 N Burst 2
 I @spr/firework-burst
 A 7
-L sprite 44 6 0 0 add 100 none fill 3
+L sprite 13 16 0 0 add 100 none fill 1
 N Burst 3
 I @spr/firework-burst
 A 12
-L sprite 34 40 0 0 add 100 none fill 1
-N Burst 4
-I @spr/firework-burst
-A 8

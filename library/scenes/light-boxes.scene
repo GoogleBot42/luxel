@@ -3,6 +3,7 @@
 # overlap into yellow, cyan, magenta and a white centre. Switch the top two
 # to `lighten` and the overlaps take the brighter channel instead: no white.
 S - Light Boxes
+U 32 32
 L color 3 3 16 16 normal 100 none fill 1
 N Red
 K ff0000

@@ -5,6 +5,7 @@
 # wash, breathing — ADDED over everything as the glow the fire throws on the
 # room. Text slot 0 is for a message (`/api/text`); empty, it draws nothing.
 S - Hearth
+U 32 32
 L color 0 0 0 0 normal 100 none fill 1
 N Wall
 K 2a1008

@@ -4,6 +4,7 @@
 # above the fire, become sparks drifting up out of it. The ground is a colour
 # layer from row 30 down, so the fire sits on it at any panel height.
 S - Campfire
+U 32 32
 L pat 0 0 0 0 normal 100 none fill 1
 N Night sky
 I @pat/starfield-2d
