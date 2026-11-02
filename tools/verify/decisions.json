@@ -25,7 +25,7 @@
     "feedback": "I actually hate the tear from the original pattern remove it. Then it is all good.",
     "addressedAt": "2026-09-01T03:12:31.030Z"
   },
-  "breakout-2d": {
+  "brick-breaker-2d": {
     "decision": "good",
     "decidedAt": "2026-09-01T01:59:26.996Z"
   },
@@ -106,12 +106,6 @@
     "decision": "needs-work",
     "decidedAt": "2026-09-01T02:16:07.725Z",
     "feedback": "Looks good but you need to find better defaults.  Something that is very interesting.",
-    "addressedAt": "2026-09-01T03:12:31.030Z"
-  },
-  "frogger-2d": {
-    "decision": "fork",
-    "decidedAt": "2026-09-01T02:17:57.326Z",
-    "feedback": "I think you can to better than the original.  Just make a frogger game.  Look at the snake game port for inspiration.  I want it to be a full game that automatically plays by itself.  There should be a slider to configure how smart the AI is (controls how easily it looses).",
     "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "geometry-morphing-demo-2d": {
@@ -208,6 +202,12 @@
     "decision": "needs-work",
     "decidedAt": "2026-09-01T02:30:39.345Z",
     "feedback": "This is great.  Feedback: the ripples appear to stick around forever.  There aren't enough controls. Maybe there should be a permanent texture overlayed on top of the simulation to give the water more texture.  The ripple should go to the very edge.  It shouldn't step one pixel before each edge.",
+    "addressedAt": "2026-09-01T03:12:31.030Z"
+  },
+  "road-hopper-2d": {
+    "decision": "fork",
+    "decidedAt": "2026-09-01T02:17:57.326Z",
+    "feedback": "I think you can to better than the original.  Just make a frogger game.  Look at the snake game port for inspiration.  I want it to be a full game that automatically plays by itself.  There should be a slider to configure how smart the AI is (controls how easily it looses).",
     "addressedAt": "2026-09-01T03:12:31.030Z"
   },
   "scary-pumpkin": {

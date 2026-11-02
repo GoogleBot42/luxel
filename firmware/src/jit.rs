@@ -206,20 +206,23 @@ fn emit_heap_need(prog: &luxel_core::vm::Program) -> usize {
 /// What a compile still puts on the INTERNAL heap when the arena carries
 /// the bookkeeping (Gitea #671), in bytes. Measured 2026-09-30 (Gitea
 /// #905): at the worst pattern's peak (`2d-fireworks-fade`, 4,122 B
-/// host-side) ~3.8 KB is the verifier's per-branch-target `BTreeMap` nodes
-/// (`luxel_core::kinds::walk_fn`; a `BTreeMap` takes no allocator, so the
-/// hook cannot route them), ~180 B its `FnView` table, and only ~150 B the
-/// operand-depth abstract stacks and the emitter's running stack copy —
-/// kept internal because moving them cost 7.5 KB of flash for those
-/// 150 B. Plus the `Placed` result and its export names.
+/// host-side; removed from library/ in 2026-11, frozen copy in
+/// tests/data/lib — see #1007) ~3.8 KB is the verifier's
+/// per-branch-target `BTreeMap` nodes (`luxel_core::kinds::walk_fn`; a
+/// `BTreeMap` takes no allocator, so the hook cannot route them), ~180 B
+/// its `FnView` table, and only ~150 B the operand-depth abstract stacks
+/// and the emitter's running stack copy — kept internal because moving
+/// them cost 7.5 KB of flash for those 150 B. Plus the `Placed` result
+/// and its export names.
 ///
 /// `words * EMIT_INT_PER_WORD + fns * EMIT_INT_PER_FN + EMIT_INT_FIXED`,
 /// fitted by the same test with a counting arena hook installed
 /// (2026-09-30, refitted from #671's 6/48/1,024, which left 28 % slack at
-/// its tightest pattern). The tightest pattern (`novas`, 2,844 B) now uses
-/// 83 %; `snake-2d` (1,698 B against a working set of 23,832 B) is charged
-/// 5,247 B instead of 8,446 B. The fixed term carries the margin because
-/// the patterns that bind are small. Host bytes again, so an over-estimate
+/// its tightest pattern). The tightest pattern (`novas`, 2,844 B; a frozen
+/// copy in tests/data/lib since 2026-11) now uses 83 %; `snake-2d`
+/// (1,698 B against a working set of 23,832 B) is charged 5,247 B instead
+/// of 8,446 B. The fixed term carries the margin because the patterns
+/// that bind are small. Host bytes again, so an over-estimate
 /// on the device. Only an arena board applies it; the constants move with
 /// the test's.
 pub const EMIT_INT_PER_WORD: usize = 3;

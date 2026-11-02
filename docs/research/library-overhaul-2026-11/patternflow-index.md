@@ -27,7 +27,7 @@
 | lissajous-weave | 3 | woven-thread Lissajous; lines + glow + eased morph → 4; merge with lissajous tracer |
 | glitch-rings | 3 | bold banded rings with VHS row tearing |
 | tile-waves | 2 | mosaic ripple with stepped timing (dup of origin) |
-| breakout-arcade | 4 | self-playing Breakout with power-ups/combos/AI; fold into breakout-2d |
+| brick-breaker-arcade | 4 | self-playing brick-breaker with power-ups/combos/AI; fold into brick-breaker-2d (was breakout-2d) |
 | midsummer-sea | 4 | synthwave sunset seascape; strongest scene candidate |
 | firefly-hollow | 4 | dusk meadow with blinking fireflies; scene with fireflies layer |
 | poincare-sphere | 3 | scrolling grid through a fisheye lens folding into a mirrored rim |
@@ -39,5 +39,5 @@
 | wave-saw | 2 | three-colour stripes with noise warp; palette banded-texture only |
 
 Near-dups: dither-bit-rain+kaleido-bit-rain; pulse-dot-grid+wave-cell-grid; glitch-rings+warped-wave+tile-waves+origin ("rings" family with tile/tear/warp/band modes); vector-field-flow+a-big-hit (keep neon ridge look); hatched-warp/nodal-lattice/contour-blobs/thermal-posterize share a sum-of-sines field.
-Overlaps with library: breakout-arcade↔breakout-2d; lissajous-weave↔lissajous-curve-tracer; firefly-hollow↔fireflies/colourful-fireflies; retro-digital-tapestry↔xorcery-2d-3d; midsummer-sea↔ocean/sunset; vector-field-flow↔curl-flow-2d/flow-field-2d.
-Portrait note: breakout-arcade, midsummer-sea, firefly-hollow were laid out tall; lay out from the grid's aspect.
+Overlaps with library: brick-breaker-arcade↔brick-breaker-2d; lissajous-weave↔lissajous-curve-tracer; firefly-hollow↔fireflies/colourful-fireflies; retro-digital-tapestry↔xorcery-2d-3d; midsummer-sea↔ocean/sunset; vector-field-flow↔curl-flow-2d/flow-field-2d.
+Portrait note: brick-breaker-arcade, midsummer-sea, firefly-hollow were laid out tall; lay out from the grid's aspect.

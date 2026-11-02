@@ -1,9 +1,9 @@
-# Frogger 2D
+# Road Hopper 2D
 kind: 2D
 sensors: no
 
 ## What it looks like
-On a square LED matrix, the display is divided into horizontal "lanes" — one lane per pixel row (for the default configuration). In each lane a short, glowing colored bar slides horizontally back and forth, like traffic lanes in the arcade game Frogger. Each lane's bar moves at its own speed, so the lanes quickly fall out of step with each other. Bars slide fully off one edge before reversing, so at any moment some lanes are empty. The bars are rainbow-colored — hue varies steadily from lane to lane so the full set spans the color wheel — and the whole rainbow slowly drifts/cycles over time. Bars have soft edges: brightest along their center line, fading to black at their fringes. Background is black. With the width control turned low the bars shrink to sparse particle-like dots; turned very high they fatten until neighboring lanes merge into a wash.
+On a square LED matrix, the display is divided into horizontal "lanes" — one lane per pixel row (for the default configuration). In each lane a short, glowing colored bar slides horizontally back and forth, like traffic lanes in the classic road-crossing arcade game. Each lane's bar moves at its own speed, so the lanes quickly fall out of step with each other. Bars slide fully off one edge before reversing, so at any moment some lanes are empty. The bars are rainbow-colored — hue varies steadily from lane to lane so the full set spans the color wheel — and the whole rainbow slowly drifts/cycles over time. Bars have soft edges: brightest along their center line, fading to black at their fringes. Background is black. With the width control turned low the bars shrink to sparse particle-like dots; turned very high they fatten until neighboring lanes merge into a wash.
 
 ## Layout assumptions
 The pattern assumes a square matrix: it derives the matrix side length as the square root of the total pixel count, and uses that both as the default number of lanes and in the line-width math. Obvious fix: accept the actual mapped width/height (or a lane-count control) instead of assuming a perfect square. Rendering itself is resolution-independent (it works in normalized 2D world coordinates), so only the defaults depend on this assumption.
