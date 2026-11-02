@@ -1,0 +1,37 @@
+# A Luxel library scene — Apache-2.0. Grammar: library/README.md.
+# `fit tile` as a COUNTER: the candle-stick sprite is an 8 px cell of two
+# candles, so a tiled box's width sets how many burn — 63 px from x 1 is eight
+# candles on a 32-wide panel and sixteen on a 64. Behind them: a warm wash, a
+# slow gold glitter (Twinkle ramped to one warm hue) drifting in the dark
+# above. For Advent, Hanukkah, Diwali or a birthday.
+# Authored for 64x64: the top-left 32x32 is one shelf of candles; a 64x64
+# shows a votive rack, two shelves.
+# Menorah variant (on a 32x32): replace the two candle rows with
+#   L sprite 1 18 16 12 normal 100 none tile 1    (four candles, left)
+#   L sprite 13 14 8 12 normal 100 none fill 1     (the raised shamash; the
+#                                                    cell's taller left candle)
+#   L sprite 18 18 16 12 normal 100 none tile 1   (four candles, right)
+# each with `I @spr/candle-stick`, and narrow the boxes to light night by night.
+S - Candle Row
+L color 0 0 0 0 normal 100 none fill 1
+N Wash
+K 140804
+L pat 0 0 0 0 add 85 none fill 1
+N Glitter
+I @pat/twinkle
+C sliderDensity 524288
+C sliderFadeSeconds 196608
+R 100 0:000000 255:ffcf7a
+L sprite 1 18 63 12 normal 100 none tile 1
+N Candles
+I @spr/candle-stick
+L sprite 1 48 63 12 normal 100 none tile 1
+N Candles 2
+I @spr/candle-stick
+A 7
+L color 0 30 0 2 normal 100 none fill 1
+N Shelf
+K 4a2a14
+L color 0 60 0 2 normal 100 none fill 1
+N Shelf 2
+K 4a2a14

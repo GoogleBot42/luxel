@@ -1,0 +1,45 @@
+# Luxel library sprite — original art, Apache-2.0. Grammar: library/README.md.
+# Classic C9 bulbs on two sagging strings, red/green/blue/gold, the second
+# string offset half a bulb. Two frames trade which half of the bulbs glows
+# (halo and hot core). A 32x12 tile, seamless both ways: tile it over a box.
+name: Bulb String
+fps: 1
+palette:
+  k 2f4f2f
+  R ff2a2a
+  G 2aff5a
+  B 2a6bff
+  Y ffcc2a
+  r 5a0e0e
+  g 0e5a1e
+  b 0e245a
+  y 5a480e
+  W fff3e0
+
+frame
+kk.....kkk.....kkk.....kkk.....k
+k.kkkkk.k.kkkkk.k.kkkkk.k.kkkkk.
+WRr....GGG....bBWBb....YYY....rR
+RRr....GGG....bBBBb....YYY....rR
+Rr......G......bBb......Y......r
+r...............b...............
+...kkk.....kkk.....kkk.....kkk..
+kkk.k.kkkkk.k.kkkkk.k.kkkkk.k.kk
+...BBB....yYWYy....RRR....gGWGg.
+...BBB....yYYYy....RRR....gGGGg.
+....B......yYy......R......gGg..
+............y...............g...
+
+frame
+kk.....kkk.....kkk.....kkk.....k
+k.kkkkk.k.kkkkk.k.kkkkk.k.kkkkk.
+RR....gGWGg....BBB....yYWYy....R
+RR....gGGGg....BBB....yYYYy....R
+R......gGg......B......yYy......
+........g...............y.......
+...kkk.....kkk.....kkk.....kkk..
+kkk.k.kkkkk.k.kkkkk.k.kkkkk.k.kk
+..bBWBb....YYY....rRWRr....GGG..
+..bBBBb....YYY....rRRRr....GGG..
+...bBb......Y......rRr......G...
+....b...............r...........

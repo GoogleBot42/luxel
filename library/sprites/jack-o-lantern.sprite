@@ -1,0 +1,45 @@
+# Luxel library sprite — original art, Apache-2.0. Grammar: library/README.md.
+# A carved pumpkin with an OPAQUE near-black surround and a TRANSPARENT carving:
+# lay it over a fire pattern and the flames show only through the eyes and grin.
+name: Jack-o'-Lantern
+fps: 0
+palette:
+  k 0a0508
+  o ff7a1a
+  r c24e00
+  h ffb066
+  g 3f7d20
+
+frame
+kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+kkkkkkkkkkkkkkkkkkggkkkkkkkkkkkk
+kkkkkkkkkkkkkkkkkggkkkkkkkkkkkkk
+kkkkkkkkkkkkkkkkggkkkkkkkkkkkkkk
+kkkkkkkkkkkkkkkggkkkkkkkkkkkkkkk
+kkkkkkkkkkkkkkggggkkkkkkkkkkkkkk
+kkkkkkkkkkkrrrrggrrrrkkkkkkkkkkk
+kkkkkkkkkrrrroroororrrrkkkkkkkkk
+kkkkkkkrrrroooroorooorrrrkkkkkkk
+kkkkkrrrrrohorrohrrooorrrrrkkkkk
+kkkkrrror.ohoroohorooo.rorrrkkkk
+kkkrrroo...horoohoroo...oorrrkkk
+kkkrrho.....rroohorr.....oorrkkk
+kkrrhh.......roohor.......oorrkk
+kkroho.......roohor.......ooorkk
+kroohorroohorroohorroooorroooork
+kroohorroohorro..orroooorroooork
+kooooorroooorr....rroooorroooook
+kooooorroooorroooorroooorroooook
+kooooorroooorroooorroooorroooook
+krooo..roooorroooorroooor..ooork
+krooo....oo..........oo....ooork
+kkrooo...oo..........oo...ooorkk
+kkrroo....................oorrkk
+kkkrroo....or..oo..ro....oorrkkk
+kkkrrroor..............roorrrkkk
+kkkkrrrorroo........oorrorrrkkkk
+kkkkkrrrrrooorroorrooorrrrrkkkkk
+kkkkkkkrrrroooroorooorrrrkkkkkkk
+kkkkkkkkkrrrrrrrrrrrrrrkkkkkkkkk
+kkkkkkkkkkkrrrrrrrrrrkkkkkkkkkkk

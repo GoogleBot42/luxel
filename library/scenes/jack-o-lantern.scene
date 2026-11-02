@@ -1,0 +1,42 @@
+# A Luxel library scene — Apache-2.0. Grammar: library/README.md.
+# Fire seen only through a carving: the pumpkin sprite has an OPAQUE near-black
+# surround and a TRANSPARENT carving, so the full-layout fire beneath shows
+# through the eyes and grin and nowhere else. The ramp keeps the fire DEEPER
+# than the orange shell (dark red cavity, yellow-white licks) so the face reads,
+# and its first stop is an ember, not black, so the carving never goes out.
+# Authored for 64x64: the top-left 32x32 is the whole scene on a small panel
+# (one pumpkin, one bat); a 64x64 adds a mirrored second pumpkin, two night
+# quadrants with stars, and two more bats flapping out of phase.
+S - Jack-o'-Lantern
+L pat 0 0 0 0 normal 100 none fill 1
+N Fire
+I @pat/perlin-fire
+C sliderFlameHeightPct 6553600
+R 100 0:2a0400 80:6a0c00 150:c02400 205:ff9a00 240:ffe08a 255:fff8e0
+L color 32 0 32 32 normal 100 none fill 1
+N Night
+K 0a0508
+L color 0 32 32 32 normal 100 none fill 1
+N Night 2
+K 0a0508
+L pat 0 0 0 0 add 70 black fill 1
+N Stars
+I @pat/twinkle
+C sliderDensity 196608
+L sprite 0 0 0 0 normal 100 none fill 1
+N Pumpkin
+I @spr/jack-o-lantern
+L sprite 32 32 0 0 normal 100 none fill 3
+N Pumpkin 2
+I @spr/jack-o-lantern
+L sprite 0 0 0 0 normal 100 none fill 1
+N Bat
+I @spr/bat
+L sprite 42 10 0 0 normal 100 none fill 3
+N Bat 2
+I @spr/bat
+A 6
+L sprite 8 44 0 0 normal 100 none fill 1
+N Bat 3
+I @spr/bat
+A 11

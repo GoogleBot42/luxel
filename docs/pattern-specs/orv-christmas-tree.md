@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/scenes/silent-night.scene (tree sprite over a starfield, 2026-11).
+
 # Orv - Christmas Tree
 kind: 2D (the 3D renderer just delegates to the 2D one, ignoring depth)
 sensors: no
