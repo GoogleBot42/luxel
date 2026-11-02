@@ -27,6 +27,20 @@ A draft credit note to the Patternflow author is in
 `docs/research/library-overhaul-2026-11/patternflow-note-draft.md`. It has
 not been sent; Jeremy decides.
 
+## 2026-11-02 — image-check: 3 % OTA-slot floor suspended on the classic boards
+
+Jeremy's call: the Seengreat boards are what matter now, and after #984 the
+`pixelblaze-v3` image sat at ~3.06 % of its 1.25 MiB slot. So
+`tools/image-check.sh` now WARNS instead of failing when a 1.25 MiB-slot
+board (everything but `board-seengreat-hub75`) is under `MIN_MARGIN_PCT`.
+Still hard failures: an image over its slot on any board, the Seengreat
+under 3 %, and a bare image with no board named. `STRICT_MARGIN=1` or an
+explicit `MIN_MARGIN_PCT` puts the floor back for a call. All three default
+`tools/ci.sh` variants are classic boards, so CI's margin gate is
+over-slot-only until Gitea #1013 (the revisit: a size diet, or the next
+classic-board release) is closed. Docs: boards.md "The OTA-slot ceiling",
+releases.md, tools.md.
+
 ## 2026-11-01 — Library overhaul: 308 patterns → 150, 41 scenes, 40 sprites, idea over fidelity
 
 The whole shipped library was re-done against one principle: **capture the

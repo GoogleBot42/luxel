@@ -60,12 +60,20 @@ list and `CI_BOARD` builds just one variant):
    | variant | why it is in the gate |
    |---|---|
    | `pixelblaze-v3` | the Xtensa toolchain; stands in for athom-music, esp32-generic, s3-devkit, s3-hub75 and seengreat-hub75. Since #501 it is also the one gated variant with `wled-takeover` **off**, so image-check's absent-marker half is exercised |
-   | `c6-devkit-hosted` | the tightest image in the fleet, and the exact C6 variant `release.yml` ships — the one that trips image-check's 3 % OTA-slot floor first |
+   | `c6-devkit-hosted` | the tightest image in the fleet, and the exact C6 variant `release.yml` ships — the one that trips image-check's 3 % OTA-slot floor first (a WARN, not a failure, since 2026-11-02 — see below) |
    | `c3-devkit` | the only `riscv32imc` target: no A extension, so no atomic read-modify-write |
 
    (All three build `core`/`alloc` from source since #501 — the RISC-V pair
    through `RUSTC_BOOTSTRAP=1` — so a std-side codegen break shows up on both
    toolchain axes, not just the Xtensa one.)
+
+   **All three are 1.25 MiB-slot boards, so since 2026-11-02 none of them
+   can fail on the 3 % margin floor** — Jeremy suspended it for the classic
+   boards (Gitea #1013; docs/boards.md "The OTA-slot ceiling"). Under the
+   floor they print `image-check: WARN — …` and pass; over the slot still
+   fails. Read the WARN lines in a green run, and gate a classic-board
+   release with `STRICT_MARGIN=1`. The Seengreat keeps its hard floor
+   wherever it is image-checked (release.yml, or `CI_VARIANTS`).
 
    Gating one board was how two release-gate breakages merged green on the
    same day (2026-09-07): `board-c3-devkit` stopped compiling outright
@@ -223,7 +231,8 @@ what is left of it:
   `MIGRATING_RELEASE=0` and `.github/workflows/release.yml` no longer sets
   it, so every release image is weighed against its own board's slot at the
   normal 3 % floor (20–25 % free on the 4 MB boards, 68.6 % on the
-  Seengreat). What forced it out on that date rather than later is the
+  Seengreat; the floor is warn-only on the 1.25 MiB-slot boards since
+  2026-11-02, Gitea #1013). What forced it out on that date rather than later is the
   classic-ESP32 JIT tier: with the emitter those images are ~1,120–1,138 KB,
   which fits 1.25 MiB with 13–15 % to spare and does not fit 1 MiB at all
   (docs/boards.md "JIT: which boards compile patterns to native code").
