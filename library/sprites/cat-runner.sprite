@@ -1,0 +1,62 @@
+# Luxel library sprite — original art, Apache-2.0. Grammar: library/README.md.
+# An original ginger tabby in a four-frame gallop, facing right: stretch,
+# front paws plant, gather, hind push. The body rides a pixel higher on the
+# two airborne frames and the tail swishes, so at 12 fps the run bounces.
+# Made for Rainbow Runner, where keyframes carry it across the panel.
+name: Cat Runner
+fps: 12
+palette:
+  o f4a259
+  s c46a1f
+  b ffe1c0
+  e 7cff7c
+  n ff7a9a
+
+frame
+...........o..o.
+s..........oooo.
+.o........oooeoo
+.o.osososoooooon
+..oosososooobbb.
+..oooooooooo....
+...bbbbbbbb.....
+...oo......oo...
+..oo........ob..
+.b...........b..
+
+frame
+................
+...........o..o.
+...........oooo.
+s.........oooeoo
+oo.osososoooooon
+..oosososooobbb.
+..oooooooooo....
+...bbbbbbbb.....
+.boo......oo....
+..........bb....
+
+frame
+................
+s..........o..o.
+.o.........oooo.
+.o........oooeoo
+...osososoooooon
+..oosososooobbb.
+..oooooooooo....
+...bbbbbbbb.....
+....oo...oo.....
+.....bb.bb......
+
+frame
+...........o..o.
+...........oooo.
+s.........oooeoo
+oo.osososoooooon
+..oosososooobbb.
+..oooooooooo....
+...bbbbbbbb.....
+...oo......oo...
+...oo.......obb.
+..bb............
+

@@ -1,0 +1,30 @@
+# A Luxel library scene — Apache-2.0. Grammar: library/README.md.
+# The screensaver everybody watched for the corner hit: the Luxel wordmark
+# drifting over a starfield and turning off all four walls. The track is a
+# closed billiard path (`M` lines, docs/spec/scenes.md "Keyframes") — ten
+# wall touches in 21.9 s, each key's ms proportional to the distance from the
+# last so the logo keeps one pace, and `sine` easing so it glides into every
+# wall and pushes off again. Each key also picks a sprite FRAME, and the
+# logo's frames are its tints: it changes colour on every bounce.
+# Authored for 64x64 — the box (26x13) travels the whole panel, x 0..38,
+# y 0..51; on a 32x32 it is on screen only when the path crosses that corner.
+S - Bouncing Logo
+L pat 0 0 0 0 normal 100 none fill 1
+N Stars
+C sliderWarpPercent 1638400
+I @pat/starfield-2d
+L sprite 0 8 0 0 normal 100 none fill 1
+N Logo
+I @spr/luxel-logo
+#  ms     x   y   opacity ease frame
+M 0       0   8   =       sine 0
+M 3600    38  42  =       sine 1
+M 4600    28  51  =       sine 2
+M 7300    0   26  =       sine 3
+M 10100   29  0   =       sine 4
+M 10900   38  8   =       sine 5
+M 14600   0   42  =       sine 0
+M 15500   10  51  =       sine 1
+M 18200   38  26  =       sine 2
+M 21000   9   0   =       sine 3
+M 21900   0   8   =       sine 0

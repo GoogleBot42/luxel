@@ -1,0 +1,32 @@
+# A Luxel library scene — Apache-2.0. Grammar: library/README.md.
+# An original ginger tabby galloping through a night sky with a rainbow
+# streaming behind it. The trail is the Rainbow pattern seen through a 40x8
+# box — a `pat` layer's box is a window onto a full-layout render, and the
+# pattern turned 90 degrees with eight repeats lays one whole rainbow across
+# every 8 rows of a 64-row panel, drifting slowly through the band — and
+# the box rides the SAME keyframe track as the cat, 37 px behind it, so the
+# two move as one. Two dashes per 9.6 s loop: across the top, then the
+# bottom; each `M` pair at one ms is an instant jump made while both are
+# off screen. Authored for 64x64; a 32x32 sees the top dash.
+S - Rainbow Runner
+L pat 0 0 0 0 normal 100 none fill 1
+N Night
+I @pat/starfield-2d
+C sliderMode 65536
+L pat -53 13 40 8 normal 100 none fill 1
+N Trail
+I @pat/rainbow
+C sliderRepeats 524288
+C sliderAngleDegrees 5898240
+#  ms    x    y   opacity ease
+M 0      -53  13  =       linear
+M 4800   64   13  =       linear
+M 4800   -53  41  =       step
+M 9600   64   41  =       linear
+L sprite -16 12 0 0 normal 100 none fill 1
+N Cat
+I @spr/cat-runner
+M 0      -16  12  =       linear
+M 4800   101  12  =       linear
+M 4800   -16  40  =       step
+M 9600   101  40  =       linear

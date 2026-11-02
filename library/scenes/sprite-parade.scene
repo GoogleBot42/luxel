@@ -1,0 +1,72 @@
+# A Luxel library scene — Apache-2.0. Grammar: library/README.md.
+# Sprites on the march: a smiley that HOPS (an `out` key up to the apex, an
+# `in` key back down, so it hangs at the top and drops), a face cycling its
+# moods and an alien shuffling with a sine bob, all on one street, and a bat
+# lapping them twice overhead. Every track is a conveyor on one 8 s loop
+# (docs/spec/scenes.md "Keyframes"): the parade moves 10 px/s, a key every
+# second, and the two keys sharing one ms are the instant jump from the
+# right edge back to the left, made while the sprite is off screen.
+# Authored for 64x64; the sprites are 16 px or smaller, so on a 32x32 the
+# same parade crosses the top-left quarter with the street out of frame.
+S - Sprite Parade
+L pat 0 0 0 0 normal 100 none fill 1
+N Sky
+I @pat/color-wash
+L color 0 52 0 12 normal 100 none fill 1
+N Street
+K 2a2238
+L color 0 52 0 1 normal 100 none fill 1
+N Curb
+K 7a6a9e
+L sprite -16 12 0 0 normal 100 none fill 1
+N Bat
+I @spr/bat
+M 0 -16 12 = linear
+M 1000 4 4 = sine
+M 2000 24 12 = sine
+M 3000 44 4 = sine
+M 4000 64 12 = sine
+M 4000 -16 12 = step
+M 5000 4 4 = sine
+M 6000 24 12 = sine
+M 7000 44 4 = sine
+M 8000 64 12 = sine
+L sprite 4 44 0 0 normal 100 none fill 1
+N Alien
+I @spr/pixel-alien
+M 0 4 44 = linear
+M 1000 14 42 = sine
+M 2000 24 44 = sine
+M 3000 34 42 = sine
+M 4000 44 44 = sine
+M 5000 54 42 = sine
+M 6000 64 44 = sine
+M 6000 -16 44 = step
+M 7000 -6 42 = sine
+M 8000 4 44 = sine
+L sprite 24 36 0 0 normal 100 none fill 1
+N Smiley
+I @spr/smiley
+M 0 24 36 = linear
+M 1000 34 30 = out
+M 2000 44 36 = in
+M 3000 54 30 = out
+M 4000 64 36 = in
+M 4000 -16 36 = step
+M 5000 -6 30 = out
+M 6000 4 36 = in
+M 7000 14 30 = out
+M 8000 24 36 = in
+L sprite 44 36 0 0 normal 100 none fill 1
+N Moods
+I @spr/face-moods
+M 0 44 36 = linear
+M 1000 54 34 = sine
+M 2000 64 36 = sine
+M 2000 -16 36 = step
+M 3000 -6 34 = sine
+M 4000 4 36 = sine
+M 5000 14 34 = sine
+M 6000 24 36 = sine
+M 7000 34 34 = sine
+M 8000 44 36 = sine
