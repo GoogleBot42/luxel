@@ -277,6 +277,7 @@ body{background:#0e1013;color:var(--text);font:14px/1.45 var(--sans);-webkit-fon
   <a href="#S7g"><b>S7g</b>Pattern layer · blend/ramp</a>
   <a href="#S7h"><b>S7h</b>Text layer · sources</a>
   <a href="#S7i"><b>S7i</b>Font picker</a>
+  <a href="#S7j"><b>S7j</b>Scene editor · design size</a>
   <a href="#S2f"><b>S2f</b>Text builtins · completions</a>
   <h3 style="margin-top:20px">Batch 7 · Color ramp editor</h3>
   <a href="#S8a"><b>S8a</b>Settings · ramp editor</a>
@@ -3217,10 +3218,11 @@ the dirty state.</p>
 <!-- ===================== S7f ===================== -->
 <p class="cap"><b>S7f</b> · Scene editor — mobile 390 px, panes stacked with the preview sticky</p>
 <div class="frame w390" id="S7f">
-  <header class="edhdr" style="height:44px;padding:0 10px;gap:8px">
+  <header class="edhdr" style="height:auto;min-height:44px;flex-wrap:wrap;padding:0 10px;gap:8px">
     <div class="btn quiet icon">←</div>
     <div class="nameedit" style="font-size:13px;flex:1;min-width:0">Clock overlay</div>
     <div class="btn transport mini" title="pause the preview"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg><span class="tlabel">Pause</span></div>
+    <div class="lyt"><span class="lytlab">Layout</span><div class="lytseg"><div class="on">Pixels</div><div>Fit 32</div><div>Fit 64</div><div>This panel</div></div></div>
     <div class="btn primary">Saved</div>
     <div class="btn icon">⋯</div>
   </header>
@@ -3308,6 +3310,11 @@ the base are drawn rather than written (#736 item 17), the chevron is off <i>+ A
 drawings (#736 items 21–23), and the transport is in the header bar — at 390 px it keeps the place and gives up the
 word, which is what leaves the one-row header at four controls (#739). The preview section's header carries the
 frame-rate chooser (#736 item 26). The save-state span is hidden at this width, as it always was.</p>
+
+<p class="note"><b>Amended 2026-11-02 (Gitea #997).</b> The header grows a second row on a phone: the scene's
+<b>Layout</b> chooser (S7j) is as wide as the whole 44px document row, so it wraps under it at full width — the same
+trade the pattern editor makes for the playground's <i>Preview as</i> chip — rather than squeezing the name to two
+characters.</p>
 
 <!-- ===================== S7g ===================== -->
 <p class="cap"><b>S7g</b> · Pattern layer — non-Normal blend, ramp stops, projection row</p>
@@ -3530,6 +3537,140 @@ rendered in that face at 1:1 device pixels, so the size difference is the thing 
 entries, all built into <span class="mono tiny">luxel-core</span>, identical on device and in the playground. There is
 no <i>Upload…</i> row, no empty "custom fonts" section and no hint that one is coming: user fonts are filed and not
 planned (#487), and an affordance for them would be a promise the device cannot keep.</p>
+
+<!-- ===================== S7j ===================== -->
+<p class="cap"><b>S7j</b> · Scene editor — a design-size scene (<span class="mono tiny">U 32 32</span>) on the 64×64 matrix: Layout chooser, Pin to pixels, Preview at</p>
+<div class="frame w1200" id="S7j">
+  <header class="edhdr">
+    <div class="btn quiet">← Scenes</div>
+    <div class="nameedit">Aurora + ticker</div>
+    <div class="savestate"></div>
+    <div class="btn transport" title="pause the preview"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg><span class="tlabel">Pause</span></div>
+    <div class="lyt">
+      <span class="lytlab">Layout</span>
+      <div class="lytseg"><div>Pixels</div><div class="on">Fit 32</div><div>Fit 64</div><div>This panel</div></div>
+    </div>
+    <div class="spacer"></div>
+    <div class="btn primary">Save</div>
+    <div class="menuwrap"><div class="btn icon">⋯</div></div>
+    <div class="edhdr-rail"><div class="devchip"><i class="dot"></i>luxel-f6b0a8 · 64×64 matrix</div></div>
+  </header>
+  <div class="scene3" style="height:712px">
+    <div class="lcol">
+      <div class="rhead" style="margin-bottom:8px">
+        <div class="slabel">Layers</div>
+      </div>
+      <div class="lrow sel">
+        <span class="hnd">⠿</span>
+        <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+        <span class="ty"><span class="lico tglyph">T</span></span>
+        <span class="nm2">Time</span>
+        <span class="meta2">12:48</span>
+      </div>
+      <div class="lrow">
+        <span class="hnd">⠿</span>
+        <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+        <span class="ty"><svg class="lico" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" role="img" aria-label="sprite layer"><path d="M3.5 3.5h7v7h-7zM13.5 3.5h7v7h-7zM3.5 13.5h7v7h-7zM13.5 13.5h7v7h-7z"/></svg></span>
+        <span class="nm2">Heart</span>
+        <span class="meta2">9×8</span>
+      </div>
+      <div class="lrow">
+        <span class="hnd">⠿</span>
+        <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+        <span class="ty"><svg class="lico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" role="img" aria-label="pattern layer"><path d="M3 12c3-7 6-7 9 0s6 7 9 0"/></svg></span>
+        <span class="nm2">Aurora 2D</span>
+        <span class="meta2"></span>
+      </div>
+      <div class="lrow off">
+        <span class="hnd">⠿</span>
+        <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4l16 16"/><path d="M6.7 6.9C4 8.6 2 12 2 12s3.8 6 10 6c1.9 0 3.5-.5 4.9-1.3"/><path d="M9.9 5.2A9.6 9.6 0 0 1 12 6c6.2 0 10 6 10 6a18 18 0 0 1-2.4 3"/></svg>
+        <span class="ty"><svg class="lico" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" role="img" aria-label="color layer"><path d="M4 4h16v16H4z"/></svg></span>
+        <span class="nm2">Bottom bar</span>
+        <span class="meta2">color</span>
+      </div>
+      <div class="lrow">
+        <span class="hnd">⠿</span>
+        <svg class="eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.8-6 10-6 10 6 10 6-3.8 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+        <span class="ty"><svg class="lico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" role="img" aria-label="pattern layer"><path d="M3 12c3-7 6-7 9 0s6 7 9 0"/></svg></span>
+        <span class="nm2">Rainbow</span>
+        <span class="meta2"></span>
+      </div>
+    </div>
+
+    <div class="ccol">
+      <div class="rhead">
+        <div class="slabel">Preview</div>
+        <div class="rdim">64×64 · 24 fps on device</div>
+        <div class="grp">
+          <div class="sel" style="height:26px;font-size:12px;padding:0 7px 0 8px">60 fps <i>▾</i></div>
+          <div class="sel pvat">at panel <i>▾</i></div>
+        </div>
+      </div>
+      <div class="stage">
+        <canvas data-viz="stagecomp" data-w="64" data-h="64"></canvas>
+        <div class="marq" style="left:0;top:172.5px;width:460px;height:115px"></div>
+        <div class="hdl" style="left:-3px;top:169.5px"></div>
+        <div class="hdl" style="left:456px;top:169.5px"></div>
+        <div class="hdl" style="left:-3px;top:283.5px"></div>
+        <div class="hdl" style="left:456px;top:283.5px"></div>
+      </div>
+      <p class="lythint">Boxes kept their numbers — now 32×32 design units, ×2 on this panel.</p>
+    </div>
+
+    <div class="rcol">
+      <div class="rhead" style="margin-bottom:12px"><div class="slabel">Text layer</div></div>
+      <div class="irow"><div class="ilab">Name</div><input class="inp" style="width:100%" value="Time"></div>
+      <div class="irow"><div class="ilab">Scroll</div><div class="sel" style="width:100%">none <i>▾</i></div></div>
+      <div class="irow wide"><div class="ilab">Box</div>
+        <div class="boxrow">
+          <label>x <input class="inp" value="0"></label>
+          <label>y <input class="inp" value="12"></label>
+          <label>w <input class="inp" value="32"></label>
+          <label>h <input class="inp" value="8"></label>
+        </div>
+        <div class="boxunits">
+          <span class="hint bzoom">×2 on this panel</span>
+          <label class="hint pin"><span class="sw"><i></i></span> Pin to pixels</label>
+        </div>
+      </div>
+      <div class="irule"></div>
+      <div class="irow"><div class="ilab">Blend</div><div class="sel" style="width:100%">normal <i>▾</i></div></div>
+    </div>
+  </div>
+</div>
+<p class="note"><b>What this specifies</b> (Gitea #997, <span class="mono tiny">docs/design/scenes-designed-size.md</span>).
+A scene can say what size it was designed at (<span class="mono tiny">U 32 32</span>), and the engine then maps its boxes,
+sprites and glyphs onto any panel by one whole-number zoom. The editor gives that one control and one line.
+<b>Layout</b> sits in the header because it is a property of the whole scene, like its name: <i>Pixels</i> is no design
+size (the box numbers are this panel's pixels, as before), <i>Fit 32</i> / <i>Fit 64</i> write
+<span class="mono tiny">U 32 32</span> / <span class="mono tiny">U 64 64</span>, and <i>This panel</i> writes the
+device's own grid. On a strip the chooser reads <i>Pixels · Fit 150 · This strip</i> instead. Switching converts
+nothing — the boxes keep their numbers — and the one dim line under the preview says so, once, after the switch.
+The <b>box fields</b> edit design units and say what a unit is right under them (<i>×2 on this panel</i>, read from the
+compositor's own <span class="mono tiny">layerRect</span>); <b>Pin to pixels</b> is <span class="mono tiny">X abs</span>,
+one layer opting out (a fine snowfall tile over a scaled tree). Both exist only in a scene with a design size: in a
+<i>Pixels</i> scene the numbers are pixels and there is nothing to say. The marquee is drawn where the layer really is
+— mapped, and on a keyed layer wherever its track has it this frame — and a drag moves the box in whole design units.
+<b>Preview at</b> beside the frame-rate picker re-rigs the PREVIEW only (32×32, 64×64, 128×128, and 150×1 where a strip
+is involved): it is how you check that a scene fits a panel you do not own, and it never writes to the device.
+The other inspector rows (Text, Font, Color, Align, Opacity, Motion…) are S7's and are cropped out here.</p>
+
+<style>
+#S7j .lyt,#S7f .lyt{display:flex;align-items:center;gap:8px;margin-left:6px}
+#S7j .lytlab,#S7f .lytlab{font-size:12px;color:var(--text-dim)}
+#S7j .lytseg,#S7f .lytseg{display:inline-flex;border:1px solid var(--border);border-radius:6px;overflow:hidden;background:var(--bg-inset)}
+#S7j .lytseg>div,#S7f .lytseg>div{display:flex;align-items:center;height:26px;padding:0 10px;font-size:12px;line-height:1;color:var(--text-dim);border-right:1px solid var(--border);white-space:nowrap}
+#S7j .lytseg>div:last-child,#S7f .lytseg>div:last-child{border-right:0}
+#S7j .lytseg>div.on,#S7f .lytseg>div.on{background:var(--accent-soft);color:var(--text);box-shadow:inset 0 -2px 0 var(--accent)}
+#S7j .sel.pvat{height:26px;width:102px;font-size:12px;padding:0 7px 0 8px}
+#S7j .lythint{width:460px;margin:10px 0 0;font-size:12px;line-height:1.4;color:var(--text-dim)}
+#S7j .boxunits{display:flex;align-items:center;justify-content:space-between;gap:10px}
+#S7j .boxunits .pin{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+/* S7f (phone): the chooser is as wide as the whole 44px row, so it takes a second row of its own */
+#S7f .lyt{order:10;flex:1 1 100%;margin:0;padding:0 0 8px}
+#S7f .lytseg{flex:1;min-width:0}
+#S7f .lytseg>div{flex:1;justify-content:center;min-width:0;padding:0 6px}
+</style>
 
 <!-- ===================== S2f ===================== -->
 <p class="cap"><b>S2f</b> · Editor — text builtins in completions and docs (matrix console)</p>

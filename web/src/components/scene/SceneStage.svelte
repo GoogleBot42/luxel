@@ -36,25 +36,27 @@
   import { createEventDispatcher, onMount } from "svelte";
   import { paintGrid } from "../../lib/draw";
   import type { Rect } from "../../lib/scene";
+  import type { PreviewSize } from "../../lib/scenePlace";
 
   /** The scene's grid. */
   export let w = 64;
   export let h = 64;
-  /** The selected layer's box, or null when nothing is selected. */
+  /** The selected layer's box AS THE RECORD HAS IT — design units in a
+   *  scene with a `U` line, pixels otherwise — or null when nothing is
+   *  selected. A drag starts from these numbers and hands back new ones. */
   export let rect: Rect | null = null;
   /**
-   * What an UNSET axis of the box really covers, when the layer knows.
-   *
-   * `w`/`h` = 0 means "the whole layout on that axis" for a pattern or a text
-   * layer — but for a `fill`/`contain` SPRITE it means the sprite's own size
-   * at (x, y) (Gitea #740's fit rule; a `tile` sprite's zero is the whole
-   * layout again since #985, and the page passes null for it). Drawing the marquee across the whole grid for a
-   * 12×12 sprite makes the one direct-manipulation affordance in the app read
-   * as "you are dragging the canvas", which is the opposite of what #741 asked
-   * for. The page passes the sprite's dimensions here and the marquee wraps
-   * what is actually drawn.
+   * Where that layer REALLY draws on this canvas, in cells: the page reads it
+   * off the compositor (`SceneRenderer.layerRect` — the `U` mapping, the
+   * keyframe track, a natural sprite's own size all applied; Gitea #997, and
+   * #996 item 1, whose marquee sat at the `L` origin while a keyed sprite was
+   * somewhere else). The marquee is drawn HERE, not from `rect`.
    */
-  export let natural: { w: number; h: number } | null = null;
+  export let box: { x: number; y: number; w: number; h: number } | null = null;
+  /** Cells per design unit on this canvas (`lib/scenePlace.ts`
+   *  `designScale`; 1 and 1 without a `U` line). A drag measured in cells is
+   *  divided by it, so a box moves in whole design units. */
+  export let scale: { x: number; y: number } = { x: 1, y: 1 };
   /** `64×64 · 24 fps on device` — the header's dim line, which travels WITH
    *  the canvas rather than with the column (#736 item 25). */
   export let dimsLine = "";
@@ -62,11 +64,20 @@
    *  fast as the browser will go (#736 item 26). The page owns the number —
    *  it is the page's render loop — and this column owns the chooser. */
   export let targetFps = 60;
+  /** The `Preview at` sizes (`lib/scenePlace.ts` `previewSizes`) and the one
+   *  chosen — "" is the device's own canvas. The page re-rigs its PREVIEW
+   *  compositor on a change and nothing else: no device write (Gitea #997). */
+  export let sizes: PreviewSize[] = [];
+  export let previewAt = "";
+  /** The one dim line under the picture after a Layout switch (S7j). */
+  export let note = "";
 
   const dispatch = createEventDispatcher<{
     rect: Rect;
     /** A new preview frame budget (#736 item 26). */
     targetfps: number;
+    /** A new `Preview at` size id. */
+    previewat: string;
   }>();
 
   let canvas: HTMLCanvasElement | undefined;
@@ -90,26 +101,15 @@
    *  the row, and a drag only ever moves or resizes it along `x`. */
   $: oneRow = h === 1;
 
-  /** The box in CSS percentages of the stage — `w`/`h` = 0 is "the whole
-   *  layout on that axis" (docs/spec/scenes.md §2), except on a `fill` /
-   *  `contain` sprite, whose zero is its natural size (`natural`; the page
-   *  passes null for a `tile` sprite, where a zero is the whole layout too).
-   *  On one row `h` is the row whatever it says. */
-  $: box = rect
-    ? {
-        x: rect.x,
-        y: oneRow ? 0 : rect.y,
-        w: rect.w === 0 ? (natural?.w ?? w) : rect.w,
-        h: oneRow ? 1 : rect.h === 0 ? (natural?.h ?? h) : rect.h,
-      }
-    : null;
+  /** On one row the box is the row whatever `y`/`h` say. */
+  $: shown = box ? { x: box.x, y: oneRow ? 0 : box.y, w: box.w, h: oneRow ? 1 : box.h } : null;
 
-  $: marq = box
+  $: marq = shown
     ? {
-        left: `${(box.x / w) * 100}%`,
-        top: `${(box.y / h) * 100}%`,
-        width: `${(box.w / w) * 100}%`,
-        height: `${(box.h / h) * 100}%`,
+        left: `${(shown.x / w) * 100}%`,
+        top: `${(shown.y / h) * 100}%`,
+        width: `${(shown.w / w) * 100}%`,
+        height: `${(shown.h / h) * 100}%`,
       }
     : null;
 
@@ -117,7 +117,11 @@
 
   type Corner = "nw" | "ne" | "sw" | "se";
   const CORNERS: Corner[] = ["nw", "ne", "sw", "se"];
-  type Grab = { mode: "move" | Corner; ox: number; oy: number; start: Rect };
+  /** A drag in progress: where the pointer went down (in cells), the record's
+   *  box then, and its size then in DESIGN units — an unset (0) axis taken
+   *  from what is drawn, so a corner drag off a "whole layout" box or a
+   *  natural-size sprite starts from the size you can see. */
+  type Grab = { mode: "move" | Corner; col: number; row: number; start: Rect; bw: number; bh: number };
   let grab: Grab | null = null;
 
   /** Pointer → cell, pixel-snapped. The canvas's intrinsic size IS the grid,
@@ -130,7 +134,7 @@
   }
 
   function start(e: PointerEvent, mode: Grab["mode"]): void {
-    if (!box || !rect) return;
+    if (!shown || !rect) return;
     e.preventDefault();
     e.stopPropagation();
     // best-effort: a synthetic pointerdown (a harness staging the state) has
@@ -141,45 +145,58 @@
       /* ignore */
     }
     const c = cellAt(e);
-    grab = { mode, ox: c.col - box.x, oy: c.row - box.y, start: { ...rect } };
+    grab = {
+      mode,
+      col: c.col,
+      row: c.row,
+      start: { ...rect },
+      bw: rect.w !== 0 ? rect.w : Math.max(1, Math.round(shown.w / scale.x)),
+      bh: rect.h !== 0 ? rect.h : Math.max(1, Math.round(shown.h / scale.y)),
+    };
   }
 
+  /**
+   * The pointer's travel since it went down, in DESIGN units: cells divided
+   * by the scale and rounded, so under `U 32 32` on a 64×64 panel a box moves
+   * one unit per two cells (snapped to design cells), and 1:1 without `U`.
+   * Measured as a DELTA because the centring offset of the design area — and
+   * a keyframe track, which moves what is drawn away from the `L` origin —
+   * never matter to how far a box should move.
+   */
   function move(e: PointerEvent): void {
-    if (!grab || !box) return;
+    if (!grab) return;
     const c = cellAt(e);
     const s = grab.start;
-    // The same "what does 0 cover" rule the marquee is drawn with, so a
-    // corner drag off a natural-size sprite starts from the size you can see.
-    const bw = s.w === 0 ? (natural?.w ?? w) : s.w;
-    const bh = s.h === 0 ? (natural?.h ?? h) : s.h;
+    const dx = Math.round((c.col - grab.col) / scale.x);
+    const dy = Math.round((c.row - grab.row) / scale.y);
     if (grab.mode === "move") {
       // on a strip the segment slides along the row: `y` lands on it and `h`
       // keeps its word (0 stays 0 — a drag must not invent a height)
-      dispatch("rect", { ...s, x: c.col - grab.ox, y: oneRow ? 0 : c.row - grab.oy });
+      dispatch("rect", { ...s, x: s.x + dx, y: oneRow ? 0 : s.y + dy });
       return;
     }
     // A resize moves one corner and keeps the opposite one put; the box never
     // goes below 1x1, and an explicit size replaces a "whole layout" 0.
     let { x, y } = s;
-    let nw = bw;
-    let nh = bh;
+    let nw = grab.bw;
+    let nh = grab.bh;
     if (grab.mode === "nw" || grab.mode === "sw") {
-      nw = x + bw - c.col;
-      x = c.col;
+      nw = Math.max(1, grab.bw - dx);
+      x = s.x + grab.bw - nw;
     } else {
-      nw = c.col - x + 1;
+      nw = Math.max(1, grab.bw + dx);
     }
     if (grab.mode === "nw" || grab.mode === "ne") {
-      nh = y + bh - c.row;
-      y = c.row;
+      nh = Math.max(1, grab.bh - dy);
+      y = s.y + grab.bh - nh;
     } else {
-      nh = c.row - y + 1;
+      nh = Math.max(1, grab.bh + dy);
     }
     if (oneRow) {
-      dispatch("rect", { ...s, x, y: 0, w: Math.max(1, nw) });
+      dispatch("rect", { ...s, x, y: 0, w: nw });
       return;
     }
-    dispatch("rect", { x, y, w: Math.max(1, nw), h: Math.max(1, nh) });
+    dispatch("rect", { x, y, w: nw, h: nh });
   }
 
   function end(e: PointerEvent): void {
@@ -232,6 +249,24 @@
           <option value={15}>15 fps</option>
           <option value={5}>5 fps</option>
         </select>
+        <!-- `Preview at` (S7j, Gitea #997): the size the preview is RENDERED
+             at — how a scene with a design size is checked on a panel you do
+             not own. Its own class, appended after the fps picker, so no
+             mapped selector of S7/S7f can land on it (.claude/rules/web.md). -->
+        {#if sizes.length > 1}
+          <select
+            class="sel pvat"
+            data-role="scene-preview-at"
+            value={sizes.some((p) => p.id === previewAt) ? previewAt : ""}
+            title="preview at another panel size (the device is not touched)"
+            aria-label="preview at"
+            on:change={(e) => dispatch("previewat", e.currentTarget.value)}
+          >
+            {#each sizes as p (p.id)}
+              <option value={p.id}>{p.label}</option>
+            {/each}
+          </select>
+        {/if}
       </div>
     </div>
 
@@ -269,6 +304,9 @@
         {/each}
       {/if}
     </div>
+    {#if note !== ""}
+      <p class="lythint" data-role="scene-layout-hint">{note}</p>
+    {/if}
   </div>
 </div>
 

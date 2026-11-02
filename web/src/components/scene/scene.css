@@ -1134,3 +1134,111 @@
     width: calc(100vw - 32px);
   }
 }
+
+/* ---------- the design size (mockup S7j, Gitea #997) ----------------------
+   The header's Layout chooser, the `Preview at` picker beside the frame-rate
+   one and the dim line under the picture after a Layout switch. Their own
+   classes (`.lyt`, `.lytseg`, `.pvat`, `.lythint`) rather than `.seg` /
+   `.sel` / `.hint`: S7 and S7f map those by querySelector, and a new element
+   wearing one would silently become the measured one (.claude/rules/web.md).
+   The box row's unit line and Pin toggle live in BoxRow.svelte. */
+
+.scenes .editor-header .lyt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 6px;
+  min-width: 0;
+}
+
+.scenes .lytlab {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.scenes .lytseg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg-inset);
+}
+
+.scenes .lytseg > button {
+  display: flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
+  border: none;
+  border-right: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font: 12px/1 var(--sans);
+  white-space: nowrap;
+}
+
+.scenes .lytseg > button:last-child {
+  border-right: 0;
+}
+
+.scenes .lytseg > button:hover {
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.scenes .lytseg > button.on {
+  background: var(--accent-soft);
+  color: var(--text);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+/* the frame-rate chooser's 69px is ITS widest option; this one sizes to its
+   own (`at 128×128`), with room on the right for the drawn chevron — a bare
+   (`appearance:none`) select does not reserve any */
+.editor-frame.scenes .grp .sel.pvat {
+  width: auto;
+  padding-right: 20px;
+}
+
+.scenes .lythint {
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-dim);
+}
+
+@media (max-width: 600px) {
+  /* A phone's header is one 44px row of [back] [name] [Save] [⋯] (S7f), and
+     the chooser is as wide as that whole row — so it takes a second row of
+     its own, the way the playground's `Preview as` chip does in the pattern
+     editor, rather than squeezing the name to two characters. */
+  .scenes .editor-header:has(.lyt) {
+    height: auto;
+    flex-wrap: wrap;
+  }
+
+  .scenes .editor-header .lyt {
+    order: 10;
+    flex: 1 1 100%;
+    margin: 0;
+    padding: 0 0 8px;
+  }
+
+  .scenes .lytseg {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .scenes .lytseg > button {
+    flex: 1;
+    justify-content: center;
+    min-width: 0;
+    padding: 0 6px;
+  }
+
+  /* three controls and a dim line do not fit 358px on one row */
+  .scenes .ccol .rhead {
+    flex-wrap: wrap;
+  }
+}

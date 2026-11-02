@@ -2237,6 +2237,34 @@ try {
       (await page.$('[data-role="scene-marquee"]')) !== null,
     );
 
+    // the design size's Layout chooser (#997, mockup S7j): Fit 32 lights its
+    // segment and brings the box row's unit line and `Pin to pixels`; Pixels
+    // takes both away again (and leaves the scene as the checks below expect)
+    {
+      await page.click('[data-role="scene-layout-32"]');
+      await sleep(500);
+      const fit = await page.evaluate(() => ({
+        on: document.querySelector('[data-role="scene-layout"] button.on')?.dataset.role ?? "",
+        zoom: (document.querySelector('[data-role="scene-box-zoom"]')?.textContent ?? "").trim(),
+        pin: document.querySelector('[data-role="scene-pin"]') !== null,
+      }));
+      await page.click('[data-role="scene-layout-px"]');
+      await sleep(400);
+      const px = await page.evaluate(() => ({
+        on: document.querySelector('[data-role="scene-layout"] button.on')?.dataset.role ?? "",
+        units: document.querySelector('[data-role="scene-box-units"]') !== null,
+      }));
+      check(
+        "scenes: the Layout chooser — Fit 32 shows the unit line and Pin to pixels, Pixels removes them (#997)",
+        fit.on === "scene-layout-32" &&
+          /^(×\d+|1:1|shrunk|scaled)/.test(fit.zoom) &&
+          fit.pin &&
+          px.on === "scene-layout-px" &&
+          !px.units,
+        `${JSON.stringify(fit)} → ${JSON.stringify(px)}`,
+      );
+    }
+
     // drag the bottom row to the top: the destination is a 2px accent rule
     // BETWEEN rows, and the list must not reflow under the pointer (S7e)
     await page.evaluate(() => {

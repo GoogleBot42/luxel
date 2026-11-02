@@ -233,6 +233,14 @@ export class SceneRenderer {
     return this.errors[i] ?? null;
   }
 
+  /** Where layer `i` draws THIS frame, in this renderer's grid cells — after
+   *  the scene's `U` mapping and its keyframe track — plus its content zoom
+   *  (`Compositor.layerRect`, Gitea #997). The scene editor's marquee and its
+   *  `×2 on this panel` line read this. null before a scene is installed. */
+  layerRect(i: number): { x: number; y: number; w: number; h: number; zoom: number } | null {
+    return this.comp?.layerRect(i) ?? null;
+  }
+
   private dropEngines(): void {
     for (const e of this.engines) e?.free();
     this.engines = [];

@@ -13,7 +13,8 @@
   // LIVE PUSH (#563/#585): an edit reaches the device only while the scene
   // being edited is the one the device is SHOWING. Opening a scene, or
   // editing any other one, touches nothing until Save.
-  import { createEventDispatcher, onDestroy, onMount } from "svelte";
+  import { createEventDispatcher, onDestroy, onMount, setContext } from "svelte";
+  import { writable } from "svelte/store";
   import "../components/scene/scene.css";
   import "../components/editor-frame.css";
   import DeviceChip from "../components/DeviceChip.svelte";
@@ -28,6 +29,20 @@
   import PatternPicker from "../components/PatternPicker.svelte";
   import Popover from "../components/Popover.svelte";
   import { SceneRenderer, playgroundPatternId, rampOnlyChange } from "../lib/sceneRender";
+  import {
+    currentChoice,
+    designScale,
+    designZoom,
+    layoutChoices,
+    mapRect,
+    previewSizes,
+    zoomHint,
+    type Canvas,
+    type LayoutChoice,
+    type PreviewSize,
+  } from "../lib/scenePlace";
+  import type { Layout } from "../lib/geometry";
+  import { PLACE_CTX, type BoxPlace, type PlaceCtx } from "../components/scene/placeCtx";
   import {
     layerPatternId,
     MAX_SCENE_NAME,
@@ -165,7 +180,7 @@
   // (.claude/rules/web.md, and it cost a debug cycle here on 2026-09-26).
   // `needSprites` rides along because the two read the same thing.
   $: if (active) void needSprites(doc, $sprites);
-  $: if (active) normaliseSpriteBoxes(doc, $sprites, $spriteRev, gridH);
+  $: if (active) normaliseSpriteBoxes(doc, $sprites, $spriteRev, devRig.h);
 
   // A deep link (`#/scenes/<id>` in a fresh tab) lands HERE, not on the
   // Scenes page, so this screen asks for the library itself rather than
@@ -201,6 +216,7 @@
     doc = found ? structuredClone(found) : { id: "", name: "New scene", layers: [] };
     savedWire = serializeScene(doc);
     selected = doc.layers.length > 0 ? doc.layers.length - 1 : -1;
+    layoutNote = "";
     // Opening a scene is not an edit: there is nothing to settle and nothing
     // on screen to be jarred, so it installs now and the edit debounce starts
     // from this wire (#736 item 28).
@@ -210,7 +226,11 @@
     rebuild(true);
   }
 
-  $: dirty = serializeScene(doc) !== savedWire;
+  /** The document's wire, once per change — the render loop compares it with
+   *  what the compositor has INSTALLED to know whether `layerRect` is
+   *  current (it lags by `REBUILD_DELAY_MS` on a pattern scene). */
+  $: docWire = serializeScene(doc);
+  $: dirty = docWire !== savedWire;
 
   /** The full save-state contract (S7 / S7e). Since #738 this is not what the
    *  header PRINTS — the Save button carries "Save"/"Saved" itself — it is
@@ -248,12 +268,42 @@
    *  console half and nothing here may hand it anything else (#539/#573).
    *  On a strip that Layout's canvas is one row of `n` cells in index order
    *  (`sceneRigOf`, Gitea #985), and the stage draws it as a bar. */
-  $: rig = sceneRigOf($layout) ?? $layout;
+  $: devRig = sceneRigOf($layout) ?? $layout;
+  /** The canvas the scene is EDITED against — the device's (or `Preview as`
+   *  in the playground). The Layout chooser's `This panel` and every box
+   *  default read it; the `Preview at` picker never changes it. */
+  $: devCanvas = { w: devRig.w, h: devRig.h } satisfies Canvas;
+  /** `Preview at` (Gitea #997): "" is the device's own canvas, otherwise a
+   *  `previewSizes` id. It re-rigs THIS screen's compositor and nothing
+   *  else — the device, the live push and the box numbers do not move. */
+  let previewAt = "";
+  $: sizes = previewSizes(devCanvas, doc.space);
+  $: rig = previewRigOf(devRig, previewAt, sizes);
   $: gridW = rig.w;
   $: gridH = rig.h;
   /** A one-row canvas (a strip): boxes are SEGMENTS — `x`, `w`; `y` 0, `h`
-   *  0 or 1 both the row — and a text layer draws nothing (scenes.md §2). */
-  $: oneRow = gridH === 1;
+   *  0 or 1 both the row — and a text layer draws nothing (scenes.md §2).
+   *  The DEVICE's shape decides it, whatever the preview is rigged at. */
+  $: oneRow = devRig.h === 1;
+
+  /** The rig a `Preview at` size renders through: the device's Layout with
+   *  its lattice swapped for the chosen one (a 2-D matrix, or an `n`×1 row),
+   *  so a pattern layer still sees the device's projection. */
+  function previewRigOf(dev: Layout, id: string, list: PreviewSize[]): Layout {
+    const c = id === "" ? null : (list.find((p) => p.id === id)?.canvas ?? null);
+    if (!c) return dev;
+    return {
+      ...dev,
+      dims: c.h === 1 ? 1 : 2,
+      regular: true,
+      w: c.w,
+      h: c.h,
+      d: 1,
+      pixels: c.w * c.h,
+      coords: undefined,
+      serpentine: undefined,
+    };
+  }
 
   /**
    * PATTERN source by store id. A device pattern's source streams in with the
@@ -356,6 +406,7 @@
       layerErrors = layerErrorsOf(doc, renderer);
     }
     renderedWire = wire;
+    syncPlace();
   }
 
   /**
@@ -487,6 +538,8 @@
   function tick(now: number): void {
     rafId = requestAnimationFrame(tick);
     if (!active || paused || !renderer) {
+      // the marquee still follows an edit made while paused
+      if (active && renderer) trackMarquee(renderer);
       // Keep the clock CURRENT while nothing is drawn (#736 item 28). It used
       // to be left at the moment of the pause, so the first frame after
       // Resume — or after coming back from another screen — carried the whole
@@ -500,7 +553,10 @@
     // (`minInterval` in pages/Editor.svelte): 0 means "every rAF". The -1 is
     // its slack for a frame that arrives a hair early.
     const minInterval = targetFps > 0 ? 1000 / targetFps - 1 : 0;
-    if (minInterval > 0 && clock.last !== 0 && now - clock.last < minInterval) return;
+    if (minInterval > 0 && clock.last !== 0 && now - clock.last < minInterval) {
+      trackMarquee(renderer); // a drag between two throttled frames still lands
+      return;
+    }
     const dt = clock.last === 0 ? 16 : Math.min(200, now - clock.last);
     clock.last = now;
     clock.fps = clock.fps === 0 ? 1000 / dt : clock.fps * 0.9 + (1000 / dt) * 0.1;
@@ -512,7 +568,28 @@
     // `slot` source and hands the string down (docs/spec/scenes.md §2).
     const px = renderer.frame(dt, (n) => $textSlots[n] ?? "");
     if (px) stage?.draw(px);
+    // AFTER the frame: the outline and the picture are the same instant
+    trackMarquee(renderer);
   }
+
+  /**
+   * The selected layer's box AS DRAWN, read off the compositor every frame
+   * (Gitea #997; #996 item 1): after the `U` mapping and wherever its
+   * keyframe track has it now. Only while the installed scene IS the
+   * document — during a pattern scene's rebuild delay the compositor still
+   * holds the previous wire, and a dragged box must follow the pointer, so
+   * the stage falls back to `mapRect` of the record (`selMapped`). Assigned
+   * only on a change, so a still layer costs no invalidation.
+   */
+  function trackMarquee(r: SceneRenderer): void {
+    const got = selected >= 0 && renderedWire === docWire ? r.layerRect(selected) : null;
+    const next = got && got.w > 0 && got.h > 0 ? { x: got.x, y: got.y, w: got.w, h: got.h } : null;
+    const cur = selLive;
+    if (next === null ? cur !== null : cur === null || cur.x !== next.x || cur.y !== next.y || cur.w !== next.w || cur.h !== next.h)
+      selLive = next;
+  }
+
+  let selLive: { x: number; y: number; w: number; h: number } | null = null;
 
   // ONE ticker for the life of the screen, started in `onMount`. NOT in a
   // `$:` block: a reactive statement that both reads and assigns the same
@@ -534,7 +611,10 @@
    *  reporting it here was quoting another screen's number (#736 item 25 is
    *  what put the line next to the picture it describes). */
   $: shownFps = $device ? ($deviceOutFps > 0 ? $deviceOutFps : $deviceFps) : Math.round(fpsAvg);
-  $: dimsLine = `${gridW}×${gridH} · ${shownFps} fps${$device ? " on device" : ""}`;
+  $: dimsLine =
+    previewAt !== "" && rig !== devRig
+      ? `${gridW}×${gridH} preview · ${Math.round(fpsAvg)} fps`
+      : `${gridW}×${gridH} · ${shownFps} fps${$device ? " on device" : ""}`;
 
   $: patternLayers = patternLayerCount(doc);
 
@@ -665,9 +745,17 @@
    *  on a `fill`/`contain` sprite layer, and "the whole layout" (null) on
    *  anything else, a `tile` sprite included (#985). It is what makes the
    *  marquee wrap a sprite whose box has not been normalised yet (its record
-   *  has not landed) instead of the whole grid (`SceneStage`'s `natural`).
+   *  has not landed) instead of the whole grid (`mapRect`'s `natural`, the
+   *  marquee's fallback while the compositor has no record to size it by).
    *  Dependencies NAMED. */
   $: selNatural = naturalOf(sel, $sprites, $spriteRev);
+  /** The selected box on the previewed canvas from the RECORD alone — what
+   *  the marquee shows while `selLive` is stale (see `trackMarquee`). */
+  $: selMapped = sel
+    ? mapRect(sel.style.rect, doc.space, { w: gridW, h: gridH }, sel.abs === true, selNatural)
+    : null;
+  /** Cells per design unit for the selected layer — what a drag divides by. */
+  $: selScale = designScale(doc.space, { w: gridW, h: gridH }, sel?.abs === true);
 
   function naturalOf(
     l: Layer | null,
@@ -739,6 +827,85 @@
     selected = at;
   }
 
+  // ---- the design size (`U`, Gitea #997; mockup S7j) --------------------
+
+  /** The header's Layout chooser on the canvas being edited against. */
+  $: choices = layoutChoices(devCanvas);
+  $: choiceId = currentChoice(doc.space, choices);
+  /** The one dim line under the picture after a Layout switch. Cleared when
+   *  another scene is opened (`adopt`). */
+  let layoutNote = "";
+
+  /** `on this panel` while the preview is the device's own canvas, `at
+   *  128×128` while `Preview at` has re-rigged it. */
+  function whereOf(at: string, r: Layout, dev: Layout): string {
+    if (at !== "" && r !== dev) return `at ${r.w}×${r.h}`;
+    return dev.h === 1 ? "on this strip" : "on this panel";
+  }
+
+  /**
+   * Write (or clear) the scene's `U` line. It converts NOTHING: the boxes
+   * keep their numbers, which now count in the new unit — what the line
+   * under the picture says, once (scenes-designed-size.md §5).
+   */
+  function setLayout(c: LayoutChoice): void {
+    const cur = doc.space;
+    if (c.space === null ? cur === undefined : cur !== undefined && cur[0] === c.space[0] && cur[1] === c.space[1])
+      return;
+    const next: Scene = { ...doc };
+    if (c.space) next.space = [c.space[0], c.space[1]];
+    else delete next.space;
+    commit(next);
+    const where = devRig.h === 1 ? "on this strip" : "on this panel";
+    layoutNote = c.space
+      ? `Boxes kept their numbers — now ${c.space[0]}×${c.space[1]} design units, ${zoomHint(
+          c.space,
+          devCanvas,
+          designZoom(c.space, devCanvas),
+          false,
+          where,
+        )}.`
+      : `Boxes kept their numbers — ${devRig.h === 1 ? "this strip" : "this panel"}’s pixels again.`;
+  }
+
+  /** `Pin to pixels` on the selected layer: `X abs`. */
+  function setAbs(on: boolean): void {
+    if (!sel || selected < 0) return;
+    const { abs: _was, ...rest } = sel;
+    replaceLayer(selected, on ? { ...rest, abs: true } : rest);
+  }
+
+  /** What the inspector's box row says about the design size — handed to
+   *  `BoxRow` through context (`components/scene/placeCtx.ts`). */
+  const place = writable<BoxPlace>({ abs: false, hint: "" });
+  setContext<PlaceCtx>(PLACE_CTX, { place, setAbs });
+
+  /**
+   * Refresh `place`. The zoom is the compositor's own (`layerRect().zoom`)
+   * once the installed scene is the document, and `designZoom` — the same
+   * number, pinned by `web/tests/scenePlace.test.mjs` — in the second
+   * before a pattern scene rebuilds. Called from `rebuildNow` and from the
+   * reactive statement below, which names every input it reads.
+   */
+  function syncPlace(): void {
+    const l = selected >= 0 ? doc.layers[selected] : undefined;
+    const abs = l?.abs === true;
+    const canvas = { w: rig.w, h: rig.h };
+    const live = renderer && renderedWire === docWire && l ? renderer.layerRect(selected) : null;
+    const zoom = live?.zoom ?? designZoom(doc.space, canvas, abs);
+    place.set({
+      space: doc.space,
+      abs,
+      hint: zoomHint(doc.space, canvas, zoom, abs, whereOf(previewAt, rig, devRig)),
+    });
+  }
+
+  $: syncPlaceOn(doc, selected, rig, previewAt);
+
+  function syncPlaceOn(_doc: unknown, _sel: unknown, _rig: unknown, _at: unknown): void {
+    syncPlace();
+  }
+
   // ---- editing ----
 
   /** Every mutation goes through here: it replaces the record, and pushes it
@@ -754,6 +921,9 @@
 
   function onAdd(kind: LayerKind): void {
     const l = newLayer(kind);
+    // Defaults are in the units the boxes are IN: the design size when the
+    // scene has one, the device's rows otherwise.
+    const gridH = doc.space ? doc.space[1] : devRig.h;
     // On a strip a colour or text layer starts as the whole row (a text layer
     // draws nothing there, but it keeps a box that means something on a
     // panel), and a sprite sits ON the row: `y` 2 would be off the canvas.
@@ -1063,6 +1233,31 @@
       <span class="tlabel">{paused ? "Resume" : "Pause"}</span>
     </button>
 
+    <!-- The Layout chooser (S7j, Gitea #997): the scene's design size, a
+         property of the whole document like its name, so it lives in the
+         document's bar. `Pixels` = no `U` line; the others write one. A
+         design size none of the segments writes (a hand-typed `U 48 40`)
+         shows as its own lit segment rather than lighting a wrong one. -->
+    <div class="lyt" data-role="scene-layout" role="group" aria-label="layout">
+      <span class="lytlab">Layout</span>
+      <div class="lytseg">
+        {#each choices as c (c.id)}
+          <button
+            class:on={choiceId === c.id}
+            data-role={`scene-layout-${c.id}`}
+            aria-pressed={choiceId === c.id}
+            title={c.title}
+            on:click={() => setLayout(c)}>{c.label}</button
+          >
+        {/each}
+        {#if choiceId === "custom" && doc.space}
+          <button class="on" data-role="scene-layout-custom" aria-pressed="true"
+            >{doc.space[0]}×{doc.space[1]}</button
+          >
+        {/if}
+      </div>
+    </div>
+
     <span class="spacer"></span>
 
     <!-- Save gives the same feedback as the pattern editor's (#738): the
@@ -1156,11 +1351,16 @@
       w={gridW}
       h={gridH}
       rect={sel?.style.rect ?? null}
-      natural={selNatural}
+      box={sel ? (selLive ?? selMapped) : null}
+      scale={selScale}
       {dimsLine}
       {targetFps}
+      {sizes}
+      {previewAt}
+      note={layoutNote}
       on:rect={(e) => onRect(e.detail)}
       on:targetfps={(e) => (targetFps = e.detail)}
+      on:previewat={(e) => (previewAt = e.detail)}
     />
 
     <div class="rcol" data-role="scene-inspector" bind:this={rcolEl}>
@@ -1216,16 +1416,18 @@
           engine={renderer?.engineAt(selected) ?? null}
           source={lookup(sel.body.pat.id, $devicePatterns)}
           patternName={patternNameOf(sel.body.pat.id, $devicePatterns)}
-          {rig}
+          rig={devRig}
           live={livePushing}
           on:change={(e) => replaceLayer(selected, e.detail)}
           on:pick={() => void pickFor(selected)}
           on:delete={() => void onDeleteLayer()}
         />
       {:else if sel && sel.body.kind === "text"}
+        <!-- the font picker's "~16 chars wide" counts in the units the box is
+             in: a design-size scene's glyphs scale with it (#997) -->
         <TextInspector
           layer={sel}
-          {gridW}
+          gridW={doc.space ? doc.space[0] : devRig.w}
           on:change={(e) => replaceLayer(selected, e.detail)}
           on:delete={() => void onDeleteLayer()}
         />

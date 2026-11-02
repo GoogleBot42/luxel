@@ -1,5 +1,22 @@
 # Update log
 
+## 2026-11-02 — Scenes that fit any panel: the console half (Gitea #997)
+
+The scene editor speaks the design size. A **Layout** chooser in its header
+(`Pixels | Fit 32 | Fit 64 | This panel`; `Pixels | Fit 150 | This strip` on
+a strip) writes or clears the `U` line and converts nothing — one dim line
+under the preview says the boxes kept their numbers. In a `U` scene the box
+fields are design units with `×2 on this panel` under them (the compositor's
+`layerRect().zoom`) beside **Pin to pixels** (`X abs`). The marquee is now
+drawn from `Compositor.layerRect`, so it sits where the layer really draws —
+mapped, and on a keyed layer wherever the track has it (#996 item 1's drawing
+half); drags move boxes in whole design units. **Preview at** (32×32 /
+64×64 / 128×128 / 150×1) re-rigs the editor's own preview and never the
+device. Mock frame S7j drawn first (1 delta, the same vertical-centring
+reading-order delta S7 carries on master); S7f amended for the phone's
+second header row. Pure helpers in `web/src/lib/scenePlace.ts`, whose
+`mapRect` is checked box-for-box against the wasm compositor.
+
 ## 2026-11-02 — Scenes that fit any panel: the library re-authored (Gitea #997)
 
 The shipped scenes now declare their design size, so a 128x128 chain shows
