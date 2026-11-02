@@ -1,0 +1,61 @@
+:root { --bg: #111317; --card: #1b1e24; --line: #2c313a; --fg: #d9dde4; --dim: #8a929e; --acc: #6aa8ff;
+  --keep: #3fb871; --fix: #e0a63a; --drop: #e5534b; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+code { font-size: 12px; color: #b9c2cf; }
+header { position: sticky; top: 0; z-index: 10; background: rgba(17,19,23,.96); border-bottom: 1px solid var(--line); padding: 8px 16px; backdrop-filter: blur(4px); }
+.bar { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+h1 { font-size: 16px; margin: 0; white-space: nowrap; }
+#q { flex: 1 1 200px; min-width: 160px; max-width: 360px; background: #0c0e11; color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; font-size: 14px; }
+#chips { display: flex; flex-wrap: wrap; gap: 4px; }
+button, .import { background: #242832; color: var(--fg); border: 1px solid var(--line); border-radius: 999px; padding: 4px 11px; font-size: 13px; cursor: pointer; }
+button:hover, .import:hover { border-color: var(--acc); }
+#chips button.on { background: var(--acc); color: #0b1220; border-color: var(--acc); }
+.actions { display: flex; gap: 6px; margin-left: auto; }
+.actions button, .import { border-radius: 6px; }
+.import input { display: none; }
+#counts { color: var(--dim); font-size: 12px; margin-top: 4px; }
+main { padding: 8px 16px 64px; }
+.intro { color: var(--dim); max-width: 1100px; font-size: 13px; }
+h2 { font-size: 18px; margin: 28px 0 10px; scroll-margin-top: 110px; }
+h2 .n { color: var(--dim); font-weight: normal; font-size: 14px; }
+section[hidden] { display: none; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 560px), 1fr)); gap: 12px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; min-width: 0; scroll-margin-top: 110px; }
+.card.v-keep { border-left: 4px solid var(--keep); }
+.card.v-fix { border-left: 4px solid var(--fix); }
+.card.v-drop { border-left: 4px solid var(--drop); }
+.head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-bottom: 6px; }
+.head b { font-size: 15px; }
+.slug { color: var(--dim); font-family: ui-monospace, monospace; font-size: 12px; }
+.badge { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: #3a2323; color: #ff9b94; border: 1px solid #6b3330; }
+.meta { color: var(--dim); font-size: 12px; margin: 2px 0 6px; }
+.err { color: #ff7b72; font-size: 12px; font-family: ui-monospace, monospace; white-space: pre-wrap; word-break: break-word; }
+.lbl { color: var(--dim); font-size: 11px; margin: 6px 0 2px; text-transform: uppercase; letter-spacing: .04em; }
+.img { overflow-x: auto; background: #000; border-radius: 4px; }
+.img img { display: block; max-width: 100%; height: auto; image-rendering: pixelated; }
+.img.strip { width: fit-content; max-width: 100%; }
+.img.spr img { max-width: none; }
+.layers { margin: 2px 0 6px; padding-left: 18px; font-size: 12px; color: #c3cad5; }
+.layers li span { color: var(--dim); }
+.verdict { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; margin-top: 8px; }
+.verdict label { display: inline-flex; gap: 4px; align-items: center; cursor: pointer; font-size: 13px; }
+.verdict input[value=keep] { accent-color: var(--keep); }
+.verdict input[value=fix] { accent-color: var(--fix); }
+.verdict input[value=drop] { accent-color: var(--drop); }
+.verdict .clear { margin-left: auto; font-size: 11px; padding: 2px 8px; }
+textarea { width: 100%; margin-top: 6px; min-height: 38px; resize: vertical; background: #0c0e11; color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: inherit; font-size: 13px; }
+#toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: #2a3242; color: var(--fg); padding: 8px 14px; border-radius: 6px; border: 1px solid var(--acc); z-index: 20; }
+@media (max-width: 640px) {
+  header { padding: 6px 10px; }
+  main { padding: 6px 10px 48px; }
+  .bar { gap: 6px 8px; }
+  h1 { font-size: 14px; flex: 1 1 auto; }
+  .actions { margin-left: auto; order: 1; }
+  .actions button, .import { padding: 3px 8px; font-size: 12px; }
+  #q { order: 2; flex: 1 1 100%; max-width: none; padding: 5px 8px; }
+  #chips { order: 3; flex-wrap: nowrap; overflow-x: auto; width: 100%; scrollbar-width: none; }
+  #chips button { flex: none; padding: 3px 9px; font-size: 12px; }
+  #counts { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
+  h2, .card { scroll-margin-top: 150px; }
+}

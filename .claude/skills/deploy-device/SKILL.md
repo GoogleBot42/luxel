@@ -312,6 +312,25 @@ pre-authorized per CLAUDE.md — no need to ask before pushing.
   `{"ok":false,"code":"bc-version"}`), so follow with
   `tools/deploy.sh <ip> --assets-only`. Check the device's compiler with
   `curl <ip>/luxel.wasm | gunzip` and read bytes 4..5 of anything it emits.
+- **The same shape without a format bump: an OTA across the #948
+  `renderFrame` → `renderBulk` rename** (unit 1 and the Athom, 2026-11-02,
+  October firmware → master). `/api/playlist` items read `"invalid":"the
+  pattern exports `renderFrame`, which `renderBulk` replaced (Gitea #948) —
+  recompile the pattern"`, the playlist skips them, and `bc_format` is
+  UNCHANGED, so the #643 recipe's "recompile" step fails: the current
+  compiler REFUSES the old export outright. Scan the store first (`GET
+  /api/patterns`, then each id's `source` for `renderFrame`; 10 of 49 on
+  unit 1). For a stored copy that is byte-identical to a pre-#948 library
+  file (`git hash-object` the source and look for it in history; 8 of 10
+  were `07360f75^:library/<slug>.js`), the faithful port is that file at
+  the #948 merge `563d40db` (frozen copies in `tools/bench-patterns/` and
+  `crates/luxel-core/tests/data/lib/` are the same text). For Jeremy's own
+  edited copies, #948 changed those files by the export rename alone, so
+  rename `export function renderFrame(` → `renderBulk(` in HIS source and
+  keep his constants. Compile at the device's pixel count, `POST
+  /api/patterns` by the same name (same id back), `GET` it back and check
+  `renderBulk`. Host sheets at 16384 px hit the classic-board array budget
+  for two of them — that is the host rig's limit, not the S3's.
 - Exercising a settings POST as a smoke test? GET the current state FIRST
   and restore it after — multi-field bodies make it easy to clobber a
   field you weren't testing (`POST /api/output` with a guessed `capMa 0`

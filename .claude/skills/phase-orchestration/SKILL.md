@@ -98,6 +98,24 @@ path. What it added to §2b:
   library sweep) after each wave caught the three stale assertions that
   the content change invalidated (JIT mean-image budget, a packing margin,
   a per-scene size cap) one at a time instead of all at the end.
+- **A dozen PRs in one day all conflict on `UPDATES.md`** (every entry is a
+  top-insert), and a PR goes `mergeable:false` the moment the one ahead of
+  it lands — eleven of twelve did on 2026-11-02. Resolve by keeping BOTH
+  sides (a regex over the conflict markers, never a hand pick), push, and
+  park the branch under `tools/pr-merge-when-green.sh <pr> <branch>`
+  (detached), which polls the gate, re-queues a cancelled run, merges on
+  success and confirms through `git fetch origin master`. Merge in series:
+  resolve the next PR only after the previous one lands, or you resolve it
+  twice.
+- **Never brief a subagent to symlink `web/node_modules`** — `tools/ci.sh`
+  runs `npm ci`, which follows the link and empties the TARGET worktree's
+  install for everyone sharing it (Gitea #1019; three briefs did it on
+  2026-11-02). A real `npm ci` per worktree is ~1 s with the cache.
+- **A review page for Jeremy is a repeatable deliverable**:
+  `tools/verify/sheet.mjs` (32/64/`--strip 144`) + `scene-sheet.mjs`
+  (64/128, `--sprites`) into `tools/verify/review-site/build-site.py`'s
+  layout, published with the publish-site skill (`luxel-library-review`);
+  per-item keep/fix/drop notes export as JSON keyed by library path.
 - **Budget signal**: 10 research agents ≈ 2.2 M tokens, 32 library batches
   ≈ 8.5 M, scenes/cleanup/engine ≈ 4 M — about 15 M Opus tokens for the
   whole campaign, one day of wall clock.

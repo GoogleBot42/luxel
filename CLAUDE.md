@@ -226,8 +226,10 @@ a one-off tool. `UPDATES.md` is the worklog: append a dated entry for substantia
   `tools/deploy.sh <ip> --assets-only`.
 - The web bundle must fit the assets partition (0xF0000 = 983,040 B on every board but
   the 16 MB Seengreat, and one bundle ships to all of them, so the small one binds):
-  908,134 B used, **74,906 B headroom** after the 2026-11-01 library overhaul
-  (it was 7,610 B after the five engine PRs that day; the installer page is
+  927,961 B used, **55,079 B headroom** after the 2026-11-02 follow-up campaign
+  (74,906 B after the 2026-11-01 overhaul; 7,610 B after the five engine PRs
+  that day — the 11-02 day spent 20 KB: four library/scene PRs ~10 KB, the
+  #985/#997 engine + console PRs ~7 KB, the gallery tags 3.5 KB; the installer page is
   hosted-only — `web/tools/device-files.mjs`; Gitea #691 has the per-file
   breakdown). **`gallery.json` — the SOURCE of every `library/*.js` — and
   `sprites.json`/`scenes.json` ship inside this archive**, so library growth
