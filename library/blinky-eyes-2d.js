@@ -1,4 +1,5 @@
 // name: Blinky Eyes
+// tags: panel, ambient
 // Clean-room reimplementation from the prose spec docs/pattern-specs/blinky-eyes-2d.md
 // — reimagined, not a replica.
 // A pair of cartoon eyes sized to the panel: white sclera, a coloured iris

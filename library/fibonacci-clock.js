@@ -1,4 +1,5 @@
 // name: Fibonacci Clock
+// tags: panel, clock
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // A Mondrian-like golden rectangle of five squares sized 1, 1, 2, 3, 5 that
 // secretly tells the time: add the hour squares (red) for the hour and the

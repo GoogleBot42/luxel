@@ -1,4 +1,5 @@
 // name: Rain on Glass
+// tags: panel, nature
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // A rainy window at night: out-of-focus city lights glow behind misted glass.
 // Beads condense and merge; a heavy drop breaks loose and slides down in

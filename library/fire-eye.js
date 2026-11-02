@@ -1,4 +1,5 @@
 // name: Fire Eye
+// tags: panel, ambient
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/eye-of-sauron.md, eye-of-sauron-with-movement.md — reimagined, not a replica.
 // A wide almond of churning ridged flame with a black slit pupil: filaments stream
 // outward and flare, white-hot where they lap the slit. Gaze lets the pupil dart

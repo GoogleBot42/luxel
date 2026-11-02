@@ -1,4 +1,5 @@
 // name: 80s Kid Show
+// tags: panel, retro, ambient
 // Clean-room reimplementation from the prose spec docs/pattern-specs/80s-kid-show.md — reimagined, not a replica.
 // A Saturday-morning title card: Memphis-style shapes (discs, targets,
 // triangles, squares, crosses, stars, squiggles, zigzags) in teal, hot pink,

@@ -1,4 +1,5 @@
 // name: Mystify
+// tags: panel, retro, ambient
 // Original work from the prose idea spec docs/pattern-specs/patternflow/normal-map-plexus.md
 // (Patternflow preset, CC BY-SA 4.0 — prose-described idea only, no code); mode 0 is the
 // classic screensaver idea. Mode 0: polygons whose corners bounce off the walls, each

@@ -1,4 +1,5 @@
 // name: Moiré Gallery
+// tags: panel, ambient
 // Original work from the prose idea specs docs/pattern-specs/patternflow/origin.md, tile-waves.md, glitch-rings.md and warped-wave.md (Patternflow presets, CC BY-SA 4.0 — prose-described ideas only, no code).
 // A wall of little screens, each sampling a ripple (rings, a zone plate or a
 // saddle) on a deliberately coarse grid at a rising frequency, so every tile

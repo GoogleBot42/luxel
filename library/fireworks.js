@@ -1,4 +1,5 @@
 // name: Fireworks
+// tags: both, holiday
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/2d-fireworks-fade.md, 4th.md, firework-nova.md, firework-rocket-sparks.md — reimagined, not a replica.
 // A fireworks show on a panel or a strip: rockets climb with a sparkling fuse
 // trail, stall at apogee, flash, and break into peony, ring, willow or crackle

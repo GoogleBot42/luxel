@@ -1,4 +1,5 @@
 // name: Copper Bars
+// tags: both, retro
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // The demoscene raster classic: glossy chrome tubes swinging on sines, drawn
 // back to front so they pass over and under each other, each with a dark rim,

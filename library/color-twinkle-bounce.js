@@ -1,4 +1,5 @@
 // name: color twinkle bounce
+// tags: strip, ambient
 // Clean-room reimplementation from a prose functional description of the
 // community pattern "color twinkle bounce"; original source never consulted.
 //

@@ -1,4 +1,5 @@
 // name: Police Lights
+// tags: both, ambient
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/policelights.md
 // — reimagined, not a replica.
 // An emergency light bar: left colour / right colour (or alternating blocks) running

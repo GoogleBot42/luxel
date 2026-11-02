@@ -1,4 +1,5 @@
 // name: Jellyfish
+// tags: panel, nature
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // Translucent jellyfish pulse up through dark water: each bell snaps shut
 // fast and relaxes slowly, every contraction a kick upward, while tentacles

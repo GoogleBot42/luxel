@@ -1,4 +1,5 @@
 // name: Fireflies
+// tags: both, nature
 // Clean-room reimplementation from the prose specs docs/pattern-specs/fireflies.md, colourful-fireflies.md, slowflies.md, xmasflies.md — reimagined, not a replica.
 // Fireflies on a strip or a panel. Blink: flies hover and flash (fast attack,
 // slow decay), and now and then a flash ripples through a neighbourhood in

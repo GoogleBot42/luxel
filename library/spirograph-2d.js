@@ -1,4 +1,5 @@
 // name: Spirograph
+// tags: panel, ambient
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/lissajous-curve-tracer.md,
 // swirlpool-2d.md — reimagined, not a replica. Weave mode: original work from the prose idea spec
 // docs/pattern-specs/patternflow/lissajous-weave.md (Patternflow preset, CC BY-SA 4.0 — prose-described

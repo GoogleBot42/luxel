@@ -1,4 +1,5 @@
 // name: Twinkle
+// tags: both, ambient, sound, holiday
 // Clean-room reimplementation from the prose specs docs/pattern-specs/twinkle.md,
 // twinkle-2.md, twinkly-stars.md, chill-confetti.md, blink-fade.md, quiet-blinkfade.md,
 // sound-blinkfade.md, autumn-colors.md, spring-colors.md, christmas-rg-fade.md,

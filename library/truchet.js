@@ -1,4 +1,5 @@
 // name: Truchet Weave
+// tags: panel, ambient, retro
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // Quarter-circle tiles join into endless ribbons and loops over a two-tone ground;
 // every so often a tile spins 90 degrees with a springy overshoot and re-routes

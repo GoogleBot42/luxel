@@ -1,5 +1,31 @@
 # Update log
 
+## 2026-11-02 — Gallery tags: a shape control and theme chips on the Library
+
+Every `library/*.js` now carries a `// tags:` line right after `// name:` —
+one shape (`strip` 5, `panel` 74, `both` 71) and one or more themes
+(`ambient` 79, `nature` 36, `retro` 27, `holiday` 12, `clock` 8, `game` 8,
+`sound` 8). The vocabulary is closed and documented in library/README.md
+"Gallery tags"; `tools/check-library.sh` fails a missing or malformed line and
+warns when the shape looks unlike the source (three index-space `renderBulk`
+files — fairies, twinkle, day-ribbon — warn by design). `gen-gallery.mjs`
+ships the line as `gallery.json`'s `tags` (shape first).
+
+The Patterns page's Library source has a tag row under the page bar: `All |
+Strip | Panel` (Strip = strip + both, Panel = panel + both) and multi-select
+theme chips with counts under the current shape. A console opens on its own
+shape (strip → Strip, matrix → Panel) and remembers an explicit pick per device
+(`luxel.libShape.<device>`); the playground opens on All. One line on a phone,
+scrolling sideways.
+
+It also fixes a master bug the overhaul introduced: a strip + panel file
+(`render(index)` + `renderBulk` branching on `has2DMap()`) reports 2-D to the
+engine, so a strip console's Library offered 11 of 150 patterns. A `both` tag
+now counts as strip-compatible on the Patterns page, in device rows (read from
+the source header) and in the playlist picker (`lib/tags.ts` `tagShowsOn`); a
+120 px strip console now offers 76. The engine-level question is Gitea #1027.
+Asset archive +3,477 B (63,412 B headroom). Mock frame for the row: #1028;
+master harness reds found while baselining: #1035.
 ## 2026-11-02 — The first strip scenes (Gitea #1018)
 
 Three scenes written for a strip now that scenes composite on one (#985,

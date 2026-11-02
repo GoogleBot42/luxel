@@ -1,4 +1,5 @@
 // name: Rotozoomer
+// tags: panel, retro
 // Original work from the prose idea specs docs/pattern-specs/patternflow/poincare-sphere.md, sliding-checker.md (Patternflow presets, CC BY-SA 4.0 — prose-described ideas only, no code); Rotozoom is the classic demoscene effect.
 // Three demo effects. Rotozoom: a tiled emblem spins and breathes in and out, hue
 // sliding with depth. Fisheye: a scrolling neon grid seen through a roaming spherical

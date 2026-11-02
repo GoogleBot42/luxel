@@ -1,4 +1,5 @@
 // name: Fire
+// tags: both, nature
 // Clean-room reimplementation from the prose specs docs/pattern-specs/perlin-fire.md, perlin-fire-wind.md, fire-red.md, fire-blue.md, sparkfire.md, newfire.md — reimagined, not a replica.
 // Panel: a full-width hearth rooted at the bottom edge. Two simplex octaves are
 // filled a row at a time — each row sheared by the gusting wind, so tips lean

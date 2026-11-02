@@ -1,4 +1,5 @@
 // name: Oil Slick
+// tags: both, ambient
 // Original work from the prose idea specs docs/pattern-specs/patternflow/oil-slick-glitch.md and sliding-strata.md (Patternflow presets, CC BY-SA 4.0 — prose-described ideas only, no code).
 // Thin-film iridescence: a domain-warped simplex field cut into tight contour
 // bands, coloured through an interference palette whose fringe spacing

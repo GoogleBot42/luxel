@@ -1,4 +1,4 @@
-// Generate the playground's pattern-browser JSON(s), as [{ name, kind, source }]:
+// Generate the playground's pattern-browser JSON(s), as [{ name, kind, tags?, source }]:
 //
 //   public/gallery.json            ← library/*.js   (the clean-room library)
 //   public/pixelblaze-library.json ← corpus/*.epe   (scraped Pixelblaze exports)
@@ -17,6 +17,14 @@
 // field buys is the pixel count of a tile's FIRST compile, so the common case
 // does not pay for a second one — see `compileForLayout` in
 // web/src/stores/geometry.ts. Nothing breaks when it is wrong.
+//
+// `tags` (library only) is the pattern's `// tags:` header line — one shape
+// (`strip`/`panel`/`both`) then its themes, e.g. ["panel", "ambient",
+// "nature"]. The Patterns page's shape control and theme chips filter on it
+// (pages/Patterns.svelte, lib/tags.ts). The vocabulary is closed and
+// `tools/check-library.sh` lints it; here an unknown word is simply dropped,
+// and a file with no line gets no `tags` (it passes the shape control and
+// matches no theme chip).
 //
 // The corpus gallery is a LOCAL-ONLY convenience: the corpus is untracked and
 // of unknown licensing (the clean-room policy keeps it out of library/ and
@@ -53,6 +61,19 @@ const BULK_2D_NAMES = [
   "gridIndex",
 ];
 
+// Mirrors lib/tags.ts (and check-library.sh's lint) — all three move together.
+const SHAPES = ["strip", "panel", "both"];
+const THEMES = ["ambient", "holiday", "game", "clock", "sound", "nature", "retro"];
+
+/** The `// tags:` line right after `// name:`, shape first. `undefined` when
+ *  the file has none. */
+const tagsOf = (source) => {
+  const m = source.match(/^\/\/ name:.*\r?\n\/\/ tags:(.*)$/m);
+  if (!m) return undefined;
+  const words = [...new Set(m[1].split(",").map((w) => w.trim()))];
+  return [...words.filter((w) => SHAPES.includes(w)), ...words.filter((w) => THEMES.includes(w))];
+};
+
 const usesBulk2D = (source) =>
   BULK_2D_NAMES.some(
     (n) =>
@@ -75,11 +96,16 @@ function collector() {
   const counts = new Map();
   const entries = [];
   return {
-    add(name, source) {
+    add(name, source, tags) {
       const key = name.toLowerCase();
       const seen = counts.get(key) ?? 0;
       counts.set(key, seen + 1);
-      entries.push({ name: seen > 0 ? `${name} (${seen + 1})` : name, kind: kindOf(source), source });
+      entries.push({
+        name: seen > 0 ? `${name} (${seen + 1})` : name,
+        kind: kindOf(source),
+        ...(tags ? { tags } : {}),
+        source,
+      });
     },
     write(outPath, label) {
       entries.sort((a, b) => a.name.localeCompare(b.name));
@@ -99,7 +125,7 @@ if (fs.existsSync(libDir)) {
     if (!f.endsWith(".js")) continue;
     const source = fs.readFileSync(path.join(libDir, f), "utf8");
     const m = source.match(/^\/\/ name:\s*(.+)$/m);
-    c.add((m ? m[1] : path.basename(f, ".js")).trim(), source);
+    c.add((m ? m[1] : path.basename(f, ".js")).trim(), source, tagsOf(source));
   }
   c.write(galleryOut, "gallery");
 } else {

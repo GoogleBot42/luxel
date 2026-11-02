@@ -1,4 +1,5 @@
 // name: Day Ribbon
+// tags: strip, clock
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // The strip is today, midnight to midnight: deep night at the ends, dawn pinks
 // and gold around sunrise, sky blue at noon, a dusk glow at sunset. A bright

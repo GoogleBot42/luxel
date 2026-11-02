@@ -1,4 +1,5 @@
 // name: Chomp Chase
+// tags: both, game, retro
 // Curated original (hand-written showcase of the Luxel language/builtins); the dotted-line
 // chase nods to the WLED "PacMan" strip effect — shapes and rules are our own, no game assets.
 // A yellow chomper eats a line of dots around a looped track, four coloured ghosts on its

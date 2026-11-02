@@ -1,4 +1,5 @@
 // name: Neon Veins
+// tags: panel, ambient
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/coral-plasma.md — reimagined, not a replica.
 // Also folds docs/pattern-specs/patternflow/glow-tendrils.md and a-big-hit.md (Patternflow presets, CC BY-SA 4.0 — prose-described ideas only, no code).
 // Glowing veins where an evolving simplex field crosses zero: coral ridges with

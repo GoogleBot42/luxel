@@ -1,4 +1,5 @@
 // name: Twister
+// tags: panel, retro
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // The Amiga twister: a square column writhes like taffy, its twist rippling
 // up the height. Per row the four rotated corners are projected; each face

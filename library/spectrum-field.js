@@ -1,4 +1,5 @@
 // name: Spectrum Field
+// tags: both, sound
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/sound-spectrokalidamandala.md, sound-spectro-kalidastrip.md, sound-spectroblots-pow-fade.md, sound-spectromatrix-agc.md, sound-spectromatrix-render2d.md — reimagined, not a replica.
 // Maps the 32 spectrum bands onto a drifting field, so each band owns a ring,
 // a plasma ribbon, a noise blob or a strip fold, and flares on its onsets

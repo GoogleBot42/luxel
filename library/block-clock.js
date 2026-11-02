@@ -1,4 +1,5 @@
 // name: Block Clock
+// tags: panel, clock, retro
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // HH:MM built live from falling blocks: each digit is a fixed set of 1-4 cell pieces
 // that drop in, turning and sliding into place, and lock with a flash. When a digit

@@ -1,4 +1,5 @@
 // name: Double Pendulum
+// tags: panel, nature
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // The butterfly effect, live: a few double pendulums hang from one pivot,
 // released a hair (0.0002 rad) apart. They swing as one (their additive

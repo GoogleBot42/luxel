@@ -1,4 +1,5 @@
 // name: Color Wash
+// tags: both, ambient
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/1-white-fade.md,
 // 2-purple-fade.md, complements-3d.md, gradient-blue-purple-pink.md,
 // twocolorhsvmix.md, color-blend.md — reimagined, not a replica.

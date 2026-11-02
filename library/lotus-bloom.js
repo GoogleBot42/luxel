@@ -1,4 +1,5 @@
 // name: Lotus Bloom
+// tags: panel, nature
 // Clean-room reimplementation from the prose specs docs/pattern-specs/infinity-flower-2d.md
 // and docs/pattern-specs/patternflow/lotus-bloom.md (Patternflow preset, CC BY-SA 4.0 —
 // prose-described idea only, no code) — reimagined, not a replica.

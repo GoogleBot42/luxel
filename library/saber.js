@@ -1,4 +1,5 @@
 // name: Saber
+// tags: both, ambient
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/saberdeploy-tutorial.md
 // — reimagined, not a replica.
 // An energy-blade prop. The blade ignites from the hilt with an eased surge, hums

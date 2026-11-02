@@ -1,4 +1,5 @@
 // name: Bouncy Boxes
+// tags: panel, ambient
 // Clean-room reimplementation from the prose spec docs/pattern-specs/bouncy-boxes.md — reimagined, not a replica.
 // Square blocks glide around a cylinder — wrapping left/right, bouncing off
 // the top and bottom — and collide like billiard blocks that never slow

@@ -1,4 +1,5 @@
 // name: Cellular Automata
+// tags: both, ambient
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/continuous-cellular-automata.md,
 // docs/pattern-specs/cellular-automata-1d.md — reimagined, not a replica.
 // One-dimensional automata as a live spacetime waterfall: each generation is

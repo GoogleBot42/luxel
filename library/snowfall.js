@@ -1,4 +1,5 @@
 // name: Snowfall
+// tags: both, nature
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // Panel: flakes in continuous depth — tiny slow far ones, big swaying near
 // ones — fall through a dusky blue night (one fillGradient, a splat per

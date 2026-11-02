@@ -1,4 +1,5 @@
 // name: Bit Rain
+// tags: both, retro
 // Original work from the prose idea specs docs/pattern-specs/patternflow/dither-bit-rain.md and kaleido-bit-rain.md (Patternflow presets, CC BY-SA 4.0 — prose-described ideas only, no code).
 // A 1-bit glitch screen: chunky data streams rain through a 4x4 Bayer dither,
 // rings pulse out of the centre lighting an XOR bit lattice, heads glow neon.

@@ -1,4 +1,5 @@
 // name: Pong Clock
+// tags: panel, clock, game, retro
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // Two paddles rally forever and the score is the time: hours on the left,
 // minutes on the right. When the minute turns, the hour paddle lets the ball

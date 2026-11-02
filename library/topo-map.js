@@ -1,4 +1,5 @@
 // name: Topo Map
+// tags: both, nature
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/perlin-simplex-noise-2d.md, perlin-simplex-noise-1d.md — reimagined, not a replica.
 // Also folds docs/pattern-specs/patternflow/contour-blobs.md (Patternflow preset, CC BY-SA 4.0 — prose-described idea only, no code).
 // A living hiking map: two octaves of simplex terrain slowly reshape while

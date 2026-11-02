@@ -1,4 +1,5 @@
 // name: Dire Spider
+// tags: panel, holiday
 // Clean-room reimplementation from the prose specs docs/pattern-specs/dire-spider-2d.md,
 // crawling-spider-2d.md — reimagined, not a replica.
 // A blood-red spider with glowing eyes stalks across its lair in stop-and-go

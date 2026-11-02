@@ -1,4 +1,5 @@
 // name: Line Dancer
+// tags: panel, ambient
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/line-dancer-2d.md — reimagined, not a replica.
 // A rainbow ribbon whips and coils round the centre: a radius-dependent shear smears
 // the picture into a dancing line, a breathing zoom widens and tightens the stripes

@@ -1,4 +1,5 @@
 // name: Color Sequence
+// tags: strip, holiday
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/custom-sequences.md,
 // christmas-lights.md, christmaslights.md, christmasstretch.md, 2-colors.md,
 // 3-color-rotation.md — reimagined, not a replica.

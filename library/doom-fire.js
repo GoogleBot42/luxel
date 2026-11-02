@@ -1,4 +1,5 @@
 // name: Doom Fire
+// tags: both, nature, retro
 // Clean-room reimplementation from the prose spec docs/pattern-specs/doom-fire.md — reimagined, not a replica.
 // The PSX-era spread fire: no noise at all. Each step every cell copies the
 // cell below it — nudged a column sideways at random, more often downwind —
