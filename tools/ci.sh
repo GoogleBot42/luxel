@@ -24,7 +24,11 @@
 #   4a. devshell firmware build (CI_BOARD, default board-pixelblaze-v3) —
 #       covers build-esp32.sh itself + the linked-feature markers
 #   4b. tools/image-check.sh over the THREE release images the flake builds
-#       (markers + the per-board OTA-slot margin), byte-identical to release.yml
+#       (markers + the per-board OTA-slot margin), byte-identical to release.yml.
+#       All three are 1.25 MiB-slot boards, where the 3 % floor is WARN-ONLY
+#       since 2026-11-02 (Jeremy; revisit ticket Gitea #1013): under it they
+#       print `image-check: WARN` and pass, over the slot still fails. Only
+#       board-seengreat-hub75 keeps the hard floor. Read the WARN lines.
 #   5. OPT-IN (CI_QEMU=1): tools/qemu/run-all.py, the emulator suite
 #
 # Step 5 is off by default on purpose (Gitea #273): it wants a from-source
@@ -49,6 +53,10 @@
 #                #676; set it to 1 to gate a `JIT_OFF=1` build against the
 #                pre-#501 1 MiB slot for a device that has not migrated yet
 #                (see below).
+#   STRICT_MARGIN
+#                passed through to tools/image-check.sh. Set it to 1 to put
+#                the hard 3 % floor back on the classic boards (suspended
+#                2026-11-02, Gitea #1013) — do that before a classic release.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"

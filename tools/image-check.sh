@@ -12,7 +12,8 @@
 # later.
 #
 # Also enforces an OTA-slot SIZE MARGIN when handed an app image (see the
-# size-margin section below).
+# size-margin section below) — WARN-ONLY on the classic 1.25 MiB-slot
+# boards since 2026-11-02 (Gitea #1013); the Seengreat still gates.
 #
 # Usage: tools/image-check.sh <elf-or-app-image>
 # Wired into: firmware/build-esp32.sh (every local build) and
@@ -210,10 +211,26 @@ echo "image-check: ok — all load-bearing features linked ($IMG)"
 # 3 % of the per-board slot, and only someone cutting a migrating release
 # should turn it on. See docs/releases.md and .github/workflows/release.yml.
 #
+# THE FLOOR IS SUSPENDED ON THE CLASSIC BOARDS (Jeremy, 2026-11-02; Gitea
+# #1013 is the revisit ticket). Every board on the 1.25 MiB slot — all of
+# them but board-seengreat-hub75 — gets a loud `image-check: WARN` instead of
+# a FAIL when it is under MIN_MARGIN_PCT, and the gate passes. Why: after
+# #984 the pixelblaze-v3 image sat at ~3.06 %, one medium feature from red,
+# and the Seengreat boards are what matter now; the classic ones get
+# revisited later (a diet, or the next classic-board release). What still
+# FAILS: an image over its slot on ANY board (/api/ota would refuse it), the
+# Seengreat under its floor, and a bare image with no board named. To put
+# the hard floor back for one call, set STRICT_MARGIN=1 or an explicit
+# MIN_MARGIN_PCT=<n> — either one gates every board again. MIGRATING_RELEASE=1
+# is untouched (it has its own 0 % floor). Search CLASSIC_FLOOR_SUSPENDED to
+# remove it.
+#
 # Only applies to app images (ESP image magic 0xE9). An ELF is not the
 # thing that has to fit, so build-esp32.sh's ELF call skips this half.
-# Overridable per-call: OTA_MAX / MIN_MARGIN_PCT / WARN_MARGIN_PCT.
+# Overridable per-call: OTA_MAX / MIN_MARGIN_PCT / WARN_MARGIN_PCT /
+# STRICT_MARGIN.
 # ---------------------------------------------------------------------------
+MIN_MARGIN_PCT_ENV=${MIN_MARGIN_PCT:-}  # before the defaults below fill it in
 MIGRATING=${MIGRATING_RELEASE:-0}
 MIGRATING_NOTE=
 if [ -n "$OTA_MAX_ENV" ]; then
@@ -239,7 +256,20 @@ else
   MIN_MARGIN_PCT=${MIN_MARGIN_PCT:-3}
 fi
 WARN_MARGIN_PCT=${WARN_MARGIN_PCT:-6}
-echo "image-check: OTA slot $OTA_MAX B, floor $MIN_MARGIN_PCT % — $OTA_MAX_RULE"
+# CLASSIC_FLOOR_SUSPENDED (Gitea #1013) — see the paragraph above. Keyed on
+# the board's IDENTITY, not the slot that won: an OTA_MAX override on a
+# classic board is still a classic board.
+FLOOR_SUSPENDED=0
+SUSPENDED_WHY="floor suspended for classic boards per Jeremy 2026-11-02, Gitea #1013"
+if [ "$MIGRATING" != 1 ] && [ -z "$MIN_MARGIN_PCT_ENV" ] && [ "${STRICT_MARGIN:-0}" != 1 ] &&
+   [ -n "$BOARD_OTA_MAX_FOR" ] && [ "$BOARD_OTA_MAX_FOR" != board-seengreat-hub75 ]; then
+  FLOOR_SUSPENDED=1
+fi
+if [ "$FLOOR_SUSPENDED" = 1 ]; then
+  echo "image-check: OTA slot $OTA_MAX B, floor $MIN_MARGIN_PCT % (WARN ONLY — $SUSPENDED_WHY) — $OTA_MAX_RULE"
+else
+  echo "image-check: OTA slot $OTA_MAX B, floor $MIN_MARGIN_PCT % — $OTA_MAX_RULE"
+fi
 if [ -n "$MIGRATING_NOTE" ]; then
   echo "image-check: *** $MIGRATING_NOTE ***"
 fi
@@ -280,6 +310,16 @@ if [ "$margin" -lt 0 ]; then
   [ -n "$MIGRATING_NOTE" ] && echo "             $MIGRATING_NOTE" >&2
   echo "             /api/ota would reject it. See docs/size-report.md for the diet list." >&2
   exit 1
+fi
+
+if [ $((margin * 100)) -lt $((OTA_MAX * MIN_MARGIN_PCT)) ] && [ "$FLOOR_SUSPENDED" = 1 ]; then
+  echo "image-check: WARN — $IMG size $sz B, only $margin B ($pct %) of the" >&2
+  echo "             $SLOT left; the floor is $MIN_MARGIN_PCT %." >&2
+  echo "             *** NOT failing: $SUSPENDED_WHY. ***" >&2
+  echo "             This image WOULD fail with STRICT_MARGIN=1. Shrink it" >&2
+  echo "             (docs/size-report.md) before the next classic-board release." >&2
+  echo "image-check: size UNDER FLOOR (suspended) — $sz B, $margin B ($pct %) of the $SLOT free"
+  exit 0
 fi
 
 if [ $((margin * 100)) -lt $((OTA_MAX * MIN_MARGIN_PCT)) ]; then

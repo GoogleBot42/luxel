@@ -92,6 +92,17 @@ number per board; `tools/image-check.sh` resolves the slot through it and
 prints which rule it used on every size line, because a margin percentage
 is meaningless without knowing which slot it is a fraction of.
 
+**The 3 % margin floor is suspended on the classic boards (Jeremy,
+2026-11-02; revisit ticket Gitea #1013).** Every board on the 1.25 MiB slot
+— everything but `board-seengreat-hub75` — now gets a loud
+`image-check: WARN — …` under the floor instead of a FAIL. After #984 the
+`pixelblaze-v3` image sat at ~3.06 %, one medium feature from red, and the
+Seengreat boards are what matter now. What still fails: an image **over**
+its slot on any board, the Seengreat under 3 %, and a bare image with no
+board named. `STRICT_MARGIN=1` (or an explicit `MIN_MARGIN_PCT`) puts the
+hard floor back for a call — use it before cutting a classic-board release,
+which is also when #1013 comes due.
+
 **`board-seengreat-hub75` has two tiers, and the gate only knows the upper
 one.** Since Gitea #634 a 16 MB board whose *bootloader* was flashed for a
 smaller part migrates to the 4 MB table rather than refusing, and then its
@@ -951,7 +962,8 @@ Both thresholds and the slot size are env-overridable
 (`MIN_MARGIN_PCT` / `WARN_MARGIN_PCT` / `OTA_MAX`) — raise them for a
 one-off, but changing the default is a decision to record here. The size
 half is skipped for ELF inputs (build-esp32.sh's local call), since an ELF
-is not the artifact that has to fit.
+is not the artifact that has to fit. (Since 2026-11-02 the floor is
+warn-only on the 1.25 MiB-slot boards — top of this section, Gitea #1013.)
 
 **The C6 penalty is the vendor radio blob, not our codegen** (profiled
 2026-08-30 with `tools/size-report.py` on credless flake builds of
