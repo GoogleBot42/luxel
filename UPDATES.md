@@ -20,6 +20,77 @@ docs/bench-seengreat-hub75-rendersize.md. The idiom is now in
 .claude/rules/library.md. Device found on sinc (`5eed1e55`) at brightness 10,
 re-activated by id; `/api/pattern`, `/api/pattern.lxp` and `/api/controls`
 read back byte-identical to the pre-run capture.
+## 2026-11-02 — Scenes on 1-D strips: the engine half (Gitea #985)
+
+Jeremy approved #985 on 2026-11-02. A scene now composites on a strip: a
+one-dimensional Layout — no map, or a 1-D map — is an **n×1 canvas in index
+order** (`outpipe::strip_grid`, any n from 1 to 65,535), so a layer's box is
+a segment (`x`, `w`; `y` 0, `h` 0 or 1), `flipx` reverses it in place, a
+tiled 1-row sprite repeats along it, and ramps, masks, clip layers,
+keyframes and blend modes are unchanged — they never knew the grid's shape.
+Text layers draw nothing on a one-row canvas (no glyph fits), documented as
+behaviour; an irregular 2-D or any 3-D map still has no canvas.
+
+`detect_grid` itself is untouched on purpose: it sets the ENGINE's grid,
+which every grid-space builtin and post stage keys on, and a pattern on a
+strip must keep seeing index space. The firmware's `scene_grid` (and the
+mirror's, now the same rule — it used to treat an irregular or 3-D map as a
+strip too) asks `strip_grid` first, so a 2D base pattern's fabricated
+ceil(√n) grid no longer becomes the canvas on a strip either.
+
+`w = 0` (or `h = 0`) on a **tiled** sprite layer is now the whole layout on
+that axis, like a pattern layer's box, on every grid — `L sprite 0 0 0 0 …
+tile` covers a strip of any length or wallpapers any panel. It used to fall
+back to the natural size; no shipped scene relied on that, and the new
+`crates/luxel-core/tests/library_scenes.rs` proved it: all 41 shipped scenes
+print the same 64x64 digest on `origin/master` and on the branch (the
+instrument was validated by moving one scene's box to `w = 0` on master,
+which changed its digest). Spec: docs/spec/scenes.md §2 "The canvas" and §4;
+`library/README.md` gains a "Strips" section. The console half (the Scenes
+tab on strips, the D10 device-e2e flip, and the editor's sprite-box
+normalisation, which still rewrites a `w = 0` tile box to the natural size)
+is the follow-up PR.
+
+## 2026-11-02 — Library cleanup: generic arcade names, #1008 housekeeping, Patternflow note draft
+
+Four library patterns carried arcade trademarks in their names. They are now
+**Rock Field** (`rock-field.js`, was Asteroids), **Brick Breaker**
+(`brick-breaker-2d.js`, was Breakout), **Road Hopper** (`road-hopper-2d.js`,
+was Frogger) and **Falling Blocks** (`falling-blocks-2d.js`, was Tetrix). No
+scene referenced any of them by `@pat/`, so the files were renamed too; the
+code is untouched (the 32x32 and 64x64 contact sheets are byte-identical to
+master's). The two prose specs moved with them
+(`docs/pattern-specs/{brick-breaker,road-hopper}-2d.md`), and the
+`tools/verify` registries (`pairs.json`, `decisions.json`, `results/`) now
+key on the new slugs. The frozen copies under `crates/luxel-core/tests/data/lib/`
+and `tools/bench-patterns/`, and historical bench reports, keep the old names.
+Brick Breaker's Patternflow idea spec became
+`patternflow/brick-breaker-arcade.md` (the preset's own display name carries
+the trademark; the spec says so, as `glitch-rings.md` does for an unnamed one).
+
+Gitea #1008: `tools/verify/fixups.json` is now `{}` (all 7 entries named ports
+the overhaul removed; `fixups.mjs` treats a missing or empty manifest as no
+fixups). Comments in `appwdt.rs`, `jit.rs`, `alloc_peak.rs` and `vm.rs` that
+cite removed patterns as evidence keep their numbers and now say where the
+pattern went. The worktree prune (item 2) was done separately.
+
+A draft credit note to the Patternflow author is in
+`docs/research/library-overhaul-2026-11/patternflow-note-draft.md`. It has
+not been sent; Jeremy decides.
+
+## 2026-11-02 — image-check: 3 % OTA-slot floor suspended on the classic boards
+
+Jeremy's call: the Seengreat boards are what matter now, and after #984 the
+`pixelblaze-v3` image sat at ~3.06 % of its 1.25 MiB slot. So
+`tools/image-check.sh` now WARNS instead of failing when a 1.25 MiB-slot
+board (everything but `board-seengreat-hub75`) is under `MIN_MARGIN_PCT`.
+Still hard failures: an image over its slot on any board, the Seengreat
+under 3 %, and a bare image with no board named. `STRICT_MARGIN=1` or an
+explicit `MIN_MARGIN_PCT` puts the floor back for a call. All three default
+`tools/ci.sh` variants are classic boards, so CI's margin gate is
+over-slot-only until Gitea #1013 (the revisit: a size diet, or the next
+classic-board release) is closed. Docs: boards.md "The OTA-slot ceiling",
+releases.md, tools.md.
 
 ## 2026-11-01 — Library overhaul: 308 patterns → 150, 41 scenes, 40 sprites, idea over fidelity
 

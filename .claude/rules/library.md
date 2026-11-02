@@ -108,7 +108,10 @@ paths:
 - **A shipped scene's wire block must stay under 1 KB**
   (`web/tests/librarySource.test.mjs`; the device holds 3,840 B of scenes).
 - **Trademarked names / copyrighted characters are out** (KITT, Sauron, Nyan,
-  Grinch, DBZ were renamed or replaced); art in `library/sprites` is original.
+  Grinch, DBZ were renamed or replaced; so were the arcade games — Rock Field,
+  Brick Breaker, Road Hopper, Falling Blocks, 2026-11-02); art in
+  `library/sprites` is original. A description may say "inspired by the
+  classic brick-breaking arcade game"; the brand name stays out of the file.
 - The batch gate is `tools/verify/verify-pattern.sh <outdir> library/a.js …`
   (lints + five rigs + 64x64 + sheets); `.claude/skills/phase-orchestration`
   §2c has the multi-agent shape that rewrote the library.

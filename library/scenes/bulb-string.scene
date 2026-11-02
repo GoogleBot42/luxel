@@ -1,10 +1,10 @@
 # A Luxel library scene — Apache-2.0. Grammar: library/README.md.
 # No pattern at all: classic C9 bulbs. `bulb-string` is a 32x12 tile of two
 # sagging strings whose two frames trade which half of the bulbs glows; tiled
-# over the whole panel it is a curtain of lights. The box is an EXPLICIT 64x64
-# (a zero box would draw one tile at natural size), so on a 32x32 it simply
-# clips to the panel. On a strip this needs scenes-on-strips (the planned
-# strip-bulbs scene); on any matrix it works today.
+# over the whole panel it is a curtain of lights. The box is an explicit 64x63
+# (since #985 a zero `w`/`h` under `tile` would mean the whole layout too), so
+# on a 32x32 it simply clips to the panel. A strip wants a 1-row variant of the
+# sprite (the planned strip-bulbs scene): this one shows only its top row there.
 S - Bulb String
 L color 0 0 0 0 normal 100 none fill 1
 N Night

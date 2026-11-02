@@ -499,12 +499,16 @@ pub use crate::sprite::{
 ///
 /// Fit (contract §2, Gitea #741 item 29):
 ///
-/// * **no box** (`rect.w == 0 || rect.h == 0`) — the sprite's NATURAL size
-///   at `(x, y)`, one texel per cell, clipped by the layout.
+/// * **no box** (`rect.w == 0 || rect.h == 0`) on a `fill`/`contain`
+///   layer — the sprite's NATURAL size at `(x, y)`, one texel per cell,
+///   clipped by the layout. On a one-row grid (a strip, Gitea #985) `h` 0
+///   is the row, so only `w` 0 is "no box" there.
 /// * **`fill`** — nearest-neighbour stretch of the frame to the whole box.
 /// * **`contain`** — nearest-neighbour uniform scale, the largest that fits
 ///   inside the box, centred in it.
-/// * **`tile`** — the frame repeated 1:1 across the box.
+/// * **`tile`** — the frame repeated 1:1 across the box, where a zero `w`
+///   or `h` is the whole layout on that axis, as for a pattern layer
+///   (Gitea #985) — never the natural size.
 ///
 /// `flipx`/`flipy`/`rot180` mirror within the DRAWN extent (the sprite
 /// itself when it is placed naturally or contained, the box when it fills
@@ -525,9 +529,14 @@ fn blit_sprite_with(dst: Canvas, sprite: &SpriteView, frame: u8, style: &LayerSt
     let (bx, by, bw, bh) = resolved_rect(style, &grid);
     // An unset box is not "the whole layout" for a sprite (that is what
     // `resolved_rect` means for a pattern layer): it is the sprite's own
-    // size at the layer's origin.
-    let natural = style.rect.w == 0 || style.rect.h == 0;
-    let tile = !natural && style.fit == Fit::Tile;
+    // size at the layer's origin. Two exceptions (Gitea #985):
+    // * `fit tile` — a zero `w` or `h` IS the whole layout on that axis,
+    //   so a tiled sprite fills a strip or a panel of any size without the
+    //   length typed in;
+    // * a one-row grid (a strip) — `h` 0 is the one row there is, so a box
+    //   `x 0 w 0` is a segment for `fill` and `contain` as well.
+    let tile = style.fit == Fit::Tile;
+    let natural = !tile && (style.rect.w == 0 || (style.rect.h == 0 && grid.h != 1));
     // The extent actually drawn, as an offset inside the box plus a size.
     let (ox, oy, dw, dh) = if natural {
         (0, 0, sw, sh)
@@ -624,7 +633,10 @@ fn draw_text_with(
     clip: &mut Clip,
 ) {
     let grid = *dst.grid;
-    if skip(style, &grid) || text.is_empty() {
+    // No glyph fits one row: on a strip a text layer draws nothing (and so
+    // has no coverage for a clip layer above it) — behaviour, not an error
+    // (Gitea #985, docs/spec/scenes.md §2).
+    if skip(style, &grid) || text.is_empty() || grid.h < 2 {
         return;
     }
     let (bx, by, bw, _bh) = resolved_rect(style, &grid);
@@ -1045,6 +1057,10 @@ impl Compositor {
                 blit_sprite_with(canvas, sp, frame, &l.style, &mut clip);
             }
             LayerKind::Text => {
+                // nothing to draw on a strip, so no scratch to take for it
+                if grid.h < 2 {
+                    return;
+                }
                 let (_, _, bw, bh) = resolved_rect(&l.style, &grid);
                 let scroll = scroll_offset(&l.text, &l.resolved, bw, bh, l.scroll_mpx);
                 // A grid-sized scratch — 12,288 B on a 64x64 panel — taken
@@ -1862,6 +1878,73 @@ mod tests {
                 assert_eq!(at(x, y), want, "({x},{y})");
             }
         }
+    }
+
+    #[test]
+    fn a_zero_w_or_h_on_a_tiled_sprite_is_the_whole_layout() {
+        // Gitea #985: `tile` never falls back to the natural size. A zero
+        // axis takes the layout's extent, as a pattern layer's box does.
+        let want = |x: usize, y: usize| match (x % 2, y % 2) {
+            (0, 0) => RED,
+            (1, 1) => BLK,
+            _ => BG,
+        };
+        let px = draw(&checker(), 6, 4, &boxed(0, 0, 0, 0, Fit::Tile));
+        for y in 0..4 {
+            for x in 0..6 {
+                assert_eq!(px[y * 6 + x], want(x, y), "whole layout ({x},{y})");
+            }
+        }
+        // `w` 0 alone: the full width, the box's own height (rows 1..3)
+        let px = draw(&checker(), 6, 4, &boxed(0, 1, 0, 2, Fit::Tile));
+        for y in 0..4 {
+            for x in 0..6 {
+                let w = if (1..3).contains(&y) {
+                    want(x, y - 1)
+                } else {
+                    BG
+                };
+                assert_eq!(px[y * 6 + x], w, "full-width band ({x},{y})");
+            }
+        }
+        // ...while fill/contain keep the natural-size rule on a panel
+        let px = draw(&checker(), 6, 4, &boxed(1, 1, 0, 2, Fit::Fill));
+        assert_eq!(px[6 + 1], RED);
+        assert_eq!(
+            px[6 + 3],
+            BG,
+            "natural size: two texels wide, not stretched"
+        );
+    }
+
+    #[test]
+    fn on_a_one_row_grid_h_0_is_the_row() {
+        // A 4x1 sprite, red/transparent/black/red, into a 8-cell segment of
+        // a 12 px strip: `h` 0 does not mean "natural size" there.
+        let bar = rec("bar", 4, 1, 1, 0, &[RED, BLK], &[1, 0, 2, 1]);
+        let px = draw(&bar, 12, 1, &boxed(2, 0, 8, 0, Fit::Fill));
+        assert_eq!(
+            px,
+            vec![BG, BG, RED, RED, BG, BG, BLK, BLK, RED, RED, BG, BG],
+            "stretched 2x into the segment"
+        );
+        // `contain` keeps the aspect: the one row caps the scale at 1, so a
+        // 4x1 sits 1:1 in the middle of an 8x1 box
+        let px = draw(&bar, 12, 1, &boxed(2, 0, 8, 0, Fit::Contain));
+        assert_eq!(px, vec![BG, BG, BG, BG, RED, BG, BLK, RED, BG, BG, BG, BG]);
+        // `w` 0 is still the natural size on a strip
+        let px = draw(&bar, 12, 1, &boxed(5, 0, 0, 0, Fit::Fill));
+        assert_eq!(px, vec![BG, BG, BG, BG, BG, RED, BG, BLK, RED, BG, BG, BG]);
+        // and flipx reverses the segment
+        let flipped = LayerStyle {
+            flipx: true,
+            ..boxed(2, 0, 8, 0, Fit::Fill)
+        };
+        let px = draw(&bar, 12, 1, &flipped);
+        assert_eq!(
+            px,
+            vec![BG, BG, RED, RED, BLK, BLK, BG, BG, RED, RED, BG, BG]
+        );
     }
 
     #[test]

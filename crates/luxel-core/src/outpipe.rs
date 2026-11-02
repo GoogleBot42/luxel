@@ -833,6 +833,30 @@ pub fn detect_grid(dims: u8, coords: &[[crate::fixed::Fx; 3]]) -> Option<GridMap
     Some(GridMap::new(w as u16, h as u16, serpentine))
 }
 
+/// The grid a SCENE composites onto when the Layout is one-dimensional
+/// (Gitea #985): an `n`×1 row in INDEX order, so a layer's box is a segment
+/// of the strip (`x`, `w`) and `flipx` reverses it. `layout_dims` is the
+/// LAYOUT's dimensionality as the host knows it — 0 for no map at all (a
+/// bare strip), 1 for a 1-D coordinate map — and any 1-D map counts, its
+/// coordinates are not consulted: index order is the strip's order.
+///
+/// `None` for a 2-D or 3-D Layout (the host keeps its own grid: the
+/// engine's, or [`detect_grid`]'s — an irregular 2-D cloud and every 3-D
+/// Layout still composite to nothing), and outside `1..=u16::MAX` pixels.
+/// One pixel is a valid strip: a 1×1 canvas is a well-defined one-cell
+/// scene, and refusing it would only add a special case to every host.
+///
+/// Deliberately NOT folded into [`detect_grid`]: that one sets the
+/// ENGINE's grid, which every grid-space builtin and post stage keys on,
+/// and a pattern on a strip has to keep seeing index space. Only the
+/// compositor gets the row.
+pub fn strip_grid(layout_dims: u8, n: usize) -> Option<GridMap> {
+    if layout_dims > 1 || n == 0 || n > u16::MAX as usize {
+        return None;
+    }
+    Some(GridMap::new(n as u16, 1, false))
+}
+
 /// Light-bleed bloom along the pixel index: each pixel takes the brighter of
 /// itself and `g`/256 of its brightest neighbor, so highlights spread without
 /// the frame losing energy the way [blur_frame] does. `g` 0 is a no-op.
@@ -1674,6 +1698,43 @@ mod tests {
             .map(|i| [Fx::from_int(i % 5), Fx::from_int((i * 7) % 11), Fx::ZERO])
             .collect();
         assert_eq!(detect_grid(2, &ring), None);
+    }
+
+    #[test]
+    fn a_one_dimensional_layout_is_a_row_in_index_order() {
+        // a bare strip (no map) and a 1-D map are both n×1, from one pixel up
+        assert_eq!(strip_grid(0, 150), Some(GridMap::new(150, 1, false)));
+        assert_eq!(strip_grid(1, 150), Some(GridMap::new(150, 1, false)));
+        assert_eq!(strip_grid(0, 1), Some(GridMap::new(1, 1, false)));
+        let g = strip_grid(1, 150).unwrap();
+        assert_eq!(
+            (0..150)
+                .map(|c| g.index(0, c))
+                .collect::<alloc::vec::Vec<_>>(),
+            (0..150).collect::<alloc::vec::Vec<_>>()
+        );
+        // nothing to address, or more cells than a GridMap can count
+        assert_eq!(strip_grid(0, 0), None);
+        assert_eq!(strip_grid(0, u16::MAX as usize + 1), None);
+        assert_eq!(
+            strip_grid(0, u16::MAX as usize),
+            Some(GridMap::new(u16::MAX, 1, false))
+        );
+        // a 2-D or 3-D Layout is the host's own grid to find, never a row
+        assert_eq!(strip_grid(2, 16), None);
+        assert_eq!(strip_grid(3, 16), None);
+        // and the ENGINE's grid is untouched: detect_grid still refuses a
+        // 1-D map, so a pattern on a strip keeps seeing index space
+        let line: alloc::vec::Vec<[crate::fixed::Fx; 3]> = (0..16)
+            .map(|i| {
+                [
+                    crate::fixed::Fx::from_int(i),
+                    crate::fixed::Fx::ZERO,
+                    crate::fixed::Fx::ZERO,
+                ]
+            })
+            .collect();
+        assert_eq!(detect_grid(1, &line), None);
     }
 
     #[test]
