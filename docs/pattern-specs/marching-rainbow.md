@@ -1,3 +1,4 @@
+> Superseded: this idea now lives in library/rainbow-melt.js (2026-11).
 # marching rainbow
 kind: 1D
 sensors: no

@@ -1,3 +1,4 @@
+> Superseded: this idea now lives in library/rainbow.js (2026-11).
 # rainbow fonts
 kind: 1D
 sensors: no

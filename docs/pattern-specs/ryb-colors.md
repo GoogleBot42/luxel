@@ -1,3 +1,4 @@
+> Superseded: this idea now lives in library/rainbow.js (2026-11).
 # RYB colors
 kind: 2D
 sensors: no
