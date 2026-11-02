@@ -43,6 +43,7 @@ Lines that bind to the most recent `L`:
 | `T <source> <arg…>` | text | `lit <utf8…>` \| `clock <fmt>` \| `slot <n 0..7>` |
 | `F <font> <rrggbb> <align> <scroll> <speed>` | text | font `tiny\|regular\|large`; align `l\|c\|r`; scroll `none\|left\|right\|up\|down\|bounce`; speed px/s |
 | `K <rrggbb>` | color | the wash colour |
+| `X <flag…>` | all | per-layer flags past the `L` line's 0..15: `clip` (§2 "Clip layers"); unknown words ignored |
 | `M <ms> <x> <y> <opacity> <ease> [<frame>]` | all | one keyframe of the layer's motion — below |
 
 `<fmt>` ∈ `HH:MM` · `HH:MM:SS` · `hh:MM` · `hh:MM:SS` · `MM-DD` · `YYYY-MM-DD`.
@@ -51,7 +52,9 @@ Lines that bind to the most recent `L`:
 and the EMPTY string for a `pat` layer (only the host knows a pattern's name);
 `F regular ffffff l none 0`; `T lit ` (empty); `K 000000`; no controls, no
 projection override, no ramp, no `A` — a sprite layer without one plays
-the record's own `fps` (§4) — and no `M`: the layer stands where `L` puts it.
+the record's own `fps` (§4), no `X` (not clipped) — and no `M`: the layer
+stands where `L` puts it. `serialize` writes a layer's `X clip` after its
+body lines and before its `M` lines.
 
 ### Keyframes (`M` lines)
 
@@ -142,7 +145,7 @@ pub enum Ease { Linear, Step, In, Out, InOut, Sine, Back, Bounce, Elastic }
 pub struct Keyframe { pub ms: u32, pub x: Option<i16>, pub y: Option<i16>,   // None = `=`
                       pub opacity: Option<u8>, pub ease: Ease, pub frame: Option<u8> }
 pub struct Layer { pub name: String, pub style: LayerStyle, pub body: LayerBody,
-                   pub keys: Vec<Keyframe> }
+                   pub keys: Vec<Keyframe>, pub clip: bool }   // clip = `X clip`
 pub struct Scene { pub id: String, pub name: String, pub layers: Vec<Layer> }
 
 pub fn parse(block: &str) -> Result<Scene, String>;
@@ -235,7 +238,42 @@ pub fn eval_keys(keys: &[Keyframe], base: &LayerStyle, t_ms: u32) -> KeyState; /
 `draw_text_layer` renders the glyphs into a caller-owned full-frame `scratch`
 and composites that black-keyed — which is how a text layer gets box
 clipping, blend modes and flips for free without `text::draw` needing an
-alpha channel. Text is therefore **always black-keyed**, like a sprite.
+alpha channel. Text is therefore **always black-keyed**, like a sprite — so
+`mask` on a text layer cannot confine a pattern to the glyphs (the keyed-out
+pixels leave what is beneath untouched). Filling text with a pattern is a
+**clip layer** above it, below.
+
+### Clip layers (`X clip`)
+
+A layer with `X clip` draws only where the layer beneath it drew: its α at
+each pixel is multiplied by that layer's **coverage** — 1 where the layer
+below had α > 0 after its own key, opacity and box, 0 elsewhere. Photoshop's
+clipping mask: `[background pat] [text] [fire pat, X clip]` is fire inside
+the glyphs over the background, and a sprite below works the same way (its
+texels are the coverage — index 0 is not, an opaque black texel is). The
+clip layer keeps its own blend, opacity, key and box inside that shape.
+
+* A run of clip layers all clip to the **base** under the run — the nearest
+  non-clip layer below — as in Photoshop, so `[text] [fire, X clip]
+  [sparks add, X clip]` puts both inside the text.
+* `X clip` on the first layer (or on a run that starts at the first layer)
+  is a no-op: there is nothing below to clip to.
+* A base that draws nothing this frame (an unbound pattern, a sprite id the
+  store no longer has, empty text) has no coverage, so its clip layers draw
+  nothing either.
+* The coverage is **1 bit per pixel** (512 B at 4096 px, 2 KB at 16384 px),
+  one mask per compositor, taken fallibly like the text scratch — out of
+  the external arena (PSRAM) on boards that have one — and only while a
+  scene with a clip layer is drawing. A frame whose base cannot get the mask
+  composites its clip layers **unclipped** (the treatment is dropped, never
+  the layer — #702's rule). It is indexed by frame slot, so serpentine
+  wiring and tiled chains need nothing special; the base and its clip
+  layers take the per-pixel path instead of the row kernel, every other
+  layer is unchanged.
+
+`X` is a binding line rather than flag bit 16 because an older host REJECTS
+`flags > 15` (`flags must be 0..15` refuses the whole scene) but ignores an
+unknown line: there, the clip layer draws unclipped.
 
 ### `Compositor` — the host-facing driver
 
@@ -353,7 +391,8 @@ own and stays (Gitea #787).
 }]}
 ```
 
-A layer with a track carries `"keys":[{"ms":0,"x":4,"y":40,"opacity":0,"ease":"linear","frame":2},…]`
+A clip layer carries `"clip":true` right after `rot180` (absent otherwise),
+and a layer with a track carries `"keys":[{"ms":0,"x":4,"y":40,"opacity":0,"ease":"linear","frame":2},…]`
 right after `rot180`: `x` / `y` / `opacity` are absent for a `=`, `frame`
 absent when the key holds none, and `keys` itself absent when the layer has
 no `M` lines.

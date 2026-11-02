@@ -426,7 +426,12 @@ injected as `RefSource` and `RefTarget`) and is deliberately reusable by **#746*
 `SceneRef[]` and its importer is the same `RefTarget`, so that ticket should
 import this rather than grow a second copy.
 
-## Scene layers move: the Motion field ✅ (2026-11-01)
+## Scene layers move and clip: Motion and Clip ✅ (2026-11-01)
+
+**Clip** (above Motion, every layer inspector): a switch, "inside the layer
+below" — the layer's `X clip` (docs/spec/scenes.md §2 "Clip layers"), which
+is how a pattern fills text or a sprite. `library/scenes/fire-clock.scene`
+is the shipped example.
 
 Every layer inspector ends (above `Delete layer`) with **Motion**: the layer's
 keyframe track as a monospace text field, one `M` line a row

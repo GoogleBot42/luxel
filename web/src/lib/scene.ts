@@ -162,6 +162,9 @@ export interface Layer {
   /** The keyframe track (docs/spec/scenes.md §1 "Keyframes"), ascending by
    *  `ms`. Absent or empty = no motion; only a non-empty one is emitted. */
   keys?: Keyframe[];
+  /** `X clip` — drawn only where the layer below drew (docs/spec/scenes.md
+   *  §2 "Clip layers"). Absent = false; only `true` is emitted. */
+  clip?: boolean;
 }
 
 export interface Scene {
@@ -638,6 +641,11 @@ function parseBinding(layer: Layer, tag: string, line: string, n: number): void 
     case "M":
       layer.keys = pushKey(layer.keys ?? [], t, n);
       break;
+    case "X":
+      // per-layer flags past the L line's 0..15; unknown words are a newer
+      // console's and are ignored
+      if (t.includes("clip")) layer.clip = true;
+      break;
     default:
       // A line from a newer console: ignored.
       break;
@@ -743,6 +751,7 @@ export function serializeScene(s: Scene): string {
     } else if (l.body.color !== "000000") {
       out += `K ${l.body.color}\n`;
     }
+    if (l.clip) out += "X clip\n";
     if (l.keys?.length) out += keysText(l.keys) + "\n";
   }
   return out;
@@ -771,6 +780,8 @@ export interface SceneLayerJson {
   flipx: boolean;
   flipy: boolean;
   rot180: boolean;
+  /** Present (and true) only on a clip layer. */
+  clip?: boolean;
   /** Present only when the layer has a track; `=` values are absent. */
   keys?: { ms: number; x?: number; y?: number; opacity?: number; ease: Ease; frame?: number }[];
   pat?: {
@@ -878,6 +889,7 @@ function layerFromJson(j: SceneLayerJson): Layer {
     body = { kind: "color", color: parseRgb(String(j.color ?? "")) ?? "000000" };
   }
   const out: Layer = { name: String(j.name ?? defaultLayerName(kind)), style, body };
+  if (j.clip === true) out.clip = true;
   // A track that does not hold up is DROPPED rather than half-kept: the
   // device only ever writes one its own parser accepted.
   if (Array.isArray(j.keys) && j.keys.length > 0) {
@@ -902,6 +914,7 @@ function layerJson(l: Layer): string {
     `"x":${st.rect.x},"y":${st.rect.y},"w":${st.rect.w},"h":${st.rect.h},` +
     `"blend":"${st.blend}","opacity":${st.opacity},"key":"${st.key}","fit":"${st.fit}",` +
     `"visible":${st.visible},"flipx":${st.flipx},"flipy":${st.flipy},"rot180":${st.rot180}`;
+  if (l.clip) o += `,"clip":true`;
   if (l.keys?.length) {
     const f = (name: string, v: number | null | undefined): string => (v == null ? "" : `,"${name}":${v}`);
     const keys = l.keys.map(

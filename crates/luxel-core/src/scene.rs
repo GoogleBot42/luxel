@@ -20,6 +20,7 @@
 //!   T <source> <arg…>             text: lit <utf8…> | clock <fmt> | slot <n>
 //!   F <font> <rrggbb> <align> <scroll> <speed>
 //!   K <rrggbb>                    color: the wash colour
+//!   X clip                        any: confined to the coverage below
 //!   M <ms> <x> <y> <opacity> <ease> [<frame>]
 //!                                 any: one keyframe of the layer's motion
 //! ```
@@ -494,6 +495,9 @@ pub struct Layer {
     /// The layer's keyframe track (`M` lines), ascending by `ms`, at most
     /// [`MAX_KEYS`]. Empty = the layer stands where its `L` line puts it.
     pub keys: Vec<Keyframe>,
+    /// `X clip`: this layer's α is multiplied by the coverage of the layer
+    /// below it (docs/spec/scenes.md §2 "Clip layers").
+    pub clip: bool,
 }
 
 impl Layer {
@@ -761,6 +765,7 @@ fn parse_layer(line: &str, n: usize) -> Result<Layer, String> {
         style,
         body,
         keys: Vec::new(),
+        clip: false,
     })
 }
 
@@ -916,6 +921,14 @@ fn parse_binding(layer: &mut Layer, tag: &str, line: &str, n: usize) -> Result<(
             let rgb = parse_rgb(tok).ok_or_else(|| err_tok(n, "wash colour is rrggbb", tok))?;
             if let LayerBody::Color(c) = &mut layer.body {
                 *c = rgb;
+            }
+        }
+        // `X <flag…>`: per-layer compositing flags that do not fit the `L`
+        // line's 0..15 `flags` (an old host REJECTS a bigger number, but
+        // ignores an unknown line). Unknown words are a newer console's.
+        "X" => {
+            if it.any(|w| w == "clip") {
+                layer.clip = true;
             }
         }
         "M" => {
@@ -1107,6 +1120,9 @@ pub fn serialize(s: &Scene, out: &mut String) {
                 }
             }
         }
+        if l.clip {
+            out.push_str("X clip\n");
+        }
         for k in &l.keys {
             push_key(out, k);
         }
@@ -1114,23 +1130,63 @@ pub fn serialize(s: &Scene, out: &mut String) {
 }
 
 /// `M <ms> <x> <y> <opacity> <ease>[ <frame>]`, `=` for a kept value.
-fn push_key(out: &mut String, k: &Keyframe) {
-    out.push_str("M ");
-    push_u32(out, k.ms);
+///
+/// Out of line and through [`push_piece`] / [`push_num`] only: inlined into
+/// `serialize`'s callers, the integer formatting and `String::push_str` are
+/// copied per call site, which cost the classic-ESP32 image ~3 KB when this
+/// shipped (the OTA slot's 3 % floor is a few hundred bytes away there).
+#[inline(never)]
+fn push_key(out: &mut dyn Sink, k: &Keyframe) {
+    push_piece(out, "M ");
+    push_num(out, Some(k.ms as i32));
     for v in [k.x.map(i32::from), k.y.map(i32::from), k.opacity.map(i32::from)] {
-        out.push(' ');
-        match v {
-            Some(v) => push_i32(out, v),
-            None => out.push('='),
-        }
+        push_piece(out, " ");
+        push_num(out, v);
     }
-    out.push(' ');
-    out.push_str(k.ease.as_str());
+    push_piece(out, " ");
+    push_piece(out, k.ease.as_str());
     if let Some(f) = k.frame {
-        out.push(' ');
-        push_u32(out, f as u32);
+        push_piece(out, " ");
+        push_num(out, Some(f as i32));
     }
-    out.push('\n');
+    push_piece(out, "\n");
+}
+
+/// An integer, or `=` for `None` (the wire's "keep the L line's value").
+#[inline(never)]
+fn push_num(out: &mut dyn Sink, v: Option<i32>) {
+    match v {
+        Some(v) => push_i32(out, v),
+        None => push_piece(out, "="),
+    }
+}
+
+/// `,"keys":[…]` — out of line for the same reason as [`push_key`].
+#[inline(never)]
+fn push_keys_json(out: &mut dyn Sink, keys: &[Keyframe]) {
+    for (ki, k) in keys.iter().enumerate() {
+        push_piece(out, if ki == 0 { ",\"keys\":[{\"ms\":" } else { ",{\"ms\":" });
+        push_num(out, Some(k.ms as i32));
+        for (name, v) in [
+            (",\"x\":", k.x.map(i32::from)),
+            (",\"y\":", k.y.map(i32::from)),
+            (",\"opacity\":", k.opacity.map(i32::from)),
+        ] {
+            if v.is_some() {
+                push_piece(out, name);
+                push_num(out, v);
+            }
+        }
+        push_piece(out, ",\"ease\":\"");
+        push_piece(out, k.ease.as_str());
+        push_piece(out, "\"");
+        if let Some(f) = k.frame {
+            push_piece(out, ",\"frame\":");
+            push_num(out, Some(f as i32));
+        }
+        push_piece(out, "}");
+    }
+    push_piece(out, "]");
 }
 
 // ---- JSON (the `/api/scenes` shape) ----
@@ -1177,7 +1233,8 @@ pub fn json_bound(s: &Scene) -> usize {
     let esc = crate::jsonview::json_escape_len;
     let mut n = SCENE_FIXED + esc(&s.id) + esc(&s.name);
     for l in &s.layers {
-        n += LAYER_FIXED + esc(&l.name);
+        // `,"clip":true` included
+        n += LAYER_FIXED + 12 + esc(&l.name);
         if !l.keys.is_empty() {
             n += KEYS_FIXED + l.keys.len() * KEY_JSON_MAX;
         }
@@ -1256,35 +1313,12 @@ pub fn push_json(s: &Scene, out: &mut dyn Sink) {
         push_bool(out, st.flipy);
         push_piece(out, ",\"rot180\":");
         push_bool(out, st.rot180);
-        // present only when the layer has a track, like the sprite's `fps`
+        // present only when set, like the sprite's `fps`
+        if l.clip {
+            push_piece(out, ",\"clip\":true");
+        }
         if !l.keys.is_empty() {
-            push_piece(out, ",\"keys\":[");
-            for (ki, k) in l.keys.iter().enumerate() {
-                if ki > 0 {
-                    push_piece(out, ",");
-                }
-                push_piece(out, "{\"ms\":");
-                push_u32(out, k.ms);
-                for (name, v) in [
-                    (",\"x\":", k.x.map(i32::from)),
-                    (",\"y\":", k.y.map(i32::from)),
-                    (",\"opacity\":", k.opacity.map(i32::from)),
-                ] {
-                    if let Some(v) = v {
-                        push_piece(out, name);
-                        push_i32(out, v);
-                    }
-                }
-                push_piece(out, ",\"ease\":\"");
-                push_piece(out, k.ease.as_str());
-                push_piece(out, "\"");
-                if let Some(f) = k.frame {
-                    push_piece(out, ",\"frame\":");
-                    push_u32(out, f as u32);
-                }
-                push_piece(out, "}");
-            }
-            push_piece(out, "]");
+            push_keys_json(out, &l.keys);
         }
         match &l.body {
             LayerBody::Pattern(p) => {
@@ -1773,6 +1807,33 @@ mod tests {
     }
 
     #[test]
+    fn x_clip_round_trips_and_ignores_words_it_does_not_know() {
+        let wire = concat!(
+            "S 0000000a clipped\n",
+            "L color 0 0 0 0 normal 100 none fill 1\n",
+            "L text 0 0 0 0 normal 100 none fill 1\n",
+            "T lit HI\n",
+            "L pat 0 0 0 0 normal 100 none fill 1\n",
+            "I 0123abcd\n",
+            "X clip\n",
+            "M 0 = = = linear\n",
+        );
+        assert_eq!(round(wire), wire);
+        let s = parse(wire).unwrap();
+        assert!(!s.layers[1].clip && s.layers[2].clip);
+        // a newer console's extra words: `clip` is still read, the rest
+        // dropped; an X line with no word this host knows changes nothing
+        let s = parse("S 0000000a c\nL color 0 0 0 0 normal 100 none fill 1\nX feather clip\nX glow\n").unwrap();
+        assert!(s.layers[0].clip);
+        let s = parse("S 0000000a c\nL color 0 0 0 0 normal 100 none fill 1\nX glow\n").unwrap();
+        assert!(!s.layers[0].clip);
+        let mut out = String::new();
+        push_json(&parse(wire).unwrap(), &mut out);
+        assert_eq!(out.matches("\"clip\":true").count(), 1);
+        assert!(out.contains("\"rot180\":false,\"clip\":true,\"keys\":["));
+    }
+
+    #[test]
     fn a_block_needs_its_s_line() {
         assert_eq!(
             parse("L color 0 0 0 0 normal 100 none fill 1\n").unwrap_err(),
@@ -1894,9 +1955,10 @@ mod tests {
                 "L color 0 0 0 0 mask 0 luma tile 0\n",
                 "K ff8800\n",
             )),
-            // a keyframe track at its cap, every field at its widest
+            // a keyframe track at its cap, every field at its widest, on a
+            // clip layer
             {
-                let mut b = String::from("S 0000000a keyed\nL color 0 0 0 0 normal 100 none fill 1\n");
+                let mut b = String::from("S 0000000a keyed\nL color 0 0 0 0 normal 100 none fill 1\nX clip\n");
                 for _ in 0..MAX_KEYS {
                     b.push_str("M 3600000 -32768 -32768 100 elastic 255\n");
                 }

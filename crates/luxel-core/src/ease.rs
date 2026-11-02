@@ -7,9 +7,10 @@
 //! (typically 0..1), no clamping except where the reference pins the
 //! endpoints (the elastics). The three one-line cubics are `#[inline]`, so
 //! `call_builtin` compiles them as it did when they were spelled inline
-//! there; the four larger curves are left to the optimiser, as
-//! `ease_out_bounce` always was, so the keyframe path does not carry a
-//! second copy of each.
+//! there; the four larger curves are `#[inline(never)]`, so `call_builtin`
+//! and the keyframe evaluator share ONE copy of each instead of the
+//! optimiser inlining a copy into both (~350 B of the classic-ESP32 image,
+//! whose OTA slot runs a few hundred bytes above its floor).
 
 use crate::fixed::Fx;
 use crate::fmath;
@@ -42,6 +43,7 @@ pub fn in_out_cubic(t: Fx) -> Fx {
 }
 
 /// `(1 − cos(t·π)) / 2`, in turns.
+#[inline(never)]
 pub fn in_out_sine(t: Fx) -> Fx {
     let c = fmath::cos_turns(t / Fx::from_int(2));
     (Fx::ONE - c) / Fx::from_int(2)
@@ -49,6 +51,7 @@ pub fn in_out_sine(t: Fx) -> Fx {
 
 /// `1 + c3·(t−1)³ + c1·(t−1)²` with c1 = 1.70158 (the classic ~10 %
 /// overshoot constant), c3 = c1 + 1.
+#[inline(never)]
 pub fn out_back(t: Fx) -> Fx {
     let u = t - Fx::ONE;
     let c1 = Fx::from_f64(1.70158);
@@ -57,6 +60,7 @@ pub fn out_back(t: Fx) -> Fx {
 }
 
 /// `2^(−10t)·sin((10t − 0.75)·2π/3) + 1`, endpoints pinned exactly.
+#[inline(never)]
 pub fn out_elastic(t: Fx) -> Fx {
     if t <= Fx::ZERO {
         Fx::ZERO
@@ -73,6 +77,7 @@ pub fn out_elastic(t: Fx) -> Fx {
 
 /// Shared by the three bounce easings: piecewise parabolas, n1 = 7.5625,
 /// d1 = 2.75 (the standard fit). "in" and "in-out" are reflections of it.
+#[inline(never)]
 pub fn out_bounce(t: Fx) -> Fx {
     let n1 = Fx::from_f64(7.5625);
     let d1 = Fx::from_f64(2.75);
