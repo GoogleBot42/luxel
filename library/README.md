@@ -153,14 +153,15 @@ thing a library entry is allowed to change.
 A scene composites onto the device's Layout: a regular 2D matrix, or — since
 Gitea #985 — a strip, as one row in index order (docs/spec/scenes.md §2 "The
 canvas"). An irregular 2D map or any 3D map has no canvas, and a scene there
-draws nothing. Most shipped ones are authored for a 64×64 panel
-(`scenes.json` `kind: "grid"`, the way a pattern carries its own `kind`) and
-keep every placed box inside 32×32, so they still read on a smaller matrix —
-the exception being a layer that is deliberately the whole layout
-(`spark-field`'s tiled sprite), which clips rather than disappears. The
-`strip-*` scenes are written for a strip (`kind: "strip"`, below). A scene
-without a `U` line is in layout pixels like these; a new scene declares a
-design size instead (below), and fits every panel.
+draws nothing. A panel scene (`scenes.json` `kind: "grid"`, the way a
+pattern carries its own `kind`) **declares `U`** — the size it was designed
+at, below — and then fits every panel: design at 32×32 unless the
+composition needs 64 columns, and pin a texture that should get MORE pixels
+on a bigger panel, not bigger ones, with `X abs`. A scene of whole-layout
+layers needs no `U` (`tidepool`), and neither does one that is a texture
+throughout (`spark-field`, `bulb-string`, `candle-row` — their `tile` boxes
+run to the edge, so a bigger panel shows more sparks, bulbs or candles).
+The `strip-*` scenes are written for a strip (`kind: "strip"`, below).
 
 ### Design size (`U <w> <h>`)
 
@@ -181,7 +182,8 @@ X clip
 
 - **Design at `U 32 32`** unless the composition genuinely needs 64 columns
   (`U 64 64`). Keep every placed box inside the design area, and every
-  non-scrolling `lit` caption inside the design width at 1×.
+  non-scrolling `lit` caption inside the design width at 1× — the gate
+  checks both (a keyframed axis and an `X abs` layer are exempt).
 - **On a panel the device zooms by a whole number** — `min(gw/32, gh/32)`, so
   ×2 on 64×64 and ×4 on 128×128 — and centres the design area. Boxes, keyframe
   positions, natural-size sprites, tile cells, glyphs and scroll speed all
@@ -249,7 +251,8 @@ On a strip of `n` pixels the canvas is `n`×1, so a scene is written in
   library/scenes/strip-zones.scene` draws a strip as a waterfall (one row
   per frame, time running down).
 - **The shipped strip scenes**: `strip-zones` (fire and sea on two
-  segments, a breathing seam glow), `strip-bulbs` (the `bulb-string-8x1`
+  segments under `U 150 1`, so the seam is the middle of any strip, a
+  breathing seam glow), `strip-bulbs` (the `bulb-string-8x1`
   sprite tiled with a zero box, any length), `strip-colour-fade` (the "fade
   between N colours" family: the `grey-fade` greyscale source under a colour
   ramp per layer, two ramps crossfading on a keyframe track). A ramp turns

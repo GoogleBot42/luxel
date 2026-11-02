@@ -2,35 +2,26 @@
 # A fireworks show with the time to the second on a scrim BAND rather than a
 # full scrim, so the show stays bright around it. HH:MM:SS fits 32 px only in
 # the `tiny` face. The burst sprites are ADDED and run at different `A` rates
-# so they never pop together; they sit under the band.
-# Authored for 64x64: the top-left 32x32 is the whole scene on a small panel;
-# on 64x64 the band, clock and greeting span the width (text boxes are the
-# whole layout) and three more bursts fill the lower sky.
+# so they never pop together; all three sit in the sky above and under the
+# band. Designed at 32x32 (`U`): a bigger panel zooms the whole show.
 S - New Year's Eve
+U 32 32
 L pat 0 0 0 0 normal 100 none fill 1
 N Fireworks
 I @pat/fireworks
 C sliderLaunchRate 3932160
-L sprite 1 -3 0 0 add 100 none fill 1
+L sprite 1 0 0 0 add 100 none fill 1
 N Burst
 I @spr/firework-burst
 A 9
-L sprite 17 -1 0 0 add 100 none fill 3
+L sprite 17 0 0 0 add 100 none fill 3
 N Burst 2
 I @spr/firework-burst
 A 7
-L sprite 40 30 0 0 add 100 none fill 1
+L sprite 9 0 0 0 add 100 none fill 1
 N Burst 3
 I @spr/firework-burst
-A 8
-L sprite 6 38 0 0 add 100 none fill 3
-N Burst 4
-I @spr/firework-burst
 A 11
-L sprite 30 46 0 0 add 100 none fill 1
-N Burst 5
-I @spr/firework-burst
-A 6
 L color 0 11 0 9 normal 60 none fill 1
 N Band
 L text 0 13 0 0 normal 100 black fill 1

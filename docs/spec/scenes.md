@@ -406,7 +406,7 @@ Worked examples (`U 32 32` unless said):
 | 128×128 | [32,96)×[0,112) | (32,68) 64×56 | rows 120+ |
 | 64×32 | z0=1, ox=16: [24,40)×[0,28) | (24,17) 16×14 | rows 30+, full width (zero axis) |
 
-**C. neon-sign glow at 128** — `L text -1 12 0 0`: `x` is a zero axis, so
+**C. neon-sign glow at 128** — `L text -1 9 0 0`: `x` is a zero axis, so
 its origin is map(−1) = −4 and the box is the real width; the glyphs are 4×
 and centre-aligned, so the glow copy sits exactly one scaled pixel (4 px)
 left of the tube.
@@ -426,7 +426,7 @@ grid pixels.
 
 **F. silent-night snow, `X abs`** — `L sprite 0 0 0 0 … tile 1` + `X abs`:
 the 16×16 snowfall tile repeats 1:1 over the whole 128×128, so the flakes
-stay fine, while the tree beside it (`4 6`, 24×26) maps to (16,24) 96×104.
+stay fine, while the tree beside it (`1 6`, 24×26) maps to (4,24) 96×104.
 
 The unit tests next to `compose::Place` pin each rule (zoom and centring,
 the never-0 rule, strips proportional and gapless at every length 1..400,

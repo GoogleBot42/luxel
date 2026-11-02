@@ -2,9 +2,11 @@
 # A calm bedroom-wall piece: a long-exposure sky wheeling round its pole, the
 # odd meteor ADDED across it, a crescent moon, and a mountain range in front
 # of everything — sprites occlude whatever is beneath their opaque texels.
-# The range is 64 wide with a lake below it: on 32 rows the ridges close the
-# picture, on 64 the lake carries the moon's reflection.
+# Designed at 32x32 (`U`): the 64-wide range-and-lake picture is FITTED to
+# the full design width, so the moon's reflection sits under the moon on
+# every panel (1:1 on 64x64, where the art was drawn).
 S - Nocturne
+U 32 32
 L pat 0 0 0 0 normal 100 none fill 1
 N Star trails
 I @pat/starfield-2d
@@ -15,9 +17,9 @@ I @pat/meteor-shower
 C sliderCount 65536
 C sliderGapSeconds 262144
 C sliderPalette 65536
-L sprite 22 3 0 0 normal 100 none fill 1
+L sprite 9 1 0 0 normal 100 none fill 1
 N Moon
 I @spr/moon
-L sprite 0 20 0 0 normal 100 none fill 1
+L sprite 0 10 32 22 normal 100 none fill 1
 N Mountains
 I @spr/mountains

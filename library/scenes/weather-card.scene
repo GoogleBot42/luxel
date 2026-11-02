@@ -4,6 +4,7 @@
 # laid down the rows and ramped to blues. The Rain layer ships HIDDEN (flags
 # 0): a loop-tile sprite tiled under the cloud, for an automation to show.
 S - Weather Card
+U 32 32
 L pat 0 0 0 0 normal 100 none fill 1
 N Sky
 I @pat/color-wash
@@ -18,14 +19,14 @@ R 100 0:0b2a5b 255:6fb3ef
 L sprite 3 10 12 12 normal 100 none tile 0
 N Rain
 I @spr/rain-tile
-L sprite -1 1 0 0 normal 100 none fill 1
+L sprite 0 1 0 0 normal 100 none fill 1
 N Weather
 I @spr/cloud-sun
 L text 0 3 0 0 normal 100 black fill 1
 N Temperature
 T slot 0
 F large ffffff r none 0
-L text 0 24 0 0 normal 100 black fill 1
+L text 0 20 0 0 normal 100 black fill 1
 N Details
 T slot 1
 F tiny cfe8ff l left 10

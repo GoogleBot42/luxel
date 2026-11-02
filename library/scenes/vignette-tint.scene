@@ -1,8 +1,10 @@
 # A Luxel library scene — Apache-2.0. Grammar: library/README.md.
 # Multiply as lighting: white leaves the base alone, black kills it, grey
 # shades it. A warm colour layer in `multiply` tints the kaleidoscope, and a
-# greyscale sprite stretched over the whole 64x64 panel darkens the corners.
+# greyscale sprite stretched over the whole 64x64 design (`U 64 64`) darkens
+# the corners — the whole panel at any square size, with no seam.
 S - Vignette & Tint
+U 64 64
 L pat 0 0 0 0 normal 100 none fill 1
 N Kaleidoscope
 I @pat/kaleidoscope-2d

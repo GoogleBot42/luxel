@@ -1,9 +1,10 @@
 # A Luxel library scene — Apache-2.0. Grammar: library/README.md.
 # A stencil, the cheap way: a white face whose eyes and grin are transparent,
 # stretched 2x by `fit fill` over a moving rainbow — the rainbow shows around
-# the face and through its features. A 64x64 panel gets a second face across
-# the diagonal.
+# the face and through its features. Two faces across the diagonal of a
+# 64x64 design (`U 64 64`); the boxes scale with the panel.
 S - Rainbow Smiley
+U 64 64
 L pat 0 0 0 0 normal 100 none fill 1
 N Rainbow
 I @pat/rainbow

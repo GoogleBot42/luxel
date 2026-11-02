@@ -130,7 +130,7 @@ also the fix #996 item 1 needs.
 | 128×128 | [32,96)×[0,112) | (32,68) 64×56 | rows 120+ |
 | 64×32 | z0=1, ox=16: [24,40)×[0,28) | (24,17) 16×14 | rows 30+, full width (zero axis) |
 
-**C. neon-sign glow at 128** (`U 32 32`, `L text -1 12 0 0`): x is a zero axis,
+**C. neon-sign glow at 128** (`U 32 32`, `L text -1 9 0 0`): x is a zero axis,
 so its origin is map(−1) = −4 and the box is the real width; the glyphs are 4×
 and centre-aligned, so the glow copy sits one scaled pixel (4 px) left of the tube.
 
@@ -149,7 +149,7 @@ pixels.
 
 **F. silent-night snow, `X abs`**: `L sprite 0 0 0 0 … tile 1` + `X abs` — the
 16×16 snowfall tile repeats 1:1 over the whole 128×128, so the flakes stay fine;
-the tree beside it (`4 6`, 24×26) maps to (16,24) 96×104.
+the tree beside it (`1 6`, 24×26) maps to (4,24) 96×104.
 
 ## 4. Why not percent fields, anchors or a 0..1 space
 

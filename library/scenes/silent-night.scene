@@ -2,26 +2,29 @@
 # Snowfall with no engine: `snowfall-tile` is a 16x16 LOOP TILE whose 16 frames
 # move its flakes down one pixel each (and wrap), so `fit tile` over the whole
 # panel is a seamless snowfall that costs no pattern layer. The one engine is
-# the drift-mode Starfield, ramped to an indigo night.
-# Authored for 64x64: the top-left 32x32 is the whole scene on a small panel
-# (the greeting over one tree); a 64x64 adds a second, mirrored tree further
-# down the slope, its lights stepping at a different rate.
+# the drift-mode Starfield, ramped to an indigo night. Designed at 32x32
+# (`U`): the greeting and the trees zoom with the panel — a second, smaller
+# tree further off, its lights stepping at a different rate — while the snow
+# is pinned to panel pixels (`X abs`), so a bigger panel gets more flakes,
+# not bigger ones.
 S - Silent Night
+U 32 32
 L pat 0 0 0 0 normal 100 none fill 1
 N Sky
 I @pat/starfield-2d
 C sliderMode 65536
 R 100 0:03041a 120:1a2350 255:dfe6ff
-L sprite 4 6 0 0 normal 100 none fill 1
-N Tree
-I @spr/christmas-tree
-L sprite 36 37 0 0 normal 100 none fill 3
+L sprite 19 15 12 13 normal 100 none fill 3
 N Tree 2
 I @spr/christmas-tree
 A 3
-L sprite 0 0 64 64 normal 100 none tile 1
+L sprite 1 6 0 0 normal 100 none fill 1
+N Tree
+I @spr/christmas-tree
+L sprite 0 0 0 0 normal 100 none tile 1
 N Snow
 I @spr/snowfall-tile
+X abs
 L text 0 0 0 0 normal 100 black fill 1
 N Greeting
 T lit MERRY CHRISTMAS

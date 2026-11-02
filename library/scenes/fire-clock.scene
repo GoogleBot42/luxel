@@ -5,7 +5,8 @@
 # always glow and the flames run through them. Everything outside the digits
 # stays black — without the X line the fire would cover the whole panel.
 S - Fire Clock
-L text 0 10 0 0 normal 100 none fill 1
+U 32 32
+L text 0 16 0 0 normal 100 none fill 1
 N Embers
 T clock HH:MM
 F large 5a1404 c none 0

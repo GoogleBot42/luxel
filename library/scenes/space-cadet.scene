@@ -1,23 +1,28 @@
 # A Luxel library scene — Apache-2.0. Grammar: library/README.md.
 # A control override retunes a base: the starfield pushed to warp. On top,
-# three sprites each running at their own rate — a planet, a rocket whose
-# exhaust flickers at 12 fps, and a little alien waving at 2 (a 64x64 panel
-# gets a second, mirrored by flags 3 and waving at 3).
+# four sprites each running at their own rate — a planet, a rocket whose
+# exhaust flickers at 12 fps (bobbing on a keyframe track), and two little
+# aliens, one mirrored by flags 3, waving at 2 and 3. Designed at 32x32
+# (`U`), so the crew fills any panel.
 S - Space Cadet
+U 32 32
 L pat 0 0 0 0 normal 100 none fill 1
 N Warp
 I @pat/starfield-2d
 C sliderWarpPercent 5242880
-L sprite 18 3 0 0 normal 100 none fill 1
+L sprite 17 2 0 0 normal 100 none fill 1
 N Planet
 I @spr/planet
-L sprite 6 9 0 0 normal 100 none fill 1
+L sprite 7 4 0 0 normal 100 none fill 1
 N Rocket
 I @spr/rocket
-L sprite 20 22 0 0 normal 100 none fill 1
+M 0    = =   = sine
+M 1500 = 6   = sine
+M 3000 = =   = sine
+L sprite 19 22 0 0 normal 100 none fill 1
 N Alien
 I @spr/pixel-alien
-L sprite 44 42 0 0 normal 100 none fill 3
+L sprite 1 23 0 0 normal 100 none fill 3
 N Alien 2
 I @spr/pixel-alien
 A 3

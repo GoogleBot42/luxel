@@ -1,11 +1,14 @@
 # A Luxel library scene — Apache-2.0. Grammar: library/README.md.
 # `fit tile` as a COUNTER: the candle-stick sprite is an 8 px cell of two
-# candles, so a tiled box's width sets how many burn — 63 px from x 1 is eight
-# candles on a 32-wide panel and sixteen on a 64. Behind them: a warm wash, a
-# slow gold glitter (Twinkle ramped to one warm hue) drifting in the dark
-# above. For Advent, Hanukkah, Diwali or a birthday.
-# Authored for 64x64: the top-left 32x32 is one shelf of candles; a 64x64
-# shows a votive rack, two shelves.
+# candles, so a tiled box's width sets how many burn — a zero `w` is the rest
+# of the panel from x 1: eight candles on a 32-wide panel, sixteen on a 64,
+# thirty-two on a 128. Behind them: a warm wash, a slow gold glitter (Twinkle
+# ramped to one warm hue) drifting in the dark above. For Advent, Hanukkah,
+# Diwali or a birthday.
+# No `U` line on purpose: a wider panel lights MORE candles at the same 1:1
+# size, not bigger ones. The shelves are grid rows too: a 32-row panel is one
+# shelf of candles, a 64-row one a votive rack of two, and a 128-row one the
+# same two shelves over an empty lower half.
 # Menorah variant (on a 32x32): replace the two candle rows with
 #   L sprite 1 18 16 12 normal 100 none tile 1    (four candles, left)
 #   L sprite 13 14 8 12 normal 100 none fill 1     (the raised shamash; the
@@ -22,10 +25,10 @@ I @pat/twinkle
 C sliderDensity 524288
 C sliderFadeSeconds 196608
 R 100 0:000000 255:ffcf7a
-L sprite 1 18 63 12 normal 100 none tile 1
+L sprite 1 18 0 12 normal 100 none tile 1
 N Candles
 I @spr/candle-stick
-L sprite 1 48 63 12 normal 100 none tile 1
+L sprite 1 48 0 12 normal 100 none tile 1
 N Candles 2
 I @spr/candle-stick
 A 7

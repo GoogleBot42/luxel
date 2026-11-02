@@ -5,6 +5,7 @@
 # from below the greeting while it fades in, a long hold at the L line's own
 # spot (`=`), then down and out to the west; the loop restarts invisible.
 S - Sunrise
+U 32 32
 L pat 0 0 0 0 normal 100 none fill 1
 N Glow
 I @pat/coral-plasma

@@ -3,6 +3,7 @@
 # by a ramp whose LAST stop is dark (the ramp clamps above it, so nothing in
 # the sky can get brighter than 24345c), and the time in a night-vision red.
 S - Night Clock
+U 32 32
 L pat 0 0 0 0 normal 100 none fill 1
 N Sky
 I @pat/starfield-2d
