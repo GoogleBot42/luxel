@@ -294,6 +294,20 @@
   white-space: nowrap;
 }
 
+/* A text layer's `draws nothing on a strip` note (#985) is longer than any
+   metadata a row carries, so it yields to the layer's NAME: it shrinks four
+   times as fast and ellipsizes (the full sentence is in the row's title). */
+.scenes .lrow .pick:has(.snote) .nm2 {
+  flex: 1 1 auto;
+}
+
+.scenes .lrow .meta2.snote {
+  flex: 0 4 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ---------- Add layer ▾ (mock `.addwrap` / `.menu.full`) ---------- */
 
 .scenes .addwrap {

@@ -267,7 +267,7 @@
               </svg>
             </span>
           {:else if oneRow && r.layer.body.kind === "text" && r.layer.style.visible}
-            <span class="meta2" data-role="scene-layer-strip-note" title="no glyph fits one row"
+            <span class="meta2 snote" data-role="scene-layer-strip-note" title="no glyph fits one row"
               >{TEXT_ON_STRIP}</span
             >
           {:else}
