@@ -11,7 +11,7 @@ glyphs and scroll speed scale by `z` too), proportional along a strip with
 gapless segment edges, positions-only shrink below the design size, and a
 mapped box never resolves to 0. `X abs` pins one layer to grid pixels.
 Scenes without `U` early-return (`Place::IDENTITY`) — the extended
-`tests/library_scenes.rs` now digests all 41 shipped scenes at 64x64,
+`tests/library_scenes.rs` now digests every shipped scene at 64x64,
 32x32, 128x128 and 150x1, and printed the same 176 lines (44 scenes since #1034) on master and on
 the branch (instrument validated: `U 32 32` on campfire moved its
 64/128/150 lines and left 32x32 alone).
