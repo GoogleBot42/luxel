@@ -1,4 +1,5 @@
 // name: Starburst
+// tags: both, ambient, sound
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/sound-starburst-2.md, white-rainbows.md — reimagined, not a replica.
 // Comet heads sweep both ways along the strip and pass through each other:
 // a white-hot head, a short coloured tail (gradientRange) and a trail left by

@@ -1,4 +1,5 @@
 // name: Embers
+// tags: both, nature, ambient
 // Clean-room reimplementation from the prose specs docs/pattern-specs/heatshivers.md, fireblobs.md (plus the smear idea of the curated Ember Diffusion example) — reimagined, not a replica.
 // Strip: ember pulses swell, drift and shiver along the strip, leaving a heat
 // trail that cools through a blackbody ramp; Smear lets the heat creep along

@@ -1,4 +1,5 @@
 // name: Spiral Galaxy
+// tags: panel, nature
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // A face-on spiral galaxy turning slowly: a yellow-white bulge, blue arms laced
 // with dark dust lanes and pink star-forming knots, and a few hundred stars that

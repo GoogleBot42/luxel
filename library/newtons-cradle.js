@@ -1,4 +1,5 @@
 // name: Newton's Cradle
+// tags: both, nature
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // Five polished balls hang in a row. The end ball swings out, falls back and
 // clacks into the row with a flash, and the far ball leaps away; each swing

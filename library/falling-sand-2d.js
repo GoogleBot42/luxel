@@ -1,4 +1,5 @@
 // name: Falling Sand
+// tags: panel, nature
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // Sand pours from wandering spouts, falls under gravity, slides down the
 // pile's slopes and settles in layered strata over a dusk backdrop. When a

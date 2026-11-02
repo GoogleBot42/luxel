@@ -1,4 +1,5 @@
 // name: Julia Morph
+// tags: panel, ambient
 // Clean-room reimplementation from the prose spec docs/pattern-specs/mandelbrot-2d.md
 // — reimagined, not a replica.
 // An animated Julia set whose constant c rides just around the main cardioid's

@@ -1,4 +1,5 @@
 // name: Crystal Growth
+// tags: panel, nature, ambient
 // Clean-room reimplementation from the prose spec docs/pattern-specs/slime-mold-palette.md — reimagined, not a replica.
 // "Rainbow smoke" growth at the panel's own resolution: each placement picks a
 // target colour and puts it on the frontier cell whose painted neighbours match

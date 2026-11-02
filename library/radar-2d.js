@@ -1,4 +1,5 @@
 // name: Radar
+// tags: panel, retro
 // Clean-room reimplementation from the prose spec docs/pattern-specs/angle-and-radius-from-coordinates.md
 // (its hue-by-radius idea) — reimagined, not a replica. A PPI scope: the persistent frame
 // IS the phosphor. Each frame fades it (delta-timed), sweeps the beam as sub-stepped

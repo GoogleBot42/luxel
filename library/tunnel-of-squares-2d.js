@@ -1,4 +1,5 @@
 // name: Tunnel
+// tags: panel, ambient
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/tunnel-of-squares-2d.md — reimagined, not a replica.
 // Fly down an endless polygon tunnel. Rings is the corkscrewing neon spiral of
 // log-spaced squares (or triangles..octagons); Textured lines the tube with bevelled

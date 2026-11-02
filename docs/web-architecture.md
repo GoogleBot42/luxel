@@ -340,6 +340,24 @@ The filter only applies when the Layout is a real FIXTURE (`layout.source` is
 the editor holds, so filtering by it would empty the library depending on what
 was last opened.
 
+One exception rides on the library's `// tags:` line (`lib/tags.ts`
+`tagShowsOn`): a `both`-tagged pattern — a strip + panel file that branches on
+`has2DMap()` and exports `render(index)` — counts as compatible with a STRIP
+Layout, though the engine reports it 2-D (it calls coordinate builtins on its
+panel branch, Gitea #1027) and the dims rule alone hid every one of them from a
+strip console. Device rows get the same treatment from their source's header
+(`tagsFromSource`), and `PatternPicker` applies it too.
+
+The Library source adds a tag row under the page bar: a shape control
+`All | Strip | Panel` (Strip = strip + both, Panel = panel + both) and theme
+chips (multi-select, OR; each badge counts that theme under the current shape,
+and a theme with nothing there is absent). Both are props of the library
+`<Gallery>` (`shape`, `themes`); a tag-excluded tile is not rendered, like the
+split, so `.tile` counts and the source chip agree. A console opens on its own
+shape (`defaultShape(deviceLayout.dims)`: 1 → Strip, 2 → Panel, else All), and
+an explicit pick persists per device in `localStorage` (`luxel.libShape.<device
+label>`); the playground opens on All and does not persist.
+
 A tile must be classified before it compiles, or the grid would resolve one
 tile at a time as they scroll into view. `gallery.json` ships an advisory
 `kind`; for the sources that arrive as bare source (device patterns, `Mine`)

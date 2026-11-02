@@ -1,4 +1,5 @@
 // name: Falling Blocks
+// tags: panel, game, retro
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // A well of columns, each dropping coloured blocks onto its own pile at its own pace.
 // Whenever every pile is past the dim clear line, the complete rows flash, vanish and

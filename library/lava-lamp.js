@@ -1,4 +1,5 @@
 // name: Lava Lamp
+// tags: both, ambient, sound
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/metaballs-of-fire-2d.md, sound-lavablob.md — reimagined, not a replica.
 // A real lava lamp: wax blobs warm in the pool at the bottom, rise with a stretched
 // neck, cool at the top and sink, merging and pinching apart inside a tapered glass.

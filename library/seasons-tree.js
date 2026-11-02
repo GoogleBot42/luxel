@@ -1,4 +1,5 @@
 // name: Seasons Tree
+// tags: panel, nature
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // A year in one minute: a fractal tree grows limb by limb, blossoms pink,
 // sheds petals, greens, turns gold and red, drops its leaves and stands bare

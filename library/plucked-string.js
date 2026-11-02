@@ -1,4 +1,5 @@
 // name: Plucked String
+// tags: both, nature
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // The strip is a guitar string. A pluck pulls a triangular kink that splits,
 // races to the fixed ends, reflects and rings down into shimmering standing

@@ -1,4 +1,5 @@
 // name: Sorting
+// tags: both, ambient
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // A shuffled rainbow puts itself back in order, live: bubble sort ripples, insertion sort
 // slides, shell sort hops, heap sort pulses, and the pair being compared flashes white.

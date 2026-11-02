@@ -1,4 +1,5 @@
 // name: Life
+// tags: panel, ambient
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/cyclic-cellular-automata-2d.md
 // — reimagined, not a replica (the Cyclic rule); the rest is a curated original.
 // Conway's Life and four cousins on a torus sized to the panel (≤ 64 cells a

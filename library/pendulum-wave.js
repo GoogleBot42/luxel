@@ -1,4 +1,5 @@
 // name: Pendulum Wave
+// tags: both, nature
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // The physics-classroom classic: a row of pendulums whose periods are tuned so
 // each completes one more swing per cycle than its neighbour. The row drifts

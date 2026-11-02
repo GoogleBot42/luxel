@@ -1,4 +1,5 @@
 // name: DNA Helix
+// tags: both, ambient
 // Curated original (hand-written showcase of the Luxel language/builtins); the
 // single-ribbon look is a clean-room reimagining of docs/pattern-specs/sinus.md.
 // Sine ribbons wound round a gently snaking axis: one is a lone ribbon, two a

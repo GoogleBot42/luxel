@@ -1,4 +1,5 @@
 // name: TV Simulator
+// tags: both, ambient
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // The glow of a television through the curtains, for an empty house. A programme
 // keeps a colour grade for about Scene seconds; inside it the camera cuts every

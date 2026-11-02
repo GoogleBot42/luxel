@@ -1,4 +1,5 @@
 // name: Word Clock
+// tags: panel, clock
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // The time in words: an 11x10 letter grid in dim grey where "IT IS TWENTY FIVE
 // PAST SEVEN" lights up, rounded down to five minutes; four corner dots count

@@ -1,4 +1,5 @@
 // name: Shadebobs
+// tags: panel, retro
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // The demoscene classic: invisible brushes trace Lissajous paths and ADD heat where
 // they pass; heat that overflows wraps back to the bottom of the palette, so the

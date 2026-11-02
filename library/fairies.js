@@ -1,4 +1,5 @@
 // name: _Fairies
+// tags: both, ambient
 // Clean-room reimplementation from the prose spec docs/pattern-specs/fairies.md
 // — reimagined, not a replica.
 // Dense, stationary fairy dust: points pop to full in the picked hue (magenta-pink

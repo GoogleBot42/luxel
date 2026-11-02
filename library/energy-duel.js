@@ -1,4 +1,5 @@
 // name: Energy Duel
+// tags: panel, game
 // Clean-room reimplementation from the prose spec docs/pattern-specs/dbzbattlefinal.md — reimagined, not a replica.
 // Two glowing fighters dart, feint and clash in an endless anime-style duel: every clash
 // throws a shockwave ring, a retreating fighter fires an energy shot, and after a few

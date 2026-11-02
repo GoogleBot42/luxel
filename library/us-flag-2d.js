@@ -1,4 +1,5 @@
 // name: Waving Flag
+// tags: both, holiday
 // Curated original (hand-written showcase of the Luxel language/builtins);
 // the Pride flag mode also carries the idea of the prose spec docs/pattern-specs/rainbow-flag.md.
 // A flag waving as cloth: US (13 stripes, canton, a staggered star lattice

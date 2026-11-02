@@ -1,4 +1,5 @@
 // name: Spiral Twirls
+// tags: panel, ambient
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/2d-spiral-twirls.md, spiral-twirls-star-2d.md — reimagined, not a replica.
 // Chromatic mode: original work from the prose idea spec docs/pattern-specs/patternflow/chromatic-vortex.md (Patternflow preset, CC BY-SA 4.0 — prose-described idea only, no code).
 // A spinning pinwheel of rainbow comet arms that winds into a spiral, relaxes

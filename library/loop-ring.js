@@ -1,4 +1,5 @@
 // name: Loop Ring
+// tags: panel, ambient
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // Concentric luminous rings whose edges boil with noise — and the whole thing is a
 // perfect loop: each ring's noise is read on a circle in space AND a circle in time,

@@ -1,4 +1,5 @@
 // name: HUD Ticker
+// tags: both, ambient
 // Original work from the prose idea spec docs/pattern-specs/patternflow/hud-ticker-rows.md (Patternflow preset, CC BY-SA 4.0 — prose-described idea only, no code).
 // A sci-fi control wall: lanes scroll in alternating directions at a few
 // speeds, each chopped into segments that carry a live widget — filling

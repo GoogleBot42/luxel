@@ -1,4 +1,5 @@
 // name: Millipede
+// tags: both, nature
 // Clean-room reimplementation from the prose spec docs/pattern-specs/millipede-1d-2d-controls.md
 // — reimagined, not a replica.
 // A millipede: plated segments that bunch and stretch as a gait wave runs up
