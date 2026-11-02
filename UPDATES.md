@@ -29,6 +29,69 @@ red | green read off the n×1 stage, the stored boxes, the segment box editor,
 the text-row note and `Add to scene ▸` in the editor's ⋯. `tabwalk` now
 fails on a missing Scenes/Sprites tab on either shape. The S2e mock's strip
 menu and the `S2estrip` mockdiff frame now carry the `Add to scene` row.
+## 2026-11-02 — The first strip scenes (Gitea #1018)
+
+Three scenes written for a strip now that scenes composite on one (#985,
+PR #1024), each declared with a `# layout: strip` comment line:
+
+- **`strip-zones` "Fire & Water"** — fire on pixels 0..74 over the sea
+  (Ocean, tropical, more foam) mirrored along the whole strip, and a warm
+  seam glow from three nested `add` colour boxes whose core breathes on a
+  4 s track. Authored for 150 px; the seam stays at pixel 75, so 300 px is
+  75 px of fire and 225 of sea, and 60 px is all fire (said in its header).
+- **`strip-bulbs` "Bulb Strip"** — the new 8×1 `bulb-string-8x1` sprite
+  (red/green/blue/gold, two frames trading which pair glows) tiled with a
+  zero box over a near-black wash: any strip length, nothing typed in.
+- **`strip-colour-fade` "Colour Fade"** — the "fade between N colours"
+  family as one greyscale source and a ramp: new `library/grey-fade.js`
+  (every grey black→white→black, in unison or as travelling waves;
+  strip = gradientRange spans between the wave's corners, panel = live
+  palette over an axis canvas) under a warm 4-stop ramp, the same source
+  under a cool ramp on top, crossfaded on a 60 s track. The cool stops sit
+  next to the warm ones on the wheel so the crossing does not go through
+  grey. Whole-strip boxes, so it looks the same at 60, 150 and 300 px.
+
+`scenes.json` `kind` is now `"strip"` for a scene whose source declares
+`# layout: strip` and `"grid"` otherwise (declared, not inferred: a scene
+of whole-layout boxes fits both shapes). `check-sprite-scene-library.mjs`
+refuses a bad or repeated `# layout:` line and, on a strip scene, a box
+that is not a segment, a keyframe moving `y` off 0, or a text layer. The
+41 shipped scenes keep their `kind` and wire bytes (scenes.json entries
+compared before/after). `tools/verify/scene-sheet.mjs --size WxH` adds
+rectangles and, at `Wx1`, a strip waterfall; `--size N` output is
+byte-identical (all 41 64x64 PNGs compared).
+
+Found on the way: a zero `w` with `x > 0` resolves to the layout's width,
+so a flipped `75 0 0 0` segment mirrors over a box that overhangs the end
+and draws black — Gitea #1026 (the README's "rest of the strip" wording
+now carries the caveat; `strip-zones` flips a whole-strip base instead).
+
+## 2026-11-02 — Library polish batch from the host review (15 patterns, 3 sprites)
+
+Fixes for what the 2026-11-02 review page found. **Panel forms** for the four
+renderBulk-only strip patterns that read as raster bands on a panel tile
+(sparkler: a slanted wire burning down, radial spray; sparks: a grinder fan /
+centre fountain / crossing corner jets under gravity, skidding on the floor;
+starburst: comets bursting out and falling in along a turning star's spokes;
+stacker: blocks dropping into columns, each column on its own round) — each
+branches on `has2DMap()` and exports `render(index)`, and its 144 px strip
+waterfall is byte-identical to before. **No black gaps**: butterfly-2d relays
+two butterflies on a one-at-a-time panel; fireflies idle at a faint glow
+between flashes, start phased apart, sync only part of the swarm and are
+denser and larger on small panels; sunrise-alarm-clock's dawn grows out of
+the night-sky colour with the stars fading through it (the black frames at
+each end of the twilight are gone); turmites starts the next colony at once
+while the old one crumbles cell by cell; typing-heatmap-2d lands two keys on
+frame 0; marbling opens with nine drops pre-baked on three centres; moon-phase
+has a brighter earthshine floor so new moon reads. **Strips**: starfield-2d
+has real strip skies (warp bursting from a wandering vanishing point,
+twinkling drift with meteors, long-exposure trails); xorcery's lane clock
+speeds are no longer whole multiples of 8 (lane 7 never flipped bit 2 and sat
+static); raindrops' pool is the same water as the strip at rest, with ripples
+spreading both ways from the splash. Lamp's header says it is a utility.
+Sprites: bat (violet body, lilac wing edges), envelope (slate outline,
+blue-grey flap, red seal) and log-pile (lighter bark) redrawn for contrast;
+the three scenes that use them re-rendered at 64x64.
 
 ## 2026-11-02 — Library review page + scene/sprite contact-sheet tool
 
@@ -42,6 +105,7 @@ that export `render` beside `renderBulk`. Findings: no compile or runtime
 errors anywhere; 5 patterns with sub-second black gaps; most scenes authored in
 fixed 64x64 pixels fill only a quadrant of the 128x128 chain (feeds #997/#1011);
 four renderBulk-only strip patterns read as raster bands on a panel tile.
+
 ## 2026-11-02 — 128x128 `setRenderSize` pass: nine ambient patterns faster on the chain
 
 Jeremy approved rendering the slowest ambient patterns at <= 4,096 cells
@@ -62,6 +126,7 @@ docs/bench-seengreat-hub75-rendersize.md. The idiom is now in
 .claude/rules/library.md. Device found on sinc (`5eed1e55`) at brightness 10,
 re-activated by id; `/api/pattern`, `/api/pattern.lxp` and `/api/controls`
 read back byte-identical to the pre-run capture.
+
 ## 2026-11-02 — Scenes on 1-D strips: the engine half (Gitea #985)
 
 Jeremy approved #985 on 2026-11-02. A scene now composites on a strip: a
@@ -92,6 +157,19 @@ which changed its digest). Spec: docs/spec/scenes.md §2 "The canvas" and §4;
 tab on strips, the D10 device-e2e flip, and the editor's sprite-box
 normalisation, which still rewrites a `w = 0` tile box to the natural size)
 is the follow-up PR.
+
+## 2026-11-02 — Library review page + scene/sprite contact-sheet tool
+
+Every shipped pattern (32x32, 64x64, 144 px strip waterfall), scene (64x64 and
+128x128) and sprite was rendered on the host and published as one browsable
+review page with a keep/fix/drop + note field per item
+(claude-luxel-library-review.sites.neet.dev; notes export as JSON). New
+`tools/verify/scene-sheet.mjs` renders scenes/sprites the way the playground
+does; `tools/verify/sheet.mjs --strip N` adds the strip waterfall for files
+that export `render` beside `renderBulk`. Findings: no compile or runtime
+errors anywhere; 5 patterns with sub-second black gaps; most scenes authored in
+fixed 64x64 pixels fill only a quadrant of the 128x128 chain (feeds #997/#1011);
+four renderBulk-only strip patterns read as raster bands on a panel tile.
 
 ## 2026-11-02 — Library cleanup: generic arcade names, #1008 housekeeping, Patternflow note draft
 

@@ -23,7 +23,7 @@ export function triggerKeys() { burst = 6 }
 
 var CAP = 32
 var heat = array(CAP * CAP), scratch = array(CAP * CAP), show = array(CAP * CAP), caps = array(CAP * CAP)
-var cw = 0, chh = 0, acc = 0, burst = 0, quiet = 0
+var cw = 0, chh = 0, acc = 2, burst = 0, quiet = 0   // acc: two keys on the first frame
 var ev = array(4)
 
 setPalette([

@@ -7,6 +7,8 @@
 // previews a whole day in ~20 s; "Sunrise now" plays a wake-light sunrise over
 // the chosen minutes. Sky, clouds and vignette are built on 49 samples a frame
 // and laid down as 48 gradientRanges; the sun is an anti-aliased fillRangeAA.
+// Dawn grows out of the night sky (and dusk back into it) with the stars fading
+// through the half hour, so no transition passes through black.
 
 var HALF = 0.5                 // sunrise/sunset half-phase, hours
 var NS = 49                    // sky samples along the strip
@@ -21,6 +23,8 @@ noon[0] = 0.1; noon[1] = 0.24; noon[2] = 0.55
 sun[0] = 1; sun[1] = 0.88; sun[2] = 0.6
 cloud[0] = 0.3; cloud[1] = 0.32; cloud[2] = 0.38
 var BLACK = array(3)
+var NIGHT = array(3)           // the starry-night base the dawn grows out of
+NIGHT[0] = 0.004; NIGHT[1] = 0.006; NIGHT[2] = 0.03
 
 export function hsvPickerEastDawnColor(h, s, v) { hsv2rgb(h, s, v, east) }
 export function hsvPickerWestDawnColor(h, s, v) { hsv2rgb(h, s, v, west) }
@@ -65,7 +69,7 @@ export function togglePreviewOnStart(v) { preview = v; if (!v) demo = 0 }
 export function toggleNightStars(v) { stars = v }
 
 var demo = 1, simTime = wakeTime - 0.6, showT = -1
-var msAccum = 0, lastSec = -1, tod = 0, dark = 0, t = 0
+var msAccum = 0, lastSec = -1, tod = 0, dark = 0, t = 0, starAmt = 0
 var skyL = array(3), skyR = array(3), cloudC = array(3)
 var ENV = array(49), TR = array(49), TG = array(49), TB = array(49)
 var sunLo = -9, sunHi = -9, sunEnv = 0
@@ -104,10 +108,13 @@ export function beforeRender(delta) {
   if (!(demo && preview) && showT < 0) demo = 0
 
   dark = 0
+  starAmt = 0
+  var base = stars ? NIGHT : BLACK
   if (tod < wake - HALF || tod > sleepTime + HALF) dark = 1
   else if (tod < wake) {
     p = (tod - (wake - HALF)) / HALF
-    mix3(BLACK, east, p, skyL); mix3(BLACK, west, p, skyR); mix3(BLACK, east, p, cloudC)
+    starAmt = 1 - p
+    mix3(base, east, p, skyL); mix3(base, west, p, skyR); mix3(base, east, p, cloudC)
   } else if (tod < wake + HALF) {
     p = (tod - wake) / HALF
     mix3(east, noon, p, skyL); mix3(west, noon, p, skyR); mix3(east, cloud, p, cloudC)
@@ -118,7 +125,8 @@ export function beforeRender(delta) {
     mix3(noon, west, p, skyL); mix3(noon, east, p, skyR); mix3(cloud, east, p, cloudC)
   } else {
     p = (tod - sleepTime) / HALF
-    mix3(west, BLACK, p, skyL); mix3(east, BLACK, p, skyR); mix3(east, BLACK, p, cloudC)
+    starAmt = p
+    mix3(west, base, p, skyL); mix3(east, base, p, skyR); mix3(east, base, p, cloudC)
   }
   if (dark) return
 
@@ -143,20 +151,25 @@ export function beforeRender(delta) {
 // Luxel always runs renderBulk.
 export function render(index) { hsv(0, 0, 0) }
 
+// the twinkling stars, added over whatever sky is down, at strength `amt`
+function drawStars(n, amt) {
+  for (var i = 0; i < n; i++) {
+    var hs = hash(i * 3.7)
+    if (hs <= 0.9) continue
+    var tw = 0.18 * wave(t / (3 + hs * 4) + hs * 9) * amt
+    rgb(tw, tw, tw)
+    fillRangeAA(i, i + 1, 1)
+  }
+}
+
 var HC = array(3)
 export function renderBulk() {
   var n = pixelCount
   if (dark) {
     if (!stars) { clear(); return }
-    rgb(0.004, 0.006, 0.03)
+    rgb(NIGHT[0], NIGHT[1], NIGHT[2])
     fill()
-    for (var i = 0; i < n; i++) {
-      var hs = hash(i * 3.7)
-      if (hs <= 0.9) continue
-      var tw = 0.18 * wave(t / (3 + hs * 4) + hs * 9)
-      rgb(0.004 + tw, 0.006 + tw, 0.03 + tw)
-      setPixel(i)
-    }
+    drawStars(n, 1)
     return
   }
   // sample k sits on pixel k * (n - 1) / 48: one HSV gradientRange per pair of
@@ -176,4 +189,5 @@ export function renderBulk() {
   rgb(sun[0] * sunEnv, sun[1] * sunEnv, sun[2] * sunEnv)   // the sun, blooming: added twice
   fillRangeAA(sunLo, sunHi, 1)
   fillRangeAA(sunLo, sunHi, 1)
+  if (stars && starAmt > 0) drawStars(n, starAmt)
 }
