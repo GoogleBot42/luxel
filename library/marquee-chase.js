@@ -1,4 +1,5 @@
 // name: Marquee
+// tags: both, ambient
 // Curated original (hand-written showcase of the Luxel language/builtins); folds in the
 // clean-room idea of docs/pattern-specs/three-red-pixels-mathy.md — reimagined, not a replica.
 // A theatre marquee: discrete incandescent bulbs every few pixels, wired on three

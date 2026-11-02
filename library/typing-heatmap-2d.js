@@ -1,4 +1,5 @@
 // name: Touch Glow
+// tags: panel, ambient
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // A keyboard heatmap: every touch deposits heat that spreads to its neighbours
 // and cools with a set half-life, through a thermal ramp (black, navy, magenta,

@@ -54,7 +54,13 @@
   import { normalizePoints, paintBar, paintGrid, paintPoints, type PointRig } from "../lib/draw";
   import { Engine, Luxel } from "../lib/luxel";
   import { gatedFetch } from "../lib/fetchgate";
-  import { shapeMatches, themeMatches, type ShapeChoice } from "../lib/tags";
+  import {
+    shapeMatches,
+    tagShowsOn,
+    tagsFromSource,
+    themeMatches,
+    type ShapeChoice,
+  } from "../lib/tags";
   import {
     autoLayoutFor,
     captionFor,
@@ -176,7 +182,7 @@
           key: it.key,
           name: it.name,
           source: it.source,
-          tags: it.tags,
+          tags: it.tags ?? tagsFromSource(it.source),
           hint,
           guess: hint,
           dims: 0,
@@ -190,7 +196,9 @@
       }
       by.delete(it.key);
       prev.name = it.name;
-      prev.tags = it.tags;
+      // a device row's source streams in after its name — and with it the
+      // header's tags, which `tagShowsOn` reads for the split
+      prev.tags = it.tags ?? tagsFromSource(it.source);
       if (prev.source !== it.source) {
         // the source arrived (or changed) — the old engine is not this pattern
         prev.engine?.free();
@@ -237,7 +245,8 @@
   const kindDims = (kind: string | undefined): PatternDims =>
     kind === "grid" ? 2 : kind === "cloud" ? 3 : kind === "strip" ? 1 : 0;
   const inThisGrid = (t: Tile, ld: number, split: boolean): boolean =>
-    !split || projectionCompatible(dimsOf(t), ld) === (only === "compatible");
+    !split ||
+    (projectionCompatible(dimsOf(t), ld) || tagShowsOn(t.tags, ld)) === (only === "compatible");
 
   /** The tiles this grid owns. A split grid RENDERS only its half rather
    *  than hiding the other one: both halves are mounted over the same item

@@ -1,4 +1,5 @@
 // name: Interference
+// tags: both, ambient
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/2d-sinc-theta-theta.md — reimagined, not a replica.
 // Point sources orbit the panel and their expanding ripples interfere. RGB sinc:
 // each source rings in its own evenly spaced primary under a 1/r sinc envelope,

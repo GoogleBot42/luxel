@@ -1,4 +1,5 @@
 // name: God Rays
+// tags: panel, nature
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/sun-rays-through-trees.md — reimagined, not a replica.
 // Low sun just above the top edge, glaring through a band of silhouetted leaves:
 // warm shafts fan across the whole panel, swaying and flickering as the canopy

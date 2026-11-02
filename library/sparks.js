@@ -1,4 +1,5 @@
 // name: Sparks
+// tags: strip, ambient
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/sparks.md, sparks-center.md — reimagined, not a replica.
 // A grinder's shower of sparks along a strip. Each spark leaves its origin
 // white-hot, flies fast and slows as it burns down, cooling through orange to a

@@ -1,4 +1,5 @@
 // name: Xorcery
+// tags: both, ambient, retro
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/xorcery-2d-3d.md,
 // docs/pattern-specs/sierpinski-rainbow-2d.md — reimagined, not a replica; the Tapestry op is
 // original work from the prose idea spec docs/pattern-specs/patternflow/retro-digital-tapestry.md

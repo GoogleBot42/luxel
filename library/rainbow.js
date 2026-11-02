@@ -1,4 +1,5 @@
 // name: Rainbow
+// tags: both, ambient
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/rainbow.md,
 // rainbow-v2.md, rainbow-fonts.md, regenbogendrogen.md, rainbow-pinwheel.md,
 // chasing-rainbows-hsluv.md, ryb-colors.md — reimagined, not a replica.

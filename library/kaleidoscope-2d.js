@@ -1,4 +1,5 @@
 // name: Kaleidoscope
+// tags: panel, ambient
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/zoom-kaleidoscope.md — reimagined, not a replica (stained-glass source: from a prose description of "Perlin Kaleidoscope 2D", no source consulted).
 // A live source folded into N mirrored wedges that spin. Source 0: domain-warped
 // noise and three orbiting blobs quantised into stained-glass cells with dark

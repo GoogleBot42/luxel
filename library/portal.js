@@ -1,4 +1,5 @@
 // name: Portal
+// tags: both, ambient
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/portal.md, novas.md, scrolls.md — reimagined, not a replica.
 // Energy pulses well up and spread; their summed field runs through a banded
 // gradient, so every pulse wears nested contour rings. On a panel the pulses are

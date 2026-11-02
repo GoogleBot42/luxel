@@ -250,7 +250,9 @@ const THREE_CHANNELS = [
 // layout-filter checks (#562/#563) never hard-code a pattern name: one the
 // 120 px strip mirror can show, and one it cannot.
 const galleryJson = JSON.parse(fs.readFileSync("public/gallery.json", "utf8"));
-const grid2d = galleryJson.find((p) => p.kind === "grid");
+// A PANEL-tagged one: a `both` file is kind "grid" too (it calls coordinate
+// builtins on its panel branch) and its tag keeps it on a strip (lib/tags.ts).
+const grid2d = galleryJson.find((p) => p.kind === "grid" && (p.tags?.[0] ?? "panel") === "panel");
 const strip1d = galleryJson.find((p) => p.kind === "strip");
 // A render3D-only pattern, if the library still has one (null = the
 // "3D is filtered on a panel" half of #538 is vacuous, not failing).
@@ -2542,9 +2544,15 @@ try {
     );
 
     // the library's TAG row (`// tags:` lines, lib/tags.ts): a strip console
-    // opens the shape control on Strip — the strip + both patterns — and All
-    // gives back everything the Layout can show. Put back in `finally`: the
+    // opens the shape control on Strip, which is EVERY strip + both pattern
+    // (a `both` file reports 2-D to the engine, #1027 — the tag is what keeps
+    // it on a strip, lib/tags.ts `tagShowsOn`); Panel drops to the `both`
+    // ones; All gives the full count back, which on a strip is the same set
+    // (a strip never shows a panel pattern, #538). Put back in `finally`: the
     // pick persists per device, and later sections count library tiles.
+    const shapeOfEntry = (p) => (p.tags ?? [])[0];
+    const wantStrip = galleryJson.filter((p) => ["strip", "both"].includes(shapeOfEntry(p))).length;
+    const wantBoth = galleryJson.filter((p) => shapeOfEntry(p) === "both").length;
     try {
       const tagState = () =>
         page.evaluate(() => {
@@ -2559,20 +2567,24 @@ try {
           };
         });
       const onStrip = await tagState();
+      await page.click('[data-role="lib-shape-panel"]');
+      await sleep(800);
+      const onPanel = await tagState();
       await page.click('[data-role="lib-shape-all"]');
       await sleep(800);
       const onAll = await tagState();
       check(
-        "tags: a strip console's library opens on Strip (strip + both), and All restores the full count",
+        "tags: a strip console's library opens on Strip (every strip + both pattern); Panel drops to the both ones; All restores the full count",
         onStrip.on === "lib-shape-strip" &&
           onStrip.offShape === 0 &&
-          onStrip.shown > 0 &&
+          onStrip.shown === wantStrip &&
           onStrip.chip === onStrip.shown &&
-          onStrip.shown === libOnStrip.shown &&
+          onPanel.shown === wantBoth &&
+          onPanel.shown < onStrip.shown &&
           onAll.on === "lib-shape-all" &&
-          onAll.shown >= onStrip.shown &&
+          onAll.shown === onStrip.shown &&
           onAll.chip === onAll.shown,
-        JSON.stringify({ onStrip, onAll }),
+        JSON.stringify({ wantStrip, wantBoth, onStrip, onPanel, onAll }),
       );
     } finally {
       await page.click('[data-role="lib-shape-strip"]');
@@ -4073,14 +4085,20 @@ try {
     els.map((e) => (e.querySelector(".pknm")?.textContent ?? "").trim()),
   );
   const kindOf = new Map(galleryJson.map((p) => [p.name, p.kind]));
+  const shapeTag = new Map(galleryJson.map((p) => [p.name, (p.tags ?? [])[0]]));
   // "any" is the generator's DIMENSIONLESS kind — an index-space
   // `renderBulk` that declares no geometry and is native on EVERY Layout, so
   // a strip offers it exactly as it offers a "strip" one. Only "grid" and
-  // "cloud" are the ones a 1D fixture must hide (#538/#629).
+  // "cloud" are the ones a 1D fixture must hide (#538/#629) — unless the
+  // file's `// tags:` line says `both`: a strip + panel file is kind "grid"
+  // (its panel branch calls coordinate builtins, #1027) and runs its strip
+  // branch here (lib/tags.ts `tagShowsOn`).
+  const fitsStrip = (n) =>
+    ["strip", "any", undefined].includes(kindOf.get(n)) || shapeTag.get(n) === "both";
   check(
     "playlist: every library row the picker offers fits the layout",
-    offered.every((n) => ["strip", "any", undefined].includes(kindOf.get(n))),
-    offered.filter((n) => kindOf.get(n) === "grid" || kindOf.get(n) === "cloud").join(", "),
+    offered.every(fitsStrip),
+    offered.filter((n) => !fitsStrip(n)).join(", "),
   );
 
   await page.$eval('[data-role="picker-search"]', (el) => {

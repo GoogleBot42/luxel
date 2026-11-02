@@ -19,6 +19,7 @@ import {
   shapeMatches,
   shapeOf,
   SHAPES,
+  tagShowsOn,
   themeCounts,
   themeMatches,
   THEMES,
@@ -43,6 +44,14 @@ test("shape control: Strip offers strip + both, Panel offers panel + both", () =
   assert.equal(shapeMatches(undefined, "panel"), true);
   assert.equal(shapeOf(["ambient", "panel"]), "panel");
   assert.equal(shapeOf(undefined), null);
+});
+
+test("a `both` tag puts a strip + panel file on a strip Layout, and nothing else moves", () => {
+  assert.equal(tagShowsOn(["both", "ambient"], 1), true);
+  assert.equal(tagShowsOn(["both", "ambient"], 2), false);
+  assert.equal(tagShowsOn(["panel", "ambient"], 1), false);
+  assert.equal(tagShowsOn(["strip", "ambient"], 1), false);
+  assert.equal(tagShowsOn(undefined, 1), false);
 });
 
 test("theme chips: OR over the picked themes, none picked = all", () => {

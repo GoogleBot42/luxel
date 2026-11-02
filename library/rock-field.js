@@ -1,4 +1,5 @@
 // name: Rock Field
+// tags: panel, game, retro
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // Attract-mode vector arcade: jagged rocks tumble across a wrap-around field while a little
 // triangle ship turns, leads its shots at the nearest rock and fires; hits split big rocks

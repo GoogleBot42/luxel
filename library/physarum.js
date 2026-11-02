@@ -1,4 +1,5 @@
 // name: Physarum
+// tags: panel, nature
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // Slime-mould agents sniff a shared trail map at three angles, turn toward the
 // strongest scent, step and deposit; one agent per cell (a blocked agent turns

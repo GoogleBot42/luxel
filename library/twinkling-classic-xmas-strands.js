@@ -1,4 +1,5 @@
 // name: Classic Christmas Strands
+// tags: strip, holiday
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/twinkling-classic-xmas-strands.md,
 // static-christmas-lights-4-colors.md — reimagined, not a replica.
 // An old-fashioned light strand: every bulb keeps its colour (a hashed walk that never

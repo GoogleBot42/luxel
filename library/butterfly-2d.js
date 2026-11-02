@@ -1,4 +1,5 @@
 // name: Butterfly
+// tags: panel, nature
 // Clean-room reimplementation from the prose spec docs/pattern-specs/butterfly-2d.md
 // — reimagined, not a replica.
 // Butterflies rise in from below, flutter harder and harder, and lift off the

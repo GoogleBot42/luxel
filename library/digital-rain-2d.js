@@ -1,4 +1,5 @@
 // name: Digital Rain
+// tags: both, retro
 // Clean-room reimplementation from the prose specs docs/pattern-specs/matrix-green-waterfall-2d.md, matrix-rain.md — reimagined, not a replica.
 // Falling code: one stream per pixel column on a panel, a handful of drops on
 // a strip. Near-white heads leave tails that decay through fade() — the frame

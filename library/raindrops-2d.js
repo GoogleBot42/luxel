@@ -1,4 +1,5 @@
 // name: Raindrops
+// tags: both, nature
 // Clean-room reimplementation from the prose spec docs/pattern-specs/raindrops-2d.md — reimagined, not a replica.
 // Rain on a pool seen from above. Sim mode: a two-buffer wave equation on a
 // canvas of up to 32x32 cells (stencil2D + feedback, fixed 30 Hz step), lit

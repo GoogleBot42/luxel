@@ -1,4 +1,5 @@
 // name: Lamp
+// tags: both, ambient
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/utilitycolortemp.md,
 // single-color-picker-wide-or-spot.md, naturallightsync.md, real-world-lights.md — reimagined, not a replica.
 // The fixture as a room light. Color: any picked colour. White: a blackbody white

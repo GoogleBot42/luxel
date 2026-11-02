@@ -1,4 +1,5 @@
 // name: Orbits
+// tags: both, nature
 // Clean-room reimplementation from the prose spec docs/pattern-specs/neutronorbit.md
 // (the strip atom) — reimagined, not a replica; the panel modes are a curated original.
 // Star system: planets on real (leapfrog, softened gravity) elliptical orbits,

@@ -1,4 +1,5 @@
 // name: Brick Breaker
+// tags: panel, game, retro
 // Clean-room reimplementation from the prose spec docs/pattern-specs/brick-breaker-2d.md — reimagined,
 // not a replica. Power-ups, combos and the item-chasing AI: original work from the prose idea spec
 // docs/pattern-specs/patternflow/brick-breaker-arcade.md (Patternflow preset, CC BY-SA 4.0 —

@@ -1,4 +1,5 @@
 // name: Halftone
+// tags: panel, ambient
 // Original work from the prose idea specs docs/pattern-specs/patternflow/pulse-dot-grid.md, wave-cell-grid.md, tri-march.md, glyph-mosaic.md and hatched-warp.md (Patternflow presets, CC BY-SA 4.0 — prose-described ideas only, no code).
 // A flowing field (simplex noise plus a diagonal swell) sampled once per CELL
 // and printed as shapes: halftone dots, squares, a marching triangle lattice,

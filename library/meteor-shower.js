@@ -1,4 +1,5 @@
 // name: Meteor Shower
+// tags: both, ambient, nature
 // Clean-room reimplementation from the prose specs docs/pattern-specs/meteor-shower.md,
 // rainbow-comet.md, pew-pew-pew.md, christmaspewpew.md, snake.md — reimagined, not a replica.
 // Streaks with white-hot heads and tails that deepen in colour as they fade: a

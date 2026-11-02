@@ -1,4 +1,5 @@
 // name: Searchlights
+// tags: panel, ambient
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/all-lasers-fire.md,
 // 3d-rotation-spotlights.md, spotlights-rotation-3d.md — reimagined, not a replica.
 // Mode 0: soft searchlight cones sweep up from the bottom edge into a hazy night sky and

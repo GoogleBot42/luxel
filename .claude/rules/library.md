@@ -60,6 +60,11 @@ paths:
   tools/verify/decisions.json entry — the review UI's "addressed" chip is
   how Jeremy finds patterns awaiting re-review. Re-deciding clears the
   stamp automatically.
+- Every pattern's SECOND line is `// tags: <shape>, <theme>[, …]` (closed
+  vocabulary in library/README.md "Gallery tags"; `tools/check-library.sh`
+  fails a bad one). `both` means the file looks right on a strip AND a panel —
+  it is also what keeps a `has2DMap()` file (which the engine reports 2-D,
+  #1027) in a strip console's Library.
 - New curated originals: `// name:` header first line, provenance comment
   ("Curated original …", not a port), controls from day one, no
   docs/pattern-specs entry. Long-running exported counters wrap negative

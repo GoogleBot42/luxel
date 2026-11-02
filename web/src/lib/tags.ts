@@ -26,6 +26,17 @@ export type ShapeChoice = "all" | "strip" | "panel";
 export const isShape = (t: string): t is ShapeTag => (SHAPES as readonly string[]).includes(t);
 export const isTheme = (t: string): t is ThemeTag => (THEMES as readonly string[]).includes(t);
 
+/** The `// tags:` line right after `// name:` in a pattern's SOURCE, shape
+ *  first, unknown words dropped — what gen-gallery writes into gallery.json,
+ *  for a pattern that did not come from it (a library pattern saved to a
+ *  device keeps its header). `undefined` when there is no line. */
+export function tagsFromSource(source: string | undefined): string[] | undefined {
+  const m = source?.match(/^\/\/ name:.*\r?\n\/\/ tags:(.*)$/m);
+  if (!m) return undefined;
+  const words = [...new Set((m[1] ?? "").split(",").map((w) => w.trim()))];
+  return [...words.filter(isShape), ...words.filter(isTheme)];
+}
+
 /** The shape tag of an entry, or `null` for an untagged one (a device or
  *  corpus pattern, or an old bundle's gallery.json). */
 export function shapeOf(tags: readonly string[] | undefined): ShapeTag | null {
@@ -39,6 +50,19 @@ export function shapeMatches(tags: readonly string[] | undefined, choice: ShapeC
   if (choice === "all") return true;
   const s = shapeOf(tags);
   return s === null || s === "both" || s === choice;
+}
+
+/**
+ * Does the TAG put this pattern on a Layout the compatibility split (#538)
+ * would keep it off? Only one case: `both` on a strip. A strip + panel file
+ * branches on `has2DMap()` and exports `render(index)` beside a `renderBulk`
+ * that calls coordinate builtins, so the engine reports it 2-D on every rig
+ * (`preferred_dims`, Gitea #1027) and a strip console's Library hid all of
+ * them — though the device runs their strip branch there. The tag is the
+ * author's word that it looks right on a strip.
+ */
+export function tagShowsOn(tags: readonly string[] | undefined, layoutDims: number): boolean {
+  return layoutDims === 1 && shapeOf(tags) === "both";
 }
 
 /** OR over the picked themes; none picked = every theme. An untagged entry

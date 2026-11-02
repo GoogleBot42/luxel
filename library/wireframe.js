@@ -1,4 +1,5 @@
 // name: Wireframe
+// tags: panel, retro
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // A vector solid tumbles in perspective — cube, octahedron, icosahedron,
 // torus knot — and every few seconds its edges fly apart and re-dock as the

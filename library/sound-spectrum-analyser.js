@@ -1,4 +1,5 @@
 // name: Spectrum Analyzer
+// tags: both, sound
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/sound-spectrum-analyser.md, sound-music-spectrum-visualizer.md, audio-volume-meter.md — reimagined, not a replica.
 // The bar-graph analyser with falling peak caps, or (Mode 1) a loudness VU.
 // Panel: bars rise from the bottom; the VU is a square that grows from the

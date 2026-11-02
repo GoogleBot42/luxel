@@ -1,4 +1,5 @@
 // name: Notification Ripple
+// tags: both, ambient
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // A home-automation signal light. It rests in a slow OKLCH breathe; an injected
 // event's type picks a channel — 1 blue ring burst (doorbell), 2 green sweep (done),

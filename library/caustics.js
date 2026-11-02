@@ -1,4 +1,5 @@
 // name: Pool Caustics
+// tags: both, nature
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // Sunlight through a rippling pool: a web of sharp bright lines dancing over
 // tiles with faint grout. Two simplex layers drift in different directions;

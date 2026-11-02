@@ -1,4 +1,5 @@
 // name: Sunrise Alarm
+// tags: strip, clock
 // Clean-room reimplementation from the prose spec(s) docs/pattern-specs/sunrise-alarm-clock.md, sunrise.md — reimagined, not a replica.
 // The strip is a slice of sky living through your day: half an hour before wake
 // time a dawn blooms (red in the east, navy in the west) and resolves into a

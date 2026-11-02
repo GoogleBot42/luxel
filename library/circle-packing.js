@@ -1,4 +1,5 @@
 // name: Circle Packing
+// tags: panel, ambient
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // Bubbles spawn in free space and inflate until they kiss a neighbour or a
 // wall, then freeze with a glossy rim in a harmonious OKLCH palette. Once the

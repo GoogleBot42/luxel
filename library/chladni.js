@@ -1,4 +1,5 @@
 // name: Chladni Plate
+// tags: panel, nature
 // Curated original (hand-written showcase of the Luxel language/builtins).
 // Sand on a vibrating plate: it gathers on the nodal lines of a standing wave,
 // cos(n pi x)cos(m pi y) -/+ cos(m pi x)cos(n pi y), and the figure melts into the
