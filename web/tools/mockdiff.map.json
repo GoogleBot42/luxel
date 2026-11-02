@@ -7097,6 +7097,174 @@
         }
       ]
     },
+    "S7j": {
+      "title": "Scene editor — a design-size scene (Fit 32 = `U 32 32`) on the 64x64 matrix: Layout chooser, box unit line + Pin to pixels, Preview at",
+      "width": 1200,
+      "height": 1000,
+      "app": {
+        "target": "scenes",
+        "route": "#/scenes",
+        "steps": [
+          {
+            "waitGone": "[data-role=\"boot\"]",
+            "required": false
+          },
+          {
+            "waitFor": "[data-role=\"scenes-grid\"]"
+          },
+          {
+            "sleep": 1500
+          },
+          {
+            "js": "document.querySelectorAll('[data-role=\"scene-tile-edit\"]')[1].click()"
+          },
+          {
+            "waitFor": "[data-role=\"scene-editor-view\"]:not([hidden])"
+          },
+          {
+            "sleep": 1600
+          },
+          {
+            "click": "[data-role=\"scene-layer\"][data-layer=\"4\"] [data-role=\"scene-layer-pick\"]"
+          },
+          {
+            "sleep": 600
+          },
+          {
+            "click": "[data-role=\"scene-layout-32\"]"
+          },
+          {
+            "sleep": 500
+          },
+          {
+            "type": "[data-role=\"scene-box-y\"]",
+            "value": "12"
+          },
+          {
+            "type": "[data-role=\"scene-box-w\"]",
+            "value": "32"
+          },
+          {
+            "sleep": 900
+          }
+        ]
+      },
+      "allow": [
+        {
+          "element": "preview-dims",
+          "property": "text",
+          "why": "the mock's `64x64 · 24 fps on device` carries the mirror's live frame rate; the wording and the separator match exactly (S7's own allow)"
+        },
+        {
+          "element": "pvat",
+          "property": "padding-right",
+          "why": "a bare (`appearance:none`) <select> reserves no room for the chevron it draws as background art, so the app pads 20px on the right where the mock's inert div draws `▾` as a glyph inside its 7px padding; the box width matches"
+        }
+      ],
+      "elements": [
+        {
+          "id": "lyt",
+          "mock": ".lyt",
+          "app": "[data-role=\"scene-layout\"]",
+          "note": "the Layout chooser, after the transport (S7j)"
+        },
+        {
+          "id": "lytlab",
+          "mock": ".lytlab",
+          "app": "[data-role=\"scene-layout\"] .lytlab",
+          "text": true
+        },
+        {
+          "id": "lytseg",
+          "mock": ".lytseg",
+          "app": "[data-role=\"scene-layout\"] .lytseg"
+        },
+        {
+          "id": "lytseg-on",
+          "mock": ".lytseg > div.on",
+          "app": "[data-role=\"scene-layout-32\"]",
+          "text": true,
+          "note": "the recipe clicks Fit 32"
+        },
+        {
+          "id": "lytseg-off",
+          "mock": ".lytseg > div",
+          "app": "[data-role=\"scene-layout-px\"]",
+          "text": true
+        },
+        {
+          "id": "lytseg-panel",
+          "mock": ".lytseg > div:last-child",
+          "app": "[data-role=\"scene-layout-panel\"]",
+          "text": true
+        },
+        {
+          "id": "save",
+          "mock": ".edhdr .btn.primary",
+          "app": "[data-role=\"scene-save\"]",
+          "text": true,
+          "note": "mock copy: `Save` — the recipe's Layout switch and box edits leave the scene dirty"
+        },
+        {
+          "id": "preview-dims",
+          "mock": ".ccol .rdim",
+          "app": "[data-role=\"scene-preview-dims\"]",
+          "text": true,
+          "noBoxW": true,
+          "note": "the width follows the live fps digits"
+        },
+        {
+          "id": "pvat",
+          "mock": ".sel.pvat",
+          "app": "[data-role=\"scene-preview-at\"]"
+        },
+        {
+          "id": "stage",
+          "mock": ".stage",
+          "app": "[data-role=\"scene-editor-view\"] .stage"
+        },
+        {
+          "id": "marq",
+          "mock": ".marq",
+          "app": "[data-role=\"scene-marquee\"]",
+          "note": "text box 0 12 32 8 in a 32x32 design = 0 24 64 16 on the 64x64 stage"
+        },
+        {
+          "id": "lythint",
+          "mock": ".lythint",
+          "app": "[data-role=\"scene-layout-hint\"]",
+          "text": true
+        },
+        {
+          "id": "boxrow",
+          "mock": ".boxrow",
+          "app": "[data-role=\"scene-box\"]"
+        },
+        {
+          "id": "box-input",
+          "mock": ".boxrow .inp",
+          "app": "[data-role=\"scene-box-x\"]"
+        },
+        {
+          "id": "boxunits",
+          "mock": ".boxunits",
+          "app": "[data-role=\"scene-box-units\"]"
+        },
+        {
+          "id": "bzoom",
+          "mock": ".boxunits .bzoom",
+          "app": "[data-role=\"scene-box-zoom\"]",
+          "text": true
+        },
+        {
+          "id": "pin",
+          "mock": ".boxunits .pin",
+          "app": "[data-role=\"scene-box-units\"] .pin",
+          "text": true,
+          "note": "the checkbox itself wears the app's switch skin (the Clip row's); the label is what is measured"
+        }
+      ]
+    },
     "S2f": {
       "title": "Editor — the text builtins in completions and docs (matrix console)",
       "width": 1200,

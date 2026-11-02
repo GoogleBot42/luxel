@@ -470,6 +470,44 @@ The sprite-box normalisation no longer rewrites a `fit tile` layer's zero
 box: since #985 `w`/`h` 0 under `tile` is the whole layout on that axis, on
 every grid, not the sprite's natural size.
 
+## Scenes that fit any panel: Layout, Pin to pixels, Preview at ✅ (2026-11-02, Gitea #997)
+
+The console half of the design size (`U <w> <h>`, docs/spec/scenes.md §2
+"Design size"; design docs/design/scenes-designed-size.md; mockup **S7j**,
+and S7f amended for the phone header).
+
+* **Layout** — a segmented chooser in the scene editor's header bar:
+  `Pixels | Fit 32 | Fit 64 | This panel` on a panel, `Pixels | Fit 150 |
+  This strip` on a strip. `Pixels` is no `U` line; the others write
+  `U 32 32`, `U 64 64`, `U 150 1` or the device's own grid. Switching
+  converts nothing — the boxes keep their numbers, which now count in the new
+  unit — and one dim line under the preview says so after the switch. A `U`
+  none of the segments writes (hand-typed `U 48 40`) lights its own segment.
+  On a phone the chooser takes a second header row.
+* **Box fields** edit DESIGN units in a scene with a `U`. A line under them
+  says what a unit is on the canvas being previewed (`×2 on this panel`, from
+  the compositor's `layerRect().zoom`; `shrunk to fit` below the design size),
+  beside **Pin to pixels** — the layer's `X abs`, `grid pixels, 1:1` when on.
+  Both are absent in a `Pixels` scene.
+* **The marquee** is drawn where the layer REALLY draws: the compositor's
+  `layerRect(i)`, so the `U` mapping and the keyframe track are both applied —
+  a keyed layer's outline follows it (#996 item 1's drawing half). In the
+  second a pattern scene waits before it rebuilds, the outline is the record
+  mapped in TS (`mapRect`, pinned against the engine by
+  `web/tests/scenePlace.test.mjs`), so a drag still follows the pointer. A drag
+  moves the box in whole design units (cells ÷ the scale); on a keyed layer it
+  still edits the `L` origin, which every `=` key inherits.
+* **Preview at** — beside the frame-rate picker: the device's own canvas,
+  32×32, 64×64, 128×128, and 150×1 on a strip or for a one-row design. It
+  re-rigs the editor's preview compositor only: nothing is written to the
+  device, and the box numbers, the Layout choices and the live push all stay
+  the device's.
+
+The pure half lives in `web/src/lib/scenePlace.ts` (choices, scale, hint,
+sizes, `mapRect`); `BoxRow` reads the scene's design size through Svelte
+context (`components/scene/placeCtx.ts`) rather than through four inspectors'
+props.
+
 ## Status-bar frame rate ✅ (Gitea #381)
 
 The counter at the right of the header (`data-role="fps"`) shows **the device's

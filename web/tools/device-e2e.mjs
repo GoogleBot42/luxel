@@ -5503,6 +5503,16 @@ try {
           JSON.stringify(marq),
         );
         await stPage.screenshot({ path: `${shotDir}/device-e2e-strip-scene-editor.png` });
+        // the design size's Layout chooser on one row (#997): Fit 150 and This
+        // strip instead of the panel's 32/64
+        const stLabels = await stPage.$$eval('[data-role="scene-layout"] button', (els) =>
+          els.map((e) => (e.textContent ?? "").trim()).join("|"),
+        );
+        check(
+          "strip scenes: the Layout chooser reads Pixels | Fit 150 | This strip (#997)",
+          stLabels === "Pixels|Fit 150|This strip",
+          stLabels,
+        );
 
         await stPage.click('[data-role="scene-save"]');
         await sleep(1000);
@@ -5561,6 +5571,180 @@ try {
       } finally {
         await stPage.close();
         stDev.kill();
+      }
+    }
+
+    // ---- scenes that fit any panel: the design size (Gitea #997) ---------
+    // Its own 64x64 mirror. The Layout chooser writes `U 32 32`, the box row
+    // says what a design unit is here (×2), `Pin to pixels` writes `X abs`,
+    // `Preview at` re-rigs the PREVIEW without one device write, the outline
+    // tracks a keyframed layer (drawn from `layerRect`, #996 item 1), and a
+    // `U` scene's thumbnail is mapped too (mockup S7j).
+    {
+      const DS_PORT = E2E.mirror.designScenes; // E2E_PORT + 56
+      const DS = `http://127.0.0.1:${DS_PORT}`;
+      const dsDev = spawn(
+        "../target/debug/luxel",
+        ["serve", ...NO_NETIN, "--port", String(DS_PORT), "--board", "panel", "--pixels", "4096"],
+        { stdio: ["ignore", "pipe", "inherit"] },
+      );
+      await new Promise((resolve, reject) => {
+        dsDev.stdout.on("data", (d) => String(d).includes("luxel serve:") && resolve());
+        dsDev.on("exit", () => reject(new Error("design-size mirror died")));
+        setTimeout(() => reject(new Error("design-size mirror start timeout")), 30000);
+      });
+      process.on("exit", () => dsDev.kill());
+      // a keyed dot over a wash, in PIXELS (no `U` yet): the track runs its x
+      // 2 → 22 → 2 over six seconds
+      const keyed =
+        "S - Design\nL color 0 0 0 0 normal 100 none fill 1\nN Wash\nK 101020\n" +
+        "L color 4 4 6 6 normal 100 none fill 1\nN Dot\nK 30a0ff\n" +
+        "M 0 2 2 = linear\nM 3000 22 2 = linear\nM 6000 2 2 = linear\n";
+      // designed at 16x16: on the 32x32 thumbnail rig its box lands at 16..24,
+      // where an unmapped one would sit at 8..12
+      const thumbScene = "S - Thumb\nU 16 16\nL color 8 8 4 4 normal 100 none fill 1\nK ff0000\n";
+      const dk = await fetch(`${DS}/api/scenes`, { method: "POST", body: keyed }).then((r) => r.json());
+      const dt = await fetch(`${DS}/api/scenes`, { method: "POST", body: thumbScene }).then((r) => r.json());
+      const dsPage = await browser.newPage();
+      const dsWrites = [];
+      dsPage.on("request", (r) => {
+        if (r.method() !== "GET" && r.url().startsWith(DS)) dsWrites.push(`${r.method()} ${r.url()}`);
+      });
+      try {
+        await dsPage.setViewport({ width: 1400, height: 950 });
+        await gotoConsole(dsPage, DS);
+        await dsPage.waitForSelector('[data-role="tab-scenes"]', { timeout: 15000 });
+        await dsPage.click('[data-role="tab-scenes"]');
+        const thumbSel = `[data-role="scene-tile"][data-scene="${dt.id}"] canvas`;
+        await dsPage.waitForSelector(thumbSel, { timeout: 10000 });
+        await sleep(2500);
+        const th = await dsPage.$eval(thumbSel, (c) => {
+          const g = c.getContext("2d");
+          const at = (fx, fy) =>
+            Array.from(g.getImageData(Math.floor(fx * c.width), Math.floor(fy * c.height), 1, 1).data).slice(0, 3);
+          return { size: `${c.width}x${c.height}`, mapped: at(0.625, 0.625), unmapped: at(0.3, 0.3) };
+        });
+        check(
+          "design size: a `U 16 16` scene's THUMBNAIL is mapped (its box in the middle, not the corner)",
+          th.mapped[0] > 150 && th.unmapped[0] < 60,
+          JSON.stringify(th),
+        );
+
+        await dsPage.$eval(`[data-role="scene-tile"][data-scene="${dk.id}"] [data-role="scene-tile-edit"]`, (el) =>
+          el.click(),
+        );
+        await dsPage.waitForSelector('[data-role="scene-editor-view"]:not([hidden])', { timeout: 10000 });
+        await sleep(1500);
+        await dsPage.click('[data-role="scene-layer"][data-layer="1"] [data-role="scene-layer-pick"]');
+        await sleep(400);
+        const before = await dsPage.evaluate(() => ({
+          on: document.querySelector('[data-role="scene-layout"] button.on')?.dataset.role ?? "",
+          labels: Array.from(document.querySelectorAll('[data-role="scene-layout"] button')).map((b) =>
+            (b.textContent ?? "").trim(),
+          ),
+          units: document.querySelector('[data-role="scene-box-units"]') !== null,
+        }));
+        check(
+          "design size: the header's Layout chooser reads Pixels | Fit 32 | Fit 64 | This panel, on Pixels, and a Pixels scene has no unit line",
+          before.on === "scene-layout-px" &&
+            before.labels.join("|") === "Pixels|Fit 32|Fit 64|This panel" &&
+            !before.units,
+          JSON.stringify(before),
+        );
+
+        await dsPage.click('[data-role="scene-layout-32"]');
+        await sleep(700);
+        const zoomTxt = await evalOr(dsPage, '[data-role="scene-box-zoom"]', (el) => (el.textContent ?? "").trim(), "");
+        const noteTxt = await evalOr(dsPage, '[data-role="scene-layout-hint"]', (el) => (el.textContent ?? "").trim(), "");
+        const boxNow = await dsPage.$$eval(
+          '[data-role="scene-box-x"], [data-role="scene-box-y"], [data-role="scene-box-w"], [data-role="scene-box-h"]',
+          (els) => els.map((e) => e.value).join(" "),
+        );
+        check(
+          "design size: Fit 32 on the 64x64 mirror — the box row reads ×2, the boxes keep their numbers and one line says so",
+          zoomTxt === "×2 on this panel" && boxNow === "4 4 6 6" && /kept their numbers/.test(noteTxt) && /32×32/.test(noteTxt),
+          `${zoomTxt} · ${boxNow} · ${noteTxt}`,
+        );
+        await dsPage.click('[data-role="scene-save"]');
+        await sleep(900);
+        const savedU = await fetch(`${DS}/api/scenes/${dk.id}`).then((r) => r.json());
+        check(
+          "design size: Save stores `U 32 32` (`space` [32,32]) on the device",
+          JSON.stringify(savedU.space) === "[32,32]",
+          JSON.stringify(savedU.space),
+        );
+
+        // the outline is where the layer IS: two instants of the track, the
+        // marquee's left edge against the dot's lit left edge in the frame
+        const sample = () =>
+          dsPage.evaluate(() => {
+            const v = document.querySelector('[data-role="scene-editor-view"]');
+            const c = v.querySelector('[data-role="scene-stage"]');
+            const m = v.querySelector('[data-role="scene-marquee"]').getBoundingClientRect();
+            const r = c.getBoundingClientRect();
+            const px = c.getContext("2d").getImageData(0, 10, c.width, 1).data;
+            let lit = -1;
+            for (let x = 0; x < c.width; x++)
+              if (px[x * 4 + 2] > 200 && px[x * 4] < 100) {
+                lit = x;
+                break;
+              }
+            return { marq: Math.round(((m.left - r.left) / r.width) * c.width), lit, wide: Math.round((m.width / r.width) * c.width) };
+          });
+        const t1 = await sample();
+        await sleep(900);
+        const t2 = await sample();
+        check(
+          "design size: the selection outline TRACKS a keyframed layer (two clock points, mapped ×2)",
+          t1.lit >= 0 && t2.lit >= 0 && t1.marq === t1.lit && t2.marq === t2.lit && Math.abs(t2.lit - t1.lit) >= 3 && t1.wide === 12,
+          `${JSON.stringify(t1)} → ${JSON.stringify(t2)}`,
+        );
+
+        // `Preview at` re-rigs the preview and writes NOTHING to the device
+        dsWrites.length = 0;
+        const recBefore = await fetch(`${DS}/api/scenes/${dk.id}`).then((r) => r.text());
+        await dsPage.select('[data-role="scene-preview-at"]', "128x128");
+        await sleep(1500);
+        const at128 = {
+          stage: await dsPage.$eval('[data-role="scene-stage"]', (c) => `${c.width}x${c.height}`),
+          zoom: await evalOr(dsPage, '[data-role="scene-box-zoom"]', (el) => (el.textContent ?? "").trim(), ""),
+          dims: await dsPage.$eval('[data-role="scene-preview-dims"]', (el) => (el.textContent ?? "").trim()),
+        };
+        await dsPage.screenshot({ path: `${shotDir}/device-e2e-design-size-128.png` });
+        await dsPage.select('[data-role="scene-preview-at"]', "");
+        await sleep(1200);
+        const back = await dsPage.$eval('[data-role="scene-stage"]', (c) => `${c.width}x${c.height}`);
+        const recAfter = await fetch(`${DS}/api/scenes/${dk.id}`).then((r) => r.text());
+        check(
+          "design size: Preview at 128×128 re-rigs the stage (×4) and back, with no device write",
+          at128.stage === "128x128" &&
+            at128.zoom === "×4 at 128×128" &&
+            /^128×128 preview/.test(at128.dims) &&
+            back === "64x64" &&
+            dsWrites.length === 0 &&
+            recAfter === recBefore,
+          `${JSON.stringify(at128)} · back ${back} · writes ${JSON.stringify(dsWrites)}`,
+        );
+
+        // `Pin to pixels` = `X abs` on THAT layer only
+        await dsPage.click('[data-role="scene-pin"]');
+        await sleep(600);
+        const pinned = await evalOr(dsPage, '[data-role="scene-box-zoom"]', (el) => (el.textContent ?? "").trim(), "");
+        await dsPage.screenshot({ path: `${shotDir}/device-e2e-design-size.png` });
+        await dsPage.click('[data-role="scene-save"]');
+        await sleep(900);
+        const savedAbs = await fetch(`${DS}/api/scenes/${dk.id}`).then((r) => r.json());
+        check(
+          "design size: Pin to pixels saves `X abs` on the pinned layer only, and the row says 1:1",
+          pinned === "grid pixels, 1:1" &&
+            savedAbs.layers?.[1]?.abs === true &&
+            savedAbs.layers?.[0]?.abs === undefined &&
+            JSON.stringify(savedAbs.space) === "[32,32]",
+          `${pinned} · ${JSON.stringify(savedAbs.layers?.map((l) => l.abs ?? null))}`,
+        );
+      } finally {
+        await dsPage.close();
+        dsDev.kill();
       }
     }
 

@@ -1212,6 +1212,20 @@ unscoped harness selector would silently resolve to the pattern editor's.
   free'". The meter read as progress, and the budget it stated was one nobody
   was near. The sentence has one home now, in the `+ Add layer` menu at the
   cap, where it explains a row that will not click.
+* **DESIGN SIZE** (Gitea #997, mockup S7j) — the header's **Layout** chooser
+  (`scene-layout-<px|32|64|150|panel>`) writes or clears `Scene.space` (the
+  `U` line) and converts no box; the preview column's **Preview at**
+  (`scene-preview-at`) is page-local state (`previewAt`) that re-rigs the
+  editor's OWN `SceneRenderer` and nothing else — `devRig` (the device's
+  canvas) keeps deciding the box editor's segment mode, `This panel`, new
+  layers' defaults and the inspector's projection row, `rig` (the preview)
+  only what is drawn. The marquee is `SceneRenderer.layerRect(selected)`, read
+  every frame AFTER the draw (`trackMarquee`) while the installed wire IS the
+  document, and `mapRect` of the record while a rebuild is pending; a drag
+  divides by `designScale`. The box row's `×2 on this panel` / **Pin to
+  pixels** (`X abs`) reach `BoxRow` through context (`placeCtx.ts`), refreshed
+  by `syncPlace()` after every rebuild and on every selection or document
+  change.
 * **TRANSPORT** — in the **header bar** (`scene-pause`), not the preview
   column, and the same `.transport` element and words the pattern editor's
   uses (#739). A labelled SVG button, `Pause`/`Resume` and never `Play`: a
