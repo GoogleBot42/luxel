@@ -151,8 +151,7 @@ export function beforeRender(delta) {
 }
 
 export function renderBulk() {
-  setBlur(gridWidth() > CW ? 0.25 : 0)
-  fillCanvas(bgH, outS, outV, CW, CH)
+  fillCanvas(bgH, outS, outV, CW, CH, gridWidth() > CW ? 1 : 0)   // bilinear upscale
   var px = U
   for (var i = 0; i < ND; i++) if (dR[i] > 0) {
     var x = dX[i], y = dY[i], r = dR[i]

@@ -169,9 +169,8 @@ export function beforeRender(delta) {
   var n = 0
   while (acc >= 0.0333 && n < 2) { step(); acc -= 0.0333; n++ }
   if (acc > 0.0333) acc = 0     // a slow device skips sim time rather than spiral
-  setBlur(gridWidth() > W ? 0.35 : 0)
 }
 
 export function renderBulk() {
-  fillCanvas(0, 0, trail, W, H)
+  fillCanvas(0, 0, trail, W, H, gridWidth() > W || gridHeight() > H ? 1 : 0)   // bilinear only when upscaling
 }

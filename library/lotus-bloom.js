@@ -6,7 +6,7 @@
 // round a sunflower seed head; it opens with easeOutBack, holds, wilts while
 // the next species opens. Rose mandala: a polar rose drawn as distance bands
 // (pale outline, inner glow, crawling striped core, spoke aura) on a cached
-// r/theta canvas (<= 40 wide), upscaled with fillCanvas and softened by setBlur.
+// r/theta canvas (<= 40 wide), upscaled bilinearly with fillCanvas.
 
 var mode = 0
 //# min=0 max=1 step=1 default=0
@@ -131,7 +131,6 @@ var ax = 1
 function bloom() {
   clear()
   ax = gridWidth() > 0 ? gridHeight() / gridWidth() : 1
-  setBlur(0, 1)
   var R = sizePct / 200
   flower(1 - cur, R)
   flower(cur, R)
@@ -171,8 +170,7 @@ function mandala() {
       j++
     }
   }
-  fillCanvas(cH, cS, cV, CW, CH)
-  setBlur(passes > 0 ? 0.45 : 0, passes)
+  fillCanvas(cH, cS, cV, CW, CH, passes > 0 ? 1 : 0)   // bilinear only when upscaling
 }
 
 export function renderBulk() {

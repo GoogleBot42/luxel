@@ -218,14 +218,23 @@ function dot(k, v) {
   splat(x, y, max(1.4 * sx, 0.8 * px), 2)
 }
 
-// strip: the same system seen edge-on; depth decides who hides behind the sun
-function seg(x, w) {
+// strip: the same system seen edge-on; depth decides who hides behind the sun.
+// Each body is a w-pixel bar with anti-aliased ends, swept from where it was
+// last frame (no gaps or seams in a fast trail), so it glides between LEDs;
+// max-blended so trails survive and a body in front still shows over the sun.
+var lastC = array(6), lastF = array(6), sf = 10
+function seg(id, x, w) {
   var n = pixelCount, c = (0.5 + x / 112) * n
-  fillRange(floor(c - w / 2), floor(c - w / 2) + max(round(w), 1))
+  var p = lastF[id] == sf - 1 ? lastC[id] : c   // hidden or new last frame: no sweep
+  lastC[id] = c
+  lastF[id] = sf
+  w = max(w, 1)
+  fillRangeAA(min(c, p) - w / 2, max(c, p) + w / 2, 2)
 }
 
 function strip() {
   fade(keep)
+  sf = sf % 30000 + 1
   var n = pixelCount, core = max(n / 60, 2), i, d
   var pulse = 0.8 + 0.2 * wave(t * 1.7)
   if (mode == 1) {
@@ -233,26 +242,26 @@ function strip() {
       d = electron(i)
       if (d < 0 && abs(ex) < 6) continue
       hsv(WARM[i], 0.85, 0.55 + 0.45 * d)
-      seg(ex, max(n / 50, 2))
+      seg(i, ex, max(n / 50, 2))
     }
     hsv(0.1, 0.25, pulse)
-    seg(sin(t * 2) * 0.8, core * (1 + 0.15 * sin(t * 12)))
+    seg(5, sin(t * 2) * 0.8, core * (1 + 0.15 * sin(t * 12)))
     return
   }
   var nb = mode == 2 ? 3 : 4
   if (mode == 0) {
     hsv(0.08, 0.7, pulse)
-    seg(0, core * 1.6)
+    seg(5, 0, core * 1.6)
   }
   for (i = 0; i < nb; i++) {
     if (mode == 0 && by[i] > 0 && abs(bx[i]) < 7) continue
     if (mode == 0) hsv(PH[i], 0.7, 1)
     else hsv(0.55 + i * 0.33, 0.6, 1)
-    seg(bx[i], max(n / 70, 2))
+    seg(i, bx[i], max(n / 70, 2))
   }
   if (mode == 0 && cometOn) {
     hsv(0.5, 0.3, 1)
-    seg(bx[4], max(n / 90, 1))
+    seg(4, bx[4], max(n / 90, 1))
   }
 }
 

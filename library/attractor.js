@@ -141,9 +141,8 @@ export function beforeRender(delta) {
   }
   px = x
   py = y
-  setBlur(gridWidth() > W ? 0.35 : 0)
 }
 
 export function renderBulk() {
-  fillCanvas(0, 0, dens, W, H)
+  fillCanvas(0, 0, dens, W, H, gridWidth() > W || gridHeight() > H ? 1 : 0)   // bilinear only when upscaling
 }

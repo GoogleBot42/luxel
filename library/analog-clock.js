@@ -185,16 +185,15 @@ function rings() {
   }
 }
 
-// strip / ring: soft blob of half-width hw centred at turn a
+// strip / ring: an anti-aliased span of half-width hw centred at turn a,
+// wrapped round the ring's seam
 function blob(a, hw, h, s, v) {
   var n = pixelCount
   var c = mod((reverse ? -a : a) + offset, 1) * n
-  for (var i = floor(c - hw - 1); i <= ceil(c + hw + 1); i++) {
-    var cov = clamp(hw + 0.5 - abs(i + 0.5 - c), 0, 1)
-    if (cov <= 0) continue
-    hsv(h, s, v * cov)
-    setPixel(mod(i, n))
-  }
+  hsv(h, s, v)
+  fillRangeAA(c - hw, c + hw, 0)
+  if (c - hw < 0) fillRangeAA(c - hw + n, c + hw + n, 0)
+  if (c + hw > n) fillRangeAA(c - hw - n, c + hw - n, 0)
 }
 
 function strip() {

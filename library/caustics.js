@@ -119,5 +119,5 @@ export function renderBulk() {
       for (c = 0; c < cw; c++) vArr[i++] = min(abs(rowA[c] * rowB[c]), 0.49) + gcol[c]
     }
   }
-  paintCanvas(vArr, cw, ch)
+  paintCanvas(vArr, cw, ch, 1, k > 1 ? 1 : 0)   // bilinear upscale
 }

@@ -84,7 +84,7 @@ export function renderBulk() {
       i++
     }
   }
-  if (palette == 0) fillCanvas(hA, 0.75, vA, cw, ch)
-  else paintCanvas(hA, cw, ch)
-  setBlur(k > 1 ? 0.5 : 0, k / 2)
+  var f = k > 1 ? 1 : 0   // bilinear only when upscaling
+  if (palette == 0) fillCanvas(hA, 0.75, vA, cw, ch, f)
+  else paintCanvas(hA, cw, ch, 1, f)
 }

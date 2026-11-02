@@ -78,14 +78,28 @@ export function beforeRender(delta) {
 export function render(index) { hsv(0, 0, 0) }
 
 // --- strip: tealights -------------------------------------------------------
+// a candle of 5+ LEDs is a one-LED flame whose light falls off through the wax
+// to the glass rim: a core span plus two gradientRanges, added, with the rim
+// laid under them (max); smaller candles are a rim and a core.
+var hc = array(3)
 function tealights() {
   var dr = 0.25 + draftPct / 100 * 0.75, n = ceil(pixelCount / groupPx)
+  if (groupPx >= 5) clear()
   for (var j = 0; j < n; j++) {
     var f = 0.78 + 0.3 * dr * simplex2(t * 0.9, j * 0.21) + 0.22 * dr * simplex2(t * 4.1, j * 1.7 + 40)
     f = clamp(f, 0.2, 1.05)
     ramp(0.2 + 0.6 * f)
     var a = j * groupPx, b = min(a + groupPx, pixelCount)
-    if (groupPx >= 3) {
+    if (groupPx >= 5) {
+      rgb2hsv(cr * f, cg * f, cb * f, hc)
+      var m = a + groupPx / 2, e = groupPx * 0.2
+      hsv(hc[0], hc[1], hc[2])
+      fillRangeAA(m - 0.5, m + 0.5, 1)
+      gradientRange(a + e, m - 0.5, hc[0], hc[1], hc[2] * 0.2, hc[0], hc[1], hc[2], 1)
+      gradientRange(m + 0.5, b - e, hc[0], hc[1], hc[2], hc[0], hc[1], hc[2] * 0.2, 1)
+      rgb(cr * f * 0.3, cg * f * 0.22, cb * f * 0.2)        // the glass rim
+      fillRangeAA(a, b, 2)
+    } else if (groupPx >= 3) {
       rgb(cr * f * 0.3, cg * f * 0.22, cb * f * 0.2)        // the glass rim
       fillRange(a, b)
       rgb(cr * f, cg * f, cb * f)

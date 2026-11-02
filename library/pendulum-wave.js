@@ -5,7 +5,8 @@
 // from unison into travelling snakes, apparent chaos and back to unison, and
 // the clock wraps exactly at realignment. Panel: one bob per column, seen from
 // above, with a short fade trail. Strip: the strip is cut into lanes, each
-// lane one pendulum's bob (or its swing as colour when lanes are tiny).
+// lane one pendulum's bob as a sub-pixel blob (or its swing as colour when
+// lanes are tiny, the lane edges anti-aliased so every lane is the same width).
 
 var cycleS = 60
 //# min=20 max=120 step=5 default=60
@@ -76,7 +77,7 @@ function strip() {
     for (var k = 0; k < g; k++) {
       var d = swing(k), b = 0.5 + 0.5 * d
       tint(k, g, d, 0.12 + 0.88 * b * b)
-      fillRange(round(k * L), round((k + 1) * L))
+      fillRangeAA(k * L, (k + 1) * L, 1)   // add: a shared edge pixel sums to one
     }
     return
   }
@@ -85,7 +86,7 @@ function strip() {
     var d = swing(k)
     var p = k * L + 0.5 + (0.5 + 0.44 * d) * (L - 2)
     tint(k, g, d, 1)
-    fillRange(floor(p), floor(p) + 2)
+    splatIndex(p, 2.5, 2)                  // max: the trail behind it survives
   }
 }
 

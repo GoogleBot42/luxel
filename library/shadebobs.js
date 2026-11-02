@@ -36,7 +36,7 @@ var pal = array(24)
 setPalette(pal)
 var fx = [1.0, 1.31, 0.73, 1.57, 0.89, 1.13], fy = [1.42, 0.67, 1.19, 0.81, 1.53, 0.97]
 var px = [0, 1.1, 2.3, 3.7, 4.4, 5.6], py = [0.7, 2.9, 1.3, 4.9, 0.2, 3.3]
-var CW = 0, CH = 0, T = 0
+var CW = 0, CH = 0, T = 0, UP = 0
 
 function st(j, pos, r, g, b) { pal[j] = pos; pal[j + 1] = r; pal[j + 2] = g; pal[j + 3] = b }
 function setPal() {
@@ -58,7 +58,7 @@ export function beforeRender(delta) {
   var gw = gridWidth(), gh = gridHeight()
   var w = gw > 0 ? min(gw, CAP) : 32, h = gh > 0 ? min(gh, CAP) : 32
   if (w != CW || h != CH) { CW = w; CH = h; feedback(acc, 0) }
-  setBlur(gw > CW ? 0.35 : 0)          // soften the 2x upscale on big panels
+  UP = gw > CW || gh > CH ? 1 : 0       // bilinear only when the canvas is upscaled
   T += dt * speed * 0.55
   if (T > 6000) T -= 6000
 
@@ -82,5 +82,5 @@ export function beforeRender(delta) {
 }
 
 export function renderBulk() {
-  paintCanvas(acc, CW, CH)
+  paintCanvas(acc, CW, CH, 1, UP)
 }

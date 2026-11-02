@@ -5,12 +5,14 @@
 // bricks and passing lamp courses. Both fog to a dark vanishing point that wanders,
 // bending the tube. Each pixel's twisted angle and polygon log-radius are tabled (a
 // sixteenth re-aimed per frame as the camera roams); bricks are a 64x16 texture.
-// Above 4,096 px a grid reads a 64-wide table by coordinate (2x2 cells on 128x128).
+// Above 4,096 px a grid renders at <= 4,096 cells (64x64 on 128x128) and the engine
+// expands it bilinearly (setRenderSize): a quarter of the per-pixel work, no 2x2 blocks.
 
 var TN = min(pixelCount, 4096), TW = 64
 var A = array(TN), L = array(TN)  // per pixel: twisted angle (turns), log2 polygon radius
 var TX = array(TW * 16)           // brick texture: hue step (integer part) + value
 var mode = 0, cw = 0, ch = 0, TS = 0, key = -1, aspX = 1, aspY = 1, slice = 0, la = 0, half = 16
+var rs = 0, rsW = 0, rsH = 0      // 1 once a big grid renders at rsW x rsH
 
 var style = 0                     // 0 rings, 1 textured
 var speed = 1.2                   // rings per second
@@ -66,17 +68,22 @@ export function beforeRender(delta) {
   var px = ox, py = oy
   ox = sin(wt * 0.21) * 0.45 * wander / 100
   oy = sin(wt * 0.13 + 1) * 0.4 * wander / 100
-  var w = gridWidth(), h = gridHeight()
+  if (!rs && pixelCount > TN && has2DMap() && gridWidth() > 0 && gridHeight() > 1) {
+    var gw = gridWidth(), gh = gridHeight()
+    rsW = min(gw, floor(64 * sqrt(gw / gh) + 0.001)); rsH = min(gh, floor(TN / rsW))
+    setRenderSize(rsW, rsH, 1)      // pixelCount is rsW * rsH from here on
+    rs = 1
+  }
+  var w = rs ? rsW : gridWidth(), h = rs ? rsH : gridHeight()
   if (w * 4096 + h != key) {
     key = w * 4096 + h
     var m = max(max(w, h), 1)
     aspX = w > 0 ? w / m : 1; aspY = h > 0 ? h / m : 1
     half = w > 0 ? m / 2 : 16
-    // 1: table per pixel; 2: a <= 4096-cell table read by coordinate; 0: no table
-    mode = pixelCount <= TN ? 1 : (w > 0 ? 2 : 0)
-    cw = min(w, 64); ch = min(h, floor(TN / max(cw, 1)))
+    // 1: table per pixel by map; 2: render-size table built by cell; 0: no table
+    mode = rs ? 2 : (pixelCount <= TN ? 1 : 0)
+    cw = w; ch = h
     TS = mode == 1 ? pixelCount : (mode == 2 ? cw * ch : 0)
-    if (mode == 2) half = max(cw, ch) / 2
     for (var i = 0; i < TS; i++) aim(i)
   } else if (mode && (px != ox || py != oy)) {
     for (i = slice; i < TS; i += 16) aim(i)
@@ -93,11 +100,8 @@ export function beforeRender(delta) {
 
 export function render2D(index, x, y) {
   var a, l
-  if (mode == 1) { a = A[index]; l = L[index] }
-  else if (mode) {
-    var i = floor(y * ch * 0.9999) * cw + floor(x * cw * 0.9999)
-    a = A[i]; l = L[i]
-  } else { l = geom(x, y); a = la }
+  if (mode) { a = A[index]; l = L[index] }
+  else { l = geom(x, y); a = la }
   var fog = clamp(l * 0.7 + fb, 0, 1)
   if (style == 0) {
     var v = triangle(rings * l + a - flow)

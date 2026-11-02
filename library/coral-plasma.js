@@ -98,5 +98,5 @@ export function renderBulk() {
     arrayScale(B, K * 0.35)
     arrayAdd(A, B)
   }
-  paintCanvas(A, CW, CH)
+  paintCanvas(A, CW, CH, 1, gw > CW || gh > CH ? 1 : 0)   // bilinear only when upscaling
 }

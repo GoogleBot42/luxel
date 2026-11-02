@@ -134,7 +134,7 @@ export function renderBulk() {
     CW = min(gw, CAP); CH = min(gh, CAP)
     var sx = hills / CW
     field(CW, CH, sx, sx * gh / CH * CW / gw)
-    paintCanvas(A, CW, CH)
+    paintCanvas(A, CW, CH, 1, gw > CW || gh > CH ? 1 : 0)   // bilinear only when upscaling
   } else {
     var n = min(pixelCount, CAP * CAP), k = n / pixelCount   // (i * n would overflow 16.16)
     field(n, 1, hills / n, 0)

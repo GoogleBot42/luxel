@@ -4,15 +4,17 @@
 // Panel: rayed curtains hang from a wavy hem under a starry sky, bright at the hem and
 // shading to the palette's top colour toward their tops. Only per-column tables are
 // noise (four native fillNoise2D rows); a canvas of at most 64x32 goes on with one
-// paintCanvas. Strip: soft lights drift, bloom and fade, added in RGB into three capped
-// arrays shown with one fillRGB. Styles: curtains | shiver (flares, afterglow) | aqua swell.
+// paintCanvas. Strip: soft lights drift, bloom and fade, each one a pair of anti-aliased
+// additive splatIndex blobs; shiver's blue afterglow is one capped array shown with one
+// fillHSV. Styles: curtains | shiver (flares, afterglow) | aqua swell.
 
-var MAXW = 64, MAXH = 32, CAP = 340, POOL = 10
+var MAXW = 64, MAXH = 32, CAP = 1024, POOL = 10
 // Allocated on first use, so a strip never pays for the panel's canvas or vice versa.
 var vC = 0, bC = 0, nA = 0, nB = 0, nR = 0, nL = 0, base = 0, ih = 0, amp = 0, pA = 0, pB = 0
 var skyB = 0, rA = 0, gA = 0, bA = 0, glow = 0          // rA..glow: strip cells, or panel columns
 var px = array(POOL), pv = array(POOL), age = array(POOL), life = array(POOL), hw = array(POOL)
 var cr = array(POOL), cg = array(POOL), cb = array(POOL)
+var lp = array(POOL), lw = array(POOL), le = array(POOL)   // strip: this frame's centre, half-width, light
 
 // Panel palettes run sky (0.12) -> hem green (0.5) -> curtain top (1.0).
 var PALS = [
@@ -98,16 +100,17 @@ function seed() {
   seeded = 1
 }
 
-// Add every live light into rA/gA/bA over m cells (strip pixels or panel columns).
+// Advance every live light. A panel adds them into rA over its m columns; a strip
+// keeps each light's centre, width and level for renderBulk's splats (and, in
+// shiver, raises the afterglow under it).
 function deposit(dt) {
-  feedback(rA, 0)
-  feedback(gA, 0)
-  feedback(bA, 0)
+  if (panel) feedback(rA, 0)
   if (style > 0 && clock >= nextSpawn) {
     for (var j = 0; j < POOL; j++) if (age[j] >= life[j]) { spawn(j, 0); break }
     nextSpawn = clock + (style == 1 ? 0.3 + random(0.2) : 1.1 + random(0.8))
   }
   for (var k = 0; k < POOL; k++) {
+    le[k] = 0
     if (age[k] >= life[k]) {
       if (style == 0 && k < 8) spawn(k, 0)
       continue
@@ -126,35 +129,57 @@ function deposit(dt) {
       env = sin(a * PI) * breath
       w = 0.05 + a * 0.5
     }
-    if (!panel) env *= env                 // squared light: soft fades, deep darks
     var ck = c * m, hk = max(w * m, 0.6)
-    var lo = max(0, ceil(ck - hk)), hi = min(m - 1, floor(ck + hk))
-    var kr = cr[k] * env, kg = cg[k] * env, kb = cb[k] * env, st = 1 / hk, i = lo, f = 0
-    for (; i <= hi; i++) {
-      f = (i - ck) * st
-      f = 1 - f * f
-      f *= f
-      rA[i] += f * kr
-      gA[i] += f * kg
-      bA[i] += f * kb
+    var lo = max(0, ceil(ck - hk)), hi = min(m - 1, floor(ck + hk)), st = 1 / hk, i = lo, f = 0
+    if (panel) {
+      var kr = cr[k] * env
+      for (; i <= hi; i++) {
+        f = (i - ck) * st
+        f = 1 - f * f
+        rA[i] += f * f * kr
+      }
+      continue
+    }
+    env *= env                             // squared light: soft fades, deep darks
+    lp[k] = c
+    lw[k] = w
+    le[k] = env
+    if (style == 1) {
+      // afterglow: a decaying running max of the flares (stored at its deep-blue level)
+      var l = max(cr[k], max(cg[k], cb[k])) * env * 0.45
+      for (; i <= hi; i++) {
+        f = (i - ck) * st
+        f = 1 - f * f
+        glow[i] = max(glow[i], f * f * l)
+      }
     }
   }
-  if (panel) return
+}
+
+// The strip: a background (afterglow / breathing field / black), then every light
+// as two additive anti-aliased blobs whose sum approximates a (1 - x^2)^2 bump.
+function stripDraw() {
+  var n = pixelCount
   if (style == 1) {
-    // afterglow: a decaying running max of the flares, shown deep blue
-    for (var q = 0; q < m; q++) {
-      var l = max(rA[q], max(gA[q], bA[q])), g = glow[q]
-      if (l > g) glow[q] = l
-      gA[q] += g * 0.1
-      bA[q] += g * 0.45
+    if (n <= m) fillHSV(0.63, 1, glow)
+    else {
+      var ps = n / m
+      for (var q = 0; q < m; q++) {
+        hsv(0.63, 1, glow[q])
+        fillRange(floor(q * ps), floor((q + 1) * ps))
+      }
     }
   } else if (style == 2) {
-    // the breathing blue field the swells rise out of
-    var gg = 0.05 * breath, gb = 0.16 * breath
-    for (var q2 = 0; q2 < m; q2++) {
-      gA[q2] += gg
-      bA[q2] += gb
-    }
+    rgb(0, 0.05 * breath, 0.16 * breath)   // the breathing blue field the swells rise out of
+    fill()
+  } else clear()
+  for (var k = 0; k < POOL; k++) {
+    var e = le[k] * 0.53                   // the pair sums to ~the bump's light
+    if (e <= 0) continue
+    var p = lp[k] * n, r = max(lw[k] * n, 0.6)
+    rgb(cr[k] * e, cg[k] * e, cb[k] * e)
+    splatIndex(p, r * 1.3, 1)
+    splatIndex(p, r * 0.8, 1)
   }
 }
 
@@ -198,13 +223,9 @@ export function beforeRender(delta) {
   } else if (panel != 0) {
     panel = 0
     m = min(pixelCount, CAP)
-    rA = array(m)
-    gA = array(m)
-    bA = array(m)
     seeded = 0
   }
   if (!seeded) seed()
-  setBlur(panel && (W < gw || H < gh) ? 0.3 : 0)
   breath = style == 2 ? 0.55 + 0.45 * wave(clock / 8) : 1
   if (style == 1) feedback(glow, pow(0.5, dt / 1.5))   // afterglow half-life 1.5 s
   if (style > 0 || !panel) deposit(dt)
@@ -262,7 +283,7 @@ function sky() {
       i++
     }
   }
-  paintCanvas(vC, W, H, bC)
+  paintCanvas(vC, W, H, bC, W < gw || H < gh ? 1 : 0)   // bilinear upscale
   // stars, only in the sky above each curtain's top
   var ns = min(40, floor(gw * gh / 100))
   for (var s = 0; s < ns; s++) {
@@ -278,15 +299,5 @@ function sky() {
 export function renderBulk() {
   if (panel) {
     sky()
-  } else if (pixelCount <= CAP) {
-    fillRGB(rA, gA, bA)
-  } else {
-    // a strip longer than the cells: each cell lights a short run
-    var sc = m / pixelCount
-    for (var i = 0; i < pixelCount; i++) {
-      var k = floor(i * sc)
-      rgb(rA[k], gA[k], bA[k])
-      setPixel(i)
-    }
-  }
+  } else stripDraw()
 }

@@ -88,11 +88,9 @@ export function renderBulk() {
         hA[i] = gH; vA[i] = gV; i++
       }
     }
-    fillCanvas(hA, 1, vA, cw, ch)
-    setBlur(k > 1 ? 0.5 : 0, k / 2)
+    fillCanvas(hA, 1, vA, cw, ch, k > 1 ? 1 : 0)
     return
   }
-  setBlur(0)
   var is3 = has3DMap(), is2 = has2DMap()
   for (i = 0; i < pixelCount; i++) {
     if (is3 || is2) {

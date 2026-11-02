@@ -9,6 +9,7 @@
 // rebuilt each frame and painted with one paintCanvas.
 
 var CAP = 64                      // canvas cap per axis (4096 cells)
+var up = 0                        // 1 = bilinear upscale (grid wider than the cap)
 
 var arms = 2
 //# min=1 max=8 step=1 default=2
@@ -106,6 +107,7 @@ export function beforeRender(delta) {
   var gwid = gridWidth(), ght = gridHeight()
   var w = gwid > 0 ? min(gwid, CAP) : 32, h = ght > 0 ? min(ght, CAP) : 32
   if (w != CW || h != CH) { CW = w; CH = h; dirty = 1 }
+  up = gwid > CW || ght > CH ? 1 : 0    // bilinear only when the canvas is upscaled
   if (dirty) buildTable()
 
   if (windSec > 0) windPh = mod(windPh + dt / windSec, 1)
@@ -147,5 +149,5 @@ export function renderBulk() {
     var ph = ai * A + (p - ai) * B - C
     cv[i] = (ph - floor(ph)) * TOP
   }
-  paintCanvas(cv, CW, CH)
+  paintCanvas(cv, CW, CH, 1, up)
 }

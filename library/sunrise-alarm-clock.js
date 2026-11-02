@@ -5,7 +5,8 @@
 // blue sky with drifting clouds and a sun creeping end to end; half an hour
 // before sleep time it sets mirrored and fades to a starry night. On start it
 // previews a whole day in ~20 s; "Sunrise now" plays a wake-light sunrise over
-// the chosen minutes. Sky, clouds and vignette are built on 49 samples a frame.
+// the chosen minutes. Sky, clouds and vignette are built on 49 samples a frame
+// and laid down as 48 gradientRanges; the sun is an anti-aliased fillRangeAA.
 
 var HALF = 0.5                 // sunrise/sunset half-phase, hours
 var NS = 49                    // sky samples along the strip
@@ -138,22 +139,41 @@ export function beforeRender(delta) {
   sunEnv = ENV[clamp(round(c / max(1, n - 1) * (NS - 1)), 0, NS - 1)]
 }
 
-export function render(index) {
+// A mapless strip stays a strip: this export suppresses the default grid.
+// Luxel always runs renderBulk.
+export function render(index) { hsv(0, 0, 0) }
+
+var HC = array(3)
+export function renderBulk() {
+  var n = pixelCount
   if (dark) {
-    if (!stars) { rgb(0, 0, 0); return }
-    var hs = hash(index * 3.7)
-    var tw = hs > 0.9 ? 0.18 * wave(t / (3 + hs * 4) + hs * 9) : 0
-    rgb(0.004 + tw, 0.006 + tw, 0.03 + tw)
+    if (!stars) { clear(); return }
+    rgb(0.004, 0.006, 0.03)
+    fill()
+    for (var i = 0; i < n; i++) {
+      var hs = hash(i * 3.7)
+      if (hs <= 0.9) continue
+      var tw = 0.18 * wave(t / (3 + hs * 4) + hs * 9)
+      rgb(0.004 + tw, 0.006 + tw, 0.03 + tw)
+      setPixel(i)
+    }
     return
   }
-  var f = index / max(1, pixelCount - 1) * (NS - 1)
-  var i = min(floor(f), NS - 2), u = f - i
-  var r = TR[i] + (TR[i + 1] - TR[i]) * u
-  var g = TG[i] + (TG[i + 1] - TG[i]) * u
-  var b = TB[i] + (TB[i + 1] - TB[i]) * u
-  if (index + 1 > sunLo && index < sunHi) {  // anti-aliased sun, blooming over the sky
-    var cov = clamp(min(sunHi, index + 1) - max(sunLo, index), 0, 1) * 2 * sunEnv
-    r += sun[0] * cov; g += sun[1] * cov; b += sun[2] * cov
+  // sample k sits on pixel k * (n - 1) / 48: one HSV gradientRange per pair of
+  // samples (hue unwrapped), added so the shared end pixels sum to whole, plus
+  // a half pixel of the first and last sample at the ends
+  clear()
+  var step = max(1, n - 1) / (NS - 1), h0 = 0, s0 = 0, v0 = 0, x0 = 0.5
+  for (var k = 0; k < NS; k++) {
+    rgb2hsv(TR[k], TG[k], TB[k], HC)
+    var h1 = k == 0 ? HC[0] : h0 + mod(HC[0] - h0 + 0.5, 1) - 0.5, x1 = k * step + 0.5
+    if (k == 0) { hsv(h1, HC[1], HC[2]); fillRangeAA(0, 0.5, 1) }
+    else gradientRange(x0, x1, h0, s0, v0, h1, HC[1], HC[2], 1)
+    h0 = h1; s0 = HC[1]; v0 = HC[2]; x0 = x1
   }
-  rgb(r, g, b)
+  hsv(h0, s0, v0)
+  fillRangeAA(x0, n, 1)
+  rgb(sun[0] * sunEnv, sun[1] * sunEnv, sun[2] * sunEnv)   // the sun, blooming: added twice
+  fillRangeAA(sunLo, sunHi, 1)
+  fillRangeAA(sunLo, sunHi, 1)
 }

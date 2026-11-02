@@ -145,7 +145,7 @@ function panel() {
     var li = floor(clamp(f, 0, 1) * (LN - 1) + 0.5)
     RP[k * 4 + 1] = LR[li]; RP[k * 4 + 2] = LG[li]; RP[k * 4 + 3] = LB[li]
   }
-  paintCanvas(rad, CW, CH)
+  paintCanvas(rad, CW, CH, 1, gridWidth() > CW || gridHeight() > CH ? 1 : 0)   // bilinear only when upscaling
 }
 
 function strip() {

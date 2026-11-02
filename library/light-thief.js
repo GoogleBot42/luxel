@@ -158,36 +158,37 @@ export function beforeRender(delta) {
   ringR = cvt[0] * ringBri; ringG = cvt[1] * ringBri; ringB = cvt[2] * ringBri
 }
 
-// --- strip: bulbs, thief and ring summed at the few pixels they reach -----
-var bulbR = 1.4
-function stripPx(j) {
-  if (j < 0 || j >= pixelCount) return
-  var r = bgR, g = bgG, b = bgB
-  var k = clamp(floor(j * nL / pixelCount), 0, nL - 1), d = abs(j - lu[k])
-  if (d < bulbR) { var p = 1 - d / bulbR, v = lbri[k] * p * p; r += lr[k] * v; g += lg[k] * v; b += lb[k] * v }
-  var gd = abs(j - gpos)
-  if (gd < glow) {
-    var q = 1 - gd / glow
-    q = q * q * 0.75
-    if (gd < 1.6) q += (1 - gd / 1.6) * 0.7
-    r += gr * q; g += gg * q; b += gb * q
+// --- strip: bulbs, thief and ring as additive splatIndex blobs -----------
+// bump(): a soft (1 - d/r)^2 bump of colour (r, g, b) x v at pos, made of two
+// linear splats (radius r and r/2, half weight each); v above 1 is laid on in
+// passes so an overshoot still saturates towards white
+function bump(pos, rad, r, g, b, v) {
+  while (v > 0.002) {
+    var k = min(v, 1) * 0.5
+    rgb(r * k, g * k, b * k)
+    splatIndex(pos, rad, 1)
+    splatIndex(pos, max(rad * 0.5, 0.5), 1)
+    v -= 1
   }
-  if (ringBri > 0) {
-    var rd = abs(abs(j - hx) - heartR)
-    if (rd < RING_W) { var w = 1 - rd / RING_W; w = w * w; r += ringR * w; g += ringG * w; b += ringB * w }
-  }
-  rgb(r, g, b)
-  setPixel(j)
 }
-function span(c, rad) { for (var j = ceil(c - rad); j <= floor(c + rad); j++) stripPx(j) }
 
 function drawStrip() {
-  bulbR = clamp(pixelCount / nL * 0.42, 0.8, 2.5)   // bulbs stay bulb-sized
+  var bulbR = clamp(pixelCount / nL * 0.42, 0.8, 2.5)   // bulbs stay bulb-sized
   rgb(bgR, bgG, bgB)
   fill()
-  for (var k = 0; k < nL; k++) span(lu[k], bulbR)
-  span(gpos, glow)
-  if (ringBri > 0) { span(hx - heartR, RING_W); span(hx + heartR, RING_W) }
+  for (var k = 0; k < nL; k++) bump(lu[k], bulbR, lr[k], lg[k], lb[k], lbri[k])
+  bump(gpos, glow, gr, gg, gb, 0.75)
+  var core = 0.7                                   // the thief's bright heart
+  while (core > 0.002) {
+    var c = min(core, 1)
+    rgb(gr * c, gg * c, gb * c)
+    splatIndex(gpos, 1.6, 1)
+    core -= 1
+  }
+  if (ringBri > 0) {
+    bump(hx - heartR, RING_W, ringR, ringG, ringB, 1)
+    bump(hx + heartR, RING_W, ringR, ringG, ringB, 1)
+  }
 }
 
 // --- panel: garland wire, hanging bulbs, the thief, the ring -------------

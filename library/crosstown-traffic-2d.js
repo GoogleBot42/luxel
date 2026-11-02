@@ -3,7 +3,7 @@
 // A long-exposure photo of a city grid: cars stream both ways in their own lanes,
 // each leaving a fading light trail. On a panel half run across and half up and
 // down, one additive drawLine per car per frame, so crossings flare; on a strip
-// they become two-way comets (fillRange). The frame itself is the trail buffer
+// they become two-way comets (fillRangeAA, max-blended). The frame itself is the trail buffer
 // (delta-based fade), so there are no pixel arrays; trails are pre-drawn at load.
 
 var MAXC = 48
@@ -103,8 +103,8 @@ function draw() {
     var last = pixelCount - 1
     for (var j = 0; j < n; j++) {
       brush(j, n)
-      var a = prev[j] * last, b = pos[j] * last
-      fillRange(round(min(a, b)), round(max(a, b)) + 1)
+      var a = prev[j] * last, b = pos[j] * last   // this frame's stretch, sub-pixel
+      fillRangeAA(min(a, b), max(a, b) + 1, 2)
     }
   }
 }

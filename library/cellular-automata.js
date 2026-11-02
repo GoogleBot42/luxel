@@ -170,7 +170,9 @@ export function render(index) {}  // a strip stays mapless (renderBulk paints)
 export function renderBulk() {
   if (gridWidth() != gwSeen || has2DMap() != panel) setup()
   for (var k = 0; k < due; k++) step(-1)
-  if (panel) paintCanvas(cv, N, H)
+  // continuous cells upscale bilinearly on a panel wider than the canvas;
+  // elementary (two-state) cells and a 1:1 canvas stay crisp
+  if (panel) paintCanvas(cv, N, H, 1, mode == 0 && (gwSeen > N || gridHeight() > H) ? 1 : 0)
   else {
     arrayMix(cv, tgt, mixK)
     paintCanvas(cv, N, 1)

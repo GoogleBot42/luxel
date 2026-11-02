@@ -109,5 +109,5 @@ export function renderBulk() {
       for (c = 0; c < CW; c++) { P[i] = a1 * XA[c] - b1 * XA[c + CAP]; i++ }
     }
   }
-  paintCanvas(P, CW, CH)
+  paintCanvas(P, CW, CH, 1, gw > CW || gh > CH ? 1 : 0)   // bilinear only when upscaling
 }

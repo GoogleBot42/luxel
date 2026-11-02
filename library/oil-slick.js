@@ -146,5 +146,5 @@ export function renderBulk() {
   layout()
   if (mode) strata()
   else oil()
-  paintCanvas(cv, cw, ch, cb)
+  paintCanvas(cv, cw, ch, cb, gridWidth() > cw || gridHeight() > ch ? 1 : 0)   // bilinear only when upscaling
 }

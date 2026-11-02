@@ -4,8 +4,9 @@
 // neck, cool at the top and sink, merging and pinching apart inside a tapered glass.
 // Temperature drives buoyancy. The field sum((r^2/d^2)^2) (no sqrt) is built per frame
 // on a canvas of at most 32x48 cells from per-blob row/column tables and painted
-// with one paintCanvas; the glass and the bulb's glow are a static brightness
-// canvas. On a strip (index 0 = bottom) the same blobs rise and fall in a tube.
+// with one paintCanvas (bilinear when the panel is bigger than it); the glass and
+// the bulb's glow are a static brightness canvas. On a strip (index 0 = bottom)
+// the same blobs rise and fall in a tube.
 
 var MAXB = 8, U = 10              // field math runs in tenths of the height
 var bx = array(MAXB), by = array(MAXB), vy = array(MAXB), tp = array(MAXB)
@@ -138,7 +139,6 @@ function panel() {
     w = ceil(gw / ceil(gw / CAPW)); h = ceil(gh / ceil(gh / CAPH)); ax = gw / gh
   }
   if (w != CW || h != CH || shape != madeFor) layout(w, h, ax)
-  setBlur(gw > CW * 1.5 ? 0.5 : 0)   // soften an upscaled canvas's blocks
   var n = blobs
   for (var j = 0; j < n; j++) {
     var o = j * CW, k = (1 + 5 * abs(vy[j]))
@@ -172,14 +172,13 @@ function panel() {
       }
     }
   }
-  paintCanvas(cv, CW, CH, bri)
+  paintCanvas(cv, CW, CH, bri, gw > CW || gh > CH ? 1 : 0)   // bilinear only when upscaling
 }
 
 // strip: one capped field array; each blob only touches its own window
 var FN = 1024
 var F = array(FN)
 function strip() {
-  setBlur(0)
   var n = min(pixelCount, FN), last = max(n - 1, 1)
   feedback(F, 0)
   for (var i = 0; i <= last * 0.25; i++) {   // the pool, bottom quarter

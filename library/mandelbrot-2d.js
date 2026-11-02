@@ -6,7 +6,8 @@
 // morphs from cauliflower to spirals to dendrites. Escape counts are smoothed
 // (log LUT) and painted through a deep cyclic palette, brightest at the
 // filaments; the interior keeps a dim texture. Iterated once per frame on a
-// small canvas (<= 48 wide), upscaled with paintCanvas and softened by setBlur.
+// small canvas (<= 64 wide) and put on the frame with paintCanvas, bilinear
+// whenever the canvas is smaller than the grid.
 
 var iters = 20
 //# min=8 max=32 step=1 default=20
@@ -97,6 +98,5 @@ export function renderBulk() {
       j++
     }
   }
-  paintCanvas(cv, CW, CH, cb)
-  setBlur(passes > 0 ? 0.5 : 0, passes)
+  paintCanvas(cv, CW, CH, cb, passes > 0 ? 1 : 0)   // 1:1 stays nearest
 }

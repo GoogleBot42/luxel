@@ -14,6 +14,7 @@ var W = 32, H = 32, gwSeen = -1, flat = 1, dirty = 1
 var simAcc = 0, dropAcc = 0, nextDrop = 300
 var ev = array(4)
 var pal = array(24)
+var dropC = array(3)                  // the strip drops' colour (palette 0.85) as h, s, v
 
 // analytic rings (mode 1): a small pool of expanding rings
 var NR = 10
@@ -81,6 +82,9 @@ function build() {
     stop(5, 1, 1, 1, 1)
   }
   setPalette(pal)
+  // stops 3 and 4 bracket 0.85: the drops' colour, as HSV for gradientRange
+  var f = (0.85 - pal[12]) / (pal[16] - pal[12])
+  rgb2hsv(mix(pal[13], pal[17], f), mix(pal[14], pal[18], f), mix(pal[15], pal[19], f), dropC)
 }
 build()
 
@@ -264,25 +268,28 @@ function strip() {
   }
   // the swelling drop at the tap
   paint(0.3 + 0.6 * swell, 0.3 + 0.7 * swell)
-  fillRange(0, max(1, floor(n * 0.012)))
+  fillRangeAA(0, max(1, n * 0.012), 2)
   // falling drops with a motion trail as long as their speed
   for (i = 0; i < ND; i++) if (dOn[i]) tail(dPos[i] * (n - 1), dVel[i] * n * 0.06, 1)
   for (i = 0; i < NS; i++) if (sLife[i] > 0) tail(sPos[i] * (n - 1), sVel[i] * n * 0.04, sLife[i])
 }
 
+// an anti-aliased streak: the drop is one full pixel at p, its trail fades to
+// nothing L pixels behind it (the same light as a 1-px head plus a linear ramp)
 function tail(p, len, b) {
-  var L = clamp(abs(len), 1, 24), dir = len > 0 ? -1 : 1
-  for (var k = 0; k < L; k++) {
-    paint(0.85, b * (1 - k / L))
-    setPixel(floor(p) + dir * k)
+  var L = clamp(abs(len), 1, 24), h = dropC[0], s = dropC[1], v = dropC[2] * b
+  hsv(h, s, v)
+  fillRangeAA(p, p + 1, 2)
+  if (L > 1) {
+    if (len > 0) gradientRange(p, p + 1 - L, h, s, v, h, s, 0, 2)
+    else gradientRange(p + 1, p + L, h, s, v, h, s, 0, 2)
   }
 }
 
 export function renderBulk() {
-  if (!has2DMap()) { setBlur(0); strip(); return }
-  if (mode == 1) { setBlur(0); rings(); return }
+  if (!has2DMap()) { strip(); return }
+  if (mode == 1) { rings(); return }
   if (dirty) shade()
   dirty = 0
-  setBlur(gridWidth() > W ? 0.3 : 0)
-  paintCanvas(vArr, W, H)
+  paintCanvas(vArr, W, H, 1, gridWidth() > W ? 1 : 0)   // bilinear upscale
 }

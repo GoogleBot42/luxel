@@ -6,7 +6,7 @@
 // spent ball is kicked back up), or a slow Lissajous drift. Each ball is two
 // additive splats plus a drawLine from its last position over fade() trails,
 // so the cost is per ball, not per pixel. On a strip the same balls run along
-// the length (whole-pixel spans, no buffers).
+// the length (anti-aliased sub-pixel spans, no buffers).
 
 var MAXB = 24
 var bx = array(MAXB), by = array(MAXB), ox = array(MAXB), oy = array(MAXB)
@@ -124,12 +124,15 @@ function rad(i) {
   return radiusPct / 100 * (1 + breathePct / 100 * sin(tm * PI2 / (3 + 4 * hash(i + 69.5)) + i))
 }
 
-// strip: one ball as a whole-pixel tent with a flat core
-function ball1D(c, hw, v) {
-  for (var p = floor(c - hw); p <= c + hw; p++) {
-    var w = clamp(1.7 * (1 - abs(p - c) / hw), 0, 1)
-    if (w > 0) { hsv(ch, cs, v * w); setPixel(p) }
-  }
+// strip: one ball as an anti-aliased tent with a flat core, max-blended over the
+// trails — two gradientRange ramps (0 -> 1.7, the hsv clamp makes the core) meeting
+// at the centre, plus the one pixel they share; no per-pixel loop
+function ball1D(c, hw) {
+  var cc = c + 0.5, p = floor(cc)
+  gradientRange(cc - hw, cc, ch, cs, 0, ch, cs, 1.7, 2)
+  gradientRange(cc, cc + hw, ch, cs, 1.7, ch, cs, 0, 2)
+  hsv(ch, cs, min(1, 1.7 * (1 - abs(p + 0.5 - cc) / hw)))
+  fillRangeAA(p, p + 1, 2)
 }
 
 function strip() {
@@ -142,13 +145,13 @@ function strip() {
     u0 = u0 / (1 - 2 * m) * span
     if (dir == 1) { u = n - u; u0 = n - u0 }
     var hw = max(0.7, rad(i) * pixelCount / 4)
-    hsv(ch, cs, 0.45)
-    fillRange(round(min(u, u0)), round(max(u, u0)) + 1)
-    ball1D(u, hw, 1)
+    hsv(ch, cs, 0.45)                           // the swept span, sub-pixel ends
+    fillRangeAA(min(u, u0) + 0.5, max(u, u0) + 0.5)
+    ball1D(u, hw)
     if (dir == 2) {
       hsv(ch, cs, 0.45)
-      fillRange(round(n - max(u, u0)), round(n - min(u, u0)) + 1)
-      ball1D(n - u, hw, 1)
+      fillRangeAA(n - max(u, u0) + 0.5, n - min(u, u0) + 0.5)
+      ball1D(n - u, hw)
     }
   }
 }

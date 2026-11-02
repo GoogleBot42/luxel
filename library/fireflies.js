@@ -4,7 +4,7 @@
 // slow decay), and now and then a flash ripples through a neighbourhood in
 // sync. Drift: they glide, swell and fade, leaving a cool ghost trail. Coast:
 // launched sparks glow brightest while fast, slow to a stop, then respawn.
-// One max-blended splat per fly (setPixel on a strip) over a fade()d frame.
+// One max-blended splat per fly (a sub-pixel splatIndex on a strip) over a fade()d frame.
 
 var MAXF = 96
 var fx = array(MAXF), fy = array(MAXF), fvx = array(MAXF), fvy = array(MAXF)
@@ -147,7 +147,7 @@ export function renderBulk() {
       var gx = fx[i] - fvx[i] / sp * unit * 1.6, gy = fy[i] - fvy[i] / sp * unit * 1.6
       hsv(h + 0.42, 0.85, v * 0.5)
       if (panel) splat(gx, gy, r, 2)
-      else setPixel(floor(mod(gx, 1) * pixelCount))
+      else splatIndex(mod(gx, 1) * pixelCount - 0.5, 1.5, 2)   // sub-pixel: glides between LEDs
     }
     hsv(h, s, v)
     // the step this frame, so a fast fly paints a stroke, not dots
@@ -156,9 +156,9 @@ export function renderBulk() {
       if (style == 2 && abs(ox - fx[i]) < 0.5) drawLine(ox, oy, fx[i], fy[i], r, 2)
       else splat(fx[i], fy[i], r, 2)
     } else {
-      var p1 = floor(fx[i] * pixelCount), p0 = floor(mod(ox, 1) * pixelCount)
-      if (abs(p1 - p0) > 1 && abs(p1 - p0) < pixelCount / 2) fillRange(min(p0, p1), max(p0, p1) + 1)
-      else setPixel(p1)
+      var p1 = fx[i] * pixelCount, p0 = mod(ox, 1) * pixelCount
+      if (abs(p1 - p0) > 1 && abs(p1 - p0) < pixelCount / 2) fillRangeAA(min(p0, p1), max(p0, p1), 2)
+      splatIndex(p1 - 0.5, 1.5, 2)                   // a ~1-px tent: glides between LEDs
     }
   }
   setGlow(panel ? 0.35 : 0.3)

@@ -6,7 +6,9 @@
 // the cloth, both growing with the square of the distance from the pole.
 // Drawn a column at a time from per-column tables: stripe runs, one blended
 // row per stripe edge, and no per-pixel trig or stripe search. On a
-// strip the flag lies along it (hoist at pixel 0), stripes scrolling gently.
+// strip the flag lies along it (hoist at pixel 0), stripes scrolling gently:
+// each stripe is a few gradientRanges (the cloth's shading lerped across them)
+// meeting at sub-pixel edges found from a coarse sampling of the sway.
 
 var MAXS = 13, MAXC = 256
 var sr = array(MAXS), sg = array(MAXS), sb = array(MAXS)   // stripe colours
@@ -48,6 +50,7 @@ var chR = [1, 1, 0.3, 0.35, 0], chG = [1, 0.38, 0.7, 0.15, 0], chB = [1, 0.6, 1,
 var CH0 = 0.2, CHW = 0.06   // white triangle reach and band width, panel heights
 
 var n = 13, tmp = array(3)
+var hh = array(MAXS), hs = array(MAXS), hv = array(MAXS)   // stripe colours as HSV
 function put(k, r, g, b) { sr[k] = r; sg[k] = g; sb[k] = b }
 function putHSV(k, h, s, v) { hsv2rgb(h, s, v, tmp); put(k, tmp[0], tmp[1], tmp[2]) }
 function build() {
@@ -58,6 +61,10 @@ function build() {
   } else if (flag == 3) {
     n = 5; put(0, 0.3, 0.7, 1); put(1, 1, 0.38, 0.6); put(2, 1, 1, 1); put(3, 1, 0.38, 0.6); put(4, 0.3, 0.7, 1)
   } else { n = customN; putHSV(0, c1h, c1s, c1v); putHSV(1, c2h, c2s, c2v); putHSV(2, c3h, c3s, c3v) }
+  for (var i = 0; i < n; i++) {
+    rgb2hsv(sr[i], sg[i], sb[i], tmp)
+    hh[i] = tmp[0]; hs[i] = tmp[1]; hv[i] = tmp[2]
+  }
   for (var i = 0; i < MAXS; i++) {
     var blue = flag == 0 && i < 7
     kr[i] = blue ? 0.06 : sr[i]; kg[i] = blue ? 0.08 : sg[i]; kb[i] = blue ? 1 : sb[i]
@@ -165,39 +172,71 @@ function stars() {
 }
 
 // --- strip: the flag along the strip, hoist at pixel 0 -------------------
+// Pixel i's centre is position i + 0.5; the cloth at original pixel x has
+// shading lum(x) and stripe coordinate pos(x) (both with the travelling wave).
+var shA = 0, shB = 0, wph = 0, dph = 0, s1 = 0, ds = 1, sw = 0
+function lum(x) { return 1 - (shA + shB * x) * (0.5 - 0.5 * cos(wph + x * dph)) }
+function pos(x) { return x * ds + s1 + sw * x * x * sin(wph + x * dph) }
+
+// [a, b) in one colour, cut into pieces of <= 8 px with the shading lerped across
+function seg(a, b, h, s, v) {
+  var m = ceil((b - a) / 8)
+  if (m < 1) return
+  var w = (b - a) / m, x = a, l0 = lum(a - 0.5)
+  for (var k = 0; k < m; k++) {
+    var l1 = lum(x + w - 0.5)
+    gradientRange(x, x + w, h, s, v * l0, h, s, v * l1, 1)
+    x += w; l0 = l1
+  }
+}
+
 function strip() {
-  var last = max(pixelCount - 1, 1)
+  var N = pixelCount, last = max(N - 1, 1)
   var head = flag == 0 ? 0.25 : flag == 2 ? 0.15 : 0, hEnd = ceil(head * last)
-  var shA = shade * 0.25, shB = shade * 0.75 / last
-  // the wave's sin/cos advance a fixed angle per pixel: rotate, don't call trig
-  var dph = 1.5 * PI2 / last, sd = sin(dph), cd = cos(dph), sn = sin(-tPhase * PI2), cs = cos(-tPhase * PI2)
-  var nStars = clamp(round(pixelCount * 0.25 / 6), 2, 10), spp = hEnd / nStars
-  for (var i = 0; i < hEnd; i++) {           // US canton / Progress chevron
-    var lum = 1 - (shA + shB * i) * (0.5 - 0.5 * cs)
-    if (flag == 0) {
-      var f = i / spp, sv = abs(f - floor(f) - 0.5) * spp < 0.51 ? 1 - twinkle / 100 * triangle(starT + floor(f) * 0.37) : 0
-      rgb(mix(0.06, 1, sv) * lum, mix(0.08, 1, sv) * lum, lum)
-    } else {
-      var bi = floor(i * 5 / hEnd)
-      rgb(chR[bi] * lum, chG[bi] * lum, chB[bi] * lum)
+  shA = shade * 0.25; shB = shade * 0.75 / last
+  wph = -tPhase * PI2; dph = 1.5 * PI2 / last
+  clear()
+  if (flag == 2) {                           // Progress chevron bands, crisp
+    for (var b = 0; b < 5; b++) {
+      rgb2hsv(chR[b], chG[b], chB[b], tmp)
+      seg(ceil(b * hEnd / 5), ceil((b + 1) * hEnd / 5), tmp[0], tmp[1], tmp[2])
     }
-    setPixel(i)
-    var s0 = sn; sn = sn * cd + cs * sd; cs = cs * cd - s0 * sd
+  } else if (flag == 0) {                    // the US canton's blue
+    rgb2hsv(0.06, 0.08, 1, tmp)
+    seg(0, hEnd, tmp[0], tmp[1], tmp[2])
   }
   // stripes: as many as fit at >= 4 px each (US: up to 13), scrolling gently
   var nn = flag == 0 ? 2 : n                  // US: red/white alternate forever
-  var vis = flag == 0 ? clamp(floor(pixelCount * 0.75 / 4), 3, 13) : n
-  var pxPer = (pixelCount - hEnd) / vis, ds = 1 / pxPer
-  var s1 = -hEnd * ds - scroll, sw = swayPx * ds / (last * last)
-  for (var i = hEnd; i < pixelCount; i++) {
-    var lum = 1 - (shA + shB * i) * (0.5 - 0.5 * cs)
-    var p = i * ds + s1 + sw * i * i * sn, fl = floor(p), k = mod(fl, nn), up = (1 - p + fl) * pxPer
-    if (up < 0.5) {
-      var t = 0.5 - up, j = (k + 1) % nn
-      rgb(mix(sr[k], sr[j], t) * lum, mix(sg[k], sg[j], t) * lum, mix(sb[k], sb[j], t) * lum)
-    } else rgb(sr[k] * lum, sg[k] * lum, sb[k] * lum)
-    setPixel(i)
-    var s0 = sn; sn = sn * cd + cs * sd; cs = cs * cd - s0 * sd
+  var vis = flag == 0 ? clamp(floor(N * 0.75 / 4), 3, 13) : n
+  var pxPer = (N - hEnd) / vis
+  ds = 1 / pxPer
+  s1 = -hEnd * ds - scroll
+  sw = swayPx * ds / (last * last)
+  // walk the stripe coordinate in steps of <= 6 px; each whole-number crossing
+  // is a stripe edge, placed by linear interpolation inside its step
+  var steps = ceil((N - hEnd) / 6), dx = (N - hEnd) / steps
+  var xa = hEnd, pa = pos(xa - 0.5), x0 = hEnd, cur = floor(pa)
+  for (var j = 1; j <= steps; j++) {
+    var xb = hEnd + j * dx, pb = pos(xb - 0.5)
+    for (var m = floor(pa) + 1; m <= pb; m++) {
+      var xe = xa + (m - pa) / (pb - pa) * dx
+      if (xe > x0) seg(x0, xe, hh[mod(cur, nn)], hs[mod(cur, nn)], hv[mod(cur, nn)])
+      x0 = max(x0, xe); cur = m
+    }
+    xa = xb; pa = pb
+  }
+  var k = mod(cur, nn)
+  seg(x0, N, hh[k], hs[k], hv[k])
+  if (flag == 0) {                            // stars: one pixel each, twinkling
+    var nStars = clamp(round(N * 0.25 / 6), 2, 10), spp = hEnd / nStars
+    for (var q = 0; q < nStars; q++) {
+      var c = (q + 0.5) * spp, sv = 1 - twinkle / 100 * triangle(starT + q * 0.37)
+      for (var i = ceil(c - 0.51); i <= floor(c + 0.51) && i < hEnd; i++) {
+        var l = lum(i)
+        rgb(mix(0.06, 1, sv) * l, mix(0.08, 1, sv) * l, l)
+        setPixel(i)
+      }
+    }
   }
 }
 

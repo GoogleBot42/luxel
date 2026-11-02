@@ -6,6 +6,7 @@
 // as its depletion D = 1 - A, so feed and kill are plain bulk decays; both
 // Laplacians are native stencil2D passes and only the a*b*b reaction is an
 // interpreted loop. A culture that dies or has run its course is reseeded.
+// A canvas smaller than the panel is upscaled bilinearly.
 
 var CAP = 48
 var D = array(CAP * CAP)         // depletion of A (A = 1 - D)
@@ -17,6 +18,7 @@ var W = 32
 var H = 32
 var N = 1024
 var gwSeen = -1
+var filt = 0
 var f = 0.0545
 var k = 0.062
 var acc = 0
@@ -91,6 +93,7 @@ function setup() {
   W = gw > 0 ? min(gw, CAP) : 32
   H = gw > 0 ? min(gridHeight(), CAP) : 32
   N = W * H
+  filt = gw > W || gridHeight() > H ? 1 : 0   // 1:1 stays nearest
   setPreset()
   setPal()
   feedback(D, 0)
@@ -138,5 +141,5 @@ export function renderBulk() {
     if (age > runSec) { feedback(D, 0); feedback(B, 0); drops(6 + floor(N / 120)) }
     else if (mass < 0.002) drops(3 + floor(N / 250))
   }
-  paintCanvas(B, W, H)
+  paintCanvas(B, W, H, 1, filt)
 }

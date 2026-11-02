@@ -5,7 +5,9 @@
 // minus a cooling drawn in 1/36 steps, so heat climbs off a white-hot bed in
 // ragged tongues through a 36-step ramp. The sim is sized from the grid (an
 // integer fraction of it, at most 48 cells a side) and painted with one
-// paintCanvas. Dragon makes the bed exhale in surges. Strip: one column.
+// paintCanvas. Dragon makes the bed exhale in surges. Strip: one column of at
+// most 64 cells; a longer strip draws one gradientRange per cell gap through an
+// HSV copy of the ramp (the neighbours' colours are close, so the lerp is the ramp).
 
 var CAP = 48
 var cv = array(CAP * CAP)
@@ -28,6 +30,29 @@ stop(6, 0.7, 0.88, 0.56, 0.1)
 stop(7, 0.82, 0.85, 0.72, 0.22)
 stop(8, 0.92, 0.93, 0.88, 0.55)
 stop(9, 1, 1, 1, 1)
+
+// The ramp as HSV at 65 heats, for the strip's gradientRange runs (built once).
+var LN = 64
+var lH = array(LN + 1), lS = array(LN + 1), lV = array(LN + 1), rgbT = array(3)
+for (var li = 0, si = 0; li <= LN; li++) {
+  var x = li / LN
+  while (si < 8 && pal[(si + 1) * 4] < x) si++
+  var f = (x - pal[si * 4]) / (pal[(si + 1) * 4] - pal[si * 4])
+  var o = si * 4
+  rgb2hsv(mix(pal[o + 1], pal[o + 5], f), mix(pal[o + 2], pal[o + 6], f), mix(pal[o + 3], pal[o + 7], f), rgbT)
+  lH[li] = rgbT[0]
+  lS[li] = rgbT[1]
+  lV[li] = rgbT[2]
+}
+lH[0] = lH[1]                                   // black and white have no hue of their own
+lH[LN] = lH[LN - 1]
+var cH = 0, cS = 0, cV = 0
+function heatHsv(h) {
+  var u = clamp(h, 0, 0.999) * LN, k = floor(u), f = u - k
+  cH = lH[k] + (lH[k + 1] - lH[k]) * f
+  cS = lS[k] + (lS[k + 1] - lS[k]) * f
+  cV = lV[k] + (lV[k + 1] - lV[k]) * f
+}
 
 var flameH = 0.75
 // How far the tongues climb, as a percentage of the panel height.
@@ -123,13 +148,32 @@ export function renderBulk() {
   // strip: the column runs from index 0 (the bed) to the far end
   var n = pixelCount
   var sc = (ch - 1) / max(n - 1, 1)
-  for (var i = 0; i < n; i++) {
-    var u = (ch - 1) - i * sc
-    var k = floor(u)
-    var h = cv[k] + (cv[min(k + 1, ch - 1)] - cv[k]) * (u - k)
-    paint(min(h, 0.999))
-    setPixel(i)
+  if (n <= ch) {                                 // a cell (or more) per pixel
+    for (var i = 0; i < n; i++) {
+      var u = (ch - 1) - i * sc
+      var k = floor(u)
+      var h = cv[k] + (cv[min(k + 1, ch - 1)] - cv[k]) * (u - k)
+      paint(min(h, 0.999))
+      setPixel(i)
+    }
+    return
   }
+  // longer strips: cell k sits at pixel centre ((ch - 1 - k) / sc); one run per gap,
+  // added over a cleared strip so the runs' shared end pixels sum to whole ones
+  clear()
+  var ps = 1 / sc, x0 = 0.5, k2 = ch - 1
+  heatHsv(cv[k2])
+  hsv(cH, cS, cV)
+  fillRangeAA(0, 0.5, 1)
+  while (k2 > 0) {
+    var h0 = cH, s0 = cS, v0 = cV, x1 = x0 + ps
+    k2--
+    heatHsv(cv[k2])
+    gradientRange(x0, x1, h0, s0, v0, cH, cS, cV, 1)
+    x0 = x1
+  }
+  hsv(cH, cS, cV)
+  fillRangeAA(n - 0.5, n, 1)
 }
 
 // declares the strip form (no default grid on a mapless strip); renderBulk wins

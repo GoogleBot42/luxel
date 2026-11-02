@@ -5,7 +5,9 @@
 // marker (a sun by day, a cool moon by night) sits at the current time, hours
 // already gone are dimmed so the day visibly fills, faint notches mark the
 // hours and stars twinkle in the night. Or centre it on now as a rolling day.
-// Index space only: the ribbon is repainted once a minute, the marker every frame.
+// Index space only: once a minute the sky is sampled (per pixel, at most 144 times) and the
+// ribbon repainted as one gradientRange per sample span; the marker is a
+// splatIndex glow and only the pixels it and the stars touch are redrawn.
 
 var sunrise = 6.5, sunset = 19.5
 var centred = 0
@@ -33,6 +35,9 @@ var NK = 14
 var KH = array(14), col = array(3)
 var dirty = 1, now = 0, lastMin = -1, secFrac = 0, lastSec = -1, t = 0
 var mark = -10, start = 0                    // marker pixel, hour at pixel 0
+var MS = 144                                 // most sky samples across the day
+var SH = array(145), SS = array(145), SV = array(145), hc = array(3)
+var M = 24                                   // sample spans in use
 
 function sky(hr) {                            // colour of the sky at hour hr -> col
   hr = mod(hr - KH[0], 24) + KH[0]
@@ -43,20 +48,64 @@ function sky(hr) {                            // colour of the sky at hour hr ->
   mixColors(KR[i], KG[i], KB[i], KR[i + 1], KG[i + 1], KB[i + 1], f, col)
 }
 
-function hourAt(i) { return mod(start + (reverse ? pixelCount - 1 - i + 0.5 : i + 0.5) / pixelCount * 24, 24) }
-
-function base(i) {                            // ribbon colour of pixel i -> col
-  var hr = hourAt(i)
-  sky(hr)
-  var k = 1, ago = mod(now - hr, 24)
-  if (ago < (centred ? 12 : now)) k = 0.42    // hours already gone
-  var pph = pixelCount / 24
-  if (pph >= 4 && floor(hourAt(i - 1)) != floor(hr)) k *= 0.45
-  else if (pph < 4 && floor(hourAt(i - 1) / 3) != floor(hr / 3)) k *= 0.45
-  col[0] *= k; col[1] *= k; col[2] *= k
+// the sky at M + 1 even steps from pixel 0's hour, as HSV with the hue unwrapped
+// so neighbouring samples never lerp the long way round
+function sampleSky() {
+  M = clamp(pixelCount, 24, MS)
+  for (var k = 0; k <= M; k++) {
+    sky(start + k * 24 / M)
+    rgb2hsv(col[0], col[1], col[2], hc)
+    SH[k] = k == 0 ? hc[0] : SH[k - 1] + mod(hc[0] - SH[k - 1] + 0.5, 1) - 0.5
+    SS[k] = hc[1]; SV[k] = hc[2]
+  }
 }
 
-function paintPixel(i) { base(i); rgb(col[0], col[1], col[2]); setPixel(i) }
+function hourAt(i) { return mod(start + (reverse ? pixelCount - 1 - i + 0.5 : i + 0.5) / pixelCount * 24, 24) }
+
+function notch(i, hr) {                       // first pixel of an hour (or of 3 h on short strips)
+  var q = pixelCount / 24 >= 4 ? 1 : 3
+  return floor(hourAt(i - 1) / q) != floor(hr / q)
+}
+
+function base(i) {                            // ribbon colour of pixel i -> col, as HSV
+  var j = reverse ? pixelCount - 1 - i : i
+  var f = (j + 0.5) / pixelCount * M, k = clamp(floor(f), 0, M - 1), u = f - k
+  col[0] = mix(SH[k], SH[k + 1], u); col[1] = mix(SS[k], SS[k + 1], u); col[2] = mix(SV[k], SV[k + 1], u)
+  var hr = hourAt(i), ago = mod(now - hr, 24)
+  if (ago < (centred ? 12 : now)) col[2] *= 0.42    // hours already gone
+  if (notch(i, hr)) col[2] *= 0.45
+}
+
+function paintPixel(i) { base(i); hsv(col[0], col[1], col[2]); setPixel(i) }
+
+// logical span [a, b) (pixel 0 = the ribbon's start) from sample position fa to fb
+function span(a, b, fa, fb, dim) {
+  var ka = clamp(floor(fa), 0, M - 1), ua = fa - ka, kb = clamp(ceil(fb) - 1, 0, M - 1), ub = fb - kb
+  var h0 = mix(SH[ka], SH[ka + 1], ua), s0 = mix(SS[ka], SS[ka + 1], ua), v0 = mix(SV[ka], SV[ka + 1], ua) * dim
+  var h1 = mix(SH[kb], SH[kb + 1], ub), s1 = mix(SS[kb], SS[kb + 1], ub), v1 = mix(SV[kb], SV[kb + 1], ub) * dim
+  var n = pixelCount
+  if (reverse) gradientRange(n - a, n - b, h0, s0, v0, h1, s1, v1, 1)
+  else gradientRange(a, b, h0, s0, v0, h1, s1, v1, 1)
+}
+
+function repaint() {
+  sampleSky()
+  var n = pixelCount, w = n / M
+  clear()
+  // hours already gone are the first B pixels of the ribbon: split there
+  var B = clamp(floor((centred ? 12 : mod(now - start, 24)) * n / 24 - 0.5) + 1, 0, n)
+  for (var k = 0; k < M; k++) {
+    var a = k * w, b = (k + 1) * w
+    if (b <= B) span(a, b, k, k + 1, 0.42)
+    else if (a >= B) span(a, b, k, k + 1, 1)
+    else { span(a, B, k, B / w, 0.42); span(B, b, B / w, k + 1, 1) }
+  }
+  var q = n / 24 >= 4 ? 1 : 3                 // the hour notches, redrawn per pixel
+  for (var hh = 0; hh < 24; hh += q) {
+    var x = mod(hh - start, 24) / 24 * n, c = floor(reverse ? n - x : x)
+    for (var i = max(c - 1, 0); i <= min(c + 1, n - 1); i++) if (notch(i, hourAt(i))) paintPixel(i)
+  }
+}
 
 export function beforeRender(delta) {
   var s = clockSecond(), dt = min(delta, 200) / 1000
@@ -73,7 +122,7 @@ export function beforeRender(delta) {
 
 export function renderBulk() {
   var n = pixelCount, i
-  if (dirty) { for (i = 0; i < n; i++) paintPixel(i); dirty = 0 }
+  if (dirty) { repaint(); dirty = 0 }
   else for (i = floor(mark) - 4; i <= floor(mark) + 5; i++) if (i >= 0 && i < n) paintPixel(i)
 
   var nStars = max(2, floor(n / 25))          // stars twinkle in the night stretches
@@ -85,22 +134,21 @@ export function renderBulk() {
     var tw = triangle(mod(cyc, 1)), prev = floor(hash2(j, floor(cyc) - 1) * n)
     paintPixel(prev)
     base(p)
+    hsv2rgb(col[0], col[1], col[2], col)
     rgb(col[0] + 0.55 * tw, col[1] + 0.55 * tw, col[2] + 0.6 * tw)
     setPixel(p)
   }
 
+  // the marker: a soft (1 - d/4)^2 glow (two splats) and a bright core, added
   var pos = mod(now - start, 24) / 24 * n - 0.5
   if (reverse) pos = n - 1 - pos
   mark = pos
-  var day = now > sunrise && now < sunset, pulse = 0.85 + 0.15 * wave(t / 2.2)
-  for (i = floor(pos) - 3; i <= floor(pos) + 4; i++) {
-    var d = abs(i - pos), glow = clamp(1 - d / 4, 0, 1)
-    if (glow <= 0 || i < 0 || i >= n) continue
-    var core = clamp(1.2 - d, 0, 1)
-    base(i)
-    var g = glow * glow * 0.8 * pulse
-    if (day) rgb(col[0] + g + core, col[1] + g * 0.8 + core * 0.85, col[2] + g * 0.3 + core * 0.5)
-    else rgb(col[0] + g * 0.55 + core * 0.7, col[1] + g * 0.6 + core * 0.8, col[2] + g + core)
-    setPixel(i)
-  }
+  var day = now > sunrise && now < sunset, g = 0.4 * (0.85 + 0.15 * wave(t / 2.2))
+  if (day) rgb(g, g * 0.8, g * 0.3)
+  else rgb(g * 0.55, g * 0.6, g)
+  splatIndex(pos, 4, 1)
+  splatIndex(pos, 2, 1)
+  if (day) rgb(1, 0.85, 0.5)
+  else rgb(0.7, 0.8, 1)
+  splatIndex(pos, 1.2, 1)
 }

@@ -4,13 +4,14 @@
 // straight beams and a spinning clover; bright cores bleach to pastel. One clock drives
 // it all, so pulse speed, spin and in/out direction breathe and reverse together.
 // Each pixel's angle and radius are tabled once and the angle-only terms come from a
-// 512-entry table rebuilt per frame: no trig per pixel. Above 4,096 px a grid reads a
-// 64-wide table by coordinate (2x2 cells on 128x128).
+// 512-entry table rebuilt per frame: no trig per pixel. Above 4,096 px a grid renders
+// at <= 4,096 cells (64x64 on 128x128), expanded bilinearly by the engine (setRenderSize).
 
 var TN = min(pixelCount, 4096), NB = 512
 var A = array(TN), R = array(TN)  // per pixel: angle bin, radius
 var SA = array(NB + 1), HA = array(NB + 1)
 var mode = 0, cw = 0, ch = 0, TS = 0, key = -1, aspX = 1, aspY = 1, ab = 0
+var rs = 0, rsW = 0, rsH = 0      // 1 once a big grid renders at rsW x rsH
 
 var master = 60                   // seconds per morph cycle
 var cycles = 6                    // pulses per swing of the clock
@@ -46,14 +47,20 @@ function polar(x, y) {             // -> radius; angle bin left in ab
 }
 
 export function beforeRender(delta) {
-  var w = gridWidth(), h = gridHeight()
+  if (!rs && pixelCount > TN && has2DMap() && gridWidth() > 0 && gridHeight() > 1) {
+    var gw = gridWidth(), gh = gridHeight()
+    rsW = min(gw, floor(64 * sqrt(gw / gh) + 0.001)); rsH = min(gh, floor(TN / rsW))
+    setRenderSize(rsW, rsH, 1)      // pixelCount is rsW * rsH from here on
+    rs = 1
+  }
+  var w = rs ? rsW : gridWidth(), h = rs ? rsH : gridHeight()
   if (w * 4096 + h != key) {
     key = w * 4096 + h
     var m = max(max(w, h), 1)
     aspX = w > 0 ? w / m : 1; aspY = h > 0 ? h / m : 1
-    // 1: table per pixel; 2: a <= 4096-cell table read by coordinate; 0: no table
-    mode = pixelCount <= TN ? 1 : (w > 0 ? 2 : 0)
-    cw = min(w, 64); ch = min(h, floor(TN / max(cw, 1)))
+    // 1: table per pixel by map; 2: render-size table built by cell; 0: no table
+    mode = rs ? 2 : (pixelCount <= TN ? 1 : 0)
+    cw = w; ch = h
     TS = mode == 1 ? pixelCount : (mode == 2 ? cw * ch : 0)
     for (var i = 0; i < TS; i++) {
       if (mode == 1) R[i] = polar(pixelCoord(i, 0), pixelCoord(i, 1))
@@ -74,11 +81,8 @@ export function beforeRender(delta) {
 
 export function render2D(index, x, y) {
   var r, a
-  if (mode == 1) { r = R[index]; a = A[index] }
-  else if (mode) {
-    var i = floor(y * ch * 0.9999) * cw + floor(x * cw * 0.9999)
-    r = R[i]; a = A[i]
-  } else { r = polar(x, y); a = ab }
+  if (mode) { r = R[index]; a = A[index] }
+  else { r = polar(x, y); a = ab }
   var v = triangle(SA[a] + r * radK)
   v = v * v
   hsv(HA[a] + r * hueSpread, 1.5 - v, v)

@@ -6,7 +6,8 @@
 // round and hunts them, eaten ghosts fly home as eyes. A cleared board flashes and refills,
 // a caught chomper pops and respawns — it never stops. On a strip the track is the strip
 // (the ends are a wrap-around tunnel); on a panel it is a walled loop round a ghost house
-// with the score. renderBulk: fillRange actors on strips, keyed sprite blits on panels.
+// with the score. renderBulk: anti-aliased fillRangeAA actors gliding between LEDs on
+// strips (the board itself stays crisp), keyed sprite blits on panels.
 
 var lapS = 12           // seconds for the chomper to run one lap
 //# min=4 max=40 step=1 default=12
@@ -319,13 +320,35 @@ function drawPanel() {
   if (hy1 + 8 < ch - a - sz - 1) drawNumber(score, floor(cw / 2) - digits * 2, hy1 + 2, 1, 0)
 }
 
-// wrap-aware run on the strip
+// wrap-aware run on the strip (static pieces: whole pixels)
 function run(p, n) {
   p = mod(round(p), T)
   fillRange(p, p + n)
   if (p + n > T) fillRange(0, p + n - T)
 }
 
+// wrap-aware anti-aliased run [p, p + n) for moving pieces, blended with mode
+function glide(p, n, mode) {
+  p = mod(p, T)
+  fillRangeAA(p, p + n, mode)
+  if (p + n > T) fillRangeAA(p - T, p + n - T, mode)
+}
+
+// an actor of sz px with a one-pixel feature (eye, mouth) at its leading end:
+// the first part replaces what is under it, the second adds, so the pixel the
+// two share sums to one whole pixel at any sub-pixel position
+var fr = 0, fg = 0, fb = 0
+function actor(p, fwd, br, bg, bb) {
+  if (fwd) {
+    rgb(br, bg, bb); glide(p, sz - 1, 0)
+    rgb(fr, fg, fb); glide(p + sz - 1, 1, 1)
+  } else {
+    rgb(fr, fg, fb); glide(p, 1, 0)
+    rgb(br, bg, bb); glide(p + 1, sz - 1, 1)
+  }
+}
+
+var cv3 = array(3)
 function drawStrip() {
   clear()
   if (levelT > 0) { hsv(0.64, 0.8, square(levelT * 3, 0.5) * 0.25); fill() }
@@ -338,27 +361,28 @@ function drawStrip() {
   for (k = 0; k < P; k++) if (pel[k] == 2) run(k * gap, sz)
   for (g = 0; g < 4; g++) {
     if (gs[g] == 3 || (deathT > 0 && deathT < 1.1)) continue
-    var lead = gd[g] > 0 ? sz - 1 : 0
-    if (gs[g] == 2) { rgb(0.7, 0.7, 0.8); run(gp[g] + lead, 1); continue }
+    if (gs[g] == 2) { rgb(0.7, 0.7, 0.8); glide(gp[g] + (gd[g] > 0 ? sz - 1 : 0), 1, 0); continue }
     var lk = ghostLook(g)
-    if (lk < 0) rgb(1, 1, 1)
-    else hsv(lk, 1, 1)
-    run(gp[g], sz)
-    rgb(1, 1, 1)
-    run(gp[g] + lead, 1)                                // the eye, looking ahead
+    if (lk < 0) { cv3[0] = 1; cv3[1] = 1; cv3[2] = 1 }
+    else hsv2rgb(lk, 1, 1, cv3)
+    fr = 1; fg = 1; fb = 1                               // the eye, looking ahead
+    actor(gp[g], gd[g] > 0, cv3[0], cv3[1], cv3[2])
   }
   if (deathT <= 0 || deathT > 1.1) {
-    var lit = deathT > 0 ? sz * (deathT - 1.1) * 2 : sz
-    hsv(0.15, 1, 1)
-    run(cp + (sz - lit) / 2, lit)
-    hsv(0.15, 1, readyT > 0 ? 1 : 0.15 + 0.85 * triangle(chomp))   // the mouth opens and shuts
-    run(cp + (cd > 0 ? sz - 1 : 0), 1)
+    hsv2rgb(0.15, 1, readyT > 0 ? 1 : 0.15 + 0.85 * triangle(chomp), cv3)   // the mouth opens and shuts
+    fr = cv3[0]; fg = cv3[1]; fb = cv3[2]
+    hsv2rgb(0.15, 1, 1, cv3)
+    if (deathT > 0) {                                   // caught: shrinking to nothing
+      var lit = sz * (deathT - 1.1) * 2
+      rgb(cv3[0], cv3[1], cv3[2])
+      glide(cp + (sz - lit) / 2, lit, 0)
+    } else actor(cp, cd > 0, cv3[0], cv3[1], cv3[2])
   }
-  if (popT < 0.5) {
+  if (popT < 0.5) {                                     // the pop: two sparks flying apart
     hsv(deathT > 0 ? 0.15 : 0.55, 0.3, 1 - popT * 2)
-    var r = round(popT * sz * 6)
-    setPixel(mod(round(popP) - r, T))
-    setPixel(mod(round(popP) + sz + r, T))
+    var r = popT * sz * 6
+    splatIndex(mod(popP - r, T), 1, 1)
+    splatIndex(mod(popP + sz + r, T), 1, 1)
   }
 }
 

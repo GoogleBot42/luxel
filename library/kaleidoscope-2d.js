@@ -182,5 +182,5 @@ export function renderBulk() {
     var u = ai * A + S
     cv[i] = canvasGet(pol, NA, abs(u - floor(u) - 0.5) * 2, p - ai)
   }
-  paintCanvas(cv, CW, CH)
+  paintCanvas(cv, CW, CH, 1, gridWidth() > CW || gridHeight() > CH ? 1 : 0)   // bilinear only when upscaling
 }

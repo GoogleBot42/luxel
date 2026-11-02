@@ -125,6 +125,5 @@ export function renderBulk() {
       j++
     }
   }
-  fillCanvas(cH, cS, cV, CW, CH)
-  setBlur(passes > 0 ? 0.35 : 0, passes)
+  fillCanvas(cH, cS, cV, CW, CH, passes > 0 ? 1 : 0)   // bilinear only when upscaling
 }

@@ -5,12 +5,14 @@
 // (floored, so it never melts into a flat wash), and Reflections folds it into a
 // seamless mirrored kaleidoscope. Each pixel's (folded) angle and radius are tabled
 // once; the shear depends on radius alone, so it is a small table rebuilt per frame.
-// Above 4,096 px a grid reads a 64-wide table by coordinate (2x2 cells on 128x128).
+// Above 4,096 px a grid renders at <= 4,096 cells (64x64 on 128x128), expanded
+// bilinearly by the engine (setRenderSize): a quarter of the work, no 2x2 blocks.
 
 var TN = min(pixelCount, 4096), NR = 256
 var A = array(TN), R = array(TN)  // per pixel: folded angle (rad), radius in RL bins
 var RL = array(NR + 1), RH = array(NR + 1)  // per radius bin: shear angle, hue offset
 var mode = 0, cw = 0, ch = 0, TS = 0, key = -1, aspX = 1, aspY = 1
+var rs = 0, rsW = 0, rsH = 0      // 1 once a big grid renders at rsW x rsH
 
 var speed = 1                     // x the base dance rate
 var twist = 1.75                  // shear reach
@@ -41,14 +43,20 @@ function polar(x, y) {             // -> angle (rad, folded) and radius bin
 }
 
 export function beforeRender(delta) {
-  var w = gridWidth(), h = gridHeight()
+  if (!rs && pixelCount > TN && has2DMap() && gridWidth() > 0 && gridHeight() > 1) {
+    var gw = gridWidth(), gh = gridHeight()
+    rsW = min(gw, floor(64 * sqrt(gw / gh) + 0.001)); rsH = min(gh, floor(TN / rsW))
+    setRenderSize(rsW, rsH, 1)      // pixelCount is rsW * rsH from here on
+    rs = 1
+  }
+  var w = rs ? rsW : gridWidth(), h = rs ? rsH : gridHeight()
   if (w * 4096 + h != key) {
     key = w * 4096 + h
     var m = max(max(w, h), 1)
     aspX = w > 0 ? w / m : 1; aspY = h > 0 ? h / m : 1
-    // 1: table per pixel; 2: a <= 4096-cell table read by coordinate; 0: no table
-    mode = pixelCount <= TN ? 1 : (w > 0 ? 2 : 0)
-    cw = min(w, 64); ch = min(h, floor(TN / max(cw, 1)))
+    // 1: table per pixel by map; 2: render-size table built by cell; 0: no table
+    mode = rs ? 2 : (pixelCount <= TN ? 1 : 0)
+    cw = w; ch = h
     TS = mode == 1 ? pixelCount : (mode == 2 ? cw * ch : 0)
     for (var i = 0; i < TS; i++) {
       if (mode == 1) R[i] = polar(pixelCoord(i, 0), pixelCoord(i, 1))
@@ -72,11 +80,8 @@ export function beforeRender(delta) {
 
 export function render2D(index, x, y) {
   var rb, a
-  if (mode == 1) { rb = R[index]; a = A[index] }
-  else if (mode) {
-    var i = floor(y * ch * 0.9999) * cw + floor(x * cw * 0.9999)
-    rb = R[i]; a = A[i]
-  } else { rb = polar(x, y); a = ph }
+  if (mode) { rb = R[index]; a = A[index] }
+  else { rb = polar(x, y); a = ph }
   var tx = rb * cos(a + RL[rb])
   var v = wave(tx * kz)
   hsv(tx * hz + RH[rb], 1, v * v)

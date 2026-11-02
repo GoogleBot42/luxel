@@ -5,7 +5,8 @@
 // its own. Bubbles rise and pop at the surface — sound makes it fizz. Waves
 // mode: rainbow bands climbing against gravity. On a panel each column (or
 // row, when it is on its side) is one blit of a depth strip offset to the
-// surface line; strips and 3D maps evaluate the same strip per pixel.
+// surface line; a strip is a dozen or so gradientRange runs between the depth
+// profile's breakpoints; 3D maps evaluate it per pixel.
 
 export var accelerometer = array(3)  // panel: x = right, y = down (remap per fixture)
 export var energyAverage = 0
@@ -161,16 +162,55 @@ function panel(gw, gh) {
   for (var i = 0; i < NB; i++) if (bOn[i]) splat(bx[i], by[i], r * 2.2, 1)
 }
 
-// strips (index 0 = the bottom of the tank) and 3D maps
-function strip() {
-  var n = pixelCount, k = 1 / max(n - 1, 1)
-  var top = mode == 1 ? 0.5 : 0.5 - s0 - surf(0.3) * 2
-  for (var i = 0; i < n; i++) {
-    shadeAt(top - i * k)
-    hsv(oH, oS, oV)
-    setPixel(i)
+// Strips (index 0 = the bottom of the tank): pixel i shows depth top - i*k. The
+// depth profile is linear between breakpoints (the surface, the foam line, the
+// hue and brightness limits; the air glow and the wave crests are curves, cut
+// finer), so each span is one anti-aliased gradientRange, added over a cleared
+// strip so the spans meet exactly and the surface line moves smoothly.
+var BP = [1, 0.5714, 0.025, 0, -0.05, -0.1, -0.15, -0.2, -0.25, -0.3, -0.35, -0.4]
+var cuts = array(80)
+var sTop = 0, sK = 1
+
+function span(o0, o1) {                 // depths o0 > o1, cut into `sub` linear runs
+  var x0 = (sTop - o0) / sK + 0.5, x1 = (sTop - o1) / sK + 0.5
+  var sub = mode == 1 ? clamp(ceil((x1 - x0) / 4), 1, 3) : 1
+  var d = (o0 - o1) / sub
+  for (var j = 0; j < sub; j++) {
+    var a = o0 - j * d, b = a - d, e = d * 0.002
+    shadeAt(a - e)
+    var h0 = oH, s0_ = oS, v0 = oV
+    shadeAt(b + e)
+    gradientRange((sTop - a) / sK + 0.5, (sTop - b) / sK + 0.5, h0, s0_, v0, oH, oS, oV, 1)
   }
 }
+
+function strip() {
+  var n = pixelCount
+  sK = 1 / max(n - 1, 1)
+  sTop = mode == 1 ? 0.5 : 0.5 - s0 - surf(0.3) * 2
+  var hi = sTop + 0.5 * sK, lo = sTop - (n - 0.5) * sK   // the depths at the strip's two ends
+  var nc = 0
+  cuts[nc++] = hi
+  if (mode == 1) {
+    // band edges (a hue step, phase j) and crests (phase j + 0.6), top down
+    var p = hi * 5 - t * 0.9, pl = lo * 5 - t * 0.9
+    var q = floor(p) + 0.6, crest = 1
+    if (q >= p) { q = floor(p); crest = 0 }
+    while (q > pl && nc < 78) {
+      cuts[nc++] = (q + t * 0.9) / 5
+      q -= crest ? 0.6 : 0.4
+      crest = 1 - crest
+    }
+  } else {
+    for (var b = 0; b < BP.length; b++) if (BP[b] < hi && BP[b] > lo) cuts[nc++] = BP[b]
+  }
+  cuts[nc++] = lo
+  clear()
+  for (var c = 1; c < nc; c++) span(cuts[c - 1], cuts[c])
+}
+
+// 3D maps
+
 
 function cloud() {
   for (var i = 0; i < pixelCount; i++) {
@@ -192,7 +232,8 @@ export function renderBulk() {
   var lit = 0.5 - s0, sparks = 1 + floor(fizzAcc * 3 + (soundOn ? energyAverage * 8 : 0))
   hsv(hue0 + 0.55, 0.2, 1)
   for (var j = 0; j < sparks; j++) {
-    var at = floor(random(pixelCount))
-    if (has3DMap() || at < lit * pixelCount) setPixel(at)
+    var at = random(pixelCount)
+    if (has3DMap()) setPixel(at)
+    else if (at < lit * pixelCount) splatIndex(floor(at), 1.5, 2)   // a white pixel with a faint halo
   }
 }

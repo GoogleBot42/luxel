@@ -158,11 +158,10 @@ function panelStep(dt) {
     }
   }
   spawnAcc = min(spawnAcc, 2)
-  setBlur(gw > 0 && cw < gw ? 0.3 : 0)
 }
 
 function renderPanel() {
-  paintCanvas(cv, cw, ch)
+  paintCanvas(cv, cw, ch, 1, gw > 0 && cw < gw ? 1 : 0)   // bilinear upscale
   var r = max(1.2 / max(gw, 32), 0.01)
   for (var i = 0; i < NS; i++) {
     if (pl[i] > 0) {
@@ -257,10 +256,7 @@ export function beforeRender(delta) {
   t = mod(t + dt, 3600)
   gust = 0.5 + 0.5 * simplex2(t * 0.45, 0.5, 5)
   if (has2DMap()) panelStep(dt)
-  else {
-    setBlur(0)
-    stripStep(delta)
-  }
+  else stripStep(delta)
 }
 
 export function renderBulk() {
