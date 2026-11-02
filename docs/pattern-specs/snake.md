@@ -1,3 +1,5 @@
+> Superseded: this idea now lives in library/meteor-shower.js (2026-11).
+
 # snake
 kind: 1D
 sensors: no
