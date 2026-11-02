@@ -28,7 +28,18 @@
 //     `# layout:` comment, `strip` or `grid` — and a STRIP scene is written
 //     in segments: every box has `y` 0 and `h` 0 or 1, and no keyframe moves
 //     `y` off 0 (a box below row 0 draws nothing on a strip), and it has no
-//     text layer (text draws nothing on one row). Library/README.md "Strips".
+//     text layer (text draws nothing on one row). Library/README.md "Strips";
+//   * a scene with a design size (`U <w> <h>`, docs/spec/scenes.md §2
+//     "Design size") keeps its composition INSIDE it: every placed axis of a
+//     box that is not `X abs` lies within the design area, a zero axis starts
+//     inside it, and a natural-size sprite fits at its record's size. An axis
+//     a keyframe track moves is exempt — a track walks on and off by design.
+//     This is what catches the "64 extras" a 32x32 design would push off-panel;
+//   * in such a scene every non-scrolling `lit` caption fits the design width
+//     at 1x: the RUST compositor draws the layer alone, white, at exactly the
+//     design size, and every glyph pixel it draws on an unclipped canvas has
+//     to be there too. Measured, not computed — the glyph metrics are
+//     `luxel_core::text`'s and nothing here mirrors them.
 //
 // Usage (from web/):
 //   node --experimental-strip-types tools/check-sprite-scene-library.mjs
@@ -110,6 +121,8 @@ const spriteFiles = fs.existsSync(spriteDir)
   : [];
 /** slug → display name, for the scene pass. */
 const spriteNames = new Map();
+/** slug → natural size, for the design-area check. */
+const spriteDims = new Map();
 let spriteBytesTotal = 0;
 for (const f of spriteFiles) {
   const what = `library/sprites/${f}`;
@@ -128,6 +141,7 @@ for (const f of spriteFiles) {
   const rust = rustCheckSprite(spriteCh, record);
   if (rust !== null) fail(what, `luxel_core::sprite refuses it: ${rust}`);
   spriteNames.set(libSlug(f), r.sprite.name);
+  spriteDims.set(libSlug(f), { w: r.sprite.w, h: r.sprite.h });
   console.log(
     `  sprite ${libSlug(f).padEnd(14)} ${String(r.sprite.w)}×${r.sprite.h}` +
       ` · ${r.sprite.frames} frame${r.sprite.frames === 1 ? "" : "s"}` +
@@ -178,6 +192,70 @@ function notASegment(l) {
 }
 const kinds = { grid: 0, strip: 0 };
 
+/** Why a layer of a `U rw rh` scene leaves the design area, or null.
+ *  `natural` is a natural-size sprite's record size, when it has one. */
+function offDesign(l, [rw, rh], natural) {
+  const r = l.style.rect;
+  const keys = l.keys ?? [];
+  const strip = rh === 1;
+  const tile = l.style.fit === "tile";
+  const why = [];
+  for (const [axis, v, n, size, nat] of [
+    ["x", r.x, r.w, rw, natural?.w],
+    ["y", r.y, r.h, rh, natural?.h],
+  ]) {
+    if (keys.some((k) => k[axis] !== null)) continue; // the track owns it
+    if (axis === "y" && strip) continue; // the strip check owns y
+    // a zero axis is the natural size on a fill/contain sprite, the rest of
+    // the layout everywhere else (§2 "Geometry", §4 "Placement")
+    const len = n > 0 ? n : l.body.kind === "sprite" && !tile ? nat : 0;
+    if (len === undefined) continue; // an unresolved sprite: reported elsewhere
+    if (len > 0 ? v < 0 || v + len > size : v >= size) {
+      why.push(len > 0 ? `${axis} ${v}..${v + len}` : `${axis} from ${v}`);
+    }
+  }
+  return why.length === 0 ? null : `${why.join(", ")} is outside the U ${rw} ${rh} design area`;
+}
+
+/** Lit pixels of one composited frame of `wire` on a `w`x`h` grid. */
+function litPixels(w, h, wire) {
+  const ch = e.lx_comp_new(w, h);
+  try {
+    if (rustParseScene(ch, wire) !== null) return -1;
+    const p = e.lx_comp_frame(ch, 0);
+    if (p === 0) return -1;
+    const px = new Uint8Array(e.memory.buffer, p, w * h * 3);
+    let n = 0;
+    for (let i = 0; i < w * h; i++) if (px[3 * i] | px[3 * i + 1] | px[3 * i + 2]) n++;
+    return n;
+  } finally {
+    e.lx_comp_free(ch);
+  }
+}
+
+/** Why a non-scrolling `lit` text layer of a `U rw rh` scene does not fit
+ *  the design area at 1x, or null: its glyph pixels on the design-size grid
+ *  against the same caption drawn on a canvas wide enough for any of it. A
+ *  caption cut off at the bottom fails too — it is the same defect. */
+function textOverflows(l, [rw, rh]) {
+  const t = l.body.text;
+  const r = l.style.rect;
+  const body = (font, align) => `T lit ${t.source.text}\nF ${font} ffffff ${align} none 0\n`;
+  const want = litPixels(
+    16 + 8 * new TextEncoder().encode(t.source.text).length,
+    16,
+    `S - probe\nL text 4 2 0 0 normal 100 none fill 1\n${body(t.font, "l")}`,
+  );
+  const got = litPixels(
+    rw,
+    rh,
+    `S - probe\nU ${rw} ${rh}\nL text ${r.x} ${r.y} ${r.w} ${r.h} normal 100 none fill 1\n${body(t.font, t.align)}`,
+  );
+  if (want <= 0 || got === want) return null;
+  return `lit text “${t.source.text}” (${t.font}) does not fit the ${rw}×${rh} design area at 1×: ` +
+    `${got} of its ${want} glyph pixels show — shorten it, use a smaller font, move it, or let it scroll`;
+}
+
 const sceneDir = path.join(repo, "library/scenes");
 const sceneFiles = fs.existsSync(sceneDir)
   ? fs.readdirSync(sceneDir).filter((f) => f.endsWith(".scene")).sort()
@@ -211,6 +289,21 @@ for (const f of sceneFiles) {
     parsed.scene.layers.forEach((l, i) => {
       const why = notASegment(l);
       if (why !== null) fail(what, `layer ${i + 1} “${l.name}”: ${why}`);
+    });
+  }
+  const space = parsed.scene.space;
+  if (space) {
+    const sprId = new Map(src.refs.filter((r) => r.kind === "spr").map((r) => [r.id, r.slug]));
+    parsed.scene.layers.forEach((l, i) => {
+      if (l.abs) return; // grid pixels by declaration
+      const natural = l.body.kind === "sprite" ? spriteDims.get(sprId.get(l.body.id)) : undefined;
+      const off = offDesign(l, space, natural);
+      if (off !== null) fail(what, `layer ${i + 1} “${l.name}”: ${off}`);
+      if (l.body.kind === "text" && l.body.text.source.kind === "lit" && l.body.text.scroll === "none" &&
+          l.body.text.source.text !== "" && space[1] > 1) {
+        const over = textOverflows(l, space);
+        if (over !== null) fail(what, `layer ${i + 1} “${l.name}”: ${over}`);
+      }
     });
   }
   // What SHIPS is the console's canonical serialization
@@ -256,7 +349,8 @@ for (const f of sceneFiles) {
     }
   }
   console.log(
-    `  scene  ${libSlug(f).padEnd(20)} ${kind ?? "?"} · ${parsed.scene.layers.length} layers · ` +
+    `  scene  ${libSlug(f).padEnd(20)} ${kind ?? "?"}${space ? ` · U ${space[0]}×${space[1]}` : ""} · ` +
+      `${parsed.scene.layers.length} layers · ` +
       `${src.refs.length} ref${src.refs.length === 1 ? "" : "s"} · ${src.wire.length} B` +
       (mLines(src.wire) > 0 ? ` · ${mLines(src.wire)} keyframes` : ""),
   );

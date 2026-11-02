@@ -1,5 +1,26 @@
 # Update log
 
+## 2026-11-02 — Scenes that fit any panel: the library re-authored (Gitea #997)
+
+The shipped scenes now declare their design size, so a 128x128 chain shows
+the composition at x4 instead of in its top-left corner. A1 moved the 13
+text/clock scenes to `U 32 32` (captions placed for the scaled glyphs,
+fire-clock's digits in the flames — #1011) and A2 the 13 sprite compositions
+(the off-design "64 extras" moved in or dropped, silent-night's snow
+`X abs`); batch B put the 8 genuinely 64-wide compositions on `U 64 64`
+(vignette-tint's box is now the whole square panel, no seam at 64; aquarium's
+second fish moved so the fish do not overlap at 32; sprite-parade's sprites
+got `fill` boxes so they shrink with the street below the design size),
+made spark-field, bulb-string and candle-row absolute on purpose (`tile`
+boxes to the panel's edge: a bigger panel gets more sparks, bulbs, candles)
+and gave strip-zones `U 150 1` (its seam is the middle of a 60 or 300 px
+strip); the full-layout four and the other two strip scenes are unchanged
+and draw byte-identically. `check-sprite-scene-library.mjs` gained two
+gates for `U` scenes — every placed, non-`abs`, unkeyed box axis inside the
+design area, and every non-scrolling `lit` caption fully drawn at 1× on the
+design-size grid (measured through the Rust compositor, so no glyph metrics
+are mirrored in JS) — both validated on a throwaway bad scene.
+
 ## 2026-11-02 — Scenes that fit any panel: the design size `U`, engine half (Gitea #997)
 
 Jeremy approved G3 on 2026-11-02. A scene may now declare the size it was

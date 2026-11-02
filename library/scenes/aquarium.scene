@@ -2,9 +2,12 @@
 # Scenery from loop tiles: kelp tiled along the floor (`fit tile`), one fish
 # sprite used three times (flags 3 = flipped to swim the other way, `A` to
 # de-sync their tails) and a bubble column that is a 6x16 tile rising forever.
-# The kelp is rooted at row 64; on a 32-row panel only its tips sway into view,
-# and the third fish and second bubble column live outside the 32x32 corner.
+# Designed at 64x64 (`U 64 64`): every placed box and sprite sits inside it
+# and a 128x128 gets the same tank at x2. On a 32x32 the positions halve but
+# the pixel art stays 1:1, so the fish crowd closer and the kelp shows its
+# top half.
 S - Aquarium
+U 64 64
 L pat 0 0 0 0 normal 100 none fill 1
 N Water
 I @pat/caustics
@@ -28,7 +31,7 @@ A 7
 L sprite 4 6 0 0 normal 100 none fill 1
 N Fish
 I @spr/fish
-L sprite 15 15 0 0 normal 100 none fill 3
+L sprite 15 20 0 0 normal 100 none fill 3
 N Fish 2
 I @spr/fish
 A 3

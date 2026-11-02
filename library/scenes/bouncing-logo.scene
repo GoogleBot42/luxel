@@ -6,9 +6,12 @@
 # last so the logo keeps one pace, and `sine` easing so it glides into every
 # wall and pushes off again. Each key also picks a sprite FRAME, and the
 # logo's frames are its tints: it changes colour on every bounce.
-# Authored for 64x64 — the box (26x13) travels the whole panel, x 0..38,
-# y 0..51; on a 32x32 it is on screen only when the path crosses that corner.
+# Designed at 64x64 (`U 64 64`) — the box (26x13) travels the whole design
+# area, x 0..38, y 0..51, so a 128x128 bounces a x2 logo off its own walls.
+# Below the design size the path halves but the pixel art stays 1:1: on a
+# 32x32 the logo overshoots the right and bottom walls by half its size.
 S - Bouncing Logo
+U 64 64
 L pat 0 0 0 0 normal 100 none fill 1
 N Stars
 C sliderWarpPercent 1638400

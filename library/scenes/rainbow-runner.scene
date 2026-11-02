@@ -7,8 +7,11 @@
 # the box rides the SAME keyframe track as the cat, 37 px behind it, so the
 # two move as one. Two dashes per 9.6 s loop: across the top, then the
 # bottom; each `M` pair at one ms is an instant jump made while both are
-# off screen. Authored for 64x64; a 32x32 sees the top dash.
+# off screen. Designed at 64x64 (`U 64 64`): the tracks are design units, so
+# a 128x128 runs a x2 cat on the same two dashes, and its rainbow — eight
+# repeats of the panel's height — still fills the scaled 16-row trail.
 S - Rainbow Runner
+U 64 64
 L pat 0 0 0 0 normal 100 none fill 1
 N Night
 I @pat/starfield-2d

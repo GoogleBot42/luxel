@@ -6,9 +6,13 @@
 # (docs/spec/scenes.md "Keyframes"): the parade moves 10 px/s, a key every
 # second, and the two keys sharing one ms are the instant jump from the
 # right edge back to the left, made while the sprite is off screen.
-# Authored for 64x64; the sprites are 16 px or smaller, so on a 32x32 the
-# same parade crosses the top-left quarter with the street out of frame.
+# Designed at 64x64 (`U 64 64`): the street and curb are full-width bands
+# at the bottom, and each sprite has a `fill` box of its own size rather than
+# a natural-size one, so it scales WITH the street at every size — x2 on a
+# 128x128, and on a 32x32 halved (the alien to a 6x4 blob) instead of 1:1
+# sprites piling up below the curb.
 S - Sprite Parade
+U 64 64
 L pat 0 0 0 0 normal 100 none fill 1
 N Sky
 I @pat/color-wash
@@ -18,7 +22,7 @@ K 2a2238
 L color 0 52 0 1 normal 100 none fill 1
 N Curb
 K 7a6a9e
-L sprite 4 44 0 0 normal 100 none fill 1
+L sprite 4 44 11 8 normal 100 none fill 1
 N Alien
 I @spr/pixel-alien
 M 0 4 44 = linear
@@ -31,7 +35,7 @@ M 6000 64 44 = sine
 M 6000 -16 44 = step
 M 7000 -6 42 = sine
 M 8000 4 44 = sine
-L sprite 24 36 0 0 normal 100 none fill 1
+L sprite 24 36 16 16 normal 100 none fill 1
 N Smiley
 I @spr/smiley
 M 0 24 36 = linear
@@ -44,7 +48,7 @@ M 5000 -6 30 = out
 M 6000 4 36 = in
 M 7000 14 30 = out
 M 8000 24 36 = in
-L sprite 44 36 0 0 normal 100 none fill 1
+L sprite 44 36 16 16 normal 100 none fill 1
 N Moods
 I @spr/face-moods
 M 0 44 36 = linear

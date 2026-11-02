@@ -3,8 +3,10 @@
 # keeps everything below row 8 so the top of the sky stays clear, and it is
 # ADDED over the aurora (black between the bars lets the curtains through),
 # ramped from blue through pink to white. Music-reactive with a sensor feed;
-# without one the analyser plays its built-in demo groove.
+# without one the analyser plays its built-in demo groove. Designed at 64x64
+# (`U 64 64`), so the clear band is the top eighth of any panel.
 S - Spectrum over Aurora
+U 64 64
 L pat 0 0 0 0 normal 80 none fill 1
 N Aurora
 I @pat/aurora-2d
