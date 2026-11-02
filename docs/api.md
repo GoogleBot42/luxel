@@ -1109,6 +1109,14 @@ goes `null` with the record.
 optional `<ms>` body (absent or `0` = hard cut). It **parks the playlist**,
 exactly like activating a pattern directly.
 
+What the scene composites ONTO follows the device's Layout (docs/spec/scenes.md
+§2 "The canvas"): a panel or any regular grid is that grid; a **strip** — no
+map, or a 1-D map — is one row of `pixel_count` cells in index order, so the
+layers' boxes are segments of it (Gitea #985; before it a device strip showed
+black); an irregular 2-D or any 3-D map has no canvas, and the scene is
+accepted, activated and draws black. Firmware and mirror apply the same
+rule.
+
 A scene shown this way **survives a reboot** (an OTA's included) the way a
 directly-activated pattern does (Gitea #790): while no playlist is playing,
 the firmware's resume record carries `S <sceneId>` in place of

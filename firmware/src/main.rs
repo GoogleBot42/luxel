@@ -1503,15 +1503,18 @@ fn install_scene(
     ms > 0
 }
 
-/// The grid the compositor addresses: the engine's effective one (it knows
-/// the fabricated square grid a Matrix layout implies), else the installed
-/// map's. An empty grid makes every compositor kernel a silent no-op, the
-/// same contract `bulk.rs` has — a scene on an irregular strip draws
-/// nothing rather than erroring.
+/// The grid the compositor addresses. A one-dimensional Layout — no map, or
+/// a 1-D map — is the strip as one row in index order (Gitea #985), whatever
+/// square grid the base engine fabricated for a 2D pattern on it. Otherwise
+/// the engine's effective grid (it knows the fabricated square grid a Matrix
+/// layout implies), else the installed map's. An empty grid makes every
+/// compositor kernel a silent no-op, the same contract `bulk.rs` has — a
+/// scene on an irregular 2-D or any 3-D map draws nothing rather than
+/// erroring.
 fn scene_grid(engine: &Option<Engine>) -> luxel_core::outpipe::GridMap {
-    engine
-        .as_ref()
-        .and_then(|e| e.grid())
+    let n = PIXEL_COUNT.load(Ordering::Relaxed) as usize;
+    luxel_core::outpipe::strip_grid(devicemap::dims(), n)
+        .or_else(|| engine.as_ref().and_then(|e| e.grid()))
         .or_else(|| devicemap::shape().1)
         .unwrap_or(luxel_core::outpipe::GridMap::new(0, 0, false))
 }
