@@ -35,8 +35,17 @@ export function sliderAxis(v) { axis = clamp(floor(v), 0, 2) }
 // Luxel always runs renderBulk.
 export function render(index) { hsv(0, 0, 0) }
 
+var rs = 0                          // 1 once a big grid renders at <= 4,096 cells
+function bigGrid() {                // above 4,096 px: render <= 4,096 cells, engine expands bilinearly
+  if (rs || pixelCount <= 4096 || !has2DMap() || gridWidth() < 1 || gridHeight() < 2) return
+  var gw = gridWidth(), gh = gridHeight(), w = min(gw, floor(64 * sqrt(gw / gh) + 0.001))
+  setRenderSize(w, min(gh, floor(4096 / w)), 1)   // gridWidth/gridHeight/pixelCount follow at once
+  rs = 1
+}
+
 var ph = 0
 export function beforeRender(delta) {
+  bigGrid()
   ph = mod(ph + min(delta, 100) / 1000 / fadeS, 1)
 }
 
