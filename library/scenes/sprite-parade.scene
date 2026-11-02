@@ -1,8 +1,8 @@
 # A Luxel library scene — Apache-2.0. Grammar: library/README.md.
 # Sprites on the march: a smiley that HOPS (an `out` key up to the apex, an
 # `in` key back down, so it hangs at the top and drops), a face cycling its
-# moods and an alien shuffling with a sine bob, all on one street, and a bat
-# lapping them twice overhead. Every track is a conveyor on one 8 s loop
+# moods and an alien shuffling with a sine bob, all on one street. Every
+# track is a conveyor on one 8 s loop
 # (docs/spec/scenes.md "Keyframes"): the parade moves 10 px/s, a key every
 # second, and the two keys sharing one ms are the instant jump from the
 # right edge back to the left, made while the sprite is off screen.
@@ -18,19 +18,6 @@ K 2a2238
 L color 0 52 0 1 normal 100 none fill 1
 N Curb
 K 7a6a9e
-L sprite -16 12 0 0 normal 100 none fill 1
-N Bat
-I @spr/bat
-M 0 -16 12 = linear
-M 1000 4 4 = sine
-M 2000 24 12 = sine
-M 3000 44 4 = sine
-M 4000 64 12 = sine
-M 4000 -16 12 = step
-M 5000 4 4 = sine
-M 6000 24 12 = sine
-M 7000 44 4 = sine
-M 8000 64 12 = sine
 L sprite 4 44 0 0 normal 100 none fill 1
 N Alien
 I @spr/pixel-alien
