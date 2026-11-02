@@ -753,6 +753,10 @@ impl Axis {
     };
 
     /// `v` mapped onto the grid (callers clamp to their field's range).
+    // Out of line, like everything on this path: one copy of the 64-bit
+    // floor division rather than one per call site (the classic boards'
+    // OTA margin is a few KB).
+    #[inline(never)]
     pub fn map(self, v: i32) -> i64 {
         self.off as i64 + (v as i64 * self.num as i64).div_euclid(self.den.max(1) as i64)
     }
@@ -763,6 +767,7 @@ impl Axis {
     /// zero axis stays zero: its origin is mapped without the centring
     /// offset when it means the whole layout (`whole`), with it when it
     /// means a sprite's natural size.
+    #[inline(never)]
     fn span(self, v: i16, n: u16, whole: bool) -> (i16, u16) {
         let clamp16 = |v: i64| v.clamp(i16::MIN as i64, i16::MAX as i64) as i16;
         if n == 0 {
@@ -857,6 +862,7 @@ impl Place {
     /// A layer's `L` style with its box mapped onto the grid. The early
     /// return is the backwards-compatibility guarantee: a scene without a
     /// `U` line draws exactly its `L` numbers.
+    #[inline(never)]
     fn style(&self, kind: LayerKind, base: &LayerStyle, grid: &GridMap) -> LayerStyle {
         if *self == Place::IDENTITY {
             return *base;
@@ -872,6 +878,7 @@ impl Place {
 
     /// The two axes a layer's keyframe ORIGINS map through — exactly the
     /// `L` origin's (a whole-layout zero axis drops the centring offset).
+    #[inline(never)]
     fn origin_axes(&self, kind: LayerKind, base: &LayerStyle, grid: &GridMap) -> (Axis, Axis) {
         let whole = Place::whole(kind, base, grid);
         let pick = |a: Axis, n: u16| {
@@ -1028,6 +1035,7 @@ impl Compositor {
     /// once-per-`set_scene`/`set_grid` step of Gitea #997. A scene without
     /// a `U` line resolves to [`Place::IDENTITY`] and every layer's style
     /// is its `L` line's, exactly as before.
+    #[inline(never)]
     fn replace(&mut self) {
         self.place = Place::new(self.space, &self.grid);
         let grid = self.grid;
@@ -1156,6 +1164,7 @@ impl Compositor {
 
     /// Advance the scroll, sprite-frame and keyframe clocks, and move every
     /// keyed layer to where its track puts it now.
+    #[inline(never)]
     pub fn advance(&mut self, dt_ms: u32) {
         self.cover_of = COVER_NONE;
         let grid = self.grid;

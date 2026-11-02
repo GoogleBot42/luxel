@@ -367,7 +367,7 @@ M key x/y:  mapped exactly like the L origin on that axis, BEFORE the
 * **Backwards compatibility**: a scene without `U` takes an early return
   (`Place::IDENTITY`) and draws byte-identically —
   `crates/luxel-core/tests/library_scenes.rs` digests every shipped scene at
-  64×64, 32×32, 128×128 and 150×1, and printed the same 164 lines on
+  64×64, 32×32, 128×128 and 150×1, and printed the same 176 lines (44 scenes × 4 grids) on
   `origin/master` and on the #997 branch. On firmware older than #997 a `U`
   scene draws at its design numbers 1:1 (§1 "Forward compatibility") —
   exactly the picture it had before it declared one.

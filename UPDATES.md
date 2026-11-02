@@ -12,7 +12,7 @@ gapless segment edges, positions-only shrink below the design size, and a
 mapped box never resolves to 0. `X abs` pins one layer to grid pixels.
 Scenes without `U` early-return (`Place::IDENTITY`) — the extended
 `tests/library_scenes.rs` now digests all 41 shipped scenes at 64x64,
-32x32, 128x128 and 150x1, and printed the same 164 lines on master and on
+32x32, 128x128 and 150x1, and printed the same 176 lines (44 scenes since #1034) on master and on
 the branch (instrument validated: `U 32 32` on campfire moved its
 64/128/150 lines and left 32x32 alone).
 
@@ -35,8 +35,14 @@ the branch (instrument validated: `U 32 32` on campfire moved its
   layout from an `x`/`y` > 0 (`grid.w − x`), the whole layout at 0, so
   `L pat 75 0 0 0 … fill 3` on a 150 px strip mirrors 75..149 instead of
   drawing black. A text layer keeps the full-extent frame for alignment and
-  scroll (neon-sign's ±1 glow copies), which kept all 164 digests identical —
+  scroll (neon-sign's ±1 glow copies), which kept all 176 digests identical —
   without that, neon-sign and now-playing moved.
+- Size: the pixelblaze-v3 release image is +3.8 KB over its master base
+  (1,270,800 → 1,274,640 B, 2.75 % of the slot free — under the suspended
+  3 % floor, warn-only per #1013; `text::draw_scaled` replacing
+  `draw_aligned` and the placement code are most of it, after moving the
+  64-bit mapping, the serializer lines and the `U` parse out of line took
+  0.8 KB back). `luxel.wasm` gzip +1.9 KB of asset headroom.
 - Docs: docs/spec/scenes.md §2 "Design size" (rules + worked examples A–F),
   docs/design/scenes-designed-size.md, library/README.md "Design size",
   docs/api.md, docs/tools.md.

@@ -688,15 +688,7 @@ fn parse_at(block: &str, first_line: usize) -> Result<Scene, String> {
             // the `S` and the first `L`. An older host reads it as a binding
             // line before any layer — ignored — and draws the numbers 1:1.
             "U" if seen_s && scene.layers.is_empty() => {
-                let mut it = line.split_whitespace().skip(1);
-                let mut dim = || -> Result<u16, String> {
-                    let tok = it.next().unwrap_or("");
-                    match tok.parse::<u16>() {
-                        Ok(v) if (1..=MAX_SPACE).contains(&v) => Ok(v),
-                        _ => Err(err_tok(n, "bad U field", tok)),
-                    }
-                };
-                scene.space = Some((dim()?, dim()?));
+                scene.space = Some(parse_space(line, n)?);
             }
             "U" if seen_s => return Err(err(n, "a U line after the first L line")),
             "" => {}
@@ -718,6 +710,26 @@ fn parse_at(block: &str, first_line: usize) -> Result<Scene, String> {
         return Err(err(first_line, "expected an S line"));
     }
     Ok(scene)
+}
+
+/// The two fields of a `U` line, each 1..=[`MAX_SPACE`]. Out of line: it
+/// runs once per scene, and inlined into `parse_at` it costs the classic
+/// boards' image more than its own size.
+#[inline(never)]
+fn parse_space(line: &str, n: usize) -> Result<(u16, u16), String> {
+    let mut it = line.split_whitespace().skip(1);
+    let mut wh = [0u16; 2];
+    for d in wh.iter_mut() {
+        let tok = it.next().unwrap_or("");
+        // i32's parse, which the L line already links; `+32` and `032`
+        // read as 32, as a u16 parse would
+        let v = tok.parse::<i32>().unwrap_or(0);
+        if !(1..=MAX_SPACE as i32).contains(&v) {
+            return Err(err_tok(n, "bad U field", tok));
+        }
+        *d = v as u16;
+    }
+    Ok((wh[0], wh[1]))
 }
 
 fn parse_int(tok: &str, line: usize, what: &str) -> Result<i32, String> {
@@ -1035,12 +1047,8 @@ pub fn serialize(s: &Scene, out: &mut String) {
         out.push_str(&s.name);
     }
     out.push('\n');
-    if let Some((w, h)) = s.space {
-        out.push_str("U ");
-        push_u32(out, w as u32);
-        out.push(' ');
-        push_u32(out, h as u32);
-        out.push('\n');
+    if let Some(space) = s.space {
+        push_space(out, space);
     }
     for l in &s.layers {
         let st = &l.style;
@@ -1160,21 +1168,36 @@ pub fn serialize(s: &Scene, out: &mut String) {
                 }
             }
         }
-        // one `X` line, its words in a fixed order: `clip`, then `abs`
         if l.clip || l.abs {
-            out.push('X');
-            if l.clip {
-                out.push_str(" clip");
-            }
-            if l.abs {
-                out.push_str(" abs");
-            }
-            out.push('\n');
+            push_x(out, l);
         }
         for k in &l.keys {
             push_key(out, k);
         }
     }
+}
+
+/// `U <w> <h>` — out of line for the reason [`push_key`] is.
+#[inline(never)]
+fn push_space(out: &mut dyn Sink, (w, h): (u16, u16)) {
+    push_piece(out, "U ");
+    push_num(out, Some(w as i32));
+    push_piece(out, " ");
+    push_num(out, Some(h as i32));
+    push_piece(out, "\n");
+}
+
+/// A layer's one `X` line, its words in a fixed order: `clip`, then `abs`.
+#[inline(never)]
+fn push_x(out: &mut dyn Sink, l: &Layer) {
+    push_piece(out, "X");
+    if l.clip {
+        push_piece(out, " clip");
+    }
+    if l.abs {
+        push_piece(out, " abs");
+    }
+    push_piece(out, "\n");
 }
 
 /// `M <ms> <x> <y> <opacity> <ease>[ <frame>]`, `=` for a kept value.
