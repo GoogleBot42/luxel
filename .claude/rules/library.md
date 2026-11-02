@@ -90,8 +90,10 @@ paths:
   `luxel check --grid 64x64`.
 - **Canvases size from `gridWidth()`/`gridHeight()`** (capped, 32x32 fallback
   when `gridWidth()` is 0), never a hard-coded 16x16. Bilinear
-  `fillCanvas`/`paintCanvas(…, 1)` only when the canvas is coarser than the
-  grid until the 1:1 identity fix lands (U1 finding).
+  `fillCanvas`/`paintCanvas(…, 1)` is the default for soft fields (since #984
+  a grid-sized canvas is the identity, so the "only when coarser" gating the
+  2026-11 batches carry is no longer needed); nearest (0) for pixel art and
+  dithers.
 - **Never black by default** for more than ~1 s; `y = 0` is the TOP (fires,
   sand and liquid root at `y = 1`). Sound patterns stay lit with no sensor.
 - **A shipped scene's wire block must stay under 1 KB**
