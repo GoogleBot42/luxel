@@ -1,0 +1,23 @@
+# A Luxel library scene — Apache-2.0. Grammar: library/README.md.
+# The household note panel. Text SLOTS come from outside the scene:
+# `POST /api/text 0 Dinner at 7` (or a Home Assistant text entity) sets the
+# crawling message, slot 1 the short "from" beside the envelope. Nothing in
+# the scene is edited to change what it says.
+S - Message Board
+L pat 0 0 0 0 normal 100 none fill 1
+N Flow
+I @pat/curl-flow-2d
+R 60 0:000000 255:6a7bff
+L color 0 19 0 11 normal 75 none fill 1
+N Band
+L sprite 1 2 0 0 normal 100 none fill 1
+N Icon
+I @spr/envelope
+L text 12 3 0 0 normal 100 black fill 1
+N From
+T slot 1
+F tiny ffd166 l none 0
+L text 0 21 0 0 normal 100 black fill 1
+N Message
+T slot 0
+F regular ffffff l left 20

@@ -1,0 +1,31 @@
+# A Luxel library scene — Apache-2.0. Grammar: library/README.md.
+# A weather card fed from outside: slot 0 the temperature ("18C"), slot 1 a
+# crawling detail line ("RAIN 80% WIND 12"). The sky is a 1D colour wash
+# laid down the rows and ramped to blues. The Rain layer ships HIDDEN (flags
+# 0): a loop-tile sprite tiled under the cloud, for an automation to show.
+S - Weather Card
+L pat 0 0 0 0 normal 100 none fill 1
+N Sky
+I @pat/color-wash
+C sliderScheme 0
+C hsvPickerColorA 43691 65536 65536
+C hsvPickerColorB 0 0 65536
+C sliderMotion 0
+C sliderBreathSeconds 1310720
+C sliderFloorPercent 4587520
+C sliderRepeats 32768
+R 100 0:0b2a5b 255:6fb3ef
+L sprite 3 10 12 12 normal 100 none tile 0
+N Rain
+I @spr/rain-tile
+L sprite -1 1 0 0 normal 100 none fill 1
+N Weather
+I @spr/cloud-sun
+L text 0 3 0 0 normal 100 black fill 1
+N Temperature
+T slot 0
+F large ffffff r none 0
+L text 0 24 0 0 normal 100 black fill 1
+N Details
+T slot 1
+F tiny cfe8ff l left 10

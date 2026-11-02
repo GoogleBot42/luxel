@@ -1,0 +1,24 @@
+# Luxel library sprite — original art, Apache-2.0. Grammar: library/README.md.
+# Partly cloudy: a rayed sun peeking from behind a white cloud with a grey
+# underside. The glyph of the Weather Card scene.
+name: Cloud and Sun
+fps: 0
+palette:
+  s ffd166
+  h fff3c4
+  w ffffff
+  c c8d2e0
+
+frame
+.....s..........
+..s.......s.....
+....sss.........
+...shhss..ww....
+.s.shsss.wwww...
+...ssssswwwwww..
+....sssswwwwwww.
+..s.wwwwwwwwwww.
+...wwwwwwwwwwwww
+..wwwwwwwwwwwwww
+..cwwwwwwwwwwwwc
+...cccccccccccc.

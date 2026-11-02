@@ -1,0 +1,18 @@
+# A Luxel library scene — Apache-2.0. Grammar: library/README.md.
+# The track title in slot 0 (a Home Assistant media_player automation writes
+# it) crawling beside a bobbing note, over a sound field ramped to one
+# palette. With no sensor feed the field plays its built-in demo groove.
+S - Now Playing
+L pat 0 0 0 0 normal 100 none fill 1
+N Field
+I @pat/spectrum-field
+R 80 0:000000 140:5a1a8c 230:ff7ad9 255:ffffff
+L color 0 0 0 11 normal 70 none fill 1
+N Band
+L sprite 1 0 0 0 normal 100 none fill 1
+N Note
+I @spr/music-note
+L text 10 2 0 0 normal 100 black fill 1
+N Title
+T slot 0
+F tiny ffffff l left 12

@@ -1,0 +1,14 @@
+# A Luxel library scene — Apache-2.0. Grammar: library/README.md.
+# A marquee: a dim black band across a softened aurora and a message
+# crawling along it. Edit the T line to change the words, or make it
+# `T slot 0` to set them from outside (POST /api/text, Home Assistant).
+S - Scrolling Message
+L pat 0 0 0 0 normal 70 none fill 1
+N Aurora
+I @pat/aurora-2d
+L color 0 10 0 12 normal 60 none fill 1
+N Band
+L text 0 12 0 0 normal 100 black fill 1
+N Message
+T lit HELLO FROM LUXEL
+F regular ffd9b0 l left 18

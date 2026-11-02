@@ -1,0 +1,17 @@
+# Luxel library sprite — original art, Apache-2.0. Grammar: library/README.md.
+# A letter: a white envelope with its flap folded down in grey. The message
+# icon for Message Board and any notification scene.
+name: Envelope
+fps: 0
+palette:
+  w f5f5f5
+  f 9aa4b2
+
+frame
+fffffffff
+ffwwwwwff
+fwfwwwfwf
+fwwfwfwwf
+fwwwfwwwf
+fwwwwwwwf
+fffffffff
