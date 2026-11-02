@@ -5,6 +5,8 @@
 // slow decay), and now and then a flash ripples through a neighbourhood in
 // sync. Drift: they glide, swell and fade, leaving a cool ghost trail. Coast:
 // launched sparks glow brightest while fast, slow to a stop, then respawn.
+// Between flashes a blinking fly's lantern idles at a faint glow, so the meadow is
+// never fully dark; a sync ripple reaches only part of the swarm.
 // One max-blended splat per fly (a sub-pixel splatIndex on a strip) over a fade()d frame.
 
 var MAXF = 96
@@ -25,7 +27,7 @@ export function sliderColour(v) { colour = clamp(floor(v), 0, 3) }
 var pickH = 0.55, pickS = 0.8
 export function hsvPickerFlyColor(h, s, v) { pickH = h; pickS = s }
 
-// Flies per 100 px of strip; a panel counts 10 px per pixel of its side (64x64 = 26 at 4).
+// Flies per 100 px of strip; a panel counts 8 px per pixel of its side (64x64 = 32 at 4).
 var per100 = 4
 //# min=1 max=20 step=1 default=4
 export function sliderFliesPer100Px(v) { per100 = clamp(v, 1, 20) }
@@ -60,12 +62,12 @@ function spawn(i) {
   ph[i] = style == 1 ? random(0.3) : random(1)
 }
 
-// Blink: a flash that strikes in 0.12 s and dies over ~a third of a second.
+// Blink: a flash that strikes in 0.12 s and dies over ~half a second.
 function flash(p) {
   if (p < 0) return 0
   var s = p * life
   if (s < 0.12) return easeOutQuad(s / 0.12)
-  return exp((0.12 - s) / min(0.4, life * 0.15))
+  return exp((0.12 - s) / min(0.55, life * 0.2))
 }
 
 // Synchronous fireflies: flies near an epicentre flash in a ripple outward.
@@ -73,7 +75,7 @@ function syncRipple() {
   var k = floor(random(n)), d
   for (var i = 0; i < n; i++) {
     d = panel ? hypot(fx[i] - fx[k], fy[i] - fy[k]) : abs(fx[i] - fx[k])
-    if (d < unit * 22) ph[i] = -d / unit * 0.035 / life   // 0.035 s per px of distance
+    if (d < min(unit * 22, 0.3)) ph[i] = -d / unit * 0.035 / life   // 0.035 s per px of distance
   }
 }
 
@@ -82,12 +84,13 @@ export function beforeRender(delta) {
   panel = has2DMap()
   var side = panel ? (gridWidth() > 0 ? gridWidth() : 32) : pixelCount
   unit = 1 / max(side, 8)
-  var want = clamp(round(panel ? per100 * sqrt(pixelCount) / 10 : per100 * pixelCount / 100), 1, MAXF)
+  var want = clamp(round(panel ? per100 * sqrt(pixelCount) / 8 : per100 * pixelCount / 100), 1, MAXF)
   if (style != lastStyle) { n = 0; lastStyle = style }
   for (var i = n; i < want; i++) {                    // new flies: spread evenly, staggered
     spawn(i)
     fx[i] = frac(i * 0.618 + 0.2)
     fy[i] = 0.06 + frac(i * 0.755 + 0.4) * 0.88
+    ph[i] = frac(i * 0.618 + 0.1)                    // phased apart from the start
     if (style == 2) { fvx[i] *= 0.15 + random(0.85); fvy[i] *= 0.15 + random(0.85) }
   }
   n = want
@@ -129,7 +132,7 @@ function flyHue(i) {
 }
 
 function brightness(i) {
-  if (style == 0) return flash(ph[i])
+  if (style == 0) return max(flash(ph[i]), 0.15)  // idle glow between flashes
   if (style == 1) { var e = sin(PI * ph[i]); return e * e }
   var e2 = min(hypot(fvx[i], fvy[i]) / 22, 1)
   return e2 * (0.35 + 0.65 * e2)
@@ -138,7 +141,7 @@ function brightness(i) {
 export function renderBulk() {
   if (trail <= 0) clear()
   else fade(exp(-3 * dt / trail))
-  var r = unit * 2.2, sat0 = colour == 3 ? pickS : colour == 0 ? 0.95 : 1
+  var r = unit * (unit > 0.022 ? 2.8 : 2.2), sat0 = colour == 3 ? pickS : colour == 0 ? 0.95 : 1
   for (var i = 0; i < n; i++) {
     var v = brightness(i)
     if (v < 0.03) continue

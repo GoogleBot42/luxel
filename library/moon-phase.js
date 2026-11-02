@@ -61,7 +61,7 @@ buildFace()
 function stop(k, pos, r, g, b) { pal[k * 4] = pos; pal[k * 4 + 1] = r; pal[k * 4 + 2] = g; pal[k * 4 + 3] = b }
 // position = 0.48 lit wrapped: 0..0.48 the sunlit side, 0.52..1 the night side
 function buildPalette(earth) {
-  var er = 0.08 * earth, eg = 0.1 * earth, eb = 0.16 * earth
+  var er = 0.15 * earth, eg = 0.17 * earth, eb = 0.27 * earth   // bright enough to read at new moon
   stop(0, 0, 0.4, 0.37, 0.32)
   stop(1, 0.06, 0.85, 0.8, 0.7)
   stop(2, 0.2, 1, 0.96, 0.86)
@@ -110,7 +110,7 @@ function drawMoon() {
   paintCanvas(L, C, C, A, 1)
   resetTransform()
   var lit = (1 - cs) / 2
-  rgb(0.1 * lit + 0.008, 0.1 * lit + 0.01, 0.12 * lit + 0.018)
+  rgb(0.1 * lit + 0.012, 0.1 * lit + 0.016, 0.12 * lit + 0.03)
   splat(0.5, 0.5, rx * 1.7, 1)
   lastPh = ph
   dirty = 0

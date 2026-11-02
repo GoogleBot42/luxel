@@ -111,9 +111,10 @@ export function render2D(index, x, y) {
   }
 }
 
-// strip: a data stream — the pixel index XOR a clock that steps faster
-// in each successive 16-pixel lane
+// strip: a data stream — the pixel index XOR a clock that steps faster in
+// each successive 16-pixel lane (six speeds, repeating; a whole-number speed
+// of 8 would never flip bit 2 and park its lane)
 export function render(index) {
-  var k = floor(index / 2) ^ (tick * (floor(index / 16) + 1))
+  var k = floor(index / 2) ^ floor(tick * (1 + (floor(index / 16) % 6) * 0.5))
   paint(index / pixelCount * spread + t + (k & 3) * 0.05, k & 4 ? 1 : 0.06)
 }

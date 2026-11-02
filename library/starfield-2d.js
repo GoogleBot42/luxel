@@ -8,6 +8,9 @@
 // shooting star — the base layer for night scenes. Trails: a long exposure —
 // stars wheel round an off-centre pole, laying arcs onto the persistent frame
 // behind a tree line, until the plate fades and a new exposure starts.
+// On a strip the same three skies run along its length: stars burst outward
+// from a wandering vanishing point, twinkle over a dim blue wash with the odd
+// meteor, or creep along laying long-exposure trails.
 
 var mode = 0              // 0 warp, 1 drift, 2 trails
 //# min=0 max=2 step=1 default=0
@@ -18,7 +21,7 @@ var warpPct = 40
 //# min=0 max=100 step=1 default=40
 export function sliderWarpPercent(v) { warpPct = clamp(v, 0, 100) }
 
-var density = 20          // stars per 1000 pixels (capped at 160 stars)
+var density = 20          // stars per 1000 pixels (a strip: per 180 px; capped at 160)
 //# min=5 max=60 step=1 default=20
 export function sliderStarsPer1000Px(v) { density = clamp(v, 5, 60) }
 
@@ -65,7 +68,7 @@ export function beforeRender(delta) {
   t = mod(t + dt, 3600)
   var w = has2DMap() ? gridWidth() : 0
   pw = 1 / max((w > 0 ? w : 32) - 1, 1)
-  n = clamp(floor(density * (pixelCount / 1000)), 8, MAXS)   // pixelCount * 60 overflows 16.16
+  n = clamp(floor(density * (pixelCount / (has2DMap() ? 1000 : 180))), 8, MAXS)   // pixelCount * 60 overflows 16.16
   var sp = warpPct / 100
   if (mode == 0) {
     cx = 0.5 + 0.16 * sin(t * 0.21); cy = 0.5 + 0.12 * sin(t * 0.13 + 1)
@@ -162,8 +165,62 @@ function trails() {
   treeLine()
 }
 
+// ---- strip: the same skies in one dimension, positions in pixels
+function stripMeteor(N) {
+  if (mLife <= 0) return
+  var k = min(1, mLife * 3), p = mx * (N - 1), dir = mvx > 0 ? 1 : -1
+  gradientRange(p - dir * N * 0.12, p, 0.13, 0.15, 0, 0.13, 0.05, 0.9 * k, 2)
+  splatIndex(p, 1, 2)
+}
+
+function stripSky() {
+  var N = pixelCount, sp = warpPct / 100, i, p
+  if (mode == 0) {
+    // warp: stars burst out both ways from a wandering vanishing point
+    var vz = 0.08 + 1.6 * sp * sp + 0.3 * sp, c = 0.5 + 0.2 * sin(t * 0.21)
+    fade(pow(0.5 + 0.4 * sp, dt * 20))
+    for (i = 0; i < n; i++) {
+      sz[i] -= vz * dt
+      var x = c + sx[i] / sz[i] * 0.25
+      if (sz[i] < 0.04 || x < 0 || x > 1) { seedStar(i, 1); continue }
+      var near = clamp(1.1 - sz[i], 0, 1)
+      tintColor(min(1, (0.08 + 0.92 * near) * 1.2), near)
+      p = x * (N - 1)
+      if (px[i] > -1) fillRangeAA(min(px[i], p) + 0.5, max(px[i], p) + 0.5, 2)
+      splatIndex(p, 0.6 + near * 1.2, 2)
+      px[i] = p
+    }
+  } else if (mode == 1) {
+    // drift: a dim blue wash, twinkling stars panning slowly, the odd meteor
+    var off = mod(t * (0.002 + 0.03 * sp), 2)
+    gradientRange(0, N, 0.65, 0.9, 0.02, 0.62, 0.8, 0.055, 0)
+    for (i = 0; i < n; i++) {
+      var b = 0.35 + 0.65 * sh[i] * sh[i]
+      var tw = 0.65 + 0.35 * sin(t * (1.3 + 3 * sh[i]) + i * 2.4)
+      tintColor(b * tw, sh[i])
+      splatIndex(mod(sx[i] * 0.5 + 0.5 + off, 1) * N, 0.7 + 0.8 * b, 2)
+    }
+    stripMeteor(N)
+  } else {
+    // trails: stars creep at their own pace, the frame keeps their tracks
+    var T = 50 - 25 * sp
+    if (lastMode != 2) { clear(); lastMode = 2 }
+    if (expo > T) {
+      fade(pow(0.9, dt * 20))
+      if (expo > T + 3) expo = 0
+    }
+    for (i = 0; i < n; i++) {
+      p = mod(sx[i] * 0.5 + 0.5 + ang * (0.05 + 0.15 * sh[i]), 1) * (N - 1)
+      starColor(i, 0.3 + 0.7 * sh[i] * sh[i])
+      if (px[i] > -1 && expo > 0.05 && abs(p - px[i]) < N / 2) fillRangeAA(min(px[i], p) + 0.3, max(px[i], p) + 0.7, 2)
+      px[i] = p
+    }
+  }
+}
+
 export function renderBulk() {
   if (mode != lastMode && mode != 2) { clear(); lastMode = mode }
+  if (!has2DMap()) { stripSky(); return }
   if (mode == 0) warp()
   else if (mode == 1) drift()
   else trails()

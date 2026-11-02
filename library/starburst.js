@@ -6,7 +6,9 @@
 // fading the frame, so no per-pixel buffers. Rainbow paints the trail by
 // position. With Sound on, rising energy flares the heads and lets trails
 // linger while falling energy snuffs them; the demo groove drives it when no
-// sensor is attached.
+// sensor is attached. On a panel the same comets run along the spokes of a
+// slowly turning star: half burst out from the centre, half fall back in on
+// the spokes between, and Rainbow paints them by radius.
 
 var sound = 0
 //# default=0
@@ -109,7 +111,46 @@ function comet(p, prev, dir, b) {
   splatIndex(p, 1.3, 2)
 }
 
+// Mapless strips stay strips: this export suppresses the default grid.
+// Luxel always runs renderBulk.
+export function render(index) {}
+
+// ---- panel: comets on the spokes of a star centred on the panel
+var SPOKES = 6              // outward spokes per leader (as many inward between)
+var REACH = 0.74            // centre to corner, plus a little
+var unit = 0.03
+
+function ray(r, a, dir, b) {
+  var h = drift + (rainbow ? r / REACH * repeats : 0)
+  var c = cos(a), s = sin(a), r0 = max(0, r - dir * 0.12)
+  hsv(h, 1, b * 0.7)
+  drawLine(0.5 + c * r0, 0.5 + s * r0, 0.5 + c * r, 0.5 + s * r, unit * 0.9, 2)
+  hsv(h, rising ? 0.1 : 0.35, b)
+  splat(0.5 + c * r, 0.5 + s * r, unit * 1.6, 2)
+}
+
+function renderPanel() {
+  var gw = gridWidth()
+  if (gw < 1) gw = 32
+  unit = 1 / gw
+  fade(keep)
+  var spin = drift * PI2, step = PI2 / SPOKES
+  for (var i = 0; i < leaders; i++) {
+    var off = i / leaders
+    var ro = frac(t * 2 + off) * REACH, ri = frac(1 - t * 2 + off) * REACH
+    for (var k = 0; k < SPOKES; k++) {
+      var a = spin + (k + off) * step
+      ray(ro, a, 1, flare)
+      ray(ri, a + step * 0.5, -1, flare)
+    }
+  }
+  // the heart of the burst
+  hsv(drift, 0.3, flare * 0.6)
+  splat(0.5, 0.5, unit * 2, 2)
+}
+
 export function renderBulk() {
+  if (has2DMap()) { renderPanel(); return }
   fade(keep)
   var n = pixelCount
   for (var i = 0; i < leaders; i++) {
